@@ -25,6 +25,9 @@ export interface ClaudePrefsData {
   /** This install's last use of each session (epoch ms): the session
    *  browser's MRU note, like DSH's `last-used.json`. */
   readonly lastUsed?: Readonly<Record<string, number>>
+  /** The `/color` accent of each session (TUI-side: the CLI keeps none),
+   *  with when it was set — the newest {@link COLOR_LIMIT} are kept. */
+  readonly colors?: Readonly<Record<string, { readonly color: string; readonly at: number }>>
 }
 
 /** A patch: a value sets the field, `null` clears it. */
@@ -43,11 +46,17 @@ export interface ClaudePrefs {
   touch(sessionId: string): void
   /** Forget a deleted session (its MRU note and the launcher marker). */
   forget(sessionId: string): void
+  /** A session's accent ('' = none). */
+  color(sessionId: string): string
+  /** Set (or with '' clear) a session's accent. */
+  setColor(sessionId: string, color: string): void
 }
 
 const FILE = 'prefs.json'
 /** MRU notes kept (oldest dropped first): the file stays small. */
 const LAST_USED_LIMIT = 200
+/** Session colours kept (the oldest set first is dropped). */
+export const COLOR_LIMIT = 200
 
 /** Narrow a parsed document to what persists. */
 function parsePrefs(parsed: unknown): ClaudePrefsData {
@@ -60,7 +69,16 @@ function parsePrefs(parsed: unknown): ClaudePrefsData {
       if (typeof value === 'number' && Number.isFinite(value)) lastUsed[id] = value
     }
   }
+  const colors: Record<string, { color: string; at: number }> = {}
+  const rawColors = record.colors
+  if (rawColors !== null && typeof rawColors === 'object' && !Array.isArray(rawColors)) {
+    for (const [id, value] of Object.entries(rawColors as Record<string, unknown>)) {
+      const entry = value !== null && typeof value === 'object' ? value as Record<string, unknown> : undefined
+      if (typeof entry?.color === 'string' && entry.color !== '' && typeof entry.at === 'number' && Number.isFinite(entry.at)) colors[id] = { color: entry.color, at: entry.at }
+    }
+  }
   return {
+    ...(Object.keys(colors).length === 0 ? {} : { colors }),
     ...(typeof record.model === 'string' && record.model !== '' ? { model: record.model } : {}),
     ...(typeof record.effort === 'string' && record.effort !== '' ? { effort: record.effort } : {}),
     ...(typeof record.lastSession === 'string' && record.lastSession !== '' ? { lastSession: record.lastSession } : {}),
@@ -88,12 +106,26 @@ function touched(current: ClaudePrefsData, sessionId: string, now: number): Clau
   return { ...current, lastUsed: Object.fromEntries(entries) }
 }
 
+/** Set or clear one session's colour (pure), keeping the newest {@link COLOR_LIMIT}. */
+function coloured(current: ClaudePrefsData, sessionId: string, color: string, now: number): ClaudePrefsData {
+  const colors: Record<string, { readonly color: string; readonly at: number }> = { ...current.colors }
+  delete colors[sessionId]
+  if (color !== '') colors[sessionId] = { color, at: now }
+  const kept = Object.entries(colors).sort((a, b) => b[1].at - a[1].at).slice(0, COLOR_LIMIT)
+  const next: Record<string, unknown> = { ...current, colors: Object.fromEntries(kept) }
+  if (kept.length === 0) delete next.colors
+  return next as ClaudePrefsData
+}
+
 /** Drop one session (pure). */
 function forgotten(current: ClaudePrefsData, sessionId: string): ClaudePrefsData {
   const lastUsed = { ...current.lastUsed }
   delete lastUsed[sessionId]
-  const next: Record<string, unknown> = { ...current, lastUsed }
+  const colors = { ...current.colors }
+  delete colors[sessionId]
+  const next: Record<string, unknown> = { ...current, lastUsed, colors }
   if (Object.keys(lastUsed).length === 0) delete next.lastUsed
+  if (Object.keys(colors).length === 0) delete next.colors
   if (current.lastSession === sessionId) delete next.lastSession
   return next as ClaudePrefsData
 }
@@ -121,6 +153,8 @@ export function fileClaudePrefs(dir: string = join(DATA_DIR, 'backends', 'claude
     write: patch => { save(patched(read(), patch)) },
     touch: sessionId => { save(touched(read(), sessionId, Date.now())) },
     forget: sessionId => { save(forgotten(read(), sessionId)) },
+    color: sessionId => read().colors?.[sessionId]?.color ?? '',
+    setColor: (sessionId, color) => { save(coloured(read(), sessionId, color, Date.now())) },
   }
 }
 
@@ -133,5 +167,7 @@ export function memoryClaudePrefs(initial: ClaudePrefsData = {}): ClaudePrefs & 
     write(patch) { data = patched(data, patch) },
     touch(sessionId) { data = touched(data, sessionId, Date.now()) },
     forget(sessionId) { data = forgotten(data, sessionId) },
+    color: sessionId => data.colors?.[sessionId]?.color ?? '',
+    setColor(sessionId, color) { data = coloured(data, sessionId, color, Date.now()) },
   }
 }

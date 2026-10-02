@@ -675,6 +675,12 @@ const GROUPS = {
 // 名册、用量/费用/标题并加提示行，批内重置先投影其前的事件；之后按新会话 id
 // （ref、sessionRef、/fork、重连、启动器 resume 标记）；TUI 的 /clear 仍只清视图。
     ["verify-claude-reset", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-reset.ts']],
+// Claude 会话命令（方案 §5.3，Phase 5b，假 Query）：/btw、/recap 的侧问是一次性 fork
+// （resume 当前 id + forkSession + persistSession:false + 无工具 + 单轮 + 同模型/env/钉住），
+// 流式、结束/中断/出错都关闭；/rename 走 renameSession 并发 session.title（未落盘先记下、
+// 首次落盘补写）；/color 按会话 id 存 prefs（上限 200、最旧淘汰、重开恢复）；
+// /mcp reconnect|toggle 走能力并补全子命令/服务器名/on|off；DSH 的命令集不变。
+    ["verify-claude-session-commands", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-session-commands.ts']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、

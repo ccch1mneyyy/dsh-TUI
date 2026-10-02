@@ -9,6 +9,7 @@
 
 import { BlockAssembler, type ContentBlock, type Message, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { sideQuestionPrompt } from '../channel/side-prompts.js'
 import { answeredToolCallIds } from './compat/messages.js'
 
 type ToolCall = Extract<ContentBlock, { type: 'tool-call' }>
@@ -23,19 +24,8 @@ const PENDING_ARGS_LIMIT = 400
  * {@link splitUnresolvedToolCalls} removed from the replayed history.
  */
 export function wrapSideQuestion(question: string, pending: readonly ToolCall[] = []): string {
-  const running = pending.length === 0 ? '' : `
-The main task is still executing these tool calls; their results are not available yet:
-${pending.map(call => `- ${call.name} ${clip(oneLine(call.arguments), PENDING_ARGS_LIMIT)}`).join('\n')}`
-  return `<side-question-context>
-Give one concise answer to the question below using the conversation already provided.
-This auxiliary call runs alongside the main session. The main task continues independently;
-do not describe it as interrupted, resumed, or as work performed by this call.
-No tools are available here: do not claim to inspect files, execute commands, browse,
-or carry out future actions. There will be no follow-up turn for this call.
-When the available context is insufficient, state what is unknown without promising research.${running}
-</side-question-context>
-
-${question}`
+  // The contract text is backend-neutral (src/channel/side-prompts.ts).
+  return sideQuestionPrompt(question, pending.map(call => `${call.name} ${clip(oneLine(call.arguments), PENDING_ARGS_LIMIT)}`))
 }
 
 /** Pretty-printed arguments carry literal breaks (the native adapter keeps the provider string); keep one bullet line. */

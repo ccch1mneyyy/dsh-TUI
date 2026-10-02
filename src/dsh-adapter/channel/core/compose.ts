@@ -246,6 +246,8 @@ export function createCoreChannel(
     state: () => state,
     host,
     localFallback: () => extension.localFs !== false,
+    // Read late: the session controls are built after the files.
+    mcpServers: () => controls.mcpServers(),
   })
   const inputDelivery = createInputDelivery(ctx, owner, binding, () => state,
     (...args) => notify(...args), trackPending, untrackPending, composer,

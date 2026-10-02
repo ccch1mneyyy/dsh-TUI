@@ -35,12 +35,21 @@ const check = (label: string, ok: boolean, detail = ''): void => {
 }
 
 const submits: { input: AgentInput; placement: SubmitPlacement }[] = []
+const mcpCalls: string[] = []
 const listeners = new Set<(batch: readonly AgentEvent[], meta: AgentEventMeta) => void>()
 const session: AgentSession = {
   ref: { backendId: 'fake', sessionId: '44444444-4444-4444-8444-444444444444' },
   cwd: process.cwd(),
   status: 'idle',
-  capabilities: { native: {} },
+  capabilities: {
+    native: {},
+    // Phase 5b: `/mcp reconnect|toggle` reach the backend's MCP control.
+    mcp: {
+      status: () => Promise.resolve([{ name: 'github', status: 'connected', toolCount: 2 }]),
+      reconnect: name => { mcpCalls.push(`reconnect:${name}`); return Promise.resolve() },
+      toggle: (name, enabled) => { mcpCalls.push(`toggle:${name}:${enabled}`); return Promise.resolve() },
+    },
+  },
   history: () => Promise.resolve([]),
   subscribe(listener) {
     listeners.add(listener)
@@ -145,6 +154,24 @@ try {
   await sleep(80)
   stdin.write('\x1b')
   check('double-Esc without rewind explains itself', await settled(() => toasts().includes(t('capability-unavailable', { name: 'rewind' }))), toasts())
+
+  // Phase 5b: /mcp subcommands where the backend controls its servers.
+  await typeLine('/mcp reconnect github')
+  stdin.write('\r')
+  check('/mcp reconnect <name> reaches the backend and says so', await settled(() => mcpCalls.includes('reconnect:github') && toasts().includes(t('mcp-reconnected', { name: 'github' }))), `${mcpCalls.join()} | ${toasts()}`)
+  await clearLine()
+  await typeLine('/mcp toggle github off')
+  stdin.write('\r')
+  check('/mcp toggle <name> off reaches the backend', await settled(() => mcpCalls.includes('toggle:github:false')), mcpCalls.join())
+  await clearLine()
+  await typeLine('/mcp toggle github')
+  stdin.write('\r')
+  check('/mcp toggle without on|off shows the usage', await settled(() => toasts().includes(t('mcp-control-usage'))) && mcpCalls.length === 2, toasts())
+  await clearLine()
+  await typeLine('/mcp')
+  stdin.write('\r')
+  check('plain /mcp still shows the status report', await settled(() => screen().includes('github')) && submits.length === 0, screen())
+  await clearLine()
 
   await typeLine('hello backend')
   stdin.write('\r')

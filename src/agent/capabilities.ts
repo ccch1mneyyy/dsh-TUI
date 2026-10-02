@@ -222,6 +222,21 @@ export interface SessionCapabilities {
     reconnect?(name: string): Promise<void>
     toggle?(name: string, enabled: boolean): Promise<void>
   }
+  /**
+   * One tool-less, single-answer side call over the current conversation
+   * (`/btw`, `/recap`): nothing it does enters the session's record. The
+   * answer streams to `onText`; `answer: null` without an `error` = the
+   * caller aborted.
+   */
+  readonly sideQuery?: {
+    ask(prompt: string, options?: { readonly signal?: AbortSignal; readonly onText?: (delta: string) => void }): Promise<{ readonly answer: string | null; readonly error?: string }>
+  }
+  /** Rename the session (persisted by the backend; reported as a
+   *  `session.title{source:'user'}` event). */
+  readonly rename?: { rename(title: string): Promise<void> }
+  /** The session's accent colour (`/color`), kept per session; reported as
+   *  a `session.color` event ('' = the theme default). */
+  readonly color?: { current(): string; set(color: string): void }
   readonly commands?: {
     list(): Promise<readonly CommandInfo[]>
     run?(name: string, rawInput: string): Promise<ExternalCommandOutcome | undefined>

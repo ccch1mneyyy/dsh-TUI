@@ -81,6 +81,9 @@ import { createWorkspaceActions } from './workspace-actions.js'
 type CoreServedAction =
   | 'commandCompletions' | 'runLocalCommand' | 'loadOlder' | 'newSession' | 'clear'
   | 'setActivityFrames' | 'pushLocal' | 'listFileCandidates' | 'listFiles'
+  // Capability-backed only: a DSH session offers no MCP control (its `/mcp`
+  // is the status report, `capabilities.mcpControl` false).
+  | 'mcpControl'
 
 /**
  * Read the persistence backend's full session list (empty without one) —

@@ -16,6 +16,7 @@
  * layer exists; no construction-time placeholder is callable.
  */
 import type { AgentSession } from '../../../agent/session.js'
+import { conversationRecapPrompt, parseRecapResponse, sideQuestionPrompt } from '../../../channel/side-prompts.js'
 import { t } from '../../../i18n.js'
 import { logForDebugging } from '../../../utils/debug.js'
 import { createUnavailableActionDelegates, type ChannelActionDelegates, type createChannelActionReadiness } from '../action-readiness.js'
@@ -98,6 +99,65 @@ export function createCapabilityDelegates(deps: {
       if (caps().mcp === undefined) return deps.unavailableLines('mcp')
       // Synchronous by contract: the last report, and a fresh one for next time.
       return deps.controls.mcpReport(deps.session(), () => deps.owner.current()) ?? [t('claude-mcp-loading')]
+    },
+    mcpControl: request => guarded('mcp', false, async () => {
+      const mcp = caps().mcp
+      const run = request.action === 'reconnect' ? mcp?.reconnect : mcp?.toggle
+      if (mcp === undefined || run === undefined) { unavailable(`mcp ${request.action}`); return false }
+      if (request.action === 'reconnect') await mcp.reconnect!(request.name)
+      else await mcp.toggle!(request.name, request.enabled)
+      if (deps.owner.current()) {
+        notify(t(request.action === 'reconnect' ? 'mcp-reconnected' : request.enabled ? 'mcp-enabled' : 'mcp-disabled', { name: request.name }), { color: 'success' })
+        // The next /mcp shows the new state.
+        deps.controls.mcpReport(deps.session(), () => deps.owner.current())
+      }
+      return true
+    }),
+    // `/btw`: the backend's side call with the shared side-question contract.
+    sideQuestion: async (question, options) => {
+      const side = caps().sideQuery
+      if (side === undefined) {
+        unavailable('btw')
+        return { answer: null, error: deps.unavailableLines('btw').join(' ') }
+      }
+      try {
+        return { ...await side.ask(sideQuestionPrompt(question), options) }
+      } catch (error) {
+        return { answer: null, error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+    // `/recap`: the same side call over the conversation itself, read back
+    // as a one-line summary plus a proposed title.
+    recapRecent: async options => {
+      const side = caps().sideQuery
+      if (side === undefined) {
+        unavailable('recap')
+        return { summary: null, error: deps.unavailableLines('recap').join(' ') }
+      }
+      try {
+        const outcome = await side.ask(conversationRecapPrompt(), options)
+        if (outcome.answer === null) return { summary: null, ...(outcome.error === undefined ? {} : { error: outcome.error }) }
+        const parsed = parseRecapResponse(outcome.answer)
+        return { summary: parsed.summary, ...(parsed.title === undefined ? {} : { title: parsed.title }) }
+      } catch (error) {
+        return { summary: null, error: error instanceof Error ? error.message : String(error) }
+      }
+    },
+    renameSession: title => {
+      const rename = caps().rename
+      if (rename === undefined) { unavailable('rename'); return }
+      void rename.rename(title).catch((error: unknown) => {
+        if (deps.owner.current()) notify(t('rename-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+      })
+    },
+    setSessionColor: color => {
+      const accent = caps().color
+      if (accent === undefined) { unavailable('color'); return }
+      try {
+        accent.set(color)
+      } catch (error) {
+        notify(t('capability-failed', { name: 'color', err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+      }
     },
   }
 }

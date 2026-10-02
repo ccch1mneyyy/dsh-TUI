@@ -68,6 +68,7 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'runExternalCommandOutcome'
   | 'pushLocal'
   | 'mcpStatus'
+  | 'mcpControl'
   | 'exportSession'
   | 'initWorkspace'
   | 'doctorInfo'
@@ -151,6 +152,7 @@ export function createChannelActionMethods(
     runExternalCommandOutcome: (name, rawInput, images) => getReadyActions().runExternalCommandOutcome(name, rawInput, images),
     pushLocal: (title, lines) => getReadyActions().pushLocal(title, lines),
     mcpStatus: () => getReadyActions().mcpStatus(),
+    mcpControl: request => getReadyActions().mcpControl(request),
     exportSession: () => getReadyActions().exportSession(),
     initWorkspace: () => getReadyActions().initWorkspace(),
     doctorInfo: () => getReadyActions().doctorInfo(),
@@ -276,6 +278,7 @@ export function createUnavailableActionDelegates(
     pushLocal: () => { unavailable('pushLocal') },
     // Report lines ARE the explicit answer for these three reports.
     mcpStatus: () => unavailableLines('mcp'),
+    mcpControl: () => refuseAsync('mcp', false),
     exportSession: () => refuse('export', null),
     initWorkspace: () => refuse('init', null),
     doctorInfo: () => unavailableLines('doctor'),

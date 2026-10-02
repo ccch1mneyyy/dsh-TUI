@@ -114,7 +114,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
  */
 export type LocalCommandRequirement =
   | 'any' | 'dsh' | 'models' | 'effort' | 'compact' | 'rewind' | 'fork' | 'resume'
-  | 'subagents' | 'tasks' | 'mcp' | 'context' | 'login'
+  | 'subagents' | 'tasks' | 'mcp' | 'context' | 'login' | 'sideQuery' | 'rename' | 'color'
 
 const LOCAL_COMMAND_REQUIREMENTS: ReadonlyMap<string, LocalCommandRequirement> = new Map<string, LocalCommandRequirement>([
   ['new', 'any'], ['clear', 'any'], ['status', 'any'], ['cost', 'any'], ['tokens', 'any'],
@@ -125,6 +125,7 @@ const LOCAL_COMMAND_REQUIREMENTS: ReadonlyMap<string, LocalCommandRequirement> =
   ['compact', 'compact'], ['resume', 'resume'], ['rewind', 'rewind'], ['fork', 'fork'],
   ['model', 'models'], ['effort', 'effort'], ['agents', 'subagents'], ['jobs', 'tasks'], ['mcp', 'mcp'],
   ['context', 'context'], ['login', 'login'],
+  ['recap', 'sideQuery'], ['btw', 'sideQuery'], ['rename', 'rename'], ['color', 'color'],
 ])
 
 /** The requirement of one built-in command name (unlisted → `dsh`). */

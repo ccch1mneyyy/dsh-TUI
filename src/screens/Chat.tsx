@@ -2837,10 +2837,29 @@ export function Chat({
           t('hooks-mount-hint'),
         ])
         return true
-      case 'mcp':
+      case 'mcp': {
         setHelpOpen(false)
+        // `/mcp reconnect <name>` and `/mcp toggle <name> on|off` where the
+        // backend controls its MCP servers; anything else (and every DSH
+        // session) shows the status report as before.
+        const control = (channel.capabilities as Channel['capabilities'] | undefined)?.mcpControl === true
+        const args = rawInput.trim()
+        const sub = /^(reconnect|toggle)(?:\s+([\s\S]*))?$/u.exec(args)
+        if (control && sub !== null) {
+          const rest = (sub[2] ?? '').trim()
+          if (sub[1] === 'reconnect') {
+            if (rest === '') channel.notify(t('mcp-control-usage'), { color: 'warning' })
+            else void channel.mcpControl({ action: 'reconnect', name: rest })
+            return true
+          }
+          const toggle = /^([\s\S]+?)\s+(on|off)$/u.exec(rest)
+          if (toggle === null) channel.notify(t('mcp-control-usage'), { color: 'warning' })
+          else void channel.mcpControl({ action: 'toggle', name: toggle[1]!.trim(), enabled: toggle[2] === 'on' })
+          return true
+        }
         channel.pushLocal('/mcp', channel.mcpStatus())
         return true
+      }
       case 'update':
         setHelpOpen(false)
         if (onUpdate === undefined) {

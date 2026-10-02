@@ -49,6 +49,8 @@ export function createCoreFiles(ctx: Context, deps: {
   host: Pick<CoreHost, 'themeHost' | 'commandTrees'>
   /** Whether the local disk stands in for a missing host fs service. */
   localFallback(): boolean
+  /** The bound backend's MCP server names (`/mcp` completion). */
+  mcpServers?(): readonly string[] | undefined
 }) {
   // The session's working directory is the local disk when the host mounts
   // no fs service and the backend runs here (mentions and `@` completion).
@@ -73,6 +75,7 @@ export function createCoreFiles(ctx: Context, deps: {
         themeHost: deps.host.themeHost,
         commandTrees: deps.host.commandTrees,
         workspaceCommands: catalog.workspaceCommands,
+        ...(deps.mcpServers === undefined ? {} : { mcpServers: deps.mcpServers }),
         model: catalog.model,
       })
     },

@@ -107,6 +107,7 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'cancelCompact': 'mutate',
   'pushLocal': 'mutate',
   'mcpStatus': 'read-only',
+  'mcpControl': 'mutate',
   'exportSession': 'mutate',
   'initWorkspace': 'mutate',
   'doctorInfo': 'read-only',

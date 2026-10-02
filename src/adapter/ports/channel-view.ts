@@ -811,6 +811,15 @@ export interface ChannelCapabilities {
   readonly context: boolean
   /** `/login` signs the backend session in (DSH: the DSH credentials). */
   readonly login: boolean
+  /** `/btw` and `/recap` run a side call over the conversation. */
+  readonly sideQuery: boolean
+  /** `/rename` renames the session. */
+  readonly rename: boolean
+  /** `/color` keeps a per-session accent. */
+  readonly color: boolean
+  /** `/mcp reconnect|toggle` control the backend's MCP servers (a DSH
+   *  session reports status only). */
+  readonly mcpControl: boolean
 }
 
 /**

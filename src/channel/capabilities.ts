@@ -38,6 +38,9 @@ export function channelCapabilities(input: {
     mcp: input.dsh || caps.mcp !== undefined,
     context: input.dsh || caps.context !== undefined,
     login: input.dsh || caps.auth !== undefined,
+    sideQuery: input.dsh || caps.sideQuery !== undefined,
+    rename: input.dsh || caps.rename !== undefined,
+    color: input.dsh || caps.color !== undefined,
   }
   return Object.freeze({
     backendId: input.backendId,
@@ -45,5 +48,7 @@ export function channelCapabilities(input: {
     commands: Object.freeze([...supportedLocalCommandNames({ dsh: input.dsh, has: capability => flags[capability] })]),
     retractPending: caps.retractPending === true,
     ...flags,
+    // Not a command requirement: `/mcp` itself stays on every backend.
+    mcpControl: !input.dsh && caps.mcp?.reconnect !== undefined && caps.mcp.toggle !== undefined,
   })
 }

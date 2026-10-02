@@ -13,9 +13,11 @@
 import type { CanUseTool, OnElicitation, OnUserDialog, Options, PermissionMode, SettingSource } from '@anthropic-ai/claude-agent-sdk'
 import type { ClaudeSdkModule } from './sdk.js'
 
-/** How the profile treats an option: `set` here, `omit` (CLI default /
- *  settings decide), or `later` (a later phase maps a TUI feature to it). */
-type OptionPolicy = 'set' | 'omit' | 'later'
+/** How the profile treats an option: `set` here, `side` (only the side
+ *  query of `/btw` and `/recap` sets it, `buildSideQueryOptions`), `omit`
+ *  (CLI default / settings decide), or `later` (a later phase maps a TUI
+ *  feature to it). */
+type OptionPolicy = 'set' | 'side' | 'omit' | 'later'
 
 export const OPTION_POLICY = {
   abortController: 'set',
@@ -37,14 +39,14 @@ export const OPTION_POLICY = {
   fallbackModel: 'omit',
   enableFileCheckpointing: 'set',
   toolConfig: 'omit',
-  forkSession: 'later', // Phase 4
+  forkSession: 'side', // the side query forks the conversation
   betas: 'omit',
   hooks: 'omit',
   onElicitation: 'set', // MCP elicitation → the questionnaire (dialogs.ts)
   onUserDialog: 'set', // the refusal-fallback dialog (dialogs.ts)
   supportedDialogKinds: 'set', // exactly the kinds dialogs.ts renders
   perTaskStopAffordance: 'set',
-  persistSession: 'omit',
+  persistSession: 'side', // the side query writes no transcript
   sessionStore: 'omit',
   sessionStoreFlush: 'omit',
   loadTimeoutMs: 'omit',
@@ -55,7 +57,7 @@ export const OPTION_POLICY = {
   thinking: 'omit',
   effort: 'set', // the persisted `/effort` choice (Phase 3)
   maxThinkingTokens: 'omit',
-  maxTurns: 'omit',
+  maxTurns: 'side', // the side query: one turn
   maxBudgetUsd: 'omit',
   taskBudget: 'omit',
   mcpServers: 'omit',
@@ -173,6 +175,48 @@ export type ProfileInput = {
   /** … or the same session resumed (the SDK refuses both together). */
   | { readonly resume: string; readonly sessionId?: undefined }
 )
+
+/** What a side query (`/btw`, `/recap`; side-query.ts) runs with. */
+export interface SideQueryInput {
+  readonly cwd: string
+  /** The session it forks (persisted). */
+  readonly resume: string
+  readonly env: Record<string, string>
+  readonly settings?: { readonly env: Readonly<Record<string, string>> }
+  readonly executable: string | undefined
+  readonly abortController: AbortController
+  readonly stderr: (data: string) => void
+  readonly model?: string
+}
+
+/**
+ * The side query's options (design §5.3): a throwaway fork of the
+ * conversation (`resume` + `forkSession`, `persistSession:false` — no
+ * transcript written), no tools, one turn, the session's model, and the
+ * session's own system prompt, settings sources, environment, credential
+ * and route pin. Nothing can ask for permission (no tools; any request is
+ * refused).
+ */
+export function buildSideQueryOptions(input: SideQueryInput): Options {
+  return {
+    abortController: input.abortController,
+    cwd: input.cwd,
+    resume: input.resume,
+    forkSession: true,
+    persistSession: false,
+    tools: [],
+    maxTurns: 1,
+    systemPrompt: { type: 'preset', preset: 'claude_code' },
+    settingSources: SETTING_SOURCES,
+    includePartialMessages: true,
+    canUseTool: () => Promise.resolve({ behavior: 'deny', message: 'No tools are available to a side question' }),
+    env: input.env,
+    stderr: input.stderr,
+    ...(input.executable === undefined ? {} : { pathToClaudeCodeExecutable: input.executable }),
+    ...(input.model === undefined ? {} : { model: input.model }),
+    ...(input.settings === undefined ? {} : { settings: { env: { ...input.settings.env } } }),
+  }
+}
 
 /** Assemble the `query()` options of one session. */
 export function buildQueryOptions(input: ProfileInput): Options {

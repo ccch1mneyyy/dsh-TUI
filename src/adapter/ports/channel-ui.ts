@@ -586,6 +586,10 @@ export interface ChannelUi {
   pushLocal(title: string, lines: readonly string[]): void
   /** MCP server/tool status for /mcp: one line per server, or setup guidance. */
   mcpStatus(): string[]
+  /** `/mcp reconnect <name>` / `/mcp toggle <name> on|off` where the backend
+   *  controls its servers (`capabilities.mcpControl`); reports the outcome
+   *  itself (a notice), resolving true when it was done. */
+  mcpControl(request: { readonly action: 'reconnect'; readonly name: string } | { readonly action: 'toggle'; readonly name: string; readonly enabled: boolean }): Promise<boolean>
   /** Write the conversation transcript to `dsh-tui-export-<ts>.md` in the
    *  session cwd; returns the written path, or null on failure. */
   exportSession(): string | null

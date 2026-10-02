@@ -78,51 +78,6 @@ export function collectRecentActivity(events: readonly SessionEvent[], limitChar
   return picked.map(entry => `${entry.role}: ${entry.text}`).join('\n')
 }
 
-/**
- * Wrap the recent-activity excerpt with the single-response, JSON-only
- * recap contract. The model answers with a title + one-line summary in
- * the language of the activity (matching the user's own words).
- */
-export function wrapRecapPrompt(activity: string): string {
-  return `Create a compact session recap from the activity excerpt below.
-Use the user's language and describe the work and its current outcome accurately.
-Return one JSON object with two string fields:
-- "title": a descriptive title of about 2-6 words.
-- "summary": one line of about 10-20 words covering the most recent progress.
-Do not include Markdown fences or any text outside the JSON object.
-
-Activity excerpt:
-${activity}`
-}
-
-/**
- * Parse the model's recap response: extract the JSON object (tolerating
- * stray prose around it); on failure the whole text becomes the summary
- * and no title is proposed.
- */
-export function parseRecapResponse(raw: string): { summary: string; title?: string } {
-  const start = raw.indexOf('{')
-  const end = raw.lastIndexOf('}')
-  if (start !== -1 && end > start) {
-    try {
-      const parsed: unknown = JSON.parse(raw.slice(start, end + 1))
-      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        const record = parsed as Record<string, unknown>
-        const summary =
-          typeof record['summary'] === 'string' && record['summary'].trim() !== ''
-            ? record['summary'].trim()
-            : undefined
-        const title =
-          typeof record['title'] === 'string' && record['title'].trim() !== ''
-            ? record['title'].trim()
-            : undefined
-        if (summary !== undefined) {
-          return title === undefined ? { summary } : { summary, title }
-        }
-      }
-    } catch {
-      // Fall through to the raw-text fallback below.
-    }
-  }
-  return { summary: raw.trim() }
-}
+/** The recap prompt and its answer parser are backend-neutral (the Claude
+ *  backend's `/recap` uses the same contract): src/channel/side-prompts.ts. */
+export { parseRecapResponse, wrapRecapPrompt } from '../channel/side-prompts.js'

@@ -52,6 +52,7 @@ import { rewindCutPoint, type ClaudeReplay } from './replay.js'
 import type { ClaudeSdkModule, ClaudeSessionStoreSdk } from './sdk.js'
 import { readTaskOutputTail, taskOutputRoots } from './task-output.js'
 import { claudeConfigDir } from './transcript-file.js'
+import { createClaudeSideQuery } from './side-query.js'
 import { createClaudeTranslator } from './translate.js'
 
 declare module '../../agent/capabilities.js' {
@@ -84,7 +85,7 @@ export interface ClaudeSessionDeps {
   readonly sdk: Pick<ClaudeSdkModule, 'query'>
   /** The session-store API behind `/fork` and the conversation rewind
    *  (absent = neither capability). */
-  readonly store?: Pick<ClaudeSessionStoreSdk, 'getSessionMessages' | 'forkSession'>
+  readonly store?: Pick<ClaudeSessionStoreSdk, 'getSessionMessages' | 'forkSession'> & Partial<Pick<ClaudeSessionStoreSdk, 'renameSession'>>
   readonly cwd: string
   readonly sessionId: string
   /**
@@ -243,6 +244,8 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
    * handshake ("No conversation found").
    */
   let persisted = resumed
+  /** A `/rename` made before the CLI wrote the transcript (flushRename). */
+  let pendingTitle: string | undefined
   /** What this session pushed, by input uuid, until the CLI starts it: a
    *  reconnect re-delivers what the old CLI never started. */
   const pushed = new Map<string, SDKUserMessage>()
@@ -432,6 +435,9 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     try {
       prefs.touch(next)
       if (prefs.read().lastSession === previous) prefs.write({ lastSession: next })
+      // The accent belongs to the TUI's session, which continues.
+      const color = prefs.color(previous)
+      if (color !== '') prefs.setColor(next, color)
     } catch (error) {
       deps.host.debug(`claude: prefs update after reset failed (${errorText(error)})`)
     }
@@ -459,7 +465,10 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       if (typeof value.apiKeySource === 'string') apiKeySource = value.apiKeySource
       if (Array.isArray(value.terminal_slash_commands)) controls.setTerminalOnly(value.terminal_slash_commands.filter((item): item is string => typeof item === 'string'))
     }
-    if (value?.type === 'result' || (value?.type === 'command_lifecycle' && value.state === 'started')) persisted = true
+    if (value?.type === 'result' || (value?.type === 'command_lifecycle' && value.state === 'started')) {
+      persisted = true
+      flushRename()
+    }
     // While a reconnect is renewing the credential, the old CLI's late
     // failing turn is the failure being handled, not a new one.
     if (reconnecting === undefined && isAuthFailure(message)) authFailed = true
@@ -706,6 +715,9 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   // The start mode is the session's first mode (the CLI confirms it with its
   // first `init`); the status line shows it from the start.
   emit([{ type: 'mode.changed', modeId: translator.mode ?? deps.start.mode }], 'none')
+  // The session's `/color` accent (kept TUI-side per session id).
+  const startColor = prefs.color(currentSessionId)
+  if (startColor !== '') emit([{ type: 'session.color', color: startColor }])
   run.consumer = consume(run)
   // A resumed transcript does not record the context window (design §4.11):
   // ask the CLI once, so the status line has it before the first `result`.
@@ -815,6 +827,39 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     return true
   }
 
+  /**
+   * `/rename` (design §4.11): `renameSession()` writes the title into the
+   * transcript (the browser and `claude --resume` read it), and the live
+   * session reports it at once. Before the CLI wrote the transcript there is
+   * no file to append to: the title is kept and written with the first
+   * persisted frame.
+   */
+  function flushRename(): void {
+    const title = pendingTitle
+    const rename = deps.store?.renameSession
+    if (title === undefined || rename === undefined || !persisted) return
+    pendingTitle = undefined
+    void rename(currentSessionId, title, { dir: deps.cwd }).catch((error: unknown) => {
+      deps.host.debug(`claude: deferred rename failed (${errorText(error)})`)
+      emit([{ type: 'notice', level: 'warning', text: t('rename-failed', { err: errorText(error) }) }])
+    })
+  }
+  function renameCapability(): Pick<AgentSession['capabilities'], 'rename'> {
+    const rename = deps.store?.renameSession
+    if (rename === undefined) return {}
+    return {
+      rename: {
+        async rename(title: string): Promise<void> {
+          const trimmed = title.trim()
+          if (trimmed === '') throw new Error(t('rename-usage'))
+          if (persisted) await rename(currentSessionId, trimmed, { dir: deps.cwd })
+          else pendingTitle = trimmed
+          emit([{ type: 'session.title', title: trimmed, source: 'user' }])
+        },
+      },
+    }
+  }
+
   const session: AgentSession = {
     ref: ownRef,
     cwd: deps.cwd,
@@ -840,6 +885,23 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       },
       ...controls.capabilities,
       ...sessionStoreCapabilities(),
+      sideQuery: createClaudeSideQuery({
+        sdk: deps.sdk,
+        cwd: deps.cwd,
+        sessionId: () => currentSessionId,
+        persisted: () => persisted,
+        model: () => translator.model,
+        spawn: () => ({ env: authPlan.env, ...(authPlan.settings === undefined ? {} : { settings: authPlan.settings }), executable: deps.executable.path }),
+        debug: deps.host.debug,
+      }),
+      ...renameCapability(),
+      color: {
+        current: () => prefs.color(currentSessionId),
+        set(color: string): void {
+          prefs.setColor(currentSessionId, color)
+          emit([{ type: 'session.color', color }])
+        },
+      },
       // Design §4.8: a subagent or background job is stopped by its task id
       // (`stopTask`; the CLI reports the stop as its notification).
       subagents: {

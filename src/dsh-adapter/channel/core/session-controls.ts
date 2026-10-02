@@ -35,6 +35,8 @@ export function createSessionControls(deps: {
   let backendCommands: LocalCommand[] = []
   /** `/mcp` is synchronous: it reads the last report (refreshed per turn). */
   let mcpLines: string[] | undefined
+  /** The servers of that report (`/mcp reconnect|toggle` completion). */
+  let mcpNames: readonly string[] | undefined
 
   const refreshCommandList = (): void => {
     const state = deps.state()
@@ -86,6 +88,7 @@ export function createSessionControls(deps: {
     if (mcp === undefined) return
     void mcp.status().then(servers => {
       if (!current()) return
+      mcpNames = servers.map(server => server.name)
       mcpLines = servers.length === 0
         ? [t('claude-mcp-none')]
         : [
@@ -128,6 +131,7 @@ export function createSessionControls(deps: {
   const seed = (session: AgentSession, current: () => boolean): void => {
     backendCommands = []
     mcpLines = undefined
+    mcpNames = undefined
     const modes = session.capabilities.modes
     if (modes !== undefined) applyMode(session, modes.current())
     if (session.capabilities.effort !== undefined) applyEffort(session, session.capabilities.effort.current())
@@ -175,6 +179,7 @@ export function createSessionControls(deps: {
   const reset = (): void => {
     backendCommands = []
     mcpLines = undefined
+    mcpNames = undefined
     refreshCommandList()
   }
 
@@ -188,6 +193,8 @@ export function createSessionControls(deps: {
       refreshMcp(session, current)
       return mcpLines
     },
+    /** The server names of the last report (undefined before one). */
+    mcpServers: (): readonly string[] | undefined => mcpNames,
   }
 }
 

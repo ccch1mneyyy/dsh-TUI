@@ -162,6 +162,8 @@ export function claudeEmits(type: AgentEventType): boolean {
     case 'todo.write':
     case 'notice':
     case 'rate-limit':
+    // The session's `/color` (prefs-backed, session.ts).
+    case 'session.color':
       return true
     // Emitted by the session's permission bridge (permissions.ts), not by
     // this translator: the prompts arrive through `canUseTool`.
@@ -173,7 +175,6 @@ export function claudeEmits(type: AgentEventType): boolean {
     // Later phases (effort, context usage) or not a Claude concept (DSH
     // goals, presets, request headers, system prompt text, plugin events,
     // compaction summary progress, task output reads).
-    case 'session.color':
     case 'assistant.attempt.end':
     case 'task.output':
     case 'compaction.progress':
