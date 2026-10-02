@@ -25,7 +25,7 @@ import {
   sessionTitleAnchor,
 } from './digest.js'
 import { fileFacts } from './frames.js'
-import { scheduleTitleRecovery, titleRecoveryNeedsWork } from './recovery.js'
+import { scheduleMetadataRecovery, metadataRecoveryNeedsWork } from './recovery.js'
 import { classify, readHeader, type RawSessionHeader } from './header.js'
 import { findSessionLogFile, resolveLocatedPath } from '../compat/sessionLog.js'
 import { indexFileStamp, readIndex, writeIndex, type DerivedEntry, type SessionIndex } from './store.js'
@@ -327,7 +327,7 @@ export async function listSummaries(
     }
     if (
       derived !== undefined && (!derived.titleComplete || derived.modelComplete !== true) && signal?.aborted !== true &&
-      titleRecoveryNeedsWork(header.id, derived.revision, enriched => notifyEnriched(header.id, enriched))
+      metadataRecoveryNeedsWork(header.id, derived.revision, enriched => notifyEnriched(header.id, enriched))
     ) {
       // A revision hit still may need enrichment, but locating that rare log
       // stays off the ordinary warm path once recovery has been scheduled.
@@ -376,7 +376,7 @@ export async function listSummaries(
 
   if (newest) {
     for (const work of scanWork) {
-      scheduleTitleRecovery(work, derived => notifyEnriched(work.id, derived))
+      scheduleMetadataRecovery(work, derived => notifyEnriched(work.id, derived))
     }
   }
 
