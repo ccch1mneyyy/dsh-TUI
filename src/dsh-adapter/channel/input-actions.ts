@@ -4,7 +4,14 @@ import { t } from '../../i18n.js'
 import { touchSession } from '../../sessionHistory.js'
 import type { ChannelState, ComposerImageRef, ComposerSubmission } from './types.js'
 
-export interface InputConvergence { cancelInFlight: boolean; interruptSeq: number }
+export interface InputConvergence {
+  cancelInFlight: boolean
+  interruptSeq: number
+  /** Cause of the abort currently converging, written by whoever fires the
+   *  cancel and read to decide whether a queued-input drop is still needed
+   *  (a 'user' cancel kept the backend queue; an 'interrupt' drops it). */
+  cancelCause?: 'user' | 'interrupt'
+}
 export function createInputActions(
   getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit' | 'notify' | 'backendCapabilities'>,
   getSession: () => AgentSession,
@@ -16,7 +23,7 @@ export function createInputActions(
   /** Move the used session to the front of the `/resume` MRU (DSH session
    *  history); a backend whose sessions that list cannot open passes a no-op. */
   touch: (sessionId: string) => void = touchSession,
-): Pick<ChannelState, 'submit' | 'steer' | 'removePending' | 'cancel' | 'interruptAndDeliver'> {
+): Pick<ChannelState, 'submit' | 'steer' | 'removePending' | 'cancel' | 'interruptAndDeliver' | 'interruptAndDock' | 'deliverDocked'> {
   return {
     submit(text, images = []) {
       owner.assertActive()
@@ -74,6 +81,16 @@ export function createInputActions(
       const session = getSession()
       const index = state.pending.findIndex(item => item.id === id)
       if (index === -1) return false
+      // A docked preview is a channel-side asset: the backend dropped its
+      // queued copy with the aborted turn, so pulling it back is purely
+      // local and EVERY backend supports it — including those without
+      // live-inbox withdrawal (`retractPending` false, the Claude CLI),
+      // whose gate below only governs LIVE queue items.
+      if (state.pending[index]!.docked === true) {
+        state.pending = state.pending.filter(item => item.id !== id)
+        state.emit()
+        return true
+      }
       // A backend that cannot withdraw synchronously is never asked: starting
       // an async removal and reporting failure here would leave the message
       // both "kept" in the UI and maybe-withdrawn in the backend. The caller
@@ -108,8 +125,76 @@ export function createInputActions(
       // mirrors that window for the UI, where a repeated press force-exits.
       if (input.cancelInFlight) return
       input.cancelInFlight = true
+      input.cancelCause = 'user'
       state.cancelPending = true
       void session.cancel('user')
+    },
+
+    /** Esc with queued input while a turn runs (Claude Code parity: "Press
+     *  up to select a queued message to edit, or Enter to send them now"):
+     *  the abort drops the backend's queued copies and the channel PARKS its
+     *  previews as a dock — nothing re-delivers them until the user sends
+     *  the dock (⏎ / deliverDocked) or retracts items (Alt+↑ / the ↑
+     *  editor). Returns the count docked; 0 means nothing new was parked
+     *  (already-docked rows stay put; the caller may still plain-cancel). */
+    interruptAndDock(): number {
+      owner.assertActive()
+      const state = getState()
+      const session = getSession()
+      const dockable = state.pending.filter(item => item.docked !== true)
+      if (dockable.length > 0) {
+        // Mark BEFORE the cancel fires: the discard events the backend's
+        // queue drop produces must not delete the previews — binding-feed
+        // keeps `docked` rows alive on discard (the dock owns them now).
+        state.pending = state.pending.map(item => item.docked === true ? item : { ...item, docked: true })
+        state.emit()
+      }
+      state.cancelPending = true
+      // A 'user' cancel already converging KEPT the backend queue
+      // (keepInbox); docking over it must still drop that queue or the
+      // parked previews would double with the backend's own next-turn run.
+      // An 'interrupt' abort already in flight is already dropping it.
+      if (!input.cancelInFlight || input.cancelCause === 'user') {
+        input.cancelInFlight = true
+        input.cancelCause = 'interrupt'
+        void session.cancel('interrupt')
+          .then(receipt => {
+            // A backend that could not drop its queue answers with the
+            // kept ids (Claude `still_queued`; a CLI without
+            // interrupt_cancel_queued_v1 runs them itself): un-dock those
+            // rows so their previews retire on claim instead of offering a
+            // second send on top of the backend's own.
+            const kept = new Set(receipt.stillQueued)
+            if (kept.size === 0) return
+            let undocked = false
+            state.pending = state.pending.map(item => {
+              if (item.docked !== true || !kept.has(item.id)) return item
+              undocked = true
+              return { ...item, docked: undefined }
+            })
+            if (undocked) state.emit()
+          })
+          .catch(() => { /* the dock stands; claims retire what really runs */ })
+      }
+      return dockable.length
+    },
+
+    /** Send every docked message now (⏎ on an empty draft, or the clickable
+     *  dock hint): FIFO through the same dispatch chain a typed submit uses,
+     *  exactly once — the docked rows leave first and their deliveries
+     *  enqueue fresh pending previews. Returns the count sent. */
+    deliverDocked(): number {
+      owner.assertActive()
+      const state = getState()
+      const docked = state.pending.filter(item => item.docked === true)
+      if (docked.length === 0) return 0
+      state.pending = state.pending.filter(item => item.docked !== true)
+      state.emit()
+      for (const entry of docked) {
+        touch(state.agentId)
+        dispatchUserText(entry.text, 'followup', entry.images)
+      }
+      return docked.length
     },
 
     interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number {
@@ -130,8 +215,11 @@ export function createInputActions(
       // replacement work and may never settle. If cancellation is already
       // in flight, keep the existing abort and still replace the pending
       // interrupt delivery; fake/embedded agents may not emit turn/end.
-      if (!input.cancelInFlight) {
+      // (Exception: an in-flight 'user' cancel KEPT the backend queue —
+      // drop it now or the re-queue below would double with its own run.)
+      if (!input.cancelInFlight || input.cancelCause === 'user') {
         input.cancelInFlight = true
+        input.cancelCause = 'interrupt'
         void session.cancel('interrupt')
       }
       state.cancelPending = true
@@ -140,7 +228,15 @@ export function createInputActions(
         // A second interrupt while the abort is still settling must not
         // double-deliver: only the latest request's re-queue runs.
         if (input.interruptSeq !== token) return
-        for (const entry of queued) {
+        // The dock's rows ride this batch too: take them off the pending
+        // list first (their re-deliveries enqueue fresh previews), ahead
+        // of the given inputs — docked rows are the OLDEST texts (FIFO).
+        const docked = state.pending.filter(item => item.docked === true)
+        if (docked.length > 0) {
+          state.pending = state.pending.filter(item => item.docked !== true)
+          state.emit()
+        }
+        for (const entry of [...docked, ...queued]) {
           touch(state.agentId)
           // Same tui/input decision pass as a typed submit: Ctrl+Enter must
           // not bypass a plugin's cancel/transform policy, and re-queued
@@ -153,6 +249,6 @@ export function createInputActions(
       // token survives, so the user's text is never sent twice.
       queueMicrotask(deliver)
       return queued.length
-    }
+    },
   }
 }

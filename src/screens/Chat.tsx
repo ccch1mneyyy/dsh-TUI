@@ -5079,19 +5079,16 @@ export function Chat({
     } else if (key.escape && channel.working && !helpOpen && !promptControllerRef.current?.vimActive()) {
       // Esc interrupts a running turn (the prompt input
       // only sees esc when idle, where it has the double-tap-clear meaning).
-      // With messages queued for delivery, interrupt-and-deliver them right
-      // away (Codex behavior); otherwise a plain interrupt parks the queue.
+      // With messages queued, the queue DOCKS (Claude Code parity): the
+      // abort drops the backend copies, the previews park channel-side and
+      // the composer's dock hint offers ↑ to edit one / ⏎ to send them all
+      // — nothing auto-sends. Already-docked rows dock nothing new; the
+      // turn still needs its plain abort.
       // vim mode (either submode) yields: there Esc is a MODE key (INSERT→
       // NORMAL, NORMAL = no-op/cancel pending d) and the prompt owns it;
       // interrupting still works via Ctrl+C / Ctrl+Enter.
       if (channel.pending.length > 0) {
-        const count = channel.interruptAndDeliver(channel.pending.map(item => ({
-          text: item.text,
-          images: item.images ?? [],
-        })))
-        if (count > 0) {
-          channel.notify(t('interrupt-delivered', { n: count }), { timeoutMs: 2500 })
-        }
+        if (channel.interruptAndDock() === 0) channel.cancel()
       } else {
         channel.cancel()
       }

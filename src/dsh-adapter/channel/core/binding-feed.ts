@@ -105,9 +105,15 @@ export function createSessionBatchRouter(deps: {
    */
   const applyPending = (event: AgentEventOf<'pending.changed'>): void => {
     for (const messageId of event.discarded ?? []) deps.retireAttachment?.(messageId)
+    // A discard also dissolves a DOCKED preview's backend copy — the dock
+    // (the channel-side park an interrupt created) owns the row now, so it
+    // stays until sent (`deliverDocked`) or retracted. A claim always
+    // retires the row: a fallback backend that kept its queue ran it.
+    const dockedDiscards = new Set(event.discarded ?? [])
     for (const messageId of [...event.claimed ?? [], ...event.discarded ?? []]) {
       const before = deps.state.pending.length
-      deps.state.pending = deps.state.pending.filter(item => item.id !== messageId)
+      deps.state.pending = deps.state.pending.filter(item =>
+        item.id !== messageId || (item.docked === true && dockedDiscards.has(messageId)))
       if (deps.state.pending.length !== before) deps.state.emit()
     }
   }

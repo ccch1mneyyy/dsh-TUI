@@ -844,6 +844,15 @@ export function PromptInput({
   const [homeHovered, setHomeHovered] = React.useState(false)
   /** Pointer over the input box (drives the hover peek card). */
   const [hovered, setHovered] = React.useState(false)
+  /** Highlighted row of the docked-queue selector (null = inactive; the
+   *  index runs over the docked subset of `channel.pending`, oldest first).
+   *  The ref mirrors it for the deferred consumeEscape controller closure. */
+  const [dockSelected, setDockSelectedState] = React.useState<number | null>(null)
+  const dockSelectedRef = React.useRef<number | null>(null)
+  const setDockSelected = (index: number | null): void => {
+    dockSelectedRef.current = index
+    setDockSelectedState(index)
+  }
   /** 120ms grace so the pointer crossing the input border row from the
    *  chip up onto the peek card never flickers the card. */
   const hoverLeaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1761,6 +1770,9 @@ export function PromptInput({
    * cannot withdraw inbox messages (released package without the inbox API).
    */
   const pullBackLast = () => {
+    // Alt+↑ keeps its direct last-item meaning even while the dock selector
+    // is open — one press, one retracted row (the selector closes with it).
+    setDockSelected(null)
     const item = channel.pending[channel.pending.length - 1]
     if (!item) return
     if (!channel.removePending(item.id)) {
@@ -1801,6 +1813,44 @@ export function PromptInput({
   }
 
   /**
+   * The docked queue (Esc parked it while interrupting, Claude Code parity):
+   * previews the composer keeps until the user sends them all (⏎ on an empty
+   * draft / the clickable hint) or retracts items (the ↑ selector / Alt+↑).
+   */
+  const dockedPending = channel.pending.filter(item => item.docked === true)
+  const dockCount = dockedPending.length
+
+  /** Send the whole dock now (⏎ on an empty draft, or the hint row click):
+   *  FIFO, exactly once, through the channel's own delivery chain. */
+  const sendDocked = (): void => {
+    const sent = channel.deliverDocked()
+    if (sent > 0) channel.notify(t('input-dock-sent', { n: sent }), { timeoutMs: 2500 })
+    setDockSelected(null)
+  }
+
+  /** Retract one docked row into the draft for editing (selector ⏎, row
+   *  click, Alt+↑ on the last): purely local — the backend dropped its copy
+   *  with the aborted turn, so every backend can do it. */
+  const editDocked = (index: number): void => {
+    const item = dockedPending[index]
+    setDockSelected(null)
+    if (item === undefined) return
+    if (!channel.removePending(item.id)) {
+      channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
+      return
+    }
+    restoreDraftImages({
+      text: item.text,
+      images: item.images ?? [],
+    })
+    setInput(item.text, item.text.length, 'silent')
+    updateFoldBlock(null)
+    setSelectedCommand(0)
+    setFileSelected(0)
+    channel.notify(t('input-retracted'), { timeoutMs: 2000 })
+  }
+
+  /**
    * Ctrl+Enter: abort the running turn and send the input immediately — the
    * model stops what it is doing and starts on this message right away.
    */
@@ -1812,10 +1862,12 @@ export function PromptInput({
     }
     // Abort the running turn and deliver: previously queued pending
     // messages first (FIFO), then the current input — all processed
-    // immediately once the abort settles.
+    // immediately once the abort settles. Docked rows are NOT listed here:
+    // the channel's interruptAndDeliver takes the dock itself first (same
+    // FIFO order), so including them would send each docked text twice.
     const images = imageRefsFor(trimmed)
     const queued: ComposerSubmission[] = [
-      ...channel.pending.map(item => ({ text: item.text, images: item.images ?? [] })),
+      ...channel.pending.filter(item => item.docked !== true).map(item => ({ text: item.text, images: item.images ?? [] })),
       { text: value, images },
     ]
     const count = channel.interruptAndDeliver(queued)
@@ -1937,6 +1989,12 @@ export function PromptInput({
     if (now - lastEnterAtRef.current < 80) return
     lastEnterAtRef.current = now
     const value = valueRef.current
+    // The docked-queue selector owns Enter while a row is highlighted and
+    // the draft is untouched: retract that row into the input for editing.
+    if (dockSelectedRef.current !== null && value.trim() === '' && dockCount > 0) {
+      editDocked(dockSelectedRef.current)
+      return
+    }
     if (overlayOpen) {
       const command = suggestions[selectedCommand]
       if (command) {
@@ -1952,6 +2010,15 @@ export function PromptInput({
         acceptFile(file)
         return
       }
+    }
+    // A docked queue (Esc parked it) owns a bare Enter on an EMPTY draft
+    // (Claude Code parity: "…or Enter to send them now"). A draft in
+    // progress keeps the ordinary submit path and the dock stays parked —
+    // sending parked messages silently along with the next typed submit is
+    // exactly the surprise the dock exists to prevent.
+    if (value.trim() === '' && !channel.working && dockCount > 0) {
+      sendDocked()
+      return
     }
     if (channel.working && value.trim() !== '') {
       // Immediate-command semantics: /btw and /skills are exempt from
@@ -2008,6 +2075,12 @@ export function PromptInput({
   /** Local Esc layers, shared by the prompt listener and Chat's delegation.
    * Refs preserve this order even when expansion and Esc share a stdin batch. */
   const consumeEditingEscape = (): boolean => {
+    // The docked-queue selector folds first: Esc leaves the selector and the
+    // dock itself stays put (⏎/↑ keep working afterwards).
+    if (dockSelectedRef.current !== null) {
+      setDockSelected(null)
+      return true
+    }
     if (selectionRef.current && !helpOpen && !overlayOpen && !fileOverlayOpen) {
       clearSelection()
       return true
@@ -2687,6 +2760,13 @@ export function PromptInput({
       return
     }
     if (key.upArrow) {
+      // The docked-queue selector owns ↑ while a row is highlighted
+      // (Claude Code parity: "Press up to select a queued message to
+      // edit"); the walk wraps around the dock.
+      if (dockSelected !== null) {
+        setDockSelected(dockSelected <= 0 ? dockCount - 1 : dockSelected - 1)
+        return
+      }
       // A history walk owns the arrows until it returns to the draft: a
       // recalled entry can itself open the @ menu or the slash menu (e.g.
       // `/model`), and letting the overlay navigate here strands the stashed
@@ -2733,6 +2813,16 @@ export function PromptInput({
         )
         return
       }
+      // An EMPTY draft while idle with a docked queue takes ↑ into the dock
+      // selector, ahead of the history walk (Claude Code parity). Any draft
+      // keeps ↑ as cursor movement; the menus above keep their priority.
+      if (
+        value === '' && !channel.working && !expandedRef.current
+        && !overlayOpen && !fileOverlayOpen && dockCount > 0
+      ) {
+        setDockSelected(dockCount - 1)
+        return
+      }
       // A workspace switch mid-walk keeps the draft that walk started from:
       // the composer shows the previous project's entry, not a new draft.
       const interrupted = seedHistory()
@@ -2760,6 +2850,11 @@ export function PromptInput({
       return
     }
     if (key.downArrow) {
+      // The docked-queue selector owns ↓ too (wraps down around the dock).
+      if (dockSelected !== null) {
+        setDockSelected(dockSelected >= dockCount - 1 ? 0 : dockSelected + 1)
+        return
+      }
       // Same history-walk ownership as ↑ above.
       if (fileOverlayOpen && historyIndex.current < 0) {
         setFileSelected(index =>
@@ -3227,17 +3322,19 @@ export function PromptInput({
         fileEscRef.current = mention?.start ?? -1
         return
       }
-      // With pending messages while working, Esc = interrupt and deliver
-      // them right away (Codex's "interrupt and send immediately"): the
-      // turn is aborted and each message is re-queued once it settles.
+      // The docked-queue selector folds before anything else: Esc leaves the
+      // selector (Chat's delegation reaches this through consumeEscape too).
+      if (dockSelectedRef.current !== null) {
+        setDockSelected(null)
+        return
+      }
+      // With pending messages while working, Esc = interrupt and DOCK the
+      // queue (Claude Code parity): the previews park channel-side and the
+      // dock hint offers ↑ to edit one / ⏎ to send them all — nothing
+      // auto-sends. A queue already fully docked docks nothing new; the
+      // turn still needs its plain abort.
       if (channel.working && channel.pending.length > 0) {
-        const count = channel.interruptAndDeliver(channel.pending.map(item => ({
-          text: item.text,
-          images: item.images ?? [],
-        })))
-        channel.notify(t('interrupt-delivered', { n: count }), {
-          timeoutMs: 2500,
-        })
+        if (channel.interruptAndDock() === 0) channel.cancel()
         return
       }
       // "Send to Chat" chips peel before the draft: the first Esc drops the
@@ -3291,8 +3388,11 @@ export function PromptInput({
       return
     }
     if (input && !key.ctrl && !key.meta && !key.super && !key.tab && !key.escape) {
-      // Typing anything else dismisses the help menu.
+      // Typing anything else dismisses the help menu…
       if (helpOpen) onToggleHelp()
+      // …and leaves the docked-queue selector: the draft is no longer empty,
+      // so ↑ goes back to cursor movement.
+      if (dockSelectedRef.current !== null) setDockSelected(null)
       // An active selection is REPLACED by the typed text, caret after it.
       const sel = selectionRef.current
       const at = sel ? sel.start : cursor
@@ -4119,11 +4219,11 @@ export function PromptInput({
         )}
         {!helpOpen && channel.pending.length > 0 && (
           <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
-            {channel.pending.some(item => item.placement === 'steer') && (
+            {channel.pending.some(item => item.placement === 'steer' && item.docked !== true) && (
               <Box flexDirection="column">
                 <Text dimColor>⚡ {t('input-pending-steer-label')}</Text>
                 {channel.pending
-                  .filter(item => item.placement === 'steer')
+                  .filter(item => item.placement === 'steer' && item.docked !== true)
                   .map(item => (
                     <Text key={item.id} dimColor wrap="truncate">
                       {'  '}↳ {item.text}
@@ -4131,16 +4231,38 @@ export function PromptInput({
                   ))}
               </Box>
             )}
-            {channel.pending.some(item => item.placement === 'followup') && (
+            {channel.pending.some(item => item.placement === 'followup' && item.docked !== true) && (
               <Box flexDirection="column">
                 <Text dimColor>⏳ {t('input-pending-queue-label')}</Text>
                 {channel.pending
-                  .filter(item => item.placement === 'followup')
+                  .filter(item => item.placement === 'followup' && item.docked !== true)
                   .map(item => (
                     <Text key={item.id} dimColor wrap="truncate">
                       {'  '}↳ {item.text}
                     </Text>
                   ))}
+              </Box>
+            )}
+            {dockCount > 0 && (
+              <Box flexDirection="column">
+                <Text dimColor>⏸ {t('input-pending-dock-label')}</Text>
+                {dockedPending.map((item, index) => (
+                  <Box
+                    key={item.id}
+                    // 点击停靠行 = 撤回该条进输入框编辑（与选择器 ⏎ 同路径）
+                    onClick={() => { editDocked(index) }}
+                  >
+                    <Text wrap="truncate" dimColor={dockSelected === null || dockSelected !== index} color={dockSelected === index ? promptAccent : undefined}>
+                      {'  '}{dockSelected === index ? '❯' : '↳'} {item.text}
+                    </Text>
+                  </Box>
+                ))}
+                <Box
+                  // 点击提示行 = 全部发送（与空输入 ⏎ 同路径）
+                  onClick={() => { sendDocked() }}
+                >
+                  <Text dimColor>{' '}{t('input-pending-dock-hint')}</Text>
+                </Box>
               </Box>
             )}
             <Text dimColor>Alt+↑ {t('input-pending-actions-hint')}</Text>
