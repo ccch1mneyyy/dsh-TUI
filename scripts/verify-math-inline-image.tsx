@@ -1,7 +1,7 @@
 /** Inline math as terminal images (`mathRendering: image`).
  *
- * layoutInlineMedia (pure): with no formulas it reproduces the <Text> wrap
- * line for line; a formula's placeholder run is never split and moves to
+ * layoutInlineMedia (pure): with no formulas it uses shared display-wrap
+ * rows; a formula's placeholder run is never split and moves to
  * the next row whole; a run wider than the row fails the layout (the caller
  * keeps Unicode); bold and links crossing a formula stay balanced in every
  * piece; wrap continuations are told apart from source newlines.
@@ -30,7 +30,7 @@ import { ThemeProvider } from '../src/components/design-system/ThemeProvider.js'
 import { setMathPreviewOpener, type MathPreviewRequest } from '../src/components/mathPreview.js'
 import instances from '../src/ink/instances.js'
 import type { TerminalImagePlacement } from '../src/ink/terminal-image.js'
-import wrapText from '../src/ink/wrap-text.js'
+import wrapText, { wrapTextLines } from '../src/ink/wrap-text.js'
 import { inlineMediaPlaceholder as slot, layoutInlineMedia } from '../src/math/inline-layout.js'
 import { applyMathRendering } from '../src/tuiDisplayPrefs.js'
 import { mathRendersInFlight } from '../src/math/renderer.js'
@@ -44,8 +44,8 @@ import { settle } from './lib/term-test.mjs'
     const rows = layoutInlineMedia(prose, width, [])!
     assert.deepEqual(
       rows.map(row => row.pieces.map(piece => (piece.kind === 'text' ? stripAnsi(piece.text) : '')).join('')),
-      stripAnsi(wrapText(prose, width, 'wrap')).split('\n'),
-      `without formulas the rows are the <Text> wrap at ${width} columns`,
+      wrapTextLines(prose, width).map(row => stripAnsi(row.text)),
+      `without formulas the rows use display wrapping at ${width} columns`,
     )
   }
 }

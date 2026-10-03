@@ -441,7 +441,8 @@ export type Styles = {
    * two rows (as it does for wrapped <Text>). The value is the width of the
    * row above, in columns from this box's left edge — where that row's
    * content ends. For rows laid out outside <Text> (a paragraph with inline
-   * images); selection-only, no effect on painting.
+   * images); selection-only, no effect on painting. A negative width marks
+   * an omitted separator space that copy must restore.
    */
   readonly softWrapContinuation?: number
 

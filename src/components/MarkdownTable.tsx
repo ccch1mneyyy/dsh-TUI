@@ -4,6 +4,7 @@ import wrapAnsi from 'wrap-ansi'
 import { useTerminalSize } from '../ink/hooks/use-terminal-size.js'
 import Text from './design-system/ThemedText.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import { wrapTextLines } from '../ink/wrap-text.js'
 import stripAnsi from 'strip-ansi'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { formatToken, padAligned } from '../terminal-utils/markdown.js'
@@ -31,12 +32,12 @@ type WrappedCell = Cell & { lines: string[] }
 
 function wrapText(text: string, width: number, hard: boolean): string[] {
   if (width <= 0) return ['']
-  const wrapped = wrapAnsi(text.trimEnd(), width, {
+  const wrapped = wrapTextLines(text.trimEnd(), width, line => wrapAnsi(line, width, {
     hard,
     trim: false,
     wordWrap: true,
-  })
-  const lines = wrapped.split('\n').filter(line => line.length > 0)
+  }))
+  const lines = wrapped.filter(line => line.text.length > 0 || line.gap).map(line => line.text)
   return lines.length > 0 ? lines : ['']
 }
 

@@ -1384,10 +1384,6 @@ function renderNodeToOutput(
         })
       }
 
-      if (node.style.softWrapContinuation !== undefined) {
-        output.softWrapRow(Math.floor(y), Math.floor(x) + node.style.softWrapContinuation)
-      }
-
       const overflowX = node.style.overflowX ?? node.style.overflow
       const overflowY = node.style.overflowY ?? node.style.overflow
       const clipHorizontally = overflowX === 'hidden' || overflowX === 'scroll'
@@ -2212,6 +2208,12 @@ function renderNodeToOutput(
         output,
         node.style.backgroundColor ?? occlusionBackground ?? inheritedBackgroundColor,
       )
+      // Child writes clear row markers, so record the continuation after paint.
+      if (node.style.softWrapContinuation !== undefined) {
+        const continuation = node.style.softWrapContinuation
+        const contentEnd = Math.floor(x) + Math.abs(continuation)
+        output.softWrapRow(Math.floor(y), continuation < 0 ? -contentEnd : contentEnd)
+      }
     } else if (node.nodeName === 'ink-root') {
       renderChildren(
         node,

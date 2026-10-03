@@ -94,7 +94,7 @@ export function InlineMathParagraph({ token, highlight }: Props): React.ReactNod
             key={rowIndex}
             flexDirection="row"
             height={1}
-            softWrapContinuation={row.continuation ? layout.rows[rowIndex - 1]?.width : undefined}
+            softWrapContinuation={row.continuation ? (row.gap ? -1 : 1) * layout.rows[rowIndex - 1]!.width : undefined}
           >
             {row.pieces.map((piece, pieceIndex) => {
               if (piece.kind === 'text') {
