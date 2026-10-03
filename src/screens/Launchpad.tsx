@@ -8,6 +8,7 @@ import type { Brand } from '../branding.js'
 import { resolveLaunchpadLayout, type LaunchpadLayout } from '../components/launchpadLayout.js'
 import { type LaunchpadAction } from '../components/launchpadActions.js'
 import { kernelDisplayName, kernelSubtitle, type KernelOption } from '../components/kernelCatalog.js'
+import { fitParamParts, PARAM_SEPARATOR } from '../components/launchpadParams.js'
 import { pickSplashFont, splashFontById, type SplashFont } from '../components/splashFonts.js'
 import { t } from '../i18n.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
@@ -591,18 +592,13 @@ export function Launchpad({
     return parts
   })()
   // 宽度自适应：参数行是**单行**（折行会把 F 组的「整句要么完整要么不出现」不
-  // 变量打碎）。装不下时从尾部省段（最不重要的先走：权限 → 模式 → 思考深度），
-  // 连第一段都放不下就整行不画。分隔符是 `  ·  `（两侧各两格）。
+  // 变量打碎）。拟合走纯函数 `fitParamParts`（三段式：装得下 → 四段原样；装不下
+  // → 按「可缩减量最大」把超长段**尾部截断**（权限段一字不减，`Max` 这类宽度
+  // ≤ 下限的短段也不减）；压到各自下限仍超 → 今天的尾部省段），组件不再自己写
+  // 累加循环——宽度记账、降级语义与 `…` 的形态都在 `components/launchpadParams.ts`，
+  // 纯函数层与屏幕层的回归在 `scripts/verify-launchpad.tsx` 的 Q / R 组。
   const paramBudget = Math.max(24, Math.min(columns - 4, 72)) - 2
-  const fittedParams: typeof paramParts = []
-  let paramUsed = 0
-  for (const part of paramParts) {
-    const width = stringWidth(part.value)
-    const next = fittedParams.length === 0 ? width : paramUsed + 5 + width
-    if (next > paramBudget) break
-    fittedParams.push(part)
-    paramUsed = next
-  }
+  const fittedParams = fitParamParts(paramParts, paramBudget)
   const hasParams = fittedParams.length > 0
   // 双角铭牌：像两枚低调的机械铭牌，把整块界面扎在终端底边上。
   const cornerLeft = [cwd, branch].filter(part => part !== undefined && part !== '').join(':')
@@ -899,12 +895,12 @@ export function Launchpad({
           </Box>
           {/* 参数行：框外、紧贴框下（无空行），左对齐输入框（框缘 + padding 2 格）。
               第五版：四段各自可点（ParamChip——挂 onClick 才有 hover 提亮），
-              分隔符（双空格 · 双空格）保持不可点。 */}
+              分隔符（双空格 · 双空格，来自 PARAM_SEPARATOR）保持不可点。 */}
           {hasParams && (
             <Box paddingLeft={2} height={1} flexDirection="row">
               {fittedParams.map((part, index) => (
                 <React.Fragment key={part.segment}>
-                  {index > 0 && <Text dimColor>{'  ' + String.fromCharCode(183) + '  '}</Text>}
+                  {index > 0 && <Text dimColor>{PARAM_SEPARATOR}</Text>}
                   {onParamPick === undefined ? (
                     <Text
                       color={part.colored === true ? 'autoAccept' : undefined}

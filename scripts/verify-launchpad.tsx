@@ -30,8 +30,12 @@
  *      标签、阶梯阈值（full → no-tip → no-hints → no-art → input-only）、
  *      fitParamParts 三段式（装得下→原样 / 装不下→尾部截断且权限段不被截 /
  *      压到下限仍超→今天的尾部省段）。theme/lang/doctor 永不出现；settings 固定在第三格。
- *   E. 宽度不变量：120/100/72/60/48 列下任何一行都不超宽；标签/Tips/参数条
- *      要么完整出现在同一行、要么整条不出现（不许被切断的半句）。
+ *   E. 宽度不变量：120/100/72/60/48 列下任何一行都不超宽；标签/Tips 要么完整
+ *      出现在同一行、要么整条不出现（不许被切断的半句）。参数段按 DESIGN D7：
+ *      **带 `…` 的尾部截断视为完整呈现**（显式标记的降级），不带 `…` 的半截
+ *      与整段消失仍判失败。
+ *   R. 屏幕级：参数行三段式的**逐字节期望行**（AC-1/2/3/5）——长 preset 四段
+ *      同屏且权限段一字不少、窄屏回落今天的尾部省段、焦点环只收画出来的段。
  *
  * Run: node --import tsx/esm scripts/verify-launchpad.tsx
  */
@@ -110,6 +114,42 @@ const PARAM_LINE = 'glm-5.3  ·  Max  ·  Standard  ·  default'
 /** 夹具固定 bold 字面：大字 needle 与阶梯阈值都不随当天轮换的字体漂。 */
 const FONT = splashFontById('bold')
 
+/**
+ * 参数行的四段载荷（T03 起夹具可传自定义四段）。`effort` 传**名册原值**
+ * （`max`），屏上是首字母大写的显示值（`Max`）——与组件同一条规则。
+ * 缺的段 = 拿不到，整段不画（与 `params: false` 的档一致）。
+ */
+interface ParamFixture {
+  model?: string
+  effort?: string
+  preset?: string
+  permission?: string
+}
+/** 既有夹具的四段（120 列下 = `PARAM_LINE`）：默认调用一律走它，老用例零改动。 */
+const DEFAULT_PARAMS: ParamFixture = { model: 'glm-5.3', effort: 'max', preset: 'Standard', permission: 'default' }
+/** 屏上四段的显示文本（空/缺的段不画；`effort` 首字母大写）。 */
+function displayedParams(params: ParamFixture): readonly string[] {
+  const effort = params.effort === undefined || params.effort === ''
+    ? undefined
+    : params.effort.charAt(0).toUpperCase() + params.effort.slice(1)
+  return [params.model, effort, params.preset, params.permission]
+    .filter((value): value is string => value !== undefined && value !== '')
+}
+/** AC-1/AC-5 载荷：14 + 3 + 38 + 18 格四段（preset = 38 格的 agent preset 显示名）。 */
+const AC1_PARAMS: ParamFixture = {
+  model: 'deepseek-flash',
+  effort: 'max',
+  preset: 'Standard (Git Bash · official tooling)',
+  permission: 'danger-full-access',
+}
+/** AC-2① 载荷：preset 拉到 76 格（比 AC-1 更狠的超宽量），其余段与 AC-1 同。 */
+const AC2_PRESET_HUGE_PARAMS: ParamFixture = {
+  ...AC1_PARAMS,
+  preset: 'Standard (Git Bash · official tooling) — nightly variant with custom tooling',
+}
+/** AC-2② 载荷：模型名（32 格）与 preset（38 格）都长。 */
+const AC2_LONG_MODEL_PARAMS: ParamFixture = { ...AC1_PARAMS, model: 'deepseek-v3.2-exp-custom-ft-2026' }
+
 class FakeStdout extends Writable {
   isTTY = true
   /** 渲染帧计数：闪烁相位切换会重绘（样式变、文本不变），帧数是"真的在闪"的无头证据。 */
@@ -141,8 +181,8 @@ interface OpenOptions {
   query?: string
   firstRun?: boolean
   whale?: boolean
-  /** 参数条三段；false = 全不传（卡片矮一行的档）。默认带全。 */
-  params?: boolean
+  /** 参数行四段；false = 全不传（卡片矮一行的档）、对象 = 自定义四段。默认带全。 */
+  params?: boolean | ParamFixture
   /** 双角铭牌三段；false = 全不传。默认带全。 */
   corners?: boolean
   /** 剪贴板桩内容；undefined = 空文本，null = 剪贴板为空（读得到但没东西）。 */
@@ -184,7 +224,9 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
   const term = new XTerm({ cols: columns, rows, scrollback: 0, allowProposedApi: true })
   const out = new FakeStdout(term)
   const input = new FakeStdin()
-  const params = options.params !== false
+  const paramFixture: ParamFixture = options.params === false
+    ? {}
+    : typeof options.params === 'object' ? options.params : DEFAULT_PARAMS
   const corners = options.corners !== false
 
   // 受控闭环：Chat 持有 query/caret/focus，这里照抄那三条回调的接线。
@@ -219,10 +261,10 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
           ) : undefined}
         inputPaused={options.inputPaused === true}
         onParamPick={(segment) => { events.push({ type: 'param', value: segment }) }}
-        model={params ? 'glm-5.3' : undefined}
-        effort={params ? 'max' : undefined}
-        preset={params ? 'Standard' : undefined}
-        permission={params ? 'default' : undefined}
+        model={paramFixture.model}
+        effort={paramFixture.effort}
+        preset={paramFixture.preset}
+        permission={paramFixture.permission}
         commands={options.commands}
         onCommandPick={(commandLine) => { events.push({ type: 'command', value: commandLine }) }}
         tipRotateMs={options.tipRotateMs}
@@ -331,6 +373,13 @@ function rowOf(term: InstanceType<typeof XTerm>, needle: string): number {
 }
 function countOf(term: InstanceType<typeof XTerm>, needle: string): number {
   return viewportLines(term).reduce((n, l) => n + (l.split(needle).length - 1), 0)
+}
+/**
+ * 一个串的**前半**（半句检测用；取上整，非空串至少 1 个字符）。
+ * 「半句判据」在两个地方用同一份定义：F 组的被切断检测与 R 组的"整段不在"。
+ */
+function halfOf(text: string): string {
+  return text.slice(0, Math.ceil(text.length / 2))
 }
 /** 行首缩进的显示宽度。 */
 function leftGap(line: string): number {
@@ -1358,13 +1407,179 @@ base.close()
     JSON.stringify(floorAttempt.map(part => part.value)))
 }
 
+// ── R. 屏幕级：参数行三段式（AC-1/AC-2/AC-3/AC-5 的真挂载读数）───────────────
+// Q 组钉纯函数层（哪一档、哪一段被减）；这一组钉**屏上结果**：逐字节期望行。
+// 期望行是契约的独立复制品——每段文本写成字面量（只有分隔符取模块常量，
+// Q0/A6e 已把它与版式字面量钉在一起），**不调用被测函数**（L-014：用独立载荷
+// 构造"交付物没走过的跳"）。表驱动：一行 = 一份载荷 + 一个列数，覆盖一条 AC。
+{
+  interface ScreenRow {
+    readonly name: string
+    readonly params: ParamFixture
+    readonly columns: number
+    /** 屏上四段的呈现（显示顺序；截断段 = 前缀 + `…`），被省的段不在这里。 */
+    readonly shown: readonly string[]
+    /** 被截断的段的**完整名**（屏上是它的前缀 + `…`）；空 = 全部原样。 */
+    readonly truncatedFull: readonly string[]
+    /** **整段不出现**的段（兜底档按今天的顺序省段）：屏上连前半都不该有。 */
+    readonly dropped: readonly string[]
+    /** 焦点环里参数段的预期编码（-2 起按显示顺序），验证"环只收画出来的段"。 */
+    readonly ring: readonly number[]
+  }
+  const rows: readonly ScreenRow[] = [
+    {
+      name: 'AC-1 长 preset：四段同屏、只截 preset、权限段一字不少',
+      params: AC1_PARAMS,
+      columns: 120,
+      shown: ['deepseek-flash', 'Max', 'Standard (Git Bash …', 'danger-full-access'],
+      truncatedFull: ['Standard (Git Bash · official tooling)'],
+      dropped: [],
+      ring: [-2, -3, -4, -5],
+    },
+    {
+      name: 'AC-2① preset 极长（76 格）：权限段仍完整、屏上权限名不带 …',
+      params: AC2_PRESET_HUGE_PARAMS,
+      columns: 120,
+      shown: ['deepseek-flash', 'Max', 'Standard (Git Bash …', 'danger-full-access'],
+      truncatedFull: ['Standard (Git Bash · official tooling) — nightly variant with custom tooling'],
+      dropped: [],
+      ring: [-2, -3, -4, -5],
+    },
+    {
+      name: 'AC-2② preset 与模型都长：两段被截、权限段不动',
+      params: AC2_LONG_MODEL_PARAMS,
+      columns: 120,
+      shown: ['deepseek-v3.2-exp-cus…', 'Max', 'Standard (G…', 'danger-full-access'],
+      truncatedFull: ['deepseek-v3.2-exp-custom-ft-2026', 'Standard (Git Bash · official tooling)'],
+      dropped: [],
+      ring: [-2, -3, -4, -5],
+    },
+    {
+      name: 'AC-3 既有夹具：逐字节不变、行内无 …',
+      params: DEFAULT_PARAMS,
+      columns: 120,
+      shown: ['glm-5.3', 'Max', 'Standard', 'default'],
+      truncatedFull: [],
+      dropped: [],
+      ring: [-2, -3, -4, -5],
+    },
+    {
+      name: 'AC-5 同一载荷 @48 列：回落今天的尾部省段（逐字节一致）',
+      params: AC1_PARAMS,
+      columns: 48,
+      shown: ['deepseek-flash', 'Max'],
+      truncatedFull: [],
+      dropped: ['Standard (Git Bash · official tooling)', 'danger-full-access'],
+      ring: [-2, -3],
+    },
+  ]
+  for (const row of rows) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { columns: row.columns, params: row.params })
+    const displayed = displayedParams(row.params)
+    const expected = row.shown.join(PARAM_SEPARATOR)
+    // 等第一段上屏再读（等不到就是后面各条断言失败，不在等待里静默吞掉）。
+    await settled(() => s.screen().includes(displayed[0] ?? ''))
+    const lines = viewportLines(s.term)
+    const bottom = rowOf(s.term, '╰')
+    const paramRow = bottom + 1
+    const raw = lines[paramRow] ?? ''
+    const text = raw.trim()
+    // ① 逐字节期望行（含分隔符与截断形态；行首的 paddingLeft 由 ⑥ 单独钉）。
+    check(`R1@${row.columns} ${row.name}：参数行逐字节等于期望行`,
+      text === expected, `got=${JSON.stringify(text)} expected=${JSON.stringify(expected)}`)
+    // ② 行宽不变量：整行 ≤ 单行预算（预算由列数**现算**，不冻结成列数阈值——L-025）。
+    const budget = Math.max(24, Math.min(row.columns - 4, 72)) - 2
+    check(`R2@${row.columns} ${row.name}：行宽 ≤ 预算且不超屏`,
+      stringWidth(text) <= budget && stringWidth(raw) <= row.columns,
+      `w=${stringWidth(text)} budget=${budget} raw=${stringWidth(raw)} cols=${row.columns}`)
+    // ③ 屏上段 = 期望（L-012 的"症状消失"面）：画出来的**都在这一行**、每段
+    //    要么原样要么是"前缀 + `…`"；省掉的段**整段不在**（连前半都不许有）。
+    const fullFor = (shown: string): string | undefined => displayed.find(full =>
+      full === shown || (shown.endsWith('…') && full.startsWith(shown.slice(0, -1))))
+    const shownOk = row.shown.every(shown => text.includes(shown) && fullFor(shown) !== undefined)
+    const droppedOk = row.dropped.every(full => !lines.some(l => l.includes(halfOf(full))))
+    const coversAll = row.shown.length + row.dropped.length === displayed.length
+    check(`R3@${row.columns} ${row.name}：屏上段 = 期望（画的都在且完整呈现，省的整段不在）`,
+      [coversAll, shownOk, droppedOk].every(Boolean),
+      `${row.shown.length}/${displayed.length} shown=${JSON.stringify(row.shown)}`
+        + ` 意外露头的省段=${JSON.stringify(row.dropped.filter(full => lines.some(l => l.includes(halfOf(full)))))}`)
+    // ④ 被截断的段 = 期望的那几段：截断必须**显式**带 `…`、是尾部截断，且真的在屏上。
+    const truncatedShown = row.shown.filter(shown => shown.endsWith('…'))
+    const truncatedOk = truncatedShown.length === row.truncatedFull.length
+      && row.truncatedFull.every(full => truncatedShown.some(shown =>
+        text.includes(shown) && full.startsWith(shown.slice(0, -1))))
+    check(`R4@${row.columns} ${row.name}：带 … 的段 = 期望的 ${row.truncatedFull.length} 段（尾部截断）`,
+      truncatedOk, JSON.stringify(truncatedShown))
+    // ⑤ 权限段（AC-2 的底线）：画出来就**一字不少**且它之后的文本里永不出现 `…`；
+    //    这一档省掉它时必须是整段不在，不能是"半截权限名"。
+    const permission = row.params.permission ?? ''
+    const permissionDrawn = row.shown.some(shown =>
+      shown === permission || (shown.endsWith('…') && permission.startsWith(shown.slice(0, -1))))
+    const permissionAt = text.indexOf(permission)
+    const permissionOk = permissionDrawn
+      ? permissionAt >= 0 && !text.slice(permissionAt).includes('…')
+      : !lines.some(l => l.includes(halfOf(permission)))
+    check(`R5@${row.columns} ${row.name}：权限段${permissionDrawn ? '一字不少且不含 …' : '整段省掉（不是半截）'}`,
+      permission !== '' && permissionOk,
+      `drawn=${permissionDrawn} at=${permissionAt} tail=${JSON.stringify(permissionAt < 0 ? '' : text.slice(permissionAt))}`)
+    // ⑥ 版式不变量：单行（整条期望行只落在一行上）、紧贴框下、行首 = 框缘 + 2。
+    const cardLeft = leftGap(lines.find(l => l.includes('╭')) ?? '')
+    check(`R6@${row.columns} ${row.name}：单行 + 紧贴框下 + 左对齐输入框（paddingLeft 2）`,
+      lines.filter(l => l.trim() === expected).length === 1 && paramRow === bottom + 1
+        && Math.abs(leftGap(raw) - (cardLeft + 2)) <= 1 && text !== '',
+      `rows=${lines.filter(l => l.trim() === expected).length} param=${paramRow} bottom=${bottom} left=${leftGap(raw)} cardLeft=${cardLeft}`)
+    // ⑦ 功能仍触发（L-012/L-014 的另一半）：焦点环只收**画出来的**段，落点顺序
+    //     = 模型→深度→模式→权限，走完参数段落第一条入口（环里没有多余的参数格）。
+    const walk: unknown[] = []
+    for (let step = 0; step < row.ring.length; step++) {
+      await s.send('\u001b[B')
+      walk.push(last(ev, 'focus')?.value)
+    }
+    await s.send('\u001b[B')
+    check(`R7@${row.columns} ${row.name}：焦点环 = [${row.ring.join(', ')}] 且之后落第一条入口`,
+      walk.join(',') === row.ring.join(',') && last(ev, 'focus')?.value === 0,
+      `${walk.join(',')} → ${JSON.stringify(last(ev, 'focus')?.value)} expected=${row.ring.join(',')} → 0`)
+    s.close()
+  }
+}
+
 // ── F. 宽度不变量（整屏：任何一行都不超宽、没有切断的半句） ─────────────────
-// 整屏不变量：键位标签、Tips 文案、
-// 参数条要么完整出现在**同一行**，要么整条不出现；任何一行 trim 后 ≤ 列数。
-// 半句检测用**渲染后的形态**：键帽文本 ` /key ` + 分隔空格 + 标签，键与标签
-// 之间是两个空格（键帽右内边距一格 + 分隔一格）。
+// 整屏不变量：每个键位标签、Tips 文案、参数段要么完整出现在**同一行**，要么
+// 整条不出现；任何一行 trim 后 ≤ 列数。
+// **判据（DESIGN D7 修订）**：参数段允许以 `…` 结尾的**尾部截断**——截断是
+// **显式标记**的（`…` 摆在屏上，用户看得见"这里还有字"），视为完整呈现；
+// 不带 `…` 的半截（字形被裁掉却没有任何提示）与整段消失才是缺陷形态，仍判失败。
+// 为什么这不是放水：旧判据的"前半在屏、完整串不在 ⇒ 切断"会把**合法的截断**
+// 与**无标记的切断**判成同一类，于是要么误报、要么被迫放弃"参数行必须完整"的
+// 不变量；新判据只是把"显式标记的降级"从缺陷里摘出来——每一条 half 判据仍要求
+// "要么完整、要么显式标记"，F1 的"任何一行不超宽"原样保留，R 组另有逐字节期望行。
 const CHIP_LABELS = DEFAULT_ACTIONS.map(a => t(a.labelKey as never, a.values as never))
 const TIP_TEXTS = [t('launchpad-tip' as never), t('launchpad-first-run' as never)]
+/**
+ * `text` 是否**无标记地被切断**：前半串在屏上，但没有任何一次出现是
+ * "完整串"或"前缀 + `…`"（后者是 D3 的尾部截断，合法呈现）。
+ * 整段不在屏上（没找到前半串）不算切断——窄屏按宽度整段省掉是契约行为。
+ */
+function isSilentlyCut(lines: readonly string[], text: string): boolean {
+  const half = halfOf(text)
+  let seen = false
+  for (const line of lines) {
+    for (let at = line.indexOf(half); at >= 0; at = line.indexOf(half, at + 1)) {
+      seen = true
+      let matched = 0
+      while (matched < text.length && line[at + matched] === text[matched]) matched += 1
+      if (matched === text.length || line[at + matched] === '…') return false
+    }
+  }
+  return seen
+}
+/** 整屏的"被切断"清单：标签/Tips 用完整串判据；参数段按上面的 D7 判据。 */
+function cutHalves(lines: readonly string[], paramTexts: readonly string[]): string[] {
+  const hard = [...CHIP_LABELS, ...TIP_TEXTS].filter(text =>
+    lines.some(l => l.includes(halfOf(text))) && !lines.some(l => l.includes(text)))
+  return [...hard, ...paramTexts.filter(text => isSilentlyCut(lines, text))]
+}
 for (const cols of [120, 100, 72, 60, 48]) {
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, { columns: cols })
@@ -1374,19 +1589,25 @@ for (const cols of [120, 100, 72, 60, 48]) {
     .filter(x => x.w > cols)
   check(`F1@${cols} 整屏不变量：任何一行都不超宽`, overflow.length === 0,
     overflow.map(x => `row=${x.i} w=${x.w}`).join(' '))
-  // 半句检测：标签/文案的前半出现在屏上、却找不到完整串 = 被切断。
   // 参数行按**段**判（模型/思考深度/模式/权限）：窄屏下尾部段按宽度省掉是
-  // 契约行为（launchpadLayout 的单行预算），整句判据会把合法省段误判成切断。
-  const PARAM_SEGMENTS = ['glm-5.3', 'Max', 'Standard', 'default']
-  const wholes = [...CHIP_LABELS, ...TIP_TEXTS, ...PARAM_SEGMENTS]
-  const cut = wholes.filter(text => {
-    const half = text.slice(0, Math.ceil(text.length / 2))
-    const onScreen = lines.some(l => l.includes(half))
-    const whole = lines.some(l => l.includes(text))
-    return onScreen && !whole
-  })
-  check(`F2@${cols} 没有被切断的半句（标签/Tips/参数条要么完整要么不出现）`, cut.length === 0,
-    cut.join(' | '))
+  // 契约行为（单行预算），整句判据会把合法省段误判成切断。
+  const cut = cutHalves(lines, displayedParams(DEFAULT_PARAMS))
+  check(`F2@${cols} 没有被切断的半句（标签/Tips 要么完整要么不出现；参数段要么完整、要么带 …）`,
+    cut.length === 0, cut.join(' | '))
+  s.close()
+}
+// F3：D7 新判据的**正面证据**——AC-1 的长 preset 在屏上是"前缀 + `…`"，旧判据
+// 会把它误判成半句，新判据必须放行；同时要求那个带 `…` 的呈现**真的在屏上**
+// （否则这条断言在"还没接线"的形态下也能空过，等于没测）。
+{
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { params: AC1_PARAMS })
+  await settled(() => s.screen().includes('Standard (Git Bash …'))
+  const lines = viewportLines(s.term)
+  const cut = cutHalves(lines, displayedParams(AC1_PARAMS))
+  check('F3@120 带 `…` 的尾部截断不算被切断（D7 新判据的正面证据）',
+    cut.length === 0 && lines.some(l => l.includes('Standard (Git Bash …')),
+    `${cut.join(' | ')} | ${JSON.stringify(lines.filter(l => l.includes('Standard')))}`)
   s.close()
 }
 
