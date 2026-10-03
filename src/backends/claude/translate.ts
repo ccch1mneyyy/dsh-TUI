@@ -320,8 +320,6 @@ interface TrackedTask {
   activeForm?: string
   /** Creation order: the snapshot's row order. */
   seq: number
-  /** Version of the last write (the rollback guard; see `taskVersion`). */
-  rev: number
 }
 
 /**
@@ -339,6 +337,24 @@ export interface ClaudeTaskSeed {
   /** Creation order: the snapshot's row order. */
   readonly seq: number
 }
+
+/** One optimistic TaskUpdate patch awaiting its result (R6 review, RV
+ *  follow-up): only the fields the input named — an unspecified field keeps
+ *  whatever the record had when the patch is applied or replayed. */
+interface TaskPatch {
+  readonly id: string
+  readonly subject?: string
+  readonly status?: string
+  readonly activeForm?: string
+  /** The patch's status was 'deleted' (it removes the task). */
+  readonly deleted: boolean
+}
+
+/** A confirmed-deleted task in the base table: no later stale fact (an old
+ *  failure's rollback, a late-arriving older success) may resurrect it. */
+interface TaskTombstone { readonly deleted: true }
+type TaskBase = TrackedTask | TaskTombstone
+const TASK_DELETED: TaskTombstone = { deleted: true }
 
 /**
  * The translator's own state as the working-activity fold reads it (the
@@ -424,24 +440,26 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   /** The session's plan-tracking tasks (the Task* family), projected onto
    *  the shared todo panel as full `todo.write` snapshots. */
   const trackedTasks = new Map<string, TrackedTask>()
+  /** Each task's CONFIRMED base: seeds, create / get / list results, updates
+   *  whose results came back successful — never an optimistic write. A
+   *  failed update rolls the view back here (with the still-pending patches
+   *  re-applied), so a failure can neither hide behind a newer success nor
+   *  resurrect a confirmed delete. */
+  const taskBases = new Map<string, TaskBase>()
   /** Task creation counter: the snapshots' row order. */
   let taskSeq = 0
-  /** Version of one write to the tracked-task table (R6 review): a failed
-   *  update rolls its optimistic patch back only while no later write touched
-   *  the task — a newer successful update or an authoritative List/Get
-   *  snapshot must not be clobbered by a stale failure. */
-  let taskVersion = 0
   // The resumed conversation's tasks start as the live table (R2 review):
-  // each translator owns its own Map, so two sessions seeded from the same
+  // each translator owns its own Maps, so two sessions seeded from the same
   // replay never share one.
   for (const seed of options.start?.tasks ?? []) {
-    trackedTasks.set(seed.id, {
+    const record: TrackedTask = {
       content: seed.content,
       status: seed.status,
       ...(seed.activeForm === undefined ? {} : { activeForm: seed.activeForm }),
       seq: seed.seq,
-      rev: ++taskVersion,
-    })
+    }
+    trackedTasks.set(seed.id, record)
+    taskBases.set(seed.id, record)
     taskSeq = Math.max(taskSeq, seed.seq)
   }
   /** Wall clock the open (or last) turn began (the activity fold's anchor). */
@@ -462,21 +480,62 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     items: [...trackedTasks.entries()].sort((a, b) => a[1].seq - b[1].seq).map(([, task]) => ({ content: task.content, status: task.status })),
   })
 
-  /** One optimistic Task* patch awaiting its result (R6 review): the
-   *  pre-image to restore when the update fails, and the table version the
-   *  patch wrote — the rollback applies only while that version still
-   *  stands (a newer write or an authoritative snapshot moved it on). */
-  const taskPreImages = new Map<string, { readonly id: string; readonly before: TrackedTask; readonly rev: number }>()
+  /** One optimistic TaskUpdate patch awaiting its result, by its call id
+   *  (issue order — a Map iterates in insertion order). */
+  const taskPatches = new Map<string, TaskPatch>()
 
-  /** Write one task, stamping the table version (see `taskVersion`). */
-  const putTask = (id: string, task: Omit<TrackedTask, 'rev'>): TrackedTask => {
-    const next: TrackedTask = { ...task, rev: ++taskVersion }
-    trackedTasks.set(id, next)
-    return next
+  /** A patch applied to a record: unspecified fields keep theirs (a delete,
+   *  or a patch on nothing, leaves nothing). */
+  const applyPatch = (record: TrackedTask | undefined, patch: TaskPatch): TrackedTask | undefined => {
+    if (record === undefined || patch.deleted) return undefined
+    return {
+      content: patch.subject ?? record.content,
+      status: panelStatus(patch.status) ?? record.status,
+      ...((patch.activeForm ?? record.activeForm) === undefined ? {} : { activeForm: patch.activeForm ?? record.activeForm }),
+      seq: record.seq,
+    }
   }
 
-  /** Whether a task record already says what the pre-image would restore (a
-   *  rollback that would change nothing emits no snapshot). */
+  /** The live record of a base entry, if it is one (a tombstone is not). */
+  const baseRecord = (base: TaskBase | undefined): TrackedTask | undefined =>
+    base !== undefined && 'deleted' in base ? undefined : base
+
+  /** A patch whose result came back successful: it joins the confirmed base
+   *  (a delete leaves a tombstone; a patch with no live base — a stale
+   *  success after a delete or an authoritative rebuild — commits nothing). */
+  const commitPatch = (patch: TaskPatch): void => {
+    if (patch.deleted) {
+      taskBases.set(patch.id, TASK_DELETED)
+      return
+    }
+    const base = baseRecord(taskBases.get(patch.id))
+    if (base === undefined) return
+    taskBases.set(patch.id, applyPatch(base, patch) ?? base)
+  }
+
+  /** Recompute one task's view — its confirmed base with every still-pending
+   *  patch re-applied in issue order — and announce the table when it
+   *  changed. This is the rollback (a failure restores the CONFIRMED base,
+   *  never a whole-record pre-image: that let failures hide behind newer
+   *  successes and resurrect confirmed deletes) and the post-commit refresh
+   *  (an earlier rollback may have wiped a patch whose success just landed). */
+  const recomputeTask = (out: AgentEvent[], id: string): void => {
+    const base = baseRecord(taskBases.get(id))
+    let record: TrackedTask | undefined = base === undefined ? undefined : { ...base }
+    for (const patch of taskPatches.values()) if (patch.id === id) record = applyPatch(record, patch)
+    const current = trackedTasks.get(id)
+    if (record === undefined) {
+      if (current === undefined) return
+      trackedTasks.delete(id)
+    } else {
+      if (sameTask(current, record)) return
+      trackedTasks.set(id, record)
+    }
+    out.push(taskSnapshot())
+  }
+
+  /** Whether two task records already say the same thing (a recompute that
+   *  would change nothing emits no snapshot). */
   const sameTask = (a: TrackedTask | undefined, b: TrackedTask): boolean =>
     a !== undefined && a.content === b.content && a.status === b.status && a.activeForm === b.activeForm && a.seq === b.seq
 
@@ -927,30 +986,28 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
               })
               out.push({ type: 'todo.write', items: todos })
             } else if (name === 'TaskUpdate') {
-              // The input is the patch, applied when the call is seen; its
-              // pre-image waits for the result (R6 review: a FAILED update
-              // rolls back — the CLI promises no corrective read).
+              // The input is the patch, applied when the call is seen; the
+              // patch itself waits for the result (R6 review: a FAILED
+              // update rolls back to the confirmed base — the CLI promises
+              // no corrective read).
               const patch = rec(input)
               const id = str(patch?.taskId)
               const known = id === undefined ? undefined : trackedTasks.get(id)
               if (id !== undefined && known !== undefined) {
-                if (patch?.status === 'deleted') {
-                  trackedTasks.delete(id)
-                  taskPreImages.set(callId, { id, before: known, rev: known.rev })
-                } else {
-                  const status = patch?.status
-                  // A partial update keeps the fields it does not mention —
-                  // the CLI's own spinner keeps showing the remembered
-                  // activeForm, and so does the working line's phrase.
-                  const form = str(patch?.activeForm) ?? known.activeForm
-                  const updated = putTask(id, {
-                    content: str(patch?.subject) ?? known.content,
-                    status: status === 'pending' || status === 'in_progress' || status === 'completed' ? status : known.status,
-                    ...(form === undefined ? {} : { activeForm: form }),
-                    seq: known.seq,
-                  })
-                  taskPreImages.set(callId, { id, before: known, rev: updated.rev })
+                const applied: TaskPatch = {
+                  id,
+                  ...(str(patch?.subject) === undefined ? {} : { subject: str(patch?.subject) }),
+                  ...(patch?.status === undefined ? {} : { status: str(patch?.status) }),
+                  ...(str(patch?.activeForm) === undefined ? {} : { activeForm: str(patch?.activeForm) }),
+                  deleted: patch?.status === 'deleted',
                 }
+                taskPatches.set(callId, applied)
+                // A partial update keeps the fields it does not mention —
+                // the CLI's own spinner keeps showing the remembered
+                // activeForm, and so does the working line's phrase.
+                const updated = applyPatch(known, applied)
+                if (updated === undefined) trackedTasks.delete(id)
+                else trackedTasks.set(id, updated)
                 out.push(taskSnapshot())
               }
             }
@@ -1044,25 +1101,18 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         // Every settled main-lane result is one tool done this turn (the
         // working line's toolCount; plan-mode tools continue'd above).
         toolResults += 1
-        // A TaskUpdate result settles its optimistic patch (R6 review): a
-        // failure (`is_error`, or the in-contract `success:false`) rolls the
-        // patch back and re-emits the snapshot — but only while no later
-        // write touched the task, so a stale failure never overwrites a
-        // newer success or an authoritative List/Get snapshot.
+        // A TaskUpdate result settles its optimistic patch (R6 review, RV
+        // follow-up): a failure (`is_error`, or the in-contract
+        // `success:false`) rolls the task's view back to its CONFIRMED base
+        // — newer successes are already part of that base, so the failure
+        // neither hides behind them nor resurrects a confirmed delete; a
+        // success commits the patch into the base.
         if (call !== undefined && call.name === 'TaskUpdate') {
-          const preImage = taskPreImages.get(callId)
-          taskPreImages.delete(callId)
+          const applied = taskPatches.get(callId)
+          taskPatches.delete(callId)
           if (isError || rec(structured)?.success === false) {
-            if (preImage !== undefined) {
-              const current = trackedTasks.get(preImage.id)
-              // Restoring the pre-image keeps ITS version: a still-older
-              // failed update stacked under this one keeps its own match.
-              if ((current === undefined || current.rev === preImage.rev) && !sameTask(current, preImage.before)) {
-                trackedTasks.set(preImage.id, preImage.before)
-                out.push(taskSnapshot())
-              }
-            }
-          } else {
+            if (applied !== undefined) recomputeTask(out, applied.id)
+          } else if (applied === undefined) {
             // A successful update of an id this table never tracked (R2
             // review): the resumed transcript's structured results can be
             // gone (the read API drops them; a compaction may cut the
@@ -1074,20 +1124,29 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
             const id = str(patch?.taskId) ?? str(record?.taskId)
             const status = panelStatus(patch?.status) ?? panelStatus(rec(record?.statusChange)?.to)
             if (id !== undefined && status !== undefined && !trackedTasks.has(id)) {
-              putTask(id, {
+              const completed: TrackedTask = {
                 content: str(patch?.subject) ?? t('claude-task-unnamed', { id }),
                 status,
                 ...(str(patch?.activeForm) === undefined ? {} : { activeForm: str(patch?.activeForm) }),
                 seq: ++taskSeq,
-              })
+              }
+              trackedTasks.set(id, completed)
+              taskBases.set(id, completed)
               out.push(taskSnapshot())
             }
+          } else {
+            commitPatch(applied)
+            // An earlier rollback may have wiped this patch from the view.
+            recomputeTask(out, applied.id)
           }
         }
-        // A legacy TodoWrite result replaced the CLI's whole plan list: any
-        // optimistic task patch under it is superseded (its rollback must
-        // not repaint the legacy list).
-        if (call !== undefined && !isError && call.name === 'TodoWrite') taskPreImages.clear()
+        // A legacy TodoWrite result replaced the CLI's whole plan list: the
+        // Task* base is superseded and pending patches are moot (a later
+        // failure must not repaint the legacy list).
+        if (call !== undefined && !isError && call.name === 'TodoWrite') {
+          taskPatches.clear()
+          taskBases.clear()
+        }
         // The task family (2.1.284+): a create's record names the id its
         // call lacked; a list/get result is the authoritative state and
         // overwrites what the inputs built (the CLI owns the tasks).
@@ -1100,19 +1159,21 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
             const content = str(rec(call.input)?.subject) ?? str(created?.subject)
             if (id !== undefined && content !== undefined) {
               const activeForm = str(rec(call.input)?.activeForm)
-              putTask(id, {
+              const created: TrackedTask = {
                 content,
                 status: 'pending',
                 ...(activeForm === undefined ? {} : { activeForm }),
                 seq: ++taskSeq,
-              })
+              }
+              trackedTasks.set(id, created)
+              taskBases.set(id, created)
               out.push(taskSnapshot())
             }
           } else if (call.name === 'TaskList') {
             // Only a real list syncs (a missing/malformed result must not
             // clear the panel); an empty list is a legitimate clear.
             if (Array.isArray(record?.tasks)) {
-              const next = new Map<string, Omit<TrackedTask, 'rev'>>()
+              const next = new Map<string, TrackedTask>()
               for (const item of arr(record?.tasks)) {
                 const task = taskRecord(item)
                 if (task === undefined) continue
@@ -1120,10 +1181,14 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
                 next.set(task.id, { content: task.content, status: task.status, ...(known?.activeForm === undefined ? {} : { activeForm: known.activeForm }), seq: known?.seq ?? ++taskSeq })
               }
               trackedTasks.clear()
-              for (const [id, task] of next) putTask(id, task)
-              // The authoritative list superseded every optimistic patch:
-              // a failure arriving after it must not roll anything back.
-              taskPreImages.clear()
+              taskBases.clear()
+              for (const [id, task] of next) {
+                trackedTasks.set(id, task)
+                taskBases.set(id, task)
+              }
+              // The authoritative list superseded every pending patch: a
+              // failure arriving after it rolls back to this truth.
+              taskPatches.clear()
               out.push(taskSnapshot())
             }
           } else if (call.name === 'TaskGet') {
@@ -1131,9 +1196,9 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
             const task = taskRecord(record?.task)
             if (task !== undefined) {
               const known = trackedTasks.get(task.id)
-              putTask(task.id, { content: task.content, status: task.status, ...(known?.activeForm === undefined ? {} : { activeForm: known.activeForm }), seq: known?.seq ?? ++taskSeq })
-              // The authoritative record supersedes that task's pending patch.
-              for (const [key, image] of taskPreImages) if (image.id === task.id) taskPreImages.delete(key)
+              const fetched: TrackedTask = { content: task.content, status: task.status, ...(known?.activeForm === undefined ? {} : { activeForm: known.activeForm }), seq: known?.seq ?? ++taskSeq }
+              trackedTasks.set(task.id, fetched)
+              taskBases.set(task.id, fetched)
               out.push(taskSnapshot())
             }
           }
@@ -1533,8 +1598,9 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
    */
   const resetConversation = (): void => {
     trackedTasks.clear()
+    taskBases.clear()
     taskSeq = 0
-    taskPreImages.clear()
+    taskPatches.clear()
     for (const [callId, call] of openCalls) if (call.lane === undefined) openCalls.delete(callId)
     deniedReasons.clear()
     settledAttempts.clear()

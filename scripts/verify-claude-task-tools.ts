@@ -14,10 +14,12 @@
  *    change emits one full 'todo.write' snapshot in TodoPanelItem shape
  *    (content/status only, creation order, 'deleted' simply absent);
  *  - a FAILED TaskUpdate (is_error or the in-contract success:false) rolls
- *    its optimistic patch back and re-emits the snapshot — guarded by table
- *    versions so a stale failure never overwrites a newer success or an
- *    authoritative List/Get snapshot — and the suppressed-card path lets a
- *    failure card through so the user sees the task change never happened;
+ *    the task's view back to its CONFIRMED base — seeds / create / get /
+ *    list results / patches whose results came back successful — with the
+ *    still-pending patches re-applied: a failure can neither hide behind a
+ *    newer success nor resurrect a confirmed delete (RV follow-up), and the
+ *    suppressed-card path lets a failure card through so the user sees the
+ *    task change never happened;
  *  - resume: the replay's tracked tasks hand over to the live translator
  *    (serializable seeds), and a successful update of an untracked id
  *    completes the table from its own patch (R2/R6 reviews);
@@ -340,7 +342,10 @@ const synced = scenario(f => [
   check('… and both failures surface as error cards', failureCards(refused.harness).length === 2, failureCards(refused.harness).length)
 
   // Parallel updates of one task, results out of order: the newer SUCCESS
-  // stands; the older failure must not roll it back.
+  // stands (its rename commits into the confirmed base); the older FAILED
+  // completion rolls back to that base — it must NOT survive by hiding
+  // behind the newer write (RV review: the old whole-record guard turned
+  // this into a false lock expecting completed).
   const outOfOrder = scenario(f => [
     f.call('TaskCreate', { subject: 'A', description: 'x' }),
     f.resultOf(1, { task: { id: 'a', subject: 'A' } }),
@@ -350,8 +355,8 @@ const synced = scenario(f => [
     f.resultOf(2, undefined, true),
     f.turnEnd(),
   ])
-  check('out-of-order: the newer successful update stands (the stale failure does not roll it back)',
-    same(outOfOrder.harness.state.todos, [{ content: 'Renamed', status: 'completed' }]), outOfOrder.harness.state.todos)
+  check('out-of-order: the rename success commits, the failed completion still rolls back (Renamed/pending)',
+    same(outOfOrder.harness.state.todos, [{ content: 'Renamed', status: 'pending' }]), outOfOrder.harness.state.todos)
 
   // Both fail, results in reverse order: the rollbacks stack to the original.
   const bothFailed = scenario(f => [
@@ -365,6 +370,34 @@ const synced = scenario(f => [
   ])
   check('both failed in reverse: stacked rollbacks reach the original state',
     same(bothFailed.harness.state.todos, [{ content: 'B', status: 'pending' }]), bothFailed.harness.state.todos)
+
+  // RV form ②: both fail, results in EMISSION order — the first rollback
+  // keeps the still-pending rename optimistic, the second drops it too.
+  const bothFailedInOrder = scenario(f => [
+    f.call('TaskCreate', { subject: 'B2', description: 'x' }),
+    f.resultOf(1, { task: { id: 'b2', subject: 'B2' } }),
+    f.call('TaskUpdate', { taskId: 'b2', status: 'completed' }),
+    f.call('TaskUpdate', { taskId: 'b2', subject: 'Never' }),
+    f.resultOf(2, undefined, true),
+    f.resultOf(3, undefined, true),
+    f.turnEnd(),
+  ])
+  check('both failed in emission order: the rollbacks still reach the original state',
+    same(bothFailedInOrder.harness.state.todos, [{ content: 'B2', status: 'pending' }]), bothFailedInOrder.harness.state.todos)
+
+  // RV form ③: a delete SUCCEEDS, then the older update fails — the task
+  // stays deleted (no resurrection through the older failure's pre-image).
+  const deletedThenFail = scenario(f => [
+    f.call('TaskCreate', { subject: 'C2', description: 'x' }),
+    f.resultOf(1, { task: { id: 'c2', subject: 'C2' } }),
+    f.call('TaskUpdate', { taskId: 'c2', status: 'completed' }),
+    f.call('TaskUpdate', { taskId: 'c2', status: 'deleted' }),
+    f.resultOf(3, { success: true, taskId: 'c2', updatedFields: ['status'] }),
+    f.resultOf(2, undefined, true),
+    f.turnEnd(),
+  ])
+  check('delete success then older failure: the task stays deleted (no resurrection)',
+    same(deletedThenFail.harness.state.todos, []), deletedThenFail.harness.state.todos)
 
   // An authoritative List between the patch and its late failure: the List
   // wins; the stale failure neither reverts it nor resurrects a delete.
