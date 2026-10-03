@@ -1,19 +1,31 @@
 /**
- * dsh-tui color themes — Gentle Mist Blue (雾蓝) family.
+ * dsh-tui color themes — two built-in palette families.
  *
- * Two truecolor palettes share one identity: mist blues carry brand, focus,
- * and interaction; body text stays neutral. `light` uses white panel
- * surfaces (#FFFFFF) and ink text (#343945) for
- * light terminals; `dark` is its dark-terminal adaptation (warm off-white
- * text, accent-soft blues). `dark-ansi` is the 16-color fallback for
- * terminals without truecolor. The active palette is chosen at startup by
- * querying the terminal background (OSC 11) — see ThemeProvider.
+ * Gentle Mist Blue (雾蓝) is the default family. Two truecolor palettes share
+ * one identity: mist blues carry brand, focus, and interaction; body text
+ * stays neutral. `light` uses white panel surfaces (#FFFFFF) and ink text
+ * (#343945) for light terminals; `dark` is its dark-terminal adaptation (warm
+ * off-white text, accent-soft blues). `dark-ansi` is the 16-color fallback for
+ * terminals without truecolor.
+ *
+ * Sakura Pink (樱) is the optional second family. Sakura pink carries brand,
+ * focus and interaction, and the surfaces stay warm so the palette reads soft
+ * rather than neon: `pink-day` for light terminals, `pink-night` for dark
+ * ones, `pink-ansi` as the 16-color fallback. The three keep the same role
+ * split as the mist family, so switching families changes hue, not the
+ * contrast structure every component relies on. `mascotBody` has no upstream
+ * consumer, so all three keep the mist family's orange rather than a pink that
+ * never renders.
+ *
+ * The active palette is chosen at startup by querying the terminal background
+ * (OSC 11) — see ThemeProvider.
  *
  * `auto` is a pseudo-theme, not a palette: it resolves to `light` or `dark`
  * from the terminal background detected via OSC 11 (which tracks the system
  * theme in terminals that follow it). ThemeProvider re-runs detection every
  * time `auto` is selected and pushes the result through setAutoThemeBase(),
- * so getTheme('auto') always serves the currently detected palette.
+ * so getTheme('auto') always serves the currently detected palette. `auto`
+ * spans the mist family only; the sakura family is selected explicitly.
  */
 
 export type Theme = {
@@ -82,6 +94,24 @@ export type Theme = {
   professionalBlue: string
   // Chrome colors
   chromeYellow: string
+  // Themed chrome that used to be hardcoded: the context bar's per-content-type
+  // segment fills (system → tools, in bar order), the thinking-effort ignition
+  // pair (top-tier sweep / `❯` prefix / tier badge), and the prompt caret.
+  // `cursor` empty keeps the inverse-video caret.
+  contextBarSystem: string
+  contextBarPrompt: string
+  contextBarAssistant: string
+  contextBarThinking: string
+  contextBarTools: string
+  /** Effort ignition colour: the wave crest, the charged `❯` and the badge. */
+  ignition: string
+  /** Where the ignition wave fades out (its resting end), i.e. the band colour. */
+  ignitionDim: string
+  /**
+   * Prompt-input caret fill. Empty (every built-in) keeps the inverse-video
+   * caret; a declared fill gets the palette ink that contrasts with it.
+   */
+  cursor: string
   // TUI V2 colors
   /** Mascot body color. */
   mascotBody: string
@@ -183,8 +213,27 @@ export function isThemeColorKey(value: unknown): value is ThemeColorKey {
   return typeof value === 'string' && normalizeThemeKey(value) !== undefined
 }
 
-/** The built-in theme names, in display order. */
-export const THEME_NAMES = ['dark', 'dark-ansi', 'light'] as const
+/**
+ * The built-in theme names, in display order. The sakura family repeats the
+ * mist family's own ordering (dark, ansi, light) so the picker reads as two
+ * parallel groups rather than an appended list.
+ */
+export const THEME_NAMES = [
+  'dark',
+  'dark-ansi',
+  'light',
+  'pink-night',
+  'pink-ansi',
+  'pink-day',
+] as const
+
+/**
+ * Whether a name is a built-in palette (THEME_NAMES membership, never the base
+ * roles a theme file may overlay).
+ */
+export function isBuiltInThemeName(name: string): boolean {
+  return THEME_NAMES.includes(name as (typeof THEME_NAMES)[number])
+}
 
 /**
  * The `auto` pseudo-theme: not a palette, but a standing request to follow
@@ -229,6 +278,29 @@ export type ThemeName = string
 const rgb = (hex: string): string => {
   const n = parseInt(hex.slice(1), 16)
   return `rgb(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255})`
+}
+
+/** The five used-segment fills of the context bar, in bar order. */
+type ContextBarRamp = Pick<
+  Theme,
+  | 'contextBarSystem'
+  | 'contextBarPrompt'
+  | 'contextBarAssistant'
+  | 'contextBarThinking'
+  | 'contextBarTools'
+>
+
+/**
+ * Gentle Mist Blue's context-bar ramp — the DeepSeek blue family. The bar was
+ * never light-specific, so the family's dark and light presets share it; only
+ * the ignition pair differs between them.
+ */
+const MIST_BAR_RAMP: ContextBarRamp = {
+  contextBarSystem: rgb('#22305F'), // deep navy
+  contextBarPrompt: rgb('#2B3D78'), // navy
+  contextBarAssistant: rgb('#344A92'), // indigo
+  contextBarThinking: rgb('#4D6BFE'), // DeepSeek brand blue
+  contextBarTools: rgb('#5A7CFF'), // lighter blue
 }
 
 /**
@@ -289,6 +361,16 @@ const darkTheme: Theme = {
   syntaxConstant: rgb('#C98291'), // softened rose
   professionalBlue: rgb('#7DA1DE'),
   chromeYellow: rgb('#D8B270'),
+  // Pre-theme values, now overridable: the mist family's bar ramp (shared with
+  // `light`) and the ignition pair — bright blue over the terminal's own dark
+  // substrate.
+  ...MIST_BAR_RAMP,
+  ignition: rgb('#82B9FF'),
+  ignitionDim: rgb('#1B1E28'),
+  // Every built-in leaves the caret empty on purpose: empty keeps the
+  // inverse-video block the palette always had, and a theme opts into a
+  // coloured block by naming a fill.
+  cursor: '',
   mascotBody: rgb('#D98A63'), // Warm mascot orange
   inputBackground: rgb('#000000'),
   userMessageBackground: '', // user turn: no fill, gold bold text only (Kimi style)
@@ -371,6 +453,12 @@ const lightTheme: Theme = {
   syntaxConstant: rgb('#A84472'), // muted rose accent
   professionalBlue: rgb('#5E88CC'),
   chromeYellow: rgb('#C99A3F'),
+  // Same chrome as `dark` (bar and caret were never light-specific), except the
+  // ignition pair: the light variants the pre-theme code picked on white.
+  ...MIST_BAR_RAMP,
+  ignition: rgb('#1E5FEB'),
+  ignitionDim: rgb('#F0F0F2'),
+  cursor: '',
   mascotBody: rgb('#D98A63'), // Warm mascot orange
   inputBackground: rgb('#F6F3ED'),
   userMessageBackground: '', // user turn: no fill in light mode, gold text only
@@ -456,6 +544,18 @@ const darkAnsiTheme: Theme = {
   syntaxConstant: 'ansi:redBright',
   professionalBlue: 'ansi:blueBright',
   chromeYellow: 'ansi:yellowBright',
+  // The bar keeps a blue/cyan ladder inside the 16-colour space (the truecolor
+  // ramp above has five steps the ANSI palette cannot express). The ignition
+  // wave is a truecolor gradient by construction — SGR goes out per column —
+  // so the ANSI base carries the same pair the pre-theme code emitted.
+  contextBarSystem: 'ansi:blackBright',
+  contextBarPrompt: 'ansi:blue',
+  contextBarAssistant: 'ansi:blueBright',
+  contextBarThinking: 'ansi:cyan',
+  contextBarTools: 'ansi:cyanBright',
+  ignition: rgb('#82B9FF'),
+  ignitionDim: rgb('#1B1E28'),
+  cursor: '',
   mascotBody: 'ansi:yellowBright',
   inputBackground: 'ansi:black',
   userMessageBackground: '',
@@ -477,6 +577,246 @@ const darkAnsiTheme: Theme = {
   subagentStatusRunning: 'ansi:blueBright',
   subagentStatusCompleted: 'ansi:greenBright',
   subagentStatusFailed: 'ansi:redBright',
+}
+
+/**
+ * Sakura Pink's context-bar ramp: the bloom deepens from plum to the pale petal
+ * tip. Night and day share the first four steps; `pink-day` steps only the tip
+ * back (see its `contextBarTools`).
+ */
+const PINK_BAR_RAMP: ContextBarRamp = {
+  contextBarSystem: rgb('#6E1B3C'), // plum
+  contextBarPrompt: rgb('#9B2C55'),
+  contextBarAssistant: rgb('#C24D78'),
+  contextBarThinking: rgb('#E879A0'),
+  contextBarTools: rgb('#F7B7CC'), // pale petal tip
+}
+
+/**
+ * Sakura Pink dark adaptation. Pinks come from the bloom (#F27BA6–#F8AFC6);
+ * neutrals are warm (derived from #F0E4E9/#2B1E25) so the palette reads soft
+ * rather than neon on a dark terminal. Role base: `dark`.
+ */
+const pinkNightTheme: Theme = {
+  autoAccept: rgb('#B598D9'),
+  bashBorder: rgb('#E08CA8'),
+  accent: rgb('#F27BA6'),
+  toolNameMutate: rgb('#E5C07B'),
+  toolNameExec: rgb('#72C4CF'),
+  accentShimmer: rgb('#F8AFC6'),
+  activity: rgb('#F27BA6'),
+  activityShimmer: rgb('#F8AFC6'),
+  permission: rgb('#F2A0BF'),
+  permissionShimmer: rgb('#F8C1D6'),
+  planMode: rgb('#7FB596'),
+  ide: rgb('#E0709A'),
+  promptBorder: rgb('#6E4A58'),
+  promptBorderShimmer: rgb('#E08CA8'),
+  text: rgb('#F0E4E9'),
+  inverseText: rgb('#2B1E25'),
+  inactive: rgb('#A8929C'),
+  inactiveShimmer: rgb('#C4B0B9'),
+  subtle: rgb('#77646D'),
+  suggestion: rgb('#F2A0BF'),
+  remember: rgb('#F2A0BF'),
+  background: rgb('#D9648F'),
+  success: rgb('#8FC9A4'),
+  error: rgb('#E66A6A'),
+  warning: rgb('#E3B56C'),
+  merged: rgb('#B598D9'),
+  warningShimmer: rgb('#F0CB8E'),
+  diffAdded: rgb('#2E3A2F'),
+  diffRemoved: rgb('#402A31'),
+  diffAddedDimmed: rgb('#2F3630'),
+  diffRemovedDimmed: rgb('#392830'),
+  diffAddedWord: rgb('#5E9B72'),
+  diffRemovedWord: rgb('#C96B7B'),
+  toolCardBackground: rgb('#2E2229'),
+  toolCardBackgroundDim: rgb('#241A20'),
+  toolDotExec: rgb('#7FB596'),
+  toolDotRead: rgb('#7FB6C9'),
+  toolDotWrite: rgb('#C29BDF'),
+  toolDotWeb: rgb('#F27BA6'),
+  toolDotTask: rgb('#E0A0AE'),
+  syntaxKeyword: rgb('#E08CA8'),
+  syntaxString: rgb('#8FC9A4'),
+  syntaxComment: rgb('#857481'),
+  syntaxNumber: rgb('#E3B56C'),
+  syntaxFunction: rgb('#7FC4CE'),
+  syntaxType: rgb('#C29BDF'),
+  syntaxVariable: rgb('#DDD2D8'),
+  syntaxOperator: rgb('#A8929C'),
+  syntaxPunctuation: rgb('#8A7680'),
+  syntaxConstant: rgb('#E0709A'),
+  professionalBlue: rgb('#E08CA8'),
+  chromeYellow: rgb('#E3B56C'),
+  mascotBody: rgb('#D98A63'),
+  inputBackground: rgb('#000000'),
+  userMessageBackground: '',
+  userMessageBackgroundHover: rgb('#7E3A55'),
+  messageActionsBackground: rgb('#362A31'),
+  selectionBg: rgb('#55303E'),
+  bashMessageBackgroundColor: rgb('#2E242A'),
+  memoryBackgroundColor: rgb('#322630'),
+  rate_limit_fill: rgb('#F27BA6'),
+  rate_limit_empty: rgb('#43333B'),
+  fastMode: rgb('#E09A58'),
+  fastModeShimmer: rgb('#ECB478'),
+  userPromptLabel: rgb('#FFDF80'),
+  subagentBullet: rgb('#E0A0BE'),
+  subagentDescription: rgb('#F0E4E9'),
+  subagentModel: rgb('#A8929C'),
+  subagentElapsed: rgb('#A8929C'),
+  subagentToolName: rgb('#F27BA6'),
+  subagentStatusRunning: rgb('#F27BA6'),
+  subagentStatusCompleted: rgb('#8FC9A4'),
+  subagentStatusFailed: rgb('#E66A6A'),
+  // The family's bar ramp and crest. `ignition` carries the brand pink rather
+  // than the neon #FF2D6F it started at — the crest reads as a glow, and a
+  // fully saturated magenta made it the loudest thing on a dark terminal (the
+  // softer crest also clears more contrast on the band: 6.56:1 against
+  // `ignitionDim`, up from 4.71:1).
+  ...PINK_BAR_RAMP,
+  ignition: rgb('#F27BA6'),
+  ignitionDim: rgb('#241A20'),
+  cursor: '',
+}
+
+/**
+ * Sakura Pink light adaptation. Warm off-white panels (#FBF3F0) under ink text
+ * (#3D2B33), with the same bloom pinks carrying brand and focus. Role base:
+ * `light`.
+ */
+const pinkDayTheme: Theme = {
+  autoAccept: rgb('#8F6BAC'),
+  bashBorder: rgb('#C05C7E'),
+  accent: rgb('#DE6E96'),
+  toolNameMutate: rgb('#8A6A00'),
+  toolNameExec: rgb('#0E7A8A'),
+  accentShimmer: rgb('#F2A0BF'),
+  activity: rgb('#E879A0'),
+  activityShimmer: rgb('#F2A0BF'),
+  permission: rgb('#D5517F'),
+  permissionShimmer: rgb('#E879A0'),
+  planMode: rgb('#43916B'),
+  ide: rgb('#C43D6C'),
+  promptBorder: rgb('#EFC4D4'),
+  promptBorderShimmer: rgb('#D988A9'),
+  text: rgb('#3D2B33'),
+  inverseText: rgb('#FBF3F0'),
+  inactive: rgb('#9A8790'),
+  inactiveShimmer: rgb('#9E6E82'),
+  subtle: rgb('#B3A3AC'),
+  suggestion: rgb('#D5517F'),
+  remember: rgb('#B03A63'),
+  background: rgb('#D5517F'),
+  success: rgb('#3E9468'),
+  error: rgb('#C24D5C'),
+  warning: rgb('#B97F2E'),
+  merged: rgb('#8F6BAC'),
+  warningShimmer: rgb('#CE9840'),
+  diffAdded: rgb('#DFF0E2'),
+  diffRemoved: rgb('#F7E0E4'),
+  diffAddedDimmed: rgb('#E8F3EA'),
+  diffRemovedDimmed: rgb('#F9E9EC'),
+  diffAddedWord: rgb('#8CCFA4'),
+  diffRemovedWord: rgb('#E6A3B0'),
+  toolCardBackground: rgb('#F9ECF1'),
+  toolCardBackgroundDim: rgb('#F2E0E9'),
+  toolDotExec: rgb('#4E7A5A'),
+  toolDotRead: rgb('#3F7E8F'),
+  toolDotWrite: rgb('#7A5CA8'),
+  toolDotWeb: rgb('#C24D78'),
+  toolDotTask: rgb('#B04A5A'),
+  syntaxKeyword: rgb('#C24470'),
+  syntaxString: rgb('#3F805F'),
+  syntaxComment: rgb('#8B7F88'),
+  syntaxNumber: rgb('#A6602B'),
+  syntaxFunction: rgb('#2E7E8A'),
+  syntaxType: rgb('#7E55A4'),
+  syntaxVariable: rgb('#3D2B33'),
+  syntaxOperator: rgb('#5F5260'),
+  syntaxPunctuation: rgb('#A3959E'),
+  syntaxConstant: rgb('#A84472'),
+  professionalBlue: rgb('#CE5A80'),
+  chromeYellow: rgb('#C99A3F'),
+  mascotBody: rgb('#D98A63'),
+  inputBackground: rgb('#FBF3F0'),
+  userMessageBackground: '',
+  userMessageBackgroundHover: rgb('#F0DCE6'),
+  messageActionsBackground: rgb('#F3E4EB'),
+  selectionBg: rgb('#F3D7E0'),
+  bashMessageBackgroundColor: rgb('#F5EAE0'),
+  memoryBackgroundColor: rgb('#F3E4EB'),
+  rate_limit_fill: rgb('#D988A9'),
+  rate_limit_empty: rgb('#E8DAD2'),
+  fastMode: rgb('#D98E4A'),
+  fastModeShimmer: rgb('#E2A465'),
+  userPromptLabel: rgb('#A67600'),
+  subagentBullet: rgb('#C05C7E'),
+  subagentDescription: rgb('#3D2B33'),
+  subagentModel: rgb('#9A8790'),
+  subagentElapsed: rgb('#9A8790'),
+  subagentToolName: rgb('#D5517F'),
+  subagentStatusRunning: rgb('#D5517F'),
+  subagentStatusCompleted: rgb('#3E9468'),
+  subagentStatusFailed: rgb('#C24D5C'),
+  // The night preset's ramp, with only the pale tip stepped back: the night's
+  // #F7B7CC sits at 1.36:1 against the #E8E8E8 free fill, the day tip #EE8FB0
+  // at 1.86:1. The crest cannot follow the night's either — #F27BA6 is 2.14:1
+  // on this palette's blush, so the wave deepens for the same reason the
+  // built-in light pair does. `ignitionDim` is the near-white blush the wave
+  // rides on, mirroring the mist light preset's #F0F0F2.
+  ...PINK_BAR_RAMP,
+  contextBarTools: rgb('#EE8FB0'),
+  ignition: rgb('#B03A63'),
+  ignitionDim: rgb('#FFE3EC'),
+  cursor: '',
+}
+
+/**
+ * Sakura Pink in the 16 standard ANSI colors, for terminals without truecolor.
+ * Magenta carries brand, matching the truecolor variants. Role base:
+ * `dark-ansi`, deliberately: the 16-color space has no pink slots, so 56 of
+ * the 81 keys are the base's own values and only the ones listed here shift.
+ * `cursor` stays empty like every other built-in (the inverse-video caret).
+ */
+const pinkAnsiTheme: Theme = {
+  ...darkAnsiTheme,
+  // Brand, focus and activity: the magenta pair replaces the base's blue pair.
+  accent: 'ansi:magentaBright',
+  accentShimmer: 'ansi:magentaBright',
+  activity: 'ansi:magentaBright',
+  activityShimmer: 'ansi:magentaBright',
+  permission: 'ansi:magentaBright',
+  permissionShimmer: 'ansi:magentaBright',
+  ide: 'ansi:magenta',
+  suggestion: 'ansi:magentaBright',
+  remember: 'ansi:magentaBright',
+  background: 'ansi:magentaBright',
+  toolDotWeb: 'ansi:magenta',
+  syntaxKeyword: 'ansi:magentaBright',
+  // A real override, not a leftover: the base's `syntaxType` is magenta too
+  // (like `syntaxKeyword` here), so deleting this line would collide the two.
+  syntaxType: 'ansi:blueBright',
+  professionalBlue: 'ansi:magentaBright',
+  // Tinted surfaces.
+  userMessageBackgroundHover: 'ansi:magenta',
+  selectionBg: 'ansi:magenta',
+  rate_limit_fill: 'ansi:magentaBright',
+  subagentStatusRunning: 'ansi:magentaBright',
+  // The 16-color bar ladder: the base's dark anchor, the two magentas that
+  // carry the sakura brand, then white/whiteBright as the pale tip (the
+  // 16-color space has no paler pink). The ignition wave is drawn column by
+  // column in truecolor, so its pair stays hex — an `ansi:*` value there falls
+  // back to the blue pair instead of rendering — and its crest matches the
+  // truecolor night preset rather than the neon #FF2D6F.
+  contextBarPrompt: 'ansi:magenta',
+  contextBarAssistant: 'ansi:magentaBright',
+  contextBarThinking: 'ansi:white',
+  contextBarTools: 'ansi:whiteBright',
+  ignition: rgb('#F27BA6'),
+  ignitionDim: rgb('#241A20'),
 }
 
 interface NormalizedThemeCacheEntry {
@@ -542,6 +882,14 @@ export function getTheme(themeName: ThemeName): Theme {
       return darkTheme
     case 'dark-ansi':
       return darkAnsiTheme
+    // The sakura family follows the same rule as the mist built-ins: explicit
+    // cases, so a built-in name never round-trips through the resolvers.
+    case 'pink-night':
+      return pinkNightTheme
+    case 'pink-ansi':
+      return pinkAnsiTheme
+    case 'pink-day':
+      return pinkDayTheme
     case AUTO_THEME_NAME:
       return autoBase === 'light' ? lightTheme : darkTheme
     default: {
@@ -586,15 +934,89 @@ let runtimeThemeResolver: ThemeResolver | undefined
  */
 export function isLightThemeActive(themeName: ThemeName): boolean {
   const theme = getTheme(themeName)
-  if (theme === lightTheme) return true
-  if (theme === darkTheme || theme === darkAnsiTheme) return false
+  // Built-ins answer by palette identity, never by luminance. An ANSI palette
+  // has no parseable ink at all, and a future truecolor tweak must not silently
+  // flip a whole family's contrast direction.
+  if (theme === lightTheme || theme === pinkDayTheme) return true
+  if (
+    theme === darkTheme ||
+    theme === darkAnsiTheme ||
+    theme === pinkNightTheme ||
+    theme === pinkAnsiTheme
+  ) return false
   // 自定义或运行时主题：按文本墨色亮度判定——浅底配深墨（ink）、深底配亮墨。
-  // 调色板的 background 字段是徽标填充色而非终端背景，不能作判据。
-  const ink = theme.text
-  const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(ink)
-  if (rgb === null) return false
-  const [r, g, b] = [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])]
-  return 0.299 * r + 0.587 * g + 0.114 * b < 140
+  // 调色板的 background 字段是徽标填充色而非终端背景，不能作判据。墨色走
+  // `parseFixedColor`：校验器放行的写法（hex、带空白的 `rgb()`）都判得出来，只认紧凑
+  // `rgb()` 会把 hex 墨的浅色主题按深色算；`ansi:*` 没有绝对通道值，维持按深色算。
+  const ink = parseFixedColor(theme.text)
+  if (ink === undefined) return false
+  return 0.299 * ink[0] + 0.587 * ink[1] + 0.114 * ink[2] < 140
+}
+
+/**
+ * The glyph color for a solid caret block: whichever palette ink (`text` or
+ * `inverseText`) contrasts better with the declared `cursor` fill. The
+ * built-ins declare no fill, so every one of them answers `inverseText` and
+ * keeps the inverse-video caret; a user or plugin theme that paints a light
+ * block (where the near-white inverse ink sits at 2.50:1 and the ink text at
+ * 4.82:1) gets the readable ink instead. A fill or ink the parser cannot read
+ * (any `ansi:*` palette) keeps `inverseText` too: exactly the behavior every
+ * palette had before the caret key existed.
+ */
+export function cursorGlyphColor(theme: Theme): 'text' | 'inverseText' {
+  const fill = parseFixedColor(theme.cursor)
+  const ink = parseFixedColor(theme.text)
+  const inverse = parseFixedColor(theme.inverseText)
+  if (fill === undefined || ink === undefined || inverse === undefined) return 'inverseText'
+  return contrastRatio(fill, ink) > contrastRatio(fill, inverse) ? 'text' : 'inverseText'
+}
+
+/**
+ * sRGB channels of a fixed-channel color (`#rgb`, `#rrggbb`, `#rrggbbaa`,
+ * `rgb()`), or undefined for the 16-color `ansi:*` forms — those carry no
+ * channel values here, and their consumers fall back rather than guess. A
+ * palette a legacy runtime resolver hands back can also omit the key entirely,
+ * so undefined is a normal input, not a programming error.
+ *
+ * `#rrggbbaa` is accepted because the validators accept it, and the renderer
+ * (chalk) drops the alpha byte: the visible channels are the first six digits.
+ * Reading only three/six-digit hex made `#000000` and `#000000ff` — the same
+ * background on screen — take opposite contrast branches.
+ */
+function parseFixedColor(color: string | undefined): readonly [number, number, number] | undefined {
+  if (typeof color !== 'string') return undefined
+  const trimmed = color.trim()
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(trimmed)
+  if (hex !== null) {
+    const digits = hex[1]!.length === 3
+      ? [...hex[1]!].map(digit => digit + digit).join('')
+      : hex[1]!
+    // The slice stops at six digits, so a trailing alpha byte is ignored here
+    // exactly as the SGR emitter ignores it.
+    return [
+      parseInt(digits.slice(0, 2), 16),
+      parseInt(digits.slice(2, 4), 16),
+      parseInt(digits.slice(4, 6), 16),
+    ]
+  }
+  const form = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/i.exec(trimmed)
+  if (form === null) return undefined
+  return [Number(form[1]), Number(form[2]), Number(form[3])]
+}
+
+/** WCAG contrast ratio between two sRGB colors, for glyph-on-fill choices. */
+function contrastRatio(
+  a: readonly [number, number, number],
+  b: readonly [number, number, number],
+): number {
+  const channel = (value: number): number => {
+    const c = value / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  }
+  const luminance = (color: readonly [number, number, number]): number =>
+    0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2])
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number]
+  return (hi + 0.05) / (lo + 0.05)
 }
 
 /**
@@ -638,10 +1060,7 @@ export function clearRuntimeThemeResolver(): void {
  * customTheme.isThemeAvailable(), whose contract is static-file-only.
  */
 export function isThemeAvailable(themeName: ThemeName): boolean {
-  if (
-    themeName === AUTO_THEME_NAME ||
-    THEME_NAMES.includes(themeName as (typeof THEME_NAMES)[number])
-  ) return true
+  if (themeName === AUTO_THEME_NAME || isBuiltInThemeName(themeName)) return true
   try {
     return customThemeResolver?.(themeName) !== undefined
       || runtimeThemeResolver?.(themeName) !== undefined

@@ -11,11 +11,11 @@
  * 复用 Ink core 共享时钟，仅动画窗口订阅（keepAlive），播完归零。
  */
 import React, { useContext, useEffect, useReducer, useState } from 'react'
-import { Text } from '../ui.js'
+import { Text, useTheme } from '../ui.js'
 import { ClockContext } from '../ink/components/ClockContext.js'
 import { rgbString } from '../trajectory/motion.js'
 import type { RGBColor } from './Spinner/spinnerUtils.js'
-import { IGNITION_TIMELINE, ignitionHues } from '../trajectory/effortIgnition.js'
+import { IGNITION_TIMELINE, ignitionColors } from '../trajectory/effortIgnition.js'
 
 type Overlay = { label: string; startedAtMs: number }
 
@@ -27,7 +27,6 @@ const CONVERGE_MS = 500
 export function EffortTierBadge({
   effort,
   levels,
-  onLight,
   columns,
   leadingColumns,
 }: {
@@ -35,7 +34,6 @@ export function EffortTierBadge({
   effort: string | undefined
   /** 当前路线的档位表（低→高，末位为最高档）；未知时传 `undefined`。 */
   levels: readonly string[] | undefined
-  onLight: boolean
   /** 终端列数——居中锚点按终端几何中心计算（纯文本流，不引入嵌套 Box）。 */
   columns: number
   /** badge 文本流之前该行已被占据的列数（❯ 与块光标等）——居中换算成
@@ -43,6 +41,8 @@ export function EffortTierBadge({
   leadingColumns: number
 }): React.ReactNode {
   const clock = useContext(ClockContext)
+  // 字样色与扫光同源（主题 ignition / ignitionDim）。
+  const [themeName] = useTheme()
   const [overlay, setOverlay] = useState<Overlay | null>(null)
   const [prevEffort, setPrevEffort] = useState(effort)
   const [, forceRender] = useReducer((tick: number) => tick + 1, 0)
@@ -79,9 +79,10 @@ export function EffortTierBadge({
       : Math.max(0, 1 - (elapsedMs - IGNITION_TIMELINE.fadeStartMs) / (IGNITION_TIMELINE.fadeEndMs - IGNITION_TIMELINE.fadeStartMs))
   const alpha = brighten * fade
   if (alpha <= 0) return null
-  const band: RGBColor = onLight ? { r: 240, g: 240, b: 242 } : { r: 27, g: 30, b: 40 }
+  const palette = ignitionColors(themeName)
+  const band: RGBColor = palette.ignitionDim
   // 明亮蓝：accent 混白 35% 提亮（用户拍板的高亮观感）。
-  const hue = ignitionHues(onLight)[0]
+  const hue = palette.ignition
   const whiten = (x: number): number => Math.round(x + (255 - x) * 0.35)
   const bright: RGBColor = { r: whiten(hue.r), g: whiten(hue.g), b: whiten(hue.b) }
   const mix = (x: number, y: number): number => Math.round(x + (y - x) * alpha)

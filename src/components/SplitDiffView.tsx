@@ -331,7 +331,9 @@ export function SplitDiffView({
   const [themeName] = useTheme()
   // Resolved-palette signature: covers dark→light, light→dark, AND the
   // `auto` base flip where the name never changes (issue #250, P1-2).
-  const syntaxTheme = React.useMemo(() => getTheme(themeName), [themeName])
+  // 按当次渲染的色板身份读，**不按名字 memo**：名字不变而色板换掉（auto 翻转、
+  // 运行时同名重注册）时，按名字缓存会让签名一直算出旧值。
+  const syntaxTheme = getTheme(themeName)
   const themeSig = React.useMemo(() => syntaxThemeSignature(syntaxTheme), [syntaxTheme])
 
   // Alignment is text-only and capped BEFORE styling: the highlighter and

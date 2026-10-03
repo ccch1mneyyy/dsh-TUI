@@ -4,21 +4,27 @@
 
 ## 内置主题
 
-dsh-TUI 提供三套 Gentle Mist Blue 色板，外加一个 `auto` 伪主题：
+dsh-TUI 内置两个色板族共六套主题，外加一个 `auto` 伪主题：
 
-| 名称 | 用途 |
-| --- | --- |
-| `auto` | 伪主题：跟随系统/终端背景，自动解析为 `light` 或 `dark` |
-| `light` | 白色面板、墨色正文、雾蓝交互色 |
-| `dark` | 深色终端适配，暖灰正文与柔雾蓝强调色 |
-| `dark-ansi` | 只依赖 16 色 ANSI 的兼容回退 |
+| 名称 | 族 | 用途 |
+| --- | --- | --- |
+| `auto` | — | 伪主题：跟随系统/终端背景，自动解析为 `light` 或 `dark` |
+| `light` | 雾蓝 | 白色面板、墨色正文、雾蓝交互色 |
+| `dark` | 雾蓝 | 深色终端适配，暖灰正文与柔雾蓝强调色 |
+| `dark-ansi` | 雾蓝 | 16 色 ANSI 兼容回退（点火色对除外） |
+| `pink-day` | 樱 | 浅色终端：淡粉面板、樱粉交互色 |
+| `pink-night` | 樱 | 深色终端：暖调面板、樱粉交互色 |
+| `pink-ansi` | 樱 | 16 色 ANSI 兼容回退（点火色对除外） |
+
+两族保持相同的角色划分（浅色 / 深色 / ANSI 回退）。`auto` 只在雾蓝族内解析，
+樱族需要显式选择。
 
 未明确指定主题时，TUI 通过 OSC 11 查询终端背景，
 在 `light` 与 `dark` 之间选择；终端不响应时回退到 `dark`。
 
-浅色主题的面板、工具卡和图片预览默认用纯白底色（`#FFFFFF`），
-图片预览用中性边框。深色主题及强调色保持原样。
-此设置不修改终端自身的背景色或壁纸。
+浅色主题的面板与工具卡各用本族的浅色表面色（雾蓝 `light` 为纯白 `#FFFFFF`，
+樱 `pink-day` 为淡粉 `#F9ECF1`；两族的输入框底色另有暖色 `#F6F3ED` / `#FBF3F0`），
+图片预览一律用中性边框。深色主题及强调色保持原样。此设置不修改终端自身的背景色或壁纸。
 
 `auto` 把这一次性启动检测变成常驻选择：
 
@@ -45,7 +51,7 @@ DSH_TUI_THEME
   用**焦点行**主题的调色板实渲染代码块、代码操作工具卡与 diff——移动光标即可
   比较语法色、diff 色与工具卡底色，Enter 才真正应用；窄终端预览堆叠在列表
   下方，浮层高度不够时整块让位，列表与焦点行始终完整。
-- `/theme <name>`：直接切换静态或运行时插件主题。
+- `/theme <name>`：直接切换内置、静态 JSON 或运行时插件主题。
 - `/theme status`：显示当前主题与持久化位置。
 
 选择器确认后立即热切换，并把选择写入 `~/.dsh-tui/theme.json`。
@@ -107,6 +113,8 @@ DSH_TUI_THEME
 - diff 语法高亮（续）：`syntaxFunction`、`syntaxType`、`syntaxVariable`、`syntaxOperator`
 - diff 语法高亮（续）：`syntaxPunctuation`、`syntaxConstant`
 - 徽标/强调：`mascotBody`、`inputBackground`、`professionalBlue`、`chromeYellow`
+- 界面动画与光标：`contextBarSystem`、`contextBarPrompt`、`contextBarAssistant`
+- 界面动画与光标（续）：`contextBarThinking`、`contextBarTools`、`ignition`、`ignitionDim`、`cursor`
 - 消息/输入：`userMessageBackground`、`userMessageBackgroundHover`
 - 消息/输入（续）：`messageActionsBackground`、`selectionBg`、`bashMessageBackgroundColor`
 - 消息/输入（续）：`memoryBackgroundColor`、`rate_limit_fill`、`rate_limit_empty`
@@ -117,6 +125,23 @@ DSH_TUI_THEME
 
 如果文件声明了 `name`，文件名仍可作为加载别名。完整颜色键见
 [`src/theme.ts`](../src/theme.ts) 中的 `Theme` 类型。
+
+几条键的语义与默认行为：
+
+- `contextBarSystem` … `contextBarTools`：上下文进度条的五个分段填充色，按条上顺序
+  （system → prompt → assistant → thinking → tools）。静态 JSON 与插件主题都从所选
+  `base` 继承这五个键；只有旧运行时解析器直接返回、缺键的色板才沿用写死的深蓝坡道。
+- `ignition` / `ignitionDim`：最高思考强度档的点火动画用色——扫光波形、`❯` 前缀与档位徽标
+  同源，`ignitionDim` 是波形淡出的本底色。波形逐列输出真彩色 SGR，所以这两个键要写成能解析
+  出固定通道的形式（`#rgb`、`#rrggbb`、`#rrggbbaa`（alpha 会被忽略）或 `rgb(r,g,b)`）；
+  写成 `ansi:*` / `ansi256(n)`（或整键缺失）时**逐键**回退到按主题明暗选定的内置点火色对，
+  另一个键不受牵连。
+- `cursor`：主输入框、落地页输入框及选择器搜索框光标的填充色。
+  块上的字形取 `text` 与 `inverseText` 中对该填充对比度更高
+  的一个（16 色的 `ansi:*` 填充，或 `text`/`inverseText` 解析不出通道的调色板，
+  都量不出对比度，仍用 `inverseText`），所以浅色光标也能配深墨字形。
+  内置主题留空——空值表示沿用原来的反色块光标（向后兼容）；只有需要光标独立于正文色时才声明。
+- 正文链接的文字色跟随 `accent`；accent 为空或解析不出时回落到原来的固定蓝。
 
 ## npm 插件主题
 

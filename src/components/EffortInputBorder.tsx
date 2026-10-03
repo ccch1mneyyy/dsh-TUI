@@ -20,12 +20,12 @@
  * 窗口订阅（keepAlive），播完回到零开销静止边框。
  */
 import React, { useContext, useEffect, useReducer, useRef, useState } from 'react'
-import { Box, Text } from '../ui.js'
+import { Box, Text, useTheme } from '../ui.js'
 import { ClockContext } from '../ink/components/ClockContext.js'
 import type { Color } from '../ink/styles.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import type { Theme } from '../theme.js'
-import { IGNITION_TIMELINE, ignitionLineColors } from '../trajectory/effortIgnition.js'
+import { IGNITION_TIMELINE, ignitionColors, ignitionLineColors } from '../trajectory/effortIgnition.js'
 
 type Overlay = { label: string; startedAtMs: number }
 
@@ -90,7 +90,6 @@ export function EffortInputBorder({
   effort,
   levels,
   columns,
-  onLight,
   idleColor,
   topRightLabel,
   children,
@@ -100,7 +99,6 @@ export function EffortInputBorder({
   /** 当前路线的档位表（低→高，末位为最高档）；未知时传 `undefined`。 */
   levels: readonly string[] | undefined
   columns: number
-  onLight: boolean
   /** 静止边框色（主题 token 名，如 'promptBorder' / 'planMode'）。 */
   idleColor: keyof Theme | Color
   /** 顶边框右侧的静态标签 chip（会话名标签）；undefined = 不显示。 */
@@ -108,6 +106,9 @@ export function EffortInputBorder({
   children: React.ReactNode
 }): React.ReactNode {
   const clock = useContext(ClockContext)
+  // 扫光色取自当前主题（ignition / ignitionDim），与 ─ 底色的取用方式一致；
+  // 缺键的旧主题回落到点火专属的蓝白对。
+  const [themeName] = useTheme()
   const [overlay, setOverlay] = useState<Overlay | null>(null)
   const [prevEffort, setPrevEffort] = useState(effort)
   const [, forceRender] = useReducer((tick: number) => tick + 1, 0)
@@ -140,7 +141,7 @@ export function EffortInputBorder({
   const midWidth = Math.max(0, columns - 2)
   const sweepColors =
     overlay !== null && elapsedMs < IGNITION_TIMELINE.sweepMs && midWidth > 0
-      ? ignitionLineColors({ elapsedMs, width: midWidth, onLight })
+      ? ignitionLineColors({ elapsedMs, width: midWidth, colors: ignitionColors(themeName) })
       : []
   // 顶/底共用的色段序列（同步）：扫光列取波形色，其余列回主题色。
   const runs: Array<{ glyph: string; color: keyof Theme | Color }> = []

@@ -4,7 +4,7 @@
  * 断言拖选/Shift+click 扩展/双击选词/Backspace/Delete 删选区/打字替换/
  * Esc 分层/Ctrl+C 经控制器复制，以及 CJK 宽字符显示列与 fold block 侧钳制。
  *
- * 两阶段：
+ * 四阶段：
  *   阶段 A（真实 PromptInput + AlternateScreen + Chat 式 useInput 持有者）：
  *     拖选→打字替换、反向拖选、Backspace/Delete 删选区、Shift+click 扩展
  *     + 控制器复制（OSC 52 断言）、Esc 仅清选区→再 Esc 清输入、双击选词
@@ -12,6 +12,8 @@
  *     caret/点击、fold block 选区钳制与无选区 consumeSelectionCopy=false。
  *   阶段 B（真实 Chat）：Ctrl+C 经 Chat→控制器复制选区且保留选区、再打字
  *     替换；无选区 Ctrl+C 保持既有清空语义。
+ *   阶段 C/D（运行时主题的 caret）：C = `cursor` 有值（实心主题色块、选区仍
+ *     反色）；D = 旧调色板整份缺 `cursor` 键（必须仍落回反色块）。
  *
  * 运行：node --import tsx/esm scripts/verify-input-selection.tsx
  */
@@ -37,7 +39,7 @@ const [
   { PassThrough, Writable },
   React,
   { Terminal: XTerm },
-  { Box, render, AlternateScreen, useInput },
+  { Box, render, AlternateScreen, useInput, ThemeProvider },
   { PromptInput },
   { LOCAL_COMMANDS },
   { Chat },
@@ -54,6 +56,7 @@ const [
   import('../src/dsh-adapter/questions.js'),
   import('./lib/term-test.mjs'),
 ])
+const { getTheme, registerRuntimeThemeResolver } = await import('../src/theme.js')
 
 import type { PromptController } from '../src/components/PromptInput.js'
 
@@ -73,6 +76,7 @@ type Harness = {
   screenHas: (s: string) => boolean
   findText: (s: string) => { col: number; row: number } | null
   inverseAt: (col: number, row: number) => boolean
+  bgAt: (col: number, row: number) => number
   oscPayloads: () => string[]
   press: (col: number, row: number) => void
   motion: (col: number, row: number) => void
@@ -133,6 +137,8 @@ function makeHarness(cols: number, rows: number): Harness {
   }
   const inverseAt = (col: number, row: number): boolean =>
     buf().getLine(buf().baseY + row)?.getCell(col)?.isInverse() ?? false
+  const bgAt = (col: number, row: number): number =>
+    buf().getLine(buf().baseY + row)?.getCell(col)?.getBgColor() ?? -1
   const oscPayloads = (): string[] =>
     [...frames.join('').matchAll(/\x1b\]52;c;([A-Za-z0-9+/=]+)/g)].map(m =>
       Buffer.from(m[1]!, 'base64').toString('utf8'),
@@ -155,6 +161,7 @@ function makeHarness(cols: number, rows: number): Harness {
     screenHas,
     findText,
     inverseAt,
+    bgAt,
     oscPayloads,
     press,
     motion,
@@ -165,16 +172,11 @@ function makeHarness(cols: number, rows: number): Harness {
   }
 }
 
-// ── 阶段 A：真实 PromptInput（Chat 式 useInput 持有者 + 控制器） ─────────
-{
-  const COLS = 80
-  const ROWS = 24
-  const h = makeHarness(COLS, ROWS)
-  const { stdin, screenHas, findText, inverseAt, oscPayloads, press, motion, release, shiftPress, shiftRelease, click } = h
-
-  const channel = {
-  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
-  whaleIdle: false,
+/** PromptInput 读到的 channel 投影子集（阶段 A 与阶段 C 共用）。 */
+function makePromptChannel(): Record<string, unknown> {
+  return {
+    // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+    whaleIdle: false,
     mode: { id: 'default', plan: false },
     modeIndex: 0,
     cycleMode() {},
@@ -196,6 +198,16 @@ function makeHarness(cols: number, rows: number): Harness {
     listFiles: async () => [],
     sessionColor: '',
   }
+}
+
+// ── 阶段 A：真实 PromptInput（Chat 式 useInput 持有者 + 控制器） ─────────
+{
+  const COLS = 80
+  const ROWS = 24
+  const h = makeHarness(COLS, ROWS)
+  const { stdin, screenHas, findText, inverseAt, oscPayloads, press, motion, release, shiftPress, shiftRelease, click } = h
+
+  const channel = makePromptChannel()
 
   // 控制器盒：PromptInput 每渲染都写入 controllerRef.current。
   const controllerBox: { current: PromptController | null } = { current: null }
@@ -743,6 +755,157 @@ function makeHarness(cols: number, rows: number): Harness {
     check('B2 无选区不写剪贴板', oscPayloads().length === before + 1)
   } finally {
     app.unmount()
+  }
+}
+
+// ── 阶段 C：主题化 caret（cursor 键）────────────────────────────────────
+// 内置主题的 `cursor` 为空 → caret 仍是反色块（向后兼容，阶段 A/B 全程在
+// 断言这条路径）。主题给出 cursor 时 caret 改为实心色块：背景 = cursor、
+// 字形 = inverseText；选区语义不变（仍是反色）。
+{
+  const COLS = 80
+  const ROWS = 10
+  const h = makeHarness(COLS, ROWS)
+  const { stdin, screenHas, findText, inverseAt, bgAt, press, motion, release } = h
+
+  const CURSOR_RGB = 0x00ff00
+  const probe = { ...getTheme('dark'), cursor: '#00FF00' }
+  const dispose = registerRuntimeThemeResolver(name =>
+    name === 'caret-probe' ? probe : undefined)
+  const controllerBox: { current: PromptController | null } = { current: null }
+
+  function Fixture(): React.ReactNode {
+    useInput(() => {})
+    return (
+      <Box height={ROWS} flexDirection="column" justifyContent="flex-end">
+        <PromptInput
+          channel={makePromptChannel() as never}
+          helpOpen={false}
+          onToggleHelp={() => {}}
+          onRunCommand={() => false}
+          selectionActive={false}
+          controllerRef={controllerBox}
+        />
+      </Box>
+    )
+  }
+
+  const app = await render(
+    <ThemeProvider theme="caret-probe">
+      <AlternateScreen>
+        <Fixture />
+      </AlternateScreen>
+    </ThemeProvider>,
+    {
+      stdout: h.stdout,
+      stdin: h.stdin,
+      stderr: h.stderr,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+
+  try {
+    await sleep(500) // 固定窗:pacing 等首帧挂载 + 输入监听挂接，无单一可观测锚点
+    stdin.write('abc')
+    check('C1 输入渲染', await settled(() => screenHas('abc')))
+    const p = findText('abc')!
+    // caret 在文本尾（行尾空格格），背景必须是主题 cursor 色、且不再是反色。
+    check(
+      'C1 caret 用主题 cursor 填充',
+      await settled(() => bgAt(p.col + 3, p.row) === CURSOR_RGB),
+      `bg=${bgAt(p.col + 3, p.row).toString(16)}`,
+    )
+    check('C1 caret 不再走反色路径', !inverseAt(p.col + 3, p.row))
+    // 选区仍是反色：主题化 caret 不改变选区语义；caret 跟着选区尾，且仍然
+    // 用主题 cursor 色（caret 在重叠处的优先级高于选区）。
+    press(p.col, p.row)
+    motion(p.col + 1, p.row)
+    release(p.col + 1, p.row)
+    const inverseMarks = (): string =>
+      Array.from({ length: 6 }, (_, offset) => (inverseAt(p.col + offset, p.row) ? 'I' : '.')).join('')
+    check(
+      'C1 选区高亮仍是反色，caret 在选区尾且仍是 cursor 色',
+      // 断言完整 6 格模式：选区只覆盖第一格，caret 的实色块落在选区尾的
+      // 第二格（不在反色集合里）。只断言首格的话，选区把 caret 一起吃掉的
+      // 回归（IIIIII）同样能过。
+      await settled(() => inverseMarks() === 'I.....' && bgAt(p.col + 1, p.row) === CURSOR_RGB),
+      `${inverseMarks()} caretBg=${bgAt(p.col + 1, p.row).toString(16)}`,
+    )
+  } finally {
+    app.unmount()
+    dispose()
+  }
+}
+
+// ── 阶段 D：旧调色板（整份 palette 缺 `cursor` 键）仍走反色 caret ────────
+// 阶段 C 覆盖"键存在但为空串"；运行时 resolver 还可能返回升级前的整份
+// palette——`cursor` 是 undefined 而不是 `''`。两条路径必须落到同一个反色
+// caret：否则那一格是"无底色 + inverseText 字形"，而宿主隐藏了原生光标，
+// 等于光标整体消失。normalizeThemePalette 对不含 deprecated/retired
+// 键的调色板原样返回，所以这里删掉的键在消费点确实是 undefined。
+{
+  const COLS = 80
+  const ROWS = 10
+  const h = makeHarness(COLS, ROWS)
+  const { stdin, screenHas, findText, inverseAt, bgAt } = h
+
+  const legacy: Record<string, unknown> = { ...getTheme('dark') }
+  delete legacy.cursor
+  const dispose = registerRuntimeThemeResolver(name =>
+    name === 'caret-legacy' ? legacy as never : undefined)
+  const controllerBox: { current: PromptController | null } = { current: null }
+
+  function Fixture(): React.ReactNode {
+    useInput(() => {})
+    return (
+      <Box height={ROWS} flexDirection="column" justifyContent="flex-end">
+        <PromptInput
+          channel={makePromptChannel() as never}
+          helpOpen={false}
+          onToggleHelp={() => {}}
+          onRunCommand={() => false}
+          selectionActive={false}
+          controllerRef={controllerBox}
+        />
+      </Box>
+    )
+  }
+
+  const app = await render(
+    <ThemeProvider theme="caret-legacy">
+      <AlternateScreen>
+        <Fixture />
+      </AlternateScreen>
+    </ThemeProvider>,
+    {
+      stdout: h.stdout,
+      stdin: h.stdin,
+      stderr: h.stderr,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+
+  try {
+    await sleep(500) // 固定窗:pacing 等首帧挂载 + 输入监听挂接，无单一可观测锚点
+    stdin.write('abc')
+    check('D1 输入渲染', await settled(() => screenHas('abc')))
+    const p = findText('abc')!
+    check(
+      'D1 缺 cursor 键的旧调色板：行尾 caret 仍是反色格',
+      await settled(() => inverseAt(p.col + 3, p.row)),
+      `inverse=${inverseAt(p.col + 3, p.row)} bg=${bgAt(p.col + 3, p.row).toString(16)}`,
+    )
+    stdin.write('\x1b[D')
+    check(
+      'D1 文本中段 caret cluster 仍是反色格',
+      await settled(() => inverseAt(p.col + 2, p.row)),
+      `inverse=${inverseAt(p.col + 2, p.row)} bg=${bgAt(p.col + 2, p.row).toString(16)}`,
+    )
+  } finally {
+    app.unmount()
+    dispose()
   }
 }
 
