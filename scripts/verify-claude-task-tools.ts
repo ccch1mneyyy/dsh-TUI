@@ -399,6 +399,38 @@ const synced = scenario(f => [
   check('delete success then older failure: the task stays deleted (no resurrection)',
     same(deletedThenFail.harness.state.todos, []), deletedThenFail.harness.state.todos)
 
+  // RV follow-up 3 (ghost task): a List that superseded an update — the
+  // update's LATE SUCCESS must not fabricate a task the list already
+  // ruled away (the unknown-id completion path is for fresh facts, not
+  // calls an authority discarded).
+  const ghost = scenario(f => [
+    f.call('TaskCreate', { subject: 'A', description: 'x' }),
+    f.resultOf(1, { task: { id: 'a', subject: 'A' } }),
+    f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
+    f.call('TaskList', {}),
+    f.resultOf(3, { tasks: [] }),
+    f.resultOf(2, { success: true, taskId: 'a', updatedFields: ['status'] }),
+    f.turnEnd(),
+  ])
+  check('late success of a superseded update fabricates nothing (the empty list stands)',
+    same(ghost.harness.state.todos, []), ghost.harness.state.todos)
+
+  // Superseding must not overreach: the list's own record stands, and a
+  // FRESH update after it confirms on that record normally (only the
+  // superseded call id is dropped, never the id itself).
+  const rebuild = scenario(f => [
+    f.call('TaskCreate', { subject: 'A', description: 'x' }),
+    f.resultOf(1, { task: { id: 'a', subject: 'A' } }),
+    f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
+    f.call('TaskList', {}),
+    f.resultOf(3, { tasks: [{ id: 'a', subject: 'A relaunched', status: 'in_progress', blockedBy: [] }] }),
+    f.resultOf(2, { success: true, taskId: 'a', updatedFields: ['status'] }),
+    f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
+    f.resultOf(4, { success: true, taskId: 'a', updatedFields: ['status'] }),
+    f.turnEnd(),
+  ])
+  check('superseded drops only the stale call: the list\'s record stands and a fresh update confirms on it',
+    same(rebuild.harness.state.todos, [{ content: 'A relaunched', status: 'completed' }]), rebuild.harness.state.todos)
   // An authoritative List between the patch and its late failure: the List
   // wins; the stale failure neither reverts it nor resurrects a delete.
   const authoritative = scenario(f => [
