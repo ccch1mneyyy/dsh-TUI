@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import { Box, Text, Image, useTerminalImages, useTerminalImageProtocol, useTerminalImageCellSize } from '../../../ui.js'
 import { WhaleArt, renderSpriteRows } from '../../Whale.js'
 import type { I18nKey } from '../../../i18n.js'
+import { DEFAULT_TERMINAL_CELL_SIZE } from '../../../ink/terminal-image.js'
 import type { TerminalImageSource } from '../../../ink/terminal-image.js'
 import type { DOMElement } from '../../../ink/dom.js'
 import { loadSharp } from '../../../dsh-adapter/sharp.js'
@@ -455,7 +456,9 @@ function WhaleGirlImageSkin(input: CompanionSkinRenderInput): React.ReactNode {
  *  帧比例钳 42 列）。解码完成前渲染字母格（同一语义同一帧）兜底。 */
 function WhaleGirlRasterSkin(input: CompanionSkinRenderInput): React.ReactNode {
   const { pose, moodSince, now, animationSemantic } = input
-  const cellSize = useTerminalImageCellSize()
+  // 拿不到终端像元尺寸（XTWINOPS 不支持，或探测回了空）时用默认像元继续出图：
+  // 尺寸会略偏，但**绝不**因此退字母格——图像消费者一律有默认值，鲸娘不再例外。
+  const cellSize = useTerminalImageCellSize() ?? DEFAULT_TERMINAL_CELL_SIZE
   const imageKit = loadWhaleGirlImageKit()
   const [boxRef, displayed] = useBoxDisplayed()
   const animationKey = imageKit !== undefined

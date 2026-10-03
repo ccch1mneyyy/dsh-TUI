@@ -91,6 +91,12 @@ const SIXEL_CURSOR_PROBE_PATCH = Object.freeze({
 // Per-image-geometry cursor baselines kept in memory. Scrolling transcript
 // crops churn through keys; the stable case is a side-panel image.
 const SIXEL_CURSOR_BASELINES = 32;
+// Terminal cell pixel size can stay unknown for a whole session (XTWINOPS
+// unsupported, or the startup probe's replies lost). Image consumers then draw
+// against DEFAULT_TERMINAL_CELL_SIZE — visibly mis-scaled — so ask again while
+// something wants images, throttled because a terminal that ignores the query
+// never answers.
+const CELL_METRICS_RETRY_MS = 3_000;
 
 // Cached per-Ink-instance, invalidated on resize. frame.cursor.y for
 // alt-screen is always terminalRows - 1 (renderer.ts).
@@ -255,6 +261,7 @@ export default class Ink {
   // in flight at a time, the terminal's post-image cursor learned per geometry,
   // and the timestamps of recent heals for the breaker.
   private sixelParkCheckPending = false;
+  private lastCellMetricsAttemptAt = 0;
   private readonly sixelPaintCursors = new Map<string, { row: number; col: number }>();
   private sixelHealTimes: number[] = [];
   private sixelParkCheckMutedUntil = 0;
@@ -760,6 +767,9 @@ export default class Ink {
       this.handleResize();
       return;
     }
+    // Images need a plausible cell size; recover it if the terminal never
+    // answered (see ensureImageCellMetrics).
+    this.ensureImageCellMetrics();
 
     const renderStart = performance.now();
     const terminalWidth = this.terminalColumns;
@@ -1917,6 +1927,25 @@ export default class Ink {
       .catch(() => {
         /* Capability detection is best-effort; fallback remains visible. */
       });
+  }
+
+  /**
+   * Ask for the cell pixel size while image consumers still have none.
+   *
+   * XTWINOPS is optional: a terminal that does not answer it (or whose startup
+   * replies were lost) leaves every image drawing against
+   * DEFAULT_TERMINAL_CELL_SIZE, which mis-scales them — the side panel's whale
+   * girl in particular derives its whole box from this number. Retry while
+   * something actually wants images, throttled, because a terminal that
+   * ignores the query will never answer.
+   */
+  private ensureImageCellMetrics(): void {
+    if (this.measuredImageCellSize !== undefined || this.terminalImageRequests === 0) return;
+    if (this.terminalCellMetricsInFlight || this.terminalCellMetricsRefreshPending) return;
+    const now = Date.now();
+    if (now - this.lastCellMetricsAttemptAt < CELL_METRICS_RETRY_MS) return;
+    this.lastCellMetricsAttemptAt = now;
+    this.refreshTerminalCellMetrics();
   }
 
   /** Refresh image pixel geometry after a resize, coalescing resize bursts. */
