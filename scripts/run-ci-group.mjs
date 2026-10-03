@@ -602,6 +602,10 @@ const GROUPS = {
 // 「前缀 + 1 字符 + 反色 caret」——只看得见最新输入的字符。断言逐键输入
 // 完整可见，并守住超长查询单行窗口化语义（尾部可见、头部滚出、不折行）。
     ["verify-searchbox-windowing", ['node', '--import', 'tsx/esm', 'scripts/verify-searchbox-windowing.tsx']],
+// `/` 命令浮窗「影响当前对话」灰区回归（issue #1072）：回合运行中按对当前
+// 对话的影响分区（正常区在上、灰区沉底，不插标题行、不多占显示行），灰区整行
+// subtle 且不提亮查询命中，点击映射与命令索引一一对应，36 列不换行。
+    ["verify-command-hold-overlay", ['node', '--import', 'tsx/esm', 'scripts/verify-command-hold-overlay.tsx']],
   ],
   'channel-ui': [
 // L4 composition boundary plus report/metadata lifetime fences.
@@ -625,6 +629,11 @@ const GROUPS = {
 // installModelSelection、#34 的投递异步化都没被它们拦下），挂进来
 // 防再腐烂。
     ["verify-submit", ['node', '--import', 'tsx/esm', 'scripts/verify-submit.mjs']],
+// 回合运行中的命令影响度真源表（issue #1072）：门禁提示与 `/` 浮窗灰区分区
+// 读同一张表——表里的命令名必须是真命令、提示 key 必须在字典里、会打断
+// 对话的名单与门禁名单不相交，且 src/ 里不得再有 `t('<门禁 key>')` 字面量
+// （9 处门禁必须走表，提示与标注才不会漂移；新增门禁不得自带字面量 key）。
+    ["verify-command-hold", ['node', '--import', 'tsx/esm', 'scripts/verify-command-hold.ts']],
     ['verify-shell-compat', ['node', 'scripts/verify-shell-compat.mjs']],
     ['verify-agent-lifecycle-compat', ['node', 'scripts/verify-agent-lifecycle-compat.mjs']],
     ['verify-bundled-presets', ['node', 'scripts/verify-bundled-presets.mjs']],

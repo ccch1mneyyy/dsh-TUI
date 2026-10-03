@@ -3,6 +3,7 @@ import type { AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import { randomUUID } from 'node:crypto'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { t } from '../../i18n.js'
+import { WORKING_GATE_NOTICES } from '../../commands.js'
 import { writeModelPref } from '../../modelPrefs.js'
 import { touchSession } from '../../sessionHistory.js'
 import { liveSessionCreateOptions, sliceLiveSessionSeed } from '../compat/index.js'
@@ -44,7 +45,7 @@ export function createModelSwitchAction(
 ) {
   return async (provider: string, model: string): Promise<boolean> => {
     const adoption = deps.binding.capture()
-    if (state.working) { deps.notify(t('model-switch-while-working'), { color: 'warning' }); return false }
+    if (state.working) { deps.notify(t(WORKING_GATE_NOTICES.model), { color: 'warning' }); return false }
     const agents = ctx.get('agents') as { create(options: CreateAgentOptions): Promise<AgentHandle> } | undefined
     if (agents === undefined) { deps.notify(t('model-switch-unavailable'), { color: 'error' }); return false }
     let seed: readonly SessionEvent[]

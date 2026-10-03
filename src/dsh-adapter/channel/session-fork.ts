@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import { t } from '../../i18n.js'
+import { WORKING_GATE_NOTICES } from '../../commands.js'
 import { resolveDshProfileName } from '../../update.js'
 import { appendSessionTitle, liveSessionCreateOptions, sliceLiveSessionSeed } from '../compat/index.js'
 import { composePreset, runningPresetOf } from '../presets.js'
@@ -35,7 +36,7 @@ export function createForkSessionAction(
       return false
     }
     if (state.working) {
-      deps.notify(t('fork-while-working'), { color: 'warning' })
+      deps.notify(t(WORKING_GATE_NOTICES.fork), { color: 'warning' })
       return false
     }
     await deps.settleCompaction()

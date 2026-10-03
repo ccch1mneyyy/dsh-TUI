@@ -679,9 +679,10 @@ function createChannelWithOwner(
       state.emit()
     },
     commandDescriptions: name => commandTrees?.descriptions(name),
+    working: () => state.working,
     // Attached-context pass-through (T03 consumes the third parameter in the
     // fallback branch): the skill catalog never loses the FIFO/decision fence.
-    deliverUserText: (text: string, placement: 'followup', attach?: UserMessage) =>
+    deliverUserText: (text: string, placement: 'steer' | 'followup', attach?: UserMessage) =>
       deliverUserText(text, placement, [], attach),
   })
   const skillViewOptions = skillCatalog.viewOptions

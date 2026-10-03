@@ -6,7 +6,7 @@
 
 | Key | Behavior |
 | --- | --- |
-| `Enter` | Send while idle; steer text into the running turn at its next step boundary; confirm an open menu |
+| `Enter` | Send while idle; run a known `/` command (with or without arguments — while a turn runs its own gate decides); steer the remaining text into the running turn at its next step boundary; confirm an open menu |
 | `Tab` | Complete a `/` command or `@` file; while the model is working, queue non-empty input as a post-turn follow-up |
 | `Ctrl+Enter` | Interrupt the running turn and process the input immediately |
 | `Shift+Enter` / `Ctrl+J` | Insert a newline at the caret; `Ctrl+J` (LF) is the fallback when the terminal cannot report the Shift modifier; macOS Terminal.app uses `Option+Enter` |
@@ -278,9 +278,11 @@ While the model is working, three paths have different placement:
 
 | Action | Placement |
 | --- | --- |
-| `Enter` | Steer: deliver to the running turn at its next step boundary |
+| `Enter` | known `/` command (with or without arguments) → run it, its own gate decides; anything else → steer: deliver to the running turn at its next step boundary |
 | `Tab` | Follow-up: wait until the current turn finishes |
 | `Ctrl+Enter` | Interrupt: stop the turn and deliver immediately |
+
+**While a turn is running, a command is always a command; only input that is not a command steers.** The completion overlay groups commands by their impact on the current conversation: the harmless ones stay on top in their normal style, while gated, interrupting, replacing or steering commands sink to the bottom in the theme's grey (`subtle`, no header row) — where they stay selectable.
 
 - Undelivered messages appear above the editor.
 - `Alt/Option+Up` retrieves the latest one.
@@ -631,6 +633,7 @@ The protocol offers only "allow once / deny" — there is **no "always allow"**.
 
 The command menu merges local commands with the DSH command registry. Type `/` to inspect the complete surface available in the current composition.
 
+- **While a turn is running**, the overlay groups commands by their impact on the current conversation: the harmless ones stay on top in their normal style, while gated, interrupting, replacing or steering commands sink to the bottom in the theme's grey (`subtle`, no header row) — and stay selectable there.
 - Command descriptions follow the UI language (`/lang`).
 - Built-in commands and mapped registry commands (`/plan`, `/goal`, `/feedback`) show Chinese translations in zh.
 - Unmapped registry commands fall back to the registry's own text.

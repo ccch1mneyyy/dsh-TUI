@@ -119,6 +119,7 @@ const makeCatalog = (options: { throwSecondListener?: boolean } = {}) => {
   const catalog = createSkillCatalog(ctx as never, {
     owner, commandService: commandService as never, agent: () => currentAgent, cwd: () => '/tmp',
     setCommands: () => { published += 1 }, commandDescriptions: () => undefined,
+    working: () => false,
     deliverUserText: () => { delivered += 1 },
   })
   return {

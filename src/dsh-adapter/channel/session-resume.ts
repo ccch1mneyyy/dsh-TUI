@@ -6,6 +6,7 @@ import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateMode
 import { clearResumeTarget, writeResumeTarget, touchAgentViewSession, touchSession } from '../../sessionHistory.js'
 import { mountFailureText } from '../../sessions/resumeFailure.js'
 import { t } from '../../i18n.js'
+import { WORKING_GATE_NOTICES } from '../../commands.js'
 import { readModelPref } from '../../modelPrefs.js'
 import { migratePresetPref, readPresetPref } from '../../presetPrefs.js'
 import { agentViewHasTurns } from '../agent-view.js'
@@ -423,7 +424,7 @@ export function createSessionResumeActions(
     const targetDisplayCwd = target?.displayCwd
     const current = (): boolean => deps.owner.current() && deps.binding.isCurrent(adoption)
     if (state.working) {
-      deps.notify(t('new-session-while-working'), { color: 'warning' })
+      deps.notify(t(WORKING_GATE_NOTICES.new), { color: 'warning' })
       return false
     }
     const agents = ctx.get('agents') as { create(options: CreateAgentOptions): Promise<AgentHandle> } | undefined

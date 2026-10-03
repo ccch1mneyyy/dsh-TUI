@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, type LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
-import type { CommandCompletionNode } from '../../commands.js'
+import { WORKING_GATE_NOTICES, type CommandCompletionNode } from '../../commands.js'
 import { nearestLowerEffort, readEffortPref, resolveEffortDefault, writeEffortPref } from '../../effortPrefs.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getLang, t, tOr, type Lang } from '../../i18n.js'
@@ -262,7 +262,7 @@ export function createModelActions(
   const switchPreset = async (presetId: string): Promise<boolean> => {
     const presets = rosterOf(ctx)
     if (presets === undefined) { notify(t('preset-unavailable'), { color: 'error' }); return false }
-    if (state.working) { notify(t('preset-agent-running'), { color: 'warning' }); return false }
+    if (state.working) { notify(t(WORKING_GATE_NOTICES.preset), { color: 'warning' }); return false }
     const capture = deps.binding.capture()
     const targetAgent = deps.agent()
     const targetSession = targetAgent.session

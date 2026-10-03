@@ -1,5 +1,6 @@
 import { statSync } from 'node:fs'
 import { t } from '../../i18n.js'
+import { WORKING_GATE_NOTICES } from '../../commands.js'
 import type { TuiWorkspaceEntry, TuiWorkspaceHost, TuiWorkspaceTarget } from '../workspaces.js'
 import type { ChannelOwner } from './owner.js'
 import type { NewSessionTarget } from './session-resume.js'
@@ -59,7 +60,7 @@ export function createWorkspaceActions(
   }
   const switchWorkspace = async (target: TuiWorkspaceTarget): Promise<boolean> => {
     deps.owner.assertActive()
-    if (state.working) { notify(t('workspace-switch-working'), { color: 'warning' }); return false }
+    if (state.working) { notify(t(WORKING_GATE_NOTICES.workspace), { color: 'warning' }); return false }
     if (target.kind === 'local') {
       try { if (!statSync(target.cwd).isDirectory()) throw new Error('not a directory') }
       catch { notify(t('workspace-open-invalid', { target: target.label }), { color: 'error', timeoutMs: 8000 }); return false }

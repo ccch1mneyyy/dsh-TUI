@@ -88,13 +88,15 @@ dsh-tui
 
 | Key | Action |
 |---|---|
-| `Enter` | idle = send; **model working = steer** (inject a next-step boundary, no interrupt); menu open = confirm selection |
+| `Enter` | idle = send; **a known `/` command (with or without arguments) = run that command** (its own gate decides while a turn is running); model working = steer (inject a next-step boundary, no interrupt); menu open = confirm selection |
 | `Tab` | complete `/` command or `@` file; **model working = follow-up** (queue after the current turn) |
 | `Ctrl+Enter` (⌘Enter) | interrupt the current turn and send the input now |
 | `Shift+Enter` / `Ctrl+J` | newline (`Option+Enter` is the mac Terminal.app fallback) |
 | `Alt+Up` | bring the last unhandled message back to the input for editing (no interrupt) |
 | `Esc` (working + pending) | interrupt the turn and re-send the pending message now |
 | `/btw …` while working | Enter runs it directly (side question never interrupts the main turn) |
+
+While a turn is running, the `/` overlay groups commands by their impact on the current conversation: the harmless ones stay on top in their normal style, while commands that are gated, interrupt or replace the conversation, or steer into it sink to the bottom in the theme's grey (`subtle`), with no extra header row. The grey region never blocks use — the gate still gates and the steer still steers. Only input that is not a command steers into the running turn.
 
 ### 2.2 Interrupt / exit / system
 
@@ -440,7 +442,7 @@ Command-line resume: `dsh-tui --resume` (last session) / `dsh-tui --resume <id>`
 ### 4.3 Message delivery semantics (while the model is working)
 
 Keys are in §2.1:
-- `Enter` = **steer** (inject a next-step boundary, no interrupt)
+- `Enter` = a known `/` command (with or without arguments) runs as a command (its own gate decides while a turn is running); anything else **steers** (inject a next-step boundary, no interrupt)
 - `Tab` = **follow-up** (queue after the turn)
 - `Ctrl+Enter` = **interrupt** (interrupt and send)
 - `Alt+Up` bring the last unhandled message back
@@ -686,7 +688,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 
 **Efficiency**
 
-4. Three deliveries while the model works: `Enter` inject a next step, `Tab` queue, `Ctrl+Enter` interrupt and send.
+4. Three deliveries while the model works: `Enter` inject a next step (a known `/` command runs as a command instead), `Tab` queue, `Ctrl+Enter` interrupt and send.
 5. `Alt+Up` brings the last unhandled message back to edit and resend, no retyping.
 6. A quick question without interrupting the main turn or writing history:
    `/btw <问题>`.

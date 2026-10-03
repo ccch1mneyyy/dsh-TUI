@@ -449,8 +449,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'flow-steer',
     group: 'workflow',
-    zh: '模型工作时：Enter 加塞、Tab 排队、Ctrl+Enter 打断',
-    en: 'While working: Enter steers, Tab queues, Ctrl+Enter interrupts',
+    zh: '模型工作时：Enter 加塞、Tab 排队、Ctrl+Enter 打断；/ 命令照常执行',
+    en: 'While working: Enter steers, Tab queues, Ctrl+Enter interrupts; / commands still run',
   },
   {
     id: 'flow-alt-up',

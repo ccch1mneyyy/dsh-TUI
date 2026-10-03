@@ -151,6 +151,76 @@ export function localizedDescription(command: LocalCommand & { descriptionKey?: 
 }
 
 /**
+ * Commands the channel REFUSES to run while a turn is streaming, mapped to the
+ * i18n key of the refusal notice. This table is the single source of truth for
+ * what a gate SAYS and for the `/` suggestion overlay that sinks the rows
+ * affecting the running conversation — so the refusal text and the overlay
+ * annotation can never drift. WHETHER a command is refused still lives in each
+ * gate's own `state.working` / `channel.working` branch (9 call sites today), so
+ * a new gate means a new entry here: `scripts/verify-command-hold.ts` fails when
+ * a `working` bail-out under `src/dsh-adapter/` notifies with a literal key of
+ * its own, and when a new name joins this dictionary without a conscious edit
+ * there. A `t(...)` call in a gate pins the key type, so removing an entry from
+ * the dict fails the build.
+ */
+export const WORKING_GATE_NOTICES = {
+  new: 'new-session-while-working',
+  compact: 'compact-while-working',
+  fork: 'fork-while-working',
+  model: 'model-switch-while-working',
+  preset: 'preset-agent-running',
+  workspace: 'workspace-switch-working',
+  update: 'update-working',
+  restart: 'update-working',
+} as const
+
+/**
+ * Commands that MAY run while a turn is streaming but act ON the conversation
+ * itself rather than on the running turn: `clear` empties the visible view (the
+ * running turn keeps writing into it, `local-actions.ts`), `rewind` starts the
+ * rewind flow, and `exit` (with its `quit`/`q` aliases) tears the process — and
+ * the running turn — down.
+ *
+ * `/rewind` cancels only once a target is CONFIRMED (`session-rewind.ts`), but
+ * replacing the conversation is the command's whole purpose, so it stays in this
+ * family. `/tree` deliberately does NOT: it only opens the family-tree browser
+ * (`Chat.tsx` `setTreeOpen(true)`) and leaves the running turn untouched — its
+ * per-node rewind/fork/adopt are separate, separately confirmed actions
+ * (`session-tree-actions.ts`), and browsing the tree is inspection, not impact
+ * (issue #1072 review: measured on a real turn — `/tree` does not interrupt).
+ */
+export const WORKING_CONVERSATION_COMMANDS: readonly string[] = [
+  'clear', 'rewind', 'exit', 'quit', 'q',
+]
+
+/**
+ * How a command affects the RUNNING conversation:
+ * - `gated` — refused by the channel while a turn runs (see
+ *   {@link WORKING_GATE_NOTICES});
+ * - `conversation` — allowed, but ends the current conversation (process exit);
+ * - `inject` — steers a line into the current turn (skills).
+ * `undefined` means the normal region: message-like commands, or commands that
+ * leave the running conversation alone.
+ */
+export type WorkingHold = 'gated' | 'conversation' | 'inject'
+
+/**
+ * Classify a command by its impact on the running conversation.
+ * @param name Bare command name or a completion path (`model deepseek-chat`);
+ *   only the first token is classified, so every child of a gated command
+ *   (`/model <id>`, `/workspace rename <t>`) inherits the parent's hold.
+ * @param skill Whether the entry is a user-invocable skill.
+ * @returns The hold, or `undefined` for the normal region.
+ */
+export function workingHoldOf(name: string, skill?: boolean): WorkingHold | undefined {
+  if (skill === true) return 'inject'
+  const root = name.replace(/^\//, '').trim().split(/[\t ]+/u)[0]?.toLowerCase() ?? ''
+  if (root === '') return undefined
+  if (Object.hasOwn(WORKING_GATE_NOTICES, root)) return 'gated'
+  return WORKING_CONVERSATION_COMMANDS.includes(root) ? 'conversation' : undefined
+}
+
+/**
  * Parse a slash-command line into its name and the verbatim input following
  * the name (separator whitespace included) — the same split the DSH command
  * registry uses, so `/plan off` dispatches `plan` with ` off`.
