@@ -1110,6 +1110,7 @@ const dict = {
   // edit, or Enter to send them now".
   'input-pending-dock-hint': { zh: '按 ↑ 编辑排队消息，⏎ 立即发送', en: 'Press ↑ to edit queued messages, ⏎ to send now' },
   'input-dock-sent': { zh: '已发送 {{n}} 条停靠消息', en: 'Sent {{n}} docked message(s)' },
+  'input-dock-swapped': { zh: '已交换：草稿停靠，所点消息回到输入框（Ctrl+Z 可换回）', en: 'Swapped: draft docked, picked message back in the input (Ctrl+Z swaps back)' },
   // U+30FB (not U+00B7): the separator participates in the folded-chip
   // width arithmetic; U+00B7 is EA-ambiguous and paints 2 cells on CJK
   // terminal fonts while the model measures 1 (see PromptInput foldBadge).

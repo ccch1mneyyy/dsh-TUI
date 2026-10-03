@@ -436,6 +436,16 @@ export interface ChannelUi {
   /** Deliver every docked queued message now (⏎ on an empty draft), FIFO,
    *  exactly once. Returns the count sent. */
   deliverDocked(): number
+  /**
+   * Lossless swap (R4-R1): retract the docked row `id` into the composer and
+   * park the live draft (text + staged images) at the pending tail as a NEW
+   * docked row, in one atomic queue write — nothing sends, no undo history is
+   * lost. The parked row is a purely channel-side asset (the backend never
+   * saw the draft), so it stays outside the interrupt-receipt fence: a
+   * settling receipt must not un-dock it (F2). Returns false when `id` is no
+   * longer a docked row (claimed / discarded / un-docked meanwhile).
+   */
+  swapDockedForDraft(id: string, draft: { text: string; images?: readonly ComposerImageRef[] }): boolean
   /** Rewind the conversation to a past user message (the double-Esc rewind):
    *  forks the session through that message, swaps in a fresh agent, and
    *  returns the message text for re-editing — or `null` when unwritable.

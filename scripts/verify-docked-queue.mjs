@@ -15,9 +15,10 @@
  *
  * Run with plain node against the compiled lib: `node scripts/verify-docked-queue.mjs`
  */
+import { Writable, PassThrough } from 'node:stream'
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
 import { setLang, t } from '../lib/types/i18n.js'
-import { settle, settled } from './lib/term-test.mjs'
+import { settle, settled, sleep, findText } from './lib/term-test.mjs'
 
 setLang('en')
 const flush = () => new Promise(resolve => setImmediate(resolve))
@@ -319,4 +320,307 @@ function makeClaudeSession({ stillQueuedOnInterrupt, cancelReceipt } = {}) {
   check('C4 each intent ran once plus exactly one confirmed resend', texts().filter(text => text === 'gen one').length === 2 && texts().filter(text => text === 'gen two').length === 2, JSON.stringify(texts()))
 }
 
+// ─────── Section D (R4-R1): a dock-row click never destroys the draft ────
+// The blocker: clicking a docked row used to silently overwrite a non-empty
+// draft (text, staged images AND the undo history). The fix is a lossless
+// SWAP — the draft parks at the dock's tail while the clicked row comes
+// into the input; nothing sends, Ctrl+Z swaps back. Channel level first
+// (the primitive's own contract), then the real PromptInput round-trip.
+{
+  // D1 — the primitive trades one docked row for the draft, atomically.
+  const { session, state } = makeClaudeSession()
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('dock me')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  await flush()
+  const dockedId = channel.pending.find(item => item.docked === true)?.id
+  const draftImages = [{ token: '[Image #1]', stageId: 'stage-1' }]
+  check('D1 swap succeeds on a docked row', channel.swapDockedForDraft(dockedId, { text: 'valuable draft', images: draftImages }) === true)
+  check('D1 the clicked row is gone, the draft parked as a NEW docked tail row',
+    channel.pending.length === 1 && channel.pending[0]?.docked === true
+      && channel.pending[0]?.text === 'valuable draft'
+      && channel.pending[0]?.placement === 'followup'
+      && JSON.stringify(channel.pending[0]?.images) === JSON.stringify(draftImages),
+    JSON.stringify(channel.pending))
+  check('D1 the parked row carries a local-only prefixed id',
+    typeof channel.pending[0]?.id === 'string' && channel.pending[0].id.startsWith('dock-swap-'),
+    channel.pending[0]?.id)
+  check('D1 the swap sends nothing', state.submits.length === 1, JSON.stringify(state.submits.map(input => input.text)))
+
+  // D2 — only a CONFIRMED-cancelled (docked) copy is swappable: an
+  // un-docked row's backend copy still lives, so editing it away would
+  // duplicate the intent (F2's fence, preserved by the swap).
+  {
+    const { session: s2, state: st2 } = makeClaudeSession({ stillQueuedOnInterrupt: true })
+    const ch2 = createChannel(ctx, s2, launchOptions)
+    ch2.submit('kept by cli')
+    await settle(() => ch2.pending.length === 1)
+    ch2.interruptAndDock()
+    check('D2 an unconfirmed row is not swappable',
+      await settled(() => ch2.pending.length === 1 && ch2.pending[0]?.docked !== true)
+        && ch2.swapDockedForDraft(ch2.pending[0]?.id, { text: 'draft' }) === false
+        && ch2.pending.length === 1 && ch2.pending[0]?.text === 'kept by cli',
+      JSON.stringify(ch2.pending))
+    check('D2 the refused swap sent nothing', st2.submits.length === 1, JSON.stringify(st2.submits.map(input => input.text)))
+  }
+
+  // D3 — the parked draft has NO backend copy: a receipt settling around
+  // the swap must not un-dock it (the F2 fence governs rows the backend
+  // may still hold; the swap row was never dispatched).
+  {
+    let release
+    const { session: s3, state: st3 } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+    const ch3 = createChannel(ctx, s3, launchOptions)
+    ch3.submit('covered row')
+    await settle(() => ch3.pending.length === 1)
+    ch3.interruptAndDock()
+    const coveredId = ch3.pending.find(item => item.docked === true)?.id
+    check('D3 swap while the receipt is in flight', ch3.swapDockedForDraft(coveredId, { text: 'parked draft' }) === true)
+    release({ stillQueued: [], outcome: 'confirmed' })
+    check('D3 the settled receipt keeps the parked draft docked',
+      await settled(() => ch3.pending.length === 1 && ch3.pending[0]?.docked === true && ch3.pending[0]?.text === 'parked draft'),
+      JSON.stringify(ch3.pending))
+    check('D3 deliverDocked counts the parked draft', ch3.deliverDocked() === 1)
+    const texts3 = () => st3.submits.map(input => input.text)
+    await settle(() => texts3().length === 2)
+    check('D3 each intent delivered exactly once (original + parked)',
+      texts3().filter(text => text === 'parked draft').length === 1
+        && texts3().filter(text => text === 'covered row').length === 1,
+      JSON.stringify(texts3()))
+  }
+
+  // D4 — retirement events name the row they retire: a discard/claim for
+  // the swapped-OUT id is a no-op, and the parked draft stays editable.
+  {
+    const { session: s4, state: st4, push } = makeClaudeSession()
+    const ch4 = createChannel(ctx, s4, launchOptions)
+    ch4.submit('to swap')
+    await settle(() => ch4.pending.length === 1)
+    ch4.interruptAndDock()
+    await flush()
+    const swappedOutId = ch4.pending.find(item => item.docked === true)?.id
+    ch4.swapDockedForDraft(swappedOutId, { text: 'parked b' })
+    push({ type: 'pending.changed', items: [], claimed: [], discarded: [swappedOutId] })
+    check('D4 a discard naming the swapped-out id retires nothing (the row is gone)',
+      ch4.pending.length === 1 && ch4.pending[0]?.docked === true && ch4.pending[0]?.text === 'parked b',
+      JSON.stringify(ch4.pending))
+    const parkedId = ch4.pending[0]?.id
+    check('D4 the parked draft retracts locally',
+      ch4.removePending(parkedId) === true && ch4.pending.length === 0,
+      JSON.stringify(ch4.pending))
+    check('D4 the discard caused no extra delivery', st4.submits.length === 1, JSON.stringify(st4.submits.map(input => input.text)))
+  }
+}
+
+// ─── UI level (R4-R1): the real PromptInput swap round-trip (SGR click) ───
+// FakeStdout paints a real xterm; the composer sits at the bottom of the
+// frame so the OverlayAbove dock paints above the input row and an SGR
+// click lands on the painted row.
+const [ReactUI, { render: renderUI, AlternateScreen, Box }, xtermModule] = await Promise.all([
+  import('react'),
+  import('../lib/types/ui.js'),
+  import('@xterm/headless'),
+])
+const XTermUI = xtermModule.Terminal ?? xtermModule.default?.Terminal
+const { PromptInput: PromptInputUI } = await import('../lib/types/components/PromptInput.js')
+const COLS_UI = 100
+const ROWS_UI = 30
+const termUI = new XTermUI({ cols: COLS_UI, rows: ROWS_UI, scrollback: 50, allowProposedApi: true })
+class FakeStdoutUI extends Writable {
+  columns = COLS_UI
+  rows = ROWS_UI
+  isTTY = true
+  _write(chunk, _enc, cb) { termUI.write(String(chunk), cb) }
+}
+class FakeStderrUI extends Writable {
+  isTTY = true
+  _write(_c, _e, cb) { cb() }
+}
+class FakeStdinUI extends PassThrough {
+  isTTY = true
+  setRawMode() { return this }
+  ref() { return this }
+  unref() { return this }
+}
+const uiStdout = new FakeStdoutUI()
+const uiStderr = new FakeStderrUI()
+const uiStdin = new FakeStdinUI()
+const clickUI = (col, row) => {
+  uiStdin.write('\x1b[<0;' + col + ';' + row + 'M')
+  uiStdin.write('\x1b[<0;' + col + ';' + row + 'm')
+}
+const findUI = text => findText(termUI, text)
+
+function makeUiChannel(initialPending, options = {}) {
+  const notified = []
+  const removed = []
+  const swaps = []
+  const discardedImages = []
+  const staged = new Map([['stage-1', { id: 'stage-1', name: 'shot.png' }]])
+  let pending = [...initialPending]
+  let swapSeq = 0
+  return {
+    working: false,
+    mode: { id: 'default', plan: false },
+    modeIndex: 0,
+    cycleMode() {},
+    commandList: [],
+    commandCompletions: () => [],
+    notifications: [],
+    contextWindow: undefined,
+    cwd: '/tmp',
+    get pending() { return pending },
+    notify(text, notifyOptions) { notified.push({ text, options: notifyOptions }) },
+    submit() {},
+    steer() {},
+    removePending(id) { removed.push(id); pending = pending.filter(item => item.id !== id); return true },
+    swapDockedForDraft(id, draft) {
+      if (options.refuseSwap === true) return false
+      swaps.push({ id, text: draft.text })
+      pending = pending.filter(item => item.id !== id)
+      pending = [...pending, { id: 'ui-swap-' + ++swapSeq, text: draft.text, images: draft.images ?? [], placement: 'followup', docked: true }]
+      return true
+    },
+    cancel() {},
+    interruptAndDock() { return 0 },
+    deliverDocked() { return 0 },
+    interruptAndDeliver() { return 0 },
+    listFiles: async () => [],
+    stagedImageGeneration: () => 0,
+    hasStagedImage: id => staged.has(id),
+    stagedImage: id => staged.get(id),
+    discardStagedImage(id) { discardedImages.push(id); staged.delete(id) },
+    stageImage() {},
+    notified,
+    removed,
+    swaps,
+    discardedImages,
+  }
+}
+
+const uiController = { current: null }
+async function mountUI(channel) {
+  const tree = ReactUI.createElement(AlternateScreen, null,
+    ReactUI.createElement(Box, { height: ROWS_UI, flexDirection: 'column', justifyContent: 'flex-end' },
+      ReactUI.createElement(PromptInputUI, {
+        channel,
+        helpOpen: false,
+        onToggleHelp() {},
+        onRunCommand: () => false,
+        selectionActive: false,
+        controllerRef: uiController,
+      })))
+  return renderUI(tree, { stdout: uiStdout, stderr: uiStderr, stdin: uiStdin, exitOnCtrlC: false, patchConsole: false })
+}
+const typeUI = async str => {
+  for (const char of str) {
+    uiStdin.write(char)
+    // 固定窗:pacing 逐字符等待上一字符落入草稿（假 stdout 的帧由 xterm 消费，无文本锚点）
+    await sleep(20)
+  }
+  await sleep(80) // 固定窗:pacing 让整段输入的末帧渲染落定
+}
+
+{
+  // D5 — a valuable draft SWAPS with the clicked row (SGR click).
+  const channel = makeUiChannel([
+    { id: 'd1', text: 'dock-alpha', placement: 'followup', docked: true },
+    { id: 'd2', text: 'dock-beta', placement: 'followup', docked: true },
+  ])
+  const instance = await mountUI(channel)
+  check('D5 the dock paints above the input', await settled(() => findUI('dock-alpha') !== null))
+  await typeUI('valuable draft')
+  const pos = findUI('dock-alpha')
+  if (pos) clickUI(pos.col + 3, pos.row + 1)
+  check('D5 the clicked row lands in the input', await settled(() => uiController.current?.text() === 'dock-alpha'), JSON.stringify(uiController.current?.text()))
+  check('D5 the draft parked at the dock tail as a docked row',
+    channel.pending.length === 2 && channel.pending[1]?.docked === true && channel.pending[1]?.text === 'valuable draft'
+      && channel.pending[0]?.id === 'd2',
+    JSON.stringify(channel.pending.map(item => ({ id: item.id, text: item.text, docked: item.docked }))))
+  check('D5 nothing was sent; the swap notice shows',
+    channel.removed.length === 0 && channel.notified.some(n => n.text === t('input-dock-swapped')),
+    JSON.stringify(channel.notified.map(n => n.text)))
+  // D6 — Ctrl+Z swaps back byte-identically; the parked copy stays queued.
+  uiStdin.write('\x1a')
+  check('D6 Ctrl+Z restores the draft byte-identically', await settled(() => uiController.current?.text() === 'valuable draft'), JSON.stringify(uiController.current?.text()))
+  check('D6 the parked copy stays in the dock', channel.pending.some(item => item.text === 'valuable draft' && item.docked === true), JSON.stringify(channel.pending.map(item => item.text)))
+  instance.unmount()
+}
+{
+  // D7 — a multi-line draft survives the round-trip unchanged.
+  const channel = makeUiChannel([
+    { id: 'd1', text: 'dock-multi', placement: 'followup', docked: true },
+  ])
+  const instance = await mountUI(channel)
+  check('D7 dock painted', await settled(() => findUI('dock-multi') !== null))
+  await typeUI('line1')
+  uiStdin.write('\n') // bare LF = Ctrl+J newline insert (not Enter)
+  await sleep(120) // 固定窗:pacing 等换行落定再续打第二行
+  await typeUI('line2')
+  check('D7 multi-line draft composed', uiController.current?.text() === 'line1\nline2', JSON.stringify(uiController.current?.text()))
+  const pos = findUI('dock-multi')
+  if (pos) clickUI(pos.col + 3, pos.row + 1)
+  check('D7 swap took the row into the input', await settled(() => uiController.current?.text() === 'dock-multi'), JSON.stringify(uiController.current?.text()))
+  check('D7 the parked copy keeps the newlines', channel.pending.some(item => item.text === 'line1\nline2'), JSON.stringify(channel.pending.map(item => item.text)))
+  uiStdin.write('\x1a')
+  check('D7 Ctrl+Z restores the multi-line draft losslessly', await settled(() => uiController.current?.text() === 'line1\nline2'), JSON.stringify(uiController.current?.text()))
+  instance.unmount()
+}
+{
+  // D8 — staged images ride the swap both ways; the capability survives.
+  const channel = makeUiChannel([
+    { id: 'd1', text: 'dock-img', placement: 'followup', docked: true },
+    { id: 'img-src', text: '[Image #1]', images: [{ token: '[Image #1]', stageId: 'stage-1' }], placement: 'followup', docked: true },
+  ])
+  const instance = await mountUI(channel)
+  check('D8 dock painted', await settled(() => findUI('dock-img') !== null))
+  // Pull the image-bearing row with Alt+Up (newest docked row first).
+  uiStdin.write('\x1b[1;3A')
+  check('D8 the image draft pulled into the input', await settled(() => uiController.current?.text() === '[Image #1]'), JSON.stringify(uiController.current?.text()))
+  check('D8 the binding is live before the swap', (uiController.current?.previewImages?.() ?? []).length === 1)
+  await typeUI(' tail')
+  const pos = findUI('dock-img')
+  if (pos) clickUI(pos.col + 3, pos.row + 1)
+  check('D8 swap landed', await settled(() => uiController.current?.text() === 'dock-img'), JSON.stringify(uiController.current?.text()))
+  check('D8 the parked row carries the image refs',
+    channel.pending.some(item => item.text === '[Image #1] tail'
+      && JSON.stringify(item.images) === JSON.stringify([{ token: '[Image #1]', stageId: 'stage-1' }])),
+    JSON.stringify(channel.pending.map(item => ({ text: item.text, images: item.images }))))
+  check('D8 the capability was not discarded', !channel.discardedImages.includes('stage-1'), JSON.stringify(channel.discardedImages))
+  uiStdin.write('\x1a')
+  check('D8 Ctrl+Z restores the image draft', await settled(() => uiController.current?.text() === '[Image #1] tail'), JSON.stringify(uiController.current?.text()))
+  check('D8 the restored binding is live', (uiController.current?.previewImages?.() ?? []).length === 1)
+  instance.unmount()
+}
+{
+  // D9 — an EMPTY draft keeps the plain retraction (no parked copy).
+  const channel = makeUiChannel([
+    { id: 'd1', text: 'dock-empty', placement: 'followup', docked: true },
+  ])
+  const instance = await mountUI(channel)
+  check('D9 dock painted', await settled(() => findUI('dock-empty') !== null))
+  const pos = findUI('dock-empty')
+  if (pos) clickUI(pos.col + 3, pos.row + 1)
+  check('D9 empty draft edits as before (plain retract)',
+    await settled(() => uiController.current?.text() === 'dock-empty' && channel.removed.includes('d1')),
+    JSON.stringify({ text: uiController.current?.text(), removed: channel.removed }))
+  check('D9 no swap row was parked', !channel.pending.some(item => item.docked === true) && channel.swaps.length === 0, JSON.stringify(channel.pending))
+  instance.unmount()
+}
+{
+  // D10 — a refused swap (the row was claimed meanwhile) keeps the draft.
+  const channel = makeUiChannel([
+    { id: 'd1', text: 'dock-gone', placement: 'followup', docked: true },
+  ], { refuseSwap: true })
+  const instance = await mountUI(channel)
+  check('D10 dock painted', await settled(() => findUI('dock-gone') !== null))
+  await typeUI('keep me')
+  const pos = findUI('dock-gone')
+  if (pos) clickUI(pos.col + 3, pos.row + 1)
+  check('D10 a refused swap keeps the draft untouched',
+    await settled(() => uiController.current?.text() === 'keep me' && channel.notified.some(n => n.text === t('input-cannot-retract'))),
+    JSON.stringify({ text: uiController.current?.text(), notified: channel.notified.map(n => n.text) }))
+  instance.unmount()
+}
 process.exit(failed)

@@ -1830,11 +1830,46 @@ export function PromptInput({
 
   /** Retract one docked row into the draft for editing (selector ⏎, row
    *  click, Alt+↑ on the last): purely local — the backend dropped its copy
-   *  with the aborted turn, so every backend can do it. */
+   *  with the aborted turn, so every backend can do it.
+   *
+   *  A draft with real content is never destroyed by the retraction (R4-R1
+   *  blocker): it SWAPS — the whole draft (text + staged images) parks at
+   *  the dock's tail while the clicked row comes into the input. Nothing
+   *  sends; the swap is one undo step, so Ctrl+Z brings the parked draft
+   *  back (text, caret, images and fold block; the parked row retains the
+   *  image capabilities, see stageIdIsRetained). Only an empty (or
+   *  whitespace-only) draft takes the plain retraction path. */
   const editDocked = (index: number): void => {
     const item = dockedPending[index]
     setDockSelected(null)
     if (item === undefined) return
+    if (valueRef.current.trim() !== '') {
+      // Park the draft FIRST: its capabilities must already be retained by
+      // the pending row when setInput's undo bookkeeping and sidecar pruning
+      // run below, or a later swap-back would find them discarded.
+      const swapped = channel.swapDockedForDraft(item.id, {
+        text: valueRef.current,
+        images: imageRefsFor(valueRef.current),
+      })
+      if (!swapped) {
+        channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
+        return
+      }
+      // One sealed undo step captures the draft the swap replaces (same
+      // shape as the external-editor refill): snapshot the fold block
+      // BEFORE clearing it, so Ctrl+Z restores the chip too. setInput runs
+      // while the sidecar still maps the parked draft's tokens — the undo
+      // snapshot then carries them, and its pruning sees the pending row
+      // already retains every capability (nothing is discarded).
+      const beforeBlock = foldBlockRef.current
+      updateFoldBlock(null)
+      setInput(item.text, item.text.length, 'step', beforeBlock)
+      replaceDraftImages(item.images ?? [])
+      setSelectedCommand(0)
+      setFileSelected(0)
+      channel.notify(t('input-dock-swapped'), { timeoutMs: 2000 })
+      return
+    }
     if (!channel.removePending(item.id)) {
       channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
       return
