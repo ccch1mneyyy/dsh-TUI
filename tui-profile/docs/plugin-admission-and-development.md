@@ -555,9 +555,14 @@ ctx.inject(['tuiSettingsSections'], (settingsCtx) => {
   `settings.mutate` path ops（冲突自动用新 revision 重试一次）。
 - 字段的"已覆盖"标记按 **user 层存在性**判断（值等于默认也算覆盖）；清空文本
   字段会在保存时生成 `unset`，让字段回退到组合层。
-- `kind` 目前支持 `text` / `number` / `boolean` / `select`；复杂嵌套结构（dict/
-  数组编辑器）暂不支持，用户仍可手工编辑 `~/.dsh/settings.yaml`——未声明区块的
-  命名空间在设置屏里就是只读 + YAML 提示。
+- `kind` 目前支持 `text` / `number` / `boolean` / `select` / `multi-select`；复杂
+  嵌套结构（dict/数组编辑器）暂不支持，用户仍可手工编辑 `~/.dsh/settings.yaml`——
+  未声明区块的命名空间在设置屏里就是只读 + YAML 提示。
+- `multi-select` 是二级菜单里的勾选列表：`options` 出选项，用户按 `Enter` 打开、
+  空格/`Enter` 勾选、`Esc` 返回，写回的草稿是「按选项顺序 + 逗号分隔」的字符串，
+  由字段自己的 `parse` 决定存成什么（数组、CSV 等）。选项多来自运行时注册表时用
+  `optionsProvider: () => [...]` 替代静态 `options`——它每次渲染都重读，注册表
+  中途变化无需重注册区块（侧栏「启用的面板」即此形态）。
 - 命名空间未注册（插件未挂载 settings section）时区块显示为不可用，不报错。
 
 ## 接缝七：profile 组合（cordis.patch.yml）

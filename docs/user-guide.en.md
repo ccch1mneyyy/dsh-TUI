@@ -270,13 +270,16 @@ one-column seam between the two surfaces.
 - **Panels**: `todo` (Goals/Todos — with a split it moves here from above the input), `jobs`
   (background jobs; clicking a job card in the transcript focuses that job here), `agents`
   (subagent dashboard and detail: Enter opens the detail, Esc steps back), `companion`
-  (the pet — off by default; add `companion` to `sidePanel.panels` to enable: its mood follows
+  (the pet — off by default; check `companion` under Enabled panels to enable: its mood follows
   the session, click for a heart, Enter to poke; the `dsh-tui.companion.skin` setting offers
   deepy (default, the fan-made deepy whale kit) or whale), `info` (model, effort, mode,
   permissions, context usage, cache hit, tokens, TPS, spend, working dir, session title and id),
   `trajectory` (the session's wake band + ledger + inspector: ↑/↓ select, Enter expands, Tab
   switches to the hotspot view — ←/→ always stay the host's panel-cycling keys), `workspace`
   (working-directory overview; Enter opens the full workspace home).
+- **Enabled panels and their order**: `/settings › Side panel › Enabled panels` — Enter opens the
+  checkbox list (Space/Enter checks, Esc goes back) and the tab bar follows the list order. Panels a
+  plugin registers sit in the same list, and leave it when they unregister.
 - **Pet (companion) details**: the pet sits at the BOTTOM of the panel with a status area above
   it (mood · subagent/session counts · current animation). Interactions: clicking its left/right
   half pokes it (poke-left/right), three rapid clicks tickle it, **holding and dragging walks it

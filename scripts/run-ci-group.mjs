@@ -112,6 +112,11 @@ const GROUPS = {
 // 焦点序跳过标题直达字段），page 组与无 mode 的旧默认仍走子页；空的
 // inline 组不渲染孤儿标题。
     ["verify-settings-root-inline", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-root-inline.tsx']],
+// /settings「启用的面板」二级菜单回归（sidePanel.panels）：字段不再是打字输入
+// 逗号分隔 id 的文本框，Enter 打开勾选页（✓/空 复选框、空格/Enter 勾选即保存、
+// Esc 返回）；写出的 draft 按「选项顺序在前 + 无主 id 殿后」排列；选项由实时
+// provider 推，插件注册的面板随后出现、撤下的随即消失。
+    ["verify-settings-panel-picker", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-panel-picker.tsx']],
     ["repro-inline-scrollback", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-scrollback.tsx']],
     ["repro-inline-thirdparty", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-thirdparty.tsx']],
 // 安全回归：OSC 出口控制字符剥离 + 超链接 scheme 门禁（安全审查

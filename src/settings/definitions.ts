@@ -228,9 +228,9 @@ export const SETTING_DEFINITIONS = {
     label: 'Enabled panels',
     descriptions: { zh: '启用的面板' },
     group: 'side-panel',
-    hint: 'Comma-separated panel ids in PanelBar order (default `todo,jobs,agents`). Ids are lowercase words (a-z, 0-9, _, -) or a `plugin:panel` namespace; a well-formed id no panel claims yet stays in the bar for a plugin that registers it later, while a malformed entry is refused. Add `companion` to enable the pet panel. Applies immediately.',
-    hintDescriptions: { zh: '按标签栏顺序排列的面板 id，逗号分隔（默认 `todo,jobs,agents`）。id 为小写词组（a-z、0-9、_、-）或 `plugin:panel` 命名空间；格式合法但尚无面板认领的 id 会留在标签栏，等插件稍后注册，格式非法的输入会被直接拒绝。加上 `companion` 可启用宠物面板。立即生效。' },
-    kind: 'text',
+    hint: 'Enter opens the panel list and Space/Enter checks the panels you want (Esc goes back); the tab bar follows the list order. Rows come from the live panel registry, so a panel a plugin registers appears here too — ids are lowercase words (a-z, 0-9, _, -) or a `plugin:panel` namespace, and an id no panel claims yet stays checked for a plugin that registers it later. Default `todo,jobs,agents`. Applies immediately.',
+    hintDescriptions: { zh: '按 Enter 打开面板列表，空格/Enter 勾选想要的面板（Esc 返回）；标签栏顺序与列表一致。条目来自实时面板注册表，插件注册的面板同样出现在这里——id 为小写词组（a-z、0-9、_、-）或 `plugin:panel` 命名空间，格式合法但尚无面板认领的 id 会保持勾选，等插件稍后注册。默认 `todo,jobs,agents`。立即生效。' },
+    kind: 'multi-select',
   },
   'sidePanel.ratio': {
     label: 'Chat column width',
