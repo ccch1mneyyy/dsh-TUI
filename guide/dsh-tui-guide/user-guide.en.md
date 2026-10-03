@@ -48,7 +48,12 @@ dsh-tui
    version, `DEEPSEEK / HARNESS` big text, current model and effort, working directory, and a
    **startup hint**; the header here is **frozen from the first frame** — the intro animation is
    left to the transcript header once you are in the chat), a **real input box** underneath
-   (type your first sentence here; Enter carries it into the chat screen), and a row of
+   (type your first sentence here; Enter carries it into the chat screen), a **parameter row** under
+   the box (model · effort · mode · permission — all four are clickable and open the chat page's
+   pickers in place; all four stay on the row, and when the line does not fit only the over-long
+   segments are truncated at the tail with a trailing `…` — the permission segment is never
+   truncated — and in fullscreen a hover reveals a truncated segment's **full name**; only when even
+   that does not fit are whole segments dropped from the tail in display order), and a row of
    **quick actions** (v7 four slots: `Continue "…"` — shortcut `Alt+R`, the slot is simply absent
    when there is nothing to continue · `Sessions & workspaces` — history and workspaces are the
    same `/home` screen, merged into one entry · `Settings` · a **conditional slot** — `Background
