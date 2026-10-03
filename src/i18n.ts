@@ -229,6 +229,14 @@ const dict = {
   'claude-auth-failed-login': { zh: 'Claude 凭证仍被拒绝：用 /login 重新登录，或设置 ANTHROPIC_API_KEY、在终端运行 claude login', en: 'Claude still refuses the credential: sign in again with /login, set ANTHROPIC_API_KEY, or run `claude login` in a terminal' },
   'claude-auth-reconnected': { zh: '凭证已刷新并重新连接同一会话，请重发上一条消息', en: 'Credential renewed and the same session reconnected; send your last message again' },
   'claude-auth-refresh-failed': { zh: '刷新 Claude 凭证失败{{detail}}（可用 /login 重新登录）', en: 'Renewing the Claude credential failed{{detail}} (sign in again with /login)' },
+  'claude-channel-token-missing': {
+    zh: '渠道 {{name}}（{{host}}）指向自定义端点但没有可用 token，已拒绝启动：不会对中转端点发匿名请求。请在 /channel → 管理渠道 里为它补上 token，或切换到其他渠道后重试。',
+    en: 'Channel {{name}} ({{host}}) points at a custom endpoint but has no usable token — the start was refused: no anonymous relay requests. Add a token under /channel → Manage channels, or switch to another channel, then retry.',
+  },
+  'claude-channel-helper-conflict': {
+    zh: 'settings.json 配置了 apiKeyHelper，与激活渠道冲突：helper 生成的 x-api-key 会随渠道请求发往渠道端点。请从 settings.json 移除 apiKeyHelper，或用 /channel 停用该渠道后再启动。',
+    en: 'settings.json declares apiKeyHelper, which conflicts with the active channel: the x-api-key the helper produces would ride channel requests to the channel endpoint. Remove apiKeyHelper from settings.json, or deactivate the channel via /channel, then retry.',
+  },
   'claude-auth-refresh-status': { zh: ' · HTTP {{status}}', en: ' · HTTP {{status}}' },
   'claude-auth-reconnect-failed': { zh: '重新连接 Claude 会话失败（诊断包含失败类别和 HTTP 状态；可用 /login 重新登录）', en: 'Reconnecting the Claude session failed (the diagnostics carry the failure category and HTTP status; sign in again with /login)' },
   'claude-auth-reconnect-deferred': { zh: '当前回合结束后再用新凭证重新连接', en: 'Reconnecting with the new credential once the current turn ends' },
@@ -2018,6 +2026,10 @@ const dict = {
   'channel-conn-settings-mismatch': {
     zh: 'settings.json 的 ANTHROPIC_BASE_URL 与激活渠道 {{name}} 不一致；本会话按渠道档案连接（settings.json 原样保留给裸 claude 用）',
     en: 'settings.json ANTHROPIC_BASE_URL differs from the active channel {{name}}; this session connects per the channel profile (settings.json stays untouched for bare claude)',
+  },
+  'channel-conn-creds-superseded': {
+    zh: '本会话使用渠道凭据；settings.json 里的 {{keys}} 本次不生效（已被渠道 flag 层显式置空，settings.json 原样保留给裸 claude 用）',
+    en: 'This session runs on the channel credential; {{keys}} from settings.json are not in effect (explicitly blanked by the channel flag layer; settings.json stays untouched for bare claude)',
   },
   'channel-switched': { zh: '已切换到 {{name}}，模型显示已刷新', en: 'Switched to {{name}}; the model display refreshed' },
   'channel-import-done': { zh: '已导入渠道 {{name}}（重复导入会刷新它）', en: 'Imported channel {{name}} (a re-import refreshes it)' },
