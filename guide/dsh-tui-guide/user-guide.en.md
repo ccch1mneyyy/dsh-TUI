@@ -54,8 +54,9 @@ dsh-tui
    segments are truncated at the tail with a trailing `…` — the permission segment is never
    truncated — and a hover reveals a truncated segment's **full name** (mouse tracking is always on
    for the launchpad screen, inline mode included); only when the **full permission name does not
-   fit the budget** (independent of the terminal width — the longer the name, the earlier it fires)
-   are whole segments dropped from the tail in display order), and a row of
+   fit the budget** (widening the terminal past 76 columns changes nothing — a narrower terminal
+   or a longer permission name triggers it earlier) are whole segments dropped from the tail in
+   display order), and a row of
    **quick actions** (v7 four slots: `Continue "…"` — shortcut `Alt+R`, the slot is simply absent
    when there is nothing to continue · `Sessions & workspaces` — history and workspaces are the
    same `/home` screen, merged into one entry · `Settings` · a **conditional slot** — `Background

@@ -102,10 +102,10 @@ results back to the chat screen and add no new behavior.
   when they fit; when they do not, only the **over-long segments** are truncated at the tail with a
   trailing `…` (the permission segment is **never truncated**), and hovering a truncated segment
   shows its **full name** in a card after ~600ms (mouse tracking is always on for the launchpad
-  screen, inline mode included); only when the **full permission name does not fit the budget**
-  — independent of the terminal width: the longer the name, the earlier it fires — does the row
-  fall back to dropping **whole segments from the tail** (permission → mode → effort → model),
-  which also drops them from the focus ring.
+  screen, inline mode included); only when the **full permission name does not fit the budget** —
+  widening the terminal past 76 columns changes nothing, while a narrower terminal or a longer
+  permission name triggers it earlier — does the row fall back to dropping **whole segments from
+  the tail** (permission → mode → effort → model), which also drops them from the focus ring.
 - **Entry row**: `Continue "…"` (Alt+R; the slot is absent when
   there is nothing to continue) · `Sessions & workspaces` (`/home` — history and workspaces merged into
   one entry) · `Settings` (`/settings`) · `Kernel · <current kernel>` (`/kernel`, opens the kernel
