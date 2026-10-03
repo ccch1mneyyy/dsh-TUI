@@ -121,6 +121,9 @@ function fixture(jobs?: unknown, options: { throwOnEvent?: string; effectCleanup
   await tick()
   assert.ok(writes.includes('submit'))
   const settings = mount.channel.settingsHost()!
+  // Settings keys effects on the host's identity: a fresh guarded wrapper per
+  // call would re-run them on every render (an endless update loop).
+  assert.equal(mount.channel.settingsHost(), settings, 'guarded settings host keeps its identity across calls')
   const provider = mount.channel.providerSetup()!
   await settings.write('x', [])
   await provider.writeProfile('x', {})

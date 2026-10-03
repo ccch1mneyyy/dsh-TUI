@@ -1696,6 +1696,26 @@ const dict = {
     en: '**j/k** page · **enter/esc** collapse · **q** exit',
   },
   'traj-hint-failure': { zh: '{{key}} 看完整轨迹', en: '{{key}} for the full trajectory' },
+  // ── boot phase (`dst` fast start; src/preboot/) ─────────────────────
+  // The real Chat is mounted against a boot channel (`ready === false`)
+  // while dsh still composes its plugin tree. Typing is accepted; sending is
+  // not — the status line says so, and Enter answers with a transient notice.
+  'preboot-status': { zh: 'DeepSeek Harness 正在启动…… 可以先输入，就绪后即可发送', en: 'DeepSeek Harness is starting… you can type now and send once it is ready' },
+  'preboot-status-slow': { zh: 'DeepSeek Harness 仍在启动（已 {{seconds}} 秒）…… 可以先输入，就绪后即可发送', en: 'DeepSeek Harness is still starting ({{seconds}}s)… you can type now and send once it is ready' },
+  'preboot-not-ready': { zh: '还没就绪——启动完成后按 Enter 发送', en: 'Not ready yet — press Enter to send once startup completes' },
+  // Printed on the restored terminal when the boot phase ends badly
+  // (src/preboot/mount.ts). Multi-line; the caller appends the final newline.
+  'preboot-exited-early': { zh: 'dsh-tui：DeepSeek Harness 在 dsh-tui 前端启动前就退出了。', en: 'dsh-tui: DeepSeek Harness exited before the dsh-tui frontend started.' },
+  'preboot-timeout': {
+    zh: 'dsh-tui：DeepSeek Harness 在 {{seconds}} 秒内没有启动 dsh-tui 前端。\n  profile 可能没有 dsh-tui 行，或 dsh-tui 配置校验失败。\n  用 DSH_TUI_PREBOOT=0（或直接 `dsh --profile <名称>`）运行以查看 dsh 自己的输出；\n  DSH_TUI_PREBOOT_TIMEOUT_MS 设置这段等待（0 关闭）。',
+    en: 'dsh-tui: DeepSeek Harness did not start the dsh-tui frontend within {{seconds}}s.\n  The profile may have no dsh-tui row, or its dsh-tui config failed validation.\n  Run it with DSH_TUI_PREBOOT=0 (or plain `dsh --profile <name>`) to see dsh\'s own output;\n  DSH_TUI_PREBOOT_TIMEOUT_MS sets this wait (0 turns it off).',
+  },
+  // The plugin took the slot but never went live — a handoff that got stuck
+  // (a huge resume, a service that never arrives). Same escape hatches.
+  'preboot-handoff-timeout': {
+    zh: 'dsh-tui：开屏已经交给 dsh-tui，但 {{seconds}} 秒内没有进入会话就绪状态。\n  多半卡在恢复大型会话、解析工作区或创建 agent 上。\n  用 DSH_TUI_PREBOOT=0（或直接 `dsh --profile <名称>`）运行以查看 dsh 自己的输出；\n  DSH_TUI_PREBOOT_HANDOFF_TIMEOUT_MS 设置这段等待（0 关闭）。',
+    en: 'dsh-tui: the boot screen was handed to dsh-tui, but the session did not become ready within {{seconds}}s.\n  It is most likely stuck resuming a large session, resolving the workspace or creating the agent.\n  Run it with DSH_TUI_PREBOOT=0 (or plain `dsh --profile <name>`) to see dsh\'s own output;\n  DSH_TUI_PREBOOT_HANDOFF_TIMEOUT_MS sets this wait (0 turns it off).',
+  },
 
   // ── screens/Launchpad.tsx（开屏落地页：取代旧的"只有标题的空白会话"）───────
   // 落地页是"启动后第一屏"：大标题与吉祥物居中、输入框在下、再往下是

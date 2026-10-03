@@ -13,6 +13,7 @@ import { SettingsForm } from '../dsh-adapter/settingsEditor.js'
 import type { TuiSettingsField, TuiSettingsFieldKind, TuiSettingsGroup, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
 import type { LocalizedDescriptions } from '../commands.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
+import { useChannelReady } from '../hooks/useChannelReady.js'
 
 /** What the screen is doing with the focused field. */
 type SettingsMode = 'list' | 'edit'
@@ -353,6 +354,20 @@ export function Settings({
   React.useEffect(() => channel.subscribeSettingsSections(() => {
     setSections(channel.settingsSections())
   }), [channel])
+
+  // A different host is a different data source: the `dst` boot channel has
+  // none, and the live one slides in under the same channel object. Re-read
+  // what the first render captured, or a screen opened before ready stays
+  // empty ("unavailable") for its whole life. The ready subscription is what
+  // re-renders this screen at the swap.
+  useChannelReady(channel)
+  const hostRef = React.useRef(host)
+  React.useEffect(() => {
+    if (hostRef.current === host) return
+    hostRef.current = host
+    setNamespaces(host?.listNamespaces() ?? [])
+    setSections(channel.settingsSections())
+  }, [host, channel])
 
   // One form per section namespace. A fresh namespace view replaces the form
   // only while it holds no edits — replacing a dirty form would discard the

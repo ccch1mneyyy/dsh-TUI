@@ -153,6 +153,20 @@ boundaries and helpers over introducing parallel abstractions.
 - `src/terminal-utils/`: terminal formatting and presentation helpers.
 - `src/*Prefs.ts`, `src/customTheme.ts`, and `src/sessionHistory.ts`: persisted
   user preferences and local session metadata under `~/.dsh-tui`.
+- `src/preboot/`: the boot shell both launch paths share. `host.tsx` is the
+  one root tree (ThemeProvider → [AlternateScreen →] PageMargin → Chat) plus
+  the `BootSlot` store: `mountChatHost()` mounts it, `slot.ready(live)` swaps
+  the live channel and host props in without re-mounting Chat.
+  `bootChannel.ts` is the `ready === false` `ChannelUi` implementation, an
+  exhaustive mapping over the port inventory (a new port member fails to
+  compile here until it has a boot answer). `entry.ts` is the `--import`
+  preload the launcher hands to the dsh process, `mount.ts` reads the settings
+  layer and mounts the tree in its boot phase, `handle.ts` is the `Symbol.for`
+  slot protocol on `globalThis`. It must never import `@deepseek-ai/*`
+  directly — its whole purpose is to run ahead of that module graph.
+- `bin/dst.js`: sets `DSH_TUI_PREBOOT=1` and enters `bin/dsh-tui.js`, which
+  then starts dsh as `node --import <preload> <dsh bin.js> --profile …`; any
+  resolution failure falls back to the plain path.
 - `.agents/skills/*/SKILL.md`: project skills for repository maintainers,
   discovered by the DSH filesystem provider and excluded from the npm package.
 - `cordis.patch.yml`: package bundle overlay used by profile installation.
@@ -622,6 +636,7 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 | --- | --- |
 | A /settings setting (new, or changed text) | Written once in `src/settings/definitions.ts` (en/zh label and help, kind, options; keys sorted); the Config schema lives in `src/dsh-adapter/index.ts`, runtime format/parse stays on the field in `src/dsh-adapter/plugin.ts`. `pnpm compile` generates `lib/settings.json`, shipped in the npm package, and the website's settings reference is built from it; `verify:settings` checks the definitions. Until that reference is live, the settings table in `docs/user-guide{,.en}.md` still needs its row |
 | Other plugin config or environment behavior | `src/dsh-adapter/index.ts`, runtime consumer, `cordis.patch.yml`, `cordis.yml` (comments: example values and essential semantics only), `README.md`, `README_ZH.md` |
+| Launcher or the `dst` fast start | `bin/dsh-tui.js`, `bin/dst.js`, `src/preboot/`, the handoff point in `plugin.ts`, `scripts/verify-launcher.mjs`, `scripts/verify-preboot.tsx`, both READMEs and getting-started guides |
 | Slash commands or shortcuts | `src/commands.ts`, `src/screens/Chat.tsx`, help/input components, both READMEs, relevant skill mapping/tests |
 | Theme contract, plugin seam, or persisted theme behavior | `src/theme.ts`, `src/themeCatalog.ts`, `src/dsh-adapter/themes.ts`, all palettes, theme provider/picker, custom-theme parser, theme verification, both READMEs, plugin docs |
 | Session/channel behavior | `src/dsh-adapter/channel.ts`, affected UI projections, compiled output, focused channel/replay regression |

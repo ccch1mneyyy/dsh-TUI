@@ -34,7 +34,7 @@ import type {
   StagedImageHandle,
 } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
-import { isHiddenCommandName, parseCommandName } from '../commands.js'
+import { isBootSafeCommand, isHiddenCommandName, parseCommandName } from '../commands.js'
 import { appendHistory, HISTORY_LIMIT, historyProjectKey, loadHistoryOldestFirst } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
@@ -1840,6 +1840,16 @@ export function PromptInput({
     const command = channel.commandList.find(entry => entry.name === parsed.name)
     const known = command !== undefined || isHiddenCommandName(parsed.name)
     if (!known) return false
+    // Boot phase (`dst` fast start): only the purely local commands can run
+    // before dsh has composed a session. Every other one is refused exactly
+    // like a plain prompt — BEFORE dispatch, so nothing clears the draft or
+    // lands in history for a command that never took effect. This is the one
+    // chokepoint for every path that runs a command (Enter, the menu's
+    // selected row, a click on a row, a pasted line).
+    if (channel.ready === false && !isBootSafeCommand(parsed.name, parsed.rawInput)) {
+      channel.notify(t('preboot-not-ready'), { color: 'warning', timeoutMs: 2500 })
+      return true
+    }
     const generation = syncImageGeneration()
     const revision = draftRevisionRef.current
     const editSequence = inputEditSequenceRef.current
@@ -1940,6 +1950,15 @@ export function PromptInput({
         acceptFile(file)
         return
       }
+    }
+    // Boot phase (`dst` fast start): dsh is still composing, nothing can be
+    // sent yet. Refuse here — BEFORE any path that clears the draft — so the
+    // text stays exactly where it is; the notice says why. A boot-safe local
+    // command still runs (tryRunCommand refuses the rest itself).
+    if (channel.ready === false && value.trim() !== '') {
+      if (tryRunCommand(value)) return
+      channel.notify(t('preboot-not-ready'), { color: 'warning', timeoutMs: 2500 })
+      return
     }
     if (channel.working && value.trim() !== '') {
       // Immediate-command semantics: /btw and /skills are exempt from
@@ -2533,7 +2552,15 @@ export function PromptInput({
           return
         }
       }
-      if (!tryRunCommand(line)) submitText(line)
+      if (tryRunCommand(line)) return
+      // Boot phase: same refusal as handleEnter — keep the line as the draft
+      // instead of submitting it into a channel that cannot send yet.
+      if (channel.ready === false) {
+        setInput(line)
+        channel.notify(t('preboot-not-ready'), { color: 'warning', timeoutMs: 2500 })
+        return
+      }
+      submitText(line)
       return
     }
     if (key.return && isMod(key)) {

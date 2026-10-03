@@ -19,9 +19,10 @@ src/native-ts/      渲染器使用的 Yoga 布局引擎
 src/terminal-utils/ 终端格式化与呈现辅助
 src/dsh-adapter/    唯一允许 import 官方 @deepseek-ai/* 的位置；themes.ts 提供 tuiThemes 插件接缝
 src/*Prefs.ts 等    ~/.dsh-tui 下的持久化用户偏好与会话元数据
+src/preboot/        启动壳（两条启动线共用）：host.tsx 唯一根树 + BootSlot，bootChannel.ts 是 ready=false 的 ChannelUi（按端口清单穷尽），entry.ts 是 dst 的 --import 预载；不得直接 import @deepseek-ai/*
 .agents/skills/     仅供仓库维护者使用的项目技能，不随 npm 包分发
 presets/            随包分发的 preset（liangshen）
-bin/dsh-tui.js      dsh-tui 直达命令入口
+bin/dsh-tui.js      dsh-tui 直达命令入口；bin/dst.js 是设 DSH_TUI_PREBOOT=1 的快速启动入口
 vendor/dsh-std      vendored 依赖（frozen lockfile 构建，见 scripts/build 相关脚本）
 tui-profile/        仓内 TUI Profile：插件准入 + 私有协议定义（纯文件，随本仓代码修订）
 cordis.patch.yml    profile 安装的包级覆盖层；行序、行 ID 与 insert/override 语义关键

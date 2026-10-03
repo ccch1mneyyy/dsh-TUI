@@ -80,7 +80,7 @@ export function createInitialChannelView(
   options: ChannelLaunchOptions,
   input: { agentId: string; sessionId: string; mode: ChannelState['mode']; cwdDescription: string },
 ): Pick<ChannelState,
-  'effortLevels' | 'version' | 'rows' | 'status' | 'sessionTitle' | 'sessionColor' |
+  'effortLevels' | 'version' | 'ready' | 'rows' | 'status' | 'sessionTitle' | 'sessionColor' |
   'agentId' | 'sessionId' | 'agentBindingGeneration' | 'model' | 'provider' | 'tokens' | 'cwd' |
   'displayCwd' | 'gitBranch' | 'working' | 'compaction' | 'cancelPending' | 'spinnerMode' |
   'responseChars' | 'activeToolCount' | 'turnStart' | 'lastUserText' |
@@ -95,7 +95,7 @@ export function createInitialChannelView(
   'lastUsage' | 'tps' | 'tpsSamples' | 'contextSegments' | 'mainCost' | 'subagentCost' | 'subagents' | 'backgroundJobs' | 'selection'
 > {
   return {
-    effortLevels: undefined, version: 0, rows: [], selection: undefined, status: 'starting', sessionTitle: '', sessionColor: '',
+    effortLevels: undefined, version: 0, ready: true, rows: [], selection: undefined, status: 'starting', sessionTitle: '', sessionColor: '',
     agentId: input.agentId, sessionId: input.sessionId, agentBindingGeneration: 0, model: options.model, provider: options.provider,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
     cwd: options.cwd, displayCwd: input.cwdDescription, gitBranch: undefined, working: false,

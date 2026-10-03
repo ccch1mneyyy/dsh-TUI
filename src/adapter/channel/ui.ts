@@ -75,6 +75,8 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
     }
     return Object.freeze(result) as T
   }
+  type SettingsHost = NonNullable<ReturnType<ChannelUi['settingsHost']>>
+  const settingsHosts = new WeakMap<SettingsHost, SettingsHost>()
   const view: Record<string, unknown> = {}
   for (const key of CHANNEL_UI_PROPERTIES) {
     Object.defineProperty(view, key, {
@@ -121,9 +123,18 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
       }
       if (observation) return lease.own(result)
       if (key === 'settingsHost' && result !== undefined) {
-        return methods(result as NonNullable<ReturnType<ChannelUi['settingsHost']>>, {
-          listNamespaces: 'read-only', credentialConfigured: 'read-only', write: 'mutate', writeCredential: 'mutate',
-        })
+        // The channel caches its host and Settings keys effects on the host's
+        // identity, so the guarded wrapper must keep that identity too — a
+        // fresh wrapper per call re-fires those effects on every render.
+        const host = result as SettingsHost
+        let guarded = settingsHosts.get(host)
+        if (guarded === undefined) {
+          guarded = methods(host, {
+            listNamespaces: 'read-only', credentialConfigured: 'read-only', write: 'mutate', writeCredential: 'mutate',
+          })
+          settingsHosts.set(host, guarded)
+        }
+        return guarded
       }
       if (key === 'providerSetup' && result !== undefined) {
         const host = result as NonNullable<ReturnType<ChannelUi['providerSetup']>>

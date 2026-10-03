@@ -114,6 +114,11 @@ dsh --profile dsh-tui
 The process starts in the current directory, which is also the Agent's default
 workspace. Change into the target project before starting it.
 
+`dsh-tui` is equivalent to the command above. `dst` is the fast-start entry: it
+paints the splash and prompt while dsh is still loading and accepts typing
+(sending waits until the real screen takes over; the draft carries across).
+Details and limits: [Fast start in the README](https://github.com/ccch1mneyyy/dsh-TUI/blob/main/README.md#fast-start-dst).
+
 On Windows, the checkout also provides:
 
 ```bat

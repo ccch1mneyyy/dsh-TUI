@@ -70,7 +70,7 @@ import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
-import type { PromptDraftCache } from '../components/promptDraftCache.js'
+import { resolveBindingGeneration, type PromptDraftCache } from '../components/promptDraftCache.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
 import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
@@ -364,6 +364,7 @@ export function Chat({
   launchpadOnBoot,
   onboardingOnBoot,
   starPrompt,
+  initialDraft,
 }: {
   channel: Channel
   renderScene?: (id: string, channel: Channel) => React.ReactNode
@@ -458,6 +459,15 @@ export function Chat({
    * undefined.
    */
   starPrompt?: { dir?: string; onStar?: () => StarAttempt | Promise<StarAttempt>; onOpen?: () => void } | null
+  /**
+   * Text the user typed BEFORE this Chat existed. The `dst` fast start
+   * normally keeps one Chat mounted from the boot phase on (no hand-over);
+   * this is its fallback when the boot slot had to be re-mounted with other
+   * renderer options (`src/preboot/host.tsx`). Seeded into the composer's
+   * draft slot for the first mount, owned by the session this Chat attaches
+   * to, so the composer restores it like a draft that survived a screen swap.
+   */
+  initialDraft?: { value: string; cursor: number }
   /**
    * The composer's live controller, published every render. Exposed as a prop
    * so a regression can read the draft the composer HOLDS — the ownership
@@ -667,9 +677,34 @@ export function Chat({
   // 整屏」，浏览器必须提前藏在下面；现在整屏（会话/设置/任务面板）盖在
   // 落地页**之上**、Esc 退回落地页，按需打开即可——boot 时同时为真反而会
   // 让浏览器盖住落地页（渲染顺序见各 early-return）。
-  const [supervisorOpen, setSupervisorOpen] = React.useState(
-    openHomeOnBoot === true && launchpadOnBoot !== true,
-  )
+  const homeLanding = openHomeOnBoot === true && launchpadOnBoot !== true
+  const [supervisorOpen, setSupervisorOpenState] = React.useState(homeLanding)
+  // The fast start mounts Chat before dsh runs, but seeds the value above
+  // with the same rule on the same inputs (decideOpenHomeOnBoot), so the
+  // boot phase's first frame is already the right page and the handoff
+  // changes nothing. Only an input the preload cannot see (a literal
+  // cordis.yml `sessionId`/`workspace`) makes the plugin's decision differ;
+  // it then arrives as a prop change at the handoff. A `true` always opens
+  // the home; a `false` only takes back a screen the landing seed opened and
+  // the user has not touched since — a user who closed the boot-time home
+  // (which marks it seen, so the plugin then says `false`) and reopened it
+  // meant to be there.
+  const landingPropRef = React.useRef(homeLanding)
+  /** The session screen is open only because of the landing seed. */
+  const landingSeededRef = React.useRef(homeLanding)
+  /** Every open/close other than the landing seed: the user's own choice. */
+  const setSupervisorOpen = React.useCallback((open: boolean): void => {
+    landingSeededRef.current = false
+    setSupervisorOpenState(open)
+  }, [])
+  React.useEffect(() => {
+    const next = homeLanding
+    if (next === landingPropRef.current) return
+    landingPropRef.current = next
+    if (!next && !landingSeededRef.current) return
+    landingSeededRef.current = next
+    setSupervisorOpenState(next)
+  }, [homeLanding])
   /**
    * The launchpad: the landing page every ordinary launch starts on.
    *
@@ -1132,9 +1167,17 @@ export function Chat({
     }, 0)
   }
   const lastAgentIdRef = React.useRef<string | undefined>(undefined)
+  /** `channel.ready` as of the last run, for the boot edge below. */
+  const switchReadyRef = React.useRef(channel.ready)
   React.useEffect(() => {
     const id = channel.agentId
-    if (lastAgentIdRef.current === undefined) {
+    const becameReady = !switchReadyRef.current && channel.ready
+    switchReadyRef.current = channel.ready
+    // Boot phase → live (`dst` fast start): the id goes from the boot
+    // channel's empty placeholder to the real one, but no session is being
+    // replaced — nothing to reset, and the scrollback clear below would wipe
+    // inline scrollback and flash the screen at the handoff. Adopt it.
+    if (lastAgentIdRef.current === undefined || becameReady) {
       lastAgentIdRef.current = id
       return
     }
@@ -1152,7 +1195,7 @@ export function Chat({
     setSearchCurrent(0)
     closeBtw()
     repaintTranscript()
-  }, [channel.agentId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [channel.agentId, channel.ready]) // eslint-disable-line react-hooks/exhaustive-deps
   /** The session attached when the agent view opened; a close on a
    *  DIFFERENT session means a switch happened inside the view, and the
    *  transcript repaint cannot be skipped. */
@@ -1636,7 +1679,21 @@ export function Chat({
    * is dropped the moment the attached session changes so no draft can follow
    * the user into a different conversation.
    */
-  const promptDraftRef = React.useRef<PromptDraftCache>({ current: null })
+  const promptDraftRef = React.useRef<PromptDraftCache>({
+    current: initialDraft === undefined || initialDraft.value === ''
+      ? null
+      : {
+          ownerAgentId: String(channel.agentId),
+          bindingGeneration: resolveBindingGeneration(channel),
+          value: initialDraft.value,
+          cursor: initialDraft.cursor,
+          foldBlock: null,
+          expanded: false,
+          vimEnabled: false,
+          vimInsert: false,
+          images: [],
+        },
+  })
   /**
    * Latest channel for the unmount release below: that effect must not re-run
    * on a channel identity change, yet its cleanup must release against the
@@ -1717,9 +1774,33 @@ export function Chat({
    * old conversation's text. Which DRAFT the slot keeps is a separate question,
    * answered by the snapshot's owner fields.
    */
+  /** `channel.ready` as of the last reconciliation, for the boot edge below. */
+  const draftReadyRef = React.useRef(channel.ready)
   React.useLayoutEffect(() => {
+    const becameReady = !draftReadyRef.current && channel.ready
+    draftReadyRef.current = channel.ready
     if (draftSessionRef.current === draftSessionId) return
+    const previousSessionId = draftSessionRef.current
     draftSessionRef.current = draftSessionId
+    // Boot phase → live (`dst` fast start): the agent id goes from the boot
+    // channel's empty placeholder to the real one, but no conversation is
+    // being REPLACED — this is the session the user was typing at all
+    // along, arriving. It adopts the draft instead of clearing it.
+    if (becameReady) {
+      // A composer that was unmounted during boot (the session screen opened
+      // from the prompt row) stored its draft under the boot owner — agent
+      // '' and the boot binding generation. Hand it to the live session, or
+      // the restore check refuses it on the way back and the draft is lost.
+      const stored = promptDraftRef.current.current
+      if (stored !== null && stored.ownerAgentId === String(previousSessionId)) {
+        promptDraftRef.current.current = {
+          ...stored,
+          ownerAgentId: String(draftSessionId),
+          bindingGeneration: resolveBindingGeneration(channel),
+        }
+      }
+      return
+    }
     // A stored draft can only belong to the conversation being replaced: the
     // composer is the one that writes it, and it writes it on the way out.
     promptDraftRef.current.current = null
@@ -1728,7 +1809,7 @@ export function Chat({
       return
     }
     promptControllerRef.current?.clear()
-  }, [draftSessionId])
+  }, [draftSessionId, channel.ready])
   const previewGallery = activePreview === null ? [] : activePreview.peek
     ? promptControllerRef.current?.previewImages?.() ?? [activePreview]
     : overlay.kind === 'image-preview' ? overlay.gallery ?? [activePreview] : []

@@ -62,6 +62,7 @@ const GATES = [
   'verify:packaged-presets',
   'verify:history-search',
   'verify:initial-prompt',
+  'verify:preboot',
   'verify:minimal-preset-tools',
   'verify:agent-capabilities',
   'verify:minimal-ui-naming',
