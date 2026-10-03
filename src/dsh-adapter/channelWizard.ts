@@ -144,6 +144,26 @@ async function runAddFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutcome
   }
   if (name === '') return { kind: 'cancelled', restart: false }
   const id = channelWizardSlug(name)
+  // ── 1b. id-clash guard (R3-4): the slug folds every name without
+  // alphanumerics the same way ("智谱" and "硅基流动" are both `channel`),
+  // so an add can silently land on ANOTHER channel's row and overwrite
+  // its connection + stored token. Re-adding the SAME-named channel is
+  // the edit path (the name-detail says so) and stays uninterrupted;
+  // a DIFFERENT-named clash needs an explicit overwrite confirmation —
+  // declining writes nothing.
+  const clash = deps.roster().channels.find(option => option.id === id && option.name !== name)
+  if (clash !== undefined) {
+    const clashAnswer = await ask({
+      questions: [optionQuestion('clash', t('channel-wiz-q-clash', { name: clash.name, id }), [
+        { label: t('channel-wiz-opt-clash-overwrite'), description: t('channel-wiz-opt-clash-overwrite-desc') },
+        { label: t('channel-wiz-opt-clash-cancel'), description: t('channel-wiz-opt-clash-cancel-desc') },
+      ], { hideCustomInput: true })],
+    })
+    if (answerSelected(clashAnswer, 'clash')[0] !== t('channel-wiz-opt-clash-overwrite')) {
+      notify(t('channel-wiz-cancelled'))
+      return { kind: 'cancelled', restart: false }
+    }
+  }
   // ── 2. base URL (blank = skip) ──────────────────────────────────
   const settings = deps.peekSettings()
   const urlAnswer = await ask({

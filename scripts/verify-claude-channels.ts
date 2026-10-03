@@ -786,6 +786,85 @@ const init = {
   }
 }
 
+// ---- 14c. R3-4: an add colliding with another channel's id confirms ------
+{
+  const { t } = await import('../src/i18n.js')
+  // The slug folds every non-alphanumeric name the same way: both Chinese
+  // names derive id `channel` (the report's collision probe).
+  check('clash: two non-alphanumeric names collide on one id', channelSlug('智谱') === channelSlug('硅基流动') && channelSlug('智谱') === 'channel')
+  const h = () => {
+    const store = memoryClaudeChannels({ active: 'channel', channels: [
+      { id: 'channel', name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/anthropic', tokenRef: 'CHANNEL_CHANNEL_TOKEN' },
+    ] })
+    const tokens = memoryClaudeChannelTokens({ CHANNEL_CHANNEL_TOKEN: 'zhipu-secret' })
+    let saved = 0
+    const deps = (selected: Record<string, string[]>, custom: Record<string, string> = {}) => ({
+      ask: async (request: { questions: { id: string }[] }) => {
+        const id = request.questions[0]!.id
+        return { answers: [{ id, ...(selected[id] === undefined ? { custom: custom[id] ?? '' } : { selected: selected[id]! }) }] } as never
+      },
+      notify: () => undefined,
+      pushLocal: () => undefined,
+      roster: () => ({
+        channels: store.read().channels.map(channel => ({
+          id: channel.id, name: channel.name, models: [], tiers: [],
+          ...(channel.baseUrl === undefined ? {} : {
+            connection: { baseUrl: channel.baseUrl, hasToken: channel.tokenRef !== undefined, envKeys: [] as string[], fingerprint: [channel.baseUrl ?? '', channel.tokenRef ?? '', channel.tokenRef === undefined ? '' : tokens.read(channel.tokenRef) ?? ''].join('/') },
+          }),
+        })),
+        activeId: store.read().active,
+      }),
+      save: (input: { id: string; name: string; baseUrl?: string; token?: string }) => {
+        saved += 1
+        tokens.write(channelTokenRef(input.id), input.token ?? 'kept')
+        store.save({ id: input.id, name: input.name, ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }), tokenRef: channelTokenRef(input.id) })
+        return deps({} as never).roster().channels.find(row => row.id === input.id)
+      },
+      remove: (id: string) => { store.remove(id); return true },
+      activate: (id: string) => { store.setActive(id); return true },
+      peekSettings: () => undefined,
+    })
+    return { store, tokens, deps, savedCalls: () => saved }
+  }
+  // (a) declining the overwrite writes NOTHING (R3-4's zero-write bar).
+  {
+    const c = h()
+    const outcome = await runChannelWizard(c.deps({
+      action: [t('channel-wiz-opt-add')],
+      clash: [t('channel-wiz-opt-clash-cancel')],
+    }, { name: '硅基流动' }) as never)
+    const row = c.store.read().channels[0]
+    check('clash: declining the overwrite writes nothing',
+      outcome.kind === 'cancelled' && outcome.restart === false && c.savedCalls() === 0
+        && c.store.read().channels.length === 1 && row?.name === '智谱' && row?.baseUrl === 'https://open.bigmodel.cn/api/anthropic'
+        && c.tokens.read('CHANNEL_CHANNEL_TOKEN') === 'zhipu-secret', { outcome, row })
+  }
+  // (b) confirming the overwrite saves — and because the clobbered row is
+  //     ACTIVE with a changed connection, the funnel is owed (R3-2 link).
+  {
+    const c = h()
+    const outcome = await runChannelWizard(c.deps({
+      action: [t('channel-wiz-opt-add')],
+      clash: [t('channel-wiz-opt-clash-overwrite')],
+      switch: [t('channel-wiz-opt-switch-no')],
+    }, { name: '硅基流动', baseurl: 'https://siliconflow.example/v1', token: 'sf-secret' }) as never)
+    const row = c.store.read().channels[0]
+    check('clash: confirming the overwrite replaces the row and restarts the active connection',
+      outcome.kind === 'saved' && outcome.restart === true && row?.name === '硅基流动' && row?.baseUrl === 'https://siliconflow.example/v1'
+        && c.tokens.read('CHANNEL_CHANNEL_TOKEN') === 'sf-secret', { outcome, row })
+  }
+  // (c) re-adding the SAME-named channel is the edit path — no clash gate.
+  {
+    const c = h()
+    const outcome = await runChannelWizard(c.deps({
+      action: [t('channel-wiz-opt-add')],
+      switch: [t('channel-wiz-opt-switch-no')],
+    }, { name: '智谱', baseurl: 'https://open.bigmodel.cn/api/anthropic' }) as never)
+    check('clash: re-adding the same-named channel never trips the clash gate',
+      outcome.kind === 'saved' && c.savedCalls() === 1, outcome)
+  }
+}
+
 // ---- 15. wiring tripwires (source-level) ------------------------------------
 {
   const { readFileSync: readSrc } = await import('node:fs')
