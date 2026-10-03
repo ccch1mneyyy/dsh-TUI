@@ -153,3 +153,29 @@
 - **Live（haiku）**：探针 side 2 turn；verify-claude-live `5b` 段 2 turn（红色方块图片被识别、`/btw` 不写转录、`/rename` 进 catalog、`/color`）。合计 4 turn；创建的会话均在 finally 中关闭并删除。
 - **延后**：`model_refusal_fallback.retracted_message_uuids` 的行驱逐（只提示、不撤回已流出的行）、对话框的 `edit_prompt` 选项、elicitation 的 URL 自动打开浏览器、`/add-dir`、`prewarm()`、P4-2（Windows）、`/claude:usage`。
 
+## Merge main (bca29675)
+
+### Merge main (bca29675) — 并入 main 的 62 个提交（Opus 5.5）
+
+- **提交**：`430adfb7` = `git merge origin/main`（merge commit，22 个分支提交不改写；基线 d96dea69 → bca29675，34 个提交动了 `src/`）；16 处内容冲突全部按"双方意图都保留"解决；本条日志为其后继提交。
+- **命名冲突（裁定）**：main 新增 `ChannelUi.capabilities(): AgentCapabilities`（DSH agent 组合事实：`/compact`、`/plan` 路由与 compaction/pruner/questionTool/skills），与本分支的后端能力快照 `ChannelUi.capabilities: ChannelCapabilities` 同名 → **本分支的快照改名 `backendCapabilities`**（main 的 API、`verify-agent-capabilities`、launchpad 桩逐字保留，后续 main 提交继续可合）；i18n 同理：main 的 `capability-unavailable`（带 reason）保留，本分支的改名 `capability-unavailable-backend`（原先同键，编译期重复属性）。
+- **逐提交落点与决定**（"自动"= 文件未迁移，git 原地合入即在 DSH 路径生效）：
+
+| main 提交 | 落点 | 决定 |
+| --- | --- | --- |
+| 6acd1ca3 / 67eccbe3 / 4ec8959f / 9d20dc52（+6aa4e77a 桩、3ed6236c 回归） | 新 `dsh-adapter/channel/capabilities.ts`；旧 channel.ts 组合 | DSH 扩展（`extensions.ts`）：`agentCapabilities: capabilitiesOf`、首帧与 skill-catalog 刷新都经 `annotateCommandCapabilities`；binding-events DSH bind 钩子发能力缺口提示；mode-actions 读共享事实。核心对非 DSH 会话按会话能力作答（`compact` 能力 ⇒ route local，plan 恒 none，questionTool ⇔ `questions`）。回归的接线断言改读组合根拼接（`channel-composition.mjs`），断言不变 |
+| b06678fb / 0bc6f863 / 9f99d0be（context occupancy） | 旧 channel.ts 访问器 + binding-events seed | `contextOccupancy` 访问器与投影变化订阅移入**核心**（所有后端）；seed 留在 DSH bind 钩子。Claude 会话 id 不在 DSH 计量投影里 → 回落 lastUsage 样本（与此前状态栏读数一致） |
+| db2aee46（压缩不再 chars/4 改写占用；每个 turn end 判警告） | 旧 `dsh-adapter/channel/projection.ts`（已是外壳） | 移植到**中立投影器**（Claude 同受益：`tokens.*` 是累计量）。另加：`compaction.end.postTokens`（Claude `compact_boundary.post_tokens`）重设占用样本——压缩回合不发请求，否则会显示压缩前占用；DSH 不带该字段，DSH 投影与 main 一致。`verify-claude-translate` +2 定点断言（已做变异验证） |
+| 3a3577df（thinking spinner 落定即停） | 旧 projection.ts + MessageList | 移植到中立投影器（`thinkingOpen`）；Claude 的思考行同样停 spinner |
+| b7bb7af8 / 9dc12579 / e7f27399（CJK token 估算） | `dsh-adapter/channel/usage.ts`（分支上已是重导出） | 实现移到中立 `src/channel/usage.ts`（Claude 分段条同受益），旧路径重导出；sessionize 经重导出生效 |
+| b18a1096（缓存分项互斥计价） | `deepseekPricing.ts` | DSH 专属 ¥ 估算，自动生效；中立 TokenUsage 本就是互斥分项（Claude usage 同口径），投影无需改 |
+| d0a304eb / 45de8cdd（悬停缓存分项 / statusBar.cost） | StatusLine / Config | 自动；Claude 的 `$` 费用段同受 `statusBar.cost` 控制，costReport 悬停分支不受影响 |
+| 51248e68（任务组圆角括号） | JobCard / MessageList | UI 按行分组，Claude 中立活动投影的任务卡自动受益；JobCard 合并新 `rail` 形状 + 本分支 `onWatchOutput` |
+| e229a32d（侧栏 / 落地页 / 首启引导 / Send to Chat） | Chat、JobsPanel、attached-context、plugin.ts… | "Send to Chat" 注册表放进**核心**（所有后端，`resetSessionProjection` 一并清空）；侧栏任务面板也接 `onWatchOutput`（仅可见时读）；InfoPanel 费用优先 `costReport`；`/panel` 记为 `any`，`/setup`（DeepSeek key 引导）默认 DSH；落地页与首启引导同工作区首页，只在 DSH 启动时出现（README 双语同步） |
+| e9496712 / f50e1378 / bca29675 / 8880b330 / cc164cb1 / 9dfd6cd0 / d63e756f / c8ca4fd0 / b2c269d7 / 4a522b68 / 620ee8b6 / 99d79ee4 / 7e4ccc70 / 7fd3c389 / 9839b0fe / 1ac0ba5e / 6686109a | 未迁移文件 | 自动；main 的对应回归在合并树上全过 |
+
+- **边界门禁**：main 新增 5 对 UI→dsh-adapter 值 import（侧栏 3、Chat→contract、StatusMetrics→context-occupancy）按落地登记进 allowlist（同一清理规则）。
+- **黄金重基线（是）**：在 `git worktree add --detach origin/main`（临时，已删）里用 Phase 0 工具（b68c42eb 的 capture/verify + 同一份 fixture）以 **main 自己的代码**生成 5 份 golden，拷回本分支；合并树 `verify:projection-golden` ✓（5 份、72 行、29 处登记 live 差异）。差异全部可归因：3a3577df → 各 reasoning 行 `thinkingOpen:false`、thinking-full 的 liveTimeline 7 帧（`spin=responding`、streaming 里不再含已落定 reasoning 行）、`spinnerMode` 与 compaction-legacy 新增 1 条 live 差异 `rows[1].thinkingOpen`（沿用既有理由）；db2aee46 → compaction-legacy `tokens.input` 150→160、`checkContextWarning` 调用 1/2→4。本分支 capture 与 main capture 仅 `resultText`/`resultFull` 键序不同（Phase 1 起即如此，比较按值，已在 HEAD 树复核）。`verify-dsh-translate` 不变（168/162）。Claude golden：translate 与 replay 的 compaction、resume-replay 四份只有 `tokens.input`（db2aee46 口径：累计量不再被摘要估算改写）。
+- **Gate**（合并树）：`pnpm install --frozen-lockfile` ✓（lockfile 未变，SDK 的 9 条 `minimumReleaseAgeExclude` 保留）；`pnpm build` ✓（verify:build 89/89，含 main 新增的 `verify:agent-capabilities` 67、`verify:theme-preview`、`verify:sync-profile`、`verify:terminal-size-source`，及 `verify:agent-domain`、`verify:claude-contract`；boundary 730 文件 / 4196 specifier）；`verify:package` ✓（2717 文件、30 入口）；`pnpm smoke` ✓；`DSH_TUI_LANG=zh run-ci-group` 终轮 render-scroll 106/106（含 repro-askpanel / askpanel-layout / repro-toolcards，main 已把三回归并入此组）、input-terminal 31/31、session-workspace 56/56、channel-ui 166/166（含 projection-golden、dsh-translate 168/162、全部 `verify-claude-*` 假 SDK 脚本：translate 152、replay 65、backend-channel 127 等）；`verify-launchpad-onboarding-chat` 77。首轮 session-workspace 55/56、channel-ui 161/166 是脚本桩仍读旧属性名 `capabilities`（已随改名修正）；`verify-backend-channel` 的“DSH 命令表即今日之表”改为 main 标注后的表（6acd1ca3 的有意行为）并补两条核心组合事实断言。未跑 `verify:bun-package`（本机无 bun）；无 live Claude 运行。
+- **Flake**：`verify:adapter-descriptor` 首轮池化 verify:build 中 1 次 `INACTIVE_EFFECT`（plugin-host 的 `setTimeout(0)` startKernelRuntime 在夹具释放后才触发；双方均未改该代码），单跑 11/11、第二轮 89/89。`verify-scroll-jumps-narrow` 首轮组内 1 次，合并树单跑 38/40（两次失败在不同的 settle 断言），干净 origin/main 0/30、合并前 HEAD 0/20 失败，最后一批 20/20——按低频计时 flake 记录、需留意。`verify-transcript-paging` 首轮组内 1 次，单跑 8/8。已登记的 `verify-compaction-progress`、`verify-session-browser` 两轮均过。
+- **风险/后续**：Claude 会话下侧栏的 workspace 面板会打开即提示"当前后端不支持：workspace"、trajectory 面板为空（面板未按后端过滤，留作后续）；main 的 InfoPanel 上下文行仍读 lastUsage 而非 `contextOccupancy`（main 自身两 PR 的先后不一致，未在合并里改 DSH 行为）。
