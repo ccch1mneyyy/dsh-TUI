@@ -355,11 +355,18 @@ export function registerDecisionHandler(
  *
  * Liveness is the conjunction of two facts, both cheap and both read live:
  *
- * - the exact registration row is still installed (deactivation and grant
- *   revocation both call the registry release, so a released row is gone);
+ * - a row for this activation/event/order is still installed (deactivation and
+ *   grant revocation both release the registration, so a released row is gone);
  * - the grant still allows this principal at the effective scope (covers a
  *   store change whose change-watcher has not run yet, or a store with no
  *   watcher at all).
+ *
+ * The installed check compares the row's own identity rather than the map's
+ * internal key: the registry is host-owned storage, and whether a handler is
+ * still live must not depend on how a row happens to be keyed inside it. In
+ * production `registerDecisionHandler` is the only writer and keys rows by
+ * `activation\0event\0order`; keeping the check identity-based leaves that as
+ * an implementation detail instead of a behavioural requirement.
  */
 export function isDecisionHandlerLive(
   ctx: Context,
@@ -367,8 +374,18 @@ export function isDecisionHandlerLive(
   payloadScope?: string,
 ): boolean {
   const registry = registryFor(ctx)
-  const key = `${handler.activationId}\0${handler.event}\0${handler.order}`
-  if (registry.handlers.get(handler.event)?.get(key) !== handler) return false
+  const rows = registry.handlers.get(handler.event)
+  if (rows === undefined) return false
+  let installed = false
+  for (const row of rows.values()) {
+    if (row.activationId === handler.activationId
+      && row.event === handler.event
+      && row.order === handler.order) {
+      installed = true
+      break
+    }
+  }
+  if (!installed) return false
   const permission = eventPermission(handler.event)
   if (permission === undefined) return true
   return registry.grants.allows(
