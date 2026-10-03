@@ -786,7 +786,9 @@ const GROUPS = {
     ["verify-claude-auth", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-auth.ts']],
 // Claude 控制面（假 Query）：model/effort/mode/compact/commands/mcp/context/account
 // 的能力委托与持久化，channel 侧的原生模式标签、后端命令合并、/mcp、/context、
-// 订阅用量、/login 宿主，以及状态栏模式标签与 /context 面板的无头渲染。
+// 订阅用量、/login 宿主，以及状态栏模式标签与 /context 面板的无头渲染；effort
+// 收敛不只 manual switch——open/resume seed、init 帧、message_start 漂移都按
+// 「明确不支持/声明档位排除」收敛（缺元数据保留，R2-4）。
     ["verify-claude-controls", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-controls.tsx']],
 // Claude 权限模式名册（/permission 选择器）：bypassPermissions 必须在运行期名册里、
 // 且选择器真能切进去——allowDangerouslySkipPermissions 是 SDK 的**闸门**（sdk.d.ts:2001

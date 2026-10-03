@@ -564,6 +564,14 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       for (const uuid of pushed.keys()) if (!unstarted.has(uuid)) pushed.delete(uuid)
     }
     for (const event of events) {
+      // R2-4: every authoritative confirmation of the model — a re-init's
+      // `model.changed`, the first init's `session.ready`, a
+      // `message_start` drift — converges the effort readout with the
+      // serving model's DECLARED capabilities (the explicit-refusal rule;
+      // missing metadata keeps the user's choice).
+      if ((event.type === 'model.changed' || event.type === 'session.ready') && event.model !== '') {
+        controls.noteConfirmedModel(event.model)
+      }
       if (event.type !== 'session.ready' || event.backendVersion === undefined || cliVersion !== undefined) continue
       cliVersion = event.backendVersion
       // Drift is reported, never a stop (design §4.2).
@@ -821,6 +829,12 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   try {
     const init = await handshake(run)
     controls.seed(init)
+    // R2-4: the seed itself is an authoritative confirmation — the model
+    // this session opened with (a fresh seed from prefs/handshake, or a
+    // resumed session's replay model, which no frame will re-announce).
+    // The catalog is in place now, so the effort readout converges with
+    // the serving model's DECLARED capabilities before any UI asks.
+    controls.noteConfirmedModel(translator.model)
   } catch (error) {
     disposing = true
     teardown()
