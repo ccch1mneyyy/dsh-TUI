@@ -829,6 +829,7 @@ export default class Output {
     }
     const presentation = node.attributes.imagePresentation
     const transparent = node.attributes.imageTransparent === 'transparent'
+    const lineArt = node.attributes.imageLineArt === 'lineArt'
     // Both protocols crop a partially visible content image to its visible
     // cells (Sixel re-encodes the slice, Kitty places a source rectangle), so
     // scrolling past a viewport edge never flips it to its text fallback.
@@ -872,6 +873,7 @@ export default class Output {
       source,
       ...(presentation === 'preview' || presentation === 'transcript' ? { presentation } : {}),
       ...(transparent ? { transparent: true } : {}),
+      ...(lineArt ? { lineArt: true } : {}),
       ...(canCrop ? { clip: { x: visibleLeft, y: visibleTop, columns: visibleRight - visibleLeft, rows: visibleBottom - visibleTop } } : {}),
       ...(background !== undefined ? { background } : {}),
     }

@@ -70,6 +70,13 @@ export interface TerminalImagePlacement {
    * this.
    */
   readonly transparent?: boolean
+  /**
+   * The raster is line art (typeset formulas, diagrams): under the transparent
+   * Sixel mask its coverage is promoted with the plain 25% threshold instead
+   * of the ordered dither, so hairline strokes stay solid. Photographs and
+   * sprites keep the dithered mask.
+   */
+  readonly lineArt?: boolean
   /** False while a protocol-specific raster is pending or unavailable. */
   readonly graphicsReady?: boolean
   /** Later paint operations cover part of this raster's visible cells. */

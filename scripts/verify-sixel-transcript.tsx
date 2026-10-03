@@ -12,7 +12,7 @@ import xterm from '@xterm/headless'
 import { decode } from 'sixel'
 import { AlternateScreen, Box, Image, ScrollBox, Text, render } from '../lib/types/ui.js'
 import type { ScrollBoxHandle } from '../lib/types/ui.js'
-import { SixelEncoderCache } from '../lib/types/ink/sixel-codec.js'
+import { SixelEncoderCache, sixelCoveragePaints } from '../lib/types/ink/sixel-codec.js'
 import { SixelGraphicsManager } from '../lib/types/ink/sixel-graphics.js'
 import { createNode } from '../lib/types/ink/dom.js'
 import { CharPool, HyperlinkPool, StylePool, createScreen } from '../lib/types/ink/screen.js'
@@ -364,6 +364,58 @@ try {
   Object.assign(process.env, oldEnv)
 }
 
+// Line art through the REAL transcript pipeline: the same mid-band source
+// (~44% coverage — where MathJax fraction-bar edges and radical overlines
+// land after quantization) marked lineArt (formulas) encodes a solid mask,
+// while the unmarked (photo) path keeps the 2×2 Bayer dither. The emitted DCS
+// is decoded pixel by pixel, so the whole chain — <Image lineArt> prop →
+// placement → worker → mask → bytes — is under test. Dithering this band is
+// the user-visible speckled, faded formula ink.
+for (const key of ['TMUX', 'STY', 'DSH_TUI_ACCESSIBILITY', 'DSH_TUI_DISABLE_TERMINAL_IMAGES', 'DSH_TUI_IMAGE_PROTOCOL']) delete process.env[key]
+{
+  const width = 80
+  const height = 20
+  const data = new Uint8Array(width * height * 4)
+  for (let index = 0; index < data.length; index += 4) data.set([52, 57, 69, 112], index)
+  const stroke: TerminalImageSource = { data, width, height }
+  const strokeTree = (lineArt: boolean) => <AlternateScreen>
+    <Box width={40} height={16} flexDirection="column">
+      <Text>HEADER</Text>
+      <Box paddingLeft={2} height={1} flexShrink={0}>
+        <Image {...(lineArt ? { lineArt: true } : {})} transparent source={stroke} width={8} height={1} presentation="transcript" alt="stroke"><Text>LOADING</Text></Image>
+      </Box>
+      <Text>PROMPT</Text>
+    </Box>
+  </AlternateScreen>
+  const decodedRows = async (lineArt: boolean): Promise<boolean[][]> => {
+    const strokeInput = new Input()
+    const strokeOutput = new Output(strokeInput)
+    const strokeApp = await render(strokeTree(lineArt), { stdin: strokeInput, stdout: strokeOutput, stderr, exitOnCtrlC: false, patchConsole: false })
+    try {
+      await until(() => strokeOutput.chunks.some(chunk => chunk.includes('\x1bP0;1;q')), (lineArt ? 'line-art' : 'photo') + ' stroke raster is transmitted')
+      await delay(40)
+      const payload = [...strokeOutput.chunks.join('').matchAll(/\x1bP0;1;q([\s\S]*?)\x1b\\/gu)].at(-1)![1]!
+      const pixels = [...decode(payload, { fillColor: 0xffff00ff }).data32]
+      return Array.from({ length: height }, (_, y) =>
+        Array.from({ length: width }, (_, x) => pixels[y * width + x] !== 0xffff00ff))
+    } finally {
+      strokeOutput.isTTY = false
+      strokeApp.unmount()
+    }
+  }
+  const solid = await decodedRows(true)
+  for (const row of solid) {
+    assert.equal(row.filter(Boolean).length, width, 'line art paints the whole mid-band row — reverting the strategy fails here')
+    assert.ok(row.every(Boolean), 'as one continuous solid run')
+  }
+  const speckled = await decodedRows(false)
+  for (const [y, row] of speckled.entries()) {
+    assert.equal(row.filter(Boolean).length, width / 2, 'the photo mask keeps exactly the dither density')
+    for (const [x, painted] of row.entries()) {
+      assert.equal(painted, sixelCoveragePaints(112, x, y), 'on exactly the Bayer checkerboard positions')
+    }
+  }
+}
 // Exercise the real transcript component and its lazy terminal capability hook.
 for (const [fullscreen, terminalImages] of [[true, true], [false, true], [true, false]] as const) {
   clearTranscriptImageCacheForTests()

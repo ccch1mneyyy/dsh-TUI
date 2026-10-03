@@ -155,12 +155,12 @@ export class SixelGraphicsManager {
     // Undefined keeps the raster transparent (only ink pixels are painted); a
     // colour flattens onto it, for images that sit on a painted surface.
     const background = placement.background
-    const assetKey = `${id}:${placement.source.width}:${placement.source.height}:${width}:${height}:${placement.transparent === true ? 'transparent' : background ?? 'default'}`
+    const assetKey = `${id}:${placement.source.width}:${placement.source.height}:${width}:${height}:${placement.transparent === true ? 'transparent' : background ?? 'default'}${placement.lineArt === true ? ':lineart' : ''}`
     const key = `${assetKey}:${left}:${top}:${cropWidth}:${cropHeight}`
     return {
       assetKey, key, placement, ready: false,
       rect: { x, y, columns: Math.ceil(cropWidth / this.cell.width), rows: Math.ceil(cropHeight / this.cell.height) },
-      request: { source: placement.source, width, height, ...(background === undefined ? {} : { background }), ...(placement.transparent === true ? { transparent: true } : {}), presentation: placement.presentation,
+      request: { source: placement.source, width, height, ...(background === undefined ? {} : { background }), ...(placement.transparent === true ? { transparent: true } : {}), ...(placement.lineArt === true ? { lineArt: true } : {}), presentation: placement.presentation,
         crop: { left, top, width: cropWidth, height: cropHeight } },
     }
   }

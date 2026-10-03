@@ -33,6 +33,13 @@ export interface ImageProps {
    * leave it unset and composite onto that surface instead.
    */
   readonly transparent?: boolean
+  /**
+   * Line art (typeset formulas, diagrams): with `transparent`, the Sixel mask
+   * paints any pixel at or above 25% coverage solid instead of ordered
+   * dithering the 25%–62.5% band, so hairline strokes stay continuous.
+   * Photographs and sprites leave it unset.
+   */
+  readonly lineArt?: boolean
   /** Same-size terminal-cell fallback rendered when graphics are unavailable. */
   readonly children?: ReactNode
 }
@@ -52,6 +59,7 @@ export default function Image({
   copyText,
   presentation,
   transparent,
+  lineArt,
   children,
 }: ImageProps): React.ReactNode {
   const [columns, rows] = normalizeSize(width, height)
@@ -67,6 +75,7 @@ export default function Image({
       imagePresentation={presentation}
       imageCopyText={copyText}
       imageTransparent={transparent === true ? 'transparent' : undefined}
+      imageLineArt={lineArt === true ? 'lineArt' : undefined}
       style={{
         width: columns,
         height: rows,
