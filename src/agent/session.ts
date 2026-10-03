@@ -37,7 +37,8 @@ export type AgentSessionStatus = 'starting' | 'idle' | 'running' | 'requires-act
 
 /**
  * Why a cancellation was requested: `user` keeps queued inputs for the next
- * turn; `interrupt` drops them because the caller re-delivers them at once;
+ * turn; `interrupt` drops them — the channel parks the dropped copies as a
+ * dock and re-delivers nothing until the user asks (Claude Code parity);
  * `switch`/`dispose` leave the session.
  */
 export type CancelCause = 'user' | 'interrupt' | 'switch' | 'dispose'

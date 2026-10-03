@@ -299,8 +299,10 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
 
     cancel(cause: CancelCause) {
       // `user` keeps the queue (queued/steered inputs run as the next turn);
-      // `interrupt` drops it because the caller re-delivers those inputs
-      // itself; a switch/dispose never resumes the old queue either.
+      // `interrupt` drops it — the channel parks those inputs as a dock and
+      // re-delivers nothing until the user sends it (keepInbox stays
+      // exclusive to the user-cancel / normal-turn-end paths); a
+      // switch/dispose never resumes the old queue either.
       if (cause === 'user') agent.cancel({ kind: 'user' }, { keepInbox: true })
       else agent.cancel({ kind: 'user' })
       return Promise.resolve({ stillQueued: cause === 'user' ? [...pending.keys()] : [] })

@@ -639,6 +639,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // soon as this session binds so a resumed or reattached session renders its
     // line immediately instead of waiting for the next event.
     seedActivity: session => activityStore.seed(session),
+    // A backend that folds its own working line (the Claude backend's
+    // `workingActivity` capability — see channel/session-activity.ts) lands
+    // in the SAME store the projection feed fills, so the Chat/StatusLine
+    // read side stays one seam for every backend.
+    publishActivity: (sessionId, view) => activityStore.update(sessionId, view),
+    clearActivity: sessionId => activityStore.clear(sessionId),
     // Same reason as the activity line: the occupancy projection only pushes on
     // change, so a resumed session reads one baseline at bind time.
     contextPressure: contextOccupancyStore,
