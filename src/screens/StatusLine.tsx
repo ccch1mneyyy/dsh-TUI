@@ -587,8 +587,8 @@ const selectionBadge = formatSelectionBadge(channel.selection)
   // (the v0.8.0 paddingX 2→1 tightening left the old `columns - 4` stale).
   const barWidth = columns - 2
   // 空段的深色兜底：deepseek 档冷灰、claude 档暖墨（品牌档见 branding.ts）。
-  // 明暗问色板而不是比主题名：浅色主题不一定叫 `light`（用户/插件色板也可以是
-  // 浅色），只有真彩/ANSI 的深色默认档才需要显式的 free 段色。
+  // 明暗问色板而不是比主题名：浅色主题不一定叫 `light`（pink-day、用户/插件
+  // 色板也可以是浅色），只有真彩/ANSI 的深色默认档才需要显式的 free 段色。
   const barColors: { freeFill: Color; freeText: Color } | undefined =
     isLightThemeActive(themeName)
       ? undefined
