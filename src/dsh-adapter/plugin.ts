@@ -1672,6 +1672,57 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     handleExit()
   }
 
+  /** /channel 三期：激活渠道的连接信息变了——运行中的 CLI 子进程换不了
+  *  baseUrl/token，就复用 backend-switch 漏斗的同款机器以新会话重启
+  *  （内核不变、不写 resume 目标；通知文案由调用方给，说渠道而不是内核）。 */
+  const restartFreshSession = (notice: string): void => {
+    if (exited || restartRequested || backendSwitchRequested !== undefined) return
+    backendSwitchRequested = backendChoice
+    logRestartEvent('command: channel connection switch accepted', { backend: backendChoice })
+    notifyChannel(notice)
+    handleExit()
+  }
+
+  /**
+   * 内核选择器的 Claude 探测（/kernel 与启动页右下角的「可选内核」行）：
+   * 与 boot 用的是同一个 detect()，宿主只补它需要的几样。SDK 与 dsh-auth
+   * 凭证源都延迟到真正探测时才 import——DSH 首帧不为它付代价。
+   *
+   * 探测失败按「未安装」作答：选择器只会把那一行画灰。宁可少一个入口，
+   * 也不给人一个按下去会炸的入口。
+   */
+  const probeClaudeKernel = async (): Promise<ClaudeKernelStatus> => {
+    try {
+      const [{ claudeBackend }, { createOAuthCredentialSource }] = await Promise.all([
+        import('../backends/claude/index.js'),
+        import('./oauth-credential-source.js'),
+      ])
+      const sources = new Map<string, ReturnType<typeof createOAuthCredentialSource>>()
+      const detection = await claudeBackend.detect({
+        cwd: sessionCwd,
+        debug: message => logForDebugging(message),
+        warn: message => ctx.logger.warn(message),
+        stderr: () => undefined,
+        oauthCredential: provider => {
+          let source = sources.get(provider)
+          if (source === undefined) {
+            source = createOAuthCredentialSource(provider)
+            sources.set(provider, source)
+          }
+          return source
+        },
+      })
+      return {
+        installed: detection.installed,
+        ...(detection.auth === undefined ? {} : { auth: detection.auth }),
+        ...(detection.version === undefined ? {} : { version: detection.version }),
+      }
+    } catch (error) {
+      logForDebugging('dsh-tui: kernel probe failed (' + (error instanceof Error ? error.message : String(error)) + ')')
+      return { installed: false }
+    }
+  }
+
   // Process-level crash backstop (see installNestedUpdateOverflowProcessGuard):
   // an uncaught exception or unhandled rejection that is NOT the React #185
   // overflow would otherwise take Node's default path and kill the process
@@ -1728,10 +1779,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    * 算进去，落地页在本机最主流的启动方式下**永远不出**——用户实测「既没看到
    * ob 也没看到 lp」的根因就是这一条。
    *
-   * All three boot screens are DSH screens: the workspace home lists DSH
-   * sessions and workspaces, the launchpad is the DeepSeek Harness landing
-   * (preset / permission segments), and the first-run guide configures a
-   * DeepSeek key. A non-DSH session opens straight into its conversation.
+   * Two of the three boot screens are DSH screens: the workspace home lists
+   * DSH sessions and workspaces, and the first-run guide configures a DeepSeek
+   * key. The launchpad is not one of them: it is where the first sentence gets
+   * typed, so a remembered claude kernel boots onto it too (the session the
+   * plugin opened keeps warming underneath) — only a resume target skips it
+   * and opens straight into its conversation.
    */
   const dshBoot = claudeStart === undefined
   const noResume = isLandingLaunch({ launchSessionId, initialPrompt })
@@ -1739,11 +1792,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   /**
    * The launchpad is NOT one-shot the way the workspace home is: every
    * ordinary launch starts on it, because it is where the first sentence gets
-   * typed rather than a tutorial that retires itself. `DSH_TUI_NO_LAUNCHPAD=1`
-   * is the escape hatch (an automation that wants the old blank conversation
-   * and no dialog in front of it).
+   * typed rather than a tutorial that retires itself — on every backend: a
+   * remembered claude kernel lands here exactly like a dsh one (the `dshBoot`
+   * gate below is deliberately absent). `DSH_TUI_NO_LAUNCHPAD=1` is the
+   * escape hatch (an automation that wants the old blank conversation and no
+   * dialog in front of it).
    */
-  const launchpadOnBoot = dshBoot && noResume && process.env.DSH_TUI_NO_LAUNCHPAD !== '1'
+  const launchpadOnBoot = noResume && process.env.DSH_TUI_NO_LAUNCHPAD !== '1'
   /**
    * The first-run guide. Gated on its own preference (not on `homeSeen`): the
    * two answer different questions, and an install that already knows its
@@ -1784,6 +1839,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       notifyChannel(t('restart-starting'))
       handleExit()
     },
+    // 内核选择器（/kernel 与启动页「内核」入口）：选择落进 kernel.json，
+    // 退出漏斗以那个内核重启——新内核开的是**新会话**，旧内核的会话仍然
+    // 留在名册里（切回去 /resume 就能找到）。
+    onSwitchBackend: switchBackend,
+    // /channel 三期：渠道连接切换的新会话重启（同款漏斗机器，内核不变）。
+    onRestartFreshSession: restartFreshSession,
+    onProbeKernels: probeClaudeKernel,
+    kernelPinned: backendPinned,
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the
     // unavailable notice instead.

@@ -71,10 +71,18 @@ export type ChatOverlay =
    * variant above). The frozen mode list and the live current id ride the
    * open because the capability read is synchronous. */
   | { kind: 'mode'; index: number; modes: readonly BackendModeOption[]; currentId: string | undefined }
+  /** 内核选择器（/kernel 与启动页「内核」入口）。只带焦点下标——目录是
+   *  Chat 的派生值（buildKernelCatalog 的输出，含异步探测结果），每次渲染
+   *  现算，所以探测落地后选择器自己就刷新了，不需要把名册冻进 overlay。 */
+  | { kind: 'kernel'; index: number }
   | { kind: 'plan'; index: number }
   | { kind: 'lang'; index: number }
   /** `/panel` 无参的选择器：列出「已启用 ∩ 已注册」的面板（含插件）。 */
   | { kind: 'panel'; index: number }
+  /** `/channel` 渠道档案选择器（仅 channels 能力的后端，即 Claude）：只带
+   *  焦点下标——名册是 Chat 的派生值（listChannels 每渲染现读 channels.json），
+   *  切换/导入后选择器自己就刷新成新状态，不需要把名册冻进 overlay。 */
+  | { kind: 'channel'; index: number }
   | { kind: 'history'; query: string; cursor: number; focus: number }
   | {
       kind: 'rewind'
@@ -148,7 +156,7 @@ export type ChatOverlayAction =
    *  with the authoritative focus (model list / preset roster), or a mouse
    *  click on a row of a panel that stays open (effort slider, workspace
    *  flow). Ignored unless that panel is still up. */
-  | { type: 'set-index'; kind: 'model' | 'preset' | 'effort' | 'permission' | 'mode' | 'workspace-flow' | 'rewind' | 'file-actions' | 'panel'; index: number }
+  | { type: 'set-index'; kind: 'model' | 'preset' | 'effort' | 'permission' | 'mode' | 'kernel' | 'workspace-flow' | 'rewind' | 'file-actions' | 'panel' | 'channel'; index: number }
   /** Edit the history-search draft (query text, caret, focused match). */
   | { type: 'history-edit'; query?: string; cursor?: number; focus?: number }
   /** Workspace flow: an action is running (keys except Esc are swallowed). */
@@ -227,6 +235,8 @@ export function chatOverlayReducer(state: ChatOverlay, action: ChatOverlayAction
         || state.kind === 'plan'
         || state.kind === 'lang'
         || state.kind === 'panel'
+        || state.kind === 'kernel'
+        || state.kind === 'channel'
         || state.kind === 'file-actions'
       ) {
         return { ...state, index: wrapIndex(state.index, action.delta, action.count) }
@@ -308,6 +318,10 @@ export function dialogOverlayVisible(
       return overlay.snapshot.options.length > 0
     case 'mode':
       return overlay.modes.length > 0
+    // The kernel roster always has at least the DSH row (the Claude row is
+    // dim while its probe is in flight), so the wrapper always mounts.
+    case 'kernel':
+      return true
     default:
       return true
   }

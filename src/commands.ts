@@ -106,6 +106,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Help / exit
   { name: 'help', description: 'Show shortcuts and commands' },
   { name: 'tips', description: 'Show usage tips and shortcuts' },
+  { name: 'kernel', description: 'Choose the kernel (backend) dsh-tui runs on' },
   { name: 'restart', description: 'Restart dsh-tui and resume this session' },
   { name: 'exit', description: 'Exit dsh-tui' },
   { name: 'quit', description: 'Exit dsh-tui', tag: 'alias of /exit' },
@@ -129,6 +130,22 @@ export const BACKEND_PERMISSION_COMMAND: LocalCommand = {
 }
 
 /**
+ * `/channel` as a channels-capable backend serves it (the Claude backend's
+ * relay channel profiles, backends/claude/channels.ts). Like /permission,
+ * deliberately NOT a LOCAL_COMMANDS entry: the command must appear only on a
+ * backend that declares the typed `channels` capability — a DSH session
+ * (every built-in) and other backends never list it, so typing `/channel`
+ * there keeps today's not-a-command behavior. The capability snapshot
+ * appends the name (channel/capabilities.ts) and session-controls rides it
+ * here.
+ */
+export const BACKEND_CHANNEL_COMMAND: LocalCommand = {
+  name: 'channel',
+  description: 'Manage relay channel profiles (switch, import, view mappings)',
+  descriptionKey: 'cmd-desc-channel',
+}
+
+/**
  * What a built-in command needs from the bound backend session: `any` works
  * on every backend (UI-only, or served by the channel's backend-neutral
  * core); a capability name needs that session capability; `dsh` needs the
@@ -146,6 +163,11 @@ const LOCAL_COMMAND_REQUIREMENTS: ReadonlyMap<string, LocalCommandRequirement> =
   ['exit', 'any'], ['quit', 'any'], ['q', 'any'], ['theme', 'any'], ['lang', 'any'],
   ['activity', 'any'], ['thinking', 'any'], ['vim', 'any'], ['terminal-setup', 'any'],
   ['connect', 'any'], ['update', 'any'], ['export', 'any'], ['panel', 'any'],
+  // The kernel switch is served by the composition root (it respawns the
+  // process), so every backend offers it — including the way BACK from a
+  // non-DSH kernel, which never shows the launchpad (its boot screens are
+  // DSH screens).
+  ['kernel', 'any'],
   ['compact', 'compact'], ['resume', 'resume'], ['rewind', 'rewind'], ['fork', 'fork'],
   ['model', 'models'], ['effort', 'effort'], ['agents', 'subagents'], ['jobs', 'tasks'], ['mcp', 'mcp'],
   ['context', 'context'], ['login', 'login'],

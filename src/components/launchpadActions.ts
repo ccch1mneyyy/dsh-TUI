@@ -100,7 +100,9 @@ const SETTINGS: LaunchpadAction = {
 const BACKEND: LaunchpadAction = {
   id: 'backend',
   labelKey: 'launchpad-action-backend',
-  command: 'backend',
+  // 命令名 = /kernel（LOCAL_COMMANDS 的登记名，requirement 'any'）：入口、
+  // 手敲命令与 Chat 的 case 'kernel' 三条路同一个名字，不给第二个别名。
+  command: 'kernel',
 }
 /** 条件位①：有后台任务在跑。 */
 const JOBS: LaunchpadAction = {

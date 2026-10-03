@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { gte, gt, lt, valid } from 'semver'
 import { shellQuote } from './utils/shellQuote.js'
 import { DATA_DIR } from './utils/paths.js'
+import { stripResumeArgs } from './sessionHistory.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
 // the compiled copy at lib/types/utils/shellQuote.js.
@@ -1914,7 +1915,12 @@ export interface TuiRestartOptions {
 export async function restartTui(sessionId: string, options: TuiRestartOptions = {}): Promise<number> {
   const kind = options.kind ?? 'restart'
   const tag = options.backend !== undefined ? 'backend-switch' : kind === 'update' ? 'update-restart' : 'restart'
-  const argv = [...process.execArgv, ...process.argv.slice(1)]
+  // A kernel switch must not hand the replacement THIS kernel's resume
+  // flags: an inherited `--resume <id>` in argv would send the new kernel
+  // looking for a session that belongs to the kernel it just left — the
+  // same reason DSH_TUI_RESUME_SESSION is deleted below.
+  const appArgs = process.argv.slice(1)
+  const argv = [...process.execArgv, ...(options.backend === undefined ? appArgs : stripResumeArgs(appArgs))]
   logRestartEvent(`${tag}: spawning replacement`, {
     node: process.execPath,
     argv,

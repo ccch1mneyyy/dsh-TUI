@@ -112,6 +112,9 @@ import { EffortSlider } from '../components/EffortSlider.js'
 import { PresetPicker } from '../components/PresetPicker.js'
 import { PermissionsPicker } from '../components/PermissionsPicker.js'
 import { ModePicker } from '../components/ModePicker.js'
+import { KernelPicker } from '../components/KernelPicker.js'
+import { ChannelPicker, type ChannelPickerRow } from '../components/ChannelPicker.js'
+import { buildKernelCatalog, type ClaudeKernelStatus } from '../components/kernelCatalog.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { PlanPicker } from '../components/PlanPicker.js'
 import { LangPicker } from '../components/LangPicker.js'
@@ -221,6 +224,9 @@ const LAUNCHPAD_OVERLAY_KINDS: ReadonlySet<string> = new Set([
   // 第八版：帮助入口也走「盖在落地页之上」的浮层姿态（overlay kind 'help'，
   // HelpMenu 经 pickerPanels 挂进 OverlayAbove）——不再收掉落地页进对话页。
   'help',
+  // 内核选择器（/kernel 与启动页「内核」入口）：同一姿态盖在落地页之上，
+  // 点选即切换内核并重启（组合根的 onSwitchBackend）。
+  'kernel',
 ])
 
 function cleanCommandError(error: unknown): string {
@@ -357,6 +363,10 @@ export function Chat({
   onExit,
   onUpdate,
   onRestart,
+  onSwitchBackend,
+  onRestartFreshSession,
+  onProbeKernels,
+  kernelPinned,
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
   injectControllerRef,
@@ -399,6 +409,25 @@ export function Chat({
   onUpdate?: () => void
   /** Restart the current TUI process and resume this session (no update). */
   onRestart?: () => void
+  /**
+   * 切换内核（组合根实现：写 kernel.json 记忆 → 通知 → 退出 → 以新内核重启，
+   * 新内核开新会话）。启动页「内核」入口与 /kernel 都落到这里；缺省 =
+   * 当前宿主没有切换能力（选择器只提示，绝不假装）。
+   */
+  onSwitchBackend?: (backend: 'dsh' | 'claude') => void
+  /**
+   * 以新会话重启（组合根实现：退出进 backend-switch 漏斗的同款机器——不写
+   * resume 目标、新会话、内核不变）。/channel 三期在「激活渠道的连接信息
+   * 变了」时走这里：运行中的 CLI 子进程换不了 baseUrl/token，只能换会话。
+   */
+  onRestartFreshSession?: (notice: string) => void
+  /**
+   * Claude 内核探测（组合根注入；Chat 不 import 任何具体后端）。首次
+   * 需要时调一次，结果缓存——探测失败按「未安装」答，宁可少一个入口。
+   */
+  onProbeKernels?: () => Promise<ClaudeKernelStatus>
+  /** 启动参数（Config 行 / DSH_TUI_BACKEND）压过了记忆：选择器明说。 */
+  kernelPinned?: boolean
   /**
    * True when the host already wrapped this tree in `<AlternateScreen>`
    * (`fullscreen: true`). Both full-screen surfaces need this — the trajectory
@@ -736,7 +765,7 @@ export function Chat({
    * "点了没反应"，状态还滞留着、等界面关掉才突然弹出来。默认收，白名单只留给覆盖层。
    */
   const overlayCommandNames = React.useMemo(
-    () => new Set(['model', 'effort', 'plan', 'preset', 'permission']),
+    () => new Set(['model', 'effort', 'plan', 'preset', 'permission', 'kernel']),
     [],
   )
   /**
@@ -765,6 +794,181 @@ export function Chat({
       setLaunchpadUpdateAvailable(update !== undefined)
     }).catch(() => undefined)
   }, [launchpadShown])
+  /**
+   * 内核（backend）选择器的目录——/kernel、启动页「内核」入口与右下角
+   * 内核行共用同一份派生值：
+   *   - `current` 来自 bound session 的能力快照（channel.backendCapabilities
+   *     .backendId），批次A 起就是内核身份的唯一来源；
+   *   - DSH 的版本是 contract 的真实读数（与右下角铭牌同源，读不到就没有
+   *     副行）；
+   *   - Claude 的探测由组合根注入（Chat 不 import 任何具体后端），只在首次
+   *     需要时探一次，结果缓存到进程结束。
+   */
+  const kernelCurrentId = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendId ?? 'dsh'
+  const [kernelProbe, setKernelProbe] = React.useState<ClaudeKernelStatus | undefined>(undefined)
+  const kernelProbeStartedRef = React.useRef(false)
+  const requestKernelProbe = React.useCallback((): void => {
+    if (kernelProbeStartedRef.current || onProbeKernels === undefined) return
+    kernelProbeStartedRef.current = true
+    // 组合根已经吞掉抛错；这里再兜一层，失败一律按「未安装」作答——
+    // 选择器只会把那一行画灰，绝不假装能切过去。
+    void onProbeKernels().then(setKernelProbe).catch(() => { setKernelProbe({ installed: false }) })
+  }, [onProbeKernels])
+  const kernelOptions = React.useMemo(
+    () => buildKernelCatalog({
+      current: kernelCurrentId,
+      ...(kernelVersion === undefined ? {} : { dshVersion: kernelVersion }),
+      ...(kernelProbe === undefined ? {} : { claude: kernelProbe }),
+    }),
+    [kernelCurrentId, kernelVersion, kernelProbe],
+  )
+  // 落地页一起来就把探测挂上：右下角那几行该在用户看见它之前尽量落定，
+  // 而不是等他点开选择器才开始等。
+  React.useEffect(() => {
+    if (launchpadShown) requestKernelProbe()
+  }, [launchpadShown, requestKernelProbe])
+  /** 当前内核在目录里的行号（选择器打开时的落点；找不到就落第一行）。 */
+  const kernelCurrentIndex = Math.max(0, kernelOptions.findIndex(option => option.current))
+  /**
+   * 开内核选择器（三条入口共用一条路：/kernel、启动页「内核」入口、右下角
+   * 内核区）。落点默认是当前内核那一行，调用方可以指定别的行。
+   */
+  const openKernelPicker = React.useCallback((index?: number): void => {
+    requestKernelProbe()
+    dispatchOverlay({ type: 'open', overlay: { kind: 'kernel', index: index ?? kernelCurrentIndex } })
+  }, [kernelCurrentIndex, requestKernelProbe])
+  /**
+   * 内核选择器的确认路径（键盘 Enter 与鼠标点击同一条）：
+   *   - 不可选（未安装 / 未登录 / 探测中）→ 只提示原因，选择器留在屏上；
+   *   - 选的就是当前内核 → 提示一句并收起；
+   *   - 其余 → 交给组合根 onSwitchBackend（写记忆 → 通知 → 以新内核重启）。
+   * 正在跑的回合拒绝切换：切内核等于换进程，与 /restart 同一道闸。
+   */
+  const pickKernel = (index: number): void => {
+    const option = kernelOptions[index]
+    if (option === undefined) return
+    if (!option.selectable) {
+      channel.notify(option.reasonKey === undefined ? t('kernel-switch-unavailable') : t(option.reasonKey), { color: 'warning' })
+      return
+    }
+    if (option.current) {
+      dispatchOverlay({ type: 'close' })
+      channel.notify(t('kernel-already-current'))
+      return
+    }
+    if (onSwitchBackend === undefined) {
+      channel.notify(t('kernel-switch-unavailable'), { color: 'warning' })
+      return
+    }
+    if (channel.working) {
+      channel.notify(t('update-working'), { color: 'warning' })
+      return
+    }
+    dispatchOverlay({ type: 'close' })
+    onSwitchBackend(option.id)
+  }
+  /**
+   * 渠道档案（/channel）名册：listChannels 同步现读 channels.json（仅 channels
+   * 能力的后端有行；夹具容错同 listModes——缺委托读作空名册）。名册不冻进
+   * overlay：切换/导入后 tick 自增 → useMemo 重读，✓ 与行自己就刷新。
+   * 普通渲染零文件 IO（useMemo 只在 /channel 活动时重算）。
+   */
+  const [channelRosterTick, setChannelRosterTick] = React.useState(0)
+  const channelSnapshot = React.useMemo(
+    () => (typeof channel.listChannels === 'function' ? channel.listChannels() : { channels: [], activeId: undefined }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- roster refreshes on open/switch/import (channelRosterTick), not on every keystroke
+    [channel, channelRosterTick],
+  )
+  const channelRows: readonly ChannelPickerRow[] = [
+    ...(channelSnapshot.channels.map((option): ChannelPickerRow => ({ kind: 'channel', option, active: option.id === channelSnapshot.activeId }))),
+    { kind: 'import' },
+    { kind: 'add' },
+    { kind: 'manage' },
+    { kind: 'view' },
+  ]
+  /**
+   * 开渠道选择器（落点默认当前渠道行；没有渠道就落在导入行）。重读一次名册，
+   * 让「打开前文件被手改」也能看到最新状态。
+   */
+  const openChannelPicker = React.useCallback((): void => {
+    setChannelRosterTick(tick => tick + 1)
+    const fresh = typeof channel.listChannels === 'function' ? channel.listChannels() : { channels: [], activeId: undefined }
+    dispatchOverlay({ type: 'open', overlay: { kind: 'channel', index: Math.max(0, fresh.channels.findIndex(option => option.id === fresh.activeId)) } })
+  }, [channel])
+  /** 查看映射：当前渠道的 models+tiers 作为 /channel 本地转录块（只读面，
+   * 逐条编辑不在选择器里——提示行指路 channels.json）。 */
+  const channelMapLines = (snapshot: typeof channelSnapshot): string[] => {
+    const active = snapshot.channels.find(option => option.id === snapshot.activeId)
+    if (active === undefined) return [t('channel-map-none')]
+    const lines = [t('channel-map-heading', { name: active.name })]
+    lines.push(active.models.length > 0 ? t('channel-map-models-heading') : t('channel-map-models-none'))
+    for (const entry of active.models) lines.push(t('channel-map-row', { from: entry.from, to: entry.to }))
+    lines.push(active.tiers.length > 0 ? t('channel-map-tiers-heading') : t('channel-map-tiers-none'))
+    for (const rule of active.tiers) lines.push(t('channel-map-row', { from: rule.tier, to: rule.to }))
+    lines.push(t('channel-map-file-hint'))
+    return lines
+  }
+  /**
+   * 渠道选择器的确认路径（键盘 Enter 与鼠标点击同一条）：
+   *  - 渠道行 → setChannel（写 channels.json；动作内同步刷新 modelDisplay），
+   *    选择器留在屏上、✓ 随之移动——管理器姿态，还要继续导入/查看；
+   *  - 导入行 → importChannel（settings.json env → 渠道 tiers；重复导入刷新
+   *    同 id 渠道），结果 toast、新行即时出现；
+   *  - 查看行 → 收起选择器，映射明细打印为本地转录块。
+   */
+  const pickChannel = (index: number): void => {
+    const row = channelRows[index]
+    if (row === undefined) return
+    if (row.kind === 'channel') {
+      if (row.active) { channel.notify(t('channel-already-active')); return }
+      if (typeof channel.setChannel === 'function' && channel.setChannel(row.option.id)) {
+        setChannelRosterTick(tick => tick + 1)
+        // 三期：连接信息（baseUrl/token/渠道 env）相同 → 就地刷新（本会话
+        // 的 CLI 子进程连的就是这套，模型显示已换）；不同 → 子进程换不了
+        // 连接，走新会话重启漏斗（不留 resume 目标）。
+        const before = channelSnapshot.channels.find(option => option.id === channelSnapshot.activeId)
+        if (sameOptionConnection(before, row.option)) {
+          channel.notify(t('channel-switched', { name: row.option.name }), { color: 'success' })
+        } else if (onRestartFreshSession !== undefined) {
+          dispatchOverlay({ type: 'close' })
+          onRestartFreshSession(t('channel-switch-restart', { name: row.option.name }))
+        } else {
+          channel.notify(t('channel-switch-restart-unavailable', { name: row.option.name }), { color: 'warning' })
+        }
+      }
+      return
+    }
+    if (row.kind === 'import') {
+      const imported = typeof channel.importChannel === 'function' ? channel.importChannel() : undefined
+      setChannelRosterTick(tick => tick + 1)
+      channel.notify(imported === undefined ? t('channel-import-none') : t('channel-import-done', { name: imported.name }), { color: imported === undefined ? 'warning' : 'success' })
+      return
+    }
+    if (row.kind === 'add' || row.kind === 'manage') {
+      // 问句式向导（/provider 先例）：QuestionStore 面板驱动，选择器收起。
+      dispatchOverlay({ type: 'close' })
+      void runChannelWizard({
+        ask: (request, options) => questionStore.ask(request, options),
+        notify: (text, options) => channel.notify(text, options),
+        pushLocal: (title, lines) => channel.pushLocal(title, lines),
+        roster: () => (typeof channel.listChannels === 'function' ? channel.listChannels() : { channels: [], activeId: undefined }),
+        save: input => (typeof channel.saveChannel === 'function' ? channel.saveChannel(input) : undefined),
+        remove: id => (typeof channel.removeChannel === 'function' ? channel.removeChannel(id) : false),
+        activate: id => (typeof channel.setChannel === 'function' ? channel.setChannel(id) : false),
+        peekSettings: () => (typeof channel.peekChannelImport === 'function' ? channel.peekChannelImport() : undefined),
+      }).then(outcome => {
+        setChannelRosterTick(tick => tick + 1)
+        if (outcome.restart && onRestartFreshSession !== undefined) {
+          onRestartFreshSession(t('channel-switch-restart', { name: t('channel-wiz-active-channel') }))
+        }
+      }).catch(() => {
+        // The wizard notifies on every handled failure; swallow the rest.
+      })
+      return
+    }
+    dispatchOverlay({ type: 'close' })
+    channel.pushLocal('/channel', channelMapLines(channelSnapshot))
+  }
   /**
    * 落地页条件位③（投喂一颗 Star）：与开屏求 star 弹窗**同一口径**——
    * `usageStats`（~/.dsh-tui/usage.json）里有未报过的已达档里程碑
@@ -3541,6 +3745,26 @@ export function Chat({
         channel.pushLocal('/reload', lines)
         return true
       }
+      case 'channel': {
+        // 渠道档案选择器（/channel 仅 channels 能力的后端提供——BACKEND_CHANNEL_
+        // COMMAND 随能力快照出现，DSH 与其他后端既不列出也不拦这条线；能走到
+        // 这里说明命令在合并表里）。切换式语义与 /kernel 同款：再点一次收起。
+        setHelpOpen(false)
+        if (overlay.kind === 'channel') dispatchOverlay({ type: 'close' })
+        else openChannelPicker()
+        return true
+      }
+      case 'kernel':
+        // 内核选择器（名册在 pickerPanels 的 kernel 分支渲染）。命令在**每个**
+        // 后端都可用——这也是从 Claude 切回 DSH 的唯一入口：非 DSH 会话根本
+        // 不出启动页（三个开机屏都是 DSH 的屏）。确认路径走组合根的
+        // onSwitchBackend（写 kernel.json → 通知 → 以新内核重启，新会话）。
+        setHelpOpen(false)
+        // 第八版切换式（与 /help、参数行同一套语义）：选择器已开着就收起，
+        // 没开才打开——再点一次同一个入口不会把人困在里面。
+        if (overlay.kind === 'kernel') dispatchOverlay({ type: 'close' })
+        else openKernelPicker()
+        return true
       case 'restart':
         // pi-style reload tail: /reload cannot re-read boot-time-only state
         // (cordis.yml root config, frozen fullscreen layout, newly built
@@ -4592,6 +4816,30 @@ export function Chat({
       }
       return
     }
+    if (overlay.kind === 'kernel') {
+      // 名册不冻在 overlay 里（kernelOptions 是渲染期派生值）：探测落地后
+      // 选择器自己就刷新成完整目录，不需要重开。
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: kernelOptions.length })
+      } else if (plainReturn) {
+        pickKernel(overlay.index)
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
+    if (overlay.kind === 'channel') {
+      // 名册不冻在 overlay 里（channelRows 是渲染期派生值）：切换/导入后
+      // 选择器自己就刷新成新状态，不需要重开。
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: channelRows.length })
+      } else if (plainReturn) {
+        pickChannel(overlay.index)
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
     if (overlay.kind === 'plan') {
       if (key.upArrow || key.downArrow) {
         dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: 2 })
@@ -5343,6 +5591,31 @@ export function Chat({
               />
             </Box>
           )}
+          {overlay.kind === 'kernel' && (
+            <Box flexDirection="column" marginTop={1}>
+              <KernelPicker
+                options={kernelOptions}
+                focusIndex={overlay.index}
+                pinned={kernelPinned === true}
+                onPick={(index) => {
+                  if (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null) return
+                  pickKernel(index)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'channel' && (
+            <Box flexDirection="column" marginTop={1}>
+              <ChannelPicker
+                rows={channelRows}
+                focusIndex={overlay.index}
+                onPick={(index) => {
+                  if (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null) return
+                  pickChannel(index)
+                }}
+              />
+            </Box>
+          )}
           {overlay.kind === 'plan' && (
             <Box flexDirection="column" marginTop={1}>
               <PlanPicker
@@ -5777,6 +6050,8 @@ export function Chat({
       ),
       updateAvailable: launchpadUpdateAvailable,
       starDue: launchpadStarDue,
+      // 内核入口带名（「内核 · Claude」）：backendId 是内核身份的唯一来源。
+      backendId: kernelCurrentId,
     })
     const node = (
       <Launchpad
@@ -5900,7 +6175,10 @@ export function Chat({
         cwd={channel.displayCwd}
         branch={channel.gitBranch}
         tuiVersion={tuiVersion}
-        kernelVersion={kernelVersion}
+        // 右下角的内核行（用户原话：「显示可以选择的内核 并且有箭头或者高亮
+        // 表明目前记忆中启动的内核」）：目录与选择器同源，点它开同一个选择器。
+        kernels={kernelOptions}
+        onKernelPick={() => openKernelPicker()}
         // 左下角工作目录铭牌（第七版）：点开/回车开既有 /workspace 菜单——
         // workspace-menu 在 LAUNCHPAD_OVERLAY_KINDS 里，选择器盖在落地页之上，
         // Esc 回落地页（与参数行选择器同一姿态），不新造面板。

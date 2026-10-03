@@ -107,6 +107,37 @@ export function resumeTargetFromArgv(
  * Session-id → last-used epoch ms map for MRU ordering.
  * @returns The parsed map; best effort, an unreadable file yields {}.
  */
+/**
+ * Drop the resume flags {@link resumeTargetFromArgv} recognizes (same
+ * grammar, one source — the two must never drift).
+ *
+ * A kernel switch respawns the process onto the OTHER backend: this
+ * kernel's session id means nothing there, and an inherited `--resume
+ * <id>` in argv would send the replacement looking for a session that
+ * belongs to the kernel it just left (DSH's `resume.txt` marker is
+ * already deleted by restartTui for the same reason). `--` still ends
+ * option parsing.
+ * @param argv - App arguments, exactly as passed to the replacement.
+ * @returns A copy without those flags (and without the id they consumed).
+ */
+export function stripResumeArgs(argv: readonly string[]): string[] {
+  const out: string[] = []
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!
+    if (a === '--') {
+      out.push(...argv.slice(i))
+      break
+    }
+    if (a === '--resume' || a === '-c' || a === '--continue' || a.startsWith('--resume=')) {
+      // A bare flag eats the id behind it (same rule as the parser above).
+      if (a === '--resume' && argv[i + 1] !== undefined && !argv[i + 1]!.startsWith('-')) i++
+      continue
+    }
+    out.push(a)
+  }
+  return out
+}
+
 export function readLastUsed(): Readonly<Record<string, number>> {
   const stamp = lastUsedFileStamp()
   if (lastUsedCache !== undefined && lastUsedStamp === stamp) return lastUsedCache

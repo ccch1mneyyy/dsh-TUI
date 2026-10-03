@@ -60,6 +60,10 @@ const {
 const compiledModulePath = fileURLToPath(new URL('../lib/types/update.js', import.meta.url))
 const compiledShellQuotePath = fileURLToPath(new URL('../lib/types/utils/shellQuote.js', import.meta.url))
 const compiledPathsPath = fileURLToPath(new URL('../lib/types/utils/paths.js', import.meta.url))
+// update.js imports stripResumeArgs from here (a kernel switch must not hand
+// the replacement this kernel's --resume flags) — the scratch mirror has to
+// carry it or the copy fails to link.
+const compiledSessionHistoryPath = fileURLToPath(new URL('../lib/types/sessionHistory.js', import.meta.url))
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 
 /**
@@ -72,6 +76,7 @@ function copyUpdateModule(dstDir) {
   cpSync(compiledModulePath, join(dstDir, 'update.js'))
   cpSync(compiledShellQuotePath, join(dstDir, 'utils', 'shellQuote.js'))
   cpSync(compiledPathsPath, join(dstDir, 'utils', 'paths.js'))
+  cpSync(compiledSessionHistoryPath, join(dstDir, 'sessionHistory.js'))
 }
 
 // ---- installedTuiVersion: compiled layout is this module's own real layout

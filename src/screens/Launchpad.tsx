@@ -6,6 +6,7 @@ import { CommandSuggestions } from '../components/CommandSuggestions.js'
 import { LogoV2 } from '../components/LogoV2.js'
 import { resolveLaunchpadLayout, type LaunchpadLayout } from '../components/launchpadLayout.js'
 import { type LaunchpadAction } from '../components/launchpadActions.js'
+import { kernelDisplayName, kernelSubtitle, type KernelOption } from '../components/kernelCatalog.js'
 import { pickSplashFont, splashFontById, type SplashFont } from '../components/splashFonts.js'
 import { t } from '../i18n.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
@@ -109,6 +110,13 @@ const TIPS_FOCUS = -6
  * （↑/↓/Tab 与版面顺序一致）自动覆盖它）。
  */
 const CWD_CORNER_FOCUS = -7
+/**
+ * 右下角内核区在焦点环里的编码（第八版）：目录铭牌之后再一格，环的最后一格。
+ * 内核区整块可点（点开内核选择器），键盘路径走同一格 + Enter——仓库硬规矩：
+ * 每个可点目标都要有不含鼠标的等价操作。它在版面上就在最底（比目录铭牌更靠
+ * 右下），所以排在 CWD_CORNER_FOCUS 之后。
+ */
+const KERNEL_CORNER_FOCUS = -8
 /** Tips 自动轮换的默认间隔（第七版：用户要「呼吸感」；手动切换后计时重置）。 */
 const TIP_ROTATE_MS = 10_000
 /** 参数段固定显示顺序（模型 · 思考深度 · 模式(preset) · 权限）。 */
@@ -208,6 +216,81 @@ function CornerChip({
 }
 
 /**
+ * 右下角内核区（第八版，用户原话：「在这里显示可以选择的内核 并且有箭头或者
+ * 高亮 表明目前记忆中启动的内核」）：第一行 TUI 版本**不动**，其后一行一个内核
+ * ——当前内核打 `▸ ` 前缀、保持主题蓝；其余行前缀两格空格、文字 dim（前缀等宽
+ * 让名字对齐）。行文本 = `短品牌名 · 副标题`（名字取 kernelDisplayName：DSH /
+ * Claude——全名 40 列会挤掉左下角的目录铭牌；副标题 = 版本 / 置灰原因，缺席就
+ * 只画名字，见 kernelCatalog 的 kernelSubtitle）。目标形状：
+ *
+ *     ```text
+ *                                              dsh-tui v0.12.0
+ *                                ▸ DSH · dsh-core v0.2.0-rc.2
+ *                                  Claude · claude-code v2.1.284
+ *     ```
+ *
+ * **整块是一个可点目标**（点开内核选择器）：点击 stopImmediatePropagation——
+ * 这一屏有「点空白收回焦点」的兜底 handler，不拦住会既开选择器又清焦点；
+ * 悬停/焦点高亮照 CornerChip 那套（主题蓝 + 加粗，未激活时只有当前内核行是
+ * 主题蓝、其余行 dim）。键盘路径 = 焦点环的 KERNEL_CORNER_FOCUS + Enter，与
+ * 点击同一条回调。没接 onKernelPick 时整块不挂鼠标事件（挂得上 onClick 才给
+ * hover 反馈，与 ActionChip/CornerChip 同一条口径），也不进焦点环。
+ */
+function KernelCorner({
+  rows,
+  focused,
+  onActivate,
+  onHover,
+  onHoverLeave,
+}: {
+  rows: readonly { id: string; current: boolean; label: string }[]
+  focused: boolean
+  /** 缺席 = 不可点（也不给 hover 反馈）。 */
+  onActivate: (() => void) | undefined
+  onHover: () => void
+  onHoverLeave: () => void
+}): React.ReactNode {
+  const [hovered, setHovered] = React.useState(false)
+  const interactive = onActivate !== undefined
+  const active = interactive && (hovered || focused)
+  return (
+    // 外层整行右推（块贴右缘，与 TUI 版本那一行同一条右边界），内层左对齐：
+    // 行内两格前缀（▸ + 空格 / 两个空格）于是成了**标记列**——几个内核的名字
+    // 从同一列开始，箭头只多占最左边那两格。可点目标是内层这个真的画了字的
+    // 块（不是整行空白），与 CornerChip 的收缩形态同一条口径。
+    <Box flexShrink={0} flexDirection="row" justifyContent="flex-end">
+      <Box
+        flexDirection="column"
+        alignItems="flex-start"
+        {...(interactive
+          ? {
+              onMouseEnter: () => { setHovered(true); onHover() },
+              onMouseLeave: () => { setHovered(false); onHoverLeave() },
+              onClick: (event: ClickEvent) => {
+                event.stopImmediatePropagation()
+                onActivate?.()
+              },
+            }
+          : {})}
+      >
+        {rows.map(row => (
+          <Box key={row.id} flexDirection="row" height={1}>
+            <Text
+              color={row.current ? 'suggestion' : undefined}
+              bold={active}
+              dimColor={!row.current && !active}
+              wrap="truncate-middle"
+            >
+              {(row.current ? '\u25b8 ' : '  ') + row.label}
+            </Text>
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  )
+}
+
+/**
  * Launchpad —— 每次启动的第一屏（取代旧的"只有鲸鱼标题的空白会话"）。
  *
  * 它**不是一个新页面**：整块视觉核心仍然是 `LogoV2`（像素鲸鱼 / 女仆娘立绘、
@@ -228,7 +311,9 @@ function CornerChip({
  *     （整行右对齐，与输入框右缘对齐）；
  *   - 再下一行 **`● Tips：`**（居中，圆点橙色 warning）。
  *
- * 屏幕最底的双角铭牌（左 `cwd:branch`、右版本号）保留。
+ * 屏幕最底的双角铭牌（左 `cwd:branch`、右下 `dsh-tui v…` + **内核区**）保留：
+ * 第八版起右下第一行仍是 TUI 版本，其后一行一个可选内核——当前内核打 `▸ ` 且
+ * 主题蓝，其余行 dim；整块可点（键盘等价操作 = 焦点环末格 + Enter）。
  *
  * **输入框在这一屏是唯一有状态的部件**：用户敲进去的东西必须原样带进聊天页，
  * 否则"第一屏输入的字"就被这一屏吞了。第六版起行首 `/` 会弹出**命令补全面板**
@@ -277,8 +362,10 @@ export function Launchpad({
   tipRotateMs = TIP_ROTATE_MS,
   /** 左下角工作目录铭牌被点击/回车时交给 Chat（开既有的 /workspace 工作区菜单）。 */
   onOpenWorkspace,
-  /** 内核（dsh）版本——右下角与 TUI 版本并列显示；读不到就不画内核段。 */
-  kernelVersion,
+  /** 右下角内核区的目录行（第八版：一行一个内核，当前那个打 ▸）。 */
+  kernels,
+  /** 右下角内核区被点击/焦点环 Enter 时交给 Chat（打开内核选择器）。 */
+  onKernelPick,
   cwd,
   branch,
   tuiVersion,
@@ -365,12 +452,21 @@ export function Launchpad({
   tipRotateMs?: number
   /** 左下角工作目录铭牌被点击/焦点环 Enter 时交给 Chat（开 /workspace 菜单）。 */
   onOpenWorkspace?: (() => void) | undefined
-  /** 内核（dsh）版本（contract.installedKernelVersion 的真实读数）；缺省只画 TUI 段。 */
-  kernelVersion?: string | undefined
+  /**
+   * 右下角内核区的目录行（第八版：`buildKernelCatalog` 的产物，数组顺序即
+   * 显示顺序）；缺省（或空数组）= 右侧只有 TUI 版本那一行——绝不编造内核号，
+   * 也不再单独传一个内核版本号（版本已经进了每一行）。
+   */
+  kernels?: readonly KernelOption[] | undefined
+  /**
+   * 内核区被点击 / 焦点环 Enter 时交给 Chat（打开内核选择器）。键盘路径是
+   * 仓库硬规矩：给了它，焦点环才多出 KERNEL_CORNER_FOCUS 那一格。
+   */
+  onKernelPick?: (() => void) | undefined
   /** 双角铭牌：左下角的工作路径与分支。 */
   cwd?: string | undefined
   branch?: string | undefined
-  /** 双角铭牌：右下角的 TUI 版本号。 */
+  /** 双角铭牌：右下第一行的 TUI 版本号（其后是 kernels 的内核区）。 */
   tuiVersion?: string | undefined
   onFocusChange: (index: number) => void
   onAction: (action: LaunchpadAction) => void
@@ -507,11 +603,20 @@ export function Launchpad({
   const hasParams = fittedParams.length > 0
   // 双角铭牌：像两枚低调的机械铭牌，把整块界面扎在终端底边上。
   const cornerLeft = [cwd, branch].filter(part => part !== undefined && part !== '').join(':')
-  // 右下角双版本（第七版，竖排两行）：第一行 TUI、第二行内核（dsh-core）。
-  // 内核版本来自 contract.installedKernelVersion 的真实读数（宿主 CLI 或内核
-  // 线包的 manifest），读不到就只画 TUI 一行——绝不编造。
+  // 右下角铭牌带（第八版）：第一行 TUI 版本，其后一行一个内核。
+  // 行文本 = `名字 · 副标题`——副标题（版本 / 置灰原因）与选择器同源
+  // （kernelSubtitle），读不到就只画名字，绝不编造。
   const tuiPart = tuiVersion === undefined || tuiVersion === '' ? undefined : `dsh-tui v${tuiVersion}`
-  const kernelPart = kernelVersion === undefined || kernelVersion === '' ? undefined : `dsh-core v${kernelVersion}`
+  // 名字用**短品牌名**（DSH / Claude，与启动页「内核 · DSH」那个 chip 同源）：
+  // 这一格与左下角的 `工作目录:分支` 共用底边，全名（DeepSeek Harness · … = 40 列）
+  // 在窄终端里会把左边的目录铭牌挤掉。选择器那一屏有地方，仍用全名（labelKey）。
+  const kernelRows = (kernels ?? []).map(option => {
+    const subtitle = kernelSubtitle(option, key => t(key))
+    const name = kernelDisplayName(option.id)
+    return { id: option.id, current: option.current, label: subtitle === undefined ? name : name + ' \u00b7 ' + subtitle }
+  })
+  /** 内核区进不进焦点环：画得出来**且**接了回调（可点才需要键盘等价操作）。 */
+  const kernelCornerFocusable = kernelRows.length > 0 && onKernelPick !== undefined
   const cardWidth = Math.max(24, Math.min(columns - 4, 72))
 
   const layout: LaunchpadLayout = resolveLaunchpadLayout(columns, rows, {
@@ -651,10 +756,13 @@ export function Launchpad({
       // 焦点画在哪一格，Enter 就归谁：Tips 行（-6）切下一条 Tip、参数段（≤-2）
       // 点开它对应的选择器、动作入口（≥0）激活那一条，输入框有焦点（`-1`）时
       // 才把整行原文交回 Chat。键盘路径是仓库硬规矩（每个可点目标都要有），
-      // 四段参数与可点击的 Tips 行也不例外。
+      // 四段参数、可点击的 Tips 行与两个角标（目录铭牌/内核区）也不例外。
       const focusedSegment = segmentOfFocus(focusIndex)
       if (focusIndex === TIPS_FOCUS) {
         rotateTip()
+      } else if (focusIndex === KERNEL_CORNER_FOCUS && onKernelPick !== undefined) {
+        // 右下角内核区（第八版）：Enter = 打开内核选择器（与点击同一条回调）。
+        onKernelPick()
       } else if (focusIndex === CWD_CORNER_FOCUS && onOpenWorkspace !== undefined) {
         // 左下角工作目录铭牌（第七版）：Enter = 打开既有 /workspace 菜单。
         onOpenWorkspace()
@@ -679,14 +787,16 @@ export function Launchpad({
       // 窄终端里 `fitChips`/参数行的宽度裁剪会丢掉放不下的那几个，按
       // 整张表绕圈会让焦点指着一个看不见的目标、Enter 触发一个看不见的动作。
       const tipsFocusable = layout.showTip && pasteNotice === undefined && !firstRun
-      // 左下角铭牌（第七版）：画得出来且接了 onOpenWorkspace 才进环（末格）。
+      // 左下角铭牌（第七版）：画得出来且接了 onOpenWorkspace 才进环。
       const cornerFocusable = layout.showCorners && cornerLeft !== '' && onOpenWorkspace !== undefined
+      // 环的顺序 = 版面顺序（↓ 一路向下）：…→ Tips → 左下目录铭牌 → 右下内核区。
       const ring = [
         -1,
         ...fittedParams.map(part => paramFocusOf(part.segment)),
         ...chips.map(chip => chip.index),
         ...(tipsFocusable ? [TIPS_FOCUS] : []),
         ...(cornerFocusable ? [CWD_CORNER_FOCUS] : []),
+        ...(kernelCornerFocusable ? [KERNEL_CORNER_FOCUS] : []),
       ]
       const at = ring.indexOf(focusIndex)
       const next = ring[((at >= 0 ? at : 0) + step + ring.length) % ring.length]!
@@ -921,9 +1031,11 @@ export function Launchpad({
           </Box>
         )}
       </Box>
-      {/* 双角铭牌（第七版：右下版本号**竖排两行**，用户原话「版本号做成竖向
-          堆叠」）：左下目录铭牌仍 1 行、与第一行**顶对齐**（同一块铭牌带，不散）；
-          第一行 = dsh-tui、第二行 = dsh-core（内核读不到时右侧只有第一行）。 */}
+      {/* 双角铭牌（第八版：右下从「两行版本号」扩成「TUI 版本 + 内核区」——用户
+          原话「在这里显示可以选择的内核 并且有箭头或者高亮 表明目前记忆中启动的
+          内核」）：左下目录铭牌仍 1 行、与第一行**顶对齐**（同一块铭牌带，不散）；
+          第一行 = dsh-tui，其后一行一个内核（当前那个打 ▸ 且主题蓝，其余 dim；
+          整块可点开选择器）。kernels 缺省时右侧只有第一行（绝不编造内核号）。 */}
       {layout.showCorners && (
         <Box flexShrink={0} flexDirection="column">
           <Box flexShrink={0} flexDirection="row" justifyContent="space-between" height={1}>
@@ -942,10 +1054,16 @@ export function Launchpad({
             )}
             <Text dimColor wrap="truncate-middle">{tuiPart ?? ''}</Text>
           </Box>
-          {kernelPart !== undefined && (
-            <Box flexShrink={0} flexDirection="row" justifyContent="flex-end" height={1}>
-              <Text dimColor wrap="truncate-middle">{kernelPart}</Text>
-            </Box>
+          {kernelRows.length > 0 && (
+            <KernelCorner
+              rows={kernelRows}
+              focused={focusIndex === KERNEL_CORNER_FOCUS}
+              onActivate={onKernelPick}
+              onHover={() => onFocusChange(KERNEL_CORNER_FOCUS)}
+              onHoverLeave={() => {
+                if (focusIndex === KERNEL_CORNER_FOCUS) onFocusChange(-1)
+              }}
+            />
           )}
         </Box>
       )}
