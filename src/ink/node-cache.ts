@@ -1,5 +1,6 @@
 import type { DOMElement } from './dom.js'
 import type { Rectangle } from './layout/geometry.js'
+import type { SoftWrapFlag } from './output.js'
 
 /**
  * Cached layout bounds for each rendered node (used for blit + clearing).
@@ -37,7 +38,7 @@ export const textPaintCache = new WeakMap<DOMElement, {
   paddingTop: number
   text: string
   lines: readonly string[]
-  softWrap: boolean[] | undefined
+  softWrap: SoftWrapFlag[] | undefined
 }>()
 
 /** Rects of removed children that need clearing on next render */

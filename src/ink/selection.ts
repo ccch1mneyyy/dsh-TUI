@@ -1196,7 +1196,7 @@ export function isCellSelected(
 }
 
 /** Extract text from one screen row, plus the copy regions it touches.
- *  When the next row is a soft-wrap continuation (screen.softWrap[row+1]>0),
+ *  When the next row is a soft-wrap continuation (screen.softWrap[row+1]!==0),
  *  clamp to that content-end column and skip the trailing trim so the
  *  word-separator space survives the join. See Screen.softWrap for why the
  *  clamp is necessary. */
@@ -1210,7 +1210,8 @@ function extractRowText(
   const noSelect = screen.noSelect
   const copyRegion = screen.copyRegion
   const rowOff = row * screen.width
-  const contentEnd = row + 1 < screen.height ? screen.softWrap[row + 1]! : 0
+  const next = row + 1 < screen.height ? screen.softWrap[row + 1]! : 0
+  const contentEnd = Math.abs(next)
   const lastCol = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) : colEnd
   let line = ''
   const regions: SelectionRegion[] = []
@@ -1245,6 +1246,9 @@ function extractRowText(
     }
     line += cell.char
   }
+  // Negative marker: the renderer elided the separator space that wrapped
+  // onto the next row (this row filled the width exactly).
+  if (next < 0 && colStart <= lastCol && lastCol === contentEnd - 1) line += ' '
   // The trailing trim may only eat blanks written AFTER the last region: a
   // region's cells are content (a formula's box), so the space separating it
   // from the text before it survives. The markers this replaced were never
@@ -1252,7 +1256,7 @@ function extractRowText(
   const tail = regions.length > 0 ? regions[regions.length - 1]!.at : 0
   return {
     text: contentEnd > 0 ? line : line.slice(0, tail) + line.slice(tail).replace(/\s+$/, ''),
-    sw: screen.softWrap[row]! > 0,
+    sw: screen.softWrap[row]! !== 0,
     regions,
   }
 }
@@ -1446,12 +1450,12 @@ export function refreshSelectionFingerprint(
       }
     }
     // Row separator + the row's soft-wrap bit: getSelectedText joins a
-    // wrapped row onto the previous line with NO newline (softWrap[row]>0)
+    // wrapped row onto the previous line with NO newline (softWrap[row]!==0)
     // but emits a real newline otherwise — identical cells with a flipped
     // wrap bit produce a different copy, so the fingerprint must see it.
-    h = Math.imul(h ^ 0x9e3779b9 ^ (softWrap[row]! > 0 ? 0x51ed270b : 0), 0x85ebca6b)
+    h = Math.imul(h ^ 0x9e3779b9 ^ (softWrap[row]! !== 0 ? 0x51ed270b : 0), 0x85ebca6b)
     // The row BELOW is an input to THIS row's copy. extractRowText reads
-    // softWrap[row + 1] as this row's content end: > 0 means the row wraps
+    // softWrap[row + 1] as this row's content end: !== 0 means the row wraps
     // into the next one, which both clamps the last column to
     // min(colEnd, contentEnd - 1) and suppresses the trailing-blank trim.
     // Flipping only the next row's wrap bit therefore rewrites the last
@@ -1460,9 +1464,10 @@ export function refreshSelectionFingerprint(
     // cells. Hash exactly what extractRowText consumes (0 = not wrapped) so
     // a contentEnd change that does not move the clamp stays invisible
     // instead of becoming a false positive.
-    const contentEnd = row + 1 < height ? softWrap[row + 1]! : 0
+    const next = row + 1 < height ? softWrap[row + 1]! : 0
+    const contentEnd = Math.abs(next)
     const wrapClamp = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) + 1 : 0
-    h = Math.imul(h ^ 0x27d4eb2f ^ wrapClamp, 0x165667b1)
+    h = Math.imul(h ^ 0x27d4eb2f ^ (next < 0 ? -wrapClamp : wrapClamp), 0x165667b1)
   }
   // The bytes a region contributes live outside the cells (Screen.copyTexts),
   // so they are hashed here — in id order, after the position terms above, so
