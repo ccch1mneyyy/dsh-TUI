@@ -16,7 +16,11 @@
  * Run with plain node against the compiled lib: `node scripts/verify-docked-queue.mjs`
  */
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
+import { setLang, t } from '../lib/types/i18n.js'
 import { settle, settled } from './lib/term-test.mjs'
+
+setLang('en')
+const flush = () => new Promise(resolve => setImmediate(resolve))
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -146,7 +150,7 @@ const launchOptions = { model: 'deepseek-chat', cwd: '/tmp', provider: 'deepseek
 // A raw AgentSession shaped like the Claude backend: no live-inbox
 // withdrawal (removePending false, retractPending therefore false) and an
 // interrupt receipt that answers still_queued.
-function makeClaudeSession({ stillQueuedOnInterrupt } = {}) {
+function makeClaudeSession({ stillQueuedOnInterrupt, cancelReceipt } = {}) {
   const state = {
     submits: [],
     cancels: [],
@@ -175,7 +179,8 @@ function makeClaudeSession({ stillQueuedOnInterrupt } = {}) {
     },
     cancel(cause) {
       state.cancels.push(cause)
-      return Promise.resolve({ stillQueued: cause === 'interrupt' ? [...state.keptIds] : [] })
+      if (cancelReceipt !== undefined) return cancelReceipt(state)
+      return Promise.resolve({ stillQueued: cause === 'interrupt' ? [...state.keptIds] : [], outcome: 'confirmed' })
     },
     dispose: async () => {},
   }
@@ -229,6 +234,89 @@ function makeClaudeSession({ stillQueuedOnInterrupt } = {}) {
   push({ type: 'pending.changed', items: [], claimed: [], discarded: [channel.pending[0]?.id] })
   check('B6 undocked row retires on discard (no ghost preview)', channel.pending.length === 0, JSON.stringify(channel.pending))
   check('B6 no delivery was made by the channel', state.submits.length === 1, JSON.stringify(state.submits.map(input => input.text)))
+}
+
+// ─────────── Section C: an unconfirmed interrupt never keeps a dock ────
+// R2-1: a failed or answerless cancel receipt must not read as an empty
+// queue. The dock is a CLAIM that the backend dropped its queued copies;
+// without a confirmed receipt the channel revokes it (with a notice), so
+// the still-live single backend copy keeps running and the SDK never
+// accepts a second copy of the same intent.
+{
+  // C1 — the interrupt request itself rejects.
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => Promise.reject(new Error('interrupt refused')) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('queued')
+  await settle(() => channel.pending.length === 1)
+  check('C1 dock counted', channel.interruptAndDock() === 1)
+  check('C1 a rejected interrupt un-docks the row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
+  check('C1 the failure is notified', channel.notifications.some(item => item.text === t('claude-interrupt-failed')), JSON.stringify(channel.notifications))
+  check('C1 nothing re-delivers over the live copy', channel.deliverDocked() === 0)
+  check('C1 the SDK accepted exactly one copy of the intent', state.submits.filter(input => input.text === 'queued').length === 1, JSON.stringify(state.submits.map(input => input.text)))
+  // Only a CONFIRMED-cancelled (docked) copy may be retracted locally
+  // (B4): the un-docked row's backend copy still lives, so withdrawal
+  // belongs to the backend — which this fixture (Claude shape) cannot do,
+  // and the row stays queued rather than silently vanishing.
+  check('C1 an un-docked row is not locally retractable', channel.removePending(channel.pending[0]?.id) === false && state.removePendingCalls.length === 0 && channel.pending.length === 1, JSON.stringify(channel.pending))
+}
+{
+  // C2 — an older CLI answers no receipt (undefined → unknown) and keeps
+  // its queue: same revocation, unconfirmed notice.
+  const { session, state } = makeClaudeSession({ cancelReceipt: s => Promise.resolve({ stillQueued: s.submits.map(input => input.clientMessageId), outcome: 'unknown' }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('old cli msg')
+  await settle(() => channel.pending.length === 1)
+  check('C2 dock counted', channel.interruptAndDock() === 1)
+  check('C2 an answerless interrupt un-docks the row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
+  check('C2 the unconfirmed dock is notified', channel.notifications.some(item => item.text === t('claude-interrupt-unconfirmed')), JSON.stringify(channel.notifications))
+  check('C2 deliverDocked sends nothing', channel.deliverDocked() === 0)
+  check('C2 exactly one copy accepted', state.submits.filter(input => input.text === 'old cli msg').length === 1, JSON.stringify(state.submits.map(input => input.text)))
+}
+{
+  // C3 — generation boundary: rows docked while the receipt was in flight
+  // sit outside its queue snapshot; even a confirmed-empty receipt cannot
+  // vouch for them (they un-dock; the row the receipt DID cover stays).
+  let release
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('first batch')
+  await settle(() => channel.pending.length === 1)
+  check('C3 first dock counted', channel.interruptAndDock() === 1)
+  channel.submit('during request')
+  await settle(() => channel.pending.length === 2)
+  check('C3 second dock parks without a second request', channel.interruptAndDock() === 1 && state.cancels.length === 1, JSON.stringify(state.cancels))
+  release({ stillQueued: [], outcome: 'confirmed' })
+  check('C3 covered row stays docked, uncovered row un-docks', await settled(() => {
+    const covered = channel.pending.find(item => item.text === 'first batch')
+    const uncovered = channel.pending.find(item => item.text === 'during request')
+    return covered?.docked === true && uncovered?.docked !== true
+  }), JSON.stringify(channel.pending))
+  check('C3 the uncovered row is notified as unconfirmed', channel.notifications.some(item => item.text === t('claude-interrupt-unconfirmed')), JSON.stringify(channel.notifications))
+  check('C3 only the confirmed-cancelled copy re-sends', channel.deliverDocked() === 1)
+  const texts = () => state.submits.map(input => input.text)
+  await settle(() => texts().length === 3)
+  check('C3 the SDK saw the uncovered intent exactly once', texts().filter(text => text === 'during request').length === 1 && texts().filter(text => text === 'first batch').length === 2, JSON.stringify(texts()))
+}
+{
+  // C4 — a later Esc whose predecessor's receipt already settled (the
+  // abort still converging) fires its own request: every dock batch gets a
+  // receipt that actually saw it.
+  const receipts = [{ stillQueued: [], outcome: 'confirmed' }, { stillQueued: [], outcome: 'confirmed' }]
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => Promise.resolve(receipts.shift()) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('gen one')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  await flush()
+  channel.submit('gen two')
+  await settle(() => channel.pending.length === 2)
+  check('C4 a new dock after the settled receipt fires its own request', channel.interruptAndDock() === 1 && state.cancels.length === 2, JSON.stringify(state.cancels))
+  await flush()
+  check('C4 both rows stay docked on their own confirmed receipts', channel.pending.length === 2 && channel.pending.every(item => item.docked === true), JSON.stringify(channel.pending))
+  check('C4 both re-send exactly once', channel.deliverDocked() === 2)
+  const texts = () => state.submits.map(input => input.text)
+  await settle(() => texts().length === 4)
+  check('C4 each intent ran once plus exactly one confirmed resend', texts().filter(text => text === 'gen one').length === 2 && texts().filter(text => text === 'gen two').length === 2, JSON.stringify(texts()))
 }
 
 process.exit(failed)

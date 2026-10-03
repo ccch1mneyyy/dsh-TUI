@@ -310,6 +310,12 @@ While the model is working, three paths have different placement:
     its own queue and runs it next turn: the channel detects this from the
     `still_queued` receipt, un-docks those rows and lets their previews
     retire on claim (the channel re-delivers nothing — no double send).
+  - The dock stands only on a **confirmed** withdrawal: a failed interrupt
+    request, an answerless older CLI (`unknown`), or rows docked after the
+    request's queue snapshot — those backend copies still run, so the
+    channel un-docks them with a notice and they flow into the next turn
+    as usual (always exactly one copy, never a doubled re-send; only rows
+    whose withdrawal was confirmed may be retracted locally for editing).
 
 ## Session workflows
 

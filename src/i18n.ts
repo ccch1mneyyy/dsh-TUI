@@ -281,6 +281,8 @@ const dict = {
   'claude-process-exited': { zh: 'Claude 进程已退出：{{reason}}', en: 'The Claude process exited: {{reason}}' },
   'claude-process-ended': { zh: '会话流已结束', en: 'the session stream ended' },
   'claude-cancel-forced': { zh: '中断 30 秒未得到确认，已强制结束本回合', en: 'The interrupt was not confirmed within 30s; the turn was force-closed' },
+  'claude-interrupt-failed': { zh: '打断请求失败：排队消息未被撤销，仍将作为下一回合执行；已撤销停靠，避免重复发送', en: 'The interrupt request failed: the queued messages were not withdrawn and will still run as the next turn; the dock was revoked to avoid sending them twice' },
+  'claude-interrupt-unconfirmed': { zh: '无法确认 CLI 已撤销排队消息：它们仍将作为下一回合执行，不再停靠', en: 'Could not confirm the CLI withdrew the queued messages: they will still run as the next turn and are no longer parked as a dock' },
   'claude-version-drift': { zh: 'Claude CLI {{version}} 未经本版 dsh-tui 验证（已验证：{{validated}}），继续运行', en: 'Claude CLI {{version}} is not validated with this dsh-tui (validated: {{validated}}); continuing' },
   'claude-sdk-drift': { zh: 'Claude Agent SDK {{version}} 与验证版本 {{validated}} 不一致，继续运行', en: 'Claude Agent SDK {{version}} differs from the validated {{validated}}; continuing' },
   'claude-sdk-missing': { zh: '未安装 Claude Agent SDK：在 dsh-tui 安装目录运行 pnpm add @anthropic-ai/claude-agent-sdk@{{version}}', en: 'The Claude Agent SDK is not installed: run pnpm add @anthropic-ai/claude-agent-sdk@{{version}} in the dsh-tui install directory' },

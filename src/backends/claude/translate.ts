@@ -1461,6 +1461,12 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     unstartedInputs(): readonly string[] {
       return [...inputs.keys()].filter(uuid => !startedInputs.has(uuid))
     },
+    /** Queued-input previews the channel still shows (pending uuids, push
+     *  order): what an interrupt covered but has not confirmed deleted —
+     *  an answerless or failed interrupt reports them as still queued. */
+    pendingInputs(): readonly string[] {
+      return [...pending.keys()]
+    },
     /** Give up on inputs that can no longer be delivered: their previews
      *  are retired as discarded. */
     dropInputs(uuids: readonly string[]): AgentEvent[] {

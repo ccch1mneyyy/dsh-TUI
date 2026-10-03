@@ -1,5 +1,5 @@
 /** Input actions own cancellation/requeue convergence, not session binding. */
-import type { AgentSession } from '../../agent/session.js'
+import type { AgentSession, CancelOutcome } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { touchSession } from '../../sessionHistory.js'
 import type { ChannelState, ComposerImageRef, ComposerSubmission } from './types.js'
@@ -11,6 +11,14 @@ export interface InputConvergence {
    *  cancel and read to decide whether a queued-input drop is still needed
    *  (a 'user' cancel kept the backend queue; an 'interrupt' drops it). */
   cancelCause?: 'user' | 'interrupt'
+  /** True while an interrupt cancel's receipt has not settled yet: rows
+   *  docked in that window sit outside the receipt's queue snapshot. */
+  interruptReceiptPending?: boolean
+  /** The docked-row ids parked while the current receipt was in flight —
+   *  its snapshot predates them, so it cannot vouch for their backend
+   *  copies; they are un-docked (with the unconfirmed notice) when it
+   *  settles. Owned by the pending request; undefined when none is. */
+  uncoveredDockIds?: string[]
 }
 export function createInputActions(
   getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit' | 'notify' | 'backendCapabilities'>,
@@ -135,13 +143,20 @@ export function createInputActions(
      *  the abort drops the backend's queued copies and the channel PARKS its
      *  previews as a dock — nothing re-delivers them until the user sends
      *  the dock (⏎ / deliverDocked) or retracts items (Alt+↑ / the ↑
-     *  editor). Returns the count docked; 0 means nothing new was parked
+     *  editor). The dock is a CLAIM that the backend dropped its copies,
+     *  and only a confirmed cancel receipt can vouch for it: a `confirmed`
+     *  answer keeps the dock (minus the ids the backend says it kept),
+     *  while an unknown or failed receipt — or rows docked after the
+     *  request fired, outside its queue snapshot — un-dock with a notice,
+     *  so the one still-live backend copy keeps running instead of being
+     *  sent twice. Returns the count docked; 0 means nothing new was parked
      *  (already-docked rows stay put; the caller may still plain-cancel). */
     interruptAndDock(): number {
       owner.assertActive()
       const state = getState()
       const session = getSession()
       const dockable = state.pending.filter(item => item.docked !== true)
+      const dockedNow = dockable.map(item => item.id)
       if (dockable.length > 0) {
         // Mark BEFORE the cancel fires: the discard events the backend's
         // queue drop produces must not delete the previews — binding-feed
@@ -150,32 +165,57 @@ export function createInputActions(
         state.emit()
       }
       state.cancelPending = true
+      if (input.cancelInFlight && input.cancelCause === 'interrupt' && input.interruptReceiptPending === true) {
+        // The in-flight receipt's queue snapshot predates these rows: it
+        // cannot vouch for their backend copies. They join its uncovered
+        // set and take the conservative un-dock when it settles — never
+        // ride a receipt that never saw them.
+        input.uncoveredDockIds?.push(...dockedNow)
+        return dockable.length
+      }
       // A 'user' cancel already converging KEPT the backend queue
       // (keepInbox); docking over it must still drop that queue or the
       // parked previews would double with the backend's own next-turn run.
-      // An 'interrupt' abort already in flight is already dropping it.
-      if (!input.cancelInFlight || input.cancelCause === 'user') {
-        input.cancelInFlight = true
-        input.cancelCause = 'interrupt'
-        void session.cancel('interrupt')
-          .then(receipt => {
-            // A backend that could not drop its queue answers with the
-            // kept ids (Claude `still_queued`; a CLI without
-            // interrupt_cancel_queued_v1 runs them itself): un-dock those
-            // rows so their previews retire on claim instead of offering a
-            // second send on top of the backend's own.
-            const kept = new Set(receipt.stillQueued)
-            if (kept.size === 0) return
-            let undocked = false
-            state.pending = state.pending.map(item => {
-              if (item.docked !== true || !kept.has(item.id)) return item
-              undocked = true
-              return { ...item, docked: undefined }
-            })
-            if (undocked) state.emit()
+      // An 'interrupt' abort whose receipt already settled is no longer
+      // dropping anything: the new rows need their own request.
+      input.cancelInFlight = true
+      input.cancelCause = 'interrupt'
+      input.interruptReceiptPending = true
+      const uncovered: string[] = []
+      input.uncoveredDockIds = uncovered
+      let settled = false
+      const settle = (outcome: CancelOutcome, stillQueued: readonly string[]): void => {
+        if (settled) return
+        settled = true
+        input.interruptReceiptPending = false
+        if (input.uncoveredDockIds === uncovered) input.uncoveredDockIds = undefined
+        // Every docked row this receipt cannot confirm dropped: the ids the
+        // backend says it kept, plus every row docked after the request
+        // fired (outside its snapshot). Those copies are still live — their
+        // previews go back to the normal claim/discard retirement and the
+        // dock never offers a second send on top of them.
+        const revoke = new Set([...stillQueued, ...uncovered])
+        if (revoke.size > 0) {
+          let undocked = false
+          state.pending = state.pending.map(item => {
+            if (item.docked !== true || !revoke.has(item.id)) return item
+            undocked = true
+            return { ...item, docked: undefined }
           })
-          .catch(() => { /* the dock stands; claims retire what really runs */ })
+          if (undocked) state.emit()
+        }
+        // The unconfirmed legs are loud: a failed or answerless interrupt
+        // must not leave a success-shaped dock (or a silently failed Esc).
+        const notice = outcome === 'failed' ? t('claude-interrupt-failed')
+          : stillQueued.length === 0 && uncovered.length === 0 ? undefined
+          : t('claude-interrupt-unconfirmed')
+        if (notice !== undefined) state.notify(notice, { color: 'warning', timeoutMs: 6000 })
       }
+      void session.cancel('interrupt')
+        .then(receipt => { settle(receipt.outcome, receipt.stillQueued) })
+        // A backend that breaks the receipt contract by throwing gets the
+        // same conservative revocation — the catch must not keep the dock.
+        .catch(() => { settle('failed', dockedNow) })
       return dockable.length
     },
 

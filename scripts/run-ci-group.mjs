@@ -651,8 +651,11 @@ const GROUPS = {
 // claim 照常退场、Ctrl+Enter 连停靠一起立即投且各恰好一次）与 Claude 形
 // 夹具（裸 AgentSession：retractPending=false 下停靠行仍可本地撤回、空
 // still_queued 停靠成立、无 cancelQueued 能力的 CLI 回执 kept id → 撤销
-// 停靠由 discard 正常退场）。UI 层键位（Esc 停靠/⏎ 全发/↑ 选择器/Esc 退
-// 出选择器/Alt+↑ 兼容）在 verify-queue.mjs。
+// 停靠由 discard 正常退场；未确认回执（R2-1）：interrupt 拒绝/旧 CLI 无回执
+// → 撤销停靠+明确 notice+SDK 只接受同意图一份、请求期间停靠的行不乘旧回执
+// 的快照、回执落定后再 Esc 自发新请求、只有确认撤销的副本可重发）。UI 层
+// 键位（Esc 停靠/⏎ 全发/↑ 选择器/Esc 退出选择器/Alt+↑ 兼容）在
+// verify-queue.mjs。
     ["verify-docked-queue", ['node', 'scripts/verify-docked-queue.mjs']],
     ['verify-shell-compat', ['node', 'scripts/verify-shell-compat.mjs']],
     ['verify-agent-lifecycle-compat', ['node', 'scripts/verify-agent-lifecycle-compat.mjs']],
@@ -715,7 +718,9 @@ const GROUPS = {
 // 回显不成气泡、前台 Bash 不建任务卡、attempt.start 先于 delta、工具结果文本）。
     ["verify-claude-translate", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-translate.ts']],
 // Claude 会话生命周期（假 Query，无网络）：开关 ×50 无残留、放置→priority、
-// 取消与 30s 强制收敛（注入时钟）、权限回调必定落定、进程死亡、握手失败。
+// 取消与 30s 强制收敛（注入时钟）、取消回执三态（拒绝=failed/旧 CLI 无回执=
+// unknown/still_queued=confirmed，快照边界不记请求期间新输入，R2-1）、权限回调
+// 必定落定、进程死亡、握手失败。
 // 真实 CLI 的 verify-claude-live / verify-claude-headless 只在
 // DSH_TUI_CLAUDE_LIVE=1 时跑，不进 CI（消耗真实用量、需要凭证）。
     ["verify-claude-session-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-session-lifecycle.ts']],
