@@ -25,8 +25,9 @@ import assert from 'node:assert/strict'
 import type { AgentEvent } from '../src/agent/events.js'
 import { claudeToolRole } from '../src/backends/claude/tools.js'
 import { createClaudeTranslator } from '../src/backends/claude/translate.js'
+import { replayClaudeTranscript } from '../src/backends/claude/replay.js'
 import { buildQueryOptions, OPTION_POLICY } from '../src/backends/claude/options.js'
-import { setLang } from '../src/i18n.js'
+import { setLang, t } from '../src/i18n.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
 
 setLang('en')
@@ -227,6 +228,72 @@ const synced = scenario(f => [
   check('options: tools stays the claude_code preset, never an explicit list',
     same(options.tools, { type: 'preset', preset: 'claude_code' }), options.tools)
   check('options: OPTION_POLICY says the profile sets allowedTools', OPTION_POLICY.allowedTools === 'set', OPTION_POLICY.allowedTools)
+}
+
+// ── ⑦ resume: the task table hands over (R2 review) ──────────────────────
+{
+  const at = (n: number): string => `2026-10-02T12:00:0${n}.000Z`
+  /** A transcript chain whose Task* results carry the structured record (a
+   *  raw transcript file) or do not (the SDK read API drops it). */
+  const chain = (structured: boolean): Rec[] => [
+    { type: 'user', uuid: 'u1', message: { role: 'user', content: 'plan the chores' }, timestamp: at(0) },
+    { type: 'assistant', uuid: 'a1', message: { id: 'm1', content: [{ type: 'tool_use', id: 'c1', name: 'TaskCreate', input: { subject: 'Old chore', description: 'x', activeForm: 'Old form' } }] }, timestamp: at(1) },
+    { type: 'user', uuid: 'r1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'ok' }] }, ...(structured ? { tool_use_result: { task: { id: '1', subject: 'Old chore' } } } : {}), timestamp: at(2) },
+    { type: 'assistant', uuid: 'a2', message: { id: 'm2', content: [{ type: 'tool_use', id: 'c2', name: 'TaskUpdate', input: { taskId: '1', status: 'in_progress' } }] }, timestamp: at(3) },
+    { type: 'user', uuid: 'r2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c2', content: 'ok' }] }, ...(structured ? { tool_use_result: { success: true, taskId: '1', updatedFields: ['status'] } } : {}), timestamp: at(4) },
+  ]
+  /** The live translator of the resumed session, continuing one replay. */
+  const liveSession = (replay: ReturnType<typeof replayClaudeTranscript>) => {
+    const translator = createClaudeTranslator({
+      cwd: '/fixture/project', userRows: 'lifecycle', now,
+      start: { ...replay.start, ...(replay.tasks === undefined ? {} : { tasks: replay.tasks }) },
+    })
+    const events: AgentEvent[] = []
+    for (const frame of [
+      { type: 'assistant', message: { id: 'msg_1', model: 'fixture-model', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'TaskUpdate', input: { taskId: '1', status: 'completed' } }] } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] }, tool_use_result: { success: true, taskId: '1', updatedFields: ['status'], statusChange: { from: 'in_progress', to: 'completed' } } },
+    ] as Rec[]) events.push(...translator.translate(frame))
+    return { events, translator }
+  }
+
+  // Rich raw transcript: the structured results survive, the replay tracks.
+  const rich = replayClaudeTranscript(chain(true), { cwd: '/fixture/project' })
+  check('resume: the replay hands the tracked tasks over as serializable seeds (id/subject/status/activeForm/seq)',
+    JSON.stringify(rich.tasks) === JSON.stringify([{ id: '1', content: 'Old chore', status: 'in_progress', activeForm: 'Old form', seq: 1 }]), rich.tasks)
+  const resumed = liveSession(rich)
+  check('resume: a live update of a replayed id lands on the panel (not silently dropped)',
+    same(items(todosOf(resumed.events).at(-1)), [{ content: 'Old chore', status: 'completed' }]), items(todosOf(resumed.events).at(-1)))
+  const otherSession = createClaudeTranslator({
+    cwd: '/fixture/project', userRows: 'lifecycle', now,
+    start: { ...rich.start, ...(rich.tasks === undefined ? {} : { tasks: rich.tasks }) },
+  })
+  check('resume: seeds are per-session copies — completing one session leaves the other untouched',
+    resumed.translator.taskSeeds()[0]?.status === 'completed' && otherSession.taskSeeds()[0]?.status === 'in_progress',
+    [resumed.translator.taskSeeds()[0]?.status, otherSession.taskSeeds()[0]?.status])
+
+  // SDK shape: the read API dropped the structured records — the result
+  // itself (non-error) is the explicit authority, so the history's own
+  // successful updates complete the table from their named patches.
+  const sdk = replayClaudeTranscript(chain(false), { cwd: '/fixture/project' })
+  check('resume: an SDK-shaped history syncs explicitly from its successful updates (no guessed ids)',
+    JSON.stringify(sdk.tasks) === JSON.stringify([{ id: '1', content: t('claude-task-unnamed', { id: '1' }), status: 'in_progress', seq: 1 }]), sdk.tasks)
+  const filled = liveSession(sdk)
+  const filledWrites = todosOf(filled.events)
+  check('resume: a successful live update of an untracked id completes the table from its patch (honest fallback subject)',
+    filledWrites.length === 1 && same(items(filledWrites[0]), [{ content: t('claude-task-unnamed', { id: '1' }), status: 'completed' }]),
+    filledWrites.map(event => items(event)))
+
+  // The completion stays explicit: a rename-only success (no status known)
+  // and a failed update of an unknown id still create nothing.
+  const quiet = scenario(f => [
+    f.call('TaskUpdate', { taskId: '7', subject: 'Just a rename' }),
+    f.resultOf(1, { success: true, taskId: '7', updatedFields: ['subject'] }),
+    f.call('TaskUpdate', { taskId: '8', status: 'completed' }),
+    f.resultOf(2, { success: false, taskId: '8', updatedFields: [], error: 'no such task' }),
+    f.turnEnd(),
+  ])
+  check('completion: only a status-bearing success of a named unknown id completes the table',
+    quiet.events.every(event => event.type !== 'todo.write'), quiet.events.filter(event => event.type === 'todo.write').map(event => items(event)))
 }
 
 console.log(passed + ' passed')

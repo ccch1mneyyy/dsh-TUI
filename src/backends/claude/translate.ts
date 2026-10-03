@@ -42,7 +42,10 @@ export interface ClaudeTranslatorOptions {
    * (turn, step) — the projector binds attempts by position — nor a
    * replayed `seq` (settled assistant messages are deduplicated by it).
    */
-  readonly start?: { readonly turn: number; readonly seq: number; readonly model?: string }
+  readonly start?: { readonly turn: number; readonly seq: number; readonly model?: string
+    /** The replayed conversation's task table (replay.ts `taskSeeds()`):
+     * seeded as the live table so a resumed TaskUpdate finds its id. */
+    readonly tasks?: readonly ClaudeTaskSeed[] }
 }
 
 type Rec = Readonly<Record<string, unknown>>
@@ -320,6 +323,22 @@ interface TrackedTask {
 }
 
 /**
+ * One tracked task as a resumed session hands it to its live translator (R2
+ * review: the replayed conversation's task table must continue live — a
+ * resumed TaskUpdate names an id the replay already tracked; a fresh empty
+ * table would silently drop every such update). Serializable: the replay and
+ * the live session are two translator instances.
+ */
+export interface ClaudeTaskSeed {
+  readonly id: string
+  readonly content: string
+  readonly status: TodoPanelItem['status']
+  readonly activeForm?: string
+  /** Creation order: the snapshot's row order. */
+  readonly seq: number
+}
+
+/**
  * The translator's own state as the working-activity fold reads it (the
  * Claude counterpart of the DSH working-activity plugin's inputs): everything
  * the working line shows, already tracked here, so the fold (activity.ts)
@@ -405,6 +424,18 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   const trackedTasks = new Map<string, TrackedTask>()
   /** Task creation counter: the snapshots' row order. */
   let taskSeq = 0
+  // The resumed conversation's tasks start as the live table (R2 review):
+  // each translator owns its own Map, so two sessions seeded from the same
+  // replay never share one.
+  for (const seed of options.start?.tasks ?? []) {
+    trackedTasks.set(seed.id, {
+      content: seed.content,
+      status: seed.status,
+      ...(seed.activeForm === undefined ? {} : { activeForm: seed.activeForm }),
+      seq: seed.seq,
+    })
+    taskSeq = Math.max(taskSeq, seed.seq)
+  }
   /** Wall clock the open (or last) turn began (the activity fold's anchor). */
   let turnTime = 0
   /** Main-lane tool results settled in the open turn (the fold's toolCount). */
@@ -422,6 +453,20 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     type: 'todo.write',
     items: [...trackedTasks.entries()].sort((a, b) => a[1].seq - b[1].seq).map(([, task]) => ({ content: task.content, status: task.status })),
   })
+
+  /** A task status the panel shows (`deleted` is not one — it removes). */
+  const panelStatus = (value: unknown): TodoPanelItem['status'] | undefined =>
+    value === 'pending' || value === 'in_progress' || value === 'completed' ? value : undefined
+
+  /** The tracked tasks as resume seeds (creation order; see {@link ClaudeTaskSeed}). */
+  const taskSeeds = (): readonly ClaudeTaskSeed[] =>
+    [...trackedTasks.entries()].sort((a, b) => a[1].seq - b[1].seq).map(([id, task]) => ({
+      id,
+      content: task.content,
+      status: task.status,
+      ...(task.activeForm === undefined ? {} : { activeForm: task.activeForm }),
+      seq: task.seq,
+    }))
 
   /** A task record from a Task* result (`{id, subject, status}`), narrowed;
    *  undefined when the record is missing or not a panel status. */
@@ -966,6 +1011,27 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         // Every settled main-lane result is one tool done this turn (the
         // working line's toolCount; plan-mode tools continue'd above).
         toolResults += 1
+        // A successful TaskUpdate of an id this table never tracked (R2
+        // review): the resumed transcript's structured results can be gone
+        // (the read API drops them; a compaction may cut the creating turn
+        // away) — the CLI confirming the patch still proves the task exists,
+        // so the table completes from the patch itself, naming only the id
+        // the patch named (never a guess). A failure result creates nothing.
+        if (call !== undefined && !isError && rec(structured)?.success !== false && call.name === 'TaskUpdate') {
+          const patch = rec(call.input)
+          const record = rec(structured)
+          const id = str(patch?.taskId) ?? str(record?.taskId)
+          const status = panelStatus(patch?.status) ?? panelStatus(rec(record?.statusChange)?.to)
+          if (id !== undefined && status !== undefined && !trackedTasks.has(id)) {
+            trackedTasks.set(id, {
+              content: str(patch?.subject) ?? t('claude-task-unnamed', { id }),
+              status,
+              ...(str(patch?.activeForm) === undefined ? {} : { activeForm: str(patch?.activeForm) }),
+              seq: ++taskSeq,
+            })
+            out.push(taskSnapshot())
+          }
+        }
         // The task family (2.1.284+): a create's record names the id its
         // call lacked; a list/get result is the authoritative state and
         // overwrites what the inputs built (the CLI owns the tasks).
@@ -1526,6 +1592,9 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     get turnNumber(): number { return turn },
     /** The last event sequence number used. */
     get seqNumber(): number { return seq },
+    /** The tracked tasks as serializable resume seeds (replay.ts hands these
+     *  to the live translator of the resumed session). */
+    taskSeeds,
     /**
      * Open the CLI's own turn that follows a task notification (replay: the
      * transcript records it as a `task-notification` prompt; live, the

@@ -223,7 +223,6 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   // let go: a long transcript's events must not live as long as the session.
   const { resume, ...deps } = input
   const resumed = resume !== undefined
-  const resumeStart = resume?.start
   const compactedFrom = resume?.compactedFrom
   let replayHistory: readonly AgentEvent[] | undefined = resume?.events
   /** The CLI's current session id: the opened one until a
@@ -282,7 +281,14 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       else waiter.reject(error)
     }
   }
-  const translator = createClaudeTranslator({ cwd: deps.cwd, userRows: 'lifecycle', debug: deps.host.debug, ...(resumeStart === undefined ? {} : { start: resumeStart }) })
+  const translator = createClaudeTranslator({
+    cwd: deps.cwd,
+    userRows: 'lifecycle',
+    debug: deps.host.debug,
+    // The replayed conversation's task table continues live (R2 review):
+    // resume carries it beside the counters the numbering needs.
+    ...(resume === undefined ? {} : { start: { ...resume.start, ...(resume.tasks === undefined || resume.tasks.length === 0 ? {} : { tasks: resume.tasks }) } }),
+  })
   translator.noteMode(deps.start.mode)
 
   // The working line's publisher (activity.ts): folded from the translator's

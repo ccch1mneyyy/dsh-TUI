@@ -280,6 +280,7 @@ const dict = {
   'claude-open-fork-unsupported': { zh: 'Claude 后端经 /fork 生成分叉，不直接打开分叉目标', en: 'The Claude backend forks through /fork, not by opening a fork target' },
   'claude-rewind-files-unavailable': { zh: '该会话没有可用的文件检查点', en: 'No file checkpoints are available for this session' },
   'claude-fork-empty': { zh: '会话还没有保存任何消息，无可分叉的内容', en: 'Nothing to fork yet — the session has no saved messages' },
+  'claude-task-unnamed': { zh: '任务 {{id}}（标题未恢复）', en: 'Task {{id}} (subject not recovered)' },
   'claude-task-output-refused': { zh: '不读取任务 {{id}} 的输出：路径不在 Claude 的目录内', en: 'Not reading the output of task {{id}}: the path is outside the Claude directories' },
   'claude-task-output-missing': { zh: '任务 {{id}} 的输出文件还不存在', en: 'The output file of task {{id}} does not exist yet' },
   'claude-task-output-unknown': { zh: '任务 {{id}} 没有报告输出文件', en: 'Task {{id}} reported no output file' },
