@@ -54,14 +54,11 @@ export function HomeWorkspaceRow({
 }): React.ReactNode {
   const [hovered, setHovered] = useState(false)
   const body = Math.max(8, width - 4)
-  // The presence marker leads the badge on purpose: `spreadRow` may truncate
-  // the right-hand segment, and "this directory is gone" is the one fact that
-  // must never be the part that gets cut (the session count is also visible in
-  // the pane, the missing directory is not).
-  const count = t('home-sessions-count', { n: sessionCount })
-  const badge = present ? count : `${t('home-workspace-missing')} · ${count}`
+  // The pane already labels the count; keep the rail's badge numeric and use
+  // its selected ring rather than a second check mark for the same state.
+  const badge = present ? String(sessionCount) : `${t('home-workspace-missing')} · ${sessionCount}`
   const name = historyOnly ? `${t('supervisor-history-only')} · ${title}` : title
-  const heading = spreadRow(`${selected ? '▣' : '▢'} ${name}`, `${selected ? '✓ ' : ''}${badge}`, body)
+  const heading = spreadRow(`${selected ? '▣' : '▢'} ${name}`, badge, body)
   const detail = formatProject(path, home)
   // The cursor (green) outranks the selection ring (green); both outrank the
   // idle colour. Blue is not part of this ladder at all — see the background.
