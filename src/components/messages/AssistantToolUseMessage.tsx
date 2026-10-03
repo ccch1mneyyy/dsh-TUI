@@ -5,7 +5,7 @@ import { stringWidth } from '../../ink/stringWidth.js'
 import { useAnimationFrame } from '../../ink/hooks/use-animation-frame.js'
 import type { ToolCallView, ToolFileDiff, ToolResultView, ToolRow } from '../../dsh-adapter/channel.js'
 import { ToolUseLoader } from '../ToolUseLoader.js'
-import { SplitDiffView } from '../SplitDiffView.js'
+import { SplitDiffView, UnifiedDiffView } from '../SplitDiffView.js'
 import { SyntaxText } from '../SyntaxText.js'
 import { useTooltip } from '../Tooltip.js'
 import { formatDuration } from '../../terminal-utils/format.js'
@@ -46,6 +46,8 @@ type Props = {
   footnote?: string
   /** Diff presentation preference; `auto` picks by terminal width. */
   diffLayout?: 'auto' | 'split' | 'unified'
+  /** Diff look: `default` −/+ rows, or `bars` (▌ bars + row tint). */
+  diffStyle?: 'default' | 'bars'
   /** Background treatment for the ordinary, unselected tool card surface. */
   toolBackground?: ToolBackground
   /**
@@ -528,6 +530,7 @@ export function AssistantToolUseMessage({
   onClick,
   footnote,
   diffLayout = 'auto',
+  diffStyle = 'default',
   toolBackground = 'none',
   onOpenFile,
   foldTerminalCommand = false,
@@ -609,10 +612,12 @@ export function AssistantToolUseMessage({
     - (!isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0))
   const useSplitDiff = !isError && view?.card === 'diff' &&
     (diffLayout === 'split' || (diffLayout !== 'unified' && columns >= SPLIT_DIFF_MIN_COLS))
+  const useBarsDiff = !isError && view?.card === 'diff' && diffStyle === 'bars'
+  const useDiffView = useSplitDiff || useBarsDiff
   let body: BodyLine[] = []
   if (isError) {
     if (tool.errorText) body = [{ text: tool.errorText, tone: 'error' }]
-  } else if (!useSplitDiff) {
+  } else if (!useDiffView) {
     if (view !== undefined) body = viewLines(view)
     if (body.length === 0 && result) {
       body = result.trimEnd().split('\n').map(plain)
@@ -648,14 +653,6 @@ export function AssistantToolUseMessage({
     : rendered.length
   const shownLines: BodyLine[] =
     revealedLineCount >= rendered.length ? rendered : rendered.slice(0, revealedLineCount)
-  // Nested split-diff context panes must also yield to interaction highlights.
-  // `none` leaves them transparent so the selected/expanded root shows through.
-  const ordinaryToolBackground = isSelected || isExpanded ? 'none' : toolBackground
-  const ordinaryBackground = ordinaryToolBackground === 'subtle'
-    ? 'toolCardBackgroundDim'
-    : ordinaryToolBackground === 'strong'
-      ? 'toolCardBackground'
-      : undefined
   // Hover affordance for the click-to-toggle row: the theme's tool-card blue
   // face marks the call's content area while the pointer dwells (the
   // toolBackground treatment steps up one level to the strong card face), the
@@ -665,6 +662,14 @@ export function AssistantToolUseMessage({
   // body never moves.
   const [hovered, setHovered] = React.useState(false)
   const hoverTint = interactive && hovered && !isSelected
+  // Nested split-diff context panes must also yield to interaction highlights.
+  // `none` leaves them transparent so the selected/hovered/expanded root shows through.
+  const ordinaryToolBackground = isSelected || isExpanded || hoverTint ? 'none' : toolBackground
+  const ordinaryBackground = ordinaryToolBackground === 'subtle'
+    ? 'toolCardBackgroundDim'
+    : ordinaryToolBackground === 'strong'
+      ? 'toolCardBackground'
+      : undefined
 
   return (
     <Box
@@ -700,19 +705,33 @@ export function AssistantToolUseMessage({
             </Box>
           )}
         </Box>
-        {useSplitDiff && view?.card === 'diff' ? (
+        {useDiffView && view?.card === 'diff' ? (
           <Box flexDirection="row">
             <Box width={3} flexShrink={0}>
               <Text dimColor>{GUTTER_FIRST}</Text>
             </Box>
-            <SplitDiffView
-              diffs={view.diffs}
-              width={columns - 4}
-              maxRows={DIFF_BODY_MAX_LINES}
-              verbose={verbose}
-              toolBackground={ordinaryToolBackground}
-              reveal={revealable ? { key: `${revealKey}:split` } : undefined}
-            />
+            {useSplitDiff ? (
+              <SplitDiffView
+                diffs={view.diffs}
+                width={columns - 4}
+                maxRows={DIFF_BODY_MAX_LINES}
+                verbose={verbose}
+                toolBackground={ordinaryToolBackground}
+                reveal={revealable ? { key: `${revealKey}:split` } : undefined}
+                bars={useBarsDiff}
+                onOpenFile={onOpenFile}
+              />
+            ) : (
+              <UnifiedDiffView
+                diffs={view.diffs}
+                width={columns - 4}
+                maxRows={DIFF_BODY_MAX_LINES}
+                verbose={verbose}
+                toolBackground={ordinaryToolBackground}
+                reveal={revealable ? { key: `${revealKey}:unified` } : undefined}
+                onOpenFile={onOpenFile}
+              />
+            )}
           </Box>
         ) : (
           shownLines.map((line, index) => (
@@ -774,7 +793,7 @@ export function AssistantToolUseMessage({
             </Box>
           ))
         )}
-        {useSplitDiff && footnote !== undefined && (
+        {useDiffView && footnote !== undefined && (
           <Box flexDirection="row">
             <Box width={3} flexShrink={0}>
               <Text dimColor>{GUTTER_REST}</Text>
