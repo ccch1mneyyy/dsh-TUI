@@ -10,6 +10,10 @@
  *    cancel on a CLI advertising it) and the confirmation clears the
  *    force-settle timer; with no confirmation the injected 30 s clock
  *    force-closes the turn with a notice and `requires-action`;
+ *  - the cancel receipt carries its certainty (R2-1): rejection → failed,
+ *    an older CLI's undefined answer → unknown, still_queued → confirmed;
+ *    the unconfirmed legs return the covered uuids (snapshot before the
+ *    request — inputs pushed during it never ride the old batch);
  *  - a permission prompt is always settled: it parks as `permission.request`
  *    (the full matrix lives in verify-claude-permissions); an unanswered
  *    prompt is settled by the SDK's abort signal and by dispose;
@@ -84,7 +88,7 @@ type Options = Parameters<typeof buildQueryOptions>[0]
 type QueryParams = { prompt: AsyncIterable<Record<string, unknown>>; options: ReturnType<typeof buildQueryOptions> }
 
 /** A fake `Query`: the test pushes SDK messages; the session pushes inputs. */
-function fakeSdk(behaviour: { initFails?: boolean; capabilities?: string[]; init?: (index: number) => Record<string, unknown> } = {}) {
+function fakeSdk(behaviour: { initFails?: boolean; capabilities?: string[]; init?: (index: number) => Record<string, unknown>; interrupt?: (options?: unknown) => Promise<unknown> } = {}) {
   const queries: ReturnType<typeof makeQuery>[] = []
   function makeQuery(params: QueryParams) {
     const outbox: unknown[] = []
@@ -118,7 +122,7 @@ function fakeSdk(behaviour: { initFails?: boolean; capabilities?: string[]; init
         : Promise.resolve(behaviour.init === undefined
           ? { capabilities: behaviour.capabilities ?? ['msg_lifecycle_v1', 'interrupt_receipt_v1', 'interrupt_cancel_queued_v1'] }
           : behaviour.init(queries.length)),
-      interrupt(options?: unknown) { interrupts.push(options ?? null); return Promise.resolve({ still_queued: [] }) },
+      interrupt(options?: unknown) { interrupts.push(options ?? null); return behaviour.interrupt === undefined ? Promise.resolve({ still_queued: [] }) : behaviour.interrupt(options) },
       applyFlagSettings(options?: unknown) { flagSettings.push(options ?? null); return Promise.resolve({}) },
       close() { closed = true; ended = true; settle() },
       [Symbol.asyncIterator]() {
@@ -249,6 +253,81 @@ const collect = (session: AgentSession) => {
   check('the session asks for attention', tail.some(event => event.type === 'session.status' && event.status === 'requires-action'))
   await session.dispose()
   check('no timer after dispose', outstanding() === 0)
+}
+
+// ── cancel receipts: failure never reads as an empty queue (R2-1) ─────
+// A rejected or answerless interrupt used to answer stillQueued [] — a
+// success-shaped receipt over a queue whose state was never confirmed.
+// The channel's dock would then offer a re-send over still-live backend
+// copies. The receipt now carries its certainty: only a CLI that answered
+// with still_queued is 'confirmed'; the other legs return the covered
+// snapshot (what the cancel saw, never what arrived during the request).
+{
+  const uuid = (tag: string): string => `00000000-0000-4000-8000-0000000000${tag}`
+  const queueOne = async (session: AgentSession, id: string): Promise<void> => {
+    await session.submit({ text: 'queued', clientMessageId: id }, 'followup')
+    await tick()
+  }
+  // (1) interrupt rejection → failed + the covered uuids.
+  {
+    const { clock } = manualClock()
+    const fake = fakeSdk({ interrupt: () => Promise.reject(new Error('interrupt refused')) })
+    const session = await openClaudeSession(baseDeps(fake.sdk, clock))
+    await queueOne(session, uuid('d1'))
+    const receipt = await session.cancel('interrupt')
+    check('receipt: a rejected interrupt is failed, never queue-empty', receipt.outcome === 'failed' && JSON.stringify(receipt.stillQueued) === JSON.stringify([uuid('d1')]), receipt)
+    await session.dispose()
+  }
+  // (2) an older CLI resolves interrupt() to undefined (sdk.d.ts) →
+  // unknown + the covered uuids; no cancel_queued was ever sent.
+  {
+    const { clock } = manualClock()
+    const fake = fakeSdk({ capabilities: ['msg_lifecycle_v1'], interrupt: () => Promise.resolve(undefined) })
+    const session = await openClaudeSession(baseDeps(fake.sdk, clock))
+    await queueOne(session, uuid('d2'))
+    const receipt = await session.cancel('interrupt')
+    check('receipt: no receipt (older CLI) is unknown and covers the queue', receipt.outcome === 'unknown' && JSON.stringify(receipt.stillQueued) === JSON.stringify([uuid('d2')]), receipt)
+    check('receipt: no cancel_queued without the capability', JSON.stringify(fake.queries[0]!.interrupts) === JSON.stringify([null]), fake.queries[0]!.interrupts)
+    await session.dispose()
+  }
+  // (3) an explicit cancelled receipt (still_queued []) → confirmed empty.
+  {
+    const { clock } = manualClock()
+    const fake = fakeSdk({ interrupt: () => Promise.resolve({ still_queued: [] }) })
+    const session = await openClaudeSession(baseDeps(fake.sdk, clock))
+    await queueOne(session, uuid('d3'))
+    const receipt = await session.cancel('interrupt')
+    check('receipt: explicit cancelled is confirmed empty', receipt.outcome === 'confirmed' && receipt.stillQueued.length === 0, receipt)
+    check('receipt: cancel_queued rode the request', JSON.stringify(fake.queries[0]!.interrupts) === JSON.stringify([{ cancelQueued: true }]), fake.queries[0]!.interrupts)
+    await session.dispose()
+  }
+  // (4) an explicit still_queued receipt → confirmed with the kept ids.
+  {
+    const { clock } = manualClock()
+    const fake = fakeSdk({ interrupt: () => Promise.resolve({ still_queued: [uuid('d4')] }) })
+    const session = await openClaudeSession(baseDeps(fake.sdk, clock))
+    await queueOne(session, uuid('d4'))
+    const receipt = await session.cancel('interrupt')
+    check('receipt: explicit still_queued is confirmed with the kept ids', receipt.outcome === 'confirmed' && JSON.stringify(receipt.stillQueued) === JSON.stringify([uuid('d4')]), receipt)
+    await session.dispose()
+  }
+  // (5) the snapshot boundary: an input pushed while the request is in
+  // flight belongs to a newer batch — the fallback neither covers nor
+  // claims to have cancelled it.
+  {
+    const { clock } = manualClock()
+    let releaseInterrupt!: (value: unknown) => void
+    const fake = fakeSdk({ interrupt: () => new Promise(resolve => { releaseInterrupt = resolve }) })
+    const session = await openClaudeSession(baseDeps(fake.sdk, clock))
+    await session.submit({ text: 'before', clientMessageId: uuid('d5') }, 'followup')
+    await tick()
+    const pending = session.cancel('interrupt')
+    await session.submit({ text: 'during', clientMessageId: uuid('d6') }, 'followup')
+    releaseInterrupt(undefined)
+    const receipt = await pending
+    check('receipt: the covered snapshot predates the request window', receipt.outcome === 'unknown' && JSON.stringify(receipt.stillQueued) === JSON.stringify([uuid('d5')]), receipt)
+    await session.dispose()
+  }
 }
 
 // ── permissions ───────────────────────────────────────────────────────

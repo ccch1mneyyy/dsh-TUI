@@ -324,7 +324,10 @@ export interface AgentSession {
   subscribe(listener: (batch: readonly AgentEvent[], meta: { replay: boolean }) => void): () => void
   submit(input: AgentInput, placement: SubmitPlacement): Promise<{ accepted: boolean; reason?: string }>
   removePending(clientMessageId: string): Promise<boolean>
-  cancel(cause: 'user' | 'switch' | 'dispose'): Promise<{ stillQueued: readonly string[] }>
+  cancel(cause: 'user' | 'interrupt' | 'switch' | 'dispose'): Promise<CancelReceipt>
+  // CancelReceipt = { stillQueued: readonly string[]; outcome: 'confirmed' | 'unknown' | 'failed' }
+  // 只有 confirmed 的 stillQueued 是后端存活快照；unknown/failed 携带请求前快照——
+  // 未确认的取消绝不编码为「队列已空」（停靠/重发据此判定，R2-1）
   dispose(): Promise<void>
 }
 

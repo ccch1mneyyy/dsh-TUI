@@ -1146,7 +1146,8 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     // No synchronous withdrawal (`retractPending` absent): never called.
     removePending: () => false,
     async cancel(cause: CancelCause) {
-      if (disposing) return { stillQueued: [] }
+      // The session is going away; nothing queues behind a disposed CLI.
+      if (disposing) return { stillQueued: [], outcome: 'unknown' }
       if (translator.turnOpen && forceTimer === undefined) {
         forceTimer = clock.setTimeout(() => {
           forceTimer = undefined
@@ -1168,17 +1169,32 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       // A CLI without the capability keeps its queue and runs it — the
       // cancel receipt's `still_queued` tells the channel, which un-docks.
       const cancelQueued = cause !== 'user' && cliCapabilities.includes(CLI_CAPABILITY.interruptCancelQueued)
+      // The queued-input previews this cancel covers and has not confirmed
+      // deleted, snapshotted BEFORE the request fires: an input pushed while
+      // the request is in flight belongs to a newer batch and never rides
+      // this receipt. Without a confirmed `still_queued` answer the snapshot
+      // IS the receipt's stillQueued — an answerless or failed interrupt
+      // must never read as a definite empty queue (the dock would sell a
+      // still-live backend copy as safe to re-send).
+      const covered = translator.pendingInputs()
       // The documented `cancel_queued` interrupt field is reachable through
       // the runtime method's option bag (absent from the TS signature).
       const query = run.query
       const interrupt = query.interrupt as (options?: { cancelQueued?: boolean }) => Promise<unknown>
       try {
         const receipt = rec(await interrupt.call(query, cancelQueued ? { cancelQueued: true } : undefined))
-        const stillQueued = Array.isArray(receipt?.still_queued) ? receipt.still_queued.filter((id): id is string => typeof id === 'string') : []
-        return { stillQueued }
+        if (Array.isArray(receipt?.still_queued)) {
+          // The receipt's `still_queued` is the CLI's live queue snapshot:
+          // exactly the uuids that WILL still run (sdk.d.ts).
+          const stillQueued = receipt.still_queued.filter((id): id is string => typeof id === 'string')
+          return { stillQueued, outcome: 'confirmed' }
+        }
+        // An older CLI resolves interrupt() to undefined (sdk.d.ts): no
+        // snapshot came back, nothing is confirmed deleted.
+        return { stillQueued: covered, outcome: 'unknown' }
       } catch (error) {
         deps.host.debug(`claude: interrupt failed (${errorText(error)})`)
-        return { stillQueued: [] }
+        return { stillQueued: covered, outcome: 'failed' }
       }
     },
     dispose(): Promise<void> {

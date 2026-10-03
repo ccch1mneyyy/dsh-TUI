@@ -305,7 +305,10 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
       // switch/dispose never resumes the old queue either.
       if (cause === 'user') agent.cancel({ kind: 'user' }, { keepInbox: true })
       else agent.cancel({ kind: 'user' })
-      return Promise.resolve({ stillQueued: cause === 'user' ? [...pending.keys()] : [] })
+      // The kernel cancel settles its bookkeeping synchronously: the answer
+      // is definitive either way (kept ids for a 'user' cancel, an emptied
+      // queue otherwise).
+      return Promise.resolve({ stillQueued: cause === 'user' ? [...pending.keys()] : [], outcome: 'confirmed' })
     },
 
     dispose(): Promise<void> {
