@@ -285,11 +285,15 @@ export class TerminalQuerier {
    * Never rejects; never times out on its own. If you never call flush()
    * and the terminal doesn't respond, the promise remains pending.
    * @param query - the query to send and await a response for.
+   * @param options - `alreadySent` registers a query whose request bytes are
+   *   already in the output stream (a caller embedded them in a frame write);
+   *   nothing is written here, only the pending entry is created.
    * @returns the matched response, or undefined when the terminal did not
    *   answer before the next flush() sentinel.
    */
   send<T extends TerminalResponse>(
     query: TerminalQuery<T>,
+    options?: { readonly alreadySent?: boolean },
   ): Promise<T | undefined> {
     if (this.disposed || this.suspended) return Promise.resolve(undefined)
     return new Promise(resolve => {
@@ -300,7 +304,7 @@ export class TerminalQuerier {
         resolve: r => resolve(r as T | undefined),
         releaseRawMode: this.holdRawMode(),
       })
-      this.stdout.write(query.request)
+      if (options?.alreadySent !== true) this.stdout.write(query.request)
     })
   }
 
