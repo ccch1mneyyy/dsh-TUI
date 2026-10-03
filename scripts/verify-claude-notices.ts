@@ -109,7 +109,11 @@ const only = (events: readonly AgentEvent[]): Notice | undefined => notices(even
   const synthesized = only(run('memory_recall_synthesize'))
   check('memory_recall (synthesize) → a row saying it was distilled', synthesized?.level === 'info' && synthesized.text === t('claude-memory-synthesized'))
   const reset = run('conversation_reset')
-  check('conversation_reset → session.reset with its trigger', reset.length === 1 && reset[0]!.type === 'session.reset' && reset[0]!.trigger === 'plan_mode_exit')
+  const resetEvent = reset.at(-1)
+  check('conversation_reset → session.reset with its trigger (whatever was open closes first, no notice)',
+    resetEvent?.type === 'session.reset' && resetEvent.trigger === 'plan_mode_exit'
+      && reset.some(event => event.type === 'turn.end' && event.reason.kind === 'aborted') && notices(reset).length === 0,
+    reset.map(event => event.type))
   check('elicitation_complete → nothing in the transcript (the session closes the panel)', run('elicitation_complete').length === 0)
 }
 

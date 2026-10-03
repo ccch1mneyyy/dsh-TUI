@@ -376,7 +376,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   let attempt: OpenAttempt | undefined
   /** API message ids already settled (late duplicate blocks are ignored). */
   const settledAttempts = new Set<string>()
-  const openCalls = new Map<string, { readonly name: string; readonly input: unknown; readonly turn: number }>()
+  const openCalls = new Map<string, { readonly name: string; readonly input: unknown; readonly turn: number; readonly lane?: string }>()
   const inputs = new Map<string, RegisteredInput>()
   /** Registered inputs the CLI already started whose echo (the user row of
    *  the replay fallback) has not arrived yet. */
@@ -799,7 +799,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         const callId = str(block.id)
         const name = str(block.name)
         if (callId === undefined || name === undefined) continue
-        openCalls.set(callId, { name, input: block.input, turn })
+        openCalls.set(callId, { name, input: block.input, turn, lane })
         const presentation = presentClaudeToolCall(name, block.input, options.cwd)
         out.push({
           type: 'tool.call',
@@ -1519,6 +1519,41 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     return out
   }
 
+  /**
+   * The conversation this translator tracked is gone (R2 review): the CLI
+   * continues under a new session id with a cleared context, so the old
+   * conversation's plan-tracking tasks, its pending optimistic patches, its
+   * unsettled main-lane tool contexts and its expectation markers must not
+   * leak into the new one (the CLI reuses short task ids, so a stale table
+   * could even mismatch a fresh TaskCreate). Kept: the queued-inputs
+   * contract (inputs this session pushed still run), the monotonic turn /
+   * seq numbering (the projector binds by position), and the identities of
+   * unended background process tasks — a backgrounded command or subagent
+   * outlives the reset and its notification still arrives.
+   */
+  const resetConversation = (): void => {
+    trackedTasks.clear()
+    taskSeq = 0
+    taskPreImages.clear()
+    for (const [callId, call] of openCalls) if (call.lane === undefined) openCalls.delete(callId)
+    deniedReasons.clear()
+    settledAttempts.clear()
+    summaryExpected = false
+    compactRequested = false
+    notificationTurnExpected = false
+    narrated = undefined
+    toolResults = 0
+    // Foreground tasks of the old conversation are gone with it (their
+    // notification never comes); background ones keep their identity.
+    for (const [taskId, kind] of [...taskKinds]) {
+      if (kind !== 'foreground') continue
+      taskKinds.delete(taskId)
+      taskInfo.delete(taskId)
+      hiddenTasks.delete(taskId)
+      for (const [callId, laneTask] of [...laneTasks]) if (laneTask === taskId) laneTasks.delete(callId)
+    }
+  }
+
   /** Translate one SDK message (declared or not). */
   const translate = (raw: unknown): readonly AgentEvent[] => {
     const message = rec(raw)
@@ -1559,8 +1594,15 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         const error = str(message.error)
         return error === undefined || error.trim() === '' ? [] : [{ type: 'notice', level: 'error', key: 'auth-status', text: t('claude-auth-status-error', { error }) }]
       }
-      case 'conversation_reset':
-        return [{ type: 'session.reset', trigger: str(message.trigger) ?? 'reset' }]
+      case 'conversation_reset': {
+        // Close whatever the old conversation left open first (an aborted
+        // turn.end before the reset clears the working line; the channel's
+        // reset then drops the row it would append), then drop its state.
+        const out = forceCloseTurn({ kind: 'aborted' })
+        resetConversation()
+        out.push({ type: 'session.reset', trigger: str(message.trigger) ?? 'reset' })
+        return out
+      }
       default:
         debug(`claude: ${type} ignored`)
         return []
