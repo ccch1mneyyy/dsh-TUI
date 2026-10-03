@@ -919,7 +919,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   check('Q3 有后台任务在跑：条件位显示「后台任务」（优先级①）',
     await settled(() => chat.screen().includes('后台任务') && !chat.screen().includes('帮助')),
     chat.screen().slice(0, 200))
-  for (let i = 0; i < 7; i++) await chat.send('\u001b[B') // 第三条入口 = 后台任务
+  for (let i = 0; i < 8; i++) await chat.send('\u001b[B') // 条件位（第五格）= 后台任务；内核入口插入后多一格
   await chat.send('\r')
   check('Q3b 后台任务入口：任务面板上屏、盖在落地页之上',
     await settled(() => !chat.screen().includes('说点什么') && chat.screen().includes('pnpm test')),
