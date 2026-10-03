@@ -295,10 +295,12 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         const existing = deps.channels.read().channels.find(channel => channel.id === draft.id)
         const imported = existing === undefined ? draft : importFromSettingsEnv(env, existing) ?? draft
         // Phase 3: the settings env's auth token, when present, moves into
-        // the credential store — the profile keeps only the derived ref, so
-        // channels.json never carries a literal token.
+        // the credential store — the profile keeps only the ref, so
+        // channels.json never carries a literal token. The import is a COPY
+        // (settings keeps its value); it rotates the row's EXISTING ref when
+        // the channel already holds one (R3-6), else the derived ref.
         const token = importTokenFromSettingsEnv(env)
-        const ref = channelTokenRef(imported.id)
+        const ref = existing?.tokenRef ?? channelTokenRef(imported.id)
         const profile: ClaudeChannelProfile = token !== undefined && deps.tokens !== undefined
           ? { ...imported, tokenRef: ref }
           : imported
@@ -308,17 +310,21 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       },
       save: input => {
         const current = deps.channels.read().channels.find(channel => channel.id === input.id)
-        const ref = channelTokenRef(input.id)
         // The token, when the wizard collected one, lives in the credential
-        // store; '' removes it (and the profile's ref with it).
+        // store; '' removes it (and the profile's ref with it). A rotation
+        // (R3-6) reuses the row's EXISTING ref — a hand-written or migrated
+        // tokenRef keeps pointing at its credential instead of being left
+        // behind in the store while the row moves to the derived ref; only
+        // a row without one adopts the derived ref.
         let storedTokenRef = current?.tokenRef
         if (input.token !== undefined && deps.tokens !== undefined) {
           if (input.token === '') {
             if (storedTokenRef !== undefined) deps.tokens.erase(storedTokenRef)
             storedTokenRef = undefined
           } else {
-            deps.tokens.write(ref, input.token)
-            storedTokenRef = ref
+            const target = storedTokenRef ?? channelTokenRef(input.id)
+            deps.tokens.write(target, input.token)
+            storedTokenRef = target
           }
         }
         const profile: ClaudeChannelProfile = {
@@ -336,7 +342,15 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       remove: id => {
         const current = deps.channels.read().channels.find(channel => channel.id === id)
         if (current === undefined) return false
-        if (current.tokenRef !== undefined) deps.tokens?.erase(current.tokenRef)
+        // R3-6: only the channel's OWN derived ref is provably ours to erase.
+        // A hand-written or migrated tokenRef may be shared with another
+        // channel or owned by the host — "referenced" is not "exclusively
+        // deletable" — so it stays in the store (reported to the debug log;
+        // the ref name is not secret, it lives in channels.json).
+        if (current.tokenRef !== undefined) {
+          if (current.tokenRef === channelTokenRef(id)) deps.tokens?.erase(current.tokenRef)
+          else deps.debug(`claude: channel ${id} removed; its non-derived tokenRef ${current.tokenRef} stays in the store (possibly shared - erase by hand if truly orphaned)`)
+        }
         deps.channels.remove(id)
         return true
       },

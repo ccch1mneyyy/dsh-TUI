@@ -650,6 +650,63 @@ const init = {
   }
 }
 
+// ---- 12b. R3-6: tokenRef ownership (rotation reuse, conservative erase) ---
+{
+  const dir = mkdtempSync(join(tmpdir(), 'dshtui-channels-refs-'))
+  const store = fileClaudeChannels(dir)
+  const tokens = memoryClaudeChannelTokens()
+  // Hand-migrated profiles pointing at foreign-shaped refs, one of them
+  // SHARED by a second channel — the shapes the derived-ref-only paths left
+  // behind as orphans (R3-6's probe).
+  store.save({ id: 'legacy-example', name: 'legacy', baseUrl: 'https://legacy.example/api', tokenRef: 'LEGACY_REF' })
+  store.save({ id: 'sibling', name: 'sibling', tokenRef: 'SHARED_REF' })
+  tokens.write('LEGACY_REF', 'old-secret')
+  tokens.write('SHARED_REF', 'shared-secret')
+  const envDir = mkdtempSync(join(tmpdir(), 'dshtui-channels-refs-env-'))
+  const settingsText = JSON.stringify({ env: {
+    ANTHROPIC_BASE_URL: 'https://legacy.example/api',
+    ANTHROPIC_AUTH_TOKEN: 'imported-token',
+  } })
+  writeFileSync(join(envDir, 'settings.json'), settingsText)
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  try {
+    process.env.CLAUDE_CONFIG_DIR = envDir
+    const fake = fakeClaudeSdk(() => ({ capabilities: [], models }), controls)
+    const session = await openClaudeSession(claudeDeps(fake.sdk, { channels: store, channelTokens: tokens }))
+    await tick()
+    const channels = session.capabilities.channels!
+    // (a) a rotation reuses the row's EXISTING ref: no orphaned credential,
+    //     no silent move to the derived ref.
+    const rotated = channels.save!({ id: 'legacy-example', name: 'legacy', token: 'rotated-secret' })
+    check('refs: a rotation reuses the existing (non-derived) ref in place',
+      tokens.read('LEGACY_REF') === 'rotated-secret' && tokens.declared('CHANNEL_LEGACY_EXAMPLE_TOKEN') === false
+        && rotated.connection?.hasToken === true && store.read().channels.find(channel => channel.id === 'legacy-example')?.tokenRef === 'LEGACY_REF', { rotated, rows: store.read() })
+    // (b) the settings import is a COPY rotating the same ref — settings.json
+    //     itself is never touched.
+    const imported = channels.importFromSettings()
+    check('refs: the import rotates the existing ref and never edits settings.json',
+      imported?.connection?.hasToken === true && tokens.read('LEGACY_REF') === 'imported-token'
+        && readFileSync(join(envDir, 'settings.json'), 'utf8') === settingsText, imported)
+    // (c) removing a channel SHARING a ref keeps it (the sibling still reads).
+    check('refs: remove of a ref-sharing channel keeps the shared credential',
+      channels.remove!('sibling') === true && tokens.read('SHARED_REF') === 'shared-secret')
+    // (d) removing the hand-written-ref channel keeps its (possibly foreign)
+    //     credential — only a DERIVED ref is provably ours to erase.
+    check('refs: remove keeps a non-derived ref (ownership guard)',
+      channels.remove!('legacy-example') === true && tokens.read('LEGACY_REF') === 'imported-token' && store.read().channels.length === 0)
+    // (e) the derived-ref channel still erases on remove (the 12th section's
+    //     contract, restated as the ownership guard's positive control).
+    channels.save!({ id: 'derived', name: 'derived', token: 'd-token' })
+    check('refs: a derived ref still erases with its channel',
+      channels.remove!('derived') === true && tokens.read('CHANNEL_DERIVED_TOKEN') === undefined)
+    await session.dispose()
+  } finally {
+    process.env.CLAUDE_CONFIG_DIR = previous
+    rmSync(envDir, { recursive: true, force: true })
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 // ---- 13. phase 3: same connection vs restart --------------------------------
 {
   const conn = (fingerprint: string, baseUrl?: string) => ({ baseUrl, hasToken: true, envKeys: [] as string[], fingerprint })
