@@ -11,10 +11,11 @@ import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } 
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
 import { EffortInputBorder, type InputBorderLabel } from './EffortInputBorder.js'
 import { EffortTierBadge } from './EffortTierBadge.js'
-import { isLightThemeActive } from '../theme.js'
+import { cursorGlyphColor, getTheme } from '../theme.js'
 import { sessionColorHex } from '../terminal-utils/sessionColors.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
+import type { Color } from '../ink/styles.js'
 import type { DragEvent } from '../ink/events/drag-event.js'
 import { TerminalWriteContext } from '../ink/useTerminalNotification.js'
 import { setClipboard } from '../ink/termio/osc.js'
@@ -694,6 +695,23 @@ export function PromptInput({
   now = Date.now,
 }: PromptInputProps) {
   const [themeName] = useTheme()
+  /**
+   * Caret fill. The face is self-drawn (the native cursor is hidden), and it
+   * used to be `inverse` only — i.e. always the ink color, which a theme whose
+   * input surface is already ink-adjacent cannot make readable. `cursor` names
+   * the block fill, and the glyph on it is whichever ink contrasts with that
+   * fill (cursorGlyphColor) — `inverseText` alone cannot serve a light caret;
+   * empty keeps the inverse-video caret for palettes that predate the key.
+   *
+   * A palette a legacy runtime resolver returns can be missing the key
+   * altogether (normalizeThemePalette hands such a palette back untouched), so
+   * the undefined case normalizes here — ONE place, both consumers below read
+   * `''` and take the inverse path. Without it the caret renders with no
+   * background at all (the native cursor is hidden: the caret disappears).
+   */
+  const cursorTheme = getTheme(themeName)
+  const cursorColor = cursorTheme.cursor ?? ''
+  const cursorGlyph = cursorGlyphColor(cursorTheme)
   // Raw stdout writer for OSC 52 clipboard writes (selection copy) — must
   // bypass the frame pipeline; null outside a mounted Ink App.
   const writeRaw = React.useContext(TerminalWriteContext)
@@ -3638,26 +3656,33 @@ export function PromptInput({
     : visualLineRanges(value, inputWidth)
 
   /**
-   * Inverse runs for one rendered row, shared by the inline prompt and the
+   * Highlight runs for one rendered row, shared by the inline prompt and the
    * expanded editor: the selection's intersection (if any) and the caret
-   * cluster on the caret's row. Both render <Text inverse>; overlapping
-   * intervals merge so a caret inside the selection stays one continuous
-   * highlight. The caret row inverts the WHOLE cluster at the caret column
-   * (solid block) — [col, next boundary) covers a surrogate pair or ZWJ
-   * emoji as one glyph; at the text end it shows a blank inverse cell like
-   * the empty-input caret (appended after everything, so a selection
+   * cluster on the caret's row. Without a palette `cursor` both are inverse
+   * runs and overlapping intervals merge, so a caret inside the selection
+   * stays one continuous highlight. The caret row inverts the WHOLE cluster at
+   * the caret column (solid block) — [col, next boundary) covers a surrogate
+   * pair or ZWJ emoji as one glyph; at the text end it shows a blank inverse
+   * cell like the empty-input caret (appended after everything, so a selection
    * ending there cannot swallow it).
+   *
+   * A palette that sets `cursor` splits the caret off the selection: the
+   * caret is then its own kind (painted with `caretCell`) instead of merging
+   * into the selection's inverse run.
    */
   const rowHighlightPieces = (
     text: string,
     absoluteLine: number,
-  ): Array<{ text: string; inverse: boolean; chip: boolean }> => {
+  ): Array<{ text: string; inverse: boolean; chip: boolean; caret: boolean }> => {
     const [rowStart] = lineRanges[absoluteLine] ?? [0, 0]
     // Per-character style: 0 plain, 1 chip (a staged token), 2 inverse
-    // (selection or caret cluster). Inverse wins over chip.
+    // (selection, or caret when the palette has no `cursor`), 3 caret.
+    // Later fills win: chip < selection < caret.
     const PLAIN = 0
     const CHIP = 1
     const INVERSE = 2
+    const CARET = 3
+    const caretKind = cursorColor === '' ? INVERSE : CARET
     const kinds = new Uint8Array(text.length)
     const fill = (lo: number, hi: number, kind: number): void => {
       for (let i = Math.max(lo, 0); i < Math.min(hi, text.length); i++) kinds[i] = kind
@@ -3675,21 +3700,38 @@ export function PromptInput({
       const clusterEnd = tokenAtCaret !== undefined
         ? Math.min(tokenAtCaret.end - rowStart, text.length)
         : nextGraphemeBoundary(graphemeBoundaries(text), col)
-      if (clusterEnd > col) fill(col, clusterEnd, INVERSE)
+      if (clusterEnd > col) fill(col, clusterEnd, caretKind)
       else endBlankCaret = col === text.length
     }
-    const pieces: Array<{ text: string; inverse: boolean; chip: boolean }> = []
+    const pieces: Array<{ text: string; inverse: boolean; chip: boolean; caret: boolean }> = []
     let pos = 0
     while (pos < text.length) {
       const kind = kinds[pos]!
       let end = pos + 1
       while (end < text.length && kinds[end] === kind) end++
-      pieces.push({ text: text.slice(pos, end), inverse: kind === INVERSE, chip: kind === CHIP })
+      pieces.push({
+        text: text.slice(pos, end),
+        inverse: kind === INVERSE,
+        chip: kind === CHIP,
+        caret: kind === CARET,
+      })
       pos = end
     }
-    if (endBlankCaret) pieces.push({ text: ' ', inverse: true, chip: false })
+    if (endBlankCaret) {
+      pieces.push({ text: ' ', inverse: caretKind === INVERSE, chip: false, caret: caretKind === CARET })
+    }
     return pieces
   }
+
+  /**
+   * One caret cell: the palette's `cursor` fill with the glyph in whichever
+   * palette ink contrasts with it, or the inverse-video block it replaces when
+   * the palette predates the key.
+   */
+  const caretCell = (key: React.Key, text: string): React.ReactNode =>
+    cursorColor === ''
+      ? <Text key={key} inverse>{text}</Text>
+      : <Text key={key} backgroundColor={cursorColor as Color} color={cursorGlyph}>{text}</Text>
 
   const rendered = visibleLines.map((line, index) => {
     const absoluteLine = windowStart + index
@@ -3722,7 +3764,9 @@ export function PromptInput({
       <Text key={absoluteLine} wrap="truncate-end">
         {prefix}
         {pieces.length === 0 ? ' ' : pieces.map((piece, pieceIndex) =>
-          piece.inverse ? (
+          piece.caret ? (
+            caretCell(pieceIndex, piece.text)
+          ) : piece.inverse ? (
             <Text key={pieceIndex} inverse>
               {piece.text}
             </Text>
@@ -3775,7 +3819,9 @@ export function PromptInput({
               {`${gutterLabel} │ `}
             </Text>
             {pieces.map((piece, pieceIndex) =>
-              piece.inverse ? (
+              piece.caret ? (
+                caretCell(pieceIndex, piece.text)
+              ) : piece.inverse ? (
                 <Text key={pieceIndex} inverse>
                   {piece.text}
                 </Text>
@@ -4483,7 +4529,6 @@ export function PromptInput({
         effort={channel.reasoningEffort}
         levels={channel.effortLevels}
         columns={columns}
-        onLight={isLightThemeActive(themeName)}
         idleColor={promptAccent}
         topRightLabel={topRightLabel}
       >
@@ -4537,7 +4582,7 @@ export function PromptInput({
               // IME preedit (pinyin) at the physical cursor, which is parked
               // right here, so nothing else may occupy this cell.
               <>
-                <Text inverse> </Text>
+                {caretCell('empty', ' ')}
                 {/* 三幕点焰第二幕：空输入行居中短暂浮现档名大写（纯文
                     本流自带偏移空格——不引入嵌套 Box，行数恒定；有文字
                     时不显示）。3 = 行内 `❯ `（2 列）+ 空输入块光标（1
@@ -4545,7 +4590,6 @@ export function PromptInput({
                 <EffortTierBadge
                   effort={channel.reasoningEffort}
                   levels={channel.effortLevels}
-                  onLight={isLightThemeActive(themeName)}
                   columns={columns}
                   leadingColumns={3 + homeButtonCols}
                 />

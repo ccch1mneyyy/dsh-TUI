@@ -79,9 +79,11 @@ results back to the chat screen and add no new behavior.
 - **Launchpad**: printable input goes into the input box (the prefix turns from `❯` to `⌘` when the line
   starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; the caret is an **inverse block
   sitting on the current character** (inverse on that one character; an inverse blank cell at end of
-  line), blinking is a pure style toggle (inverse ↔ regular, ~550ms per phase) and never occupies an
-  extra cell or eats a character; `Alt+R` continues the most recent session (= the first entry row slot,
-  bound only on this screen, no-op when there is nothing to continue, remappable in `/settings`);
+  line — a theme that declares the `cursor` key paints a solid fill with a contrasting glyph instead,
+  see [Themes](themes.en.md)), blinking is a pure style toggle (inverse ↔ regular, ~550ms per phase)
+  and never occupies an extra cell or eats a character; `Alt+R` continues the most recent session
+  (= the first entry row slot, bound only on this screen, no-op when there is nothing to continue,
+  remappable in `/settings`);
   a leading `/` opens the
   **command palette** (the same data source and component as the chat composer: `↑`/`↓` move the selection,
   `Enter`/`Tab`/click **run** the selected command, `Esc` dismisses only the palette and keeps the draft);

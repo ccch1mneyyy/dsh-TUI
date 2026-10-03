@@ -167,6 +167,7 @@
     "verify:plugin-lifecycle": "node --import tsx/esm scripts/verify-plugin-lifecycle.ts",
     "verify:plugin-panels": "node --import tsx/esm scripts/verify-plugin-panels.tsx",
     "verify:runtime-themes": "node --import tsx/esm scripts/verify-runtime-themes.ts",
+    "verify:theme-hotswap": "node --import tsx/esm scripts/verify-theme-hotswap.tsx",
     "verify:theme-preview": "node --import tsx/esm scripts/verify-theme-preview.tsx",
     "verify:tips": "node --import tsx/esm scripts/verify-tips.tsx",
     "verify:thinking-preview": "node --import tsx/esm scripts/verify-thinking-preview.tsx",

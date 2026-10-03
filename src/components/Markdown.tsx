@@ -1,7 +1,8 @@
 import React from 'react'
 import { marked, type Token, type Tokens } from 'marked'
-import { Box, Text } from '../ui.js'
+import { Box, Text, useTheme } from '../ui.js'
 import type { TextDecoration } from '../ink/styles.js'
+import { getTheme } from '../theme.js'
 import { appendBlockText, configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { isMermaidLang } from '../terminal-utils/mermaid.js'
@@ -263,6 +264,12 @@ function MarkdownImpl({ children, dimColor = false, cacheTokens = true, inlineMa
   // Inline math is baked into the ANSI text, so the switch must invalidate
   // the memo below (MathBlock nodes subscribe on their own).
   const mathRendering = React.useSyncExternalStore(subscribeMathRendering, getMathRendering)
+  // 渲染结果把主题色烤进 ANSI（链接 accent、行内代码 permission、列表点…）。
+  // 消费主题上下文让这个 memo 组件在换主题时也重渲染（context 更新绕过
+  // React.memo）；memo 依赖取**调色板身份**而非名字——`auto` 明暗翻转时名字
+  // 不变但色板换了，只按名字会漏。
+  const [themeName] = useTheme()
+  const palette = getTheme(themeName)
 
   React.useEffect(() => {
     let mounted = true
@@ -285,7 +292,7 @@ function MarkdownImpl({ children, dimColor = false, cacheTokens = true, inlineMa
       // Dimmed text (thinking) cannot dim an image, so it keeps Unicode.
       inlineMathImages && mathRendering === 'image' && !dimColor,
     )
-  }, [children, dimColor, highlight, cacheTokens, mathRendering, inlineMathImages])
+  }, [children, dimColor, highlight, cacheTokens, mathRendering, inlineMathImages, palette])
 
   return (
     <Box flexDirection="column" gap={1}>
