@@ -762,6 +762,11 @@ const GROUPS = {
 // 限额（类型/5 MiB/20 张/合计 20 MiB）与"图片块缺 facade 即拒发"；用户行由暂存字节
 // 支撑，@ 图片同路径；回放 base64 成惰性 facade；无该能力的会话（DSH）行为不变。
     ["verify-claude-images", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-images.ts']],
+// claude 可执行文件解析（设计 §4.2）：PATH 命中必须"本进程真能启动"才采用——
+// npm 装的 claude 先给出扩展名缺失的 POSIX sh 转发脚本，直接交给 SDK 会让整个
+// 启动失败（"native binary … failed to launch"）；转发脚本改为跟随到真身，
+// 全部不可启动才交给 SDK 自带二进制；显式配置的可执行文件仍原样优先。
+    ["verify-claude-executable", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-executable.ts']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、

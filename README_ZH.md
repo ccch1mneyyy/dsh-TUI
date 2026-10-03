@@ -169,7 +169,9 @@ dsh-tui --backend claude     # 或在 dsh-tui 配置行写 `backend: claude`
   `apiKeyHelper` 时，环境原样交给 CLI，`/login` 改为显示当前路由。令牌将过期时在启动 CLI 前刷新；会话中被 CLI 拒绝时，dsh-TUI 刷新后以
   同一会话重连一次，仍失败则提示你 `/login`（回合进行中执行 `/login` 会在回合结束
   后再重连）。令牌内容从不写入日志。
-- **可执行文件**：`PATH` 上的 `claude`，否则 SDK 自带二进制。项目 `CLAUDE.md`、
+- **可执行文件**：`PATH` 上**真能启动**的第一个 `claude`（npm 装的转发脚本会跟随到它指向的
+  真实二进制，例如 Windows 上那份扩展名缺失的 POSIX `sh` 包装；只存在却启动不了的包装
+  不会胜出），否则用 SDK 自带二进制。项目 `CLAUDE.md`、
   设置、hooks、MCP 服务器与插件按 CLI 的方式加载。
 - **审批**沿用 DSH 的同一个面板：允许一次、始终允许（标签写明 CLI 会记住什么——
   例如本会话自动接受编辑，或本项目的一条权限规则；由 CLI 保存，dsh-TUI 不写任何
