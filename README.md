@@ -198,7 +198,10 @@ dsh-tui --backend claude     # or `backend: claude` in the dsh-tui config row
   starts; if the CLI rejects it mid-session, dsh-TUI renews it and resumes the
   same session once, then asks you to `/login` (a `/login` during a running
   turn reconnects after it). Token material is never logged.
-- **Executable**: `claude` on `PATH`, else the SDK's bundled binary. Project
+- **Executable**: the first `claude` on `PATH` this process can really launch
+  (an npm wrapper is followed to the binary it forwards to — e.g. the
+  extensionless POSIX `sh` wrapper on Windows; a wrapper that cannot start
+  never wins), else the SDK's bundled binary. Project
   `CLAUDE.md`, settings, hooks, MCP servers and plugins load exactly as the CLI
   loads them.
 - **Approvals** use the same panel as DSH: allow once, allow always (the label
