@@ -19,6 +19,12 @@
  * 不会漏跑。新增测试只登记 GROUPS，不必改分片。
  * --list 只打印本片条目与预计耗时，不运行。--record-timings 在跑完后把本次
  * 通过条目的实测耗时写回 ci-group-timings.json（重新均衡分片时用）。
+ * --jobs N：组内并发（缺省 1 = 逐条串行，CI 行为逐字节不变）。本地提速用：
+ * 每条仍是独立渲染日志 + 一次性 HOME，输出按条缓冲、完成后整段透传；并行
+ * 失败的条目自动串行复跑一次——复跑绿按「CPU 竞争假红」放行但显式记录
+ * （::error + 汇总标注），复跑仍红才算真失败。渲染类组在 CPU 争抢下本就有
+ * 假红前科（#513/#734），并发只用于本地往返；--jobs > 1 与 --record-timings
+ * 互斥（并发耗时失真，会污染装箱表）。
  *
  * 组定义在下方 GROUPS 表：名称 + 完整 argv + 可选附加 env。所有条目默认
  * NODE_ENV=production：产品入口本就强制生产版 React，dev 版 reconciler 每次
@@ -37,7 +43,7 @@
  *     flake（#513/#734 一类"退出备用屏后主屏错一行"）本地复现不出来，只有
  *     CI 那一次失败的原始帧字节才是证据。
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1115,10 +1121,20 @@ const flags = process.argv.slice(3)
 let shard = { index: 1, count: 1 }
 let listOnly = false
 let recordTimings = false
+let jobs = 1
 for (let i = 0; i < flags.length; i++) {
   const flag = flags[i]
   if (flag === '--list') { listOnly = true; continue }
   if (flag === '--record-timings') { recordTimings = true; continue }
+  const jobValue = flag === '--jobs' ? flags[++i] : flag.startsWith('--jobs=') ? flag.slice('--jobs='.length) : undefined
+  if (jobValue !== undefined) {
+    if (!/^[1-9]\d*$/.test(jobValue)) {
+      console.error('[run-ci-group] --jobs 须为正整数，收到: ' + String(jobValue))
+      process.exit(2)
+    }
+    jobs = Number(jobValue)
+    continue
+  }
   const value = flag === '--shard' ? flags[++i] : flag.startsWith('--shard=') ? flag.slice('--shard='.length) : undefined
   const m = value === undefined ? null : /^([1-9]\d*)\/([1-9]\d*)$/.exec(value)
   if (flag !== '--shard' && !flag.startsWith('--shard=')) {
@@ -1130,6 +1146,10 @@ for (let i = 0; i < flags.length; i++) {
     process.exit(2)
   }
   shard = { index: Number(m[1]), count: Number(m[2]) }
+}
+if (jobs > 1 && recordTimings) {
+  console.error('[run-ci-group] --jobs > 1 与 --record-timings 互斥：并发耗时失真，会污染 ci-group-timings.json 装箱表')
+  process.exit(2)
 }
 const TIMINGS_FILE = new URL('./ci-group-timings.json', import.meta.url)
 const timings = JSON.parse(readFileSync(TIMINGS_FILE, 'utf8'))
@@ -1171,45 +1191,113 @@ if (listOnly) {
 const RENDER_LOG_DIR = 'ci-render-logs'
 mkdirSync(RENDER_LOG_DIR, { recursive: true })
 
-console.log('::group::' + label + '（' + group.length + ' 项，失败不中断）')
+console.log('::group::' + label + '（' + group.length + ' 项，失败不中断' + (jobs > 1 ? '，--jobs ' + jobs : '') + '）')
 const results = []
-for (const entry of group) {
-  const [name, argv, extraEnv] = entry
-  console.log('\n===== ' + name + ' =====')
-  const renderLog = join(RENDER_LOG_DIR, name + '.log')
-  rmSync(renderLog, { force: true })
-  // One throwaway HOME per script: fixtures used to share the machine's real
-  // home, so a script that submits text left entries in
-  // `~/.dsh-tui/history.jsonl` for whatever ran next — and `↑` walks that file
-  // (#986), which turned one script's leftovers into the next script's
-  // assertion failure. A local group run must also never write the runner's
-  // own history. `HOME`/`USERPROFILE` sit after `env` (which carries the real
-  // ones) so the real home can never win; an entry may still override them
-  // through its own `extraEnv`.
-  const scriptHome = mkdtempSync(join(tmpdir(), 'dsh-tui-group-home-'))
-  const startedAt = performance.now()
-  const r = spawnSync(argv[0], argv.slice(1), {
-    env: {
-      DSH_TUI_RENDER_LOG: renderLog,
-      ...env,
-      HOME: scriptHome,
-      USERPROFILE: scriptHome,
-      ...(extraEnv ?? {}),
-    },
-    stdio: 'inherit',
-    shell: false,
-  })
-  rmSync(scriptHome, { recursive: true, force: true })
-  const seconds = (performance.now() - startedAt) / 1000
-  const failed = r.status !== 0
-  results.push({ name, failed, status: r.status, seconds })
-  if (failed) {
-    console.log('::error title=' + label + '::测试 ' + name + ' 失败（exit ' + r.status + '）——已记录，继续跑同组其余测试')
-    let bytes = 0
-    try { bytes = statSync(renderLog).size } catch { /* 脚本没画帧（纯逻辑测试）：无日志可留 */ }
-    if (bytes > 0) console.log('[run-ci-group] 帧日志已保留: ' + renderLog + '（' + bytes + ' 字节）')
-  } else {
+
+// One throwaway HOME per script: fixtures used to share the machine's real
+// home, so a script that submits text left entries in
+// `~/.dsh-tui/history.jsonl` for whatever ran next — and `↑` walks that file
+// (#986), which turned one script's leftovers into the next script's
+// assertion failure. A local group run must also never write the runner's
+// own history. `HOME`/`USERPROFILE` sit after `env` (which carries the real
+// ones) so the real home can never win; an entry may still override them
+// through its own `extraEnv`.
+const entryEnv = (extraEnv, renderLog, scriptHome) => ({
+  DSH_TUI_RENDER_LOG: renderLog,
+  ...env,
+  HOME: scriptHome,
+  USERPROFILE: scriptHome,
+  ...(extraEnv ?? {}),
+})
+
+const reportFailure = (name, status, renderLog) => {
+  console.log('::error title=' + label + '::测试 ' + name + ' 失败（exit ' + status + '）——已记录，继续跑同组其余测试')
+  let bytes = 0
+  try { bytes = statSync(renderLog).size } catch { /* 脚本没画帧（纯逻辑测试）：无日志可留 */ }
+  if (bytes > 0) console.log('[run-ci-group] 帧日志已保留: ' + renderLog + '（' + bytes + ' 字节）')
+}
+
+if (jobs === 1) {
+  for (const entry of group) {
+    const [name, argv, extraEnv] = entry
+    console.log('\n===== ' + name + ' =====')
+    const renderLog = join(RENDER_LOG_DIR, name + '.log')
     rmSync(renderLog, { force: true })
+    const scriptHome = mkdtempSync(join(tmpdir(), 'dsh-tui-group-home-'))
+    const startedAt = performance.now()
+    const r = spawnSync(argv[0], argv.slice(1), {
+      env: entryEnv(extraEnv, renderLog, scriptHome),
+      stdio: 'inherit',
+      shell: false,
+    })
+    rmSync(scriptHome, { recursive: true, force: true })
+    const seconds = (performance.now() - startedAt) / 1000
+    const failed = r.status !== 0
+    results.push({ name, failed, status: r.status, seconds })
+    if (failed) reportFailure(name, r.status, renderLog)
+    else rmSync(renderLog, { force: true })
+  }
+} else {
+  // 并发路径：输出按条缓冲、完成后整段透传（前缀仍是 ===== name =====，日志
+  // 可按条归因）；每条独立 HOME/渲染日志与串行完全一致。失败条目随后串行
+  // 复跑一次分家「CPU 竞争假红」与真失败——两种结果都落盘，不静默放行。
+  const pending = group.slice()
+  const runOne = entry => new Promise(resolve => {
+    const [name, argv, extraEnv] = entry
+    const renderLog = join(RENDER_LOG_DIR, name + '.log')
+    rmSync(renderLog, { force: true })
+    const scriptHome = mkdtempSync(join(tmpdir(), 'dsh-tui-group-home-'))
+    const startedAt = performance.now()
+    const child = spawn(argv[0], argv.slice(1), {
+      env: entryEnv(extraEnv, renderLog, scriptHome),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: false,
+    })
+    const chunks = []
+    for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => chunks.push(chunk))
+    const settle = status => {
+      rmSync(scriptHome, { recursive: true, force: true })
+      resolve({ name, argv, extraEnv, renderLog, failed: status !== 0, status, seconds: (performance.now() - startedAt) / 1000, output: Buffer.concat(chunks) })
+    }
+    child.on('error', error => settle('spawn:' + (error.code ?? 'error')))
+    child.on('close', status => settle(status))
+  })
+  const worker = async () => {
+    for (;;) {
+      const entry = pending.shift()
+      if (entry === undefined) return
+      const r = await runOne(entry)
+      process.stdout.write('\n===== ' + r.name + ' =====\n')
+      process.stdout.write(r.output)
+      if (r.failed) reportFailure(r.name, r.status, r.renderLog)
+      else rmSync(r.renderLog, { force: true })
+      results.push(r)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(jobs, group.length) }, worker))
+  for (const r of results.filter(item => item.failed)) {
+    console.log('\n[run-ci-group] ' + r.name + ' 并行失败（exit ' + r.status + '），串行复跑一次：分家 CPU 竞争假红与真失败')
+    const renderLog = join(RENDER_LOG_DIR, r.name + '.log')
+    rmSync(renderLog, { force: true })
+    const scriptHome = mkdtempSync(join(tmpdir(), 'dsh-tui-group-home-'))
+    const startedAt = performance.now()
+    const again = spawnSync(r.argv[0], r.argv.slice(1), {
+      env: entryEnv(r.extraEnv, renderLog, scriptHome),
+      stdio: 'inherit',
+      shell: false,
+    })
+    rmSync(scriptHome, { recursive: true, force: true })
+    r.seconds += (performance.now() - startedAt) / 1000
+    if (again.status === 0) {
+      r.failed = false
+      r.status = 0
+      r.flake = true
+      rmSync(renderLog, { force: true })
+      console.log('::error title=' + label + '::测试 ' + r.name + ' 并行红、串行复跑绿——按 CPU 竞争假红放行，已显式记录')
+    } else {
+      r.status = again.status
+      reportFailure(r.name, again.status, renderLog)
+    }
   }
 }
 console.log('::endgroup::')
@@ -1217,8 +1305,12 @@ console.log('::endgroup::')
 const fmt = seconds => seconds.toFixed(1) + 's'
 const total = results.reduce((sum, r) => sum + r.seconds, 0)
 console.log('\n' + label + ' 汇总（共 ' + fmt(total) + '）：')
-for (const { name, failed, status, seconds } of results) {
-  console.log('  ' + (failed ? '✗' : '✓') + ' ' + name + '  ' + fmt(seconds) + (failed ? '（exit ' + status + '）' : ''))
+for (const { name, failed, status, seconds, flake } of results) {
+  console.log('  ' + (failed ? '✗' : '✓') + ' ' + name + '  ' + fmt(seconds) + (failed ? '（exit ' + status + '）' : flake ? '（并行红，串行复跑绿）' : ''))
+}
+const flakeList = results.filter(r => r.flake)
+if (flakeList.length > 0) {
+  console.log('\n[run-ci-group] ' + flakeList.length + ' 项在 --jobs ' + jobs + ' 下并行红、串行复跑绿（CPU 竞争假红，已记录不静默）：' + flakeList.map(r => r.name).join(', '))
 }
 
 // GitHub Actions step summary：按耗时降序，给分片/拆组提供数据。
@@ -1229,7 +1321,7 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     '',
     '| 结果 | 测试 | 耗时 |',
     '| --- | --- | ---: |',
-    ...rows.map(r => '| ' + (r.failed ? '✗ exit ' + r.status : '✓') + ' | ' + r.name + ' | ' + fmt(r.seconds) + ' |'),
+    ...rows.map(r => '| ' + (r.failed ? '✗ exit ' + r.status : r.flake ? '✓ ⚑并行红串行绿' : '✓') + ' | ' + r.name + ' | ' + fmt(r.seconds) + ' |'),
     '',
   ].join('\n'))
 }

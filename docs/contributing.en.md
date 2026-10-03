@@ -350,6 +350,17 @@ CI shards each test group by the measured durations in
 table only affects balance). New scripts need no table entry; to rebalance, run
 the whole group once with `node scripts/run-ci-group.mjs <group> --record-timings`.
 
+For local speed add `--jobs N` (default 1 = exactly what CI runs today): entries
+run concurrently, each still with its own throwaway HOME and render log, and each
+script's output is printed as one block when it finishes. An entry that fails
+under concurrency is re-run once, serially — a serial pass is released as a
+CPU-contention flake but recorded loudly (`::error` plus a summary marker); a
+serial failure counts as real. `--jobs > 1` refuses to combine with
+`--record-timings` (contended timings would poison the packing table). Daily
+loop in three tiers: focused script for the touched area (table above) → the
+affected group with `--jobs 4` → before merging, `pnpm build` plus all four
+groups in full.
+
 CI runs these commands after installation:
 
 ```sh
