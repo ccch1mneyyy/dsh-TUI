@@ -6081,7 +6081,7 @@ export function Chat({
       // 内核入口带名（「内核 · Claude」）：backendId 是内核身份的唯一来源。
       backendId: kernelCurrentId,
     })
-    const node = (
+    const launchpad = (
       <Launchpad
         query={launchpadDraft}
         cursorOffset={launchpadCaret}
@@ -6212,6 +6212,18 @@ export function Chat({
         // Esc 回落地页（与参数行选择器同一姿态），不新造面板。
         onOpenWorkspace={() => { void runCommand('workspace', '') }}
       />
+    )
+    // 落地页这一屏的完整树（AC-4）：Tooltip 单例层挂在**最外层最后**——与下面
+    // 聊天主树末尾那处（SidePanelLayout 里）是同一个组件、同一条"单例层挂树尾"
+    // 姿态；参数行被截断的段（ParamChip 写的锚点）hover 600ms 后由它画完整名。
+    // 本屏没有滚动、也没有面板几何过渡，不需要 invalidationKey /
+    // subscribeInvalidation；切屏时 ParamChip 卸载，useTooltip 的清理 effect
+    // 撤掉挂着的那张卡片，不会把浮层留给下一屏。
+    const node = (
+      <>
+        {launchpad}
+        <TooltipLayer />
+      </>
     )
     return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
   }

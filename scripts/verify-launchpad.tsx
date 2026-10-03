@@ -36,6 +36,8 @@
  *      与整段消失仍判失败。
  *   R. 屏幕级：参数行三段式的**逐字节期望行**（AC-1/2/3/5）——长 preset 四段
  *      同屏且权限段一字不少、窄屏回落今天的尾部省段、焦点环只收画出来的段。
+ *   S. 屏幕级 AC-4：被截断段的 tooltip——真 SGR motion 悬停 600ms 出完整名、
+ *      离开即撤且高亮复原、点击/键盘仍开对应选择器、未截断段绝不弹卡片。
  *
  * Run: node --import tsx/esm scripts/verify-launchpad.tsx
  */
@@ -47,7 +49,7 @@ import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import xterm from '@xterm/headless'
 import fakeHome from './lib/fake-home.mjs' // 必须最先：DATA_DIR 在 import 时定死
-import { settle, settled, viewportLines } from './lib/term-test.mjs'
+import { settle, settled, sleep, viewportLines } from './lib/term-test.mjs'
 import { stringWidth } from '../src/ink/stringWidth.js'
 // 只借类型（import type 被 tsx 整体擦除，不影响上面 fake-home 的加载顺序）。
 import type { KernelOption } from '../src/components/kernelCatalog.js'
@@ -61,6 +63,7 @@ const [
   { fitParamParts, PARAM_SEPARATOR, PARAM_SEGMENT_MIN_WIDTH, PARAM_UNTRUNCABLE_SEGMENT },
   { splashFontById },
   { t },
+  { TooltipLayer, getTooltipSnapshot },
   { applyCompanionSkin },
 ] = await Promise.all([
   import('../src/ui.js'),
@@ -71,6 +74,7 @@ const [
   import('../src/components/splashFonts.js'),
   import('../src/i18n.js',
   ),
+  import('../src/components/Tooltip.js'),
   import('../src/tuiDisplayPrefs.js'),
 ])
 // 本脚本锁的是落地页版面/阶梯契约（WHALE_ART_ROWS=13 那套预算）：吉祥物
@@ -234,7 +238,7 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
     const [query, setQuery] = React.useState(options.query ?? '')
     const [caret, setCaret] = React.useState((options.query ?? '').length)
     const [focus, setFocus] = React.useState(-1)
-    return (
+    const page = (
       <Launchpad
         query={query}
         cursorOffset={caret}
@@ -299,6 +303,14 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         onEscape={(intent) => { events.push({ type: 'escape', value: intent }) }}
         onBlankClick={() => { events.push({ type: 'blank' }); setFocus(-1) }}
       />
+    )
+    // AC-4：与 Chat 的落地页分支同姿态——单例 Tooltip 层挂在树的最外层最后
+    // （ParamChip 只写锚点，卡片由它画；Tooltip.tsx 的语义/延迟/几何一律不改）。
+    return (
+      <>
+        {page}
+        <TooltipLayer />
+      </>
     )
   }
 
@@ -385,6 +397,15 @@ function halfOf(text: string): string {
 function leftGap(line: string): number {
   const m = /^\s*/.exec(line)
   return m === null ? 0 : stringWidth(m[0])
+}
+/** 两份整屏快照的首个差异行（"屏上零新字形"负例失败时的定位证据）。 */
+function firstScreenDiff(before: string, after: string): string {
+  const a = before.split('\n')
+  const b = after.split('\n')
+  for (let row = 0; row < Math.max(a.length, b.length); row++) {
+    if (a[row] !== b[row]) return `row=${row} before=${JSON.stringify(a[row])} after=${JSON.stringify(b[row])}`
+  }
+  return ''
 }
 /** 行尾留白的显示宽度。 */
 function rightGap(line: string, columns: number): number {
@@ -1542,6 +1563,106 @@ base.close()
       `${walk.join(',')} → ${JSON.stringify(last(ev, 'focus')?.value)} expected=${row.ring.join(',')} → 0`)
     s.close()
   }
+}
+
+// ── S. AC-4：截断段的 tooltip（hover 出完整名 / 离开即撤 / 点击与键盘不退化）────
+// AC-4 是**屏幕级**契约：真 SGR mode-1003 motion 悬停 → 600ms dwell → 单例浮层画卡片。
+// 夹具的 Harness 与 Chat 的落地页分支同姿态（`<Launchpad/>` + `<TooltipLayer/>` 兄弟，
+// 层挂在树的最外层最后）——Chat.tsx 里的真实挂载点由 verify-launchpad-onboarding-chat
+// （真 Chat 树）兜底。负例断言的是"**不变量**"（未截断段与无 … 的载荷都不许弹卡片）：
+// 轮询到的谓词恒真不算证据，所以用带标签的固定观察窗，并让同一会话紧接的正例
+// 证明浮层是活的（不是"没挂所以什么都不出"）。
+const AC1_FULL_PRESET = 'Standard (Git Bash · official tooling)'
+const AC1_SHOWN_PRESET = 'Standard (Git Bash …'
+{
+  // ①③⑤a 在同一屏（AC-1 载荷）：**先负例后正例**——负例的观察窗里浮层是活的，
+  // 同一会话紧接着就为截断段弹出卡片，排除"层没挂"的假绿。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { params: AC1_PARAMS })
+  await settled(() => s.screen().includes(AC1_SHOWN_PRESET))
+  // ⑤a 负例：未截断的 model 段（屏上无 …）hover 满一个 dwell 窗口——卡片会替换它
+  // 覆盖的格子，屏上出任何新字形都会被抓到；单例 store 也必须仍是空。
+  const modelCell = findCell(s.term, 'deepseek-flash')!
+  const quietBefore = viewportLines(s.term).join('\n')
+  s.input.write(`\u001b[<35;${modelCell.col};${modelCell.row}M`)
+  const modelHoverLive = await settled(() => last(ev, 'focus')?.value === -2)
+  // 固定窗:探针 dwell（600ms）已过 + 余量——断言"未截断段不弹卡片"这个不变量
+  await sleep(900)
+  const quietAfter = viewportLines(s.term).join('\n')
+  check('S1 未截断段 hover 仍走既有手势（高亮 → 焦点落模型段 -2），但不弹卡片（整屏逐字节不变 + 单例 store 空）',
+    modelHoverLive && getTooltipSnapshot() === null && quietAfter === quietBefore,
+    `focus=${JSON.stringify(last(ev, 'focus')?.value)} store=${JSON.stringify(getTooltipSnapshot())} `
+      + firstScreenDiff(quietBefore, quietAfter))
+  // ① 正例：hover 到 dwell —— 卡片显示**完整 preset 名**，且锚在被悬停行**之上**。
+  const presetCell = findCell(s.term, AC1_SHOWN_PRESET)!
+  const hoveredAt = Date.now()
+  s.input.write(`\u001b[<35;${presetCell.col};${presetCell.row}M`)
+  const cardShown = await settled(() => s.screen().includes(AC1_FULL_PRESET))
+  const dwellMs = Date.now() - hoveredAt
+  const cardRow = rowOf(s.term, AC1_FULL_PRESET)
+  check('S2 被截断段 hover 停留约 600ms 后卡片显示完整名（AC-4①：dwell ≥ 500ms、卡片在锚点行之上）',
+    cardShown && dwellMs >= 500 && cardRow >= 0 && cardRow < presetCell.row - 1,
+    `dwell=${dwellMs}ms shown=${cardShown} cardRow=${cardRow} anchorRow=${presetCell.row - 1}`)
+  // ② 离开即撤：卡片消失 + 该段高亮复原（第五版 BUG 2 的病灶面：hover 带进的焦点要交还）。
+  const blankCell = findCell(s.term, '██▀▀▄▄')!
+  s.input.write(`\u001b[<35;${blankCell.col};${blankCell.row}M`)
+  const cardGone = await settled(() => !s.screen().includes(AC1_FULL_PRESET)
+    && getTooltipSnapshot() === null && last(ev, 'focus')?.value === -1)
+  check('S3 离开后卡片立即消失且高亮复原（AC-4②：屏上无完整名 + store 空 + focus 回 -1）',
+    cardShown && cardGone,
+    `wasShown=${cardShown} focus=${JSON.stringify(last(ev, 'focus')?.value)} store=${JSON.stringify(getTooltipSnapshot())}`)
+  // ③ 点击仍打开该段的选择器（落点必须是 preset，不是别的段）。
+  const beforeClick = ev.length
+  await s.click(AC1_SHOWN_PRESET)
+  check('S4 点击被截断段仍打开对应选择器（AC-4②：param = preset）',
+    last(ev, 'param')?.value === 'preset', JSON.stringify(ev.slice(beforeClick)))
+  s.close()
+}
+{
+  // ④ 键盘不退化（AC-4③）：焦点环仍四段（模型→深度→模式→权限），Enter 开对应选择器。
+  // 鼠标只在 AlternateScreen 存在，键盘等价路径必须独立成立（DESIGN 风险 R3）。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { params: AC1_PARAMS })
+  await settled(() => s.screen().includes(AC1_SHOWN_PRESET))
+  const walk: unknown[] = []
+  for (let step = 0; step < 3; step++) {
+    await s.send('\t')
+    walk.push(last(ev, 'focus')?.value)
+  }
+  // 焦点此刻在被截断的 preset 段（-4）上：Enter 打开 /preset（与鼠标同一条 onParamPick）。
+  await s.send('\r')
+  const presetPick = last(ev, 'param')?.value
+  await s.send('\t')
+  walk.push(last(ev, 'focus')?.value)
+  await s.send('\r')
+  const permissionPick = last(ev, 'param')?.value
+  check('S5 焦点环仍含四段（模型→深度→模式→权限 = -2/-3/-4/-5）：截断不减少键盘可达目标',
+    walk.join(',') === '-2,-3,-4,-5', walk.join(','))
+  check('S6 键盘 Enter 在被截断的 preset 段上打开 /preset（截断不失去等价操作）',
+    presetPick === 'preset', JSON.stringify(presetPick))
+  check('S7 再走一段 Enter 落在权限段 → /permission（环不串段）',
+    permissionPick === 'permission', JSON.stringify(permissionPick))
+  s.close()
+}
+{
+  // ⑤b 负例（AC-3 默认夹具：参数行内无 …）：hover 参数段一个 dwell 窗口——屏上零新
+  // 字形、单例 store 仍空；手势本身照旧活着（高亮 + 焦点），不是"没接上所以没反应"。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev)
+  await settled(() => s.screen().includes('Standard'))
+  const paramLine = viewportLines(s.term).find(l => l.includes('Standard')) ?? ''
+  const target = findCell(s.term, 'Standard')!
+  const quietBefore = viewportLines(s.term).join('\n')
+  s.input.write(`\u001b[<35;${target.col};${target.row}M`)
+  const hoverLive = await settled(() => last(ev, 'focus')?.value === -4)
+  // 固定窗:探针 dwell（600ms）已过 + 余量——断言"无 … 的载荷不弹卡片"这个不变量
+  await sleep(900)
+  const quietAfter = viewportLines(s.term).join('\n')
+  check('S8 AC-3 默认夹具（无 …）hover 参数段：手势活着但不出卡片（整屏逐字节不变 + store 空）',
+    hoverLive && !paramLine.includes('…') && getTooltipSnapshot() === null && quietAfter === quietBefore,
+    `focus=${JSON.stringify(last(ev, 'focus')?.value)} store=${JSON.stringify(getTooltipSnapshot())} `
+      + firstScreenDiff(quietBefore, quietAfter))
+  s.close()
 }
 
 // ── F. 宽度不变量（整屏：任何一行都不超宽、没有切断的半句） ─────────────────

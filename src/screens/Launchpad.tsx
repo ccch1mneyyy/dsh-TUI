@@ -9,6 +9,7 @@ import { resolveLaunchpadLayout, type LaunchpadLayout } from '../components/laun
 import { type LaunchpadAction } from '../components/launchpadActions.js'
 import { kernelDisplayName, kernelSubtitle, type KernelOption } from '../components/kernelCatalog.js'
 import { fitParamParts, PARAM_SEPARATOR } from '../components/launchpadParams.js'
+import { useTooltip } from '../components/Tooltip.js'
 import { pickSplashFont, splashFontById, type SplashFont } from '../components/splashFonts.js'
 import { t } from '../i18n.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
@@ -131,9 +132,20 @@ const PARAM_SEGMENT_ORDER: readonly LaunchpadParamSegment[] = ['model', 'effort'
  * 该段文字变主题蓝 + 加粗（不铺背景方块），宽度不变（不加内边距，
  * 参数行的宽度预算按原文算）；onMouseLeave 复原并交还悬停带进的焦点
  * （与 ActionChip 的 BUG 2 修复同一条规则）。
+ *
+ * AC-4（第八版）：段被**尾部截断**时（`…` 在屏上、完整名看不见），hover
+ * 走仓库既有的 Tooltip 单例层——dwell 600ms 后弹出完整名。两个鼠标手势
+ * **手动组合**（`useTooltip` 只返回它自己的一对 handler，直接覆盖会丢掉
+ * 高亮与焦点收回）：进入 = 高亮 + 记焦点 +（被截断才）起计时，离开 =
+ * 复原高亮 + 交还焦点 + 撤卡片——成对写在一起，第五版 BUG 2「高亮赖着
+ * 不走」那类回归没有缝隙可钻。未截断的段手势照旧（高亮/点击/焦点）但
+ * **连计时都不起**（与 Tooltip.tsx 头部「只给真的被隐藏的文本挂」同一条
+ * 契约），所以完整名在屏上时不会有浮层风险。
  */
 function ParamChip({
   label,
+  fullValue,
+  truncated,
   colored,
   focused,
   onActivate,
@@ -141,6 +153,10 @@ function ParamChip({
   onHoverLeave,
 }: {
   label: string
+  /** 完整名（截断前的原值）——只有 `truncated` 为真时它才上卡片。 */
+  fullValue: string
+  /** 本段是否被尾部截断（AC-4：未截断的段不接 tooltip 手势，只走既有高光）。 */
+  truncated: boolean
   /** 模型段常亮浅紫（autoAccept）；其余段默认 dim。 */
   colored?: boolean
   focused: boolean
@@ -151,12 +167,27 @@ function ParamChip({
 }): React.ReactNode {
   const [hovered, setHovered] = React.useState(false)
   const active = hovered || focused
+  // 内容恒为完整名，**是否接手势**由 `truncated` 自己门控（见下面的 handler）：
+  // 未截断的段连 dwell 计时都不起，不依赖单例层"空内容不画卡片"的内部约定
+  // ——那条约定改天变了也不该由本屏承担。
+  const tooltip = useTooltip(fullValue)
   return (
     <Box
       flexShrink={0}
       height={1}
-      onMouseEnter={() => { setHovered(true); onHover() }}
-      onMouseLeave={() => { setHovered(false); onHoverLeave() }}
+      onMouseEnter={(event) => {
+        setHovered(true)
+        onHover()
+        // 只有被截断的段才起计时（AC-4：完整名已在屏上时挂卡片是噪音）。
+        if (truncated) tooltip.onMouseEnter(event)
+      }}
+      onMouseLeave={() => {
+        setHovered(false)
+        onHoverLeave()
+        // 离开**恒**撤：进出的两个手势成对，任何误挂的卡片都不许赖着不走
+        // （第五版 BUG 2 的同族失败模式）。
+        tooltip.onMouseLeave()
+      }}
       onClick={(event: ClickEvent) => {
         event.stopImmediatePropagation()
         onActivate()
@@ -895,7 +926,9 @@ export function Launchpad({
           </Box>
           {/* 参数行：框外、紧贴框下（无空行），左对齐输入框（框缘 + padding 2 格）。
               第五版：四段各自可点（ParamChip——挂 onClick 才有 hover 提亮），
-              分隔符（双空格 · 双空格，来自 PARAM_SEPARATOR）保持不可点。 */}
+              分隔符（双空格 · 双空格，来自 PARAM_SEPARATOR）保持不可点。
+              AC-4：被截断的段（`…` 在屏上）另挂 tooltip——完整名走本屏之外的
+              单例层（Chat 在落地页分支末尾挂 TooltipLayer），本屏只写锚点。 */}
           {hasParams && (
             <Box paddingLeft={2} height={1} flexDirection="row">
               {fittedParams.map((part, index) => (
@@ -912,6 +945,8 @@ export function Launchpad({
                   ) : (
                     <ParamChip
                       label={part.value}
+                      fullValue={part.fullValue}
+                      truncated={part.truncated}
                       colored={part.colored}
                       focused={focusIndex === paramFocusOf(part.segment)}
                       onActivate={() => onParamPick(part.segment)}
