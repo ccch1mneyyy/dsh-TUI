@@ -389,6 +389,11 @@ function countOf(term: InstanceType<typeof XTerm>, needle: string): number {
 /**
  * 一个串的**前半**（半句检测用；取上整，非空串至少 1 个字符）。
  * 「半句判据」在两个地方用同一份定义：F 组的被切断检测与 R 组的"整段不在"。
+ *
+ * ⚠️ 这里按 **UTF-16 码元** `slice`：对含代理对（emoji/ZWJ）的文本，切出来的
+ * "前半"不是原串的合法前缀 ⇒ 以此为前提的 `indexOf` 探针**永不命中**、F2 判据
+ * 对这类文本永不判红（REVIEW F-05，见 `isSilentlyCut` 的盲区清单）。
+ * 这是判据的已知边界，不是本轮引入的回归。
  */
 function halfOf(text: string): string {
   return text.slice(0, Math.ceil(text.length / 2))
@@ -1717,12 +1722,35 @@ const AC1_SHOWN_PRESET = 'Standard (Git Bash …'
 // 与**无标记的切断**判成同一类，于是要么误报、要么被迫放弃"参数行必须完整"的
 // 不变量；新判据只是把"显式标记的降级"从缺陷里摘出来——每一条 half 判据仍要求
 // "要么完整、要么显式标记"，F1 的"任何一行不超宽"原样保留，R 组另有逐字节期望行。
+//
+// **档位覆盖（REVIEW F-06 · T-FIX-04 补齐）**：F1/F2 的五档矩阵用**短名夹具**
+// （四段原样总宽 40 ≤ 最小预算 42）⇒ 五档**全在 fit 档**；长名载荷下的**截断档**
+// 与**兜底档**由下面的 F4@76 / F5@48 各自用同一对不变量 + 档位形态断言覆盖。
+//
+// **F1 形状的已知边界**：「任何一行 trim 后 ≤ 列数」对**组合出来的超宽行**判不出
+// ——终端会在列宽处**折行**，超宽内容变成下一行的前几个字符，每一行本身仍 ≤ 列数
+// （读数：`probe/fix/T-FIX-04-xterm-wrap-probe.txt`，48 列里写 100 个 `x` ⇒
+// 48/48/4 三行）。这条判据抓的是**宽度记账与终端格子不一致**（emoji/ZWJ 计数差那
+// 一类，见 F-08），而"参数行不超预算"由 R1/R2 的逐字节期望行 + 预算判据钉住。
 const CHIP_LABELS = DEFAULT_ACTIONS.map(a => t(a.labelKey as never, a.values as never))
 const TIP_TEXTS = [t('launchpad-tip' as never), t('launchpad-first-run' as never)]
 /**
  * `text` 是否**无标记地被切断**：前半串在屏上，但没有任何一次出现是
  * "完整串"或"前缀 + `…`"（后者是 D3 的尾部截断，合法呈现）。
  * 整段不在屏上（没找到前半串）不算切断——窄屏按宽度整段省掉是契约行为。
+ *
+ * ⚠️ **已知盲区（REVIEW F-05 · 登记 `KNOWN-ISSUES`）——它不是"参数段完整性"的
+ * 通用守卫**，只是"切痕 ≥ 半个串且同屏没有完整串"这一形态的探针：
+ *   ① **不足半个串的无标记半截判不出**：探针就是前半串，切得比它短时屏上根本
+ *      找不到锚点（`probe/review/readings-zwj-f2.txt`：@70%/55%/50% 判红，
+ *      @45%/25% 判不出）；
+ *   ② **`halfOf` 用 UTF-16 `slice`**：代理对（emoji/ZWJ 序列）被从中间切开后
+ *      的"前半"不是原串的合法前缀，`indexOf` 永不命中 ⇒ 对这类文本**永不判红**
+ *      （`readings-zwj-f2.txt` 第 27-37 行；当前载荷是 ASCII，非活漏洞）；
+ *   ③ **完整串出现在别处就放行**：同一行是半截、但完整串在另一行（如 tooltip
+ *      卡片行）时，`isSilentlyCut` 会在那一行命中"完整串"并返回 false
+ *      （`readings-zwj-f2.txt` 末行）。
+ * 参数段的**完整性**另由 Q 组（纯函数三档契约）与 R 组（逐字节期望行）钉住。
  */
 function isSilentlyCut(lines: readonly string[], text: string): boolean {
   const half = halfOf(text)
@@ -1744,6 +1772,9 @@ function cutHalves(lines: readonly string[], paramTexts: readonly string[]): str
   return [...hard, ...paramTexts.filter(text => isSilentlyCut(lines, text))]
 }
 for (const cols of [120, 100, 72, 60, 48]) {
+  // 注意载荷：默认短名夹具（四段原样总宽 40 ≤ 最小预算 42）⇒ 这五档**全在 fit 档**，
+  // 截断档/兜底档的不变量由 F4@76 / F5@48（REVIEW F-06）覆盖；判据本身的盲区见
+  // `isSilentlyCut` 的注释。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, { columns: cols })
   await settled(() => s.screen().trim().length > 0)
@@ -1771,6 +1802,68 @@ for (const cols of [120, 100, 72, 60, 48]) {
   check('F3@120 带 `…` 的尾部截断不算被切断（D7 新判据的正面证据）',
     cut.length === 0 && lines.some(l => l.includes('Standard (Git Bash …')),
     `${cut.join(' | ')} | ${JSON.stringify(lines.filter(l => l.includes('Standard')))}`)
+  s.close()
+}
+// F4/F5（REVIEW F-06）：**截断档 / 兜底档的真实渲染不变量**。上面 F1/F2 的五档
+// 矩阵是短名夹具（全 fit 档）、F3@120 只覆盖截断档的"无标记半截"，兜底档此前
+// **0 条**不变量断言。这里换长名载荷（AC-1）补两档，断言形状与 F1/F2 同源：
+// 每档两条不变量（不超宽 / 无无标记半截）+ 一条**档位形态**（截断档四段同屏且
+// preset 显式带 `…`；兜底档与今天逐字节一致且无 `…` 泄漏）。
+// 档位读数（**不是**阈值，L-025）：`probe/round4/param-band.txt` —— AC-1 载荷
+// 兜底档最大列数 = 65、截断档最小列数 = 66；76 列 = 预算 70 的截断档、
+// 48 列 = 预算 42 的兜底档（两者都是该档的**代表列**，不是边界）。
+{
+  // F4@76（截断档）：四段同屏、只截 preset、权限段一字不少、行宽 ≤ 预算。
+  const cols = 76
+  const budget = Math.max(24, Math.min(cols - 4, 72)) - 2
+  const shown = ['deepseek-flash', 'Max', 'Standard (Git Bash …', 'danger-full-access']
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { columns: cols, params: AC1_PARAMS })
+  await settled(() => s.screen().includes('Standard (Git Bash …'))
+  const lines = viewportLines(s.term)
+  const overflow = lines.map((l, i) => ({ w: stringWidth(l.replace(/\s+$/u, '')), i }))
+    .filter(x => x.w > cols)
+  check(`F4@${cols} 截断档（AC-1 载荷）：整屏不变量——任何一行都不超宽`, overflow.length === 0,
+    overflow.map(x => `row=${x.i} w=${x.w}`).join(' '))
+  const cut = cutHalves(lines, displayedParams(AC1_PARAMS))
+  check(`F4b@${cols} 截断档（AC-1 载荷）：没有被切断的半句（preset 显式带 …、权限段一字不少）`,
+    cut.length === 0, cut.join(' | '))
+  const row = (lines.find(l => l.includes('danger-full-access')) ?? '').trim()
+  const rowWidth = stringWidth(row)
+  check(`F4c@${cols} 截断档（AC-1 载荷）：四段同屏 + preset 段带 … + 行宽 ≤ 预算`,
+    shown.every(needle => row.includes(needle)) && rowWidth <= budget,
+    `w=${rowWidth} budget=${budget} row=${JSON.stringify(row)}`)
+  s.close()
+}
+{
+  // F5@48（兜底档）：**与今天逐字节一致**（尾部整段省）+ **无 `…` 泄漏**。
+  // 期望行按契约字面量写（分隔符取模块常量，A6e 已把它钉在版式上）——不调用被测函数。
+  const cols = 48
+  const budget = Math.max(24, Math.min(cols - 4, 72)) - 2
+  const expected = ['deepseek-flash', 'Max'].join(PARAM_SEPARATOR)
+  const dropped = ['Standard (Git Bash · official tooling)', 'danger-full-access']
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { columns: cols, params: AC1_PARAMS })
+  await settled(() => s.screen().includes('deepseek-flash'))
+  const lines = viewportLines(s.term)
+  const overflow = lines.map((l, i) => ({ w: stringWidth(l.replace(/\s+$/u, '')), i }))
+    .filter(x => x.w > cols)
+  check(`F5@${cols} 兜底档（AC-1 载荷）：整屏不变量——任何一行都不超宽`, overflow.length === 0,
+    overflow.map(x => `row=${x.i} w=${x.w}`).join(' '))
+  const cut = cutHalves(lines, displayedParams(AC1_PARAMS))
+  check(`F5b@${cols} 兜底档（AC-1 载荷）：没有被切断的半句（省掉的段整段不在、留下的段完整）`,
+    cut.length === 0, cut.join(' | '))
+  const paramRow = rowOf(s.term, '╰') + 1
+  const text = (lines[paramRow] ?? '').trim()
+  // 「无 `…` 泄漏」按**参数行**判：屏上别处另有合法的省略号（输入框占位提示
+  // `说点什么，或输入 / 看命令…`），整屏扫 `…` 会把那条误算成泄漏。
+  const paramLeak = text.includes('…')
+  check(`F5c@${cols} 兜底档（AC-1 载荷）：与今天逐字节一致（尾部省段）+ 参数行无 … 泄漏`,
+    text === expected && !paramLeak && stringWidth(text) <= budget
+      && dropped.every(full => !lines.some(l => l.includes(halfOf(full)))),
+    `got=${JSON.stringify(text)} expected=${JSON.stringify(expected)} budget=${budget} `
+      + `paramLeak=${paramLeak} `
+      + `droppedVisible=${JSON.stringify(dropped.filter(full => lines.some(l => l.includes(halfOf(full)))))}`)
   s.close()
 }
 
