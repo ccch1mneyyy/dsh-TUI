@@ -46,7 +46,12 @@ DSH_TUI_THEME
 ## Switching themes
 
 - `/theme` opens the picker, with `auto` and the built-ins before static JSON
-  and plugin themes.
+  and plugin themes. On terminals at least 76 columns wide a live preview sits
+  beside the list: the **focused row's** palette renders a code block, a
+  code-operation tool card and a diff, so moving the cursor compares syntax,
+  diff and tool-card colors before Enter applies anything. Narrower terminals
+  stack the preview under the list, and it yields entirely when the height
+  budget is short — the list and its focused row always stay visible.
 - `/theme <name>` switches directly to a static or runtime plugin theme.
 - `/theme status` shows the current theme and persistence location.
 
@@ -140,7 +145,7 @@ export function apply(ctx: Context): void {
 - On an older profile without `tuiThemes`, the plugin degrades silently and
   static themes remain unaffected.
 
-See the [Plugin Admission and Development Guide](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)
+See the [Plugin Admission and Development Guide](../tui-profile/docs/plugin-admission-and-development.md)
 for the full key list, legacy-key mapping, and registration contract.
 
 ## Color formats

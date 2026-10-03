@@ -21,6 +21,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { markChannelReadDirty } from '../../../adapter/channel/read-view.js'
+import type { AgentCapabilities } from '../../../adapter/ports/channel-capabilities.js'
 import type { OAuthSetupHost } from '../../../adapter/ports/channel-settings.js'
 import type { AgentSession } from '../../../agent/session.js'
 import { createActivityProjection } from '../../../channel/activity.js'
@@ -28,8 +29,10 @@ import { channelCapabilities } from '../../../channel/capabilities.js'
 import { anchoredRow, prependHistoryRows, projectHistorySlice, restoreFoldedRows } from '../../../channel/history-restore.js'
 import { t } from '../../../i18n.js'
 import { DEFAULT_SESSION_MODES } from '../../../sessionModes.js'
+import { resolveContextOccupancy } from '../../context-occupancy.js'
 import { IdeChannel, ideLockDir, type SelectionSnapshot } from '../../ide-channel.js'
 import { createChannelActionMethods, createChannelActionReadiness, type ChannelActionDelegates } from '../action-readiness.js'
+import { createAttachedContextRegistry } from '../attached-context.js'
 import { createChannelBinding, type ChannelBinding } from '../binding.js'
 import { channelCommands } from '../commands.js'
 import { createComposerImages } from '../composer-images.js'
@@ -100,6 +103,10 @@ export interface ChannelExtension {
   noteBranch?(branch: string): void
   /** Argument catalogs for slash completion. */
   completions?: CompletionCatalog
+  /** What the bound agent's composition mounts (`ChannelUi.capabilities()`;
+   *  DSH: resolved from its live services, `../capabilities.ts`). Absent, the
+   *  core describes the session from its typed capabilities. */
+  agentCapabilities?(): AgentCapabilities
   /** Hooks into every bind (core/binding-feed.ts). */
   bind?: BindingFeedHooks
   /** How `/new` opens a fresh session (default: `options.openSession`). */
@@ -151,9 +158,9 @@ export function createCoreChannel(
   }
   /** The explicit failure every unbacked action reports (design §3.5). */
   const unavailable = (name: string): void => {
-    notify(t('capability-unavailable', { name }), { color: 'warning', timeoutMs: 4000 })
+    notify(t('capability-unavailable-backend', { name }), { color: 'warning', timeoutMs: 4000 })
   }
-  const unavailableLines = (name: string): string[] => [t('capability-unavailable', { name })]
+  const unavailableLines = (name: string): string[] => [t('capability-unavailable-backend', { name })]
   /**
    * Subagents and background jobs of a session no extension projects
    * (design §4.8): fed by the shared projector in stream order; output tails
@@ -243,6 +250,12 @@ export function createCoreChannel(
     void ideChannel.rebind(state.cwd).catch(() => {})
   }
   const selectionAttachments = createSelectionAttachments()
+  // "Send to Chat" (side-panel §6.7): staged panel contexts are a session-scoped
+  // projection like the selection above — the registry writes through the live
+  // state (so every session-projection reset clears them with everything else)
+  // and the submit path takes them off in one step. Backend-neutral: the
+  // context rides the submission as one more text block.
+  const contextRegistry = createAttachedContextRegistry(() => state, () => state.emit())
   /**
    * Images for a session that takes them itself (the `images` capability):
    * held in memory by the core (local-images.ts), under the bound session's
@@ -267,7 +280,7 @@ export function createCoreChannel(
   const inputDelivery = createInputDelivery(ctx, owner, binding, () => state,
     (...args) => notify(...args), trackPending, untrackPending, composer,
     () => currentSelection, (messageId, info) => selectionAttachments.remember(messageId, info),
-    files.fallbackFs, localImages)
+    files.fallbackFs, localImages, () => contextRegistry.consume())
   const { dispatchUserText, withDecisionPending, clearStagedImages } = inputDelivery
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
@@ -289,6 +302,29 @@ export function createCoreChannel(
     resume: options.openSession !== undefined && options.sessionCatalog !== undefined,
   })
   const initialCapabilities = snapshotOf(initialSession)
+  /**
+   * `ChannelUi.capabilities()` for a session no extension describes: what the
+   * session itself serves, in the composition-fact vocabulary the UI routes
+   * `/compact` and `/plan` by. `/compact` is the channel's compact action
+   * (delegated to the session's `compact` capability); `/plan` has no
+   * registry route (a backend's plan mode is one of its native modes).
+   */
+  const sessionAgentCapabilities = (): AgentCapabilities => {
+    const caps = binding.session.capabilities
+    const compact = caps.compact !== undefined
+    return {
+      compact: compact ? { route: 'local' } : { route: 'none', reasonKey: 'capability-reason-no-compaction' },
+      plan: { route: 'none', reasonKey: 'capability-reason-no-plan-command' },
+      compaction: compact,
+      pruner: false,
+      questionTool: caps.questions !== undefined,
+      skills: false,
+    }
+  }
+  // Official occupancy source (absent in compositions without the token meter,
+  // and never holding a non-DSH session's id): `read` is a cached lookup, so
+  // the accessor on the state below stays cheap.
+  const contextPressure = options.contextPressure
 
   const state: ChannelState = {
     ...createInputActions(() => state, () => binding.session, owner, inputConvergence,
@@ -320,8 +356,23 @@ export function createCoreChannel(
     get minimal(): boolean {
       return state.minimalUi
     },
+    /**
+     * Context occupancy is DERIVED here, not stored: it combines the cached
+     * host projection value (a map lookup) with this channel's own fallback
+     * sample and capacity. An accessor is what keeps "one source of truth"
+     * true without republishing a derived value from every mutation site that
+     * can move the window or the sample (replay, resume, model switch, reset).
+     */
+    get contextOccupancy() {
+      return resolveContextOccupancy(
+        contextPressure?.read(state.sessionId),
+        state.lastUsage,
+        state.contextWindow,
+      )
+    },
     commandList: localCommandsFor(initialCapabilities.commands),
-    capabilities: initialCapabilities,
+    backendCapabilities: initialCapabilities,
+    capabilities: () => extension.agentCapabilities?.() ?? sessionAgentCapabilities(),
     get sessionRef() {
       const ref = binding.session.ref
       return { backendId: ref.backendId, sessionId: ref.sessionId }
@@ -380,6 +431,11 @@ export function createCoreChannel(
     discardStagedImage: composer.discardStagedImage,
     stagedImage: composer.stagedImage,
     stagedImageLimits: composer.stagedImageLimits,
+    // "Send to Chat" projection + actions (see `contextRegistry` above; its
+    // methods close over the registry's own state, so they carry no `this`).
+    attachedContexts: [],
+    attachContext: contextRegistry.attach,
+    detachContext: contextRegistry.detach,
     // The core rewind prompt (capability-backed); the DSH extension
     // replaces it with its plugin-decision prompt.
     promptRewind: row => sessionActions.promptRewind(row),
@@ -414,7 +470,19 @@ export function createCoreChannel(
   // owner already makes teardown and construction failure fail closed.
   registerChannelOwner(state, owner)
 
-  const controls = createSessionControls({ state: () => state, backendLabel: () => state.capabilities.backendLabel })
+  // The projection's change feed is the only thing that can move occupancy
+  // between session events (a compaction rewriting the surface, the prompt
+  // growing before the next request); republish so the footer, the status
+  // commands and the warning read the fresh value immediately. The store is
+  // host-wide, so the emit is unconditional — the accessor already ignores
+  // another session's value.
+  if (contextPressure !== undefined) {
+    owner.own(contextPressure.subscribe(() => {
+      if (owner.current()) state.emit()
+    }))
+  }
+
+  const controls = createSessionControls({ state: () => state, backendLabel: () => state.backendCapabilities.backendLabel })
   const feed = createBindingFeed(ctx, {
     owner,
     binding,

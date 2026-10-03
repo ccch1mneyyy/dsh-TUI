@@ -441,7 +441,7 @@ export function createBackendOpener(deps: {
     resetSessionProjection(state, deps.rowIds, deps.resetProjection, () => { deps.resetActivity?.() }, () => undefined)
     state.agentId = candidate.ref.sessionId
     state.sessionId = candidate.ref.sessionId
-    state.capabilities = deps.snapshotOf(candidate)
+    state.backendCapabilities = deps.snapshotOf(candidate)
     deps.resetControls()
     deps.bind(history)
     deps.touch?.(candidate.ref.sessionId)

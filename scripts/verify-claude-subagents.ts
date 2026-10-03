@@ -99,7 +99,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
 {
   const { channel, query, session } = await openChannel()
   try {
-    check('the session offers /agents and /jobs', channel.capabilities.subagents && channel.capabilities.tasks && channel.capabilities.commands.includes('agents') && channel.capabilities.commands.includes('jobs'), channel.capabilities.commands)
+    check('the session offers /agents and /jobs', channel.backendCapabilities.subagents && channel.backendCapabilities.tasks && channel.backendCapabilities.commands.includes('agents') && channel.backendCapabilities.commands.includes('jobs'), channel.backendCapabilities.commands)
     let callChecked = false
     for (const line of lines('subagent')) {
       if (line.dir === 'in' && line.msg !== undefined) {

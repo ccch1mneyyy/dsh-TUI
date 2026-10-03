@@ -263,8 +263,18 @@ function spawnForBuffer(
     const child = spawn(file, [...args], { timeout })
     const chunks: Buffer[] = []
     child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk))
-    child.on('error', () => resolve({ code: 1, stdout: Buffer.concat(chunks) }))
-    child.on('close', code => resolve({ code, stdout: Buffer.concat(chunks) }))
+    child.stderr.resume() // A full stderr pipe must not block the child.
+    // Node's spawn timeout sends SIGTERM only; an uncooperative helper can
+    // otherwise keep the paste Promise pending forever.
+    const hardKill = setTimeout(() => child.kill('SIGKILL'), timeout + 1000)
+    child.on('error', () => {
+      clearTimeout(hardKill)
+      resolve({ code: 1, stdout: Buffer.concat(chunks) })
+    })
+    child.on('close', code => {
+      clearTimeout(hardKill)
+      resolve({ code, stdout: Buffer.concat(chunks) })
+    })
     child.stdin.end()
   })
 }
@@ -530,12 +540,15 @@ function buildWslPsScript(): string {
   return [
     "$ErrorActionPreference='SilentlyContinue'",
     '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8',
+    // Only CLIPBRD_E_CANT_OPEN is retryable. A missing format or empty
+    // clipboard is not a reason to cold-start PowerShell three times.
+    'function Test-ClipboardBusy($e){while($e){if($e.HResult -eq -2147221040){return $true};$e=$e.InnerException};return $false}',
     '$files=$null',
-    'try { $files = Get-Clipboard -Format FileDropList -ErrorAction Stop } catch {}',
+    'try { $files = Get-Clipboard -Format FileDropList -ErrorAction Stop } catch { if(Test-ClipboardBusy $_.Exception){exit 75} }',
     'if($files){foreach($f in $files){Write-Output ("FILE:"+$f.FullName)}}',
     '$saved=$false',
-    'if(-not $files){try { Add-Type -AssemblyName System.Drawing; $img=Get-Clipboard -Format Image -ErrorAction Stop; if($img){$ms=New-Object System.IO.MemoryStream; $img.Save($ms,[System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose(); Write-Output ("IMAGE64:"+[Convert]::ToBase64String($ms.ToArray())); $saved=$true} } catch {} }',
-    'if(-not $files -and -not $saved){$t=Get-Clipboard -Raw; if($null -ne $t){Write-Output ("TEXT64:"+[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($t)))}}',
+    'if(-not $files){try { Add-Type -AssemblyName System.Drawing; $img=Get-Clipboard -Format Image -ErrorAction Stop; if($img){$ms=New-Object System.IO.MemoryStream; $img.Save($ms,[System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose(); Write-Output ("IMAGE64:"+[Convert]::ToBase64String($ms.ToArray())); $saved=$true} } catch { if(Test-ClipboardBusy $_.Exception){exit 75} } }',
+    'if(-not $files -and -not $saved){try { $t=Get-Clipboard -Raw -ErrorAction Stop; if($null -ne $t){Write-Output ("TEXT64:"+[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($t)))} } catch { if(Test-ClipboardBusy $_.Exception){exit 75} } }',
   ].join('; ')
 }
 
@@ -546,11 +559,16 @@ function buildWslPsScript(): string {
  *   clipboard holds nothing usable.
  */
 async function readClipboardWsl(): Promise<ClipboardContent | null> {
-  const result = await spawnForBuffer(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', buildWslPsScript()],
-    WSL_POWERSHELL_TIMEOUT,
-  )
+  let result: Awaited<ReturnType<typeof spawnForBuffer>>
+  for (let attempt = 0; ; attempt += 1) {
+    result = await spawnForBuffer(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', buildWslPsScript()],
+      WSL_POWERSHELL_TIMEOUT,
+    )
+    if (result.code !== 75 || attempt >= 2) break
+    await new Promise(resolve => setTimeout(resolve, 150))
+  }
   if (result.code !== 0) return null
   const files: string[] = []
   const texts: string[] = []

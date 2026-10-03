@@ -171,7 +171,7 @@ export function useForeignSessions(input: ForeignSessionsInput) {
   // backend without it never probes (its delegate would refuse loudly).
   const supported = typeof channel.listForeignSources === 'function'
     // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts pass partial channels
-    && (channel.capabilities?.commands.includes('migrate') ?? true)
+    && (channel.backendCapabilities?.commands.includes('migrate') ?? true)
   const agentId = tab === DSH_TAB ? undefined : tab
 
   const [sources, setSources] = useState<readonly ForeignSource[]>([])

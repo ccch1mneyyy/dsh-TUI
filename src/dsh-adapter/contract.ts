@@ -207,6 +207,29 @@ export function installedUpstreamVersion(packageName: string): UpstreamVersionTu
 }
 
 /**
+ * 内核（dsh）版本的铭牌来源（第七版：落地页右下角双版本号）。
+ *
+ * 真实来源两级，都不造假：
+ * 1. **宿主 CLI** `@deepseek-ai/dsh` 的 package.json——TUI 作为插件跑在 dsh
+ *    宿主进程里时它一定可解析（`bin/dsh-tui.js` 委托 `dsh --profile` 启动）；
+ *    孤立回归/源码 checkout 里解析不到就落到第 2 级。
+ * 2. **内核线包** `@deepseek-ai/dsh-agent`（与内核同线发版、由本仓直接依赖，
+ *    `installedUpstreamVersions` 的既有清单成员）的已装版本——它就是
+ *    upstreamDriftSummary 用来判定「内核在不在验证线」的同一份数据。
+ *
+ * 两级都读不到 → undefined（调用方只画 TUI 版本，不编造）。
+ */
+export function installedKernelVersion(): string | undefined {
+  try {
+    const hostManifest = JSON.parse(readFileSync(fileURLToPath(import.meta.resolve('@deepseek-ai/dsh/package.json')), 'utf8')) as { version?: unknown }
+    if (typeof hostManifest.version === 'string' && hostManifest.version !== '') return hostManifest.version
+  } catch {
+    // 宿主包不在解析半径内（孤立测试/源码运行）——落到内核线包。
+  }
+  return installedUpstreamVersions()['@deepseek-ai/dsh-agent']
+}
+
+/**
  * Whether the installed version of `packageName` is at or beyond `minimum`
  * (a literal like `'0.1.0-rc.8'`). Unparseable or older installs return
  * false so features introduced on the minimum line degrade gracefully.

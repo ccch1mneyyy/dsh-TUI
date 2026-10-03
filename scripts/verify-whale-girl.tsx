@@ -154,6 +154,12 @@ function makeChannel(options = {}) {
 }
 
 // ── B. 头部渲染（真实 LogoHeader） ──────────────────────────────────────────
+// 2026-10 启动页吉祥物起，艺术槽跟随 companion.skin：deepy/whaleGirl 皮肤的
+// 吉祥物按设计取代女仆娘立绘——maid 回退契约只存在于 whale 皮肤分支。
+// LogoHeader 不透传 companionSkin，用 store 钉住 'whale' 来测 maid 契约本身
+//（吉祥物形态归 verify-splash-mascot）。
+const { applyCompanionSkin } = await import('../src/tuiDisplayPrefs.js')
+applyCompanionSkin('whale')
 async function renderHeader(props: Record<string, unknown>, expect?: (plain: string) => boolean) {
   const stdout = new FakeStdout(typeof props.columns === 'number' ? props.columns as number : 120)
   const { columns, ...logoProps } = props

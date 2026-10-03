@@ -37,13 +37,13 @@ function exportSection(row: ChatRow): string | undefined {
 export function createCoreReports(deps: {
   owner: Pick<ChannelOwner, 'current'>
   binding: Pick<ChannelBinding, 'session' | 'capture' | 'isCurrent'>
-  state: () => Pick<ChannelState, 'rows' | 'model' | 'cwd' | 'contextWindow' | 'agentId' | 'capabilities'>
+  state: () => Pick<ChannelState, 'rows' | 'model' | 'cwd' | 'contextWindow' | 'agentId' | 'backendCapabilities'>
 }) {
   /** `/doctor`: the backend-neutral facts plus the backend's own lines. */
   const doctorInfo = (): string[] => {
     const session: AgentSession = deps.binding.session
     const state = deps.state()
-    const label = state.capabilities.backendLabel
+    const label = state.backendCapabilities.backendLabel
     return [
       `Node ${process.version} · ${process.platform} ${process.arch}`,
       t('doctor-backend', { label, id: session.ref.backendId }),

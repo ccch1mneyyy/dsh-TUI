@@ -35,6 +35,7 @@ import { homeDir } from '../utils/paths.js'
 import {
   FREE_SEGMENT_FILL,
   USED_SEGMENTS,
+  channelContextOccupancy,
   contextBarBreakdown,
   renderMiniContextBar,
   renderTpsGauge,
@@ -43,6 +44,7 @@ import {
   tpsStats,
 } from './StatusMetrics.js'
 import type { WaveBand } from '../dsh-adapter/types.js'
+import type { ContextOccupancy } from '../adapter/ports/channel-view.js'
 
 /**
  * The footer under the prompt input: the segmented context progress bar on
@@ -212,9 +214,15 @@ export function StatusLine({
     ? formatProject(channel.displayCwd, homeDir())
     : channel.displayCwd
   const usage = channel.lastUsage
-  const contextUsed = usage === undefined
-    ? undefined
-    : usage.input + usage.cacheRead + usage.cacheWrite
+  // ONE occupancy reading behind every ctx surface in this footer (the field,
+  // its hover gauge, the segmented bar, the working line's pressure prefix):
+  // DSH's own `contextPressure` projection when the composition mounts the
+  // token meter, else the last request's billed sample. `usage` above stays the
+  // source for the cache/cost fields — "what the last request cost" and "how
+  // full the window is now" are different questions.
+  const occupancy = channelContextOccupancy(channel)
+  const contextUsed = occupancy?.usedTokens
+  const contextWindow = occupancy?.contextWindow
   const contextParts: FieldPart[] = []
 
   if (statusBar.thinking && channel.reasoningEffort !== undefined) {
@@ -240,7 +248,7 @@ export function StatusLine({
   }
 
   const formattedContext = statusBar.contextUsage
-    ? formatContextUsage(contextUsed, channel.contextWindow, statusBar.compact)
+    ? formatContextUsage(contextUsed, contextWindow, statusBar.compact)
     : undefined
   // The ctx field's two faces: the idle readout, and the hover state — an
   // in-place pressure bar (the user-liked "text becomes a bar" morph).
@@ -269,11 +277,11 @@ export function StatusLine({
         ctxParts !== undefined &&
         ctxHoverBarWidth > 0 &&
         contextUsed !== undefined &&
-        channel.contextWindow !== undefined
+        contextWindow !== undefined
       ? (
         <Text color="inactiveShimmer">
           <Text dimColor>ctx </Text>
-          {renderMiniContextBar(contextUsed, channel.contextWindow, ctxHoverBarWidth)}
+          {renderMiniContextBar(contextUsed, contextWindow, ctxHoverBarWidth)}
           {' '}{ctxParts.percent}
         </Text>
       )
@@ -515,12 +523,12 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     statusBar.contextBar &&
     channel.contextBarEnabled &&
     barWidth >= 14 &&
-    usage !== undefined &&
-    channel.contextWindow !== undefined
+    contextUsed !== undefined &&
+    contextWindow !== undefined
 
   // The supplemental-row readout for the hovered field: replaces the idle
   // hint (never the activity line) while the pointer dwells on a field.
-  const detail = buildHoverDetail(hover, channel, usage, contextUsed, columns, barColors)
+  const detail = buildHoverDetail(hover, channel, occupancy, usage, columns, barColors)
   const trailer: React.ReactNode = detail !== null
     ? detail
     : hint !== ''
@@ -568,7 +576,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
           <ContextBarView
             segments={channel.contextSegments}
             usedTokens={contextUsed ?? 0}
-            contextWindow={channel.contextWindow ?? 0}
+            contextWindow={contextWindow ?? 0}
             width={barWidth}
             colors={barColors}
             onHover={hovered =>
@@ -623,9 +631,9 @@ const selectionBadge = formatSelectionBadge(channel.selection)
               <ActivityLine
                 activity={activity}
                 activityFrames={channel.activityFrames}
-                warnPct={contextPressurePct(usage, channel.contextWindow)}
+                warnPct={contextPressurePct(occupancy)}
                 warnDanger={
-                  (contextPressurePct(usage, channel.contextWindow) ?? 0) >= 95
+                  (contextPressurePct(occupancy) ?? 0) >= 95
                 }
               />
             ) : trailer}
@@ -666,13 +674,16 @@ function formatRateLimit(rateLimit: Channel['rateLimit']): string | undefined {
 function buildHoverDetail(
   hover: HoverTarget | null,
   channel: Channel,
+  occupancy: ContextOccupancy | undefined,
   usage: UsageSnapshot | undefined,
-  contextUsed: number | undefined,
   columns: number,
   barColors: { freeFill: Color; freeText: Color } | undefined,
 ): React.ReactNode | null {
   if (hover === null) return null
-  const window = channel.contextWindow
+  const contextUsed = occupancy?.usedTokens
+  // The hover surfaces report the SAME occupancy the field/bar above show; the
+  // 'model' chip below stays a pure route-capacity readout.
+  const window = occupancy?.contextWindow
   const dim = (label: string): React.ReactNode => <Text dimColor>{label}</Text>
 
   if (hover === 'bar') {
@@ -721,10 +732,21 @@ function buildHoverDetail(
     case 'cache': {
       const rate = formatCacheHitRate(usage)
       if (usage === undefined || rate === undefined) return null
+      // The cache split is optional on the wire (`cacheReadTokens?` /
+      // `cacheWriteTokens?`), and a route that never writes the prompt cache
+      // reports a zero or omits the field — every DeepSeek route does one or
+      // the other. A zero component says nothing the rate does not, and
+      // rendering the absence as `0` asserts a number no provider sent.
       return (
         <Text wrap="truncate">
-          {dim('cache ')}{rate} · {dim('read ')}{formatTokens(usage.cacheRead)} ·{' '}
-          {dim('write ')}{formatTokens(usage.cacheWrite)} · {dim('input ')}{formatTokens(usage.input)}
+          {dim('cache ')}{rate}
+          {usage.cacheRead > 0
+            ? <>{' · '}{dim('read ')}{formatTokens(usage.cacheRead)}</>
+            : null}
+          {usage.cacheWrite > 0
+            ? <>{' · '}{dim('write ')}{formatTokens(usage.cacheWrite)}</>
+            : null}
+          {' · '}{dim('input ')}{formatTokens(usage.input)}
         </Text>
       )
     }

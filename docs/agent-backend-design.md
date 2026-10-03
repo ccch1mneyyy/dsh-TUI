@@ -367,7 +367,7 @@ Channel（组合根 + `src/channel/*`）只做六件事：
 1. 持有一个 `AgentSession` 绑定（`binding.ts` 泛化：`Agent/AgentHandle` → `AgentSession`，prepare/adopt/switchTo 事务语义不变）；
 2. 用 `session.history()` 回放、`session.subscribe()` 跟随，交给唯一 reducer `createChannelProjection`；
 3. 维护 UI 视图模型 `ChannelState`（rows、tokens、spinner、pending、subagents、tasks、compaction、notifications…）；
-4. 把 `ChannelUi` 动作委托给 `session.capabilities.*`，能力缺席时 `notify(t('capability-unavailable', {name}))` 并返回失败值（**不**静默 no-op，符合"未安装或已释放的动作明确失败"的既有约定）；
+4. 把 `ChannelUi` 动作委托给 `session.capabilities.*`，能力缺席时 `notify(t('capability-unavailable-backend', {name}))` 并返回失败值（**不**静默 no-op，符合"未安装或已释放的动作明确失败"的既有约定）；
 5. 输入管线（FIFO、@ 提及、图片、IDE 选区、`tui/input` 决策）与 `submit/steer/interruptAndDeliver` 的放置语义；
 6. 宿主接缝（settings/scenes/themes/dialogs/notify）。
 
@@ -928,7 +928,7 @@ UI 映射：`subagent.*` → 现有 `SubagentActivityStore`/`SubagentRow`/`Subag
 7. **durable truth vs UI projection**：§3.6；`ChannelState` 全部是投影，可从后端真源重建。
 8. **Claude 会话真源**：`~/.claude/projects` 转录 + SDK 读写 API；TUI 只存 last-used/pins。
 9. **`/resume` 同时列 DSH/Claude**：`SessionSupervisor` 多 tab，行携带 `backendId`，打开走 `backend.open({kind:'resume'})`。
-10. **后端专属 feature 不污染 UI**：`capabilities` 类型化对象 + `native.*` 逃生舱只允许在各自后端目录访问（门禁）；UI 只看 `ChannelUi.capabilities` 布尔快照决定显示。
+10. **后端专属 feature 不污染 UI**：`capabilities` 类型化对象 + `native.*` 逃生舱只允许在各自后端目录访问（门禁）；UI 只看 `ChannelUi.backendCapabilities` 布尔快照决定显示（合并 main bca29675 时由 `capabilities` 改名：main 的 `ChannelUi.capabilities()` 是 DSH agent 组合事实，两者并存）。
 11. **权限死锁**：§4.7 六条 + signal 驱动 + 30s 强制收敛 + 测试矩阵。
 12. **子代理进入现有 UI**：`subagent.*` 事件 → 现有 `SubagentActivityStore`/卡片/面板，`task_id` 即 agentId，`parent_tool_use_id` 预建。
 13. **后台任务表达**：`task.*` + `tasks.snapshot` → 现有 jobs 面板/chip；`working` 不与任务绑定。

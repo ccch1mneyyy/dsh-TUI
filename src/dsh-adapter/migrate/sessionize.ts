@@ -65,6 +65,7 @@ import {
   type SessionHeader,
 } from '@deepseek-ai/dsh-session'
 import { userTitleData } from '../compat/sessionLog.js'
+import { estimateTokens } from '../channel/usage.js'
 import { normalizeTitle } from './parse/title.js'
 import type { ImportStep, MigrationSession } from './types.js'
 
@@ -73,11 +74,6 @@ import type { ImportStep, MigrationSession } from './types.js'
  *  dsh-tui does not depend on. `Session.append` validates them at runtime. */
 interface UntypedAppend {
   append(type: string, data: unknown, intent?: unknown): SessionEvent
-}
-
-/** Rough token estimate for shadowed text (the compaction metering field). */
-function estimateTokens(chars: number): number {
-  return Math.ceil(chars / 4)
 }
 
 /** One migration turn's model-visible outcome, ready for persistence. */
@@ -164,7 +160,7 @@ export function sessionize(id: SessionId, agentId: string, session: MigrationSes
   }
   const writePrompt = (prompt: string): void => {
     if (prompt === '') return
-    surfaceChars += prompt.length
+    surfaceTokens += estimateTokens(prompt)
     events.push(model.append('user/message', createUserMessage({
       content: [{ type: 'text', text: prompt }],
       source: { kind: 'user' },
@@ -193,9 +189,11 @@ export function sessionize(id: SessionId, agentId: string, session: MigrationSes
     }
   }
   let compactions = 0
-  // Text volume on the surface since the last checkpoint, for the summary's
-  // shadowedTokenCount (an estimate, like the live engine's).
-  let surfaceChars = 0
+  // Estimated model-visible tokens on the surface since the last checkpoint,
+  // for the summary's shadowedTokenCount (an estimate, like the live engine's;
+  // the shared CJK-aware estimator keeps migrated CJK sessions from being
+  // under-counted ~3x the way the old chars/4 did — issue #1170).
+  let surfaceTokens = 0
   /** Fold every surface node after the head into one checkpoint; false when
    *  there is nothing to fold (the upstream contract needs a non-empty span). */
   const writeCompaction = (summary: string, summaryModel: string | undefined): boolean => {
@@ -211,7 +209,7 @@ export function sessionize(id: SessionId, agentId: string, session: MigrationSes
       summary: [{ type: 'text', text: summary }],
       shadowedRange: range,
       shadowedSeqs: shadowed,
-      shadowedTokenCount: estimateTokens(surfaceChars),
+      shadowedTokenCount: surfaceTokens,
       provider: `migrated:${agentId}`,
       model: summaryModel ?? agentId,
     }))
@@ -221,7 +219,7 @@ export function sessionize(id: SessionId, agentId: string, session: MigrationSes
       source: { kind: 'compact-checkpoint', compactionId } as unknown as { kind: 'user' },
     }), { surfaceOp: { op: 'replace', startSeq: range.start, endSeq: range.end }, sourceEventSeqs: shadowed }))
     events.push(untyped.append('compaction/end', { compactionId, turn: null }))
-    surfaceChars = summary.length
+    surfaceTokens = estimateTokens(summary)
     return true
   }
   let turnIndex = 0
@@ -261,8 +259,8 @@ export function sessionize(id: SessionId, agentId: string, session: MigrationSes
         writePrompt(turn.prompt)
       }
       for (const input of imported.inputs) writePrompt(input)
-      for (const block of imported.blocks) surfaceChars += block.type === 'tool-call' ? block.arguments.length : block.text.length
-      for (const result of imported.results) surfaceChars += result.text.length
+      for (const block of imported.blocks) surfaceTokens += estimateTokens(block.type === 'tool-call' ? block.arguments : block.text)
+      for (const result of imported.results) surfaceTokens += estimateTokens(result.text)
       events.push(model.append('assistant/message', {
         turn: turnIndex,
         step,

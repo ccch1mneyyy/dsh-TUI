@@ -5,7 +5,7 @@
  * last-session marker), `/resume`, `/fork` and the double-Esc rewind — each
  * backed by the backend's offline `SessionCatalog`, its `openSession` and
  * the bound session's `fork` / `rewind` capabilities. A missing backing is
- * an explicit `capability-unavailable`, never a silent no-op.
+ * an explicit `capability-unavailable-backend`, never a silent no-op.
  *
  * Within one backend per process: the catalog lists the bound backend's
  * sessions and a resume opens one of them; switching backends inside one

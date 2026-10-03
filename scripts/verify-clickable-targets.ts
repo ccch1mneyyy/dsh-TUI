@@ -118,6 +118,30 @@ checkEq(
 )
 checkEq('empty text unchanged', linkifyFilePaths('', wrap), '')
 
+// Test the scanner, not only the whole-token heuristic: an internal slash
+// must not turn a rejected token's suffix into an anchored path.
+for (const text of [
+  'working/idle/needs-input state,',
+  '2024/01/15',
+  'github.com/foo/bar',
+  '工作/空闲/等待输入',
+  'working\\idle\\needs-input',
+  'prefix./dir/name',
+  'prefix~/dir/name',
+  'prefixC:\\dir\\name',
+]) {
+  checkEq(`non-path token stays intact: ${text}`, linkifyFilePaths(text, wrap), text)
+}
+for (const path of ['/tmp/project', './dir/name', '../dir/name', '~/dir/name', 'C:\\dir\\name']) {
+  for (const prefix of ['', 'see ', '\n', '"', "'", '(', '[', '{', '=']) {
+    checkEq(
+      `anchored path at a text boundary: ${prefix}${path}`,
+      linkifyFilePaths(prefix + path, wrap),
+      prefix + wrap(path, path),
+    )
+  }
+}
+
 // ── 3. dsh-file: URL round-trip ─────────────────────────────────────────
 const tricky = [
   'src/foo.ts',

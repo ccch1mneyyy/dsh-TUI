@@ -46,6 +46,7 @@ import { createAgentViewProjection } from './agent-view-projection.js'
 import { createBackgroundCurrentAction } from './background-action.js'
 import { dshChannelBinding } from './binding.js'
 import { createBindingEvents } from './binding-events.js'
+import { agentCapabilityEvidence, annotateCommandCapabilities, resolveAgentCapabilities } from './capabilities.js'
 import { channelCommands } from './commands.js'
 import { createManualCompaction } from './compaction.js'
 import type { CoreChannel } from './core/compose.js'
@@ -186,13 +187,20 @@ export function attachDshExtensions(
   state.sessionId = binding.agent.session.id
   state.mode = sessionModes[0]!
   // A DSH session supports everything the TUI offers (design §3.5).
-  state.capabilities = channelCapabilities({
+  state.backendCapabilities = channelCapabilities({
     backendId: initialSession.ref.backendId,
     backendLabel: options.backendLabel ?? DSH_BACKEND_LABEL,
     capabilities: initialSession.capabilities,
     dsh: true,
   })
-  state.commandList = LOCAL_COMMANDS
+  // Capability facts for the bound agent (channel/capabilities.ts). Reads are
+  // service lookups, so both consumers may call it freely: the public
+  // `capabilities()` accessor and the command-list annotation below.
+  const capabilitiesOf = () => resolveAgentCapabilities(agentCapabilityEvidence(ctx, binding.agent))
+  // Annotated from the start: Help and `/` completion read `commandList`
+  // before the first skill-catalog refresh publishes a new one, and a command
+  // whose capability is missing must never look usable in that window.
+  state.commandList = annotateCommandCapabilities(LOCAL_COMMANDS, capabilitiesOf())
   Object.defineProperty(state, 'autoRecapOnOpen', {
     configurable: true,
     enumerable: true,
@@ -265,6 +273,8 @@ export function attachDshExtensions(
     touchSession: sessionId => { touchSession(sessionId) },
     // A session log records no branch; note it so the browser can show it.
     noteBranch: branch => { noteBranch(binding.agent.session.id, branch) },
+    // `ChannelUi.capabilities()`: the agent's composition facts.
+    agentCapabilities: capabilitiesOf,
   })
   core.feed.configureProjection({ jobs: jobProjection.store, pricingWindow: dshPricingWindow })
   const resetProjection = core.feed.resetProjection
@@ -329,7 +339,13 @@ export function attachDshExtensions(
     commandService,
     agent: () => binding.agent,
     cwd: () => state.cwd,
-    setCommands(commands) { state.commandList = commands; state.emit() },
+    setCommands(commands) {
+      // Annotate before publishing: Help and `/` completion both read
+      // `commandList`, so a command whose capability is missing says so
+      // instead of looking usable and failing on use.
+      state.commandList = annotateCommandCapabilities(commands, capabilitiesOf())
+      state.emit()
+    },
     commandDescriptions: name => commandTrees?.descriptions(name),
     // Attached-context pass-through: the skill catalog never loses the
     // FIFO/decision fence.
@@ -462,6 +478,7 @@ export function attachDshExtensions(
     binding,
     state,
     seedActivity: options.seedActivity,
+    seedContextOccupancy: options.seedContextOccupancy,
     inputConvergence: core.inputConvergence,
     selection,
     modelActions,

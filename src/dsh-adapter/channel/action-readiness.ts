@@ -180,7 +180,7 @@ export function createChannelActionReadiness() {
  * delegate per public action, each failing per its own contract — `false`,
  * `null`, `undefined`, an empty list or an `{ ok: false }` result — and, for
  * an action the user invoked, saying so through `unavailable(name)` (which
- * notifies `capability-unavailable`). Nothing here pretends to succeed.
+ * notifies `capability-unavailable-backend`). Nothing here pretends to succeed.
  *
  * Passive reads the renderer performs on its own (agent-view rows and their
  * subscription, the cached session list, workspace sub-commands, cache

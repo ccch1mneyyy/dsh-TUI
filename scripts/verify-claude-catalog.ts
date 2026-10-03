@@ -330,7 +330,7 @@ try {
   try {
     check('the startup history paints before the first live event', kinds()[0] === 'user:earlier question' && kinds().indexOf('notice:live backlog notice') > kinds().indexOf('assistant:earlier answer'), kinds())
     check('user rows carry the backend\'s rewind anchor', channel.rows.find(row => row.kind === 'user')?.anchor === 'start-u1')
-    check('/resume is offered for a backend with a catalog and open', channel.capabilities.resume && channel.capabilities.commands.includes('resume'))
+    check('/resume is offered for a backend with a catalog and open', channel.backendCapabilities.resume && channel.backendCapabilities.commands.includes('resume'))
 
     // The browser: the directory first (partial), then every project.
     const partials: number[] = []

@@ -108,7 +108,8 @@
       "text": "Thinking about the tail",
       "streaming": false,
       "seq": 33,
-      "durationMs": 1
+      "durationMs": 1,
+      "thinkingOpen": false
     },
     {
       "id": 17,
@@ -125,7 +126,7 @@
     }
   ],
   "tokens": {
-    "input": 150,
+    "input": 160,
     "output": 8,
     "cacheRead": 30,
     "cacheWrite": 0,
@@ -219,7 +220,8 @@
       "text": "Greeting the user.",
       "streaming": false,
       "seq": 4,
-      "durationMs": 1
+      "durationMs": 1,
+      "thinkingOpen": false
     },
     {
       "id": 2,
@@ -308,7 +310,8 @@
       "text": "Thinking about the tail",
       "streaming": false,
       "seq": 33,
-      "durationMs": 1
+      "durationMs": 1,
+      "thinkingOpen": false
     },
     {
       "id": 17,
@@ -364,7 +367,7 @@
         "other-plugin/ping",
         "developer/message"
       ],
-      "checkContextWarning": 1,
+      "checkContextWarning": 4,
       "resetContextWarning": 2,
       "agent": 0
     }
@@ -396,6 +399,10 @@
     },
     {
       "path": "rows[1].streaming",
+      "reason": "prepareReplayEvents drops legacy assistant/chunk deltas already settled by a later assistant/message; live renders them first (rows keep the chunk seq, TPS is sampled from them, and the extra Date.now reads shift later stub-clock stamps)"
+    },
+    {
+      "path": "rows[1].thinkingOpen",
       "reason": "prepareReplayEvents drops legacy assistant/chunk deltas already settled by a later assistant/message; live renders them first (rows keep the chunk seq, TPS is sampled from them, and the extra Date.now reads shift later stub-clock stamps)"
     },
     {

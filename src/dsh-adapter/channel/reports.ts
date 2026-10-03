@@ -7,7 +7,7 @@ import { readGrantStore } from '../../adapter/standard/grants.js'
 import type { AdapterRuntimeOptions } from '../../adapter/kernel/runtime.js'
 import { fetchBalance } from '../../deepseekBalance.js'
 import { t } from '../../i18n.js'
-import { credentialRefDeclared } from '../../utils/credentials.js'
+import { credentialRefDeclared, dshHomeDir } from '../../utils/credentials.js'
 import { homeDir } from '../../utils/paths.js'
 import { sessionsRoots } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
@@ -135,9 +135,17 @@ export function createReportActions(ctx: Context, deps: {
       t('doctor-context-window', { window: deps.contextWindow() ?? t('doctor-unknown') }),
       `${t('doctor-session', { id: deps.capture().agent.id })}${deps.sessionTitle() ? ` · ${deps.sessionTitle()}` : ''}`,
     ]
-    for (const candidate of [join(homeDir(), '.dsh-tui/cordis.yml'), join(homeDir(), '.dsh/profiles/dsh-tui/cordis.patch.yml')]) {
-      lines.push(t('doctor-config', { candidate, state: existsSync(candidate) ? '✓' : t('doctor-config-missing') }))
-    }
+    // The same two config candidates as the launcher's doctor, resolved the same
+    // way. `~/.dsh-tui/cordis.yml` is the bare-composition root config
+    // (`dsh --config cordis.yml`): a profile install does not use it and nothing
+    // reads it, so its absence is normal — list it only when the user kept one.
+    // The profile patch hangs off `$DSH_HOME ?? ~/.dsh` plus the launcher's own
+    // profile name; a hardcoded `~/.dsh` named a different file whenever
+    // `DSH_HOME` was set. The two doctors must not diverge.
+    const legacyConfig = join(homeDir(), '.dsh-tui/cordis.yml')
+    if (existsSync(legacyConfig)) lines.push(t('doctor-config', { candidate: legacyConfig, state: '✓' }))
+    const profileConfig = join(dshHomeDir(), 'profiles', 'dsh-tui', 'cordis.patch.yml')
+    lines.push(t('doctor-config', { candidate: profileConfig, state: existsSync(profileConfig) ? '✓' : t('doctor-config-missing') }))
     for (const dir of sessionsRoots()) lines.push(t('doctor-storage', { dir, state: existsSync(dir) ? '✓' : t('doctor-storage-uninit') }))
     const pluginHost = ctx.get('tuiPluginHost')
     lines.push(t('doctor-plugin-generation', { id: pluginHost?.generationId ?? t('doctor-plugin-host-missing') }))

@@ -1,5 +1,5 @@
 /**
- * The UI's capability snapshot of a bound session (`ChannelUi.capabilities`):
+ * The UI's capability snapshot of a bound session (`ChannelUi.backendCapabilities`):
  * plain readonly data derived once per binding from the session's typed
  * capabilities. The composition root says whether the session is a DSH
  * session (only the DSH directory may look at `native.dsh`); a DSH session

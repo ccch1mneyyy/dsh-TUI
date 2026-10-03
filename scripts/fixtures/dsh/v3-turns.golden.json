@@ -117,7 +117,8 @@
       "kind": "reasoning",
       "text": "Frames carry revisions.",
       "streaming": false,
-      "durationMs": 1
+      "durationMs": 1,
+      "thinkingOpen": false
     },
     {
       "id": 18,
@@ -327,7 +328,8 @@
       "kind": "reasoning",
       "text": "Frames carry revisions.",
       "streaming": false,
-      "durationMs": 1
+      "durationMs": 1,
+      "thinkingOpen": false
     },
     {
       "id": 18,
@@ -351,7 +353,7 @@
       "jobsOnStarted": [],
       "jobsOnOutputSeen": [],
       "rendererRender": [],
-      "checkContextWarning": 2,
+      "checkContextWarning": 4,
       "resetContextWarning": 0,
       "agent": 0
     }

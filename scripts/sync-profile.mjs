@@ -3,10 +3,16 @@
  * sync-profile.mjs — 把当前工作区产物同步到已安装的 dsh-tui 包。
  *
  * 同步范围 = package.json `files` 列表（bin/、lib/、assets/、cordis*.yml、
- * dsh-ecosystem-spec/{registry,protocols,schemas}、presets、guide），与发布包
+ * tui-profile/{registry,protocols,schemas}、presets、guide），与发布包
  * 完全一致（guide/ 是随包用户手册，见 scripts/build-guide.mjs）。逐文件比较
  * hash，只复制有差异的文件；不删除 profile
  * 里多余的依赖文件（node_modules 等由 dsh plugin 管理）。
+ *
+ * 写入方式：先删目标再复制，绝不就地覆盖。pnpm 的 node_modules 是硬链接到
+ * 内容寻址 store 的，同一个 inode 被多个路径共享（同内容的多个文件、以及
+ * store 条目本身）；`fs.copyFileSync` 覆盖已存在的文件是就地写，会**写穿**
+ * 共享 inode，把兄弟文件一起改掉。删掉目标只摘掉这一个目录项，复制落到新
+ * inode 上。回归见 scripts/verify-sync-profile.mjs。
  *
  * 用法：
  *   node scripts/sync-profile.mjs                   # 同步 profile 内的包
@@ -18,7 +24,7 @@
  * profile 内的副本不会生效。用 `dsh --profile dsh-tui --dump-config`
  * 确认实际 bundle，再通过 --target 同步那份安装包。
  */
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -105,6 +111,9 @@ for (const rel of changed) {
   const src = join(root, rel)
   const dst = join(installed, rel)
   mkdirSync(dirname(dst), { recursive: true })
+  // 摘掉这一个目录项再复制：就地覆盖会写穿共享 inode（pnpm 硬链接），
+  // 把同 inode 的兄弟文件和 store 条目一起改掉。
+  rmSync(dst, { force: true })
   copyFileSync(src, dst)
   console.log(`  → ${rel}`)
 }

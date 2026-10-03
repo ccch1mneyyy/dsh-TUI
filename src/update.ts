@@ -1056,18 +1056,41 @@ export interface ReleaseAgeExcludeOutcome {
  * (24h by default) — on release day that gate refuses the very version
  * `/update` is installing (ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION), which
  * reads to the user as a broken update until the window passes. Pre-seed the
- * profile's pnpm-workspace.yaml with a release-age exclusion scoped to this
- * package at the exact target version — the same best-effort, idempotent
- * pattern as {@link ensureProfileAllowBuilds}: foreign entries are preserved,
- * an existing entry for this package is replaced (one entry tracks the current
- * target instead of accumulating), a missing `minimumReleaseAgeExclude` block
- * is appended, a missing file is created, and an absent profile directory
- * resolves to undefined — the caller still runs pnpm, whose own diagnostic
- * stays the visible fallback.
+ * profile's pnpm-workspace.yaml with release-age exclusions scoped to this
+ * package at the exact versions pnpm verifies before it can swap the package:
+ * the target version itself, plus `alsoExempt` — the pre-update `updatedFrom`,
+ * read from the running package's own manifest (normally the version the
+ * profile lockfile pins). Two releases inside the 24h window leave the OLD
+ * lockfile entry inside it too, and pnpm fails the whole policy check on that
+ * entry before replacing the package (issue #1205), so exempting only the
+ * target is not enough. Same best-effort,
+ * idempotent pattern as {@link ensureProfileAllowBuilds}: entries for this
+ * package track exactly the versions the current update needs (older own
+ * entries are dropped instead of accumulating), foreign entries are
+ * preserved, a missing `minimumReleaseAgeExclude` block is appended, a
+ * missing file is created, and an absent profile directory resolves to
+ * undefined — the caller still runs pnpm, whose own diagnostic stays the
+ * visible fallback. Own entries are re-rendered target-first on every
+ * rewrite: pnpm 11.7.x honours only the FIRST entry per package (later
+ * entries for the same package are ignored against the real registry), and
+ * 11.21.x applies every entry in any order, so the target — the version the
+ * swap itself has to resolve, and published by construction while a
+ * dev-built `updatedFrom` need not be — takes the slot older pnpm still
+ * reads. Both exemptions come from the manifest, not from `pnpm-lock.yaml`:
+ * a profile whose manifest and lockfile diverged keeps the lockfile's entry
+ * unexempted. The 11.7.x `--frozen-lockfile` policy check reads that first
+ * entry only, so a two-entry list does not clear it there; the `pnpm add`
+ * path `/update` runs resolves the target and does pass.
+ *
+ * @param profile - The dsh profile whose workspace file is seeded.
+ * @param version - The update target (exact version).
+ * @param alsoExempt - Optional second version to keep exempt, normally the
+ *   pre-update `updatedFrom`; ignored when empty or equal to `version`.
  */
 export function ensureProfileReleaseAgeExclude(
   profile: string,
   version: string,
+  alsoExempt?: string,
 ): ReleaseAgeExcludeOutcome | undefined {
   const yamlPath = profileWorkspaceYamlPath(profile)
   try {
@@ -1079,6 +1102,10 @@ export function ensureProfileReleaseAgeExclude(
       // Missing file — start from an empty document; writeFileSync creates it.
     }
     const entry = `${PACKAGE_NAME}@${version}`
+    const alsoEntry = alsoExempt !== undefined && alsoExempt !== '' && alsoExempt !== version
+      ? `${PACKAGE_NAME}@${alsoExempt}`
+      : undefined
+    const keep = alsoEntry === undefined ? [entry] : [entry, alsoEntry]
     const lines = text.split(/\r?\n/u)
     let blockStart = -1
     for (let i = 0; i < lines.length; i += 1) {
@@ -1090,9 +1117,12 @@ export function ensureProfileReleaseAgeExclude(
     }
     /** Item text of a list line, unquoted (`- 'x@1'` / `- x@1` → `x@1`). */
     const itemOf = (line: string): string => line.trim().replace(/^-\s*/u, '').replace(/^'(.*)'$/u, '$1')
-    const foreign: string[] = []
+    /** Foreign exclusion lines, preserved verbatim and in file order. */
+    const foreignLines: string[] = []
+    /** Keep-set entries already present in the block. */
+    const present: string[] = []
+    let droppedStale = false
     let blockEnd = -1
-    let alreadyCurrent = false
     if (blockStart !== -1) {
       blockEnd = blockStart + 1
       for (let i = blockStart + 1; i < lines.length; i += 1) {
@@ -1100,20 +1130,25 @@ export function ensureProfileReleaseAgeExclude(
         if (line === '' || line === line.trimStart()) break // dedent = block ends
         blockEnd = i + 1
         const item = itemOf(line)
-        if (item === entry) {
-          alreadyCurrent = true
-          foreign.push(line)
-        } else if (!item.startsWith(`${PACKAGE_NAME}@`)) {
-          foreign.push(line)
+        if (!item.startsWith(`${PACKAGE_NAME}@`)) {
+          foreignLines.push(line)
+        } else if (keep.includes(item)) {
+          present.push(item)
+        } else {
+          // Own entries for older targets: dropped (no accumulation).
+          droppedStale = true
         }
-        // Stale entries for THIS package (older targets) are dropped above.
       }
     }
-    if (alreadyCurrent) {
-      const entries = [entry, ...lines.slice(blockStart + 1, blockEnd).map(itemOf)]
-      return { entries, changed: false }
+    const missing = keep.filter(item => !present.includes(item))
+    if (!droppedStale && missing.length === 0) {
+      return { entries: [...foreignLines.map(itemOf), ...present], changed: false }
     }
-    const insert = foreign.concat(`  - '${entry}'`)
+    // Own entries are re-rendered in keep order (target first) instead of
+    // copied as found: pnpm 11.7.x honours only the first entry per package
+    // (11.21.x applies them all, order-independent), and the target is the
+    // version the swap must resolve, so it takes that first slot.
+    const insert = foreignLines.concat(keep.map(item => `  - '${item}'`))
     if (blockStart !== -1) {
       lines.splice(blockStart + 1, blockEnd - blockStart - 1, ...insert)
     } else {
@@ -1121,7 +1156,7 @@ export function ensureProfileReleaseAgeExclude(
       lines.push('minimumReleaseAgeExclude:', ...insert)
     }
     writeFileSync(yamlPath, `${lines.join('\n')}\n`)
-    return { entries: [...foreign.map(itemOf), entry], changed: true }
+    return { entries: insert.map(itemOf), changed: true }
   } catch {
     return undefined
   }
@@ -1577,14 +1612,22 @@ export async function updateTui(
   // pnpm ≥11's minimumReleaseAge (24h by default) refuses installs of
   // packages published within the window — on release day that gate rejects
   // the exact version /update pins, surfacing as a failed update that heals
-  // itself a day later. Scope-exempt this package at the exact target before
-  // pnpm runs (release-day /update parity with the allowBuilds seed above).
+  // itself a day later. Two releases inside the window (issue #1205) trip the
+  // same gate on the OLD lockfile entry pnpm verifies before the swap, so
+  // both the target and the still-installed updatedFrom are exempted.
   if (targetVersion !== undefined) {
-    const releaseAge = ensureProfileReleaseAgeExclude(profile, targetVersion)
+    const releaseAge = ensureProfileReleaseAgeExclude(
+      profile,
+      targetVersion,
+      updatedFrom === '' ? undefined : updatedFrom,
+    )
     if (releaseAge !== undefined && releaseAge.changed) {
+      const exempted = updatedFrom !== '' && updatedFrom !== targetVersion
+        ? `${PACKAGE_NAME}@${targetVersion} + ${PACKAGE_NAME}@${updatedFrom}`
+        : `${PACKAGE_NAME}@${targetVersion}`
       process.stderr.write(
-        `dsh-tui: pre-seeded profile release-age exclusion (${PACKAGE_NAME}@${targetVersion}) — ` +
-          'a freshly published version installs without the 24h supply-chain delay\n',
+        `dsh-tui: pre-seeded profile release-age exclusion (${exempted}) — ` +
+          'freshly published versions install without the 24h supply-chain delay\n',
       )
     }
   }

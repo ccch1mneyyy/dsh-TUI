@@ -637,9 +637,14 @@ const runDoctorChecks = () => {
     'DEEPSEEK_API_KEY',
     keyFromEnv ? L.keySetEnv : keyFromStore ? L.keySetStore : L.keyMissing,
   )
-  for (const candidate of [join(homedir(), '.dsh-tui', 'cordis.yml'), join(profileDir, 'cordis.patch.yml')]) {
-    report(existsSync(candidate), 'config', `${candidate}${existsSync(candidate) ? '' : `  ${L.missing}`}`)
-  }
+  // `~/.dsh-tui/cordis.yml` 是裸组合（`dsh --config cordis.yml`）时代的用户根
+  // 配置：profile 安装不使用它，全包也没有任何代码读它——缺席是常态，不是故障。
+  // 恒报 ✗ 会把旁边唯一有意义的 profile 补丁一起变成噪音（用户会去创建这个对
+  // 功能毫无影响的文件）。只在用户确实留了它时列出。
+  const legacyConfig = join(homedir(), '.dsh-tui', 'cordis.yml')
+  if (existsSync(legacyConfig)) report(true, 'config', legacyConfig)
+  const profileConfig = join(profileDir, 'cordis.patch.yml')
+  report(existsSync(profileConfig), 'config', `${profileConfig}${existsSync(profileConfig) ? '' : `  ${L.missing}`}`)
   return { hardFailure, lines }
 }
 // ─── safe 会话支撑（清单解析与报告渲染，交互/非交互共用）──────────────────────

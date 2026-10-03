@@ -117,7 +117,8 @@
       "kind": "reasoning",
       "text": "Frames carry revisions.",
       "streaming": false,
-      "durationMs": 1
+      "durationMs": 1,
+      "thinkingOpen": false
     },
     {
       "id": 18,
@@ -170,7 +171,7 @@
   "cancelPending": false,
   "turnStart": 1767571200006,
   "activeToolCount": 0,
-  "spinnerMode": "thinking",
+  "spinnerMode": "responding",
   "responseChars": 26,
   "lastUserText": "Explain the frame protocol.",
   "tps": 17,
@@ -327,7 +328,8 @@
       "kind": "reasoning",
       "text": "Frames carry revisions.",
       "streaming": false,
-      "durationMs": 1
+      "durationMs": 1,
+      "thinkingOpen": false
     },
     {
       "id": 18,
@@ -351,7 +353,7 @@
       "jobsOnStarted": [],
       "jobsOnOutputSeen": [],
       "rendererRender": [],
-      "checkContextWarning": 2,
+      "checkContextWarning": 4,
       "resetContextWarning": 0,
       "agent": 0
     }
@@ -415,18 +417,18 @@
     "#41 request/header | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
     "frame r1 start attempt-a | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
     "frame r2 chunk attempt-a | rows=15 streaming=[14] spin=thinking working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "frame r3 chunk attempt-a | rows=16 streaming=[14,15] spin=thinking working=1 tools=0 chars=28 goal=- todos=0 compaction=-",
+    "frame r3 chunk attempt-a | rows=16 streaming=[15] spin=responding working=1 tools=0 chars=28 goal=- todos=0 compaction=-",
     "frame r4 end attempt-a | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
     "frame r5 start attempt-b | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
     "frame r6 chunk attempt-b | rows=15 streaming=[16] spin=responding working=1 tools=0 chars=33 goal=- todos=0 compaction=-",
     "frame r7 end attempt-b | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
     "frame r8 start attempt-c | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
     "frame r9 chunk attempt-c | rows=15 streaming=[17] spin=thinking working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "frame r10 chunk attempt-c | rows=16 streaming=[17,18] spin=thinking working=1 tools=0 chars=14 goal=- todos=0 compaction=-",
-    "frame r10 chunk attempt-c | rows=16 streaming=[17,18] spin=thinking working=1 tools=0 chars=14 goal=- todos=0 compaction=-",
-    "frame r11 chunk attempt-x | rows=16 streaming=[17,18] spin=thinking working=1 tools=0 chars=14 goal=- todos=0 compaction=-",
-    "frame r12 chunk attempt-c | rows=16 streaming=[17,18] spin=thinking working=1 tools=0 chars=26 goal=- todos=0 compaction=-",
-    "frame r13 chunk attempt-c | rows=16 streaming=[17,18] spin=thinking working=1 tools=0 chars=26 goal=- todos=0 compaction=-",
-    "settleStreaming | rows=16 streaming=[] spin=thinking working=1 tools=0 chars=26 goal=- todos=0 compaction=-"
+    "frame r10 chunk attempt-c | rows=16 streaming=[18] spin=responding working=1 tools=0 chars=14 goal=- todos=0 compaction=-",
+    "frame r10 chunk attempt-c | rows=16 streaming=[18] spin=responding working=1 tools=0 chars=14 goal=- todos=0 compaction=-",
+    "frame r11 chunk attempt-x | rows=16 streaming=[18] spin=responding working=1 tools=0 chars=14 goal=- todos=0 compaction=-",
+    "frame r12 chunk attempt-c | rows=16 streaming=[18] spin=responding working=1 tools=0 chars=26 goal=- todos=0 compaction=-",
+    "frame r13 chunk attempt-c | rows=16 streaming=[18] spin=responding working=1 tools=0 chars=26 goal=- todos=0 compaction=-",
+    "settleStreaming | rows=16 streaming=[] spin=responding working=1 tools=0 chars=26 goal=- todos=0 compaction=-"
   ]
 }

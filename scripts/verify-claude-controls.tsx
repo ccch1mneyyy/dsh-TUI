@@ -184,7 +184,7 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
   query.emit(init)
   await settled(() => channel.model === 'claude-sonnet-x')
   try {
-    check('channel: the native modes, models, effort, compact, mcp, context and login commands are served', ['model', 'effort', 'compact', 'mcp', 'context', 'login'].every(name => channel.capabilities.commands.includes(name)), channel.capabilities.commands)
+    check('channel: the native modes, models, effort, compact, mcp, context and login commands are served', ['model', 'effort', 'compact', 'mcp', 'context', 'login'].every(name => channel.backendCapabilities.commands.includes(name)), channel.backendCapabilities.commands)
     check('channel: backend commands merge after the local ones, local names win, terminal-only dropped', await settled(() => channel.commandList.some(command => command.name === 'review' && command.origin === 'backend'))
       && channel.commandList.filter(command => command.name === 'compact').length === 1 && channel.commandList.find(command => command.name === 'compact')?.origin === undefined
       && !channel.commandList.some(command => command.name === 'doctor' && command.origin === 'backend'), channel.commandList.map(command => `${command.name}:${command.origin ?? 'local'}`))

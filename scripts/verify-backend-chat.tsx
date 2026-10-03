@@ -146,14 +146,14 @@ try {
   // Review fix: keys that open DSH-only surfaces explain themselves instead
   // of opening an empty UI (or cycling nothing).
   stdin.write('\x1b[Z')
-  check('Shift+Tab without native modes explains itself', await settled(() => toasts().includes(t('capability-unavailable', { name: 'mode' }))), toasts())
+  check('Shift+Tab without native modes explains itself', await settled(() => toasts().includes(t('capability-unavailable-backend', { name: 'mode' }))), toasts())
   stdin.write('\x14')
-  check('Ctrl+T without a trace explains itself and opens no scene', await settled(() => toasts().includes(t('capability-unavailable', { name: 'trace' }))) && !screen().includes('trajectory'), toasts())
+  check('Ctrl+T without a trace explains itself and opens no scene', await settled(() => toasts().includes(t('capability-unavailable-backend', { name: 'trace' }))) && !screen().includes('trajectory'), toasts())
   stdin.write('\x1b')
   // 固定窗:pacing the double-Esc detector needs two distinct key events.
   await sleep(80)
   stdin.write('\x1b')
-  check('double-Esc without rewind explains itself', await settled(() => toasts().includes(t('capability-unavailable', { name: 'rewind' }))), toasts())
+  check('double-Esc without rewind explains itself', await settled(() => toasts().includes(t('capability-unavailable-backend', { name: 'rewind' }))), toasts())
 
   // Phase 5b: /mcp subcommands where the backend controls its servers.
   await typeLine('/mcp reconnect github')

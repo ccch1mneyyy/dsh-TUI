@@ -17,7 +17,7 @@ import { configValues, createSettingsScope, editableConfig, resolveSettingsNames
 import { createSettingsHosts } from '../src/dsh-adapter/channel/settings-host.ts'
 import { SettingsForm } from '../src/dsh-adapter/settingsEditor.ts'
 import TuiSettingsSectionsRuntime, { getHostSettingsSections, getLocalSettingsSectionsHost } from '../src/dsh-adapter/settings-sections.ts'
-import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizePageMargin, parsePageMarginSpec } from '../src/tuiDisplayPrefs.ts'
+import { DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, isPageMarginMode, normalizePageMargin, normalizeSidePanelPanels, parsePageMarginSpec } from '../src/tuiDisplayPrefs.ts'
 import { SPLASH_FONTS, SPLASH_FONT_OPTIONS, normalizeSplashFont } from '../src/components/splashFonts.ts'
 import { getLang, isLang } from '../src/i18n.ts'
 import { SHORTCUT_ACTIONS, setKeymapOverrides, resetKeymapOverrides, effectiveComboString, parseComboDraft, draftComboConflicts } from '../src/utils/keymap.ts'
@@ -50,6 +50,27 @@ function isVolatilePath(schema, path) {
 // Negative control: an intentionally non-volatile route must fail the walker,
 // so a walker that always returns true cannot satisfy the guard below.
 assert.equal(isVolatilePath(Config, ['sessionId']), false)
+
+/**
+ * Whether the schema DECLARES a settings path (walk `dict` segment by segment).
+ * `isVolatilePath` cannot see this on its own: a leaf under a volatile parent
+ * (`statusBar.cost`) is writable no matter what, so the host accepts the write
+ * and schemastery then drops the undeclared key on the way back in — the row
+ * reads "(unset)" and every edit silently reverts. Declaration is the property
+ * that actually has to hold for the value to survive a round trip.
+ */
+function isDeclaredPath(schema, path) {
+  let node = schema
+  for (const key of path) {
+    node = node?.dict?.[key]
+    if (node === undefined) return false
+  }
+  return true
+}
+// Negative control as well: the walker must reject an undeclared leaf (its
+// positive side is the production-registry guard below, exactly like
+// isVolatilePath above).
+assert.equal(isDeclaredPath(Config, ['statusBar', 'no-such-toggle']), false)
 
 let update
 const ctx = { on(event, handler) {
@@ -169,7 +190,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
   const home = mkdtempSync(join(tmpdir(), 'dsh-tui-settings-'))
   const observed = []
   const notices = []
-  let owner, child, liveScope, applyShortcuts, runtime
+  let owner, child, liveScope, applyShortcuts, runtime, legacyScopeSchema
   resetKeymapOverrides()
   const defaultPaste = effectiveComboString('paste')
   try {
@@ -198,7 +219,11 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
       await ctx.plugin(async runtimeCtx => {
         await bindSettings({
           ctx: runtimeCtx, configOwner: ctx, runtimeConfig, config: configValues(runtimeConfig), Schema, SHORTCUT_ACTIONS,
-          DEFAULT_STATUS_BAR, normalizePageMargin, isLang, Config, configValues, createSettingsScope, resolveSettingsNamespace, setKeymapOverrides,
+          DEFAULT_STATUS_BAR, normalizePageMargin, isLang, Config, configValues, resolveSettingsNamespace, setKeymapOverrides,
+          // Capture the legacy scope's own schema: the production wiring hands
+          // it a second hand-written statusBar list that has to stay in step
+          // with Config (the `local` registry path reads values through it).
+          createSettingsScope: (...args) => { legacyScopeSchema = args[3]; return createSettingsScope(...args) },
           bootedFullscreen: true, bootedTerminalImages: true,
           t: key => key, notifyChannel: message => notices.push(message), channel: { notify: message => notices.push(message) },
           observe: value => observed.push(value),
@@ -215,6 +240,9 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
       configOwner: owner, Config, resolveSettingsNamespace, settingsSections: sections,
       config: configValues(runtime), SHORTCUT_ACTIONS, SHORTCUT_FIELD_META, SETTING_GROUPS, settingField, effectiveComboString, parseComboDraft, draftComboConflicts,
       getLang, DEFAULT_PAGE_MARGIN, isPageMarginMode, parsePageMarginSpec, SPLASH_FONT_OPTIONS, normalizeSplashFont,
+      // Side-panel fields (sidePanel.panels) validate their draft against the
+      // production id grammar, so the eval scope mirrors those helpers too.
+      DEFAULT_SIDE_PANEL_IDS, SIDE_PANEL_ID_PATTERN, normalizeSidePanelPanels,
       bootedFullscreen: true, terminalImagesDisabledByEnv: false,
       readEffortPref: () => undefined, // Do not read the developer's persisted preferences.
     })
@@ -249,32 +277,61 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     }
     const descriptor = root.settings.describe().find(view => view.ns === ns)
     assert.deepEqual(Object.keys(descriptor.schema.refs[descriptor.schema.uid].dict).sort(), Object.keys(Config.dict).filter(key => Config.dict[key].meta.volatile === true).sort())
-    // 面板注册表（plugin.ts 的 fields）与 Config 的 volatile 白名单是两份手写
-    // 清单：少写一处，面板照样显示、改动却报 `Config field "x" is not
-    // volatile`。这条 guard 一次钉住全部注册 path（recapOnOpen 就是这么漏掉的）。
+    // 面板注册表（plugin.ts 的 fields）与 Config 是两份手写清单。两条断言各管一
+    // 半：volatile 决定写路径收不收（recapOnOpen 漏掉时是响亮的
+    // `Config field "x" is not volatile`），声明决定值能不能活着回来——叶子挂在
+    // volatile 父节点下（statusBar.cost）时 volatile 恒真，只有声明性 walker 抓
+    // 得住它：写被照收，随后 schema 重新解析时丢掉，面板退化成「（未设置）」。
     for (const field of section.fields) {
       assert.equal(isVolatilePath(Config, field.path), true, `${registry}: registered field ${field.path.join('.')} must be volatile on Config`)
+      assert.equal(isDeclaredPath(Config, field.path), true, `${registry}: registered field ${field.path.join('.')} must be declared on Config`)
     }
+    // normalizeStatusBar 会照单抄 DEFAULT_STATUS_BAR 的每个键，所以运行时的这份
+    // 契约每个键都得在 Config.statusBar 里有槽位（同一条手写清单问题的另一半）。
+    assert.deepEqual(
+      Object.keys(DEFAULT_STATUS_BAR).filter(key => !isDeclaredPath(Config, ['statusBar', key])),
+      [],
+      `${registry}: every DEFAULT_STATUS_BAR field needs a Config.statusBar slot`,
+    )
+    // 老式 settings scope 自带第二份手写 statusBar 清单（plugin.ts 的
+    // createSettingsScope 内联 schema）；`local` 注册表路径经它读值，键集必须与
+    // Config.statusBar 一致，否则那条路径上同样读不到 / 存不住。
+    assert.ok(legacyScopeSchema, `${registry}: the production wiring built its legacy settings scope schema`)
+    assert.deepEqual(
+      Object.keys(legacyScopeSchema.dict.statusBar.dict).sort(),
+      Object.keys(Config.dict.statusBar.dict).sort(),
+      `${registry}: the legacy settings scope must declare the same statusBar slots as Config`,
+    )
     // 打开会话自动总结（recapOnOpen）：可写之外还要真的存得进、读得回。
     // channel.autoRecapOnOpen 读的是 describe().value.recapOnOpen !== false，漏掉
     // Config 声明时它恒为 undefined，于是自动回顾永远关不掉。
     const recapField = section.fields.find(field => field.path.length === 1 && field.path[0] === 'recapOnOpen')
     assert.ok(recapField, `${registry}: the production section exposes recapOnOpen`)
     assert.equal(form.field(recapField).text, 'true', 'unset recapOnOpen shows the effective on')
+    // 底栏花费估算（statusBar.cost）：同一条链的叶子版本——未设置时面板要显示生效
+    // 值「开」，改动要真的落盘，describe() 投影也要带上它（StatusLine 读的就是这一
+    // 份；漏声明时那一行永远只显示「（未设置）」）。
+    const costField = section.fields.find(field => field.path.length === 2 && field.path[0] === 'statusBar' && field.path[1] === 'cost')
+    assert.ok(costField, `${registry}: the production section exposes statusBar.cost`)
+    assert.equal(form.field(costField).text, 'true', 'unset statusBar.cost shows the effective on')
     observed.length = 0
     form.edit(diffField, 'unified')
     form.edit(splashField, 'classic')
     form.edit(recapField, 'false')
+    form.edit(costField, 'false')
     assert.equal(form.field(recapField).invalid, false, `${registry}: recapOnOpen accepts a boolean edit`)
+    assert.equal(form.field(costField).invalid, false, `${registry}: statusBar.cost accepts a boolean edit`)
     const saved = await form.save()
     assert.equal(saved, true, `form save uses the real settings mutation path: ${form.failureMessage}`)
     assert.equal(configValues(runtime).diffLayout, 'unified')
     assert.equal(configValues(runtime).splashFont, 'classic', 'the panel persists the picked face')
     assert.equal(configValues(runtime).recapOnOpen, false, 'the panel persists the recap switch')
+    assert.equal(configValues(runtime).statusBar.cost, false, 'the panel persists the status-bar cost switch')
     assert.equal(owner.fiber, ownerFiber, 'editing settings does not remount the agent owner')
     assert.equal(observed.length, 1)
     assert.equal(host.listNamespaces().find(view => view.ns === ns).value.diffLayout, 'unified')
     assert.equal(host.listNamespaces().find(view => view.ns === ns).value.recapOnOpen, false, 'describe() projects the recap switch for the channel read site')
+    assert.equal(host.listNamespaces().find(view => view.ns === ns).value.statusBar.cost, false, 'describe() projects the cost switch for the status-bar read site')
     observed.length = 0
     await root.loader.update(entryId, { config: { diffLayout: 'unified', fullscreen: false, shortcuts: {} } })
     await root.loader.await()

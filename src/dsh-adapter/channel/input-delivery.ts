@@ -11,12 +11,13 @@ import {
   type ComposerImages,
 } from './composer-images.js'
 import { expandComposerMentions } from './composer-mentions.js'
+import { appendAttachedContextBlocks } from './attached-context.js'
 import { normalizeInputDecision } from './decisions.js'
 import { attachIdeSelection } from './ide-selection.js'
 import { mentionAttachments, mentionFs } from './mentions.js'
 import type { LocalImageStore } from './core/local-images.js'
 import type { ChannelOwner } from './owner.js'
-import type { ChannelSelection, SelectionAttachment } from '../../adapter/ports/channel-view.js'
+import type { AttachedContext, ChannelSelection, SelectionAttachment } from '../../adapter/ports/channel-view.js'
 import type {
   ChannelImageBlock,
   ChannelState,
@@ -44,6 +45,10 @@ export interface UserTextOrigin {
    *  selection made while the FIFO or mention expansion parks the delivery
    *  can never attach to this message. */
   readonly selection: ChannelSelection | undefined
+  /** "Send to Chat" contexts AT ENQUEUE, already taken off the channel (see
+   *  `consumeAttachedContexts`): the same one-shot rule as the selection, and
+   *  the reason a chip can never ride along with a second submission. */
+  readonly attachedContexts: readonly AttachedContext[]
 }
 
 /** Input FIFO, staged attachments and decision notice timers share one lifetime. */
@@ -62,6 +67,13 @@ export function createInputDelivery(
  /** The in-memory image store of a session that takes images itself (the
   *  `images` capability); absent / undefined = the DSH attachments service. */
  localImages?: () => LocalImageStore | undefined,
+ /**
+  * Take-and-clear the staged "Send to Chat" contexts for the submission being
+  * enqueued (side-panel §6.7). Optional so a bare embedder/fixture that owns
+  * only the decision seam stays constructible; with it absent the origin
+  * simply carries no contexts.
+  */
+ consumeAttachedContexts?: () => readonly AttachedContext[],
 ) {
   /**
    * `@` file mentions (issue #15): expansion reads files asynchronously, so
@@ -151,6 +163,10 @@ export function createInputDelivery(
     ...(local === undefined ? {} : { localImages: local }),
     stagedImages: composer.snapshot(),
     selection: selection(),
+    // Consumed (not merely read): the snapshot and the clear are one step, so
+    // the chips leave with the submission that owns them and a second,
+    // faster-typed message can never re-attach the same context.
+    attachedContexts: consumeAttachedContexts?.() ?? [],
     }
   }
 
@@ -194,6 +210,11 @@ export function createInputDelivery(
     // attached-file block — direct construction, never text parsing, failures
     // silently skipped (an IDE-side extra must never block a send).
     const selectionAttached = await attachIdeSelection(expansion.blocks, origin.cwd, origin.selection, origin.fs)
+    // "Send to Chat": append every context staged for THIS submission as its
+    // own `<attached-context …>` block, behind the typed text and the
+    // mention/selection attachments. Unlike the selection there is nothing to
+    // resolve and nothing that can fail — the body is already in hand.
+    appendAttachedContextBlocks(expansion.blocks, origin.attachedContexts)
     const message = createUserMessage({
       content: expansion.blocks,
       source: { kind: 'user' },

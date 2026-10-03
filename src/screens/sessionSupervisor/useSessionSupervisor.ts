@@ -24,7 +24,7 @@ import type { TuiWorkspaceEntry, TuiWorkspaceTarget } from '../../workspaces.js'
 import type { ChannelUi as Channel } from '../../adapter/channel/ui-policy.js'
 import type { ResumeResult } from '../../adapter/ports/channel-view.js'
 import { resumeFailureText } from '../../sessions/resumeFailure.js'
-import { RAIL_CHROME_ROWS, WORKSPACE_ROW_LINES, RAIL_MIN_TOTAL_COLUMNS, RAIL_WIDTH_MIN, RAIL_WIDTH_MAX, SESSION_ROW_LINES, SESSION_PANE_CHROME_ROWS, noticeLines, MenuAction, MENU_ACTIONS, MENU_WIDTH, MENU_HEIGHT, MENU_LABEL_KEYS, SupervisorLiveState, RailEntry, UNREGISTERED_RAIL_ID, message, samePath, sessionMatchesQuery } from './model.js'
+import { RAIL_CHROME_ROWS, WORKSPACE_ROW_LINES, RAIL_MIN_TOTAL_COLUMNS, RAIL_WIDTH_MIN, RAIL_WIDTH_MAX, SESSION_ROW_LINES, SESSION_PANE_CHROME_ROWS, noticeLines, menuActionsFor, SupervisorLiveState, RailEntry, UNREGISTERED_RAIL_ID, message, samePath, sessionMatchesQuery } from './model.js'
 
 /**
  * The last successful listing, per channel, carried across mounts of this
@@ -105,10 +105,10 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
    * renamed / deleted through its catalog.
    */
   // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts pass partial channels
-  const backendId = channel.capabilities?.backendId ?? 'dsh'
+  const backendId = channel.backendCapabilities?.backendId ?? 'dsh'
   const dshBackend = backendId === 'dsh'
   // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts pass partial channels
-  const workspaceLedger = channel.capabilities?.commands.includes('workspace') ?? true
+  const workspaceLedger = channel.backendCapabilities?.commands.includes('workspace') ?? true
   const pinsDir = sessionPinsDir(backendId)
 
   const [entries, setEntries] = useState<readonly RailEntry[]>([])
@@ -687,7 +687,10 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   const removeEntry = useCallback((path: string): void => {
     void channel.removeWorkspace(path)
       .then((ok) => {
-        if (ok) return reload()
+        if (ok) {
+          report(t('supervisor-workspace-removed'), 'info')
+          return reload()
+        }
         report(t('workspace-remove-unknown', { target: path }), 'error')
         return undefined
       })
@@ -719,7 +722,8 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
 
   const activateMenu = useCallback((entry: RailEntry, item: number): void => {
     closeMenu()
-    const action: MenuAction = MENU_ACTIONS[item] ?? 'edit'
+    const action = menuActionsFor(entry)[item]
+    if (action === undefined) return
     if (action === 'edit') selectEntry(entry)
     else if (action === 'new') newSessionIn(entry)
     // The fallback group is not a registration, so there is no ledger row to

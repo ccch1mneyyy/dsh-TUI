@@ -8,12 +8,18 @@
  * the real cmdline provider, then executes the compiled plugin's startup
  * selection/submission statements with a recording channel. This is a bounded
  * argv integration check, not a full Cordis/TTY/model-session boot.
+ *
+ * The compiled startup statements are pulled out of lib/types/dsh-adapter/
+ * plugin.js once, here, and handed to every probe through a file, and the
+ * probe imports only the dependency-free startup parser — not the whole
+ * plugin graph. That made each case ~1.4 s cheaper; the cases themselves run
+ * concurrently. Every case still goes through the real bin and its delegation.
  */
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
+import { availableParallelism, tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runInNewContext } from 'node:vm'
@@ -84,8 +90,29 @@ if (probeMode) {
   provideCmdline(ctx, { args: program.args, exit: code => process.exit(code) })
   if (process.env.DSH_TUI_ARGV_SHAPE === 'args') ctx.cmdlineArgs = { args: program.args }
 
-  const { initialPromptFromCmdlineArgs } = await import('../lib/types/dsh-adapter/plugin.js')
+  const { initialPromptFromCmdlineArgs } = await import('../lib/types/dsh-adapter/startup-args.js')
   const { resumeTargetFromArgv } = await import('../lib/types/sessionHistory.js')
+  const { startup, submit } = JSON.parse(readFileSync(process.env.DSH_TUI_ARGV_STARTUP, 'utf8'))
+  const submitted = []
+  const scope = {
+    ctx, process, initialPromptFromCmdlineArgs, resumeTargetFromArgv,
+    config: {
+      sessionId: process.env.DSH_TUI_RESUME_SESSION,
+      workspace: process.env.DSH_TUI_WORKSPACE_TARGET,
+    },
+    shadow: false,
+    channel: { submit: text => submitted.push(text) },
+  }
+  runInNewContext([
+    ...startup, submit,
+    'globalThis.targets = { session: launchSessionId ?? null, workspace: requestedWorkspace ?? null }',
+  ].join('\n'), scope)
+  report('profile', { ...scope.targets, submitted })
+  process.exit(0)
+}
+
+/** The compiled plugin's startup declarations and submission branch, as source text. */
+async function compiledStartup() {
   const { default: ts } = await import('typescript')
   const code = readFileSync(join(root, 'lib/types/dsh-adapter/plugin.js'), 'utf8')
   const source = ts.createSourceFile('plugin.js', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
@@ -105,28 +132,30 @@ if (probeMode) {
   })
   const submit = apply.body.statements.find(node => ts.isIfStatement(node) && node.expression.getText(source) === 'initialPrompt')
   assert.ok(submit, 'compiled initial prompt submission branch exists')
-  const submitted = []
-  const scope = {
-    ctx, process, initialPromptFromCmdlineArgs, resumeTargetFromArgv,
-    config: {
-      sessionId: process.env.DSH_TUI_RESUME_SESSION,
-      workspace: process.env.DSH_TUI_WORKSPACE_TARGET,
-    },
-    shadow: false,
-    channel: { submit: text => submitted.push(text) },
-  }
-  runInNewContext([
-    ...startup, submit.getText(source),
-    'globalThis.targets = { session: launchSessionId ?? null, workspace: requestedWorkspace ?? null }',
-  ].join('\n'), scope)
-  report('profile', { ...scope.targets, submitted })
-  process.exit(0)
+  return { startup, submit: submit.getText(source) }
+}
+
+/** spawnSync's result shape, without blocking the other cases. */
+function run(command, args, options) {
+  return new Promise(resolve => {
+    const child = spawn(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8').on('data', chunk => { stdout += chunk })
+    child.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk })
+    child.on('error', error => resolve({ error, status: null, stdout, stderr }))
+    child.on('close', (status, signal) => resolve({
+      error: signal ? new Error(`killed by ${signal}`) : undefined, status, stdout, stderr,
+    }))
+  })
 }
 
 const temp = mkdtempSync(join(tmpdir(), 'dsh-tui-argv-'))
 let failures = 0
 let checks = 0
 try {
+  const startupFile = join(temp, 'compiled-startup.json')
+  writeFileSync(startupFile, JSON.stringify(await compiledStartup()))
   const stubDir = join(temp, 'bin')
   const dshHome = join(temp, '.dsh')
   const profilePackage = join(dshHome, 'profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui')
@@ -154,7 +183,7 @@ try {
     PATH: [stubDir, dirname(process.execPath), ...(isWin ? ['C:\\Windows\\System32', 'C:\\Windows'] : ['/usr/bin', '/bin'])].join(delimiter),
     ...(isWin ? { SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec, PATHEXT: process.env.PATHEXT } : {}),
     HOME: temp, USERPROFILE: temp, DSH_HOME: dshHome,
-    DSH_TUI_ARGV_PROBE: '1', NODE_OPTIONS: '--no-deprecation',
+    DSH_TUI_ARGV_PROBE: '1', DSH_TUI_ARGV_STARTUP: startupFile, NODE_OPTIONS: '--no-deprecation',
   }
   const cases = [
     ...[
@@ -200,6 +229,7 @@ try {
     { name: 'Claude explicit resume', hostArgs: [], argv: ['--backend', 'claude', '--resume', 'claude-explicit'], session: 'claude-explicit', prompt: '', binOnly: true },
     { name: 'DSH bare resume after an explicit one (last wins)', hostArgs: [], argv: ['--resume', 'explicit-first', '--resume'], session: 'remembered-session', prompt: '', binOnly: true },
   ]
+  const runs = []
   for (const route of ['bin', 'delegated-bin', 'direct-profile']) {
     for (const shape of ['get', 'args']) {
       for (const test of cases) {
@@ -212,30 +242,40 @@ try {
         const argv = direct
           ? [self, '--profile', 'dsh-tui', ...hostArgs, ...(test.argv.length ? ['--', ...test.argv] : [])]
           : [bin, ...hostArgs, ...test.argv]
-        const result = spawnSync(process.execPath, argv, {
-          cwd: temp, encoding: 'utf8', timeout: 15000,
-          env: { ...env, DSH_TUI_ARGV_SHAPE: shape, ...(route === 'bin' ? { DSH_TUI_NO_DELEGATE: '1' } : {}) },
+        runs.push({
+          label: `${route}/${shape}: ${test.name}`, direct, test,
+          start: () => run(process.execPath, argv, {
+            cwd: temp, timeout: 15000,
+            env: { ...env, DSH_TUI_ARGV_SHAPE: shape, ...(route === 'bin' ? { DSH_TUI_NO_DELEGATE: '1' } : {}) },
+          }),
         })
-        const label = `${route}/${shape}: ${test.name}`
-        checks += 1
-        try {
-          assert.equal(result.error, undefined)
-          assert.equal(result.status, test.exitCode ?? 0, result.stderr)
-          assert.deepEqual(JSON.parse(result.stdout), {
-            mode: test.mode ?? 'profile',
-            hostOptions: { patches: test.patches ?? [], fromDefaultProfile: test.fromDefaultProfile ?? null },
-            session: test.session ?? null,
-            workspace: test.workspace ?? null,
-            submitted: test.prompt ? [test.prompt] : [],
-            resumeEnv: direct ? null : test.session ?? null,
-            workspaceEnv: test.workspace ?? null,
-          })
-          console.log(`PASS: ${label}`)
-        } catch (error) {
-          failures += 1
-          console.error(`FAIL: ${label}\n${error.message}`)
-        }
       }
+    }
+  }
+  // Every case only reads the shared fixture tree, so they can run side by
+  // side; results are still reported in case order.
+  const queue = [...runs]
+  await Promise.all(Array.from({ length: availableParallelism() }, async () => {
+    for (let next = queue.shift(); next; next = queue.shift()) next.result = await next.start()
+  }))
+  for (const { label, direct, test, result } of runs) {
+    checks += 1
+    try {
+      assert.equal(result.error, undefined)
+      assert.equal(result.status, test.exitCode ?? 0, result.stderr)
+      assert.deepEqual(JSON.parse(result.stdout), {
+        mode: test.mode ?? 'profile',
+        hostOptions: { patches: test.patches ?? [], fromDefaultProfile: test.fromDefaultProfile ?? null },
+        session: test.session ?? null,
+        workspace: test.workspace ?? null,
+        submitted: test.prompt ? [test.prompt] : [],
+        resumeEnv: direct ? null : test.session ?? null,
+        workspaceEnv: test.workspace ?? null,
+      })
+      console.log(`PASS: ${label}`)
+    } catch (error) {
+      failures += 1
+      console.error(`FAIL: ${label}\n${error.message}`)
     }
   }
 } finally {

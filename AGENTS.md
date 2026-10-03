@@ -11,6 +11,7 @@ src/dsh-adapter/channel.ts  Channel 入口：后端中立核心（channel/core/�
 src/dsh-adapter/oauth/    内置订阅 OAuth：provider 路由、/auth、凭据存储与问卷桥接
 src/screens/        Chat.tsx 交互协调器与状态栏呈现
 src/components/     功能组件；design-system/ 是主题感知原语
+src/components/sidePanel/  侧栏分栏（几何、标签栏、PanelHost、键盘接缝）与内置面板适配
 src/themeCatalog.ts  内置、静态 JSON 与运行时插件主题的统一列表/解析
 src/ui.ts           本地渲染器、主题化 Box/Text 与公共 TUI 原语的首选门面
 src/ink/            Ink 系渲染器与终端实现——敏感基础设施，改动聚焦并附专用回归
@@ -22,7 +23,7 @@ src/*Prefs.ts 等    ~/.dsh-tui 下的持久化用户偏好与会话元数据
 presets/            随包分发的 preset（liangshen）
 bin/dsh-tui.js      dsh-tui 直达命令入口
 vendor/dsh-std      vendored 依赖（frozen lockfile 构建，见 scripts/build 相关脚本）
-dsh-ecosystem-spec/ 生态适配规范子项目（自带 CONTRIBUTING 与治理文档）
+tui-profile/        仓内 TUI Profile：插件准入 + 私有协议定义（纯文件，随本仓代码修订）
 cordis.patch.yml    profile 安装的包级覆盖层；行序、行 ID 与 insert/override 语义关键
 cordis.yml          直接 Cordis/DSH 启动的完整裸组合示例
 scripts/            无头回归、复现环境、探针与诊断；运行前先读脚本头部说明
@@ -36,9 +37,9 @@ lib/                由 src/ 生成的产物——忽略入库、随 npm 分发�
 
 ```sh
 pnpm install --frozen-lockfile  # pnpm 11；Node ^22.19 || >=24（CI 用 Node 24）
-pnpm compile                    # 干净编译 src/ → lib/types/（先删整个 lib/）
+pnpm compile                    # 干净编译 src/ → lib/types/（先删整个 lib/；vendor 构建未变则跳过）
 pnpm build                      # compile + 全部构建门禁
-pnpm verify:build               # 构建门禁（边界/契约/patch surface/plugin 系列等），不重复编译
+pnpm verify:build               # 构建门禁（边界/契约/patch surface/plugin 系列等），并行、不重复编译；--jobs 1 串行排查
 pnpm verify:package             # npm tarball 目标完整 + 入口 smoke import
 pnpm smoke                      # 通用无头屏幕组装冒烟
 ```
@@ -64,6 +65,7 @@ pnpm smoke                      # 通用无头屏幕组装冒烟
 - **渲染安静**：TUI 活动期间不加 `console.log` 或 stdout 诊断；用 opt-in 的 stderr/调试路径（`DSH_TUI_DEBUG`、`DSH_TUI_RENDER_LOG`）。
 - **TypeScript**：纯 ESM，相对导入用 `.js` 后缀；纯类型依赖优先 `import type`；不因 Ink 系渲染器的放宽而引入 `any`，用 `unknown` 收窄；遵循现有两空格、单引号、无分号风格，不批量格式化渲染器文件。
 - **终端宽度是显示单元宽度**，不是 JS 字符串长度；考虑 ANSI 转义、组合字符、emoji 与东亚宽字符，用仓库的宽度/切片/换行辅助函数。
+- **尺寸只有一个来源**：`ink/` 之外一律经 `useTerminalSize()` 取尺寸（页边距、分栏会逐层收窄它），不直接读 `stdout.columns/rows` 或自行监听 resize；确需物理终端的，登记进 `verify:terminal-size-source` 的 `ALLOWED` 并写明理由。
 - **双语文档同步**：行为、配置、快捷键与限制在 `README.md`（英文默认）与 `README_ZH.md`（中文）两版同步。插件配置、slash 命令、主题、渲染器、技能发现的跨文件同步清单见 [docs/contributing.md](docs/contributing.md)。
 - **密钥**：交互启动读取 `DEEPSEEK_API_KEY`；诊断只能报告是否已设置，绝不泄露完整值。
 - **PR**：创建或更新 PR（包括改写描述）一律使用 `.agents/skills/pr`。

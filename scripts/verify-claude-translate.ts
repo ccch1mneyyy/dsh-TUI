@@ -209,6 +209,22 @@ for (const [name, result] of runs) {
   const compaction = get('compaction')
   check('compaction: manual start, committed end', of(compaction.events, 'compaction.start').some(event => event.trigger === 'manual') && of(compaction.events, 'compaction.end').some(event => event.ok && (event.preTokens ?? 0) > 0))
   check('compaction: summary row, no /compact bubble, no local-command echo', compaction.harness.state.rows.some(row => row.kind === 'compact') && !compaction.harness.state.rows.some(row => row.kind === 'user' && (row.text === '/compact' || row.text.includes('local-command'))))
+  // Merge of main bca29675 (db2aee46): the summary no longer rewrites the
+  // occupancy sample or the cumulative input with a chars/4 estimate; the
+  // CLI-measured `compact_boundary.post_tokens` re-seeds the sample instead
+  // (a compaction turn makes no request of its own).
+  {
+    const boundary = compaction.events.findIndex(event => event.type === 'compaction.end' && event.ok)
+    const summary = compaction.events.findIndex(event => event.type === 'user.message' && event.source === 'compaction')
+    const end = compaction.events[boundary]
+    const postTokens = end?.type === 'compaction.end' ? end.postTokens : undefined
+    const cut = createProjectorHarness({ model: '', activity: true, now: () => 0 })
+    cut.apply(compaction.events.slice(0, boundary + 1))
+    const inputAtBoundary = cut.state.tokens.input
+    check('compaction: post_tokens re-seeds the occupancy sample', postTokens !== undefined && cut.state.lastUsage?.input === postTokens && cut.state.lastUsage.cacheRead === 0, cut.state.lastUsage)
+    cut.apply(compaction.events.slice(boundary + 1, summary + 1))
+    check('compaction: the summary rewrites neither the sample nor the cumulative input', summary > boundary && cut.state.lastUsage?.input === postTokens && cut.state.tokens.input === inputAtBoundary, { lastUsage: cut.state.lastUsage, input: cut.state.tokens.input, inputAtBoundary })
+  }
   const deny = get('permission-deny')
   check('denied permission: the tool card errors with the deny message', deny.harness.state.rows.some(row => row.kind === 'tool' && row.tool?.status === 'error' && (row.tool.errorText ?? '').includes('interactive approvals arrive in the next phase')))
   const background = get('background-bash')

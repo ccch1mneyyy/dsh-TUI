@@ -37,8 +37,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-esc-levels',
     group: 'keys',
-    zh: 'Esc 逐层收：帮助 → 图片预览 → 命令/文件菜单 → 清选区 → 清空',
-    en: 'Esc peels layers: help → image preview → command/file menus → selection → clear input',
+    zh: 'Esc 逐层收：帮助 → 图片预览 → 命令/文件菜单 → 清选区 → 清附加 → 清空',
+    en: 'Esc peels layers: help → preview → menus → selection → context chip → clear input',
   },
   {
     id: 'keys-ctrl-o',
@@ -552,7 +552,7 @@ export const TIPS: readonly Tip[] = [
     id: 'flow-question-arrows',
     group: 'workflow',
     zh: '多题问卷用 ←/→ 换题，不提交；输入行要先把光标移到行首或行尾',
-    en: 'In a multi-question ask, ←/→ switches questions without submitting; on the input row the caret must already be at the edge',
+    en: 'In a multi-question ask, ←/→ switches questions; on the input row the caret must be at the edge',
   },
   {
     id: 'flow-question-fold',
@@ -867,8 +867,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'pit-minimal',
     group: 'pitfalls',
-    zh: '内核「极简模式」预设下 /compact 与问卷不可用（与「极简界面」无关）',
-    en: 'Under the kernel Minimal preset /compact and questions are off (not the Minimal UI switch)',
+    zh: '内核「极简模式」预设不压缩、不剪枝：长会话可能撞上限，/compact 与问卷也不可用（与「极简界面」无关）',
+    en: 'Minimal preset: no compaction or pruning — long sessions can hit the limit (not the Minimal UI)',
   },
   {
     id: 'pit-mouse-mode',

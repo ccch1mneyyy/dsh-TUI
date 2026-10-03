@@ -201,7 +201,7 @@
     },
     "contextWindow": 200000,
     "tokens": {
-      "input": 811,
+      "input": 28,
       "output": 641,
       "cacheRead": 56985,
       "cacheWrite": 12638

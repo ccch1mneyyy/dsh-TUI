@@ -36,21 +36,41 @@ dsh-tui
 
 ### 1.2 What you see on first launch
 
-1. **Pixel whale header** (~3.4 s intro animation, then frozen): `✦ dsh-TUI` version,
-   `DEEPSEEK / HARNESS` big text, current model and effort, working directory, and a
-   **startup hint** (`/model` · `/help` · `Tab`). Narrow terminals climb down a ladder (see 5.1).
-   When the dsh engine is out of the verified range, a **⚠ version-drift warning**
-   appears with the align command.
-2. **Bottom status bar**: working-status row, context bar, TPS gauge, and other live
+1. **First-run guide** (whenever the guide has not been completed yet — a fresh install, or a
+   guide that bumped its own version): a four-step wizard — **API key & connectivity → language &
+   theme → model & workspace → shortcuts & moves**. `←/→` change step, `Tab` switches between the
+   two panes, `↑/↓` move the selection, `Enter` runs the step, `Esc` skips. **Skipping is not
+   recorded** (you are asked again next launch); the last step only counts as finished — and writes
+   the marker — when `Enter` lands on a **shortcut card** (on a command card `Enter` tries the command).
+   Re-run it any time with `/setup`.
+2. **Launchpad** (the first screen of an **ordinary launch** — no `--resume`, no workspace target,
+   no prompt; `DSH_TUI_NO_LAUNCHPAD=1` skips it entirely): the pixel-whale header (`✦ dsh-TUI`
+   version, `DEEPSEEK / HARNESS` big text, current model and effort, working directory, and a
+   **startup hint**; the header here is **frozen from the first frame** — the intro animation is
+   left to the transcript header once you are in the chat), a **real input box** underneath
+   (type your first sentence here; Enter carries it into the chat screen), and a row of
+   **quick actions** (v7 four slots: `Continue "…"` — shortcut `Alt+R`, the slot is simply absent
+   when there is nothing to continue · `Sessions & workspaces` — history and workspaces are the
+   same `/home` screen, merged into one entry · `Settings` · a **conditional slot** — `Background
+   jobs` while jobs are running, `Update available` when a newer release is detected, `Feed us a
+   star` once usage milestones are reached and you never starred, falling back to `Help`).
+   Move with `↑/↓` or `Tab`, activate with `Enter`, or just click;
+   short terminals drop whole blocks (quick actions → hint line → input only) and narrow ones
+   climb down the ladder in 5.1. Full screens opened from this screen (sessions & workspaces /
+   settings / background jobs / the first-run guide) render **above the launchpad** — `Esc` closes
+   them back onto the launchpad (draft, params and focus intact); the only way off the launchpad
+   into the chat is submitting a non-command line with Enter. When the dsh engine is out of the verified range, a
+   **⚠ version-drift warning** appears with the align command.
+3. **Bottom status bar**: working-status row, context bar, TPS gauge, and other live
    indicators (see [5. UI and status bar](#5-ui-and-status-bar)).
-3. **Startup hint line**: one fixed line under the logo:
+4. **Startup hint line**: one fixed line under the logo:
    `提示：<随机小技巧> · /tips 更多技巧` — changes each launch.
    `/tips` opens the full tips panel (`↑/↓` scroll, `Esc` close).
-4. **First normal launch** (no `--resume`, no workspace, no prompt) enters the
-   **session manager** to pick a workspace. `~/.dsh-tui/home.json` records "seen"
-   so later launches go straight to chat. Open it any time with `/resume`, `/home`,
-   `/agentview`, `/bg`, or `⌸` at the start of the input line.
-5. Type `/` for the command menu, `?` for the shortcut help.
+5. **First normal launch** (no `--resume`, no workspace, no prompt) reaches the
+   **session manager** after the launchpad to pick a workspace. `~/.dsh-tui/home.json`
+   records "seen" so later launches go straight to chat. Open it any time with `/resume`,
+   `/home`, `/agentview`, `/bg`, or `⌸` at the start of the input line.
+6. Type `/` for the command menu, `?` for the shortcut help.
 
 ### 1.3 Core mental model
 
@@ -92,7 +112,7 @@ dsh-tui
 
 | Key | Action |
 |---|---|
-| `Ctrl+R` (⌘R) | history search; press again or `↓` for next match; `Enter` fills the input |
+| `Ctrl+R` (⌘R) | history search (current project only); press again or `↓` for next match; `Enter` fills the input |
 | `/` (transcript) | full-transcript search; `n` / `N` jump (only in Ctrl+O expanded state) |
 
 ### 2.4 Input editing
@@ -104,8 +124,9 @@ dsh-tui
 | `Home` / `End`, `Ctrl+E` | logical line start / end (`Ctrl+A` now opens the subagent panel, see §2.7) |
 | `Ctrl+U` / `Ctrl+K` | delete before the cursor (to line start) / after the cursor (to line end) |
 | `Ctrl+W` | delete the previous word |
+| `Ctrl+Z` | undo the draft's last word-level edit (caret and images included); draft-only — a submit or a history recall (`Ctrl+R`/`↑`) ends it, and it is unrelated to the `Esc Esc` conversation/message rewind; remappable via `/settings` |
 | `Backspace` / `Delete` | delete previous / next character; **with a selection, delete the whole selection** |
-| `↑` / `↓` | move between lines when multi-line; browse input history when single-line (last 200 entries, kept across restarts) |
+| `↑` / `↓` | move between lines when multi-line; browse input history when single-line (scoped per project, last 200 entries each, kept across restarts; history from before the upgrade shows in every project) |
 | `Ctrl+V` (⌘V) / `Alt+V` | paste: text / file path (images auto `@`-referenced) / clipboard bitmap (`[Image #N]` attachment); use `Alt+V` when the terminal swallows `Ctrl+V` |
 | `Ctrl+G` | edit the input in the `$VISUAL`/`$EDITOR` external editor (`:cq` keeps the draft; prompts you to configure when unset) |
 | `Ctrl+Shift+E` (⌘⇧E) | open the **full-screen draft editor** (or click `⛶` at the end of the input line): line numbers, current line highlighted, `Enter` newline, `Ctrl+Enter` send, `Esc` collapse (draft kept); off at `/settings → 全屏草稿编辑` |
@@ -127,6 +148,7 @@ Unrecognized keys are ignored, `Esc` does nothing, clear with `Ctrl+C`/`dd`.
 | `Shift+Tab` | cycle session mode (default → plan → full access); mounted third-party permission presets follow in registry order at the end of the cycle |
 | `Shift+↑` | message selection mode (`↑/↓` move, `Enter` expand one, `Esc` exit) |
 | `Ctrl+T` (⌘T) | open the trace scene (same as `/trace`) |
+| `Alt+R` | on the launchpad, **continue the most recent session** (same as the `Continue "…"` entry; bound only while the launchpad is up, no-op when there is nothing to continue). Remappable in `/settings` |
 | `Alt+S` | one-key star (same as `/star`; the splash's star line is clickable too). Remappable in `/settings`; a short "the whale girl catches the star" celebration plays on success. Replay it any time with `DSH_TUI_STAR_MODAL=1 dsh-tui`; preview the splash star line with `DSH_TUI_STAR_LINE=1 dsh-tui` (preview env vars, ledger untouched) |
 
 ### 2.6 Mouse (fullscreen mode; drag/double-click/triple-click select-and-copy)
@@ -173,6 +195,8 @@ A session taken by another terminal shows red with `占用 pid <pid>`
 and can't be entered; it recovers after that terminal exits.
 Fixed items live in `~/.dsh-tui/session-pins.json`.
 The workspace menu has four items: edit / new here / rename / remove from list (**removes the entry only**, directory and session log stay).
+After removal, a directory with past sessions remains in the rail as "History only"; the heading counts registrations and history directories separately, and a success notice confirms the removal.
+A "History only" row offers edit and new here; rename and remove apply only to registered workspaces.
 
 **Image preview** (open by clicking `[Image #N]` in the input or a thumbnail in the transcript)
 
@@ -189,6 +213,7 @@ The workspace menu has four items: edit / new here / rename / remove from list (
 - No IDE installed/connected → skipped automatically, nothing else affected (see [vscode.md](vscode.md)).
 
 **History search (Ctrl+R)**
+Lists only inputs from the current project (the session's working directory), plus unscoped history from before the upgrade.
 `↑/↓` select · press `Ctrl+R` again or `↓` for next · `Enter` fill · `Esc`/`Ctrl+C`/`Ctrl+D` cancel
 
 **Trace scene (Ctrl+T / /trace)**
@@ -219,9 +244,78 @@ changes save automatically, `Esc` exits
 **Double-press Esc time-travel (rewind)**
 List `↑/↓` + `Enter` to confirm · confirm page `Enter` rewind / `Esc` back · only `Esc` responds while a plugin decision is pending
 
+### 2.8 Side panel
+
+`Ctrl+B` (remappable under `/settings` → `Shortcuts`) expands a panel column to the right of the
+chat: a capsule tab bar on top, the active panel in the middle, a key-hint row at the bottom, and a
+one-column seam between the two surfaces.
+
+- **Three states**: **split** (chat ≈ 68% plus the panel; `+`/`-` resize by 4 columns), **collapsed**
+  (the layout is byte-identical to before), **zoom** (the panel takes over and the chat column keeps
+  its minimum width).
+- **When it splits**: `fullscreen` plus a content width of ≥93 columns (≈97 terminal columns at the
+  default page margin); narrow terminals, inline mode and the expanded draft editor fall back —
+  `/jobs` and friends keep their full-screen panels there, while `Ctrl+B` and `/panel` do not split at all.
+- **Focus model**: one keyboard focus at a time; while the panel holds it, its frame and the seam
+  brighten together. `Ctrl+B` is three-state: closed → open and focus the panel; open but
+  chat-focused → focus the panel; panel-focused → close and return to the chat.
+- **Panel keys**: `Esc` steps back to the input (the panel stays open) · `←`/`→` or `[`/`]` switch
+  panels · `1`-`9` jump to the Nth · `z` or `Alt+Z` zoom · `+`/`-` resize (`+` widens the panel by 4 columns) · `↑`/`↓`/`PgUp`/`PgDn`
+  go to the active panel (jobs selects and scrolls with them). Keys the panel does not take never
+  reach the chat, while `Ctrl+C`/`Ctrl+D`/`Ctrl+L` and the other Ctrl combos still do.
+- **Mouse**: click the chat column to focus the chat, click the panel column to focus the panel;
+  clicking a tab on the bar switches to that panel (hover highlights it), and the `⤢` on its right
+  edge blows the active panel up to the full screen. The panel column is excluded from
+  drag-selection.
+- **Panels**: `todo` (Goals/Todos — with a split it moves here from above the input), `jobs`
+  (background jobs; clicking a job card in the transcript focuses that job here), `agents`
+  (subagent dashboard and detail: Enter opens the detail, Esc steps back), `companion`
+  (the pet — off by default; add `companion` to `sidePanel.panels` to enable: its mood follows
+  the session, click for a heart, Enter to poke; the `dsh-tui.companion.skin` setting offers
+  deepy (default, the fan-made deepy whale kit) or whale), `info` (model, effort, mode,
+  permissions, context usage, cache hit, tokens, TPS, spend, working dir, session title and id),
+  `trajectory` (the session's wake band + ledger + inspector: ↑/↓ select, Enter expands, Tab
+  switches to the hotspot view — ←/→ always stay the host's panel-cycling keys), `workspace`
+  (working-directory overview; Enter opens the full workspace home).
+- **Pet (companion) details**: the pet sits at the BOTTOM of the panel with a status area above
+  it (mood · subagent/session counts · current animation). Interactions: clicking its left/right
+  half pokes it (poke-left/right), three rapid clicks tickle it, **holding and dragging walks it
+  around the whole panel with the pointer (release springs it back home)**, hovering makes it look
+  toward the pointer; Enter also pokes. Job-done / interrupted notices are spoken by a speech
+  bubble above its head — while the pet panel is the ACTIVE panel the toast above the input box
+  does NOT repeat it (toasts return on any other panel; error-colored notices always toast). Moods
+  are debounced: fast tool calls no longer flicker the animation (leaving the working state takes
+  ~1.5s to settle; approvals and errors still preempt instantly). Subagent/session counts switch
+  the music / conducting / building ensemble animations. When the column is too narrow even for
+  the compact form the pet hides, leaving one line: "So cramped! {{name}} is hiding for now~".
+  The `dsh-tui.companion.skin` setting picks one of three: `deepy` (default, the fan-made whale
+  kit), `whaleGirl` (the whale-girl sticker pack — 22 animations that react to pokes, tickles and
+  drags, plus its own hearts and thumbs-up) or `whale` (the splash's pixel whale). **On terminals
+  with an image protocol (kitty/sixel) whaleGirl renders at native 240px with all 267 frames**
+  (transparent float, decoded on demand); without one it falls back to the character-art form.
+
+| Subcommand | Effect |
+|---|---|
+| `/panel` | Open the panel picker (↑↓ to choose, Enter opens and focuses) |
+| `/panel toggle` | Really open / really close (closing returns focus to the chat) |
+| `/panel focus` | Open and focus the panel |
+| `/panel zoom` | Open and zoom the active panel |
+| `/panel <id>` | Open a panel by id: `todo` / `info` / `trajectory` / `jobs` / `agents` / `workspace` / `companion` (completion lists the enabled ids) |
+
+- Views that used to be full-screen-only now also live in the sidebar: with the split up and the
+  matching panel enabled, `Ctrl+T` / `/trace` open the trajectory panel and `/home` opens the
+  workspace panel; the `⤢` on the panel bar puts them back on the whole screen (`⤢` is the mouse
+  path — the keyboard equivalents are each view's own full-screen shortcut: `Ctrl+T` trajectory,
+  `Ctrl+A` agents, `/jobs` jobs, `/home` the workspace home).
+- Settings: the **Side panel** group in `/settings`, or
+  `dsh-tui.sidePanel.{splitEnabled,open,ratio,panels}` (see the
+  [configuration reference](configuration.en.md#tui-configuration)).
+- **tmux users**: `Ctrl+B` is tmux's default prefix, so tmux swallows it before the TUI sees it —
+  remap `sidePanel` to another combo (for example `alt+b`) under `/settings` → `Shortcuts`.
+
 ## 3. Command reference
 
-The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goal` etc.) + the skill catalog
+The command menu = built-in commands (58, aliases included) + DSH registry commands (`/plan` `/goal` etc.) + the skill catalog
 (completion only, hidden from the `/help` menu). `/lang` switches the UI and command descriptions between English and Chinese.
 
 ### 3.1 Session
@@ -260,6 +354,7 @@ The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goa
 | `/agents` | none | subagent list for this session |
 | `/jobs` | none | background-task panel: status/runtime/exit-code tracking, `↑/↓` select, `k` stop; while open, `Esc` **closes only the panel** and won't interrupt the turn (close the panel first, then `Ctrl+C`) |
 | `/settings` | none | open the plugin settings editor (namespace read/edit) |
+| `/setup` | none | re-run the first-run guide (API key / language+theme / model+workspace / shortcuts) — same screen as the very first launch |
 | `/help` | none | shortcut + command help menu (`?` entry) |
 
 ### 3.3 Model / display
@@ -269,13 +364,14 @@ The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goa
 | `/model` | none | model selector; **switching = fork the session** (history kept, only routing changes; a session nobody has typed into records no branch, keeping automatic titles for its first prompt), choice persisted to `~/.dsh-tui/model.json` |
 | `/effort` | `status` / `<id>` | reasoning effort: no-arg slider (`←/→` adjust); `status` current level; `<id>` set directly. Persisted to `~/.dsh-tui/effort.json`; new-session start level follows /settings `effortDefault` (§5.3) |
 | `/thinking` | none | extended-thinking display toggle (thinking expands item by item while streaming) |
-| `/tokens` | none | token usage + context percentage |
+| `/tokens` | none | three separate figures, never two different quantities side by side: **this request**'s upload (input + cache read + cache write — the harness's four buckets are disjoint), the **session totals** (uncached input / output / cache read / cache write), and **context occupancy** |
 | `/activity` | `frames <名>` / `status` | working-status animation: no-arg selector, `frames <名>` sets directly (includes `random`), default `moon8`. Persisted to `~/.dsh-tui/working-activity.json` |
 | `/preset` | `<id>` / `status` | agent preset: `standard` / `ptc` (old 0.1.1 name `code`) / `minimal` / `cordis` / **Liangshen mode `liangshen`**; **cannot switch an already-started session**. Persisted to `~/.dsh-tui/agent-preset.json` |
 | `/theme` | `<名字>` / `status` | theme: no-arg selector; `<名字>` switch directly; `status` current theme (auto appends the OSC 11 result). Persisted to `~/.dsh-tui/theme.json` |
 | `/color` | no-arg / `<名>` / `status` / `reset` | session accent color: no-arg opens the palette (`↑/↓` pick, `Enter` apply); `<名>` set directly; `reset` back to default. Colors `red/orange/yellow/green/blue/purple/pink/cyan`, saved per session |
 | `/lang` | `en` / `zh` / `status` | hot-switch UI language. Priority: `DSH_TUI_LANG` > profile config (legacy: settings.yaml user layer > cordis.yml) > persisted |
 | `/vim` | none | **vim editing mode toggle** (see §2.4): input switches to vim keys, per-session, not persisted |
+| `/panel` | `toggle` / `focus` / `zoom` / `<panel id>` | side panel: toggle / focus / zoom / switch panels; states and subcommands in §2.8 |
 
 ### 3.4 Account / policy / extensions
 
@@ -367,7 +463,7 @@ Full-screen view of the whole session timeline (doesn't pollute scrollback); key
 - `/model`: selector. **Switching = fork the session** (history kept, only routing changes, the old session stays in `/resume`);
   persisted to `~/.dsh-tui/model.json`.
 - Switching is rejected mid-turn.
-- `/preset` options: `standard` (default full features), `ptc`, `minimal` (the kernel's Minimal preset: one persistent-shell tool only, no compaction, no plan mode),
+- `/preset` options: `standard` (default full features), `ptc`, `minimal` (the kernel's Minimal preset: one persistent-shell tool only, no compaction, no plan mode — and therefore no compaction and no tool-result pruning, so a long session can hit the context limit and `/compact` plus questions are unavailable; Help and `/` completion mark the command, and entering the preset says so once),
   `cordis`, `liangshen` (Liangshen mode).
   **A session that already has messages can't switch** (blank-only): the choice only becomes the default for the next `/new`.
   This is a **kernel agent preset** deciding which tools the model can use; `/settings → Minimal UI` (极简界面) on the display side is unrelated.
@@ -389,7 +485,7 @@ Keys are in §2.7. Key points:
 - `/skills` browses the skill catalog; a direct-call skill joins the command menu as `/name` (dsh-TUI ships no generic skills).
 - `/plan` `/goal` `/feedback` `/permission` come from the DSH registry, merged into the `/` menu.
 - **Goals/Todos panel appears automatically**: when the model writes a goal/todo, it renders above the input
-  (🎯 goal + phase badge + tree todo), no action needed.
+  (🎯 goal + phase badge + tree todo), no action needed; with a split it moves to the `todo` panel on the right (see §2.8).
 
 ### 4.9 MCP / Workspace / other
 
@@ -445,12 +541,18 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 **Row 1 — context segment bar** (`/settings → statusBar.contextBar`, default on)
 
 - Colored by content type (system / prompt / assistant / thinking / tools).
+- Segment token counts are a **local estimate** (CJK/full-width ≈1.4 chars/token, ASCII ≈4, other scripts ≈2): they describe what the bar is made of and **never** feed the occupancy total — that comes from the ctx reading below.
 - The only text on the bar is the right-edge reading `13k/64k 19.5%` (narrow screens show only `19.5%`).
 - The reading colors by usage: <80% gray-blue, **≥80% amber, ≥95% red**.
 - Hover the whole bar for the legend: color block + name + token count (narrow screens shorten the names).
 
 **Row 2 — status field row** (each field toggled separately, see `/settings`)
-- left group: model → TPS → thinking → mode → ctx → cache hit rate → tokens (`1.2k→340` input→output) →
+- left group: model → TPS → thinking → mode → ctx (**context occupancy** `19.5% (13k/64k)`: the SAME
+  value the segmented bar, the working line's pressure prefix, `/tokens`, `/status` and the context-low
+  warning read, sourced from the harness's own `contextPressure` projection — `projectedTokens ??
+  pressureTokens`, i.e. what the NEXT request would occupy, so a compaction or a rejected request shows
+  up immediately instead of waiting for one successful request; a bare `cordis.yml` composition without
+  the meter falls back to the last request's billed usage) → cache hit rate → tokens (`1.2k→340` input→output) →
   cost (`≈¥0.05 谷`, **a session estimate** that includes subagent usage, priced per
   each agent's model × peak/idle × cache components; hover splits main ¥ / subagent ¥ / unpriced N tok;
   unofficial or unlisted models show tokens only and are marked unpriced;
@@ -462,7 +564,7 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 
 **Row 3 — hints / working activity + mini trace bar**
 - Idle shows `? for shortcuts`, running `esc to interrupt`, selecting `esc to return to input`.
-- Idle also shows the working-activity animation (`statusBar.activity` on), context ≥80% amber, ≥95% red.
+- Idle also shows the working-activity animation (`statusBar.activity` on), context ≥80% amber, ≥95% red (the same occupancy reading as the ctx field).
 - Right-side **mini trace bar MiniWake** (`statusBar.trajectory`, default off): session projected as density glyphs, color per channel, failures red;
   degrades/hides on narrow screens.
 
@@ -473,7 +575,7 @@ speed **≥50 green / ≥20 yellow / <20 red**.
 
 `/settings` opens the plugin settings editor; **changes save automatically**, `Esc` exits directly.
 On 0.1.7 the dsh-tui block writes to the active profile's `cordis.patch.yml`; older hosts use the settings.yaml user layer. Most settings apply live; fullscreen and image-preview need `/restart`.
-Common items below, full list on the /settings screen. Most topics (**Appearance**, **Splash**, **Conversation**, **Rendering**) lay their fields right on the root page under small headers — no subpage round-trip to tweak them; only the genuinely block-like domains — **Formula**, **Status bar**, **Shortcuts** — keep a subpage behind one root-page row:
+Common items below, full list on the /settings screen. Most topics (**Appearance**, **Splash**, **Conversation**, **Rendering**) lay their fields right on the root page under small headers — no subpage round-trip to tweak them; only the genuinely block-like domains — **Formula**, **Status bar**, **Side panel**, **Shortcuts** — keep a subpage behind one root-page row:
 
 | Field | Notes |
 |---|---|

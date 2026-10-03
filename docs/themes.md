@@ -41,7 +41,10 @@ DSH_TUI_THEME
 ## 切换主题
 
 - `/theme`：打开主题选择器。`auto` 与内置主题在前，
-  静态 JSON 主题和插件主题在后。
+  静态 JSON 主题和插件主题在后。宽终端（≥76 列）在列表右侧并排一列实时预览：
+  用**焦点行**主题的调色板实渲染代码块、代码操作工具卡与 diff——移动光标即可
+  比较语法色、diff 色与工具卡底色，Enter 才真正应用；窄终端预览堆叠在列表
+  下方，浮层高度不够时整块让位，列表与焦点行始终完整。
 - `/theme <name>`：直接切换静态或运行时插件主题。
 - `/theme status`：显示当前主题与持久化位置。
 
@@ -141,7 +144,7 @@ export function apply(ctx: Context): void {
 - 旧 profile 没有 `tuiThemes` 时插件静默降级，静态主题不受影响。
 
 完整的可覆盖键、旧键映射与注册契约见
-[终端交互生态插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)。
+[终端交互生态插件准入与开发指南](../tui-profile/docs/plugin-admission-and-development.md)。
 
 ## 颜色格式
 

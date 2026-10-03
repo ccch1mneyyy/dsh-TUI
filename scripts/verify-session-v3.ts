@@ -101,14 +101,32 @@ try {
     p.chunk('text-delta', 'A'.repeat(450))
     const event = answer(s, 'A'.repeat(450), 'R'.repeat(450))
     p.projector.renderEvent(event)
+    const reasoningRow = p.state.rows.find(row => row.kind === 'reasoning')
+    assert.equal(reasoningRow?.streaming, false, 'a settled reasoning step stops its transcript spinner')
+    assert.equal(Boolean(reasoningRow?.thinkingOpen), thinkingFold === 'full', 'full mode keeps settled reasoning open without marking it streaming')
     p.end({ kind: 'committed', eventType: 'assistant/message', seq: event.seq })
     p.projector.settleStreaming()
+    assert.equal(Boolean(reasoningRow?.thinkingOpen), false, 'turn settlement closes full-mode reasoning')
     assert.equal(p.state.rows.length, 2)
     assert.ok(p.state.rows.every(row => row.seq === event.seq), 'all live rows gain durable anchors')
     foldRows(p.state.rows, 0)
     assert.equal(p.state.rows[0]!.text.length, 201)
     assert.equal(foldBack(p.state.rows, s.snapshotEvents()), 2)
     assert.ok(p.state.rows.every(row => row.text.length === 450), 'both folded bodies restore fully')
+  }
+  {
+    const p = projection(session('full-thinking-tool'))
+    p.state.thinkingFold = 'full'
+    p.start()
+    p.chunk('reasoning-delta', 'reasoning before tool')
+    p.projector.renderEvent({
+      type: 'tool/call', seq: 1, time: Date.now(),
+      data: { turn: 1, step: 1, callId: 'call-1', name: 'Bash', arguments: '{}' },
+    } as never)
+    const reasoningRow = p.state.rows.find(row => row.kind === 'reasoning')
+    assert.equal(reasoningRow?.streaming, false, 'a tool call stops the completed reasoning spinner')
+    assert.equal(reasoningRow?.thinkingOpen, true, 'full mode keeps tool-prefixed reasoning expanded')
+    assert.equal(p.state.spinnerMode, 'tool-use', 'the global spinner follows the active tool')
   }
   {
     const s = session('canonical-empty')

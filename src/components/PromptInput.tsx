@@ -1,5 +1,7 @@
 import React from 'react'
-import stripAnsi from 'strip-ansi'
+// 粘贴/清洗语义已抽到 utils/inputPaste.ts（方案 B：PromptInput 与 Launchpad 共享；
+// 行为逐字节不变，只是搬了家）。
+import { sanitizeEditableText, sanitizePastedText } from '../utils/inputPaste.js'
 import { constants as fsConstants } from 'node:fs'
 import { open, unlink } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
@@ -20,6 +22,7 @@ import instances from '../ink/instances.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
+import { draftWordRangeAt, isDraftWordBoundary } from '../utils/draftWordBoundary.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { imagePathMediaType, parsePastedImagePath, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
@@ -32,7 +35,7 @@ import type {
 } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import { isHiddenCommandName, isUnavailableLocalCommand, parseCommandName } from '../commands.js'
-import { appendHistory, HISTORY_LIMIT, loadHistoryOldestFirst } from '../history.js'
+import { appendHistory, HISTORY_LIMIT, historyProjectKey, loadHistoryOldestFirst } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
 import { isMod } from '../utils/modifiers.js'
@@ -49,6 +52,7 @@ import {
   type PromptDraftCache,
   type PromptDraftImage,
 } from './promptDraftCache.js'
+export { sanitizeEditableText, sanitizePastedText } from '../utils/inputPaste.js'
 
 /**
  * Visible text of the session-entry control at the head of the input row:
@@ -75,8 +79,129 @@ interface PromptHistoryEntry {
   readonly images: readonly ComposerImageRef[]
 }
 
+/**
+ * One prompt-draft undo step: the state BEFORE a discrete edit (or edit run),
+ * plus the tracking the grouping rule needs. `Ctrl+Z` pops it back, and it is
+ * one of the places a staged image capability is held between edits, so it
+ * must stay in {@link PromptInput}'s `stageIdIsRetained` scan.
+ */
+interface DraftUndoEntry extends PromptHistoryEntry {
+  readonly cursor: number
+  /** Fold block as it was before the step; restored (or cleared) with it. */
+  readonly block: { readonly start: number; readonly end: number } | null
+  /** Timestamp of the run's last edit (layer-3 idle coalescing). */
+  atMs: number
+  /** Caret the run's last edit ended at; `null` seals the step (discrete). */
+  caretAfter: number | null
+  /**
+   * Edit direction, so a delete run never folds into an insert run and the two
+   * deletion directions (whose anchors differ) never merge. `clear` marks the
+   * sealed snapshot an Esc/clear takes, which never groups.
+   */
+  kind: 'insert' | 'deleteBackward' | 'deleteForward' | 'clear'
+  /** Deletion runs only: see {@link DraftDeleteRun}. */
+  deleteRun: DraftDeleteRun | null
+}
+
+/**
+ * The word a deletion run may keep consuming: the interval that held the first
+ * character it removed, plus the range the run has consumed so far. Both are in
+ * the step's own `text` coordinates, so the shrinking draft is never
+ * re-segmented (a truncated copy can split a repeated-Han run differently).
+ */
+interface DraftDeleteRun {
+  readonly wordStart: number
+  readonly wordEnd: number
+  /** Consumed range `[lo, hi)`. */
+  lo: number
+  hi: number
+}
+
+/**
+ * One vim NORMAL-mode undo step: the state before a vim command. Kept apart
+ * from the draft stack so `u` and `Ctrl+Z` never undo each other's edits.
+ */
 interface VimUndoEntry extends PromptHistoryEntry {
   readonly cursor: number
+}
+
+/** Undo depth for both stacks (draft `Ctrl+Z` and vim `u`). */
+const UNDO_LIMIT = 100
+/** Total characters kept across all snapshots; the oldest are dropped first. */
+const UNDO_MAX_CHARS = 1_000_000
+/** Layer-3 idle window: a pause longer than this starts a new step. */
+const UNDO_IDLE_MS = 700
+
+/** How a `setInput` call relates to the draft undo stack. */
+type UndoMode =
+  /** Fold into the current step when the word/idle rules allow (typing). */
+  | 'group'
+  /** One discrete edit: its own step, sealed against continuation (paste). */
+  | 'step'
+  /** End of the draft's life: clear the stack, then apply the text. */
+  | 'reset'
+  /** Apply the text without touching the stack (undo itself, recalls). */
+  | 'silent'
+
+/**
+ * Common prefix/suffix of `prev` and `next` — the single edited span. Undo
+ * grouping works on this span rather than on a stdin chunk: one chunk may
+ * carry several characters (or several keys), so the unit is one real text
+ * mutation however it arrived. The common prefix must not pass either caret:
+ * repeated characters otherwise make an edit at the head look like a tail edit.
+ */
+function diffSpan(
+  prev: string,
+  next: string,
+  cursorBefore: number,
+  cursorAfter: number,
+): { start: number; inserted: string } {
+  let start = 0
+  const common = Math.min(prev.length, next.length, cursorBefore, cursorAfter)
+  while (start < common && prev.charCodeAt(start) === next.charCodeAt(start)) start++
+  let prevEnd = prev.length
+  let nextEnd = next.length
+  while (
+    prevEnd > start &&
+    nextEnd > start &&
+    prev.charCodeAt(prevEnd - 1) === next.charCodeAt(nextEnd - 1)
+  ) {
+    prevEnd--
+    nextEnd--
+  }
+  return { start, inserted: next.slice(start, nextEnd) }
+}
+
+/**
+ * Open a deletion run at the first character it removed: remember the word that
+ * character belongs to, and how much has been consumed so far.
+ */
+function startDeleteRun(text: string, start: number, removed: number): DraftDeleteRun {
+  const word = draftWordRangeAt(text, start)
+  return { wordStart: word.start, wordEnd: word.end, lo: start, hi: start + removed }
+}
+
+/**
+ * Whether a same-direction deletion extends the run recorded on `last`. The
+ * run's word interval and consumed range live in `last.text` coordinates, so
+ * the comparison survives the draft shrinking under it; extending past the word
+ * (or off the text) starts a new step. Only called once the direction, caret
+ * continuity and idle window have already agreed, so the new text is always
+ * adjacent to the consumed range.
+ */
+function extendDeleteRun(last: DraftUndoEntry, backward: boolean, removed: number): boolean {
+  const run = last.deleteRun
+  if (run === null || removed <= 0) return false
+  if (backward) {
+    const lo = run.lo - removed
+    if (lo < 0 || lo < run.wordStart) return false
+    run.lo = lo
+    return true
+  }
+  const hi = run.hi + removed
+  if (hi > last.text.length || hi > run.wordEnd) return false
+  run.hi = hi
+  return true
 }
 
 interface DraftImageLease {
@@ -98,69 +223,6 @@ const FOLD_MIN_CHARS = 600
 const isBigInput = (text: string): boolean =>
   text.split('\n').length >= FOLD_MIN_LINES || text.length >= FOLD_MIN_CHARS
 
-/**
- * Editable prompt text must have one stable source-to-screen geometry. The
- * renderer interprets ANSI as zero-width styling and expands tabs relative to
- * global tab stops; keeping either in `value` would let wrapping/click mapping
- * count different cells and could split an escape sequence during selection.
- * Strip terminal controls and expand tabs at ingress while preserving newlines.
- */
-const EDITABLE_CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f]/u
-
-/**
- * Raw win32-input-mode records (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`) that reached the
- * editable buffer as text instead of being translated. `stripAnsi` consumes
- * the record head and leaves its terminating `_` in the draft — the stray
- * underscore users see after a multi-line paste (issue #1090). Only the full
- * record grammar (exactly five `;` separators) matches, so a real `_` and
- * ordinary bracket text survive untouched.
- */
-const WIN32_RECORD_RESIDUE = /\u001b\[\d*(?:;\d*){5}_/gu
-
-/**
- * The same record with its ESC byte missing: what a record split across
- * reads leaves behind when the escape timer flushed the prefix before the
- * tail arrived. Printable, so it is stripped only from paste payloads
- * ({@link sanitizePastedText}) — and only when the same payload also carries
- * a full ESC-bearing record as in-payload evidence of that split; typed text
- * and literal clipboard/bracketed-paste bytes are left untouched.
- */
-const WIN32_RECORD_RESIDUE_TAIL = /\[\d*(?:;\d*){5}_/gu
-
-/**
- * Normalize editable text so no terminal control characters remain in state.
- */
-export function sanitizeEditableText(text: string): string {
-  // Fast path for ordinary and multi-line drafts: newline is intentionally
-  // absent from the probe, so large clean text returns without the
-  // stripAnsi/control-normalization passes.
-  if (!EDITABLE_CONTROL.test(text)) return text
-  // Record residue goes first: `stripAnsi` would consume the CSI head and
-  // leave only the terminating `_` behind.
-  return stripAnsi(text.replace(WIN32_RECORD_RESIDUE, ''))
-    .replace(/\r\n?/gu, '\n')
-    .replace(/\t/gu, '        ')
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
-}
-
-/**
- * Paste-payload ingress: strip the ESC-less tail of a split record before
- * normalizing. The tail is printable, so it survives `sanitizeEditableText`'s
- * control probe untouched; typed text keeps it because only a paste payload
- * can carry a partial record.
- *
- * The five separators only prove the *shape*, not that a record was split:
- * a user can legitimately paste the literal `[13;28;13;1;0;1_`. Strip the
- * ESC-less form only when the same payload also carries a full ESC-bearing
- * record — only then is there in-payload evidence of a split stream.
- * Otherwise the bytes are ordinary text and must survive verbatim.
- */
-export function sanitizePastedText(text: string): string {
-  // Probe with String#match: the /g detection regex carries lastIndex state
-  // across `.test` calls, so a previous success could skip a later match.
-  const hasRecordStream = text.match(WIN32_RECORD_RESIDUE) !== null
-  return sanitizeEditableText(hasRecordStream ? text.replace(WIN32_RECORD_RESIDUE_TAIL, '') : text)
-}
 
 const COMPOSER_IMAGE_TOKEN = /\[Image #\d+\]/gu
 
@@ -440,10 +502,9 @@ const EDITOR_CHROME_ROWS = 5
 const DOUBLE_CLICK_MS = 500
 
 /**
- * Imperative handle for the Chat-level Ctrl+C rule: Chat's useInput listener
- * runs BEFORE this component's (EventEmitter registration order), so Chat
- * asks the prompt whether it holds text (→ clear it) or not (→ arm the
- * double-press exit). Populated every render; null while unmounted.
+ * Live composer handle for Chat's global key rules and external draft actions.
+ * Chat listens first, so delegated editing actions stay with their state owner.
+ * Populated after each commit; null while unmounted or suspended.
  */
 export interface PromptController {
   hasText(): boolean
@@ -466,6 +527,8 @@ export interface PromptController {
    * branch calls this first, before its clear/exit semantics.
    */
   consumeSelectionCopy(): boolean
+  /** Consume selection/editor Esc before Chat's working-turn interrupt. */
+  consumeEscape(): boolean
   /** Toggle vim editing mode (`/vim`); returns the new state (true = on). */
   toggleVim(): boolean
   /** True while vim mode is on (either submode). Esc belongs to vim then —
@@ -483,6 +546,13 @@ export interface PromptInputProps {
   channel: Channel
   /** Keep the draft mounted while another prompt-slot panel owns the UI. */
   suspended?: boolean
+  /**
+   * Host judgement "this notice needs no toast" — the pet panel says it with
+   * its speech bubble instead while it is the active panel. Evaluated during
+   * render (not via an effect-written ledger) so toast and bubble swap in
+   * the same commit without a one-frame flash. Errors are never suppressed.
+   */
+  toastSuppressed?: (item: Channel['notifications'][number]) => boolean
   /**
    * Owner-held slot for the unsent draft.
    *
@@ -562,6 +632,12 @@ export interface PromptInputProps {
    */
   caretPreviewOpen?: boolean
   onDismissCaretPreview?(): void
+  /**
+   * Clock seam for the draft undo's 700ms idle coalescing. Defaults to
+   * `Date.now`; the regression harness passes a hand-advanced clock so the idle
+   * rule is exercised without a wall-clock sleep (which would be flaky).
+   */
+  now?: () => number
 }
 
 /**
@@ -596,6 +672,7 @@ export interface PromptInputProps {
  */
 export function PromptInput({
   channel,
+  toastSuppressed,
   suspended = false,
   draftCache,
   helpOpen,
@@ -612,6 +689,7 @@ export function PromptInput({
   onCaretImage,
   caretPreviewOpen = false,
   onDismissCaretPreview,
+  now = Date.now,
 }: PromptInputProps) {
   const [themeName] = useTheme()
   // Raw stdout writer for OSC 52 clipboard writes (selection copy) — must
@@ -705,7 +783,20 @@ export function PromptInput({
   const vimInsertRef = React.useRef(true)
   vimEnabledRef.current = vimEnabled
   vimInsertRef.current = vimInsert
-  /** Undo owns the draft's image bindings as well as its text and caret. */
+  /**
+   * Draft-scoped undo stack (word-level `Ctrl+Z`). This is the DRAFT's own
+   * history: a submit, a recall or a session switch ends it. Entries hold image
+   * bindings exactly like the draft does, so dropping one must release the
+   * capabilities only it kept alive.
+   */
+  const draftUndoRef = React.useRef<DraftUndoEntry[]>([])
+  /**
+   * Vim NORMAL-mode undo stack (vim `u`), deliberately separate from
+   * `draftUndoRef`: unifying the two transaction models is a user-visible vim
+   * behavior change and is out of this change's scope. `/vim` toggling clears
+   * THIS stack — a later re-enable must never `u` back past edits made while
+   * vim was off.
+   */
   const vimUndoRef = React.useRef<VimUndoEntry[]>([])
   /** Pending vim operator: `d` pressed, awaiting its second key. */
   const vimPendingRef = React.useRef<'' | 'd'>('')
@@ -772,8 +863,11 @@ export function PromptInput({
   const history = React.useRef<PromptHistoryEntry[]>([])
   const historyIndex = React.useRef(-1)
   const historyDraft = React.useRef<PromptHistoryEntry>({ text: '', images: [] })
-  /** The persisted history is read lazily, once per mount (see seedHistory). */
-  const historySeeded = React.useRef(false)
+  /** The persisted history is read lazily, once per mount and project: the
+   * normalized project key it was seeded for, so a workspace switch re-seeds
+   * (see seedHistory) while a respelled path to the same directory does not.
+   * `null` = never seeded; `''` = seeded without a workspace. */
+  const historySeededProject = React.useRef<string | null>(null)
   /** Visible `[Image #N]` labels are presentation only; this sidecar carries
    * the non-reusable capability for the current draft. History/rewind text
    * restored without this map can never bind to a later image by accident. */
@@ -808,13 +902,15 @@ export function PromptInput({
   const detachDraftImages = (): void => {
     advanceDraftRevision()
     draftImagesRef.current.clear()
+    clearDraftUndo()
     clearVimUndo()
   }
   const stageIdIsRetained = (stageId: string): boolean => {
     for (const current of draftImagesRef.current.values()) {
       if (current === stageId) return true
     }
-    return vimUndoRef.current.some(entry => entry.images.some(image => image.stageId === stageId))
+    return draftUndoRef.current.some(entry => entry.images.some(image => image.stageId === stageId))
+      || vimUndoRef.current.some(entry => entry.images.some(image => image.stageId === stageId))
       || history.current.some(entry => entry.images.some(image => image.stageId === stageId))
       || historyDraft.current.images.some(image => image.stageId === stageId)
       || channel.pending.some(item => item.images?.some(image => image.stageId === stageId) === true)
@@ -824,14 +920,130 @@ export function PromptInput({
       if (!stageIdIsRetained(stageId)) channel.discardStagedImage(stageId)
     }
   }
+  const clearDraftUndo = (): void => {
+    const previous = draftUndoRef.current
+    draftUndoRef.current = []
+    discardUnretainedImages(previous.flatMap(entry => entry.images.map(image => image.stageId)))
+  }
   const clearVimUndo = (): void => {
     const previous = vimUndoRef.current
     vimUndoRef.current = []
     discardUnretainedImages(previous.flatMap(entry => entry.images.map(image => image.stageId)))
   }
-  const discardDraftImages = (): void => {
+  /** Push one step and enforce the depth/character guards. */
+  const pushDraftUndo = (
+    snapshot: Omit<DraftUndoEntry, 'atMs' | 'caretAfter' | 'kind' | 'deleteRun'>,
+    kind: DraftUndoEntry['kind'],
+    caretAfter: number | null,
+    deleteRun: DraftUndoEntry['deleteRun'] = null,
+  ): void => {
+    draftUndoRef.current.push({ ...snapshot, atMs: now(), caretAfter, kind, deleteRun })
+    const dropped: DraftUndoEntry[] = []
+    while (draftUndoRef.current.length > UNDO_LIMIT) dropped.push(draftUndoRef.current.shift()!)
+    let chars = draftUndoRef.current.reduce((total, entry) => total + entry.text.length, 0)
+    while (chars > UNDO_MAX_CHARS && draftUndoRef.current.length > 1) {
+      const oldest = draftUndoRef.current.shift()!
+      chars -= oldest.text.length
+      dropped.push(oldest)
+    }
+    if (dropped.length > 0) {
+      discardUnretainedImages(dropped.flatMap(entry => entry.images.map(image => image.stageId)))
+    }
+  }
+  /**
+   * Record one real text mutation. `group` folds it into the current step when
+   * the direction, caret continuity, idle window and word rule all agree;
+   * `step` always starts a sealed step. A chunk carrying several characters is
+   * judged per mutation, never per stdin read.
+   */
+  const recordDraftEdit = (
+    prev: string,
+    prevCursor: number,
+    block: DraftUndoEntry['block'],
+    next: string,
+    nextCursor: number,
+    mode: 'group' | 'step',
+  ): void => {
+    const span = diffSpan(prev, next, prevCursor, nextCursor)
+    // Backspace consumes the character BEFORE the caret; Delete consumes the
+    // one AT it. The two directions anchor differently, so their runs must
+    // never fold into one another.
+    const backward = span.start < prevCursor
+    const kind: DraftUndoEntry['kind'] =
+      span.inserted.length > 0 ? 'insert' : backward ? 'deleteBackward' : 'deleteForward'
+    const removed = prev.length - next.length
+    const caretAfter = nextCursor
+    if (mode === 'group') {
+      const last = draftUndoRef.current[draftUndoRef.current.length - 1]
+      // Continuity: this edit must begin where the last one ended. An insertion
+      // begins at the caret; a Backspace consumes the character BEFORE it, so
+      // the pre-edit caret is its start — comparing `span.start` there would
+      // make every repeated Backspace a step of its own.
+      const editStart = kind === 'insert' ? span.start : prevCursor
+      if (
+        last !== undefined &&
+        last.caretAfter !== null &&
+        last.kind === kind &&
+        last.caretAfter === editStart &&
+        now() - last.atMs <= UNDO_IDLE_MS &&
+        // An insertion extends a word when its seam is not a boundary; a
+        // deletion continues while it stays inside the word its run began in.
+        // The boundary question is deliberately NOT asked of a deletion: at the
+        // seam, `isDraftWordBoundary(prev, span.start)` reads the removed
+        // character's LEFT neighbour, which stops the run one keystroke early
+        // at a word's left edge and at the text head (and mis-splits a
+        // re-segmented CJK suffix).
+        (kind === 'insert'
+          ? !isDraftWordBoundary(next, span.start)
+          : extendDeleteRun(last, backward, removed))
+      ) {
+        last.atMs = now()
+        last.caretAfter = caretAfter
+        return
+      }
+    }
+    pushDraftUndo(
+      { text: prev, cursor: prevCursor, images: imageRefsFor(prev), block },
+      kind,
+      mode === 'group' ? caretAfter : null,
+      // A sealed step never groups, so only a groupable deletion needs (and
+      // pays for) the word interval.
+      mode === 'group' && kind !== 'insert' ? startDeleteRun(prev, span.start, removed) : null,
+    )
+  }
+  /**
+   * Clear the draft while keeping ONE undo step, so `Ctrl+Z` can bring the
+   * whole draft back (text, caret, images and fold block). The snapshot is
+   * taken before the images are released: afterwards the capabilities would
+   * already be gone and the restored `[Image #N]` tokens would be inert.
+   */
+  const clearDraftUndoably = (): void => {
+    syncImageGeneration()
+    // Nothing to come back to on an already-empty draft: pushing a snapshot
+    // there would waste the next Ctrl+Z (and hide an older real step).
+    if (valueRef.current !== '') {
+      pushDraftUndo(
+        {
+          text: valueRef.current,
+          cursor: cursorRef.current,
+          images: imageRefsFor(valueRef.current),
+          block: foldBlockRef.current,
+        },
+        'clear',
+        null,
+      )
+    }
+    discardDraftImages({ keepUndo: true })
+    setInput('', 0, 'silent')
+    setSelectedCommand(0)
+    setFileSelected(0)
+  }
+  const discardDraftImages = (options?: { keepUndo?: boolean }): void => {
     advanceDraftRevision()
     const stageIds = [...draftImagesRef.current.values()]
+    // The draft stack may be kept so Ctrl+Z can undo the clear; the vim stack
+    // is never restored by `u` across a whole-draft replacement.
+    if (options?.keepUndo !== true) clearDraftUndo()
     clearVimUndo()
     draftImagesRef.current.clear()
     discardUnretainedImages(stageIds)
@@ -851,6 +1063,7 @@ export function PromptInput({
     if (draftImagesGenerationRef.current !== generation) {
       // The channel has already cleared every old-generation capability.
       // Only detach the UI sidecar; calling discard would be redundant.
+      draftUndoRef.current = []
       vimUndoRef.current = []
       detachDraftImages()
       draftImagesGenerationRef.current = generation
@@ -919,6 +1132,11 @@ export function PromptInput({
         const previous = valueRef.current
         const next = sanitizeEditableText(previous + text)
         if (next !== previous) inputEditSequenceRef.current += 1
+        // An external injection is a NEW draft baseline. It bypasses setInput,
+        // so the stack would still describe the pre-injection text: one Ctrl+Z
+        // would then erase the injected text together with the typing it
+        // joined (the injection is not an edit of the draft the user made).
+        if (next !== previous) clearDraftUndo()
         valueRef.current = next
         cursorRef.current = next.length
         setValue(next)
@@ -935,14 +1153,16 @@ export function PromptInput({
         // The selection stays: copy never clears it (Esc/typing/delete do).
         return true
       },
+      consumeEscape: consumeEditingEscape,
       toggleVim: () => {
         const next = !vimEnabledRef.current
         vimEnabledRef.current = next
         setVimEnabled(next)
         // Every toggle lands in INSERT: a fresh vim user keeps typing
         // normally until they press Esc for the first time. Turning the
-        // mode off also clears the undo stack — a later re-enable must
-        // never `u` its way back past edits made while vim was off.
+        // mode off also clears the VIM undo stack — a later re-enable must
+        // never `u` its way back past edits made while vim was off. The
+        // draft stack (Ctrl+Z) is a different history and is left alone.
         vimInsertRef.current = true
         setVimInsert(true)
         vimPendingRef.current = ''
@@ -964,7 +1184,9 @@ export function PromptInput({
       syncImageGeneration()
       discardDraftImages()
       updateFoldBlock(null)
-      setInput(fillText)
+      // A recall is not undoable (D4): the stack was just cleared above, so
+      // the fill must not push a snapshot of the draft it replaced.
+      setInput(fillText, fillText.length, 'silent')
       onFillConsumed?.()
     }
   }, [fillText, onFillConsumed])
@@ -990,9 +1212,10 @@ export function PromptInput({
        *
        * `advanceDraftRevision` invalidates any image read/stage still in
        * flight, so a late continuation cannot bind a capability into a composer
-       * that no longer exists. `clearVimUndo` releases the capabilities that
-       * only the undo stack was holding: they are not part of the draft, and
-       * nothing will ever restore them once this composer is gone.
+       * that no longer exists. `clearDraftUndo`/`clearVimUndo` release the
+       * capabilities that only an undo stack was holding: they are not part of
+       * the draft, and nothing will ever restore them once this composer is
+       * gone.
        *
        * The stageIds the DRAFT holds are deliberately NOT revoked — they are
        * part of the snapshot the slot now keeps, and the restore filters out
@@ -1000,6 +1223,7 @@ export function PromptInput({
        * an image draft used to come back as inert text.
        */
       advanceDraftRevision()
+      clearDraftUndo()
       clearVimUndo()
       const images: PromptDraftImage[] = [...draftImagesRef.current.entries()]
         .map(([token, stageId]) => [token, stageId] as const)
@@ -1184,7 +1408,18 @@ export function PromptInput({
     }
   }
 
-  const setInput = (next: string, cursorOffset = next.length) => {
+  /**
+   * Apply `next` at `cursorOffset` and record the edit on the undo stack.
+   * `snapshotBlock` overrides the block the step snapshots: a caller that must
+   * clear the fold block BEFORE writing (the external-editor refill) still
+   * wants the block that was live at edit time.
+   */
+  const setInput = (
+    next: string,
+    cursorOffset = next.length,
+    undo: UndoMode = 'group',
+    snapshotBlock?: DraftUndoEntry['block'],
+  ) => {
     // Apply the same ingress normalization to fills/history/editor results as
     // to paste. Map the requested caret through the sanitized prefix so an
     // ANSI sequence removed before it cannot leave the caret past the text.
@@ -1228,6 +1463,15 @@ export function PromptInput({
       offset,
       offset < prevCursor ? 'start' : offset > prevCursor ? 'end' : 'nearest',
     )
+    // Undo bookkeeping runs before the mirrors move: it snapshots the state
+    // this edit replaces, and `diffSpan` needs both texts. `reset` ends the
+    // draft's history, `silent` (undo itself, a recall) leaves it untouched.
+    if (next !== prev) {
+      if (undo === 'reset') clearDraftUndo()
+      else if (undo !== 'silent') {
+        recordDraftEdit(prev, prevCursor, snapshotBlock === undefined ? block : snapshotBlock, next, offset, undo)
+      }
+    }
     // The synchronous mirrors are what batch-dispatched events (one stdin
     // read → several keys, no render in between) read on their next turn.
     if (next !== prev) inputEditSequenceRef.current += 1
@@ -1248,11 +1492,11 @@ export function PromptInput({
     setCursor(offset)
   }
 
-  const deleteInputRange = (start: number, end: number): void => {
+  const deleteInputRange = (start: number, end: number, undo: UndoMode = 'group'): void => {
     if (start >= end) return
     const text = valueRef.current
     const range = expandImageTokenRange(boundImageSpans(text), start, end)
-    setInput(text.slice(0, range.start) + text.slice(range.end), range.start)
+    setInput(text.slice(0, range.start) + text.slice(range.end), range.start, undo)
   }
 
   /**
@@ -1315,7 +1559,7 @@ export function PromptInput({
     const suffix = mention.pathEnd === undefined ? '' : value.slice(mention.pathEnd, mention.end)
     const insert = candidate.kind === 'directory' ? `${body}${suffix}` : `${body}${suffix} `
     const next = value.slice(0, mention.start) + insert + value.slice(mention.end)
-    setInput(next, mention.start + insert.length)
+    setInput(next, mention.start + insert.length, 'step')
     setFileSelected(0)
   }
 
@@ -1352,13 +1596,35 @@ export function PromptInput({
    * persisted entries first, this run's submits behind them — instead of two
    * lists to merge at recall time. Restored text carries no image capability
    * (the file stores text only), which is also what keeps a recalled entry
-   * from binding to a later staged image by accident.
+   * from binding to a later staged image by accident. The walk is scoped to
+   * the channel's workspace, keyed the same way the store keys it
+   * (historyProjectKey), so a workspace switch re-seeds it with that
+   * project's history instead of carrying the previous one over — and a
+   * respelled path to the same directory is not a switch.
+   * @returns Whether the re-seed cut short a walk in progress: the composer
+   * then shows a recalled entry of the previous project while the draft that
+   * walk started from is still held in `historyDraft`.
    */
-  const seedHistory = (): void => {
-    if (historySeeded.current) return
-    historySeeded.current = true
-    history.current = loadHistoryOldestFirst().map(entry => ({ text: entry.text, images: [] }))
+  const seedHistory = (): boolean => {
+    // The store's own key, not the raw cwd: `/repo` and `/repo/` are one
+    // project, so respelling the path must not look like a workspace switch.
+    const project = historyProjectKey(channel.cwd) ?? ''
+    if (historySeededProject.current === project) return false
+    const interrupted = historyIndex.current >= 0
+    historySeededProject.current = project
+    history.current = loadHistoryOldestFirst(channel.cwd).map(entry => ({ text: entry.text, images: [] }))
     historyIndex.current = -1
+    return interrupted
+  }
+
+  /** End the walk and put back the draft it started from. */
+  const restoreHistoryDraft = (): void => {
+    historyIndex.current = -1
+    updateFoldBlock(null)
+    restoreDraftImages(historyDraft.current)
+    // A recall is not undoable (D4): `restoreDraftImages` just ended the
+    // history, so the restore must not push a step of its own.
+    setInput(historyDraft.current.text, historyDraft.current.text.length, 'silent')
   }
 
   const rememberHistory = (text: string, images: readonly ComposerImageRef[]): void => {
@@ -1371,15 +1637,16 @@ export function PromptInput({
     })
     if (history.current.length > HISTORY_LIMIT) history.current.shift()
     historyIndex.current = -1
-    void appendHistory(text)
+    void appendHistory(text, channel.cwd)
   }
 
   const clearDeliveredDraft = (): void => {
     syncImageGeneration()
     // Delivery captured the opaque refs and history retains them; only the
-    // editable-draft binding is ending here.
+    // editable-draft binding is ending here. `reset` ends the draft's undo
+    // history: a submitted message must not come back with Ctrl+Z.
     detachDraftImages()
-    setInput('', 0)
+    setInput('', 0, 'reset')
     setSelectedCommand(0)
     setFileSelected(0)
   }
@@ -1405,7 +1672,40 @@ export function PromptInput({
     syncImageGeneration()
     advanceDraftRevision()
     replaceDraftImages(entry.images)
+    // A recall is not undoable (D4): both stacks end with the draft it replaced.
+    clearDraftUndo()
     clearVimUndo()
+  }
+
+  /**
+   * `Ctrl+Z`: pop back to the state before the current undo step — text,
+   * caret, images and fold block together. An empty stack is a no-op (never
+   * the rewind picker, never a clear). The restore is `silent`, so repeated
+   * Ctrl+Z walks further back instead of pushing what it just left. Vim `u`
+   * uses its own stack (see {@link vimUndoRef}).
+   */
+  const undoDraft = (): void => {
+    // A session replacement invalidates the whole stack. Check that BEFORE
+    // popping: restoring first and discarding afterwards would put the old
+    // session's text (and its image tokens) back into the new composer.
+    syncImageGeneration()
+    const entry = draftUndoRef.current.pop()
+    if (entry === undefined) return
+    advanceDraftRevision()
+    replaceDraftImages(entry.images)
+    // Drop the live block first: setInput's atomicity rules describe the block
+    // that was live at edit time, and re-shifting it here would corrupt the
+    // snapshot's. The snapshot's own block goes back afterwards, and only if
+    // its range still fits the text it was captured from.
+    updateFoldBlock(null)
+    setInput(entry.text, entry.cursor, 'silent')
+    const block =
+      entry.block !== null && entry.block.start < entry.block.end && entry.block.end <= entry.text.length
+        ? entry.block
+        : null
+    updateFoldBlock(block)
+    setSelectedCommand(0)
+    setFileSelected(0)
   }
 
   const submitText = (text: string, notice?: string) => {
@@ -1471,7 +1771,7 @@ export function PromptInput({
       text: item.text,
       images: item.images ?? [],
     })
-    setInput(item.text)
+    setInput(item.text, item.text.length, 'silent')
     updateFoldBlock(null)
     setSelectedCommand(0)
     setFileSelected(0)
@@ -1542,7 +1842,7 @@ export function PromptInput({
     // Tab, and a typed one must neither run nor reach the model as text. A
     // partial embedder channel carries no snapshot: everything is served.
     // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the snapshot
-    const capabilities = channel.capabilities as Channel['capabilities'] | undefined
+    const capabilities = channel.backendCapabilities as Channel['backendCapabilities'] | undefined
     if (command === undefined && isUnavailableLocalCommand(parsed.name, capabilities)) {
       channel.notify(t('cmd-unavailable-backend', { cmd: parsed.name, backend: capabilities?.backendLabel ?? '' }), {
         color: 'warning',
@@ -1666,7 +1966,7 @@ export function PromptInput({
         || isHiddenCommandName(parsed.name)
         // A built-in the backend lacks is refused here too, never steered in.
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the snapshot
-        || isUnavailableLocalCommand(parsed.name, channel.capabilities as Channel['capabilities'] | undefined)
+        || isUnavailableLocalCommand(parsed.name, channel.backendCapabilities as Channel['backendCapabilities'] | undefined)
       )) {
         if (tryRunCommand(value)) return
       }
@@ -1705,6 +2005,20 @@ export function PromptInput({
     lastClickRowRef.current = -1
   }
 
+  /** Local Esc layers, shared by the prompt listener and Chat's delegation.
+   * Refs preserve this order even when expansion and Esc share a stdin batch. */
+  const consumeEditingEscape = (): boolean => {
+    if (selectionRef.current && !helpOpen && !overlayOpen && !fileOverlayOpen) {
+      clearSelection()
+      return true
+    }
+    if (expandedRef.current) {
+      collapseEditor()
+      return true
+    }
+    return false
+  }
+
   /** The editor's explicit send (Ctrl+Enter / Send button): the Enter main
    *  path, then collapse — an empty draft just collapses. */
   const submitFromEditor = () => {
@@ -1724,7 +2038,8 @@ export function PromptInput({
     const next = sel
       ? current.slice(0, sel.start) + text + current.slice(sel.end)
       : current.slice(0, position) + text + current.slice(position)
-    setInput(next, position + text.length)
+    // A paste is ONE undo step however many characters it carries.
+    setInput(next, position + text.length, 'step')
     setSelectedCommand(0)
     setFileSelected(0)
     return { next, at: position }
@@ -1882,26 +2197,16 @@ export function PromptInput({
     // ONLY drops the highlight (text untouched), and Backspace/Delete
     // delete the selected span. Arrows/typing handle the selection at their
     // own arms below.
-    if (key.escape && selection && !helpOpen && !overlayOpen && !fileOverlayOpen) {
+    if (key.escape && consumeEditingEscape()) {
       event.stopImmediatePropagation()
-      clearSelection()
       return
     }
     if ((key.backspace || key.delete) && selection) {
-      deleteInputRange(selection.start, selection.end)
+      // Removing a selection is atomic: it must undo in one step, not fold
+      // into whatever the caret-continuity rule would otherwise see.
+      deleteInputRange(selection.start, selection.end, 'step')
       setSelectedCommand(0)
       setFileSelected(0)
-      return
-    }
-
-    // ── 全屏草稿编辑（expandEditor，默认 Ctrl+Shift+E / 输入行 ✎）─────
-    // 展开态拥有屏幕；Esc 收起（有选区时上面的 selection 分支已先行只清
-    // 选区）。滚轮不经此——编辑区的 onWheel 位置路由直接驱动滚动窗口。
-    if (key.escape && expandedRef.current) {
-      // Collapse runs AHEAD of the fold-block/vim Esc meanings: the
-      // fullscreen cover is the outermost modal layer.
-      event?.stopImmediatePropagation()
-      collapseEditor()
       return
     }
 
@@ -1926,7 +2231,7 @@ export function PromptInput({
       if ((key.backspace && cursor === block.end) || (key.delete && cursor === block.start)) {
         const next = value.slice(0, block.start) + value.slice(block.end)
         updateFoldBlock(null)
-        setInput(next, block.start)
+        setInput(next, block.start, 'step', block)
         setSelectedCommand(0)
         setFileSelected(0)
         return
@@ -1949,14 +2254,16 @@ export function PromptInput({
      *  active selection is REPLACED by the insert (standard editor
      *  semantics). Returns the insertion offset so callers can derive the
      *  inserted span (paste fold). */
-    const insertAtCaret = (text: string): number => {
+    const insertAtCaret = (text: string, undo: UndoMode = 'group'): number => {
       if (helpOpen) onToggleHelp()
       const sel = selectionRef.current
       const at = sel ? sel.start : cursor
       const next = sel
         ? value.slice(0, sel.start) + text + value.slice(sel.end)
         : value.slice(0, cursor) + text + value.slice(cursor)
-      setInput(next, at + text.length)
+      // Replacing a selection is atomic (like deleting one): the replaced span
+      // must not fold into the surrounding typed run.
+      setInput(next, at + text.length, sel ? 'step' : undo)
       setSelectedCommand(0)
       setFileSelected(0)
       return at
@@ -1994,7 +2301,8 @@ export function PromptInput({
           })
         return
       }
-      const at = insertAtCaret(text)
+      // One paste is ONE undo step however many characters it carries.
+      const at = insertAtCaret(text, 'step')
       // A big paste becomes a fold block right away (hover peeks
       // at it); an existing block is replaced by the new paste's span.
       // The EXPANDED editor never folds — pasting there is plain text
@@ -2179,8 +2487,12 @@ export function PromptInput({
           // newer composer after the terminal handoff returns.
           if (!draftImageLeaseIsCurrent(editorLease)) return
           if (outcome.kind === 'edited') {
+            // Snapshot the block BEFORE clearing it: the refill is one undo
+            // step (D4), and Ctrl+Z must bring back the fold chip the draft
+            // had, not the already-cleared null.
+            const beforeBlock = foldBlockRef.current
             updateFoldBlock(null)
-            setInput(outcome.text)
+            setInput(outcome.text, outcome.text.length, 'step', beforeBlock)
             setSelectedCommand(0)
             setFileSelected(0)
           } else if (outcome.kind === 'unavailable') {
@@ -2291,8 +2603,8 @@ export function PromptInput({
     if (key.tab && key.shift) {
       // A backend without native modes has nothing to cycle (capability
       // snapshots absent on test stubs = DSH).
-      if ((channel.capabilities as Channel['capabilities'] | undefined)?.modes === false) {
-        channel.notify(t('capability-unavailable', { name: 'mode' }), { color: 'warning', timeoutMs: 4000 })
+      if ((channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.modes === false) {
+        channel.notify(t('capability-unavailable-backend', { name: 'mode' }), { color: 'warning', timeoutMs: 4000 })
         return
       }
       // The key is consumed either way. `cycleMode` is best-effort inside the
@@ -2324,7 +2636,7 @@ export function PromptInput({
       const command = suggestions[selectedCommand]
       if (command) {
         updateFoldBlock(null)
-        setInput(command.replacement)
+        setInput(command.replacement, command.replacement.length, 'step')
       }
       return
     }
@@ -2421,9 +2733,16 @@ export function PromptInput({
         )
         return
       }
-      seedHistory()
-      if (history.current.length === 0) return
-      if (historyIndex.current < 0) {
+      // A workspace switch mid-walk keeps the draft that walk started from:
+      // the composer shows the previous project's entry, not a new draft.
+      const interrupted = seedHistory()
+      if (history.current.length === 0) {
+        if (interrupted) restoreHistoryDraft()
+        return
+      }
+      if (interrupted) {
+        historyIndex.current = history.current.length - 1
+      } else if (historyIndex.current < 0) {
         historyDraft.current = {
           text: value,
           images: imageRefsFor(value),
@@ -2437,7 +2756,7 @@ export function PromptInput({
       retractRecalledCopy(entry.text)
       updateFoldBlock(null)
       restoreDraftImages(entry)
-      setInput(entry.text)
+      setInput(entry.text, entry.text.length, 'silent')
       return
     }
     if (key.downArrow) {
@@ -2507,18 +2826,21 @@ export function PromptInput({
         )
         return
       }
+      // A walk cut short by a workspace switch has no position in the new
+      // project's list; ↓ just ends it and returns the draft.
+      if (seedHistory()) {
+        restoreHistoryDraft()
+        return
+      }
       if (historyIndex.current < 0) return
       if (historyIndex.current >= history.current.length - 1) {
-        historyIndex.current = -1
-        updateFoldBlock(null)
-        restoreDraftImages(historyDraft.current)
-        setInput(historyDraft.current.text)
+        restoreHistoryDraft()
       } else {
         historyIndex.current += 1
         const entry = history.current[historyIndex.current]
         if (entry !== undefined) {
           restoreDraftImages(entry)
-          setInput(entry.text)
+          setInput(entry.text, entry.text.length, 'silent')
         }
       }
       return
@@ -2605,10 +2927,19 @@ export function PromptInput({
       deleteInputRange(cursor, end)
       return
     }
+    if (actionMatches('undo', input, key)) {
+      // Word-level draft undo (remappable via /settings). Only the prompt
+      // draft has an undo space: with the keyboard owned by a panel or a
+      // dialog this handler is inactive (useInput isActive), and an empty
+      // stack is a no-op rather than the rewind picker.
+      undoDraft()
+      return
+    }
     if (isMod(key) && input === 'w') {
-      // Delete the word before the cursor: skip
-      // trailing whitespace, then the whitespace-delimited word. The
-      // deletion start never crosses into the block.
+      // Delete the word before the cursor: readline's whitespace-delimited
+      // rule (skip trailing whitespace, then the word). The ICU/CJK
+      // alternative is a separate editor-UX change, not part of draft undo.
+      // The deletion start never crosses into the block.
       const before = value.slice(0, cursor)
       let end = before.length
       while (end > 0 && /\s/.test(before[end - 1]!)) end--
@@ -2623,23 +2954,29 @@ export function PromptInput({
     // NORMAL submode: bare characters and Esc are vim keys; help/command/
     // file overlays, modified combos, Tab, Enter, arrows and other
     // structured keys keep their existing handlers.
+    /**
+     * Push one vim NORMAL-mode step. Vim edits never touch the draft stack:
+     * `u` and `Ctrl+Z` are two independent histories (see {@link vimUndoRef}).
+     */
+    const vimPushUndo = (): void => {
+      const images = imageRefsFor(valueRef.current)
+      const evicted = vimUndoRef.current.length >= UNDO_LIMIT ? vimUndoRef.current.shift() : undefined
+      vimUndoRef.current.push({ text: valueRef.current, cursor: cursorRef.current, images })
+      if (evicted !== undefined) {
+        discardUnretainedImages(evicted.images.map(image => image.stageId))
+      }
+    }
     const vimNormalEdit = (next: string, cursorOffset: number) => {
       updateFoldBlock(null)
-      setInput(next, cursorOffset)
+      setInput(next, cursorOffset, 'silent')
       setSelectedCommand(0)
       setFileSelected(0)
-    }
-    const vimPushUndo = () => {
-      const images = imageRefsFor(valueRef.current)
-      const evicted = vimUndoRef.current.length >= 100 ? vimUndoRef.current.shift() : undefined
-      vimUndoRef.current.push({ text: valueRef.current, cursor: cursorRef.current, images })
-      if (evicted !== undefined) discardUnretainedImages(evicted.images.map(image => image.stageId))
     }
     const vimDeleteRange = (start: number, end: number): void => {
       if (start >= end) return
       vimPushUndo()
       updateFoldBlock(null)
-      deleteInputRange(start, end)
+      deleteInputRange(start, end, 'silent')
       setSelectedCommand(0)
       setFileSelected(0)
     }
@@ -2753,14 +3090,14 @@ export function PromptInput({
         case 'd':
           vimPendingRef.current = 'd'
           return
-        case 'u': { // undo the last vim edit
+        case 'u': { // undo the last vim edit (its own stack, not Ctrl+Z's)
           syncImageGeneration()
           const prev = vimUndoRef.current.pop()
           if (prev === undefined) return
           advanceDraftRevision()
           replaceDraftImages(prev.images)
           updateFoldBlock(null)
-          setInput(prev.text, prev.cursor)
+          setInput(prev.text, prev.cursor, 'silent')
           setSelectedCommand(0)
           setFileSelected(0)
           return
@@ -2832,12 +3169,17 @@ export function PromptInput({
           if (input === '?' && value.length === 0) return
           // `/` opens the slash-command menu even in NORMAL: insert it and
           // switch to INSERT so the rest of the command types normally
-          // (the menu then owns the keys while it is open).
+          // (the menu then owns the keys while it is open). The insertion is
+          // a NORMAL command, so it lands on the vim undo stack (`u` reverts
+          // it); anything typed afterwards is a draft edit whose first
+          // snapshot already contains the `/`, so `Ctrl+Z` never peels the
+          // `/` off on its own.
           if (input === '/') {
             const text = valueRef.current
             const pos = cursorRef.current
             const next = text.slice(0, pos) + '/' + text.slice(pos)
-            setInput(next, pos + 1)
+            vimPushUndo() // NORMAL command: one vim-undo step, not a draft edit
+            setInput(next, pos + 1, 'silent')
             setSelectedCommand(0)
             setFileSelected(0)
             vimInsertRef.current = true
@@ -2876,11 +3218,7 @@ export function PromptInput({
       // A single Esc closes the open command menu first;
       // the double-tap-clear semantics only apply to ordinary input.
       if (overlayOpen) {
-        syncImageGeneration()
-        discardDraftImages()
-        setInput('', 0)
-        setSelectedCommand(0)
-        setFileSelected(0)
+        clearDraftUndoably()
         return
       }
       // File overlay: Esc dismisses the menu for THIS token only — clearing
@@ -2902,6 +3240,17 @@ export function PromptInput({
         })
         return
       }
+      // "Send to Chat" chips peel before the draft: the first Esc drops the
+      // contexts panels staged and leaves the typed text untouched, so a second
+      // Esc then clears the input as usual. The press is CONSUMED — this rung
+      // has exactly one meaning, and a running turn must not be interrupted by
+      // the same key that only dropped a chip.
+      const stagedContexts = channel.attachedContexts ?? []
+      if (stagedContexts.length > 0) {
+        event?.stopImmediatePropagation()
+        for (const staged of [...stagedContexts]) channel.detachContext(staged.id)
+        return
+      }
       // A single Esc clears the current input (if any); the double-tap
       // path below handles rewind/clear on an already-empty input. A BIG
       // input folds into a block instead (Esc = the fold toggle; the
@@ -2914,26 +3263,18 @@ export function PromptInput({
           setFileSelected(0)
           return
         }
-        syncImageGeneration()
-        discardDraftImages()
-        setInput('', 0)
-        setSelectedCommand(0)
-        setFileSelected(0)
+        // Esc clearing the draft is undoable (D4): Ctrl+Z brings the whole
+        // draft back, images and fold block included.
+        clearDraftUndoably()
         return
       }
-      // Double-tap Esc: clear the input when it has content; when empty,
-      // open the rewind picker (double-tap Esc rewinds the selected message
-      // and/or conversation to a previous point in time).
+      // Double-tap Esc opens the rewind picker. Reaching here means the draft
+      // is empty: every non-empty branch above returns after clearing, so the
+      // second tap can only be the rewind gesture.
       if (escPendingRef.current) {
         escPendingRef.current = false
         if (escTimerRef.current) clearTimeout(escTimerRef.current)
-        if (value.length === 0) {
-          onRewindRequest?.()
-        } else {
-          syncImageGeneration()
-          discardDraftImages()
-          setInput('', 0)
-        }
+        onRewindRequest?.()
         return
       }
       escPendingRef.current = true
@@ -2958,7 +3299,9 @@ export function PromptInput({
       const next = sel
         ? value.slice(0, sel.start) + input + value.slice(sel.end)
         : value.slice(0, cursor) + input + value.slice(cursor)
-      setInput(next, at + input.length)
+      // Replacing a selection is atomic, exactly like `insertAtCaret`: the
+      // replaced span must not fold into the surrounding typed run.
+      setInput(next, at + input.length, sel ? 'step' : 'group')
       setSelectedCommand(0)
       setFileSelected(0)
     }
@@ -3327,6 +3670,12 @@ export function PromptInput({
 
   const lastNotification =
     channel.notifications[channel.notifications.length - 1]
+  // The pet panel can "say" a notice with its speech bubble instead: while
+  // that panel is the ACTIVE one the host suppresses the duplicate toast
+  // here (errors always toast — they may need action). Same render, same
+  // commit, so the swap cannot flash one frame of toast first.
+  const toastVisible =
+    lastNotification !== undefined && (toastSuppressed?.(lastNotification) ?? false) !== true
 
   // Park the native terminal cursor at the input caret (via the renderer's
   // cursor-declaration mechanism). Terminal emulators render IME preedit
@@ -3575,6 +3924,13 @@ export function PromptInput({
   // 顶边框右侧的会话名标签 chip：色随强调色；超宽截断，宽度
   // 随终端列数伸缩但不超过 28 显示单元。默认关闭——`/settings` 的
   // 「会话名标签」开关（dsh-tui.promptSessionLabel）开启后显示。
+  // "Send to Chat" chips (side-panel §6.7): the contexts panels staged for the
+  // next submission, rendered as one strip directly above the prompt border.
+  // Read defensively — hosts and older fixtures mount this composer with a
+  // partial channel stub (Chat guards `agentViewRows` for the same reason),
+  // and a missing projection means "nothing attached". A render-time TypeError
+  // here would be swallowed by ink and silently freeze the screen.
+  const attachedContexts = channel.attachedContexts ?? []
   const sessionTitle = channel.sessionTitle ?? ''
   const topRightLabel: InputBorderLabel | undefined =
     channel.promptSessionLabel === true && sessionTitle !== ''
@@ -3754,7 +4110,8 @@ export function PromptInput({
               onCommandPick={(name) => {
                 // 点击命令行 = 填入 /name 并关闭帮助（Tab 补全的鼠标等价）
                 updateFoldBlock(null)
-                setInput(`/${name} `)
+                // `/${name} ` — the whole fill is one undo step.
+                setInput(`/${name} `, name.length + 2, 'step')
                 onToggleHelp()
               }}
             />
@@ -3854,7 +4211,33 @@ export function PromptInput({
         )}
       </OverlayAbove>
       )}
-      {lastNotification && (
+      {attachedContexts.length > 0 && (
+        // The chip strip sits in the band directly above the prompt border —
+        // the row band the `[Image #N]` tokens occupy inside the input.
+        // Chips lay out side by side and each truncates at the row end, so the
+        // strip is ALWAYS exactly one row tall no matter how many panels stage
+        // a context or how long their titles are.
+        <Box
+          flexDirection="row"
+          width="100%"
+          height={1}
+          overflow="hidden"
+          paddingLeft={2}
+          columnGap={2}
+        >
+          {attachedContexts.map(item => (
+            // Each chip is its own shrinkable cell (ink boxes shrink by
+            // default) so a long title truncates at ITS OWN end instead of
+            // pushing the later chips off the row.
+            <Box key={item.id} overflow="hidden">
+              <Text color={promptAccent} wrap="truncate-end">
+                {t('prompt-attached-context-chip', { title: item.title })}
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      )}
+      {lastNotification && toastVisible && (
         // position=absolute takes zero layout height so the transcript never
         // shifts when a notification appears/disappears; the layer floats one
         // row above the prompt border, right-aligned.

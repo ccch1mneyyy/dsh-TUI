@@ -43,7 +43,7 @@ export function createSessionControls(deps: {
     // Local names win, served here or not: a typed `/init` is the local
     // command (or its explicit unavailability), never the backend's.
     const local = new Set(LOCAL_COMMANDS.map(command => command.name))
-    const served = localCommandsFor(state.capabilities.commands)
+    const served = localCommandsFor(state.backendCapabilities.commands)
     state.commandList = backendCommands.length === 0
       ? served
       : [...served, ...backendCommands.filter(command => !local.has(command.name))]

@@ -58,10 +58,10 @@ function windowQuery(
 /**
  * A single-line search input in a round-bordered box: `⌕ ` prefix, block
  * cursor at `cursorOffset` (inverse cell).
- * When empty and focused, a solid block caret sits at the start and the
- * placeholder is right-aligned (dimmed) — kept off the caret's cell so the
- * terminal-painted IME preedit (pinyin) can never be overlaid on it during
- * CJK composition.
+ * When empty and focused, the caret is an inverse block **on the first
+ * character of the placeholder** (opencode style, 2026-10 第七版) — it never
+ * occupies a cell of its own, so text never shifts; the terminal-painted IME
+ * preedit (pinyin) still lands at the declared native cursor next to it.
  *
  * The query row is strictly single-line: an overlong query is windowed
  * around the caret (horizontal scroll) instead of wrapping, so the native
@@ -76,6 +76,8 @@ export function SearchBox({
   width,
   cursorOffset,
   borderless = false,
+  caretBlink = true,
+  placeholderAlign = 'right',
 }: {
   query: string
   placeholder?: string
@@ -85,14 +87,33 @@ export function SearchBox({
   width?: number | string
   cursorOffset?: number
   borderless?: boolean
+  /**
+   * 空输入 + 焦点态那一行里占位文案的对齐（2026-10 落地页第四版新增）：
+   * `right`（缺省，历史行为）贴框右缘；`left` 紧跟 `前缀 + 块状光标` 之后。
+   * 共享组件——聊天页/选择器不传此 prop，渲染与从前逐字节一致。
+   */
+  placeholderAlign?: 'left' | 'right'
+  /**
+   * 光标闪烁相位（true = 反显、false = 常规）。落地页传入（约 550ms 一相位）；
+   * 缺省 true 恒反显——其它使用方（选择器搜索等）保持不闪。
+   *
+   * 契约（第七版修订）：光标是**压在当前字符身上的反显块**（对那一个字符
+   * 用 inverse；行尾时对反显空格），绝不另起一格、绝不吃掉字符；闪烁是
+   * **纯样式切换**（inverse ↔ 常规——上一版是 inverse ↔ inverse+dim，dim
+   * 相位在部分终端会把反显块里的字形糊到几乎看不见，看起来像"字消失了"），
+   * 不增删任何字符——无头回归读的是视口纯文本，断言不会随相位抖动。
+   */
+  caretBlink?: boolean
 }): React.ReactNode {
   const offset = cursorOffset ?? query.length
   const borderStyle = borderless ? undefined : 'round'
   const borderColor = isFocused ? 'suggestion' : undefined
   const borderDimColor = !isFocused
-  // Focused + empty + terminal focused: inline caret row (block caret at the
-  // start, placeholder right-aligned) instead of the inline placeholder.
-  const inlineCaret = isFocused && query === '' && isTerminalFocused
+  // 空输入的行内光标（第七版重做）：光标压在**占位文本的第一个字符**身上
+  // （对那一个字符 inverse，opencode 式）——绝不自己占一格、绝不把文字往右
+  // 挤。不再拿终端焦点（DECSET 1004 focus 事件）当开关：只要这个输入框是
+  // 本屏的焦点目标，光标就常在（用户原话「光标永远不消失 哪怕焦点没了」）。
+  const inlineCaret = isFocused && query === ''
 
   // Content width of the box in display cells. Measured from yoga after
   // layout (resize re-layouts without any prop/state change, so measure on
@@ -149,17 +170,16 @@ export function SearchBox({
   let content: React.ReactNode
   if (isFocused) {
     if (query) {
-      content = isTerminalFocused ? (
+      // 第七版重做：光标常在（不再依赖终端焦点事件），压在当前字符身上
+      // （对那一个字符 inverse；行尾时反显空格），闪烁相位只在
+      // inverse ↔ 常规之间切样式——字符常在、文字不位移。
+      content = (
         <>
           <Text>{win.before}</Text>
-          <Text inverse>{win.at}</Text>
+          {caretBlink ? <Text inverse>{win.at}</Text> : <Text>{win.at}</Text>}
           {win.after !== '' && <Text>{win.after}</Text>}
         </>
-      ) : (
-        <Text>{query}</Text>
       )
-    } else if (!isTerminalFocused) {
-      content = <Text dimColor>{placeholder}</Text>
     }
   } else {
     content = query ? <Text>{query}</Text> : <Text>{placeholder}</Text>
@@ -176,14 +196,30 @@ export function SearchBox({
       width={width}
     >
       {inlineCaret ? (
-        <Box flexDirection="row" width="100%">
-          <Text>{prefix} </Text>
-          <Text inverse> </Text>
-          <Box flexGrow={1} />
-          <Text dimColor wrap="truncate">
-            {placeholder}
-          </Text>
-        </Box>
+        placeholderAlign === 'left' ? (
+          <Box flexDirection="row" width="100%">
+            <Text>{prefix} </Text>
+            {/* 光标压在占位**第一个字符**身上（opencode 式）：对那一个字符
+                inverse，整行不多占一格、文字位置不动；闪烁只切样式。 */}
+            <Text dimColor wrap="truncate">
+              {caretBlink
+                ? <Text inverse>{placeholder.slice(0, 1)}</Text>
+                : placeholder.slice(0, 1)}
+              {placeholder.slice(1)}
+            </Text>
+          </Box>
+        ) : (
+          <Box flexDirection="row" width="100%">
+            <Text>{prefix} </Text>
+            {/* 右对齐变体（非落地页使用方）：占位钉在右缘，行首没有可压的
+                字符——光标画在光标位那一格（反显空格），同样不挤任何文字。 */}
+            {caretBlink ? <Text inverse> </Text> : <Text> </Text>}
+            <Box flexGrow={1} />
+            <Text dimColor wrap="truncate">
+              {placeholder}
+            </Text>
+          </Box>
+        )
       ) : (
         <Text dimColor={!isFocused} wrap="truncate-end">
           {prefix} {content}

@@ -2,11 +2,12 @@
  * Private protocol / permission / catalog single-source gate.
  *
  * Enforces:
- * - only `src/adapter/spec/**` may resolve `#dsh-ecosystem-spec/*`,
- *   `dsh-ecosystem-spec/*`, or relative paths into the vendored spec;
+ * - only `src/adapter/spec/**` may resolve `#tui-profile/*`,
+ *   `tui-profile/*`, or relative paths into the in-tree profile;
  * - no production code declares the private protocol constant/mapping sets
  *   locally (all derivation lives in `src/adapter/spec`);
- * - spec-derived constants agree with the vendored machine-readable registry;
+ * - spec-derived constants agree with the in-tree machine-readable registry;
+ * - the profile stays plain in-tree files (never re-mounted as a submodule);
  * - the process-level canonical ProtocolCatalog is used;
  * - the public plugin-host export surface does not expose mutable catalog
  *   factories, test admission, or caller-supplied principal grant APIs.
@@ -23,7 +24,7 @@ const SRC = join(ROOT, 'src')
 const ADAPTER = join(SRC, 'adapter')
 const SPEC = join(ADAPTER, 'spec')
 const STANDARD = join(ADAPTER, 'standard')
-const DSH_SPEC_SPECIFIERS = ['#dsh-ecosystem-spec', 'dsh-ecosystem-spec/', '../dsh-ecosystem-spec', '../../dsh-ecosystem-spec']
+const DSH_SPEC_SPECIFIERS = ['#tui-profile', 'tui-profile/', '../tui-profile', '../../tui-profile']
 const CATALOG_FILE = join(STANDARD, 'tui-extension.ts')
 
 function collectFiles(dir: string): string[] {
@@ -67,9 +68,9 @@ for (const file of allFiles) {
   const rel = relative(ROOT, file)
   for (const specifier of moduleSpecifiers(file)) {
     const touchesSpec = DSH_SPEC_SPECIFIERS.some(prefix => specifier.startsWith(prefix))
-      || specifier.includes('dsh-ecosystem-spec')
+      || specifier.includes('tui-profile')
     if (touchesSpec && !isUnder(file, SPEC)) {
-      failures.push(`${rel}: resolves dsh-ecosystem-spec outside spec (${specifier}); must go through src/adapter/spec`)
+      failures.push(`${rel}: resolves tui-profile outside spec (${specifier}); must go through src/adapter/spec`)
     }
   }
 }
@@ -135,7 +136,7 @@ const { getAdmissionCatalog, createAdmissionCatalog } = await import('../src/ada
 const { loadSpecData } = await import('../src/adapter/standard/registry.js')
 const specData = loadSpecData()
 if (specData === undefined) {
-  failures.push('vendored dsh-ecosystem-spec data is unavailable; cannot verify protocol constant consistency')
+  failures.push('in-tree tui-profile data is unavailable; cannot verify protocol constant consistency')
 } else {
   const expectedByName = new Map(EXPECTED_PERMISSIONS.map(permission => [permission.name, permission]))
   const actualPermissions = specData.permissions.permissions
@@ -195,20 +196,22 @@ if (specData === undefined) {
   }
 }
 
-// Pinned submodule must be clean and match the revision constant.
+// The profile is in-tree plain files, not a submodule: derivation must be
+// reproducible from this repository's content alone. A re-mount (gitlink) would
+// silently drop the profile out of the published npm tarball, so fail closed.
 try {
-  const specGitDir = join(ROOT, 'dsh-ecosystem-spec')
-  const head = execFileSync('git', ['-C', specGitDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
-  const status = execFileSync('git', ['-C', specGitDir, 'status', '--short'], { encoding: 'utf8' }).trim()
-  const { ECOSYSTEM_SPEC_REVISION } = await import('../src/adapter/standard/registry.js')
-  if (head !== ECOSYSTEM_SPEC_REVISION) {
-    failures.push(`dsh-ecosystem-spec HEAD ${head} does not match ECOSYSTEM_SPEC_REVISION ${ECOSYSTEM_SPEC_REVISION}`)
+  const { TUI_PROFILE_DIR } = await import('../src/adapter/standard/registry.js')
+  const tracked = execFileSync('git', ['ls-files', '-s', '--', TUI_PROFILE_DIR], { encoding: 'utf8' })
+    .trim().split('\n').filter(Boolean)
+  if (tracked.length === 0) {
+    failures.push(`${TUI_PROFILE_DIR}/ is not tracked by git`)
   }
-  if (status !== '') {
-    failures.push(`dsh-ecosystem-spec has uncommitted changes (must be clean for reproducible derivation): ${status}`)
+  const gitlinks = tracked.filter(line => line.startsWith('160000'))
+  if (gitlinks.length > 0) {
+    failures.push(`${TUI_PROFILE_DIR}/ is mounted as a submodule (gitlink); it must stay plain in-tree files`)
   }
 } catch (error) {
-  failures.push(`cannot verify dsh-ecosystem-spec submodule state: ${error instanceof Error ? error.message : String(error)}`)
+  failures.push(`cannot verify tui-profile/ tracking state: ${error instanceof Error ? error.message : String(error)}`)
 }
 
 // Canonical catalog singleton.

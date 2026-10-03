@@ -198,6 +198,15 @@ Cordis config
 
 - 该命令先删除整个 `lib/`，再用 `tsc -p tsconfig.json` 把 `src/` 输出到
   `lib/types/`，最后运行适配边界、上游契约与 patch surface 门禁。
+- 编译前的 vendor 构建（`vendor/dsh-std`、`vendor/mathjax-tex-svg`）由
+  `scripts/build-vendor.mjs` 负责：输入（子模块源码、锁文件、构建命令、Node
+  版本）与产物文件逐字节都和上次成功构建一致时跳过，否则照常重建；
+  `node scripts/build-vendor.mjs --force` 强制重建。指纹记在
+  `node_modules/.cache/dsh-tui/vendor-build.json`。
+- `verify:build` 按 CPU 数并行跑全部门禁，每个门禁独立临时 HOME，输出按门禁
+  整块打印；`pnpm verify:build --jobs 1`（或 `DSH_TUI_VERIFY_JOBS=1`）恢复
+  串行、实时输出，便于排查单个门禁。门禁不得依赖其他门禁留下的状态；确实需要
+  独占机器的门禁登记进 `scripts/run-verify-build.mjs` 的 `SERIAL`，并写明原因。
 - `prepare` 生命周期只服务**源码检出场景**的自举编译（vendor 子模块缺失时
   快速失败，见 scripts/prepare-guard.mjs）。
 - Git URL 依赖安装自 vendoring（#308）起三重阻断（workspace 依赖/子模块/
@@ -238,9 +247,14 @@ CI 另按 `.github/workflows/ci.yml` 的 `changes` 路径白名单分流：`AGEN
 `.agents/skills/` 和源码中的注释不在文档豁免内，仍会触发代码门禁。本地无需
 重建不代表 CI 会跳过；提交时保留所需门禁并如实说明本地验证范围。
 
-`verify:build` 也检查源码输入卫生、渲染原语、主题与活动偏好迁移、状态动画、
-表格布局、mermaid 图表、LaTeX 公式和侧问行为。源码卫生检查只拦截已列明的命名与编译产物回归，不替代
+`verify:build` 也检查源码输入卫生、渲染原语、终端尺寸来源（`ink/` 之外只经
+`useTerminalSize()`）、主题与活动偏好迁移、状态动画、表格布局、mermaid 图表、
+LaTeX 公式和侧问行为。源码卫生检查只拦截已列明的命名与编译产物回归，不替代
 来源或许可证审计。
+
+CI 的测试组按 `scripts/ci-group-timings.json` 的实测耗时分片（每条恰好落在
+一片，表只影响均衡）；新增脚本不必改表，需要重新均衡时整组跑一次
+`node scripts/run-ci-group.mjs <组> --record-timings`。
 
 CI 在安装后运行：
 
@@ -281,6 +295,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 提示队列行为 | `node scripts/verify-queue.mjs` |
 | Goal/todo 投影与渲染 | `node scripts/verify-channel-goal-todo.mjs` + `node scripts/verify-goal-todo.mjs` |
 | Compaction 与折叠 transcript 行 | `node scripts/verify-compact.mjs` |
+| 命令能力事实（compaction / plan / 问卷 / 剪枝的路由与 Help + `/` 的不可用标注） | `pnpm verify:agent-capabilities` |
 | 压缩 × 会话切换生命周期（取消先于 fork 快照、persistence 分类提示） | `node --import tsx/esm scripts/verify-compact-switch.tsx` |
 | 主题加载、持久化与运行时插件接缝 | `node --import tsx/esm scripts/verify-themes.mjs`、`node --import tsx/esm scripts/verify-runtime-themes.ts` |
 | 默认推理强度等偏好链（effortPrefs / settings 默认值） | `node --import tsx/esm scripts/verify-effort-default.ts` |

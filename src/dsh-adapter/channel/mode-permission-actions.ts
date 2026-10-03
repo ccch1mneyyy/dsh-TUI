@@ -98,8 +98,14 @@ export function createPermissionModeActions(
   state: ModeState,
   deps: Pick<
     BaseModeActionDeps,
-    'owner' | 'runtime' | 'binding' | 'sessionModes' | 'commandService' | 'executeRegistryCommand' | 'notify'
-  > & { roster: PermissionModeRoster },
+    'owner' | 'runtime' | 'binding' | 'sessionModes' | 'executeRegistryCommand' | 'notify'
+  > & {
+    roster: PermissionModeRoster
+    /** Only the permission identity reads the registry directly (#755 is the
+     *  authoritative design for `/permission`); the plan route comes from the
+     *  shared capability facts inside `createModeActions`. */
+    commandService?: { find(agent: Agent, name: string): unknown }
+  },
 ): {
   refreshMode(): void
   cycleMode(): Promise<void>
@@ -114,7 +120,6 @@ export function createPermissionModeActions(
     runtime: deps.runtime,
     binding,
     sessionModes,
-    commandService,
     executeRegistryCommand,
     notify,
   })

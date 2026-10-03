@@ -147,10 +147,10 @@ function makeProjector(state: Record<string, unknown>): { renderEvent: (event: u
     { provider: 'deepseek-official', model: 'deepseek-v4-flash', buckets, scope: 'main' },
     { provider: 'deepseek-official', model: 'deepseek-flash', buckets: subBuckets, scope: 'subagent' },
   ])
-  // 子代理：空闲 (0.5M-0.1M)×1.0 + 0.1M×0.02 + 0.25M×4.0 = 0.4+0.002+1.0 = 1.402
+  // 子代理空闲桶：0.5M×1.0 + 0.1M×0.02 + 0.05M×1.0 + 0.25M×4.0 = 0.5+0.002+0.05+1.0 = 1.552
   check('estimate 分侧 main/subagent + 峰谷合计', split !== undefined
-    && close(split.main, 2.0) && close(split.subagent, 1.402) && close(split.total, 3.402)
-    && close(split.peak, 2.0) && close(split.idle, 1.402), JSON.stringify(split))
+    && close(split.main, 2.0) && close(split.subagent, 1.552) && close(split.total, 3.552)
+    && close(split.peak, 2.0) && close(split.idle, 1.552), JSON.stringify(split))
 
   const unpriced = estimateCostFromBucketsCny([
     { provider: 'kimi-coding', model: 'kimi-k2', buckets: emptyCostBuckets0(), scope: 'subagent' },
@@ -170,6 +170,55 @@ function makeProjector(state: Record<string, unknown>): { renderEvent: (event: u
     copy.peak.input = 99
     return source.peak.input === 7 && copy.peak.input === 99
   })())
+}
+
+// ═════════════════════ 计价口径：三段输入量各自计价（DSH TokenUsage 契约） ═════════════════════
+// DSH 的 TokenUsage 契约把一次调用的用量定义为互不重叠的计数：inputTokens 只是
+// **未命中**输入，cacheReadTokens / cacheWriteTokens 另计，计费输入 = 三者之和。
+// 下表逐条钉住该口径下的锚点与边界（含 cacheRead ≫ input 的真实形态），期望值写成
+// 算式以便对照复核。
+
+{
+  // 与 verify-balance.tsx 的 buckets() 同款类型惯用法：直接复用计价模块的公开类型，
+  // 不另起一份字段形状（避免与 CostTokenTotals 漂移）。
+  type Usage = Partial<import('../src/deepseekPricing.js').CostTokenTotals>
+  const cases: Array<{ name: string; peak?: Usage; idle?: Usage; expected: number }> = [
+    {
+      name: '未命中输入不被命中量抵扣（上游报告的实测读数）',
+      idle: { input: 551_515, output: 236_604, cacheRead: 74_514_560, cacheWrite: 0 },
+      expected: (551_515 * 1.0 + 74_514_560 * 0.02 + 236_604 * 4.0) / 1e6,
+    },
+    {
+      name: 'cacheRead ≫ input 的真实形态不截断',
+      idle: { input: 100_000, output: 500_000, cacheRead: 10_000_000, cacheWrite: 0 },
+      expected: (100_000 * 1.0 + 10_000_000 * 0.02 + 500_000 * 4.0) / 1e6,
+    },
+    {
+      name: 'cacheRead == input 时两段各自计价',
+      peak: { input: 1_000_000, cacheRead: 1_000_000 },
+      expected: (1_000_000 * 2.0 + 1_000_000 * 0.04) / 1e6,
+    },
+    {
+      name: 'cacheRead == 0 时不改变既有金额（守恒对照）',
+      peak: { input: 1_000_000 },
+      expected: (1_000_000 * 2.0) / 1e6,
+    },
+    {
+      name: 'cacheWrite 按未命中价计入',
+      idle: { cacheWrite: 1_000_000 },
+      expected: (1_000_000 * 1.0) / 1e6,
+    },
+  ]
+  for (const item of cases) {
+    const usage = emptyCostBuckets()
+    if (item.peak !== undefined) addUsageToCostBuckets(usage, item.peak, true)
+    if (item.idle !== undefined) addUsageToCostBuckets(usage, item.idle, false)
+    const priced = estimateCostFromBucketsCny([
+      { provider: 'deepseek-official', model: 'deepseek-v4-flash', buckets: usage, scope: 'main' },
+    ])
+    check(`计价 ${item.name} = ¥${item.expected}`, priced !== undefined && close(priced.total, item.expected),
+      priced === undefined ? 'total=undefined' : JSON.stringify(priced))
+  }
 }
 
 // ═════════════════════ AC-A1/A2：子代理 durable usage 累计与计价 ═════════════════════
@@ -198,9 +247,9 @@ function makeProjector(state: Record<string, unknown>): { renderEvent: (event: u
     && entry?.buckets.idle.input === 1_000_000 && entry?.buckets.idle.cacheRead === 800_000
     && entry?.buckets.idle.output === 500_000, JSON.stringify(entry?.buckets))
   const estimate = estimateCostFromBucketsCny(entry === undefined ? [] : [{ ...entry, scope: 'subagent' as const }])
-  // 谷：(1M−0.8M)×1.0 + 0.8M×0.02 + 0.5M×4.0 = 2.216；峰：0.25M×8.0 = 2.0
-  check('AC-A2 cacheRead 按命中价、跨时段分价 = ¥4.216', estimate !== undefined
-    && close(estimate.total, 4.216) && close(estimate.peak, 2.0) && close(estimate.idle, 2.216), JSON.stringify(estimate))
+  // 谷：1M×1.0 + 0.8M×0.02 + 0.1M×1.0 + 0.5M×4.0 = 3.116；峰：0.25M×8.0 = 2.0
+  check('AC-A2 cacheRead 按命中价、跨时段分价 = ¥5.116', estimate !== undefined
+    && close(estimate.total, 5.116) && close(estimate.peak, 2.0) && close(estimate.idle, 3.116), JSON.stringify(estimate))
   check('AC-A2 isPeakHour 判定与分桶一致', isPeakHour(new Date(PEAK)) && !isPeakHour(new Date(IDLE)))
 }
 

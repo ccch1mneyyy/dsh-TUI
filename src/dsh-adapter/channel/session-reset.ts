@@ -24,6 +24,10 @@ export type SessionResetState = Pick<
   | 'lastUsage'
   | 'contextSegments'
   | 'costReport'
+  /** Staged "Send to Chat" contexts belong to the composer that staged them:
+   *  an adopted session must never carry the previous conversation's chips
+   *  (or hand its model a panel context the user staged elsewhere). */
+  | 'attachedContexts'
 >
 
 /**
@@ -75,6 +79,7 @@ export function resetSessionProjection(
   state.lastUsage = undefined
   // A backend-reported cost belongs to the session that reported it.
   state.costReport = undefined
+  state.attachedContexts = []
   state.contextSegments = {
     system: 0,
     prompt: 0,

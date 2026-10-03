@@ -232,7 +232,7 @@ function signatureParts(
     case 'reasoning':
       // thinkingFold (preview vs full), its per-row live override, and the
       // visibility filter all change the card's height.
-      signatureScratch.push(row.streaming === true, expanded, expandedRows.has(row.id), streamViewToggledRows.has(row.id), thinkingVisible, thinkingFold)
+      signatureScratch.push(row.streaming === true, row.thinkingOpen === true, expanded, expandedRows.has(row.id), streamViewToggledRows.has(row.id), thinkingVisible, thinkingFold)
       break
     case 'tool': {
       const tool = row.tool
@@ -274,6 +274,10 @@ function signatureParts(
       const group = row.jobGroup
       signatureScratch.push(
         row.job?.status ?? '',
+        // The label drives the card's height: it wraps inside its column and
+        // the rail is painted per line, so a label that lands later (the
+        // kernel fills it in after launch) must invalidate the cached height.
+        row.job?.label?.length ?? 0,
         row.job?.outputLines.length ?? 0,
         row.job?.detail?.length ?? 0,
         row.job?.progress?.length ?? 0,
@@ -282,8 +286,12 @@ function signatureParts(
         row.job === undefined
           ? ''
           : row.job.outputLines.slice(-4).map(line => line.text.length).join(','),
-        group === undefined ? '' : `${group.index}/${group.count}/${group.last ? 'l' : 'm'}`,
+        // Grouped members all render with the same 2-cell rail, so the only
+        // shape inputs are "is it a member", "is it the head" and "is the run
+        // folded" (a folded head paints the summary alone).
+        group !== undefined,
         group?.head === true,
+        group?.last === true,
         group?.folded === true,
       )
       break
@@ -663,9 +671,8 @@ export function MessageList({
           ...(out[k]!),
           jobGroup: {
             head: k === i,
-            index: k - i,
-            count,
             last: k === end,
+            count,
             folded,
             running,
             completed,
@@ -1431,6 +1438,7 @@ export function MessageList({
               executionTarget={row.executionTarget}
               selectionAttached={row.selectionAttached}
               streaming={displayStreaming}
+              thinkingOpen={row.thinkingOpen === true}
               durationMs={row.durationMs}
               reasoningTokens={row.reasoningTokens}
               time={row.time}
@@ -1507,6 +1515,7 @@ type MemoRowProps = {
   /** Session cwd for the indicator's display-path relativization (T-FIX-01). */
   sessionCwd: string | undefined
   streaming: boolean
+  thinkingOpen: boolean
   durationMs: number | undefined
   /** Estimated thinking tokens of a count-only reasoning row. */
   reasoningTokens: number | undefined
@@ -1597,6 +1606,7 @@ function TranscriptRow({
   selectionAttached,
   sessionCwd,
   streaming,
+  thinkingOpen,
   durationMs,
   reasoningTokens,
   time,
@@ -1656,8 +1666,8 @@ function TranscriptRow({
     if (event.cellIsBlank) return
     onToggleRow(rowId)
   }, [onToggleRow, rowId])
-  // 流式 reasoning 行：点击在三行预览/全文间切换。它反转 thinkingFold
-  // 的默认值，落定后语义自动回到 foldOnClick。
+  // 当前回合仍展开的 reasoning 行：点击在三行预览/全文间切换。它反转
+  // thinkingFold 的默认值，回合落定后语义自动回到 foldOnClick。
   const streamViewOnClick = React.useCallback((event: ClickEvent): void => {
     if (event.cellIsBlank) return
     onToggleStreamView(rowId)
@@ -1777,7 +1787,8 @@ function TranscriptRow({
     case 'reasoning': {
       // The setting chooses the live default; a row click reverses it. Global
       // or per-row transcript expansion always wins and shows the full text.
-      const streamPreview = streaming && !expanded && !isExpanded &&
+      const turnOpen = streaming || thinkingOpen
+      const streamPreview = turnOpen && !expanded && !isExpanded &&
         (streamViewToggled ? thinkingFold === 'full' : thinkingFold === 'preview')
       return (
         <Box flexDirection="column" ref={ref}>
@@ -1788,12 +1799,12 @@ function TranscriptRow({
             streaming={streaming}
             preview={streamPreview}
             // Settled rows keep the fold-on-settle default and expand via
-            // expandedRows/Ctrl+O; a live row is always preview or full.
-            verbose={isExpanded || expanded || (streaming && !streamPreview)}
+            // expandedRows/Ctrl+O; a current-turn row is preview or full.
+            verbose={isExpanded || expanded || (turnOpen && !streamPreview)}
             durationMs={durationMs}
             reasoningTokens={reasoningTokens}
             isSelected={isSelected}
-            onClick={streaming ? streamViewOnClick : foldOnClick}
+            onClick={turnOpen ? streamViewOnClick : foldOnClick}
           />
         </Box>
       )
@@ -1929,7 +1940,10 @@ function TranscriptRow({
             <JobCard
               job={job}
               marginTopOnTurn={groupHead ? false : marginTopOnTurn}
-              rail={jobGroup === undefined ? undefined : jobGroup.last ? 'tail' : 'mid'}
+              // The bracket hugs the CARDS: the summary line above stays
+              // outside it, and the head/last member round the two ends in
+              // place (no extra cap row) — see JobCard's `rail` prop.
+              rail={jobGroup === undefined ? undefined : { open: jobGroup.head, close: jobGroup.last }}
               // Clicking a card opens the panel focused on THAT job, not the roster head.
               onClick={onOpenJobs === undefined ? undefined : () => onOpenJobs(job.id)}
               onWatchOutput={onWatchJobOutput}

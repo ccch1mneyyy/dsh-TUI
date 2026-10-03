@@ -9,18 +9,61 @@ import { Divider } from './design-system/Divider.js'
 import { ExitButton } from './SubagentDashboard.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
+import { usePanelInput } from './sidePanel/usePanelInput.js'
+import type { PanelKeyHandler } from './sidePanel/types.js'
+
+/**
+ * Pure width→column allocation for the roster row (kept side-effect free so
+ * regressions can assert the table directly). There is no pid column in this
+ * roster. Side-panel tiers: the label always truncates and every column
+ * leaves it ≥8 cells — progress drops first, then duration, then the
+ * id/status columns narrow — so a 38-col panel never folds a command into
+ * per-word lines. The full-screen form keeps its wrap-the-label contract.
+ */
+export interface JobsRowColumns {
+  readonly showProgress: boolean
+  readonly showDuration: boolean
+  readonly showStatus: boolean
+  readonly idWidth: number
+  readonly statusWidth: number
+  /** 整屏形态 label 折行（长命令可读全文）；panel 形态 truncate-end
+   *  （行高恒定，全文由焦点行的 detail 块承担）。 */
+  readonly labelWrap: boolean
+}
+
+export function resolveJobsRowColumns(width: number): JobsRowColumns {
+  if (width >= 52) return { showProgress: true, showDuration: true, showStatus: true, idWidth: 9, statusWidth: 9, labelWrap: false }
+  if (width >= 44) return { showProgress: false, showDuration: true, showStatus: true, idWidth: 9, statusWidth: 9, labelWrap: false }
+  if (width >= 34) return { showProgress: false, showDuration: true, showStatus: true, idWidth: 8, statusWidth: 6, labelWrap: false }
+  return { showProgress: false, showDuration: false, showStatus: true, idWidth: 7, statusWidth: 6, labelWrap: false }
+}
 
 export interface JobsPanelProps {
   jobs: readonly BackgroundJobState[]
   /** Focus this job on open (a transcript card click opens the panel AT its
    *  job); absent or unknown ids fall back to the roster head. */
   initialFocusId?: string
-  onClose: () => void
+  /** Panel-variant focus lane: same intent as initialFocusId but re-fireable
+   *  (nonce bumps on every request, so clicking the same card twice refocuses).
+   *  Ignored by the default (full-screen) variant. */
+  focusRequest?: { readonly id: string | null; readonly nonce: number } | null
+  onClose?: () => void
   /** Kill the focused live job (`job_kill` with the session's authority). */
   onKill: (id: string) => void
   /** Keep the focused job's output tail fresh while the panel shows it
    *  (a backend whose output is read on demand); returns the unwatch. */
   onWatchOutput?: (id: string) => () => void
+  /** Send to Chat（§6.7）：把焦点任务作为附加上下文送进草稿（chip 出现在
+   *  输入框上方，随下一次提交附给模型）。仅 panel 形态；未接时不提供 's'。 */
+  onSendToChat?: (job: BackgroundJobState) => void
+  /** 'panel' mounts inside the side-panel host (no outer padding, host-owned
+   *  chrome, keyboard via usePanelInput). Default keeps the full-screen
+   *  behavior byte-for-byte. */
+  variant?: 'default' | 'panel'
+  /** Panel variant: the host reports focus/visibility; inactive panels keep
+   *  their state but receive no keys and pause the clock. */
+  focused?: boolean
+  visible?: boolean
 }
 
 function statusInfo(status: BackgroundJobStatus): { glyph: string; label: string; color: keyof Theme | undefined } {
@@ -71,7 +114,7 @@ function renderOutputRuns(job: BackgroundJobState): OutputRun[] {
     runs.push({ kind: 'markdown', text: markdown.join('\n') })
     markdown = []
   }
-  for (const line of job.outputLines) {
+  for (const line of job.outputLines ?? []) {
     if (line.gapBefore === true) {
       flush()
       runs.push({ kind: 'gap' })
@@ -90,13 +133,14 @@ function renderOutputRuns(job: BackgroundJobState): OutputRun[] {
   return runs
 }
 
-function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
+function JobRowLine({ job, focused, armed, columns, onFocus }: {
   job: BackgroundJobState
   focused: boolean
   armed?: boolean
-  /** Reserve the progress column on EVERY row (see the panel below) so the
-   *  grid stays aligned once one live job reports progress. */
-  showProgress?: boolean
+  /** Column allocation (see resolveJobsRowColumns); the progress flag
+   * reserves the column on EVERY row so the grid stays aligned once one
+   * live job reports progress. */
+  columns: JobsRowColumns
   onFocus?: () => void
 }): React.ReactNode {
   const info = statusInfo(job.status)
@@ -117,7 +161,7 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
           <Text color={focused ? 'accent' : undefined}>{focused ? '❯' : ' '}</Text>
           <Text color={info.color}>{info.glyph}</Text>
         </Box>
-        <Box width={9} flexShrink={0}>
+        <Box width={columns.idWidth} flexShrink={0}>
           <Text bold={focused} color={focused ? 'accent' : undefined} wrap="truncate-end">{job.id}</Text>
         </Box>
         {/* The label is the row's flexible column and WRAPS: a long command
@@ -125,9 +169,9 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
           * instead of collapsing to an ellipsis when the terminal is narrow.
           * The id, progress, duration and status columns keep their grid. */}
         <Box flexGrow={1} flexShrink={1}>
-          <Text bold={focused}>{job.label}</Text>
+          <Text bold={focused} wrap={columns.labelWrap ? undefined : 'truncate-end'}>{job.label}</Text>
         </Box>
-        {showProgress === true && (
+        {columns.showProgress && (
           <Box width={11} flexShrink={0} justifyContent="flex-end">
             {progress !== undefined ? <JobProgress progress={progress} /> : <Text> </Text>}
           </Box>
@@ -138,10 +182,14 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
           <Text bold color="error" wrap="truncate-end">{t('jobs-kill-armed')}</Text>
         ) : (
           <>
-            <Box width={6} flexShrink={0} justifyContent="flex-end"><Text dimColor>{duration}</Text></Box>
+            {columns.showDuration && (
+              <Box width={6} flexShrink={0} justifyContent="flex-end"><Text dimColor>{duration}</Text></Box>
+            )}
             {/* Right-aligned too: a 4-cell status ("失败") next to a 6-cell one
               * ("已完成") left the row's right edge ragged. */}
-            <Box width={9} flexShrink={0} justifyContent="flex-end"><Text color={info.color} wrap="truncate-end">{info.label}</Text></Box>
+            {columns.showStatus && (
+              <Box width={columns.statusWidth} flexShrink={0} justifyContent="flex-end"><Text color={info.color} wrap="truncate-end">{info.label}</Text></Box>
+            )}
           </>
         )}
       </Box>
@@ -186,7 +234,7 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
               </Text>
             </Box>
           )}
-          {job.outputLines.length > 0 ? (
+          {(job.outputLines?.length ?? 0) > 0 ? (
             <Box flexDirection="column" marginTop={1}>
               {renderOutputRuns(job).map((run, runIndex) => (
                 <Box
@@ -235,7 +283,8 @@ function timeOf(ms: number): string {
  * row expands a detail block (full label, start/finish times, mirrored
  * output tail). The panel is the deep view behind the transcript job cards.
  */
-export function JobsPanel({ jobs, onClose, onKill, initialFocusId, onWatchOutput }: JobsPanelProps): React.ReactNode {
+export function JobsPanel({ jobs, onClose, onKill, onSendToChat, initialFocusId, focusRequest, variant = 'default', focused = true, visible = true, onWatchOutput }: JobsPanelProps): React.ReactNode {
+  const panelMode = variant === 'panel'
   const [focusIndex, setFocusIndex] = React.useState(() => {
     if (initialFocusId === undefined) return 0
     const found = jobs.findIndex(job => job.id === initialFocusId)
@@ -252,13 +301,35 @@ export function JobsPanel({ jobs, onClose, onKill, initialFocusId, onWatchOutput
     setFocusIndex(found)
     scrollRef.current?.scrollTo(Math.max(0, found - 2))
   }, [jobs, initialFocusId])
+  // Panel-variant focus lane: the same "open AT this job" intent, but each
+  // request carries a nonce so re-clicking the same card refocuses. The
+  // nonce is only consumed once the id resolves against the roster (the
+  // late-kernel-push race from initialFocusId applies here too).
+  const focusRequestNonceRef = React.useRef(-1)
+  React.useEffect(() => {
+    if (panelMode === false || focusRequest === undefined || focusRequest === null) return
+    if (focusRequestNonceRef.current === focusRequest.nonce) return
+    if (focusRequest.id === null) {
+      focusRequestNonceRef.current = focusRequest.nonce
+      return
+    }
+    const found = jobs.findIndex(job => job.id === focusRequest.id)
+    if (found < 0) return
+    focusRequestNonceRef.current = focusRequest.nonce
+    initialFocusApplied.current = true
+    setFocusIndex(found)
+    scrollRef.current?.scrollTo(Math.max(0, found - 2))
+  }, [jobs, focusRequest, panelMode])
   /** Armed kill: first `k` primes, second within the window confirms; any
    *  navigation or other key disarms. Mirrors the web two-press stop. */
   const [killArmed, setKillArmed] = React.useState<string | undefined>(undefined)
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
-  const { rows } = useTerminalSize()
-  // 1s tick keeps live durations counting while the panel is open.
-  const [clockRef] = useAnimationFrame(1000)
+  // PanelHost overrides the terminal-size context to the panel's own
+  // columns/rows, so the same hook reports the panel geometry in panel mode.
+  const { columns: terminalColumns, rows } = useTerminalSize()
+  // 1s tick keeps live durations counting while the panel is open (a hidden
+  // panel variant suspends the clock — zero subscriptions when invisible).
+  const [clockRef] = useAnimationFrame(panelMode ? (visible ? 1000 : null) : 1000)
 
   // Bring an initial deep focus into view on mount (rows are ~1 line each;
   // two rows of headroom above reads better than pinning to the top edge).
@@ -272,9 +343,11 @@ export function JobsPanel({ jobs, onClose, onKill, initialFocusId, onWatchOutput
 
   const focus = Math.min(focusIndex, Math.max(0, jobs.length - 1))
   // The focused job's detail shows its output: keep that tail fresh while
-  // the panel is open (a settled job is read once more, then left alone).
+  // the panel is open and visible (a hidden side-panel instance keeps its
+  // state but reads nothing; a settled job is read once more, then left
+  // alone).
   const focusedId = jobs[focus]?.id
-  React.useEffect(() => (focusedId === undefined || onWatchOutput === undefined ? undefined : onWatchOutput(focusedId)), [focusedId, onWatchOutput])
+  React.useEffect(() => (focusedId === undefined || onWatchOutput === undefined || !visible ? undefined : onWatchOutput(focusedId)), [focusedId, onWatchOutput, visible])
 
   // The armed confirmation decays after 4s so a stray later `k` never kills.
   React.useEffect(() => {
@@ -283,10 +356,15 @@ export function JobsPanel({ jobs, onClose, onKill, initialFocusId, onWatchOutput
     return () => clearTimeout(timer)
   }, [killArmed])
 
+  // Full-screen form: byte-identical to the pre-panel behavior (the only
+  // delta is isActive, which is always true in default mode). In panel mode
+  // this stays registered-but-inactive so the hook order never changes; the
+  // host dispatcher (usePanelInput) owns the keys instead.
   useInput((input, key, event) => {
+    if (panelMode) return
     if (key.escape || (key.ctrl && input === 'c')) {
       event.stopImmediatePropagation()
-      onClose()
+      onClose?.()
       return
     }
     if (key.upArrow) {
@@ -323,14 +401,110 @@ export function JobsPanel({ jobs, onClose, onKill, initialFocusId, onWatchOutput
       return
     }
     event.stopImmediatePropagation()
-  })
+  }, { isActive: !panelMode })
+
+  // Panel form: same business keys through the host dispatcher. Esc/Ctrl+C
+  // RETURN FALSE — the host fallback then walks the focus back to chat (the
+  // panel never closes the sidebar itself); everything unconsumed also
+  // returns false so [/]/z/+/-/digits keep working.
+  const panelKeyHandler: PanelKeyHandler = (input, key) => {
+    if (key.escape === true || (key.ctrl === true && input === 'c')) return false
+    if (key.upArrow === true) {
+      setKillArmed(undefined)
+      setFocusIndex(i => Math.max(0, i - 1))
+      scrollRef.current?.scrollBy(-1)
+      return true
+    }
+    if (key.downArrow === true) {
+      setKillArmed(undefined)
+      setFocusIndex(i => Math.min(jobs.length - 1, i + 1))
+      scrollRef.current?.scrollBy(1)
+      return true
+    }
+    if (input === 'k') {
+      const selected = jobs[focus]
+      if (selected !== undefined && (selected.status === 'running' || selected.status === 'stopping')) {
+        if (killArmed === selected.id) {
+          setKillArmed(undefined)
+          onKill(selected.id)
+        } else {
+          setKillArmed(selected.id)
+        }
+      }
+      return true
+    }
+    // 's' = Send to Chat：焦点任务附为下一次提交的上下文（chip 在输入框
+    // 上方，Esc 可撤）。未接通道时让出。
+    if (input === 's') {
+      if (onSendToChat === undefined) return false
+      const selected = jobs[focus]
+      if (selected === undefined) return true
+      onSendToChat(selected)
+      return true
+    }
+    // Enter keeps the same "panel owns the keyboard" semantics (no extra
+    // action on a live job — the row IS the view).
+    if (key.return_ === true) return true
+    return false
+  }
+  usePanelInput(panelKeyHandler, { active: panelMode && focused && visible })
 
   const running = jobs.filter(job => job.status === 'running' || job.status === 'stopping').length
   // One live job with a progress line reserves the column on every row, so the
   // right-hand grid does not shift as jobs start and finish.
-  const showProgress = jobs.some(job => (job.status === 'running' || job.status === 'stopping') && job.progress !== undefined && job.progress !== '')
+  const progressEligible = jobs.some(job => (job.status === 'running' || job.status === 'stopping') && job.progress !== undefined && job.progress !== '')
+  // Column allocation: the full-screen form keeps the historical layout
+  // (progress eligible as computed, duration and status always shown); the
+  // panel form derives everything from the panel width.
+  const rowColumns: JobsRowColumns = panelMode
+    ? resolveJobsRowColumns(terminalColumns)
+    : { showProgress: progressEligible, showDuration: true, showStatus: true, idWidth: 9, statusWidth: 9, labelWrap: true }
   const completed = jobs.filter(job => job.status === 'completed').length
   const failed = jobs.filter(job => job.status === 'failed' || job.status === 'killed').length
+
+  if (panelMode) {
+    // Panel layout aligned with TodoPanelAdapter: no outer padding beyond
+    // one left/right cell, no title divider / exit button / hint footer
+    // (PanelBar + the host hint row already carry that chrome), the summary
+    // line kept but tightened for narrow widths.
+    return (
+      <Box flexDirection="column" paddingLeft={1} paddingRight={1} paddingTop={0} flexGrow={1} ref={clockRef}>
+        <Box flexDirection="row" gap={1} marginTop={0} marginBottom={1}>
+          <Text>
+            <Text color="accent">{running}</Text>
+            <Text dimColor> {t('jobs-panel-count-running')}</Text>
+          </Text>
+          {(terminalColumns >= 34 || failed > 0) && (
+            <Text>
+              <Text color={failed > 0 ? 'error' : 'success'}>{failed > 0 ? failed : completed}</Text>
+              <Text dimColor> {failed > 0 ? t('jobs-panel-count-failed') : t('jobs-panel-count-completed')}</Text>
+            </Text>
+          )}
+        </Box>
+        <Box flexDirection="column" maxHeight={Math.max(6, rows - 4)} marginTop={0}>
+          <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
+            {jobs.length === 0 ? (
+              <Box flexDirection="column" alignItems="center" marginTop={2}>
+                <Text dimColor>{'○'}</Text>
+                <Text dimColor>{t('jobs-panel-empty')}</Text>
+              </Box>
+            ) : (
+              jobs.map((job, index) => (
+                <JobRowLine
+                  key={job.id}
+                  job={job}
+                  focused={index === focus}
+                  armed={killArmed === job.id}
+                  columns={rowColumns}
+                  onFocus={() => { setKillArmed(undefined); setFocusIndex(index) }}
+                />
+              ))
+            )}
+          </ScrollBox>
+        </Box>
+      </Box>
+    )
+  }
 
   return (
     <Box flexDirection="column" paddingX={2} paddingY={1} ref={clockRef}>
@@ -352,7 +526,7 @@ export function JobsPanel({ jobs, onClose, onKill, initialFocusId, onWatchOutput
           </Text>
         )}
         <Box flexGrow={1} />
-        <ExitButton onClick={onClose} />
+        <ExitButton onClick={() => onClose?.()} />
       </Box>
 
       <Box flexDirection="column" maxHeight={Math.max(10, rows - 10)} marginTop={1}>
@@ -370,7 +544,7 @@ export function JobsPanel({ jobs, onClose, onKill, initialFocusId, onWatchOutput
                 job={job}
                 focused={index === focus}
                 armed={killArmed === job.id}
-                showProgress={showProgress}
+                columns={rowColumns}
                 onFocus={() => { setKillArmed(undefined); setFocusIndex(index) }}
               />
             ))

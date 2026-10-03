@@ -1,4 +1,4 @@
-/** Load and verify the pinned dsh-TUI admission profile. */
+/** Load and verify the in-tree TUI Profile (dsh-TUI 自维护的准入与私有协议定义). */
 
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
@@ -9,7 +9,8 @@ import { EXPECTED_PERMISSIONS } from '../spec/protocol-constants.js'
 import type { ContractRegistry, PermissionEntry, PermissionRegistry, RegistryEntry } from './types.js'
 
 export const DSH_STD_REVISION = '614dfa1ac168db79fcf4577cf0ebb34e2e3b944b'
-export const ECOSYSTEM_SPEC_REVISION = 'd28c267fe7fd775428ec2dccd65b0b7efd4dacee'
+/** 仓内 TUI Profile 目录（纯文件，无 submodule 挂载，随本仓库代码一起修订）。 */
+export const TUI_PROFILE_DIR = 'tui-profile'
 
 export interface SpecData {
   dir: string
@@ -24,7 +25,7 @@ export interface SpecData {
 
 const REGISTRY_FILE = join('registry', 'registry-0.15.json')
 const EXPECTED_PROFILE_VERSION = 'tui-admission/0.15'
-const EXPECTED_STD_REPOSITORY = 'https://github.com/Yan-Zero/dsh-std'
+const EXPECTED_STD_REPOSITORY = 'https://github.com/T-Auto/dsh-std'
 const EXPECTED_STD_SUBMODULE = 'vendor/dsh-std'
 const EXPECTED_STD_MANIFEST_VERSION = '0.15'
 const EXPECTED_PERMISSION_REGISTRY_VERSION = '0.1'
@@ -32,7 +33,7 @@ const EXPECTED_PERMISSION_REGISTRY_VERSION = '0.1'
 export function locateSpecDir(start: string = dirname(fileURLToPath(import.meta.url))): string | undefined {
   let dir = start
   for (let index = 0; index < 8; index++) {
-    if (existsSync(join(dir, 'dsh-ecosystem-spec', REGISTRY_FILE))) return join(dir, 'dsh-ecosystem-spec')
+    if (existsSync(join(dir, TUI_PROFILE_DIR, REGISTRY_FILE))) return join(dir, TUI_PROFILE_DIR)
     const parent = dirname(dir)
     if (parent === dir) return undefined
     dir = parent

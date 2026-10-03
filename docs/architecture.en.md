@@ -31,6 +31,7 @@ Cordis profile
 | `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |
+| `src/components/sidePanel/` (`SidePanelLayout`, `PanelHost`) | Chat/side-panel split: geometry (`dimensions`), the seam, the `PanelBar` tab strip and panel host, and the `useSidePanel` controller; mounted inside Chat's main return, it only arranges boxes and re-provides the TerminalSize / SurfaceEdges contexts — it never touches message rendering and never copies channel state |
 | `src/ui.ts` | Themed `Box`/`Text`, render, selection, scroll, and other public TUI primitives |
 | `src/theme.ts`, `src/themeCatalog.ts` | Built-in, static JSON, and runtime plugin theme resolution and catalog ordering |
 | `src/dsh-adapter/themes.ts` | The `ctx.tuiThemes` theme seam, registration lifecycle, and private host facade |

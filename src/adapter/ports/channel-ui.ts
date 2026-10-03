@@ -1,7 +1,8 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
+import type { AgentCapabilities } from './channel-capabilities.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry, ForeignSource, ForeignSessionRow, ForeignImportOutcome } from './channel-session.js'
 import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
 import type { ProviderSetupHost, OAuthProviderStatus, OAuthSetupHost, SettingsHost, TuiSettingsSection } from './channel-settings.js'
@@ -53,8 +54,10 @@ export interface ChannelUi {
   readonly sessionRef: ChannelSessionRef
   /** What the bound backend session supports, as plain data: the UI hides
    *  commands and affordances whose capability is absent instead of letting
-   *  them fail. A DSH session supports everything the TUI offers. */
-  readonly capabilities: ChannelCapabilities
+   *  them fail. A DSH session supports everything the TUI offers. Distinct
+   *  from {@link ChannelUi.capabilities}, which describes what the current
+   *  DSH agent's COMPOSITION mounts (compaction, `/plan`, skills, …). */
+  readonly backendCapabilities: ChannelCapabilities
   /** The session cost the backend itself reported (Claude
    *  `total_cost_usd`), or undefined when the backend reports none — the
    *  status line then falls back to its local estimate. */
@@ -142,6 +145,24 @@ export interface ChannelUi {
   readonly lastUsage:
     | { input: number; output: number; cacheRead: number; cacheWrite: number }
     | undefined
+  /**
+   * Context occupancy — the ONE source of truth for the footer's `ctx` field,
+   * the segmented context bar, the working-activity line's `⚠ ctx N%` prefix,
+   * `/tokens` + `/status`, and the context-low warning. Read from DSH's own
+   * `contextPressure` session projection (`projectedTokens ?? pressureTokens`,
+   * the same number the Web UI shows) and refreshed by that projection's change
+   * feed — never by a per-render fold.
+   *
+   * `undefined` only before anything is known: no request yet AND no meter (a
+   * bare `cordis.yml` composition). {@link ContextOccupancy.source} says which
+   * path answered; see `dsh-adapter/context-occupancy.ts` for the deliberate
+   * divergence from the official "render nothing" behavior.
+   *
+   * Required-and-undefined rather than optional, matching `compaction`: the
+   * effect inventory in `adapter/channel/ui-policy.ts` maps over
+   * `keyof ChannelUi`, and an optional member would widen that union.
+   */
+  readonly contextOccupancy: ContextOccupancy | undefined
   /** Output tokens per second of the current/last turn's response, when known. */
   readonly tps: number | undefined
   /** Per-turn tps samples (sparkline history), oldest first. */
@@ -268,6 +289,19 @@ export interface ChannelUi {
   /** Context-aware slash completions, including plugin subcommands. */
   commandCompletions(input: string): readonly CommandCompletion[]
   /**
+   * What the CURRENT agent's composition actually serves (compaction, pruning,
+   * questionnaire, skills, and the route `/compact` and `/plan` take), with
+   * the evidence for each fact documented in
+   * `dsh-adapter/channel/capabilities.ts`.
+   *
+   * Resolved from live services through the agent's own preset scope chain —
+   * never from a preset-id table — so a user preset that adds a service back
+   * gets the full feature set with no consumer change. Consumers use it to
+   * refuse-with-reason instead of failing on use, and to mark an entry whose
+   * capability is missing in Help and `/` completion.
+   */
+  capabilities(): AgentCapabilities
+  /**
    * Run a plugin-registered slash command against the live agent (DSH
    * `dsh-commands` registry): logs `command/run`/`command/done` and returns
    * the handler's result text — `''` when the handler succeeded silently,
@@ -351,6 +385,24 @@ export interface ChannelUi {
     readonly maxImageDimension: number
     readonly maxImagePixels: number
   } | undefined
+  /**
+   * Contexts a side panel staged for the NEXT submission ("Send to Chat",
+   * side-panel design §6.7), oldest first. The composer renders one chip per
+   * entry above the input row; the submission that captures them consumes and
+   * clears the list, and every session-scoped reset (resume / rewind / new /
+   * model switch) empties it with the other session projections.
+   */
+  readonly attachedContexts: readonly AttachedContext[]
+  /**
+   * Stage one panel context on the composer. The body is capped at the shared
+   * `MENTION_MAX_FILE_CHARS` limit when it is staged (`truncated` records the
+   * cut), and a duplicate `sourceId` + `title` REPLACES the existing entry
+   * instead of stacking a second chip.
+   */
+  attachContext(input: { source: 'panel'; sourceId: string; title: string; content: string }): void
+  /** Drop one staged context by its `id` (an unknown id is a no-op). */
+  detachContext(id: string): void
+
   submit(text: string, images?: readonly ComposerImageRef[]): void
   /**
    * Steer a message into the running turn (Codex/pi semantics): injected at

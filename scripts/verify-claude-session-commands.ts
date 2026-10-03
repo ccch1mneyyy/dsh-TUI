@@ -167,7 +167,7 @@ function answer(query: { emit(message: unknown): void }, text: string): void {
   const channel = createChannel(ctx, session, { model: 'Claude Agent', provider: 'claude', cwd: '/fixture/project', activity: false, backendLabel: 'Claude Agent' })
   try {
     await persist()
-    check('the commands are offered for Claude', ['btw', 'recap', 'rename', 'color', 'mcp'].every(name => channel.capabilities.commands.includes(name)) && channel.capabilities.sideQuery && channel.capabilities.mcpControl)
+    check('the commands are offered for Claude', ['btw', 'recap', 'rename', 'color', 'mcp'].every(name => channel.backendCapabilities.commands.includes(name)) && channel.backendCapabilities.sideQuery && channel.backendCapabilities.mcpControl)
     check('the open-time recap stays off for Claude (it would spend on every open)', channel.autoRecapOnOpen === false)
     const streamed: string[] = []
     const btw = channel.sideQuestion('what changed?', { onText: delta => { streamed.push(delta) } })

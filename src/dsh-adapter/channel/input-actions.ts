@@ -6,7 +6,7 @@ import type { ChannelState, ComposerImageRef, ComposerSubmission } from './types
 
 export interface InputConvergence { cancelInFlight: boolean; interruptSeq: number }
 export function createInputActions(
-  getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit' | 'notify' | 'capabilities'>,
+  getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit' | 'notify' | 'backendCapabilities'>,
   getSession: () => AgentSession,
   owner: { assertActive(): void },
   input: InputConvergence,
@@ -78,7 +78,7 @@ export function createInputActions(
       // an async removal and reporting failure here would leave the message
       // both "kept" in the UI and maybe-withdrawn in the backend. The caller
       // (PromptInput) keeps it queued and says it cannot be retracted.
-      if (!state.capabilities.retractPending) return false
+      if (!state.backendCapabilities.retractPending) return false
       // The backend withdraws it (DSH: through the agent's inbox, which durably
       // records the cancellation and reports the discard that retires the
       // preview). Refuse when the message was already claimed so the UI never

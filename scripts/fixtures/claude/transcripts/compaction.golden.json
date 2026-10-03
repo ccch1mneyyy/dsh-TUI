@@ -43,7 +43,7 @@
     "model": "claude-haiku-4-5-20251001",
     "sessionTitle": "",
     "tokens": {
-      "input": 864,
+      "input": 8,
       "output": 43,
       "cacheRead": 22951,
       "cacheWrite": 1533

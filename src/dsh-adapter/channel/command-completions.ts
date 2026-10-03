@@ -1,4 +1,5 @@
 import { completeCommands, isCommandCompletionToken, type CommandCompletionNode } from '../../commands.js'
+import { getSidePanelPanels, parseSidePanelIds } from '../../tuiDisplayPrefs.js'
 import { SESSION_COLOR_NAMES } from '../../terminal-utils/sessionColors.js'
 import { getLang, LANGS } from '../../i18n.js'
 import { AUTO_THEME_NAME } from '../../theme.js'
@@ -90,7 +91,7 @@ export function createCommandCompletions(deps: {
           ...(snapshot.current?.kind === 'preset' && snapshot.current.value === option.value ? { tag: 'current' } : {}),
         }))
       }
-      if (path[0] === 'mcp' && state.capabilities?.mcpControl === true) {
+      if (path[0] === 'mcp' && state.backendCapabilities?.mcpControl === true) {
         const servers = (deps.mcpServers?.() ?? []).filter(isCommandCompletionToken)
         if (path.length === 1) return [
           { name: 'reconnect', description: 'Reconnect an MCP server', descriptionKey: 'sugg-mcp-reconnect-desc' },
@@ -103,6 +104,12 @@ export function createCommandCompletions(deps: {
         ]
         return []
       }
+      if (path.length === 1 && path[0] === 'panel') return [
+        { name: 'toggle', description: 'Toggle the sidebar', descriptionKey: 'sugg-panel-toggle-desc' },
+        { name: 'focus', description: 'Focus the side panel', descriptionKey: 'sugg-panel-focus-desc' },
+        { name: 'zoom', description: 'Zoom the active panel', descriptionKey: 'sugg-panel-zoom-desc' },
+        ...parseSidePanelIds(getSidePanelPanels()).map(id => ({ name: id, description: `Open the ${id} panel`, descriptionKey: 'sugg-panel-id-desc' as const })),
+      ]
       if (path.length === 1 && path[0] === 'plan') return [
         { name: 'on', description: 'Enter plan mode: read-only, plan before acting', descriptionKey: 'plan-mode-on-desc' },
         { name: 'off', description: 'Exit plan mode, back to normal execution', descriptionKey: 'plan-mode-off-desc' },

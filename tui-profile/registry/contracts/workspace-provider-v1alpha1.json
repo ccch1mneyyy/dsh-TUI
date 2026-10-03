@@ -1,0 +1,6 @@
+{
+  "status": "superseded",
+  "coordinates": {"apiVersion": "workspace.dsh/v1alpha1", "kind": "WorkspaceProvider"},
+  "package": "@dsh-std/workspace",
+  "proposal": "vendor/dsh-std/docs/proposals/workspace.zh.md"
+}

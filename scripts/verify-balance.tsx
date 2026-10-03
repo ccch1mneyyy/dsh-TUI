@@ -214,9 +214,10 @@ const buckets = (peak: Partial<import('../src/deepseekPricing.js').CostTokenTota
   check('估算 跨时段分桶各按对应单价 = 1.2', cost !== undefined && Math.abs(cost - 1.2) < 1e-9, `cost=${cost}`)
 }
 {
-  // 缓存命中计价：高峰桶 1M 输入其中 0.8M 命中 → 0.2×2.0 + 0.8×0.04 = 0.432
+  // 两段输入各自计价：未命中输入 1M×2.0 + 命中输入 0.8M×0.04 = 2.032
+  // （DSH TokenUsage 契约：inputTokens 只是未命中输入，cacheReadTokens 另计）
   const cost = estimateSessionCostCny(buckets({ input: 1_000_000, cacheRead: 800_000 }), 'deepseek-v4-flash')
-  check('估算 缓存命中按命中价 = 0.432', cost !== undefined && Math.abs(cost - 0.432) < 1e-9, `cost=${cost}`)
+  check('估算 未命中输入与命中输入分别计价 = 2.032', cost !== undefined && Math.abs(cost - 2.032) < 1e-9, `cost=${cost}`)
 }
 {
   // 输出计价：空闲桶 0.5M 输出 → 0.5×4.0 = 2.0（vision 同 flash 价）
@@ -229,9 +230,9 @@ const buckets = (peak: Partial<import('../src/deepseekPricing.js').CostTokenTota
   check('估算拆分 peak=2.0 idle=1.0 total=3.0', split !== undefined && Math.abs(split.peak - 2.0) < 1e-9 && Math.abs(split.idle - 1.0) < 1e-9 && Math.abs(split.total - 3.0) < 1e-9, `split=${JSON.stringify(split)}`)
 }
 {
-  // 缓存写超 input 的异常值钳制（防御）
+  // cacheRead ≫ input 是真实形态而非异常值：两段各自计价 = (100×2.0 + 10_000×0.04)/1e6 = 0.0006
   const cost = estimateSessionCostCny(buckets({ input: 100, cacheRead: 10_000 }), 'deepseek-v4-flash')
-  check('估算 cacheRead 超 input 时钳制', cost !== undefined && cost >= 0, `cost=${cost}`)
+  check('估算 cacheRead ≫ input 时分别计价 = 0.0006', cost !== undefined && Math.abs(cost - 0.0006) < 1e-9, `cost=${cost}`)
 }
 {
   const cost = estimateSessionCostCny(buckets({}, {}), 'deepseek-v4-flash')
@@ -255,10 +256,10 @@ const buckets = (peak: Partial<import('../src/deepseekPricing.js').CostTokenTota
       scope: 'subagent',
     },
   ])
-  // 主：1M×2.0 = 2.0；子：(0.5M−0.1M)×1.0 + 0.1M×0.02 + 0.25M×4.0 = 1.402
-  check('多模型桶：main/subagent/total 分侧求和 = 2.0/1.402/3.402', estimate !== undefined
-    && Math.abs(estimate.main - 2.0) < 1e-9 && Math.abs(estimate.subagent - 1.402) < 1e-9
-    && Math.abs(estimate.total - 3.402) < 1e-9 && estimate.unpricedTokens === 0, JSON.stringify(estimate))
+  // 主：1M×2.0 = 2.0；子：0.5M×1.0 + 0.1M×0.02 + 0.05M×1.0 + 0.25M×4.0 = 1.552
+  check('多模型桶：main/subagent/total 分侧求和 = 2.0/1.552/3.552', estimate !== undefined
+    && Math.abs(estimate.main - 2.0) < 1e-9 && Math.abs(estimate.subagent - 1.552) < 1e-9
+    && Math.abs(estimate.total - 3.552) < 1e-9 && estimate.unpricedTokens === 0, JSON.stringify(estimate))
 }
 {
   // 非官方 provider / 未收录模型：金额为 0，但 token 计入 unpriced（AC-A6）。
@@ -269,6 +270,20 @@ const buckets = (peak: Partial<import('../src/deepseekPricing.js').CostTokenTota
   check('多模型桶：未计价金额为 0、token 仍上报 900', unpriced !== undefined
     && unpriced.total === 0 && unpriced.main === 0 && unpriced.subagent === 0
     && unpriced.unpricedTokens === 900, JSON.stringify(unpriced))
+}
+{
+  // 未计价统计与计价口径同构：inputTokens 只是未命中输入，cache 分项另计，
+  // 未计价 token = 三段（未命中输入 + 命中输入 + 输出）之和。
+  const unpriced = estimateCostFromBucketsCny([
+    {
+      provider: 'kimi-coding',
+      model: 'kimi-k2',
+      buckets: buckets({}, { input: 500, output: 100, cacheRead: 4_000, cacheWrite: 0 }),
+      scope: 'subagent',
+    },
+  ])
+  check('多模型桶：未计价 token 计入 cache 分项 = 4600', unpriced !== undefined
+    && unpriced.total === 0 && unpriced.unpricedTokens === 500 + 100 + 4_000, JSON.stringify(unpriced))
 }
 {
   check('多模型桶：全零条目 → undefined', estimateCostFromBucketsCny([

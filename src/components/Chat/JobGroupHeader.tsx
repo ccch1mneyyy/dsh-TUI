@@ -21,6 +21,10 @@ type Chip = { key: string; text: string; color: 'warning' | 'error' | 'success' 
  * and brightens on hover — the same mouse gesture the job cards use — and
  * Ctrl+O expands every group at once.
  *
+ * The summary line sits OUTSIDE the group's rail: the cards below it carry
+ * the bracket (`╭` on the first card, `╰` on the last), so this line reads as
+ * the run's title rather than its first row.
+ *
  * Failures stay LOUD while folded: the failed/killed counts are painted in
  * the error color, because folding must never bury a job that died.
  */

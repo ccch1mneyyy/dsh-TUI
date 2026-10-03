@@ -2,7 +2,7 @@
  * The channel's one action install (docs/agent-backend-design.md §3.5 item 4):
  * every `ChannelUi` action resolves, in layers,
  *
- *   1. explicitly unavailable — `capability-unavailable` + the contract's
+ *   1. explicitly unavailable — `capability-unavailable-backend` + the contract's
  *      failure value (`createUnavailableActionDelegates`);
  *   2. backed by a typed session capability — resolved on the bound session
  *      at every call (a `/new` may land on a session with other
@@ -27,7 +27,7 @@ import type { SessionControls } from './session-controls.js'
 export function createCapabilityDelegates(deps: {
   owner: Pick<ChannelOwner, 'current'>
   session(): AgentSession
-  state: () => Pick<ChannelState, 'provider' | 'capabilities'>
+  state: () => Pick<ChannelState, 'provider' | 'backendCapabilities'>
   notify: ChannelState['notify']
   unavailable(name: string): void
   unavailableLines(name: string): string[]
@@ -79,7 +79,7 @@ export function createCapabilityDelegates(deps: {
       const models = caps().models
       if (models === undefined) { unavailable('model'); return false }
       const state = deps.state()
-      const own = provider === '' || provider === state.capabilities.backendLabel || provider === state.provider
+      const own = provider === '' || provider === state.backendCapabilities.backendLabel || provider === state.provider
       const outcome = await models.set({ ...(own ? {} : { provider }), model })
       if (outcome.kind === 'refused') notify(outcome.reason, { color: 'warning' })
       return outcome.kind === 'switched'

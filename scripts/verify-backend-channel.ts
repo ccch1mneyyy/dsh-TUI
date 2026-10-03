@@ -3,14 +3,14 @@
  * checkpoint B): a fake `AgentSession` with no `native.dsh` goes through the
  * real `createChannel`, and the channel must
  *
- *  - publish a capability snapshot (`capabilities`, `sessionRef`,
+ *  - publish a capability snapshot (`backendCapabilities`, `sessionRef`,
  *    `costReport`) and offer only the commands the backend serves;
  *  - run the generic actions on any session (submit → `session.submit`,
  *    cancel, clear, pushLocal, loadOlder → 0, local-fs file completion,
  *    `/new` through the backend's own `open`, `/doctor`);
  *  - never start an async retraction (Alt+Up on a backend without
  *    `retractPending` answers false without calling the backend);
- *  - fail every DSH-only action explicitly (notify `capability-unavailable`
+ *  - fail every DSH-only action explicitly (notify `capability-unavailable-backend`
  *    + the contract's failure value) while passive reads stay silent;
  *  - delegate to a typed capability when the session declares it;
  *  - fence events of a replaced session by binding generation.
@@ -36,6 +36,7 @@ import type { AgentInput, AgentSession, SubmitPlacement } from '../src/agent/ses
 import type { SessionCapabilities } from '../src/agent/capabilities.js'
 import { LOCAL_COMMANDS } from '../src/commands.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
+import { annotateCommandCapabilities } from '../src/dsh-adapter/channel/capabilities.js'
 import { Config, normalizeBackendChoice } from '../src/dsh-adapter/index.js'
 import { MAX_ROWS } from '../src/channel/transcript.js'
 import { PermissionStore } from '../src/channel/permissions.js'
@@ -130,14 +131,14 @@ const channel = createChannel(ctx, first, {
   },
 })
 const toasts = (): string[] => channel.notifications.map(item => item.text)
-const unavailableText = (name: string): string => t('capability-unavailable', { name })
+const unavailableText = (name: string): string => t('capability-unavailable-backend', { name })
 
 try {
   // ── capability snapshot and command surface ─────────────────────────
-  check('snapshot names the backend', channel.capabilities.backendId === 'fake' && channel.capabilities.backendLabel === 'Fake Agent')
+  check('snapshot names the backend', channel.backendCapabilities.backendId === 'fake' && channel.backendCapabilities.backendLabel === 'Fake Agent')
   check('sessionRef follows the bound session', channel.sessionRef.backendId === 'fake' && channel.sessionRef.sessionId === first.ref.sessionId)
   check('no backend cost reported yet', channel.costReport === undefined)
-  check('no retraction without the capability', channel.capabilities.retractPending === false)
+  check('no retraction without the capability', channel.backendCapabilities.retractPending === false)
   const offered = channel.commandList.map(command => command.name)
   for (const name of ['new', 'clear', 'status', 'cost', 'doctor', 'help', 'exit', 'theme', 'lang']) {
     check(`generic /${name} is offered`, offered.includes(name))
@@ -145,7 +146,10 @@ try {
   for (const name of ['preset', 'tree', 'trace', 'rewind', 'fork', 'resume', 'model', 'effort', 'compact', 'balance', 'workspace', 'agents', 'jobs', 'mcp']) {
     check(`/${name} is hidden without its capability`, !offered.includes(name))
   }
-  check('snapshot commands == offered list', JSON.stringify(channel.capabilities.commands) === JSON.stringify(offered))
+  check('snapshot commands == offered list', JSON.stringify(channel.backendCapabilities.commands) === JSON.stringify(offered))
+  // main's composition facts (`ChannelUi.capabilities()`) for a session no
+  // extension describes: no compact capability → `/compact` has no route.
+  check('composition facts without compact: /compact and /plan have no route', channel.capabilities().compact.route === 'none' && channel.capabilities().plan.route === 'none' && !channel.capabilities().skills)
   check('Tab completion offers only served commands', channel.commandCompletions('/pre').length === 0 && channel.commandCompletions('/ne').some(item => item.name === 'new'))
 
   // ── generic actions ─────────────────────────────────────────────────
@@ -256,14 +260,15 @@ try {
   try {
     const offered = backed.commandList.map(command => command.name)
     check('declared capabilities offer their commands', ['compact', 'model', 'effort', 'fork'].every(name => offered.includes(name)))
-    check('retractPending flows into the snapshot', backed.capabilities.retractPending)
+    check('retractPending flows into the snapshot', backed.backendCapabilities.retractPending)
+    check('composition facts follow the session: /compact routes to the channel action', backed.capabilities().compact.route === 'local' && backed.capabilities().plan.route === 'none')
     backed.compact()
     await backed.cycleMode()
     const switched = await backed.switchModel('', 'haiku')
     const effortSet = await backed.setEffort('high')
     const forked = await backed.forkSession()
     check('actions delegate to the typed capabilities', switched && effortSet && forked && JSON.stringify(calls) === JSON.stringify(['compact', 'mode:plan', 'model:haiku', 'effort:high', 'fork']), calls)
-    check('a capability-backed action does not report unavailability', !backed.notifications.some(item => item.text.startsWith(t('capability-unavailable', { name: '' }).trim().split(':')[0]!)))
+    check('a capability-backed action does not report unavailability', !backed.notifications.some(item => item.text.startsWith(t('capability-unavailable-backend', { name: '' }).trim().split(':')[0]!)))
   } finally {
     backed.releaseContributions()
   }
@@ -333,7 +338,7 @@ try {
     const request = { requestId: 'req-1', toolName: 'Bash', command: 'ls', options: [{ id: 'allow-once', kind: 'allow-once' as const }, { id: 'reject', kind: 'reject' as const }] }
     firstAsker.emit([{ type: 'permission.request', request }])
     check('a session prompt parks in the shared store', permissions.getSnapshot()?.command === 'ls' && permissions.getSnapshot()?.agentId === firstAsker.ref.sessionId)
-    check('the capability snapshot declares permissions', prompted.capabilities.permissions)
+    check('the capability snapshot declares permissions', prompted.backendCapabilities.permissions)
     permissions.decide('allowed-once')
     check('the panel decision reaches the session', responses.length === 1 && responses[0]!.requestId === 'req-1' && responses[0]!.decision.kind === 'allow-once')
     firstAsker.emit([{ type: 'permission.request', request: { ...request, requestId: 'req-2' } }])
@@ -530,7 +535,7 @@ try {
     ])
     check('… the user row shows the selection indicator', channel.rows.some(row => row.kind === 'user' && row.selectionAttached !== undefined))
     check('the git branch breadcrumb works on a non-DSH session', await settled(() => channel.gitBranch === 'feature-x') && commands[0] === 'git branch --show-current')
-    check('/export is offered', channel.commandList.some(command => command.name === 'export') && channel.capabilities.commands.includes('export'))
+    check('/export is offered', channel.commandList.some(command => command.name === 'export') && channel.backendCapabilities.commands.includes('export'))
     const exported = channel.exportSession()
     const text = exported === null ? '' : readFileSync(exported, 'utf8')
     check('/export writes the projected transcript', exported !== null && text.includes('explain the selection') && text.includes('It lists three files.'), exported)
@@ -554,9 +559,14 @@ try {
   }
   const dsh = createChannel(ctx, agent as never, { model: 'deepseek-chat', provider: 'deepseek', cwd: workdir, activity: false })
   try {
-    check('a DSH session supports every built-in command', JSON.stringify(dsh.capabilities.commands) === JSON.stringify(LOCAL_COMMANDS.map(command => command.name)))
-    check('the DSH command list is today\'s list', dsh.commandList === LOCAL_COMMANDS || JSON.stringify(dsh.commandList) === JSON.stringify(LOCAL_COMMANDS))
-    check('DSH snapshot is all-capable', dsh.capabilities.backendId === 'dsh' && dsh.capabilities.retractPending && dsh.capabilities.rewind && dsh.capabilities.models && dsh.capabilities.resume)
+    check('a DSH session supports every built-in command', JSON.stringify(dsh.backendCapabilities.commands) === JSON.stringify(LOCAL_COMMANDS.map(command => command.name)))
+    // Today's list is main's: the built-ins, with the entries whose
+    // composition route is missing re-described (main 6acd1ca3,
+    // `annotateCommandCapabilities`; this bare fixture mounts neither a
+    // compaction service nor a `/plan` registry command).
+    const today = annotateCommandCapabilities(LOCAL_COMMANDS, dsh.capabilities())
+    check('the DSH command list is today\'s list', JSON.stringify(dsh.commandList) === JSON.stringify(today) && today.some(command => command.descriptionKey === 'cmd-desc-compact-unavailable'))
+    check('DSH snapshot is all-capable', dsh.backendCapabilities.backendId === 'dsh' && dsh.backendCapabilities.retractPending && dsh.backendCapabilities.rewind && dsh.backendCapabilities.models && dsh.backendCapabilities.resume)
     check('DSH sessionRef', dsh.sessionRef.backendId === 'dsh' && dsh.sessionRef.sessionId === 'dsh-1')
     check('DSH reports no backend cost', dsh.costReport === undefined)
   } finally {

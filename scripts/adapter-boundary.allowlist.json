@@ -2,7 +2,8 @@
   "$comment": [
     "UI value imports from src/dsh-adapter/ that predate the §8.0 rule table (docs/agent-backend-design.md §2.3, §8.7).",
     "verify-adapter-boundary.ts reports these as one warning; a new pair fails the gate, and a pair that no longer matches must be deleted here.",
-    "Planned cleanup: Phase 2 (Chat.tsx sessionCwdMatches) and Phase 3 (dialog/status/approval fallback stores); the rest move to neutral modules as they are touched."
+    "Planned cleanup: Phase 2 (Chat.tsx sessionCwdMatches) and Phase 3 (dialog/status/approval fallback stores); the rest move to neutral modules as they are touched.",
+    "Merge of main bca29675 (2026-10-02): five pairs main added (side panels, launchpad version banner, StatusMetrics occupancy fallback) are registered as they landed; same cleanup rule."
   ],
   "entries": [
     {
@@ -140,6 +141,26 @@
     {
       "from": "screens/TrajectoryScene.tsx",
       "to": "dsh-adapter/trajectory/index.js"
+    },
+    {
+      "from": "components/sidePanel/TrajectoryPanel.tsx",
+      "to": "dsh-adapter/trajectory/index.js"
+    },
+    {
+      "from": "components/sidePanel/companion/skins.tsx",
+      "to": "dsh-adapter/sharp.js"
+    },
+    {
+      "from": "components/sidePanel/pluginPanelAdapter.tsx",
+      "to": "dsh-adapter/panel-runtime-registry.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/contract.js"
+    },
+    {
+      "from": "screens/StatusMetrics.ts",
+      "to": "dsh-adapter/context-occupancy.js"
     }
   ]
 }
