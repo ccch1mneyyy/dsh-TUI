@@ -591,6 +591,108 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
       app4.unmount()
       h4.terminal.dispose()
     }
+
+    // Heterogeneous same-anchor split (RV round 3): one API message with a
+    // reasoning AND a text block, paginated per block — the older page's
+    // reasoning part must survive (a taken key is never a drop reason) and
+    // stay ahead of the answer text.
+    const h5 = mk()
+    const mixedState = {
+      agentId: 'agent-mix', description: 'heterogeneous probe', status: 'completed' as const, startedAt: NOW - 3000, completedAt: NOW,
+      output: [], outputEvents: [], toolCalls: [] as never[],
+    }
+    const mixedMessage = (block: Record<string, unknown>) => ({ type: 'assistant.message', seq: 1, anchor: 'msg_mix', attemptId: 'msg_mix', time: NOW, blocks: [block], canonical: true, parentCallId: 'agent-mix' })
+    const mixedLoad = async (_agentId: string, window?: { count: number; skipFromStart: number }) => {
+      if (window === undefined) return { events: [mixedMessage({ type: 'text', text: 'the answer text' })], parentAgentId: null, uuids: ['u-t'], hasOlder: true, skippedFromStart: 1 } as never
+      return { events: [mixedMessage({ type: 'reasoning', text: 'the reasoning head' })], parentAgentId: null, uuids: ['u-r'], hasOlder: false, skippedFromStart: 0 } as never
+    }
+    const app5 = await render(React.createElement(AlternateScreen, null, React.createElement(SubagentDetailScene, { subagent: mixedState as never, onBack: () => undefined, loadTranscript: mixedLoad })), {
+      stdout: h5.stdout, stdin: h5.stdin as never, stderr: h5.stdout, exitOnCtrlC: false, patchConsole: false,
+    })
+    try {
+      // 固定窗:pacing the key handler attaches after the first frame.
+      await sleep(200)
+      h5.stdin.write('\x1b[C')
+      // 固定窗:pacing 分帧送达第二枚方向键。
+      await sleep(200)
+      h5.stdin.write('\x1b[C')
+      // 固定窗:探针 分页页窗 翻页与异步转录读取落帧。
+      await sleep(300)
+      await settled(() => h5.screen().includes('the answer text') && h5.screen().includes('Load 1 older'))
+      const clickMixed = async (): Promise<void> => {
+        const hit = findText(h5.terminal, 'Load 1 older') as { col: number; row: number } | null
+        if (hit === null) return
+        const seq = (final: string): string => `\x1b[<0;${hit.col + 1};${hit.row + 1}${final}`
+        h5.stdin.write(seq('M'))
+        // 固定窗:pacing 鼠标 press→release 步间。
+        await sleep(30)
+        h5.stdin.write(seq('m'))
+      }
+      await clickMixed()
+      const headerShown = await settled(() => h5.screen().includes('Thinking'))
+      if (headerShown) {
+        h5.stdin.write('\r')
+        // 固定窗:pacing Enter 展开思考落帧。
+        await sleep(250)
+      }
+      const mixed = h5.screen()
+      check('transcript paging: a reasoning part under a taken text key survives (never dropped)', mixed.includes('the reasoning head') && mixed.includes('the answer text'), mixed)
+      check('transcript paging: … the reasoning precedes the answer of the same message', mixed.indexOf('the reasoning head') < mixed.indexOf('the answer text'), mixed)
+    } finally {
+      app5.unmount()
+      h5.terminal.dispose()
+    }
+
+    // Interleaved split (RV round 3): text, tool, text of one message across
+    // the page boundary — the tool card must stay BETWEEN the two text
+    // parts, not hoisted ahead of the merged row.
+    const h6 = mk()
+    const interState = {
+      agentId: 'agent-inter', description: 'interleave probe', status: 'completed' as const, startedAt: NOW - 3000, completedAt: NOW,
+      output: [], outputEvents: [], toolCalls: [] as never[],
+    }
+    const interText = (text: string) => ({ type: 'assistant.message', seq: 1, anchor: 'msg_tool', attemptId: 'msg_tool', time: NOW, blocks: [{ type: 'text', text }], canonical: true, parentCallId: 'agent-inter' })
+    const interLoad = async (_agentId: string, window?: { count: number; skipFromStart: number }) => {
+      if (window === undefined) return { events: [interText('seg after tool')], parentAgentId: null, uuids: ['u-a'], hasOlder: true, skippedFromStart: 2 } as never
+      return {
+        events: [
+          interText('seg before tool'),
+          { type: 'tool.call', seq: 2, anchor: 'call-mid', turn: 0, step: 0, callId: 'call-mid', name: 'Read', argsJson: JSON.stringify({ file_path: '/fixture/project/NEEDLE.md' }), parentCallId: 'agent-inter', time: NOW },
+        ],
+        parentAgentId: null, uuids: ['u-b'], hasOlder: false, skippedFromStart: 0,
+      } as never
+    }
+    const app6 = await render(React.createElement(AlternateScreen, null, React.createElement(SubagentDetailScene, { subagent: interState as never, onBack: () => undefined, loadTranscript: interLoad })), {
+      stdout: h6.stdout, stdin: h6.stdin as never, stderr: h6.stdout, exitOnCtrlC: false, patchConsole: false,
+    })
+    try {
+      // 固定窗:pacing the key handler attaches after the first frame.
+      await sleep(200)
+      h6.stdin.write('\x1b[C')
+      // 固定窗:pacing 分帧送达第二枚方向键。
+      await sleep(200)
+      h6.stdin.write('\x1b[C')
+      // 固定窗:探针 分页页窗 翻页与异步转录读取落帧。
+      await sleep(300)
+      await settled(() => h6.screen().includes('seg after tool') && h6.screen().includes('Load 2 older'))
+      const hitInter = findText(h6.terminal, 'Load 2 older') as { col: number; row: number } | null
+      if (hitInter !== null) {
+        const seqI = (final: string): string => `\x1b[<0;${hitInter.col + 1};${hitInter.row + 1}${final}`
+        h6.stdin.write(seqI('M'))
+        // 固定窗:pacing 鼠标 press→release 步间。
+        await sleep(30)
+        h6.stdin.write(seqI('m'))
+      }
+      await settled(() => h6.screen().includes('NEEDLE.md'))
+      const interleaved = h6.screen()
+      const before = interleaved.indexOf('seg before tool')
+      const tool = interleaved.indexOf('NEEDLE.md')
+      const after = interleaved.indexOf('seg after tool')
+      check('transcript paging: a tool between two same-anchor text parts stays between them (no hoisting)', before !== -1 && tool !== -1 && after !== -1 && before < tool && tool < after, interleaved)
+    } finally {
+      app6.unmount()
+      h6.terminal.dispose()
+    }
   } finally {
     channel.releaseContributions()
     await session.dispose()
