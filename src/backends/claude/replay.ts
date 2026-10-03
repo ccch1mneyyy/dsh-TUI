@@ -466,6 +466,72 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
   }
 }
 
+
+/** A subagent's own transcript replayed as its child lane (design
+ *  agent-team-panels §2): every user/assistant message goes through the
+ *  SAME translator the live lane uses (thinking/text blocks, tool calls
+ *  and results), with `parent_tool_use_id` forced to the child's own agent
+ *  id — a message whose store metadata lacks the delegating call id must
+ *  never fall through to the MAIN lane translation. Thinking the API only
+ *  signed or counted (empty text) degrades honestly: a `reasoning-tokens`
+ *  block carries the count, a `reasoning-signature` block says even that
+ *  is unknown — the view renders "body unavailable", never fabricated
+ *  prose. The child's initial prompt stays hidden (the translator's
+ *  standing contract). Pure: no I/O, no clock (times come from the
+ *  message timestamps). */
+export interface ClaudeSubagentLane {
+  readonly events: readonly AgentEvent[]
+  /** `parent_agent_id` across the child's messages; null = depth-1 or
+   *  old-format metadata (sdk.d.ts:6437-6449). */
+  readonly parentAgentId: string | null
+  readonly uuids: readonly string[]
+}
+
+export function replayClaudeSubagentLane(
+  agentId: string,
+  messages: readonly unknown[],
+  options: { readonly cwd: string; readonly debug?: (message: string) => void },
+): ClaudeSubagentLane {
+  const debug = options.debug ?? (() => undefined)
+  let clock = 0
+  let seq = 0
+  const translator = createClaudeTranslator({ cwd: options.cwd, userRows: 'lifecycle', now: () => clock, debug })
+  const events: AgentEvent[] = []
+  const uuids: string[] = []
+  let parentAgentId: string | null = null
+  const nextSeq = (): number => { seq += 1; return seq }
+  for (const raw of messages) {
+    const message = rec(raw)
+    if (message === undefined || (message.type !== 'assistant' && message.type !== 'user')) continue
+    const uuid = str(message.uuid)
+    if (uuid !== undefined) uuids.push(uuid)
+    if (typeof message.parent_agent_id === 'string') parentAgentId = message.parent_agent_id
+    const time = Date.parse(str(message.timestamp) ?? '')
+    if (Number.isFinite(time)) clock = time
+    if (message.type === 'assistant') {
+      const body = rec(message.message)
+      const blocks = arr(body?.content).map(rec)
+      // Count/signature-only thinking (the API returns signatures, not
+      // bodies, unless summaries are enabled) becomes a marker block the
+      // transcript view renders as an honest "body unavailable" row.
+      if (blocks.some(block => block?.type === 'thinking' && (str(block?.thinking) ?? '') === '')) {
+        const tokens = num(rec(rec(body?.usage)?.output_tokens_details)?.thinking_tokens)
+        events.push({
+          type: 'assistant.message',
+          seq: nextSeq(),
+          anchor: str(body?.id) ?? uuid ?? `lane-${seq}`,
+          attemptId: str(body?.id) ?? uuid ?? `lane-${seq}`,
+          time: clock,
+          blocks: [tokens !== undefined && tokens > 0 ? { type: 'reasoning-tokens', text: String(tokens) } : { type: 'reasoning-signature', text: '' }],
+          canonical: false,
+          parentCallId: agentId,
+        })
+      }
+    }
+    events.push(...translator.translate({ ...message, parent_tool_use_id: agentId }))
+  }
+  return { events, parentAgentId, uuids }
+}
 /**
  * The uuid of the chain entry right before `anchor` — where a conversation
  * rewind cuts (`forkSession({upToMessageId})` keeps it, inclusive). Undefined

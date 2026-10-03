@@ -47,7 +47,7 @@ import { unavailablePermissionPresetSnapshot } from '../permissions.js'
 import { createPreferences } from '../preferences.js'
 import { createSettingsHosts } from '../settings-host.js'
 import { createInitialChannelView, type ChannelLaunchOptions } from '../state.js'
-import type { ChannelState } from '../types.js'
+import type { ChannelState, SubagentTranscriptView } from '../types.js'
 import { createCapabilityDelegates, installChannelActions } from './actions.js'
 import { createBindingFeed, type BindingFeedHooks } from './binding-feed.js'
 import { createCoreFiles, NO_COMPLETION_CATALOG, type CompletionCatalog } from './files.js'
@@ -408,6 +408,18 @@ export function createCoreChannel(
         })
         return true
       },
+      // The child transcript source exists only while the bound session's
+      // backend offers it (Claude's store read; a DSH session has no such
+      // data plane): the METHOD's absence is what the detail scene reads to
+      // decide whether a Transcript page renders at all. A failed read
+      // resolves null — the scene says unavailable, never empty.
+      ...(binding.session.capabilities.subagents?.history === undefined ? {} : {
+        history: (agentId: string, window?: import('../../../agent/capabilities.js').SubagentTranscriptWindow): Promise<SubagentTranscriptView | null> => {
+          const history = binding.session.capabilities.subagents?.history
+          if (history === undefined) return Promise.resolve(null)
+          return history(agentId, window).catch(() => null)
+        },
+      }),
     },
     jobControl: {
       kill: id => {

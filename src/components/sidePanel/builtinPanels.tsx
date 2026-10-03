@@ -175,6 +175,7 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
         visible={visible}
         onBack={() => setRoute('dashboard')}
         onInterrupt={(id: string) => channel.subagentControl.interrupt(id)}
+        {...(channel.subagentControl.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
       />
     )
   }

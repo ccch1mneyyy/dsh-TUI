@@ -299,9 +299,16 @@ export interface SessionCapabilities {
   /** A persisted copy of the session (through `anchor`, inclusive, when
    *  given); the live session is untouched. */
   readonly fork?: { fork(anchor?: string, title?: string): Promise<AgentSessionRef> }
+
+  /** Subagents: stop one by the id the channel knows it by, or read one
+   *  child's own transcript from the durable store. */
   readonly subagents?: {
     interrupt(agentId: string): Promise<boolean>
-    history?(agentId: string): Promise<readonly AgentEvent[]>
+    /** The child's own full transcript from the backend's durable store
+     *  (design agent-team-panels §2: history = getSubagentMessages → the
+     *  replay/translator → AgentEvent). Absent = the backend has no
+     *  transcript data source; rejects when the read fails. */
+    history?(agentId: string, window?: SubagentTranscriptWindow): Promise<SubagentTranscriptPage>
   }
   /**
    * Background tasks: `stop` asks the backend to stop one; `readOutput`
@@ -383,4 +390,32 @@ export interface SessionCapabilities {
   readonly diagnostics?: { lines(): readonly string[] }
   /** Backend escape hatches; read only from the owning backend's directory. */
   readonly native: { readonly dsh?: DshNative; readonly claude?: ClaudeNative; readonly acp?: AcpNative }
+}
+
+/**
+ * One page of a subagent's own transcript, read from the backend's durable
+ * store (design agent-team-panels §2). The events are the child-lane leaf
+ * events (assistant.message / tool.call / tool.result, oldest first) in
+ * the same vocabulary live lane traffic uses; parentAgentId is the
+ * parent_agent_id of the child's messages — null = a depth-1 child
+ * (spawned by the main loop) or old-format metadata that never recorded it.
+ */
+export interface SubagentTranscriptPage {
+  readonly events: readonly AgentEvent[]
+  readonly parentAgentId: string | null
+  /** The SessionMessage uuids the events cover (dedup keys: the live tail
+   *  and an overlapping reload drop what these already account for). */
+  readonly uuids: readonly string[]
+  /** Older messages exist on disk before this page's first message. */
+  readonly hasOlder: boolean
+  /** Messages the disk transcript holds before this page's first message
+   *  (the next older window asks for skipFromStart - count). */
+  readonly skippedFromStart: number
+}
+
+/** An older slice request: `count` messages ending just before
+ *  `skipFromStart` (the pagination bookkeeping of the page already shown). */
+export interface SubagentTranscriptWindow {
+  readonly count: number
+  readonly skipFromStart: number
 }

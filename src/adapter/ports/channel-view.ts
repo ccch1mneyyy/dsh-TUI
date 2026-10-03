@@ -598,8 +598,18 @@ export interface PendingMessage {
  * Subagent row: displays a subagent's lifecycle (started → running → completed/failed).
  * Derived from agent.task events and history events.
  */
+/**
+ * One page of a subagent's own transcript (the agent capability's return;
+ *  aliased here so the UI port stays free of module imports).
+ */
+export type SubagentTranscriptView = import('../../agent/capabilities.js').SubagentTranscriptPage
 export interface SubagentControl {
   interrupt(agentId: string): boolean
+  /** The child's full transcript source (Claude's on-disk child lane).
+   *  Absent = this backend has no transcript data (DSH): transcript UI is
+   *  not rendered for it — a degraded tail with its retained-range note is
+   *  shown instead (design agent-team-panels §2). Null = no such child. */
+  history?(agentId: string, window?: import('../../agent/capabilities.js').SubagentTranscriptWindow): Promise<SubagentTranscriptView | null>
 }
 
 /** One tracked job as the UI renders it. */
