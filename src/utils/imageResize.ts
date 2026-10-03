@@ -107,6 +107,23 @@ function probeGif(b: Uint8Array): ImageSizeProbe | null {
 }
 
 /**
+ * The image media type the encoded bytes actually are, from the magic
+ * bytes alone (the same signatures {@link probeImageSize} dispatches on):
+ * PNG, JPEG, WebP (RIFF/WEBP) or GIF; anything else is undefined and the
+ * caller keeps its own label (those bytes take the decode-or-refuse path
+ * anyway). Used to keep a renamed file from travelling under a label its
+ * content contradicts.
+ */
+export function sniffImageMediaType(bytes: Uint8Array): 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' | undefined {
+  if (bytes.length >= 8 && PNG_SIGNATURE.every((v, i) => bytes[i] === v)) return 'image/png'
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) return 'image/jpeg'
+  if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+    && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) return 'image/webp'
+  if (bytes.length >= 4 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return 'image/gif'
+  return undefined
+}
+
+/**
  * Measure intrinsic pixel dimensions from the encoded bytes alone — no
  * decode, no dependencies. Recognizes PNG / JPEG / WebP (VP8X, VP8,
  * VP8L) / GIF; anything else returns null, which callers MUST treat as

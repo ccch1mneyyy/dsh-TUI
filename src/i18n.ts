@@ -225,7 +225,7 @@ const dict = {
   'claude-auth-reconnected': { zh: '凭证已刷新并重新连接同一会话，请重发上一条消息', en: 'Credential renewed and the same session reconnected; send your last message again' },
   'claude-auth-refresh-failed': { zh: '刷新 Claude 凭证失败{{detail}}（可用 /login 重新登录）', en: 'Renewing the Claude credential failed{{detail}} (sign in again with /login)' },
   'claude-auth-refresh-status': { zh: ' · HTTP {{status}}', en: ' · HTTP {{status}}' },
-  'claude-auth-reconnect-failed': { zh: '重新连接 Claude 会话失败（详情见调试日志；可用 /login 重新登录）', en: 'Reconnecting the Claude session failed (details in the debug log; sign in again with /login)' },
+  'claude-auth-reconnect-failed': { zh: '重新连接 Claude 会话失败（诊断包含失败类别和 HTTP 状态；可用 /login 重新登录）', en: 'Reconnecting the Claude session failed (the diagnostics carry the failure category and HTTP status; sign in again with /login)' },
   'claude-auth-reconnect-deferred': { zh: '当前回合结束后再用新凭证重新连接', en: 'Reconnecting with the new credential once the current turn ends' },
   'claude-auth-reconnect-forced': { zh: '等待当前回合结束超时，现在重新连接——这会中断正在运行的回合', en: 'The turn did not finish in time; reconnecting now — this interrupts the running turn' },
   'claude-auth-inputs-dropped': { zh: '重新连接失败，{{n}} 条尚未开始的消息未能送达', en: 'Reconnecting failed; {{n}} message(s) that had not started were not delivered' },

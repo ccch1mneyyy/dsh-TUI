@@ -119,7 +119,21 @@ export function formFields(schema: Rec | undefined): FormField[] {
 }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u
-const DATE = /^\d{4}-\d{2}-\d{2}$/u
+const DATE = /^(\d{4})-(\d{2})-(\d{2})$/u
+const DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-](\d{2}):(\d{2}))$/u
+
+/**
+ * A real calendar day (leap years counted). `Date.parse` cannot judge an
+ * RFC3339 date: it rolls impossible days such as 2024-02-31 over into March
+ * instead of refusing them (and rejects legal leap seconds), so the fields
+ * of the captured groups are checked for real.
+ */
+function calendarDay(year: number, month: number, day: number): boolean {
+  if (month < 1 || month > 12 || day < 1) return false
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+  const length = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]!
+  return day <= length
+}
 
 /** Validate one typed value against its field; the value or the reason. */
 export function parseFieldText(field: FormField, text: string): { readonly value: FormValue } | { readonly error: string } {
@@ -165,12 +179,23 @@ export function parseFieldText(field: FormField, text: string): { readonly value
         return { error: t('claude-elicit-invalid-uri') }
       }
       break
-    case 'date':
-      if (!DATE.test(text) || Number.isNaN(Date.parse(text))) return { error: t('claude-elicit-invalid-date') }
+    case 'date': {
+      const match = DATE.exec(text)
+      if (match === null || !calendarDay(Number(match[1]), Number(match[2]), Number(match[3]))) return { error: t('claude-elicit-invalid-date') }
       break
-    case 'date-time':
-      if (!text.includes('T') || Number.isNaN(Date.parse(text))) return { error: t('claude-elicit-invalid-date-time') }
+    }
+    case 'date-time': {
+      // Full RFC3339: a real day, a clock within range (second 60 = a leap
+      // second, accepted on syntax — whether the day really had one stays
+      // the server's to check), and an explicit timezone (Z, z or ±HH:MM —
+      // required, never the local-time fallback `Date.parse` implies).
+      const match = DATE_TIME.exec(text)
+      if (match === null
+        || !calendarDay(Number(match[1]), Number(match[2]), Number(match[3]))
+        || Number(match[4]) > 23 || Number(match[5]) > 59 || Number(match[6]) > 60
+        || Number(match[7]) > 23 || Number(match[8]) > 59) return { error: t('claude-elicit-invalid-date-time') }
       break
+    }
     default:
       break
   }

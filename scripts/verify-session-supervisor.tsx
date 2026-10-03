@@ -2101,5 +2101,74 @@ console.log('backend browser:')
   app.close()
 }
 
+console.log('backend browser: a SECOND cwd is selectable on the rail')
+{
+  // The backend browser case above lists Claude sessions that all share ONE
+  // directory, so it cannot speak for a backend whose history spans several:
+  // with no workspace ledger every directory is its own fallback group, and a
+  // pick that remembered only "some unregistered group" (a boolean) always
+  // resolved to the FIRST one — clicking (or arrowing onto) the second cwd
+  // kept showing (and Enter kept resuming) the first one's sessions. The
+  // pick must carry the group's own identity, and the automatic default must
+  // still follow the terminal's own directory, not the first group.
+  const rows = [
+    session({ id: 'cwd-a-one', backendId: 'claude', cwd: alphaDir, title: { text: 'claude in alpha', source: 'prompt' }, updatedAt: now - 1_000, agentPreset: undefined, model: undefined }),
+    session({ id: 'cwd-b-one', backendId: 'claude', cwd: betaDir, title: { text: 'claude in beta', source: 'prompt' }, updatedAt: now - 2_000, agentPreset: undefined, model: undefined }),
+  ]
+  const calls: string[] = []
+  const backend = {
+    version: 0,
+    cwd: betaDir,
+    working: false,
+    agentId: 'cwd-b-one',
+    backendCapabilities: { backendId: 'claude', backendLabel: 'Claude Agent', commands: ['new', 'resume', 'rewind', 'fork'] },
+    listWorkspaceRegistry: async () => { calls.push('registry'); return registry },
+    listSessions: async () => rows,
+    resumeTo: async (id: string) => { calls.push(`resumeTo:${id}`); return { ok: true } },
+    switchWorkspace: async () => true,
+    resolveWorkspace: async (reference: string) => ({ cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }),
+    stopBackgroundAgent: async () => true,
+    notify: () => {},
+    subscribe: () => () => {},
+  } as never
+  const target: StubChannel = { channel: backend, calls, plan: {}, landed: 0, config: { registry: [], cwd: betaDir } }
+  const app = await mountSupervisor(target)
+  const shown = (): string => app.lines().join('\n')
+  await settled(() => shown().includes('History only · alpha') && shown().includes('History only · beta'), { timeoutMs: 6_000 })
+  check('the rail opens on the terminal own cwd group, not the first one', await settled(() => shown().includes('Sessions in beta')), shown())
+  check('… and shows that directory\'s session', shown().includes('claude in beta') && !shown().includes('claude in alpha'), shown())
+  check('the workspace ledger is never read without the capability', !calls.includes('registry'), calls.join(' '))
+
+  // Click the OTHER group by its rail row (the row's own history-only line,
+  // which the pane never prints), then click back: the second pick is what
+  // used to collapse onto the first group.
+  await app.click('History only · alpha')
+  check('clicking the other cwd group shows its sessions', await settled(() => shown().includes('Sessions in alpha') && shown().includes('claude in alpha')), shown())
+  await app.click('History only · beta')
+  check('clicking back to the second-picked group really switches', await settled(() => shown().includes('Sessions in beta') && shown().includes('claude in beta')), shown())
+
+  // Enter follows the VISIBLE pane: with beta's session on screen it must
+  // resume beta's row, never the first directory's.
+  app.write('\u001b[C')
+  await sleep(60) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
+  app.write('\u001b[B')
+  await sleep(60) // 固定窗:pacing 让光标移动渲染一帧
+  app.write('\r')
+  check('Enter resumes the session the pane is showing', await settled(() => calls.includes('resumeTo:cwd-b-one'), { timeoutMs: 4_000 }), calls.join(' '))
+  check('… and not the first directory\'s session', !calls.includes('resumeTo:cwd-a-one'), calls.join(' '))
+  app.close()
+
+  // The keyboard rail (↓) must move the SELECTION with the cursor. Both
+  // worlds start from a known place — alpha, picked by hand above — so the
+  // move onto beta is what is under test, not the default.
+  const second = await mountSupervisor(target)
+  const secondShown = (): string => second.lines().join('\n')
+  await settled(() => secondShown().includes('History only · alpha'), { timeoutMs: 6_000 })
+  await second.click('History only · alpha')
+  await settled(() => secondShown().includes('Sessions in alpha'))
+  second.write('\u001b[B')
+  check('moving the rail cursor onto the second cwd selects it', await settled(() => secondShown().includes('Sessions in beta') && secondShown().includes('claude in beta')), secondShown())
+  second.close()
+}
 console.log(failures === 0 ? '\nAll session-supervisor checks passed.' : `\n${failures} check(s) failed.`)
 process.exit(failures === 0 ? 0 : 1)

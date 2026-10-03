@@ -23,7 +23,7 @@
 import { createHash } from 'node:crypto'
 import type { TranscriptImage } from '../../../adapter/ports/channel-view.js'
 import type { ImageLimitsView } from '../../../agent/capabilities.js'
-import { adaptImageForAdmission, probeImageSize, withinDimensionLimits } from '../../../utils/imageResize.js'
+import { adaptImageForAdmission, probeImageSize, sniffImageMediaType, withinDimensionLimits } from '../../../utils/imageResize.js'
 import type { MentionAttachments, MentionImageBlock, MentionImageMediaType } from '../types.js'
 
 type ImageRef = MentionImageBlock['attachment']
@@ -104,6 +104,15 @@ export function createLocalImageStore(limits: () => ImageLimitsView): LocalImage
       const caps = imageLimits()
       let data = input.data
       let mediaType: MentionImageMediaType = input.mediaType
+      // The content wins over the label: a paste or @-mention declares a
+      // media type from the filename, and a renamed file would otherwise
+      // travel (and be sent to the backend) under a type its bytes
+      // contradict. The sniff reads magic bytes only — no decode, no
+      // re-encode — so a mislabeled image keeps its bytes, animation
+      // included; unmeasurable content still takes the decode-or-refuse
+      // path below with the declared label.
+      const sniffed = sniffImageMediaType(data)
+      if (sniffed !== undefined && sniffed !== mediaType) mediaType = sniffed
       const dimensions = { maxImageDimension: caps.maxImageDimension, maxImagePixels: caps.maxImagePixels }
       let size = probeImageSize(data)
       let originalDimensions: { width: number; height: number } | undefined
@@ -116,7 +125,7 @@ export function createLocalImageStore(limits: () => ImageLimitsView): LocalImage
           mediaType = outcome.mediaType as MentionImageMediaType
           size = { width: outcome.width, height: outcome.height }
         } else if (outcome.kind === 'unavailable') {
-          if (!accepted) throw new Error(`${input.mediaType} images are not accepted by this backend and could not be converted (${outcome.detail})`)
+          if (!accepted) throw new Error(`${mediaType} images are not accepted by this backend and could not be converted (${outcome.detail})`)
           if (size === null) throw new Error(`the image could not be measured (${outcome.detail})`)
           // An accepted format the gate could not resample: the backend's
           // own downscaling is the backstop (its hard caps are larger).

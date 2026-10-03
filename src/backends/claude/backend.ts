@@ -16,7 +16,7 @@ import type { AgentBackend, BackendDetection, BackendHost, OpenTarget } from '..
 import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { CLAUDE_BACKEND_ID, CLAUDE_BACKEND_LABEL, cliVersionDrift, sdkVersionDrift, VALIDATED_SDK_VERSION } from './contract.js'
-import { CLAUDE_OAUTH_PROVIDER, detectClaudeAuth, refreshFailureStatus, resolveClaudeAuth, type ClaudeRouteSettings } from './auth.js'
+import { CLAUDE_OAUTH_PROVIDER, detectClaudeAuth, refreshFailureDebugDetail, refreshFailureStatus, resolveClaudeAuth, type ClaudeRouteSettings } from './auth.js'
 import { createClaudeCatalog } from './catalog.js'
 import { resolveStartPermissionMode } from './options.js'
 import { fileClaudePrefs } from './prefs.js'
@@ -135,9 +135,11 @@ export const claudeBackend: AgentBackend = {
       plan = await resolveClaudeAuth(baseEnv, credentials, { settings })
     } catch (error) {
       // A failed refresh must not stop the start: the session runs on the
-      // environment or the local login, and says why (status only: the
-      // refresh error can carry the OAuth endpoint's response body).
-      host.debug(`claude: dsh-auth refresh failed (${errorText(error)})`)
+      // environment or the local login, and says why. The debug log gets a
+      // fixed failure category and at most the HTTP status: the refresh
+      // error can carry the OAuth endpoint's response body, which may echo
+      // request material (auth.ts contract).
+      host.debug(`claude: dsh-auth refresh failed (${refreshFailureDebugDetail(error)})`)
       startNotices.push(refreshFailedNotice(error))
       plan = await resolveClaudeAuth(baseEnv, undefined, { settings })
     }

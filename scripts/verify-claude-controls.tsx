@@ -169,6 +169,78 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
   await session.dispose()
 }
 
+// ── a model switch clears an effort the new model cannot run ──────────
+{
+  // `MODELS` plus the shapes the real offline catalog serves: a Haiku row
+  // that advertises NEITHER `supportsEffort` NOR a level list (SDK
+  // 0.3.287), and an old-CLI row that claims support but lists no levels —
+  // the picker honestly offers nothing for either; a kept readout would be
+  // a claim the UI cannot back.
+  const CATALOG = [
+    ...MODELS,
+    { value: 'haiku-pro', resolvedModel: 'claude-haiku-4-5-20251001', displayName: 'Haiku Pro', description: 'no effort metadata' },
+    { value: 'legacy', resolvedModel: 'claude-legacy-x', displayName: 'Legacy', description: 'supports effort, lists no levels', supportsEffort: true },
+  ]
+  const fake = fakeClaudeSdk(() => ({ capabilities: [], models: CATALOG }), controls)
+  const prefs = memoryClaudePrefs({ model: 'opus' })
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { prefs }))
+  const events: AgentEvent[] = []
+  session.subscribe(batch => { events.push(...batch) })
+  await tick()
+  fake.queries[0]!.emit(init)
+  await tick()
+  const caps = session.capabilities
+  const effortEvents = () => events.filter(event => event.type === 'effort.changed').map(event => event.effort)
+  await caps.models!.set({ model: 'opus' })
+  await caps.effort!.set('max')
+  check('effort: seeded and settable', caps.effort!.current() === 'max' && prefs.data.effort === 'max' && effortEvents().at(-1) === 'max')
+
+  // max is not a level of the plain model (low..high): cleared everywhere,
+  // the UI never claims a level the picker does not offer.
+  await caps.models!.set({ model: 'default' })
+  check('models: an effort outside the new levels is cleared everywhere', caps.effort!.current() === undefined && prefs.data.effort === undefined && effortEvents().at(-1) === null && caps.effort!.levels().map(level => level.id).join() === 'low,medium,high')
+
+  // high IS a level of both the plain and the opus model: kept, no clear.
+  await caps.effort!.set('high')
+  events.length = 0
+  await caps.models!.set({ model: 'opus' })
+  check('models: an effort the new model still runs is kept', caps.effort!.current() === 'high' && prefs.data.effort === 'high' && effortEvents().length === 0)
+
+  // haiku declares no effort support at all (no levels list): without the
+  // supportsEffort check the readout kept saying max while levels() was
+  // empty and the persisted pref resurrected on the next start.
+  await caps.effort!.set('max')
+  events.length = 0
+  const switched = await caps.models!.set({ model: 'haiku' })
+  check('models: an effort on a model without effort support is cleared', switched.kind === 'switched' && caps.effort!.current() === undefined && prefs.data.effort === undefined && JSON.stringify(effortEvents()) === '[null]' && caps.effort!.levels().length === 0)
+
+  // The real 0.3.287 Haiku shape: no `supportsEffort`, no levels at all.
+  await caps.models!.set({ model: 'opus' })
+  await caps.effort!.set('max')
+  events.length = 0
+  const toHaikuPro = await caps.models!.set({ model: 'haiku-pro' })
+  check('models: a row advertising no levels at all clears the effort', toHaikuPro.kind === 'switched' && caps.effort!.current() === undefined && prefs.data.effort === undefined && JSON.stringify(effortEvents()) === '[null]' && caps.effort!.levels().length === 0, { current: caps.effort!.current(), prefs: prefs.data.effort, events: effortEvents() })
+
+  // supportsEffort:true with no level list (old CLI): the picker stays
+  // honestly empty — no hardcoded tiers — so the readout claims nothing.
+  await caps.models!.set({ model: 'opus' })
+  await caps.effort!.set('high')
+  events.length = 0
+  const toLegacy = await caps.models!.set({ model: 'legacy' })
+  check('models: supported-but-unlisted levels still clear (no hardcoded tiers)', toLegacy.kind === 'switched' && caps.effort!.current() === undefined && prefs.data.effort === undefined && JSON.stringify(effortEvents()) === '[null]' && caps.effort!.levels().length === 0, { current: caps.effort!.current(), prefs: prefs.data.effort, events: effortEvents() })
+
+  // The cleared effort does not resurrect, a refused switch never touches
+  // it, and setting one again works.
+  events.length = 0
+  await caps.models!.set({ model: 'opus' })
+  check('models: a cleared effort stays cleared across switches', caps.effort!.current() === undefined && prefs.data.effort === undefined && effortEvents().length === 0 && caps.effort!.levels().map(level => level.id).join() === 'low,medium,high,max')
+  const refused = await caps.models!.set({ model: 'gpt-5' })
+  check('models: a refused switch leaves the effort untouched', refused.kind === 'refused' && caps.effort!.current() === undefined && prefs.data.effort === undefined)
+  await caps.effort!.set('max')
+  check('effort: settable again after a clear', caps.effort!.current() === 'max' && prefs.data.effort === 'max' && effortEvents().at(-1) === 'max')
+  await session.dispose()
+}
+
 // ── the channel and the screen ────────────────────────────────────────
 {
   const fake = fakeClaudeSdk(() => ({ capabilities: ['msg_lifecycle_v1'], models: MODELS, commands: COMMANDS }), controls)

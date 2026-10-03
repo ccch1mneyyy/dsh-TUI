@@ -736,6 +736,12 @@ const GROUPS = {
 // 的能力委托与持久化，channel 侧的原生模式标签、后端命令合并、/mcp、/context、
 // 订阅用量、/login 宿主，以及状态栏模式标签与 /context 面板的无头渲染。
     ["verify-claude-controls", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-controls.tsx']],
+// Claude 可执行文件解析回归（方案 §4.2）：PATH 候选必须本进程真能 spawn（--version
+// 探针，与 SDK 同一 execFile 路径）才可采纳——npm 在 Windows 发布的扩展名空 POSIX
+// 转发脚本/.cmd 会以"native binary failed to launch"拖垮整个启动；转发脚本被跟随到
+// 其指向的真实二进制（仍是用户自己的 CLI），全部不可启动才落到 SDK 自带；挂死候选
+// 被探针超时切断（POSIX 夹具）；process.ts 认的可执行文件环境变量显式值原样优先、不做二次校验。
+    ["verify-claude-executable", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-executable.ts']],
 // Claude 的 MCP elicitation 与用户对话框（方案 §4.3/§4.7，Phase 5b，假 Query）：表单字段
 // → 问卷（枚举/布尔/多选/文本与数字校验、无效项重问、可选项可跳过）→ accept/decline/
 // cancel；URL 模式的提示行与链接、elicitation_complete 关闭；不支持的模式拒绝；

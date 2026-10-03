@@ -26,14 +26,21 @@
  *    conversation found"; a `/login` reconnect waits for the running turn;
  *    a late auth failure of the old CLI is ignored; inputs the old CLI never
  *    started are pushed again in order (or retired with a notice); a failed
- *    renewal shows the HTTP status only.
+ *    renewal shows the HTTP status only — and is LOGGED by fixed category +
+ *    HTTP status only: the refresh error's own text (an OAuth endpoint's
+ *    response body can echo request material) never reaches a log, notice
+ *    or event, on the startup path (backend.open over the real SDK loader,
+ *    node as the fake executable: no claude binary, no credential read, no
+ *    network) nor the reconnect path;
  *
  * Run: node --import tsx/esm scripts/verify-claude-auth.ts
  */
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { OAuthAccess, OAuthCredentialSource } from '../src/agent/backend.js'
 import type { AgentEvent } from '../src/agent/events.js'
 import { claudeConfigDirOf, claudeGlobalConfigPath, claudeGlobalConfigPaths, detectClaudeAuth, fileGlobalConfigReader, isAuthFailure, refreshFailureStatus, resolveClaudeAuth } from '../src/backends/claude/auth.js'
@@ -232,7 +239,7 @@ const firstParty = { settings: () => Promise.resolve({}), globalConfig: () => un
     check('pin: only an injected token is pinned', notInjected.settings === undefined)
   }
   check('detection: any routing flag is a credential', await detectClaudeAuth({ CLAUDE_CODE_USE_MANTLE: '1', CLAUDE_CONFIG_DIR: '/nonexistent' }, undefined, 'linux') === 'ok')
-  check('a refresh failure is reported by HTTP status only', refreshFailureStatus(new Error('400 Bad Request: {"error":"invalid_grant","token":"secret-body"}')) === '400' && refreshFailureStatus(Object.assign(new Error('x'), { status: 401 })) === '401' && refreshFailureStatus(new Error('socket hang up')) === undefined)
+  check('a refresh failure is reported by HTTP status only', refreshFailureStatus(new Error('400 Bad Request: {"error":"invalid_grant","token":"secret-body"}')) === '400' && refreshFailureStatus(Object.assign(new Error('x'), { status: 401 })) === '401' && refreshFailureStatus(new Error('socket hang up')) === undefined && refreshFailureStatus(Object.assign(new Error('x'), { status: 401.5 })) === undefined)
 }
 
 // ── the dsh-auth credential source (real credential file, fake refresh) ──
@@ -614,6 +621,111 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   check('… at most 120 s, then reconnects anyway', reconnected !== 'timed out' && fake.queries.length === 2 && first.closed)
   check('… saying it interrupts the turn', events.some(event => event.type === 'notice' && event.text === t('claude-auth-reconnect-forced')) && events.some(event => event.type === 'turn.end' && event.reason.kind === 'aborted'))
   await session.dispose()
+}
+
+// ── a failed renewal is logged by category + HTTP status only (reconnect path) ──
+{
+  const fake = fakeClaudeSdk()
+  const debug: string[] = []
+  const plan = { source: 'dsh-auth' as const, expiresAt: 1, env: { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } } }
+  const SECRET = 'SYNTHETIC-SECRET-never-to-log'
+  // A realistic refresh rejection: the HTTP body echoes request material.
+  const renewal = Object.assign(new Error(`401 Unauthorized: {"error":"invalid_grant","client_secret":"${SECRET}"}`), { status: 401 })
+  const session = await openClaudeSession(claudeDeps(fake.sdk, {
+    host: { debug: message => { debug.push(message) } },
+    auth: { plan, renew: () => Promise.reject(renewal) },
+  }))
+  const events: AgentEvent[] = []
+  session.subscribe(batch => { events.push(...batch) })
+  await tick()
+  fake.queries[0]!.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' })
+  for (let i = 0; i < 10; i += 1) await tick()
+  const logged = debug.join('\n')
+  check('reconnect: the renewal failure is logged as category + HTTP status only', logged.includes('reconnect failed (HTTP 401)'), logged)
+  check('reconnect: the error body never reaches the debug log', !logged.includes(SECRET) && !logged.includes('invalid_grant'), logged)
+  check('reconnect: nor any event or notice', !JSON.stringify(events).includes(SECRET) && !JSON.stringify(events).includes('invalid_grant'))
+  await session.dispose()
+  // A renewal failure with no HTTP status in it: the fixed category says
+  // so instead of quoting the error's own text.
+  const debug2: string[] = []
+  const session2 = await openClaudeSession(claudeDeps(fake.sdk, {
+    host: { debug: message => { debug2.push(message) } },
+    auth: { plan, renew: () => Promise.reject(new Error('socket hang up')) },
+  }))
+  session2.subscribe(() => undefined)
+  await tick()
+  fake.queries.at(-1)!.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' })
+  for (let i = 0; i < 10; i += 1) await tick()
+  const logged2 = debug2.join('\n')
+  check('reconnect: a failure with no status is logged as the fixed category, not the error text', logged2.includes('reconnect failed') && !logged2.includes('socket hang up'), logged2)
+  await session2.dispose()
+}
+
+// ── a failed pre-start refresh is logged the same way (startup path) ──
+// claudeBackend.open() over the REAL SDK loader with a rejecting dsh-auth
+// source; only the startup catch's debug line is observable here (a start
+// notice would need a live CLI handshake). The "CLI" is node itself
+// (CLAUDE_CODE_EXECUTABLE): it rejects the SDK's args and exits at once.
+// The composition runs in an ISOLATED CHILD that points HOME and the
+// config dir at a temp directory BEFORE importing anything, so no module
+// of this test process (and no cached data dir of the host user) is read.
+{
+  const home = mkdtempSync(join(tmpdir(), 'dsh-tui-claude-startup-'))
+  const SECRET = 'SYNTHETIC-SECRET-never-to-log'
+  const backendUrl = new URL('../src/backends/claude/index.ts', import.meta.url).href
+  const root = fileURLToPath(new URL('..', import.meta.url))
+  // argv: backend URL, home, config dir, secret. The env is scrubbed of
+  // every routing/credential variable before the first import.
+  const child = [
+    "const [backendUrl, home, configDir, secret] = process.argv.slice(2)",
+    "process.env.HOME = home",
+    "process.env.USERPROFILE = home",
+    "process.env.CLAUDE_CONFIG_DIR = configDir",
+    "for (const key of Object.keys(process.env)) {",
+    "  const upper = key.toUpperCase()",
+    "  if (upper.startsWith('ANTHROPIC_') || upper === 'CLAUDECODE' || (upper.startsWith('CLAUDE_CODE_') && upper !== 'CLAUDE_CODE_EXECUTABLE')) delete process.env[key]",
+    "}",
+    "process.env.CLAUDE_CODE_EXECUTABLE = process.execPath",
+    "const renewal = Object.assign(new Error('401 Unauthorized: invalid_grant client_secret=' + secret), { status: 401 })",
+    "const debug = []",
+    "const report = outcome => console.log('@@RESULT@@' + JSON.stringify({ outcome, debug }))",
+    "try {",
+    "  const { claudeBackend } = await import(backendUrl)",
+    "  const session = await claudeBackend.open({ kind: 'create', cwd: home }, {",
+    "    cwd: home,",
+    "    debug: message => { debug.push(message) },",
+    "    warn: () => undefined,",
+    "    oauthCredential: () => ({ stored: () => Promise.resolve(true), fresh: () => Promise.reject(renewal) }),",
+    "  })",
+    "  await session.dispose()",
+    "  report('opened')",
+    "} catch (error) {",
+    "  report('rejected: ' + (error instanceof Error ? error.message : String(error)))",
+    "}",
+  ].join('\n')
+  const probe = join(home, 'startup-probe.mjs')
+  writeFileSync(probe, child)
+  let stdout = ''
+  let stderr = ''
+  try {
+    const ran = await new Promise<{ code: number | null }>(resolve => {
+      execFile(process.execPath, ['--import', 'tsx/esm', probe, backendUrl, home, join(home, '.claude'), SECRET], { cwd: root, timeout: 30_000 }, (error, out, err) => {
+        stdout = String(out)
+        stderr = String(err)
+        resolve({ code: error === null ? 0 : (error.code ?? 1) })
+      })
+    })
+    const lines = stdout.split('\r\n')
+    const line = lines.find(l => l.startsWith('@@RESULT@@'))
+    const parsed = line === undefined ? undefined : JSON.parse(line.slice('@@RESULT@@'.length)) as { outcome: string; debug: string[] }
+    check('startup: the isolated child ran and reported', parsed !== undefined && ran.code === 0, { code: ran.code, stderr: stderr.slice(0, 300), stdout: stdout.slice(0, 300) })
+    check('startup: the open rejects on the fake executable (nothing else ran)', parsed !== undefined && parsed.outcome.startsWith('rejected'), parsed?.outcome)
+    const logged = parsed === undefined ? '' : parsed.debug.join('\n')
+    check('startup: the pre-start refresh failure is logged as category + HTTP status only', logged.includes('dsh-auth refresh failed (HTTP 401)'), logged)
+    check('startup: the error body never reaches the debug log', !logged.includes(SECRET) && !logged.includes('invalid_grant'), logged)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
 }
 
 console.log(`\nverify-claude-auth OK (${passed} checks)`)

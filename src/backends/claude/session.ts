@@ -40,7 +40,7 @@ import type { AgentSessionRef } from '../../agent/refs.js'
 import type { AgentInput, AgentSession, AgentSessionStatus, CancelCause, SubmitPlacement } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { CLAUDE_BACKEND_ID, CLI_CAPABILITY, cliVersionDrift, VALIDATED_CLI_VERSIONS, VALIDATED_SDK_VERSION } from './contract.js'
-import { CLAUDE_OAUTH_PROVIDER, detectClaudeAuth, isAuthFailure, type ClaudeAuthPlan } from './auth.js'
+import { CLAUDE_OAUTH_PROVIDER, detectClaudeAuth, isAuthFailure, refreshFailureDebugDetail, type ClaudeAuthPlan } from './auth.js'
 import { accountView, createClaudeControls } from './controls.js'
 import { buildQueryOptions, type StartPermissionMode } from './options.js'
 import { createClaudeDialogBridge, SUPPORTED_DIALOG_KINDS } from './dialogs.js'
@@ -411,6 +411,32 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     })
   }
 
+  /** Seed the translator's (and so the channel's) model once, before any
+   *  UI asks for it — the model this session spawned with, at exactly the
+   *  priority `startRun` uses: the persisted choice, then the explicit
+   *  start model, else the CLI's own handshake account of its default —
+   *  the scalar `model` when it provides one, else the catalog's
+   *  `default` alias row (its resolvedModel, never a hardcoded name; no
+   *  default row at all leaves the model unknown). Only an EMPTY model is
+   *  seeded: a resumed session keeps the replay's model, and a later
+   *  reconnect must not overwrite a model the user switched to (the CLI's
+   *  own frames still correct it). */
+  const seedModel = (init: Rec | undefined): void => {
+    if (translator.model !== '') return
+    const catalog = (Array.isArray(init?.models) ? init.models : []).flatMap((row): { readonly value: string; readonly resolvedModel?: unknown }[] => {
+      if (typeof row !== 'object' || row === null) return []
+      const value = (row as Rec).value
+      return typeof value === 'string' ? [{ value, resolvedModel: (row as Rec).resolvedModel }] : []
+    })
+    const defaultRow = catalog.find(row => row.value === 'default')
+    const fromRow = defaultRow === undefined ? undefined
+      : typeof defaultRow.resolvedModel === 'string' && defaultRow.resolvedModel !== '' ? defaultRow.resolvedModel : defaultRow.value
+    const handshakeModel = typeof init?.model === 'string' && init.model !== '' ? init.model : fromRow
+    const model = prefs.read().model ?? deps.model ?? handshakeModel
+    if (model === undefined) return
+    emit(translator.noteModel(model), 'none')
+  }
+
   /** The handshake of one run: capabilities, model catalog, commands. */
   const handshake = async (target: Run): Promise<Rec | undefined> => {
     let timer: unknown
@@ -421,9 +447,14 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       }),
     ]).finally(() => clock.clearTimeout(timer))
     const result = rec(init)
+    // Every handshake starts from scratch: a run that reports no
+    // capabilities at all must not inherit the previous CLI's — an older
+    // CLI without `msg_lifecycle_v1` confirms inputs by their replay
+    // echo, so the user-row source is picked explicitly each time.
     const capabilities = result?.capabilities
-    if (Array.isArray(capabilities)) cliCapabilities = capabilities.filter((item): item is string => typeof item === 'string')
-    if (cliCapabilities.length > 0 && !cliCapabilities.includes(CLI_CAPABILITY.lifecycle)) translator.setUserRows('replay')
+    cliCapabilities = Array.isArray(capabilities) ? capabilities.filter((item): item is string => typeof item === 'string') : []
+    translator.setUserRows(cliCapabilities.includes(CLI_CAPABILITY.lifecycle) ? 'lifecycle' : 'replay')
+    seedModel(result)
     fetchAccount(target)
     return result
   }
@@ -667,9 +698,12 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   const injectedToken = (): string | undefined =>
     authPlan.source === 'dsh-auth' ? authPlan.env.CLAUDE_CODE_OAUTH_TOKEN : undefined
 
-  /** A failed renewal as the user sees it (details stay in the debug log). */
+  /** A failed renewal as the user sees it. The debug log gets a fixed
+   *  failure category and at most the HTTP status: a real refresh rejection
+   *  carries the OAuth endpoint's response body, which may echo request
+   *  material (auth.ts contract) — the error's own text is never logged. */
   const renewalFailed = (error: unknown): string => {
-    deps.host.debug(`claude: reconnect failed (${errorText(error)})`)
+    deps.host.debug(`claude: reconnect failed (${refreshFailureDebugDetail(error)})`)
     return deps.auth?.failureNotice?.(error) ?? t('claude-auth-reconnect-failed')
   }
 
@@ -1003,6 +1037,13 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       const staged = input.images ?? []
       if (imageBlocks > staged.length) throw new Error(t('claude-image-unreadable', { name: `#${staged.length + 1}`, err: t('claude-image-gone') }))
       const images = staged.length === 0 ? [] : await claudeImageBlocks(staged)
+      // The read may straddle a reconnect: an authentication failure
+      // stopped THIS run (its inbox is closed — temporarily, while the
+      // renewal and the replacement handshake are in flight). Pass the
+      // non-deferred gate again and only then judge: a deferred `/login`
+      // reconnect still leaves the old CLI serving submits, so waiting for
+      // it here would stall behind the running turn.
+      if (reconnecting !== undefined && !reconnectDeferred) await reconnecting.catch(() => undefined)
       if (disposing || run.inbox.closed) throw new Error(t('claude-session-closed'))
       const texts = (input.blocks ?? [{ type: 'text', text: input.text }])
         .flatMap(block => block.type === 'text' && typeof block.text === 'string' && block.text !== '' ? [block.text] : [])

@@ -365,15 +365,28 @@ export async function resolveClaudeAuth(
 /**
  * A credential refresh failure as the user sees it: a fixed sentence with at
  * most the HTTP status (an OAuth endpoint's error body can echo request
- * material); the full error belongs in the debug log only.
+ * material, so the error's own text is never logged — see
+ * {@link refreshFailureDebugDetail}).
  */
 export function refreshFailureStatus(error: unknown): string | undefined {
   const value = typeof error === 'object' && error !== null ? error as Record<string, unknown> : undefined
   const direct = value?.status ?? (typeof value?.response === 'object' && value.response !== null ? (value.response as Record<string, unknown>).status : undefined)
-  if (typeof direct === 'number' && direct >= 100 && direct <= 599) return String(direct)
+  if (typeof direct === 'number' && Number.isInteger(direct) && direct >= 100 && direct <= 599) return String(direct)
   const text = error instanceof Error ? error.message : String(error)
   const match = /\b(?:HTTP|status)\D{0,3}([1-5]\d\d)\b/iu.exec(text) ?? /(?<![\d.])([45]\d\d)(?![\d.])/u.exec(text)
   return match?.[1]
+}
+
+/**
+ * The debug-log detail of a failed credential refresh: a fixed failure
+ * category plus at most the HTTP status ({@link refreshFailureStatus}).
+ * The error's own text — a real refresh rejection carries the OAuth
+ * endpoint's response body, which can echo request material — never
+ * reaches a log, notice, trace or event (the module contract above).
+ */
+export function refreshFailureDebugDetail(error: unknown): string {
+  const status = refreshFailureStatus(error)
+  return status === undefined ? 'status unknown' : `HTTP ${status}`
 }
 
 /** The CLI's authentication-failure signatures (design §4.13). */

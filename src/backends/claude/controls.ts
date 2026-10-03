@@ -117,8 +117,16 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         deps.prefs.write({ model: row.value })
         deps.emit(deps.noteModel(row.resolvedModel ?? row.value))
         // An effort the new model cannot run is cleared (the CLI would run
-        // its default anyway; the readout must not claim otherwise).
-        if (effort !== undefined && row.supportedEffortLevels !== undefined && !(row.supportedEffortLevels as readonly string[]).includes(effort)) {
+        // its default anyway; the readout must not claim otherwise). The
+        // effort is kept only when the row still advertises it: the real
+        // offline catalog serves Haiku rows with neither `supportsEffort`
+        // nor a level list, and an old CLI may claim support without
+        // listing levels — either way the picker offers nothing, so the
+        // readout and the persisted pref must claim nothing either (no
+        // hardcoded tiers; the pref can be set again on a model that
+        // advertises levels).
+        const levels = row.supportedEffortLevels as readonly string[] | undefined
+        if (effort !== undefined && (row.supportsEffort === false || levels === undefined || levels.length === 0 || !levels.includes(effort))) {
           effort = undefined
           deps.prefs.write({ effort: null })
           deps.emit([{ type: 'effort.changed', effort: null }])

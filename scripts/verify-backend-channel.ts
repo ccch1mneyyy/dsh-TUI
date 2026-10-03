@@ -574,6 +574,121 @@ try {
   }
 }
 
+// ── /mcp reports and controls are fenced by the bound session ────────
+{
+  // An MCP answer is a fact of ONE session: a slow /mcp on A must not
+  // overwrite the report (or the `/mcp reconnect|toggle` completion) of the
+  // session that replaced it — including when the user comes BACK to A (a
+  // promise of the old binding generation is still old), and a reconnect or
+  // toggle completing after a switch must neither refresh nor toast for the
+  // new session.
+  interface Row { name: string; status: string; toolCount?: number }
+  const rows = (names: string[]): Row[] => names.map(name => ({ name, status: 'connected', toolCount: 1 }))
+  const probe = () => {
+    const calls: ((list: readonly Row[]) => void)[] = []
+    const controlPending: (() => void)[] = []
+    const state = {
+      servers: [] as Row[],
+      auto: false,
+      autoControls: false,
+      controls: [] as string[],
+      answer(index: number, names: string[]): void { calls[index]?.(rows(names)) },
+      releaseControls(): void { for (const done of controlPending.splice(0)) done() },
+    }
+    const mcp = {
+      status: () => new Promise<readonly Row[]>(resolve => { if (state.auto) resolve([...state.servers]); else calls.push(resolve) }),
+      reconnect: (name: string) => { state.controls.push(`reconnect:${name}`); return state.autoControls ? Promise.resolve() : new Promise<void>(done => { controlPending.push(done) }) },
+      toggle: (name: string, enabled: boolean) => { state.controls.push(`toggle:${name}:${enabled}`); return state.autoControls ? Promise.resolve() : new Promise<void>(done => { controlPending.push(done) }) },
+    }
+    return { state, mcp }
+  }
+  const tick = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
+  const A = probe()
+  const B = probe()
+  const C = probe()
+  B.state.auto = true; B.state.servers = rows(['beta-server'])
+  C.state.auto = true; C.state.servers = rows(['gamma-server'])
+  const sessionA = fakeSession('e1e1e1e1-e1e1-41e1-81e1-e1e1e1e1e1e1', { mcp: A.mcp })
+  const byId = new Map([[sessionA.ref.sessionId, sessionA]])
+  let created = 0
+  const mcpChannel = createChannel(ctx, sessionA, {
+    model: 'm', provider: '', cwd: workdir, activity: false, backendLabel: 'Fake Agent',
+    openSession: target => {
+      if (target.kind === 'resume') return Promise.resolve(byId.get(target.sessionId)!)
+      created += 1
+      const next = created === 1
+        ? fakeSession(`b2b2b2b2-b2b2-42b2-82b2-${String(created).padStart(12, '0')}`, { mcp: B.mcp })
+        : fakeSession(`c3c3c3c3-c3c3-43c3-83c3-${String(created).padStart(12, '0')}`, { mcp: C.mcp })
+      byId.set(next.ref.sessionId, next)
+      return Promise.resolve(next)
+    },
+    sessionCatalog: { list: async () => [] },
+  })
+  const serversOf = (): string[] => mcpChannel.commandCompletions('/mcp reconnect ').map(item => item.name.replace(/^mcp reconnect /u, ''))
+  const toastsOf = (): string[] => mcpChannel.notifications.map(item => item.text)
+  try {
+    check('a fresh /mcp answers the loading line', mcpChannel.mcpStatus().join('\n') === t('claude-mcp-loading'))
+    mcpChannel.mcpStatus() // a second ask of the same binding, kept pending for the generation case
+    check('/new switches to the second session', await mcpChannel.newSession() === true)
+    await settled(() => serversOf().includes('beta-server'))
+    // The answer A owed its own /mcp lands now, one session too late.
+    A.state.answer(1, ['alpha-stale-server'])
+    await tick()
+    check('a delayed status of the replaced session does not pollute the completion', JSON.stringify(serversOf()) === JSON.stringify(['beta-server']), serversOf().join(','))
+    check('… nor the report the next /mcp reads', mcpChannel.mcpStatus().some(line => line.includes('beta-server')) && !mcpChannel.mcpStatus().join('\n').includes('alpha-stale-server'), mcpChannel.mcpStatus().join('\n'))
+
+    // Back on A (a NEW binding generation): the promise parked by the FIRST
+    // A binding is old even though the very same session object is bound
+    // again — only the binding generation tells those two A bindings apart.
+    A.state.auto = true; A.state.servers = rows(['alpha-fresh'])
+    check('resume lands back on A', (await mcpChannel.resumeTo(sessionA.ref.sessionId)).ok === true)
+    await settled(() => serversOf().includes('alpha-fresh'))
+    A.state.answer(2, ['alpha-older'])
+    await tick()
+    check('a promise of the FIRST A binding is not accepted on the re-bound A', JSON.stringify(serversOf()) === JSON.stringify(['alpha-fresh']), serversOf().join(','))
+    check('… and the report the next /mcp reads is the fresh one', mcpChannel.mcpStatus().some(line => line.includes('alpha-fresh')) && !mcpChannel.mcpStatus().join('\n').includes('alpha-older'), mcpChannel.mcpStatus().join('\n'))
+
+    // A control (toggle) held across a switch: completing it later must not
+    // refresh or toast for the session that replaced the one it asked about.
+    check('/new switches to the third session', await mcpChannel.newSession() === true)
+    await settled(() => serversOf().includes('gamma-server'))
+
+    const toggling = mcpChannel.mcpControl({ action: 'toggle', name: 'gamma-server', enabled: false })
+    check('resume lands back on A again', (await mcpChannel.resumeTo(sessionA.ref.sessionId)).ok === true)
+    await settled(() => serversOf().includes('alpha-fresh'))
+    C.state.releaseControls()
+    check('the delayed toggle itself still succeeds', await toggling === true)
+    await tick()
+    check('a control completing after a switch does not toast for the new session', !toastsOf().includes(t('mcp-disabled', { name: 'gamma-server' })), toastsOf().join(' | '))
+    A.state.autoControls = true
+    check('a control of the CURRENT session still reports', await mcpChannel.mcpControl({ action: 'reconnect', name: 'alpha-fresh' }) === true && toastsOf().includes(t('mcp-reconnected', { name: 'alpha-fresh' })), toastsOf().join(' | '))
+  } finally {
+    mcpChannel.releaseContributions()
+  }
+}
+
+// ── bare /effort answers honestly on 0/1-tier routes ────────────────
+{
+  // The Chat slider assumes listEfforts already said why it cannot open
+  // (Chat.tsx returns silently for <= 1 tiers). That contract holds for the
+  // DSH specialist today; every other backend needs the same honesty here.
+  const empty = fakeSession('d1d1d1d1-d1d1-41d1-81d1-d1d1d1d1d1d1', {
+    effort: { levels: () => [], current: () => undefined, set: () => Promise.resolve() },
+  })
+  const emptyChannel = createChannel(ctx, empty, { model: 'm', provider: '', cwd: workdir, activity: false })
+  try {
+    const list = await emptyChannel.listEfforts()
+    check('a 0-tier effort route reports the unsupported model', list.efforts.length === 0 && emptyChannel.notifications.some(item => item.text === t('effort-unsupported')), emptyChannel.notifications.map(item => item.text).join(' | '))
+  } finally { emptyChannel.releaseContributions() }
+  const single = fakeSession('d2d2d2d2-d2d2-42d2-82d2-d2d2d2d2d2d2', {
+    effort: { levels: () => [{ id: 'medium', label: 'Medium' }], current: () => 'medium', set: () => Promise.resolve() },
+  })
+  const singleChannel = createChannel(ctx, single, { model: 'm', provider: '', cwd: workdir, activity: false })
+  try {
+    const list = await singleChannel.listEfforts()
+    check('a single-tier effort route says so', list.efforts.length === 1 && singleChannel.notifications.some(item => item.text === t('effort-single-tier', { name: 'Medium' })), singleChannel.notifications.map(item => item.text).join(' | '))
+  } finally { singleChannel.releaseContributions() }
+}
 rmSync(workdir, { recursive: true, force: true })
 console.log(`\nverify-backend-channel OK (${passed} checks)`)
 process.exit(0)

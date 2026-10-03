@@ -252,12 +252,14 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
 
   const [railFocus, setRailFocus] = useState(0)
   /**
-   * A rail entry the user picked by hand that is NOT registered — the fallback
-   * group for unregistered sessions. It exists only for this screen's lifetime:
-   * selecting a group is a way to SEE those sessions, never a way to register a
-   * directory, so it must not create a ledger record.
+   * The id of the fallback-group row the user picked by hand — unregistered
+   * groups are identified by their own id, never by "some group": a backend
+   * without the workspace ledger has ONE such group per directory, and a pick
+   * that forgot WHICH one kept resolving to the first. It exists only for this
+   * screen's lifetime: selecting a group is a way to SEE those sessions, never
+   * a way to register a directory, so it must not create a ledger record.
    */
-  const [selectedUnregistered, setSelectedUnregistered] = useState(false)
+  const [selectedUnregisteredId, setSelectedUnregisteredId] = useState<string | undefined>(undefined)
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined)
   /** True once the user picked a rail row by hand; see the selection effect. */
   const [selectionManual, setSelectionManual] = useState(false)
@@ -433,12 +435,16 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     // A hand-picked fallback group stays picked while it is still on the rail.
     // Without this the group would be dropped on the very next listing pass and
     // the sessions it was showing would vanish again.
-    if (selectionManual && selectedUnregistered
-      && railEntries.some(entry => entry.from === 'unregistered')) return
+    if (selectionManual && selectedUnregisteredId !== undefined
+      && railEntries.some(entry => entry.id === selectedUnregisteredId)) return
+    // The terminal's own directory, registered OR a fallback group: a backend
+    // without the workspace ledger lists every directory as a group of its own,
+    // and its rail must open on the one this terminal is in just the same.
     const here = railEntries.find(entry => entry.from === 'registry' && samePath(entry.path, channel.cwd))
+      ?? railEntries.find(entry => entry.from === 'unregistered' && samePath(entry.path, channel.cwd))
     const next = here ?? railEntries[0]!
     setSelectedPath(next.from === 'registry' ? next.path : undefined)
-    setSelectedUnregistered(next.from === 'unregistered')
+    setSelectedUnregisteredId(next.from === 'unregistered' ? next.id : undefined)
     // The cursor travels with an automatic selection. It starts at 0, so
     // leaving it there while the selection lands elsewhere paints two green
     // rows — `❯` on the first record and the marker on the selected one — until
@@ -449,7 +455,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
       const index = railEntries.findIndex(entry => entry.id === next.id)
       return index < 0 || current === index ? current : index
     })
-  }, [railEntries, selectedPath, selectedUnregistered, selectionManual, channel.cwd])
+  }, [railEntries, selectedPath, selectedUnregisteredId, selectionManual, channel.cwd])
 
   // The cursor indexes the entry list directly (there is no `+` row in front of
   // it), so a shrinking ledger has to pull it back inside or the last row would
@@ -463,9 +469,9 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     const registered = railEntries.find(entry =>
       entry.from === 'registry' && selectedPath !== undefined && samePath(entry.path, selectedPath))
     if (registered !== undefined) return registered
-    if (selectedUnregistered) return railEntries.find(entry => entry.from === 'unregistered')
+    if (selectedUnregisteredId !== undefined) return railEntries.find(entry => entry.id === selectedUnregisteredId)
     return railEntries[0]
-  }, [railEntries, selectedPath, selectedUnregistered])
+  }, [railEntries, selectedPath, selectedUnregisteredId])
 
   /**
    * Sessions whose recorded cwd is the selected workspace, minus the search
@@ -619,7 +625,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
 
   const selectEntry = useCallback((entry: RailEntry): void => {
     setSelectedPath(entry.from === 'registry' ? entry.path : undefined)
-    setSelectedUnregistered(entry.from === 'unregistered')
+    setSelectedUnregisteredId(entry.from === 'unregistered' ? entry.id : undefined)
     setSelectionManual(true)
     setFocusSessionId(undefined)
   }, [])

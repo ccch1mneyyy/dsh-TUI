@@ -14,11 +14,20 @@
  *    enforced; an image block without its facade refuses the message;
  *  - the user row shows `TranscriptImage` facades backed by the staged
  *    bytes; an `@`-mentioned image file is staged and sent the same way;
+ *  - the CONTENT wins over the label: a renamed file (a real WebP named
+ *    .jpg) is staged and sent as its sniffed format (magic bytes only —
+ *    no decode, no re-encode, animations untouched), so the backend's
+ *    media_type always matches the bytes; unmeasurable bytes are refused;
  *  - replay: base64 image blocks from `getSessionMessages` become lazy
  *    facades (size probed on first access, bytes decoded on read; no
  *    pixels in the projection); an image-only prompt is a row;
  *  - a session without the capability (DSH) still needs the attachments
- *    service, exactly as before.
+ *    service, exactly as before;
+ *  - a submit whose image read straddles a credential reconnect: the
+ *    input waits for the replacement CLI and is delivered exactly once
+ *    (never into the closed old inbox, never dropped); a deferred /login
+ *    reconnect still leaves the old CLI serving it; a failed reconnect or
+ *    a dispose during the read refuses it.
  *
  * Run: node --import tsx/esm scripts/verify-claude-images.ts
  */
@@ -61,6 +70,9 @@ const check = (label: string, ok: boolean, detail?: unknown): void => {
   passed += 1
   console.log(`PASS ${label}`)
 }
+/** A promise's outcome, or 'timed out' (a hang fails loudly, not forever). */
+const within = <T>(promise: Promise<T>, ms = 3000): Promise<T | 'timed out'> =>
+  Promise.race([promise, new Promise<'timed out'>(resolve => { setTimeout(() => resolve('timed out'), ms) })])
 const { fakeClaudeSdk, claudeDeps, tick } = fakes
 const ctx = { on: () => () => undefined, get: () => undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never
 
@@ -112,6 +124,39 @@ const BLUE = png(5, 5, [0, 0, 255])
   let gone = false
   try { await view.read() } catch { gone = true }
   check(`bounded: past ${LOCAL_IMAGE_LIMIT} images the oldest is dropped, its facade reports it`, gone && store.facade(ref) === undefined)
+}
+
+// ── content wins over the label (a renamed image stages as its real format) ──
+{
+  // A real 8×8 lossless WebP (built with sharp offline, embedded so the
+  // test needs no encoder): renaming it .jpg must not send image/jpeg.
+  const WEBP = new Uint8Array(Buffer.from('UklGRhwAAABXRUJQVlA4TBAAAAAvB8ABAAdQrSho/wMR0f8A', 'base64'))
+  const store = createLocalImageStore(() => CLAUDE_IMAGE_LIMITS)
+  const renamed = await store.saveImage({ data: WEBP, mediaType: 'image/jpeg', name: 'photo.jpg' })
+  check('a real WebP named .jpg is staged as image/webp', renamed.mediaType === 'image/webp', renamed.mediaType)
+  check('… measured at its real dimensions (no decode)', renamed.width === 8 && renamed.height === 8)
+  check('… its facade reports the sniffed type', store.facade(renamed)?.mediaType === 'image/webp')
+  check('… and the bytes are untouched (magic sniff only)', Buffer.compare(Buffer.from(store.bytes(renamed.attachmentId) ?? ''), Buffer.from(WEBP)) === 0)
+  // The mismatch matrix, each against a different declared label.
+  const minimalJpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x08, 0x00, 0x08, 0x00, 0x00, 0x00])
+  const minimalGif = new Uint8Array(Buffer.concat([Buffer.from('GIF89a'), Buffer.from([0x08, 0x00, 0x08, 0x00, 0x00])]))
+  const cases: readonly [string, Uint8Array, Parameters<typeof store.saveImage>[0]['mediaType'], string][] = [
+    ['a PNG named .webp', RED, 'image/webp', 'image/png'],
+    ['a JPEG named .gif', minimalJpeg, 'image/gif', 'image/jpeg'],
+    ['a GIF named .png', minimalGif, 'image/png', 'image/gif'],
+  ]
+  for (const [label, data, declared, actual] of cases) {
+    const ref = await store.saveImage({ data, mediaType: declared, name: 'renamed' })
+    check(`content sniff: ${label} is staged as ${actual}`, ref.mediaType === actual, ref.mediaType)
+    check(`content sniff: ${label} keeps its bytes`, Buffer.compare(Buffer.from(store.bytes(ref.attachmentId) ?? ''), Buffer.from(data)) === 0)
+  }
+  check('content sniff: a truthfully declared image is unchanged', (await store.saveImage({ data: RED, mediaType: 'image/png', name: 'plain.png' })).mediaType === 'image/png')
+  // Unmeasurable bytes are still refused, whatever the label says.
+  const refusal = async (data: Uint8Array, mediaType: Parameters<typeof store.saveImage>[0]['mediaType']): Promise<string | undefined> => {
+    try { await store.saveImage({ data, mediaType }); return undefined } catch (error) { return error instanceof Error ? error.message : String(error) }
+  }
+  check('content sniff: bytes with no image magic are refused (not relabeled)', (await refusal(new Uint8Array([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]), 'image/png'))?.startsWith('the image could not be measured') === true)
+  check('content sniff: a truncated header fragment is refused', (await refusal(new Uint8Array([0x52, 0x49, 0x46, 0x46]), 'image/png'))?.startsWith('the image could not be measured') === true)
 }
 
 // ── the image blocks of a message and their limits ─────────────────────
@@ -170,6 +215,29 @@ const BLUE = png(5, 5, [0, 0, 255])
   await lone.dispose()
 }
 
+// ── end to end: a renamed image is SENT as its sniffed format ──────────
+{
+  const cwd = mkdtempSync(join(home, 'project-sniff-'))
+  const fake = fakeClaudeSdk(() => ({ capabilities: ['msg_lifecycle_v1'] }))
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { cwd, prefs: memoryClaudePrefs() }))
+  const channel = createChannel(ctx, session, { model: 'Claude Agent', provider: 'claude', cwd, activity: false, backendLabel: 'Claude Agent' })
+  const query = fake.queries[0]!
+  const WEBP = new Uint8Array(Buffer.from('UklGRhwAAABXRUJQVlA4TBAAAAAvB8ABAAdQrSho/wMR0f8A', 'base64'))
+  try {
+    // The composer hands the store a .jpg paste/mention: the declared
+    // type is image/jpeg while the bytes are a real WebP.
+    const handle = await channel.stageComposerImage({ data: WEBP, mediaType: 'image/jpeg', name: 'photo.jpg' }, channel.stagedImageGeneration())
+    channel.submit('what format is [Image #1]?', [{ token: '[Image #1]', stageId: handle.stageId }])
+    await settled(() => query.inputs.length === 1)
+    const content = (query.inputs[0]!.message as { content: unknown }).content as { type: string; source?: { type: string; media_type: string; data: string } }[]
+    const block = Array.isArray(content) ? content.find(item => item.type === 'image') : undefined
+    check('the base64 block carries the sniffed media_type (webp bytes are never sent as image/jpeg)', block?.source?.type === 'base64' && block.source.media_type === 'image/webp' && block.source.data === Buffer.from(WEBP).toString('base64'), block?.source?.media_type)
+  } finally {
+    channel.releaseContributions()
+    await session.dispose()
+  }
+}
+
 // ── replay: lazy facades over the transcript's base64 ──────────────────
 {
   const data = Buffer.from(BLUE).toString('base64')
@@ -212,6 +280,137 @@ const BLUE = png(5, 5, [0, 0, 255])
   } finally {
     channel.releaseContributions()
   }
+}
+
+// ── a submit whose image read straddles a credential reconnect ──────────
+// The read of the staged bytes is async: an authentication failure can
+// stop the old CLI (closing its inbox) and be renewing while the read is
+// still pending. The input is legitimate — it must wait for the
+// replacement CLI, never be mistaken for a closed session.
+{
+  const fake = fakeClaudeSdk()
+  let releaseRenew: (() => void) | undefined
+  const plan = { source: 'dsh-auth' as const, expiresAt: 1, env: { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } } }
+  const session = await openClaudeSession(claudeDeps(fake.sdk, {
+    auth: { plan, renew: () => new Promise(resolve => { releaseRenew = () => resolve(plan) }) },
+  }))
+  session.subscribe(() => undefined)
+  await tick()
+  let releaseImage: (() => void) | undefined
+  const imageGate = new Promise<void>(resolve => { releaseImage = () => resolve() })
+  const facade = { id: 'gate-1', width: 4, height: 3, mediaType: 'image/png', bytes: RED.byteLength, read: () => imageGate.then(() => RED) }
+  const submitting = session.submit({ text: 'look', images: [facade as never], clientMessageId: 'u-img' }, 'turn').then(() => 'accepted', (error: unknown) => `refused: ${error instanceof Error ? error.message : String(error)}`)
+  await tick()
+  // While the read is pending, the credential is refused: the reconnect
+  // stops the old CLI (its inbox closes) and waits on the renewal.
+  fake.queries[0]!.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' })
+  for (let i = 0; i < 4; i += 1) await tick()
+  check('the read is pending and the reconnect stopped the old CLI (renewing)', !fake.queries[1] && fake.queries[0]!.closed && releaseRenew !== undefined)
+  // The read completes MID-reconnect, then the renewal and handshake do.
+  releaseImage!()
+  await tick()
+  releaseRenew!()
+  const outcome = await within(submitting)
+  check('a read straddling the renew is accepted once the replacement is live', outcome === 'accepted', outcome)
+  const replacement = fake.queries[1]
+  const delivered = replacement?.inputs.find(input => input.uuid === 'u-img')
+  const content = delivered === undefined ? undefined : (delivered.message as { content?: unknown[] }).content
+  check('the replacement CLI received the input exactly once, images and all', replacement !== undefined && replacement.inputs.length === 1 && Array.isArray(content) && content.some(block => (block as { type?: string; source?: { media_type?: string; data?: string } }).type === 'image' && (block as { source: { media_type: string; data: string } }).source?.data === Buffer.from(RED).toString('base64')), content)
+  check('the closed old inbox never saw it', !fake.queries[0]!.inputs.some(input => input.uuid === 'u-img'))
+  await session.dispose()
+}
+// The reconnect may also COMPLETE while the read is still pending: the
+// input then goes to the already-live replacement, exactly once.
+{
+  const fake = fakeClaudeSdk()
+  const plan = { source: 'dsh-auth' as const, expiresAt: 1, env: { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } } }
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { auth: { plan, renew: () => Promise.resolve(plan) } }))
+  session.subscribe(() => undefined)
+  await tick()
+  let releaseImage: (() => void) | undefined
+  const imageGate = new Promise<void>(resolve => { releaseImage = () => resolve() })
+  const facade = { id: 'gate-2', width: 4, height: 3, mediaType: 'image/png', bytes: RED.byteLength, read: () => imageGate.then(() => RED) }
+  const submitting = session.submit({ text: 'late', images: [facade as never], clientMessageId: 'u-late' }, 'turn').then(() => 'accepted', (error: unknown) => `refused: ${error instanceof Error ? error.message : String(error)}`)
+  await tick()
+  fake.queries[0]!.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' })
+  for (let i = 0; i < 6; i += 1) await tick()
+  check('the reconnect completed while the read was pending', fake.queries.length === 2)
+  releaseImage!()
+  const outcome = await within(submitting)
+  check('a read outlasting the reconnect goes to the live replacement', outcome === 'accepted' && fake.queries[1]!.inputs.some(input => input.uuid === 'u-late') && !fake.queries[0]!.inputs.some(input => input.uuid === 'u-late'), outcome)
+  await session.dispose()
+}
+// A reconnect whose replacement cannot start, and a dispose during the
+// read, still refuse the input (a temporarily closed inbox is not those).
+{
+  const fake = fakeClaudeSdk(index => {
+    if (index > 0) throw new Error('spawn failed')
+    return { capabilities: ['msg_lifecycle_v1'] }
+  })
+  const plan = { source: 'dsh-auth' as const, expiresAt: 1, env: { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } } }
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { auth: { plan, renew: () => Promise.resolve(plan) } }))
+  session.subscribe(() => undefined)
+  await tick()
+  let releaseImage: (() => void) | undefined
+  const imageGate = new Promise<void>(resolve => { releaseImage = () => resolve() })
+  const facade = { id: 'gate-3', width: 4, height: 3, mediaType: 'image/png', bytes: RED.byteLength, read: () => imageGate.then(() => RED) }
+  const submitting = session.submit({ text: 'doomed', images: [facade as never], clientMessageId: 'u-doomed' }, 'turn').then(() => 'accepted', (error: unknown) => `refused: ${error instanceof Error ? error.message : String(error)}`)
+  await tick()
+  fake.queries[0]!.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' })
+  for (let i = 0; i < 8; i += 1) await tick()
+  releaseImage!()
+  const outcome = await within(submitting)
+  check('a failed reconnect still refuses the pending input', outcome !== 'accepted' && outcome !== 'timed out' && String(outcome).includes('closed'), outcome)
+  check('… and nothing was delivered anywhere', ![fake.queries[0], fake.queries[1]].some(query => query !== undefined && query.inputs.some(input => input.uuid === 'u-doomed')))
+  await session.dispose().catch(() => undefined)
+}
+{
+  const fake = fakeClaudeSdk()
+  const session = await openClaudeSession(claudeDeps(fake.sdk))
+  session.subscribe(() => undefined)
+  await tick()
+  let releaseImage: (() => void) | undefined
+  const imageGate = new Promise<void>(resolve => { releaseImage = () => resolve() })
+  const facade = { id: 'gate-4', width: 4, height: 3, mediaType: 'image/png', bytes: RED.byteLength, read: () => imageGate.then(() => RED) }
+  const submitting = session.submit({ text: 'gone', images: [facade as never], clientMessageId: 'u-gone' }, 'turn').then(() => 'accepted', (error: unknown) => `refused: ${error instanceof Error ? error.message : String(error)}`)
+  await tick()
+  await session.dispose()
+  releaseImage!()
+  const outcome = await within(submitting)
+  check('a dispose during the read refuses the input', outcome !== 'accepted' && outcome !== 'timed out' && String(outcome).includes('closed'), outcome)
+}
+// A DEFERRED /login reconnect leaves the old CLI serving submits — the
+// read's completion must not wait behind the running turn (self-deadlock).
+{
+  const fake = fakeClaudeSdk()
+  const plan = { source: 'dsh-auth' as const, expiresAt: 1, env: { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } } }
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { auth: { plan, renew: () => Promise.resolve(plan) } }))
+  session.subscribe(() => undefined)
+  await tick()
+  await session.submit({ text: 'running turn', clientMessageId: 'u-1' }, 'followup')
+  fake.queries[0]!.emit({ type: 'command_lifecycle', command_uuid: 'u-1', state: 'started' })
+  await tick()
+  const login = session.capabilities.auth!.reconnect().catch(() => undefined)
+  for (let i = 0; i < 4; i += 1) await tick()
+  check('the /login reconnect is deferred behind the running turn', fake.queries.length === 1 && !fake.queries[0]!.closed)
+  let releaseImage: (() => void) | undefined
+  const imageGate = new Promise<void>(resolve => { releaseImage = () => resolve() })
+  const facade = { id: 'gate-5', width: 4, height: 3, mediaType: 'image/png', bytes: RED.byteLength, read: () => imageGate.then(() => RED) }
+  const submitting = session.submit({ text: 'meanwhile', images: [facade as never], clientMessageId: 'u-2' }, 'followup').then(() => 'accepted', (error: unknown) => `refused: ${error instanceof Error ? error.message : String(error)}`)
+  await tick()
+  releaseImage!()
+  const outcome = await within(submitting)
+  check('a read under a DEFERRED reconnect goes to the serving CLI at once', outcome === 'accepted' && fake.queries[0]!.inputs.some(input => input.uuid === 'u-2'), outcome)
+  fake.queries[0]!.emit({ type: 'result', subtype: 'success', is_error: false, result: 'done' })
+  await tick()
+  // The old CLI starts the queued input too — only then is the session
+  // idle enough for the deferred swap (nothing is left to re-push).
+  fake.queries[0]!.emit({ type: 'command_lifecycle', command_uuid: 'u-2', state: 'started' })
+  fake.queries[0]!.emit({ type: 'result', subtype: 'success', is_error: false, result: 'done too' })
+  await login
+  await tick()
+  check('… and the deferred reconnect swaps once the queue drained (nothing to re-push)', fake.queries.length === 2 && fake.queries[1]!.inputs.length === 0, fake.queries[1]?.inputs.map(input => input.uuid))
+  await session.dispose()
 }
 
 console.log(`\nverify-claude-images OK (${passed} checks)`)

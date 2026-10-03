@@ -27,7 +27,7 @@ import type { SessionControls } from './session-controls.js'
 export function createCapabilityDelegates(deps: {
   owner: Pick<ChannelOwner, 'current'>
   session(): AgentSession
-  state: () => Pick<ChannelState, 'provider' | 'backendCapabilities'>
+  state: () => Pick<ChannelState, 'provider' | 'backendCapabilities' | 'agentBindingGeneration'>
   notify: ChannelState['notify']
   unavailable(name: string): void
   unavailableLines(name: string): string[]
@@ -35,6 +35,19 @@ export function createCapabilityDelegates(deps: {
 }): Partial<ChannelActionDelegates> {
   const { notify, unavailable } = deps
   const caps = (): AgentSession['capabilities'] => deps.session().capabilities
+  /**
+   * An MCP answer is a fact of ONE session: both /mcp and the server controls
+   * run async against the bound session, and a '/new' or '/resume' may land
+   * before the answer does. The channel owner staying alive is not enough —
+   * this fence also captures the session and its binding generation, so a
+   * late answer of the replaced session (even of the SAME session re-bound a
+   * round trip later) writes neither the report nor a toast for its successor.
+   */
+  const mcpFence = (): { session: AgentSession; current(): boolean } => {
+    const session = deps.session()
+    const generation = deps.state().agentBindingGeneration
+    return { session, current: () => deps.owner.current() && deps.session() === session && deps.state().agentBindingGeneration === generation }
+  }
   const guarded = async <T>(name: string, fallback: T, run: () => Promise<T>): Promise<T> => {
     try {
       return await run()
@@ -87,7 +100,13 @@ export function createCapabilityDelegates(deps: {
     listEfforts: () => {
       const effort = caps().effort
       if (effort === undefined) { unavailable('effort'); return Promise.resolve({ efforts: [], defaultEffort: undefined }) }
-      return Promise.resolve({ efforts: effort.levels().map(level => ({ id: level.id, name: level.label })), defaultEffort: effort.current() })
+      const levels = effort.levels()
+      // The slider trusts this answer to have said why it cannot open (Chat
+      // returns silently for <= 1 tiers): a backend whose route exposes no (or
+      // a single) effort tier gets the same honesty the DSH specialist gives.
+      if (levels.length === 0) notify(t('effort-unsupported'), { color: 'warning' })
+      else if (levels.length === 1) notify(t('effort-single-tier', { name: levels[0]!.label }), { color: 'warning' })
+      return Promise.resolve({ efforts: levels.map(level => ({ id: level.id, name: level.label })), defaultEffort: effort.current() })
     },
     setEffort: id => guarded('effort', false, async () => {
       const effort = caps().effort
@@ -98,18 +117,20 @@ export function createCapabilityDelegates(deps: {
     mcpStatus: () => {
       if (caps().mcp === undefined) return deps.unavailableLines('mcp')
       // Synchronous by contract: the last report, and a fresh one for next time.
-      return deps.controls.mcpReport(deps.session(), () => deps.owner.current()) ?? [t('claude-mcp-loading')]
+      const fence = mcpFence()
+      return deps.controls.mcpReport(fence.session, fence.current) ?? [t('claude-mcp-loading')]
     },
     mcpControl: request => guarded('mcp', false, async () => {
       const mcp = caps().mcp
       const run = request.action === 'reconnect' ? mcp?.reconnect : mcp?.toggle
       if (mcp === undefined || run === undefined) { unavailable(`mcp ${request.action}`); return false }
+      const fence = mcpFence()
       if (request.action === 'reconnect') await mcp.reconnect!(request.name)
       else await mcp.toggle!(request.name, request.enabled)
-      if (deps.owner.current()) {
+      if (fence.current()) {
         notify(t(request.action === 'reconnect' ? 'mcp-reconnected' : request.enabled ? 'mcp-enabled' : 'mcp-disabled', { name: request.name }), { color: 'success' })
         // The next /mcp shows the new state.
-        deps.controls.mcpReport(deps.session(), () => deps.owner.current())
+        deps.controls.mcpReport(fence.session, fence.current)
       }
       return true
     }),

@@ -182,5 +182,164 @@ try {
   term.dispose()
 }
 
+// ── bare /effort on a FRESH channel: before any event or first prompt ──
+// The slider trusts listEfforts to have said why it cannot open (Chat
+// returns silently for <= 1 tiers). These mounts emit nothing and submit
+// nothing — exactly the fresh-startup shape where the levels list is
+// whatever the backend itself reports.
+const { applySidePanelSplitEnabled, applySidePanelOpen, applySidePanelPanels, getSidePanelSplitEnabled, getSidePanelOpen, getSidePanelPanels } = await import('../src/tuiDisplayPrefs.js')
+const freshSession = (capabilities: Partial<AgentSession['capabilities']>): AgentSession => ({
+  ref: { backendId: 'fake', sessionId: 'a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1' },
+  cwd: process.cwd(),
+  status: 'idle',
+  capabilities: { native: {}, ...capabilities },
+  history: () => Promise.resolve([]),
+  subscribe: () => () => undefined,
+  submit: () => Promise.resolve({ accepted: true }),
+  removePending: () => false,
+  cancel: () => Promise.resolve({ stillQueued: [] }),
+  dispose: () => Promise.resolve(),
+})
+const runEffortCase = async (label: string, levels: { id: string; label: string }[], current: string | undefined, expectToast: string | undefined, expectSlider: boolean): Promise<void> => {
+  const sets: string[] = []
+  const submits: AgentInput[] = []
+  const session = freshSession({
+    effort: { levels: () => levels, current: () => current, set: id => { sets.push(id); return Promise.resolve() } },
+  })
+  session.submit = input => { submits.push(input); return Promise.resolve({ accepted: true }) }
+  const channel = createChannel(ctx, session, { model: 'fake-model', provider: '', cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent' })
+  const term = new XTerm({ cols: 100, rows: 30, scrollback: 0, allowProposedApi: true })
+  class Out extends Writable { columns = 100; rows = 30; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
+  class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
+  const stdin = new In()
+  const instance = await ui.render(
+    React.createElement(Chat, { channel: channel as never, questionStore: new QuestionStore(), approvalStore: new ApprovalStore(), onExit: () => undefined, fullscreen: false, trajectorySeen: true }),
+    { stdout: new Out() as never, stdin: stdin as never, stderr: new Out() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  try {
+    await sleep(300) // 固定窗:pacing the key handlers attach after the first frame.
+    for (const char of '/effort') stdin.write(char)
+    await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
+    stdin.write('\r')
+    await sleep(200) // 固定窗:pacing listEfforts resolves and the overlay or toast paints.
+    const text = viewportLines(term, 30).join('\n')
+    const toasts = channel.notifications.map(item => item.text).join(' | ')
+    check(`${label}: the route answers with its toast`, expectToast === undefined || toasts.includes(expectToast), `${toasts} :: ${text}`)
+    check(`${label}: the slider opens only for a real range`, text.includes(t('picker-title-effort')) === expectSlider, text)
+    check(`${label}: nothing reached the model`, submits.length === 0, JSON.stringify(submits.map(input => input.text)))
+    if (expectSlider) {
+      stdin.write('\u001b[C')
+      await sleep(150) // 固定窗:pacing the live-apply keystroke lands on one setEffort call.
+      check(`${label}: → applies exactly one control set`, sets.length === 1 && sets[0] === 'medium', sets.join(','))
+      check(`${label}: the apply never submits either`, submits.length === 0, JSON.stringify(submits.map(input => input.text)))
+    }
+  } finally {
+    instance.unmount()
+    channel.releaseContributions()
+    term.dispose()
+  }
+}
+await runEffortCase('bare /effort with no tiers', [], undefined, t('effort-unsupported'), false)
+await runEffortCase('bare /effort with a single tier', [{ id: 'medium', label: 'Medium' }], 'medium', t('effort-single-tier', { name: 'Medium' }), false)
+await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' }], 'low', undefined, true)
+
+// ── /resume with the sidebar split open routes by workspace capability ──
+// The workspace PANEL reads the DSH workspace ledger. A backend without
+// that capability (the Claude browser shape) used to have its /resume
+// swallowed by the panel: no catalog read, no history on screen — while
+// the user asked for their sessions. Such backends keep the full-screen
+// supervisor; a DSH channel keeps the panel route.
+{
+  const previousSplit = getSidePanelSplitEnabled()
+  const previousOpen = getSidePanelOpen()
+  const previousPanels = getSidePanelPanels()
+  applySidePanelSplitEnabled(true)
+  applySidePanelPanels('info,workspace')
+  applySidePanelOpen(true)
+  const SPLIT_COLS = 150
+  const SPLIT_ROWS = 30
+  const mountSplitChat = async (session: AgentSession, launch: {
+    readonly model: string
+    readonly provider: string
+    readonly openSession?: (target: { kind: string; sessionId?: string; cwd?: string }) => Promise<AgentSession>
+    readonly sessionCatalog?: { list(): Promise<readonly unknown[]> }
+  }): Promise<{ text(): string; write(data: string): void; toasts(): string[]; unmount(): void }> => {
+    const term = new XTerm({ cols: SPLIT_COLS, rows: SPLIT_ROWS, scrollback: 0, allowProposedApi: true })
+    class Out extends Writable { columns = SPLIT_COLS; rows = SPLIT_ROWS; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
+    class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
+    const stdin = new In()
+    const channel = createChannel(ctx, session, {
+      model: launch.model, provider: launch.provider, cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent',
+      ...(launch.openSession === undefined ? {} : { openSession: launch.openSession }),
+      ...(launch.sessionCatalog === undefined ? {} : { sessionCatalog: launch.sessionCatalog }),
+    } as never)
+    const instance = await ui.render(
+      React.createElement(Chat, { channel: channel as never, questionStore: new QuestionStore(), approvalStore: new ApprovalStore(), onExit: () => undefined, fullscreen: true, trajectorySeen: true }),
+      { stdout: new Out() as never, stdin: stdin as never, stderr: new Out() as never, exitOnCtrlC: false, patchConsole: false },
+    )
+    return {
+      text: () => viewportLines(term, SPLIT_ROWS).join('\n'),
+      write: (data: string) => { stdin.write(data) },
+      toasts: () => channel.notifications.map(item => item.text),
+      unmount: () => { instance.unmount(); channel.releaseContributions(); term.dispose() },
+    }
+  }
+  try {
+    // The Claude shape: resume wired, no workspace capability.
+    let catalogReads = 0
+    const opened: string[] = []
+    const historyId = 'c7c7c7c7-c7c7-47c7-87c7-c7c7c7c7c7c7'
+    const stamp = Date.now()
+    const historyRow = {
+      id: historyId, kind: { kind: 'root' }, title: { text: 'claude history session', source: 'prompt' },
+      cwd: process.cwd(), createdAt: stamp - 60_000, updatedAt: stamp - 30_000, bytes: 2048, hasPrompt: true,
+      agentPreset: 'standard', model: 'claude-opus', label: undefined, branch: 'main', childCount: 0, backendId: 'fake',
+    }
+    const claude = await mountSplitChat(freshSession({}), {
+      model: 'claude-opus',
+      provider: '',
+      openSession: async target => {
+        opened.push(`${target.kind}:${target.sessionId ?? target.cwd ?? ''}`)
+        return freshSession({})
+      },
+      sessionCatalog: { list: async () => { catalogReads += 1; return [historyRow] } },
+    })
+    try {
+      await sleep(300) // 固定窗:pacing the key handlers attach after the first frame.
+      for (const char of '/resume') claude.write(char)
+      await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
+      claude.write('\r')
+      check('/resume with the sidebar open lists the backend history', await settled(() => claude.text().includes('claude history session'), { timeoutMs: 6_000 }), claude.text())
+      check('… reading the catalog rather than opening the workspace panel', catalogReads >= 1, String(catalogReads))
+      check('… the workspace panel stayed closed', !claude.text().includes(t('panel-workspace-current')), claude.text())
+      claude.write('\u001b[C')
+      await sleep(60) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
+      claude.write('\u001b[B')
+      await sleep(60) // 固定窗:pacing 让光标移动渲染一帧
+      claude.write('\r')
+      check('Enter on the history row really opens it through the backend', await settled(() => opened.includes(`resume:${historyId}`), { timeoutMs: 6_000 }), opened.join(' '))
+    } finally { claude.unmount() }
+
+    // The DSH shape keeps today's panel route (positive control).
+    const stubAgentCtx = { on: () => () => undefined }
+    const agent = {
+      id: 'dsh-1', status: 'idle', session: { id: 'dsh-1', seq: 0, events: [] }, ctx: stubAgentCtx,
+      followup: () => undefined, steer: () => undefined, inbox: { remove: () => true },
+    }
+    const dsh = await mountSplitChat(agent as never, { model: 'deepseek-chat', provider: 'deepseek' })
+    try {
+      await sleep(300) // 固定窗:pacing the key handlers attach after the first frame.
+      for (const char of '/home') dsh.write(char)
+      await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
+      dsh.write('\r')
+      check('a DSH /home with the sidebar open routes to the workspace panel', await settled(() => dsh.text().includes(t('panel-workspace-current')), { timeoutMs: 6_000 }), dsh.text())
+      check('… and not to the full-screen supervisor', !dsh.text().includes('Sessions in'), dsh.text())
+    } finally { dsh.unmount() }
+  } finally {
+    applySidePanelSplitEnabled(previousSplit)
+    applySidePanelOpen(previousOpen)
+    applySidePanelPanels(previousPanels)
+  }
+}
 console.log(`\nverify-backend-chat OK (${passed} checks)`)
 process.exit(0)

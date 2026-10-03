@@ -103,16 +103,34 @@ const answer = (...items: { selected?: string[]; custom?: string }[]) => ({ answ
       subscribe: { type: 'boolean', default: true },
       tags: { type: 'array', items: { type: 'string', enum: ['x', 'y'] } },
       email: { type: 'string', format: 'email', description: 'Where to write' },
+      when: { type: 'string', format: 'date' },
+      stamp: { type: 'string', format: 'date-time' },
       extra: { type: 'object' },
     },
     required: ['name', 'age', 'color', 'size'],
   })
-  check('fields keep declaration order and kinds', fields.map(field => `${field.key}:${field.kind}:${field.required ? 'req' : 'opt'}`).join() === 'name:text:req,age:integer:req,color:choice:req,size:choice:req,subscribe:boolean:opt,tags:multi:opt,email:text:opt,extra:json:opt', fields.map(field => field.kind))
+  check('fields keep declaration order and kinds', fields.map(field => `${field.key}:${field.kind}:${field.required ? 'req' : 'opt'}`).join() === 'name:text:req,age:integer:req,color:choice:req,size:choice:req,subscribe:boolean:opt,tags:multi:opt,email:text:opt,when:text:opt,stamp:text:opt,extra:json:opt', fields.map(field => field.kind))
   check('enum titles: enumNames and oneOf const/title', JSON.stringify(fields[2]!.choices) === JSON.stringify([{ label: 'Red', value: 'red' }, { label: 'Green', value: 'green' }]) && fields[3]!.choices?.[1]?.label === 'Large')
   const value = (key: string, text: string) => parseFieldText(fields.find(field => field.key === key)!, text)
   check('integer: parsed as a number; a fraction, a word, out of range refused', JSON.stringify(value('age', '42')) === '{"value":42}' && 'error' in value('age', '4.5') && 'error' in value('age', 'old') && 'error' in value('age', '151'))
   check('string: minLength and email format', 'error' in value('name', 'A') && 'value' in value('name', 'Ann') && 'error' in value('email', 'nope') && 'value' in value('email', 'a@b.co'))
   check('an object field (not an MCP primitive) is refused as text', 'error' in value('extra', '{"a":1}'))
+  // Date.parse cannot judge RFC3339 dates: it rolls 2024-02-31 over into
+  // March instead of refusing it, so the calendar is checked for real.
+  check('date: a real calendar day (rollovers refused, leap days kept)',
+    'value' in value('when', '2024-02-29') && 'value' in value('when', '2023-12-31')
+    && 'error' in value('when', '2024-02-31') && 'error' in value('when', '2023-02-29') && 'error' in value('when', '2024-04-31') && 'error' in value('when', '2024-13-01') && 'error' in value('when', '02/29/2024'))
+  // Full RFC3339: the timezone is required and explicit (never the local
+  // fallback), the day real, the clock within range, t/z lower case legal,
+  // fractional seconds and numeric offsets kept.
+  check('date-time: full RFC3339 — timezone required, real day, clock in range',
+    'value' in value('stamp', '2024-01-01T00:00:00Z') && 'value' in value('stamp', '2024-01-01t00:00:00z')
+    && 'value' in value('stamp', '2024-06-15T12:30:45-05:30') && 'value' in value('stamp', '2024-01-01T00:00:00.123Z') && 'value' in value('stamp', '2024-01-01T23:59:59.5+00:00')
+    && 'error' in value('stamp', '2024-01-01T00:00:00') && 'error' in value('stamp', '2024-02-30T10:00:00Z') && 'error' in value('stamp', '2024-01-01T24:00:00Z') && 'error' in value('stamp', '2024-01-01T00:00:00+8:00') && 'error' in value('stamp', '2024-01-01 00:00:00Z'))
+  // A leap second is legal RFC3339 syntax (Date.parse would refuse it);
+  // whether the day really had one stays the server's to check.
+  check('date-time: a leap second is legal syntax',
+    'value' in value('stamp', '2016-12-31T23:59:60Z') && 'value' in value('stamp', '2017-01-01T07:59:60+08:00') && 'error' in value('stamp', '2024-01-01T00:00:61Z'))
 }
 
 // ── form mode: ask, re-ask the invalid, accept typed content ────────────

@@ -27,7 +27,7 @@
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -233,6 +233,100 @@ const chain = (id: string) => [
   writeFileSync(join(dir, 'prefs.json'), '{ broken')
   check('a corrupt prefs file reads as no choice', JSON.stringify(file.read()) === '{}')
   rmSync(join(dir, 'prefs.json'))
+}
+
+// ── prefs writes never expose a torn document ──────────────────────────
+{
+  const dir = join(home, 'atomic', 'claude')
+  mkdirSync(dir, { recursive: true })
+  const debugged: string[] = []
+  const prefs = fileClaudePrefs(dir, message => debugged.push(message))
+  prefs.write({ model: 'opus' })
+  // A near-limit document (200 colours + 200 MRU notes) widens the window
+  // a plain O_TRUNC write leaves the file truncated for.
+  for (let i = 0; i < 200; i++) prefs.setColor(`s-${i}`, '#0a0b0c')
+  for (let i = 0; i < 200; i++) prefs.touch(`t-${i}`)
+  // A real second process hammers the same file through the same API —
+  // two terminals, no synthetic fs — while this one keeps reading (and
+  // writing); whatever a reader sees must be a complete JSON document,
+  // and the shared fields (the model pick) must survive the storm.
+  const PREFS_URL = new URL('../src/backends/claude/prefs.ts', import.meta.url).href
+  const ready = join(dir, 'writer-ready')
+  const writer = spawn(process.execPath, ['--import', 'tsx/esm', '-e',
+    `const m = await import(${JSON.stringify(PREFS_URL)}); const fs = await import('node:fs'); const p = m.fileClaudePrefs(${JSON.stringify(dir)}); fs.writeFileSync(${JSON.stringify(ready)}, ''); const end = Date.now() + 2500; let i = 0; while (Date.now() < end) { p.setColor('peer-' + (i % 60), '#abcdef'); p.touch('peer-' + (i % 60)); i++ }`],
+    { stdio: 'ignore', env: { ...process.env } })
+  // The exit promise is armed at once (a child that dies before the ready
+  // marker settles the await instead of hanging the test).
+  const exited = new Promise<void>(resolve => {
+    writer.once('exit', () => resolve())
+    writer.once('error', () => resolve())
+  })
+  // A ready marker written by the child itself: the storm below only counts
+  // once the writer is really hammering (a dead child would fail here).
+  check('prefs: the concurrent writer came up', await settled(() => existsSync(ready), { timeoutMs: 15_000 }))
+  // 固定窗:墙钟 a fixed observation window: the child hammers for 2.5 s,
+  // this loop reads (and writes) for 3 s — long enough to overlap the whole
+  // storm deterministically without extending the run on failure.
+  const deadline = Date.now() + 3000
+  let torn = 0
+  let reads = 0
+  while (Date.now() < deadline) {
+    reads += 1
+    try {
+      JSON.parse(readFileSync(join(dir, 'prefs.json'), 'utf8'))
+    } catch {
+      torn += 1
+    }
+    prefs.touch(`main-${reads % 20}`)
+  }
+  await exited
+  rmSync(ready, { force: true })
+  check('prefs: the concurrent writer ran to completion', writer.exitCode === 0, writer.exitCode)
+  check('prefs: a concurrent reader never sees a torn document', torn === 0, `${torn} torn of ${reads} reads`)
+  const final = JSON.parse(readFileSync(join(dir, 'prefs.json'), 'utf8')) as Record<string, unknown>
+  check('prefs: the storm never wipes the model choice', final.model === 'opus', Object.keys(final))
+  check('prefs: no temporary litter is left behind', readdirSync(dir).filter(name => name.endsWith('.tmp')).length === 0, readdirSync(dir))
+
+  // A failed commit reports, keeps the previous document and cleans its
+  // temporary (the target being a directory makes the rename fail).
+  const debuggedSoFar = debugged.length
+  rmSync(join(dir, 'prefs.json'))
+  mkdirSync(join(dir, 'prefs.json'))
+  prefs.write({ model: 'haiku' })
+  check('prefs: a failed commit keeps the target and leaves no temp', debugged.length === debuggedSoFar + 1 && readdirSync(dir).join() === 'prefs.json' && JSON.stringify(prefs.read()) === '{}', debugged)
+  rmSync(dir, { recursive: true, force: true })
+}
+
+// A rename that fails mid-commit leaves the previous document — a VALID
+// prefs file, byte-for-byte — and its temporary is cleaned; the next write
+// still succeeds. The failure is injected through the default fs export
+// for this process only (`syncBuiltinESMExports` from node:module makes
+// the named bindings follow; the storm child above keeps the real one).
+{
+  const dir = join(home, 'atomic-fail', 'claude')
+  mkdirSync(dir, { recursive: true })
+  const debugged: string[] = []
+  const prefs = fileClaudePrefs(dir, message => debugged.push(message))
+  prefs.write({ model: 'opus' })
+  prefs.touch('keep-1')
+  const before = readFileSync(join(dir, 'prefs.json'), 'utf8')
+  const fsDefault = (await import('node:fs')).default
+  const { syncBuiltinESMExports } = await import('node:module')
+  const realRename = fsDefault.renameSync
+  let injections = 0
+  try {
+    fsDefault.renameSync = () => { injections += 1; throw new Error('injected rename failure') }
+    syncBuiltinESMExports()
+    prefs.write({ model: 'haiku' })
+  } finally {
+    fsDefault.renameSync = realRename
+    syncBuiltinESMExports()
+  }
+  check('prefs: a failed rename keeps the previous document byte-for-byte', readFileSync(join(dir, 'prefs.json'), 'utf8') === before && (JSON.parse(before) as Record<string, unknown>).model === 'opus' && injections === 1, { injections, head: before.slice(0, 40) })
+  check('prefs: the failed commit is reported and leaves no temp', debugged.length === 1 && readdirSync(dir).join() === 'prefs.json', debugged)
+  prefs.write({ model: 'sonnet' })
+  check('prefs: the next write after a failed one succeeds', (JSON.parse(readFileSync(join(dir, 'prefs.json'), 'utf8')) as Record<string, unknown>).model === 'sonnet')
+  rmSync(join(home, 'atomic-fail'), { recursive: true, force: true })
 }
 
 // ── the channel: browser, /resume, ledger, rename/delete, /fork, rewind ──

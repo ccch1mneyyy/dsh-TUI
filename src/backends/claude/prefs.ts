@@ -10,7 +10,7 @@
  * reads as "no choice", a failed write is reported to the caller's debug
  * log and the session carries on.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from '../../utils/paths.js'
 
@@ -130,6 +130,32 @@ function forgotten(current: ClaudePrefsData, sessionId: string): ClaudePrefsData
   return next as ClaudePrefsData
 }
 
+/** Names one not-yet-used temporary per commit (`writePinsAtomic` pattern). */
+let temporarySequence = 0
+
+/** The retry cell for `renameIntoPlace` (a synchronous bounded wait). */
+const waitCell = new Int32Array(new SharedArrayBuffer(4))
+
+/**
+ * Rename a same-directory temporary over the target. Windows can transiently
+ * refuse the move while another process holds the target open (EPERM/EBUSY),
+ * so on Windows that pair alone is retried briefly with a short synchronous
+ * pause; any other refusal (POSIX EACCES/EXDEV among them) is real and
+ * thrown at once, leaving the caller's previous document intact.
+ */
+function renameIntoPlace(temporary: string, target: string): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      renameSync(temporary, target)
+      return
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null ? String((error as NodeJS.ErrnoException).code) : ''
+      if (process.platform !== 'win32' || attempt >= 7 || (code !== 'EPERM' && code !== 'EBUSY')) throw error
+      Atomics.wait(waitCell, 0, 0, 2 ** attempt)
+    }
+  }
+}
+
 /** The file-backed prefs under `<dir>` (default `~/.dsh-tui/backends/claude`). */
 export function fileClaudePrefs(dir: string = join(DATA_DIR, 'backends', 'claude'), debug: (message: string) => void = () => undefined): ClaudePrefs {
   const path = join(dir, FILE)
@@ -141,10 +167,23 @@ export function fileClaudePrefs(dir: string = join(DATA_DIR, 'backends', 'claude
     }
   }
   const save = (next: ClaudePrefsData): void => {
+    // Same-directory temporary + rename: a plain `writeFileSync` truncates
+    // the target first, so another terminal's read-modify-write in that
+    // window starts from `{}` and wipes every field it does not know
+    // (model, effort, colours, MRU). The rename is atomic — a reader (or a
+    // concurrent writer's read) sees the old or the new document, never a
+    // truncated one. A failed commit leaves the previous document intact.
+    const temporary = join(dir, `${FILE}.${process.pid}.${Date.now()}.${temporarySequence++}.tmp`)
     try {
       mkdirSync(dir, { recursive: true })
-      writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`)
+      writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+      renameIntoPlace(temporary, path)
     } catch (error) {
+      try {
+        rmSync(temporary, { force: true })
+      } catch {
+        // The previous document is still intact; nothing else is safe to do.
+      }
       debug(`claude: prefs write failed (${error instanceof Error ? error.message : String(error)})`)
     }
   }

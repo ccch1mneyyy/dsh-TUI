@@ -2784,9 +2784,17 @@ export function Chat({
         setHelpOpen(false)
         // Split-aware, like /trace and /jobs: while the sidebar is rendering
         // and the workspace panel is enabled, the workspace view opens THERE.
-        // The panel's own ⤢ goes back to the full-screen home.
+        // The panel's own ⤢ goes back to the full-screen home. The panel reads
+        // the DSH workspace ledger, though: a backend without that capability
+        // (capability snapshots absent on test stubs = DSH) would have its
+        // /resume swallowed by an unsupported panel and no history anywhere —
+        // those keep the full-screen session supervisor.
+        const capabilities = channel.backendCapabilities as Channel['backendCapabilities'] | undefined
         const controller = sidePanelRef.current
-        if (controller !== null && controller.split && controller.enabledPanelIds.includes('workspace')) {
+        if (
+          (capabilities === undefined || capabilities.commands.includes('workspace'))
+          && controller !== null && controller.split && controller.enabledPanelIds.includes('workspace')
+        ) {
           controller.openPanel('workspace', { focus: true })
           return true
         }
