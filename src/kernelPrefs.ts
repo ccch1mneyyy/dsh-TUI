@@ -87,12 +87,29 @@ function normalizeBackend(value: string | undefined): KernelBackendId | undefine
 }
 
 /**
- * boot 时的内核选择（plugin.ts 的 backendChoice）：显式 Config 行或
+ * 一次性内核切换 handoff 的 env 载体（r1-stability S01）。restartTui 的
+ * backend 选项与 launcher 的崩溃重试把**本次 boot 必须落到的内核**放进
+ * 它；boot（plugin.ts）读到后立即从 process.env 删除——一次性、只属于
+ * 这一个进程。它与普通 DSH_TUI_BACKEND 的区别正是它在 resolver 里的
+ * 位置：压过 Config 行。没有它，显式 backend: dsh 的配置会让「选择器
+ * 本次切换」白重启一回（替换进程明明带着 DSH_TUI_BACKEND=claude 来，
+ * 却被 config 行挡回 dsh）。普通冷启动的 config > env > memory 合同
+ * （K7）不动。
+ */
+export const KERNEL_SWITCH_HANDOFF_ENV = 'DSH_TUI_BACKEND_HANDOFF'
+
+/**
+ * boot 时的内核选择（plugin.ts 的 backendChoice）：一次性切换 handoff
+ * （KERNEL_SWITCH_HANDOFF_ENV 的合法值）压过一切；否则显式 Config 行或
  * DSH_TUI_BACKEND 永远优先；其次选择器记忆；否则 dsh。**非法** env 值仍落
- * dsh——boot 警告原文就是 "starting on dsh"，不能让它掉到记忆上。纯函数：
- * 不读不写（记忆只被选择器的确认路径写，见 writeKernelPrefs 的注释）。
+ * dsh——boot 警告原文就是 "starting on dsh"，不能让它掉到记忆上；非法
+ * handoff 同理按不存在处理。纯函数：不读不写（记忆只被选择器的确认路径
+ * 写，见 writeKernelPrefs 的注释）。
  */
 export function resolveRememberedBackend(input: {
+  /** 一次性切换 handoff（KERNEL_SWITCH_HANDOFF_ENV 归一后）；只在切换/
+   *  崩溃重试链上出现，普通启动恒 undefined。 */
+  readonly handoff?: KernelBackendId | undefined
   /** Config.backend（schema 已归一）。 */
   readonly configured?: KernelBackendId | undefined
   /** process.env.DSH_TUI_BACKEND 原文。 */
@@ -100,6 +117,7 @@ export function resolveRememberedBackend(input: {
   /** kernel.json 记住的内核。 */
   readonly memory?: KernelBackendId | undefined
 }): KernelBackendId {
+  if (input.handoff === 'dsh' || input.handoff === 'claude') return input.handoff
   if (input.configured === 'dsh' || input.configured === 'claude') return input.configured
   const env = normalizeBackend(input.envRaw)
   if (env !== undefined) return env

@@ -51,20 +51,65 @@ const MAX_TEXT_CHARS = 32 * 1024
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
-/** Stringify without letting a hostile toString/symbol take the path down. */
+/** Fixed literal for values whose own conversion machinery throws: the crash
+ * path's diagnostics must degrade to SOMETHING, never re-read the hostile
+ * value (r1-stability S03). */
+export const UNSERIALIZABLE = '[unserializable value]'
+
+/**
+ * Read one property of a maybe-hostile record; a throwing getter (defined
+ * accessor, Proxy get trap) degrades to undefined instead of escaping the
+ * serializer. The crash funnel runs AFTER the exit latch is set, so an
+ * escaping read here would skip every cleanup below it (S03).
+ */
+function safeProp(record: Record<string, unknown>, key: string): unknown {
+  try {
+    return record[key]
+  } catch {
+    return undefined
+  }
+}
+
+/** instanceof through a maybe-hostile value: a Proxy can trap
+ * getPrototypeOf too, and that must degrade the same way as a property read. */
+function safeInstanceOfError(value: unknown): boolean {
+  try {
+    return value instanceof Error
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Three-tier stringify: String(value), then Object.prototype.toString.call
+ * (itself re-wrapped — a Symbol.toStringTag getter can throw too), then the
+ * fixed literal. Never throws.
+ */
 function safeString(value: unknown): string {
   try {
     return String(value)
   } catch {
-    return Object.prototype.toString.call(value)
+    // Fall through to the second conversion.
   }
+  try {
+    return Object.prototype.toString.call(value)
+  } catch {
+    // Fall through to the fixed literal.
+  }
+  return UNSERIALIZABLE
 }
 
 function serializeLevel(error: unknown): CrashDetailLevel {
-  if (error instanceof Error) {
-    const name = typeof error.name === 'string' && error.name !== '' ? error.name : 'Error'
-    const stack = typeof error.stack === 'string' && error.stack !== '' ? error.stack : undefined
-    return { name, message: error.message, ...(stack === undefined ? {} : { stack }) }
+  if (safeInstanceOfError(error) && isRecord(error)) {
+    const rawName = safeProp(error, 'name')
+    const rawStack = safeProp(error, 'stack')
+    const rawMessage = safeProp(error, 'message')
+    const name = typeof rawName === 'string' && rawName !== '' ? rawName : 'Error'
+    const stack = typeof rawStack === 'string' && rawStack !== '' ? rawStack : undefined
+    // A non-string message still stringifies (a hostile Error can carry 42);
+    // only a THROWING conversion degrades to the fixed literal.
+    const message = typeof rawMessage === 'string' ? rawMessage : safeString(rawMessage)
+    return { name, message, ...(stack === undefined ? {} : { stack }) }
   }
   return { name: typeof error, message: safeString(error) }
 }
@@ -83,19 +128,21 @@ export function serializeCrashDetail(error: unknown): CrashDetail {
   // Follow .cause links (ES2022 Error cause + manually attached ones); the
   // seen-set stops self/mutual references, the cap stops absurd chains.
   const seen = new Set<unknown>([error])
-  let current = isRecord(error) ? error.cause : undefined
+  let current = isRecord(error) ? safeProp(error, 'cause') : undefined
   while (levels.length < MAX_CAUSE_LEVELS && current !== undefined && current !== null && !seen.has(current)) {
     seen.add(current)
     levels.push(serializeLevel(current))
-    current = isRecord(current) ? current.cause : undefined
+    current = isRecord(current) ? safeProp(current, 'cause') : undefined
   }
   const head = levels[0]
+  const rawComponentStack = isRecord(error) ? safeProp(error, 'componentStack') : undefined
+  const rawDigest = isRecord(error) ? safeProp(error, 'digest') : undefined
   const componentStack =
-    isRecord(error) && typeof error.componentStack === 'string' && error.componentStack !== ''
-      ? error.componentStack
+    typeof rawComponentStack === 'string' && rawComponentStack !== ''
+      ? rawComponentStack
       : undefined
-  const digest = isRecord(error) && typeof error.digest === 'string' && error.digest !== '' ? error.digest : undefined
-  const summary = error instanceof Error ? `${head.name}: ${head.message}` : head.message
+  const digest = typeof rawDigest === 'string' && rawDigest !== '' ? rawDigest : undefined
+  const summary = safeInstanceOfError(error) ? `${head.name}: ${head.message}` : head.message
   const lines: string[] = [`dsh-tui crashed: ${summary}`]
   levels.forEach((level, index) => {
     lines.push(`level ${index}${index === 0 ? '' : ' (cause)'}: ${level.name}: ${level.message}`)
@@ -112,6 +159,27 @@ export function serializeCrashDetail(error: unknown): CrashDetail {
     ...(componentStack === undefined ? {} : { componentStack }),
     ...(digest === undefined ? {} : { digest }),
     summary,
+    text,
+  }
+}
+
+/**
+ * The fixed-literal crash detail for when the diagnostics chain itself fails
+ * (a serializer escape, a throwing log sink): built ONLY from literals — it
+ * never re-reads anything on the thrown value, so it cannot throw either.
+ * The funnel's crash tail falls back to this so the resume-marker write and
+ * the terminal cleanup below it still run (r1-stability S03).
+ */
+export function unserializableCrashDetail(): CrashDetail {
+  const text = [
+    `dsh-tui crashed: ${UNSERIALIZABLE}`,
+    `level 0: Error: ${UNSERIALIZABLE}`,
+    '(crash detail serialization failed; every property of the thrown value was left unread)',
+  ].join('\n')
+  return {
+    message: UNSERIALIZABLE,
+    levels: [{ name: 'Error', message: UNSERIALIZABLE }],
+    summary: `Error: ${UNSERIALIZABLE}`,
     text,
   }
 }

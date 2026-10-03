@@ -26,7 +26,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { appendCrashLog, formatCrashLogLine, serializeCrashDetail, type CrashDetail } from '../src/utils/crashDetail.js'
+import { appendCrashLog, formatCrashLogLine, serializeCrashDetail, UNSERIALIZABLE, unserializableCrashDetail, type CrashDetail } from '../src/utils/crashDetail.js'
 
 let passed = 0
 const check = (label: string, ok: boolean, detail?: unknown): void => {
@@ -123,10 +123,93 @@ try {
   rmSync(dir, { recursive: true, force: true })
 }
 
+// ── hostile throwables (r1-stability S03): getters, Proxy traps, and a
+// toString + Symbol.toStringTag double-throw must degrade, never escape ──
+class HostileError extends Error {
+  constructor() {
+    super('real message')
+    const boom = (): never => { throw new Error('getter boom') }
+    Object.defineProperties(this, {
+      name: { get: boom, configurable: true },
+      stack: { get: boom, configurable: true },
+      message: { get: boom, configurable: true },
+      cause: { get: boom, configurable: true },
+      componentStack: { get: boom, configurable: true },
+      digest: { get: boom, configurable: true },
+    })
+  }
+}
+let hostileThrew = false
+let hostileDetail: CrashDetail | undefined
+try {
+  hostileDetail = serializeCrashDetail(new HostileError())
+} catch {
+  hostileThrew = true
+}
+check('throwing getters on every read property never escape the serializer', !hostileThrew, 'serializeCrashDetail threw')
+check(
+  'throwing getters degrade to bounded literals (no stack, no extras, bounded message)',
+  hostileDetail !== undefined && hostileDetail.stack === undefined && hostileDetail.componentStack === undefined
+    && hostileDetail.digest === undefined && hostileDetail.levels.length === 1
+    && typeof hostileDetail.message === 'string' && hostileDetail.message.length <= 64,
+  hostileDetail?.message,
+)
+{
+  // A Proxy whose get trap throws for every key (instanceof still resolves
+  // through the default prototype trap, so the Error branch is taken).
+  const inner = new Error('proxied')
+  const proxy = new Proxy(inner, {
+    get() { throw new Error('proxy get boom') },
+  })
+  let threw = false
+  let detail: CrashDetail | undefined
+  try {
+    detail = serializeCrashDetail(proxy)
+  } catch {
+    threw = true
+  }
+  check('Proxy get trap never escapes the serializer', !threw)
+  check('Proxy detail is bounded (name/stack degrade, cause chain stops)', detail !== undefined && detail.levels.length === 1, detail?.levels.length)
+}
+{
+  // toString AND Symbol.toStringTag both throw: safeString's second
+  // conversion is itself wrapped and the fixed literal is the floor.
+  const doubleThrow: object = {
+    toString() { throw new Error('toString boom') },
+    get [Symbol.toStringTag]() { throw new Error('toStringTag boom') },
+  }
+  let threw = false
+  let detail: CrashDetail | undefined
+  try {
+    detail = serializeCrashDetail(doubleThrow)
+  } catch {
+    threw = true
+  }
+  check('toString + toStringTag double-throw never escapes', !threw)
+  check('double-throw degrades to the fixed literal', detail !== undefined && detail.message === UNSERIALIZABLE && detail.summary === UNSERIALIZABLE, detail?.message)
+  check('a hostile link in the cause chain degrades without breaking the walk', (() => {
+    const head = new Error('head ok')
+    ;(head as Error & { cause?: unknown }).cause = doubleThrow
+    const d = serializeCrashDetail(head)
+    return d.levels.length === 2 && d.levels[0]?.message === 'head ok' && d.levels[1]?.message === UNSERIALIZABLE
+  })())
+}
+{
+  // The funnel's fixed-literal fallback: built from literals only, cannot
+  // throw, and keeps the crash.log header shape (starts "dsh-tui crashed: ").
+  const fallback = unserializableCrashDetail()
+  check('unserializableCrashDetail is pure literals with the header shape',
+    fallback.message === UNSERIALIZABLE && fallback.levels.length === 1 && fallback.summary === ('Error: ' + UNSERIALIZABLE)
+      && fallback.text.startsWith('dsh-tui crashed: '),
+    fallback.text.split('\n')[0])
+  check('unserializableCrashDetail is stable across calls (no clock/pid reads)', JSON.stringify(unserializableCrashDetail()) === JSON.stringify(fallback))
+}
+
 // ── funnel wiring tripwire: reverting plugin.ts to message-only goes red ──
 const plugin = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
-check('funnel serializes the crash', plugin.includes('serializeCrashDetail(error)'), 'plugin.ts crash branch no longer calls serializeCrashDetail')
-check('funnel appends to crash.log', plugin.includes('appendCrashLog(detail)'), 'plugin.ts crash branch no longer calls appendCrashLog')
+check('funnel serializes the crash', plugin.includes('(deps.serialize ?? serializeCrashDetail)(deps.error)'), 'plugin.ts crash branch no longer calls serializeCrashDetail')
+check('funnel appends to crash.log', plugin.includes('appendLog: appendCrashLog'), 'plugin.ts crash branch no longer calls appendCrashLog')
+check('funnel crash tail degrades diagnostics independently of cleanup (S03)', plugin.includes('export function runCrashExit'), 'plugin.ts runCrashExit extraction is gone')
 
 // ── regression note: a deep-but-finite chain is capped, not dropped ──
 const chain: Error[] = []

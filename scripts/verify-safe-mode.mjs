@@ -33,6 +33,7 @@
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import vm from 'node:vm'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -338,6 +339,149 @@ const cleanManifest = {
     // 抛 ERR_UNKNOWN_SIGNAL（实测）。
     const r = runFb({ DSH_STUB_PROFILE_SIGNAL: 'SIGINT' })
     check('fallback: 信号透传且无 safe 提示', r.status === null && r.signal === 'SIGINT' && !r.stderr.includes('dsh-tui safe'), `signal=${r.signal}`)
+  }
+}
+
+// --- 安全重试的后端限定身份（r1-stability S02）----------------------------------
+// resumeEnvForRetry 的权威次序：**本链**写下的 ~/.dsh-tui/last-run.json（由
+// 最后运行的 TUI 实例写入——内核切换后外层 env 仍指向原内核）> 用户显式
+// --resume 输入（仅当没有本链记录时）> 旧嗅探逻辑。这里用 node:vm 驱动
+// **bin 里的真实函数文本**（非 TTY 走不到重试菜单，无法整进程驱动）：从
+// bin/dsh-tui.js 切出 readLastRunRecord/envFromLastRun/noteLaunchChain/
+// readClaudeLastSession/resumeEnvForRetry，注入受控的 homedir/process.env。
+{
+  const binSource = readFileSync(bin, 'utf8')
+  const fromMarker = 'const readLastRunRecord = () => {'
+  const from = binSource.indexOf(fromMarker)
+  const to = binSource.indexOf('// TTY 判定：')
+  if (from < 0 || to < 0 || to < from) throw new Error('bin retry section not found for S02 extraction')
+  const section = binSource.slice(from, to)
+  const makeLauncher = ({ env, home }) => {
+    const sandboxProcess = { env }
+    const context = {
+      readFileSync,
+      join,
+      homedir: () => home,
+      process: sandboxProcess,
+    }
+    context.globalThis = context
+    const factory = new vm.Script(
+      '(function () {\n' + section + '\nreturn { readLastRunRecord, envFromLastRun, resumeEnvForRetry, noteLaunchChain }\n})()',
+    )
+    return factory.runInNewContext(context)
+  }
+  const chainHome = join(tmp, 's02-chain')
+  const chainDotTui = join(chainHome, '.dsh-tui')
+  const writeRecord = (home, record) => {
+    mkdirSync(join(home, '.dsh-tui'), { recursive: true })
+    writeFileSync(join(home, '.dsh-tui', 'last-run.json'), JSON.stringify(record), 'utf8')
+  }
+  // C1 主链路（报告原场景）：外层 --backend dsh 启动 → TUI 内选 Claude →
+  // 替换的 Claude 实例写下记录 → 非零退出 → 重试必须恢复刚崩的 Claude 会话。
+  {
+    const launcher = makeLauncher({ env: { DSH_TUI_BACKEND: 'dsh', DSH_TUI_RESUME_SESSION: 'dsh-old-1' }, home: chainHome })
+    launcher.noteLaunchChain(false)
+    // 替换实例在链上晚于 launcher 启动写下记录（updatedAt > startedAt）。
+    writeRecord(chainHome, { backendId: 'claude', sessionId: 'claude-42', cwd: 'D:/w', attemptId: 'b2', updatedAt: Date.now() + 5000 })
+    const env = launcher.resumeEnvForRetry()
+    check(
+      'S02 重试: 本链记录恢复刚崩的内核与会话（backend=claude + handoff=claude + resume=claude-42，不回 dsh）',
+      env.DSH_TUI_BACKEND === 'claude' && env.DSH_TUI_BACKEND_HANDOFF === 'claude' && env.DSH_TUI_RESUME_SESSION === 'claude-42',
+      'backend=' + env.DSH_TUI_BACKEND + ' handoff=' + env.DSH_TUI_BACKEND_HANDOFF + ' resume=' + env.DSH_TUI_RESUME_SESSION,
+    )
+  }
+  // C2 空 env（第二形态）：外层什么都没带，kernel.json 已记 Claude——记录仍是权威。
+  {
+    const launcher = makeLauncher({ env: {}, home: chainHome })
+    launcher.noteLaunchChain(false)
+    writeRecord(chainHome, { backendId: 'claude', sessionId: 'claude-43', cwd: 'D:/w', attemptId: 'b3', updatedAt: Date.now() + 5000 })
+    const env = launcher.resumeEnvForRetry()
+    check(
+      'S02 重试: 空 env 也按记录走（claude + claude-43），不按 dsh 分支读 resume.txt',
+      env.DSH_TUI_BACKEND === 'claude' && env.DSH_TUI_BACKEND_HANDOFF === 'claude' && env.DSH_TUI_RESUME_SESSION === 'claude-43',
+      JSON.stringify({ b: env.DSH_TUI_BACKEND, r: env.DSH_TUI_RESUME_SESSION }),
+    )
+  }
+  // C3 显式旧 marker：本链有记录（切换是用户更新的选择）→ 记录赢、旧输入滤掉。
+  {
+    const launcher = makeLauncher({ env: { DSH_TUI_RESUME_SESSION: 'user-typed-dsh' }, home: chainHome })
+    launcher.noteLaunchChain(true)
+    writeRecord(chainHome, { backendId: 'claude', sessionId: 'claude-44', cwd: 'D:/w', attemptId: 'b4', updatedAt: Date.now() + 5000 })
+    const env = launcher.resumeEnvForRetry()
+    check(
+      'S02 重试: 显式旧 marker 让位给本链记录（用户切换过内核；不再拿 dsh id 恢复 Claude）',
+      env.DSH_TUI_RESUME_SESSION === 'claude-44' && env.DSH_TUI_BACKEND === 'claude',
+      'resume=' + env.DSH_TUI_RESUME_SESSION,
+    )
+  }
+  // C3b 显式 marker + 上一次启动的残留记录（updatedAt 早于本进程）→ 显式输入保留。
+  {
+    const launcher = makeLauncher({ env: { DSH_TUI_RESUME_SESSION: 'user-typed-dsh' }, home: chainHome })
+    launcher.noteLaunchChain(true)
+    writeRecord(chainHome, { backendId: 'claude', sessionId: 'stale-9', cwd: 'D:/w', attemptId: 'b5', updatedAt: Date.now() - 600000 })
+    const env = launcher.resumeEnvForRetry()
+    check(
+      'S02 重试: 非本链的旧记录不劫持显式输入（marker 原样、无 handoff 覆盖）',
+      env.DSH_TUI_RESUME_SESSION === 'user-typed-dsh' && env.DSH_TUI_BACKEND === undefined && env.DSH_TUI_BACKEND_HANDOFF === undefined,
+      JSON.stringify({ b: env.DSH_TUI_BACKEND, r: env.DSH_TUI_RESUME_SESSION }),
+    )
+  }
+  // C4 反向切换：Claude → DSH 崩溃，重试回 dsh + 刚崩的 dsh 会话。
+  {
+    const launcher = makeLauncher({ env: { DSH_TUI_BACKEND: 'claude', DSH_TUI_RESUME_SESSION: 'claude-old' }, home: chainHome })
+    launcher.noteLaunchChain(false)
+    writeRecord(chainHome, { backendId: 'dsh', sessionId: 'dsh-9', cwd: 'D:/w', attemptId: 'b6', updatedAt: Date.now() + 5000 })
+    const env = launcher.resumeEnvForRetry()
+    check(
+      'S02 重试: 反向切换同样成立（claude→dsh：backend=dsh + resume=dsh-9）',
+      env.DSH_TUI_BACKEND === 'dsh' && env.DSH_TUI_BACKEND_HANDOFF === 'dsh' && env.DSH_TUI_RESUME_SESSION === 'dsh-9',
+      'backend=' + env.DSH_TUI_BACKEND + ' resume=' + env.DSH_TUI_RESUME_SESSION,
+    )
+  }
+  // C5 记录无可恢复会话（崩溃时没有 user 消息）：旧 marker 滤掉、目标内核冷启动。
+  {
+    const launcher = makeLauncher({ env: { DSH_TUI_BACKEND: 'dsh', DSH_TUI_RESUME_SESSION: 'dsh-old-2' }, home: chainHome })
+    launcher.noteLaunchChain(false)
+    writeRecord(chainHome, { backendId: 'claude', sessionId: '', cwd: 'D:/w', attemptId: 'b7', updatedAt: Date.now() + 5000 })
+    const env = launcher.resumeEnvForRetry()
+    check(
+      'S02 重试: 记录无可恢复会话 → 旧 marker 滤掉、按记录内核冷启动（不跨域恢复）',
+      env.DSH_TUI_BACKEND === 'claude' && env.DSH_TUI_BACKEND_HANDOFF === 'claude' && env.DSH_TUI_RESUME_SESSION === undefined,
+      'resume=' + String(env.DSH_TUI_RESUME_SESSION),
+    )
+  }
+  // C6 无记录回落（旧安装/记录没写成）：旧合同逐条保真。
+  {
+    rmSync(chainDotTui, { recursive: true, force: true })
+    const legacyHome = join(tmp, 's02-legacy')
+    mkdirSync(join(legacyHome, '.dsh-tui', 'backends', 'claude'), { recursive: true })
+    writeFileSync(join(legacyHome, '.dsh-tui', 'resume.txt'), 'dsh-marker-3', 'utf8')
+    writeFileSync(join(legacyHome, '.dsh-tui', 'backends', 'claude', 'prefs.json'), JSON.stringify({ lastSession: 'claude-prefs-7' }), 'utf8')
+    {
+      const launcher = makeLauncher({ env: { DSH_TUI_RESUME_SESSION: 'explicit-keep' }, home: legacyHome })
+      launcher.noteLaunchChain(true)
+      const env = launcher.resumeEnvForRetry()
+      check('S02 回落: 无记录时显式 marker 不被覆盖（来源差异保留）', env.DSH_TUI_RESUME_SESSION === 'explicit-keep' && env.DSH_TUI_BACKEND_HANDOFF === undefined)
+    }
+    {
+      const launcher = makeLauncher({ env: { DSH_TUI_BACKEND: 'claude' }, home: legacyHome })
+      launcher.noteLaunchChain(false)
+      const env = launcher.resumeEnvForRetry()
+      check('S02 回落: 无记录 + claude env → 读 claude prefs 的 lastSession（旧逻辑不变）', env.DSH_TUI_RESUME_SESSION === 'claude-prefs-7')
+    }
+    {
+      const launcher = makeLauncher({ env: {}, home: legacyHome })
+      launcher.noteLaunchChain(false)
+      const env = launcher.resumeEnvForRetry()
+      check('S02 回落: 无记录 + 空 env → 读 resume.txt（旧逻辑不变）', env.DSH_TUI_RESUME_SESSION === 'dsh-marker-3')
+    }
+  }
+  // C7 接线 tripwire：launch 路径必须在首次 spawn 之前登记链身份。
+  {
+    const noteAt = binSource.indexOf('noteLaunchChain(')
+    const spawnAt = binSource.indexOf('settleFirstResult(await startDshSession(')
+    check('S02 接线: noteLaunchChain 在首次 startDshSession 之前（链时刻先于任何后代）', noteAt > 0 && spawnAt > 0 && noteAt < spawnAt)
+    check('S02 接线: 显式 resume 的来源 = 命令行 resume flags', binSource.includes('noteLaunchChain(resumeFlags.length > 0)'))
   }
 }
 
