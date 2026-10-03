@@ -184,13 +184,19 @@ async function runAddFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutcome
   notify(t('channel-wiz-saved', { name }), { color: 'success' })
   // ── 6. switch now? ──────────────────────────────────────────────
   const activeBefore = before.channels.find(option => option.id === before.activeId)
+  // The save may have overwritten the ACTIVE row itself (same name → same
+  // id, or an explicit clash confirmation): its connection then changed on
+  // disk even when the user declines the switch, and the running child
+  // still holds the old one — the funnel is owed regardless (R3-2/R3-4).
+  const overwroteActive = activeBefore !== undefined && activeBefore.id === id
+  const activeConnectionChanged = overwroteActive && !sameOptionConnection(activeBefore, saved)
   const switchAnswer = await ask({
     questions: [optionQuestion('switch', t('channel-wiz-q-switch', { name }), [
       { label: t('channel-wiz-opt-switch-yes') },
       { label: t('channel-wiz-opt-switch-no') },
     ], { hideCustomInput: true })],
   })
-  if (answerSelected(switchAnswer, 'switch')[0] !== t('channel-wiz-opt-switch-yes')) return { kind: 'saved', restart: false }
+  if (answerSelected(switchAnswer, 'switch')[0] !== t('channel-wiz-opt-switch-yes')) return { kind: 'saved', restart: activeConnectionChanged }
   deps.activate(id)
   return { kind: 'switched', restart: !sameOptionConnection(activeBefore, saved) }
 }
@@ -238,7 +244,13 @@ async function runManageFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutc
       return { kind: 'failed', restart: false }
     }
     notify(t('channel-wiz-deleted', { name: target.name }), { color: 'success' })
-    return { kind: 'deleted', restart: false }
+    // Deleting the ACTIVE channel with a connection severs what the RUNNING
+    // child still holds: erasing the token and the profile row cannot reach
+    // the live process, so the next message would keep riding the deleted
+    // connection — that is a connection change, routed through the
+    // fresh-session funnel (R3-2). A mapping-only row never shaped the
+    // spawn, so deleting it changes nothing the child sees.
+    return { kind: 'deleted', restart: isActive && target.connection !== undefined }
   }
   if (pick === t('channel-wiz-opt-edit-baseurl')) {
     const answer = await ask({ questions: [textQuestion('value', t('channel-wiz-q-baseurl'), t('channel-wiz-q-edit-value-hint'))] })

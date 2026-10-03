@@ -584,6 +584,130 @@ const init = {
   check('wizard: the comparator drives the restart flag', sameOptionConnection(deps.roster().channels[0], deps.roster().channels[0]) === true)
 }
 
+// ---- 14b. R3-2: delete/overwrite of the ACTIVE connection restarts ---------
+{
+  const { t } = await import('../src/i18n.js')
+  /** In-memory wizard harness whose roster rows carry REAL-shaped
+   * fingerprints (endpoint + ref + stored token, like controls.ts's
+   * connectionFingerprint — a token rotation changes the fingerprint). */
+  const harness = (initial: { active?: string; channels: readonly { id: string; name: string; baseUrl?: string; tokenRef?: string }[] }) => {
+    const store = memoryClaudeChannels({ channels: [...initial.channels], ...(initial.active === undefined ? {} : { active: initial.active }) })
+    const tokens = memoryClaudeChannelTokens()
+    const rowOf = (channel: { id: string; name: string; baseUrl?: string; tokenRef?: string }) => ({
+      id: channel.id, name: channel.name, models: [], tiers: [],
+      ...(channel.baseUrl === undefined && channel.tokenRef === undefined ? {} : {
+        connection: {
+          ...(channel.baseUrl === undefined ? {} : { baseUrl: channel.baseUrl }),
+          hasToken: channel.tokenRef !== undefined && tokens.declared(channel.tokenRef),
+          envKeys: [] as string[],
+          fingerprint: [channel.baseUrl ?? '', channel.tokenRef ?? '', channel.tokenRef === undefined ? '' : tokens.read(channel.tokenRef) ?? ''].join('/'),
+        },
+      }),
+    })
+    const wire = (answer: (id: string) => { selected?: string[]; custom?: string }) => ({
+      ask: async (request: { questions: { id: string }[] }) => {
+        const id = request.questions[0]!.id
+        return { answers: [{ id, ...answer(id) }] } as never
+      },
+      notify: () => undefined,
+      pushLocal: () => undefined,
+      roster: () => ({ channels: store.read().channels.map(rowOf), activeId: store.read().active }),
+      // The capability's save semantics (controls.ts): undefined fields keep
+      // the current row's values; a token rotates the stored ref in place.
+      save: (input: { id: string; name: string; baseUrl?: string; token?: string }) => {
+        const current = store.read().channels.find(channel => channel.id === input.id)
+        let ref = current?.tokenRef
+        if (input.token !== undefined && input.token !== '') {
+          ref = ref ?? channelTokenRef(input.id)
+          tokens.write(ref, input.token)
+        }
+        store.save({
+          id: input.id, name: input.name,
+          ...(input.baseUrl === undefined ? { ...(current?.baseUrl === undefined ? {} : { baseUrl: current.baseUrl }) } : input.baseUrl === '' ? {} : { baseUrl: input.baseUrl }),
+          ...(ref === undefined ? {} : { tokenRef: ref }),
+        })
+        return wire(undefined as never).roster().channels.find(row => row.id === input.id)
+      },
+      remove: (id: string) => { const had = store.read().channels.some(channel => channel.id === id); store.remove(id); return had },
+      activate: (id: string) => { store.setActive(id); return true },
+      peekSettings: () => undefined,
+    })
+    const deps = (selected: Record<string, string[]>, custom: Record<string, string> = {}) =>
+      wire((id: string) => (selected[id] === undefined ? { custom: custom[id] ?? '' } : { selected: selected[id]! }))
+    return { store, tokens, deps }
+  }
+  // (a) deleting the ACTIVE channel WITH a connection restarts (R3-2): the
+  //     running child still holds the erased endpoint/token.
+  {
+    const h = harness({ active: 'conn', channels: [
+      { id: 'conn', name: 'Conn', baseUrl: 'https://relay.example/api', tokenRef: 'CHANNEL_CONN_TOKEN' },
+      { id: 'plain', name: 'Plain' },
+    ] })
+    h.tokens.write('CHANNEL_CONN_TOKEN', 'live-token')
+    const outcome = await runChannelWizard(h.deps({
+      action: [t('channel-wiz-opt-manage')],
+      pick: ['Conn'],
+      edit: [t('channel-wiz-opt-edit-delete')],
+      confirm: [t('channel-wiz-opt-delete-yes')],
+    }) as never)
+    check('restart: deleting the ACTIVE connected channel demands a fresh session',
+      outcome.kind === 'deleted' && outcome.restart === true, outcome)
+  }
+  // (b) a mapping-only ACTIVE row never shaped the spawn → no restart.
+  {
+    const h = harness({ active: 'map', channels: [{ id: 'map', name: 'Map', tiers: { opus: 'x' } } as never] })
+    const outcome = await runChannelWizard(h.deps({
+      action: [t('channel-wiz-opt-manage')],
+      pick: ['Map'],
+      edit: [t('channel-wiz-opt-edit-delete')],
+      confirm: [t('channel-wiz-opt-delete-yes')],
+    }) as never)
+    check('restart: deleting a mapping-only ACTIVE channel restarts nothing',
+      outcome.kind === 'deleted' && outcome.restart === false, outcome)
+  }
+  // (c) deleting an INACTIVE connected channel leaves the running row alone.
+  {
+    const h = harness({ active: 'keep', channels: [
+      { id: 'keep', name: 'Keep', baseUrl: 'https://keep.example' },
+      { id: 'other', name: 'Other', baseUrl: 'https://other.example' },
+    ] })
+    const outcome = await runChannelWizard(h.deps({
+      action: [t('channel-wiz-opt-manage')],
+      pick: ['Other'],
+      edit: [t('channel-wiz-opt-edit-delete')],
+      confirm: [t('channel-wiz-opt-delete-yes')],
+    }) as never)
+    check('restart: deleting an inactive connected channel needs no restart',
+      outcome.kind === 'deleted' && outcome.restart === false, outcome)
+  }
+  // (d) the add flow overwriting the ACTIVE row (same name → same id) with a
+  //     rotated token, then DECLINING the switch: the disk connection changed
+  //     under the running child — restart anyway (R3-2/R3-4).
+  {
+    const h = harness({ active: 'conn', channels: [
+      { id: 'conn', name: 'Conn', baseUrl: 'https://relay.example/api', tokenRef: 'CHANNEL_CONN_TOKEN' },
+    ] })
+    h.tokens.write('CHANNEL_CONN_TOKEN', 'old-token')
+    const outcome = await runChannelWizard(h.deps({
+      action: [t('channel-wiz-opt-add')],
+      switch: [t('channel-wiz-opt-switch-no')],
+    }, { name: 'Conn', token: 'rotated-token' }) as never)
+    const landed = h.store.read().channels[0]
+    check('restart: overwriting the ACTIVE row restarts even when the switch is declined',
+      outcome.kind === 'saved' && outcome.restart === true && landed?.tokenRef === 'CHANNEL_CONN_TOKEN' && h.tokens.read('CHANNEL_CONN_TOKEN') === 'rotated-token', { outcome, landed })
+  }
+  // (e) a brand-new channel (no active row touched) stays restart-free.
+  {
+    const h = harness({ active: 'keep', channels: [{ id: 'keep', name: 'Keep', baseUrl: 'https://keep.example' }] })
+    const outcome = await runChannelWizard(h.deps({
+      action: [t('channel-wiz-opt-add')],
+      switch: [t('channel-wiz-opt-switch-no')],
+    }, { name: 'Fresh', baseurl: 'https://fresh.example', token: 'fresh-token' }) as never)
+    check('restart: adding a brand-new channel without switching restarts nothing',
+      outcome.kind === 'saved' && outcome.restart === false, outcome)
+  }
+}
+
 // ---- 15. wiring tripwires (source-level) ------------------------------------
 {
   const { readFileSync: readSrc } = await import('node:fs')
@@ -591,6 +715,8 @@ const init = {
   const chatSrc = readRepo('../src/screens/Chat.tsx')
   check('tripwire: Chat runs the wizard from the add/manage rows', chatSrc.includes('runChannelWizard({') && chatSrc.includes("{ kind: 'add' }") && chatSrc.includes("{ kind: 'manage' }"))
   check('tripwire: Chat routes a connection change through the fresh-session funnel', chatSrc.includes('onRestartFreshSession(t(\'channel-switch-restart\'') && chatSrc.includes('sameOptionConnection(before, row.option)'))
+  check('tripwire: Chat routes an import that changes the ACTIVE connection through the funnel (R3-2)',
+    chatSrc.includes('before.id === imported.id') && chatSrc.includes('sameOptionConnection(before, imported)'))
   const pluginSrc = readRepo('../src/dsh-adapter/plugin.ts')
   check('tripwire: the composition root wires the funnel reusing the backend-switch branch',
     pluginSrc.includes('onRestartFreshSession: restartFreshSession') && pluginSrc.includes('backendSwitchRequested = backendChoice'))

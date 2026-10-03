@@ -946,8 +946,24 @@ export function Chat({
       return
     }
     if (row.kind === 'import') {
+      /* 三期连接语义（R3-2）：导入刷新的行若是当前 active 渠道，且其连接
+       * 变了（mapping-only 被补成连接、端点/token 轮换），运行中的子进程
+       * 仍持旧连接——与渠道行切换同一条 fresh-session 重启漏斗，不能只
+       * 刷新列表加个 toast 了事。非 active 行导入保持纯 toast。 */
+      const before = channelSnapshot.channels.find(option => option.id === channelSnapshot.activeId)
       const imported = typeof channel.importChannel === 'function' ? channel.importChannel() : undefined
       setChannelRosterTick(tick => tick + 1)
+      if (imported !== undefined && before !== undefined && before.id === imported.id
+        && !sameOptionConnection(before, imported)) {
+        dispatchOverlay({ type: 'close' })
+        channel.notify(t('channel-import-done', { name: imported.name }), { color: 'success' })
+        if (onRestartFreshSession !== undefined) {
+          onRestartFreshSession(t('channel-switch-restart', { name: imported.name }))
+        } else {
+          channel.notify(t('channel-switch-restart-unavailable', { name: imported.name }), { color: 'warning' })
+        }
+        return
+      }
       channel.notify(imported === undefined ? t('channel-import-none') : t('channel-import-done', { name: imported.name }), { color: imported === undefined ? 'warning' : 'success' })
       return
     }
