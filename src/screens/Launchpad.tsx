@@ -141,6 +141,12 @@ const PARAM_SEGMENT_ORDER: readonly LaunchpadParamSegment[] = ['model', 'effort'
  * 不走」那类回归没有缝隙可钻。未截断的段手势照旧（高亮/点击/焦点）但
  * **连计时都不起**（与 Tooltip.tsx 头部「只给真的被隐藏的文本挂」同一条
  * 契约），所以完整名在屏上时不会有浮层风险。
+ *
+ * F-04（T-FIX-03）：撤卡**不只**挂在 pointer-leave 上——**激活**也显式撤
+ * （点击，以及键盘焦点环上的 Enter 走 `onParamPick` 的那条）。否则 hover 出卡
+ * 后换一段激活，卡片会停在选择器之上、内容还是上一段的完整名（误导）。指针
+ * **仍停在段上**时的保留属 tooltip 的既有语义，这里不动：撤的是"这一次激活"
+ * 留下的卡片，下一次真正的 mouseenter 照常按 dwell 出卡。
  */
 function ParamChip({
   label,
@@ -148,6 +154,7 @@ function ParamChip({
   truncated,
   colored,
   focused,
+  activationNonce,
   onActivate,
   onHover,
   onHoverLeave,
@@ -160,6 +167,12 @@ function ParamChip({
   /** 模型段常亮浅紫（autoAccept）；其余段默认 dim。 */
   colored?: boolean
   focused: boolean
+  /**
+   * 键盘激活（焦点环 Enter）信号：每被激活一次 +1，只喂给**刚被激活的那一段**。
+   * 点击路径在下面的 `onClick` 里就地撤卡，不需要它；键盘路径的 Enter 由屏级
+   * `useInput` 处理，本组件只被"通知"。
+   */
+  activationNonce?: number
   onActivate: () => void
   onHover: () => void
   /** 移出时若焦点是悬停带进来的，交还输入框（BUG 2：移开必须复原）。 */
@@ -171,6 +184,17 @@ function ParamChip({
   // 未截断的段连 dwell 计时都不起，不依赖单例层"空内容不画卡片"的内部约定
   // ——那条约定改天变了也不该由本屏承担。
   const tooltip = useTooltip(fullValue)
+  // F-04：键盘激活的撤卡。首渲染把当前值记为基准（`nonce === 基准` 时不动），
+  // 之后只在**变化**时撤一次——连续两次 Enter 也各算一次变化。`tooltip` 是
+  // `useTooltip` 的 memo 返回值（依赖 `[owner, delayMs]`），所以这条 effect
+  // 不会每次渲染都跑。
+  const lastActivation = React.useRef(activationNonce ?? 0)
+  React.useEffect(() => {
+    const nonce = activationNonce ?? 0
+    if (nonce === lastActivation.current) return
+    lastActivation.current = nonce
+    tooltip.onMouseLeave()
+  }, [activationNonce, tooltip])
   return (
     <Box
       flexShrink={0}
@@ -190,6 +214,10 @@ function ParamChip({
       }}
       onClick={(event: ClickEvent) => {
         event.stopImmediatePropagation()
+        // F-04：激活即撤卡——只挂 pointer-leave 时，点开这一段的选择器后卡片
+        // 会停在它之上（且内容可能还是上一段的完整名）。指针仍停在段上时的
+        // 保留属 tooltip 既有语义，这里撤的是"这一次激活"留下的卡片。
+        tooltip.onMouseLeave()
         onActivate()
       }}
     >
@@ -604,6 +632,13 @@ export function Launchpad({
     return () => { clearInterval(timer) }
   }, [inputActive])
 
+  // F-04（T-FIX-03）：键盘激活参数段（焦点环 Enter → onParamPick）与点击同一条
+  // 语义——**激活即撤卡**。点击的撤卡在 `ParamChip.onClick` 里就地做（它自己
+  // 持有 tooltip owner）；键盘路径的 Enter 由下面的屏级 useInput 处理，这里用
+  // 一枚自增信号把"刚被激活的是哪一段"传给对应的 ParamChip（`segment` 定位、
+  // `nonce` 让连续两次 Enter 也各算一次变化）。指针**仍停在段上**时的保留属
+  // tooltip 既有语义，不动。
+  const [paramActivation, setParamActivation] = React.useState<{ segment: LaunchpadParamSegment; nonce: number } | null>(null)
   // 参数行（第五版；第六版设计 1 改 preset 段）：**只画值、不画字段名**；
   // 模型段**只显示模型名**（去掉 provider/ 前缀——用户原话「两个都放的话就
   // 太长了」）：`glm-5.3  ·  Max  ·  Standard  ·  default`。模式段显示 agent
@@ -797,7 +832,11 @@ export function Launchpad({
         // 左下角工作目录铭牌（第七版）：Enter = 打开既有 /workspace 菜单。
         onOpenWorkspace()
       } else if (focusedSegment !== undefined && onParamPick !== undefined) {
-        onParamPick(focusedSegment)
+        // 激活即撤卡（F-04）：先记信号——ParamChip 的 effect 在这次提交后撤掉
+        // 可能挂着的卡片；键盘路径与点击路径落在同一个 onParamPick 上。
+        const activated = focusedSegment
+        setParamActivation(prev => ({ segment: activated, nonce: (prev?.nonce ?? 0) + 1 }))
+        onParamPick(activated)
       } else {
         const focused = focusIndex >= 0 ? actions[focusIndex] : undefined
         if (focused === undefined) onSubmit(query)
@@ -949,6 +988,7 @@ export function Launchpad({
                       truncated={part.truncated}
                       colored={part.colored}
                       focused={focusIndex === paramFocusOf(part.segment)}
+                      activationNonce={paramActivation?.segment === part.segment ? paramActivation.nonce : 0}
                       onActivate={() => onParamPick(part.segment)}
                       onHover={() => onFocusChange(paramFocusOf(part.segment))}
                       onHoverLeave={() => {

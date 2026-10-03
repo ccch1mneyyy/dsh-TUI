@@ -1664,6 +1664,48 @@ const AC1_SHOWN_PRESET = 'Standard (Git Bash …'
       + firstScreenDiff(quietBefore, quietAfter))
   s.close()
 }
+{
+  // ⑥ F-04（T-FIX-03）：**激活即撤卡**——hover 出卡后点这一段，指针**仍停在段上**
+  // （不再有 pointer-leave 收敛），卡片必须立刻消失：否则它会停在刚打开的选择器
+  // 之上，而 `param` 事件本身照常发出（鼠标选择器路径不退化）。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { params: AC1_PARAMS })
+  await settled(() => s.screen().includes(AC1_SHOWN_PRESET))
+  const cell = findCell(s.term, AC1_SHOWN_PRESET)!
+  s.input.write(`\u001b[<35;${cell.col};${cell.row}M`)
+  const cardShown = await settled(() => s.screen().includes(AC1_FULL_PRESET) && getTooltipSnapshot() !== null)
+  const beforeClick = ev.length
+  await s.click(AC1_SHOWN_PRESET)
+  const picked = last(ev, 'param')?.value
+  const cardGone = await settled(() => !s.screen().includes(AC1_FULL_PRESET) && getTooltipSnapshot() === null)
+  check('S9 点击被截断段（指针仍在段上）→ 卡片立即消失且 param=preset（F-04：激活即撤卡，选择器路径不退化）',
+    cardShown && cardGone && picked === 'preset',
+    `cardShown=${cardShown} cardGone=${cardGone} param=${JSON.stringify(picked)} `
+      + `store=${JSON.stringify(getTooltipSnapshot())} ${JSON.stringify(ev.slice(beforeClick))}`)
+  s.close()
+}
+{
+  // ⑦ F-04（T-FIX-03）：键盘激活走同一条语义。hover 出卡时焦点已被 hover 带进
+  // preset 段（-4），直接按 Enter（屏级 useInput → onParamPick）：卡片同样必须
+  // 消失——这一条与 S9 的差别只在"激活从哪里来"，两条路径都不许把上一段的
+  // 完整名留在选择器之上。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { params: AC1_PARAMS })
+  await settled(() => s.screen().includes(AC1_SHOWN_PRESET))
+  const cell = findCell(s.term, AC1_SHOWN_PRESET)!
+  s.input.write(`\u001b[<35;${cell.col};${cell.row}M`)
+  const hoverFocused = await settled(() => last(ev, 'focus')?.value === -4)
+  const cardShown = await settled(() => s.screen().includes(AC1_FULL_PRESET) && getTooltipSnapshot() !== null)
+  const beforeKey = ev.length
+  await s.send('\r')
+  const picked = last(ev, 'param')?.value
+  const cardGone = await settled(() => !s.screen().includes(AC1_FULL_PRESET) && getTooltipSnapshot() === null)
+  check('S10 键盘 Enter 激活被截断段（卡片已挂）→ 卡片立即消失且 param=preset（F-04：两条激活路径同语义）',
+    hoverFocused && cardShown && cardGone && picked === 'preset',
+    `focus=${JSON.stringify(last(ev, 'focus')?.value)} cardShown=${cardShown} cardGone=${cardGone} `
+      + `param=${JSON.stringify(picked)} store=${JSON.stringify(getTooltipSnapshot())} ${JSON.stringify(ev.slice(beforeKey))}`)
+  s.close()
+}
 
 // ── F. 宽度不变量（整屏：任何一行都不超宽、没有切断的半句） ─────────────────
 // 整屏不变量：每个键位标签、Tips 文案、参数段要么完整出现在**同一行**，要么
