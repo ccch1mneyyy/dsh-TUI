@@ -532,6 +532,8 @@ const GROUPS = {
 // 日志、标题来源判定、revision 命中/失效（钉住 revision 改写日志作
 // 判据）、索引自愈与剪枝、**终态等价**（增量索引 == 全新构建）。
     ["verify-session-index", ['node', 'scripts/verify-session-index.mjs']],
+// 尾窗外模型恢复：开头/中间/尾部路由、旧 context、无请求、旧缓存补查、损坏与取消。
+    ['verify-session-model-recovery', ['node', '--import', 'tsx/esm', 'scripts/verify-session-model-recovery.ts']],
 // 真 JSONL 混合版本库：无关追加不重读旧会话摘要，文件改写/替换仍须失效。
     ["verify-session-artifact-cache", ['node', 'scripts/verify-session-artifact-cache.mjs']],
 // 跨进程首屏快照：不等慢枚举、来源隔离、失败保留、空库清空与迟到守卫。

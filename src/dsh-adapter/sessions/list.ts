@@ -25,7 +25,7 @@ import {
   sessionTitleAnchor,
 } from './digest.js'
 import { fileFacts } from './frames.js'
-import { scheduleTitleRecovery, titleRecoveryNeedsWork } from './recovery.js'
+import { scheduleMetadataRecovery, metadataRecoveryNeedsWork } from './recovery.js'
 import { classify, readHeader, type RawSessionHeader } from './header.js'
 import { findSessionLogFile, resolveLocatedPath } from '../compat/sessionLog.js'
 import { indexFileStamp, readIndex, writeIndex, type DerivedEntry, type SessionIndex } from './store.js'
@@ -297,6 +297,7 @@ export async function listSummaries(
                 titleComplete: suffix.title !== undefined || previous.titleComplete,
                 hasPrompt: previous.hasPrompt || suffix.hasHumanPrompt,
                 model: suffix.model ?? previous.model,
+                modelComplete: suffix.model !== undefined || previous.modelComplete === true,
                 label: suffix.label ?? previous.label,
               }
             }
@@ -316,6 +317,7 @@ export async function listSummaries(
               titleComplete: digest.titleComplete === true,
               hasPrompt: digest.hasPrompt,
               model: digest.model ?? carried?.model,
+              modelComplete: digest.modelComplete,
               label: digest.label ?? carried?.label,
             }
           }
@@ -324,8 +326,8 @@ export async function listSummaries(
       }
     }
     if (
-      derived !== undefined && !derived.titleComplete && signal?.aborted !== true &&
-      titleRecoveryNeedsWork(header.id, derived.revision, enriched => notifyEnriched(header.id, enriched))
+      derived !== undefined && (!derived.titleComplete || derived.modelComplete !== true) && signal?.aborted !== true &&
+      metadataRecoveryNeedsWork(header.id, derived.revision, enriched => notifyEnriched(header.id, enriched))
     ) {
       // A revision hit still may need enrichment, but locating that rare log
       // stays off the ordinary warm path once recovery has been scheduled.
@@ -374,7 +376,7 @@ export async function listSummaries(
 
   if (newest) {
     for (const work of scanWork) {
-      scheduleTitleRecovery(work, derived => notifyEnriched(work.id, derived))
+      scheduleMetadataRecovery(work, derived => notifyEnriched(work.id, derived))
     }
   }
 
