@@ -256,8 +256,8 @@ visual TUI alone does not describe the effective policy.
 
 - Plugin-source context injected into the system prompt is not shown as a
   separate UI segment; it is included in the system/context meter.
-- `/model` switches through a session fork rather than an in-place update; the
-  old session remains in `/resume`.
+- `/model` selects subsequent requests in the same session, preserving identity
+  and history.
 - `Ctrl+V` clipboard reads dispatch per platform:
   - Windows: PowerShell `Get-Clipboard` (a competing process can lock the
     clipboard and make the read appear empty after retries).

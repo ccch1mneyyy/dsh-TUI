@@ -260,7 +260,7 @@ export function restoreToolResult(row: ChatRow, event: SessionEvent<'tool/result
 }
 
 /**
- * Prepare durable events for REPLAY (resume / rewind / model-switch fork):
+ * Prepare durable events for REPLAY (resume / rewind / fork):
  * drop settled `assistant/chunk` stream deltas — the sealed
  * `assistant/message` events carry the full text and reasoning blocks, so
  * per-token chunks add nothing to the replayed transcript while costing a

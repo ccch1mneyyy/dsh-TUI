@@ -242,7 +242,7 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 
 - 注入到 system prompt 的插件上下文不会在 UI 中单独列出，而是计入 system/context
   分段。
-- `/model` 通过 session fork 切换，不是原位修改；旧会话会留在 `/resume`。
+- `/model` 在同一 session 内切换后续请求的模型，不改变会话身份与历史。
 - `Ctrl+V` 读剪贴板按平台分派：
   - Windows 用 PowerShell `Get-Clipboard`（剪贴板被其他程序锁定时重试后
     可能静默失败并显示为空）。
