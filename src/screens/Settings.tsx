@@ -843,7 +843,7 @@ export function Settings({
       })
     })
     if (pickRows.length === 0) {
-      entries.push({ key: 'pick:empty', lines: 1, node: <CardRow><Text dimColor>{t('settings-group-empty')}</Text></CardRow> })
+      entries.push({ key: 'pick:empty', lines: 1, node: <CardRow><Text dimColor>{t('settings-pick-empty')}</Text></CardRow> })
     }
     entries.push({ key: 'card:pick:bottom', lines: 1, node: <CardBottom columns={columns} /> })
   } else if (activeSection !== undefined && activeGroupSpec !== undefined) {
