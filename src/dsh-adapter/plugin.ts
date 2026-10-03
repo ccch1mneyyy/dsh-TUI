@@ -23,7 +23,7 @@ import { bindChannelCommands } from './channel/commands.js'
 import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
 import { removeClipboardImageDir } from '../utils/clipboard.js'
-import { appendCrashLog, serializeCrashDetail } from '../utils/crashDetail.js'
+import { appendCrashLog, serializeCrashDetail, unserializableCrashDetail, type CrashDetail } from '../utils/crashDetail.js'
 import { logForDebugging } from '../utils/debug.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
@@ -1529,44 +1529,45 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       // background-check guards that still read the outer one.
       exited = true
       if (error !== undefined) {
-        // Full crash serialization (stack + .cause chain + React extras): the
-        // production #185 crashes reached here with nothing but a minified
-        // message, so four real crashes left zero post-mortem evidence.
-        // serializeCrashDetail keeps every part the process still carries;
-        // appendCrashLog persists it to ~/.dsh-tui/crash.log (best effort,
-        // never throws) and restart.log/stderr each get their one-line event.
-        const detail = serializeCrashDetail(error)
-        ctx.logger.error(`dsh-tui: exit after error: ${detail.summary}`)
-        appendCrashLog(detail)
-        logRestartEvent('crash', { summary: detail.summary, ...(detail.digest === undefined ? {} : { digest: detail.digest }) })
-        logForDebugging('dsh-tui: crash detail', { crash: detail.text })
-        // A crash must leave the resume marker a clean exit would leave: the
-        // launcher's next start (and its safe-mode retry) then reopens the
-        // session the user was actually in instead of a blank one. Only the
-        // resumable case writes — unlike the clean-exit branch below, a crash
-        // never CLEARS a marker, so a session the user still has cannot be
-        // dropped by a failure that happened before the first message landed.
-        try {
-          if (isExitResumable({
-            pendingCount: channel.pending.length,
-            liveAgent: ctx.agents.get(SessionId(channel.agentId)),
-            startupAgent: agent,
-          })) {
-            writeResumeTarget(channel.agentId)
-          }
-          // A Claude session's marker is its backend's own (never resume.txt).
-          if (claudeStart !== undefined && claudeStart.persisted(channel.agentId, channel.rows)) claudeStart.sessionPrefs.setLastSession(channel.agentId)
-        } catch {
-          // Resume persistence is best effort and must never block the exit.
-        }
-        void finishExit(
-          ctx,
-          instance,
-          bootedFullscreen,
-          undefined,
-          `dsh-tui crashed: ${detail.message}`,
-          () => disposeRootAndExit(ctx, 1),
-        )
+        // The crash tail lives in runCrashExit (S03): its diagnostics are
+        // fully degradable while the resume markers and the terminal cleanup
+        // run independently — an escape inside the funnel used to skip
+        // finishExit entirely and leave the process "exited but not cleaned
+        // up".
+        runCrashExit({
+          error,
+          logError: message => { ctx.logger.error(message) },
+          appendLog: appendCrashLog,
+          logRestart: logRestartEvent,
+          logDebug: logForDebugging,
+          // A crash must leave the resume marker a clean exit would leave: the
+          // launcher's next start (and its safe-mode retry) then reopens the
+          // session the user was actually in instead of a blank one. Only the
+          // resumable case writes — unlike the clean-exit branch below, a crash
+          // never CLEARS a marker, so a session the user still has cannot be
+          // dropped by a failure that happened before the first message landed.
+          writeResumeMarkers: () => {
+            if (isExitResumable({
+              pendingCount: channel.pending.length,
+              liveAgent: ctx.agents.get(SessionId(channel.agentId)),
+              startupAgent: agent,
+            })) {
+              writeResumeTarget(channel.agentId)
+            }
+            // A Claude session's marker is its backend's own (never resume.txt).
+            if (claudeStart !== undefined && claudeStart.persisted(channel.agentId, channel.rows)) claudeStart.sessionPrefs.setLastSession(channel.agentId)
+          },
+          finish: crashLine => {
+            void finishExit(
+              ctx,
+              instance,
+              bootedFullscreen,
+              undefined,
+              crashLine,
+              () => disposeRootAndExit(ctx, 1),
+            )
+          },
+        })
         return
       }
       if (updateRequested) {
@@ -1763,7 +1764,20 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // the funnel as-is: `error !== undefined` is what selects the crash path, so
     // a bare undefined would exit 0 while this sink claims the process.
     const fatal = fatalReasonForExit(error, origin)
-    ctx.logger.error(`dsh-tui: fatal ${origin}: ${fatal instanceof Error ? fatal.message : String(fatal)}`)
+    // The description is degradable (S03): reading .message / String() on a
+    // hostile value can throw, and this sink runs BEFORE the funnel latch —
+    // an escape here would hand the process to Node's default crash with no
+    // terminal cleanup at all. runCrashExit downstream serializes the same
+    // hostile value safely.
+    try {
+      ctx.logger.error(`dsh-tui: fatal ${origin}: ${fatal instanceof Error ? fatal.message : String(fatal)}`)
+    } catch {
+      try {
+        ctx.logger.error(`dsh-tui: fatal ${origin}: (unserializable reason)`)
+      } catch {
+        // Logging is gone; the funnel still must run.
+      }
+    }
     return handleExit(fatal)
   })
 
@@ -2376,6 +2390,72 @@ export function createExitFunnel(deps: { onUserExit: (error?: unknown) => void }
       return true
     },
   }
+}
+
+/**
+ * The exit funnel's crash tail (r1-stability S03), extracted so the failure
+ * contract is testable (scripts/verify-shutdown-fallback drives the REAL
+ * createExitFunnel around it with fault-injected sinks):
+ *
+ *  - Diagnostics (serialization + every log sink) are FULLY DEGRADABLE: an
+ *    escape anywhere in the block — a hostile throwable with throwing
+ *    getters, a Proxy trap, or a failing sink — falls back to the
+ *    fixed-literal unserializableCrashDetail (built from literals only, it
+ *    never re-reads the thrown value) and one best-effort re-log attempt.
+ *    Before this, a throwing getter escaped serializeCrashDetail AFTER the
+ *    funnel latch was set, so appendCrashLog, the resume marker and
+ *    finishExit never ran: the process died "exited but not cleaned up",
+ *    without its terminal restore.
+ *  - The resume-marker write and the terminal cleanup (finish +
+ *    disposeRootAndExit(1)) are MUST-RUN and sit OUTSIDE the diagnostics'
+ *    fate: each has its own degradation, and finish is reached on every path
+ *    through this function.
+ */
+export interface CrashExitDeps {
+  /** The crash value itself (may be hostile: throwing getters, Proxy traps). */
+  readonly error: unknown
+  /** Serializer override (verify fault injection); default serializeCrashDetail. */
+  readonly serialize?: (error: unknown) => CrashDetail
+  /** One-line error log (ctx.logger.error). */
+  readonly logError: (message: string) => void
+  /** crash.log append (appendCrashLog). */
+  readonly appendLog: (detail: CrashDetail) => void
+  /** restart.log one-line event (logRestartEvent). */
+  readonly logRestart: (event: string, data?: Record<string, unknown>) => void
+  /** Debug log (logForDebugging). */
+  readonly logDebug: (message: string, data?: Record<string, unknown>) => void
+  /** Resume markers; best effort, isolated from the diagnostics' fate. */
+  readonly writeResumeMarkers: () => void
+  /** MUST-RUN terminal cleanup + exit(1) handoff (finishExit + dispose). */
+  readonly finish: (crashLine: string) => void
+}
+
+export function runCrashExit(deps: CrashExitDeps): void {
+  let detail: CrashDetail
+  try {
+    detail = (deps.serialize ?? serializeCrashDetail)(deps.error)
+    deps.logError(`dsh-tui: exit after error: ${detail.summary}`)
+    deps.appendLog(detail)
+    deps.logRestart('crash', { summary: detail.summary, ...(detail.digest === undefined ? {} : { digest: detail.digest }) })
+    deps.logDebug('dsh-tui: crash detail', { crash: detail.text })
+  } catch {
+    // Ultimate degradation: fixed literals only — never re-read the throwable,
+    // never re-run the sink chain beyond one best-effort attempt.
+    detail = unserializableCrashDetail()
+    try {
+      deps.logError(`dsh-tui: exit after error: ${detail.summary}`)
+      deps.appendLog(detail)
+      deps.logRestart('crash', { summary: detail.summary })
+    } catch {
+      // Nothing left to try — the cleanup below still must run.
+    }
+  }
+  try {
+    deps.writeResumeMarkers()
+  } catch {
+    // Resume persistence is best effort and must never block the exit.
+  }
+  deps.finish(`dsh-tui crashed: ${detail.message}`)
 }
 
 /**
