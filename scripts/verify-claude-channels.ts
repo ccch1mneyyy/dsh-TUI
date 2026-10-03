@@ -56,7 +56,7 @@ import { ClaudeChannelConflictError, channelMissingCredential, resolveClaudeAuth
 import { channelStartNotices } from '../src/backends/claude/backend.js'
 import { loadClaudeSdk } from '../src/backends/claude/sdk.js'
 import { runChannelWizard, sameOptionConnection } from '../src/dsh-adapter/channelWizard.js'
-import { readModelEnvTruth } from '../src/backends/claude/modelEnv.js'
+import { importedModelEnv, mergedModelEnv, readModelEnvTruth } from '../src/backends/claude/modelEnv.js'
 import { openClaudeSession } from '../src/backends/claude/session.js'
 import { BACKEND_CHANNEL_COMMAND, LOCAL_COMMANDS } from '../src/commands.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
@@ -370,6 +370,84 @@ const init = {
     mem.read('CHANNEL_M_TOKEN') === 'mem' && (mem.write('CHANNEL_M_TOKEN', 'two'), mem.read('CHANNEL_M_TOKEN') === 'two') && (mem.erase('CHANNEL_M_TOKEN'), mem.read('CHANNEL_M_TOKEN') === undefined && mem.declared('CHANNEL_M_TOKEN') === false))
 }
 
+// ---- 9b. R3-3: every commit parses back as valid YAML (round-trip) --------
+{
+  const yaml = await import('yaml')
+  const dir = mkdtempSync(join(tmpdir(), 'dshtui-channel-tokens-yaml-'))
+  const storeFile = join(dir, '.credentials.yaml')
+  const seeded = (text: string): void => { writeFileSync(storeFile, text) }
+  const text = (): string => readFileSync(storeFile, 'utf8')
+  const parses = () => yaml.parseDocument(text())
+  try {
+    // (a) a FLOW (inline) refs library: the write must extend the SAME
+    //     top-level key — the old line-append created a duplicate `refs:`.
+    seeded('refs: { FOREIGN: synthetic }\n')
+    const inline = fileClaudeChannelTokens(dir, () => undefined)
+    check('yaml: a flow refs library reads its foreign ref', inline.read('FOREIGN') === 'synthetic')
+    inline.write('CHANNEL_Z_TOKEN', 'inline-secret')
+    const inlineDoc = parses()
+    check('yaml: writing into a flow refs library keeps ONE valid top-level refs',
+      inlineDoc.errors.length === 0 && inlineDoc.getIn(['refs', 'FOREIGN']) === 'synthetic' && inlineDoc.getIn(['refs', 'CHANNEL_Z_TOKEN']) === 'inline-secret', text())
+    // (b) an empty flow mapping gains its first ref cleanly.
+    seeded('refs: {}\n')
+    fileClaudeChannelTokens(dir, () => undefined).write('CHANNEL_A_TOKEN', 'first')
+    const emptyDoc = parses()
+    check('yaml: an empty flow refs library gains its first ref cleanly',
+      emptyDoc.errors.length === 0 && emptyDoc.getIn(['refs', 'CHANNEL_A_TOKEN']) === 'first', text())
+    // (c) a quoted refs key is located semantically.
+    seeded('"refs":\n  "CHANNEL_A_TOKEN": quoted\n')
+    const quoted = fileClaudeChannelTokens(dir, () => undefined)
+    check('yaml: a quoted refs key reads and writes',
+      quoted.read('CHANNEL_A_TOKEN') === 'quoted' && (quoted.write('CHANNEL_B_TOKEN', 'b'), parses().errors.length === 0 && parses().getIn(['refs', 'CHANNEL_B_TOKEN']) === 'b'), text())
+    // (d) foreign comments, a multiline scalar and sibling fields keep their
+    //     meaning across an unrelated write (semantic, via the parser).
+    seeded(['# host-managed', 'refs:', '  FOREIGN: |', '    line one', '    line two', 'other:', '  key: value', ''].join('\n'))
+    fileClaudeChannelTokens(dir, () => undefined).write('CHANNEL_B_TOKEN', 'b-token')
+    const multiDoc = parses()
+    check('yaml: foreign comments, multiline scalars and siblings survive a write',
+      multiDoc.errors.length === 0 && multiDoc.getIn(['refs', 'FOREIGN']) === 'line one\nline two\n'
+        && multiDoc.getIn(['other', 'key']) === 'value' && multiDoc.getIn(['refs', 'CHANNEL_B_TOKEN']) === 'b-token', text())
+    // (e) CRLF and no-trailing-newline inputs stay semantically intact.
+    seeded('refs:\r\n  A: keep\r\n')
+    const crlf = fileClaudeChannelTokens(dir, () => undefined)
+    crlf.write('CHANNEL_C_TOKEN', 'c')
+    const crlfDoc = parses()
+    check('yaml: a CRLF library round-trips (semantics kept, still valid)',
+      crlfDoc.errors.length === 0 && crlfDoc.getIn(['refs', 'A']) === 'keep' && crlfDoc.getIn(['refs', 'CHANNEL_C_TOKEN']) === 'c', text())
+    seeded('refs:\n  A: keep')
+    const noNewline = fileClaudeChannelTokens(dir, () => undefined)
+    noNewline.write('CHANNEL_D_TOKEN', 'd')
+    const noNewlineDoc = parses()
+    check('yaml: a library without a trailing newline round-trips',
+      noNewlineDoc.errors.length === 0 && noNewlineDoc.getIn(['refs', 'A']) === 'keep' && noNewlineDoc.getIn(['refs', 'CHANNEL_D_TOKEN']) === 'd', text())
+    // (f) damaged stores are refused byte-intact (never rebuilt over).
+    seeded('refs:\n  A: 1\nrefs:\n  B: 2\n')
+    const debugs: string[] = []
+    const damaged = fileClaudeChannelTokens(dir, message => debugs.push(message))
+    damaged.write('CHANNEL_E_TOKEN', 'e')
+    check('yaml: a duplicate-refs library is refused, byte-intact, with a debug line',
+      text() === 'refs:\n  A: 1\nrefs:\n  B: 2\n' && damaged.read('CHANNEL_E_TOKEN') === undefined && debugs.some(message => message.includes('not valid YAML')), { text: text(), debugs })
+    // (g) a refs entry that is not a mapping refuses writes.
+    seeded('refs: [1, 2]\n')
+    fileClaudeChannelTokens(dir, () => undefined).write('CHANNEL_E_TOKEN', 'e')
+    check('yaml: a non-mapping refs value refuses writes', text() === 'refs: [1, 2]\n')
+    // (h) only non-empty STRING scalars read as tokens.
+    seeded('refs:\n  NULLV: null\n  NUMV: 42\n  TOK: real\n')
+    const scalars = fileClaudeChannelTokens(dir, () => undefined)
+    check('yaml: only string scalars read as tokens (non-strings: declared, not usable)',
+      scalars.read('TOK') === 'real' && scalars.read('NULLV') === undefined && scalars.read('NUMV') === undefined && scalars.declared('NULLV') === true)
+    // (i) erase keeps the library valid for a strict parser.
+    seeded('refs:\n  KEEP: k\n  CHANNEL_F_TOKEN: gone\n')
+    const erasing = fileClaudeChannelTokens(dir, () => undefined)
+    erasing.erase('CHANNEL_F_TOKEN')
+    const erasedDoc = parses()
+    check('yaml: erase leaves a valid library with the other refs intact',
+      erasedDoc.errors.length === 0 && erasedDoc.getIn(['refs', 'KEEP']) === 'k' && erasedDoc.getIn(['refs', 'CHANNEL_F_TOKEN']) === undefined, text())
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 // ---- 10. phase 3: the spawn injection shape (env + the flag layer) ----------
 {
   const noSettings = { settings: async () => ({}), globalConfig: () => undefined } as const
@@ -539,6 +617,84 @@ const init = {
     withUrl?.baseUrl === 'https://x.example/api' && importFromSettingsEnv({ ANTHROPIC_BASE_URL: 'not a url', ANTHROPIC_MODEL: 'm' })?.baseUrl === undefined, withUrl)
 }
 
+// ---- 11b. R3-5: flag > settings > inherited; the import drops OUR injections --
+{
+  const envDir = mkdtempSync(join(tmpdir(), 'dshtui-channels-r35-'))
+  writeFileSync(join(envDir, 'settings.json'), JSON.stringify({ env: {
+    ANTHROPIC_MODEL: 'from-settings',
+    ANTHROPIC_BASE_URL: 'https://settings.example/api',
+  } }))
+  try {
+    const injected = new Set(['ANTHROPIC_AUTH_TOKEN'])
+    const live = {
+      ANTHROPIC_AUTH_TOKEN: 'flag-injected-token',          // ours (the flag layer)
+      ANTHROPIC_MODEL: 'inherited-model',                    // truly inherited
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'inherited-opus',        // inherited, settings silent
+    }
+    const merged = mergedModelEnv(envDir, live, injected)
+    check('sources: a flag-injected key outranks the settings file (deliberate)',
+      merged.ANTHROPIC_AUTH_TOKEN === 'flag-injected-token', merged)
+    check('sources: the settings file outranks the truly inherited env (the CLI\'s own order)',
+      merged.ANTHROPIC_MODEL === 'from-settings' && merged.ANTHROPIC_BASE_URL === 'https://settings.example/api', merged)
+    check('sources: an inherited key fills the gaps the settings leave',
+      merged.ANTHROPIC_DEFAULT_OPUS_MODEL === 'inherited-opus', merged)
+    check('sources: without injected keys the settings-vs-inherited order still holds (no wholesale flip)',
+      mergedModelEnv(envDir, { ANTHROPIC_MODEL: 'inherited-model' }).ANTHROPIC_MODEL === 'from-settings')
+    const importSource = importedModelEnv(envDir, live, injected)
+    check('sources: the import source EXCLUDES the TUI\'s own injections entirely',
+      importSource.ANTHROPIC_AUTH_TOKEN === undefined, importSource)
+    check('sources: the import source is settings first, inherited env for the gaps',
+      importSource.ANTHROPIC_MODEL === 'from-settings' && importSource.ANTHROPIC_BASE_URL === 'https://settings.example/api'
+        && importSource.ANTHROPIC_DEFAULT_OPUS_MODEL === 'inherited-opus', importSource)
+  } finally {
+    rmSync(envDir, { recursive: true, force: true })
+  }
+  // The cc-switch loop, end to end: the ACTIVE channel A injects itself at
+  // spawn (auth plan flag layer), cc-switch rewrote settings to relay B —
+  // "import from settings" must land B, not re-import A.
+  {
+    const envDir = mkdtempSync(join(tmpdir(), 'dshtui-channels-r35-e2e-'))
+    writeFileSync(join(envDir, 'settings.json'), JSON.stringify({ env: {
+      ANTHROPIC_BASE_URL: 'https://relay-b.example/api',
+      ANTHROPIC_AUTH_TOKEN: 'cc-switch-b-token',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'b-opus',
+    } }))
+    const previous = process.env.CLAUDE_CONFIG_DIR
+    try {
+      process.env.CLAUDE_CONFIG_DIR = envDir
+      const store = memoryClaudeChannels({ active: 'relay-a-example', channels: [
+        { id: 'relay-a-example', name: 'relay-a.example', baseUrl: 'https://relay-a.example/api', tokenRef: 'CHANNEL_RELAY_A_EXAMPLE_TOKEN' },
+      ] })
+      const tokens = memoryClaudeChannelTokens({ CHANNEL_RELAY_A_EXAMPLE_TOKEN: 'channel-a-token' })
+      const plan = await resolveClaudeAuth({}, undefined, {
+        settings: async () => ({}),
+        globalConfig: () => undefined,
+        channel: { baseUrl: 'https://relay-a.example/api', token: 'channel-a-token' },
+      })
+      const fake = fakeClaudeSdk(() => ({ capabilities: [], models }), controls)
+      const session = await openClaudeSession(claudeDeps(fake.sdk, {
+        channels: store,
+        channelTokens: tokens,
+        auth: { plan, renew: () => Promise.resolve(plan) },
+      }))
+      await tick()
+      fake.queries[0]!.emit(init)
+      await tick()
+      const imported = session.capabilities.channels?.importFromSettings()
+      check('sources: cc-switch end to end — the import lands the SETTINGS relay, not the injected one',
+        imported?.id === 'relay-b-example' && imported.connection?.baseUrl === 'https://relay-b.example/api'
+          && tokens.read('CHANNEL_RELAY_B_EXAMPLE_TOKEN') === 'cc-switch-b-token', imported)
+      const aRow = store.read().channels.find(channel => channel.id === 'relay-a-example')
+      check('sources: the active channel A survives untouched (its own row and token intact)',
+        aRow?.baseUrl === 'https://relay-a.example/api' && tokens.read('CHANNEL_RELAY_A_EXAMPLE_TOKEN') === 'channel-a-token', aRow)
+      await session.dispose()
+    } finally {
+      process.env.CLAUDE_CONFIG_DIR = previous
+      rmSync(envDir, { recursive: true, force: true })
+    }
+  }
+}
+
 // ---- 12. phase 3: save/remove through the capability (the wizard's seams) ---
 {
   const dir = mkdtempSync(join(tmpdir(), 'dshtui-channels-manage-'))
@@ -571,6 +727,63 @@ const init = {
     check('manage: remove drops the row, its token, and the dangling active',
       channels.remove!('newchan') === true && store.read().channels.length === 0 && store.read().active === undefined && tokens.read('CHANNEL_NEWCHAN_TOKEN') === undefined)
     check('manage: remove of an unknown id answers false', channels.remove!('ghost') === false)
+    await session.dispose()
+  } finally {
+    process.env.CLAUDE_CONFIG_DIR = previous
+    rmSync(envDir, { recursive: true, force: true })
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// ---- 12b. R3-6: tokenRef ownership (rotation reuse, conservative erase) ---
+{
+  const dir = mkdtempSync(join(tmpdir(), 'dshtui-channels-refs-'))
+  const store = fileClaudeChannels(dir)
+  const tokens = memoryClaudeChannelTokens()
+  // Hand-migrated profiles pointing at foreign-shaped refs, one of them
+  // SHARED by a second channel — the shapes the derived-ref-only paths left
+  // behind as orphans (R3-6's probe).
+  store.save({ id: 'legacy-example', name: 'legacy', baseUrl: 'https://legacy.example/api', tokenRef: 'LEGACY_REF' })
+  store.save({ id: 'sibling', name: 'sibling', tokenRef: 'SHARED_REF' })
+  tokens.write('LEGACY_REF', 'old-secret')
+  tokens.write('SHARED_REF', 'shared-secret')
+  const envDir = mkdtempSync(join(tmpdir(), 'dshtui-channels-refs-env-'))
+  const settingsText = JSON.stringify({ env: {
+    ANTHROPIC_BASE_URL: 'https://legacy.example/api',
+    ANTHROPIC_AUTH_TOKEN: 'imported-token',
+  } })
+  writeFileSync(join(envDir, 'settings.json'), settingsText)
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  try {
+    process.env.CLAUDE_CONFIG_DIR = envDir
+    const fake = fakeClaudeSdk(() => ({ capabilities: [], models }), controls)
+    const session = await openClaudeSession(claudeDeps(fake.sdk, { channels: store, channelTokens: tokens }))
+    await tick()
+    const channels = session.capabilities.channels!
+    // (a) a rotation reuses the row's EXISTING ref: no orphaned credential,
+    //     no silent move to the derived ref.
+    const rotated = channels.save!({ id: 'legacy-example', name: 'legacy', token: 'rotated-secret' })
+    check('refs: a rotation reuses the existing (non-derived) ref in place',
+      tokens.read('LEGACY_REF') === 'rotated-secret' && tokens.declared('CHANNEL_LEGACY_EXAMPLE_TOKEN') === false
+        && rotated.connection?.hasToken === true && store.read().channels.find(channel => channel.id === 'legacy-example')?.tokenRef === 'LEGACY_REF', { rotated, rows: store.read() })
+    // (b) the settings import is a COPY rotating the same ref — settings.json
+    //     itself is never touched.
+    const imported = channels.importFromSettings()
+    check('refs: the import rotates the existing ref and never edits settings.json',
+      imported?.connection?.hasToken === true && tokens.read('LEGACY_REF') === 'imported-token'
+        && readFileSync(join(envDir, 'settings.json'), 'utf8') === settingsText, imported)
+    // (c) removing a channel SHARING a ref keeps it (the sibling still reads).
+    check('refs: remove of a ref-sharing channel keeps the shared credential',
+      channels.remove!('sibling') === true && tokens.read('SHARED_REF') === 'shared-secret')
+    // (d) removing the hand-written-ref channel keeps its (possibly foreign)
+    //     credential — only a DERIVED ref is provably ours to erase.
+    check('refs: remove keeps a non-derived ref (ownership guard)',
+      channels.remove!('legacy-example') === true && tokens.read('LEGACY_REF') === 'imported-token' && store.read().channels.length === 0)
+    // (e) the derived-ref channel still erases on remove (the 12th section's
+    //     contract, restated as the ownership guard's positive control).
+    channels.save!({ id: 'derived', name: 'derived', token: 'd-token' })
+    check('refs: a derived ref still erases with its channel',
+      channels.remove!('derived') === true && tokens.read('CHANNEL_DERIVED_TOKEN') === undefined)
     await session.dispose()
   } finally {
     process.env.CLAUDE_CONFIG_DIR = previous
@@ -669,6 +882,209 @@ const init = {
   check('wizard: the comparator drives the restart flag', sameOptionConnection(deps.roster().channels[0], deps.roster().channels[0]) === true)
 }
 
+// ---- 14b. R3-2: delete/overwrite of the ACTIVE connection restarts ---------
+{
+  const { t } = await import('../src/i18n.js')
+  /** In-memory wizard harness whose roster rows carry REAL-shaped
+   * fingerprints (endpoint + ref + stored token, like controls.ts's
+   * connectionFingerprint — a token rotation changes the fingerprint). */
+  const harness = (initial: { active?: string; channels: readonly { id: string; name: string; baseUrl?: string; tokenRef?: string }[] }) => {
+    const store = memoryClaudeChannels({ channels: [...initial.channels], ...(initial.active === undefined ? {} : { active: initial.active }) })
+    const tokens = memoryClaudeChannelTokens()
+    const rowOf = (channel: { id: string; name: string; baseUrl?: string; tokenRef?: string }) => ({
+      id: channel.id, name: channel.name, models: [], tiers: [],
+      ...(channel.baseUrl === undefined && channel.tokenRef === undefined ? {} : {
+        connection: {
+          ...(channel.baseUrl === undefined ? {} : { baseUrl: channel.baseUrl }),
+          hasToken: channel.tokenRef !== undefined && tokens.declared(channel.tokenRef),
+          envKeys: [] as string[],
+          fingerprint: [channel.baseUrl ?? '', channel.tokenRef ?? '', channel.tokenRef === undefined ? '' : tokens.read(channel.tokenRef) ?? ''].join('/'),
+        },
+      }),
+    })
+    const wire = (answer: (id: string) => { selected?: string[]; custom?: string }) => ({
+      ask: async (request: { questions: { id: string }[] }) => {
+        const id = request.questions[0]!.id
+        return { answers: [{ id, ...answer(id) }] } as never
+      },
+      notify: () => undefined,
+      pushLocal: () => undefined,
+      roster: () => ({ channels: store.read().channels.map(rowOf), activeId: store.read().active }),
+      // The capability's save semantics (controls.ts): undefined fields keep
+      // the current row's values; a token rotates the stored ref in place.
+      save: (input: { id: string; name: string; baseUrl?: string; token?: string }) => {
+        const current = store.read().channels.find(channel => channel.id === input.id)
+        let ref = current?.tokenRef
+        if (input.token !== undefined && input.token !== '') {
+          ref = ref ?? channelTokenRef(input.id)
+          tokens.write(ref, input.token)
+        }
+        store.save({
+          id: input.id, name: input.name,
+          ...(input.baseUrl === undefined ? { ...(current?.baseUrl === undefined ? {} : { baseUrl: current.baseUrl }) } : input.baseUrl === '' ? {} : { baseUrl: input.baseUrl }),
+          ...(ref === undefined ? {} : { tokenRef: ref }),
+        })
+        return wire(undefined as never).roster().channels.find(row => row.id === input.id)
+      },
+      remove: (id: string) => { const had = store.read().channels.some(channel => channel.id === id); store.remove(id); return had },
+      activate: (id: string) => { store.setActive(id); return true },
+      peekSettings: () => undefined,
+    })
+    const deps = (selected: Record<string, string[]>, custom: Record<string, string> = {}) =>
+      wire((id: string) => (selected[id] === undefined ? { custom: custom[id] ?? '' } : { selected: selected[id]! }))
+    return { store, tokens, deps }
+  }
+  // (a) deleting the ACTIVE channel WITH a connection restarts (R3-2): the
+  //     running child still holds the erased endpoint/token.
+  {
+    const h = harness({ active: 'conn', channels: [
+      { id: 'conn', name: 'Conn', baseUrl: 'https://relay.example/api', tokenRef: 'CHANNEL_CONN_TOKEN' },
+      { id: 'plain', name: 'Plain' },
+    ] })
+    h.tokens.write('CHANNEL_CONN_TOKEN', 'live-token')
+    const outcome = await runChannelWizard(h.deps({
+      action: [t('channel-wiz-opt-manage')],
+      pick: ['Conn'],
+      edit: [t('channel-wiz-opt-edit-delete')],
+      confirm: [t('channel-wiz-opt-delete-yes')],
+    }) as never)
+    check('restart: deleting the ACTIVE connected channel demands a fresh session',
+      outcome.kind === 'deleted' && outcome.restart === true, outcome)
+  }
+  // (b) a mapping-only ACTIVE row never shaped the spawn → no restart.
+  {
+    const h = harness({ active: 'map', channels: [{ id: 'map', name: 'Map', tiers: { opus: 'x' } } as never] })
+    const outcome = await runChannelWizard(h.deps({
+      action: [t('channel-wiz-opt-manage')],
+      pick: ['Map'],
+      edit: [t('channel-wiz-opt-edit-delete')],
+      confirm: [t('channel-wiz-opt-delete-yes')],
+    }) as never)
+    check('restart: deleting a mapping-only ACTIVE channel restarts nothing',
+      outcome.kind === 'deleted' && outcome.restart === false, outcome)
+  }
+  // (c) deleting an INACTIVE connected channel leaves the running row alone.
+  {
+    const h = harness({ active: 'keep', channels: [
+      { id: 'keep', name: 'Keep', baseUrl: 'https://keep.example' },
+      { id: 'other', name: 'Other', baseUrl: 'https://other.example' },
+    ] })
+    const outcome = await runChannelWizard(h.deps({
+      action: [t('channel-wiz-opt-manage')],
+      pick: ['Other'],
+      edit: [t('channel-wiz-opt-edit-delete')],
+      confirm: [t('channel-wiz-opt-delete-yes')],
+    }) as never)
+    check('restart: deleting an inactive connected channel needs no restart',
+      outcome.kind === 'deleted' && outcome.restart === false, outcome)
+  }
+  // (d) the add flow overwriting the ACTIVE row (same name → same id) with a
+  //     rotated token, then DECLINING the switch: the disk connection changed
+  //     under the running child — restart anyway (R3-2/R3-4).
+  {
+    const h = harness({ active: 'conn', channels: [
+      { id: 'conn', name: 'Conn', baseUrl: 'https://relay.example/api', tokenRef: 'CHANNEL_CONN_TOKEN' },
+    ] })
+    h.tokens.write('CHANNEL_CONN_TOKEN', 'old-token')
+    const outcome = await runChannelWizard(h.deps({
+      action: [t('channel-wiz-opt-add')],
+      switch: [t('channel-wiz-opt-switch-no')],
+    }, { name: 'Conn', token: 'rotated-token' }) as never)
+    const landed = h.store.read().channels[0]
+    check('restart: overwriting the ACTIVE row restarts even when the switch is declined',
+      outcome.kind === 'saved' && outcome.restart === true && landed?.tokenRef === 'CHANNEL_CONN_TOKEN' && h.tokens.read('CHANNEL_CONN_TOKEN') === 'rotated-token', { outcome, landed })
+  }
+  // (e) a brand-new channel (no active row touched) stays restart-free.
+  {
+    const h = harness({ active: 'keep', channels: [{ id: 'keep', name: 'Keep', baseUrl: 'https://keep.example' }] })
+    const outcome = await runChannelWizard(h.deps({
+      action: [t('channel-wiz-opt-add')],
+      switch: [t('channel-wiz-opt-switch-no')],
+    }, { name: 'Fresh', baseurl: 'https://fresh.example', token: 'fresh-token' }) as never)
+    check('restart: adding a brand-new channel without switching restarts nothing',
+      outcome.kind === 'saved' && outcome.restart === false, outcome)
+  }
+}
+
+// ---- 14c. R3-4: an add colliding with another channel's id confirms ------
+{
+  const { t } = await import('../src/i18n.js')
+  // The slug folds every non-alphanumeric name the same way: both Chinese
+  // names derive id `channel` (the report's collision probe).
+  check('clash: two non-alphanumeric names collide on one id', channelSlug('智谱') === channelSlug('硅基流动') && channelSlug('智谱') === 'channel')
+  const h = () => {
+    const store = memoryClaudeChannels({ active: 'channel', channels: [
+      { id: 'channel', name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/anthropic', tokenRef: 'CHANNEL_CHANNEL_TOKEN' },
+    ] })
+    const tokens = memoryClaudeChannelTokens({ CHANNEL_CHANNEL_TOKEN: 'zhipu-secret' })
+    let saved = 0
+    const deps = (selected: Record<string, string[]>, custom: Record<string, string> = {}) => ({
+      ask: async (request: { questions: { id: string }[] }) => {
+        const id = request.questions[0]!.id
+        return { answers: [{ id, ...(selected[id] === undefined ? { custom: custom[id] ?? '' } : { selected: selected[id]! }) }] } as never
+      },
+      notify: () => undefined,
+      pushLocal: () => undefined,
+      roster: () => ({
+        channels: store.read().channels.map(channel => ({
+          id: channel.id, name: channel.name, models: [], tiers: [],
+          ...(channel.baseUrl === undefined ? {} : {
+            connection: { baseUrl: channel.baseUrl, hasToken: channel.tokenRef !== undefined, envKeys: [] as string[], fingerprint: [channel.baseUrl ?? '', channel.tokenRef ?? '', channel.tokenRef === undefined ? '' : tokens.read(channel.tokenRef) ?? ''].join('/') },
+          }),
+        })),
+        activeId: store.read().active,
+      }),
+      save: (input: { id: string; name: string; baseUrl?: string; token?: string }) => {
+        saved += 1
+        tokens.write(channelTokenRef(input.id), input.token ?? 'kept')
+        store.save({ id: input.id, name: input.name, ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }), tokenRef: channelTokenRef(input.id) })
+        return deps({} as never).roster().channels.find(row => row.id === input.id)
+      },
+      remove: (id: string) => { store.remove(id); return true },
+      activate: (id: string) => { store.setActive(id); return true },
+      peekSettings: () => undefined,
+    })
+    return { store, tokens, deps, savedCalls: () => saved }
+  }
+  // (a) declining the overwrite writes NOTHING (R3-4's zero-write bar).
+  {
+    const c = h()
+    const outcome = await runChannelWizard(c.deps({
+      action: [t('channel-wiz-opt-add')],
+      clash: [t('channel-wiz-opt-clash-cancel')],
+    }, { name: '硅基流动' }) as never)
+    const row = c.store.read().channels[0]
+    check('clash: declining the overwrite writes nothing',
+      outcome.kind === 'cancelled' && outcome.restart === false && c.savedCalls() === 0
+        && c.store.read().channels.length === 1 && row?.name === '智谱' && row?.baseUrl === 'https://open.bigmodel.cn/api/anthropic'
+        && c.tokens.read('CHANNEL_CHANNEL_TOKEN') === 'zhipu-secret', { outcome, row })
+  }
+  // (b) confirming the overwrite saves — and because the clobbered row is
+  //     ACTIVE with a changed connection, the funnel is owed (R3-2 link).
+  {
+    const c = h()
+    const outcome = await runChannelWizard(c.deps({
+      action: [t('channel-wiz-opt-add')],
+      clash: [t('channel-wiz-opt-clash-overwrite')],
+      switch: [t('channel-wiz-opt-switch-no')],
+    }, { name: '硅基流动', baseurl: 'https://siliconflow.example/v1', token: 'sf-secret' }) as never)
+    const row = c.store.read().channels[0]
+    check('clash: confirming the overwrite replaces the row and restarts the active connection',
+      outcome.kind === 'saved' && outcome.restart === true && row?.name === '硅基流动' && row?.baseUrl === 'https://siliconflow.example/v1'
+        && c.tokens.read('CHANNEL_CHANNEL_TOKEN') === 'sf-secret', { outcome, row })
+  }
+  // (c) re-adding the SAME-named channel is the edit path — no clash gate.
+  {
+    const c = h()
+    const outcome = await runChannelWizard(c.deps({
+      action: [t('channel-wiz-opt-add')],
+      switch: [t('channel-wiz-opt-switch-no')],
+    }, { name: '智谱', baseurl: 'https://open.bigmodel.cn/api/anthropic' }) as never)
+    check('clash: re-adding the same-named channel never trips the clash gate',
+      outcome.kind === 'saved' && c.savedCalls() === 1, outcome)
+  }
+}
+
 // ---- 15. wiring tripwires (source-level) ------------------------------------
 {
   const { readFileSync: readSrc } = await import('node:fs')
@@ -676,6 +1092,8 @@ const init = {
   const chatSrc = readRepo('../src/screens/Chat.tsx')
   check('tripwire: Chat runs the wizard from the add/manage rows', chatSrc.includes('runChannelWizard({') && chatSrc.includes("{ kind: 'add' }") && chatSrc.includes("{ kind: 'manage' }"))
   check('tripwire: Chat routes a connection change through the fresh-session funnel', chatSrc.includes('onRestartFreshSession(t(\'channel-switch-restart\'') && chatSrc.includes('sameOptionConnection(before, row.option)'))
+  check('tripwire: Chat routes an import that changes the ACTIVE connection through the funnel (R3-2)',
+    chatSrc.includes('before.id === imported.id') && chatSrc.includes('sameOptionConnection(before, imported)'))
   const pluginSrc = readRepo('../src/dsh-adapter/plugin.ts')
   check('tripwire: the composition root wires the funnel reusing the backend-switch branch',
     pluginSrc.includes('onRestartFreshSession: restartFreshSession') && pluginSrc.includes('backendSwitchRequested = backendChoice'))

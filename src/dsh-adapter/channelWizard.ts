@@ -144,6 +144,26 @@ async function runAddFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutcome
   }
   if (name === '') return { kind: 'cancelled', restart: false }
   const id = channelWizardSlug(name)
+  // ── 1b. id-clash guard (R3-4): the slug folds every name without
+  // alphanumerics the same way ("智谱" and "硅基流动" are both `channel`),
+  // so an add can silently land on ANOTHER channel's row and overwrite
+  // its connection + stored token. Re-adding the SAME-named channel is
+  // the edit path (the name-detail says so) and stays uninterrupted;
+  // a DIFFERENT-named clash needs an explicit overwrite confirmation —
+  // declining writes nothing.
+  const clash = deps.roster().channels.find(option => option.id === id && option.name !== name)
+  if (clash !== undefined) {
+    const clashAnswer = await ask({
+      questions: [optionQuestion('clash', t('channel-wiz-q-clash', { name: clash.name, id }), [
+        { label: t('channel-wiz-opt-clash-overwrite'), description: t('channel-wiz-opt-clash-overwrite-desc') },
+        { label: t('channel-wiz-opt-clash-cancel'), description: t('channel-wiz-opt-clash-cancel-desc') },
+      ], { hideCustomInput: true })],
+    })
+    if (answerSelected(clashAnswer, 'clash')[0] !== t('channel-wiz-opt-clash-overwrite')) {
+      notify(t('channel-wiz-cancelled'))
+      return { kind: 'cancelled', restart: false }
+    }
+  }
   // ── 2. base URL (blank = skip) ──────────────────────────────────
   const settings = deps.peekSettings()
   const urlAnswer = await ask({
@@ -184,13 +204,19 @@ async function runAddFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutcome
   notify(t('channel-wiz-saved', { name }), { color: 'success' })
   // ── 6. switch now? ──────────────────────────────────────────────
   const activeBefore = before.channels.find(option => option.id === before.activeId)
+  // The save may have overwritten the ACTIVE row itself (same name → same
+  // id, or an explicit clash confirmation): its connection then changed on
+  // disk even when the user declines the switch, and the running child
+  // still holds the old one — the funnel is owed regardless (R3-2/R3-4).
+  const overwroteActive = activeBefore !== undefined && activeBefore.id === id
+  const activeConnectionChanged = overwroteActive && !sameOptionConnection(activeBefore, saved)
   const switchAnswer = await ask({
     questions: [optionQuestion('switch', t('channel-wiz-q-switch', { name }), [
       { label: t('channel-wiz-opt-switch-yes') },
       { label: t('channel-wiz-opt-switch-no') },
     ], { hideCustomInput: true })],
   })
-  if (answerSelected(switchAnswer, 'switch')[0] !== t('channel-wiz-opt-switch-yes')) return { kind: 'saved', restart: false }
+  if (answerSelected(switchAnswer, 'switch')[0] !== t('channel-wiz-opt-switch-yes')) return { kind: 'saved', restart: activeConnectionChanged }
   deps.activate(id)
   return { kind: 'switched', restart: !sameOptionConnection(activeBefore, saved) }
 }
@@ -238,7 +264,13 @@ async function runManageFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutc
       return { kind: 'failed', restart: false }
     }
     notify(t('channel-wiz-deleted', { name: target.name }), { color: 'success' })
-    return { kind: 'deleted', restart: false }
+    // Deleting the ACTIVE channel with a connection severs what the RUNNING
+    // child still holds: erasing the token and the profile row cannot reach
+    // the live process, so the next message would keep riding the deleted
+    // connection — that is a connection change, routed through the
+    // fresh-session funnel (R3-2). A mapping-only row never shaped the
+    // spawn, so deleting it changes nothing the child sees.
+    return { kind: 'deleted', restart: isActive && target.connection !== undefined }
   }
   if (pick === t('channel-wiz-opt-edit-baseurl')) {
     const answer = await ask({ questions: [textQuestion('value', t('channel-wiz-q-baseurl'), t('channel-wiz-q-edit-value-hint'))] })
