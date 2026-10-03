@@ -27,9 +27,10 @@ const [
   { Writable, PassThrough },
   React,
   { Terminal: XTerm },
-  { render, Text, Box },
+  { render, Text, Box, ThemeProvider },
   { EffortInputBorder },
   { EffortTierBadge },
+  { EffortChargeGlyph },
   { ClockProvider },
   math,
   { sleep },
@@ -40,6 +41,7 @@ const [
   import('../src/ui.js'),
   import('../src/components/EffortInputBorder.js'),
   import('../src/components/EffortTierBadge.js'),
+  import('../src/components/EffortChargeGlyph.js'),
   import('../src/ink/components/ClockContext.js'),
   import('../src/trajectory/effortIgnition.js'),
   import('./lib/term-test.mjs'),
@@ -47,6 +49,9 @@ const [
 
 // 本文件按固定墙钟时间采样动画时间轴的各幕（时间轴本身是被测对象），
 // 改成轮询会移动采样点、破坏后续幕的相对时序。
+const PALETTE = math.ignitionColors('dark')
+// 主题化的对照组：红对（带底色纯黑）应画出只含红通道的列。
+const RED_PALETTE = { ignition: { r: 255, g: 0, b: 0 }, ignitionDim: { r: 0, g: 0, b: 0 } }
 let failures = 0
 function check(name: string, ok: boolean, detail = ''): void {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${detail === '' ? '' : ` (${detail})`}`)
@@ -63,25 +68,40 @@ check('easings: endpoints are exact',
 check('easings: clamped outside [0,1]',
   math.easeOutCubic(2) === 1 && math.easeInOutCubic(-3) === 0)
 check('line colors: exactly one entry per column',
-  math.ignitionLineColors({ elapsedMs: 300, width: 40, onLight: false }).length === 40)
+  math.ignitionLineColors({ elapsedMs: 300, width: 40, colors: PALETTE }).length === 40)
 check('line colors: empty before start and after the end',
-  math.ignitionLineColors({ elapsedMs: 0, width: 40, onLight: false }).length === 0
-  && math.ignitionLineColors({ elapsedMs: math.SWEEP_TOTAL_MS + 1, width: 40, onLight: false }).length === 0)
+  math.ignitionLineColors({ elapsedMs: 0, width: 40, colors: PALETTE }).length === 0
+  && math.ignitionLineColors({ elapsedMs: math.SWEEP_TOTAL_MS + 1, width: 40, colors: PALETTE }).length === 0)
 check('line colors: boundary guards (width 0, negative/NaN/at-total elapsed)',
-  math.ignitionLineColors({ elapsedMs: 300, width: 0, onLight: false }).length === 0
-  && math.ignitionLineColors({ elapsedMs: -5, width: 40, onLight: false }).length === 0
-  && math.ignitionLineColors({ elapsedMs: Number.NaN, width: 40, onLight: false }).length === 0
-  && math.ignitionLineColors({ elapsedMs: math.SWEEP_TOTAL_MS, width: 40, onLight: false }).length === 0)
+  math.ignitionLineColors({ elapsedMs: 300, width: 0, colors: PALETTE }).length === 0
+  && math.ignitionLineColors({ elapsedMs: -5, width: 40, colors: PALETTE }).length === 0
+  && math.ignitionLineColors({ elapsedMs: Number.NaN, width: 40, colors: PALETTE }).length === 0
+  && math.ignitionLineColors({ elapsedMs: math.SWEEP_TOTAL_MS, width: 40, colors: PALETTE }).length === 0)
 check('line colors: single-column terminal yields one entry',
-  math.ignitionLineColors({ elapsedMs: 300, width: 1, onLight: false }).length === 1)
+  math.ignitionLineColors({ elapsedMs: 300, width: 1, colors: PALETTE }).length === 1)
 check('line colors: every painted entry is a truecolor rgb() string',
   math
-    .ignitionLineColors({ elapsedMs: 200, width: 60, onLight: false })
+    .ignitionLineColors({ elapsedMs: 200, width: 60, colors: PALETTE })
     .every(color => color === undefined || /^rgb\(\d+,\d+,\d+\)$/.test(String(color))))
 check('line colors: some columns are painted mid-wave',
   math
-    .ignitionLineColors({ elapsedMs: 300, width: 80, onLight: false })
+    .ignitionLineColors({ elapsedMs: 300, width: 80, colors: PALETTE })
     .some(color => color !== undefined))
+// 主题化：波形色来自传入的色对，不再有模块内的固定色板。
+{
+  const painted = math
+    .ignitionLineColors({ elapsedMs: 300, width: 80, colors: RED_PALETTE })
+    .filter(color => color !== undefined)
+  check('line colors: the palette pair drives the wave (red pair paints red-only columns)',
+    painted.length > 0
+    && painted.every(color => /^rgb\(\d+,0,0\)$/.test(String(color)))
+    && painted.some(color => color !== 'rgb(0,0,0)'),
+    `${painted.length} painted`)
+  check('line colors: channel quantisation never overflows 255',
+    math
+      .ignitionLineColors({ elapsedMs: 300, width: 80, colors: { ignition: { r: 255, g: 255, b: 255 }, ignitionDim: { r: 255, g: 255, b: 255 } } })
+      .every(color => color === undefined || /^rgb\((?:25[0-5]|2[0-4]\d|1?\d?\d),(?:25[0-5]|2[0-4]\d|1?\d?\d),(?:25[0-5]|2[0-4]\d|1?\d?\d)\)$/.test(String(color))))
+}
 // --- Part B: three acts on the prompt border, then back to nothing --------
 const LEVELS = ['low', 'medium', 'high'] as const
 const COLS = 60
@@ -106,16 +126,17 @@ async function makeHarness(rows: number, driver: React.ReactNode) {
   }
   const rowText = (y: number): string =>
     term.buffer.active.getLine(term.buffer.active.baseY + y)?.translateToString(true) ?? ''
-  const fgColors = (y: number): number => {
+  const fgSet = (y: number): Set<number> => {
     const line = term.buffer.active.getLine(term.buffer.active.baseY + y)
-    if (line === undefined) return 0
     const found = new Set<number>()
+    if (line === undefined) return found
     for (let x = 0; x < COLS; x++) {
       const cell = line.getCell(x)
       if (cell !== undefined && cell.isFgRGB()) found.add(cell.getFgColor())
     }
-    return found.size
+    return found
   }
+  const fgColors = (y: number): number => fgSet(y).size
   const instance = await render(
     React.createElement(ClockProvider, null, driver),
     {
@@ -126,17 +147,17 @@ async function makeHarness(rows: number, driver: React.ReactNode) {
       patchConsole: false,
     },
   )
-  return { term, writes, rowText, fgColors, instance }
+  return { term, writes, rowText, fgSet, fgColors, instance }
 }
 
 function borderNode(effort: string | undefined): React.ReactNode {
   // Children mirror the real empty input row: block caret + centered badge.
   return React.createElement(
     EffortInputBorder,
-    { effort, levels: LEVELS, columns: COLS, onLight: false, idleColor: 'promptBorder' },
+    { effort, levels: LEVELS, columns: COLS, idleColor: 'promptBorder' },
     React.createElement(Text, null,
       ' ',
-      React.createElement(EffortTierBadge, { effort, levels: LEVELS, onLight: false, columns: COLS, leadingColumns: 2 })),
+      React.createElement(EffortTierBadge, { effort, levels: LEVELS, columns: COLS, leadingColumns: 2 })),
   )
 }
 
@@ -206,6 +227,61 @@ function SweepDriver(): React.ReactNode {
   }
 }
 
+// --- Part C: 主题接线 ----------------------------------------------------------
+// 三个点火组件都从 useTheme() 取名再查色对；不套 ThemeProvider 时上下文落到
+// 默认 `{ theme: 'dark' }`，把三处 `ignitionColors(themeName)` 写死成
+// `ignitionColors('dark')` 也照样全绿。这里用合成主题实渲染：它的点火是红
+// （#FF0000 → #2A0000，每通道 r > g），深色回退是蓝（#82B9FF → #1B1E28，
+// r < g），接错主题混进蓝列立刻红。
+{
+  const { getTheme, registerRuntimeThemeResolver } = await import('../src/theme.js')
+  const PROBE = 'ignition-probe'
+  // `promptBorder` 是采样行里静止列的颜色（idleColor），也必须偏红：否则
+  // 「整行 r > g」会被中性边框色破掉，判据就只剩波形列。
+  const probe = {
+    ...getTheme('dark'),
+    ignition: '#FF0000',
+    ignitionDim: '#2A0000',
+    promptBorder: '#5A2A2A',
+  }
+  const disposeProbe = registerRuntimeThemeResolver(name => name === PROBE ? probe : undefined)
+  const themed = (node: React.ReactNode): React.ReactNode =>
+    React.createElement(ThemeProvider, { theme: PROBE }, node)
+  const redOnly = (colors: Iterable<number>): boolean =>
+    [...colors].every(color => ((color >> 16) & 0xff) > ((color >> 8) & 0xff))
+
+  // 边框扫光 + 档位字样：与 Part B 同一组固定窗采样点。
+  const harness = await makeHarness(6, themed(React.createElement(SweepDriver)))
+  try {
+    await sleep(600) // 固定窗:墙钟 采样 sweep [0,800) 中段（切档在 t=300）
+    const wave = [...harness.fgSet(0)]
+    check('theme: 扫光/边框取主题的点火色对（红坡道，不是深色回退蓝）',
+      wave.length >= 2 && redOnly(wave), `${wave.length} colours`)
+    await sleep(650) // 固定窗:墙钟 采样 elapsed≈950，档位字样已出
+    const letters = [...harness.fgSet(1)]
+    check('theme: 档位字样与扫光同源（同一红坡道）',
+      letters.length >= 1 && redOnly(letters), `${letters.length} colours`)
+  } finally {
+    harness.instance.unmount()
+  }
+
+  // ❯ 前缀的稳态色就是点火原值：钉到具体通道，接错主题时值直接不等。
+  const glyph = await makeHarness(2, themed(
+    React.createElement(EffortChargeGlyph, { effort: 'high', levels: LEVELS, working: false })))
+  try {
+    await sleep(60) // 固定窗:墙钟 冷挂载在最高档不充能，等首帧
+    // 期望值是**字面量**，不取自 `ignitionColors(PROBE)`：从被测映射派生期望的
+    // 话，该映射自己回退时两边同漂、这条不红（verify-themes 另钉了解析层）。
+    const want = 0xff0000
+    const shown = [...glyph.fgSet(0)]
+    check('theme: ❯ 前缀取主题的 ignition 原值',
+      shown.includes(want), `fg=${shown.map(color => color.toString(16)).join(' ')}`)
+  } finally {
+    glyph.instance.unmount()
+    disposeProbe()
+  }
+}
+
 // --- Negative paths: no sweep, no letters, ever -------------------------------
 async function runDarkScenario(name: string, node: React.ReactNode) {
   const harness = await makeHarness(6, node)
@@ -228,7 +304,7 @@ await runDarkScenario('cold mount on the top tier', borderNode('high'))
 function SingleTierDriver(): React.ReactNode {
   return React.createElement(
     EffortInputBorder,
-    { effort: 'high', levels: ['high'], columns: COLS, onLight: false, idleColor: 'promptBorder' },
+    { effort: 'high', levels: ['high'], columns: COLS, idleColor: 'promptBorder' },
     React.createElement(Text, null, 'row'),
   )
 }
@@ -236,7 +312,7 @@ await runDarkScenario('single-tier table', React.createElement(SingleTierDriver)
 function NoTableDriver(): React.ReactNode {
   return React.createElement(
     EffortInputBorder,
-    { effort: 'high', levels: undefined, columns: COLS, onLight: false, idleColor: 'promptBorder' },
+    { effort: 'high', levels: undefined, columns: COLS, idleColor: 'promptBorder' },
     React.createElement(Text, null, 'row'),
   )
 }

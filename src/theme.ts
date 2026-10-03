@@ -2,12 +2,13 @@
  * dsh-tui color themes — Gentle Mist Blue (雾蓝) family.
  *
  * Two truecolor palettes share one identity: mist blues carry brand, focus,
- * and interaction; body text stays neutral. `light` uses white panel
- * surfaces (#FFFFFF) and ink text (#343945) for
- * light terminals; `dark` is its dark-terminal adaptation (warm off-white
- * text, accent-soft blues). `dark-ansi` is the 16-color fallback for
- * terminals without truecolor. The active palette is chosen at startup by
- * querying the terminal background (OSC 11) — see ThemeProvider.
+ * and interaction; body text stays neutral. `light` uses white panel surfaces
+ * (#FFFFFF) and ink text (#343945) for light terminals; `dark` is its
+ * dark-terminal adaptation (warm off-white text, accent-soft blues).
+ * `dark-ansi` is the 16-color fallback for terminals without truecolor.
+ *
+ * The active palette is chosen at startup by querying the terminal background
+ * (OSC 11) — see ThemeProvider.
  *
  * `auto` is a pseudo-theme, not a palette: it resolves to `light` or `dark`
  * from the terminal background detected via OSC 11 (which tracks the system
@@ -82,6 +83,24 @@ export type Theme = {
   professionalBlue: string
   // Chrome colors
   chromeYellow: string
+  // Themed chrome that used to be hardcoded: the context bar's per-content-type
+  // segment fills (system → tools, in bar order), the thinking-effort ignition
+  // pair (top-tier sweep / `❯` prefix / tier badge), and the prompt caret.
+  // `cursor` empty keeps the inverse-video caret.
+  contextBarSystem: string
+  contextBarPrompt: string
+  contextBarAssistant: string
+  contextBarThinking: string
+  contextBarTools: string
+  /** Effort ignition colour: the wave crest, the charged `❯` and the badge. */
+  ignition: string
+  /** Where the ignition wave fades out (its resting end), i.e. the band colour. */
+  ignitionDim: string
+  /**
+   * Prompt-input caret fill. Empty (every built-in) keeps the inverse-video
+   * caret; a declared fill gets the palette ink that contrasts with it.
+   */
+  cursor: string
   // TUI V2 colors
   /** Mascot body color. */
   mascotBody: string
@@ -187,6 +206,14 @@ export function isThemeColorKey(value: unknown): value is ThemeColorKey {
 export const THEME_NAMES = ['dark', 'dark-ansi', 'light'] as const
 
 /**
+ * Whether a name is a built-in palette (THEME_NAMES membership, never the base
+ * roles a theme file may overlay).
+ */
+export function isBuiltInThemeName(name: string): boolean {
+  return THEME_NAMES.includes(name as (typeof THEME_NAMES)[number])
+}
+
+/**
  * The `auto` pseudo-theme: not a palette, but a standing request to follow
  * the terminal background (OSC 11, which tracks the system theme in
  * terminals that follow it). Selectable everywhere a theme name is
@@ -229,6 +256,29 @@ export type ThemeName = string
 const rgb = (hex: string): string => {
   const n = parseInt(hex.slice(1), 16)
   return `rgb(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255})`
+}
+
+/** The five used-segment fills of the context bar, in bar order. */
+type ContextBarRamp = Pick<
+  Theme,
+  | 'contextBarSystem'
+  | 'contextBarPrompt'
+  | 'contextBarAssistant'
+  | 'contextBarThinking'
+  | 'contextBarTools'
+>
+
+/**
+ * Gentle Mist Blue's context-bar ramp — the DeepSeek blue family. The bar was
+ * never light-specific, so the family's dark and light presets share it; only
+ * the ignition pair differs between them.
+ */
+const MIST_BAR_RAMP: ContextBarRamp = {
+  contextBarSystem: rgb('#22305F'), // deep navy
+  contextBarPrompt: rgb('#2B3D78'), // navy
+  contextBarAssistant: rgb('#344A92'), // indigo
+  contextBarThinking: rgb('#4D6BFE'), // DeepSeek brand blue
+  contextBarTools: rgb('#5A7CFF'), // lighter blue
 }
 
 /**
@@ -289,6 +339,16 @@ const darkTheme: Theme = {
   syntaxConstant: rgb('#C98291'), // softened rose
   professionalBlue: rgb('#7DA1DE'),
   chromeYellow: rgb('#D8B270'),
+  // Pre-theme values, now overridable: the mist family's bar ramp (shared with
+  // `light`) and the ignition pair — bright blue over the terminal's own dark
+  // substrate.
+  ...MIST_BAR_RAMP,
+  ignition: rgb('#82B9FF'),
+  ignitionDim: rgb('#1B1E28'),
+  // Every built-in leaves the caret empty on purpose: empty keeps the
+  // inverse-video block the palette always had, and a theme opts into a
+  // coloured block by naming a fill.
+  cursor: '',
   mascotBody: rgb('#D98A63'), // Warm mascot orange
   inputBackground: rgb('#000000'),
   userMessageBackground: '', // user turn: no fill, gold bold text only (Kimi style)
@@ -371,6 +431,12 @@ const lightTheme: Theme = {
   syntaxConstant: rgb('#A84472'), // muted rose accent
   professionalBlue: rgb('#5E88CC'),
   chromeYellow: rgb('#C99A3F'),
+  // Same chrome as `dark` (bar and caret were never light-specific), except the
+  // ignition pair: the light variants the pre-theme code picked on white.
+  ...MIST_BAR_RAMP,
+  ignition: rgb('#1E5FEB'),
+  ignitionDim: rgb('#F0F0F2'),
+  cursor: '',
   mascotBody: rgb('#D98A63'), // Warm mascot orange
   inputBackground: rgb('#F6F3ED'),
   userMessageBackground: '', // user turn: no fill in light mode, gold text only
@@ -456,6 +522,18 @@ const darkAnsiTheme: Theme = {
   syntaxConstant: 'ansi:redBright',
   professionalBlue: 'ansi:blueBright',
   chromeYellow: 'ansi:yellowBright',
+  // The bar keeps a blue/cyan ladder inside the 16-colour space (the truecolor
+  // ramp above has five steps the ANSI palette cannot express). The ignition
+  // wave is a truecolor gradient by construction — SGR goes out per column —
+  // so the ANSI base carries the same pair the pre-theme code emitted.
+  contextBarSystem: 'ansi:blackBright',
+  contextBarPrompt: 'ansi:blue',
+  contextBarAssistant: 'ansi:blueBright',
+  contextBarThinking: 'ansi:cyan',
+  contextBarTools: 'ansi:cyanBright',
+  ignition: rgb('#82B9FF'),
+  ignitionDim: rgb('#1B1E28'),
+  cursor: '',
   mascotBody: 'ansi:yellowBright',
   inputBackground: 'ansi:black',
   userMessageBackground: '',
@@ -586,15 +664,84 @@ let runtimeThemeResolver: ThemeResolver | undefined
  */
 export function isLightThemeActive(themeName: ThemeName): boolean {
   const theme = getTheme(themeName)
+  // Built-ins answer by palette identity, never by luminance. An ANSI palette
+  // has no parseable ink at all, and a future truecolor tweak must not silently
+  // flip a whole family's contrast direction.
   if (theme === lightTheme) return true
   if (theme === darkTheme || theme === darkAnsiTheme) return false
   // 自定义或运行时主题：按文本墨色亮度判定——浅底配深墨（ink）、深底配亮墨。
-  // 调色板的 background 字段是徽标填充色而非终端背景，不能作判据。
-  const ink = theme.text
-  const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(ink)
-  if (rgb === null) return false
-  const [r, g, b] = [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])]
-  return 0.299 * r + 0.587 * g + 0.114 * b < 140
+  // 调色板的 background 字段是徽标填充色而非终端背景，不能作判据。墨色走
+  // `parseFixedColor`：校验器放行的写法（hex、带空白的 `rgb()`）都判得出来，只认紧凑
+  // `rgb()` 会把 hex 墨的浅色主题按深色算；`ansi:*` 没有绝对通道值，维持按深色算。
+  const ink = parseFixedColor(theme.text)
+  if (ink === undefined) return false
+  return 0.299 * ink[0] + 0.587 * ink[1] + 0.114 * ink[2] < 140
+}
+
+/**
+ * The glyph color for a solid caret block: whichever palette ink (`text` or
+ * `inverseText`) contrasts better with the declared `cursor` fill. The
+ * built-ins declare no fill, so every one of them answers `inverseText` and
+ * keeps the inverse-video caret; a user or plugin theme that paints a light
+ * block (where the near-white inverse ink sits at 2.50:1 and the ink text at
+ * 4.82:1) gets the readable ink instead. A fill or ink the parser cannot read
+ * (any `ansi:*` palette) keeps `inverseText` too: exactly the behavior every
+ * palette had before the caret key existed.
+ */
+export function cursorGlyphColor(theme: Theme): 'text' | 'inverseText' {
+  const fill = parseFixedColor(theme.cursor)
+  const ink = parseFixedColor(theme.text)
+  const inverse = parseFixedColor(theme.inverseText)
+  if (fill === undefined || ink === undefined || inverse === undefined) return 'inverseText'
+  return contrastRatio(fill, ink) > contrastRatio(fill, inverse) ? 'text' : 'inverseText'
+}
+
+/**
+ * sRGB channels of a fixed-channel color (`#rgb`, `#rrggbb`, `#rrggbbaa`,
+ * `rgb()`), or undefined for the 16-color `ansi:*` forms — those carry no
+ * channel values here, and their consumers fall back rather than guess. A
+ * palette a legacy runtime resolver hands back can also omit the key entirely,
+ * so undefined is a normal input, not a programming error.
+ *
+ * `#rrggbbaa` is accepted because the validators accept it, and the renderer
+ * (chalk) drops the alpha byte: the visible channels are the first six digits.
+ * Reading only three/six-digit hex made `#000000` and `#000000ff` — the same
+ * background on screen — take opposite contrast branches.
+ */
+function parseFixedColor(color: string | undefined): readonly [number, number, number] | undefined {
+  if (typeof color !== 'string') return undefined
+  const trimmed = color.trim()
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(trimmed)
+  if (hex !== null) {
+    const digits = hex[1]!.length === 3
+      ? [...hex[1]!].map(digit => digit + digit).join('')
+      : hex[1]!
+    // The slice stops at six digits, so a trailing alpha byte is ignored here
+    // exactly as the SGR emitter ignores it.
+    return [
+      parseInt(digits.slice(0, 2), 16),
+      parseInt(digits.slice(2, 4), 16),
+      parseInt(digits.slice(4, 6), 16),
+    ]
+  }
+  const form = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/i.exec(trimmed)
+  if (form === null) return undefined
+  return [Number(form[1]), Number(form[2]), Number(form[3])]
+}
+
+/** WCAG contrast ratio between two sRGB colors, for glyph-on-fill choices. */
+function contrastRatio(
+  a: readonly [number, number, number],
+  b: readonly [number, number, number],
+): number {
+  const channel = (value: number): number => {
+    const c = value / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  }
+  const luminance = (color: readonly [number, number, number]): number =>
+    0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2])
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number]
+  return (hi + 0.05) / (lo + 0.05)
 }
 
 /**
@@ -638,10 +785,7 @@ export function clearRuntimeThemeResolver(): void {
  * customTheme.isThemeAvailable(), whose contract is static-file-only.
  */
 export function isThemeAvailable(themeName: ThemeName): boolean {
-  if (
-    themeName === AUTO_THEME_NAME ||
-    THEME_NAMES.includes(themeName as (typeof THEME_NAMES)[number])
-  ) return true
+  if (themeName === AUTO_THEME_NAME || isBuiltInThemeName(themeName)) return true
   try {
     return customThemeResolver?.(themeName) !== undefined
       || runtimeThemeResolver?.(themeName) !== undefined

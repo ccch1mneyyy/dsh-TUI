@@ -1,12 +1,14 @@
 import React from 'react'
-import { Box, Text } from '../ui.js'
+import { Box, Text, useTheme } from '../ui.js'
 import type { Color } from '../ink/styles.js'
+import { getTheme } from '../theme.js'
 import {
   FREE_SEGMENT_FILL,
   FREE_SEGMENT_TEXT,
   USED_SEGMENTS,
   allocateBarColumns,
   contextBarReadout,
+  contextBarSegmentColors,
   contextPressureStep,
   rightAlignBarText,
   type ContextSegments,
@@ -53,8 +55,13 @@ export function ContextBarView({
    *  leave. Absent handlers render a static bar (tests, headless embeds). */
   onHover?: (hovered: boolean) => void
 }): React.ReactNode {
+  // The five used fills come from the palette (contextBar* keys); only the free
+  // segment still takes an override, since its shading is a light/dark call the
+  // call site already made.
+  const [themeName] = useTheme()
   if (width <= 0 || contextWindow <= 0) return null
 
+  const segmentColors = contextBarSegmentColors(getTheme(themeName))
   const freeTokens = Math.max(0, contextWindow - usedTokens)
   const values = [...USED_SEGMENTS.map(segment => segments[segment.key]), freeTokens]
   const columns = allocateBarColumns(values, width)
@@ -78,7 +85,7 @@ export function ContextBarView({
         width={segmentWidth}
         height={1}
         flexShrink={0}
-        backgroundColor={segment.color}
+        backgroundColor={segmentColors[index] ?? segment.fallback}
       />,
     )
   }

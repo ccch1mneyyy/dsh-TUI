@@ -17,7 +17,7 @@ process.env.FORCE_COLOR = '3'
 
 import type { Terminal } from '@xterm/headless'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { StatusLine }, { settled }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, ThemeProvider }, { StatusLine }, { settled }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -177,5 +177,104 @@ for (const cols of WIDTHS) {
   }
 }
 
+// ── 空余段配色：浅色判定看调色板，不看主题名 ─────────────────────────────
+// 浅色主题的名字不必叫 `light`（用户主题、插件主题都可能）；按名字比较会让
+// 它拿到深色空余段（#2E3440 深蓝灰），在浅色终端上是肉眼可见的瑕疵。这里用
+// 一份浅色墨的运行时调色板当探针：它不是内置 `light` 的身份，只能靠亮度判定。
+const DARK_FREE_FILL = (0x2e << 16) | (0x34 << 8) | 0x40
+const LIGHT_FREE_FILL = (0xe8 << 16) | (0xe8 << 8) | 0xe8
+const hex = (value: number): string => `#${value.toString(16).padStart(6, '0')}`
+
+/** 该主题下 bar 行的背景填充色**段**，按列顺序、相邻同色合并。 */
+async function barFills(theme: string): Promise<number[]> {
+  const harness = makeHarness(120, 30)
+  const instance = await render(
+    React.createElement(
+      ThemeProvider,
+      { theme },
+      React.createElement(StatusLine, { channel: makeChannel() as never }),
+    ),
+    {
+      stdout: harness.stdout as never,
+      stdin: harness.stdin as never,
+      stderr: harness.stdout as never,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  for (const value of instances.values()) instances.set(process.stdout, value)
+  try {
+    await settled(() => findBarRow(harness.term) >= 0)
+    const barY = findBarRow(harness.term)
+    const fills: number[] = []
+    if (barY >= 0) {
+      for (let x = 0; x < harness.term.cols; x++) {
+        const cell = cellAt(harness.term, barY, x)
+        if (cell === undefined || cell.isBgDefault()) continue
+        const fill = cell.getBgColor()
+        // 段与段的先后就是条上的渲染顺序：只按集合比对会漏掉「两段映射颠倒」。
+        if (fills[fills.length - 1] !== fill) fills.push(fill)
+      }
+    }
+    return fills
+  } finally {
+    instance.unmount()
+    instances.delete(process.stdout)
+    harness.term.dispose()
+  }
+}
+
+const fmtFills = (fills: readonly number[]): string => fills.map(hex).join(' ')
+
+const darkFills = await barFills('dark')
+check('dark 空余段用深色填充', darkFills.includes(DARK_FREE_FILL), fmtFills(darkFills))
+
+const probeFillsForLightInk = async (): Promise<Set<number>> => {
+  const { getTheme, registerRuntimeThemeResolver } = await import('../src/theme.js')
+  // 另一个身份（不是内置对象）⇒ 只能走亮度分支；`text` 刻意写成 hex——校验器放行的
+  // 最常见写法，判据必须读得出来（只认紧凑 `rgb()` 时下面两条会红）。
+  const lightInk = { ...getTheme('light'), text: '#22262E' }
+  const dispose = registerRuntimeThemeResolver(name =>
+    name === 'light-ink-probe' ? lightInk : undefined)
+  try {
+    return await barFills('light-ink-probe')
+  } finally {
+    dispose()
+  }
+}
+
+const lightInkFills = await probeFillsForLightInk()
+check('浅色墨的运行时主题不拿深色空余段', !lightInkFills.includes(DARK_FREE_FILL), fmtFills(lightInkFills))
+check('浅色墨的运行时主题退回浅色默认填充', lightInkFills.includes(LIGHT_FREE_FILL), fmtFills(lightInkFills))
+
+const lightFills = await barFills('light')
+check('light 空余段用浅色默认填充', lightFills.includes(LIGHT_FREE_FILL), fmtFills(lightFills))
+
+// ── 段填充跟着主题走（contextBar* 键）────────────────────────────────────
+// 五段色曾写死在 StatusMetrics 的 USED_SEGMENTS 里；现在由调色板的
+// contextBar* 键驱动。运行时主题探针断言「键 → 屏上填充色」这条链路真的接通，
+// 而不只是解析层拿到值（解析层在 verify-themes）。
+const PROBE_FILLS = [0x101010, 0x202020, 0x303030, 0x404040, 0x505050]
+{
+  const { getTheme, registerRuntimeThemeResolver } = await import('../src/theme.js')
+  const probe = {
+    ...getTheme('dark'),
+    contextBarSystem: '#101010',
+    contextBarPrompt: '#202020',
+    contextBarAssistant: '#303030',
+    contextBarThinking: '#404040',
+    contextBarTools: '#505050',
+  }
+  const dispose = registerRuntimeThemeResolver(name =>
+    name === 'chrome-probe' ? probe : undefined)
+  const probeFills = await barFills('chrome-probe')
+  const shown = fmtFills(probeFills)
+  // 按顺序逐段比对，而不是「五个色都在屏上」：只比集合时，渲染器把任意两段的
+  // 颜色对调仍然全绿——段与段的先后正是本条要钉的映射；写死的深蓝坡道色不在前
+  // 五段里，同样被这条排除。
+  check('五段填充按上下文段顺序来自主题的 contextBar* 键',
+    PROBE_FILLS.every((fill, index) => probeFills[index] === fill), shown)
+  dispose()
+}
 console.log(failed === 0 ? '\nAll context bar alignment checks passed.' : `\n${failed} check(s) failed.`)
 process.exit(failed === 0 ? 0 : 1)

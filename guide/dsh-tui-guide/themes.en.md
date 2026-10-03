@@ -11,7 +11,7 @@ dsh-TUI provides three Gentle Mist Blue palettes, plus an `auto` pseudo-theme:
 | `auto` | Pseudo-theme: follows the system/terminal background, resolving to `light` or `dark` |
 | `light` | White panels, ink body text, and mist-blue interaction color |
 | `dark` | Dark-terminal adaptation with warm-gray text and soft blue accents |
-| `dark-ansi` | Compatibility fallback using only the 16 ANSI colors |
+| `dark-ansi` | Compatibility fallback using only the 16 ANSI colors (except the ignition pair) |
 
 Without an explicit choice, the TUI queries the terminal background with OSC
 11 and selects `light` or `dark`. It falls back to `dark` when the terminal
@@ -52,7 +52,7 @@ DSH_TUI_THEME
   diff and tool-card colors before Enter applies anything. Narrower terminals
   stack the preview under the list, and it yields entirely when the height
   budget is short — the list and its focused row always stay visible.
-- `/theme <name>` switches directly to a static or runtime plugin theme.
+- `/theme <name>` switches directly to a built-in, static JSON, or runtime plugin theme.
 - `/theme status` shows the current theme and persistence location.
 
 Confirming a choice hot-switches immediately and writes it to
@@ -110,6 +110,8 @@ Available color keys by purpose:
 - Diff syntax highlighting: `syntaxKeyword`, `syntaxString`, `syntaxComment`, `syntaxNumber`, `syntaxFunction`, `syntaxType`
 - Diff syntax highlighting (cont.): `syntaxVariable`, `syntaxOperator`, `syntaxPunctuation`, `syntaxConstant`
 - Badges/accents: `mascotBody`, `inputBackground`, `professionalBlue`, `chromeYellow`
+- Animated chrome & caret: `contextBarSystem`, `contextBarPrompt`, `contextBarAssistant`
+- Animated chrome & caret (cont.): `contextBarThinking`, `contextBarTools`, `ignition`, `ignitionDim`, `cursor`
 - Messages & input: `userMessageBackground`, `userMessageBackgroundHover`, `messageActionsBackground`, `selectionBg`, `bashMessageBackgroundColor`
 - Messages & input (cont.): `memoryBackgroundColor`, `rate_limit_fill`, `rate_limit_empty`, `fastMode`, `fastModeShimmer`, `userPromptLabel`
 - Subagent messages: `subagentBullet`, `subagentDescription`, `subagentModel`, `subagentElapsed`, `subagentToolName`, `subagentStatusRunning`
@@ -117,6 +119,26 @@ Available color keys by purpose:
 
 When the file declares `name`, its filename remains a loading alias. See the
 `Theme` type in [`src/theme.ts`](../src/theme.ts) for every color key.
+
+A few keys carry behavior worth knowing:
+
+- `contextBarSystem` … `contextBarTools`: the context progress bar's five segment fills, in bar
+  order (system → prompt → assistant → thinking → tools). Static JSON and plugin themes inherit
+  all five from the `base` they pick; only a legacy resolver's key-less palette keeps the old ramp.
+- `ignition` / `ignitionDim`: the top reasoning tier's ignition colors — the sweep waveform, the
+  `❯` prefix and the tier badge all read the same pair, and `ignitionDim` is the substrate the
+  wave fades into. The wave emits per-column truecolor SGR, so these two want a form with fixed
+  channels (`#rgb`, `#rrggbb`, `#rrggbbaa` with the alpha ignored, or `rgb(r,g,b)`); `ansi:*` /
+  `ansi256(n)` — or a missing key — falls back **per key** to the built-in pair selected by the
+  palette's lightness, so the other key is unaffected.
+- `cursor`: the caret fill in the main prompt, launchpad input and picker search boxes.
+  The glyph on it is whichever of `text` / `inverseText`
+  contrasts better with that fill (a 16-color `ansi:*` fill, or a palette whose `text`/`inverseText`
+  has no parseable channels, cannot be measured and keeps `inverseText`), so a light caret can still
+  carry dark ink. The built-ins leave it empty — empty
+  keeps the inverse-video caret for backwards compatibility; declare it only when the caret must
+  stop following the body text color.
+- Transcript link text follows `accent`; an empty or unparseable accent keeps the old fixed blue.
 
 ## npm plugin themes
 
