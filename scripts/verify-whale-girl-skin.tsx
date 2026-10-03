@@ -671,11 +671,13 @@ if (imageKit === undefined) {
  * getSnapshot/getCellSize 必须返回缓存值（useSyncExternalStore 的
  * Object.is 语义——每次新对象会触发 Maximum update depth #185）。 */
 const FAKE_CELL_SIZE = Object.freeze({ width: 8, height: 16 })
-function fakeImagesStore(protocol: 'kitty' | 'sixel' | undefined): object {
+// null = the terminal never answered XTWINOPS (an explicit `undefined` would be
+// swallowed by the default parameter and silently test the happy path).
+function fakeImagesStore(protocol: 'kitty' | 'sixel' | undefined, cellSize: object | null = FAKE_CELL_SIZE): object {
   return {
     subscribe: () => () => {},
     getSnapshot: () => true,
-    getCellSize: () => FAKE_CELL_SIZE,
+    getCellSize: () => cellSize ?? undefined,
     getProtocol: () => protocol,
     request: () => () => {},
   }
@@ -685,6 +687,10 @@ const withKitty = (children: React.ReactNode): React.ReactNode => (
 )
 const withNoProtocol = (children: React.ReactNode): React.ReactNode => (
   <TerminalImagesContext.Provider value={fakeImagesStore(undefined) as never}>{children}</TerminalImagesContext.Provider>
+)
+/** 有协议但终端从不回答 XTWINOPS：像元尺寸未知。 */
+const withUnknownCellSize = (children: React.ReactNode): React.ReactNode => (
+  <TerminalImagesContext.Provider value={fakeImagesStore('sixel', null) as never}>{children}</TerminalImagesContext.Provider>
 )
 
 try {
@@ -746,6 +752,29 @@ try {
     if (u !== undefined) {
       await u.app.unmount()
       u.term.dispose()
+    }
+  }
+
+  // --- 有协议但像元尺寸未知（XTWINOPS 不支持/探测回空）：仍出图像 ----------
+  // 鲸娘是唯一整条图像路径都依赖 cellSize 的组件；缺它曾静默退字母格（用户
+  // 看到的"像素块"）。默认像元兜底后必须照常出 raster 盒。
+  resetWhaleGirlImageCacheForTests()
+  let unknown: Scene | undefined
+  try {
+    unknown = await scene(140, 30, withUnknownCellSize)
+    unknown.controller?.openPanel('companion', { focus: true })
+    await settled(() => nowPlaying(unknown!.lines()) === '鲸娘', { timeoutMs: 8000 })
+    await settled(() => artRows(unknown!.lines()).length === 0, { timeoutMs: 8000 })
+    check('image: unknown terminal cell size still renders the raster with default cells (no letter-grid fallback)',
+      artRows(unknown.lines()).length === 0 && nowPlaying(unknown.lines()) === '鲸娘',
+      'artRows=' + artRows(unknown.lines()).length + ' now=' + nowPlaying(unknown.lines()))
+    check('image: unknown cell size still decodes raster frames',
+      whaleGirlDecodedAnimationKeys().length > 0,
+      'decoded=' + whaleGirlDecodedAnimationKeys().join(','))
+  } finally {
+    if (unknown !== undefined) {
+      await unknown.app.unmount()
+      unknown.term.dispose()
     }
   }
 } catch (error) {
