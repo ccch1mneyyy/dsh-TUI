@@ -4,6 +4,35 @@
  * The controlled query loop mirrors Chat; callbacks and screen text are both
  * observable so focus-only and tip-only input can settle early.
  *
+ * 钉住的契约（2026-10 第三版改版）：
+ *
+ *   A. 版面：头部走 LogoV2 chrome=minimal + arrangement=column——**立绘在上、
+ *      DEEPSEEK/HARNESS 大字在下**，两块各自水平居中；头部里没有版号/模型/
+ *      工作目录/启动提示/欢迎语（它们各有更低频的位置：参数进卡片、目录与
+ *      版本进双角铭牌）。居中主体 = 头部 + **复合卡片**：圆角边框（只有一层，
+ *      不框套框）里只有输入行（SearchBox borderless），参数条移出框外紧贴框下
+ *      ——第四版只画值不画字段名（第六版模式段 = preset 显示名）：
+ *      `glm-5.3  ·  Max  ·  Standard  ·  default`
+ *      （任一段拿不到就省掉，全空整条不画）。框下再一行**纯文字动作入口**
+ *      （ActionChip：无键帽/键位前缀/指针，悬停或焦点 = 整块矩形高亮，恒 1 行高，
+ *      整行右对齐输入框右缘）；居中 Tips 行（● 前置圆点，首启 warning 色 +
+ *      `launchpad-first-run`）；双角铭牌：左下 `displayCwd:branch`、右下 `dsh-tui v<版本>`。
+ *   B. 输入：这一屏是**受控**的（query 由 Chat 持有），夹具必须闭环回写。
+ *      敲字进 query、退格/←/→/Home/End 走 caret、Enter 把整行**原文**交给
+ *      onSubmit、Esc 有字先清空而空输入才去看会话、Ctrl+C 空输入交 exit；
+ *      前缀随行首 `/` 从 `❯` 变 `⌘`。
+ *   C. 动作入口：纯文字标签（无键帽）；真 SGR 点击触发动作、悬停移焦点并
+ *      整块高亮；↑/↓/Tab 焦点环 = 输入框(-1) + **画出来的**入口（第一行再 ↑
+ *      回输入框）；整行右对齐（含 fitChips 裁掉尾部后的窄屏）；行高恒 1。
+ *   D. 纯函数：resolveLaunchpadActions 表驱动（第七版四格：Continue(条件) ·
+ *      会话与工作区 · 设置 · 条件位 jobs>update>star>help 优先级，单独/
+ *      多重/全不成立各一行）、truncateContinueTitle 边界、fitChips 不切半个
+ *      标签、阶梯阈值（full → no-tip → no-hints → no-art → input-only）、
+ *      fitParamParts 三段式（装得下→原样 / 装不下→尾部截断且权限段不被截 /
+ *      压到下限仍超→今天的尾部省段）。theme/lang/doctor 永不出现；settings 固定在第三格。
+ *   E. 宽度不变量：120/100/72/60/48 列下任何一行都不超宽；标签/Tips/参数条
+ *      要么完整出现在同一行、要么整条不出现（不许被切断的半句）。
+ *
  * Run: node --import tsx/esm scripts/verify-launchpad.tsx
  */
 process.env.FORCE_COLOR = '3'
@@ -25,6 +54,7 @@ const [
   { Launchpad, fitChips, prevBoundary, nextBoundary },
   { resolveLaunchpadLayout },
   { resolveLaunchpadActions, truncateContinueTitle, LAUNCHPAD_CONTINUE_TITLE_MAX },
+  { fitParamParts, PARAM_SEPARATOR, PARAM_SEGMENT_MIN_WIDTH, PARAM_UNTRUNCABLE_SEGMENT },
   { splashFontById },
   { t },
   { applyCompanionSkin },
@@ -33,6 +63,7 @@ const [
   import('../src/screens/Launchpad.js'),
   import('../src/components/launchpadLayout.js'),
   import('../src/components/launchpadActions.js'),
+  import('../src/components/launchpadParams.js'),
   import('../src/components/splashFonts.js'),
   import('../src/i18n.js',
   ),
@@ -1151,6 +1182,180 @@ base.close()
   check('K9b 另两个 boot 屏仍 DSH 专属：workspace home 与首启引导的门不动（dshBoot 保留）',
     declLine('openHomeOnBoot').includes('dshBoot') && declLine('onboardingOnBoot').includes('dshBoot'),
     declLine('openHomeOnBoot') + ' / ' + declLine('onboardingOnBoot'))
+}
+
+// ── Q. 纯函数：参数行三段式（fitParamParts；AC-1/2/3/5 的纯函数层）─────────
+// DESIGN D1 的三档：①四段原样装得下 → 逐字节不变；②装不下 → 按「可缩减量最大」
+// 逐步**尾部截断**（权限段不被截断、宽度 ≤ 下限的段不可减）；③非权限段全到下限
+// 仍超预算 → 复用今天的尾部省段（原始宽度、按显示顺序、首个超预算即 break）。
+// 断言锚在**宽度关系与档位**上（总宽 ≤ 预算 / truncated 标志 / 权限段一字不少 /
+// 尾部是 …），不把「第 66 列」这类计数写成判据（L-025）——数字只出现在载荷里。
+{
+  interface ParamRow {
+    readonly segment: string
+    readonly value: string
+    readonly colored?: boolean
+  }
+  /** 参数段之间的分隔符（与 Launchpad 版式同一条：两侧各两格）。 */
+  const SEPARATOR = '  ·  '
+  // 分隔符是**一个决定**，不是三份字面量：模块导出的常量与这里的字面量（版式
+  // 契约的独立复制品）必须一致——屏幕层另有逐字节断言（`PARAM_LINE`）。对不上
+  // 就在这里早红，别等屏上错位。T03 接入时请用 `PARAM_SEPARATOR` 渲染分隔符。
+  check('Q0 分隔符常量与版式字面量逐字节一致', PARAM_SEPARATOR === SEPARATOR, JSON.stringify(PARAM_SEPARATOR))
+  /** 一段参数行的显示宽度：各段宽之和 + 分隔符 ×（段数 - 1）。 */
+  const lineWidth = (parts: readonly { value: string }[]): number =>
+    parts.reduce((sum, part, index) => sum + stringWidth(part.value) + (index === 0 ? 0 : stringWidth(SEPARATOR)), 0)
+  /**
+   * 今天的尾部省段（改造前 `Launchpad.tsx` 参数行的累加循环，逐字节复刻）。
+   * 兜底档必须与它逐字节一致，所以这里**独立写一份当期望**，绝不复用被测函数
+   * ——拿实现证实现等于没证。只做宽度累加，不参与任何截断。
+   */
+  const legacyFit = (parts: readonly ParamRow[], budget: number): readonly string[] => {
+    const kept: string[] = []
+    let used = 0
+    for (const part of parts) {
+      const width = stringWidth(part.value)
+      const next = kept.length === 0 ? width : used + stringWidth(SEPARATOR) + width
+      if (next > budget) break
+      kept.push(part.value)
+      used = next
+    }
+    return kept
+  }
+  /**
+   * 契约推出来的「截断档下限预算」：非权限段压到 `PARAM_SEGMENT_MIN_WIDTH`、
+   * 权限段一字不减，再加分隔符。它是 D2/D4 的定义，不是实现的中间量。
+   */
+  const floorBudget = (parts: readonly ParamRow[]): number => parts.reduce(
+    (sum, part, index) => sum + (index === 0 ? 0 : stringWidth(SEPARATOR))
+      + (part.segment === PARAM_UNTRUNCABLE_SEGMENT
+        ? stringWidth(part.value)
+        : Math.min(stringWidth(part.value), PARAM_SEGMENT_MIN_WIDTH)),
+    0,
+  )
+  /** AC-1 的复现载荷：38 格的 agent preset 显示名（`·` 按窄字符算 1 格）。 */
+  const PRESET_LONG = 'Standard (Git Bash · official tooling)'
+  /** 既有夹具四段（120 列 / 预算 70）：改造前后必须逐字节一致。 */
+  const FIXTURE_PARTS: readonly ParamRow[] = [
+    { segment: 'model', value: 'glm-5.3', colored: true },
+    { segment: 'effort', value: 'Max' },
+    { segment: 'preset', value: 'Standard' },
+    { segment: 'permission', value: 'default' },
+  ]
+  // 载荷里的 `effort` 传的是**显示值** `Max`：组件在调纯函数前已把首字母大写
+  // （`Launchpad.tsx` 的 paramParts），T03 接入时保持该口径。
+  const AC1_PARTS: readonly ParamRow[] = [
+    { segment: 'model', value: 'deepseek-flash', colored: true },
+    { segment: 'effort', value: 'Max' },
+    { segment: 'preset', value: PRESET_LONG },
+    { segment: 'permission', value: 'danger-full-access' },
+  ]
+  /** AC-2①：preset 极长（76 格），其余段与 AC-1 同。 */
+  const PRESET_HUGE_PARTS: readonly ParamRow[] = [
+    AC1_PARTS[0] as ParamRow,
+    AC1_PARTS[1] as ParamRow,
+    { segment: 'preset', value: PRESET_LONG + ' — nightly variant with custom tooling' },
+    AC1_PARTS[3] as ParamRow,
+  ]
+  /** AC-2②：模型名（48 格）与 preset（38 格）都长。 */
+  const MODEL_AND_PRESET_LONG_PARTS: readonly ParamRow[] = [
+    { segment: 'model', value: 'deepseek-official/deepseek-flash-preview-2027-10', colored: true },
+    AC1_PARTS[1] as ParamRow,
+    AC1_PARTS[2] as ParamRow,
+    AC1_PARTS[3] as ParamRow,
+  ]
+  const cases: readonly {
+    readonly name: string
+    readonly parts: readonly ParamRow[]
+    readonly budget: number
+    readonly tier: 'fit' | 'truncated' | 'fallback'
+    readonly truncatedSegments: readonly string[]
+  }[] = [
+    { name: '装得下：既有夹具四段 @120 列预算（AC-3 纯函数层）', parts: FIXTURE_PARTS, budget: 70, tier: 'fit', truncatedSegments: [] },
+    { name: 'AC-1 长 preset（预算 70）：四段都在、只截 preset', parts: AC1_PARTS, budget: 70, tier: 'truncated', truncatedSegments: ['preset'] },
+    { name: 'AC-2① preset 极长：… 只出现在最长的非权限段', parts: PRESET_HUGE_PARTS, budget: 70, tier: 'truncated', truncatedSegments: ['preset'] },
+    { name: 'AC-2② preset 与 model 都长：两段被截、权限段不动', parts: MODEL_AND_PRESET_LONG_PARTS, budget: 70, tier: 'truncated', truncatedSegments: ['model', 'preset'] },
+    { name: 'AC-5 窄预算 42（@48 列）：回落今天的尾部省段', parts: AC1_PARTS, budget: 42, tier: 'fallback', truncatedSegments: [] },
+    { name: '边界：预算 = 各段下限之和（截断档边缘，四段都在）', parts: AC1_PARTS, budget: floorBudget(AC1_PARTS), tier: 'truncated', truncatedSegments: ['model', 'preset'] },
+    { name: '边界：下限之和 - 1（兜底档边缘）', parts: AC1_PARTS, budget: floorBudget(AC1_PARTS) - 1, tier: 'fallback', truncatedSegments: [] },
+  ]
+  for (const [index, row] of cases.entries()) {
+    const label = `Q${index + 1} ${row.name}`
+    const fitted = fitParamParts(row.parts, row.budget)
+    const values = fitted.map(part => part.value)
+    const original = row.parts.map(part => part.value)
+    const total = lineWidth(fitted)
+    const allPresent = fitted.length === row.parts.length
+    const truncatedNow = fitted.filter(part => part.truncated).map(part => part.segment)
+    // ① 档位判据（不是列数判据）：fit / fallback 两档要求行文本与「原样」/「今天的
+    //    省段」逐字节一致；截断档要求四段都在——截断永不省段，省段才是兜底。
+    const expectedLine = row.tier === 'fit'
+      ? original.join(SEPARATOR)
+      : row.tier === 'fallback'
+        ? legacyFit(row.parts, row.budget).join(SEPARATOR)
+        : undefined
+    check(`${label}：档位 = ${row.tier}`,
+      row.tier === 'truncated' ? allPresent : values.join(SEPARATOR) === expectedLine,
+      `tier=${row.tier} present=${fitted.length}/${row.parts.length} line=${JSON.stringify(values.join(SEPARATOR))} expected=${JSON.stringify(expectedLine)}`)
+    // ② 单行不变量：三档任何一档都不许超预算。
+    check(`${label}：总宽 ≤ 预算`, total <= row.budget, `total=${total} budget=${row.budget}`)
+    // ③ 缩减对象由 D2「可缩减量最大优先」决定——表里逐档钉死（含空：没段被截）。
+    check(`${label}：被截断的段 = [${row.truncatedSegments.join(', ')}]`,
+      truncatedNow.join(',') === row.truncatedSegments.join(','), `truncated=[${truncatedNow.join(',')}]`)
+    // ④ 「截断」与「切断」的分界（AC-5 的屏上不变量，纯函数层是同一条）：
+    //    value ≠ fullValue ⇔ truncated，且被截的尾巴必须显式带 `…`。
+    const cutSilently = fitted.filter(part =>
+      (part.value !== part.fullValue) !== part.truncated || (part.truncated && !part.value.endsWith('…')))
+    check(`${label}：没有被切断却没有 … 的段`, cutSilently.length === 0,
+      JSON.stringify(cutSilently.map(part => `${part.segment}:${part.value}`)))
+    // ⑤ 权限段：截断档必须完整（一字不少）；三档里都**永不**出现 `…`（AC-2）；
+    //    兜底档按今天的顺序被省段是允许的（用户裁决），但绝不出现半截权限名。
+    const permission = fitted.find(part => part.segment === PARAM_UNTRUNCABLE_SEGMENT)
+    const permissionSource = row.parts.find(part => part.segment === PARAM_UNTRUNCABLE_SEGMENT)
+    check(`${label}：权限段一字不少且从不含 …`,
+      row.tier === 'fallback'
+        ? permission === undefined || permission.value === permissionSource?.value
+        : permission !== undefined && permission.value === permissionSource?.value && !permission.truncated
+          && !permission.value.includes('…'),
+      JSON.stringify(permission))
+    // ⑥ 功能仍触发（L-012/L-014 的另一半）：每段都带得出完整名（T04 的 tooltip 靠它），
+    //    且截断是**尾部**截断——显示值是完整名的前缀，不是中部/头部切一刀。
+    const brokenFull = fitted.filter((part, i) =>
+      part.fullValue !== row.parts[i]?.value || !part.fullValue.startsWith(part.value.replace(/…$/u, '')))
+    check(`${label}：每段带完整名且显示值是完整名的前缀（尾部截断）`, brokenFull.length === 0,
+      JSON.stringify(brokenFull.map(part => `${part.segment}:${part.value}|${part.fullValue}`)))
+  }
+  // 段身份 / 顺序 / 配色原样透传——T03 的焦点环与 T04 的 tooltip 都认这些字段。
+  const passedThrough = fitParamParts(AC1_PARTS, 70)
+  check('Q8 段身份 / 顺序 / colored 原样透传（T03 的焦点环依赖它）',
+    passedThrough.map(part => part.segment).join(',') === 'model,effort,preset,permission'
+      && passedThrough[0]?.colored === true && passedThrough[1]?.colored === undefined,
+    JSON.stringify(passedThrough.map(part => [part.segment, part.colored])))
+  // 纯函数：不改入参（深冻结；原地写会抛 TypeError）。
+  const frozenParts = Object.freeze(AC1_PARTS.map(part => Object.freeze({ ...part })))
+  const fromFrozen = fitParamParts(frozenParts, 70)
+  check('Q9 纯函数：不改入参（冻结载荷直解）',
+    frozenParts[2]?.value === PRESET_LONG && fromFrozen.length === 4,
+    JSON.stringify(fromFrozen.map(part => part.value)))
+  // 退化档：没段 → 空；单段超预算 1 格 → 截到预算内；权限段单独放不下 → 宁可不画。
+  check('Q10 空输入 → 空输出', fitParamParts([], 70).length === 0)
+  const oneShort = fitParamParts([{ segment: 'model', value: 'deepseek-flash' }], 13)
+  check('Q11 单段超预算 1 格 → 尾部截断到预算内（带 …）',
+    oneShort.length === 1 && oneShort[0]?.truncated === true && oneShort[0]?.value.endsWith('…') === true
+      && stringWidth(oneShort[0]?.value ?? '') <= 13,
+    JSON.stringify(oneShort[0]))
+  const onlyPermission = fitParamParts([{ segment: 'permission', value: 'danger-full-access' }], 10)
+  check('Q12 权限段单独放不下 → 整段不画，绝不截断权限名（AC-2 的底线）',
+    onlyPermission.length === 0, JSON.stringify(onlyPermission))
+  const shortFloor = [
+    { segment: 'model', value: 'deepseek-flash', colored: true },
+    { segment: 'effort', value: 'Max' },
+  ]
+  const floorAttempt = fitParamParts(shortFloor, 17)
+  check('Q13 宽度 ≤ 下限的段不可减（Max 不被砍）：压不动就回落今天的省段',
+    floorAttempt.map(part => part.value).join(SEPARATOR) === legacyFit(shortFloor, 17).join(SEPARATOR)
+      && floorAttempt.every(part => part.fullValue === part.value),
+    JSON.stringify(floorAttempt.map(part => part.value)))
 }
 
 // ── F. 宽度不变量（整屏：任何一行都不超宽、没有切断的半句） ─────────────────
