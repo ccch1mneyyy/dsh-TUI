@@ -67,6 +67,11 @@ const GROUPS = {
 // 开整屏界面的动作要先收掉当前屏、覆盖层不收、记账 skipped/done、最小模式、
 // 首启横幅不 stale）。这三类缺陷是单独挂组件的回归测不到的——先有 bug 才有它。
     ['verify-launchpad-onboarding-chat', ['node', '--import', 'tsx/esm', 'scripts/verify-launchpad-onboarding-chat.tsx']],
+// 内核选择器（第八版）展示组件回归：标题/行标签/副标题（版本 · 置灰原因）/当前勾
+// 跟着 current 走/不可选行变暗（焦点压上去 ❯ 指针仍在——不能用 ListItem 的
+// disabled，它连指针一起吞）/pinned 提示行/鼠标点行回行号/没接 onPick 则无 hover
+// 反馈。与同组的 verify-launchpad 是同一个功能的两面（底栏那一行 ↔ 选择器本体）。
+    ['verify-kernel-picker', ['node', '--import', 'tsx/esm', 'scripts/verify-kernel-picker.tsx']],
 // 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
 // （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
     ["repro-askpanel", ['node', '--import', 'tsx/esm', 'scripts/repro-askpanel.tsx']],
@@ -608,6 +613,14 @@ const GROUPS = {
 // 「前缀 + 1 字符 + 反色 caret」——只看得见最新输入的字符。断言逐键输入
 // 完整可见，并守住超长查询单行窗口化语义（尾部可见、头部滚出、不折行）。
     ["verify-searchbox-windowing", ['node', '--import', 'tsx/esm', 'scripts/verify-searchbox-windowing.tsx']],
+// 崩溃可观测性回归（React #185 闪退后续）：退出漏斗的崩溃行原来只带
+// error.message，生产压缩 React 只留 "Minified React error #185" 一行、
+// 四次真机闪退零取证。serializeCrashDetail（src/utils/crashDetail.ts，
+// 纯函数）逐层序列化 stack / .cause 链 / componentStack / digest，
+// formatCrashLogLine 钉死 crash.log 的 "<UTC ISO> pid=<pid> <text>" 行
+// 格式，appendCrashLog 实写临时目录且吞掉写失败；源码 tripwire 保证
+// plugin.ts 崩溃分支真的接线（回退成 message-only 必红）。
+    ["verify-crash-detail", ['node', '--import', 'tsx/esm', 'scripts/verify-crash-detail.ts']],
   ],
   'channel-ui': [
 // L4 composition boundary plus report/metadata lifetime fences.
@@ -631,6 +644,16 @@ const GROUPS = {
 // installModelSelection、#34 的投递异步化都没被它们拦下），挂进来
 // 防再腐烂。
     ["verify-submit", ['node', '--import', 'tsx/esm', 'scripts/verify-submit.mjs']],
+// 打断后排队消息「停靠」（对齐 Claude Code 2.1.284：Esc 打断=停靠不自动发、
+// ↑ 选一条编辑、空输入 ⏎ 全部发送恰好一次）。channel 层双后端各钉一遍：DSH
+// 夹具（真 createDshSession：interrupt cancel 不带 keepInbox、内核 discard
+// 事件不删停靠预览、本地撤回不经 inbox.remove、user-cancel 仍 keepInbox、
+// claim 照常退场、Ctrl+Enter 连停靠一起立即投且各恰好一次）与 Claude 形
+// 夹具（裸 AgentSession：retractPending=false 下停靠行仍可本地撤回、空
+// still_queued 停靠成立、无 cancelQueued 能力的 CLI 回执 kept id → 撤销
+// 停靠由 discard 正常退场）。UI 层键位（Esc 停靠/⏎ 全发/↑ 选择器/Esc 退
+// 出选择器/Alt+↑ 兼容）在 verify-queue.mjs。
+    ["verify-docked-queue", ['node', 'scripts/verify-docked-queue.mjs']],
     ['verify-shell-compat', ['node', 'scripts/verify-shell-compat.mjs']],
     ['verify-agent-lifecycle-compat', ['node', 'scripts/verify-agent-lifecycle-compat.mjs']],
     ['verify-bundled-presets', ['node', 'scripts/verify-bundled-presets.mjs']],
@@ -718,6 +741,21 @@ const GROUPS = {
 // （<id>.output、解析符号链接后仍在 CLI 目录内、普通文件、最后 64 KiB）、每秒至多一次、
 // 取消观察即停；任务卡与 /jobs 面板的无头渲染。
     ["verify-claude-tasks", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-tasks.ts']],
+// Claude Task* 工具族 → 待办面板（CLI 2.1.284：TaskCreate/TaskUpdate/TaskList/TaskGet 取代
+// TodoWrite，两族都是 preset 不带的 shouldDefer 工具）：离线合成帧过真翻译器 + 共享投影器——
+// 角色映射（Task 子代理 / TaskStop 后台任务不卷入）、状态机（create 输入给内容/结果给 id、
+// update 输入直接打补丁、deleted 移除、list/get 结果为准覆盖本地）、每次变化发完整
+// todo.write 快照（TodoPanelItem 形状、创建序、不建卡）、TodoWrite 原路径逐字节不变、
+// buildQueryOptions 的 allowedTools 附加+预批准且 tools 仍是 preset。
+    ["verify-claude-task-tools", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-task-tools.ts']],
+// Claude 会话的 Working Activity 工作行（复用 DSH 工作行的 ActivityView 形状）：
+// 翻译器自身状态（openCalls/回合锚点/⏵ 自述行/TaskUpdate activeForm/本回合工具计数）
+// 由 activity.ts 折叠成 WorkingActivityView——首回合前零发布（随机动词 spinner 原样）、
+// 回合内 thinking/⏵ 叙述/tool(label+detail)/权限停靠 waiting、回合结束 done 卡（live=false）、
+// 下回合复活；detail 提取优先级与截断；会话级（假 SDK）能力订阅真实回合上屏、迟到订阅者
+// 立即收到最新值（红→绿杠杆＝session.ts 的发布钩子）。
+    ["verify-claude-activity", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-activity.ts']],
+  ["verify-claude-sdk-warnings", ['node', 'scripts/verify-claude-sdk-warnings.mjs']],
 // Claude「加载更早消息」（方案 §4.11 压缩前历史）：按会话 id 扫描定位原生 JSONL、坏行容忍、
 // 超限拒读；两次压缩的转录按 parentUuid 链逐段回溯（保留段的拼接与排除）、有界分片不重叠、
 // 用尽后幂等；channel 上 olderHistory 显示分隔线、loadOlder 逐段前插（负 id、restored）；
@@ -742,6 +780,22 @@ const GROUPS = {
 // 的能力委托与持久化，channel 侧的原生模式标签、后端命令合并、/mcp、/context、
 // 订阅用量、/login 宿主，以及状态栏模式标签与 /context 面板的无头渲染。
     ["verify-claude-controls", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-controls.tsx']],
+// Claude 权限模式名册（/permission 选择器）：bypassPermissions 必须在运行期名册里、
+// 且选择器真能切进去——allowDangerouslySkipPermissions 是 SDK 的**闸门**（sdk.d.ts:2001
+// 要求 bypassPermissions 必须带它、sdk.d.ts:331 说没它预热起来的进程无法进入 bypass），
+// 所以恒随 query options 下发，而 permissionMode 仍等于 env/settings/default 解析出的
+// 起始 mode；每行必须带非空 description 且不等于自己的 label（此前每行把名字打两遍）；
+// 安全线不放松：settings 里的 defaultMode=bypassPermissions 仍降级为 default，提示里
+// 必须指出可在 /permission 显式选择。登记在 channel-ui（与其余 Claude 后端回归同组，
+// 它们共用假 SDK 夹具；input-terminal / session-workspace 都不含后端面）。
+    ["verify-claude-mode-roster", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-mode-roster.ts']],
+// 渠道档案回归（/channel 二期）：channels.json 存储 best-effort（坏文件读空、写失败只进
+// debug、临时文件+rename 原子提交、窄化）、真源优先级全链（active channel 的 models 精确+base
+// 归一 > tiers 档位+default > 旧 model-names.json > settings env > 原始 id；channel 未激活时
+// 与四期前逐字节一致）、settings 导入形状（host 作名、ANTHROPIC_*_MODEL 吸成 tiers、不猜
+// models、重复导入刷新同 id）、/channel 门控（BACKEND_CHANNEL_COMMAND 随能力出现、DSH 永不
+// 列出）、切换后 modelDisplay 经 session-controls 的 refreshModelDisplay 钩子同调用刷新。
+    ["verify-claude-channels", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-channels.ts']],
 // Claude 可执行文件解析回归（方案 §4.2）：PATH 候选必须本进程真能 spawn（--version
 // 探针，与 SDK 同一 execFile 路径）才可采纳——npm 在 Windows 发布的扩展名空 POSIX
 // 转发脚本/.cmd 会以"native binary failed to launch"拖垮整个启动；转发脚本被跟随到

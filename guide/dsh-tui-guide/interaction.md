@@ -17,7 +17,7 @@
 | `Ctrl+G` | 用外部编辑器（`$VISUAL` → `$EDITOR`）编辑当前输入，保存退出后回填；`:cq` 或非零退出保留原稿；未设置变量时提示配置，无 `vi` 兜底 |
 | `Ctrl+Shift+E` | 展开全屏草稿编辑器（也可点输入行尾 `⛶`）：行号 + 当前行高亮 + 行/字统计，`Enter` 换行、`Ctrl+Enter` 或「发送」按钮发送、`Esc` 或「收起」按钮收起（草稿保留）；滚轮自由滚动、点击定位/拖选/双击选词与输入框一致；可经 `/settings` 重映射 |
 | `Ctrl+Z` | 撤销输入框草稿的上一步「词级」编辑（文本、光标、图片一起回退）。只作用于草稿：提交、历史召回（`Ctrl+R`/`↑`）或换会话后即结束；`Esc Esc` 的会话/消息回溯与它不是一回事。可经 `/settings` 重映射 |
-| `Esc` | 层级：关帮助 → 关图片预览 → 关命令菜单 → 关文件菜单（仅当前 `@` token）→ **输入框内有选区时仅清选区（文本不动）** → 中断回合并重投 pending 消息 → 有输入时清空 → 空输入连续两次 = 时间回溯 rewind；fullscreen 下有鼠标选区时优先取消选区（不复制） |
+| `Esc` | 层级：关帮助 → 关图片预览 → 关命令菜单 → 关文件菜单（仅当前 `@` token）→ **输入框内有选区时仅清选区（文本不动）** → 排队选择器开着时仅退出选择器 → 中断回合并**停靠** pending 消息（对齐 Claude Code：不自动重投，见「排队消息」）→ 有输入时清空 → 空输入连续两次 = 时间回溯 rewind；fullscreen 下有鼠标选区时优先取消选区（不复制） |
 | 图片预览打开时 `Esc` / `Ctrl+C` / `Enter` | 关闭预览，恢复下层界面；其余按键不透传 |
 | 图片弹窗中的 `←` / `→` | 上一张 / 下一张；首尾不循环，临时光标预览不抢输入框方向键 |
 | `Ctrl+C` | 工作时中断；中断迟迟不收敛时再按一次强制退出；空闲且有输入时清空；**空闲且输入框内有选区时复制选区到剪贴板（保留选区继续编辑）**；空输入时连续两次退出 |
@@ -88,7 +88,8 @@
   （`Esc` 关掉它回到落地页），选中的值就地更新参数行、已输入的草稿不动；选择器开着时点它内部是选择，
   **点别处会关掉它、点另一段会直接切换**成那个选择器。
 - **入口行（第七版四格）**：`继续「…」`（Alt+R；无可继续会话时整格不画）· `会话与工作区`（`/home`，
-  历史会话与工作区合并成一个入口）· `设置`（`/settings`）· **条件位**（优先级：有后台任务在跑 →
+  历史会话与工作区合并成一个入口）· `设置`（`/settings`）· `内核`（`/kernel`；当前内核已知时带名
+  「内核 · Claude」——打开内核选择器，见「命令」一节的 `/kernel`）· **条件位**（优先级：有后台任务在跑 →
   `后台任务`；检测到新版本 → `有新版本`；用量到档且从未 star → `投喂一颗 Star`；兜底 `帮助`）。
   从落地页打开的整屏界面（会话与工作区 / 设置 / 后台任务 / 家谱 / 引导向导）都**盖在落地页之上**，
   `Esc` 退出回到落地页（草稿/参数/焦点原样保留）；**离开落地页进对话页的唯一方式是回车提交一条
@@ -99,8 +100,10 @@
   第七版起还**自动轮换**（约 10s 一换，手动切换后计时重置），切换只改文本、行高与居中位置不变。
 - **双角铭牌（第七版）**：左下角工作目录**可点**——点开既有的 `/workspace` 菜单
   （盖在落地页之上、`Esc` 回落地页），键盘路径 = 焦点环末格 + `Enter`，悬停/焦点 =
-  文字高亮；右下角是**双版本竖排两行**：第一行 `dsh-tui v<TUI>`、第二行
-  `dsh-core v<内核>`（内核版本读宿主/内核线包的 manifest，读不到只画 TUI 一行），
+  文字高亮；右下角第一行是 `dsh-tui v<TUI>`，其下**每个可选内核一行**：
+  `▸ DSH · dsh-core v<内核>` / `Claude · claude-code v<CLI>`（`▸` 标出当前内核，其余行暗色；
+  未安装/未登录的内核写原因，版本读不到就只画名字）——整块**可点**，点开就是同一个内核选择器
+  （键盘路径 = 焦点环 + `Enter`）。
   两行都右对齐、左下目录铭牌与第一行顶对齐，窄屏按既有 truncate-middle 截断。
 - **引导向导**：`←`/`→` 换步骤（例外：第三步的强度区、以及已钻进去的模型列表，横向键归子控件，不换步骤）、
   `Tab` 在「语言 / 主题」与「模型 / 强度 / 工作区」两组面板间切、`↑`/`↓` 移动选择；
@@ -291,7 +294,21 @@ Bracketed paste（右键或终端原生粘贴）保留普通文本与换行。
 输入框上方会显示尚未领取的消息。
 
 - `Alt/Option+Up` 取回最后一条。
-- 模型工作时按 `Esc` 会中断，并立即重投当前 pending 消息。
+- 模型工作时按 `Esc` 会中断，排队消息**停靠**而非自动重投（对齐 Claude Code 2.1.284
+  官方行为："Press up to select a queued message to edit, or Enter to send them
+  now"）：预览保留在停靠区，底部提示 `按 ↑ 编辑排队消息，⏎ 立即发送`。
+  - 停靠态（队列非空且不在跑回合）空输入按 `↑` 进入排队消息选择器：
+    `↑/↓` 循环移动，`⏎` 把选中条撤回进输入框编辑（纯客户端撤回，任何后端
+    都可用），`Esc` 退出选择器；停靠行与提示行也可直接点击（行 = 撤回编辑，
+    提示行 = 全部发送）。
+  - 空输入按 `⏎` 把停靠队列按 FIFO 一次性全部发送（恰好一次）；输入框有
+    草稿时 `⏎` 仍只提交草稿，停靠队列保持停靠——不与下一次输入静默打包。
+  - `Ctrl+Enter`（立即发送）语义不变：中断后连同停靠队列一起立即投递。
+  - 回合正常结束时排队消息照常流入下一回合；`Ctrl+C`（user cancel）保留
+    队列的既有语义不变。
+  - 无 `interrupt_cancel_queued_v1` 能力的旧 CLI 保留自己的队列并在下回合
+    自行运行：通道以回执 `still_queued` 识别，撤销停靠、预览随 claim 退场
+    （通道不重投，无双重发送）。
 
 ## 会话工作流
 
@@ -491,6 +508,89 @@ Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的
 
 - 已经开始的会话会把选择保存为下一次 `/new` 或启动时的默认值。
 - 详细规则见[配置参考](configuration.md#agent-preset)。
+
+### 渠道档案（/channel，仅 Claude）
+
+中转渠道常用「化妆品名」卖 Claude 档位（Opus 5.5 (1M)），实际路由到别的模型。四期把 settings env 的
+ANTHROPIC_*_MODEL 启发式升格为**你自己的数据**：`~/.dsh-tui/backends/claude/channels.json` 里存渠道
+档案，激活的渠道决定「请求 id → 实际模型」的显示真源。
+
+```json
+{
+  "active": "zhipu",
+  "channels": [
+    {
+      "id": "zhipu",
+      "name": "智谱",
+      "models": { "claude-opus-5-5[1m]": "glm-5.3[1M]" },
+      "tiers": { "opus": "glm-5.3[1M]", "haiku": "glm-5.3-flash" }
+    }
+  ]
+}
+```
+
+- `models` 是精确映射（先精确匹配，再按去掉 `[1m]` 后缀、忽略大小写的 base 归一匹配）；
+  `tiers` 是档位关键字规则（`haiku`/`opus`/`sonnet`/`fable`，保留字 `default` =
+  任意模型的兜底规则，对应 ANTHROPIC_MODEL）。两个字段都可选。
+- `id` 由 `name` slug 化且稳定（小写、非字母数字折叠成 `-`）；重复导入刷新同 id 渠道。
+- 真源优先级：激活渠道的 `models` > 激活渠道的 `tiers` > 旧
+  `model-names.json`（平铺，保持兼容）> settings env 档位推断 > 原始 id。
+  没有激活渠道或文件缺省时，行为与没有这份文件时完全一致。
+
+`/channel` 打开选择器（视觉与键盘契约与 /kernel、/color 同款）：
+
+- 行 = 各渠道（当前渠道 ✓，副行是映射规模），**Enter 切换激活渠道，页脚与 /model 的模型名显示
+  立即刷新**（不等下一次事件）——选择器留在屏上，✓ 随之移动；
+- 「从 settings.json 导入」：读 ANTHROPIC_BASE_URL 的 host 作渠道名，
+  ANTHROPIC_DEFAULT_{HAIKU,OPUS,SONNET,FABLE}_MODEL + ANTHROPIC_MODEL 吸成 `tiers`
+  （不猜精确 `models`）；重复导入 = 刷新同 id 渠道（手写的 `models` 保留）；
+- 「查看映射」：当前渠道的 `models` + `tiers` 逐条打印为本地转录块（只读）。
+  **逐条编辑不在选择器里**：直接改 `channels.json`，模型显示按真源优先级实时生效。
+
+存储与 `prefs.json` 同一套 best-effort 约定：坏文件读作空、写失败只进 debug 日志、
+提交走同目录临时文件 + rename 原子落位。该命令只在声明 channels 能力的后端（Claude）出现，
+DSH 会话既不列出也不拦截。
+
+#### 三期：管理渠道本体（连接真源）
+
+渠道档案不止管模型名——`baseUrl` / `token` / 渠道私有 `env` 也归它管，激活渠道就是这条会话的
+**连接真源**：
+
+```json
+{
+  "active": "zhipu",
+  "channels": [
+    {
+      "id": "zhipu",
+      "name": "智谱",
+      "baseUrl": "https://open.bigmodel.cn/api/anthropic",
+      "tokenRef": "CHANNEL_OPEN_BIGMODEL_CN_TOKEN",
+      "env": { "ANTHROPIC_LOG": "debug" },
+      "tiers": { "opus": "glm-5.3[1M]" }
+    }
+  ]
+}
+```
+
+- **凭据存放**：token 写进 `~/.dsh/.credentials.yaml`（0600，与 /provider 的密钥同一套凭据库、
+  同一套 `CHANNEL_<ID>_TOKEN` 引用命名），`channels.json` 里只存 `tokenRef`，**永不落明文**。
+  环境变量 `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` 若与渠道端点配错对（拆对凭据），注入时会被
+  丢弃——不给旧端点的凭据去新主机上报到。
+- **注入机制**：连接随 spawn 管线下发——子进程 env 带一份，同时经 SDK `settings` 选项（CLI 的
+  `--settings` flag 层）再钉一份。CLI 2.1.287 的实测优先级是 **settings 文件的 `env` 块盖过进程
+  env**（取证见 `.local/agent-backend-review.md` 第四批增补四），所以只靠进程 env 压不住 cc-switch
+  写进 settings.json 的值；flag 层是用户可控的最高档，压得住。激活渠道带 dsh-auth 订阅登录时，
+  **渠道凭据优先**（订阅 token 不会与渠道连接同场注入）。
+- **选择器的新行**：`＊ 新增渠道` 与 `⚙ 管理渠道` 打开问句式向导（与 /provider 同一个问句面板）：
+  新增走 名字 → baseUrl → token（redact 输入）→ 映射来源（从 settings env 吸收档位或跳过）→
+  是否立即切换；管理选渠道后可改 baseUrl / token / 从 settings 刷新映射 / 删除（连凭据一起删）。
+  「导入」动作三期起也吸收 baseUrl 与 `ANTHROPIC_AUTH_TOKEN`（token 按上面的凭据规则入库）。
+- **切换语义**：新旧渠道连接信息（baseUrl/token/渠道 env）相同 → 就地刷新（模型显示即刻换）；
+  不同 → 运行中的 CLI 子进程换不了连接，走**新会话重启**（复用内核切换的漏斗：不留 resume
+  目标、backend-switch 式日志）。行尾指纹相同即视为同连接，token 换了也算不同。
+- **与 cc-switch 共存**：dsh-tui 不改不删 `~/.claude/settings.json`。会话启动时若 settings.json 的
+  `ANTHROPIC_BASE_URL` 与激活渠道不一致，提示一行（每次启动至多一次）说明本会话按渠道档案连接、
+  settings.json 原样留给裸 `claude` 用。
 
 ### 工作区
 
@@ -700,6 +800,7 @@ Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的
 **模型与显示**
 
 - `/model`、`/effort`、`/thinking`、`/tokens`、`/activity`、`/preset`、`/theme`。
+- `/channel`：渠道档案选择器（仅 Claude 后端，见「渠道档案」小节）。
 - `/color`：会话强调色。
   - 无参打开调色板选择器，`<名>` 直接设置，`status`/`reset`。
   - 输入框边框 + 右上角会话名标签，按会话保存。
@@ -721,6 +822,11 @@ Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的
 **其他**
 
 - `/update`、`/vim`（vim 编辑模式开关，见「输入编辑」）、`/terminal-setup`、`/connect`、`/help`。
+- `/kernel`：打开内核选择器（当前内核打勾，每行带版本与一句说明）。选中另一个内核会**记住并重启进入它**
+  ——新内核开新会话，旧内核的会话仍在名册里（`/resume` 找得回）。启动页的「内核」入口与右下角内核区
+  开的是同一个选择器；正在跑的回合会拒绝切换（与 `/restart` 同一道闸）。这不是 DSH 专属命令：
+  **从 Claude 切回 DSH 也只有这一条路**（Claude 会话同样从启动页进——全新启动无论记住的内核是
+  DSH 还是 Claude 都先落在启动页，那里的「内核」入口两边都可用；带 resume 目标的启动仍直达会话）。
 - `/exit`（别名 `/quit`、`/q`）。
 
 **注册表**
@@ -753,6 +859,18 @@ dsh-TUI 不预装通用技能；技能内容与发现规则由 DSH 及当前组�
   - registry 服务缺失时 TUI 使用三项 legacy 兼容名册。
   - 服务已挂载但损坏、为空或不一致时标记 unavailable 并 fail closed。
   - 退出计划模式先恢复进入前的 sandbox/approval，再还原进入前所在的权限预设（registry 仍提供时）。
+  - **非 DSH 后端**（如 Claude）声明原生权限模式时，`/permission` 列的是该后端的模式：
+    `default`（逐个询问）/ `acceptEdits`（自动接受编辑）/ `plan`（只读规划）/
+    `bypassPermissions`（跳过全部权限确认；模型支持时还有 `auto`），每行带一句解释。
+    `bypassPermissions` **只能在这个选择器里显式选择**——`Shift+Tab` 循环仍是
+    default → acceptEdits → plan（+auto），永远到不了它。底栏恒显示当前模式
+    （`bypassPermissions`/`dontAsk` 走警告色），只有「极简界面」例外。
+    Claude 自己的 settings 里写 `defaultMode: bypassPermissions` 仍会被降级为 `default` 并在转录里提示
+    ——克隆来的仓库不能静默关掉全部确认。
+  - **记住你的选择**：`/permission` 里选过的模式会存进 `~/.dsh-tui/backends/claude/prefs.json`
+    （与模型/思考深度同一份），下一次会话直接按它启动，直到你再改——优先级是
+    `DSH_TUI_CLAUDE_PERMISSION_MODE` 环境变量 > 记住的选择 > Claude settings > `default`。
+    唯一不静默的是 `bypassPermissions`：按记住的选择以它启动时，转录里会明说一句（`/permission` 可改）。
 - `/lang` 切换中英界面语言（见「界面语言」）。
 - `/compact` 压缩会话历史；内核「极简模式」预设（Agent preset `minimal`，只有一个持久 shell 工具）既不挂载压缩服务也不剪枝工具结果，长会话可能撞上下文上限、超长工具输出整段留在上下文里，`/compact` 因此不可用（Help 与 `/` 补全标注「不可用」，进入该预设时提示一次）——与界面设置的「极简界面」无关。
 - `/thinking` 扩展思考显示开关，仅本次界面状态、**不持久化**。
