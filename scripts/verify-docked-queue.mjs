@@ -623,4 +623,131 @@ const typeUI = async str => {
     JSON.stringify({ text: uiController.current?.text(), notified: channel.notified.map(n => n.text) }))
   instance.unmount()
 }
+
+// ─── UI level (R4-R2): the dock window — the focus row stays visible ───
+// A 40-row dock in a 30-row terminal: the overlay clips from the top, so
+// the window (not the full list) decides what paints. The highlighted row
+// must stay visible through the whole ↑ wrap, Enter must retract the row
+// the user sees highlighted, and lengths at the viewport boundary must not
+// clip the focus.
+const termTestLib = await import('./lib/term-test.mjs')
+function makeDockRows(count, prefix) {
+  const rows = []
+  for (let i = 0; i < count; i++) {
+    const label = String(i).padStart(2, '0')
+    rows.push({ id: 'w' + i, text: prefix + '-row-' + label, placement: 'followup', docked: true })
+  }
+  return rows
+}
+const paintedDockRows = (term, prefix) =>
+  termTestLib.viewportLines(term).filter(line => line.includes(prefix + '-row-')).length
+const highlightVisible = (term, prefix, index) =>
+  termTestLib.viewportLines(term).some(line => line.includes('❯ ' + prefix + '-row-' + String(index).padStart(2, '0')))
+const highlightCount = (term, prefix) =>
+  termTestLib.viewportLines(term).filter(line => line.includes('❯ ' + prefix + '-row-')).length
+
+{
+  // D11 — a long dock windows: the newest rows paint, the head does not.
+  const channel = makeUiChannel(makeDockRows(40, 'dock'))
+  const instance = await mountUI(channel)
+  await settle(() => paintedDockRows(termUI, 'dock') > 0)
+  const cap = paintedDockRows(termUI, 'dock')
+  check('D11 a 40-row dock windows to the overlay budget (0 < n < 40)', cap > 0 && cap < 40, String(cap))
+  check('D11 the newest row paints', findUI('dock-row-39') !== null)
+  check('D11 the head row is outside the initial window', findUI('dock-row-00') === null)
+  instance.unmount()
+
+  // D12 — ↑ through the whole wrap keeps exactly one highlight, visible.
+  const channel2 = makeUiChannel(makeDockRows(40, 'dock'))
+  const instance2 = await mountUI(channel2)
+  await settled(() => findUI('dock-row-39') !== null)
+  uiStdin.write('\x1b[A') // selector opens on the newest row
+  await settled(() => highlightVisible(termUI, 'dock', 39))
+  const checkpoints = [39, 30, 20, 10, 1, 0]
+  let allVisible = true
+  let extra = ''
+  for (let i = 0; i < checkpoints.length; i++) {
+    const target = checkpoints[i]
+    const steps = i === 0 ? 0 : (checkpoints[i - 1] - target + 40) % 40
+    if (steps > 0) uiStdin.write('\x1b[A'.repeat(steps))
+    const ok = await settled(() => highlightVisible(termUI, 'dock', target))
+    if (!ok || highlightCount(termUI, 'dock') !== 1) {
+      allVisible = false
+      extra = 'at ' + target + ' visible=' + ok + ' highlights=' + highlightCount(termUI, 'dock')
+      break
+    }
+  }
+  check('D12 the wrapped walk keeps exactly one highlight, always visible', allVisible, extra)
+  check('D12 the head row is visible once it is the focus', findUI('dock-row-00') !== null)
+
+  // D13 — Enter retracts the row the user sees highlighted (same id).
+  uiStdin.write('\r')
+  check('D13 Enter retracts exactly the highlighted row',
+    await settled(() => channel2.removed.length === 1 && channel2.removed[0] === 'w0'),
+    JSON.stringify(channel2.removed))
+  check('D13 the highlighted text lands in the input', await settled(() => uiController.current?.text() === 'dock-row-00'), JSON.stringify(uiController.current?.text()))
+  instance2.unmount()
+
+  // D14 — boundary lengths: the window never clips a short dock, and the
+  // boundary+1 dock keeps the focused (newest) row visible.
+  const lengths = [1, 2, cap - 1, cap, cap + 1]
+  let boundariesOk = true
+  let boundaryNote = ''
+  for (const length of lengths) {
+    const ch = makeUiChannel(makeDockRows(length, 'edge'))
+    const inst = await mountUI(ch)
+    await settle(() => paintedDockRows(termUI, 'edge') === Math.min(length, cap))
+    const painted = paintedDockRows(termUI, 'edge')
+    const expected = Math.min(length, cap)
+    const newestVisible = await settled(() => findUI('edge-row-' + String(length - 1).padStart(2, '0')) !== null)
+    inst.unmount()
+    if (painted !== expected || !newestVisible) {
+      boundariesOk = false
+      boundaryNote = 'len=' + length + ' painted=' + painted + ' expected=' + expected + ' newestVisible=' + newestVisible
+      break
+    }
+  }
+  check('D14 lengths 1/2/boundary/boundary+1 paint min(n, cap) rows with the newest visible', boundariesOk, boundaryNote + ' cap=' + cap)
+}
+
+{
+  // D15 — CJK rows and a NARROW terminal: the window still keeps the
+  // highlighted row on screen (rows truncate, the focus never clips).
+  const COLS_N = 44
+  const termN = new XTermUI({ cols: COLS_N, rows: ROWS_UI, scrollback: 50, allowProposedApi: true })
+  class NarrowStdout extends Writable {
+    columns = COLS_N
+    rows = ROWS_UI
+    isTTY = true
+    _write(chunk, _enc, cb) { termN.write(String(chunk), cb) }
+  }
+  const stdoutN = new NarrowStdout()
+  const stderrN = new FakeStderrUI()
+  const stdinN = new FakeStdinUI()
+  const cjkRows = []
+  for (let i = 0; i < 30; i++) {
+    cjkRows.push({ id: 'c' + i, text: '停靠中文消息第' + String(i).padStart(2, '0') + '条', placement: 'followup', docked: true })
+  }
+  const channel = makeUiChannel(cjkRows)
+  const tree = ReactUI.createElement(AlternateScreen, null,
+    ReactUI.createElement(Box, { height: ROWS_UI, flexDirection: 'column', justifyContent: 'flex-end' },
+      ReactUI.createElement(PromptInputUI, {
+        channel,
+        helpOpen: false,
+        onToggleHelp() {},
+        onRunCommand: () => false,
+        selectionActive: false,
+        controllerRef: uiController,
+      })))
+  const instance = await renderUI(tree, { stdout: stdoutN, stderr: stderrN, stdin: stdinN, exitOnCtrlC: false, patchConsole: false })
+  check('D15 the narrow CJK dock paints its newest row', await settled(() => termTestLib.findText(termN, '第29条') !== null))
+  check('D15 the narrow CJK dock windows the head out', termTestLib.findText(termN, '第00条') === null)
+  stdinN.write('\x1b[A')
+  check('D15 the highlighted CJK row is visible (newest first)', await settled(() => termTestLib.viewportLines(termN).some(line => line.includes('❯') && line.includes('第29条'))))
+  stdinN.write('\x1b[A'.repeat(29))
+  check('D15 the wrapped highlight reaches the head row visibly', await settled(() => termTestLib.viewportLines(termN).some(line => line.includes('❯') && line.includes('第00条'))))
+  stdinN.write('\r')
+  check('D15 Enter retracts the highlighted CJK row', await settled(() => channel.removed.length === 1 && channel.removed[0] === 'c0'), JSON.stringify(channel.removed))
+  instance.unmount()
+}
 process.exit(failed)
