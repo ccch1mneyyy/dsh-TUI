@@ -29,23 +29,39 @@
  *     问句式向导（channelWizard.ts，headless 驱动）走 saveChannel/
      removeChannel/peekChannelImport 三动作。
  *
+ *  7. **R3-1 凭据隔离**（.local/review/r3-channels-security.md）：携带连接的
+ *     渠道在 flag 层逐字声明三个凭据键——API_KEY=''、OAUTH=''、AUTH_TOKEN=
+ *     渠道 token 或 ''（空串压掉 user settings 里 cc-switch 写入的旧值）——
+ *     并清空路由变量，child env 同步清理冲突拼写；自定义 endpoint 缺凭据
+ *     fail-closed 拒绝启动（含 apiKeyHelper 冲突）；mismatch notice 扩展到
+ *     被替换凭据的键名（不报值）。出站行为用隔离环回实证：真
+ *     resolveClaudeAuth + 已装 CLI + 127.0.0.1 动态端口 listener，六格矩阵
+ *     （tokenless/token × 三种旧凭据键）断言「出站请求不含旧 sentinel」——
+ *     形状断言不替代行为断言；无 CLI 时显式 SKIP，不伪称覆盖。
+ *
  * Run: node --import tsx/esm scripts/verify-claude-channels.ts
  */
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
+import http from 'node:http'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { channelCapabilities } from '../src/channel/capabilities.js'
 import { channelSlug, fileClaudeChannels, importFromSettingsEnv, importTokenFromSettingsEnv, memoryClaudeChannels, sameChannelConnection } from '../src/backends/claude/channels.js'
 import { channelTokenRef, fileClaudeChannelTokens, memoryClaudeChannelTokens } from '../src/backends/claude/channelTokens.js'
-import { resolveClaudeAuth } from '../src/backends/claude/auth.js'
+import { ClaudeChannelConflictError, channelMissingCredential, resolveClaudeAuth } from '../src/backends/claude/auth.js'
+import { channelStartNotices } from '../src/backends/claude/backend.js'
+import { loadClaudeSdk } from '../src/backends/claude/sdk.js'
 import { runChannelWizard, sameOptionConnection } from '../src/dsh-adapter/channelWizard.js'
 import { readModelEnvTruth } from '../src/backends/claude/modelEnv.js'
 import { openClaudeSession } from '../src/backends/claude/session.js'
 import { BACKEND_CHANNEL_COMMAND, LOCAL_COMMANDS } from '../src/commands.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { localCommandsFor } from '../src/dsh-adapter/channel/core/session-controls.js'
-import { setLang } from '../src/i18n.js'
+import { setLang, t } from '../src/i18n.js'
 import { claudeDeps, fakeClaudeSdk, tick } from './lib/claude-fake-sdk.js'
 
 setLang('en')
@@ -371,10 +387,15 @@ const init = {
   })
   check('inject: the channel env carries the endpoint, the token and the private env',
     plan.env.ANTHROPIC_BASE_URL === 'https://relay.example/api' && plan.env.ANTHROPIC_AUTH_TOKEN === 'chan-token' && plan.env.ANTHROPIC_LOG === 'debug', plan.env)
-  check('inject: the environment stale spellings are gone',
-    plan.env.ANTHROPIC_API_KEY === undefined && plan.env.ANTHROPIC_BASE_URL !== 'https://stale.example' && plan.env.ANTHROPIC_AUTH_TOKEN !== 'stale-token', plan.env)
-  check('inject: the flag layer re-states exactly the channel keys (the settings env cannot override them)',
-    plan.settings?.env?.ANTHROPIC_BASE_URL === 'https://relay.example/api' && plan.settings?.env?.ANTHROPIC_AUTH_TOKEN === 'chan-token' && plan.settings?.env?.ANTHROPIC_LOG === 'debug' && Object.keys(plan.settings.env).length === 3, plan.settings)
+  check('inject: the environment stale spellings are gone (every credential, in the child env too — R3-1)',
+    plan.env.ANTHROPIC_API_KEY === undefined && plan.env.ANTHROPIC_BASE_URL !== 'https://stale.example' && plan.env.ANTHROPIC_AUTH_TOKEN !== 'stale-token' && plan.env.CLAUDE_CODE_OAUTH_TOKEN === undefined, plan.env)
+  check('inject: the flag layer names all three credential keys verbatim (R3-1: an empty string suppresses the value user settings still holds)',
+    plan.settings?.env?.ANTHROPIC_BASE_URL === 'https://relay.example/api' && plan.settings?.env?.ANTHROPIC_AUTH_TOKEN === 'chan-token'
+    && plan.settings?.env?.ANTHROPIC_API_KEY === '' && plan.settings?.env?.CLAUDE_CODE_OAUTH_TOKEN === ''
+    && plan.settings?.env?.ANTHROPIC_LOG === 'debug', plan.settings)
+  check('inject: the flag layer blanks the routing variables (a settings tier cannot re-route the credential)',
+    plan.settings?.env?.CLAUDE_CODE_USE_BEDROCK === '' && plan.settings?.env?.CLAUDE_CODE_API_BASE_URL === '' && plan.settings?.env?.ANTHROPIC_CUSTOM_HEADERS === ''
+    && plan.settings?.env?.ANTHROPIC_UNIX_SOCKET === '' && plan.settings?.env?.CLAUDE_CODE_USE_GATEWAY === '', plan.settings?.env)
   check('inject: the route names the channel endpoint and the source says auth-token',
     plan.route?.kind === 'custom-endpoint' && (plan.route as { host?: string }).host === 'relay.example' && plan.source === 'auth-token', plan)
   // (b) the dsh-auth login is never injected alongside a channel connection —
@@ -386,11 +407,75 @@ const init = {
   })
   check('inject: a channel connection outranks the dsh-auth login (no oauth alongside)',
     freshCalls === 0 && planFirstParty.source === 'auth-token' && planFirstParty.env.CLAUDE_CODE_OAUTH_TOKEN === undefined, planFirstParty)
-  // (c) a channel without a stored token still pins the endpoint.
+  // (c) a channel without a stored token still pins the endpoint — and now
+  //     pins all three credential keys EMPTY: production refuses to SPAWN a
+  //     tokenless custom endpoint (backend.ts, the fail-closed checks below),
+  //     but the plan itself stays defense-in-depth complete.
   const planNoToken = await resolveClaudeAuth({ ...base }, undefined, { ...noSettings, channel: { baseUrl: 'https://relay.example/api' } })
   check('inject: a tokenless channel pins the base URL and drops the split-pair ambient credentials',
-    planNoToken.env.ANTHROPIC_BASE_URL === 'https://relay.example/api' && planNoToken.env.ANTHROPIC_AUTH_TOKEN === undefined && planNoToken.env.ANTHROPIC_API_KEY === undefined
-    && planNoToken.settings?.env?.ANTHROPIC_BASE_URL === 'https://relay.example/api' && planNoToken.settings?.env?.ANTHROPIC_AUTH_TOKEN === undefined, planNoToken)
+    planNoToken.env.ANTHROPIC_BASE_URL === 'https://relay.example/api' && planNoToken.env.ANTHROPIC_AUTH_TOKEN === undefined && planNoToken.env.ANTHROPIC_API_KEY === undefined && planNoToken.env.CLAUDE_CODE_OAUTH_TOKEN === undefined
+    && planNoToken.settings?.env?.ANTHROPIC_BASE_URL === 'https://relay.example/api' && planNoToken.settings?.env?.ANTHROPIC_AUTH_TOKEN === ''
+    && planNoToken.settings?.env?.ANTHROPIC_API_KEY === '' && planNoToken.settings?.env?.CLAUDE_CODE_OAUTH_TOKEN === '', planNoToken)
+  // (c2) a token without a base URL re-credentials the endpoint the ambient
+  //      environment/settings already names (the pair stays), and the flag
+  //      layer owns the credential keys without pinning any endpoint.
+  const planTokenOnly = await resolveClaudeAuth({ ...base }, undefined, { ...noSettings, channel: { token: 'chan-token' } })
+  check('inject: a token-only channel keeps the ambient endpoint and replaces only the credential',
+    planTokenOnly.env.ANTHROPIC_BASE_URL === 'https://stale.example' && planTokenOnly.env.ANTHROPIC_AUTH_TOKEN === 'chan-token'
+    && planTokenOnly.env.ANTHROPIC_API_KEY === undefined && planTokenOnly.env.CLAUDE_CODE_OAUTH_TOKEN === undefined
+    && planTokenOnly.settings?.env?.ANTHROPIC_AUTH_TOKEN === 'chan-token' && planTokenOnly.settings?.env?.ANTHROPIC_API_KEY === ''
+    && planTokenOnly.settings?.env?.CLAUDE_CODE_OAUTH_TOKEN === '' && planTokenOnly.settings?.env?.ANTHROPIC_BASE_URL === undefined, planTokenOnly)
+  // (c3) an env-only profile (a model mapping with private variables) pins
+  //      nothing and leaves the ambient credentials exactly as they were —
+  //      the phase-1/-2 behavior is a contract, not an accident.
+  const planEnvOnly = await resolveClaudeAuth({ ...base }, undefined, { ...noSettings, channel: { env: { ANTHROPIC_LOG: 'debug' } } })
+  check('inject: an env-only channel pins only its env and keeps the ambient credentials',
+    planEnvOnly.settings?.env?.ANTHROPIC_LOG === 'debug' && Object.keys(planEnvOnly.settings?.env ?? {}).length === 1
+    && planEnvOnly.env.ANTHROPIC_API_KEY === 'stale-key' && planEnvOnly.env.ANTHROPIC_AUTH_TOKEN === 'stale-token' && planEnvOnly.source === 'api-key', planEnvOnly)
+  // (c4) fail-closed seams (R3-1 acceptance 3/4): a custom endpoint without
+  //      a credential the profile modeled is refusable, and an explicit
+  //      helper identity in readable settings conflicts with a channel.
+  check('refuse: a custom endpoint with no token and no credential-shaped env key is refusable',
+    channelMissingCredential({ baseUrl: 'https://relay.example/api' }) === true
+    && channelMissingCredential({ baseUrl: 'not a url' }) === true)
+  check('refuse: the first-party origin, a token, or an explicitly modeled env credential are not',
+    channelMissingCredential({ baseUrl: 'https://api.anthropic.com' }) === false
+    && channelMissingCredential({ baseUrl: 'https://relay.example/api', token: 't' }) === false
+    && channelMissingCredential({ baseUrl: 'https://relay.example/api', env: { Anthropic_Api_Key: 'k' } }) === false
+    && channelMissingCredential({ env: { ANTHROPIC_LOG: 'debug' } }) === false)
+  let helperConflict = ''
+  try {
+    await resolveClaudeAuth({ ...base }, undefined, {
+      settings: async () => ({ env: {}, apiKeyHelper: '/usr/local/bin/key' }),
+      globalConfig: () => undefined,
+      channel: { baseUrl: 'https://relay.example/api', token: 'chan-token' },
+    })
+  } catch (error) {
+    helperConflict = error instanceof ClaudeChannelConflictError ? error.message : 'wrong error: ' + String(error)
+  }
+  check('refuse: a settings apiKeyHelper conflicts with a channel (fail closed, never a double credential)',
+    helperConflict === t('claude-channel-helper-conflict') && !helperConflict.includes('chan-token'), helperConflict)
+  const helperless = await resolveClaudeAuth({ ...base }, undefined, {
+    settings: async () => ({ env: {} }),
+    globalConfig: () => undefined,
+    channel: { baseUrl: 'https://relay.example/api', token: 'chan-token' },
+  })
+  check('refuse: no helper declared, no conflict (the plan builds)', helperless.source === 'auth-token' && helperless.env.ANTHROPIC_AUTH_TOKEN === 'chan-token', helperless.source)
+  // (c5) the cc-switch notices (R3-1 acceptance 5): which settings
+  //      credentials the channel pin replaces — key names only.
+  {
+    const superseded = channelStartNotices({ name: 'ZhiPu', baseUrl: 'https://relay.example/api', tokenRef: 'CHANNEL_RELAY_TOKEN' },
+      { ANTHROPIC_BASE_URL: 'https://old.invalid', ANTHROPIC_API_KEY: 'stale-key-secret', anthropic_auth_token: 'stale-token-secret', CLAUDE_CODE_OAUTH_TOKEN: 'stale-oauth-secret' })
+    check('notice: the URL mismatch line and the superseded-credential line both appear (names only, never values)',
+      superseded.length === 2
+      && superseded[0] === t('channel-conn-settings-mismatch', { name: 'ZhiPu' })
+      && superseded[1] === t('channel-conn-creds-superseded', { keys: 'ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN' })
+      && !superseded.join('\n').includes('stale-key-secret') && !superseded.join('\n').includes('stale-token-secret') && !superseded.join('\n').includes('stale-oauth-secret'), superseded)
+    check('notice: a mapping-only channel supersedes nothing (the ambient credentials stand)',
+      channelStartNotices({ name: 'Map' }, { ANTHROPIC_API_KEY: 'k' }).length === 0)
+    check('notice: matching URLs and no settings credentials stay silent',
+      channelStartNotices({ name: 'Same', baseUrl: 'https://relay.example/api' }, { ANTHROPIC_BASE_URL: 'https://relay.example/api' }).length === 0)
+  }
   // (d) NO channel connection: the plan stays byte-identical to phase 2 (no
   //     flag layer, no env surgery) — the priority-chain regression guard.
   const legacy = await resolveClaudeAuth({ ...base }, undefined, noSettings)
@@ -599,6 +684,254 @@ const init = {
   const actionsSrc = readRepo('../src/dsh-adapter/channel/core/actions.ts')
   check('tripwire: the channel actions delegate saveChannel/removeChannel/peekChannelImport',
     actionsSrc.includes('saveChannel: input =>') && actionsSrc.includes('removeChannel: id =>') && actionsSrc.includes('peekChannelImport: () =>'))
+}
+
+// ---- 16. R3-1: fail-closed refusals through the real backend.open ---------
+//
+// The unit checks above cover the predicates; this drives the WIRING: an
+// isolated child process (temp HOME/USERPROFILE/CLAUDE_CONFIG_DIR/DSH_HOME,
+// every ANTHROPIC_*/CLAUDE_CODE_* ambient variable scrubbed before the first
+// import) imports the real backend and opens a session with (a) an active
+// tokenless custom-endpoint channel and (b) a token channel under a settings
+// apiKeyHelper. Both opens must REJECT with the actionable sentence — never
+// spawn (the "CLI" is node itself, which exits at once on the SDK's args),
+// never leak the synthetic token or helper material.
+{
+  const home = mkdtempSync(join(tmpdir(), 'dshtui-channels-refuse-'))
+  const configDir = join(home, '.claude')
+  const dshHome = join(home, '.dsh')
+  mkdirSync(configDir, { recursive: true })
+  mkdirSync(dshHome, { recursive: true })
+  const backendUrl = new URL('../src/backends/claude/index.ts', import.meta.url).href
+  const root = fileURLToPath(new URL('..', import.meta.url))
+  const child = [
+    "const [backendUrl, home, configDir, dshHome] = process.argv.slice(2)",
+    "process.env.DSH_TUI_LANG = 'en'",
+    "const fs = await import('node:fs')",
+    "const path = await import('node:path')",
+    "process.env.HOME = home",
+    "process.env.USERPROFILE = home",
+    "process.env.CLAUDE_CONFIG_DIR = configDir",
+    "process.env.DSH_HOME = dshHome",
+    "for (const key of Object.keys(process.env)) {",
+    "  const upper = key.toUpperCase()",
+    "  if (upper.startsWith('ANTHROPIC_') || upper === 'CLAUDECODE' || (upper.startsWith('CLAUDE_CODE_') && upper !== 'CLAUDE_CODE_EXECUTABLE')) delete process.env[key]",
+    "}",
+    "process.env.CLAUDE_CODE_EXECUTABLE = process.execPath",
+    "const dataDir = path.join(home, '.dsh-tui', 'backends', 'claude')",
+    "fs.mkdirSync(dataDir, { recursive: true })",
+    "const open = async claudeBackend => {",
+    "  try {",
+    "    const session = await claudeBackend.open({ kind: 'create', cwd: home }, { cwd: home, debug: () => undefined, warn: () => undefined })",
+    "    await session.dispose()",
+    "    return 'opened'",
+    "  } catch (error) { return 'rejected: ' + (error instanceof Error ? error.message : String(error)) }",
+    "}",
+    "const report = outcome => console.log('@@RESULT@@' + JSON.stringify(outcome))",
+    "try {",
+    "  const { claudeBackend } = await import(backendUrl)",
+    "  fs.writeFileSync(path.join(dataDir, 'channels.json'), JSON.stringify({ active: 'relay', channels: [{ id: 'relay', name: 'Relay', baseUrl: 'https://relay.example/api' }] }))",
+    "  const s1 = await open(claudeBackend)",
+    "  fs.writeFileSync(path.join(dataDir, 'channels.json'), JSON.stringify({ active: 'relay', channels: [{ id: 'relay', name: 'Relay', baseUrl: 'https://relay.example/api', tokenRef: 'CHANNEL_RELAY_TOKEN' }] }))",
+    "  fs.writeFileSync(path.join(dshHome, '.credentials.yaml'), 'refs:\\n  CHANNEL_RELAY_TOKEN: synthetic-channel-token-not-real\\n')",
+    "  fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({ apiKeyHelper: 'echo synthetic-helper-key-not-real' }))",
+    "  const s2 = await open(claudeBackend)",
+    "  report({ s1, s2 })",
+    "} catch (error) {",
+    "  report({ crashed: error instanceof Error ? error.message : String(error) })",
+    "}",
+  ].join('\n')
+  const probe = join(home, 'refuse-probe.mjs')
+  writeFileSync(probe, child)
+  try {
+    const ran = await new Promise<{ code: number | null; stdout: string; stderr: string }>(resolve => {
+      execFile(process.execPath, ['--import', 'tsx/esm', probe, backendUrl, home, configDir, dshHome], {
+        cwd: root,
+        timeout: 60_000,
+        // A child that inherits a broken/relative TMP chokes inside tsx; its
+        // temp lives in its own isolated home.
+        env: { ...process.env, TMP: home, TEMP: home, TMPDIR: home },
+      }, (error, stdout, stderr) => {
+        resolve({ code: error === null ? 0 : (error.code ?? 1), stdout: String(stdout), stderr: String(stderr) })
+      })
+    })
+    const line = ran.stdout.split(/\r?\n/u).find(l => l.startsWith('@@RESULT@@'))
+    const parsed = line === undefined ? undefined : JSON.parse(line.slice('@@RESULT@@'.length)) as { s1?: string; s2?: string; crashed?: string }
+    const outcomeText = JSON.stringify(parsed ?? {})
+    const synthetic = ['synthetic-channel-token-not-real', 'synthetic-helper-key-not-real']
+    check('refuse-backend: the isolated child ran and reported both scenarios',
+      parsed !== undefined && parsed.crashed === undefined && ran.code === 0, { code: ran.code, stderr: ran.stderr.slice(0, 300), stdout: ran.stdout.slice(0, 300) })
+    check('refuse-backend: a tokenless custom-endpoint channel refuses the start with the actionable sentence',
+      parsed?.s1 === 'rejected: ' + t('claude-channel-token-missing', { name: 'Relay', host: 'relay.example' }), parsed?.s1)
+    check('refuse-backend: a channel token under a settings apiKeyHelper refuses the start the same way',
+      parsed?.s2 === 'rejected: ' + t('claude-channel-helper-conflict'), parsed?.s2)
+    check('refuse-backend: no synthetic credential material travels in the refusals',
+      synthetic.every(secret => !outcomeText.includes(secret)), outcomeText.slice(0, 300))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+// ---- 17. R3-1: the outbound credential matrix (real CLI, loopback) --------
+//
+// The shape checks say the flag layer CARRIES the blanks; this proves what
+// the blanks DO against the really-installed CLI (the SDK's bundled native
+// binary — the one production ships): the isolated user settings hold an
+// OLD credential sentinel on one of the three keys (plus an old base URL,
+// the cc-switch shape), the active channel points at a 127.0.0.1 listener,
+// and NO outbound request may carry the old sentinel — with a token, only
+// the channel sentinel travels; tokenless, the requests are anonymous
+// (production refuses to spawn that shape at all; this proves the pin
+// holds even for it). One CONTROL cell first: the same settings with the
+// listener URL and NO channel — the sentinel MUST arrive, proving both
+// that the CLI applies user settings env over the child env (the R3-1
+// mechanism) and that the listener detects sentinels (otherwise every
+// "absent" below is vacuous). Isolation per cell: fresh HOME/USERPROFILE/
+// CLAUDE_CONFIG_DIR, a child env built from zero (PATH/SystemRoot/telemetry
+// flags only), the listener answers 401 so no turn ever succeeds, and only
+// booleans/counts leave the listener — never a header or body. Skipped
+// LOUDLY (never silently green) when the SDK or its bundled CLI is absent.
+{
+  const OLD_SENTINEL = 'r3-old-sentinel-not-a-token'
+  const CHANNEL_SENTINEL = 'r3-channel-sentinel-not-a-token'
+  const CELL_MS = 12_000
+  let sdk: Awaited<ReturnType<typeof loadClaudeSdk>> | undefined
+  let cli: string | undefined
+  try {
+    sdk = await loadClaudeSdk()
+    const require = createRequire(import.meta.url)
+    const sdkEntry = require.resolve('@anthropic-ai/claude-agent-sdk') as string
+    const ext = process.platform === 'win32' ? '.exe' : ''
+    cli = createRequire(sdkEntry).resolve(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}/claude${ext}`) as string
+  } catch (error) {
+    console.log(`SKIP loopback (R3-1): the SDK or its bundled CLI is not installed (${error instanceof Error ? error.message : String(error)}) — the outbound matrix was NOT exercised`)
+  }
+  if (sdk !== undefined && cli !== undefined) {
+    const root = mkdtempSync(join(tmpdir(), 'dshtui-channels-loop-'))
+    try {
+      const cell = async (label: string, settingsEnv: Record<string, string>, mode: 'control' | { readonly token?: string }): Promise<void> => {
+        const home = join(root, label)
+        const config = join(home, 'config')
+        const cwd = join(home, 'cwd')
+        mkdirSync(config, { recursive: true })
+        mkdirSync(cwd, { recursive: true })
+        let seenOld = false
+        let seenChannel = false
+        let requests = 0
+        // Early finish (the report's methodology): once a credential-bearing
+        // request was observed a few times over, the process's fixed merged
+        // credentials have spoken — keep waiting only for the cap otherwise.
+        let verdictReady: (() => void) | undefined
+        const early = new Promise<void>(resolve => { verdictReady = () => resolve() })
+        const server = http.createServer((request, response) => {
+          requests += 1
+          const values = Object.values(request.headers).map(value => Array.isArray(value) ? value.join(' ') : String(value ?? '')).join('\n')
+          if (values.includes(OLD_SENTINEL)) seenOld = true
+          if (values.includes(CHANNEL_SENTINEL)) seenChannel = true
+          if (requests >= 3 && (seenChannel || (mode === 'control' && seenOld))) verdictReady?.()
+          request.resume()
+          response.writeHead(401, { 'content-type': 'application/json' })
+          response.end(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'loopback' } }))
+        })
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+        const loopbackUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+        // The synthetic user settings (written AFTER the listener exists —
+        // the control's base URL is the listener's own dynamic port).
+        writeFileSync(join(config, 'settings.json'), JSON.stringify({
+          env: Object.fromEntries(Object.entries(settingsEnv).map(([key, value]) => [key, value === 'LOOPBACK' ? loopbackUrl : value])),
+        }))
+        // The child env is built from ZERO (the SDK's `env` option replaces
+        // the child environment): only PATH, SystemRoot, the telemetry
+        // kill-switches and the isolated home/config pointers — nothing of
+        // the host's identity or credentials is inherited.
+        const base: Record<string, string> = {
+          PATH: process.env.PATH ?? '',
+          ...(process.env.SystemRoot === undefined ? {} : { SystemRoot: process.env.SystemRoot }),
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+          DISABLE_TELEMETRY: '1',
+          HOME: home, USERPROFILE: home, CLAUDE_CONFIG_DIR: config,
+          TMP: home, TEMP: home, TMPDIR: home,
+        }
+        const settings = async (): Promise<{ env: Record<string, string> }> => ({ env: settingsEnv })
+        const plan = mode === 'control' ? undefined : await resolveClaudeAuth({ ...base }, undefined, {
+          settings,
+          globalConfig: () => undefined,
+          channel: { baseUrl: loopbackUrl, ...(mode.token === undefined ? {} : { token: mode.token }) },
+        })
+        const abort = new AbortController()
+        const started = Date.now()
+        const query = sdk.query({
+          prompt: 'loopback probe: reply with the single word ok',
+          options: {
+            cwd,
+            env: plan === undefined ? base : plan.env,
+            ...(plan?.settings === undefined ? {} : { settings: plan.settings }),
+            settingSources: ['user'],
+            permissionMode: 'default',
+            model: 'haiku',
+            maxTurns: 1,
+            abortController: abort,
+            stderr: () => undefined,
+          },
+        })
+        try {
+          await Promise.race([
+            (async () => {
+              try {
+                for await (const message of query) {
+                  if ((message as { type?: string }).type === 'result') break
+                }
+              } catch {
+                // The CLI died on our 401s — the observed window is the verdict.
+              }
+            })(),
+            early,
+            new Promise<void>(resolve => { setTimeout(resolve, CELL_MS) }),
+          ])
+        } finally {
+          abort.abort()
+          try { await Promise.race([query.close().catch(() => undefined), new Promise(resolve => { setTimeout(resolve, 5000) })]) } catch { /* already gone */ }
+          await new Promise<void>(resolve => server.close(() => resolve()))
+        }
+        console.log(`loopback ${label}: requests=${requests} old=${seenOld} channel=${seenChannel} in ${Date.now() - started}ms`)
+        if (mode === 'control') {
+          // The negative/positive control: the settings credential DOES
+          // reach the listener without any channel pin — the R3-1 leak
+          // mechanism itself, and the proof that absence below is meaningful.
+          check(`loopback control: the settings credential reaches the listener (the leak mechanism is real and detectable)`,
+            requests > 0 && seenOld && !seenChannel, { requests })
+          return
+        }
+        check(`loopback ${label}: no outbound request carries the OLD settings sentinel`, requests > 0 && !seenOld, { requests })
+        if (mode.token !== undefined) check(`loopback ${label}: the channel token is the credential that travels`, seenChannel)
+      }
+      // The control, then the six-cell matrix: tokenless/token × the three
+      // credential keys cc-switch could have left in user settings.
+      await cell('control', { ANTHROPIC_BASE_URL: 'LOOPBACK', ANTHROPIC_AUTH_TOKEN: OLD_SENTINEL }, 'control')
+      for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']) {
+        await cell(`tokenless-${key}`, { ANTHROPIC_BASE_URL: 'https://old.invalid', [key]: OLD_SENTINEL }, {})
+        await cell(`token-${key}`, { ANTHROPIC_BASE_URL: 'https://old.invalid', [key]: OLD_SENTINEL }, { token: CHANNEL_SENTINEL })
+      }
+    } finally {
+      // The cleanup guard (the report's methodology): only ever remove the
+      // directory this run created under tmpdir, by exact prefix — retrying
+      // the Windows EPERM window where a just-killed CLI still holds a
+      // handle (channels.ts's renameIntoPlace retry pattern).
+      if (root.startsWith(join(tmpdir(), 'dshtui-channels-loop-'))) {
+        const waitCell = new Int32Array(new SharedArrayBuffer(4))
+        for (let attempt = 0; ; attempt++) {
+          try {
+            rmSync(root, { recursive: true, force: true })
+            break
+          } catch (error) {
+            const code = typeof error === 'object' && error !== null ? String((error as NodeJS.ErrnoException).code) : ''
+            if (attempt >= 10 || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'ENOTEMPTY')) throw error
+            Atomics.wait(waitCell, 0, 0, Math.min(2 ** attempt, 500))
+          }
+        }
+      }
+    }
+  }
 }
 
 console.log('\nverify-claude-channels OK (' + passed + ' checks)')

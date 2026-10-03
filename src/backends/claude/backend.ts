@@ -16,12 +16,12 @@ import type { AgentBackend, BackendDetection, BackendHost, OpenTarget } from '..
 import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { CLAUDE_BACKEND_ID, CLAUDE_BACKEND_LABEL, cliVersionDrift, sdkVersionDrift, VALIDATED_SDK_VERSION } from './contract.js'
-import { CLAUDE_OAUTH_PROVIDER, detectClaudeAuth, refreshFailureDebugDetail, refreshFailureStatus, resolveClaudeAuth, type ClaudeRouteSettings } from './auth.js'
+import { CLAUDE_OAUTH_PROVIDER, ClaudeChannelConflictError, channelMissingCredential, detectClaudeAuth, originHost, refreshFailureDebugDetail, refreshFailureStatus, resolveClaudeAuth, type ClaudeChannelConnectionInput, type ClaudeRouteSettings } from './auth.js'
 import { createClaudeCatalog } from './catalog.js'
 import { resolveStartPermissionMode } from './options.js'
 import { fileClaudePrefs } from './prefs.js'
 import { buildClaudeEnv, readClaudeVersion, resolveClaudeExecutable } from './process.js'
-import { activeProfileOf, fileClaudeChannels, hasChannelConnection, type ClaudeChannels } from './channels.js'
+import { activeProfileOf, fileClaudeChannels, hasChannelConnection, type ClaudeChannelProfile, type ClaudeChannels } from './channels.js'
 import { fileClaudeChannelTokens, type ClaudeChannelTokens } from './channelTokens.js'
 import { replayClaudeTranscript, type ClaudeReplay, type ClaudeSubagentTranscript } from './replay.js'
 import { installedSdkVersion, loadClaudeSdk, type ClaudeSessionStoreSdk } from './sdk.js'
@@ -31,8 +31,48 @@ const errorText = (error: unknown): string => error instanceof Error ? error.mes
 
 /** The user-facing refresh failure: a fixed sentence, the HTTP status at most. */
 function refreshFailedNotice(error: unknown): string {
+  // A channel connection the session must not run on says so itself
+  // (R3-1): the refusal sentence is already the actionable one.
+  if (error instanceof ClaudeChannelConflictError) return error.message
   const status = refreshFailureStatus(error)
   return t('claude-auth-refresh-failed', { detail: status === undefined ? '' : t('claude-auth-refresh-status', { status }) })
+}
+
+/** The settings credentials a channel connection replaces (names only —
+ *  R3-1 acceptance 5: a notice never carries a value). */
+const SUPERSEDED_CREDENTIAL_KEYS: readonly string[] = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']
+
+/** The first non-empty value of `key` in an env record, the name matched
+ *  case-insensitively (auth.ts's `valuesOf` rule). */
+function firstNonEmpty(env: Readonly<Record<string, unknown>>, key: string): string | undefined {
+  const upper = key.toUpperCase()
+  for (const [name, value] of Object.entries(env)) {
+    if (name.toUpperCase() === upper && typeof value === 'string' && value !== '') return value
+  }
+  return undefined
+}
+
+/**
+ * The one-line start notices of an active channel profile against the
+ * effective settings `env` (R3-1 acceptance 5): the cc-switch base-URL
+ * mismatch (unchanged), plus WHICH settings credentials the channel's flag
+ * pin replaces this session — key names only, never values. Pure, so the
+ * regression drives it directly.
+ */
+export function channelStartNotices(
+  channel: Pick<ClaudeChannelProfile, 'name' | 'baseUrl' | 'tokenRef'>,
+  settingsEnv: Readonly<Record<string, unknown>>,
+): string[] {
+  const notices: string[] = []
+  const settingsUrl = firstNonEmpty(settingsEnv, 'ANTHROPIC_BASE_URL')
+  if (channel.baseUrl !== undefined && settingsUrl !== undefined && settingsUrl !== channel.baseUrl) {
+    notices.push(t('channel-conn-settings-mismatch', { name: channel.name }))
+  }
+  if (channel.baseUrl !== undefined || channel.tokenRef !== undefined) {
+    const superseded = SUPERSEDED_CREDENTIAL_KEYS.filter(key => firstNonEmpty(settingsEnv, key) !== undefined)
+    if (superseded.length > 0) notices.push(t('channel-conn-creds-superseded', { keys: superseded.join(', ') }))
+  }
+  return notices
 }
 
 /**
@@ -141,40 +181,49 @@ export const claudeBackend: AgentBackend = {
     // picked up by the next spawn on this session.
     const channels: ClaudeChannels = fileClaudeChannels(undefined, message => host.debug(message))
     const tokens: ClaudeChannelTokens = fileClaudeChannelTokens(undefined, message => host.debug(message))
-    const channelConnection = () => {
+    // The active profile's connection, fail-closed (R3-1 acceptance 3): a
+    // custom endpoint the profile gives no credential — no token (a missing
+    // or dangling ref reads the same) and no credential-shaped env key —
+    // never spawns. No anonymous relay requests, and no ambient or local
+    // login identity silently riding the channel endpoint; the refusal
+    // sentence says where to add the token.
+    const channelConnection = (): ClaudeChannelConnectionInput | undefined => {
       const active = activeProfileOf(channels.read())
       if (active === undefined || !hasChannelConnection(active)) return undefined
-      return {
+      const connection: ClaudeChannelConnectionInput = {
         ...(active.baseUrl === undefined ? {} : { baseUrl: active.baseUrl }),
         ...(active.tokenRef === undefined ? {} : { token: tokens.read(active.tokenRef) }),
         ...(active.env === undefined ? {} : { env: active.env }),
       }
+      if (channelMissingCredential(connection)) {
+        throw new ClaudeChannelConflictError(t('claude-channel-token-missing', { name: active.name, host: originHost(active.baseUrl ?? '') }))
+      }
+      return connection
     }
     const startNotices: string[] = []
-    // cc-switch coexistence (one line, once per session start): when the
-    // CLI settings env names a DIFFERENT base URL than the active channel,
-    // say which one wins this session — the flag-settings injection does
-    // (the channel profile), and the settings file keeps its row for the
-    // next plain `claude` run.
+    // cc-switch coexistence (once per session start): which base URL wins
+    // this session (the channel profile's — the settings file keeps its row
+    // for the next plain `claude` run), and which settings credentials the
+    // channel's flag pin replaces (key names only, never values — R3-1).
     try {
       const effective = await settings()
       const settingsEnv = typeof effective.env === 'object' && effective.env !== null ? effective.env as Record<string, unknown> : {}
-      const settingsUrl = Object.entries(settingsEnv)
-        .filter(([name, value]) => name.toUpperCase() === 'ANTHROPIC_BASE_URL' && typeof value === 'string' && value !== '')
-        .map(([, value]) => value as string)[0]
       const activeAtStart = activeProfileOf(channels.read())
-      const channelUrl = activeAtStart?.baseUrl
-      if (channelUrl !== undefined && settingsUrl !== undefined && settingsUrl !== channelUrl) {
-        startNotices.push(t('channel-conn-settings-mismatch', { name: activeAtStart?.name ?? channelUrl }))
-      }
+      if (activeAtStart !== undefined) startNotices.push(...channelStartNotices(activeAtStart, settingsEnv))
     } catch {
-      // The notice is informational; an unreadable settings file has
+      // The notices are informational; an unreadable settings file has
       // already failed closed in the route gate below.
     }
     let plan: Awaited<ReturnType<typeof resolveClaudeAuth>>
     try {
-      plan = await resolveClaudeAuth(baseEnv, credentials, { settings, ...(channelConnection() === undefined ? {} : { channel: channelConnection() }) })
+      const connection = channelConnection()
+      plan = await resolveClaudeAuth(baseEnv, credentials, { settings, ...(connection === undefined ? {} : { channel: connection }) })
     } catch (error) {
+      // A channel connection that must not run (a tokenless custom
+      // endpoint, an apiKeyHelper conflict) fails CLOSED: the start is
+      // refused with the actionable sentence — never a silent fallback to
+      // ambient credentials or an anonymous request (R3-1).
+      if (error instanceof ClaudeChannelConflictError) throw error
       // A failed refresh must not stop the start: the session runs on the
       // environment or the local login, and says why. The debug log gets a
       // fixed failure category and at most the HTTP status: the refresh
