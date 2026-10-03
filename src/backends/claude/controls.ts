@@ -177,6 +177,14 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
     return ids.map(id => ({ id, label: modeLabel(id), description: modeDescription(id) }))
   }
 
+  /** R3-6 followup: whether any OTHER profile row still references `ref`.
+   *  Shared refs are legal data — a hand edit or migration can point a
+   *  second channel at another channel's DERIVED key — so erasing a
+   *  credential on one row's account must first prove no sibling still
+   *  reads it. */
+  const refSharedElsewhere = (ref: string, exceptId: string): boolean =>
+    deps.channels.read().channels.some(channel => channel.id !== exceptId && channel.tokenRef === ref)
+
   const capabilities = {
     models: {
       async list(): Promise<readonly ModelOption[]> {
@@ -319,7 +327,16 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         let storedTokenRef = current?.tokenRef
         if (input.token !== undefined && deps.tokens !== undefined) {
           if (input.token === '') {
-            if (storedTokenRef !== undefined) deps.tokens.erase(storedTokenRef)
+            // Clearing THIS row detaches the ref from it, but the credential
+            // dies only with its last referent: another row sharing the ref
+            // (shared DERIVED keys included) must not dangle (R3-6 followup).
+            if (storedTokenRef !== undefined) {
+              if (refSharedElsewhere(storedTokenRef, input.id)) {
+                deps.debug(`claude: channel ${input.id} cleared its token; the shared ref ${storedTokenRef} stays in the store (another channel still references it)`)
+              } else {
+                deps.tokens.erase(storedTokenRef)
+              }
+            }
             storedTokenRef = undefined
           } else {
             const target = storedTokenRef ?? channelTokenRef(input.id)
@@ -342,14 +359,21 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       remove: id => {
         const current = deps.channels.read().channels.find(channel => channel.id === id)
         if (current === undefined) return false
-        // R3-6: only the channel's OWN derived ref is provably ours to erase.
-        // A hand-written or migrated tokenRef may be shared with another
-        // channel or owned by the host — "referenced" is not "exclusively
-        // deletable" — so it stays in the store (reported to the debug log;
-        // the ref name is not secret, it lives in channels.json).
+        // R3-6: a credential is erased only when no OTHER row still
+        // references its ref — shared DERIVED keys included (a hand edit
+        // can point a second channel at CHANNEL_<A>_TOKEN; removing A must
+        // not dangle B) — AND the ref is this channel's own derived one (a
+        // hand-written ref may be host-owned: "referenced" is not
+        // "exclusively deletable"). Everything kept is reported to the
+        // debug log; the ref name is not secret, it lives in channels.json.
         if (current.tokenRef !== undefined) {
-          if (current.tokenRef === channelTokenRef(id)) deps.tokens?.erase(current.tokenRef)
-          else deps.debug(`claude: channel ${id} removed; its non-derived tokenRef ${current.tokenRef} stays in the store (possibly shared - erase by hand if truly orphaned)`)
+          if (refSharedElsewhere(current.tokenRef, id)) {
+            deps.debug(`claude: channel ${id} removed; its tokenRef ${current.tokenRef} stays in the store (another channel still references it)`)
+          } else if (current.tokenRef === channelTokenRef(id)) {
+            deps.tokens?.erase(current.tokenRef)
+          } else {
+            deps.debug(`claude: channel ${id} removed; its non-derived tokenRef ${current.tokenRef} stays in the store (possibly host-owned - erase by hand if truly orphaned)`)
+          }
         }
         deps.channels.remove(id)
         return true
