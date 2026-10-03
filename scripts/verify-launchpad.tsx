@@ -1406,6 +1406,18 @@ base.close()
     passedThrough.map(part => part.segment).join(',') === 'model,effort,preset,permission'
       && passedThrough[0]?.colored === true && passedThrough[1]?.colored === undefined,
     JSON.stringify(passedThrough.map(part => [part.segment, part.colored])))
+  // Q8b–Q8d（REVIEW F-09 / T-FIX-05）：**档位有类型载体**。上面表里的 `row.tier`
+  // 是测试自己推出来的期望；`fitParamParts` 的返回项现在自带 `tier`
+  // （`fit` / `truncated` / `fallback`，同一行的各段恒相同）——"哪一档"从注释与
+  // 测试推断变成**能被程序检查**的字段，三档各钉一条。
+  const tierOf = (parts: readonly ParamRow[], budget: number): string =>
+    fitParamParts(parts, budget).map(part => part.tier).join(',')
+  check('Q8b tier 载体：装得下 → 每段 tier=fit（既有夹具 @ 预算 70）',
+    tierOf(FIXTURE_PARTS, 70) === 'fit,fit,fit,fit', `tier=${tierOf(FIXTURE_PARTS, 70)}`)
+  check('Q8c tier 载体：截断档 → 每段 tier=truncated（AC-1 @ 预算 70）',
+    tierOf(AC1_PARTS, 70) === 'truncated,truncated,truncated,truncated', `tier=${tierOf(AC1_PARTS, 70)}`)
+  check('Q8d tier 载体：兜底档 → 每段 tier=fallback（AC-1 @ 预算 42）',
+    tierOf(AC1_PARTS, 42) === 'fallback,fallback', `tier=${tierOf(AC1_PARTS, 42)}`)
   // 纯函数：不改入参（深冻结；原地写会抛 TypeError）。
   const frozenParts = Object.freeze(AC1_PARTS.map(part => Object.freeze({ ...part })))
   const fromFrozen = fitParamParts(frozenParts, 70)

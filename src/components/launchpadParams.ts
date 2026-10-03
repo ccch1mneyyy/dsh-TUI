@@ -19,9 +19,11 @@ import { truncateToWidth } from '../ink/truncateToWidth.js'
  *                   **权限段不被截断**、宽度 ≤ 下限的段不可减（`Max` 这类短段
  *                   因此永不被砍）——所以这一档**四段都在**，被压缩的是最长的
  *                   非权限段；
- *   ③ FALLBACK  —— 非权限段全压到下限仍装不下（极窄屏）→ **逐字节复刻改造前
+ *   ③ FALLBACK  —— 非权限段全压到下限仍装不下（**完整权限名放不进预算**时——
+ *                   与终端列数无关，权限名越长越早触发）→ **逐字节复刻改造前
  *                   的尾部省段**：用**原始宽度**按显示顺序累加、首个超预算即
- *                   break（权限段最先被省，用户裁决的"极窄屏与今天一致"）。
+ *                   break（权限段最先被省；用户裁决这一档"与今天逐字节一致"，
+ *                   决策当时的措辞是"极窄屏"——准确条件即上面这条）。
  *
  * 纯函数：不改入参、不读环境、同样输入恒同样输出——`verify-launchpad.tsx`
  * 的 Q 组表驱动回归钉死三档与边界（含"撤实现必红"留证）。
@@ -69,7 +71,17 @@ export interface ParamPart<S extends string = string> {
   readonly colored?: boolean
 }
 
-/** 拟合后的一段：显示值 + 是否被截断 + 完整名（tooltip 用）。 */
+/**
+ * 参数行降级的**档位**（T-FIX-05 / REVIEW F-09）：三档契约的机器可读载体。
+ *
+ * 以前"这一次落在哪一档"只活在模块头注释与回归的推断里，文档一旦漂移（F-02 就是
+ * 漂了的那一处）没有任何机制能发现；现在它是 `FittedParamPart.tier`，可以直接断言
+ * ——断它比断 `truncated` 或数组长度更贴近契约本身（"哪一档"是契约，"某段是否被截"
+ * 只是档内的结果）。
+ */
+export type ParamFitTier = 'fit' | 'truncated' | 'fallback'
+
+/** 拟合后的一段：显示值 + 是否被截断 + 完整名（tooltip 用）+ 档位。 */
 export interface FittedParamPart<S extends string = string> {
   /** 段的身份（原样透传）。 */
   readonly segment: S
@@ -81,6 +93,11 @@ export interface FittedParamPart<S extends string = string> {
   readonly fullValue: string
   /** 本段是否被尾部截断（`value !== fullValue` 的等价标志）。 */
   readonly truncated: boolean
+  /**
+   * 本行落在哪一档：`fit` 原样 / `truncated` 尾部截断 / `fallback` 尾部省段。
+   * **同一行的各段恒相同**（档位是"行"的决定，不是"段"的）。
+   */
+  readonly tier: ParamFitTier
 }
 
 /** 一行参数行的显示宽度：各段宽之和 + 分隔符 ×（段数 - 1）。 */
@@ -93,9 +110,12 @@ function lineWidth(parts: readonly { value: string }[]): number {
   return sum
 }
 
-/** 一段的"原样"输出（FIT 档与兜底档都用它：`fullValue` = 原值、未截断）。 */
-function fitWhole<S extends string>(part: ParamPart<S>): FittedParamPart<S> {
-  return { ...part, fullValue: part.value, truncated: false }
+/**
+ * 一段的"原样"输出（FIT 档与兜底档都用它：`fullValue` = 原值、未截断）。
+ * `tier` 由调用方给出——它描述的是**整行**落在哪一档，不是这一段的局部状态。
+ */
+function fitWhole<S extends string>(part: ParamPart<S>, tier: ParamFitTier): FittedParamPart<S> {
+  return { ...part, fullValue: part.value, truncated: false, tier }
 }
 
 /**
@@ -152,9 +172,9 @@ function fitByTruncating<S extends string>(
     targets[pick] = target
   }
   const fitted = parts.map((part, index): FittedParamPart<S> => {
-    if (targets[index] >= original[index]) return fitWhole(part)
+    if (targets[index] >= original[index]) return fitWhole(part, 'truncated')
     // 尾部截断：留一格给 `…`（码位安全，CJK 不会切半个字形）。
-    return { ...part, value: truncateToWidth(part.value, targets[index] - 1) + '…', fullValue: part.value, truncated: true }
+    return { ...part, value: truncateToWidth(part.value, targets[index] - 1) + '…', fullValue: part.value, truncated: true, tier: 'truncated' }
   })
   // 宽度记账用**截断后的真实文本**再算一次（宽字符可能让实际值比目标更窄），
   // 只有真的 ≤ 预算才认这一档——本函数的输出恒满足"总宽 ≤ budget"。
@@ -163,8 +183,10 @@ function fitByTruncating<S extends string>(
 
 /**
  * 第三档（兜底）：**逐字节复刻改造前的尾部省段**——用**原始宽度**按显示顺序
- * 累加、首个超预算即 break。故意不改写、不"顺手保权限"：用户裁决极窄屏形态与
- * 今天一致（v2 才考虑兜底保权限），回归（Q5/Q7）拿独立的同形循环做期望。
+ * 累加、首个超预算即 break。故意不改写、不"顺手保权限"：用户裁决这一档的形态与
+ * 今天一致（决策当时的措辞是"极窄屏"；准确条件是**完整权限名放不进预算**、与
+ * 终端列数无关——权限名越长越早触发。v2 才考虑兜底保权限），回归（Q5/Q7）拿
+ * 独立的同形循环做期望。
  */
 function dropFromTail<S extends string>(parts: readonly ParamPart<S>[], budget: number): readonly FittedParamPart<S>[] {
   const fitted: FittedParamPart<S>[] = []
@@ -173,7 +195,7 @@ function dropFromTail<S extends string>(parts: readonly ParamPart<S>[], budget: 
     const width = stringWidth(part.value)
     const next = fitted.length === 0 ? width : used + PARAM_SEPARATOR_WIDTH + width
     if (next > budget) break
-    fitted.push(fitWhole(part))
+    fitted.push(fitWhole(part, 'fallback'))
     used = next
   }
   return fitted
@@ -185,6 +207,7 @@ function dropFromTail<S extends string>(parts: readonly ParamPart<S>[], budget: 
  * @param parts - 按**显示顺序**给出的段（模型 · 思考深度 · preset · 权限）。
  * @param budget - 这一行的显示宽度预算（`max(24, min(columns - 4, 72)) - 2`）。
  * @returns 拟合后的段（新数组；FIT 档与入参逐字节等值，TRUNCATED 档四段都在）。
+ *   每段的 `tier` 标明本行落在哪一档（见 `ParamFitTier`）——同一行的各段恒相同。
  */
 export function fitParamParts<S extends string>(
   parts: readonly ParamPart<S>[],
@@ -192,7 +215,7 @@ export function fitParamParts<S extends string>(
 ): readonly FittedParamPart<S>[] {
   const total = lineWidth(parts)
   // ① 装得下：原样（普通宽度下与改造前逐字节一致）。
-  if (total <= budget) return parts.map(part => fitWhole(part))
+  if (total <= budget) return parts.map(part => fitWhole(part, 'fit'))
   // ② 截断：四段都在，权限段一字不减。
   const truncated = fitByTruncating(parts, budget, total)
   if (truncated !== undefined) return truncated
