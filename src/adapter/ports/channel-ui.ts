@@ -434,7 +434,9 @@ export interface ChannelUi {
    *  `cancel`). */
   interruptAndDock(): number
   /** Deliver every docked queued message now (⏎ on an empty draft), FIFO,
-   *  exactly once. Returns the count sent. */
+   *  exactly once. Rows still awaiting their interrupt receipt's verdict
+   *  (R7) are held parked — their backend copies may yet run — and the call
+   *  notifies how many were held. Returns the count sent. */
   deliverDocked(): number
   /**
    * Lossless swap (R4-R1): retract the docked row `id` into the composer and
@@ -443,7 +445,8 @@ export interface ChannelUi {
    * lost. The parked row is a purely channel-side asset (the backend never
    * saw the draft), so it stays outside the interrupt-receipt fence: a
    * settling receipt must not un-dock it (F2). Returns false when `id` is no
-   * longer a docked row (claimed / discarded / un-docked meanwhile).
+   * longer a docked row (claimed / discarded / un-docked meanwhile), or while
+   * the row's dock rights are held by an unsettled interrupt receipt (R7).
    */
   swapDockedForDraft(id: string, draft: { text: string; images?: readonly ComposerImageRef[] }): boolean
   /** Rewind the conversation to a past user message (the double-Esc rewind):

@@ -365,9 +365,11 @@ function makeClaudeSession({ stillQueuedOnInterrupt, cancelReceipt } = {}) {
     check('D2 the refused swap sent nothing', st2.submits.length === 1, JSON.stringify(st2.submits.map(input => input.text)))
   }
 
-  // D3 — the parked draft has NO backend copy: a receipt settling around
-  // the swap must not un-dock it (the F2 fence governs rows the backend
-  // may still hold; the swap row was never dispatched).
+  // D3 — (R7 rewrite) while the receipt is in flight the CLICKED row's
+  // rights are held: swapping its text into the composer would hand the
+  // user a second copy a late failed/kept verdict can no longer revoke.
+  // The parked draft itself still has no backend copy — once the receipt
+  // confirms, the swap goes through and the parked row keeps its dock.
   {
     let release
     const { session: s3, state: st3 } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
@@ -376,10 +378,15 @@ function makeClaudeSession({ stillQueuedOnInterrupt, cancelReceipt } = {}) {
     await settle(() => ch3.pending.length === 1)
     ch3.interruptAndDock()
     const coveredId = ch3.pending.find(item => item.docked === true)?.id
-    check('D3 swap while the receipt is in flight', ch3.swapDockedForDraft(coveredId, { text: 'parked draft' }) === true)
+    check('D3 swap while the receipt is in flight is REFUSED',
+      ch3.swapDockedForDraft(coveredId, { text: 'parked draft' }) === false
+        && ch3.pending.length === 1 && ch3.pending[0]?.text === 'covered row' && ch3.pending[0]?.docked === true,
+      JSON.stringify(ch3.pending))
     release({ stillQueued: [], outcome: 'confirmed' })
-    check('D3 the settled receipt keeps the parked draft docked',
-      await settled(() => ch3.pending.length === 1 && ch3.pending[0]?.docked === true && ch3.pending[0]?.text === 'parked draft'),
+    check('D3 the confirmed receipt graduates the row', await settled(() => ch3.pending.length === 1 && ch3.pending[0]?.docked === true))
+    check('D3 the swap goes through once the receipt confirmed',
+      ch3.swapDockedForDraft(coveredId, { text: 'parked draft' }) === true
+        && ch3.pending.length === 1 && ch3.pending[0]?.text === 'parked draft',
       JSON.stringify(ch3.pending))
     check('D3 deliverDocked counts the parked draft', ch3.deliverDocked() === 1)
     const texts3 = () => st3.submits.map(input => input.text)
@@ -808,5 +815,142 @@ const selectorHighlightVisible = (term, texts) =>
   check('D17 the undo refill restores the draft', await settled(() => uiController.current?.text() === 'recover me'), JSON.stringify(uiController.current?.text()))
   check('D17 the refill closed the selector', !selectorHighlightVisible(termUI, ['dock-r3c']))
   instance.unmount()
+}
+
+// ─────── Section E (R7): dock rights are HELD while the receipt is in flight
+// The blocker: rows parked by interruptAndDock were fully editable /
+// re-sendable / swappable BEFORE the cancel receipt settled. A late
+// failed / unknown / still_queued answer only revokes rows still on the
+// pending list — anything already delivered, edited out or swapped under
+// a new id was unreachable, and the SDK accepted the intent twice. The
+// transitional state: rows render docked, but every right is gated until
+// the receipt confirms; confirmed graduates them, anything else revokes.
+{
+  // E1 — deliver: the whole dock is held; a failed receipt keeps one copy.
+  let release
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('e1 intent')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  check('E1 deliverDocked while in flight sends NOTHING', channel.deliverDocked() === 0)
+  check('E1 the hold is notified', channel.notifications.some(item => item.text === t('input-dock-confirming', { n: 1 })), JSON.stringify(channel.notifications))
+  check('E1 the row stays parked as docked', channel.pending.length === 1 && channel.pending[0]?.docked === true, JSON.stringify(channel.pending))
+  release({ stillQueued: [], outcome: 'failed' })
+  const texts = () => state.submits.map(input => input.text)
+  check('E1 a failed receipt un-docks the held row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
+  check('E1 the SDK accepted exactly one copy', texts().filter(text => text === 'e1 intent').length === 1, JSON.stringify(texts()))
+}
+{
+  // E2 — edit (removePending): refused while in flight, so the edit+resend
+  // path cannot strand a copy a kept-queue verdict later owns.
+  let release
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('e2 intent')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  const rowId = channel.pending[0]?.id
+  check('E2 removePending is refused while in flight', channel.removePending(rowId) === false && channel.pending.length === 1 && channel.pending[0]?.docked === true, JSON.stringify(channel.pending))
+  release({ stillQueued: [rowId], outcome: 'confirmed' })
+  check('E2 the kept-queue receipt un-docks the row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
+  const texts = () => state.submits.map(input => input.text)
+  check('E2 the SDK accepted exactly one copy', texts().filter(text => text === 'e2 intent').length === 1, JSON.stringify(texts()))
+}
+{
+  // E3 — swap: refused while in flight (no parked copy, nothing swapped);
+  // an answerless 'unknown' receipt now also revokes (only a CONFIRMED
+  // answer graduates) and says so.
+  let release
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('e3 intent')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  const rowId = channel.pending[0]?.id
+  check('E3 swap is refused while in flight',
+    channel.swapDockedForDraft(rowId, { text: 'user draft' }) === false
+      && channel.pending.length === 1 && channel.pending[0]?.text === 'e3 intent',
+    JSON.stringify(channel.pending))
+  release({ stillQueued: [], outcome: 'unknown' })
+  check('E3 an answerless receipt un-docks the provisional row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
+  check('E3 the unconfirmed verdict is notified', channel.notifications.some(item => item.text === t('claude-interrupt-unconfirmed')), JSON.stringify(channel.notifications))
+  const texts = () => state.submits.map(input => input.text)
+  check('E3 the SDK accepted exactly one copy', texts().filter(text => text === 'e3 intent').length === 1, JSON.stringify(texts()))
+}
+{
+  // E4 — graduation: once the receipt confirms an emptied queue, the held
+  // row gains full rights and the legitimate exactly-once re-send works.
+  let release
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('e4 intent')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  check('E4 held before the receipt settles', channel.deliverDocked() === 0)
+  release({ stillQueued: [], outcome: 'confirmed' })
+  await settled(() => channel.pending[0]?.docked === true)
+  check('E4 delivered after confirmation', channel.deliverDocked() === 1)
+  const texts = () => state.submits.map(input => input.text)
+  await settle(() => texts().length === 2)
+  check('E4 the original plus exactly one confirmed re-send',
+    texts().filter(text => text === 'e4 intent').length === 2,
+    JSON.stringify(texts()))
+}
+{
+  // E5 — Ctrl+Enter does not ride provisional rows: the fresh input goes,
+  // the held row stays parked for its verdict.
+  let release
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('e5 intent')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  channel.interruptAndDeliver(['e5 urgent'])
+  const texts = () => state.submits.map(input => input.text)
+  check('E5 the fresh input rides the interrupt', await settled(() => texts().includes('e5 urgent')), JSON.stringify(texts()))
+  await settle(() => channel.pending.length >= 1)
+  check('E5 the provisional dock row did NOT ride',
+    texts().filter(text => text === 'e5 intent').length === 1
+      && channel.pending.some(item => item.text === 'e5 intent' && item.docked === true),
+    JSON.stringify({ texts: texts(), pending: channel.pending.map(item => ({ text: item.text, docked: item.docked })) }))
+  release({ stillQueued: [], outcome: 'failed' })
+  check('E5 the failed receipt un-docks the held row', await settled(() => !channel.pending.some(item => item.text === 'e5 intent' && item.docked === true)), JSON.stringify(channel.pending))
+  check('E5 the SDK accepted each intent exactly once',
+    texts().filter(text => text === 'e5 intent').length === 1 && texts().filter(text => text === 'e5 urgent').length === 1,
+    JSON.stringify(texts()))
+}
+{
+  // E6 — mixed dock: graduated rows send FIFO while a newer in-flight
+  // batch is held back (no reorder, no silent drop).
+  let release1
+  let release2
+  const receipts = [
+    () => new Promise(resolve => { release1 = resolve }),
+    () => new Promise(resolve => { release2 = resolve }),
+  ]
+  let call = 0
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => receipts[call++]() })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('e6 old')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  release1({ stillQueued: [], outcome: 'confirmed' })
+  await settled(() => channel.pending[0]?.docked === true)
+  channel.submit('e6 new')
+  await settle(() => channel.pending.length === 2)
+  channel.interruptAndDock()
+  check('E6 deliverDocked sends only the graduated row and holds the new one',
+    channel.deliverDocked() === 1
+      && channel.pending.some(item => item.text === 'e6 new' && item.docked === true),
+    JSON.stringify(channel.pending.map(item => ({ text: item.text, docked: item.docked }))))
+  release2({ stillQueued: [], outcome: 'confirmed' })
+  await settled(() => channel.pending.every(item => item.docked === true))
+  check('E6 the held row delivers after its own confirmation', channel.deliverDocked() === 1)
+  const texts = () => state.submits.map(input => input.text)
+  await settle(() => texts().length === 4)
+  check('E6 FIFO order kept, each intent once per confirmed re-send',
+    JSON.stringify(texts()) === JSON.stringify(['e6 old', 'e6 new', 'e6 old', 'e6 new']),
+    JSON.stringify(texts()))
 }
 process.exit(failed)

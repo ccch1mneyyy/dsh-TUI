@@ -653,7 +653,10 @@ const GROUPS = {
 // still_queued 停靠成立、无 cancelQueued 能力的 CLI 回执 kept id → 撤销
 // 停靠由 discard 正常退场；未确认回执（R2-1）：interrupt 拒绝/旧 CLI 无回执
 // → 撤销停靠+明确 notice+SDK 只接受同意图一份、请求期间停靠的行不乘旧回执
-// 的快照、回执落定后再 Esc 自发新请求、只有确认撤销的副本可重发）。UI 层
+// 的快照、回执落定后再 Esc 自发新请求、只有确认撤销的副本可重发；回执在途
+// 的过渡停靠（R7）：deliver/remove/swap/Ctrl+Enter 全被门住（视觉停靠但不可
+// 编辑/重发/交换），confirmed 空单才放行，迟到 failed/unknown/still_queued 只
+// 撤销仍在 pending 的行——换过 id 的追不回，所以权利必须前置门住）。UI 层
 // 键位（Esc 停靠/⏎ 全发/↑ 选择器/Esc 退出选择器/Alt+↑ 兼容）在
 // verify-queue.mjs。
     ["verify-docked-queue", ['node', 'scripts/verify-docked-queue.mjs']],
