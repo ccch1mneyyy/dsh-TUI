@@ -21,7 +21,7 @@
  *   C. 动作入口：纯文字标签（无键帽）；真 SGR 点击触发动作、悬停移焦点并
  *      整块高亮；↑/↓/Tab 焦点环 = 输入框(-1) + **画出来的**入口（第一行再 ↑
  *      回输入框）；整行右对齐（含 fitChips 裁掉尾部后的窄屏）；行高恒 1。
- *   D. 纯函数：resolveLaunchpadActions 表驱动（第七版四格：Continue(条件) ·
+ *   D. 纯函数：resolveLaunchpadActions 表驱动（第七版四格 + 内核入口：Continue(条件) ·
  *      会话与工作区 · 设置 · 条件位 jobs>update>star>help 优先级，单独/
  *      多重/全不成立各一行）、truncateContinueTitle 边界、fitChips 不切半个
  *      标签、阶梯阈值（full → no-tip → no-hints → no-art → input-only）。
@@ -66,12 +66,13 @@ const [
 // （吉祥物形态归 verify-splash-mascot 管）。
 applyCompanionSkin('whale')
 
-/** 夹具的默认状态：有上次会话 + 条件位全不成立（动作表 = Continue·会话与工作区·设置·帮助）。 */
+/** 夹具的默认状态：有上次会话 + 条件位全不成立（动作表 = Continue·会话与工作区·设置·内核·帮助）。 */
 const DEFAULT_ACTIONS = resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false })
-/** 默认档四个入口的屏上标签（zh，第七版四格）。 */
+/** 默认档五个入口的屏上标签（zh，第七版四格 + 内核入口；backendId 缺省 → 短标签）。 */
 const CONTINUE_LABEL = '继续「修个登录页」'
 const SESSIONS_WORKSPACE_LABEL = '会话与工作区'
 const SETTINGS_LABEL = '设置'
+const BACKEND_LABEL = '内核'
 const HELP_LABEL = '帮助'
 const JOBS_LABEL = '后台任务'
 const UPDATE_LABEL = '有新版本'
@@ -379,11 +380,12 @@ check('A2 模型串只出现在参数条那一行（头部不画模型行）',
     !hintRow.includes('/setup') && !hintRow.includes('esc') && !hintRow.includes('/model')
       && !hintRow.includes('?') && !hintRow.includes('▸') && !hintRow.includes('❯'),
     hintRow.trim().slice(0, 80))
-  check('A4c 四个入口在同一行、行高恒 1（每个标签整屏只出现在这一行；第七版四格）',
-    rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL, HELP_LABEL])
+  check('A4c 五个入口在同一行、行高恒 1（每个标签整屏只出现在这一行；第七版四格 + 内核）',
+    rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL, BACKEND_LABEL, HELP_LABEL])
       && lines.filter(l => l.includes(CONTINUE_LABEL)).length === 1
       && lines.filter(l => l.includes(SESSIONS_WORKSPACE_LABEL)).length === 1
       && lines.filter(l => l.includes(SETTINGS_LABEL)).length === 1
+      && lines.filter(l => l.includes(BACKEND_LABEL)).length === 1
       // 合并/移除契约：旧入口（历史会话、工作区分立、环境体检）绝不再出现。
       && !base.screen().includes('历史会话') && !base.screen().includes('环境体检')
       && viewportLines(base.term).filter(l => l.includes('工作区')).every(l => l.includes(SESSIONS_WORKSPACE_LABEL)),
@@ -677,8 +679,8 @@ base.close()
   const target = findCell(s.term, HELP_LABEL)!
   const beforeHover = ev.length
   s.input.write(`\u001b[<35;${target.col};${target.row}M`)
-  check('C7b 鼠标悬停入口即移焦点（mode 1003，无需点击；帮助 = 第 4 条）',
-    await settled(() => last(ev, 'focus')?.value === 3), JSON.stringify(ev.slice(beforeHover)))
+  check('C7b 鼠标悬停入口即移焦点（mode 1003，无需点击；帮助 = 第 5 条，含内核入口）',
+    await settled(() => last(ev, 'focus')?.value === 4), JSON.stringify(ev.slice(beforeHover)))
   // 移到入口行之外的空白格（大字区）：onMouseLeave 必须把焦点交还输入框。
   const blank = findCell(s.term, '██▀▀▄▄')!
   s.input.write(`\u001b[<35;${blank.col};${blank.row}M`)
@@ -696,9 +698,9 @@ base.close()
   await s.send('\t')
   check('C9 再 Tab 前进一段（思考深度，focus=-3）', last(ev, 'focus')?.value === -3,
     JSON.stringify(ev.slice(beforeBlank)))
-  // 焦点环 = 输入框 + 参数四段 + 画出来的入口 + Tips 行（第六版设计 2，环尾）。
-  // 从 -3 再 Tab 7 次：-4→-5→0→1→2→3→-6（Tips），第 8 次绕回输入框。
-  for (let i = 0; i < 7; i++) await s.send('\t')
+  // 焦点环 = 输入框 + 参数四段 + 画出来的入口（含内核，五条）+ Tips 行（第六版设计 2，环尾）。
+  // 从 -3 再 Tab 8 次：-4→-5→0→1→2→3→4→-6（Tips），第 9 次绕回输入框。
+  for (let i = 0; i < 8; i++) await s.send('\t')
   check('C9b Tab 走到环尾的 Tips 行（focus=-6，可点击目标进了焦点环）',
     last(ev, 'focus')?.value === -6, JSON.stringify(last(ev, 'focus')))
   await s.send('\t')
@@ -874,16 +876,16 @@ base.close()
   // 单独成立、多个同时成立、全不成立三类都要钉（详见 launchpadActions.ts）。
   const BASE = { lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false }
   const rows: readonly { name: string; state: Record<string, unknown>; ids: readonly string[]; commands: readonly string[]; firstLabelKey?: string }[] = [
-    { name: '常态（条件位全不成立 → 帮助兜底）', state: BASE, ids: ['continue', 'sessions-workspace', 'settings', 'help'], commands: ['continue', 'home', 'settings', 'help'] },
-    { name: '条件位①单独成立（jobs）', state: { ...BASE, jobsRunning: true }, ids: ['continue', 'sessions-workspace', 'settings', 'jobs'], commands: ['continue', 'home', 'settings', 'jobs'] },
-    { name: '条件位②单独成立（update）', state: { ...BASE, updateAvailable: true }, ids: ['continue', 'sessions-workspace', 'settings', 'update'], commands: ['continue', 'home', 'settings', 'update'] },
-    { name: '条件位③单独成立（star）', state: { ...BASE, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'star'], commands: ['continue', 'home', 'settings', 'star'] },
-    { name: '①+②同时成立：①胜（jobs > update）', state: { ...BASE, jobsRunning: true, updateAvailable: true }, ids: ['continue', 'sessions-workspace', 'settings', 'jobs'], commands: ['continue', 'home', 'settings', 'jobs'] },
-    { name: '②+③同时成立：②胜（update > star）', state: { ...BASE, updateAvailable: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'update'], commands: ['continue', 'home', 'settings', 'update'] },
-    { name: '①+③同时成立：①胜（jobs > star）', state: { ...BASE, jobsRunning: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'jobs'], commands: ['continue', 'home', 'settings', 'jobs'] },
-    { name: '①②③全成立：①胜', state: { ...BASE, jobsRunning: true, updateAvailable: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'jobs'], commands: ['continue', 'home', 'settings', 'jobs'] },
-    { name: '无上次会话（Continue 整格缺席，条件位照常）', state: { jobsRunning: false, updateAvailable: false, starDue: false }, ids: ['sessions-workspace', 'settings', 'help'], commands: ['home', 'settings', 'help'] },
-    { name: '无上次会话 × 条件位①', state: { jobsRunning: true, updateAvailable: false, starDue: false }, ids: ['sessions-workspace', 'settings', 'jobs'], commands: ['home', 'settings', 'jobs'] },
+    { name: '常态（条件位全不成立 → 帮助兜底）', state: BASE, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'help'], commands: ['continue', 'home', 'settings', 'backend', 'help'] },
+    { name: '条件位①单独成立（jobs）', state: { ...BASE, jobsRunning: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'jobs'], commands: ['continue', 'home', 'settings', 'backend', 'jobs'] },
+    { name: '条件位②单独成立（update）', state: { ...BASE, updateAvailable: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'update'], commands: ['continue', 'home', 'settings', 'backend', 'update'] },
+    { name: '条件位③单独成立（star）', state: { ...BASE, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'star'], commands: ['continue', 'home', 'settings', 'backend', 'star'] },
+    { name: '①+②同时成立：①胜（jobs > update）', state: { ...BASE, jobsRunning: true, updateAvailable: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'jobs'], commands: ['continue', 'home', 'settings', 'backend', 'jobs'] },
+    { name: '②+③同时成立：②胜（update > star）', state: { ...BASE, updateAvailable: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'update'], commands: ['continue', 'home', 'settings', 'backend', 'update'] },
+    { name: '①+③同时成立：①胜（jobs > star）', state: { ...BASE, jobsRunning: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'jobs'], commands: ['continue', 'home', 'settings', 'backend', 'jobs'] },
+    { name: '①②③全成立：①胜', state: { ...BASE, jobsRunning: true, updateAvailable: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'jobs'], commands: ['continue', 'home', 'settings', 'backend', 'jobs'] },
+    { name: '无上次会话（Continue 整格缺席，条件位照常）', state: { jobsRunning: false, updateAvailable: false, starDue: false }, ids: ['sessions-workspace', 'settings', 'backend', 'help'], commands: ['home', 'settings', 'backend', 'help'] },
+    { name: '无上次会话 × 条件位①', state: { jobsRunning: true, updateAvailable: false, starDue: false }, ids: ['sessions-workspace', 'settings', 'backend', 'jobs'], commands: ['home', 'settings', 'backend', 'jobs'] },
   ]
   for (const row of rows) {
     const actions = resolveLaunchpadActions(row.state as never)
@@ -899,7 +901,7 @@ base.close()
   const frozen = Object.freeze({ lastSessionTitle: '冻结标题', jobsRunning: false, updateAvailable: false, starDue: false })
   const fromFrozen = resolveLaunchpadActions(frozen)
   check('E2 纯函数：不改入参（冻结状态对象直解）',
-    fromFrozen.length === 4 && frozen.lastSessionTitle === '冻结标题',
+    fromFrozen.length === 5 && frozen.lastSessionTitle === '冻结标题',
     JSON.stringify(fromFrozen.map(a => a.id)))
   // Continue 带标题：标签键 + 插值；标题超宽截断（含省略号、显示宽度封顶）。
   const titled = resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false })
@@ -918,21 +920,86 @@ base.close()
   check('E6 lastSessionTitle 为空白 = 无历史（不造 Continue，落常态档）',
     resolveLaunchpadActions({ lastSessionTitle: '   ', jobsRunning: false, updateAvailable: false, starDue: false })[0]?.id === 'sessions-workspace',
     resolveLaunchpadActions({ lastSessionTitle: '   ', jobsRunning: false, updateAvailable: false, starDue: false }).map(a => a.id).join(','))
+  // 内核入口（阶段A）：backendId 缺省 → 短标签；给出 → 带名插值（显示名来自
+  // kernelCatalog 的 displayName，chip 上屏「内核 · Claude」/「Kernel · DSH」）。
+  const namedBackend = resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false, backendId: 'claude' })
+  check('E6b backendId=claude：内核入口带名（labelKey = backend-named，values.name = Claude）',
+    namedBackend.find(a => a.id === 'backend')?.labelKey === 'launchpad-action-backend-named' && namedBackend.find(a => a.id === 'backend')?.values?.name === 'Claude',
+    JSON.stringify(namedBackend.find(a => a.id === 'backend')))
+  check("E6c backendId 缺省：内核入口用短标签（无插值，阶段B接线前的回退）",
+    resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false }).find(a => a.id === 'backend')?.labelKey === 'launchpad-action-backend'
+      && resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false }).find(a => a.id === 'backend')?.values === undefined)
+  check('E6d backendId=dsh：带名 DSH',
+    resolveLaunchpadActions({ jobsRunning: false, updateAvailable: false, starDue: false, backendId: 'dsh' }).find(a => a.id === 'backend')?.values?.name === 'DSH')
 }
 {
   const labels = DEFAULT_ACTIONS.map(a => t(a.labelKey as never, a.values as never))
   const wide = fitChips(labels, COLS)
   const allComplete = wide.every(chip => labels[chip.index] === chip.label)
-  check('E8 fitChips 只整条取用，绝不切半个标签（120 列四条全画）', allComplete && wide.length === 4,
+  check('E8 fitChips 只整条取用，绝不切半个标签（120 列五条全画）', allComplete && wide.length === 5,
     wide.map(c => c.label).join(' | '))
   const narrow = fitChips(['这是一个很长的入口标签'], 8)
   check('E9 放不下就整条不画（不是截断）', narrow.length === 0,
     JSON.stringify(narrow))
   // 48 列：预算 44，四条 zh 标签装不下最后一条（模型）——整条裁掉、不切半。
-  const clipped = fitChips(labels, 48)
-  check('E9b 48 列裁掉放不下的尾部入口（整条取舍）',
-    clipped.length === 3 && clipped.every(c => labels[c.index] === c.label),
-    clipped.map(c => c.label).join(' | '))
+}
+
+// ── K. 内核选择（阶段A：目录纯函数 + kernel.json 记忆 + boot 优先级）──────
+{
+  const { buildKernelCatalog, kernelDisplayName } = await import('../src/components/kernelCatalog.js')
+  const { readKernelPrefs, writeKernelPrefs, resolveRememberedBackend } = await import('../src/kernelPrefs.js')
+  const { mkdtempSync, readFileSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+
+  // 目录：DSH 恒在恒可选（默认内核）；claude 依探测结果定可选性。
+  const dshOnly = buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.6' })
+  check('K1 目录：DSH 恒可选并带内核版本；claude 未探测=不可选(未安装)',
+    dshOnly.length === 2 && dshOnly[0]?.id === 'dsh' && dshOnly[0]?.current === true && dshOnly[0]?.selectable === true && dshOnly[0]?.version === '0.2.6'
+      && dshOnly[1]?.id === 'claude' && dshOnly[1]?.current === false && dshOnly[1]?.selectable === false && dshOnly[1]?.reasonKey === 'kernel-unavailable-not-installed',
+    JSON.stringify(dshOnly))
+  const ok = buildKernelCatalog({ current: 'claude', dshVersion: '0.2.6', claude: { installed: true, auth: 'ok', version: '2.1.287' } })
+  check('K2 目录：installed+auth=ok 的 claude 可选、版本透传、current 标记在 claude',
+    ok[0]?.current === false && ok[1]?.selectable === true && ok[1]?.current === true && ok[1]?.version === '2.1.287' && ok[1]?.reasonKey === undefined,
+    JSON.stringify(ok))
+  check('K3 目录：auth=missing 置灰(未登录)；auth=unknown 仍可选（分不清≠没有）',
+    buildKernelCatalog({ current: 'dsh', claude: { installed: true, auth: 'missing', version: '1.2.3' } })[1]?.selectable === false
+      && buildKernelCatalog({ current: 'dsh', claude: { installed: true, auth: 'missing' } })[1]?.reasonKey === 'kernel-unavailable-auth-missing'
+      && buildKernelCatalog({ current: 'dsh', claude: { installed: true, auth: 'unknown' } })[1]?.selectable === true)
+  check('K4 显示名：dsh→DSH、claude→Claude（chip 插值与重启通知共用）',
+    kernelDisplayName('dsh') === 'DSH' && kernelDisplayName('claude') === 'Claude')
+
+  // kernel.json 记忆：原子写（tmp+rename，claude prefs.ts 同款）往返。
+  const dir = mkdtempSync(join(tmpdir(), 'verify-launchpad-kernel-'))
+  const file = join(dir, 'kernel.json')
+  writeKernelPrefs({ backend: 'claude' }, file)
+  check('K5 kernel.json：写后读回（形状 backend: claude，原子 tmp+rename）',
+    readKernelPrefs(file).backend === 'claude' && readFileSync(file, 'utf8').includes('"backend": "claude"'),
+    readFileSync(file, 'utf8'))
+  writeKernelPrefs({ backend: 'dsh' }, file)
+  check('K5b kernel.json：覆盖写往返（claude→dsh）', readKernelPrefs(file).backend === 'dsh')
+  writeFileSync(file, '{ not json', 'utf8')
+  check('K6 kernel.json：坏 JSON 读作无记忆（读失败=无记忆，不抛）', readKernelPrefs(file).backend === undefined)
+  writeFileSync(file, '{"backend":"nonsense"}', 'utf8')
+  check('K6b kernel.json：非法 backend 值读作无记忆', readKernelPrefs(file).backend === undefined)
+  writeFileSync(file, '{"backend":"claude","extra":1}', 'utf8')
+  check('K6c kernel.json：未知字段容忍，backend 保留', readKernelPrefs(file).backend === 'claude')
+
+  // boot 优先级：config > env > memory > dsh（launchpad 记忆只垫底）。
+  const P = (configured?: 'dsh' | 'claude', envRaw?: string, memory?: 'dsh' | 'claude') =>
+    resolveRememberedBackend({ configured, envRaw, memory })
+  check('K7 boot 优先级：config 压过 env+记忆；env 压过记忆；记忆垫底；全空=dsh',
+    P('dsh', 'claude', 'claude') === 'dsh' && P(undefined, 'claude', 'dsh') === 'claude'
+      && P(undefined, undefined, 'claude') === 'claude' && P() === 'dsh')
+  check('K7b boot 优先级：非法 env → dsh（不是记忆——与启动警告 starting on dsh 一致）；空白 env = 无 env',
+    P(undefined, 'nonsense', 'claude') === 'dsh' && P(undefined, '  CLAUDE  ', 'dsh') === 'claude' && P(undefined, '', 'claude') === 'claude')
+  check('K7c boot 优先级：env 大小写/空白归一（镜像 normalizeBackendChoice）',
+    P(undefined, 'Claude', 'dsh') === 'claude' && P(undefined, ' dsh ', 'claude') === 'dsh')
+  // 记忆只被选择器写：boot 解析（读路径）绝不改文件。
+  writeKernelPrefs({ backend: 'claude' }, file)
+  const before = readFileSync(file, 'utf8')
+  void P(); void P(undefined, undefined, 'dsh'); void P('claude'); void P(undefined, 'dsh')
+  check('K8 记忆不被 boot 读取改写（读路径零写入；显式 --backend 启动也不改写——boot 不调 write）', readFileSync(file, 'utf8') === before)
 }
 
 // ── F. 宽度不变量（整屏：任何一行都不超宽、没有切断的半句） ─────────────────
@@ -979,7 +1046,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   const cardLeft = leftGap(cardRow)
   const cardWidth = Math.max(24, Math.min(48 - 4, 72))
   check('G1 入口被裁掉后整行仍右对齐（行尾 = 卡片右缘 ±1，且被裁的不画半句）',
-    hintRow !== '' && !hintRow.includes(HELP_LABEL) && Math.abs(stringWidth(hintRow.replace(/\s+$/u, '')) - (cardLeft + cardWidth)) <= 1,
+    hintRow !== '' && !hintRow.includes(HELP_LABEL) && !hintRow.includes(BACKEND_LABEL) && Math.abs(stringWidth(hintRow.replace(/\s+$/u, '')) - (cardLeft + cardWidth)) <= 1,
     `rowEnd=${stringWidth(hintRow.replace(/\s+$/u, ''))} cardRight=${cardLeft + cardWidth} ${hintRow.trim()}`)
   check('G2 裁剪后行高仍恒 1（三个入口同在一行、各只出现一次）',
     rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL])
@@ -1004,9 +1071,10 @@ for (const cols of [120, 100, 72, 60, 48]) {
     const hintRow = lines.find(l => l.includes(label)) ?? ''
     const cardLeft = leftGap(lines.find(l => l.includes('╭')) ?? '')
     const cardRight = cardLeft + Math.max(24, Math.min(COLS - 4, 72))
-    check(`G2b 条件位=${kind}：四格同一行、行高恒 1、仍右对齐（对齐/行高契约不随条件位漂）`,
-      rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL, label])
+    check(`G2b 条件位=${kind}：五格同一行、行高恒 1、仍右对齐（对齐/行高契约不随条件位漂）`,
+      rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL, BACKEND_LABEL, label])
         && lines.filter(l => l.includes(label)).length === 1
+        && lines.filter(l => l.includes(BACKEND_LABEL)).length === 1
         && Math.abs(stringWidth(hintRow.replace(/\s+$/u, '')) - cardRight) <= 1,
       `${kind} ${hintRow.trim().slice(0, 90)}`)
     s.close()
@@ -1265,8 +1333,8 @@ for (const cols of [120, 100, 72, 60, 48]) {
   // 键盘路径（仓库硬规矩）：焦点环走到 Tips（-6）+ Enter = 切下一条。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev)
-  // 环 = 输入框 → 参数四段 → 入口四条 → Tips（-6）：从 -1 数 9 步 Tab。
-  for (let i = 0; i < 9; i++) await s.send('\t')
+  // 环 = 输入框 → 参数四段 → 入口五条（含内核）→ Tips（-6）：从 -1 数 10 步 Tab。
+  for (let i = 0; i < 10; i++) await s.send('\t')
   await settled(() => last(ev, 'focus')?.value === -6)
   await s.send('\r')
   check('L4 焦点在 Tips 行上 Enter 切下一条（与点击同一条 rotateTip）',
@@ -1505,8 +1573,8 @@ for (const cols of [120, 100, 72, 60, 48]) {
   await s.click(CWD)
   check('R3 点击左下角工作目录铭牌 → onOpenWorkspace（既有 /workspace 路径）',
     last(ev, 'workspace') !== undefined, JSON.stringify(ev.slice(before)))
-  // 环 = -1 → 参数4（-2..-5）→ 入口4（0..3）→ Tips（-6）→ 铭牌（-7）：Tab×10。
-  for (let i = 0; i < 10; i++) await s.send('\t')
+  // 环 = -1 → 参数4（-2..-5）→ 入口5（0..4，含内核）→ Tips（-6）→ 铭牌（-7）：Tab×11。
+  for (let i = 0; i < 11; i++) await s.send('\t')
   const beforeKb = ev.length
   await s.send('\r')
   check('R3b 键盘路径：焦点环走到铭牌（环末格）+ Enter → 同一条回调',

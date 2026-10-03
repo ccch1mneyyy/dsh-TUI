@@ -1882,10 +1882,13 @@ export function detachHandoffStdin(
  * reported synchronously (a raw inherit write can vanish mid-handoff). A
  * late exit is quiet — by then the user owned a working TUI session.
  *
- * @param sessionId - Session to resume in the replacement process.
+ * @param sessionId - Session to resume in the replacement process (ignored
+ *   when `options.backend` switches kernels — the new backend starts a
+ *   fresh session).
  * @param options - `kind: 'update'` drops the /restart boot-diagnosis
  *   marker and tags restart.log events for the update flow; `env` adds
- *   marker variables for the replacement (e.g. DSH_TUI_UPDATED_FROM).
+ *   marker variables for the replacement (e.g. DSH_TUI_UPDATED_FROM);
+ *   `backend` switches the replacement onto that kernel.
  * @returns 0 when the replacement ran and exited cleanly, 127 when it
  *   failed to start, otherwise the child's own exit code.
  */
@@ -1898,11 +1901,19 @@ export interface TuiRestartOptions {
    * diagnostics) and restart.log events carry the update-restart tag.
    */
   kind?: 'restart' | 'update'
+  /**
+   * The launchpad kernel selector's switch: restart.log events carry the
+   * backend-switch tag, the replacement env pins DSH_TUI_BACKEND to the
+   * chosen kernel (deterministic even though kernel.json also remembers
+   * it), and DSH_TUI_RESUME_SESSION is DELETED — the new kernel starts a
+   * new session, never this one.
+   */
+  backend?: 'dsh' | 'claude'
 }
 
 export async function restartTui(sessionId: string, options: TuiRestartOptions = {}): Promise<number> {
   const kind = options.kind ?? 'restart'
-  const tag = kind === 'update' ? 'update-restart' : 'restart'
+  const tag = options.backend !== undefined ? 'backend-switch' : kind === 'update' ? 'update-restart' : 'restart'
   const argv = [...process.execArgv, ...process.argv.slice(1)]
   logRestartEvent(`${tag}: spawning replacement`, {
     node: process.execPath,
@@ -1916,24 +1927,34 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
   })
   const startedAt = Date.now()
   return new Promise(resolve => {
+    // A kernel switch never resumes: the id of THIS backend's session means
+    // nothing to the next one, and an inherited marker (this process may
+    // itself be a /restart child) would send the new kernel looking for it —
+    // so the key is deleted outright, not blanked (the launcher row maps ''
+    // to config.sessionId='', not to "absent").
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      // The replacement resumes the current session through the launcher
+      // contract (DSH_TUI_RESUME_SESSION; see src/sessionHistory.ts).
+      DSH_TUI_RESUME_SESSION: sessionId,
+      // Marks the replacement so its own boot logs to restart.log without
+      // noisy logging on every ordinary launch (/restart only).
+      ...(kind === 'restart' ? { [RESTART_CHILD_ENV]: '1' } : {}),
+      ...options.env,
+    }
+    if (options.backend !== undefined) {
+      childEnv.DSH_TUI_BACKEND = options.backend
+      delete childEnv.DSH_TUI_RESUME_SESSION
+    }
     const child = spawn(process.execPath, argv, {
-      env: {
-        ...process.env,
-        // The replacement resumes the current session through the launcher
-        // contract (DSH_TUI_RESUME_SESSION; see src/sessionHistory.ts).
-        DSH_TUI_RESUME_SESSION: sessionId,
-        // Marks the replacement so its own boot logs to restart.log without
-        // noisy logging on every ordinary launch (/restart only).
-        ...(kind === 'restart' ? { [RESTART_CHILD_ENV]: '1' } : {}),
-        ...options.env,
-      },
+      env: childEnv,
       // stdin/stdout stay inherited so the replacement owns the console the
       // moment it boots; stderr is captured so a boot failure is reportable
       // through THIS process (the terminal may already be mid-handoff when
       // the child dies, and a raw inherit write can vanish).
       stdio: ['inherit', 'inherit', 'pipe'],
     })
-    logRestartEvent(`${tag}: replacement spawned`, { childPid: child.pid })
+    logRestartEvent(`${tag}: replacement spawned`, { childPid: child.pid, ...(options.backend === undefined ? {} : { backend: options.backend }) })
     // Handoff watchdog (field evidence 2026-08-24: restarted TUI mounts but
     // takes no input). Two jobs, both diagnosis-grade:
     // 1. SAMPLE this process's stdin state every second — if anything

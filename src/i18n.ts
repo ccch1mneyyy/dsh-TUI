@@ -1949,7 +1949,7 @@ const dict = {
   },
   // Tips 前缀（第三版：● 彩色圆点 + Tips： 前缀，整行居中）。
   'launchpad-tip-prefix': { zh: 'Tips：', en: 'Tips: ' },
-  // 入口行（第七版：四格 = Continue(条件) · 会话与工作区 · 设置 · 条件位）。
+  // 入口行（第七版四格 + 内核入口：Continue(条件) · 会话与工作区 · 设置 · 内核 · 条件位）。
   // （launchpad-action-theme / -lang 三键早已删；第六版的 -sessions / -workspace
   // / -doctor / -setup / -setup-provider 五键随第七版合并/移除一并删除——
   // 历史会话与工作区合并成 -sessions-workspace，doctor 入口退役，首启由
@@ -1958,11 +1958,20 @@ const dict = {
   'launchpad-action-continue-titled': { zh: '继续「{{title}}」', en: 'Continue "{{title}}"' },
   'launchpad-action-sessions-workspace': { zh: '会话与工作区', en: 'Sessions & workspaces' },
   'launchpad-action-settings': { zh: '设置', en: 'Settings' },
+  // 内核入口（backendId 已知 → 带名；{{name}} 是品牌词不译：DSH / Claude）。
+  'launchpad-action-backend': { zh: '内核', en: 'Kernel' },
+  'launchpad-action-backend-named': { zh: '内核 · {{name}}', en: 'Kernel · {{name}}' },
   'launchpad-action-help': { zh: '帮助', en: 'Help' },
   // 条件位（优先级 jobs > update > star > help，见 launchpadActions.ts）。
   'launchpad-action-jobs': { zh: '后台任务', en: 'Background jobs' },
   'launchpad-action-update': { zh: '有新版本', en: 'Update available' },
   'launchpad-action-star': { zh: '投喂一颗 Star', en: 'Feed us a star' },
+  // 内核选择器（launchpad「内核」入口）：目录行标签、置灰原因、切换重启提示。
+  'kernel-label-dsh': { zh: 'DeepSeek Harness', en: 'DeepSeek Harness' },
+  'kernel-label-claude': { zh: 'Claude Agent', en: 'Claude Agent' },
+  'kernel-unavailable-not-installed': { zh: '未安装', en: 'Not installed' },
+  'kernel-unavailable-auth-missing': { zh: '未登录', en: 'Not signed in' },
+  'kernel-switch-restarting': { zh: '正在以 {{name}} 内核重启…', en: 'Restarting on the {{name}} kernel…' },
   // Continue 的失败/空态（Chat 的 /continue 分支）：绝不静默。
   'launchpad-continue-none': {
     zh: '没有可继续的会话，已打开历史会话列表',

@@ -45,9 +45,11 @@ import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './comp
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
 import { initialPromptFromCmdlineArgs } from './startup-args.js'
 import { readHomePrefs } from '../homePrefs.js'
+import { readKernelPrefs, resolveRememberedBackend, writeKernelPrefs } from '../kernelPrefs.js'
+import { kernelDisplayName } from '../components/kernelCatalog.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
+import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, type TuiRestartOptions } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -499,8 +501,16 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // The `backend` row reads DSH_TUI_BACKEND (`dsh-tui --backend`), but a
   // launcher whose bundle patch predates that row (the issue #183 copy skew)
   // never passes it — so the variable is also read here, below the config.
+  // Priority: an explicit Config row or env var always wins; then the
+  // launchpad kernel selector's memory (kernel.json — written only by the
+  // selector, never by boot); else dsh. An INVALID env value still means dsh
+  // (the warning below says exactly that), never the memory.
   const rawBackend = process.env.DSH_TUI_BACKEND
-  const backendChoice = config.backend ?? normalizeBackendChoice(rawBackend)
+  const backendChoice = resolveRememberedBackend({
+    configured: config.backend,
+    envRaw: rawBackend,
+    memory: readKernelPrefs().backend,
+  })
   if (rawBackend !== undefined && rawBackend.trim() !== '' && normalizeBackendChoice(rawBackend) === undefined) {
     ctx.logger.warn(`dsh-tui: DSH_TUI_BACKEND="${rawBackend}" names no known backend (dsh, claude); starting on dsh`)
   }
@@ -1480,6 +1490,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // write the resume target, restore the terminal, respawn the process with
   // the original argv, and let the fresh boot attach the same session.
   let restartRequested = false
+  // The launchpad kernel selector's switch target: set once a choice was
+  // accepted; the exit funnel then respawns onto that kernel (a NEW session —
+  // no resume markers at all).
+  let backendSwitchRequested: 'dsh' | 'claude' | undefined
   // The profile this process was booted with (`dsh --profile <name>`); dsh
   // exposes it nowhere else, and /update must update the installation the
   // user is actually running, not a hard-coded one.
@@ -1553,6 +1567,24 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         )
         return
       }
+      // The kernel selector's switch: the same respawn machinery, no resume.
+      // The new kernel starts a NEW session — no resume target is written
+      // (this kernel's sessions stay persisted; /resume finds them again
+      // after switching back), and restartTui's backend option deletes the
+      // inherited DSH_TUI_RESUME_SESSION marker from the replacement env.
+      // kernel.json was already written when the choice was accepted.
+      if (backendSwitchRequested !== undefined) {
+        logRestartEvent('funnel: backend-switch branch entered', { backend: backendSwitchRequested })
+        void finishExit(
+          ctx,
+          instance,
+          bootedFullscreen,
+          t('kernel-switch-restarting', { name: kernelDisplayName(backendSwitchRequested) }),
+          undefined,
+          () => runRestart(ctx, profile, '', undefined, { backend: backendSwitchRequested }),
+        )
+        return
+      }
       // `/restart`: same handoff as the update path, no installation step.
       // The resume target is written unconditionally — the user asked to
       // restart THIS session, blank or not (mirrors the update contract).
@@ -1623,6 +1655,22 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     },
   })
   const handleExit = funnel.handleExit
+
+  /** The launchpad kernel selector's accept path (the Chat side passes the
+   *  chosen kernel through onSwitchBackend — the prop wiring lands together
+   *  with the selector's Chat rendering). Persists the choice BEFORE the
+   *  teardown, so a crash mid-handoff still leaves the pick remembered, then
+   *  exits into the funnel's backend-switch branch: a fresh session on the
+   *  new kernel; this kernel's sessions stay persisted (/resume finds them
+   *  again after switching back). */
+  const switchBackend = (backend: 'dsh' | 'claude'): void => {
+    if (exited || restartRequested || backendSwitchRequested !== undefined) return
+    backendSwitchRequested = backend
+    writeKernelPrefs({ backend })
+    logRestartEvent('command: backend switch accepted', { backend })
+    notifyChannel(t('kernel-switch-restarting', { name: kernelDisplayName(backend) }))
+    handleExit()
+  }
 
   // Process-level crash backstop (see installNestedUpdateOverflowProcessGuard):
   // an uncaught exception or unhandled rejection that is NOT the React #185
@@ -2451,11 +2499,11 @@ function preservedSessionTail(sessionId: string, hint: (sessionId: string) => st
   return sessionId === '' ? '\n\n' : ` Your session is preserved — resume with:\n${hint(sessionId)}\n\n`
 }
 
-function runRestart(ctx: Context, profile: string | undefined, sessionId: string, hint: (sessionId: string) => string = id => resumeCommand(profile, id)): void {
+function runRestart(ctx: Context, profile: string | undefined, sessionId: string, hint: (sessionId: string) => string = id => resumeCommand(profile, id), options: TuiRestartOptions = {}): void {
   logRestartEvent('runRestart: entered, disposing cordis root')
   disposeRootAndThen(ctx, () => {
     logRestartEvent('runRestart: root disposed, starting restartTui')
-    void restartTui(sessionId).then(
+    void restartTui(sessionId, options).then(
       restartCode => {
         logRestartEvent('runRestart: restartTui resolved', { restartCode })
         if (restartCode !== 0) {
