@@ -171,7 +171,7 @@ check('palette: light panels are white without changing accent or dark surfaces'
 // next family cannot land half-covered.
 check('palette: every built-in covers the full Theme contract', () => {
   const reference = Object.keys(getTheme('dark')).sort()
-  // 键数本身就是契约：只比「期望集 vs 被测集」的话，从 `Theme` 与三套色板
+  // 键数本身就是契约：只比「期望集 vs 被测集」的话，从 `Theme` 与六套色板
   // 同时删一键会让两边一起缩水，消费方拿到的 `undefined` 无人咬。
   assert.equal(reference.length, 81, 'Theme contract key count')
   for (const name of THEME_NAMES) {
@@ -185,16 +185,70 @@ check('palette: every built-in covers the full Theme contract', () => {
       assert.ok(typeof value === 'string' && value !== '', `${name}.${key} is empty`)
     }
   }
+  assert.deepEqual(
+    THEME_NAMES.filter(name => name.startsWith('pink-')).sort(),
+    ['pink-ansi', 'pink-day', 'pink-night'],
+    'the sakura family ships all three roles',
+  )
+})
+
+check('palette: the sakura family keeps the mist family role split', () => {
+  assert.equal(getTheme('pink-night').text, 'rgb(240,228,233)', 'dark ink stays light')
+  assert.equal(getTheme('pink-day').toolCardBackground, 'rgb(249,236,241)', 'light palette uses a panel surface')
+  assert.equal(getTheme('pink-ansi').toolCardBackground, 'ansi:blackBright', 'ansi palette stays 16-color')
+  assert.equal(getTheme('pink-night').accent, getTheme('pink-night').activity, 'brand and activity share the accent')
+  assert.equal(getTheme('pink-night').userMessageBackground, '', 'user turn keeps no fill')
+})
+
+// The sakura family is the reason the chrome keys exist: these palettes ship a
+// pink ramp, so a dropped key would silently fall back to the pre-theme navy
+// ramp (the wave pair falls back silently too, and only fixed-channel forms
+// reach it — an `ansi:*` `ignition` renders the built-in blue wave instead of
+// failing). The caret is the one chrome key the family leaves empty, like the
+// mist family: empty keeps the inverse-video block. Every value is pinned.
+const SAKURA_CHROME = {
+  'pink-night': {
+    contextBarSystem: 'rgb(110,27,60)', contextBarPrompt: 'rgb(155,44,85)',
+    contextBarAssistant: 'rgb(194,77,120)', contextBarThinking: 'rgb(232,121,160)',
+    contextBarTools: 'rgb(247,183,204)', ignition: 'rgb(242,123,166)',
+    ignitionDim: 'rgb(36,26,32)', cursor: '',
+  },
+  // The light crest is its own deeper pink: neither the old neon #FF2D6F nor
+  // the night's softened #F27BA6 reads on this palette's `#FFE3EC` blush (2.98:1
+  // and 2.14:1), and #E879A0 stops the ramp above it.
+  'pink-day': {
+    contextBarSystem: 'rgb(110,27,60)', contextBarPrompt: 'rgb(155,44,85)',
+    contextBarAssistant: 'rgb(194,77,120)', contextBarThinking: 'rgb(232,121,160)',
+    contextBarTools: 'rgb(238,143,176)', ignition: 'rgb(176,58,99)',
+    ignitionDim: 'rgb(255,227,236)', cursor: '',
+  },
+  'pink-ansi': {
+    contextBarSystem: 'ansi:blackBright', contextBarPrompt: 'ansi:magenta',
+    contextBarAssistant: 'ansi:magentaBright', contextBarThinking: 'ansi:white',
+    contextBarTools: 'ansi:whiteBright', ignition: 'rgb(242,123,166)',
+    ignitionDim: 'rgb(36,26,32)', cursor: '',
+  },
+}
+check('palette: the sakura family carries the chrome keys', () => {
+  for (const [name, expected] of Object.entries(SAKURA_CHROME)) {
+    assert.deepEqual(Object.keys(expected), CHROME_KEYS, `${name} pins every chrome key`)
+    const palette = getTheme(name)
+    for (const key of CHROME_KEYS) assert.equal(palette[key], expected[key], `${name}.${key}`)
+  }
 })
 
 // The caret glyph is not unconditionally `inverseText` any more: whichever ink
 // contrasts with the declared fill wins. No built-in declares one, so the
 // synthetic palettes below stand in for the user/plugin themes that do.
 check('palette: the caret glyph follows the fill, not the inverse assumption', () => {
-  // Three empty carets: the pre-key inverse-video block, unchanged.
+  // Six empty carets: the pre-key inverse-video block, unchanged.
   for (const name of THEME_NAMES) {
     assert.equal(cursorGlyphColor(getTheme(name)), 'inverseText', `${name} keeps the inverse glyph`)
   }
+  // 同一填充、两种答案：pink-night 的近黑 `inverseText`（#2B1E25）在粉底上
+  // 对比度更高；pink-day 的近白 `inverseText`（#FBF3F0）输给深墨 `text`（#3D2B33）。
+  assert.equal(cursorGlyphColor({ ...getTheme('pink-night'), cursor: '#E879A0' }), 'inverseText')
+  assert.equal(cursorGlyphColor({ ...getTheme('pink-day'), cursor: '#E879A0' }), 'text')
   // A 16-color or empty fill carries no channels to measure: pre-key behavior.
   const dark = getTheme('dark')
   assert.equal(cursorGlyphColor({ ...dark, cursor: 'ansi:magentaBright' }), 'inverseText')
@@ -211,13 +265,16 @@ check('palette: the caret glyph follows the fill, not the inverse assumption', (
 })
 
 // 驱动组件（点火坡道、提示输入的 onLight、默认前景）消费的是这个**答案**。
-// 注意断言只钉答案：三套内置的身份分支与亮度分支今天恰好同答，所以删掉
+// 注意断言只钉答案：六套内置的身份分支与亮度分支今天恰好同答，所以删掉
 // `isLightThemeActive` 里的身份分支这些断言仍全绿——机制本身没有可观测接缝，
 // 这里守的是答案不回退。
 check('light detection: every built-in lands on the right side', () => {
   assert.ok(isLightThemeActive('light'))
+  assert.ok(isLightThemeActive('pink-day'))
   assert.ok(!isLightThemeActive('dark'))
   assert.ok(!isLightThemeActive('dark-ansi'))
+  assert.ok(!isLightThemeActive('pink-night'))
+  assert.ok(!isLightThemeActive('pink-ansi'))
 })
 
 // 校验器放行的墨色写法都必须判得出来：只认紧凑 `rgb()` 时，hex 墨（最常见的写法）
@@ -403,6 +460,9 @@ check('isThemeAvailable: built-ins and valid user themes, not the rest', () => {
   assert.ok(isThemeAvailable('dark'))
   assert.ok(isThemeAvailable('light'))
   assert.ok(isThemeAvailable('dark-ansi'))
+  assert.ok(isThemeAvailable('pink-night'))
+  assert.ok(isThemeAvailable('pink-day'))
+  assert.ok(isThemeAvailable('pink-ansi'))
   assert.ok(isThemeAvailable('good'))
   assert.ok(isThemeAvailable('format'))
   assert.ok(!isThemeAvailable('bad-base'))
@@ -421,7 +481,8 @@ check('getTheme: registry resolves user themes, built-ins untouched', () => {
 
 // --- chrome keys: context bar, effort ignition, caret ----------------------
 // The other seven chrome keys need no separate check: the contract check above
-// asserts every built-in's key set and non-empty values.
+// asserts every built-in's key set and non-empty values, and SAKURA_CHROME
+// pins the sakura values one by one.
 check('chrome: every built-in keeps the inverse-video caret', () => {
   for (const name of THEME_NAMES) {
     // `cursor` is the one slot the contract check skips on purpose: empty means

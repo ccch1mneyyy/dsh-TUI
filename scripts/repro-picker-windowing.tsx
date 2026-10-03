@@ -12,6 +12,8 @@
  *  - ModelPicker：30 个**带 description** 的模型，首/中焦点在屏；
  *  - HistorySearchDialog：30 条历史（每项恒 2 行 + 容器 gap=1），首/中/末焦点在屏；
  *  - ThemePicker：displayName 含内部换行的自定义主题单行渲染（生产路径）；
+ *  - ThemePicker：短终端（20 行）下焦点行（标签 + 描述两行）仍在屏——
+ *    按项数开窗的 7 项 × 2 行会把浮层顶部的焦点行整行裁掉（六轮审查实证）；
  *  - RewindPicker：30 条用户消息，首/中/末焦点在屏（首项带 'last message' 描述）。
  *
  * "在屏"判定：焦点行的 ❯/正文是 suggestion 主题色（#ABC2EC），逐单元格
@@ -117,34 +119,44 @@ function check(name: string, ok: boolean, extra = '') {
   if (!ok) failed += 1
 }
 function screenLines(): string[] {
-  const buf = term.buffer.active
+  return linesOf(term, ROWS)
+}
+/** 指定终端的可见视口（短终端场景复用；主实例等价于 screenLines）。 */
+type Term = typeof term
+function linesOf(t: Term, rows: number): string[] {
+  const buf = t.buffer.active
   const out: string[] = []
-  for (let y = buf.baseY; y < buf.baseY + ROWS; y++) out.push(buf.getLine(y)?.translateToString(true) ?? '')
+  for (let y = buf.baseY; y < buf.baseY + rows; y++) out.push(buf.getLine(y)?.translateToString(true) ?? '')
   return out
 }
-function dump(tag: string) {
+function dump(tag: string, t: Term = term, rows = ROWS) {
   if (process.env.DUMP !== '1') return
   console.log(`--- dump: ${tag}`)
-  screenLines().forEach((l, i) => console.log(String(i).padStart(2), l.replace(/\s+$/u, '').slice(0, 90)))
+  linesOf(t, rows).forEach((l, i) => console.log(String(i).padStart(2), l.replace(/\s+$/u, '').slice(0, 90)))
 }
 
 /** dark 主题 suggestion 色（焦点行 ❯/正文的 fg）。 */
 const SUGGESTION_RGB = 0xABC2EC
+/** 视口第 row 行是否有 suggestion 前景单元格（焦点行判定）。 */
+function lineHasSuggestion(t: Term, row: number): boolean {
+  const line = t.buffer.active.getLine(t.buffer.active.baseY + row)
+  if (!line) return false
+  for (let x = 0; x < COLS; x++) {
+    const cell = line.getCell(x)
+    if (cell && cell.getChars() && (cell.getFgColor() & 0xffffff) === SUGGESTION_RGB) return true
+  }
+  return false
+}
+/** 快照 lines 里首个「文本匹配 + suggestion 前景」的行号（-1 = 焦点行不在屏）。 */
+function focusRowIndex(lines: readonly string[], t: Term, match: (line: string) => boolean): number {
+  return lines.findIndex((line, row) => match(line) && lineHasSuggestion(t, row))
+}
 /**
  * 焦点行是否在屏：含 `text` 且至少一个单元格前景为 suggestion 色。转录里
  * 同文本的用户消息回显行不是这个颜色，不会被误判（rewind 断言依赖这点）。
  */
 function focusLineVisible(text: string): boolean {
-  const buf = term.buffer.active
-  for (let y = buf.baseY; y < buf.baseY + ROWS; y++) {
-    const line = buf.getLine(y)
-    if (!line || !line.translateToString(true).includes(text)) continue
-    for (let x = 0; x < COLS; x++) {
-      const cell = line.getCell(x)
-      if (cell && cell.getChars() && (cell.getFgColor() & 0xffffff) === SUGGESTION_RGB) return true
-    }
-  }
-  return false
+  return focusRowIndex(screenLines(), term, line => line.includes(text)) !== -1
 }
 
 // ---------------------------------------------------------------- listWindow
@@ -394,6 +406,13 @@ const typeKeys = async (s: string, stepMs = 40) => {
     nameRow === -1 ? '未找到 Foo Bar NL 行' : lines[nameRow]!.trim().slice(0, 60))
   check('/theme 无换行泄漏行（Bar NL 不得单独成行）',
     !lines.some(l => /^\s*Bar NL/u.test(l)))
+  check('/theme 首窗包含 pink-day 与静态主题',
+    lines.some(line => /^\s*[❯↑↓]?\s*pink-day\s+██/u.test(line)) && nameRow !== -1)
+  // 内置项的描述打印的是它占据的 base 角色（BUILT_IN_BASE），不是主题名：
+  // pink-night 是 dark 角色、pink-day 是 light 角色（六轮审查 P3）。
+  check('/theme 内置项描述打印 base 角色而非主题名',
+    lines.some(l => l.includes('内置 · dark 基底')) && !lines.some(l => /pink-[a-z]+ 基底/u.test(l)),
+    lines.filter(l => l.includes('基底')).map(l => l.trim()).join(' | ').slice(0, 120) || '未找到描述行')
   dump('theme newline displayName')
   stdin.write('\x1b')
   await sleep(400) // 固定窗:pacing 浮层关闭过渡，无文本可观测
@@ -424,6 +443,58 @@ const typeKeys = async (s: string, stepMs = 40) => {
 }
 
 instance.unmount()
+
+// ---------------------------------------- 短终端 /theme（六轮审查 P2）
+// 20 行终端：OverlayAbove 的有效高度 = maxHeight（rows-8 = 12），面板框架
+// （挂载 marginTop 1 + Pane 2 + 标题 2 + 提示 1）占 6 行，列表区只剩 6 行。
+// 按**项数**开窗的 7 项 × 2 行 = 14 行让内容高 20 行，overflow 从浮层顶部
+// 整行裁掉 8 行：当前主题 dark（目录索引 1）的标签行连同 ❯ 指针一起消失，
+// 只剩它的描述行——用户看不到焦点在哪就按 Enter（六轮审查实证）。窗口按
+// 行预算开（ModelPicker/listWindow 同款）后焦点项正文 + 描述两行都在屏。
+{
+  const SHORT_ROWS = 20
+  const shortTerm = new XTerm({ cols: COLS, rows: SHORT_ROWS, scrollback: 2000, allowProposedApi: true })
+  class ShortStdout extends Writable {
+    columns = COLS
+    rows = SHORT_ROWS
+    isTTY = true
+    _write(chunk: unknown, _e: BufferEncoding, cb: () => void) {
+      shortTerm.write(String(chunk), () => cb())
+    }
+  }
+  const shortStdin = new FakeStdin()
+  const shortInstance = await render(
+    <Chat
+      channel={createChannel(ctx as never, makeAgent('a2', events) as never, {
+        whaleIdle: false, model: 'model-00', cwd: '/tmp/demo', provider: 'fake-provider', activity: false,
+      }) as never}
+      questionStore={new QuestionStore()}
+      onExit={() => {}}
+    />,
+    { stdout: new ShortStdout(), stdin: shortStdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
+  )
+  await settle(() => linesOf(shortTerm, SHORT_ROWS).some(l => l.includes('rewind 消息 29')))
+  for (const ch of '/theme') { shortStdin.write(ch); await sleep(40) } // 固定窗:pacing 逐键步进
+  await sleep(200) // 固定窗:pacing 等浮层 key-ready，无文本可观测
+  shortStdin.write('\r')
+  // 断言在 settle 捕获的同一快照 shortLines 上求值，无重读分叉。
+  // 标签以 ❯ dark 开头，排除 dark-ansi 和右侧预览标题。
+  let shortLines: string[] = []
+  const darkRowOf = () => focusRowIndex(shortLines, shortTerm, line => /^\s*❯ dark\s/u.test(line))
+  await settle(() => {
+    shortLines = linesOf(shortTerm, SHORT_ROWS)
+    return darkRowOf() !== -1
+  })
+  const darkRow = darkRowOf()
+  check('/theme 短终端（20 行）焦点行标签与 ❯ 在屏', darkRow !== -1,
+    darkRow === -1 ? '焦点行被裁出浮层（仅描述行可见）' : (shortLines[darkRow] ?? '').trim().slice(0, 60))
+  check('/theme 短终端焦点项描述行在屏（整项 2 行）',
+    darkRow !== -1 && (shortLines[darkRow + 1] ?? '').includes('基底'),
+    darkRow === -1 ? '焦点行不可见' : (shortLines[darkRow + 1] ?? '').trim().slice(0, 60))
+  dump('theme short terminal', shortTerm, SHORT_ROWS)
+  shortInstance.unmount()
+}
+
 // 先恢复再断言：恢复后产生的错误走原生 console.error 直接可见，不会被吞；
 // 若上面任一阶段抛异常，顶层未捕获即以非零退出，CI 照样红。
 console.error = origConsoleError

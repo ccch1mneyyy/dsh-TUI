@@ -490,9 +490,9 @@ const selectionBadge = formatSelectionBadge(channel.selection)
   // arithmetic or its right edge falls 2 columns short of the status row's
   // (the v0.8.0 paddingX 2→1 tightening left the old `columns - 4` stale).
   const barWidth = columns - 2
-  // Ask the palette instead of comparing the theme NAME: a light theme need not
-  // be called `light` (a user or plugin palette can be light too). Only the
-  // truecolor+ANSI dark default needs the explicit free-segment colors.
+  // Ask the palette instead of comparing the theme NAME: a light built-in need
+  // not be called `light` (pink-day), and a user theme can be light too. Only
+  // the truecolor+ANSI dark default needs the explicit free-segment colors.
   const barColors: { freeFill: Color; freeText: Color } | undefined =
     isLightThemeActive(themeName)
       ? undefined
