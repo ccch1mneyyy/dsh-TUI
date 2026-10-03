@@ -54,6 +54,8 @@ export type ScrollGeometryNote = {
   prevMaxScroll: number
   clampMin: number | null
   clampMax: number | null
+  /** Frame held by the artifact-shrink recovery: position frozen, follow suspended. */
+  recovering: boolean
 }
 
 export type ListGeometryNote = {
