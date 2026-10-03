@@ -792,6 +792,59 @@ const init = {
   }
 }
 
+// ---- 12c. R3-6 followup: SHARED DERIVED refs never dangle a sibling -------
+{
+  const dir = mkdtempSync(join(tmpdir(), 'dshtui-channels-shared-derived-'))
+  const store = fileClaudeChannels(dir)
+  const tokens = memoryClaudeChannelTokens()
+  // B points at A's DERIVED ref (a hand edit or migration): the ref is legal
+  // and derived-for-A, yet TWO rows reference it. Erasing it on A's account
+  // (remove or clear-token) would dangle B: the row survives while its
+  // credential dies.
+  store.save({ id: 'a', name: 'A', baseUrl: 'https://a.example', tokenRef: 'CHANNEL_A_TOKEN' })
+  store.save({ id: 'b', name: 'B', tokenRef: 'CHANNEL_A_TOKEN' })
+  tokens.write('CHANNEL_A_TOKEN', 'shared-secret')
+  const bRow = () => store.read().channels.find(channel => channel.id === 'b')
+  const envDir = mkdtempSync(join(tmpdir(), 'dshtui-channels-shared-derived-env-'))
+  writeFileSync(join(envDir, 'settings.json'), JSON.stringify({ env: {} }))
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  try {
+    process.env.CLAUDE_CONFIG_DIR = envDir
+    const fake = fakeClaudeSdk(() => ({ capabilities: [], models }), controls)
+    const session = await openClaudeSession(claudeDeps(fake.sdk, { channels: store, channelTokens: tokens }))
+    await tick()
+    const channels = session.capabilities.channels!
+    // (a) clearing A's token detaches the ROW but keeps the credential B
+    //     reads — B did nothing wrong and must not be downgraded.
+    const cleared = channels.save!({ id: 'a', name: 'A', token: '' })
+    check('shared-ref: clearing one row keeps the credential the sibling reads',
+      cleared.connection?.hasToken === false
+        && store.read().channels.find(channel => channel.id === 'a')?.tokenRef === undefined
+        && tokens.read('CHANNEL_A_TOKEN') === 'shared-secret'
+        && bRow()?.tokenRef === 'CHANNEL_A_TOKEN',
+      { cleared, rows: store.read(), token: tokens.read('CHANNEL_A_TOKEN') })
+    // (b) removing A (which re-adopted its derived ref) keeps the credential
+    //     B still references — no dangling reference.
+    channels.save!({ id: 'a', name: 'A', token: 're-set' })
+    check('shared-ref: remove keeps a derived ref another row still references',
+      channels.remove!('a') === true && tokens.read('CHANNEL_A_TOKEN') === 're-set'
+        && bRow()?.tokenRef === 'CHANNEL_A_TOKEN' && tokens.declared('CHANNEL_A_TOKEN'),
+      { rows: store.read(), token: tokens.read('CHANNEL_A_TOKEN') })
+    // (c) the LAST referent clears -> the credential dies with it (the
+    //     un-shared positive control of the clear path's guard). B never had
+    // a baseUrl, so the cleared row is mapping-only: no connection slice.
+    const clearedLast = channels.save!({ id: 'b', name: 'B', token: '' })
+    check('shared-ref: the last referent still clears the credential',
+      clearedLast.connection === undefined && tokens.read('CHANNEL_A_TOKEN') === undefined && bRow()?.tokenRef === undefined,
+      { rows: store.read(), token: tokens.read('CHANNEL_A_TOKEN') })
+    await session.dispose()
+  } finally {
+    process.env.CLAUDE_CONFIG_DIR = previous
+    rmSync(envDir, { recursive: true, force: true })
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 // ---- 13. phase 3: same connection vs restart --------------------------------
 {
   const conn = (fingerprint: string, baseUrl?: string) => ({ baseUrl, hasToken: true, envKeys: [] as string[], fingerprint })
