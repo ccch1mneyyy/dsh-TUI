@@ -1417,6 +1417,10 @@ function renderNodeToOutput(
             padTop -
             yogaNode.getComputedPadding(LayoutEdge.Bottom),
         )
+        // Scroll-container box width. A collapse that comes WITH a width change
+        // is a reflow (the row-height cache is cleared and the tree re-measures),
+        // not a virtual-window measurement artifact — see the recovery below.
+        const boxWidth = Math.round(yogaNode.getComputedWidth())
 
         const content = node.childNodes.find(c => (c as DOMElement).yogaNode) as
           | DOMElement
@@ -1573,21 +1577,26 @@ function renderNodeToOutput(
         // user is at the bottom" (140 >= 140) and silently resumes the follow
         // the user had scrolled away from — and restoring sticky. Two guards
         // keep this off unrelated states: the displacement check
-        // (before === scrollPrevTop) skips deliberate scrolls and genuine
-        // layout collapses (there the position WAS at the old maxScroll), and
-        // the height floor skips a whole-list collapse such as the row-height
-        // cache clear on resize — that one must clamp and repaint normally
-        // (verify-scroll-jumps), not freeze.
+        // (before === scrollPrevTop) skips deliberate scrolls (those move the
+        // position, so the recovery ends the frame the user scrolls), and the
+        // width check skips a reflow — a width change clears the row-height
+        // cache and re-measures the tree, and that collapse must clamp and
+        // repaint as before (verify-scroll-jumps' narrow-to-wide gutter
+        // contract), not freeze. Magnitude is deliberately not a criterion:
+        // the artifact can drop more than a viewport of estimated height, and
+        // a viewport-sized height floor then let the yank through.
         const recoveryH = node.scrollPrevHeight ?? prevScrollHeight
         const recoveryTop = node.scrollPrevTop
+        const reflowed =
+          node.scrollPrevWidth !== undefined && node.scrollPrevWidth !== boxWidth
         const recovering =
           !sticky &&
           !shrunk &&
+          !reflowed &&
           recoveryTop !== undefined &&
           scrollTopBeforeFollow === recoveryTop &&
           scrollTopBeforeFollow > maxScroll &&
-          scrollHeight < recoveryH &&
-          scrollHeight + innerHeight > recoveryH
+          scrollHeight < recoveryH
         // Only real growth (or a settled measurement) refreshes the trusted
         // maxScroll used by the positional at-bottom check — otherwise the
         // frame AFTER an artifact shrink compares against the shrunken
@@ -1596,9 +1605,10 @@ function renderNodeToOutput(
         if (!shrunk && !recovering) node.scrollPrevMax = maxScroll
         // The trusted pre-artifact height outlives the shrink frame itself;
         // once the content grows back to it, the recovery above is over.
-        if (shrunk || recovering) node.scrollPrevHeight = recoveryH
+        if ((shrunk && !reflowed) || recovering) node.scrollPrevHeight = recoveryH
         else node.scrollPrevHeight = undefined
         node.scrollPrevTop = scrollTopBeforeFollow
+        node.scrollPrevWidth = boxWidth
         // Positional at-bottom also fires on NO-GROWTH frames when the
         // scroll position already sits at maxScroll: a wheel-down that
         // lands exactly on the bottom re-pins the follow (and restores
@@ -1738,6 +1748,7 @@ function renderNodeToOutput(
             scrollHeight,
             prevScrollHeight,
             innerHeight,
+            boxWidth,
             maxScroll,
             prevMaxScroll,
             clampMin: cMin ?? null,

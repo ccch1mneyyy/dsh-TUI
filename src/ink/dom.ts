@@ -104,6 +104,11 @@ export type DOMElement = {
   // equals it is the one the artifact collapse displaced — as opposed to a
   // deliberate scroll (or a genuine layout collapse), which moves it.
   scrollPrevTop?: number
+  // Box width measured on the previous frame. A collapse that arrives WITH a
+  // width change is a reflow (row-height cache clear + re-measure), whose new
+  // height is real: it must clamp and repaint, so it never arms the artifact
+  // recovery above.
+  scrollPrevWidth?: number
   stickyScroll?: boolean
   // Renderer → React notification channel, set by ScrollBox to its
   // subscriber-notify. Invoked when the RENDERER restores stickyScroll on

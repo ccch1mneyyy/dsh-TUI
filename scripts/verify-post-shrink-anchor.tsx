@@ -9,7 +9,14 @@
  * 重新接上——屏幕表现为「翻上去停住，新内容一来又被推回底部」。
  *
  * 场景（全屏 Chat，20 轮历史 + 尾行流式）：先让尾行长起来撑开窗口，
- * 上翻 2 格停住，再继续流式增长 32 行并追加新行。
+ * 上翻 2 格停住，再继续流式增长并追加新行。
+ *
+ * 探针设计：尾行**只增不减**（正文数组只 push，永不改短），所以观测窗里
+ * 出现的任何 shrunk 帧都只可能是虚拟化重挂的测量假象，不会是探针自己把
+ * 内容改短制造出来的。另加两条非空转断言：整轮必须真的观测到塌陷帧与
+ * 恢复帧，否则这次运行什么都没测到，判失败而不是默默通过；单轮是否撞上
+ * 假象取决于窗口重挂的时机，所以这两条按整轮合计计，不按单轮。
+ *
  * 断言：整段流式期间 sticky 不得被重新置真、committed 位置不得改变
  * （拽底签名）。位置停在原地时屏幕行号仍可能因虚拟化重测而轻微变化，
  * 那不属于本缺陷，不作断言。
@@ -133,19 +140,24 @@ const instance = await render(
 )
 await sleep(1200) // 固定窗:pacing 首屏就绪的静置窗——完整渲染前无单一可轮询锚点（trace 只在滚动几何变化的帧落 note）
 
-// 尾行流式：先把虚拟化窗口撑开（真实会话里这条行一直在长）。
+// 尾行流式：正文数组只 push 不改写，整轮下来内容只增不减。
 const stream = { id: nextId++, kind: 'assistant', text: 'S-HEAD', streaming: true }
+const body: string[] = []
+const paint = () => { stream.text = ['S-HEAD', ...body].join('\n') }
 channel.rows.push(stream)
 bump()
 await sleep(600) // 固定窗:pacing 流式行首次布局落定——虚拟化窗口重挂后该行才进入测量
 for (let i = 1; i <= 6; i++) {
-  stream.text = `S-HEAD\n` + Array.from({ length: i * 3 }, (_, k) => `prime body ${k + 1}`).join('\n')
+  for (let k = 0; k < 3; k++) body.push(`prime body ${body.length + 1}`)
+  paint()
   bump()
   await sleep(160) // 固定窗:pacing 每步增长各自落帧的步间（prime 阶段不承载断言）
 }
 await sleep(400) // 固定窗:pacing 撑开窗口后的静置窗——等最后一次测量的渲染帧排空
 
 const ROUNDS = 2
+let totalShrunk = 0
+let totalRecovering = 0
 for (let round = 1; round <= ROUNDS; round++) {
   stdin.write('\x1b[1;5F') // Ctrl+End → 回底
   await sleep(700) // 固定窗:pacing 等 Ctrl+End 回底生效——随后才取基线帧
@@ -160,10 +172,11 @@ for (let round = 1; round <= ROUNDS; round++) {
   const mark = traceFrames().length
 
   for (let i = 1; i <= 8; i++) {
-    stream.text = `S-HEAD r${round}\n` + Array.from({ length: i * 4 }, (_, k) => `S-body r${round}-${k + 1} 行`).join('\n')
+    for (let k = 0; k < 4; k++) body.push(`r${round} body ${body.length + 1}`)
     if (i % 4 === 0) {
       channel.rows.push({ id: nextId++, kind: 'assistant', text: `新消息 r${round}-${i} 一行`, streaming: false })
     }
+    paint()
     bump()
     await sleep(160) // 固定窗:探针 每步增长的观察窗——随后断言的是「整段流式期间」的不变量，轮询已成立的条件等于没测
   }
@@ -171,15 +184,24 @@ for (let round = 1; round <= ROUNDS; round++) {
 
   // 拽底签名：sticky 被重新置真（跟随被悄悄接回），或 committed 位置被改写。
   const frames = traceFrames().slice(mark)
+  const shrunkFrames = frames.filter(f => f.shrunk === true)
+  const recoveringFrames = frames.filter(f => f.recovering === true)
   const stickyBack = frames.find(f => f.sticky === true)
   const moved = before.renderScrollTop === undefined
     ? undefined
     : frames.find(f => f.scrollTop !== undefined && f.scrollTop !== before.scrollTop)
+  totalShrunk += shrunkFrames.length
+  totalRecovering += recoveringFrames.length
   check(`round ${round}: 流式期间未重新粘底（sticky 保持 false）`, stickyBack === undefined,
     stickyBack ? `sticky=true @H=${stickyBack.scrollHeight} max=${stickyBack.maxScroll}` : `frames=${frames.length}`)
   check(`round ${round}: 流式期间 committed 位置未被改写`, moved === undefined,
     moved ? `scrollTop ${before.scrollTop} → ${moved.scrollTop} (max ${moved.maxScroll})` : `scrollTop=${before.scrollTop}`)
 }
+
+// 非空转：内容只增不减，窗口里的收缩帧只可能是虚拟化重挂的假象。
+// 单轮是否撞上它取决于重挂时机，所以按整轮合计判。
+check('整轮观测到塌陷假象帧（否则本轮没测到目标路径）', totalShrunk > 0, `shrunk=${totalShrunk}`)
+check('整轮观测到恢复帧（冻结态确实接管过）', totalRecovering > 0, `recovering=${totalRecovering}`)
 
 await instance.unmount()
 rmSync(TRACE, { force: true })
