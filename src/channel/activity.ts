@@ -366,6 +366,24 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
       trimSubagents()
     } else {
       const state = entry.state
+      if (!isLiveSubagent(state.status)) {
+        // A start for a settled subagent is a NEW RUN of the same agent (R6
+        // review: a SendMessage to a finished agent resumes it from its
+        // transcript under the same id, and the CLI re-registers it): the
+        // old run's terminal fields go, the identity, transcript, tool
+        // records and CUMULATIVE tokens stay, and the new run's own clock
+        // starts now. A start while it still runs (moved to the background)
+        // is the same run — no reset.
+        state.status = 'running'
+        state.startedAt = event.time
+        state.completedAt = undefined
+        state.endedAt = undefined
+        state.stopReason = undefined
+        state.summary = undefined
+        state.error = undefined
+        entry.inferred = false
+        entry.lastSummary = undefined
+      }
       if (event.description !== '') state.description = event.description
       if (event.kind !== undefined) state.provider = event.kind
       if (event.model !== undefined) state.model = event.model

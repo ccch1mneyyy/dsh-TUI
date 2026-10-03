@@ -256,6 +256,53 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   }
 }
 
+
+// ── a finished subagent resumes under the same id: a new run (R6 M1) ─────
+{
+  const { channel, query, session } = await openChannel()
+  try {
+    await session.submit({ text: 'dig twice', clientMessageId: 'u1' }, 'turn')
+    query.emit({ type: 'command_lifecycle', command_uuid: 'u1', state: 'started' })
+    query.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1', model: 'claude-haiku', usage: {} } } })
+    query.emit({ type: 'assistant', message: { id: 'm1', content: [{ type: 'tool_use', id: 'call-r', name: 'Agent', input: { description: 'resumable dig', subagent_type: 'Explore', prompt: 'x', run_in_background: true } }] } })
+    query.emit({ type: 'system', subtype: 'task_started', task_id: 'rs-1', tool_use_id: 'call-r', description: 'resumable dig', is_backgrounded: true, spawn_depth: 1, task_type: 'local_agent' })
+    query.emit({ type: 'assistant', parent_tool_use_id: 'call-r', message: { id: 'sub-1', content: [{ type: 'tool_use', id: 'lane-1', name: 'Read', input: { file_path: '/fixture/project/README.md' } }] } })
+    query.emit({ type: 'user', parent_tool_use_id: 'call-r', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'lane-1', content: 'first line' }] } })
+    query.emit({ type: 'assistant', parent_tool_use_id: 'call-r', message: { id: 'sub-2', content: [{ type: 'text', text: 'run one finding' }] } })
+    query.emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-r', content: 'Async agent launched successfully.' }] } })
+    query.emit({ type: 'result', subtype: 'success', is_error: false, result: 'launched', total_cost_usd: 0.001, modelUsage: {} })
+    query.emit({ type: 'system', subtype: 'task_notification', task_id: 'rs-1', status: 'completed', summary: 'first run done', usage: { total_tokens: 100, tool_uses: 1, duration_ms: 900 } })
+    check('first run: settles completed with its report', await settled(() => { const s = channel.subagents.find(item => item.agentId === 'rs-1'); return s?.status === 'completed' && s.summary === 'first run done' }))
+    const first = channel.subagents.find(item => item.agentId === 'rs-1')!
+
+    // SendMessage wakes the finished agent: the same task id starts a NEW run.
+    query.emit({ type: 'system', subtype: 'task_started', task_id: 'rs-1', tool_use_id: 'call-r', description: 'resumable dig', is_backgrounded: true, spawn_depth: 1, task_type: 'local_agent' })
+    check('resume: the same id runs again (a new epoch, not a dead card)', await settled(() => channel.subagents.some(item => item.agentId === 'rs-1' && item.status === 'running')), channel.subagents.map(item => item.status))
+    const resumed = channel.subagents.find(item => item.agentId === 'rs-1')!
+    check('resume: the first run\'s summary and terminal fields go', resumed !== undefined && resumed.summary === undefined && resumed.completedAt === undefined && resumed.endedAt === undefined && resumed.stopReason === undefined && resumed.error === undefined, resumed)
+    check('resume: its transcript, tool records and cumulative tokens stay (not blindly cleared)', resumed !== undefined && resumed.toolCalls.length === 1 && (resumed.toolCalls[0]?.resultPreview ?? '').includes('first line') && resumed.tokens?.total === 100 && resumed.output.includes('run one finding'), resumed && { tools: resumed.toolCalls.length, tokens: resumed.tokens, output: resumed.output })
+    check('resume: the run clock starts fresh', (resumed?.startedAt ?? 0) > (first?.startedAt ?? Infinity), [first?.startedAt, resumed?.startedAt])
+
+    // A duplicate start while it runs (moved to the background) is the SAME
+    // run: the clock is not reset.
+    const clock = resumed?.startedAt
+    query.emit({ type: 'system', subtype: 'task_updated', task_id: 'rs-1', patch: { is_backgrounded: true } })
+    check('resume: backgrounding the running agent keeps its run clock (same epoch)', await settled(() => { const s = channel.subagents.find(item => item.agentId === 'rs-1'); return s?.background === true && s?.startedAt === clock }))
+
+    // The second run FAILS: the new outcome must win over the first success.
+    query.emit({ type: 'system', subtype: 'task_notification', task_id: 'rs-1', status: 'failed', summary: 'second run broke', usage: { total_tokens: 160, tool_uses: 2, duration_ms: 400 } })
+    check('resume: the second run\'s failure wins (not shadowed by the first run\'s success)', await settled(() => { const s = channel.subagents.find(item => item.agentId === 'rs-1'); return s?.status === 'failed' && s.summary === 'second run broke' }))
+    const second = channel.subagents.find(item => item.agentId === 'rs-1')!
+    check('resume: tokens stay cumulative across runs', second?.tokens?.total === 160, second?.tokens)
+    // A re-delivered end of the settled run does not overwrite the outcome.
+    query.emit({ type: 'system', subtype: 'task_notification', task_id: 'rs-1', status: 'completed', summary: 'stale duplicate', usage: { total_tokens: 160, tool_uses: 2, duration_ms: 400 } })
+    check('resume: a re-delivered end of the settled run does not overwrite it', await settled(() => { const s = channel.subagents.find(item => item.agentId === 'rs-1'); return s?.status === 'failed' && s.summary === 'second run broke' }))
+  } finally {
+    channel.releaseContributions()
+    await session.dispose()
+  }
+}
+
 // ── replay after resume ───────────────────────────────────────────────
 {
   const transcript = readFileSync(join(FIXTURES, 'transcripts', 'subagent.jsonl'), 'utf8').split('\n').filter(line => line.trim() !== '').map(line => JSON.parse(line) as { kind: string; agentId?: string; msg: Rec })
