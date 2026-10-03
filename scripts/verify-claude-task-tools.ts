@@ -431,7 +431,35 @@ const synced = scenario(f => [
   ])
   check('superseded drops only the stale call: the list\'s record stands and a fresh update confirms on it',
     same(rebuild.harness.state.todos, [{ content: 'A relaunched', status: 'completed' }]), rebuild.harness.state.todos)
-  // An authoritative List between the patch and its late failure: the List
+
+  // RV round 4 (ghost via an UNKNOWN id): an update of an id the table
+  // never tracked (a resumed/compacted table) is in flight just the same
+  // — an authoritative empty List must supersede ITS call too, or its
+  // late success walks the unknown-id completion and fabricates the task.
+  const unknownGhost = scenario(f => [
+    f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
+    f.call('TaskList', {}),
+    f.resultOf(2, { tasks: [] }),
+    f.resultOf(1, { success: true, taskId: 'a', updatedFields: ['status'] }),
+    f.turnEnd(),
+  ])
+  check('an unknown-id update superseded by an empty List fabricates nothing (the empty list stands)',
+    same(unknownGhost.harness.state.todos, []), unknownGhost.harness.state.todos)
+
+  // Positive control: after that List re-introduces the id, a FRESH
+  // update confirms on it normally (the superseded call id, not the id,
+  // is what drops).
+  const unknownRebuild = scenario(f => [
+    f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
+    f.call('TaskList', {}),
+    f.resultOf(2, { tasks: [{ id: 'a', subject: 'A relaunched', status: 'in_progress', blockedBy: [] }] }),
+    f.resultOf(1, { success: true, taskId: 'a', updatedFields: ['status'] }),
+    f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
+    f.resultOf(3, { success: true, taskId: 'a', updatedFields: ['status'] }),
+    f.turnEnd(),
+  ])
+  check('unknown-id supersede drops only the stale call: the reintroduced record confirms normally',
+    same(unknownRebuild.harness.state.todos, [{ content: 'A relaunched', status: 'completed' }]), unknownRebuild.harness.state.todos)  // An authoritative List between the patch and its late failure: the List
   // wins; the stale failure neither reverts it nor resurrects a delete.
   const authoritative = scenario(f => [
     f.call('TaskCreate', { subject: 'C', description: 'x' }),

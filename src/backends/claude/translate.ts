@@ -494,19 +494,37 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
    * commit, no unknown-id completion, no recompute). Consumed by its own
    * result; refilled only with the calls still in flight. */
   const supersededUpdates = new Set<string>()
+  /** EVERY in-flight TaskUpdate call id — known-patch or UNKNOWN id (a
+   *  resumed/compacted table tracks ids the update still names; RV round
+   * 4): an authority that rules the table away supersedes these calls too,
+   * or their late successes would fabricate tasks through the unknown-id
+   * completion. Consumed by the call's own result. */
+  const inFlightUpdates = new Set<string>()
 
-  /** Move every still-pending update call id into the superseded set (their
-   *  authority has discarded the patches). Capped FIFO: an evicted call's
-   *  result has been absent a long while, and the cap keeps a pathological
-   *  session from growing the set without bound. */
+  /** Remember one update call as in flight (capped FIFO, like the
+   *  superseded set: an evicted call's result has been absent a long
+   *  while). */
+  const noteInFlightUpdate = (callId: string): void => {
+    inFlightUpdates.add(callId)
+    if (inFlightUpdates.size > MAX_SUPERSEDED_UPDATES) {
+      const oldest = inFlightUpdates.values().next().value
+      if (oldest !== undefined) inFlightUpdates.delete(oldest)
+    }
+  }
+
+  /** Move every in-flight update call id (known patch or unknown id) into
+   *  the superseded set — their authority has discarded them. Capped FIFO:
+   *  an evicted call's result has been absent a long while, and the cap
+   *  keeps a pathological session from growing the set without bound. */
   const supersedePendingUpdates = (): void => {
-    for (const callId of taskPatches.keys()) {
+    for (const callId of inFlightUpdates) {
       supersededUpdates.add(callId)
       if (supersededUpdates.size > MAX_SUPERSEDED_UPDATES) {
         const oldest = supersededUpdates.values().next().value
         if (oldest !== undefined) supersededUpdates.delete(oldest)
       }
     }
+    inFlightUpdates.clear()
   }
 
   /** A patch applied to a record: unspecified fields keep theirs (a delete,
@@ -1018,6 +1036,10 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
               const patch = rec(input)
               const id = str(patch?.taskId)
               const known = id === undefined ? undefined : trackedTasks.get(id)
+              // Every id-bearing update call is in flight, tracked or not —
+              // an authority that empties the table supersedes it all the
+              // same (see inFlightUpdates).
+              if (id !== undefined) noteInFlightUpdate(callId)
               if (id !== undefined && known !== undefined) {
                 const applied: TaskPatch = {
                   id,
@@ -1133,6 +1155,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         // neither hides behind them nor resurrects a confirmed delete; a
         // success commits the patch into the base.
         if (call !== undefined && call.name === 'TaskUpdate') {
+          inFlightUpdates.delete(callId)
           if (supersededUpdates.delete(callId)) {
             // An authoritative fact (a List/TodoWrite result, a reset)
             // already discarded this call's optimistic patch: its late
@@ -1642,13 +1665,13 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     trackedTasks.clear()
     taskBases.clear()
     taskSeq = 0
-    // The old conversation's still-pending updates are superseded (a result
-    // that raced the reset must not fabricate a task in the new one); the
-    // set itself starts fresh — only the in-flight calls ride along.
-    const inFlight = [...taskPatches.keys()]
-    taskPatches.clear()
+    // The old conversation's in-flight updates (known patch or unknown
+    // id) are superseded — a result that raced the reset must not
+    // fabricate a task in the new conversation; the set itself starts
+    // fresh, only those in-flight calls riding along (capped).
     supersededUpdates.clear()
-    for (const callId of inFlight) supersededUpdates.add(callId)
+    supersedePendingUpdates()
+    taskPatches.clear()
     for (const [callId, call] of openCalls) if (call.lane === undefined) openCalls.delete(callId)
     deniedReasons.clear()
     settledAttempts.clear()
