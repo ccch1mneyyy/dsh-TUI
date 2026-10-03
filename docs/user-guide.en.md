@@ -52,8 +52,10 @@ dsh-tui
    the box (model · effort · mode · permission — all four are clickable and open the chat page's
    pickers in place; all four stay on the row, and when the line does not fit only the over-long
    segments are truncated at the tail with a trailing `…` — the permission segment is never
-   truncated — and in fullscreen a hover reveals a truncated segment's **full name**; only when even
-   that does not fit are whole segments dropped from the tail in display order), and a row of
+   truncated — and a hover reveals a truncated segment's **full name** (mouse tracking is always on
+   for the launchpad screen, inline mode included); only when the **full permission name does not
+   fit the budget** (independent of the terminal width — the longer the name, the earlier it fires)
+   are whole segments dropped from the tail in display order), and a row of
    **quick actions** (v7 four slots: `Continue "…"` — shortcut `Alt+R`, the slot is simply absent
    when there is nothing to continue · `Sessions & workspaces` — history and workspaces are the
    same `/home` screen, merged into one entry · `Settings` · a **conditional slot** — `Background
