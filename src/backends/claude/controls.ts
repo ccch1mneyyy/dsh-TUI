@@ -8,18 +8,39 @@
  * `message_start.model`, `system/status.permissionMode`, `compact_boundary`):
  * the wrappers emit the change as soon as the control request succeeds and
  * the translator's own tracking keeps later frames from repeating it.
- * The user's model / effort choice persists in `~/.dsh-tui` under a
- * backend-scoped key (never in Claude's settings files).
+ * The user's model / effort / permission-mode choice persists in `~/.dsh-tui`
+ * under a backend-scoped key (never in Claude's settings files).
  */
 import type { AccountInfo, McpServerStatus, ModelInfo, Query, SDKControlGetContextUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk'
-import type { AccountView, ContextUsageView, EffortOption, McpServerView, ModelOption, ModelRef, ModelSwitchOutcome, ModeOption, SessionCapabilities } from '../../agent/capabilities.js'
+import type { AccountView, ChannelProfileView, ContextUsageView, EffortOption, McpServerView, ModelOption, ModelRef, ModelSwitchOutcome, ModeOption, SessionCapabilities } from '../../agent/capabilities.js'
 import type { AgentEvent, CommandInfo } from '../../agent/events.js'
 import { t } from '../../i18n.js'
+import { createHash } from 'node:crypto'
+import { channelTokenRef, type ClaudeChannelTokens } from './channelTokens.js'
+import { importFromSettingsEnv, importTokenFromSettingsEnv, hasChannelConnection, type ClaudeChannelProfile, type ClaudeChannels } from './channels.js'
 import type { ClaudePrefs } from './prefs.js'
 
-/** Modes the Shift+Tab cycle offers, in order (`auto` only where supported;
- *  `bypassPermissions` and `dontAsk` never). */
-const CYCLE: readonly string[] = ['default', 'acceptEdits', 'plan']
+/** The fixed roster, in order, for the /permission picker: `bypassPermissions`
+ *  is always listed — the SDK gate keeps it available at runtime (options.ts),
+ *  so the user's explicit choice is honoured instead of being vetoed by the
+ *  TUI — and `auto` only where the model's classifier supports it. `dontAsk`
+ *  is never offered unless the session already runs in it. */
+const ROSTER: readonly string[] = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
+
+/** The Shift+Tab cycle surface, in order: the pre-bypass roster, verbatim.
+ *  `bypassPermissions` is deliberately NOT here: Shift+Tab is a reflexive
+ *  key (the user taps it repeatedly to move through modes), and one stray
+ *  press landing in "all confirmations off" is unacceptable — bypass is
+ *  entered only through the /permission picker's explicit, explained row.
+ *  Declared as `modes.cycle()` so the narrowing lives in the capability
+ *  layer, not as a mode name hardcoded in the UI. */
+const CYCLE_ROSTER: readonly string[] = ['default', 'acceptEdits', 'plan']
+
+/** The CLI's standard reasoning-effort tiers, weakest to strongest — the
+ * compatibility fallback `levels()` serves for a model row that declares no
+ * list of its own (relay custom rows; the CLI accepts any effortLevel flag
+ * via applyFlagSettings, so the standard ladder is an honest offer). */
+const EFFORT_FALLBACK_TIERS: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
 /** What the controls read from and write to the live session. */
 export interface ClaudeControlsDeps {
@@ -33,14 +54,25 @@ export interface ClaudeControlsDeps {
   currentModel(): string
   /** The backend-native permission mode (translator's view). */
   currentMode(): string
-  /** Whether the session may (re-)enter `bypassPermissions`: only one
-   *  that explicitly started in it (the env opt-in; fail-closed). */
-  bypassAllowed(): boolean
   /** Record a confirmed model / mode in the translator (dedupes later frames). */
   noteModel(model: string): readonly AgentEvent[]
   noteMode(mode: string): readonly AgentEvent[]
   readonly prefs: ClaudePrefs
+  /** The channel-profile store (channels.json); the session wires the file
+   *  store by default and tests an in-memory one. */
+  readonly channels: ClaudeChannels
+  /** The channel-token credential seam (~/.dsh/.credentials.yaml, the
+   *  /provider precedent); the session wires the file store by default.
+   *  Token material moves between this seam and the spawn pipeline only. */
+  readonly tokens?: ClaudeChannelTokens
+  /** The env the CLI child applies (settings `env` + live env), read lazily
+   *  by the settings import. Absent = nothing to import from. */
+  settingsEnv?(): Record<string, string | undefined>
   debug(message: string): void
+  /** The channel's model truth (settings `env` + live env), read lazily on
+   *  the first model-list call: a relay's cosmetic tier name must not hide
+   *  the model that actually serves the request (see modelEnv.ts). */
+  modelTruth?(): { actualFor(requestedId: string): string | undefined }
 }
 
 /** The model catalog row a model id or alias selects. */
@@ -77,6 +109,32 @@ export function accountView(info: AccountInfo, apiKeySource: string | undefined)
   }
 }
 
+/** The connection fingerprint of one profile: a sha256 over the endpoint,
+ *  the STORED token (when the seam holds one) and the channel-private env —
+ *  equal fingerprints are the same connection, so the UI can decide
+ *  restart-vs-refresh without ever seeing the token. */
+const connectionFingerprint = (profile: ClaudeChannelProfile, tokens: ClaudeChannelTokens | undefined): string => {
+  const token = profile.tokenRef !== undefined && tokens !== undefined ? tokens.read(profile.tokenRef) ?? '' : ''
+  const env = Object.entries(profile.env ?? {}).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, value]) => key + '=' + value).join(';')
+  return createHash('sha256').update([profile.baseUrl ?? '', token, env].join('\u0000')).digest('hex').slice(0, 16)
+}
+
+/** One stored profile as the capability's readonly view (file order kept). */
+const profileView = (profile: ClaudeChannelProfile, tokens: ClaudeChannelTokens | undefined): ChannelProfileView => ({
+  id: profile.id,
+  name: profile.name,
+  models: Object.entries(profile.models ?? {}).map(([from, to]) => ({ from, to })),
+  tiers: Object.entries(profile.tiers ?? {}).map(([tier, to]) => ({ tier, to })),
+  ...(!hasChannelConnection(profile) ? {} : {
+    connection: {
+      ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
+      hasToken: profile.tokenRef !== undefined && (tokens?.declared(profile.tokenRef) ?? false),
+      envKeys: Object.keys(profile.env ?? {}),
+      fingerprint: connectionFingerprint(profile, tokens),
+    },
+  }),
+})
+
 /** Build the capabilities (catalogs seeded from the handshake by `seed`). */
 export function createClaudeControls(deps: ClaudeControlsDeps) {
   let models: readonly ModelInfo[] = []
@@ -98,20 +156,53 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
 
   const modeList = (): readonly ModeOption[] => {
     const row = currentRow()
-    const ids = row?.supportsAutoMode === true ? [...CYCLE, 'auto'] : [...CYCLE]
+    const ids = [...ROSTER]
+    if (row?.supportsAutoMode === true) ids.push('auto')
     // The live mode stays listed (and cyclable away from) even when the
-    // cycle would not offer it — a session started in `dontAsk`, say.
+    // roster would not offer it — a session started in `dontAsk`, say.
     const current = deps.currentMode()
     if (current !== '' && !ids.includes(current)) ids.push(current)
-    return ids.map(id => ({ id, label: modeLabel(id) }))
+    return ids.map(id => ({ id, label: modeLabel(id), description: modeDescription(id) }))
+  }
+
+  /** The cycle: the same assembly as `modeList`, over `CYCLE_ROSTER` — the
+   *  live mode still trails the cycle as the away-out when the roster would
+   *  not offer it, so a session in a non-roster mode can always cycle out. */
+  const modeCycle = (): readonly ModeOption[] => {
+    const row = currentRow()
+    const ids = [...CYCLE_ROSTER]
+    if (row?.supportsAutoMode === true) ids.push('auto')
+    const current = deps.currentMode()
+    if (current !== '' && !ids.includes(current)) ids.push(current)
+    return ids.map(id => ({ id, label: modeLabel(id), description: modeDescription(id) }))
   }
 
   const capabilities = {
     models: {
       async list(): Promise<readonly ModelOption[]> {
-        return (await refreshModels()).map(model => ({ id: model.value, label: model.displayName, description: model.description }))
+        const truth = deps.modelTruth?.()
+        return (await refreshModels()).map(model => {
+          // Channel truth (modelEnv.ts): when the configuration says this
+          // row's id routes to a different model, the LABEL becomes the
+          // actual model and the cosmetic name moves into the description.
+          // No mapping (a real Claude setup, or one resolving to the same
+          // model) renders exactly as before.
+          const actual = truth?.actualFor(model.value)
+            ?? truth?.actualFor(model.resolvedModel ?? '')
+          if (actual === undefined) {
+            return { id: model.value, label: model.displayName, description: model.description }
+          }
+          const description = [model.displayName, model.description]
+            .filter((part): part is string => typeof part === 'string' && part.trim() !== '')
+            .join(' — ')
+          return { id: model.value, label: actual, description: description === '' ? undefined : description }
+        })
       },
       current: (): ModelRef => ({ model: deps.currentModel() }),
+      display: (): string | undefined => {
+        const current = deps.currentModel()
+        return current === '' ? undefined : deps.modelTruth?.().actualFor(current)
+      },
       async set(ref: ModelRef): Promise<ModelSwitchOutcome> {
         const row = rowOf(models, ref.model) ?? rowOf(await refreshModels(), ref.model)
         if (row === undefined) return { kind: 'refused', reason: t('claude-model-unknown', { model: ref.model }) }
@@ -119,17 +210,21 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         await deps.query().setModel(row.value)
         deps.prefs.write({ model: row.value })
         deps.emit(deps.noteModel(row.resolvedModel ?? row.value))
-        // An effort the new model cannot run is cleared (the CLI would run
-        // its default anyway; the readout must not claim otherwise). The
-        // effort is kept only when the row still advertises it: the real
-        // offline catalog serves Haiku rows with neither `supportsEffort`
-        // nor a level list, and an old CLI may claim support without
-        // listing levels — either way the picker offers nothing, so the
-        // readout and the persisted pref must claim nothing either (no
-        // hardcoded tiers; the pref can be set again on a model that
-        // advertises levels).
+        // An effort the new model refuses is cleared (the CLI would run
+        // its default anyway; the readout must not claim otherwise) — but
+        // only on an EXPLICIT refusal: `supportsEffort === false`, or a
+        // DECLARED level list that does not contain the tier. A row that
+        // declares no list (the real offline catalog's Haiku rows, a relay
+        // channel's custom model rows, an old CLI claiming support without
+        // tiers) keeps the choice: the CLI accepts any effortLevel flag
+        // (applyFlagSettings — the user's own settings.json ships a global
+        // one), and levels() serves the CLI-standard tiers for exactly
+        // that shape. A remembered tier outside even the fallback ladder
+        // is kept verbatim — the CLI is the authority on what it will run,
+        // and the TUI neither rewrites the user's pref nor offers it in
+        // the picker (the slider marks no tier as current).
         const levels = row.supportedEffortLevels as readonly string[] | undefined
-        if (effort !== undefined && (row.supportsEffort === false || levels === undefined || levels.length === 0 || !levels.includes(effort))) {
+        if (effort !== undefined && (row.supportsEffort === false || (levels !== undefined && levels.length > 0 && !levels.includes(effort)))) {
           effort = undefined
           deps.prefs.write({ effort: null })
           deps.emit([{ type: 'effort.changed', effort: null }])
@@ -138,10 +233,28 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       },
     },
     effort: {
+      get levelsFallback(): true | undefined {
+        const row = currentRow()
+        if (row === undefined) return undefined
+        const declared = row.supportedEffortLevels as readonly string[] | undefined
+        if (row.supportsEffort === false || (declared !== undefined && declared.length > 0)) return undefined
+        return true
+      },
       levels(): readonly EffortOption[] {
         const row = currentRow()
-        if (row !== undefined && row.supportsEffort === false) return []
-        return (row?.supportedEffortLevels ?? []).map(level => ({ id: level, label: effortLabel(level) }))
+        // An unknown model (no catalog row at all — the cold start before the
+        // handshake seeds one) offers nothing: nothing is guessed for a model
+        // the catalog does not know (the lifecycle contract).
+        if (row === undefined) return []
+        if (row.supportsEffort === false) return []
+        // A KNOWN row that declares no list of its own (relay custom rows,
+        // the offline Haiku shape, old CLIs) falls back to the CLI's standard
+        // tiers — the CLI accepts any effortLevel flag, so the standard
+        // ladder is the honest compatibility offer, marked above for the
+        // picker to say so.
+        const declared = row.supportedEffortLevels as readonly string[] | undefined
+        const tiers = declared !== undefined && declared.length > 0 ? declared : EFFORT_FALLBACK_TIERS
+        return tiers.map(level => ({ id: level, label: effortLabel(level) }))
       },
       current: (): string | undefined => effort,
       async set(id: string | null): Promise<void> {
@@ -155,11 +268,86 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
     },
     modes: {
       list: modeList,
+      cycle: modeCycle,
       current: (): string => deps.currentMode(),
       async set(id: string): Promise<void> {
-        if (id === 'bypassPermissions' && !deps.bypassAllowed()) throw new Error(t('claude-mode-bypass-refused'))
+        // No TUI-side vetting: the query was pre-warmed for `bypassPermissions`
+        // (options.ts) and the CLI is the authority on what it accepts. A
+        // refusal comes back as a rejection and is reported by the channel's
+        // guarded setMode, never swallowed here.
         await deps.query().setPermissionMode(id as never)
+        // The pick is remembered (prefs.ts): the next session starts where
+        // this one ended — the same best-effort write model / effort ride.
+        deps.prefs.write({ permissionMode: id })
         deps.emit(deps.noteMode(id))
+      },
+    },
+    channels: {
+      list: (): readonly ChannelProfileView[] => deps.channels.read().channels.map(profile => profileView(profile, deps.tokens)),
+      activeId: (): string | undefined => deps.channels.read().active,
+      setActive: (id: string): void => { deps.channels.setActive(id) },
+      importFromSettings: (): ChannelProfileView | undefined => {
+        const env = deps.settingsEnv?.() ?? {}
+        const draft = importFromSettingsEnv(env)
+        if (draft === undefined) return undefined
+        // A re-import refreshes the same-id channel in place, keeping the
+        // user's hand-written exact models (channels.ts's contract).
+        const existing = deps.channels.read().channels.find(channel => channel.id === draft.id)
+        const imported = existing === undefined ? draft : importFromSettingsEnv(env, existing) ?? draft
+        // Phase 3: the settings env's auth token, when present, moves into
+        // the credential store — the profile keeps only the derived ref, so
+        // channels.json never carries a literal token.
+        const token = importTokenFromSettingsEnv(env)
+        const ref = channelTokenRef(imported.id)
+        const profile: ClaudeChannelProfile = token !== undefined && deps.tokens !== undefined
+          ? { ...imported, tokenRef: ref }
+          : imported
+        if (token !== undefined && deps.tokens !== undefined) deps.tokens.write(ref, token)
+        deps.channels.save(profile)
+        return profileView(profile, deps.tokens)
+      },
+      save: input => {
+        const current = deps.channels.read().channels.find(channel => channel.id === input.id)
+        const ref = channelTokenRef(input.id)
+        // The token, when the wizard collected one, lives in the credential
+        // store; '' removes it (and the profile's ref with it).
+        let storedTokenRef = current?.tokenRef
+        if (input.token !== undefined && deps.tokens !== undefined) {
+          if (input.token === '') {
+            if (storedTokenRef !== undefined) deps.tokens.erase(storedTokenRef)
+            storedTokenRef = undefined
+          } else {
+            deps.tokens.write(ref, input.token)
+            storedTokenRef = ref
+          }
+        }
+        const profile: ClaudeChannelProfile = {
+          id: input.id,
+          name: input.name,
+          ...(input.baseUrl === undefined ? { ...(current?.baseUrl === undefined ? {} : { baseUrl: current.baseUrl }) } : input.baseUrl === '' ? {} : { baseUrl: input.baseUrl }),
+          ...(storedTokenRef === undefined ? {} : { tokenRef: storedTokenRef }),
+          ...(input.env === undefined ? { ...(current?.env === undefined ? {} : { env: current.env }) } : Object.keys(input.env).length === 0 ? {} : { env: input.env }),
+          ...(input.models === undefined ? { ...(current?.models === undefined ? {} : { models: current.models }) } : input.models),
+          ...(input.tiers === undefined ? { ...(current?.tiers === undefined ? {} : { tiers: current.tiers }) } : input.tiers),
+        }
+        deps.channels.save(profile)
+        return profileView(profile, deps.tokens)
+      },
+      remove: id => {
+        const current = deps.channels.read().channels.find(channel => channel.id === id)
+        if (current === undefined) return false
+        if (current.tokenRef !== undefined) deps.tokens?.erase(current.tokenRef)
+        deps.channels.remove(id)
+        return true
+      },
+      peekSettingsImport: () => {
+        const env = deps.settingsEnv?.() ?? {}
+        const draft = importFromSettingsEnv(env)
+        if (draft === undefined) return undefined
+        return {
+          ...(draft.baseUrl === undefined ? {} : { baseUrl: draft.baseUrl }),
+          tiers: draft.tiers ?? {},
+        }
       },
     },
     compact: {
@@ -234,6 +422,21 @@ export function modeLabel(id: string): string {
     case 'dontAsk': return t('claude-mode-dontAsk')
     case 'bypassPermissions': return t('claude-mode-bypassPermissions')
     default: return id
+  }
+}
+
+/** The one-line explanation of a backend-native permission mode (the
+ *  picker's second row: what the mode actually does — never a repeat of the
+ *  label). Unknown ids have none. */
+export function modeDescription(id: string): string | undefined {
+  switch (id) {
+    case 'default': return t('claude-mode-desc-default')
+    case 'acceptEdits': return t('claude-mode-desc-acceptEdits')
+    case 'plan': return t('claude-mode-desc-plan')
+    case 'auto': return t('claude-mode-desc-auto')
+    case 'dontAsk': return t('claude-mode-desc-dontAsk')
+    case 'bypassPermissions': return t('claude-mode-desc-bypassPermissions')
+    default: return undefined
   }
 }
 

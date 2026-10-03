@@ -21,7 +21,10 @@ export type ClaudeToolRole =
   | 'subagent'
   /** `AskUserQuestion`: the questionnaire surface. */
   | 'question'
-  /** `TodoWrite`: the todo panel. */
+  /** `TodoWrite` and the task family that replaced it (CLI 2.1.284:
+   *  `TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet`): the todo panel, never
+   *  a card — the translator emits `todo.write` snapshots for them. Not the
+   *  `Task` subagent delegation nor `TaskStop` (a background task). */
   | 'todo'
   /** `EnterPlanMode` / `ExitPlanMode`: the mode and the plan-review panel,
    *  never a card (the translator emits no call for them). */
@@ -58,6 +61,12 @@ export function claudeToolRole(name: string): ClaudeToolRole {
     case 'AskUserQuestion':
       return 'question'
     case 'TodoWrite':
+    // The task tools that replaced TodoWrite (CLI 2.1.284); both families
+    // are shouldDefer tools, so the preset alone never surfaces them.
+    case 'TaskCreate':
+    case 'TaskUpdate':
+    case 'TaskList':
+    case 'TaskGet':
       return 'todo'
     case 'EnterPlanMode':
     case 'ExitPlanMode':

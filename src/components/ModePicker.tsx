@@ -37,7 +37,7 @@ export function ModePicker({
           </Text>
         </Box>
         <Select
-          options={modes.map(mode => ({ value: mode.id, label: mode.name, description: mode.name }))}
+          options={modes.map(mode => ({ value: mode.id, label: mode.name, description: mode.description ?? mode.name }))}
           focusIndex={focusIndex}
           selectedValue={currentId}
           onPick={onPick ? index => onPick(index) : undefined}

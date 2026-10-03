@@ -12,6 +12,9 @@
  */
 import type { CanUseTool, OnElicitation, OnUserDialog, Options, PermissionMode, SettingSource } from '@anthropic-ai/claude-agent-sdk'
 import type { ClaudeSdkModule } from './sdk.js'
+// Side-effect import: the canUseTool-shadow warning filter must be installed
+// before the first query() construction (this module is in that chain).
+import './sdk-warnings.js'
 
 /** How the profile treats an option: `set` here, `side` (only the side
  *  query of `/btw` and `/recap` sets it, `buildSideQueryOptions`), `omit`
@@ -25,7 +28,10 @@ export const OPTION_POLICY = {
   projectConfigRoot: 'omit',
   agent: 'omit',
   agents: 'omit',
-  allowedTools: 'omit',
+  // The todo-panel family only: additive + pre-approved (below) — the SDK's
+  // auto-allow list also surfaces shouldDefer tools the native build keeps
+  // behind ToolSearch, so the panel works without per-call prompts.
+  allowedTools: 'set',
   canUseTool: 'set',
   continue: 'omit',
   cwd: 'set',
@@ -66,7 +72,7 @@ export const OPTION_POLICY = {
   pathToClaudeCodeExecutable: 'set',
   permissionMode: 'set',
   planModeInstructions: 'omit',
-  allowDangerouslySkipPermissions: 'set', // only the explicit `bypassPermissions` start
+  allowDangerouslySkipPermissions: 'set', // the always-on bypass gate (buildQueryOptions)
   permissionPromptToolName: 'omit',
   permissionPrompts: 'omit',
   plugins: 'omit',
@@ -95,6 +101,13 @@ export const OPTION_POLICY = {
  *  the CLI (`project` is the one that brings CLAUDE.md, Phase 0 probe P1). */
 export const SETTING_SOURCES: SettingSource[] = ['user', 'project', 'local']
 
+/** The plan-tracking tools the todo panel renders (CLI 2.1.284: the Task*
+ *  family replaced TodoWrite; both are shouldDefer tools the preset does not
+ *  list — `allowedTools` both pre-approves them and brings them in, while
+ *  `tools` stays the preset: additive, never an explicit replacement that
+ *  would swap the whole default set). */
+export const TODO_PANEL_TOOLS: readonly string[] = ['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']
+
 /** Modes the start resolution accepts from settings. `bypassPermissions`
  *  is never started from settings — only the env override below opts in. */
 const START_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']
@@ -114,32 +127,43 @@ export interface StartPermissionMode {
   readonly mode: PermissionMode
   /** Set when the configured mode was not honoured. */
   readonly downgradedFrom?: PermissionMode
-  readonly source: 'env' | 'settings' | 'default'
+  readonly source: 'env' | 'pref' | 'settings' | 'default'
   /** `DSH_TUI_CLAUDE_PERMISSION_MODE` was set to a value the override refuses. */
   readonly ignoredOverride?: string
-  /** Derived (`mode === 'bypassPermissions'`): the session may re-enter
-   *  bypass only because it explicitly started in it (fail-closed). */
-  readonly bypassAllowed: boolean
 }
 
 /**
  * The explicit start permission mode (design §4.3: never omitted — the CLI
  * default may be `auto`). `DSH_TUI_CLAUDE_PERMISSION_MODE` is a developer
- * override for live tests; `bypassPermissions` is the one mode only it can
- * start (README documents it) — the user's explicit choice, never a settings
- * file. Otherwise the user's settings cascade after the CLI's own trust
- * filter for escalating modes from repo-committed files; otherwise `default`.
+ * override for live tests; it is the one source that may START in
+ * `bypassPermissions` (README documents it) — the user's explicit choice,
+ * never a settings file. Next comes `pref`, the user's remembered
+ * `/permission` pick (`~/.dsh-tui/backends/claude/prefs.json`, the same
+ * store as the model and effort choices): it may also start in
+ * `bypassPermissions` (the always-on gate pre-warms the process) — the
+ * user chose it explicitly, here or in an earlier session, so it skips the
+ * settings cascade entirely: no escalation filter, no downgrade notice.
+ * An illegal persisted value reads as no choice. Otherwise the user's
+ * settings cascade after the CLI's own trust filter for escalating modes
+ * from repo-committed files; otherwise `default`.
+ *
+ * Starting elsewhere restricts nothing: the bypass gate rides along on every
+ * query (`buildQueryOptions`), so `/permission` may switch into
+ * `bypassPermissions` at any point of the session.
  */
 export async function resolveStartPermissionMode(
   sdk: Pick<ClaudeSdkModule, 'resolveSettings' | 'filterEscalatingDefaultMode'>,
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
+  pref?: string,
 ): Promise<StartPermissionMode> {
   const override = env.DSH_TUI_CLAUDE_PERMISSION_MODE
   if (override !== undefined && override !== '' && (OVERRIDE_MODES as readonly string[]).includes(override)) {
-    return { mode: override as PermissionMode, source: 'env', bypassAllowed: override === 'bypassPermissions' }
+    return { mode: override as PermissionMode, source: 'env' }
   }
   const ignoredOverride = override === undefined || override === '' ? undefined : override
+  const ignored = ignoredOverride === undefined ? {} : { ignoredOverride }
+  if (isPermissionMode(pref)) return { mode: pref, source: 'pref', ...ignored }
   let configured: unknown
   try {
     const resolved = await sdk.resolveSettings({ cwd, settingSources: SETTING_SOURCES })
@@ -149,10 +173,9 @@ export async function resolveStartPermissionMode(
   } catch {
     configured = undefined
   }
-  const ignored = ignoredOverride === undefined ? {} : { ignoredOverride }
-  if (!isPermissionMode(configured)) return { mode: 'default', source: 'default', bypassAllowed: false, ...ignored }
-  if (!(START_MODES as readonly string[]).includes(configured)) return { mode: 'default', downgradedFrom: configured, source: 'settings', bypassAllowed: false, ...ignored }
-  return { mode: configured, source: 'settings', bypassAllowed: configured === 'bypassPermissions', ...ignored }
+  if (!isPermissionMode(configured)) return { mode: 'default', source: 'default', ...ignored }
+  if (!(START_MODES as readonly string[]).includes(configured)) return { mode: 'default', downgradedFrom: configured, source: 'settings', ...ignored }
+  return { mode: configured, source: 'settings', ...ignored }
 }
 
 export type ProfileInput = {
@@ -234,10 +257,22 @@ export function buildQueryOptions(input: ProfileInput): Options {
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     settingSources: SETTING_SOURCES,
     tools: { type: 'preset', preset: 'claude_code' },
+    // Additive + pre-approval only (see TODO_PANEL_TOOLS): the preset above
+    // stays the base set; this frees the todo-panel family from approval
+    // prompts and surfaces it where the native build defers it.
+    allowedTools: [...TODO_PANEL_TOOLS],
     permissionMode: input.permissionMode,
-    // The SDK refuses `bypassPermissions` without this flag (sdk.d.ts);
-    // no other mode ever carries it.
-    ...(input.permissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
+    // The gate, always. `allowDangerouslySkipPermissions` becomes the CLI's
+    // `--allow-dangerously-skip-permissions`, which only PRE-WARMS the
+    // process: the SDK refuses `bypassPermissions` without it ("Must be set
+    // to true when using permissionMode: 'bypassPermissions'", sdk.d.ts:2001)
+    // and a process started without it can never enter that mode later
+    // (sdk.d.ts:331) — `setPermissionMode` is just a control request, with
+    // no SDK-side gate of its own. It does NOT force bypass: the session
+    // starts in `input.permissionMode` exactly as resolved, and bypass is
+    // entered only by an explicit `setPermissionMode('bypassPermissions')`
+    // (the /permission picker).
+    allowDangerouslySkipPermissions: true,
     canUseTool: input.canUseTool,
     ...(input.onElicitation === undefined ? {} : { onElicitation: input.onElicitation }),
     // The SDK refuses declared kinds without the callback.

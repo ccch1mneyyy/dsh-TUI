@@ -1,7 +1,8 @@
 /**
  * The Claude backend's persisted user choices
- * (`~/.dsh-tui/backends/claude/prefs.json`, design §3.6): the `/model` and
- * `/effort` picks a later session starts with. Backend-scoped on purpose —
+ * (`~/.dsh-tui/backends/claude/prefs.json`, design §3.6): the `/model`,
+ * `/effort` and `/permission` picks a later session starts with. Backend-
+ * scoped on purpose —
  * a Claude model id means nothing to the DSH `/model` preference, and the
  * CLI's own settings files are never written (the user's interactive
  * `claude` keeps its own choices).
@@ -14,10 +15,17 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path'
 import { DATA_DIR } from '../../utils/paths.js'
 
+/** The permission modes the persisted choice may hold (the SDK's whole
+ *  vocabulary, `bypassPermissions` included: the always-on query gate keeps
+ *  it startable, options.ts). Anything else reads as no choice. */
+export const CLAUDE_PERMISSION_MODES: readonly string[] = ['default', 'acceptEdits', 'plan', 'dontAsk', 'auto', 'bypassPermissions']
+
 /** What persists. */
 export interface ClaudePrefsData {
   readonly model?: string
   readonly effort?: string
+  /** The remembered `/permission` pick a later session starts in. */
+  readonly permissionMode?: string
   /** The session a bare `dsh-tui --backend claude --resume` opens (the
    *  launcher reads this field directly; DSH's `resume.txt` never holds a
    *  Claude id). */
@@ -34,6 +42,7 @@ export interface ClaudePrefsData {
 export interface ClaudePrefsPatch {
   readonly model?: string | null
   readonly effort?: string | null
+  readonly permissionMode?: string | null
   readonly lastSession?: string | null
 }
 
@@ -81,6 +90,7 @@ function parsePrefs(parsed: unknown): ClaudePrefsData {
     ...(Object.keys(colors).length === 0 ? {} : { colors }),
     ...(typeof record.model === 'string' && record.model !== '' ? { model: record.model } : {}),
     ...(typeof record.effort === 'string' && record.effort !== '' ? { effort: record.effort } : {}),
+    ...(typeof record.permissionMode === 'string' && CLAUDE_PERMISSION_MODES.includes(record.permissionMode) ? { permissionMode: record.permissionMode } : {}),
     ...(typeof record.lastSession === 'string' && record.lastSession !== '' ? { lastSession: record.lastSession } : {}),
     ...(Object.keys(lastUsed).length === 0 ? {} : { lastUsed }),
   }
@@ -89,7 +99,7 @@ function parsePrefs(parsed: unknown): ClaudePrefsData {
 /** Apply a patch (pure). */
 function patched(current: ClaudePrefsData, patch: ClaudePrefsPatch): ClaudePrefsData {
   const next: Record<string, unknown> = { ...current }
-  for (const key of ['model', 'effort', 'lastSession'] as const) {
+  for (const key of ['model', 'effort', 'permissionMode', 'lastSession'] as const) {
     const value = patch[key]
     if (value === undefined) continue
     if (value === null) delete next[key]

@@ -8,6 +8,7 @@
  * each backend augments its own marker from inside its directory, and only
  * that directory may read it (enforced by `verify:boundary`).
  */
+import type { WorkingActivityView } from '../adapter/ports/channel-view.js'
 import type { AgentEvent, CommandInfo, PermissionRequestView } from './events.js'
 import type { AgentSessionRef } from './refs.js'
 
@@ -68,6 +69,37 @@ export interface EffortOption {
 export interface ModeOption {
   readonly id: string
   readonly label: string
+  /** One line saying what the mode does (the picker's second row); absent
+   *  when the backend has nothing to add. */
+  readonly description?: string
+}
+
+/**
+ * One relay channel profile (the Claude backend's channels.json): the exact
+ * `models` map and the `tiers` rules that say which model actually serves
+ * a requested id (backends/claude/channels.ts). Read-only rows for the
+ * /channel picker, its mapping view, and the phase-3 connection-change
+ * restart decision.
+ */
+export interface ChannelProfileView {
+  readonly id: string
+  readonly name: string
+  /** Exact requested-id → actual model, in file order. */
+  readonly models: readonly { readonly from: string; readonly to: string }[]
+  /** Tier keyword → actual model, in file order (`default` = any-model rule). */
+  readonly tiers: readonly { readonly tier: string; readonly to: string }[]
+  /** The phase-3 connection truth (endpoint + credential presence +
+   *  channel-private env KEYS — never a token literal); absent on
+   *  mapping-only channels. `fingerprint` names the whole connection
+   *  (endpoint + token + env) without exposing any secret: equal
+   *  fingerprints are the SAME connection — switching between them needs
+   *  no restart. */
+  readonly connection?: {
+    readonly baseUrl?: string
+    readonly hasToken: boolean
+    readonly envKeys: readonly string[]
+    readonly fingerprint: string
+  }
 }
 
 /**
@@ -181,16 +213,77 @@ export interface SessionCapabilities {
     list(): Promise<readonly ModelOption[]>
     current(): ModelRef
     set(ref: ModelRef): Promise<ModelSwitchOutcome>
+    /** The display name of the model that actually serves the session when
+     *  a channel mapping says the live id is a cosmetic alias (relay
+     *  channels echo the requested id back — backends/claude/modelEnv.ts).
+     *  Undefined = the id itself is the truth; presenters render it instead
+     *  of the id, data surfaces (attribution, matching) keep the id. */
+    display?(): string | undefined
   }
   readonly effort?: {
+    /** Read-only bit: `levels()` serves the CLI-standard compatibility
+     *  tiers (low → max) because the current model row declares no level
+     *  list of its own — the relay-channel custom-row shape. The CLI
+     *  accepts any effortLevel flag regardless, so the honest answer is
+     *  the standard ladder, marked here so the picker can say so.
+     *  Undefined = the list is the model's own (or there is no list). */
+    readonly levelsFallback?: true
     levels(): readonly EffortOption[]
     current(): string | undefined
     set(id: string | null): Promise<void>
   }
   readonly modes?: {
     list(): readonly ModeOption[]
+    /**
+     * The mode surface the Shift+Tab reflex key may walk. Absent = the
+     * cycle walks `list()` unchanged. A backend MAY declare a cycle that
+     * is narrower than `list()`: a mode that must only ever be entered by
+     * an explicit pick (Claude's `bypassPermissions` in the /permission
+     * picker) stays out of the cycle, so one reflexive keypress can never
+     * land in it. The narrowing is declared here, in the capability layer —
+     * the UI never hardcodes mode names to shape the cycle.
+     */
+    cycle?(): readonly ModeOption[]
     current(): string
     set(id: string): Promise<void>
+  }
+  /**
+   * The backend's relay channel profiles (the Claude backend's channels.json):
+   * the /channel picker's roster, the active pick (whose mapping the model
+   * display resolves through), and the settings import. Synchronous by
+   * contract — the store is a small best-effort file (prefs.ts's model).
+   */
+  readonly channels?: {
+    list(): readonly ChannelProfileView[]
+    /** The active channel's id; undefined when none is active. */
+    activeId(): string | undefined
+    /** Switch the active channel (persists; a no-op for an unknown id). */
+    setActive(id: string): void
+    /** Import/refresh the channel profile hiding in the CLI settings env;
+     *  undefined when the env holds nothing importable. Phase 3: the
+     *  connection (base URL + auth token) is absorbed too — the token
+     *  moves into the credential store, the profile keeps only its ref. */
+    importFromSettings(): ChannelProfileView | undefined
+    /** Upsert one profile with connection fields (the phase-3 wizard): a
+     *  given token goes to the credential seam, the profile keeps only its
+     *  ref. Absent on backends without the management surface. */
+    save?(input: {
+      readonly id: string
+      readonly name: string
+      /** Undefined = keep the stored field; '' clears it. */
+      readonly baseUrl?: string
+      /** Undefined = keep the stored token; '' removes it (and its ref). */
+      readonly token?: string
+      /** Undefined = keep; a provided record replaces the whole map. */
+      readonly env?: Readonly<Record<string, string>>
+      readonly models?: Readonly<Record<string, string>>
+      readonly tiers?: Readonly<Record<string, string>>
+    }): ChannelProfileView
+    /** Drop one profile (and its stored token); false for an unknown id. */
+    remove?(id: string): boolean
+    /** What the CLI settings env holds for an import (phase-3 wizard): the
+     *  base URL and the absorbable tier rules, without creating anything. */
+    peekSettingsImport?(): { readonly baseUrl?: string; readonly tiers: Readonly<Record<string, string>> } | undefined
   }
   readonly compact?: { run(): Promise<void>; cancel?(): void }
   /**
@@ -276,6 +369,15 @@ export interface SessionCapabilities {
     reconnect(): Promise<void>
   }
   readonly loadedContext?: { snapshot(): Promise<LoadedContextView | undefined> }
+  /**
+   * The backend's own working-activity line, when it folds one itself (the
+   * Claude backend does; a DSH session publishes through the
+   * `dsh-working-activity` plugin's session projection instead and serves
+   * no capability here). One `WorkingActivityView` per phase or line change
+   * while the session works; a late subscriber gets the latest value once on
+   * subscribe. Absent (or silent) → the UI keeps its classic spinner.
+   */
+  readonly workingActivity?: { subscribe(listener: (view: WorkingActivityView) => void): () => void }
   /** Backend-specific `/doctor` lines (version drift, executable, …), already
    *  localized by the backend. */
   readonly diagnostics?: { lines(): readonly string[] }

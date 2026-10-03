@@ -208,6 +208,10 @@ interface OpenAttempt {
   readonly model?: string
   reasoning: string
   text: string
+  /** Visible TEXT streamed for this attempt (the settled blocks land in
+   *  `text` only when the CLI sends the whole assistant message; a streamed
+   *  response never does, so the narration window reads this). */
+  streamText: string
   /** Blocks received via `assistant` messages. */
   blocks: number
   aborted: boolean
@@ -238,6 +242,26 @@ function toolResultText(content: unknown): string {
     const value = rec(block)
     return value?.type === 'text' ? str(value.text) ?? '' : ''
   }).join('')
+}
+
+/** The longest working-line narration kept (the ⏵ self-narration line). */
+const NARRATION_CHARS = 120
+
+/**
+ * The leading ⏵ self-narration line of a streaming reply, when there is
+ * one (the narrate contract puts exactly one at the very top; only a COMPLETE
+ * first line counts, so a narration still streaming shows nothing yet). The
+ * line is flattened and capped — it is model output destined for a status
+ * line, never for re-parsing.
+ */
+function narrationOf(text: string | undefined): string | undefined {
+  if (text === undefined || text === '') return undefined
+  const newline = text.indexOf('\n')
+  if (newline === -1) return undefined
+  const first = text.slice(0, newline).trimStart()
+  if (!first.startsWith('⏵')) return undefined
+  const flat = first.replace(/[\u0000-\u001f\u007f]/gu, '')
+  return flat.length <= NARRATION_CHARS ? flat : flat.slice(0, NARRATION_CHARS) + '…'
 }
 
 /** First text of a user `message.content` (string or block array). */
@@ -278,6 +302,46 @@ function questionRecordText(input: unknown, structured: unknown, raw: string): s
   })
 }
 
+/**
+ * One task of the CLI's task family (2.1.284+: TaskCreate/TaskUpdate/
+ * TaskList/TaskGet replaced TodoWrite for plan tracking), as the todo panel
+ * projects it. Keyed by the id the CLI assigned (a TaskCreate result).
+ */
+interface TrackedTask {
+  /** The `subject` line (the panel's content). */
+  content: string
+  status: TodoPanelItem['status']
+  /** The spinner line while in_progress — tracked for parity with the
+   *  family's input contract, never emitted (the panel shape is
+   *  content/status only, exactly like TodoWrite's path). */
+  activeForm?: string
+  /** Creation order: the snapshot's row order. */
+  seq: number
+}
+
+/**
+ * The translator's own state as the working-activity fold reads it (the
+ * Claude counterpart of the DSH working-activity plugin's inputs): everything
+ * the working line shows, already tracked here, so the fold (activity.ts)
+ * re-parses nothing. A snapshot is taken after each translated message.
+ */
+export interface ClaudeActivityState {
+  /** A turn is open (the line works only inside one). */
+  readonly turnOpen: boolean
+  /** Wall clock the open (or last) turn began (0 before the first). */
+  readonly turnStartedAt: number
+  /** The newest tool call not yet settled, main lane or subagent lane. */
+  readonly openTool: { readonly name: string; readonly input: unknown } | undefined
+  /** Tool results settled in the current turn (main lane). */
+  readonly toolCount: number
+  /** The in_progress tracked task's `activeForm` — the CLI's own spinner
+   *  wording, the closest thing to a DSH phrase this backend has. */
+  readonly activeForm: string | undefined
+  /** The leading `⏵` self-narration line of the streaming reply, if any
+   *  (the narrate contract: exactly one, at the very top). */
+  readonly narration: string | undefined
+}
+
 /** Create one translator; it serves exactly one session's stream. */
 export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   const now = options.now ?? Date.now
@@ -291,7 +355,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   let attempt: OpenAttempt | undefined
   /** API message ids already settled (late duplicate blocks are ignored). */
   const settledAttempts = new Set<string>()
-  const openCalls = new Map<string, { readonly name: string; readonly input: unknown }>()
+  const openCalls = new Map<string, { readonly name: string; readonly input: unknown; readonly turn: number }>()
   const inputs = new Map<string, RegisteredInput>()
   /** Registered inputs the CLI already started whose echo (the user row of
    *  the replay fallback) has not arrived yet. */
@@ -336,8 +400,39 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   /** Why the CLI auto-denied a call (`system/permission_denied`), until its
    *  error result lands on the card. */
   const deniedReasons = new Map<string, string>()
+  /** The session's plan-tracking tasks (the Task* family), projected onto
+   *  the shared todo panel as full `todo.write` snapshots. */
+  const trackedTasks = new Map<string, TrackedTask>()
+  /** Task creation counter: the snapshots' row order. */
+  let taskSeq = 0
+  /** Wall clock the open (or last) turn began (the activity fold's anchor). */
+  let turnTime = 0
+  /** Main-lane tool results settled in the open turn (the fold's toolCount). */
+  let toolResults = 0
+  /** The turn's latest complete ⏵ narration line (survives the attempt
+   *  that streamed it — the working line keeps narrating between responses,
+   *  like the DSH plugin's freshness window). */
+  let narrated: string | undefined
 
   const nextSeq = (): number => ++seq
+
+  /** The tracked tasks as one full todo snapshot (creation order; a deleted
+   *  task is simply absent). */
+  const taskSnapshot = (): AgentEventOf<'todo.write'> => ({
+    type: 'todo.write',
+    items: [...trackedTasks.entries()].sort((a, b) => a[1].seq - b[1].seq).map(([, task]) => ({ content: task.content, status: task.status })),
+  })
+
+  /** A task record from a Task* result (`{id, subject, status}`), narrowed;
+   *  undefined when the record is missing or not a panel status. */
+  const taskRecord = (value: unknown): { id: string; content: string; status: TodoPanelItem['status'] } | undefined => {
+    const task = rec(value)
+    const id = str(task?.id)
+    const content = str(task?.subject)
+    const status = task?.status
+    if (id === undefined || content === undefined || (status !== 'pending' && status !== 'in_progress' && status !== 'completed')) return undefined
+    return { id, content, status }
+  }
 
   const closeStep = (out: AgentEvent[]): void => {
     if (!stepOpen) return
@@ -350,6 +445,9 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     turnOpen = true
     turn += 1
     step = 0
+    turnTime = now()
+    toolResults = 0
+    narrated = undefined
     // An unprompted turn right after a task notification is the model
     // reporting on it: a notice stands where a user bubble would be.
     const notified = origin === 'system' && notificationTurnExpected
@@ -364,6 +462,11 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     if (open === undefined) return
     attempt = undefined
     settledAttempts.add(open.id)
+    // A reply that narrated keeps the working line narrating until the turn
+    // ends (the fold's freshness window is the turn itself). A streamed
+    // response never re-delivers its blocks; the settled message carries them.
+    const complete = narrationOf(open.streamText !== '' ? open.streamText : open.text)
+    if (complete !== undefined) narrated = complete
     const blocks: ContentBlockView[] = []
     if (open.reasoning !== '' || open.blocks > 0) blocks.push({ type: 'reasoning', text: open.reasoning })
     if (open.text !== '') blocks.push({ type: 'text', text: open.text })
@@ -403,7 +506,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
       currentModel = model
       out.push({ type: 'model.changed', model, source: 'settings' })
     }
-    attempt = { id, step, model, reasoning: '', text: '', blocks: 0, aborted: false, usage, outputTokens: undefined, streamTools: new Map() }
+    attempt = { id, step, model, reasoning: '', text: '', streamText: '', blocks: 0, aborted: false, usage, outputTokens: undefined, streamTools: new Map() }
     return attempt
   }
 
@@ -529,7 +632,10 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         switch (str(body.type)) {
           case 'text_delta': {
             const text = str(body.text) ?? ''
-            if (text !== '') out.push(delta(open, { kind: 'text', text }, index))
+            if (text !== '') {
+              open.streamText += text
+              out.push(delta(open, { kind: 'text', text }, index))
+            }
             return out
           }
           case 'thinking_delta': {
@@ -622,7 +728,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         const callId = str(block.id)
         const name = str(block.name)
         if (callId === undefined || name === undefined) continue
-        openCalls.set(callId, { name, input: block.input })
+        openCalls.set(callId, { name, input: block.input, turn })
         const presentation = presentClaudeToolCall(name, block.input, options.cwd)
         out.push({
           type: 'tool.call',
@@ -720,7 +826,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           const name = str(block.name)
           if (callId === undefined || name === undefined) break
           const input = block.input
-          openCalls.set(callId, { name, input })
+          openCalls.set(callId, { name, input, turn })
           // Plan-mode tools render as a mode change and the plan-review
           // panel, never as a card: no call, and their result below only
           // reports the outcome.
@@ -740,14 +846,42 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           })
           if (claudeToolRole(name) === 'subagent') out.push(delegation(callId, input))
           if (claudeToolRole(name) === 'todo') {
-            const todos = arr(rec(input)?.todos).flatMap((item): TodoPanelItem[] => {
-              const todo = rec(item)
-              const content = str(todo?.content)
-              const status = todo?.status
-              if (content === undefined || (status !== 'pending' && status !== 'in_progress' && status !== 'completed')) return []
-              return [{ content, status }]
-            })
-            out.push({ type: 'todo.write', items: todos })
+            if (name === 'TodoWrite') {
+              const todos = arr(rec(input)?.todos).flatMap((item): TodoPanelItem[] => {
+                const todo = rec(item)
+                const content = str(todo?.content)
+                const status = todo?.status
+                if (content === undefined || (status !== 'pending' && status !== 'in_progress' && status !== 'completed')) return []
+                return [{ content, status }]
+              })
+              out.push({ type: 'todo.write', items: todos })
+            } else if (name === 'TaskUpdate') {
+              // The input is the patch, applied when the call is seen (a
+              // failed update is corrected by the next authoritative read).
+              const patch = rec(input)
+              const id = str(patch?.taskId)
+              const known = id === undefined ? undefined : trackedTasks.get(id)
+              if (id !== undefined && known !== undefined) {
+                if (patch?.status === 'deleted') {
+                  trackedTasks.delete(id)
+                } else {
+                  const status = patch?.status
+                  // A partial update keeps the fields it does not mention —
+                  // the CLI's own spinner keeps showing the remembered
+                  // activeForm, and so does the working line's phrase.
+                  const form = str(patch?.activeForm) ?? known.activeForm
+                  trackedTasks.set(id, {
+                    content: str(patch?.subject) ?? known.content,
+                    status: status === 'pending' || status === 'in_progress' || status === 'completed' ? status : known.status,
+                    ...(form === undefined ? {} : { activeForm: form }),
+                    seq: known.seq,
+                  })
+                }
+                out.push(taskSnapshot())
+              }
+            }
+            // TaskCreate waits for its result (the id); TaskList/TaskGet have
+            // no input-driven effect.
           }
           break
         }
@@ -829,6 +963,54 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           ...(structured === undefined ? {} : { structured }),
           ...(presentation === undefined ? {} : { presentation }),
         })
+        // Every settled main-lane result is one tool done this turn (the
+        // working line's toolCount; plan-mode tools continue'd above).
+        toolResults += 1
+        // The task family (2.1.284+): a create's record names the id its
+        // call lacked; a list/get result is the authoritative state and
+        // overwrites what the inputs built (the CLI owns the tasks).
+        if (call !== undefined && !isError && call.name !== 'TodoWrite' && claudeToolRole(call.name) === 'todo') {
+          const record = rec(structured)
+          if (call.name === 'TaskCreate') {
+            // The record carries no status (a fresh task is pending).
+            const created = rec(record?.task)
+            const id = str(created?.id)
+            const content = str(rec(call.input)?.subject) ?? str(created?.subject)
+            if (id !== undefined && content !== undefined) {
+              const activeForm = str(rec(call.input)?.activeForm)
+              trackedTasks.set(id, {
+                content,
+                status: 'pending',
+                ...(activeForm === undefined ? {} : { activeForm }),
+                seq: ++taskSeq,
+              })
+              out.push(taskSnapshot())
+            }
+          } else if (call.name === 'TaskList') {
+            // Only a real list syncs (a missing/malformed result must not
+            // clear the panel); an empty list is a legitimate clear.
+            if (Array.isArray(record?.tasks)) {
+              const next = new Map<string, TrackedTask>()
+              for (const item of arr(record?.tasks)) {
+                const task = taskRecord(item)
+                if (task === undefined) continue
+                const known = trackedTasks.get(task.id)
+                next.set(task.id, { content: task.content, status: task.status, ...(known?.activeForm === undefined ? {} : { activeForm: known.activeForm }), seq: known?.seq ?? ++taskSeq })
+              }
+              trackedTasks.clear()
+              for (const [id, task] of next) trackedTasks.set(id, task)
+              out.push(taskSnapshot())
+            }
+          } else if (call.name === 'TaskGet') {
+            // `task: null` is a not-found: local state stands.
+            const task = taskRecord(record?.task)
+            if (task !== undefined) {
+              const known = trackedTasks.get(task.id)
+              trackedTasks.set(task.id, { content: task.content, status: task.status, ...(known?.activeForm === undefined ? {} : { activeForm: known.activeForm }), seq: known?.seq ?? ++taskSeq })
+              out.push(taskSnapshot())
+            }
+          }
+        }
         // A backgrounded command's acknowledgement names its output file
         // (`task_started` does not): the job's output tail is read from it.
         const backgroundTask = str(rec(structured)?.backgroundTaskId)
@@ -1321,6 +1503,24 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     /** The output file the CLI reported for a task. */
     outputFileOf(taskId: string): string | undefined {
       return outputFiles.get(taskId)
+    },
+    /** The working-activity fold's inputs (see ClaudeActivityState): the
+     *  translator's own view of the stream, nothing re-parsed. */
+    activityState(): ClaudeActivityState {
+      // Only THIS turn's calls: a call the turn left unsettled is stale (the
+      // CLI moved on), so the working line never shows the last turn's tool.
+      const newest = [...openCalls.entries()].filter(([, call]) => call.turn === turn).at(-1)
+      const inProgress = [...trackedTasks.values()]
+        .filter(task => task.status === 'in_progress' && task.activeForm !== undefined && task.activeForm !== '')
+        .sort((a, b) => a.seq - b.seq)[0]
+      return {
+        turnOpen,
+        turnStartedAt: turnTime,
+        openTool: newest === undefined ? undefined : { name: newest[1].name, input: newest[1].input },
+        toolCount: toolResults,
+        activeForm: inProgress?.activeForm,
+        narration: attempt === undefined ? narrated : narrationOf(attempt.streamText !== '' ? attempt.streamText : attempt.text) ?? narrated,
+      }
     },
     /** The last turn number used (a resumed session continues after it). */
     get turnNumber(): number { return turn },

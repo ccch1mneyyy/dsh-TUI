@@ -41,6 +41,11 @@ export function channelCapabilities(input: {
     sideQuery: input.dsh || caps.sideQuery !== undefined,
     rename: input.dsh || caps.rename !== undefined,
     color: input.dsh || caps.color !== undefined,
+    // The ONLY flag without the dsh shortcut: /channel manages the Claude
+    // backend's own channels.json, which a DSH session does not have — the
+    // command must not appear there even though dsh sessions list every
+    // built-in.
+    channels: caps.channels !== undefined,
   }
   return Object.freeze({
     backendId: input.backendId,
@@ -52,6 +57,10 @@ export function channelCapabilities(input: {
       // channel's listModes/setMode actions. DSH keeps its registry-row
       // command (dsh sessions take the every-builtin branch above).
       ...(input.dsh || caps.modes === undefined ? [] : ['permission']),
+      // The typed `channels` capability rides the same way: /channel is
+      // the backend's own profile manager (BACKEND_CHANNEL_COMMAND), never
+      // offered on a session that does not declare it (DSH included).
+      ...(input.dsh || caps.channels === undefined ? [] : ['channel']),
     ]),
     retractPending: caps.retractPending === true,
     ...flags,
