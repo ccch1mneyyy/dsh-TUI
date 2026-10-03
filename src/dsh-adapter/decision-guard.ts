@@ -345,6 +345,39 @@ export function registerDecisionHandler(
   return release
 }
 
+/** Liveness re-check for a handler snapshot taken before an `await`.
+ *
+ * Decision dispatch awaits plugin handlers, and both grant revocation and
+ * deactivation release their registration while that await is pending. A
+ * snapshot captured at loop start therefore cannot authorize a *late* return
+ * value: a revoked or unloaded component must not be able to veto or rewrite a
+ * user flow with an answer that arrives after its authority ended.
+ *
+ * Liveness is the conjunction of two facts, both cheap and both read live:
+ *
+ * - the exact registration row is still installed (deactivation and grant
+ *   revocation both call the registry release, so a released row is gone);
+ * - the grant still allows this principal at the effective scope (covers a
+ *   store change whose change-watcher has not run yet, or a store with no
+ *   watcher at all).
+ */
+export function isDecisionHandlerLive(
+  ctx: Context,
+  handler: RegisteredDecisionHandler,
+  payloadScope?: string,
+): boolean {
+  const registry = registryFor(ctx)
+  const key = `${handler.activationId}\0${handler.event}\0${handler.order}`
+  if (registry.handlers.get(handler.event)?.get(key) !== handler) return false
+  const permission = eventPermission(handler.event)
+  if (permission === undefined) return true
+  return registry.grants.allows(
+    { componentId: handler.componentId, activationId: handler.activationId },
+    permission,
+    payloadScope ?? handler.scope,
+  )
+}
+
 /** Locale-independent comparator for the declared decision order policy.
  * `localeCompare()` can vary with host ICU settings, which would make the
  * winner depend on the machine running the same admitted component set. */
