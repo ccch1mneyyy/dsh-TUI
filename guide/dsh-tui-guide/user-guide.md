@@ -97,6 +97,7 @@ dsh-tui
 | `Ctrl+L`（⌘L） | 清屏并强制重绘 |
 | `Ctrl+O`（⌘O） | 展开/收起详情（思考全文、工具参数与输出） |
 | `Ctrl+E` | 输入框=光标到行尾；转录中=展开/折叠隐藏的旧消息 |
+| `Alt+G` | 查看自动换行、可滚动的目标全文；`↑/↓`、`PgUp/PgDn`、`Home/End` 浏览，`Esc` 关闭 |
 | `Ctrl+P` | 切换启动时 loaded-context 面板（面板在屏时有效） |
 | `?` | 输入框为空时打开快捷键/命令帮助菜单 |
 
@@ -453,7 +454,7 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 - `/skills` 浏览技能目录，可直调技能以 `/name` 加入命令菜单（dsh-TUI 不自带通用技能）。
 - `/plan` `/goal` `/feedback` `/permission` 来自 DSH 注册表，随组合并入 `/` 菜单。
 - **Goals/Todos 面板自动出现**：模型写入 goal/todo 时在输入框上方实时渲染（🎯 目标 + phase 徽章 + 树形 todo），
-  无需操作；分栏开启时它迁到右栏的 `todo` 面板（见 §2.8）。
+  无需操作；分栏开启时它迁到右栏的 `todo` 面板（见 §2.8）。目标栏保留单行摘要；`Alt+G` 在 inline/fullscreen 均可打开全文，可通过 `/settings` 改绑。fullscreen 可点击目标正文打开详情，悬停被截断的目标显示预览。
 
 ### 4.9 MCP / Workspace / 其他
 

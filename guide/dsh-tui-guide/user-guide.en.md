@@ -105,6 +105,7 @@ dsh-tui
 | `Ctrl+L` (⌘L) | clear screen and force redraw |
 | `Ctrl+O` (⌘O) | expand/collapse details (full thinking, tool args and output) |
 | `Ctrl+E` | in input = cursor to line end; in transcript = expand/collapse hidden old messages |
+| `Alt+G` | View wrapped, scrollable full goal text; navigate with `↑/↓`, `PgUp/PgDn`, `Home/End`, close with `Esc` |
 | `Ctrl+P` | toggle the loaded-context panel at startup (works when the panel is on screen) |
 | `?` | empty input = open shortcut/command help menu |
 
@@ -485,7 +486,7 @@ Keys are in §2.7. Key points:
 - `/skills` browses the skill catalog; a direct-call skill joins the command menu as `/name` (dsh-TUI ships no generic skills).
 - `/plan` `/goal` `/feedback` `/permission` come from the DSH registry, merged into the `/` menu.
 - **Goals/Todos panel appears automatically**: when the model writes a goal/todo, it renders above the input
-  (🎯 goal + phase badge + tree todo), no action needed; with a split it moves to the `todo` panel on the right (see §2.8).
+  (🎯 goal + phase badge + tree todo), no action needed; with a split it moves to the `todo` panel on the right (see §2.8). The goal summary stays on one line; `Alt+G` opens the full text in inline/fullscreen and is remappable via `/settings`. In fullscreen, click the goal text for details or hover truncated text for a preview.
 
 ### 4.9 MCP / Workspace / other
 

@@ -196,6 +196,7 @@ export type ShortcutActionId =
   | 'showAll'
   | 'questionFold'
   | 'redraw'
+  | 'goalDetails'
   | 'todoFold'
   | 'expandEditor'
   | 'star'
@@ -235,6 +236,7 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionSpec[] = [
   { id: 'continue', defaults: ['alt+r'] },
   { id: 'showAll', defaults: ['ctrl+e'] },
   { id: 'redraw', defaults: ['ctrl+l'] },
+  { id: 'goalDetails', defaults: ['alt+g'] },
   { id: 'todoFold', defaults: ['ctrl+q'] },
   { id: 'questionFold', defaults: ['ctrl+k'] },
   { id: 'expandEditor', defaults: ['ctrl+shift+e'] },

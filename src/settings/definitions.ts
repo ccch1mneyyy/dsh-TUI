@@ -571,6 +571,12 @@ export const SHORTCUT_FIELD_META: Record<ShortcutActionId, { label: string; zh: 
     hintEn: d => `Clear and repaint the terminal. Default: ${d}.`,
     hintZh: d => `清空并重绘终端。默认 ${d}。`,
   },
+  goalDetails: {
+    label: 'Goal details shortcut',
+    zh: '目标全文快捷键',
+    hintEn: d => `Open the full goal text with wrapping and scrolling. Default: ${d}.`,
+    hintZh: d => `打开自动换行、可滚动的目标全文。默认 ${d}。`,
+  },
   todoFold: {
     label: 'Todo fold shortcut',
     zh: '待办折叠快捷键',
