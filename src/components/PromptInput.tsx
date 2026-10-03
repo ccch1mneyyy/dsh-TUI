@@ -1477,6 +1477,13 @@ export function PromptInput({
     // this edit replaces, and `diffSpan` needs both texts. `reset` ends the
     // draft's history, `silent` (undo itself, a recall) leaves it untouched.
     if (next !== prev) {
+      // R4-R3: EVERY real text mutation hands the arrows back to the draft.
+      // This is the one owner for paste/clipboard/history/external-editor/
+      // undo refills alike — a dock selection surviving an edited draft is
+      // exactly the stale-focus bug (↑/↓ steering an invisible selector
+      // over the user's text). Caret-only moves (next === prev) never land
+      // here, so the empty-draft selector keeps its keys untouched.
+      if (dockSelectedRef.current !== null) setDockSelected(null)
       if (undo === 'reset') clearDraftUndo()
       else if (undo !== 'silent') {
         recordDraftEdit(prev, prevCursor, snapshotBlock === undefined ? block : snapshotBlock, next, offset, undo)
@@ -1885,6 +1892,16 @@ export function PromptInput({
     setFileSelected(0)
     channel.notify(t('input-retracted'), { timeoutMs: 2000 })
   }
+
+  // A dock that empties or shrinks under an open selector (rows claimed,
+  // a receipt un-docking them, a session reset) leaves the highlight
+  // pointing past the list — fold it instead of steering arrows at an
+  // invisible row (R4-R3's "never operate a hidden focus").
+  React.useEffect(() => {
+    if (dockSelected !== null && (dockSelected >= dockCount || dockCount === 0)) {
+      setDockSelected(null)
+    }
+  }, [dockSelected, dockCount])
 
   /**
    * Ctrl+Enter: abort the running turn and send the input immediately — the

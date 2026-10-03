@@ -750,4 +750,63 @@ const highlightCount = (term, prefix) =>
   check('D15 Enter retracts the highlighted CJK row', await settled(() => channel.removed.length === 1 && channel.removed[0] === 'c0'), JSON.stringify(channel.removed))
   instance.unmount()
 }
+
+// ─── UI level (R4-R3): a real draft edit closes the dock selector ───
+// The stale-focus bug: paste/clipboard/history/editor refills edited the
+// draft but left dockSelected armed, so ↑/↓ kept steering the invisible
+// selector instead of the caret. The clear now lives in setInput's
+// real-mutation block — the ONE owner every draft edit funnels through.
+const selectorHighlightVisible = (term, texts) =>
+  termTestLib.viewportLines(term).some(line => line.includes('❯') && texts.some(text => line.includes(text)))
+
+{
+  // D16 — the review's exact repro: paste over an open selector, then ↑
+  // must edit the text (caret to line 1), not steer the selector.
+  const channel = makeUiChannel([
+    { id: 'r1', text: 'dock-r3a', placement: 'followup', docked: true },
+    { id: 'r2', text: 'dock-r3b', placement: 'followup', docked: true },
+  ])
+  const instance = await mountUI(channel)
+  await settled(() => findUI('dock-r3a') !== null)
+  uiStdin.write('\x1b[A')
+  check('D16 the selector opens on the empty draft', await settled(() => selectorHighlightVisible(termUI, ['dock-r3a', 'dock-r3b'])))
+  uiStdin.write('\x1b[200~line1\nline2\x1b[201~')
+  check('D16 the paste lands in the draft', await settled(() => uiController.current?.text() === 'line1\nline2'), JSON.stringify(uiController.current?.text()))
+  await sleep(150) // 固定窗:探针 断言选择器不再回采：观察窗内不得出现高亮行
+  check('D16 the paste closed the selector', !selectorHighlightVisible(termUI, ['dock-r3a', 'dock-r3b']))
+  uiStdin.write('\x1b[A') // ↑ now belongs to the caret
+  await sleep(120) // 固定窗:pacing 等光标移动生效
+  uiStdin.write('X')
+  check('D16 ↑ edits the first line (caret movement, not selection)', await settled(() => uiController.current?.text() === 'line1X\nline2'), JSON.stringify(uiController.current?.text()))
+
+  // D18 — the EMPTY-draft selector behaviour is unchanged: after clearing
+  // the draft, ↑ reopens the selector and Enter retracts the highlighted row.
+  uiStdin.write('\x1b') // clear the draft (undoable)
+  await settled(() => uiController.current?.text() === '')
+  uiStdin.write('\x1b[A')
+  check('D18 the selector reopens on an empty draft', await settled(() => selectorHighlightVisible(termUI, ['dock-r3a', 'dock-r3b'])))
+  uiStdin.write('\r')
+  check('D18 Enter still retracts the highlighted row', await settled(() => channel.removed.length === 1 && channel.removed[0] === 'r2'), JSON.stringify(channel.removed))
+  instance.unmount()
+}
+
+{
+  // D17 — an undo refill (a silent whole-draft restore) closes the
+  // selector too: the unified owner does not care who mutated the text.
+  const channel = makeUiChannel([
+    { id: 'r1', text: 'dock-r3c', placement: 'followup', docked: true },
+  ])
+  const instance = await mountUI(channel)
+  await settled(() => findUI('dock-r3c') !== null)
+  await typeUI('recover me')
+  uiStdin.write('\x1b') // Esc: clear the draft, keeping one undo step
+  await settled(() => uiController.current?.text() === '')
+  await sleep(150) // 固定窗:pacing 等 Esc 清稿语义落定（避开双击 Esc 判定窗）
+  uiStdin.write('\x1b[A') // open the selector on the empty draft
+  check('D17 the selector opens before the undo', await settled(() => selectorHighlightVisible(termUI, ['dock-r3c'])))
+  uiStdin.write('\x1a') // Ctrl+Z: refill the draft through setInput('silent')
+  check('D17 the undo refill restores the draft', await settled(() => uiController.current?.text() === 'recover me'), JSON.stringify(uiController.current?.text()))
+  check('D17 the refill closed the selector', !selectorHighlightVisible(termUI, ['dock-r3c']))
+  instance.unmount()
+}
 process.exit(failed)
