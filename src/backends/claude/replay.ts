@@ -238,24 +238,82 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
    *  delegating call id and its own agent id). */
   const claimed = new Set<string>()
 
-  /**
-   * The first unattached transcript whose `parent_agent_id` names this
-   * delegating agent: a nested child whose messages never recorded the
-   * delegating call id still finds its true parent by agent id (design §2:
-   * the tree trusts `parent_agent_id`, the call only locates one launch).
-   * For a main-loop delegation the match is a transcript reporting no parent
-   * agent (null/absent = depth-1 or old-format metadata). A transcript that
-   * matches no delegation stays unattached — an orphan is never fabricated
-   * onto an unrelated agent.
-   */
-  const unclaimedChildOf = (delegatorId: string | undefined): ClaudeSubagentTranscript | undefined => {
-    if (options.subagents === undefined) return undefined
-    for (const transcript of options.subagents.values()) {
-      if (claimed.has(transcript.agentId)) continue
-      if (delegatorId === undefined ? transcript.parentAgentId != null : transcript.parentAgentId !== delegatorId) continue
-      return transcript
+  /** Every transcript once, by its own agent id (the map also keys them by
+   *  their delegating call). */
+  const uniqueTranscripts: ClaudeSubagentTranscript[] = []
+  for (const transcript of options.subagents?.values() ?? []) {
+    if (uniqueTranscripts.some(seen => seen.agentId === transcript.agentId)) continue
+    uniqueTranscripts.push(transcript)
+  }
+  /** Recorded hand-back results name the child they return (`agentId: <id>` —
+   *  the same line handBackReport strips): an exact, falsifiable attribution
+   *  channel for a child whose own metadata never recorded the call id. */
+  const childOfResult = new Map<string, string>()
+  const indexHandBackIds = (source: readonly unknown[]): void => {
+    for (const raw of source) {
+      const message = rec(raw)
+      if (message === undefined || message.type !== 'user') continue
+      for (const block of arr(rec(message.message)?.content).map(rec)) {
+        if (block?.type !== 'tool_result') continue
+        const callId = str(block.tool_use_id)
+        if (callId === undefined) continue
+        const text = userText(block.content) ?? (typeof block.content === 'string' ? block.content : '')
+        const child = /(?:^|\n)agentId: ([^\s\n]+)/u.exec(text)?.[1]
+        if (child !== undefined) childOfResult.set(callId, child)
+      }
     }
-    return undefined
+  }
+  indexHandBackIds(messages)
+  for (const transcript of uniqueTranscripts) indexHandBackIds(transcript.messages)
+  /** Per delegator ('' = the main chain): how many of its `Agent` calls NO
+   *  exact channel can attribute (neither a call-id keyed transcript nor a
+   *  hand-back result naming an available child). The fail-closed join
+   *  (RV round 4) only ever pairs a SOLE such call with a SOLE unclaimed
+   *  candidate — anything less is a guess, and a guess cross-wires bodies
+   *  onto the wrong call's card (the map order is the store's traversal
+   *  order, not the parent's call order). */
+  const nonExactCalls = new Map<string, number>()
+  const censusCalls = (source: readonly unknown[], owner: string): void => {
+    for (const raw of source) {
+      const message = rec(raw)
+      if (message === undefined || message.type !== 'assistant') continue
+      for (const block of arr(rec(message.message)?.content).map(rec)) {
+        if (block?.type !== 'tool_use') continue
+        const callId = str(block.id)
+        const name = str(block.name)
+        if (callId === undefined || name === undefined || !AGENT_TOOLS.has(name)) continue
+        const keyed = options.subagents?.has(callId) === true
+        const namedChild = childOfResult.get(callId)
+        const namedAvailable = namedChild !== undefined && (options.subagents?.has(namedChild) === true || uniqueTranscripts.some(seen => seen.agentId === namedChild))
+        if (!keyed && !namedAvailable) nonExactCalls.set(owner, (nonExactCalls.get(owner) ?? 0) + 1)
+      }
+    }
+  }
+  censusCalls(messages, '')
+  for (const transcript of uniqueTranscripts) censusCalls(transcript.messages, transcript.agentId)
+  /** The unclaimed transcript of an exact child id, if the store kept it. */
+  const unclaimedByAgentId = (agentId: string): ClaudeSubagentTranscript | undefined => {
+    if (claimed.has(agentId)) return undefined
+    return uniqueTranscripts.find(seen => seen.agentId === agentId)
+  }
+  /** The unclaimed candidates naming this delegator as parent (for the main
+   *  chain: no parent agent recorded — depth-1 or old-format metadata). */
+  const unclaimedCandidatesOf = (delegatorId: string | undefined): readonly ClaudeSubagentTranscript[] =>
+    uniqueTranscripts.filter(seen => !claimed.has(seen.agentId) && (delegatorId === undefined ? seen.parentAgentId == null : seen.parentAgentId === delegatorId))
+  /**
+   * The SOLE unclaimed candidate for a delegator, attached only when the
+   *  attribution is provably unique (design §2 / RV round 4): the delegator
+   *  made exactly ONE call no exact channel attributes, exactly one
+   *  candidate names it as parent, and the transcript source is complete —
+   *  a main chain that began at a compaction may have dropped the call the
+   *  child actually belongs to. Otherwise undefined: the child stays
+   *  unattached rather than cross-wired onto an arbitrary call.
+   */
+  const soleUnclaimedChildOf = (delegatorId: string | undefined): ClaudeSubagentTranscript | undefined => {
+    if (delegatorId === undefined && compactedFrom !== undefined) return undefined
+    if ((nonExactCalls.get(delegatorId ?? '') ?? 0) !== 1) return undefined
+    const candidates = unclaimedCandidatesOf(delegatorId)
+    return candidates.length === 1 ? candidates[0] : undefined
   }
 
   const closeTurn = (): void => {
@@ -313,10 +371,20 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
       const input = rec(block.input)
       const background = input?.run_in_background === true
       const byCall = depth < MAX_NESTING ? options.subagents?.get(callId) : undefined
-      const transcript = byCall !== undefined && !claimed.has(byCall.agentId)
-        ? byCall
-        : depth < MAX_NESTING ? unclaimedChildOf(delegatorId) : undefined
-      if (byCall !== undefined && transcript !== byCall) debug('claude replay: subagent transcript attached by parent_agent_id healing')
+      let transcript: ClaudeSubagentTranscript | undefined = byCall !== undefined && !claimed.has(byCall.agentId) ? byCall : undefined
+      let via = transcript !== undefined ? 'call id' : undefined
+      if (transcript === undefined && depth < MAX_NESTING) {
+        // Exact, falsifiable: the call's recorded hand-back names the child.
+        const named = childOfResult.get(callId)
+        transcript = named === undefined ? undefined : unclaimedByAgentId(named)
+        if (transcript !== undefined) via = 'hand-back agent id'
+        else {
+          // Fail-closed bijection (RV round 4): provably-unique only.
+          transcript = soleUnclaimedChildOf(delegatorId)
+          if (transcript !== undefined) via = 'unique-candidate bijection'
+        }
+      }
+      if (via !== undefined && transcript !== byCall) debug(`claude replay: subagent transcript attached by ${via}`)
       launched.set(callId, { agentId: transcript?.agentId ?? callId, background })
       if (transcript === undefined) continue
       claimed.add(transcript.agentId)

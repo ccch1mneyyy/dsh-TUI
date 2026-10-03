@@ -852,6 +852,53 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   check('parent_agent_id: a transcript naming an unknown parent stays unattached (no fabricated nesting)', !phantomReplay.events.some(event => (event.type === 'subagent.start' || event.type === 'subagent.end') && event.agentId === 'agent-phantom') && !phantomReplay.events.some(event => 'blocks' in event && JSON.stringify(event).includes('healed works')))
 }
 
+// ── fail-closed attribution: ambiguous twins never cross-wire ──────────
+{
+  const at = (n: number): string => `2026-10-04T09:00:0${n}.000Z`
+  // Two children of one parent, both without call-id metadata (parent_agent_id
+  // carries no call identity), Map insertion order REVERSED against the parent's
+  // call order (listSubagents traversal order).
+  const twinsCalls: Rec = { type: 'assistant', uuid: 'a1', message: { id: 'm1', content: [
+    { type: 'tool_use', id: 'c-A', name: 'Agent', input: { description: 'twin A', prompt: 'x' } },
+    { type: 'tool_use', id: 'c-B', name: 'Agent', input: { description: 'twin B', prompt: 'y' } },
+  ] }, timestamp: at(1) }
+  const twinBody = (text: string): Rec[] => [
+    { type: 'user', message: { role: 'user', content: `${text} prompt` }, timestamp: at(1) },
+    { type: 'assistant', message: { id: `msg_${text.replace(/\s/g, '')}`, content: [{ type: 'text', text: `${text} body` }] }, timestamp: at(2) },
+  ]
+  // REVERSED insertion order: child-b first, whatever the call order is.
+  const reversedMap = () => new Map([
+    ['child-b', { agentId: 'child-b', messages: twinBody('child B') }],
+    ['child-a', { agentId: 'child-a', messages: twinBody('child A') }],
+  ])
+  const twinsChain = (named: boolean): Rec[] => [
+    { type: 'user', uuid: 'u1', message: { role: 'user', content: 'delegate two' }, timestamp: at(0) },
+    twinsCalls,
+    { type: 'user', uuid: 'r1', message: { role: 'user', content: [
+      { type: 'tool_result', tool_use_id: 'c-A', content: named ? `The report follows:\n  result A\nagentId: child-a` : 'The report follows:\n  result A' },
+      { type: 'tool_result', tool_use_id: 'c-B', content: named ? `The report follows:\n  result B\nagentId: child-b` : 'The report follows:\n  result B' },
+    ] }, timestamp: at(4) },
+  ]
+
+  // (a) Ambiguous: no hand-back agent id — pairing by Map order would wire
+  // child B's body onto call A's card. Fail-closed: neither attaches; each
+  // call's card keeps its OWN result as the summary.
+  const ambiguous = replayClaudeTranscript(twinsChain(false), { cwd: '/fixture/project', subagents: reversedMap() })
+  const starts = ambiguous.events.filter(event => event.type === 'subagent.start')
+  check('attribution: ambiguous twins stay unattached (no Map-order pairing, no cross-wiring)', !starts.some(event => (event as { agentId?: string }).agentId === 'child-a' || (event as { agentId?: string }).agentId === 'child-b'), starts)
+  check('attribution: … neither child body replays onto a call lane', !ambiguous.events.some(event => 'blocks' in event && JSON.stringify(event).includes('body')))
+  const ends = new Map(ambiguous.events.flatMap(event => event.type === 'subagent.end' ? [[event.agentId, event] as const] : []))
+  check('attribution: … each call keeps its own hand-back as the summary', ends.get('c-A')?.summary === 'result A' && ends.get('c-B')?.summary === 'result B', [...ends.entries()].map(([id, e]) => `${id}:${(e as { summary?: string }).summary}`))
+
+  // (b) Constructive: the hand-back results NAME their children (`agentId:`
+  // line) — exact, falsifiable attribution despite the reversed Map order.
+  const named = replayClaudeTranscript(twinsChain(true), { cwd: '/fixture/project', subagents: reversedMap() })
+  const namedStarts = new Map(named.events.filter(event => event.type === 'subagent.start').map(event => [(event as { agentId?: string }).agentId, event] as const))
+  check('attribution: hand-back agent ids attach each twin to its OWN call', namedStarts.get('child-a')?.parentCallId === 'c-A' && namedStarts.get('child-b')?.parentCallId === 'c-B', [...namedStarts.entries()].map(([id, e]) => `${id}->${(e as { parentCallId?: string }).parentCallId}`))
+  check('attribution: … each body replays on its own lane', named.events.some(event => event.type === 'assistant.message' && event.parentCallId === 'c-A' && JSON.stringify(event).includes('child A body')) && named.events.some(event => event.type === 'assistant.message' && event.parentCallId === 'c-B' && JSON.stringify(event).includes('child B body')))
+  const namedEnds = new Map(named.events.flatMap(event => event.type === 'subagent.end' ? [[event.agentId, event] as const] : []))
+  check('attribution: … summaries stay per-call (agentId line stripped)', namedEnds.get('child-a')?.summary === 'result A' && namedEnds.get('child-b')?.summary === 'result B', [...namedEnds.entries()].map(([id, e]) => `${id}:${(e as { summary?: string }).summary}`))
+}
 // ── a foreground subagent cannot outlive its turn (5a review 4) ───────
 {
   const { channel, query, session } = await openChannel()
