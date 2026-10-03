@@ -917,7 +917,7 @@ try {
     await settled(() => obsA.some(frames => frames !== undefined), { timeoutMs: 5000 })
     check('r5-1: consumer hits the shared cache synchronously (injected frames)', obsA.some(frames => frames !== undefined))
     // 持续播放 3 个 tick：每个已提交 commit 把 idle 升到最近使用位。
-    for (let tick = 0; tick < 3; tick += 1) { s1.bump(); await sleep(40) }
+    for (let tick = 0; tick < 3; tick += 1) { s1.bump(); await sleep(40) } // 固定窗:commit 窗——touch 后无 revision
     check('r5-1: commit-path LRU touch publishes no revision (no self-stimulated renders)',
       revDuringPlayback === 0, 'revisions=' + revDuringPlayback)
     // 注入 4×8MiB 压力：注入间隙保持播放 commit（每次 bump 把 idle 升回
@@ -926,9 +926,9 @@ try {
     for (const warm of ['warm-1', 'warm-2', 'warm-3', 'warm-4']) {
       injectDecodedAnimationForTests(warm, fakeFrames(8))
       s1.bump()
-      await sleep(40)
+      await sleep(40) // 固定窗:commit 窗——压力注入间隙的播放 commit
     }
-    await sleep(300) // revision 通知 → 消费者重渲染（仍应命中）
+    await sleep(300) // 固定窗:revision 通知 → 消费者重渲染（仍应命中）
     check('r5-1: actively played key survives eviction pressure (true recency protection)',
       decodedImageAnimationOrderForTests().includes('idle'),
       'order=' + decodedImageAnimationOrderForTests().join(','))
@@ -943,7 +943,7 @@ try {
     s1.term.dispose()
     s1 = undefined
     for (const warm of ['warm-5', 'warm-6', 'warm-7', 'warm-8']) injectDecodedAnimationForTests(warm, fakeFrames(8))
-    await sleep(150)
+    await sleep(150) // 固定窗:卸载后保活失效观察窗
     check('r5-1: unmounted (hidden) consumer no longer keeps its key alive',
       !decodedImageAnimationOrderForTests().includes('idle'),
       'order=' + decodedImageAnimationOrderForTests().join(','))
@@ -1096,7 +1096,7 @@ try {
       'order=' + decodedImageAnimationOrderForTests().join(','))
     // bump 推进时钟会合法触发预热（poke 左右/smile-hearts 未失败时预解）
     // ——断言收敛为「坏键不进缓存，新增解码只来自预热键」。
-    for (let tick = 0; tick < 5; tick += 1) { f1.bump(); await sleep(30) }
+    for (let tick = 0; tick < 5; tick += 1) { f1.bump(); await sleep(30) } // 固定窗:tick commit 窗——预热合法、坏键不得入缓存
     const orderAfterTicks = decodedImageAnimationOrderForTests()
     check('r5-2: a failed key is not retried per tick (never cached; churn limited to preheat keys)',
       !orderAfterTicks.includes('typing') && orderAfterTicks.every(key => WHALE_GIRL_PREHEAT_KEYS.includes(key)),
@@ -1132,7 +1132,7 @@ try {
       'requests=' + whaleGirlDecodeRequestCountForTests())
     check('r5-2: all-failed cold start stays on the letter grid (bounded convergence, no crash)',
       artRows(f3.lines()).length > 0, 'artRows=' + artRows(f3.lines()).length)
-    for (let tick = 0; tick < 4; tick += 1) { f3.bump(); await sleep(30) }
+    for (let tick = 0; tick < 4; tick += 1) { f3.bump(); await sleep(30) } // 固定窗:tick commit 窗——全失败态有界收敛
     check('r5-2: ticking an all-failed skin stays bounded (letter grid, zero decode churn)',
       whaleGirlDecodeRequestCountForTests() === 0 && artRows(f3.lines()).length > 0)
   } finally {
