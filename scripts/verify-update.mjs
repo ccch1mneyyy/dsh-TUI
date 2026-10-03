@@ -64,6 +64,10 @@ const compiledPathsPath = fileURLToPath(new URL('../lib/types/utils/paths.js', i
 // the replacement this kernel's --resume flags) — the scratch mirror has to
 // carry it or the copy fails to link.
 const compiledSessionHistoryPath = fileURLToPath(new URL('../lib/types/sessionHistory.js', import.meta.url))
+// update.js imports KERNEL_SWITCH_HANDOFF_ENV from here (the kernel-switch
+// handoff is one-shot) — the scratch mirror has to carry it or the copy
+// fails to link.
+const compiledKernelPrefsPath = fileURLToPath(new URL('../lib/types/kernelPrefs.js', import.meta.url))
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 
 /**
@@ -77,6 +81,7 @@ function copyUpdateModule(dstDir) {
   cpSync(compiledShellQuotePath, join(dstDir, 'utils', 'shellQuote.js'))
   cpSync(compiledPathsPath, join(dstDir, 'utils', 'paths.js'))
   cpSync(compiledSessionHistoryPath, join(dstDir, 'sessionHistory.js'))
+  cpSync(compiledKernelPrefsPath, join(dstDir, 'kernelPrefs.js'))
 }
 
 // ---- installedTuiVersion: compiled layout is this module's own real layout
