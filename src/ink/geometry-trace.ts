@@ -50,10 +50,14 @@ export type ScrollGeometryNote = {
   scrollHeight: number
   prevScrollHeight: number
   innerHeight: number
+  /** Scroll-container box width — a width change across a collapse means reflow, not an artifact. */
+  boxWidth: number
   maxScroll: number
   prevMaxScroll: number
   clampMin: number | null
   clampMax: number | null
+  /** Frame held by the artifact-shrink recovery: position frozen, follow suspended. */
+  recovering: boolean
 }
 
 export type ListGeometryNote = {

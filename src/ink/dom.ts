@@ -92,6 +92,20 @@ export type DOMElement = {
   // bottom/top. Shrink frames keep the last trusted value; only real
   // growth (or a settled measurement) refreshes it.
   scrollPrevMax?: number
+  // scrollHeight to grow back to before an artifact recovery is over: the
+  // trusted pre-artifact height, kept while the geometry is recovering. The
+  // renderer freezes the position (instead of clamping it to a maxScroll the
+  // measurement no longer backs) until the real height returns.
+  scrollPrevHeight?: number
+  // scrollTop painted on the previous frame. A frame whose position still
+  // equals it is the one the artifact collapse displaced — as opposed to a
+  // deliberate scroll (or a genuine layout collapse), which moves it.
+  scrollPrevTop?: number
+  // Box width measured on the previous frame. A collapse that arrives WITH a
+  // width change is a reflow (row-height cache clear + re-measure), whose new
+  // height is real: it must clamp and repaint, so it never arms the artifact
+  // recovery above.
+  scrollPrevWidth?: number
   stickyScroll?: boolean
   // Renderer → React notification channel, set by ScrollBox to its
   // subscriber-notify. Invoked when the RENDERER restores stickyScroll on

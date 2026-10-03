@@ -1169,6 +1169,10 @@ function renderNodeToOutput(
             padTop -
             yogaNode.getComputedPadding(LayoutEdge.Bottom),
         )
+        // Scroll-container box width. A collapse that comes WITH a width change
+        // is a reflow (the row-height cache is cleared and the tree re-measures),
+        // not a virtual-window measurement artifact — see the recovery below.
+        const boxWidth = Math.round(yogaNode.getComputedWidth())
 
         const content = node.childNodes.find(c => (c as DOMElement).yogaNode) as
           | DOMElement
@@ -1315,12 +1319,48 @@ function renderNodeToOutput(
         // transient measurement drops below the viewport. Freeze the
         // position for that frame; the next growth frame re-validates it.
         const shrunk = scrollHeight < prevScrollHeight
+        // Geometry is still recovering from an artifact collapse: the artifact
+        // measured the content a little smaller than it is, so the frames that
+        // follow it carry unusable numbers — `prevScrollHeight` is the
+        // artifact height (making `grew` lie) and the trusted pre-artifact
+        // maxScroll is oversized. Two things must not happen while that lasts:
+        // clamping the (displacement-preserving) position down to the artifact
+        // maxScroll — which writes a scrollTop the next frame reads as "the
+        // user is at the bottom" (140 >= 140) and silently resumes the follow
+        // the user had scrolled away from — and restoring sticky. Two guards
+        // keep this off unrelated states: the displacement check
+        // (before === scrollPrevTop) skips deliberate scrolls (those move the
+        // position, so the recovery ends the frame the user scrolls), and the
+        // width check skips a reflow — a width change clears the row-height
+        // cache and re-measures the tree, and that collapse must clamp and
+        // repaint as before (verify-scroll-jumps' narrow-to-wide gutter
+        // contract), not freeze. Magnitude is deliberately not a criterion:
+        // the artifact can drop more than a viewport of estimated height, and
+        // a viewport-sized height floor then let the yank through.
+        const recoveryH = node.scrollPrevHeight ?? prevScrollHeight
+        const recoveryTop = node.scrollPrevTop
+        const reflowed =
+          node.scrollPrevWidth !== undefined && node.scrollPrevWidth !== boxWidth
+        const recovering =
+          !sticky &&
+          !shrunk &&
+          !reflowed &&
+          recoveryTop !== undefined &&
+          scrollTopBeforeFollow === recoveryTop &&
+          scrollTopBeforeFollow > maxScroll &&
+          scrollHeight < recoveryH
         // Only real growth (or a settled measurement) refreshes the trusted
         // maxScroll used by the positional at-bottom check — otherwise the
         // frame AFTER an artifact shrink compares against the shrunken
         // maxScroll and yanks a mid-scroll view to the bottom (opentui #709:
         // content-size changes must not reset the manual-scroll state).
-        if (!shrunk) node.scrollPrevMax = maxScroll
+        if (!shrunk && !recovering) node.scrollPrevMax = maxScroll
+        // The trusted pre-artifact height outlives the shrink frame itself;
+        // once the content grows back to it, the recovery above is over.
+        if ((shrunk && !reflowed) || recovering) node.scrollPrevHeight = recoveryH
+        else node.scrollPrevHeight = undefined
+        node.scrollPrevTop = scrollTopBeforeFollow
+        node.scrollPrevWidth = boxWidth
         // Positional at-bottom also fires on NO-GROWTH frames when the
         // scroll position already sits at maxScroll: a wheel-down that
         // lands exactly on the bottom re-pins the follow (and restores
@@ -1329,7 +1369,8 @@ function renderNodeToOutput(
         // content growth, and an idle stream leaves the pill stuck.
         const atBottom =
           sticky ||
-          (scrollTopBeforeFollow >= prevMaxScroll &&
+          (!recovering &&
+            scrollTopBeforeFollow >= prevMaxScroll &&
             (grew || scrollTopBeforeFollow >= maxScroll))
         if (atBottom && (node.pendingScrollDelta ?? 0) >= 0 && !shrunk) {
           node.scrollTop = maxScroll
@@ -1401,9 +1442,11 @@ function renderNodeToOutput(
           // schedule an infinite loop of no-op drain frames.
           node.pendingScrollDelta = undefined
         }
-        // Keep the pre-frame position on a shrink frame (measurement
-        // artifact) instead of clamping to the shrunken maxScroll — the
-        // clamp would persist the yank even after content grows back.
+        // Artifact shrink (or its recovery): keep the pre-frame position
+        // instead of clamping to a maxScroll the measurement no longer
+        // backs — the clamp would persist the yank even after content grows
+        // back, and (on the recovery frame) a clamp to the oversized
+        // pre-artifact max then reads as "at bottom" on the next frame.
         // Exception: a STICKY view must stay pinned to the bottom. A width
         // change clears MessageList's row-height cache, collapsing the
         // estimated scrollHeight; freezing the pre-shrink scrollTop then
@@ -1415,7 +1458,7 @@ function renderNodeToOutput(
         // issue #421; repro-resize-blank). Clamping a sticky view to the shrunken
         // maxScroll is exactly its contract — show the bottom.
         let scrollTop =
-          shrunk && !sticky ? cur : Math.max(0, Math.min(cur, maxScroll))
+          (shrunk && !sticky) || recovering ? cur : Math.max(0, Math.min(cur, maxScroll))
         // Virtual-scroll clamp: if scrollTop raced past the currently-mounted
         // range (burst PageUp before React re-renders), render at the EDGE of
         // the mounted children instead of blank spacer. Do NOT write back to
@@ -1457,10 +1500,12 @@ function renderNodeToOutput(
             scrollHeight,
             prevScrollHeight,
             innerHeight,
+            boxWidth,
             maxScroll,
             prevMaxScroll,
             clampMin: cMin ?? null,
             clampMax: cMax ?? null,
+            recovering,
           })
         }
         // Wheel-drain selection translate (#438): the drain moved content
@@ -1493,9 +1538,15 @@ function renderNodeToOutput(
         // no ticks) produces none, leaving sticky broken and the
         // new-messages pill stuck at its peak count. Only restores a flag
         // that was explicitly broken by scrollTo/scrollBy (=== false);
-        // shrink-artifact frames and still-draining scrolls are excluded.
+        // shrink-artifact frames, still-draining scrolls, and the frames
+        // still recovering from an artifact shrink are excluded — during a
+        // recovery the position is frozen at the pre-artifact height, so it
+        // reads as "at maxScroll" exactly when the artifact measured the
+        // content short, and re-pinning there is the yank this guard exists
+        // to prevent.
         if (
           !shrunk &&
+          !recovering &&
           node.stickyScroll === false &&
           node.pendingScrollDelta === undefined &&
           scrollTop >= maxScroll
