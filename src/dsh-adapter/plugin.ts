@@ -50,7 +50,7 @@ import { KERNEL_SWITCH_HANDOFF_ENV, readKernelPrefs, resolveRememberedBackend, w
 import { kernelDisplayName, type ClaudeKernelStatus } from '../components/kernelCatalog.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, type TuiRestartOptions } from '../update.js'
+import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -731,6 +731,33 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const uiMount = mountChannelUi(ctx, rawChannel, pluginHost, adapterRuntime.mode)
   const channel = uiMount.channel
   bindChannelCommands(rawChannel, channel)
+  // 后端限定的最后运行记录（r1-stability S02）：本实例的身份（内核/会话/
+  // 目录/代次）落盘，launcher 的崩溃重试以它为权威——内核切换后外层 env
+  // 仍指向原内核，按旧 env 重试会把刚崩的会话换成旧内核（或拿 DSH 的会话
+  // id 去恢复 Claude）。boot 在此写一次，退出漏斗按当时的可恢复性刷新（见
+  // funnel 各分支的 refreshLastRunRecord）；内核切换分支不写：替换进程自己
+  // 是「最后运行的实例」，它 boot 就会盖掉这条。
+  const bootAttemptId = `${process.pid.toString(36)}-${Date.now().toString(36)}`
+  const refreshLastRunRecord = (): void => {
+    // An observational composition (replay/embedding) is not "the instance the
+    // user ran last" — it must not overwrite the interactive record.
+    if (adapterRuntime.mode === 'passive-shadow' || adapterRuntime.mode === 'replay-shadow') return
+    const resumable = claudeStart !== undefined
+      ? claudeStart.persisted(channel.agentId, channel.rows)
+      : isExitResumable({
+        pendingCount: channel.pending.length,
+        liveAgent: ctx.agents.get(SessionId(channel.agentId)),
+        startupAgent: agent,
+      })
+    writeLastRunRecord({
+      backendId: backendChoice,
+      sessionId: resumable ? channel.agentId : '',
+      cwd: sessionCwd,
+      attemptId: bootAttemptId,
+      pid: process.pid,
+    })
+  }
+  refreshLastRunRecord()
   const shadow = adapterRuntime.mode === 'passive-shadow' || adapterRuntime.mode === 'replay-shadow'
   // Bootstrap notices/prompts are deliberately dropped in observational mode;
   // interactive commands retain rejection semantics through the UI capability.
@@ -1540,10 +1567,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       exited = true
       if (error !== undefined) {
         // The crash tail lives in runCrashExit (S03): its diagnostics are
-        // fully degradable while the resume markers and the terminal cleanup
-        // run independently — an escape inside the funnel used to skip
-        // finishExit entirely and leave the process "exited but not cleaned
-        // up".
+        // fully degradable while the resume markers (plus the S02 last-run
+        // record refresh) and the terminal cleanup run independently — an
+        // escape inside the funnel used to skip finishExit entirely and
+        // leave the process "exited but not cleaned up".
         runCrashExit({
           error,
           logError: message => { ctx.logger.error(message) },
@@ -1566,6 +1593,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
             }
             // A Claude session's marker is its backend's own (never resume.txt).
             if (claudeStart !== undefined && claudeStart.persisted(channel.agentId, channel.rows)) claudeStart.sessionPrefs.setLastSession(channel.agentId)
+            // S02: re-stamp what is actually resumable RIGHT NOW so the
+            // launcher's retry targets this session, not the boot-time one.
+            refreshLastRunRecord()
           },
           finish: crashLine => {
             void finishExit(
@@ -1589,6 +1619,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         } catch {
           // Resume persistence is best effort and must never block an update.
         }
+        refreshLastRunRecord()
         const hintText = isStandaloneRuntime()
           ? t('update-standalone-starting')
           : t('update-starting')
@@ -1636,6 +1667,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
             message: error instanceof Error ? error.message : String(error),
           })
         }
+        refreshLastRunRecord()
         void finishExit(
           ctx,
           instance,
@@ -1679,6 +1711,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           ? `Resume with the command below:\n${resumeCommand(profile, channel.agentId)}`
           : undefined
       }
+      // S02: the exit-time record (the markers above and this share the same
+      // resumability view of the live channel session).
+      refreshLastRunRecord()
       void finishExit(
         ctx,
         instance,
@@ -2416,7 +2451,8 @@ export function createExitFunnel(deps: { onUserExit: (error?: unknown) => void }
  *    funnel latch was set, so appendCrashLog, the resume marker and
  *    finishExit never ran: the process died "exited but not cleaned up",
  *    without its terminal restore.
- *  - The resume-marker write and the terminal cleanup (finish +
+ *  - The resume-marker write (plus the S02 last-run record refresh, via
+ *    the writeResumeMarkers sink) and the terminal cleanup (finish +
  *    disposeRootAndExit(1)) are MUST-RUN and sit OUTSIDE the diagnostics'
  *    fate: each has its own degradation, and finish is reached on every path
  *    through this function.

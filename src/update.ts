@@ -69,6 +69,104 @@ export function logRestartEvent(event: string, data?: Record<string, unknown>): 
   writeRestartLine(`${event}${data === undefined ? '' : ` ${JSON.stringify(data)}`}`)
 }
 
+/**
+ * `~/.dsh-tui/last-run.json` (r1-stability S02): the backend-scoped identity
+ * of the instance that ran LAST — which kernel, which session, where, and
+ * which attempt wrote it. The TUI stamps it (boot identity in plugin.ts plus
+ * a refresh in the exit funnel); the LAUNCHER's safe-mode retry re-reads it
+ * and explicitly restarts that backend+session. Without it, a crash after a
+ * kernel switch retries per the OUTER launcher env, which still names the
+ * ORIGINAL backend: the retry lands on the old kernel (or worse, hands a DSH
+ * session id to a Claude boot). kernel.json alone is not enough — it carries
+ * the backend but neither the session identity nor the failure generation.
+ */
+export interface LastRunRecord {
+  /** The kernel THIS instance ran on (Config domain: 'dsh' | 'claude'). */
+  readonly backendId: 'dsh' | 'claude'
+  /** The resumable session id on that backend; '' = nothing resumable (the
+   *  retry cold-starts the backend instead of resuming across domains). */
+  readonly sessionId: string
+  /** The session's working directory (diagnostics; the retry keeps the
+   *  launch cwd, it does not chdir from this field). */
+  readonly cwd: string
+  /** Which boot wrote this record (pid+clock id; diagnostics and
+   *  generation comparisons). */
+  readonly attemptId: string
+  /** epoch-ms stamp (added by writeLastRunRecord): the launcher compares it
+   *  against its own start to tell this-chain records from a previous
+   *  launch's leftovers. */
+  readonly updatedAt: number
+  /** Writer pid (diagnostics). */
+  readonly pid?: number
+}
+
+const LAST_RUN_FILE = join(DATA_DIR, 'last-run.json')
+
+/** Windows rename retry cell (kernelPrefs writeKernelPrefs precedent). */
+const lastRunWaitCell = new Int32Array(new SharedArrayBuffer(4))
+
+/**
+ * Stamp the last-run record atomically (tmp + rename, so the launcher's read
+ * never sees half a file). Best effort, never throws: a failed stamp only
+ * degrades the launcher's retry to its legacy sniffing path.
+ * @param record - Identity without updatedAt (stamped here, one clock).
+ * @param file - Path override (verify scripts point at a temp dir).
+ */
+export function writeLastRunRecord(
+  record: Omit<LastRunRecord, 'updatedAt'>,
+  file: string = LAST_RUN_FILE,
+): void {
+  const temporary = join(dirname(file), `.last-run.${process.pid}.${Date.now()}.tmp`)
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+    const updatedAt = Date.now()
+    writeFileSync(temporary, `${JSON.stringify({ ...record, updatedAt }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+    for (let attempt = 0; ; attempt++) {
+      try {
+        renameSync(temporary, file)
+        return
+      } catch (error) {
+        const code = typeof error === 'object' && error !== null ? String((error as NodeJS.ErrnoException).code) : ''
+        if (process.platform !== 'win32' || attempt >= 7 || (code !== 'EPERM' && code !== 'EBUSY')) throw error
+        Atomics.wait(lastRunWaitCell, 0, 0, 2 ** attempt)
+      }
+    }
+  } catch (error) {
+    try {
+      rmSync(temporary, { force: true })
+    } catch {
+      // The previous record stays; no safe remedy.
+    }
+    writeRestartLine(`last-run record write failed (${error instanceof Error ? error.message : String(error)})`)
+  }
+}
+
+/**
+ * Read the last-run record; unreadable/invalid/missing yields undefined (the
+ * caller falls back to its legacy behavior). Never throws.
+ * @param file - Path override (verify scripts point at a temp dir).
+ */
+export function readLastRunRecord(file: string = LAST_RUN_FILE): LastRunRecord | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+    const record = parsed as Record<string, unknown>
+    if (record.backendId !== 'dsh' && record.backendId !== 'claude') return undefined
+    if (typeof record.sessionId !== 'string' || typeof record.cwd !== 'string' || typeof record.attemptId !== 'string') return undefined
+    if (typeof record.updatedAt !== 'number' || !Number.isFinite(record.updatedAt)) return undefined
+    return {
+      backendId: record.backendId,
+      sessionId: record.sessionId,
+      cwd: record.cwd,
+      attemptId: record.attemptId,
+      updatedAt: record.updatedAt,
+      ...(typeof record.pid === 'number' ? { pid: record.pid } : {}),
+    }
+  } catch {
+    return undefined
+  }
+}
+
 /** Start a fresh, clearly delimited /restart attempt block in the log. */
 export function beginRestartAttempt(sessionId: string): void {
   try {

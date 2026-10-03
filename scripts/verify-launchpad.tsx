@@ -998,7 +998,7 @@ base.close()
 {
   const { buildKernelCatalog, kernelDisplayName, kernelVersionLabel, kernelSubtitle } = await import('../src/components/kernelCatalog.js')
   const { readKernelPrefs, writeKernelPrefs, resolveRememberedBackend } = await import('../src/kernelPrefs.js')
-  const { mkdtempSync, readFileSync, writeFileSync } = await import('node:fs')
+  const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
 
@@ -1087,7 +1087,7 @@ base.close()
   // 组合根整链（S01）：真实 restartChildEnv 造出切换替换进程的 env →
   // 用 boot 同款输入喂真实 resolver，断言落到目标内核（选择器侧的
   // onSwitchBackend 驱动由 verify-launchpad-onboarding-chat X5 锁定）。
-  const { restartChildEnv } = await import('../src/update.js')
+  const { restartChildEnv, writeLastRunRecord, readLastRunRecord } = await import('../src/update.js')
   const { KERNEL_SWITCH_HANDOFF_ENV: HANDOFF_ENV } = await import('../src/kernelPrefs.js')
   const captured = restartChildEnv(
     // 一个被显式钉在 dsh 上的外层进程（--backend dsh 启动 + 旧内核的自动
@@ -1112,6 +1112,43 @@ base.close()
   const bootSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
   check('K12 plugin.ts boot 消费 handoff 后从 process.env 删除（一次性语义）',
     bootSource.includes('delete process.env[KERNEL_SWITCH_HANDOFF_ENV]'))
+
+  // ── 后端限定的最后运行记录（S02）：切换后崩溃的安全重试身份 ──
+  // 记录由最后运行的实例写（plugin boot + 退出漏斗刷新），launcher 的
+  // fallback retry 重新读取并明确置新 backend。这里锁 src 侧的往返与容错，
+  // 以及组合根的写入接线；bin 侧的 retry 权威次序在 verify-safe-mode。
+  const recordDir = mkdtempSync(join(tmpdir(), 'verify-launchpad-lastrun-'))
+  const recordFile = join(recordDir, 'last-run.json')
+  writeLastRunRecord({ backendId: 'claude', sessionId: 'claude-42', cwd: 'D:/w', attemptId: 'a1', pid: 4242 }, recordFile)
+  const stamped = readLastRunRecord(recordFile)
+  check('LR1 last-run 记录原子写往返（updatedAt 由写入侧盖章）',
+    stamped !== undefined && stamped.backendId === 'claude' && stamped.sessionId === 'claude-42' && stamped.cwd === 'D:/w' && stamped.attemptId === 'a1' && stamped.pid === 4242 && typeof stamped.updatedAt === 'number' && stamped.updatedAt > 0,
+    JSON.stringify(stamped))
+  writeLastRunRecord({ backendId: 'dsh', sessionId: '', cwd: 'D:/w', attemptId: 'a2' }, recordFile)
+  check('LR1b 空会话（无可恢复）也如实落盘：sessionId 空串保留（重试=目标内核冷启动）',
+    readLastRunRecord(recordFile)?.sessionId === '')
+  writeFileSync(recordFile, '{ not json', 'utf8')
+  check('LR2 坏 JSON 读作 undefined（不抛）', readLastRunRecord(recordFile) === undefined)
+  writeFileSync(recordFile, '{"backendId":"nonsense","sessionId":"x","cwd":"c","attemptId":"a","updatedAt":1}', 'utf8')
+  check('LR2b 非法 backendId 读作 undefined（拒绝跨域恢复的载体）', readLastRunRecord(recordFile) === undefined)
+  writeFileSync(recordFile, '{"backendId":"claude","sessionId":"x","attemptId":"a","updatedAt":1}', 'utf8')
+  check('LR2c 缺 cwd 字段读作 undefined', readLastRunRecord(recordFile) === undefined)
+  const blocker2 = join(recordDir, 'blocker-file')
+  writeFileSync(blocker2, 'x')
+  let recordThrew = false
+  try {
+    writeLastRunRecord({ backendId: 'dsh', sessionId: 's', cwd: 'c', attemptId: 'a' }, blocker2)
+  } catch {
+    recordThrew = true
+  }
+  check('LR3 写失败绝不抛（best-effort，退化到 launcher 旧逻辑）', !recordThrew)
+  rmSync(recordDir, { recursive: true, force: true })
+  // 组合根写入接线（变异陷阱：漏斗/启动忘记写记录 → S02 静默失效）。
+  const funnelSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
+  const refreshCalls = funnelSource.split('refreshLastRunRecord()').length - 1
+  check('LR4 plugin.ts 写记录接线齐：boot 落盘 + 崩溃/更新//restart/干净退出四个漏斗分支刷新（内核切换分支不写——替换进程自己写）',
+    funnelSource.includes('const refreshLastRunRecord = (): void =>') && refreshCalls === 5,
+    'refresh calls=' + refreshCalls)
 
   // 启动页的 boot 门（用户实测：kernel.json 记住 claude 后全新启动直接进聊天页、
   // 没有启动页）。契约断言组合根 plugin.ts 里的**调用点**——门只剩 noResume
