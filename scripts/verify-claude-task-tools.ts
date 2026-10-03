@@ -455,6 +455,44 @@ const synced = scenario(f => [
   ])
   check('… a delete the List confirmed stays gone (the failure does not resurrect it)',
     same(deletedSync.harness.state.todos, []), deletedSync.harness.state.todos)
-}
+
+  // RV follow-up 4 (mixed family): a successful TodoWrite is the WHOLE-LIST
+  // authority — the stale Task* view must go with its patches and bases,
+  // or a later update of a stale id first repaints the panel from a stale
+  // table and then empties it (the recompute finds no base).
+  const legacyWins = scenario(f => [
+    f.call('TaskCreate', { subject: 'Chore', description: 'x' }),
+    f.resultOf(1, { task: { id: 't', subject: 'Chore' } }),
+    f.call('TodoWrite', { todos: [{ content: 'Legacy entry', status: 'pending' }] }),
+    f.resultOf(2, { todos: { count: 1 } }),
+    f.call('TaskUpdate', { taskId: 't', subject: 'Chore done', status: 'completed' }),
+    f.resultOf(3, { success: true, taskId: 't', updatedFields: ['subject', 'status'] }),
+    f.turnEnd(),
+  ])
+  check('TodoWrite success clears the stale Task* view: the later update confirms on a clean table (no empty-panel glitch)',
+    same(legacyWins.harness.state.todos, [{ content: 'Chore done', status: 'completed' }]), legacyWins.harness.state.todos)
+  const legacyOnly = scenario(f => [
+    f.call('TaskCreate', { subject: 'Chore', description: 'x' }),
+    f.resultOf(1, { task: { id: 't', subject: 'Chore' } }),
+    f.call('TodoWrite', { todos: [{ content: 'Legacy entry', status: 'pending' }] }),
+    f.resultOf(2, { todos: { count: 1 } }),
+    f.turnEnd(),
+  ])
+  check('… the legacy list owns the panel after its write',
+    same(legacyOnly.harness.state.todos, [{ content: 'Legacy entry', status: 'pending' }]), legacyOnly.harness.state.todos)
+
+  // Coexistence after the wipe: a fresh Task* family builds and confirms
+  // normally (the last FULL write owns the panel, as ever).
+  const coexist = scenario(f => [
+    f.call('TodoWrite', { todos: [{ content: 'Legacy entry', status: 'pending' }] }),
+    f.resultOf(1, { todos: { count: 1 } }),
+    f.call('TaskCreate', { subject: 'Fresh', description: 'x' }),
+    f.resultOf(2, { task: { id: 'new', subject: 'Fresh' } }),
+    f.call('TaskUpdate', { taskId: 'new', status: 'completed' }),
+    f.resultOf(3, { success: true, taskId: 'new', updatedFields: ['status'] }),
+    f.turnEnd(),
+  ])
+  check('TodoWrite then fresh Task* work: create and update confirm normally (last full write wins)',
+    same(coexist.harness.state.todos, [{ content: 'Fresh', status: 'completed' }]), coexist.harness.state.todos)}
 
 console.log(passed + ' passed')

@@ -1174,13 +1174,18 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
             }
           }
         }
-        // A legacy TodoWrite result replaced the CLI's whole plan list: the
-        // Task* base is superseded and pending patches are moot (a later
-        // result — success or failure — must not repaint the legacy list).
+        // A legacy TodoWrite result replaced the CLI's whole plan list (RV
+        // follow-up: the WHOLE-list authority): the stale Task* view goes
+        // with its patches and bases — leaving it would let a later update
+        // of a stale id repaint the panel from a dead table and then empty
+        // it (the recompute finds no base). Its pending patches are moot (a
+        // later result — success or failure — must not repaint the legacy
+        // list either).
         if (call !== undefined && !isError && call.name === 'TodoWrite') {
           supersedePendingUpdates()
           taskPatches.clear()
           taskBases.clear()
+          trackedTasks.clear()
         }
         // The task family (2.1.284+): a create's record names the id its
         // call lacked; a list/get result is the authoritative state and
