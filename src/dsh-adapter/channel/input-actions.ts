@@ -20,6 +20,15 @@ export interface InputConvergence {
    *  copies; they are un-docked (with the unconfirmed notice) when it
    *  settles. Owned by the pending request; undefined when none is. */
   uncoveredDockIds?: string[]
+  /** Docked-row ids whose vouching interrupt receipt has NOT settled yet
+   *  (R7): they still RENDER as docked, but edit / re-send / swap rights
+   *  are held — a late failed/unknown/still_queued answer can only revoke
+   *  rows still on the pending list, so anything already delivered,
+   *  edited out or swapped under a new id would double with the backend
+   *  copy that receipt says may still run. A confirmed receipt graduates
+   *  its rows; every other answer revokes them. Owned by the pending
+   *  request; undefined when none is. */
+  provisionalDockIds?: string[]
 }
 export function createInputActions(
   getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit' | 'notify' | 'backendCapabilities'>,
@@ -96,6 +105,11 @@ export function createInputActions(
       // live-inbox withdrawal (`retractPending` false, the Claude CLI),
       // whose gate below only governs LIVE queue items.
       if (state.pending[index]!.docked === true) {
+        // R7: a dock the pending receipt has not vouched for is view-only:
+        // its backend copy may still run, so editing the row out now would
+        // strand a copy the late revocation can no longer reach. The caller
+        // keeps the row queued and says it cannot be retracted.
+        if (input.provisionalDockIds?.includes(id) === true) return false
         state.pending = state.pending.filter(item => item.id !== id)
         state.emit()
         return true
@@ -172,6 +186,11 @@ export function createInputActions(
         // set and take the conservative un-dock when it settles — never
         // ride a receipt that never saw them.
         input.uncoveredDockIds?.push(...dockedNow)
+        // They are provisional dock rows for exactly the same reason (the
+        // receipt cannot vouch for them yet): view-only until it settles.
+        // Mutate, never replace: settle() clears this exact array.
+        if (input.provisionalDockIds === undefined) input.provisionalDockIds = [...dockedNow]
+        else input.provisionalDockIds.push(...dockedNow)
         return dockable.length
       }
       // A 'user' cancel already converging KEPT the backend queue
@@ -184,18 +203,28 @@ export function createInputActions(
       input.interruptReceiptPending = true
       const uncovered: string[] = []
       input.uncoveredDockIds = uncovered
+      // R7: every row this request parks is provisional until its receipt
+      // vouches for them — the batch that fired the request (the receipt's
+      // own snapshot covers it) and every later joiner above alike.
+      const provisional: string[] = [...dockedNow]
+      input.provisionalDockIds = provisional
       let settled = false
       const settle = (outcome: CancelOutcome, stillQueued: readonly string[]): void => {
         if (settled) return
         settled = true
         input.interruptReceiptPending = false
         if (input.uncoveredDockIds === uncovered) input.uncoveredDockIds = undefined
+        if (input.provisionalDockIds === provisional) input.provisionalDockIds = undefined
         // Every docked row this receipt cannot confirm dropped: the ids the
         // backend says it kept, plus every row docked after the request
         // fired (outside its snapshot). Those copies are still live — their
         // previews go back to the normal claim/discard retirement and the
-        // dock never offers a second send on top of them.
+        // dock never offers a second send on top of them. Only a CONFIRMED
+        // answer graduates the provisional rows (R7); any other verdict
+        // un-docks them too, so nothing keeps edit/re-send rights a late
+        // revocation could no longer reach.
         const revoke = new Set([...stillQueued, ...uncovered])
+        if (outcome !== 'confirmed') for (const id of provisional) revoke.add(id)
         if (revoke.size > 0) {
           let undocked = false
           state.pending = state.pending.map(item => {
@@ -208,7 +237,7 @@ export function createInputActions(
         // The unconfirmed legs are loud: a failed or answerless interrupt
         // must not leave a success-shaped dock (or a silently failed Esc).
         const notice = outcome === 'failed' ? t('claude-interrupt-failed')
-          : stillQueued.length === 0 && uncovered.length === 0 ? undefined
+          : revoke.size === 0 ? undefined
           : t('claude-interrupt-unconfirmed')
         if (notice !== undefined) state.notify(notice, { color: 'warning', timeoutMs: 6000 })
       }
@@ -223,19 +252,30 @@ export function createInputActions(
     /** Send every docked message now (⏎ on an empty draft, or the clickable
      *  dock hint): FIFO through the same dispatch chain a typed submit uses,
      *  exactly once — the docked rows leave first and their deliveries
-     *  enqueue fresh pending previews. Returns the count sent. */
+     *  enqueue fresh pending previews. Rows still awaiting their interrupt
+     *  receipt (R7) are HELD: their backend copies may yet run, so they stay
+     *  parked (and said so) until the receipt confirms. Returns the count
+     *  sent. */
     deliverDocked(): number {
       owner.assertActive()
       const state = getState()
+      const held = (id: string): boolean => input.provisionalDockIds?.includes(id) === true
       const docked = state.pending.filter(item => item.docked === true)
       if (docked.length === 0) return 0
-      state.pending = state.pending.filter(item => item.docked !== true)
+      // Provisional rows are always the newest dock batches, so the confirmed
+      // remainder is a FIFO prefix — holding the tail never reorders anyone.
+      const ready = docked.filter(item => !held(item.id))
+      if (ready.length < docked.length) {
+        state.notify(t('input-dock-confirming', { n: docked.length - ready.length }), { color: 'warning', timeoutMs: 4000 })
+      }
+      if (ready.length === 0) return 0
+      state.pending = state.pending.filter(item => item.docked !== true || held(item.id))
       state.emit()
-      for (const entry of docked) {
+      for (const entry of ready) {
         touch(state.agentId)
         dispatchUserText(entry.text, 'followup', entry.images)
       }
-      return docked.length
+      return ready.length
     },
 
     /**
@@ -247,14 +287,19 @@ export function createInputActions(
      * swap never joins the in-flight interrupt receipt's uncovered set — the
      * receipt fence (F2) governs rows the backend may still hold, and this
      * one has no backend copy. False when `id` is no longer docked (the
-     * receipt un-docked it, a claim retired it, another editor took it): the
-     * caller keeps its draft and says so.
+     * receipt un-docked it, a claim retired it, another editor took it) or
+     * while its dock rights are held by an unsettled interrupt receipt
+     * (R7): the caller keeps its draft and says so.
      */
     swapDockedForDraft(id: string, draft: { text: string; images?: readonly ComposerImageRef[] }): boolean {
       owner.assertActive()
       const state = getState()
       const index = state.pending.findIndex(item => item.id === id)
       if (index === -1 || state.pending[index]!.docked !== true) return false
+      // R7: the clicked row's backend copy may still run while its receipt
+      // is in flight — swapping its text into the composer now would hand
+      // the user a second copy the late revocation cannot reach.
+      if (input.provisionalDockIds?.includes(id) === true) return false
       // A docked retract is purely local on every backend (see removePending).
       state.pending = [
         ...state.pending.filter(item => item.id !== id),
@@ -304,9 +349,12 @@ export function createInputActions(
         // The dock's rows ride this batch too: take them off the pending
         // list first (their re-deliveries enqueue fresh previews), ahead
         // of the given inputs — docked rows are the OLDEST texts (FIFO).
-        const docked = state.pending.filter(item => item.docked === true)
+        // Rows still awaiting their receipt (R7) do NOT ride: their backend
+        // copies may still run, so they stay parked for the verdict.
+        const heldHere = (id: string): boolean => input.provisionalDockIds?.includes(id) === true
+        const docked = state.pending.filter(item => item.docked === true && !heldHere(item.id))
         if (docked.length > 0) {
-          state.pending = state.pending.filter(item => item.docked !== true)
+          state.pending = state.pending.filter(item => item.docked !== true || heldHere(item.id))
           state.emit()
         }
         for (const entry of [...docked, ...queued]) {
