@@ -1029,6 +1029,7 @@ const dict = {
   'settings-hint-list': { zh: '**Enter** 进入/编辑/切换（改动即保存） · Esc 退出', en: '**Enter** open/edit/toggle (auto-saves) · Esc exit' },
   'settings-hint-group': { zh: '**Enter** 编辑/切换（改动即保存） · Esc 返回', en: '**Enter** edit/toggle (auto-saves) · Esc back' },
   'settings-hint-edit': { zh: '**Enter** 确认并保存 · Esc 取消', en: '**Enter** to confirm & save · Esc to cancel' },
+  'settings-hint-pick': { zh: '**空格** 勾选（即保存） · ↑/↓ 移动 · Esc 返回', en: '**Space** toggle (auto-saves) · ↑/↓ move · Esc back' },
 
   // ── 会话与工作区列表行：行、计数、筛选、预览 ─────────────────────────
   'session-resume-failed': { zh: '恢复会话失败 · {{err}}', en: 'Resuming the session failed · {{err}}' },

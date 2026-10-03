@@ -67,8 +67,8 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 | `sidePanel.splitEnabled` | `true`（布尔） | 分栏总开关：开启时 `Ctrl+B` 与 `/panel` 在聊天右侧展开侧栏；关闭时两者都不再分栏，`/jobs` 等仍走整屏面板。立即生效 |
 | `sidePanel.open` | `false`（布尔） | 启动时侧栏是否已展开；默认关闭，升级后布局与原来一致。会话内的 `Ctrl+B` / `/panel toggle` 不写回这里。立即生效 |
 | `sidePanel.ratio` | `0.68`（数值，0.1–0.95） | 聊天列占内容宽度的比例；侧栏有焦点时 `+`/`-` 在当前会话内实时微调（不写回）。立即生效 |
-| `sidePanel.panels` | `todo,jobs,agents`（逗号分隔文本） | 启用的面板 id 与顺序（内置：`todo` `info` `trajectory` `jobs` `agents` `workspace` `companion`）；格式合法但暂无面板认领的 id 会留在标签栏等插件注册，格式非法的条目被拒绝。面板栏右端的 `⤢` 把当前面板放大成整屏（只对声明了整屏形态的面板出现）。立即生效 |
- | `companion.skin` | `deepy` | 宠物面板的皮肤：`deepy`（默认，deepy 小鲸鱼素材包）、`whaleGirl`（鲸娘表情包，22 个动画含互动反应）或 `whale`（与开屏同款分层像素鲸鱼）；面板需在 `sidePanel.panels` 加入 `companion` 启用。立即生效 |
+| `sidePanel.panels` | `todo,jobs,agents`（勾选列表） | 启用的面板与顺序：`/settings › 侧栏 › 启用的面板` 按 `Enter` 打开勾选页，空格/`Enter` 勾选、`Esc` 返回，标签栏顺序与列表一致。行来自实时面板注册表——内置 `todo` `info` `trajectory` `jobs` `agents` `workspace` `companion`，插件注册的面板同样在列；格式合法但暂无面板认领的 id 会保持可见可取消，并留在标签栏等插件注册。面板栏右端的 `⤢` 把当前面板放大成整屏（只对声明了整屏形态的面板出现）。立即生效 |
+ | `companion.skin` | `deepy` | 宠物面板的皮肤：`deepy`（默认，deepy 小鲸鱼素材包）、`whaleGirl`（鲸娘表情包，22 个动画含互动反应）或 `whale`（与开屏同款分层像素鲸鱼）；面板需在 `启用的面板` 里勾选 `companion` 启用。立即生效 |
 | `modes` | 内置三档 | Shift+Tab 会话模式循环（plan/sandbox/approval 原子组合）；缺省为 默认 → 计划 → 完全访问 |
 | `activity` | `true` | 是否显示实时工作状态行 |
 | `activityFrames` | `moon8` | 工作状态动画预设；也可通过 `/activity` 修改。旧配置值 `claude` 读取时映射为 `moon8`，选择器不再显示该旧预设 |

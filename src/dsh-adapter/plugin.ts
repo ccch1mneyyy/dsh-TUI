@@ -71,6 +71,7 @@ import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import { PageMargin } from '../components/PageMargin.js'
 import { normalizeSplashFont } from '../components/splashFonts.js'
+import { panelStore } from '../components/sidePanel/PanelStore.js'
 import { SETTING_GROUPS, SHORTCUT_FIELD_META, settingField } from '../settings/definitions.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
@@ -1294,7 +1295,18 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
         {
           ...settingField('sidePanel.panels'),
-          placeholder: DEFAULT_SIDE_PANEL_IDS,
+          // The picker's rows are the live registry — built-ins in PanelBar
+          // order, then plugin panels by their declared order, titled in the
+          // language in force when the row renders — so a panel a plugin
+          // registers during the session appears without re-registering the
+          // section. The draft stays the CSV the store already speaks, so the
+          // parse below still validates every toggle.
+          optionsProvider: () => panelStore.list().map(entry => ({
+            value: entry.definition.id,
+            label: entry.definition.titleKey !== undefined
+              ? t(entry.definition.titleKey)
+              : entry.definition.title ?? entry.definition.id,
+          })),
           format(value: unknown): string {
             // Unset in the user layer: show the effective list.
             return typeof value === 'string' && value.trim() !== ''

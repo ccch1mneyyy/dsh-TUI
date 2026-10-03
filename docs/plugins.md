@@ -42,7 +42,9 @@
   连续崩溃 3 次本会话禁用）。full 面板（`component`）与 compact 行
   （`compact`，1–3 行紧凑呈现）两个渲染槽中，**本阶段 compact 仅校验
   descriptor、尚不挂载渲染**；`sendToChat` 需要 `panels.chat.attach`
-  授权（后续版本），当前恒返回 `false` 并提示一次。类型见
+  授权（后续版本），当前恒返回 `false` 并提示一次。注册即入侧栏启用列表，
+  用户在 `/settings › 侧栏 › 启用的面板` 的勾选页里看到并调整它（选项由实时
+  面板注册表推，撤下即从列表消失）。类型见
   `@deepseek-harness-tui/dsh-tui/panels` 与 `./api`。
 - `@deepseek-harness-tui/dsh-tui/test-utils` 子路径与
   `ctx.tuiPluginHost.grants.corrupt` 已随 adapter 分层重构（#705）移除。

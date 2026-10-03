@@ -19,7 +19,8 @@ import { SettingsForm } from '../src/dsh-adapter/settingsEditor.ts'
 import TuiSettingsSectionsRuntime, { getHostSettingsSections, getLocalSettingsSectionsHost } from '../src/dsh-adapter/settings-sections.ts'
 import { DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, isPageMarginMode, normalizePageMargin, normalizeSidePanelPanels, parsePageMarginSpec } from '../src/tuiDisplayPrefs.ts'
 import { SPLASH_FONTS, SPLASH_FONT_OPTIONS, normalizeSplashFont } from '../src/components/splashFonts.ts'
-import { getLang, isLang } from '../src/i18n.ts'
+import { getLang, isLang, t } from '../src/i18n.ts'
+import { panelStore } from '../src/components/sidePanel/PanelStore.ts'
 import { SHORTCUT_ACTIONS, setKeymapOverrides, resetKeymapOverrides, effectiveComboString, parseComboDraft, draftComboConflicts } from '../src/utils/keymap.ts'
 import { SETTING_GROUPS, SHORTCUT_FIELD_META, settingField } from '../src/settings/definitions.ts'
 
@@ -241,8 +242,9 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
       config: configValues(runtime), SHORTCUT_ACTIONS, SHORTCUT_FIELD_META, SETTING_GROUPS, settingField, effectiveComboString, parseComboDraft, draftComboConflicts,
       getLang, DEFAULT_PAGE_MARGIN, isPageMarginMode, parsePageMarginSpec, SPLASH_FONT_OPTIONS, normalizeSplashFont,
       // Side-panel fields (sidePanel.panels) validate their draft against the
-      // production id grammar, so the eval scope mirrors those helpers too.
-      DEFAULT_SIDE_PANEL_IDS, SIDE_PANEL_ID_PATTERN, normalizeSidePanelPanels,
+      // production id grammar, so the eval scope mirrors those helpers too;
+      // its picker rows come from the live panel registry (panelStore + t).
+      DEFAULT_SIDE_PANEL_IDS, SIDE_PANEL_ID_PATTERN, normalizeSidePanelPanels, panelStore, t,
       bootedFullscreen: true, terminalImagesDisabledByEnv: false,
       readEffortPref: () => undefined, // Do not read the developer's persisted preferences.
     })
@@ -275,6 +277,20 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
       form.edit(splashField, option.value)
       assert.equal(form.field(splashField).invalid, false, `${registry}: splashFont option ${option.value} is selectable`)
     }
+    // 侧栏面板（sidePanel.panels）：从文本输入改成二级菜单的勾选列表，行由实时
+    // 面板注册表推，插件注册的面板因此自然出现在同一列表里（注册入列、撤下出列）。
+    const panelField = section.fields.find(field => field.path.length === 2 && field.path[0] === 'sidePanel' && field.path[1] === 'panels')
+    assert.ok(panelField, `${registry}: the production section exposes sidePanel.panels`)
+    assert.equal(panelField.kind, 'multi-select', `${registry}: the panel picker is a checkbox list, not a text editor`)
+    assert.equal(typeof panelField.optionsProvider, 'function', `${registry}: the picker rows come from a live provider`)
+    const panelValues = () => panelField.optionsProvider().map(option => option.value)
+    assert.deepEqual(panelValues(), panelStore.list().map(entry => entry.definition.id), `${registry}: the picker lists the whole registry in PanelBar order`)
+    const registerProbePanel = panelStore.register({
+      id: 'probe:metrics', title: 'Metrics', source: 'plugin', mountPolicy: 'active', component: () => null,
+    }, 'builtin')
+    assert.ok(panelValues().includes('probe:metrics'), `${registry}: a panel registered by a plugin joins the picker`)
+    registerProbePanel()
+    assert.ok(!panelValues().includes('probe:metrics'), `${registry}: an unregistered panel leaves the picker`)
     const descriptor = root.settings.describe().find(view => view.ns === ns)
     assert.deepEqual(Object.keys(descriptor.schema.refs[descriptor.schema.uid].dict).sort(), Object.keys(Config.dict).filter(key => Config.dict[key].meta.volatile === true).sort())
     // 面板注册表（plugin.ts 的 fields）与 Config 是两份手写清单。两条断言各管一

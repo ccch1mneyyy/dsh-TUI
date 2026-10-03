@@ -243,6 +243,13 @@ export interface TuiSettingsField {
    * text opens the editor for a custom value).
    */
   options?: readonly TuiSettingsFieldOption[]
+  /**
+   * Choices for a field whose list is not static — the side-panel picker
+   * follows the live panel registry, so a panel a plugin registers during
+   * the session shows up without re-registering the section. Re-read on
+   * every render and appended after {@link options}.
+   */
+  optionsProvider?: () => readonly TuiSettingsFieldOption[]
   /** Input placeholder for `kind: 'text' | 'number'`. */
   placeholder?: string
   /**
@@ -268,8 +275,13 @@ export interface TuiSettingsField {
   parse?(text: string): TuiSettingsFieldWrite | undefined
 }
 
-/** Control kinds the TUI settings screen knows how to render. */
-export type TuiSettingsFieldKind = 'text' | 'number' | 'boolean' | 'select'
+/**
+ * Control kinds the TUI settings screen knows how to render. `multi-select`
+ * is a checkbox LIST on a subpage (Enter opens it, Space/Enter toggles, Esc
+ * goes back): its draft is the checked option values comma-joined in option
+ * order, so the field's own `parse` maps it to whatever the schema stores.
+ */
+export type TuiSettingsFieldKind = 'text' | 'number' | 'boolean' | 'select' | 'multi-select'
 
 export interface TuiSettingsFieldOption {
   /** Stored value. */
