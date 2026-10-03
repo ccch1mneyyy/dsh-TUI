@@ -499,7 +499,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
       // 固定窗:pacing 分帧送达第二枚方向键。
       await sleep(200)
       h2.stdin.write('\x1b[C')
-      // 固定窗:paging 翻页与异步读取落帧。
+      // 固定窗:探针 分页页窗 翻页与异步读取落帧。
       await sleep(300)
       await settled(() => h2.screen().includes('settled line one'))
       const liveBody = h2.screen()
