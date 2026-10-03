@@ -399,6 +399,38 @@ const synced = scenario(f => [
   check('delete success then older failure: the task stays deleted (no resurrection)',
     same(deletedThenFail.harness.state.todos, []), deletedThenFail.harness.state.todos)
 
+  // RV follow-up 3 (ghost task): a List that superseded an update — the
+  // update's LATE SUCCESS must not fabricate a task the list already
+  // ruled away (the unknown-id completion path is for fresh facts, not
+  // calls an authority discarded).
+  const ghost = scenario(f => [
+    f.call('TaskCreate', { subject: 'A', description: 'x' }),
+    f.resultOf(1, { task: { id: 'a', subject: 'A' } }),
+    f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
+    f.call('TaskList', {}),
+    f.resultOf(3, { tasks: [] }),
+    f.resultOf(2, { success: true, taskId: 'a', updatedFields: ['status'] }),
+    f.turnEnd(),
+  ])
+  check('late success of a superseded update fabricates nothing (the empty list stands)',
+    same(ghost.harness.state.todos, []), ghost.harness.state.todos)
+
+  // Superseding must not overreach: the list's own record stands, and a
+  // FRESH update after it confirms on that record normally (only the
+  // superseded call id is dropped, never the id itself).
+  const rebuild = scenario(f => [
+    f.call('TaskCreate', { subject: 'A', description: 'x' }),
+    f.resultOf(1, { task: { id: 'a', subject: 'A' } }),
+    f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
+    f.call('TaskList', {}),
+    f.resultOf(3, { tasks: [{ id: 'a', subject: 'A relaunched', status: 'in_progress', blockedBy: [] }] }),
+    f.resultOf(2, { success: true, taskId: 'a', updatedFields: ['status'] }),
+    f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
+    f.resultOf(4, { success: true, taskId: 'a', updatedFields: ['status'] }),
+    f.turnEnd(),
+  ])
+  check('superseded drops only the stale call: the list\'s record stands and a fresh update confirms on it',
+    same(rebuild.harness.state.todos, [{ content: 'A relaunched', status: 'completed' }]), rebuild.harness.state.todos)
   // An authoritative List between the patch and its late failure: the List
   // wins; the stale failure neither reverts it nor resurrects a delete.
   const authoritative = scenario(f => [
@@ -423,6 +455,44 @@ const synced = scenario(f => [
   ])
   check('… a delete the List confirmed stays gone (the failure does not resurrect it)',
     same(deletedSync.harness.state.todos, []), deletedSync.harness.state.todos)
-}
+
+  // RV follow-up 4 (mixed family): a successful TodoWrite is the WHOLE-LIST
+  // authority — the stale Task* view must go with its patches and bases,
+  // or a later update of a stale id first repaints the panel from a stale
+  // table and then empties it (the recompute finds no base).
+  const legacyWins = scenario(f => [
+    f.call('TaskCreate', { subject: 'Chore', description: 'x' }),
+    f.resultOf(1, { task: { id: 't', subject: 'Chore' } }),
+    f.call('TodoWrite', { todos: [{ content: 'Legacy entry', status: 'pending' }] }),
+    f.resultOf(2, { todos: { count: 1 } }),
+    f.call('TaskUpdate', { taskId: 't', subject: 'Chore done', status: 'completed' }),
+    f.resultOf(3, { success: true, taskId: 't', updatedFields: ['subject', 'status'] }),
+    f.turnEnd(),
+  ])
+  check('TodoWrite success clears the stale Task* view: the later update confirms on a clean table (no empty-panel glitch)',
+    same(legacyWins.harness.state.todos, [{ content: 'Chore done', status: 'completed' }]), legacyWins.harness.state.todos)
+  const legacyOnly = scenario(f => [
+    f.call('TaskCreate', { subject: 'Chore', description: 'x' }),
+    f.resultOf(1, { task: { id: 't', subject: 'Chore' } }),
+    f.call('TodoWrite', { todos: [{ content: 'Legacy entry', status: 'pending' }] }),
+    f.resultOf(2, { todos: { count: 1 } }),
+    f.turnEnd(),
+  ])
+  check('… the legacy list owns the panel after its write',
+    same(legacyOnly.harness.state.todos, [{ content: 'Legacy entry', status: 'pending' }]), legacyOnly.harness.state.todos)
+
+  // Coexistence after the wipe: a fresh Task* family builds and confirms
+  // normally (the last FULL write owns the panel, as ever).
+  const coexist = scenario(f => [
+    f.call('TodoWrite', { todos: [{ content: 'Legacy entry', status: 'pending' }] }),
+    f.resultOf(1, { todos: { count: 1 } }),
+    f.call('TaskCreate', { subject: 'Fresh', description: 'x' }),
+    f.resultOf(2, { task: { id: 'new', subject: 'Fresh' } }),
+    f.call('TaskUpdate', { taskId: 'new', status: 'completed' }),
+    f.resultOf(3, { success: true, taskId: 'new', updatedFields: ['status'] }),
+    f.turnEnd(),
+  ])
+  check('TodoWrite then fresh Task* work: create and update confirm normally (last full write wins)',
+    same(coexist.harness.state.todos, [{ content: 'Fresh', status: 'completed' }]), coexist.harness.state.todos)}
 
 console.log(passed + ' passed')
