@@ -1070,6 +1070,49 @@ base.close()
   void P(); void P(undefined, undefined, 'dsh'); void P('claude'); void P(undefined, 'dsh')
   check('K8 记忆不被 boot 读取改写（读路径零写入；显式 --backend 启动也不改写——boot 不调 write）', readFileSync(file, 'utf8') === before)
 
+  // 一次性切换 handoff（S01）：选择器的「本次切换」必须真的切过去——
+  // restartTui 的 backend 选项把 KERNEL_SWITCH_HANDOFF_ENV 放进替换进程
+  // env，boot 的 resolver 把它排在 Config 行之前；没有它，显式 backend: dsh
+  // 的配置行让切换白重启一回。普通冷启动合同（K7）不动。
+  const H = (handoff?: 'dsh' | 'claude', configured?: 'dsh' | 'claude', envRaw?: string, memory?: 'dsh' | 'claude') =>
+    resolveRememberedBackend({ ...(handoff === undefined ? {} : { handoff }), configured, envRaw, memory })
+  check('K10 切换 handoff 压过 Config：configured=dsh/env=claude/memory=claude/handoff=claude → claude；同参数无 handoff 仍 → dsh',
+    H('claude', 'dsh', 'claude', 'claude') === 'claude' && H(undefined, 'dsh', 'claude', 'claude') === 'dsh')
+  check('K10b 反向切换同样成立：handoff=dsh 压过 configured=claude',
+    H('dsh', 'claude', 'claude', 'claude') === 'dsh')
+  check('K10c 非法 handoff 按不存在处理（回落到 Config > env > memory）',
+    resolveRememberedBackend({ handoff: 'nonsense' as never, configured: 'claude' }) === 'claude'
+      && resolveRememberedBackend({ handoff: '' as never, memory: 'claude' }) === 'claude')
+
+  // 组合根整链（S01）：真实 restartChildEnv 造出切换替换进程的 env →
+  // 用 boot 同款输入喂真实 resolver，断言落到目标内核（选择器侧的
+  // onSwitchBackend 驱动由 verify-launchpad-onboarding-chat X5 锁定）。
+  const { restartChildEnv } = await import('../src/update.js')
+  const { KERNEL_SWITCH_HANDOFF_ENV: HANDOFF_ENV } = await import('../src/kernelPrefs.js')
+  const captured = restartChildEnv(
+    // 一个被显式钉在 dsh 上的外层进程（--backend dsh 启动 + 旧内核的自动
+    // resume marker 在 env 里）接受切换 → claude：
+    { DSH_TUI_BACKEND: 'dsh', DSH_TUI_RESUME_SESSION: 'dsh-session-1' },
+    '',
+    'restart',
+    { backend: 'claude' },
+  )
+  check('K11 切换替换 env：backend/handoff 都钉到目标内核，旧内核的 resume marker 被滤掉',
+    captured.DSH_TUI_BACKEND === 'claude' && captured[HANDOFF_ENV] === 'claude' && captured.DSH_TUI_RESUME_SESSION === undefined,
+    JSON.stringify({ backend: captured.DSH_TUI_BACKEND, handoff: captured[HANDOFF_ENV], resume: captured.DSH_TUI_RESUME_SESSION }))
+  // boot 读法与 plugin.ts 相同：handoff 从捕获 env 读、backend 原文进 envRaw、
+  // Config 行仍钉旧内核（dsh）——组合根必须解析到 claude。
+  check('K11b 组合根解析：捕获 env + Config 行钉 dsh → 实际落到 claude（不是白重启）',
+    resolveRememberedBackend({ handoff: 'claude', configured: 'dsh', envRaw: captured.DSH_TUI_BACKEND, memory: 'dsh' }) === 'claude')
+  check('K11c 无 handoff 键的同一 env 仍按 Config 走 dsh（K7 合同不被顺手改掉）',
+    resolveRememberedBackend({ configured: 'dsh', envRaw: captured.DSH_TUI_BACKEND, memory: 'dsh' }) === 'dsh')
+  check('K11d 普通 /restart 替换 env 不携带任何 handoff 覆盖（一次性，不外泄给非切换子进程）',
+    restartChildEnv({ [HANDOFF_ENV]: 'claude' } as NodeJS.ProcessEnv, 's1', 'restart', {})[HANDOFF_ENV] === undefined)
+  // boot 消费即删除：一次性语义的变异陷阱（读了不删 → 泄漏给孙进程）。
+  const bootSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
+  check('K12 plugin.ts boot 消费 handoff 后从 process.env 删除（一次性语义）',
+    bootSource.includes('delete process.env[KERNEL_SWITCH_HANDOFF_ENV]'))
+
   // 启动页的 boot 门（用户实测：kernel.json 记住 claude 后全新启动直接进聊天页、
   // 没有启动页）。契约断言组合根 plugin.ts 里的**调用点**——门只剩 noResume
   // （带 resume 目标的启动直达会话）与 DSH_TUI_NO_LAUNCHPAD（自动化逃生门），

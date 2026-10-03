@@ -8,6 +8,7 @@ import { gte, gt, lt, valid } from 'semver'
 import { shellQuote } from './utils/shellQuote.js'
 import { DATA_DIR } from './utils/paths.js'
 import { stripResumeArgs } from './sessionHistory.js'
+import { KERNEL_SWITCH_HANDOFF_ENV } from './kernelPrefs.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
 // the compiled copy at lib/types/utils/shellQuote.js.
@@ -1904,12 +1905,59 @@ export interface TuiRestartOptions {
   kind?: 'restart' | 'update'
   /**
    * The launchpad kernel selector's switch: restart.log events carry the
-   * backend-switch tag, the replacement env pins DSH_TUI_BACKEND to the
-   * chosen kernel (deterministic even though kernel.json also remembers
-   * it), and DSH_TUI_RESUME_SESSION is DELETED — the new kernel starts a
-   * new session, never this one.
+   * backend-switch tag, the replacement env pins DSH_TUI_BACKEND AND the
+   * one-shot KERNEL_SWITCH_HANDOFF_ENV to the chosen kernel (the handoff
+   * var is what makes the switch survive a pinning Config row — S01; the
+   * plain env var stays for determinism even though kernel.json also
+   * remembers it), and DSH_TUI_RESUME_SESSION is DELETED — the new kernel
+   * starts a new session, never this one.
    */
   backend?: 'dsh' | 'claude'
+}
+
+/**
+ * The replacement's env, pure: the launcher resume contract marker, the
+ * /restart child stamp, the caller's extra markers, and the kernel-switch
+ * overrides. Exported for scripts/verify-launchpad — the captured switch env,
+ * fed through the real boot resolver, must land on the chosen kernel even
+ * under a pinning Config row (r1-stability S01).
+ */
+export function restartChildEnv(
+  parentEnv: NodeJS.ProcessEnv,
+  sessionId: string,
+  kind: 'restart' | 'update',
+  options: TuiRestartOptions,
+): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = {
+    ...parentEnv,
+    // The replacement resumes the current session through the launcher
+    // contract (DSH_TUI_RESUME_SESSION; see src/sessionHistory.ts).
+    DSH_TUI_RESUME_SESSION: sessionId,
+    // Marks the replacement so its own boot logs to restart.log without
+    // noisy logging on every ordinary launch (/restart only).
+    ...(kind === 'restart' ? { [RESTART_CHILD_ENV]: '1' } : {}),
+    ...options.env,
+  }
+  // A stale handoff override never leaks into a plain replacement: the var is
+  // one-shot (consumed at this process's own boot), and a child that is NOT
+  // switching kernels keeps this process's kernel by config/env/memory as
+  // usual.
+  delete childEnv[KERNEL_SWITCH_HANDOFF_ENV]
+  if (options.backend !== undefined) {
+    childEnv.DSH_TUI_BACKEND = options.backend
+    // The one-shot switch override (S01): DSH_TUI_BACKEND alone loses to an
+    // explicit Config row (K7: config > env > memory), so the switch also
+    // rides the variable the boot resolver ranks ABOVE config — a kernel
+    // switch must actually switch, not just restart onto the same kernel.
+    childEnv[KERNEL_SWITCH_HANDOFF_ENV] = options.backend
+    // A kernel switch never resumes: the id of THIS backend's session means
+    // nothing to the next one, and an inherited marker (this process may
+    // itself be a /restart child) would send the new kernel looking for it —
+    // deleted outright, not blanked (the launcher row maps '' to
+    // config.sessionId='', not to "absent").
+    delete childEnv.DSH_TUI_RESUME_SESSION
+  }
+  return childEnv
 }
 
 export async function restartTui(sessionId: string, options: TuiRestartOptions = {}): Promise<number> {
@@ -1933,25 +1981,7 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
   })
   const startedAt = Date.now()
   return new Promise(resolve => {
-    // A kernel switch never resumes: the id of THIS backend's session means
-    // nothing to the next one, and an inherited marker (this process may
-    // itself be a /restart child) would send the new kernel looking for it —
-    // so the key is deleted outright, not blanked (the launcher row maps ''
-    // to config.sessionId='', not to "absent").
-    const childEnv: NodeJS.ProcessEnv = {
-      ...process.env,
-      // The replacement resumes the current session through the launcher
-      // contract (DSH_TUI_RESUME_SESSION; see src/sessionHistory.ts).
-      DSH_TUI_RESUME_SESSION: sessionId,
-      // Marks the replacement so its own boot logs to restart.log without
-      // noisy logging on every ordinary launch (/restart only).
-      ...(kind === 'restart' ? { [RESTART_CHILD_ENV]: '1' } : {}),
-      ...options.env,
-    }
-    if (options.backend !== undefined) {
-      childEnv.DSH_TUI_BACKEND = options.backend
-      delete childEnv.DSH_TUI_RESUME_SESSION
-    }
+    const childEnv = restartChildEnv(process.env, sessionId, kind, options)
     const child = spawn(process.execPath, argv, {
       env: childEnv,
       // stdin/stdout stay inherited so the replacement owns the console the

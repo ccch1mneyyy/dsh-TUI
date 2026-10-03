@@ -46,7 +46,7 @@ import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './comp
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
 import { initialPromptFromCmdlineArgs } from './startup-args.js'
 import { readHomePrefs } from '../homePrefs.js'
-import { readKernelPrefs, resolveRememberedBackend, writeKernelPrefs } from '../kernelPrefs.js'
+import { KERNEL_SWITCH_HANDOFF_ENV, readKernelPrefs, resolveRememberedBackend, writeKernelPrefs } from '../kernelPrefs.js'
 import { kernelDisplayName, type ClaudeKernelStatus } from '../components/kernelCatalog.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
@@ -507,7 +507,17 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // selector, never by boot); else dsh. An INVALID env value still means dsh
   // (the warning below says exactly that), never the memory.
   const rawBackend = process.env.DSH_TUI_BACKEND
+  // One-shot switch handoff (r1-stability S01): restartTui's backend option
+  // and the launcher's crash retry set it so THIS boot lands on the chosen
+  // kernel even when a Config row pins the other one (a switch that only
+  // writes DSH_TUI_BACKEND loses to config-over-env). Consumed here — deleted
+  // from the env so no child of this process inherits a stale override; an
+  // invalid value reads as "no handoff" and the normal priority applies.
+  const handoffBackendRaw = process.env[KERNEL_SWITCH_HANDOFF_ENV]
+  if (handoffBackendRaw !== undefined) delete process.env[KERNEL_SWITCH_HANDOFF_ENV]
+  const handoffBackend = normalizeBackendChoice(handoffBackendRaw)
   const backendChoice = resolveRememberedBackend({
+    ...(handoffBackend === undefined ? {} : { handoff: handoffBackend }),
     configured: config.backend,
     envRaw: rawBackend,
     memory: readKernelPrefs().backend,
