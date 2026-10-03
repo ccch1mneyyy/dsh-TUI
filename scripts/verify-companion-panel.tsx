@@ -80,11 +80,13 @@ const { applySidePanelOpen, applySidePanelRatio, applySidePanelPanels, applyComp
 const { settled, sleep } = termTest
 const { WhaleSkin } = skins
 const {
-  CELEBRATE_DWELL_MS, IDLE_ROTATE_MS, LEAVE_WORKING_SETTLE_MS, MIN_MOOD_DWELL_MS,
+  CELEBRATE_DWELL_MS, HOVER_ENTER_DWELL_MS, HOVER_LEAVE_SETTLE_MS, IDLE_ROTATE_MS,
+  LEAVE_WORKING_SETTLE_MS, MIN_MOOD_DWELL_MS,
   NOTIFICATION_BUBBLE_MS, POKE_MS, TICKLE_WINDOW_MS,
   countRunningSubagents, countSessionsRunning, createNotificationTracker, deriveCompanionContext,
-  idleRotationIndex, initialCompanionDisplayState, notificationReactionKind, resolveTargetSemantic,
-  stepCompanionDisplay, stepNotificationTracker,
+  idleRotationIndex, initialCompanionDisplayState, initialCompanionHoverState,
+  notificationReactionKind, resolveTargetSemantic,
+  stepCompanionDisplay, stepCompanionHover, stepNotificationTracker,
 } = mood
 const { DEEPY_CONTEXT_ANIMATION, DEEPY_IDLE_ROTATION, DEEPY_INTERACTION_ANIMATION,
   DEEPY_MOOD_ANIMATION, DEEPY_NOTIFICATION_REACTION, loadDeepyKit } = deepy
@@ -199,6 +201,40 @@ check('unit: settled jobs do not count', countRunningSubagents([sub('completed')
   const idx2 = idleRotationIndex(T0, T0 + 2 * IDLE_ROTATE_MS + 100, 4)
   check('unit f) idle rotation advances with time', idx0 !== idx1 && idx1 !== idx2, idx0 + '/' + idx1 + '/' + idx2)
   check('unit f) idle rotation is signal-independent (same clock, same answer)', idleRotationIndex(T0, T0 + IDLE_ROTATE_MS + 100, 4) === idx1)
+}
+
+// --- hover dwell (enter 驻留 / leave 迟滞，2026-10-03 悬停变脸修复) --------
+{
+  check('unit: hover dwell constants pinned (400 enter / 800 leave)',
+    HOVER_ENTER_DWELL_MS === 400 && HOVER_LEAVE_SETTLE_MS === 800,
+    HOVER_ENTER_DWELL_MS + '/' + HOVER_LEAVE_SETTLE_MS)
+  const T0 = 5_000_000
+  // enter dwell：未满窗不换脸；满窗即切，since 锚定切换时刻（动画从头播）。
+  let s = stepCompanionHover(initialCompanionHoverState, 'look', T0)
+  check('unit: hover enter keeps the prior animation before the dwell window',
+    stepCompanionHover(s, 'look', T0 + HOVER_ENTER_DWELL_MS - 1).semantic === undefined)
+  const entered = stepCompanionHover(s, 'look', T0 + HOVER_ENTER_DWELL_MS)
+  check('unit: hover enter switches exactly at the dwell window',
+    entered.semantic === 'look' && entered.since === T0 + HOVER_ENTER_DWELL_MS)
+  // 快速划过：enter 未满窗就移开 → 全程未切换。
+  let q = stepCompanionHover(initialCompanionHoverState, 'look', T0)
+  q = stepCompanionHover(q, undefined, T0 + HOVER_ENTER_DWELL_MS - 200)
+  check('unit: quick hover pass-through never switches', q.semantic === undefined)
+  // leave settle：移开未满窗保持悬停动画、满窗切回；窗内折返无缝续播。
+  let l = stepCompanionHover(entered, undefined, T0 + 1000)
+  check('unit: hover leave holds the animation inside the settle window',
+    stepCompanionHover(l, undefined, T0 + 1000 + HOVER_LEAVE_SETTLE_MS - 1).semantic === 'look')
+  check('unit: hover leave restores exactly at the settle window',
+    stepCompanionHover(l, undefined, T0 + 1000 + HOVER_LEAVE_SETTLE_MS).semantic === undefined)
+  const back = stepCompanionHover(l, 'look', T0 + 1000 + HOVER_LEAVE_SETTLE_MS - 300)
+  check('unit: re-entry inside the settle window resumes seamlessly (anchor kept)',
+    back.semantic === 'look' && back.since === entered.since)
+  // 换档（look→notice）同样要驻留满窗。
+  const n = stepCompanionHover(entered, 'notice', T0 + 2000)
+  check('unit: zone change look->notice waits for the dwell window',
+    stepCompanionHover(n, 'notice', T0 + 2000 + HOVER_ENTER_DWELL_MS - 1).semantic === 'look')
+  check('unit: zone change switches once the dwell window fills',
+    stepCompanionHover(n, 'notice', T0 + 2000 + HOVER_ENTER_DWELL_MS).semantic === 'notice')
 }
 
 // --- notification tracker ---------------------------------------------------
@@ -801,6 +837,44 @@ try {
       d.stdin.write(sgr(35, 5, 5, false))
       await settled(() => nowPlaying(d.lines()) !== '开心喷水', { timeoutMs: 4000 })
       check('hover: leaving the panel restores the rotation', ['待机', '东张西望', '开心喷水', '游来游去'].includes(nowPlaying(d.lines())), nowPlaying(d.lines()))
+
+      // --- 悬停驻留（enter 400ms / leave 800ms，2026-10-03 变脸修复）---------
+      // 探针档选与当前轮换档不同的悬停语义（面板空区=东张西望、宠物本体=
+      // 开心喷水）：划过不换脸、驻留满窗换脸、移开迟滞切回、悬停未落定时
+      // 点击依旧即时。断言避开轮换基线值（8s 槽界可能中途推进）。
+      const rotationFamily = ['待机', '东张西望', '开心喷水', '游来游去']
+      const baselineTitle = nowPlaying(d.lines())
+      const hoverFaceTitle = baselineTitle === '东张西望' ? '开心喷水' : '东张西望'
+      const hoverTarget = hoverFaceTitle === '东张西望'
+        ? { col: Math.max(1, spanD.start - 8), row: cellD.row }   // 面板空区（左 spacer）
+        : { col: spanD.start + 20, row: cellD.row - 2 }            // 宠物本体
+      // 快速划过：进→停在驻留窗内→出，全程不得换脸。
+      d.stdin.write(sgr(35, hoverTarget.col, hoverTarget.row, false))
+      await sleep(180) // 固定窗:墙钟 停在 enter 驻留窗内（180 < 400），断言尚未换脸
+      check('hover: face unchanged inside the enter dwell window',
+        nowPlaying(d.lines()) !== hoverFaceTitle, nowPlaying(d.lines()))
+      d.stdin.write(sgr(35, 5, 5, false))
+      await sleep(HOVER_LEAVE_SETTLE_MS + 300) // 固定窗:墙钟 覆盖 leave 迟滞窗，断言划过全程未切换
+      check('hover: quick pass-through never switches the face',
+        nowPlaying(d.lines()) !== hoverFaceTitle, nowPlaying(d.lines()))
+      // 持续悬停 → 驻留满窗换脸。
+      d.stdin.write(sgr(35, hoverTarget.col, hoverTarget.row, false))
+      await settled(() => nowPlaying(d.lines()) === hoverFaceTitle, { timeoutMs: 2500 })
+      check('hover: sustained pointer switches after the dwell window', nowPlaying(d.lines()) === hoverFaceTitle, nowPlaying(d.lines()))
+      // 移开 → 迟滞窗内保持悬停脸、满窗切回轮换。
+      d.stdin.write(sgr(35, 5, 5, false))
+      await sleep(300) // 固定窗:墙钟 迟滞窗（800ms）内采样，断言仍持悬停脸
+      check('hover: leaving holds the face inside the settle window', nowPlaying(d.lines()) === hoverFaceTitle, nowPlaying(d.lines()))
+      await settled(() => nowPlaying(d.lines()) !== hoverFaceTitle, { timeoutMs: 2500 })
+      check('hover: leaving restores the rotation after the settle window',
+        rotationFamily.includes(nowPlaying(d.lines())), nowPlaying(d.lines()))
+      // 悬停驻留未落定时点击 → poke 覆盖层即时（驻留不拖慢点击反馈）。
+      d.stdin.write(sgr(35, hoverTarget.col, hoverTarget.row, false))
+      await sleep(150) // 固定窗:墙钟 停在驻留窗内（150 < 400）再点击
+      clickAt(d, cellD.col, cellD.row)
+      await settled(() => nowPlaying(d.lines()) === '戳左边' || nowPlaying(d.lines()) === '戳右边', { timeoutMs: 1500 })
+      check('hover: click poke stays instant while the hover dwell is still pending',
+        nowPlaying(d.lines()) === '戳左边' || nowPlaying(d.lines()) === '戳右边', nowPlaying(d.lines()))
     }
 
     // --- long notification wraps to <=3 lines and truncates with … ------

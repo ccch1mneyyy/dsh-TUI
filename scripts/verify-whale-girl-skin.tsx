@@ -29,7 +29,12 @@
  *    中间 2×2 Bayer 图样交替；纯 0/255 源与旧单阈值逐像素一致；色调
  *    保真（软边）MAE 显著低于阈值掩膜；
  *  - 假 TerminalImages context（kitty）：隐藏面板零解码（visible=false
- *    零工作）、打开后惰性解码只碰播过的动画、raster 盒取代字母格；
+ *    零工作）、打开后惰性解码只碰「播过的 + 预热」键、raster 盒取代字母格；
+ *  - 持帧/预热（2026-10-03 抽搐修复）：可见后常用互动键（idle 主键/poke
+ *    左右/smile-hearts）预解进 LRU；切到未解码键保持上一帧不闪字母格；
+ *    冷启动（会话内从未上过图像）字母格兜底仍工作；
+ *  - SplashMascot（logo 栏吉祥物，同一渲染管线）：点击换键链（poke→
+ *    smile-hearts）不闪字母格；active=false 冻结态不预热、定格帧稳定；
  *  - 假 context（无协议）：字母格回退且永不解码 raster 帧。
  *
  * Run: node --import tsx/esm scripts/verify-whale-girl-skin.tsx
@@ -425,7 +430,7 @@ try {
 // 假 protocol context 注入下的惰性解码（只碰当前动画）、面板隐藏零解码、
 // 无协议 context → 字母格回退（且永不解码 raster 帧）。
 
-const { loadWhaleGirlImageKit, whaleGirlImageFrameIndexAt, whaleGirlDecodedAnimationKeys, resetWhaleGirlImageCacheForTests, whaleGirlImageBoxColumns, WhaleGirlSkin: WhaleGirlSkinForCells } = skins
+const { loadWhaleGirlImageKit, whaleGirlImageFrameIndexAt, whaleGirlDecodedAnimationKeys, resetWhaleGirlImageCacheForTests, whaleGirlImageBoxColumns, WHALE_GIRL_PREHEAT_KEYS, WhaleGirlSkin: WhaleGirlSkinForCells } = skins
 const { TerminalImagesContext } = await import('../src/ink/hooks/use-terminal-images.js')
 const { createRequire } = await import('node:module')
 const { existsSync } = await import('node:fs')
@@ -707,20 +712,42 @@ try {
       whaleGirlDecodedAnimationKeys().length === 0,
       'decoded=' + whaleGirlDecodedAnimationKeys().join(','))
 
-    // --- 打开面板 → 惰性解码只碰播过的动画，字母格让位 raster 盒 -----------
+    // --- 打开面板 → 预热进 LRU；惰性解码只碰「播过的 + 预热」键 ------------
     k.controller?.openPanel('companion', { focus: true })
-    await settled(() => whaleGirlDecodedAnimationKeys().length > 0, { timeoutMs: 8000 })
+    await settled(() => WHALE_GIRL_PREHEAT_KEYS.every(key => whaleGirlDecodedAnimationKeys().includes(key)), { timeoutMs: 10000 })
+    check('preheat: common interaction keys warm the LRU once displayed (idle / poke L+R / smile-hearts)',
+      WHALE_GIRL_PREHEAT_KEYS.every(key => whaleGirlDecodedAnimationKeys().includes(key)),
+      'decoded=' + whaleGirlDecodedAnimationKeys().join(','))
     const decodedKeys = [...whaleGirlDecodedAnimationKeys()]
     const mapped = new Set(observedSemantics.map(sem =>
       sem === 'idle-spout' ? 'smile-hearts' : sem === 'happy' ? 'thumbs-up' : sem))
-    const stranger = decodedKeys.filter(key => !mapped.has(key) && key !== 'smile-hearts' && key !== 'thumbs-up')
-    check('image: opening the panel decodes only animations it actually played (lazy decode)',
+    const allowed = new Set([...mapped, ...WHALE_GIRL_PREHEAT_KEYS])
+    const stranger = decodedKeys.filter(key => !allowed.has(key))
+    check('image: opening the panel decodes only played + preheated keys (lazy decode)',
       decodedKeys.length > 0 && stranger.length === 0,
       'decoded=' + decodedKeys.join(',') + ' stranger=' + stranger.join(','))
     await settled(() => artRows(k!.lines()).length === 0, { timeoutMs: 8000 })
     check('image: raster path replaces letter cells (kitty context → space fallback, no half-block art)',
       artRows(k.lines()).length === 0 && nowPlaying(k.lines()) === '鲸娘',
       'artRows=' + artRows(k.lines()).length + ' now=' + nowPlaying(k.lines()))
+
+    // --- 持帧：切到未解码键保持上一帧，不得闪回字母格 ------------------------
+    // success 通知 → happy 反应 → 鲸娘落点 thumbs-up（未预热键）：解码窗口内
+    // 保持上一帧（空格盒），全程不得出现字母格半块行——字母格只允许冷启动
+    // 兜底。（无色通知的 default 反应 'idle-look' 经 deepyAnimationFor 会回落
+    // 成 'idle'——动画键不是语义键，既有 round-trip 怪癖，故用 success 档。）
+    const letterFlash: number[] = []
+    const letterPoll = setInterval(() => { if (artRows(k!.lines()).length > 0) letterFlash.push(Date.now()) }, 10)
+    ;(fakeChannel.notifications as Array<{ text: string; color?: string }>).push({ text: '持帧探针', color: 'success' })
+    bumpChannel()
+    await settled(() => whaleGirlDecodedAnimationKeys().includes('thumbs-up'), { timeoutMs: 8000 })
+    await sleep(500) // 固定窗:探针 覆盖「解码完成→时钟重渲染」的尾巴，断言全程无字母格闪变
+    clearInterval(letterPoll)
+    check('hold: switching to an undecoded key keeps the last frame (no letter-grid flash)',
+      letterFlash.length === 0, 'flashes=' + letterFlash.length)
+    check('hold: the new animation really took over (thumbs-up decoded after the switch)',
+      whaleGirlDecodedAnimationKeys().includes('thumbs-up'),
+      'decoded=' + whaleGirlDecodedAnimationKeys().join(','))
   } finally {
     WhaleGirlSkin.render = originalRender
     if (k !== undefined) {
@@ -729,8 +756,30 @@ try {
     }
   }
 
-  // --- 无协议 context：字母格回退，且永不解码 raster 帧 ---------------------
+  // --- 冷启动：全新会话未解码 → 字母格兜底仍工作（一次性契约）---------------
   resetWhaleGirlImageCacheForTests()
+  let m: Scene | undefined
+  try {
+    m = await scene(140, 30, withKitty)
+    m.controller?.openPanel('companion', { focus: true })
+    // 首帧必须在解码完成前以字母格起画（冷启动兜底还在）；解码完成后
+    // raster 取而代之。首画窗口不可事后锚定，10ms 抢窗采样。
+    const sawLetterBootstrap = await settled(() => artRows(m!.lines()).length > 0, { timeoutMs: 4000, stepMs: 10 })
+    check('cold: fresh session bootstraps on the letter grid (one-time fallback intact)',
+      sawLetterBootstrap, 'firstPaint=' + (sawLetterBootstrap ? 'letters' : 'missed'))
+    await settled(() => artRows(m!.lines()).length === 0, { timeoutMs: 8000 })
+    check('cold: raster takes over once the first animation decodes',
+      artRows(m.lines()).length === 0 && nowPlaying(m.lines()) === '鲸娘',
+      'artRows=' + artRows(m.lines()).length + ' now=' + nowPlaying(m.lines()))
+  } finally {
+    if (m !== undefined) {
+      await m.app.unmount()
+      m.term.dispose()
+    }
+  }
+  resetWhaleGirlImageCacheForTests()
+
+  // --- 无协议 context：字母格回退，且永不解码 raster 帧 ---------------------
   let u: Scene | undefined
   try {
     u = await scene(140, 30, withNoProtocol)
@@ -752,6 +801,128 @@ try {
   check('image fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
 } finally {
   applyCompanionSkin('deepy')
+  resetWhaleGirlImageCacheForTests()
+}
+
+// ========================= SPLASH MASCOT LAYER =============================
+// Logo 栏吉祥物（SplashMascot → WhaleGirlSkin.render → 同一图像管线）：持帧/
+// 预热修在共享层、这里显式验证 logo 栏形态——活跃态点击换键链（poke →
+// smile-hearts）全程不闪字母格；active=false 冻结态（定格 idle 帧 0、零时钟）
+// 不预热、定格帧稳定（whaleFrozen 契约）。SplashMascot 无悬停路径（点击/
+// 三连点两种互动，无 onMouseEnter），悬停驻留不涉及。
+{
+  const { SplashMascot } = await import('../src/components/sidePanel/companion/SplashMascot.js')
+  const MASCOT_COLS = 80
+  const MASCOT_ROWS = 24
+  async function mascotScene(active: boolean): Promise<{
+    app: { unmount: () => Promise<unknown> }
+    term: import('@xterm/headless').Terminal
+    stdin: FakeStdin
+    lines: () => string[]
+  }> {
+    const term = new XTerm({ cols: MASCOT_COLS, rows: MASCOT_ROWS, scrollback: 0, allowProposedApi: true })
+    class MascotStdout extends Writable {
+      columns = MASCOT_COLS
+      rows = MASCOT_ROWS
+      isTTY = true
+      term: import('@xterm/headless').Terminal
+      constructor(t: import('@xterm/headless').Terminal) { super(); this.term = t }
+      _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { this.term.write(String(chunk), cb) }
+    }
+    class MascotStderr extends Writable { isTTY = true; _write(_c: unknown, _e: Buffer.Encoding, cb: () => void) { cb() } }
+    const stdin = new FakeStdin()
+    const stdout = new MascotStdout(term)
+    function Harness(): React.ReactNode {
+      // App 无 useInput 消费者时 stdin 监听不挂（既有坑）——照主场景挂一层。
+      useInput(() => {})
+      return withKitty(
+        <ThemeProvider theme="dark">
+          <Box flexDirection="column" alignItems="center" paddingTop={2}>
+            <SplashMascot skin="whaleGirl" active={active} />
+          </Box>
+        </ThemeProvider>,
+      )
+    }
+    const app = await render(
+      <AlternateScreen mouseTracking={true}><Harness /></AlternateScreen>,
+      {
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stdin: stdin as unknown as NodeJS.ReadStream,
+        stderr: new MascotStderr() as unknown as NodeJS.WriteStream,
+        exitOnCtrlC: false,
+        patchConsole: false,
+      },
+    )
+    const lines = (): string[] => {
+      const buf = term.buffer.active
+      const out: string[] = []
+      for (let y = 0; y < MASCOT_ROWS; y += 1) out.push((buf.getLine(y)?.translateToString(false) ?? '').padEnd(MASCOT_COLS, ' '))
+      return out
+    }
+    return { app, term, stdin, lines }
+  }
+
+  // --- 活跃态：点击换键链（poke → smile-hearts → idle）不闪字母格 -----------
+  resetWhaleGirlImageCacheForTests()
+  const mascotSemantics: string[] = []
+  const originalMascotRender = WhaleGirlSkin.render
+  WhaleGirlSkin.render = function recordedMascot(input: Parameters<typeof originalMascotRender>[0]) {
+    if (input.animationSemantic !== undefined) mascotSemantics.push(input.animationSemantic)
+    return originalMascotRender(input)
+  }
+  let p: Awaited<ReturnType<typeof mascotScene>> | undefined
+  try {
+    p = await mascotScene(true)
+    // 定位用几何而非首画采样：warm 进程里 idle 解码可能快于首个 30ms 轮询
+    // （冷启动字母格兜底契约已由面板 cold 场景钉住）。80 列终端、31 宽吉祥
+    // 物盒居中 → 左缘 ~24、行 2..16（paddingTop 2 + 15 行）。
+    const mascotCell = { col: 38, row: 9 }
+    // raster 就位 + 预热完成后，点击换键链期间采样字母格闪变。
+    await settled(() => artRows(p!.lines()).length === 0
+      && WHALE_GIRL_PREHEAT_KEYS.every(key => whaleGirlDecodedAnimationKeys().includes(key)), { timeoutMs: 10000 })
+    check('splash: active mascot reaches the raster path (image box up, preheat warm)',
+      artRows(p.lines()).length === 0, 'artRows=' + artRows(p.lines()).length)
+    const splashFlashes: number[] = []
+    const splashPoll = setInterval(() => { if (artRows(p!.lines()).length > 0) splashFlashes.push(Date.now()) }, 10)
+    clickAt(p, mascotCell.col, mascotCell.row)
+    await settled(() => mascotSemantics.includes('smile-hearts'), { timeoutMs: 6000 })
+    await sleep(600) // 固定窗:探针 覆盖 poke→smile-hearts→idle 的换键窗口尾巴
+    clearInterval(splashPoll)
+    check('splash: poke -> smile-hearts key chain reaches the mascot',
+      (mascotSemantics.includes('poke-left') || mascotSemantics.includes('poke-right')) && mascotSemantics.includes('smile-hearts'),
+      'seen=' + [...new Set(mascotSemantics)].join(','))
+    check('splash: mascot key switches never flash the letter grid (shared hold + preheat)',
+      splashFlashes.length === 0, 'flashes=' + splashFlashes.length)
+  } finally {
+    WhaleGirlSkin.render = originalMascotRender
+    if (p !== undefined) {
+      await p.app.unmount()
+      p.term.dispose()
+    }
+  }
+
+  // --- 冻结态（active=false）：不预热、定格帧稳定 ----------------------------
+  resetWhaleGirlImageCacheForTests()
+  let z: Awaited<ReturnType<typeof mascotScene>> | undefined
+  try {
+    z = await mascotScene(false)
+    // 冻结态照常解码活跃键（idle——定格帧 0 要画），但时钟从未走动，
+    // 绝不预热互动键；画面定格后字节级稳定（零时钟契约）。
+    await settled(() => whaleGirlDecodedAnimationKeys().includes('idle') && artRows(z!.lines()).length === 0, { timeoutMs: 8000 })
+    await sleep(900) // 固定窗:探针 冻结态观察窗：时钟若误走/预热若误触都会在此窗内显形
+    const decodedFrozen = [...whaleGirlDecodedAnimationKeys()]
+    check('splash: frozen mascot (active=false) never preheats interaction keys',
+      decodedFrozen.every(key => key === 'idle'), 'decoded=' + decodedFrozen.join(','))
+    const frozenFrame1 = z.lines().join('|')
+    await sleep(600) // 固定窗:探针 定格帧稳定性观察窗
+    const frozenFrame2 = z.lines().join('|')
+    check('splash: frozen mascot frame stays byte-stable (zero clock)', frozenFrame1 === frozenFrame2)
+  } finally {
+    if (z !== undefined) {
+      await z.app.unmount()
+      z.term.dispose()
+    }
+  }
   resetWhaleGirlImageCacheForTests()
 }
 
