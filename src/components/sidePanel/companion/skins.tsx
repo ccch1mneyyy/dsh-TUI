@@ -153,18 +153,28 @@ const WHALE_GIRL_KEY_ANIMATION: Readonly<Record<string, string>> = {
 }
 
 /** 鲸娘动画键裁决（字母格与图像两条路径同一语义）：semanticMap 落点
- *  > 爱心 pass > 心情层（whaleGirlAnimationKey 原契约不变）；落点在
- *  「本路径的素材包」里不存在时退心情层，不报错。 */
-function resolveWhaleGirlAnimationKey(
+ *  > 爱心 pass > 心情层（优先级与 whaleGirlAnimationKey 原契约一致）。
+ *  R5-2：所有返回路径统一过 hasKey 健康守卫——候选不健康（不在素材
+ *  包 / 解码失败过）时沿有界链降级：semantic → 健康 heart → 健康
+ *  mood（heart 失败不再覆盖心情层）→ 健康 idle，全部不健康才返回
+ *  undefined（调用方回退字母格/持帧，不闪不循环重试）。旧实现的心
+ *  情/爱心返回值绕过守卫，失败键会被再次选中并永久持帧。导出供回归
+ *  直接钉住裁决链。 */
+export function resolveWhaleGirlAnimationKey(
   pose: CompanionPose,
   animationSemantic: string | undefined,
   hasKey: (key: string) => boolean,
-): string {
-  const semanticKey = animationSemantic !== undefined
-    ? WHALE_GIRL_KEY_ANIMATION[animationSemantic] ?? animationSemantic
-    : undefined
-  if (semanticKey !== undefined && hasKey(semanticKey)) return semanticKey
-  return whaleGirlAnimationKey(pose.mood, pose.heart)
+): string | undefined {
+  if (animationSemantic !== undefined) {
+    const semanticKey = WHALE_GIRL_KEY_ANIMATION[animationSemantic] ?? animationSemantic
+    if (hasKey(semanticKey)) return semanticKey
+  }
+  if (pose.heart > 0 && hasKey('smile-hearts')) return 'smile-hearts'
+  const moodKey = WHALE_GIRL_MOOD_ANIMATION[pose.mood] ?? 'idle'
+  if (hasKey(moodKey)) return moodKey
+  const idleKey = WHALE_GIRL_MOOD_ANIMATION.idle
+  if (hasKey(idleKey)) return idleKey
+  return undefined
 }
 
 /** 字母轨开窗（2026-10 空气墙修复配套）：42 格帧串的全部美术落在
@@ -199,7 +209,10 @@ function renderWhaleGirlLetterGrid(input: CompanionSkinRenderInput): React.React
   const { pose, moodSince, now, animationSemantic } = input
   const kit = loadWhaleGirlKit()
   if (kit === undefined) return DeepySkin.render({ ...input, width: WHALE_GIRL_CELLS.columns })
+  // 字母轨的健康判据是「kit 里有这个动画」；全链不健康（kit 键集残缺）
+  // 时退 DeepySkin，与缺帧回退同一出口。
   const animationKey = resolveWhaleGirlAnimationKey(pose, animationSemantic, key => kit.byKey[key] !== undefined)
+  if (animationKey === undefined) return DeepySkin.render({ ...input, width: WHALE_GIRL_CELLS.columns })
   const rendered = renderedWhaleGirlWindowRows(kit, animationKey)
   const animation = kit.byKey[animationKey]
   if (rendered === undefined || animation === undefined) {
@@ -483,6 +496,11 @@ export function injectDecodedAnimationForTests(key: string, frames: readonly Ter
 /** 测试观测点（R5-1）：解码发起总次数（去重/有界断言）。 */
 export function whaleGirlDecodeRequestCountForTests(): number {
   return whaleGirlDecodeRequestCount
+}
+
+/** 测试接缝（R5-2）：登记解码失败键（模拟坏 PNG，不动真实资产）。 */
+export function injectFailedAnimationForTests(key: string): void {
+  failedImageAnimations.add(key)
 }
 
 /** 测试接缝：清图像层缓存（timings kit + 已解码动画 + 失败集合 + 字母开窗渲染）。 */

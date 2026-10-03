@@ -434,7 +434,7 @@ const {
   loadWhaleGirlImageKit, whaleGirlImageFrameIndexAt, whaleGirlDecodedAnimationKeys, resetWhaleGirlImageCacheForTests,
   whaleGirlImageBoxColumns, WHALE_GIRL_PREHEAT_KEYS, WhaleGirlSkin: WhaleGirlSkinForCells,
   useDecodedWhaleGirlFrames, subscribeDecodedImageCache, injectDecodedAnimationForTests,
-  decodedImageAnimationOrderForTests, whaleGirlDecodeRequestCountForTests,
+  decodedImageAnimationOrderForTests, whaleGirlDecodeRequestCountForTests, injectFailedAnimationForTests,
 } = skins
 const { TerminalImagesContext } = await import('../src/ink/hooks/use-terminal-images.js')
 const { createRequire } = await import('node:module')
@@ -825,9 +825,11 @@ interface BareScene {
   bump: () => void
   lines: () => string[]
 }
+/** mountBare 的 children 工厂签名：bump 驱动重渲染，tick 是已提交的
+ *  重渲染计数（R5-2/3 用它驱动 now 之类的 props）。 */
 const BARE_COLS = 60
 const BARE_ROWS = 24
-async function mountBare(children: (bump: () => void) => React.ReactNode): Promise<BareScene> {
+async function mountBare(children: (bump: () => void, tick: number) => React.ReactNode): Promise<BareScene> {
   const term = new XTerm({ cols: BARE_COLS, rows: BARE_ROWS, scrollback: 0, allowProposedApi: true })
   class BareStdout extends Writable {
     columns = BARE_COLS
@@ -841,9 +843,9 @@ async function mountBare(children: (bump: () => void) => React.ReactNode): Promi
   const stdout = new BareStdout(term)
   let bumpImpl: () => void = () => {}
   function Harness(): React.ReactNode {
-    const [, setV] = React.useState(0)
-    React.useEffect(() => { bumpImpl = () => setV(previous => previous + 1) })
-    return children(() => { bumpImpl() })
+    const [tick, setTick] = React.useState(0)
+    React.useEffect(() => { bumpImpl = () => setTick(previous => previous + 1) })
+    return children(() => { bumpImpl() }, tick)
   }
   const app = await render(
     <AlternateScreen mouseTracking={false}><Harness /></AlternateScreen>,
@@ -1000,6 +1002,160 @@ try {
   resetWhaleGirlImageCacheForTests()
 } catch (error) {
   check('r5-1 fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
+} finally {
+  applyCompanionSkin('deepy')
+  resetWhaleGirlImageCacheForTests()
+}
+
+// ===================== R5-2 · 失败键健康链兜底（回归）=======================
+// 报告 r5-rendering.md R5-2 的独立回归形状：模拟单键解码失败（不动真实
+// 资产），覆盖 working/typing、heart/poke/smile-hearts、idle 失败与全部
+// 失败；断言解析出的键一定满足 hasKey、健康兜底接管、坏键不逐 tick
+// 重解、所有候选失败时有界收敛（持帧/字母格降级，不闪不循环）。旧实现
+// 的 heart/mood 返回路径绕过守卫：失败的 typing/smile-hearts 会被再次
+// 选中，画面钉死在持帧上（报告实测两例在本段单元级复现）。
+
+/** 最小 pose 夹具（CompanionPose 运行时契约形状）。 */
+function fakePose(mood: import('../src/components/sidePanel/companion/mood.js').CompanionMood, heart = 0): never {
+  return { mood, heart, tick: 0, gestures: new Set(), blink: false, sleepZ: 0, facing: 'left' } as never
+}
+
+/** 完整皮肤的裸挂载组件（R5-2 渲染级）：走 WhaleGirlSkin.render → 协议
+ *  裁决 → raster 全链，需要假 kitty context。 */
+function SkinHost({ pose, semantic, now }: {
+  pose: import('../src/components/sidePanel/companion/pose.js').CompanionPose
+  semantic: string | undefined
+  now: number
+}): React.ReactNode {
+  return <>{WhaleGirlSkin.render({ pose, moodSince: 0, now, width: 31, animationSemantic: semantic })}</>
+}
+
+try {
+  const resolve = skins.resolveWhaleGirlAnimationKey
+  const allKeys = [...EXPECTED_KEYS]
+  const healthy = (failed: readonly string[]) => (key: string) => allKeys.includes(key) && !failed.includes(key)
+  // 报告 R5-2 两个机制例（旧实现分别返回 typing / smile-hearts）。
+  check('r5-2: failed semantic typing with working mood degrades to healthy idle (was: typing)',
+    resolve(fakePose('working'), 'typing', healthy(['typing'])) === 'idle')
+  check('r5-2: failed poke-left + smile-hearts with heart pass degrades to mood layer idle (was: smile-hearts)',
+    resolve(fakePose('idle', 1), 'poke-left', healthy(['poke-left', 'smile-hearts'])) === 'idle')
+  // 健康优先级与原契约一致。
+  check('r5-2: healthy chain keeps original priorities (semantic > heart > mood)',
+    resolve(fakePose('idle'), 'tickle', healthy([])) === 'tickle'
+    && resolve(fakePose('idle', 1), undefined, healthy([])) === 'smile-hearts'
+    && resolve(fakePose('celebrate'), undefined, healthy([])) === 'thumbs-up'
+    && resolve(fakePose('working'), undefined, healthy([])) === 'typing')
+  // 心情键失败 → 健康 idle；idle 也失败 → undefined（有界链终点）。
+  check('r5-2: failed mood key falls to healthy idle',
+    resolve(fakePose('error'), undefined, healthy(['error'])) === 'idle')
+  check('r5-2: every candidate unhealthy resolves to undefined (bounded chain end)',
+    resolve(fakePose('idle', 1), 'smile-hearts', healthy(['idle', 'smile-hearts'])) === undefined
+    && resolve(fakePose('working'), 'typing', healthy(['typing', 'idle'])) === undefined)
+  // 裁决结果永远满足健康判据（穷举 mood×heart×失败形状样本）。
+  {
+    let alwaysHealthy = true
+    let offender = ''
+    const moods = ['sleeping', 'idle', 'waiting', 'thinking', 'working', 'responding', 'attention', 'celebrate', 'error'] as const
+    const failureShapes: readonly string[][] = [[], ['typing'], ['smile-hearts', 'poke-left'], ['idle'], ['idle', 'typing', 'smile-hearts']]
+    for (const mood of moods) {
+      for (const heart of [0, 1]) {
+        for (const semantic of [undefined, 'typing', 'poke-left', 'smile-hearts', 'tickle']) {
+          for (const failed of failureShapes) {
+            const resolved = resolve(fakePose(mood, heart), semantic, healthy(failed))
+            if (resolved !== undefined && !healthy(failed)(resolved)) {
+              alwaysHealthy = false
+              offender = mood + '/h' + heart + '/' + semantic + '/failed=[' + failed.join(',') + '] → ' + resolved
+            }
+          }
+        }
+      }
+    }
+    check('r5-2: resolved key always satisfies the health guard (exhaustive samples)', alwaysHealthy, offender)
+  }
+} catch (error) {
+  check('r5-2 unit fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
+}
+
+try {
+  applyCompanionSkin('whaleGirl')
+
+  // --- 渲染级 1：semantic typing 失败 → 健康 idle 接管，坏键零解码 -------
+  let f1: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    injectFailedAnimationForTests('typing')
+    f1 = await mountBare((_bump, tick) => withKitty(<SkinHost pose={fakePose('working')} semantic="typing" now={2000 + tick * 120} />))
+    await settled(() => whaleGirlDecodedAnimationKeys().includes('idle'), { timeoutMs: 10000 })
+    check('r5-2: failed semantic key degrades to a healthy animation (idle decoded and played)',
+      whaleGirlDecodedAnimationKeys().includes('idle'),
+      'decoded=' + whaleGirlDecodedAnimationKeys().join(','))
+    check('r5-2: the failed key never gets decoded (excluded by the health guard)',
+      !decodedImageAnimationOrderForTests().includes('typing'),
+      'order=' + decodedImageAnimationOrderForTests().join(','))
+    // bump 推进时钟会合法触发预热（poke 左右/smile-hearts 未失败时预解）
+    // ——断言收敛为「坏键不进缓存，新增解码只来自预热键」。
+    for (let tick = 0; tick < 5; tick += 1) { f1.bump(); await sleep(30) }
+    const orderAfterTicks = decodedImageAnimationOrderForTests()
+    check('r5-2: a failed key is not retried per tick (never cached; churn limited to preheat keys)',
+      !orderAfterTicks.includes('typing') && orderAfterTicks.every(key => WHALE_GIRL_PREHEAT_KEYS.includes(key)),
+      'order=' + orderAfterTicks.join(','))
+  } finally {
+    if (f1 !== undefined) { await f1.app.unmount(); f1.term.dispose() }
+  }
+
+  // --- 渲染级 2：heart 链（poke-left + smile-hearts）失败 → mood 层 idle --
+  let f2: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    injectFailedAnimationForTests('poke-left')
+    injectFailedAnimationForTests('smile-hearts')
+    f2 = await mountBare((_bump, tick) => withKitty(<SkinHost pose={fakePose('idle', 1)} semantic="poke-left" now={2000 + tick * 120} />))
+    await settled(() => whaleGirlDecodedAnimationKeys().includes('idle'), { timeoutMs: 10000 })
+    check('r5-2: failed heart-pass chain falls to the healthy mood layer (idle, not smile-hearts)',
+      decodedImageAnimationOrderForTests().includes('idle') && !decodedImageAnimationOrderForTests().includes('smile-hearts'),
+      'order=' + decodedImageAnimationOrderForTests().join(','))
+  } finally {
+    if (f2 !== undefined) { await f2.app.unmount(); f2.term.dispose() }
+  }
+
+  // --- 渲染级 3：全部候选失败 → 明确不可用态（冷启动字母格 / 持帧）-------
+  let f3: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    for (const key of EXPECTED_KEYS) injectFailedAnimationForTests(key)
+    f3 = await mountBare((_bump, tick) => withKitty(<SkinHost pose={fakePose('idle')} semantic="poke-left" now={2000 + tick * 120} />))
+    await sleep(600) // 固定窗:探针 全失败态的观察窗（不得解码、不得崩、不得循环）
+    check('r5-2: all-candidates-failed resolves to the unavailable state with zero decodes',
+      whaleGirlDecodeRequestCountForTests() === 0,
+      'requests=' + whaleGirlDecodeRequestCountForTests())
+    check('r5-2: all-failed cold start stays on the letter grid (bounded convergence, no crash)',
+      artRows(f3.lines()).length > 0, 'artRows=' + artRows(f3.lines()).length)
+    for (let tick = 0; tick < 4; tick += 1) { f3.bump(); await sleep(30) }
+    check('r5-2: ticking an all-failed skin stays bounded (letter grid, zero decode churn)',
+      whaleGirlDecodeRequestCountForTests() === 0 && artRows(f3.lines()).length > 0)
+  } finally {
+    if (f3 !== undefined) { await f3.app.unmount(); f3.term.dispose() }
+  }
+
+  // --- 渲染级 4：上过屏后全失败 → 持帧（不闪回字母格，契约保全）----------
+  let f4: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    f4 = await mountBare((bump, tick) => withKitty(<SkinHost pose={fakePose('idle')} semantic={tick >= 2 ? 'poke-left' : undefined} now={2000 + tick * 120} />))
+    await settled(() => whaleGirlDecodedAnimationKeys().includes('idle') && artRows(f4.lines()).length === 0, { timeoutMs: 10000 })
+    check('r5-2: healthy skin reaches the raster path first (image on screen)',
+      artRows(f4.lines()).length === 0)
+    for (const key of EXPECTED_KEYS) injectFailedAnimationForTests(key)
+    f4.bump() // semantic → poke-left：全链不健康 → activeKey=undefined → 持帧
+    await sleep(400) // 固定窗:探针 持帧窗口（无字母格闪变）
+    check('r5-2: after all candidates fail post-image, the panel holds the frame (no letter flash)',
+      artRows(f4.lines()).length === 0, 'artRows=' + artRows(f4.lines()).length)
+  } finally {
+    if (f4 !== undefined) { await f4.app.unmount(); f4.term.dispose() }
+  }
+  resetWhaleGirlImageCacheForTests()
+} catch (error) {
+  check('r5-2 fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
 } finally {
   applyCompanionSkin('deepy')
   resetWhaleGirlImageCacheForTests()
