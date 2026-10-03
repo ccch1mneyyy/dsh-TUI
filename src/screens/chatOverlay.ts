@@ -28,7 +28,7 @@
  *      picker can paint the previous list while the fresh one loads,
  *      exactly as before.
  */
-import type { ChatRow, PermissionPresetSnapshot } from '../dsh-adapter/channel.js'
+import type { BackendModeOption, ChatRow, PermissionPresetSnapshot } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import type { TuiWorkspaceCommandResult } from '../workspaces.js'
@@ -66,6 +66,11 @@ export type ChatOverlay =
   | { kind: 'preset'; index: number }
   | { kind: 'theme'; index: number }
   | { kind: 'permission'; index: number; snapshot: PermissionPresetSnapshot }
+  /** /permission over a backend's native permission modes (the typed
+   * modes capability; a DSH session answers none and keeps the preset
+   * variant above). The frozen mode list and the live current id ride the
+   * open because the capability read is synchronous. */
+  | { kind: 'mode'; index: number; modes: readonly BackendModeOption[]; currentId: string | undefined }
   | { kind: 'plan'; index: number }
   | { kind: 'lang'; index: number }
   /** `/panel` 无参的选择器：列出「已启用 ∩ 已注册」的面板（含插件）。 */
@@ -143,7 +148,7 @@ export type ChatOverlayAction =
    *  with the authoritative focus (model list / preset roster), or a mouse
    *  click on a row of a panel that stays open (effort slider, workspace
    *  flow). Ignored unless that panel is still up. */
-  | { type: 'set-index'; kind: 'model' | 'preset' | 'effort' | 'permission' | 'workspace-flow' | 'rewind' | 'file-actions' | 'panel'; index: number }
+  | { type: 'set-index'; kind: 'model' | 'preset' | 'effort' | 'permission' | 'mode' | 'workspace-flow' | 'rewind' | 'file-actions' | 'panel'; index: number }
   /** Edit the history-search draft (query text, caret, focused match). */
   | { type: 'history-edit'; query?: string; cursor?: number; focus?: number }
   /** Workspace flow: an action is running (keys except Esc are swallowed). */
@@ -218,6 +223,7 @@ export function chatOverlayReducer(state: ChatOverlay, action: ChatOverlayAction
         || state.kind === 'preset'
         || state.kind === 'theme'
         || state.kind === 'permission'
+        || state.kind === 'mode'
         || state.kind === 'plan'
         || state.kind === 'lang'
         || state.kind === 'panel'
@@ -300,6 +306,8 @@ export function dialogOverlayVisible(
       return (gates.panelCount ?? 1) > 0
     case 'permission':
       return overlay.snapshot.options.length > 0
+    case 'mode':
+      return overlay.modes.length > 0
     default:
       return true
   }

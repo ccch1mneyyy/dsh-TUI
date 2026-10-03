@@ -689,6 +689,51 @@ try {
     check('a single-tier effort route says so', list.efforts.length === 1 && singleChannel.notifications.some(item => item.text === t('effort-single-tier', { name: 'Medium' })), singleChannel.notifications.map(item => item.text).join(' | '))
   } finally { singleChannel.releaseContributions() }
 }
+// ── backend-native permission modes (capabilities.modes) ────────────
+// /permission generalized over the typed `modes` capability: the channel
+// exposes the roster (listModes) and the switch (setMode), the command
+// surface offers /permission exactly when the session declares modes, and
+// Tab completion lists the mode ids with the current one tagged. A backend
+// without modes keeps today's behavior: no command, no completion, and the
+// passive roster read stays silent (an empty list IS the answer).
+{
+  const sets: string[] = []
+  let current = 'acceptEdits'
+  const modeful = fakeSession('f1f1f1f1-f1f1-41f1-81f1-f1f1f1f1f1f1', {
+    modes: {
+      list: () => [{ id: 'default', label: 'Default' }, { id: 'acceptEdits', label: 'Accept edits' }, { id: 'plan', label: 'Plan' }],
+      current: () => current,
+      set: id => { sets.push(id); current = id; return Promise.resolve() },
+    },
+  })
+  const modeChannel = createChannel(ctx, modeful, { model: 'm', provider: '', cwd: workdir, activity: false, backendLabel: 'Fake Agent' })
+  try {
+    const roster = modeChannel.listModes()
+    check('listModes maps the capability list with the current index', JSON.stringify(roster) === JSON.stringify({ modes: [{ id: 'default', name: 'Default' }, { id: 'acceptEdits', name: 'Accept edits' }, { id: 'plan', name: 'Plan' }], currentIndex: 1 }), JSON.stringify(roster))
+    const offered = modeChannel.commandList.map(command => command.name)
+    check('a modes-capable backend offers /permission', offered.includes('permission') && modeChannel.commandList.find(command => command.name === 'permission')?.descriptionKey === 'cmd-desc-permission', offered.join(','))
+    check('snapshot commands == offered list (the modes injection keeps the invariant)', JSON.stringify(modeChannel.backendCapabilities.commands) === JSON.stringify(offered))
+    check('setMode delegates to the typed capability', await modeChannel.setMode('plan') === true && JSON.stringify(sets) === JSON.stringify(['plan']))
+    check('setMode refuses an id the backend does not offer', await modeChannel.setMode('bogus') === false && modeChannel.notifications.some(item => item.text === unavailableText('mode')) && JSON.stringify(sets) === JSON.stringify(['plan']))
+    const children = modeChannel.commandCompletions('/permission ')
+    check('Tab completes /permission with the mode ids', JSON.stringify(children.map(item => item.name)) === JSON.stringify(['permission default', 'permission acceptEdits', 'permission plan']) && children.find(item => item.name === 'permission plan')?.tag === 'current', JSON.stringify(children))
+    check('the completion follows a switch (current trails the live mode)', await modeChannel.setMode('default') === true && modeChannel.commandCompletions('/permission ').find(item => item.name === 'permission default')?.tag === 'current')
+  } finally {
+    modeChannel.releaseContributions()
+  }
+
+  const modeless = fakeSession('f2f2f2f2-f2f2-42f2-82f2-f2f2f2f2f2f2')
+  const bareChannel = createChannel(ctx, modeless, { model: 'm', provider: '', cwd: workdir, activity: false, backendLabel: 'Fake Agent' })
+  try {
+    const before = bareChannel.notifications.length
+    const roster = bareChannel.listModes()
+    check('a backend without modes answers an empty roster, silently', roster.modes.length === 0 && roster.currentIndex === -1 && bareChannel.notifications.length === before, JSON.stringify(roster))
+    check('a backend without modes keeps /permission out of the list', !bareChannel.commandList.some(command => command.name === 'permission') && !bareChannel.backendCapabilities.commands.includes('permission'))
+    check('… and out of the completion', bareChannel.commandCompletions('/per').length === 0 && bareChannel.commandCompletions('/permission ').length === 0)
+  } finally {
+    bareChannel.releaseContributions()
+  }
+}
 rmSync(workdir, { recursive: true, force: true })
 console.log(`\nverify-backend-channel OK (${passed} checks)`)
 process.exit(0)

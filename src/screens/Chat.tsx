@@ -28,7 +28,7 @@ import {
 } from '../modelGroups.js'
 import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
-import { sessionCwdMatches, type ChatRow, type ComposerImageRef, type EffortOption, type ExternalCommandOutcome, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
+import { sessionCwdMatches, type BackendModeOption, type ChatRow, type ComposerImageRef, type EffortOption, type ExternalCommandOutcome, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
 import type { QuestionStore } from '../channel/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
@@ -111,6 +111,8 @@ import { ColorPicker } from '../components/ColorPicker.js'
 import { EffortSlider } from '../components/EffortSlider.js'
 import { PresetPicker } from '../components/PresetPicker.js'
 import { PermissionsPicker } from '../components/PermissionsPicker.js'
+import { ModePicker } from '../components/ModePicker.js'
+import { modeDisplayName } from '../sessionModes.js'
 import { PlanPicker } from '../components/PlanPicker.js'
 import { LangPicker } from '../components/LangPicker.js'
 import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js'
@@ -212,7 +214,7 @@ const MIGRATE_CHILD_TIMEOUT_MS = 30 * 60 * 1000
  * 落地页期间照旧整块让位。
  */
 const LAUNCHPAD_OVERLAY_KINDS: ReadonlySet<string> = new Set([
-  'model', 'effort', 'plan', 'preset', 'permission',
+  'model', 'effort', 'plan', 'preset', 'permission', 'mode',
   // 第七版：左下角工作目录铭牌点开的工作区菜单（及其二级选择器/流程层）
   // 也是「盖在落地页之上」的姿态——同一套 pickerPanels 挂载，Esc 回落地页。
   'workspace-menu', 'workspace-picker', 'workspace-flow',
@@ -2086,6 +2088,19 @@ export function Chat({
     })
   }
 
+
+  /** Apply one backend-native permission mode switch (the /permission
+   *  pipeline over the typed `modes` capability): narrated like the DSH
+   *  preset switch; the backend's own mode.changed event then moves the
+   *  footer indicator (session-controls applyMode). */
+  const runBackendModeCommand = (id: string, name: string): Promise<boolean> => {
+    const originAgentBinding = channel.agentBindingGeneration
+    return channel.setMode(id).then(ok => {
+      if (channel.agentBindingGeneration !== originAgentBinding) return false
+      if (ok) channel.notify(t('mode-switched', { name }), { color: 'success' })
+      return ok
+    })
+  }
   /** Hot-swap the UI language (`/lang <id>` and the LangPicker both land
    *  here): persist to ~/.dsh-tui/lang.json and mirror into the dsh-tui
    *  settings namespace when it is served (best effort). */
@@ -3330,6 +3345,50 @@ export function Chat({
           setHelpOpen(false)
           return runPermissionCommand(rawInput, images)
         }
+        // Backend-native permission modes (the typed `modes` capability):
+        // the same command surface over the backend's own roster — bare
+        // opens the mode picker, `/permission <id>` sets directly, `status`
+        // reports the live mode. A DSH session declares no such capability
+        // (listModes answers empty), so every branch below is unreachable
+        // there and the preset pipeline above stands unchanged.
+        // Stub tolerance (partial channel literals in verify/repro
+        // harnesses predate the action): a missing delegate reads as the
+        // silent empty roster, exactly what a DSH session answers anyway.
+        const backendModes = typeof channel.listModes === 'function'
+          ? channel.listModes()
+          : { modes: [], currentIndex: -1 }
+        if (backendModes.modes.length > 0 && parts[0] === 'status') {
+          setHelpOpen(false)
+          channel.pushLocal('/permission', [
+            t('permission-current', { name: modeDisplayName(channel.mode) }),
+            t('permission-mode-switch-hint'),
+          ])
+          return true
+        }
+        if (backendModes.modes.length > 0 && parts.length === 0) {
+          setHelpOpen(false)
+          const index = backendModes.currentIndex >= 0 ? backendModes.currentIndex : 0
+          dispatchOverlay({
+            type: 'open',
+            overlay: {
+              kind: 'mode',
+              index,
+              modes: backendModes.modes.map(mode => ({ id: mode.id, name: mode.name })),
+              currentId: backendModes.modes[index]?.id,
+            },
+          })
+          return true
+        }
+        if (backendModes.modes.length > 0) {
+          const target = backendModes.modes.find(mode => mode.id === parts[0])
+          if (target === undefined) {
+            channel.notify(t('permission-mode-unknown', { id: parts[0]! }), { color: 'error' })
+            return true
+          }
+          setHelpOpen(false)
+          void runBackendModeCommand(target.id, target.name)
+          return true
+        }
         return false
       }
       case 'plan': {
@@ -4521,6 +4580,18 @@ export function Chat({
       }
       return
     }
+    if (overlay.kind === 'mode') {
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: overlay.modes.length })
+      } else if (plainReturn) {
+        const option = overlay.modes[overlay.index]
+        dispatchOverlay({ type: 'close' })
+        if (option !== undefined) void runBackendModeCommand(option.id, option.name)
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
     if (overlay.kind === 'plan') {
       if (key.upArrow || key.downArrow) {
         dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: 2 })
@@ -5253,6 +5324,21 @@ export function Chat({
                   const option = overlay.snapshot.options[index]
                   dispatchOverlay({ type: 'close' })
                   if (option !== undefined) void runPermissionCommand(` ${option.value}`)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'mode' && overlay.modes.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <ModePicker
+                modes={overlay.modes}
+                focusIndex={overlay.index}
+                currentId={overlay.currentId}
+                onPick={(index) => {
+                  if (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null) return
+                  const option = overlay.modes[index]
+                  dispatchOverlay({ type: 'close' })
+                  if (option !== undefined) void runBackendModeCommand(option.id, option.name)
                 }}
               />
             </Box>
@@ -6263,6 +6349,14 @@ export function Chat({
           activity={workingActivity}
           selectionActive={selectionActive}
           helpOpen={helpOpen}
+          // Backend-native permission modes: the footer mode segment always
+          // shows (the base mode included) and clicks into the same
+          // /permission picker the command opens (the launchpad param row's
+          // route). DSH answers an empty list here — no prop, byte-identical
+          // rendering.
+          backendModePicker={typeof channel.listModes === 'function' && channel.listModes().modes.length > 0
+            ? () => { void runCommand('permission', '') }
+            : undefined}
           wake={
             wakeBand === undefined
               ? undefined

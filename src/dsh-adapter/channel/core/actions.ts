@@ -80,6 +80,24 @@ export function createCapabilityDelegates(deps: {
       const index = list.findIndex(mode => mode.id === modes.current())
       await modes.set(list[(index + 1) % list.length]!.id)
     }),
+    // Passive roster read for the /permission picker: sync (modes.list() is
+    // synchronous by contract) and silent when absent — the empty list is
+    // the answer, exactly what permissionPresets() answers for a missing
+    // roster. DSH sessions declare no modes capability, so they read empty
+    // and their preset pipeline stays the only /permission.
+    listModes: () => {
+      const modes = caps().modes
+      if (modes === undefined) return { modes: [], currentIndex: -1 }
+      const list = modes.list()
+      const index = list.findIndex(mode => mode.id === modes.current())
+      return { modes: list.map(mode => ({ id: mode.id, name: mode.label })), currentIndex: index }
+    },
+    setMode: id => guarded('mode', false, async () => {
+      const modes = caps().modes
+      if (modes === undefined || !modes.list().some(mode => mode.id === id)) { unavailable('mode'); return false }
+      await modes.set(id)
+      return true
+    }),
     listModels: () => guarded('model', [], async () => {
       const models = caps().models
       if (models === undefined) { unavailable('model'); return [] }

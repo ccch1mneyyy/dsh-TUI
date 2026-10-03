@@ -816,6 +816,9 @@ const dict = {
   'permission-current': { zh: '当前预设  {{name}}', en: 'Current preset  {{name}}' },
   'permission-roster-unavailable': { zh: '权限预设名册不可用', en: 'Permission preset roster unavailable' },
   'permission-picker-title': { zh: '权限预设', en: 'Permission preset' },
+  'permission-mode-picker-title': { zh: '权限模式', en: 'Permission mode' },
+  'permission-mode-switch-hint': { zh: '切换：/permission <模式>，或点击底栏模式段', en: 'Switch with /permission <mode>, or click the mode segment in the footer' },
+  'permission-mode-unknown': { zh: '没有这个权限模式：{{id}}', en: 'No such permission mode: {{id}}' },
   'permission-preset-readonly': { zh: '只读', en: 'Read-only' },
   'permission-preset-readonly-desc': { zh: '会话只读：不写文件、不执行命令', en: 'Read-only session: no file writes, no commands' },
   'permission-preset-workspace-write': { zh: '工作区读写', en: 'Workspace read/write' },
@@ -1285,6 +1288,7 @@ const dict = {
   'statusline-hint-shortcuts': { zh: '? 查看快捷键', en: '? for shortcuts' },
   // ── 底栏字段 hover 明细（补充行读出；技术标签 ctx/free/read 等保持不译）──
   'status-detail-session-id': { zh: '会话日志目录与此 id 同名', en: 'the session log directory is named after this id' },
+  'status-detail-mode': { zh: '点击或 /permission 切换权限模式', en: 'click or /permission to switch the permission mode' },
   'hint-ext-dialog-input': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
   'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },

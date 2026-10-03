@@ -235,6 +235,41 @@ check('T10j rapid next/previous actions use reducer state', reduce(galleryFirst,
   { type: 'image-step', delta: 1 }, { type: 'image-step', delta: -1 }), galleryFirst)
 check('T10k stale gallery actions leave another overlay intact', reduce({ kind: 'tips' }, { type: 'image-step', delta: 1 }), { kind: 'tips' })
 
+// --- T11: backend-native permission modes (capabilities.modes) -----------
+// /permission on a modes-capable backend opens THIS picker: an index cursor
+// over a frozen mode list, keyboard-aligned with effort/preset (up/down with
+// wrap, Enter applies, Esc closes). The list rides the overlay because the
+// open is synchronous — modes.list() is a sync capability read.
+const modeList = [{ id: 'default', name: 'Default' }, { id: 'acceptEdits', name: 'Accept edits' }, { id: 'plan', name: 'Plan' }] as never
+const modePicker = (index: number): ChatOverlay => ({ kind: 'mode', index, modes: modeList, currentId: 'default' })
+check('T11a open from none', reduce(NO_OVERLAY, { type: 'open', overlay: modePicker(0) }), modePicker(0))
+check(
+  'T11b move wraps within the mode list',
+  [
+    reduce(modePicker(2), { type: 'move', delta: 1, count: 3 }),
+    reduce(modePicker(0), { type: 'move', delta: -1, count: 3 }),
+  ],
+  [modePicker(0), modePicker(2)],
+)
+check('T11c empty mode list is a no-op', reduce(modePicker(0), { type: 'move', delta: 1, count: 0 }), modePicker(0))
+check(
+  'T11d mouse pick sets the absolute row (set-index is kind-guarded)',
+  [
+    reduce(modePicker(0), { type: 'set-index', kind: 'mode', index: 2 }),
+    reduce({ kind: 'theme', index: 0 }, { type: 'set-index', kind: 'mode', index: 2 }),
+  ],
+  [modePicker(2), { kind: 'theme', index: 0 }],
+)
+check('T11e close', reduce(modePicker(1), { type: 'close' }), { kind: 'none' })
+check('T11f close-if own kind', reduce(modePicker(1), { type: 'close-if', kind: 'mode' }), { kind: 'none' })
+check(
+  'T11g overlay mounts only for a non-empty list',
+  [
+    dialogOverlayVisible(modePicker(0), gates),
+    dialogOverlayVisible({ kind: 'mode', index: 0, modes: [] as never, currentId: undefined }, gates),
+  ],
+  [true, false],
+)
 if (failures > 0) {
   console.error(`\n${failures} failure(s)`)
   process.exit(1)

@@ -10,16 +10,20 @@
 import type { LocalCommand } from '../../../adapter/ports/channel-catalog.js'
 import type { AgentEvent } from '../../../agent/events.js'
 import type { AgentSession } from '../../../agent/session.js'
-import { LOCAL_COMMANDS } from '../../../commands.js'
+import { BACKEND_PERMISSION_COMMAND, LOCAL_COMMANDS } from '../../../commands.js'
 import { t } from '../../../i18n.js'
 import { logForDebugging } from '../../../utils/debug.js'
 import type { ChannelState } from '../types.js'
 
 /** The built-in commands a capability snapshot serves, in catalog order. A
- *  snapshot serving every built-in keeps the catalog itself (identity). */
+ *  snapshot serving every built-in keeps the catalog itself (identity).
+ *  `permission` is not a LOCAL_COMMANDS name: it appears only when the
+ *  snapshot appended it for the session's typed `modes` capability (see
+ *  channel/capabilities.ts), and then rides as BACKEND_PERMISSION_COMMAND. */
 export function localCommandsFor(names: readonly string[]): readonly LocalCommand[] {
   if (names.length === LOCAL_COMMANDS.length && LOCAL_COMMANDS.every((command, index) => command.name === names[index])) return LOCAL_COMMANDS
-  return LOCAL_COMMANDS.filter(command => names.includes(command.name))
+  const served = LOCAL_COMMANDS.filter(command => names.includes(command.name))
+  return names.includes('permission') ? [...served, BACKEND_PERMISSION_COMMAND] : served
 }
 
 const debugFailure = (what: string) => (error: unknown): void => {
@@ -135,6 +139,10 @@ export function createSessionControls(deps: {
     const modes = session.capabilities.modes
     if (modes !== undefined) applyMode(session, modes.current())
     if (session.capabilities.effort !== undefined) applyEffort(session, session.capabilities.effort.current())
+    // Rebuild even when the backend exposes no commands capability of its
+    // own: the capability snapshot may still append /permission for the
+    // modes capability, and the first paint must offer it.
+    refreshCommandList()
     loadBackendCommands(session, current)
     refreshMcp(session, current)
     refreshContext(session, current)

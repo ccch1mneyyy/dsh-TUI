@@ -45,7 +45,14 @@ export function channelCapabilities(input: {
   return Object.freeze({
     backendId: input.backendId,
     backendLabel: input.backendLabel,
-    commands: Object.freeze([...supportedLocalCommandNames({ dsh: input.dsh, has: capability => flags[capability] })]),
+    commands: Object.freeze([
+      ...supportedLocalCommandNames({ dsh: input.dsh, has: capability => flags[capability] }),
+      // The typed `modes` capability is its own permission roster: a
+      // non-DSH session that declares it serves /permission through the
+      // channel's listModes/setMode actions. DSH keeps its registry-row
+      // command (dsh sessions take the every-builtin branch above).
+      ...(input.dsh || caps.modes === undefined ? [] : ['permission']),
+    ]),
     retractPending: caps.retractPending === true,
     ...flags,
     // Not a command requirement: `/mcp` itself stays on every backend.

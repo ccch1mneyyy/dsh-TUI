@@ -733,6 +733,16 @@ export interface PermissionPresetCurrent {
   readonly kind: 'preset' | 'custom'
 }
 
+/**
+ * One backend-native permission mode (the typed `modes` capability a
+ * non-DSH session may declare). The port restates the capability's own
+ * {id, label} so the UI layer never imports the agent domain.
+ */
+export interface BackendModeOption {
+  readonly id: string
+  readonly name: string
+}
+
 /** @internal */
 /** One roster entry in the `/preset` picker (see {@link Channel.listPresets}). */
 export interface PresetOption {

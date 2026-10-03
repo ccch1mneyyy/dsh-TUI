@@ -85,6 +85,10 @@ type CoreServedAction =
   // Capability-backed only: a DSH session offers no MCP control (its `/mcp`
   // is the status report, `capabilities.mcpControl` false).
   | 'mcpControl'
+  // Capability-backed only: a DSH session declares no native `modes`
+  // capability, so listModes answers the silent empty roster and setMode its
+  // explicit refusal — the DSH /permission pipeline never routes through them.
+  | 'listModes' | 'setMode'
 
 /**
  * Read the persistence backend's full session list (empty without one) —

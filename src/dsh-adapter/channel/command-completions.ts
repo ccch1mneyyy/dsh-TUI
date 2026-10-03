@@ -85,10 +85,21 @@ export function createCommandCompletions(deps: {
       }
       if (path.length === 1 && path[0] === 'permission') {
         const snapshot = state.permissionPresets()
-        return snapshot.options.filter(option => isCommandCompletionToken(option.value)).map(option => ({
-          name: option.value, description: option.description ?? option.name,
-          ...(option.value === 'read-only' ? { descriptionKey: 'permission-preset-readonly-desc' } : option.value === 'workspace-write' ? { descriptionKey: 'permission-preset-workspace-write-desc' } : option.value === 'danger-full-access' ? { descriptionKey: 'permission-preset-full-access-desc' } : {}),
-          ...(snapshot.current?.kind === 'preset' && snapshot.current.value === option.value ? { tag: 'current' } : {}),
+        if (snapshot.options.length > 0) {
+          return snapshot.options.filter(option => isCommandCompletionToken(option.value)).map(option => ({
+            name: option.value, description: option.description ?? option.name,
+            ...(option.value === 'read-only' ? { descriptionKey: 'permission-preset-readonly-desc' } : option.value === 'workspace-write' ? { descriptionKey: 'permission-preset-workspace-write-desc' } : option.value === 'danger-full-access' ? { descriptionKey: 'permission-preset-full-access-desc' } : {}),
+            ...(snapshot.current?.kind === 'preset' && snapshot.current.value === option.value ? { tag: 'current' } : {}),
+          }))
+        }
+        // No preset roster (a non-DSH backend): the typed `modes` capability
+        // is the roster. DSH sessions declare no such capability, so this
+        // arm answers an empty list there and the roster above stands.
+        const modes = state.listModes()
+        const currentId = modes.modes[modes.currentIndex]?.id
+        return modes.modes.filter(mode => isCommandCompletionToken(mode.id)).map(mode => ({
+          name: mode.id, description: mode.name,
+          ...(mode.id === currentId ? { tag: 'current' } : {}),
         }))
       }
       if (path[0] === 'mcp' && state.backendCapabilities?.mcpControl === true) {

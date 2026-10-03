@@ -78,6 +78,8 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'setEffort': 'mutate',
   'setDefaultEffort': 'mutate',
   'cycleMode': 'mutate',
+  'listModes': 'read-only',
+  'setMode': 'mutate',
   'permissionPresets': 'read-only',
   'runPermissionPreset': 'mutate',
   'listPresets': 'read-only',

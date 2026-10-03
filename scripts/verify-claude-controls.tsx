@@ -24,6 +24,7 @@
  * Run: node --import tsx/esm scripts/verify-claude-controls.tsx
  */
 import assert from 'node:assert/strict'
+import instances from '../src/ink/instances.js'
 
 process.env.FORCE_COLOR = '3'
 
@@ -31,14 +32,14 @@ const [
   { PassThrough, Writable },
   React,
   { Terminal },
-  { render },
+  { render, AlternateScreen },
   { Chat },
   { QuestionStore },
   { openClaudeSession },
   { memoryClaudePrefs },
   { createChannel },
   { setLang, t },
-  { settled, sleep },
+  { findText, settled, sleep },
   fakes,
 ] = await Promise.all([
   import('node:stream'),
@@ -87,9 +88,10 @@ const USAGE = {
   skills: { totalSkills: 1, includedSkills: 1, tokens: 80, skillFrontmatter: [{ name: 'deploy', source: 'project', tokens: 80 }] },
   isAutoCompactEnabled: true,
 }
+const permissionModeCalls: string[] = []
 const controls = {
   setModel: () => undefined,
-  setPermissionMode: () => undefined,
+  setPermissionMode: (mode: string) => { permissionModeCalls.push(mode) },
   applyFlagSettings: () => undefined,
   supportedModels: () => MODELS,
   supportedCommands: () => COMMANDS,
@@ -348,5 +350,82 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
   }
 }
 
+
+// ── /permission over the native modes + the footer mode chip (click) ──
+{
+  const fake = fakeClaudeSdk(() => ({ capabilities: ['msg_lifecycle_v1'], models: MODELS, commands: COMMANDS }), controls)
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { prefs: memoryClaudePrefs() }))
+  const ctx = {
+    on: () => () => undefined,
+    get: () => undefined,
+    logger: { warn: () => undefined, info: () => undefined, debug: () => undefined },
+  } as never
+  const channel = createChannel(ctx, session, { model: 'Claude Agent', provider: 'claude', cwd: '/fixture/project', activity: false, backendLabel: 'Claude Agent', statusBar: { mode: true } })
+  const query = fake.queries[0]!
+  query.emit(init)
+  await settled(() => channel.model === 'claude-sonnet-x')
+  const COLS = 110
+  const ROWS = 32
+  const terminal = new Terminal({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  class FakeStdout extends Writable {
+    columns = COLS
+    rows = ROWS
+    isTTY = true
+    _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void { terminal.write(String(chunk), callback) }
+  }
+  class FakeStdin extends PassThrough {
+    isTTY = true
+    setRawMode() { return this }
+    ref() { return this }
+    unref() { return this }
+  }
+  const stdin = new FakeStdin()
+  const stdout = new FakeStdout()
+  const screen = (): string => {
+    const buffer = terminal.buffer.active
+    return Array.from({ length: buffer.length }, (_, y) => buffer.getLine(y)?.translateToString(true) ?? '').join('\n')
+  }
+  const footer = (): string => {
+    const lines = screen().split('\n')
+    while (lines.length > 0 && lines[lines.length - 1]!.trim() === '') lines.pop()
+    return lines.slice(-4).join('\n')
+  }
+  // AlternateScreen resolves its renderer through instances.get(process.stdout)
+  // with a single-entry fallback: the earlier section's unmounted instance must
+  // not answer for this render's alt-screen gate.
+  for (const key of [...instances.keys()]) instances.delete(key)
+  const app = await render(React.createElement(AlternateScreen, null, React.createElement(Chat, { channel, questionStore: new QuestionStore(), onExit: () => undefined, fullscreen: true, trajectorySeen: true })), {
+    stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false,
+  })
+  try {
+    // The base mode is shown too (backend modes are always visible in the
+    // footer — a DSH base mode stays unmarked/hidden by its own rule).
+    const callsBefore = permissionModeCalls.length
+    check('render: the footer shows the base native mode', await settled(() => footer().includes(t('claude-mode-default'))), footer())
+    const hit = findText(terminal, t('claude-mode-default'))
+    check('render: the footer mode segment is locatable', hit !== null)
+    if (hit !== null) {
+      const seq = (final: string): string => '\x1b[<0;' + (hit.col + 1) + ';' + (hit.row + 1) + final
+      stdin.write(seq('M'))
+      await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
+      stdin.write(seq('m'))
+      check('render: clicking the mode segment opens the /permission picker', await settled(() => screen().includes(t('permission-mode-picker-title')) && screen().includes(t('claude-mode-acceptEdits'))), screen())
+      stdin.write('\x1b[B')
+      await sleep(80) // 固定窗:pacing the arrow move lands before Enter.
+      stdin.write('\r')
+      check('render: picker Enter drives setPermissionMode once', await settled(() => permissionModeCalls.length - callsBefore === 1 && permissionModeCalls[permissionModeCalls.length - 1] === 'acceptEdits'), permissionModeCalls.join(','))
+      check('render: the footer follows the native mode.changed', await settled(() => footer().includes(t('claude-mode-acceptEdits'))), footer())
+    }
+    await sleep(200) // 固定窗:pacing the prompt attaches its key handler after the picker closed.
+    for (const char of '/permission status') stdin.write(char)
+    await sleep(100) // 固定窗:pacing typed characters land before Enter.
+    stdin.write('\r')
+    check('render: /permission status reports the current native mode', await settled(() => screen().includes(t('permission-current', { name: '' }).trim()) && screen().includes(t('claude-mode-acceptEdits'))), screen())
+  } finally {
+    app.unmount()
+    terminal.dispose()
+  }
+  channel.releaseContributions()
+}
 console.log(`\nverify-claude-controls OK (${passed} checks)`)
 process.exit(0)

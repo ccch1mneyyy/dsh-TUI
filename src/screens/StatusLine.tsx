@@ -92,6 +92,7 @@ const MINIMAL_UI_STATUS_BAR: StatusBarConfig = Object.freeze({
  *  The context bar reports the single `bar` target (see ContextBarView). */
 type HoverTarget =
   | 'ctx'
+  | 'mode'
   | 'cache'
   | 'tps'
   | 'tokens'
@@ -116,6 +117,9 @@ type FieldPart = {
    *  tooltip with the full string (e.g. the session title, cut mid-word
    *  when the right-aligned group runs out of columns). */
   tooltip?: string
+  /** Click target (fullscreen mouse): the backend mode segment opens the
+   *  /permission picker — the same route the launchpad param row takes. */
+  onClick?: () => void
 }
 
 /**
@@ -146,6 +150,7 @@ function FieldLine({
           <Box
             flexShrink={1}
             {...(part.id === undefined ? {} : hoverProps(part.id))}
+            {...(part.onClick === undefined ? {} : { onClick: part.onClick })}
           >
             {part.tooltip === undefined || part.tooltip === '' ? (
               <Text wrap="truncate">{part.node}</Text>
@@ -165,12 +170,19 @@ export function StatusLine({
   channel,
   selectionActive = false,
   helpOpen = false,
+  backendModePicker,
   wake,
   activity: projectedActivity,
 }: {
   channel: Channel
   selectionActive?: boolean
   helpOpen?: boolean
+  /** Backend-native permission modes (the typed `modes` capability): the
+   *  mode segment always shows — the base mode included, the user asked to
+   *  SEE the current permission level — and the click opens the same
+   *  /permission picker the command does. Absent (DSH, or a backend without
+   *  modes): rendering stays byte-identical to the modeIndex rule. */
+  backendModePicker?: () => void
   /** Activity value published by the working-activity plugin for this session.
    *  Preferred over the channel's own copy when the composition provides it. */
   activity?: ActivityLineValue
@@ -234,12 +246,19 @@ export function StatusLine({
   const modeNeedsExplicitMarker = channel.mode.plan === true
     || channel.mode.sandbox === 'danger-full-access'
     || channel.mode.approval === 'never'
-  if (statusBar.mode && (channel.modeIndex > 0 || modeNeedsExplicitMarker)) {
+  const modeMarked = channel.modeIndex > 0 || modeNeedsExplicitMarker
+  if (statusBar.mode && (modeMarked || backendModePicker !== undefined)) {
+    // Backend base modes render muted (the DSH rule keeps warning colour
+    // for anything that needs an explicit marker); plan keeps its own.
+    const modeColour = channel.mode.plan === true
+      ? 'planMode'
+      : modeMarked ? 'warning' : 'inactiveShimmer'
     contextParts.push({
       key: 'mode',
+      ...(backendModePicker === undefined ? {} : { id: 'mode' as const, onClick: backendModePicker }),
       node: (
         <Text
-          color={channel.mode.plan === true ? 'planMode' : 'warning'}
+          color={modeColour}
         >
           {modeDisplayName(channel.mode)}
         </Text>
@@ -726,6 +745,15 @@ function buildHoverDetail(
           {((contextUsed / window) * 100).toFixed(1)}% ·{' '}
           {formatTokens(contextUsed)}/{formatTokens(window)} · {dim('free ')}{formatTokens(free)}
           {' · '}{segments}
+        </Text>
+      )
+    }
+    case 'mode': {
+      // Only the backend mode segment carries the hover id (its click
+      // target); the detail names the affordance at the moment of asking.
+      return (
+        <Text wrap="truncate">
+          {dim('mode ')}{modeDisplayName(channel.mode)} · {t('status-detail-mode')}
         </Text>
       )
     }

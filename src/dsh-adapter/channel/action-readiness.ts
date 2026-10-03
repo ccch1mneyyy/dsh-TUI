@@ -27,6 +27,8 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'setEffort'
   | 'setDefaultEffort'
   | 'cycleMode'
+  | 'listModes'
+  | 'setMode'
   | 'runPermissionPreset'
   | 'clear'
   | 'setActivityFrames'
@@ -111,6 +113,8 @@ export function createChannelActionMethods(
     setEffort: id => getReadyActions().setEffort(id),
     setDefaultEffort: id => getReadyActions().setDefaultEffort(id),
     cycleMode: () => getReadyActions().cycleMode(),
+    listModes: () => getReadyActions().listModes(),
+    setMode: id => getReadyActions().setMode(id),
     runPermissionPreset: name => getReadyActions().runPermissionPreset(name),
     clear: () => getReadyActions().clear(),
     setActivityFrames: name => getReadyActions().setActivityFrames(name),
@@ -225,6 +229,10 @@ export function createUnavailableActionDelegates(
     // boot (not a user action), and a toast per launch would be noise.
     setDefaultEffort: () => undefined,
     cycleMode: () => refuseAsync('mode', undefined),
+    // Silent like permissionPresets: the empty roster IS the answer (the
+    // picker decides from it); only the explicit switch toasts its refusal.
+    listModes: () => ({ modes: [], currentIndex: -1 }),
+    setMode: () => refuseAsync('mode', false),
     clear: () => { unavailable('clear') },
     setActivityFrames: () => refuse('activity', false),
     listPresets: () => refuseAsync('preset', []),

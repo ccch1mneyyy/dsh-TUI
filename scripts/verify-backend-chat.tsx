@@ -9,7 +9,7 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { setLang, t }, { default: instances }, { settled, sleep, viewportLines }] =
+const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { setLang, t }, { default: instances }, { findText, settled, sleep, viewportLines }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -339,6 +339,140 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
     applySidePanelSplitEnabled(previousSplit)
     applySidePanelOpen(previousOpen)
     applySidePanelPanels(previousPanels)
+  }
+}
+
+// ── backend-native permission modes: /permission + the footer mode chip ──
+// The Claude shape over the fake-session harness: the typed `modes`
+// capability is the whole surface. /permission behaves like the DSH preset
+// pipeline (bare opens a picker, <id> sets directly, status reports the
+// current mode), and the footer mode segment — hidden for a base mode on
+// DSH — is always shown for backend modes and clicks into the same picker.
+{
+  const MODES = [
+    { id: 'default', label: 'Default' },
+    { id: 'acceptEdits', label: 'Accept edits' },
+    { id: 'plan', label: 'Plan' },
+  ]
+  const sets: string[] = []
+  const listeners = new Set<(batch: readonly AgentEvent[], meta: AgentEventMeta) => void>()
+  const modeful: AgentSession = {
+    ...freshSession({
+      modes: {
+        list: () => MODES,
+        current: () => 'default',
+        set: id => { sets.push(id); for (const listener of [...listeners]) listener([{ type: 'mode.changed', modeId: id }], { replay: false, wake: 'sync' }); return Promise.resolve() },
+      },
+    }),
+  }
+  modeful.subscribe = listener => { listeners.add(listener); return () => { listeners.delete(listener) } }
+  const submits: AgentInput[] = []
+  modeful.submit = input => { submits.push(input); return Promise.resolve({ accepted: true }) }
+  const channel = createChannel(ctx, modeful, { model: 'fake-model', provider: '', cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent', statusBar: { mode: true } } as never)
+  const COLS = 100
+  const ROWS = 30
+  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  class Out extends Writable { columns = COLS; rows = ROWS; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
+  class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
+  const stdin = new In()
+  const stdout = new Out()
+  // AlternateScreen resolves its renderer through instances.get(process.stdout)
+  // with a single-entry fallback: drop the earlier sections' stale (unmounted)
+  // instances so this render is the one the alt-screen gate answers to.
+  for (const key of [...instances.keys()]) instances.delete(key)
+  const instance = await ui.render(
+    React.createElement(ui.AlternateScreen, null, React.createElement(Chat, { channel: channel as never, questionStore: new QuestionStore(), approvalStore: new ApprovalStore(), onExit: () => undefined, fullscreen: true, trajectorySeen: true })),
+    { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  // AlternateScreen resolves its renderer through instances.get(process.stdout):
+  // repoint the bridge at THIS render (earlier sections bridged theirs) so the
+  // alt-screen gate and mouse dispatch answer to the live instance.
+  instances.set(process.stdout, instances.get(stdout)!)
+  const screen = (): string => viewportLines(term, ROWS).join('\n')
+  const footer = (): string => {
+    const lines = viewportLines(term, ROWS)
+    while (lines.length > 0 && lines[lines.length - 1]!.trim() === '') lines.pop()
+    return lines.slice(-4).join('\n')
+  }
+  const toasts = (): string => channel.notifications.map(item => item.text).join(' | ')
+  const clearLineStdin = async (): Promise<void> => {
+    for (let i = 0; i < 24; i += 1) stdin.write('\x7f')
+    await sleep(60) // 固定窗:pacing backspaces land before the next keystroke batch.
+  }
+  try {
+    await sleep(300) // 固定窗:pacing the key handlers attach after the first frame.
+    check('the footer shows the base backend mode (always visible for backend modes)', await settled(() => footer().includes('Default')), footer())
+    const hit = findText(term, 'Default')
+    check('the footer mode segment is locatable', hit !== null)
+    if (hit !== null) {
+      const seq = (final: string): string => '\x1b[<0;' + (hit.col + 1) + ';' + (hit.row + 1) + final
+      stdin.write(seq('M'))
+      await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
+      stdin.write(seq('m'))
+      check('clicking the mode segment opens the same /permission picker', await settled(() => screen().includes(t('permission-mode-picker-title')) && screen().includes('Accept edits')), screen())
+      stdin.write('\x1b')
+      await sleep(120) // 固定窗:pacing the picker closes before the next keystroke batch.
+    }
+    check('Esc closed the picker', await settled(() => !screen().includes(t('permission-mode-picker-title'))), screen())
+    for (const char of '/permission') stdin.write(char)
+    await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
+    stdin.write('\r')
+    check('bare /permission opens the mode picker with the current row focused', await settled(() => screen().includes(t('permission-mode-picker-title')) && screen().includes('Plan')), screen())
+    stdin.write('\x1b[B')
+    await sleep(80) // 固定窗:pacing the arrow move lands before Enter.
+    stdin.write('\r')
+    await sleep(80) // 固定窗:pacing setMode resolves and the overlay closes.
+    check('Enter applies exactly one mode switch (default → acceptEdits)', JSON.stringify(sets) === JSON.stringify(['acceptEdits']) && !screen().includes(t('permission-mode-picker-title')), JSON.stringify(sets) + ' | ' + screen())
+    check('the switch is narrated', toasts().includes(t('mode-switched', { name: 'Accept edits' })), toasts())
+    check('the footer follows the live mode', await settled(() => footer().includes('Accept edits')), footer())
+    await clearLineStdin(stdin)
+    for (const char of '/permission plan') stdin.write(char)
+    await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
+    stdin.write('\r')
+    check('/permission <id> sets the mode directly', await settled(() => JSON.stringify(sets) === JSON.stringify(['acceptEdits', 'plan'])), JSON.stringify(sets))
+    await clearLineStdin(stdin)
+    for (const char of '/permission status') stdin.write(char)
+    await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
+    stdin.write('\r')
+    check('/permission status reports the current mode', await settled(() => screen().includes(t('permission-current', { name: '' }).trim()) && screen().includes('Plan')), screen())
+    check('no permission line ever reached the model', submits.length === 0, JSON.stringify(submits.map(input => input.text)))
+    await clearLineStdin(stdin)
+    for (const char of '/permission bogus') stdin.write(char)
+    await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
+    stdin.write('\r')
+    check('/permission <unknown-id> explains itself and reaches no model', await settled(() => toasts().includes(t('permission-mode-unknown', { id: 'bogus' }))) && submits.length === 0, toasts())
+  } finally {
+    instance.unmount()
+    channel.releaseContributions()
+    term.dispose()
+  }
+
+  // A backend WITHOUT modes keeps today's reachability: /permission is not
+  // a command there, so the typed line falls through to the model as text.
+  {
+    const submits: AgentInput[] = []
+    const session = freshSession({})
+    session.submit = input => { submits.push(input); return Promise.resolve({ accepted: true }) }
+    const channel = createChannel(ctx, session, { model: 'fake-model', provider: '', cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent' } as never)
+    const term = new XTerm({ cols: 100, rows: 30, scrollback: 0, allowProposedApi: true })
+    class Out extends Writable { columns = 100; rows = 30; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
+    class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
+    const stdin = new In()
+    const instance = await ui.render(
+      React.createElement(Chat, { channel: channel as never, questionStore: new QuestionStore(), approvalStore: new ApprovalStore(), onExit: () => undefined, fullscreen: false, trajectorySeen: true }),
+      { stdout: new Out() as never, stdin: stdin as never, stderr: new Out() as never, exitOnCtrlC: false, patchConsole: false },
+    )
+    try {
+      await sleep(300) // 固定窗:pacing the key handlers attach after the first frame.
+      for (const char of '/permission') stdin.write(char)
+      await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
+      stdin.write('\r')
+      check('without modes /permission still falls through to the model', await settled(() => submits.length === 1 && submits[0]!.text === '/permission'), JSON.stringify(submits.map(input => input.text)))
+    } finally {
+      instance.unmount()
+      channel.releaseContributions()
+      term.dispose()
+    }
   }
 }
 console.log(`\nverify-backend-chat OK (${passed} checks)`)

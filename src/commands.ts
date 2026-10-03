@@ -113,6 +113,22 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
 ]
 
 /**
+ * `/permission` as a modes-capable backend serves it. Deliberately NOT a
+ * LOCAL_COMMANDS entry: DSH's own /permission comes from the permission-
+ * presets registry row, and a local entry would shadow it in the merged
+ * list (locals win collisions), flipping the external-command route the
+ * DSH pipeline depends on. The backend capability snapshot appends this
+ * shape instead (channel/capabilities.ts → session-controls), so a session
+ * with the typed `modes` capability offers the same command surface
+ * without touching DSH's.
+ */
+export const BACKEND_PERMISSION_COMMAND: LocalCommand = {
+  name: 'permission',
+  description: 'Show or switch the backend permission mode',
+  descriptionKey: 'cmd-desc-permission',
+}
+
+/**
  * What a built-in command needs from the bound backend session: `any` works
  * on every backend (UI-only, or served by the channel's backend-neutral
  * core); a capability name needs that session capability; `dsh` needs the
