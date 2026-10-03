@@ -57,6 +57,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { SidePanelLay
   import('./lib/term-test.mjs'),
 ])
 const { render, ThemeProvider, AlternateScreen, Box, Text, useInput } = ui
+const { Suspense } = React
 const { applySidePanelPanels, applySidePanelOpen, applySidePanelRatio, applyCompanionSkin, getCompanionSkin, normalizeCompanionSkin } = prefs
 const { DeepySkin, WhaleGirlSkin, resolveCompanionSkin, whaleGirlAnimationKey, WHALE_GIRL_SEMANTIC_ANIMATION } = skins
 const {
@@ -435,6 +436,7 @@ const {
   whaleGirlImageBoxColumns, WHALE_GIRL_PREHEAT_KEYS, WhaleGirlSkin: WhaleGirlSkinForCells,
   useDecodedWhaleGirlFrames, subscribeDecodedImageCache, injectDecodedAnimationForTests,
   decodedImageAnimationOrderForTests, whaleGirlDecodeRequestCountForTests, injectFailedAnimationForTests,
+  useHeldCommittedImage,
 } = skins
 const { TerminalImagesContext } = await import('../src/ink/hooks/use-terminal-images.js')
 const { createRequire } = await import('node:module')
@@ -1156,6 +1158,142 @@ try {
   resetWhaleGirlImageCacheForTests()
 } catch (error) {
   check('r5-2 fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
+} finally {
+  applyCompanionSkin('deepy')
+  resetWhaleGirlImageCacheForTests()
+}
+
+// ===================== R5-3 · 持帧/预热记账以提交为准 ======================
+// 报告 r5-rendering.md R5-3 的独立回归形状：真 ConcurrentRoot（ink 的
+// react-reconciler ConcurrentRoot）+ Suspense 受控挂起——A 已提交，B 渲染
+// 后挂起并被同步 C 更新放弃，C 缺帧；断言持住 A（不是从未提交的 B）、未
+// 提交渲染不改变冷启动/预热许可。旧实现 render 期写 ref：丢弃渲染把 B
+// 记成「上一帧」并提前解锁预热（本段红）。
+
+const NEVER_PROMISE = new Promise<void>(() => {})
+function SuspendForever(): never {
+  throw NEVER_PROMISE
+}
+
+/** 生产持帧 hook 的探针：记录每次 render 的 [visible, ever]。 */
+function HoldProbe({ candidate, onRender }: {
+  candidate: React.ReactNode
+  onRender: (visible: React.ReactNode, ever: boolean) => void
+}): React.ReactNode {
+  const [visible, ever] = useHeldCommittedImage(candidate)
+  onRender(visible, ever)
+  return null
+}
+
+try {
+  applyCompanionSkin('whaleGirl')
+
+  // --- 1. 丢弃渲染不污染持帧：A 提交 → B 挂起放弃 → C 缺帧持 A ----------
+  let h1: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    const aElement = <Text>a</Text>
+    const bElement = <Text>b</Text>
+    const records: Array<{ phase: string; visible: React.ReactNode; ever: boolean }> = []
+    let phase: 'A' | 'B' | 'C' = 'A'
+    h1 = await mountBare(() => {
+      const candidate = phase === 'A' ? aElement : phase === 'B' ? bElement : undefined
+      return (
+        <Suspense fallback={<Text>fallback</Text>}>
+          <HoldProbe candidate={candidate} onRender={(visible, ever) => { records.push({ phase, visible, ever }) }} />
+          {phase === 'B' && <SuspendForever />}
+        </Suspense>
+      )
+    })
+    await sleep(150) // 固定窗:探针 A 的 commit 窗
+    const aCommits = records.filter(r => r.phase === 'A')
+    check('r5-3: committed candidate A renders as itself (cold)', aCommits.length > 0 && aCommits.every(r => r.visible === aElement))
+    phase = 'B'
+    h1.bump() // B render 执行（丢弃候选写入观察记录）→ SuspendForever 挂起 → 放弃
+    await sleep(250) // 固定窗:探针 挂起窗口：B 永不 resolve，primary 不提交
+    const bRenders = records.filter(r => r.phase === 'B')
+    check('r5-3: discarded render B executes its candidate (observed) but never commits',
+      bRenders.length > 0 && bRenders.every(r => r.visible === bElement),
+      'bRenders=' + bRenders.length)
+    phase = 'C'
+    h1.bump() // 同步默认优先级更新插队：C（缺帧）提交
+    await settled(() => records.some(r => r.phase === 'C'), { timeoutMs: 4000 })
+    h1.bump() // 持帧窗口内继续 tick（candidate 仍缺）：观察引用稳定性
+    h1.bump()
+    await sleep(150) // 固定窗:探针 持帧 tick 窗
+    const cRecords = records.filter(r => r.phase === 'C')
+    const lastC = cRecords[cRecords.length - 1]
+    check('r5-3: missing-frame render holds the last COMMITTED candidate (A), not the discarded one (B)',
+      lastC !== undefined && lastC.visible === aElement && lastC.ever === true,
+      'visible===' + (lastC?.visible === aElement ? 'A' : lastC?.visible === bElement ? 'B' : String(lastC?.visible)))
+    check('r5-3: hold keeps a stable element reference across ticks (no subtree repaint churn)',
+      cRecords.length > 1 && cRecords.every(r => r.visible === aElement),
+      'cRenders=' + cRecords.length)
+  } finally {
+    if (h1 !== undefined) { await h1.app.unmount(); h1.term.dispose() }
+  }
+
+  // --- 2. 丢弃渲染的 now 不解锁预热；提交的时钟走动才解锁 -----------------
+  let h2: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    let phase: 'A' | 'B' | 'C' | 'D' = 'A'
+    h2 = await mountBare(() => {
+      const now = phase === 'B' ? 5000 : phase === 'D' ? 1300 : 1000
+      return withKitty(
+        <Suspense fallback={<Text>fallback</Text>}>
+          <SkinHost pose={fakePose('idle')} semantic={undefined} now={now} />
+          {phase === 'B' && <SuspendForever />}
+        </Suspense>,
+      )
+    })
+    await settled(() => whaleGirlDecodedAnimationKeys().includes('idle'), { timeoutMs: 10000 })
+    await sleep(400) // 固定窗:探针 A 态观察窗：now 恒 1000，预热必须不发生
+    check('r5-3: committed static clock never preheats (frozen contract intact)',
+      whaleGirlDecodedAnimationKeys().every(key => key === 'idle'),
+      'decoded=' + whaleGirlDecodedAnimationKeys().join(','))
+    phase = 'B'
+    h2.bump() // B：now=5000 渲染后挂起放弃（旧实现：render 期写 ref 提前解锁预热）
+    await sleep(400) // 固定窗:探针 挂起窗口观察
+    phase = 'C'
+    h2.bump() // C：now 回到 1000（与上一提交值相同）→ 不得预热
+    await sleep(500) // 固定窗:探针 C 态观察窗（旧实现被丢弃渲染污染后在此预热 → 红）
+    check("r5-3: a discarded render's clock advance does not unlock preheat",
+      whaleGirlDecodedAnimationKeys().every(key => key === 'idle'),
+      'decoded=' + whaleGirlDecodedAnimationKeys().join(','))
+    phase = 'D'
+    h2.bump() // D：now=1300 已提交地走动 → 预热解锁
+    await settled(() => WHALE_GIRL_PREHEAT_KEYS.every(key => whaleGirlDecodedAnimationKeys().includes(key)), { timeoutMs: 10000 })
+    check('r5-3: a committed clock advance still unlocks preheat (feature intact)',
+      WHALE_GIRL_PREHEAT_KEYS.every(key => whaleGirlDecodedAnimationKeys().includes(key)),
+      'decoded=' + whaleGirlDecodedAnimationKeys().join(','))
+  } finally {
+    if (h2 !== undefined) { await h2.app.unmount(); h2.term.dispose() }
+  }
+
+  // --- 3. #185 高频 commit 轰炸：持帧/预热记账在提交风暴下零异常 ----------
+  let h3: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    const semantics = [undefined, 'typing', 'poke-left', 'smile-hearts', 'tickle', 'idle-look', 'happy', undefined]
+    h3 = await mountBare((_bump, tick) => withKitty(
+      <SkinHost pose={fakePose(tick % 4 === 0 ? 'working' : 'idle', tick % 3 === 0 ? 1 : 0)} semantic={semantics[tick % semantics.length]} now={1000 + tick * 16} />,
+    ))
+    let bombed = 0
+    const bomber = setInterval(() => { bombed += 1; h3!.bump() }, 16)
+    await sleep(2000) // 固定窗:探针 2s 高频提交风暴（16ms 换语义/now，语义轮换触发换键持帧路径）
+    clearInterval(bomber)
+    check('r5-3: high-frequency commit storm survives (no #185 nested-update explosion)',
+      bombed >= 80, 'bumps=' + bombed)
+    check('r5-3: commit storm keeps decode churn bounded (lazy keys only)',
+      whaleGirlDecodedAnimationKeys().length <= EXPECTED_KEYS.length,
+      'decoded=' + whaleGirlDecodedAnimationKeys().length)
+  } finally {
+    if (h3 !== undefined) { await h3.app.unmount(); h3.term.dispose() }
+  }
+  resetWhaleGirlImageCacheForTests()
+} catch (error) {
+  check('r5-3 fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
 } finally {
   applyCompanionSkin('deepy')
   resetWhaleGirlImageCacheForTests()

@@ -517,6 +517,9 @@ const reconciler = createReconciler<
   // ViewTransition」）；缺这个成员时任何 Suspense 挂起后的恢复提交都抛
   // "suspendOnActiveViewTransition is not a function"。本渲染器不实现
   // ViewTransition：no-op 与 react-dom 在无活动 transition 时的行为等价。
+  // 0.34 甩出的 HostConfig 类型尚未收录该成员（运行时已要求）——类型
+  // 追上后这行 expect-error 会自曝，届时删除即可。
+  // @ts-expect-error suspendOnActiveViewTransition missing from react-reconciler 0.34 HostConfig types
   suspendOnActiveViewTransition(): void {},
   waitForCommitToBeReady(): null {
     return null

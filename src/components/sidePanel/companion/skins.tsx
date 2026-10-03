@@ -593,9 +593,36 @@ function WhaleGirlImageSkin(input: CompanionSkinRenderInput): React.ReactNode {
   return <WhaleGirlRasterSkin {...input} />
 }
 
+/** 持帧记账 hook（R5-3）：render 只把本次候选交给这里；「上一已提交
+ *  帧」（heldCommitted）与「是否上过屏」（everCommitted）只在 commit 后
+ *  的 useLayoutEffect 写——concurrent 丢弃渲染（挂起/中断后放弃的
+ *  render）不污染持帧源，未提交的候选不解锁「终生不回字母格」。effect
+ *  闭包携带本次已提交 render 的候选（无 deps，每次 commit 跑）；持帧期
+ *  间返回的元素引用稳定（逐 tick 重渲染不触发子树重画，画面冻结在上一
+ *  帧）。返回 [本次应显示的节点, 是否已上过屏]；节点为 undefined 表示
+ *  从未上过屏（调用方走冷启动字母格兜底）。导出供回归在真
+ *  ConcurrentRoot 下钉住「持帧 == 上一已提交候选」语义（生产消费者
+ *  WhaleGirlRasterSkin）。 */
+export function useHeldCommittedImage(
+  candidate: React.ReactNode,
+): readonly [committed: React.ReactNode, everCommitted: boolean] {
+  const everCommittedRef = React.useRef(false)
+  const heldCommittedRef = React.useRef<React.ReactNode>(undefined)
+  React.useLayoutEffect(() => {
+    if (candidate === undefined) return
+    heldCommittedRef.current = candidate
+    everCommittedRef.current = true
+  })
+  if (candidate !== undefined) return [candidate, everCommittedRef.current] as const
+  if (!everCommittedRef.current) return [undefined, false] as const
+  return [heldCommittedRef.current, true] as const
+}
+
 /** 图像渲染层：timings 选帧 + 惰性解码 + 单元格盒（15 行预算、宽按
  *  帧比例钳 42 列）。解码窗口【持帧】（上一帧画面保持到新帧就绪）；字母
- *  格只在冷启动（从未成功上过图像）兜底；常用互动键可见后预热。 */
+ *  格只在冷启动（从未成功上过图像）兜底；常用互动键可见后预热。
+ *  R5-3：持帧/预热记账只认已提交 render（见 useHeldCommittedImage 与
+ *  预热 effect）。 */
 function WhaleGirlRasterSkin(input: CompanionSkinRenderInput): React.ReactNode {
   const { pose, moodSince, now, animationSemantic } = input
   const cellSize = useTerminalImageCellSize()
@@ -610,28 +637,25 @@ function WhaleGirlRasterSkin(input: CompanionSkinRenderInput): React.ReactNode {
   const frames = useDecodedWhaleGirlFrames(displayed ? animationKey : undefined, imageKit)
   const animation = animationKey !== undefined ? imageKit?.byKey[animationKey] : undefined
 
-  // 预热（抽搐修复）：可见且【动画时钟走动】后，把常用互动键异步预解进
-  // LRU（不阻塞首帧；失败静默进失败集）。时钟从未走动 = active=false 冻结
-  // 态（SplashMascot 定格 idle 帧 0、零时钟）——不预热，冻结契约不破。
+  // 预热（抽搐修复）：可见且【动画时钟已提交地走动】后，把常用互动键异步
+  // 预解进 LRU（不阻塞首帧；失败静默进失败集）。R5-3：now 只在 commit 后
+  // 的 effect 里与上一提交值比对——丢弃渲染携带的新 now 不再提前解锁预热
+  // 许可（render 期写 ref 会被未提交的时钟污染）。时钟从未走动 =
+  // active=false 冻结态（SplashMascot 定格 idle 帧 0、零时钟）——不预热，
+  // 冻结契约不破。
   const lastNowRef = React.useRef(now)
-  const clockAdvancedRef = React.useRef(false)
-  if (now !== lastNowRef.current) {
-    lastNowRef.current = now
-    clockAdvancedRef.current = true
-  }
   React.useEffect(() => {
-    if (!displayed || imageKit === undefined || !clockAdvancedRef.current) return
+    if (now === lastNowRef.current) return
+    lastNowRef.current = now
+    if (!displayed || imageKit === undefined) return
     for (const key of WHALE_GIRL_PREHEAT_KEYS) preheatWhaleGirlAnimation(imageKit, key)
-  }, [displayed, imageKit, clockAdvancedRef.current])
+  }, [now, displayed, imageKit])
 
-  // 持帧（抽搐修复）：动画键切到未解码键（LRU 未命中/在途解码）的窗口里
-  // 不再闪回字母格——保持上一帧画面直到新帧就绪；字母格兜底只在「本会话
-  // 从未成功渲染过图像」的冷启动阶段出现，图像一旦上过屏终生不再回退
-  // （组件实例级 ref：重挂载走模块 LRU 同步命中，字母格窗口实际只存在于
-  // 冷启动）。渲染期写 ref 是「上一个渲染值」模式（同 useBoxDisplayed 的
-  // displayedRef 镜像）：值由 props 纯派生、幂等。
-  const everRenderedImageRef = React.useRef(false)
-  const heldImageRef = React.useRef<React.ReactNode>(undefined)
+  // 持帧（R5-3）：候选只在 commit 后写入 refs（useHeldCommittedImage）——
+  // 动画键切到未解码键（LRU 未命中/在途解码）的窗口里不再闪回字母格，
+  // 保持上一【已提交】帧直到新帧就绪；字母格兜底只在「本会话从未成功提
+  // 交过图像」的冷启动阶段出现，图像一旦上过屏终生不再回退（组件实例级
+  // ref：重挂载走模块 LRU 同步命中，字母格窗口实际只存在于冷启动）。
 
   // 单元格盒：15 行预算 + 帧自身宽高比（source.width/height，与档位
   // 无关）+ 真实像元；宽钳 42 列（§16.6）。8×16 像元下 288px 档
@@ -660,16 +684,17 @@ function WhaleGirlRasterSkin(input: CompanionSkinRenderInput): React.ReactNode {
           <Text>{Array.from({ length: rows }, () => ' '.repeat(columns)).join('\n')}</Text>
         </Image>
       )
-      // 图像成功上屏：记「已渲染过」并留存本帧（持帧源）；held 元素引用
-      // 稳定，持帧期间逐 tick 重渲染不触发子树重画（画面冻结在上一帧）。
-      everRenderedImageRef.current = true
-      heldImageRef.current = image
+      // 图像候选：是否「成功上屏」由 commit 后的 useHeldCommittedImage
+      // 记账（构造元素 ≠ 已提交，丢弃渲染不写持帧源）。
     }
   }
+  // 持帧裁决：非 undefined 即显示（本次候选或上一已提交帧），undefined
+  // 才是冷启动字母格兜底。
+  const [visibleImage] = useHeldCommittedImage(image)
   return (
     <Box ref={boxRef} flexDirection="column" flexShrink={0} alignItems="center" justifyContent="center"
       width={WHALE_GIRL_CELLS.columns} height={WHALE_GIRL_CELLS.rows}>
-      {image ?? (everRenderedImageRef.current ? heldImageRef.current : renderWhaleGirlLetterGrid(input))}
+      {visibleImage !== undefined ? visibleImage : renderWhaleGirlLetterGrid(input)}
     </Box>
   )
 }
