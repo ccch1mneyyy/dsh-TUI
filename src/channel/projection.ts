@@ -125,6 +125,12 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
    * live stream AND on every replay (`/resume`, rewind, model switch).
    */
   const askCalls = new Map<string, string>()
+  /** Todo-panel calls by callId (cards suppressed: the panel tells the
+   *  story). Their arguments are remembered so a FAILED result can still
+   *  render its error card — without it a rejected TaskUpdate would vanish
+   *  silently (R6 review: the optimistic panel change was rolled back; the
+   *  user must see the task change never happened). */
+  const todoCalls = new Map<string, { name: string; argsJson: string; seq: number; time: number }>()
   /** callId of the result that just settled an ok card: task feeds a
    *  translator derives from a result only reach the job registry when that
    *  result actually settled a card here (the pre-split reducer's gate). */
@@ -728,8 +734,12 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     // while this transcript is parked.
     if (presentation?.card === 'subagent') return
     // A todo-list write renders in the todo panel (the backend emits
-    // `todo.write` with it); a card would repeat the list.
-    if (presentation?.card === 'todo') return
+    // `todo.write` with it); a card would repeat the list. The call is
+    // remembered so its result can still surface a failure card.
+    if (presentation?.card === 'todo') {
+      todoCalls.set(event.callId, { name: event.name, argsJson: event.argsJson, seq: event.seq, time: event.time })
+      return
+    }
     // Reasoning that led to a tool call is done thinking — fold the preview
     // now, before the tool card grows the transcript past it (see
     // settleLiveReasoning).
@@ -774,6 +784,35 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     if (card === undefined && askArguments !== undefined) {
       projectAskResult(event, askArguments)
       askCalls.delete(callId)
+      return
+    }
+    const suppressedTodo = todoCalls.get(callId)
+    if (suppressedTodo !== undefined) {
+      todoCalls.delete(callId)
+      // Success stays in the panel; only a failure needs a visible card.
+      if (event.isError) {
+        settleLiveReasoning('tool call')
+        const errorCard: ChatRow = {
+          id: deps.rowIds.value,
+          kind: 'tool',
+          text: '',
+          seq: suppressedTodo.seq,
+          fresh: !replaying,
+          tool: {
+            callId,
+            name: suppressedTodo.name,
+            argsText: preview(suppressedTodo.argsJson, ARGS_PREVIEW_LIMIT),
+            argsFull: suppressedTodo.argsJson,
+            status: 'error',
+            callView: undefined,
+            startedAt: suppressedTodo.time,
+            errorText: event.errorText ?? '',
+          },
+        }
+        deps.rowIds.value += 1
+        appendRow(errorCard)
+        state.contextSegments.tools += estimateTokens(event.errorText ?? '')
+      }
       return
     }
     if (card === undefined || card.tool === undefined) return

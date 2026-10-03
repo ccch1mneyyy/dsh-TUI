@@ -13,6 +13,14 @@
  *    TaskGet results are authoritative and overwrite local state; every
  *    change emits one full 'todo.write' snapshot in TodoPanelItem shape
  *    (content/status only, creation order, 'deleted' simply absent);
+ *  - a FAILED TaskUpdate (is_error or the in-contract success:false) rolls
+ *    its optimistic patch back and re-emits the snapshot — guarded by table
+ *    versions so a stale failure never overwrites a newer success or an
+ *    authoritative List/Get snapshot — and the suppressed-card path lets a
+ *    failure card through so the user sees the task change never happened;
+ *  - resume: the replay's tracked tasks hand over to the live translator
+ *    (serializable seeds), and a successful update of an untracked id
+ *    completes the table from its own patch (R2/R6 reviews);
  *  - TodoWrite itself stays byte-identical (its own snapshot from its own
  *    input; activeForm still dropped) and replaces the panel view wholesale;
  *  - buildQueryOptions: allowedTools adds + pre-approves the family while
@@ -294,6 +302,94 @@ const synced = scenario(f => [
   ])
   check('completion: only a status-bearing success of a named unknown id completes the table',
     quiet.events.every(event => event.type !== 'todo.write'), quiet.events.filter(event => event.type === 'todo.write').map(event => items(event)))
+}
+
+// ── ⑧ a failed TaskUpdate rolls its patch back and says so (R6 review) ───
+{
+  const failureCards = (h: ReturnType<typeof createProjectorHarness>) =>
+    h.state.rows.filter(row => row.kind === 'tool' && row.tool?.name === 'TaskUpdate' && row.tool?.status === 'error')
+
+  // A failed delete of a known id: the task returns, the failure card shows.
+  const failedDelete = scenario(f => [
+    f.call('TaskCreate', { subject: 'Keep', description: 'stays' }),
+    f.resultOf(1, { task: { id: 'task-1', subject: 'Keep' } }),
+    f.call('TaskCreate', { subject: 'Drop', description: 'goes away' }),
+    f.resultOf(2, { task: { id: 'task-2', subject: 'Drop' } }),
+    f.call('TaskUpdate', { taskId: 'task-2', status: 'deleted' }),
+    f.resultOf(3, undefined, true),
+    f.turnEnd(),
+  ])
+  check('failed delete: the task returns to the panel (the CLI did not drop it)',
+    same(failedDelete.harness.state.todos, [{ content: 'Keep', status: 'pending' }, { content: 'Drop', status: 'pending' }]), failedDelete.harness.state.todos)
+  check('… the rollback re-emitted a snapshot after the optimistic one', todosOf(failedDelete.events).length === 4, todosOf(failedDelete.events).length)
+  check('… the suppressed-card path still renders the failure card (the user sees why)',
+    failureCards(failedDelete.harness).length === 1 && failureCards(failedDelete.harness)[0]?.tool?.errorText === 'ok', failureCards(failedDelete.harness).map(card => card.tool))
+
+  // A failed complete and a failed rename (success:false without is_error).
+  const refused = scenario(f => [
+    f.call('TaskCreate', { subject: 'Chore', description: 'x', activeForm: 'Doing the chore' }),
+    f.resultOf(1, { task: { id: 't', subject: 'Chore' } }),
+    f.call('TaskUpdate', { taskId: 't', status: 'completed' }),
+    f.resultOf(2, { success: false, taskId: 't', updatedFields: [], error: 'not while blocked' }),
+    f.call('TaskUpdate', { taskId: 't', subject: 'Wrong name' }),
+    f.resultOf(3, { success: false, taskId: 't', updatedFields: ['subject'], error: 'read-only' }),
+    f.turnEnd(),
+  ])
+  check('success:false without is_error: the status and the subject both roll back',
+    same(refused.harness.state.todos, [{ content: 'Chore', status: 'pending' }]), refused.harness.state.todos)
+  check('… and both failures surface as error cards', failureCards(refused.harness).length === 2, failureCards(refused.harness).length)
+
+  // Parallel updates of one task, results out of order: the newer SUCCESS
+  // stands; the older failure must not roll it back.
+  const outOfOrder = scenario(f => [
+    f.call('TaskCreate', { subject: 'A', description: 'x' }),
+    f.resultOf(1, { task: { id: 'a', subject: 'A' } }),
+    f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
+    f.call('TaskUpdate', { taskId: 'a', subject: 'Renamed' }),
+    f.resultOf(3, { success: true, taskId: 'a', updatedFields: ['subject'] }),
+    f.resultOf(2, undefined, true),
+    f.turnEnd(),
+  ])
+  check('out-of-order: the newer successful update stands (the stale failure does not roll it back)',
+    same(outOfOrder.harness.state.todos, [{ content: 'Renamed', status: 'completed' }]), outOfOrder.harness.state.todos)
+
+  // Both fail, results in reverse order: the rollbacks stack to the original.
+  const bothFailed = scenario(f => [
+    f.call('TaskCreate', { subject: 'B', description: 'x' }),
+    f.resultOf(1, { task: { id: 'b', subject: 'B' } }),
+    f.call('TaskUpdate', { taskId: 'b', status: 'completed' }),
+    f.call('TaskUpdate', { taskId: 'b', subject: 'Never' }),
+    f.resultOf(3, undefined, true),
+    f.resultOf(2, undefined, true),
+    f.turnEnd(),
+  ])
+  check('both failed in reverse: stacked rollbacks reach the original state',
+    same(bothFailed.harness.state.todos, [{ content: 'B', status: 'pending' }]), bothFailed.harness.state.todos)
+
+  // An authoritative List between the patch and its late failure: the List
+  // wins; the stale failure neither reverts it nor resurrects a delete.
+  const authoritative = scenario(f => [
+    f.call('TaskCreate', { subject: 'C', description: 'x' }),
+    f.resultOf(1, { task: { id: 'c', subject: 'C' } }),
+    f.call('TaskUpdate', { taskId: 'c', status: 'completed' }),
+    f.call('TaskList', {}),
+    f.resultOf(3, { tasks: [{ id: 'c', subject: 'C', status: 'in_progress', blockedBy: [] }] }),
+    f.resultOf(2, undefined, true),
+    f.turnEnd(),
+  ])
+  check('authoritative List wins over the late failure (no rollback to the pre-image)',
+    same(authoritative.harness.state.todos, [{ content: 'C', status: 'in_progress' }]), authoritative.harness.state.todos)
+  const deletedSync = scenario(f => [
+    f.call('TaskCreate', { subject: 'D', description: 'x' }),
+    f.resultOf(1, { task: { id: 'd', subject: 'D' } }),
+    f.call('TaskUpdate', { taskId: 'd', status: 'deleted' }),
+    f.call('TaskList', {}),
+    f.resultOf(3, { tasks: [] }),
+    f.resultOf(2, undefined, true),
+    f.turnEnd(),
+  ])
+  check('… a delete the List confirmed stays gone (the failure does not resurrect it)',
+    same(deletedSync.harness.state.todos, []), deletedSync.harness.state.todos)
 }
 
 console.log(passed + ' passed')
