@@ -5990,6 +5990,7 @@ export function Chat({
       <SubagentDetailScene
         subagent={subagent}
         onInterrupt={(id) => channel.subagentControl.interrupt(id)}
+        {...(channel.subagentControl.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
         onBack={() => {
           setSubagentDetailId(null)
           setSubagentDashboardOpen(true)

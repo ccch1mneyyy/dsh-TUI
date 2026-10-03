@@ -96,8 +96,17 @@ export async function loadClaudeTranscript(
   const subagents = new Map<string, ClaudeSubagentTranscript>()
   await Promise.all(subagentIds.map(async agentId => {
     const transcript = await sdk.getSubagentMessages(target.sessionId, agentId, { dir: cwd })
+    // parent_agent_id (sdk.d.ts:6437-6449): the agent that spawned this
+    // child — null/absent = a depth-1 child (main loop) or old-format
+    // metadata, never an orphan to drop. The transcript is keyed by the
+    // delegating call when the messages carry one, and by the child's own
+    // id as well, so replay can heal a nesting whose call attribution the
+    // store never recorded.
+    const parentAgent = transcript.find(message => typeof message.parent_agent_id === 'string')?.parent_agent_id
+    const entry: ClaudeSubagentTranscript = { agentId, messages: transcript, ...(typeof parentAgent === 'string' ? { parentAgentId: parentAgent } : {}) }
     const parent = transcript.find(message => typeof message.parent_tool_use_id === 'string')?.parent_tool_use_id
-    if (typeof parent === 'string') subagents.set(parent, { agentId, messages: transcript })
+    if (typeof parent === 'string') subagents.set(parent, entry)
+    if (!subagents.has(agentId)) subagents.set(agentId, entry)
   }))
   const title = info.customTitle?.trim()
   const replay = replayClaudeTranscript(messages, { cwd, subagents, ...(title === undefined || title === '' ? {} : { title }), debug })

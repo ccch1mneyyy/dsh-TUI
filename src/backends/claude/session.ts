@@ -54,7 +54,7 @@ import { memoryClaudePrefs, type ClaudePrefs } from './prefs.js'
 import { activeProfileOf, fileClaudeChannels, type ClaudeChannels } from './channels.js'
 import { fileClaudeChannelTokens, type ClaudeChannelTokens } from './channelTokens.js'
 import { createClaudeTranscriptHistory } from './older-history.js'
-import { rewindCutPoint, type ClaudeReplay } from './replay.js'
+import { replayClaudeSubagentLane, rewindCutPoint, type ClaudeReplay } from './replay.js'
 import type { ClaudeSdkModule, ClaudeSessionStoreSdk } from './sdk.js'
 import { readTaskOutputTail, taskOutputRoots } from './task-output.js'
 import { join } from 'node:path'
@@ -91,11 +91,15 @@ const REAL_CLOCK: ClaudeClock = {
   clearTimeout: handle => { clearTimeout(handle as ReturnType<typeof setTimeout>) },
 }
 
+/** The subagent transcript's newest page (messages); older windows of the
+ *  same size load on demand (design agent-team-panels §2, MVP pagination). */
+const SUBAGENT_TRANSCRIPT_PAGE = 400
+
 export interface ClaudeSessionDeps {
   readonly sdk: Pick<ClaudeSdkModule, 'query'>
   /** The session-store API behind `/fork` and the conversation rewind
    *  (absent = neither capability). */
-  readonly store?: Pick<ClaudeSessionStoreSdk, 'getSessionMessages' | 'forkSession'> & Partial<Pick<ClaudeSessionStoreSdk, 'renameSession'>>
+  readonly store?: Pick<ClaudeSessionStoreSdk, 'getSessionMessages' | 'forkSession'> & Partial<Pick<ClaudeSessionStoreSdk, 'renameSession' | 'getSubagentMessages'>>
   readonly cwd: string
   readonly sessionId: string
   /**
@@ -944,6 +948,38 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   }
 
   /**
+   * The child transcript source (design agent-team-panels §2): the
+   *  subagent's own messages, read from the store and replayed through the
+   *  same translator the live lane uses. Absent when this session has no
+   *  store read API (tests, a store-less open); a read that fails rejects
+   *  and the transcript view says unavailable — an unreadable transcript is
+   *  never presented as an empty one.
+   */
+  function subagentHistory(): Pick<NonNullable<AgentSession['capabilities']['subagents']>, 'history'> {
+    const read = deps.store?.getSubagentMessages
+    if (read === undefined) return {}
+    return {
+      async history(agentId, window) {
+        const laneOf = (messages: readonly unknown[], hasOlder: boolean, skippedFromStart: number) => {
+          const lane = replayClaudeSubagentLane(agentId, messages, { cwd: deps.cwd, debug: message => deps.host.debug(message) })
+          return { events: lane.events, parentAgentId: lane.parentAgentId, uuids: lane.uuids, hasOlder, skippedFromStart }
+        }
+        if (window !== undefined) {
+          // An older slice: [skipFromStart - count, skipFromStart) of the disk
+          // transcript (the SDK paginates by offset from the START).
+          const count = Math.max(1, Math.min(window.count, window.skipFromStart))
+          const slice = await read(currentSessionId, agentId, { dir: deps.cwd, offset: window.skipFromStart - count, limit: count })
+          return laneOf(slice, window.skipFromStart - count > 0, window.skipFromStart - slice.length)
+        }
+        // The newest page: one full read (bounded below), the tail kept.
+        const all = await read(currentSessionId, agentId, { dir: deps.cwd })
+        if (all.length <= SUBAGENT_TRANSCRIPT_PAGE) return laneOf(all, false, 0)
+        return laneOf(all.slice(all.length - SUBAGENT_TRANSCRIPT_PAGE), true, all.length - SUBAGENT_TRANSCRIPT_PAGE)
+      },
+    }
+  }
+
+  /**
    * `/rename` (design §4.11): `renameSession()` writes the title into the
    * transcript (the browser and `claude --resume` read it), and the live
    * session reports it at once. Before the CLI wrote the transcript there is
@@ -1025,6 +1061,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       // (`stopTask`; the CLI reports the stop as its notification).
       subagents: {
         interrupt: agentId => stopTask(agentId),
+        ...subagentHistory(),
       },
       tasks: {
         stop: taskId => stopTask(taskId),

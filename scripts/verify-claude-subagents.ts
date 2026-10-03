@@ -80,12 +80,12 @@ type Line = { dir: string; msg?: Rec; placement?: 'turn' | 'steer' | 'followup' 
 const lines = (name: string): Line[] => readFileSync(join(FIXTURES, `${name}.jsonl`), 'utf8').split('\n').filter(line => line.trim() !== '').map(line => JSON.parse(line) as Line)
 
 /** A Claude session over a fake SDK, bound to a channel core. */
-async function openChannel(options: { resume?: ReturnType<typeof replayClaudeTranscript> } = {}): Promise<{ channel: ChannelState; query: FakeQuery; session: Awaited<ReturnType<typeof openClaudeSession>> }> {
+async function openChannel(options: { resume?: ReturnType<typeof replayClaudeTranscript>; store?: unknown } = {}): Promise<{ channel: ChannelState; query: FakeQuery; session: Awaited<ReturnType<typeof openClaudeSession>> }> {
   const fake = fakeClaudeSdk(() => ({ capabilities: ['msg_lifecycle_v1'] }), {
     stopTask: () => undefined,
     getContextUsage: () => ({ totalTokens: 1000, maxTokens: 200_000, categories: [], memoryFiles: [], mcpTools: [] }),
   })
-  const session = await openClaudeSession(claudeDeps(fake.sdk, { prefs: memoryClaudePrefs(), ...(options.resume === undefined ? {} : { resume: options.resume }) }))
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { prefs: memoryClaudePrefs(), ...(options.resume === undefined ? {} : { resume: options.resume }), ...(options.store === undefined ? {} : { store: options.store as never }) }))
   const channel = createChannel(ctx, session, {
     model: 'Claude Agent', provider: 'claude', cwd: '/fixture/project', activity: false, backendLabel: 'Claude Agent',
     ...(options.resume === undefined ? {} : { initialHistory: options.resume.events }),
@@ -393,6 +393,152 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   }
 }
 
+// ── the Agent-Transcript page: capability seam + scene rendering ────────
+{
+  const [{ SubagentDetailScene }] = await Promise.all([import('../src/components/SubagentDetailScene.js')])
+  const NOW = Date.now()
+  const at = (n: number): string => `2026-10-02T13:00:0${n}.000Z`
+  // The child's on-disk transcript (parent_agent_id null = a depth-1 child):
+  // real thinking, one tool round-trip, a signature/count-only thinking
+  // entry, the answer text — and the initial prompt the translator hides.
+  const childMessages: Rec[] = [
+    { type: 'user', uuid: 'c-u0', parent_tool_use_id: 'call-tx', parent_agent_id: null, message: { role: 'user', content: 'explore the fixture secret prompt' }, timestamp: at(0) },
+    { type: 'assistant', uuid: 'c-a1', parent_tool_use_id: 'call-tx', parent_agent_id: null, message: { id: 'msg_t1', content: [{ type: 'thinking', thinking: 'planning the read', signature: 'x' }], usage: {} }, timestamp: at(1) },
+    { type: 'assistant', uuid: 'c-a2', parent_tool_use_id: 'call-tx', parent_agent_id: null, message: { id: 'msg_t1', content: [{ type: 'tool_use', id: 'call-read-1', name: 'Read', input: { file_path: '/fixture/project/README.md' } }] }, timestamp: at(2) },
+    { type: 'user', uuid: 'c-u1', parent_tool_use_id: 'call-tx', parent_agent_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-read-1', content: 'fixture body' }] }, timestamp: at(3) },
+    { type: 'assistant', uuid: 'c-a3', parent_tool_use_id: 'call-tx', parent_agent_id: null, message: { id: 'msg_t2', content: [{ type: 'thinking', thinking: '', signature: 'REDACTED' }], usage: { output_tokens_details: { thinking_tokens: 4321 } } }, timestamp: at(4) },
+    { type: 'assistant', uuid: 'c-a4', parent_tool_use_id: 'call-tx', parent_agent_id: null, message: { id: 'msg_t3', content: [{ type: 'text', text: 'The fixture answer.' }], usage: {} }, timestamp: at(5) },
+  ]
+  const chain: Rec[] = [
+    { type: 'user', uuid: 'u1', message: { role: 'user', content: 'delegate transcript' }, timestamp: at(0) },
+    { type: 'assistant', uuid: 'a1', message: { id: 'm1', content: [{ type: 'tool_use', id: 'call-tx', name: 'Agent', input: { description: 'transcript probe', prompt: 'x' } }] }, timestamp: at(1) },
+    { type: 'user', uuid: 'r1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-tx', content: 'The report follows:\n  done well' }] }, timestamp: at(6) },
+  ]
+  const store = {
+    getSessionMessages: () => Promise.resolve([]),
+    forkSession: () => Promise.reject(new Error('unused')) as never,
+    getSubagentMessages: (_sid: string, agentId: string, _options?: unknown) => Promise.resolve(agentId === 'agent-tx' ? childMessages : []) as never,
+  }
+  const replay = replayClaudeTranscript(chain, { cwd: '/fixture/project', subagents: new Map([['call-tx', { agentId: 'agent-tx', messages: childMessages }]]) })
+  const { channel, session } = await openChannel({ resume: replay, store })
+  try {
+    check('transcript: the channel exposes the subagent transcript capability', typeof channel.subagentControl.history === 'function')
+    const page = await channel.subagentControl.history?.('agent-tx')
+    const kinds = (page?.events ?? []).map(event => event.type).join()
+    check('transcript: the page replays the child lane (assistant blocks + tool call/result), never the initial prompt', page !== null && kinds.includes('assistant.message') && kinds.includes('tool.call') && kinds.includes('tool.result') && !JSON.stringify(page.events).includes('secret prompt'), kinds)
+    check('transcript: a signature/count-only thinking entry carries the honest unavailable marker', JSON.stringify(page?.events).includes('reasoning-tokens') && JSON.stringify(page?.events).includes('4321'))
+    check('transcript: parent_agent_id rides the page (null = depth-1)', page?.parentAgentId === null && page?.hasOlder === false && page?.skippedFromStart === 0)
+
+    // The scene: the page renders through the shared leaves, deduped
+    // against the live tail, capability-gated.
+    const COLS = 110
+    const ROWS = 30
+    const mk = (): { terminal: Terminal; stdin: InstanceType<typeof PassThrough>; stdout: never; screen(): string } => {
+      const terminal = new Terminal({ cols: COLS, rows: ROWS, scrollback: 400, allowProposedApi: true })
+      class Out extends Writable {
+        columns = COLS; rows = ROWS; isTTY = true
+        _write(chunk: unknown, _enc: BufferEncoding, cb: () => void) { terminal.write(String(chunk), cb) }
+      }
+      class In extends PassThrough { isTTY = true; setRawMode() { return this } ref() { return this } unref() { return this } }
+      const stdin = new In()
+      const screen = (): string => {
+        const buffer = terminal.buffer.active
+        return Array.from({ length: buffer.length }, (_, y) => buffer.getLine(y)?.translateToString(true) ?? '').join('\n')
+      }
+      return { terminal, stdin, stdout: new Out() as never, screen }
+    }
+    const h = mk()
+    const subagent = channel.subagents.find(item => item.agentId === 'agent-tx')!
+    const app = await render(React.createElement(SubagentDetailScene, { subagent: subagent as never, onBack: () => undefined, loadTranscript: channel.subagentControl.history }), {
+      stdout: h.stdout, stdin: h.stdin as never, stderr: h.stdout, exitOnCtrlC: false, patchConsole: false,
+    })
+    try {
+      // 固定窗:pacing the scene attaches its key handler after the first frame.
+      await sleep(200)
+      check('transcript render: the Transcript tab appears when the capability exists', await settled(() => h.screen().includes('Transcript')), h.screen())
+      h.stdin.write('\x1b[C') // → output
+      // 固定窗:pacing 第二枚方向键与首枚分帧送达。
+      await sleep(200)
+      h.stdin.write('\x1b[C') // → transcript
+      // 固定窗:pacing 翻页渲染与异步转录读取落帧后再断言。
+      await sleep(300)
+      await settled(() => h.screen().includes('history · read-only'))
+      const body = h.screen()
+      check('transcript render: the page lands on the history view with its honest range line', body.includes('history') && body.includes('read-only'), body)
+      check('transcript render: the count-only thinking degrades to body-unavailable, not fabricated prose', body.includes('Thinking body unavailable') && body.includes('4321'), body)
+      check('transcript render: the tool card renders (presented title + result)', body.includes('README.md') && body.includes('fixture body'), body)
+      check('transcript render: the answer text renders as markdown', body.includes('The fixture answer.'), body)
+      check('transcript render: the hidden initial prompt stays hidden', !body.includes('secret prompt'), body)
+    } finally {
+      app.unmount()
+      h.terminal.dispose()
+    }
+
+    // Live dedup: a running child's settled tail line the history already
+    // shows must not double; the live section only keeps what is new.
+    const h2 = mk()
+    const liveState = {
+      agentId: 'agent-live', description: 'live tail probe', status: 'running' as const, startedAt: NOW,
+      output: ['settled line one', 'fresh streaming line'],
+      outputEvents: [
+        { kind: 'text', text: 'settled line one', at: NOW, settled: true },
+        { kind: 'text', text: 'fresh streaming line', at: NOW, settled: false },
+      ], toolCalls: [] as never[],
+    }
+    const livePage = {
+      events: [{ type: 'assistant.message', seq: 1, anchor: 'msg_l1', attemptId: 'msg_l1', time: NOW, blocks: [{ type: 'text', text: 'settled line one' }], canonical: true, parentCallId: 'agent-live' }],
+      parentAgentId: null, uuids: ['l-u1'], hasOlder: false, skippedFromStart: 0,
+    }
+    const app2 = await render(React.createElement(SubagentDetailScene, { subagent: liveState as never, onBack: () => undefined, loadTranscript: async () => livePage as never }), {
+      stdout: h2.stdout, stdin: h2.stdin as never, stderr: h2.stdout, exitOnCtrlC: false, patchConsole: false,
+    })
+    try {
+      // 固定窗:pacing the key handler attaches after the first frame.
+      await sleep(200)
+      h2.stdin.write('\x1b[C')
+      // 固定窗:pacing 分帧送达第二枚方向键。
+      await sleep(200)
+      h2.stdin.write('\x1b[C')
+      // 固定窗:paging 翻页与异步读取落帧。
+      await sleep(300)
+      await settled(() => h2.screen().includes('settled line one'))
+      const liveBody = h2.screen()
+      check('transcript live: the settled tail the history shows is suppressed (no double row)', liveBody.split('settled line one').length - 1 === 1, liveBody)
+      check('transcript live: the still-streaming line stays visible under the live marker', liveBody.includes('fresh streaming line') && liveBody.includes('── live ──'), liveBody)
+    } finally {
+      app2.unmount()
+      h2.terminal.dispose()
+    }
+
+    // Degradation: a backend with no transcript source (DSH) renders no
+    // Transcript tab and annotates the retained tail window instead.
+    const h3 = mk()
+    const capless = {
+      agentId: 'agent-dsh', description: 'no transcript plane', status: 'completed' as const, startedAt: NOW - 1000, completedAt: NOW,
+      output: [],
+      outputEvents: Array.from({ length: 160 }, (_, i) => ({ kind: 'text', text: `retained line ${i}`, at: NOW, settled: true })),
+      toolCalls: [] as never[],
+    }
+    const app3 = await render(React.createElement(SubagentDetailScene, { subagent: capless as never, onBack: () => undefined }), {
+      stdout: h3.stdout, stdin: h3.stdin as never, stderr: h3.stdout, exitOnCtrlC: false, patchConsole: false,
+    })
+    try {
+      // 固定窗:pacing the key handler attaches after the first frame.
+      await sleep(200)
+      check('degradation: no transcript tab without a transcript source', !h3.screen().includes('Transcript'), h3.screen())
+      h3.stdin.write('\x1b[C') // → output
+      // 固定窗:pacing 翻页渲染落帧后再断言。
+      await sleep(300)
+      check('degradation: the capped tail states its retained range honestly', await settled(() => h3.screen().includes(t('subagent-transcript-retained', { count: 160 }))), h3.screen())
+    } finally {
+      app3.unmount()
+      h3.terminal.dispose()
+    }
+  } finally {
+    channel.releaseContributions()
+    await session.dispose()
+  }
+}
 // ── replay after resume ───────────────────────────────────────────────
 {
   const transcript = readFileSync(join(FIXTURES, 'transcripts', 'subagent.jsonl'), 'utf8').split('\n').filter(line => line.trim() !== '').map(line => JSON.parse(line) as { kind: string; agentId?: string; msg: Rec })
@@ -484,6 +630,67 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     channel.releaseContributions()
     await session.dispose()
   }
+}
+
+// ── parent_agent_id passthrough: nesting heals by agent id ──────────────
+{
+  const at = (n: number): string => `2026-10-02T12:00:0${n}.000Z`
+  const chain: Rec[] = [
+    { type: 'user', uuid: 'u1', message: { role: 'user', content: 'delegate deep' }, timestamp: at(0) },
+    { type: 'assistant', uuid: 'a1', message: { id: 'm1', content: [{ type: 'tool_use', id: 'c-outer', name: 'Agent', input: { description: 'outer', prompt: 'x' } }] }, timestamp: at(1) },
+    { type: 'user', uuid: 'r1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c-outer', content: 'The report follows:\n  outer done' }] }, timestamp: at(5) },
+  ]
+  const outer: Rec[] = [
+    { type: 'user', message: { role: 'user', content: 'outer prompt' }, timestamp: at(1) },
+    { type: 'assistant', message: { id: 'o1', content: [{ type: 'tool_use', id: 'c-heal', name: 'Agent', input: { description: 'healed child', prompt: 'y' } }] }, timestamp: at(2) },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c-heal', content: 'The report follows:\n  healed finished' }] }, timestamp: at(3) },
+    { type: 'assistant', message: { id: 'o2', content: [{ type: 'text', text: 'outer wraps up' }] }, timestamp: at(4) },
+  ]
+  const healed: Rec[] = [
+    // Old-format store: the child's messages never recorded the delegating
+    // call id, but parent_agent_id still names its true parent agent.
+    { type: 'user', message: { role: 'user', content: 'healed prompt' }, timestamp: at(2) },
+    { type: 'assistant', message: { id: 'h1', content: [{ type: 'text', text: 'healed works' }] }, timestamp: at(3) },
+  ]
+  const depth1: Rec[] = [
+    // A depth-1 child of the main loop whose call attribution is likewise
+    // missing: parent_agent_id reports null.
+    { type: 'user', message: { role: 'user', content: 'depth1 prompt' }, timestamp: at(1) },
+    { type: 'assistant', message: { id: 'd1', content: [{ type: 'text', text: 'depth1 works' }] }, timestamp: at(2) },
+  ]
+  const chainDepth1: Rec[] = [
+    ...chain.slice(0, 2),
+    { type: 'assistant', uuid: 'a2', message: { id: 'm2', content: [{ type: 'tool_use', id: 'c-d1', name: 'Agent', input: { description: 'depth one', prompt: 'z' } }] }, timestamp: at(2) },
+    { type: 'user', uuid: 'r2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c-d1', content: 'The report follows:\n  depth1 done' }] }, timestamp: at(3) },
+  ]
+  const replay = replayClaudeTranscript(chain, { cwd: '/fixture/project', subagents: new Map([
+    ['c-outer', { agentId: 'agent-outer', messages: outer }],
+    // NOT keyed by the call: reachable only through its own agent id +
+    // parentAgentId healing.
+    ['agent-healed', { agentId: 'agent-healed', messages: healed, parentAgentId: 'agent-outer' }],
+  ]) })
+  check('parent_agent_id: a nested transcript with no call attribution heals onto its true parent', replay.events.some(event => event.type === 'subagent.start' && event.agentId === 'agent-healed' && event.parentCallId === 'c-heal'), replay.events.filter(event => event.type === 'subagent.start'))
+  check('parent_agent_id: … its messages replay on the delegating call lane', replay.events.some(event => event.type === 'assistant.message' && event.parentCallId === 'c-heal' && JSON.stringify((event as { blocks?: { text?: string }[] }).blocks).includes('healed works')))
+  check('parent_agent_id: … and it ends from the result in its parent transcript', replay.events.some(event => event.type === 'subagent.end' && event.agentId === 'agent-healed' && event.status === 'completed'))
+
+  // parent_agent_id null = a depth-1 child (or old metadata): the data
+  // cannot say WHICH main-loop call launched it, so the deterministic rule
+  // attaches it to the first main-loop call whose own transcript is missing
+  // — the child stays visible as a depth-1 spawn, never an orphan.
+  const depth1Replay = replayClaudeTranscript(chainDepth1, { cwd: '/fixture/project', subagents: new Map([
+    ['c-outer', { agentId: 'agent-outer', messages: outer }],
+    ['agent-d1', { agentId: 'agent-d1', messages: depth1 }],
+  ]) })
+  check('parent_agent_id: a null parent (depth-1 / old format) heals onto the first transcript-less main-loop call', depth1Replay.events.some(event => event.type === 'subagent.start' && event.agentId === 'agent-d1' && event.parentCallId === 'c-d1'), depth1Replay.events.filter(event => event.type === 'subagent.start'))
+  check('parent_agent_id: … its lane replays (no invisible child)', depth1Replay.events.some(event => event.type === 'assistant.message' && event.parentCallId === 'c-d1'))
+
+  const phantomReplay = replayClaudeTranscript(chain, { cwd: '/fixture/project', subagents: new Map([
+    ['c-outer', { agentId: 'agent-outer', messages: outer }],
+    // Names a parent agent this chain never held: stays unattached — no
+    // fabricated parent, no orphan card.
+    ['agent-phantom', { agentId: 'agent-phantom', messages: healed, parentAgentId: 'agent-nowhere' }],
+  ]) })
+  check('parent_agent_id: a transcript naming an unknown parent stays unattached (no fabricated nesting)', !phantomReplay.events.some(event => (event.type === 'subagent.start' || event.type === 'subagent.end') && event.agentId === 'agent-phantom') && !phantomReplay.events.some(event => 'blocks' in event && JSON.stringify(event).includes('healed works')))
 }
 
 // ── a foreground subagent cannot outlive its turn (5a review 4) ───────
