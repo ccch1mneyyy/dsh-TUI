@@ -59,6 +59,7 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'interruptAndDeliver': 'mutate',
   'interruptAndDock': 'mutate',
   'deliverDocked': 'mutate',
+  'swapDockedForDraft': 'mutate',
   'rewindTo': 'mutate',
   'promptRewind': 'mutate',
   'buildSessionTree': 'mutate',

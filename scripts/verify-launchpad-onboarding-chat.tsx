@@ -42,6 +42,7 @@ const [
   { setMinimalUiMode },
   { readOnboardingPrefs },
   { isLandingLaunch },
+  { noteBoundaryRecoveryRemount },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
@@ -50,6 +51,7 @@ const [
   import('../src/minimalUiMode.js'),
   import('../src/onboardingPrefs.js'),
   import('../src/dsh-adapter/plugin.js'),
+  import('../src/ink/update-overflow-guard.js'),
 ])
 
 let failures = 0
@@ -1102,6 +1104,68 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.unmount()
 }
 
+
+
+// ── R. 错误边界恢复重挂的落点矩阵（R4-R4）：recovery 标志必须把全部启动
+//      入口（启动页/首启引导/会话管理屏）都压下——恢复直接回对话，且标志
+//      只消费一次（下一个正常挂载不受影响）。──────────────────────────────
+/**
+ * 固定窗:探针 观察窗内不得出现任何启动入口屏。会话管理屏的内容（工作区/会话
+ * 列表）是异步解析后才上屏的，一次读屏会跑到它前面——坏基线上假绿（实测）。
+ * 轮询整窗，任一标记出现即判失败，窗内未现才算通过。
+ */
+async function noBootSurfaceFor(chat: { screen: () => string }, windowMs: number): Promise<string | null> {
+  const deadline = Date.now() + windowMs
+  for (;;) {
+    const screen = chat.screen()
+    for (const mark of ['说点什么', WIZARD_MARK, '新建会话']) {
+      if (screen.includes(mark)) return mark
+    }
+    if (Date.now() >= deadline) return null
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+}
+
+{
+  const combos: Array<[boolean, boolean, boolean]> = [
+    [false, false, false],
+    [true, false, false],
+    [false, true, false],
+    [true, true, false],
+    [false, false, true],
+    [true, false, true],
+    [false, true, true],
+    [true, true, true],
+  ]
+  let matrixOk = true
+  let note = ''
+  let index = 0
+  for (const [openHome, launchpad, onboarding] of combos) {
+    index += 1
+    noteBoundaryRecoveryRemount()
+    const chat = await mountChat({ openHomeOnBoot: openHome, launchpadOnBoot: launchpad, onboardingOnBoot: onboarding })
+    const offender = await noBootSurfaceFor(chat, 1200)
+    await chat.unmount()
+    if (offender !== null) {
+      matrixOk = false
+      note = 'combo #' + index + ' openHome=' + openHome + ' launchpad=' + launchpad + ' onboarding=' + onboarding + ' -> ' + offender
+      break
+    }
+  }
+  check('R1 recovery × 全部 8 种启动组合：恢复落点都是对话页（无启动页/向导/会话管理）', matrixOk, note)
+
+  // 标志只消费一次：恢复挂载吃掉标记后，紧接着的普通挂载回到正常语义
+  // （openHome=true × launchpad=false 仍预开会话管理屏）。
+  noteBoundaryRecoveryRemount()
+  const recoveryChat = await mountChat({ openHomeOnBoot: true, launchpadOnBoot: false })
+  const recoveryOffender = await noBootSurfaceFor(recoveryChat, 1200)
+  check('R2 恢复挂载本身落在对话页（观察窗内无任何启动入口）', recoveryOffender === null, String(recoveryOffender))
+  await recoveryChat.unmount()
+  const plainChat = await mountChat({ openHomeOnBoot: true, launchpadOnBoot: false })
+  await settled(() => plainChat.screen().includes('新建会话'))
+  check('R3 标志只消费一次：下一个普通挂载仍按 openHome 预开会话管理屏', plainChat.screen().includes('新建会话'), plainChat.screen().slice(0, 160))
+  await plainChat.unmount()
+}
 if (failures === 0) console.log(`\nverify-launchpad-onboarding-chat: ${checks} checks, all passed`)
 else console.error(`\nverify-launchpad-onboarding-chat: ${failures} of ${checks} checks FAILED`)
 process.exit(failures === 0 ? 0 : 1)

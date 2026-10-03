@@ -700,18 +700,20 @@ export function Chat({
    * on" has not been answered yet. Every later launch starts on the chat
    * screen, and the screen stays reachable.
    */
+  // #185 收尾：根边界恢复触发的重挂不是「启动」——启动页、首启引导与会话
+  // 管理屏都是启动入口，恢复的落点是对话页本身（一次性标记由 App 错误边界
+  // 的恢复路径写入，见 update-overflow-guard）。首渲染即消费；即便某次并发
+  // 渲染被丢弃也只是回到旧表现（多见一次启动入口），不会更糟。
+  const recoveryRemountOnBoot = consumeBoundaryRecoveryRemount()
   // 第七版：启动页在开时**不再**预开会话浏览器。旧姿态是「先收落地页再开
   // 整屏」，浏览器必须提前藏在下面；现在整屏（会话/设置/任务面板）盖在
   // 落地页**之上**、Esc 退回落地页，按需打开即可——boot 时同时为真反而会
-  // 让浏览器盖住落地页（渲染顺序见各 early-return）。
+  // 让浏览器盖住落地页（渲染顺序见各 early-return）。恢复重挂同样不开它
+  // （R4-R4）：recovery × openHome=true × launchpad=false 之前会把恢复落进
+  // 会话管理屏，偏离「恢复直接回对话」。
   const [supervisorOpen, setSupervisorOpen] = React.useState(
-    openHomeOnBoot === true && launchpadOnBoot !== true,
+    openHomeOnBoot === true && launchpadOnBoot !== true && !recoveryRemountOnBoot,
   )
-  // #185 收尾：根边界恢复触发的重挂不是「启动」——启动页与首启引导都是
-  // 启动入口，恢复的落点是对话页本身（一次性标记由 App 错误边界的恢复
-  // 路径写入，见 update-overflow-guard）。首渲染即消费；即便某次并发渲染
-  // 被丢弃也只是回到旧表现（多见一次启动页），不会更糟。
-  const recoveryRemountOnBoot = consumeBoundaryRecoveryRemount()
   /**
    * The launchpad: the landing page every ordinary launch starts on.
    *

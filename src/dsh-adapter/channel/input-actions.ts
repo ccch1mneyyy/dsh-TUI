@@ -1,4 +1,5 @@
 /** Input actions own cancellation/requeue convergence, not session binding. */
+import { randomUUID } from 'node:crypto'
 import type { AgentSession, CancelOutcome } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { touchSession } from '../../sessionHistory.js'
@@ -31,7 +32,7 @@ export function createInputActions(
   /** Move the used session to the front of the `/resume` MRU (DSH session
    *  history); a backend whose sessions that list cannot open passes a no-op. */
   touch: (sessionId: string) => void = touchSession,
-): Pick<ChannelState, 'submit' | 'steer' | 'removePending' | 'cancel' | 'interruptAndDeliver' | 'interruptAndDock' | 'deliverDocked'> {
+): Pick<ChannelState, 'submit' | 'steer' | 'removePending' | 'cancel' | 'interruptAndDeliver' | 'interruptAndDock' | 'deliverDocked' | 'swapDockedForDraft'> {
   return {
     submit(text, images = []) {
       owner.assertActive()
@@ -235,6 +236,38 @@ export function createInputActions(
         dispatchUserText(entry.text, 'followup', entry.images)
       }
       return docked.length
+    },
+
+    /**
+     * Lossless swap (R4-R1): retract the docked row `id` and park the live
+     * draft (text + staged images) at the pending tail as a NEW docked row —
+     * one atomic queue write, nothing sends. The draft's id is prefixed and
+     * purely local: the backend never saw this text, so no inbox event can
+     * ever match it (a discard/claim retires only the row it names) and the
+     * swap never joins the in-flight interrupt receipt's uncovered set — the
+     * receipt fence (F2) governs rows the backend may still hold, and this
+     * one has no backend copy. False when `id` is no longer docked (the
+     * receipt un-docked it, a claim retired it, another editor took it): the
+     * caller keeps its draft and says so.
+     */
+    swapDockedForDraft(id: string, draft: { text: string; images?: readonly ComposerImageRef[] }): boolean {
+      owner.assertActive()
+      const state = getState()
+      const index = state.pending.findIndex(item => item.id === id)
+      if (index === -1 || state.pending[index]!.docked !== true) return false
+      // A docked retract is purely local on every backend (see removePending).
+      state.pending = [
+        ...state.pending.filter(item => item.id !== id),
+        {
+          id: `dock-swap-${randomUUID()}`,
+          text: draft.text,
+          images: [...(draft.images ?? [])],
+          placement: 'followup',
+          docked: true,
+        },
+      ]
+      state.emit()
+      return true
     },
 
     interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number {

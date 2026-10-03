@@ -43,7 +43,8 @@ import { actionMatches } from '../utils/keymap.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
-import { OverlayAbove } from './OverlayAbove.js'
+import { OverlayAbove, useOverlayListRows } from './OverlayAbove.js'
+import { listWindow } from './listWindow.js'
 import { SuggestionCard, cardContentWidth } from './SuggestionCard.js'
 import {
   filterLiveImageBindings,
@@ -1476,6 +1477,13 @@ export function PromptInput({
     // this edit replaces, and `diffSpan` needs both texts. `reset` ends the
     // draft's history, `silent` (undo itself, a recall) leaves it untouched.
     if (next !== prev) {
+      // R4-R3: EVERY real text mutation hands the arrows back to the draft.
+      // This is the one owner for paste/clipboard/history/external-editor/
+      // undo refills alike — a dock selection surviving an edited draft is
+      // exactly the stale-focus bug (↑/↓ steering an invisible selector
+      // over the user's text). Caret-only moves (next === prev) never land
+      // here, so the empty-draft selector keeps its keys untouched.
+      if (dockSelectedRef.current !== null) setDockSelected(null)
       if (undo === 'reset') clearDraftUndo()
       else if (undo !== 'silent') {
         recordDraftEdit(prev, prevCursor, snapshotBlock === undefined ? block : snapshotBlock, next, offset, undo)
@@ -1830,11 +1838,46 @@ export function PromptInput({
 
   /** Retract one docked row into the draft for editing (selector ⏎, row
    *  click, Alt+↑ on the last): purely local — the backend dropped its copy
-   *  with the aborted turn, so every backend can do it. */
+   *  with the aborted turn, so every backend can do it.
+   *
+   *  A draft with real content is never destroyed by the retraction (R4-R1
+   *  blocker): it SWAPS — the whole draft (text + staged images) parks at
+   *  the dock's tail while the clicked row comes into the input. Nothing
+   *  sends; the swap is one undo step, so Ctrl+Z brings the parked draft
+   *  back (text, caret, images and fold block; the parked row retains the
+   *  image capabilities, see stageIdIsRetained). Only an empty (or
+   *  whitespace-only) draft takes the plain retraction path. */
   const editDocked = (index: number): void => {
     const item = dockedPending[index]
     setDockSelected(null)
     if (item === undefined) return
+    if (valueRef.current.trim() !== '') {
+      // Park the draft FIRST: its capabilities must already be retained by
+      // the pending row when setInput's undo bookkeeping and sidecar pruning
+      // run below, or a later swap-back would find them discarded.
+      const swapped = channel.swapDockedForDraft(item.id, {
+        text: valueRef.current,
+        images: imageRefsFor(valueRef.current),
+      })
+      if (!swapped) {
+        channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
+        return
+      }
+      // One sealed undo step captures the draft the swap replaces (same
+      // shape as the external-editor refill): snapshot the fold block
+      // BEFORE clearing it, so Ctrl+Z restores the chip too. setInput runs
+      // while the sidecar still maps the parked draft's tokens — the undo
+      // snapshot then carries them, and its pruning sees the pending row
+      // already retains every capability (nothing is discarded).
+      const beforeBlock = foldBlockRef.current
+      updateFoldBlock(null)
+      setInput(item.text, item.text.length, 'step', beforeBlock)
+      replaceDraftImages(item.images ?? [])
+      setSelectedCommand(0)
+      setFileSelected(0)
+      channel.notify(t('input-dock-swapped'), { timeoutMs: 2000 })
+      return
+    }
     if (!channel.removePending(item.id)) {
       channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
       return
@@ -1849,6 +1892,16 @@ export function PromptInput({
     setFileSelected(0)
     channel.notify(t('input-retracted'), { timeoutMs: 2000 })
   }
+
+  // A dock that empties or shrinks under an open selector (rows claimed,
+  // a receipt un-docking them, a session reset) leaves the highlight
+  // pointing past the list — fold it instead of steering arrows at an
+  // invisible row (R4-R3's "never operate a hidden focus").
+  React.useEffect(() => {
+    if (dockSelected !== null && (dockSelected >= dockCount || dockCount === 0)) {
+      setDockSelected(null)
+    }
+  }, [dockSelected, dockCount])
 
   /**
    * Ctrl+Enter: abort the running turn and send the input immediately — the
@@ -2762,9 +2815,13 @@ export function PromptInput({
     if (key.upArrow) {
       // The docked-queue selector owns ↑ while a row is highlighted
       // (Claude Code parity: "Press up to select a queued message to
-      // edit"); the walk wraps around the dock.
-      if (dockSelected !== null) {
-        setDockSelected(dockSelected <= 0 ? dockCount - 1 : dockSelected - 1)
+      // edit"); the walk wraps around the dock. The REF drives it: one
+      // stdin read can carry several ↑ (key repeat / a coalescing
+      // terminal), and the state value would pin every handler in the
+      // batch to the same row — N presses collapsing to one step.
+      if (dockSelectedRef.current !== null) {
+        const current = dockSelectedRef.current
+        setDockSelected(current <= 0 ? dockCount - 1 : current - 1)
         return
       }
       // A history walk owns the arrows until it returns to the draft: a
@@ -2850,9 +2907,11 @@ export function PromptInput({
       return
     }
     if (key.downArrow) {
-      // The docked-queue selector owns ↓ too (wraps down around the dock).
-      if (dockSelected !== null) {
-        setDockSelected(dockSelected >= dockCount - 1 ? 0 : dockSelected + 1)
+      // The docked-queue selector owns ↓ too (wraps down around the dock;
+      // the REF, so a batch of ↓ advances one row per press — see ↑).
+      if (dockSelectedRef.current !== null) {
+        const current = dockSelectedRef.current
+        setDockSelected(current >= dockCount - 1 ? 0 : current + 1)
         return
       }
       // Same history-walk ownership as ↑ above.
@@ -4017,6 +4076,33 @@ export function PromptInput({
   // 的 style.position，常驻浮层 + 移除普通子节点不会触发 blit 解毒，被
   // 覆盖的转录行会留空（见 Chat.tsx dialogOverlayOpen 注释）。展开态由
   // 全屏编辑器接管，内联浮层全部撤下。
+  // R4-R2: the dock rows are WINDOWED, never rendered in full — the
+  // OverlayAbove clips overflow from the top without scrolling, so a long
+  // dock put the highlighted row (and every row above it) off-screen while
+  // Enter still retracted by index. The window keeps the focused row
+  // visible (listWindow centers on it); Enter and the row click both
+  // operate on the absolute dock index, so they always name the row the
+  // user SEES highlighted. The budget subtracts every other row the
+  // pending block paints (steer/followup previews, labels, hints, padding)
+  // so the window always fits the overlay's effective height.
+  const steerPreviewCount = channel.pending.filter(
+    item => item.placement === 'steer' && item.docked !== true,
+  ).length
+  const followupPreviewCount = channel.pending.filter(
+    item => item.placement === 'followup' && item.docked !== true,
+  ).length
+  const dockWindowRows = useOverlayListRows(
+    (steerPreviewCount > 0 ? 1 + steerPreviewCount : 0)
+    + (followupPreviewCount > 0 ? 1 + followupPreviewCount : 0)
+    + 1 /* dock label */ + 1 /* dock hint row */ + 1 /* Alt+↑ hint */ + 1 /* block paddingBottom */,
+  )
+  const dockFocus = dockSelected ?? Math.max(dockCount - 1, 0)
+  const { start: dockStart, end: dockEnd } = listWindow(
+    dockedPending.map(() => 1),
+    dockFocus,
+    dockWindowRows,
+  )
+
   const floatersOpen =
     !suspended &&
     !expanded &&
@@ -4246,17 +4332,22 @@ export function PromptInput({
             {dockCount > 0 && (
               <Box flexDirection="column">
                 <Text dimColor>⏸ {t('input-pending-dock-label')}</Text>
-                {dockedPending.map((item, index) => (
-                  <Box
-                    key={item.id}
-                    // 点击停靠行 = 撤回该条进输入框编辑（与选择器 ⏎ 同路径）
-                    onClick={() => { editDocked(index) }}
-                  >
-                    <Text wrap="truncate" dimColor={dockSelected === null || dockSelected !== index} color={dockSelected === index ? promptAccent : undefined}>
-                      {'  '}{dockSelected === index ? '❯' : '↳'} {item.text}
-                    </Text>
-                  </Box>
-                ))}
+                {dockedPending.slice(dockStart, dockEnd).map((item, index) => {
+                  // The window maps to absolute dock indices: the click and
+                  // the highlight name the same row the user sees (R4-R2).
+                  const absoluteIndex = dockStart + index
+                  return (
+                    <Box
+                      key={item.id}
+                      // 点击停靠行 = 撤回该条进输入框编辑（与选择器 ⏎ 同路径）
+                      onClick={() => { editDocked(absoluteIndex) }}
+                    >
+                      <Text wrap="truncate" dimColor={dockSelected === null || dockSelected !== absoluteIndex} color={dockSelected === absoluteIndex ? promptAccent : undefined}>
+                        {'  '}{dockSelected === absoluteIndex ? '❯' : '↳'} {item.text}
+                      </Text>
+                    </Box>
+                  )
+                })}
                 <Box
                   // 点击提示行 = 全部发送（与空输入 ⏎ 同路径）
                   onClick={() => { sendDocked() }}
