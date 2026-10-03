@@ -81,6 +81,7 @@ const GROUPS = {
     ["verify-streaming-markdown-spacing", ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-spacing.tsx']],
     ['verify-text-measure-cache', ['node', '--import', 'tsx/esm', 'scripts/verify-text-measure-cache.ts']],
     ['verify-text-wrap-geometry', ['node', '--import', 'tsx/esm', 'scripts/verify-text-wrap-geometry.tsx']],
+    ['verify-component-wrap-exact-fill', ['node', '--import', 'tsx/esm', 'scripts/verify-component-wrap-exact-fill.tsx']],
     ['verify-streaming-markdown-blocks', ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-blocks.tsx']],
     ['verify-text-paint-budget', ['node', '--import', 'tsx/esm', 'scripts/verify-text-paint-budget.tsx']],
     ['verify-text-viewport-paint', ['node', '--import', 'tsx/esm', 'scripts/verify-text-viewport-paint.ts']],

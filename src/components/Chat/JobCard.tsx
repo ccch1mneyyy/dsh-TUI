@@ -5,7 +5,7 @@ import type { JobRow } from '../../dsh-adapter/channel.js'
 import type { BackgroundJobOutputChannel, BackgroundJobOutputLine } from '../../adapter/ports/channel-view.js'
 import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
-import wrapText from '../../ink/wrap-text.js'
+import { wrapTextLines } from '../../ink/wrap-text.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import { ProgressBar } from '../design-system/ProgressBar.js'
@@ -89,7 +89,7 @@ function waterfallWindow(
       rows.unshift({ key: `gap-${index}`, text: '', gap: true })
       continue
     }
-    const wrapped = wrapText(entry.line.text, textWidth, 'wrap').split('\n')
+    const wrapped = wrapTextLines(entry.line.text, textWidth).map(line => line.text)
     for (let row = wrapped.length - 1; row >= 0 && rows.length < budget; row--) {
       rows.unshift({
         key: `${index}-${row}`,
@@ -189,9 +189,8 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail }: {
     8,
     cardColumns - (grouped ? 2 : 0) - fixedWidths.reduce((sum, width) => sum + width, 0) - fixedWidths.length,
   )
-  // wrapText returns the wrapped STRING (newline separated), so the line
-  // count comes straight out of it.
-  const labelLines = grouped ? wrapText(job.label, labelWidth, 'wrap').split('\n') : undefined
+  // Pre-wrap the label so the rail has one glyph per display row.
+  const labelLines = grouped ? wrapTextLines(job.label, labelWidth).map(line => line.text) : undefined
   const contentLines = (labelLines?.length ?? 1) + activity.length + (railBody ? 1 : 0)
   const railGlyphs: string[] = []
   if (grouped) {

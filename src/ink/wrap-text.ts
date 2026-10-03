@@ -2,8 +2,29 @@ import sliceAnsi from '../utils/sliceAnsi.js'
 import { stringWidth } from './stringWidth.js'
 import type { Styles } from './styles.js'
 import { wrapAnsi } from './wrapAnsi.js'
+import stripAnsi from 'strip-ansi'
 
 const ELLIPSIS = '…'
+
+/** Pre-wrapped display rows; keep source newlines and omitted copy separators. */
+export function wrapTextLines(
+  text: string,
+  maxWidth: number,
+  wrapLine: (line: string) => string = line => wrapText(line, maxWidth, 'wrap'),
+): { text: string; continuation: boolean; gap: boolean }[] {
+  return text.split('\n').flatMap(sourceLine => {
+    const pieces = wrapLine(sourceLine).split('\n')
+    return pieces.map((line, index) => {
+      const gap = index > 0 && stringWidth(pieces[index - 1]!) === maxWidth
+        && stripAnsi(line).startsWith(' ')
+      return {
+        text: gap ? sliceAnsi(line, 1, stringWidth(line)) : line,
+        continuation: index > 0,
+        gap,
+      }
+    })
+  })
+}
 
 // --- cross-mount wrap cache ------------------------------------------------
 // wrapText is pure: (text, maxWidth, wrapType) deterministically maps to one

@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text, useAnimationFrame } from '../ui.js'
-import wrapText from '../ink/wrap-text.js'
+import wrapText, { wrapTextLines } from '../ink/wrap-text.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { ChannelGoal, TodoPanelItem } from '../dsh-adapter/channel.js'
 import { t } from '../i18n.js'
@@ -200,7 +200,7 @@ export function GoalTodoPanel({
   if (wrapWidth !== undefined && wrapWidth > 4) {
     let used = 0
     for (const todo of todos) {
-      const wrapped = wrapText(todo.content, wrapWidth, 'wrap').split('\n')
+      const wrapped = wrapTextLines(todo.content, wrapWidth).map(line => line.text)
       const lines = wrapped.length <= 2
         ? wrapped
         : [wrapped[0]!, wrapText(wrapped.slice(1).join(''), wrapWidth, 'truncate')!]

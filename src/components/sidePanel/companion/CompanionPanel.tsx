@@ -50,7 +50,7 @@ import React from 'react'
 import { Box, Text, useAnimationFrame } from '../../../ui.js'
 import instances from '../../../ink/instances.js'
 import { t, type I18nKey } from '../../../i18n.js'
-import wrapText from '../../../ink/wrap-text.js'
+import { wrapTextLines } from '../../../ink/wrap-text.js'
 import { truncateWidth } from '../../../trajectory/format.js'
 import type { ClickEvent } from '../../../ink/events/click-event.js'
 import type { DragEvent } from '../../../ink/events/drag-event.js'
@@ -600,7 +600,7 @@ export function CompanionPanel({ width, height, focused, visible }: PanelProps):
   let bubbleNode: React.ReactNode = null
   if (bubble !== undefined && bubbleLines > 0 && !compact) {
     const inner = Math.max(4, width - 4)
-    const wrapped = wrapText(bubble.text, inner, 'wrap').split('\n')
+    const wrapped = wrapTextLines(bubble.text, inner).map(line => line.text)
     const shown = wrapped.length > bubbleLines
       ? [...wrapped.slice(0, bubbleLines - 1), truncateWidth(wrapped[bubbleLines - 1] + '…', inner)]
       : wrapped
