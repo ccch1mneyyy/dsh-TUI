@@ -309,6 +309,77 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
   await session.dispose()
 }
 
+// ── external model confirmations converge the effort too (R2-4) ──────
+{
+  // A model change the TUI did not make — a settings edit, /model in
+  // another client, a relay rerouting — reaches the session as an init
+  // frame or a message_start drift, never through models.set. Every
+  // authoritative confirmation (the open/resume seed included) runs the
+  // same explicit-refusal convergence as a manual switch; a row with no
+  // effort metadata keeps the choice (the standing contract).
+  const CATALOG = [
+    ...MODELS,
+    { value: 'relay', resolvedModel: 'relay-custom-x', displayName: 'Relay', description: 'no effort metadata' },
+  ]
+  const fake = fakeClaudeSdk(() => ({ capabilities: ['msg_lifecycle_v1'], models: CATALOG }), controls)
+  const prefs = memoryClaudePrefs({ effort: 'max' })
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { prefs }))
+  const events: AgentEvent[] = []
+  session.subscribe(batch => { events.push(...batch) })
+  await tick()
+  const caps = session.capabilities
+  const query = fake.queries[0]!
+  const effortEvents = () => events.filter(event => event.type === 'effort.changed').map(event => event.effort)
+
+  // Seed source (handshake default): the open seeded the catalog's default
+  // row (Sonnet, levels low..high) — the remembered max is excluded and
+  // converges at once, before any frame or UI ask.
+  check('seed: the open seed converges the effort with the seeded model', caps.models!.current().model === 'claude-sonnet-x' && caps.effort!.current() === undefined && prefs.data.effort === undefined && JSON.stringify(effortEvents()) === '[null]', { model: caps.models!.current().model, current: caps.effort!.current(), prefs: prefs.data.effort, events: effortEvents() })
+
+  // init-frame source: set max again; the CLI's first init frame names the
+  // no-effort Haiku — cleared everywhere, exactly one event.
+  await caps.effort!.set('max')
+  events.length = 0
+  query.emit({ ...init, model: 'claude-haiku-x' })
+  await tick()
+  check('init frame: a no-effort model clears the effort', caps.models!.current().model === 'claude-haiku-x' && caps.effort!.current() === undefined && prefs.data.effort === undefined && JSON.stringify(effortEvents()) === '[null]' && caps.effort!.levels().length === 0, { model: caps.models!.current().model, current: caps.effort!.current(), events: effortEvents() })
+
+  // message_start source: the drift frame carries the relay's custom row
+  // — missing metadata keeps the choice; a declared list that excludes
+  // the tier still clears.
+  await caps.effort!.set('max')
+  events.length = 0
+  query.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'msg_r24a', model: 'relay-custom-x' } }, parent_tool_use_id: null })
+  await tick()
+  check('message_start: missing metadata keeps the effort', caps.models!.current().model === 'relay-custom-x' && caps.effort!.current() === 'max' && prefs.data.effort === 'max' && effortEvents().length === 0 && caps.effort!.levelsFallback === true, { model: caps.models!.current().model, current: caps.effort!.current() })
+  query.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'msg_r24b', model: 'claude-sonnet-x' } }, parent_tool_use_id: null })
+  await tick()
+  check('message_start: a declared list excluding the tier clears', caps.effort!.current() === undefined && prefs.data.effort === undefined && effortEvents().at(-1) === null, { current: caps.effort!.current(), events: effortEvents() })
+  await session.dispose()
+
+  // Session-fallback source: the persisted model choice seeds the session
+  // (prefs before the handshake default) — a no-effort row clears at open.
+  const fallbackFake = fakeClaudeSdk(() => ({ capabilities: [], models: CATALOG }), controls)
+  const fallbackPrefs = memoryClaudePrefs({ model: 'haiku', effort: 'max' })
+  const fallback = await openClaudeSession(claudeDeps(fallbackFake.sdk, { prefs: fallbackPrefs }))
+  const fallbackEvents: AgentEvent[] = []
+  fallback.subscribe(batch => { fallbackEvents.push(...batch) })
+  await tick()
+  check('session fallback: the persisted no-effort model clears the effort at open', fallback.capabilities.models!.current().model === 'haiku' && fallback.capabilities.effort!.current() === undefined && fallbackPrefs.data.effort === undefined && fallbackEvents.filter(event => event.type === 'effort.changed').map(event => event.effort).at(-1) === null, { model: fallback.capabilities.models!.current().model, current: fallback.capabilities.effort!.current(), prefs: fallbackPrefs.data.effort })
+  await fallback.dispose()
+
+  // Resume-seed source: the replay names the model no frame will
+  // re-announce — the seed converges with it at open.
+  const resumeFake = fakeClaudeSdk(() => ({ capabilities: [], models: CATALOG }), controls)
+  const resumePrefs = memoryClaudePrefs({ effort: 'max' })
+  const resumed = await openClaudeSession(claudeDeps(resumeFake.sdk, { prefs: resumePrefs, resume: { events: [], start: { turn: 2, seq: 3, model: 'claude-haiku-x' } } }))
+  const resumeEvents: AgentEvent[] = []
+  resumed.subscribe(batch => { resumeEvents.push(...batch) })
+  await tick()
+  check('resume seed: the replay model converges the effort at open', resumed.capabilities.models!.current().model === 'claude-haiku-x' && resumed.capabilities.effort!.current() === undefined && resumePrefs.data.effort === undefined && resumeEvents.filter(event => event.type === 'effort.changed').map(event => event.effort).at(-1) === null, { model: resumed.capabilities.models!.current().model, current: resumed.capabilities.effort!.current(), prefs: resumePrefs.data.effort })
+  await resumed.dispose()
+}
+
 // ── the channel and the screen ────────────────────────────────────────
 {
   const fake = fakeClaudeSdk(() => ({ capabilities: ['msg_lifecycle_v1'], models: MODELS, commands: COMMANDS }), controls)

@@ -145,6 +145,33 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
   let terminalOnly: ReadonlySet<string> = new Set()
 
   const currentRow = (): ModelInfo | undefined => rowOf(models, deps.currentModel())
+
+  /** Converge the remembered effort with a model's DECLARED effort
+   *  capabilities: the choice is cleared ONLY on an explicit refusal —
+   *  `supportsEffort === false`, or a DECLARED level list that does not
+   *  contain the tier. A row that declares neither (the real offline
+   *  catalog's Haiku rows, a relay channel's custom model rows, an old CLI
+   *  claiming support without tiers) keeps the choice: the CLI accepts any
+   *  effortLevel flag (applyFlagSettings — the user's own settings.json
+   *  ships a global one), and levels() serves the CLI-standard tiers for
+   *  exactly that shape. A remembered tier outside even the fallback ladder
+   *  is kept verbatim — the CLI is the authority on what it will run, and
+   *  the TUI neither rewrites the user's pref nor offers it in the picker
+   *  (the slider marks no tier as current). Returns the events the caller
+   *  must emit. (R2-4: EVERY authoritative confirmation of the model runs
+   *  this — a manual switch, the open/resume seed, a later `system/init`
+   *  or `message_start` frame — so the readout never claims a tier the
+   *  serving model refuses.) */
+  const convergeEffort = (row: ModelInfo | undefined): readonly AgentEvent[] => {
+    if (row === undefined || effort === undefined) return []
+    const levels = row.supportedEffortLevels as readonly string[] | undefined
+    if (row.supportsEffort === false || (levels !== undefined && levels.length > 0 && !levels.includes(effort))) {
+      effort = undefined
+      deps.prefs.write({ effort: null })
+      return [{ type: 'effort.changed', effort: null }]
+    }
+    return []
+  }
   const refreshModels = async (): Promise<readonly ModelInfo[]> => {
     try {
       models = await deps.query().supportedModels()
@@ -218,25 +245,10 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         await deps.query().setModel(row.value)
         deps.prefs.write({ model: row.value })
         deps.emit(deps.noteModel(row.resolvedModel ?? row.value))
-        // An effort the new model refuses is cleared (the CLI would run
-        // its default anyway; the readout must not claim otherwise) — but
-        // only on an EXPLICIT refusal: `supportsEffort === false`, or a
-        // DECLARED level list that does not contain the tier. A row that
-        // declares no list (the real offline catalog's Haiku rows, a relay
-        // channel's custom model rows, an old CLI claiming support without
-        // tiers) keeps the choice: the CLI accepts any effortLevel flag
-        // (applyFlagSettings — the user's own settings.json ships a global
-        // one), and levels() serves the CLI-standard tiers for exactly
-        // that shape. A remembered tier outside even the fallback ladder
-        // is kept verbatim — the CLI is the authority on what it will run,
-        // and the TUI neither rewrites the user's pref nor offers it in
-        // the picker (the slider marks no tier as current).
-        const levels = row.supportedEffortLevels as readonly string[] | undefined
-        if (effort !== undefined && (row.supportsEffort === false || (levels !== undefined && levels.length > 0 && !levels.includes(effort)))) {
-          effort = undefined
-          deps.prefs.write({ effort: null })
-          deps.emit([{ type: 'effort.changed', effort: null }])
-        }
+        // An effort the new model refuses is cleared (the CLI would run its
+        // default anyway; the readout must not claim otherwise) — the
+        // explicit-refusal rule lives on convergeEffort (R2-4).
+        deps.emit(convergeEffort(row))
         return { kind: 'switched' }
       },
     },
@@ -438,6 +450,17 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         : []
       models = list(init?.models).filter(row => typeof row.value === 'string' && typeof row.displayName === 'string') as unknown as ModelInfo[]
       commands = list(init?.commands).filter(row => typeof row.name === 'string') as unknown as SlashCommand[]
+    },
+    /** R2-4: the session confirmed the model from an authoritative source
+     *  other than a manual switch — the open/resume seed, a `system/init`
+     *  frame, a `message_start` drift. The effort readout converges with
+     *  the model's DECLARED capabilities through the same explicit-refusal
+     *  rule; a model the seeded catalog has no row for is missing
+     *  metadata and keeps the choice. */
+    noteConfirmedModel(model: string): void {
+      if (model === '') return
+      const events = convergeEffort(rowOf(models, model))
+      if (events.length > 0) deps.emit(events)
     },
     /** `system/init.terminal_slash_commands` (terminal-only, never offered). */
     setTerminalOnly(names: readonly string[]): void {

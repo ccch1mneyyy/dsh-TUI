@@ -775,7 +775,8 @@ const GROUPS = {
     ["verify-permission-store", ['node', '--import', 'tsx/esm', 'scripts/verify-permission-store.ts']],
 // Claude 权限桥（假 Query）：允许一次/始终允许/拒绝的 PermissionResult、选项生成
 // 与抑制、六条死锁规则、AskUserQuestion 作答与取消、ExitPlanMode 批准/继续规划、
-// requires-action，以及翻译器的 permission_denied/计划工具/问卷记录。
+// requires-action，以及翻译器的 permission_denied/计划工具/问卷记录；重投的
+// requestId 也监听自己的 AbortSignal（任一取消=整组恰好一次结算，R2-5）。
     ["verify-claude-permissions", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-permissions.ts']],
 // 审批面板的选项变体（中英）：DSH 无选项=今天的两行与结局字符串、后端三选项、
 // defaultToNo 拒绝居首且无单键批准、allow-always 抑制、打字附拒绝理由。
@@ -786,7 +787,9 @@ const GROUPS = {
     ["verify-claude-auth", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-auth.ts']],
 // Claude 控制面（假 Query）：model/effort/mode/compact/commands/mcp/context/account
 // 的能力委托与持久化，channel 侧的原生模式标签、后端命令合并、/mcp、/context、
-// 订阅用量、/login 宿主，以及状态栏模式标签与 /context 面板的无头渲染。
+// 订阅用量、/login 宿主，以及状态栏模式标签与 /context 面板的无头渲染；effort
+// 收敛不只 manual switch——open/resume seed、init 帧、message_start 漂移都按
+// 「明确不支持/声明档位排除」收敛（缺元数据保留，R2-4）。
     ["verify-claude-controls", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-controls.tsx']],
 // Claude 权限模式名册（/permission 选择器）：bypassPermissions 必须在运行期名册里、
 // 且选择器真能切进去——allowDangerouslySkipPermissions 是 SDK 的**闸门**（sdk.d.ts:2001
