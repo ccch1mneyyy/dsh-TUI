@@ -93,6 +93,7 @@ const MINIMAL_UI_STATUS_BAR: StatusBarConfig = Object.freeze({
 type HoverTarget =
   | 'ctx'
   | 'mode'
+  | 'effort'
   | 'cache'
   | 'tps'
   | 'tokens'
@@ -170,19 +171,45 @@ export function StatusLine({
   channel,
   selectionActive = false,
   helpOpen = false,
-  backendModePicker,
+  backendMode,
+  modelPicker,
+  effortPicker,
   wake,
   activity: projectedActivity,
 }: {
   channel: Channel
   selectionActive?: boolean
   helpOpen?: boolean
-  /** Backend-native permission modes (the typed `modes` capability): the
-   *  mode segment always shows — the base mode included, the user asked to
-   *  SEE the current permission level — and the click opens the same
-   *  /permission picker the command does. Absent (DSH, or a backend without
-   *  modes): rendering stays byte-identical to the modeIndex rule. */
-  backendModePicker?: () => void
+  /** The backend's OWN permission mode (the typed `modes` capability):
+   *  `id` is the backend mode id (default / acceptEdits / plan /
+   *  bypassPermissions / dontAsk / auto …), `name` the label the backend
+   *  gives it, `onOpen` opens the same /permission picker the command does.
+   *  Present: the mode segment always shows — the base mode included, the
+   *  user asked to SEE the current permission level — and both its colour
+   *  and its text come from the backend, never from the DSH mode atoms.
+   *  It also ignores the `statusBar.mode` field switch (see the gate
+   *  below: a safety readout outranks a decoration preference); the minimal
+   *  UI is the only thing it yields to. Absent (DSH, or a backend without
+   *  modes): rendering stays byte-identical to the modeMarked rule below. */
+  backendMode?: {
+    readonly id: string
+    readonly name: string
+    readonly onOpen: () => void
+  }
+  /** The model segment's click target: the same /model picker the command
+   *  opens. Present only when the backend serves a model catalog
+   *  (backendCapabilities.models — DSH and the Claude backend both do);
+   *  absent = the segment renders exactly as before, and its hover detail
+   *  keeps the pure route readout without the click affordance line. */
+  modelPicker?: {
+    readonly onOpen: () => void
+  }
+  /** Same contract for the think-level segment and /effort: present only
+   *  when the backend serves the effort capability. The hover id rides
+   *  with it — the segment's whole detail line IS the affordance. */
+  effortPicker?: {
+    readonly onOpen: () => void
+  }
   /** Activity value published by the working-activity plugin for this session.
    *  Preferred over the channel's own copy when the composition provides it. */
   activity?: ActivityLineValue
@@ -240,6 +267,10 @@ export function StatusLine({
   if (statusBar.thinking && channel.reasoningEffort !== undefined) {
     contextParts.push({
       key: 'effort',
+      // The hover id rides only with the click target: the segment's whole
+      // detail line IS the affordance (level + /effort), so promising it
+      // without the picker behind it would be a lie.
+      ...(effortPicker === undefined ? {} : { id: 'effort' as const, onClick: effortPicker.onOpen }),
       node: <Text color="inactiveShimmer">{channel.reasoningEffort}</Text>,
     })
   }
@@ -247,20 +278,37 @@ export function StatusLine({
     || channel.mode.sandbox === 'danger-full-access'
     || channel.mode.approval === 'never'
   const modeMarked = channel.modeIndex > 0 || modeNeedsExplicitMarker
-  if (statusBar.mode && (modeMarked || backendModePicker !== undefined)) {
-    // Backend base modes render muted (the DSH rule keeps warning colour
-    // for anything that needs an explicit marker); plan keeps its own.
-    const modeColour = channel.mode.plan === true
-      ? 'planMode'
-      : modeMarked ? 'warning' : 'inactiveShimmer'
+  // Backend-native permission modes are a SAFETY readout (bypassPermissions
+  // = every confirmation switched off), so the segment outranks the
+  // `statusBar.mode` field switch: it shows whenever the backend reports a
+  // mode, even at the default `mode: false`. The one thing it cannot outrank
+  // is the minimal UI (`minimalUi === true` pins the footer to model + cwd —
+  // the user's explicit choice must not be displaced). With no backend mode
+  // (DSH) the rule stays byte-identical to before: `statusBar.mode` AND
+  // modeMarked.
+  if (backendMode === undefined
+    ? statusBar.mode && modeMarked
+    : channel.minimalUi !== true) {
+    // Backend modes carry their own colour rule — the two destructive ids
+    // warn, plan keeps its own colour, everything else (the unmarked base
+    // mode included) renders muted; the DSH atoms never leak in. Without a
+    // backend mode the DSH rule stands: warning colour for anything that
+    // needs an explicit marker, plan keeps its own.
+    const modeColour = backendMode === undefined
+      ? channel.mode.plan === true
+        ? 'planMode'
+        : modeMarked ? 'warning' : 'inactiveShimmer'
+      : backendMode.id === 'bypassPermissions' || backendMode.id === 'dontAsk'
+        ? 'warning'
+        : backendMode.id === 'plan' ? 'planMode' : 'inactiveShimmer'
     contextParts.push({
       key: 'mode',
-      ...(backendModePicker === undefined ? {} : { id: 'mode' as const, onClick: backendModePicker }),
+      ...(backendMode === undefined ? {} : { id: 'mode' as const, onClick: backendMode.onOpen }),
       node: (
         <Text
           color={modeColour}
         >
-          {modeDisplayName(channel.mode)}
+          {backendMode === undefined ? modeDisplayName(channel.mode) : backendMode.name}
         </Text>
       ),
     })
@@ -387,7 +435,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
       }
   const leftFields: FieldPart[] = [
     ...(statusBar.model
-      ? [{ key: 'model', id: 'model' as const, node: <Text color="inactiveShimmer">{channel.model}</Text> }]
+      ? [{ key: 'model', id: 'model' as const, ...(modelPicker === undefined ? {} : { onClick: modelPicker.onOpen }), node: <Text color="inactiveShimmer">{channel.modelDisplay ?? channel.model}</Text> }]
       : []),
     ...(tpsPart !== undefined ? [tpsPart] : []),
     ...(jobsPart !== undefined ? [jobsPart] : []),
@@ -547,7 +595,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
 
   // The supplemental-row readout for the hovered field: replaces the idle
   // hint (never the activity line) while the pointer dwells on a field.
-  const detail = buildHoverDetail(hover, channel, occupancy, usage, columns, barColors)
+  const detail = buildHoverDetail(hover, channel, occupancy, usage, columns, barColors, backendMode, modelPicker)
   const trailer: React.ReactNode = detail !== null
     ? detail
     : hint !== ''
@@ -697,6 +745,8 @@ function buildHoverDetail(
   usage: UsageSnapshot | undefined,
   columns: number,
   barColors: { freeFill: Color; freeText: Color } | undefined,
+  backendMode: { readonly name: string } | undefined,
+  modelPicker: { readonly onOpen: () => void } | undefined,
 ): React.ReactNode | null {
   if (hover === null) return null
   const contextUsed = occupancy?.usedTokens
@@ -749,11 +799,23 @@ function buildHoverDetail(
       )
     }
     case 'mode': {
-      // Only the backend mode segment carries the hover id (its click
-      // target); the detail names the affordance at the moment of asking.
+      // Only the mode segment carries the hover id (its click target); the
+      // detail names the field and the affordance at the moment of asking.
+      // A backend-owned mode names itself (the DSH spec would only ever show
+      // the DSH cycle's own label here).
       return (
         <Text wrap="truncate">
-          {dim('mode ')}{modeDisplayName(channel.mode)} · {t('status-detail-mode')}
+          {dim('mode ')}{backendMode?.name ?? modeDisplayName(channel.mode)} · {t('status-detail-mode')}
+        </Text>
+      )
+    }
+    case 'effort': {
+      // The think-level segment's whole detail line IS the affordance (the
+      // hover id rides with the click target — see the field above), so the
+      // case is unreachable without the picker behind it.
+      return (
+        <Text wrap="truncate">
+          {dim('effort ')}{channel.reasoningEffort} · {t('status-detail-effort')}
         </Text>
       )
     }
@@ -867,9 +929,12 @@ function buildHoverDetail(
     case 'model': {
       return (
         <Text wrap="truncate">
-          {dim('model ')}{channel.model} · {dim('provider ')}{channel.provider}
+          {dim('model ')}{channel.modelDisplay ?? channel.model} · {dim('provider ')}{channel.provider}
           {channel.contextWindow !== undefined
             ? <> · {dim('ctx ')}{formatTokens(channel.contextWindow)}</>
+            : null}
+          {modelPicker !== undefined
+            ? <> · {t('status-detail-model')}</>
             : null}
         </Text>
       )

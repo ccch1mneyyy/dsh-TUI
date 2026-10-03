@@ -64,6 +64,40 @@ export interface AttachedContext {
 }
 
 /**
+ * One working-activity line value a backend publishes for its own session —
+ * the wire shape of the DSH `dsh-working-activity` plugin's session
+ * projection, which this port mirrors so a backend without that plugin (the
+ * Claude backend folds its own) can serve the same working line. Structural
+ * copy only: consumers narrow with `asActivityView` before rendering, so a
+ * malformed value is dropped rather than shown half-formed.
+ */
+export interface WorkingActivityView {
+  /** Which phase the line is in; `idle` means "render nothing". */
+  readonly phase: 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'
+  /** The line as the backend rendered it at `updatedAt`. */
+  readonly line: string
+  /** Whether `line` counts elapsed time (this port publishes settled copy,
+   *  so a backend-authored value is `false` unless it re-renders the line). */
+  readonly live: boolean
+  /** Tool action verb, when the line describes a running tool. */
+  readonly label?: string
+  /** Tool detail fragment (path / command / pattern), when there is one. */
+  readonly detail?: string
+  /** The playful phrase or `⏵` self-narration currently shown, when any. */
+  readonly phrase?: string
+  /** Tools completed in the current turn. */
+  readonly toolCount: number
+  /** Wall clock the current phase began. */
+  readonly phaseStartedAt: number
+  /** Wall clock the current turn began (0 when no turn has started). */
+  readonly turnStartedAt: number
+  /** Timestamp of the last folded event — the value's freshness signal. */
+  readonly updatedAt: number
+  /** Language the line was rendered in. */
+  readonly lang: 'zh' | 'en'
+}
+
+/**
  * One rendered transcript row. The DSH session log is the source of truth:
  * rows are derived from `session/event` records (and the initial
  * `agent.session.events` replay), never from optimistic local state.
@@ -545,6 +579,11 @@ export interface PendingMessage {
   text: string
   images: readonly ComposerImageRef[]
   placement: 'steer' | 'followup'
+  /** Parked channel-side by an interrupt (Esc, Claude Code parity): the
+   *  backend dropped its queued copy with the aborted turn, this preview is
+   *  the only remaining copy, and nothing delivers it until the user sends
+   *  the dock (⏎ / deliverDocked) or retracts it (Alt+↑ / the ↑ editor). */
+  docked?: boolean
 }
 
 /**
@@ -741,6 +780,35 @@ export interface PermissionPresetCurrent {
 export interface BackendModeOption {
   readonly id: string
   readonly name: string
+  /** The one-line explanation the picker shows under the name (absent when
+   *  the backend declares none). */
+  readonly description?: string
+}
+
+/**
+ * One relay channel profile (the typed `channels` capability a Claude
+ * session declares; the store is backends/claude/channels.json). The port
+ * restates the capability's own view so the UI layer never imports the
+ * agent domain — the picker's rows and the mapping view both render from
+ * these entries.
+ */
+export interface BackendChannelOption {
+  readonly id: string
+  readonly name: string
+  /** Exact requested-id → actual model entries, in file order. */
+  readonly models: readonly { readonly from: string; readonly to: string }[]
+  /** Tier keyword → actual model entries, in file order (`default` = the
+   *  any-model rule). */
+  readonly tiers: readonly { readonly tier: string; readonly to: string }[]
+  /** The phase-3 connection slice (never a token literal); absent on
+   *  mapping-only channels. Equal fingerprints = the same connection, so
+   *  the picker can decide restart-vs-refresh without the secret. */
+  readonly connection?: {
+    readonly baseUrl?: string
+    readonly hasToken: boolean
+    readonly envKeys: readonly string[]
+    readonly fingerprint: string
+  }
 }
 
 /** @internal */
@@ -855,6 +923,10 @@ export interface ChannelCapabilities {
   readonly rename: boolean
   /** `/color` keeps a per-session accent. */
   readonly color: boolean
+  /** `/channel` manages the backend's relay channel profiles (Claude's
+   *  channels.json; false on every other backend, DSH included — the only
+   *  flag without the "a DSH session supports everything" shortcut). */
+  readonly channels: boolean
   /** `/mcp reconnect|toggle` control the backend's MCP servers (a DSH
    *  session reports status only). */
   readonly mcpControl: boolean

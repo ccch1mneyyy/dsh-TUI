@@ -47,7 +47,7 @@ import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../s
 import { initialPromptFromCmdlineArgs } from './startup-args.js'
 import { readHomePrefs } from '../homePrefs.js'
 import { readKernelPrefs, resolveRememberedBackend, writeKernelPrefs } from '../kernelPrefs.js'
-import { kernelDisplayName } from '../components/kernelCatalog.js'
+import { kernelDisplayName, type ClaudeKernelStatus } from '../components/kernelCatalog.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, type TuiRestartOptions } from '../update.js'
@@ -515,6 +515,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   if (rawBackend !== undefined && rawBackend.trim() !== '' && normalizeBackendChoice(rawBackend) === undefined) {
     ctx.logger.warn(`dsh-tui: DSH_TUI_BACKEND="${rawBackend}" names no known backend (dsh, claude); starting on dsh`)
   }
+  /**
+   * 启动参数是否压过了选择器的记忆（见 resolveRememberedBackend：Config 行
+   * 与 DSH_TUI_BACKEND 都优先于 kernel.json）。为真时选择器多画一行提示——
+   * 本次切换仍会重启进所选内核，但下一次「直接启动」还是按参数走，这事不能
+   * 瞒着用户。
+   */
+  const backendPinned = config.backend !== undefined
+    || (rawBackend !== undefined && rawBackend.trim() !== '')
   const claudeStart = backendChoice === 'claude'
     ? await openClaudeStartup(ctx, sessionCwd, line => {
       logForDebugging(`[claude-stderr] ${line}`)

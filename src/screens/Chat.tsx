@@ -1193,6 +1193,9 @@ export function Chat({
   }, [launchpadShown, presetOptions.length, channel])
   /** `/effort` adapter levels: load async before the slider opens. */
   const [effortOptions, setEffortOptions] = React.useState<readonly EffortOption[]>([])
+  /** True when those levels are the CLI-standard compatibility ladder (the
+   *  model row declares no tiers of its own) — the slider says so. */
+  const [effortLevelsFallback, setEffortLevelsFallback] = React.useState(false)
   const [themeName, setTheme] = useTheme()
   const { rows: terminalRows } = useTerminalSize()
   /**
@@ -2614,10 +2617,11 @@ export function Chat({
           return true
         }
         setHelpOpen(false)
-        void channel.listEfforts().then(({ efforts, defaultEffort }) => {
+        void channel.listEfforts().then(({ efforts, defaultEffort, levelsFallback }) => {
           // 0/1-tier routes were already notified by listEfforts.
           if (efforts.length <= 1) return
           setEffortOptions(efforts)
+          setEffortLevelsFallback(levelsFallback === true)
           const current = channel.reasoningEffort ?? defaultEffort
           const index = efforts.findIndex(effort => effort.id === current)
           // open-if: a picker the user opened during the round trip wins
@@ -3584,7 +3588,7 @@ export function Chat({
             overlay: {
               kind: 'mode',
               index,
-              modes: backendModes.modes.map(mode => ({ id: mode.id, name: mode.name })),
+              modes: backendModes.modes.map(mode => ({ id: mode.id, name: mode.name, ...(mode.description === undefined ? {} : { description: mode.description }) })),
               currentId: backendModes.modes[index]?.id,
             },
           })
@@ -5322,6 +5326,36 @@ export function Chat({
    * (above the input cluster) and the launchpad itself (above its input
    * card, see the launchpad branch). Defined once so the two never drift.
    */
+  /**
+   * 底栏右侧的权限模式段（只有声明了原生 modes 的后端才有名册；DSH 会话
+   * listModes() 答空名册 → 不传 prop，底栏渲染与以前逐字节相同）。名字与
+   * id 来自同一个名册，点击 = 既有 /permission 命令（同一批选择器）。
+   */
+  const backendModeSnapshot = typeof channel.listModes === 'function' ? channel.listModes() : undefined
+  const backendModeCurrent = backendModeSnapshot === undefined || backendModeSnapshot.currentIndex < 0
+    ? undefined
+    : backendModeSnapshot.modes[backendModeSnapshot.currentIndex]
+  const backendModeStatus = backendModeCurrent === undefined
+    ? undefined
+    : {
+        id: backendModeCurrent.id,
+        name: backendModeCurrent.name,
+        onOpen: () => { void runCommand('permission', '') },
+      }
+  /**
+   * 底栏模型段/思考档位段的点击（与模式段同一契约）：后端声明了模型目录或
+   * effort 能力（backendCapabilities 位）才挂，点击 = 既有 /model · /effort
+   * 命令（同一批选择器）；无能力不挂点击，hover 也不承诺（StatusLine 的
+   * effort hover id 与点击同乘，model hover 只是不追加操作行）。
+   */
+  const backendCaps = channel.backendCapabilities as Channel['backendCapabilities'] | undefined
+  const modelPickerStatus = backendCaps?.models === false
+    ? undefined
+    : { onOpen: () => { void runCommand('model', '') } }
+  const effortPickerStatus = backendCaps?.effort === false
+    ? undefined
+    : { onOpen: () => { void runCommand('effort', '') } }
+
   const pickerPanels = (
     <>
           {overlay.kind === 'help' && (
@@ -5541,6 +5575,7 @@ export function Chat({
                 options={effortOptions}
                 focusIndex={overlay.index}
                 currentId={channel.reasoningEffort}
+                levelsFallback={effortLevelsFallback}
                 // 点击档位 = 移到该档并即时应用（与 ←/→ 同语义）
                 onPick={(index) => {
                   dispatchOverlay({ type: 'set-index', kind: 'effort', index })
@@ -6145,7 +6180,7 @@ export function Chat({
           if (overlay.kind !== 'none') dispatchOverlay({ type: 'close' })
           setLaunchpadFocus(-1)
         }}
-        model={channel.model}
+        model={channel.modelDisplay ?? channel.model}
         effort={channel.reasoningEffort}
         preset={
           channel.agentPreset === undefined
@@ -6301,7 +6336,7 @@ export function Chat({
         <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
         <LogoHeader
           key={logoNonce}
-          model={channel.model}
+          model={channel.modelDisplay ?? channel.model}
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
           // 大字字面（设置项 `dsh-tui.splashFont`）：`daily` 交回按天轮换
@@ -6344,7 +6379,7 @@ export function Chat({
           onToggleRow={toggleRowExpanded}
           streamViewToggledRows={streamViewToggledRows}
           onToggleStreamView={toggleStreamView}
-          model={channel.model}
+          model={channel.modelDisplay ?? channel.model}
           diffLayout={channel.diffLayout}
           thinkingFold={channel.thinkingFold}
           jobGroupFold={channel.jobGroupFold}
@@ -6480,7 +6515,7 @@ export function Chat({
             result={balance.result}
             refreshing={balance.refreshing}
             tokens={channel.tokens}
-            model={channel.model}
+            model={channel.modelDisplay ?? channel.model}
             provider={channel.provider}
             mainCost={channel.mainCost}
             subagentCost={channel.subagentCost}
@@ -6636,9 +6671,11 @@ export function Chat({
           // /permission picker the command opens (the launchpad param row's
           // route). DSH answers an empty list here — no prop, byte-identical
           // rendering.
-          backendModePicker={typeof channel.listModes === 'function' && channel.listModes().modes.length > 0
-            ? () => { void runCommand('permission', '') }
-            : undefined}
+          backendMode={backendModeStatus}
+          // 模型段/思考档位段：能力位在才可点，点击走既有 /model · /effort
+          // 命令（与模式段打开 /permission 完全同构）。
+          modelPicker={modelPickerStatus}
+          effortPicker={effortPickerStatus}
           wake={
             wakeBand === undefined
               ? undefined

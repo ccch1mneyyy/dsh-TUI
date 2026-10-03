@@ -5,6 +5,7 @@ import type { AgentSession } from '../../agent/session.js'
 import type { PermissionStore } from '../../channel/permissions.js'
 import type { QuestionStoreLike } from '../../channel/questions.js'
 import type { ContextPressureSource } from '../context-occupancy.js'
+import type { ActivityView } from '../activity-store.js'
 import type { SessionModeSpec } from '../../sessionModes.js'
 import { normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type JobGroupFoldMode, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
 import { normalizeActivityPreset } from '../../components/activityFrames.js'
@@ -25,6 +26,15 @@ export interface ChannelLaunchOptions {
    *  projection value only arrives on change, so a resumed session needs this
    *  read to render its line before the next event lands. */
   seedActivity?: (session: unknown) => void
+  /** Land one BACKEND-authored working-activity value for the bound session
+   *  (the Claude backend's counterpart of the projection feed: the session's
+   *  `workingActivity` capability, wired per binding — see
+   *  `channel/session-activity.ts`). Values are narrowed (`asActivityView`)
+   *  before this is called; absent → the capability is simply not consumed. */
+  publishActivity?: (sessionId: string, view: ActivityView) => void
+  /** Drop the bound session's backend-authored working-activity value (its
+   *  session went away: the next binding, or the channel's release). */
+  clearActivity?: (sessionId: string) => void
   /**
    * Official context-occupancy source (see `dsh-adapter/context-occupancy.ts`).
    *
@@ -133,7 +143,7 @@ export function createInitialChannelView(
   input: { agentId: string; sessionId: string; mode: ChannelState['mode']; cwdDescription: string },
 ): Pick<ChannelState,
   'effortLevels' | 'version' | 'rows' | 'status' | 'sessionTitle' | 'sessionColor' |
-  'agentId' | 'sessionId' | 'agentBindingGeneration' | 'model' | 'provider' | 'tokens' | 'cwd' |
+  'agentId' | 'sessionId' | 'agentBindingGeneration' | 'model' | 'modelDisplay' | 'provider' | 'tokens' | 'cwd' |
   'displayCwd' | 'gitBranch' | 'working' | 'compaction' | 'cancelPending' | 'spinnerMode' |
   'responseChars' | 'activeToolCount' | 'turnStart' | 'lastUserText' |
   'notifications' | 'contextWindow' | 'reasoningEffort' | 'mode' | 'modeIndex' |
@@ -148,7 +158,7 @@ export function createInitialChannelView(
 > {
   return {
     effortLevels: undefined, version: 0, rows: [], selection: undefined, status: 'starting', sessionTitle: '', sessionColor: '',
-    agentId: input.agentId, sessionId: input.sessionId, agentBindingGeneration: 0, model: options.model, provider: options.provider,
+    agentId: input.agentId, sessionId: input.sessionId, agentBindingGeneration: 0, model: options.model, modelDisplay: undefined, provider: options.provider,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
     cwd: options.cwd, displayCwd: input.cwdDescription, gitBranch: undefined, working: false,
     compaction: undefined,

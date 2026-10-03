@@ -100,6 +100,26 @@ export interface ClaudeAuthPlan {
   readonly settings?: { readonly env: Readonly<Record<string, string>> }
 }
 
+/**
+ * The active channel profile's connection (phase 3, channels.ts), resolved
+ * for one spawn: the endpoint, the token (already read from the credential
+ * store — token material only ever travels into the child environment this
+ * function returns, never into a log or event), and the channel-private
+ * env. When present, the channel IS the session's connection: the spawn
+ * env carries it AND the flag-settings layer (the SDK `settings` option)
+ * re-states it — the CLI applies a settings file's `env` block OVER the
+ * process environment it inherited (proved for CLI 2.1.287 in
+ * .local/agent-backend-review.md 第四批增补四), so the process env alone
+ * could not outrank e.g. a cc-switch-written `ANTHROPIC_BASE_URL`; the
+ * flag layer (the `--settings` rank, above user settings) can and does
+ * (the same layer `pinFirstParty` already relies on).
+ */
+export interface ClaudeChannelConnectionInput {
+  readonly baseUrl?: string
+  readonly token?: string
+  readonly env?: Readonly<Record<string, string>>
+}
+
 /** The settings slice the route depends on (`resolveSettings().effective`). */
 export interface ClaudeRouteSettings {
   readonly env?: Readonly<Record<string, unknown>>
@@ -320,9 +340,46 @@ export async function resolveClaudeAuth(
     /** The access token the CLI just refused (a reconnect): refresh unless
      *  dsh-auth already holds a different one. */
     readonly rejected?: string
+    /** The active channel profile's connection (phase 3). When it carries
+     *  anything spawn-shaping, the channel IS the credential: the dsh-auth
+     *  subscription login is never injected alongside it (the user said the
+     *  channel manages this session's connection), the environment's own
+     *  conflicting spellings are replaced, and the flag-settings layer
+     *  re-states the connection so a settings-file env cannot override
+     *  it (see ClaudeChannelConnectionInput above). */
+    readonly channel?: ClaudeChannelConnectionInput
   } = {},
 ): Promise<ClaudeAuthPlan> {
   const env = { ...base }
+  // The channel connection wins over everything user-ambient: its base URL
+  // and token replace any spelling the environment carried (a stale shell
+  // export must not split the pair), and the channel-private env layers on
+  // top. The flag layer repeats exactly these keys — nothing else is pinned,
+  // so every other settings key (cc-switch's included) still applies.
+  const channel = options.channel
+  const channelShapesSpawn = channel !== undefined
+    && (channel.baseUrl !== undefined || channel.token !== undefined
+      || (channel.env !== undefined && Object.keys(channel.env).length > 0))
+  if (channel !== undefined && channelShapesSpawn) {
+    if (channel.baseUrl !== undefined) {
+      deleteAll(env, 'ANTHROPIC_BASE_URL')
+      env.ANTHROPIC_BASE_URL = channel.baseUrl
+      // The ambient credential spellings were issued for the endpoint the
+      // environment named; re-pointing the endpoint must not carry them to
+      // a different host (the same fail-closed rule the route gate uses).
+      deleteAll(env, 'ANTHROPIC_API_KEY')
+      deleteAll(env, 'ANTHROPIC_AUTH_TOKEN')
+      deleteAll(env, 'CLAUDE_CODE_OAUTH_TOKEN')
+    }
+    if (channel.token !== undefined) {
+      // The CLI ranks an API key above an auth token's bearer; the channel
+      // names exactly one credential, so the other one must go.
+      deleteAll(env, 'ANTHROPIC_API_KEY')
+      deleteAll(env, 'ANTHROPIC_AUTH_TOKEN')
+      env.ANTHROPIC_AUTH_TOKEN = channel.token
+    }
+    for (const [key, value] of Object.entries(channel.env ?? {})) env[key] = value
+  }
   let route: ClaudeRoute
   if (options.settings === undefined) {
     route = { kind: 'settings-unreadable' }
@@ -341,6 +398,23 @@ export async function resolveClaudeAuth(
     } catch {
       route = { kind: 'settings-unreadable' }
     }
+  }
+  if (channel !== undefined && channelShapesSpawn) {
+    // The channel's own credential decides the source label; the dsh-auth
+    // branch below is deliberately unreachable while a channel connection
+    // is active (a channel naming the first-party origin with its own token
+    // still wins: the profile, not the subscription, is the user's pick).
+    const source: ClaudeAuthSource = channel.token !== undefined ? 'auth-token'
+      : set(env, 'ANTHROPIC_API_KEY') ? 'api-key'
+        : set(env, 'ANTHROPIC_AUTH_TOKEN') ? 'auth-token'
+          : set(env, 'CLAUDE_CODE_OAUTH_TOKEN') ? 'oauth-env'
+            : 'claude-login'
+    const pinned: Record<string, string> = {
+      ...(channel.baseUrl === undefined ? {} : { ANTHROPIC_BASE_URL: channel.baseUrl }),
+      ...(channel.token === undefined ? {} : { ANTHROPIC_AUTH_TOKEN: channel.token }),
+      ...(channel.env ?? {}),
+    }
+    return { source, route, env, settings: { env: pinned } }
   }
   if (route.kind === 'cloud') return { source: 'cloud', cloud: route.provider, route, env }
   if (route.kind === 'first-party') {

@@ -89,6 +89,10 @@ type CoreServedAction =
   // capability, so listModes answers the silent empty roster and setMode its
   // explicit refusal — the DSH /permission pipeline never routes through them.
   | 'listModes' | 'setMode'
+  // Capability-backed only: the typed `channels` capability is the Claude
+  // backend's own profile store — a DSH session answers the silent empty
+  // roster and the explicit refusals, and /channel never appears there.
+  | 'listChannels' | 'setChannel' | 'importChannel' | 'saveChannel' | 'removeChannel' | 'peekChannelImport'
 
 /**
  * Read the persistence backend's full session list (empty without one) —

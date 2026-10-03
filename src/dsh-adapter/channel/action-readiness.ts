@@ -29,6 +29,12 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'cycleMode'
   | 'listModes'
   | 'setMode'
+  | 'listChannels'
+  | 'setChannel'
+  | 'importChannel'
+  | 'saveChannel'
+  | 'removeChannel'
+  | 'peekChannelImport'
   | 'runPermissionPreset'
   | 'clear'
   | 'setActivityFrames'
@@ -115,6 +121,12 @@ export function createChannelActionMethods(
     cycleMode: () => getReadyActions().cycleMode(),
     listModes: () => getReadyActions().listModes(),
     setMode: id => getReadyActions().setMode(id),
+    listChannels: () => getReadyActions().listChannels(),
+    setChannel: id => getReadyActions().setChannel(id),
+    importChannel: () => getReadyActions().importChannel(),
+    saveChannel: input => getReadyActions().saveChannel(input),
+    removeChannel: id => getReadyActions().removeChannel(id),
+    peekChannelImport: () => getReadyActions().peekChannelImport(),
     runPermissionPreset: name => getReadyActions().runPermissionPreset(name),
     clear: () => getReadyActions().clear(),
     setActivityFrames: name => getReadyActions().setActivityFrames(name),
@@ -233,6 +245,15 @@ export function createUnavailableActionDelegates(
     // picker decides from it); only the explicit switch toasts its refusal.
     listModes: () => ({ modes: [], currentIndex: -1 }),
     setMode: () => refuseAsync('mode', false),
+    // Silent like listModes: the empty roster is the /channel picker's
+    // honest answer; the switch and the import are user actions and toast.
+    listChannels: () => ({ channels: [], activeId: undefined }),
+    setChannel: () => refuse('channel', false),
+    importChannel: () => refuse('channel', undefined),
+    saveChannel: () => refuse('channel', undefined),
+    removeChannel: () => refuse('channel', false),
+    // Silent like listChannels: nothing-to-absorb IS the answer.
+    peekChannelImport: () => undefined,
     clear: () => { unavailable('clear') },
     setActivityFrames: () => refuse('activity', false),
     listPresets: () => refuseAsync('preset', []),

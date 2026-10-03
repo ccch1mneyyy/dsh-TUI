@@ -11,9 +11,11 @@
  *   name the input the channel tracks.
  * - Cancellation: `interrupt()`; a `user` cancel keeps queued inputs (they run
  *   next), an `interrupt` cancel drops them when the CLI can
- *   (`interrupt_cancel_queued_v1`) because the channel re-delivers them. Until
- *   a `result`/`idle` confirms, a 30 s timer stands by to force-close the turn
- *   (`turn.end{aborted}` + notice): an interrupted turn may never report.
+ *   (`interrupt_cancel_queued_v1`) — the channel parks the dropped copies as
+ *   a dock and re-delivers nothing until the user asks (Claude Code parity).
+ *   Until a `result`/`idle` confirms, a 30 s timer stands by to force-close
+ *   the turn (`turn.end{aborted}` + notice): an interrupted turn may never
+ *   report.
  * - Permissions (Phase 3): the permission bridge (`permissions.ts`) parks
  *   every `canUseTool` prompt and announces it as `permission.request` /
  *   `question.request`; the user's answer returns through the
@@ -35,6 +37,7 @@
 import type { AccountInfo, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { randomUUID } from 'node:crypto'
 import type { AccountView, RewindOutcome, RewindPreview, SessionAuthView } from '../../agent/capabilities.js'
+import type { WorkingActivityView } from '../../adapter/ports/channel-view.js'
 import type { AgentEvent, AgentEventMeta } from '../../agent/events.js'
 import type { AgentSessionRef } from '../../agent/refs.js'
 import type { AgentInput, AgentSession, AgentSessionStatus, CancelCause, SubmitPlacement } from '../../agent/session.js'
@@ -44,13 +47,19 @@ import { CLAUDE_OAUTH_PROVIDER, detectClaudeAuth, isAuthFailure, refreshFailureD
 import { accountView, createClaudeControls } from './controls.js'
 import { buildQueryOptions, type StartPermissionMode } from './options.js'
 import { createClaudeDialogBridge, SUPPORTED_DIALOG_KINDS } from './dialogs.js'
+import { createClaudeActivityPublisher } from './activity.js'
 import { createClaudePermissionBridge, WITHDRAWN_MESSAGE } from './permissions.js'
 import { createStderrSink, type ClaudeExecutable } from './process.js'
 import { memoryClaudePrefs, type ClaudePrefs } from './prefs.js'
+import { activeProfileOf, fileClaudeChannels, type ClaudeChannels } from './channels.js'
+import { fileClaudeChannelTokens, type ClaudeChannelTokens } from './channelTokens.js'
 import { createClaudeTranscriptHistory } from './older-history.js'
 import { rewindCutPoint, type ClaudeReplay } from './replay.js'
 import type { ClaudeSdkModule, ClaudeSessionStoreSdk } from './sdk.js'
 import { readTaskOutputTail, taskOutputRoots } from './task-output.js'
+import { join } from 'node:path'
+import { DATA_DIR } from '../../utils/paths.js'
+import { mergedModelEnv, modelTruthFrom, readLocalModelNames } from './modelEnv.js'
 import { claudeConfigDir } from './transcript-file.js'
 import { CLAUDE_IMAGE_LIMITS, claudeImageBlocks } from './images.js'
 import { createClaudeSideQuery } from './side-query.js'
@@ -112,6 +121,12 @@ export interface ClaudeSessionDeps {
   }
   /** The user's persisted `/model` and `/effort` choices (memory if absent). */
   readonly prefs?: ClaudePrefs
+  /** The relay channel profiles (channels.json; the file store if absent). */
+  readonly channels?: ClaudeChannels
+  /** The channel-token credential seam (channelTokens.ts; the file store
+   *  under the DSH home if absent). Token material only ever moves between
+   *  this seam and the spawn pipeline's env. */
+  readonly channelTokens?: ClaudeChannelTokens
   /** A start model / effort when nothing is persisted (none = the CLI's). */
   readonly model?: string
   readonly effort?: string
@@ -219,6 +234,12 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   const clock = deps.clock ?? REAL_CLOCK
   const forceSettleMs = deps.forceSettleMs ?? 30_000
   const prefs = deps.prefs ?? memoryClaudePrefs()
+  // The relay channel profiles: the file store under ~/.dsh-tui by default,
+  // injectable like prefs (tests run an in-memory store).
+  const channels = deps.channels ?? fileClaudeChannels(join(DATA_DIR, 'backends', 'claude'), message => deps.host.debug(message))
+  // The channel-token seam: ~/.dsh/.credentials.yaml by default (the
+  // /provider precedent), injectable for tests.
+  const channelTokens = deps.channelTokens ?? fileClaudeChannelTokens(undefined, message => deps.host.debug(message))
   const listeners = new Set<Listener>()
   /** Batches produced before the channel subscribed (handshake, start notices). */
   const backlog: [readonly AgentEvent[], AgentEventMeta][] = []
@@ -264,10 +285,28 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   const translator = createClaudeTranslator({ cwd: deps.cwd, userRows: 'lifecycle', debug: deps.host.debug, ...(resumeStart === undefined ? {} : { start: resumeStart }) })
   translator.noteMode(deps.start.mode)
 
+  // The working line's publisher (activity.ts): folded from the translator's
+  // own state after every batch, never from a second parse of the stream. A
+  // parked permission/dialog prompt is the waiting phase; the fold dedupes,
+  // so folding after every emit publishes only real changes.
+  const activityPublisher = createClaudeActivityPublisher()
+  const activityListeners = new Set<(view: WorkingActivityView) => void>()
+  const publishActivity = (): void => {
+    const view = activityPublisher.fold(translator.activityState(), asking || dialogsOpen)
+    if (view === undefined) return
+    for (const listener of [...activityListeners]) {
+      try {
+        listener(view)
+      } catch (error) {
+        deps.host.debug(`claude: activity listener failed (${errorText(error)})`)
+      }
+    }
+  }
+
   const emit = (events: readonly AgentEvent[], wake: AgentEventMeta['wake'] = 'sync'): void => {
     if (events.length === 0) return
     const meta: AgentEventMeta = { replay: false, wake }
-    if (listeners.size === 0) { backlog.push([events, meta]); return }
+    if (listeners.size === 0) { backlog.push([events, meta]); publishActivity(); return }
     for (const listener of [...listeners]) {
       try {
         listener(events, meta)
@@ -275,6 +314,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         deps.host.debug(`claude: listener failed (${errorText(error)})`)
       }
     }
+    publishActivity()
   }
 
   const clearForceTimer = (): void => {
@@ -731,11 +771,32 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     },
     currentModel: () => translator.model,
     currentMode: () => translator.mode ?? deps.start.mode,
-    bypassAllowed: () => deps.start.bypassAllowed,
     noteModel: model => translator.noteModel(model),
     noteMode: mode => translator.noteMode(mode),
     prefs,
+    channels,
+    tokens: channelTokens,
     debug: deps.host.debug,
+    // The settings env the import resolves from — the same merge the model
+    // truth applies (settings file + live auth env).
+    settingsEnv: () => mergedModelEnv(
+      claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
+      authPlan.env,
+    ),
+    // Channel model truth, lazily (the list reads it on demand): the ACTIVE
+    // channel profile first (channels.json — the user's own data), then the
+    // settings env of the same config dir the transcripts use, plus the
+    // live auth env on top. A cosmetic tier name a relay channel wrote
+    // must not hide the model that actually serves the request.
+    modelTruth: () => {
+      const active = activeProfileOf(channels.read())
+      return modelTruthFrom(
+        claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
+        authPlan.env,
+        readLocalModelNames(join(DATA_DIR, 'backends', 'claude')),
+        active === undefined ? undefined : { models: active.models, tiers: active.tiers },
+      )
+    },
   })
 
   try {
@@ -991,6 +1052,19 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
           get cliCapabilities() { return cliCapabilities },
         },
       },
+      // The working-activity line this backend folds itself (activity.ts):
+      // the channel subscribes per binding and forwards into the store the
+      // DSH projection feed fills, so the UI's working line stays
+      // backend-neutral. A late subscriber receives the latest value once —
+      // a rebind shows the running line without waiting for a change.
+      workingActivity: {
+        subscribe(listener: (view: WorkingActivityView) => void) {
+          activityListeners.add(listener)
+          const last = activityPublisher.last()
+          if (last !== undefined) listener(last)
+          return () => { activityListeners.delete(listener) }
+        },
+      },
       diagnostics: {
         lines: (): readonly string[] => [
           t('claude-doctor-cli', { path: deps.executable.path ?? t('claude-doctor-bundled'), source: deps.executable.source, version: cliVersion ?? t('doctor-unknown') }),
@@ -1088,8 +1162,11 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
           settleIdleWaiters()
         }, forceSettleMs)
       }
-      // `interrupt` re-delivers the queue itself, so the queued inputs go with
-      // the turn when the CLI can drop them; a user cancel keeps them.
+      // An `interrupt` parks the queue in the channel (the dock) instead of
+      // re-delivering it, so the queued inputs go with the turn when the CLI
+      // can drop them; a user cancel keeps them (they run as the next turn).
+      // A CLI without the capability keeps its queue and runs it — the
+      // cancel receipt's `still_queued` tells the channel, which un-docks.
       const cancelQueued = cause !== 'user' && cliCapabilities.includes(CLI_CAPABILITY.interruptCancelQueued)
       // The documented `cancel_queued` interrupt field is reachable through
       // the runtime method's option bag (absent from the TS signature).

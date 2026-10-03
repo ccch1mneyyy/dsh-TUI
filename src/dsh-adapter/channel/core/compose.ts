@@ -284,7 +284,7 @@ export function createCoreChannel(
   const { dispatchUserText, withDecisionPending, clearStagedImages } = inputDelivery
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
-  const inputConvergence: InputConvergence = { interruptSeq: 0, cancelInFlight: false }
+  const inputConvergence: InputConvergence = { interruptSeq: 0, cancelInFlight: false, cancelCause: undefined }
 
   const actionReadiness = createChannelActionReadiness()
   const getReadyActions = (): ChannelActionDelegates => {

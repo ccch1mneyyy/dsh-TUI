@@ -25,6 +25,8 @@ const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { Qu
   ])
 import type { AgentEvent, AgentEventMeta } from '../src/agent/events.js'
 import type { AgentInput, AgentSession, SubmitPlacement } from '../src/agent/session.js'
+import type { WorkingActivityView } from '../src/adapter/ports/channel-view.js'
+import { ActivityStore } from '../src/dsh-adapter/activity-store.js'
 
 setLang('en')
 let passed = 0
@@ -355,13 +357,20 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
     { id: 'plan', label: 'Plan' },
   ]
   const sets: string[] = []
+  // The stub's `current()` FOLLOWS `set()`, exactly like the real backend:
+  // the live mode is what `modes.current()` reports (the translator updates
+  // it from the same `mode.changed` frame this stub emits). A constant
+  // `current: () => 'default'` made the footer assertion below vacuous — it
+  // asked whether the footer follows the switch while the roster claimed
+  // nothing had changed (fixtures must follow the runtime contract).
+  let currentMode = 'default'
   const listeners = new Set<(batch: readonly AgentEvent[], meta: AgentEventMeta) => void>()
   const modeful: AgentSession = {
     ...freshSession({
       modes: {
         list: () => MODES,
-        current: () => 'default',
-        set: id => { sets.push(id); for (const listener of [...listeners]) listener([{ type: 'mode.changed', modeId: id }], { replay: false, wake: 'sync' }); return Promise.resolve() },
+        current: () => currentMode,
+        set: id => { sets.push(id); currentMode = id; for (const listener of [...listeners]) listener([{ type: 'mode.changed', modeId: id }], { replay: false, wake: 'sync' }); return Promise.resolve() },
       },
     }),
   }
@@ -473,6 +482,222 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
       channel.releaseContributions()
       term.dispose()
     }
+  }
+}
+
+// ── footer model + think-level segments click into /model · /effort ──
+// Same contract as the mode segment: the capability bit (backendCapabilities
+// .models / .effort) gates the click, the picker is the command's own, and a
+// backend without the capability renders the segment but answers nothing.
+// The effort fixture also carries levelsFallback — the slider must SAY the
+// ladder is the CLI-standard compatibility offer, not the model's own list.
+{
+  const modelsCap = {
+    list: () => Promise.resolve([{ id: 'sonnet', label: 'Sonnet' }, { id: 'opus', label: 'Opus' }]),
+    current: () => ({ model: 'fake-model' }),
+    set: () => Promise.resolve({ kind: 'switched' as const }),
+  }
+  const effortSets: string[] = []
+  const effortCap = {
+    levelsFallback: true as const,
+    levels: () => [
+      { id: 'low', label: 'Low' }, { id: 'medium', label: 'Medium' }, { id: 'high', label: 'High' },
+      { id: 'xhigh', label: 'Extra high' }, { id: 'max', label: 'Max' },
+    ],
+    current: () => 'medium',
+    set: (id: string | null) => { effortSets.push(id ?? 'null'); return Promise.resolve() },
+  }
+  const capable = freshSession({ models: modelsCap, effort: effortCap })
+  const channel = createChannel(ctx, capable, { model: 'fake-model', provider: '', cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent' } as never)
+  const COLS = 100
+  const ROWS = 30
+  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  class Out extends Writable { columns = COLS; rows = ROWS; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
+  class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
+  const stdin = new In()
+  const stdout = new Out()
+  // AlternateScreen resolves its renderer through instances.get(process.stdout):
+  // the earlier sections' (unmounted) instances must not answer for this render.
+  for (const key of [...instances.keys()]) instances.delete(key)
+  const instance = await ui.render(
+    React.createElement(ui.AlternateScreen, null, React.createElement(Chat, { channel: channel as never, questionStore: new QuestionStore(), approvalStore: new ApprovalStore(), onExit: () => undefined, fullscreen: true, trajectorySeen: true })),
+    { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  instances.set(process.stdout, instances.get(stdout)!)
+  const screen = (): string => viewportLines(term, ROWS).join('\n')
+  const footer = (): string => {
+    const lines = viewportLines(term, ROWS)
+    while (lines.length > 0 && lines[lines.length - 1]!.trim() === '') lines.pop()
+    return lines.slice(-4).join('\n')
+  }
+  // The empty transcript's splash ALSO prints the model name (capitalized
+  // effort), so findText's top-down scan lands on the splash row, not the
+  // footer segment. Locate segments bottom-up: the footer is the last
+  // content row and its effort id is the raw lowercase one.
+  const footerHit = (needle: string): { col: number; row: number } | null => {
+    const lines = viewportLines(term, ROWS)
+    for (let row = lines.length - 1; row >= 0; row--) {
+      const col = lines[row]!.indexOf(needle)
+      if (col >= 0) return { col, row }
+    }
+    return null
+  }
+  try {
+    await sleep(300) // 固定窗:pacing the key handlers attach after the first frame.
+    check('the footer shows the model and think-level segments', await settled(() => footer().includes('fake-model') && footer().includes('medium')), footer())
+    const modelHit = footerHit('fake-model')
+    check('the model segment is locatable', modelHit !== null)
+    if (modelHit !== null) {
+      const seq = (final: string): string => '\x1b[<0;' + (modelHit.col + 1) + ';' + (modelHit.row + 1) + final
+      stdin.write(seq('M'))
+      await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
+      stdin.write(seq('m'))
+      // A single-provider catalog opens the picker's DIRECT list (no group
+      // pane, no title row) — the catalog rows + the confirm hint are the
+      // open-picker markers.
+      check('clicking the model segment opens the /model picker with the catalog', await settled(() => screen().includes('Sonnet') && screen().includes('Opus') && screen().includes('Enter to confirm')), screen())
+      stdin.write('\x1b')
+      await sleep(120) // 固定窗:pacing the picker closes before the next click.
+    }
+    check('Esc closed the model picker', await settled(() => !screen().includes('Sonnet')), screen())
+    const effortHit = footerHit('medium')
+    check('the think-level segment is locatable', effortHit !== null)
+    if (effortHit !== null) {
+      const seq = (final: string): string => '\x1b[<0;' + (effortHit.col + 1) + ';' + (effortHit.row + 1) + final
+      stdin.write(seq('M'))
+      await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
+      stdin.write(seq('m'))
+      check('clicking the think-level segment opens the /effort slider', await settled(() => screen().includes(t('picker-title-effort')) && screen().includes('Extra high')), screen())
+      check('the slider marks the ladder as the CLI-standard compatibility offer', screen().includes(t('effort-fallback-tier-note')), screen())
+      stdin.write('\x1b')
+      await sleep(120) // 固定窗:pacing the slider closes before the next assertion.
+    }
+    check('Esc closed the slider without applying anything', await settled(() => !screen().includes(t('picker-title-effort'))) && effortSets.length === 0, screen() + ' :: ' + effortSets.join())
+  } finally {
+    instance.unmount()
+    channel.releaseContributions()
+    term.dispose()
+  }
+
+  // The same footer WITHOUT the capabilities: the model segment renders but
+  // its click answers nothing, and the think-level segment stays away (no
+  // reasoning effort to show).
+  {
+    const channel = createChannel(ctx, freshSession({}), { model: 'fake-model', provider: '', cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent' } as never)
+    const term = new XTerm({ cols: 100, rows: 30, scrollback: 0, allowProposedApi: true })
+    class Out extends Writable { columns = 100; rows = 30; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
+    class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
+    const stdin = new In()
+    const stdout = new Out()
+    for (const key of [...instances.keys()]) instances.delete(key)
+    const instance = await ui.render(
+      React.createElement(ui.AlternateScreen, null, React.createElement(Chat, { channel: channel as never, questionStore: new QuestionStore(), approvalStore: new ApprovalStore(), onExit: () => undefined, fullscreen: true, trajectorySeen: true })),
+      { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
+    )
+    instances.set(process.stdout, instances.get(stdout)!)
+    const screen = (): string => viewportLines(term, 30).join('\n')
+    const footer = (): string => {
+      const lines = viewportLines(term, 30)
+      while (lines.length > 0 && lines[lines.length - 1]!.trim() === '') lines.pop()
+      return lines.slice(-4).join('\n')
+    }
+    try {
+      await sleep(300) // 固定窗:pacing the key handlers attach after the first frame.
+      check('without capabilities the model segment still renders', await settled(() => footer().includes('fake-model')), footer())
+      check('… and the think-level segment stays away (no effort to show)', !footer().includes('medium'), footer())
+      const modelHit = (() => {
+        const lines = viewportLines(term, 30)
+        for (let row = lines.length - 1; row >= 0; row--) {
+          const col = lines[row]!.indexOf('fake-model')
+          if (col >= 0) return { col, row }
+        }
+        return null
+      })()
+      if (modelHit !== null) {
+        const seq = (final: string): string => '\x1b[<0;' + (modelHit.col + 1) + ';' + (modelHit.row + 1) + final
+        stdin.write(seq('M'))
+        await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
+        stdin.write(seq('m'))
+        await sleep(200) // 固定窗:pacing a no-op click stays settled before asserting.
+      }
+      check('clicking the model segment without the capability opens nothing', !screen().includes(t('picker-title-model')) && !screen().includes(t('picker-title-effort')), screen())
+    } finally {
+      instance.unmount()
+      channel.releaseContributions()
+      term.dispose()
+    }
+  }
+}
+
+// ── the backend's own working line (the Claude shape): capability → store ──
+// A backend that folds its own working activity publishes through the typed
+// `workingActivity` capability; the channel forwards into the SAME store the
+// DSH projection fills, and Chat's spinner slot shows the published line.
+// Nothing published = the classic random-verb spinner, untouched.
+{
+  const activityListeners = new Set<(view: WorkingActivityView) => void>()
+  const session = freshSession({
+    workingActivity: { subscribe: listener => { activityListeners.add(listener); return () => { activityListeners.delete(listener) } } },
+  })
+  const listeners = new Set<(batch: readonly AgentEvent[], meta: AgentEventMeta) => void>()
+  session.subscribe = listener => { listeners.add(listener); return () => { listeners.delete(listener) } }
+  const emit = (events: readonly AgentEvent[]): void => {
+    for (const listener of [...listeners]) listener(events, { replay: false, wake: 'sync' })
+  }
+  /** Push one view the way the Claude session's fold does. */
+  const pushActivity = (view: WorkingActivityView): void => {
+    for (const listener of [...activityListeners]) listener(view)
+  }
+  const activityStore = new ActivityStore()
+  const channel = createChannel(ctx, session, {
+    model: 'fake-model', provider: '', cwd: process.cwd(),
+    activity: true, backendLabel: 'Fake Agent',
+    // The status bar's activity field is default-off; the done card's resting
+    // place is that row, so this block turns it on (a user preference).
+    statusBar: { activity: true },
+    publishActivity: (sessionId, view) => activityStore.update(sessionId, view),
+    clearActivity: sessionId => activityStore.clear(sessionId),
+  } as never)
+  const term = new XTerm({ cols: 100, rows: 30, scrollback: 0, allowProposedApi: true })
+  class Out extends Writable { columns = 100; rows = 30; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
+  class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
+  const stdin = new In()
+  const screen = (): string => viewportLines(term, 30).join('\n')
+  const instance = await ui.render(
+    React.createElement(Chat, { channel: channel as never, questionStore: new QuestionStore(), approvalStore: new ApprovalStore(), activityStore, onExit: () => undefined, fullscreen: false, trajectorySeen: true }),
+    { stdout: new Out() as never, stdin: stdin as never, stderr: new Out() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  try {
+    await sleep(300) // 固定窗:pacing the key handlers attach after the first frame.
+    emit([{ type: 'turn.start', turn: 1, origin: 'user', time: Date.now() }])
+    await settled(() => channel.working)
+    const occurrences = (needle: string): number => screen().split(needle).length - 1
+    check('nothing published: the classic random-verb spinner keeps the slot',
+      occurrences('⏵') === 0 && screen().includes('…'),
+      screen())
+    pushActivity({ phase: 'thinking', line: '⏵Fixing the login bug', live: false, toolCount: 0, phrase: '⏵Fixing the login bug', phaseStartedAt: Date.now(), turnStartedAt: Date.now(), updatedAt: Date.now(), lang: 'en' })
+    check('the published ⏵ line takes the spinner slot', await settled(() => occurrences('Fixing the login bug') === 1), screen())
+    // The narration contract: the transcript strips the ⏵ line at render
+    // (MessageList), so the SAME text streaming into the transcript must not
+    // double it on screen.
+    emit([{ type: 'assistant.attempt.start', attemptId: 'a1', turn: 1, step: 1 }])
+    emit([{ type: 'assistant.delta', attemptId: 'a1', index: 0, time: Date.now(), delta: { kind: 'text', text: '⏵Fixing the login bug\nand the details follow' } }])
+    await sleep(120) // 固定窗:pacing the streaming row paints.
+    check('the ⏵ line shows exactly once (transcript strips its copy)',
+      occurrences('Fixing the login bug') === 1,
+      screen())
+    pushActivity({ phase: 'tool', line: 'Read src/login.tsx', live: false, label: 'Read', detail: 'src/login.tsx', toolCount: 0, phaseStartedAt: Date.now(), turnStartedAt: Date.now(), updatedAt: Date.now(), lang: 'en' })
+    check('a running tool replaces the line with label + detail', await settled(() => occurrences('Read src/login.tsx') === 1 && occurrences('Fixing the login bug') === 0), screen())
+    emit([{ type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: Date.now() }])
+    await settled(() => !channel.working)
+    pushActivity({ phase: 'done', line: 'Done · 1 tool', live: false, toolCount: 1, phaseStartedAt: Date.now(), turnStartedAt: Date.now(), updatedAt: Date.now(), lang: 'en' })
+    check('turn end settles on the done line and frees the spinner slot',
+      await settled(() => occurrences('Done · 1 tool') === 1 && occurrences('Read src/login.tsx') === 0),
+      screen())
+  } finally {
+    instance.unmount()
+    channel.releaseContributions()
+    term.dispose()
   }
 }
 console.log(`\nverify-backend-chat OK (${passed} checks)`)

@@ -11,6 +11,7 @@ import type { AgentSession } from '../agent/session.js'
 import { createDshSession, isAgentSession } from './backend/session.js'
 import { createCoreChannel } from './channel/core/compose.js'
 import { attachDshExtensions } from './channel/extensions.js'
+import { attachSessionWorkingActivity } from './channel/session-activity.js'
 import { createChannelOwner } from './channel/owner.js'
 import type { ChannelLaunchOptions } from './channel/state.js'
 import type { ChannelState } from './channel/types.js'
@@ -41,6 +42,10 @@ export function createChannel(
     // backend is served by the core and its session's capabilities alone.
     const native = session.capabilities.native.dsh
     if (native !== undefined) attachDshExtensions(core, ctx, native, options)
+    // A backend that folds its own working line (the Claude backend) serves
+    // it through the typed capability; the DSH projection path above is
+    // untouched. No capability, or no publish option → nothing attaches.
+    if (session.capabilities.workingActivity !== undefined) attachSessionWorkingActivity(core, options)
     return core.start()
   } catch (error) {
     // Setup is one transaction from the first acquired resource. Preserve the
@@ -53,5 +58,5 @@ export function createChannel(
 export type { ChannelLaunchOptions } from './channel/state.js'
 export { expandMentions } from './channel/mentions.js'
 export { sessionCwdMatches } from './channel/paths.js'
-export type { AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, BackendModeOption, Channel, ChannelGoal, ChannelState, ChatRow, ComposerImageRef, ComposerSubmission, CredentialStatus, EffortOption, ExternalCommandOutcome, JobControl, JobGroupRow, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageHandle, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter, TranscriptImage } from './channel/types.js'
+export type { AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, BackendModeOption, BackendChannelOption, Channel, ChannelGoal, ChannelState, ChatRow, ComposerImageRef, ComposerSubmission, CredentialStatus, EffortOption, ExternalCommandOutcome, JobControl, JobGroupRow, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageHandle, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter, TranscriptImage } from './channel/types.js'
 export { emptyTokenUsage } from './channel/usage.js'

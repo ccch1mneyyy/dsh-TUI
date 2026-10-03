@@ -16,11 +16,16 @@ export function EffortSlider({
   options,
   focusIndex,
   currentId,
+  levelsFallback = false,
   onPick,
 }: {
   options: readonly EffortOption[]
   focusIndex: number
   currentId: string | undefined
+  /** True when the ladder is the CLI-standard compatibility offer (the
+   *  model row declares no tiers of its own): the note says so — the
+   *  levels are applied exactly like a model's own list either way. */
+  levelsFallback?: boolean
   /** Mouse pick (fullscreen): click a tier = move there and live-apply —
    *  the same semantics as the ←/→ keys (the slider IS the control). */
   onPick?: (index: number) => void
@@ -61,6 +66,9 @@ export function EffortSlider({
         </Box>
         {focused?.description !== undefined ? (
           <Text dimColor>{focused.description}</Text>
+        ) : null}
+        {levelsFallback ? (
+          <Text dimColor>{t('effort-fallback-tier-note')}</Text>
         ) : null}
         <Text dimColor italic>
           <HintLine text={t('hint-adjust-done')} />

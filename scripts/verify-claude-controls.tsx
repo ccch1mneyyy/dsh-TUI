@@ -8,10 +8,12 @@
  *    model; an unknown id is refused;
  *  - effort: levels from the current model's `supportedEffortLevels`;
  *    `applyFlagSettings({effortLevel})`, `null` = default; persisted;
- *  - modes: default → acceptEdits → plan (auto only where the model supports
- *    it, bypass never in the cycle); `setPermissionMode`, confirmed as
- *    `mode.changed`; a session explicitly started in bypass (the env
- *    opt-in) may re-enter it, everyone else is refused;
+ *  - modes: default → acceptEdits → plan → bypassPermissions (auto only where
+ *    the model supports it, added after bypass); `setPermissionMode`,
+ *    confirmed as `mode.changed`; `bypassPermissions` is selectable from any
+ *    session (the SDK bypass gate is always sent — options.ts — and the CLI
+ *    is the authority, so the TUI refuses nothing); every row carries the
+ *    one-line explanation the picker renders;
  *  - compact pushes the CLI's own `/compact`; commands drop terminal-only
  *    ones; MCP, context usage and account (no email) map to neutral views;
  *  - the channel: native mode label + index, effort readout, backend
@@ -27,6 +29,17 @@ import assert from 'node:assert/strict'
 import instances from '../src/ink/instances.js'
 
 process.env.FORCE_COLOR = '3'
+
+// Hermetic model-truth env (backends/claude/modelEnv.ts reads
+// <CLAUDE_CONFIG_DIR>/settings.json to relabel relay catalog rows): pin an
+// EMPTY config dir so the real ~/.claude on the developer machine (a relay
+// channel mapping every tier to glm-5.3) cannot relabel the fixture catalog.
+const { mkdtempSync, rmSync } = await import('node:fs')
+const { tmpdir } = await import('node:os')
+const { join: joinPath } = await import('node:path')
+const hermeticClaudeDir = mkdtempSync(joinPath(tmpdir(), 'dshtui-controls-'))
+process.env.CLAUDE_CONFIG_DIR = hermeticClaudeDir
+process.on('exit', () => { try { rmSync(hermeticClaudeDir, { recursive: true, force: true }) } catch { /* best effort */ } })
 
 const [
   { PassThrough, Writable },
@@ -137,16 +150,22 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
   check('effort: a model without effort offers no levels', caps.effort!.levels().length === 0)
   await caps.models!.set({ model: 'opus' })
 
-  check('modes: auto only where the model supports it, bypass never', caps.modes!.list().map(mode => mode.id).join() === 'default,acceptEdits,plan,auto')
+  check('modes: bypass is always listed, auto only where the model supports it', caps.modes!.list().map(mode => mode.id).join() === 'default,acceptEdits,plan,bypassPermissions,auto')
   await caps.models!.set({ model: 'default' })
-  check('modes: default → acceptEdits → plan without auto', caps.modes!.list().map(mode => mode.id).join() === 'default,acceptEdits,plan')
+  check('modes: default → acceptEdits → plan → bypassPermissions without auto', caps.modes!.list().map(mode => mode.id).join() === 'default,acceptEdits,plan,bypassPermissions')
   await caps.modes!.set('acceptEdits')
   check('modes: setPermissionMode, confirmed as mode.changed', query.calls.some(call => call.method === 'setPermissionMode' && call.args[0] === 'acceptEdits') && caps.modes!.current() === 'acceptEdits' && events.some(event => event.type === 'mode.changed' && event.modeId === 'acceptEdits'))
-  const bypassRefusal = await caps.modes!.set('bypassPermissions').then(() => undefined, (error: unknown) => error instanceof Error ? error.message : String(error))
-  check('modes: bypassPermissions is refused outside a session started in it', bypassRefusal === t('claude-mode-bypass-refused'), bypassRefusal)
   query.emit({ type: 'system', subtype: 'status', status: null, permissionMode: 'acceptEdits' })
   await tick()
   check('modes: the CLI\'s confirming status frame is not reported twice', events.filter(event => event.type === 'mode.changed' && event.modeId === 'acceptEdits').length === 1)
+  // The /permission picker can really switch INTO bypass: the TUI no longer
+  // vets the id (the SDK gate is always sent; the CLI is the authority). The
+  // mode is restored afterwards so the readouts below stay comparable.
+  const entered = await caps.modes!.set('bypassPermissions').then(() => true, (error: unknown) => error instanceof Error ? error.message : String(error))
+  check('modes: bypassPermissions is selectable at runtime', entered === true && query.calls.some(call => call.method === 'setPermissionMode' && call.args[0] === 'bypassPermissions') && caps.modes!.current() === 'bypassPermissions', entered)
+  await caps.modes!.set('acceptEdits')
+  const roster = caps.modes!.list()
+  check('modes: every roster row explains itself (non-empty, never the bare label)', roster.every(mode => typeof mode.description === 'string' && mode.description.trim() !== '' && mode.description !== mode.label), roster.map(mode => [mode.id, mode.label, mode.description]))
 
   await caps.compact!.run()
   await tick()
@@ -166,10 +185,10 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
   await session.dispose()
 }
 
-// ── the explicit bypass start: re-entry allowed, the cycle unchanged ──
+// ── the explicit bypass start: the roster entry is not a duplicate ─────
 {
   const fake = fakeClaudeSdk(() => ({ capabilities: ['msg_lifecycle_v1'], models: MODELS, commands: COMMANDS }), controls)
-  const session = await openClaudeSession(claudeDeps(fake.sdk, { start: { mode: 'bypassPermissions', source: 'env', bypassAllowed: true } }))
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { start: { mode: 'bypassPermissions', source: 'env' } }))
   const events: AgentEvent[] = []
   session.subscribe(batch => { events.push(...batch) })
   await tick()
@@ -178,9 +197,9 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
   await tick()
   const caps = session.capabilities
   check('bypass session: starts and reports bypassPermissions', caps.modes!.current() === 'bypassPermissions' && events.some(event => event.type === 'mode.changed' && event.modeId === 'bypassPermissions'))
-  // The Shift+Tab cycle never offers bypass; the live mode only trails the
-  // list because it is current (the pre-existing retention rule).
-  check('bypass session: the cycle still never offers bypass', caps.modes!.list().map(mode => mode.id).join() === 'default,acceptEdits,plan,bypassPermissions')
+  // Bypass is the roster's own entry, so the live mode is not appended again
+  // by the retention rule (the pre-existing trailing rule).
+  check('bypass session: bypass is listed once, as the roster entry', caps.modes!.list().map(mode => mode.id).join() === 'default,acceptEdits,plan,bypassPermissions')
   const reentered = await caps.modes!.set('bypassPermissions').then(() => true, (error: unknown) => error instanceof Error ? error.message : String(error))
   check('bypass session: re-entering bypass delegates to setPermissionMode', reentered === true && query.calls.some(call => call.method === 'setPermissionMode' && call.args[0] === 'bypassPermissions'), reentered)
   await caps.modes!.set('default')
@@ -197,13 +216,16 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
   await session.dispose()
 }
 
-// ── a model switch clears an effort the new model cannot run ──────────
+// ── a model switch vs the effort: declared lists rule; missing ones fall back ──
 {
-  // `MODELS` plus the shapes the real offline catalog serves: a Haiku row
-  // that advertises NEITHER `supportsEffort` NOR a level list (SDK
-  // 0.3.287), and an old-CLI row that claims support but lists no levels —
-  // the picker honestly offers nothing for either; a kept readout would be
-  // a claim the UI cannot back.
+  // `MODELS` plus the shapes the real catalog serves: a Haiku row that
+  // advertises NEITHER `supportsEffort` NOR a level list (SDK 0.3.287 —
+  // the same shape a relay channel's custom model rows serve), and an
+  // old-CLI row that claims support but lists no levels. The CLI accepts
+  // any effortLevel flag regardless (applyFlagSettings), so those rows get
+  // the CLI-standard tiers as a MARKED compatibility fallback and keep the
+  // remembered choice; only an explicit `supportsEffort === false` (or a
+  // declared list that excludes the tier) still clears.
   const CATALOG = [
     ...MODELS,
     { value: 'haiku-pro', resolvedModel: 'claude-haiku-4-5-20251001', displayName: 'Haiku Pro', description: 'no effort metadata' },
@@ -229,39 +251,57 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
   check('models: an effort outside the new levels is cleared everywhere', caps.effort!.current() === undefined && prefs.data.effort === undefined && effortEvents().at(-1) === null && caps.effort!.levels().map(level => level.id).join() === 'low,medium,high')
 
   // high IS a level of both the plain and the opus model: kept, no clear.
+  // A row that declares its own list carries NO fallback marker — the
+  // ladder is the model's, not the compatibility offer.
   await caps.effort!.set('high')
   events.length = 0
   await caps.models!.set({ model: 'opus' })
-  check('models: an effort the new model still runs is kept', caps.effort!.current() === 'high' && prefs.data.effort === 'high' && effortEvents().length === 0)
+  check('models: an effort the new model still runs is kept', caps.effort!.current() === 'high' && prefs.data.effort === 'high' && effortEvents().length === 0 && caps.effort!.levelsFallback === undefined)
 
-  // haiku declares no effort support at all (no levels list): without the
-  // supportsEffort check the readout kept saying max while levels() was
-  // empty and the persisted pref resurrected on the next start.
+  // haiku EXPLICITLY declares no effort support: still refused and still
+  // cleared (without the supportsEffort check the readout kept saying max
+  // while levels() was empty and the persisted pref resurrected).
   await caps.effort!.set('max')
   events.length = 0
   const switched = await caps.models!.set({ model: 'haiku' })
-  check('models: an effort on a model without effort support is cleared', switched.kind === 'switched' && caps.effort!.current() === undefined && prefs.data.effort === undefined && JSON.stringify(effortEvents()) === '[null]' && caps.effort!.levels().length === 0)
+  check('models: an effort on a model without effort support is cleared', switched.kind === 'switched' && caps.effort!.current() === undefined && prefs.data.effort === undefined && JSON.stringify(effortEvents()) === '[null]' && caps.effort!.levels().length === 0 && caps.effort!.levelsFallback === undefined)
 
-  // The real 0.3.287 Haiku shape: no `supportsEffort`, no levels at all.
+  // The real 0.3.287 Haiku / relay-custom shape: no `supportsEffort`, no
+  // levels list. The picker serves the CLI-standard tiers — marked as a
+  // compatibility fallback — and the remembered choice survives the switch
+  // (a silent clear would downgrade the user's next start for nothing).
   await caps.models!.set({ model: 'opus' })
   await caps.effort!.set('max')
   events.length = 0
   const toHaikuPro = await caps.models!.set({ model: 'haiku-pro' })
-  check('models: a row advertising no levels at all clears the effort', toHaikuPro.kind === 'switched' && caps.effort!.current() === undefined && prefs.data.effort === undefined && JSON.stringify(effortEvents()) === '[null]' && caps.effort!.levels().length === 0, { current: caps.effort!.current(), prefs: prefs.data.effort, events: effortEvents() })
+  check('models: a row with no level metadata keeps the effort and serves the CLI-standard tiers', toHaikuPro.kind === 'switched' && caps.effort!.current() === 'max' && prefs.data.effort === 'max' && effortEvents().length === 0 && caps.effort!.levels().map(level => level.id).join() === 'low,medium,high,xhigh,max' && caps.effort!.levels().every(level => level.label !== level.id) && caps.effort!.levelsFallback === true, { current: caps.effort!.current(), prefs: prefs.data.effort, events: effortEvents(), levels: caps.effort!.levels() })
+  await caps.effort!.set('xhigh')
+  check('effort: a fallback tier applies through applyFlagSettings like any level', fake.queries[0]!.calls.some(call => call.method === 'applyFlagSettings' && JSON.stringify(call.args[0]) === JSON.stringify({ effortLevel: 'xhigh' })) && caps.effort!.current() === 'xhigh' && prefs.data.effort === 'xhigh')
 
-  // supportsEffort:true with no level list (old CLI): the picker stays
-  // honestly empty — no hardcoded tiers — so the readout claims nothing.
-  await caps.models!.set({ model: 'opus' })
-  await caps.effort!.set('high')
+  // supportsEffort:true with no level list (old CLI): a declared-support
+  // claim without a list is still a missing list — same fallback.
   events.length = 0
   const toLegacy = await caps.models!.set({ model: 'legacy' })
-  check('models: supported-but-unlisted levels still clear (no hardcoded tiers)', toLegacy.kind === 'switched' && caps.effort!.current() === undefined && prefs.data.effort === undefined && JSON.stringify(effortEvents()) === '[null]' && caps.effort!.levels().length === 0, { current: caps.effort!.current(), prefs: prefs.data.effort, events: effortEvents() })
+  check('models: supported-but-unlisted rows take the same marked fallback', toLegacy.kind === 'switched' && caps.effort!.current() === 'xhigh' && prefs.data.effort === 'xhigh' && effortEvents().length === 0 && caps.effort!.levelsFallback === true && caps.effort!.levels().map(level => level.id).join() === 'low,medium,high,xhigh,max', { current: caps.effort!.current(), prefs: prefs.data.effort, events: effortEvents() })
+
+  // A remembered tier outside even the fallback ladder (a relay-specific id
+  // the user pinned earlier) is kept verbatim: the CLI is the authority on
+  // what it will run, and the TUI neither rewrites the pref nor pretends
+  // the picker offers it (the slider marks no tier as current).
+  await caps.effort!.set('turbo')
+  events.length = 0
+  const toHaikuProAgain = await caps.models!.set({ model: 'haiku-pro' })
+  check('models: a remembered tier outside the fallback ladder is kept verbatim', toHaikuProAgain.kind === 'switched' && caps.effort!.current() === 'turbo' && prefs.data.effort === 'turbo' && effortEvents().length === 0, { current: caps.effort!.current(), prefs: prefs.data.effort })
+
+  // A declared list that excludes the tier is a real refusal: still cleared.
+  await caps.models!.set({ model: 'opus' })
+  check('models: a declared list excluding the tier still clears', caps.effort!.current() === undefined && prefs.data.effort === undefined && effortEvents().at(-1) === null && caps.effort!.levels().map(level => level.id).join() === 'low,medium,high,max')
 
   // The cleared effort does not resurrect, a refused switch never touches
   // it, and setting one again works.
   events.length = 0
-  await caps.models!.set({ model: 'opus' })
-  check('models: a cleared effort stays cleared across switches', caps.effort!.current() === undefined && prefs.data.effort === undefined && effortEvents().length === 0 && caps.effort!.levels().map(level => level.id).join() === 'low,medium,high,max')
+  await caps.models!.set({ model: 'haiku-pro' })
+  check('models: a cleared effort stays cleared across switches', caps.effort!.current() === undefined && prefs.data.effort === undefined && effortEvents().length === 0 && caps.effort!.levels().map(level => level.id).join() === 'low,medium,high,xhigh,max')
   const refused = await caps.models!.set({ model: 'gpt-5' })
   check('models: a refused switch leaves the effort untouched', refused.kind === 'refused' && caps.effort!.current() === undefined && prefs.data.effort === undefined)
   await caps.effort!.set('max')
@@ -278,8 +318,11 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
     get: (name: string) => name === 'dshAuth' ? { api: { providers: () => Promise.resolve([]), login: () => Promise.reject(new Error('no')), logout: () => Promise.resolve(false) } } : undefined,
     logger: { warn: () => undefined, info: () => undefined, debug: () => undefined },
   } as never
-  // The status line's mode field is opt-in (`statusBar.mode`, as on DSH).
-  const channel = createChannel(ctx, session, { model: 'Claude Agent', provider: 'claude', cwd: '/fixture/project', activity: false, backendLabel: 'Claude Agent', statusBar: { mode: true } })
+  // The status line's backend-native mode segment is always shown — the
+  // `statusBar.mode` field switch does not gate it (only the minimal UI
+  // hides it) — so this render uses the DEFAULT status bar config and the
+  // mode label must still be on screen.
+  const channel = createChannel(ctx, session, { model: 'Claude Agent', provider: 'claude', cwd: '/fixture/project', activity: false, backendLabel: 'Claude Agent' })
   const query = fake.queries[0]!
   query.emit(init)
   await settled(() => channel.model === 'claude-sonnet-x')
@@ -333,7 +376,7 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
       stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false,
     })
     try {
-      check('render: the status line shows the native mode label', await settled(() => screen().includes(t('claude-mode-plan'))), screen())
+      check('render: the status line shows the native mode label under the DEFAULT status bar config', await settled(() => screen().includes(t('claude-mode-plan'))), screen())
       // 固定窗:pacing the prompt attaches its key handler after the first frame.
       await sleep(200)
       for (const char of '/context') stdin.write(char)
@@ -360,7 +403,8 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
     get: () => undefined,
     logger: { warn: () => undefined, info: () => undefined, debug: () => undefined },
   } as never
-  const channel = createChannel(ctx, session, { model: 'Claude Agent', provider: 'claude', cwd: '/fixture/project', activity: false, backendLabel: 'Claude Agent', statusBar: { mode: true } })
+  // Default status bar config: the backend-native mode segment shows anyway.
+  const channel = createChannel(ctx, session, { model: 'Claude Agent', provider: 'claude', cwd: '/fixture/project', activity: false, backendLabel: 'Claude Agent' })
   const query = fake.queries[0]!
   query.emit(init)
   await settled(() => channel.model === 'claude-sonnet-x')
@@ -410,6 +454,9 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
       await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
       stdin.write(seq('m'))
       check('render: clicking the mode segment opens the /permission picker', await settled(() => screen().includes(t('permission-mode-picker-title')) && screen().includes(t('claude-mode-acceptEdits'))), screen())
+      // 人话解释：每行的第二行必须是「这个模式会做什么」，而不是把名字再打
+      // 一遍（旧实现 description = name）。bypass 行同样带着它的解释。
+      check('render: picker rows explain themselves instead of repeating the name', await settled(() => screen().includes(t('claude-mode-desc-acceptEdits')) && screen().includes(t('claude-mode-desc-bypassPermissions'))), screen())
       stdin.write('\x1b[B')
       await sleep(80) // 固定窗:pacing the arrow move lands before Enter.
       stdin.write('\r')

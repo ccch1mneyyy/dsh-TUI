@@ -10,7 +10,7 @@
 import type { LocalCommand } from '../../../adapter/ports/channel-catalog.js'
 import type { AgentEvent } from '../../../agent/events.js'
 import type { AgentSession } from '../../../agent/session.js'
-import { BACKEND_PERMISSION_COMMAND, LOCAL_COMMANDS } from '../../../commands.js'
+import { BACKEND_CHANNEL_COMMAND, BACKEND_PERMISSION_COMMAND, LOCAL_COMMANDS } from '../../../commands.js'
 import { t } from '../../../i18n.js'
 import { logForDebugging } from '../../../utils/debug.js'
 import type { ChannelState } from '../types.js'
@@ -19,11 +19,17 @@ import type { ChannelState } from '../types.js'
  *  snapshot serving every built-in keeps the catalog itself (identity).
  *  `permission` is not a LOCAL_COMMANDS name: it appears only when the
  *  snapshot appended it for the session's typed `modes` capability (see
- *  channel/capabilities.ts), and then rides as BACKEND_PERMISSION_COMMAND. */
+ *  channel/capabilities.ts), and then rides as BACKEND_PERMISSION_COMMAND.
+ *  `channel` follows the same ride-along for the typed `channels`
+ *  capability (BACKEND_CHANNEL_COMMAND). */
 export function localCommandsFor(names: readonly string[]): readonly LocalCommand[] {
   if (names.length === LOCAL_COMMANDS.length && LOCAL_COMMANDS.every((command, index) => command.name === names[index])) return LOCAL_COMMANDS
   const served = LOCAL_COMMANDS.filter(command => names.includes(command.name))
-  return names.includes('permission') ? [...served, BACKEND_PERMISSION_COMMAND] : served
+  const appended = [
+    ...(names.includes('permission') ? [BACKEND_PERMISSION_COMMAND] : []),
+    ...(names.includes('channel') ? [BACKEND_CHANNEL_COMMAND] : []),
+  ]
+  return appended.length === 0 ? served : [...served, ...appended]
 }
 
 const debugFailure = (what: string) => (error: unknown): void => {
@@ -148,6 +154,20 @@ export function createSessionControls(deps: {
     refreshContext(session, current)
   }
 
+  /**
+   * Channel model truth: when the backend maps the live model id to the
+   * model that actually serves the request (relay channels echo the
+   * requested id back — backends/claude/modelEnv.ts), the footer shows the
+   * mapped name. Data surfaces keep the raw id. Also the refresh path of a
+   * channel-profile switch (/channel): the backend's truth read is lazy, so
+   * re-running it after the store changed repaints the footer immediately.
+   */
+  const refreshModelDisplay = (session: AgentSession): void => {
+    const state = deps.state()
+    const display = session.capabilities.models?.display?.()
+    state.modelDisplay = display !== undefined && display !== state.model ? display : undefined
+  }
+
   /** The session-level events of one admitted batch. */
   const observe = (batch: readonly AgentEvent[], session: AgentSession, current: () => boolean): void => {
     let changed = false
@@ -162,9 +182,15 @@ export function createSessionControls(deps: {
           changed = true
           break
         case 'model.changed':
+        case 'session.ready': {
           // Effort levels follow the model.
-          if (session.capabilities.effort !== undefined) applyEffort(session, session.capabilities.effort.current())
+          if (event.type === 'model.changed' && session.capabilities.effort !== undefined) {
+            applyEffort(session, session.capabilities.effort.current())
+          }
+          refreshModelDisplay(session)
+          changed = true
           break
+        }
         case 'commands.changed':
           loadBackendCommands(session, current)
           break
@@ -196,6 +222,8 @@ export function createSessionControls(deps: {
     observe,
     reset,
     refreshCommandList,
+    /** Re-resolve the channel model display now (the /channel switch path). */
+    refreshModelDisplay,
     /** The last MCP report, refreshing it for next time (`/mcp` is synchronous). */
     mcpReport(session: AgentSession, current: () => boolean): string[] | undefined {
       refreshMcp(session, current)

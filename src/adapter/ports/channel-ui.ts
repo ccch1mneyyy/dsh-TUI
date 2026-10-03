@@ -1,5 +1,5 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { AgentCapabilities } from './channel-capabilities.js'
@@ -82,6 +82,13 @@ export interface ChannelUi {
   readonly settingsNamespace: string
   /** Resolved model id (from the plugin config). */
   readonly model: string
+  /** Display name of the live model when a channel mapping says the id the
+   *  runtime echoes is not what actually serves the request (relay channels
+   *  echo the requested id back; backends/claude/modelEnv.ts resolves it
+   *  from the user ANTHROPIC_*_MODEL env plus the local model-names.json).
+   *  UI renders this instead of `model` when present; attribution and
+   *  matching keep using `model`. */
+  readonly modelDisplay: string | undefined
   /** Provider route of the live agent. */
   readonly provider: string
   /** Raw cordis.yml `provider` key (undefined when unset) — the boot-time
@@ -415,10 +422,20 @@ export interface ChannelUi {
    *  stays true the abort has not converged; Chat force-exits on the next
    *  Ctrl+C press in that window. */
   cancel(): void
-  /** Abort the in-flight turn and process `texts` right away (Esc/Ctrl+Enter
+  /** Abort the in-flight turn and process `texts` right away (Ctrl+Enter
    *  with queued input): each text is re-queued as a followup once the abort
    *  settles, so the new turn starts immediately. Returns the count queued. */
   interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number
+  /** Esc with queued input: abort the turn and PARK the queued previews as a
+   *  dock (Claude Code parity) — the backend drops its queued copies with
+   *  the aborted turn and nothing re-delivers them until the user sends the
+   *  dock (⏎ / `deliverDocked`) or retracts items (Alt+↑ / the ↑ editor).
+   *  Returns the count docked; 0 = nothing new parked (the caller may still
+   *  `cancel`). */
+  interruptAndDock(): number
+  /** Deliver every docked queued message now (⏎ on an empty draft), FIFO,
+   *  exactly once. Returns the count sent. */
+  deliverDocked(): number
   /** Rewind the conversation to a past user message (the double-Esc rewind):
    *  forks the session through that message, swaps in a fresh agent, and
    *  returns the message text for re-editing — or `null` when unwritable.
@@ -485,8 +502,11 @@ export interface ChannelUi {
    *  The history replays unchanged; only the request route changes. */
   switchModel(provider: string, model: string): Promise<boolean>
   /** The live route's effort levels + adapter default for the `/effort`
-   *  slider; empty `efforts` after notifying when unsupported/unavailable. */
-  listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined }>
+   *  slider; empty `efforts` after notifying when unsupported/unavailable.
+   *  `levelsFallback` is true when the ladder is the CLI-standard
+   *  compatibility offer (the model row declares no tiers of its own) —
+   *  the slider marks it as such instead of implying the model's list. */
+  listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined; levelsFallback?: true }>
   /** Set one effort level by id (validated against the adapter list);
    *  false + a notify when the id is not offered. Persists like the old
    *  Shift+Tab cycle (~/.dsh-tui/effort.json). */
@@ -518,6 +538,52 @@ export interface ChannelUi {
    * their Shift+Tab cycle and `/permission` presets are session modes.
    */
   setMode(id: string): Promise<boolean>
+  /**
+   * The bound session's relay channel profiles (its typed `channels`
+   * capability), with the active id. Synchronous and SILENT: an absent
+   * capability answers the empty roster — the /channel picker renders from
+   * it (its import row stays the only entry when the file holds nothing).
+   */
+  listChannels(): { channels: readonly BackendChannelOption[]; activeId: string | undefined }
+  /**
+   * Switch the active channel profile by id (validated against the live
+   * roster). The model display re-resolves in the same call, so the footer
+   * and the /model labels repaint immediately. False + a notify when the
+   * capability or the id is absent.
+   */
+  setChannel(id: string): boolean
+  /**
+   * Import (or refresh) the channel profile hiding in the CLI settings env
+   * — the ANTHROPIC_BASE_URL host names it, ANTHROPIC_*_MODEL become its
+   * tiers, and phase 3 absorbs the connection too: the base URL becomes
+   * the profile's, the ANTHROPIC_AUTH_TOKEN moves into the credential
+   * store (the profile keeps only its ref). Undefined when the env holds
+   * nothing importable; the caller notifies either way.
+   */
+  importChannel(): BackendChannelOption | undefined
+  /**
+   * Upsert one channel profile with connection fields (the /channel
+   * wizard, phase 3): a collected token goes to the credential seam,
+   * channels.json keeps only the ref. Undefined when the backend has no
+   * management surface; the caller notifies.
+   */
+  saveChannel(input: {
+    readonly id: string
+    readonly name: string
+    readonly baseUrl?: string
+    /** Undefined = keep; '' removes the stored token and its ref. */
+    readonly token?: string
+    readonly env?: Readonly<Record<string, string>>
+    readonly models?: Readonly<Record<string, string>>
+    readonly tiers?: Readonly<Record<string, string>>
+  }): BackendChannelOption | undefined
+  /** Drop one channel profile and its stored token; false when the
+   *  backend has no management surface or no such channel. */
+  removeChannel(id: string): boolean
+  /** What the CLI settings env holds for an import (the wizard's
+   *  absorb-tiers offer): the base URL and tier rules, read-only,
+   *  nothing created. Undefined when nothing is importable. */
+  peekChannelImport(): { readonly baseUrl?: string; readonly tiers: Readonly<Record<string, string>> } | undefined
   /** Read the official permission preset roster and current identity. */
   permissionPresets(): PermissionPresetSnapshot
   /**

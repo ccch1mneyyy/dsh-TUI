@@ -27,11 +27,11 @@ import type { SessionControls } from './session-controls.js'
 export function createCapabilityDelegates(deps: {
   owner: Pick<ChannelOwner, 'current'>
   session(): AgentSession
-  state: () => Pick<ChannelState, 'provider' | 'backendCapabilities' | 'agentBindingGeneration'>
+  state: () => Pick<ChannelState, 'provider' | 'backendCapabilities' | 'agentBindingGeneration' | 'model' | 'modelDisplay' | 'emit'>
   notify: ChannelState['notify']
   unavailable(name: string): void
   unavailableLines(name: string): string[]
-  controls: Pick<SessionControls, 'mcpReport'>
+  controls: Pick<SessionControls, 'mcpReport' | 'refreshModelDisplay'>
 }): Partial<ChannelActionDelegates> {
   const { notify, unavailable } = deps
   const caps = (): AgentSession['capabilities'] => deps.session().capabilities
@@ -75,7 +75,10 @@ export function createCapabilityDelegates(deps: {
     cycleMode: () => guarded('mode', undefined, async () => {
       const modes = caps().modes
       if (modes === undefined) { unavailable('mode'); return }
-      const list = modes.list()
+      // The reflex key walks the backend's declared cycle surface when it is
+      // narrower than the roster (Claude keeps `bypassPermissions`
+      // picker-only); a backend that declares none cycles the full list.
+      const list = modes.cycle?.() ?? modes.list()
       if (list.length === 0) return
       const index = list.findIndex(mode => mode.id === modes.current())
       await modes.set(list[(index + 1) % list.length]!.id)
@@ -90,7 +93,7 @@ export function createCapabilityDelegates(deps: {
       if (modes === undefined) return { modes: [], currentIndex: -1 }
       const list = modes.list()
       const index = list.findIndex(mode => mode.id === modes.current())
-      return { modes: list.map(mode => ({ id: mode.id, name: mode.label })), currentIndex: index }
+      return { modes: list.map(mode => ({ id: mode.id, name: mode.label, ...(mode.description === undefined ? {} : { description: mode.description }) })), currentIndex: index }
     },
     setMode: id => guarded('mode', false, async () => {
       const modes = caps().modes
@@ -98,6 +101,73 @@ export function createCapabilityDelegates(deps: {
       await modes.set(id)
       return true
     }),
+    // `/channel`: the typed `channels` capability's roster — sync and
+    // silent when absent (the empty roster IS the answer, like listModes).
+    listChannels: () => {
+      const channels = caps().channels
+      if (channels === undefined) return { channels: [], activeId: undefined }
+      return { channels: channels.list(), activeId: channels.activeId() }
+    },
+    setChannel: id => {
+      const channels = caps().channels
+      if (channels === undefined || !channels.list().some(channel => channel.id === id)) { unavailable('channel'); return false }
+      channels.setActive(id)
+      // The active channel's mapping is the model display's truth source
+      // (backends/claude/modelEnv.ts reads the store lazily), so one refresh
+      // repaints the footer and the /model labels immediately — no
+      // model.changed round trip needed.
+      try {
+        deps.controls.refreshModelDisplay(deps.session())
+        deps.state().emit()
+      } catch (error) {
+        logForDebugging(`channel: model display refresh failed (${error instanceof Error ? error.message : String(error)})`)
+      }
+      return true
+    },
+    importChannel: () => {
+      const channels = caps().channels
+      if (channels === undefined) { unavailable('channel'); return undefined }
+      try {
+        return channels.importFromSettings()
+      } catch (error) {
+        notify(t('capability-failed', { name: 'channel', err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+        return undefined
+      }
+    },
+    // The phase-3 wizard's writes: upsert with connection fields (the
+    // token travels capability→credential seam, never through the UI), and
+    // the delete. Both refuse politely on backends without the surface.
+    saveChannel: input => {
+      const channels = caps().channels
+      if (channels?.save === undefined) { unavailable('channel'); return undefined }
+      try {
+        return channels.save(input)
+      } catch (error) {
+        notify(t('capability-failed', { name: 'channel', err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+        return undefined
+      }
+    },
+    removeChannel: id => {
+      const channels = caps().channels
+      if (channels?.remove === undefined) { unavailable('channel'); return false }
+      try {
+        return channels.remove(id)
+      } catch (error) {
+        notify(t('capability-failed', { name: 'channel', err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+        return false
+      }
+    },
+    // Read-only peek at what settings.json holds (the wizard's absorb
+    // offer); silent undefined when there is nothing importable.
+    peekChannelImport: () => {
+      const channels = caps().channels
+      if (channels?.peekSettingsImport === undefined) return undefined
+      try {
+        return channels.peekSettingsImport()
+      } catch {
+        return undefined
+      }
+    },
     listModels: () => guarded('model', [], async () => {
       const models = caps().models
       if (models === undefined) { unavailable('model'); return [] }
@@ -124,7 +194,11 @@ export function createCapabilityDelegates(deps: {
       // a single) effort tier gets the same honesty the DSH specialist gives.
       if (levels.length === 0) notify(t('effort-unsupported'), { color: 'warning' })
       else if (levels.length === 1) notify(t('effort-single-tier', { name: levels[0]!.label }), { color: 'warning' })
-      return Promise.resolve({ efforts: levels.map(level => ({ id: level.id, name: level.label })), defaultEffort: effort.current() })
+      // levelsFallback rides along when the backend marks the ladder as
+      // the CLI-standard compatibility offer (a model row that declares no
+      // tiers of its own) — the slider says so instead of pretending the
+      // tiers are the model's own list.
+      return Promise.resolve({ efforts: levels.map(level => ({ id: level.id, name: level.label })), defaultEffort: effort.current(), ...(effort.levelsFallback === true ? { levelsFallback: true as const } : {}) })
     },
     setEffort: id => guarded('effort', false, async () => {
       const effort = caps().effort

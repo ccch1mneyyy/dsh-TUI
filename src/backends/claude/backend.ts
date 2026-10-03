@@ -21,6 +21,8 @@ import { createClaudeCatalog } from './catalog.js'
 import { resolveStartPermissionMode } from './options.js'
 import { fileClaudePrefs } from './prefs.js'
 import { buildClaudeEnv, readClaudeVersion, resolveClaudeExecutable } from './process.js'
+import { activeProfileOf, fileClaudeChannels, hasChannelConnection, type ClaudeChannels } from './channels.js'
+import { fileClaudeChannelTokens, type ClaudeChannelTokens } from './channelTokens.js'
 import { replayClaudeTranscript, type ClaudeReplay, type ClaudeSubagentTranscript } from './replay.js'
 import { installedSdkVersion, loadClaudeSdk, type ClaudeSessionStoreSdk } from './sdk.js'
 import { openClaudeSession } from './session.js'
@@ -115,9 +117,13 @@ export const claudeBackend: AgentBackend = {
       ? await loadClaudeTranscript(sdk, target, host.cwd, message => host.debug(message))
       : undefined
     const cwd = resumed?.cwd ?? (target.kind === 'create' ? target.cwd : host.cwd)
+    // The backend-scoped prefs: the remembered model / effort / permission
+    // picks. One store for the whole open — the start resolution reads the
+    // mode here, the session's controls keep writing all three later.
+    const prefs = fileClaudePrefs(undefined, message => host.debug(message))
     const [executable, start] = await Promise.all([
       resolveClaudeExecutable(),
-      resolveStartPermissionMode(sdk, cwd),
+      resolveStartPermissionMode(sdk, cwd, process.env, prefs.read().permissionMode),
     ])
     const sdkVersion = installedSdkVersion()
     // The credential (design §4.12): a dsh-auth login wins (refreshed now if
@@ -129,10 +135,45 @@ export const claudeBackend: AgentBackend = {
     // in ~/.claude/settings.json counts like one in the environment.
     const settings = async (): Promise<ClaudeRouteSettings> =>
       (await sdk.resolveSettings({ cwd, settingSources: ['user', 'project', 'local'] })).effective as ClaudeRouteSettings
+    // The active channel profile's connection (phase 3): the channel
+    // store + the credential seam are read fresh for EVERY plan (the open
+    // and each reconnect), so a /channel switch while the session lives is
+    // picked up by the next spawn on this session.
+    const channels: ClaudeChannels = fileClaudeChannels(undefined, message => host.debug(message))
+    const tokens: ClaudeChannelTokens = fileClaudeChannelTokens(undefined, message => host.debug(message))
+    const channelConnection = () => {
+      const active = activeProfileOf(channels.read())
+      if (active === undefined || !hasChannelConnection(active)) return undefined
+      return {
+        ...(active.baseUrl === undefined ? {} : { baseUrl: active.baseUrl }),
+        ...(active.tokenRef === undefined ? {} : { token: tokens.read(active.tokenRef) }),
+        ...(active.env === undefined ? {} : { env: active.env }),
+      }
+    }
     const startNotices: string[] = []
+    // cc-switch coexistence (one line, once per session start): when the
+    // CLI settings env names a DIFFERENT base URL than the active channel,
+    // say which one wins this session — the flag-settings injection does
+    // (the channel profile), and the settings file keeps its row for the
+    // next plain `claude` run.
+    try {
+      const effective = await settings()
+      const settingsEnv = typeof effective.env === 'object' && effective.env !== null ? effective.env as Record<string, unknown> : {}
+      const settingsUrl = Object.entries(settingsEnv)
+        .filter(([name, value]) => name.toUpperCase() === 'ANTHROPIC_BASE_URL' && typeof value === 'string' && value !== '')
+        .map(([, value]) => value as string)[0]
+      const activeAtStart = activeProfileOf(channels.read())
+      const channelUrl = activeAtStart?.baseUrl
+      if (channelUrl !== undefined && settingsUrl !== undefined && settingsUrl !== channelUrl) {
+        startNotices.push(t('channel-conn-settings-mismatch', { name: activeAtStart?.name ?? channelUrl }))
+      }
+    } catch {
+      // The notice is informational; an unreadable settings file has
+      // already failed closed in the route gate below.
+    }
     let plan: Awaited<ReturnType<typeof resolveClaudeAuth>>
     try {
-      plan = await resolveClaudeAuth(baseEnv, credentials, { settings })
+      plan = await resolveClaudeAuth(baseEnv, credentials, { settings, ...(channelConnection() === undefined ? {} : { channel: channelConnection() }) })
     } catch (error) {
       // A failed refresh must not stop the start: the session runs on the
       // environment or the local login, and says why. The debug log gets a
@@ -147,6 +188,10 @@ export const claudeBackend: AgentBackend = {
     // The developer override is never silent: a live-test leftover in the
     // environment would otherwise change every approval without a trace.
     if (start.source === 'env') startNotices.push(t('claude-start-mode-env', { mode: start.mode }))
+    // A remembered bypass is never silent: the session really does start
+    // with every confirmation off, so the transcript must say so (and where
+    // the choice is changed: /permission).
+    if (start.source === 'pref' && start.mode === 'bypassPermissions') startNotices.push(t('claude-start-mode-pref-bypass'))
     if (start.ignoredOverride !== undefined) startNotices.push(t('claude-start-mode-env-ignored', { mode: start.ignoredOverride }))
     if (sdkVersionDrift(sdkVersion) !== undefined) startNotices.push(t('claude-sdk-drift', { version: sdkVersion ?? '', validated: VALIDATED_SDK_VERSION }))
     return openClaudeSession({
@@ -164,10 +209,17 @@ export const claudeBackend: AgentBackend = {
         // authentication failure the refused token is refreshed only if
         // dsh-auth still holds it (compare-and-swap); `/login` uses the
         // stored credential as is.
-        renew: renewal => resolveClaudeAuth(buildClaudeEnv(), credentials, { settings, ...(renewal.rejected === undefined ? {} : { rejected: renewal.rejected }) }),
+        renew: renewal => {
+          const channel = channelConnection()
+          return resolveClaudeAuth(buildClaudeEnv(), credentials, {
+            settings,
+            ...(renewal.rejected === undefined ? {} : { rejected: renewal.rejected }),
+            ...(channel === undefined ? {} : { channel }),
+          })
+        },
         failureNotice: refreshFailedNotice,
       },
-      prefs: fileClaudePrefs(undefined, message => host.debug(message)),
+      prefs,
       host: { debug: message => host.debug(message), ...(host.stderr === undefined ? {} : { stderr: (line: string) => host.stderr?.(line) }) },
       ...(sdkVersion === undefined ? {} : { sdkVersion }),
       startNotices,
