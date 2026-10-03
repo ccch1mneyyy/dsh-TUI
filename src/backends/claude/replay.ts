@@ -81,10 +81,16 @@ const ASYNC_LAUNCH = /^Async agent launched/u
  *  store cannot recurse without bound). */
 const MAX_NESTING = 8
 
-/** One subagent transcript, keyed by the `Agent` tool call that launched it. */
+/** One subagent transcript, keyed by the `Agent` tool call that launched
+ *  it (and, for healing, by the child's own agent id). */
 export interface ClaudeSubagentTranscript {
   readonly agentId: string
   readonly messages: readonly unknown[]
+  /** `parent_agent_id` of the child's messages (sdk.d.ts:6437-6449): the
+   *  agent that spawned it. Absent/null = a depth-1 child (spawned by the
+   *  main loop) or old-format metadata that never recorded it — never an
+   *  orphan: such a transcript heals onto a delegation by agent id. */
+  readonly parentAgentId?: string
 }
 
 export interface ClaudeReplayOptions {
@@ -227,6 +233,30 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
   const counted = new Set<string>()
   /** Subagents launched by a call whose end has not been replayed yet. */
   const launched = new Map<string, { readonly agentId: string; background: boolean }>()
+  /** Subagent transcripts already attached to a delegation (a healed child
+   *  must not attach twice; the same transcript is reachable under both its
+   *  delegating call id and its own agent id). */
+  const claimed = new Set<string>()
+
+  /**
+   * The first unattached transcript whose `parent_agent_id` names this
+   * delegating agent: a nested child whose messages never recorded the
+   * delegating call id still finds its true parent by agent id (design §2:
+   * the tree trusts `parent_agent_id`, the call only locates one launch).
+   * For a main-loop delegation the match is a transcript reporting no parent
+   * agent (null/absent = depth-1 or old-format metadata). A transcript that
+   * matches no delegation stays unattached — an orphan is never fabricated
+   * onto an unrelated agent.
+   */
+  const unclaimedChildOf = (delegatorId: string | undefined): ClaudeSubagentTranscript | undefined => {
+    if (options.subagents === undefined) return undefined
+    for (const transcript of options.subagents.values()) {
+      if (claimed.has(transcript.agentId)) continue
+      if (delegatorId === undefined ? transcript.parentAgentId != null : transcript.parentAgentId !== delegatorId) continue
+      return transcript
+    }
+    return undefined
+  }
 
   const closeTurn = (): void => {
     if (!translator.turnOpen) { interrupted = false; return }
@@ -262,7 +292,7 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
       const thinking = num(rec(rec(body?.usage)?.output_tokens_details)?.thinking_tokens)
       if (thinking !== undefined && thinking > 0) out.push(...translator.translate({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: thinking }))
     }
-    delegations(blocks, 0)
+    delegations(blocks, 0, undefined)
   }
 
   /**
@@ -270,9 +300,11 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
    * a subagent's own transcript — a nested delegation): each one launched a
    * subagent (the translator pre-created it from the call); when the
    * session kept that subagent's transcript, its own id completes it and its
-   * messages follow as its lane.
+   * messages follow as its lane. `delegatorId` is the agent whose transcript
+   * the calls sit in (undefined = the main chain) — a transcript whose call
+   * attribution is missing heals onto it by `parent_agent_id`.
    */
-  const delegations = (blocks: readonly (Rec | undefined)[], depth: number): void => {
+  const delegations = (blocks: readonly (Rec | undefined)[], depth: number, delegatorId: string | undefined): void => {
     for (const block of blocks) {
       if (block?.type !== 'tool_use') continue
       const callId = str(block.id)
@@ -280,9 +312,14 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
       if (callId === undefined || name === undefined || !AGENT_TOOLS.has(name) || launched.has(callId)) continue
       const input = rec(block.input)
       const background = input?.run_in_background === true
-      const transcript = depth < MAX_NESTING ? options.subagents?.get(callId) : undefined
+      const byCall = depth < MAX_NESTING ? options.subagents?.get(callId) : undefined
+      const transcript = byCall !== undefined && !claimed.has(byCall.agentId)
+        ? byCall
+        : depth < MAX_NESTING ? unclaimedChildOf(delegatorId) : undefined
+      if (byCall !== undefined && transcript !== byCall) debug('claude replay: subagent transcript attached by parent_agent_id healing')
       launched.set(callId, { agentId: transcript?.agentId ?? callId, background })
       if (transcript === undefined) continue
+      claimed.add(transcript.agentId)
       out.push({
         type: 'subagent.start',
         agentId: transcript.agentId,
@@ -308,7 +345,7 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
       out.push(...translator.translate({ ...message, parent_tool_use_id: callId }))
       const content = arr(rec(message.message)?.content).map(rec)
       if (message.type === 'assistant') {
-        delegations(content, depth)
+        delegations(content, depth, transcript.agentId)
         continue
       }
       const structured = rec(message.tool_use_result ?? message.toolUseResult)
