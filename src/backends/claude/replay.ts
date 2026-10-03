@@ -55,6 +55,7 @@
  * Pure: no I/O, no clock (event times come from the message timestamps).
  */
 import type { AgentEvent, SubagentUsage } from '../../agent/events.js'
+import type { ClaudeTaskSeed } from './translate.js'
 import { transcriptImages } from './images.js'
 import { createClaudeTranslator } from './translate.js'
 
@@ -100,6 +101,10 @@ export interface ClaudeReplay {
   /** The counters (and model) the live translator of the resumed session
    *  continues from. */
   readonly start: { readonly turn: number; readonly seq: number; readonly model?: string }
+  /** The replayed conversation's task table (the Task* family), handed to
+   *  the live translator so a resumed update finds the ids the replay
+   *  tracked (R2 review). Absent when the history tracked none. */
+  readonly tasks?: readonly ClaudeTaskSeed[]
   /**
    * The chain began at a compaction (its boundary's uuid, or the summary's
    * when no boundary entry led it): older history exists on disk.
@@ -415,9 +420,11 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
   for (const callId of [...launched.keys()]) endSubagent(callId, { status: 'unknown' })
   if (options.title !== undefined && options.title !== '') out.push({ type: 'session.title', title: options.title, source: 'auto' })
   if (model !== undefined) out.push({ type: 'model.changed', model, source: 'resume' })
+  const tasks = translator.taskSeeds()
   return {
     events: out,
     start: { turn: translator.turnNumber, seq: translator.seqNumber, ...(model === undefined ? {} : { model }) },
+    ...(tasks.length === 0 ? {} : { tasks }),
     ...(compactedFrom === undefined ? {} : { compactedFrom }),
   }
 }

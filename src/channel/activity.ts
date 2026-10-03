@@ -321,6 +321,14 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
     }
   }
 
+  /** The backend's own reports (absolute values — overwrite, never add): the
+   *  locally kept tool records miss lane frames, so the reports win (R6). */
+  const applyReports = (entry: SubagentEntry, usage: SubagentUsage | undefined): void => {
+    if (usage === undefined) return
+    if (usage.toolUses !== undefined) entry.state.reportedToolUses = usage.toolUses
+    if (usage.durationMs !== undefined) entry.state.reportedDurationMs = usage.durationMs
+  }
+
   /** Forget the oldest settled subagents beyond the roster bound (their
    *  transcript cards stay as they are). */
   const trimSubagents = (): void => {
@@ -366,6 +374,27 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
       trimSubagents()
     } else {
       const state = entry.state
+      if (!isLiveSubagent(state.status)) {
+        // A start for a settled subagent is a NEW RUN of the same agent (R6
+        // review: a SendMessage to a finished agent resumes it from its
+        // transcript under the same id, and the CLI re-registers it): the
+        // old run's terminal fields go, the identity, transcript, tool
+        // records and CUMULATIVE tokens stay, and the new run's own clock
+        // starts now. A start while it still runs (moved to the background)
+        // is the same run — no reset.
+        state.status = 'running'
+        state.startedAt = event.time
+        state.completedAt = undefined
+        state.endedAt = undefined
+        state.stopReason = undefined
+        state.summary = undefined
+        state.error = undefined
+        state.reportedToolUses = undefined
+        state.reportedDurationMs = undefined
+        state.lastTool = undefined
+        entry.inferred = false
+        entry.lastSummary = undefined
+      }
       if (event.description !== '') state.description = event.description
       if (event.kind !== undefined) state.provider = event.kind
       if (event.model !== undefined) state.model = event.model
@@ -384,6 +413,8 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
     const entry = entryOf(event.agentId)
     if (entry === undefined) return
     applyUsage(entry, event.usage)
+    applyReports(entry, event.usage)
+    if (event.lastTool !== undefined) entry.state.lastTool = event.lastTool
     const summary = event.summary?.trim()
     if (summary !== undefined && summary !== '' && summary !== entry.lastSummary) {
       entry.lastSummary = summary
@@ -421,6 +452,7 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
     const entry = entryOf(event.agentId)
     if (entry === undefined) return
     applyUsage(entry, event.usage)
+    applyReports(entry, event.usage)
     finishSubagent(entry, event.status, event.time, { ...(event.summary === undefined ? {} : { summary: event.summary }) })
     syncSubagent(entry)
   }

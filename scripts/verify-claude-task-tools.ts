@@ -13,6 +13,14 @@
  *    TaskGet results are authoritative and overwrite local state; every
  *    change emits one full 'todo.write' snapshot in TodoPanelItem shape
  *    (content/status only, creation order, 'deleted' simply absent);
+ *  - a FAILED TaskUpdate (is_error or the in-contract success:false) rolls
+ *    its optimistic patch back and re-emits the snapshot — guarded by table
+ *    versions so a stale failure never overwrites a newer success or an
+ *    authoritative List/Get snapshot — and the suppressed-card path lets a
+ *    failure card through so the user sees the task change never happened;
+ *  - resume: the replay's tracked tasks hand over to the live translator
+ *    (serializable seeds), and a successful update of an untracked id
+ *    completes the table from its own patch (R2/R6 reviews);
  *  - TodoWrite itself stays byte-identical (its own snapshot from its own
  *    input; activeForm still dropped) and replaces the panel view wholesale;
  *  - buildQueryOptions: allowedTools adds + pre-approves the family while
@@ -25,8 +33,9 @@ import assert from 'node:assert/strict'
 import type { AgentEvent } from '../src/agent/events.js'
 import { claudeToolRole } from '../src/backends/claude/tools.js'
 import { createClaudeTranslator } from '../src/backends/claude/translate.js'
+import { replayClaudeTranscript } from '../src/backends/claude/replay.js'
 import { buildQueryOptions, OPTION_POLICY } from '../src/backends/claude/options.js'
-import { setLang } from '../src/i18n.js'
+import { setLang, t } from '../src/i18n.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
 
 setLang('en')
@@ -227,6 +236,160 @@ const synced = scenario(f => [
   check('options: tools stays the claude_code preset, never an explicit list',
     same(options.tools, { type: 'preset', preset: 'claude_code' }), options.tools)
   check('options: OPTION_POLICY says the profile sets allowedTools', OPTION_POLICY.allowedTools === 'set', OPTION_POLICY.allowedTools)
+}
+
+// ── ⑦ resume: the task table hands over (R2 review) ──────────────────────
+{
+  const at = (n: number): string => `2026-10-02T12:00:0${n}.000Z`
+  /** A transcript chain whose Task* results carry the structured record (a
+   *  raw transcript file) or do not (the SDK read API drops it). */
+  const chain = (structured: boolean): Rec[] => [
+    { type: 'user', uuid: 'u1', message: { role: 'user', content: 'plan the chores' }, timestamp: at(0) },
+    { type: 'assistant', uuid: 'a1', message: { id: 'm1', content: [{ type: 'tool_use', id: 'c1', name: 'TaskCreate', input: { subject: 'Old chore', description: 'x', activeForm: 'Old form' } }] }, timestamp: at(1) },
+    { type: 'user', uuid: 'r1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c1', content: 'ok' }] }, ...(structured ? { tool_use_result: { task: { id: '1', subject: 'Old chore' } } } : {}), timestamp: at(2) },
+    { type: 'assistant', uuid: 'a2', message: { id: 'm2', content: [{ type: 'tool_use', id: 'c2', name: 'TaskUpdate', input: { taskId: '1', status: 'in_progress' } }] }, timestamp: at(3) },
+    { type: 'user', uuid: 'r2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c2', content: 'ok' }] }, ...(structured ? { tool_use_result: { success: true, taskId: '1', updatedFields: ['status'] } } : {}), timestamp: at(4) },
+  ]
+  /** The live translator of the resumed session, continuing one replay. */
+  const liveSession = (replay: ReturnType<typeof replayClaudeTranscript>) => {
+    const translator = createClaudeTranslator({
+      cwd: '/fixture/project', userRows: 'lifecycle', now,
+      start: { ...replay.start, ...(replay.tasks === undefined ? {} : { tasks: replay.tasks }) },
+    })
+    const events: AgentEvent[] = []
+    for (const frame of [
+      { type: 'assistant', message: { id: 'msg_1', model: 'fixture-model', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'TaskUpdate', input: { taskId: '1', status: 'completed' } }] } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] }, tool_use_result: { success: true, taskId: '1', updatedFields: ['status'], statusChange: { from: 'in_progress', to: 'completed' } } },
+    ] as Rec[]) events.push(...translator.translate(frame))
+    return { events, translator }
+  }
+
+  // Rich raw transcript: the structured results survive, the replay tracks.
+  const rich = replayClaudeTranscript(chain(true), { cwd: '/fixture/project' })
+  check('resume: the replay hands the tracked tasks over as serializable seeds (id/subject/status/activeForm/seq)',
+    JSON.stringify(rich.tasks) === JSON.stringify([{ id: '1', content: 'Old chore', status: 'in_progress', activeForm: 'Old form', seq: 1 }]), rich.tasks)
+  const resumed = liveSession(rich)
+  check('resume: a live update of a replayed id lands on the panel (not silently dropped)',
+    same(items(todosOf(resumed.events).at(-1)), [{ content: 'Old chore', status: 'completed' }]), items(todosOf(resumed.events).at(-1)))
+  const otherSession = createClaudeTranslator({
+    cwd: '/fixture/project', userRows: 'lifecycle', now,
+    start: { ...rich.start, ...(rich.tasks === undefined ? {} : { tasks: rich.tasks }) },
+  })
+  check('resume: seeds are per-session copies — completing one session leaves the other untouched',
+    resumed.translator.taskSeeds()[0]?.status === 'completed' && otherSession.taskSeeds()[0]?.status === 'in_progress',
+    [resumed.translator.taskSeeds()[0]?.status, otherSession.taskSeeds()[0]?.status])
+
+  // SDK shape: the read API dropped the structured records — the result
+  // itself (non-error) is the explicit authority, so the history's own
+  // successful updates complete the table from their named patches.
+  const sdk = replayClaudeTranscript(chain(false), { cwd: '/fixture/project' })
+  check('resume: an SDK-shaped history syncs explicitly from its successful updates (no guessed ids)',
+    JSON.stringify(sdk.tasks) === JSON.stringify([{ id: '1', content: t('claude-task-unnamed', { id: '1' }), status: 'in_progress', seq: 1 }]), sdk.tasks)
+  const filled = liveSession(sdk)
+  const filledWrites = todosOf(filled.events)
+  check('resume: a successful live update of an untracked id completes the table from its patch (honest fallback subject)',
+    filledWrites.length === 1 && same(items(filledWrites[0]), [{ content: t('claude-task-unnamed', { id: '1' }), status: 'completed' }]),
+    filledWrites.map(event => items(event)))
+
+  // The completion stays explicit: a rename-only success (no status known)
+  // and a failed update of an unknown id still create nothing.
+  const quiet = scenario(f => [
+    f.call('TaskUpdate', { taskId: '7', subject: 'Just a rename' }),
+    f.resultOf(1, { success: true, taskId: '7', updatedFields: ['subject'] }),
+    f.call('TaskUpdate', { taskId: '8', status: 'completed' }),
+    f.resultOf(2, { success: false, taskId: '8', updatedFields: [], error: 'no such task' }),
+    f.turnEnd(),
+  ])
+  check('completion: only a status-bearing success of a named unknown id completes the table',
+    quiet.events.every(event => event.type !== 'todo.write'), quiet.events.filter(event => event.type === 'todo.write').map(event => items(event)))
+}
+
+// ── ⑧ a failed TaskUpdate rolls its patch back and says so (R6 review) ───
+{
+  const failureCards = (h: ReturnType<typeof createProjectorHarness>) =>
+    h.state.rows.filter(row => row.kind === 'tool' && row.tool?.name === 'TaskUpdate' && row.tool?.status === 'error')
+
+  // A failed delete of a known id: the task returns, the failure card shows.
+  const failedDelete = scenario(f => [
+    f.call('TaskCreate', { subject: 'Keep', description: 'stays' }),
+    f.resultOf(1, { task: { id: 'task-1', subject: 'Keep' } }),
+    f.call('TaskCreate', { subject: 'Drop', description: 'goes away' }),
+    f.resultOf(2, { task: { id: 'task-2', subject: 'Drop' } }),
+    f.call('TaskUpdate', { taskId: 'task-2', status: 'deleted' }),
+    f.resultOf(3, undefined, true),
+    f.turnEnd(),
+  ])
+  check('failed delete: the task returns to the panel (the CLI did not drop it)',
+    same(failedDelete.harness.state.todos, [{ content: 'Keep', status: 'pending' }, { content: 'Drop', status: 'pending' }]), failedDelete.harness.state.todos)
+  check('… the rollback re-emitted a snapshot after the optimistic one', todosOf(failedDelete.events).length === 4, todosOf(failedDelete.events).length)
+  check('… the suppressed-card path still renders the failure card (the user sees why)',
+    failureCards(failedDelete.harness).length === 1 && failureCards(failedDelete.harness)[0]?.tool?.errorText === 'ok', failureCards(failedDelete.harness).map(card => card.tool))
+
+  // A failed complete and a failed rename (success:false without is_error).
+  const refused = scenario(f => [
+    f.call('TaskCreate', { subject: 'Chore', description: 'x', activeForm: 'Doing the chore' }),
+    f.resultOf(1, { task: { id: 't', subject: 'Chore' } }),
+    f.call('TaskUpdate', { taskId: 't', status: 'completed' }),
+    f.resultOf(2, { success: false, taskId: 't', updatedFields: [], error: 'not while blocked' }),
+    f.call('TaskUpdate', { taskId: 't', subject: 'Wrong name' }),
+    f.resultOf(3, { success: false, taskId: 't', updatedFields: ['subject'], error: 'read-only' }),
+    f.turnEnd(),
+  ])
+  check('success:false without is_error: the status and the subject both roll back',
+    same(refused.harness.state.todos, [{ content: 'Chore', status: 'pending' }]), refused.harness.state.todos)
+  check('… and both failures surface as error cards', failureCards(refused.harness).length === 2, failureCards(refused.harness).length)
+
+  // Parallel updates of one task, results out of order: the newer SUCCESS
+  // stands; the older failure must not roll it back.
+  const outOfOrder = scenario(f => [
+    f.call('TaskCreate', { subject: 'A', description: 'x' }),
+    f.resultOf(1, { task: { id: 'a', subject: 'A' } }),
+    f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
+    f.call('TaskUpdate', { taskId: 'a', subject: 'Renamed' }),
+    f.resultOf(3, { success: true, taskId: 'a', updatedFields: ['subject'] }),
+    f.resultOf(2, undefined, true),
+    f.turnEnd(),
+  ])
+  check('out-of-order: the newer successful update stands (the stale failure does not roll it back)',
+    same(outOfOrder.harness.state.todos, [{ content: 'Renamed', status: 'completed' }]), outOfOrder.harness.state.todos)
+
+  // Both fail, results in reverse order: the rollbacks stack to the original.
+  const bothFailed = scenario(f => [
+    f.call('TaskCreate', { subject: 'B', description: 'x' }),
+    f.resultOf(1, { task: { id: 'b', subject: 'B' } }),
+    f.call('TaskUpdate', { taskId: 'b', status: 'completed' }),
+    f.call('TaskUpdate', { taskId: 'b', subject: 'Never' }),
+    f.resultOf(3, undefined, true),
+    f.resultOf(2, undefined, true),
+    f.turnEnd(),
+  ])
+  check('both failed in reverse: stacked rollbacks reach the original state',
+    same(bothFailed.harness.state.todos, [{ content: 'B', status: 'pending' }]), bothFailed.harness.state.todos)
+
+  // An authoritative List between the patch and its late failure: the List
+  // wins; the stale failure neither reverts it nor resurrects a delete.
+  const authoritative = scenario(f => [
+    f.call('TaskCreate', { subject: 'C', description: 'x' }),
+    f.resultOf(1, { task: { id: 'c', subject: 'C' } }),
+    f.call('TaskUpdate', { taskId: 'c', status: 'completed' }),
+    f.call('TaskList', {}),
+    f.resultOf(3, { tasks: [{ id: 'c', subject: 'C', status: 'in_progress', blockedBy: [] }] }),
+    f.resultOf(2, undefined, true),
+    f.turnEnd(),
+  ])
+  check('authoritative List wins over the late failure (no rollback to the pre-image)',
+    same(authoritative.harness.state.todos, [{ content: 'C', status: 'in_progress' }]), authoritative.harness.state.todos)
+  const deletedSync = scenario(f => [
+    f.call('TaskCreate', { subject: 'D', description: 'x' }),
+    f.resultOf(1, { task: { id: 'd', subject: 'D' } }),
+    f.call('TaskUpdate', { taskId: 'd', status: 'deleted' }),
+    f.call('TaskList', {}),
+    f.resultOf(3, { tasks: [] }),
+    f.resultOf(2, undefined, true),
+    f.turnEnd(),
+  ])
+  check('… a delete the List confirmed stays gone (the failure does not resurrect it)',
+    same(deletedSync.harness.state.todos, []), deletedSync.harness.state.todos)
 }
 
 console.log(passed + ' passed')

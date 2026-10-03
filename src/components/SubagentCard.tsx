@@ -19,6 +19,11 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
   const elapsed = running
     ? Date.now() - subagent.startedAt
     : subagent.completedAt !== undefined ? subagent.completedAt - subagent.startedAt : undefined
+  // The backend's own reports win over locally kept records (R6 review):
+  // missed lane frames must not show 0 tools, and the reported duration
+  // carries no host receive delay. No report → the old fallback.
+  const toolsCount = subagent.reportedToolUses ?? subagent.toolCalls.length
+  const shownDuration = subagent.reportedDurationMs ?? elapsed
   const total = subagent.tokens?.total ?? ((subagent.tokens?.input ?? 0) + (subagent.tokens?.output ?? 0) || 0)
   // Mouse affordance: clickable cards tint on hover; the keyboard-focused
   // card keeps its brand-color header (no double highlight).
@@ -47,9 +52,9 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
   const { columns } = useTerminalSize()
   const metaParts: string[] = []
   if (columns >= 56) metaParts.push(subagent.model ?? subagent.provider ?? 'default')
-  if (elapsed !== undefined) metaParts.push(formatDuration(elapsed))
+  if (shownDuration !== undefined) metaParts.push(formatDuration(shownDuration))
   if (columns >= 44) metaParts.push(`${total || '—'} tok`)
-  if (columns >= 34) metaParts.push(`${subagent.toolCalls.length} tools`)
+  if (columns >= 34) metaParts.push(`${toolsCount} tools`)
   const meta = metaParts.join(' · ')
   return <Box
     flexDirection="column"

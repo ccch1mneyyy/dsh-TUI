@@ -75,6 +75,12 @@ const NEW = '00000000-0000-4000-8000-00000000beef'
     query.emit({ type: 'system', subtype: 'session_title_changed', title: 'Planning', session_id: OLD })
     query.emit({ type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: 0.25, modelUsage: {}, session_id: OLD })
     check('before: rows, a subagent, a cost and a title', await settled(() => channel.rows.some(row => row.kind === 'assistant') && channel.subagents.length === 1 && channel.costReport?.amount === 0.25 && channel.sessionTitle === 'Planning'))
+    // The old conversation tracked a plan task (TaskCreate + in_progress).
+    query.emit({ type: 'assistant', session_id: OLD, message: { id: 'm2', content: [{ type: 'tool_use', id: 'call-2', name: 'TaskCreate', input: { subject: 'Old chore', description: 'x', activeForm: 'Old form' } }] } })
+    query.emit({ type: 'user', session_id: OLD, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-2', content: 'ok' }] }, tool_use_result: { task: { id: 'task-1', subject: 'Old chore' } } })
+    query.emit({ type: 'assistant', session_id: OLD, message: { id: 'm3', content: [{ type: 'tool_use', id: 'call-3', name: 'TaskUpdate', input: { taskId: 'task-1', status: 'in_progress' } }] } })
+    query.emit({ type: 'user', session_id: OLD, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-3', content: 'ok' }] }, tool_use_result: { success: true, taskId: 'task-1', updatedFields: ['status'] } })
+    check('before: the plan-tracking task shows on the panel, in_progress', await settled(() => channel.todos.length === 1 && channel.todos[0]?.content === 'Old chore' && channel.todos[0]?.status === 'in_progress'), channel.todos)
     // An input the CLI has not started when the reset lands.
     await session.submit({ text: 'queued after', clientMessageId: 'u2' }, 'followup')
     query.emit({ type: 'conversation_reset', new_conversation_id: 'not-the-session-id', uuid: 'r1', session_id: OLD, trigger: 'plan_mode_exit' })
@@ -89,6 +95,12 @@ const NEW = '00000000-0000-4000-8000-00000000beef'
     query.emit({ type: 'command_lifecycle', command_uuid: 'u2', state: 'started', session_id: NEW })
     query.emit({ type: 'result', subtype: 'success', is_error: false, result: 'continued', total_cost_usd: 0.01, modelUsage: {}, session_id: NEW })
     check('… the input queued before the reset still runs after it', await settled(() => channel.rows.some(row => row.kind === 'user' && row.text === 'queued after')))
+    // The new conversation's task table starts clean — even when the CLI
+    // reuses the old short task id ('task-1').
+    query.emit({ type: 'assistant', session_id: NEW, message: { id: 'm4', content: [{ type: 'tool_use', id: 'call-4', name: 'TaskCreate', input: { subject: 'New chore', description: 'y' } }] } })
+    query.emit({ type: 'user', session_id: NEW, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-4', content: 'ok' }] }, tool_use_result: { task: { id: 'task-1', subject: 'New chore' } } })
+    check('… the new conversation\'s task table starts clean (a reused short id mismatches nothing)', await settled(() => channel.todos.length === 1 && channel.todos[0]?.content === 'New chore' && channel.todos[0]?.status === 'pending'), channel.todos)
+    query.emit({ type: 'result', subtype: 'success', is_error: false, result: 'planned', total_cost_usd: 0.01, modelUsage: {}, session_id: NEW })
     await tick()
     await session.capabilities.fork!.fork()
     check('/fork copies the new session', forked.at(-1) === NEW, forked)
@@ -133,6 +145,44 @@ const NEW = '00000000-0000-4000-8000-00000000beef'
   } finally {
     channel.releaseContributions()
   }
+}
+
+
+// ── the translator drops the old conversation's own state (R2 review) ────
+{
+  const { createClaudeTranslator } = await import('../src/backends/claude/translate.js')
+  type Ev = import('../src/agent/events.js').AgentEvent
+  const translator = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle' })
+  const events: Ev[] = []
+  const feed = (...frames: Rec[]): void => { for (const frame of frames) events.push(...translator.translate(frame)) }
+  const call = (n: number, name: string, input: Record<string, unknown>): Rec => ({ type: 'assistant', message: { id: 'm' + n, content: [{ type: 'tool_use', id: 'call-' + n, name, input }] } })
+  const resultOf = (n: number, structured?: Record<string, unknown>, isError = false): Rec => ({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-' + n, content: 'ok', ...(isError ? { is_error: true } : {}) }] }, ...(structured === undefined ? {} : { tool_use_result: structured }) })
+  feed(
+    call(1, 'TaskCreate', { subject: 'Old chore', description: 'x', activeForm: 'Old form' }),
+    resultOf(1, { task: { id: '1', subject: 'Old chore' } }),
+    call(2, 'TaskUpdate', { taskId: '1', status: 'in_progress' }),
+    resultOf(2, { success: true, taskId: '1', updatedFields: ['status'] }),
+  )
+  const before = translator.activityState()
+  check('translator: the old in_progress task drives the working line', before.turnOpen && before.activeForm === 'Old form', before)
+  // An optimistic patch whose result never comes, plus a queued input.
+  feed(call(3, 'TaskUpdate', { taskId: '1', status: 'deleted' }))
+  translator.registerInput('queued-1', 'still runs', 'followup')
+  const seqBefore = translator.seqNumber
+  const turnBefore = translator.turnNumber
+  feed({ type: 'conversation_reset', trigger: 'plan_mode_exit' })
+  const after = translator.activityState()
+  check('translator: the reset clears the task table — no old activeForm on the working line', after.activeForm === undefined && !after.turnOpen, after)
+  check('translator: the reset emits session.reset (and closes the open turn first)', events.some(event => event.type === 'turn.end' && event.reason.kind === 'aborted') && events.some(event => event.type === 'session.reset'), events.filter(event => event.type === 'turn.end' || event.type === 'session.reset').map(event => event.type))
+  check('translator: queued inputs survive the reset (the CLI still runs them)', JSON.stringify(translator.unstartedInputs()) === JSON.stringify(['queued-1']), translator.unstartedInputs())
+  check('translator: turn / seq numbering stays monotonic across the reset', translator.seqNumber >= seqBefore && translator.turnNumber >= turnBefore, [seqBefore, translator.seqNumber, turnBefore, translator.turnNumber])
+  const writesBefore = events.filter(event => event.type === 'todo.write').length
+  feed(resultOf(3, undefined, true))
+  check('translator: a late failure of the old conversation\'s patch resurrects nothing', events.filter(event => event.type === 'todo.write').length === writesBefore, [writesBefore, events.filter(event => event.type === 'todo.write').length])
+  feed(call(4, 'TaskCreate', { subject: 'New chore' }), resultOf(4, { task: { id: '1', subject: 'New chore' } }))
+  const last = events.filter(event => event.type === 'todo.write').at(-1)
+  check('translator: the new conversation\'s task table starts clean (a reused short id mismatches nothing)',
+    last !== undefined && last.type === 'todo.write' && last.items.length === 1 && last.items[0]?.content === 'New chore' && last.items[0]?.status === 'pending', last?.items)
 }
 
 console.log(`\nverify-claude-reset OK (${passed} checks)`)
