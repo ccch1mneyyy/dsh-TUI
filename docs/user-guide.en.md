@@ -48,19 +48,26 @@ dsh-tui
    version, `DEEPSEEK / HARNESS` big text, current model and effort, working directory, and a
    **startup hint**; the header here is **frozen from the first frame** — the intro animation is
    left to the transcript header once you are in the chat), a **real input box** underneath
-   (type your first sentence here; Enter carries it into the chat screen), and a row of
-   **quick actions** (v7 four slots: `Continue "…"` — shortcut `Alt+R`, the slot is simply absent
-   when there is nothing to continue · `Sessions & workspaces` — history and workspaces are the
-   same `/home` screen, merged into one entry · `Settings` · a **conditional slot** — `Background
-   jobs` while jobs are running, `Update available` when a newer release is detected, `Feed us a
-   star` once usage milestones are reached and you never starred, falling back to `Help`).
-   Move with `↑/↓` or `Tab`, activate with `Enter`, or just click;
-   short terminals drop whole blocks (quick actions → hint line → input only) and narrow ones
-   climb down the ladder in 5.1. Full screens opened from this screen (sessions & workspaces /
-   settings / background jobs / the first-run guide) render **above the launchpad** — `Esc` closes
-   them back onto the launchpad (draft, params and focus intact); the only way off the launchpad
-   into the chat is submitting a non-command line with Enter. When the dsh engine is out of the verified range, a
-   **⚠ version-drift warning** appears with the align command.
+   (type your first sentence here; Enter carries it into the chat screen), a **parameter row** under
+   the box (model · effort · mode · permission — all four are clickable and open the chat page's
+   pickers in place; all four stay on the row, and when the line does not fit only the over-long
+   segments are truncated at the tail with a trailing `…` — the permission segment is never
+   truncated — and a hover reveals a truncated segment's **full name** (mouse tracking is always on
+   for the launchpad screen, inline mode included); only when the **full permission name does not
+   fit the budget** (widening the terminal past 76 columns changes nothing — a narrower terminal
+   or a longer permission name triggers it earlier) are whole segments dropped from the tail in
+   display order), and a row of **quick actions** (v7 four slots: `Continue "…"` — shortcut `Alt+R`,
+   the slot is simply absent when there is nothing to continue · `Sessions & workspaces` — history
+   and workspaces are the same `/home` screen, merged into one entry · `Settings` · a **conditional
+   slot** — `Background jobs` while jobs are running, `Update available` when a newer release is
+   detected, `Feed us a star` once usage milestones are reached and you never starred, falling back
+   to `Help`). Move with `↑/↓` or `Tab`, activate with `Enter`, or just click; short terminals drop
+   whole blocks (quick actions → hint line → input only) and narrow ones climb down the ladder in
+   5.1. Full screens opened from this screen (sessions & workspaces / settings / background jobs /
+   the first-run guide) render **above the launchpad** — `Esc` closes them back onto the launchpad
+   (draft, params and focus intact); the only way off the launchpad into the chat is submitting a
+   non-command line with Enter. When the dsh engine is out of the verified range, a **⚠
+   version-drift warning** appears with the align command.
 3. **Bottom status bar**: working-status row, context bar, TPS gauge, and other live
    indicators (see [5. UI and status bar](#5-ui-and-status-bar)).
 4. **Startup hint line**: one fixed line under the logo:

@@ -24,10 +24,17 @@
  *   D. 纯函数：resolveLaunchpadActions 表驱动（第七版四格：Continue(条件) ·
  *      会话与工作区 · 设置 · 条件位 jobs>update>star>help 优先级，单独/
  *      多重/全不成立各一行）、truncateContinueTitle 边界、fitChips 不切半个
- *      标签、阶梯阈值（full → no-tip → no-hints → no-art → input-only）。
- *      theme/lang/doctor 永不出现；settings 固定在第三格。
- *   E. 宽度不变量：120/100/72/60/48 列下任何一行都不超宽；标签/Tips/参数条
- *      要么完整出现在同一行、要么整条不出现（不许被切断的半句）。
+ *      标签、阶梯阈值（full → no-tip → no-hints → no-art → input-only）、
+ *      fitParamParts 三段式（装得下→原样 / 装不下→尾部截断且权限段不被截 /
+ *      压到下限仍超→今天的尾部省段）。theme/lang/doctor 永不出现；settings 固定在第三格。
+ *   E. 宽度不变量：120/100/72/60/48 列下任何一行都不超宽；标签/Tips 要么完整
+ *      出现在同一行、要么整条不出现（不许被切断的半句）。参数段按 DESIGN D7：
+ *      **带 `…` 的尾部截断视为完整呈现**（显式标记的降级），不带 `…` 的半截
+ *      与整段消失仍判失败。
+ *   R. 屏幕级：参数行三段式的**逐字节期望行**（AC-1/2/3/5）——长 preset 四段
+ *      同屏且权限段一字不少、窄屏回落今天的尾部省段、焦点环只收画出来的段。
+ *   S. 屏幕级 AC-4：被截断段的 tooltip——真 SGR motion 悬停 600ms 出完整名、
+ *      离开即撤且高亮复原、点击/键盘仍开对应选择器、未截断段绝不弹卡片。
  *
  * 运行：node --import tsx/esm scripts/verify-launchpad.tsx
  */
@@ -39,7 +46,7 @@ import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import xterm from '@xterm/headless'
 import fakeHome from './lib/fake-home.mjs' // 必须最先：DATA_DIR 在 import 时定死
-import { settle, settled, viewportLines } from './lib/term-test.mjs'
+import { settle, settled, sleep, viewportLines } from './lib/term-test.mjs'
 import { stringWidth } from '../src/ink/stringWidth.js'
 
 const { Terminal: XTerm } = xterm
@@ -48,17 +55,21 @@ const [
   { Launchpad, fitChips, prevBoundary, nextBoundary },
   { resolveLaunchpadLayout },
   { resolveLaunchpadActions, truncateContinueTitle, LAUNCHPAD_CONTINUE_TITLE_MAX },
+  { fitParamParts, PARAM_SEPARATOR, PARAM_SEGMENT_MIN_WIDTH, PARAM_UNTRUNCABLE_SEGMENT },
   { splashFontById },
   { t },
+  { TooltipLayer, getTooltipSnapshot },
   { applyCompanionSkin },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Launchpad.js'),
   import('../src/components/launchpadLayout.js'),
   import('../src/components/launchpadActions.js'),
+  import('../src/components/launchpadParams.js'),
   import('../src/components/splashFonts.js'),
   import('../src/i18n.js',
   ),
+  import('../src/components/Tooltip.js'),
   import('../src/tuiDisplayPrefs.js'),
 ])
 // 本脚本锁的是落地页版面/阶梯契约（WHALE_ART_ROWS=13 那套预算）：吉祥物
@@ -99,6 +110,42 @@ const PARAM_LINE = 'glm-5.3  ·  Max  ·  Standard  ·  default'
 /** 夹具固定 bold 字面：大字 needle 与阶梯阈值都不随当天轮换的字体漂。 */
 const FONT = splashFontById('bold')
 
+/**
+ * 参数行的四段载荷（T03 起夹具可传自定义四段）。`effort` 传**名册原值**
+ * （`max`），屏上是首字母大写的显示值（`Max`）——与组件同一条规则。
+ * 缺的段 = 拿不到，整段不画（与 `params: false` 的档一致）。
+ */
+interface ParamFixture {
+  model?: string
+  effort?: string
+  preset?: string
+  permission?: string
+}
+/** 既有夹具的四段（120 列下 = `PARAM_LINE`）：默认调用一律走它，老用例零改动。 */
+const DEFAULT_PARAMS: ParamFixture = { model: 'glm-5.3', effort: 'max', preset: 'Standard', permission: 'default' }
+/** 屏上四段的显示文本（空/缺的段不画；`effort` 首字母大写）。 */
+function displayedParams(params: ParamFixture): readonly string[] {
+  const effort = params.effort === undefined || params.effort === ''
+    ? undefined
+    : params.effort.charAt(0).toUpperCase() + params.effort.slice(1)
+  return [params.model, effort, params.preset, params.permission]
+    .filter((value): value is string => value !== undefined && value !== '')
+}
+/** AC-1/AC-5 载荷：14 + 3 + 38 + 18 格四段（preset = 38 格的 agent preset 显示名）。 */
+const AC1_PARAMS: ParamFixture = {
+  model: 'deepseek-flash',
+  effort: 'max',
+  preset: 'Standard (Git Bash · official tooling)',
+  permission: 'danger-full-access',
+}
+/** AC-2① 载荷：preset 拉到 76 格（比 AC-1 更狠的超宽量），其余段与 AC-1 同。 */
+const AC2_PRESET_HUGE_PARAMS: ParamFixture = {
+  ...AC1_PARAMS,
+  preset: 'Standard (Git Bash · official tooling) — nightly variant with custom tooling',
+}
+/** AC-2② 载荷：模型名（32 格）与 preset（38 格）都长。 */
+const AC2_LONG_MODEL_PARAMS: ParamFixture = { ...AC1_PARAMS, model: 'deepseek-v3.2-exp-custom-ft-2026' }
+
 class FakeStdout extends Writable {
   isTTY = true
   /** 渲染帧计数：闪烁相位切换会重绘（样式变、文本不变），帧数是"真的在闪"的无头证据。 */
@@ -130,8 +177,8 @@ interface OpenOptions {
   query?: string
   firstRun?: boolean
   whale?: boolean
-  /** 参数条三段；false = 全不传（卡片矮一行的档）。默认带全。 */
-  params?: boolean
+  /** 参数行四段；false = 全不传（卡片矮一行的档）、对象 = 自定义四段。默认带全。 */
+  params?: boolean | ParamFixture
   /** 双角铭牌三段；false = 全不传。默认带全。 */
   corners?: boolean
   /** 剪贴板桩内容；undefined = 空文本，null = 剪贴板为空（读得到但没东西）。 */
@@ -168,7 +215,9 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
   const term = new XTerm({ cols: columns, rows, scrollback: 0, allowProposedApi: true })
   const out = new FakeStdout(term)
   const input = new FakeStdin()
-  const params = options.params !== false
+  const paramFixture: ParamFixture = options.params === false
+    ? {}
+    : typeof options.params === 'object' ? options.params : DEFAULT_PARAMS
   const corners = options.corners !== false
 
   // 受控闭环：Chat 持有 query/caret/focus，这里照抄那三条回调的接线。
@@ -176,7 +225,7 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
     const [query, setQuery] = React.useState(options.query ?? '')
     const [caret, setCaret] = React.useState((options.query ?? '').length)
     const [focus, setFocus] = React.useState(-1)
-    return (
+    const page = (
       <Launchpad
         query={query}
         cursorOffset={caret}
@@ -203,10 +252,10 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
           ) : undefined}
         inputPaused={options.inputPaused === true}
         onParamPick={(segment) => { events.push({ type: 'param', value: segment }) }}
-        model={params ? 'glm-5.3' : undefined}
-        effort={params ? 'max' : undefined}
-        preset={params ? 'Standard' : undefined}
-        permission={params ? 'default' : undefined}
+        model={paramFixture.model}
+        effort={paramFixture.effort}
+        preset={paramFixture.preset}
+        permission={paramFixture.permission}
         commands={options.commands}
         onCommandPick={(commandLine) => { events.push({ type: 'command', value: commandLine }) }}
         tipRotateMs={options.tipRotateMs}
@@ -240,6 +289,14 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         onEscape={(intent) => { events.push({ type: 'escape', value: intent }) }}
         onBlankClick={() => { events.push({ type: 'blank' }); setFocus(-1) }}
       />
+    )
+    // AC-4：与 Chat 的落地页分支同姿态——单例 Tooltip 层挂在树的最外层最后
+    // （ParamChip 只写锚点，卡片由它画；Tooltip.tsx 的语义/延迟/几何一律不改）。
+    return (
+      <>
+        {page}
+        <TooltipLayer />
+      </>
     )
   }
 
@@ -304,10 +361,31 @@ function rowOf(term: InstanceType<typeof XTerm>, needle: string): number {
 function countOf(term: InstanceType<typeof XTerm>, needle: string): number {
   return viewportLines(term).reduce((n, l) => n + (l.split(needle).length - 1), 0)
 }
+/**
+ * 一个串的**前半**（半句检测用；取上整，非空串至少 1 个字符）。
+ * 「半句判据」在两个地方用同一份定义：F 组的被切断检测与 R 组的"整段不在"。
+ *
+ * ⚠️ 这里按 **UTF-16 码元** `slice`：对含代理对（emoji/ZWJ）的文本，切出来的
+ * "前半"不是原串的合法前缀 ⇒ 以此为前提的 `indexOf` 探针**永不命中**、F2 判据
+ * 对这类文本永不判红（REVIEW F-05，见 `isSilentlyCut` 的盲区清单）。
+ * 这是判据的已知边界，不是本轮引入的回归。
+ */
+function halfOf(text: string): string {
+  return text.slice(0, Math.ceil(text.length / 2))
+}
 /** 行首缩进的显示宽度。 */
 function leftGap(line: string): number {
   const m = /^\s*/.exec(line)
   return m === null ? 0 : stringWidth(m[0])
+}
+/** 两份整屏快照的首个差异行（"屏上零新字形"负例失败时的定位证据）。 */
+function firstScreenDiff(before: string, after: string): string {
+  const a = before.split('\n')
+  const b = after.split('\n')
+  for (let row = 0; row < Math.max(a.length, b.length); row++) {
+    if (a[row] !== b[row]) return `row=${row} before=${JSON.stringify(a[row])} after=${JSON.stringify(b[row])}`
+  }
+  return ''
 }
 /** 行尾留白的显示宽度。 */
 function rightGap(line: string, columns: number): number {
@@ -935,14 +1013,534 @@ base.close()
     clipped.map(c => c.label).join(' | '))
 }
 
+// ── Q. 纯函数：参数行三段式（fitParamParts；AC-1/2/3/5 的纯函数层）─────────
+// DESIGN D1 的三档：①四段原样装得下 → 逐字节不变；②装不下 → 按「可缩减量最大」
+// 逐步**尾部截断**（权限段不被截断、宽度 ≤ 下限的段不可减）；③非权限段全到下限
+// 仍超预算 → 复用今天的尾部省段（原始宽度、按显示顺序、首个超预算即 break）。
+// 断言锚在**宽度关系与档位**上（总宽 ≤ 预算 / truncated 标志 / 权限段一字不少 /
+// 尾部是 …），不把「第 66 列」这类计数写成判据（L-025）——数字只出现在载荷里。
+{
+  interface ParamRow {
+    readonly segment: string
+    readonly value: string
+    readonly colored?: boolean
+  }
+  /** 参数段之间的分隔符（与 Launchpad 版式同一条：两侧各两格）。 */
+  const SEPARATOR = '  ·  '
+  // 分隔符是**一个决定**，不是三份字面量：模块导出的常量与这里的字面量（版式
+  // 契约的独立复制品）必须一致——屏幕层另有逐字节断言（`PARAM_LINE`）。对不上
+  // 就在这里早红，别等屏上错位。T03 接入时请用 `PARAM_SEPARATOR` 渲染分隔符。
+  check('Q0 分隔符常量与版式字面量逐字节一致', PARAM_SEPARATOR === SEPARATOR, JSON.stringify(PARAM_SEPARATOR))
+  /** 一段参数行的显示宽度：各段宽之和 + 分隔符 ×（段数 - 1）。 */
+  const lineWidth = (parts: readonly { value: string }[]): number =>
+    parts.reduce((sum, part, index) => sum + stringWidth(part.value) + (index === 0 ? 0 : stringWidth(SEPARATOR)), 0)
+  /**
+   * 今天的尾部省段（改造前 `Launchpad.tsx` 参数行的累加循环，逐字节复刻）。
+   * 兜底档必须与它逐字节一致，所以这里**独立写一份当期望**，绝不复用被测函数
+   * ——拿实现证实现等于没证。只做宽度累加，不参与任何截断。
+   */
+  const legacyFit = (parts: readonly ParamRow[], budget: number): readonly string[] => {
+    const kept: string[] = []
+    let used = 0
+    for (const part of parts) {
+      const width = stringWidth(part.value)
+      const next = kept.length === 0 ? width : used + stringWidth(SEPARATOR) + width
+      if (next > budget) break
+      kept.push(part.value)
+      used = next
+    }
+    return kept
+  }
+  /**
+   * 契约推出来的「截断档下限预算」：非权限段压到 `PARAM_SEGMENT_MIN_WIDTH`、
+   * 权限段一字不减，再加分隔符。它是 D2/D4 的定义，不是实现的中间量。
+   */
+  const floorBudget = (parts: readonly ParamRow[]): number => parts.reduce(
+    (sum, part, index) => sum + (index === 0 ? 0 : stringWidth(SEPARATOR))
+      + (part.segment === PARAM_UNTRUNCABLE_SEGMENT
+        ? stringWidth(part.value)
+        : Math.min(stringWidth(part.value), PARAM_SEGMENT_MIN_WIDTH)),
+    0,
+  )
+  /** AC-1 的复现载荷：38 格的 agent preset 显示名（`·` 按窄字符算 1 格）。 */
+  const PRESET_LONG = 'Standard (Git Bash · official tooling)'
+  /** 既有夹具四段（120 列 / 预算 70）：改造前后必须逐字节一致。 */
+  const FIXTURE_PARTS: readonly ParamRow[] = [
+    { segment: 'model', value: 'glm-5.3', colored: true },
+    { segment: 'effort', value: 'Max' },
+    { segment: 'preset', value: 'Standard' },
+    { segment: 'permission', value: 'default' },
+  ]
+  // 载荷里的 `effort` 传的是**显示值** `Max`：组件在调纯函数前已把首字母大写
+  // （`Launchpad.tsx` 的 paramParts），T03 接入时保持该口径。
+  const AC1_PARTS: readonly ParamRow[] = [
+    { segment: 'model', value: 'deepseek-flash', colored: true },
+    { segment: 'effort', value: 'Max' },
+    { segment: 'preset', value: PRESET_LONG },
+    { segment: 'permission', value: 'danger-full-access' },
+  ]
+  /** AC-2①：preset 极长（76 格），其余段与 AC-1 同。 */
+  const PRESET_HUGE_PARTS: readonly ParamRow[] = [
+    AC1_PARTS[0] as ParamRow,
+    AC1_PARTS[1] as ParamRow,
+    { segment: 'preset', value: PRESET_LONG + ' — nightly variant with custom tooling' },
+    AC1_PARTS[3] as ParamRow,
+  ]
+  /** AC-2②：模型名（48 格）与 preset（38 格）都长。 */
+  const MODEL_AND_PRESET_LONG_PARTS: readonly ParamRow[] = [
+    { segment: 'model', value: 'deepseek-official/deepseek-flash-preview-2027-10', colored: true },
+    AC1_PARTS[1] as ParamRow,
+    AC1_PARTS[2] as ParamRow,
+    AC1_PARTS[3] as ParamRow,
+  ]
+  const cases: readonly {
+    readonly name: string
+    readonly parts: readonly ParamRow[]
+    readonly budget: number
+    readonly tier: 'fit' | 'truncated' | 'fallback'
+    readonly truncatedSegments: readonly string[]
+  }[] = [
+    { name: '装得下：既有夹具四段 @120 列预算（AC-3 纯函数层）', parts: FIXTURE_PARTS, budget: 70, tier: 'fit', truncatedSegments: [] },
+    { name: 'AC-1 长 preset（预算 70）：四段都在、只截 preset', parts: AC1_PARTS, budget: 70, tier: 'truncated', truncatedSegments: ['preset'] },
+    { name: 'AC-2① preset 极长：… 只出现在最长的非权限段', parts: PRESET_HUGE_PARTS, budget: 70, tier: 'truncated', truncatedSegments: ['preset'] },
+    { name: 'AC-2② preset 与 model 都长：两段被截、权限段不动', parts: MODEL_AND_PRESET_LONG_PARTS, budget: 70, tier: 'truncated', truncatedSegments: ['model', 'preset'] },
+    { name: 'AC-5 窄预算 42（@48 列）：回落今天的尾部省段', parts: AC1_PARTS, budget: 42, tier: 'fallback', truncatedSegments: [] },
+    { name: '边界：预算 = 各段下限之和（截断档边缘，四段都在）', parts: AC1_PARTS, budget: floorBudget(AC1_PARTS), tier: 'truncated', truncatedSegments: ['model', 'preset'] },
+    { name: '边界：下限之和 - 1（兜底档边缘）', parts: AC1_PARTS, budget: floorBudget(AC1_PARTS) - 1, tier: 'fallback', truncatedSegments: [] },
+  ]
+  for (const [index, row] of cases.entries()) {
+    const label = `Q${index + 1} ${row.name}`
+    const fitted = fitParamParts(row.parts, row.budget)
+    const values = fitted.map(part => part.value)
+    const original = row.parts.map(part => part.value)
+    const total = lineWidth(fitted)
+    const allPresent = fitted.length === row.parts.length
+    const truncatedNow = fitted.filter(part => part.truncated).map(part => part.segment)
+    // ① 档位判据（不是列数判据）：fit / fallback 两档要求行文本与「原样」/「今天的
+    //    省段」逐字节一致；截断档要求四段都在——截断永不省段，省段才是兜底。
+    const expectedLine = row.tier === 'fit'
+      ? original.join(SEPARATOR)
+      : row.tier === 'fallback'
+        ? legacyFit(row.parts, row.budget).join(SEPARATOR)
+        : undefined
+    check(`${label}：档位 = ${row.tier}`,
+      row.tier === 'truncated' ? allPresent : values.join(SEPARATOR) === expectedLine,
+      `tier=${row.tier} present=${fitted.length}/${row.parts.length} line=${JSON.stringify(values.join(SEPARATOR))} expected=${JSON.stringify(expectedLine)}`)
+    // ② 单行不变量：三档任何一档都不许超预算。
+    check(`${label}：总宽 ≤ 预算`, total <= row.budget, `total=${total} budget=${row.budget}`)
+    // ③ 缩减对象由 D2「可缩减量最大优先」决定——表里逐档钉死（含空：没段被截）。
+    check(`${label}：被截断的段 = [${row.truncatedSegments.join(', ')}]`,
+      truncatedNow.join(',') === row.truncatedSegments.join(','), `truncated=[${truncatedNow.join(',')}]`)
+    // ④ 「截断」与「切断」的分界（AC-5 的屏上不变量，纯函数层是同一条）：
+    //    value ≠ fullValue ⇔ truncated，且被截的尾巴必须显式带 `…`。
+    const cutSilently = fitted.filter(part =>
+      (part.value !== part.fullValue) !== part.truncated || (part.truncated && !part.value.endsWith('…')))
+    check(`${label}：没有被切断却没有 … 的段`, cutSilently.length === 0,
+      JSON.stringify(cutSilently.map(part => `${part.segment}:${part.value}`)))
+    // ⑤ 权限段：截断档必须完整（一字不少）；三档里都**永不**出现 `…`（AC-2）；
+    //    兜底档按今天的顺序被省段是允许的（用户裁决），但绝不出现半截权限名。
+    const permission = fitted.find(part => part.segment === PARAM_UNTRUNCABLE_SEGMENT)
+    const permissionSource = row.parts.find(part => part.segment === PARAM_UNTRUNCABLE_SEGMENT)
+    check(`${label}：权限段一字不少且从不含 …`,
+      row.tier === 'fallback'
+        ? permission === undefined || permission.value === permissionSource?.value
+        : permission !== undefined && permission.value === permissionSource?.value && !permission.truncated
+          && !permission.value.includes('…'),
+      JSON.stringify(permission))
+    // ⑥ 功能仍触发（L-012/L-014 的另一半）：每段都带得出完整名（T04 的 tooltip 靠它），
+    //    且截断是**尾部**截断——显示值是完整名的前缀，不是中部/头部切一刀。
+    const brokenFull = fitted.filter((part, i) =>
+      part.fullValue !== row.parts[i]?.value || !part.fullValue.startsWith(part.value.replace(/…$/u, '')))
+    check(`${label}：每段带完整名且显示值是完整名的前缀（尾部截断）`, brokenFull.length === 0,
+      JSON.stringify(brokenFull.map(part => `${part.segment}:${part.value}|${part.fullValue}`)))
+  }
+  // 段身份 / 顺序 / 配色原样透传——T03 的焦点环与 T04 的 tooltip 都认这些字段。
+  const passedThrough = fitParamParts(AC1_PARTS, 70)
+  check('Q8 段身份 / 顺序 / colored 原样透传（T03 的焦点环依赖它）',
+    passedThrough.map(part => part.segment).join(',') === 'model,effort,preset,permission'
+      && passedThrough[0]?.colored === true && passedThrough[1]?.colored === undefined,
+    JSON.stringify(passedThrough.map(part => [part.segment, part.colored])))
+  // Q8b–Q8d（REVIEW F-09 / T-FIX-05）：**档位有类型载体**。上面表里的 `row.tier`
+  // 是测试自己推出来的期望；`fitParamParts` 的返回项现在自带 `tier`
+  // （`fit` / `truncated` / `fallback`，同一行的各段恒相同）——"哪一档"从注释与
+  // 测试推断变成**能被程序检查**的字段，三档各钉一条。
+  const tierOf = (parts: readonly ParamRow[], budget: number): string =>
+    fitParamParts(parts, budget).map(part => part.tier).join(',')
+  check('Q8b tier 载体：装得下 → 每段 tier=fit（既有夹具 @ 预算 70）',
+    tierOf(FIXTURE_PARTS, 70) === 'fit,fit,fit,fit', `tier=${tierOf(FIXTURE_PARTS, 70)}`)
+  check('Q8c tier 载体：截断档 → 每段 tier=truncated（AC-1 @ 预算 70）',
+    tierOf(AC1_PARTS, 70) === 'truncated,truncated,truncated,truncated', `tier=${tierOf(AC1_PARTS, 70)}`)
+  check('Q8d tier 载体：兜底档 → 每段 tier=fallback（AC-1 @ 预算 42）',
+    tierOf(AC1_PARTS, 42) === 'fallback,fallback', `tier=${tierOf(AC1_PARTS, 42)}`)
+  // 纯函数：不改入参（深冻结；原地写会抛 TypeError）。
+  const frozenParts = Object.freeze(AC1_PARTS.map(part => Object.freeze({ ...part })))
+  const fromFrozen = fitParamParts(frozenParts, 70)
+  check('Q9 纯函数：不改入参（冻结载荷直解）',
+    frozenParts[2]?.value === PRESET_LONG && fromFrozen.length === 4,
+    JSON.stringify(fromFrozen.map(part => part.value)))
+  // 退化档：没段 → 空；单段超预算 1 格 → 截到预算内；权限段单独放不下 → 宁可不画。
+  check('Q10 空输入 → 空输出', fitParamParts([], 70).length === 0)
+  const oneShort = fitParamParts([{ segment: 'model', value: 'deepseek-flash' }], 13)
+  check('Q11 单段超预算 1 格 → 尾部截断到预算内（带 …）',
+    oneShort.length === 1 && oneShort[0]?.truncated === true && oneShort[0]?.value.endsWith('…') === true
+      && stringWidth(oneShort[0]?.value ?? '') <= 13,
+    JSON.stringify(oneShort[0]))
+  const onlyPermission = fitParamParts([{ segment: 'permission', value: 'danger-full-access' }], 10)
+  check('Q12 权限段单独放不下 → 整段不画，绝不截断权限名（AC-2 的底线）',
+    onlyPermission.length === 0, JSON.stringify(onlyPermission))
+  const shortFloor = [
+    { segment: 'model', value: 'deepseek-flash', colored: true },
+    { segment: 'effort', value: 'Max' },
+  ]
+  const floorAttempt = fitParamParts(shortFloor, 17)
+  check('Q13 宽度 ≤ 下限的段不可减（Max 不被砍）：压不动就回落今天的省段',
+    floorAttempt.map(part => part.value).join(SEPARATOR) === legacyFit(shortFloor, 17).join(SEPARATOR)
+      && floorAttempt.every(part => part.fullValue === part.value),
+    JSON.stringify(floorAttempt.map(part => part.value)))
+}
+
+// ── R. 屏幕级：参数行三段式（AC-1/AC-2/AC-3/AC-5 的真挂载读数）───────────────
+// Q 组钉纯函数层（哪一档、哪一段被减）；这一组钉**屏上结果**：逐字节期望行。
+// 期望行是契约的独立复制品——每段文本写成字面量（只有分隔符取模块常量，
+// Q0/A6e 已把它与版式字面量钉在一起），**不调用被测函数**（L-014：用独立载荷
+// 构造"交付物没走过的跳"）。表驱动：一行 = 一份载荷 + 一个列数，覆盖一条 AC。
+{
+  interface ScreenRow {
+    readonly name: string
+    readonly params: ParamFixture
+    readonly columns: number
+    /** 屏上四段的呈现（显示顺序；截断段 = 前缀 + `…`），被省的段不在这里。 */
+    readonly shown: readonly string[]
+    /** 被截断的段的**完整名**（屏上是它的前缀 + `…`）；空 = 全部原样。 */
+    readonly truncatedFull: readonly string[]
+    /** **整段不出现**的段（兜底档按今天的顺序省段）：屏上连前半都不该有。 */
+    readonly dropped: readonly string[]
+    /** 焦点环里参数段的预期编码（-2 起按显示顺序），验证"环只收画出来的段"。 */
+    readonly ring: readonly number[]
+  }
+  const rows: readonly ScreenRow[] = [
+    {
+      name: 'AC-1 长 preset：四段同屏、只截 preset、权限段一字不少',
+      params: AC1_PARAMS,
+      columns: 120,
+      shown: ['deepseek-flash', 'Max', 'Standard (Git Bash …', 'danger-full-access'],
+      truncatedFull: ['Standard (Git Bash · official tooling)'],
+      dropped: [],
+      ring: [-2, -3, -4, -5],
+    },
+    {
+      name: 'AC-2① preset 极长（76 格）：权限段仍完整、屏上权限名不带 …',
+      params: AC2_PRESET_HUGE_PARAMS,
+      columns: 120,
+      shown: ['deepseek-flash', 'Max', 'Standard (Git Bash …', 'danger-full-access'],
+      truncatedFull: ['Standard (Git Bash · official tooling) — nightly variant with custom tooling'],
+      dropped: [],
+      ring: [-2, -3, -4, -5],
+    },
+    {
+      name: 'AC-2② preset 与模型都长：两段被截、权限段不动',
+      params: AC2_LONG_MODEL_PARAMS,
+      columns: 120,
+      shown: ['deepseek-v3.2-exp-cus…', 'Max', 'Standard (G…', 'danger-full-access'],
+      truncatedFull: ['deepseek-v3.2-exp-custom-ft-2026', 'Standard (Git Bash · official tooling)'],
+      dropped: [],
+      ring: [-2, -3, -4, -5],
+    },
+    {
+      name: 'AC-3 既有夹具：逐字节不变、行内无 …',
+      params: DEFAULT_PARAMS,
+      columns: 120,
+      shown: ['glm-5.3', 'Max', 'Standard', 'default'],
+      truncatedFull: [],
+      dropped: [],
+      ring: [-2, -3, -4, -5],
+    },
+    {
+      name: 'AC-5 同一载荷 @48 列：回落今天的尾部省段（逐字节一致）',
+      params: AC1_PARAMS,
+      columns: 48,
+      shown: ['deepseek-flash', 'Max'],
+      truncatedFull: [],
+      dropped: ['Standard (Git Bash · official tooling)', 'danger-full-access'],
+      ring: [-2, -3],
+    },
+  ]
+  for (const row of rows) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { columns: row.columns, params: row.params })
+    const displayed = displayedParams(row.params)
+    const expected = row.shown.join(PARAM_SEPARATOR)
+    // 等第一段上屏再读（等不到就是后面各条断言失败，不在等待里静默吞掉）。
+    await settled(() => s.screen().includes(displayed[0] ?? ''))
+    const lines = viewportLines(s.term)
+    const bottom = rowOf(s.term, '╰')
+    const paramRow = bottom + 1
+    const raw = lines[paramRow] ?? ''
+    const text = raw.trim()
+    // ① 逐字节期望行（含分隔符与截断形态；行首的 paddingLeft 由 ⑥ 单独钉）。
+    check(`R1@${row.columns} ${row.name}：参数行逐字节等于期望行`,
+      text === expected, `got=${JSON.stringify(text)} expected=${JSON.stringify(expected)}`)
+    // ② 行宽不变量：整行 ≤ 单行预算（预算由列数**现算**，不冻结成列数阈值——L-025）。
+    const budget = Math.max(24, Math.min(row.columns - 4, 72)) - 2
+    check(`R2@${row.columns} ${row.name}：行宽 ≤ 预算且不超屏`,
+      stringWidth(text) <= budget && stringWidth(raw) <= row.columns,
+      `w=${stringWidth(text)} budget=${budget} raw=${stringWidth(raw)} cols=${row.columns}`)
+    // ③ 屏上段 = 期望（L-012 的"症状消失"面）：画出来的**都在这一行**、每段
+    //    要么原样要么是"前缀 + `…`"；省掉的段**整段不在**（连前半都不许有）。
+    const fullFor = (shown: string): string | undefined => displayed.find(full =>
+      full === shown || (shown.endsWith('…') && full.startsWith(shown.slice(0, -1))))
+    const shownOk = row.shown.every(shown => text.includes(shown) && fullFor(shown) !== undefined)
+    const droppedOk = row.dropped.every(full => !lines.some(l => l.includes(halfOf(full))))
+    const coversAll = row.shown.length + row.dropped.length === displayed.length
+    check(`R3@${row.columns} ${row.name}：屏上段 = 期望（画的都在且完整呈现，省的整段不在）`,
+      [coversAll, shownOk, droppedOk].every(Boolean),
+      `${row.shown.length}/${displayed.length} shown=${JSON.stringify(row.shown)}`
+        + ` 意外露头的省段=${JSON.stringify(row.dropped.filter(full => lines.some(l => l.includes(halfOf(full)))))}`)
+    // ④ 被截断的段 = 期望的那几段：截断必须**显式**带 `…`、是尾部截断，且真的在屏上。
+    const truncatedShown = row.shown.filter(shown => shown.endsWith('…'))
+    const truncatedOk = truncatedShown.length === row.truncatedFull.length
+      && row.truncatedFull.every(full => truncatedShown.some(shown =>
+        text.includes(shown) && full.startsWith(shown.slice(0, -1))))
+    check(`R4@${row.columns} ${row.name}：带 … 的段 = 期望的 ${row.truncatedFull.length} 段（尾部截断）`,
+      truncatedOk, JSON.stringify(truncatedShown))
+    // ⑤ 权限段（AC-2 的底线）：画出来就**一字不少**且它之后的文本里永不出现 `…`；
+    //    这一档省掉它时必须是整段不在，不能是"半截权限名"。
+    const permission = row.params.permission ?? ''
+    const permissionDrawn = row.shown.some(shown =>
+      shown === permission || (shown.endsWith('…') && permission.startsWith(shown.slice(0, -1))))
+    const permissionAt = text.indexOf(permission)
+    const permissionOk = permissionDrawn
+      ? permissionAt >= 0 && !text.slice(permissionAt).includes('…')
+      : !lines.some(l => l.includes(halfOf(permission)))
+    check(`R5@${row.columns} ${row.name}：权限段${permissionDrawn ? '一字不少且不含 …' : '整段省掉（不是半截）'}`,
+      permission !== '' && permissionOk,
+      `drawn=${permissionDrawn} at=${permissionAt} tail=${JSON.stringify(permissionAt < 0 ? '' : text.slice(permissionAt))}`)
+    // ⑥ 版式不变量：单行（整条期望行只落在一行上）、紧贴框下、行首 = 框缘 + 2。
+    const cardLeft = leftGap(lines.find(l => l.includes('╭')) ?? '')
+    check(`R6@${row.columns} ${row.name}：单行 + 紧贴框下 + 左对齐输入框（paddingLeft 2）`,
+      lines.filter(l => l.trim() === expected).length === 1 && paramRow === bottom + 1
+        && Math.abs(leftGap(raw) - (cardLeft + 2)) <= 1 && text !== '',
+      `rows=${lines.filter(l => l.trim() === expected).length} param=${paramRow} bottom=${bottom} left=${leftGap(raw)} cardLeft=${cardLeft}`)
+    // ⑦ 功能仍触发（L-012/L-014 的另一半）：焦点环只收**画出来的**段，落点顺序
+    //     = 模型→深度→模式→权限，走完参数段落第一条入口（环里没有多余的参数格）。
+    const walk: unknown[] = []
+    for (let step = 0; step < row.ring.length; step++) {
+      await s.send('\u001b[B')
+      walk.push(last(ev, 'focus')?.value)
+    }
+    await s.send('\u001b[B')
+    check(`R7@${row.columns} ${row.name}：焦点环 = [${row.ring.join(', ')}] 且之后落第一条入口`,
+      walk.join(',') === row.ring.join(',') && last(ev, 'focus')?.value === 0,
+      `${walk.join(',')} → ${JSON.stringify(last(ev, 'focus')?.value)} expected=${row.ring.join(',')} → 0`)
+    s.close()
+  }
+}
+
+// ── S. AC-4：截断段的 tooltip（hover 出完整名 / 离开即撤 / 点击与键盘不退化）────
+// AC-4 是**屏幕级**契约：真 SGR mode-1003 motion 悬停 → 600ms dwell → 单例浮层画卡片。
+// 夹具的 Harness 与 Chat 的落地页分支同姿态（`<Launchpad/>` + `<TooltipLayer/>` 兄弟，
+// 层挂在树的最外层最后）——Chat.tsx 里的真实挂载点由 verify-launchpad-onboarding-chat
+// （真 Chat 树）兜底。负例断言的是"**不变量**"（未截断段与无 … 的载荷都不许弹卡片）：
+// 轮询到的谓词恒真不算证据，所以用带标签的固定观察窗，并让同一会话紧接的正例
+// 证明浮层是活的（不是"没挂所以什么都不出"）。
+const AC1_FULL_PRESET = 'Standard (Git Bash · official tooling)'
+const AC1_SHOWN_PRESET = 'Standard (Git Bash …'
+{
+  // ①③⑤a 在同一屏（AC-1 载荷）：**先负例后正例**——负例的观察窗里浮层是活的，
+  // 同一会话紧接着就为截断段弹出卡片，排除"层没挂"的假绿。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { params: AC1_PARAMS })
+  await settled(() => s.screen().includes(AC1_SHOWN_PRESET))
+  // ⑤a 负例：未截断的 model 段（屏上无 …）hover 满一个 dwell 窗口——卡片会替换它
+  // 覆盖的格子，屏上出任何新字形都会被抓到；单例 store 也必须仍是空。
+  const modelCell = findCell(s.term, 'deepseek-flash')!
+  const quietBefore = viewportLines(s.term).join('\n')
+  s.input.write(`\u001b[<35;${modelCell.col};${modelCell.row}M`)
+  const modelHoverLive = await settled(() => last(ev, 'focus')?.value === -2)
+  // 固定窗:探针 dwell（600ms）已过 + 余量——断言"未截断段不弹卡片"这个不变量
+  await sleep(900)
+  const quietAfter = viewportLines(s.term).join('\n')
+  check('S1 未截断段 hover 仍走既有手势（高亮 → 焦点落模型段 -2），但不弹卡片（整屏逐字节不变 + 单例 store 空）',
+    modelHoverLive && getTooltipSnapshot() === null && quietAfter === quietBefore,
+    `focus=${JSON.stringify(last(ev, 'focus')?.value)} store=${JSON.stringify(getTooltipSnapshot())} `
+      + firstScreenDiff(quietBefore, quietAfter))
+  // ① 正例：hover 到 dwell —— 卡片显示**完整 preset 名**，且锚在被悬停行**之上**。
+  const presetCell = findCell(s.term, AC1_SHOWN_PRESET)!
+  const hoveredAt = Date.now()
+  s.input.write(`\u001b[<35;${presetCell.col};${presetCell.row}M`)
+  const cardShown = await settled(() => s.screen().includes(AC1_FULL_PRESET))
+  const dwellMs = Date.now() - hoveredAt
+  const cardRow = rowOf(s.term, AC1_FULL_PRESET)
+  check('S2 被截断段 hover 停留约 600ms 后卡片显示完整名（AC-4①：dwell ≥ 500ms、卡片在锚点行之上）',
+    cardShown && dwellMs >= 500 && cardRow >= 0 && cardRow < presetCell.row - 1,
+    `dwell=${dwellMs}ms shown=${cardShown} cardRow=${cardRow} anchorRow=${presetCell.row - 1}`)
+  // ② 离开即撤：卡片消失 + 该段高亮复原（第五版 BUG 2 的病灶面：hover 带进的焦点要交还）。
+  const blankCell = findCell(s.term, '██▀▀▄▄')!
+  s.input.write(`\u001b[<35;${blankCell.col};${blankCell.row}M`)
+  const cardGone = await settled(() => !s.screen().includes(AC1_FULL_PRESET)
+    && getTooltipSnapshot() === null && last(ev, 'focus')?.value === -1)
+  check('S3 离开后卡片立即消失且高亮复原（AC-4②：屏上无完整名 + store 空 + focus 回 -1）',
+    cardShown && cardGone,
+    `wasShown=${cardShown} focus=${JSON.stringify(last(ev, 'focus')?.value)} store=${JSON.stringify(getTooltipSnapshot())}`)
+  // ③ 点击仍打开该段的选择器（落点必须是 preset，不是别的段）。
+  const beforeClick = ev.length
+  await s.click(AC1_SHOWN_PRESET)
+  check('S4 点击被截断段仍打开对应选择器（AC-4②：param = preset）',
+    last(ev, 'param')?.value === 'preset', JSON.stringify(ev.slice(beforeClick)))
+  s.close()
+}
+{
+  // ④ 键盘不退化（AC-4③）：焦点环仍四段（模型→深度→模式→权限），Enter 开对应选择器。
+  // 鼠标只在 AlternateScreen 存在，键盘等价路径必须独立成立（DESIGN 风险 R3）。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { params: AC1_PARAMS })
+  await settled(() => s.screen().includes(AC1_SHOWN_PRESET))
+  const walk: unknown[] = []
+  for (let step = 0; step < 3; step++) {
+    await s.send('\t')
+    walk.push(last(ev, 'focus')?.value)
+  }
+  // 焦点此刻在被截断的 preset 段（-4）上：Enter 打开 /preset（与鼠标同一条 onParamPick）。
+  await s.send('\r')
+  const presetPick = last(ev, 'param')?.value
+  await s.send('\t')
+  walk.push(last(ev, 'focus')?.value)
+  await s.send('\r')
+  const permissionPick = last(ev, 'param')?.value
+  check('S5 焦点环仍含四段（模型→深度→模式→权限 = -2/-3/-4/-5）：截断不减少键盘可达目标',
+    walk.join(',') === '-2,-3,-4,-5', walk.join(','))
+  check('S6 键盘 Enter 在被截断的 preset 段上打开 /preset（截断不失去等价操作）',
+    presetPick === 'preset', JSON.stringify(presetPick))
+  check('S7 再走一段 Enter 落在权限段 → /permission（环不串段）',
+    permissionPick === 'permission', JSON.stringify(permissionPick))
+  s.close()
+}
+{
+  // ⑤b 负例（AC-3 默认夹具：参数行内无 …）：hover 参数段一个 dwell 窗口——屏上零新
+  // 字形、单例 store 仍空；手势本身照旧活着（高亮 + 焦点），不是"没接上所以没反应"。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev)
+  await settled(() => s.screen().includes('Standard'))
+  const paramLine = viewportLines(s.term).find(l => l.includes('Standard')) ?? ''
+  const target = findCell(s.term, 'Standard')!
+  const quietBefore = viewportLines(s.term).join('\n')
+  s.input.write(`\u001b[<35;${target.col};${target.row}M`)
+  const hoverLive = await settled(() => last(ev, 'focus')?.value === -4)
+  // 固定窗:探针 dwell（600ms）已过 + 余量——断言"无 … 的载荷不弹卡片"这个不变量
+  await sleep(900)
+  const quietAfter = viewportLines(s.term).join('\n')
+  check('S8 AC-3 默认夹具（无 …）hover 参数段：手势活着但不出卡片（整屏逐字节不变 + store 空）',
+    hoverLive && !paramLine.includes('…') && getTooltipSnapshot() === null && quietAfter === quietBefore,
+    `focus=${JSON.stringify(last(ev, 'focus')?.value)} store=${JSON.stringify(getTooltipSnapshot())} `
+      + firstScreenDiff(quietBefore, quietAfter))
+  s.close()
+}
+{
+  // ⑥ F-04（T-FIX-03）：**激活即撤卡**——hover 出卡后点这一段，指针**仍停在段上**
+  // （不再有 pointer-leave 收敛），卡片必须立刻消失：否则它会停在刚打开的选择器
+  // 之上，而 `param` 事件本身照常发出（鼠标选择器路径不退化）。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { params: AC1_PARAMS })
+  await settled(() => s.screen().includes(AC1_SHOWN_PRESET))
+  const cell = findCell(s.term, AC1_SHOWN_PRESET)!
+  s.input.write(`\u001b[<35;${cell.col};${cell.row}M`)
+  const cardShown = await settled(() => s.screen().includes(AC1_FULL_PRESET) && getTooltipSnapshot() !== null)
+  const beforeClick = ev.length
+  await s.click(AC1_SHOWN_PRESET)
+  const picked = last(ev, 'param')?.value
+  const cardGone = await settled(() => !s.screen().includes(AC1_FULL_PRESET) && getTooltipSnapshot() === null)
+  check('S9 点击被截断段（指针仍在段上）→ 卡片立即消失且 param=preset（F-04：激活即撤卡，选择器路径不退化）',
+    cardShown && cardGone && picked === 'preset',
+    `cardShown=${cardShown} cardGone=${cardGone} param=${JSON.stringify(picked)} `
+      + `store=${JSON.stringify(getTooltipSnapshot())} ${JSON.stringify(ev.slice(beforeClick))}`)
+  s.close()
+}
+{
+  // ⑦ F-04（T-FIX-03）：键盘激活走同一条语义。hover 出卡时焦点已被 hover 带进
+  // preset 段（-4），直接按 Enter（屏级 useInput → onParamPick）：卡片同样必须
+  // 消失——这一条与 S9 的差别只在"激活从哪里来"，两条路径都不许把上一段的
+  // 完整名留在选择器之上。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { params: AC1_PARAMS })
+  await settled(() => s.screen().includes(AC1_SHOWN_PRESET))
+  const cell = findCell(s.term, AC1_SHOWN_PRESET)!
+  s.input.write(`\u001b[<35;${cell.col};${cell.row}M`)
+  const hoverFocused = await settled(() => last(ev, 'focus')?.value === -4)
+  const cardShown = await settled(() => s.screen().includes(AC1_FULL_PRESET) && getTooltipSnapshot() !== null)
+  const beforeKey = ev.length
+  await s.send('\r')
+  const picked = last(ev, 'param')?.value
+  const cardGone = await settled(() => !s.screen().includes(AC1_FULL_PRESET) && getTooltipSnapshot() === null)
+  check('S10 键盘 Enter 激活被截断段（卡片已挂）→ 卡片立即消失且 param=preset（F-04：两条激活路径同语义）',
+    hoverFocused && cardShown && cardGone && picked === 'preset',
+    `focus=${JSON.stringify(last(ev, 'focus')?.value)} cardShown=${cardShown} cardGone=${cardGone} `
+      + `param=${JSON.stringify(picked)} store=${JSON.stringify(getTooltipSnapshot())} ${JSON.stringify(ev.slice(beforeKey))}`)
+  s.close()
+}
+
 // ── F. 宽度不变量（整屏：任何一行都不超宽、没有切断的半句） ─────────────────
-// 旧的「提示行不许出现被切断的半句」升级成整屏不变量：每个键位标签、Tips 文案、
-// 参数条要么完整出现在**同一行**，要么整条不出现；任何一行 trim 后 ≤ 列数。
-// 半句检测用**渲染后的形态**：键帽文本 ` /key ` + 分隔空格 + 标签，键与标签
-// 之间是两个空格（键帽右内边距一格 + 分隔一格）。
+// 整屏不变量：每个键位标签、Tips 文案、参数段要么完整出现在**同一行**，要么
+// 整条不出现；任何一行 trim 后 ≤ 列数。
+// **判据（DESIGN D7 修订）**：参数段允许以 `…` 结尾的**尾部截断**——截断是
+// **显式标记**的（`…` 摆在屏上，用户看得见"这里还有字"），视为完整呈现；
+// 不带 `…` 的半截（字形被裁掉却没有任何提示）与整段消失才是缺陷形态，仍判失败。
+// 为什么这不是放水：旧判据的"前半在屏、完整串不在 ⇒ 切断"会把**合法的截断**
+// 与**无标记的切断**判成同一类，于是要么误报、要么被迫放弃"参数行必须完整"的
+// 不变量；新判据只是把"显式标记的降级"从缺陷里摘出来——每一条 half 判据仍要求
+// "要么完整、要么显式标记"，F1 的"任何一行不超宽"原样保留，R 组另有逐字节期望行。
+//
+// **档位覆盖（REVIEW F-06 · T-FIX-04 补齐）**：F1/F2 的五档矩阵用**短名夹具**
+// （四段原样总宽 40 ≤ 最小预算 42）⇒ 五档**全在 fit 档**；长名载荷下的**截断档**
+// 与**兜底档**由下面的 F4@76 / F5@48 各自用同一对不变量 + 档位形态断言覆盖。
+//
+// **F1 形状的已知边界**：「任何一行 trim 后 ≤ 列数」对**组合出来的超宽行**判不出
+// ——终端会在列宽处**折行**，超宽内容变成下一行的前几个字符，每一行本身仍 ≤ 列数
+// （读数：`probe/fix/T-FIX-04-xterm-wrap-probe.txt`，48 列里写 100 个 `x` ⇒
+// 48/48/4 三行）。这条判据抓的是**宽度记账与终端格子不一致**（emoji/ZWJ 计数差那
+// 一类，见 F-08），而"参数行不超预算"由 R1/R2 的逐字节期望行 + 预算判据钉住。
 const CHIP_LABELS = DEFAULT_ACTIONS.map(a => t(a.labelKey as never, a.values as never))
 const TIP_TEXTS = [t('launchpad-tip' as never), t('launchpad-first-run' as never)]
+/**
+ * `text` 是否**无标记地被切断**：前半串在屏上，但没有任何一次出现是
+ * "完整串"或"前缀 + `…`"（后者是 D3 的尾部截断，合法呈现）。
+ * 整段不在屏上（没找到前半串）不算切断——窄屏按宽度整段省掉是契约行为。
+ *
+ * ⚠️ **已知盲区（REVIEW F-05 · 登记 `KNOWN-ISSUES`）——它不是"参数段完整性"的
+ * 通用守卫**，只是"切痕 ≥ 半个串且同屏没有完整串"这一形态的探针：
+ *   ① **不足半个串的无标记半截判不出**：探针就是前半串，切得比它短时屏上根本
+ *      找不到锚点（`probe/review/readings-zwj-f2.txt`：@70%/55%/50% 判红，
+ *      @45%/25% 判不出）；
+ *   ② **`halfOf` 用 UTF-16 `slice`**：代理对（emoji/ZWJ 序列）被从中间切开后
+ *      的"前半"不是原串的合法前缀，`indexOf` 永不命中 ⇒ 对这类文本**永不判红**
+ *      （`readings-zwj-f2.txt` 第 27-37 行；当前载荷是 ASCII，非活漏洞）；
+ *   ③ **完整串出现在别处就放行**：同一行是半截、但完整串在另一行（如 tooltip
+ *      卡片行）时，`isSilentlyCut` 会在那一行命中"完整串"并返回 false
+ *      （`readings-zwj-f2.txt` 末行）。
+ * 参数段的**完整性**另由 Q 组（纯函数三档契约）与 R 组（逐字节期望行）钉住。
+ */
+function isSilentlyCut(lines: readonly string[], text: string): boolean {
+  const half = halfOf(text)
+  let seen = false
+  for (const line of lines) {
+    for (let at = line.indexOf(half); at >= 0; at = line.indexOf(half, at + 1)) {
+      seen = true
+      let matched = 0
+      while (matched < text.length && line[at + matched] === text[matched]) matched += 1
+      if (matched === text.length || line[at + matched] === '…') return false
+    }
+  }
+  return seen
+}
+/** 整屏的"被切断"清单：标签/Tips 用完整串判据；参数段按上面的 D7 判据。 */
+function cutHalves(lines: readonly string[], paramTexts: readonly string[]): string[] {
+  const hard = [...CHIP_LABELS, ...TIP_TEXTS].filter(text =>
+    lines.some(l => l.includes(halfOf(text))) && !lines.some(l => l.includes(text)))
+  return [...hard, ...paramTexts.filter(text => isSilentlyCut(lines, text))]
+}
 for (const cols of [120, 100, 72, 60, 48]) {
+  // 注意载荷：默认短名夹具（四段原样总宽 40 ≤ 最小预算 42）⇒ 这五档**全在 fit 档**，
+  // 截断档/兜底档的不变量由 F4@76 / F5@48（REVIEW F-06）覆盖；判据本身的盲区见
+  // `isSilentlyCut` 的注释。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, { columns: cols })
   await settled(() => s.screen().trim().length > 0)
@@ -951,19 +1549,87 @@ for (const cols of [120, 100, 72, 60, 48]) {
     .filter(x => x.w > cols)
   check(`F1@${cols} 整屏不变量：任何一行都不超宽`, overflow.length === 0,
     overflow.map(x => `row=${x.i} w=${x.w}`).join(' '))
-  // 半句检测：标签/文案的前半出现在屏上、却找不到完整串 = 被切断。
   // 参数行按**段**判（模型/思考深度/模式/权限）：窄屏下尾部段按宽度省掉是
-  // 契约行为（launchpadLayout 的单行预算），整句判据会把合法省段误判成切断。
-  const PARAM_SEGMENTS = ['glm-5.3', 'Max', 'Standard', 'default']
-  const wholes = [...CHIP_LABELS, ...TIP_TEXTS, ...PARAM_SEGMENTS]
-  const cut = wholes.filter(text => {
-    const half = text.slice(0, Math.ceil(text.length / 2))
-    const onScreen = lines.some(l => l.includes(half))
-    const whole = lines.some(l => l.includes(text))
-    return onScreen && !whole
-  })
-  check(`F2@${cols} 没有被切断的半句（标签/Tips/参数条要么完整要么不出现）`, cut.length === 0,
-    cut.join(' | '))
+  // 契约行为（单行预算），整句判据会把合法省段误判成切断。
+  const cut = cutHalves(lines, displayedParams(DEFAULT_PARAMS))
+  check(`F2@${cols} 没有被切断的半句（标签/Tips 要么完整要么不出现；参数段要么完整、要么带 …）`,
+    cut.length === 0, cut.join(' | '))
+  s.close()
+}
+// F3：D7 新判据的**正面证据**——AC-1 的长 preset 在屏上是"前缀 + `…`"，旧判据
+// 会把它误判成半句，新判据必须放行；同时要求那个带 `…` 的呈现**真的在屏上**
+// （否则这条断言在"还没接线"的形态下也能空过，等于没测）。
+{
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { params: AC1_PARAMS })
+  await settled(() => s.screen().includes('Standard (Git Bash …'))
+  const lines = viewportLines(s.term)
+  const cut = cutHalves(lines, displayedParams(AC1_PARAMS))
+  check('F3@120 带 `…` 的尾部截断不算被切断（D7 新判据的正面证据）',
+    cut.length === 0 && lines.some(l => l.includes('Standard (Git Bash …')),
+    `${cut.join(' | ')} | ${JSON.stringify(lines.filter(l => l.includes('Standard')))}`)
+  s.close()
+}
+// F4/F5（REVIEW F-06）：**截断档 / 兜底档的真实渲染不变量**。上面 F1/F2 的五档
+// 矩阵是短名夹具（全 fit 档）、F3@120 只覆盖截断档的"无标记半截"，兜底档此前
+// **0 条**不变量断言。这里换长名载荷（AC-1）补两档，断言形状与 F1/F2 同源：
+// 每档两条不变量（不超宽 / 无无标记半截）+ 一条**档位形态**（截断档四段同屏且
+// preset 显式带 `…`；兜底档与今天逐字节一致且无 `…` 泄漏）。
+// 档位读数（**不是**阈值，L-025）：`probe/round4/param-band.txt` —— AC-1 载荷
+// 兜底档最大列数 = 65、截断档最小列数 = 66；76 列 = 预算 70 的截断档、
+// 48 列 = 预算 42 的兜底档（两者都是该档的**代表列**，不是边界）。
+{
+  // F4@76（截断档）：四段同屏、只截 preset、权限段一字不少、行宽 ≤ 预算。
+  const cols = 76
+  const budget = Math.max(24, Math.min(cols - 4, 72)) - 2
+  const shown = ['deepseek-flash', 'Max', 'Standard (Git Bash …', 'danger-full-access']
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { columns: cols, params: AC1_PARAMS })
+  await settled(() => s.screen().includes('Standard (Git Bash …'))
+  const lines = viewportLines(s.term)
+  const overflow = lines.map((l, i) => ({ w: stringWidth(l.replace(/\s+$/u, '')), i }))
+    .filter(x => x.w > cols)
+  check(`F4@${cols} 截断档（AC-1 载荷）：整屏不变量——任何一行都不超宽`, overflow.length === 0,
+    overflow.map(x => `row=${x.i} w=${x.w}`).join(' '))
+  const cut = cutHalves(lines, displayedParams(AC1_PARAMS))
+  check(`F4b@${cols} 截断档（AC-1 载荷）：没有被切断的半句（preset 显式带 …、权限段一字不少）`,
+    cut.length === 0, cut.join(' | '))
+  const row = (lines.find(l => l.includes('danger-full-access')) ?? '').trim()
+  const rowWidth = stringWidth(row)
+  check(`F4c@${cols} 截断档（AC-1 载荷）：四段同屏 + preset 段带 … + 行宽 ≤ 预算`,
+    shown.every(needle => row.includes(needle)) && rowWidth <= budget,
+    `w=${rowWidth} budget=${budget} row=${JSON.stringify(row)}`)
+  s.close()
+}
+{
+  // F5@48（兜底档）：**与今天逐字节一致**（尾部整段省）+ **无 `…` 泄漏**。
+  // 期望行按契约字面量写（分隔符取模块常量，A6e 已把它钉在版式上）——不调用被测函数。
+  const cols = 48
+  const budget = Math.max(24, Math.min(cols - 4, 72)) - 2
+  const expected = ['deepseek-flash', 'Max'].join(PARAM_SEPARATOR)
+  const dropped = ['Standard (Git Bash · official tooling)', 'danger-full-access']
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { columns: cols, params: AC1_PARAMS })
+  await settled(() => s.screen().includes('deepseek-flash'))
+  const lines = viewportLines(s.term)
+  const overflow = lines.map((l, i) => ({ w: stringWidth(l.replace(/\s+$/u, '')), i }))
+    .filter(x => x.w > cols)
+  check(`F5@${cols} 兜底档（AC-1 载荷）：整屏不变量——任何一行都不超宽`, overflow.length === 0,
+    overflow.map(x => `row=${x.i} w=${x.w}`).join(' '))
+  const cut = cutHalves(lines, displayedParams(AC1_PARAMS))
+  check(`F5b@${cols} 兜底档（AC-1 载荷）：没有被切断的半句（省掉的段整段不在、留下的段完整）`,
+    cut.length === 0, cut.join(' | '))
+  const paramRow = rowOf(s.term, '╰') + 1
+  const text = (lines[paramRow] ?? '').trim()
+  // 「无 `…` 泄漏」按**参数行**判：屏上别处另有合法的省略号（输入框占位提示
+  // `说点什么，或输入 / 看命令…`），整屏扫 `…` 会把那条误算成泄漏。
+  const paramLeak = text.includes('…')
+  check(`F5c@${cols} 兜底档（AC-1 载荷）：与今天逐字节一致（尾部省段）+ 参数行无 … 泄漏`,
+    text === expected && !paramLeak && stringWidth(text) <= budget
+      && dropped.every(full => !lines.some(l => l.includes(halfOf(full)))),
+    `got=${JSON.stringify(text)} expected=${JSON.stringify(expected)} budget=${budget} `
+      + `paramLeak=${paramLeak} `
+      + `droppedVisible=${JSON.stringify(dropped.filter(full => lines.some(l => l.includes(halfOf(full)))))}`)
   s.close()
 }
 

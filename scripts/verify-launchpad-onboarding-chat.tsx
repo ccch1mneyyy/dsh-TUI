@@ -17,6 +17,10 @@
  *   G. 首启 Tips 行（launchpad-first-run，首启专用文案）不再 stale：完成引导后
  *      它立刻换回平时的 launchpad-tip（跳过则保留首启那句，因为没记账）。
  *   H. 向导招式卡的"试一下"：会开整屏界面的命令同样先把向导收掉，不留滞留状态。
+ *   R. AC-4 的**真集成面**：长名 preset 载荷 → 真 SGR motion 悬停到被截断的
+ *      preset 段 → 卡片显示完整名 → 指针移开卡片消失。这一组钉的是 `Chat.tsx`
+ *      落地页分支末尾那一行 `<TooltipLayer />`——删掉它 R1 必红（F-01 的守卫；
+ *      verify-launchpad 的 S 组是孤立夹具自挂层，删 Chat 那一行那边照绿）。
  *
  * 运行：node --import tsx/esm scripts/verify-launchpad-onboarding-chat.tsx
  */
@@ -984,6 +988,52 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
     chat.screen().slice(0, 200))
   await chat.unmount()
 }
+// ── R. AC-4 的真集成面：Chat 挂的那层 TooltipLayer 真的把卡片画出来 ──────────
+// REVIEW F-01：S 组（verify-launchpad）是**孤立夹具自挂单例层**，本脚本此前 0 处
+// tooltip 断言 ⇒ 把 `Chat.tsx` 落地页分支末尾的 `<TooltipLayer />` 删掉，
+// `verify:build` 4/4 + 258 + 77 仍全绿（覆盖率幻觉）。这一组钉**真 Chat 树**上的
+// 端到端面：长名 preset 载荷（参数行装不下 ⇒ preset 段真的被尾部截断）→ 真 SGR
+// mode-1003 motion 悬停到**被截断的 preset 段**（列号按显示宽度算，与 S 组同法）
+// → 轮询到屏上出现**完整 preset 名** → 指针移开卡片消失。
+const AC4_FULL_PRESET = 'Standard (Git Bash · official tooling)'
+/** 被截断的 preset 段在屏上的前缀（`truncateToWidth` 之后的头部，卡片出现前屏上只有它）。 */
+const AC4_CUT_PRESET = 'Standard (Git Bash'
+{
+  const chat = await mountChat({ launchpadOnBoot: true }, {
+    // 名册是异步预热的（Chat 的 effect 读 listPresets）：把当前 preset 的显示名
+    // 换成 AC-1 同款 38 格长名，参数行（预算 70 格）就装不下它。
+    agentPreset: 'standard',
+    listPresets: async () => [
+      { id: 'standard', name: AC4_FULL_PRESET, isDefault: true },
+      { id: 'ptc', name: 'PTC', isDefault: false },
+    ],
+  } as never)
+  // 名册落定：被截断的 preset 段上屏（带 `…`），且**完整名还不在屏上**——
+  // 后者是这一组的基线：卡片出现之前，完整名不可能靠别的路径上屏。
+  const cutOnScreen = await settled(() => {
+    const line = viewportLines(chat.term).find(l => l.includes(AC4_CUT_PRESET))
+    return line !== undefined && line.includes('…')
+  })
+  const beforeHover = chat.screen()
+  const cell = findParamCell(chat.term, AC4_CUT_PRESET)
+  if (cell === null) throw new Error('truncated preset segment not on screen')
+  // 真 SGR mode-1003 motion（无按键）：ParamChip 的 onMouseEnter 臂上 600ms dwell，
+  // 卡片由 Chat 树尾的单例层画——删掉那一行，这里永远等不到完整名（R1 变红）。
+  chat.stdin.write(`\u001b[<35;${cell.col};${cell.row}M`)
+  const cardShown = await settled(() => chat.screen().includes(AC4_FULL_PRESET))
+  check('R1 真 Chat 树：悬停被截断的 preset 段 → 单例层画出卡片、完整 preset 名上屏（AC-4①，钉 Chat 的 <TooltipLayer />）',
+    cutOnScreen && !beforeHover.includes(AC4_FULL_PRESET) && cardShown,
+    `cut=${cutOnScreen} beforeHasFull=${beforeHover.includes(AC4_FULL_PRESET)} after=${cardShown} `
+      + `cell=${JSON.stringify(cell)} :: ${chat.screen().slice(0, 240)}`)
+  // 移开指针（屏角空白）→ 卡片立即撤掉。
+  chat.stdin.write('\u001b[<35;1;1M')
+  const cardGone = await settled(() => !chat.screen().includes(AC4_FULL_PRESET))
+  check('R2 真 Chat 树：指针移开后卡片撤掉（AC-4②：屏上不再有完整名）',
+    cardShown && cardGone,
+    `wasShown=${cardShown} gone=${cardGone} :: ${chat.screen().slice(0, 240)}`)
+  await chat.unmount()
+}
+
 if (failures === 0) console.log(`\nverify-launchpad-onboarding-chat: ${checks} checks, all passed`)
 else console.error(`\nverify-launchpad-onboarding-chat: ${failures} of ${checks} checks FAILED`)
 process.exit(failures === 0 ? 0 : 1)

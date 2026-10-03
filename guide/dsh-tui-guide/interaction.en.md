@@ -97,7 +97,14 @@ results back to the chat screen and add no new behavior.
   `/permission`); the picker renders **above** the launchpad and owns the keyboard
   (`Esc` closes it back onto the launchpad), the picked value updates the row in place and the typed draft
   is untouched; clicking inside the picker selects, **clicking elsewhere closes it and clicking another
-  segment switches to that picker**.
+  segment switches to that picker**. All four segments **stay on the row**: they are drawn verbatim
+  when they fit; when they do not, only the **over-long segments** are truncated at the tail with a
+  trailing `…` (the permission segment is **never truncated**), and hovering a truncated segment
+  shows its **full name** in a card after ~600ms (mouse tracking is always on for the launchpad
+  screen, inline mode included); only when the **full permission name does not fit the budget** —
+  widening the terminal past 76 columns changes nothing, while a narrower terminal or a longer
+  permission name triggers it earlier — does the row fall back to dropping **whole segments from
+  the tail** (permission → mode → effort → model), which also drops them from the focus ring.
 - **Entry row (v7, four slots)**: `Continue "…"` (Alt+R; the slot is absent when there is nothing to
   continue) · `Sessions & workspaces` (`/home` — history and workspaces merged into one entry) ·
   `Settings` (`/settings`) · a **conditional slot** (priority: background jobs running → `Background
@@ -127,9 +134,10 @@ results back to the chat screen and add no new behavior.
   **language pane applies on `Enter`**; `Enter` on the last step finishes and records the guide when the
   focused card is a shortcut card, and tries the command when it is a command card; `Esc` skips
   (**not recorded**, asked again next launch).
-- **Mouse** (fullscreen): the launchpad's quick actions (hover = the label turns accent-blue and bold,
-  leaving restores the dim look), param segments, command palette, Tips line, the wizard's "Try it" cards
-  and the workspace picker are clickable, and a click lands on the same command path as the keyboard.
+- **Mouse** (mouse tracking is always on for this screen): the launchpad's quick actions (hover = the
+  label turns accent-blue and bold, leaving restores the dim look), param segments, command palette,
+  Tips line, the wizard's "Try it" cards and the workspace picker are clickable, and a click lands on
+  the same command path as the keyboard.
 
 ## Editing keys
 
