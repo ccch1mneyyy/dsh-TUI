@@ -6,9 +6,17 @@
  * only the derived `tokenRef`, never a literal token.
  *
  * This module is a direct, host-side file view of that store (the Claude
- * backend has no cordis context to resolve `ctx.get('credentials')` from):
- * one `  REF: value` line under the top-level `refs:` block, every other
- * line byte-preserved, commits atomic (channels.ts's temp+rename pattern).
+ * backend has no cordis context to resolve `ctx.get('credentials')` from).
+ * The store is edited through a REAL YAML document parser (`yaml`, already
+ * a runtime dependency): the top-level `refs` mapping is located semantically
+ * — block or flow (inline) style, quoted keys included — foreign fields,
+ * comments and multiline scalars keep their meaning, and every commit must
+ * parse back clean before it is allowed to replace the file (R3-3: the old
+ * line-append once turned a legal `refs: { A: b }` into a duplicate top-level
+ * `refs:` key, corrupting the shared library for every strict parser). A
+ * store this module cannot honestly read — unreadable, or not valid YAML —
+ * is never rebuilt over: reads answer undefined and writes refuse.
+ * Commits stay atomic (channels.ts's temp+rename pattern).
  * The ref namespace is `CHANNEL_<SLUG>_TOKEN` — derived from the channel id
  * the way deriveKeyRef derives `<ROUTE>_API_KEY`, so a re-import (or a hand
  * edit of the name's slug) refreshes the same credential row.
@@ -19,6 +27,7 @@
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { isMap, parseDocument, type Document, type YAMLMap } from 'yaml'
 import { dshHomeDir } from '../../utils/credentials.js'
 
 /** The credential ref of one channel id (the deriveKeyRef convention:
@@ -41,70 +50,46 @@ export interface ClaudeChannelTokens {
   declared(ref: string): boolean
 }
 
-/** Render one credential value as a YAML scalar (single-quoted only when the
- *  plain form could be misread; '' doubles inside, per the YAML rule). */
-function yamlScalar(value: string): string {
-  if (value === '' || /^[?-\[\]{}#&*!|>'"%@,]/.test(value) || /[:#]/.test(value) || /^\s|\s$/.test(value)
-    || /[\n\r\t]/.test(value) || /^(true|false|null|~|-?\d+(\.\d+)?([eE][-+]?\d+)?)$/.test(value)) {
-    return "'" + value.replaceAll("'", "''") + "'"
-  }
-  return value
-}
-
-/** Unquote one YAML scalar the store may hold (plain or single-quoted). */
-function unquote(value: string): string {
-  const trimmed = value.trim()
-  if (trimmed.length >= 2 && trimmed.startsWith("'") && trimmed.endsWith("'")) {
-    return trimmed.slice(1, -1).replaceAll("''", "'")
-  }
-  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
-    try { return JSON.parse(trimmed) as string } catch { return trimmed.slice(1, -1) }
-  }
-  return trimmed
-}
-
 const FILE = '.credentials.yaml'
 
-/** Split text into lines that KEEP their trailing newline (splice-safe). */
-function splitLines(text: string): string[] {
-  return text.split(/(?<=\n)/)
-}
-
 /** The file-backed token store under `home` (default the DSH home that owns
- *  `~/.dsh/.credentials.yaml`). */
+ * `~/.dsh/.credentials.yaml`). */
 export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (message: string) => void = () => undefined): ClaudeChannelTokens {
   const path = join(home, FILE)
-  const readAll = (): string => {
+
+  /** Parse the store into a YAML document. `undefined` = this module refuses
+   *  to interpret (let alone rewrite) what it cannot honestly read: an
+   *  unreadable file, or one that does not parse (a damaged or
+   *  duplicate-keyed library must never be rebuilt over — R3-3). An absent
+   *  file parses as an empty document, so the first write can create it. */
+  const load = (): Document | undefined => {
+    let text: string
     try {
-      return readFileSync(path, 'utf8')
-    } catch {
-      return ''
+      text = readFileSync(path, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return parseDocument('')
+      debug('claude: channel token store unreadable (' + (error instanceof Error ? error.message : String(error)) + '); refusing to touch it')
+      return undefined
     }
-  }
-  /** The `refs:` block's line range in `text` (both -1 when absent). */
-  const refsBlock = (text: string): { start: number; end: number } => {
-    const match = /^refs:[ \t]*\r?\n/m.exec(text)
-    if (match === null) return { start: -1, end: -1 }
-    const start = match.index + match[0].length
-    let end = start
-    while (end < text.length) {
-      const lineEnd = text.indexOf('\n', end)
-      const stop = lineEnd === -1 ? text.length : lineEnd
-      const line = text.slice(end, stop)
-      if (!/^([ \t]+\S|\s*$)/.test(line)) break
-      end = lineEnd === -1 ? text.length : lineEnd + 1
+    const doc = parseDocument(text)
+    if (doc.errors.length > 0) {
+      debug('claude: channel token store is not valid YAML (' + doc.errors.length + ' parse errors); refusing to touch it')
+      return undefined
     }
-    return { start, end }
+    return doc
   }
-  const findLine = (block: string, ref: string): number => {
-    const escaped = ref.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-    const re = new RegExp('^[ \\t]+' + escaped + '[ \\t]*:', 'mu')
-    const lines = splitLines(block)
-    for (let at = 0; at < lines.length; at += 1) {
-      if (re.test(lines[at]!)) return at
-    }
-    return -1
+
+  /** The top-level `refs` mapping: undefined when absent, null when the
+   *  document holds a `refs` entry that is not a mapping (writes refuse on
+   *  that shape instead of guessing around it). */
+  const refsOf = (doc: Document): YAMLMap | undefined | null => {
+    if (doc.contents === null) return undefined
+    if (!isMap(doc.contents)) return null
+    const refs = doc.contents.get('refs')
+    if (refs === undefined) return undefined
+    return isMap(refs) ? refs : null
   }
+
   const commit = (next: string): void => {
     const temporary = join(home, FILE + '.' + process.pid + '.' + Date.now() + '.tmp')
     try {
@@ -121,52 +106,52 @@ export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (mes
       debug('claude: channel token write failed (' + (error instanceof Error ? error.message : String(error)) + ')')
     }
   }
+
   return {
     read: ref => {
-      const text = readAll()
-      const block = refsBlock(text)
-      if (block.start === -1) return undefined
-      const lines = splitLines(text.slice(block.start, block.end))
-      const at = findLine(text.slice(block.start, block.end), ref)
-      if (at === -1) return undefined
-      const line = lines[at] ?? ''
-      const colon = line.indexOf(':')
-      const value = colon === -1 ? '' : line.slice(colon + 1).replace(/\r?\n$/, '')
-      const unquoted = unquote(value)
-      return unquoted === '' ? undefined : unquoted
+      const doc = load()
+      if (doc === undefined) return undefined
+      const refs = refsOf(doc)
+      if (refs === undefined || refs === null) return undefined
+      const value = refs.get(ref)
+      // Only a non-empty string scalar is a token; null/number/boolean
+      // scalars are declared but not usable credential material.
+      return typeof value === 'string' && value !== '' ? value : undefined
     },
     write: (ref, value) => {
-      const text = readAll()
-      const entry = '  ' + ref + ': ' + yamlScalar(value) + '\n'
-      const block = refsBlock(text)
-      let next: string
-      if (block.start === -1) {
-        const base = text === '' ? '' : text.endsWith('\n') ? text : text + '\n'
-        next = base + 'refs:\n' + entry
-      } else {
-        const current = text.slice(block.start, block.end)
-        const at = findLine(current, ref)
-        const lines = splitLines(current)
-        next = at === -1
-          ? text.slice(0, block.start) + current + entry + text.slice(block.end)
-          : text.slice(0, block.start) + lines.map((line, i) => i === at ? entry : line).join('') + text.slice(block.end)
+      const doc = load()
+      if (doc === undefined) return
+      const refs = refsOf(doc)
+      if (refs === null) {
+        debug('claude: channel token store refs is not a mapping; refusing to write')
+        return
       }
-      if (next !== text) commit(next)
+      if (refs === undefined) doc.set('refs', { [ref]: value })
+      else refs.set(ref, value)
+      // lineWidth 0: a token is one scalar and must never be line-folded.
+      const next = doc.toString({ lineWidth: 0 })
+      // Self-check: nothing leaves this module unless it parses back clean
+      // — R3-3's duplicate-refs class of corruption cannot be committed.
+      if (parseDocument(next).errors.length > 0) {
+        debug('claude: channel token write self-check failed; refusing to commit')
+        return
+      }
+      if (next !== '') commit(next)
     },
     erase: ref => {
-      const text = readAll()
-      const block = refsBlock(text)
-      if (block.start === -1) return
-      const current = text.slice(block.start, block.end)
-      const at = findLine(current, ref)
-      if (at === -1) return
-      const lines = splitLines(current)
-      commit(text.slice(0, block.start) + lines.filter((_, i) => i !== at).join('') + text.slice(block.end))
+      const doc = load()
+      if (doc === undefined) return
+      const refs = refsOf(doc)
+      if (refs === undefined || refs === null) return
+      if (!refs.has(ref)) return
+      refs.delete(ref)
+      commit(doc.toString({ lineWidth: 0 }))
     },
     declared: ref => {
-      const text = readAll()
-      const block = refsBlock(text)
-      return block.start !== -1 && findLine(text.slice(block.start, block.end), ref) !== -1
+      const doc = load()
+      if (doc === undefined) return false
+      const refs = refsOf(doc)
+      return refs !== undefined && refs !== null && refs.has(ref)
     },
   }
 }

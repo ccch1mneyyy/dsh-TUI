@@ -354,6 +354,84 @@ const init = {
     mem.read('CHANNEL_M_TOKEN') === 'mem' && (mem.write('CHANNEL_M_TOKEN', 'two'), mem.read('CHANNEL_M_TOKEN') === 'two') && (mem.erase('CHANNEL_M_TOKEN'), mem.read('CHANNEL_M_TOKEN') === undefined && mem.declared('CHANNEL_M_TOKEN') === false))
 }
 
+// ---- 9b. R3-3: every commit parses back as valid YAML (round-trip) --------
+{
+  const yaml = await import('yaml')
+  const dir = mkdtempSync(join(tmpdir(), 'dshtui-channel-tokens-yaml-'))
+  const storeFile = join(dir, '.credentials.yaml')
+  const seeded = (text: string): void => { writeFileSync(storeFile, text) }
+  const text = (): string => readFileSync(storeFile, 'utf8')
+  const parses = () => yaml.parseDocument(text())
+  try {
+    // (a) a FLOW (inline) refs library: the write must extend the SAME
+    //     top-level key — the old line-append created a duplicate `refs:`.
+    seeded('refs: { FOREIGN: synthetic }\n')
+    const inline = fileClaudeChannelTokens(dir, () => undefined)
+    check('yaml: a flow refs library reads its foreign ref', inline.read('FOREIGN') === 'synthetic')
+    inline.write('CHANNEL_Z_TOKEN', 'inline-secret')
+    const inlineDoc = parses()
+    check('yaml: writing into a flow refs library keeps ONE valid top-level refs',
+      inlineDoc.errors.length === 0 && inlineDoc.getIn(['refs', 'FOREIGN']) === 'synthetic' && inlineDoc.getIn(['refs', 'CHANNEL_Z_TOKEN']) === 'inline-secret', text())
+    // (b) an empty flow mapping gains its first ref cleanly.
+    seeded('refs: {}\n')
+    fileClaudeChannelTokens(dir, () => undefined).write('CHANNEL_A_TOKEN', 'first')
+    const emptyDoc = parses()
+    check('yaml: an empty flow refs library gains its first ref cleanly',
+      emptyDoc.errors.length === 0 && emptyDoc.getIn(['refs', 'CHANNEL_A_TOKEN']) === 'first', text())
+    // (c) a quoted refs key is located semantically.
+    seeded('"refs":\n  "CHANNEL_A_TOKEN": quoted\n')
+    const quoted = fileClaudeChannelTokens(dir, () => undefined)
+    check('yaml: a quoted refs key reads and writes',
+      quoted.read('CHANNEL_A_TOKEN') === 'quoted' && (quoted.write('CHANNEL_B_TOKEN', 'b'), parses().errors.length === 0 && parses().getIn(['refs', 'CHANNEL_B_TOKEN']) === 'b'), text())
+    // (d) foreign comments, a multiline scalar and sibling fields keep their
+    //     meaning across an unrelated write (semantic, via the parser).
+    seeded(['# host-managed', 'refs:', '  FOREIGN: |', '    line one', '    line two', 'other:', '  key: value', ''].join('\n'))
+    fileClaudeChannelTokens(dir, () => undefined).write('CHANNEL_B_TOKEN', 'b-token')
+    const multiDoc = parses()
+    check('yaml: foreign comments, multiline scalars and siblings survive a write',
+      multiDoc.errors.length === 0 && multiDoc.getIn(['refs', 'FOREIGN']) === 'line one\nline two\n'
+        && multiDoc.getIn(['other', 'key']) === 'value' && multiDoc.getIn(['refs', 'CHANNEL_B_TOKEN']) === 'b-token', text())
+    // (e) CRLF and no-trailing-newline inputs stay semantically intact.
+    seeded('refs:\r\n  A: keep\r\n')
+    const crlf = fileClaudeChannelTokens(dir, () => undefined)
+    crlf.write('CHANNEL_C_TOKEN', 'c')
+    const crlfDoc = parses()
+    check('yaml: a CRLF library round-trips (semantics kept, still valid)',
+      crlfDoc.errors.length === 0 && crlfDoc.getIn(['refs', 'A']) === 'keep' && crlfDoc.getIn(['refs', 'CHANNEL_C_TOKEN']) === 'c', text())
+    seeded('refs:\n  A: keep')
+    const noNewline = fileClaudeChannelTokens(dir, () => undefined)
+    noNewline.write('CHANNEL_D_TOKEN', 'd')
+    const noNewlineDoc = parses()
+    check('yaml: a library without a trailing newline round-trips',
+      noNewlineDoc.errors.length === 0 && noNewlineDoc.getIn(['refs', 'A']) === 'keep' && noNewlineDoc.getIn(['refs', 'CHANNEL_D_TOKEN']) === 'd', text())
+    // (f) damaged stores are refused byte-intact (never rebuilt over).
+    seeded('refs:\n  A: 1\nrefs:\n  B: 2\n')
+    const debugs: string[] = []
+    const damaged = fileClaudeChannelTokens(dir, message => debugs.push(message))
+    damaged.write('CHANNEL_E_TOKEN', 'e')
+    check('yaml: a duplicate-refs library is refused, byte-intact, with a debug line',
+      text() === 'refs:\n  A: 1\nrefs:\n  B: 2\n' && damaged.read('CHANNEL_E_TOKEN') === undefined && debugs.some(message => message.includes('not valid YAML')), { text: text(), debugs })
+    // (g) a refs entry that is not a mapping refuses writes.
+    seeded('refs: [1, 2]\n')
+    fileClaudeChannelTokens(dir, () => undefined).write('CHANNEL_E_TOKEN', 'e')
+    check('yaml: a non-mapping refs value refuses writes', text() === 'refs: [1, 2]\n')
+    // (h) only non-empty STRING scalars read as tokens.
+    seeded('refs:\n  NULLV: null\n  NUMV: 42\n  TOK: real\n')
+    const scalars = fileClaudeChannelTokens(dir, () => undefined)
+    check('yaml: only string scalars read as tokens (non-strings: declared, not usable)',
+      scalars.read('TOK') === 'real' && scalars.read('NULLV') === undefined && scalars.read('NUMV') === undefined && scalars.declared('NULLV') === true)
+    // (i) erase keeps the library valid for a strict parser.
+    seeded('refs:\n  KEEP: k\n  CHANNEL_F_TOKEN: gone\n')
+    const erasing = fileClaudeChannelTokens(dir, () => undefined)
+    erasing.erase('CHANNEL_F_TOKEN')
+    const erasedDoc = parses()
+    check('yaml: erase leaves a valid library with the other refs intact',
+      erasedDoc.errors.length === 0 && erasedDoc.getIn(['refs', 'KEEP']) === 'k' && erasedDoc.getIn(['refs', 'CHANNEL_F_TOKEN']) === undefined, text())
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 // ---- 10. phase 3: the spawn injection shape (env + the flag layer) ----------
 {
   const noSettings = { settings: async () => ({}), globalConfig: () => undefined } as const
