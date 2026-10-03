@@ -8,9 +8,12 @@
  *  - the six deadlock rules: abort signal while pending (→ cancelled, panel
  *    closes), a user cancel only interrupts (the bridge never answers on its
  *    own; the CLI's abort settles it), dispose while pending (deny before
- *    close), two parallel prompts, a redelivered request id, a callback that
- *    fails while building its prompt (→ deny, never a throw), and the forced
- *    turn close withdrawing what the CLI never withdrew;
+ *    close), two parallel prompts, a redelivered request id (R2-5: the
+ *    redelivery's OWN signal too — abort second / first-then-second /
+ *    already-aborted / a normal answer, one settlement per group), a
+ *    callback that fails while building its prompt (→ deny, never a
+ *    throw), and the forced turn close withdrawing what the CLI never
+ *    withdrew;
  *  - `AskUserQuestion`: answers by question text (`label`, `a, b`, custom
  *    text), cancel → deny + interrupt;
  *  - `ExitPlanMode`: approve with auto-accepted or manual edits → allow +
@@ -250,6 +253,81 @@ const writeInput = { file_path: '/fixture/project/notes.txt', content: 'x' }
   session.capabilities.permissions!.respond('p1', { kind: 'reject' })
   check('rule 5: each prompt gets its own answer', (await second).behavior === 'allow' && (await first).behavior === 'deny')
   check('a redelivered request id resolves with the same answer', JSON.stringify(await redelivered) === JSON.stringify(await first))
+
+  // R2-5: a redelivered request id must honour ITS signal too — the
+  // baseline listened only to the first delivery's, so cancelling the
+  // redelivery left every resolver hanging (until dispose's settleAll).
+  // The request is SHARED: whichever delivered signal aborts settles the
+  // whole group once, with exactly one settled event and one answer per
+  // resolver. A resolver that never settles must fail a check, not hang
+  // the suite — the 2 s marker is a real timer (the manual clock drives
+  // only the force-settle path).
+  const settledWithin = async <T,>(promise: Promise<T>): Promise<{ ok: true; value: T } | { ok: false }> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        promise.then((value: T) => ({ ok: true as const, value })),
+        new Promise<{ ok: false }>(resolve => { timer = setTimeout(() => resolve({ ok: false }), 2_000) }),
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  {
+    // (a) only the SECOND signal aborts.
+    const firstController = new AbortController()
+    const secondController = new AbortController()
+    const waiting = canUseTool('Write', writeInput, opts('s1', {}, firstController.signal))
+    await tick()
+    const redeliveredAgain = canUseTool('Write', writeInput, opts('s1', {}, secondController.signal))
+    await tick()
+    secondController.abort()
+    const settledFirst = await settledWithin(waiting)
+    const settledSecond = await settledWithin(redeliveredAgain)
+    check('R2-5: aborting the redelivered signal settles the shared request', settledFirst.ok && settledSecond.ok && settledFirst.value!.behavior === 'deny' && settledFirst.value!.message === WITHDRAWN_MESSAGE && JSON.stringify(settledSecond.value) === JSON.stringify(settledFirst.value), { settledFirst, settledSecond })
+    check('R2-5: exactly one settled event (cancelled) for the group', of(events, 'permission.settled').filter(event => event.requestId === 's1').length === 1 && of(events, 'permission.settled').find(event => event.requestId === 's1')!.outcome === 'cancelled')
+    // A late abort of the OTHER signal is a no-op: the prompt is gone.
+    firstController.abort()
+    check('R2-5: a late abort of the other signal changes nothing', of(events, 'permission.settled').filter(event => event.requestId === 's1').length === 1)
+  }
+  {
+    // (b) the first signal aborts, then the second's — still one settlement.
+    const firstController = new AbortController()
+    const secondController = new AbortController()
+    const waiting = canUseTool('Write', writeInput, opts('s2', {}, firstController.signal))
+    await tick()
+    const redeliveredAgain = canUseTool('Write', writeInput, opts('s2', {}, secondController.signal))
+    await tick()
+    firstController.abort()
+    const settledFirst = await settledWithin(waiting)
+    const settledSecond = await settledWithin(redeliveredAgain)
+    secondController.abort()
+    check('R2-5: first-then-second aborts settle exactly once', settledFirst.ok && settledSecond.ok && settledFirst.value!.behavior === 'deny' && settledSecond.value!.behavior === 'deny' && of(events, 'permission.settled').filter(event => event.requestId === 's2').length === 1, { settledFirst, settledSecond })
+  }
+  {
+    // (c) the redelivery arrives ALREADY aborted: the group settles at once.
+    const dead = new AbortController()
+    dead.abort()
+    const waiting = canUseTool('Write', writeInput, opts('s3'))
+    await tick()
+    const redeliveredAgain = canUseTool('Write', writeInput, opts('s3', {}, dead.signal))
+    await tick()
+    const settledFirst = await settledWithin(waiting)
+    const settledSecond = await settledWithin(redeliveredAgain)
+    check('R2-5: an already-aborted redelivery settles the group at once', settledFirst.ok && settledSecond.ok && settledFirst.value!.behavior === 'deny' && settledFirst.value!.message === WITHDRAWN_MESSAGE && JSON.stringify(settledSecond.value) === JSON.stringify(settledFirst.value) && of(events, 'permission.settled').filter(event => event.requestId === 's3').length === 1, { settledFirst, settledSecond })
+  }
+  {
+    // (d) single-signal original behavior unchanged: a normal answer still
+    // reaches every resolver of the shared request exactly once.
+    const waiting = canUseTool('Write', writeInput, opts('s4'))
+    await tick()
+    const redeliveredAgain = canUseTool('Write', writeInput, opts('s4'))
+    await tick()
+    session.capabilities.permissions!.respond('s4', { kind: 'reject' })
+    const settledFirst = await settledWithin(waiting)
+    const settledSecond = await settledWithin(redeliveredAgain)
+    check('R2-5: a normal answer still reaches every resolver once', settledFirst.ok && settledSecond.ok && settledFirst.value!.behavior === 'deny' && JSON.stringify(settledSecond.value) === JSON.stringify(settledFirst.value) && of(events, 'permission.settled').filter(event => event.requestId === 's4').length === 1, { settledFirst, settledSecond })
+  }
 
   // Rule 6: a prompt that cannot be built is refused, never a throw.
   const hostile = { toJSON() { throw new Error('unserializable') } }

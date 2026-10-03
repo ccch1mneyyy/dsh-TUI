@@ -18,7 +18,8 @@
  * Deadlock rules (design §4.7, each pinned by verify-claude-permissions):
  *  1. the SDK's abort signal (interrupt, turn end, process exit, `close()`)
  *     settles the prompt as withdrawn and closes the panel
- *     (`permission.settled{cancelled}` / `question.settled`);
+ *     (`permission.settled{cancelled}` / `question.settled`) — EVERY
+ *     delivered signal, a redelivery's included (R2-5);
  *  2. a user cancel only interrupts the CLI (the session's `cancel()`); the
  *     abort that follows is rule 1 — this bridge never answers on its own;
  *  3. a dismissed panel is a rejection (the panel's Esc);
@@ -72,7 +73,9 @@ interface Pending {
   readonly plan?: PlanLabels
   /** Resolve every callback waiting on this request id. */
   readonly resolvers: ((result: PermissionResult) => void)[]
-  readonly detach: () => void
+  /** One unsubscriber per delivered signal (a redelivery adds its own,
+   *  R2-5); settle detaches them all. */
+  readonly detachers: (() => void)[]
 }
 
 export interface ClaudePermissionBridgeDeps {
@@ -191,7 +194,7 @@ export function createClaudePermissionBridge(deps: ClaudePermissionBridgeDeps) {
   const settle = (entry: Pending, result: PermissionResult, outcome: PermissionOutcome): void => {
     if (pending.get(entry.requestId) !== entry) return
     pending.delete(entry.requestId)
-    entry.detach()
+    for (const detach of entry.detachers.splice(0)) detach()
     for (const resolve of entry.resolvers.splice(0)) resolve(result)
     deps.emit([entry.kind === 'permission'
       ? { type: 'permission.settled', requestId: entry.requestId, outcome }
@@ -222,11 +225,32 @@ export function createClaudePermissionBridge(deps: ClaudePermissionBridgeDeps) {
         resolve(deny(options, CLOSED_MESSAGE))
         return
       }
+      // Any of the request's delivered signals aborting cancels the shared
+      // prompt (rule 1): one listener per signal, every one detached on
+      // settle (R2-5 — a redelivery's signal included).
+      const onAbort = (): void => {
+        const entry = pending.get(requestId)
+        if (entry !== undefined) settle(entry, deny(entry, WITHDRAWN_MESSAGE, { classify: false }), 'cancelled')
+      }
+      const listen = (signal: AbortSignal): (() => void) => {
+        signal.addEventListener('abort', onAbort, { once: true })
+        return () => { signal.removeEventListener('abort', onAbort) }
+      }
       // The SDK may redeliver a request it already handed us (reinitialize
-      // after a transport gap): the second callback waits for the same answer.
+      // after a transport gap): the second callback waits for the same
+      // answer — a SHARED request, so its signal is honoured exactly like
+      // the first's (R2-5): a redelivery that arrives already aborted, or
+      // is cancelled later, settles the whole group once with the same
+      // withdrawn-deny — no resolver may be left hanging on a cancellation
+      // the bridge was told about.
       const existing = pending.get(requestId)
       if (existing !== undefined) {
         existing.resolvers.push(resolve)
+        if (options.signal.aborted) {
+          settle(existing, deny(existing, WITHDRAWN_MESSAGE, { classify: false }), 'cancelled')
+          return
+        }
+        existing.detachers.push(listen(options.signal))
         return
       }
       if (options.signal.aborted) {
@@ -235,12 +259,7 @@ export function createClaudePermissionBridge(deps: ClaudePermissionBridgeDeps) {
       }
       const suggestions = options.suggestions ?? []
       const kind: Kind = toolName === 'AskUserQuestion' ? 'question' : toolName === 'ExitPlanMode' ? 'plan' : 'permission'
-      const onAbort = (): void => {
-        const entry = pending.get(requestId)
-        if (entry !== undefined) settle(entry, deny(entry, WITHDRAWN_MESSAGE, { classify: false }), 'cancelled')
-      }
-      const detach = (): void => { options.signal.removeEventListener('abort', onAbort) }
-      const base = { requestId, toolUseID: options.toolUseID, input, suggestions, resolvers: [resolve], detach }
+      const base = { requestId, toolUseID: options.toolUseID, input, suggestions, resolvers: [resolve], detachers: [] as (() => void)[] }
       let entry: Pending
       let event: AgentEvent
       if (kind === 'question') {
@@ -302,7 +321,7 @@ export function createClaudePermissionBridge(deps: ClaudePermissionBridgeDeps) {
         event = { type: 'permission.request', request: view }
       }
       pending.set(requestId, entry)
-      options.signal.addEventListener('abort', onAbort, { once: true })
+      entry.detachers.push(listen(options.signal))
       deps.emit([event])
       changed()
     } catch (error) {

@@ -775,7 +775,8 @@ const GROUPS = {
     ["verify-permission-store", ['node', '--import', 'tsx/esm', 'scripts/verify-permission-store.ts']],
 // Claude 权限桥（假 Query）：允许一次/始终允许/拒绝的 PermissionResult、选项生成
 // 与抑制、六条死锁规则、AskUserQuestion 作答与取消、ExitPlanMode 批准/继续规划、
-// requires-action，以及翻译器的 permission_denied/计划工具/问卷记录。
+// requires-action，以及翻译器的 permission_denied/计划工具/问卷记录；重投的
+// requestId 也监听自己的 AbortSignal（任一取消=整组恰好一次结算，R2-5）。
     ["verify-claude-permissions", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-permissions.ts']],
 // 审批面板的选项变体（中英）：DSH 无选项=今天的两行与结局字符串、后端三选项、
 // defaultToNo 拒绝居首且无单键批准、allow-always 抑制、打字附拒绝理由。
