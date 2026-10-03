@@ -85,6 +85,9 @@
  * 40. catalog routes with custom headers explicitly fall back to the snapshot.
  * 41. a failed catalog lookup never lets live capacities enter the profile.
  * 42. the Anthropic catalog uses the anthropic-messages live probe protocol.
+ * 43–52. Tab capability drafts: add/edit commits, cancellation, unchanged
+ * selections, unchecked edits, whole-catalog overrides, override migration,
+ * offline editing, inheritance resets, validation and no-op saves.
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-provider-wizard.mjs`
@@ -219,6 +222,11 @@ function makeDeps(script, options = {}) {
           : specFor(question.id)
         if (spec === undefined) throw new Error(`unscripted question: ${question.id}`)
         if (spec === 'cancel') throw CANCEL
+        for (const [id, fields] of Object.entries(spec.edits ?? {})) {
+          if (question.modelEditor === undefined) throw new Error('model capability editor missing')
+          question.modelEditor.save(id, { ...question.modelEditor.read(id).values, ...fields })
+        }
+        if (spec.cancelAfterEdits) throw CANCEL
         answers.push({
           id: question.id,
           selected: spec.selected ?? [],
@@ -1572,6 +1580,168 @@ function oauthStub(behavior = {}) {
       { provider: 'anthropic' },
       { baseURL: 'https://relay.example', api: 'anthropic-messages', apiKey: 'sk-ant' },
     ]), JSON.stringify(calls.discoverRequests))
+}
+
+// 43. Add adopts explicit capability edits, but not edits to unchecked models.
+const CAPABILITIES = {
+  contextWindow: 200000,
+  maxTokens: 8192,
+  reasoningEfforts: { off: null, low: 'low', high: 'high', max: 'ultra' },
+  input: ['text', 'image'],
+}
+const CUSTOM_ADD = {
+  mode: MODE_CUSTOM,
+  'route-id': { custom: 'capability-gateway' },
+  apikey: { custom: 'probe-key' },
+  baseurl: { custom: 'https://gateway.example/v1' },
+  protocol: { selected: ['openai-completions'] },
+  confirm: CONFIRM_WRITE,
+  switch: KEEP_MODEL,
+}
+{
+  const { deps, calls } = makeDeps({
+    ...CUSTOM_ADD,
+    models: { selected: ['chosen'], edits: { chosen: CAPABILITIES, unchecked: { contextWindow: 1000 } } },
+  }, { discovered: [{ id: 'chosen', contextWindow: 4000 }, { id: 'unchecked' }] })
+  check('43 add capabilities: outcome added', await runProviderWizard(deps) === 'added')
+  check('43 add capabilities: only enabled model adopts the four fields',
+    eq(calls.profiles[0]?.[1]?.models, [{ id: 'chosen', ...CAPABILITIES }]), JSON.stringify(calls.profiles))
+  check('43 add capabilities: confirm names capability overrides',
+    calls.details.confirm.includes(t('provider-line-model-capabilities', { models: 'chosen' })))
+}
+
+const STORED_CAPABILITY_MODEL = {
+  id: 'chosen', contextWindow: 4000, maxTokens: 1000,
+  reasoningEfforts: { high: 'gateway-high' }, input: ['text'],
+  name: 'My model', compat: { supportsDeveloperRole: false }, customNote: 'preserve',
+}
+const CAPABILITY_PROVIDER = {
+  route: 'capability-gateway', ref: '', shadowed: false, isCatalog: false,
+  api: 'openai-completions', baseURL: 'https://gateway.example/v1',
+  models: ['chosen'], modelEntries: [STORED_CAPABILITY_MODEL],
+}
+const CUSTOM_EDIT = {
+  action: ACTION_EDIT,
+  'edit-provider': { selected: ['capability-gateway'] },
+  'edit-menu': MENU_MODELS,
+}
+
+// 44. Same enabled ids no longer hide a real capability edit.
+{
+  const { deps, calls } = makeDeps({
+    ...CUSTOM_EDIT,
+    models: { selected: ['chosen'], edits: { chosen: CAPABILITIES } },
+  }, { configured: [CAPABILITY_PROVIDER], discovered: [{ id: 'chosen', contextWindow: 800000 }] })
+  check('44 edit capabilities: outcome updated despite identical ids', await runProviderWizard(deps) === 'updated')
+  check('44 edit capabilities: unknown fields survive, only models path is patched', eq(calls.mutations, [[
+    'capability-gateway', [{ op: 'set', path: ['models'], value: [{ ...STORED_CAPABILITY_MODEL, ...CAPABILITIES }] }],
+  ]]), JSON.stringify(calls.mutations))
+  check('44 edit capabilities: stored entry was not mutated', STORED_CAPABILITY_MODEL.contextWindow === 4000)
+}
+
+// 45. Editor saves are drafts, so Esc or cancelling add confirmation writes nothing.
+for (const cancelAfterEdits of [true, false]) {
+  const { deps, calls } = makeDeps({
+    ...CUSTOM_ADD,
+    models: { selected: ['chosen'], edits: { chosen: CAPABILITIES }, cancelAfterEdits },
+    confirm: { selected: [t('provider-opt-confirm-cancel')] },
+  }, { discovered: [{ id: 'chosen' }] })
+  check(`45 cancel capability draft (${cancelAfterEdits}): cancelled`, await runProviderWizard(deps) === 'cancelled')
+  check(`45 cancel capability draft (${cancelAfterEdits}): zero writes`,
+    calls.profiles.length === 0 && calls.mutations.length === 0 && calls.credentials.length === 0)
+}
+
+// 46. Editing an unchecked row must neither enable it nor rewrite kept rows.
+{
+  const { deps, calls } = makeDeps({
+    ...CUSTOM_EDIT,
+    models: { selected: ['chosen'], edits: { unchecked: CAPABILITIES } },
+  }, { configured: [CAPABILITY_PROVIDER], discovered: [{ id: 'chosen' }, { id: 'unchecked' }] })
+  check('46 unchecked edit: unchanged provider', await runProviderWizard(deps) === 'cancelled' && calls.mutations.length === 0)
+}
+
+// 47. Editing a whole-catalog route uses modelOverrides, never a one-model list.
+{
+  const { deps, calls } = makeDeps({
+    action: ACTION_EDIT,
+    'edit-provider': { selected: ['openai'] },
+    'edit-menu': MENU_MODELS,
+    models: { selected: [], edits: { known: { contextWindow: 200000 } } },
+  }, {
+    configured: [{ route: 'openai', ref: '', shadowed: false, isCatalog: true,
+      modelOverrides: { known: { contextWindow: 4000, compat: { supportsDeveloperRole: false } } } }],
+    discovered: [{ id: 'known', contextWindow: 1000000 }, { id: 'other' }],
+  })
+  check('47 whole-catalog capability edit: updated', await runProviderWizard(deps) === 'updated')
+  check('47 whole-catalog capability edit: exact field patch, no catalog narrowing', eq(calls.mutations, [[
+    'openai', [{ op: 'set', path: ['modelOverrides', 'known', 'contextWindow'], value: 200000 }],
+  ]]), JSON.stringify(calls.mutations))
+}
+
+// 48. Explicit model lists absorb existing overrides before clearing their alternate shape.
+{
+  const override = { contextWindow: 4000, reasoningEfforts: { high: 'high' }, compat: { supportsDeveloperRole: false } }
+  const { deps, calls } = makeDeps({
+    action: ACTION_EDIT,
+    'edit-provider': { selected: ['openai'] },
+    'edit-menu': MENU_MODELS,
+    models: { selected: ['known', 'other'], edits: { known: { maxTokens: 8192 } } },
+  }, {
+    configured: [{ route: 'openai', ref: '', shadowed: false, isCatalog: true, modelOverrides: { known: override } }],
+    discovered: [{ id: 'known' }, { id: 'other' }],
+  })
+  check('48 modelOverrides migration: updated', await runProviderWizard(deps) === 'updated')
+  check('48 modelOverrides migration: preserves fields and avoids upstream conflict', eq(calls.mutations, [[
+    'openai', [
+      { op: 'set', path: ['models'], value: [{ id: 'known', ...override, maxTokens: 8192 }, { id: 'other' }] },
+      { op: 'unset', path: ['modelOverrides'] },
+    ],
+  ]]), JSON.stringify(calls.mutations))
+}
+
+// 49. Stored model rows remain editable when the endpoint is down.
+{
+  const { deps, calls } = makeDeps({
+    ...CUSTOM_EDIT,
+    models: { selected: ['chosen'], edits: { chosen: { contextWindow: 200000 } } },
+  }, { configured: [CAPABILITY_PROVIDER], discoverThrows: true })
+  check('49 offline capability edit: updated', await runProviderWizard(deps) === 'updated')
+  check('49 offline capability edit: no manual fallback, original other fields retained',
+    !calls.asks.includes('models-fallback') && eq(calls.mutations[0]?.[1]?.[0]?.value,
+      [{ ...STORED_CAPABILITY_MODEL, contextWindow: 200000 }]))
+}
+
+// 50. Clearing overrides restores inheritance without touching unrelated fields.
+{
+  const { deps, calls } = makeDeps({
+    ...CUSTOM_EDIT,
+    models: { selected: ['chosen'], edits: { chosen: {
+      contextWindow: undefined, maxTokens: undefined, reasoningEfforts: undefined, input: undefined,
+    } } },
+  }, { configured: [CAPABILITY_PROVIDER], discovered: [{ id: 'chosen' }] })
+  check('50 inheritance reset: updated', await runProviderWizard(deps) === 'updated')
+  check('50 inheritance reset: removes only the four overrides', eq(calls.mutations[0]?.[1]?.[0]?.value,
+    [{ id: 'chosen', name: 'My model', compat: { supportsDeveloperRole: false }, customNote: 'preserve' }]))
+}
+
+// 51. Invalid capability values never get through the draft save to persistence.
+for (const invalid of [
+  { contextWindow: 0 }, { maxTokens: 1.5 }, { maxTokens: Number.MAX_SAFE_INTEGER + 1 },
+  { reasoningEfforts: { off: null } }, { reasoningEfforts: { high: null } }, { input: [] },
+]) {
+  const { deps, calls } = makeDeps({
+    ...CUSTOM_EDIT, models: { selected: ['chosen'], edits: { chosen: invalid } },
+  }, { configured: [CAPABILITY_PROVIDER], discovered: [{ id: 'chosen' }] })
+  check(`51 invalid capability ${JSON.stringify(invalid)}: no write`,
+    await runProviderWizard(deps) === 'failed' && calls.mutations.length === 0)
+}
+
+// 52. Opening and saving unchanged values does not rewrite a provider.
+{
+  const { deps, calls } = makeDeps({
+    ...CUSTOM_EDIT, models: { selected: ['chosen'], edits: { chosen: {} } },
+  }, { configured: [CAPABILITY_PROVIDER], discovered: [{ id: 'chosen', contextWindow: 800000 }] })
+  check('52 no-op capability save: zero writes', await runProviderWizard(deps) === 'cancelled' && calls.mutations.length === 0)
 }
 
 console.log(failed === 0 ? '\nAll provider-wizard checks passed' : `\n${failed} check(s) FAILED`)

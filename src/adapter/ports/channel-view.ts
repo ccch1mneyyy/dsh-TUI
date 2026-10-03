@@ -774,7 +774,7 @@ export type BackgroundResult =
 export type AgentStatus = 'idle' | 'running'
 export interface LlmModelInfo { provider: string; id: string; name: string; description?: string; inputModalities?: readonly string[] }
 export interface LlmProviderInfo { id: string; name: string }
-export interface LlmDiscoveredModel { id: string; name?: string; contextWindow?: number; maxTokens?: number }
+export interface LlmDiscoveredModel { id: string; name?: string; contextWindow?: number; maxTokens?: number; inputModalities?: readonly string[] }
 export type ChannelImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
 export interface ChannelSceneMetadata { readonly id: string; readonly title?: string }
 export interface RawTrajEvent { readonly type: string; readonly seq: number; readonly time: number; readonly data: unknown }

@@ -184,6 +184,8 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
 
+在 `/provider` 模型列表聚焦一项并按 `Tab`，可编辑上下文窗口、最大输出 token、推理档位和图片输入能力。
+
 会话管理界面会立即显示上次成功读取的列表，同时核对持久化存储的变化。需要深度扫描日志的标题会先显示回退名称，恢复完成后在原行更新。
 移除工作区登记后，其历史会话仍可从侧栏的「仅历史」目录进入。
 「仅历史」目录只提供编辑和新建会话操作；重命名与移除仅适用于已登记工作区。
