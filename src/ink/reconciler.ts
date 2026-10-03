@@ -511,6 +511,16 @@ const reconciler = createReconciler<
   },
   startSuspendingCommit(): void {},
   suspendInstance(): void {},
+  // react-reconciler 0.34（React 19.3）对非 Sync lanes 的提交在
+  // completeRootWhenReady 里无条件调用本钩子（isViewTransitionEligible 的
+  // 判定是「lanes 有资格被 ViewTransition 包裹」，不是「存在活动的
+  // ViewTransition」）；缺这个成员时任何 Suspense 挂起后的恢复提交都抛
+  // "suspendOnActiveViewTransition is not a function"。本渲染器不实现
+  // ViewTransition：no-op 与 react-dom 在无活动 transition 时的行为等价。
+  // 0.34 甩出的 HostConfig 类型尚未收录该成员（运行时已要求）——类型
+  // 追上后这行 expect-error 会自曝，届时删除即可。
+  // @ts-expect-error suspendOnActiveViewTransition missing from react-reconciler 0.34 HostConfig types
+  suspendOnActiveViewTransition(): void {},
   waitForCommitToBeReady(): null {
     return null
   },

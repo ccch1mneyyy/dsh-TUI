@@ -57,6 +57,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { SidePanelLay
   import('./lib/term-test.mjs'),
 ])
 const { render, ThemeProvider, AlternateScreen, Box, Text, useInput } = ui
+const { Suspense } = React
 const { applySidePanelPanels, applySidePanelOpen, applySidePanelRatio, applyCompanionSkin, getCompanionSkin, normalizeCompanionSkin } = prefs
 const { DeepySkin, WhaleGirlSkin, resolveCompanionSkin, whaleGirlAnimationKey, WHALE_GIRL_SEMANTIC_ANIMATION } = skins
 const {
@@ -430,7 +431,13 @@ try {
 // 假 protocol context 注入下的惰性解码（只碰当前动画）、面板隐藏零解码、
 // 无协议 context → 字母格回退（且永不解码 raster 帧）。
 
-const { loadWhaleGirlImageKit, whaleGirlImageFrameIndexAt, whaleGirlDecodedAnimationKeys, resetWhaleGirlImageCacheForTests, whaleGirlImageBoxColumns, WHALE_GIRL_PREHEAT_KEYS, WhaleGirlSkin: WhaleGirlSkinForCells } = skins
+const {
+  loadWhaleGirlImageKit, whaleGirlImageFrameIndexAt, whaleGirlDecodedAnimationKeys, resetWhaleGirlImageCacheForTests,
+  whaleGirlImageBoxColumns, WHALE_GIRL_PREHEAT_KEYS, WhaleGirlSkin: WhaleGirlSkinForCells,
+  useDecodedWhaleGirlFrames, subscribeDecodedImageCache, injectDecodedAnimationForTests,
+  decodedImageAnimationOrderForTests, whaleGirlDecodeRequestCountForTests, injectFailedAnimationForTests,
+  useHeldCommittedImage,
+} = skins
 const { TerminalImagesContext } = await import('../src/ink/hooks/use-terminal-images.js')
 const { createRequire } = await import('node:module')
 const { existsSync } = await import('node:fs')
@@ -799,6 +806,494 @@ try {
   }
 } catch (error) {
   check('image fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
+} finally {
+  applyCompanionSkin('deepy')
+  resetWhaleGirlImageCacheForTests()
+}
+
+// ===================== R5-1 · 真 LRU + 驱逐恢复（压力回归）==================
+// 报告 r5-rendering.md R5-1 的独立回归形状：预置多键超过 32MiB，两个 raster
+// 消费实例交错——A 始终同键播放（每个已提交 commit 把键升到最近使用位），
+// B 的解码/注入提供挤出压力；断言 A 的帧持续可用或按需恢复（帧索引继续
+// 推进的前提）、热键获得真实最近使用保护、卸载（隐藏）实例不保活、并发
+// 消费者在途解码去重。旧实现（FIFO + effect 只依赖 [key, kit]）在本段红：
+// 持续命中的键不升温被挤出、挤出后 effect 不重跑永久持帧冻结。
+
+/** 最小 ink 挂载（无 SidePanel）：children 工厂拿 bump（驱动本树重渲染，
+ *  模拟动画时钟 tick 的 commit）。 */
+interface BareScene {
+  app: { unmount: () => Promise<unknown> }
+  term: import('@xterm/headless').Terminal
+  bump: () => void
+  lines: () => string[]
+}
+/** mountBare 的 children 工厂签名：bump 驱动重渲染，tick 是已提交的
+ *  重渲染计数（R5-2/3 用它驱动 now 之类的 props）。 */
+const BARE_COLS = 60
+const BARE_ROWS = 24
+async function mountBare(children: (bump: () => void, tick: number) => React.ReactNode): Promise<BareScene> {
+  const term = new XTerm({ cols: BARE_COLS, rows: BARE_ROWS, scrollback: 0, allowProposedApi: true })
+  class BareStdout extends Writable {
+    columns = BARE_COLS
+    rows = BARE_ROWS
+    isTTY = true
+    term: import('@xterm/headless').Terminal
+    constructor(t: import('@xterm/headless').Terminal) { super(); this.term = t }
+    _write(chunk: unknown, _e: Buffer.Encoding, cb: () => void) { this.term.write(String(chunk), cb) }
+  }
+  class BareStderr extends Writable { isTTY = true; _write(_c: unknown, _e: Buffer.Encoding, cb: () => void) { cb() } }
+  const stdout = new BareStdout(term)
+  let bumpImpl: () => void = () => {}
+  function Harness(): React.ReactNode {
+    const [tick, setTick] = React.useState(0)
+    React.useEffect(() => { bumpImpl = () => setTick(previous => previous + 1) })
+    return children(() => { bumpImpl() }, tick)
+  }
+  const app = await render(
+    <AlternateScreen mouseTracking={false}><Harness /></AlternateScreen>,
+    {
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      stdin: new FakeStdin() as unknown as NodeJS.ReadStream,
+      stderr: new BareStderr() as unknown as NodeJS.WriteStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  const lines = (): string[] => {
+    const buf = term.buffer.active
+    const out: string[] = []
+    for (let y = 0; y < BARE_ROWS; y += 1) out.push((buf.getLine(y)?.translateToString(false) ?? '').padEnd(BARE_COLS, ' '))
+    return out
+  }
+  return { app, term, get bump() { return () => bumpImpl() }, lines }
+}
+
+/** R5-1 的消费实例：只挂帧缓存 hook，把每次 render 观察到的帧记录出去。 */
+function FramesConsumer({ activeKey, onObserve }: {
+  activeKey: string | undefined
+  onObserve: (frames: readonly import('../src/ink/terminal-image.js').TerminalImageSource[] | undefined) => void
+}): React.ReactNode {
+  const kit = loadWhaleGirlImageKit()
+  const frames = useDecodedWhaleGirlFrames(activeKey, kit)
+  onObserve(frames)
+  return null
+}
+
+/** 假帧（R5-1 压力注入）：byteLength 决定 32MiB 账本，不解码真实 PNG。 */
+function fakeFrames(mib: number): never {
+  return [{ data: new Uint8Array(mib * 1024 * 1024), width: 301, height: 288 }] as never
+}
+
+try {
+  applyCompanionSkin('whaleGirl')
+  // --- 单元：插入/驱逐发布 revision；32MiB 逐最旧 ------------------------
+  {
+    resetWhaleGirlImageCacheForTests()
+    let revisions = 0
+    const off = subscribeDecodedImageCache(() => { revisions += 1 })
+    injectDecodedAnimationForTests('a', fakeFrames(8))
+    injectDecodedAnimationForTests('b', fakeFrames(8))
+    check('r5-1: cache insertions publish revisions (eviction becomes effect input)',
+      revisions === 2, 'revisions=' + revisions)
+    injectDecodedAnimationForTests('c', fakeFrames(8))
+    injectDecodedAnimationForTests('d', fakeFrames(8))
+    injectDecodedAnimationForTests('e', fakeFrames(8))
+    check('r5-1: 32MiB cap evicts strictly oldest-first (Map iteration order = recency)',
+      decodedImageAnimationOrderForTests().join(',') === 'b,c,d,e',
+      'order=' + decodedImageAnimationOrderForTests().join(','))
+    off()
+    resetWhaleGirlImageCacheForTests()
+  }
+
+  // --- 压力双实例 A：同键持续播放（每 commit 升温）挤出压力下不失帧 ------
+  let s1: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    injectDecodedAnimationForTests('idle', fakeFrames(8))
+    const obsA: Array<readonly import('../src/ink/terminal-image.js').TerminalImageSource[] | undefined> = []
+    let revDuringPlayback = 0
+    const offA = subscribeDecodedImageCache(() => { revDuringPlayback += 1 })
+    s1 = await mountBare(() => <FramesConsumer activeKey="idle" onObserve={frames => { obsA.push(frames) }} />)
+    await settled(() => obsA.some(frames => frames !== undefined), { timeoutMs: 5000 })
+    check('r5-1: consumer hits the shared cache synchronously (injected frames)', obsA.some(frames => frames !== undefined))
+    // 持续播放 3 个 tick：每个已提交 commit 把 idle 升到最近使用位。
+    for (let tick = 0; tick < 3; tick += 1) { s1.bump(); await sleep(40) }
+    check('r5-1: commit-path LRU touch publishes no revision (no self-stimulated renders)',
+      revDuringPlayback === 0, 'revisions=' + revDuringPlayback)
+    // 注入 4×8MiB 压力：注入间隙保持播放 commit（每次 bump 把 idle 升回
+    // 最近使用位）——「A 始终同键播放」的字面构造。旧 FIFO 语义下 idle
+    // （最早插入）无论怎么 bump 都是第一个被挤出。
+    for (const warm of ['warm-1', 'warm-2', 'warm-3', 'warm-4']) {
+      injectDecodedAnimationForTests(warm, fakeFrames(8))
+      s1.bump()
+      await sleep(40)
+    }
+    await sleep(300) // revision 通知 → 消费者重渲染（仍应命中）
+    check('r5-1: actively played key survives eviction pressure (true recency protection)',
+      decodedImageAnimationOrderForTests().includes('idle'),
+      'order=' + decodedImageAnimationOrderForTests().join(','))
+    check('r5-1: consumer never loses frames under pressure (frame index keeps advancing)',
+      obsA.length > 0 && obsA.every(frames => frames !== undefined),
+      'observations=' + obsA.length + ' lost=' + obsA.filter(frames => frames === undefined).length)
+    check('r5-1: resident key never triggers a redundant decode',
+      whaleGirlDecodeRequestCountForTests() === 0, 'requests=' + whaleGirlDecodeRequestCountForTests())
+    offA()
+    // 卸载 = 隐藏实例不再消费：再注入压力后 idle 不被保活（可被逐出）。
+    await s1.app.unmount()
+    s1.term.dispose()
+    s1 = undefined
+    for (const warm of ['warm-5', 'warm-6', 'warm-7', 'warm-8']) injectDecodedAnimationForTests(warm, fakeFrames(8))
+    await sleep(150)
+    check('r5-1: unmounted (hidden) consumer no longer keeps its key alive',
+      !decodedImageAnimationOrderForTests().includes('idle'),
+      'order=' + decodedImageAnimationOrderForTests().join(','))
+  } finally {
+    if (s1 !== undefined) { await s1.app.unmount(); s1.term.dispose() }
+  }
+
+  // --- 压力双实例 B：key 未变但缓存失去 → 按需恢复解码（不永久冻结）----
+  let s2: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    injectDecodedAnimationForTests('idle', fakeFrames(8))
+    const obsB: Array<readonly import('../src/ink/terminal-image.js').TerminalImageSource[] | undefined> = []
+    s2 = await mountBare(() => <FramesConsumer activeKey="idle" onObserve={frames => { obsB.push(frames) }} />)
+    await settled(() => obsB.some(frames => frames !== undefined), { timeoutMs: 5000 })
+    // 不再 bump（无 commit → 不 touch）：idle 保持最旧，注入即被挤出。
+    const requestsBefore = whaleGirlDecodeRequestCountForTests()
+    for (const warm of ['warm-1', 'warm-2', 'warm-3', 'warm-4']) injectDecodedAnimationForTests(warm, fakeFrames(8))
+    await settled(() => obsB.some(frames => frames === undefined), { timeoutMs: 4000 })
+    check('r5-1: key-unchanged consumer observes the eviction (cache lost under its feet)',
+      obsB.some(frames => frames === undefined))
+    // 旧实现：effect 依赖 [key, kit] 未变 → 永不重跑 → 永久持帧冻结。
+    await settled(() => obsB[obsB.length - 1] !== undefined, { timeoutMs: 15000 })
+    check('r5-1: evicted active key re-decodes on demand (animation recovers, not frozen)',
+      obsB[obsB.length - 1] !== undefined, 'lastObservation=' + (obsB[obsB.length - 1] === undefined ? 'lost' : 'frames'))
+    check('r5-1: recovery decode is bounded and deduped (exactly one request)',
+      whaleGirlDecodeRequestCountForTests() - requestsBefore === 1,
+      'requests=' + (whaleGirlDecodeRequestCountForTests() - requestsBefore))
+  } finally {
+    if (s2 !== undefined) { await s2.app.unmount(); s2.term.dispose() }
+  }
+
+  // --- 并发消费者：同键在途解码去重 ---------------------------------------
+  let s3: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    const obsC1: Array<readonly import('../src/ink/terminal-image.js').TerminalImageSource[] | undefined> = []
+    const obsC2: Array<readonly import('../src/ink/terminal-image.js').TerminalImageSource[] | undefined> = []
+    const before = whaleGirlDecodeRequestCountForTests() // mount 首commit 的 effect 即发起解码，必须先采样
+    s3 = await mountBare(() => (
+      <>
+        <FramesConsumer activeKey="thumbs-up" onObserve={frames => { obsC1.push(frames) }} />
+        <FramesConsumer activeKey="thumbs-up" onObserve={frames => { obsC2.push(frames) }} />
+      </>
+    ))
+    await settled(() => obsC1.some(frames => frames !== undefined) && obsC2.some(frames => frames !== undefined), { timeoutMs: 15000 })
+    check('r5-1: both concurrent consumers resolve frames (decode completed)',
+      obsC1.some(frames => frames !== undefined) && obsC2.some(frames => frames !== undefined))
+    check('r5-1: concurrent consumers share one inflight decode (no duplicate work)',
+      whaleGirlDecodeRequestCountForTests() - before === 1,
+      'requests=' + (whaleGirlDecodeRequestCountForTests() - before))
+    const last1 = [...obsC1].reverse().find(frames => frames !== undefined)
+    const last2 = [...obsC2].reverse().find(frames => frames !== undefined)
+    check('r5-1: concurrent consumers observe the identical frames reference', last1 === last2)
+  } finally {
+    if (s3 !== undefined) { await s3.app.unmount(); s3.term.dispose() }
+  }
+  resetWhaleGirlImageCacheForTests()
+} catch (error) {
+  check('r5-1 fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
+} finally {
+  applyCompanionSkin('deepy')
+  resetWhaleGirlImageCacheForTests()
+}
+
+// ===================== R5-2 · 失败键健康链兜底（回归）=======================
+// 报告 r5-rendering.md R5-2 的独立回归形状：模拟单键解码失败（不动真实
+// 资产），覆盖 working/typing、heart/poke/smile-hearts、idle 失败与全部
+// 失败；断言解析出的键一定满足 hasKey、健康兜底接管、坏键不逐 tick
+// 重解、所有候选失败时有界收敛（持帧/字母格降级，不闪不循环）。旧实现
+// 的 heart/mood 返回路径绕过守卫：失败的 typing/smile-hearts 会被再次
+// 选中，画面钉死在持帧上（报告实测两例在本段单元级复现）。
+
+/** 最小 pose 夹具（CompanionPose 运行时契约形状）。 */
+function fakePose(mood: import('../src/components/sidePanel/companion/mood.js').CompanionMood, heart = 0): never {
+  return { mood, heart, tick: 0, gestures: new Set(), blink: false, sleepZ: 0, facing: 'left' } as never
+}
+
+/** 完整皮肤的裸挂载组件（R5-2 渲染级）：走 WhaleGirlSkin.render → 协议
+ *  裁决 → raster 全链，需要假 kitty context。 */
+function SkinHost({ pose, semantic, now }: {
+  pose: import('../src/components/sidePanel/companion/pose.js').CompanionPose
+  semantic: string | undefined
+  now: number
+}): React.ReactNode {
+  return <>{WhaleGirlSkin.render({ pose, moodSince: 0, now, width: 31, animationSemantic: semantic })}</>
+}
+
+try {
+  const resolve = skins.resolveWhaleGirlAnimationKey
+  const allKeys = [...EXPECTED_KEYS]
+  const healthy = (failed: readonly string[]) => (key: string) => allKeys.includes(key) && !failed.includes(key)
+  // 报告 R5-2 两个机制例（旧实现分别返回 typing / smile-hearts）。
+  check('r5-2: failed semantic typing with working mood degrades to healthy idle (was: typing)',
+    resolve(fakePose('working'), 'typing', healthy(['typing'])) === 'idle')
+  check('r5-2: failed poke-left + smile-hearts with heart pass degrades to mood layer idle (was: smile-hearts)',
+    resolve(fakePose('idle', 1), 'poke-left', healthy(['poke-left', 'smile-hearts'])) === 'idle')
+  // 健康优先级与原契约一致。
+  check('r5-2: healthy chain keeps original priorities (semantic > heart > mood)',
+    resolve(fakePose('idle'), 'tickle', healthy([])) === 'tickle'
+    && resolve(fakePose('idle', 1), undefined, healthy([])) === 'smile-hearts'
+    && resolve(fakePose('celebrate'), undefined, healthy([])) === 'thumbs-up'
+    && resolve(fakePose('working'), undefined, healthy([])) === 'typing')
+  // 心情键失败 → 健康 idle；idle 也失败 → undefined（有界链终点）。
+  check('r5-2: failed mood key falls to healthy idle',
+    resolve(fakePose('error'), undefined, healthy(['error'])) === 'idle')
+  check('r5-2: every candidate unhealthy resolves to undefined (bounded chain end)',
+    resolve(fakePose('idle', 1), 'smile-hearts', healthy(['idle', 'smile-hearts'])) === undefined
+    && resolve(fakePose('working'), 'typing', healthy(['typing', 'idle'])) === undefined)
+  // 裁决结果永远满足健康判据（穷举 mood×heart×失败形状样本）。
+  {
+    let alwaysHealthy = true
+    let offender = ''
+    const moods = ['sleeping', 'idle', 'waiting', 'thinking', 'working', 'responding', 'attention', 'celebrate', 'error'] as const
+    const failureShapes: readonly string[][] = [[], ['typing'], ['smile-hearts', 'poke-left'], ['idle'], ['idle', 'typing', 'smile-hearts']]
+    for (const mood of moods) {
+      for (const heart of [0, 1]) {
+        for (const semantic of [undefined, 'typing', 'poke-left', 'smile-hearts', 'tickle']) {
+          for (const failed of failureShapes) {
+            const resolved = resolve(fakePose(mood, heart), semantic, healthy(failed))
+            if (resolved !== undefined && !healthy(failed)(resolved)) {
+              alwaysHealthy = false
+              offender = mood + '/h' + heart + '/' + semantic + '/failed=[' + failed.join(',') + '] → ' + resolved
+            }
+          }
+        }
+      }
+    }
+    check('r5-2: resolved key always satisfies the health guard (exhaustive samples)', alwaysHealthy, offender)
+  }
+} catch (error) {
+  check('r5-2 unit fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
+}
+
+try {
+  applyCompanionSkin('whaleGirl')
+
+  // --- 渲染级 1：semantic typing 失败 → 健康 idle 接管，坏键零解码 -------
+  let f1: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    injectFailedAnimationForTests('typing')
+    f1 = await mountBare((_bump, tick) => withKitty(<SkinHost pose={fakePose('working')} semantic="typing" now={2000 + tick * 120} />))
+    await settled(() => whaleGirlDecodedAnimationKeys().includes('idle'), { timeoutMs: 10000 })
+    check('r5-2: failed semantic key degrades to a healthy animation (idle decoded and played)',
+      whaleGirlDecodedAnimationKeys().includes('idle'),
+      'decoded=' + whaleGirlDecodedAnimationKeys().join(','))
+    check('r5-2: the failed key never gets decoded (excluded by the health guard)',
+      !decodedImageAnimationOrderForTests().includes('typing'),
+      'order=' + decodedImageAnimationOrderForTests().join(','))
+    // bump 推进时钟会合法触发预热（poke 左右/smile-hearts 未失败时预解）
+    // ——断言收敛为「坏键不进缓存，新增解码只来自预热键」。
+    for (let tick = 0; tick < 5; tick += 1) { f1.bump(); await sleep(30) }
+    const orderAfterTicks = decodedImageAnimationOrderForTests()
+    check('r5-2: a failed key is not retried per tick (never cached; churn limited to preheat keys)',
+      !orderAfterTicks.includes('typing') && orderAfterTicks.every(key => WHALE_GIRL_PREHEAT_KEYS.includes(key)),
+      'order=' + orderAfterTicks.join(','))
+  } finally {
+    if (f1 !== undefined) { await f1.app.unmount(); f1.term.dispose() }
+  }
+
+  // --- 渲染级 2：heart 链（poke-left + smile-hearts）失败 → mood 层 idle --
+  let f2: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    injectFailedAnimationForTests('poke-left')
+    injectFailedAnimationForTests('smile-hearts')
+    f2 = await mountBare((_bump, tick) => withKitty(<SkinHost pose={fakePose('idle', 1)} semantic="poke-left" now={2000 + tick * 120} />))
+    await settled(() => whaleGirlDecodedAnimationKeys().includes('idle'), { timeoutMs: 10000 })
+    check('r5-2: failed heart-pass chain falls to the healthy mood layer (idle, not smile-hearts)',
+      decodedImageAnimationOrderForTests().includes('idle') && !decodedImageAnimationOrderForTests().includes('smile-hearts'),
+      'order=' + decodedImageAnimationOrderForTests().join(','))
+  } finally {
+    if (f2 !== undefined) { await f2.app.unmount(); f2.term.dispose() }
+  }
+
+  // --- 渲染级 3：全部候选失败 → 明确不可用态（冷启动字母格 / 持帧）-------
+  let f3: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    for (const key of EXPECTED_KEYS) injectFailedAnimationForTests(key)
+    f3 = await mountBare((_bump, tick) => withKitty(<SkinHost pose={fakePose('idle')} semantic="poke-left" now={2000 + tick * 120} />))
+    await sleep(600) // 固定窗:探针 全失败态的观察窗（不得解码、不得崩、不得循环）
+    check('r5-2: all-candidates-failed resolves to the unavailable state with zero decodes',
+      whaleGirlDecodeRequestCountForTests() === 0,
+      'requests=' + whaleGirlDecodeRequestCountForTests())
+    check('r5-2: all-failed cold start stays on the letter grid (bounded convergence, no crash)',
+      artRows(f3.lines()).length > 0, 'artRows=' + artRows(f3.lines()).length)
+    for (let tick = 0; tick < 4; tick += 1) { f3.bump(); await sleep(30) }
+    check('r5-2: ticking an all-failed skin stays bounded (letter grid, zero decode churn)',
+      whaleGirlDecodeRequestCountForTests() === 0 && artRows(f3.lines()).length > 0)
+  } finally {
+    if (f3 !== undefined) { await f3.app.unmount(); f3.term.dispose() }
+  }
+
+  // --- 渲染级 4：上过屏后全失败 → 持帧（不闪回字母格，契约保全）----------
+  let f4: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    f4 = await mountBare((bump, tick) => withKitty(<SkinHost pose={fakePose('idle')} semantic={tick >= 2 ? 'poke-left' : undefined} now={2000 + tick * 120} />))
+    await settled(() => whaleGirlDecodedAnimationKeys().includes('idle') && artRows(f4.lines()).length === 0, { timeoutMs: 10000 })
+    check('r5-2: healthy skin reaches the raster path first (image on screen)',
+      artRows(f4.lines()).length === 0)
+    for (const key of EXPECTED_KEYS) injectFailedAnimationForTests(key)
+    f4.bump() // semantic → poke-left：全链不健康 → activeKey=undefined → 持帧
+    await sleep(400) // 固定窗:探针 持帧窗口（无字母格闪变）
+    check('r5-2: after all candidates fail post-image, the panel holds the frame (no letter flash)',
+      artRows(f4.lines()).length === 0, 'artRows=' + artRows(f4.lines()).length)
+  } finally {
+    if (f4 !== undefined) { await f4.app.unmount(); f4.term.dispose() }
+  }
+  resetWhaleGirlImageCacheForTests()
+} catch (error) {
+  check('r5-2 fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
+} finally {
+  applyCompanionSkin('deepy')
+  resetWhaleGirlImageCacheForTests()
+}
+
+// ===================== R5-3 · 持帧/预热记账以提交为准 ======================
+// 报告 r5-rendering.md R5-3 的独立回归形状：真 ConcurrentRoot（ink 的
+// react-reconciler ConcurrentRoot）+ Suspense 受控挂起——A 已提交，B 渲染
+// 后挂起并被同步 C 更新放弃，C 缺帧；断言持住 A（不是从未提交的 B）、未
+// 提交渲染不改变冷启动/预热许可。旧实现 render 期写 ref：丢弃渲染把 B
+// 记成「上一帧」并提前解锁预热（本段红）。
+
+const NEVER_PROMISE = new Promise<void>(() => {})
+function SuspendForever(): never {
+  throw NEVER_PROMISE
+}
+
+/** 生产持帧 hook 的探针：记录每次 render 的 [visible, ever]。 */
+function HoldProbe({ candidate, onRender }: {
+  candidate: React.ReactNode
+  onRender: (visible: React.ReactNode, ever: boolean) => void
+}): React.ReactNode {
+  const [visible, ever] = useHeldCommittedImage(candidate)
+  onRender(visible, ever)
+  return null
+}
+
+try {
+  applyCompanionSkin('whaleGirl')
+
+  // --- 1. 丢弃渲染不污染持帧：A 提交 → B 挂起放弃 → C 缺帧持 A ----------
+  let h1: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    const aElement = <Text>a</Text>
+    const bElement = <Text>b</Text>
+    const records: Array<{ phase: string; visible: React.ReactNode; ever: boolean }> = []
+    let phase: 'A' | 'B' | 'C' = 'A'
+    h1 = await mountBare(() => {
+      const candidate = phase === 'A' ? aElement : phase === 'B' ? bElement : undefined
+      return (
+        <Suspense fallback={<Text>fallback</Text>}>
+          <HoldProbe candidate={candidate} onRender={(visible, ever) => { records.push({ phase, visible, ever }) }} />
+          {phase === 'B' && <SuspendForever />}
+        </Suspense>
+      )
+    })
+    await sleep(150) // 固定窗:探针 A 的 commit 窗
+    const aCommits = records.filter(r => r.phase === 'A')
+    check('r5-3: committed candidate A renders as itself (cold)', aCommits.length > 0 && aCommits.every(r => r.visible === aElement))
+    phase = 'B'
+    h1.bump() // B render 执行（丢弃候选写入观察记录）→ SuspendForever 挂起 → 放弃
+    await sleep(250) // 固定窗:探针 挂起窗口：B 永不 resolve，primary 不提交
+    const bRenders = records.filter(r => r.phase === 'B')
+    check('r5-3: discarded render B executes its candidate (observed) but never commits',
+      bRenders.length > 0 && bRenders.every(r => r.visible === bElement),
+      'bRenders=' + bRenders.length)
+    phase = 'C'
+    h1.bump() // 同步默认优先级更新插队：C（缺帧）提交
+    await settled(() => records.some(r => r.phase === 'C'), { timeoutMs: 4000 })
+    h1.bump() // 持帧窗口内继续 tick（candidate 仍缺）：观察引用稳定性
+    h1.bump()
+    await sleep(150) // 固定窗:探针 持帧 tick 窗
+    const cRecords = records.filter(r => r.phase === 'C')
+    const lastC = cRecords[cRecords.length - 1]
+    check('r5-3: missing-frame render holds the last COMMITTED candidate (A), not the discarded one (B)',
+      lastC !== undefined && lastC.visible === aElement && lastC.ever === true,
+      'visible===' + (lastC?.visible === aElement ? 'A' : lastC?.visible === bElement ? 'B' : String(lastC?.visible)))
+    check('r5-3: hold keeps a stable element reference across ticks (no subtree repaint churn)',
+      cRecords.length > 1 && cRecords.every(r => r.visible === aElement),
+      'cRenders=' + cRecords.length)
+  } finally {
+    if (h1 !== undefined) { await h1.app.unmount(); h1.term.dispose() }
+  }
+
+  // --- 2. 丢弃渲染的 now 不解锁预热；提交的时钟走动才解锁 -----------------
+  let h2: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    let phase: 'A' | 'B' | 'C' | 'D' = 'A'
+    h2 = await mountBare(() => {
+      const now = phase === 'B' ? 5000 : phase === 'D' ? 1300 : 1000
+      return withKitty(
+        <Suspense fallback={<Text>fallback</Text>}>
+          <SkinHost pose={fakePose('idle')} semantic={undefined} now={now} />
+          {phase === 'B' && <SuspendForever />}
+        </Suspense>,
+      )
+    })
+    await settled(() => whaleGirlDecodedAnimationKeys().includes('idle'), { timeoutMs: 10000 })
+    await sleep(400) // 固定窗:探针 A 态观察窗：now 恒 1000，预热必须不发生
+    check('r5-3: committed static clock never preheats (frozen contract intact)',
+      whaleGirlDecodedAnimationKeys().every(key => key === 'idle'),
+      'decoded=' + whaleGirlDecodedAnimationKeys().join(','))
+    phase = 'B'
+    h2.bump() // B：now=5000 渲染后挂起放弃（旧实现：render 期写 ref 提前解锁预热）
+    await sleep(400) // 固定窗:探针 挂起窗口观察
+    phase = 'C'
+    h2.bump() // C：now 回到 1000（与上一提交值相同）→ 不得预热
+    await sleep(500) // 固定窗:探针 C 态观察窗（旧实现被丢弃渲染污染后在此预热 → 红）
+    check("r5-3: a discarded render's clock advance does not unlock preheat",
+      whaleGirlDecodedAnimationKeys().every(key => key === 'idle'),
+      'decoded=' + whaleGirlDecodedAnimationKeys().join(','))
+    phase = 'D'
+    h2.bump() // D：now=1300 已提交地走动 → 预热解锁
+    await settled(() => WHALE_GIRL_PREHEAT_KEYS.every(key => whaleGirlDecodedAnimationKeys().includes(key)), { timeoutMs: 10000 })
+    check('r5-3: a committed clock advance still unlocks preheat (feature intact)',
+      WHALE_GIRL_PREHEAT_KEYS.every(key => whaleGirlDecodedAnimationKeys().includes(key)),
+      'decoded=' + whaleGirlDecodedAnimationKeys().join(','))
+  } finally {
+    if (h2 !== undefined) { await h2.app.unmount(); h2.term.dispose() }
+  }
+
+  // --- 3. #185 高频 commit 轰炸：持帧/预热记账在提交风暴下零异常 ----------
+  let h3: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    const semantics = [undefined, 'typing', 'poke-left', 'smile-hearts', 'tickle', 'idle-look', 'happy', undefined]
+    h3 = await mountBare((_bump, tick) => withKitty(
+      <SkinHost pose={fakePose(tick % 4 === 0 ? 'working' : 'idle', tick % 3 === 0 ? 1 : 0)} semantic={semantics[tick % semantics.length]} now={1000 + tick * 16} />,
+    ))
+    let bombed = 0
+    const bomber = setInterval(() => { bombed += 1; h3!.bump() }, 16)
+    await sleep(2000) // 固定窗:探针 2s 高频提交风暴（16ms 换语义/now，语义轮换触发换键持帧路径）
+    clearInterval(bomber)
+    check('r5-3: high-frequency commit storm survives (no #185 nested-update explosion)',
+      bombed >= 80, 'bumps=' + bombed)
+    check('r5-3: commit storm keeps decode churn bounded (lazy keys only)',
+      whaleGirlDecodedAnimationKeys().length <= EXPECTED_KEYS.length,
+      'decoded=' + whaleGirlDecodedAnimationKeys().length)
+  } finally {
+    if (h3 !== undefined) { await h3.app.unmount(); h3.term.dispose() }
+  }
+  resetWhaleGirlImageCacheForTests()
+} catch (error) {
+  check('r5-3 fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
 } finally {
   applyCompanionSkin('deepy')
   resetWhaleGirlImageCacheForTests()
