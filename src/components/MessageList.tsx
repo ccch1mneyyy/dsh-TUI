@@ -9,9 +9,7 @@ import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
-import { AssistantTextMessage } from './messages/AssistantTextMessage.js'
-import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js'
-import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
+import { AssistantTextLeafRow, ThinkingLeafRow, ToolLeafRow } from './messages/TranscriptLeaves.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
 import { JobCard } from './Chat/JobCard.js'
 import { JobGroupHeader } from './Chat/JobGroupHeader.js'
@@ -1775,7 +1773,7 @@ function TranscriptRow({
               <MessageMetadata timestamp={time} model={model} />
             </Box>
           )}
-          <AssistantTextMessage
+          <AssistantTextLeafRow
             text={stripNarration(displayText)}
             marginTopOnTurn={marginTopOnTurn}
             isSelected={isSelected}
@@ -1792,7 +1790,7 @@ function TranscriptRow({
         (streamViewToggled ? thinkingFold === 'full' : thinkingFold === 'preview')
       return (
         <Box flexDirection="column" ref={ref}>
-          <AssistantThinkingMessage
+          <ThinkingLeafRow
             thinking={text}
             textFull={textFull}
             marginTopOnTurn={marginTopOnTurn}
@@ -1837,7 +1835,7 @@ function TranscriptRow({
       }
       return (
         <Box flexDirection="column" ref={ref}>
-          <AssistantToolUseMessage
+          <ToolLeafRow
             tool={tool}
             marginTopOnTurn={marginTopOnTurn}
             verbose={isExpanded || expanded}
@@ -1852,8 +1850,10 @@ function TranscriptRow({
             foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}
+            images={images}
+            onPreviewImage={onPreviewImage}
+            suppressImageGraphics={suppressImageGraphics}
           />
-          {images !== undefined && <TranscriptImages images={images} indent={4} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
         </Box>
       )
     }
