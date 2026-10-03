@@ -111,6 +111,28 @@ export interface ConfiguredProvider {
    * wizard never learned about (`input`, `compat`, …) survive the edit.
    */
   readonly modelEntries?: readonly Record<string, unknown>[]
+  /** Per-model overrides on a route that still serves its whole catalog. */
+  readonly modelOverrides?: Readonly<Record<string, Record<string, unknown>>>
+}
+
+/** The capability fields exposed by the local /provider model editor. */
+export interface ProviderModelCapabilities {
+  readonly contextWindow?: number
+  readonly maxTokens?: number
+  readonly reasoningEfforts?: false | Readonly<Record<string, string | null>>
+  readonly input?: readonly ('text' | 'image')[]
+}
+
+/** In-process, draft-only option editor; never part of a model-facing ask. */
+export interface ProviderModelEditor {
+  readonly reasoningEditable: boolean
+  read(id: string): {
+    readonly values: ProviderModelCapabilities
+    readonly defaults: ProviderModelCapabilities
+  }
+  /** Replace the four editable overrides in the draft, preserving other fields. */
+  save(id: string, values: ProviderModelCapabilities): void
+  edited(id: string): boolean
 }
 
 /** One path op inside a provider profile, relative to the profile object. */

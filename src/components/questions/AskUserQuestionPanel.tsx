@@ -10,6 +10,8 @@
  * appends into that input row (single-select also attaches the option's
  * label, so the answer can carry both `selected` and `custom`); focusing
  * the input row itself and typing gives a pure custom answer.
+ * Local /provider model lists additionally offer a Tab capability editor;
+ * ordinary questionnaires retain the inline-answer behavior.
  *
  * Paste works on the input row like the composer: Ctrl+V/Alt+V (the keymap
  * `paste` binding, remappable in /settings) reads the system clipboard,
@@ -32,7 +34,9 @@ import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../terminal-utils/figures.js'
 import type { QuestionDraft, QuestionSelection } from '../../dsh-adapter/questions.js'
+import type { ProviderModelEditor as ModelEditor } from '../../adapter/ports/channel-settings.js'
 import { PlanReviewPanel } from './PlanReviewPanel.js'
+import { ProviderModelEditor } from './ProviderModelEditor.js'
 import { QuestionMinimizedBar } from './QuestionMinimizedBar.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
 import { actionMatches, comboDisplay, effectiveComboDisplay, primaryComboString } from '../../utils/keymap.js'
@@ -76,6 +80,8 @@ export type AskUserQuestionPanelProps = {
      *  (single-select) shown on first display, before any saved draft — e.g.
      *  the models already enabled on a provider being edited. */
     readonly defaultSelected?: readonly string[]
+    /** Local /provider draft editor. Ordinary model-facing asks carry none. */
+    readonly modelEditor?: ModelEditor
     /** Presentation intent tag (rc.6): 'plan-review' switches to the
      *  decision-card layout; an intent never changes the protocol. */
     readonly intent?: { readonly kind: 'plan-review'; readonly approve: string }
@@ -160,6 +166,13 @@ export function AskUserQuestionPanel({
   const options = question.options ?? []
   const multiSelect = question.multiSelect === true
   const hideCustomInput = question.hideCustomInput === true && options.length > 0
+  const modelEditor = typeof question.modelEditor?.read === 'function'
+    && typeof question.modelEditor.save === 'function' && typeof question.modelEditor.edited === 'function'
+    ? question.modelEditor : undefined
+  const [editingModel, setEditingModel] = React.useState<string | null>(null)
+  // Opening Tab and later keys may share one stdin batch. Stop the list
+  // synchronously, before the nested editor has had a chance to mount.
+  const editingRef = React.useRef(false)
   const { rows: terminalRows } = useTerminalSize()
   /** Rows: the real options plus the inline input row at the tail. */
   const rowCount = options.length + (hideCustomInput ? 0 : 1)
@@ -267,7 +280,7 @@ export function AskUserQuestionPanel({
   // three visual variants): its nodeCache rect IS the caret cell, so (0, 0)
   // stays exact under CJK widths and line wrapping without any
   // layout-affecting wrapper Box.
-  const caretRef = useDeclaredCursor({ line: 0, column: 0, active: !hideCustomInput && !collapsed })
+  const caretRef = useDeclaredCursor({ line: 0, column: 0, active: !hideCustomInput && !collapsed && editingModel === null })
 
   const moveFocus = (delta: 1 | -1): void => {
     if (rowCount <= 1) return
@@ -414,7 +427,30 @@ export function AskUserQuestionPanel({
     }
   }
 
+  const openModelEditor = (model: string, event: { stopImmediatePropagation(): void }): void => {
+    editingRef.current = true
+    setEditingModel(model)
+    event.stopImmediatePropagation()
+  }
+  const manualModelAtCaret = (): string => {
+    const points = [...textRef.current]
+    const isSeparator = (char: string | undefined): boolean => char === undefined || /[,，\s]/u.test(char)
+    let at = Math.min(cursorRef.current, points.length)
+    if (at === points.length || isSeparator(points[at])) at -= 1
+    while (at >= 0 && isSeparator(points[at])) at -= 1
+    if (at < 0) return ''
+    let start = at
+    let end = at + 1
+    while (start > 0 && !isSeparator(points[start - 1])) start -= 1
+    while (end < points.length && !isSeparator(points[end])) end += 1
+    return points.slice(start, end).join('')
+  }
+
   useInput((input, key, event) => {
+    if (editingRef.current) {
+      event.stopImmediatePropagation()
+      return
+    }
     // The mounted panel owns folding, just like answering: hidden asks
     // cannot steal approval/dialog keys, and an interrupting questionnaire
     // still works when Chat yields to an underlying screen's open flag.
@@ -465,6 +501,16 @@ export function AskUserQuestionPanel({
     }
 
     if (onInputRow()) {
+      if (key.tab && modelEditor !== undefined) {
+        const manualModel = manualModelAtCaret()
+        if (manualModel !== '') {
+          openModelEditor(manualModel, event)
+          return
+        }
+        placeFocus(0)
+        event.stopImmediatePropagation()
+        return
+      }
       if (key.upArrow) {
         moveFocus(-1)
         return
@@ -546,6 +592,13 @@ export function AskUserQuestionPanel({
     }
     if (key.rightArrow && isPlainArrow(key)) {
       if (onForward !== undefined) onForward(currentDraft())
+      return
+    }
+    if (key.tab && !key.shift && !key.ctrl && !key.meta && !key.super && modelEditor !== undefined) {
+      const model = options[focusRef.current]?.label
+      if (model !== undefined) {
+        openModelEditor(model, event)
+      }
       return
     }
     if (key.tab && !hideCustomInput) {
@@ -711,7 +764,7 @@ export function AskUserQuestionPanel({
                 color={focused ? 'accent' : undefined}
                 wrap={windowedOptions ? 'truncate' : 'wrap'}
               >
-                {label}
+                {label}{modelEditor?.edited(option.label) ? ` ${t('provider-model-edited')}` : ''}
               </Text>
               {description !== undefined && (
                 <Text dimColor wrap={windowedOptions ? 'truncate' : 'wrap'}>
@@ -743,6 +796,7 @@ export function AskUserQuestionPanel({
   const hintParts = inputFocused
     ? [
         t('question-hint-type'),
+        ...(modelEditor === undefined ? [] : [t('provider-model-edit-hint')]),
         t('question-hint-paste', { key: comboDisplay(primaryComboString('paste')) }),
         t('question-hint-enter'),
         ...(options.length > 0 ? [t('question-hint-back')] : []),
@@ -755,6 +809,7 @@ export function AskUserQuestionPanel({
     : [
         t('question-hint-select'),
         ...(multiSelect ? [t('question-hint-multi')] : []),
+        ...(modelEditor === undefined ? [] : [t('provider-model-edit-hint')]),
         ...(hideCustomInput ? [] : [t('question-hint-paste', { key: comboDisplay(primaryComboString('paste')) }), t('question-hint-attach')]),
         t('question-hint-enter'),
         onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
@@ -769,6 +824,19 @@ export function AskUserQuestionPanel({
   // hooks and the draft refs above stay alive for the expand.
   if (collapsed) {
     return <QuestionMinimizedBar progress={headerTitle} questionText={questionText} onExpand={onExpand ?? (() => {})} />
+  }
+
+  if (editingModel !== null && modelEditor !== undefined) {
+    return <ProviderModelEditor
+      model={editingModel}
+      editor={modelEditor}
+      onClose={() => {
+        editingRef.current = false
+        setEditingModel(null)
+      }}
+      onAbort={onCancel}
+      readClipboardOverride={readClipboardOverride}
+    />
   }
 
   return (

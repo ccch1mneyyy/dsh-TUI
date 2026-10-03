@@ -900,6 +900,9 @@ const GROUPS = {
 // provider 字段的端点实拉）合并、线上新增标记、目录外 id 容量写入、
 // 实拉失败降级与匿名探测请求形状。
     ["verify-provider-wizard", ['node', 'scripts/verify-provider-wizard.mjs']],
+// /provider 的 Tab 模型能力编辑：真实 Chat 下的键盘隔离、草稿/取消、
+// 窄 inline/fullscreen 布局与上游能力解析；普通问卷 Tab 行为不变。
+    ["verify-provider-model-editor", ['node', '--import', 'tsx/esm', 'scripts/verify-provider-model-editor.tsx']],
 // /login 凭据状态回归（issue #213）：只通过 credentials.describe()
 // 展示 configured/source/writable，managed key 不得误报或泄露值。
     ["verify-login-credentials", ['node', '--import', 'tsx/esm', 'scripts/verify-login-credentials.tsx']],
