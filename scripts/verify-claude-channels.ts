@@ -40,7 +40,7 @@ import { channelSlug, fileClaudeChannels, importFromSettingsEnv, importTokenFrom
 import { channelTokenRef, fileClaudeChannelTokens, memoryClaudeChannelTokens } from '../src/backends/claude/channelTokens.js'
 import { resolveClaudeAuth } from '../src/backends/claude/auth.js'
 import { runChannelWizard, sameOptionConnection } from '../src/dsh-adapter/channelWizard.js'
-import { readModelEnvTruth } from '../src/backends/claude/modelEnv.js'
+import { importedModelEnv, mergedModelEnv, readModelEnvTruth } from '../src/backends/claude/modelEnv.js'
 import { openClaudeSession } from '../src/backends/claude/session.js'
 import { BACKEND_CHANNEL_COMMAND, LOCAL_COMMANDS } from '../src/commands.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
@@ -530,6 +530,84 @@ const init = {
   const withUrl = importFromSettingsEnv({ ANTHROPIC_BASE_URL: 'https://x.example/api', ANTHROPIC_MODEL: 'm' })
   check('import: a parseable base URL becomes the profile connection; an unparseable one does not',
     withUrl?.baseUrl === 'https://x.example/api' && importFromSettingsEnv({ ANTHROPIC_BASE_URL: 'not a url', ANTHROPIC_MODEL: 'm' })?.baseUrl === undefined, withUrl)
+}
+
+// ---- 11b. R3-5: flag > settings > inherited; the import drops OUR injections --
+{
+  const envDir = mkdtempSync(join(tmpdir(), 'dshtui-channels-r35-'))
+  writeFileSync(join(envDir, 'settings.json'), JSON.stringify({ env: {
+    ANTHROPIC_MODEL: 'from-settings',
+    ANTHROPIC_BASE_URL: 'https://settings.example/api',
+  } }))
+  try {
+    const injected = new Set(['ANTHROPIC_AUTH_TOKEN'])
+    const live = {
+      ANTHROPIC_AUTH_TOKEN: 'flag-injected-token',          // ours (the flag layer)
+      ANTHROPIC_MODEL: 'inherited-model',                    // truly inherited
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'inherited-opus',        // inherited, settings silent
+    }
+    const merged = mergedModelEnv(envDir, live, injected)
+    check('sources: a flag-injected key outranks the settings file (deliberate)',
+      merged.ANTHROPIC_AUTH_TOKEN === 'flag-injected-token', merged)
+    check('sources: the settings file outranks the truly inherited env (the CLI\'s own order)',
+      merged.ANTHROPIC_MODEL === 'from-settings' && merged.ANTHROPIC_BASE_URL === 'https://settings.example/api', merged)
+    check('sources: an inherited key fills the gaps the settings leave',
+      merged.ANTHROPIC_DEFAULT_OPUS_MODEL === 'inherited-opus', merged)
+    check('sources: without injected keys the settings-vs-inherited order still holds (no wholesale flip)',
+      mergedModelEnv(envDir, { ANTHROPIC_MODEL: 'inherited-model' }).ANTHROPIC_MODEL === 'from-settings')
+    const importSource = importedModelEnv(envDir, live, injected)
+    check('sources: the import source EXCLUDES the TUI\'s own injections entirely',
+      importSource.ANTHROPIC_AUTH_TOKEN === undefined, importSource)
+    check('sources: the import source is settings first, inherited env for the gaps',
+      importSource.ANTHROPIC_MODEL === 'from-settings' && importSource.ANTHROPIC_BASE_URL === 'https://settings.example/api'
+        && importSource.ANTHROPIC_DEFAULT_OPUS_MODEL === 'inherited-opus', importSource)
+  } finally {
+    rmSync(envDir, { recursive: true, force: true })
+  }
+  // The cc-switch loop, end to end: the ACTIVE channel A injects itself at
+  // spawn (auth plan flag layer), cc-switch rewrote settings to relay B —
+  // "import from settings" must land B, not re-import A.
+  {
+    const envDir = mkdtempSync(join(tmpdir(), 'dshtui-channels-r35-e2e-'))
+    writeFileSync(join(envDir, 'settings.json'), JSON.stringify({ env: {
+      ANTHROPIC_BASE_URL: 'https://relay-b.example/api',
+      ANTHROPIC_AUTH_TOKEN: 'cc-switch-b-token',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'b-opus',
+    } }))
+    const previous = process.env.CLAUDE_CONFIG_DIR
+    try {
+      process.env.CLAUDE_CONFIG_DIR = envDir
+      const store = memoryClaudeChannels({ active: 'relay-a-example', channels: [
+        { id: 'relay-a-example', name: 'relay-a.example', baseUrl: 'https://relay-a.example/api', tokenRef: 'CHANNEL_RELAY_A_EXAMPLE_TOKEN' },
+      ] })
+      const tokens = memoryClaudeChannelTokens({ CHANNEL_RELAY_A_EXAMPLE_TOKEN: 'channel-a-token' })
+      const plan = await resolveClaudeAuth({}, undefined, {
+        settings: async () => ({}),
+        globalConfig: () => undefined,
+        channel: { baseUrl: 'https://relay-a.example/api', token: 'channel-a-token' },
+      })
+      const fake = fakeClaudeSdk(() => ({ capabilities: [], models }), controls)
+      const session = await openClaudeSession(claudeDeps(fake.sdk, {
+        channels: store,
+        channelTokens: tokens,
+        auth: { plan, renew: () => Promise.resolve(plan) },
+      }))
+      await tick()
+      fake.queries[0]!.emit(init)
+      await tick()
+      const imported = session.capabilities.channels?.importFromSettings()
+      check('sources: cc-switch end to end — the import lands the SETTINGS relay, not the injected one',
+        imported?.id === 'relay-b-example' && imported.connection?.baseUrl === 'https://relay-b.example/api'
+          && tokens.read('CHANNEL_RELAY_B_EXAMPLE_TOKEN') === 'cc-switch-b-token', imported)
+      const aRow = store.read().channels.find(channel => channel.id === 'relay-a-example')
+      check('sources: the active channel A survives untouched (its own row and token intact)',
+        aRow?.baseUrl === 'https://relay-a.example/api' && tokens.read('CHANNEL_RELAY_A_EXAMPLE_TOKEN') === 'channel-a-token', aRow)
+      await session.dispose()
+    } finally {
+      process.env.CLAUDE_CONFIG_DIR = previous
+      rmSync(envDir, { recursive: true, force: true })
+    }
+  }
 }
 
 // ---- 12. phase 3: save/remove through the capability (the wizard's seams) ---

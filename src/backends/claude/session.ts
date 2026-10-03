@@ -59,7 +59,7 @@ import type { ClaudeSdkModule, ClaudeSessionStoreSdk } from './sdk.js'
 import { readTaskOutputTail, taskOutputRoots } from './task-output.js'
 import { join } from 'node:path'
 import { DATA_DIR } from '../../utils/paths.js'
-import { mergedModelEnv, modelTruthFrom, readLocalModelNames } from './modelEnv.js'
+import { importedModelEnv, modelTruthFrom, readLocalModelNames } from './modelEnv.js'
 import { claudeConfigDir } from './transcript-file.js'
 import { CLAUDE_IMAGE_LIMITS, claudeImageBlocks } from './images.js'
 import { createClaudeSideQuery } from './side-query.js'
@@ -763,6 +763,15 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     })
   }
 
+  /** The env keys the TUI itself injected into the spawn env — exactly the
+   *  auth plan's flag layer (the channel connection, or the first-party
+   *  pin; auth.ts re-states precisely these keys there). They are OURS, not
+   *  the user's settings: the settings import excludes them (reading them
+   *  back would re-import the channel the TUI itself activated), while the
+   *  model truth keeps them deliberately ABOVE the settings file — the
+   *  flag > settings > inherited order the CLI itself applies (R3-5). */
+  const injectedEnvKeys = (): ReadonlySet<string> => new Set(Object.keys(authPlan.settings?.env ?? {}))
+
   const controls = createClaudeControls({
     query: () => run.query,
     emit: events => emit(events),
@@ -777,11 +786,14 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     channels,
     tokens: channelTokens,
     debug: deps.host.debug,
-    // The settings env the import resolves from — the same merge the model
-    // truth applies (settings file + live auth env).
-    settingsEnv: () => mergedModelEnv(
+    // The settings-import source (R3-5): the user's own settings file plus
+    // the truly inherited env (settings first, the CLI's own order) — the
+    // TUI's own injections are NOT settings material and are excluded, so a
+    // cc-switch-written settings.json is what "import from settings" sees.
+    settingsEnv: () => importedModelEnv(
       claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
       authPlan.env,
+      injectedEnvKeys(),
     ),
     // Channel model truth, lazily (the list reads it on demand): the ACTIVE
     // channel profile first (channels.json — the user's own data), then the
@@ -795,6 +807,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         authPlan.env,
         readLocalModelNames(join(DATA_DIR, 'backends', 'claude')),
         active === undefined ? undefined : { models: active.models, tiers: active.tiers },
+        injectedEnvKeys(),
       )
     },
   })

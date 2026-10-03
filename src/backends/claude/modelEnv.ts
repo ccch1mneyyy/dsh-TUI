@@ -92,11 +92,10 @@ export function readLocalModelNames(dir: string): Readonly<Record<string, string
   }
 }
 
-/** Build the channel-model truth from the merged env (settings file first,
- *  live env on top — the CLI applies both to its child; undefined-valued
- *  live keys never clobber file values) plus the optional local
- *  model-names.json map, which outranks both — and the active channel
- *  profile (channels.ts), which outranks everything. */
+/** Build the channel-model truth from the tier env the caller resolved
+ *  (mergedModelEnv — the CLI's own three-layer order, see there) plus the
+ *  optional local model-names.json map, which outranks it — and the active
+ *  channel profile (channels.ts), which outranks everything. */
 export function readModelEnvTruth(
   env: Record<string, string | undefined>,
   localNames: Readonly<Record<string, string>> = {},
@@ -152,28 +151,59 @@ export function readModelEnvTruth(
   }
 }
 
-/** The env the CLI child applies: the settings file of `configDir` with the
- *  live env on top (undefined-valued live keys never clobber file values).
- *  Exported because the channel-profile import resolves from the same truth
- *  the model mapping does (channels.ts's importFromSettingsEnv). */
+/** The env the CLI child actually applies, in the CLI's own truth order
+ *  (R3-5): **flag-injected keys > the settings file's `env` > the truly
+ *  inherited env**. `injectedKeys` marks what the TUI itself pinned into the
+ *  spawn env (the auth plan's flag layer — the channel connection, the
+ *  first-party pin): those deliberately outrank the settings file, exactly
+ *  like the flag-settings layer outranks user settings inside the CLI
+ *  (binary forensics, CLI 2.1.287). Every OTHER live key is merely
+ *  INHERITED environment, and the CLI provably applies the settings `env`
+ *  OVER the process environment it inherited — so a settings value wins the
+ *  clash and an inherited key only fills gaps the settings leave. Empty /
+ *  undefined live values never clobber anything. */
 export function mergedModelEnv(
   configDir: string,
   liveEnv: Readonly<Record<string, string | undefined>>,
+  injectedKeys?: ReadonlySet<string>,
 ): Record<string, string | undefined> {
   const merged = readSettingsEnvForModels(configDir)
   for (const [key, value] of Object.entries(liveEnv)) {
-    if (typeof value === 'string' && value.trim() !== '') merged[key] = value
+    if (typeof value !== 'string' || value.trim() === '') continue
+    if (injectedKeys?.has(key) === true) merged[key] = value
+    else if (!Object.hasOwn(merged, key)) merged[key] = value
   }
   return merged
 }
 
-/** One-shot wiring for the session: settings env of `configDir` + live env,
- *  the optional local model-names.json map, and the active channel profile. */
+/** The env the settings IMPORT resolves from (R3-5): the user's own
+ *  settings file plus the truly inherited environment (settings first —
+ *  the CLI's own order), with the TUI's OWN injections REMOVED. Reading
+ *  them back would import the channel the TUI itself activated (or the
+ *  dsh-auth pin) instead of what the user's settings actually say — the
+ *  cc-switch loop: switch settings to relay B, import, get relay A back. */
+export function importedModelEnv(
+  configDir: string,
+  liveEnv: Readonly<Record<string, string | undefined>>,
+  injectedKeys?: ReadonlySet<string>,
+): Record<string, string | undefined> {
+  const merged = readSettingsEnvForModels(configDir)
+  for (const [key, value] of Object.entries(liveEnv)) {
+    if (injectedKeys?.has(key) === true) continue
+    if (typeof value === 'string' && value.trim() !== '' && !Object.hasOwn(merged, key)) merged[key] = value
+  }
+  return merged
+}
+
+/** One-shot wiring for the session: settings env of `configDir` + live env
+ *  (the CLI's flag > settings > inherited order), the optional local
+ *  model-names.json map, and the active channel profile. */
 export function modelTruthFrom(
   configDir: string,
   liveEnv: Readonly<Record<string, string | undefined>>,
   localNames: Readonly<Record<string, string>> = {},
   channel?: ChannelModelSource,
+  injectedKeys?: ReadonlySet<string>,
 ): ModelEnvTruth {
-  return readModelEnvTruth(mergedModelEnv(configDir, liveEnv), localNames, channel)
+  return readModelEnvTruth(mergedModelEnv(configDir, liveEnv, injectedKeys), localNames, channel)
 }
