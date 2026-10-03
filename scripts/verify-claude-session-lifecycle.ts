@@ -26,7 +26,9 @@
  *    control reaches the CLI before the first turn; a reconnect never
  *    overwrites the model once set (a resumed session keeps the replay's);
  *  - env scrubbing, the Fidelity Profile options and the start-mode
- *    resolution are pinned as units.
+ *    resolution are pinned as units (bypassPermissions only ever starts
+ *    from the env override: `allowDangerouslySkipPermissions` rides along
+ *    there and nowhere else; settings-level bypass still downgrades).
  *
  * Run: node --import tsx/esm scripts/verify-claude-session-lifecycle.ts
  */
@@ -327,8 +329,9 @@ const collect = (session: AgentSession) => {
   // (`pathToClaudeCodeExecutable` is set only when an executable was found.)
   const set = Object.entries(OPTION_POLICY).filter(([key, policy]) => policy === 'set' && key !== 'pathToClaudeCodeExecutable').map(([key]) => key).sort()
   // The conditional ones: the persisted model/effort, the route pin of an
-  // injected subscription token, and `resume` in place of `sessionId` for a
-  // credential reconnect.
+  // injected subscription token, `resume` in place of `sessionId` for a
+  // credential reconnect, and `allowDangerouslySkipPermissions` — only the
+  // explicit `bypassPermissions` start carries it.
   const withChoices = buildQueryOptions({
     cwd: '/fixture/project', sessionId: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
     stderr: () => undefined, abortController: new AbortController(), replayUserMessages: true, model: 'haiku', effort: 'low',
@@ -339,7 +342,16 @@ const collect = (session: AgentSession) => {
     cwd: '/fixture/project', resume: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
     stderr: () => undefined, abortController: new AbortController(), replayUserMessages: true,
   })
-  const built = [...new Set([...Object.keys(withChoices), ...Object.keys(resumed)])].sort()
+  const builtWith = (permissionMode: Options['permissionMode']) => buildQueryOptions({
+    cwd: '/fixture/project', sessionId: 's', permissionMode, executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
+    stderr: () => undefined, abortController: new AbortController(), replayUserMessages: true,
+  })
+  const bypassed = builtWith('bypassPermissions')
+  check('profile: bypass carries the SDK-required allowDangerouslySkipPermissions', bypassed.permissionMode === 'bypassPermissions' && bypassed.allowDangerouslySkipPermissions === true, bypassed.allowDangerouslySkipPermissions)
+  for (const mode of ['default', 'acceptEdits', 'plan', 'dontAsk'] as const) {
+    check(`profile: ${mode} never carries allowDangerouslySkipPermissions`, !('allowDangerouslySkipPermissions' in builtWith(mode)))
+  }
+  const built = [...new Set([...Object.keys(withChoices), ...Object.keys(resumed), ...Object.keys(bypassed)])].sort()
   check('profile: exactly the `set` options are built', JSON.stringify(set) === JSON.stringify(built), { set, built })
   check('profile: a reconnect resumes instead of naming a new session', resumed.resume === 's' && resumed.sessionId === undefined && options.sessionId === 's' && options.resume === undefined)
   check('profile: no model/effort unless chosen', options.model === undefined && options.effort === undefined && withChoices.model === 'haiku' && withChoices.effort === 'low')
@@ -351,11 +363,13 @@ const collect = (session: AgentSession) => {
   check('start mode: default when nothing is configured', (await resolveStartPermissionMode(fakeSettings(undefined), '/p', {})).mode === 'default')
   check('start mode: a configured acceptEdits is honoured', (await resolveStartPermissionMode(fakeSettings('acceptEdits'), '/p', {})).mode === 'acceptEdits')
   const bypass = await resolveStartPermissionMode(fakeSettings('bypassPermissions'), '/p', {})
-  check('start mode: bypassPermissions from settings is downgraded', bypass.mode === 'default' && bypass.downgradedFrom === 'bypassPermissions')
+  check('start mode: bypassPermissions from settings is downgraded (repo files cannot opt in)', bypass.mode === 'default' && bypass.downgradedFrom === 'bypassPermissions' && bypass.bypassAllowed === false, bypass)
   check('start mode: the developer override wins', (await resolveStartPermissionMode(fakeSettings('plan'), '/p', { DSH_TUI_CLAUDE_PERMISSION_MODE: 'acceptEdits' })).mode === 'acceptEdits')
-  for (const refused of ['bypassPermissions', 'auto', 'nonsense']) {
+  const envBypass = await resolveStartPermissionMode(fakeSettings('plan'), '/p', { DSH_TUI_CLAUDE_PERMISSION_MODE: 'bypassPermissions' })
+  check('start mode: the env override alone can start bypassPermissions', envBypass.mode === 'bypassPermissions' && envBypass.source === 'env' && envBypass.bypassAllowed === true, envBypass)
+  for (const refused of ['auto', 'nonsense']) {
     const start = await resolveStartPermissionMode(fakeSettings('plan'), '/p', { DSH_TUI_CLAUDE_PERMISSION_MODE: refused })
-    check(`start mode: the override refuses ${refused} (settings win, the refusal is reported)`, start.mode === 'plan' && start.source === 'settings' && start.ignoredOverride === refused, start)
+    check(`start mode: the override refuses ${refused} (settings win, the refusal is reported)`, start.mode === 'plan' && start.source === 'settings' && start.ignoredOverride === refused && start.bypassAllowed === false, start)
   }
 }
 

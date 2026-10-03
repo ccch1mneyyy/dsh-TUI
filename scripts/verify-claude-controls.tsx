@@ -9,7 +9,9 @@
  *  - effort: levels from the current model's `supportedEffortLevels`;
  *    `applyFlagSettings({effortLevel})`, `null` = default; persisted;
  *  - modes: default → acceptEdits → plan (auto only where the model supports
- *    it, bypass never); `setPermissionMode`, confirmed as `mode.changed`;
+ *    it, bypass never in the cycle); `setPermissionMode`, confirmed as
+ *    `mode.changed`; a session explicitly started in bypass (the env
+ *    opt-in) may re-enter it, everyone else is refused;
  *  - compact pushes the CLI's own `/compact`; commands drop terminal-only
  *    ones; MCP, context usage and account (no email) map to neutral views;
  *  - the channel: native mode label + index, effort readout, backend
@@ -138,7 +140,8 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
   check('modes: default → acceptEdits → plan without auto', caps.modes!.list().map(mode => mode.id).join() === 'default,acceptEdits,plan')
   await caps.modes!.set('acceptEdits')
   check('modes: setPermissionMode, confirmed as mode.changed', query.calls.some(call => call.method === 'setPermissionMode' && call.args[0] === 'acceptEdits') && caps.modes!.current() === 'acceptEdits' && events.some(event => event.type === 'mode.changed' && event.modeId === 'acceptEdits'))
-  check('modes: bypassPermissions is refused', await caps.modes!.set('bypassPermissions').then(() => false, () => true))
+  const bypassRefusal = await caps.modes!.set('bypassPermissions').then(() => undefined, (error: unknown) => error instanceof Error ? error.message : String(error))
+  check('modes: bypassPermissions is refused outside a session started in it', bypassRefusal === t('claude-mode-bypass-refused'), bypassRefusal)
   query.emit({ type: 'system', subtype: 'status', status: null, permissionMode: 'acceptEdits' })
   await tick()
   check('modes: the CLI\'s confirming status frame is not reported twice', events.filter(event => event.type === 'mode.changed' && event.modeId === 'acceptEdits').length === 1)
@@ -158,6 +161,29 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
   const account = await caps.account!.info()
   check('account: organization/subscription/provider, never the email', account.organization === 'Example Org' && account.subscription === 'Team' && account.provider === 'firstParty' && !JSON.stringify(account).includes('example.invalid'))
   check('/doctor lines never carry the email', !session.capabilities.diagnostics!.lines().join('\n').includes('example.invalid'))
+  await session.dispose()
+}
+
+// ── the explicit bypass start: re-entry allowed, the cycle unchanged ──
+{
+  const fake = fakeClaudeSdk(() => ({ capabilities: ['msg_lifecycle_v1'], models: MODELS, commands: COMMANDS }), controls)
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { start: { mode: 'bypassPermissions', source: 'env', bypassAllowed: true } }))
+  const events: AgentEvent[] = []
+  session.subscribe(batch => { events.push(...batch) })
+  await tick()
+  const query = fake.queries[0]!
+  query.emit({ ...init, permissionMode: 'bypassPermissions' })
+  await tick()
+  const caps = session.capabilities
+  check('bypass session: starts and reports bypassPermissions', caps.modes!.current() === 'bypassPermissions' && events.some(event => event.type === 'mode.changed' && event.modeId === 'bypassPermissions'))
+  // The Shift+Tab cycle never offers bypass; the live mode only trails the
+  // list because it is current (the pre-existing retention rule).
+  check('bypass session: the cycle still never offers bypass', caps.modes!.list().map(mode => mode.id).join() === 'default,acceptEdits,plan,bypassPermissions')
+  const reentered = await caps.modes!.set('bypassPermissions').then(() => true, (error: unknown) => error instanceof Error ? error.message : String(error))
+  check('bypass session: re-entering bypass delegates to setPermissionMode', reentered === true && query.calls.some(call => call.method === 'setPermissionMode' && call.args[0] === 'bypassPermissions'), reentered)
+  await caps.modes!.set('default')
+  const back = await caps.modes!.set('bypassPermissions').then(() => true, (error: unknown) => error instanceof Error ? error.message : String(error))
+  check('bypass session: switching away and back works (the start opt-in holds)', back === true && query.calls.filter(call => call.method === 'setPermissionMode' && call.args[0] === 'bypassPermissions').length === 2 && caps.modes!.current() === 'bypassPermissions', back)
   await session.dispose()
 }
 

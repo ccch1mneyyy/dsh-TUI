@@ -33,6 +33,9 @@ export interface ClaudeControlsDeps {
   currentModel(): string
   /** The backend-native permission mode (translator's view). */
   currentMode(): string
+  /** Whether the session may (re-)enter `bypassPermissions`: only one
+   *  that explicitly started in it (the env opt-in; fail-closed). */
+  bypassAllowed(): boolean
   /** Record a confirmed model / mode in the translator (dedupes later frames). */
   noteModel(model: string): readonly AgentEvent[]
   noteMode(mode: string): readonly AgentEvent[]
@@ -154,7 +157,7 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       list: modeList,
       current: (): string => deps.currentMode(),
       async set(id: string): Promise<void> {
-        if (id === 'bypassPermissions') throw new Error(t('claude-mode-bypass-refused'))
+        if (id === 'bypassPermissions' && !deps.bypassAllowed()) throw new Error(t('claude-mode-bypass-refused'))
         await deps.query().setPermissionMode(id as never)
         deps.emit(deps.noteMode(id))
       },

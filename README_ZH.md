@@ -187,7 +187,9 @@ dsh-tui --backend claude     # 或在 dsh-tui 配置行写 `backend: claude`
   `/mcp toggle <服务器> on|off`，服务器名可补全）、`/doctor`（CLI、SDK、凭证与账户），
   补全中还会列出 Claude 自己的斜杠命令（原样发给 Claude）。悬停费用字段可看
   订阅用量（5小时 / 7天）；用量接近或达到上限、API 重试、模型回退、自动拒绝的权限、
-  登录错误与回忆起的记忆都会以提示显示。
+  登录错误与回忆起的记忆都会以提示显示。`bypassPermissions` 模式跳过全部
+  工具审批（危险），必须以 `DSH_TUI_CLAUDE_PERMISSION_MODE=bypassPermissions`
+  显式启动；运行中不能从非 bypass 会话进入。
 - **同样可用**：流式回复、思考 token 计数、工具卡（Read、Write、Edit、Bash、
   Glob、Grep、网络与 MCP 工具）、Ctrl+C 中断、`/new`（新会话仍在启动时若有消息抢先
   开始，本次 `/new` 取消、消息留在当前会话）、`/status`、`/cost`（后端上报的美元

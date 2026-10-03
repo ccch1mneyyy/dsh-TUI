@@ -731,6 +731,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     },
     currentModel: () => translator.model,
     currentMode: () => translator.mode ?? deps.start.mode,
+    bypassAllowed: () => deps.start.bypassAllowed,
     noteModel: model => translator.noteModel(model),
     noteMode: mode => translator.noteMode(mode),
     prefs,

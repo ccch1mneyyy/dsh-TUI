@@ -291,7 +291,7 @@ const dict = {
   'claude-start-timeout': { zh: 'Claude CLI 未在时限内完成启动握手', en: 'The Claude CLI did not finish its start handshake in time' },
   'claude-start-mode-downgraded': { zh: '设置中的权限模式 {{mode}} 需要显式选择，本会话以 default 启动', en: 'The configured permission mode {{mode}} needs an explicit choice; this session starts in default' },
   'claude-start-mode-env': { zh: '权限模式由 DSH_TUI_CLAUDE_PERMISSION_MODE 指定：{{mode}}', en: 'Permission mode set by DSH_TUI_CLAUDE_PERMISSION_MODE: {{mode}}' },
-  'claude-start-mode-env-ignored': { zh: '已忽略 DSH_TUI_CLAUDE_PERMISSION_MODE={{mode}}（只接受 default/acceptEdits/plan/dontAsk）', en: 'Ignored DSH_TUI_CLAUDE_PERMISSION_MODE={{mode}} (accepts default/acceptEdits/plan/dontAsk only)' },
+  'claude-start-mode-env-ignored': { zh: '已忽略 DSH_TUI_CLAUDE_PERMISSION_MODE={{mode}}（只接受 default/acceptEdits/plan/dontAsk/bypassPermissions）', en: 'Ignored DSH_TUI_CLAUDE_PERMISSION_MODE={{mode}} (accepts default/acceptEdits/plan/dontAsk/bypassPermissions)' },
   'claude-input-refused': { zh: 'Claude 拒绝了这条输入', en: 'Claude refused this input' },
   'claude-assistant-error': { zh: 'Claude 错误：{{error}}', en: 'Claude error: {{error}}' },
   'claude-api-retry': { zh: 'API 重试 {{attempt}}/{{max}}{{detail}}…', en: 'API retry {{attempt}}/{{max}}{{detail}}…' },

@@ -66,7 +66,7 @@ export const OPTION_POLICY = {
   pathToClaudeCodeExecutable: 'set',
   permissionMode: 'set',
   planModeInstructions: 'omit',
-  allowDangerouslySkipPermissions: 'later', // explicit bypass mode (Phase 3)
+  allowDangerouslySkipPermissions: 'set', // only the explicit `bypassPermissions` start
   permissionPromptToolName: 'omit',
   permissionPrompts: 'omit',
   plugins: 'omit',
@@ -96,12 +96,15 @@ export const OPTION_POLICY = {
 export const SETTING_SOURCES: SettingSource[] = ['user', 'project', 'local']
 
 /** Modes the start resolution accepts from settings. `bypassPermissions`
- *  needs an explicit user choice and is never started from settings. */
+ *  is never started from settings — only the env override below opts in. */
 const START_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']
 const ALL_MODES: readonly PermissionMode[] = [...START_MODES, 'bypassPermissions']
-/** Modes the developer override may start in: never `bypassPermissions`,
- *  and not `auto` either (it depends on the model's classifier support). */
-const OVERRIDE_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'dontAsk']
+/** Modes the developer override may start in. `bypassPermissions` is the
+ *  one explicit bypass entry: the repo owner's own environment, never a
+ *  repo-committed settings file (settings-level bypass still downgrades
+ *  above, so a cloned repo cannot poison a session into it). Not `auto`
+ *  either (it depends on the model's classifier support). */
+const OVERRIDE_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions']
 
 const isPermissionMode = (value: unknown): value is PermissionMode =>
   typeof value === 'string' && (ALL_MODES as readonly string[]).includes(value)
@@ -114,14 +117,18 @@ export interface StartPermissionMode {
   readonly source: 'env' | 'settings' | 'default'
   /** `DSH_TUI_CLAUDE_PERMISSION_MODE` was set to a value the override refuses. */
   readonly ignoredOverride?: string
+  /** Derived (`mode === 'bypassPermissions'`): the session may re-enter
+   *  bypass only because it explicitly started in it (fail-closed). */
+  readonly bypassAllowed: boolean
 }
 
 /**
  * The explicit start permission mode (design §4.3: never omitted — the CLI
  * default may be `auto`). `DSH_TUI_CLAUDE_PERMISSION_MODE` is a developer
- * override for live tests (documented in the progress log, not in README);
- * otherwise the user's settings cascade after the CLI's own trust filter for
- * escalating modes from repo-committed files; otherwise `default`.
+ * override for live tests; `bypassPermissions` is the one mode only it can
+ * start (README documents it) — the user's explicit choice, never a settings
+ * file. Otherwise the user's settings cascade after the CLI's own trust
+ * filter for escalating modes from repo-committed files; otherwise `default`.
  */
 export async function resolveStartPermissionMode(
   sdk: Pick<ClaudeSdkModule, 'resolveSettings' | 'filterEscalatingDefaultMode'>,
@@ -130,7 +137,7 @@ export async function resolveStartPermissionMode(
 ): Promise<StartPermissionMode> {
   const override = env.DSH_TUI_CLAUDE_PERMISSION_MODE
   if (override !== undefined && override !== '' && (OVERRIDE_MODES as readonly string[]).includes(override)) {
-    return { mode: override as PermissionMode, source: 'env' }
+    return { mode: override as PermissionMode, source: 'env', bypassAllowed: override === 'bypassPermissions' }
   }
   const ignoredOverride = override === undefined || override === '' ? undefined : override
   let configured: unknown
@@ -143,9 +150,9 @@ export async function resolveStartPermissionMode(
     configured = undefined
   }
   const ignored = ignoredOverride === undefined ? {} : { ignoredOverride }
-  if (!isPermissionMode(configured)) return { mode: 'default', source: 'default', ...ignored }
-  if (!(START_MODES as readonly string[]).includes(configured)) return { mode: 'default', downgradedFrom: configured, source: 'settings', ...ignored }
-  return { mode: configured, source: 'settings', ...ignored }
+  if (!isPermissionMode(configured)) return { mode: 'default', source: 'default', bypassAllowed: false, ...ignored }
+  if (!(START_MODES as readonly string[]).includes(configured)) return { mode: 'default', downgradedFrom: configured, source: 'settings', bypassAllowed: false, ...ignored }
+  return { mode: configured, source: 'settings', bypassAllowed: configured === 'bypassPermissions', ...ignored }
 }
 
 export type ProfileInput = {
@@ -228,6 +235,9 @@ export function buildQueryOptions(input: ProfileInput): Options {
     settingSources: SETTING_SOURCES,
     tools: { type: 'preset', preset: 'claude_code' },
     permissionMode: input.permissionMode,
+    // The SDK refuses `bypassPermissions` without this flag (sdk.d.ts);
+    // no other mode ever carries it.
+    ...(input.permissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
     canUseTool: input.canUseTool,
     ...(input.onElicitation === undefined ? {} : { onElicitation: input.onElicitation }),
     // The SDK refuses declared kinds without the callback.

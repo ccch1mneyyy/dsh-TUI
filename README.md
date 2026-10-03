@@ -226,7 +226,10 @@ dsh-tui --backend claude     # or `backend: claude` in the dsh-tui config row
   commands in completion (sent to Claude as typed). Hovering the cost field
   shows subscription usage (5h / 7d); approaching or hitting a usage limit,
   API retries, model fallbacks, automatic permission denials, sign-in errors
-  and recalled memories show as notices.
+  and recalled memories show as notices. `bypassPermissions` skips every
+  tool approval — dangerous; it needs an explicit start with
+  `DSH_TUI_CLAUDE_PERMISSION_MODE=bypassPermissions`, and a running session
+  cannot enter it from any other mode.
 - **Also works**: streaming replies, thinking token counts, tool cards (Read,
   Write, Edit, Bash, Glob, Grep, web and MCP tools), Ctrl+C cancel, `/new`
   (a `/new` that a message overtakes while the new session is still starting
