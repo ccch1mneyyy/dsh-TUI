@@ -259,6 +259,51 @@ const OUTPUT_WINDOW_CAP = 160
 
 /** A live tail line as the transcript page renders it below the history. */
 type LiveLeaf = { kind: 'live'; line: SubagentOutputLine }
+/** Prepend one older page's folded leaves (RV review): a same-key collision
+ *  on COMPATIBLE text/thinking leaves MERGES — the store splits one API
+ *  message into per-block entries sharing the anchor, and a load-older
+ *  window boundary between two such entries must not swallow the older
+ *  part whole. The merge target is the first current leaf of the SAME
+ *  kind under that key (one page may legitimately hold a text and a
+ *  thinking leaf of one message side by side; an older part continues its
+ *  own kind, and its text precedes — the order the blocks were written
+ *  in). Everything else keeps the whole-leaf dedup: a tool's key is its
+ *  call id (one call, one key) and the marker kinds never merge. Pure —
+ *  the current leaves are never mutated, only replaced. */
+function prependOlderLeaves(fresh: readonly TranscriptLeaf[], current: readonly TranscriptLeaf[]): TranscriptLeaf[] {
+  const firstIndexOf = new Map<string, number>()
+  const compatibleIndexOf = new Map<string, number>()
+  for (let i = 0; i < current.length; i += 1) {
+    const leaf = current[i]!
+    if (!firstIndexOf.has(leaf.key)) firstIndexOf.set(leaf.key, i)
+    if (leaf.kind === 'text' || leaf.kind === 'thinking') {
+      const byKind = `${leaf.key}\u0000${leaf.kind}`
+      if (!compatibleIndexOf.has(byKind)) compatibleIndexOf.set(byKind, i)
+    }
+  }
+  const merged = [...current]
+  const kept: TranscriptLeaf[] = []
+  const seen = new Set(firstIndexOf.keys())
+  for (const leaf of fresh) {
+    if (leaf.kind === 'text' || leaf.kind === 'thinking') {
+      const index = compatibleIndexOf.get(`${leaf.key}\u0000${leaf.kind}`)
+      if (index !== undefined) {
+        const target = merged[index]!
+        // The index is kind-keyed, so this narrows to the compatible
+        // pair; the check keeps the type (and the truth) honest anyway.
+        if (target.kind === 'text' || target.kind === 'thinking') merged[index] = { ...target, text: `${leaf.text}\n${target.text}` }
+        continue
+      }
+    }
+    if (firstIndexOf.has(leaf.key)) continue
+    // An incompatible kind under a taken key keeps the whole-leaf dedup;
+    // a fresh unseen key joins the older rows ahead of the current ones.
+    if (seen.has(leaf.key)) continue
+    seen.add(leaf.key)
+    kept.push(leaf)
+  }
+  return [...kept, ...merged]
+}
 
 const capLike = (line: string): string => (line.length > 400 ? `${line.slice(0, 400)}…` : line)
 
@@ -425,8 +470,7 @@ export function SubagentDetailScene({
         if (prev.status !== 'ready' || older === null) return older === null && prev.status === 'ready' ? { ...prev, loadingOlder: false } : prev
         const fresh: TranscriptLeaf[] = []
         foldTranscriptLeaves(older.events, fresh)
-        const existing = new Set(prev.leaves.map(leaf => leaf.key))
-        return { ...prev, leaves: [...fresh.filter(leaf => !existing.has(leaf.key)), ...prev.leaves], hasOlder: older.hasOlder, skippedFromStart: older.skippedFromStart, loadingOlder: false }
+        return { ...prev, leaves: prependOlderLeaves(fresh, prev.leaves), hasOlder: older.hasOlder, skippedFromStart: older.skippedFromStart, loadingOlder: false }
       })
     }, () => {
       setTranscript(prev => prev.status === 'ready' ? { ...prev, loadingOlder: false } : prev)

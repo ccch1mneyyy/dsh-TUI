@@ -37,7 +37,7 @@ const [
   { PassThrough, Writable },
   React,
   { Terminal },
-  { render },
+  { render, AlternateScreen },
   { Chat },
   { QuestionStore },
   { openClaudeSession },
@@ -45,7 +45,7 @@ const [
   { memoryClaudePrefs },
   { createChannel },
   { setLang, t },
-  { settled, sleep },
+  { settled, sleep, findText },
   fakes,
 ] = await Promise.all([
   import('node:stream'),
@@ -533,6 +533,63 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     } finally {
       app3.unmount()
       h3.terminal.dispose()
+    }
+
+    // Page-boundary split of ONE API message (RV review): the store splits a
+    // message into per-block entries sharing the anchor, and a load-older
+    // window boundary between two such entries must MERGE the compatible
+    // text/thinking parts — never swallow the older part whole.
+    const h4 = mk()
+    const splitState = {
+      agentId: 'agent-split', description: 'page boundary probe', status: 'completed' as const, startedAt: NOW - 2000, completedAt: NOW,
+      output: [], outputEvents: [], toolCalls: [] as never[],
+    }
+    const splitMessage = (anchor: string, text: string) => ({ type: 'assistant.message', seq: 1, anchor, attemptId: anchor, time: NOW, blocks: [{ type: 'text', text }], canonical: true, parentCallId: 'agent-split' })
+    const olderWindows = new Map([
+      ['2', { events: [splitMessage('msg_split', 'seg middle')], parentAgentId: null, uuids: ['u-m'], hasOlder: true, skippedFromStart: 1 }],
+      ['1', { events: [splitMessage('msg_split', 'seg head')], parentAgentId: null, uuids: ['u-h'], hasOlder: false, skippedFromStart: 0 }],
+    ])
+    const splitLoad = async (_agentId: string, window?: { count: number; skipFromStart: number }) => {
+      if (window === undefined) return { events: [splitMessage('msg_split', 'seg tail')], parentAgentId: null, uuids: ['u-t'], hasOlder: true, skippedFromStart: 2 } as never
+      return (olderWindows.get(String(window.skipFromStart)) ?? { events: [], parentAgentId: null, uuids: [], hasOlder: false, skippedFromStart: 0 }) as never
+    }
+    const app4 = await render(React.createElement(AlternateScreen, null, React.createElement(SubagentDetailScene, { subagent: splitState as never, onBack: () => undefined, loadTranscript: splitLoad })), {
+      stdout: h4.stdout, stdin: h4.stdin as never, stderr: h4.stdout, exitOnCtrlC: false, patchConsole: false,
+    })
+    try {
+      // 固定窗:pacing the key handler attaches after the first frame.
+      await sleep(200)
+      h4.stdin.write('\x1b[C')
+      // 固定窗:pacing 分帧送达第二枚方向键。
+      await sleep(200)
+      h4.stdin.write('\x1b[C')
+      // 固定窗:探针 分页页窗 翻页与异步转录读取落帧。
+      await sleep(300)
+      await settled(() => h4.screen().includes('seg tail') && h4.screen().includes('Load 2 older'))
+      const clickRow = async (label: string): Promise<void> => {
+        const hit = findText(h4.terminal, label) as { col: number; row: number } | null
+        if (hit === null) return
+        const seq = (final: string): string => `\x1b[<0;${hit.col + 1};${hit.row + 1}${final}`
+        h4.stdin.write(seq('M'))
+        // 固定窗:pacing 鼠标 press→release 步间。
+        await sleep(30)
+        h4.stdin.write(seq('m'))
+      }
+      await clickRow('Load 2 older')
+      await settled(() => h4.screen().includes('Load 1 older'))
+      const twoParts = h4.screen()
+      check('transcript paging: a same-anchor part from the older page survives (merged, not swallowed)', twoParts.includes('seg middle') && twoParts.includes('seg tail'), twoParts)
+      check('transcript paging: … the older part precedes the newer one, exactly once each', twoParts.indexOf('seg middle') < twoParts.indexOf('seg tail') && twoParts.split('seg tail').length - 1 === 1 && twoParts.split('seg middle').length - 1 === 1, twoParts)
+      // 固定窗:墙钟 第二击必须落在 500ms 多击窗之外——同格快二连会被
+      // App 的双击分类器收走（词选择），load-older 的 onClick 不发。
+      await sleep(600)
+      await clickRow('Load 1 older')
+      await settled(() => h4.screen().includes('seg head'))
+      const threeParts = h4.screen()
+      check('transcript paging: three same-anchor parts across three pages all survive in order', threeParts.includes('seg head') && threeParts.indexOf('seg head') < threeParts.indexOf('seg middle') && threeParts.indexOf('seg middle') < threeParts.indexOf('seg tail'), threeParts)
+    } finally {
+      app4.unmount()
+      h4.terminal.dispose()
     }
   } finally {
     channel.releaseContributions()
