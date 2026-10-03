@@ -23,6 +23,7 @@ import { bindChannelCommands } from './channel/commands.js'
 import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
 import { removeClipboardImageDir } from '../utils/clipboard.js'
+import { appendCrashLog, serializeCrashDetail } from '../utils/crashDetail.js'
 import { logForDebugging } from '../utils/debug.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
@@ -1514,8 +1515,17 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       // background-check guards that still read the outer one.
       exited = true
       if (error !== undefined) {
-        const message = error instanceof Error ? error.message : String(error)
-        ctx.logger.error(`dsh-tui: exit after error: ${message}`)
+        // Full crash serialization (stack + .cause chain + React extras): the
+        // production #185 crashes reached here with nothing but a minified
+        // message, so four real crashes left zero post-mortem evidence.
+        // serializeCrashDetail keeps every part the process still carries;
+        // appendCrashLog persists it to ~/.dsh-tui/crash.log (best effort,
+        // never throws) and restart.log/stderr each get their one-line event.
+        const detail = serializeCrashDetail(error)
+        ctx.logger.error(`dsh-tui: exit after error: ${detail.summary}`)
+        appendCrashLog(detail)
+        logRestartEvent('crash', { summary: detail.summary, ...(detail.digest === undefined ? {} : { digest: detail.digest }) })
+        logForDebugging('dsh-tui: crash detail', { crash: detail.text })
         // A crash must leave the resume marker a clean exit would leave: the
         // launcher's next start (and its safe-mode retry) then reopens the
         // session the user was actually in instead of a blank one. Only the
@@ -1540,7 +1550,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           instance,
           bootedFullscreen,
           undefined,
-          `dsh-tui crashed: ${message}`,
+          `dsh-tui crashed: ${detail.message}`,
           () => disposeRootAndExit(ctx, 1),
         )
         return

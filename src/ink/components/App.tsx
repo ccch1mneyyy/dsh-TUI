@@ -7,6 +7,8 @@ import { isMouseClicksDisabled } from "../../utils/fullscreen.js";
 import { isInputSuppressed } from "../input-suppression.js";
 import { logMouseDebug } from "../../utils/debug.js";
 import { logError } from "../../utils/log.js";
+import { appendCrashLog, serializeCrashDetail } from "../../utils/crashDetail.js";
+import { isNestedUpdateOverflow, noteBoundaryRecoveryRemount, shouldRecoverBoundaryOverflow } from "../update-overflow-guard.js";
 import { EventEmitter } from "../events/emitter.js";
 import { InputEvent } from "../events/input-event.js";
 import instances from "../instances.js";
@@ -492,7 +494,49 @@ export default class App extends PureComponent<Props, State> {
 			while (this.rawModeEnabledCount > 0) this.handleSetRawMode(false);
 		}
 	}
-	override componentDidCatch(error: Error) {
+	override componentDidCatch(error: Error, errorInfo: { componentStack?: string }) {
+		// A #185 reaching this ROOT boundary escaped every enqueue-site guard
+		// and surfaced inside React's own commit (e.g. updates chained through
+		// an effect) — the process-level backstop can never see it, because the
+		// boundary consumes the error. Historically that meant a full crash exit
+		// (componentDidCatch → handleExit), and it cost real users their sessions
+		// (four crash reports, all #185, zero stacks). Recover instead:
+		// react-reconciler resets the nested-update counter BEFORE throwing, so
+		// clearing the boundary state remounts the tree from a clean counter —
+		// the session lives, and the full detail block lands in crash.log for the
+		// root-cause hunt. Recoveries are capped per window; a sustained
+		// oscillation falls back to the original crash exit rather than
+		// remount-looping forever.
+		if (isNestedUpdateOverflow(error)) {
+			if (
+				typeof errorInfo?.componentStack === "string" &&
+				(error as Error & { componentStack?: string }).componentStack === undefined
+			) {
+				try {
+					(error as Error & { componentStack?: string }).componentStack = errorInfo.componentStack;
+				} catch {
+					// Frozen error object — the boundary stack is best-effort.
+				}
+			}
+			if (shouldRecoverBoundaryOverflow()) {
+				logError(
+					new Error(
+						"Recovered from React nested-update overflow (#185) at the root boundary — the UI remounts (widget state resets; session data is intact). Full detail in crash.log.",
+					),
+				);
+				try {
+					appendCrashLog(serializeCrashDetail(error));
+				} catch {
+					// Diagnostics must never break the recovery itself.
+				}
+				// The remount this triggers is a RECOVERY, not a boot: the screen
+				// layer reads the mark to keep boot-only surfaces (launchpad,
+				// onboarding) closed, so the user lands back in the conversation.
+				noteBoundaryRecoveryRemount();
+				this.setState({ error: undefined });
+				return;
+			}
+		}
 		this.handleExit(error);
 	}
 	scheduleXtversionProbe = (): void => {

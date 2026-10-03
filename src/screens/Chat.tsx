@@ -47,10 +47,12 @@ import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import { runOAuthLogin, runProviderWizard } from '../dsh-adapter/providerWizard.js'
+import { runChannelWizard, sameOptionConnection } from '../dsh-adapter/channelWizard.js'
 import { PermissionStore, type PermissionPanelSource } from '../channel/permissions.js'
 import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPanel.js'
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
 import { ExtensionDialog } from '../components/ExtensionDialog.js'
+import { consumeBoundaryRecoveryRemount } from '../ink/update-overflow-guard.js'
 import type { DOMElement } from '../ink/dom.js'
 import { useSearchHighlight } from '../ink/hooks/use-search-highlight.js'
 import { useTerminalTitle } from '../ink/hooks/use-terminal-title.js'
@@ -705,6 +707,11 @@ export function Chat({
   const [supervisorOpen, setSupervisorOpen] = React.useState(
     openHomeOnBoot === true && launchpadOnBoot !== true,
   )
+  // #185 收尾：根边界恢复触发的重挂不是「启动」——启动页与首启引导都是
+  // 启动入口，恢复的落点是对话页本身（一次性标记由 App 错误边界的恢复
+  // 路径写入，见 update-overflow-guard）。首渲染即消费；即便某次并发渲染
+  // 被丢弃也只是回到旧表现（多见一次启动页），不会更糟。
+  const recoveryRemountOnBoot = consumeBoundaryRecoveryRemount()
   /**
    * The launchpad: the landing page every ordinary launch starts on.
    *
@@ -712,7 +719,7 @@ export function Chat({
    * that decides what comes next — a submitted line hands over to the chat
    * screen, an action hands over to whatever surface that action opens.
    */
-  const [launchpadOpen, setLaunchpadOpen] = React.useState(launchpadOnBoot === true)
+  const [launchpadOpen, setLaunchpadOpen] = React.useState(launchpadOnBoot === true && !recoveryRemountOnBoot)
   /**
    * The launchpad's draft. It lives HERE, not inside the screen, because the
    * screen unmounts the moment the user submits: a draft owned by an
@@ -980,13 +987,13 @@ export function Chat({
    * The first-run guide. Renders above the launchpad (see the prop docs): a
    * launch that needs setup has not answered the launchpad's question yet.
    */
-  const [onboardingOpen, setOnboardingOpen] = React.useState(onboardingOnBoot === true)
+  const [onboardingOpen, setOnboardingOpen] = React.useState(onboardingOnBoot === true && !recoveryRemountOnBoot)
   /**
    * 落地页那条"第一次用？跑一遍引导"的横幅认的是**还欠一次引导**，而不是启动快照：
    * 完成（写进 onboarding.json）之后立刻收掉；跳过刻意保留——没记账，下次启动还会问，
    * 横幅说的正是这件事。
    */
-  const [onboardingPending, setOnboardingPending] = React.useState(onboardingOnBoot === true)
+  const [onboardingPending, setOnboardingPending] = React.useState(onboardingOnBoot === true && !recoveryRemountOnBoot)
   /** `/tree` opens the session family tree (pi's Session Tree): every rewind
    *  fork stitched back onto the message it diverged from, hover previews,
    *  and per-node rewind/fork/adopt actions. Like the supervisor, a screen. */
