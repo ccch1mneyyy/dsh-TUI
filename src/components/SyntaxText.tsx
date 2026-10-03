@@ -25,7 +25,10 @@ export function SyntaxText({ text, language, sourceText = text, lineIndex = 0, c
     void getCliHighlightPromise().then(value => { if (mounted) setHighlighter(value) })
     return () => { mounted = false }
   }, [])
-  const theme = React.useMemo(() => getTheme(themeName), [themeName])
+  // 当次渲染解析色板，**不按名字 memo**：`auto` 明暗翻转、运行时同名重注册
+  // 都不改名字，只改色板身份；按名字缓存会一直留着旧色板（getTheme 本身只是
+  // 一次 switch / resolver 查表，与其它取色组件一致）。
+  const theme = getTheme(themeName)
   const themeSig = React.useMemo(() => syntaxThemeSignature(theme), [theme])
   const syntax: SyntaxLines | undefined = React.useMemo(
     () => highlightLines(sourceText, language, highlighter, theme, themeSig),

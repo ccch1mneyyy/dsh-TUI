@@ -1,5 +1,7 @@
 import chalk from 'chalk'
 import { supportsHyperlinks } from '../ink/supports-hyperlinks.js'
+import { colorize } from '../ink/colorize.js'
+import { getActiveTheme } from '../theme.js'
 
 // OSC 8 hyperlink escape sequences
 // Format: \e]8;;URL\e\\TEXT\e]8;;\e\\
@@ -12,11 +14,27 @@ export const OSC8_END = '\x07'
 type HyperlinkOptions = {
   supportsHyperlinks?: boolean
   /**
-   * Override the default blue styling of the display text — callers that
+   * Override the default link styling of the display text. Callers that
    * already painted the content (code spans keep their permission color)
    * pass the identity here so the OSC 8 wrap does not recolor it.
    */
   style?: (text: string) => string
+}
+
+/**
+ * Default link style: the active palette's `accent`. It used to be a fixed
+ * ANSI blue, i.e. the one color in the transcript that no theme could reach.
+ * An unresolved accent (empty or malformed) still falls back to blue so a
+ * link never renders as plain text.
+ *
+ * Wrapping is a non-issue for the color: `wrap-ansi` re-emits the active SGR
+ * on every continuation line and re-pairs the OSC 8 runs, so a truecolor
+ * label keeps its accent across the break.
+ */
+function defaultLinkStyle(text: string): string {
+  const accent = getActiveTheme().accent
+  const painted = accent === '' ? text : colorize(text, accent, 'foreground')
+  return painted === text ? chalk.blue(text) : painted
 }
 
 /** Schemes a rendered hyperlink may point at. Anything else degrades to
@@ -60,7 +78,7 @@ const DISPLAY_TEXT_CONTROL_CHARS =
  *                  If provided and hyperlinks are supported, this text is shown as a clickable link.
  *                  If hyperlinks are not supported, content is ignored and only the URL is shown.
  * @param options - Optional overrides for testing (supportsHyperlinks, style)
- * @returns The OSC 8-wrapped blue link text, or the plain URL when the terminal lacks hyperlink support.
+ * @returns The OSC 8-wrapped link text (accent-colored by default), or the plain URL when the terminal lacks hyperlink support.
  */
 export function createHyperlink(
   url: string,
@@ -81,10 +99,10 @@ export function createHyperlink(
     return safeUrl === null ? (safeContent ?? '') : safeUrl
   }
 
-  // Apply basic ANSI blue color - wrap-ansi preserves this across line breaks
-  // RGB colors (like theme colors) are NOT preserved by wrap-ansi with OSC 8
+  // The active theme's accent (see defaultLinkStyle), applied here so the
+  // wrap pass receives an already-styled, OSC 8-wrapped label.
   const displayText = safeContent ?? safeUrl
-  const style = options?.style ?? ((text: string) => chalk.blue(text))
+  const style = options?.style ?? defaultLinkStyle
   const coloredText = style(displayText)
   return `${OSC8_START}${safeUrl}${OSC8_END}${coloredText}${OSC8_START}${OSC8_END}`
 }

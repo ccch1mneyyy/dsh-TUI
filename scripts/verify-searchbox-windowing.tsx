@@ -14,6 +14,9 @@
  *   2. 单 chunk 整段到达（等价粘贴）后，尾部 'END' 可见、头部 'START' 滚出
  *   3. 超长查询仍严格单行：不产生折行续行（守住窗口化语义，防修复把横向
  *      滚动改成折行/撑破布局）
+ *   4. 六套内置主题 + 两个带 `cursor` 的合成主题 × 有框/无框 × 行中/行尾/宽字符/
+ *      左右占位光标：主题填充与字形对比度、空填充的反显回退、闪烁不改文本、
+ *      失焦无光标。
  *
  * 运行：node --import tsx/esm scripts/verify-searchbox-windowing.tsx
  */
@@ -27,7 +30,7 @@ process.env.DSH_TUI_LANG = 'zh'
 
 // 静态 import 会提升到上面的 env 钉死之前，但 term-test 只读 process.env.CI，
 // 与语言/主题无关，顺序安全。
-import { settle } from './lib/term-test.mjs'
+import { settle, settled } from './lib/term-test.mjs'
 
 const [
   { PassThrough, Writable },
@@ -36,6 +39,8 @@ const [
   { render, ThemeProvider, AlternateScreen },
   { SessionTree },
   sessionTree,
+  { SearchBox },
+  { getTheme, registerRuntimeThemeResolver },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -43,6 +48,8 @@ const [
   import('../src/ui.js'),
   import('../src/screens/SessionTree.js'),
   import('../src/dsh-adapter/sessionTree.js'),
+  import('../src/components/SearchBox.js'),
+  import('../src/theme.js'),
 ])
 
 /** 帧间 pacing：让一次 stdin 写入完整走完「解析→渲染→xterm 呈现」再发下一键。 */
@@ -182,8 +189,102 @@ async function mountTree(cols = 120, rows = 30) {
   await sleep(20) // 固定窗:pacing 卸载/dispose 收尾
 }
 
+const caretCases = [
+  { name: 'query-middle', query: 'abc', cursorOffset: 1, placeholderAlign: 'right', char: 'b', column: 3 },
+  { name: 'query-end', query: 'abc', cursorOffset: 3, placeholderAlign: 'right', char: ' ', column: 5 },
+  { name: 'query-wide', query: 'a好c', cursorOffset: 1, placeholderAlign: 'right', char: '好', column: 3 },
+  { name: 'placeholder-left', query: '', cursorOffset: 0, placeholderAlign: 'left', char: 'H', column: 2 },
+  { name: 'placeholder-right', query: '', cursorOffset: 0, placeholderAlign: 'right', char: ' ', column: 2 },
+] as const
+
+// 三套内置主题一律留空 `cursor`（反色 caret，verify-themes 逐套钉住），带填充的
+// caret 路径因此由两个合成主题覆盖：真彩填充与 16 色填充各一，各取一套内置色板
+// 再加一个 cursor 值。内置只留一深一浅两套：SearchBox 不按主题名分支，三套在这里
+// 走的是同一条分支、同一个期望，多跑一套只是重复同一批检查。
+const CARET_PROBES: Record<string, ReturnType<typeof getTheme>> = {
+  'caret-fill-probe': { ...getTheme('dark'), cursor: '#E879A0' },
+  'caret-ansi-probe': { ...getTheme('dark-ansi'), cursor: 'ansi:magentaBright' },
+}
+const disposeCaretProbes = registerRuntimeThemeResolver(name => CARET_PROBES[name])
+const caretThemes = ['dark', 'light', ...Object.keys(CARET_PROBES)]
+
+for (const themeName of caretThemes) {
+  const palette = getTheme(themeName)
+  for (const borderless of [true, false]) {
+    for (const scenario of caretCases) {
+      const harness = makeHarness(50, 8)
+      const tree = (caretBlink: boolean, isFocused = true) => (
+        <ThemeProvider theme={themeName}>
+          <SearchBox
+            query={scenario.query}
+            placeholder="Hint"
+            prefix="❯"
+            width={40}
+            borderless={borderless}
+            cursorOffset={scenario.cursorOffset}
+            placeholderAlign={scenario.placeholderAlign}
+            caretBlink={caretBlink}
+            isFocused={isFocused}
+            isTerminalFocused={false}
+          />
+        </ThemeProvider>
+      )
+      const instance = await render(tree(true), {
+        stdout: harness.stdout, stderr: harness.stderr, stdin: harness.stdin,
+        exitOnCtrlC: false, patchConsole: false,
+      })
+      const cellAtCaret = () => {
+        const row = harness.lines().findIndex(line => line.includes('❯'))
+        return harness.term.buffer.active.getLine(harness.term.buffer.active.baseY + row)
+          ?.getCell(scenario.column + (borderless ? 0 : 2))
+      }
+      const label = `${themeName}/${borderless ? 'borderless' : 'bordered'}/${scenario.name}`
+      const expectedChar = scenario.char.trim()
+      const isCaret = () => {
+        const cell = cellAtCaret()
+        if (cell === undefined || cell.getChars().trim() !== expectedChar) return false
+        if (palette.cursor === '') return Boolean(cell.isInverse())
+        if (cell.isInverse()) return false
+        if (palette.cursor.startsWith('ansi:')) {
+          return cell.isBgPalette() && cell.getBgColor() === 13
+        }
+        // 真彩填充：字形取与填充对比度更高的墨色——深色内置的 `inverseText` 胜出。
+        return cell.isBgRGB() && cell.getBgColor() === 0xE879A0
+          && cell.isFgRGB() && cell.getFgColor() === 0x22262E
+      }
+      check(`${label} cursor fill/glyph`, await settled(isCaret))
+      const text = harness.lines().join('\n')
+      instance.rerender(tree(false))
+      const isPlain = () => {
+        const cell = cellAtCaret()
+        return cell !== undefined && cell.getChars().trim() === expectedChar
+          && !cell.isInverse() && cell.getBgColor() === -1
+      }
+      check(`${label} blink preserves text`, await settled(isPlain) && harness.lines().join('\n') === text)
+      instance.rerender(tree(true))
+      check(`${label} blink restores caret`, await settled(isCaret))
+      instance.rerender(tree(true, false))
+      check(`${label} unfocused has no caret`, await settled(() => {
+        const row = harness.lines().findIndex(line => line.includes('❯'))
+        const line = harness.term.buffer.active.getLine(harness.term.buffer.active.baseY + row)
+        if (line === undefined) return false
+        for (let column = 0; column < harness.term.cols; column++) {
+          const cell = line.getCell(column)
+          if (cell?.isInverse() || cell?.getBgColor() !== -1) return false
+        }
+        return true
+      }))
+      harness.stdout.isTTY = false
+      instance.unmount()
+      harness.term.dispose()
+    }
+  }
+}
+
 if (failed > 0) {
   console.error(`\n${failed} check(s) failed`)
+  disposeCaretProbes()
   process.exit(1)
 }
+disposeCaretProbes()
 console.log('\nall searchbox windowing checks passed')

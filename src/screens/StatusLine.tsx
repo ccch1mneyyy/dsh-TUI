@@ -19,15 +19,16 @@ const NO_SUBAGENT_COST: Channel['subagentCost'] = []
 import type { SelectionSnapshot } from '../dsh-adapter/ide-channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
+import { getTheme, isLightThemeActive } from '../theme.js'
 import { ContextBarView } from '../components/ContextBarView.js'
 import { TooltipTarget } from '../components/Tooltip.js'
 import { formatProject } from '../sessions/format.js'
 import { homeDir } from '../utils/paths.js'
 import {
-  FREE_SEGMENT_FILL,
   USED_SEGMENTS,
   channelContextOccupancy,
   contextBarBreakdown,
+  contextBarSegmentColors,
   renderMiniContextBar,
   renderTpsGauge,
   renderTpsSparkline,
@@ -489,8 +490,11 @@ const selectionBadge = formatSelectionBadge(channel.selection)
   // arithmetic or its right edge falls 2 columns short of the status row's
   // (the v0.8.0 paddingX 2→1 tightening left the old `columns - 4` stale).
   const barWidth = columns - 2
+  // Ask the palette instead of comparing the theme NAME: a light theme need not
+  // be called `light` (a user or plugin palette can be light too). Only the
+  // truecolor+ANSI dark default needs the explicit free-segment colors.
   const barColors: { freeFill: Color; freeText: Color } | undefined =
-    themeName === 'light'
+    isLightThemeActive(themeName)
       ? undefined
       : { freeFill: '#2E3440', freeText: '#8D95A6' }
   const barVisible =
@@ -502,7 +506,15 @@ const selectionBadge = formatSelectionBadge(channel.selection)
 
   // The supplemental-row readout for the hovered field: replaces the idle
   // hint (never the activity line) while the pointer dwells on a field.
-  const detail = buildHoverDetail(hover, channel, occupancy, usage, columns, barColors)
+  const detail = buildHoverDetail(
+    hover,
+    channel,
+    occupancy,
+    usage,
+    columns,
+    barColors,
+    contextBarSegmentColors(getTheme(themeName)),
+  )
   const trailer: React.ReactNode = detail !== null
     ? detail
     : hint !== ''
@@ -642,6 +654,7 @@ function buildHoverDetail(
   usage: UsageSnapshot | undefined,
   columns: number,
   barColors: { freeFill: Color; freeText: Color } | undefined,
+  usedColors: readonly Color[],
 ): React.ReactNode | null {
   if (hover === null) return null
   const contextUsed = occupancy?.usedTokens
@@ -659,7 +672,7 @@ function buildHoverDetail(
       contextUsed,
       window,
       columns,
-      barColors?.freeFill ?? FREE_SEGMENT_FILL,
+      { used: usedColors, freeFill: barColors?.freeFill },
     )
     if (entries.length === 0) return null
     return (
