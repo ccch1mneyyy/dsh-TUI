@@ -10,7 +10,7 @@ import { POINTER, TICK, MULTIPLICATION_X } from '../terminal-utils/figures.js'
 import type { Theme } from '../theme.js'
 import { getLang, t } from '../i18n.js'
 import { SettingsForm } from '../dsh-adapter/settingsEditor.js'
-import type { TuiSettingsField, TuiSettingsFieldKind, TuiSettingsGroup, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
+import type { TuiSettingsField, TuiSettingsFieldKind, TuiSettingsFieldOption, TuiSettingsGroup, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
 import type { LocalizedDescriptions } from '../commands.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 
@@ -26,6 +26,33 @@ interface EditingState {
 interface ActiveGroup {
   ns: string
   id: string
+}
+
+/** The multi-select subpage the screen is showing, if any. */
+interface PickingState {
+  ns: string
+  field: TuiSettingsField
+}
+
+/** One checkbox row of a multi-select subpage. */
+interface PickRow {
+  value: string
+  label: string
+  checked: boolean
+}
+
+/**
+ * A field's choices: the static list plus the live provider, re-read on every
+ * render (the panel picker follows the registry, so a panel a plugin
+ * registers mid-session is listed without re-registering the section).
+ */
+function optionsOf(field: TuiSettingsField): readonly TuiSettingsFieldOption[] {
+  return [...field.options ?? [], ...field.optionsProvider?.() ?? []]
+}
+
+/** A multi-select draft: the comma-joined values, trimmed, empties dropped. */
+function splitValues(text: string): string[] {
+  return text.split(',').map(token => token.trim()).filter(token => token !== '')
 }
 
 /** One focusable row on either the root page or a group subpage. */
@@ -334,6 +361,9 @@ export function Settings({
   const [sections, setSections] = React.useState(() => channel.settingsSections())
   const [mode, setMode] = React.useState<SettingsMode>('list')
   const [editing, setEditing] = React.useState<EditingState | null>(null)
+  /** Open multi-select subpage (its own focus list; Esc unwinds to the list). */
+  const [picking, setPicking] = React.useState<PickingState | null>(null)
+  const [pickIndex, setPickIndex] = React.useState(0)
   const [activeGroup, setActiveGroup] = React.useState<ActiveGroup | null>(null)
   const [focusIndex, setFocusIndex] = React.useState(0)
   const [notice, setNotice] = React.useState<{ text: string; tone: 'error' | 'success' } | undefined>(undefined)
@@ -404,6 +434,15 @@ export function Settings({
     }
   }, [activeGroup, activeGroupSpec])
 
+  // A picker whose section (or field) went away — a plugin unloading while the
+  // screen is open — closes instead of leaving a page nobody can name.
+  React.useEffect(() => {
+    if (picking !== null && !sections.some(section => section.ns === picking.ns && section.fields.includes(picking.field))) {
+      setPicking(null)
+      setWindowStart(0)
+    }
+  }, [picking, sections])
+
   /** Focusable rows in display order for the current page. */
   const focusable: FocusEntry[] = activeSection !== undefined && activeGroupSpec !== undefined
     ? activeSection.fields
@@ -414,8 +453,34 @@ export function Settings({
       if (row.kind === 'page') return [{ kind: 'group', ns: section.ns, group: row.group }]
       return []
     }))
-  const effFocus = Math.min(focusIndex, Math.max(0, focusable.length - 1))
-  const focused = focusable.length === 0 ? undefined : focusable[effFocus]
+  // The multi-select subpage is its own focus list: options in provider order,
+  // then the draft values no option claims (a well-formed id kept for a plugin
+  // that has not registered yet must stay visible — and uncheckable).
+  const pickSection = picking === null ? undefined : sections.find(section => section.ns === picking.ns)
+  const pickText = picking === null ? '' : forms.get(picking.ns)?.field(picking.field).text ?? ''
+  const pickRows: readonly PickRow[] = picking === null
+    ? []
+    : (() => {
+        const enabled = new Set(splitValues(pickText))
+        const options = optionsOf(picking.field)
+        const claimed = new Set(options.map(option => option.value))
+        return [
+          ...options.map(option => ({
+            value: option.value,
+            label: pick(option.label, option.descriptions),
+            checked: enabled.has(option.value),
+          })),
+          ...splitValues(pickText)
+            .filter(value => !claimed.has(value))
+            .map(value => ({ value, label: value, checked: true })),
+        ]
+      })()
+  const pickMode = picking !== null && pickSection !== undefined
+  const pageCount = pickMode ? pickRows.length : focusable.length
+  const effFocus = pickMode
+    ? Math.min(pickIndex, Math.max(0, pickRows.length - 1))
+    : Math.min(focusIndex, Math.max(0, focusable.length - 1))
+  const focused = pickMode || focusable.length === 0 ? undefined : focusable[effFocus]
 
   /**
    * Save a section's staged edits right now (auto-save: every confirmed edit
@@ -468,7 +533,7 @@ export function Settings({
     if (field.kind === 'boolean') {
       form.edit(field, current === 'true' ? 'false' : 'true')
     } else {
-      const options = field.options ?? []
+      const options = optionsOf(field)
       if (options.length === 0) return
       const index = options.findIndex(option => option.value === current)
       const size = options.length
@@ -480,9 +545,34 @@ export function Settings({
   }
 
   /**
+   * Toggle one row of a multi-select subpage and save it right away. The
+   * draft is the checked values in option order with the unclaimed ids
+   * trailing — the order the tab bar (or any other consumer) then follows —
+   * and the field's own parse still decides what is storable.
+   */
+  const togglePick = (row: PickRow): void => {
+    if (picking === null) return
+    const form = forms.get(picking.ns)
+    if (form === undefined || !form.available) return
+    const current = splitValues(form.field(picking.field).text)
+    const next = new Set(current)
+    if (next.has(row.value)) next.delete(row.value)
+    else next.add(row.value)
+    const optionIds = optionsOf(picking.field).map(option => option.value)
+    const claimed = new Set(optionIds)
+    form.edit(picking.field, [
+      ...optionIds.filter(value => next.has(value)),
+      ...current.filter(value => !claimed.has(value) && next.has(value)),
+    ].join(','))
+    bump()
+    saveSoon(picking.ns)
+  }
+
+  /**
    * Activate one focusable entry — the keyboard Enter path, shared with the
-   * mouse click. Groups open their subpage; boolean/select fields cycle their
-   * value; text/secret fields enter the edit mode.
+   * mouse click. Groups open their subpage; multi-select fields open their
+   * checkbox list; boolean/select fields cycle their value; text/secret
+   * fields enter the edit mode.
    */
   const activateEntry = (entry: FocusEntry): void => {
     if (entry.kind === 'group') {
@@ -493,7 +583,11 @@ export function Settings({
     }
     const form = forms.get(entry.ns)
     if (form === undefined || !form.available) return
-    if (entry.field.kind === 'boolean' || entry.field.kind === 'select') {
+    if (entry.field.kind === 'multi-select') {
+      setPicking({ ns: entry.ns, field: entry.field })
+      setPickIndex(0)
+      setWindowStart(0)
+    } else if (entry.field.kind === 'boolean' || entry.field.kind === 'select') {
       cycleField(entry.ns, entry.field)
     } else {
       setEditing({ ns: entry.ns, field: entry.field, draft: form.field(entry.field).text })
@@ -506,6 +600,10 @@ export function Settings({
   const handleWheel = (event: WheelEvent): void => {
     if (mode === 'edit') return
     const direction = event.deltaY >= 0 ? 1 : -1
+    if (pickMode) {
+      setPickIndex(previous => Math.min(Math.max(0, pickRows.length - 1), Math.max(0, previous + direction)))
+      return
+    }
     setFocusIndex(previous =>
       Math.min(Math.max(0, focusable.length - 1), Math.max(0, previous + direction)),
     )
@@ -544,6 +642,24 @@ export function Settings({
       return
     }
 
+    // Multi-select subpage: ↑/↓ walk the checkboxes, Space/Enter toggle the
+    // focused one (auto-saves), Esc returns to the list it was opened from.
+    // It owns the keyboard while open — there is no draft to protect here.
+    if (pickMode) {
+      if (key.upArrow) {
+        setPickIndex(Math.max(0, effFocus - 1))
+      } else if (key.downArrow) {
+        setPickIndex(Math.min(Math.max(0, pickRows.length - 1), effFocus + 1))
+      } else if (isPlainReturn(key) || input === ' ') {
+        const row = pickRows[effFocus]
+        if (row !== undefined) togglePick(row)
+      } else if (key.escape) {
+        setPicking(null)
+        setWindowStart(0)
+      }
+      return
+    }
+
     if (key.upArrow) {
       setFocusIndex(Math.max(0, effFocus - 1))
     } else if (key.downArrow) {
@@ -552,10 +668,11 @@ export function Settings({
       // ←/→ cycle an options-bearing field (select rows and hybrid
       // text-with-options rows such as the page margin presets). Rows
       // without options ignore the arrows; boolean rows keep Enter as
-      // their only toggle.
-      if (focused !== undefined && focused.kind === 'field') {
+      // their only toggle, and a multi-select opens its list instead of
+      // cycling (a single step could only ever pick one of many values).
+      if (focused !== undefined && focused.kind === 'field' && focused.field.kind !== 'multi-select') {
         const field = focused.field
-        if ((field.options?.length ?? 0) > 0) {
+        if (optionsOf(field).length > 0) {
           cycleField(focused.ns, field, key.rightArrow === true ? 1 : -1)
         }
       }
@@ -619,14 +736,18 @@ export function Settings({
     // Options-bearing values render as chips: use the option's localized
     // label ('zh' → '常规') instead of the stored raw value; a value that
     // matches no option (a custom text spec such as `3x1`) falls back to
-    // the raw text. Only when not editing and the value is non-empty.
-    const selectLabel =
-      ((field.kind === 'select' || (field.options?.length ?? 0) > 0) && !isEditing && state.text !== '')
-        ? (() => {
-            const option = field.options?.find(entry => entry.value === state.text)
-            return option === undefined ? state.text : pick(option.label, option.descriptions)
-          })()
-        : undefined
+    // the raw text. Only when not editing and the value is non-empty. A
+    // multi-select chips its checked labels joined — its Enter opens the
+    // checkbox list, so the chip is a summary, never a value to cycle.
+    const optionLabel = (raw: string): string => {
+      const option = optionsOf(field).find(entry => entry.value === raw)
+      return option === undefined ? raw : pick(option.label, option.descriptions)
+    }
+    let selectLabel: string | undefined
+    if (!isEditing && state.text !== '') {
+      if (field.kind === 'multi-select') selectLabel = splitValues(state.text).map(optionLabel).join(', ')
+      else if (field.kind === 'select' || optionsOf(field).length > 0) selectLabel = optionLabel(state.text)
+    }
 
     return (
       <FieldRow
@@ -679,7 +800,53 @@ export function Settings({
     })
   }
 
-  if (activeSection !== undefined && activeGroupSpec !== undefined) {
+  if (pickMode && picking !== null && pickSection !== undefined) {
+    // The multi-select subpage replaces the page it was opened from: one
+    // checkbox row per option (plus the unclaimed draft ids), same one-line
+    // geometry as the field rows so the focus-follow window is untouched.
+    entries.push({
+      key: 'card:pick:top',
+      lines: 1,
+      node: (
+        <CardTop
+          title={pick(picking.field.label, picking.field.descriptions)}
+          subtitle={pick(pickSection.title, pickSection.descriptions)}
+          badges={sectionBadges(pickSection)}
+          columns={columns}
+        />
+      ),
+    })
+    pickRows.forEach((row, index) => {
+      const isFocused = index === effFocus
+      entries.push({
+        key: `pick:${picking.ns}:${picking.field.path.join('.')}:${row.value}`,
+        lines: 1,
+        focus: index,
+        node: (
+          <CardRow highlight={isFocused}>
+            <FieldRow
+              label={row.label}
+              kind="boolean"
+              value={row.checked ? 'true' : 'false'}
+              focused={isFocused}
+              editing={false}
+              invalid={false}
+              staged={false}
+              onClick={(): void => {
+                setPickIndex(index)
+                togglePick(row)
+              }}
+              onMouseEnter={(): void => setPickIndex(index)}
+            />
+          </CardRow>
+        ),
+      })
+    })
+    if (pickRows.length === 0) {
+      entries.push({ key: 'pick:empty', lines: 1, node: <CardRow><Text dimColor>{t('settings-pick-empty')}</Text></CardRow> })
+    }
+    entries.push({ key: 'card:pick:bottom', lines: 1, node: <CardBottom columns={columns} /> })
+  } else if (activeSection !== undefined && activeGroupSpec !== undefined) {
     const groupFields = activeSection.fields.filter(field => field.group === activeGroupSpec.id)
     entries.push({
       key: 'card:group:top',
@@ -827,13 +994,17 @@ export function Settings({
   })
 
   const inGroup = activeSection !== undefined && activeGroupSpec !== undefined
-  const navigationHint = inGroup ? t('settings-hint-group') : t('settings-hint-list')
+  const navigationHint = pickMode
+    ? t('settings-hint-pick')
+    : inGroup ? t('settings-hint-group') : t('settings-hint-list')
   // The bottom help bar: the focused field's hint on the left (truncated
   // first), the navigation keys pinned to the right — a truncated hint still
   // reads, a truncated shortcut hint hides the keys nobody can guess.
-  const focusedHint = focused?.kind === 'field' && focused.field.hint !== undefined
-    ? pick(focused.field.hint, focused.field.hintDescriptions)
-    : undefined
+  const focusedHint = pickMode && picking !== null
+    ? picking.field.hint === undefined ? undefined : pick(picking.field.hint, picking.field.hintDescriptions)
+    : focused?.kind === 'field' && focused.field.hint !== undefined
+      ? pick(focused.field.hint, focused.field.hintDescriptions)
+      : undefined
   // A field whose user layer carries a value (settings.yaml) is "customized"
   // — worth knowing, too noisy to badge every row with. It rides the help
   // bar instead: focus the field and the suffix appears next to its hint.
@@ -868,9 +1039,16 @@ export function Settings({
             <Text bold>{pick(activeGroupSpec.title, activeGroupSpec.descriptions)}</Text>
           </>
         )}
+        {pickMode && picking !== null && pickSection !== undefined && (
+          <>
+            {!inGroup && <Text dimColor>{' › '}{pick(pickSection.title, pickSection.descriptions)}</Text>}
+            <Text dimColor>{' › '}</Text>
+            <Text bold>{pick(picking.field.label, picking.field.descriptions)}</Text>
+          </>
+        )}
         <Box flexGrow={1} />
         {host === undefined && <Text color="warning">{`${t('settings-unavailable')} `}</Text>}
-        {focusable.length > 0 && <Text dimColor>{`${effFocus + 1}/${focusable.length}`}</Text>}
+        {pageCount > 0 && <Text dimColor>{`${effFocus + 1}/${pageCount}`}</Text>}
       </Box>
       {/* Literal ink-box host for the wheel — every Box flavor is a compiled
           component whose prop list drops onWheel (SuggestionCard precedent).

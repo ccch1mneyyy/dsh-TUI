@@ -1012,6 +1012,7 @@ const dict = {
   'settings-unavailable': { zh: '设置服务未挂载——只读', en: 'settings service absent — read-only' },
   'settings-empty': { zh: '没有可配置的插件设置（尚无插件注册设置区块）', en: 'No configurable plugin settings (no plugin has registered a section)' },
   'settings-group-empty': { zh: '此分组没有可配置字段', en: 'No configurable fields in this group' },
+  'settings-pick-empty': { zh: '没有可勾选的选项', en: 'No options to check' },
   'settings-section-unavailable': { zh: '命名空间未注册', en: 'namespace not served' },
   'settings-badge-restart': { zh: '重启生效', en: 'applies on restart' },
   'settings-badge-dirty': { zh: '未保存', en: 'unsaved' },
@@ -1029,6 +1030,7 @@ const dict = {
   'settings-hint-list': { zh: '**Enter** 进入/编辑/切换（改动即保存） · Esc 退出', en: '**Enter** open/edit/toggle (auto-saves) · Esc exit' },
   'settings-hint-group': { zh: '**Enter** 编辑/切换（改动即保存） · Esc 返回', en: '**Enter** edit/toggle (auto-saves) · Esc back' },
   'settings-hint-edit': { zh: '**Enter** 确认并保存 · Esc 取消', en: '**Enter** to confirm & save · Esc to cancel' },
+  'settings-hint-pick': { zh: '**空格** 勾选（即保存） · ↑/↓ 移动 · Esc 返回', en: '**Space** toggle (auto-saves) · ↑/↓ move · Esc back' },
 
   // ── 会话与工作区列表行：行、计数、筛选、预览 ─────────────────────────
   'session-resume-failed': { zh: '恢复会话失败 · {{err}}', en: 'Resuming the session failed · {{err}}' },

@@ -47,7 +47,10 @@ Also an experimental public surface:
   (`component`) and the compact row (`compact`, 1–3 lines) — **compact is
   descriptor-validated only this phase and not mounted yet**; `sendToChat`
   requires the `panels.chat.attach` grant (a later version) and currently
-  always returns `false` with a one-time hint. Types live at
+  always returns `false` with a one-time hint. Registering also enables the
+  panel, and the user sees and adjusts it in the checkbox list under
+  `/settings › Side panel › Enabled panels` (its rows come from the live panel
+  registry, so an unregistered panel leaves the list). Types live at
   `@deepseek-harness-tui/dsh-tui/panels` and `./api`.
 - The `@deepseek-harness-tui/dsh-tui/test-utils` subpath and
   `ctx.tuiPluginHost.grants.corrupt` were removed in the adapter layering
