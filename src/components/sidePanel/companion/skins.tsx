@@ -335,11 +335,41 @@ export function whaleGirlImageFrameIndexAt(animation: WhaleGirlImageAnimation, e
 }
 
 /** 已解码动画的 LRU（Map 迭代序 = 最近使用序）；失败集合防止坏动画
- *  每帧重试。字节上限防 267 帧全量常驻（全解约 60MB RGBA）。 */
+ *  每帧重试。字节上限防 267 帧全量常驻（全解约 92.6MB RGBA）。
+ *  R5-1：迭代序由「已提交使用路径」的 touchDecodedAnimation 维护（缓存
+ *  命中不再只是 get）；写入/驱逐发布 revision，消费者经
+ *  useSyncExternalStore 订阅，把「key 未变但缓存失去」变成解码 effect
+ *  的显式输入——被逐出的活跃键能按需恢复解码，而不是永久冻结。 */
 const decodedImageAnimations = new Map<string, readonly TerminalImageSource[]>()
 const failedImageAnimations = new Set<string>()
 let decodedImageBytes = 0
 const DECODED_IMAGE_BYTES_CAP = 32 * 1024 * 1024
+
+/** 缓存写入/驱逐的版本号（R5-1 订阅面）：getSnapshot 返回原始 number，
+ *  Object.is 稳定，不制造 uSES #185。touch 只动迭代序、不发布（否则
+ *  自激通知形成自我渲染循环）。 */
+let decodedImageCacheRevision = 0
+const decodedImageCacheListeners = new Set<() => void>()
+function publishDecodedImageCacheChange(): void {
+  decodedImageCacheRevision += 1
+  for (const listener of [...decodedImageCacheListeners]) listener()
+}
+/** 订阅缓存写入/驱逐（uSES 的 subscribe 面；回归直接用它观测 revision）。 */
+export function subscribeDecodedImageCache(listener: () => void): () => void {
+  decodedImageCacheListeners.add(listener)
+  return () => { decodedImageCacheListeners.delete(listener) }
+}
+
+/** LRU 升温（R5-1）：把命中的键移到最近使用位。只动迭代顺序，不动键集
+ *  与字节账本——不发布 revision。只能在 commit 后的 effect 里调用（不
+ *  允许 render 期写共享缓存）；键不在缓存（解码窗口/隐藏实例）时 no-op，
+ *  隐藏实例不保活。 */
+function touchDecodedAnimation(key: string): void {
+  const frames = decodedImageAnimations.get(key)
+  if (frames === undefined) return
+  decodedImageAnimations.delete(key)
+  decodedImageAnimations.set(key, frames)
+}
 
 /** 解码一个动画的全部帧（顺序、确定性）；任一帧失败 → 整个动画 undefined。 */
 async function decodeWhaleGirlAnimation(dir: string, animation: WhaleGirlImageAnimation): Promise<readonly TerminalImageSource[] | undefined> {
@@ -381,6 +411,9 @@ function rememberDecodedAnimation(key: string, frames: readonly TerminalImageSou
     decodedImageAnimations.delete(oldest)
     decodedImageBytes -= evicted?.reduce((sum, frame) => sum + frame.data.byteLength, 0) ?? 0
   }
+  // 插入/替换/驱逐都改变了消费者可见的缓存内容：发布 revision，让
+  // 「key 未变但缓存失去」的消费者重跑解码 effect（R5-1）。
+  publishDecodedImageCacheChange()
 }
 
 /** 预热键集（抽搐修复）：面板证明可见且动画时钟走动后，把常用互动键
@@ -396,12 +429,18 @@ export const WHALE_GIRL_PREHEAT_KEYS: readonly string[] = [
 /** 在途解码登记（同键去重：活跃解码路径与预热共用一个 Promise）。 */
 const inflightImageDecodes = new Map<string, Promise<readonly TerminalImageSource[] | undefined>>()
 
+/** 解码发起计数（R5-1 回归观测点）：只在真正创建新的在途 Promise 时
+ *  递增——断言「坏键不逐 tick 解码」「同键并发只解一次」「驱逐恢复
+ *  有界」都用它。 */
+let whaleGirlDecodeRequestCount = 0
+
 /** 解码一个动画并入库：成功进 LRU，失败进失败集（后续解析自动跳到兜底
  *  语义键）；同键并发请求共用在途 Promise，不重复解码。永不 reject、
  *  不触发任何 React 更新（消费方的时钟/事件驱动重渲染）。 */
 function requestWhaleGirlAnimationFrames(kit: WhaleGirlImageKit, key: string): Promise<readonly TerminalImageSource[] | undefined> {
   const inflight = inflightImageDecodes.get(key)
   if (inflight !== undefined) return inflight
+  whaleGirlDecodeRequestCount += 1
   const pending = decodeWhaleGirlAnimation(kit.dir, kit.byKey[key]!)
     .then(frames => {
       inflightImageDecodes.delete(key)
@@ -431,6 +470,21 @@ export function whaleGirlDecodedAnimationKeys(): readonly string[] {
   return [...decodedImageAnimations.keys(), ...failedImageAnimations]
 }
 
+/** 测试接缝（R5-1）：LRU 迭代序 = 最近使用序（touch 升温后的顺序）。 */
+export function decodedImageAnimationOrderForTests(): readonly string[] {
+  return [...decodedImageAnimations.keys()]
+}
+
+/** 测试接缝（R5-1）：注入假帧驱动 32MiB 驱逐压力（不触发真实解码）。 */
+export function injectDecodedAnimationForTests(key: string, frames: readonly TerminalImageSource[]): void {
+  rememberDecodedAnimation(key, frames)
+}
+
+/** 测试观测点（R5-1）：解码发起总次数（去重/有界断言）。 */
+export function whaleGirlDecodeRequestCountForTests(): number {
+  return whaleGirlDecodeRequestCount
+}
+
 /** 测试接缝：清图像层缓存（timings kit + 已解码动画 + 失败集合 + 字母开窗渲染）。 */
 export function resetWhaleGirlImageCacheForTests(): void {
   whaleGirlImageKitCache = undefined
@@ -439,6 +493,8 @@ export function resetWhaleGirlImageCacheForTests(): void {
   decodedImageBytes = 0
   inflightImageDecodes.clear()
   whaleGirlWindowCache.clear()
+  whaleGirlDecodeRequestCount = 0
+  publishDecodedImageCacheChange()
 }
 
 /** 面板可见性门（visible=false 零工作契约）：PanelHost 对非 active 的
@@ -473,25 +529,38 @@ function useBoxDisplayed(): [(element: DOMElement | null) => void, boolean] {
 }
 
 /** 鲸娘图像路径的帧缓存 hook：activeKey 为 undefined（面板不可见/无
- *  动画）时不做任何事；命中缓存同步返回，未命中异步解码完成后返回。 */
-function useDecodedWhaleGirlFrames(
+ *  动画）时不做任何事；命中缓存同步返回，未命中异步解码完成后返回。
+ *  R5-1：缓存写入/驱逐经 useSyncExternalStore 订阅成为解码 effect 的
+ *  显式输入——「key 未变但缓存失去（被共享预热/别的实例挤出）」时
+ *  effect 重跑、按需重新解码，画面不再永久冻结；命中在 commit 后升温
+ *  LRU（touchDecodedAnimation），活跃键获得真实的最近使用保护。导出
+ *  供回归在真渲染器下钉住 LRU/恢复语义（生产消费者 WhaleGirlRasterSkin）。 */
+export function useDecodedWhaleGirlFrames(
   activeKey: string | undefined,
   kit: WhaleGirlImageKit | undefined,
 ): readonly TerminalImageSource[] | undefined {
   const [settled, setSettled] = React.useState<{ readonly key: string; readonly frames: readonly TerminalImageSource[] } | undefined>(undefined)
+  // 快照是原始 number：键集/字节变化才递增（touch 不递增），Object.is
+  // 稳定；通知只在外部事件（解码完成微任务/测试注入）发生，稳态零入队。
+  const cacheRevision = React.useSyncExternalStore(subscribeDecodedImageCache, () => decodedImageCacheRevision)
   React.useEffect(() => {
     if (activeKey === undefined || kit === undefined) return
     if (!decodedImageAnimations.has(activeKey) && !failedImageAnimations.has(activeKey)) {
       let live = true
       // 解码走共享在途登记（与预热同键去重）；setSettled 只在本组件仍是
-      // 消费者时入队（预热先完成时，缓存由下一次时钟渲染同步命中）。
+      // 消费者时入队（预热先完成时，缓存由 revision 通知的渲染同步命中）。
       void requestWhaleGirlAnimationFrames(kit, activeKey).then(frames => {
         if (live && frames !== undefined) setSettled({ key: activeKey, frames })
       })
       return () => { live = false }
     }
     return
-  }, [activeKey, kit])
+  }, [activeKey, kit, cacheRevision])
+  // 已提交使用路径的 LRU 升温：每次 commit 触一次（幂等，只动迭代序）；
+  // activeKey 不在缓存（解码窗口）或为 undefined（隐藏实例）时 no-op。
+  React.useLayoutEffect(() => {
+    if (activeKey !== undefined) touchDecodedAnimation(activeKey)
+  })
   const cached = activeKey !== undefined ? decodedImageAnimations.get(activeKey) : undefined
   if (cached !== undefined) return cached
   return settled !== undefined && settled.key === activeKey ? settled.frames : undefined

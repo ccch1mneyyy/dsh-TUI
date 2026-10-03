@@ -430,7 +430,12 @@ try {
 // 假 protocol context 注入下的惰性解码（只碰当前动画）、面板隐藏零解码、
 // 无协议 context → 字母格回退（且永不解码 raster 帧）。
 
-const { loadWhaleGirlImageKit, whaleGirlImageFrameIndexAt, whaleGirlDecodedAnimationKeys, resetWhaleGirlImageCacheForTests, whaleGirlImageBoxColumns, WHALE_GIRL_PREHEAT_KEYS, WhaleGirlSkin: WhaleGirlSkinForCells } = skins
+const {
+  loadWhaleGirlImageKit, whaleGirlImageFrameIndexAt, whaleGirlDecodedAnimationKeys, resetWhaleGirlImageCacheForTests,
+  whaleGirlImageBoxColumns, WHALE_GIRL_PREHEAT_KEYS, WhaleGirlSkin: WhaleGirlSkinForCells,
+  useDecodedWhaleGirlFrames, subscribeDecodedImageCache, injectDecodedAnimationForTests,
+  decodedImageAnimationOrderForTests, whaleGirlDecodeRequestCountForTests,
+} = skins
 const { TerminalImagesContext } = await import('../src/ink/hooks/use-terminal-images.js')
 const { createRequire } = await import('node:module')
 const { existsSync } = await import('node:fs')
@@ -799,6 +804,202 @@ try {
   }
 } catch (error) {
   check('image fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
+} finally {
+  applyCompanionSkin('deepy')
+  resetWhaleGirlImageCacheForTests()
+}
+
+// ===================== R5-1 · 真 LRU + 驱逐恢复（压力回归）==================
+// 报告 r5-rendering.md R5-1 的独立回归形状：预置多键超过 32MiB，两个 raster
+// 消费实例交错——A 始终同键播放（每个已提交 commit 把键升到最近使用位），
+// B 的解码/注入提供挤出压力；断言 A 的帧持续可用或按需恢复（帧索引继续
+// 推进的前提）、热键获得真实最近使用保护、卸载（隐藏）实例不保活、并发
+// 消费者在途解码去重。旧实现（FIFO + effect 只依赖 [key, kit]）在本段红：
+// 持续命中的键不升温被挤出、挤出后 effect 不重跑永久持帧冻结。
+
+/** 最小 ink 挂载（无 SidePanel）：children 工厂拿 bump（驱动本树重渲染，
+ *  模拟动画时钟 tick 的 commit）。 */
+interface BareScene {
+  app: { unmount: () => Promise<unknown> }
+  term: import('@xterm/headless').Terminal
+  bump: () => void
+  lines: () => string[]
+}
+const BARE_COLS = 60
+const BARE_ROWS = 24
+async function mountBare(children: (bump: () => void) => React.ReactNode): Promise<BareScene> {
+  const term = new XTerm({ cols: BARE_COLS, rows: BARE_ROWS, scrollback: 0, allowProposedApi: true })
+  class BareStdout extends Writable {
+    columns = BARE_COLS
+    rows = BARE_ROWS
+    isTTY = true
+    term: import('@xterm/headless').Terminal
+    constructor(t: import('@xterm/headless').Terminal) { super(); this.term = t }
+    _write(chunk: unknown, _e: Buffer.Encoding, cb: () => void) { this.term.write(String(chunk), cb) }
+  }
+  class BareStderr extends Writable { isTTY = true; _write(_c: unknown, _e: Buffer.Encoding, cb: () => void) { cb() } }
+  const stdout = new BareStdout(term)
+  let bumpImpl: () => void = () => {}
+  function Harness(): React.ReactNode {
+    const [, setV] = React.useState(0)
+    React.useEffect(() => { bumpImpl = () => setV(previous => previous + 1) })
+    return children(() => { bumpImpl() })
+  }
+  const app = await render(
+    <AlternateScreen mouseTracking={false}><Harness /></AlternateScreen>,
+    {
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      stdin: new FakeStdin() as unknown as NodeJS.ReadStream,
+      stderr: new BareStderr() as unknown as NodeJS.WriteStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  const lines = (): string[] => {
+    const buf = term.buffer.active
+    const out: string[] = []
+    for (let y = 0; y < BARE_ROWS; y += 1) out.push((buf.getLine(y)?.translateToString(false) ?? '').padEnd(BARE_COLS, ' '))
+    return out
+  }
+  return { app, term, get bump() { return () => bumpImpl() }, lines }
+}
+
+/** R5-1 的消费实例：只挂帧缓存 hook，把每次 render 观察到的帧记录出去。 */
+function FramesConsumer({ activeKey, onObserve }: {
+  activeKey: string | undefined
+  onObserve: (frames: readonly import('../src/ink/terminal-image.js').TerminalImageSource[] | undefined) => void
+}): React.ReactNode {
+  const kit = loadWhaleGirlImageKit()
+  const frames = useDecodedWhaleGirlFrames(activeKey, kit)
+  onObserve(frames)
+  return null
+}
+
+/** 假帧（R5-1 压力注入）：byteLength 决定 32MiB 账本，不解码真实 PNG。 */
+function fakeFrames(mib: number): never {
+  return [{ data: new Uint8Array(mib * 1024 * 1024), width: 301, height: 288 }] as never
+}
+
+try {
+  applyCompanionSkin('whaleGirl')
+  // --- 单元：插入/驱逐发布 revision；32MiB 逐最旧 ------------------------
+  {
+    resetWhaleGirlImageCacheForTests()
+    let revisions = 0
+    const off = subscribeDecodedImageCache(() => { revisions += 1 })
+    injectDecodedAnimationForTests('a', fakeFrames(8))
+    injectDecodedAnimationForTests('b', fakeFrames(8))
+    check('r5-1: cache insertions publish revisions (eviction becomes effect input)',
+      revisions === 2, 'revisions=' + revisions)
+    injectDecodedAnimationForTests('c', fakeFrames(8))
+    injectDecodedAnimationForTests('d', fakeFrames(8))
+    injectDecodedAnimationForTests('e', fakeFrames(8))
+    check('r5-1: 32MiB cap evicts strictly oldest-first (Map iteration order = recency)',
+      decodedImageAnimationOrderForTests().join(',') === 'b,c,d,e',
+      'order=' + decodedImageAnimationOrderForTests().join(','))
+    off()
+    resetWhaleGirlImageCacheForTests()
+  }
+
+  // --- 压力双实例 A：同键持续播放（每 commit 升温）挤出压力下不失帧 ------
+  let s1: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    injectDecodedAnimationForTests('idle', fakeFrames(8))
+    const obsA: Array<readonly import('../src/ink/terminal-image.js').TerminalImageSource[] | undefined> = []
+    let revDuringPlayback = 0
+    const offA = subscribeDecodedImageCache(() => { revDuringPlayback += 1 })
+    s1 = await mountBare(() => <FramesConsumer activeKey="idle" onObserve={frames => { obsA.push(frames) }} />)
+    await settled(() => obsA.some(frames => frames !== undefined), { timeoutMs: 5000 })
+    check('r5-1: consumer hits the shared cache synchronously (injected frames)', obsA.some(frames => frames !== undefined))
+    // 持续播放 3 个 tick：每个已提交 commit 把 idle 升到最近使用位。
+    for (let tick = 0; tick < 3; tick += 1) { s1.bump(); await sleep(40) }
+    check('r5-1: commit-path LRU touch publishes no revision (no self-stimulated renders)',
+      revDuringPlayback === 0, 'revisions=' + revDuringPlayback)
+    // 注入 4×8MiB 压力：注入间隙保持播放 commit（每次 bump 把 idle 升回
+    // 最近使用位）——「A 始终同键播放」的字面构造。旧 FIFO 语义下 idle
+    // （最早插入）无论怎么 bump 都是第一个被挤出。
+    for (const warm of ['warm-1', 'warm-2', 'warm-3', 'warm-4']) {
+      injectDecodedAnimationForTests(warm, fakeFrames(8))
+      s1.bump()
+      await sleep(40)
+    }
+    await sleep(300) // revision 通知 → 消费者重渲染（仍应命中）
+    check('r5-1: actively played key survives eviction pressure (true recency protection)',
+      decodedImageAnimationOrderForTests().includes('idle'),
+      'order=' + decodedImageAnimationOrderForTests().join(','))
+    check('r5-1: consumer never loses frames under pressure (frame index keeps advancing)',
+      obsA.length > 0 && obsA.every(frames => frames !== undefined),
+      'observations=' + obsA.length + ' lost=' + obsA.filter(frames => frames === undefined).length)
+    check('r5-1: resident key never triggers a redundant decode',
+      whaleGirlDecodeRequestCountForTests() === 0, 'requests=' + whaleGirlDecodeRequestCountForTests())
+    offA()
+    // 卸载 = 隐藏实例不再消费：再注入压力后 idle 不被保活（可被逐出）。
+    await s1.app.unmount()
+    s1.term.dispose()
+    s1 = undefined
+    for (const warm of ['warm-5', 'warm-6', 'warm-7', 'warm-8']) injectDecodedAnimationForTests(warm, fakeFrames(8))
+    await sleep(150)
+    check('r5-1: unmounted (hidden) consumer no longer keeps its key alive',
+      !decodedImageAnimationOrderForTests().includes('idle'),
+      'order=' + decodedImageAnimationOrderForTests().join(','))
+  } finally {
+    if (s1 !== undefined) { await s1.app.unmount(); s1.term.dispose() }
+  }
+
+  // --- 压力双实例 B：key 未变但缓存失去 → 按需恢复解码（不永久冻结）----
+  let s2: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    injectDecodedAnimationForTests('idle', fakeFrames(8))
+    const obsB: Array<readonly import('../src/ink/terminal-image.js').TerminalImageSource[] | undefined> = []
+    s2 = await mountBare(() => <FramesConsumer activeKey="idle" onObserve={frames => { obsB.push(frames) }} />)
+    await settled(() => obsB.some(frames => frames !== undefined), { timeoutMs: 5000 })
+    // 不再 bump（无 commit → 不 touch）：idle 保持最旧，注入即被挤出。
+    const requestsBefore = whaleGirlDecodeRequestCountForTests()
+    for (const warm of ['warm-1', 'warm-2', 'warm-3', 'warm-4']) injectDecodedAnimationForTests(warm, fakeFrames(8))
+    await settled(() => obsB.some(frames => frames === undefined), { timeoutMs: 4000 })
+    check('r5-1: key-unchanged consumer observes the eviction (cache lost under its feet)',
+      obsB.some(frames => frames === undefined))
+    // 旧实现：effect 依赖 [key, kit] 未变 → 永不重跑 → 永久持帧冻结。
+    await settled(() => obsB[obsB.length - 1] !== undefined, { timeoutMs: 15000 })
+    check('r5-1: evicted active key re-decodes on demand (animation recovers, not frozen)',
+      obsB[obsB.length - 1] !== undefined, 'lastObservation=' + (obsB[obsB.length - 1] === undefined ? 'lost' : 'frames'))
+    check('r5-1: recovery decode is bounded and deduped (exactly one request)',
+      whaleGirlDecodeRequestCountForTests() - requestsBefore === 1,
+      'requests=' + (whaleGirlDecodeRequestCountForTests() - requestsBefore))
+  } finally {
+    if (s2 !== undefined) { await s2.app.unmount(); s2.term.dispose() }
+  }
+
+  // --- 并发消费者：同键在途解码去重 ---------------------------------------
+  let s3: BareScene | undefined
+  try {
+    resetWhaleGirlImageCacheForTests()
+    const obsC1: Array<readonly import('../src/ink/terminal-image.js').TerminalImageSource[] | undefined> = []
+    const obsC2: Array<readonly import('../src/ink/terminal-image.js').TerminalImageSource[] | undefined> = []
+    const before = whaleGirlDecodeRequestCountForTests() // mount 首commit 的 effect 即发起解码，必须先采样
+    s3 = await mountBare(() => (
+      <>
+        <FramesConsumer activeKey="thumbs-up" onObserve={frames => { obsC1.push(frames) }} />
+        <FramesConsumer activeKey="thumbs-up" onObserve={frames => { obsC2.push(frames) }} />
+      </>
+    ))
+    await settled(() => obsC1.some(frames => frames !== undefined) && obsC2.some(frames => frames !== undefined), { timeoutMs: 15000 })
+    check('r5-1: both concurrent consumers resolve frames (decode completed)',
+      obsC1.some(frames => frames !== undefined) && obsC2.some(frames => frames !== undefined))
+    check('r5-1: concurrent consumers share one inflight decode (no duplicate work)',
+      whaleGirlDecodeRequestCountForTests() - before === 1,
+      'requests=' + (whaleGirlDecodeRequestCountForTests() - before))
+    const last1 = [...obsC1].reverse().find(frames => frames !== undefined)
+    const last2 = [...obsC2].reverse().find(frames => frames !== undefined)
+    check('r5-1: concurrent consumers observe the identical frames reference', last1 === last2)
+  } finally {
+    if (s3 !== undefined) { await s3.app.unmount(); s3.term.dispose() }
+  }
+  resetWhaleGirlImageCacheForTests()
+} catch (error) {
+  check('r5-1 fixture: no unexpected exception', false, (error as { stack?: string })?.stack ?? String(error))
 } finally {
   applyCompanionSkin('deepy')
   resetWhaleGirlImageCacheForTests()
