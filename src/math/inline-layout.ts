@@ -5,15 +5,15 @@
  * its image (one private-use code point per formula, so neighbouring
  * formulas stay distinguishable), and the formatted paragraph is wrapped by
  * the same `wrapText` that <Text> uses. A run holds no spaces, so it wraps
- * as one unbreakable word: a formula never splits across rows, and a
- * paragraph with no formulas lays out exactly as it does in <Text>. Each
+ * as one unbreakable word: a formula never splits across rows. The display
+ * helper hides separators moved past a full row without changing row count. Each
  * wrapped row is then cut into ANSI-balanced text pieces (sliceAnsi re-opens
  * the styles and links a cut crosses) and the image slots between them.
  * Pure: no React, no terminal.
  */
 import stripAnsi from 'strip-ansi'
 import { stringWidth } from '../ink/stringWidth.js'
-import wrapText from '../ink/wrap-text.js'
+import { wrapTextLines } from '../ink/wrap-text.js'
 import sliceAnsi from '../utils/sliceAnsi.js'
 
 /** First placeholder code point (Private Use Area, width 1). */
@@ -33,6 +33,8 @@ export type InlineRow = {
   readonly width: number
   /** The row continues the previous one (a wrap, not a source newline). */
   readonly continuation: boolean
+  /** A separator omitted at a full row boundary; restore it on copy. */
+  readonly gap: boolean
 }
 
 /** The placeholder run standing in for formula `index`, `columns` cells wide. */
@@ -58,9 +60,7 @@ export function layoutInlineMedia(
   if (width < 1) return undefined
   const seen = new Set<number>()
   const rows: InlineRow[] = []
-  const wrapped = wrapText(formatted, width, 'wrap')
-  const continuations = wrapContinuations(stripAnsi(formatted), stripAnsi(wrapped))
-  for (const [lineIndex, line] of wrapped.split('\n').entries()) {
+  for (const { text: line, continuation, gap } of wrapTextLines(formatted, width)) {
     const pieces: InlinePiece[] = []
     const plain = stripAnsi(line)
     let column = 0
@@ -94,27 +94,7 @@ export function layoutInlineMedia(
     }
     if (!closeRun()) return undefined
     flushText(column)
-    rows.push({ pieces, width: column, continuation: continuations[lineIndex] === true })
+    rows.push({ pieces, width: column, continuation, gap })
   }
   return seen.size === columns.length ? rows : undefined
-}
-
-/**
- * For each line of `wrapped`, whether the newline before it was inserted by
- * wrapping (true) or was in `source` (false). wrapAnsi (trim off) only
- * inserts newlines, so walking both plain strings in step finds them.
- */
-function wrapContinuations(source: string, wrapped: string): boolean[] {
-  const result = [false]
-  let at = 0
-  for (const char of wrapped) {
-    if (char === '\n') {
-      const inSource = source[at] === '\n'
-      result.push(!inSource)
-      if (inSource) at += 1
-      continue
-    }
-    at += char.length
-  }
-  return result
 }

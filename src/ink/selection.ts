@@ -41,8 +41,8 @@ export type SelectionRow = {
   readonly text: string
   /** The row continues the previous one: the `\n` came from word-wrap, not
    *  from the source. Captured at extraction time because the screen's
-   *  softWrap bitmap shifts with content. */
-  readonly sw: boolean
+   *  softWrap bitmap shifts with content. 'gap' restores an omitted separator. */
+  readonly sw: boolean | 'gap'
   /** Region insertions, ascending by `at`. */
   readonly regions: readonly SelectionRegion[]
 }
@@ -1196,7 +1196,7 @@ export function isCellSelected(
 }
 
 /** Extract text from one screen row, plus the copy regions it touches.
- *  When the next row is a soft-wrap continuation (screen.softWrap[row+1]>0),
+ *  When the next row is a soft-wrap continuation (screen.softWrap[row+1]!==0),
  *  clamp to that content-end column and skip the trailing trim so the
  *  word-separator space survives the join. See Screen.softWrap for why the
  *  clamp is necessary. */
@@ -1210,7 +1210,7 @@ function extractRowText(
   const noSelect = screen.noSelect
   const copyRegion = screen.copyRegion
   const rowOff = row * screen.width
-  const contentEnd = row + 1 < screen.height ? screen.softWrap[row + 1]! : 0
+  const contentEnd = row + 1 < screen.height ? Math.abs(screen.softWrap[row + 1]!) : 0
   const lastCol = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) : colEnd
   let line = ''
   const regions: SelectionRegion[] = []
@@ -1252,7 +1252,7 @@ function extractRowText(
   const tail = regions.length > 0 ? regions[regions.length - 1]!.at : 0
   return {
     text: contentEnd > 0 ? line : line.slice(0, tail) + line.slice(tail).replace(/\s+$/, ''),
-    sw: screen.softWrap[row]! > 0,
+    sw: screen.softWrap[row]! < 0 ? 'gap' : screen.softWrap[row]! > 0,
     regions,
   }
 }
@@ -1268,9 +1268,9 @@ function extractRowText(
  * `text`: a row's characters are model output, and nothing in them may be
  * read back as metadata.
  */
-function resolveCopyRegions(rows: readonly SelectionRow[]): { text: string; sw: boolean }[] {
+function resolveCopyRegions(rows: readonly SelectionRow[]): { text: string; sw: SelectionRow['sw'] }[] {
   const emitted = new Set<number>()
-  const resolved: { text: string; sw: boolean }[] = []
+  const resolved: { text: string; sw: SelectionRow['sw'] }[] = []
   for (const row of rows) {
     if (row.regions.length === 0) {
       resolved.push({ text: row.text, sw: row.sw })
@@ -1303,14 +1303,14 @@ function resolveCopyRegions(rows: readonly SelectionRow[]): { text: string; sw: 
 /** Accumulator for selected text that merges soft-wrapped rows back
  *  into logical lines. push(text, sw) appends a newline before text
  *  only when sw=false (i.e. the row starts a new logical line). Rows
- *  with sw=true are concatenated onto the previous row. */
+ *  with sw=true are concatenated; sw='gap' also restores a separator space. */
 function joinRows(
   lines: string[],
   text: string,
-  sw: boolean | undefined,
+  sw: SelectionRow['sw'] | undefined,
 ): void {
   if (sw && lines.length > 0) {
-    lines[lines.length - 1] += text
+    lines[lines.length - 1] += (sw === 'gap' ? ' ' : '') + text
   } else {
     lines.push(text)
   }
@@ -1446,12 +1446,12 @@ export function refreshSelectionFingerprint(
       }
     }
     // Row separator + the row's soft-wrap bit: getSelectedText joins a
-    // wrapped row onto the previous line with NO newline (softWrap[row]>0)
+    // wrapped row onto the previous line with NO newline (softWrap[row]!==0)
     // but emits a real newline otherwise — identical cells with a flipped
     // wrap bit produce a different copy, so the fingerprint must see it.
-    h = Math.imul(h ^ 0x9e3779b9 ^ (softWrap[row]! > 0 ? 0x51ed270b : 0), 0x85ebca6b)
+    h = Math.imul(h ^ 0x9e3779b9 ^ (softWrap[row]! < 0 ? 0x2c1b3c6d : softWrap[row]! > 0 ? 0x51ed270b : 0), 0x85ebca6b)
     // The row BELOW is an input to THIS row's copy. extractRowText reads
-    // softWrap[row + 1] as this row's content end: > 0 means the row wraps
+    // abs(softWrap[row + 1]) as this row's content end: > 0 means the row wraps
     // into the next one, which both clamps the last column to
     // min(colEnd, contentEnd - 1) and suppresses the trailing-blank trim.
     // Flipping only the next row's wrap bit therefore rewrites the last
@@ -1460,7 +1460,7 @@ export function refreshSelectionFingerprint(
     // cells. Hash exactly what extractRowText consumes (0 = not wrapped) so
     // a contentEnd change that does not move the clamp stays invisible
     // instead of becoming a false positive.
-    const contentEnd = row + 1 < height ? softWrap[row + 1]! : 0
+    const contentEnd = row + 1 < height ? Math.abs(softWrap[row + 1]!) : 0
     const wrapClamp = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) + 1 : 0
     h = Math.imul(h ^ 0x27d4eb2f ^ wrapClamp, 0x165667b1)
   }

@@ -348,7 +348,7 @@ type NoSelectOperation = {
   region: Rectangle
 }
 
-/** Row `y` continues the row above, whose content ends at `contentEnd`. */
+/** Row `y` continues the row above; negative contentEnd restores a separator. */
 type SoftWrapRowOperation = {
   type: 'softWrapRow'
   y: number
@@ -1196,7 +1196,8 @@ export default class Output {
           // row. (This used to run in a pass after every write, which let a
           // marker outlive an overlay that overwrote the row.)
           if (operation.y > 0 && operation.y < screen.height) {
-            screen.softWrap[operation.y] = Math.max(1, operation.contentEnd)
+            const contentEnd = Math.max(1, Math.abs(operation.contentEnd))
+            screen.softWrap[operation.y] = operation.contentEnd < 0 ? -contentEnd : contentEnd
           }
           continue
         }

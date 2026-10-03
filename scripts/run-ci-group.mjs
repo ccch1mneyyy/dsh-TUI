@@ -103,6 +103,7 @@ const GROUPS = {
     ["verify-streaming-markdown-spacing", ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-spacing.tsx']],
     ['verify-text-measure-cache', ['node', '--import', 'tsx/esm', 'scripts/verify-text-measure-cache.ts']],
     ['verify-text-wrap-geometry', ['node', '--import', 'tsx/esm', 'scripts/verify-text-wrap-geometry.tsx']],
+    ['verify-component-wrap-exact-fill', ['node', '--import', 'tsx/esm', 'scripts/verify-component-wrap-exact-fill.tsx']],
     ['verify-streaming-markdown-blocks', ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-blocks.tsx']],
 // Markdown token 覆盖：真实 lexer 产出的 token 类型必须与白名单完全一致
 // （marked 升级带来新类型即失败）；任务列表 [x]/[ ] 在各种列表形态下的位置。

@@ -14,6 +14,7 @@ import Output from '../src/ink/output.js'
 import { blitRegion, CharPool, createScreen, HyperlinkPool, shiftRows, StylePool, type Screen } from '../src/ink/screen.js'
 import { captureScrolledRows, getSelectedText, shiftSelectionForViewportResize, startSelection, updateSelection, type SelectionState } from '../src/ink/selection.js'
 import type { TerminalImageSource } from '../src/ink/terminal-image.js'
+import { inlineMediaPlaceholder, layoutInlineMedia } from '../src/math/inline-layout.js'
 
 const source: TerminalImageSource = { data: new Uint8Array(4 * 4), width: 2, height: 2 }
 const stylePool = new StylePool()
@@ -94,6 +95,33 @@ function frame(): Screen {
   const joined = output.get()
   assert.equal(joined.softWrap[1], 8, 'the continuation records where the previous row ends')
   assert.equal(getSelectedText(selection(0, 0, 19, 1), joined), 'wrapped line $y$', 'a wrapped row joins its predecessor on copy')
+}
+
+{
+  // An exact-fill separator before an inline formula is hidden on screen,
+  // but survives semantic copy, blitting and drag-to-scroll capture.
+  const rows = layoutInlineMedia(`aaa the ${inlineMediaPlaceholder(0, 2)}`, 7, [2])!
+  assert.equal(rows[1]!.gap, true)
+  assert.deepEqual(rows[1]!.pieces, [{ kind: 'media', index: 0, columns: 2 }])
+  const screen = createScreen(7, 2, stylePool, charPool, hyperlinkPool)
+  const output = new Output({ width: 7, height: 2, stylePool, screen, terminalImages: true })
+  output.write(0, 0, 'aaa the')
+  const formula = image('$x$')
+  assert.equal(output.image(formula, 0, 1, 2, 1, source), true)
+  output.imageBacking(formula)
+  output.softWrapRow(1, -rows[0]!.width)
+  const painted = output.get()
+  assert.equal(getSelectedText(selection(0, 0, 6, 1), painted), 'aaa the $x$', 'copy restores the gap before the formula source')
+  assert.equal(getSelectedText(selection(0, 1, 6, 1), painted), '$x$', 'starting on a continuation does not prepend a gap')
+  const blitted = createScreen(7, 2, stylePool, charPool, hyperlinkPool)
+  blitRegion(blitted, painted, 0, 0, 7, 2)
+  assert.equal(getSelectedText(selection(0, 0, 6, 1), blitted), 'aaa the $x$', 'blitting keeps the gap marker')
+  const captured = selection(0, 0, 6, 1)
+  captureScrolledRows(captured, painted, 0, 0, 'above')
+  shiftRows(painted, 0, 1, 1)
+  captured.anchor = { col: 0, row: 0 }
+  captured.focus = { col: 6, row: 0 }
+  assert.equal(getSelectedText(captured, painted), 'aaa the $x$', 'a captured predecessor keeps the gap on its visible continuation')
 }
 
 {
