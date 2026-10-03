@@ -281,6 +281,14 @@ export interface SubagentState {
   outputEvents: SubagentOutputLine[]
   toolCalls: SubagentToolCall[]
   tokens?: SubagentTokenUsage
+  /** The backend's own tool-count report (`usage.tool_uses`) — preferred
+   *  over the locally kept records, which miss lane frames (R6 review). */
+  reportedToolUses?: number
+  /** The backend's own duration report (`usage.duration_ms`) — free of the
+   *  host's receive delay; per run (a resumed run reports its own). */
+  reportedDurationMs?: number
+  /** The tool the backend last saw the subagent run (`task_progress`). */
+  lastTool?: string
   summary?: string
   /** Runs in the background (the delegating call returned at launch). */
   background?: boolean

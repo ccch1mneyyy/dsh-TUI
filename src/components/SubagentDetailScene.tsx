@@ -71,8 +71,13 @@ function StatGrid({ subagent, totalTokens, elapsed, statusLabel, statusColor }: 
         <Text>{totalTokens || '—'}{subagent.tokens?.input !== undefined ? ` (in ${subagent.tokens.input} · out ${subagent.tokens.output ?? 0})` : ''}</Text>
       </StatRow>
       <StatRow label={t('subagent-tools')}>
-        <Text>{subagent.toolCalls.length}</Text>
+        <Text>{subagent.reportedToolUses ?? subagent.toolCalls.length}</Text>
       </StatRow>
+      {subagent.lastTool !== undefined && (
+        <StatRow label={t('subagent-last-tool')}>
+          <Text>{subagent.lastTool}</Text>
+        </StatRow>
+      )}
       <StatRow label={t('subagent-started')}>
         <Text>{formatTimestamp(subagent.startedAt)}</Text>
       </StatRow>
@@ -190,6 +195,10 @@ export function SubagentDetailScene({
     : subagent.completedAt !== undefined ? subagent.completedAt - subagent.startedAt : undefined
   const info = statusGlyph(subagent.status)
   const totalTokens = subagent.tokens?.total ?? ((subagent.tokens?.input ?? 0) + (subagent.tokens?.output ?? 0) || 0)
+  // The backend's own reports win over locally kept records (R6 review); no
+  // report → the locally kept fallback.
+  const toolsCount = subagent.reportedToolUses ?? subagent.toolCalls.length
+  const shownDuration = subagent.reportedDurationMs ?? elapsed
   const pageIndex = PAGES.indexOf(page)
 
   /** Folded reasoning runs (the transcript's thinking grammar). Enter flips
@@ -359,7 +368,7 @@ export function SubagentDetailScene({
       </Box>
       <Text>
         <Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>
-        <Text dimColor>{elapsed !== undefined ? ` · ${formatDuration(elapsed)} · ` : ' · '}{totalTokens || '—'} tok · {subagent.toolCalls.length} tools</Text>
+        <Text dimColor>{shownDuration !== undefined ? ` · ${formatDuration(shownDuration)} · ` : ' · '}{totalTokens || '—'} tok · {toolsCount} tools</Text>
       </Text>
       <Text dimColor>
         {`${t('subagent-started')} ${formatTimestamp(subagent.startedAt)}`
@@ -376,7 +385,7 @@ export function SubagentDetailScene({
       <Box flexDirection="row" gap={0} marginTop={1}>
         {tab('summary', t('subagent-tab-summary'))}
         {tab('output', subagent.outputEvents.length > 0 ? `${t('subagent-output-label')} ${subagent.outputEvents.length}` : t('subagent-output-label'))}
-        {tab('tools', subagent.toolCalls.length > 0 ? `${t('subagent-tools')} ${subagent.toolCalls.length}` : t('subagent-tools'))}
+        {tab('tools', toolsCount > 0 ? `${t('subagent-tools')} ${toolsCount}` : t('subagent-tools'))}
         <Text dimColor>{`  ${pageIndex + 1}/${PAGES.length}`}</Text>
       </Box>
       <Text dimColor>{'─'.repeat(Math.max(20, Math.min(72, columns - 6)))}</Text>
@@ -474,10 +483,17 @@ export function SubagentDetailScene({
             )
           )}
           {page === 'tools' && (
-            subagent.toolCalls.length === 0 ? (
+            subagent.toolCalls.length === 0 && subagent.reportedToolUses === undefined ? (
               <Text dimColor>{t('subagent-no-tools')}</Text>
             ) : (
-              subagent.toolCalls.map((tool, index) => (
+              <Box flexDirection="column">
+              {/* The backend reported N tool uses but only these records were
+                  kept (missed lane frames, window tail): say so — never
+                  fabricate the missing records (R6 review). */}
+              {subagent.reportedToolUses !== undefined && subagent.reportedToolUses !== subagent.toolCalls.length && (
+                <Text dimColor>{t('subagent-tools-kept', { kept: subagent.toolCalls.length, reported: subagent.reportedToolUses })}</Text>
+              )}
+              {subagent.toolCalls.map((tool, index) => (
                 <Box key={tool.id ?? index} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
                   <Box flexDirection="row" gap={1}>
                     <Text color={tool.status === 'failed' ? 'error' : tool.status === 'running' ? 'warning' : 'success'}>
@@ -502,7 +518,8 @@ export function SubagentDetailScene({
                     </Box>
                   )}
                 </Box>
-              ))
+              ))}
+              </Box>
             )
           )}
         </ScrollBox>

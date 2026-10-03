@@ -269,17 +269,25 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     query.emit({ type: 'assistant', parent_tool_use_id: 'call-r', message: { id: 'sub-1', content: [{ type: 'tool_use', id: 'lane-1', name: 'Read', input: { file_path: '/fixture/project/README.md' } }] } })
     query.emit({ type: 'user', parent_tool_use_id: 'call-r', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'lane-1', content: 'first line' }] } })
     query.emit({ type: 'assistant', parent_tool_use_id: 'call-r', message: { id: 'sub-2', content: [{ type: 'text', text: 'run one finding' }] } })
+    // The backend's own reports: a repeated progress does not double-count;
+    // a lone last_tool_name updates only the last tool; the notification's
+    // usage is the final word (m2).
+    query.emit({ type: 'system', subtype: 'task_progress', task_id: 'rs-1', summary: 'reading', last_tool_name: 'Read', usage: { total_tokens: 90, tool_uses: 1, duration_ms: 800 } })
+    query.emit({ type: 'system', subtype: 'task_progress', task_id: 'rs-1', summary: 'reading', last_tool_name: 'Read', usage: { total_tokens: 90, tool_uses: 1, duration_ms: 800 } })
+    query.emit({ type: 'system', subtype: 'task_progress', task_id: 'rs-1', last_tool_name: 'Grep' })
     query.emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-r', content: 'Async agent launched successfully.' }] } })
     query.emit({ type: 'result', subtype: 'success', is_error: false, result: 'launched', total_cost_usd: 0.001, modelUsage: {} })
     query.emit({ type: 'system', subtype: 'task_notification', task_id: 'rs-1', status: 'completed', summary: 'first run done', usage: { total_tokens: 100, tool_uses: 1, duration_ms: 900 } })
     check('first run: settles completed with its report', await settled(() => { const s = channel.subagents.find(item => item.agentId === 'rs-1'); return s?.status === 'completed' && s.summary === 'first run done' }))
     const first = channel.subagents.find(item => item.agentId === 'rs-1')!
+    check('first run: the backend-reported tool count / duration / last tool are kept (reports overwrite, never add)', first.reportedToolUses === 1 && first.reportedDurationMs === 900 && first.lastTool === 'Grep' && first.tokens?.total === 100, first)
 
     // SendMessage wakes the finished agent: the same task id starts a NEW run.
     query.emit({ type: 'system', subtype: 'task_started', task_id: 'rs-1', tool_use_id: 'call-r', description: 'resumable dig', is_backgrounded: true, spawn_depth: 1, task_type: 'local_agent' })
     check('resume: the same id runs again (a new epoch, not a dead card)', await settled(() => channel.subagents.some(item => item.agentId === 'rs-1' && item.status === 'running')), channel.subagents.map(item => item.status))
     const resumed = channel.subagents.find(item => item.agentId === 'rs-1')!
     check('resume: the first run\'s summary and terminal fields go', resumed !== undefined && resumed.summary === undefined && resumed.completedAt === undefined && resumed.endedAt === undefined && resumed.stopReason === undefined && resumed.error === undefined, resumed)
+    check('resume: the first run\'s per-run reports go with them (tokens stay cumulative)', resumed.reportedToolUses === undefined && resumed.reportedDurationMs === undefined && resumed.lastTool === undefined && resumed.tokens?.total === 100, resumed)
     check('resume: its transcript, tool records and cumulative tokens stay (not blindly cleared)', resumed !== undefined && resumed.toolCalls.length === 1 && (resumed.toolCalls[0]?.resultPreview ?? '').includes('first line') && resumed.tokens?.total === 100 && resumed.output.includes('run one finding'), resumed && { tools: resumed.toolCalls.length, tokens: resumed.tokens, output: resumed.output })
     check('resume: the run clock starts fresh', (resumed?.startedAt ?? 0) > (first?.startedAt ?? Infinity), [first?.startedAt, resumed?.startedAt])
 
@@ -294,12 +302,94 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     check('resume: the second run\'s failure wins (not shadowed by the first run\'s success)', await settled(() => { const s = channel.subagents.find(item => item.agentId === 'rs-1'); return s?.status === 'failed' && s.summary === 'second run broke' }))
     const second = channel.subagents.find(item => item.agentId === 'rs-1')!
     check('resume: tokens stay cumulative across runs', second?.tokens?.total === 160, second?.tokens)
+    check('resume: the second run\'s reports replace the first\'s', second?.reportedToolUses === 2 && second?.reportedDurationMs === 400, second)
     // A re-delivered end of the settled run does not overwrite the outcome.
     query.emit({ type: 'system', subtype: 'task_notification', task_id: 'rs-1', status: 'completed', summary: 'stale duplicate', usage: { total_tokens: 160, tool_uses: 2, duration_ms: 400 } })
     check('resume: a re-delivered end of the settled run does not overwrite it', await settled(() => { const s = channel.subagents.find(item => item.agentId === 'rs-1'); return s?.status === 'failed' && s.summary === 'second run broke' }))
   } finally {
     channel.releaseContributions()
     await session.dispose()
+  }
+}
+
+
+// ── reported tool stats render when the lane frames are gone (R6 m2) ────
+{
+  const [{ SubagentCard }, { SubagentDetailScene }] = await Promise.all([
+    import('../src/components/SubagentCard.js'),
+    import('../src/components/SubagentDetailScene.js'),
+  ])
+  const NOW = Date.now()
+  const reported = {
+    agentId: 'probe-agent-0001', description: 'Explore deep', status: 'completed' as const,
+    startedAt: NOW - 1500, completedAt: NOW, output: [], outputEvents: [], toolCalls: [],
+    tokens: { total: 10 }, reportedToolUses: 3, reportedDurationMs: 1500, lastTool: 'Read',
+  }
+  const COLS = 96
+  const ROWS = 24
+  const terminal = new Terminal({ cols: COLS, rows: ROWS, scrollback: 200, allowProposedApi: true })
+  class FakeStdout extends Writable {
+    columns = COLS
+    rows = ROWS
+    isTTY = true
+    _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void) { terminal.write(String(chunk), callback) }
+  }
+  class FakeStdin extends PassThrough {
+    isTTY = true
+    setRawMode() { return this }
+    ref() { return this }
+    unref() { return this }
+  }
+  const screen = (): string => {
+    const buffer = terminal.buffer.active
+    return Array.from({ length: buffer.length }, (_, y) => buffer.getLine(y)?.translateToString(true) ?? '').join('\n')
+  }
+  const stdin = new FakeStdin()
+  const stdout = new FakeStdout()
+  const app = await render(React.createElement(SubagentCard, { subagent: reported as never }), {
+    stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false,
+  })
+  try {
+    check('render: the card shows the reported tool count and duration (no fabricated records)', await settled(() => screen().includes('3 tools') && screen().includes('10 tok')), screen())
+  } finally {
+    app.unmount()
+  }
+  const terminal2 = new Terminal({ cols: COLS, rows: ROWS, scrollback: 200, allowProposedApi: true })
+  class FakeStdout2 extends Writable {
+    columns = COLS
+    rows = ROWS
+    isTTY = true
+    _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void) { terminal2.write(String(chunk), callback) }
+  }
+  const stdin2 = new FakeStdin()
+  const stdout2 = new FakeStdout2()
+  const screen2 = (): string => {
+    const buffer = terminal2.buffer.active
+    return Array.from({ length: buffer.length }, (_, y) => buffer.getLine(y)?.translateToString(true) ?? '').join('\n')
+  }
+  const app2 = await render(React.createElement(SubagentDetailScene, { subagent: reported as never, onBack: () => undefined }), {
+    stdout: stdout2 as never, stdin: stdin2 as never, stderr: stdout2 as never, exitOnCtrlC: false, patchConsole: false,
+  })
+  try {
+    // 固定窗:pacing the scene attaches its key handler after the first frame.
+    await sleep(200)
+    check('render: the detail summary prefers the reported stats and names the last tool', await settled(() => {
+      const text = screen2()
+      return text.includes('3') && text.includes('1.5s') && text.includes('Read')
+    }), screen2())
+    // 固定窗:pacing one key per frame — a same-tick double arrow is parsed
+    // as one chunk by the input layer.
+    stdin2.write('\x1b[C') // → output
+    // 固定窗:pacing 第二枚方向键与首枚分帧送达。
+    await sleep(200)
+    stdin2.write('\x1b[C') // → tools
+    // 固定窗:pacing 翻页渲染落帧后再断言。
+    await sleep(200)
+    check('render: the tools page marks how many records were kept, fabricating none', await settled(() => screen2().includes(t('subagent-tools-kept', { kept: 0, reported: 3 }))), screen2())
+  } finally {
+    app2.unmount()
+    terminal.dispose()
+    terminal2.dispose()
   }
 }
 

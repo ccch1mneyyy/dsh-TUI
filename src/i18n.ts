@@ -1535,6 +1535,8 @@ const dict = {
   'subagent-conclusion': { zh: '结论', en: 'Conclusion' },
   'subagent-hint-fold': { zh: 'Enter 思考折叠', en: 'Enter thinking' },
   'subagent-no-tools': { zh: '暂无工具调用', en: 'No tool calls' },
+  'subagent-last-tool': { zh: '最近工具', en: 'last tool' },
+  'subagent-tools-kept': { zh: '已保留 {{kept}} 条记录（后端报告 {{reported}} 次工具调用，未伪造缺失记录）', en: '{{kept}} records kept (backend reported {{reported}} tool uses; missing records are not fabricated)' },
   'subagent-hint-page': { zh: '切页', en: 'page' },
   'subagent-hint-scroll': { zh: '滚动', en: 'scroll' },
   'subagent-hint-back': { zh: '返回', en: 'back' },
