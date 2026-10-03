@@ -286,16 +286,28 @@ export class SixelGraphicsManager {
     return { erase: coverErase + erase + '\x1b[H', baseline }
   }
 
+  /**
+   * The image the last {@link paint} emitted, so a caller can attribute the
+   * cursor check that follows it to the right geometry. Undefined when the last
+   * paint drew nothing.
+   */
+  get lastPaintAnchor(): { readonly key: string; readonly rect: Rect } | undefined {
+    return this.paintAnchor
+  }
+  private paintAnchor: { key: string; rect: Rect } | undefined
+
   /** Unchanged images have zero transport cost, including unrelated text ticks. */
   paint(diff: Diff): string {
     let damage: Rect[] | null | undefined
     let draw = ''
+    this.paintAnchor = undefined
     for (const [node, next] of this.nextDisplay) {
       if (!this.dirty && !this.repaint.has(node)) {
         if (damage === undefined) damage = this.textDamage(diff)
         if (damage !== null && !damage.some(rect => overlaps(rect, next))) continue
       }
       draw += `\x1b[${next.y + 1};${next.x + 1}H${next.raster.data}`
+      this.paintAnchor = { key: next.key, rect: { x: next.x, y: next.y, columns: next.columns, rows: next.rows } }
     }
     this.displayed = new Map(this.nextDisplay)
     // Rects held this frame stay on screen: they were neither erased nor

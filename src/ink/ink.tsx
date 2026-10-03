@@ -77,6 +77,20 @@ const TERMINAL_REPLY_QUARANTINE_MS = 120;
 const SIXEL_HEAL_WINDOW_MS = 10_000;
 const SIXEL_HEAL_BURST = 3;
 const SIXEL_HEAL_MUTE_MS = 60_000;
+// The cursor probe that rides inside a graphics frame. It has to sit between
+// the payload and the frame's park CUP: an absolute park move overwrites the
+// only trace a cut-short payload leaves. Measured on Windows Terminal — an
+// intact payload leaves the cursor on the image's bottom-left cell, a payload
+// cut by an injected ESC prints its tail and leaves the cursor far away, and
+// the frame's park CUP then reports the expected cell either way, so a probe
+// written after the park can never see the difference.
+const SIXEL_CURSOR_PROBE_PATCH = Object.freeze({
+  type: 'stdout' as const,
+  content: cursorPositionQuery().request
+});
+// Per-image-geometry cursor baselines kept in memory. Scrolling transcript
+// crops churn through keys; the stable case is a side-panel image.
+const SIXEL_CURSOR_BASELINES = 32;
 
 // Cached per-Ink-instance, invalidated on resize. frame.cursor.y for
 // alt-screen is always terminalRows - 1 (renderer.ts).
@@ -237,9 +251,11 @@ export default class Ink {
   // render() takes; deferring into the atomic block means old content stays
   // visible until the new frame is fully ready.
   private needsEraseBeforePaint = false;
-  // Sixel corruption self-heal (see verifySixelPark): one DECXCPR round trip
-  // in flight at a time, plus the timestamps of recent heals for the breaker.
+  // Sixel corruption self-heal (see verifySixelPaint): one DECXCPR round trip
+  // in flight at a time, the terminal's post-image cursor learned per geometry,
+  // and the timestamps of recent heals for the breaker.
   private sixelParkCheckPending = false;
+  private readonly sixelPaintCursors = new Map<string, { row: number; col: number }>();
   private sixelHealTimes: number[] = [];
   private sixelParkCheckMutedUntil = 0;
   // Native cursor positioning: a component (via useDeclaredCursor) declares
@@ -1057,6 +1073,10 @@ export default class Ink {
       this.altScreenActive && this.kittyGraphicsSupported
         ? this.kittyGraphicsManager.reconcile(frame.images ?? [])
         : sixelActive ? this.sixelGraphicsManager.paint(optimized) : '';
+    // The image that payload drew, so the cursor check below can be attributed
+    // to its geometry. Set by paint(); undefined when it drew nothing.
+    const graphicsAnchor = graphicsOutput === '' ? undefined : this.sixelGraphicsManager.lastPaintAnchor;
+    const probeSixelCursor = graphicsOutput !== '' && this.shouldProbeSixelCursor();
     const hasDiff = optimized.length > 0 || graphicsOutput !== '' || sixelFrame.erase !== '';
     if (this.altScreenActive && hasDiff) {
       // Prepend CSI H to anchor the physical cursor to (0,0) so
@@ -1087,6 +1107,11 @@ export default class Ink {
       if (sixelFrame.erase !== '') optimized.unshift({ type: 'stdout', content: sixelFrame.erase });
       if (graphicsOutput !== '') {
         optimized.push({ type: 'stdout', content: graphicsOutput });
+        // Probe BEFORE the park patch below: that absolute move would mask a
+        // cut-short payload's effect on the cursor (see SIXEL_CURSOR_PROBE_PATCH).
+        // Only when this frame's answer will actually be collected, so an
+        // in-flight or muted check never leaves an orphan reply behind.
+        if (probeSixelCursor) optimized.push(SIXEL_CURSOR_PROBE_PATCH);
       }
       optimized.push(this.altScreenParkPatch);
     }
@@ -1139,9 +1164,8 @@ export default class Ink {
         if (this.altScreenActive) {
           // Absolute CUP (1-indexed); next frame's CSI H resets regardless.
           // Emitted after altScreenParkPatch so the declared position wins.
-          // One source of truth with the sixel cursor check, which judges a
-          // DECXCPR report against this same cell.
-          const { row, col } = this.altScreenParkCell(target);
+          const row = Math.min(Math.max(target.y + 1, 1), terminalRows);
+          const col = Math.min(Math.max(target.x + 1, 1), terminalWidth);
           optimized.push({
             type: 'stdout',
             content: cursorPosition(row, col)
@@ -1188,13 +1212,13 @@ export default class Ink {
     const tWrite = performance.now();
     writeDiffToTerminal(this.terminal, optimized, this.altScreenActive && !SYNC_OUTPUT_SUPPORTED);
     const writeMs = performance.now() - tWrite;
-    // The sixel graphics just pushed are one long DCS string; ConPTY can cut it
-    // short with its own in-band signalling and the tail then lands on screen
-    // as literal text. Cross-check the cursor this frame parked before the
-    // screen is trusted again (see verifySixelPark). Frames without graphics
-    // pay nothing — no query is written at all.
-    if (graphicsOutput !== '' && this.altScreenActive) {
-      this.verifySixelPark(this.altScreenParkCell(target));
+    // The graphics just pushed are one long control string; ConPTY can cut one
+    // short with its own in-band signalling and the tail then lands on screen as
+    // literal text. The probe for it rode inside the frame we just wrote, so
+    // this only collects the answer (see verifySixelPaint). Frames without
+    // graphics write no query at all.
+    if (probeSixelCursor && graphicsAnchor !== undefined) {
+      this.verifySixelPaint(graphicsAnchor);
     }
     // One frame reached the terminal. Components holding a widened mount
     // window until its content is actually flushed (MessageList's paint
@@ -2061,21 +2085,6 @@ export default class Ink {
   }
 
   /**
-   * The cell an alt-screen frame leaves the physical cursor on: the declared
-   * position (clamped exactly like the CUP we emit) when a component declared
-   * one, else the bottom-left park row makeAltScreenParkPatch uses. Shared by
-   * the CUP emission and the sixel cursor check, so the two can never disagree
-   * about where the frame parked.
-   */
-  private altScreenParkCell(target: { x: number; y: number } | null): { row: number; col: number } {
-    if (target === null) return { row: this.terminalRows, col: 1 };
-    return {
-      row: Math.min(Math.max(target.y + 1, 1), this.terminalRows),
-      col: Math.min(Math.max(target.x + 1, 1), this.terminalColumns)
-    };
-  }
-
-  /**
    * Sixel corruption self-heal.
    *
    * A sixel image is a single DCS string, and a terminal consumes it as pixels
@@ -2091,47 +2100,68 @@ export default class Ink {
    * model, so an unchanged cell is never rewritten and the garbage survives
    * until the user presses Ctrl+L.
    *
-   * The parked cursor is the witness. The frame ends by placing the physical
-   * cursor on {@link altScreenParkCell}; leaked payload text advances and wraps
-   * it, so a report that disagrees with our own placement proves the screen no
-   * longer matches the model. Recovery is then exactly the Ctrl+L path — a
-   * physical erase plus a full repaint, the only thing that can reclaim cells
-   * our model calls blank, because a diff never writes those.
+   * The witness is the cursor *directly after the payload*, which is why the
+   * probe is part of the frame (see SIXEL_CURSOR_PROBE_PATCH): the frame's own
+   * park CUP is absolute, so it resets the cursor to the expected cell whether
+   * or not payload text leaked — a probe written after the park reports a
+   * perfect position on a wrecked screen (measured on Windows Terminal). Before
+   * the park, an intact payload leaves the cursor where that terminal puts it
+   * (WT: the image's bottom-left cell) and a cut payload leaves it wherever the
+   * leaked text ran off to, so the two are plainly different.
    *
-   * Only graphics frames are checked, and only the protocols that ship images
-   * as one long control string (sixel's DCS, and kitty's APC on terminals
-   * where that is reachable) — a frame without graphics writes no query at
-   * all. Deliberately timid everywhere else: an unanswered report is ignored
-   * (a terminal that ignores DECXCPR, or a reply that loses the race against
-   * the flush sentinel, must never trigger a clear), a resize in flight
-   * invalidates the comparison, and repeated heals mute the check instead of
-   * clearing the screen every single frame. A terminal that answers CPR with a
-   * stale position is indistinguishable from a corrupted screen here; that is
-   * what the breaker bounds (three clears, then a minute of silence).
+   * The healthy value is terminal convention, not something we can derive: it
+   * is learned per image geometry on first sight, then required to repeat. A
+   * leak on that very first frame is learned as truth — this check is a
+   * witness, not a proof.
+   *
+   * Recovery is the Ctrl+L path — a physical erase plus a full repaint, the
+   * only thing that can reclaim cells our model calls blank, because a diff
+   * never writes those. Deliberately timid everywhere else: a frame without
+   * graphics writes no probe at all, an unanswered report is ignored (a
+   * terminal that ignores DECXCPR, or a reply that loses the race against the
+   * flush sentinel, resolves undefined), a resize in flight invalidates the
+   * comparison, and the breaker mutes the check after a burst so a terminal
+   * whose convention differs cannot be cleared every frame.
    */
-  private verifySixelPark(expected: { row: number; col: number }): void {
+  /**
+   * Whether this graphics frame should carry a cursor probe: exactly one check
+   * may be in flight, and a muted or suspended instance writes no probe at all
+   * (an unanswerable probe would only produce an orphan reply).
+   */
+  private shouldProbeSixelCursor(): boolean {
+    return !this.sixelParkCheckPending &&
+      !this.isUnmounted && !this.isPaused && !this.terminalQueriesSuspended &&
+      this.altScreenActive && Date.now() >= this.sixelParkCheckMutedUntil;
+  }
+
+  private verifySixelPaint(anchor: { key: string; rect: { x: number; y: number; columns: number; rows: number } }): void {
     if (this.sixelParkCheckPending || this.isUnmounted || this.isPaused) return;
     if (this.terminalQueriesSuspended || !this.altScreenActive) return;
     const now = Date.now();
     if (now < this.sixelParkCheckMutedUntil) return;
     const querier = this.app?.querier;
     if (querier === undefined) return;
-    // Written after the frame, so the terminal answers for the post-park
-    // cursor. flush() bounds the wait: a terminal that ignores DECXCPR
-    // resolves undefined once the DA1 sentinel answers first.
+    // The request bytes are already in the frame this call follows, so only the
+    // pending entry is created here. flush() bounds the wait: a terminal that
+    // ignores DECXCPR resolves undefined once the DA1 sentinel answers first.
     const geometry = `${this.terminalRows}x${this.terminalColumns}`;
     this.sixelParkCheckPending = true;
-    void Promise.all([querier.send(cursorPositionQuery()), querier.flush()])
+    void Promise.all([querier.send(cursorPositionQuery(), { alreadySent: true }), querier.flush()])
       .then(([reply]) => {
         this.sixelParkCheckPending = false;
         if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) return;
         if (reply === undefined) return;
-        // A resize in flight re-parks the cursor on the new grid, so a report
-        // measured against the old geometry proves nothing — and the terminal
-        // rebuilds its own idea of the cursor on resize. Skip the frame rather
-        // than clear a healthy screen.
+        // A resize in flight re-flows the grid and repaints every image, so a
+        // report measured against the old geometry proves nothing. Skip the
+        // frame rather than clear a healthy screen.
         if (geometry !== `${this.terminalRows}x${this.terminalColumns}`) return;
-        if (reply.row === expected.row && reply.col === expected.col) return;
+        const here = { row: reply.row, col: reply.col };
+        const known = this.sixelPaintCursors.get(anchor.key);
+        if (known === undefined) {
+          this.rememberSixelPaintCursor(anchor.key, here);
+          return;
+        }
+        if (known.row === here.row && known.col === here.col) return;
         const at = Date.now();
         this.sixelHealTimes = this.sixelHealTimes.filter(time => at - time < SIXEL_HEAL_WINDOW_MS);
         this.sixelHealTimes.push(at);
@@ -2139,13 +2169,13 @@ export default class Ink {
           this.sixelHealTimes = [];
           this.sixelParkCheckMutedUntil = at + SIXEL_HEAL_MUTE_MS;
           logForDebugging(
-            `sixel cursor check muted: ${SIXEL_HEAL_BURST} mismatches within ${SIXEL_HEAL_WINDOW_MS}ms (expected ${expected.row},${expected.col})`,
+            `sixel cursor check muted: ${SIXEL_HEAL_BURST} mismatches within ${SIXEL_HEAL_WINDOW_MS}ms (image ${anchor.rect.x},${anchor.rect.y} ${anchor.rect.columns}x${anchor.rect.rows}, normally ${known.row},${known.col})`,
             { level: 'warn' }
           );
           return;
         }
         logForDebugging(
-          `sixel payload cut short: parked at ${expected.row},${expected.col} but the cursor is at ${reply.row},${reply.col} — clearing the screen to reclaim leaked payload text`,
+          `sixel payload cut short: image ${anchor.rect.x},${anchor.rect.y} ${anchor.rect.columns}x${anchor.rect.rows} normally ends with the cursor at ${known.row},${known.col} but this one ended at ${here.row},${here.col} — clearing the screen to reclaim leaked payload text`,
           { level: 'warn' }
         );
         this.forceRedraw();
@@ -2153,6 +2183,15 @@ export default class Ink {
       .catch(() => {
         this.sixelParkCheckPending = false;
       });
+  }
+
+  /** Remember the post-image cursor for one geometry, oldest first out. */
+  private rememberSixelPaintCursor(key: string, cell: { row: number; col: number }): void {
+    if (this.sixelPaintCursors.size >= SIXEL_CURSOR_BASELINES) {
+      const oldest = this.sixelPaintCursors.keys().next().value;
+      if (oldest !== undefined) this.sixelPaintCursors.delete(oldest);
+    }
+    this.sixelPaintCursors.set(key, cell);
   }
 
   /**
