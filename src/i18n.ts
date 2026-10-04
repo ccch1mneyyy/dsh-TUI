@@ -1609,6 +1609,8 @@ const dict = {
   'agent-message-target-nameless': { zh: '此代理没有可寻址名称，无法提交', en: 'this agent has no addressable name; cannot submit' },
   'agent-message-target-not-resumable': { zh: '目标代理当前不可恢复（not-resumable）', en: 'target not resumable' },
   'agent-message-parent-unavailable': { zh: '父代理不可用，未发送', en: 'parent unavailable; not sent' },
+  'agent-message-unauthorized': { zh: '当前父权不允许发送', en: 'not authorized to send' },
+  'agent-message-delivery-unavailable': { zh: '目标投递通道当前不可用', en: 'delivery unavailable' },
   'agent-message-dispatch-failed': { zh: '发送失败', en: 'dispatch failed' },
   'agent-message-parent-interrupted': { zh: '父回合被中断，未送达', en: 'parent turn interrupted; not delivered' },
   'agent-message-draft-retained': { zh: '草稿已保留', en: 'draft retained' },

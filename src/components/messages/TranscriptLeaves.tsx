@@ -10,13 +10,13 @@ import { AssistantTextMessage } from './AssistantTextMessage.js'
 import { AssistantThinkingMessage } from './AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from './AssistantToolUseMessage.js'
 import { TranscriptImages } from './TranscriptImages.js'
-import type { AgentMessageDeliveryState, AgentMessageVia, AgentMessageView } from './agentTeam.js'
+import type { AgentMessageState, AgentMessageVia, AgentMessageView } from './agentTeam.js'
 
 // ── agent↔agent message flow leaves (design agent-team-full §5.4) ─────────
 
 /** Delivery-state badge color: only what the channel reported — green is
  *  reserved for an explicit `delivered` fact, dim for `unknown`/`expired`. */
-export function agentMessageStateColor(state: AgentMessageDeliveryState): keyof Theme {
+export function agentMessageStateColor(state: AgentMessageState): keyof Theme {
   if (state === 'delivered') return 'success'
   if (state === 'refused') return 'error'
   if (state === 'issued' || state === 'queued' || state === 'held') return 'warning'
@@ -25,7 +25,7 @@ export function agentMessageStateColor(state: AgentMessageDeliveryState): keyof 
 
 /** The localized state word (issued/queued/delivered/held/refused/expired/
  *  unknown) — one vocabulary across composer status lines and flow rows. */
-export function agentMessageStateText(state: AgentMessageDeliveryState): string {
+export function agentMessageStateText(state: AgentMessageState): string {
   return t(`agent-message-delivery-${state}`)
 }
 

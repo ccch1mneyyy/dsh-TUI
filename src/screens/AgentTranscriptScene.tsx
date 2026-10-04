@@ -17,7 +17,7 @@ import {
 import { AgentMessageComposer } from '../components/AgentMessageComposer.js'
 import { ExitButton } from '../components/SubagentDashboard.js'
 import { t } from '../i18n.js'
-import type { AgentComposeCapability, AgentComposeTarget, AgentMessageView, AgentViewSource } from '../components/messages/agentTeam.js'
+import type { AgentComposeTarget, AgentMessageControl, AgentMessageView, AgentViewSource } from '../components/messages/agentTeam.js'
 
 const sourceLabel = (source: AgentViewSource): string =>
   source.kind === 'chat' ? t('agent-view-source-chat')
@@ -38,9 +38,10 @@ export interface AgentTranscriptSceneProps {
   loadTranscript?: (agentId: string, window?: SubagentTranscriptWindow) => Promise<SubagentTranscriptView | null>
   /** The durable agent↔agent feed for this child (newest last), if any. */
   readonly messages?: readonly AgentMessageView[]
-  /** The compose face + resolved target; absent = no send path → no
-   *  composer rendered (capability absence is absence). */
-  readonly compose?: { readonly capability: AgentComposeCapability; readonly target: AgentComposeTarget }
+  /** The channel's message control + resolved target (`subagentControl.message`);
+   *  absent = no send path → no composer rendered (capability absence is
+   *  absence). */
+  readonly compose?: { readonly control: AgentMessageControl; readonly target: AgentComposeTarget }
 }
 
 /**
@@ -292,7 +293,7 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
         <Box flexDirection="column" marginTop={1}>
           <AgentMessageComposer
             target={compose.target}
-            capability={compose.capability}
+            control={compose.control}
             messages={messages}
             focused={composerFocused}
             onFocusChange={setComposerFocused}

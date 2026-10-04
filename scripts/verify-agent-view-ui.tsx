@@ -185,16 +185,18 @@ function historyPage(events: Array<Record<string, unknown>>, over: Record<string
   return { events, parentAgentId: 'parent-agent-9', uuids: [], hasOlder: false, skippedFromStart: 0, ...over }
 }
 
-function makeCapability(log: Array<Record<string, unknown>>, over: Record<string, unknown> = {}): Record<string, unknown> {
+/** 真通道面形状（channel-view 的 AgentMessageControl）的 mock。 */
+function makeControl(log: Array<Record<string, unknown>>, over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    via: 'claude-parent-mediated',
-    dispatch: async (input: Record<string, unknown>) => {
+    via: over.via ?? 'claude-parent-mediated',
+    steer: over.steer === true,
+    listTargets: async () => [],
+    messages: () => over.feed ?? [],
+    submit: async (input: Record<string, unknown>) => {
       log.push(input)
-      if (over.fail === true) return { ok: false, reason: over.reason ?? 'dispatch-failed' }
-      return { ok: true, state: over.state ?? 'issued' }
+      if (over.fail === true) return { ok: false, reason: over.reason ?? 'failed' }
+      return { ok: true, intentId: 'intent-fx-' + (log.length), state: over.state ?? 'issued' }
     },
-    ...(over.steer === true ? { steer: true as const } : {}),
-    ...(over.via === undefined ? {} : { via: over.via }),
   }
 }
 
@@ -314,13 +316,13 @@ console.log('--- S4: esc layering + queue/steer ---')
 {
   const dispatchLog: Array<Record<string, unknown>> = []
   let exited = 0
-  const capability = makeCapability(dispatchLog)
+  const control = makeControl(dispatchLog)
   await withTerminal(
     () => React.createElement(AgentTranscriptScene, {
       subagent: makeSubagent(),
       source: { kind: 'chat', returnFocus: 'prompt' },
       onExit: () => { exited += 1 },
-      compose: { capability, target: { agentId: 'agent-child-0001', name: 'research the spec' } } as never,
+      compose: { control, target: { agentId: 'agent-child-0001', name: 'research the spec' } } as never,
     }),
     async frame => {
       check('S4 composer 标题（经父代理转发）', await settled(() => frame.screen().includes('Send to research the spec') && frame.screen().includes('via parent relay')), frame.lines().slice(-6).join('|'))
@@ -357,7 +359,7 @@ console.log('--- S4: esc layering + queue/steer ---')
       subagent: makeSubagent(),
       source: { kind: 'chat', returnFocus: 'prompt' },
       onExit: () => {},
-      compose: { capability: makeCapability(steerLog, { steer: true, via: 'dsh-direct-continuable', state: 'queued' }), target: { agentId: 'agent-child-0001', name: 'research the spec' } } as never,
+      compose: { control: makeControl(steerLog, { steer: true, via: 'dsh-direct-continuable', state: 'queued' }), target: { agentId: 'agent-child-0001', name: 'research the spec' } } as never,
     }),
     async frame => {
       await settled(() => frame.screen().includes('direct to child'))
@@ -375,7 +377,7 @@ console.log('--- S4: esc layering + queue/steer ---')
       subagent: makeSubagent(),
       source: { kind: 'chat', returnFocus: 'prompt' },
       onExit: () => {},
-      compose: { capability: makeCapability(failLog, { fail: true, reason: 'target-not-resumable' }), target: { agentId: 'agent-child-0001', name: 'research the spec' } } as never,
+      compose: { control: makeControl(failLog, { fail: true, reason: 'not-resumable' }), target: { agentId: 'agent-child-0001', name: 'research the spec' } } as never,
     }),
     async frame => {
       frame.stdin.write('draft stays')
@@ -412,7 +414,7 @@ console.log('--- S5: capability degradation ---')
       subagent: makeSubagent(),
       source: { kind: 'chat', returnFocus: 'prompt' },
       onExit: () => {},
-      compose: { capability: makeCapability(log), target: { agentId: 'agent-child-0001' } } as never,
+      compose: { control: makeControl(log), target: { agentId: 'agent-child-0001' } } as never,
     }),
     async frame => {
       check('S5 无 name：不提供提交（提示 nameless）', await settled(() => frame.screen().includes('no addressable name')), frame.lines().slice(-4).join('|'))
@@ -428,7 +430,7 @@ console.log('--- S5: capability degradation ---')
       subagent: makeSubagent(),
       source: { kind: 'chat', returnFocus: 'prompt' },
       onExit: () => {},
-      compose: { capability: makeCapability(log), target: { agentId: 'agent-child-0001', name: 'dup', ambiguous: true } } as never,
+      compose: { control: makeControl(log), target: { agentId: 'agent-child-0001', name: 'dup', ambiguous: true } } as never,
     }),
     async frame => {
       check('S5 重名：标题按稳定 id 消歧', await settled(() => frame.screen().includes('Send to agent-ch')), frame.lines().slice(-5).join('|'))
@@ -503,7 +505,7 @@ console.log('--- S8: detail messages page + view action ---')
       onBack: () => {},
       onOpenView: () => { opened += 1 },
       messages: [msg(), msg({ messageId: 'm2', state: 'unknown', from: undefined, to: undefined })] as never,
-      compose: { capability: makeCapability(log), target: { agentId: 'agent-child-0001', name: 'research the spec' } } as never,
+      compose: { control: makeControl(log), target: { agentId: 'agent-child-0001', name: 'research the spec' } } as never,
     }),
     async frame => {
       check('S8 Messages 页签出现（feed 非空）', await settled(() => frame.screen().includes('Messages 2')), frame.lines().slice(3, 8).join('|'))
@@ -634,7 +636,7 @@ console.log('--- Chat: source stack + parent state preservation ---')
       interrupt: () => true,
       history: async () => historyPageData,
       agentMessages: () => feed,
-      agentCompose: () => makeCapability(dispatchLog),
+      message: makeControl(dispatchLog, { feed }),
     },
     backgroundCurrent: async () => ({ ok: true, backgroundedSessionId: 'probe' }),
     agentViewRows: () => EMPTY,

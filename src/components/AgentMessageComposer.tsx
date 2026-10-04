@@ -4,21 +4,36 @@ import { t } from '../i18n.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { agentMessageStateColor, agentMessageStateText, agentMessageViaText } from './messages/TranscriptLeaves.js'
 import type {
-  AgentComposeCapability,
-  AgentComposeDispatchOutcome,
   AgentComposeTarget,
-  AgentMessageDeliveryState,
+  AgentMessageControl,
+  AgentMessageState,
+  AgentMessageSubmitResult,
   AgentMessageView,
 } from './messages/agentTeam.js'
 
-/** The stable §8 notice vocabulary this composer can show. */
+/** The stable §8 notice vocabulary this composer can show (the control's
+ *  failure reasons, localized). */
 type ComposerNoticeKey =
   | 'agent-message-unavailable'
   | 'agent-message-target-ambiguous'
   | 'agent-message-target-not-resumable'
   | 'agent-message-parent-unavailable'
+  | 'agent-message-unauthorized'
+  | 'agent-message-delivery-unavailable'
   | 'agent-message-dispatch-failed'
   | 'agent-message-parent-interrupted'
+
+/** The control's stable failure reason → the notice word. */
+const NOTICE_OF_REASON: Readonly<Record<Extract<AgentMessageSubmitResult, { ok: false }>['reason'], ComposerNoticeKey>> = {
+  unavailable: 'agent-message-unavailable',
+  'target-ambiguous': 'agent-message-target-ambiguous',
+  'not-resumable': 'agent-message-target-not-resumable',
+  'parent-unavailable': 'agent-message-parent-unavailable',
+  unauthorized: 'agent-message-unauthorized',
+  'delivery-unavailable': 'agent-message-delivery-unavailable',
+  cancelled: 'agent-message-parent-interrupted',
+  failed: 'agent-message-dispatch-failed',
+}
 
 /** Local submit record: what THIS composer sent and what the channel said.
  *  The durable feed (`messages`) may later advance the same intent — the
@@ -27,14 +42,15 @@ type ComposerNoticeKey =
 interface SentIntent {
   readonly intentId: string
   readonly text: string
-  state: AgentMessageDeliveryState
+  state: AgentMessageState
 }
 
 export interface AgentMessageComposerProps {
   /** Resolved target: unique name, or the stable id when ambiguous. */
   readonly target: AgentComposeTarget
-  /** The transport face; the wiring already proved it exists. */
-  readonly capability: AgentComposeCapability
+  /** The channel's message control (`subagentControl.message`); the wiring
+   *  already proved the member exists. */
+  readonly control: AgentMessageControl
   /** The durable feed for this child — later facts about our intents. */
   readonly messages: readonly AgentMessageView[]
   /** Keyboard focus; the scene yields plain typing here while true. */
@@ -46,52 +62,51 @@ export interface AgentMessageComposerProps {
  * AgentMessageComposer — the user→child send box (design agent-team-full
  * §5.1): an INDEPENDENT draft owner, never the parent PromptInput. The
  * parent's draft, dock and queue are untouched by construction — this
- * component holds its own text and submits only through the capability it
- * was handed (Claude parent mediation or DSH direct prompt). No confirm
- * dialog anywhere: failures keep the draft and say why in a notice line.
+ * component holds its own text and submits only through the channel's
+ * AgentMessageControl (Claude parent mediation or DSH direct prompt). No
+ * confirm dialog anywhere: failures keep the draft and say why in a notice.
  */
-export function AgentMessageComposer({ target, capability, messages, focused, onFocusChange }: AgentMessageComposerProps): React.ReactNode {
+export function AgentMessageComposer({ target, control, messages, focused, onFocusChange }: AgentMessageComposerProps): React.ReactNode {
   const [text, setText] = React.useState('')
   const [caret, setCaret] = React.useState(0)
   const [sending, setSending] = React.useState(false)
   const [sent, setSent] = React.useState<SentIntent | null>(null)
   const [notice, setNotice] = React.useState<{ key: ComposerNoticeKey; failure?: boolean } | null>(null)
-  const intentSeq = React.useRef(0)
 
   // The display name: the unique name, the stable id when ambiguous, or the
   // short id when the backend reports no name at all.
-  const shownName = target.ambiguous === true ? `${target.agentId.slice(0, 8)}` : target.name ?? target.agentId.slice(0, 8)
+  const shownName = target.ambiguous === true ? target.agentId.slice(0, 8) : target.name ?? target.agentId.slice(0, 8)
   const canSubmit = target.name !== undefined && !sending
 
   // Later channel facts about our newest intent advance the status line.
-  const latestIntentState = React.useMemo<AgentMessageDeliveryState | undefined>(() => {
-    if (sent === undefined || sent === null) return undefined
+  const latestIntentState = React.useMemo<AgentMessageState | undefined>(() => {
+    if (sent === null) return undefined
     const advance = [...messages].reverse().find(message => message.intentId === sent.intentId)
     return advance?.state ?? sent.state
   }, [messages, sent])
 
   const submit = (delivery: 'queue' | 'steer'): void => {
     if (!canSubmit || text.trim() === '') return
-    const intentId = `intent-${Date.now().toString(36)}-${intentSeq.current += 1}`
     setSending(true)
     setNotice(null)
-    capability.dispatch({ intentId, targetAgentId: target.agentId, text, delivery }).then(outcome => {
+    control.submit({
+      targetId: target.agentId,
+      ...(target.name === undefined ? {} : { targetName: target.name }),
+      text,
+      delivery,
+    }).then(outcome => {
       setSending(false)
       if (outcome.ok) {
+        // The channel mints the intent id; the receipt state is a FACT the
+        // transport stated (an accepted inbox is 'queued', never more).
         setText('')
         setCaret(0)
-        setSent({ intentId, text, state: outcome.state })
+        setSent({ intentId: outcome.intentId, text, state: outcome.state })
         return
       }
       // Failure keeps the draft verbatim (design §5.1) — the notice names
       // the stable reason (§8 vocabulary), never a raw provider error.
-      const reasonKey: ComposerNoticeKey = outcome.reason === 'cancelled' ? 'agent-message-parent-interrupted'
-        : outcome.reason === 'target-ambiguous' ? 'agent-message-target-ambiguous'
-          : outcome.reason === 'unavailable' ? 'agent-message-unavailable'
-            : outcome.reason === 'target-not-resumable' ? 'agent-message-target-not-resumable'
-              : outcome.reason === 'parent-unavailable' ? 'agent-message-parent-unavailable'
-                : 'agent-message-dispatch-failed'
-      setNotice({ key: reasonKey, failure: true })
+      setNotice({ key: NOTICE_OF_REASON[outcome.reason], failure: true })
     }, () => {
       setSending(false)
       setNotice({ key: 'agent-message-dispatch-failed', failure: true })
@@ -116,7 +131,7 @@ export function AgentMessageComposer({ target, capability, messages, focused, on
     // keeps the followup placement (never interruptAndDeliver — §6.3).
     if (key.return && key.ctrl) {
       event.stopImmediatePropagation()
-      submit(capability.steer === true ? 'steer' : 'queue')
+      submit(control.steer === true ? 'steer' : 'queue')
       return
     }
     if (key.backspace || key.delete) {
@@ -156,7 +171,7 @@ export function AgentMessageComposer({ target, capability, messages, focused, on
     }
   }, { isActive: focused })
 
-  const viaLabel = agentMessageViaText(capability.via)
+  const viaLabel = agentMessageViaText(control.via)
   return (
     <Box flexDirection="column">
       <Box flexDirection="row">
@@ -187,7 +202,7 @@ export function AgentMessageComposer({ target, capability, messages, focused, on
       )}
       <Text dimColor>
         {canSubmit
-          ? (capability.steer === true
+          ? (control.steer === true
               ? t('agent-message-hint-queue-steer')
               : t('agent-message-hint-queue'))
           : t('agent-message-hint-nameless')}

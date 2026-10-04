@@ -74,7 +74,7 @@ import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
 import { AgentTranscriptScene } from './AgentTranscriptScene.js'
 import { agentViewStore } from '../components/sidePanel/agentViewStore.js'
-import { agentComposeFor, agentComposeTargetOf, agentTeamCapabilities, type AgentComposeCapability, type AgentComposeTarget, type AgentMessageView, type AgentViewSource } from '../components/messages/agentTeam.js'
+import { agentComposeTargetOf, type AgentComposeTarget, type AgentMessageView, type AgentViewSource } from '../components/messages/agentTeam.js'
 import type { PromptDraftCache } from '../components/promptDraftCache.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
 import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
@@ -6036,10 +6036,9 @@ export function Chat({
       setAgentView(null)
       return null
     }
-    const agentTeamFace = agentTeamCapabilities(channel.subagentControl)
-    const viewMessages = agentTeamFace?.agentMessages !== undefined ? agentTeamFace.agentMessages(agentView.agentId) : []
+    const messageControl = channel.subagentControl.message
+    const viewMessages = messageControl === undefined ? [] : messageControl.messages().filter(m => m.from === agentView.agentId || m.to === agentView.agentId)
     const viewTarget = agentComposeTargetOf(agentView.agentId, new Map(channel.subagents.map(s => [s.agentId, s.description])))
-    const viewCapability = agentComposeFor(agentTeamFace, viewTarget)
     const viewScene = (
       <AgentTranscriptScene
         subagent={viewSubagent}
@@ -6047,7 +6046,7 @@ export function Chat({
         onExit={() => exitAgentView(agentView.source)}
         {...(channel.subagentControl.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
         messages={viewMessages}
-        {...(viewCapability === undefined ? {} : { compose: { capability: viewCapability, target: viewTarget } })}
+        {...(messageControl === undefined ? {} : { compose: { control: messageControl, target: viewTarget } })}
       />
     )
     return fullscreen ? viewScene : <AlternateScreen>{viewScene}</AlternateScreen>
@@ -6063,10 +6062,8 @@ export function Chat({
       openSubagentDashboard()
       return null
     }
-    const detailFace = agentTeamCapabilities(channel.subagentControl)
-    const detailMessages = detailFace?.agentMessages !== undefined ? detailFace.agentMessages(subagent.agentId) : []
+    const detailMessages = channel.subagentControl.message === undefined ? [] : channel.subagentControl.message.messages().filter(m => m.from === subagent.agentId || m.to === subagent.agentId)
     const detailTarget = agentComposeTargetOf(subagent.agentId, new Map(channel.subagents.map(s => [s.agentId, s.description])))
-    const detailCapability = agentComposeFor(detailFace, detailTarget)
     const scene = (
       <SubagentDetailScene
         subagent={subagent}
@@ -6074,7 +6071,7 @@ export function Chat({
         {...(channel.subagentControl.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
         onOpenView={() => openAgentView(subagent.agentId, { kind: 'agent-detail', agentId: subagent.agentId })}
         messages={detailMessages}
-        {...(detailCapability === undefined ? {} : { compose: { capability: detailCapability, target: detailTarget } })}
+        {...(channel.subagentControl.message === undefined ? {} : { compose: { control: channel.subagentControl.message, target: detailTarget } })}
         onBack={() => {
           setSubagentDetailId(null)
           setSubagentDashboardOpen(true)
@@ -6108,7 +6105,6 @@ export function Chat({
   // Subagent dashboard: displays all active and completed subagents.
   // Like the browser and settings, it replaces the conversation entirely.
   if (subagentDashboardOpen && launchpadGate()) {
-    const dashboardFace = agentTeamCapabilities(channel.subagentControl)
     const dashboard = (
       <SubagentDashboard
         subagents={[...channel.subagents]}
@@ -6117,7 +6113,7 @@ export function Chat({
           setSubagentDetailId(id)
         }}
         onOpenView={(id) => openAgentView(id, { kind: 'agents-dashboard' })}
-        messages={dashboardFace?.agentMessages !== undefined ? dashboardFace.agentMessages() : undefined}
+        messages={channel.subagentControl.message?.messages()}
         onClose={() => setSubagentDashboardOpen(false)}
       />
     )

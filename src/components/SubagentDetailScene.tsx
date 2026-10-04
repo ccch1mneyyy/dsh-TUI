@@ -6,7 +6,7 @@ import type { SubagentTranscriptWindow } from '../agent/capabilities.js'
 import { AgentMessageLeafRow, AssistantTextLeafRow, ThinkingLeafRow, ToolLeafRow } from './messages/TranscriptLeaves.js'
 import { AgentMessageFlowRow } from './messages/AgentMessageFlow.js'
 import { AgentMessageComposer } from './AgentMessageComposer.js'
-import type { AgentComposeCapability, AgentComposeTarget, AgentMessageView } from './messages/agentTeam.js'
+import type { AgentComposeTarget, AgentMessageControl, AgentMessageView } from './messages/agentTeam.js'
 import { subagentDetailMemory } from './subagentDetailMemory.js'
 import {
   foldTranscriptLeaves,
@@ -191,7 +191,7 @@ export interface SubagentDetailSceneProps {
   /** 代理↔代理消息流（§5.4）：非空时出现 Messages 页。 */
   messages?: readonly AgentMessageView[]
   /** 发送能力（§5.1）：存在才渲染 composer；独立草稿，不经父 PromptInput。 */
-  compose?: { readonly capability: AgentComposeCapability; readonly target: AgentComposeTarget }
+  compose?: { readonly control: AgentMessageControl; readonly target: AgentComposeTarget }
   /** 'panel' 挂在侧栏宿主里（去外层 padding、键盘走 usePanelInput 分发器）；
    *  default（缺省）与整屏形态逐字节一致。 */
   variant?: 'default' | 'panel'
@@ -810,7 +810,7 @@ export function SubagentDetailScene({
         <Box flexDirection="column" marginTop={1}>
           <AgentMessageComposer
             target={compose.target}
-            capability={compose.capability}
+            control={compose.control}
             messages={messages}
             focused={composerFocused}
             onFocusChange={setComposerFocused}
