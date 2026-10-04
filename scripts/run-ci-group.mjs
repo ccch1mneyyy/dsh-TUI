@@ -897,6 +897,13 @@ const GROUPS = {
 // 空态、↑/↓ 经分发器移动选中、Tab/→ 切视图、Enter 展开再收起、Esc 恒不消费、
 // SGR 真鼠标点行聚焦、visible=false 零写流（visible=true 对照有写）、28/40 列不溢出。
     ["verify-trajectory-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-panel.tsx']],
+// 轨迹三态回归（设计 agent-team-panels §④ / R6-m1 消解）：TrajectorySource
+// supported/empty/unsupported 由组合结构声明（核心=unsupported、DSH 扩展=
+// empty→supported，非 backendId 硬编码）；四入口同口径——/trace、Ctrl+T 在
+// 无源后端上打开诚实 unsupported 场景（无能力通知、无拒绝）、侧栏 ∿ 标签
+// 照常可点、⤢ 全屏出口在 unsupported 收起而 supported 保留；supported-empty
+// 的现文案与 DSH golden 逐字节不变。
+    ["verify-trajectory-source-states", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-source-states.tsx']],
 // 信息栏回归：分组键值渲染（模型/思考深度/模式/权限/上下文/缓存/TPS/消耗/工作目录/
 // 会话标题与 ID）、无数据回落 ——、长值截断不溢出、窄列可读、visible=false 不订阅。
     ["verify-info-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-info-panel.tsx']],
