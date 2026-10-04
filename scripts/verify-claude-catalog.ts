@@ -350,7 +350,7 @@ const fakeSession = (sessionId: string, options: { cwd?: string; history?: reado
       return () => { listeners.delete(listener) }
     },
     submit: () => Promise.resolve({ accepted: true }),
-    removePending: () => false,
+
     cancel: () => Promise.resolve({ stillQueued: [] }),
     dispose() { session.disposed = true; return Promise.resolve() },
     emit(events, meta = {}) { for (const listener of [...listeners]) listener(events, { replay: false, wake: 'sync', ...meta }) },

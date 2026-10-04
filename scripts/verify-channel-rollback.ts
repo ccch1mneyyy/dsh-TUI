@@ -87,7 +87,7 @@ function fakeSession(sessionId: string, subscribeThrows = false) {
       return () => { subscribed -= 1 }
     },
     submit: () => Promise.resolve({ accepted: true }),
-    removePending: () => false,
+
     cancel: () => Promise.resolve({ stillQueued: [] }),
     dispose() { disposed += 1; return Promise.resolve() },
   }

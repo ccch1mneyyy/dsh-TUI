@@ -8,23 +8,13 @@
  * each backend augments its own marker from inside its directory, and only
  * that directory may read it (enforced by `verify:boundary`).
  */
-import type { AgentMessageView, WorkingActivityView } from '../adapter/ports/channel-view.js'
+import type { WorkingActivityView } from '../adapter/ports/channel-view.js'
 import type { AgentEvent, CommandInfo, PermissionRequestView } from './events.js'
 import type { AgentSessionRef } from './refs.js'
 
 /** DSH escape hatch; augmented by `src/dsh-adapter/backend/session.ts`. */
 export interface DshNative {
   readonly kind: 'dsh'
-}
-
-/** Claude Agent SDK escape hatch; augmented by `src/backends/claude/`. */
-export interface ClaudeNative {
-  readonly kind: 'claude'
-}
-
-/** ACP escape hatch; augmented by `src/backends/acp/`. */
-export interface AcpNative {
-  readonly kind: 'acp'
 }
 
 /** A user decision on one permission prompt. */
@@ -74,13 +64,7 @@ export interface ModeOption {
   readonly description?: string
 }
 
-/**
- * One relay channel profile (the Claude backend's channels.json): the exact
- * `models` map and the `tiers` rules that say which model actually serves
- * a requested id (backends/claude/channels.ts). Read-only rows for the
- * /channel picker, its mapping view, and the restart decision when the
- * connection changes.
- */
+/** Read-only mapping and connection details for a backend channel. */
 export interface ChannelProfileView {
   readonly id: string
   readonly name: string
@@ -145,11 +129,6 @@ export interface McpServerView {
   readonly toolCount?: number
 }
 
-/** What running a backend command did. */
-export type ExternalCommandOutcome =
-  | { readonly kind: 'handled' }
-  | { readonly kind: 'failed'; readonly reason: string }
-
 /** One named context contributor and its token cost. */
 export interface ContextItemView {
   readonly name: string
@@ -187,20 +166,9 @@ export interface SessionAuthView {
   readonly lines: readonly string[]
 }
 
-/** What a fresh conversation loads (system prompt sections, files, skills). */
-export interface LoadedContextView {
-  readonly sections: readonly { readonly name: string; readonly text: string }[]
-}
-
 /** Every optional capability of one live session. */
 export interface SessionCapabilities {
-  /**
-   * The backend can withdraw a queued input synchronously: `removePending`
-   * answers with a plain boolean. Absent = queued inputs cannot be retracted,
-   * and the channel never starts a withdrawal (Alt+Up keeps the message
-   * queued instead of racing an async removal it would report as failed).
-   */
-  readonly retractPending?: true
+  readonly pendingRetraction?: { remove(clientMessageId: string): boolean }
   readonly permissions?: {
     respond(requestId: string, decision: PermissionDecision): void
     pending(): readonly PermissionRequestView[]
@@ -213,11 +181,8 @@ export interface SessionCapabilities {
     list(): Promise<readonly ModelOption[]>
     current(): ModelRef
     set(ref: ModelRef): Promise<ModelSwitchOutcome>
-    /** The display name of the model that actually serves the session when
-     *  a channel mapping says the live id is a cosmetic alias (relay
-     *  channels echo the requested id back; see backends/claude/modelEnv.ts).
-     *  Undefined = the id is what serves the session. Presenters render it
-     *  instead of the id; data surfaces (attribution, matching) keep the id. */
+    /** The model name that serves the session when the live id is an alias.
+     *  Presenters use it for display; data surfaces keep the requested id. */
     display?(): string | undefined
   }
   readonly effort?: {
@@ -284,7 +249,7 @@ export interface SessionCapabilities {
      *  base URL and the absorbable tier rules, without creating anything. */
     peekSettingsImport?(): { readonly baseUrl?: string; readonly tiers: Readonly<Record<string, string>> } | undefined
   }
-  readonly compact?: { run(): Promise<void>; cancel?(): void }
+  readonly compact?: { run(): Promise<void> }
   /**
    * Rewind to a user message (`anchor` = its `user.message.anchor`):
    * `preview` reports what restoring the files would change (throws when
@@ -308,13 +273,8 @@ export interface SessionCapabilities {
      *  AgentEvents). Absent = the backend has no transcript data source;
      *  rejects when the read fails. */
     history?(agentId: string, window?: SubagentTranscriptWindow): Promise<SubagentTranscriptPage>
-    /**
-     * The session's own relay observations (Claude folds its SendMessage
-     * tool traffic into neutral views). The channel core composes the
-     * parent-mediated submit path around it; absent = this backend serves no
-     * message capability (the composer is not rendered).
-     */
-    message?: { messages(): readonly AgentMessageView[] }
+    /** How subagent messages reach this session. */
+    messaging?: 'parent-mediated'
   }
   /**
    * Background tasks: `stop` asks the backend to stop one; `readOutput`
@@ -366,7 +326,6 @@ export interface SessionCapabilities {
   readonly images?: { readonly limits: ImageLimitsView }
   readonly commands?: {
     list(): Promise<readonly CommandInfo[]>
-    run?(name: string, rawInput: string): Promise<ExternalCommandOutcome | undefined>
   }
   readonly context?: { usage(detail: 'summary' | 'full'): Promise<ContextUsageView> }
   readonly account?: { info(): Promise<AccountView> }
@@ -380,7 +339,6 @@ export interface SessionCapabilities {
     status(): Promise<SessionAuthView>
     reconnect(): Promise<void>
   }
-  readonly loadedContext?: { snapshot(): Promise<LoadedContextView | undefined> }
   /**
    * The backend's own working-activity line, when it folds one itself (the
    * Claude backend does; a DSH session publishes through the
@@ -393,8 +351,8 @@ export interface SessionCapabilities {
   /** Backend-specific `/doctor` lines (version drift, executable, …), already
    *  localized by the backend. */
   readonly diagnostics?: { lines(): readonly string[] }
-  /** Backend escape hatches; read only from the owning backend's directory. */
-  readonly native: { readonly dsh?: DshNative; readonly claude?: ClaudeNative; readonly acp?: AcpNative }
+  /** DSH specialists not yet covered by a typed capability. */
+  readonly native: { readonly dsh?: DshNative }
 }
 
 /**

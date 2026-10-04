@@ -1329,8 +1329,11 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         return
       }
       // Owned outside the transcript reducer: session status and pending
-      // inputs by the channel binding, permissions/questions by their
-      // stores; the remaining vocabulary has no channel state yet.
+      // inputs by the channel binding, permissions/questions by their stores,
+      // and agent-message observations by the activity projection.
+      case 'agent.message':
+        deps.activity?.apply(event, replaying)
+        return
       case 'session.reset':
       case 'session.status':
       case 'pending.changed':
@@ -1344,10 +1347,6 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'mode.changed':
       case 'commands.changed':
       case 'rate-limit':
-      // The agent↔agent relay observation is folded by the
-      // session that observes it (the Claude session's message capability);
-      // the transcript itself renders nothing for it here.
-      case 'agent.message':
         return
       default: {
         // Exhaustiveness: a new AgentEvent variant must be handled above.

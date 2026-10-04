@@ -75,21 +75,21 @@ const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
 // ── Section A: the neutral fold and vocabulary helpers ────────────────────
 {
   const views: import('../src/adapter/ports/channel-view.js').AgentMessageView[] = []
-  foldAgentMessage(views, { messageId: 'call-1', via: 'claude-parent-mediated', text: 'ship it', state: 'issued', observedAt: 1 })
+  foldAgentMessage(views, { messageId: 'call-1', via: 'parent-mediated', text: 'ship it', state: 'issued', observedAt: 1 })
   check('A1 a new observation appends one view', views.length === 1 && views[0]!.messageId === 'call-1' && views[0]!.state === 'issued')
-  foldAgentMessage(views, { messageId: 'call-1', via: 'claude-parent-mediated', text: '', state: 'unknown', observedAt: 2 })
+  foldAgentMessage(views, { messageId: 'call-1', via: 'parent-mediated', text: '', state: 'unknown', observedAt: 2 })
   check('A2 the settlement updates the SAME row (no text, no regression)', views.length === 1 && views[0]!.state === 'unknown' && views[0]!.text === 'ship it' && views[0]!.observedAt === 2)
-  foldAgentMessage(views, { messageId: 'call-1', via: 'claude-parent-mediated', text: '', state: 'delivered', observedAt: 3 })
+  foldAgentMessage(views, { messageId: 'call-1', via: 'parent-mediated', text: '', state: 'delivered', observedAt: 3 })
   check('A3 unknown stays terminal (a later delivered is dropped)', views[0]!.state === 'unknown')
-  foldAgentMessage(views, { messageId: 'm2', via: 'dsh-direct-continuable', text: 'later', state: 'queued', observedAt: 4 })
-  foldAgentMessage(views, { messageId: 'm2', via: 'dsh-direct-continuable', text: '', state: 'issued', observedAt: 5 })
+  foldAgentMessage(views, { messageId: 'm2', via: 'direct-continuable', text: 'later', state: 'queued', observedAt: 4 })
+  foldAgentMessage(views, { messageId: 'm2', via: 'direct-continuable', text: '', state: 'issued', observedAt: 5 })
   check('A4 queued never regresses to issued', views[1]!.state === 'queued')
-  foldAgentMessage(views, { messageId: 'm2', via: 'dsh-direct-continuable', text: '', state: 'delivered', observedAt: 6 })
+  foldAgentMessage(views, { messageId: 'm2', via: 'direct-continuable', text: '', state: 'delivered', observedAt: 6 })
   check('A5 queued advances to an explicit delivered', views[1]!.state === 'delivered')
   const bounded: import('../src/adapter/ports/channel-view.js').AgentMessageView[] = []
-  for (let i = 0; i < MAX_AGENT_MESSAGES + 25; i++) bounded.push({ messageId: `m${i}`, via: 'dsh-agent-relay', text: '', state: 'queued', observedAt: i })
+  for (let i = 0; i < MAX_AGENT_MESSAGES + 25; i++) bounded.push({ messageId: `m${i}`, via: 'agent-relay', text: '', state: 'queued', observedAt: i })
   const copy = [...bounded]
-  foldAgentMessage(copy, { messageId: 'fresh', via: 'dsh-agent-relay', text: '', state: 'queued', observedAt: 0 })
+  foldAgentMessage(copy, { messageId: 'fresh', via: 'agent-relay', text: '', state: 'queued', observedAt: 0 })
   check('A6 the store stays bounded, newest kept', copy.length === MAX_AGENT_MESSAGES && copy[copy.length - 1]!.messageId === 'fresh')
 
   check('A7 a relay source is recognized exactly', agentRelaySourceOf({ kind: 'agent-message', form: 'relay', senderSessionId: 'child-9' })?.senderSessionId === 'child-9')
@@ -144,14 +144,14 @@ const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
     lookupChild: () => undefined,
   })
   const control = projection.control
-  check('B0 the control exposes the direct continuable capability', control.message !== undefined && control.message.via === 'dsh-direct-continuable' && control.message.steer === true)
+  check('B0 the control exposes the direct continuable capability', control.message !== undefined && control.message.via === 'direct-continuable' && control.message.steer === true)
 
   // A relay into the parent: durable user/message with AgentMessageSource.
   projection.onSessionEvent(parentSession, { type: 'user/message', seq: 11, time: 111, data: { id: 'relay-1', source: { kind: 'agent-message', form: 'relay', senderSessionId: 'sess-child-1' }, content: [{ type: 'text', text: 'scan finished' }] } })
   let messages = control.message!.messages()
   check('B1 a durable relay folds into a queued child→parent view',
     messages.length === 1 && messages[0]!.messageId === 'relay-1' && messages[0]!.from === 'sess-child-1' && messages[0]!.to === 'sess-parent-1'
-    && messages[0]!.via === 'dsh-agent-relay' && messages[0]!.state === 'queued' && messages[0]!.text === 'scan finished' && messages[0]!.sourceRef === 'seq:11' && messages[0]!.parentSessionId === 'sess-parent-1',
+    && messages[0]!.via === 'agent-relay' && messages[0]!.state === 'queued' && messages[0]!.text === 'scan finished' && messages[0]!.sourceRef === 'seq:11' && messages[0]!.parentSessionId === 'sess-parent-1',
     messages)
 
   // Plain user text, injected context and settlement notices are not relays.
@@ -177,7 +177,7 @@ const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
     request.parentSessionId === 'sess-parent-1' && request.childSessionId === 'child-cont' && request.mode === 'continuable' && request.delivery === 'queue' && request.content.length === 1 && request.content[0]!.text === 'focus on tests',
     request)
   messages = control.message!.messages()
-  check('B6 the receipt folds as a user→child queued view', messages.length === 3 && messages[2]!.from === 'user' && messages[2]!.to === 'child-cont' && messages[2]!.via === 'dsh-direct-continuable' && messages[2]!.intentId === request.requestId, messages)
+  check('B6 the receipt folds as a user→child queued view', messages.length === 3 && messages[2]!.from === 'user' && messages[2]!.to === 'child-cont' && messages[2]!.via === 'direct-continuable' && messages[2]!.intentId === request.requestId, messages)
 
   for (const [code, reason] of [['subagent/not-resumable', 'not-resumable'], ['subagent/unauthorized', 'unauthorized'], ['subagent/delivery-unavailable', 'delivery-unavailable'], ['subagent/parent-unavailable', 'parent-unavailable'], ['gateway/cancelled', 'cancelled']] as const) {
     failCode = code
@@ -214,7 +214,7 @@ const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
   check('C2 an unaddressable or empty input is not a fact', parseSendMessageInput({ message: 'hi' }) === undefined && parseSendMessageInput({ to: 'helper', message: '' }) === undefined && parseSendMessageInput('nope') === undefined)
 
   const callMain = sendMessageCallView({ callId: 'call-9', observedAt: 5, input: { to: 'helper', text: 'hi' } })
-  check('C3 a parent-lane call observes as issued with no sender id', callMain.messageId === 'call-9' && callMain.from === undefined && callMain.to === 'helper' && callMain.state === 'issued' && callMain.sourceRef === 'call-9' && callMain.via === 'claude-parent-mediated')
+  check('C3 a parent-lane call observes as issued with no sender id', callMain.messageId === 'call-9' && callMain.from === undefined && callMain.to === 'helper' && callMain.state === 'issued' && callMain.sourceRef === 'call-9' && callMain.via === 'parent-mediated')
   const callLane = sendMessageCallView({ callId: 'call-10', lane: 'toolu_parent', observedAt: 6, input: { to: 'peer', text: 'yo' } })
   check('C4 a subagent-lane call names the lane as sender', callLane.from === 'toolu_parent' && callLane.to === 'peer')
 
@@ -250,7 +250,7 @@ const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
       status: 'running' as const,
       capabilities: {
         native: {},
-        ...(withCapability ? { subagents: { interrupt: async () => true, message: { messages: () => [{ messageId: 'obs-1', via: 'claude-parent-mediated', text: 'seen', state: 'issued', observedAt: 9 }] } } } : {}),
+        ...(withCapability ? { subagents: { interrupt: async () => true, messaging: 'parent-mediated' as const } } : {}),
       },
       history: async () => [],
       subscribe(listener: (batch: readonly unknown[], meta: unknown) => void) {
@@ -261,7 +261,7 @@ const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
         state.submits.push({ text: input.text, placement })
         return Promise.resolve({ accepted: true })
       },
-      removePending: () => false,
+
       cancel: async () => ({ stillQueued: [], outcome: 'confirmed' as const }),
       dispose: async () => {},
     }
@@ -280,8 +280,9 @@ const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
   const med = makeSession(true)
   const channel = createChannel(ctx, med.session as never, launchOptions)
   const message = channel.subagentControl.message
-  check('D1 the parent-mediated control is composed', message !== undefined && message.via === 'claude-parent-mediated' && message.steer === false)
-  check('D2 the observed views come from the session capability', message!.messages().length === 1 && message!.messages()[0]!.messageId === 'obs-1')
+  check('D1 the parent-mediated control is composed', message !== undefined && message.via === 'parent-mediated' && message.steer === false)
+  med.push({ type: 'agent.message', message: { messageId: 'obs-1', via: 'parent-mediated', text: 'seen', state: 'issued', observedAt: 9 } })
+  check('D2 agent.message folds into channel activity', message!.messages().length === 1 && message!.messages()[0]!.messageId === 'obs-1')
 
   med.push({ type: 'subagent.start', agentId: 'toolu_1', description: 'Scan the repo', background: false, time: 1 })
   const targets = await message!.listTargets()
@@ -309,14 +310,14 @@ const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
   const channel = createChannel(ctx, session, { model: 'Claude Agent', provider: 'claude', cwd: '/fixture/project', activity: false, backendLabel: 'Claude Agent' })
   const query = fake.queries[0]!
   const message = channel.subagentControl.message
-  check('E0 the claude channel serves the parent-mediated capability', message !== undefined && message!.via === 'claude-parent-mediated' && message!.steer === false)
-  check('E1 the session capability starts empty (no fabricated views)', message!.messages().length === 0)
+  check('E0 the claude channel serves the parent-mediated capability', message !== undefined && message!.via === 'parent-mediated' && message!.steer === false)
+  check('E1 the channel activity fold starts empty', message!.messages().length === 0)
 
   query.emit({ type: 'assistant', message: { id: 'msg_e1', model: 'claude', content: [{ type: 'tool_use', id: 'call-e1', name: 'SendMessage', input: { to: 'helper', message: 'please scan' } }] } })
   await tick()
   await tick()
   let views = message!.messages()
-  check('E2 the live SendMessage call folds into the session capability', views.length === 1 && views[0]!.messageId === 'call-e1' && views[0]!.state === 'issued' && views[0]!.to === 'helper' && views[0]!.via === 'claude-parent-mediated', views)
+  check('E2 the live SendMessage call folds into channel activity', views.length === 1 && views[0]!.messageId === 'call-e1' && views[0]!.state === 'issued' && views[0]!.to === 'helper' && views[0]!.via === 'parent-mediated', views)
 
   query.emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-e1', is_error: true, content: 'agent not found' }] } })
   await tick()
