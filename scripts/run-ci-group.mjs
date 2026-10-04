@@ -404,6 +404,19 @@ const GROUPS = {
 // 后再单独登记。
   ],
   'session-workspace': [
+// G0 host-loader 门（deploy-transition 设计的开工 gate）：真实 cordis +
+// cordis-plugin-loader 在 hoisted 夹具 profile 上按包名加载 TUI 门面，
+// 证明 TLA dispatcher 能选代次（lease 先于代次模块求值、进程内 pin、
+// 翻转指针换新进程、legacy/source/fail-closed、internals 与普通动态
+// import 双解析路径）。改动 dispatch/ 或包 exports 时必须过这条。
+    ["g0-host-loader-spike", ['node', 'scripts/g0-host-loader-spike.mjs']],
+// 版本化部署 M0 回归：manifest 解析矩阵（截断/越权 id/坏哈希全 fail
+// closed）、promote 原子性（并发读者只见旧或新、staging 改名不可变冲
+// 突、READY 树漂移拒绝、build-lock 互斥+过期不死锁）、启动 pin（含
+// Junction 开发轨 src/+tsconfig 标记优先于 manifest）、lease 三态分类、
+// 安全 GC（dry-run 默认、active/回滚目标/活 lease 一律保留）、回滚＝
+// 只改指针。
+    ["verify-deploy-generations", ['node', 'scripts/verify-deploy-generations.mjs']],
 // 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：
 // 全程跑官方读取链——Session.append 生成骨架（turn 配对/reasoning/
 // provenance/空 system head/工具调用/中断/标题/压缩检查点）、
