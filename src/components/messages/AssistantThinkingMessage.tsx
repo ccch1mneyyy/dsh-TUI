@@ -3,7 +3,7 @@ import chalk from 'chalk'
 import { Box, Text } from '../../ui.js'
 import { t } from '../../i18n.js'
 import { StreamingMarkdown } from '../StreamingMarkdown.js'
-import { formatDuration } from '../../terminal-utils/format.js'
+import { formatDuration, formatTokens } from '../../terminal-utils/format.js'
 import {
   THINKING_SPINNER_FRAMES,
   THINKING_SPINNER_INTERVAL_MS,
@@ -44,6 +44,11 @@ type Props = {
   preview?: boolean
   /** Thinking wall-clock duration once the reasoning block settled (ms). */
   durationMs?: number
+  /** Estimated thinking tokens when the backend reports thinking only as a
+   *  count (no text). Renders a one-line `Thinking · ~N tokens` header while
+   *  streaming and `Thought · ~N tokens` once settled; text, when present,
+   *  still wins. */
+  reasoningTokens?: number
   /** Message-selection mode highlight. */
   isSelected?: boolean
   onClick?(event: ClickEvent): void
@@ -67,10 +72,22 @@ export function AssistantThinkingMessage({
   streaming = false,
   preview = false,
   durationMs,
+  reasoningTokens,
   isSelected = false,
   onClick,
 }: Props): React.ReactNode {
-  if (!thinking) return null
+  if (!thinking) {
+    if (reasoningTokens === undefined) return null
+    return (
+      <ThinkingTokensHeader
+        tokens={reasoningTokens}
+        streaming={streaming}
+        marginTopOnTurn={marginTopOnTurn}
+        isSelected={isSelected}
+        onClick={onClick}
+      />
+    )
+  }
 
   // The preview ticker tracks the newest ARRIVED line (smooth streaming must
   // not lag it behind the reveal); the expanded body below paints `thinking`
@@ -202,6 +219,55 @@ export function AssistantThinkingMessage({
           cost at O(new content) instead of re-laying out the whole block. */}
         <StreamingMarkdown dimColor>{thinking}</StreamingMarkdown>
       </Box>
+    </Box>
+  )
+}
+
+/**
+ * Count-only thinking: the backend streams an
+ * estimated token count but no thinking text. One header line in the same
+ * visual language as a text block — the pulsing braille spinner while live,
+ * the settled anchor afterwards — with nothing to expand.
+ */
+function ThinkingTokensHeader({
+  tokens,
+  streaming,
+  marginTopOnTurn,
+  isSelected,
+  onClick,
+}: {
+  tokens: number
+  streaming: boolean
+  marginTopOnTurn: boolean
+  isSelected: boolean
+  onClick?(event: ClickEvent): void
+}): React.ReactNode {
+  const [frame, setFrame] = React.useState(0)
+  React.useEffect(() => {
+    if (!streaming) return
+    const interval = setInterval(() => setFrame(f => f + 1), THINKING_SPINNER_INTERVAL_MS)
+    return () => clearInterval(interval)
+  }, [streaming])
+  const minimalUi = isMinimalUiMode()
+  const n = formatTokens(tokens)
+  const pulse = (Math.sin(frame * 0.9) + 1) / 2
+  const pulseColor = interpolateColor(BRAND, ICE, pulse)
+  const frameText = THINKING_SPINNER_FRAMES[frame % THINKING_SPINNER_FRAMES.length]!
+  return (
+    <Box
+      flexDirection="row"
+      marginTop={marginTopOnTurn ? 1 : 0}
+      backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
+      onClick={onClick}
+    >
+      {streaming ? (
+        <>
+          <Text>{minimalUi ? frameText : chalk.rgb(pulseColor.r, pulseColor.g, pulseColor.b).bold(frameText)}</Text>
+          <Text dimColor italic>{` ${t('thinking-tokens-live', { n })}`}</Text>
+        </>
+      ) : (
+        <Text dimColor italic>{`${minimalUi ? '*' : THINKING_SETTLED_MARKER} ${t('thinking-tokens-done', { n })}`}</Text>
+      )}
     </Box>
   )
 }

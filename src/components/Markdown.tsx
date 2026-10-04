@@ -1,12 +1,14 @@
 import React from 'react'
 import { marked, type Token, type Tokens } from 'marked'
 import { Box, Text } from '../ui.js'
-import { configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
+import type { TextDecoration } from '../ink/styles.js'
+import { appendBlockText, configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { isMermaidLang } from '../terminal-utils/mermaid.js'
 import { isMathBlockToken, isMathToken } from '../terminal-utils/math.js'
 import { getMathRendering, subscribeMathRendering } from '../tuiDisplayPrefs.js'
 import { MarkdownTable } from './MarkdownTable.js'
+import { CodeBlockFrame } from './CodeBlockFrame.js'
 import { MermaidDiagram } from './MermaidDiagram.js'
 import { InlineMathParagraph } from './InlineMathParagraph.js'
 import { MathBlock } from './MathBlock.js'
@@ -37,6 +39,14 @@ type Props = {
    */
   inlineMathImages?: boolean
 }
+
+/**
+ * Hang decoration for the ANSI text runs: a terminal-wrapped continuation
+ * lines up under its line's quote rails, list marker or indentation
+ * instead of falling back to column 0. One shared object, because the
+ * style diff and the measure/paint caches compare it by reference.
+ */
+const HANG_DECORATION: TextDecoration = { hang: true }
 
 // ---- token 缓存 ----
 //
@@ -113,10 +123,16 @@ function lexWithCache(content: string, allowCache: boolean): Token[] {
  * Tokens that render as their own layout node (a width-aware component)
  * instead of joining the ANSI text run. StreamingMarkdown consults the same
  * predicate: a standalone node has a fixed one-row gap to its neighbours
- * rather than the newline-derived spacing of text blocks.
+ * rather than the newline-derived spacing of text blocks. Top-level
+ * fenced code is one too (CodeBlockFrame).
  */
 export function isStandaloneToken(token: Token): boolean {
-  return token.type === 'table' || isMermaidToken(token) || isMathBlockToken(token)
+  return (
+    token.type === 'table' ||
+    token.type === 'code' ||
+    isMermaidToken(token) ||
+    isMathBlockToken(token)
+  )
 }
 
 /** Whether a paragraph holds inline math anywhere in its inline tokens. */
@@ -149,7 +165,7 @@ function renderTokensToNodes(
   const flushAnsiText = (): void => {
     if (!ansiText && textParts.length === 0) return
     if (textParts.length === 0) {
-      nodes.push(<Text key={nodes.length} dimColor={dimColor}>{ansiText.trim()}</Text>)
+      nodes.push(<Text key={nodes.length} dimColor={dimColor} decoration={HANG_DECORATION}>{ansiText.trim()}</Text>)
     } else {
       textParts.push(ansiText)
       let first = 0
@@ -163,7 +179,7 @@ function renderTokensToNodes(
       nodes.push(
         <Box key={nodes.length} flexDirection="column">
           {textParts.slice(first, last + 1).map((part, index) => (
-            <Text key={index} dimColor={dimColor}>{index + first < last ? part.slice(0, -1) : part}</Text>
+            <Text key={index} dimColor={dimColor} decoration={HANG_DECORATION}>{index + first < last ? part.slice(0, -1) : part}</Text>
           ))}
         </Box>,
       )
@@ -205,8 +221,19 @@ function renderTokensToNodes(
           dimColor={dimColor}
         />,
       )
+    } else if (token.type === 'code') {
+      // Top-level fences get the CodeBlockFrame (header/rail/padding);
+      // the mermaid branch above keeps diagram fences routed to
+      // MermaidDiagram (whose fallback re-enters the frame), and code
+      // nested in lists/quotes keeps formatToken's ANSI path.
+      flushAnsiText()
+      nodes.push(
+        <CodeBlockFrame key={nodes.length} token={token as Tokens.Code} highlight={highlight} dimColor={dimColor} />,
+      )
     } else {
-      ansiText += formatToken(token, 0, null, null, highlight)
+      // appendBlockText inserts the row break after the (newline-free) hr
+      // divider when the next block does not open its own line.
+      ansiText = appendBlockText(ansiText, formatToken(token, 0, null, null, highlight))
       // A top-level token boundary keeps inline formatting and code fences
       // intact while letting the painter cull finished offscreen text blocks.
       if (ansiText.length >= TEXT_BLOCK_BUDGET && ansiText.endsWith('\n')) {

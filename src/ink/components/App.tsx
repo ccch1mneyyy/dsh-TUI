@@ -7,6 +7,8 @@ import { isMouseClicksDisabled } from "../../utils/fullscreen.js";
 import { isInputSuppressed } from "../input-suppression.js";
 import { logMouseDebug } from "../../utils/debug.js";
 import { logError } from "../../utils/log.js";
+import { appendCrashLog, serializeCrashDetail } from "../../utils/crashDetail.js";
+import { isNestedUpdateOverflow, noteBoundaryRecoveryRemount, shouldRecoverBoundaryOverflow } from "../update-overflow-guard.js";
 import { EventEmitter } from "../events/emitter.js";
 import { InputEvent } from "../events/input-event.js";
 import instances from "../instances.js";
@@ -394,6 +396,22 @@ export default class App extends PureComponent<Props, State> {
 	// Initialized to now so startup doesn't false-trigger.
 	lastStdinTime = Date.now();
 
+	// TerminalSizeContext value, renewed only when the dimensions change.
+	// A fresh object per App render would re-render every width-aware
+	// consumer (MarkdownTable, CodeBlockFrame, panel geometry) on each
+	// streaming frame.
+	private terminalSizeValue: { columns: number; rows: number } | null = null
+	private terminalSizeFor(columns: number, rows: number): { columns: number; rows: number } {
+		if (
+			this.terminalSizeValue === null ||
+			this.terminalSizeValue.columns !== columns ||
+			this.terminalSizeValue.rows !== rows
+		) {
+			this.terminalSizeValue = { columns, rows }
+		}
+		return this.terminalSizeValue
+	}
+
 	// Raw stdout writer for control sequences that must bypass the frame
 	// pipeline (alt-screen enter/exit, mouse-tracking toggles, notifications).
 	// A class property (not a render-local closure) so the context value keeps
@@ -415,10 +433,7 @@ export default class App extends PureComponent<Props, State> {
 		return (
 			<TerminalWriteProvider value={this.writeRaw}>
 			<TerminalSizeContext.Provider
-				value={{
-					columns: this.props.terminalColumns,
-					rows: this.props.terminalRows,
-				}}
+				value={this.terminalSizeFor(this.props.terminalColumns, this.props.terminalRows)}
 			>
 				<AppContext.Provider
 					value={{
@@ -492,7 +507,46 @@ export default class App extends PureComponent<Props, State> {
 			while (this.rawModeEnabledCount > 0) this.handleSetRawMode(false);
 		}
 	}
-	override componentDidCatch(error: Error) {
+	override componentDidCatch(error: Error, errorInfo: { componentStack?: string }) {
+		// A #185 that reaches the root boundary escaped every enqueue-site
+		// guard and was thrown inside React's own commit (e.g. updates
+		// chained through an effect); the process-level guard never sees it
+		// because the boundary consumes the error. react-reconciler resets
+		// its nested-update counter before throwing, so clearing the error
+		// remounts the tree from a clean counter and the session survives;
+		// the detail goes to crash.log. Recoveries are capped per window;
+		// past the cap the error goes to handleExit instead of remounting in
+		// a loop.
+		if (isNestedUpdateOverflow(error)) {
+			if (
+				typeof errorInfo?.componentStack === "string" &&
+				(error as Error & { componentStack?: string }).componentStack === undefined
+			) {
+				try {
+					(error as Error & { componentStack?: string }).componentStack = errorInfo.componentStack;
+				} catch {
+					// Frozen error object — the boundary stack is best-effort.
+				}
+			}
+			if (shouldRecoverBoundaryOverflow()) {
+				logError(
+					new Error(
+						"Recovered from React nested-update overflow (#185) at the root boundary — the UI remounts (widget state resets; session data is intact). Full detail in crash.log.",
+					),
+				);
+				try {
+					appendCrashLog(serializeCrashDetail(error));
+				} catch {
+					// Diagnostics must never break the recovery itself.
+				}
+				// The remount this triggers is a RECOVERY, not a boot: the screen
+				// layer reads the mark to keep boot-only surfaces (launchpad,
+				// onboarding) closed, so the user lands back in the conversation.
+				noteBoundaryRecoveryRemount();
+				this.setState({ error: undefined });
+				return;
+			}
+		}
 		this.handleExit(error);
 	}
 	scheduleXtversionProbe = (): void => {

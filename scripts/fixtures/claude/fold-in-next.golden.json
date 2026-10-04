@@ -1,0 +1,121 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "notice",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "assistant.message",
+    "tool.result",
+    "pending.changed",
+    "user.message",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Use the Bash tool to run `sleep 4 && echo slept`, then summarize the output in one sentence."
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 129
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Bash",
+        "status": "ok",
+        "call": {
+          "card": "terminal",
+          "displayKey": "tool-name-bash",
+          "category": "exec"
+        },
+        "result": {
+          "card": "terminal"
+        },
+        "resultText": "slept"
+      }
+    },
+    {
+      "kind": "user",
+      "text": "Also end your reply with the word NEXT-OK."
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 136
+    },
+    {
+      "kind": "assistant",
+      "text": "The command waited 4 seconds and then printed \"slept\" to the output.\n\nNEXT-OK"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.023462100000000003,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 18,
+      "output": 245,
+      "cacheRead": 37881,
+      "cacheWrite": 8729
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": [
+      "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    ],
+    "subagents": [],
+    "jobs": []
+  }
+}

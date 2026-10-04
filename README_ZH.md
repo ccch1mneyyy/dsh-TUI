@@ -148,6 +148,28 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 **VS Code**：用集成终端，或用 `dsh-tui-vscode` 扩展。见 [VS Code 使用指南](docs/vscode.md)。**Herdr**：在 [Herdr](https://herdr.dev) 窗格运行 `dsh-tui`，经其本地集成 API 报告 `idle` / `working` / `blocked`。
 
+### 实验性：Claude 后端
+
+dsh-TUI 也可以把会话跑在 Claude 上：界面不变，背后由 Claude Agent SDK 驱动
+Claude Code CLI。项目的 `CLAUDE.md`、设置、hooks、MCP 服务器与插件按 CLI 的方式加载。
+
+```sh
+# 一次性：在 dsh-tui 的 profile 目录安装（SDK 是可选依赖）
+cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
+dsh-tui --backend claude     # 或在 /kernel 里选 Claude，选择会被记住
+```
+
+- **登录**：依次使用 `/channel` 渠道档案、dsh-auth 的 `anthropic` 订阅登录（`/login`）、
+  `ANTHROPIC_API_KEY` 或云厂商环境变量、本机已有的 `claude login`。`PATH` 上有
+  `claude` 就用它，否则用 SDK 自带的二进制。
+- **可用**：流式回复、工具卡、审批与问卷、`/model`、`/effort`、Claude 的权限模式
+  （`/permission`、`Shift+Tab`）、`/compact`、`/context`、`/mcp`、`/resume`、`/fork`、
+  双击 `Esc` 回退、子代理、后台任务、图片、`/btw`，以及 Claude 上报的美元费用。
+- **不可用**：DSH 专属命令，如 `/tree`、`/preset`、`/provider`、`/workspace`、
+  `/agentview`、`/bg`。一个进程只跑一个后端，`/kernel` 切换时会重启并开新会话。
+
+详细说明与已知限制：[Claude 后端](docs/claude-backend.md)。
+
 ## 快捷键与鼠标
 
 `Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 打断并发送 · `Alt+Up` 取回上一条 · `Esc` 逐层关闭，空输入双击回溯 · `Ctrl+B` 侧栏 · `Ctrl+O` 详情 · `Ctrl+R` 搜历史（`↑`/`↓` 与 `Ctrl+R` 按当前项目隔离） · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 快捷键 · `←` 转后台。

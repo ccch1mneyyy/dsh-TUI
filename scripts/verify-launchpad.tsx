@@ -13,7 +13,9 @@
  *      （任一段拿不到就省掉，全空整条不画）。框下再一行**纯文字动作入口**
  *      （ActionChip：无键帽/键位前缀/指针，悬停或焦点 = 整块矩形高亮，恒 1 行高，
  *      整行右对齐输入框右缘）；居中 Tips 行（● 前置圆点，首启 warning 色 +
- *      `launchpad-first-run`）；双角铭牌：左下 `displayCwd:branch`、右下 `dsh-tui v<版本>`。
+ *      `launchpad-first-run`）；双角铭牌：左下 `displayCwd:branch`、右下 `dsh-tui v<版本>`
+ *      + **内核区**（S 组：一行一个内核，当前那个打 ▸ 且主题蓝、其余行 dim；整块
+ *      一个可点目标，键盘等价操作 = 焦点环末格 + Enter）。
  *   B. 输入：这一屏是**受控**的（query 由 Chat 持有），夹具必须闭环回写。
  *      敲字进 query、退格/←/→/Home/End 走 caret、Enter 把整行**原文**交给
  *      onSubmit、Esc 有字先清空而空输入才去看会话、Ctrl+C 空输入交 exit；
@@ -21,11 +23,12 @@
  *   C. 动作入口：纯文字标签（无键帽）；真 SGR 点击触发动作、悬停移焦点并
  *      整块高亮；↑/↓/Tab 焦点环 = 输入框(-1) + **画出来的**入口（第一行再 ↑
  *      回输入框）；整行右对齐（含 fitChips 裁掉尾部后的窄屏）；行高恒 1。
- *   D. 纯函数：resolveLaunchpadActions 表驱动（第七版四格：Continue(条件) ·
- *      会话与工作区 · 设置 · 条件位 jobs>update>star>help 优先级，单独/
- *      多重/全不成立各一行）、truncateContinueTitle 边界、fitChips 不切半个
- *      标签、阶梯阈值（full → no-tip → no-hints → no-art → input-only）。
- *      theme/lang/doctor 永不出现；settings 固定在第三格。
+ *   D. 纯函数：resolveLaunchpadActions 表驱动（第七版四格 + 内核入口，命令名是
+ *      `kernel`：Continue(条件) · 会话与工作区 · 设置 · 条件位 jobs>update>star>help
+ *      优先级，单独/多重/全不成立各一行）、truncateContinueTitle 边界、fitChips
+ *      不切半个标签、阶梯阈值（full → no-tip → no-hints → no-art → input-only）、
+ *      kernelCatalog 的目录/版本显示串/副标题（K 组）。theme/lang/doctor 永不出现；
+ *      settings 固定在第三格。
  *   E. 宽度不变量：120/100/72/60/48 列下任何一行都不超宽；标签/Tips/参数条
  *      要么完整出现在同一行、要么整条不出现（不许被切断的半句）。
  *
@@ -41,6 +44,8 @@ import xterm from '@xterm/headless'
 import fakeHome from './lib/fake-home.mjs' // 必须最先：DATA_DIR 在 import 时定死
 import { settle, settled, viewportLines } from './lib/term-test.mjs'
 import { stringWidth } from '../src/ink/stringWidth.js'
+// 只借类型（import type 被 tsx 整体擦除，不影响上面 fake-home 的加载顺序）。
+import type { KernelOption } from '../src/components/kernelCatalog.js'
 
 const { Terminal: XTerm } = xterm
 const [
@@ -66,12 +71,16 @@ const [
 // （吉祥物形态归 verify-splash-mascot 管）。
 applyCompanionSkin('whale')
 
-/** 夹具的默认状态：有上次会话 + 条件位全不成立（动作表 = Continue·会话与工作区·设置·帮助）。 */
+/** 内核目录的真实派生（与 Chat 同一函数——夹具不手写形状，R4/S 组共用）。 */
+const { buildKernelCatalog } = await import('../src/components/kernelCatalog.js')
+
+/** 夹具的默认状态：有上次会话 + 条件位全不成立（动作表 = Continue·会话与工作区·设置·内核·帮助）。 */
 const DEFAULT_ACTIONS = resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false })
-/** 默认档四个入口的屏上标签（zh，第七版四格）。 */
+/** 默认档五个入口的屏上标签（zh，第七版四格 + 内核入口；backendId 缺省 → 短标签）。 */
 const CONTINUE_LABEL = '继续「修个登录页」'
 const SESSIONS_WORKSPACE_LABEL = '会话与工作区'
 const SETTINGS_LABEL = '设置'
+const BACKEND_LABEL = '内核'
 const HELP_LABEL = '帮助'
 const JOBS_LABEL = '后台任务'
 const UPDATE_LABEL = '有新版本'
@@ -158,8 +167,13 @@ interface OpenOptions {
   tipRotateMs?: number
   /** 接上左下角铭牌的 onOpenWorkspace（true = 记 workspace 事件）。 */
   cornerWorkspace?: boolean
-  /** 内核版本（第七版双版本铭牌）。 */
-  kernelVersion?: string
+  /**
+   * 右下角内核区的目录行（第八版；用 buildKernelCatalog 造真实形状）。
+   * 不给 = 只画 TUI 版本那一行。
+   */
+  kernels?: readonly KernelOption[]
+  /** 接上内核区的 onKernelPick（true = 点击/Enter 记一条 'kernel' 事件）。 */
+  kernelPick?: boolean
 }
 
 async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
@@ -210,7 +224,8 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         commands={options.commands}
         onCommandPick={(commandLine) => { events.push({ type: 'command', value: commandLine }) }}
         tipRotateMs={options.tipRotateMs}
-        kernelVersion={options.kernelVersion}
+        kernels={options.kernels}
+        onKernelPick={options.kernelPick === true ? () => { events.push({ type: 'kernel' }) } : undefined}
         onOpenWorkspace={options.cornerWorkspace === true ? () => { events.push({ type: 'workspace' }) } : undefined}
         cwd={corners ? CWD : undefined}
         branch={corners ? BRANCH : undefined}
@@ -314,6 +329,42 @@ function rightGap(line: string, columns: number): number {
   const trimmed = line.replace(/\s+$/u, '')
   return Math.max(0, columns - stringWidth(trimmed))
 }
+/**
+ * 该行**第一个非空格字符**所在单元格。前缀是空格（或 ▸ 这种宽窄有争议的字形）
+ * 时，按列号算术去取会踩宽度口径；扫格取首个字形则与画法无关。
+ */
+function firstGlyphCell(term: InstanceType<typeof XTerm>, row: number, columns: number) {
+  const line = row < 0 ? undefined : term.buffer.active.getLine(row)
+  if (line === undefined) return undefined
+  for (let col = 0; col < columns; col++) {
+    const cell = line.getCell(col)
+    if ((cell?.getChars() ?? '').trim() !== '') return cell
+  }
+  return undefined
+}
+
+/**
+ * 前景色的判据串。**别拿 xterm 的 isDim() 判「变暗」**：本仓的 `dimColor` 是
+ * ThemedText 的语义（换成主题 inactive 色），根本不发 ANSI 2（见
+ * components/design-system/ThemedText.tsx 的 Props 注释）。
+ */
+function fgKeyOf(cell: ReturnType<typeof firstGlyphCell>): string {
+  if (cell === undefined) return 'none'
+  if (cell.isFgDefault()) return 'default'
+  if (cell.isFgRGB()) return 'rgb:' + cell.getFgColor().toString(16)
+  if (cell.isFgPalette()) return 'palette:' + cell.getFgColor()
+  return 'ansi:' + cell.getFgColor()
+}
+
+/** 行内某段文字**首字符**的单元格（前缀须是 ASCII——列号按显示宽度算）。 */
+function cellAtText(term: InstanceType<typeof XTerm>, lines: readonly string[], row: number, needle: string) {
+  const text = row < 0 ? '' : lines[row] ?? ''
+  const at = text.indexOf(needle)
+  const line = row < 0 ? undefined : term.buffer.active.getLine(row)
+  if (line === undefined || at < 0) return undefined
+  return line.getCell(stringWidth(text.slice(0, at)))
+}
+
 /** 一行里同时含全部 needle。 */
 const rowHasAll = (line: string, needles: readonly string[]): boolean => needles.every(n => line.includes(n))
 
@@ -379,11 +430,12 @@ check('A2 模型串只出现在参数条那一行（头部不画模型行）',
     !hintRow.includes('/setup') && !hintRow.includes('esc') && !hintRow.includes('/model')
       && !hintRow.includes('?') && !hintRow.includes('▸') && !hintRow.includes('❯'),
     hintRow.trim().slice(0, 80))
-  check('A4c 四个入口在同一行、行高恒 1（每个标签整屏只出现在这一行；第七版四格）',
-    rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL, HELP_LABEL])
+  check('A4c 五个入口在同一行、行高恒 1（每个标签整屏只出现在这一行；第七版四格 + 内核）',
+    rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL, BACKEND_LABEL, HELP_LABEL])
       && lines.filter(l => l.includes(CONTINUE_LABEL)).length === 1
       && lines.filter(l => l.includes(SESSIONS_WORKSPACE_LABEL)).length === 1
       && lines.filter(l => l.includes(SETTINGS_LABEL)).length === 1
+      && lines.filter(l => l.includes(BACKEND_LABEL)).length === 1
       // 合并/移除契约：旧入口（历史会话、工作区分立、环境体检）绝不再出现。
       && !base.screen().includes('历史会话') && !base.screen().includes('环境体检')
       && viewportLines(base.term).filter(l => l.includes('工作区')).every(l => l.includes(SESSIONS_WORKSPACE_LABEL)),
@@ -677,8 +729,8 @@ base.close()
   const target = findCell(s.term, HELP_LABEL)!
   const beforeHover = ev.length
   s.input.write(`\u001b[<35;${target.col};${target.row}M`)
-  check('C7b 鼠标悬停入口即移焦点（mode 1003，无需点击；帮助 = 第 4 条）',
-    await settled(() => last(ev, 'focus')?.value === 3), JSON.stringify(ev.slice(beforeHover)))
+  check('C7b 鼠标悬停入口即移焦点（mode 1003，无需点击；帮助 = 第 5 条，含内核入口）',
+    await settled(() => last(ev, 'focus')?.value === 4), JSON.stringify(ev.slice(beforeHover)))
   // 移到入口行之外的空白格（大字区）：onMouseLeave 必须把焦点交还输入框。
   const blank = findCell(s.term, '██▀▀▄▄')!
   s.input.write(`\u001b[<35;${blank.col};${blank.row}M`)
@@ -696,9 +748,9 @@ base.close()
   await s.send('\t')
   check('C9 再 Tab 前进一段（思考深度，focus=-3）', last(ev, 'focus')?.value === -3,
     JSON.stringify(ev.slice(beforeBlank)))
-  // 焦点环 = 输入框 + 参数四段 + 画出来的入口 + Tips 行（第六版设计 2，环尾）。
-  // 从 -3 再 Tab 7 次：-4→-5→0→1→2→3→-6（Tips），第 8 次绕回输入框。
-  for (let i = 0; i < 7; i++) await s.send('\t')
+  // 焦点环 = 输入框 + 参数四段 + 画出来的入口（含内核，五条）+ Tips 行（第六版设计 2，环尾）。
+  // 从 -3 再 Tab 8 次：-4→-5→0→1→2→3→4→-6（Tips），第 9 次绕回输入框。
+  for (let i = 0; i < 8; i++) await s.send('\t')
   check('C9b Tab 走到环尾的 Tips 行（focus=-6，可点击目标进了焦点环）',
     last(ev, 'focus')?.value === -6, JSON.stringify(last(ev, 'focus')))
   await s.send('\t')
@@ -874,16 +926,16 @@ base.close()
   // 单独成立、多个同时成立、全不成立三类都要钉（详见 launchpadActions.ts）。
   const BASE = { lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false }
   const rows: readonly { name: string; state: Record<string, unknown>; ids: readonly string[]; commands: readonly string[]; firstLabelKey?: string }[] = [
-    { name: '常态（条件位全不成立 → 帮助兜底）', state: BASE, ids: ['continue', 'sessions-workspace', 'settings', 'help'], commands: ['continue', 'home', 'settings', 'help'] },
-    { name: '条件位①单独成立（jobs）', state: { ...BASE, jobsRunning: true }, ids: ['continue', 'sessions-workspace', 'settings', 'jobs'], commands: ['continue', 'home', 'settings', 'jobs'] },
-    { name: '条件位②单独成立（update）', state: { ...BASE, updateAvailable: true }, ids: ['continue', 'sessions-workspace', 'settings', 'update'], commands: ['continue', 'home', 'settings', 'update'] },
-    { name: '条件位③单独成立（star）', state: { ...BASE, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'star'], commands: ['continue', 'home', 'settings', 'star'] },
-    { name: '①+②同时成立：①胜（jobs > update）', state: { ...BASE, jobsRunning: true, updateAvailable: true }, ids: ['continue', 'sessions-workspace', 'settings', 'jobs'], commands: ['continue', 'home', 'settings', 'jobs'] },
-    { name: '②+③同时成立：②胜（update > star）', state: { ...BASE, updateAvailable: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'update'], commands: ['continue', 'home', 'settings', 'update'] },
-    { name: '①+③同时成立：①胜（jobs > star）', state: { ...BASE, jobsRunning: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'jobs'], commands: ['continue', 'home', 'settings', 'jobs'] },
-    { name: '①②③全成立：①胜', state: { ...BASE, jobsRunning: true, updateAvailable: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'jobs'], commands: ['continue', 'home', 'settings', 'jobs'] },
-    { name: '无上次会话（Continue 整格缺席，条件位照常）', state: { jobsRunning: false, updateAvailable: false, starDue: false }, ids: ['sessions-workspace', 'settings', 'help'], commands: ['home', 'settings', 'help'] },
-    { name: '无上次会话 × 条件位①', state: { jobsRunning: true, updateAvailable: false, starDue: false }, ids: ['sessions-workspace', 'settings', 'jobs'], commands: ['home', 'settings', 'jobs'] },
+    { name: '常态（条件位全不成立 → 帮助兜底）', state: BASE, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'help'], commands: ['continue', 'home', 'settings', 'kernel', 'help'] },
+    { name: '条件位①单独成立（jobs）', state: { ...BASE, jobsRunning: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'jobs'], commands: ['continue', 'home', 'settings', 'kernel', 'jobs'] },
+    { name: '条件位②单独成立（update）', state: { ...BASE, updateAvailable: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'update'], commands: ['continue', 'home', 'settings', 'kernel', 'update'] },
+    { name: '条件位③单独成立（star）', state: { ...BASE, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'star'], commands: ['continue', 'home', 'settings', 'kernel', 'star'] },
+    { name: '①+②同时成立：①胜（jobs > update）', state: { ...BASE, jobsRunning: true, updateAvailable: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'jobs'], commands: ['continue', 'home', 'settings', 'kernel', 'jobs'] },
+    { name: '②+③同时成立：②胜（update > star）', state: { ...BASE, updateAvailable: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'update'], commands: ['continue', 'home', 'settings', 'kernel', 'update'] },
+    { name: '①+③同时成立：①胜（jobs > star）', state: { ...BASE, jobsRunning: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'jobs'], commands: ['continue', 'home', 'settings', 'kernel', 'jobs'] },
+    { name: '①②③全成立：①胜', state: { ...BASE, jobsRunning: true, updateAvailable: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'backend', 'jobs'], commands: ['continue', 'home', 'settings', 'kernel', 'jobs'] },
+    { name: '无上次会话（Continue 整格缺席，条件位照常）', state: { jobsRunning: false, updateAvailable: false, starDue: false }, ids: ['sessions-workspace', 'settings', 'backend', 'help'], commands: ['home', 'settings', 'kernel', 'help'] },
+    { name: '无上次会话 × 条件位①', state: { jobsRunning: true, updateAvailable: false, starDue: false }, ids: ['sessions-workspace', 'settings', 'backend', 'jobs'], commands: ['home', 'settings', 'kernel', 'jobs'] },
   ]
   for (const row of rows) {
     const actions = resolveLaunchpadActions(row.state as never)
@@ -899,7 +951,7 @@ base.close()
   const frozen = Object.freeze({ lastSessionTitle: '冻结标题', jobsRunning: false, updateAvailable: false, starDue: false })
   const fromFrozen = resolveLaunchpadActions(frozen)
   check('E2 纯函数：不改入参（冻结状态对象直解）',
-    fromFrozen.length === 4 && frozen.lastSessionTitle === '冻结标题',
+    fromFrozen.length === 5 && frozen.lastSessionTitle === '冻结标题',
     JSON.stringify(fromFrozen.map(a => a.id)))
   // Continue 带标题：标签键 + 插值；标题超宽截断（含省略号、显示宽度封顶）。
   const titled = resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false })
@@ -918,21 +970,203 @@ base.close()
   check('E6 lastSessionTitle 为空白 = 无历史（不造 Continue，落常态档）',
     resolveLaunchpadActions({ lastSessionTitle: '   ', jobsRunning: false, updateAvailable: false, starDue: false })[0]?.id === 'sessions-workspace',
     resolveLaunchpadActions({ lastSessionTitle: '   ', jobsRunning: false, updateAvailable: false, starDue: false }).map(a => a.id).join(','))
+  // 内核入口（阶段A）：backendId 缺省 → 短标签；给出 → 带名插值（显示名来自
+  // kernelCatalog 的 displayName，chip 上屏「内核 · Claude」/「Kernel · DSH」）。
+  const namedBackend = resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false, backendId: 'claude' })
+  check('E6b backendId=claude：内核入口带名（labelKey = backend-named，values.name = Claude）',
+    namedBackend.find(a => a.id === 'backend')?.labelKey === 'launchpad-action-backend-named' && namedBackend.find(a => a.id === 'backend')?.values?.name === 'Claude',
+    JSON.stringify(namedBackend.find(a => a.id === 'backend')))
+  check("E6c backendId 缺省：内核入口用短标签（无插值，阶段B接线前的回退）",
+    resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false }).find(a => a.id === 'backend')?.labelKey === 'launchpad-action-backend'
+      && resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false }).find(a => a.id === 'backend')?.values === undefined)
+  check('E6d backendId=dsh：带名 DSH',
+    resolveLaunchpadActions({ jobsRunning: false, updateAvailable: false, starDue: false, backendId: 'dsh' }).find(a => a.id === 'backend')?.values?.name === 'DSH')
 }
 {
   const labels = DEFAULT_ACTIONS.map(a => t(a.labelKey as never, a.values as never))
   const wide = fitChips(labels, COLS)
   const allComplete = wide.every(chip => labels[chip.index] === chip.label)
-  check('E8 fitChips 只整条取用，绝不切半个标签（120 列四条全画）', allComplete && wide.length === 4,
+  check('E8 fitChips 只整条取用，绝不切半个标签（120 列五条全画）', allComplete && wide.length === 5,
     wide.map(c => c.label).join(' | '))
   const narrow = fitChips(['这是一个很长的入口标签'], 8)
   check('E9 放不下就整条不画（不是截断）', narrow.length === 0,
     JSON.stringify(narrow))
   // 48 列：预算 44，四条 zh 标签装不下最后一条（模型）——整条裁掉、不切半。
-  const clipped = fitChips(labels, 48)
-  check('E9b 48 列裁掉放不下的尾部入口（整条取舍）',
-    clipped.length === 3 && clipped.every(c => labels[c.index] === c.label),
-    clipped.map(c => c.label).join(' | '))
+}
+
+// ── K. 内核选择（阶段A：目录纯函数 + kernel.json 记忆 + boot 优先级）──────
+{
+  const { buildKernelCatalog, kernelDisplayName, kernelVersionLabel, kernelSubtitle } = await import('../src/components/kernelCatalog.js')
+  const { readKernelPrefs, writeKernelPrefs, resolveRememberedBackend } = await import('../src/kernelPrefs.js')
+  const { mkdtempSync, readFileSync, rmSync, writeFileSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+
+  // 目录：DSH 恒在恒可选（默认内核）；claude 依探测结果定可选性。版本一律是
+  // **显示串**（产品前缀 + 版本号），不再是裸版本号。
+  const dshOnly = buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.6' })
+  check('K1 目录：DSH 恒可选并带版本显示串；claude 未探测=置灰为「检测中…」（不是未安装）',
+    dshOnly.length === 2 && dshOnly[0]?.id === 'dsh' && dshOnly[0]?.current === true && dshOnly[0]?.selectable === true && dshOnly[0]?.version === 'dsh-core v0.2.6'
+      && dshOnly[1]?.id === 'claude' && dshOnly[1]?.current === false && dshOnly[1]?.selectable === false && dshOnly[1]?.reasonKey === 'kernel-probing',
+    JSON.stringify(dshOnly))
+  const ok = buildKernelCatalog({ current: 'claude', dshVersion: '0.2.6', claude: { installed: true, auth: 'ok', version: '2.1.287' } })
+  check('K2 目录：installed+auth=ok 的 claude 可选、版本显示串、current 标记在 claude',
+    ok[0]?.current === false && ok[1]?.selectable === true && ok[1]?.current === true && ok[1]?.version === 'claude-code v2.1.287' && ok[1]?.reasonKey === undefined,
+    JSON.stringify(ok))
+  check('K3 目录：auth=missing 置灰(未登录)；auth=unknown 仍可选（分不清≠没有）；installed=false → 未安装',
+    buildKernelCatalog({ current: 'dsh', claude: { installed: true, auth: 'missing', version: '1.2.3' } })[1]?.selectable === false
+      && buildKernelCatalog({ current: 'dsh', claude: { installed: true, auth: 'missing' } })[1]?.reasonKey === 'kernel-unavailable-auth-missing'
+      && buildKernelCatalog({ current: 'dsh', claude: { installed: true, auth: 'unknown' } })[1]?.selectable === true
+      && buildKernelCatalog({ current: 'dsh', claude: { installed: false, version: '1.2.3' } })[1]?.reasonKey === 'kernel-unavailable-not-installed')
+  check('K4 显示名：dsh→DSH、claude→Claude（chip 插值与重启通知共用）',
+    kernelDisplayName('dsh') === 'DSH' && kernelDisplayName('claude') === 'Claude')
+  // 版本显示串：产品前缀表（dsh→dsh-core、claude→claude-code）；空/缺省 = undefined
+  // （调用方整段省掉，绝不画一个空壳的 v）；未知 id 不编造产品名。
+  check('K4b kernelVersionLabel：产品前缀 + 空格 + v + 版本号；空串/缺省 undefined；未知 id 裸版本',
+    kernelVersionLabel('dsh', '0.2.0-rc.2') === 'dsh-core v0.2.0-rc.2'
+      && kernelVersionLabel('claude', '2.0.1') === 'claude-code v2.0.1'
+      && kernelVersionLabel('dsh', '') === undefined && kernelVersionLabel('dsh') === undefined
+      && kernelVersionLabel('custom', '9.9.9') === '9.9.9',
+    JSON.stringify([kernelVersionLabel('dsh', '0.2.0-rc.2'), kernelVersionLabel('dsh', ''), kernelVersionLabel('custom', '9.9.9')]))
+  // 副标题：版本 · 置灰原因——谁有拼谁，两样都没有 = undefined（底栏与选择器共用）。
+  const subtitleOf = (input: Parameters<typeof buildKernelCatalog>[0]) => buildKernelCatalog(input).map(option => kernelSubtitle(option, key => 'R:' + key))
+  check('K4c kernelSubtitle：版本·原因 / 只有版本 / 只有原因 / 都没有=undefined',
+    subtitleOf({ current: 'dsh', dshVersion: '0.2.6' })[1] === 'R:kernel-probing'
+      && subtitleOf({ current: 'dsh', dshVersion: '0.2.6', claude: { installed: false } })[1] === 'R:kernel-unavailable-not-installed'
+      && subtitleOf({ current: 'dsh', dshVersion: '0.2.6' })[0] === 'dsh-core v0.2.6'
+      && subtitleOf({ current: 'dsh' })[0] === undefined
+      && subtitleOf({ current: 'dsh', claude: { installed: true, auth: 'missing', version: '1.2.3' } })[1] === 'claude-code v1.2.3 · R:kernel-unavailable-auth-missing',
+    JSON.stringify(subtitleOf({ current: 'dsh', dshVersion: '0.2.6' })))
+
+  // kernel.json 记忆：原子写（tmp+rename，claude prefs.ts 同款）往返。
+  const dir = mkdtempSync(join(tmpdir(), 'verify-launchpad-kernel-'))
+  const file = join(dir, 'kernel.json')
+  writeKernelPrefs({ backend: 'claude' }, file)
+  check('K5 kernel.json：写后读回（形状 backend: claude，原子 tmp+rename）',
+    readKernelPrefs(file).backend === 'claude' && readFileSync(file, 'utf8').includes('"backend": "claude"'),
+    readFileSync(file, 'utf8'))
+  writeKernelPrefs({ backend: 'dsh' }, file)
+  check('K5b kernel.json：覆盖写往返（claude→dsh）', readKernelPrefs(file).backend === 'dsh')
+  writeFileSync(file, '{ not json', 'utf8')
+  check('K6 kernel.json：坏 JSON 读作无记忆（读失败=无记忆，不抛）', readKernelPrefs(file).backend === undefined)
+  writeFileSync(file, '{"backend":"nonsense"}', 'utf8')
+  check('K6b kernel.json：非法 backend 值读作无记忆', readKernelPrefs(file).backend === undefined)
+  writeFileSync(file, '{"backend":"claude","extra":1}', 'utf8')
+  check('K6c kernel.json：未知字段容忍，backend 保留', readKernelPrefs(file).backend === 'claude')
+
+  // boot 优先级：config > env > memory > dsh（launchpad 记忆只垫底）。
+  const P = (configured?: 'dsh' | 'claude', envRaw?: string, memory?: 'dsh' | 'claude') =>
+    resolveRememberedBackend({ configured, envRaw, memory })
+  check('K7 boot 优先级：config 压过 env+记忆；env 压过记忆；记忆垫底；全空=dsh',
+    P('dsh', 'claude', 'claude') === 'dsh' && P(undefined, 'claude', 'dsh') === 'claude'
+      && P(undefined, undefined, 'claude') === 'claude' && P() === 'dsh')
+  check('K7b boot 优先级：非法 env → dsh（不是记忆——与启动警告 starting on dsh 一致）；空白 env = 无 env',
+    P(undefined, 'nonsense', 'claude') === 'dsh' && P(undefined, '  CLAUDE  ', 'dsh') === 'claude' && P(undefined, '', 'claude') === 'claude')
+  check('K7c boot 优先级：env 大小写/空白归一（镜像 normalizeBackendChoice）',
+    P(undefined, 'Claude', 'dsh') === 'claude' && P(undefined, ' dsh ', 'claude') === 'dsh')
+  // 记忆只被选择器写：boot 解析（读路径）绝不改文件。
+  writeKernelPrefs({ backend: 'claude' }, file)
+  const before = readFileSync(file, 'utf8')
+  void P(); void P(undefined, undefined, 'dsh'); void P('claude'); void P(undefined, 'dsh')
+  check('K8 记忆不被 boot 读取改写（读路径零写入；显式 --backend 启动也不改写——boot 不调 write）', readFileSync(file, 'utf8') === before)
+
+  // 一次性切换 handoff（S01）：选择器的「本次切换」必须真的切过去——
+  // restartTui 的 backend 选项把 KERNEL_SWITCH_HANDOFF_ENV 放进替换进程
+  // env，boot 的 resolver 把它排在 Config 行之前；没有它，显式 backend: dsh
+  // 的配置行让切换白重启一回。普通冷启动合同（K7）不动。
+  const H = (handoff?: 'dsh' | 'claude', configured?: 'dsh' | 'claude', envRaw?: string, memory?: 'dsh' | 'claude') =>
+    resolveRememberedBackend({ ...(handoff === undefined ? {} : { handoff }), configured, envRaw, memory })
+  check('K10 切换 handoff 压过 Config：configured=dsh/env=claude/memory=claude/handoff=claude → claude；同参数无 handoff 仍 → dsh',
+    H('claude', 'dsh', 'claude', 'claude') === 'claude' && H(undefined, 'dsh', 'claude', 'claude') === 'dsh')
+  check('K10b 反向切换同样成立：handoff=dsh 压过 configured=claude',
+    H('dsh', 'claude', 'claude', 'claude') === 'dsh')
+  check('K10c 非法 handoff 按不存在处理（回落到 Config > env > memory）',
+    resolveRememberedBackend({ handoff: 'nonsense' as never, configured: 'claude' }) === 'claude'
+      && resolveRememberedBackend({ handoff: '' as never, memory: 'claude' }) === 'claude')
+
+  // 组合根整链（S01）：真实 restartChildEnv 造出切换替换进程的 env →
+  // 用 boot 同款输入喂真实 resolver，断言落到目标内核（选择器侧的
+  // onSwitchBackend 驱动由 verify-launchpad-onboarding-chat X5 锁定）。
+  const { restartChildEnv, writeLastRunRecord, readLastRunRecord } = await import('../src/update.js')
+  const { KERNEL_SWITCH_HANDOFF_ENV: HANDOFF_ENV } = await import('../src/kernelPrefs.js')
+  const captured = restartChildEnv(
+    // 一个被显式钉在 dsh 上的外层进程（--backend dsh 启动 + 旧内核的自动
+    // resume marker 在 env 里）接受切换 → claude：
+    { DSH_TUI_BACKEND: 'dsh', DSH_TUI_RESUME_SESSION: 'dsh-session-1' },
+    '',
+    'restart',
+    { backend: 'claude' },
+  )
+  check('K11 切换替换 env：backend/handoff 都钉到目标内核，旧内核的 resume marker 被滤掉',
+    captured.DSH_TUI_BACKEND === 'claude' && captured[HANDOFF_ENV] === 'claude' && captured.DSH_TUI_RESUME_SESSION === undefined,
+    JSON.stringify({ backend: captured.DSH_TUI_BACKEND, handoff: captured[HANDOFF_ENV], resume: captured.DSH_TUI_RESUME_SESSION }))
+  // boot 读法与 plugin.ts 相同：handoff 从捕获 env 读、backend 原文进 envRaw、
+  // Config 行仍钉旧内核（dsh）——组合根必须解析到 claude。
+  check('K11b 组合根解析：捕获 env + Config 行钉 dsh → 实际落到 claude（不是白重启）',
+    resolveRememberedBackend({ handoff: 'claude', configured: 'dsh', envRaw: captured.DSH_TUI_BACKEND, memory: 'dsh' }) === 'claude')
+  check('K11c 无 handoff 键的同一 env 仍按 Config 走 dsh（K7 合同不被顺手改掉）',
+    resolveRememberedBackend({ configured: 'dsh', envRaw: captured.DSH_TUI_BACKEND, memory: 'dsh' }) === 'dsh')
+  check('K11d 普通 /restart 替换 env 不携带任何 handoff 覆盖（一次性，不外泄给非切换子进程）',
+    restartChildEnv({ [HANDOFF_ENV]: 'claude' } as NodeJS.ProcessEnv, 's1', 'restart', {})[HANDOFF_ENV] === undefined)
+  // boot 消费即删除：一次性语义的变异陷阱（读了不删 → 泄漏给孙进程）。
+  const bootSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
+  check('K12 plugin.ts boot 消费 handoff 后从 process.env 删除（一次性语义）',
+    bootSource.includes('delete process.env[KERNEL_SWITCH_HANDOFF_ENV]'))
+
+  // ── 后端限定的最后运行记录（S02）：切换后崩溃的安全重试身份 ──
+  // 记录由最后运行的实例写（plugin boot + 退出漏斗刷新），launcher 的
+  // fallback retry 重新读取并明确置新 backend。这里锁 src 侧的往返与容错，
+  // 以及组合根的写入接线；bin 侧的 retry 权威次序在 verify-safe-mode。
+  const recordDir = mkdtempSync(join(tmpdir(), 'verify-launchpad-lastrun-'))
+  const recordFile = join(recordDir, 'last-run.json')
+  writeLastRunRecord({ backendId: 'claude', sessionId: 'claude-42', cwd: 'D:/w', attemptId: 'a1', pid: 4242 }, recordFile)
+  const stamped = readLastRunRecord(recordFile)
+  check('LR1 last-run 记录原子写往返（updatedAt 由写入侧盖章）',
+    stamped !== undefined && stamped.backendId === 'claude' && stamped.sessionId === 'claude-42' && stamped.cwd === 'D:/w' && stamped.attemptId === 'a1' && stamped.pid === 4242 && typeof stamped.updatedAt === 'number' && stamped.updatedAt > 0,
+    JSON.stringify(stamped))
+  writeLastRunRecord({ backendId: 'dsh', sessionId: '', cwd: 'D:/w', attemptId: 'a2' }, recordFile)
+  check('LR1b 空会话（无可恢复）也如实落盘：sessionId 空串保留（重试=目标内核冷启动）',
+    readLastRunRecord(recordFile)?.sessionId === '')
+  writeFileSync(recordFile, '{ not json', 'utf8')
+  check('LR2 坏 JSON 读作 undefined（不抛）', readLastRunRecord(recordFile) === undefined)
+  writeFileSync(recordFile, '{"backendId":"nonsense","sessionId":"x","cwd":"c","attemptId":"a","updatedAt":1}', 'utf8')
+  check('LR2b 非法 backendId 读作 undefined（拒绝跨域恢复的载体）', readLastRunRecord(recordFile) === undefined)
+  writeFileSync(recordFile, '{"backendId":"claude","sessionId":"x","attemptId":"a","updatedAt":1}', 'utf8')
+  check('LR2c 缺 cwd 字段读作 undefined', readLastRunRecord(recordFile) === undefined)
+  const blocker2 = join(recordDir, 'blocker-file')
+  writeFileSync(blocker2, 'x')
+  let recordThrew = false
+  try {
+    writeLastRunRecord({ backendId: 'dsh', sessionId: 's', cwd: 'c', attemptId: 'a' }, blocker2)
+  } catch {
+    recordThrew = true
+  }
+  check('LR3 写失败绝不抛（best-effort，退化到 launcher 旧逻辑）', !recordThrew)
+  rmSync(recordDir, { recursive: true, force: true })
+  // 组合根写入接线（变异陷阱：漏斗/启动忘记写记录 → S02 静默失效）。
+  const funnelSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
+  const refreshCalls = funnelSource.split('refreshLastRunRecord()').length - 1
+  check('LR4 plugin.ts 写记录接线齐：boot 落盘 + 崩溃/更新//restart/干净退出四个漏斗分支刷新（内核切换分支不写——替换进程自己写）',
+    funnelSource.includes('const refreshLastRunRecord = (): void =>') && refreshCalls === 5,
+    'refresh calls=' + refreshCalls)
+
+  // 启动页的 boot 门（用户实测：kernel.json 记住 claude 后全新启动直接进聊天页、
+  // 没有启动页）。契约断言组合根 plugin.ts 里的**调用点**——门只剩 noResume
+  // （带 resume 目标的启动直达会话）与 DSH_TUI_NO_LAUNCHPAD（自动化逃生门），
+  // backend 不参与：记住的内核是 dsh 还是 claude，全新启动一律先落启动页。
+  const pluginSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
+  const declLine = (name: string): string => {
+    const at = pluginSource.indexOf('const ' + name + ' = ')
+    const end = pluginSource.indexOf('\n', at)
+    return at < 0 || end < 0 ? '' : pluginSource.slice(at, end)
+  }
+  const launchpadBoot = declLine('launchpadOnBoot')
+  check('K9 启动页 boot 门：launchpadOnBoot 不带 dshBoot（claude 记忆启动同样落启动页），门仍是 noResume + DSH_TUI_NO_LAUNCHPAD',
+    launchpadBoot.includes('noResume') && launchpadBoot.includes('DSH_TUI_NO_LAUNCHPAD') && !launchpadBoot.includes('dshBoot'),
+    launchpadBoot)
+  check('K9b 另两个 boot 屏仍 DSH 专属：workspace home 与首启引导的门不动（dshBoot 保留）',
+    declLine('openHomeOnBoot').includes('dshBoot') && declLine('onboardingOnBoot').includes('dshBoot'),
+    declLine('openHomeOnBoot') + ' / ' + declLine('onboardingOnBoot'))
 }
 
 // ── F. 宽度不变量（整屏：任何一行都不超宽、没有切断的半句） ─────────────────
@@ -979,7 +1213,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   const cardLeft = leftGap(cardRow)
   const cardWidth = Math.max(24, Math.min(48 - 4, 72))
   check('G1 入口被裁掉后整行仍右对齐（行尾 = 卡片右缘 ±1，且被裁的不画半句）',
-    hintRow !== '' && !hintRow.includes(HELP_LABEL) && Math.abs(stringWidth(hintRow.replace(/\s+$/u, '')) - (cardLeft + cardWidth)) <= 1,
+    hintRow !== '' && !hintRow.includes(HELP_LABEL) && !hintRow.includes(BACKEND_LABEL) && Math.abs(stringWidth(hintRow.replace(/\s+$/u, '')) - (cardLeft + cardWidth)) <= 1,
     `rowEnd=${stringWidth(hintRow.replace(/\s+$/u, ''))} cardRight=${cardLeft + cardWidth} ${hintRow.trim()}`)
   check('G2 裁剪后行高仍恒 1（三个入口同在一行、各只出现一次）',
     rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL])
@@ -1004,9 +1238,10 @@ for (const cols of [120, 100, 72, 60, 48]) {
     const hintRow = lines.find(l => l.includes(label)) ?? ''
     const cardLeft = leftGap(lines.find(l => l.includes('╭')) ?? '')
     const cardRight = cardLeft + Math.max(24, Math.min(COLS - 4, 72))
-    check(`G2b 条件位=${kind}：四格同一行、行高恒 1、仍右对齐（对齐/行高契约不随条件位漂）`,
-      rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL, label])
+    check(`G2b 条件位=${kind}：五格同一行、行高恒 1、仍右对齐（对齐/行高契约不随条件位漂）`,
+      rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL, BACKEND_LABEL, label])
         && lines.filter(l => l.includes(label)).length === 1
+        && lines.filter(l => l.includes(BACKEND_LABEL)).length === 1
         && Math.abs(stringWidth(hintRow.replace(/\s+$/u, '')) - cardRight) <= 1,
       `${kind} ${hintRow.trim().slice(0, 90)}`)
     s.close()
@@ -1265,8 +1500,8 @@ for (const cols of [120, 100, 72, 60, 48]) {
   // 键盘路径（仓库硬规矩）：焦点环走到 Tips（-6）+ Enter = 切下一条。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev)
-  // 环 = 输入框 → 参数四段 → 入口四条 → Tips（-6）：从 -1 数 9 步 Tab。
-  for (let i = 0; i < 9; i++) await s.send('\t')
+  // 环 = 输入框 → 参数四段 → 入口五条（含内核）→ Tips（-6）：从 -1 数 10 步 Tab。
+  for (let i = 0; i < 10; i++) await s.send('\t')
   await settled(() => last(ev, 'focus')?.value === -6)
   await s.send('\r')
   check('L4 焦点在 Tips 行上 Enter 切下一条（与点击同一条 rotateTip）',
@@ -1505,8 +1740,8 @@ for (const cols of [120, 100, 72, 60, 48]) {
   await s.click(CWD)
   check('R3 点击左下角工作目录铭牌 → onOpenWorkspace（既有 /workspace 路径）',
     last(ev, 'workspace') !== undefined, JSON.stringify(ev.slice(before)))
-  // 环 = -1 → 参数4（-2..-5）→ 入口4（0..3）→ Tips（-6）→ 铭牌（-7）：Tab×10。
-  for (let i = 0; i < 10; i++) await s.send('\t')
+  // 环 = -1 → 参数4（-2..-5）→ 入口5（0..4，含内核）→ Tips（-6）→ 铭牌（-7）：Tab×11。
+  for (let i = 0; i < 11; i++) await s.send('\t')
   const beforeKb = ev.length
   await s.send('\r')
   check('R3b 键盘路径：焦点环走到铭牌（环末格）+ Enter → 同一条回调',
@@ -1515,15 +1750,16 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s.close()
 }
 {
-  // 双版本铭牌（第七版定稿：**竖排两行**）：第一行 dsh-tui、第二行 dsh-core，
-  // 两行都右对齐；内核读不到时右侧只有第一行（降级不编造）。底部带 2 行后，
-  // 输入框在任何档位都不被挤掉（input-only 档由 D 组钉死；这里再钉 corners 行数）。
-  const s = await openLaunchpad([], { kernelVersion: '0.2.0-rc.2' })
+  // 右下角铭牌带（第八版）：第一行仍是 dsh-tui，其后一行一个内核（当前那个打
+  // ▸、主题蓝），行与行右缘对齐（同一块铭牌带）；kernels 缺省时右侧只有第一行
+  // （降级不编造内核号）。底部带满 3 行后，输入框在任何档位都不被挤掉
+  // （input-only 档由 D 组钉死；这里再钉 corners 行数）。
+  const s = await openLaunchpad([], { kernels: buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2' }) })
   await settled(() => s.screen().includes('dsh-core v0.2.0-rc.2'))
   const lines = viewportLines(s.term)
   const tuiRow = lines.findIndex(l => l.includes(`dsh-tui v${VERSION}`))
   const kernelRow = lines.findIndex(l => l.includes('dsh-core v0.2.0-rc.2'))
-  check('R4 右下角双版本竖排：TUI 在上、内核在下，两行相邻且都靠右',
+  check('R4 右下角：TUI 版本在上、内核行紧随其后，两块右缘对齐（同一块铭牌带）',
     tuiRow >= 0 && kernelRow === tuiRow + 1
       && Math.abs(rightGap(lines[tuiRow]!, COLS) - rightGap(lines[kernelRow]!, COLS)) <= 1,
     `tui=${JSON.stringify(lines[tuiRow]?.trimEnd())} kernel=${JSON.stringify(lines[kernelRow]?.trimEnd())}`)
@@ -1533,9 +1769,111 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s.close()
   const s2 = await openLaunchpad([])
   await settled(() => s2.screen().includes(`dsh-tui v${VERSION}`))
-  check('R4c 内核版本缺省：只画 TUI 一行（不编造内核号）',
-    !s2.screen().includes('dsh-core v'), s2.screen().slice(-120))
+  check('R4c 内核目录缺省：右侧只有 TUI 一行（不编造内核号、也不画 ▸）',
+    !s2.screen().includes('dsh-core v') && !s2.screen().includes('\u25b8'), s2.screen().slice(-120))
   s2.close()
+}
+
+// ── S. 第八版：右下角内核区（可选内核 + 当前内核标记 + 鼠标/键盘两条路径）──
+// 用户原话：「在这里显示可以选择的内核 并且有箭头或者高亮 表明目前记忆中启动
+// 的内核」——目录由 kernelCatalog 的真实派生函数造（夹具不手写形状）。
+{
+  // 底栏用**短品牌名**（kernelDisplayName：DSH / Claude，与「内核 · DSH」那个 chip
+  // 同源）——全名 40 列会把左下角的目录铭牌挤掉；全名留给选择器那一屏。
+  const DSH_LABEL = 'DSH'
+  const CLAUDE_LABEL = 'Claude'
+  /** 当前内核的前缀（两格宽，与「不多不少两个空格」的其余行对齐）。 */
+  const MARK = '\u25b8 '
+  /** Launchpad 的 KERNEL_CORNER_FOCUS（内核区在焦点环里的编码）。 */
+  const KERNEL_FOCUS = -8
+  const probing = buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2' })
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { kernels: probing, kernelPick: true })
+  await settled(() => s.screen().includes('dsh-tui v' + VERSION))
+  const lines = viewportLines(s.term)
+  const tuiRow = lines.findIndex(l => l.includes('dsh-tui v' + VERSION))
+  const dshRow = lines.findIndex(l => l.includes(MARK + DSH_LABEL))
+  const claudeRow = lines.findIndex(l => l.includes(CLAUDE_LABEL))
+  const firstGlyph = (row: number) => firstGlyphCell(s.term, row, COLS)
+  /** 对照基准：同一屏上**既有的 dim 行**（右下第一行的 TUI 版本号）。 */
+  const tuiCell = cellAtText(s.term, lines, tuiRow, 'dsh-tui v' + VERSION)
+  check('S1 内核区排在 TUI 版本之下，一行一个内核：当前行打 ▸ 且带版本串',
+    tuiRow >= 0 && dshRow === tuiRow + 1 && claudeRow === tuiRow + 2
+      && lines[dshRow]!.includes('dsh-core v0.2.0-rc.2'),
+    `tui=${tuiRow} dsh=${dshRow} claude=${claudeRow} ${JSON.stringify(lines[dshRow]?.trimEnd())}`)
+  const dshFg = fgKeyOf(firstGlyph(dshRow))
+  const claudeFg = fgKeyOf(firstGlyph(claudeRow))
+  check('S2 当前内核行正常亮度（与 dim 行不同色），其余行两个空格前缀且与 TUI 版本行同色（dim）',
+    dshFg !== claudeFg && claudeFg === fgKeyOf(tuiCell) && claudeFg !== 'default'
+      && !lines[claudeRow]!.includes(MARK)
+      // 前缀等宽：两个名字的起始列相同（▸ + 空格 vs 两个空格）。
+      && stringWidth(lines[dshRow]!.slice(0, lines[dshRow]!.indexOf(DSH_LABEL)))
+        === stringWidth(lines[claudeRow]!.slice(0, lines[claudeRow]!.indexOf(CLAUDE_LABEL))),
+    `dsh=${dshFg} claude=${claudeFg} tui=${fgKeyOf(tuiCell)} claude=${JSON.stringify(lines[claudeRow]?.trimEnd())}`)
+  check('S2b 底栏画短品牌名（DSH / Claude），全名一个都不画（全名只进选择器）',
+    lines[dshRow]!.includes(MARK + DSH_LABEL + ' \u00b7 ') && lines[claudeRow]!.trim().startsWith(CLAUDE_LABEL + ' \u00b7 ')
+      && !lines.some(l => l.includes('DeepSeek Harness') || l.includes('Claude Agent')),
+    `dsh=${JSON.stringify(lines[dshRow]?.trimEnd())} claude=${JSON.stringify(lines[claudeRow]?.trimEnd())}`)
+  check('S3 探测未回来：claude 行显示「检测中…」——置灰但**不是**「未安装」',
+    claudeRow >= 0 && lines[claudeRow]!.includes('检测中…') && !lines[claudeRow]!.includes('未安装'),
+    JSON.stringify(lines[claudeRow]?.trimEnd()))
+  // 鼠标路径：整块是一个可点目标（点开选择器 = Chat 的 onKernelPick），点击
+  // 拦住冒泡，不能同时算「点空白」（那会既开选择器又清焦点）。
+  const beforeClick = ev.length
+  await s.click(DSH_LABEL)
+  check('S4 点击内核区 → onKernelPick（整块一个目标，且不是「点空白」）',
+    last(ev, 'kernel') !== undefined && !ev.slice(beforeClick).some(e => e.type === 'blank'),
+    JSON.stringify(ev.slice(beforeClick)))
+  // 悬停 = CornerChip 那套：焦点挪到内核区那一格（-8），且原来 dim 的非当前
+  // 行**亮起来**（加粗）——这就是「可以点」的鼠标反馈。
+  const beforeHover = ev.length
+  const hoverAt = findCell(s.term, CLAUDE_LABEL)!
+  s.input.write('\u001b[<35;' + hoverAt.col + ';' + hoverAt.row + 'M')
+  check('S5 悬停内核区 → 焦点落到 KERNEL_CORNER_FOCUS(-8)（鼠标与键盘同一格）',
+    await settled(() => last(ev, 'focus')?.value === KERNEL_FOCUS), JSON.stringify(ev.slice(beforeHover)))
+  check('S5b 悬停高亮：非当前行不再是 dim 色且加粗（悬停前的对照见 S2）',
+    await settled(() => fgKeyOf(firstGlyph(claudeRow)) !== fgKeyOf(tuiCell) && (firstGlyph(claudeRow)?.isBold() ?? 0) > 0),
+    `fg=${fgKeyOf(firstGlyph(claudeRow))} tui=${fgKeyOf(tuiCell)} bold=${firstGlyph(claudeRow)?.isBold()}`)
+  s.close()
+  // 键盘路径（仓库硬规矩：每个可点目标都要有不含鼠标的等价操作）：焦点环末格
+  // 是内核区，Enter 与点击同一条回调。环 = 输入框(-1) → 参数4 → 入口5 →
+  // Tips(-6) → 目录铭牌(-7) → 内核区(-8)，共 13 格。这里铭牌也接上，钉死顺序。
+  const ev2: Ev[] = []
+  const s2 = await openLaunchpad(ev2, { kernels: probing, kernelPick: true, cornerWorkspace: true })
+  await settled(() => s2.screen().includes(MARK + DSH_LABEL))
+  for (let i = 0; i < 11; i++) await s2.send('\t')
+  const atCwd = last(ev2, 'focus')?.value
+  await s2.send('\t')
+  const atKernel = last(ev2, 'focus')?.value
+  const beforeEnter = ev2.length
+  await s2.send('\r')
+  check('S6 焦点环：目录铭牌(-7) 之后才是内核区(-8)；Enter 触发 onKernelPick（不是提交）',
+    atCwd === -7 && atKernel === KERNEL_FOCUS && last(ev2, 'kernel') !== undefined && last(ev2, 'submit') === undefined,
+    `cwd=${atCwd} kernel=${atKernel} ${JSON.stringify(ev2.slice(beforeEnter))}`)
+  s2.close()
+  {
+    // 已探测「未安装」：置灰原因是未安装（与「检测中…」分得清）。
+    const s3 = await openLaunchpad([], { kernels: buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2', claude: { installed: false } }) })
+    check('S7 已探测未安装：claude 行显示「未安装」',
+      await settled(() => s3.screen().includes(CLAUDE_LABEL + ' · 未安装')), s3.screen().slice(-160))
+    s3.close()
+  }
+  {
+    // 已探测可用：版本串是**产品前缀 + 版本号**，且这一行不变暗（可选）。
+    const s4 = await openLaunchpad([], { kernels: buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2', claude: { installed: true, auth: 'ok', version: '2.0.1' } }) })
+    check('S8 可选内核显示版本串：claude-code v2.0.1（不是裸版本号）',
+      await settled(() => s4.screen().includes(CLAUDE_LABEL + ' · claude-code v2.0.1')), s4.screen().slice(-160))
+    const lines4 = viewportLines(s4.term)
+    const tui4 = lines4.findIndex(l => l.includes('dsh-tui v' + VERSION))
+    const claude4 = rowOf(s4.term, CLAUDE_LABEL)
+    const claude4Fg = fgKeyOf(firstGlyphCell(s4.term, claude4, COLS))
+    // 底栏只管「现在跑的是它」：可选择的内核行**照样** dim（可选性由选择器那一行
+    // 表达——picker 里只有不可选行才变暗，两条不同的口径各测各的）。
+    check('S8b 可选但非当前的内核行在底栏仍 dim（可不可选归选择器表达）',
+      claude4Fg === fgKeyOf(cellAtText(s4.term, lines4, tui4, 'dsh-tui v' + VERSION)),
+      'claude=' + claude4Fg + ' tui=' + fgKeyOf(cellAtText(s4.term, lines4, tui4, 'dsh-tui v' + VERSION)))
+    s4.close()
+  }
 }
 
 // ── O. 第七版：落地页浮层 = 干净镂空（遮挡不叠加、无底色）──────────────

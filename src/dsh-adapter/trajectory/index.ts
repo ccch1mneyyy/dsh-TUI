@@ -21,7 +21,11 @@ export { aggregate, forEachCall, sortRows } from './aggregate.js'
 
 export { inspectNode, type InspectDetail, type InspectSection } from './inspect.js'
 
+export type { RawTrajEvent } from './guards.js'
+
 export { channelOf, columnOfIndex, dominantChannel, projectWave } from './wave.js'
+
+export { createAgentTrajectorySource, type AgentTrajectorySource } from './agent-source.js'
 
 export {
   BURST_MIN,
@@ -40,6 +44,7 @@ export {
   type TrajStatus,
   type TrajTokens,
   type TrajTotals,
+  type TrajectoryLane,
   type WaveBand,
   type WaveBucket,
   type WaveChannel,

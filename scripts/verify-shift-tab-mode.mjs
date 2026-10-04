@@ -15,6 +15,13 @@
  * process from the rejection listener, replacing the FAIL line this script
  * exists to print with a raw crash.
  *
+ * It also pins the cycle SURFACE the reflex key may walk (against the
+ * compiled Claude backend wired through the real channel cycleMode, not a
+ * stub): walking the entire cycle repeatedly must replay the pre-bypass
+ * order default → acceptEdits → plan → auto and must NEVER land in
+ * bypassPermissions — that mode is picker-only (/permission), because one
+ * stray reflex press must not turn every confirmation off.
+ *
  * Run with plain node against the compiled lib:
  *   node scripts/verify-shift-tab-mode.mjs
  */
@@ -122,6 +129,71 @@ stdin.write('\t')
 await sleep(300) // 固定窗:探针 普通 Tab 不得改动循环计数
 check('plain Tab does not cycle the mode', channel.cycled.length === 2, JSON.stringify(channel.cycled.length))
 instance.unmount()
+
+// ---- the real cycle surface: bypass is unreachable from Shift+Tab ------
+// The composer is rerendered against the REAL channel cycleMode (the
+// compiled delegate over the compiled Claude modes capability), so the
+// walk below exercises the shipped narrowing, not a stubbed copy of it.
+const { createClaudeControls } = await import('../lib/types/backends/claude/controls.js')
+const { memoryClaudePrefs } = await import('../lib/types/backends/claude/prefs.js')
+const { createCapabilityDelegates } = await import('../lib/types/dsh-adapter/channel/core/actions.js')
+const { setLang } = await import('../lib/types/i18n.js')
+setLang('en')
+const MODE_SET_CALLS = []
+let liveMode = 'default'
+const queryControls = {
+  setPermissionMode(mode) { MODE_SET_CALLS.push(mode) },
+  setModel: async () => undefined,
+  applyFlagSettings: async () => undefined,
+  supportedModels: async () => [
+    { value: 'opus', resolvedModel: 'claude-opus-x', displayName: 'Opus', description: '', supportsAutoMode: true },
+  ],
+  supportedCommands: async () => [],
+  mcpServerStatus: async () => [],
+  reconnectMcpServer: async () => undefined,
+  toggleMcpServer: async () => undefined,
+  getContextUsage: async () => { throw new Error('not needed') },
+  accountInfo: async () => { throw new Error('not needed') },
+}
+const claudeControls = createClaudeControls({
+  query: () => queryControls,
+  emit: () => undefined,
+  submitText: async () => undefined,
+  currentModel: () => 'claude-opus-x',
+  currentMode: () => liveMode,
+  noteModel: model => [{ type: 'model.changed', model }],
+  noteMode: mode => { liveMode = mode; return [{ type: 'mode.changed', modeId: mode }] },
+  prefs: memoryClaudePrefs(),
+  debug: () => undefined,
+})
+claudeControls.seed({ models: [{ value: 'opus', resolvedModel: 'claude-opus-x', displayName: 'Opus', description: '', supportsAutoMode: true }] })
+const modeCaps = claudeControls.capabilities.modes
+const delegates = createCapabilityDelegates({
+  owner: { current: () => true },
+  session: () => ({ capabilities: { modes: modeCaps } }),
+  state: () => ({ provider: 'claude', backendCapabilities: {}, agentBindingGeneration: 0 }),
+  notify: () => undefined,
+  unavailable: () => undefined,
+  unavailableLines: () => [],
+  controls: { mcpReport: () => undefined },
+})
+check('cycle surface: the roster still lists bypassPermissions (picker-only)', modeCaps.list().some(mode => mode.id === 'bypassPermissions'), modeCaps.list().map(mode => mode.id).join())
+check('cycle surface: modes.cycle() omits bypassPermissions', !modeCaps.cycle().some(mode => mode.id === 'bypassPermissions'), modeCaps.cycle().map(mode => mode.id).join())
+const realChannel = makeChannel()
+realChannel.cycleMode = () => delegates.cycleMode()
+const realStreams = makeStreams()
+const realInstance = await renderInput(realChannel, realStreams)
+await sleep(600) // 固定窗:pacing 等真通道夹具首帧就绪再注入按键
+// Two full laps around the 4-entry cycle (default, acceptEdits, plan, auto)
+// plus the closing return to default: nowhere may bypass appear.
+for (let i = 0; i < 8; i++) {
+  realStreams.stdin.write('\x1b[Z')
+  await sleep(200) // 固定窗:探针 每次Backtab推进一位并等set落定
+}
+const EXPECTED_WALK = ['acceptEdits', 'plan', 'auto', 'default', 'acceptEdits', 'plan', 'auto', 'default']
+check('cycle walk: the order is the pre-bypass cycle, verbatim', JSON.stringify(MODE_SET_CALLS) === JSON.stringify(EXPECTED_WALK), JSON.stringify(MODE_SET_CALLS))
+check('cycle walk: bypassPermissions is never reached across the whole cycle', !MODE_SET_CALLS.includes('bypassPermissions'), JSON.stringify(MODE_SET_CALLS))
+realInstance.unmount()
 
 // ---- rejected cycleMode: the keyboard entry owns the failure ---------------
 const rejections = []

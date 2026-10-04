@@ -947,14 +947,29 @@ function oauthStateDescription(status: OAuthProviderStatus): string {
 }
 
 /**
+ * The sign-in flow of a backend session's `/login`: the `/provider` OAuth
+ * branch preselected on one provider (sign in, or re-login / sign out when
+ * already signed in). Same panels, same plugin flow.
+ */
+export function runOAuthLogin(
+  deps: Pick<ProviderWizardDeps, 'ask' | 'notify' | 'pushLocal'>,
+  oauth: OAuthSetupHost,
+  provider: string,
+): Promise<ProviderWizardOutcome> {
+  return runOAuthWizard(deps, oauth, provider)
+}
+
+/**
  * The OAuth branch of `/provider`: pick a subscription provider, then sign
  * in (the plugin's own question panels carry the flow — device codes,
  * authorization URLs), or re-login / sign out when one is already signed in.
  * No settings or credential writes happen here; the plugin owns its store.
+ * `preselect` skips the pick (a backend's own `/login`).
  */
 async function runOAuthWizard(
-  deps: ProviderWizardDeps,
+  deps: Pick<ProviderWizardDeps, 'ask' | 'notify' | 'pushLocal'>,
   oauth: OAuthSetupHost,
+  preselect?: string,
 ): Promise<ProviderWizardOutcome> {
   const { ask, notify, pushLocal } = deps
   try {
@@ -963,14 +978,23 @@ async function runOAuthWizard(
       notify(t('provider-oauth-none'), { color: 'warning' })
       return 'failed'
     }
-    const pickAnswer = await ask({
-      questions: [optionQuestion('oauth-provider', t('provider-q-oauth'), statuses.map(status => ({
-        label: status.provider,
-        description: oauthStateDescription(status),
-      })), { hideCustomInput: true })],
-    })
-    const providerId = answerSelected(pickAnswer, 'oauth-provider')[0]
-    const status = statuses.find(row => row.provider === providerId)
+    let status: (typeof statuses)[number] | undefined
+    if (preselect !== undefined) {
+      status = statuses.find(row => row.provider === preselect)
+      if (status === undefined) {
+        notify(t('provider-oauth-unmounted', { provider: preselect }), { color: 'warning', timeoutMs: 8000 })
+        return 'failed'
+      }
+    } else {
+      const pickAnswer = await ask({
+        questions: [optionQuestion('oauth-provider', t('provider-q-oauth'), statuses.map(row => ({
+          label: row.provider,
+          description: oauthStateDescription(row),
+        })), { hideCustomInput: true })],
+      })
+      const providerId = answerSelected(pickAnswer, 'oauth-provider')[0]
+      status = statuses.find(row => row.provider === providerId)
+    }
     if (status === undefined) return 'cancelled'
 
     if (status.signedIn) {

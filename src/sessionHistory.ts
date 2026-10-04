@@ -80,22 +80,68 @@ export function readResumeTarget(): string | undefined {
  * @param argv - the app arguments from cmdlineArgs, after the host's own options.
  * @returns The requested session id, or undefined when none was given.
  */
-export function resumeTargetFromArgv(argv: readonly string[]): string | undefined {
+export function resumeTargetFromArgv(
+  argv: readonly string[],
+  /** What a bare flag resumes: DSH's exit-time marker by default; another
+   *  backend passes its own (a Claude id never lives in `resume.txt`). */
+  readFallback: () => string | undefined = readResumeTarget,
+): string | undefined {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--') break
-    if (a === '--resume' || a === '-c' || a === '--continue' || a.startsWith('--resume=')) {
+    if (isResumeFlag(a)) {
       let sessionId = ''
       if (a.startsWith('--resume=')) {
         sessionId = a.slice('--resume='.length).trim()
-      } else if (a === '--resume' && argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) {
+      } else if (resumeTakesNextArg(argv, i)) {
         sessionId = argv[++i].trim()
       }
-      if (!sessionId) sessionId = readResumeTarget() ?? ''
+      if (!sessionId) sessionId = readFallback() ?? ''
       if (sessionId) return sessionId
     }
   }
   return undefined
+}
+
+/** A resume flag of the app argv grammar shared by the two functions here. */
+function isResumeFlag(arg: string): boolean {
+  return arg === '--resume' || arg === '-c' || arg === '--continue' || arg.startsWith('--resume=')
+}
+
+/** `--resume <id>`: the bare flag consumes the next argument unless it is an option. */
+function resumeTakesNextArg(argv: readonly string[], index: number): boolean {
+  const next = argv[index + 1]
+  return argv[index] === '--resume' && next !== undefined && !next.startsWith('-')
+}
+
+/**
+ * Drop the resume flags {@link resumeTargetFromArgv} recognizes (the same
+ * grammar, through the same helpers).
+ *
+ * A kernel switch respawns the process onto the OTHER backend: this
+ * kernel's session id means nothing there, and an inherited `--resume
+ * <id>` in argv would send the replacement looking for a session that
+ * belongs to the kernel it just left (DSH's `resume.txt` marker is
+ * already deleted by restartTui for the same reason). `--` still ends
+ * option parsing.
+ * @param argv - App arguments, exactly as passed to the replacement.
+ * @returns A copy without those flags (and without the id they consumed).
+ */
+export function stripResumeArgs(argv: readonly string[]): string[] {
+  const out: string[] = []
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!
+    if (a === '--') {
+      out.push(...argv.slice(i))
+      break
+    }
+    if (isResumeFlag(a)) {
+      if (resumeTakesNextArg(argv, i)) i++
+      continue
+    }
+    out.push(a)
+  }
+  return out
 }
 
 /**

@@ -11,11 +11,13 @@ import type { DOMNode, TextNode, DOMElement } from '../src/ink/dom.js'
 import type { Frame } from '../src/ink/frame.js'
 import type { Screen } from '../src/ink/screen.js'
 
-const [React, { marked }, { Box, Text }, { Markdown }, { StreamingMarkdown }, { MarkdownTable }, { configureMarked, formatToken }, { renderToScreen }, { cellAtIndex }] = await Promise.all([
+const [React, { marked }, { Box, Text }, { Markdown }, { StreamingMarkdown }, { MarkdownTable }, { CodeBlockFrame }, { configureMarked, formatToken }, { renderToScreen }, { cellAtIndex }, { TerminalSizeContext }] = await Promise.all([
   import('react'), import('marked'), import('../src/ui.js'),
   import('../src/components/Markdown.js'), import('../src/components/StreamingMarkdown.js'),
-  import('../src/components/MarkdownTable.js'), import('../src/terminal-utils/markdown.js'),
+  import('../src/components/MarkdownTable.js'), import('../src/components/CodeBlockFrame.js'),
+  import('../src/terminal-utils/markdown.js'),
   import('../src/ink/render-to-screen.js'), import('../src/ink/screen.js'),
+  import('../src/ink/components/TerminalSizeContext.js'),
 ])
 configureMarked()
 
@@ -30,6 +32,11 @@ function unsplit(source: string): React.ReactElement {
     if (token.type === 'table') {
       flush()
       nodes.push(<MarkdownTable key={nodes.length} token={token as Tokens.Table} highlight={null} />)
+    } else if (token.type === 'code') {
+      // Fences render through the same CodeBlockFrame the component path
+      // uses, so the unsplit reference matches Markdown's node decisions.
+      flush()
+      nodes.push(<CodeBlockFrame key={nodes.length} token={token as Tokens.Code} highlight={null} />)
     } else text += formatToken(token)
   }
   flush()
@@ -49,7 +56,16 @@ function screenSnapshot(screen: Screen, height = screen.height, styles = true) {
 }
 
 function snapshot(element: React.ReactElement, width: number, styles = true) {
-  const { screen, height } = renderToScreen(element, width)
+  // The width-aware standalone components (MarkdownTable, CodeBlockFrame)
+  // read TerminalSizeContext; provide the render width so the reference
+  // tree sees the same geometry as the real App (and the table cases stay
+  // non-vacuous: without a provider they render empty on BOTH sides).
+  const provided = (
+    <TerminalSizeContext.Provider value={{ columns: width, rows: 40 }}>
+      {element}
+    </TerminalSizeContext.Provider>
+  )
+  const { screen, height } = renderToScreen(provided, width)
   return screenSnapshot(screen, height, styles)
 }
 

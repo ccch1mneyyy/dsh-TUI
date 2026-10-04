@@ -21,6 +21,7 @@
  * Run via `node --import tsx/esm scripts/verify-plugin-commands.ts`.
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { compositionAndCoreSource } from './lib/channel-composition.mjs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -258,7 +259,8 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
 
 // ── G. channel 接线断言 ───────────────────────────────────────────────────
 {
-  const channel = readFileSync(join(root, 'src/dsh-adapter/channel.ts'), 'utf8')
+  // Phase 4a: the DSH extension (channel/extensions.ts) composes the invoker.
+  const channel = readFileSync(join(root, 'src/dsh-adapter/channel/extensions.ts'), 'utf8')
   const invoker = readFileSync(join(root, 'src/dsh-adapter/channel/external-commands.ts'), 'utf8')
   const definitionLookup = invoker.indexOf('const definition = service.find(commandAgent, name)')
   const ownerLookup = invoker.indexOf('const owner = commandOwner(ctx, definition)')
@@ -277,7 +279,9 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   check1('owner deny keeps the structured draft-preserving error outcome',
     invoker.includes("return t('command-invoke-denied-owner'") && invoker.includes('consumeDraft: false'))
   check1('owner invoke deny records a scoped permission id', invoker.includes('resource: { kind: \'permission\', id: `${owner.componentId}:commands.invoke:${owner.commandId}` }'))
-  check1('channel composes external invocation instead of retaining policy', channel.includes('createExternalCommandInvoker(') && !channel.includes('commandOwner(ctx, definition)'))
+  // The negative half reads every composition root and core module (Phase 4a
+  // moved composition code into channel/core/*).
+  check1('channel composes external invocation instead of retaining policy', channel.includes('createExternalCommandInvoker(') && !compositionAndCoreSource().includes('commandOwner(ctx, definition)'))
   const skills = readFileSync(join(root, 'src/dsh-adapter/channel/skill-catalog.ts'), 'utf8')
   check1('skill register catch maps through mapCommandError', /catch \(error\) \{[\s\S]{0,400}mapCommandError\(error\)/.test(skills))
   check1("skill success recorded as command create applied",

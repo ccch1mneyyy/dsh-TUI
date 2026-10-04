@@ -1,0 +1,58 @@
+{
+  "start": {
+    "turn": 1,
+    "seq": 2,
+    "model": "claude-haiku-4-5-20251001"
+  },
+  "compactedFrom": "00000000-0000-4000-8000-000000000114",
+  "events": [
+    "compaction.end",
+    "user.message",
+    "turn.start:system",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "assistant.message",
+    "step.end",
+    "turn.end:completed",
+    "model.changed"
+  ],
+  "rows": [
+    {
+      "kind": "notice",
+      "text": "Session summary is ready"
+    },
+    {
+      "kind": "compact",
+      "text": "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary…"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "anchor": "msg_fixture_002",
+      "reasoningTokens": 36
+    },
+    {
+      "kind": "assistant",
+      "text": "ok",
+      "anchor": "msg_fixture_002"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "sessionTitle": "",
+    "tokens": {
+      "input": 8,
+      "output": 43,
+      "cacheRead": 22951,
+      "cacheWrite": 1533
+    },
+    "compaction": null,
+    "notices": []
+  }
+}

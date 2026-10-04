@@ -1,0 +1,230 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.result",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "subagent.start",
+    "subagent.start",
+    "assistant.message",
+    "subagent.progress",
+    "tool.call",
+    "tool.result",
+    "assistant.message",
+    "subagent.end",
+    "tool.result",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status",
+    "session.status",
+    "turn.start",
+    "compaction.start",
+    "compaction.end",
+    "user.message",
+    "context.capacity",
+    "turn.end",
+    "session.status",
+    "session.status",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Use the Read tool to read README.md. Then use the Agent tool with subagent_type \"general-purpose\" and the prompt \"Read src/app.js with the Read tool and report …"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 162
+    },
+    {
+      "kind": "assistant",
+      "text": "I'll read the README and then check the exported function from src/app.js."
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Read",
+        "status": "ok",
+        "call": {
+          "card": "generic",
+          "displayKey": "tool-name-read",
+          "category": "other"
+        },
+        "result": {
+          "card": "read"
+        },
+        "resultText": "1 # Fixture project 2 3 A tiny project for recording Claude SDK fixtures. 4"
+      }
+    },
+    {
+      "kind": "subagent",
+      "text": "Read src/app.js and report exported function",
+      "subagent": {
+        "agentId": "a1f5db6eabc1b18a2",
+        "status": "completed",
+        "kind": "general-purpose",
+        "background": false,
+        "tools": [
+          "Read:completed"
+        ],
+        "outputLines": [
+          "The exported function name is **`greet`**."
+        ],
+        "tokens": 14612,
+        "summary": "The exported function name is **`greet`**."
+      }
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 144
+    },
+    {
+      "kind": "assistant",
+      "text": "The README describes a fixture project for Claude SDK, and src/app.js exports a function named `greet`."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
+      "kind": "notice",
+      "text": "Session summary is ready"
+    },
+    {
+      "kind": "compact",
+      "text": "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary…"
+    },
+    {
+      "kind": "user",
+      "text": "Which file did you read yourself first? Reply with just the file name."
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 229
+    },
+    {
+      "kind": "assistant",
+      "text": "README.md"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.06820105,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 28,
+      "output": 641,
+      "cacheRead": 56985,
+      "cacheWrite": 12638
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": [],
+    "subagents": [
+      {
+        "agentId": "a1f5db6eabc1b18a2",
+        "status": "completed",
+        "depth": 1,
+        "output": 1
+      }
+    ],
+    "jobs": []
+  }
+}

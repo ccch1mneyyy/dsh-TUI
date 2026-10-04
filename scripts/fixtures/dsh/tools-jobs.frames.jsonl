@@ -1,0 +1,3 @@
+{"type":"chunk","attemptId":"attempt-reattach","revision":1,"index":4,"time":1767618018100,"chunk":{"type":"tool-call-delta","index":0,"id":"call_live_1","name":"read_file","argumentsDelta":"{\"path\":\"a.md\"}"}}
+{"type":"chunk","attemptId":"attempt-reattach","revision":2,"index":5,"time":1767618018150,"chunk":{"type":"text-delta","index":1,"text":"Reading a.md next."}}
+{"type":"end","attemptId":"attempt-reattach","revision":3,"index":6,"outcome":{"kind":"abandoned"}}

@@ -16,6 +16,7 @@ import { POINTER } from '../terminal-utils/figures.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { actionMatches, effectiveComboDisplay, primaryComboString } from '../utils/keymap.js'
 import { formatTokens } from '../terminal-utils/format.js'
+import { formatClock } from '../trajectory/format.js'
 import { homeDir } from '../utils/paths.js'
 import { execFileNoThrow } from '../utils/execFileNoThrow.js'
 import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-view.js'
@@ -28,8 +29,8 @@ import {
 } from '../modelGroups.js'
 import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
-import { sessionCwdMatches, type ChatRow, type ComposerImageRef, type EffortOption, type ExternalCommandOutcome, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
-import type { QuestionStore } from '../dsh-adapter/questions.js'
+import { sessionCwdMatches, type BackendModeOption, type ChatRow, type ComposerImageRef, type EffortOption, type ExternalCommandOutcome, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
+import type { QuestionStore } from '../channel/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
 import { ActivityStore, useActivity } from '../dsh-adapter/activity-store.js'
@@ -46,11 +47,13 @@ const MATH_PREVIEW_MAX_ROWS = 64
 import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
-import { runProviderWizard } from '../dsh-adapter/providerWizard.js'
-import { ApprovalStore } from '../dsh-adapter/approvals.js'
+import { runOAuthLogin, runProviderWizard } from '../dsh-adapter/providerWizard.js'
+import { runChannelWizard, sameOptionConnection } from '../channel/channel-wizard.js'
+import { PermissionStore, type PermissionPanelSource } from '../channel/permissions.js'
 import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPanel.js'
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
 import { ExtensionDialog } from '../components/ExtensionDialog.js'
+import { consumeBoundaryRecoveryRemount } from '../ink/update-overflow-guard.js'
 import type { DOMElement } from '../ink/dom.js'
 import { useSearchHighlight } from '../ink/hooks/use-search-highlight.js'
 import { useTerminalTitle } from '../ink/hooks/use-terminal-title.js'
@@ -70,6 +73,10 @@ import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
+import { turnUsageParts } from '../components/TurnUsageRow.js'
+import { AgentTranscriptScene } from './AgentTranscriptScene.js'
+import { agentViewStore } from '../components/sidePanel/agentViewStore.js'
+import { agentComposeTargetOf, type AgentComposeTarget, type AgentMessageView, type AgentViewSource } from '../components/messages/agentTeam.js'
 import type { PromptDraftCache } from '../components/promptDraftCache.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
 import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
@@ -85,7 +92,7 @@ import { BalanceReportRow } from '../components/BalanceReportRow.js'
 import type { BalanceResult } from '../deepseekBalance.js'
 import { estimateSessionCostSnapshotCny } from '../deepseekPricing.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
-import { StatusLine } from './StatusLine.js'
+import { formatCostReport, StatusLine } from './StatusLine.js'
 import { channelContextOccupancy } from './StatusMetrics.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
@@ -111,6 +118,11 @@ import { ColorPicker } from '../components/ColorPicker.js'
 import { EffortSlider } from '../components/EffortSlider.js'
 import { PresetPicker } from '../components/PresetPicker.js'
 import { PermissionsPicker } from '../components/PermissionsPicker.js'
+import { ModePicker } from '../components/ModePicker.js'
+import { KernelPicker } from '../components/KernelPicker.js'
+import { ChannelPicker, type ChannelPickerRow } from '../components/ChannelPicker.js'
+import { buildKernelCatalog, type ClaudeKernelStatus } from '../components/kernelCatalog.js'
+import { modeDisplayName } from '../sessionModes.js'
 import { PlanPicker } from '../components/PlanPicker.js'
 import { LangPicker } from '../components/LangPicker.js'
 import { ThemePicker, getThemeOptions } from '../components/ThemePicker.js'
@@ -119,7 +131,10 @@ import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
 import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
-import { BtwPanel } from '../components/BtwPanel.js'
+import { BtwPanelFallback } from '../components/BtwPanel.js'
+import { btwThreads } from '../components/sidePanel/btw/threads.js'
+import { getBtwContextBudget, getBtwContextTurns } from '../tuiDisplayPrefs.js'
+import { BtwThreadScene } from '../components/sidePanel/btw/BtwThreadScene.js'
 import { RecapPanel } from '../components/RecapPanel.js'
 import { isValidSessionColor, SESSION_COLOR_NAMES } from '../terminal-utils/sessionColors.js'
 import { TipsPanel } from '../components/TipsPanel.js'
@@ -212,13 +227,16 @@ const MIGRATE_CHILD_TIMEOUT_MS = 30 * 60 * 1000
  * 落地页期间照旧整块让位。
  */
 const LAUNCHPAD_OVERLAY_KINDS: ReadonlySet<string> = new Set([
-  'model', 'effort', 'plan', 'preset', 'permission',
+  'model', 'effort', 'plan', 'preset', 'permission', 'mode',
   // 第七版：左下角工作目录铭牌点开的工作区菜单（及其二级选择器/流程层）
   // 也是「盖在落地页之上」的姿态——同一套 pickerPanels 挂载，Esc 回落地页。
   'workspace-menu', 'workspace-picker', 'workspace-flow',
   // 第八版：帮助入口也走「盖在落地页之上」的浮层姿态（overlay kind 'help'，
   // HelpMenu 经 pickerPanels 挂进 OverlayAbove）——不再收掉落地页进对话页。
   'help',
+  // 内核选择器（/kernel 与启动页「内核」入口）：同一姿态盖在落地页之上，
+  // 点选即切换内核并重启（组合根的 onSwitchBackend）。
+  'kernel',
 ])
 
 function cleanCommandError(error: unknown): string {
@@ -321,7 +339,7 @@ function searchableText(row: ChatRow): string {
  * approval seam (headless verify scripts). Never parked into, so its
  * snapshot stays null and the approval panel never mounts.
  */
-let fallbackApprovalStore: ApprovalStore | undefined
+let fallbackApprovalStore: PermissionStore | undefined
 
 /**
  * Shared inert extension stores for hosts that render Chat without the
@@ -355,6 +373,10 @@ export function Chat({
   onExit,
   onUpdate,
   onRestart,
+  onSwitchBackend,
+  onRestartFreshSession,
+  onProbeKernels,
+  kernelPinned,
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
   injectControllerRef,
@@ -369,11 +391,13 @@ export function Chat({
   renderScene?: (id: string, channel: Channel) => React.ReactNode
   questionStore: QuestionStore
   /**
-   * The approval seam's UI store. Optional: hosts without an approval
-   * channel (headless scripts, older embeds) render Chat without it and
-   * simply never see an approval panel — the question panel keeps its seat.
+   * The approval seam's UI store — the DSH `ApprovalStore` or a backend
+   * session's shared `PermissionStore`; both present the same panel shape.
+   * Optional: hosts without an approval channel (headless scripts, older
+   * embeds) render Chat without it and simply never see an approval panel —
+   * the question panel keeps its seat.
    */
-  approvalStore?: ApprovalStore
+  approvalStore?: PermissionPanelSource
   /**
    * The managed plugin dialog queue (tuiDialogs service's store). Optional
    * for the same hosts as approvalStore; absent, plugin dialog requests
@@ -395,6 +419,25 @@ export function Chat({
   onUpdate?: () => void
   /** Restart the current TUI process and resume this session (no update). */
   onRestart?: () => void
+  /**
+   * 切换内核（组合根实现：写 kernel.json 记忆 → 通知 → 退出 → 以新内核重启，
+   * 新内核开新会话）。启动页「内核」入口与 /kernel 都落到这里；缺省 =
+   * 当前宿主没有切换能力（选择器只提示，绝不假装）。
+   */
+  onSwitchBackend?: (backend: 'dsh' | 'claude') => void
+  /**
+   * 以新会话重启（组合根实现：走切换内核的同一条退出路径，不写 resume 目标，
+   * 内核不变）。/channel 在激活渠道的连接变了时用它：运行中的 CLI 子进程
+   * 换不了 baseUrl/token，只能换会话。
+   */
+  onRestartFreshSession?: (notice: string) => void
+  /**
+   * Claude 内核探测（组合根注入；Chat 不 import 任何具体后端）。首次需要时
+   * 调一次并缓存结果；探测失败按「未安装」处理。
+   */
+  onProbeKernels?: () => Promise<ClaudeKernelStatus>
+  /** 启动参数（Config 行 / DSH_TUI_BACKEND）压过了记忆：选择器明说。 */
+  kernelPinned?: boolean
   /**
    * True when the host already wrapped this tree in `<AlternateScreen>`
    * (`fullscreen: true`). Both full-screen surfaces need this — the trajectory
@@ -488,7 +531,7 @@ export function Chat({
   // parks here until the panel decides; shown with priority over a pending
   // questionnaire since it gates a tool about to run. Hosts that pass no
   // approvalStore share one inert instance that never holds an ask.
-  const approvals = approvalStore ?? (fallbackApprovalStore ??= new ApprovalStore())
+  const approvals: PermissionPanelSource = approvalStore ?? (fallbackApprovalStore ??= new PermissionStore())
   const approvalSnapshot = React.useSyncExternalStore(
     listener => approvals.subscribe(listener),
     () => approvals.getSnapshot(),
@@ -607,7 +650,9 @@ export function Chat({
   /** Provider display identities for the /model group level; refreshed alongside `models`. */
   const [providerInfos, setProviderInfos] = React.useState<readonly LlmProviderInfo[]>([])
   /** /model 最近使用分组：成功切换即记录（去重置顶，上限 10），重启保留。 */
-  const [modelRecents, setModelRecents] = React.useState<readonly ModelRecentsRef[]>(() => readModelRecents())
+  // Recents are per backend: a Claude session's picks never evict the DSH list.
+  const recentsBackend = channel.backendCapabilities?.backendId
+  const [modelRecents, setModelRecents] = React.useState<readonly ModelRecentsRef[]>(() => readModelRecents(undefined, recentsBackend))
   /** Two-level /model: the drilled-in provider route; undefined = group level.
    *  Reset on open; stale ids resolve back to the group level via `activeModelGroup`. */
   const [modelGroup, setModelGroup] = React.useState<string | undefined>(undefined)
@@ -639,7 +684,7 @@ export function Chat({
     return channel.switchModel(provider, id).then((ok) => {
       if (!ok) return ok
       if (name !== undefined) channel.notify(t('model-switched', { name }))
-      setModelRecents(recordModelUse({ provider, id }))
+      setModelRecents(recordModelUse({ provider, id }, undefined, recentsBackend))
       return ok
     })
   }
@@ -663,12 +708,17 @@ export function Chat({
    * on" has not been answered yet. Every later launch starts on the chat
    * screen, and the screen stays reachable.
    */
+  // 根错误边界恢复后的重挂不是一次启动：启动页、首启引导与会话管理屏都
+  // 不再打开，直接回到对话页（一次性标记由错误边界的恢复路径写入，见
+  // update-overflow-guard）。首次渲染即消费；若这次渲染被丢弃，最坏只是
+  // 多显示一次启动入口。
+  const recoveryRemountOnBoot = consumeBoundaryRecoveryRemount()
   // 第七版：启动页在开时**不再**预开会话浏览器。旧姿态是「先收落地页再开
   // 整屏」，浏览器必须提前藏在下面；现在整屏（会话/设置/任务面板）盖在
   // 落地页**之上**、Esc 退回落地页，按需打开即可——boot 时同时为真反而会
-  // 让浏览器盖住落地页（渲染顺序见各 early-return）。
+  // 让浏览器盖住落地页（渲染顺序见各 early-return）。恢复重挂同样不开它。
   const [supervisorOpen, setSupervisorOpen] = React.useState(
-    openHomeOnBoot === true && launchpadOnBoot !== true,
+    openHomeOnBoot === true && launchpadOnBoot !== true && !recoveryRemountOnBoot,
   )
   /**
    * The launchpad: the landing page every ordinary launch starts on.
@@ -677,7 +727,7 @@ export function Chat({
    * that decides what comes next — a submitted line hands over to the chat
    * screen, an action hands over to whatever surface that action opens.
    */
-  const [launchpadOpen, setLaunchpadOpen] = React.useState(launchpadOnBoot === true)
+  const [launchpadOpen, setLaunchpadOpen] = React.useState(launchpadOnBoot === true && !recoveryRemountOnBoot)
   /**
    * The launchpad's draft. It lives HERE, not inside the screen, because the
    * screen unmounts the moment the user submits: a draft owned by an
@@ -730,7 +780,7 @@ export function Chat({
    * "点了没反应"，状态还滞留着、等界面关掉才突然弹出来。默认收，白名单只留给覆盖层。
    */
   const overlayCommandNames = React.useMemo(
-    () => new Set(['model', 'effort', 'plan', 'preset', 'permission']),
+    () => new Set(['model', 'effort', 'plan', 'preset', 'permission', 'kernel']),
     [],
   )
   /**
@@ -760,6 +810,190 @@ export function Chat({
     }).catch(() => undefined)
   }, [launchpadShown])
   /**
+   * 内核选择器的目录。/kernel、启动页「内核」入口与右下角内核行共用这一份：
+   * 当前内核取自会话能力快照的 backendId；DSH 版本取已安装 contract 的读数
+   * （读不到就不画副行）；Claude 的探测由组合根注入（Chat 不 import 具体
+   * 后端），首次需要时探一次，结果留到进程结束。
+   */
+  const kernelCurrentId = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendId ?? 'dsh'
+  const [kernelProbe, setKernelProbe] = React.useState<ClaudeKernelStatus | undefined>(undefined)
+  const kernelProbeStartedRef = React.useRef(false)
+  const requestKernelProbe = React.useCallback((): void => {
+    if (kernelProbeStartedRef.current || onProbeKernels === undefined) return
+    kernelProbeStartedRef.current = true
+    // 探测失败按「未安装」处理：那一行画灰，不给一个点了会失败的入口。
+    void onProbeKernels().then(setKernelProbe).catch(() => { setKernelProbe({ installed: false }) })
+  }, [onProbeKernels])
+  const kernelOptions = React.useMemo(
+    () => buildKernelCatalog({
+      current: kernelCurrentId,
+      ...(kernelVersion === undefined ? {} : { dshVersion: kernelVersion }),
+      ...(kernelProbe === undefined ? {} : { claude: kernelProbe }),
+    }),
+    [kernelCurrentId, kernelVersion, kernelProbe],
+  )
+  // 启动页一出现就开始探测，右下角的内核行尽量在用户看到前就有结果。
+  React.useEffect(() => {
+    if (launchpadShown) requestKernelProbe()
+  }, [launchpadShown, requestKernelProbe])
+  /** 当前内核在目录里的行号（选择器打开时的落点；找不到就落第一行）。 */
+  const kernelCurrentIndex = Math.max(0, kernelOptions.findIndex(option => option.current))
+  /** 打开内核选择器，默认落在当前内核那一行。 */
+  const openKernelPicker = React.useCallback((index?: number): void => {
+    requestKernelProbe()
+    dispatchOverlay({ type: 'open', overlay: { kind: 'kernel', index: index ?? kernelCurrentIndex } })
+  }, [kernelCurrentIndex, requestKernelProbe])
+  /**
+   * 内核选择器的确认（Enter 与鼠标点击共用）：不可选的行只提示原因，选择器
+   * 留在屏上；选当前内核就提示并收起；其余交给组合根 onSwitchBackend（记住
+   * 选择后以新内核重启）。切内核要换进程，回合运行中拒绝，与 /restart 一致。
+   */
+  const pickKernel = (index: number): void => {
+    const option = kernelOptions[index]
+    if (option === undefined) return
+    if (!option.selectable) {
+      channel.notify(option.reasonKey === undefined ? t('kernel-switch-unavailable') : t(option.reasonKey), { color: 'warning' })
+      return
+    }
+    if (option.current) {
+      dispatchOverlay({ type: 'close' })
+      channel.notify(t('kernel-already-current'))
+      return
+    }
+    if (onSwitchBackend === undefined) {
+      channel.notify(t('kernel-switch-unavailable'), { color: 'warning' })
+      return
+    }
+    if (channel.working) {
+      channel.notify(t('kernel-switch-while-working'), { color: 'warning' })
+      return
+    }
+    dispatchOverlay({ type: 'close' })
+    onSwitchBackend(option.id)
+  }
+  /**
+   * /channel 的渠道名册（只有声明了 channels 能力的内核才有行）。名册不存进
+   * overlay，切换/导入后 tick 加一触发重读，✓ 与行随之刷新。
+   */
+  const [channelRosterTick, setChannelRosterTick] = React.useState(0)
+  const channelSnapshot = React.useMemo(
+    () => (typeof channel.listChannels === 'function' ? channel.listChannels() : { channels: [], activeId: undefined }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- roster refreshes on open/switch/import (channelRosterTick), not on every keystroke
+    [channel, channelRosterTick],
+  )
+  const channelRows: readonly ChannelPickerRow[] = [
+    ...(channelSnapshot.channels.map((option): ChannelPickerRow => ({ kind: 'channel', option, active: option.id === channelSnapshot.activeId }))),
+    { kind: 'import' },
+    { kind: 'add' },
+    { kind: 'manage' },
+    { kind: 'view' },
+  ]
+  /** 打开渠道选择器，落在当前渠道行（没有渠道就落在导入行）。打开前重读
+   *  一次名册，文件被手改过也能看到。 */
+  const openChannelPicker = React.useCallback((): void => {
+    setChannelRosterTick(tick => tick + 1)
+    const fresh = typeof channel.listChannels === 'function' ? channel.listChannels() : { channels: [], activeId: undefined }
+    dispatchOverlay({ type: 'open', overlay: { kind: 'channel', index: Math.max(0, fresh.channels.findIndex(option => option.id === fresh.activeId)) } })
+  }, [channel])
+  /** 「查看映射」：把当前渠道的 models 与 tiers 打印成 /channel 本地块。 */
+  const channelMapLines = (snapshot: typeof channelSnapshot): string[] => {
+    const active = snapshot.channels.find(option => option.id === snapshot.activeId)
+    if (active === undefined) return [t('channel-map-none')]
+    const lines = [t('channel-map-heading', { name: active.name })]
+    lines.push(active.models.length > 0 ? t('channel-map-models-heading') : t('channel-map-models-none'))
+    for (const entry of active.models) lines.push(t('channel-map-row', { from: entry.from, to: entry.to }))
+    lines.push(active.tiers.length > 0 ? t('channel-map-tiers-heading') : t('channel-map-tiers-none'))
+    for (const rule of active.tiers) lines.push(t('channel-map-row', { from: rule.tier, to: rule.to }))
+    lines.push(t('channel-map-file-hint'))
+    return lines
+  }
+  /**
+   * 激活渠道的连接（baseUrl / token / 渠道环境变量）变了：运行中的 CLI 子进程
+   * 换不了连接，只能以新会话重启。没有重启能力的宿主只提示下次会话生效。
+   */
+  const restartForChannelConnection = (name: string): void => {
+    if (onRestartFreshSession !== undefined) {
+      dispatchOverlay({ type: 'close' })
+      onRestartFreshSession(t('channel-switch-restart', { name }))
+    } else {
+      channel.notify(t('channel-switch-restart-unavailable', { name }), { color: 'warning' })
+    }
+  }
+  /**
+   * 渠道选择器的确认（Enter 与鼠标点击共用）：
+   *  - 渠道行：切换激活渠道。连接相同就地生效，选择器留在屏上；连接不同则
+   *    以新会话重启；
+   *  - 导入行：从 settings.json 导入（同名再导入会刷新那一条），若刷新的是
+   *    激活渠道且连接变了，同样重启；
+   *  - 新增/管理行：收起选择器，走问答向导；
+   *  - 查看行：收起选择器，打印映射。
+   * 重启会打断正在运行的回合，所以会改动连接的操作在回合运行中一律拒绝，
+   * 与 /kernel、/restart 一致。
+   */
+  const pickChannel = (index: number): void => {
+    const row = channelRows[index]
+    if (row === undefined) return
+    const before = channelSnapshot.channels.find(option => option.id === channelSnapshot.activeId)
+    if (row.kind === 'channel') {
+      if (row.active) { channel.notify(t('channel-already-active')); return }
+      const sameConnection = sameOptionConnection(before, row.option)
+      if (!sameConnection && channel.working) {
+        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
+        return
+      }
+      if (typeof channel.setChannel === 'function' && channel.setChannel(row.option.id)) {
+        setChannelRosterTick(tick => tick + 1)
+        if (sameConnection) channel.notify(t('channel-switched', { name: row.option.name }), { color: 'success' })
+        else restartForChannelConnection(row.option.name)
+      }
+      return
+    }
+    if (row.kind === 'import') {
+      if (channel.working) {
+        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
+        return
+      }
+      const imported = typeof channel.importChannel === 'function' ? channel.importChannel() : undefined
+      setChannelRosterTick(tick => tick + 1)
+      channel.notify(imported === undefined ? t('channel-import-none') : t('channel-import-done', { name: imported.name }), { color: imported === undefined ? 'warning' : 'success' })
+      if (imported !== undefined && before !== undefined && before.id === imported.id
+        && !sameOptionConnection(before, imported)) {
+        restartForChannelConnection(imported.name)
+      }
+      return
+    }
+    if (row.kind === 'add' || row.kind === 'manage') {
+      if (channel.working) {
+        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
+        return
+      }
+      dispatchOverlay({ type: 'close' })
+      void runChannelWizard({
+        ask: (request, options) => questionStore.ask(request, options),
+        notify: (text, options) => channel.notify(text, options),
+        pushLocal: (title, lines) => channel.pushLocal(title, lines),
+        roster: () => (typeof channel.listChannels === 'function' ? channel.listChannels() : { channels: [], activeId: undefined }),
+        save: input => (typeof channel.saveChannel === 'function' ? channel.saveChannel(input) : undefined),
+        remove: id => (typeof channel.removeChannel === 'function' ? channel.removeChannel(id) : false),
+        activate: id => (typeof channel.setChannel === 'function' ? channel.setChannel(id) : false),
+        peekSettings: () => (typeof channel.peekChannelImport === 'function' ? channel.peekChannelImport() : undefined),
+      }).then(outcome => {
+        setChannelRosterTick(tick => tick + 1)
+        if (!outcome.restart) return
+        const name = t('channel-wiz-active-channel')
+        // A turn can start while the wizard is up (a background task waking
+        // the model): never restart over it, the change applies next session.
+        if (channel.working) channel.notify(t('channel-switch-restart-unavailable', { name }), { color: 'warning' })
+        else restartForChannelConnection(name)
+      }).catch(() => {
+        // The wizard notifies on every handled failure; swallow the rest.
+      })
+      return
+    }
+    dispatchOverlay({ type: 'close' })
+    channel.pushLocal('/channel', channelMapLines(channelSnapshot))
+  }
+  /**
    * 落地页条件位③（投喂一颗 Star）：与开屏求 star 弹窗**同一口径**——
    * `usageStats`（~/.dsh-tui/usage.json）里有未报过的已达档里程碑
    * （`pendingStarMilestone`，首档 24h）且本进程尚未 star 成功。star 成功
@@ -770,13 +1004,13 @@ export function Chat({
    * The first-run guide. Renders above the launchpad (see the prop docs): a
    * launch that needs setup has not answered the launchpad's question yet.
    */
-  const [onboardingOpen, setOnboardingOpen] = React.useState(onboardingOnBoot === true)
+  const [onboardingOpen, setOnboardingOpen] = React.useState(onboardingOnBoot === true && !recoveryRemountOnBoot)
   /**
    * 落地页那条"第一次用？跑一遍引导"的横幅认的是**还欠一次引导**，而不是启动快照：
    * 完成（写进 onboarding.json）之后立刻收掉；跳过刻意保留——没记账，下次启动还会问，
    * 横幅说的正是这件事。
    */
-  const [onboardingPending, setOnboardingPending] = React.useState(onboardingOnBoot === true)
+  const [onboardingPending, setOnboardingPending] = React.useState(onboardingOnBoot === true && !recoveryRemountOnBoot)
   /** `/tree` opens the session family tree (pi's Session Tree): every rewind
    *  fork stitched back onto the message it diverged from, hover previews,
    *  and per-node rewind/fork/adopt actions. Like the supervisor, a screen. */
@@ -976,6 +1210,9 @@ export function Chat({
   }, [launchpadShown, presetOptions.length, channel])
   /** `/effort` adapter levels: load async before the slider opens. */
   const [effortOptions, setEffortOptions] = React.useState<readonly EffortOption[]>([])
+  /** True when those levels are the CLI-standard compatibility ladder (the
+   *  model row declares no tiers of its own) — the slider says so. */
+  const [effortLevelsFallback, setEffortLevelsFallback] = React.useState(false)
   const [themeName, setTheme] = useTheme()
   const { rows: terminalRows } = useTerminalSize()
   /**
@@ -1000,15 +1237,35 @@ export function Chat({
    *  plugin answering after the user moved on must not open a confirm for
    *  a row they are no longer looking at). */
   const rewindRequestRef = React.useRef(0)
-  /** /btw side-question overlay: pure UI state — the answer never
-   *  enters the transcript or the session log. */
-  const [btw, setBtw] = React.useState<{ question: string; answer: string; error?: string; done: boolean } | null>(null)
-  const btwAbortRef = React.useRef<AbortController | null>(null)
-  const closeBtw = () => {
-    btwAbortRef.current?.abort()
-    btwAbortRef.current = null
-    setBtw(null)
+  /** /btw side-question thread: pure UI state in btwThreads — the answers
+   *  never enter the transcript or the session log. The floating overlay is
+   *  only the FALLBACK surface (btw panel not enabled); with the panel
+   *  enabled the same thread routes to the sidebar instead — one answer,
+   *  exactly one surface. */
+  const [btwOverlayOpen, setBtwOverlayOpen] = React.useState(false)
+  /** ⤢ fullscreen thread scene (openPanelFullscreen 'btw' route). */
+  const [btwSceneOpen, setBtwSceneOpen] = React.useState(false)
+  // Only the fallback overlay reads the thread here. With the overlay closed
+  // the snapshot stays undefined, so an answer streaming into the sidebar
+  // panel does not re-render the whole Chat on every delta.
+  const btwOverlayThread = React.useSyncExternalStore(
+    btwThreads.subscribe,
+    () => (btwOverlayOpen ? btwThreads.get(String(channel.agentId)) : undefined),
+  )
+  const closeBtwOverlay = () => {
+    // Fallback parity with the pre-thread overlay: closing cancels the
+    // in-flight ask (completed turns stay in the thread).
+    btwThreads.abortActive(String(channel.agentId))
+    setBtwOverlayOpen(false)
   }
+  /** 有模态或整屏界面时，/btw 的回答不抢着打开面板，只标未读。 */
+  const btwSurfaceFree = () =>
+    approvalSnapshot === null && dialogSnapshot === null && questionSnapshot === null
+    && overlay.kind === 'none' && !helpOpen && !starModal && !couponVisible
+    && !supervisorOpen && !treeOpen && !settingsOpen && !jobsPanelOpen
+    && !sceneOpen && channel.pluginScene === undefined
+    && !subagentDashboardOpen && subagentDetailId === null
+    && !onboardingOpen && !launchpadShown && !btwSceneOpen && !promptEditorOpen
   /** /recap overlay (pi-recap semantics): pure UI state like /btw — the
    *  summary never enters the transcript or session log; applying the
    *  proposed title goes through the normal /rename path. `auto` marks the
@@ -1057,14 +1314,11 @@ export function Chat({
     balanceSeqRef.current += 1
     setBalance(null)
   }, [balanceSessionId])
-  // A side question belongs to its captured session just like a recap. Chat
-  // remains mounted across /resume, so explicitly retire its request/UI when
-  // the binding changes instead of allowing a former conversation to finish.
-  React.useEffect(() => {
-    btwAbortRef.current?.abort()
-    btwAbortRef.current = null
-    setBtw(null)
-  }, [channel.agentId])
+  // A side question belongs to its captured session just like a recap. The
+  // THREAD stays in memory under its own session id (an archived thread may
+  // keep streaming); only the FALLBACK overlay is retired on a binding change
+  // (see the btwSessionIdRef effect above) so an old conversation never leaks
+  // onto the new one's screen.
   // Auto-recap (`dsh-tui.recapOnOpen`): every time the session switches
   // (mount = open/resume, rewind/fork included), summarize its tail into
   // the dim AutoRecapRow. Failures stay silent in auto mode — `/recap`
@@ -1150,7 +1404,7 @@ export function Chat({
     setSearchCursor(0)
     setSearchCount(0)
     setSearchCurrent(0)
-    closeBtw()
+    setBtwOverlayOpen(false)
     repaintTranscript()
   }, [channel.agentId]) // eslint-disable-line react-hooks/exhaustive-deps
   /** The session attached when the agent view opened; a close on a
@@ -1195,6 +1449,17 @@ export function Chat({
     if (typeof focusId === 'string' && focusId !== '') setJobsPanelFocusId(focusId)
     setJobsPanelOpen(true)
   }, [])
+  // A job card / the panel keeps its output tail fresh while on screen, when
+  // the backend reads output on demand. The control is re-projected on every
+  // read; this handler keeps one identity per channel capability so the
+  // memoized rows are not re-rendered by it.
+  const jobControlRef = React.useRef(channel.jobControl)
+  jobControlRef.current = channel.jobControl
+  const jobOutputWatchable = typeof channel.jobControl?.watchOutput === 'function'
+  const watchJobOutput = React.useMemo(
+    () => jobOutputWatchable ? (id: string) => jobControlRef.current?.watchOutput?.(id) ?? (() => undefined) : undefined,
+    [jobOutputWatchable],
+  )
   /** Ctrl+A / detail 回退：侧栏分栏且 agents 已启用时打开右栏 Panel（内部
    *  dashboard ↔ detail 二级路由自己管）；窄屏 / inline 保留整屏形态。 */
   const openSubagentDashboard = React.useCallback((): void => {
@@ -1208,11 +1473,52 @@ export function Chat({
   /** Detail view for a specific subagent (opened from dashboard). */
   const [subagentDetailId, setSubagentDetailId] = React.useState<string | null>(null)
   /**
+   * 主屏只读 Agent View：Chat 自己的场景层。父 Chat、Channel 与 PromptInput
+   * 保持挂载（草稿经 draftCache 往返），场景只借用屏幕与键盘；Esc 回到打开它
+   * 的地方（对话 / 代理面板 / 详情 / 转录卡）。不建第二个 Channel。
+   */
+  const [agentView, setAgentView] = React.useState<{ agentId: string; source: AgentViewSource } | null>(null)
+  const openAgentView = React.useCallback((agentId: string, source: AgentViewSource): void => {
+    setAgentView({ agentId, source })
+  }, [])
+  /** 工作台里切到同级或父代理：原地换被查看的代理，Esc 仍回最初的入口。 */
+  const switchViewedAgent = React.useCallback((agentId: string): void => {
+    setAgentView(prev => prev === null ? prev : { ...prev, agentId })
+  }, [])
+  /** 转录卡入口的稳定句柄：MessageList 的 memo 行按 props 身份比较，内联
+   *  箭头会让每个流式 tick 重渲染全部落定行（verify-tool-history-window）。 */
+  const openSubagentViewFromCard = React.useCallback((agentId: string, rowId: number): void => {
+    openAgentView(agentId, { kind: 'transcript-card', rowId })
+  }, [openAgentView])
+  // 侧栏 agents 面板 / 其 Detail 的主屏查看请求（面板没有 Chat 的场景 state）。
+  React.useEffect(() => agentViewStore.subscribe(() => {
+    const request = agentViewStore.get()
+    if (request === null) return
+    const source: AgentViewSource = request.source === 'agents-dashboard'
+      ? { kind: 'agents-dashboard', ...(request.panel ? { panel: true as const } : {}) }
+      : { kind: 'agent-detail', agentId: request.agentId, ...(request.panel ? { panel: true as const } : {}) }
+    setAgentView({ agentId: request.agentId, source })
+  }), [])
+  /** Esc 的返回路由：面板来源回面板（路由经模块记忆保真），整屏来源回整屏。 */
+  const exitAgentView = React.useCallback((source: AgentViewSource): void => {
+    setAgentView(null)
+    const sidePanel = sidePanelRef.current
+    const panelReturn = (sidePanel !== null && sidePanel.split && sidePanel.enabledPanelIds.includes('agents'))
+    if (source.kind === 'agents-dashboard') {
+      if (source.panel === true && panelReturn) sidePanel.openPanel('agents', { focus: true })
+      else setSubagentDashboardOpen(true)
+      return
+    }
+    if (source.kind === 'agent-detail') {
+      if (source.panel === true && panelReturn) sidePanel.openPanel('agents', { focus: true })
+      else setSubagentDetailId(source.agentId)
+    }
+  }, [])
+  /**
    * Hidden `/deepseek` easter egg: each invocation bumps this key so the
    * logo header remounts and replays the whale spout + text shimmer.
    */
   const [logoNonce, setLogoNonce] = React.useState(0)
-  React.useEffect(() => () => btwAbortRef.current?.abort(), [])
   React.useEffect(() => () => recapAbortRef.current?.abort(), [])
   /**
    * The trajectory scene (issue #80 evolution). Unlike every other overlay
@@ -1248,6 +1554,8 @@ export function Chat({
   // 覆盖屏全部收起时收回授权：下一次打开必须再经过落地页自己的交互。
   const launchpadCoverScreenUp = supervisorOpen || treeOpen || settingsOpen
     || jobsPanelOpen || subagentDashboardOpen || subagentDetailId !== null || sceneOpen
+    || agentView !== null
+    || btwSceneOpen
   React.useEffect(() => {
     if (!launchpadCoverScreenUp) launchpadCoverRef.current = false
   }, [launchpadCoverScreenUp])
@@ -1269,6 +1577,10 @@ export function Chat({
    * straight back into the panel it is trying to leave.
    */
   const openScene = React.useCallback((options?: { readonly fullscreen?: boolean }) => {
+    // /trace, Ctrl+T, the sidebar tab and ⤢ all open the trajectory. A
+    // kernel without a trajectory source reports 'unsupported' and the
+    // scene/panel say so; no entry point refuses on its own, so they can
+    // never disagree about the capability.
     seenFailuresRef.current = trajectoryRef.current?.counts.errors ?? 0
     setTrajectorySeen(previous => {
       if (!previous) writeTrajectorySeen()
@@ -1285,7 +1597,7 @@ export function Chat({
       return
     }
     setSceneOpen(true)
-  }, [])
+  }, [channel])
 
   /**
    * Leave the session supervisor for the conversation.
@@ -2064,6 +2376,19 @@ export function Chat({
     })
   }
 
+
+  /** Apply one backend-native permission mode switch (the /permission
+   *  pipeline over the typed `modes` capability): narrated like the DSH
+   *  preset switch; the backend's own mode.changed event then moves the
+   *  footer indicator (session-controls applyMode). */
+  const runBackendModeCommand = (id: string, name: string): Promise<boolean> => {
+    const originAgentBinding = channel.agentBindingGeneration
+    return channel.setMode(id).then(ok => {
+      if (channel.agentBindingGeneration !== originAgentBinding) return false
+      if (ok) channel.notify(t('mode-switched', { name }), { color: 'success' })
+      return ok
+    })
+  }
   /** Hot-swap the UI language (`/lang <id>` and the LangPicker both land
    *  here): persist to ~/.dsh-tui/lang.json and mirror into the dsh-tui
    *  settings namespace when it is served (best effort). */
@@ -2366,10 +2691,11 @@ export function Chat({
           return true
         }
         setHelpOpen(false)
-        void channel.listEfforts().then(({ efforts, defaultEffort }) => {
+        void channel.listEfforts().then(({ efforts, defaultEffort, levelsFallback }) => {
           // 0/1-tier routes were already notified by listEfforts.
           if (efforts.length <= 1) return
           setEffortOptions(efforts)
+          setEffortLevelsFallback(levelsFallback === true)
           const current = channel.reasoningEffort ?? defaultEffort
           const index = efforts.findIndex(effort => effort.id === current)
           // open-if: a picker the user opened during the round trip wins
@@ -2586,7 +2912,10 @@ export function Chat({
           setHelpOpen(false)
           const spec = parts[0]!
           const slash = spec.indexOf('/')
-          const provider = slash >= 0 ? spec.slice(0, slash) : undefined
+          // A non-DSH backend has one provider (itself): `/model haiku`.
+          const singleProvider = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendId !== undefined
+            && channel.backendCapabilities.backendId !== 'dsh'
+          const provider = slash >= 0 ? spec.slice(0, slash) : singleProvider ? channel.provider : undefined
           const id = slash >= 0 ? spec.slice(slash + 1) : spec
           if (provider === undefined || id.length === 0 || provider.length === 0) {
             channel.notify(t('model-usage'), { color: 'warning' })
@@ -2613,7 +2942,7 @@ export function Chat({
         let recentsNow = modelRecents
         if (channel.provider !== '' && channel.model !== ''
           && !recentsNow.some(ref => ref.provider === channel.provider && ref.id === channel.model)) {
-          recentsNow = recordModelUse({ provider: channel.provider, id: channel.model })
+          recentsNow = recordModelUse({ provider: channel.provider, id: channel.model }, undefined, recentsBackend)
           setModelRecents(recentsNow)
         }
         // Two-level landing: recents (when catalogued) focus their pinned
@@ -2716,24 +3045,28 @@ export function Chat({
         })
         return true
       case 'tokens': {
-        // Three separately-labelled facts, never two measures side by side:
+        // Four separately-labelled facts, never two measures side by side:
         // what THIS request uploaded (the provider's mutually-exclusive prompt
-        // buckets), what the session has accumulated (the token counters), and
-        // how full the window is (the channel's single occupancy reading — the
-        // same number the footer and the context-low warning show).
+        // buckets, with when it was sampled), what the last turn used (its
+        // own ledger, never added into the session counters), what the
+        // session has accumulated, and how full the window is (the channel's
+        // single occupancy reading — the same number the footer and the
+        // context-low warning show).
         const usage = channel.lastUsage
         const lines: string[] = []
         if (usage !== undefined) {
           const upload = usage.input + usage.cacheRead + usage.cacheWrite
           const rate = upload > 0 ? ((usage.cacheRead / upload) * 100).toFixed(1) : '0.0'
-          lines.push(t('tokens-request-upload', {
+          lines.push(`${t('tokens-request-upload', {
             upload: formatTokens(upload),
             input: formatTokens(usage.input),
             read: formatTokens(usage.cacheRead),
             write: formatTokens(usage.cacheWrite),
             rate,
-          }))
+          })} · ${t('usage-sampled-at', { time: formatClock(usage.at) })}`)
         }
+        const turn = channel.turnUsage
+        if (turn !== undefined) lines.push(`${t('usage-turn-summary')} ${turnUsageParts(turn).join(' · ')}`)
         lines.push(t('tokens-session-breakdown', {
           input: formatTokens(channel.tokens.input),
           output: formatTokens(channel.tokens.output),
@@ -2759,9 +3092,17 @@ export function Chat({
         setHelpOpen(false)
         // Split-aware, like /trace and /jobs: while the sidebar is rendering
         // and the workspace panel is enabled, the workspace view opens THERE.
-        // The panel's own ⤢ goes back to the full-screen home.
+        // The panel's own ⤢ goes back to the full-screen home. The panel reads
+        // the DSH workspace ledger, though: a backend without that capability
+        // (capability snapshots absent on test stubs = DSH) would have its
+        // /resume swallowed by an unsupported panel and no history anywhere —
+        // those keep the full-screen session supervisor.
+        const capabilities = channel.backendCapabilities as Channel['backendCapabilities'] | undefined
         const controller = sidePanelRef.current
-        if (controller !== null && controller.split && controller.enabledPanelIds.includes('workspace')) {
+        if (
+          (capabilities === undefined || capabilities.commands.includes('workspace'))
+          && controller !== null && controller.split && controller.enabledPanelIds.includes('workspace')
+        ) {
           controller.openPanel('workspace', { focus: true })
           return true
         }
@@ -2876,8 +3217,12 @@ export function Chat({
         if (usage !== undefined) {
           const total = usage.input + usage.cacheRead + usage.cacheWrite
           const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
-          lines.push(t('cost-cache-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) }))
+          lines.push(`${t('cost-cache-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) })} · ${t('usage-sampled-at', { time: formatClock(usage.at) })}`)
         }
+        // The last turn gets its own labelled line so it never reads as part
+        // of the session totals.
+        const turn = channel.turnUsage
+        if (turn !== undefined) lines.push(`${t('usage-turn-summary')} ${turnUsageParts(turn).join(' · ')}`)
         const occupancyLine = contextOccupancyLine(channel)
         if (occupancyLine !== undefined) lines.push(occupancyLine)
         if (channel.sessionTitle) lines.push(t('status-title', { title: channel.sessionTitle }))
@@ -2897,6 +3242,16 @@ export function Chat({
           const total = usage.input + usage.cacheRead + usage.cacheWrite
           const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
           lines.push(t('cost-cache-hit-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) }))
+        }
+        // A backend that reports its own session cost (Claude) states the
+        // bill itself; the DeepSeek estimate below would only be noise.
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the report
+        const report = channel.costReport
+        if (report !== undefined) {
+          lines.push(`${formatCostReport(report)} · ${t(report.source === 'backend' ? 'cost-source-backend' : 'status-cost-note')}`)
+          setHelpOpen(false)
+          channel.pushLocal('/cost', lines)
+          return true
         }
         // 金额与拆解：主会话按模型分桶 + 子代理按各自 (provider, model) 分桶；
         // 全部未计价时只报 token 并标注未计价，不显示 ¥0.00 金额行（DESIGN D4/D6）。
@@ -3144,6 +3499,40 @@ export function Chat({
         return true
       case 'login': {
         setHelpOpen(false)
+        // A non-DSH session signs in its own backend: its credential status,
+        // then the host's OAuth sign-in preselected on the backend's
+        // provider, then a reconnect on the fresh credential.
+        const backendAuth = channel.backendAuth?.()
+        if (backendAuth !== undefined) {
+          const backend = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendLabel ?? ''
+          void backendAuth.status()
+            .catch((error: unknown) => [t('capability-failed', { name: 'login', err: error instanceof Error ? error.message : String(error) })])
+            .then(async lines => {
+              channel.pushLocal('/login', [
+                t('login-backend-heading', { backend }),
+                ...lines,
+                ...(backendAuth.oauth === undefined ? [t('login-backend-no-oauth')] : []),
+              ])
+              if (backendAuth.oauth === undefined || backendAuth.provider === undefined) return
+              const outcome = await runOAuthLogin({
+                ask: (request, options) => questionStore.ask(request, options),
+                notify: (text, options) => channel.notify(text, options),
+                pushLocal: (title, rows) => channel.pushLocal(title, rows),
+              }, backendAuth.oauth, backendAuth.provider)
+              if (outcome !== 'added' && outcome !== 'signed-out') return
+              try {
+                await backendAuth.reconnect()
+                channel.notify(t('login-backend-reconnected', { backend }), { color: 'success' })
+              } catch (error) {
+                channel.notify(t('login-backend-reconnect-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+              }
+            })
+            .catch(() => {
+              // The wizard notifies its own failures; this only keeps an
+              // unexpected reject from becoming an unhandled rejection.
+            })
+          return true
+        }
         void channel.describeCredential('DEEPSEEK_API_KEY')
           .catch(() => undefined)
           .then(async status => {
@@ -3253,6 +3642,53 @@ export function Chat({
           setHelpOpen(false)
           return runPermissionCommand(rawInput, images)
         }
+        // Backend-native permission modes (the typed `modes` capability):
+        // the same command surface over the backend's own roster — bare
+        // opens the mode picker, `/permission <id>` sets directly, `status`
+        // reports the live mode. A DSH session declares no such capability
+        // (listModes answers empty), so every branch below is unreachable
+        // there and the preset pipeline above stands unchanged.
+        // Stub tolerance (partial channel literals in verify/repro
+        // harnesses predate the action): a missing delegate reads as the
+        // silent empty roster, exactly what a DSH session answers anyway.
+        const backendModes = typeof channel.listModes === 'function'
+          ? channel.listModes()
+          : { modes: [], currentIndex: -1 }
+        const backendModeCurrent = backendModes.currentIndex >= 0 ? backendModes.modes[backendModes.currentIndex] : undefined
+        if (backendModes.modes.length > 0 && parts[0] === 'status') {
+          setHelpOpen(false)
+          channel.pushLocal('/permission', [
+            t('permission-mode-current', { name: backendModeCurrent?.name ?? modeDisplayName(channel.mode) }),
+            t('permission-mode-switch-hint'),
+          ])
+          return true
+        }
+        if (backendModes.modes.length > 0 && parts.length === 0) {
+          setHelpOpen(false)
+          const index = backendModes.currentIndex >= 0 ? backendModes.currentIndex : 0
+          dispatchOverlay({
+            type: 'open',
+            overlay: {
+              kind: 'mode',
+              index,
+              modes: backendModes.modes.map(mode => ({ id: mode.id, name: mode.name, ...(mode.description === undefined ? {} : { description: mode.description }) })),
+              // No ✓ when the live mode is not in the roster: the focus falls
+              // back to the first row, the checkmark must not follow it.
+              currentId: backendModeCurrent?.id,
+            },
+          })
+          return true
+        }
+        if (backendModes.modes.length > 0) {
+          const target = backendModes.modes.find(mode => mode.id === parts[0])
+          if (target === undefined) {
+            channel.notify(t('permission-mode-unknown', { id: parts[0]! }), { color: 'error' })
+            return true
+          }
+          setHelpOpen(false)
+          void runBackendModeCommand(target.id, target.name)
+          return true
+        }
         return false
       }
       case 'plan': {
@@ -3294,10 +3730,29 @@ export function Chat({
           t('hooks-mount-hint'),
         ])
         return true
-      case 'mcp':
+      case 'mcp': {
         setHelpOpen(false)
+        // `/mcp reconnect <name>` and `/mcp toggle <name> on|off` where the
+        // backend controls its MCP servers; anything else (and every DSH
+        // session) shows the status report as before.
+        const control = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.mcpControl === true
+        const args = rawInput.trim()
+        const sub = /^(reconnect|toggle)(?:\s+([\s\S]*))?$/u.exec(args)
+        if (control && sub !== null) {
+          const rest = (sub[2] ?? '').trim()
+          if (sub[1] === 'reconnect') {
+            if (rest === '') channel.notify(t('mcp-control-usage'), { color: 'warning' })
+            else void channel.mcpControl({ action: 'reconnect', name: rest })
+            return true
+          }
+          const toggle = /^([\s\S]+?)\s+(on|off)$/u.exec(rest)
+          if (toggle === null) channel.notify(t('mcp-control-usage'), { color: 'warning' })
+          else void channel.mcpControl({ action: 'toggle', name: toggle[1]!.trim(), enabled: toggle[2] === 'on' })
+          return true
+        }
         channel.pushLocal('/mcp', channel.mcpStatus())
         return true
+      }
       case 'update':
         setHelpOpen(false)
         if (onUpdate === undefined) {
@@ -3386,6 +3841,22 @@ export function Chat({
         channel.pushLocal('/reload', lines)
         return true
       }
+      case 'channel': {
+        // 渠道选择器。/channel 只在声明了 channels 能力的内核下进命令表，
+        // 能走到这里就说明可用。与 /kernel 一样，再执行一次就收起。
+        setHelpOpen(false)
+        if (overlay.kind === 'channel') dispatchOverlay({ type: 'close' })
+        else openChannelPicker()
+        return true
+      }
+      case 'kernel':
+        // 内核选择器，每个内核下都可用（在对话页里切回 DSH 只有这一条路）。
+        // 确认后由组合根的 onSwitchBackend 记住选择并以新内核重启。与 /help、
+        // 参数行一致：选择器已开着就收起，没开才打开。
+        setHelpOpen(false)
+        if (overlay.kind === 'kernel') dispatchOverlay({ type: 'close' })
+        else openKernelPicker()
+        return true
       case 'restart':
         // pi-style reload tail: /reload cannot re-read boot-time-only state
         // (cordis.yml root config, frozen fullscreen layout, newly built
@@ -3447,28 +3918,26 @@ export function Chat({
         return true
       }
       case 'btw': {
-        // `/btw`：单轮无工具侧问，overlay 态纯 UI，不打断主回合、不写
-        // 会话历史。空参数只提示用法。
+        // `/btw`：单轮无工具侧问，线程只在内存里（btwThreads，按会话
+        // 隔离），不打断主回合、不写会话历史。空参数只提示用法。启用了
+        // btw 面板就进面板线程（有模态界面时不抢开，只标未读）；没启用
+        // 就用浮层。同一个问答只出现在一处。
         setHelpOpen(false)
         const question = rawInput.trim()
         if (!question) {
           channel.notify(t('btw-usage'), { timeoutMs: 3000 })
           return true
         }
-        btwAbortRef.current?.abort()
-        const controller = new AbortController()
-        btwAbortRef.current = controller
-        setBtw({ question, answer: '', done: false })
-        void channel.sideQuestion(question, {
-          signal: controller.signal,
-          onText: delta => setBtw(prev => (prev ? { ...prev, answer: prev.answer + delta } : prev)),
-        }).then(result => {
-          if (controller.signal.aborted) return
-          setBtw(prev => (prev ? { ...prev, answer: result.answer ?? prev.answer, error: result.error, done: true } : prev))
-        }).catch(error => {
-          if (controller.signal.aborted) return
-          setBtw(prev => prev ? { ...prev, error: error instanceof Error ? error.message : String(error), done: true } : prev)
-        })
+        const btwResult = btwThreads.submit(String(channel.agentId), question, (q, options) => channel.sideQuestion(q, options), { recentTurnsLimit: getBtwContextTurns(), contextBudget: getBtwContextBudget() })
+        if (!btwResult.ok) {
+          channel.notify(t('btw-thread-busy'), { color: 'warning', timeoutMs: 3000 })
+          return true
+        }
+        if (sidePanel.enabledPanelIds.includes('btw')) {
+          if (btwSurfaceFree()) sidePanel.openPanel('btw')
+        } else {
+          setBtwOverlayOpen(true)
+        }
         return true
       }
       case 'deepseek': {
@@ -3540,6 +4009,10 @@ export function Chat({
     : NO_ROWS
   /** Open the rewind picker (from PromptInput's double-Esc on an empty input). */
   const openRewind = () => {
+    if ((channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.rewind === false) {
+      channel.notify(t('capability-unavailable-backend', { name: 'rewind' }), { color: 'warning', timeoutMs: 4000 })
+      return
+    }
     // The overlay is not 'rewind' yet this render, so rewindRows is empty —
     // scan directly instead of reading the gated list.
     const candidates = channel.rows
@@ -3646,6 +4119,13 @@ export function Chat({
     if (panelId === 'workspace') {
       sidePanelRef.current?.focusChat()
       setSupervisorOpen(true)
+      return
+    }
+    if (panelId === 'btw') {
+      // ⤢ 进整屏线程场景：Esc 返回侧栏，不清 thread/draft（面板
+      // mountPolicy=enabled 保挂载，路由/焦点/滚动原样恢复）。
+      sidePanelRef.current?.focusChat()
+      setBtwSceneOpen(true)
     }
   }, [openScene])
   // openJobsPanel（在上方、identity 稳定）经 ref 读取最新控制器。
@@ -3825,9 +4305,10 @@ export function Chat({
   const lastModalEnterAtRef = React.useRef(0)
   const couponVisible = coupon !== null && starModal === null
     && approvalSnapshot === null && dialogSnapshot === null && questionSnapshot === null
-    && overlay.kind === 'none' && btw === null && recap === null
+    && overlay.kind === 'none' && !btwOverlayOpen && recap === null
     && !supervisorOpen && !treeOpen && !settingsOpen && !jobsPanelOpen
     && !sceneOpen && !subagentDashboardOpen && subagentDetailId === null
+    && !btwSceneOpen
   const markCouponShown = React.useCallback((orderId: Parameters<WhaleCouponStore['shown']>[0]) => {
     bonusNotices?.shown(orderId)
   }, [bonusNotices])
@@ -3846,7 +4327,7 @@ export function Chat({
     // suspended to preserve async command drafts, making this guard also
     // essential for Ctrl+C: it must never clear the hidden composer.
     if (
-      btw !== null
+      btwOverlayOpen
       || overlay.kind === 'tips'
       || (recap !== null && (!recap.auto || recap.expanded))
     ) return
@@ -3878,11 +4359,17 @@ export function Chat({
     if (settingsOpen) return
     // Subagent dashboard or detail scene: it owns the keyboard while open.
     if (subagentDashboardOpen || subagentDetailId !== null) return
+    // The main-screen Agent View owns the whole terminal while open (its
+    // composer, scrolling and Esc layering live in the scene).
+    if (agentView !== null) return
     // The `/jobs` panel replaces the conversation too, so it owns Esc (close)
     // and k (kill) while open. Unguarded, Esc meant to CLOSE the panel also
     // reached the chat:cancel branch below whenever a turn was in flight —
     // dismissing the panel and killing the turn with one key.
     if (jobsPanelOpen) return
+    // The ⤢ btw thread scene owns the keyboard the same way: Esc there
+    // returns to the sidebar (never the chat:cancel branch below).
+    if (btwSceneOpen) return
     // A plugin scene (dsh-tui-scenes) or the trajectory scene owns the whole
     // screen while open: every key belongs to it. Unguarded, an Esc meant to
     // CLOSE the scene also reached the chat:cancel branch below whenever a
@@ -4421,6 +4908,42 @@ export function Chat({
       }
       return
     }
+    if (overlay.kind === 'mode') {
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: overlay.modes.length })
+      } else if (plainReturn) {
+        const option = overlay.modes[overlay.index]
+        dispatchOverlay({ type: 'close' })
+        if (option !== undefined) void runBackendModeCommand(option.id, option.name)
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
+    if (overlay.kind === 'kernel') {
+      // 名册不冻在 overlay 里（kernelOptions 是渲染期派生值）：探测落地后
+      // 选择器自己就刷新成完整目录，不需要重开。
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: kernelOptions.length })
+      } else if (plainReturn) {
+        pickKernel(overlay.index)
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
+    if (overlay.kind === 'channel') {
+      // 名册不冻在 overlay 里（channelRows 是渲染期派生值）：切换/导入后
+      // 选择器自己就刷新成新状态，不需要重开。
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: channelRows.length })
+      } else if (plainReturn) {
+        pickChannel(overlay.index)
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
     if (overlay.kind === 'plan') {
       if (key.upArrow || key.downArrow) {
         dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: 2 })
@@ -4653,19 +5176,16 @@ export function Chat({
     } else if (key.escape && channel.working && !helpOpen && !promptControllerRef.current?.vimActive()) {
       // Esc interrupts a running turn (the prompt input
       // only sees esc when idle, where it has the double-tap-clear meaning).
-      // With messages queued for delivery, interrupt-and-deliver them right
-      // away (Codex behavior); otherwise a plain interrupt parks the queue.
+      // With messages queued, the queue DOCKS (Claude Code parity): the
+      // abort drops the backend copies, the previews park channel-side and
+      // the composer's dock hint offers ↑ to edit one / ⏎ to send them all
+      // — nothing auto-sends. Already-docked rows dock nothing new; the
+      // turn still needs its plain abort.
       // vim mode (either submode) yields: there Esc is a MODE key (INSERT→
       // NORMAL, NORMAL = no-op/cancel pending d) and the prompt owns it;
       // interrupting still works via Ctrl+C / Ctrl+Enter.
       if (channel.pending.length > 0) {
-        const count = channel.interruptAndDeliver(channel.pending.map(item => ({
-          text: item.text,
-          images: item.images ?? [],
-        })))
-        if (count > 0) {
-          channel.notify(t('interrupt-delivered', { n: count }), { timeoutMs: 2500 })
-        }
+        if (channel.interruptAndDock() === 0) channel.cancel()
       } else {
         channel.cancel()
       }
@@ -4838,7 +5358,7 @@ export function Chat({
       key={approvalSnapshot.key}
       approval={approvalSnapshot}
       background={approvalSnapshot.agentId !== channel.agentId}
-      onDecide={outcome => approvals.decide(outcome)}
+      onDecide={(outcome, decision) => approvals.decide(outcome, decision)}
     />
   ) : null
   const questionPanelNode = questionSnapshot !== null ? (
@@ -4899,6 +5419,36 @@ export function Chat({
    * (above the input cluster) and the launchpad itself (above its input
    * card, see the launchpad branch). Defined once so the two never drift.
    */
+  /**
+   * 底栏右侧的权限模式段（只有声明了原生 modes 的后端才有名册；DSH 会话
+   * listModes() 答空名册 → 不传 prop，底栏渲染与以前逐字节相同）。名字与
+   * id 来自同一个名册，点击 = 既有 /permission 命令（同一批选择器）。
+   */
+  const backendModeSnapshot = typeof channel.listModes === 'function' ? channel.listModes() : undefined
+  const backendModeCurrent = backendModeSnapshot === undefined || backendModeSnapshot.currentIndex < 0
+    ? undefined
+    : backendModeSnapshot.modes[backendModeSnapshot.currentIndex]
+  const backendModeStatus = backendModeCurrent === undefined
+    ? undefined
+    : {
+        id: backendModeCurrent.id,
+        name: backendModeCurrent.name,
+        onOpen: () => { void runCommand('permission', '') },
+      }
+  /**
+   * 底栏模型段/思考档位段的点击（与模式段同一契约）：后端声明了模型目录或
+   * effort 能力（backendCapabilities 位）才挂，点击 = 既有 /model · /effort
+   * 命令（同一批选择器）；无能力不挂点击，hover 也不承诺（StatusLine 的
+   * effort hover id 与点击同乘，model hover 只是不追加操作行）。
+   */
+  const backendCaps = channel.backendCapabilities as Channel['backendCapabilities'] | undefined
+  const modelPickerStatus = backendCaps?.models === false
+    ? undefined
+    : { onOpen: () => { void runCommand('model', '') } }
+  const effortPickerStatus = backendCaps?.effort === false
+    ? undefined
+    : { onOpen: () => { void runCommand('effort', '') } }
+
   const pickerPanels = (
     <>
           {overlay.kind === 'help' && (
@@ -5118,6 +5668,7 @@ export function Chat({
                 options={effortOptions}
                 focusIndex={overlay.index}
                 currentId={channel.reasoningEffort}
+                levelsFallback={effortLevelsFallback}
                 // 点击档位 = 移到该档并即时应用（与 ←/→ 同语义）
                 onPick={(index) => {
                   dispatchOverlay({ type: 'set-index', kind: 'effort', index })
@@ -5153,6 +5704,46 @@ export function Chat({
                   const option = overlay.snapshot.options[index]
                   dispatchOverlay({ type: 'close' })
                   if (option !== undefined) void runPermissionCommand(` ${option.value}`)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'mode' && overlay.modes.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <ModePicker
+                modes={overlay.modes}
+                focusIndex={overlay.index}
+                currentId={overlay.currentId}
+                onPick={(index) => {
+                  if (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null) return
+                  const option = overlay.modes[index]
+                  dispatchOverlay({ type: 'close' })
+                  if (option !== undefined) void runBackendModeCommand(option.id, option.name)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'kernel' && (
+            <Box flexDirection="column" marginTop={1}>
+              <KernelPicker
+                options={kernelOptions}
+                focusIndex={overlay.index}
+                pinned={kernelPinned === true}
+                onPick={(index) => {
+                  if (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null) return
+                  pickKernel(index)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'channel' && (
+            <Box flexDirection="column" marginTop={1}>
+              <ChannelPicker
+                rows={channelRows}
+                focusIndex={overlay.index}
+                onPick={(index) => {
+                  if (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null) return
+                  pickChannel(index)
                 }}
               />
             </Box>
@@ -5274,6 +5865,7 @@ export function Chat({
   )
     const screenOpen = channel.pluginScene !== undefined || supervisorOpen || settingsOpen
     || subagentDetailId !== null || subagentDashboardOpen || sceneOpen
+    || agentView !== null
     || launchpadShown || onboardingOpen
   if (interruptPanel !== null && screenOpen) {
     const node = (
@@ -5375,7 +5967,7 @@ export function Chat({
         home={homeDir()}
         onClose={closeHome}
         approval={approvalSnapshot}
-        onApprove={outcome => approvals.decide(outcome)}
+        onApprove={(outcome, decision) => approvals.decide(outcome, decision)}
         onOpenSession={async (sessionId) => {
           // A refusal is reported by the screen itself (see `openSession`):
           // the composer that draws channel notifications is not mounted here.
@@ -5415,9 +6007,13 @@ export function Chat({
         onStopSession={async (sessionId) => channel.stopBackgroundAgent?.(sessionId) ?? false}
         liveStateOf={(sessionId) => {
           const row = agentRowOf(sessionId)
-          return row === undefined
-            ? undefined
-            : { status: row.status, live: row.live, current: row.current, summary: row.summary }
+          if (row !== undefined) return { status: row.status, live: row.live, current: row.current, summary: row.summary }
+          // A non-DSH backend has no agent view: the session this terminal is
+          // in is its only live one (the DSH view lists its own as before).
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts render Chat with a partial channel
+          const backendId = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendId ?? 'dsh'
+          if (backendId === 'dsh' || sessionId !== channel.agentId) return undefined
+          return { status: channel.working ? 'working' : 'idle', live: true, current: true, summary: '' }
         }}
       />
     )
@@ -5456,6 +6052,40 @@ export function Chat({
     return fullscreen ? screen : <AlternateScreen>{screen}</AlternateScreen>
   }
 
+  // Main-screen read-only Agent View: a scene over the mounted Chat, with no
+  // second Channel and no change of the bound session. It borrows the screen
+  // the way the trajectory scene does; Chat stays mounted, so the parent's
+  // rows, draft, pending queue and usage are untouched by the round trip.
+  // Esc returns to wherever the view was opened from.
+  if (agentView !== null && launchpadGate()) {
+    const viewSubagent = channel.subagents.find(s => s.agentId === agentView.agentId)
+    if (!viewSubagent) {
+      // The roster lost this child (session switch): pop the view, don't crash.
+      setAgentView(null)
+      return null
+    }
+    // Headless stubs mount Chat without a subagentControl at all.
+    const messageControl = channel.subagentControl?.message
+    const loadTranscript = channel.subagentControl?.history
+    const viewMessages = messageControl === undefined ? [] : messageControl.messages().filter(m => m.from === agentView.agentId || m.to === agentView.agentId)
+    const viewTarget = agentComposeTargetOf(agentView.agentId, new Map(channel.subagents.map(s => [s.agentId, s.description])))
+    const viewScene = (
+      <AgentTranscriptScene
+        subagent={viewSubagent}
+        source={agentView.source}
+        onExit={() => exitAgentView(agentView.source)}
+        {...(loadTranscript === undefined ? {} : { loadTranscript })}
+        messages={viewMessages}
+        {...(messageControl === undefined ? {} : { compose: { control: messageControl, target: viewTarget } })}
+        roster={channel.subagents}
+        // Switching to a sibling or the parent swaps the viewed agent in
+        // place; Esc still returns to the original entry point.
+        onSwitchAgent={switchViewedAgent}
+      />
+    )
+    return fullscreen ? viewScene : <AlternateScreen>{viewScene}</AlternateScreen>
+  }
+
   // Subagent detail scene: displays detailed view of a specific subagent.
   // Like the browser and settings, it replaces the conversation entirely.
   if (subagentDetailId !== null && launchpadGate()) {
@@ -5466,10 +6096,17 @@ export function Chat({
       openSubagentDashboard()
       return null
     }
+    const detailControl = channel.subagentControl?.message
+    const detailMessages = detailControl === undefined ? [] : detailControl.messages().filter(m => m.from === subagent.agentId || m.to === subagent.agentId)
+    const detailTarget = agentComposeTargetOf(subagent.agentId, new Map(channel.subagents.map(s => [s.agentId, s.description])))
     const scene = (
       <SubagentDetailScene
         subagent={subagent}
-        onInterrupt={(id) => channel.subagentControl.interrupt(id)}
+        onInterrupt={(id) => channel.subagentControl?.interrupt(id)}
+        {...(channel.subagentControl?.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
+        onOpenView={() => openAgentView(subagent.agentId, { kind: 'agent-detail', agentId: subagent.agentId })}
+        messages={detailMessages}
+        {...(detailControl === undefined ? {} : { compose: { control: detailControl, target: detailTarget } })}
         onBack={() => {
           setSubagentDetailId(null)
           setSubagentDashboardOpen(true)
@@ -5487,6 +6124,7 @@ export function Chat({
         jobs={channel.backgroundJobs ?? []}
         initialFocusId={jobsPanelFocusId ?? undefined}
         onClose={() => { setJobsPanelOpen(false); setJobsPanelFocusId(null) }}
+        onWatchOutput={watchJobOutput}
         onKill={(id) => {
           // Stub channels (verify harnesses) have no jobControl — surface
           // the same failure toast as a refused kill instead of throwing.
@@ -5499,9 +6137,24 @@ export function Chat({
     return fullscreen ? panel : <AlternateScreen>{panel}</AlternateScreen>
   }
 
+  // ⤢ btw thread scene (openPanelFullscreen 'btw'): the whole-terminal form
+  // of the sidebar panel. Esc returns to the sidebar exactly as it was — the
+  // thread and the composer draft live in btwThreads, nothing is cleared.
+  if (btwSceneOpen && launchpadGate()) {
+    const scene = (
+      <BtwThreadScene
+        channel={channel}
+        onClose={() => setBtwSceneOpen(false)}
+      />
+    )
+    return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
+  }
+
   // Subagent dashboard: displays all active and completed subagents.
   // Like the browser and settings, it replaces the conversation entirely.
   if (subagentDashboardOpen && launchpadGate()) {
+    // No kernel serves agents from other sessions yet, so the dashboard gets
+    // no `peers`; once one does, pass them here.
     const dashboard = (
       <SubagentDashboard
         subagents={[...channel.subagents]}
@@ -5509,6 +6162,8 @@ export function Chat({
           setSubagentDashboardOpen(false)
           setSubagentDetailId(id)
         }}
+        onOpenView={(id) => openAgentView(id, { kind: 'agents-dashboard' })}
+        messages={channel.subagentControl?.message?.messages()}
         onClose={() => setSubagentDashboardOpen(false)}
       />
     )
@@ -5519,7 +6174,7 @@ export function Chat({
    *  overlay union covers every picker/dialog and /tips in one check;
    *  message-selection mode and the /btw panel live outside it. */
   const promptSelectionActive =
-    selectionActive || overlay.kind !== 'none' || btw !== null
+    selectionActive || overlay.kind !== 'none' || btwOverlayOpen
 
   // These panels replace the visible composer, but PromptInput remains
   // mounted (suspended) so an async registry command cannot lose its exact
@@ -5529,7 +6184,7 @@ export function Chat({
     || dialogSnapshot !== null
     || overlay.kind === 'tips'
     || (recap !== null && (!recap.auto || recap.expanded))
-    || btw !== null
+    || btwOverlayOpen
     || questionPanelNode !== null
     || starModal !== null
     || couponVisible
@@ -5586,6 +6241,8 @@ export function Chat({
       ),
       updateAvailable: launchpadUpdateAvailable,
       starDue: launchpadStarDue,
+      // 内核入口带名（「内核 · Claude」）：backendId 是内核身份的唯一来源。
+      backendId: kernelCurrentId,
     })
     const node = (
       <Launchpad
@@ -5675,7 +6332,7 @@ export function Chat({
           if (overlay.kind !== 'none') dispatchOverlay({ type: 'close' })
           setLaunchpadFocus(-1)
         }}
-        model={channel.model}
+        model={channel.modelDisplay ?? channel.model}
         effort={channel.reasoningEffort}
         preset={
           channel.agentPreset === undefined
@@ -5709,7 +6366,9 @@ export function Chat({
         cwd={channel.displayCwd}
         branch={channel.gitBranch}
         tuiVersion={tuiVersion}
-        kernelVersion={kernelVersion}
+        // 右下角的内核行：与选择器同一份目录，标出当前内核，点它打开选择器。
+        kernels={kernelOptions}
+        onKernelPick={() => openKernelPicker()}
         // 左下角工作目录铭牌（第七版）：点开/回车开既有 /workspace 菜单——
         // workspace-menu 在 LAUNCHPAD_OVERLAY_KINDS 里，选择器盖在落地页之上，
         // Esc 回落地页（与参数行选择器同一姿态），不新造面板。
@@ -5828,7 +6487,7 @@ export function Chat({
         <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
         <LogoHeader
           key={logoNonce}
-          model={channel.model}
+          model={channel.modelDisplay ?? channel.model}
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
           // 大字字面（设置项 `dsh-tui.splashFont`）：`daily` 交回按天轮换
@@ -5871,12 +6530,13 @@ export function Chat({
           onToggleRow={toggleRowExpanded}
           streamViewToggledRows={streamViewToggledRows}
           onToggleStreamView={toggleStreamView}
-          model={channel.model}
+          model={channel.modelDisplay ?? channel.model}
           diffLayout={channel.diffLayout}
           thinkingFold={channel.thinkingFold}
           jobGroupFold={channel.jobGroupFold}
           toolBackground={channel.toolBackground}
           foldTerminalCommand={channel.foldTerminalCommand}
+          turnUsageRow={channel.turnUsageRow}
           smoothStreaming={channel.smoothStreaming}
           activityFrames={channel.activityFrames}
           showAll={showAllMessages}
@@ -5891,11 +6551,14 @@ export function Chat({
           onUnseenCount={setUnseenCount}
           onTimeline={setTimeline}
           onOpenSubagent={setSubagentDetailId}
+          onOpenSubagentView={openSubagentViewFromCard}
           onOpenJobs={openJobsPanel}
           onOpenFile={openFileActions}
           sessionCwd={channel.cwd}
           onPreviewImage={openImagePreview}
           suppressImageGraphics={activePreview !== null}
+          olderHistory={channel.olderHistory}
+          onWatchJobOutput={watchJobOutput}
         />
         </ScrollBox>
         {(() => {
@@ -6005,7 +6668,7 @@ export function Chat({
             result={balance.result}
             refreshing={balance.refreshing}
             tokens={channel.tokens}
-            model={channel.model}
+            model={channel.modelDisplay ?? channel.model}
             provider={channel.provider}
             mainCost={channel.mainCost}
             subagentCost={channel.subagentCost}
@@ -6089,17 +6752,15 @@ export function Chat({
               }}
             />
           </Box>
-        ) : btw !== null ? (
+        ) : btwOverlayOpen && !sidePanel.enabledPanelIds.includes('btw') ? (
+          // 浮层只在 btw 面板未启用时显示；面板中途被启用就立即让位。
           <Box flexDirection="column" marginTop={1}>
-            <BtwPanel
-              question={btw.question}
-              answer={btw.answer}
-              error={btw.error}
-              streaming={!btw.done}
-              onClose={closeBtw}
-              onCopy={() => {
-                void setClipboard(btw.answer ?? '').then(raw => { if (raw) writeRaw?.(raw) })
-                channel.notify(t('copied-chars', { n: (btw.answer ?? '').length }), { timeoutMs: 1500 })
+            <BtwPanelFallback
+              thread={btwOverlayThread}
+              onClose={closeBtwOverlay}
+              onCopy={answer => {
+                void setClipboard(answer).then(raw => { if (raw) writeRaw?.(raw) })
+                channel.notify(t('copied-chars', { n: answer.length }), { timeoutMs: 1500 })
               }}
             />
           </Box>
@@ -6156,6 +6817,16 @@ export function Chat({
           activity={workingActivity}
           selectionActive={selectionActive}
           helpOpen={helpOpen}
+          // Backend-native permission modes: the footer mode segment always
+          // shows (the base mode included) and clicks into the same
+          // /permission picker the command opens (the launchpad param row's
+          // route). DSH answers an empty list here — no prop, byte-identical
+          // rendering.
+          backendMode={backendModeStatus}
+          // 模型段/思考档位段：能力位在才可点，点击走既有 /model · /effort
+          // 命令（与模式段打开 /permission 完全同构）。
+          modelPicker={modelPickerStatus}
+          effortPicker={effortPickerStatus}
           wake={
             wakeBand === undefined
               ? undefined
@@ -6189,7 +6860,7 @@ export function Chat({
           订阅模块级 store，锚点/内容由各处 useTooltip hover props 写入；
           resize 时自行隐藏（几何失效）。 */}
       <TooltipLayer
-        invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`}
+        invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btwOverlayOpen}`}
         subscribeInvalidation={subscribeTooltipInvalidation}
       />
       </SidePanelLayout>

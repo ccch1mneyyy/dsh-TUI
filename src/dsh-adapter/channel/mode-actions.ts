@@ -8,9 +8,9 @@ import { assertShadowPolicy, type AdapterRuntimeOptions } from '../../adapter/ke
 import type { ChannelState } from './types.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { agentCapabilityEvidence, resolveAgentCapabilities } from './capabilities.js'
-import type { createChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 
-type Binding = ReturnType<typeof createChannelBinding>
+type Binding = DshChannelBinding
 type ModeState = Pick<ChannelState, 'mode' | 'modeIndex' | 'emit'>
 
 /**

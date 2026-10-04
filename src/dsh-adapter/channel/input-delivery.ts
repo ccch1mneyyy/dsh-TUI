@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { dispatchTuiDecision } from '../extension-events.js'
@@ -15,6 +15,7 @@ import { appendAttachedContextBlocks } from './attached-context.js'
 import { normalizeInputDecision } from './decisions.js'
 import { attachIdeSelection } from './ide-selection.js'
 import { mentionAttachments, mentionFs } from './mentions.js'
+import type { LocalImageStore } from './core/local-images.js'
 import type { ChannelOwner } from './owner.js'
 import type { AttachedContext, ChannelSelection, SelectionAttachment } from '../../adapter/ports/channel-view.js'
 import type {
@@ -29,13 +30,16 @@ import type {
 
 /** One submission's enqueue-time world: the session it was typed in, the
  *  services that resolve its references, and the capabilities live then. */
-interface UserTextOrigin {
-  readonly agent: Agent
+export interface UserTextOrigin {
+  readonly session: AgentSession
   readonly agentId: string
   readonly generation: number
   readonly cwd: string
   readonly fs: MentionFs | undefined
   readonly attachments: MentionAttachments | undefined
+  /** The in-memory image store when the session takes images itself: the
+   *  staged references resolve to its facades for `submit`. */
+  readonly localImages?: LocalImageStore
   readonly stagedImages: ReadonlyMap<string, ChannelImageBlock['attachment']>
   /** Live editor selection AT ENQUEUE (undefined = none). Captured here so a
    *  selection made while the FIFO or mention expansion parks the delivery
@@ -49,7 +53,7 @@ interface UserTextOrigin {
 
 /** Input FIFO, staged attachments and decision notice timers share one lifetime. */
 export function createInputDelivery(
- ctx: Context, owner: ChannelOwner, binding: { readonly agent: Agent },
+ ctx: Context, owner: ChannelOwner, binding: { readonly session: AgentSession },
  state: () => Pick<ChannelState, 'cwd' | 'agentId' | 'agentBindingGeneration'>,
  notify: ChannelState['notify'],
  trackPending: (message: { id: string; text: string; images?: readonly ComposerImageRef[] }, placement: PendingMessage['placement']) => void,
@@ -57,6 +61,12 @@ export function createInputDelivery(
  composer: ComposerImages,
  selection: () => ChannelSelection | undefined,
  rememberSelection: (messageId: string, info: SelectionAttachment) => void,
+ /** The fs surface to use when the host mounts no `fs` service (a non-DSH
+  *  composition reads the local disk); absent = no fallback. */
+ fallbackFs?: () => MentionFs | undefined,
+ /** The in-memory image store of a session that takes images itself (the
+  *  `images` capability); absent / undefined = the DSH attachments service. */
+ localImages?: () => LocalImageStore | undefined,
  /**
   * Take-and-clear the staged "Send to Chat" contexts for the submission being
   * enqueued (side-panel §6.7). Optional so a bare embedder/fixture that owns
@@ -71,6 +81,12 @@ export function createInputDelivery(
    * through this chain to keep the send order FIFO.
    */
   let inputChain: Promise<void> = Promise.resolve()
+  /** Monotonic: inputs that entered the FIFO, and how many of them have
+   *  left it (delivered, dropped or failed). `/new` compares them. */
+  let dispatched = 0
+  let settled = 0
+  /** The texts still in the FIFO, oldest first (a switch names the parked one). */
+  const inFlight: string[] = []
 
   /**
    * Attached-context registry (issue #842): `deliverUserText(..., attach)`
@@ -124,29 +140,35 @@ export function createInputDelivery(
     attachedByMessageId.clear()
   })
 
-  /** D-6 fence: the submission belongs to the session it was typed in. */
+  /** Stale fence: the submission belongs to the session it was typed in (the
+   *  bound session object plus the binding generation every adoption
+   *  advances; works for any backend, no DSH agent needed). */
   const current = (origin: UserTextOrigin): boolean =>
-    owner.current() && binding.agent === origin.agent && state().agentBindingGeneration === origin.generation
+    owner.current() && binding.session === origin.session && state().agentBindingGeneration === origin.generation
 
   /** D-6: bind the submission to the session it was typed in AT ENQUEUE
    *  TIME. The FIFO chain may park this task behind a slow predecessor
    *  while the user /new's away — capturing the agent at run time would
    *  adopt the NEW session as this text's origin and deliver the old
    *  conversation's words into it. */
-  const captureOrigin = (): UserTextOrigin => ({
-    agent: binding.agent,
+  const captureOrigin = (): UserTextOrigin => {
+    const local = localImages?.()
+    return {
+    session: binding.session,
     agentId: state().agentId,
     generation: state().agentBindingGeneration,
     cwd: state().cwd,
-    fs: mentionFs(ctx),
-    attachments: mentionAttachments(ctx),
+    fs: mentionFs(ctx) ?? fallbackFs?.(),
+    attachments: local ?? mentionAttachments(ctx),
+    ...(local === undefined ? {} : { localImages: local }),
     stagedImages: composer.snapshot(),
     selection: selection(),
     // Consumed (not merely read): the snapshot and the clear are one step, so
     // the chips leave with the submission that owns them and a second,
     // faster-typed message can never re-attach the same context.
     attachedContexts: consumeAttachedContexts?.() ?? [],
-  })
+    }
+  }
 
   /**
    * Expand the text's `@` mentions and deliver ONE user message: the typed
@@ -199,16 +221,25 @@ export function createInputDelivery(
     })
     if (selectionAttached !== undefined) rememberSelection(message.id, selectionAttached)
     // The message is real from here on: remember its attached context BEFORE
-    // the agent call so the pre-step listener can find it (D6). A throwing
-    // followup/steer rolls both the pending preview and this entry back.
+    // the submit so the pre-step listener can find it. A throwing submit
+    // rolls both the pending preview and this entry back.
     if (attach !== undefined) attachedByMessageId.set(message.id, attach)
-    // Track BEFORE the agent call: a synchronous throw inside
-    // followup/steer rolls the preview back; otherwise the inbox events
-    // retire it once the message is claimed or discarded.
+    // Track BEFORE the submit: a synchronous throw inside it rolls the
+    // preview back; otherwise the backend's pending changes retire it once
+    // the message is claimed or discarded.
     trackPending({ id: message.id, text, images }, placement)
     try {
-      if (placement === 'steer') origin.agent.steer(message)
-      else origin.agent.followup(message)
+      // The message id IS the clientMessageId every ledger above keys on; the
+      // DSH session delivers this exact message (steer/followup).
+      // A session that takes images itself reads them through their
+      // in-memory facades, in block order.
+      const local = origin.localImages
+      const images = local === undefined ? undefined : expansion.blocks.flatMap(block => {
+        if (block.type !== 'image') return []
+        const view = local.facade(block.attachment)
+        return view === undefined ? [] : [view]
+      })
+      await origin.session.submit({ text, blocks: message.content, clientMessageId: message.id, native: message, ...(images === undefined || images.length === 0 ? {} : { images }) }, placement)
     } catch (error) {
       if (attach !== undefined) attachedByMessageId.delete(message.id)
       untrackPending(message.id)
@@ -298,9 +329,9 @@ export function createInputDelivery(
     origin: UserTextOrigin,
     attach?: UserMessage,
   ): Promise<void> => {
-    // Stale detection compares the AGENT REFERENCE, not the id: session ids
+    // Stale detection compares the SESSION REFERENCE, not the id: session ids
     // are reusable (A → /new → /resume A lands back on the same id with a
-    // fresh agent), so an id check has an ABA hole. Both origin values are
+    // fresh session), so an id check has an ABA hole. Both origin values are
     // ENQUEUE-time captures (see dispatchUserText): a decision parked behind
     // a slow predecessor must still be judged against the session its text
     // was typed in, not whichever session is live when it finally runs.
@@ -353,10 +384,15 @@ export function createInputDelivery(
   ): void => {
     const origin = captureOrigin()
     const capturedImages = composer.captureDraftImages(text, images)
+    dispatched += 1
+    inFlight.push(text)
     inputChain = inputChain.then(() => runUserTextDecision(text, placement, capturedImages, origin, attach)).catch((error: unknown) => {
       // The chain must survive a failed decision: log, then continue with
       // the next queued submission.
       ctx.logger.warn('dsh-tui: tui/input dispatch failed: %o', error)
+    }).finally(() => {
+      settled += 1
+      inFlight.shift()
     })
   }
   /** Public companion for callers that own a line but not a draft (skill
@@ -380,6 +416,13 @@ export function createInputDelivery(
 
   return {
     dispatchUserText,
+    /** Inputs dispatched so far, and whether any is still in the FIFO (a
+     *  parked decision, an `@` read, an IDE-selection read). */
+    activity: (): { readonly dispatched: number; readonly unsettled: boolean; readonly parked?: string } => ({
+      dispatched,
+      unsettled: settled < dispatched,
+      ...(inFlight[0] === undefined ? {} : { parked: inFlight[0] }),
+    }),
     deliverUserText: deliverUserTextNow,
     claimAttachments,
     retireAttachment,

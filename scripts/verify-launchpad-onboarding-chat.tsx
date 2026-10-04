@@ -42,6 +42,7 @@ const [
   { setMinimalUiMode },
   { readOnboardingPrefs },
   { isLandingLaunch },
+  { noteBoundaryRecoveryRemount },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
@@ -50,6 +51,7 @@ const [
   import('../src/minimalUiMode.js'),
   import('../src/onboardingPrefs.js'),
   import('../src/dsh-adapter/plugin.js'),
+  import('../src/ink/update-overflow-guard.js'),
 ])
 
 let failures = 0
@@ -261,7 +263,7 @@ interface Flags {
   openHomeOnBoot?: boolean
 }
 
-async function mountChat(flags: Flags, over: Record<string, unknown> = {}) {
+async function mountChat(flags: Flags, over: Record<string, unknown> = {}, chatProps: Record<string, unknown> = {}) {
   const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const stdout = new FakeStdout(term)
   const stdin = new FakeStdin()
@@ -277,6 +279,9 @@ async function mountChat(flags: Flags, over: Record<string, unknown> = {}) {
           openHomeOnBoot={flags.openHomeOnBoot === true}
           launchpadOnBoot={flags.launchpadOnBoot === true}
           onboardingOnBoot={flags.onboardingOnBoot === true}
+          // 宿主注入的缝（内核选择器等）：用例按需补，缺省与真机之外的
+          // headless 宿主一致（没有这些能力时 Chat 只提示、不假装）。
+          {...chatProps}
         />
       </Box>
     </ThemeProvider>,
@@ -303,7 +308,7 @@ async function mountChat(flags: Flags, over: Record<string, unknown> = {}) {
     stdin.write(`\u001b[<0;${cell.col};${cell.row}M\u001b[<0;${cell.col};${cell.row}m`)
     await settle(() => stdout.frames.length > before, { timeoutMs: 400 })
   }
-  return { term, stdout, stdin, notifications, calls, screen, send, type, click, unmount: async () => { await instance.unmount() } }
+  return { term, stdout, stdin, channel, notifications, calls, screen, send, type, click, unmount: async () => { await instance.unmount() } }
 }
 
 const LAUNCHPAD_MARK = '说点什么，或输入 /' + ' 看命令…'
@@ -919,7 +924,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   check('Q3 有后台任务在跑：条件位显示「后台任务」（优先级①）',
     await settled(() => chat.screen().includes('后台任务') && !chat.screen().includes('帮助')),
     chat.screen().slice(0, 200))
-  for (let i = 0; i < 7; i++) await chat.send('\u001b[B') // 第三条入口 = 后台任务
+  for (let i = 0; i < 8; i++) await chat.send('\u001b[B') // 条件位（第五格）= 后台任务；内核入口插入后多一格
   await chat.send('\r')
   check('Q3b 后台任务入口：任务面板上屏、盖在落地页之上',
     await settled(() => !chat.screen().includes('说点什么') && chat.screen().includes('pnpm test')),
@@ -983,6 +988,238 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
     await settled(() => !chat.screen().includes('Workspace 操作') && chat.screen().includes('说点什么')),
     chat.screen().slice(0, 200))
   await chat.unmount()
+}
+// ── X. 内核选择器（用户实测：点「内核」直接落进对话页，没有选择空间）──────
+{
+  // 组合根注入的两条缝：onProbeKernels（Claude 探测）与 onSwitchBackend
+  // （写记忆 + 重启进入新内核）。这一段的断言就是用户报的那条链路：
+  // 点「内核」→ 选择器盖在启动页之上 → 选 Claude → 真的调了切换。
+  const switches: string[] = []
+  let probes = 0
+  const chat = await mountChat(
+    { launchpadOnBoot: true },
+    {},
+    {
+      onSwitchBackend: (id: string) => { switches.push(id) },
+      onProbeKernels: async () => { probes += 1; return { installed: true, auth: 'ok' as const, version: '2.1.284' } },
+    },
+  )
+  check('X0 夹具挂起来了（启动页上屏）', await settled(() => chat.screen().includes('说点什么')), chat.screen().slice(0, 200))
+  // 右下角：可选内核行 + 当前内核的箭头标记（用户原话「有箭头或者高亮
+  // 表明目前记忆中启动的内核」）。
+  check('X1 右下角列出可选内核，当前内核带 ▸ 标记',
+    await settled(() => /▸\s*DSH/.test(chat.screen()) && chat.screen().includes('Claude ·')),
+    chat.screen().slice(-320))
+  check('X2 Claude 行显示探测到的版本（claude-code v…）',
+    await settled(() => chat.screen().includes('claude-code v2.1.284')),
+    'probes=' + probes + ' :: ' + chat.screen().slice(-320))
+  check('X2b 探测只跑一次（组合根那条缝不会被反复打）', probes === 1, 'probes=' + probes)
+  await clickChip(chat, '内核')
+  check('X3 点「内核」：选择器盖在启动页之上（启动页仍在、没落进对话页）',
+    await settled(() => chat.screen().includes('选择内核') && chat.screen().includes('说点什么')),
+    chat.screen().slice(0, 360))
+  check('X4 选择器里两行内核都在（DSH 当前、Claude 可选）',
+    await settled(() => chat.screen().includes('DeepSeek Harness') && chat.screen().includes('Claude Agent')),
+    chat.screen().slice(0, 360))
+  await chat.click('Claude Agent')
+  check('X5 选中 Claude：走组合根 onSwitchBackend(claude)（不是落进 DSH 对话页）',
+    await settled(() => switches.includes('claude')),
+    JSON.stringify(switches))
+  await chat.unmount()
+}
+{
+  // Esc 关掉选择器：谁也不切（切换是显式动作，误开一次不会换内核）。
+  const switches: string[] = []
+  const chat = await mountChat({ launchpadOnBoot: true }, {}, {
+    onSwitchBackend: (id: string) => { switches.push(id) },
+    // 探测说「没装」：那一行必须画灰并写明原因。
+    onProbeKernels: async () => ({ installed: false }),
+  })
+  await settled(() => chat.screen().includes('说点什么'))
+  await clickChip(chat, '内核')
+  await settled(() => chat.screen().includes('选择内核'))
+  await chat.send('\x1b')
+  check('X6 Esc 关掉选择器回启动页，且没有发生任何切换',
+    await settled(() => !chat.screen().includes('选择内核') && chat.screen().includes('说点什么')) && switches.length === 0,
+    JSON.stringify(switches))
+  // 浮层关闭后，本夹具里的第一次鼠标点击会被吞掉——**A/B 实证**：换成帮助入口
+  // 也一样（helpFirst=true / helpAfterEsc=false），而帮助走的是同一条
+  // ActionChip.onClick，所以这是夹具在浮层关闭后的鼠标节奏问题，不是内核入口
+  // 特有的缺陷；上面的 V 段同样用这个 550ms 停顿规避。照既有做法，不把夹具的
+  // 脾气写成产品 bug，也不放宽断言——这里点的仍然是**一次**单击。
+  await new Promise(resolve => setTimeout(resolve, 550))
+  await clickChip(chat, '内核')
+  check('X7 关闭后能再次打开选择器（同一个入口可重复用）',
+    await settled(() => chat.screen().includes('选择内核'), { timeoutMs: 1200 }),
+    chat.screen().slice(0, 360))
+  check('X7b 未安装的 Claude 行写明原因（未安装）',
+    await settled(() => chat.screen().includes('未安装')),
+    chat.screen().slice(0, 360))
+  // 键盘路径：↓ 移到不可选行 + Enter = 只提示原因，绝不切换（选择器留在屏上）。
+  const beforeKeys = chat.screen().slice(-300)
+  await chat.send('\x1b[B')
+  const afterDown = chat.screen().slice(-300)
+  await chat.send('\r')
+  const afterEnter = chat.screen().slice(-300)
+  check('X8a ↓/Enter 之后选择器仍在屏上（不可选行不吃掉 Enter）',
+    chat.screen().includes('选择内核'),
+    'before=' + JSON.stringify(beforeKeys) + '\n      down=' + JSON.stringify(afterDown)
+      + '\n      enter=' + JSON.stringify(afterEnter))
+  check('X8 在不可选行上 Enter：提示原因、不切换、选择器不收起',
+    await settled(() => chat.notifications.some(text => text.includes('未安装')))
+      && switches.length === 0 && chat.screen().includes('选择内核'),
+    'before=' + JSON.stringify(beforeKeys) + '\n      down=' + JSON.stringify(afterDown)
+      + '\n      enter=' + JSON.stringify(afterEnter) + '\n      notes=' + JSON.stringify(chat.notifications))
+  await chat.send('\x1b')
+  await chat.unmount()
+}
+{
+  // 回合运行中（例如后台任务唤醒了模型）切内核会杀掉这个回合：只提示，不切换。
+  const switches: string[] = []
+  const chat = await mountChat({ launchpadOnBoot: true }, { working: true }, {
+    onSwitchBackend: (id: string) => { switches.push(id) },
+    onProbeKernels: async () => ({ installed: true, auth: 'ok' as const, version: '2.1.284' }),
+  })
+  await settled(() => chat.screen().includes('说点什么'))
+  await clickChip(chat, '内核')
+  await settled(() => chat.screen().includes('选择内核') && chat.screen().includes('claude-code v2.1.284'))
+  await chat.click('Claude Agent')
+  check('X9 回合运行中选 Claude：提示不能切换，不调用 onSwitchBackend',
+    await settled(() => chat.notifications.includes('回合运行中，无法切换内核')) && switches.length === 0,
+    JSON.stringify({ switches, notes: chat.notifications }))
+  await chat.send('\x1b')
+  await chat.unmount()
+}
+{
+  // /channel 打开后回合开始了（后台任务唤醒模型）：换到连接不同的渠道要以新
+  // 会话重启，会打断这个回合，所以只提示，不写渠道、不重启。
+  const sets: string[] = []
+  const restarts: string[] = []
+  const conn = (url: string) => ({ baseUrl: url, hasToken: true, envKeys: [], fingerprint: url })
+  const channels = [
+    { id: 'alpha', name: 'alpha', models: [], tiers: [], connection: conn('https://alpha.example') },
+    { id: 'beta', name: 'beta', models: [], tiers: [], connection: conn('https://beta.example') },
+  ]
+  const chat = await mountChat({}, {
+    commandList: [...LOCAL_COMMANDS, { name: 'channel', description: 'channel' }],
+    listChannels: () => ({ channels, activeId: 'alpha' }),
+    setChannel: (id: string) => { sets.push(id); return true },
+  }, { onRestartFreshSession: (notice: string) => { restarts.push(notice) } })
+  await chat.type('/channel')
+  await chat.send('\r')
+  check('X10 /channel 打开渠道选择器',
+    await settled(() => chat.screen().includes('渠道档案') && chat.screen().includes('beta')),
+    chat.screen().slice(-600))
+  ;(chat.channel as { working: boolean }).working = true
+  await chat.send('\x1b[B')
+  // 固定窗:墙钟 Chat 吞掉上一次 Enter 后 80ms 内的回车（防连按），等过这个窗口。
+  await new Promise(resolve => setTimeout(resolve, 120))
+  await chat.send('\r')
+  check('X10b 回合运行中切到连接不同的渠道：提示、不写渠道、不重启',
+    await settled(() => chat.notifications.includes('回合运行中，无法切换或改动渠道'))
+      && sets.length === 0 && restarts.length === 0,
+    JSON.stringify({ sets, restarts, notes: chat.notifications }))
+  ;(chat.channel as { working: boolean }).working = false
+  // 固定窗:墙钟 同上，越过回车防连按窗口。
+  await new Promise(resolve => setTimeout(resolve, 120))
+  await chat.send('\r')
+  check('X10c 空闲后同一操作：写渠道并以新会话重启',
+    await settled(() => sets.join() === 'beta' && restarts.length === 1),
+    JSON.stringify({ sets, restarts, notes: chat.notifications }))
+  await chat.unmount()
+}
+
+// ── Y. claude 内核的启动页编排（用户实测：kernel.json 记住 claude 后全新启动
+//      直接进聊天页、没有启动页。修复后 launchpadOnBoot 不再看后端——claude
+//      启动同样先落启动页、Enter 才进聊天；带 resume 目标仍直达）─────────────
+{
+  // 桩口径与真机 claude 会话一致：backendCapabilities.backendId = 'claude'
+  // （Chat 的 kernelCurrentId 只认这一处——右下角内核区的 ▸ 与入口名都跟着它）。
+  const claudeCaps = { backendId: 'claude', backendLabel: 'Claude', commands: [] }
+  const chat = await mountChat({ launchpadOnBoot: true }, { backendCapabilities: claudeCaps })
+  check('Y1 claude 内核全新启动先落启动页（Launchpad 盖在最上层）',
+    await settled(() => chat.screen().includes('说点什么')), chat.screen().slice(0, 200))
+  check('Y2 内核角标把 claude 记为当前内核（▸ 在 Claude 行，不在 DSH 行）',
+    await settled(() => /▸\s*Claude/.test(chat.screen()) && !/▸\s*DSH/.test(chat.screen())),
+    chat.screen().slice(-320))
+  await chat.type('你好')
+  await chat.send('\r')
+  check('Y3 Enter 发首条消息才进聊天页（与 dsh 路径同一条 submit）',
+    await settled(() => !chat.screen().includes('说点什么')) && chat.calls.includes('submit:你好'),
+    JSON.stringify(chat.calls))
+  await chat.unmount()
+}
+{
+  // resume 目标（DSH_TUI_RESUME_SESSION / --resume <id>，plugin 侧同源的
+  // launchSessionId）仍直达会话：noResume 门保留，与后端无关。
+  const chat = await mountChat({}, { backendCapabilities: { backendId: 'claude', backendLabel: 'Claude', commands: [] } })
+  check('Y4 resume 启动直达聊天页（没有启动页盖屏）',
+    await settled(() => !chat.screen().includes('说点什么')),
+    chat.screen().slice(0, 200))
+  await chat.unmount()
+}
+
+
+
+// ── R. 错误边界恢复重挂的落点矩阵（R4-R4）：recovery 标志必须把全部启动
+//      入口（启动页/首启引导/会话管理屏）都压下——恢复直接回对话，且标志
+//      只消费一次（下一个正常挂载不受影响）。──────────────────────────────
+/**
+ * 固定窗:探针 观察窗内不得出现任何启动入口屏。会话管理屏的内容（工作区/会话
+ * 列表）是异步解析后才上屏的，一次读屏会跑到它前面——坏基线上假绿（实测）。
+ * 轮询整窗，任一标记出现即判失败，窗内未现才算通过。
+ */
+async function noBootSurfaceFor(chat: { screen: () => string }, windowMs: number): Promise<string | null> {
+  const deadline = Date.now() + windowMs
+  for (;;) {
+    const screen = chat.screen()
+    for (const mark of ['说点什么', WIZARD_MARK, '新建会话']) {
+      if (screen.includes(mark)) return mark
+    }
+    if (Date.now() >= deadline) return null
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+}
+
+{
+  const combos: Array<[boolean, boolean, boolean]> = [
+    [false, false, false],
+    [true, false, false],
+    [false, true, false],
+    [true, true, false],
+    [false, false, true],
+    [true, false, true],
+    [false, true, true],
+    [true, true, true],
+  ]
+  let matrixOk = true
+  let note = ''
+  let index = 0
+  for (const [openHome, launchpad, onboarding] of combos) {
+    index += 1
+    noteBoundaryRecoveryRemount()
+    const chat = await mountChat({ openHomeOnBoot: openHome, launchpadOnBoot: launchpad, onboardingOnBoot: onboarding })
+    const offender = await noBootSurfaceFor(chat, 1200)
+    await chat.unmount()
+    if (offender !== null) {
+      matrixOk = false
+      note = 'combo #' + index + ' openHome=' + openHome + ' launchpad=' + launchpad + ' onboarding=' + onboarding + ' -> ' + offender
+      break
+    }
+  }
+  check('R1 recovery × 全部 8 种启动组合：恢复落点都是对话页（无启动页/向导/会话管理）', matrixOk, note)
+
+  // 标志只消费一次：恢复挂载吃掉标记后，紧接着的普通挂载回到正常语义
+  // （openHome=true × launchpad=false 仍预开会话管理屏）。
+  noteBoundaryRecoveryRemount()
+  const recoveryChat = await mountChat({ openHomeOnBoot: true, launchpadOnBoot: false })
+  const recoveryOffender = await noBootSurfaceFor(recoveryChat, 1200)
+  check('R2 恢复挂载本身落在对话页（观察窗内无任何启动入口）', recoveryOffender === null, String(recoveryOffender))
+  await recoveryChat.unmount()
+  const plainChat = await mountChat({ openHomeOnBoot: true, launchpadOnBoot: false })
+  await settled(() => plainChat.screen().includes('新建会话'))
+  check('R3 标志只消费一次：下一个普通挂载仍按 openHome 预开会话管理屏', plainChat.screen().includes('新建会话'), plainChat.screen().slice(0, 160))
+  await plainChat.unmount()
 }
 if (failures === 0) console.log(`\nverify-launchpad-onboarding-chat: ${checks} checks, all passed`)
 else console.error(`\nverify-launchpad-onboarding-chat: ${failures} of ${checks} checks FAILED`)

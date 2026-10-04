@@ -210,6 +210,30 @@ export const getMermaidDiagrams = mermaidDiagramsStore.get
 export const applyMermaidDiagrams = mermaidDiagramsStore.apply
 
 /**
+ * How fenced code blocks frame themselves (settings
+ *  `dsh-tui.codeFrameStyle`): `light` (default) is the open rail frame
+ * — corner + language label on top, a left rail with one padding
+ * column, no right wall or bottom edge; `full` closes the box with a
+ * right wall (continuous across wrapped rows, it rides the layout
+ * border) and a bottom edge. The narrow-terminal fallback (net body
+ * width < 8) always stays the plain ANSI fence, whatever this says.
+ */
+export type CodeFrameStyle = 'light' | 'full'
+const CODE_FRAME_STYLES = new Set<CodeFrameStyle>(['light', 'full'])
+
+export function normalizeCodeFrameStyle(value: unknown): CodeFrameStyle {
+  return typeof value === 'string' && CODE_FRAME_STYLES.has(value as CodeFrameStyle)
+    ? value as CodeFrameStyle
+    : 'light'
+}
+
+/** Read at render time, so settled code blocks re-render on change. */
+const codeFrameStyleStore = createLiveSetting<CodeFrameStyle>('light', normalizeCodeFrameStyle)
+export const subscribeCodeFrameStyle = codeFrameStyleStore.subscribe
+export const getCodeFrameStyle = codeFrameStyleStore.get
+export const applyCodeFrameStyle = codeFrameStyleStore.apply
+
+/**
  * How LaTeX math in replies renders (settings `dsh-tui.mathRendering`):
  * `auto` picks the best available backend (today the Unicode renderer),
  * `image` typesets complete block formulas as terminal images where the
@@ -383,6 +407,43 @@ const sidePanelPanelsStore = createLiveSetting<string>(DEFAULT_SIDE_PANEL_IDS, n
 export const subscribeSidePanelPanels = sidePanelPanelsStore.subscribe
 export const getSidePanelPanels = sidePanelPanelsStore.get
 export const applySidePanelPanels = sidePanelPanelsStore.apply
+
+/**
+ * btw 线程上下文设置（设置 `dsh-tui.btw.*`）：追问携带的最近完成轮数
+ * 与总字符预算。clamp 规则与线程 store 的防御性钳制（sidePanel/btw/
+ * threads.ts 的 normalizeRecentTurnsLimit / selectContextTurns）一致——
+ * 两道闸门同规则，先到者生效；这里管 /settings 与 cordis.yml 的入口，
+ * store 侧兜住不经设置的直接调用。
+ */
+export const BTW_CONTEXT_TURNS_MIN = 1
+export const BTW_CONTEXT_TURNS_MAX = 8
+export const BTW_CONTEXT_TURNS_DEFAULT = 4
+
+/** 总预算下限护住单答派生（perAnswer = min(8k, budget/2)）：再小就只剩
+ *  当前问句本身，上下文功能名存实亡。 */
+export const BTW_CONTEXT_BUDGET_MIN = 1_000
+export const BTW_CONTEXT_BUDGET_MAX = 200_000
+export const BTW_CONTEXT_BUDGET_DEFAULT = 24_000
+
+export function normalizeBtwContextTurns(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return BTW_CONTEXT_TURNS_DEFAULT
+  return Math.min(BTW_CONTEXT_TURNS_MAX, Math.max(BTW_CONTEXT_TURNS_MIN, Math.round(value)))
+}
+
+export function normalizeBtwContextBudget(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return BTW_CONTEXT_BUDGET_DEFAULT
+  return Math.min(BTW_CONTEXT_BUDGET_MAX, Math.max(BTW_CONTEXT_BUDGET_MIN, Math.round(value)))
+}
+
+const btwContextTurnsStore = createLiveSetting<number>(BTW_CONTEXT_TURNS_DEFAULT, normalizeBtwContextTurns)
+export const subscribeBtwContextTurns = btwContextTurnsStore.subscribe
+export const getBtwContextTurns = btwContextTurnsStore.get
+export const applyBtwContextTurns = btwContextTurnsStore.apply
+
+const btwContextBudgetStore = createLiveSetting<number>(BTW_CONTEXT_BUDGET_DEFAULT, normalizeBtwContextBudget)
+export const subscribeBtwContextBudget = btwContextBudgetStore.subscribe
+export const getBtwContextBudget = btwContextBudgetStore.get
+export const applyBtwContextBudget = btwContextBudgetStore.apply
 
 /**
  * Companion 皮肤（设置 `dsh-tui.companion.skin`）：内置 'deepy'（默认，

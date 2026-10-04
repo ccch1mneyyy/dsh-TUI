@@ -1,0 +1,77 @@
+{
+  "start": {
+    "turn": 1,
+    "seq": 5,
+    "model": "claude-haiku-4-5-20251001"
+  },
+  "compactedFrom": null,
+  "events": [
+    "turn.start:user",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "tool.call",
+    "tool.result",
+    "assistant.message",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "assistant.message",
+    "step.end",
+    "turn.end:completed",
+    "model.changed"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Use the Read tool to read README.md, then tell me its first line.",
+      "anchor": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "anchor": "msg_fixture_001",
+      "reasoningTokens": 111
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Read",
+        "status": "ok",
+        "result": null,
+        "resultText": "1 # Fixture project 2 3 A tiny project for recording Claude SDK fixtures. 4"
+      }
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "anchor": "msg_fixture_002",
+      "reasoningTokens": 48
+    },
+    {
+      "kind": "assistant",
+      "text": "The first line of README.md is:\n\n**# Fixture project**",
+      "anchor": "msg_fixture_002"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "sessionTitle": "",
+    "tokens": {
+      "input": 18,
+      "output": 290,
+      "cacheRead": 37868,
+      "cacheWrite": 8722
+    },
+    "compaction": null,
+    "notices": []
+  }
+}

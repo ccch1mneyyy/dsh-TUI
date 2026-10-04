@@ -8,13 +8,26 @@ import { Divider } from './design-system/Divider.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { usePanelInput } from './sidePanel/usePanelInput.js'
 import type { SidePanelKeyFlags } from './sidePanel/types.js'
+import { AgentMessagesSummary } from './messages/AgentMessageFlow.js'
+import type { AgentMessageView, AgentIdentity } from './messages/agentTeam.js'
 
 export interface SubagentDashboardProps {
   subagents: readonly SubagentState[]
+  /** Cross-session peers (the CLI's ListAgents peer/teammate sections).
+   *  undefined = no peer roster for this session: no section; a list
+   *  renders in its own section, apart from the children. No backend
+   *  serves one yet: the SDK's listSubagents lists this session's own
+   *  children, not peers. */
+  readonly peers?: readonly AgentIdentity[]
   /** 整屏/浮层形态的退出通道（Esc / ✕ 按钮）。panel 形态不传：面板不自己
    *  关侧栏——Esc 让给宿主（焦点回聊天，见 usePanelInput 契约）。 */
   onClose?: () => void
   onSelect?: (agentId: string) => void
+  /** 打开主屏只读 Agent View：行点击/Enter 仍进 Detail，这是另一个专用
+   *  动作（'v' 键或行内 ⤢）。 */
+  onOpenView?: (agentId: string) => void
+  /** 代理↔代理消息流：每张卡下显示最后一条 from → to 摘要。 */
+  messages?: readonly AgentMessageView[]
   /** `panel` 挂在侧栏宿主里（去外层 padding、键盘走 usePanelInput 分发器）；
    *  default（缺省）与整屏形态逐字节一致。 */
   variant?: 'default' | 'panel'
@@ -57,8 +70,11 @@ export function ExitButton({ onClick }: { onClick: () => void }): React.ReactNod
  */
 export function SubagentDashboard({
   subagents,
+  peers,
   onClose,
   onSelect,
+  onOpenView,
+  messages,
   variant = 'default',
   focused = true,
   visible = true,
@@ -67,6 +83,16 @@ export function SubagentDashboard({
   const [focusIndex, setFocusIndex] = React.useState(0)
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows, columns } = useTerminalSize()
+
+  // ── roster partition: only a known nesting moves a row (a parent agent
+  // id or depth >= 2) below the main-loop children with a ↳ mark. Rows
+  // with neither stay in place, unmarked. Without any nesting the roster
+  // keeps its flat layout. ──────────────────────────────────────────────
+  const isNestedSpawn = (row: SubagentState): boolean =>
+    row.parentAgentId !== undefined || (row.depth ?? 1) >= 2
+  const nestedRows = subagents.filter(isNestedSpawn)
+  const flatRows = subagents.filter(row => !isNestedSpawn(row))
+  const ordered = nestedRows.length === 0 ? subagents : [...flatRows, ...nestedRows]
 
   useInput((input, key, event) => {
     if (panelMode) return
@@ -85,15 +111,23 @@ export function SubagentDashboard({
     
     if (key.downArrow) {
       event.stopImmediatePropagation()
-      setFocusIndex(i => Math.min(subagents.length - 1, i + 1))
+      setFocusIndex(i => Math.min(ordered.length - 1, i + 1))
       scrollRef.current?.scrollBy(3)
       return
     }
-    
+
     if (isPlainReturnInput(input, key) && onSelect) {
       event.stopImmediatePropagation()
-      const selected = subagents[focusIndex]
+      const selected = ordered[focusIndex]
       if (selected) onSelect(selected.agentId)
+      return
+    }
+
+    // v = 主屏查看（Enter 仍是详情）。
+    if (input.toLowerCase() === 'v' && onOpenView) {
+      event.stopImmediatePropagation()
+      const selected = ordered[focusIndex]
+      if (selected) onOpenView(selected.agentId)
       return
     }
     
@@ -114,14 +148,20 @@ export function SubagentDashboard({
     }
 
     if (key.downArrow === true) {
-      setFocusIndex(i => Math.min(subagents.length - 1, i + 1))
+      setFocusIndex(i => Math.min(ordered.length - 1, i + 1))
       scrollRef.current?.scrollBy(3)
       return true
     }
 
     if (isPanelPlainReturn(input, key)) {
-      const selected = subagents[focusIndex]
+      const selected = ordered[focusIndex]
       if (selected !== undefined) onSelect?.(selected.agentId)
+      return true
+    }
+
+    if (input.toLowerCase() === 'v' && onOpenView !== undefined) {
+      const selected = ordered[focusIndex]
+      if (selected !== undefined) onOpenView(selected.agentId)
       return true
     }
 
@@ -132,6 +172,7 @@ export function SubagentDashboard({
   const running = subagents.filter(s => s.status === 'running').length
   const completed = subagents.filter(s => s.status === 'completed').length
   const failed = subagents.filter(s => s.status === 'failed').length
+  const nested = nestedRows.length
 
   // 外层留白：整屏形态保持原样；侧栏形态只留左右各 1 格（PanelBar 与宿主
   // 提示行已经承担其余 chrome）。卡片之间的分隔线按 `columns` 算，而
@@ -162,6 +203,12 @@ export function SubagentDashboard({
             <Text dimColor> {t('subagent-count-failed')}</Text>
           </Text>
         )}
+        {nested > 0 && (
+          <Text>
+            <Text color="accent">{nested}</Text>
+            <Text dimColor> {t('subagent-count-nested')}</Text>
+          </Text>
+        )}
         <Box flexGrow={1} />
         {/* 可点击退出（Esc 的鼠标等价），hover 提亮。侧栏形态没有退出目标：
             ✕ 关不掉右栏（那是宿主的事），渲染出来就是死控件。 */}
@@ -180,8 +227,11 @@ export function SubagentDashboard({
               <Box marginTop={1}><Text dimColor>{t('subagent-empty-hint')}</Text></Box>
             </Box>
           ) : (
-            subagents.map((subagent, index) => (
+            ordered.map((subagent, index) => (
               <Box key={subagent.agentId} flexDirection="column">
+                {nested > 0 && isNestedSpawn(subagent) && (
+                  <Text dimColor>{'  ↳ ' + t('subagent-nested-mark')}</Text>
+                )}
                 <SubagentCard
                   subagent={subagent}
                   focused={index === focusIndex}
@@ -190,7 +240,18 @@ export function SubagentDashboard({
                     ? () => onSelect(subagent.agentId)
                     : undefined}
                 />
-                {index < subagents.length - 1 && (
+                {messages !== undefined && messages.length > 0 && (
+                  <AgentMessagesSummary
+                    messages={messages.filter(message => message.from === subagent.agentId || message.to === subagent.agentId)}
+                    selfAgentId={subagent.agentId}
+                  />
+                )}
+                {onOpenView !== undefined && (
+                  <Box paddingLeft={1} onClick={() => onOpenView(subagent.agentId)}>
+                    <Text color="subtle">{`⤢ ${t('agent-view-open-action')}`}</Text>
+                  </Box>
+                )}
+                {index < ordered.length - 1 && (
                   <Text dimColor>{'─'.repeat(Math.max(20, Math.min(72, columns - 6)))}</Text>
                 )}
               </Box>
@@ -198,6 +259,34 @@ export function SubagentDashboard({
           )}
         </ScrollBox>
       </Box>
+
+      {/* Peer roster, kept apart from the children above. Without a peer
+       * roster (no backend serves one yet) the section is not drawn at all.
+       * Peers get no send action: the composer reaches only this session's
+       * children. The side panel collapses the section to one line. */}
+      {peers !== undefined && (
+        <Box flexDirection="column">
+          {panelMode ? (
+            <Text dimColor wrap="truncate-end">{t('agents-peers-title') + ' · ' + peers.length}</Text>
+          ) : (
+            <>
+              <Text dimColor>{t('agents-peers-title')}</Text>
+              {peers.length === 0 ? (
+                <Text dimColor>{'  ' + t('agents-peers-empty')}</Text>
+              ) : (
+                <Box flexDirection="column">
+                  {peers.map(peer => (
+                    <Text key={peer.agentId} dimColor wrap="truncate-end">
+                      {'  · ' + (peer.name ?? peer.label ?? peer.agentId.slice(0, 8)) + ' · ' + peer.agentId.slice(0, 8)}
+                    </Text>
+                  ))}
+                  <Text dimColor wrap="truncate-end">{'  ' + t('agents-peers-note')}</Text>
+                </Box>
+              )}
+            </>
+          )}
+        </Box>
+      )}
 
       <Divider color="subtle" title="" />
       <Box marginTop={0}>

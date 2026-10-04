@@ -98,9 +98,15 @@ draft、只跑一次 CI 就关，`pr-gate` 与 `issue-link` 都按机器人放�
     也能观察、替换或拒绝下游结果；`{ prepend: true }` 会把 listener 插到队首。
   - 上游没有受支持的方法发现或保留可验证的独占 claimant，
     因此 legacy seat guard 及其告警无法在本地复现。
-- `src/dsh-adapter/channel.ts`：事件到视图的投影 + 非 React 的动作面。把 DSH 会话事件
-  翻译成 transcript 行，实现 submit、steer、rewind、resume、模型/preset 切换、
-  本地报告及相关状态迁移。
+- `src/dsh-adapter/channel.ts`：Channel 入口——后端中立核心
+  `channel/core/`（绑定、输入管线、共享投影器的接线、宿主接缝、`/new`、本地动作、
+  文件/报告、按能力委托的动作）+ 仅 DSH 会话挂载的扩展 `channel/extensions.ts`
+  （rewind、resume、agent view、子代理/任务、模型/preset/模式、recap 等 DSH
+  specialist 的接线）。会话事件由后端翻译器转成 `AgentEvent`，经唯一的共享投影器
+  `src/channel/projection.ts` 成为 transcript 行。新增后端不写 channel 代码。
+- `src/agent/`、`src/channel/`、`src/backends/claude/`、`src/dsh-adapter/backend/`：
+  后端中立的会话领域与共享投影器，以及各后端的翻译器与会话实现。结构、规则与接入
+  新后端的步骤见 [多后端架构](agent-backend-design.md)。
 - `src/screens/Chat.tsx`：顶层交互协调器。负责模态优先级、全局键盘、滚动/
   搜索/选区状态、slash 命令分发与聊天屏组装。
 - `src/screens/StatusLine.tsx` 与 `src/screens/StatusMetrics.ts`：底部状态栏
@@ -138,7 +144,7 @@ Cordis config
   -> src/index.ts
   -> src/dsh-adapter/plugin.ts
   -> DSH agent/session services
-  -> src/dsh-adapter/channel.ts (session events -> Channel snapshot)
+  -> src/dsh-adapter/channel.ts（core + DSH extensions；AgentEvent -> 共享投影器 -> Channel snapshot）
   -> src/screens/Chat.tsx
   -> src/components/*
   -> src/ui.ts
@@ -149,7 +155,9 @@ Cordis config
 职责归属在各层，不要越权：
 
 - Agent/会话/工具事实来自 DSH 服务与持久化会话事件。
-- 投影与 TUI 动作属于 `dsh-adapter/channel.ts`，不属于呈现组件。
+- 投影属于共享投影器 `src/channel/projection.ts`，TUI 动作属于 channel 核心
+  （`dsh-adapter/channel/core/`）与 DSH 扩展（`dsh-adapter/channel/extensions.ts`），
+  不属于呈现组件。
 - 交互模式与按键优先级属于 `Chat.tsx` 或当前聚焦的模态/输入组件。
 - 可复用的视觉行为属于 `components/` 与主题感知原语。
 - 终端协议、布局、命中测试、选区与帧差分行为属于 `ink/`。
@@ -251,6 +259,13 @@ CI 的测试组按 `scripts/ci-group-timings.json` 的实测耗时分片（每�
 一片，表只影响均衡）；新增脚本不必改表，需要重新均衡时整组跑一次
 `node scripts/run-ci-group.mjs <组> --record-timings`。
 
+本地提速可加 `--jobs N`（缺省 1，与 CI 相同）：组内条目并发执行，每条仍有独立的
+HOME 与渲染日志，输出按条整块打印。并发下失败的条目会串行重跑一次：重跑通过
+按 CPU 争用导致的偶发失败放行，但会以 `::error` 和汇总标记记下来；重跑仍失败才算
+真失败。`--jobs > 1` 不能与 `--record-timings` 同用（并发下的耗时不准）。日常建议：
+先跑改动区域的聚焦脚本（见下表），再对受影响的组加 `--jobs 4`，合并前跑
+`pnpm build` 和四个测试组全量。
+
 CI 在安装后运行：
 
 ```sh
@@ -285,6 +300,8 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | --- | --- |
 | 通用无头屏幕组装 | `pnpm smoke` |
 | 跨代理会话迁移（src/migrate、adapter 解析或事件合成） | `node --import tsx/esm scripts/verify-migrate.mjs` |
+| 共享投影器、DSH 翻译器 | `pnpm verify:projection-golden`、`node --import tsx/esm scripts/verify-dsh-translate.ts`、`pnpm verify:agent-domain` |
+| Claude 后端 | 对应的 `scripts/verify-claude-*`（假 SDK，不花钱）与 `pnpm verify:backend-channel`；`verify:claude-live`/`verify:claude-headless` 调用真实 CLI，只在有意花费时手动跑（钉在 haiku） |
 | Channel submit/steer/pending 行为 | `node scripts/verify-submit.mjs` |
 | 回退后编辑重发与历史 Inbox 清理 | `pnpm verify:rewind-edit` |
 | 提示队列行为 | `node scripts/verify-queue.mjs` |
@@ -467,12 +484,13 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 | 其他插件配置或环境行为 | `src/dsh-adapter/index.ts`、运行时消费、`cordis.patch.yml`、`cordis.yml`（注释只写示例值与必要语义）、`README.md`、`README_ZH.md` |
 | Slash 命令或快捷键 | `src/commands.ts`、`src/screens/Chat.tsx`、帮助/输入组件、双 README、相关技能映射/测试 |
 | 主题契约、插件接缝或持久化主题行为 | `src/theme.ts`、`src/themeCatalog.ts`、`src/dsh-adapter/themes.ts`、所有色板、主题 provider/picker、自定义主题解析器、主题验证、双 README、插件文档 |
-| 会话/channel 行为 | `src/dsh-adapter/channel.ts`、受影响的 UI 投影、编译产物、聚焦 channel/回放回归 |
+| 会话/channel 行为 | 后端中立的放 `src/dsh-adapter/channel/core/`，DSH 专属的放 `channel/extensions.ts` 及其 specialist、受影响的 UI 投影、编译产物、聚焦 channel/回放回归（含 `verify-backend-channel`、`verify-channel-rollback`） |
 | 渲染器/布局行为 | `src/ink/` 或 Yoga 源、编译产物、CI 回归、聚焦滚动/resize/PTY 探针 |
 | 技能发现或呈现 | DSH adapter、slash 命令合并、`/skills` 与相关回归；项目维护技能放 `.agents/skills/` 且不得加入 npm 包 |
 | 用户可见的文档化行为 | 中英文 README，外加适用的配置注释/帮助文本 |
 | 贡献入口或 PR 门禁 | `.mergify.yml`、`docs/contributing.md`、`docs/contributing.en.md`、`.github/workflows/pr-gate.yml`、`.github/scripts/pr-intake/`、`.github/APPROVED_CONTRIBUTORS` |
 | 包版本或依赖 | `package.json`、`pnpm-lock.yaml`、适用时的生成/发布产物；不要顺手搅动旧 npm 锁文件 |
+| Claude Agent SDK 版本 | `package.json` 的 optional peer 与 dev 两处精确版本、`pnpm-lock.yaml`、`src/backends/claude/contract.ts`（`VALIDATED_SDK_VERSION`/`VALIDATED_CLI_VERSIONS`）、`docs/claude-backend{,.en}.md` 的安装命令；`verify:claude-contract` 检查一致 |
 | 上游验证线 bump | `src/dsh-adapter/contract.ts`、`src/dsh-adapter/oauth/`、`package.json` peer+dev 两组范围、`pnpm-workspace.yaml`、`.github/workflows/ci.yml` alpha-compat 的上游 SHA、`scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}` 内的版本常量、`patch-surface.snapshot.json`、`ADAPTER.md`、`docs/user-guide.md`；步骤见 [ADAPTER.md](../ADAPTER.md) 升级流程 |
 
 ## Git 与发布安全（Git And Release Safety）

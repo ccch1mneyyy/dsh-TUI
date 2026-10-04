@@ -252,7 +252,15 @@ export function Ledger({
             </Box>
             <Box flexShrink={0} justifyContent="flex-end" width={7}>
               <Text color={running ? 'success' : heatColor(duration)}>
-                {running ? '…' : duration === undefined ? '' : formatDuration(duration)}
+                {/* 等待中的审批/问卷显示已等待时长而不是省略号：等待本身
+                    就是这一行的成本；两个宿主都在动画帧上重渲染。 */}
+                {running
+                  ? node.kind === 'approval'
+                    ? formatDuration(Math.max(0, Date.now() - node.time))
+                    : '…'
+                  : duration === undefined
+                    ? ''
+                    : formatDuration(duration)}
               </Text>
             </Box>
           </Box>

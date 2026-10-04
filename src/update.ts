@@ -7,6 +7,13 @@ import { fileURLToPath } from 'node:url'
 import { gte, gt, lt, valid } from 'semver'
 import { shellQuote } from './utils/shellQuote.js'
 import { DATA_DIR } from './utils/paths.js'
+import { stripResumeArgs } from './sessionHistory.js'
+import { KERNEL_SWITCH_HANDOFF_ENV } from './kernelPrefs.js'
+import { kernelDisplayName } from './components/kernelCatalog.js'
+import { classifyReplacementOutcome, formatHandoffNotice, handoffEventTag, writeHandoffStage } from './handoffEvents.js'
+import { HANDOFF_ACK_FD_ENV, HANDOFF_ATTEMPT_ENV, HANDOFF_SCREEN_ENV, parseHandoffAckLine } from './handoffAck.js'
+import { DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from './ink/termio/csi.js'
+import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from './ink/termio/dec.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
 // the compiled copy at lib/types/utils/shellQuote.js.
@@ -67,6 +74,101 @@ export function logRestartEvent(event: string, data?: Record<string, unknown>): 
   writeRestartLine(`${event}${data === undefined ? '' : ` ${JSON.stringify(data)}`}`)
 }
 
+/**
+ * `~/.dsh-tui/last-run.json`: which kernel and session the most recent TUI
+ * instance ran, written at boot (plugin.ts) and refreshed by the exit funnel.
+ * The launcher's safe-mode retry reads it. After a kernel switch the
+ * launcher's own env still names the original backend, so retrying from that
+ * env would reopen the old kernel, or hand a DSH session id to a Claude boot.
+ * kernel.json has the backend but not the session or when it was written.
+ */
+export interface LastRunRecord {
+  /** The kernel THIS instance ran on (Config domain: 'dsh' | 'claude'). */
+  readonly backendId: 'dsh' | 'claude'
+  /** The resumable session id on that backend; '' = nothing resumable (the
+   *  retry cold-starts the backend instead of resuming across domains). */
+  readonly sessionId: string
+  /** The session's working directory (diagnostics; the retry keeps the
+   *  launch cwd, it does not chdir from this field). */
+  readonly cwd: string
+  /** Which boot wrote this record (pid+clock id; diagnostics and
+   *  generation comparisons). */
+  readonly attemptId: string
+  /** epoch-ms stamp (added by writeLastRunRecord): the launcher compares it
+   *  against its own start to tell this-chain records from a previous
+   *  launch's leftovers. */
+  readonly updatedAt: number
+  /** Writer pid (diagnostics). */
+  readonly pid?: number
+}
+
+const LAST_RUN_FILE = join(DATA_DIR, 'last-run.json')
+
+/** Windows rename retry cell (kernelPrefs writeKernelPrefs precedent). */
+const lastRunWaitCell = new Int32Array(new SharedArrayBuffer(4))
+
+/**
+ * Stamp the last-run record atomically (tmp + rename, so the launcher's read
+ * never sees half a file). Best effort, never throws: a failed stamp only
+ * degrades the launcher's retry to its legacy sniffing path.
+ * @param record - Identity without updatedAt (stamped here, one clock).
+ * @param file - Path override (verify scripts point at a temp dir).
+ */
+export function writeLastRunRecord(
+  record: Omit<LastRunRecord, 'updatedAt'>,
+  file: string = LAST_RUN_FILE,
+): void {
+  const temporary = join(dirname(file), `.last-run.${process.pid}.${Date.now()}.tmp`)
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+    const updatedAt = Date.now()
+    writeFileSync(temporary, `${JSON.stringify({ ...record, updatedAt }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+    for (let attempt = 0; ; attempt++) {
+      try {
+        renameSync(temporary, file)
+        return
+      } catch (error) {
+        const code = typeof error === 'object' && error !== null ? String((error as NodeJS.ErrnoException).code) : ''
+        if (process.platform !== 'win32' || attempt >= 7 || (code !== 'EPERM' && code !== 'EBUSY')) throw error
+        Atomics.wait(lastRunWaitCell, 0, 0, 2 ** attempt)
+      }
+    }
+  } catch (error) {
+    try {
+      rmSync(temporary, { force: true })
+    } catch {
+      // The previous record stays; no safe remedy.
+    }
+    writeRestartLine(`last-run record write failed (${error instanceof Error ? error.message : String(error)})`)
+  }
+}
+
+/**
+ * Read the last-run record; unreadable/invalid/missing yields undefined (the
+ * caller falls back to its legacy behavior). Never throws.
+ * @param file - Path override (verify scripts point at a temp dir).
+ */
+export function readLastRunRecord(file: string = LAST_RUN_FILE): LastRunRecord | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+    const record = parsed as Record<string, unknown>
+    if (record.backendId !== 'dsh' && record.backendId !== 'claude') return undefined
+    if (typeof record.sessionId !== 'string' || typeof record.cwd !== 'string' || typeof record.attemptId !== 'string') return undefined
+    if (typeof record.updatedAt !== 'number' || !Number.isFinite(record.updatedAt)) return undefined
+    return {
+      backendId: record.backendId,
+      sessionId: record.sessionId,
+      cwd: record.cwd,
+      attemptId: record.attemptId,
+      updatedAt: record.updatedAt,
+      ...(typeof record.pid === 'number' ? { pid: record.pid } : {}),
+    }
+  } catch {
+    return undefined
+  }
+}
+
 /** Start a fresh, clearly delimited /restart attempt block in the log. */
 export function beginRestartAttempt(sessionId: string): void {
   try {
@@ -94,6 +196,29 @@ export function writeHandoffNotice(text: string): void {
     writeFileSync(2, text)
   } catch {
     process.stderr.write(text)
+  }
+}
+
+/**
+ * Hand the terminal back after a kernel-switch replacement that cannot clean
+ * up after itself: one that died before its first frame (this process still
+ * holds the alternate screen) or one killed by a signal. Besides leaving the
+ * alternate screen it turns off the input modes the replacement may already
+ * have enabled; each reset is harmless if the mode was never on. Written
+ * synchronously to fd 1 so the failure notice that follows lands on the main
+ * screen.
+ */
+export function restoreHandoffScreen(): void {
+  const reset = DISABLE_MOUSE_TRACKING + DISABLE_MODIFY_OTHER_KEYS + DISABLE_KITTY_KEYBOARD
+    + DISABLE_WIN32_INPUT_MODE + DFE + DBP + SHOW_CURSOR + EXIT_ALT_SCREEN + '\r\n'
+  try {
+    writeFileSync(1, reset)
+  } catch {
+    try {
+      process.stdout.write(reset)
+    } catch {
+      // Even a dead stdout must not block the exit path.
+    }
   }
 }
 
@@ -1726,12 +1851,14 @@ export async function updateTui(
  *   other profile would leave the running install untouched.
  * @param targetVersion - Exact version returned by the preflight registry
  *   check, or undefined when that check failed and pnpm should resolve latest.
+ * @param kernel - The kernel this process runs (TuiRestartOptions.kernel).
  * @returns Exit codes for the update run and the replacement process.
  */
 export async function updateTuiAndRestart(
   sessionId: string,
   profile: string,
   targetVersion?: string,
+  kernel?: 'dsh' | 'claude',
 ): Promise<TuiUpdateResult> {
   const outcome = await updateTui(profile, targetVersion)
   const { updatedFrom } = outcome
@@ -1747,6 +1874,7 @@ export async function updateTuiAndRestart(
   const restartCode = await restartTui(sessionId, {
     env: { [UPDATED_FROM_ENV]: updatedFrom },
     kind: 'update',
+    ...(kernel === undefined ? {} : { kernel }),
   })
   return { updateCode: 0, restartCode }
 }
@@ -1882,10 +2010,13 @@ export function detachHandoffStdin(
  * reported synchronously (a raw inherit write can vanish mid-handoff). A
  * late exit is quiet — by then the user owned a working TUI session.
  *
- * @param sessionId - Session to resume in the replacement process.
+ * @param sessionId - Session to resume in the replacement process (ignored
+ *   when `options.backend` switches kernels — the new backend starts a
+ *   fresh session).
  * @param options - `kind: 'update'` drops the /restart boot-diagnosis
  *   marker and tags restart.log events for the update flow; `env` adds
- *   marker variables for the replacement (e.g. DSH_TUI_UPDATED_FROM).
+ *   marker variables for the replacement (e.g. DSH_TUI_UPDATED_FROM);
+ *   `backend` switches the replacement onto that kernel.
  * @returns 0 when the replacement ran and exited cleanly, 127 when it
  *   failed to start, otherwise the child's own exit code.
  */
@@ -1898,12 +2029,88 @@ export interface TuiRestartOptions {
    * diagnostics) and restart.log events carry the update-restart tag.
    */
   kind?: 'restart' | 'update'
+  /**
+   * A kernel switch from the launchpad selector. restart.log events use the
+   * backend-switch tag; the replacement gets DSH_TUI_BACKEND and the one-shot
+   * KERNEL_SWITCH_HANDOFF_ENV set to the chosen kernel (the latter beats a
+   * Config row that pins the other one), and no DSH_TUI_RESUME_SESSION: the
+   * new kernel starts a new session.
+   */
+  backend?: 'dsh' | 'claude'
+  /**
+   * 'alt' (fullscreen kernel switch only): this process keeps the alternate
+   * screen open through the spawn, the replacement adopts it without a
+   * second 1049h, and its first flushed frame (ACKed on fd 3) hands the
+   * screen over; see src/handoffAck.ts. /restart, /update and inline
+   * sessions go back to the main screen before the spawn as before.
+   */
+  handoffScreen?: 'alt'
+  /**
+   * The kernel this process runs. A plain /restart or /update passes it in
+   * the one-shot KERNEL_SWITCH_HANDOFF_ENV so the replacement reopens the
+   * session on the same kernel even when a Config row names the other one
+   * (as it does after a kernel switch). Ignored when `backend` is set.
+   */
+  kernel?: 'dsh' | 'claude'
+}
+
+/**
+ * The replacement's env, pure: the resume marker, the /restart child stamp,
+ * the caller's extra markers and the kernel-switch overrides. Exported for
+ * scripts/verify-launchpad, which feeds it through the boot resolver.
+ */
+export function restartChildEnv(
+  parentEnv: NodeJS.ProcessEnv,
+  sessionId: string,
+  kind: 'restart' | 'update',
+  options: TuiRestartOptions,
+): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = {
+    ...parentEnv,
+    // The replacement resumes the current session through the launcher
+    // contract (DSH_TUI_RESUME_SESSION; see src/sessionHistory.ts).
+    DSH_TUI_RESUME_SESSION: sessionId,
+    // Marks the replacement so its own boot logs to restart.log without
+    // noisy logging on every ordinary launch (/restart only).
+    ...(kind === 'restart' ? { [RESTART_CHILD_ENV]: '1' } : {}),
+    ...options.env,
+  }
+  // A stale handoff override never leaks into a plain replacement: the var is
+  // one-shot (consumed at this process's own boot), and a child that is NOT
+  // switching kernels keeps this process's kernel by config/env/memory as
+  // usual.
+  delete childEnv[KERNEL_SWITCH_HANDOFF_ENV]
+  // Same for the alt-screen handoff markers: a replacement must not adopt a
+  // screen or ACK pipe from an earlier attempt. restartTui sets them again
+  // when it opens a handoff.
+  delete childEnv[HANDOFF_SCREEN_ENV]
+  delete childEnv[HANDOFF_ACK_FD_ENV]
+  delete childEnv[HANDOFF_ATTEMPT_ENV]
+  if (options.backend === undefined && options.kernel !== undefined) childEnv[KERNEL_SWITCH_HANDOFF_ENV] = options.kernel
+  if (options.backend !== undefined) {
+    childEnv.DSH_TUI_BACKEND = options.backend
+    // DSH_TUI_BACKEND alone loses to a Config row (config > env > memory),
+    // so the switch also sets the one-shot variable that ranks above config.
+    childEnv[KERNEL_SWITCH_HANDOFF_ENV] = options.backend
+    // A kernel switch never resumes: the id of THIS backend's session means
+    // nothing to the next one, and an inherited marker (this process may
+    // itself be a /restart child) would send the new kernel looking for it —
+    // deleted outright, not blanked (the launcher row maps '' to
+    // config.sessionId='', not to "absent").
+    delete childEnv.DSH_TUI_RESUME_SESSION
+  }
+  return childEnv
 }
 
 export async function restartTui(sessionId: string, options: TuiRestartOptions = {}): Promise<number> {
   const kind = options.kind ?? 'restart'
-  const tag = kind === 'update' ? 'update-restart' : 'restart'
-  const argv = [...process.execArgv, ...process.argv.slice(1)]
+  const tag = options.backend !== undefined ? 'backend-switch' : kind === 'update' ? 'update-restart' : 'restart'
+  // A kernel switch must not hand the replacement THIS kernel's resume
+  // flags: an inherited `--resume <id>` in argv would send the new kernel
+  // looking for a session that belongs to the kernel it just left — the
+  // same reason DSH_TUI_RESUME_SESSION is deleted below.
+  const appArgs = process.argv.slice(1)
+  const argv = [...process.execArgv, ...(options.backend === undefined ? appArgs : stripResumeArgs(appArgs))]
   logRestartEvent(`${tag}: spawning replacement`, {
     node: process.execPath,
     argv,
@@ -1915,25 +2122,84 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     dshHome: process.env.DSH_HOME ?? null,
   })
   const startedAt = Date.now()
+  // Fullscreen kernel switch: keep the alternate screen until the replacement
+  // reports its first flushed frame on the ACK pipe (see handoffScreen).
+  const handoff = options.handoffScreen === 'alt' && options.backend !== undefined
+  const attemptId = handoff ? 'hs-' + Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 8) : undefined
+  // Ctrl+C while the replacement boots reaches this process too: same process
+  // group, and nothing has the terminal in raw mode yet. Dying here would
+  // leave behind the alternate screen this process still holds; the
+  // replacement gets the same signal, and its close below restores the screen.
+  const ignoreInterrupt = (): void => {}
+  if (handoff) process.on('SIGINT', ignoreInterrupt)
+  // "Starting X…" goes out before the spawn, waiting for the write callback
+  // so it lands before the replacement draws anything.
+  if (options.backend !== undefined) {
+    await writeHandoffStage(
+      process.stdout,
+      formatHandoffNotice('stage-start', { name: kernelDisplayName(options.backend), color: process.stdout.isTTY === true }) + '\n',
+    )
+    logRestartEvent(handoffEventTag('stage-start'), { backend: options.backend, ...(attemptId === undefined ? {} : { attemptId }) })
+  }
   return new Promise(resolve => {
+    const childEnv = restartChildEnv(process.env, sessionId, kind, options)
+    if (handoff) {
+      // stdio[3] is the ACK pipe; the env tells the replacement its fd and the attempt id.
+      childEnv[HANDOFF_SCREEN_ENV] = 'alt'
+      childEnv[HANDOFF_ACK_FD_ENV] = '3'
+      childEnv[HANDOFF_ATTEMPT_ENV] = attemptId!
+      logRestartEvent('handoff: alt-screen bracket held for the replacement', { attemptId })
+    }
     const child = spawn(process.execPath, argv, {
-      env: {
-        ...process.env,
-        // The replacement resumes the current session through the launcher
-        // contract (DSH_TUI_RESUME_SESSION; see src/sessionHistory.ts).
-        DSH_TUI_RESUME_SESSION: sessionId,
-        // Marks the replacement so its own boot logs to restart.log without
-        // noisy logging on every ordinary launch (/restart only).
-        ...(kind === 'restart' ? { [RESTART_CHILD_ENV]: '1' } : {}),
-        ...options.env,
-      },
+      env: childEnv,
       // stdin/stdout stay inherited so the replacement owns the console the
       // moment it boots; stderr is captured so a boot failure is reportable
       // through THIS process (the terminal may already be mid-handoff when
-      // the child dies, and a raw inherit write can vanish).
-      stdio: ['inherit', 'inherit', 'pipe'],
+      // the child dies, and a raw inherit write can vanish). fd 3 is the
+      // one-way ACK pipe (replacement → supervisor): adopted / first frame.
+      stdio: handoff ? ['inherit', 'inherit', 'pipe', 'pipe'] : ['inherit', 'inherit', 'pipe'],
     })
-    logRestartEvent(`${tag}: replacement spawned`, { childPid: child.pid })
+    let ackAdoptedAt: number | undefined
+    let ackReadyAt: number | undefined
+    const ackStream = handoff ? (child.stdio[3] ?? undefined) as import('node:stream').Readable | undefined : undefined
+    if (ackStream !== undefined) {
+      ackStream.setEncoding('utf8')
+      let pending = ''
+      ackStream.on('data', (chunk: string) => {
+        pending += chunk
+        for (;;) {
+          const newline = pending.indexOf('\n')
+          if (newline < 0) break
+          const line = pending.slice(0, newline)
+          pending = pending.slice(newline + 1)
+          const ack = parseHandoffAckLine(line)
+          if (ack === null || ack.attemptId !== attemptId) continue
+          if (ack.kind === 'adopted' && ackAdoptedAt === undefined) {
+            ackAdoptedAt = Date.now()
+            logRestartEvent('handoff/screen-adopted', { attemptId, backend: options.backend })
+          }
+          if (ack.kind === 'ready' && ackReadyAt === undefined) {
+            ackReadyAt = Date.now()
+            // ready means the replacement's first frame was flushed, not just
+            // that it mounted or is still alive.
+            logRestartEvent(handoffEventTag('first-frame'), { attemptId, backend: options.backend, elapsedMs: ackReadyAt - startedAt })
+          }
+        }
+      })
+      ackStream.on('error', () => {
+        // The supervisor outlives the pipe by contract; a broken pipe here
+        // means the replacement never speaks the protocol (e.g. an older
+        // build) — the close handler's no-ready branch still restores the
+        // screen, so the bracket can never be orphaned.
+      })
+      const ackWatch = setTimeout(() => {
+        if (ackReadyAt === undefined) {
+          logRestartEvent('handoff/first-frame watch', { attemptId, note: 'no first-frame ACK within 30s (diagnosis only, never a success/failure fact)' })
+        }
+      }, 30000)
+      ackWatch.unref()
+    }
+    logRestartEvent(`${tag}: replacement spawned`, { childPid: child.pid, ...(options.backend === undefined ? {} : { backend: options.backend }) })
     // Handoff watchdog (field evidence 2026-08-24: restarted TUI mounts but
     // takes no input). Two jobs, both diagnosis-grade:
     // 1. SAMPLE this process's stdin state every second — if anything
@@ -1988,19 +2254,78 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     timer.unref()
     child.once('error', error => {
       clearTimeout(timer)
+      process.removeListener('SIGINT', ignoreInterrupt)
       logRestartEvent(`${tag}: spawn error`, { message: error.message })
-      writeHandoffNotice(`dsh-tui: failed to spawn the restart: ${error.message}\n`)
+      if (options.backend !== undefined) {
+        // Nothing took the screen over: restore it before the notice.
+        if (handoff) restoreHandoffScreen()
+        // A spawn failure is a failed switch (yellow, with the safe-mode hint),
+        // not a crash.
+        logRestartEvent(handoffEventTag('failed'), { reason: 'spawn-error', message: error.message })
+        writeHandoffNotice(
+          formatHandoffNotice('failed', {
+            name: kernelDisplayName(options.backend),
+            reason: 'spawn-error',
+            safeHint: true,
+            color: process.stderr.isTTY === true,
+          }) + `\n${error.message}\n`,
+        )
+      } else {
+        writeHandoffNotice(`dsh-tui: failed to spawn the restart: ${error.message}\n`)
+      }
       resolve(127)
     })
     child.once('close', (code, signal) => {
       clearTimeout(timer)
+      process.removeListener('SIGINT', ignoreInterrupt)
       const elapsedMs = Date.now() - startedAt
       logRestartEvent(`${tag}: replacement exited`, {
         code: code ?? null,
         signal: signal ?? null,
         elapsedMs,
       })
-      if (elapsedMs < 4000) {
+      if (options.backend !== undefined) {
+        // Kernel switch outcome: success is quiet (restart.log only), a
+        // replacement that never came up is a yellow failure with the session
+        // kept and the safe-mode hint, and a later nonzero exit is a red
+        // crash. With the ACK pipe the first frame decides which of the two
+        // failures it was; see classifyReplacementOutcome.
+        const outcome = classifyReplacementOutcome({
+          closed: true, code, signal, elapsedMs,
+          ...(handoff ? { firstFrameAcked: ackReadyAt !== undefined } : {}),
+        })
+        logRestartEvent(handoffEventTag(outcome.kind), {
+          ...(outcome.kind === 'crashed' ? { code: outcome.code } : outcome.kind === 'failed' ? { reason: outcome.reason } : {}),
+          ...(attemptId === undefined ? {} : { attemptId }),
+        })
+        if (outcome.kind === 'failed') {
+          // Before ready this process still holds the alternate screen:
+          // restore it first so the notice lands on the main screen. After
+          // ready the replacement's own exit cleanup closed it.
+          if (handoff && ackReadyAt === undefined) restoreHandoffScreen()
+          const suffix = childStderr.trim() === '' ? '' : `\n${childStderr.trimEnd()}`
+          writeHandoffNotice(
+            formatHandoffNotice('failed', {
+              name: kernelDisplayName(options.backend),
+              reason: outcome.reason,
+              safeHint: true,
+              color: process.stderr.isTTY === true,
+            }) + `${suffix}\n`,
+          )
+        } else if (outcome.kind === 'crashed') {
+          // A signal death after the first frame skipped the replacement's
+          // own exit cleanup, so the screen and input modes are still its.
+          if (handoff && signal !== null) restoreHandoffScreen()
+          writeHandoffNotice(
+            '\n' + formatHandoffNotice('crashed', {
+              name: kernelDisplayName(options.backend),
+              code: outcome.code,
+              safeHint: true,
+              color: process.stderr.isTTY === true,
+            }) + '\n',
+          )
+        }
+      } else if (elapsedMs < 4000) {
         // Fast death: the TUI never came up. Synchronous stderr write —
         // process.exit() right after an async stream write skips the flush,
         // and a vanished diagnosis is indistinguishable from silent failure.

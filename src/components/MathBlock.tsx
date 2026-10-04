@@ -89,8 +89,10 @@ export function MathBlock({ token, dimColor, forceWidth }: Props): React.ReactNo
     // wrapped across it, so every visible row of the box carries the formula.
     const stackedFits = lines !== undefined && lines.length <= raster.rows &&
       lines.every(line => stringWidth(line) <= raster.columns)
+    // A formula is line art: the transparent Sixel mask stays solid instead
+    // of dithering, so fraction bars and hairline strokes keep their ink.
     const painted = (
-      <Image {...(composited ? {} : { transparent: true })} presentation="transcript" source={raster.source} width={raster.columns} height={raster.rows} alt={token.text} copyText={token.raw.trim()}>
+      <Image {...(composited ? {} : { transparent: true })} lineArt presentation="transcript" source={raster.source} width={raster.columns} height={raster.rows} alt={token.text} copyText={token.raw.trim()}>
         <Box width={raster.columns} height={raster.rows} overflow="hidden">
           <Text dimColor wrap={stackedFits ? 'truncate' : 'wrap'}>
             {stackedFits ? lines.join('\n') : renderInlineMath(token.text) ?? token.text}

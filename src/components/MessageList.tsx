@@ -3,15 +3,14 @@ import { getLang, subscribeLang, t, type Lang } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow, JobGroupRow, JobRow } from '../dsh-adapter/channel.js'
+import type { TurnUsageSummary } from '../adapter/ports/channel-view.js'
 import type { JobGroupFoldMode } from '../tuiDisplayPrefs.js'
 import { normalizeIdePath } from '../dsh-adapter/ide-channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
-import { AssistantTextMessage } from './messages/AssistantTextMessage.js'
-import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js'
-import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
+import { AssistantTextLeafRow, ThinkingLeafRow, ToolLeafRow } from './messages/TranscriptLeaves.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
 import { JobCard } from './Chat/JobCard.js'
 import { JobGroupHeader } from './Chat/JobGroupHeader.js'
@@ -19,6 +18,7 @@ import { isMinimalUiMode } from '../minimalUiMode.js'
 import { noteFrameCause, noteListGeometry } from '../ink/geometry-trace.js'
 import { getTerminalFlushTick } from '../ink/flush-tick.js'
 import { TurnInterruptedRow } from './TurnInterruptedRow.js'
+import { TurnUsageRow } from './TurnUsageRow.js'
 import { LogoV2 } from './LogoV2.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
@@ -248,6 +248,11 @@ function signatureParts(
         tool?.resultText?.length ?? 0,
         tool?.resultFull?.length ?? 0,
         tool?.errorText?.length ?? 0,
+        // Source-fold disclosure and the uncapped terminal exit/signal tail
+        // change the card's height when they (dis)appear — the window fold
+        // drops payloads and a settled terminal view adds its verdict lines.
+        row.folded === true,
+        tool?.resultView?.card ?? '',
         row.id === failureHintRowId ? failureHint ?? '' : '',
       )
       break
@@ -300,6 +305,10 @@ function signatureParts(
       // Folded one-liner vs full summary text.
       signatureScratch.push(expanded, expandedRows.has(row.id))
       break
+    case 'turn-summary':
+      // Immutable payload, single truncate-end line: the kind switch alone
+      // covers the height semantics (content never changes after creation).
+      break
     case 'user':
       // T06: the selection indicator line above the bubble adds one rendered
       // row whose text wraps with width — its presence and content length
@@ -350,11 +359,13 @@ export function MessageList({
   jobGroupFold = 'auto',
   toolBackground = 'none',
   foldTerminalCommand = false,
+  turnUsageRow = false,
   smoothStreaming = false,
   activityFrames,
   showAll,
   onToggleAll,
   onLoadOlder,
+  olderHistory,
   thinkingVisible = true,
   historyPaintEnabled = true,
   registerRowRef,
@@ -366,7 +377,9 @@ export function MessageList({
   failureHintRowId,
   failureHint,
   onOpenSubagent,
+  onOpenSubagentView,
   onOpenJobs,
+  onWatchJobOutput,
   onOpenFile,
   sessionCwd,
   onPreviewImage,
@@ -394,6 +407,11 @@ export function MessageList({
   toolBackground?: ToolBackground
   /** Terminal-card header folding from the live channel settings. */
   foldTerminalCommand?: boolean
+  /** Turn-usage ledger row from the live channel settings (default off):
+   *  off filters the rows out of the visible window BEFORE virtualization —
+   *  the ledger itself keeps feeding `turnUsage`, /tokens, /status and the
+   *  footer hover. */
+  turnUsageRow?: boolean
   /** Smooth streaming reveal from the live channel settings (default off at
    *  this layer — embedders and verify harnesses keep exact-paint behavior;
    *  Chat passes the channel's `dsh-tui.smoothStreaming` value). */
@@ -404,8 +422,14 @@ export function MessageList({
   showAll: boolean
   onToggleAll: () => void
   /** Restore folded-away older rows from the session log; shown only when
-   *  rows were folded. */
+   *  rows were folded (or `olderHistory` says more exists before them). */
   onLoadOlder?: () => void
+  /** The session has history older than the first row (a compaction cut it
+   *  off before a resume): the "load earlier" divider shows without any
+   *  folded row. */
+  olderHistory?: boolean
+  /** A job card on screen keeps its output tail fresh (returns the unwatch). */
+  onWatchJobOutput?: (id: string) => () => void
   thinkingVisible?: boolean
   /**
    * Whether rows outside the virtualization window must still be painted
@@ -460,6 +484,8 @@ export function MessageList({
   failureHint?: string
   /** 打开子代理详情场景（transcript 内点击子代理卡）。 */
   onOpenSubagent?: (agentId: string) => void
+  /** 从转录里的子代理卡打开主屏只读 Agent View。 */
+  onOpenSubagentView?: (agentId: string, rowId: number) => void
   /** 打开 /jobs 后台任务面板（transcript 内点击任务卡）。 */
   onOpenJobs?: (focusId?: string) => void
   /** 点击工具卡内的文件路径（打开文件操作菜单）。 */
@@ -501,6 +527,9 @@ export function MessageList({
     /** Job-status/toggle fingerprint (see below): job cards settle IN PLACE,
      *  and a settling run changes how — and whether — its members render. */
     jobsSig: number
+    /** Turn-usage row toggle: flipping it adds/removes turn-summary rows
+     *  from the visible window without touching the row array. */
+    turnRowOn: boolean
   } | null>(null)
   /** Generation counter for the visibleRows cache (timeline memo key). */
   const visGenRef = React.useRef(0)
@@ -536,6 +565,7 @@ export function MessageList({
     visibleCache.showAll !== (showAll || hiddenCount <= 0) ||
     visibleCache.thinkingVisible !== thinkingVisible ||
     visibleCache.jobsSig !== jobsSig ||
+    visibleCache.turnRowOn !== turnUsageRow ||
     !streamBitsSame
   ) {
     const sliced = showAll || hiddenCount <= 0
@@ -577,7 +607,7 @@ export function MessageList({
     // objects (an in-place write throws on a frozen row and takes the TUI
     // down at startup — the resume/replay first frame delivers exactly
     // that shape).
-    const out: ChatRow[] = hasEmptyAssistant
+    let out: ChatRow[] = hasEmptyAssistant
       ? sliced.filter(row =>
           !rendersEmptyAssistant(row) &&
           (thinkingVisible || row.kind !== 'reasoning'),
@@ -585,6 +615,11 @@ export function MessageList({
       : thinkingVisible
         ? sliced.slice()
         : sliced.filter(row => row.kind !== 'reasoning')
+    // Turn-usage rows (settings `dsh-tui.turnUsageRow`, default off): a
+    // pure PRESENTATION gate — filtering here (not render-null) keeps the
+    // row out of the window entirely, so no cached height or mounted node
+    // survives the toggle. The ledger data itself is collected regardless.
+    if (!turnUsageRow) out = out.filter(row => row.kind !== 'turn-summary')
     // --- consecutive-job groups ------------------------------------------
     // A batch of run_in_background calls lands as N adjacent job cards (the
     // projection pushes the whole roster in one sync) and EVERY card pays
@@ -705,6 +740,7 @@ export function MessageList({
       margins,
       streamBits,
       jobsSig,
+      turnRowOn: turnUsageRow,
     }
     visGenRef.current++
   }
@@ -1380,7 +1416,7 @@ export function MessageList({
 
   return (
     <>
-      {rows.some(row => row.folded) && (
+      {(olderHistory === true || rows.some(row => row.folded)) && (
         <ClickableDivider title={t('load-earlier')} onClick={onLoadOlder} />
       )}
       {!showAll && hiddenCount > 0 && (
@@ -1432,6 +1468,7 @@ export function MessageList({
               streaming={displayStreaming}
               thinkingOpen={row.thinkingOpen === true}
               durationMs={row.durationMs}
+              reasoningTokens={row.reasoningTokens}
               time={row.time}
               marginTopOnTurn={marginTopOnTurn}
               isSelected={selectedId === row.id}
@@ -1460,6 +1497,8 @@ export function MessageList({
               toolResultView={tool?.resultView}
               toolStartedAt={tool?.startedAt}
               toolDurationMs={tool?.durationMs}
+              toolSourceFolded={row.folded === true}
+              turnUsage={row.turnUsage}
               subagent={subagent}
               job={job}
               jobGroup={jobGroup}
@@ -1467,7 +1506,9 @@ export function MessageList({
               onToggleStreamView={onToggleStreamView}
               streamViewToggled={streamViewToggledRows.has(row.id)}
               onOpenSubagent={onOpenSubagent}
+          onOpenSubagentView={onOpenSubagentView}
               onOpenJobs={onOpenJobs}
+              onWatchJobOutput={onWatchJobOutput}
               onOpenFile={onOpenFile}
               sessionCwd={sessionCwd}
               onPreviewImage={onPreviewImage}
@@ -1507,6 +1548,8 @@ type MemoRowProps = {
   streaming: boolean
   thinkingOpen: boolean
   durationMs: number | undefined
+  /** Estimated thinking tokens of a count-only reasoning row. */
+  reasoningTokens: number | undefined
   time: number | undefined
   marginTopOnTurn: boolean
   isSelected: boolean
@@ -1546,6 +1589,12 @@ type MemoRowProps = {
   toolResultView: ToolResultView | undefined
   toolStartedAt: number | undefined
   toolDurationMs: number | undefined
+  /** Row-level source fold (window cap dropped full payloads): the expanded
+   *  card discloses preview-only instead of passing it off as full text. */
+  toolSourceFolded: boolean
+  /** Turn-summary payload (kind === 'turn-summary'); set-once immutable
+   *  ref created at turn.end, so a plain ref compare is complete. */
+  turnUsage: TurnUsageSummary | undefined
   // SubagentRow, stable ref (subagent lifecycle events update the store, not
   // the row ref itself, so a plain ref compare stays correct).
   subagent: SubagentRow | undefined
@@ -1559,7 +1608,9 @@ type MemoRowProps = {
   /** 是否反转该流式行的 thinkingFold 默认视图。 */
   streamViewToggled: boolean
   onOpenSubagent: ((agentId: string) => void) | undefined
+  onOpenSubagentView: ((agentId: string, rowId: number) => void) | undefined
   onOpenJobs: ((focusId?: string) => void) | undefined
+  onWatchJobOutput: ((id: string) => () => void) | undefined
   onOpenFile: ((path: string) => void) | undefined
   onPreviewImage: ((image: TranscriptImage) => void) | undefined
   suppressImageGraphics: boolean
@@ -1595,6 +1646,7 @@ function TranscriptRow({
   streaming,
   thinkingOpen,
   durationMs,
+  reasoningTokens,
   time,
   marginTopOnTurn,
   isSelected,
@@ -1623,6 +1675,8 @@ function TranscriptRow({
   toolResultView,
   toolStartedAt,
   toolDurationMs,
+  toolSourceFolded,
+  turnUsage,
   subagent,
   job,
   jobGroup,
@@ -1630,7 +1684,9 @@ function TranscriptRow({
   onToggleStreamView,
   streamViewToggled,
   onOpenSubagent,
+  onOpenSubagentView,
   onOpenJobs,
+  onWatchJobOutput,
   onOpenFile,
   onPreviewImage,
   suppressImageGraphics,
@@ -1760,7 +1816,7 @@ function TranscriptRow({
               <MessageMetadata timestamp={time} model={model} />
             </Box>
           )}
-          <AssistantTextMessage
+          <AssistantTextLeafRow
             text={stripNarration(displayText)}
             marginTopOnTurn={marginTopOnTurn}
             isSelected={isSelected}
@@ -1777,7 +1833,7 @@ function TranscriptRow({
         (streamViewToggled ? thinkingFold === 'full' : thinkingFold === 'preview')
       return (
         <Box flexDirection="column" ref={ref}>
-          <AssistantThinkingMessage
+          <ThinkingLeafRow
             thinking={text}
             textFull={textFull}
             marginTopOnTurn={marginTopOnTurn}
@@ -1787,6 +1843,7 @@ function TranscriptRow({
             // expandedRows/Ctrl+O; a current-turn row is preview or full.
             verbose={isExpanded || expanded || (turnOpen && !streamPreview)}
             durationMs={durationMs}
+            reasoningTokens={reasoningTokens}
             isSelected={isSelected}
             onClick={turnOpen ? streamViewOnClick : foldOnClick}
           />
@@ -1821,7 +1878,7 @@ function TranscriptRow({
       }
       return (
         <Box flexDirection="column" ref={ref}>
-          <AssistantToolUseMessage
+          <ToolLeafRow
             tool={tool}
             marginTopOnTurn={marginTopOnTurn}
             verbose={isExpanded || expanded}
@@ -1836,8 +1893,11 @@ function TranscriptRow({
             foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}
+            images={images}
+            onPreviewImage={onPreviewImage}
+            suppressImageGraphics={suppressImageGraphics}
+            sourceFolded={toolSourceFolded}
           />
-          {images !== undefined && <TranscriptImages images={images} indent={4} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
         </Box>
       )
     }
@@ -1851,6 +1911,18 @@ function TranscriptRow({
       return (
         <Box marginTop={1} ref={ref}>
           <TurnInterruptedRow />
+        </Box>
+      )
+    case 'turn-summary':
+      // The turn's closing ledger: a quiet RIGHT-aligned
+      // emblem — metadata does not lead the reading flow. No top margin, it
+      // belongs to the block above. width="100%" is what makes flex-end mean
+      // the transcript's right margin (an auto-width row has nothing to push
+      // against).
+      if (turnUsage === undefined) return null
+      return (
+        <Box paddingLeft={2} width="100%" flexDirection="row" justifyContent="flex-end" ref={ref}>
+          <TurnUsageRow usage={turnUsage} />
         </Box>
       )
     case 'local':
@@ -1901,6 +1973,7 @@ function TranscriptRow({
             activityFrames={activityFrames}
             isExpanded={isExpanded}
             onClick={openSubagent}
+            onOpenView={onOpenSubagentView === undefined ? undefined : () => onOpenSubagentView(subagent.agentId, rowId)}
           />
         </Box>
       )
@@ -1930,6 +2003,7 @@ function TranscriptRow({
               rail={jobGroup === undefined ? undefined : { open: jobGroup.head, close: jobGroup.last }}
               // Clicking a card opens the panel focused on THAT job, not the roster head.
               onClick={onOpenJobs === undefined ? undefined : () => onOpenJobs(job.id)}
+              onWatchOutput={onWatchJobOutput}
             />
           )}
         </Box>

@@ -1,0 +1,131 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "notice",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.result",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "session.status",
+    "assistant.message",
+    "session.status",
+    "tool.result",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Use the Bash tool to run `echo fixture-ok`, then use the Bash tool to run `ls /definitely-missing-dir`. Report both outcomes in one short sentence."
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 135
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Bash",
+        "status": "ok",
+        "call": {
+          "card": "terminal",
+          "displayKey": "tool-name-bash",
+          "category": "exec"
+        },
+        "result": {
+          "card": "terminal"
+        },
+        "resultText": "fixture-ok"
+      }
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Bash",
+        "status": "error",
+        "call": {
+          "card": "terminal",
+          "displayKey": "tool-name-bash",
+          "category": "exec"
+        },
+        "result": null,
+        "errorText": "Exit code 2\nls: cannot access '/definitely-missing-dir': No such file or directory"
+      }
+    },
+    {
+      "kind": "assistant",
+      "text": "The first command succeeded and echoed \"fixture-ok\", while the second failed with exit code 2 because the directory doesn't exist."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.024404900000000004,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 18,
+      "output": 291,
+      "cacheRead": 38149,
+      "cacheWrite": 9046
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": [
+      "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    ],
+    "subagents": [],
+    "jobs": []
+  }
+}

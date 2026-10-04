@@ -128,14 +128,19 @@ function waterfallWindow(
  * paints exactly that many glyphs. Both use ink's own `wrapText`/`stringWidth`,
  * so the pre-wrap breaks where the renderer would have broken.
  */
-export function JobCard({ job, marginTopOnTurn, onClick, rail }: {
+export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput }: {
   job: JobRow
   marginTopOnTurn: boolean
   onClick?(): void
   /** Job GROUP member: shared chain rail, optionally rounded at either end. */
   rail?: { open?: boolean; close?: boolean } | undefined
+  /** A backend whose output is read on demand keeps a mounted (on-screen)
+   *  live card's tail fresh while it is watched; returns the unwatch. */
+  onWatchOutput?: (id: string) => () => void
 }): React.ReactNode {
   const settled = job.status === 'completed' || job.status === 'failed' || job.status === 'killed'
+  // Only a live card needs a fresh tail (a settled one folds its waterfall).
+  React.useEffect(() => (settled || onWatchOutput === undefined ? undefined : onWatchOutput(job.id)), [settled, onWatchOutput, job.id])
   // 动画订阅仅限存活卡片：settled 后退订共享 clock（同 SubagentMessage 的
   // 约定）。1s tick 只驱动运行时长跳动——状态标是静态的（见 statusInfo）。
   const [viewportRef] = useAnimationFrame(settled ? null : 1000)

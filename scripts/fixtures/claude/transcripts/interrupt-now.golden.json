@@ -1,0 +1,75 @@
+{
+  "start": {
+    "turn": 2,
+    "seq": 4,
+    "model": "claude-haiku-4-5-20251001"
+  },
+  "compactedFrom": null,
+  "events": [
+    "turn.start:user",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "assistant.message",
+    "step.end",
+    "turn.end:completed",
+    "turn.start:user",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "assistant.message",
+    "step.end",
+    "turn.end:completed",
+    "model.changed"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Count from 1 to 200, one number per line, no other text.",
+      "anchor": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "kind": "assistant",
+      "text": "1\n2\n3",
+      "anchor": "msg_fixture_001"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
+      "kind": "user",
+      "text": "Stop. Reply with exactly: NOW-OK",
+      "anchor": "00000000-0000-4000-8000-000000000020"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "anchor": "msg_fixture_002",
+      "reasoningTokens": 35
+    },
+    {
+      "kind": "assistant",
+      "text": "NOW-OK",
+      "anchor": "msg_fixture_002"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "sessionTitle": "",
+    "tokens": {
+      "input": 20,
+      "output": 50,
+      "cacheRead": 37869,
+      "cacheWrite": 8542
+    },
+    "compaction": null,
+    "notices": []
+  }
+}

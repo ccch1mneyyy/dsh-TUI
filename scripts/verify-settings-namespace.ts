@@ -131,12 +131,13 @@ check('plugin.ts 把解析出的 tuiSettingsNs 传给 createChannel', () => {
   const plugin = source('dsh-adapter/plugin.ts')
   assert.match(
     plugin,
-    /const rawChannel = createChannel\(ctx, agent, \{[\s\S]{0,1200}?settingsNs: tuiSettingsNs,/,
+    /const rawChannel = createChannel\(ctx, startupSession, \{[\s\S]{0,1200}?settingsNs: tuiSettingsNs,/,
     'createChannel 的启动选项必须带上 settingsNs: tuiSettingsNs',
   )
 })
-check('channel.ts 的 getter 查 state.settingsNamespace，不残留字面量比较', () => {
-  const channel = source('dsh-adapter/channel.ts')
+check('channel/extensions.ts 的 getter 查 state.settingsNamespace，不残留字面量比较', () => {
+  // Phase 4a：autoRecapOnOpen 随 DSH 扩展迁入 channel/extensions.ts。
+  const channel = source('dsh-adapter/channel/extensions.ts')
   assert.match(channel, /find\(entry => entry\.ns === state\.settingsNamespace\)/)
   assert.doesNotMatch(channel, /entry\.ns === 'dsh-tui'/, '读点不得回退到字面量 ns')
 })

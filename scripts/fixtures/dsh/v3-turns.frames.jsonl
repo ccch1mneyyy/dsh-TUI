@@ -1,0 +1,14 @@
+{"type":"start","attemptId":"attempt-a","revision":1,"turn":5,"step":1}
+{"type":"chunk","attemptId":"attempt-a","revision":2,"index":0,"time":1767618060860,"chunk":{"type":"reasoning-delta","index":0,"text":"Considering frames"}}
+{"type":"chunk","attemptId":"attempt-a","revision":3,"index":1,"time":1767618060900,"chunk":{"type":"text-delta","index":1,"text":"Draft that will be abandoned"}}
+{"type":"end","attemptId":"attempt-a","revision":4,"index":2,"outcome":{"kind":"abandoned"}}
+{"type":"start","attemptId":"attempt-b","revision":5,"turn":5,"step":1}
+{"type":"chunk","attemptId":"attempt-b","revision":6,"index":0,"time":1767618061060,"chunk":{"type":"text-delta","index":0,"text":"Retry text recorded as an attempt"}}
+{"type":"end","attemptId":"attempt-b","revision":7,"index":1,"outcome":{"kind":"committed","eventType":"assistant/attempt","seq":42}}
+{"type":"start","attemptId":"attempt-c","revision":8,"turn":5,"step":1}
+{"type":"chunk","attemptId":"attempt-c","revision":9,"index":0,"time":1767618061260,"chunk":{"type":"reasoning-delta","index":0,"text":"Frames carry revisions."}}
+{"type":"chunk","attemptId":"attempt-c","revision":10,"index":1,"time":1767618061360,"chunk":{"type":"text-delta","index":1,"text":"Each frame has"}}
+{"type":"chunk","attemptId":"attempt-c","revision":10,"index":1,"time":1767618061360,"chunk":{"type":"text-delta","index":1,"text":"Each frame has"}}
+{"type":"chunk","attemptId":"attempt-x","revision":11,"index":0,"time":1767618061410,"chunk":{"type":"text-delta","index":0,"text":"stray"}}
+{"type":"chunk","attemptId":"attempt-c","revision":12,"index":2,"time":1767618062160,"chunk":{"type":"text-delta","index":1,"text":" a revision."}}
+{"type":"chunk","attemptId":"attempt-c","revision":13,"index":3,"time":1767618062260,"chunk":{"type":"tool-call-delta","index":2,"id":"call_frame_1","name":"read_file","argumentsDelta":"{\"path\":"}}

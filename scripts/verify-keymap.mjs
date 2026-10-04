@@ -290,9 +290,22 @@ const promptText = (view = screen()) => {
   // matches and every draft reads as empty. The EMPTY prompt renders box-drawing
   // decoration on the same row and the row ends with the ⛶ expand-editor
   // affordance — strip those before comparing content, along with the ⌸ itself.
-  const match = view.match(/^\s*⌸?\s*[❯]\s*(.*)$/m)
-  const raw = match === null ? '' : (match[1] ?? '')
-  return raw.replace(/[╭╮╰╯─│═║⛶⌸]+/g, '').trim()
+  //
+  // Multi-row drafts (a pasted multi-line block) keep their content on the
+  // rows BELOW the ❯ caret row — and the ambient clipboard can even start
+  // with a newline, leaving the ❯ row visually empty. Read the whole input
+  // box, from the ❯ row down to its bottom border, so a paste is observable
+  // wherever its first newline lands (the old single-row regex read the
+  // empty ❯ row as "" and the paste checks went red on such clipboards).
+  const lines = view.split('\n')
+  const start = lines.findIndex(line => /^\s*⌸?\s*[❯]/.test(line))
+  if (start === -1) return ''
+  const rows = []
+  for (let i = start; i < lines.length; i++) {
+    if (i > start && /^\s*[╰└]/.test(lines[i])) break
+    rows.push(lines[i])
+  }
+  return rows.join(' ').replace(/[❯⌸⛶╭╮╰╯─│═║]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
 const clipboardNotice = () => notifications.some(n => /clipboard|剪贴板/i.test(String(n.text)))
 

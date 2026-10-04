@@ -1,0 +1,149 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "notice",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.result",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "assistant.message",
+    "tool.result",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "In ONE response, call the Read tool twice in parallel (two tool_use blocks in the same message): README.md and src/app.js. Then tell me the first line of each i…"
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (94%) — resets in 1d 0h"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 258
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Read",
+        "status": "ok",
+        "call": {
+          "card": "generic",
+          "displayKey": "tool-name-read",
+          "category": "other"
+        },
+        "result": {
+          "card": "read"
+        },
+        "resultText": "1 # Fixture project 2 3 A tiny project for recording Claude SDK fixtures. 4"
+      }
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Read",
+        "status": "ok",
+        "call": {
+          "card": "generic",
+          "displayKey": "tool-name-read",
+          "category": "other"
+        },
+        "result": {
+          "card": "read"
+        },
+        "resultText": "1 export function greet(name) { 2 return `hello ${name}` 3 } 4"
+      }
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 132
+    },
+    {
+      "kind": "assistant",
+      "text": "README.md starts with \"# Fixture project\" and src/app.js starts with \"export function greet(name) {\"."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.025816900000000004,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 18,
+      "output": 568,
+      "cacheRead": 37899,
+      "cacheWrite": 9074
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": [
+      "Approaching the 7d usage limit (94%) — resets in 1d 0h"
+    ],
+    "subagents": [],
+    "jobs": []
+  }
+}

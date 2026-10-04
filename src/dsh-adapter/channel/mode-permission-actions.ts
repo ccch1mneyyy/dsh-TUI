@@ -5,13 +5,13 @@ import { assertShadowPolicy } from '../../adapter/kernel/runtime.js'
 import { t } from '../../i18n.js'
 import { modeDisplayName, type SessionModeSpec } from '../../sessionModes.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
-import type { createChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 import { createModeActions, reportModeSwitchFailure } from './mode-actions.js'
 import { createPermissionIdentity, foldPermissionPreset, type PermissionIdentity } from './mode-permission.js'
 import type { PermissionModeRoster } from './mode-roster.js'
 import type { ChannelState } from './types.js'
 
-type Binding = ReturnType<typeof createChannelBinding>
+type Binding = DshChannelBinding
 type ModeState = Pick<ChannelState, 'mode' | 'modeIndex' | 'emit'>
 type ModeCapture = ReturnType<Binding['capture']>
 /** The composition seam `createModeActions` owns; this factory forwards every

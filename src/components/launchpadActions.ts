@@ -1,11 +1,13 @@
 import { stringWidth } from '../ink/stringWidth.js'
+import { kernelDisplayName } from './kernelCatalog.js'
 
 /**
  * 落地页的一个动作入口（第四版：状态驱动的"下一步建议"）。
  *
- * 动作仍然全部走**既有命令名**（第七版表：continue / home / settings /
- * jobs / update / star / help）——这一屏不新增行为，它只是把"当前状态下
- * 最可能的下一步"摆到台面上。知道了名字，键盘用户直接敲；鼠标用户点一下，
+ * 动作走命令名（第七版表 + 内核入口：continue / home / settings / backend
+ * / jobs / update / star / help）——除 backend 外全部是既有命令；backend 打开
+ * 内核选择器（选择器渲染与 runCommand 处理在 Chat 侧）。它把"当前状态下最
+ * 可能的下一步"摆到台面上。知道了名字，键盘用户直接敲；鼠标用户点一下，
  * 两条路落到同一个 `runCommand`。
  */
 export interface LaunchpadAction {
@@ -41,6 +43,9 @@ export interface LaunchpadActionState {
   readonly updateAvailable: boolean
   /** 用量到档且从未 star（条件位③）。 */
   readonly starDue: boolean
+  /** 当前内核（channel.backendCapabilities.backendId）；缺省 = 未知，内核
+   *  入口用不带名的短标签。 */
+  readonly backendId?: string | undefined
 }
 
 /** Continue 标题的截断上限（显示宽度，含截断省略号）。 */
@@ -87,6 +92,18 @@ const SETTINGS: LaunchpadAction = {
   labelKey: 'launchpad-action-settings',
   command: 'settings',
 }
+/**
+ * 内核（第四格，固定入口）：打开内核选择器。当前内核已知时带名
+ * （「内核 · Claude」），未知（接线前）用短标签——kernelCatalog 的
+ * displayName 是品牌名的唯一来源。
+ */
+const BACKEND: LaunchpadAction = {
+  id: 'backend',
+  labelKey: 'launchpad-action-backend',
+  // 命令名 = /kernel（LOCAL_COMMANDS 的登记名，requirement 'any'）：入口、
+  // 手敲命令与 Chat 的 case 'kernel' 三条路同一个名字，不给第二个别名。
+  command: 'kernel',
+}
 /** 条件位①：有后台任务在跑。 */
 const JOBS: LaunchpadAction = {
   id: 'jobs',
@@ -115,13 +132,16 @@ const HELP: LaunchpadAction = {
 /**
  * 落地页第七版的核心纯函数：按状态快照决定入口行放什么。
  *
- * 版面（用户拍板的四格；第一格条件性缺席）：
+ * 版面（用户拍板的四格 + 内核入口；第一格条件性缺席，最多五格）：
  *
  *   1. `继续「<标题>」` —— 有可继续会话才画（无历史不放假动作）；
  *      快捷键 Alt+R（keymap 的 `continue` 动作，见 utils/keymap.ts）。
  *   2. `会话与工作区` —— 历史会话 + 工作区合并入口；命令用既有 `home`。
  *   3. `设置` —— /settings。
- *   4. 条件位，**按优先级取第一个成立者**（同时成立时高优先级胜出，
+ *   4. `内核` —— 打开内核选择器（backendId 已知时「内核 · Claude」；选择
+ *      器本体在 Chat 侧渲染）。窄屏装不下时它排在条件位**之后**被裁——
+ *      fitChips 整条取舍，条件位先让位。
+ *   5. 条件位，**按优先级取第一个成立者**（同时成立时高优先级胜出，
  *      回归按这张优先级表驱动）：
  *        ① jobsRunning → `后台任务`（/jobs）
  *        ② updateAvailable → `有新版本`（/update，走既有更新路径）
@@ -131,7 +151,7 @@ const HELP: LaunchpadAction = {
  * 第六版的 doctor 入口已删（第七版）：它的输出属于转录区，天然把人带进
  * 对话页，不适合留在"Esc 必须回启动页"的这一屏；首启/配置问题专属按钮
  * 也随之退役——首启由引导向导（盖在落地页之上）承担，provider 配置经
- * 向导或 /settings 可达。输出恒 ≤4 条。
+ * 向导或 /settings 可达。输出恒 ≤5 条。
  *
  * 纯函数：不改入参、不读环境、同样输入恒同样输出——表驱动回归钉死每个状态。
  */
@@ -143,14 +163,20 @@ export function resolveLaunchpadActions(state: LaunchpadActionState): readonly L
       : state.starDue
         ? STAR
         : HELP
+  // 内核入口：当前内核已知 → 带名（「内核 · Claude」）；未知（Chat 侧接线
+  // 前）→ 短标签。显示名走 kernelCatalog，与选择器和重启通知同源。
+  const backend = state.backendId === undefined
+    ? BACKEND
+    : { ...BACKEND, labelKey: 'launchpad-action-backend-named', values: { name: kernelDisplayName(state.backendId) } }
   const title = truncateContinueTitle(state.lastSessionTitle ?? '')
   if (title !== '') {
     return [
       { ...CONTINUE, labelKey: 'launchpad-action-continue-titled', values: { title } },
       SESSIONS_WORKSPACE,
       SETTINGS,
+      backend,
       conditional,
     ]
   }
-  return [SESSIONS_WORKSPACE, SETTINGS, conditional]
+  return [SESSIONS_WORKSPACE, SETTINGS, backend, conditional]
 }

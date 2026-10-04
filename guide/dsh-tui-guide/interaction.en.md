@@ -16,7 +16,7 @@
 | `Ctrl+V` / `Alt+V` | Insert clipboard text or files; images are sent as durable attachments. Use `Alt+V` when the terminal intercepts `Ctrl+V` |
 | `Ctrl+G` | Edit the current input in an external editor (`$VISUAL` → `$EDITOR`); saving and quitting fills it back, `:cq`/non-zero exit keeps the draft; with neither variable set the TUI asks you to configure one (no `vi` fallback) |
 | `Ctrl+Shift+E` | Expand the fullscreen draft editor (or click the `⛶` affordance at the end of the input row): line numbers + current-line highlight + live line/char stats<br>`Enter` inserts a newline, `Ctrl+Enter` or the Send button sends, `Esc` or the Collapse button keeps the draft and returns<br>wheel-scrolls freely; click/drag/double-click selection work as in the inline prompt; remappable via `/settings` |
-| `Esc` | Ladder: close help → close the image preview → close the command menu → close the file menu (only the current `@` token)<br>→ **with a selection in the prompt input: only clear it (text untouched)** → interrupt the turn and redeliver pending messages → clear non-empty input → double-tap on empty input = rewind<br>in fullscreen, an active mouse selection is cleared first (not copied) |
+| `Esc` | Ladder: close help → close the image preview → close the command menu → close the file menu (only the current `@` token)<br>→ **with a selection in the prompt input: only clear it (text untouched)** → with the held-queue selector open: only leave the selector → interrupt the turn and hold the queued messages (no automatic re-send, see "Message delivery semantics") → clear non-empty input → double-tap on empty input = rewind<br>in fullscreen, an active mouse selection is cleared first (not copied) |
 | `Ctrl+Z` | Undo the prompt draft's last word-level edit (text, caret and images together). Draft-only: a submit, a history recall (`Ctrl+R`/`↑`) or a session switch ends the history; it is NOT the message/conversation rewind behind `Esc Esc`. Remappable via `/settings` |
 | `Esc` / `Ctrl+C` / `Enter` while an image preview is open | Close the preview and restore the surface underneath; other keys are not passed through |
 | `Left` / `Right` in the image modal | Previous / next image, no wrapping; caret peeks keep arrows with the prompt |
@@ -98,9 +98,10 @@ results back to the chat screen and add no new behavior.
   (`Esc` closes it back onto the launchpad), the picked value updates the row in place and the typed draft
   is untouched; clicking inside the picker selects, **clicking elsewhere closes it and clicking another
   segment switches to that picker**.
-- **Entry row (v7, four slots)**: `Continue "…"` (Alt+R; the slot is absent when there is nothing to
-  continue) · `Sessions & workspaces` (`/home` — history and workspaces merged into one entry) ·
-  `Settings` (`/settings`) · a **conditional slot** (priority: background jobs running → `Background
+- **Entry row**: `Continue "…"` (Alt+R; the slot is absent when
+  there is nothing to continue) · `Sessions & workspaces` (`/home` — history and workspaces merged into
+  one entry) · `Settings` (`/settings`) · `Kernel · <current kernel>` (`/kernel`, opens the kernel
+  picker, see the commands section) · a **conditional slot** (priority: background jobs running → `Background
   jobs`; update detected → `Update available`; usage milestone reached and never starred → `Feed us a
   star`; fallback `Help`). Full screens opened from the launchpad (sessions & workspaces / settings /
   background jobs / the family tree / the wizard) render **above the launchpad** — `Esc` closes them
@@ -110,15 +111,18 @@ results back to the chat screen and add no new behavior.
   glyphs never bleed through), yet no background color is emitted (no white block; Kitty splash
   art still shows through the terminal-default cells; the chat page's pickers are unaffected).
 - **Tips line**: click to rotate (three tips cycle; the first-run tip has top priority and never rotates);
-  keyboard path = focus ring + `Enter`; as of v7 it also **auto-rotates** (~10s per tip; a manual
+  keyboard path = focus ring + `Enter`; it also **auto-rotates** (~10s per tip; a manual
   rotate resets the timer) — the switch changes only the text, never the row height or centering.
-- **Corner plates (v7)**: the bottom-left working directory is **clickable** — it opens the existing
+- **Corner plates**: the bottom-left working directory is **clickable** — it opens the existing
   `/workspace` menu (rendered above the launchpad; `Esc` returns to the launchpad), keyboard path =
-  the focus ring's last slot + `Enter`, hover/focus = text highlight; the bottom-right plate shows
-  **two versions stacked vertically**: `dsh-tui v<TUI>` on the first row, `dsh-core v<kernel>` on
-  the second (the kernel version is read from the host/kernel package manifests; only the TUI row
-  is drawn when neither resolves), both right-aligned with the cwd plate top-aligned to the first
-  row, truncated per the existing truncate-middle contract on narrow terminals.
+  the focus ring's last slot + `Enter`, hover/focus = text highlight; the bottom-right plate starts
+  with `dsh-tui v<TUI>`, followed by one row for each of the two kernels:
+  `▸ DSH · dsh-core v<kernel>` / `Claude · claude-code v<CLI>`. `▸` marks the current kernel and the
+  other row stays dim; an unavailable kernel adds the reason after its version (such as *Not installed*
+  or *Not signed in*), a row whose version cannot be read shows just the name, and *Checking…* shows
+  while the probe runs. The whole block is clickable and opens the same kernel picker (keyboard path =
+  focus ring + `Enter`). Rows are right-aligned, the cwd plate is top-aligned to the first row, and
+  narrow terminals truncate per the existing truncate-middle contract.
 - **Wizard**: `←`/`→` change step (except the effort slider in step 3 and a drilled-in model list, where the
   horizontal keys belong to the child control), `Tab` switches between the language/theme and
   model/effort/workspace panes, `↑`/`↓` move the selection; `Enter` runs the step (step 1 = re-check
@@ -284,7 +288,25 @@ While the model is working, three paths have different placement:
 
 - Undelivered messages appear above the editor.
 - `Alt/Option+Up` retrieves the latest one.
-- Pressing `Esc` while pending messages exist interrupts and redelivers them immediately.
+- Pressing `Esc` while the model works interrupts the turn and holds the queued
+  messages above the input instead of re-sending them; the hint row reads
+  `Press ↑ to edit queued messages, ⏎ to send now`. DSH and Claude behave the same.
+  - With messages held and idle, `↑` on an empty input opens the queued-message
+    selector: `↑`/`↓` move, `⏎` takes the selected message back into the input
+    for editing, `Esc` leaves the selector. You can also click a held message
+    (takes it back for editing; with a draft in the input the two swap, and
+    `Ctrl+Z` swaps them back) or click the hint row (sends everything).
+  - `⏎` on an empty input sends all held messages in order, exactly once; with a
+    draft in the input `⏎` sends only the draft and the held messages stay, so
+    they are never bundled with it.
+  - `Ctrl+Enter` (with a draft) interrupts the turn and sends the held messages together
+    with the draft right away.
+  - When a turn ends normally, queued messages still flow into the next turn;
+    `Ctrl+C` keeps the queue.
+  - Only messages the backend confirmed as withdrawn are held. With an older
+    Claude CLI that cannot withdraw them, or when the withdrawal request fails,
+    the backend still runs them next turn; dsh-TUI stops holding them, says so,
+    and never sends them twice.
 
 ## Session workflows
 
@@ -462,6 +484,79 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 
 See [Configuration](configuration.en.md#agent-presets).
 
+### Channel profiles (/channel, Claude only)
+
+Relay channels often route a request to a different model while keeping a Claude
+tier name (such as Opus 5.5 (1M)). A channel profile records each channel's model
+mappings and connection, in `~/.dsh-tui/backends/claude/channels.json`:
+
+```json
+{
+  "active": "zhipu",
+  "channels": [
+    {
+      "id": "zhipu",
+      "name": "Zhipu",
+      "baseUrl": "https://open.bigmodel.cn/api/anthropic",
+      "tokenRef": "CHANNEL_ZHIPU_TOKEN",
+      "models": { "claude-opus-5-5[1m]": "glm-5.3[1M]" },
+      "tiers": { "opus": "glm-5.3[1M]", "haiku": "glm-5.3-flash" }
+    }
+  ]
+}
+```
+
+- `models` is an exact map: exact match first, then a match that strips the `[1m]`
+  suffix and ignores case. `tiers` matches tier keywords (`haiku`/`opus`/`sonnet`/
+  `fable`); the reserved `default` matches every other model (like
+  `ANTHROPIC_MODEL`). Both fields are optional.
+- The `id` is derived from `name` (lowercase, non-alphanumerics folded into `-`);
+  importing again updates the channel with the same id.
+- The model name shown is taken in this order: the active channel's `models` > its
+  `tiers` > the legacy `model-names.json` > the tier variables in the Claude
+  settings `env` > the raw id. Without an active channel it is as if the file did
+  not exist.
+- `baseUrl`, `tokenRef` and a channel-private `env` are the connection; all are
+  optional. The active channel decides where the session connects and outranks the
+  dsh-auth subscription sign-in. The token is stored in `~/.dsh/.credentials.yaml`
+  (0600, the same credential store `/provider` uses, referenced as
+  `CHANNEL_<ID>_TOKEN` by default); `channels.json` keeps only the reference, never
+  the token.
+- The connection reaches the CLI twice: in the child environment and through the
+  SDK `settings` option (the CLI's `--settings` layer, which outranks the `env` of
+  `~/.claude/settings.json`, so values a tool such as cc-switch wrote there cannot
+  override the channel). `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` issued for a
+  different endpoint are never carried to the new host.
+
+`/channel` opens the picker, in this order:
+
+- The channels (the active one ticked, the sub-row shows the mapping counts).
+  `Enter` switches the active channel. Between channels with the same connection
+  the switch is in place and the footer and `/model` names refresh at once; a
+  different connection restarts into a new session (a running CLI cannot change
+  its connection).
+- *Import from settings.json*: names the channel after the `ANTHROPIC_BASE_URL`
+  host, takes `ANTHROPIC_DEFAULT_{HAIKU,OPUS,SONNET,FABLE}_MODEL` and
+  `ANTHROPIC_MODEL` as `tiers` (exact `models` are never guessed), and takes the
+  `baseUrl` and `ANTHROPIC_AUTH_TOKEN` too (the token goes to the credential store
+  as above). Importing again updates the same-id channel and keeps hand-written
+  `models`.
+- *Add a channel* and *Manage channels*: open the same question panel `/provider`
+  uses. Adding asks for the name, base URL, token (input hidden), mapping source
+  (take the tiers from the settings or skip) and whether to switch now; managing
+  edits the base URL or token, refreshes the mappings from the settings, or deletes
+  the channel along with its stored token.
+- *View mappings*: prints the active channel's `models` and `tiers` as a local
+  transcript block. To edit single entries, edit `channels.json`; the display
+  follows the order above live.
+
+A corrupt file reads as empty, a failed write only reaches the debug log, and
+writes go through a same-directory temporary file and an atomic rename. dsh-tui
+never edits `~/.claude/settings.json`; when its `ANTHROPIC_BASE_URL` or credentials
+conflict with the active channel, the session start shows one notice that this
+session connects per the channel profile. The command appears only in Claude
+sessions.
+
 ### Workspaces
 
 - `/workspace resume` opens the workspace picker.
@@ -627,6 +722,10 @@ owns the keyboard (when a questionnaire is also pending, approval takes priority
 
 The protocol offers only "allow once / deny" — there is **no "always allow"**.
 
+On the Claude backend the approval comes from the CLI: it adds *allow always*
+when the CLI suggests a rule, and with the focus on the reject row you can type a
+reason; see [Claude backend](claude-backend.en.md#approvals-and-questions).
+
 ## Slash commands
 
 The command menu merges local commands with the DSH command registry. Type `/` to inspect the complete surface available in the current composition.
@@ -659,8 +758,9 @@ The command menu merges local commands with the DSH command registry. Type `/` t
 
 **Model and display**
 
-- `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/color` —
-  session accent color: bare opens the palette picker, `<name>` sets directly, `status`/`reset`;
+- `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`.
+- `/channel` — the channel-profile picker (Claude backend only; see the Channel profiles section).
+- `/color` — session accent color: bare opens the palette picker, `<name>` sets directly, `status`/`reset`;
   input border + session-name chip at the top-right, per-session; chip off by default, enable
   in `/settings`.
 - `/panel` — side panel: toggle / focus / zoom / switch panels (subcommands in the user guide §2.8).
@@ -679,6 +779,16 @@ The command menu merges local commands with the DSH command registry. Type `/` t
 
 - `/update`, `/vim` — vim editing mode toggle, see "Editing keys".
 - `/terminal-setup`, `/connect`, `/help`, `/exit` — aliases `/quit`, `/q`.
+- `/kernel` — opens the kernel picker (the current kernel is ticked; every row
+  carries a version and a one-line explanation), on DSH and Claude sessions alike.
+  Picking the other kernel remembers it and restarts into it with a new session;
+  the old session stays in `/resume`, and if the new session fails to start you
+  are back on the old one. A running turn blocks the switch. The launchpad's
+  Kernel entry and its bottom-right kernel block open the same picker. When
+  `--backend` or the config row names a kernel, this restart follows your pick but
+  a later direct launch follows the flag. A fresh launch lands on the launchpad
+  whichever kernel is remembered; a launch with a resume target goes straight
+  into the session.
 
 **Registry**
 
@@ -717,6 +827,22 @@ Additional forms:
   available, it fails loudly instead of sending the input to the model.
 - Exiting plan mode restores the pre-plan atoms first, then the durable preset you were on before plan mode (while the registry still offers it).
 - When the registry service is absent, TUI uses its legacy three-row compatibility roster; a mounted but broken service is unavailable and fails closed.
+- Non-DSH backends (Claude) that declare native permission modes answer
+  `/permission` with that backend's own modes: `default` (ask before each risky
+  action), `acceptEdits` (auto-accept file edits), `plan` (read-only planning),
+  `bypassPermissions` (skip every permission check), plus `auto` where the model
+  supports it, each with a one-line explanation. `bypassPermissions` can only be
+  picked explicitly here; the `Shift+Tab` cycle default → acceptEdits → plan
+  (→ auto) never reaches it. The footer always shows the current mode
+  (`bypassPermissions`/`dontAsk` in the warning colour), except under Minimal UI.
+  A Claude settings file with `defaultMode: bypassPermissions` is downgraded to
+  `default` with a transcript notice, so a cloned repository cannot silently turn
+  every prompt off.
+- The `/permission` pick is saved to `~/.dsh-tui/backends/claude/prefs.json` (the
+  same file as the model and effort picks) and later sessions start on it.
+  Precedence: the `DSH_TUI_CLAUDE_PERMISSION_MODE` environment variable > the
+  remembered pick > Claude settings > `default`. Starting in `bypassPermissions`
+  from the remembered pick is announced in the transcript.
 - `/lang` toggles the interface language (see "Interface language").
 - `/compact` compresses the session history; unavailable under the kernel Minimal agent preset (`minimal`, a single persistent-shell tool), which mounts no compaction and does not prune tool results — a long session can hit the context limit and oversized tool output stays in full (Help and `/` completion mark the entry, and entering the preset says so once) — unrelated to the display-side Minimal UI switch.
 - `/thinking` toggles extended reasoning display; UI state only — **not persisted**.

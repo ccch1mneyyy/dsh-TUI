@@ -1,42 +1,34 @@
+/**
+ * BtwPanelFallback：btw 侧栏面板未启用时的 /btw 浮层。同一问答只在一处
+ * 呈现，Chat 只在面板未启用时挂它。
+ *
+ * 内容是当前 session 的 btw 线程（只读：无 composer、无 attach）。键位：
+ * Esc/Enter/Space 关闭（关闭即中止在途的一轮，由 Chat 接线）、↑/↓ 滚动、
+ * c 复制；浮层打开时吞掉其余所有键。底部提示如何启用 btw 面板，不替用户
+ * 改面板列表。
+ */
 import React from 'react'
-import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize } from '../ui.js'
-import { Markdown } from './Markdown.js'
-import { SpinnerGlyph } from './Spinner/SpinnerGlyph.js'
+import { Box, Text, useInput, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import { t } from '../i18n.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
+import { BtwThreadView } from './sidePanel/btw/BtwThreadView.js'
+import type { BtwThreadSnapshot } from './sidePanel/btw/threads.js'
 
-/**
- * /btw side-question panel, an inline-pane form like the local pickers:
- * title line with the question, a scrollable answer body (error /
- * markdown answer / answering spinner), and a hint line. Owns the keyboard
- * while open — every key it sees is consumed here.
- */
-export function BtwPanel({
-  question,
-  answer,
-  error,
-  streaming,
+export function BtwPanelFallback({
+  thread,
   onClose,
   onCopy,
 }: {
-  question: string
-  answer: string
-  error?: string
-  streaming: boolean
-  onClose: () => void
-  onCopy: () => void
+  readonly thread: BtwThreadSnapshot | undefined
+  readonly onClose: () => void
+  readonly onCopy: (answer: string) => void
 }): React.ReactNode {
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
-  const { rows } = useTerminalSize()
-  // Spinner frame (80ms cadence, only while waiting for the first text).
-  const [frame, setFrame] = React.useState(0)
-  React.useEffect(() => {
-    if (!streaming || answer !== '') return
-    const interval = setInterval(() => setFrame(f => f + 1), 80)
-    return () => clearInterval(interval)
-  }, [streaming, answer])
+  const { rows, columns } = useTerminalSize()
 
   useInput((input, key, event) => {
+    // A pasted chunk can carry the return flag; it must not close the
+    // overlay (closing aborts the side question in flight).
     if (key.escape || isPlainReturnInput(input, key) || input === ' ') {
       event.stopImmediatePropagation()
       onClose()
@@ -49,43 +41,46 @@ export function BtwPanel({
     }
     if (input === 'c' && !key.ctrl) {
       event.stopImmediatePropagation()
-      onCopy()
+      const latest = latestAnswer(thread)
+      if (latest !== '') onCopy(latest)
       return
     }
-    // The overlay owns the keyboard while open: swallow everything else so
-    // nothing leaks into the prompt input behind it.
+    // 浮层拥有键盘：吞掉其余一切，不泄漏进身后的输入框。
     event.stopImmediatePropagation()
   })
 
-  const settled = answer !== '' || error !== undefined
   return (
     <Box flexDirection="column">
-      <Text>
-        <Text color="warning" bold>/btw </Text>
-        <Text dimColor>{question}</Text>
-      </Text>
       <Box flexDirection="column" maxHeight={Math.max(5, rows - 8)}>
-        <Box marginLeft={2} flexDirection="column" flexGrow={1}>
-          <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
-            {error !== undefined ? (
-              <Text color="error">{error}</Text>
-            ) : answer !== '' ? (
-              <Markdown cacheTokens={false}>{answer}</Markdown>
-            ) : (
-              <Box>
-                <SpinnerGlyph frame={frame} messageColor="warning" />
-                <Text color="warning"> {t('btw-answering')}</Text>
-              </Box>
-            )}
-          </ScrollBox>
-        </Box>
+        <BtwThreadView
+          thread={thread}
+          width={columns}
+          height={Math.max(5, rows - 10)}
+          alive
+          scrollHandleRef={scrollRef}
+        />
       </Box>
-      {/* 提示行可点击复制（与 c 键同路径，审计 C-19） */}
-      <Box onClick={settled ? onCopy : undefined}>
+      <Box onClick={settled(thread) ? () => { const latest = latestAnswer(thread); if (latest !== '') onCopy(latest) } : undefined}>
         <Text dimColor>
-          {settled ? t('btw-hint-done') : streaming ? t('btw-hint-loading') : t('btw-hint-done')}
+          {settled(thread) ? t('btw-hint-done') : t('btw-hint-loading')}
+          {'  ·  '}
+          {t('btw-panel-unavailable')}
         </Text>
       </Box>
     </Box>
   )
+}
+
+function latestAnswer(thread: BtwThreadSnapshot | undefined): string {
+  if (thread === undefined) return ''
+  for (let index = thread.turns.length - 1; index >= 0; index -= 1) {
+    const turn = thread.turns[index]!
+    if (turn.answer !== '') return turn.answer
+  }
+  return ''
+}
+
+function settled(thread: BtwThreadSnapshot | undefined): boolean {
+  const active = thread?.turns.find(turn => turn.turnId === thread.activeTurnId)
+  return thread === undefined || active === undefined || active.answer !== '' || active.phase === 'failed'
 }

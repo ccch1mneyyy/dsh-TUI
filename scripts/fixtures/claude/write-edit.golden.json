@@ -1,0 +1,186 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "notice",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "assistant.message",
+    "tool.result",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "assistant.message",
+    "tool.result",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Use the Write tool to create notes.txt containing exactly the line: alpha. Then use the Edit tool to change alpha to beta. Reply done."
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 679
+    },
+    {
+      "kind": "assistant",
+      "text": "I'll create the notes.txt file and then edit it."
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Write",
+        "status": "ok",
+        "call": {
+          "card": "diff",
+          "displayKey": "tool-name-write",
+          "category": "mutate"
+        },
+        "result": {
+          "card": "diff"
+        },
+        "resultText": "File created successfully at: /fixture/project/notes.txt (file state is current in your context — no need to Read it bac"
+      }
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 131
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Edit",
+        "status": "ok",
+        "call": {
+          "card": "diff",
+          "displayKey": "tool-name-edit",
+          "category": "mutate"
+        },
+        "result": {
+          "card": "diff"
+        },
+        "resultText": "The file /fixture/project/notes.txt has been updated successfully. (file state is current in your context — no need to R"
+      }
+    },
+    {
+      "kind": "assistant",
+      "text": "Done."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.031805799999999995,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 26,
+      "output": 1037,
+      "cacheRead": 62408,
+      "cacheWrite": 9681
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": [
+      "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    ],
+    "subagents": [],
+    "jobs": []
+  }
+}

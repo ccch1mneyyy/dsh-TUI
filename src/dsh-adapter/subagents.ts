@@ -69,6 +69,7 @@ export class SubagentActivityStore {
         output: [],
         outputEvents: [],
         toolCalls: [],
+        ...(info.parentAgentId === undefined ? {} : { parentAgentId: info.parentAgentId }),
       })
       this.notify()
       return
@@ -96,11 +97,15 @@ export class SubagentActivityStore {
       existing.local = info.local ?? existing.local
       existing.provider = provider
       existing.model = model ?? existing.model
+      // A late parent fact heals an unknown one; never rewrites a known
+      // parent (the same once-only rule the channel store applies).
+      if (info.parentAgentId !== undefined && existing.parentAgentId === undefined) existing.parentAgentId = info.parentAgentId
     } else {
       existing.provider = provider
       existing.model = model ?? existing.model
       if (info.description !== undefined) existing.description = info.description
       if (info.local !== undefined) existing.local = info.local
+      if (info.parentAgentId !== undefined && existing.parentAgentId === undefined) existing.parentAgentId = info.parentAgentId
     }
     this.notify()
   }

@@ -12,7 +12,8 @@
  * The scene renders the returned sections without knowing what an event is.
  */
 
-import { asRawEvents, readRetry, type RawTrajEvent } from './guards.js'
+import { t } from '../../i18n.js'
+import { asRawEvents, readApprovalAsked, readRetry, type RawTrajEvent } from './guards.js'
 import type { TrajNode } from './types.js'
 
 
@@ -31,6 +32,13 @@ export interface InspectDetail {
   /** Short `key value` facts rendered on the header line. */
   readonly facts: readonly string[]
   readonly sections: readonly InspectSection[]
+  /**
+   * True when the row's owning event could not be re-read from the log (a
+   * compacted-away bracket, a pruned lane): the header facts above still
+   * stand, but the full content is shown as unavailable
+   * (`trajectory-inspect-unavailable`) rather than silently blank.
+   */
+  readonly unresolved?: boolean
 }
 
 /** Binary search for an event by seq; the log is seq-monotonic. */
@@ -72,6 +80,30 @@ function allText(content: unknown): string {
 }
 
 /**
+ * The answer text of the ask-tool result paired with a question's `callId`.
+ *
+ * A settled questionnaire reports only its `requestId`; the answer the user
+ * picked lands as the ask tool's own result, found by one backwards scan;
+ * absence stays absence.
+ */
+function pairedResultText(events: readonly RawTrajEvent[], callId: string): string | undefined {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]!
+    if (event.type !== 'tool/result') continue
+    const message = (event.data as Record<string, unknown> | undefined)?.message
+    const source =
+      typeof message === 'object' && message !== null
+        ? (message as Record<string, unknown>).source
+        : undefined
+    if (typeof source !== 'object' || source === null) continue
+    if ((source as Record<string, unknown>).callId !== callId) continue
+    const body = allText((message as Record<string, unknown>).content)
+    return body === '' ? undefined : body
+  }
+  return undefined
+}
+
+/**
  * Resolve the full detail for one ledger row.
  *
  * @param node - The focused row.
@@ -91,6 +123,13 @@ export function inspectNode(node: TrajNode, events: readonly RawTrajEvent[]): In
   if (node.tokens !== undefined) {
     const { input, output, think, cacheRead } = node.tokens
     facts.push(`in ${input} · out ${output}${think > 0 ? ` · think ${think}` : ''}${cacheRead > 0 ? ` · cache ${cacheRead}` : ''}`)
+  }
+  // The neutral AgentEvent source stamps rows whose envelope
+  // time came from the trace clock rather than the backend: "this is when
+  // we saw it", not "this is when it happened". DSH events never carry the
+  // stamp, so their facts are unchanged.
+  if ((data as Record<string, unknown> | undefined)?.observed === true) {
+    facts.push(t('trajectory-time-observed'))
   }
 
   const sections: InspectSection[] = []
@@ -134,9 +173,38 @@ export function inspectNode(node: TrajNode, events: readonly RawTrajEvent[]): In
     }
 
     case 'approval': {
+      // 审批/问卷的等待时长在表头右侧（已结束）或检视器的 live 行（等待
+      // 中）呈现；这里补上响应与来源。settled 事件只带 outcome，来源与
+      // 可选项只在 asked 载荷里。
       if (node.detail !== undefined) sections.push({ title: 'reason', body: node.detail })
       if (node.outcome !== undefined) {
         sections.push({ title: 'outcome', body: node.outcome, tone: node.status === 'error' ? 'error' : undefined })
+      }
+      const ask = readApprovalAsked(open?.data)
+      if (ask !== undefined) {
+        // 问卷的 settled 只报 requestId；答案在 callId 配对的 ask 工具结果里，
+        // 找不到就不显示。
+        if (ask.ask === 'question') {
+          const answer = ask.callId === undefined ? undefined : pairedResultText(raw, ask.callId)
+          if (answer !== undefined) {
+            sections.push({ title: 'response', body: answer })
+          }
+        }
+        const source: string[] = []
+        if (ask.agentId !== undefined) source.push(`agent ${ask.agentId.slice(0, 12)}`)
+        if (ask.title !== undefined && ask.title !== ask.reason) source.push(ask.title)
+        if (ask.command !== undefined) source.push(`command: ${ask.command}`)
+        if (ask.blockedPath !== undefined) source.push(`blocked: ${ask.blockedPath}`)
+        if (ask.options !== undefined && ask.options.length > 0) source.push(`options: ${ask.options.join(' | ')}`)
+        if (source.length > 0) sections.push({ title: 'source', body: source.join('\n'), tone: 'dim' })
+        if (ask.questions !== undefined && ask.questions.length > 0) {
+          const lines = ask.questions.map((question, index) => {
+            const head = question.header === undefined ? '' : `[${question.header}] `
+            const options = question.options.length === 0 ? '' : `  (${question.options.join(' | ')})`
+            return `${index + 1}. ${head}${question.question}${options}`
+          })
+          sections.push({ title: 'questions', body: lines.join('\n') })
+        }
       }
       break
     }
@@ -169,5 +237,5 @@ export function inspectNode(node: TrajNode, events: readonly RawTrajEvent[]): In
   }
 
   const title = node.label === '' ? node.kind : node.label
-  return { title, facts, sections }
+  return { title, facts, sections, ...(open === undefined ? { unresolved: true } : {}) }
 }

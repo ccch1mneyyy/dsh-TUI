@@ -1,0 +1,158 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "notice",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "assistant.message",
+    "tasks.snapshot",
+    "task.start",
+    "tool.result",
+    "task.update",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status",
+    "tasks.snapshot",
+    "task.update",
+    "task.end",
+    "session.status",
+    "turn.start",
+    "notice",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Use the Bash tool with run_in_background set to true to run `sleep 3; echo bg-done`. Then reply with exactly: started"
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 133
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Bash",
+        "status": "ok",
+        "call": {
+          "card": "terminal",
+          "displayKey": "tool-name-bash",
+          "category": "exec"
+        },
+        "result": {
+          "card": "terminal"
+        },
+        "resultText": "Command running in background with ID: b93f4dfp3. Output is being written to: /fixture/tmp/claude-1000/-fixture-project/"
+      }
+    },
+    {
+      "kind": "job",
+      "text": "sleep 3; echo bg-done",
+      "job": {
+        "id": "b93f4dfp3",
+        "kind": "shell",
+        "label": "sleep 3; echo bg-done",
+        "status": "completed",
+        "detail": "exit code: 0"
+      }
+    },
+    {
+      "kind": "assistant",
+      "text": "started"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
+      "kind": "notice",
+      "text": "A background task finished; the model continues"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 239
+    },
+    {
+      "kind": "assistant",
+      "text": "Background command completed successfully (exit code 0)."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.0275919,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 28,
+      "output": 415,
+      "cacheRead": 61839,
+      "cacheWrite": 9163
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": [
+      "Approaching the 7d usage limit (87%) — resets in 1d 0h",
+      "Background job completed: sleep 3; echo bg-done (b93f4dfp3 · 0s)"
+    ],
+    "subagents": [],
+    "jobs": [
+      {
+        "id": "b93f4dfp3",
+        "status": "completed",
+        "command": "sleep 3; echo bg-done",
+        "outputFile": "/fixture/tmp/claude-1000/-fixture-project/00000000-0000-4000-8000-000000000003/tasks/b93f4dfp3.output"
+      }
+    ]
+  }
+}

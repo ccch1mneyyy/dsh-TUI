@@ -1,0 +1,92 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "notice",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Count from 1 to 200, one number per line, no other text."
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 126
+    },
+    {
+      "kind": "assistant",
+      "text": "1\n2\n3"
+    },
+    {
+      "kind": "interrupt",
+      "text": "Interrupted · What should DeepSeek do instead?"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
+      "kind": "user",
+      "text": "Stop. Reply with exactly: NOW-OK"
+    },
+    {
+      "kind": "assistant",
+      "text": "NOW-OK"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.0055154,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 20,
+      "output": 50,
+      "cacheRead": 37869,
+      "cacheWrite": 8542
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": [
+      "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    ],
+    "subagents": [],
+    "jobs": []
+  }
+}

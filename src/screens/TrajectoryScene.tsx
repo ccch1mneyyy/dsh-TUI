@@ -9,6 +9,7 @@ import { Ledger } from '../components/trajectory/Ledger.js'
 import { Inspector } from '../components/trajectory/Inspector.js'
 import { HotspotView, hotspotRows } from '../components/trajectory/HotspotView.js'
 import { applyQuery, parseQuery } from '../trajectory/query.js'
+import { ledgerWindow } from '../trajectory/window.js'
 import { MOTION_TICK_MS } from '../trajectory/motion.js'
 import { formatDuration, formatTokens, truncateWidth } from '../trajectory/format.js'
 import { stringWidth } from '../ink/stringWidth.js'
@@ -22,6 +23,8 @@ import {
   type TrajBuild,
 } from '../dsh-adapter/trajectory/index.js'
 import { HOTSPOT_SORTS, WAVE_PROJECTIONS } from '../dsh-adapter/trajectory/index.js'
+import { useTrajectoryScope } from '../components/trajectory/useTrajectoryScope.js'
+import { scopeChipParts } from '../components/trajectory/scope.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { HotspotRow, HotspotSort, WaveProjection } from '../dsh-adapter/types.js'
 
@@ -99,8 +102,13 @@ export function TrajectoryScene({
   /** Hover state for the header ✕ exit button. */
   const [closeHovered, setCloseHovered] = React.useState(false)
 
-  // ── projection ───────────────────────────────────────────────────────────
-  const nodes = build.nodes
+  // ── projection + scope ────────────────────────────────────────────────────
+  // Every region below renders from one scoped data plane: the session's
+  // rows by default, or one agent's lane / the delegating turn / the whole
+  // subtree once the user drills in. The header, the wave, the hotspot and
+  // the inspector all follow the scope.
+  const { scope, lanes, scoped, drill, popScope } = useTrajectoryScope(channel, build)
+  const nodes = scoped.build.nodes
 
   const query = React.useMemo(() => parseQuery(queryText), [queryText])
   const { rows: filtered, indexes } = React.useMemo(
@@ -113,9 +121,25 @@ export function TrajectoryScene({
 
   const agg = React.useMemo(
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-    () => aggregate(build, sort),
-    [build, nodes.length, sort],
+    () => aggregate(scoped.build, sort),
+    [scoped.build, nodes.length, sort],
   )
+
+  // A scope switch swaps the row list under the cursor: re-arm arrival and
+  // re-anchor at the scoped list's head (declared BEFORE the arrival effect
+  // below, so the first scoped frame does not read the previous list's refs).
+  const scopeKey =
+    scope.kind === 'session' ? 's'
+      : scope.kind === 'parent-turn' ? 'p:' + scope.agentId + ':' + scope.turn
+        : (scope.kind === 'agent' ? 'a:' : 'd:') + scope.agentId
+  React.useEffect(() => {
+    seenRef.current = 0
+    errorsRef.current = agg.totals.errors
+    setCursor(0)
+    setFollow(true)
+    setInspectScroll(0)
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey])
 
   // ── arrival + alert detection ────────────────────────────────────────────
   const seenRef = React.useRef(0)
@@ -139,10 +163,9 @@ export function TrajectoryScene({
   const bandWidth = Math.max(1, columns - 4)
 
   const clampedCursor = filtered.length === 0 ? 0 : Math.min(cursor, filtered.length - 1)
-  const windowStart = Math.max(
-    0,
-    Math.min(clampedCursor - Math.floor(ledgerRows / 2), filtered.length - ledgerRows),
-  )
+  // The ledger paints exactly one viewport's worth of rows at any session
+  // length.
+  const windowStart = ledgerWindow(filtered.length, clampedCursor, ledgerRows).start
 
   const band = React.useMemo(
     // oxlint-disable-next-line react-hooks/exhaustive-deps
@@ -158,8 +181,8 @@ export function TrajectoryScene({
 
   const focused = filtered[clampedCursor]
   const detail = React.useMemo(
-    () => (focused === undefined ? undefined : inspectNode(focused, channel.traceEvents())),
-    [focused, channel],
+    () => (focused === undefined ? undefined : inspectNode(focused, scoped.events)),
+    [focused, scoped.events],
   )
 
   // ── navigation helpers ───────────────────────────────────────────────────
@@ -298,6 +321,8 @@ export function TrajectoryScene({
         setQueryText('')
         return
       }
+      // Esc 先退出下钻范围回到会话，再退出场景；q 任何时候都直接离开。
+      if (key.escape && popScope()) return
       onClose()
       return
     }
@@ -351,6 +376,13 @@ export function TrajectoryScene({
       setSwitchTick(tick)
       return
     }
+    // 会话范围内 `a` 下钻到焦点行所指的 lane（子代理描述行或委托工具
+    // 调用）；已在范围内则循环 当前 Agent → 父回合 → 全部后代 → 会话。
+    // 数据源没有 lane 就没有这个键。
+    if (input === 'a' && !key.ctrl && !key.meta && lanes.length > 0) {
+      drill(filtered[clampedCursor])
+      return
+    }
     if (key.return) {
       setExpanded(previous => !previous)
       setInspectScroll(0)
@@ -360,6 +392,51 @@ export function TrajectoryScene({
       setInspectScroll(previous => Math.max(0, previous + (input === 'j' ? inspectorRows - 2 : -(inspectorRows - 2))))
     }
   })
+
+  // ── unsupported state ──────────────────────────────────────────────────────
+  // Same rule as the side panel: a session with no trajectory source says
+  // so instead of showing the empty-session chrome that promises a wake
+  // band after the first turn. Every in-tree composition mounts a source
+  // (DSH: raw history, others: the AgentEvent fold), so only fixtures reach
+  // this branch today. Esc/q and ✕ still leave. A channel without the
+  // report (partial fixtures) keeps the old behavior.
+  if (channel.trajectorySource?.() === 'unsupported') {
+    const unsupportedLine =
+      channel.backendCapabilities?.backendId === 'claude'
+        ? t('trajectory-unsupported-claude')
+        : t('trajectory-unsupported')
+    return (
+      <Box ref={ref} flexDirection="column" width="100%" paddingX={1}>
+        <Box width="100%" height={1} flexShrink={0}>
+          <Box flexShrink={0} flexGrow={1} overflow="hidden">
+            <Text wrap="truncate">
+              <Text color="accent" bold>{`\u2726 ${t('traj-title')}`}</Text>
+              <Text color="subtle">{`  ${channel.sessionTitle ?? channel.cwd}`}</Text>
+            </Text>
+          </Box>
+          <Box
+            flexShrink={0}
+            width={2}
+            onClick={() => onClose()}
+            onMouseEnter={(): void => setCloseHovered(true)}
+            onMouseLeave={(): void => setCloseHovered(false)}
+          >
+            <Text color={closeHovered ? 'text' : 'subtle'}>{' ✕'}</Text>
+          </Box>
+        </Box>
+        <Box marginTop={2}>
+          <Text color="subtle" wrap="truncate">
+            {truncateWidth(unsupportedLine, bandWidth)}
+          </Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text dimColor italic wrap="truncate">
+            {truncateWidth(t('trajectory-unsupported-exit'), bandWidth)}
+          </Text>
+        </Box>
+      </Box>
+    )
+  }
 
   // ── header ───────────────────────────────────────────────────────────────
   //
@@ -371,6 +448,8 @@ export function TrajectoryScene({
   // whole scene depends on. Padding to an exact column count is deterministic,
   // CJK-aware, and cheap (two strings per frame).
   const { totals } = agg
+  // The mounted source's label; partial fixtures render without one.
+  const backendLabel = channel.trajectoryBackendLabel?.() ?? ''
 
   /** Left text, a computed gap, right text — clipped to `width` columns. */
   const spread = (left: string, right: string, width: number): { left: string; gap: string; right: string } => {
@@ -388,7 +467,9 @@ export function TrajectoryScene({
     t('traj-totals', { turns: totals.turns, steps: totals.rows }) +
     (totals.errors > 0 ? ` \u00b7 ${t('traj-errors', { n: totals.errors })}` : '') +
     (totals.retries > 0 ? ` \u00b7 ${t('traj-retries', { n: totals.retries })}` : '') +
-    ` \u00b7 ${formatDuration(totals.spanMs)}`
+    ` \u00b7 ${formatDuration(totals.spanMs)}` +
+    // Name the source being read next to the numbers.
+    (backendLabel === '' ? '' : ` \u00b7 ${t('trajectory-backend-label', { name: backendLabel })}`)
 
   // ✕ 退出按钮占 2 格（` ✕`）：预量测行给右端留出预算，按钮钉在末列
   const CLOSE_WIDTH = 2
@@ -425,22 +506,30 @@ export function TrajectoryScene({
   const axisLabel = view === 'hotspot' ? t(`traj-sort-${sort}`) : t(`traj-proj-${projection}`)
   const tabTimelineText = `${view === 'timeline' ? '\u25cf' : '\u25cb'} ${t('traj-tab-timeline')}  `
   const tabHotspotText = `${view === 'hotspot' ? '\u25cf' : '\u25cb'} ${t('traj-tab-hotspot')}`
+  // The scope chip: shown exactly while a non-session
+  // scope is active; clicking cycles it (the a key's mouse equivalent).
+  const scopeChip = scopeChipParts(scope)
+  const scopeChipText = scopeChip === undefined ? '' : '◆ ' + t(scopeChip.key, scopeChip.params) + '  '
   const queryText_ =
     queryOpen || !query.empty
       ? `   / ${queryText}${queryOpen ? '\u258c' : ''}  ${t('traj-matches', { n: filtered.length, total: nodes.length })}`
       : ''
-  const tabsLeft = tabTimelineText + tabHotspotText
-  const tabsLine = spread(tabsLeft + queryText_, axisLabel, bandWidth)
+  const tabsLeft = tabTimelineText + tabHotspotText + scopeChipText + queryText_
+  const tabsLine = spread(tabsLeft, axisLabel, bandWidth)
   // Segment truncation mirrors spread's left-clip: the query tail yields
   // first, then the far tab label — the line stays exactly one row.
   const leftRoom = stringWidth(tabsLine.left)
   const hotspotShown = truncateWidth(tabHotspotText, Math.max(0, leftRoom - stringWidth(tabTimelineText)))
+  const scopeShown =
+    scopeChipText === ''
+      ? ''
+      : truncateWidth(scopeChipText, Math.max(0, leftRoom - stringWidth(tabTimelineText) - stringWidth(hotspotShown)))
   const queryShown =
     queryText_ === ''
       ? ''
       : truncateWidth(
           queryText_,
-          Math.max(0, leftRoom - stringWidth(tabTimelineText) - stringWidth(hotspotShown)),
+          Math.max(0, leftRoom - stringWidth(tabTimelineText) - stringWidth(hotspotShown) - stringWidth(scopeShown)),
         )
   const tabs = (
     <Box width="100%" height={1} flexShrink={0}>
@@ -477,6 +566,17 @@ export function TrajectoryScene({
           {hotspotShown}
         </Text>
       </Box>
+      {scopeShown !== '' && (
+        <Box
+          flexShrink={0}
+          width={stringWidth(scopeShown)}
+          // 点击 scope chip = a 键的鼠标等价（循环 当前 Agent → 父回合 →
+          // 全部后代 → 会话）。
+          onClick={() => { drill(undefined) }}
+        >
+          <Text color="accent" bold>{scopeShown}</Text>
+        </Box>
+      )}
       {queryShown !== '' && (
         <Box flexShrink={0} width={stringWidth(queryShown)} onClick={() => setQueryOpen(true)}>
           <Text color="suggestion">{queryShown}</Text>
@@ -511,13 +611,16 @@ export function TrajectoryScene({
   )
 
   const hints =
-    view === 'hotspot'
+    (view === 'hotspot'
       ? t('traj-hint-hotspot')
       : queryOpen
         ? t('traj-hint-query')
         : expanded
           ? t('traj-hint-expanded')
-          : t('traj-hint-timeline')
+          : t('traj-hint-timeline'))
+    // Drilldown affordance: teach the a key exactly while lanes exist, and
+    // how to leave a scope once inside one (the chip names the scope).
+    + (lanes.length === 0 ? '' : scope.kind === 'session' ? `  ·  ${t('trajectory-drill-hint')}` : `  ·  ${t('trajectory-scope-hint')}`)
 
   return (
     // `flexGrow`, not an explicit `height={rows}`: in inline mode the scene is
@@ -604,6 +707,7 @@ export function TrajectoryScene({
           ) : (
             ''
           )}
+
         </Text>
       </Box>
     </Box>

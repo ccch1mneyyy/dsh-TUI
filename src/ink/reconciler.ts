@@ -511,6 +511,15 @@ const reconciler = createReconciler<
   },
   startSuspendingCommit(): void {},
   suspendInstance(): void {},
+  // react-reconciler 0.34 calls this from completeRootWhenReady for every
+  // commit on a transition, retry or idle lane, whether or not a
+  // ViewTransition exists; without it a commit resuming after Suspense
+  // throws "is not a function". This renderer has no ViewTransition, so
+  // a no-op matches react-dom with no active transition.
+  // @types/react-reconciler (0.33) does not list it yet; drop the
+  // expect-error once it does.
+  // @ts-expect-error suspendOnActiveViewTransition missing from react-reconciler 0.34 HostConfig types
+  suspendOnActiveViewTransition(): void {},
   waitForCommitToBeReady(): null {
     return null
   },

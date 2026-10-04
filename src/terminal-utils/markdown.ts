@@ -25,6 +25,7 @@ import { logForDebugging } from '../utils/debug.js'
 import { createHyperlink } from './hyperlink.js'
 import { fileLinkUrl, linkifyFilePaths, looksLikeFilePath } from '../utils/fileTarget.js'
 import { getMathRendering } from '../tuiDisplayPrefs.js'
+import { noteCodeHighlight, noteFormatToken } from '../ink/render-stats.js'
 import {
   isMathBlockToken,
   isMathToken,
@@ -40,6 +41,12 @@ const EOL = '\n'
 
 /** Left one-quarter block (U+258E), the blockquote gutter marker. */
 const QUOTE_BAR = '\u258e'
+
+/** Left one-eighth block (U+258F): quote levels past the second get the thinner bar. */
+const QUOTE_BAR_DEEP = '\u258f'
+
+/** The horizontal-rule divider: three light box-drawing dashes. */
+const HR_DIVIDER = '\u2500\u2500\u2500'
 
 /** Tool-analysis tag blocks that carry no user-facing content; dropped before lexing. */
 const TOOL_ANALYSIS_TAG_BLOCKS =
@@ -75,11 +82,11 @@ export function stripPromptXMLTags(content: string): string {
 let markedInitialized = false
 
 /**
- * Configure the shared `marked` instance once. Strikethrough parsing is
- * disabled so that `~100` renders literally instead of as deleted text —
- * models use `~` far more often for "approximate" than for real
- * strikethrough. LaTeX math becomes `math`/`mathBlock` tokens (see
- * math.ts). Every lexer caller — Markdown and StreamingMarkdown's boundary
+ * Configure the shared `marked` instance once. Strikethrough stays on
+ * marked's built-in del tokenizer, which only matches double-tilde pairs —
+ * single tildes (`~100`, models' "approximate") never pair up and render
+ * literally. LaTeX math becomes `math`/`mathBlock` tokens (see math.ts).
+ * Every lexer caller — Markdown and StreamingMarkdown's boundary
  * lex — must run this first so both agree on block boundaries.
  */
 export function configureMarked(): void {
@@ -87,11 +94,6 @@ export function configureMarked(): void {
   markedInitialized = true
 
   marked.use({
-    tokenizer: {
-      del() {
-        return undefined
-      },
-    },
     extensions: [...MATH_MARKDOWN_EXTENSIONS],
   })
 }
@@ -151,11 +153,20 @@ interface RenderState {
   readonly listDepth: number
   /** Ordinal of the current ordered-list item, or null for unordered lists. */
   readonly ordinal: number | null
+  /** Nesting depth of the enclosing blockquote; deeper levels get a more muted bar. */
+  readonly quoteDepth: number
+  /**
+   * Absolute column where the enclosing list item's body block starts
+   * (indent + marker + checkbox). Soft-break continuations and nested
+   * blocks align there, and a nested list's items inherit it as their
+   * indent so the ladder advances by one marker width per level.
+   */
+  readonly hang: number
 }
 
 /** A fresh context for block-level children: list state reset, no parent. */
 function fresh(state: RenderState): RenderState {
-  return { highlight: state.highlight, parent: null, listDepth: 0, ordinal: null }
+  return { highlight: state.highlight, parent: null, listDepth: 0, ordinal: null, quoteDepth: 0, hang: 0 }
 }
 
 /** Same context, different parent token. */
@@ -165,7 +176,7 @@ function withParent(state: RenderState, parent: Token | null): RenderState {
 
 /** Inline-styled children keep the outer parent but shed list context. */
 function inlineChildren(state: RenderState): RenderState {
-  return { ...state, listDepth: 0, ordinal: null }
+  return { ...state, listDepth: 0, ordinal: null, quoteDepth: 0, hang: 0 }
 }
 
 /**
@@ -184,7 +195,14 @@ export function formatToken(
   parent: Token | null = null,
   highlight: CliHighlight | null = null,
 ): string {
-  return dispatch(token, { highlight, parent, listDepth, ordinal: orderedListNumber })
+  return dispatch(token, {
+    highlight,
+    parent,
+    listDepth,
+    ordinal: orderedListNumber,
+    quoteDepth: 0,
+    hang: 0,
+  })
 }
 
 /**
@@ -203,11 +221,12 @@ export function applyMarkdown(
     parent: null,
     listDepth: 0,
     ordinal: null,
+    quoteDepth: 0,
+    hang: 0,
   }
   return marked
     .lexer(stripPromptXMLTags(content))
-    .map(token => dispatch(token, rootState))
-    .join('')
+    .reduce((out: string, token: Token) => appendBlockText(out, dispatch(token, rootState)), '')
     // trimEnd only: the input is already trimmed, so leading whitespace in
     // the output is renderer-intended (e.g. the code block's 2-space indent
     // on its first line). A full trim() would eat that first-line indent.
@@ -229,14 +248,17 @@ function isToken<K extends MarkedToken['type']>(
 
 /** Fan-out point: narrows the token union, then delegates to the per-type render functions. */
 function dispatch(token: Token, state: RenderState): string {
+  noteFormatToken(token.raw ?? '')
   if (isToken(token, 'blockquote')) return renderBlockquote(token, state)
+  if (isToken(token, 'checkbox')) return renderCheckbox(token)
   if (isToken(token, 'code')) return renderCodeBlock(token, state)
   if (isToken(token, 'codespan')) return renderCodeSpan(token)
   if (isToken(token, 'em')) return renderEmphasis(token, state)
   if (isToken(token, 'strong')) return renderStrong(token, state)
+  if (isToken(token, 'del')) return renderDel(token, state)
   if (isToken(token, 'heading')) return renderHeading(token, state)
-  if (isToken(token, 'hr')) return '---'
-  if (isToken(token, 'image')) return token.href
+  if (isToken(token, 'hr')) return renderHr()
+  if (isToken(token, 'image')) return renderImage(token, state)
   if (isToken(token, 'link')) return renderLink(token, state)
   if (isToken(token, 'list')) return renderList(token, state)
   if (isToken(token, 'list_item')) return renderListItem(token, state)
@@ -249,13 +271,15 @@ function dispatch(token: Token, state: RenderState): string {
   // Top-level math blocks are standalone MathBlock nodes; this path only
   // sees blocks nested in list items / blockquotes (or formatToken callers).
   if (isMathBlockToken(token)) return renderNestedMathBlock(token)
-  if (isToken(token, 'def') || isToken(token, 'del') || isToken(token, 'html')) {
-    // Link definitions, strikethrough, and raw HTML carry no ANSI
-    // representation.
+  if (isToken(token, 'def') || isToken(token, 'html')) {
+    // Link definitions and raw HTML carry no ANSI representation.
     return ''
   }
-  // Unknown / extension token types render as nothing.
-  return ''
+  // Unknown token types (a marked upgrade or extension) echo their raw
+  // source instead of silently dropping it; verify-markdown-token-coverage
+  // fails until the type gets a renderer or an explicit ignore.
+  logForDebugging(`Markdown token without a renderer, echoing raw source: ${token.type}`)
+  return (token as { raw?: string }).raw ?? ''
 }
 
 /** Inline math as single-line Unicode; the exact source when it has none
@@ -274,14 +298,38 @@ function renderNestedMathBlock(token: MathToken): string {
   return (rendered ?? token.raw.trim()) + EOL
 }
 
+/**
+ * The gutter for one blockquote level: the first level in the theme's
+ * muted color, the second dimmed, deeper levels the thinner one-eighth
+ * bar, so nesting fades instead of repeating identical rails.
+ */
+function quoteGutter(depth: number): string {
+  if (depth === 0) return colorize(QUOTE_BAR, getActiveTheme().subtle, 'foreground')
+  if (depth === 1) return chalk.dim(QUOTE_BAR)
+  return chalk.dim(QUOTE_BAR_DEEP)
+}
+
 function renderBlockquote(token: Tokens.Blockquote, state: RenderState): string {
-  const inner = token.tokens.map(child => dispatch(child, fresh(state))).join('')
-  // Dim gutter bar per line; keep the text italic but at normal brightness —
-  // chalk.dim is nearly invisible on dark themes.
-  const gutter = chalk.dim(QUOTE_BAR)
-  return inner
-    .split(EOL)
-    .map(line => (stripAnsi(line).trim() ? `${gutter} ${chalk.italic(line)}` : line))
+  const depth = state.quoteDepth
+  // Children keep the quote context (a nested blockquote increments the
+  // depth) but shed list state, exactly like fresh().
+  const childState = { ...fresh(state), quoteDepth: depth + 1 }
+  const inner = token.tokens.map(child => dispatch(child, childState)).join('')
+  // Gutter bar per line; keep the text italic but at normal brightness —
+  // chalk.dim is nearly invisible on dark themes. Blank lines inside the
+  // quote keep a bare gutter so the quote stays visible across paragraph
+  // gaps; only the empty piece after inner's final newline stays empty.
+  const gutter = quoteGutter(depth)
+  const lines = inner.split(EOL)
+  // An empty quote (`>` on its own line) still shows one rail.
+  if (lines.every(line => line === '')) return gutter + EOL
+  return lines
+    .map((line, index) => {
+      if (line === '' || stripAnsi(line).trim() === '') {
+        return index === lines.length - 1 ? line : gutter
+      }
+      return `${gutter} ${chalk.italic(line)}`
+    })
     .join(EOL)
 }
 
@@ -289,28 +337,13 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
   // Kimi Code style: a muted ```lang opening line (language tag + boundary
   // for unhighlighted blocks) + 2-space indent; no closing fence (syntax
   // colors or the indent already mark the end, it only cost vertical space).
+  // This ANSI form serves nested code (inside lists/quotes) and the narrow
+  // fallback of CodeBlockFrame; top-level fences render through the frame
+  // component sharing formatCodeBody below.
   const theme = getActiveTheme()
-  const openFence = colorize('```' + (token.lang ?? ''), theme.subtle, 'foreground')
+  const openFence = colorize('```' + codeLanguageTag(token), theme.subtle, 'foreground')
   const indent = '  '
-  const renderBody = (): string => {
-    if (!state.highlight) {
-      return token.text
-    }
-    let language = 'plaintext'
-    if (token.lang) {
-      if (state.highlight.supportsLanguage(token.lang)) {
-        language = token.lang
-      } else {
-        logForDebugging(
-          `Language not supported while highlighting code, falling back to plaintext: ${token.lang}`,
-        )
-      }
-    }
-    return state.highlight.highlight(token.text, { language, theme: buildSyntaxTheme(theme) })
-  }
-  // Strip ALL trailing newlines: trailing blank lines would otherwise leak a
-  // stray blank line at the end of the block.
-  const body = renderBody().replace(/\n+$/, '')
+  const body = formatCodeBody(token, state.highlight)
   if (body === '') {
     return `${openFence}${EOL}`
   }
@@ -324,6 +357,55 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
   )
 }
 
+/**
+ * The fence info string trimmed to its first word: a fence opening with
+ * "js meta" names js. Everything after the first whitespace run is meta
+ * the renderer never consumes; the full source stays in token.text.
+ */
+export function codeLanguageTag(token: Tokens.Code): string {
+  return (token.lang ?? '').trim().split(/\s+/)[0] ?? ''
+}
+
+/**
+ * Highlighted (or plain) body of a fenced code block, with trailing blank
+ * lines stripped. Shared by the ANSI fence and CodeBlockFrame so both
+ * surfaces agree on highlighting, language resolution and trimming.
+ *
+ * NEVER throws: cli-highlight feeds highlight.js, which converts to HTML
+ * fragments and can raise synchronously on hostile inputs. Any failure in
+ * the highlighting pipeline degrades to the plain body - the fence and
+ * language label survive - instead of unwinding the React render that
+ * called it.
+ */
+export function formatCodeBody(token: Tokens.Code, highlight: CliHighlight | null): string {
+  const plain = token.text.replace(/\n+$/, '')
+  if (!highlight || plain === '') return plain
+  try {
+    let language = 'plaintext'
+    const tag = codeLanguageTag(token)
+    if (tag) {
+      if (highlight.supportsLanguage(tag)) {
+        language = tag
+      } else {
+        logForDebugging(
+          `Language not supported while highlighting code, falling back to plaintext: ${tag}`,
+        )
+      }
+    }
+    const theme = getActiveTheme()
+    noteCodeHighlight()
+    const highlighted = highlight.highlight(token.text, { language, theme: buildSyntaxTheme(theme) })
+    // Strip ALL trailing newlines: trailing blank lines would otherwise leak
+    // a stray blank line at the end of the block.
+    return highlighted.replace(/\n+$/, '') || plain
+  } catch (error) {
+    logForDebugging(
+      `Code highlighting threw, degrading the block to plaintext: ${String(error)}`,
+    )
+    return plain
+  }
+}
+
 function renderEmphasis(token: Tokens.Em, state: RenderState): string {
   const inner = token.tokens.map(child => dispatch(child, inlineChildren(state))).join('')
   return chalk.italic(inner)
@@ -334,18 +416,79 @@ function renderStrong(token: Tokens.Strong, state: RenderState): string {
   return chalk.bold(inner)
 }
 
+/** Double-tilde strikethrough; marked's del tokenizer never pairs single
+ *  tildes, so approximate notation like ~100 stays literal. */
+function renderDel(token: Tokens.Del, state: RenderState): string {
+  const inner = token.tokens.map(child => dispatch(child, inlineChildren(state))).join('')
+  return chalk.strikethrough(inner)
+}
+
+/**
+ * The hr divider: three dashes in the theme's muted color.
+ *
+ * No trailing newline: the surrounding space tokens already separate the
+ * blocks, so the divider costs one row. appendBlockText adds the row
+ * break when the next block does not start with one.
+ */
+function renderHr(): string {
+  return colorize(HR_DIVIDER, getActiveTheme().subtle, 'foreground')
+}
+
+/**
+ * Append one block token's rendered text to the accumulated run. Every
+ * visible block renderer ends its output with a newline except the hr
+ * divider; when such an unterminated block is followed directly by
+ * content that does not open with its own line break (a rule
+ * immediately before a heading, or two adjacent rules), the row break
+ * is inserted here so the divider never merges into the next block's
+ * first row.
+ */
+export function appendBlockText(accumulated: string, block: string): string {
+  if (accumulated !== '' && !accumulated.endsWith(EOL) && block !== '' && !block.startsWith(EOL)) {
+    return accumulated + EOL + block
+  }
+  return accumulated + block
+}
+
 function renderHeading(token: Tokens.Heading, state: RenderState): string {
   const text = token.tokens.map(child => dispatch(child, fresh(state))).join('')
-  // Blue-primary progression: H1 gets the mist brand blue + underline, H2 the
-  // lighter border blue, deeper levels stay bold near-text (kimi-style).
+  // Blue-primary ladder (kimi-style): H1 gets the mist brand blue +
+  // underline, H2 the lighter border blue, then H3 bold, H4 bold italic,
+  // H5 italic subtle and H6 subtle, so each level reads one step quieter.
   const theme = getActiveTheme()
   const styled =
     token.depth === 1
       ? chalk.bold.underline(colorize(text, theme.accent, 'foreground'))
       : token.depth === 2
         ? chalk.bold(colorize(text, theme.permission, 'foreground'))
-        : chalk.bold(text)
-  return styled + EOL + EOL
+        : token.depth === 3
+          ? chalk.bold(text)
+          : token.depth === 4
+            ? chalk.bold.italic(text)
+            : token.depth === 5
+              ? chalk.italic(colorize(text, theme.subtle, 'foreground'))
+              : colorize(text, theme.subtle, 'foreground')
+  // One trailing newline: blank rows below a heading come from the
+  // source's own blank lines (the following space token), not from here.
+  return styled + EOL
+}
+
+/**
+ * Image reference: `[img]` plus the alt text, linked to the source URL
+ * with OSC 8. Nothing is fetched; the href is only a click target.
+ * Without hyperlink support the plain form shows both the alt and the URL.
+ */
+function renderImage(token: Tokens.Image, state: RenderState): string {
+  const alt = token.text.replace(/\s+/g, ' ').trim()
+  if (state.parent?.type === 'link') {
+    // Inside a link's OSC 8 wrap a nested sequence would override the real
+    // href; show the alt (or the URL) as plain text, like nested labels.
+    return alt || token.href
+  }
+  if (!supportsHyperlinks()) {
+    return alt ? `[img] ${alt} (${token.href})` : token.href
+  }
+  return createHyperlink(token.href, alt ? `[img] ${alt}` : '[img]')
 }
 
 function renderLink(token: Tokens.Link, state: RenderState): string {
@@ -378,12 +521,76 @@ function renderList(token: Tokens.List, state: RenderState): string {
 }
 
 function renderListItem(token: Tokens.ListItem, state: RenderState): string {
-  const indent = '  '.repeat(state.listDepth)
+  // Tight task items carry their checkbox as a sibling token AHEAD of the
+  // text token (loose items inline it inside the paragraph). Lift it out
+  // here so it lands between the marker and the body.
+  const isTightTask = token.task === true && token.tokens[0]?.type === 'checkbox'
+  const children = isTightTask ? token.tokens.slice(1) : token.tokens
+  const taskMark = isTightTask ? renderCheckbox(token.tokens[0] as Tokens.Checkbox) : ''
+  const indent = ' '.repeat(state.hang)
+  const marker =
+    state.ordinal === null ? '-' : `${formatListMarker(state.listDepth + 1, state.ordinal)}.`
+  // The body column: soft-break continuations, later paragraphs of loose
+  // items, and nested blocks align one marker width (plus checkbox) past
+  // this item's indent. A nested list gets this as its indent, so each
+  // level steps in by one marker width.
+  const bodyHang = state.hang + marker.length + 1 + stripAnsi(taskMark).length
   const childState = withParent(
-    { ...state, listDepth: state.listDepth + 1 },
+    { ...state, listDepth: state.listDepth + 1, hang: bodyHang },
     token,
   )
-  return token.tokens.map(child => indent + dispatch(child, childState)).join('')
+  // Text/paragraph/blockquote children render unindented lines and the
+  // assembly below pads their continuations to the body column. A nested
+  // list already carries its absolute indent (its items inherit
+  // bodyHang), so its lines pass through untouched.
+  const segments: Array<{ text: string; preindented: boolean }> = []
+  let raw = ''
+  for (const child of children) {
+    const part = dispatch(child, childState)
+    if (child.type === 'list') {
+      if (raw !== '') {
+        segments.push({ text: raw, preindented: false })
+        raw = ''
+      }
+      segments.push({ text: part, preindented: true })
+    } else {
+      // appendBlockText: a text token does not end its own row, and the
+      // next child must start on a fresh line (a plain join would glue
+      // blocks together, a join(EOL) would double blank rows).
+      raw = appendBlockText(raw, part)
+    }
+  }
+  if (raw !== '') segments.push({ text: raw, preindented: false })
+  const tinted = colorize(marker, getActiveTheme().permission, 'foreground')
+  const bodyIndent = ' '.repeat(bodyHang)
+  let out = `${indent}${tinted} ${taskMark}`
+  let firstLine = true
+  for (const segment of segments) {
+    const lines = segment.text.split(EOL)
+    for (const line of lines) {
+      if (firstLine) {
+        out += line
+        firstLine = false
+        continue
+      }
+      out += EOL + (line === '' || segment.preindented ? line : bodyIndent + line)
+    }
+  }
+  if (out === '') return ''
+  if (!out.endsWith(EOL)) out += EOL
+  return out
+}
+
+/**
+ * Task checkbox as width-safe ASCII: literal [x] / [ ] keeps its state
+ * through display, copy, and ANSI-stripping measurements alike; a styled
+ * glyph pair would not survive every terminal font. The trailing space is
+ * the separator to the item text.
+ */
+function renderCheckbox(token: Tokens.Checkbox): string {
+  const mark = token.checked ? '[x]' : '[ ]'
+  const color = token.checked ? getActiveTheme().success : getActiveTheme().subtle
+  return colorize(mark, color, 'foreground') + ' '
 }
 
 function renderParagraph(token: Tokens.Paragraph, state: RenderState): string {
@@ -391,25 +598,18 @@ function renderParagraph(token: Tokens.Paragraph, state: RenderState): string {
 }
 
 function renderText(token: Tokens.Text, state: RenderState): string {
-  const { parent, listDepth, ordinal } = state
-
-  if (parent?.type === 'link') {
+  if (state.parent?.type === 'link') {
     // Already inside a link: the link handler wraps everything in one OSC 8
     // sequence, and a nested one would override the real href. Stay plain.
     return token.text
   }
 
-  if (parent?.type === 'list_item') {
-    const bullet = ordinal === null ? '-' : `${formatListMarker(listDepth, ordinal)}.`
-    const body = token.tokens
-      ? token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
-      : linkifyText(token.text)
-    // Blue bullet marker: list structure gets a tint without loading the
-    // whole item (kimi-style `•` in the accent color).
-    const tinted = colorize(bullet, getActiveTheme().permission, 'foreground')
-    return `${tinted} ${body}${EOL}`
+  // List markers, checkboxes and indentation belong to renderListItem:
+  // a loose item's paragraph reaches here with a fresh state, and inline
+  // em/strong children recurse through here with the list_item parent.
+  if (token.tokens) {
+    return token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
   }
-
   return linkifyText(token.text)
 }
 

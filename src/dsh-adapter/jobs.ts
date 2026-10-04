@@ -1,5 +1,5 @@
-import type { BackgroundJobOutputChannel, BackgroundJobOutputLine, BackgroundJobStatus, BackgroundJobState } from '../adapter/ports/channel-view.js'
-export type { BackgroundJobOutputChannel, BackgroundJobOutputLine, BackgroundJobStatus, BackgroundJobState } from '../adapter/ports/channel-view.js'
+import type { BackgroundJobOutputChannel, BackgroundJobOutputLine, BackgroundJobStatus, BackgroundJobState, JobTimelineEvent } from '../adapter/ports/channel-view.js'
+export type { BackgroundJobOutputChannel, BackgroundJobOutputLine, BackgroundJobStatus, BackgroundJobState, JobTimelineEvent } from '../adapter/ports/channel-view.js'
 
 
 /**
@@ -108,6 +108,9 @@ export const JOBS_MAX_TRACKED = 40
 /** Output tail lines retained per job (the card waterfall shows the last 3;
  *  the /jobs panel detail shows the whole retained tail). */
 export const JOBS_MAX_OUTPUT_LINES = 30
+/** Timeline events retained per job: the /jobs detail renders the latest
+ *  slice; older observations are dropped, never re-derived. */
+export const JOBS_MAX_TIMELINE = 40
 /** A `job_output` result's trailing status suffix — never a waterfall line. */
 const STATUS_SUFFIX_PATTERN = /^\s*\[status:\s/
 
@@ -131,6 +134,15 @@ interface KernelReadState {
   cursor: number
   /** Unconsumed tail of the last chunk that did not end in a newline. */
   partial: string
+}
+
+/** Append one bounded timeline observation. Timeline events live directly
+ *  on the job state so a snapshot reader sees them without a second lookup;
+ *  the ring drops the oldest entries, and the detail renders the latest
+ *  slice without implying a complete history. */
+function recordTimeline(job: BackgroundJobState, event: JobTimelineEvent): void {
+  const timeline = [...(job.timeline ?? []), event]
+  job.timeline = timeline.length > JOBS_MAX_TIMELINE ? timeline.slice(timeline.length - JOBS_MAX_TIMELINE) : timeline
 }
 
 export class BackgroundJobStore {
@@ -170,9 +182,13 @@ export class BackgroundJobStore {
           status: snap.status,
           ...(snap.detail === undefined ? {} : { detail: snap.detail }),
           ...(snap.progress === undefined ? {} : { progress: snap.progress }),
+          ...(snap.progress === undefined || snap.progress === '' ? {} : { lastProgress: snap.progress, lastProgressAt: Date.now() }),
           startedAt: snap.startedAt,
           ...(snap.finishedAt === undefined ? {} : { finishedAt: snap.finishedAt }),
           outputLines: [],
+          // First sight already terminal (a roster refresh mid-flight missed
+          // the live phase): the timeline starts at the settle fact.
+          timeline: [{ kind: isTerminal(snap.status) ? 'settled' : 'started', at: snap.startedAt, ...(snap.detail === undefined ? {} : { text: snap.detail }) }],
           ...(snap.output === undefined ? {} : {
             outputTotalBytes: snap.output.total,
             ...(snap.output.spillPaths === undefined || snap.output.spillPaths.length === 0 ? {} : { spillPaths: [...snap.output.spillPaths] }),
@@ -190,14 +206,34 @@ export class BackgroundJobStore {
         prev.finishedAt === snap.finishedAt
       ) continue
       const wasLive = !isTerminal(prev.status)
+      // Captured before the write below: the lifecycle-event gate compares
+      // against the previous status, which the assignment overwrites.
+      const prevStatus = prev.status
       prev.status = snap.status
       prev.label = snap.label
       if (snap.detail === undefined) delete prev.detail
       else prev.detail = snap.detail
       if (snap.progress === undefined) delete prev.progress
       else prev.progress = snap.progress
+      // The live progress line dies at settle, but the last thing the producer
+      // said survives for the focused detail, with its observation time (the
+      // source is the producer kind the row already names).
+      if (snap.progress !== undefined && snap.progress !== '') {
+        prev.lastProgress = snap.progress
+        prev.lastProgressAt = Date.now()
+        recordTimeline(prev, { kind: 'progress', at: prev.lastProgressAt, text: snap.progress })
+      }
       if (snap.finishedAt === undefined) delete prev.finishedAt
       else prev.finishedAt = snap.finishedAt
+      // Lifecycle observations land in the timeline ring: stopping, and the
+      // terminal transition with its detail (exit code, kill cause).
+      if (prevStatus !== snap.status) {
+        recordTimeline(prev, {
+          kind: snap.status === 'stopping' ? 'stopping' : isTerminal(snap.status) ? 'settled' : 'started',
+          at: snap.finishedAt ?? Date.now(),
+          ...(snap.detail === undefined ? {} : { text: snap.detail }),
+        })
+      }
       if (snap.output !== undefined) {
         prev.outputTotalBytes = snap.output.total
         if (snap.output.spillPaths !== undefined && snap.output.spillPaths.length > 0) prev.spillPaths = [...snap.output.spillPaths]
@@ -210,6 +246,7 @@ export class BackgroundJobStore {
       if (seen.has(job.id) || isTerminal(job.status)) continue
       job.status = 'killed'
       job.finishedAt = Date.now()
+      recordTimeline(job, { kind: 'settled', at: job.finishedAt })
       this.events.onSettled?.(job)
       changed = true
     }
@@ -262,6 +299,7 @@ export class BackgroundJobStore {
     if (lines.length === 0) return
     job.outputLines = [...job.outputLines, ...lines].slice(-JOBS_MAX_OUTPUT_LINES)
     job.lastOutputAt = at
+    recordTimeline(job, { kind: 'output', at, bytes: text.length })
     this.events.onChanged?.()
   }
 
@@ -279,7 +317,11 @@ export class BackgroundJobStore {
       read.cursor = earliest
       read.partial = ''
       const job = this.jobs.get(id)
-      if (job !== undefined) job.outputDropped = true
+      if (job !== undefined) {
+        job.outputDropped = true
+        job.gapCount = (job.gapCount ?? 0) + 1
+        recordTimeline(job, { kind: 'gap', at: Date.now() })
+      }
     }
   }
 
@@ -295,6 +337,7 @@ export class BackgroundJobStore {
     if (job === undefined) return
     const state = this.kernelReads.get(id) ?? { cursor: 0, partial: '' }
     this.kernelReads.set(id, state)
+    const startCursor = state.cursor
     const appended: BackgroundJobOutputLine[] = []
     let gapPending = read.lossy === true
     let gapSeen = read.lossy === true
@@ -323,10 +366,18 @@ export class BackgroundJobStore {
       }
     }
     state.cursor = read.next
-    if (gapSeen) job.outputDropped = true
+    if (gapSeen) {
+      job.outputDropped = true
+      job.gapCount = (job.gapCount ?? 0) + 1
+      recordTimeline(job, { kind: 'gap', at })
+    }
     if (appended.length > 0) {
       job.outputLines = [...job.outputLines, ...appended].slice(-JOBS_MAX_OUTPUT_LINES)
       job.lastOutputAt = at
+      // One observation per drain: the bytes this pull advanced and the
+      // dominant channel label, when the chunks carried one.
+      const channel = appended.find(line => line.channel !== undefined)?.channel
+      recordTimeline(job, { kind: 'output', at, bytes: read.next - startCursor, ...(channel === undefined ? {} : { channel }) })
       this.events.onChanged?.()
     } else if (job.outputTotalBytes !== read.next) {
       this.events.onChanged?.()
@@ -366,13 +417,6 @@ export class BackgroundJobStore {
   }
 }
 
-/** `3s` under a minute, `3m12s` under an hour, `1h02m` beyond — transcript-card compact. */
-export function formatJobDuration(job: Pick<BackgroundJobState, 'startedAt' | 'finishedAt'>, now = Date.now()): string {
-  const end = job.finishedAt ?? now
-  const seconds = Math.max(0, Math.floor((end - job.startedAt) / 1000))
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m${seconds % 60}s`
-  const hours = Math.floor(minutes / 60)
-  return `${hours}h${String(minutes % 60).padStart(2, '0')}m`
-}
+// The formatter is backend-neutral (src/channel/job-format.ts); re-exported
+// here for the existing importers.
+export { formatJobDuration } from '../channel/job-format.js'

@@ -171,6 +171,32 @@ Full guide: [Session migration](docs/migrate.en.md).
 
 **VS Code**: use the integrated terminal or the `dsh-tui-vscode` extension. See [VS Code guide](docs/vscode.en.md). **Herdr**: run `dsh-tui` in a [Herdr](https://herdr.dev) pane; `idle` / `working` / `blocked` are reported through its local integration API.
 
+### Experimental: Claude backend
+
+dsh-TUI can also run its session on Claude: the same interface, driving the
+Claude Code CLI through the Claude Agent SDK. Your project's `CLAUDE.md`,
+settings, hooks, MCP servers and plugins load as the CLI loads them.
+
+```sh
+# once, in the dsh-tui profile directory (the SDK is an optional dependency)
+cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
+dsh-tui --backend claude     # or pick Claude in /kernel; that choice is remembered
+```
+
+- **Sign-in**: a `/channel` relay profile, your dsh-auth `anthropic` sign-in
+  (`/login`), `ANTHROPIC_API_KEY` or cloud-provider variables, or an existing
+  `claude login`, in that order. A `claude` on `PATH` is used when present,
+  otherwise the SDK's bundled binary.
+- **Works**: streaming, tool cards, approvals and questions, `/model`,
+  `/effort`, Claude's permission modes (`/permission`, `Shift+Tab`),
+  `/compact`, `/context`, `/mcp`, `/resume`, `/fork`, double-`Esc` rewind,
+  subagents, background jobs, images, `/btw`, and the USD cost Claude reports.
+- **Not available**: DSH-only commands such as `/tree`, `/preset`,
+  `/provider`, `/workspace`, `/agentview` and `/bg`. One process runs one
+  backend; `/kernel` switches by restarting into a new session.
+
+Details and known limitations: [Claude backend](docs/claude-backend.en.md).
+
 ## Keybindings & Mouse
 
 `Enter` send · `Tab` complete · `Ctrl+Enter` interrupt and send · `Alt+Up` recall the last message · `Esc` dismiss, double-`Esc` rewinds · `Ctrl+B` side panel · `Ctrl+O` details · `Ctrl+R` history (`↑`/`↓` and `Ctrl+R` are scoped to the current project) · `Ctrl+V` paste · `Ctrl+Shift+E` fullscreen draft editor · `?` shortcuts · `←` background the session.

@@ -81,8 +81,26 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
       enumerable: true,
       get() {
         check('read-only')
-        if (key === 'subagentControl') return methods(channel.subagentControl, { interrupt: 'mutate' })
-        if (key === 'jobControl') return channel.jobControl === undefined ? undefined : methods(channel.jobControl, { kill: 'mutate' })
+        if (key === 'subagentControl') {
+          const control = channel.subagentControl
+          const projected = methods(control, { interrupt: 'mutate' } as Readonly<Record<keyof typeof control, HostEffectClass>>)
+          const history = control.history
+          // The transcript read is an optional capability (Claude only): the
+          // method's absence is the signal the detail scene reads.
+          if (history === undefined) return projected
+          return Object.freeze({ ...projected, history: (id: string, window?: import('../../agent/capabilities.js').SubagentTranscriptWindow) => { check('read-only'); return history.call(control, id, window) } })
+        }
+        if (key === 'jobControl') {
+          const control = channel.jobControl as ChannelUi['jobControl'] | undefined
+          if (control === undefined) return undefined
+          const projected = methods(control, { kill: 'mutate' } as Readonly<Record<keyof typeof control, HostEffectClass>>)
+          const watch = control.watchOutput
+          if (watch === undefined) return projected
+          // A renderer observation of an on-screen card (like `subscribe`):
+          // the lease owns the unwatch, so a card unmounting after the
+          // channel's release is a no-op.
+          return Object.freeze({ ...projected, watchOutput: (id: string) => { check('read-only'); return lease.own(watch.call(control, id)) } })
+        }
         if (key === 'autoRecapOnOpen' && (mode === 'passive-shadow' || mode === 'replay-shadow')) return false
         if (key === 'pluginScene') {
           const scene = channel.pluginScene
@@ -147,7 +165,7 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
       // 65ms @200k. The snapshot array is already frozen by the session, so
       // hand it back as-is; the lease/shadow `check()` above still gates the
       // call itself (same contract as before the Channel UI split).
-      if (key === 'traceEvents') return result
+      if (key === 'traceEvents' || key === 'trajectoryLaneEvents') return result
       if (key === 'agentViewRows' || key === 'settingsSections') return project(result)
       return settle(result)
     }

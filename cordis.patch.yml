@@ -509,6 +509,8 @@
         preset: !!js process.env.DSH_TUI_PRESET ?? undefined
         workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
         sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined
+        # Agent backend (`dsh-tui --backend claude` → DSH_TUI_BACKEND); unset → /kernel's remembered pick, else dsh.
+        backend: !!js process.env.DSH_TUI_BACKEND || undefined
 
     # Live working-line data source (thinking copy / running tool / turn
     # summary). Mounted through @deepseek-harness-tui/dsh-tui's own

@@ -72,14 +72,16 @@ export function mountedSessionIds(ctx: Context): string[] {
  * The first publish runs synchronously so a session mounted during boot is
  * claimed before the user can reach a second terminal.
  * @param ctx - The plugin context, for the agent registry.
+ * @param extra - Sessions no DSH registry lists: a non-DSH backend's bound
+ *   session under its backend-qualified key (`claude:<id>`).
  * @returns A disposer that stops publishing and releases the claim.
  */
-export function startSessionMountHeartbeat(ctx: Context): () => void {
+export function startSessionMountHeartbeat(ctx: Context, extra: () => Iterable<string> = () => []): () => void {
   let stopped = false
   const beat = (): void => {
     if (stopped) return
     try {
-      publishMounts(mountedSessionIds(ctx))
+      publishMounts([...mountedSessionIds(ctx), ...extra()])
     } catch {
       // PUBLISHING is best-effort; DECIDING is not. A beat that cannot write
       // costs announcement until the next one, and must not disturb this

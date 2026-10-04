@@ -71,7 +71,7 @@ for (const relative of ['adapter/ports/channel-ui.ts', 'dsh-adapter/channel/type
 }
 
 // 4. The channel layer routes no activity events and owns no activity timer.
-for (const relative of ['dsh-adapter/channel.ts', 'dsh-adapter/channel/binding-events.ts']) {
+for (const relative of ['dsh-adapter/channel.ts', 'dsh-adapter/channel/core/compose.ts', 'dsh-adapter/channel/core/binding-feed.ts', 'dsh-adapter/channel/extensions.ts', 'dsh-adapter/channel/binding-events.ts']) {
   const text = readFileSync(join(SRC, relative), 'utf8')
   assert.doesNotMatch(text, /onModelSwitch|onCompact\(|onGitBranch|onAgentStatus/, `${relative} forwards no activity signals`)
   assert.doesNotMatch(text, /setInterval\(/, `${relative} owns no activity tick`)
@@ -85,7 +85,9 @@ for (const relative of ['dsh-adapter/channel.ts', 'dsh-adapter/channel/binding-e
 //    merely losing a line. The ordering IS the invariant, so assert the order.
 const pluginSource = readFileSync(join(SRC, 'dsh-adapter/plugin.ts'), 'utf8')
 const storeDeclaration = pluginSource.indexOf('const activityStore = createActivityStore(ctx, ')
-const channelConstruction = pluginSource.indexOf('const rawChannel = createChannel(ctx, agent, {')
+// The channel receives the startup backend session (DSH: the resolved agent
+// wrapped by createDshSession; Claude: the backend's own session).
+const channelConstruction = pluginSource.indexOf('const rawChannel = createChannel(ctx, startupSession, {')
 assert.notEqual(storeDeclaration, -1, 'plugin.ts declares the activity store')
 assert.notEqual(channelConstruction, -1, 'plugin.ts constructs the channel')
 assert.ok(

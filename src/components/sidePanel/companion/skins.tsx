@@ -152,19 +152,26 @@ const WHALE_GIRL_KEY_ANIMATION: Readonly<Record<string, string>> = {
   'happy': 'thumbs-up',
 }
 
-/** 鲸娘动画键裁决（字母格与图像两条路径同一语义）：semanticMap 落点
- *  > 爱心 pass > 心情层（whaleGirlAnimationKey 原契约不变）；落点在
- *  「本路径的素材包」里不存在时退心情层，不报错。 */
-function resolveWhaleGirlAnimationKey(
+/** 鲸娘动画键裁决（字母格与图像两条路径共用）：semanticMap 映射 >
+ *  爱心 pass > 心情层，与 whaleGirlAnimationKey 的优先级一致。每个候选
+ *  都要过 hasKey（在素材包里、没解码失败过），不过就沿链往下：semantic
+ *  → heart → mood → idle；全部不可用返回 undefined，由调用方退字母格
+ *  或保持上一帧。导出供回归直接测这条链。 */
+export function resolveWhaleGirlAnimationKey(
   pose: CompanionPose,
   animationSemantic: string | undefined,
   hasKey: (key: string) => boolean,
-): string {
-  const semanticKey = animationSemantic !== undefined
-    ? WHALE_GIRL_KEY_ANIMATION[animationSemantic] ?? animationSemantic
-    : undefined
-  if (semanticKey !== undefined && hasKey(semanticKey)) return semanticKey
-  return whaleGirlAnimationKey(pose.mood, pose.heart)
+): string | undefined {
+  if (animationSemantic !== undefined) {
+    const semanticKey = WHALE_GIRL_KEY_ANIMATION[animationSemantic] ?? animationSemantic
+    if (hasKey(semanticKey)) return semanticKey
+  }
+  if (pose.heart > 0 && hasKey('smile-hearts')) return 'smile-hearts'
+  const moodKey = WHALE_GIRL_MOOD_ANIMATION[pose.mood] ?? 'idle'
+  if (hasKey(moodKey)) return moodKey
+  const idleKey = WHALE_GIRL_MOOD_ANIMATION.idle
+  if (hasKey(idleKey)) return idleKey
+  return undefined
 }
 
 /** 字母轨开窗（2026-10 空气墙修复配套）：42 格帧串的全部美术落在
@@ -199,7 +206,10 @@ function renderWhaleGirlLetterGrid(input: CompanionSkinRenderInput): React.React
   const { pose, moodSince, now, animationSemantic } = input
   const kit = loadWhaleGirlKit()
   if (kit === undefined) return DeepySkin.render({ ...input, width: WHALE_GIRL_CELLS.columns })
+  // 字母轨只要求 kit 里有这个动画；一个都没有时退 DeepySkin，与缺帧
+  // 回退同一出口。
   const animationKey = resolveWhaleGirlAnimationKey(pose, animationSemantic, key => kit.byKey[key] !== undefined)
+  if (animationKey === undefined) return DeepySkin.render({ ...input, width: WHALE_GIRL_CELLS.columns })
   const rendered = renderedWhaleGirlWindowRows(kit, animationKey)
   const animation = kit.byKey[animationKey]
   if (rendered === undefined || animation === undefined) {
@@ -242,12 +252,13 @@ export const WhaleGirlSkin: CompanionSkin = {
 //
 // 分层：
 // - WhaleGirlImageSkin：协议裁决（useTerminalImageProtocol）——无 kitty/
-//   sixel 直接退字母格（现有 42×15 半块路径）；
+//   sixel 直接退字母格（31×15 开窗半块路径）；
 // - WhaleGirlRasterSkin：timings 选帧（dur 累加取模，与 frameAt 同语义）
-//   + 惰性解码（只解当前动画，PNG→RGBA 走 sharp，进程内 LRU 缓存；
-//   解码期间渲染字母格一帧兜底，解码完切换）；
+//   + 惰性解码（只解当前动画，PNG→RGBA 走 sharp，进程内 LRU 缓存）。
+//   解码期间保持上一帧，直到新帧就绪；字母格只在冷启动（本会话还没
+//   显示过图像）时出现；常用互动键在可见后预热，换键时不闪回字母格；
 // - 尺寸：15 行预算 + 帧宽高比 + useTerminalImageCellSize() 真实像元，
-//   宽度钳在 42 列（§16.6 列宽不变），16px 像元下正好 1:1 像素显示；
+//   宽度钳在 WHALE_GIRL_CELLS.columns（31 列），16px 像元下正好 1:1 像素显示；
 // - presentation='transcript'：唯一非模态且 opt-in Sixel 的档位——宠物
 //   是面板里的常驻位（固定不滚区），归 transcript 生命周期；'preview'
 //   是模态卡片专属（更大字节预算 + 编码优先级），不能占。
@@ -333,11 +344,37 @@ export function whaleGirlImageFrameIndexAt(animation: WhaleGirlImageAnimation, e
 }
 
 /** 已解码动画的 LRU（Map 迭代序 = 最近使用序）；失败集合防止坏动画
- *  每帧重试。字节上限防 267 帧全量常驻（全解约 60MB RGBA）。 */
+ *  每帧重试。字节上限防 267 帧全量常驻（全解约 92.6MB RGBA）。
+ *  提交后的使用经 touchDecodedAnimation 刷新迭代序；写入和驱逐会发布
+ *  revision，消费者订阅后能发现自己的键被挤出并重新解码。 */
 const decodedImageAnimations = new Map<string, readonly TerminalImageSource[]>()
 const failedImageAnimations = new Set<string>()
 let decodedImageBytes = 0
 const DECODED_IMAGE_BYTES_CAP = 32 * 1024 * 1024
+
+/** 缓存写入/驱逐的版本号。快照是原始 number，Object.is 比较稳定。
+ *  touch 只改迭代序、不发布：它在 commit 后运行，发布会让每次 commit
+ *  再触发一次渲染。 */
+let decodedImageCacheRevision = 0
+const decodedImageCacheListeners = new Set<() => void>()
+function publishDecodedImageCacheChange(): void {
+  decodedImageCacheRevision += 1
+  for (const listener of [...decodedImageCacheListeners]) listener()
+}
+/** 订阅缓存写入/驱逐（uSES 的 subscribe 面；回归直接用它观测 revision）。 */
+export function subscribeDecodedImageCache(listener: () => void): () => void {
+  decodedImageCacheListeners.add(listener)
+  return () => { decodedImageCacheListeners.delete(listener) }
+}
+
+/** 把命中的键移到最近使用位。只改迭代序，不动键集和字节数，所以不
+ *  发布 revision。只在 commit 后的 effect 里调用；键不在缓存时 no-op。 */
+function touchDecodedAnimation(key: string): void {
+  const frames = decodedImageAnimations.get(key)
+  if (frames === undefined) return
+  decodedImageAnimations.delete(key)
+  decodedImageAnimations.set(key, frames)
+}
 
 /** 解码一个动画的全部帧（顺序、确定性）；任一帧失败 → 整个动画 undefined。 */
 async function decodeWhaleGirlAnimation(dir: string, animation: WhaleGirlImageAnimation): Promise<readonly TerminalImageSource[] | undefined> {
@@ -379,11 +416,88 @@ function rememberDecodedAnimation(key: string, frames: readonly TerminalImageSou
     decodedImageAnimations.delete(oldest)
     decodedImageBytes -= evicted?.reduce((sum, frame) => sum + frame.data.byteLength, 0) ?? 0
   }
+  // 插入、替换、驱逐都改变了消费者可见的内容：发布 revision，让键被
+  // 挤出的消费者重跑解码 effect。
+  publishDecodedImageCacheChange()
+}
+
+/** 预热键集：面板可见且动画时钟在走时，把常用互动键（idle + poke
+ *  左/右 + smile-hearts）提前异步解码进 LRU，换键时少等一次解码。
+ *  导出供回归检查。 */
+export const WHALE_GIRL_PREHEAT_KEYS: readonly string[] = [
+  WHALE_GIRL_MOOD_ANIMATION.idle,
+  'poke-left',
+  'poke-right',
+  'smile-hearts',
+]
+
+/** 在途解码登记（同键去重：活跃解码路径与预热共用一个 Promise）。 */
+const inflightImageDecodes = new Map<string, Promise<readonly TerminalImageSource[] | undefined>>()
+
+/** 解码发起次数，只在新建在途 Promise 时递增。回归用它检查失败键不
+ *  按 tick 重试、同键并发只解一次、驱逐后的恢复有界。 */
+let whaleGirlDecodeRequestCount = 0
+
+/** 测试重置时递增：重置前发起、重置后才完成的解码不得写进新缓存。 */
+let decodeGeneration = 0
+
+/** 解码一个动画并入库：成功进 LRU，失败进失败集（之后的裁决会跳过
+ *  这个键）；同键并发请求共用在途 Promise。永不 reject，也不直接触发
+ *  React 更新。 */
+function requestWhaleGirlAnimationFrames(kit: WhaleGirlImageKit, key: string): Promise<readonly TerminalImageSource[] | undefined> {
+  const inflight = inflightImageDecodes.get(key)
+  if (inflight !== undefined) return inflight
+  whaleGirlDecodeRequestCount += 1
+  const generation = decodeGeneration
+  const pending = decodeWhaleGirlAnimation(kit.dir, kit.byKey[key]!)
+    .then(frames => {
+      if (generation !== decodeGeneration) return frames
+      inflightImageDecodes.delete(key)
+      if (frames === undefined) failedImageAnimations.add(key)
+      else rememberDecodedAnimation(key, frames)
+      return frames
+    })
+    .catch(() => {
+      if (generation !== decodeGeneration) return undefined
+      inflightImageDecodes.delete(key)
+      failedImageAnimations.add(key)
+      return undefined
+    })
+  inflightImageDecodes.set(key, pending)
+  return pending
+}
+
+/** 预热一个键（幂等：缺键/已缓存/已失败跳过）；失败静默——与按需解码
+ *  同语义地进失败集，不闪不响。 */
+function preheatWhaleGirlAnimation(kit: WhaleGirlImageKit, key: string): void {
+  if (kit.byKey[key] === undefined) return
+  if (decodedImageAnimations.has(key) || failedImageAnimations.has(key)) return
+  void requestWhaleGirlAnimationFrames(kit, key)
 }
 
 /** 测试观测点：当前进程已解码了哪些动画（惰性解码断言用）。 */
 export function whaleGirlDecodedAnimationKeys(): readonly string[] {
   return [...decodedImageAnimations.keys(), ...failedImageAnimations]
+}
+
+/** 测试接缝：LRU 迭代序（= 最近使用序）。 */
+export function decodedImageAnimationOrderForTests(): readonly string[] {
+  return [...decodedImageAnimations.keys()]
+}
+
+/** 测试接缝：注入假帧，制造 32MiB 驱逐压力（不触发真实解码）。 */
+export function injectDecodedAnimationForTests(key: string, frames: readonly TerminalImageSource[]): void {
+  rememberDecodedAnimation(key, frames)
+}
+
+/** 测试观测点：解码发起总次数。 */
+export function whaleGirlDecodeRequestCountForTests(): number {
+  return whaleGirlDecodeRequestCount
+}
+
+/** 测试接缝：登记解码失败键（模拟坏 PNG，不动真实资产）。 */
+export function injectFailedAnimationForTests(key: string): void {
+  failedImageAnimations.add(key)
 }
 
 /** 测试接缝：清图像层缓存（timings kit + 已解码动画 + 失败集合 + 字母开窗渲染）。 */
@@ -392,7 +506,11 @@ export function resetWhaleGirlImageCacheForTests(): void {
   decodedImageAnimations.clear()
   failedImageAnimations.clear()
   decodedImageBytes = 0
+  inflightImageDecodes.clear()
+  decodeGeneration += 1
   whaleGirlWindowCache.clear()
+  whaleGirlDecodeRequestCount = 0
+  publishDecodedImageCacheChange()
 }
 
 /** 面板可见性门（visible=false 零工作契约）：PanelHost 对非 active 的
@@ -400,6 +518,7 @@ export function resetWhaleGirlImageCacheForTests(): void {
  *  布局期更新（不触发额外渲染循环），解码 effect 只在证明可见后开跑。 */
 function useBoxDisplayed(): [(element: DOMElement | null) => void, boolean] {
   const elementRef = React.useRef<DOMElement | null>(null)
+  const displayedRef = React.useRef(false)
   const [displayed, setDisplayed] = React.useState(false)
   const setElement = React.useCallback((element: DOMElement | null) => { elementRef.current = element }, [])
   React.useLayoutEffect(() => {
@@ -409,34 +528,48 @@ function useBoxDisplayed(): [(element: DOMElement | null) => void, boolean] {
       if (node.style?.display === 'none') hidden = true
       node = node.parentNode
     }
-    setDisplayed(previous => (previous === !hidden ? previous : !hidden))
+    // 只在值真的变化时 setState。这个无 deps 的 layout effect 每次
+    // commit 都跑；即使更新器返回原值，enqueue 本身也会计入
+    // react-reconciler 的 nestedUpdateCount，遇上连续提交（如 /context
+    // 滚动）会攒到 50 并抛 #185。用 ref 记住上次的值，稳态不入队。
+    const next = !hidden
+    if (displayedRef.current !== next) {
+      displayedRef.current = next
+      setDisplayed(next)
+    }
   })
   return [setElement, displayed]
 }
 
 /** 鲸娘图像路径的帧缓存 hook：activeKey 为 undefined（面板不可见/无
- *  动画）时不做任何事；命中缓存同步返回，未命中异步解码完成后返回。 */
-function useDecodedWhaleGirlFrames(
+ *  动画）时不做任何事；命中缓存同步返回，未命中异步解码完成后返回。
+ *  缓存 revision 是解码 effect 的依赖：键没变但被预热或别的实例挤出
+ *  缓存时，effect 重跑并重新解码。每次 commit 后刷新当前键的 LRU 位置。
+ *  导出供回归在真渲染器下测试。 */
+export function useDecodedWhaleGirlFrames(
   activeKey: string | undefined,
   kit: WhaleGirlImageKit | undefined,
 ): readonly TerminalImageSource[] | undefined {
   const [settled, setSettled] = React.useState<{ readonly key: string; readonly frames: readonly TerminalImageSource[] } | undefined>(undefined)
+  // 只在缓存写入/驱逐时变化（解码完成或测试注入），稳态不触发渲染。
+  const cacheRevision = React.useSyncExternalStore(subscribeDecodedImageCache, () => decodedImageCacheRevision)
   React.useEffect(() => {
     if (activeKey === undefined || kit === undefined) return
     if (!decodedImageAnimations.has(activeKey) && !failedImageAnimations.has(activeKey)) {
       let live = true
-      const animation = kit.byKey[activeKey]!
-      void decodeWhaleGirlAnimation(kit.dir, animation).then(frames => {
-        if (frames === undefined) failedImageAnimations.add(activeKey)
-        else {
-          rememberDecodedAnimation(activeKey, frames)
-          if (live) setSettled({ key: activeKey, frames })
-        }
+      // 与预热共用在途解码；组件已换键或卸载时不 setSettled（预热先完成
+      // 的话，revision 通知触发的渲染会直接命中缓存）。
+      void requestWhaleGirlAnimationFrames(kit, activeKey).then(frames => {
+        if (live && frames !== undefined) setSettled({ key: activeKey, frames })
       })
       return () => { live = false }
     }
     return
-  }, [activeKey, kit])
+  }, [activeKey, kit, cacheRevision])
+  // 每次 commit 刷新当前键的 LRU 位置；键不在缓存或为 undefined 时 no-op。
+  React.useLayoutEffect(() => {
+    if (activeKey !== undefined) touchDecodedAnimation(activeKey)
+  })
   const cached = activeKey !== undefined ? decodedImageAnimations.get(activeKey) : undefined
   if (cached !== undefined) return cached
   return settled !== undefined && settled.key === activeKey ? settled.frames : undefined
@@ -451,24 +584,60 @@ function WhaleGirlImageSkin(input: CompanionSkinRenderInput): React.ReactNode {
   return <WhaleGirlRasterSkin {...input} />
 }
 
+/** 保持上一帧的 hook：render 把本次候选图像交进来，没有候选时返回上一
+ *  次已提交的图像。「上一帧」和「是否显示过」只在 commit 后的 layout
+ *  effect 里写，被放弃的 concurrent render 不会改动它们。保持期间返回
+ *  同一个元素引用，逐 tick 重渲染不会重画子树。返回 [要显示的节点,
+ *  是否显示过]；节点为 undefined 表示从未显示过（调用方画字母格）。
+ *  导出供回归在 ConcurrentRoot 下测试。 */
+export function useHeldCommittedImage(
+  candidate: React.ReactNode,
+): readonly [committed: React.ReactNode, everCommitted: boolean] {
+  const everCommittedRef = React.useRef(false)
+  const heldCommittedRef = React.useRef<React.ReactNode>(undefined)
+  React.useLayoutEffect(() => {
+    if (candidate === undefined) return
+    heldCommittedRef.current = candidate
+    everCommittedRef.current = true
+  })
+  if (candidate !== undefined) return [candidate, everCommittedRef.current] as const
+  if (!everCommittedRef.current) return [undefined, false] as const
+  return [heldCommittedRef.current, true] as const
+}
+
 /** 图像渲染层：timings 选帧 + 惰性解码 + 单元格盒（15 行预算、宽按
- *  帧比例钳 42 列）。解码完成前渲染字母格（同一语义同一帧）兜底。 */
+ *  帧比例钳 31 列）。解码期间保持上一帧；字母格只在冷启动时出现；常用
+ *  互动键在可见后预热。保持和预热都只看已提交的 render。 */
 function WhaleGirlRasterSkin(input: CompanionSkinRenderInput): React.ReactNode {
   const { pose, moodSince, now, animationSemantic } = input
   const cellSize = useTerminalImageCellSize()
   const imageKit = loadWhaleGirlImageKit()
   const [boxRef, displayed] = useBoxDisplayed()
+  // 解码失败过的键不再被选中（退到心情层的键），失败的互动不会让画面
+  // 一直停在上一帧。
   const animationKey = imageKit !== undefined
-    ? resolveWhaleGirlAnimationKey(pose, animationSemantic, key => imageKit.byKey[key] !== undefined)
+    ? resolveWhaleGirlAnimationKey(pose, animationSemantic, key => imageKit.byKey[key] !== undefined && !failedImageAnimations.has(key))
     : undefined
   // visible=false 零工作：display:none 祖先链未排除前不解码、不订阅时钟。
   const frames = useDecodedWhaleGirlFrames(displayed ? animationKey : undefined, imageKit)
   const animation = animationKey !== undefined ? imageKit?.byKey[animationKey] : undefined
 
+  // 预热：可见且动画时钟在走时，把常用互动键异步解码进 LRU（不挡首帧，
+  // 失败静默进失败集）。now 只在 commit 后的 effect 里与上次比较，被
+  // 放弃的 render 带来的 now 不算。时钟一直不动就是 active=false 的定格
+  // 态（SplashMascot 停在 idle 第 0 帧），不预热。
+  const lastNowRef = React.useRef(now)
+  React.useEffect(() => {
+    if (now === lastNowRef.current) return
+    lastNowRef.current = now
+    if (!displayed || imageKit === undefined) return
+    for (const key of WHALE_GIRL_PREHEAT_KEYS) preheatWhaleGirlAnimation(imageKit, key)
+  }, [now, displayed, imageKit])
+
   // 单元格盒：15 行预算 + 帧自身宽高比（source.width/height，与档位
-  // 无关）+ 真实像元；宽钳 42 列（§16.6）。8×16 像元下 288px 档
+  // 无关）+ 真实像元；宽钳 31 列。8×16 像元下 288px 档
   // （301×288）≈ 31 列，渲染层 fit 只降采样，显示恒 1:1 或更密。
-  // 外层盒恒定 42×15：ref 挂在它上面（可见性门要求任何分支都在树里），
+  // 外层盒恒定 31×15：ref 挂在它上面（可见性门要求任何分支都在树里），
   // 字母格→图像切换时面板几何零跳动。
   let image: React.ReactNode
   if (imageKit !== undefined && cellSize !== undefined && frames !== undefined && animation !== undefined) {
@@ -494,10 +663,13 @@ function WhaleGirlRasterSkin(input: CompanionSkinRenderInput): React.ReactNode {
       )
     }
   }
+  // 本次候选或上一帧；都没有（冷启动）时画字母格。切到还没解码的键时
+  // 保持上一帧，不闪回字母格。
+  const [visibleImage] = useHeldCommittedImage(image)
   return (
     <Box ref={boxRef} flexDirection="column" flexShrink={0} alignItems="center" justifyContent="center"
       width={WHALE_GIRL_CELLS.columns} height={WHALE_GIRL_CELLS.rows}>
-      {image ?? renderWhaleGirlLetterGrid(input)}
+      {visibleImage !== undefined ? visibleImage : renderWhaleGirlLetterGrid(input)}
     </Box>
   )
 }

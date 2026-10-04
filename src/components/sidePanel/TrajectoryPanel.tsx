@@ -9,6 +9,7 @@ import { Inspector } from '../trajectory/Inspector.js'
 import { HotspotView, hotspotRows } from '../trajectory/HotspotView.js'
 import { Divider } from '../design-system/Divider.js'
 import { MOTION_TICK_MS } from '../../trajectory/motion.js'
+import { ledgerWindow } from '../../trajectory/window.js'
 import { truncateWidth } from '../../trajectory/format.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { t } from '../../i18n.js'
@@ -25,6 +26,8 @@ import type { HotspotRow, HotspotSort, WaveProjection } from '../../dsh-adapter/
 import { SidePanelRuntimeContext, useSidePanelTrajectory } from './SidePanelRuntimeContext.js'
 import { usePanelInput } from './usePanelInput.js'
 import type { PanelKeyHandler, PanelProps } from './types.js'
+import { useTrajectoryScope } from '../trajectory/useTrajectoryScope.js'
+import { scopeChipParts } from '../trajectory/scope.js'
 
 /**
  * The trajectory as a side-panel form of the fullscreen TrajectoryScene.
@@ -47,6 +50,8 @@ import type { PanelKeyHandler, PanelProps } from './types.js'
 const INSPECTOR_ROWS = 4
 /** Tabs row, the wake's two rows, the ledger/inspector divider, the hint. */
 const CHROME_ROWS = 5
+/** Shared read-only identity for a panel mounted before any fold exists. */
+const EMPTY_BUILD = emptyTrajectory()
 
 type TrajectoryView = 'timeline' | 'hotspot'
 
@@ -55,9 +60,16 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
   // does. Reading it tolerantly (rather than via useSidePanelChannel, which
   // throws) keeps the component mountable in headless fallback probes.
   const channel = React.useContext(SidePanelRuntimeContext)?.channel
-  const build = useSidePanelTrajectory()
-  const nodes = build?.nodes
-  const empty = nodes === undefined || nodes.length === 0
+  const mainBuild = useSidePanelTrajectory()
+  const build = mainBuild ?? EMPTY_BUILD
+  // 跨 Agent 下钻：面板与全屏场景共用同一个 scope 数据面，波形/账本/检视器
+  // 随 scope 一起切换。面板不消费 Esc，范围循环走 a 键与 chip 点击。
+  const { scope, lanes, scoped, drill } = useTrajectoryScope(channel, build)
+  const nodes = scoped.build.nodes
+  // The empty-state copy promises "data once turns happen" — that is only
+  // honest for the SESSION scope; a scoped view of an eventless lane falls
+  // through to the normal chrome (tabs + chip + the ledger's own '—').
+  const empty = mainBuild === undefined || (scope.kind === 'session' && scoped.build.nodes.length === 0)
 
   // visible=false (inactive tab / collapsed sidebar) stops the motion clock:
   // zero animation-frame subscriptions, the store keeps folding underneath.
@@ -82,17 +94,31 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
 
   // ── projection (no query in the panel form: the filtered list is the
   //    ledger itself, and the column index map is the identity) ─────────────
-  const filtered = nodes ?? []
+  const filtered = nodes
   const indexes = React.useMemo(() => filtered.map((_, index) => index), [filtered.length])
 
-  // `emptyTrajectory()` keeps the memo body total: hooks run before the
+  // EMPTY_BUILD (shared read-only identity) keeps the memo body total: hooks run before the
   // empty-state early return, so the aggregators must tolerate a missing
   // build rather than throwing on first paint.
   const agg = React.useMemo(
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-    () => aggregate(build ?? emptyTrajectory(), sort),
-    [build, filtered.length, sort],
+    () => aggregate(scoped.build, sort),
+    [scoped.build, filtered.length, sort],
   )
+
+  // A scope switch swaps the row list: re-arm arrival at the scoped head.
+  const scopeKey =
+    scope.kind === 'session' ? 's'
+      : scope.kind === 'parent-turn' ? 'p:' + scope.agentId + ':' + scope.turn
+        : (scope.kind === 'agent' ? 'a:' : 'd:') + scope.agentId
+  React.useEffect(() => {
+    seenRef.current = 0
+    errorsRef.current = agg.totals.errors
+    setCursor(0)
+    setFollow(true)
+    setInspectScroll(0)
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey])
 
   // ── arrival + alert detection (same contract as the scene) ───────────────
   const seenRef = React.useRef(0)
@@ -121,15 +147,14 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
   const ledgerRows = Math.max(1, height - CHROME_ROWS - inspectorRows)
 
   const clampedCursor = filtered.length === 0 ? 0 : Math.min(cursor, filtered.length - 1)
-  const windowStart = Math.max(
-    0,
-    Math.min(clampedCursor - Math.floor(ledgerRows / 2), filtered.length - ledgerRows),
-  )
+  // The same windowing as the scene: one viewport's worth of rows at any
+  // session length.
+  const windowStart = ledgerWindow(filtered.length, clampedCursor, ledgerRows).start
 
   const band = React.useMemo(
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-    () => projectWave(nodes ?? emptyTrajectory().nodes, bandWidth, projection),
-    [nodes, filtered.length, bandWidth, projection],
+    () => projectWave(scoped.build.nodes, bandWidth, projection),
+    [scoped.build, filtered.length, bandWidth, projection],
   )
 
   const focusedNode = filtered[clampedCursor]
@@ -137,8 +162,8 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
     () =>
       focusedNode === undefined || channel === undefined
         ? undefined
-        : inspectNode(focusedNode, channel.traceEvents()),
-    [focusedNode, channel],
+        : inspectNode(focusedNode, scoped.events),
+    [focusedNode, scoped.events],
   )
 
   // ── navigation helpers (mirroring the scene's semantics) ─────────────────
@@ -263,6 +288,13 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
         setSwitchTick(tick)
         return true
       }
+      // 会话范围内 a 下钻到焦点行所指的 lane；已在范围内则循环
+      // 当前 Agent → 父回合 → 全部后代 → 会话。面板不消费 Esc，循环也可以
+      // 点 scope chip。
+      if (input === 'a' && !key.ctrl && !key.meta && lanes.length > 0) {
+        drill(filtered[clampedCursor])
+        return true
+      }
       if (key.return_) {
         setExpanded(previous => !previous)
         setInspectScroll(0)
@@ -277,11 +309,45 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
       return false
       // oxlint-disable-next-line react-hooks/exhaustive-deps
     },
-    [view, agg, hotCursor, expanded, inspectorRows, ledgerRows, move, switchView, jumpFromHotspot, tick],
+    [view, agg, hotCursor, expanded, inspectorRows, ledgerRows, move, switchView, jumpFromHotspot, tick, lanes, drill, filtered, clampedCursor],
   )
   usePanelInput(onKey, { active: focused && visible })
 
-  // ── empty state ───────────────────────────────────────────────────────────
+  // ── unsupported state ──────────────────────────────────────────────────────
+  // The channel's trajectorySource() decides, not the node count: a session
+  // with no trajectory source must not read as "no turns yet". Every
+  // in-tree composition mounts one (DSH: raw history; other backends: the
+  // AgentEvent fold), so only fixtures reach this branch today. The ⤢
+  // outlet is hidden for it (SidePanelColumn) and the second line says
+  // why. A channel without the report (partial fixtures) keeps the old
+  // behavior.
+  const source = channel?.trajectorySource?.()
+  if (source === 'unsupported') {
+    // Copy selection only (the STATE above is structural): the Claude
+    // backend gets its specifically-worded line, any other source-less
+    // backend the generic one.
+    const unsupportedLine =
+      channel?.backendCapabilities?.backendId === 'claude'
+        ? t('trajectory-unsupported-claude')
+        : t('trajectory-unsupported')
+    return (
+      <Box ref={ref} flexDirection="column" width="100%" paddingX={1}>
+        <Box marginTop={1}>
+          <Text color="subtle" wrap="truncate">
+            {truncateWidth(unsupportedLine, contentWidth)}
+          </Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text dimColor italic wrap="truncate">
+            {truncateWidth(t('trajectory-unsupported-fullscreen'), contentWidth)}
+          </Text>
+        </Box>
+      </Box>
+    )
+  }
+
+  // ── empty state (supported + no events yet — the ONLY state allowed to
+  //    promise data once turns happen) ────────────────────────────────────────
   if (empty) {
     return (
       <Box ref={ref} flexDirection="column" width="100%" paddingX={1}>
@@ -302,8 +368,13 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
   // ── tabs row: two clickable segments + the axis label (cycle on click) ───
   const tabTimelineText = `${view === 'timeline' ? '●' : '○'} ${t('traj-tab-timeline')}`
   const tabHotspotText = `${view === 'hotspot' ? '●' : '○'} ${t('traj-tab-hotspot')}`
+  // The scope chip: shown exactly while a non-session scope
+  // is active; its width is charged to the axis label's budget so a narrow
+  // panel drops the axis before it drops the scope identity.
+  const scopeChip = scopeChipParts(scope)
+  const scopeChipText = scopeChip === undefined ? '' : '◆ ' + t(scopeChip.key, scopeChip.params)
   const axisText = view === 'hotspot' ? t(`traj-sort-${sort}`) : t(`traj-proj-${projection}`)
-  const axisRoom = contentWidth - stringWidth(tabTimelineText) - stringWidth(tabHotspotText) - 3
+  const axisRoom = contentWidth - stringWidth(tabTimelineText) - stringWidth(tabHotspotText) - stringWidth(scopeChipText) - 3
   const axisShown = axisRoom >= stringWidth(axisText) ? axisText : ''
   const tabs = (
     <Box width="100%" height={1} flexShrink={0}>
@@ -341,6 +412,20 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
           {tabHotspotText}
         </Text>
       </Box>
+      {scopeChipText !== '' && (
+        <Box
+          flexShrink={0}
+          width={stringWidth(scopeChipText)}
+          // 点击 scope chip = a 键的鼠标等价（循环 当前 Agent → 父回合 →
+          // 全部后代 → 会话）。
+          onClick={(event: ClickEvent) => {
+            event.stopImmediatePropagation()
+            drill(undefined)
+          }}
+        >
+          <Text color="accent" bold>{scopeChipText}</Text>
+        </Box>
+      )}
       <Box flexGrow={1} flexShrink={1}>
         <Text> </Text>
       </Box>
@@ -436,7 +521,14 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
       </ink-box>
       <Box width="100%" height={1} flexShrink={0}>
         <Text dimColor italic wrap="truncate">
-          {truncateWidth(t('panel-trajectory-hint'), contentWidth)}
+          {truncateWidth(
+            // 有 lane 可下钻时教一次 a 键；进入范围后改说怎么出来（面板
+            // 不消费 Esc，循环回会话也是出口）。
+            lanes.length === 0 ? t('panel-trajectory-hint')
+              : scope.kind === 'session' ? t('panel-trajectory-hint') + ' · ' + t('trajectory-drill-hint')
+                : t('trajectory-scope-hint-panel'),
+            contentWidth,
+          )}
         </Text>
       </Box>
     </Box>

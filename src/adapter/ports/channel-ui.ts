@@ -1,11 +1,23 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, TurnUsageSummary, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, TrajectoryLane, TrajectorySource, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { AgentCapabilities } from './channel-capabilities.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry, ForeignSource, ForeignSessionRow, ForeignImportOutcome } from './channel-session.js'
 import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
-import type { ProviderSetupHost, OAuthProviderStatus, SettingsHost, TuiSettingsSection } from './channel-settings.js'
+import type { ProviderSetupHost, OAuthProviderStatus, OAuthSetupHost, SettingsHost, TuiSettingsSection } from './channel-settings.js'
+
+/** One backend session's sign-in surface (`ChannelUi.backendAuth`). */
+export interface BackendAuthHost {
+  /** The host OAuth provider id the backend signs in with (`anthropic`). */
+  readonly provider: string | undefined
+  /** The host's OAuth sign-in surface (dsh-auth), when mounted. */
+  readonly oauth: OAuthSetupHost | undefined
+  /** Localized status lines (credential source, account; never tokens). */
+  status(): Promise<readonly string[]>
+  /** Restart the backend on the freshly stored credential. */
+  reconnect(): Promise<void>
+}
 
 /**
  * The public channel surface a screen renders: the full transcript and live
@@ -37,6 +49,26 @@ export interface ChannelUi {
   readonly sessionId: string
   /** TUI-owned generation that changes on every live Agent rebind. */
   readonly agentBindingGeneration: number
+  /** Cross-backend identity of the bound session (`backendId` + the
+   *  backend's own session id); follows every rebind. */
+  readonly sessionRef: ChannelSessionRef
+  /** What the bound backend session supports, as plain data: the UI hides
+   *  commands and affordances whose capability is absent instead of letting
+   *  them fail. A DSH session supports everything the TUI offers. Distinct
+   *  from {@link ChannelUi.capabilities}, which describes what the current
+   *  DSH agent's composition mounts (compaction, `/plan`, skills, …). */
+  readonly backendCapabilities: ChannelCapabilities
+  /** The session cost the backend itself reported (Claude
+   *  `total_cost_usd`), or undefined when the backend reports none; the
+   *  status line then falls back to its local estimate. */
+  readonly costReport: ChannelCostReport | undefined
+  /** Subscription usage windows the backend reported (Claude
+   *  `rate_limit_event`), or undefined when it reports none. */
+  readonly rateLimit: ChannelRateLimit | undefined
+  /** The bound session has durable history older than the painted
+   *  transcript (a compaction cut it off before a resume): "load earlier"
+   *  shows even when no row is folded, and `loadOlder()` prepends it. */
+  readonly olderHistory: boolean
   /** `dsh-tui.recapOnOpen` (default on): auto-summarize the session tail
    *  into the dim AutoRecapRow when the session opens/resumes. Read live
    *  (settings service), so a `/settings` change applies on the next
@@ -50,6 +82,13 @@ export interface ChannelUi {
   readonly settingsNamespace: string
   /** Resolved model id (from the plugin config). */
   readonly model: string
+  /** Display name of the live model when a channel mapping says the id the
+   *  runtime echoes is not what actually serves the request (relay channels
+   *  echo the requested id back; backends/claude/modelEnv.ts resolves it
+   *  from the user ANTHROPIC_*_MODEL env plus the local model-names.json).
+   *  UI renders this instead of `model` when present; attribution and
+   *  matching keep using `model`. */
+  readonly modelDisplay: string | undefined
   /** Provider route of the live agent. */
   readonly provider: string
   /** Raw cordis.yml `provider` key (undefined when unset) — the boot-time
@@ -109,10 +148,17 @@ export interface ChannelUi {
    *  is the top tier). Consumed by top-tier-triggered UI (effort ignition). */
   readonly effortLevels: readonly string[] | undefined
   /** Usage of the most recent request (context share + cache hits come from
-   *  this, not the running totals — each request's input IS the context). */
+   *  this, not the running totals — each request's input IS the context).
+   *  `at` is the producing message's event time, so readouts that quote
+   *  this request can say when it was measured. */
   readonly lastUsage:
-    | { input: number; output: number; cacheRead: number; cacheWrite: number }
+    | { input: number; output: number; cacheRead: number; cacheWrite: number; at: number }
     | undefined
+  /** Ledger of the most recently ended turn: per-turn usage aggregate,
+   *  retry count, span, model/effort. Kept until the next turn ends, so the
+   *  footer's turn mini-summary can read it while the next turn runs without
+   *  mixing the two. Undefined before any turn ended. */
+  readonly turnUsage: TurnUsageSummary | undefined
   /**
    * Context occupancy — the ONE source of truth for the footer's `ctx` field,
    * the segmented context bar, the working-activity line's `⚠ ctx N%` prefix,
@@ -162,6 +208,11 @@ export interface ChannelUi {
   /** Terminal-card header folding (settings `dsh-tui.foldTerminalCommand`):
    *  collapse a multi-line command title to its first line + count hint. */
   readonly foldTerminalCommand: boolean
+  /** Turn-usage ledger row in the transcript (settings `dsh-tui.turnUsageRow`;
+   *  off by default): the quiet right-aligned line that closes each turn.
+   *  Display only: the ledger itself is always collected for `turnUsage`,
+   *  /tokens, /status and the footer hover. */
+  readonly turnUsageRow: boolean
   /** Whether the session-name chip shows on the prompt top border's right
    *  side (settings `dsh-tui.promptSessionLabel`; off by default). */
   readonly promptSessionLabel: boolean
@@ -383,10 +434,33 @@ export interface ChannelUi {
    *  stays true the abort has not converged; Chat force-exits on the next
    *  Ctrl+C press in that window. */
   cancel(): void
-  /** Abort the in-flight turn and process `texts` right away (Esc/Ctrl+Enter
+  /** Abort the in-flight turn and process `texts` right away (Ctrl+Enter
    *  with queued input): each text is re-queued as a followup once the abort
    *  settles, so the new turn starts immediately. Returns the count queued. */
   interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number
+  /** Esc with queued input: abort the turn and park the queued previews as a
+   *  dock, as Claude Code does. The backend drops its queued copies with the
+   *  aborted turn, and nothing re-delivers them until the user sends the
+   *  dock (⏎ / `deliverDocked`) or retracts items (Alt+↑ / the ↑ editor).
+   *  Returns the count docked; 0 means nothing new was parked (the caller
+   *  may still `cancel`). */
+  interruptAndDock(): number
+  /** Deliver every docked queued message now (⏎ on an empty draft), FIFO,
+   *  exactly once. Rows still awaiting their interrupt receipt's verdict
+   *  stay parked, since their backend copies may yet run, and the call
+   *  notifies how many were held. Returns the count sent. */
+  deliverDocked(): number
+  /**
+   * Lossless swap: retract the docked row `id` into the composer and park
+   * the live draft (text + staged images) at the pending tail as a new
+   * docked row, in one queue write. Nothing sends and no undo history is
+   * lost. The backend never saw the parked draft, so it stays outside the
+   * interrupt-receipt fence: a settling receipt must not un-dock it.
+   * Returns false when `id` is no longer a docked row (claimed, discarded or
+   * un-docked meanwhile), or while an unsettled interrupt receipt still
+   * holds the row.
+   */
+  swapDockedForDraft(id: string, draft: { text: string; images?: readonly ComposerImageRef[] }): boolean
   /** Rewind the conversation to a past user message (the double-Esc rewind):
    *  forks the session through that message, swaps in a fresh agent, and
    *  returns the message text for re-editing — or `null` when unwritable.
@@ -453,8 +527,11 @@ export interface ChannelUi {
    *  The history replays unchanged; only the request route changes. */
   switchModel(provider: string, model: string): Promise<boolean>
   /** The live route's effort levels + adapter default for the `/effort`
-   *  slider; empty `efforts` after notifying when unsupported/unavailable. */
-  listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined }>
+   *  slider; empty `efforts` after notifying when unsupported/unavailable.
+   *  `levelsFallback` is true when the ladder is the CLI-standard
+   *  compatibility offer (the model row declares no tiers of its own) —
+   *  the slider marks it as such instead of implying the model's list. */
+  listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined; levelsFallback?: true }>
   /** Set one effort level by id (validated against the adapter list);
    *  false + a notify when the id is not offered. Persists like the old
    *  Shift+Tab cycle (~/.dsh-tui/effort.json). */
@@ -471,6 +548,67 @@ export interface ChannelUi {
   readonly modeIndex: number
   /** Shift+Tab: advance to the next configured session mode. */
   cycleMode(): Promise<void>
+  /**
+   * The bound session's backend-native permission modes (its typed `modes`
+   * capability), with the index of the current one (-1 when the live mode is
+   * not in the list). Synchronous and silent: an absent capability answers
+   * an empty list, as `permissionPresets()` does for an unavailable roster,
+   * so the UI can probe without toasting.
+   */
+  listModes(): { modes: readonly BackendModeOption[]; currentIndex: number }
+  /**
+   * Switch the backend-native permission mode by id (validated against the
+   * live list, the same rule `setEffort` applies); false + a notify when
+   * the capability or the id is absent. DSH sessions never route here —
+   * their Shift+Tab cycle and `/permission` presets are session modes.
+   */
+  setMode(id: string): Promise<boolean>
+  /**
+   * The bound session's relay channel profiles (its typed `channels`
+   * capability), with the active id. Synchronous and silent: an absent
+   * capability answers the empty roster, and the /channel picker renders
+   * from it (its import row is the only entry when the file holds nothing).
+   */
+  listChannels(): { channels: readonly BackendChannelOption[]; activeId: string | undefined }
+  /**
+   * Switch the active channel profile by id (validated against the live
+   * roster). The model display re-resolves in the same call, so the footer
+   * and the /model labels repaint immediately. False + a notify when the
+   * capability or the id is absent.
+   */
+  setChannel(id: string): boolean
+  /**
+   * Import (or refresh) the channel profile implied by the CLI settings
+   * env: the ANTHROPIC_BASE_URL host names it, ANTHROPIC_*_MODEL become its
+   * tiers, the base URL becomes the profile's, and ANTHROPIC_AUTH_TOKEN
+   * moves into the credential store (the profile keeps only its ref).
+   * Undefined when the env holds nothing importable; the caller notifies
+   * either way.
+   */
+  importChannel(): BackendChannelOption | undefined
+  /**
+   * Upsert one channel profile with connection fields (the /channel
+   * wizard): a collected token goes to the credential seam,
+   * channels.json keeps only the ref. Undefined when the backend has no
+   * management surface; the caller notifies.
+   */
+  saveChannel(input: {
+    readonly id: string
+    readonly name: string
+    readonly baseUrl?: string
+    /** Undefined = keep; '' removes the stored token and its ref. */
+    readonly token?: string
+    readonly env?: Readonly<Record<string, string>>
+    readonly models?: Readonly<Record<string, string>>
+    readonly tiers?: Readonly<Record<string, string>>
+  }): BackendChannelOption | undefined
+  /** Drop one channel profile and its stored token; false when the
+   *  backend has no management surface or no such channel. */
+  removeChannel(id: string): boolean
+  /** What the CLI settings env holds for an import (the wizard's
+   *  absorb-tiers offer): the base URL and tier rules, read-only,
+   *  nothing created. Undefined when nothing is importable. */
+  peekChannelImport(): { readonly baseUrl?: string; readonly tiers: Readonly<Record<string, string>> } | undefined
   /** Read the official permission preset roster and current identity. */
   permissionPresets(): PermissionPresetSnapshot
   /**
@@ -536,6 +674,13 @@ export interface ChannelUi {
    *  without the plugin, so `/login` renders exactly what it did before. */
   oauthProviderStatuses(): Promise<readonly OAuthProviderStatus[] | undefined>
   /**
+   * The bound backend session's own sign-in for `/login` (status lines, the
+   * host's OAuth sign-in preselected on the backend's provider, reconnect on
+   * the fresh credential); undefined for a DSH session, whose `/login`
+   * reports the DSH credentials.
+   */
+  backendAuth(): BackendAuthHost | undefined
+  /**
    * Runtime capabilities for the `/settings` screen, over the settings /
    * credentials seams; undefined when the composition lacks the settings
    * service (the screen then renders plugin sections as unavailable and
@@ -599,6 +744,10 @@ export interface ChannelUi {
   pushLocal(title: string, lines: readonly string[]): void
   /** MCP server/tool status for /mcp: one line per server, or setup guidance. */
   mcpStatus(): string[]
+  /** `/mcp reconnect <name>` / `/mcp toggle <name> on|off` where the backend
+   *  controls its servers (`capabilities.mcpControl`); reports the outcome
+   *  itself (a notice), resolving true when it was done. */
+  mcpControl(request: { readonly action: 'reconnect'; readonly name: string } | { readonly action: 'toggle'; readonly name: string; readonly enabled: boolean }): Promise<boolean>
   /** Write the conversation transcript to `dsh-tui-export-<ts>.md` in the
    *  session cwd; returns the written path, or null on failure. */
   exportSession(): string | null
@@ -675,6 +824,38 @@ export interface ChannelUi {
    * time; agent swaps (/resume /rewind /new) are reflected immediately.
    */
   traceEvents(): readonly RawTrajEvent[]
+  /**
+   * The trajectory source's own three-state report (see
+   * {@link TrajectorySource}): 'unsupported' when the composition mounted no
+   * trajectory source at all, 'empty'/'supported' when it did (the DSH
+   * extension reading its raw history; any other backend via the core's
+   * AgentEvent fold). Every trajectory surface (/trace, Ctrl+T, the sidebar
+   * tab, the ⤢ outlet) reads this instead of guessing from the event count,
+   * so "not adapted yet" never shows up as "no turns yet".
+   */
+  trajectorySource(): TrajectorySource
+  /**
+   * The trajectory's drilldown lanes: every subagent whose child-lane
+   * events the mounted source folded into their own log. A source that
+   * attributes no lanes (DSH raw history today) answers an empty roster, and
+   * the scope filter is then not offered rather than faked over the main
+   * ledger.
+   */
+  trajectoryLanes(): readonly TrajectoryLane[]
+  /**
+   * One lane's own raw-event snapshot (`descendants` unset), or the agent's
+   * whole subtree merged in emission order (`descendants` set). Same
+   * append-only, prefix-identity contract as {@link traceEvents}, so the
+   * scoped fold stays incremental like the main one.
+   */
+  trajectoryLaneEvents(agentId: string, descendants?: boolean): readonly RawTrajEvent[]
+  /**
+   * Localized one-phrase label naming the mounted trajectory source (the
+   * raw DSH session log, or the backend-neutral AgentEvent fold), so the
+   * fullscreen view says what it is reading instead of guessing from the
+   * backend id.
+   */
+  trajectoryBackendLabel(): string
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   setThinkingFold(mode: 'preview' | 'full'): void
   setJobGroupFold(mode: JobGroupFoldMode): void
@@ -682,6 +863,7 @@ export interface ChannelUi {
   setScrollGutter(mode: ScrollGutterMode): void
   setPageMargin(setting: PageMarginSetting): void
   setFoldTerminalCommand(enabled: boolean): void
+  setTurnUsageRow(enabled: boolean): void
   setPromptSessionLabel(enabled: boolean): void
   setExpandEditor(enabled: boolean): void
   setSmoothStreaming(enabled: boolean): void

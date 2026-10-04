@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text } from '../../ui.js'
 import { formatDuration } from '../../trajectory/format.js'
+import { t } from '../../i18n.js'
 import type { InspectDetail } from '../../dsh-adapter/trajectory/index.js'
 import type { TrajNode } from '../../dsh-adapter/types.js'
 
@@ -51,6 +52,14 @@ export function Inspector({
   // Flatten every section into display lines up front, so paging and
   // clipping operate on one uniform list.
   const lines: { text: string; tone?: 'error' | 'dim'; head?: boolean }[] = []
+  // 还在等的审批/问卷行没有 durationMs，这里按渲染时刻算已等待时长；
+  // 场景与侧栏都在动画帧上重渲染，这行会随等待走动。
+  if (node.kind === 'approval' && node.status === 'running') {
+    lines.push({ text: t('trajectory-wait-elapsed', { duration: formatDuration(Math.max(0, Date.now() - node.time)) }) })
+  }
+  if (detail.unresolved === true) {
+    lines.push({ text: t('trajectory-inspect-unavailable'), tone: 'dim' })
+  }
   for (const section of detail.sections) {
     // A lone section whose heading repeats the pane title (a message row's
     // `assistant` under `assistant`) spends a line saying nothing.

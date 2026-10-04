@@ -80,13 +80,16 @@ export class PanelStore {
     return this.entries.get(id)
   }
 
-  /** 只允许 owner 或宿主调用（调用侧自律，与 tuiStatus 相同）。 */
+  /** 只允许 owner 或宿主调用（调用侧自律，与 tuiStatus 相同）。
+   *  level/unread 都没变时不通知：适配器在每次 channel 变化（流式时每个
+   *  delta）都会调这里，每次通知都会让订阅 list() 的宿主重渲染。 */
   setBadge(id: string, badge: Omit<PanelBadge, 'latestAt'> | null): void {
     const entry = this.entries.get(id)
     if (entry === undefined) return
-    const next: PanelBadge | null = badge === null
-      ? null
-      : { level: badge.level, unread: Math.min(PANEL_UNREAD_CAP, Math.max(0, badge.unread)), latestAt: Date.now() }
+    const unread = badge === null ? 0 : Math.min(PANEL_UNREAD_CAP, Math.max(0, badge.unread))
+    const current = entry.badge
+    if (badge === null ? current === null : current !== null && current.level === badge.level && current.unread === unread) return
+    const next: PanelBadge | null = badge === null ? null : { level: badge.level, unread, latestAt: Date.now() }
     this.entries.set(id, { ...entry, badge: next })
     this.emit({ type: 'badge', id })
   }

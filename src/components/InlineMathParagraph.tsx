@@ -112,7 +112,7 @@ export function InlineMathParagraph({ token, highlight }: Props): React.ReactNod
               // edge — the same contract block formulas use.
               const formulaRequest = requests?.[piece.index]
               const painted = (
-                <Image {...(composited ? {} : { transparent: true })} presentation="transcript" source={raster.source} width={piece.columns} height={1} alt={formula.text} copyText={formula.raw}>
+                <Image {...(composited ? {} : { transparent: true })} lineArt presentation="transcript" source={raster.source} width={piece.columns} height={1} alt={formula.text} copyText={formula.raw}>
                   <Text dimColor wrap="truncate">{renderInlineMath(formula.text) ?? formula.raw}</Text>
                 </Image>
               )

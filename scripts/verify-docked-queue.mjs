@@ -1,0 +1,956 @@
+/**
+ * Channel-level regression for the docked queue (Claude Code 2.1.284 parity):
+ * Esc with queued input while a turn runs parks the previews as a DOCK —
+ * the abort drops the backend's queued copies and nothing re-delivers them
+ * until the user sends the dock (⏎ / deliverDocked) or retracts items.
+ *
+ * Both backends are pinned through the SAME channel core:
+ * - DSH fixture: a real createDshSession over a fake agent (keepInbox
+ *   belongs to user-cancel only; the interrupt cancel drops the inbox and
+ *   the dock survives the kernel's discard events).
+ * - Claude fixture: a raw AgentSession whose CLI keeps no withdrawal API
+ *   (retractPending false) — docked rows still retract locally — and whose
+ *   interrupt receipt can answer still_queued (the no-cancelQueued CLI
+ *   fallback: those rows un-dock and retire on their own).
+ *
+ * Run with plain node against the compiled lib: `node scripts/verify-docked-queue.mjs`
+ */
+import { Writable, PassThrough } from 'node:stream'
+import { createChannel } from '../lib/types/dsh-adapter/channel.js'
+import { setLang, t } from '../lib/types/i18n.js'
+import { settle, settled, sleep, findText } from './lib/term-test.mjs'
+
+setLang('en')
+const flush = () => new Promise(resolve => setImmediate(resolve))
+
+let failed = 0
+function check(name, ok, extra = '') {
+  console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
+  if (!ok) failed += 1
+}
+
+const ctx = {
+  on(event, handler) {
+    handlers.set(event, handler)
+    return () => handlers.delete(event)
+  },
+  get() {
+    return undefined
+  },
+  logger: { warn() {} },
+}
+const handlers = new Map()
+const stubAgentCtx = { on: () => () => {} }
+
+const launchOptions = { model: 'deepseek-chat', cwd: '/tmp', provider: 'deepseek', activity: false }
+
+// ───────────────────────── Section A: DSH fixture ─────────────────────────
+{
+  const followupCalls = []
+  const cancelCalls = []
+  const inboxRemovals = []
+  const agent = {
+    id: 'a1',
+    status: 'running',
+    session: { id: 's1', seq: 0, events: [] },
+    ctx: stubAgentCtx,
+    followup(message) {
+      followupCalls.push(message)
+    },
+    steer() {},
+    cancel(cause, options) {
+      cancelCalls.push({ cause, options })
+    },
+    inbox: {
+      remove(id) {
+        inboxRemovals.push(id)
+        return true
+      },
+    },
+  }
+  const channel = createChannel(ctx, agent, launchOptions)
+
+  // Two queued messages while a turn runs.
+  channel.submit('停靠一')
+  channel.submit('停靠二')
+  check('A1 two queued previews tracked', await settled(() => channel.pending.length === 2), JSON.stringify(channel.pending.map(p => p.text)))
+
+  // Esc: dock, not deliver.
+  check('A2 interruptAndDock counts', channel.interruptAndDock() === 2)
+  check('A2 interrupt cancel drops the inbox (no keepInbox)', cancelCalls.length === 1 && cancelCalls[0]?.options === undefined, JSON.stringify(cancelCalls))
+  check('A2 previews parked as docked', channel.pending.length === 2 && channel.pending.every(item => item.docked === true), JSON.stringify(channel.pending))
+
+  // The kernel's discard events (the cancel dropped the inbox) must not
+  // delete the docked previews.
+  const discarded = handlers.get('agent/inbox/discarded')
+  check('A3 discard handler registered', typeof discarded === 'function')
+  if (discarded) {
+    for (const message of [...followupCalls]) discarded({ agent, message })
+    check('A3 docked previews survive the discard events', channel.pending.length === 2 && channel.pending.every(item => item.docked === true), JSON.stringify(channel.pending))
+  }
+  check('A4 nothing re-delivered after the dock', await settled(() => followupCalls.length === 2), JSON.stringify(followupCalls.map(m => m.content?.[0]?.text)))
+
+  // Retract one docked row: purely local — the agent inbox is never asked.
+  const retractedId = channel.pending[0]?.id
+  check('A5 docked retract is local (no inbox.remove)', channel.removePending(retractedId) === true && inboxRemovals.length === 0 && channel.pending.length === 1)
+
+  // Send the dock: exactly once, FIFO.
+  check('A6 deliverDocked counts', channel.deliverDocked() === 1)
+  const texts = () => followupCalls.map(m => m.content?.[0]?.text)
+  check('A6 docked text delivered exactly once', await settled(() => texts().filter(text => text === '停靠二').length === 1), JSON.stringify(texts()))
+  check('A6 fresh preview is not docked', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true && channel.pending[0]?.placement === 'followup'), JSON.stringify(channel.pending))
+
+  // Claim still retires a docked row (the fallback backend ran it).
+  channel.submit('停靠三')
+  await settle(() => channel.pending.length === 2)
+  channel.interruptAndDock()
+  const claimedId = channel.pending.find(item => item.docked === true)?.id
+  const claimed = handlers.get('agent/inbox/claimed')
+  check('A8 claim handler registered', typeof claimed === 'function')
+  if (claimed) {
+    claimed({ agent, message: { id: claimedId } })
+    check('A8 claim retires a docked row', channel.pending.every(item => item.id !== claimedId), JSON.stringify(channel.pending))
+  }
+
+  // Ctrl+Enter over a dock: immediate delivery takes the dock along (the
+  // docked text re-delivered exactly once, ahead of the new input), and no
+  // docked row is left behind. Assert on the DELTA since the interrupt
+  // began: the original submission already reached the agent once before
+  // the dock parked its preview.
+  const beforeInterrupt = followupCalls.length
+  channel.interruptAndDeliver(['urgent'])
+  const interruptDelta = () => texts().slice(beforeInterrupt)
+  check('A9 interruptAndDeliver takes the dock first, exactly once each', await settled(() =>
+    JSON.stringify(interruptDelta()) === JSON.stringify(['停靠三', 'urgent'])
+    && channel.pending.every(item => item.docked !== true),
+  ), JSON.stringify(interruptDelta()))
+
+  // User-cancel semantics untouched: keepInbox stays exclusive to 'user'.
+  const userCancelCalls = []
+  const userCancelAgent = {
+    id: 'a2',
+    status: 'running',
+    session: { id: 's2', seq: 0, events: [] },
+    ctx: stubAgentCtx,
+    followup() {},
+    steer() {},
+    cancel(cause, options) {
+      userCancelCalls.push({ cause, options })
+    },
+    inbox: { remove: () => true },
+  }
+  const userChannel = createChannel(ctx, userCancelAgent, launchOptions)
+  userChannel.submit('保留我')
+  await settle(() => userChannel.pending.length === 1)
+  userChannel.cancel()
+  check('A7 user cancel keeps the inbox (keepInbox:true)', userCancelCalls.length === 1 && JSON.stringify(userCancelCalls[0]?.options) === '{"keepInbox":true}', JSON.stringify(userCancelCalls))
+  check('A7 user cancel keeps the preview undocked', userChannel.pending.length === 1 && userChannel.pending[0]?.docked !== true)
+}
+
+// ─────────────────────── Section B: Claude fixture ────────────────────────
+// A raw AgentSession shaped like the Claude backend: no live-inbox
+// withdrawal (removePending false, retractPending therefore false) and an
+// interrupt receipt that answers still_queued.
+function makeClaudeSession({ stillQueuedOnInterrupt, cancelReceipt } = {}) {
+  const state = {
+    submits: [],
+    cancels: [],
+    removePendingCalls: [],
+    listeners: new Set(),
+    keptIds: [],
+  }
+  const session = {
+    ref: { backendId: 'claude', sessionId: 'cs1' },
+    cwd: '/tmp',
+    status: 'running',
+    capabilities: { native: {} },
+    history: async () => [],
+    subscribe(listener) {
+      state.listeners.add(listener)
+      return () => state.listeners.delete(listener)
+    },
+    submit(input) {
+      state.submits.push(input)
+      if (stillQueuedOnInterrupt === true) state.keptIds.push(input.clientMessageId)
+      return Promise.resolve({ accepted: true })
+    },
+    removePending(id) {
+      state.removePendingCalls.push(id)
+      return false
+    },
+    cancel(cause) {
+      state.cancels.push(cause)
+      if (cancelReceipt !== undefined) return cancelReceipt(state)
+      return Promise.resolve({ stillQueued: cause === 'interrupt' ? [...state.keptIds] : [], outcome: 'confirmed' })
+    },
+    dispose: async () => {},
+  }
+  const push = event => {
+    for (const listener of [...state.listeners]) listener([event], { replay: false, wake: 'sync' })
+  }
+  return { session, state, push }
+}
+
+{
+  const { session, state, push } = makeClaudeSession()
+  const channel = createChannel(ctx, session, launchOptions)
+  check('B0 claude fixture has no retractPending', channel.backendCapabilities.retractPending === false)
+
+  channel.submit('claude 一')
+  channel.submit('claude 二')
+  check('B1 two queued previews tracked', await settled(() => channel.pending.length === 2), JSON.stringify(channel.pending.map(p => p.text)))
+
+  check('B2 interruptAndDock counts', channel.interruptAndDock() === 2)
+  check('B2 cancel cause is interrupt', state.cancels.length === 1 && state.cancels[0] === 'interrupt', JSON.stringify(state.cancels))
+  check('B2 previews parked (empty still_queued receipt)', await settled(() => channel.pending.length === 2 && channel.pending.every(item => item.docked === true)), JSON.stringify(channel.pending))
+
+  // The CLI dropped its queue: pending.changed discards must not delete the
+  // docked previews.
+  push({ type: 'pending.changed', items: [], claimed: [], discarded: channel.pending.map(item => item.id) })
+  check('B3 docked previews survive the CLI discard events', channel.pending.length === 2 && channel.pending.every(item => item.docked === true), JSON.stringify(channel.pending))
+
+  // THE retract fix: a docked row retracts locally even though the session
+  // reports no withdrawal capability at all.
+  const dockedId = channel.pending[0]?.id
+  check('B4 docked retract works without retractPending', channel.removePending(dockedId) === true && state.removePendingCalls.length === 0 && channel.pending.length === 1)
+
+  check('B5 deliverDocked counts', channel.deliverDocked() === 1)
+  check('B5 docked text delivered exactly once', await settled(() => {
+    const texts = state.submits.map(input => input.text)
+    return texts.filter(text => text === 'claude 二').length === 1
+  }), JSON.stringify(state.submits.map(input => input.text)))
+  check('B5 fresh preview is not docked', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
+}
+
+// Fallback leg: a CLI without interrupt_cancel_queued_v1 answers the
+// interrupt receipt with the ids it KEPT — those rows un-dock and retire on
+// their own (a discard retires them like any live preview).
+{
+  const { session, state, push } = makeClaudeSession({ stillQueuedOnInterrupt: true })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('fallback 消息')
+  await settle(() => channel.pending.length === 1)
+  check('B6 dock counted', channel.interruptAndDock() === 1)
+  check('B6 kept-queue receipt un-docks the row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
+  push({ type: 'pending.changed', items: [], claimed: [], discarded: [channel.pending[0]?.id] })
+  check('B6 undocked row retires on discard (no ghost preview)', channel.pending.length === 0, JSON.stringify(channel.pending))
+  check('B6 no delivery was made by the channel', state.submits.length === 1, JSON.stringify(state.submits.map(input => input.text)))
+}
+
+// ─────────── Section C: an unconfirmed interrupt never keeps a dock ────
+// R2-1: a failed or answerless cancel receipt must not read as an empty
+// queue. The dock is a CLAIM that the backend dropped its queued copies;
+// without a confirmed receipt the channel revokes it (with a notice), so
+// the still-live single backend copy keeps running and the SDK never
+// accepts a second copy of the same intent.
+{
+  // C1 — the interrupt request itself rejects.
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => Promise.reject(new Error('interrupt refused')) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('queued')
+  await settle(() => channel.pending.length === 1)
+  check('C1 dock counted', channel.interruptAndDock() === 1)
+  check('C1 a rejected interrupt un-docks the row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
+  check('C1 the failure is notified', channel.notifications.some(item => item.text === t('claude-interrupt-failed')), JSON.stringify(channel.notifications))
+  check('C1 nothing re-delivers over the live copy', channel.deliverDocked() === 0)
+  check('C1 the SDK accepted exactly one copy of the intent', state.submits.filter(input => input.text === 'queued').length === 1, JSON.stringify(state.submits.map(input => input.text)))
+  // Only a CONFIRMED-cancelled (docked) copy may be retracted locally
+  // (B4): the un-docked row's backend copy still lives, so withdrawal
+  // belongs to the backend — which this fixture (Claude shape) cannot do,
+  // and the row stays queued rather than silently vanishing.
+  check('C1 an un-docked row is not locally retractable', channel.removePending(channel.pending[0]?.id) === false && state.removePendingCalls.length === 0 && channel.pending.length === 1, JSON.stringify(channel.pending))
+}
+{
+  // C2 — an older CLI answers no receipt (undefined → unknown) and keeps
+  // its queue: same revocation, unconfirmed notice.
+  const { session, state } = makeClaudeSession({ cancelReceipt: s => Promise.resolve({ stillQueued: s.submits.map(input => input.clientMessageId), outcome: 'unknown' }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('old cli msg')
+  await settle(() => channel.pending.length === 1)
+  check('C2 dock counted', channel.interruptAndDock() === 1)
+  check('C2 an answerless interrupt un-docks the row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
+  check('C2 the unconfirmed dock is notified', channel.notifications.some(item => item.text === t('claude-interrupt-unconfirmed')), JSON.stringify(channel.notifications))
+  check('C2 deliverDocked sends nothing', channel.deliverDocked() === 0)
+  check('C2 exactly one copy accepted', state.submits.filter(input => input.text === 'old cli msg').length === 1, JSON.stringify(state.submits.map(input => input.text)))
+}
+{
+  // C3 — generation boundary: rows docked while the receipt was in flight
+  // sit outside its queue snapshot; even a confirmed-empty receipt cannot
+  // vouch for them (they un-dock; the row the receipt DID cover stays).
+  let release
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('first batch')
+  await settle(() => channel.pending.length === 1)
+  check('C3 first dock counted', channel.interruptAndDock() === 1)
+  channel.submit('during request')
+  await settle(() => channel.pending.length === 2)
+  check('C3 second dock parks without a second request', channel.interruptAndDock() === 1 && state.cancels.length === 1, JSON.stringify(state.cancels))
+  release({ stillQueued: [], outcome: 'confirmed' })
+  check('C3 covered row stays docked, uncovered row un-docks', await settled(() => {
+    const covered = channel.pending.find(item => item.text === 'first batch')
+    const uncovered = channel.pending.find(item => item.text === 'during request')
+    return covered?.docked === true && uncovered?.docked !== true
+  }), JSON.stringify(channel.pending))
+  check('C3 the uncovered row is notified as unconfirmed', channel.notifications.some(item => item.text === t('claude-interrupt-unconfirmed')), JSON.stringify(channel.notifications))
+  check('C3 only the confirmed-cancelled copy re-sends', channel.deliverDocked() === 1)
+  const texts = () => state.submits.map(input => input.text)
+  await settle(() => texts().length === 3)
+  check('C3 the SDK saw the uncovered intent exactly once', texts().filter(text => text === 'during request').length === 1 && texts().filter(text => text === 'first batch').length === 2, JSON.stringify(texts()))
+}
+{
+  // C4 — a later Esc whose predecessor's receipt already settled (the
+  // abort still converging) fires its own request: every dock batch gets a
+  // receipt that actually saw it.
+  const receipts = [{ stillQueued: [], outcome: 'confirmed' }, { stillQueued: [], outcome: 'confirmed' }]
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => Promise.resolve(receipts.shift()) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('gen one')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  await flush()
+  channel.submit('gen two')
+  await settle(() => channel.pending.length === 2)
+  check('C4 a new dock after the settled receipt fires its own request', channel.interruptAndDock() === 1 && state.cancels.length === 2, JSON.stringify(state.cancels))
+  await flush()
+  check('C4 both rows stay docked on their own confirmed receipts', channel.pending.length === 2 && channel.pending.every(item => item.docked === true), JSON.stringify(channel.pending))
+  check('C4 both re-send exactly once', channel.deliverDocked() === 2)
+  const texts = () => state.submits.map(input => input.text)
+  await settle(() => texts().length === 4)
+  check('C4 each intent ran once plus exactly one confirmed resend', texts().filter(text => text === 'gen one').length === 2 && texts().filter(text => text === 'gen two').length === 2, JSON.stringify(texts()))
+}
+
+// ─────── Section D (R4-R1): a dock-row click never destroys the draft ────
+// The blocker: clicking a docked row used to silently overwrite a non-empty
+// draft (text, staged images AND the undo history). The fix is a lossless
+// SWAP — the draft parks at the dock's tail while the clicked row comes
+// into the input; nothing sends, Ctrl+Z swaps back. Channel level first
+// (the primitive's own contract), then the real PromptInput round-trip.
+{
+  // D1 — the primitive trades one docked row for the draft, atomically.
+  const { session, state } = makeClaudeSession()
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('dock me')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  await flush()
+  const dockedId = channel.pending.find(item => item.docked === true)?.id
+  const draftImages = [{ token: '[Image #1]', stageId: 'stage-1' }]
+  check('D1 swap succeeds on a docked row', channel.swapDockedForDraft(dockedId, { text: 'valuable draft', images: draftImages }) === true)
+  check('D1 the clicked row is gone, the draft parked as a NEW docked tail row',
+    channel.pending.length === 1 && channel.pending[0]?.docked === true
+      && channel.pending[0]?.text === 'valuable draft'
+      && channel.pending[0]?.placement === 'followup'
+      && JSON.stringify(channel.pending[0]?.images) === JSON.stringify(draftImages),
+    JSON.stringify(channel.pending))
+  check('D1 the parked row carries a local-only prefixed id',
+    typeof channel.pending[0]?.id === 'string' && channel.pending[0].id.startsWith('dock-swap-'),
+    channel.pending[0]?.id)
+  check('D1 the swap sends nothing', state.submits.length === 1, JSON.stringify(state.submits.map(input => input.text)))
+
+  // D2 — only a CONFIRMED-cancelled (docked) copy is swappable: an
+  // un-docked row's backend copy still lives, so editing it away would
+  // duplicate the intent (F2's fence, preserved by the swap).
+  {
+    const { session: s2, state: st2 } = makeClaudeSession({ stillQueuedOnInterrupt: true })
+    const ch2 = createChannel(ctx, s2, launchOptions)
+    ch2.submit('kept by cli')
+    await settle(() => ch2.pending.length === 1)
+    ch2.interruptAndDock()
+    check('D2 an unconfirmed row is not swappable',
+      await settled(() => ch2.pending.length === 1 && ch2.pending[0]?.docked !== true)
+        && ch2.swapDockedForDraft(ch2.pending[0]?.id, { text: 'draft' }) === false
+        && ch2.pending.length === 1 && ch2.pending[0]?.text === 'kept by cli',
+      JSON.stringify(ch2.pending))
+    check('D2 the refused swap sent nothing', st2.submits.length === 1, JSON.stringify(st2.submits.map(input => input.text)))
+  }
+
+  // D3 — (R7 rewrite) while the receipt is in flight the CLICKED row's
+  // rights are held: swapping its text into the composer would hand the
+  // user a second copy a late failed/kept verdict can no longer revoke.
+  // The parked draft itself still has no backend copy — once the receipt
+  // confirms, the swap goes through and the parked row keeps its dock.
+  {
+    let release
+    const { session: s3, state: st3 } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+    const ch3 = createChannel(ctx, s3, launchOptions)
+    ch3.submit('covered row')
+    await settle(() => ch3.pending.length === 1)
+    ch3.interruptAndDock()
+    const coveredId = ch3.pending.find(item => item.docked === true)?.id
+    check('D3 swap while the receipt is in flight is REFUSED',
+      ch3.swapDockedForDraft(coveredId, { text: 'parked draft' }) === false
+        && ch3.pending.length === 1 && ch3.pending[0]?.text === 'covered row' && ch3.pending[0]?.docked === true,
+      JSON.stringify(ch3.pending))
+    release({ stillQueued: [], outcome: 'confirmed' })
+    check('D3 the confirmed receipt graduates the row', await settled(() => ch3.pending.length === 1 && ch3.pending[0]?.docked === true))
+    check('D3 the swap goes through once the receipt confirmed',
+      ch3.swapDockedForDraft(coveredId, { text: 'parked draft' }) === true
+        && ch3.pending.length === 1 && ch3.pending[0]?.text === 'parked draft',
+      JSON.stringify(ch3.pending))
+    check('D3 deliverDocked counts the parked draft', ch3.deliverDocked() === 1)
+    const texts3 = () => st3.submits.map(input => input.text)
+    await settle(() => texts3().length === 2)
+    check('D3 each intent delivered exactly once (original + parked)',
+      texts3().filter(text => text === 'parked draft').length === 1
+        && texts3().filter(text => text === 'covered row').length === 1,
+      JSON.stringify(texts3()))
+  }
+
+  // D4 — retirement events name the row they retire: a discard/claim for
+  // the swapped-OUT id is a no-op, and the parked draft stays editable.
+  {
+    const { session: s4, state: st4, push } = makeClaudeSession()
+    const ch4 = createChannel(ctx, s4, launchOptions)
+    ch4.submit('to swap')
+    await settle(() => ch4.pending.length === 1)
+    ch4.interruptAndDock()
+    await flush()
+    const swappedOutId = ch4.pending.find(item => item.docked === true)?.id
+    ch4.swapDockedForDraft(swappedOutId, { text: 'parked b' })
+    push({ type: 'pending.changed', items: [], claimed: [], discarded: [swappedOutId] })
+    check('D4 a discard naming the swapped-out id retires nothing (the row is gone)',
+      ch4.pending.length === 1 && ch4.pending[0]?.docked === true && ch4.pending[0]?.text === 'parked b',
+      JSON.stringify(ch4.pending))
+    const parkedId = ch4.pending[0]?.id
+    check('D4 the parked draft retracts locally',
+      ch4.removePending(parkedId) === true && ch4.pending.length === 0,
+      JSON.stringify(ch4.pending))
+    check('D4 the discard caused no extra delivery', st4.submits.length === 1, JSON.stringify(st4.submits.map(input => input.text)))
+  }
+}
+
+// ─── UI level (R4-R1): the real PromptInput swap round-trip (SGR click) ───
+// FakeStdout paints a real xterm; the composer sits at the bottom of the
+// frame so the OverlayAbove dock paints above the input row and an SGR
+// click lands on the painted row.
+const [ReactUI, { render: renderUI, AlternateScreen, Box }, xtermModule] = await Promise.all([
+  import('react'),
+  import('../lib/types/ui.js'),
+  import('@xterm/headless'),
+])
+const XTermUI = xtermModule.Terminal ?? xtermModule.default?.Terminal
+const { PromptInput: PromptInputUI } = await import('../lib/types/components/PromptInput.js')
+const COLS_UI = 100
+const ROWS_UI = 30
+const termUI = new XTermUI({ cols: COLS_UI, rows: ROWS_UI, scrollback: 50, allowProposedApi: true })
+class FakeStdoutUI extends Writable {
+  columns = COLS_UI
+  rows = ROWS_UI
+  isTTY = true
+  _write(chunk, _enc, cb) { termUI.write(String(chunk), cb) }
+}
+class FakeStderrUI extends Writable {
+  isTTY = true
+  _write(_c, _e, cb) { cb() }
+}
+class FakeStdinUI extends PassThrough {
+  isTTY = true
+  setRawMode() { return this }
+  ref() { return this }
+  unref() { return this }
+}
+const uiStdout = new FakeStdoutUI()
+const uiStderr = new FakeStderrUI()
+const uiStdin = new FakeStdinUI()
+const clickUI = (col, row) => {
+  uiStdin.write('\x1b[<0;' + col + ';' + row + 'M')
+  uiStdin.write('\x1b[<0;' + col + ';' + row + 'm')
+}
+const findUI = text => findText(termUI, text)
+
+function makeUiChannel(initialPending, options = {}) {
+  const notified = []
+  const removed = []
+  const swaps = []
+  const discardedImages = []
+  const staged = new Map([['stage-1', { id: 'stage-1', name: 'shot.png' }]])
+  let pending = [...initialPending]
+  let swapSeq = 0
+  return {
+    working: false,
+    mode: { id: 'default', plan: false },
+    modeIndex: 0,
+    cycleMode() {},
+    commandList: [],
+    commandCompletions: () => [],
+    notifications: [],
+    contextWindow: undefined,
+    cwd: '/tmp',
+    get pending() { return pending },
+    notify(text, notifyOptions) { notified.push({ text, options: notifyOptions }) },
+    submit() {},
+    steer() {},
+    removePending(id) { removed.push(id); pending = pending.filter(item => item.id !== id); return true },
+    swapDockedForDraft(id, draft) {
+      if (options.refuseSwap === true) return false
+      swaps.push({ id, text: draft.text })
+      pending = pending.filter(item => item.id !== id)
+      pending = [...pending, { id: 'ui-swap-' + ++swapSeq, text: draft.text, images: draft.images ?? [], placement: 'followup', docked: true }]
+      return true
+    },
+    cancel() {},
+    interruptAndDock() { return 0 },
+    deliverDocked() { return 0 },
+    interruptAndDeliver() { return 0 },
+    listFiles: async () => [],
+    stagedImageGeneration: () => 0,
+    hasStagedImage: id => staged.has(id),
+    stagedImage: id => staged.get(id),
+    discardStagedImage(id) { discardedImages.push(id); staged.delete(id) },
+    stageImage() {},
+    notified,
+    removed,
+    swaps,
+    discardedImages,
+  }
+}
+
+const uiController = { current: null }
+async function mountUI(channel) {
+  const tree = ReactUI.createElement(AlternateScreen, null,
+    ReactUI.createElement(Box, { height: ROWS_UI, flexDirection: 'column', justifyContent: 'flex-end' },
+      ReactUI.createElement(PromptInputUI, {
+        channel,
+        helpOpen: false,
+        onToggleHelp() {},
+        onRunCommand: () => false,
+        selectionActive: false,
+        controllerRef: uiController,
+      })))
+  return renderUI(tree, { stdout: uiStdout, stderr: uiStderr, stdin: uiStdin, exitOnCtrlC: false, patchConsole: false })
+}
+const typeUI = async str => {
+  for (const char of str) {
+    uiStdin.write(char)
+    // 固定窗:pacing 逐字符等待上一字符落入草稿（假 stdout 的帧由 xterm 消费，无文本锚点）
+    await sleep(20)
+  }
+  await sleep(80) // 固定窗:pacing 让整段输入的末帧渲染落定
+}
+
+{
+  // D5 — a valuable draft SWAPS with the clicked row (SGR click).
+  const channel = makeUiChannel([
+    { id: 'd1', text: 'dock-alpha', placement: 'followup', docked: true },
+    { id: 'd2', text: 'dock-beta', placement: 'followup', docked: true },
+  ])
+  const instance = await mountUI(channel)
+  check('D5 the dock paints above the input', await settled(() => findUI('dock-alpha') !== null))
+  await typeUI('valuable draft')
+  const pos = findUI('dock-alpha')
+  if (pos) clickUI(pos.col + 3, pos.row + 1)
+  check('D5 the clicked row lands in the input', await settled(() => uiController.current?.text() === 'dock-alpha'), JSON.stringify(uiController.current?.text()))
+  check('D5 the draft parked at the dock tail as a docked row',
+    channel.pending.length === 2 && channel.pending[1]?.docked === true && channel.pending[1]?.text === 'valuable draft'
+      && channel.pending[0]?.id === 'd2',
+    JSON.stringify(channel.pending.map(item => ({ id: item.id, text: item.text, docked: item.docked }))))
+  check('D5 nothing was sent; the swap notice shows',
+    channel.removed.length === 0 && channel.notified.some(n => n.text === t('input-dock-swapped')),
+    JSON.stringify(channel.notified.map(n => n.text)))
+  // D6 — Ctrl+Z swaps back byte-identically; the parked copy stays queued.
+  uiStdin.write('\x1a')
+  check('D6 Ctrl+Z restores the draft byte-identically', await settled(() => uiController.current?.text() === 'valuable draft'), JSON.stringify(uiController.current?.text()))
+  check('D6 the parked copy stays in the dock', channel.pending.some(item => item.text === 'valuable draft' && item.docked === true), JSON.stringify(channel.pending.map(item => item.text)))
+  instance.unmount()
+}
+{
+  // D7 — a multi-line draft survives the round-trip unchanged.
+  const channel = makeUiChannel([
+    { id: 'd1', text: 'dock-multi', placement: 'followup', docked: true },
+  ])
+  const instance = await mountUI(channel)
+  check('D7 dock painted', await settled(() => findUI('dock-multi') !== null))
+  await typeUI('line1')
+  uiStdin.write('\n') // bare LF = Ctrl+J newline insert (not Enter)
+  await sleep(120) // 固定窗:pacing 等换行落定再续打第二行
+  await typeUI('line2')
+  check('D7 multi-line draft composed', uiController.current?.text() === 'line1\nline2', JSON.stringify(uiController.current?.text()))
+  const pos = findUI('dock-multi')
+  if (pos) clickUI(pos.col + 3, pos.row + 1)
+  check('D7 swap took the row into the input', await settled(() => uiController.current?.text() === 'dock-multi'), JSON.stringify(uiController.current?.text()))
+  check('D7 the parked copy keeps the newlines', channel.pending.some(item => item.text === 'line1\nline2'), JSON.stringify(channel.pending.map(item => item.text)))
+  uiStdin.write('\x1a')
+  check('D7 Ctrl+Z restores the multi-line draft losslessly', await settled(() => uiController.current?.text() === 'line1\nline2'), JSON.stringify(uiController.current?.text()))
+  instance.unmount()
+}
+{
+  // D8 — staged images ride the swap both ways; the capability survives.
+  const channel = makeUiChannel([
+    { id: 'd1', text: 'dock-img', placement: 'followup', docked: true },
+    { id: 'img-src', text: '[Image #1]', images: [{ token: '[Image #1]', stageId: 'stage-1' }], placement: 'followup', docked: true },
+  ])
+  const instance = await mountUI(channel)
+  check('D8 dock painted', await settled(() => findUI('dock-img') !== null))
+  // Pull the image-bearing row with Alt+Up (newest docked row first).
+  uiStdin.write('\x1b[1;3A')
+  check('D8 the image draft pulled into the input', await settled(() => uiController.current?.text() === '[Image #1]'), JSON.stringify(uiController.current?.text()))
+  check('D8 the binding is live before the swap', (uiController.current?.previewImages?.() ?? []).length === 1)
+  await typeUI(' tail')
+  const pos = findUI('dock-img')
+  if (pos) clickUI(pos.col + 3, pos.row + 1)
+  check('D8 swap landed', await settled(() => uiController.current?.text() === 'dock-img'), JSON.stringify(uiController.current?.text()))
+  check('D8 the parked row carries the image refs',
+    channel.pending.some(item => item.text === '[Image #1] tail'
+      && JSON.stringify(item.images) === JSON.stringify([{ token: '[Image #1]', stageId: 'stage-1' }])),
+    JSON.stringify(channel.pending.map(item => ({ text: item.text, images: item.images }))))
+  check('D8 the capability was not discarded', !channel.discardedImages.includes('stage-1'), JSON.stringify(channel.discardedImages))
+  uiStdin.write('\x1a')
+  check('D8 Ctrl+Z restores the image draft', await settled(() => uiController.current?.text() === '[Image #1] tail'), JSON.stringify(uiController.current?.text()))
+  check('D8 the restored binding is live', (uiController.current?.previewImages?.() ?? []).length === 1)
+  instance.unmount()
+}
+{
+  // D9 — an EMPTY draft keeps the plain retraction (no parked copy).
+  const channel = makeUiChannel([
+    { id: 'd1', text: 'dock-empty', placement: 'followup', docked: true },
+  ])
+  const instance = await mountUI(channel)
+  check('D9 dock painted', await settled(() => findUI('dock-empty') !== null))
+  const pos = findUI('dock-empty')
+  if (pos) clickUI(pos.col + 3, pos.row + 1)
+  check('D9 empty draft edits as before (plain retract)',
+    await settled(() => uiController.current?.text() === 'dock-empty' && channel.removed.includes('d1')),
+    JSON.stringify({ text: uiController.current?.text(), removed: channel.removed }))
+  check('D9 no swap row was parked', !channel.pending.some(item => item.docked === true) && channel.swaps.length === 0, JSON.stringify(channel.pending))
+  instance.unmount()
+}
+{
+  // D10 — a refused swap (the row was claimed meanwhile) keeps the draft.
+  const channel = makeUiChannel([
+    { id: 'd1', text: 'dock-gone', placement: 'followup', docked: true },
+  ], { refuseSwap: true })
+  const instance = await mountUI(channel)
+  check('D10 dock painted', await settled(() => findUI('dock-gone') !== null))
+  await typeUI('keep me')
+  const pos = findUI('dock-gone')
+  if (pos) clickUI(pos.col + 3, pos.row + 1)
+  check('D10 a refused swap keeps the draft untouched',
+    await settled(() => uiController.current?.text() === 'keep me' && channel.notified.some(n => n.text === t('input-cannot-retract'))),
+    JSON.stringify({ text: uiController.current?.text(), notified: channel.notified.map(n => n.text) }))
+  instance.unmount()
+}
+
+// ─── UI level (R4-R2): the dock window — the focus row stays visible ───
+// A 40-row dock in a 30-row terminal: the overlay clips from the top, so
+// the window (not the full list) decides what paints. The highlighted row
+// must stay visible through the whole ↑ wrap, Enter must retract the row
+// the user sees highlighted, and lengths at the viewport boundary must not
+// clip the focus.
+const termTestLib = await import('./lib/term-test.mjs')
+function makeDockRows(count, prefix) {
+  const rows = []
+  for (let i = 0; i < count; i++) {
+    const label = String(i).padStart(2, '0')
+    rows.push({ id: 'w' + i, text: prefix + '-row-' + label, placement: 'followup', docked: true })
+  }
+  return rows
+}
+const paintedDockRows = (term, prefix) =>
+  termTestLib.viewportLines(term).filter(line => line.includes(prefix + '-row-')).length
+const highlightVisible = (term, prefix, index) =>
+  termTestLib.viewportLines(term).some(line => line.includes('❯ ' + prefix + '-row-' + String(index).padStart(2, '0')))
+const highlightCount = (term, prefix) =>
+  termTestLib.viewportLines(term).filter(line => line.includes('❯ ' + prefix + '-row-')).length
+
+{
+  // D11 — a long dock windows: the newest rows paint, the head does not.
+  const channel = makeUiChannel(makeDockRows(40, 'dock'))
+  const instance = await mountUI(channel)
+  await settle(() => paintedDockRows(termUI, 'dock') > 0)
+  const cap = paintedDockRows(termUI, 'dock')
+  check('D11 a 40-row dock windows to the overlay budget (0 < n < 40)', cap > 0 && cap < 40, String(cap))
+  check('D11 the newest row paints', findUI('dock-row-39') !== null)
+  check('D11 the head row is outside the initial window', findUI('dock-row-00') === null)
+  instance.unmount()
+
+  // D12 — ↑ through the whole wrap keeps exactly one highlight, visible.
+  const channel2 = makeUiChannel(makeDockRows(40, 'dock'))
+  const instance2 = await mountUI(channel2)
+  await settled(() => findUI('dock-row-39') !== null)
+  uiStdin.write('\x1b[A') // selector opens on the newest row
+  await settled(() => highlightVisible(termUI, 'dock', 39))
+  const checkpoints = [39, 30, 20, 10, 1, 0]
+  let allVisible = true
+  let extra = ''
+  for (let i = 0; i < checkpoints.length; i++) {
+    const target = checkpoints[i]
+    const steps = i === 0 ? 0 : (checkpoints[i - 1] - target + 40) % 40
+    if (steps > 0) uiStdin.write('\x1b[A'.repeat(steps))
+    const ok = await settled(() => highlightVisible(termUI, 'dock', target))
+    if (!ok || highlightCount(termUI, 'dock') !== 1) {
+      allVisible = false
+      extra = 'at ' + target + ' visible=' + ok + ' highlights=' + highlightCount(termUI, 'dock')
+      break
+    }
+  }
+  check('D12 the wrapped walk keeps exactly one highlight, always visible', allVisible, extra)
+  check('D12 the head row is visible once it is the focus', findUI('dock-row-00') !== null)
+
+  // D13 — Enter retracts the row the user sees highlighted (same id).
+  uiStdin.write('\r')
+  check('D13 Enter retracts exactly the highlighted row',
+    await settled(() => channel2.removed.length === 1 && channel2.removed[0] === 'w0'),
+    JSON.stringify(channel2.removed))
+  check('D13 the highlighted text lands in the input', await settled(() => uiController.current?.text() === 'dock-row-00'), JSON.stringify(uiController.current?.text()))
+  instance2.unmount()
+
+  // D14 — boundary lengths: the window never clips a short dock, and the
+  // boundary+1 dock keeps the focused (newest) row visible.
+  const lengths = [1, 2, cap - 1, cap, cap + 1]
+  let boundariesOk = true
+  let boundaryNote = ''
+  for (const length of lengths) {
+    const ch = makeUiChannel(makeDockRows(length, 'edge'))
+    const inst = await mountUI(ch)
+    await settle(() => paintedDockRows(termUI, 'edge') === Math.min(length, cap))
+    const painted = paintedDockRows(termUI, 'edge')
+    const expected = Math.min(length, cap)
+    const newestVisible = await settled(() => findUI('edge-row-' + String(length - 1).padStart(2, '0')) !== null)
+    inst.unmount()
+    if (painted !== expected || !newestVisible) {
+      boundariesOk = false
+      boundaryNote = 'len=' + length + ' painted=' + painted + ' expected=' + expected + ' newestVisible=' + newestVisible
+      break
+    }
+  }
+  check('D14 lengths 1/2/boundary/boundary+1 paint min(n, cap) rows with the newest visible', boundariesOk, boundaryNote + ' cap=' + cap)
+}
+
+{
+  // D15 — CJK rows and a NARROW terminal: the window still keeps the
+  // highlighted row on screen (rows truncate, the focus never clips).
+  const COLS_N = 44
+  const termN = new XTermUI({ cols: COLS_N, rows: ROWS_UI, scrollback: 50, allowProposedApi: true })
+  class NarrowStdout extends Writable {
+    columns = COLS_N
+    rows = ROWS_UI
+    isTTY = true
+    _write(chunk, _enc, cb) { termN.write(String(chunk), cb) }
+  }
+  const stdoutN = new NarrowStdout()
+  const stderrN = new FakeStderrUI()
+  const stdinN = new FakeStdinUI()
+  const cjkRows = []
+  for (let i = 0; i < 30; i++) {
+    cjkRows.push({ id: 'c' + i, text: '停靠中文消息第' + String(i).padStart(2, '0') + '条', placement: 'followup', docked: true })
+  }
+  const channel = makeUiChannel(cjkRows)
+  const tree = ReactUI.createElement(AlternateScreen, null,
+    ReactUI.createElement(Box, { height: ROWS_UI, flexDirection: 'column', justifyContent: 'flex-end' },
+      ReactUI.createElement(PromptInputUI, {
+        channel,
+        helpOpen: false,
+        onToggleHelp() {},
+        onRunCommand: () => false,
+        selectionActive: false,
+        controllerRef: uiController,
+      })))
+  const instance = await renderUI(tree, { stdout: stdoutN, stderr: stderrN, stdin: stdinN, exitOnCtrlC: false, patchConsole: false })
+  check('D15 the narrow CJK dock paints its newest row', await settled(() => termTestLib.findText(termN, '第29条') !== null))
+  check('D15 the narrow CJK dock windows the head out', termTestLib.findText(termN, '第00条') === null)
+  stdinN.write('\x1b[A')
+  check('D15 the highlighted CJK row is visible (newest first)', await settled(() => termTestLib.viewportLines(termN).some(line => line.includes('❯') && line.includes('第29条'))))
+  stdinN.write('\x1b[A'.repeat(29))
+  check('D15 the wrapped highlight reaches the head row visibly', await settled(() => termTestLib.viewportLines(termN).some(line => line.includes('❯') && line.includes('第00条'))))
+  stdinN.write('\r')
+  check('D15 Enter retracts the highlighted CJK row', await settled(() => channel.removed.length === 1 && channel.removed[0] === 'c0'), JSON.stringify(channel.removed))
+  instance.unmount()
+}
+
+// ─── UI level (R4-R3): a real draft edit closes the dock selector ───
+// The stale-focus bug: paste/clipboard/history/editor refills edited the
+// draft but left dockSelected armed, so ↑/↓ kept steering the invisible
+// selector instead of the caret. The clear now lives in setInput's
+// real-mutation block — the ONE owner every draft edit funnels through.
+const selectorHighlightVisible = (term, texts) =>
+  termTestLib.viewportLines(term).some(line => line.includes('❯') && texts.some(text => line.includes(text)))
+
+{
+  // D16 — the review's exact repro: paste over an open selector, then ↑
+  // must edit the text (caret to line 1), not steer the selector.
+  const channel = makeUiChannel([
+    { id: 'r1', text: 'dock-r3a', placement: 'followup', docked: true },
+    { id: 'r2', text: 'dock-r3b', placement: 'followup', docked: true },
+  ])
+  const instance = await mountUI(channel)
+  await settled(() => findUI('dock-r3a') !== null)
+  uiStdin.write('\x1b[A')
+  check('D16 the selector opens on the empty draft', await settled(() => selectorHighlightVisible(termUI, ['dock-r3a', 'dock-r3b'])))
+  uiStdin.write('\x1b[200~line1\nline2\x1b[201~')
+  check('D16 the paste lands in the draft', await settled(() => uiController.current?.text() === 'line1\nline2'), JSON.stringify(uiController.current?.text()))
+  await sleep(150) // 固定窗:探针 断言选择器不再回采：观察窗内不得出现高亮行
+  check('D16 the paste closed the selector', !selectorHighlightVisible(termUI, ['dock-r3a', 'dock-r3b']))
+  uiStdin.write('\x1b[A') // ↑ now belongs to the caret
+  await sleep(120) // 固定窗:pacing 等光标移动生效
+  uiStdin.write('X')
+  check('D16 ↑ edits the first line (caret movement, not selection)', await settled(() => uiController.current?.text() === 'line1X\nline2'), JSON.stringify(uiController.current?.text()))
+
+  // D18 — the EMPTY-draft selector behaviour is unchanged: after clearing
+  // the draft, ↑ reopens the selector and Enter retracts the highlighted row.
+  uiStdin.write('\x1b') // clear the draft (undoable)
+  await settled(() => uiController.current?.text() === '')
+  uiStdin.write('\x1b[A')
+  check('D18 the selector reopens on an empty draft', await settled(() => selectorHighlightVisible(termUI, ['dock-r3a', 'dock-r3b'])))
+  uiStdin.write('\r')
+  check('D18 Enter still retracts the highlighted row', await settled(() => channel.removed.length === 1 && channel.removed[0] === 'r2'), JSON.stringify(channel.removed))
+  instance.unmount()
+}
+
+{
+  // D17 — an undo refill (a silent whole-draft restore) closes the
+  // selector too: the unified owner does not care who mutated the text.
+  const channel = makeUiChannel([
+    { id: 'r1', text: 'dock-r3c', placement: 'followup', docked: true },
+  ])
+  const instance = await mountUI(channel)
+  await settled(() => findUI('dock-r3c') !== null)
+  await typeUI('recover me')
+  uiStdin.write('\x1b') // Esc: clear the draft, keeping one undo step
+  await settled(() => uiController.current?.text() === '')
+  await sleep(150) // 固定窗:pacing 等 Esc 清稿语义落定（避开双击 Esc 判定窗）
+  uiStdin.write('\x1b[A') // open the selector on the empty draft
+  check('D17 the selector opens before the undo', await settled(() => selectorHighlightVisible(termUI, ['dock-r3c'])))
+  uiStdin.write('\x1a') // Ctrl+Z: refill the draft through setInput('silent')
+  check('D17 the undo refill restores the draft', await settled(() => uiController.current?.text() === 'recover me'), JSON.stringify(uiController.current?.text()))
+  check('D17 the refill closed the selector', !selectorHighlightVisible(termUI, ['dock-r3c']))
+  instance.unmount()
+}
+
+// ─────── Section E (R7): dock rights are HELD while the receipt is in flight
+// The blocker: rows parked by interruptAndDock were fully editable /
+// re-sendable / swappable BEFORE the cancel receipt settled. A late
+// failed / unknown / still_queued answer only revokes rows still on the
+// pending list — anything already delivered, edited out or swapped under
+// a new id was unreachable, and the SDK accepted the intent twice. The
+// transitional state: rows render docked, but every right is gated until
+// the receipt confirms; confirmed graduates them, anything else revokes.
+{
+  // E1 — deliver: the whole dock is held; a failed receipt keeps one copy.
+  let release
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('e1 intent')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  check('E1 deliverDocked while in flight sends NOTHING', channel.deliverDocked() === 0)
+  check('E1 the hold is notified', channel.notifications.some(item => item.text === t('input-dock-confirming', { n: 1 })), JSON.stringify(channel.notifications))
+  check('E1 the row stays parked as docked', channel.pending.length === 1 && channel.pending[0]?.docked === true, JSON.stringify(channel.pending))
+  release({ stillQueued: [], outcome: 'failed' })
+  const texts = () => state.submits.map(input => input.text)
+  check('E1 a failed receipt un-docks the held row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
+  check('E1 the SDK accepted exactly one copy', texts().filter(text => text === 'e1 intent').length === 1, JSON.stringify(texts()))
+}
+{
+  // E2 — edit (removePending): refused while in flight, so the edit+resend
+  // path cannot strand a copy a kept-queue verdict later owns.
+  let release
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('e2 intent')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  const rowId = channel.pending[0]?.id
+  check('E2 removePending is refused while in flight', channel.removePending(rowId) === false && channel.pending.length === 1 && channel.pending[0]?.docked === true, JSON.stringify(channel.pending))
+  release({ stillQueued: [rowId], outcome: 'confirmed' })
+  check('E2 the kept-queue receipt un-docks the row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
+  const texts = () => state.submits.map(input => input.text)
+  check('E2 the SDK accepted exactly one copy', texts().filter(text => text === 'e2 intent').length === 1, JSON.stringify(texts()))
+}
+{
+  // E3 — swap: refused while in flight (no parked copy, nothing swapped);
+  // an answerless 'unknown' receipt now also revokes (only a CONFIRMED
+  // answer graduates) and says so.
+  let release
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('e3 intent')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  const rowId = channel.pending[0]?.id
+  check('E3 swap is refused while in flight',
+    channel.swapDockedForDraft(rowId, { text: 'user draft' }) === false
+      && channel.pending.length === 1 && channel.pending[0]?.text === 'e3 intent',
+    JSON.stringify(channel.pending))
+  release({ stillQueued: [], outcome: 'unknown' })
+  check('E3 an answerless receipt un-docks the provisional row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
+  check('E3 the unconfirmed verdict is notified', channel.notifications.some(item => item.text === t('claude-interrupt-unconfirmed')), JSON.stringify(channel.notifications))
+  const texts = () => state.submits.map(input => input.text)
+  check('E3 the SDK accepted exactly one copy', texts().filter(text => text === 'e3 intent').length === 1, JSON.stringify(texts()))
+}
+{
+  // E4 — graduation: once the receipt confirms an emptied queue, the held
+  // row gains full rights and the legitimate exactly-once re-send works.
+  let release
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('e4 intent')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  check('E4 held before the receipt settles', channel.deliverDocked() === 0)
+  release({ stillQueued: [], outcome: 'confirmed' })
+  await settled(() => channel.pending[0]?.docked === true)
+  check('E4 delivered after confirmation', channel.deliverDocked() === 1)
+  const texts = () => state.submits.map(input => input.text)
+  await settle(() => texts().length === 2)
+  check('E4 the original plus exactly one confirmed re-send',
+    texts().filter(text => text === 'e4 intent').length === 2,
+    JSON.stringify(texts()))
+}
+{
+  // E5 — Ctrl+Enter does not ride provisional rows: the fresh input goes,
+  // the held row stays parked for its verdict.
+  let release
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => new Promise(resolve => { release = resolve }) })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('e5 intent')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  channel.interruptAndDeliver(['e5 urgent'])
+  const texts = () => state.submits.map(input => input.text)
+  check('E5 the fresh input rides the interrupt', await settled(() => texts().includes('e5 urgent')), JSON.stringify(texts()))
+  await settle(() => channel.pending.length >= 1)
+  check('E5 the provisional dock row did NOT ride',
+    texts().filter(text => text === 'e5 intent').length === 1
+      && channel.pending.some(item => item.text === 'e5 intent' && item.docked === true),
+    JSON.stringify({ texts: texts(), pending: channel.pending.map(item => ({ text: item.text, docked: item.docked })) }))
+  release({ stillQueued: [], outcome: 'failed' })
+  check('E5 the failed receipt un-docks the held row', await settled(() => !channel.pending.some(item => item.text === 'e5 intent' && item.docked === true)), JSON.stringify(channel.pending))
+  check('E5 the SDK accepted each intent exactly once',
+    texts().filter(text => text === 'e5 intent').length === 1 && texts().filter(text => text === 'e5 urgent').length === 1,
+    JSON.stringify(texts()))
+}
+{
+  // E6 — mixed dock: graduated rows send FIFO while a newer in-flight
+  // batch is held back (no reorder, no silent drop).
+  let release1
+  let release2
+  const receipts = [
+    () => new Promise(resolve => { release1 = resolve }),
+    () => new Promise(resolve => { release2 = resolve }),
+  ]
+  let call = 0
+  const { session, state } = makeClaudeSession({ cancelReceipt: () => receipts[call++]() })
+  const channel = createChannel(ctx, session, launchOptions)
+  channel.submit('e6 old')
+  await settle(() => channel.pending.length === 1)
+  channel.interruptAndDock()
+  release1({ stillQueued: [], outcome: 'confirmed' })
+  await settled(() => channel.pending[0]?.docked === true)
+  channel.submit('e6 new')
+  await settle(() => channel.pending.length === 2)
+  channel.interruptAndDock()
+  check('E6 deliverDocked sends only the graduated row and holds the new one',
+    channel.deliverDocked() === 1
+      && channel.pending.some(item => item.text === 'e6 new' && item.docked === true),
+    JSON.stringify(channel.pending.map(item => ({ text: item.text, docked: item.docked }))))
+  release2({ stillQueued: [], outcome: 'confirmed' })
+  await settled(() => channel.pending.every(item => item.docked === true))
+  check('E6 the held row delivers after its own confirmation', channel.deliverDocked() === 1)
+  const texts = () => state.submits.map(input => input.text)
+  await settle(() => texts().length === 4)
+  check('E6 FIFO order kept, each intent once per confirmed re-send',
+    JSON.stringify(texts()) === JSON.stringify(['e6 old', 'e6 new', 'e6 old', 'e6 new']),
+    JSON.stringify(texts()))
+}
+process.exit(failed)

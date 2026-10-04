@@ -53,6 +53,8 @@ const sources = new Map<string, SourceState>()
 /** Test seam: reset rate-limit bookkeeping. */
 export function resetUpdateOverflowGuardForTest(): void {
   sources.clear()
+  boundaryRecoveries = []
+  boundaryRecoveryRemount = false
 }
 
 /**
@@ -151,6 +153,49 @@ export function callWithUpdateOverflowGuard(source: string, onChange: () => void
     if (swallowNestedUpdateOverflow(error, source)) return
     throw error
   }
+}
+
+/**
+ * Boundary-recovery bookkeeping: remounting the whole tree is far heavier
+ * than absorbing one dropped update, so the root boundary may recover only
+ * a bounded number of #185s per window. Beyond the cap the boundary falls
+ * back to the original crash exit — "alive" must not degrade into an
+ * endless crash-remount loop burning CPU.
+ */
+const BOUNDARY_RECOVERY_WINDOW_MS = 60_000
+const BOUNDARY_RECOVERY_CAP = 3
+let boundaryRecoveries: number[] = []
+
+/**
+ * Whether one more root-boundary #185 recovery is allowed inside the window
+ * (the recovery is recorded when it is). `now` is injectable for tests.
+ */
+export function shouldRecoverBoundaryOverflow(now: number = Date.now()): boolean {
+  boundaryRecoveries = boundaryRecoveries.filter(at => now - at < BOUNDARY_RECOVERY_WINDOW_MS)
+  if (boundaryRecoveries.length >= BOUNDARY_RECOVERY_CAP) return false
+  boundaryRecoveries.push(now)
+  return true
+}
+
+/**
+ * One-shot mark that the NEXT tree mount is a boundary-recovery remount
+ * (set by the root boundary's recovery path, consumed by the screen layer:
+ * a remount is not a boot, so boot-only surfaces — the launchpad, the
+ * onboarding overlay — must stay closed and the user lands back in the
+ * conversation they were in).
+ */
+let boundaryRecoveryRemount = false
+
+/** Record that the upcoming mount follows an overflow recovery. */
+export function noteBoundaryRecoveryRemount(): void {
+  boundaryRecoveryRemount = true
+}
+
+/** Consume the recovery-remount mark: true at most once per recovery. */
+export function consumeBoundaryRecoveryRemount(): boolean {
+  const value = boundaryRecoveryRemount
+  boundaryRecoveryRemount = false
+  return value
 }
 
 /**

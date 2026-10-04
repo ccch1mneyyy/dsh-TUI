@@ -234,6 +234,7 @@ const channel = {
 
 const liveState = {
   'live-one': { status: 'working' as const, live: true, current: true, summary: 'doing work' },
+  'claude-current': { status: 'idle' as const, live: true, current: true, summary: '' },
 }
 
 /**
@@ -2021,6 +2022,153 @@ console.log('the cache read re-scopes the slot on every mount')
   gate.resolve()
   await settled(() => target.landed >= 2, { timeoutMs: 4_000 })
   app.close()
+}
+// ── another backend's sessions (Phase 4b: the Claude Agent browser) ──────────
+console.log('backend browser:')
+{
+  // The ledger keys a non-DSH session by its backend-qualified reference; the
+  // DSH pins file names a Claude row that must NOT read as pinned here, and
+  // the backend's own pins file pins another.
+  const dataDir = join(fakeHome, '.dsh-tui')
+  writeFileSync(join(dataDir, 'session-mounts.json'), JSON.stringify({ version: 1, owners: [{ pid: FOREIGN_PID, startedAt: Date.now(), sessionIds: [HELD_SESSION_ID, 'claude:claude-held'] }] }, null, 2), 'utf8')
+  writeFileSync(join(dataDir, 'session-pins.json'), JSON.stringify(['claude-one']), 'utf8')
+  mkdirSync(join(dataDir, 'backends', 'claude'), { recursive: true })
+  writeFileSync(join(dataDir, 'backends', 'claude', 'session-pins.json'), JSON.stringify(['claude-two']), 'utf8')
+  const rows = [
+    session({ id: 'claude-current', backendId: 'claude', title: { text: 'claude current', source: 'auto' }, updatedAt: now - 1_000, agentPreset: undefined, model: undefined }),
+    session({ id: 'claude-one', backendId: 'claude', title: { text: 'claude one', source: 'auto' }, updatedAt: now - 2_000, agentPreset: undefined, model: undefined }),
+    session({ id: 'claude-two', backendId: 'claude', title: { text: 'claude two', source: 'prompt' }, updatedAt: now - 3_000, agentPreset: undefined, model: undefined }),
+    session({ id: 'claude-held', backendId: 'claude', title: { text: 'claude held', source: 'auto' }, updatedAt: now - 4_000, agentPreset: undefined, model: undefined }),
+  ]
+  const calls: string[] = []
+  const backend = {
+    version: 0,
+    cwd: alphaDir,
+    working: false,
+    agentId: 'claude-current',
+    backendCapabilities: { backendId: 'claude', backendLabel: 'Claude Agent', commands: ['new', 'resume', 'rewind', 'fork'] },
+    listWorkspaceRegistry: async () => { calls.push('registry'); return registry },
+    listForeignSources: async () => { calls.push('probe'); return [] },
+    listSessions: async () => rows,
+    resumeTo: async (id: string) => { calls.push(`resumeTo:${id}`); return { ok: true } },
+    renameSessionTo: async (id: string, title: string) => { calls.push(`rename:${id}:${title}`); return true },
+    deleteSession: async (id: string) => { calls.push(`delete:${id}`); return true },
+    switchWorkspace: async () => true,
+    resolveWorkspace: async (reference: string) => ({ cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }),
+    stopBackgroundAgent: async () => true,
+    notify: () => {},
+    subscribe: () => () => {},
+  } as never
+  const target: StubChannel = { channel: backend, calls, plan: {}, landed: 0, config: { registry: [], cwd: alphaDir } }
+  const app = await mountSupervisor(target)
+  const text = (): string => app.lines().join('\n')
+  check('the backend browser lists that backend\'s sessions', await settled(() => text().includes('claude current') && text().includes('claude two'), { timeoutMs: 4_000 }), text())
+  check('… its one tab names the backend', text().includes('Claude Agent'))
+  check('… it never reads the DSH workspace ledger or probes foreign sources', !calls.includes('registry') && !calls.includes('probe'), calls.join(' '))
+  const line = (needle: string): string => app.lines().find(row => row.includes(needle)) ?? ''
+  check('pins are the backend\'s own (the DSH pins file does not apply)', line('claude two').includes('★') && !line('claude one').includes('★'), `${line('claude two')} | ${line('claude one')}`)
+  check('a session another terminal holds under claude:<id> reads as occupied', await settled(() => line('claude held').includes(String(FOREIGN_PID)) || text().includes(`pid ${FOREIGN_PID}`), { timeoutMs: 4_000 }), line('claude held'))
+  check('the backend\'s hint offers rename and delete', text().includes('Ctrl+R rename') || (app.write('\u001b[C'), await settled(() => text().includes('Ctrl+R rename'))))
+  // → into the list, ↓ past the new-session card to the second row.
+  app.write('\u001b[C')
+  await settled(() => text().includes('Ctrl+R rename'))
+  const focusRow = async (needle: string, up = false): Promise<boolean> => {
+    for (let i = 0; i < 8; i += 1) {
+      if ((app.lines().find(row => row.includes('❯') && row.includes(needle))) !== undefined) return true
+      app.write(up ? '\u001b[A' : '\u001b[B')
+      await sleep(60) // 固定窗:pacing 让光标移动渲染一帧
+    }
+    return app.lines().some(row => row.includes('❯') && row.includes(needle))
+  }
+  check('the cursor reaches a stored session', await focusRow('claude one'))
+  app.write('\u0012')
+  check('Ctrl+R opens the rename line with the current title', await settled(() => text().includes('claude one') && text().includes('✎')), text())
+  app.write(' (renamed)')
+  await settled(() => text().includes('✎ claude one (renamed)'))
+  app.write('\r')
+  check('… Enter renames through the catalog', await settled(() => calls.includes('rename:claude-one:claude one (renamed)')), calls.join(' '))
+  check('… and the screen re-lists', await settled(() => target.calls.length > 0))
+  await focusRow('claude two')
+  app.write('\u0004')
+  check('Ctrl+D asks before deleting', await settled(() => text().includes('Delete session claude two?')), text())
+  app.write('\r')
+  check('… Enter deletes through the catalog', await settled(() => calls.includes('delete:claude-two')), calls.join(' '))
+  check('the cursor reaches the current session', await focusRow('claude current', true))
+  app.write('\u0004')
+  await sleep(120) // 固定窗:pacing 让确认行渲染一帧
+  app.write('\r')
+  check('the session this terminal is in is never deleted', await settled(() => text().includes('cannot be deleted')) && !calls.includes('delete:claude-current'), text())
+  app.close()
+}
+
+console.log('backend browser: a SECOND cwd is selectable on the rail')
+{
+  // The backend browser case above lists Claude sessions that all share ONE
+  // directory, so it cannot speak for a backend whose history spans several:
+  // with no workspace ledger every directory is its own fallback group, and a
+  // pick that remembered only "some unregistered group" (a boolean) always
+  // resolved to the FIRST one — clicking (or arrowing onto) the second cwd
+  // kept showing (and Enter kept resuming) the first one's sessions. The
+  // pick must carry the group's own identity, and the automatic default must
+  // still follow the terminal's own directory, not the first group.
+  const rows = [
+    session({ id: 'cwd-a-one', backendId: 'claude', cwd: alphaDir, title: { text: 'claude in alpha', source: 'prompt' }, updatedAt: now - 1_000, agentPreset: undefined, model: undefined }),
+    session({ id: 'cwd-b-one', backendId: 'claude', cwd: betaDir, title: { text: 'claude in beta', source: 'prompt' }, updatedAt: now - 2_000, agentPreset: undefined, model: undefined }),
+  ]
+  const calls: string[] = []
+  const backend = {
+    version: 0,
+    cwd: betaDir,
+    working: false,
+    agentId: 'cwd-b-one',
+    backendCapabilities: { backendId: 'claude', backendLabel: 'Claude Agent', commands: ['new', 'resume', 'rewind', 'fork'] },
+    listWorkspaceRegistry: async () => { calls.push('registry'); return registry },
+    listSessions: async () => rows,
+    resumeTo: async (id: string) => { calls.push(`resumeTo:${id}`); return { ok: true } },
+    switchWorkspace: async () => true,
+    resolveWorkspace: async (reference: string) => ({ cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }),
+    stopBackgroundAgent: async () => true,
+    notify: () => {},
+    subscribe: () => () => {},
+  } as never
+  const target: StubChannel = { channel: backend, calls, plan: {}, landed: 0, config: { registry: [], cwd: betaDir } }
+  const app = await mountSupervisor(target)
+  const shown = (): string => app.lines().join('\n')
+  await settled(() => shown().includes('History only · alpha') && shown().includes('History only · beta'), { timeoutMs: 6_000 })
+  check('the rail opens on the terminal own cwd group, not the first one', await settled(() => shown().includes('Sessions in beta')), shown())
+  check('… and shows that directory\'s session', shown().includes('claude in beta') && !shown().includes('claude in alpha'), shown())
+  check('the workspace ledger is never read without the capability', !calls.includes('registry'), calls.join(' '))
+
+  // Click the OTHER group by its rail row (the row's own history-only line,
+  // which the pane never prints), then click back: the second pick is what
+  // used to collapse onto the first group.
+  await app.click('History only · alpha')
+  check('clicking the other cwd group shows its sessions', await settled(() => shown().includes('Sessions in alpha') && shown().includes('claude in alpha')), shown())
+  await app.click('History only · beta')
+  check('clicking back to the second-picked group really switches', await settled(() => shown().includes('Sessions in beta') && shown().includes('claude in beta')), shown())
+
+  // Enter follows the VISIBLE pane: with beta's session on screen it must
+  // resume beta's row, never the first directory's.
+  app.write('\u001b[C')
+  await sleep(60) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
+  app.write('\u001b[B')
+  await sleep(60) // 固定窗:pacing 让光标移动渲染一帧
+  app.write('\r')
+  check('Enter resumes the session the pane is showing', await settled(() => calls.includes('resumeTo:cwd-b-one'), { timeoutMs: 4_000 }), calls.join(' '))
+  check('… and not the first directory\'s session', !calls.includes('resumeTo:cwd-a-one'), calls.join(' '))
+  app.close()
+
+  // The keyboard rail (↓) must move the SELECTION with the cursor. Both
+  // worlds start from a known place — alpha, picked by hand above — so the
+  // move onto beta is what is under test, not the default.
+  const second = await mountSupervisor(target)
+  const secondShown = (): string => second.lines().join('\n')
+  await settled(() => secondShown().includes('History only · alpha'), { timeoutMs: 6_000 })
+  await second.click('History only · alpha')
+  await settled(() => secondShown().includes('Sessions in alpha'))
+  second.write('\u001b[B')
+  check('moving the rail cursor onto the second cwd selects it', await settled(() => secondShown().includes('Sessions in beta') && secondShown().includes('claude in beta')), secondShown())
+  second.close()
 }
 console.log(failures === 0 ? '\nAll session-supervisor checks passed.' : `\n${failures} check(s) failed.`)
 process.exit(failures === 0 ? 0 : 1)

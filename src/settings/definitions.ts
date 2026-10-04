@@ -16,6 +16,34 @@ import type { ShortcutActionId } from '../utils/keymap.js'
 export type SettingDefinition = Pick<TuiSettingsField, 'label' | 'descriptions' | 'hint' | 'hintDescriptions' | 'kind' | 'group' | 'options'>
 
 export const SETTING_DEFINITIONS = {
+  'btw.contextBudget': {
+    label: 'btw context budget',
+    descriptions: { zh: 'btw 上下文预算' },
+    group: 'side-panel',
+    hint: 'Total characters of recent Q/A pairs a /btw follow-up carries, 1000-200000 (default 24000). Whole older pairs drop first; the per-answer cap derives as min(8k, budget/2). Enable the btw panel via sidePanel.panels. Applies immediately.',
+    hintDescriptions: { zh: '追问携带的最近问答总字符预算，1000-200000（默认 24000）。超出时从最旧的整组开始裁剪；单条答案上限内部派生为 min(8k, 预算/2)。btw 面板需在 sidePanel.panels 里启用。立即生效。' },
+    kind: 'number',
+  },
+  'btw.contextTurns': {
+    label: 'btw context turns',
+    descriptions: { zh: 'btw 上下文轮数' },
+    group: 'side-panel',
+    hint: 'Completed Q/A pairs a /btw follow-up explicitly carries, 1-8 (default 4). Pairs beyond the window are omitted from the ask (the thread and the panel still keep them). Enable the btw panel via sidePanel.panels. Applies immediately.',
+    hintDescriptions: { zh: '追问显式携带的最近完成问答组数，1-8（默认 4）。窗口外的旧组不进请求（线程与面板仍保留全文）。btw 面板需在 sidePanel.panels 里启用。立即生效。' },
+    kind: 'number',
+  },
+  'codeFrameStyle': {
+    label: 'Code frame',
+    descriptions: { zh: '代码框样式' },
+    group: 'rendering',
+    hint: 'How fenced code blocks in replies frame themselves. Light (default): an open rail — corner + language label on top, a left rail with one padding column per row, no right wall or bottom edge (costs no extra height). Full: closes the box with a right wall that stays continuous across wrapped rows and a bottom edge under the block. Very narrow terminals always keep the plain fence, whatever this says. Applies immediately.',
+    hintDescriptions: { zh: '回复里代码块的边框形式。轻框（默认）：开放式栏杆——顶部角标加语言标签，每行左侧竖杆加一格内边距，无右墙无底边（不多占高度）。全框：封闭盒子——右墙在折行处保持连续，底部封边。终端太窄时恒为纯 fence（不受此设置影响）。立即生效。' },
+    kind: 'select',
+    options: [
+      { value: 'light', label: 'Light rail', descriptions: { zh: '轻框（栏杆）' } },
+      { value: 'full', label: 'Full box', descriptions: { zh: '全框（封闭）' } },
+    ],
+  },
   'companion.skin': {
     label: 'Companion skin',
     descriptions: { zh: '宠物皮肤' },
@@ -228,8 +256,8 @@ export const SETTING_DEFINITIONS = {
     label: 'Enabled panels',
     descriptions: { zh: '启用的面板' },
     group: 'side-panel',
-    hint: 'Comma-separated panel ids in PanelBar order (default `todo,jobs,agents`). Ids are lowercase words (a-z, 0-9, _, -) or a `plugin:panel` namespace; a well-formed id no panel claims yet stays in the bar for a plugin that registers it later, while a malformed entry is refused. Add `companion` to enable the pet panel. Applies immediately.',
-    hintDescriptions: { zh: '按标签栏顺序排列的面板 id，逗号分隔（默认 `todo,jobs,agents`）。id 为小写词组（a-z、0-9、_、-）或 `plugin:panel` 命名空间；格式合法但尚无面板认领的 id 会留在标签栏，等插件稍后注册，格式非法的输入会被直接拒绝。加上 `companion` 可启用宠物面板。立即生效。' },
+    hint: 'Tick the panels the side panel bar shows: a new tick appends at the end, unticking removes. Panels registered by plugins appear here automatically, and a well-formed id nothing claims yet stays as a checked placeholder. The Advanced row edits the raw comma list (e.g. to reorder). Applies immediately.',
+    hintDescriptions: { zh: '勾选侧栏标签栏要显示的面板：新勾选的追加在末尾，取消即移除。插件注册的面板会自动出现在这里；格式合法但尚无面板认领的 id 会保留为已勾选的占位行。「高级」行可编辑原始逗号列表（如调整顺序）。立即生效。' },
     kind: 'text',
   },
   'sidePanel.ratio': {
@@ -441,6 +469,14 @@ export const SETTING_DEFINITIONS = {
       { value: 'subtle', label: 'Subtle', descriptions: { zh: '轻微' } },
       { value: 'strong', label: 'Strong', descriptions: { zh: '明显' } },
     ],
+  },
+  'turnUsageRow': {
+    label: 'Turn usage row',
+    descriptions: { zh: '回合用量行' },
+    group: 'rendering',
+    hint: 'Show the quiet right-aligned ledger that closes each turn (tokens in/out, cache split, span, retries). Off by default — the /tokens and /status commands and the footer token hover keep reporting the same numbers either way.',
+    hintDescriptions: { zh: '在每回合末尾显示安静的右对齐用量小记（输入/输出、缓存分段、耗时、重试）。默认关闭——无论开关，/tokens、/status 与底栏 token 悬停都照常报告同样数字。' },
+    kind: 'boolean',
   },
   'whale': {
     label: 'Header art',

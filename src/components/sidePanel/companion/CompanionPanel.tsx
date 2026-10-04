@@ -76,13 +76,16 @@ import {
   deriveCompanionContext,
   deriveCompanionMood,
   idleRotationIndex,
+  initialCompanionHoverState,
   initialCompanionDisplayState,
   notificationReactionKind,
   resolveTargetSemantic,
   stepCompanionDisplay,
+  stepCompanionHover,
   stepNotificationTracker,
   type CompanionDisplaySemantic,
   type CompanionDisplayState,
+  type CompanionHoverState,
   type CompanionMood,
 } from './mood.js'
 import { initialCompanionPoseState, nextCompanionPoseStep } from './pose.js'
@@ -247,6 +250,8 @@ export function CompanionPanel({ width, height, focused, visible }: PanelProps):
   const dragPosRef = React.useRef<{ left: number; top: number } | undefined>(undefined)
   const flybackRef = React.useRef<PetFlyback | undefined>(undefined)
   const [hoverState, setHoverState] = React.useState<{ zone: HoverZone; since: number } | undefined>(undefined)
+  // 悬停展示语义（驻留平滑后的）：渲染期 ref 步进，同 displayRef 模式。
+  const hoverDisplayRef = React.useRef<CompanionHoverState>(initialCompanionHoverState)
 
   const now = Date.now()
 
@@ -335,16 +340,20 @@ export function CompanionPanel({ width, height, focused, visible }: PanelProps):
 
   // --- 最终动画键（互动覆盖 > 悬停 > idle 轮换 > 平滑语义）-----------------
   const hover = hoverState !== undefined && visible ? hoverState : undefined
+  // 悬停驻留平滑（mood.stepCompanionHover）：zone 直读是期望值，指针驻留
+  // 满窗才真正换脸（快速划过不触发）；tick 档位判定仍用原始 zone。
+  hoverDisplayRef.current = stepCompanionHover(hoverDisplayRef.current, hoverSemantic(hover?.zone), now)
+  const hoverDisplay = hoverDisplayRef.current
   let animationSemantic: string
   let animSince: number
   if (activeOverride !== undefined) {
     animationSemantic = activeOverride.semantic
     animSince = activeOverride.since
   } else if (display.semantic === 'idle') {
-    const hoverSem = hoverSemantic(hover?.zone)
+    const hoverSem = hoverDisplay.semantic
     if (hoverSem !== undefined) {
       animationSemantic = hoverSem
-      animSince = hover?.since ?? now
+      animSince = hoverDisplay.since
     } else {
       const index = idleRotationIndex(display.since, now, DEEPY_IDLE_ROTATION.length)
       animationSemantic = DEEPY_IDLE_ROTATION[index] ?? 'idle'

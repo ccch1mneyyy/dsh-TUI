@@ -89,7 +89,12 @@ export function SidePanelColumn({ width, controller, channel, activity, attentio
   // ⤢ 只对「活动面板 + 声明了整屏形态 + 宿主接了出口」出现：能力位是
   // 声明的唯一真源，没有整屏对应物的面板（info/companion）不画。
   const activeEntry = entries.find(entry => entry.definition.id === controller.activePanelId)
-  const canExpand = activeEntry?.definition.capabilities?.fullscreen === true && onExpand !== undefined
+  // 没有轨迹来源（unsupported）时收起轨迹的 ⤢：全屏只会放大同一句「不支
+  // 持」，面板自己的文案说明了原因。channel 不报告来源（旧夹具/部分
+  // channel）时照旧显示。
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: partial fixture channels
+  const trajectoryUnsupported = controller.activePanelId === 'trajectory' && channel.trajectorySource?.() === 'unsupported'
+  const canExpand = activeEntry?.definition.capabilities?.fullscreen === true && onExpand !== undefined && !trajectoryUnsupported
   // 标签点击与 ←/→ 宿主键走同一条路（openPanel 会顺带把焦点给右栏）。
   const onSelectPanel = React.useCallback(
     (id: string) => { controller.openPanel(id, { focus: true }) },

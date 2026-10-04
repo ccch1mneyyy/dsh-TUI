@@ -72,6 +72,10 @@ A complete common override looks like this:
 | `sidePanel.ratio` | `0.68` (number, 0.1–0.95) | Chat column as a fraction of the content width; while the panel has focus, `+`/`-` nudge it live for the current session (not written back). Applies immediately |
 | `sidePanel.panels` | `todo,jobs,agents` (comma-separated text) | Enabled panel ids and their order (built-ins: `todo` `info` `trajectory` `jobs` `agents` `workspace` `companion`); a well-formed id no panel claims yet stays in the tab bar for a plugin to register later, a malformed entry is refused. The `⤢` on the right edge of the bar blows the active panel up to full screen (drawn only for panels that declare a fullscreen form). Applies immediately |
  | `companion.skin` | `deepy` | Skin of the companion-panel pet: `deepy` (default, the deepy whale kit), `whaleGirl` (the whale-girl sticker pack, 22 animations incl. interaction reactions) or `whale` (the splash's layered pixel whale); the panel itself is enabled by adding `companion` to `sidePanel.panels`. Applies immediately |
+| `btw.contextTurns` | `4` (number, 1–8) | Completed Q/A pairs a `/btw` follow-up carries; older pairs stay in the thread and panel but are not sent. Applies immediately |
+| `btw.contextBudget` | `24000` (number, 1000–200000) | Character budget for the recent Q/A pairs a `/btw` follow-up carries; the oldest pairs drop first. Applies immediately |
+| `codeFrameStyle` | `light` | Frame of fenced code blocks in replies: `light` is a top label plus a left rail and costs no extra rows; `full` closes the box. Very narrow terminals always use a plain fence. Applies immediately |
+| `turnUsageRow` | `false` (boolean) | Show a right-aligned usage row at the end of each turn (tokens in/out, cache, duration, retries); `/tokens`, `/status` and the footer hover report the same numbers either way |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | `moon8` | Activity animation preset; `/activity` changes it at runtime. A legacy saved value of `claude` is read as `moon8`, and the picker no longer offers that legacy preset |
@@ -80,6 +84,7 @@ A complete common override looks like this:
 | `terminalImages` | `true` | Allow previews in supported terminals; `false` keeps text metadata and skips image probing and preview decoding. Restart to apply changes |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
+| `backend` | unset (the backend `/kernel` remembers, else `dsh`) | Session backend: `dsh` or the experimental `claude` (case-insensitive; an unknown value means `dsh`). The profile row reads `DSH_TUI_BACKEND`, which `dsh-tui --backend claude` sets. See [Claude backend](claude-backend.en.md) |
 
 ### Precedence and force-off
 
@@ -256,6 +261,8 @@ for the complete field reference.
 | `DSH_TUI_DISABLE_TERMINAL_IMAGES` | Set to `1` to force Kitty/Sixel probing, preview reads/decoding, and terminal image rendering off, overriding config and /settings; text metadata remains visible |
 | `DSH_TUI_IMAGE_PROTOCOL` | `auto` (default), `kitty`, `sixel`, or `none`; override protocol selection without bypassing the preview preference, disable switch, non-fullscreen, accessibility or multiplexer guards |
 | `DSH_TUI_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |
+| `DSH_TUI_BACKEND` | Session backend (`dsh` / `claude`), normally set by `dsh-tui --backend` |
+| `DSH_TUI_CLAUDE_PERMISSION_MODE` | Start permission mode of the Claude backend (`default`/`acceptEdits`/`plan`/`dontAsk`/`bypassPermissions`); wins over the mode `/permission` remembered |
 | `DSH_TUI_WORKSPACE_TARGET` | Workspace path or URI resolved at startup, normally set by `dsh-tui <target>` |
 | `DSH_TUI_SESSION_ROOT` | Override the JSONL session root; profile default `$DSH_HOME/sessions`, bare `cordis.yml` default `~/.dsh-tui/sessions` |
 | `DSH_PERMISSION_MODE` | Override non-Windows sandbox policy, such as `workspace-write` or `danger-full-access` |

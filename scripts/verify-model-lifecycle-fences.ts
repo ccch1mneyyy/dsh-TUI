@@ -6,8 +6,20 @@
  * preferences, or published workspace breadcrumb.
  */
 import assert from 'node:assert/strict'
-import { createModelActions } from '../src/dsh-adapter/channel/model-actions.js'
-import { createWorkspaceActions } from '../src/dsh-adapter/channel/workspace-actions.js'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+// Isolate HOME/USERPROFILE BEFORE the src imports: a successful setEffort
+// persists the effort preference through effortPrefs, whose DATA_DIR
+// resolves from homedir() at module load (POSIX reads HOME, Windows reads
+// USERPROFILE — both point at the throwaway dir so a green run can never
+// touch the real ~/.dsh-tui/effort.json).
+const isolatedHome = mkdtempSync(join(tmpdir(), 'dshtui-effort-fences-'))
+process.env.HOME = isolatedHome
+process.env.USERPROFILE = isolatedHome
+const { createModelActions } = await import('../src/dsh-adapter/channel/model-actions.js')
+const { createWorkspaceActions } = await import('../src/dsh-adapter/channel/workspace-actions.js')
 
 type Deferred<T> = { promise: Promise<T>; resolve(value: T): void; reject(error: unknown): void }
 const deferred = <T>(): Deferred<T> => {
@@ -34,9 +46,12 @@ const state = {
   effortLevels: undefined as string[] | undefined, agentPreset: undefined as string | undefined,
   working: false, emit: () => undefined, notify: () => undefined,
 }
-const routeLoads = new Map<string, Deferred<{ reasoning: { efforts: { id: string; name: string }[] } }>>()
+/** Route-metadata answer shape as the widened llm runtime sees it: a
+ * catalog row may declare `reasoning: true` with no tier list at all. */
+type RouteInfo = { context?: { contextWindow: number }; reasoning?: boolean | { efforts?: { id: string; name: string }[]; defaultEffort?: string } }
+const routeLoads = new Map<string, Deferred<RouteInfo>>()
 const infoFor = (provider: string, model: string) => {
-  const gate = deferred<{ reasoning: { efforts: { id: string; name: string }[] } }>()
+  const gate = deferred<RouteInfo>()
   routeLoads.set(`${provider}/${model}`, gate)
   return gate.promise
 }
@@ -159,5 +174,57 @@ const rejected = workspace.switchWorkspace({ kind: 'remote', cwd: '/reject', uri
 workspaceCalls[2]!.reject(new Error('create failed'))
 assert.equal(await rejected, false)
 assert.equal(workspaceState.cwd, '/B', 'rejected workspace creation cannot publish or roll back cwd')
+
+// ── Effort-tier fallback ─────────────────────────────────────────────────
+// A catalog row that declares reasoning support WITHOUT a tier list (pi-ai
+// 0.87.x zai rows for glm-5.3* ship only `reasoning: true`) must offer the
+// standard ladder — the kernel accepts the standard ids and stays the
+// set-time authority. An EXPLICIT list, including an explicit empty one, is
+// respected verbatim; no reasoning declaration offers nothing.
+{
+  ownerActive = true
+  state.model = 'ladder-true'
+  actions.refreshEffortLevels()
+  await tick()
+  routeLoads.get('p/ladder-true')!.resolve({ reasoning: true })
+  await tick()
+  assert.deepEqual(state.effortLevels, ['low', 'medium', 'high', 'xhigh', 'max'],
+    'reasoning:true with no tier list falls back to the standard ladder')
+  const ladderSet = actions.setEffort('xhigh')
+  await tick()
+  routeLoads.get('p/ladder-true')!.resolve({ reasoning: true })
+  assert.equal(await ladderSet, true, 'a fallback ladder tier switches and reaches the wire')
+  assert.deepEqual(selection.current, { provider: 'p', model: 'ladder-true', reasoningEffort: 'xhigh' },
+    'the fallback tier install writes the request selection')
+
+  state.model = 'ladder-object'
+  actions.refreshEffortLevels()
+  await tick()
+  routeLoads.get('p/ladder-object')!.resolve({ reasoning: {} })
+  await tick()
+  assert.deepEqual(state.effortLevels, ['low', 'medium', 'high', 'xhigh', 'max'],
+    'a reasoning object without an efforts key falls back to the standard ladder')
+
+  state.model = 'ladder-listed'
+  actions.refreshEffortLevels()
+  await tick()
+  routeLoads.get('p/ladder-listed')!.resolve({ reasoning: { efforts: [{ id: 'low', name: 'Low' }] } })
+  await tick()
+  assert.deepEqual(state.effortLevels, ['low'], 'a declared tier list wins over the fallback ladder')
+
+  state.model = 'ladder-empty'
+  actions.refreshEffortLevels()
+  await tick()
+  routeLoads.get('p/ladder-empty')!.resolve({ reasoning: { efforts: [] } })
+  await tick()
+  assert.deepEqual(state.effortLevels, [], 'an explicit empty efforts list is respected, not replaced by the ladder')
+
+  state.model = 'ladder-none'
+  actions.refreshEffortLevels()
+  await tick()
+  routeLoads.get('p/ladder-none')!.resolve({})
+  await tick()
+  assert.deepEqual(state.effortLevels, [], 'no reasoning declaration offers no tiers')
+}
 
 console.log('verify-model-lifecycle-fences: OK')

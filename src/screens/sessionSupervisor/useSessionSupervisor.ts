@@ -17,7 +17,7 @@ import { basename } from 'node:path'
 import { t } from '../../i18n.js'
 import { truncateWidth } from '../../sessions/format.js'
 import { normalizeWorkspaceCwd } from '../../sessions/view.js'
-import { readSessionPins, setSessionPinned } from '../../sessionPins.js'
+import { readSessionPins, sessionPinsDir, setSessionPinned } from '../../sessionPins.js'
 import { readSessionOwners, type SessionMountOwner } from '../../sessionMounts.js'
 import type { SessionSummary } from '../../dsh-adapter/sessions/index.js'
 import type { TuiWorkspaceEntry, TuiWorkspaceTarget } from '../../workspaces.js'
@@ -97,6 +97,19 @@ export interface SessionSupervisorInput {
  */
 export function useSessionSupervisor(input: SessionSupervisorInput) {
   const { channel, home, onOpenSession, onNewSession, onStopSession, liveStateOf, columns, rows } = input
+  /**
+   * The bound backend: the screen lists ITS sessions. A DSH
+   * channel (or a partial headless one without a snapshot) keeps today's
+   * screen exactly; another backend has no workspace ledger (`/workspace` is
+   * a DSH command), keeps its pins in its own file, and its rows are
+   * renamed / deleted through its catalog.
+   */
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts pass partial channels
+  const backendId = channel.backendCapabilities?.backendId ?? 'dsh'
+  const dshBackend = backendId === 'dsh'
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts pass partial channels
+  const workspaceLedger = channel.backendCapabilities?.commands.includes('workspace') ?? true
+  const pinsDir = sessionPinsDir(backendId)
 
   const [entries, setEntries] = useState<readonly RailEntry[]>([])
   // Lazy so a non-empty snapshot from this channel's previous mount paints as
@@ -139,10 +152,12 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   }
   const holderOf = useCallback(
     (sessionId: string): number | undefined => {
-      const owner = occupancyRef.current.get(sessionId)
+      // The ledger keys a non-DSH session by its backend-qualified reference
+      // (`claude:<id>`); DSH ids stay bare.
+      const owner = occupancyRef.current.get(dshBackend ? sessionId : `${backendId}:${sessionId}`)
       return owner === undefined || owner.pid === process.pid ? undefined : owner.pid
     },
-    [],
+    [dshBackend, backendId],
   )
 
   /**
@@ -237,12 +252,14 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
 
   const [railFocus, setRailFocus] = useState(0)
   /**
-   * A rail entry the user picked by hand that is NOT registered — the fallback
-   * group for unregistered sessions. It exists only for this screen's lifetime:
-   * selecting a group is a way to SEE those sessions, never a way to register a
-   * directory, so it must not create a ledger record.
+   * The id of the fallback-group row the user picked by hand — unregistered
+   * groups are identified by their own id, never by "some group": a backend
+   * without the workspace ledger has ONE such group per directory, and a pick
+   * that forgot WHICH one kept resolving to the first. It exists only for this
+   * screen's lifetime: selecting a group is a way to SEE those sessions, never
+   * a way to register a directory, so it must not create a ledger record.
    */
-  const [selectedUnregistered, setSelectedUnregistered] = useState(false)
+  const [selectedUnregisteredId, setSelectedUnregisteredId] = useState<string | undefined>(undefined)
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined)
   /** True once the user picked a rail row by hand; see the selection effect. */
   const [selectionManual, setSelectionManual] = useState(false)
@@ -274,7 +291,10 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
    * no answer, and ←/→ is how this screen answers it.
    */
   const [activePane, setActivePane] = useState<'rail' | 'list'>('rail')
-  const [pins, setPins] = useState<ReadonlySet<string>>(() => readSessionPins())
+  const [pins, setPins] = useState<ReadonlySet<string>>(() => readSessionPins(pinsDir))
+  /** A stored session being renamed / confirmed for deletion (non-DSH rows). */
+  const [sessionRename, setSessionRename] = useState<{ id: string; draft: string } | undefined>(undefined)
+  const [confirmDelete, setConfirmDelete] = useState<string | undefined>(undefined)
 
   const [menu, setMenu] = useState<{ path: string; col: number; row: number; item: number } | undefined>(undefined)
   const [rename, setRename] = useState<{ path: string; draft: string } | undefined>(undefined)
@@ -359,7 +379,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
       })(),
       (async (): Promise<void> => {
         try {
-          const registry = typeof channel.listWorkspaceRegistry === 'function'
+          const registry = typeof channel.listWorkspaceRegistry === 'function' && workspaceLedger
             ? await channel.listWorkspaceRegistry()
             : []
           if (slot.requestGeneration !== generation) return
@@ -376,7 +396,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [channel])
+  }, [channel, workspaceLedger])
 
   React.useEffect(() => {
     void reload()
@@ -415,12 +435,16 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     // A hand-picked fallback group stays picked while it is still on the rail.
     // Without this the group would be dropped on the very next listing pass and
     // the sessions it was showing would vanish again.
-    if (selectionManual && selectedUnregistered
-      && railEntries.some(entry => entry.from === 'unregistered')) return
+    if (selectionManual && selectedUnregisteredId !== undefined
+      && railEntries.some(entry => entry.id === selectedUnregisteredId)) return
+    // The terminal's own directory, registered OR a fallback group: a backend
+    // without the workspace ledger lists every directory as a group of its own,
+    // and its rail must open on the one this terminal is in just the same.
     const here = railEntries.find(entry => entry.from === 'registry' && samePath(entry.path, channel.cwd))
+      ?? railEntries.find(entry => entry.from === 'unregistered' && samePath(entry.path, channel.cwd))
     const next = here ?? railEntries[0]!
     setSelectedPath(next.from === 'registry' ? next.path : undefined)
-    setSelectedUnregistered(next.from === 'unregistered')
+    setSelectedUnregisteredId(next.from === 'unregistered' ? next.id : undefined)
     // The cursor travels with an automatic selection. It starts at 0, so
     // leaving it there while the selection lands elsewhere paints two green
     // rows — `❯` on the first record and the marker on the selected one — until
@@ -431,7 +455,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
       const index = railEntries.findIndex(entry => entry.id === next.id)
       return index < 0 || current === index ? current : index
     })
-  }, [railEntries, selectedPath, selectedUnregistered, selectionManual, channel.cwd])
+  }, [railEntries, selectedPath, selectedUnregisteredId, selectionManual, channel.cwd])
 
   // The cursor indexes the entry list directly (there is no `+` row in front of
   // it), so a shrinking ledger has to pull it back inside or the last row would
@@ -445,9 +469,9 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     const registered = railEntries.find(entry =>
       entry.from === 'registry' && selectedPath !== undefined && samePath(entry.path, selectedPath))
     if (registered !== undefined) return registered
-    if (selectedUnregistered) return railEntries.find(entry => entry.from === 'unregistered')
+    if (selectedUnregisteredId !== undefined) return railEntries.find(entry => entry.id === selectedUnregisteredId)
     return railEntries[0]
-  }, [railEntries, selectedPath, selectedUnregistered])
+  }, [railEntries, selectedPath, selectedUnregisteredId])
 
   /**
    * Sessions whose recorded cwd is the selected workspace, minus the search
@@ -549,17 +573,59 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   }, [])
 
   const persistPin = useCallback((id: string, pinned: boolean): void => {
-    const result = setSessionPinned(id, pinned)
+    const result = setSessionPinned(id, pinned, pinsDir)
     if (!result.ok) {
       report(t('resume-pin-save-failed'), 'error')
       return
     }
     setPins(result.pins)
-  }, [report])
+  }, [report, pinsDir])
+
+  /** Rename a stored session through the backend's catalog (non-DSH rows). */
+  const renameSession = useCallback((sessionId: string, title: string): void => {
+    const next = title.trim()
+    if (next === '') {
+      report(t('home-rename-empty'), 'error')
+      return
+    }
+    void channel.renameSessionTo(sessionId, next)
+      .then((ok) => {
+        if (ok) return reload()
+        report(t('rename-failed', { err: '' }), 'error')
+        return undefined
+      })
+      .catch(error => report(t('rename-failed', { err: message(error) }), 'error'))
+  }, [channel, reload, report])
+
+  /**
+   * Delete a stored session through the backend's catalog (non-DSH rows):
+   * never the one this terminal is in, never one another terminal holds.
+   */
+  const deleteSession = useCallback((session: SessionSummary): void => {
+    if (liveStateOf(session.id)?.current === true) {
+      report(t('supervisor-delete-current'), 'error')
+      return
+    }
+    const holder = holderOf(session.id)
+    if (holder !== undefined) {
+      report(t('supervisor-occupied', { pid: holder }), 'error')
+      return
+    }
+    void channel.deleteSession(session.id)
+      .then((ok) => {
+        if (!ok) {
+          report(t('supervisor-delete-failed', { name: session.title.text }), 'error')
+          return undefined
+        }
+        report(t('supervisor-deleted', { name: session.title.text }), 'info')
+        return reload()
+      })
+      .catch(error => report(t('session-delete-failed', { err: message(error) }), 'error'))
+  }, [channel, holderOf, liveStateOf, reload, report])
 
   const selectEntry = useCallback((entry: RailEntry): void => {
     setSelectedPath(entry.from === 'registry' ? entry.path : undefined)
-    setSelectedUnregistered(entry.from === 'unregistered')
+    setSelectedUnregisteredId(entry.from === 'unregistered' ? entry.id : undefined)
     setSelectionManual(true)
     setFocusSessionId(undefined)
   }, [])
@@ -702,6 +768,13 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   const focusedSession = sessionAt(sessionIndex)
 
   return {
+    dshBackend,
+    sessionRename,
+    setSessionRename,
+    confirmDelete,
+    setConfirmDelete,
+    renameSession,
+    deleteSession,
     entries,
     sessions,
     loading,

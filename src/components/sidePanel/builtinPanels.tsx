@@ -15,10 +15,13 @@ import { CompanionPanel } from './companion/CompanionPanel.js'
 import { InfoPanel } from './InfoPanel.js'
 import { TrajectoryPanel } from './TrajectoryPanel.js'
 import { WorkspacePanel } from './WorkspacePanel.js'
+import { BtwPanelAdapter } from './btw/BtwPanelAdapter.js'
 import { panelStore } from './PanelStore.js'
 import { useSidePanelChannel } from './SidePanelRuntimeContext.js'
 import { usePanelInput } from './usePanelInput.js'
 import { jobsFocusStore } from './jobsFocusStore.js'
+import { agentViewStore } from './agentViewStore.js'
+import { agentComposeTargetOf, type AgentComposeTarget } from '../messages/agentTeam.js'
 import type { PanelProps } from './types.js'
 
 /** todo：GoalTodoPanel 的 panel variant（同一份 store，不重写业务）。 */
@@ -63,6 +66,16 @@ function JobsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
   const jobs = channel.backgroundJobs
   const version = channel.version
   const focusRequest = React.useSyncExternalStore(jobsFocusStore.subscribe, jobsFocusStore.get)
+  // A backend whose job output is read on demand keeps the focused job's
+  // tail fresh while this panel shows it (the same seam the full-screen
+  // panel and the transcript cards use); one identity per capability.
+  const jobControlRef = React.useRef(channel.jobControl)
+  jobControlRef.current = channel.jobControl
+  const outputWatchable = typeof channel.jobControl?.watchOutput === 'function'
+  const watchOutput = React.useMemo(
+    () => outputWatchable ? (id: string) => jobControlRef.current?.watchOutput?.(id) ?? (() => undefined) : undefined,
+    [outputWatchable],
+  )
   // 已读基线：上次 visible=true 时见过的 failed id 集合。
   const seenFailedRef = React.useRef<ReadonlySet<string>>(new Set())
   React.useEffect(() => {
@@ -88,6 +101,7 @@ function JobsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
       focused={focused}
       visible={visible}
       focusRequest={focusRequest}
+      onWatchOutput={watchOutput}
       onKill={(id: string) => {
         // Stub channels (verify harnesses) have no jobControl — surface
         // the same failure toast as a refused kill instead of throwing.
@@ -117,6 +131,10 @@ function JobsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
 /** agents 面板的二级路由：dashboard ↔ detail。 */
 type AgentsRoute = 'dashboard' | { readonly detail: string }
 
+/** 主屏 Agent View 盖过 Chat 时整棵主树（含本面板）会卸载；重挂载时从这里
+ *  恢复最后的路由。 */
+let lastAgentsRoute: AgentsRoute = 'dashboard'
+
 /**
  * agents：SubagentDashboard / SubagentDetailScene 的 panel variant——同一份
  * channel.subagents 与 subagentControl，布局与键盘按侧栏契约重排。二级路由
@@ -129,7 +147,24 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
   const channel = useSidePanelChannel()
   const subagents = channel.subagents
   const version = channel.version
-  const [route, setRoute] = React.useState<AgentsRoute>('dashboard')
+  const [route, setRoute] = React.useState<AgentsRoute>(lastAgentsRoute)
+  React.useEffect(() => { lastAgentsRoute = route }, [route])
+  // subagentControl.message 缺失 = 没有 composer 和消息流。可选链是给没有
+  // subagentControl 的桩 channel（回归夹具）用的。
+  const messageControl = channel.subagentControl?.message
+  const detailAgentId = typeof route === 'object' ? route.detail : null
+  const detailMessages = detailAgentId !== null && messageControl !== undefined
+    ? messageControl.messages().filter(m => m.from === detailAgentId || m.to === detailAgentId)
+    : []
+  const detailTarget: AgentComposeTarget | undefined = React.useMemo(() => {
+    if (detailAgentId === null) return undefined
+    const labels = new Map(subagents.map(s => [s.agentId, s.description]))
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- roster may lag the route
+    return labels.has(detailAgentId) ? agentComposeTargetOf(detailAgentId, labels) : undefined
+  }, [detailAgentId, subagents])
+  const detailCompose = detailTarget !== undefined && messageControl !== undefined
+    ? { control: messageControl, target: detailTarget }
+    : undefined
   // 已读基线：上次 visible=true 时见过的 failed id 集合。
   const seenFailedRef = React.useRef<ReadonlySet<string>>(new Set())
   React.useEffect(() => {
@@ -163,7 +198,11 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
         focused={focused}
         visible={visible}
         onBack={() => setRoute('dashboard')}
-        onInterrupt={(id: string) => channel.subagentControl.interrupt(id)}
+        onInterrupt={(id: string) => channel.subagentControl?.interrupt(id)}
+        {...(channel.subagentControl?.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
+        onOpenView={() => agentViewStore.request(detail.agentId, 'agent-detail', true)}
+        messages={detailMessages}
+        {...(detailCompose === undefined ? {} : { compose: detailCompose })}
       />
     )
   }
@@ -174,6 +213,8 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
       focused={focused}
       visible={visible}
       onSelect={(id: string) => setRoute({ detail: id })}
+      onOpenView={(id: string) => agentViewStore.request(id, 'agents-dashboard', true)}
+      messages={messageControl?.messages()}
     />
   )
 }
@@ -257,6 +298,20 @@ export function registerBuiltinPanels(): void {
     // 整屏对应物 = /home 的工作区主页（分屏时 /home 也走本面板）。
     capabilities: { scroll: true, fullscreen: true },
     component: WorkspacePanel,
+  }, 'builtin')
+  panelStore.register({
+    id: 'btw',
+    titleKey: 'panel-title-btw',
+    icon: '?',
+    order: 22,
+    source: 'builtin',
+    mountPolicy: 'enabled',
+    // opt-in（/btw 快路径在未启用时回退浮层，启用后路由进面板）。
+    defaultEnabled: false,
+    minColumns: 28,
+    // 整屏对应物 = ⤢ 的 BtwThreadScene（Esc 返回侧栏，不清 thread/draft）。
+    capabilities: { scroll: true, sendToChat: true, fullscreen: true },
+    component: BtwPanelAdapter,
   }, 'builtin')
   panelStore.register({
     id: 'companion',

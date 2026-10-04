@@ -167,7 +167,11 @@ function importFailureText(outcome: Exclude<ForeignImportOutcome, { kind: 'ready
  */
 export function useForeignSessions(input: ForeignSessionsInput) {
   const { channel, tab, registry, query, setNotice, onOpenSession } = input
+  // Importing other agents' conversations is a DSH feature (`/migrate`): a
+  // backend without it never probes (its delegate would refuse loudly).
   const supported = typeof channel.listForeignSources === 'function'
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts pass partial channels
+    && (channel.backendCapabilities?.commands.includes('migrate') ?? true)
   const agentId = tab === DSH_TAB ? undefined : tab
 
   const [sources, setSources] = useState<readonly ForeignSource[]>([])

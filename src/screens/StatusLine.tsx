@@ -6,6 +6,7 @@ import { t } from '../i18n.js'
 import { formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
 import { estimateSessionCostSnapshotCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
 import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../components/ActivityLine.js'
+import { formatClock } from '../trajectory/format.js'
 import { GoalStatusChip } from '../components/GoalTodoPanel.js'
 import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.js'
 
@@ -14,6 +15,15 @@ import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.
 const NO_BACKGROUND_JOBS: readonly BackgroundJobState[] = []
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 /** 同上：partial channel 字面量可能早于 mainCost/subagentCost 字段（R4 兼容）。 */
+/** A reported session cost: `$0.0123` for USD (sub-dollar keeps 4 places,
+ *  a session often costs cents), `12.34 EUR` for any other currency. */
+export function formatCostReport(report: { readonly currency: string; readonly amount: number }): string {
+  const digits = report.amount < 1 ? 4 : 2
+  return report.currency === 'USD'
+    ? `$${report.amount.toFixed(digits)}`
+    : `${report.amount.toFixed(digits)} ${report.currency}`
+}
+
 const NO_MAIN_COST: Channel['mainCost'] = {}
 const NO_SUBAGENT_COST: Channel['subagentCost'] = []
 import type { SelectionSnapshot } from '../dsh-adapter/ide-channel.js'
@@ -83,6 +93,8 @@ const MINIMAL_UI_STATUS_BAR: StatusBarConfig = Object.freeze({
  *  The context bar reports the single `bar` target (see ContextBarView). */
 type HoverTarget =
   | 'ctx'
+  | 'mode'
+  | 'effort'
   | 'cache'
   | 'tps'
   | 'tokens'
@@ -107,6 +119,9 @@ type FieldPart = {
    *  tooltip with the full string (e.g. the session title, cut mid-word
    *  when the right-aligned group runs out of columns). */
   tooltip?: string
+  /** Click target (fullscreen mouse): the backend mode segment opens the
+   *  /permission picker — the same route the launchpad param row takes. */
+  onClick?: () => void
 }
 
 /**
@@ -137,6 +152,7 @@ function FieldLine({
           <Box
             flexShrink={1}
             {...(part.id === undefined ? {} : hoverProps(part.id))}
+            {...(part.onClick === undefined ? {} : { onClick: part.onClick })}
           >
             {part.tooltip === undefined || part.tooltip === '' ? (
               <Text wrap="truncate">{part.node}</Text>
@@ -156,12 +172,45 @@ export function StatusLine({
   channel,
   selectionActive = false,
   helpOpen = false,
+  backendMode,
+  modelPicker,
+  effortPicker,
   wake,
   activity: projectedActivity,
 }: {
   channel: Channel
   selectionActive?: boolean
   helpOpen?: boolean
+  /** The backend's OWN permission mode (the typed `modes` capability):
+   *  `id` is the backend mode id (default / acceptEdits / plan /
+   *  bypassPermissions / dontAsk / auto …), `name` the label the backend
+   *  gives it, `onOpen` opens the same /permission picker the command does.
+   *  Present: the mode segment always shows — the base mode included, the
+   *  user asked to SEE the current permission level — and both its colour
+   *  and its text come from the backend, never from the DSH mode atoms.
+   *  It also ignores the `statusBar.mode` field switch (see the gate
+   *  below: a safety readout outranks a decoration preference); the minimal
+   *  UI is the only thing it yields to. Absent (DSH, or a backend without
+   *  modes): rendering stays byte-identical to the modeMarked rule below. */
+  backendMode?: {
+    readonly id: string
+    readonly name: string
+    readonly onOpen: () => void
+  }
+  /** The model segment's click target: the same /model picker the command
+   *  opens. Present only when the backend serves a model catalog
+   *  (backendCapabilities.models — DSH and the Claude backend both do);
+   *  absent = the segment renders exactly as before, and its hover detail
+   *  keeps the pure route readout without the click affordance line. */
+  modelPicker?: {
+    readonly onOpen: () => void
+  }
+  /** Same contract for the think-level segment and /effort: present only
+   *  when the backend serves the effort capability. The hover id rides
+   *  with it — the segment's whole detail line IS the affordance. */
+  effortPicker?: {
+    readonly onOpen: () => void
+  }
   /** Activity value published by the working-activity plugin for this session.
    *  Preferred over the channel's own copy when the composition provides it. */
   activity?: ActivityLineValue
@@ -219,20 +268,48 @@ export function StatusLine({
   if (statusBar.thinking && channel.reasoningEffort !== undefined) {
     contextParts.push({
       key: 'effort',
+      // The hover id rides only with the click target: the segment's whole
+      // detail line IS the affordance (level + /effort), so promising it
+      // without the picker behind it would be a lie.
+      ...(effortPicker === undefined ? {} : { id: 'effort' as const, onClick: effortPicker.onOpen }),
       node: <Text color="inactiveShimmer">{channel.reasoningEffort}</Text>,
     })
   }
   const modeNeedsExplicitMarker = channel.mode.plan === true
     || channel.mode.sandbox === 'danger-full-access'
     || channel.mode.approval === 'never'
-  if (statusBar.mode && (channel.modeIndex > 0 || modeNeedsExplicitMarker)) {
+  const modeMarked = channel.modeIndex > 0 || modeNeedsExplicitMarker
+  // Backend-native permission modes are a SAFETY readout (bypassPermissions
+  // = every confirmation switched off), so the segment outranks the
+  // `statusBar.mode` field switch: it shows whenever the backend reports a
+  // mode, even at the default `mode: false`. The one thing it cannot outrank
+  // is the minimal UI (`minimalUi === true` pins the footer to model + cwd —
+  // the user's explicit choice must not be displaced). With no backend mode
+  // (DSH) the rule stays byte-identical to before: `statusBar.mode` AND
+  // modeMarked.
+  if (backendMode === undefined
+    ? statusBar.mode && modeMarked
+    : channel.minimalUi !== true) {
+    // Backend modes carry their own colour rule — the two destructive ids
+    // warn, plan keeps its own colour, everything else (the unmarked base
+    // mode included) renders muted; the DSH atoms never leak in. Without a
+    // backend mode the DSH rule stands: warning colour for anything that
+    // needs an explicit marker, plan keeps its own.
+    const modeColour = backendMode === undefined
+      ? channel.mode.plan === true
+        ? 'planMode'
+        : modeMarked ? 'warning' : 'inactiveShimmer'
+      : backendMode.id === 'bypassPermissions' || backendMode.id === 'dontAsk'
+        ? 'warning'
+        : backendMode.id === 'plan' ? 'planMode' : 'inactiveShimmer'
     contextParts.push({
       key: 'mode',
+      ...(backendMode === undefined ? {} : { id: 'mode' as const, onClick: backendMode.onOpen }),
       node: (
         <Text
-          color={channel.mode.plan === true ? 'planMode' : 'warning'}
+          color={modeColour}
         >
-          {modeDisplayName(channel.mode)}
+          {backendMode === undefined ? modeDisplayName(channel.mode) : backendMode.name}
         </Text>
       ),
     })
@@ -333,6 +410,10 @@ export function StatusLine({
   }
 
 const selectionBadge = formatSelectionBadge(channel.selection)
+  // The short id names the backend's own session, the id `--resume`
+  // takes. A DSH session's id is its agent id; stub channels
+  // without a session ref fall back to the agent id.
+  const sessionShortId = channel.sessionRef?.sessionId ?? channel.agentId
   // Background-job chip (ctx.jobs; /jobs): live count of running/stopping
   // jobs, shown only while non-zero — a silent zero is not information.
   // Not preference-gated: it is transient situational state like the goal
@@ -355,7 +436,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
       }
   const leftFields: FieldPart[] = [
     ...(statusBar.model
-      ? [{ key: 'model', id: 'model' as const, node: <Text color="inactiveShimmer">{channel.model}</Text> }]
+      ? [{ key: 'model', id: 'model' as const, ...(modelPicker === undefined ? {} : { onClick: modelPicker.onOpen }), node: <Text color="inactiveShimmer">{channel.modelDisplay ?? channel.model}</Text> }]
       : []),
     ...(tpsPart !== undefined ? [tpsPart] : []),
     ...(jobsPart !== undefined ? [jobsPart] : []),
@@ -379,7 +460,20 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     // work no longer silently undercounts. The trailing 峰/谷 marker shows
     // the current billing window; the total>0 shape is unchanged. Hover shows
     // the breakdown.
-    ...(statusBar.cost && isDeepSeekOfficialProvider(channel.provider)
+    // A backend that reports its own session cost (Claude `total_cost_usd`)
+    // wins over the local DeepSeek estimate: the reported figure is the bill.
+    ...(statusBar.cost && channel.costReport !== undefined
+      ? [{
+          key: 'cost',
+          id: 'cost' as const,
+          node: (
+            <Text color="inactiveShimmer">
+              {channel.costReport.source === 'estimate' ? t('status-cost-label') : ''}{formatCostReport(channel.costReport)}
+            </Text>
+          ),
+        }]
+      : []),
+    ...(statusBar.cost && channel.costReport === undefined && isDeepSeekOfficialProvider(channel.provider)
       ? (() => {
         const estimate = estimateSessionCostSnapshotCny({
           provider: channel.provider,
@@ -459,11 +553,11 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     // Short id last: a provenance tag trails the content it identifies, and
     // the 8-char form is what the session log filename starts with, so a
     // truncated rendering still names the right log for --resume.
-    ...(statusBar.sessionId && channel.agentId
+    ...(statusBar.sessionId && sessionShortId
       ? [{
           key: 'sessionId',
           id: 'sessionId' as const,
-          node: <Text dimColor>{`#${channel.agentId.slice(0, 8)}`}</Text>,
+          node: <Text dimColor>{`#${sessionShortId.slice(0, 8)}`}</Text>,
         }]
       : []),
   ]
@@ -502,7 +596,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
 
   // The supplemental-row readout for the hovered field: replaces the idle
   // hint (never the activity line) while the pointer dwells on a field.
-  const detail = buildHoverDetail(hover, channel, occupancy, usage, columns, barColors)
+  const detail = buildHoverDetail(hover, channel, occupancy, usage, columns, barColors, backendMode, modelPicker)
   const trailer: React.ReactNode = detail !== null
     ? detail
     : hint !== ''
@@ -626,6 +720,8 @@ type UsageSnapshot = {
   input: number
   cacheRead: number
   cacheWrite: number
+  /** Sampling wall-clock (the producing message's event time). */
+  at: number
 }
 
 /**
@@ -635,6 +731,16 @@ type UsageSnapshot = {
  * hovered (or the hover outlived its data, which the field gating makes
  * near-impossible).
  */
+/** `5h 68% · 7d 87%` for the subscription windows a backend reported. */
+function formatRateLimit(rateLimit: Channel['rateLimit']): string | undefined {
+  const windows = rateLimit?.windows ?? []
+  if (windows.length === 0) return undefined
+  const label = (name: string): string => name === 'five_hour'
+    ? t('status-rate-limit-five-hour')
+    : name === 'seven_day' ? t('status-rate-limit-seven-day') : name
+  return windows.map(window => `${label(window.name)} ${Math.round(window.utilization * 100)}%`).join(' · ')
+}
+
 function buildHoverDetail(
   hover: HoverTarget | null,
   channel: Channel,
@@ -642,6 +748,8 @@ function buildHoverDetail(
   usage: UsageSnapshot | undefined,
   columns: number,
   barColors: { freeFill: Color; freeText: Color } | undefined,
+  backendMode: { readonly name: string } | undefined,
+  modelPicker: { readonly onOpen: () => void } | undefined,
 ): React.ReactNode | null {
   if (hover === null) return null
   const contextUsed = occupancy?.usedTokens
@@ -693,6 +801,27 @@ function buildHoverDetail(
         </Text>
       )
     }
+    case 'mode': {
+      // Only the mode segment carries the hover id (its click target); the
+      // detail names the field and the affordance at the moment of asking.
+      // A backend-owned mode names itself (the DSH spec would only ever show
+      // the DSH cycle's own label here).
+      return (
+        <Text wrap="truncate">
+          {dim('mode ')}{backendMode?.name ?? modeDisplayName(channel.mode)} · {t('status-detail-mode')}
+        </Text>
+      )
+    }
+    case 'effort': {
+      // The think-level segment's whole detail line IS the affordance (the
+      // hover id rides with the click target — see the field above), so the
+      // case is unreachable without the picker behind it.
+      return (
+        <Text wrap="truncate">
+          {dim('effort ')}{channel.reasoningEffort} · {t('status-detail-effort')}
+        </Text>
+      )
+    }
     case 'cache': {
       const rate = formatCacheHitRate(usage)
       if (usage === undefined || rate === undefined) return null
@@ -725,15 +854,51 @@ function buildHoverDetail(
       )
     }
     case 'tokens': {
-      const { input, output } = channel.tokens
+      const { input, output, cacheRead, cacheWrite } = channel.tokens
+      // The hover answers "what moved" in one place — session
+      // totals with the cache split (uncached in/out stay separate from
+      // cache movement; zeros render nothing rather than a fabricated 0),
+      // the window the totals sit in, WHEN the last request was sampled,
+      // and the last COMPLETED turn's mini summary (kept after the turn
+      // ends — per-turn and cumulative never blend into one number).
+      const last = channel.turnUsage
       return (
         <Text wrap="truncate">
-          {dim('in ')}{input.toLocaleString()} · {dim('out ')}{output.toLocaleString()} ·{' '}
-          {dim('total ')}{(input + output).toLocaleString()}
+          {dim('in ')}{formatTokens(input)} · {dim('out ')}{formatTokens(output)}
+          {cacheRead > 0 ? <>{' · '}{dim('cache read ')}{formatTokens(cacheRead)}</> : null}
+          {cacheWrite > 0 ? <>{' · '}{dim('cache write ')}{formatTokens(cacheWrite)}</> : null}
+          {' · '}{dim('total ')}{formatTokens(input + output + cacheRead + cacheWrite)}
+          {window !== undefined && window > 0 ? <>{' · '}{dim('ctx ')}{formatTokens(window)}</> : null}
+          {usage !== undefined
+            ? <>{' · '}{t('usage-sampled-at', { time: formatClock(usage.at) })}</>
+            : null}
+          {last !== undefined
+            ? <>{' · '}{t('usage-last-turn')} ↑{formatTokens(last.input)} ↓{formatTokens(last.output)}
+              {last.cacheKnown && last.cacheRead + last.cacheWrite > 0
+                ? <> {t('usage-cache-segment', { parts: `${formatTokens(last.cacheRead)}/${formatTokens(last.cacheWrite)}` })}</>
+                : null}
+              {last.retries > 0 ? <> · {t('usage-retry-segment', { n: last.retries })}</> : null}
+            </>
+            : null}
         </Text>
       )
     }
     case 'cost': {
+      const report = channel.costReport
+      if (report !== undefined) {
+        const { input, output, cacheRead } = channel.tokens
+        // Subscription windows the backend reported ride along: the bill and
+        // the plan's remaining room answer the same "what did this cost" glance.
+        const usage = formatRateLimit(channel.rateLimit)
+        return (
+          <Text wrap="truncate">
+            {formatCostReport(report)} · {dim('in ')}{formatTokens(input)}
+            {' · '}{dim('out ')}{formatTokens(output)} · {dim('cache ')}{formatTokens(cacheRead)}
+            {' · '}{t(report.source === 'backend' ? 'cost-source-backend' : 'status-cost-note')}
+            {usage === undefined ? null : <>{' · '}{t('status-rate-limit', { usage })}</>}
+          </Text>
+        )
+      }
       const estimate = estimateSessionCostSnapshotCny({
         provider: channel.provider,
         main: channel.mainCost ?? NO_MAIN_COST,
@@ -786,11 +951,22 @@ function buildHoverDetail(
       )
     }
     case 'model': {
+      // When a display name masks the raw id (modelDisplay maps a
+      // friendly/alias name), the hover shows BOTH — the requested alias the
+      // user picked and the raw id the route runs. Identical strings render
+      // once; nothing is invented when no mapping is known.
       return (
         <Text wrap="truncate">
-          {dim('model ')}{channel.model} · {dim('provider ')}{channel.provider}
+          {dim('model ')}{channel.modelDisplay ?? channel.model}
+          {channel.modelDisplay !== undefined && channel.modelDisplay !== channel.model
+            ? <>{' ('}{channel.model}{')'}</>
+            : null}
+          {' · '}{dim('provider ')}{channel.provider}
           {channel.contextWindow !== undefined
             ? <> · {dim('ctx ')}{formatTokens(channel.contextWindow)}</>
+            : null}
+          {modelPicker !== undefined
+            ? <> · {t('status-detail-model')}</>
             : null}
         </Text>
       )
@@ -806,7 +982,7 @@ function buildHoverDetail(
     case 'sessionId':
       return (
         <Text wrap="truncate">
-          {dim('# ')}{channel.agentId} · {t('status-detail-session-id')}
+          {dim('# ')}{channel.sessionRef?.sessionId ?? channel.agentId} · {t('status-detail-session-id')}
         </Text>
       )
     case 'cwd':

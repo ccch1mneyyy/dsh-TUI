@@ -168,6 +168,9 @@ try {
   writeFileSync(join(profilePackage, 'package.json'), JSON.stringify({ name, version, type: 'module' }))
   copyFileSync(bin, join(profilePackage, 'bin/dsh-tui.js'))
   writeFileSync(join(temp, '.dsh-tui/resume.txt'), 'remembered-session')
+  // The Claude backend's own last-session marker (never resume.txt).
+  mkdirSync(join(temp, '.dsh-tui/backends/claude'), { recursive: true })
+  writeFileSync(join(temp, '.dsh-tui/backends/claude/prefs.json'), JSON.stringify({ lastSession: 'claude-last' }))
   writeFileSync(patch, '[]\n')
   writeFileSync(join(temp, '--resume=patch-file'), '[]\n')
   const isWin = process.platform === 'win32'
@@ -218,7 +221,41 @@ try {
     { name: 'host prefix ends at a positional', hostArgs: [], argv: ['explain', '--dump-config'], prompt: 'explain' },
     { name: 'DSH prefix survives TUI resume interception', hostArgs: [], argv: ['--resume', 'real-session', '--patch', patch, '--', '--resume=literal'], patches: [patch], session: 'real-session', prompt: '--resume=literal', binOnly: true },
     { name: 'DSH prefix survives workspace interception', hostArgs: [], argv: [workspace, '--patch', patch, '--', '--resume=literal'], patches: [patch], workspace, prompt: '--resume=literal', binOnly: true },
+    // Phase 4b: a bare --resume of the Claude backend reopens ITS last session
+    // (the backend may be named after the flag); explicit ids and DSH's
+    // "each flag sets it, the last wins" are unchanged.
+    { name: 'Claude bare resume reads the Claude marker', hostArgs: [], argv: ['--backend', 'claude', '--resume'], session: 'claude-last', prompt: '', binOnly: true },
+    { name: 'Claude bare resume before --backend', hostArgs: [], argv: ['--resume', '--backend', 'claude'], session: 'claude-last', prompt: '', binOnly: true },
+    { name: 'Claude explicit resume', hostArgs: [], argv: ['--backend', 'claude', '--resume', 'claude-explicit'], session: 'claude-explicit', prompt: '', binOnly: true },
+    { name: 'DSH bare resume after an explicit one (last wins)', hostArgs: [], argv: ['--resume', 'explicit-first', '--resume'], session: 'remembered-session', prompt: '', binOnly: true },
   ]
+  // stripResumeArgs: the ONE grammar that decides what a respawned process
+  // must not inherit. A kernel switch respawns onto the other backend, where
+  // this kernel's session id means nothing (update.ts restartTui); the
+  // function shares its flag set with resumeTargetFromArgv above, so these
+  // cases pin both the flags and the id they consume.
+  const { stripResumeArgs } = await import('../lib/types/sessionHistory.js')
+  const stripCases = [
+    { name: 'explicit id', argv: ['--resume', 'sid'], want: [] },
+    { name: 'inline id', argv: ['--resume=sid'], want: [] },
+    { name: 'short continue', argv: ['-c'], want: [] },
+    { name: 'long continue', argv: ['--continue'], want: [] },
+    { name: 'bare flag eats the id behind it', argv: ['--resume', 'sid', '--fullscreen'], want: ['--fullscreen'] },
+    { name: 'bare flag before another flag keeps it', argv: ['--resume', '--fullscreen'], want: ['--fullscreen'] },
+    { name: 'separator ends option parsing', argv: ['--resume=sid', '--', '--resume=literal'], want: ['--', '--resume=literal'] },
+    { name: 'unrelated flags survive in place', argv: ['--fullscreen', '--backend', 'claude'], want: ['--fullscreen', '--backend', 'claude'] },
+  ]
+  for (const test of stripCases) {
+    checks += 1
+    try {
+      assert.deepEqual(stripResumeArgs(test.argv), test.want)
+      console.log(`PASS: stripResumeArgs ${test.name}`)
+    } catch (error) {
+      failures += 1
+      console.error(`FAIL: stripResumeArgs ${test.name}\n${error.message}`)
+    }
+  }
+
   const runs = []
   for (const route of ['bin', 'delegated-bin', 'direct-profile']) {
     for (const shape of ['get', 'args']) {

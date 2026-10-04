@@ -13,7 +13,7 @@ import { HomeWorkspaceRow } from '../components/workspaces/HomeWorkspaceRow.js'
 import { SessionListRow } from '../components/sessions/SessionListRow.js'
 import { SpinnerGlyph } from '../components/Spinner/SpinnerGlyph.js'
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
-import type { ApprovalSnapshot } from '../dsh-adapter/approvals.js'
+import type { PermissionPanelDecision, PermissionPanelOutcome, PermissionPanelSnapshot } from '../channel/permissions.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { isPlainReturn, isMod } from '../utils/modifiers.js'
@@ -88,8 +88,8 @@ export function SessionSupervisor({
    * permission prompt is answerable without leaving this screen — the one
    * thing a parked session cannot wait indefinitely for.
    */
-  approval: ApprovalSnapshot | null
-  onApprove(outcome: 'allowed-once' | 'rejected'): void
+  approval: PermissionPanelSnapshot | null
+  onApprove(outcome: PermissionPanelOutcome, decision: PermissionPanelDecision): void
   /**
    * This terminal's live state for a session, or undefined when it has none.
    * Read from the channel's agent-view projection so the list agrees with the
@@ -102,6 +102,13 @@ export function SessionSupervisor({
   const isTerminalFocused = useTerminalFocus()
 
   const {
+    dshBackend,
+    sessionRename,
+    setSessionRename,
+    confirmDelete,
+    setConfirmDelete,
+    renameSession,
+    deleteSession,
     entries,
     sessions,
     loading,
@@ -170,6 +177,9 @@ export function SessionSupervisor({
   const [tabMenu, setTabMenu] = useState<{ col: number; row: number; item: number } | undefined>(undefined)
   const tabMenuRef = useRef(tabMenu)
   tabMenuRef.current = tabMenu
+  /** The session-rename draft as the keyboard sees it (see the input handler). */
+  const sessionRenameRef = useRef(sessionRename)
+  sessionRenameRef.current = sessionRename
   const foreign = useForeignSessions({ channel, tab, registry: entries, query, setNotice, onOpenSession })
 
   /**
@@ -178,9 +188,13 @@ export function SessionSupervisor({
    * each time this screen opens.
    */
   const tabs = useMemo<readonly SourceTab[]>(() => {
+    // Another backend's screen lists that backend's sessions: its one tab
+    // names it (foreign imports are a DSH feature and never probed there).
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts pass partial channels
+    if (!dshBackend) return [{ id: DSH_TAB, label: channel.backendCapabilities?.backendLabel ?? DSH_TAB }]
     if (foreign.sources.length === 0) return []
     return [{ id: DSH_TAB, label: 'DSH' }, ...foreign.sources.map(source => ({ id: source.agentId, label: source.label }))]
-  }, [foreign.sources])
+  }, [foreign.sources, dshBackend, channel.backendCapabilities])
   const activeSource = foreign.sources.find(source => source.agentId === tab)
 
   // A source that vanished on refresh takes its tab with it; land on DSH
@@ -211,6 +225,43 @@ export function SessionSupervisor({
 
   useInput((input, key) => {
     // Modal layers own the keyboard, in the same order they render.
+    // The draft is read through a ref: keystrokes that arrive in one batch
+    // (typing, then Enter) must commit everything typed, not the last render.
+    const renaming = sessionRenameRef.current
+    if (renaming !== undefined) {
+      const update = (next: { id: string; draft: string } | undefined): void => {
+        sessionRenameRef.current = next
+        setSessionRename(next)
+      }
+      if (key.escape) {
+        update(undefined)
+        return
+      }
+      if (isPlainReturn(key)) {
+        update(undefined)
+        renameSession(renaming.id, renaming.draft)
+        return
+      }
+      if (key.backspace || key.delete) {
+        update({ ...renaming, draft: renaming.draft.slice(0, -1) })
+        return
+      }
+      if (!isMod(key) && !key.meta && input && !key.return) {
+        const typed = input.replace(/[\r\n]+/gu, '')
+        if (typed !== '') update({ ...renaming, draft: renaming.draft + typed })
+      }
+      return
+    }
+    if (confirmDelete !== undefined) {
+      if (isPlainReturn(key)) {
+        const target = listedSessions.find(candidate => candidate.id === confirmDelete)
+        setConfirmDelete(undefined)
+        if (target !== undefined) deleteSession(target)
+      } else if (key.escape) {
+        setConfirmDelete(undefined)
+      }
+      return
+    }
     if (rename !== undefined) {
       if (key.escape) {
         setRename(undefined)
@@ -349,6 +400,20 @@ export function SessionSupervisor({
       if (focusedSession !== undefined) stopSession(focusedSession)
       return
     }
+    // Another backend's stored sessions are renamed / deleted through its
+    // catalog (the DSH screen keeps its keys exactly as they were).
+    if (!dshBackend && isMod(key) && input === 'r') {
+      if (activePane === 'list' && focusedSession !== undefined) {
+        const next = { id: focusedSession.id, draft: focusedSession.title.text }
+        sessionRenameRef.current = next
+        setSessionRename(next)
+      }
+      return
+    }
+    if (!dshBackend && isMod(key) && input === 'd') {
+      if (activePane === 'list' && focusedSession !== undefined) setConfirmDelete(focusedSession.id)
+      return
+    }
     if (isPlainReturn(key)) {
       // Enter means "the thing the active column is showing": its action menu
       // for a workspace, that session for the session list. Ctrl/Cmd+Enter keeps
@@ -449,8 +514,9 @@ export function SessionSupervisor({
   const tabBudget = columns - stringWidth(titleText) - (showSubtitle ? stringWidth(subtitleText) : 0) - HEADER_GAPS
   const tabLayout = layoutSourceTabs(tabs, tab, tabBudget)
   const tabMenuWidth = Math.max(12, ...tabLayout.hidden.map(hidden => stringWidth(hidden.label) + 6))
-  const withTabHint = (text: string): string => (tabs.length === 0 ? text : `${text} · ${t('supervisor-hint-tabs')}`)
+  const withTabHint = (text: string): string => (tabs.length < 2 ? text : `${text} · ${t('supervisor-hint-tabs')}`)
 
+  const listHint = dshBackend ? t('supervisor-hint-list') : t('supervisor-hint-list-backend')
   const railHint = rename !== undefined
     ? t('home-hint-rename')
     : confirmRemove !== undefined
@@ -459,7 +525,7 @@ export function SessionSupervisor({
         ? t('home-hint-menu')
         : activePane === 'rail'
           ? withTabHint(t('home-hint-list'))
-          : withTabHint(t('supervisor-hint-list'))
+          : withTabHint(listHint)
 
   const railWindowTopIndex = railWindowTop(railFocus, railEntries.length, railEntryCapacity)
   const visibleRailRows = railEntries.slice(railWindowTopIndex, railWindowTopIndex + railEntryCapacity)
@@ -716,13 +782,33 @@ export function SessionSupervisor({
           </Box>
           <Box flexShrink={0}>
             <Text dimColor italic>
-              <HintLine text={filtered ? t('supervisor-hint-filter') : withTabHint(t('supervisor-hint-list'))} />
+              <HintLine text={sessionRename !== undefined ? t('supervisor-hint-session-rename') : filtered ? t('supervisor-hint-filter') : withTabHint(listHint)} />
             </Text>
           </Box>
         </Box>
       </Box>
       )}
 
+      {sessionRename !== undefined && (
+        <Box height={1} flexShrink={0}>
+          <SearchBox
+            query={sessionRename.draft}
+            isFocused
+            isTerminalFocused={isTerminalFocused}
+            placeholder={t('home-rename-placeholder')}
+            prefix="✎"
+            borderless
+            width="100%"
+          />
+        </Box>
+      )}
+      {confirmDelete !== undefined && (
+        <Box flexShrink={0} paddingX={1}>
+          <Text color="error">
+            {truncateWidth(` ${t('supervisor-delete-confirm', { name: listedSessions.find(candidate => candidate.id === confirmDelete)?.title.text ?? confirmDelete })}`, columns - 3)}
+          </Text>
+        </Box>
+      )}
       {rename !== undefined && (
         <Box height={1} flexShrink={0}>
           <SearchBox

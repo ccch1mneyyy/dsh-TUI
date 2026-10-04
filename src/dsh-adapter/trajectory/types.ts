@@ -135,10 +135,24 @@ export interface TrajNode {
    * range, so a re-seeded log re-marks the rows folded before it.
    */
   seed?: boolean
+  /**
+   * The subagent a `subagent/descriptor` row names — the drilldown anchor.
+   * Present only when the emitting source knew the id
+   * (the neutral AgentEvent fold); DSH descriptor payloads predate the
+   * field and their rows simply carry none.
+   */
+  readonly agentId?: string
 }
 
 /** Minimum run length that folds into a {@link TrajBurst}. */
 export const BURST_MIN = 3
+
+/**
+ * One trajectory drilldown lane. The ports module owns the vocabulary
+ * (same layering as {@link RawTrajEvent});
+ * re-exported here so the trajectory barrel stays the UI's single import.
+ */
+export type { TrajectoryLane } from '../../adapter/ports/channel-view.js'
 
 /** Timeline channel a node contributes to in the wave band. */
 export type WaveChannel = 'input' | 'model' | 'tool'

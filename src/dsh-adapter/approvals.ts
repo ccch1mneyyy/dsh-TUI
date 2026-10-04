@@ -12,6 +12,12 @@
  * Outcomes are the protocol's closed set — `'allowed-once'` and
  * `'rejected'` from the panel, `'cancelled'` on abort/teardown; there is
  * no allow-always or feedback channel in the protocol.
+ *
+ * The store presents its asks through the shared permission-panel shape
+ * (`src/channel/permissions.ts`), so the one approval panel renders DSH and
+ * backend prompts alike: a DSH ask offers exactly the protocol's two
+ * options (allow once / reject), and the DSH-only facts (the `external`
+ * source badge, the background-session id) ride along on the snapshot.
  */
 
 import { compositionRoot } from './host-access.js'
@@ -23,9 +29,17 @@ import {
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { snapshotLiveSessionEvents } from './compat/liveSession.js'
+import {
+  DEFAULT_PERMISSION_OPTIONS,
+  type PermissionPanelDecision,
+  type PermissionPanelOutcome,
+  type PermissionPanelSnapshot,
+  type PermissionPanelSource,
+} from '../channel/permissions.js'
 
-/** What the TUI renders while an approval is pending. */
-export interface ApprovalSnapshot {
+/** What the TUI renders while an approval is pending (the shared panel
+ *  shape plus the DSH facts it documents below). */
+export interface ApprovalSnapshot extends PermissionPanelSnapshot {
   /** Stable key so the panel remounts (fresh focus state) per request. */
   readonly key: string
   readonly toolName: string
@@ -56,6 +70,8 @@ export interface ApprovalSnapshot {
    * "needs input" instead of hanging on a fail-closed answer).
    */
   readonly agentId: string
+  /** The protocol's two choices: allow once / reject. */
+  readonly options: PermissionPanelSnapshot['options']
 }
 
 /**
@@ -173,7 +189,7 @@ function consumedKey(agentId: unknown, callId: unknown): string {
  * the ask is withdrawn. The TUI subscribes for re-renders and decides via
  * {@link ApprovalStore.decide}.
  */
-export class ApprovalStore {
+export class ApprovalStore implements PermissionPanelSource {
   private readonly runtime: AdapterRuntimeOptions
 
   constructor(runtime: AdapterRuntimeOptions = defaultAdapterRuntime()) {
@@ -292,7 +308,7 @@ export class ApprovalStore {
     const pending = this.active
     this.snapshotCache = pending === undefined
       ? null
-      : { key: pending.key, ...pending.snapshot }
+      : { key: pending.key, ...pending.snapshot, options: DEFAULT_PERMISSION_OPTIONS }
   }
 
   /**
@@ -458,15 +474,20 @@ export class ApprovalStore {
   /**
    * The user decided on the current approval; settles it and drains the
    * next queued ask if any. No-op when nothing is pending.
-   * @param outcome - `'allowed-once'` or `'rejected'`.
+   * @param outcome - `'allowed-once'` or `'rejected'`. The protocol has no
+   *   allow-always and the panel never offers it for a DSH ask; one arriving
+   *   anyway is refused (fail closed). The panel's option detail carries
+   *   nothing the protocol can use beyond its panel key.
    */
-  decide(outcome: 'allowed-once' | 'rejected'): void {
+  decide(outcome: PermissionPanelOutcome, decision?: PermissionPanelDecision): void {
     const pending = this.active
     if (pending === undefined) return
+    // A keystroke the withdrawn panel still handled answers nothing.
+    if (decision?.key !== undefined && decision.key !== pending.key) return
     this.noteConsumed(pending)
     this.active = undefined
     this.rebuildSnapshot()
-    pending.resolve(outcome)
+    pending.resolve(outcome === 'allowed-once' ? 'allowed-once' : 'rejected')
     this.startNext()
     this.emit()
   }

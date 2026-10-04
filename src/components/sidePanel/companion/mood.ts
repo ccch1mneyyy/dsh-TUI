@@ -280,6 +280,73 @@ export function stepCompanionDisplay(
 }
 
 // ---------------------------------------------------------------------------
+// 悬停驻留（hover dwell）：指针停够一会儿才换成悬停动画
+// ---------------------------------------------------------------------------
+
+/** 指针驻留多久才切到悬停动画（enter dwell）：400ms 内移开的划过不触发
+ *  切换。约为 poke 动画（~70ms/帧）半轮的时长。 */
+export const HOVER_ENTER_DWELL_MS = 400
+/** 指针移开多久才切回非悬停档（leave settle）：短暂滑出面板（跨分区、
+ *  贴边抖动）不打断动画。比 LEAVE_WORKING_SETTLE_MS（1500）短，悬停只是
+ *  装饰，可以恢复得快一些。 */
+export const HOVER_LEAVE_SETTLE_MS = 800
+
+/** 悬停语义（CompanionPanel 的 hoverSemantic：面板内 = look，宠物本体 =
+ *  notice）。 */
+export type CompanionHoverSemantic = 'look' | 'notice'
+
+export interface CompanionHoverState {
+  /** 当前展示中的悬停语义；undefined = 未在演悬停档。 */
+  readonly semantic: CompanionHoverSemantic | undefined
+  /** 展示语义进入的时刻（动画时钟锚点；同语义保持不重置，elapsed 连续）。 */
+  readonly since: number
+  /** 最近一次的期望语义（zone 直读）。 */
+  readonly desired: CompanionHoverSemantic | undefined
+  /** 期望语义变为当前值的时刻（enter/leave 计时起点）。 */
+  readonly desiredSince: number
+}
+
+export const initialCompanionHoverState: CompanionHoverState = {
+  semantic: undefined,
+  since: 0,
+  desired: undefined,
+  desiredSince: 0,
+}
+
+/** 悬停驻留平滑器（近纯步进，与 stepCompanionDisplay 同模式）：输入期望
+ *  语义流（指针 zone 直读）+ 时钟，输出展示中的悬停语义流。
+ *
+ * - 期望 == 展示：什么都不动（since 保留 → 动画 elapsed 连续）。
+ * - 移入/换档（look↔notice）：驻留满 HOVER_ENTER_DWELL_MS 才切；快速划过
+ *  （enter 后未满窗就移开）全程不触发。
+ * - 移开：迟滞满 HOVER_LEAVE_SETTLE_MS 才切回；窗口内折返 = 期望回到当前
+ *  展示值 → 动画无缝续播（since 不重置）。
+ * - 互动覆盖层（poke/tickle/爱心）不经过本函数：点击反馈即时性不受影响。
+ */
+export function stepCompanionHover(
+  prev: CompanionHoverState,
+  desired: CompanionHoverSemantic | undefined,
+  now: number,
+): CompanionHoverState {
+  const desiredSince = desired === prev.desired ? prev.desiredSince : now
+  if (desired === prev.semantic) {
+    return { semantic: prev.semantic, since: prev.since, desired, desiredSince }
+  }
+  if (desired === undefined) {
+    // 移开：迟滞窗外保持展示（指针折返不打断）；满窗切回非悬停档。
+    if (now - desiredSince >= HOVER_LEAVE_SETTLE_MS) {
+      return { semantic: undefined, since: prev.since, desired, desiredSince }
+    }
+    return { ...prev, desired, desiredSince }
+  }
+  // 移入/换档：驻留满窗才真正切到悬停动画（快速划过不触发）。
+  if (now - desiredSince >= HOVER_ENTER_DWELL_MS) {
+    return { semantic: desired, since: now, desired, desiredSince }
+  }
+  return { ...prev, desired, desiredSince }
+}
+
+// ---------------------------------------------------------------------------
 // idle 族轮换（规则 5：按时间，不跟信号边沿）
 // ---------------------------------------------------------------------------
 

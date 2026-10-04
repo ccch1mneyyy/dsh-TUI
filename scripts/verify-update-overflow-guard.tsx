@@ -9,6 +9,11 @@
  *   B1 clock.tick：订阅者抛 #185 被吞，后续订阅者仍执行，时钟继续。
  *   B2 reveal.tick：listener 抛 #185 被吞，调度器后续 tick 正常推进。
  *   B3 channel.emit/emitStream：listener 抛 #185 不炸 channel。
+ * Group C — 根边界恢复：commit 期 #185（热点守卫与进程兜底都看不到的
+ *   类别）由根 App 边界恢复（清 state 重挂载，细节落 crash.log），窗口
+ *   内恢复次数封顶，耗尽回落原崩溃退出。
+ * Group D — 恢复后的落点：一次性重挂标记（note/consume）+ 三处源码检查
+ *   （App 记标记、Chat 消费、皮肤 hook 不再每次 commit 都排更新）。
  *
  * 运行：node --import tsx/esm scripts/verify-update-overflow-guard.tsx
  */
@@ -16,7 +21,7 @@ process.env.DSH_TUI_LANG = 'en'
 process.env['FORCE_COLOR'] = '0'
 
 // 家目录隔离：channel 构造路径会 touch 用户目录，先切临时目录再 import。
-const { mkdtempSync, mkdirSync } = await import('node:fs')
+const { mkdtempSync, mkdirSync, readFileSync } = await import('node:fs')
 const { tmpdir } = await import('node:os')
 const { join: joinPath } = await import('node:path')
 const isolatedHome = mkdtempSync(joinPath(tmpdir(), 'dshtui-185-guard-'))
@@ -25,7 +30,7 @@ process.env.USERPROFILE = isolatedHome
 mkdirSync(joinPath(isolatedHome, '.dsh-tui'), { recursive: true })
 
 const [
-  { swallowNestedUpdateOverflow, isNestedUpdateOverflow, callWithUpdateOverflowGuard, resetUpdateOverflowGuardForTest, installNestedUpdateOverflowProcessGuard, registerOverflowQuench, fatalReasonForExit },
+  { swallowNestedUpdateOverflow, isNestedUpdateOverflow, callWithUpdateOverflowGuard, resetUpdateOverflowGuardForTest, installNestedUpdateOverflowProcessGuard, registerOverflowQuench, fatalReasonForExit, shouldRecoverBoundaryOverflow, noteBoundaryRecoveryRemount, consumeBoundaryRecoveryRemount },
   { createClock },
   { Context },
   { createChannel },
@@ -54,6 +59,7 @@ function check(name: string, ok: boolean, extra = ''): void {
 }
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
 const { settled } = await import('./lib/term-test.mjs')
+const { default: inkInstances } = await import('../src/ink/instances.js')
 
 const COLS = 80, ROWS = 12
 class FakeStdout extends Writable {
@@ -236,5 +242,109 @@ console.log('--- B: hotspots ---')
   check('B6 非 Error 的已定义原因不被包装', fatalReasonForExit(nonError, 'unhandledRejection') === nonError)
 }
 
+// --- Group C: root-boundary recovery ---------------------------------------
+// commit 期的 #185（无依赖的 layout effect 每次 commit 都排下一次更新）
+// 热点守卫和进程级兜底都看不到，只有根 App 边界接得住。react-reconciler
+// 抛出前已清零嵌套计数，边界清掉 error 态就能重挂载整棵树；窗口内恢复
+// 次数有上限，用完按原来的崩溃退出。
+{
+  console.log('--- C: root-boundary recovery ---')
+  resetUpdateOverflowGuardForTest()
+  const t0 = 1_000_000_000
+  check('C1 窗口内恢复次数封顶（3 次）', shouldRecoverBoundaryOverflow(t0) && shouldRecoverBoundaryOverflow(t0 + 1) && shouldRecoverBoundaryOverflow(t0 + 2) && !shouldRecoverBoundaryOverflow(t0 + 3))
+  check('C1 窗口滑动后恢复额度回来', shouldRecoverBoundaryOverflow(t0 + 60_001))
+  resetUpdateOverflowGuardForTest()
+}
+
+// C2：一次 #185 → 恢复（重挂载）→ 实例存活；细节落 crash.log（隔离家目录）。
+{
+  resetUpdateOverflowGuardForTest()
+  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(term) as unknown as NodeJS.WriteStream
+  let mounts = 0
+  function OnceOscillator(): React.ReactNode {
+    const [mount] = React.useState(() => ++mounts)
+    const [tick, setTick] = React.useState(0)
+    // 只在第一次挂载时振荡：无依赖 layout effect 每次 commit 排下一次更新，
+    // 约 50 拍后 #185 在 commit 期抛出。重挂载后的树（mount ≥ 2）不再振荡，
+    // 对应「状态归零后振荡消失」。
+    React.useLayoutEffect(() => { if (mount === 1) setTick(tick + 1) })
+    return <Box><Text>osc{mount}</Text></Box>
+  }
+  const instance = await render(<OnceOscillator />, {
+    stdout, stdin: new FakeInput() as unknown as NodeJS.ReadStream,
+    exitOnCtrlC: false, patchConsole: false,
+  })
+  let exitReason: unknown
+  let cleanExit = false
+  void instance.waitUntilExit().then(() => { cleanExit = true }, (reason: unknown) => { exitReason = reason })
+  const recovered = await settled(() => mounts >= 2)
+  await sleep(150) // 固定窗:探针 恢复后观察窗——断言实例不退出、crash.log 已落（状态不变量）
+  const crashPath = joinPath(isolatedHome, '.dsh-tui', 'crash.log')
+  let crashText = ''
+  try { crashText = readFileSync(crashPath, 'utf8') } catch { /* absence asserted below */ }
+  check('C2 #185 后根边界恢复（树重挂载且只挂一次）', recovered && mounts === 2, `mounts=${mounts}`)
+  check('C2 恢复后实例未退出（ink 实例仍在册、无拒绝）', inkInstances.get(stdout) !== undefined && exitReason === undefined && !cleanExit, `reason=${String(exitReason)}`)
+  check('C2 细节已落 crash.log（含 #185 标记）', crashText.includes('#185') || crashText.includes('Maximum update depth'))
+  try { await instance.unmount() } catch { /* teardown failure surfaces above */ }
+  term.dispose()
+}
+
+// C3：永不停歇的振荡 → 3 次恢复耗尽 → 回落原崩溃退出（waitUntilExit 拒绝携带 #185）。
+{
+  resetUpdateOverflowGuardForTest()
+  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(term) as unknown as NodeJS.WriteStream
+  let mounts = 0
+  function AlwaysOscillator(): React.ReactNode {
+    React.useState(() => ++mounts)
+    const [tick, setTick] = React.useState(0)
+    // 每次挂载都振荡：恢复多少次都再犯 → 额度耗尽 → 回落原崩溃退出。
+    React.useLayoutEffect(() => { setTick(tick + 1) })
+    return <Box><Text>osc</Text></Box>
+  }
+  const crashPath = joinPath(isolatedHome, '.dsh-tui', 'crash.log')
+  const countCrashLines = (): number => {
+    try { return readFileSync(crashPath, 'utf8').split('\n').filter((l: string) => l.includes('pid=')).length } catch { return 0 }
+  }
+  // 计数窗要在 render 之前开：振荡、恢复、耗尽、拆除在首次同步 render 里就
+  // 全部发生（render 返回时 mounts 已经是 4）。
+  const before = countCrashLines()
+  const instance = await render(<AlwaysOscillator />, {
+    stdout, stdin: new FakeInput() as unknown as NodeJS.ReadStream,
+    exitOnCtrlC: false, patchConsole: false,
+  })
+  let exitReason: unknown
+  const crashed = await settled(() => {
+    void instance.waitUntilExit().then(() => {}, (reason: unknown) => { exitReason = reason })
+    return inkInstances.get(stdout) === undefined || exitReason !== undefined
+  })
+  const lines = countCrashLines() - before
+  check('C3 恢复额度耗尽后回落崩溃退出（ink 实例被拆除或退出承诺结算）', crashed && (inkInstances.get(stdout) === undefined || (exitReason instanceof Error && /#185|Maximum update depth/.test(exitReason.message))), `gone=${String(inkInstances.get(stdout) === undefined)} reason=${String(exitReason)}`)
+  check('C3 崩溃前恰有 3 次恢复（crash.log +3 条、挂载 4 次）', lines === 3 && mounts === 4, `lines=+${lines} mounts=${mounts}`)
+  term.dispose()
+}
+// --- Group D: recovery remount mark + wiring tripwires ----------------------
+{
+  console.log('--- D: recovery remount mark ---')
+  resetUpdateOverflowGuardForTest()
+  check('D1 未恢复时消费为假', !consumeBoundaryRecoveryRemount())
+  noteBoundaryRecoveryRemount()
+  check('D1 恢复后首次消费为真', consumeBoundaryRecoveryRemount())
+  check('D1 消费一次性（再读为假）', !consumeBoundaryRecoveryRemount())
+  noteBoundaryRecoveryRemount()
+  resetUpdateOverflowGuardForTest()
+  check('D1 重置清标记', !consumeBoundaryRecoveryRemount())
+
+  // 源码检查：三处接线都还在（行为由 C 组覆盖，这里防重构时被拆掉）。
+  const { readFileSync: readSrc } = await import('node:fs')
+  const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url), 'utf8')
+  const appSrc = readRepo('../src/ink/components/App.tsx')
+  const chatSrc = readRepo('../src/screens/Chat.tsx')
+  const skinsSrc = readRepo('../src/components/sidePanel/companion/skins.tsx')
+  check('D2 App 恢复路径记标记', appSrc.includes('noteBoundaryRecoveryRemount();'))
+  check('D2 Chat 消费标记并门住启动页', chatSrc.includes('!recoveryRemountOnBoot)') && chatSrc.includes('consumeBoundaryRecoveryRemount()'))
+  check('D2 皮肤 hook 已去逐 commit 入队（ref 镜像在位、bail 更新器已删）', skinsSrc.includes('displayedRef.current !== next') && !skinsSrc.includes('setDisplayed(previous =>'))
+}
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)
 process.exit(failed === 0 ? 0 : 1)

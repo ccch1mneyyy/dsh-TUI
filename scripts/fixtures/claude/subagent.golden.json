@@ -1,0 +1,120 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "notice",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "subagent.start",
+    "subagent.start",
+    "assistant.message",
+    "subagent.progress",
+    "tool.call",
+    "tool.result",
+    "assistant.message",
+    "subagent.end",
+    "tool.result",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Use the Agent tool with subagent_type \"general-purpose\" and the prompt \"Read README.md with the Read tool and report its first line.\" Wait for it (do not run it…"
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (94%) — resets in 1d 0h"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 151
+    },
+    {
+      "kind": "subagent",
+      "text": "Read README.md first line",
+      "subagent": {
+        "agentId": "aedea1ecd3a81bb44",
+        "status": "completed",
+        "kind": "general-purpose",
+        "background": false,
+        "tools": [
+          "Read:completed"
+        ],
+        "outputLines": [
+          "The first line of the README.md file is:",
+          "**# Fixture project**"
+        ],
+        "tokens": 14536,
+        "summary": "The first line of the README.md file is:\n\n**# Fixture project**"
+      }
+    },
+    {
+      "kind": "assistant",
+      "text": "The first line of README.md is \"# Fixture project\"."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.0448781,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 18,
+      "output": 280,
+      "cacheRead": 37909,
+      "cacheWrite": 8952
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": [
+      "Approaching the 7d usage limit (94%) — resets in 1d 0h"
+    ],
+    "subagents": [
+      {
+        "agentId": "aedea1ecd3a81bb44",
+        "status": "completed",
+        "depth": 1,
+        "output": 2
+      }
+    ],
+    "jobs": []
+  }
+}

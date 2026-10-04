@@ -1,0 +1,89 @@
+{
+  "start": {
+    "turn": 1,
+    "seq": 7,
+    "model": "claude-haiku-4-5-20251001"
+  },
+  "compactedFrom": null,
+  "events": [
+    "turn.start:user",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "tool.call",
+    "tool.result",
+    "tool.call",
+    "tool.result",
+    "assistant.message",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "assistant.message",
+    "step.end",
+    "turn.end:completed",
+    "model.changed"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "In ONE response, call the Read tool twice in parallel (two tool_use blocks in the same message): README.md and src/app.js. Then tell me the first line of each i…",
+      "anchor": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "anchor": "msg_fixture_001",
+      "reasoningTokens": 264
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Read",
+        "status": "ok",
+        "result": null,
+        "resultText": "1 # Fixture project 2 3 A tiny project for recording Claude SDK fixtures. 4"
+      }
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Read",
+        "status": "ok",
+        "result": null,
+        "resultText": "1 export function greet(name) { 2 return `hello ${name}` 3 } 4"
+      }
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "anchor": "msg_fixture_002",
+      "reasoningTokens": 66
+    },
+    {
+      "kind": "assistant",
+      "text": "README.md starts with \"# Fixture project\" and src/app.js starts with \"export function greet(name) {\".",
+      "anchor": "msg_fixture_002"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "sessionTitle": "",
+    "tokens": {
+      "input": 18,
+      "output": 568,
+      "cacheRead": 37899,
+      "cacheWrite": 9074
+    },
+    "compaction": null,
+    "notices": []
+  }
+}

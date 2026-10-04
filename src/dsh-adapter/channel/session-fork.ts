@@ -12,7 +12,7 @@ import { mountFailureText } from '../../sessions/resumeFailure.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState } from './types.js'
 
-type ForkState = Pick<ChannelState, 'working' | 'cwd' | 'provider' | 'model' | 'sessionTitle'>
+type ForkState = Pick<ChannelState, 'working' | 'cwd' | 'provider' | 'model' | 'modelDisplay' | 'sessionTitle'>
 
 /** Create a detached `/fork` copy without adopting it into the foreground. */
 export function createForkSessionAction(

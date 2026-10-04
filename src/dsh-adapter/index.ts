@@ -9,7 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
-import { DEFAULT_COMPANION_SKIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { BTW_CONTEXT_BUDGET_DEFAULT, BTW_CONTEXT_TURNS_DEFAULT, DEFAULT_COMPANION_SKIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, normalizeBtwContextBudget, normalizeBtwContextTurns, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../components/splashFonts.js'
 import { editableConfig, type RuntimeConfig } from './compat/settings.js'
@@ -34,6 +34,12 @@ export const inject = ['agents']
 export interface Config {
   /** Existing session to attach; a fresh session is created when absent. */
   sessionId?: string
+  /** Agent backend the session runs on: `dsh` (default), the DeepSeek
+   *  Harness agent; `claude`, the experimental Claude Agent backend driving
+   *  the local Claude CLI through the Claude Agent SDK (optional peer
+   *  `@anthropic-ai/claude-agent-sdk`). `dsh-tui --backend claude` sets it
+   *  through `DSH_TUI_BACKEND`. */
+  backend?: 'dsh' | 'claude'
   /** LLM provider route. The route resolves atomically (issue #67): when
    *  cordis.yml names BOTH `provider` and `model`, that pair wins; otherwise
    *  the `/model` choice persisted in `~/.dsh-tui/model.json` wins whole;
@@ -131,6 +137,11 @@ export interface Config {
    *  `+N lines` hint; Ctrl+O / clicking the card expands it. Default off —
    *  the full title keeps rendering. */
   foldTerminalCommand?: boolean
+  /** Turn-usage ledger row (settings `dsh-tui.turnUsageRow`): the quiet
+   *  right-aligned line that closes each turn in the transcript (tokens
+   *  in/out, cache split, span, retries). Off by default; the ledger data
+   *  feeds /tokens, /status and the footer hover regardless. */
+  turnUsageRow?: boolean
   /** Show the session name as a chip on the prompt top border's right side
    *  (settings `dsh-tui.promptSessionLabel`); off by default. */
   promptSessionLabel?: boolean
@@ -151,6 +162,13 @@ export interface Config {
    *  than the viewport or of an unsupported type keeps the fenced source.
    *  On by default; off always shows the source. */
   mermaidDiagrams?: boolean
+  /** Code-frame shape (settings `dsh-tui.codeFrameStyle`): `light`
+   *  (default) is the open rail frame — corner + language label on top,
+   *  a left rail with one padding column per row, no right wall or
+   *  bottom edge; `full` closes the box with a right wall (continuous
+   *  across wrapped rows) and a bottom edge. The narrow fallback (net
+   *  body width < 8) always stays the plain ANSI fence. */
+  codeFrameStyle?: CodeFrameStyle
   /** LaTeX math (settings `dsh-tui.mathRendering`): `$…$` / `\(…\)` inline
    *  and `$$…$$` / `\[…\]` blocks in replies. `auto` (default) uses the best
    *  available renderer — today Unicode text: Greek and operator symbols,
@@ -206,6 +224,16 @@ export interface Config {
      *  layered pixel whale). Unknown ids normalize to deepy. */
     skin?: string
   }
+  /** btw thread context (settings `dsh-tui.btw.*`): how much of the side
+   *  thread follows into the next ask. Members normalize (turns clamp
+   *  1-8, budget clamps 1k-200k), so junk cannot wedge the thread. */
+  btw?: {
+    /** Completed Q/A pairs carried into a follow-up ask, 1-8 (default 4). */
+    contextTurns?: number
+    /** Total character budget of that carried context (default 24000;
+     *  the per-answer cap derives internally as min(8k, budget/2)). */
+    contextBudget?: number
+  }
   /** Built-in action-shortcut overrides (`paste: 'alt+v'`), keyed by action
    *  id (see the keymap utility). Combos are `ctrl+`/`alt+`/`shift+` plus a
    *  key; several combos may be comma-separated. Unset actions keep their
@@ -219,8 +247,20 @@ export interface Config {
   modes?: SessionModeSpec[]
 }
 
+/** The backend a configured value names: case-insensitive, trimmed;
+ *  empty or unknown → undefined (the DSH default). */
+export function normalizeBackendChoice(value: unknown): 'dsh' | 'claude' | undefined {
+  if (typeof value !== 'string') return undefined
+  const id = value.trim().toLowerCase()
+  return id === 'dsh' || id === 'claude' ? id : undefined
+}
+
 export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Config>(Schema.object({
   sessionId: Schema.string().required(false),
+  // A transform, not a union: the row reads `DSH_TUI_BACKEND`, and a stray
+  // export (`Claude`, a typo) must not fail the whole boot — case and blanks
+  // are normalized and anything unknown means the default (plugin.ts warns).
+  backend: Schema.transform(Schema.string(), value => normalizeBackendChoice(value)),
   // No schema defaults on the route: a `.default()` here would make an
   // unset key indistinguishable from an explicit cordis.yml choice and the
   // persisted `/model` preference could never win (issue #30). The defaults
@@ -266,10 +306,12 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
     value => normalizePageMargin(value),
   ),
   foldTerminalCommand: Schema.boolean().default(false),
+  turnUsageRow: Schema.boolean().default(false),
   promptSessionLabel: Schema.boolean().default(false),
   expandEditor: Schema.boolean().default(true),
   smoothStreaming: Schema.boolean().default(true),
   mermaidDiagrams: Schema.boolean().default(true),
+  codeFrameStyle: Schema.union(['light', 'full']),
   mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),
   mathImageScale: Schema.union(['auto', 'large', 'xlarge']),
   mathImageBacking: Schema.union(['transparent', 'terminal']),
@@ -326,6 +368,20 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
       value => normalizeCompanionSkin(value),
     ),
   }).default({ skin: DEFAULT_COMPANION_SKIN }),
+  // btw thread context: schema defaults + transforms (same shape as
+  // sidePanel above) so an unset cordis.yml block and junk values both
+  // resolve to the documented 4 turns / 24k chars before the stores see
+  // them (the store normalize remains the second, identical gate).
+  btw: Schema.object({
+    contextTurns: Schema.transform(
+      Schema.number().default(BTW_CONTEXT_TURNS_DEFAULT),
+      value => normalizeBtwContextTurns(value),
+    ),
+    contextBudget: Schema.transform(
+      Schema.number().default(BTW_CONTEXT_BUDGET_DEFAULT),
+      value => normalizeBtwContextBudget(value),
+    ),
+  }).default({ contextTurns: BTW_CONTEXT_TURNS_DEFAULT, contextBudget: BTW_CONTEXT_BUDGET_DEFAULT }),
   // One optional combo string per customizable action (no defaults: unset
   // keeps the built-in binding; see Config.shortcuts).
   shortcuts: Schema.object(

@@ -2,10 +2,13 @@ import type { FocusManager } from './focus.js'
 import { createLayoutNode } from './layout/engine.js'
 import type { LayoutNode } from './layout/node.js'
 import { LayoutDisplay, LayoutMeasureMode } from './layout/node.js'
+import { lineWidth } from './line-width-cache.js'
 import measureText from './measure-text.js'
+import { noteMeasureCompute } from './render-stats.js'
 import { addPendingClear, nodeCache, textPaintCache } from './node-cache.js'
 import squashTextNodes from './squash-text-nodes.js'
-import type { Styles, TextStyles } from './styles.js'
+import type { Styles, TextDecoration, TextStyles } from './styles.js'
+import { decoratedWrapBudget, wrapDecoratedLine } from './text-decoration.js'
 import { expandTabs } from './tabstops.js'
 import wrapText from './wrap-text.js'
 
@@ -436,6 +439,9 @@ type TextMeasureCache = {
   rawText: string
   text: string
   wrap: NonNullable<Styles['textWrap']>
+  /** Decoration identity participates in the key: producers memo the
+   * object, so a changed decoration rebuilds while a reused one hits. */
+  decoration: TextDecoration | undefined
   entries: Array<{
     width: number
     widthMode: LayoutMeasureMode
@@ -456,10 +462,22 @@ const measureTextNode = function (
     node.nodeName === '#text' ? node.nodeValue : squashTextNodes(node)
 
   const textWrap = node.style.textWrap ?? 'wrap'
+  const decoration = node.style.decoration
   let cache = textMeasureCache.get(node)
-  if (cache === undefined || cache.rawText !== rawText || cache.wrap !== textWrap) {
+  if (
+    cache === undefined ||
+    cache.rawText !== rawText ||
+    cache.wrap !== textWrap ||
+    cache.decoration !== decoration
+  ) {
     // Tabs use the same measurement expansion as the uncached path.
-    cache = { rawText, text: expandTabs(rawText), wrap: textWrap, entries: [] }
+    cache = {
+      rawText,
+      text: expandTabs(rawText),
+      wrap: textWrap,
+      decoration,
+      entries: [],
+    }
     textMeasureCache.set(node, cache)
   }
   for (const entry of cache.entries) {
@@ -467,10 +485,75 @@ const measureTextNode = function (
   }
 
   // Check above before measureText walks every line, even on a wrap-cache hit.
-  const result = measureTextDimensions(cache.text, width, widthMode, textWrap)
+  noteMeasureCompute()
+  const result =
+    decoration !== undefined
+      ? measureDecoratedText(cache.text, rawText, width, textWrap, decoration)
+      : measureTextDimensions(cache.text, width, widthMode, textWrap)
   if (cache.entries.length === TEXT_MEASURE_CACHE_SIZE) cache.entries.shift()
   cache.entries.push({ width, widthMode, result })
   return result
+}
+
+/**
+ * Decoration-aware measurement, mirroring measureTextDimensions: when no
+ * line overflows its budget every line is one row; otherwise every line
+ * is wrapped (wrapDecoratedLine, the same call the paint makes) and the
+ * wrapped rows are counted. Wrapping all lines rather than only the ones
+ * that look too wide matters because wrap-ansi and stringWidth disagree
+ * on some scripts, and the paint wraps all of them.
+ *
+ * The header adds one row, a prefix widens the reported width, and the
+ * reported width is the widest wrapped piece so a constrained probe
+ * cannot inflate the node. The header counts toward the width too, up to
+ * the probe width (the paint cuts a header wider than the node).
+ */
+function measureDecoratedText(
+  text: string,
+  rawText: string,
+  width: number,
+  textWrap: NonNullable<Styles['textWrap']>,
+  decoration: TextDecoration,
+): { width: number; height: number } {
+  const prefixWidth = decoration.prefix?.width ?? 0
+  const headerRows = decoration.header !== undefined ? 1 : 0
+  const headerWidth = decoration.header !== undefined ? lineWidth(decoration.header) : 0
+  const contentWidth = (w: number): number =>
+    Math.max(w, Number.isFinite(width) ? Math.min(headerWidth, width) : headerWidth)
+  // Header-only: the paint writes just the header row.
+  if (rawText === '') {
+    return { width: contentWidth(prefixWidth), height: headerRows }
+  }
+  const lines = text.split('\n')
+  const wraps = textWrap === 'wrap' || textWrap === 'wrap-trim'
+  // Intrinsic, truncate, or fractional shrink probes: one row per line.
+  const noWrap = !wraps || !Number.isFinite(width) || width < 1
+  const budget = decoratedWrapBudget(decoration, width)
+  let widest = 0
+  let overflows = false
+  for (const line of lines) {
+    const w = lineWidth(line)
+    if (w > widest) widest = w
+    if (w > budget) overflows = true
+  }
+  if (noWrap || !overflows) {
+    return { width: contentWidth(widest + prefixWidth), height: lines.length + headerRows }
+  }
+  // The hang is parsed from the raw (unexpanded) line, as the paint does.
+  const rawLines = rawText.split('\n')
+  const wrap = (t: string, w: number): string => wrapText(t, w, textWrap)
+  let height = 0
+  widest = 0
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!
+    const pieces = wrapDecoratedLine(line, rawLines[i] ?? line, width, decoration, wrap)
+    height += pieces.length
+    for (const piece of pieces) {
+      const w = lineWidth(piece)
+      if (w > widest) widest = w
+    }
+  }
+  return { width: contentWidth(widest + prefixWidth), height: height + headerRows }
 }
 
 function measureTextDimensions(

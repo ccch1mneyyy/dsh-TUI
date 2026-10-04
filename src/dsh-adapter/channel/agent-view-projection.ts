@@ -23,12 +23,12 @@ import { reserveNewSession } from '../../sessionMounts.js'
 import { locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { logForDebugging } from '../../utils/debug.js'
-import type { createChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { AgentViewDispatchResult, AgentViewRow, BackgroundResult, ResumeResult } from './types.js'
 import type { PreviewEntry } from '../sessions/index.js'
 
-type Binding = ReturnType<typeof createChannelBinding>
+type Binding = DshChannelBinding
 type ApprovalStore = {
   pendingAgentIds(): readonly string[]
   pendingAgentDetail(agentId: string): { toolName: string; reason?: string; command?: string } | undefined

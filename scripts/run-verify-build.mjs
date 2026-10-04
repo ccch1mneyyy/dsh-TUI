@@ -43,7 +43,9 @@ import { join } from 'node:path'
 
 const GATES = [
   'verify:boundary',
+  'verify:agent-domain',
   'verify:contract',
+  'verify:claude-contract',
   'verify:herdr',
   'verify:manifest-deps',
   'verify:oauth',

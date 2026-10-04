@@ -23,6 +23,7 @@ import {
   type CapabilityEvidence,
 } from '../src/dsh-adapter/channel/capabilities.js'
 import { setLang, t } from '../src/i18n.js'
+import { compositionSource } from './lib/channel-composition.mjs'
 
 let checks = 0
 const ok = (condition: unknown, message: string): void => {
@@ -287,8 +288,10 @@ for (const [presetId, services, expected] of [
   available.releaseContributions()
 
   // 刷新路径（skill catalog 的 setCommands 回调）同样必须经过标注：删掉那一行
-  // 不会被任何既有门禁拦住，所以在这里按源码钉住这条接线。
-  const source = readFileSync(new URL('../src/dsh-adapter/channel.ts', import.meta.url), 'utf8')
+  // 不会被任何既有门禁拦住，所以在这里按源码钉住这条接线。组合根自 agent-backend
+  // Phase 4a 起拆成 channel.ts + core/compose.ts + extensions.ts（DSH 接线在后者），
+  // 读三者拼接（scripts/lib/channel-composition.mjs），断言不变。
+  const source = compositionSource()
   ok(
     source.includes('annotateCommandCapabilities(commands, capabilitiesOf())'),
     'the command-list refresh path annotates through the shared capability facts',

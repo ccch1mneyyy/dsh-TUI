@@ -1,0 +1,170 @@
+{
+  "$comment": [
+    "UI value imports from src/dsh-adapter/ that predate the boundary rules (ADAPTER.md 「边界规则」).",
+    "verify-adapter-boundary.ts reports these as one warning; a new pair fails the gate, and a pair that no longer matches must be deleted here.",
+    "Planned cleanup: Chat.tsx sessionCwdMatches and the dialog/status/approval fallback stores first; the rest move to neutral modules as they are touched.",
+    "The side-panel, launchpad version banner and StatusMetrics occupancy-fallback pairs arrived with a merge from main; same cleanup rule."
+  ],
+  "entries": [
+    {
+      "from": "components/Chat/JobCard.tsx",
+      "to": "dsh-adapter/jobs.js"
+    },
+    {
+      "from": "components/Chat/JobGroupHeader.tsx",
+      "to": "dsh-adapter/jobs.js"
+    },
+    {
+      "from": "components/ExtensionDialog.tsx",
+      "to": "dsh-adapter/dialogs.js"
+    },
+    {
+      "from": "components/ExtensionDialog.tsx",
+      "to": "dsh-adapter/sanitize.js"
+    },
+    {
+      "from": "components/JobsPanel.tsx",
+      "to": "dsh-adapter/jobs.js"
+    },
+    {
+      "from": "components/LogoV2.tsx",
+      "to": "dsh-adapter/contract.js"
+    },
+    {
+      "from": "components/maidPortrait.tsx",
+      "to": "dsh-adapter/sharp.js"
+    },
+    {
+      "from": "components/mathPreview.ts",
+      "to": "dsh-adapter/sharp.js"
+    },
+    {
+      "from": "components/MessageList.tsx",
+      "to": "dsh-adapter/ide-channel.js"
+    },
+    {
+      "from": "components/messages/imageInspection.ts",
+      "to": "dsh-adapter/sharp.js"
+    },
+    {
+      "from": "components/messages/transcriptImageDecode.ts",
+      "to": "dsh-adapter/sharp.js"
+    },
+    {
+      "from": "components/messages/TranscriptImages.tsx",
+      "to": "dsh-adapter/sanitize.js"
+    },
+    {
+      "from": "components/questions/AskUserQuestionPanel.tsx",
+      "to": "dsh-adapter/sanitize.js"
+    },
+    {
+      "from": "components/questions/PlanReviewPanel.tsx",
+      "to": "dsh-adapter/sanitize.js"
+    },
+    {
+      "from": "components/trajectory/Ledger.tsx",
+      "to": "dsh-adapter/trajectory/index.js"
+    },
+    {
+      "from": "components/trajectory/MiniWake.tsx",
+      "to": "dsh-adapter/trajectory/index.js"
+    },
+    {
+      "from": "components/trajectory/WaveBand.tsx",
+      "to": "dsh-adapter/trajectory/index.js"
+    },
+    {
+      "from": "components/trajectory/useTrajectoryScope.ts",
+      "to": "dsh-adapter/trajectory/index.js"
+    },
+    {
+      "from": "ink/sixel-codec.ts",
+      "to": "dsh-adapter/sharp.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/activity-store.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/channel.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/dialogs.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/migrate/bin-path.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/migrate/index.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/migrate/picker.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/migrate/recent-agents.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/providerWizard.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/sanitize.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/settingsEditor.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/status.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/trajectory/index.js"
+    },
+    {
+      "from": "screens/SessionTree.tsx",
+      "to": "dsh-adapter/sessionTree.js"
+    },
+    {
+      "from": "screens/Settings.tsx",
+      "to": "dsh-adapter/settingsEditor.js"
+    },
+    {
+      "from": "screens/StatusLine.tsx",
+      "to": "dsh-adapter/jobs.js"
+    },
+    {
+      "from": "screens/TrajectoryScene.tsx",
+      "to": "dsh-adapter/trajectory/index.js"
+    },
+    {
+      "from": "components/sidePanel/TrajectoryPanel.tsx",
+      "to": "dsh-adapter/trajectory/index.js"
+    },
+    {
+      "from": "components/sidePanel/companion/skins.tsx",
+      "to": "dsh-adapter/sharp.js"
+    },
+    {
+      "from": "components/sidePanel/pluginPanelAdapter.tsx",
+      "to": "dsh-adapter/panel-runtime-registry.js"
+    },
+    {
+      "from": "screens/Chat.tsx",
+      "to": "dsh-adapter/contract.js"
+    },
+    {
+      "from": "screens/StatusMetrics.ts",
+      "to": "dsh-adapter/context-occupancy.js"
+    }
+  ]
+}

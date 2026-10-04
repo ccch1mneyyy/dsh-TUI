@@ -27,6 +27,8 @@ function status(row: SubagentRow): { glyph: string; label: string; color: keyof 
   if (row.status === 'completed') return { glyph: minimalUi ? '✓' : '🟢', label: t('subagent-status-completed'), color: minimalUi ? undefined : 'success' }
   if (row.status === 'failed') return { glyph: minimalUi ? '×' : '🔴', label: t('subagent-status-failed'), color: minimalUi ? undefined : 'error' }
   if (row.status === 'cancelled') return { glyph: minimalUi ? '×' : '🔴', label: t('subagent-status-cancelled'), color: minimalUi ? undefined : 'error' }
+  // No end was ever reported (the run's process is gone): settled, unknown.
+  if (row.status === 'unknown') return { glyph: minimalUi ? '·' : '⚪', label: t('subagent-status-unknown'), color: minimalUi ? undefined : 'subtle' }
   return { glyph: minimalUi ? '·' : '🟡', label: t('subagent-status-running'), color: minimalUi ? undefined : 'warning' }
 }
 /** Hard single-line clip by display width — a wrapped waterfall row would
@@ -57,14 +59,17 @@ function clipLine(text: string, maxWidth: number): string {
  * working-activity preset (`/activity`), so the indicator follows the same
  * setting as the main spinner.
  */
-export function SubagentMessage({ subagent, marginTopOnTurn, activityFrames, onClick }: {
+export function SubagentMessage({ subagent, marginTopOnTurn, activityFrames, onClick, onOpenView }: {
   subagent: SubagentRow
   marginTopOnTurn: boolean
   activityFrames?: string
   isExpanded: boolean
   onClick?(event: ClickEvent): void
+  /** 在主屏打开子代理转录：与卡片点击（→ 详情）并列的独立动作；拦截冒泡，
+   *  普通正文点击与选区不受影响。 */
+  onOpenView?(): void
 }): React.ReactNode {
-  const settled = subagent.status === 'completed' || subagent.status === 'failed' || subagent.status === 'cancelled'
+  const settled = subagent.status === 'completed' || subagent.status === 'failed' || subagent.status === 'cancelled' || subagent.status === 'unknown'
   // 动画订阅仅限运行中的卡片：settled 后传 null 退出共享 clock（keepAlive
   // 归零 → interval 清除），否则历史里的每张完成卡片都以 120ms 永久驱动
   // React commit。viewportRef 必须挂到根节点——useTerminalViewport 初始
@@ -104,6 +109,23 @@ export function SubagentMessage({ subagent, marginTopOnTurn, activityFrames, onC
       <Text dimColor>·</Text><Text dimColor>{tokens(subagent)}</Text>
       <Text dimColor>·</Text><Text dimColor>{subagent.toolCalls.length} tools</Text>
       <Text dimColor>·</Text><Text color={info.color}>{info.label}</Text>
+      {onOpenView !== undefined && (
+        <Box
+          flexShrink={0}
+          marginLeft={1}
+          onClick={(event: ClickEvent) => {
+            // 拦截冒泡：这一格是「主屏查看」，不是卡片点击（→详情）。
+            event.stopImmediatePropagation()
+            onOpenView()
+          }}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+        >
+          {/* 字形位（与面板 ⤢ 全屏同一词汇）：卡片行是恒定高度的水流行，
+              长标签会把状态列顶折行；完整名称留给 Dashboard/Detail 入口。 */}
+          <Text color={hovered ? 'accent' : 'subtle'}>{'⤢'}</Text>
+        </Box>
+      )}
     </Box>
     {!settled && (lastRunning ?? previousDone) !== undefined && (
       <Text wrap="truncate">

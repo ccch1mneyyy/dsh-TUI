@@ -109,9 +109,12 @@ assert.ok(wide.every(line => stringWidth(line) <= 100), 'the diagram stays insid
 assert.ok(wide.every(line => line === '' || line.startsWith('  ')), 'art rows carry the code-block indent')
 
 const narrow = renderDiagram(FLOWCHART, 40)
-assert.equal(narrow[0], '```mermaid', 'the source fallback is a real code block, fence line included')
-assert.ok(narrow.some(line => line.includes('flowchart LR')), 'a too-wide diagram falls back to the fenced source')
-assert.ok(!narrow.some(line => BOX_DRAWING.test(line)), 'no box art leaks into the fallback')
+assert.equal(narrow[0], '┌─ mermaid', 'a too-wide diagram falls back to the shared code frame')
+assert.ok(narrow.some(line => line.startsWith('│ flowchart LR')), 'the fenced source rides inside the frame rail')
+assert.ok(
+  narrow.every(line => !BOX_DRAWING.test(line) || line.startsWith('┌') || line.startsWith('│')),
+  'no diagram box art leaks into the fallback (box glyphs only appear as frame chrome at column 0)',
+)
 assert.ok(
   narrow.some(line => line.includes(`diagram needs ${cjk!.width} columns`)),
   'the fallback captions the width the diagram needs',
@@ -123,8 +126,12 @@ assert.ok(!unsupported.some(line => line.includes('diagram needs')), 'no width c
 
 applyMermaidDiagrams(false)
 const disabled = renderDiagram(FLOWCHART, 100)
-assert.ok(disabled.some(line => line.includes('flowchart LR')) && !disabled.some(line => BOX_DRAWING.test(line)),
-  'the setting off keeps the fenced source')
+assert.ok(disabled.some(line => line.startsWith('│ flowchart LR')),
+  'the setting off keeps the fenced source inside the shared frame')
+assert.ok(
+  disabled.every(line => !BOX_DRAWING.test(line) || line.startsWith('┌') || line.startsWith('│')),
+  'the setting off draws no diagram art (box glyphs only appear as frame chrome)',
+)
 assert.ok(!disabled.some(line => line.includes('diagram needs')), 'the setting off adds no caption')
 applyMermaidDiagrams(undefined)
 assert.ok(renderDiagram(FLOWCHART, 100).some(line => BOX_DRAWING.test(line)), 'unset re-enables the default')
@@ -148,7 +155,8 @@ assert.ok(rendered.some(line => BOX_DRAWING.test(line)), 'a mermaid fence inside
 assert.ok(rendered.some(line => line.includes('User') && line.includes('TUI')), 'participants are laid out side by side')
 
 const plainFence = renderMarkdown('```js\nconst a = 1\n```', 100)
-assert.ok(plainFence.some(line => line.includes('const a = 1')) && !plainFence.some(line => BOX_DRAWING.test(line)),
-  'other fences stay ordinary code blocks')
+assert.ok(plainFence.some(line => line.startsWith('│ const a = 1')),
+  'other fences render through the shared code frame')
+assert.ok(plainFence.some(line => line.startsWith('┌─ js ')), 'the frame names the language')
 
 console.log('Mermaid diagrams verified: engine width/parity/streaming contract, viewport fit and fallbacks, settings switch, Markdown dispatch')

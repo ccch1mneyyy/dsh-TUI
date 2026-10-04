@@ -8,11 +8,19 @@ import { truncateWidth } from '../sessions/format.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { POINTER, TICK, MULTIPLICATION_X } from '../terminal-utils/figures.js'
 import type { Theme } from '../theme.js'
-import { getLang, t } from '../i18n.js'
+import { getLang, t, type I18nKey } from '../i18n.js'
 import { SettingsForm } from '../dsh-adapter/settingsEditor.js'
 import type { TuiSettingsField, TuiSettingsFieldKind, TuiSettingsGroup, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
 import type { LocalizedDescriptions } from '../commands.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
+import { panelStore } from '../components/sidePanel/PanelStore.js'
+import { registerBuiltinPanels } from '../components/sidePanel/builtinPanels.js'
+import { SIDE_PANEL_ID_PATTERN } from '../tuiDisplayPrefs.js'
+
+// The panel picker enumerates the live registry: builtin panels register on
+// import (same idempotent call SidePanelColumn makes), plugins come and go
+// through ctx.tuiPanels while the screen is open.
+registerBuiltinPanels()
 
 /** What the screen is doing with the focused field. */
 type SettingsMode = 'list' | 'edit'
@@ -32,6 +40,48 @@ interface ActiveGroup {
 type FocusEntry =
   | { kind: 'field'; ns: string; field: TuiSettingsField }
   | { kind: 'group'; ns: string; group: TuiSettingsGroup }
+  /** One checkbox row of the sidePanel.panels picker. */
+  | { kind: 'panelToggle'; ns: string; field: TuiSettingsField; panelId: string }
+  /** The picker's raw-text escape hatch (reorder / future plugin ids). */
+  | { kind: 'panelAdvanced'; ns: string; field: TuiSettingsField }
+
+/**
+ * The sidePanel.panels field renders as a checkbox multi-select over the live
+ * panel registry instead of a raw text row (its stored value stays the exact
+ * comma-separated id string — schema and persistence contract unchanged).
+ * Scoped to the TUI's own namespace so a plugin section that happens to carry
+ * the same path keeps the generic field rendering.
+ */
+function isPanelListField(ns: string, field: TuiSettingsField): boolean {
+  return ns === 'dsh-tui' && field.path.join('.') === 'sidePanel.panels'
+}
+
+/**
+ * Enabled panel ids in PanelBar order from the field's draft text — the same
+ * grammar the store normalizes (lowercase tokens, deduped, order preserved),
+ * so the checkboxes can never disagree with what the PanelBar will show.
+ */
+function panelIdsFromText(text: string): string[] {
+  const seen = new Set<string>()
+  for (const token of text.split(',')) {
+    const id = token.trim().toLowerCase()
+    if (id !== '' && SIDE_PANEL_ID_PATTERN.test(id)) seen.add(id)
+  }
+  return [...seen]
+}
+
+/** One-line descriptions for the builtin picker rows (plugin rows show their
+ * plugin id; unclaimed rows show the waiting hint). */
+const PANEL_DESCRIPTION_KEYS: Readonly<Record<string, I18nKey>> = {
+  todo: 'panel-desc-todo',
+  info: 'panel-desc-info',
+  trajectory: 'panel-desc-trajectory',
+  jobs: 'panel-desc-jobs',
+  agents: 'panel-desc-agents',
+  workspace: 'panel-desc-workspace',
+  btw: 'panel-desc-btw',
+  companion: 'panel-desc-companion',
+}
 
 /**
  * One planned row of a section's root page, shared by the focus list and
@@ -154,6 +204,66 @@ function FieldRow({
           {value}
         </Text>
       )}
+    </Box>
+  )
+}
+
+/**
+ * One checkbox row of the sidePanel.panels picker: `❯ [✓] ≡ Todo  描述…`.
+ * Checked derives from the stored comma string; the registry supplies icon,
+ * title and the one-line description. Always exactly one line — title and
+ * description are truncated against the card width (CardTop's ladder: drop
+ * the description first, then clamp the title) so focusing never reflows.
+ */
+function PanelToggleRow({
+  checked,
+  icon,
+  title,
+  description,
+  focused,
+  columns,
+  onClick,
+  onMouseEnter,
+}: {
+  checked: boolean
+  icon: string
+  title: string
+  description: string
+  focused: boolean
+  columns: number
+  onClick?: () => void
+  onMouseEnter?: () => void
+}): React.ReactNode {
+  // Content column: card borders (2) + CardRow padding (2); fixed prefix:
+  // pointer gutter (2) + checkbox (4) + icon + space (2).
+  const available = Math.max(12, columns - 4 - 8)
+  let titleText = title
+  if (stringWidth(titleText) > available - 8) titleText = truncateWidth(titleText, Math.max(4, available - 8))
+  const descBudget = available - stringWidth(titleText) - 2
+  const descText = description === '' || descBudget < 6 ? '' : truncateWidth(description, descBudget)
+  return (
+    <Box
+      flexDirection="row"
+      height={1}
+      flexShrink={0}
+      overflow="hidden"
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+    >
+      <Text color={focused ? 'suggestion' : undefined}>{focused ? padTo(POINTER, 2) : '  '}</Text>
+      <Text color={checked ? 'success' : 'inactive'}>{checked ? `[${padTo(TICK, 2)}] ` : '[  ] '}</Text>
+      <Text bold={focused}>{icon} </Text>
+      <Text bold={focused}>{titleText}</Text>
+      {descText !== '' && <Text dimColor>{`  ${descText}`}</Text>}
+    </Box>
+  )
+}
+
+/** The picker's non-focusable title row — the inline-group header style. */
+function PanelListHeaderRow({ title }: { title: string }): React.ReactNode {
+  return (
+    <Box flexDirection="row" height={1} flexShrink={0} overflow="hidden">
+      <Text dimColor>{'  '}{title}</Text>
     </Box>
   )
 }
@@ -404,13 +514,46 @@ export function Settings({
     }
   }, [activeGroup, activeGroupSpec])
 
+  /** Live panel registry: builtin + plugin:panel entries, re-rendered on
+   *  register/unregister (a plugin landing mid-session adds its row on the
+   *  open screen — the list is never a frozen snapshot). */
+  const panelEntries = React.useSyncExternalStore(panelStore.subscribe, () => panelStore.list())
+
+  /**
+   * Checkbox rows of one picker field, in display order: every registered
+   * panel (registry order — builtins by `order`, then plugins), then the
+   * well-formed ids nothing claims yet as checked placeholder rows (the
+   * extension story: tick a future id now, the plugin claims it later), then
+   * the advanced raw-text row.
+   */
+  const panelPickerRows = (ns: string, field: TuiSettingsField): { id: string; checked: boolean }[] => {
+    const ids = panelIdsFromText(forms.get(ns)?.field(field).text ?? '')
+    const claimed = new Set(panelEntries.map(entry => entry.definition.id))
+    const rows = panelEntries.map(entry => ({ id: entry.definition.id, checked: ids.includes(entry.definition.id) }))
+    for (const id of ids) {
+      if (!claimed.has(id)) rows.push({ id, checked: true })
+    }
+    return rows
+  }
+
+  /** Focusable entries one field contributes — a picker field fans out into
+   *  its checkbox rows plus the advanced row, in the exact order the renderer
+   *  below lays them out (the focus list and the layout share this order). */
+  const fieldEntries = (ns: string, field: TuiSettingsField): FocusEntry[] => {
+    if (!isPanelListField(ns, field)) return [{ kind: 'field', ns, field }]
+    return [
+      ...panelPickerRows(ns, field).map(row => ({ kind: 'panelToggle' as const, ns, field, panelId: row.id })),
+      { kind: 'panelAdvanced' as const, ns, field },
+    ]
+  }
+
   /** Focusable rows in display order for the current page. */
   const focusable: FocusEntry[] = activeSection !== undefined && activeGroupSpec !== undefined
     ? activeSection.fields
       .filter(field => field.group === activeGroupSpec.id)
-      .map(field => ({ kind: 'field', ns: activeSection.ns, field }))
+      .flatMap(field => fieldEntries(activeSection.ns, field))
     : sections.flatMap(section => rootRowsFor(section).flatMap((row): FocusEntry[] => {
-      if (row.kind === 'field') return [{ kind: 'field', ns: section.ns, field: row.field }]
+      if (row.kind === 'field') return fieldEntries(section.ns, row.field)
       if (row.kind === 'page') return [{ kind: 'group', ns: section.ns, group: row.group }]
       return []
     }))
@@ -480,9 +623,34 @@ export function Settings({
   }
 
   /**
+   * Tick/untick one panel id. The stored string keeps its exact semantics:
+   * ids already present keep their relative order (PanelBar order is user
+   * data), a new tick appends at the end, unticking removes. An empty
+   * selection is refused — the persisted string cannot represent it (the
+   * store would fall back to the default and silently re-enable panels) — so
+   * the toggle says so instead of writing a lie.
+   */
+  const togglePanel = (ns: string, field: TuiSettingsField, panelId: string): void => {
+    const form = forms.get(ns)
+    if (form === undefined || !form.available) return
+    const current = panelIdsFromText(form.field(field).text)
+    const next = current.includes(panelId)
+      ? current.filter(id => id !== panelId)
+      : [...current, panelId]
+    if (next.length === 0) {
+      setNotice({ text: t('settings-panels-min-one'), tone: 'error' })
+      return
+    }
+    form.edit(field, next.join(','))
+    bump()
+    saveSoon(ns)
+  }
+
+  /**
    * Activate one focusable entry — the keyboard Enter path, shared with the
-   * mouse click. Groups open their subpage; boolean/select fields cycle their
-   * value; text/secret fields enter the edit mode.
+   * mouse click. Groups open their subpage; picker checkbox rows toggle their
+   * panel; boolean/select fields cycle their value; text/secret fields (and
+   * the picker's advanced row) enter the edit mode.
    */
   const activateEntry = (entry: FocusEntry): void => {
     if (entry.kind === 'group') {
@@ -491,9 +659,13 @@ export function Settings({
       setWindowStart(0)
       return
     }
+    if (entry.kind === 'panelToggle') {
+      togglePanel(entry.ns, entry.field, entry.panelId)
+      return
+    }
     const form = forms.get(entry.ns)
     if (form === undefined || !form.available) return
-    if (entry.field.kind === 'boolean' || entry.field.kind === 'select') {
+    if (entry.kind === 'field' && (entry.field.kind === 'boolean' || entry.field.kind === 'select')) {
       cycleField(entry.ns, entry.field)
     } else {
       setEditing({ ns: entry.ns, field: entry.field, draft: form.field(entry.field).text })
@@ -665,7 +837,114 @@ export function Settings({
     return badges
   }
 
+  /**
+   * The picker field's block: a dim title row, one checkbox row per panel
+   * (registry order), the unclaimed placeholders, and the advanced raw-text
+   * row. Rows stay one line each, so the focus-follow windowing below needs
+   * no special casing.
+   */
+  const addPanelPicker = (section: TuiSettingsSection, field: TuiSettingsField): void => {
+    const ns = section.ns
+    const form = forms.get(ns)
+    const state = form?.field(field) ?? { text: '', overridden: false, invalid: false }
+    const registered = new Map(panelEntries.map(entry => [entry.definition.id, entry]))
+    entries.push({
+      key: `panel-header:${ns}:${field.path.join('.')}`,
+      lines: 1,
+      node: <CardRow><PanelListHeaderRow title={pick(field.label, field.descriptions)} /></CardRow>,
+    })
+    for (const row of panelPickerRows(ns, field)) {
+      const index = focusCursor
+      focusCursor += 1
+      const isFocused = focused?.kind === 'panelToggle' && focused.ns === ns && focused.field === field && focused.panelId === row.id
+      const rowEvents = mode === 'edit'
+        ? undefined
+        : {
+            onClick: (): void => {
+              setFocusIndex(index)
+              togglePanel(ns, field, row.id)
+            },
+            onMouseEnter: (): void => {
+              setFocusIndex(index)
+            },
+          }
+      const definition = registered.get(row.id)?.definition
+      const title = definition === undefined
+        ? row.id
+        : definition.titleKey !== undefined
+          ? t(definition.titleKey)
+          : definition.title ?? row.id
+      const descriptionKey = PANEL_DESCRIPTION_KEYS[row.id]
+      const description = definition === undefined
+        ? t('settings-panels-unclaimed')
+        : definition.source === 'plugin'
+          ? t('settings-panels-plugin', { plugin: definition.pluginId ?? definition.id })
+          : descriptionKey !== undefined ? t(descriptionKey) : ''
+      entries.push({
+        key: `panel-toggle:${ns}:${row.id}`,
+        lines: 1,
+        focus: index,
+        node: (
+          <CardRow highlight={isFocused}>
+            <PanelToggleRow
+              checked={row.checked}
+              icon={definition?.icon ?? '·'}
+              title={title}
+              description={description}
+              focused={isFocused}
+              columns={columns}
+              onClick={rowEvents?.onClick}
+              onMouseEnter={rowEvents?.onMouseEnter}
+            />
+          </CardRow>
+        ),
+      })
+    }
+    // The advanced escape hatch: the same row/edit/invalid conventions as a
+    // text field, seeded with the current raw list (order edits live here).
+    const advIndex = focusCursor
+    focusCursor += 1
+    const advFocused = focused?.kind === 'panelAdvanced' && focused.ns === ns && focused.field === field
+    const advEditing = advFocused && mode === 'edit' && editing !== null
+    const advEvents = mode === 'edit'
+      ? undefined
+      : {
+          onClick: (): void => {
+            setFocusIndex(advIndex)
+            activateEntry({ kind: 'panelAdvanced', ns, field })
+          },
+          onMouseEnter: (): void => {
+            setFocusIndex(advIndex)
+          },
+        }
+    entries.push({
+      key: `panel-advanced:${ns}:${field.path.join('.')}`,
+      lines: 1,
+      focus: advIndex,
+      node: (
+        <CardRow highlight={advFocused}>
+          <FieldRow
+            label={t('settings-panels-advanced')}
+            kind="text"
+            value={advEditing ? `${editing?.draft ?? ''}▌` : state.text === '' ? t('settings-field-empty') : state.text}
+            selectLabel={undefined}
+            focused={advFocused}
+            editing={advEditing}
+            invalid={state.invalid}
+            staged={form?.isStaged(field) === true}
+            onClick={advEvents?.onClick}
+            onMouseEnter={advEvents?.onMouseEnter}
+          />
+        </CardRow>
+      ),
+    })
+  }
+
   const addField = (section: TuiSettingsSection, field: TuiSettingsField): void => {
+    if (isPanelListField(section.ns, field)) {
+      addPanelPicker(section, field)
+      return
+    }
     const index = focusCursor
     focusCursor += 1
     const isFocused = focused?.kind === 'field' && focused.ns === section.ns && focused.field === field
@@ -831,13 +1110,13 @@ export function Settings({
   // The bottom help bar: the focused field's hint on the left (truncated
   // first), the navigation keys pinned to the right — a truncated hint still
   // reads, a truncated shortcut hint hides the keys nobody can guess.
-  const focusedHint = focused?.kind === 'field' && focused.field.hint !== undefined
+  const focusedHint = focused !== undefined && focused.kind !== 'group' && focused.field.hint !== undefined
     ? pick(focused.field.hint, focused.field.hintDescriptions)
     : undefined
   // A field whose user layer carries a value (settings.yaml) is "customized"
   // — worth knowing, too noisy to badge every row with. It rides the help
   // bar instead: focus the field and the suffix appears next to its hint.
-  const focusedCustomized = focused?.kind === 'field'
+  const focusedCustomized = focused !== undefined && focused.kind !== 'group'
     ? forms.get(focused.ns)?.field(focused.field).overridden === true
     : false
   const keysLine = mode === 'edit' ? t('settings-hint-edit') : navigationHint

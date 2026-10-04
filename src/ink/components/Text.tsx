@@ -46,6 +46,13 @@ type BaseProps = {
    * If `truncate-*` is passed, Ink will truncate text instead, which will result in one line of text with the rest cut off.
    */
   readonly wrap?: Styles['textWrap'];
+  /**
+   * Typed paint metadata (Styles.decoration): header row, per-row
+   * prefix, and wrap-continuation hanging indent painted alongside this
+   * leaf's own text. Producers must memo the object — style diffing
+   * compares it by reference.
+   */
+  readonly decoration?: Styles['decoration'];
   readonly children?: ReactNode;
 };
 
@@ -68,13 +75,24 @@ const wrapStyles = new Map<NonNullable<Styles['textWrap']>, Styles>()
 
 /** A text leaf. Empty children produce no layout node. */
 function Text({ children, ref, wrap = 'wrap', color, backgroundColor,
-  bold, dim, italic, underline, strikethrough, inverse,
+  bold, dim, italic, underline, strikethrough, inverse, decoration,
 }: Props) {
   const textStyles = React.useMemo<TextStyles>(() => {
     const values = { color, backgroundColor, bold, dim, italic, underline, strikethrough, inverse }
     return Object.fromEntries(Object.entries(values).filter(([, value]) => Boolean(value)))
   }, [color, backgroundColor, bold, dim, italic, underline, strikethrough, inverse])
+  // A decorated leaf cannot share the wrapStyles cache. This hook must run
+  // on every render: one instance can gain or lose its decoration (a code
+  // frame narrowing into its plain fallback) and the hook count must not
+  // change.
+  const decoratedStyle = React.useMemo<Styles | undefined>(() => decoration === undefined
+    ? undefined
+    : { flexDirection: 'row', flexGrow: 0, flexShrink: 1, textWrap: wrap, decoration },
+  [wrap, decoration])
   if (children == null) return null
+  if (decoratedStyle !== undefined) {
+    return <ink-text ref={ref} style={decoratedStyle} textStyles={textStyles}>{children}</ink-text>
+  }
   let style = wrapStyles.get(wrap)
   if (!style) {
     style = { flexDirection: 'row', flexGrow: 0, flexShrink: 1, textWrap: wrap }

@@ -37,7 +37,11 @@ export function sixelCoveragePaints(alpha: number, x: number, y: number): boolea
 }
 
 /** The pre-dither decision (single 25% threshold), kept for the mask
- * regression's before/after comparison. */
+ * regression's before/after comparison. It doubles as the line-art policy:
+ * rasters that mark themselves `lineArt` paint every pixel at or above the
+ * same 25% coverage solid, with no positional dither — thin strokes (fraction
+ * bars, radical overlines, superscripts) live in the 25%–62.5% band, and the
+ * Bayer checkerboard there reads as speckled, faded ink. */
 export function sixelCoveragePaintsThreshold(alpha: number): boolean {
   return alpha >= TRANSPARENT_COVERAGE_THRESHOLD
 }
@@ -65,6 +69,12 @@ export interface SixelEncodeRequest {
    * painted and whatever the terminal shows behind them stays visible.
    */
   readonly transparent?: boolean
+  /**
+   * Line art (typeset formulas, diagrams): with {@link transparent} the mask
+   * uses the plain 25% coverage threshold — no ordered dither — so hairline
+   * strokes stay solid. Photographs and sprites keep the dithered mask.
+   */
+  readonly lineArt?: boolean
   readonly presentation?: 'preview' | 'transcript'
   readonly crop?: SixelCrop
 }
@@ -151,11 +161,14 @@ async function prepareSixel(request: SixelEncodeRequest): Promise<PreparedSixel>
     // sixelCoveragePaints): <25% transparent, ≥62.5% solid, in between by
     // 2×2 Bayer position. Only sources that actually carry intermediate
     // alpha change their mask; pure 0/255 rasters are byte-identical to the
-    // old single-threshold promotion.
+    // old single-threshold promotion. Line art opts out of the dither: its
+    // thin strokes sit inside the band, so the plain 25% threshold keeps them
+    // continuous (see sixelCoveragePaintsThreshold).
     let index = 3
     for (let y = 0; y < height; y += 1) {
       for (let x = 0; x < width; x += 1) {
-        data[index] = sixelCoveragePaints(data[index]!, x, y) ? 255 : 0
+        const alpha = data[index]!
+        data[index] = (request.lineArt === true ? alpha >= TRANSPARENT_COVERAGE_THRESHOLD : sixelCoveragePaints(alpha, x, y)) ? 255 : 0
         index += 4
       }
     }

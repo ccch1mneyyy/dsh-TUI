@@ -34,7 +34,7 @@ import type {
   StagedImageHandle,
 } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
-import { isHiddenCommandName, parseCommandName } from '../commands.js'
+import { isHiddenCommandName, isUnavailableLocalCommand, parseCommandName } from '../commands.js'
 import { appendHistory, HISTORY_LIMIT, historyProjectKey, loadHistoryOldestFirst } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
@@ -43,7 +43,8 @@ import { actionMatches } from '../utils/keymap.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
-import { OverlayAbove } from './OverlayAbove.js'
+import { OverlayAbove, useOverlayListRows } from './OverlayAbove.js'
+import { listWindow } from './listWindow.js'
 import { SuggestionCard, cardContentWidth } from './SuggestionCard.js'
 import {
   filterLiveImageBindings,
@@ -844,6 +845,15 @@ export function PromptInput({
   const [homeHovered, setHomeHovered] = React.useState(false)
   /** Pointer over the input box (drives the hover peek card). */
   const [hovered, setHovered] = React.useState(false)
+  /** Highlighted row of the docked-queue selector (null = inactive; the
+   *  index runs over the docked subset of `channel.pending`, oldest first).
+   *  The ref mirrors it for the deferred consumeEscape controller closure. */
+  const [dockSelected, setDockSelectedState] = React.useState<number | null>(null)
+  const dockSelectedRef = React.useRef<number | null>(null)
+  const setDockSelected = (index: number | null): void => {
+    dockSelectedRef.current = index
+    setDockSelectedState(index)
+  }
   /** 120ms grace so the pointer crossing the input border row from the
    *  chip up onto the peek card never flickers the card. */
   const hoverLeaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1467,6 +1477,11 @@ export function PromptInput({
     // this edit replaces, and `diffSpan` needs both texts. `reset` ends the
     // draft's history, `silent` (undo itself, a recall) leaves it untouched.
     if (next !== prev) {
+      // Every real text change (typing, paste, history, external editor,
+      // undo) hands the arrows back to the draft: a held-queue selection
+      // must not survive an edited draft and steer ↑/↓ over the text.
+      // Caret-only moves (next === prev) never land here.
+      if (dockSelectedRef.current !== null) setDockSelected(null)
       if (undo === 'reset') clearDraftUndo()
       else if (undo !== 'silent') {
         recordDraftEdit(prev, prevCursor, snapshotBlock === undefined ? block : snapshotBlock, next, offset, undo)
@@ -1761,6 +1776,9 @@ export function PromptInput({
    * cannot withdraw inbox messages (released package without the inbox API).
    */
   const pullBackLast = () => {
+    // Alt+↑ keeps its direct last-item meaning even while the dock selector
+    // is open — one press, one retracted row (the selector closes with it).
+    setDockSelected(null)
     const item = channel.pending[channel.pending.length - 1]
     if (!item) return
     if (!channel.removePending(item.id)) {
@@ -1801,6 +1819,89 @@ export function PromptInput({
   }
 
   /**
+   * The docked queue (Esc parked it while interrupting, Claude Code parity):
+   * previews the composer keeps until the user sends them all (⏎ on an empty
+   * draft / the clickable hint) or retracts items (the ↑ selector / Alt+↑).
+   */
+  const dockedPending = channel.pending.filter(item => item.docked === true)
+  const dockCount = dockedPending.length
+
+  /** Send the whole dock now (⏎ on an empty draft, or the hint row click):
+   *  FIFO, exactly once, through the channel's own delivery chain. */
+  const sendDocked = (): void => {
+    const sent = channel.deliverDocked()
+    if (sent > 0) channel.notify(t('input-dock-sent', { n: sent }), { timeoutMs: 2500 })
+    setDockSelected(null)
+  }
+
+  /** Retract one docked row into the draft for editing (selector ⏎, row
+   *  click, Alt+↑ on the last): purely local — the backend dropped its copy
+   *  with the aborted turn, so every backend can do it.
+   *
+   *  A draft with real content is never destroyed by the retraction: it
+   *  SWAPS — the whole draft (text + staged images) parks at
+   *  the dock's tail while the clicked row comes into the input. Nothing
+   *  sends; the swap is one undo step, so Ctrl+Z brings the parked draft
+   *  back (text, caret, images and fold block; the parked row retains the
+   *  image capabilities, see stageIdIsRetained). Only an empty (or
+   *  whitespace-only) draft takes the plain retraction path. */
+  const editDocked = (index: number): void => {
+    const item = dockedPending[index]
+    setDockSelected(null)
+    if (item === undefined) return
+    if (valueRef.current.trim() !== '') {
+      // Park the draft FIRST: its capabilities must already be retained by
+      // the pending row when setInput's undo bookkeeping and sidecar pruning
+      // run below, or a later swap-back would find them discarded.
+      const swapped = channel.swapDockedForDraft(item.id, {
+        text: valueRef.current,
+        images: imageRefsFor(valueRef.current),
+      })
+      if (!swapped) {
+        channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
+        return
+      }
+      // One sealed undo step captures the draft the swap replaces (same
+      // shape as the external-editor refill): snapshot the fold block
+      // BEFORE clearing it, so Ctrl+Z restores the chip too. setInput runs
+      // while the sidecar still maps the parked draft's tokens — the undo
+      // snapshot then carries them, and its pruning sees the pending row
+      // already retains every capability (nothing is discarded).
+      const beforeBlock = foldBlockRef.current
+      updateFoldBlock(null)
+      setInput(item.text, item.text.length, 'step', beforeBlock)
+      replaceDraftImages(item.images ?? [])
+      setSelectedCommand(0)
+      setFileSelected(0)
+      channel.notify(t('input-dock-swapped'), { timeoutMs: 2000 })
+      return
+    }
+    if (!channel.removePending(item.id)) {
+      channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
+      return
+    }
+    restoreDraftImages({
+      text: item.text,
+      images: item.images ?? [],
+    })
+    setInput(item.text, item.text.length, 'silent')
+    updateFoldBlock(null)
+    setSelectedCommand(0)
+    setFileSelected(0)
+    channel.notify(t('input-retracted'), { timeoutMs: 2000 })
+  }
+
+  // A dock that empties or shrinks under an open selector (rows claimed,
+  // a receipt un-docking them, a session reset) leaves the highlight
+  // pointing past the list — fold it instead of steering arrows at an
+  // invisible row.
+  React.useEffect(() => {
+    if (dockSelected !== null && (dockSelected >= dockCount || dockCount === 0)) {
+      setDockSelected(null)
+    }
+  }, [dockSelected, dockCount])
+
+  /**
    * Ctrl+Enter: abort the running turn and send the input immediately — the
    * model stops what it is doing and starts on this message right away.
    */
@@ -1812,10 +1913,12 @@ export function PromptInput({
     }
     // Abort the running turn and deliver: previously queued pending
     // messages first (FIFO), then the current input — all processed
-    // immediately once the abort settles.
+    // immediately once the abort settles. Docked rows are NOT listed here:
+    // the channel's interruptAndDeliver takes the dock itself first (same
+    // FIFO order), so including them would send each docked text twice.
     const images = imageRefsFor(trimmed)
     const queued: ComposerSubmission[] = [
-      ...channel.pending.map(item => ({ text: item.text, images: item.images ?? [] })),
+      ...channel.pending.filter(item => item.docked !== true).map(item => ({ text: item.text, images: item.images ?? [] })),
       { text: value, images },
     ]
     const count = channel.interruptAndDeliver(queued)
@@ -1838,6 +1941,18 @@ export function PromptInput({
     const parsed = parseCommandName(text)
     if (parsed === undefined) return false
     const command = channel.commandList.find(entry => entry.name === parsed.name)
+    // A built-in the bound backend does not serve is hidden from the menu and
+    // Tab, and a typed one must neither run nor reach the model as text. A
+    // partial embedder channel carries no snapshot: everything is served.
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the snapshot
+    const capabilities = channel.backendCapabilities as Channel['backendCapabilities'] | undefined
+    if (command === undefined && isUnavailableLocalCommand(parsed.name, capabilities)) {
+      channel.notify(t('cmd-unavailable-backend', { cmd: parsed.name, backend: capabilities?.backendLabel ?? '' }), {
+        color: 'warning',
+        timeoutMs: 4000,
+      })
+      return true
+    }
     const known = command !== undefined || isHiddenCommandName(parsed.name)
     if (!known) return false
     const generation = syncImageGeneration()
@@ -1925,6 +2040,12 @@ export function PromptInput({
     if (now - lastEnterAtRef.current < 80) return
     lastEnterAtRef.current = now
     const value = valueRef.current
+    // The docked-queue selector owns Enter while a row is highlighted and
+    // the draft is untouched: retract that row into the input for editing.
+    if (dockSelectedRef.current !== null && value.trim() === '' && dockCount > 0) {
+      editDocked(dockSelectedRef.current)
+      return
+    }
     if (overlayOpen) {
       const command = suggestions[selectedCommand]
       if (command) {
@@ -1941,6 +2062,15 @@ export function PromptInput({
         return
       }
     }
+    // A docked queue (Esc parked it) owns a bare Enter on an EMPTY draft
+    // (Claude Code parity: "…or Enter to send them now"). A draft in
+    // progress keeps the ordinary submit path and the dock stays parked —
+    // sending parked messages silently along with the next typed submit is
+    // exactly the surprise the dock exists to prevent.
+    if (value.trim() === '' && !channel.working && dockCount > 0) {
+      sendDocked()
+      return
+    }
     if (channel.working && value.trim() !== '') {
       // Immediate-command semantics: /btw and /skills are exempt from
       // steering — neither command interrupts the running turn. Hidden
@@ -1952,6 +2082,9 @@ export function PromptInput({
         ((parsed.name === 'btw' || parsed.name === 'skills')
           && channel.commandList.some(c => c.name === parsed.name))
         || isHiddenCommandName(parsed.name)
+        // A built-in the backend lacks is refused here too, never steered in.
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the snapshot
+        || isUnavailableLocalCommand(parsed.name, channel.backendCapabilities as Channel['backendCapabilities'] | undefined)
       )) {
         if (tryRunCommand(value)) return
       }
@@ -1993,6 +2126,12 @@ export function PromptInput({
   /** Local Esc layers, shared by the prompt listener and Chat's delegation.
    * Refs preserve this order even when expansion and Esc share a stdin batch. */
   const consumeEditingEscape = (): boolean => {
+    // The docked-queue selector folds first: Esc leaves the selector and the
+    // dock itself stays put (⏎/↑ keep working afterwards).
+    if (dockSelectedRef.current !== null) {
+      setDockSelected(null)
+      return true
+    }
     if (selectionRef.current && !helpOpen && !overlayOpen && !fileOverlayOpen) {
       clearSelection()
       return true
@@ -2586,6 +2725,12 @@ export function PromptInput({
     // indentation arm so the expanded editor participates in the cycle too —
     // the parser reports backtab as key.tab + key.shift.
     if (key.tab && key.shift) {
+      // A backend without native modes has nothing to cycle (capability
+      // snapshots absent on test stubs = DSH).
+      if ((channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.modes === false) {
+        channel.notify(t('capability-unavailable-backend', { name: 'mode' }), { color: 'warning', timeoutMs: 4000 })
+        return
+      }
       // The key is consumed either way. `cycleMode` is best-effort inside the
       // channel, but a dropped rejection here would be an unhandledRejection
       // (the process guard rethrows everything that is not React #185), and
@@ -2666,6 +2811,17 @@ export function PromptInput({
       return
     }
     if (key.upArrow) {
+      // The docked-queue selector owns ↑ while a row is highlighted
+      // (Claude Code parity: "Press up to select a queued message to
+      // edit"); the walk wraps around the dock. The REF drives it: one
+      // stdin read can carry several ↑ (key repeat / a coalescing
+      // terminal), and the state value would pin every handler in the
+      // batch to the same row — N presses collapsing to one step.
+      if (dockSelectedRef.current !== null) {
+        const current = dockSelectedRef.current
+        setDockSelected(current <= 0 ? dockCount - 1 : current - 1)
+        return
+      }
       // A history walk owns the arrows until it returns to the draft: a
       // recalled entry can itself open the @ menu or the slash menu (e.g.
       // `/model`), and letting the overlay navigate here strands the stashed
@@ -2712,6 +2868,16 @@ export function PromptInput({
         )
         return
       }
+      // An EMPTY draft while idle with a docked queue takes ↑ into the dock
+      // selector, ahead of the history walk (Claude Code parity). Any draft
+      // keeps ↑ as cursor movement; the menus above keep their priority.
+      if (
+        value === '' && !channel.working && !expandedRef.current
+        && !overlayOpen && !fileOverlayOpen && dockCount > 0
+      ) {
+        setDockSelected(dockCount - 1)
+        return
+      }
       // A workspace switch mid-walk keeps the draft that walk started from:
       // the composer shows the previous project's entry, not a new draft.
       const interrupted = seedHistory()
@@ -2739,6 +2905,13 @@ export function PromptInput({
       return
     }
     if (key.downArrow) {
+      // The docked-queue selector owns ↓ too (wraps down around the dock;
+      // the REF, so a batch of ↓ advances one row per press — see ↑).
+      if (dockSelectedRef.current !== null) {
+        const current = dockSelectedRef.current
+        setDockSelected(current >= dockCount - 1 ? 0 : current + 1)
+        return
+      }
       // Same history-walk ownership as ↑ above.
       if (fileOverlayOpen && historyIndex.current < 0) {
         setFileSelected(index =>
@@ -3206,17 +3379,19 @@ export function PromptInput({
         fileEscRef.current = mention?.start ?? -1
         return
       }
-      // With pending messages while working, Esc = interrupt and deliver
-      // them right away (Codex's "interrupt and send immediately"): the
-      // turn is aborted and each message is re-queued once it settles.
+      // The docked-queue selector folds before anything else: Esc leaves the
+      // selector (Chat's delegation reaches this through consumeEscape too).
+      if (dockSelectedRef.current !== null) {
+        setDockSelected(null)
+        return
+      }
+      // With pending messages while working, Esc = interrupt and DOCK the
+      // queue (Claude Code parity): the previews park channel-side and the
+      // dock hint offers ↑ to edit one / ⏎ to send them all — nothing
+      // auto-sends. A queue already fully docked docks nothing new; the
+      // turn still needs its plain abort.
       if (channel.working && channel.pending.length > 0) {
-        const count = channel.interruptAndDeliver(channel.pending.map(item => ({
-          text: item.text,
-          images: item.images ?? [],
-        })))
-        channel.notify(t('interrupt-delivered', { n: count }), {
-          timeoutMs: 2500,
-        })
+        if (channel.interruptAndDock() === 0) channel.cancel()
         return
       }
       // "Send to Chat" chips peel before the draft: the first Esc drops the
@@ -3270,8 +3445,11 @@ export function PromptInput({
       return
     }
     if (input && !key.ctrl && !key.meta && !key.super && !key.tab && !key.escape) {
-      // Typing anything else dismisses the help menu.
+      // Typing anything else dismisses the help menu…
       if (helpOpen) onToggleHelp()
+      // …and leaves the docked-queue selector: the draft is no longer empty,
+      // so ↑ goes back to cursor movement.
+      if (dockSelectedRef.current !== null) setDockSelected(null)
       // An active selection is REPLACED by the typed text, caret after it.
       const sel = selectionRef.current
       const at = sel ? sel.start : cursor
@@ -3896,6 +4074,33 @@ export function PromptInput({
   // 的 style.position，常驻浮层 + 移除普通子节点不会触发 blit 解毒，被
   // 覆盖的转录行会留空（见 Chat.tsx dialogOverlayOpen 注释）。展开态由
   // 全屏编辑器接管，内联浮层全部撤下。
+  // The dock rows are windowed, never rendered in full: OverlayAbove clips
+  // overflow from the top without scrolling, so a long dock would push the
+  // highlighted row off-screen while Enter still retracts by index. The
+  // window keeps the focused row
+  // visible (listWindow centers on it); Enter and the row click both
+  // operate on the absolute dock index, so they always name the row the
+  // user SEES highlighted. The budget subtracts every other row the
+  // pending block paints (steer/followup previews, labels, hints, padding)
+  // so the window always fits the overlay's effective height.
+  const steerPreviewCount = channel.pending.filter(
+    item => item.placement === 'steer' && item.docked !== true,
+  ).length
+  const followupPreviewCount = channel.pending.filter(
+    item => item.placement === 'followup' && item.docked !== true,
+  ).length
+  const dockWindowRows = useOverlayListRows(
+    (steerPreviewCount > 0 ? 1 + steerPreviewCount : 0)
+    + (followupPreviewCount > 0 ? 1 + followupPreviewCount : 0)
+    + 1 /* dock label */ + 1 /* dock hint row */ + 1 /* Alt+↑ hint */ + 1 /* block paddingBottom */,
+  )
+  const dockFocus = dockSelected ?? Math.max(dockCount - 1, 0)
+  const { start: dockStart, end: dockEnd } = listWindow(
+    dockedPending.map(() => 1),
+    dockFocus,
+    dockWindowRows,
+  )
+
   const floatersOpen =
     !suspended &&
     !expanded &&
@@ -4098,11 +4303,11 @@ export function PromptInput({
         )}
         {!helpOpen && channel.pending.length > 0 && (
           <Box flexDirection="column" paddingLeft={2} paddingBottom={1}>
-            {channel.pending.some(item => item.placement === 'steer') && (
+            {channel.pending.some(item => item.placement === 'steer' && item.docked !== true) && (
               <Box flexDirection="column">
                 <Text dimColor>⚡ {t('input-pending-steer-label')}</Text>
                 {channel.pending
-                  .filter(item => item.placement === 'steer')
+                  .filter(item => item.placement === 'steer' && item.docked !== true)
                   .map(item => (
                     <Text key={item.id} dimColor wrap="truncate">
                       {'  '}↳ {item.text}
@@ -4110,16 +4315,43 @@ export function PromptInput({
                   ))}
               </Box>
             )}
-            {channel.pending.some(item => item.placement === 'followup') && (
+            {channel.pending.some(item => item.placement === 'followup' && item.docked !== true) && (
               <Box flexDirection="column">
                 <Text dimColor>⏳ {t('input-pending-queue-label')}</Text>
                 {channel.pending
-                  .filter(item => item.placement === 'followup')
+                  .filter(item => item.placement === 'followup' && item.docked !== true)
                   .map(item => (
                     <Text key={item.id} dimColor wrap="truncate">
                       {'  '}↳ {item.text}
                     </Text>
                   ))}
+              </Box>
+            )}
+            {dockCount > 0 && (
+              <Box flexDirection="column">
+                <Text dimColor>⏸ {t('input-pending-dock-label')}</Text>
+                {dockedPending.slice(dockStart, dockEnd).map((item, index) => {
+                  // The window maps to absolute dock indices: the click and
+                  // the highlight name the same row the user sees.
+                  const absoluteIndex = dockStart + index
+                  return (
+                    <Box
+                      key={item.id}
+                      // 点击停靠行 = 撤回该条进输入框编辑（与选择器 ⏎ 同路径）
+                      onClick={() => { editDocked(absoluteIndex) }}
+                    >
+                      <Text wrap="truncate" dimColor={dockSelected === null || dockSelected !== absoluteIndex} color={dockSelected === absoluteIndex ? promptAccent : undefined}>
+                        {'  '}{dockSelected === absoluteIndex ? '❯' : '↳'} {item.text}
+                      </Text>
+                    </Box>
+                  )
+                })}
+                <Box
+                  // 点击提示行 = 全部发送（与空输入 ⏎ 同路径）
+                  onClick={() => { sendDocked() }}
+                >
+                  <Text dimColor>{' '}{t('input-pending-dock-hint')}</Text>
+                </Box>
               </Box>
             )}
             <Text dimColor>Alt+↑ {t('input-pending-actions-hint')}</Text>
