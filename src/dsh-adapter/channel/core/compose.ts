@@ -537,7 +537,7 @@ export function createCoreChannel(
     // trajectory (DSH: raw history) the fold receives no events, so lanes()
     // is empty and the scope filter is not offered; the raw DSH log has no
     // lane attribution to filter by.
-    trajectoryLanes: () => agentTrajectory.lanes() as unknown as readonly import('../../../adapter/ports/channel-view.js').TrajectoryLane[],
+    trajectoryLanes: () => agentTrajectory.lanes(),
     trajectoryLaneEvents: (agentId: string, descendants?: boolean) =>
       (descendants === true ? agentTrajectory.descendantEvents(agentId) : agentTrajectory.laneEvents(agentId)) as unknown as readonly SessionEvent[],
     // The source label: the core serves the trajectory from the neutral
