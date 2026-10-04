@@ -471,6 +471,13 @@ const GROUPS = {
 // （resolve 晚于 write 回调、sink 抛错不阻塞）、文案双语与配色互异
 // （青/黄/红，无色模式零 ANSI）、plugin.ts/update.ts 源接线 tripwire。
     ["verify-handoff-transition", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-transition.ts']],
+// 内核切换原子屏交接回归（S05 完整版，M1①）：ACK 协议解析、结局分类的
+// 首帧事实（flush 过＝post-boot、没 flush＝boot-failure，4 秒窗只留给无
+// 协议 replacement）、子进程状态机（armed→adopted→ready、ready 前不写
+// 1049l、管道亡自持兜底、env 一次性消费）、armFirstFrameAck 对 adoption
+// 前写入直通/自恢复，以及真进程 e2e：ready 后旧父永不写 1049l、ready 前
+// 死亡与旧版 replacement 都恰一次收口回主屏。
+    ["verify-handoff-atomic", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-atomic.ts']],
 // 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：
 // 全程跑官方读取链——Session.append 生成骨架（turn 配对/reasoning/
 // provenance/空 system head/工具调用/中断/标题/压缩检查点）、

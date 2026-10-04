@@ -11,6 +11,8 @@ import { stripResumeArgs } from './sessionHistory.js'
 import { KERNEL_SWITCH_HANDOFF_ENV } from './kernelPrefs.js'
 import { kernelDisplayName } from './components/kernelCatalog.js'
 import { classifyReplacementOutcome, formatHandoffNotice, handoffEventTag, writeHandoffStage } from './handoffEvents.js'
+import { HANDOFF_ACK_FD_ENV, HANDOFF_ATTEMPT_ENV, HANDOFF_SCREEN_ENV, parseHandoffAckLine } from './handoffAck.js'
+import { EXIT_ALT_SCREEN } from './ink/termio/dec.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
 // the compiled copy at lib/types/utils/shellQuote.js.
@@ -196,6 +198,26 @@ export function writeHandoffNotice(text: string): void {
     writeFileSync(2, text)
   } catch {
     process.stderr.write(text)
+  }
+}
+
+/**
+ * Close the alt-screen bracket THIS process still holds (S05 完整版): a
+ * replacement that died before its first flushed frame never took ownership,
+ * so the supervisor restores the main buffer FIRST — the failure notice then
+ * lands on the persistent main screen instead of vanishing with the alt
+ * buffer. Synchronous fd-1 write with the stream fallback, same flush
+ * discipline as writeHandoffNotice.
+ */
+export function restoreHandoffScreen(): void {
+  try {
+    writeFileSync(1, EXIT_ALT_SCREEN + '\r\n')
+  } catch {
+    try {
+      process.stdout.write(EXIT_ALT_SCREEN + '\r\n')
+    } catch {
+      // Even a dead stdout must not block the exit path.
+    }
   }
 }
 
@@ -2013,6 +2035,15 @@ export interface TuiRestartOptions {
    * starts a new session, never this one.
    */
   backend?: 'dsh' | 'claude'
+  /**
+   * 'alt'（S05 完整版，fullscreen 切换专属）: the old process keeps the
+   * alternate buffer through the spawn — the transition frame lives in the
+   * alt screen, the replacement adopts it (no second 1049h), and the first
+   * flushed frame ACK hands the bracket over. Plain /restart, /update and
+   * inline sessions keep the MVE main-screen handoff (design: 只有切换存在
+   * 差别，不把每次退出变成部署向导).
+   */
+  handoffScreen?: 'alt'
 }
 
 /**
@@ -2043,6 +2074,13 @@ export function restartChildEnv(
   // switching kernels keeps this process's kernel by config/env/memory as
   // usual.
   delete childEnv[KERNEL_SWITCH_HANDOFF_ENV]
+  // Same one-shot hygiene for the S05 handoff contract markers: a replacement
+  // that is NOT part of an armed handoff must never adopt a screen bracket or
+  // ACK pipe from an earlier attempt (the parent re-arms them explicitly when
+  // it actually opens one).
+  delete childEnv[HANDOFF_SCREEN_ENV]
+  delete childEnv[HANDOFF_ACK_FD_ENV]
+  delete childEnv[HANDOFF_ATTEMPT_ENV]
   if (options.backend !== undefined) {
     childEnv.DSH_TUI_BACKEND = options.backend
     // The one-shot switch override (S01): DSH_TUI_BACKEND alone loses to an
@@ -2080,26 +2118,80 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     dshHome: process.env.DSH_HOME ?? null,
   })
   const startedAt = Date.now()
-  // 内核切换的过场第二阶段（S05 MVE）：replacement spawn 之前由旧父进程
-  // 在已自由的控制台上写一行已 flush 的「正在启动 X…」——此后屏幕交给
-  // 新内核。写等待 drain 回调（不是定时 sleep），保证行落地早于 spawn。
+  // S05 完整版：fullscreen 内核切换时，本进程（supervisor 角色）持有
+  // alt buffer 不放——过场帧写在 alt 屏内，replacement 通过 ACK 管道报告
+  // 挂接（adopted）与首帧 flush（ready），ready 之后 1049 括号归它。
+  const handoff = options.handoffScreen === 'alt' && options.backend !== undefined
+  const attemptId = handoff ? 'hs-' + Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 8) : undefined
+  // 内核切换的过场第二阶段（S05）：replacement spawn 之前由旧父进程写一
+  // 行已 flush 的「正在启动 X…」——此后屏幕交给新内核。写等待 drain 回调
+  // （不是定时 sleep），保证行落地早于 spawn。handoff 模式下这行落在 alt
+  // 屏的过场帧之下；MVE 模式落在已恢复的主屏上。
   if (options.backend !== undefined) {
     await writeHandoffStage(
       process.stdout,
       formatHandoffNotice('stage-start', { name: kernelDisplayName(options.backend), color: process.stdout.isTTY === true }) + '\n',
     )
-    logRestartEvent(handoffEventTag('stage-start'), { backend: options.backend })
+    logRestartEvent(handoffEventTag('stage-start'), { backend: options.backend, ...(attemptId === undefined ? {} : { attemptId }) })
   }
   return new Promise(resolve => {
     const childEnv = restartChildEnv(process.env, sessionId, kind, options)
+    if (handoff) {
+      // stdio[3] 是 ACK 管道；env 把 fd 号与 attemptId 交给 replacement。
+      childEnv[HANDOFF_SCREEN_ENV] = 'alt'
+      childEnv[HANDOFF_ACK_FD_ENV] = '3'
+      childEnv[HANDOFF_ATTEMPT_ENV] = attemptId!
+      logRestartEvent('handoff: alt-screen bracket held for the replacement', { attemptId })
+    }
     const child = spawn(process.execPath, argv, {
       env: childEnv,
       // stdin/stdout stay inherited so the replacement owns the console the
       // moment it boots; stderr is captured so a boot failure is reportable
       // through THIS process (the terminal may already be mid-handoff when
-      // the child dies, and a raw inherit write can vanish).
-      stdio: ['inherit', 'inherit', 'pipe'],
+      // the child dies, and a raw inherit write can vanish). fd 3 is the
+      // one-way ACK pipe (replacement → supervisor): adopted / first frame.
+      stdio: handoff ? ['inherit', 'inherit', 'pipe', 'pipe'] : ['inherit', 'inherit', 'pipe'],
     })
+    let ackAdoptedAt: number | undefined
+    let ackReadyAt: number | undefined
+    const ackStream = handoff ? (child.stdio[3] ?? undefined) as import('node:stream').Readable | undefined : undefined
+    if (ackStream !== undefined) {
+      ackStream.setEncoding('utf8')
+      let pending = ''
+      ackStream.on('data', (chunk: string) => {
+        pending += chunk
+        for (;;) {
+          const newline = pending.indexOf('\n')
+          if (newline < 0) break
+          const line = pending.slice(0, newline)
+          pending = pending.slice(newline + 1)
+          const ack = parseHandoffAckLine(line)
+          if (ack === null || ack.attemptId !== attemptId) continue
+          if (ack.kind === 'adopted' && ackAdoptedAt === undefined) {
+            ackAdoptedAt = Date.now()
+            logRestartEvent('handoff/screen-adopted', { attemptId, backend: options.backend })
+          }
+          if (ack.kind === 'ready' && ackReadyAt === undefined) {
+            ackReadyAt = Date.now()
+            // ready 的定义＝新 renderer 首帧 write 已 flush（不是 mount、
+            // 不是进程存在、不是 4 秒计时）——设计「明确不做」的反面。
+            logRestartEvent(handoffEventTag('first-frame'), { attemptId, backend: options.backend, elapsedMs: ackReadyAt - startedAt })
+          }
+        }
+      })
+      ackStream.on('error', () => {
+        // The supervisor outlives the pipe by contract; a broken pipe here
+        // means the replacement never speaks the protocol (e.g. an older
+        // build) — the close handler's no-ready branch still restores the
+        // screen, so the bracket can never be orphaned.
+      })
+      const ackWatch = setTimeout(() => {
+        if (ackReadyAt === undefined) {
+          logRestartEvent('handoff/first-frame watch', { attemptId, note: 'no first-frame ACK within 30s (diagnosis only, never a success/failure fact)' })
+        }
+      }, 30000)
+      ackWatch.unref()
+    }
     logRestartEvent(`${tag}: replacement spawned`, { childPid: child.pid, ...(options.backend === undefined ? {} : { backend: options.backend }) })
     // Handoff watchdog (field evidence 2026-08-24: restarted TUI mounts but
     // takes no input). Two jobs, both diagnosis-grade:
@@ -2157,6 +2249,9 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
       clearTimeout(timer)
       logRestartEvent(`${tag}: spawn error`, { message: error.message })
       if (options.backend !== undefined) {
+        // spawn 失败＝没有任何东西挂上屏幕：supervisor 仍持有 1049 括号，
+        // 先恢复主屏再落失败文案（与 close 分支同一收口纪律）。
+        if (handoff) restoreHandoffScreen()
         // 内核切换事件分类（S05 MVE）：spawn 失败＝切换未完成（黄色），
         // 附安全模式修复路径；与崩溃（红）区分。
         logRestartEvent(handoffEventTag('failed'), { reason: 'spawn-error', message: error.message })
@@ -2182,13 +2277,24 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
         elapsedMs,
       })
       if (options.backend !== undefined) {
-        // 内核切换的结局三分（S05 MVE）：成功＝安静（新 UI 即成功信号，
-        // 只记 restart.log 事件）；启动失败＝黄色＋会话保留＋safe 提示；
-        // 运行后异常退出＝红色＋退出码。现有 4 秒窗仍是诊断口径，不升级
-        // 为启动成功事实（设计「明确不做」）。
-        const outcome = classifyReplacementOutcome({ closed: true, code, signal, elapsedMs })
-        logRestartEvent(handoffEventTag(outcome.kind), outcome.kind === 'crashed' ? { code: outcome.code } : outcome.kind === 'failed' ? { reason: outcome.reason } : {})
+        // 内核切换的结局三分（S05；M1 起事实来自 ACK 管道）：成功＝安静
+        // （新 UI 即成功信号，只记 restart.log 事件）；启动失败＝黄色＋会话
+        // 保留＋safe 提示；运行后异常退出＝红色＋退出码。ACK 在场时以
+        // 「首帧是否 flush」为准（4 秒窗只对无协议 replacement 保留诊断
+        // 口径，不升级为启动成功事实——设计「明确不做」）。
+        const outcome = classifyReplacementOutcome({
+          closed: true, code, signal, elapsedMs,
+          ...(handoff ? { firstFrameAcked: ackReadyAt !== undefined } : {}),
+        })
+        logRestartEvent(handoffEventTag(outcome.kind), {
+          ...(outcome.kind === 'crashed' ? { code: outcome.code } : outcome.kind === 'failed' ? { reason: outcome.reason } : {}),
+          ...(attemptId === undefined ? {} : { attemptId }),
+        })
         if (outcome.kind === 'failed') {
+          // ready 之前死亡＝alt buffer 仍由本进程持有（replacement 从未接
+          // 管）：先退出 1049 回主屏，失败文案才能留在持久主屏上；ready
+          // 之后死亡＝括号归 replacement 自己的退出清理，这里不碰。
+          if (handoff && ackReadyAt === undefined) restoreHandoffScreen()
           const suffix = childStderr.trim() === '' ? '' : `\n${childStderr.trimEnd()}`
           writeHandoffNotice(
             formatHandoffNotice('failed', {

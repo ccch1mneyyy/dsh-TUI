@@ -47,6 +47,7 @@ import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../s
 import { initialPromptFromCmdlineArgs } from './startup-args.js'
 import { readHomePrefs } from '../homePrefs.js'
 import { handoffEventTag, formatHandoffNotice } from '../handoffEvents.js'
+import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit } from '../handoffAck.js'
 import { KERNEL_SWITCH_HANDOFF_ENV, readKernelPrefs, resolveRememberedBackend, writeKernelPrefs } from '../kernelPrefs.js'
 import { kernelDisplayName, type ClaudeKernelStatus } from '../components/kernelCatalog.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
@@ -517,6 +518,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const handoffBackendRaw = process.env[KERNEL_SWITCH_HANDOFF_ENV]
   if (handoffBackendRaw !== undefined) delete process.env[KERNEL_SWITCH_HANDOFF_ENV]
   const handoffBackend = normalizeBackendChoice(handoffBackendRaw)
+  // S05 完整版 boot 侧：supervisor（旧 TUI 进程）在本进程 spawn 时给了
+  // ACK 管道（fd 3）与它仍持有的 alt 屏。这里一次性消费 env（host
+  // recompose、本进程的孩子都读不到陈旧标记）；此后 AlternateScreen 挂接
+  // 时发 adopted、首帧 flush 后发 ready，ready 之前本进程不写 1049l。
+  const handoffAck = beginHandoffAck()
+  if (handoffAck !== undefined) {
+    logRestartEvent('handoff/boot: ack armed', { attemptId: handoffAttemptId() ?? '' })
+  }
   const backendChoice = resolveRememberedBackend({
     ...(handoffBackend === undefined ? {} : { handoff: handoffBackend }),
     configured: config.backend,
@@ -1642,17 +1651,24 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       // kernel.json was already written when the choice was accepted.
       if (backendSwitchRequested !== undefined) {
         logRestartEvent('funnel: backend-switch branch entered', { backend: backendSwitchRequested })
-        // 切换过场第一阶段（S05 MVE）：finishExit 交界的稳定状态行——
-        // 终端恢复后由本进程写、经 writeStream 等待 flush，明确时态与
-        // 「原会话保留」，不给用户「整个 dsh-tui 消失了」的读法。
+        // 切换过场第一阶段（S05；fullscreen 走完整版）：本进程作为
+        // supervisor 持有 alt 屏不退——过场文案写进 alt buffer（清屏归
+        // 位后），replacement adopted/首帧 ACK 后移交；inline 会话仍按
+        // MVE 恢复主屏写状态行。两态都明确时态与「原会话保留」，不给
+        // 用户「整个 dsh-tui 消失了」的读法。
         logRestartEvent(handoffEventTag('starting'), { backend: backendSwitchRequested })
+        const keepAlt = bootedFullscreen
         void finishExit(
           ctx,
           instance,
           bootedFullscreen,
           formatHandoffNotice('starting', { name: kernelDisplayName(backendSwitchRequested), color: process.stdout.isTTY === true }),
           undefined,
-          () => runRestart(ctx, profile, '', undefined, { backend: backendSwitchRequested }),
+          () => runRestart(ctx, profile, '', undefined, {
+            backend: backendSwitchRequested,
+            ...(keepAlt ? { handoffScreen: 'alt' } : {}),
+          }),
+          { keepAltScreen: keepAlt },
         )
         return
       }
@@ -2008,6 +2024,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     themeHost,
     children: marginChildren,
   })
+  // 首帧观察（S05 完整版）：adoption 之后第一次 stdout write 的 flush 回调
+  // 触发 ready ACK。补丁一次性自恢复；未武装时零开销。
+  armFirstFrameAck(process.stdout)
   instance = await render(tree, { exitOnCtrlC: false, terminalImages: bootedTerminalImages })
   const isRecompose = lastBootedFullscreen !== undefined
   lastBootedFullscreen = bootedFullscreen
@@ -2562,6 +2581,7 @@ export async function finishExit(
   notice: string | undefined,
   stderrNotice: string | undefined,
   done: () => void,
+  options: { keepAltScreen?: boolean } = {},
 ): Promise<void> {
   try {
     // Resolve the Ink runtime twice: the instances map is keyed by stdout
@@ -2610,8 +2630,16 @@ export async function finishExit(
     } catch {
       ctx.logger.debug('dsh-tui: Ink shutdown detach failed; continuing with generic terminal cleanup')
     }
+    // S05 完整版屏幕托管：
+    //  - keepAltScreen（旧进程的切换分支）: 本进程作为 supervisor 持有
+    //    1049 括号穿过 spawn——不写 1049l，清屏归位后把过场文案写进
+    //    alt buffer（用户全程停留在同一块屏上，不闪主屏）。
+    //  - ownsAltScreenExit()=false（新进程 ready 前的退出）：括号属于旧
+    //    父进程，本进程的清理跳过 1049l（失败收口由持有者做——全链路
+    //    恰好一次闭合）。
+    const exitAlt = fullscreen && !(options.keepAltScreen === true) && ownsAltScreenExit() ? EXIT_ALT_SCREEN : ''
     const cleanup = [
-      fullscreen ? EXIT_ALT_SCREEN : '',
+      exitAlt,
       cursor,
       DISABLE_MOUSE_TRACKING,
       DISABLE_MODIFY_OTHER_KEYS,
@@ -2624,7 +2652,8 @@ export async function finishExit(
       supportsTabStatus() ? wrapForMultiplexer(CLEAR_TAB_STATUS) : '',
     ].join('')
     const suffix = notice === undefined ? '' : `${notice}\n`
-    await writeStream(process.stdout, `${cleanup}\r\n${suffix}`)
+    const restoreFrame = options.keepAltScreen === true ? '\x1b[2J\x1b[H' : ''
+    await writeStream(process.stdout, `${restoreFrame}${cleanup}\r\n${suffix}`)
     // Re-drain AFTER the cleanup sequences have landed (#507): terminal
     // replies and mouse packets already in flight when the exit started
     // keep arriving while cleanup is being written — the detach-time drain
