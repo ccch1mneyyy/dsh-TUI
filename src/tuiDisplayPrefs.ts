@@ -210,6 +210,30 @@ export const getMermaidDiagrams = mermaidDiagramsStore.get
 export const applyMermaidDiagrams = mermaidDiagramsStore.apply
 
 /**
+ * How fenced code blocks frame themselves (settings
+ *  `dsh-tui.codeFrameStyle`): `light` (default) is the open rail frame
+ * — corner + language label on top, a left rail with one padding
+ * column, no right wall or bottom edge; `full` closes the box with a
+ * right wall (continuous across wrapped rows, it rides the layout
+ * border) and a bottom edge. The narrow-terminal fallback (net body
+ * width < 8) always stays the plain ANSI fence, whatever this says.
+ */
+export type CodeFrameStyle = 'light' | 'full'
+const CODE_FRAME_STYLES = new Set<CodeFrameStyle>(['light', 'full'])
+
+export function normalizeCodeFrameStyle(value: unknown): CodeFrameStyle {
+  return typeof value === 'string' && CODE_FRAME_STYLES.has(value as CodeFrameStyle)
+    ? value as CodeFrameStyle
+    : 'light'
+}
+
+/** Read at render time, so settled code blocks re-render on change. */
+const codeFrameStyleStore = createLiveSetting<CodeFrameStyle>('light', normalizeCodeFrameStyle)
+export const subscribeCodeFrameStyle = codeFrameStyleStore.subscribe
+export const getCodeFrameStyle = codeFrameStyleStore.get
+export const applyCodeFrameStyle = codeFrameStyleStore.apply
+
+/**
  * How LaTeX math in replies renders (settings `dsh-tui.mathRendering`):
  * `auto` picks the best available backend (today the Unicode renderer),
  * `image` typesets complete block formulas as terminal images where the

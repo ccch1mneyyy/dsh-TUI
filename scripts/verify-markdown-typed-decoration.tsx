@@ -355,4 +355,64 @@ assert.equal(liveRow(), RAIL + ' ' + body, 'switching back repaints again')
 await app2.unmount()
 console.log('6. mermaid fallback shares the typed frame; decoration identity keys the paint cache')
 
-console.log('markdown typed decoration verified (engine equivalence, structure counts, copy contract, hanging continuations, fingerprint, mermaid sharing, cache identity)')
+// -- 7. codeFrameStyle setting: light default, full form, roundtrip -------
+
+const { applyCodeFrameStyle, getCodeFrameStyle } = await import('../src/tuiDisplayPrefs.js')
+assert.equal(getCodeFrameStyle(), 'light', 'light is the default frame style')
+assert.equal(applyCodeFrameStyle('nonsense'), 'light', 'normalize rejects unknown values')
+
+// Light rows byte-identical with section 3 (the default path is unchanged).
+const lightRows = snap(<Markdown>{SRC}</Markdown>, 60).rows
+assert.deepEqual(lightRows, target.rows, 'light default renders the exact section-3 rows')
+
+applyCodeFrameStyle('full')
+const fullFrame = snap(<CodeBlockFrame token={codeToken('ts', 'const a = 1' + NL + 'const bb = 2')} highlight={null} />, 60)
+const fullRows = fullFrame.rows.filter(r => r !== '')
+assert.ok(fullRows.length >= 4, 'full frame has header, body rows and a bottom edge')
+assert.ok(fullRows[0]!.startsWith('\u250c\u2500 ts ') && fullRows[0]!.endsWith('\u2500\u2510'),
+  'full header carries the label and closes with the top-right corner: ' + JSON.stringify(fullRows[0]))
+for (const row of fullRows.slice(1, -1)) {
+  assert.ok(row.startsWith(RAIL + ' ') && row.endsWith(RAIL),
+    'every full body row keeps the rail and the continuous right wall: ' + JSON.stringify(row))
+}
+assert.ok(fullRows[fullRows.length - 1]!.startsWith('\u2514\u2500') && fullRows[fullRows.length - 1]!.endsWith('\u2500\u2518'),
+  'full bottom edge closes the box: ' + JSON.stringify(fullRows[fullRows.length - 1]))
+
+// Wrapped body keeps the wall continuous across rows (a layout border,
+// not per-row paint).
+const fullWrap = snap(<CodeBlockFrame token={codeToken('txt', 'x'.repeat(90))} highlight={null} />, 40)
+const wrapRows = fullWrap.rows.filter(r => r !== '')
+assert.ok(wrapRows.length >= 5, 'long body wraps inside the full box')
+for (const row of wrapRows.slice(1, -1)) {
+  assert.ok(row.startsWith(RAIL + ' ') && row.endsWith(RAIL),
+    'wrapped full rows keep rail and wall: ' + JSON.stringify(row))
+}
+
+// Copy contract under full: body selectable, decorations excluded.
+const fullNoSelect = (x: number, y: number) => fullFrame.screen.noSelect![y * fullFrame.screen.width + x]
+assert.equal(fullNoSelect(0, 0), 1, 'full header row is noSelect')
+assert.equal(fullNoSelect(0, 1), 1, 'full rail is noSelect')
+assert.equal(fullNoSelect(1, 1), 0, 'full padding stays selectable')
+assert.equal(fullNoSelect(2, 1), 0, 'full body stays selectable')
+assert.equal(fullNoSelect(fullFrame.screen.width - 1, 1), 1, 'full right wall is noSelect')
+const fullHi = fullFrame.rows.findIndex(r => r.startsWith('\u250c'))
+assert.equal(
+  copyRect(fullFrame.screen, [2, fullHi + 1], [fullFrame.screen.width - 2, fullHi + 2]),
+  'const a = 1' + NL + ' const bb = 2',
+  'full body-anchored copy stays the clean payload (wall and rail excluded)',
+)
+
+// The narrow fallback (net width < 8) stays the plain ANSI fence under
+// whatever style is active.
+const tinyFull = snap(<CodeBlockFrame token={codeToken('js', 'const a = 1')} highlight={null} />, 12)
+assert.ok(tinyFull.rows.some(r => r.startsWith('```js')),
+  'net width < 8 keeps the ANSI fence even in full style')
+assert.ok(!tinyFull.rows.some(r => r.includes('\u2510')), 'no closed-box glyphs in the narrow fallback')
+
+// Roundtrip: flipping back to light restores the section-3 bytes.
+applyCodeFrameStyle('light')
+assert.deepEqual(snap(<Markdown>{SRC}</Markdown>, 60).rows, target.rows,
+  'switching back to light restores the exact default rows')
+console.log('7. codeFrameStyle: light default byte-identical, full closed box (walls/bottom/copy), narrow fallback, roundtrip')
+
+console.log('markdown typed decoration verified (engine equivalence, structure counts, copy contract, hanging continuations, fingerprint, mermaid sharing, cache identity, frame style)')

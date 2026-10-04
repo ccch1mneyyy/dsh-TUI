@@ -7,6 +7,7 @@ import type { Color, TextDecoration } from '../ink/styles.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import { codeLanguageTag, formatCodeBody, formatToken } from '../terminal-utils/markdown.js'
+import { getCodeFrameStyle, subscribeCodeFrameStyle } from '../tuiDisplayPrefs.js'
 import type { CliHighlight } from '../terminal-utils/cliHighlight.js'
 
 /**
@@ -73,6 +74,10 @@ type Props = {
 
 export function CodeBlockFrame({ token, highlight, dimColor = false, forceWidth }: Props): React.ReactNode {
   const { columns } = useTerminalSize()
+  // Live setting (settings `dsh-tui.codeFrameStyle`): read at render
+  // time so settled blocks re-render when the style flips; the store
+  // mirrors both the /settings edit and cordis.yml.
+  const frameStyle = React.useSyncExternalStore(subscribeCodeFrameStyle, getCodeFrameStyle)
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
   // Theme values are raw color strings; the ink-level border props take the
@@ -125,6 +130,23 @@ export function CodeBlockFrame({ token, highlight, dimColor = false, forceWidth 
     return <Text dimColor={dimColor}>{formatToken(token, 0, null, null, highlight).trimEnd()}</Text>
   }
 
+  if (frameStyle === 'full') {
+    // The closed form is structural by nature (the right wall must
+    // follow the content column and stay continuous across wrapped
+    // rows), so it rides the hybrid layout with the wall and bottom
+    // edge added - regardless of the typed/hybrid engine switch.
+    return (
+      <CodeBlockFrameFull
+        contentWidth={contentWidth}
+        label={label}
+        body={body}
+        subtle={subtle}
+        themeSubtle={theme.subtle}
+        dimColor={dimColor}
+      />
+    )
+  }
+
   if (codeFrameEngine() === 'hybrid') {
     return (
       <CodeBlockFrameHybrid
@@ -141,6 +163,77 @@ export function CodeBlockFrame({ token, highlight, dimColor = false, forceWidth 
   // Typed engine: one ink-text leaf whose paint carries the frame.
   return (
     <Text dimColor={dimColor} decoration={decoration}>{body}</Text>
+  )
+}
+
+/**
+ * The `full` style: the hybrid layout with the box closed - a right wall
+ * (a layout border, so it stays continuous across wrapped rows and
+ * follows the content column) and a bottom edge under the whole block.
+ * Header/rail/wall/bottom stay NoSelect; the body (and its padding
+ * column) stay selectable - the same copy contract as the light frame.
+ */
+function CodeBlockFrameFull({
+  contentWidth,
+  label,
+  body,
+  subtle,
+  themeSubtle,
+  dimColor,
+}: {
+  contentWidth: number
+  label: string
+  body: string
+  subtle: Color
+  themeSubtle: string
+  dimColor: boolean
+}): React.ReactNode {
+  return (
+    <Box flexDirection="column" width="100%">
+      <NoSelect
+        borderStyle="single"
+        borderTop
+        borderLeft
+        borderRight
+        borderBottom={false}
+        borderColor={subtle}
+        borderText={{
+          content: colorize(' ' + label + ' ', themeSubtle, 'foreground'),
+          position: 'top',
+          align: 'start',
+          offset: 1,
+        }}
+      />
+      <Box flexDirection="row">
+        <NoSelect
+          borderStyle="single"
+          borderLeft
+          borderTop={false}
+          borderRight={false}
+          borderBottom={false}
+          borderColor={subtle}
+        />
+        <Box paddingLeft={1} flexGrow={1}>
+          <Text dimColor={dimColor}>{body}</Text>
+        </Box>
+        <NoSelect
+          borderStyle="single"
+          borderRight
+          borderTop={false}
+          borderLeft={false}
+          borderBottom={false}
+          borderColor={subtle}
+        />
+      </Box>
+      <NoSelect
+        borderStyle="single"
+        borderLeft
+        borderRight
+        borderBottom
+        borderTop={false}
+        borderColor={subtle}
+      />
+    </Box>
   )
 }
 

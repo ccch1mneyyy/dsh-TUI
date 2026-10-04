@@ -9,7 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
-import { DEFAULT_COMPANION_SKIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_COMPANION_SKIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../components/splashFonts.js'
 import { editableConfig, type RuntimeConfig } from './compat/settings.js'
@@ -157,6 +157,13 @@ export interface Config {
    *  than the viewport or of an unsupported type keeps the fenced source.
    *  On by default; off always shows the source. */
   mermaidDiagrams?: boolean
+  /** Code-frame shape (settings `dsh-tui.codeFrameStyle`): `light`
+   *  (default) is the open rail frame — corner + language label on top,
+   *  a left rail with one padding column per row, no right wall or
+   *  bottom edge; `full` closes the box with a right wall (continuous
+   *  across wrapped rows) and a bottom edge. The narrow fallback (net
+   *  body width < 8) always stays the plain ANSI fence. */
+  codeFrameStyle?: CodeFrameStyle
   /** LaTeX math (settings `dsh-tui.mathRendering`): `$…$` / `\(…\)` inline
    *  and `$$…$$` / `\[…\]` blocks in replies. `auto` (default) uses the best
    *  available renderer — today Unicode text: Greek and operator symbols,
@@ -288,6 +295,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   expandEditor: Schema.boolean().default(true),
   smoothStreaming: Schema.boolean().default(true),
   mermaidDiagrams: Schema.boolean().default(true),
+  codeFrameStyle: Schema.union(['light', 'full']),
   mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),
   mathImageScale: Schema.union(['auto', 'large', 'xlarge']),
   mathImageBacking: Schema.union(['transparent', 'terminal']),
