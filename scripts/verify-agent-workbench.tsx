@@ -342,8 +342,27 @@ console.log('--- W3: workbench panel + sibling switching ---')
     }),
     async frame => {
       check('W3 窄屏（40 列）面板退场', await settled(() => frame.screen().includes('alpha unique marker one')) && !frame.screen().includes('workbench'))
+      check('W3 窄屏顶栏仍显示代理名', frame.lines().slice(0, 3).some(line => line.includes('Subagent: agent')), frame.lines().slice(0, 3).join('|'))
     },
     40,
+  )
+
+  // A long line wraps inside the 28-column screen instead of being laid out
+  // wider than the terminal and clipped at the edge.
+  const longPage = historyPage([
+    ev('assistant.message', { anchor: 'w1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'first second third fourth fifth sixth seventh eighth ninth LASTWORD' }] }),
+  ])
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, {
+      subagent: roster[0],
+      source: { kind: 'agents-dashboard' },
+      onExit: () => {},
+      loadTranscript: (async () => longPage) as never,
+    }),
+    async frame => {
+      check('W3 28 列长行完整折行（末词可见）', await settled(() => frame.screen().includes('LASTWORD')), frame.lines().slice(0, 10).join('|'))
+    },
+    28,
   )
 }
 
