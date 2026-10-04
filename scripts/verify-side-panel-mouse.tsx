@@ -5,14 +5,11 @@
  * panels that actually have a fullscreen form (capabilities.fullscreen).
  *
  * Locked behavior:
- *  a. boot: capsule ‹ Todo › on row 0, tab icons ≡ ▸ ◆, no ⤢ (todo has no
- *     fullscreen form);
- *  b. hover on the ▸ tab brightens it (bold), mouse-out restores it;
- *  c. click on ▸ switches the column to Jobs (capsule + active window) and
- *     the ⤢ button appears (jobs declares capabilities.fullscreen);
- *  d. click on ⤢ calls the host's onExpand with the ACTIVE panel id;
- *  e. click on the chat column hands the focus back to chat (hint copy
- *     swaps to the unfocused one).
+ *  a. the active title stays centered while inactive panels appear as dots;
+ *  b. dot hover reveals the panel title, and clicking its hit area selects it;
+ *  c. the edge arrows wrap through the panel order and ⤢ appears by capability;
+ *  d. ⤢ calls the host with the active panel id;
+ *  e. clicking the chat column returns focus to chat.
  *
  * Run: node --import tsx/esm scripts/verify-side-panel-mouse.tsx
  */
@@ -21,7 +18,7 @@ export {}
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, termTest] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { TooltipLayer }, termTest] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -30,6 +27,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { SidePanelLay
   import('../src/components/sidePanel/SidePanelColumn.js'),
   import('../src/components/sidePanel/useSidePanel.js'),
   import('../src/tuiDisplayPrefs.js'),
+  import('../src/components/Tooltip.js'),
   import('./lib/term-test.mjs'),
 ])
 const { render, AlternateScreen, Box, Text, useInput } = ui
@@ -152,7 +150,10 @@ applySidePanelOpen(true)
 
 const app = await render(
   <AlternateScreen>
-    <Harness />
+    <>
+      <Harness />
+      <TooltipLayer />
+    </>
   </AlternateScreen>,
   {
     stdout: stdout as unknown as NodeJS.WriteStream,
@@ -164,30 +165,30 @@ const app = await render(
 )
 
 try {
-  // ── a. boot ────────────────────────────────────────────────────────────
-  check('a boot: capsule shows Todo', await settled(() => has('‹ Todo ›'), { timeoutMs: 4000 }))
-  // 活动标签是胶囊（标题），非活动的才是单格图标。
-  check('a boot: inactive tabs collapse to their icons', has('▸') && has('◆'))
-  check('a boot: the active tab is not drawn as an icon', !has('≡'))
+  check('a boot: active title is centered on Todo', await settled(() => has('Todo'), { timeoutMs: 4000 }))
+  check('a boot: inactive panels use carousel dots', (lines()[0]?.match(/[○●]/g) ?? []).length === 2, lines()[0]?.trim())
   check('a boot: no ⤢ for a panel without a fullscreen form', !has('⤢'))
 
-  // ── b. hover ───────────────────────────────────────────────────────────
-  const jobsTab = findText('▸')
-  check('b hover: jobs tab located', jobsTab !== null, JSON.stringify(jobsTab))
-  if (jobsTab !== null) {
-    check('b hover: tab starts not bold', !boldAt(jobsTab.col, jobsTab.row))
-    motion(jobsTab.col, jobsTab.row)
-    check('b hover: hover brightens the tab', await settled(() => boldAt(jobsTab.col!, jobsTab.row!), { timeoutMs: 4000 }))
-    // Move far away inside the panel column to leave the tab.
-    motion(jobsTab.col + 4, jobsTab.row + 3)
-    check('b hover: mouse-out restores it', await settled(() => !boldAt(jobsTab.col!, jobsTab.row!), { timeoutMs: 4000 }))
+  const agentsDot = findText('○')
+  check('b hover: agents dot located', agentsDot !== null, JSON.stringify(agentsDot))
+  if (agentsDot !== null) {
+    check('b hover: dot starts dim', !boldAt(agentsDot.col, agentsDot.row))
+    motion(agentsDot.col, agentsDot.row)
+    check('b hover: dot brightens and reveals its title', await settled(() => boldAt(agentsDot.col, agentsDot.row) && has('Agents'), { timeoutMs: 4000 }))
+    motion(agentsDot.col + 5, agentsDot.row + 3)
+    check('b hover: tooltip disappears after leaving the dot', await settled(() => !has('Agents'), { timeoutMs: 4000 }))
   }
 
-  // ── c. click switches the active panel ─────────────────────────────────
-  if (jobsTab !== null) click(jobsTab.col, jobsTab.row)
-  check('c click: capsule switches to Jobs', await settled(() => has('‹ Jobs ›'), { timeoutMs: 4000 }))
-  check('c click: the tab we left collapses back to its icon', has('≡'))
-  check('c click: ⤢ appears for a fullscreen-capable panel', has('⤢'))
+  if (agentsDot !== null) click(agentsDot.col + 1, agentsDot.row)
+  check('c click: dot hit area selects Agents', await settled(() => has('Agents') && has('⤢'), { timeoutMs: 4000 }))
+  const nextArrow = findText('▶')
+  check('c arrows: right arrow located', nextArrow !== null)
+  if (nextArrow !== null) click(nextArrow.col, nextArrow.row)
+  check('c arrows: next wraps from Agents to Todo', await settled(() => has('Todo') && !has('⤢'), { timeoutMs: 4000 }))
+  const previousArrow = findText('◀')
+  check('c arrows: left arrow located', previousArrow !== null)
+  if (previousArrow !== null) click(previousArrow.col, previousArrow.row)
+  check('c arrows: previous wraps from Todo to Agents', await settled(() => has('Agents') && has('⤢'), { timeoutMs: 4000 }))
 
   // ── d. ⤢ hands the ACTIVE panel id to the host ─────────────────────────
   const expand = findText('⤢')
@@ -196,7 +197,7 @@ try {
     click(expand.col, expand.row)
     // 固定窗:onExpand 是宿主回调，屏幕本身没有可轮询的变化点
     await new Promise(resolve => setTimeout(resolve, 200))
-    check('d ⤢: host received the active panel id', expanded.length === 1 && expanded[0] === 'jobs', JSON.stringify(expanded))
+    check('d ⤢: host received the active panel id', expanded.length === 1 && expanded[0] === 'agents', JSON.stringify(expanded))
   }
 
   // ── e. clicking the chat column returns the focus ──────────────────────
@@ -209,18 +210,13 @@ try {
   await app.unmount()
 }
 
-// ── f. ⤢ on a folding bar (width-budget edge) ─────────────────────────────
-// 96 columns (the split floor is 93) with ALL seven builtins enabled: the
-// panel column is ~30 wide, so the inactive tabs MUST fold into +N while the
-// active capsule, the +N marker and ⤢ all stay on the SAME single bar row —
-// the two reserved cells cannot push the fold marker onto a second row.
+// ── f. seven dots and fullscreen control stay on one narrow bar ───────────
 {
   const NARROW = 96
   const NROWS = 14
   const term2 = new XTerm({ cols: NARROW, rows: NROWS, scrollback: 0, allowProposedApi: true })
   const lines2 = (): string[] => viewportLines(term2, NROWS)
-  // jobs first so the ACTIVE panel is fullscreen-capable (⤢ must draw); a
-  // fatter chat ratio squeezes the column until the inactive icons must fold.
+  // Jobs starts active so the fullscreen control is present beside seven dots.
   applySidePanelRatio(0.78)
   applySidePanelPanels('jobs,todo,info,trajectory,agents,workspace,companion')
   const app2 = await render(
@@ -236,10 +232,10 @@ try {
     },
   )
   try {
-    await settled(() => lines2().some(line => line.includes('‹ Jobs ›')), { timeoutMs: 4000 })
-    const barRow = lines2().find(line => line.includes('‹ Jobs ›')) ?? ''
-    check('f fold: inactive tabs folded into +N', /\+\d/.test(barRow), barRow.trim())
-    check('f fold: ⤢ still drawn on the same row', barRow.includes('⤢'), barRow.trim())
+    await settled(() => lines2().some(line => line.includes('Jobs')), { timeoutMs: 4000 })
+    const barRow = lines2()[0] ?? ''
+    check('f narrow: seven-panel bar keeps every dot and both arrows', (barRow.match(/[○●]/g) ?? []).length === 6 && barRow.includes('◀') && barRow.includes('▶'), barRow.trim())
+    check('f narrow: ⤢ stays on the same row', barRow.includes('⤢'), barRow.trim())
     check('f fold: the bar is exactly one row (row 1 is the rule)', (lines2()[1] ?? '').includes('─'), (lines2()[1] ?? '').trim())
   } finally {
     await app2.unmount()
