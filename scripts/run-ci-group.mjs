@@ -739,6 +739,11 @@ const GROUPS = {
 // langOverriddenBySettings）必须用同一个 ns —— 写死 'dsh-tui' 会让非默认挂载
 // 「写得进、读不回」，自动回顾永远关不掉。
     ["verify-settings-namespace", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-namespace.ts']],
+// sidePanel.panels 勾选式面板多选回归：checkbox 行 ↔ 逗号字符串双向映射、
+// 顺序保真（已有 id 保序、新勾追加尾、取消即移）、未认领 id 保留为占位行、
+// 活注册表（插件面板注册即出现/撤下退化占位）、至少一个守卫、高级原始
+// 编辑器（改序/手填 id，非法草稿拒绝）与 hint 收缩 + kind 保持 text。
+    ["verify-panel-settings-picker", ['node', '--import', 'tsx/esm', 'scripts/verify-panel-settings-picker.tsx']],
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-compaction-progress", ['node', '--import', 'tsx/esm', 'scripts/verify-compaction-progress.tsx']],
 // #1030：隔离 locale、持久化 /lang 与环境变量，不能靠 CI 的 zh 默认掩盖脚本依赖。
