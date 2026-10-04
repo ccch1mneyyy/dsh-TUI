@@ -6,6 +6,7 @@
  * the Agent View source stack and the compose-target resolution.
  */
 import type { AgentIdentity } from '../../adapter/ports/channel-view.js'
+import type { SubagentState } from '../../dsh-adapter/subagents.js'
 
 export type {
   AgentIdentity,
@@ -58,4 +59,57 @@ export function agentComposeTargetOfIdentity(agentId: string, targets: readonly 
   const labels = new Map<string, string>()
   for (const target of targets) labels.set(target.agentId, target.name ?? target.label ?? '')
   return agentComposeTargetOf(agentId, labels)
+}
+
+// ── workbench parent/sibling math (design agent-team-panels §3 P3) ──────────
+
+/** Who spawned an agent, as a PROVABLE fact. 'main' = the session's main
+ *  loop — proven by depth 1 alone (the SDK's spawn-depth definition).
+ *  'agent' = a named parent agent. 'unknown' = no fact: depth >= 2 without
+ *  a parent id (old metadata) must NEVER collapse into 'main' or a
+ *  depth-mate (agent-team §2: the tree only trusts parent facts, orphans
+ *  are not drawn). */
+export type AgentParentFact = { readonly kind: 'main' } | { readonly kind: 'agent'; readonly agentId: string } | { readonly kind: 'unknown' }
+
+/** The parent fact of one roster row from the roster's own fields. */
+export function agentParentFactOf(agent: Pick<SubagentState, 'parentAgentId' | 'depth'>): AgentParentFact {
+  if (agent.parentAgentId !== undefined) return { kind: 'agent', agentId: agent.parentAgentId }
+  if (agent.depth === 1) return { kind: 'main' }
+  return { kind: 'unknown' }
+}
+
+/** The parent fact of the VIEWED agent, letting the loaded transcript's
+ *  explicit parent override the roster's (the disk copy is the durable
+ *  truth; a still-loading or absent transcript keeps the roster fact).
+ *  transcriptParent follows SubagentTranscriptPage.parentAgentId: null =
+ *  depth-1-or-old-format, so it only proves 'main' together with depth 1. */
+export function viewedAgentParentFact(agent: SubagentState, transcriptParent: string | null | undefined): AgentParentFact {
+  if (transcriptParent !== undefined && transcriptParent !== null) return { kind: 'agent', agentId: transcriptParent }
+  if (transcriptParent === null && agent.depth === 1) return { kind: 'main' }
+  return agentParentFactOf(agent)
+}
+
+/** The switchable neighbourhood of the viewed agent (design §3 P3
+ *  workbench): its parent row and its siblings — roster agents PROVABLY
+ *  spawned by the same parent. Depth-equality alone never makes siblings;
+ *  an unknown parent yields no siblings (honest absence, not a guess). */
+export function agentNeighbourhood(
+  self: SubagentState,
+  roster: readonly SubagentState[],
+  transcriptParent: string | null | undefined,
+): { readonly parent: AgentParentFact; readonly siblings: readonly SubagentState[] } {
+  const parent = viewedAgentParentFact(self, transcriptParent)
+  const parentOf = (other: SubagentState): AgentParentFact => agentParentFactOf(other)
+  const sameParent = (other: SubagentState): boolean => {
+    if (parent.kind === 'main') return parentOf(other).kind === 'main'
+    if (parent.kind === 'agent') {
+      const otherParent = parentOf(other)
+      return otherParent.kind === 'agent' && otherParent.agentId === parent.agentId
+    }
+    return false
+  }
+  const siblings = parent.kind === 'unknown'
+    ? []
+    : roster.filter(other => other.agentId !== self.agentId && sameParent(other))
+  return { parent, siblings }
 }

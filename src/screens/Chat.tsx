@@ -1483,6 +1483,11 @@ export function Chat({
   const openAgentView = React.useCallback((agentId: string, source: AgentViewSource): void => {
     setAgentView({ agentId, source })
   }, [])
+  /** P3 工作台的 sibling/父切换：原地换被查看的代理，来源栈保持进入时
+   *  的样子（Esc 回原入口，不回上一个查看的代理）。 */
+  const switchViewedAgent = React.useCallback((agentId: string): void => {
+    setAgentView(prev => prev === null ? prev : { ...prev, agentId })
+  }, [])
   /** 转录卡入口的稳定句柄：MessageList 的 memo 行按 props 身份比较，内联
    *  箭头会让每个流式 tick 重渲染全部落定行（verify-tool-history-window）。 */
   const openSubagentViewFromCard = React.useCallback((agentId: string, rowId: number): void => {
@@ -6097,6 +6102,12 @@ export function Chat({
         {...(channel.subagentControl.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
         messages={viewMessages}
         {...(messageControl === undefined ? {} : { compose: { control: messageControl, target: viewTarget } })}
+        roster={channel.subagents}
+        // P3 workbench: switching a sibling/parent swaps the viewed agent
+        // IN PLACE — the source stack stays as entered, so Esc still returns
+        // to the original entry point (never to the previously viewed
+        // agent), and the Channel identity/parent queues are untouched.
+        onSwitchAgent={switchViewedAgent}
       />
     )
     return fullscreen ? viewScene : <AlternateScreen>{viewScene}</AlternateScreen>
@@ -6169,6 +6180,11 @@ export function Chat({
   // Subagent dashboard: displays all active and completed subagents.
   // Like the browser and settings, it replaces the conversation entirely.
   if (subagentDashboardOpen && launchpadGate()) {
+    // P3 peer roster: deliberately NOT passed to the dashboard — no backend
+    // serves a cross-session roster today (the CLI ListAgents peer/teammate
+    // sections need a host control plane the SDK does not expose). When one
+    // grows a stable seam, hand the rows here; the dashboard partitions them
+    // from the children and keeps them non-sending.
     const dashboard = (
       <SubagentDashboard
         subagents={[...channel.subagents]}

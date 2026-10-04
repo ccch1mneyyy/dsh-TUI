@@ -18,6 +18,56 @@ import { AgentMessageComposer } from '../components/AgentMessageComposer.js'
 import { ExitButton } from '../components/SubagentDashboard.js'
 import { t } from '../i18n.js'
 import type { AgentComposeTarget, AgentMessageControl, AgentMessageView, AgentViewSource } from '../components/messages/agentTeam.js'
+import { agentNeighbourhood, type AgentParentFact } from '../components/messages/agentTeam.js'
+
+/** The workbench side panel appears at all only on wide screens (design
+ *  agent-team-panels §3 P3: the 28/40-column contracts of the P1 view are
+ *  untouched — below the threshold the layout is byte-identical to P1). */
+const WORKBENCH_MIN_COLUMNS = 96
+const WORKBENCH_PANEL_COLUMNS = 30
+const WORKBENCH_TOOL_ROWS = 5
+const WORKBENCH_SIBLING_ROWS = 5
+
+const panelStatusGlyph = (status: SubagentState['status']): { glyph: string; color?: 'warning' | 'success' | 'error' | 'subtle' } =>
+  status === 'running' || status === 'starting' ? { glyph: '●', color: 'warning' }
+    : status === 'failed' || status === 'cancelled' ? { glyph: '×', color: 'error' }
+      : status === 'unknown' ? { glyph: '○', color: 'subtle' }
+        : { glyph: '✓', color: 'success' }
+
+const panelFormatDuration = (ms: number): string => {
+  const seconds = Math.floor(ms / 1000)
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${seconds % 60}s`
+}
+
+/** One switchable neighbourhood row (a sibling, or the parent when the
+ *  roster still holds it): click or panel-Enter swaps the viewed agent in
+ *  place — the source stack is NOT pushed (Esc still exits to the original
+ *  entry point, never to the previously viewed agent). */
+function AgentSwitchRow({ agent, selected, onSelect }: { readonly agent: SubagentState; readonly selected: boolean; onSelect(): void }): React.ReactNode {
+  const [hovered, setHovered] = React.useState(false)
+  const { glyph, color } = panelStatusGlyph(agent.status)
+  return (
+    <Box
+      onClick={onSelect}
+      onMouseEnter={(): void => setHovered(true)}
+      onMouseLeave={(): void => setHovered(false)}
+      backgroundColor={hovered && !selected ? 'userMessageBackgroundHover' : undefined}
+    >
+      <Text color={selected ? 'accent' : undefined} wrap="truncate-end">{` ${selected ? '▸' : ' '} ${glyph} `}</Text>
+      <Text color={selected ? 'accent' : color} wrap="truncate-end">{agent.description}</Text>
+    </Box>
+  )
+}
+
+/** The parent line: only facts (agent-team §2) — a named parent, the main
+ *  loop (depth-1 proof), or an honest unknown. A parent the roster lost is
+ *  named but not switchable. */
+function AgentParentRow({ fact, rosterIds }: { readonly fact: AgentParentFact; readonly rosterIds: ReadonlySet<string> }): React.ReactNode {
+  if (fact.kind === 'main') return <Text dimColor>{'  ' + t('agent-view-parent-main')}</Text>
+  if (fact.kind === 'unknown') return <Text dimColor>{'  ' + t('agent-view-parent-unknown')}</Text>
+  if (!rosterIds.has(fact.agentId)) return <Text dimColor wrap="truncate-end">{'  ' + t('agent-view-parent-not-in-roster', { id: fact.agentId.slice(0, 8) })}</Text>
+  return <Text dimColor wrap="truncate-end">{'  ' + t('agent-view-parent-agent', { id: fact.agentId.slice(0, 8) })}</Text>
+}
 
 const sourceLabel = (source: AgentViewSource): string =>
   source.kind === 'chat' ? t('agent-view-source-chat')
@@ -42,6 +92,14 @@ export interface AgentTranscriptSceneProps {
    *  absent = no send path → no composer rendered (capability absence is
    *  absence). */
   readonly compose?: { readonly control: AgentMessageControl; readonly target: AgentComposeTarget }
+  /** The session roster (workbench P3): drives the right-side panel's
+   *  metadata/tools/parent sections and the sibling switcher. Absent (or a
+   *  narrow terminal) = the P1 single-column layout, byte-identical. */
+  readonly roster?: readonly SubagentState[]
+  /** Switch the viewed agent IN PLACE (sibling/parent navigation): the
+   *  source stack is preserved — Esc still returns to the original entry
+   *  point. Absent = the panel renders read-only rows without switching. */
+  onSwitchAgent?: (agentId: string) => void
 }
 
 /**
@@ -54,10 +112,16 @@ export interface AgentTranscriptSceneProps {
  * one, with the live SubagentState tail merged in and one settlement
  * reload — no Channel rebuild, no attach/resume side effects.
  */
-export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript, messages = [], compose }: AgentTranscriptSceneProps): React.ReactNode {
+export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript, messages = [], compose, roster, onSwitchAgent }: AgentTranscriptSceneProps): React.ReactNode {
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows, columns } = useTerminalSize()
   const isRunning = subagent.status === 'running' || subagent.status === 'starting'
+
+  // ── workbench side panel (P3): only on wide terminals, and only with a
+  // roster. Everything below degrades to the P1 view when absent. ─────────
+  const panelEnabled = roster !== undefined && columns >= WORKBENCH_MIN_COLUMNS
+  const [panelFocused, setPanelFocused] = React.useState(false)
+  const [siblingCursor, setSiblingCursor] = React.useState(0)
 
   // ── history pages (same loader contract as the Detail transcript page) ──
   const [transcript, setTranscript] = React.useState<TranscriptState>({ status: 'idle' })
@@ -101,9 +165,70 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
     })
   }
 
+  // ── workbench neighbourhood (P3): the transcript's own parent fact wins
+  // once loaded (the durable disk copy); until then the roster's fields
+  // speak (agentNeighbourhood's resolution order, W1-verified). ───────────
+  const transcriptParent = transcript.status === 'ready' ? transcript.parentAgentId : undefined
+  const neighbourhood = React.useMemo(
+    () => roster === undefined ? { parent: { kind: 'unknown' } as const, siblings: [] as readonly SubagentState[] } : agentNeighbourhood(subagent, roster, transcriptParent),
+    [roster, subagent, transcriptParent],
+  )
+  const rosterIds = React.useMemo(() => new Set((roster ?? []).map(row => row.agentId)), [roster])
+  const parentFact = neighbourhood.parent
+  const parentRow = parentFact.kind === 'agent'
+    ? (roster ?? []).find(row => row.agentId === parentFact.agentId)
+    : undefined
+  // Switch targets in panel order: the parent (when still in the roster),
+  // then the siblings — the keyboard cursor and clicks share this list.
+  const switchTargets = React.useMemo(() => {
+    const targets: SubagentState[] = []
+    if (parentRow !== undefined) targets.push(parentRow)
+    targets.push(...neighbourhood.siblings.slice(0, WORKBENCH_SIBLING_ROWS))
+    return targets
+  }, [neighbourhood, parentRow])
+  const switchTo = (agentId: string): void => { onSwitchAgent?.(agentId) }
+  // A switch re-targets the view: the transcript effect reloads per
+  // agentId, and the sibling cursor + scroll origin reset so nothing from
+  // the previously viewed agent lingers above the fold.
+  React.useEffect(() => {
+    setSiblingCursor(0)
+    scrollRef.current?.scrollTo(0)
+  }, [agentId])
+
   // ── keyboard: the scene owns the whole screen while open ────────────────
   const [composerFocused, setComposerFocused] = React.useState(true)
   useInput((input, key, event) => {
+    // The workbench panel layer: while focused it owns every key — the
+    // arrows walk the switch targets, Enter switches in place, Esc/Tab hand
+    // focus back (Esc here deliberately does NOT exit the scene: the panel
+    // is one focus layer inside it, §6's Esc ladder gets its exit only when
+    // no inner layer holds focus).
+    if (panelFocused && panelEnabled) {
+      event.stopImmediatePropagation()
+      if (key.escape || key.tab) {
+        setPanelFocused(false)
+        setComposerFocused(compose !== undefined)
+        return
+      }
+      if (key.upArrow || key.downArrow) {
+        setSiblingCursor(cursor => Math.max(0, Math.min(switchTargets.length - 1, cursor + (key.downArrow ? 1 : -1))))
+        return
+      }
+      if (input === '' && key.return) {
+        const target = switchTargets[siblingCursor]
+        if (target !== undefined) switchTo(target.agentId)
+        return
+      }
+      return
+    }
+    // Tab enters the workbench panel when it exists (the composer takes no
+    // Tab — its editor has no tab stops), P1 layouts never see this branch.
+    if (key.tab && panelEnabled) {
+      event.stopImmediatePropagation()
+      setPanelFocused(true)
+      setComposerFocused(false)
+      return
+    }
     // The composer editor layer owns plain typing while focused (§6.5: the
     // scene still takes the vertical arrows — transcript scrolling never
     // dies behind a focused editor).
@@ -181,8 +306,12 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
       </Box>
       <Text dimColor wrap="truncate-end">{`${t('agent-view-title')} · ${sourceLabel(source)} · ${t('agent-view-back')}: Esc${headerWidth < 44 ? '' : ` · ↑/↓ ${t('subagent-hint-scroll')} · o ${t('subagent-transcript-load-older', { count: TRANSCRIPT_OLDER_CHUNK })}`}`}</Text>
 
-      {/* Body */}
-      <Box flexDirection="column" paddingX={1} maxHeight={Math.max(10, rows - (compose !== undefined ? 12 : 6))}>
+      {/* Body: the transcript column, plus the workbench panel on wide
+       * terminals (P3). The panel is a LEFT-bordered rail — it never
+       * reflows the transcript's own wrapping, and below the width
+       * threshold this whole row collapses to the P1 single column. */}
+      <Box flexDirection="row" paddingX={1} maxHeight={Math.max(10, rows - (compose !== undefined ? 12 : 6))}>
+        <Box flexDirection="column" flexGrow={1} minWidth={44}>
         <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
           {loadTranscript === undefined ? (
             <Box flexDirection="column">
@@ -286,12 +415,30 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
             </Box>
           )}
         </ScrollBox>
+        </Box>
+        {panelEnabled && roster !== undefined && (
+          <WorkbenchPanel
+            subagent={subagent}
+            parent={neighbourhood.parent}
+            parentRow={parentRow}
+            rosterIds={rosterIds}
+            siblings={neighbourhood.siblings}
+            switchTargets={switchTargets}
+            cursor={siblingCursor}
+            focused={panelFocused}
+            onSwitch={switchTo}
+          />
+        )}
       </Box>
 
-      {/* Composer: capability-driven; the scene yields plain typing to it. */}
+      {/* Composer: capability-driven; the scene yields plain typing to it.
+       *  Keyed by the target agent: a sibling switch remounts the editor —
+       *  the previous target's draft NEVER travels to the new target (the
+       *  no-mixing rule of the P3 workbench). */}
       {compose !== undefined && (
         <Box flexDirection="column" marginTop={1}>
           <AgentMessageComposer
+            key={compose.target.agentId}
             target={compose.target}
             control={compose.control}
             messages={messages}
@@ -300,6 +447,103 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
           />
         </Box>
       )}
+    </Box>
+  )
+}
+
+/** One label/value metadata line of the workbench panel. */
+function PanelMetaRow({ label, value }: { readonly label: string; readonly value: string | undefined }): React.ReactNode {
+  if (value === undefined || value === '') return null
+  return (
+    <Box>
+      <Box flexShrink={0} width={9}><Text dimColor>{label}</Text></Box>
+      <Text wrap="truncate-end">{value}</Text>
+    </Box>
+  )
+}
+
+/**
+ * WorkbenchPanel - the right rail of the full workbench (design
+ * agent-team-panels §3 P3): metadata, the tool records the roster kept
+ * (with the backend's own report when it stated one), and the parent /
+ * sibling neighbourhood. Switching happens IN PLACE through the caller's
+ * onSwitch - the panel never mutates the roster, the Channel, or the
+ * source stack, and facts that are absent render as absent (an unknown
+ * parent stays unknown; no tree is inferred from depth).
+ */
+function WorkbenchPanel({ subagent, parent, parentRow, rosterIds, siblings, switchTargets, cursor, focused, onSwitch }: {
+  readonly subagent: SubagentState
+  readonly parent: AgentParentFact
+  readonly parentRow: SubagentState | undefined
+  readonly rosterIds: ReadonlySet<string>
+  readonly siblings: readonly SubagentState[]
+  readonly switchTargets: readonly SubagentState[]
+  readonly cursor: number
+  readonly focused: boolean
+  onSwitch(agentId: string): void
+}): React.ReactNode {
+  const running = subagent.status === 'running' || subagent.status === 'starting'
+  const elapsed = running
+    ? Date.now() - subagent.startedAt
+    : subagent.completedAt !== undefined ? subagent.completedAt - subagent.startedAt : undefined
+  const shownDuration = subagent.reportedDurationMs ?? elapsed
+  const toolsCount = subagent.reportedToolUses ?? subagent.toolCalls.length
+  const keptTools = subagent.toolCalls.slice(-WORKBENCH_TOOL_ROWS)
+  const hiddenTools = Math.max(0, subagent.toolCalls.length - keptTools.length)
+  const shownSiblings = siblings.slice(0, WORKBENCH_SIBLING_ROWS)
+  const hiddenSiblings = Math.max(0, siblings.length - shownSiblings.length)
+  // The cursor indexes switchTargets (the parent first when it is still in
+  // the roster, then the siblings); the rows below render in that same
+  // order, so the marker lands on what Enter will switch to.
+  const cursorOf = (agentId: string): boolean => focused && switchTargets[cursor]?.agentId === agentId
+  return (
+    <Box
+      flexDirection="column"
+      width={WORKBENCH_PANEL_COLUMNS}
+      paddingLeft={1}
+      borderStyle="single"
+      borderLeft
+      borderRight={false}
+      borderTop={false}
+      borderBottom={false}
+      borderColor="inactive"
+    >
+      <Text bold color={focused ? 'accent' : undefined}>{t('agent-view-panel-title')}</Text>
+      <Text dimColor>{' ' + t('agent-view-panel-metadata') + ' ─────'}</Text>
+      <PanelMetaRow label={t('agent-view-field-status')} value={subagent.status} />
+      <PanelMetaRow label={t('agent-view-field-mode')} value={subagent.mode} />
+      <PanelMetaRow label={t('agent-view-field-model')} value={subagent.model ?? subagent.provider} />
+      <PanelMetaRow label={t('agent-view-field-tokens')} value={subagent.tokens === undefined ? undefined : String(subagent.tokens.total ?? ((subagent.tokens.input ?? 0) + (subagent.tokens.output ?? 0)))} />
+      <PanelMetaRow label={t('agent-view-field-duration')} value={shownDuration === undefined ? undefined : panelFormatDuration(shownDuration)} />
+      <PanelMetaRow label={t('agent-view-field-run')} value={subagent.runId === undefined ? undefined : subagent.runId.slice(0, 8)} />
+      <PanelMetaRow label={t('agent-view-field-session')} value={subagent.sessionId === undefined ? undefined : subagent.sessionId.slice(0, 8)} />
+      <PanelMetaRow label={t('agent-view-field-depth')} value={subagent.depth === undefined ? undefined : String(subagent.depth)} />
+      <Text dimColor>{' ' + t('agent-view-panel-tools') + ' ────────'}</Text>
+      {subagent.toolCalls.length === 0 && subagent.reportedToolUses === undefined && (
+        <Text dimColor>{'  ' + t('agent-view-tools-none')}</Text>
+      )}
+      {subagent.reportedToolUses !== undefined && subagent.reportedToolUses !== subagent.toolCalls.length && (
+        <Text dimColor>{'  ' + t('agent-view-tools-reported', { reported: toolsCount, kept: subagent.toolCalls.length })}</Text>
+      )}
+      {keptTools.map(tool => (
+        <Box key={tool.id ?? tool.name + tool.startedAt}>
+          <Box flexShrink={0}><Text color={tool.status === 'failed' ? 'error' : tool.status === 'running' ? 'warning' : 'success'}>{tool.status === 'failed' ? '× ' : tool.status === 'running' ? '● ' : '✓ '}</Text></Box>
+          <Text wrap="truncate-end" dimColor={tool.status === 'completed'}>{tool.name}</Text>
+        </Box>
+      ))}
+      {hiddenTools > 0 && <Text dimColor>{'  ' + t('agent-view-tools-more', { count: hiddenTools })}</Text>}
+      <Text dimColor>{' ' + t('agent-view-parent-context') + ' ──────'}</Text>
+      {parentRow !== undefined
+        ? <AgentSwitchRow agent={parentRow} selected={cursorOf(parentRow.agentId)} onSelect={(): void => onSwitch(parentRow.agentId)} />
+        : <AgentParentRow fact={parent} rosterIds={rosterIds} />}
+      {shownSiblings.map(agent => (
+        <AgentSwitchRow key={agent.agentId} agent={agent} selected={cursorOf(agent.agentId)} onSelect={(): void => onSwitch(agent.agentId)} />
+      ))}
+      {hiddenSiblings > 0 && <Text dimColor>{'  ' + t('agent-view-siblings-more', { count: hiddenSiblings })}</Text>}
+      {siblings.length === 0 && <Text dimColor>{'  ' + t('agent-view-siblings-none')}</Text>}
+      <Box marginTop={1}>
+        <Text dimColor>{focused ? t('agent-view-select-sibling-focused') : t('agent-view-select-sibling')}</Text>
+      </Box>
     </Box>
   )
 }

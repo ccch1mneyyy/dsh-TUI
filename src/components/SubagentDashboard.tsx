@@ -9,10 +9,17 @@ import { isPlainReturnInput } from '../utils/modifiers.js'
 import { usePanelInput } from './sidePanel/usePanelInput.js'
 import type { SidePanelKeyFlags } from './sidePanel/types.js'
 import { AgentMessagesSummary } from './messages/AgentMessageFlow.js'
-import type { AgentMessageView } from './messages/agentTeam.js'
+import type { AgentMessageView, AgentIdentity } from './messages/agentTeam.js'
 
 export interface SubagentDashboardProps {
   subagents: readonly SubagentState[]
+  /** Cross-session addressable peers (the CLI ListAgents peer/teammate
+   *  sections, design agent-team-panels P3). undefined = this backend
+   *  serves no peer roster — an honest one-line unsupported note renders;
+   *  a list = served (their own section, never mixed into the children).
+   *  NO backend wires a roster today: the SDK's listSubagents only reads
+   *  this session's disk transcript ids, which are CHILDREN, not peers. */
+  readonly peers?: readonly AgentIdentity[]
   /** 整屏/浮层形态的退出通道（Esc / ✕ 按钮）。panel 形态不传：面板不自己
    *  关侧栏——Esc 让给宿主（焦点回聊天，见 usePanelInput 契约）。 */
   onClose?: () => void
@@ -64,6 +71,7 @@ export function ExitButton({ onClick }: { onClick: () => void }): React.ReactNod
  */
 export function SubagentDashboard({
   subagents,
+  peers,
   onClose,
   onSelect,
   onOpenView,
@@ -76,6 +84,17 @@ export function SubagentDashboard({
   const [focusIndex, setFocusIndex] = React.useState(0)
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows, columns } = useTerminalSize()
+
+  // ── P3 roster partition: only PROVEN nesting moves a row — a parent
+  // agent fact or depth >= 2. Rows with no facts at all (a backend that
+  // reports neither) stay unmarked and in place: the ↳ mark claims
+  // "nested spawn", which nothing may infer (agent-team §2). A roster
+  // with no proven nesting keeps the exact P1 flat layout. ───────────────
+  const isNestedSpawn = (row: SubagentState): boolean =>
+    row.parentAgentId !== undefined || (row.depth ?? 1) >= 2
+  const nestedRows = subagents.filter(isNestedSpawn)
+  const flatRows = subagents.filter(row => !isNestedSpawn(row))
+  const ordered = nestedRows.length === 0 ? subagents : [...flatRows, ...nestedRows]
 
   useInput((input, key, event) => {
     if (panelMode) return
@@ -94,14 +113,14 @@ export function SubagentDashboard({
     
     if (key.downArrow) {
       event.stopImmediatePropagation()
-      setFocusIndex(i => Math.min(subagents.length - 1, i + 1))
+      setFocusIndex(i => Math.min(ordered.length - 1, i + 1))
       scrollRef.current?.scrollBy(3)
       return
     }
-    
+
     if (isPlainReturnInput(input, key) && onSelect) {
       event.stopImmediatePropagation()
-      const selected = subagents[focusIndex]
+      const selected = ordered[focusIndex]
       if (selected) onSelect(selected.agentId)
       return
     }
@@ -109,7 +128,7 @@ export function SubagentDashboard({
     // v = 主屏查看（专用动作，与 Enter=详情并立；design §4.1）。
     if (input.toLowerCase() === 'v' && onOpenView) {
       event.stopImmediatePropagation()
-      const selected = subagents[focusIndex]
+      const selected = ordered[focusIndex]
       if (selected) onOpenView(selected.agentId)
       return
     }
@@ -131,19 +150,19 @@ export function SubagentDashboard({
     }
 
     if (key.downArrow === true) {
-      setFocusIndex(i => Math.min(subagents.length - 1, i + 1))
+      setFocusIndex(i => Math.min(ordered.length - 1, i + 1))
       scrollRef.current?.scrollBy(3)
       return true
     }
 
     if (isPanelPlainReturn(input, key)) {
-      const selected = subagents[focusIndex]
+      const selected = ordered[focusIndex]
       if (selected !== undefined) onSelect?.(selected.agentId)
       return true
     }
 
     if (input.toLowerCase() === 'v' && onOpenView !== undefined) {
-      const selected = subagents[focusIndex]
+      const selected = ordered[focusIndex]
       if (selected !== undefined) onOpenView(selected.agentId)
       return true
     }
@@ -155,6 +174,7 @@ export function SubagentDashboard({
   const running = subagents.filter(s => s.status === 'running').length
   const completed = subagents.filter(s => s.status === 'completed').length
   const failed = subagents.filter(s => s.status === 'failed').length
+  const nested = nestedRows.length
 
   // 外层留白：整屏形态保持原样；侧栏形态只留左右各 1 格（PanelBar 与宿主
   // 提示行已经承担其余 chrome）。卡片之间的分隔线按 `columns` 算，而
@@ -185,6 +205,12 @@ export function SubagentDashboard({
             <Text dimColor> {t('subagent-count-failed')}</Text>
           </Text>
         )}
+        {nested > 0 && (
+          <Text>
+            <Text color="accent">{nested}</Text>
+            <Text dimColor> {t('subagent-count-nested')}</Text>
+          </Text>
+        )}
         <Box flexGrow={1} />
         {/* 可点击退出（Esc 的鼠标等价），hover 提亮。侧栏形态没有退出目标：
             ✕ 关不掉右栏（那是宿主的事），渲染出来就是死控件。 */}
@@ -203,8 +229,11 @@ export function SubagentDashboard({
               <Box marginTop={1}><Text dimColor>{t('subagent-empty-hint')}</Text></Box>
             </Box>
           ) : (
-            subagents.map((subagent, index) => (
+            ordered.map((subagent, index) => (
               <Box key={subagent.agentId} flexDirection="column">
+                {nested > 0 && isNestedSpawn(subagent) && (
+                  <Text dimColor>{'  ↳ ' + t('subagent-nested-mark')}</Text>
+                )}
                 <SubagentCard
                   subagent={subagent}
                   focused={index === focusIndex}
@@ -224,13 +253,52 @@ export function SubagentDashboard({
                     <Text color="subtle">{`⤢ ${t('agent-view-open-action')}`}</Text>
                   </Box>
                 )}
-                {index < subagents.length - 1 && (
+                {index < ordered.length - 1 && (
                   <Text dimColor>{'─'.repeat(Math.max(20, Math.min(72, columns - 6)))}</Text>
                 )}
               </Box>
             ))
           )}
         </ScrollBox>
+      </Box>
+
+      {/* P3 peer roster: its own partition, NEVER mixed with the children
+       * above. No backend serves a peer roster today (the CLI ListAgents
+       * peer/teammate sections need a host control plane the SDK does not
+       * expose; listSubagents disk ids are children, not peers) — so the
+       * honest note renders instead of an invented list, and served peers
+       * would carry no send affordance either: cross-session targets are
+       * not addressable through the dual channels (parent relay / direct
+       * child prompt) this UI ships. */}
+      {/* The side-panel variant is space-critical (28–40 columns): the
+       *  partition statement collapses to ONE truncated line there, keeping
+       *  the cards above the fold; the fullscreen form spells it out. */}
+      <Box flexDirection="column">
+        {panelMode ? (
+          <Text dimColor wrap="truncate-end">
+            {peers === undefined
+              ? t('agents-peers-unsupported-panel')
+              : t('agents-peers-title') + ' · ' + peers.length}
+          </Text>
+        ) : (
+          <>
+            <Text dimColor>{t('agents-peers-title')}</Text>
+            {peers === undefined ? (
+              <Text dimColor wrap="truncate-end">{'  ' + t('agents-peers-unsupported')}</Text>
+            ) : peers.length === 0 ? (
+              <Text dimColor>{'  ' + t('agents-peers-empty')}</Text>
+            ) : (
+              <Box flexDirection="column">
+                {peers.map(peer => (
+                  <Text key={peer.agentId} dimColor wrap="truncate-end">
+                    {'  · ' + (peer.name ?? peer.label ?? peer.agentId.slice(0, 8)) + ' · ' + peer.agentId.slice(0, 8)}
+                  </Text>
+                ))}
+                <Text dimColor wrap="truncate-end">{'  ' + t('agents-peers-note')}</Text>
+              </Box>
+            )}
+          </>
+        )}
       </Box>
 
       <Divider color="subtle" title="" />

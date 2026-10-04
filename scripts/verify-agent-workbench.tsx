@@ -1,0 +1,424 @@
+#!/usr/bin/env node
+"use strict";
+/**
+ * verify-agent-workbench — agent-team P3（design agent-team-panels 路线图
+ * P3 行：完整工作台 / peer roster / 跨会话如实降级）的回归。
+ *
+ *   W1  父关系/兄弟纯函数（agentTeam.ts）：parentAgentId 是唯一父事实、
+ *       depth 1 证明主循环、depth>=2 无父=unknown（不造假树）；transcript
+ *       的显式父覆盖 roster 事实；兄弟=同父可证，深度相同不构成兄弟。
+ *   W2  领域事实链：Claude replay 的 subagent.start 带真实 parentAgentId
+ *       （嵌套）/depth 1（主链）；生产投影折叠 parentAgentId 且无父刷新
+ *       不清已有父事实。
+ *   W3  工作台 UI（AgentTranscriptScene）：宽屏右侧 metadata/工具/父关系
+ *       面板；sibling 原地切换不混消息（换代理即换转录源，旧代理行不
+ *       残留、expandedLeaf 重置、消息按代理过滤）；来源栈不被 sibling
+ *       切换推入；窄屏（40 列）面板整体退场。
+ *   W4  peer roster（SubagentDashboard）：children 与 peers 分区呈现；
+ *       无 peer 名册能力时如实降级一行（不伪装空名册）；served peers
+ *       不混入 children、无发送入口（跨会话交互无上游支持面）。
+ *
+ * 运行：node --import tsx/esm scripts/verify-agent-workbench.tsx
+ */
+process.env.DSH_TUI_LANG = 'en'
+process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_THEME = 'dark'
+process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES = '1'
+
+const { mkdtempSync } = await import('node:fs')
+const { tmpdir } = await import('node:os')
+const { join } = await import('node:path')
+const isolatedHome = mkdtempSync(join(tmpdir(), 'dshtui-agent-workbench-'))
+process.env.HOME = isolatedHome
+process.env.USERPROFILE = isolatedHome
+
+let failed = 0
+let passed = 0
+function check(name: string, ok: boolean, extra = ''): void {
+  passed += ok ? 1 : 0
+  if (!ok) failed += 1
+  console.log((ok ? 'PASS' : 'FAIL') + '  ' + name + (extra ? '  (' + extra + ')' : ''))
+}
+
+// ── W1: parent/sibling pure math ───────────────────────────────────────────
+console.log('--- W1: parent fact + neighbourhood math ---')
+{
+  const { agentParentFactOf, viewedAgentParentFact, agentNeighbourhood } = await import('../src/components/messages/agentTeam.js')
+  const row = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ agentId: 'a', depth: undefined, ...over })
+  check('W1 parentAgentId 是父事实', agentParentFactOf(row({ parentAgentId: 'p1' }) as never).kind === 'agent' && (agentParentFactOf(row({ parentAgentId: 'p1' }) as never) as { agentId: string }).agentId === 'p1')
+  check('W1 depth 1 证明主循环', agentParentFactOf(row({ depth: 1 }) as never).kind === 'main')
+  check('W1 depth>=2 无父 = unknown（不画孤儿）', agentParentFactOf(row({ depth: 2 }) as never).kind === 'unknown')
+  check('W1 无 depth 无父 = unknown', agentParentFactOf(row() as never).kind === 'unknown')
+  const self = row({ agentId: 'self', depth: 2, parentAgentId: 'p9' })
+  check('W1 transcript 显式父覆盖 roster', viewedAgentParentFact(self as never, 'p-other').kind === 'agent' && (viewedAgentParentFact(self as never, 'p-other') as { agentId: string }).agentId === 'p-other')
+  check('W1 transcript null + depth1 = 主循环', viewedAgentParentFact(row({ agentId: 's', depth: 1 }) as never, null).kind === 'main')
+  check('W1 transcript null + depth2 = 未知（旧格式）', viewedAgentParentFact(row({ agentId: 's', depth: 2 }) as never, null).kind === 'unknown')
+  check('W1 transcript 未载入保持 roster 事实', (viewedAgentParentFact(self as never, undefined) as { agentId: string }).agentId === 'p9')
+
+  const mk = (id: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({ agentId: id, description: 'agent ' + id, status: 'completed', startedAt: 0, output: [], outputEvents: [], toolCalls: [], ...over })
+  const roster = [
+    mk('main-a', { depth: 1 }),
+    mk('main-b', { depth: 1 }),
+    mk('nest-1', { depth: 2, parentAgentId: 'main-a' }),
+    mk('nest-2', { depth: 2, parentAgentId: 'main-a' }),
+    mk('nest-3', { depth: 2, parentAgentId: 'main-b' }),
+    mk('orphan', { depth: 2 }),
+    mk('nodepth', {}),
+  ]
+  const hoodOfMain = agentNeighbourhood(roster[0] as never, roster as never, null)
+  check('W1 主循环兄弟 = 其它 depth-1', hoodOfMain.parent.kind === 'main' && hoodOfMain.siblings.map(s => s.agentId).join(',') === 'main-b', JSON.stringify(hoodOfMain.siblings.map(s => s.agentId)))
+  const hoodOfNest1 = agentNeighbourhood(roster[2] as never, roster as never, 'main-a')
+  check('W1 同父嵌套互为兄弟（transcript 父事实）', hoodOfNest1.siblings.map(s => s.agentId).join(',') === 'nest-2', JSON.stringify(hoodOfNest1.siblings.map(s => s.agentId)))
+  const hoodOfNest3 = agentNeighbourhood(roster[4] as never, roster as never, undefined)
+  check('W1 不同父不构成兄弟（同深度也不行）', hoodOfNest3.siblings.length === 0, JSON.stringify(hoodOfNest3.siblings.map(s => s.agentId)))
+  const hoodOfOrphan = agentNeighbourhood(roster[5] as never, roster as never, null)
+  check('W1 旧格式孤儿无兄弟（诚实缺席）', hoodOfOrphan.parent.kind === 'unknown' && hoodOfOrphan.siblings.length === 0)
+}
+
+// ── W2: the facts through replay + the production fold ────────────────────
+console.log('--- W2: replay parent facts + projection fold ---')
+{
+  const { replayClaudeTranscript } = await import('../src/backends/claude/replay.js')
+  const { createProjectorHarness } = await import('./lib/projector-harness.js')
+  const at = (s: number): string => new Date(1_700_000_000_000 + s * 1000).toISOString()
+  const chain = [
+    { type: 'user', uuid: 'u1', message: { role: 'user', content: 'delegate two levels' }, timestamp: at(0) },
+    { type: 'assistant', uuid: 'a1', message: { id: 'm1', content: [{ type: 'tool_use', id: 'c-1', name: 'Agent', input: { description: 'outer dig', prompt: 'x' } }] }, timestamp: at(1) },
+  ]
+  const outer = [
+    { type: 'user', message: { role: 'user', content: 'outer prompt' }, timestamp: at(2), parent_agent_id: null },
+    { type: 'assistant', message: { id: 'm2', content: [{ type: 'tool_use', id: 'c-2', name: 'Agent', input: { description: 'inner dig', prompt: 'y' } }] }, timestamp: at(3), parent_agent_id: null },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c-2', content: 'agentId: agent-b' }] }, timestamp: at(4), parent_agent_id: null },
+  ]
+  const inner = [
+    { type: 'user', message: { role: 'user', content: 'inner prompt' }, timestamp: at(5), parent_agent_id: 'agent-a' },
+    { type: 'assistant', message: { id: 'm3', content: [{ type: 'text', text: 'inner body works' }] }, timestamp: at(6), parent_agent_id: 'agent-a' },
+  ]
+  const replay = replayClaudeTranscript(chain as never, {
+    cwd: '/fixture/project',
+    subagents: new Map([
+      ['c-1', { agentId: 'agent-a', messages: outer }],
+      ['c-2', { agentId: 'agent-b', messages: inner, parentAgentId: 'agent-a' }],
+    ]) as never,
+  })
+  const starts = new Map(replay.events.filter(e => e.type === 'subagent.start').map(e => [(e as { agentId: string }).agentId, e as { depth?: number; parentAgentId?: string }]))
+  check('W2 replay：主链子代理 depth 1 且无伪父', starts.get('agent-a')?.depth === 1 && starts.get('agent-a')?.parentAgentId === undefined, JSON.stringify(starts.get('agent-a')))
+  check('W2 replay：嵌套子代理带真实 parentAgentId + depth 2', starts.get('agent-b')?.parentAgentId === 'agent-a' && starts.get('agent-b')?.depth === 2, JSON.stringify(starts.get('agent-b')))
+
+  const harness = createProjectorHarness({ activity: true })
+  harness.apply([{ type: 'subagent.start', agentId: 'fx-1', description: 'has parent', background: false, depth: 2, parentAgentId: 'fx-0', time: 1 } as never])
+  const folded = (harness.state as unknown as { subagents: Array<{ agentId: string; parentAgentId?: string }> }).subagents.find(s => s.agentId === 'fx-1')
+  check('W2 投影折叠 parentAgentId 进名册', folded?.parentAgentId === 'fx-0', JSON.stringify(folded))
+  harness.apply([{ type: 'subagent.start', agentId: 'fx-1', description: 'refresh without parent', background: false, time: 2 } as never])
+  const refreshed = (harness.state as unknown as { subagents: Array<{ agentId: string; parentAgentId?: string }> }).subagents.find(s => s.agentId === 'fx-1')
+  check('W2 无父刷新不清已有父事实', refreshed?.parentAgentId === 'fx-0', JSON.stringify(refreshed))
+}
+
+// ── terminal harness (the same shape verify-agent-view-ui uses) ───────────
+const NOW = Date.now()
+const [{ PassThrough, Writable }, { default: React }, { Terminal: XTerm }, uiMod, sceneMod] = await Promise.all([
+  import('node:stream'),
+  import('react'),
+  import('@xterm/headless'),
+  import('../src/ui.js'),
+  import('../src/screens/AgentTranscriptScene.js'),
+])
+const { render, AlternateScreen, useInput } = uiMod as unknown as {
+  render: typeof import('../src/ui.js').render
+  AlternateScreen: React.ComponentType<{ children?: React.ReactNode }>
+  useInput: (handler: (input: string, key: unknown) => void, options?: { isActive?: boolean }) => void
+}
+const { AgentTranscriptScene } = sceneMod as unknown as { AgentTranscriptScene: React.ComponentType<Record<string, unknown>> }
+const termTest = await import('./lib/term-test.mjs')
+const { settled, sleep, viewportLines, findText } = termTest as unknown as {
+  settled(pred: () => boolean, opts?: { timeoutMs?: number }): Promise<boolean>
+  sleep: (ms: number) => Promise<void>
+  viewportLines(term: InstanceType<typeof XTerm>, rows?: number): string[]
+  findText(term: InstanceType<typeof XTerm>, needle: string): { col: number; row: number } | null
+}
+const { setLang } = await import('../src/i18n.js')
+setLang('en')
+
+const COLS = 100
+const ROWS = 30
+
+class FakeStdout extends Writable {
+  columns: number
+  rows = ROWS
+  isTTY = true
+  constructor(private term: InstanceType<typeof XTerm>, cols = COLS) { super(); this.columns = cols }
+  _write(chunk: unknown, _e: unknown, cb: () => void): void { this.term.write(String(chunk), cb) }
+}
+class Input extends PassThrough {
+  isTTY = true
+  setRawMode(): this { return this }
+  ref(): this { return this }
+  unref(): this { return this }
+}
+
+/** 输入链路保持器（同 verify-jobs-transcript-group 的教训）：没有组件开
+ *  raw mode，注入的键鼠根本进不了管线。 */
+function RawMode(): null {
+  useInput((): void => {}, { isActive: true })
+  return null
+}
+
+interface Frame {
+  screen(): string
+  lines(): string[]
+  rerender(node: React.ReactNode): void
+  stdin: Input
+  term: InstanceType<typeof XTerm>
+}
+async function withTerminal(make: () => React.ReactNode, run: (frame: Frame) => Promise<void>, cols = COLS): Promise<void> {
+  const term = new XTerm({ cols, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(term, cols) as unknown as NodeJS.WriteStream
+  const stdin = new Input()
+  const instance = await render(React.createElement(AlternateScreen, null, React.createElement(RawMode, null), make()), {
+    stdout, stdin: stdin as unknown as NodeJS.ReadStream, exitOnCtrlC: false, patchConsole: false,
+  })
+  const lines = (): string[] => viewportLines(term, ROWS)
+  try {
+    await run({ screen: () => lines().join('\n'), lines, rerender: node => { instance.rerender(React.createElement(AlternateScreen, null, React.createElement(RawMode, null), node)) }, stdin, term })
+  } finally {
+    await instance.unmount()
+    term.dispose()
+  }
+}
+
+async function click(frame: Frame, needle: string): Promise<boolean> {
+  const hit = findText(frame.term, needle)
+  if (hit === null) return false
+  frame.stdin.write('\x1b[<0;' + (hit.col + 1) + ';' + (hit.row + 1) + 'M')
+  await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
+  frame.stdin.write('\x1b[<0;' + (hit.col + 1) + ';' + (hit.row + 1) + 'm')
+  return true
+}
+
+const ev = (type: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({ type, ...over })
+const historyPage = (events: Array<Record<string, unknown>>, over: Record<string, unknown> = {}): Record<string, unknown> => ({ events, parentAgentId: null, uuids: [], hasOlder: false, skippedFromStart: 0, ...over })
+
+function makeRow(id: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    agentId: id,
+    description: 'agent ' + id,
+    status: 'completed',
+    startedAt: NOW - 60_000,
+    completedAt: NOW - 10_000,
+    output: [],
+    outputEvents: [],
+    toolCalls: [],
+    ...over,
+  }
+}
+
+// ── W3: the workbench scene ───────────────────────────────────────────────
+console.log('--- W3: workbench panel + sibling switching ---')
+{
+  // Two depth-1 siblings (same main-loop parent) with distinct histories.
+  const pages = new Map<string, Record<string, unknown>>([
+    ['agent-a', historyPage([
+      ev('assistant.message', { anchor: 'aa1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'alpha unique marker one' }] }),
+      ev('tool.call', { callId: 'ac1', name: 'Grep', argsJson: '{}', time: NOW - 30_000, seq: 1, turn: 1, step: 1 }),
+      ev('tool.result', { callId: 'ac1', isError: false, text: 'alpha tool body', time: NOW - 20_000, seq: 2, turn: 1, step: 1, content: [] }),
+    ])],
+    ['agent-b', historyPage([
+      ev('assistant.message', { anchor: 'bb1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'beta unique marker two' }] }),
+    ])],
+  ])
+  const load = async (agentId: string): Promise<Record<string, unknown> | null> => pages.get(agentId) ?? null
+  const roster = [
+    makeRow('agent-a', { mode: 'continuable', model: 'fixture-model', tokens: { input: 10, output: 5, total: 15 }, toolCalls: [{ id: 't1', name: 'Grep', status: 'completed', startedAt: NOW - 30_000, endedAt: NOW - 20_000 }] }),
+    makeRow('agent-b', { depth: 1 }),
+    makeRow('agent-c', { depth: 1 }),
+    makeRow('agent-nested', { depth: 2, parentAgentId: 'agent-a' }),
+  ]
+  // roster rows carry depth 1 for a/b/c (the main-loop proof)
+  roster[0] = makeRow('agent-a', { depth: 1, mode: 'continuable', model: 'fx-model', tokens: { input: 10, output: 5, total: 15 }, toolCalls: [{ id: 't1', name: 'Grep', status: 'completed', startedAt: NOW - 30_000, endedAt: NOW - 20_000 }] })
+  const switched: string[] = []
+  let exited = 0
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, {
+      subagent: roster[0],
+      source: { kind: 'transcript-card', rowId: 3 },
+      onExit: () => { exited += 1 },
+      loadTranscript: load as never,
+      roster: roster as never,
+      onSwitchAgent: (id: string) => { switched.push(id) },
+    }),
+    async frame => {
+      check('W3 宽屏渲染右侧工作台面板', await settled(() => frame.screen().includes('workbench') && frame.screen().includes('metadata') && frame.screen().includes('context')), frame.lines().slice(0, 2).join('|'))
+      check('W3 面板元数据：状态/模式/模型', frame.screen().includes('completed') && frame.screen().includes('continuable') && frame.screen().includes('fx-model'))
+      check('W3 面板工具段保留记录', frame.screen().includes('Grep'))
+      check('W3 父关系=主循环（depth 1 事实）', frame.screen().includes('main loop'))
+      check('W3 同主循环兄弟列出（b/c）', frame.screen().includes('agent agent-b') && frame.screen().includes('agent agent-c'))
+      check('W3 嵌套不同父不混入兄弟列表', !frame.screen().includes('agent agent-nested'))
+      // keyboard: Tab focuses the panel, arrows walk, Enter switches
+      frame.stdin.write('\t')
+      await settled(() => frame.screen().includes('select'))
+      frame.stdin.write('\x1b[B') // ↓ past the first sibling (agent-b)
+      await sleep(30) // 固定窗:pacing 焦点移动重渲染
+      frame.stdin.write('\r')
+      check('W3 键盘 Enter 原地切换兄弟（调 onSwitchAgent）', await settled(() => switched.length === 1 && switched[0] === 'agent-c'), JSON.stringify(switched))
+      // rerender as the wiring would: subagent=b, same source (the panel
+      // keeps focus across the switch — Esc first leaves the panel, the
+      // second Esc exits the scene to the ORIGINAL source)
+      frame.rerender(React.createElement(AgentTranscriptScene, {
+        subagent: roster[1],
+        source: { kind: 'transcript-card', rowId: 3 },
+        onExit: () => { exited += 1 },
+        loadTranscript: load as never,
+        roster: roster as never,
+        onSwitchAgent: (id: string) => { switched.push(id) },
+      }))
+      check('W3 切换后新代理转录载入', await settled(() => frame.screen().includes('beta unique marker two')), frame.lines().slice(0, 4).join('|'))
+      check('W3 旧代理行不残留（不混消息）', await settled(() => !frame.screen().includes('alpha unique marker one') && !frame.screen().includes('alpha tool body')))
+      check('W3 切换后顶栏换成新代理描述', frame.screen().includes('agent agent-b'))
+      // Esc still exits to the ORIGINAL source (not the previous agent):
+      // the first Esc only leaves the focused panel (§6's ladder).
+      frame.stdin.write('\x1b')
+      await sleep(30) // 固定窗:pacing 焦点层切换
+      frame.stdin.write('\x1b')
+      check('W3 Esc 退出场景一次（来源栈未被切换推入）', await settled(() => exited === 1), String(exited))
+    },
+  )
+
+  // Mouse switching + the composer draft never travels across targets.
+  const dispatchLog: Array<Record<string, unknown>> = []
+  const control = {
+    via: 'claude-parent-mediated',
+    steer: false,
+    listTargets: async () => [],
+    messages: () => [],
+    submit: async (input: Record<string, unknown>) => {
+      dispatchLog.push(input)
+      return { ok: true, intentId: 'intent-' + (dispatchLog.length), state: 'issued' }
+    },
+  }
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, {
+      subagent: roster[0],
+      source: { kind: 'chat', returnFocus: 'prompt' },
+      onExit: () => {},
+      loadTranscript: load as never,
+      roster: roster as never,
+      onSwitchAgent: (id: string) => { switched.push(id) },
+      compose: { control, target: { agentId: 'agent-a', name: 'agent agent-a' } } as never,
+    }),
+    async frame => {
+      check('W3 composer 挂载', await settled(() => frame.screen().includes('Send to agent agent-a')))
+      frame.stdin.write('secret draft for a')
+      check('W3 草稿接收输入', await settled(() => frame.screen().includes('secret draft for a')))
+      check('W3 鼠标点击兄弟行切换', await click(frame, 'agent agent-c'), 'row not found')
+      check('W3 点击发出 onSwitchAgent(agent-c)', await settled(() => switched.includes('agent-c')), JSON.stringify(switched))
+      // wiring rerenders with target B: the composer remounts (keyed)
+      frame.rerender(React.createElement(AgentTranscriptScene, {
+        subagent: roster[2],
+        source: { kind: 'chat', returnFocus: 'prompt' },
+        onExit: () => {},
+        loadTranscript: load as never,
+        roster: roster as never,
+        onSwitchAgent: (id: string) => { switched.push(id) },
+        compose: { control, target: { agentId: 'agent-c', name: 'agent agent-c' } } as never,
+      }))
+      check('W3 草稿不随目标漂移（重挂清空）', await settled(() => !frame.screen().includes('secret draft for a') && frame.screen().includes('Send to agent agent-c')))
+      check('W3 未提交的草稿没有发往任何目标', dispatchLog.length === 0, JSON.stringify(dispatchLog))
+    },
+  )
+
+  // 40 columns: the P1 single-column contract is untouched.
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, {
+      subagent: roster[0],
+      source: { kind: 'agents-dashboard' },
+      onExit: () => {},
+      loadTranscript: load as never,
+      roster: roster as never,
+    }),
+    async frame => {
+      check('W3 窄屏（40 列）面板退场', await settled(() => frame.screen().includes('alpha unique marker one')) && !frame.screen().includes('workbench'))
+    },
+    40,
+  )
+}
+
+// ── W4: peer roster partition (Dashboard) ─────────────────────────────────
+console.log('--- W4: dashboard children/peers partition ---')
+{
+  const { SubagentDashboard } = (await import('../src/components/SubagentDashboard.js')) as unknown as { SubagentDashboard: React.ComponentType<Record<string, unknown>> }
+  const mainA = makeRow('agent-a', { depth: 1 })
+  const mainB = makeRow('agent-b', { depth: 1 })
+  const nestedKnown = makeRow('agent-n1', { depth: 2, parentAgentId: 'agent-a' })
+  const nestedOld = makeRow('agent-n2', { depth: 2 })
+
+  // (1) children-only roster, no peers prop: the honest unsupported note;
+  // children stay ABOVE the peers section and carry no nested marks.
+  const selected: string[] = []
+  await withTerminal(
+    () => React.createElement(SubagentDashboard, {
+      subagents: [mainA, mainB] as never,
+      onSelect: (id: string) => { selected.push(id) },
+      onClose: () => {},
+    }),
+    async frame => {
+      check('W4 无 peer 名册能力：如实降级一行', await settled(() => frame.screen().includes('cross-session peers') && frame.screen().includes('no roster served')))
+      const childrenAt = frame.screen().indexOf('agent agent-a')
+      const peersAt = frame.screen().indexOf('cross-session peers')
+      check('W4 children 在 peers 分区之前（不混淆分区）', childrenAt >= 0 && peersAt > childrenAt)
+      check('W4 纯直属名册保持 P1 平铺（无嵌套标记）', !frame.screen().includes('nested'))
+      // keyboard walks the displayed order: ↓ then Enter selects agent-b
+      frame.stdin.write('\x1b[B')
+      await sleep(30) // 固定窗:pacing 焦点移动重渲染
+      frame.stdin.write('\r')
+      check('W4 键盘走显示顺序选择 agent-b', await settled(() => selected.length === 1 && selected[0] === 'agent-b'), JSON.stringify(selected))
+    },
+  )
+
+  // (2) partition: main-loop children first, nested spawns after with the
+  // ↳ mark (known parent AND old-format unknown parent both nest).
+  await withTerminal(
+    () => React.createElement(SubagentDashboard, {
+      subagents: [mainA, nestedKnown, mainB, nestedOld] as never,
+      onSelect: () => {},
+      onClose: () => {},
+    }),
+    async frame => {
+      const screen = () => frame.screen()
+      await settled(() => screen().includes('agent agent-b'))
+      const a = screen().indexOf('agent agent-a')
+      const b = screen().indexOf('agent agent-b')
+      const n1 = screen().indexOf('agent agent-n1')
+      const n2 = screen().indexOf('agent agent-n2')
+      check('W4 直属在前嵌套在后（分区排序）', a >= 0 && b > a && n1 > b && n2 > n1, JSON.stringify({ a, b, n1, n2 }))
+      check('W4 嵌套行带 ↳ 标记', screen().includes('↳'))
+      check('W4 计数行含嵌套数', screen().includes('nested'))
+    },
+  )
+
+  // (3) served peers: own section, never mixed into children, and NO
+  // interactive affordance (cross-session targets are not addressable
+  // through the dual channels — the honest P3 degrade).
+  const selected2: string[] = []
+  await withTerminal(
+    () => React.createElement(SubagentDashboard, {
+      subagents: [mainA] as never,
+      peers: [{ agentId: 'peer-session-0001', name: 'codex' }, { agentId: 'peer-session-0002', label: 'teammate row' }] as never,
+      onSelect: (id: string) => { selected2.push(id) },
+      onClose: () => {},
+    }),
+    async frame => {
+      check('W4 served peers 渲染在独立分区', await settled(() => frame.screen().includes('codex') && frame.screen().includes('teammate row') && frame.screen().includes('peer-ses')))
+      check('W4 peer 行注明无发送入口（跨会话降级）', frame.screen().includes('no send affordance'))
+      await click(frame, 'codex')
+      check('W4 点击 peer 行不触发任何 child 导航', selected2.length === 0, JSON.stringify(selected2))
+      const childrenCount = (frame.screen().match(/agent agent-a/g) ?? []).length
+      check('W4 children 不重复出现在 peers 分区', childrenCount === 1, String(childrenCount))
+    },
+  )
+}
+
+if (failed > 0) {
+  console.error('verify-agent-workbench FAILED (' + failed + ' checks)')
+  process.exit(1)
+}
+console.log('verify-agent-workbench OK (' + passed + ' checks)')

@@ -366,6 +366,7 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
           toolCalls: [],
           background: event.background,
           ...(event.depth === undefined ? {} : { depth: event.depth }),
+          ...(event.parentAgentId === undefined ? {} : { parentAgentId: event.parentAgentId }),
         },
         inferred: false,
         confirmed: false,
@@ -400,6 +401,9 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
       if (event.model !== undefined) state.model = event.model
       state.background = event.background || state.background === true
       if (event.depth !== undefined) state.depth = event.depth
+      // A late parent fact heals an unknown one; a known parent is never
+      // rewritten by a fact-free refresh (same once-only rule as depth).
+      if (event.parentAgentId !== undefined && state.parentAgentId === undefined) state.parentAgentId = event.parentAgentId
     }
     if (lane !== undefined) {
       lanes.set(lane, event.agentId)
