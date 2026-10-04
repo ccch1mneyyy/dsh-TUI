@@ -58,6 +58,16 @@ export function useTrajectoryScope(channel: ChannelUi | undefined, build: TrajBu
   /** The lane fold, keyed by scope so a switch refolds from scratch. */
   const laneBuildRef = React.useRef<{ readonly key: string; build: TrajBuild | null }>({ key: '', build: null })
 
+  // The parent-turn view is derived from the main build; memoized so the
+  // animation tick does not refilter the ledger and invalidate every
+  // aggregate keyed on the scoped build.
+  const parentTurn = scope.kind === 'parent-turn' ? scope.turn : undefined
+  const parentTurnBuild = React.useMemo((): TrajBuild | undefined => {
+    if (parentTurn === undefined) return undefined
+    const filtered = build.nodes.filter(node => node.turn === parentTurn)
+    return { source: build.source, nodes: filtered, timing: build.timing, counts: build.counts, state: build.state }
+  }, [build, parentTurn])
+
   let nodes: readonly TrajNode[] = build.nodes
   let events: readonly RawTrajEvent[] = NO_EVENTS
   let scopedBuild: TrajBuild = build
@@ -76,14 +86,13 @@ export function useTrajectoryScope(channel: ChannelUi | undefined, build: TrajBu
     scopedBuild = laneBuildRef.current.build ?? emptyTrajectory()
     nodes = scopedBuild.nodes
     events = snapshot
-  } else if (scope.kind === 'parent-turn') {
+  } else if (parentTurnBuild !== undefined) {
     // The main lane's rows of the delegating turn: a derived view (the
     // timing slots stay the main build's — keyed turn:step, they answer
     // this turn's TTFT/decode questions exactly).
-    const filtered = build.nodes.filter(node => node.turn === scope.turn)
-    nodes = filtered
+    nodes = parentTurnBuild.nodes
     events = (channel?.traceEvents?.() ?? NO_EVENTS) as readonly RawTrajEvent[]
-    scopedBuild = { source: build.source, nodes: filtered as TrajNode[], timing: build.timing, counts: build.counts, state: build.state }
+    scopedBuild = parentTurnBuild
   } else {
     events = (channel?.traceEvents?.() ?? NO_EVENTS) as readonly RawTrajEvent[]
   }
