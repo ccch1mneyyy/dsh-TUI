@@ -356,7 +356,8 @@ the whole group once with `node scripts/run-ci-group.mjs <group> --record-timing
 
 For local speed add `--jobs N` (default 1, the same as CI): entries run
 concurrently, each with its own throwaway HOME and render log, and each script's
-output is printed as one block when it finishes. An entry that fails under
+output is printed as one block when it finishes. CI exits with code 2 when `--jobs > 1` is
+requested. An entry that fails under
 concurrency is re-run once on its own: a pass there is treated as a CPU-contention
 flake but still reported (`::error` plus a summary marker); a failure there is a
 real failure. `--jobs > 1` cannot be combined with `--record-timings` (timings
