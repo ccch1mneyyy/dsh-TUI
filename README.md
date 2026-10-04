@@ -173,126 +173,29 @@ Full guide: [Session migration](docs/migrate.en.md).
 
 ### Experimental: Claude backend
 
-dsh-TUI can run its session on the **Claude Agent** backend instead of the
-DeepSeek Harness agent: the same TUI, driving your local `claude` CLI through
-the Claude Agent SDK.
+dsh-TUI can also run its session on Claude: the same interface, driving the
+Claude Code CLI through the Claude Agent SDK. Your project's `CLAUDE.md`,
+settings, hooks, MCP servers and plugins load as the CLI loads them.
 
 ```sh
-# once, in the dsh-tui profile (the SDK is an optional peer dependency)
+# once, in the dsh-tui profile directory (the SDK is an optional dependency)
 cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
-dsh-tui --backend claude     # or `backend: claude` in the dsh-tui config row
+dsh-tui --backend claude     # or pick Claude in /kernel; that choice is remembered
 ```
 
-- **Credentials**, in this order: your dsh-auth `anthropic` sign-in (the
-  same OAuth `/provider` offers; `/login` opens it preselected and reconnects
-  the session afterwards — while it is used, `ANTHROPIC_API_KEY` /
-  `ANTHROPIC_AUTH_TOKEN` are kept away from the CLI so your explicit sign-in
-  wins), else `ANTHROPIC_API_KEY` / cloud-provider variables in your
-  environment, else your existing `claude login`. `/login` shows which one the
-  session runs on. The dsh-auth sign-in is used **only for Anthropic's own
-  API**: when `ANTHROPIC_BASE_URL` (in your environment or a Claude settings
-  `env`) points anywhere other than `https://api.anthropic.com`, or a Unix
-  socket, a cloud-provider or gateway route, or an `apiKeyHelper`
-  is configured, your environment is passed through untouched and `/login`
-  names the route instead. A token that expires is refreshed before the CLI
-  starts; if the CLI rejects it mid-session, dsh-TUI renews it and resumes the
-  same session once, then asks you to `/login` (a `/login` during a running
-  turn reconnects after it). Token material is never logged.
-- **Executable**: `claude` on `PATH`, else the SDK's bundled binary. Project
-  `CLAUDE.md`, settings, hooks, MCP servers and plugins load exactly as the CLI
-  loads them.
-- **Approvals** use the same panel as DSH: allow once, allow always (the label
-  says what the CLI will remember — e.g. auto-accepting edits for this session
-  or a permission rule for this project; the CLI stores it, dsh-TUI writes no
-  settings file) and reject; with the focus on the reject row (↓ / Tab), type
-  a reason to send with the rejection (allow always is never a single digit
-  there — move to it and press Enter). Questions from the model (`AskUserQuestion`) use the
-  questionnaire, and a plan from plan mode opens the plan review (approve with
-  auto-accepted edits, approve with per-edit approval, or keep planning with
-  feedback). An MCP server asking for input uses the questionnaire too: one
-  question per form field (choices, yes/no, checkboxes, or typed text checked
-  against the field — an invalid answer is asked again with the reason), then
-  *Send* or *Decline*; a server that needs a browser step shows its link in a
-  notice and in the question (clickable where the terminal supports links).
-  When the model declines a request and a fallback model is configured, a
-  question offers retrying on it. `Esc` cancels any of these.
-- **Controls**: `/model` (Claude's own model list, no provider prefix —
-  `/model sonnet`; the choice is remembered for new sessions), `/effort`, `Shift+Tab`
-  cycles default → accept edits → plan (auto where the model supports it; the
-  mode shows in the status line when its `mode` field is on), `/compact`,
-  `/context` (Claude's context report), `/mcp` (status; `/mcp reconnect
-  <server>` and `/mcp toggle <server> on|off`, server names complete),
-  `/doctor` (CLI, SDK, credential and account), and Claude's own slash
-  commands in completion (sent to Claude as typed). Hovering the cost field
-  shows subscription usage (5h / 7d); approaching or hitting a usage limit,
-  API retries, model fallbacks, automatic permission denials, sign-in errors
-  and recalled memories show as notices. `bypassPermissions` skips every
-  tool approval — dangerous; it needs an explicit start with
-  `DSH_TUI_CLAUDE_PERMISSION_MODE=bypassPermissions`, and a running session
-  cannot enter it from any other mode.
-- **Also works**: streaming replies, thinking token counts, tool cards (Read,
-  Write, Edit, Bash, Glob, Grep, web and MCP tools), Ctrl+C cancel, `/new`
-  (a `/new` that a message overtakes while the new session is still starting
-  is cancelled, the message stays in the current session), `/status`, `/cost`
-  (the backend-reported USD cost), `/export` (the transcript as shown),
-  `!cmd` / `!!cmd`, the IDE selection channel and the git branch in the
-  status line. `/rename` names the session (the title Claude's own session
-  list shows), `/color` keeps an accent per Claude session (stored by
-  dsh-TUI).
-- **`/btw` and `/recap`** ask one side question over the conversation through
-  a throwaway copy of it (no tools, one turn, nothing written to the
-  session's transcript) — each is one model call; the automatic recap when a
-  session opens stays off for Claude so opening a session never costs
-  anything.
-- **Images**: paste an image or `@`-mention an image file (PNG, JPEG, GIF,
-  WebP; resized to at most 2000 px per side, at most 5 MiB each and 20 per
-  message) and it is sent with the message; staged images are held in memory
-  only. Resumed sessions show the images their prompts carried.
-- **`/clear`** clears the view only, as with DSH: Claude keeps its context.
-  When Claude itself resets the conversation (leaving plan mode with
-  *clear context*), the view, subagents and jobs are cleared with a notice,
-  and the session continues under the new session id Claude gives it.
-- **Sessions**: `/resume` opens the session browser on your Claude sessions —
-  this project's first, then every project (sessions dsh-TUI created are
-  listed too, although Claude Code's own picker hides them); Enter resumes
-  one (its history is replayed, then the conversation continues), `Ctrl+R`
-  renames, `Ctrl+D` deletes (never the open session, never one another
-  dsh-TUI terminal is using), pins are kept per backend. From a shell:
-  `dsh-tui --backend claude --resume <id>`, or a bare `--resume` for the last
-  Claude session this install used (DSH's own `--resume` marker is never
-  touched); on exit dsh-TUI prints that command. A session another dsh-TUI
-  terminal has open is refused (a concurrent plain `claude --resume` cannot
-  be detected), and a `--resume` that cannot open fails instead of starting
-  a fresh session. `/fork` writes a copy you can resume later (the open
-  session is untouched). Double-`Esc` rewinds to an earlier prompt: the
-  conversation (continuing in a copy cut just before it, the prompt back in
-  the input), the files Claude edited since (restored from Claude's file
-  checkpoints, previewed before you confirm), or both. The status line's
-  short session id is the Claude session id `--resume` takes, and a resumed
-  session shows its context window before its first reply.
-- **Subagents**: each `Agent` delegation is a subagent card in the transcript
-  (its own text, tool calls and token count stream into the card, never into
-  the main conversation); `/agents` lists them, `Ctrl+A` opens the subagent
-  dashboard and its detail view, where a running one can be stopped. A
-  resumed session shows its subagents with their recorded output; one whose
-  end the transcript never recorded shows as *status unknown*.
-- **Background jobs**: a command Claude runs in the background (`Bash` with
-  `run_in_background`, or a running command moved to the background) is a job
-  card with the status-line chip, `/jobs` lists them (`k` twice stops one);
-  the card and the panel show the tail of the job's output file while they
-  are on screen (read-only, the last 64 KiB, at most once a second, only the
-  file Claude itself reported). Interrupting a turn never stops a job;
-  a job Claude stops reporting shows as *status unknown*.
-- **Older history**: a session resumed after a compaction shows *load earlier*
-  at the top; it brings back the conversation the compaction cut off, one
-  compaction at a time, read-only from Claude's own transcript file. Long
-  sessions fold old rows to keep memory bounded, and *load earlier* restores
-  them from the same file.
-- **Not yet**: `/tree`, and switching between backends inside one running
-  dsh-TUI. DeepSeek-specific commands (`/setup` among them) are hidden while
-  this backend is active, and the DSH launch screens (launchpad, first-run
-  guide, workspace home) are skipped: a Claude session opens straight into
-  its conversation.
+- **Sign-in**: a `/channel` relay profile, your dsh-auth `anthropic` sign-in
+  (`/login`), `ANTHROPIC_API_KEY` or cloud-provider variables, or an existing
+  `claude login`, in that order. A `claude` on `PATH` is used when present,
+  otherwise the SDK's bundled binary.
+- **Works**: streaming, tool cards, approvals and questions, `/model`,
+  `/effort`, Claude's permission modes (`/permission`, `Shift+Tab`),
+  `/compact`, `/context`, `/mcp`, `/resume`, `/fork`, double-`Esc` rewind,
+  subagents, background jobs, images, `/btw`, and the USD cost Claude reports.
+- **Not available**: DSH-only commands such as `/tree`, `/preset`,
+  `/provider`, `/workspace`, `/agentview` and `/bg`. One process runs one
+  backend; `/kernel` switches by restarting into a new session.
+
+Details and known limitations: [Claude backend](docs/claude-backend.en.md).
 
 ## Keybindings & Mouse
 

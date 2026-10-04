@@ -150,88 +150,25 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 ### 实验性：Claude 后端
 
-dsh-TUI 可以把会话跑在 **Claude Agent** 后端上，而不是 DeepSeek Harness 智能体：
-同一个 TUI，通过 Claude Agent SDK 驱动你本机的 `claude` CLI。
+dsh-TUI 也可以把会话跑在 Claude 上：界面不变，背后由 Claude Agent SDK 驱动
+Claude Code CLI。项目的 `CLAUDE.md`、设置、hooks、MCP 服务器与插件按 CLI 的方式加载。
 
 ```sh
-# 一次性：在 dsh-tui profile 中安装（SDK 是可选 peer 依赖）
+# 一次性：在 dsh-tui 的 profile 目录安装（SDK 是可选依赖）
 cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
-dsh-tui --backend claude     # 或在 dsh-tui 配置行写 `backend: claude`
+dsh-tui --backend claude     # 或在 /kernel 里选 Claude，选择会被记住
 ```
 
-- **凭证**按以下顺序选用：你的 dsh-auth `anthropic` 登录（即 `/provider` 提供的同一套
-  OAuth；`/login` 会直接打开它并在登录后重连会话——使用它时不把
-  `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` 交给 CLI，保证你显式的登录生效），
-  其次是环境中的 `ANTHROPIC_API_KEY` / 云厂商变量，最后是你已有的 `claude login`。
-  `/login` 会显示当前会话用的是哪一种。dsh-auth 登录**只用于 Anthropic 官方 API**：
-  当 `ANTHROPIC_BASE_URL`（环境变量或 Claude 设置的 `env`）指向
-  `https://api.anthropic.com` 以外的地址，或配置了 Unix 套接字、云厂商/网关路由、
-  `apiKeyHelper` 时，环境原样交给 CLI，`/login` 改为显示当前路由。令牌将过期时在启动 CLI 前刷新；会话中被 CLI 拒绝时，dsh-TUI 刷新后以
-  同一会话重连一次，仍失败则提示你 `/login`（回合进行中执行 `/login` 会在回合结束
-  后再重连）。令牌内容从不写入日志。
-- **可执行文件**：`PATH` 上的 `claude`，否则 SDK 自带二进制。项目 `CLAUDE.md`、
-  设置、hooks、MCP 服务器与插件按 CLI 的方式加载。
-- **审批**沿用 DSH 的同一个面板：允许一次、始终允许（标签写明 CLI 会记住什么——
-  例如本会话自动接受编辑，或本项目的一条权限规则；由 CLI 保存，dsh-TUI 不写任何
-  设置文件）与拒绝；焦点移到"拒绝"行（↓ / Tab）后打字可附拒绝理由（此时"始终允许"
-  不再有数字快捷键——移过去按 Enter）。模型的提问（`AskUserQuestion`）
-  走问卷面板，计划模式提交的计划打开计划评审（批准并自动接受编辑、批准但逐个确认
-  编辑、或带反馈继续规划）。MCP 服务器请求输入时同样走问卷：表单每个字段一题（选项、
-  是/否、多选，或按字段约束校验的文本——无效的回答会带原因重问），最后选「发送」或
-  「拒绝」；需要在浏览器完成一步的服务器会在提示行和问题里给出链接（终端支持时可点击）。
-  模型拒绝请求且配置了回退模型时，会询问是否改用回退模型重试。以上都可按 `Esc` 取消。
-- **控制**：`/model`（Claude 自己的模型列表，不需要 provider 前缀——`/model sonnet`；
-  选择会记住用于新会话）、`/effort`、`Shift+Tab` 在 默认 → 自动接受编辑 → 计划模式
-  间循环（模型支持时含自动审批；状态栏打开 `mode` 字段时显示当前模式）、`/compact`、
-  `/context`（Claude 的上下文报告）、`/mcp`（状态；`/mcp reconnect <服务器>` 与
-  `/mcp toggle <服务器> on|off`，服务器名可补全）、`/doctor`（CLI、SDK、凭证与账户），
-  补全中还会列出 Claude 自己的斜杠命令（原样发给 Claude）。悬停费用字段可看
-  订阅用量（5小时 / 7天）；用量接近或达到上限、API 重试、模型回退、自动拒绝的权限、
-  登录错误与回忆起的记忆都会以提示显示。`bypassPermissions` 模式跳过全部
-  工具审批（危险），必须以 `DSH_TUI_CLAUDE_PERMISSION_MODE=bypassPermissions`
-  显式启动；运行中不能从非 bypass 会话进入。
-- **同样可用**：流式回复、思考 token 计数、工具卡（Read、Write、Edit、Bash、
-  Glob、Grep、网络与 MCP 工具）、Ctrl+C 中断、`/new`（新会话仍在启动时若有消息抢先
-  开始，本次 `/new` 取消、消息留在当前会话）、`/status`、`/cost`（后端上报的美元
-  费用）、`/export`（按当前显示的对话导出）、`!cmd` / `!!cmd`、IDE 选区通道与状态栏
-  的 git 分支。`/rename` 给会话命名（即 Claude 自己的会话列表显示的标题），`/color`
-  按 Claude 会话保存强调色（由 dsh-TUI 保存）。
-- **`/btw` 与 `/recap`**：在对话的一次性副本上提一个侧问（无工具、单轮、不写入会话
-  转录）——每次各花一次模型调用；打开会话时的自动回顾对 Claude 保持关闭，打开会话
-  不会产生任何费用。
-- **图片**：粘贴图片或 `@` 引用图片文件（PNG、JPEG、GIF、WebP；缩放到每边至多
-  2000 px，每张至多 5 MiB、每条消息至多 20 张）即随消息发送；暂存的图片只保存在内存里。
-  恢复的会话会显示提问中带过的图片。
-- **`/clear`** 与 DSH 一样只清屏：Claude 保留上下文。Claude 自己重置对话时（退出
-  计划模式并选择清空上下文），视图、子代理与任务随之清空并给出提示，会话改用 Claude
-  分配的新会话 id 继续。
-- **会话**：`/resume` 打开会话浏览器，列出你的 Claude 会话——先是当前项目，再是全部
-  项目（dsh-TUI 创建的会话也会列出，尽管 Claude Code 自己的选择器会隐藏它们）；Enter
-  恢复（先回放历史，再继续对话），`Ctrl+R` 重命名，`Ctrl+D` 删除（不能删当前会话，
-  也不能删另一个 dsh-TUI 终端正在用的会话），置顶按后端分开保存。在 shell 中：
-  `dsh-tui --backend claude --resume <id>`，或裸 `--resume` 恢复本机最近一次用过的
-  Claude 会话（DSH 自己的 `--resume` 标记不受影响）；退出时 dsh-TUI 会打印这条命令。
-  另一个 dsh-TUI 终端已打开的会话会被拒绝（同时用普通 `claude --resume` 打开则无法
-  察觉）；`--resume` 打不开时直接报错，不会悄悄开新会话。`/fork` 生成一份之后可恢复的
-  副本（当前会话不受影响）。双击 `Esc` 回退到之前的某条提问：回退对话（在该提问之前
-  截断的副本里继续，提问回到输入框）、恢复 Claude 之后改过的文件（用 Claude 的文件
-  检查点，确认前先预览），或两者都做。状态栏的短会话 id 即 `--resume` 所用的 Claude
-  会话 id；恢复的会话在第一条回复之前就显示上下文窗口。
-- **子代理**：每次 `Agent` 委派在对话中显示为一张子代理卡片（它自己的文本、工具调用与
-  token 数流进卡片，不进入主对话）；`/agents` 列出全部，`Ctrl+A` 打开子代理面板与详情，
-  可在其中停止运行中的子代理。恢复的会话会带着记录下的子代理输出；转录里从未记录结束
-  的子代理显示为「状态未知」。
-- **后台任务**：Claude 在后台运行的命令（带 `run_in_background` 的 `Bash`，或运行中被
-  转到后台的命令）显示为任务卡片并点亮状态栏 chip，`/jobs` 列出全部（连按两次 `k` 停止）；
-  卡片与面板在屏幕上时显示该任务输出文件的末尾（只读、最后 64 KiB、每秒至多一次，只读
-  Claude 自己报告的那个文件）。中断回合不会停止后台任务；Claude 不再报告的任务显示为
-  「状态未知」。
-- **更早的历史**：压缩后恢复的会话顶部会显示「加载更早消息」，逐次压缩找回被压缩掉的
-  对话（只读 Claude 自己的转录文件）。长会话会折叠旧行以限制内存，「加载更早消息」也从
-  同一文件恢复它们。
-- **尚未支持**：`/tree`，以及在一个运行中的 dsh-TUI 里切换后端。启用该后端时
-  DeepSeek 专属命令（含 `/setup`）会隐藏，DSH 的启动屏（落地页、首启引导、工作区
-  首页）也不出现：Claude 会话直接进入对话。
+- **登录**：依次使用 `/channel` 渠道档案、dsh-auth 的 `anthropic` 订阅登录（`/login`）、
+  `ANTHROPIC_API_KEY` 或云厂商环境变量、本机已有的 `claude login`。`PATH` 上有
+  `claude` 就用它，否则用 SDK 自带的二进制。
+- **可用**：流式回复、工具卡、审批与问卷、`/model`、`/effort`、Claude 的权限模式
+  （`/permission`、`Shift+Tab`）、`/compact`、`/context`、`/mcp`、`/resume`、`/fork`、
+  双击 `Esc` 回退、子代理、后台任务、图片、`/btw`，以及 Claude 上报的美元费用。
+- **不可用**：DSH 专属命令，如 `/tree`、`/preset`、`/provider`、`/workspace`、
+  `/agentview`、`/bg`。一个进程只跑一个后端，`/kernel` 切换时会重启并开新会话。
+
+详细说明与已知限制：[Claude 后端](docs/claude-backend.md)。
 
 ## 快捷键与鼠标
 

@@ -18,6 +18,7 @@ The root README lists what ships; the details live here. Chinese files have no s
 | 使用说明 / User guide | [user-guide.md](user-guide.md) | [user-guide.en.md](user-guide.en.md) | 键位、命令、会话工作流与设置。 |
 | 交互与命令 / Interaction & commands | [interaction.md](interaction.md) | [interaction.en.md](interaction.en.md) | 键位、鼠标、问卷审批与 slash 命令。 |
 | 主题系统 / Themes | [themes.md](themes.md) | [themes.en.md](themes.en.md) | 内置主题、自动检测与自定义主题。 |
+| Claude 后端（实验性）/ Claude backend (experimental) | [claude-backend.md](claude-backend.md) | [claude-backend.en.md](claude-backend.en.md) | 启用、登录、与 DSH 的差异和已知限制。 |
 
 ## 配置 / Configuration
 
@@ -31,6 +32,8 @@ The root README lists what ships; the details live here. Chinese files have no s
 | --- | --- | --- | --- |
 | 架构与限制 / Architecture & limitations | [architecture.md](architecture.md) | [architecture.en.md](architecture.en.md) | 运行链路、性能、安全边界与已知限制。 |
 | 会话挂载运行时 / Session mount runtime | [session-mount-runtime.md](session-mount-runtime.md) | [session-mount-runtime.en.md](session-mount-runtime.en.md) | 多 TUI 占用规则与本机账本。 |
+| 多后端架构 / Agent backends | [agent-backend-design.md](agent-backend-design.md) | — | 后端中立层、Claude 后端实现与接入新后端。 |
+| 子代理转录页数据源 / DSH child transcript | [dsh-child-transcript.md](dsh-child-transcript.md) | — | DSH 子会话转录的读取契约与新后端接入清单。 |
 
 ## 插件 / Plugins
 
