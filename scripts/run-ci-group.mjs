@@ -104,6 +104,12 @@ const GROUPS = {
 // 纯 ANSI 回退、长行/CJK 折行续行保栏、高亮 throw 组件级降级、流式
 // 增长 fence 与整段渲染等价、resize 两档一致性。
     ['verify-markdown-render', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-render.tsx']],
+// 流式代码框性能门（渲染升级 Batch B，设计文档 §2.5）：真实 StreamingMarkdown
+// 连续 100 帧（40 帧到达 + 60 帧尾部增长）驱动 100 个已封口块 + 2 个 220 行
+// 块 + 持续增长的未封口 fence。结构断言 required：封口节点身份不变、稳态帧
+// 零复格式化/复高亮（render-stats 计数器归因）、每帧增量有界且不随转录
+// 增长、半开 fence 闭合后与整段渲染逐行相等、重渲染不触碰封口内容；
+// p50/p95/max 只打印观察（含 settle 轮询粒度），不作断言。
     ['verify-text-paint-budget', ['node', '--import', 'tsx/esm', 'scripts/verify-text-paint-budget.tsx']],
     ['verify-text-viewport-paint', ['node', '--import', 'tsx/esm', 'scripts/verify-text-viewport-paint.ts']],
     ['verify-tool-history-window', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-history-window.tsx']],
