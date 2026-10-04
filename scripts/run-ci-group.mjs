@@ -67,10 +67,8 @@ const GROUPS = {
 // 开整屏界面的动作要先收掉当前屏、覆盖层不收、记账 skipped/done、最小模式、
 // 首启横幅不 stale）。这三类缺陷是单独挂组件的回归测不到的——先有 bug 才有它。
     ['verify-launchpad-onboarding-chat', ['node', '--import', 'tsx/esm', 'scripts/verify-launchpad-onboarding-chat.tsx']],
-// 内核选择器（第八版）展示组件回归：标题/行标签/副标题（版本 · 置灰原因）/当前勾
-// 跟着 current 走/不可选行变暗（焦点压上去 ❯ 指针仍在——不能用 ListItem 的
-// disabled，它连指针一起吞）/pinned 提示行/鼠标点行回行号/没接 onPick 则无 hover
-// 反馈。与同组的 verify-launchpad 是同一个功能的两面（底栏那一行 ↔ 选择器本体）。
+// 内核选择器组件：标题、行标签与副标题（版本、不可选原因）、当前项勾选、
+// 不可选行变暗但焦点指针仍显示、pinned 提示行、鼠标点行、未接 onPick 时无 hover。
     ['verify-kernel-picker', ['node', '--import', 'tsx/esm', 'scripts/verify-kernel-picker.tsx']],
 // 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
 // （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
@@ -93,38 +91,21 @@ const GROUPS = {
     ['verify-text-measure-cache', ['node', '--import', 'tsx/esm', 'scripts/verify-text-measure-cache.ts']],
     ['verify-text-wrap-geometry', ['node', '--import', 'tsx/esm', 'scripts/verify-text-wrap-geometry.tsx']],
     ['verify-streaming-markdown-blocks', ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-blocks.tsx']],
-// Markdown token 级正确性门（渲染升级 Batch A）：真实 lexer 的递归 token
-// census 必须与 allowlist 精确相等（marked 升级引入新类型即红，fail
-// closed）；任务列表 checkbox 状态 [x]/[ ] 在紧/松/有序/嵌套/引用/CJK
-// 形态下都落在 bullet 与正文之间；def/html 保持刻意不可见。
+// Markdown token 覆盖：真实 lexer 产出的 token 类型必须与白名单完全一致
+// （marked 升级带来新类型即失败）；任务列表 [x]/[ ] 在各种列表形态下的位置。
     ['verify-markdown-token-coverage', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-token-coverage.ts']],
-// 代码框（CodeBlockFrame）回归（渲染升级 Batch B）：轻框视觉契约（宽/窄
-// 两档表头、│ 栏+1 格内边距、无右墙底边）、复制契约（header/rail NoSelect、
-// 正文可选，正文锚点得干净代码、装饰锚点按现有语义只复制装饰）、净宽<8
-// 纯 ANSI 回退、长行/CJK 折行续行保栏、高亮 throw 组件级降级、流式
-// 增长 fence 与整段渲染等价、resize 两档一致性。
+// 代码框（CodeBlockFrame）：宽/窄两档表头与左栏、复制只取正文、净宽 < 8 时的
+// 纯文本回退、长行与 CJK 折行、高亮失败降级、流式增长与整段渲染一致。
     ['verify-markdown-render', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-render.tsx']],
-// Markdown 列表/引用/图片/标题一致性门（渲染升级 Batch D，设计文档 §3/§4）：
-// H1-H6 视觉分层与压缩空白节奏（标题下不再叠加双空行）、hr subtle 单行
-// 分隔线（无多余高度、不与后块粘连）、列表悬挂缩进/稳定嵌套阶梯/松散项
-// bullet 不丢、嵌套引用逐级 muted bar 且空行保持结构、图片 alt+OSC8 链接
-// （不自动下载）；每段都先在坏基线上证红再转绿。
+// Markdown 标题层级与间距、分隔线、列表悬挂缩进与嵌套、嵌套引用、图片 alt 与
+// OSC 8 链接（不自动下载）。
     ['verify-markdown-batch-d', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-batch-d.tsx']],
-// 流式代码框性能门（渲染升级 Batch B，设计文档 §2.5）：真实 StreamingMarkdown
-// 连续 100 帧（40 帧到达 + 60 帧尾部增长）驱动 100 个已封口块 + 2 个 220 行
-// 块 + 持续增长的未封口 fence。结构断言 required：封口节点身份不变、稳态帧
-// 零复格式化/复高亮（render-stats 计数器归因）、每帧增量有界且不随转录
-// 增长、半开 fence 闭合后与整段渲染逐行相等、重渲染不触碰封口内容；
-// p50/p95/max 只打印观察（含 settle 轮询粒度），不作断言。
     ['verify-text-paint-budget', ['node', '--import', 'tsx/esm', 'scripts/verify-text-paint-budget.tsx']],
+// 流式代码框性能：100 个已封口块加一个持续增长的 fence，跑 100 帧；封口块不重新
+// 格式化/高亮、每帧增量有界、fence 闭合后与整段渲染逐行相同。耗时分位只打印不断言。
     ['verify-markdown-codebox-performance', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-codebox-performance.tsx']],
-// Typed decoration 门（渲染升级 Batch C，设计文档 §2）：typed 与 hybrid
-// （DSH_TUI_CODE_FRAME=hybrid＝Batch B 基线）在行/noSelect 位图/softWrap
-// 簿记/三类锚点复制字节上逐位等价；结构计数＝代码框 1 个 ink-text、
-// 零结构 ink-box（hybrid 回退保留组件布局）；复制契约（正文锚点得
-// 干净代码、rail/header 锚点只复制装饰）；D 批遗留的终端折行续行
-// 落列 0 在 quote/list/task/CJK 上治好（无装饰坏基线证红）、指纹守卫
-// 同源消费、mermaid fallback 共享、装饰对象身份参与 paint cache 键。
+// 代码框装饰：typed 与 hybrid（DSH_TUI_CODE_FRAME=hybrid）两种实现的行内容、noSelect
+// 位图、折行簿记与复制字节完全一致；引用/列表/任务/CJK 的折行续行不落到第 0 列。
     ['verify-markdown-typed-decoration', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-typed-decoration.tsx']],
     ['verify-text-viewport-paint', ['node', '--import', 'tsx/esm', 'scripts/verify-text-viewport-paint.ts']],
     ['verify-tool-history-window', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-history-window.tsx']],
@@ -297,10 +278,8 @@ const GROUPS = {
 // 代理探针）、SGR 点击艺术区触发 heart pass、Enter poke 显示完整 activity.line、
 // 左栏 §16.6 零 diff（50 次 version bump 重渲染逐行恒等）。
     ["verify-companion-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-companion-panel.tsx']],
-// btw 线程纯逻辑层：最近 N=4 轮窗口与 8k/24k 字符预算按整轮裁剪、单问合同
-// 逐字节不变（sideQuestionPrompt 钉死）、线程生命周期（busy/abort 代际守卫/
-// 新话题/双 session 隔离/unread 记账）、合同保全审计（线程层只经 sideQuery
-// 门面说话，毒化代理断言无 submit/steer/pushLocal 触碰）。
+// btw 线程逻辑：最近 4 轮窗口与字符预算按整轮裁剪、单问 prompt 不变、线程生命周期
+// （忙碌/中止/新话题/多会话隔离/未读计数），线程只经 sideQuery 发请求。
     ["verify-btw-thread", ['node', '--import', 'tsx/esm', 'scripts/verify-btw-thread.mjs']],
   ],
   'input-terminal': [
@@ -441,64 +420,37 @@ const GROUPS = {
 // 后再单独登记。
   ],
   'session-workspace': [
-// G0 host-loader 门（deploy-transition 设计的开工 gate）：真实 cordis +
-// cordis-plugin-loader 在 hoisted 夹具 profile 上按包名加载 TUI 门面，
-// 证明 TLA dispatcher 能选代次（lease 先于代次模块求值、进程内 pin、
-// 翻转指针换新进程、legacy/source/fail-closed、internals 与普通动态
-// import 双解析路径）。改动 dispatch/ 或包 exports 时必须过这条。
+// 版本化部署：真实 cordis + plugin-loader 按包名加载 TUI 入口，dispatch 选代次（lease
+// 先于代次模块求值、进程内 pin、指针翻转后新进程取新代、legacy/源码/失败关闭）。
+// 改 dispatch/ 或包 exports 时必须过这条。
     ["g0-host-loader-spike", ['node', 'scripts/g0-host-loader-spike.mjs']],
-// 版本化部署 M0 回归：manifest 解析矩阵（截断/越权 id/坏哈希全 fail
-// closed）、promote 原子性（并发读者只见旧或新、staging 改名不可变冲
-// 突、READY 树漂移拒绝、build-lock 互斥+过期不死锁）、启动 pin（含
-// Junction 开发轨 src/+tsconfig 标记优先于 manifest）、lease 三态分类、
-// 安全 GC（dry-run 默认、active/回滚目标/活 lease 一律保留）、回滚＝
-// 只改指针。
+// 版本化部署：manifest 解析（截断、越权 id、坏哈希一律拒绝）、promote 原子性与
+// build-lock 互斥、启动 pin、lease 分类、GC（默认 dry-run，保留活跃代次/回滚目标/
+// 活 lease）、回滚只改指针。
     ["verify-deploy-generations", ['node', 'scripts/verify-deploy-generations.mjs']],
-// lease 强判活回归（M1③）：lease 携带进程创建时间身份——linux /proc tick 精确
-// 判死（可证 PID 复用）、win32 CIM 数字探针（一次批查询，locale 免疫）匹配
-// 即 live(strong)（心跳写失败不再误判 ambiguous）；wall-clock 不合只降级不判
-// 死（时钟步进 fail-safe）；M0 无身份 lease 心跳三态不变；GC 只回收 stale
-// lease 文件（dry-run 报告、apply 才删，ambiguous/live 不动）。
+// 部署 lease 判活：按进程创建时间识别 PID 复用（linux /proc、win32 CIM），时钟
+// 不一致只降级不判死；GC 只回收 stale lease（dry-run 只报告）。
     ["verify-deploy-lease-liveness", ['node', 'scripts/verify-deploy-lease-liveness.mjs']],
-// 子路径统一代次回归（M1②）：所有公共子路径（oauth/working-activity/panels/
-// plugin-host/extensions/api/jsx-runtime/invariant 等 12 个）经 dispatch 门面
-// 与主入口共享同一进程 pin——真夹具 profile + deploy root 下按包名解析也
-// 取 pin 代次的码（混代风险证伪）；翻指针后新进程取新代；代次缺入口
-// fail closed 给可行动错误；legacy 无 manifest 跑规范内容；转发名集合与
-// 规范模块运行时导出面锁步。
+// 公共子路径（oauth、panels、plugin-host 等）经 dispatch 入口与主入口共享同一进程
+// pin；指针翻转后新进程取新代；代次缺入口时报可操作的错误；转发的导出名与源模块一致。
     ["verify-dispatch-subpaths", ['node', 'scripts/verify-dispatch-subpaths.mjs']],
-// runtime-lock 闭包锁定/健康检查回归（M2①）：运行闭包从 profile 根解析成
-// 具体身份（version＋package.json 字节指纹；bundled 只记标记），found:false
-// 如实记录不装 hermetic；健康三态 healthy/drifted（升级、消失、构建后才
-// 出现，逐条点名 recorded→now）/degraded（锁坏）；deployctl health 命令
-// 退出码；真实 build-generation 集成（合成夹具包，绝不 cpSync 共享
-// node_modules 的符号链接——写入会打穿 pnpm store）。
+// runtime-lock：运行闭包解析成具体身份（版本 + package.json 指纹）、健康检查
+// healthy/drifted/degraded 与 deployctl health 退出码；用合成夹具包，不复制共享 node_modules。
     ["verify-deploy-runtime-lock", ['node', 'scripts/verify-deploy-runtime-lock.mjs']],
-// 构建隔离 M0 回归：live-tree 守卫（profile junction 指向的源树拒绝
-// clean/build、逃生口、clean-lib 真子进程集成）、staging 构建产物形状
-// （READY files 清单/树哈希独立复核/runtime-lock 如实标 profile 提供）、
-// promote 后 dispatch pin 落位、gen-settings-json 参数化逐字节等价。
-// 真实 tsc staging 构建是本地验收档（DSH_TUI_VERIFY_FULL_COMPILE=1），
-// CI 默认走 --skip-compile 快路径。
+// 构建隔离：profile 指向的源码树拒绝 clean/build（含逃生口与 clean-lib 子进程）、
+// staging 产物形状与树哈希、promote 后的 dispatch pin、gen-settings-json 参数化输出不变。
+// CI 走 --skip-compile；真实 tsc staging 构建用 DSH_TUI_VERIFY_FULL_COMPILE=1 在本地跑。
     ["verify-build-isolation", ['node', 'scripts/verify-build-isolation.mjs']],
-// 内核切换过场 MVE 回归（S05）：结局三分（spawn 失败/窗内死亡＝failed、
-// 干净退出＝succeeded 安静、窗后非零＝crashed）、已 flush 进度行契约
-// （resolve 晚于 write 回调、sink 抛错不阻塞）、文案双语与配色互异
-// （青/黄/红，无色模式零 ANSI）、plugin.ts/update.ts 源接线 tripwire。
+// 内核切换过场：结局分类（spawn 失败或启动期死亡＝failed，干净退出＝succeeded 不出声，
+// 之后非零退出＝crashed）、进度行写完才 spawn、双语文案与配色、plugin.ts/update.ts 接线。
     ["verify-handoff-transition", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-transition.ts']],
-// 内核切换原子屏交接回归（S05 完整版，M1①）：ACK 协议解析、结局分类的
-// 首帧事实（flush 过＝post-boot、没 flush＝boot-failure，4 秒窗只留给无
-// 协议 replacement）、子进程状态机（armed→adopted→ready、ready 前不写
-// 1049l、管道亡自持兜底、env 一次性消费）、armFirstFrameAck 对 adoption
-// 前写入直通/自恢复，以及真进程 e2e：ready 后旧父永不写 1049l、ready 前
-// 死亡与旧版 replacement 都恰一次收口回主屏。
+// 内核切换屏幕交接：ACK 行解析、按首帧是否 flush 判定结局、子进程状态（armed →
+// adopted → ready，ready 前不写 1049l，管道断开时自己收尾）、env 只消费一次；真进程
+// 端到端：ready 后旧进程不写 1049l，ready 前死亡与旧版 replacement 都只回主屏一次。
     ["verify-handoff-atomic", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-atomic.ts']],
-// PTY/ConPTY 先行门（S05 完整版）：在真实 PTY 下跑完整交接链（旧父 1049 →
-// 过场帧 → replacement adopted/首帧/ready → 自然退出闭合 1049），断言
-// 1049h/l 各恰一次且闭合晚于首帧、旧父 spawn 前后 stdin 零 reader、
-// replacement 的 TTY facade（isTTY/尺寸/raw mode）。provider 自动选择：
-// node-pty（真 ConPTY/PTY + master 侧 DA1 应答器）→ POSIX script（真 PTY）
-// → pipe（协议级回退，设备断言显式 note）。Linux CI 走 script 档。
+// 真实 PTY 下的完整交接链：1049h/l 各恰好一次且闭合晚于首帧、旧进程 spawn 前后
+// stdin 无 reader、replacement 的 isTTY/尺寸/raw mode。依次尝试 node-pty、POSIX
+// script、pipe（pipe 档跳过设备断言并注明）；Linux CI 走 script。
     ["verify-handoff-pty-gate", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-pty-gate.mjs']],
 // 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：
 // 全程跑官方读取链——Session.append 生成骨架（turn 配对/reasoning/
@@ -672,20 +624,14 @@ const GROUPS = {
 // 运行中占位、搜索截断——必须在 zh/en 双语都走字典渲染；与 verify-i18n
 // 的字面量 tripwire 互补（那边管源码侧，这边管渲染侧）。
     ["verify-toolcard-i18n", ['node', '--import', 'tsx/esm', 'scripts/verify-toolcard-i18n.tsx']],
-// 工具卡完整度回归（信息展示完整度设计 §B）：终端非零退出码/信号行不被
-// 行预算折叠（长输出不再把失败判定折没了）、行折叠提示聚合被折字符量、
-// verbose 有界行窗口 + 如实告知、展开卡的源截断/仅结构化披露、错误长文
-// 走与输出同一套行预算。
+// 工具卡完整度：非零退出码/信号行不被行预算折掉、折叠提示带被折字符数、verbose
+// 行窗口有界并注明、展开卡的截断说明、错误长文与输出共用行预算。
     ["verify-tool-card-completeness", ['node', '--import', 'tsx/esm', 'scripts/verify-tool-card-completeness.tsx']],
-// 每回合用量账本回归（信息展示完整度设计 §C）：共享投影器把回合内各
-// assistant.message 的 per-request usage 求和成 turn-summary 行与底栏
-// 快照——result/turn 口径不双计、缓存缺席≠0、中断/通知/压缩/重放各形态、
-// 失败尝试（重试）只计一次。
+// 每回合用量：共享投影器把回合内各请求的 usage 求和成 turn-summary 行与底栏快照；
+// result 与 turn 不重复计、缓存缺失不当 0、中断/通知/压缩/回放、重试只计一次。
     ["verify-usage-turn-summary", ['node', '--import', 'tsx/esm', 'scripts/verify-usage-turn-summary.ts']],
-// 回合用量行回炉（用户实测反馈）：设置 dsh-tui.turnUsageRow（默认关）只门
-// 渲染——关=visible 预过滤零行、数据照采（/tokens、/status、底栏 hover 不变）；
-// 开=右对齐安静徽记（无前缀、subtle 色阶）、模型名仅在与上一轮不同或首轮
-// 显示（noteModel 投影期标记，重复模型不刷屏）。
+// 回合用量行（设置 turnUsageRow，默认关）：关时不渲染但数据照常采集（/tokens、
+// /status、底栏 hover 不变）；开时右对齐显示，模型名只在首轮或换模型时出现。
     ["verify-turn-usage-row", ['node', '--import', 'tsx/esm', 'scripts/verify-turn-usage-row.tsx']],
 // 悬停浮层第二批回归：@ 文件补全面板长路径悬停弹全路径（完整可见的短路径
 // 不弹）、会话列表行标题截断悬停弹完整标题+绝对时间+cwd（未截断不重复
@@ -724,13 +670,8 @@ const GROUPS = {
 // 「前缀 + 1 字符 + 反色 caret」——只看得见最新输入的字符。断言逐键输入
 // 完整可见，并守住超长查询单行窗口化语义（尾部可见、头部滚出、不折行）。
     ["verify-searchbox-windowing", ['node', '--import', 'tsx/esm', 'scripts/verify-searchbox-windowing.tsx']],
-// 崩溃可观测性回归（React #185 闪退后续）：退出漏斗的崩溃行原来只带
-// error.message，生产压缩 React 只留 "Minified React error #185" 一行、
-// 四次真机闪退零取证。serializeCrashDetail（src/utils/crashDetail.ts，
-// 纯函数）逐层序列化 stack / .cause 链 / componentStack / digest，
-// formatCrashLogLine 钉死 crash.log 的 "<UTC ISO> pid=<pid> <text>" 行
-// 格式，appendCrashLog 实写临时目录且吞掉写失败；源码 tripwire 保证
-// plugin.ts 崩溃分支真的接线（回退成 message-only 必红）。
+// 崩溃诊断：serializeCrashDetail 逐层序列化 stack、cause 链、componentStack 与 digest；
+// crash.log 行格式；appendCrashLog 写失败不抛；plugin.ts 的崩溃分支确实接上了它。
     ["verify-crash-detail", ['node', '--import', 'tsx/esm', 'scripts/verify-crash-detail.ts']],
   ],
   'channel-ui': [
@@ -755,21 +696,9 @@ const GROUPS = {
 // installModelSelection、#34 的投递异步化都没被它们拦下），挂进来
 // 防再腐烂。
     ["verify-submit", ['node', '--import', 'tsx/esm', 'scripts/verify-submit.mjs']],
-// 打断后排队消息「停靠」（对齐 Claude Code 2.1.284：Esc 打断=停靠不自动发、
-// ↑ 选一条编辑、空输入 ⏎ 全部发送恰好一次）。channel 层双后端各钉一遍：DSH
-// 夹具（真 createDshSession：interrupt cancel 不带 keepInbox、内核 discard
-// 事件不删停靠预览、本地撤回不经 inbox.remove、user-cancel 仍 keepInbox、
-// claim 照常退场、Ctrl+Enter 连停靠一起立即投且各恰好一次）与 Claude 形
-// 夹具（裸 AgentSession：retractPending=false 下停靠行仍可本地撤回、空
-// still_queued 停靠成立、无 cancelQueued 能力的 CLI 回执 kept id → 撤销
-// 停靠由 discard 正常退场；未确认回执（R2-1）：interrupt 拒绝/旧 CLI 无回执
-// → 撤销停靠+明确 notice+SDK 只接受同意图一份、请求期间停靠的行不乘旧回执
-// 的快照、回执落定后再 Esc 自发新请求、只有确认撤销的副本可重发；回执在途
-// 的过渡停靠（R7）：deliver/remove/swap/Ctrl+Enter 全被门住（视觉停靠但不可
-// 编辑/重发/交换），confirmed 空单才放行，迟到 failed/unknown/still_queued 只
-// 撤销仍在 pending 的行——换过 id 的追不回，所以权利必须前置门住）。UI 层
-// 键位（Esc 停靠/⏎ 全发/↑ 选择器/Esc 退出选择器/Alt+↑ 兼容）在
-// verify-queue.mjs。
+// 打断后排队消息停靠（Esc 打断不自动发、↑ 选一条编辑、空输入 ⏎ 全部发送各一次）：
+// channel 层分别用 DSH 会话夹具和 Claude 形会话夹具覆盖撤回、取消回执（确认/失败/
+// 未知）与回执在途时的门控。UI 键位在 verify-queue.mjs。
     ["verify-docked-queue", ['node', 'scripts/verify-docked-queue.mjs']],
     ['verify-shell-compat', ['node', 'scripts/verify-shell-compat.mjs']],
     ['verify-agent-lifecycle-compat', ['node', 'scripts/verify-agent-lifecycle-compat.mjs']],
@@ -786,10 +715,8 @@ const GROUPS = {
 // langOverriddenBySettings）必须用同一个 ns —— 写死 'dsh-tui' 会让非默认挂载
 // 「写得进、读不回」，自动回顾永远关不掉。
     ["verify-settings-namespace", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-namespace.ts']],
-// sidePanel.panels 勾选式面板多选回归：checkbox 行 ↔ 逗号字符串双向映射、
-// 顺序保真（已有 id 保序、新勾追加尾、取消即移）、未认领 id 保留为占位行、
-// 活注册表（插件面板注册即出现/撤下退化占位）、至少一个守卫、高级原始
-// 编辑器（改序/手填 id，非法草稿拒绝）与 hint 收缩 + kind 保持 text。
+// sidePanel.panels 多选：勾选行与逗号字符串互转且保序、未注册 id 保留为占位行、
+// 插件面板注册即出现、至少保留一个、高级原始编辑（改序/手填 id、非法草稿拒绝）。
     ["verify-panel-settings-picker", ['node', '--import', 'tsx/esm', 'scripts/verify-panel-settings-picker.tsx']],
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-compaction-progress", ['node', '--import', 'tsx/esm', 'scripts/verify-compaction-progress.tsx']],
@@ -807,171 +734,117 @@ const GROUPS = {
 // 非负、代理对与 ANSI 转义的处理都在这里钉死。
     ["verify-cjk-token-estimate", ['node', '--import', 'tsx/esm', 'scripts/verify-cjk-token-estimate.ts']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
-// 投影黄金基线（多后端方案 §6.4）：scripts/fixtures/dsh/ 的合成 DSH 日志
-// + 流帧经「DSH 翻译器 + 共享投影器」的 replay 与 live 两路，与 Phase 0
-// 由拆分前投影器生成的 *.golden.json 逐字段比较；live 与 replay 的差异
-// 必须有登记的理由，不改黄金文件也必须通过。
+// 投影基线：scripts/fixtures/dsh/ 的合成日志与流帧经 DSH 翻译器 + 共享投影器，
+// replay 与 live 两路都与 *.golden.json 逐字段比较；两路的差异必须登记原因。
     ["verify-projection-golden", ['node', '--import', 'tsx/esm', 'scripts/verify-projection-golden.ts']],
-// DSH 翻译器词汇覆盖（多后端方案 §6.2/§8.2）：同一批 fixture 经翻译器的
-// live/replay 两路，逐行断言 §6.2 每一类 DSH 事件产出对应 AgentEvent 与身份字段。
+// DSH 翻译器：同一批 fixture 的 live/replay 两路，每类 DSH 事件产出对应的
+// AgentEvent 与身份字段。
     ["verify-dsh-translate", ['node', '--import', 'tsx/esm', 'scripts/verify-dsh-translate.ts']],
-// 非 DSH 会话上的 channel（多后端方案 §3.5，Phase 2 checkpoint B）：能力快照、
-// 只提供后端支持的命令、通用动作走 AgentSession、DSH 专属动作显式不可用
-// （通知 + 契约失败值）、能力在场时委托、/new 经后端 open、换会话后的代际
-// 栅栏；同一入口的 DSH channel 命令表与今天逐字一致。
+// 非 DSH 会话上的 channel：能力快照、只提供后端支持的命令、DSH 专属动作明确不可用、
+// /new 经后端 open、换会话后的代际栅栏；DSH channel 的命令表不变。
     ["verify-backend-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-channel.ts']],
-// channel 构造是一个 owner 事务（Phase 4a 核心 + DSH 扩展）：核心构造、DSH 扩展
-// 挂载、首次 bind 中任一步抛错，都释放宿主监听、agent 上下文监听、决策拓扑标记、
-// IDE 选区连接（真实 loopback）与计时器，并关闭自管生命周期的非 DSH 会话。
+// channel 构造失败回滚：核心、DSH 扩展或首次 bind 任一步抛错，都释放宿主与 agent
+// 监听、IDE 选区连接（真 loopback）和计时器，并关闭非 DSH 会话。
     ["verify-channel-rollback", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-rollback.ts']],
-// 真实 Chat 挂在非 DSH channel 上：斜杠菜单/Tab 只给后端支持的命令，键入的
-// 不可用命令提示 cmd-unavailable-backend、绝不落到模型（运行中也不 steer）。
+// 真实 Chat 挂在非 DSH channel 上：斜杠菜单/Tab 只列后端支持的命令，键入不可用命令
+// 给提示，不发给模型（运行中也不 steer）。
     ["verify-backend-chat", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-chat.tsx']],
-// 只有 token 计数、没有正文的思考行（方案 §4.5 (b)）：投影器 reasoning-tokens
-// → ChatRow.reasoningTokens，流式一行「思考中 · ~N tokens」、落定「已思考 ·
-// ~N tokens」，正文到达时正文优先；中英双语。
+// 只有 token 数没有正文的思考行：流式「思考中 · ~N tokens」、落定「已思考 · ~N tokens」，
+// 正文到达后显示正文；中英双语。
     ["verify-thinking-tokens", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-tokens.tsx']],
-// Claude 后端翻译器（方案 §5.1，Phase 2）：scripts/fixtures/claude/ 下脱敏的真实
-// SDK 消息序列 → 翻译器 → 共享投影器，与提交的 golden 逐字段比较，外加 Phase 0
-// 各项实测修正的定点断言（先判 terminal_reason、[ede_diagnostic] 不上屏、中断
-// 回显不成气泡、前台 Bash 不建任务卡、attempt.start 先于 delta、工具结果文本）。
+// Claude 翻译器：scripts/fixtures/claude/ 下脱敏的 SDK 消息序列经翻译器 + 共享投影器
+// 与 golden 逐字段比较；另有定点断言（terminal_reason 优先、诊断行不上屏、中断回显、
+// 前台 Bash 不建任务卡、attempt.start 先于 delta）。
     ["verify-claude-translate", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-translate.ts']],
-// Claude 会话生命周期（假 Query，无网络）：开关 ×50 无残留、放置→priority、
-// 取消与 30s 强制收敛（注入时钟）、取消回执三态（拒绝=failed/旧 CLI 无回执=
-// unknown/still_queued=confirmed，快照边界不记请求期间新输入，R2-1）、权限回调
-// 必定落定、进程死亡、握手失败。
-// 真实 CLI 的 verify-claude-live / verify-claude-headless 只在
-// DSH_TUI_CLAUDE_LIVE=1 时跑，不进 CI（消耗真实用量、需要凭证）。
+// Claude 会话生命周期（假 Query，无网络）：开关 50 次无残留、取消与 30s 强制收敛
+// （注入时钟）、取消回执三种结果、权限回调必定落定、进程死亡、握手失败。
+// 真实 CLI 的 verify-claude-live / verify-claude-headless 只在 DSH_TUI_CLAUDE_LIVE=1
+// 时跑，不进 CI（花真实用量、需要凭证）。
     ["verify-claude-session-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-session-lifecycle.ts']],
-// Claude 会话恢复回放（方案 §4.11，Phase 4b）：scripts/fixtures/claude/transcripts/ 下与流录制
-// 一起脱敏的读 API 转录 → replay → 共享投影器，与 golden 逐字段比较；按真实提问切分 turn、
-// 行锚点 = 推送时的 uuid、排队提问并入、中断/通知/本地命令回显/压缩摘要、工具结果配对、
-// 子代理不进主转录、回放与 live 同一会话行一致、resume 后 live 编号接续。
+// Claude 会话恢复回放：fixtures/claude/transcripts/ 的脱敏转录经 replay + 共享投影器与
+// golden 比较；turn 切分、行锚点、排队提问、中断/通知/压缩摘要、工具结果配对、子代理
+// 不进主转录、回放与 live 一致、resume 后编号接续。
     ["verify-claude-replay", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-replay.ts']],
-// Claude 会话生命周期（假 SDK + 临时 HOME）：catalog 列表/标题来源/预览/改名/删除、resume
-// 先读转录再以 resume 启动、/fork 与 rewind（文件/对话/两者）、channel 的浏览器列表、
-// /resume 历史先于 live 绘制、claude:<id> 挂载账本（真实对端进程占用即拒绝）、失败响亮、
-// 当前/被占用会话不可删、/fork 提示、rewind 提示与三种模式、启动历史先于首个 live 事件。
+// Claude 会话目录（假 SDK + 临时 HOME）：列表/标题/预览/改名/删除、resume 先读转录、
+// /fork 与 rewind 三种模式、/resume 历史先于 live 绘制、claude:<id> 挂载账本（真实对端
+// 进程占用即拒绝）、当前或被占用的会话不可删。
     ["verify-claude-catalog", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-catalog.ts']],
-// Claude 子代理（方案 §4.8，Phase 5a，假 SDK + 录制 fixture）：Agent 调用预建卡片、
-// task_started 以任务 id 补全（同一 lane 重键）、子通道的文本/工具进卡片与面板而不进
-// 主转录、task_progress/task_notification 的用量与终态、stopTask 停止、后台子代理与
-// 层级信号（缺席即推断 unknown，真实结束仍覆盖）、resume 回放子转录内容与终态推断，
-// 以及 /agents、仪表盘与详情场景的无头渲染。
+// Claude 子代理（假 SDK + 录制 fixture）：Agent 调用建卡并按任务 id 补全、子代理文本/
+// 工具进卡片与面板而不进主转录、进度与终态、stopTask、后台子代理、resume 回放，
+// 以及 /agents、仪表盘与详情的无头渲染。
     ["verify-claude-subagents", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-subagents.ts']],
-// agent-team 通道层回归（设计 agent-team-full §3/§5/§6/§7 通道条目）：统一
-// 代理消息领域模型（via/state 词汇、单调 fold、relay 源形状——普通 user 文本
-// 绝不猜成 relay）、DSH 子代理投影的 durable relay/直发 prompt 回执
-// （RemoteError 稳定映射、one-shot fail-closed、listChildren 只列 continuable）、
-// Claude SendMessage 观察（call=issued、裸成功=unknown、明确结构化字段才
-// delivered/held）、通道核的父中介提交（信封走常规 FIFO 固定 followup、
-// 无能力不渲染）。
+// agent-team 通道层：代理消息模型（via/state 词表、单调合并，普通 user 文本不当 relay）、
+// DSH 子代理 relay 与直发回执及错误映射、Claude SendMessage 观察、父会话中转提交。
     ["verify-agent-team-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-team-channel.ts']],
-// DSH 子会话转录页回归（设计 dsh-child-transcript）：SubagentControl.history 的第二个实现。
-// 只经公开 sessionPersistence.open(read)+handle.read(offset,length) 读 direct child 的
-// durable 日志（禁 deprecated Session snapshot、禁直读 JSONL）；listChildren 验权、
-// 活跃 child 先 ctx.sessions.flush 持久屏障（失败降级为已落盘前缀+live tail）、
-// seeded child 从精确 inherited cut 起页（缺 cut fail-closed）、stat 无 eventCount 时
-// 有界单事件探尾（禁无界全读后 slice，50k+ 日志预算断言）、每次调用一次性 translator
-// 只出三种 leaf 事件并强制 parentCallId、binding generation 栅栏、每路 finally close 恰一次；
-// 共享 fold/prepend/mergeLiveWindow 去重与 overlap；真实 channel 下能力点亮
-// （有 persistence 才有 history 方法，无则无页签——UI 零分叉）。
+// DSH 子会话转录页：只经公开的 sessionPersistence.open + handle.read 读子会话日志；
+// 活跃子会话先 flush（失败时退回已落盘部分 + live 尾巴）、seeded 子会话从继承切点起页、
+// 没有 eventCount 时有界探尾（5 万事件日志的预算）、代际栅栏、每路 close 恰好一次；
+// 没有 persistence 时不出历史页签。
     ["verify-dsh-child-transcript", ['node', '--import', 'tsx/esm', 'scripts/verify-dsh-child-transcript.ts']],
-// Claude 后台任务（假 SDK + 录制 fixture）：后台 Bash 生命周期（任务卡、确认文本里的
-// 输出文件、状态栏 chip、一次落定提示）、前台 Bash 只有工具卡、tasks.snapshot 的
-// REPLACE 语义、kill → stopTask、用户中断不停任务；输出尾部只读 CLI 报告的路径并校验
-// （<id>.output、解析符号链接后仍在 CLI 目录内、普通文件、最后 64 KiB）、每秒至多一次、
-// 取消观察即停；任务卡与 /jobs 面板的无头渲染。
+// Claude 后台任务（假 SDK + 录制 fixture）：后台 Bash 的任务卡、输出文件、状态栏 chip
+// 与一次性落定提示；前台 Bash 只有工具卡；kill → stopTask，用户中断不停任务；输出尾部
+// 只读 CLI 目录内普通文件的最后 64 KiB、每秒至多一次。
     ["verify-claude-tasks", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-tasks.ts']],
-// Claude Task* 工具族 → 待办面板（CLI 2.1.284：TaskCreate/TaskUpdate/TaskList/TaskGet 取代
-// TodoWrite，两族都是 preset 不带的 shouldDefer 工具）：离线合成帧过真翻译器 + 共享投影器——
-// 角色映射（Task 子代理 / TaskStop 后台任务不卷入）、状态机（create 输入给内容/结果给 id、
-// update 输入直接打补丁、deleted 移除、list/get 结果为准覆盖本地）、每次变化发完整
-// todo.write 快照（TodoPanelItem 形状、创建序、不建卡）、TodoWrite 原路径逐字节不变、
-// buildQueryOptions 的 allowedTools 附加+预批准且 tools 仍是 preset。
+// Claude Task* 工具（TaskCreate/Update/List/Get，取代 TodoWrite）→ 待办面板：合成帧经
+// 翻译器 + 共享投影器；角色映射、状态机、每次变化发完整 todo.write 快照、TodoWrite
+// 原路径不变、allowedTools 追加并预批准。
     ["verify-claude-task-tools", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-task-tools.ts']],
-// Claude 会话的 Working Activity 工作行（复用 DSH 工作行的 ActivityView 形状）：
-// 翻译器自身状态（openCalls/回合锚点/⏵ 自述行/TaskUpdate activeForm/本回合工具计数）
-// 由 activity.ts 折叠成 WorkingActivityView——首回合前零发布（随机动词 spinner 原样）、
-// 回合内 thinking/⏵ 叙述/tool(label+detail)/权限停靠 waiting、回合结束 done 卡（live=false）、
-// 下回合复活；detail 提取优先级与截断；会话级（假 SDK）能力订阅真实回合上屏、迟到订阅者
-// 立即收到最新值（红→绿杠杆＝session.ts 的发布钩子）。
+// Claude 会话工作行（与 DSH 同一 ActivityView 形状）：首回合前不发布、回合内思考/叙述/
+// 工具/权限等待、回合结束 done、下回合恢复；detail 提取与截断；迟到订阅者立即拿到最新值。
     ["verify-claude-activity", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-activity.ts']],
-  ["verify-claude-sdk-warnings", ['node', 'scripts/verify-claude-sdk-warnings.mjs']],
-// Claude「加载更早消息」（方案 §4.11 压缩前历史）：按会话 id 扫描定位原生 JSONL、坏行容忍、
-// 超限拒读；两次压缩的转录按 parentUuid 链逐段回溯（保留段的拼接与排除）、有界分片不重叠、
-// 用尽后幂等；channel 上 olderHistory 显示分隔线、loadOlder 逐段前插（负 id、restored）；
-// Claude 长会话重新折叠（只折有锚点的行）、保留文本有界、loadOlder 先从转录恢复折叠行。
+// Claude SDK 启动警告过滤：子进程里 import 编译产物，放行的警告保持 node 原样输出，
+// 被过滤的不出现（需先构建 lib/）。
+    ["verify-claude-sdk-warnings", ['node', 'scripts/verify-claude-sdk-warnings.mjs']],
+// Claude「加载更早消息」：按会话 id 定位原生 JSONL（坏行容忍、超限拒读）、多次压缩的
+// 转录按 parentUuid 链分段回溯、分片不重叠、用尽后幂等；channel 前插更早的行并恢复折叠行。
     ["verify-claude-load-older", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-load-older.ts']],
-// 共享权限面板（方案 §4.7，Phase 3）：PermissionStore 的 FIFO、选项与呈现规则、
-// 四种结局（含拒绝理由）、撤回/会话释放/拆除不二次作答；channel 桥把会话的
-// permission/question 事件接到 store 与问卷，答复经能力回到后端。
+// 共享权限面板 store：FIFO、选项与呈现规则、四种结局（含拒绝理由）、撤回/会话释放/
+// 拆除时不重复作答；channel 把会话的 permission/question 事件接到 store 与问卷。
     ["verify-permission-store", ['node', '--import', 'tsx/esm', 'scripts/verify-permission-store.ts']],
-// Claude 权限桥（假 Query）：允许一次/始终允许/拒绝的 PermissionResult、选项生成
-// 与抑制、六条死锁规则、AskUserQuestion 作答与取消、ExitPlanMode 批准/继续规划、
-// requires-action，以及翻译器的 permission_denied/计划工具/问卷记录；重投的
-// requestId 也监听自己的 AbortSignal（任一取消=整组恰好一次结算，R2-5）。
+// Claude 权限桥（假 Query）：允许一次/始终允许/拒绝、选项生成与抑制、死锁规则、
+// AskUserQuestion、ExitPlanMode、permission_denied 记录；同一 requestId 重投后任一处
+// 取消都只结算一次。
     ["verify-claude-permissions", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-permissions.ts']],
-// 审批面板的选项变体（中英）：DSH 无选项=今天的两行与结局字符串、后端三选项、
-// defaultToNo 拒绝居首且无单键批准、allow-always 抑制、打字附拒绝理由。
+// 审批面板选项（中英）：DSH 无选项时与原来一致、后端三选项、defaultToNo 时拒绝在首位
+// 且无单键批准、allow-always 抑制、输入拒绝理由。
     ["verify-approval-panel-options", ['node', '--import', 'tsx/esm', 'scripts/verify-approval-panel-options.tsx']],
-// Claude 凭证（方案 §4.12，D-AUTH）：dsh-auth 登录 > 环境 > 本机 claude login 的优先级
-// 与 env 清洗、到期前刷新（凭证文件锁内落盘）、探测、认证失败刷新后以同一会话
-// resume 一次、二次失败引导 /login，且任何事件/提示/日志都不含令牌。
+// Claude 凭证：dsh-auth 登录 > 环境变量 > 本机 claude login 的优先级与 env 清洗、到期前
+// 刷新（文件锁内落盘）、认证失败刷新后同会话 resume 一次、再失败引导 /login；事件、
+// 提示和日志里都不出现令牌。
     ["verify-claude-auth", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-auth.ts']],
-// Claude 控制面（假 Query）：model/effort/mode/compact/commands/mcp/context/account
-// 的能力委托与持久化，channel 侧的原生模式标签、后端命令合并、/mcp、/context、
-// 订阅用量、/login 宿主，以及状态栏模式标签与 /context 面板的无头渲染；effort
-// 收敛不只 manual switch——open/resume seed、init 帧、message_start 漂移都按
-// 「明确不支持/声明档位排除」收敛（缺元数据保留，R2-4）。
+// Claude 控制面（假 Query）：model/effort/mode/compact/commands/mcp/context/account 的委托
+// 与持久化、channel 侧模式标签与命令合并、/mcp、/context、订阅用量、/login 及其无头渲染；
+// effort 在 open/resume、init 帧与 message_start 变化时都按后端声明的档位收敛。
     ["verify-claude-controls", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-controls.tsx']],
-// Claude 权限模式名册（/permission 选择器）：bypassPermissions 必须在运行期名册里、
-// 且选择器真能切进去——allowDangerouslySkipPermissions 是 SDK 的**闸门**（sdk.d.ts:2001
-// 要求 bypassPermissions 必须带它、sdk.d.ts:331 说没它预热起来的进程无法进入 bypass），
-// 所以恒随 query options 下发，而 permissionMode 仍等于 env/settings/default 解析出的
-// 起始 mode；每行必须带非空 description 且不等于自己的 label（此前每行把名字打两遍）；
-// 安全线不放松：settings 里的 defaultMode=bypassPermissions 仍降级为 default，提示里
-// 必须指出可在 /permission 显式选择。登记在 channel-ui（与其余 Claude 后端回归同组，
-// 它们共用假 SDK 夹具；input-terminal / session-workspace 都不含后端面）。
+// Claude 权限模式名册（/permission）：bypassPermissions 在名册里且能切进去
+// （allowDangerouslySkipPermissions 始终随 query options 下发，起始 mode 仍按
+// env/settings/default 解析）；每行有不同于 label 的 description；settings 里的
+// defaultMode=bypassPermissions 仍降级为 default，并提示可在 /permission 选择。
     ["verify-claude-mode-roster", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-mode-roster.ts']],
-// 渠道档案回归（/channel 二期）：channels.json 存储 best-effort（坏文件读空、写失败只进
-// debug、临时文件+rename 原子提交、窄化）、真源优先级全链（active channel 的 models 精确+base
-// 归一 > tiers 档位+default > 旧 model-names.json > settings env > 原始 id；channel 未激活时
-// 与四期前逐字节一致）、settings 导入形状（host 作名、ANTHROPIC_*_MODEL 吸成 tiers、不猜
-// models、重复导入刷新同 id）、/channel 门控（BACKEND_CHANNEL_COMMAND 随能力出现、DSH 永不
-// 列出）、切换后 modelDisplay 经 session-controls 的 refreshModelDisplay 钩子同调用刷新。
+// 渠道档案（/channel）：channels.json 读写容错与原子提交、模型名解析优先级（渠道
+// models > tiers > model-names.json > settings env > 原始 id；未激活渠道时不变）、
+// settings 导入、/channel 只在支持的后端出现、切换后刷新模型显示。
     ["verify-claude-channels", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-channels.ts']],
-// Claude 可执行文件解析回归（方案 §4.2）：PATH 候选必须本进程真能 spawn（--version
-// 探针，与 SDK 同一 execFile 路径）才可采纳——npm 在 Windows 发布的扩展名空 POSIX
-// 转发脚本/.cmd 会以"native binary failed to launch"拖垮整个启动；转发脚本被跟随到
-// 其指向的真实二进制（仍是用户自己的 CLI），全部不可启动才落到 SDK 自带；挂死候选
-// 被探针超时切断（POSIX 夹具）；process.ts 认的可执行文件环境变量显式值原样优先、不做二次校验。
+// Claude 可执行文件解析：PATH 候选要能真正 spawn（--version 探针）才采用；Windows 上
+// npm 的无扩展名转发脚本跟随到真实二进制，都不可用才用 SDK 自带的；挂死的候选被
+// 超时切断；显式环境变量原样优先。
     ["verify-claude-executable", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-executable.ts']],
-// Claude 的 MCP elicitation 与用户对话框（方案 §4.3/§4.7，Phase 5b，假 Query）：表单字段
-// → 问卷（枚举/布尔/多选/文本与数字校验、无效项重问、可选项可跳过）→ accept/decline/
-// cancel；URL 模式的提示行与链接、elicitation_complete 关闭；不支持的模式拒绝；
-// refusal_fallback_prompt 重试/取消/关闭、未声明种类直接 cancelled、重投同一答复；
-// 中断与释放收回面板；经 channel 桥与真实 QuestionStore 端到端，面板渲染链接。
+// Claude MCP elicitation 与对话框（假 Query）：表单字段 → 问卷（各类型校验、无效项重问、
+// 可选项跳过）→ accept/decline/cancel；URL 模式、elicitation_complete、不支持的模式、
+// refusal_fallback_prompt；中断与释放收回面板；经 channel 与真实 QuestionStore 端到端。
     ["verify-claude-dialogs", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-dialogs.ts']],
-// Claude 提示审计（方案 §5.1，Phase 5b）：fixtures/claude/notices 下的消息夹具逐类
-// 断言（api_retry、模型拒绝回退/无回退、informational 级别、notification 优先级、
-// 限流告警/拒绝只报一次、permission_denied、auth_status 错误、memory_recall、
-// conversation_reset、elicitation_complete），投影器按 key 去重（toast 替换、行原地更新）。
+// Claude 提示：fixtures/claude/notices 下逐类断言（api_retry、模型拒绝回退、
+// informational、notification 优先级、限流只报一次、permission_denied、auth_status、
+// memory_recall、conversation_reset、elicitation_complete），投影器按 key 去重。
     ["verify-claude-notices", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-notices.ts']],
-// Claude 对话重置（方案 §4.11，Phase 5b，假 Query）：conversation_reset → 清空行、
-// 名册、用量/费用/标题并加提示行，批内重置先投影其前的事件；之后按新会话 id
-// （ref、sessionRef、/fork、重连、启动器 resume 标记）；TUI 的 /clear 仍只清视图。
+// Claude 对话重置（假 Query）：conversation_reset 清空行、名册、用量、费用与标题并加
+// 提示行，之后按新会话 id 工作（ref、/fork、重连、resume 标记）；TUI 的 /clear 仍只清视图。
     ["verify-claude-reset", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-reset.ts']],
-// Claude 会话命令（方案 §5.3，Phase 5b，假 Query）：/btw、/recap 的侧问是一次性 fork
-// （resume 当前 id + forkSession + persistSession:false + 无工具 + 单轮 + 同模型/env/钉住），
-// 流式、结束/中断/出错都关闭；/rename 走 renameSession 并发 session.title（未落盘先记下、
-// 首次落盘补写）；/color 按会话 id 存 prefs（上限 200、最旧淘汰、重开恢复）；
-// /mcp reconnect|toggle 走能力并补全子命令/服务器名/on|off；DSH 的命令集不变。
+// Claude 会话命令（假 Query）：/btw、/recap 的一次性 fork 侧问、/rename、/color
+// （按会话保存，上限 200）、/mcp reconnect|toggle 与补全；DSH 命令集不变。
     ["verify-claude-session-commands", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-session-commands.ts']],
-// Claude 图片输入（Phase 5b，假 Query）：带 images 能力的会话由核心在内存暂存（不经 DSH
-// attachments 服务；同一限额模型、内容寻址、有界淘汰），submit 在文本后发 base64 块，
-// 限额（类型/5 MiB/20 张/合计 20 MiB）与"图片块缺 facade 即拒发"；用户行由暂存字节
-// 支撑，@ 图片同路径；回放 base64 成惰性 facade；无该能力的会话（DSH）行为不变。
+// Claude 图片输入（假 Query）：核心内存暂存（不经 DSH attachments，有限额与淘汰）、
+// 文本后发 base64 块、类型/大小/数量限额、回放成惰性 facade；无该能力的会话不变。
     ["verify-claude-images", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-images.ts']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
@@ -1013,11 +886,8 @@ const GROUPS = {
 // toast、kill 权限传递、无 jobs 服务降级、/new 重置）、JobCard/JobsPanel
 // 渲染冒烟（三行瀑布、settled 折叠、面板行/提示）。
     ["verify-jobs-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-panel.tsx']],
-// jobs 面板增量（信息展示完整度设计 §D，与 job-mirror 在途批对齐）：最近
-// 进度跨 settle 保留（带观测时点与生产者来源）、有界时间线观察环
-// （启动/进度/输出增量/缺口/收尾，丢最旧、无第二读取器——事件来自既有
-// readAt drain 与 job_output 镜像）、保留尾巴如实标注、无观测历史的诚实
-// 提示。
+// jobs 面板：最近进度跨 settle 保留（带时间与来源）、有界时间线（启动/进度/输出/
+// 缺口/收尾，满了丢最旧）、保留的尾巴如实标注、无历史时的提示。
     ["verify-jobs-progress-timeline", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-progress-timeline.ts']],
 // jobs 侧栏迁移回归：SidePanelColumn/PanelHost 内挂真实 useSidePanel 与假
 // channel——badge（running→info、未见 failed→error、打开清错）、名册渲染、
@@ -1037,26 +907,16 @@ const GROUPS = {
 // 空态、↑/↓ 经分发器移动选中、Tab/→ 切视图、Enter 展开再收起、Esc 恒不消费、
 // SGR 真鼠标点行聚焦、visible=false 零写流（visible=true 对照有写）、28/40 列不溢出。
     ["verify-trajectory-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-panel.tsx']],
-// 轨迹三态回归（设计 agent-team-panels §④ / R6-m1 消解）：TrajectorySource
-// supported/empty/unsupported 由组合结构声明（核心=unsupported、DSH 扩展=
-// empty→supported，非 backendId 硬编码）；四入口同口径——/trace、Ctrl+T 在
-// 无源后端上打开诚实 unsupported 场景（无能力通知、无拒绝）、侧栏 ∿ 标签
-// 照常可点、⤢ 全屏出口在 unsupported 收起而 supported 保留；supported-empty
-// 的现文案与 DSH golden 逐字节不变。
+// 轨迹三态：TrajectorySource 的 supported/empty/unsupported 由组合声明（不按
+// backendId 判断）；/trace、Ctrl+T、侧栏标签、全屏出口四个入口行为一致；supported-empty
+// 的文案不变。
     ["verify-trajectory-source-states", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-source-states.tsx']],
-// AgentEvent 轨迹折叠回归（设计 §④ Claude MVP 映射）：中立 source 把共享
-// AgentEvent 词表逐行翻成轨迹 raw 事件（turn/step/attempt-retry/delta 时序/
-// thinking 估计/usage 消息级+回合级不双计/tool call-result-progress/审批问
-// 卷/压缩/子代理 child-lane 描述行且子流量不入父账/user/todo）、无时间戳
-// 事件走观察时钟并标注、durable seq 去重、乱序 close、增量=全量、组合三态
-// empty→supported、场景 40 列/侧栏 28 列渲染。
+// AgentEvent 轨迹：中立 source 把共享 AgentEvent 逐行翻成轨迹事件（turn/step/重试/delta/
+// 思考/usage 不重复计/工具/审批问卷/压缩/子代理/todo），无时间戳事件用观察时钟、seq 去重、
+// 增量与全量一致，场景 40 列与侧栏 28 列渲染。
     ["verify-trajectory-agent-fold", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-agent-fold.tsx']],
-// 轨迹 XL 回归（设计 §④ 完整档）：审批/问卷等待段详情（asked 载荷带来源与
-// 可选项、答案靠 callId 配对 ask 工具结果懒读、等待中 live 时长、事件不可读
-// 的诚实降级）；跨 Agent 下钻（parentCallId 路由的 lane 日志、主 lane 逐字节
-// 不变、后代按 seq 归并、re-key 收养、增量=全量、场景与侧栏的 a 键/chip/
-// Esc 分层四范围循环）；长会话虚拟化（共享 ledgerWindow 夹取性质 + 千行会话
-// 只画一窗、G/g 跳转、时长预算）；源标签（header 标注 DSH 日志/AgentEvent 折叠）。
+// 轨迹完整版：审批/问卷等待段详情、跨 Agent 下钻（按 parentCallId 分 lane、主 lane 不变、
+// 增量与全量一致）、长会话虚拟化（千行只画一窗、G/g 跳转）、header 的来源标签。
     ["verify-trajectory-xl", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-xl.tsx']],
 // 信息栏回归：分组键值渲染（模型/思考深度/模式/权限/上下文/缓存/TPS/消耗/工作目录/
 // 会话标题与 ID）、无数据回落 ——、长值截断不溢出、窄列可读、visible=false 不订阅。
@@ -1143,16 +1003,12 @@ const GROUPS = {
 // 分代（含上一 epoch 迟到 end 不得错杀）、resume 日志 bootstrap（历史行
 // 不进转录）、会话绑定延迟愈合与 peer 会话不污染。
     ["verify-subagent-panel-sync", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-panel-sync.tsx']],
-// 主屏只读 Agent View / 子代理消息 composer / 代理↔代理消息流（design
-// agent-team-full §7 UI 条目）：三入口来源栈与 Esc 分层、父 rows/草稿往返
-// 不变、无 history 回退 tail+范围标注（不自称 history）、composer queue/steer
-// 与失败保草稿、无 name/重名/无能力降级、状态词表只认通道给的、未知关系
-// 不画箭头、28/40 列顶栏不溢出、Detail Messages 页与 Dashboard 摘要行。
+// 只读 Agent View、子代理消息输入框与代理间消息流：三个入口与 Esc 分层、父会话行与草稿
+// 往返不变、无 history 时回退 tail 并注明范围、queue/steer 与失败保草稿、降级路径、
+// 28/40 列不溢出、Detail Messages 页与 Dashboard 摘要行。
     ["verify-agent-view-ui", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-view-ui.tsx']],
-// agent-team P3 工作台回归（design agent-team-panels 路线图 P3 行）：
-// 父关系/兄弟纯函数（不造假树）、replay/投影的 parentAgentId 事实、
-// Agent View 右侧工作台面板与 sibling 原地切换不混消息、Dashboard 的
-// children/peers 分区与跨会话无控制面的如实降级。
+// agent-team 工作台：父/兄弟关系纯函数、replay 的 parentAgentId、Agent View 右侧工作台与
+// 兄弟切换不串消息、Dashboard 的 children/peers 分区与跨会话降级。
     ["verify-agent-workbench", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-workbench.tsx']],
 // 子进程 stderr 接管回归（issue #17）：inherit 的 MCP 子进程 stderr
 // 不再裸写终端破坏 alt-screen，输出去重聚合为受控通知。
@@ -1332,11 +1188,8 @@ const GROUPS = {
 // 与正文都出折叠标记且裁掉的尾巴不在屏上；Ctrl+O 逃生门恢复原文；
 // reasoning 行不折叠（自带三行预览）。
     ["verify-long-line-fold", ['node', '--import', 'tsx/esm', 'scripts/verify-long-line-fold.tsx']],
-// btw 面板/快路径/回退/badge 渲染层：侧栏面板（空态/线程 Markdown/composer
-// 键语义：Enter 提交、Esc 分层保草稿、Tab 切焦点、n 新话题、s 发送到聊天
-// 的 AttachedContext 合同与截断提示）、badge（不可见期间落定 → ●，进入面板
-// 清）、28/40 列窄幅不崩；真 Chat 的 /btw 快路由（面板启用路由进侧栏且浮层
-// 反针不出现——单一 surface；未启用回退浮层，Esc 关闭即 abort）。
+// btw 面板：侧栏（空态、Markdown、Enter 提交/Esc 保草稿/Tab 切焦点/n 新话题/s 发到聊天）、
+// 未读 badge、28/40 列；真实 Chat 的 /btw 在面板启用时进侧栏，未启用时用浮层（Esc 中止）。
     ["verify-btw-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-btw-panel.tsx']],
   ],
   'flaky-observation': [
