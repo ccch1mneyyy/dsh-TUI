@@ -82,7 +82,7 @@ interface FakeSubagent {
   toolCalls: unknown[]
 }
 const NOW = Date.now()
-const ROSTER: FakeSubagent[] = Array.from({ length: 8 }, (_, i) => ({
+const ROSTER: FakeSubagent[] = Array.from({ length: 24 }, (_, i) => ({
   agentId: 'agent-' + (i + 1),
   description: 'AAA' + (i + 1),
   status: 'completed',
@@ -189,6 +189,7 @@ function rawLines(): string[] {
   return out
 }
 const has = (needle: string): boolean => rawLines().some(l => l.includes(needle))
+const hasAgent = (id: string): boolean => rawLines().some(line => new RegExp('\\b' + id + '\\b').test(line))
 const dividerCol = (): number => exposedChatColumns
 /** '' when every divider cell is the expected glyph; else a row:got!=want list. */
 function dividerReport(): string {
@@ -233,10 +234,10 @@ function dumpScreen(tag: string): void {
 }
 
 try {
-  await settled(() => has('AAA1') && has('R00'))
+  await settled(() => hasAgent('AAA1') && has('R00'))
   openAgents?.()
-  await settled(() => has('AAA1') && has('Agents'))
-  check('boot: agents panel active with the roster', has('AAA1') && has('AAA2'), 'panel=' + exposedPanelColumns + ' chat=' + exposedChatColumns)
+  await settled(() => hasAgent('AAA1') && has('Agents'))
+  check('boot: agents panel active with the roster', hasAgent('AAA1') && hasAgent('AAA2'), 'panel=' + exposedPanelColumns + ' chat=' + exposedChatColumns)
   check('boot: divider intact before any scroll', dividerReport() === '', dividerReport())
 
   let chatBase = chatRegion()
@@ -263,7 +264,7 @@ try {
     await sleep(90) // 固定窗:pacing 每步滚动后的排水/渲染窗口，连续按键不能同 tick 合并
     assertChatUntouched('down #' + step)
   }
-  check('keys: the panel list actually scrolled down', !has('AAA1'), (rawLines().find(l => l.includes('AAA')) ?? '').trim())
+  check('keys: the panel list actually scrolled down', !hasAgent('AAA1'), (rawLines().find(l => l.includes('AAA')) ?? '').trim())
   const orderDown = anchorsOrdered()
   check('keys: chat anchors ordered/unique after downs', orderDown.ok, orderDown.detail)
 
@@ -289,7 +290,7 @@ try {
     assertChatUntouched('wheel-down #' + step)
   }
   const firstCardAfterDowns = (rawLines().find(l => l.includes('AAA')) ?? '').trim()
-  check('wheel: the panel list scrolled (AAA1 gone)', !has('AAA1'), firstCardAfterDowns)
+  check('wheel: the panel list scrolled (AAA1 gone)', !hasAgent('AAA1'), firstCardAfterDowns)
   const orderWheel = anchorsOrdered()
   check('wheel: chat anchors ordered/unique', orderWheel.ok, orderWheel.detail)
 

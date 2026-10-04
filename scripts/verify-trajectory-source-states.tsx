@@ -405,12 +405,12 @@ try {
     source = 'unsupported'
     {
       const { h, app } = await mountColumn()
-      check('tab: ∿ tab is still rendered (not silently hidden)', await settled(() => h.screen().includes('∿')))
-      const tab = findText(h, '∿')
-      if (tab !== null) click(h, tab.col, tab.row)
-      check('tab: trajectory capsule switched', await settled(() => h.screen().includes('‹ Trajectory ›')))
-      check('tab: honest unsupported copy in the panel', await settled(() => h.screen().includes(head(t('trajectory-unsupported')))))
-      check('outlet/unsupported: ⤢ leaves the bar', !barRow(h).includes('⤢'), barRow(h).trim())
+      check('tab: the inactive trajectory title is represented by a dot', await settled(() => barRow(h).includes('○') && barRow(h).includes('◀') && barRow(h).includes('▶')), barRow(h).trim())
+      const tab = findText(h, '○')
+      if (tab !== null) click(h, tab.col + 1, tab.row)
+      check('tab: clicking the trajectory dot centers its title', await settled(() => barRow(h).includes('Trajectory') && !barRow(h).includes('Todo')), barRow(h).trim())
+      check('tab: honest generic unsupported copy remains in the panel', await settled(() => h.screen().includes(head(t('trajectory-unsupported')))))
+      check('outlet/unsupported: ⤢ stays hidden while carousel navigation remains', !barRow(h).includes('⤢') && barRow(h).includes('Trajectory') && barRow(h).includes('◀') && barRow(h).includes('▶'), barRow(h).trim())
       await app.unmount(); h.term.dispose()
     }
     source = 'supported'
@@ -419,10 +419,10 @@ try {
       // 固定窗:pacing 两次用例在完全相同的坐标点击 ∿——必须跨过 ink 的
       // 500ms 双击窗，否则第二次点击被当作 double-click 吞掉（面板不切换）。
       await sleep(600)
-      const tab = findText(h, '∿')
-      if (tab !== null) click(h, tab.col, tab.row)
-      check('outlet/supported: capsule switched', await settled(() => h.screen().includes('‹ Trajectory ›')))
-      check('outlet/supported: ⤢ stays on the bar', await settled(() => barRow(h).includes('⤢')), barRow(h).trim())
+      const tab = findText(h, '○')
+      if (tab !== null) click(h, tab.col + 1, tab.row)
+      check('outlet/supported: trajectory dot centers the title', await settled(() => barRow(h).includes('Trajectory') && !barRow(h).includes('Todo')), barRow(h).trim())
+      check('outlet/supported: ⤢ stays beside the carousel', await settled(() => barRow(h).includes('⤢') && barRow(h).includes('◀') && barRow(h).includes('▶')), barRow(h).trim())
       await app.unmount(); h.term.dispose()
     }
     // Restore the in-process defaults so later harnesses in the same process
