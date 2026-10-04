@@ -8,8 +8,7 @@
 //   - a directory with `@anthropic-ai/claude-agent-sdk@0.3.287` installed
 //     (`npm i --ignore-scripts @anthropic-ai/claude-agent-sdk@0.3.287`); copy
 //     this file next to its node_modules and run it from there;
-//   - a local `claude` CLI; adjust `pathToClaudeCodeExecutable` below or drop
-//     the option to use the SDK's bundled binary;
+//   - the SDK's bundled CLI, or a local one named by CLAUDE_CODE_EXECUTABLE;
 //   - valid Claude credentials. The run costs a few haiku turns of real usage.
 // Usage: node <this file> <output-dir>   → <output-dir>/trace*.jsonl
 //
@@ -60,7 +59,7 @@ const runSession = async (label, options, phases, hooks = {}) => {
   const send = (text) => { const uuid = crypto.randomUUID(); sendUuids.push(uuid); log('send', { label, text, uuid }); inbox.push({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, session_id: '', uuid }) }
   const started = Date.now()
   let firstInitMs
-  const q = query({ prompt: inbox, options: { cwd, includePartialMessages: true, pathToClaudeCodeExecutable: '/home/coder/.local/bin/claude', env, stderr: d => log('stderr', { label, data: d.slice(0, 400) }), ...options, model: 'haiku', canUseTool: (toolName, input, opts) => hooks.canUseTool ? hooks.canUseTool(toolName, input, opts, q) : Promise.resolve({ behavior: 'allow' }) } })
+  const q = query({ prompt: inbox, options: { cwd, includePartialMessages: true, ...(process.env.CLAUDE_CODE_EXECUTABLE ? { pathToClaudeCodeExecutable: process.env.CLAUDE_CODE_EXECUTABLE } : {}), env, stderr: d => log('stderr', { label, data: d.slice(0, 400) }), ...options, model: 'haiku', canUseTool: (toolName, input, opts) => hooks.canUseTool ? hooks.canUseTool(toolName, input, opts, q) : Promise.resolve({ behavior: 'allow' }) } })
   let phase = -1
   let turnMsgs = 0
   const counts = {}

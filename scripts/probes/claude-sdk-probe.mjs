@@ -8,8 +8,7 @@
 //   - a directory with `@anthropic-ai/claude-agent-sdk@0.3.287` installed
 //     (`npm i --ignore-scripts @anthropic-ai/claude-agent-sdk@0.3.287`); copy
 //     this file next to its node_modules and run it from there;
-//   - a local `claude` CLI; adjust `pathToClaudeCodeExecutable` below or drop
-//     the option to use the SDK's bundled binary;
+//   - the SDK's bundled CLI, or a local one named by CLAUDE_CODE_EXECUTABLE;
 //   - valid Claude credentials. The run costs a few haiku turns of real usage.
 // Usage: node <this file> <output-dir>   → <output-dir>/trace*.jsonl
 //
@@ -97,7 +96,7 @@ const q = query({
     permissionMode: 'default',
     settingSources: ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code' },
-    pathToClaudeCodeExecutable: '/home/coder/.local/bin/claude',
+    ...(process.env.CLAUDE_CODE_EXECUTABLE ? { pathToClaudeCodeExecutable: process.env.CLAUDE_CODE_EXECUTABLE } : {}),
     env,
     enableFileCheckpointing: true,
     perTaskStopAffordance: true,
