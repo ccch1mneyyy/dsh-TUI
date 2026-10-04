@@ -74,6 +74,8 @@ export interface Channel extends Omit<ChannelUi, 'pluginScene' | 'traceEvents' |
  /** Lane drilldown reads (see ChannelUi); events carry the SessionEvent envelope. */
  trajectoryLanes(): readonly import('../../adapter/ports/channel-view.js').TrajectoryLane[]
  trajectoryLaneEvents(agentId: string, descendants?: boolean): readonly SessionEvent[]
+ /** Localized mounted-source label (see ChannelUi). */
+ trajectoryBackendLabel(): string
  releaseContributions(): void
 }
 type MutableChannelView = { -readonly [K in keyof ChannelUi]: ChannelUi[K] }

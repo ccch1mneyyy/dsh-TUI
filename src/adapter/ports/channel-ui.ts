@@ -845,6 +845,13 @@ export interface ChannelUi {
    * scoped fold stays incremental exactly like the main one.
    */
   trajectoryLaneEvents(agentId: string, descendants?: boolean): readonly RawTrajEvent[]
+  /**
+   * Localized one-phrase label naming the mounted trajectory SOURCE (the
+   * raw DSH session log, or the backend-neutral AgentEvent fold) — the
+   * design §④ trajectory-backend-label affordance: the fullscreen view says
+   * what it is reading, never guessing from the backend id.
+   */
+  trajectoryBackendLabel(): string
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   setThinkingFold(mode: 'preview' | 'full'): void
   setJobGroupFold(mode: JobGroupFoldMode): void

@@ -544,6 +544,10 @@ export function createCoreChannel(
     trajectoryLanes: () => agentTrajectory.lanes() as unknown as readonly import('../../../adapter/ports/channel-view.js').TrajectoryLane[],
     trajectoryLaneEvents: (agentId: string, descendants?: boolean) =>
       (descendants === true ? agentTrajectory.descendantEvents(agentId) : agentTrajectory.laneEvents(agentId)) as unknown as readonly SessionEvent[],
+    // The source label (design §④ i18n trajectory-backend-label): this core
+    // serves the trajectory from the neutral AgentEvent fold; the DSH
+    // extension overrides the label together with the source accessors.
+    trajectoryBackendLabel: () => t('trajectory-backend-agent-events'),
     // The trajectory capability declaration (design doc ④ 轨迹裁决): the
     // core mounts the neutral AgentEvent fold, so a session it serves alone
     // reports 'empty' before the first mapped event and 'supported' from

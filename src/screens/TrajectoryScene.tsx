@@ -453,6 +453,9 @@ export function TrajectoryScene({
   // whole scene depends on. Padding to an exact column count is deterministic,
   // CJK-aware, and cheap (two strings per frame).
   const { totals } = agg
+  // The mounted source's own label (design §4 trajectory-backend-label):
+  // tolerant read keeps partial fixtures rendering without one.
+  const backendLabel = channel.trajectoryBackendLabel?.() ?? ''
 
   /** Left text, a computed gap, right text — clipped to `width` columns. */
   const spread = (left: string, right: string, width: number): { left: string; gap: string; right: string } => {
@@ -470,7 +473,10 @@ export function TrajectoryScene({
     t('traj-totals', { turns: totals.turns, steps: totals.rows }) +
     (totals.errors > 0 ? ` \u00b7 ${t('traj-errors', { n: totals.errors })}` : '') +
     (totals.retries > 0 ? ` \u00b7 ${t('traj-retries', { n: totals.retries })}` : '') +
-    ` \u00b7 ${formatDuration(totals.spanMs)}`
+    ` \u00b7 ${formatDuration(totals.spanMs)}` +
+    // The mounted source rides the session summary (design §4 trajectory-
+    // backend-label): name what is being read, right where the numbers are.
+    (backendLabel === '' ? '' : ` \u00b7 ${t('trajectory-backend-label', { name: backendLabel })}`)
 
   // ✕ 退出按钮占 2 格（` ✕`）：预量测行给右端留出预算，按钮钉在末列
   const CLOSE_WIDTH = 2

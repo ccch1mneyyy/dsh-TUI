@@ -1952,6 +1952,11 @@ const dict = {
   'trajectory-drill-hint': { zh: 'a 下钻该 Agent', en: 'a drill into agent' },
   'trajectory-scope-hint-panel': { zh: 'a 切换范围', en: 'a cycle scope' },
   'trajectory-scope-hint': { zh: 'a 切换范围 · Esc 返回会话', en: 'a cycle scope · Esc back to session' },
+  // 轨迹源标签（设计 §④ i18n trajectory-backend-label）：全屏视图如实标注
+  // 正在读的是哪个数据源——DSH 会话日志还是中立 AgentEvent 折叠。
+  'trajectory-backend-label': { zh: '轨迹源：{{name}}', en: 'trajectory source: {{name}}' },
+  'trajectory-backend-dsh': { zh: 'DSH 会话日志', en: 'DSH session log' },
+  'trajectory-backend-agent-events': { zh: 'AgentEvent 折叠', en: 'AgentEvent fold' },
   'info-section-session': { zh: '会话', en: 'Session' },
   'info-section-model': { zh: '模型', en: 'Model' },
   'info-section-context': { zh: '上下文', en: 'Context' },

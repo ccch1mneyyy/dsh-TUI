@@ -150,6 +150,7 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   // no upstream service, no host cache.
   'trajectoryLanes': 'read-only',
   'trajectoryLaneEvents': 'read-only',
+  'trajectoryBackendLabel': 'read-only',
   'subscribe': 'subscribe'
 } satisfies Record<MethodKeys<ChannelUi>, HostEffectClass>)
 
