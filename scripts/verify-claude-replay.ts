@@ -1,6 +1,6 @@
 /**
- * Claude resume replay (docs/agent-backend-design.md §4.11, Phase 4b): every
- * read-API transcript in scripts/fixtures/claude/transcripts/ (the
+ * Claude resume replay: every read-API transcript in
+ * scripts/fixtures/claude/transcripts/ (the
  * `getSessionMessages(…, {includeSystemMessages:true})` + subagent dumps of
  * recorded sessions, redacted together with their stream recordings so ids
  * line up) runs through `replayClaudeTranscript` and the shared projector,
@@ -24,7 +24,7 @@
  *
  * Run:    node --import tsx/esm scripts/verify-claude-replay.ts
  * Update: node --import tsx/esm scripts/verify-claude-replay.ts --update
- *         (review the golden diff: it IS the behaviour change)
+ *         (review the golden diff: it is the behaviour change)
  */
 import assert from 'node:assert/strict'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -199,8 +199,8 @@ const userRows = (name: string) => run(name).harness.state.rows.filter(row => ro
   check('… with its notice, and the notification text is no bubble', events.some(event => event.type === 'notice' && event.text === t('claude-notification-turn')) && !userRows('background-bash').some(row => row.text.includes('task-notification')))
 }
 
-// Phase 4b review 4: dsh-tui's own `!!` sends `<bash-stdout>…` as a real
-// prompt — its own turn (the model answers it), shown as the output row.
+// dsh-tui's own `!!` sends `<bash-stdout>…` as a real prompt: its own turn
+// (the model answers it), shown as the output row.
 {
   const at = (n: number): string => `2026-10-02T11:00:0${n}.000Z`
   const chain = [

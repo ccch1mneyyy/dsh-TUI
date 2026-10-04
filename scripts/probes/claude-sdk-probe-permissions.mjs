@@ -1,9 +1,8 @@
-// Maintainer probe — NOT a regression test, NOT part of CI.
+// Maintainer probe, not a regression test and not part of CI.
 //
-// Phase 3 permission-bridge probe (docs/agent-backend-design.md §8.8 P3-1 and
-// the §4.7 deadlock rules): drives the real Claude Code CLI through
+// Permission-bridge probe: drives the real Claude Code CLI through
 // @anthropic-ai/claude-agent-sdk with an instrumented `canUseTool` and
-// records, per scenario, the ORDER of `system/session_state_changed` frames
+// records, per scenario, the order of `system/session_state_changed` frames
 // relative to the callback, the callback's option bag (field presence and
 // suggestion shapes only — paths are reduced to their basename), and what the
 // CLI does when the prompt is withdrawn.
@@ -22,9 +21,9 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
-// Maintainer cost rule (2026-10-02): every real-CLI run uses haiku only —
-// never sonnet or opus. The query pins `model: 'haiku'` and this guard
-// refuses to run when the environment would point the alias elsewhere.
+// Real-CLI runs use haiku only, never sonnet or opus. The query pins
+// `model: 'haiku'` and this guard refuses to run when the environment would
+// point the alias elsewhere.
 for (const name of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL']) {
   const value = process.env[name]
   if (value !== undefined && value !== '' && !/haiku/iu.test(value)) {
@@ -218,7 +217,7 @@ const allowOnce = call => ({ behavior: 'allow', updatedInput: call.input, toolUs
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 const SCENARIOS = {
-  // P3-1: requires_action ordering vs canUseTool; allow-always persistence.
+  // requires_action ordering vs canUseTool; allow-always persistence.
   'ask-write-always': {
     decide: call => ({
       behavior: 'allow',

@@ -1,7 +1,7 @@
-// Maintainer probe — NOT a regression test, NOT part of CI.
+// Maintainer probe, not a regression test and not part of CI.
 //
-// Dumps the SDK's read-API view of recorded sessions (docs/agent-backend-design.md
-// §4.11) next to their raw stream recordings, for the resume-replay fixtures
+// Dumps the SDK's read-API view of recorded sessions next to their raw
+// stream recordings, for the resume-replay fixtures
 // (scripts/verify-claude-replay.ts): for every `<name>.raw.jsonl` written by
 // scripts/probes/claude-sdk-record.mjs, the session id is read from the
 // recording's first `system/init`, and
@@ -13,7 +13,7 @@
 // or `{"kind":"subagent","agentId":…,"msg":…}` per line. No CLI runs and no
 // model is called: it only reads the transcripts the CLI already wrote.
 //
-// Raw files contain real paths and ids: NEVER commit them. Run
+// Raw files contain real paths and ids. Never commit them: run
 // scripts/fixtures/claude/redact.mjs over the directory (it redacts a
 // transcript together with its stream recording, so ids line up).
 //

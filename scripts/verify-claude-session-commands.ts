@@ -1,7 +1,6 @@
 /**
  * `/btw`, `/recap`, `/rename`, `/color` and `/mcp reconnect|toggle` on a
- * Claude session (docs/agent-backend-design.md §5.3; Phase 5b), over a fake
- * SDK — no CLI, no network:
+ * Claude session, over a fake SDK (no CLI, no network):
  *
  *  - the side query is a throwaway fork: `resume` = the current session id,
  *    `forkSession`, `persistSession:false`, no tools, one turn, the

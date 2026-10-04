@@ -1,8 +1,8 @@
-// Maintainer probe — NOT a regression test, NOT part of CI.
+// Maintainer probe, not a regression test and not part of CI.
 //
-// Phase 5b probes (docs/agent-backend-design.md §4.11, §8.8 P5-3):
+// Two probes for session reset and side queries:
 //
-//  reset  — `/clear` sent as input is a LOCAL command of the CLI (no model
+//  reset  — `/clear` sent as input is a local command of the CLI (no model
 //           call, nothing billed): records the `conversation_reset` frame
 //           (trigger, new_conversation_id vs session_id) and the session id
 //           the frames carry after it, for a second `/clear` too, plus the
@@ -12,7 +12,7 @@
 //           `query({prompt, options:{resume, forkSession:true,
 //           persistSession:false, tools:[], maxTurns:1, model}})`; records
 //           whether it answers (a history with tool calls and no tools),
-//           its latency and cost, and whether ANY transcript file was
+//           its latency and cost, and whether any transcript file was
 //           written by it (files before / after). 2 haiku turns.
 //
 // Every session it creates lives in a fresh temp cwd; the finally block
@@ -29,7 +29,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-// Maintainer cost rule (2026-10-02): every real-CLI run uses haiku only.
+// Real-CLI runs use haiku only.
 for (const name of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL']) {
   const value = process.env[name]
   if (value !== undefined && value !== '' && !/haiku/iu.test(value)) {

@@ -3,11 +3,11 @@
  * Claude session): the translator's own state folded by activity.ts into
  * WorkingActivityView values, published through the session's
  * `workingActivity` capability. Offline: synthetic SDK frames through the
- * REAL translator (no CLI, no network), the real fold, and one session-level
+ * real translator (no CLI, no network), the real fold, and one session-level
  * case over the shared fake SDK.
  *
  *  - fold lifecycle: nothing before the first turn; thinking on turn open;
- *    the ⏵ self-narration line of a streaming reply (and it SURVIVES the
+ *    the ⏵ self-narration line of a streaming reply (and it survives the
  *    attempt that streamed it); tool phase (label = tool name, detail = the
  *    input's file_path/command/pattern/url/path, line = both); the tracked
  *    task's activeForm as the thinking phrase; a parked prompt outranks all
@@ -15,8 +15,8 @@
  *    the next turn revives; unchanged state publishes nothing.
  *  - detail extraction: priority order, whitespace flattening, 60-char clip.
  *  - session level: the capability delivers the same values a real turn
- *    produces (this is the red/green lever for session.ts's publish hook),
- *    and a late subscriber receives the latest value once on subscribe.
+ *    produces (it fails without session.ts's publish hook), and a late
+ *    subscriber receives the latest value once on subscribe.
  *
  * Run: node --import tsx/esm scripts/verify-claude-activity.ts
  */

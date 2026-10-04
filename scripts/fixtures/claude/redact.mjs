@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Redact raw Claude SDK recordings (scripts/probes/claude-sdk-record.mjs) into
- * committable translator fixtures, keeping every message's STRUCTURE:
+ * committable translator fixtures, keeping every message's structure:
  *
  *   - absolute paths: the scenario project dir → /fixture/project, the home
  *     dir → /fixture/home, the temp dir → /fixture/tmp, the recording root →
@@ -22,7 +22,7 @@
  * Writes `<scenario>.jsonl` per `<scenario>.raw.jsonl`, and
  * `transcripts/<scenario>.jsonl` per `<scenario>.transcript.raw.jsonl` (the
  * read-API dump of scripts/probes/claude-transcript-dump.mjs), redacted with
- * the SAME placeholder maps as its stream so ids line up between the live
+ * the same placeholder maps as its stream so ids line up between the live
  * recording and the replay. After redacting, the output is scanned for the
  * home dir, the user name and any remaining absolute path under them; a hit
  * aborts with a non-zero exit.

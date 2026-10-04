@@ -1,7 +1,6 @@
 /**
- * MCP elicitation and the CLI's user dialogs on a Claude session
- * (docs/agent-backend-design.md §4.3, §4.7; Phase 5b), over a fake SDK —
- * no CLI, no network:
+ * MCP elicitation and the CLI's user dialogs on a Claude session, over a
+ * fake SDK (no CLI, no network):
  *
  *  - the query declares `onElicitation`, `onUserDialog` and
  *    `supportedDialogKinds: ['refusal_fallback_prompt']`;

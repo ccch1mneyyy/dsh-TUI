@@ -1,17 +1,18 @@
 /**
- * Claude translator gate (docs/agent-backend-design.md §5.1, §8.3): every
- * redacted SDK recording in scripts/fixtures/claude/*.jsonl runs through
- * `createClaudeTranslator` and then the ONE shared projector, and the result
- * — the event-type sequence, the transcript rows and the status-relevant
- * channel state — must equal the committed `<fixture>.golden.json`.
- * Targeted assertions pin each Phase 0 correction on top of the goldens.
+ * Claude translator gate: every redacted SDK recording in
+ * scripts/fixtures/claude/*.jsonl runs through `createClaudeTranslator` and
+ * then the one shared projector, and the result (the event-type sequence,
+ * the transcript rows and the status-relevant channel state) must equal the
+ * committed `<fixture>.golden.json`. Targeted assertions on top of the
+ * goldens pin individual behaviours: interrupts, compaction, parallel tools,
+ * subagents, task kinds.
  *
  * The fixtures are recorded by scripts/probes/claude-sdk-record.mjs and
  * redacted by scripts/fixtures/claude/redact.mjs (no network here).
  *
  * Run:    node --import tsx/esm scripts/verify-claude-translate.ts
  * Update: node --import tsx/esm scripts/verify-claude-translate.ts --update
- *         (review the golden diff: it IS the behaviour change)
+ *         (review the golden diff: it is the behaviour change)
  */
 import assert from 'node:assert/strict'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -186,7 +187,7 @@ for (const [name, result] of runs) {
   check('Bash: terminal cards, exec category', bash.harness.state.rows.filter(row => row.kind === 'tool').every(row => row.tool?.callView?.card === 'terminal' && row.tool.callView.category === 'exec'))
 }
 
-// ── interrupts (Phase 0 corrections) ──────────────────────────────────
+// ── interrupts ────────────────────────────────────────────────────────
 {
   const now = get('interrupt-now')
   const ends = of(now.events, 'turn.end')
@@ -209,10 +210,10 @@ for (const [name, result] of runs) {
   const compaction = get('compaction')
   check('compaction: manual start, committed end', of(compaction.events, 'compaction.start').some(event => event.trigger === 'manual') && of(compaction.events, 'compaction.end').some(event => event.ok && (event.preTokens ?? 0) > 0))
   check('compaction: summary row, no /compact bubble, no local-command echo', compaction.harness.state.rows.some(row => row.kind === 'compact') && !compaction.harness.state.rows.some(row => row.kind === 'user' && (row.text === '/compact' || row.text.includes('local-command'))))
-  // Merge of main bca29675 (db2aee46): the summary no longer rewrites the
-  // occupancy sample or the cumulative input with a chars/4 estimate; the
-  // CLI-measured `compact_boundary.post_tokens` re-seeds the sample instead
-  // (a compaction turn makes no request of its own).
+  // The summary does not rewrite the occupancy sample or the cumulative
+  // input with a chars/4 estimate; the CLI-measured
+  // `compact_boundary.post_tokens` re-seeds the sample instead (a compaction
+  // turn makes no request of its own).
   {
     const boundary = compaction.events.findIndex(event => event.type === 'compaction.end' && event.ok)
     const summary = compaction.events.findIndex(event => event.type === 'user.message' && event.source === 'compaction')
@@ -239,8 +240,8 @@ for (const [name, result] of runs) {
 
 // ── parallel tools / subagent channel / allowed permission / partials ──
 {
-  // Review fix (Phase 2 → 3): the CLI drains the first result while the same
-  // API message still streams the second call; the attempt stays open.
+  // The CLI drains the first result while the same API message still
+  // streams the second call; the attempt stays open.
   const parallel = get('parallel-tool')
   const cards = parallel.harness.state.rows.filter(row => row.kind === 'tool')
   check('parallel: both Read calls get a card', cards.length === 2 && cards.every(row => row.tool?.name === 'Read'), cards.map(row => row.tool?.name))
@@ -256,8 +257,8 @@ for (const [name, result] of runs) {
 
   const sub = get('subagent')
   check('subagent: subagent channel messages stay off the main transcript', sub.harness.state.rows.filter(row => row.kind === 'user').length === 1 && sub.harness.state.rows.filter(row => row.kind === 'tool').length === 0 && sub.harness.state.rows.filter(row => row.kind === 'assistant').length === 1, sub.harness.state.rows.map(row => row.kind))
-  // Phase 5a: the `Agent` call pre-creates the subagent, `task_started`
-  // completes it on the same lane — one subagent, one card, no task card.
+  // The `Agent` call pre-creates the subagent, `task_started` completes it
+  // on the same lane: one subagent, one card, no task card.
   const starts = of(sub.events, 'subagent.start')
   check('subagent: the call pre-creates it, task_started completes it on the same lane', starts.length === 2 && starts[0]!.agentId === starts[0]!.parentCallId && starts[1]!.parentCallId === starts[0]!.parentCallId && starts[1]!.agentId !== starts[0]!.agentId && starts[1]!.depth === 1, starts)
   check('subagent: one subagent ends, no task card', of(sub.events, 'subagent.end').length === 1 && of(sub.events, 'task.end').length === 0 && sub.harness.state.rows.filter(row => row.kind === 'job').length === 0)
@@ -278,7 +279,7 @@ for (const [name, result] of runs) {
   check('partial text: many deltas settle into one complete reply', textDeltas > 1 && reply !== undefined && reply.text.split('\n').filter(line => line.trim() !== '').length >= 5 && reply.streaming !== true, { textDeltas, text: reply?.text })
 }
 
-// ── task kinds / origins / message-level structured result (review fixes) ──
+// ── task kinds / origins / message-level structured result ────────────
 {
   const background = get('background-bash')
   check('background Bash: a job ends as a task, never as a subagent', of(background.events, 'task.end').length === 1 && of(background.events, 'subagent.end').length === 0)

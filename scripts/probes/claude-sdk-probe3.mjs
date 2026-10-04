@@ -1,10 +1,10 @@
-// Maintainer probe — NOT a regression test, NOT part of CI.
+// Maintainer probe, not a regression test and not part of CI.
 //
 // Drives the real Claude Code CLI through @anthropic-ai/claude-agent-sdk and
 // records every observed message shape, so the Claude backend contract in
 // docs/agent-backend-design.md is written from behaviour, not guesses.
 //
-// Prerequisites (see docs/agent-backend-design.md 附录 A):
+// Prerequisites:
 //   - a directory with `@anthropic-ai/claude-agent-sdk@0.3.287` installed
 //     (`npm i --ignore-scripts @anthropic-ai/claude-agent-sdk@0.3.287`); copy
 //     this file next to its node_modules and run it from there;
@@ -13,23 +13,24 @@
 //   - valid Claude credentials. The run costs a few haiku turns of real usage.
 // Usage: node <this file> <output-dir>   → <output-dir>/trace3.jsonl
 //
-// Probe 3 (design §8.8 P2-1 / P3-1 / P3-3, plus the P3-2 method listing):
+// Probe 3:
 //   - every `command_lifecycle` frame with its timing relative to the per-turn
 //     `system/init`, `system/status`, first `stream_event` and `result`;
 //   - whether `system/session_state_changed` appears once
 //     CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1 is set, and where it lands
 //     relative to `result`;
 //   - the delivery semantics of `priority:'next'` and `priority:'now'` sent
-//     mid-turn, both while text streams and while a foreground Bash tool runs.
+//     mid-turn, both while text streams and while a foreground Bash tool runs;
+//   - the methods the runtime Query object exposes beyond the declared ones.
 // A summary keyed by command uuid is printed at the end; the trace keeps
 // every non-delta message (truncated) for anything the summary misses.
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import fs from 'node:fs'
 import path from 'node:path'
 
-// Maintainer cost rule (2026-10-02): every real-CLI run uses haiku only —
-// never sonnet or opus. The query pins `model: 'haiku'` and this guard
-// refuses to run when the environment would point the alias elsewhere.
+// Real-CLI runs use haiku only, never sonnet or opus. The query pins
+// `model: 'haiku'` and this guard refuses to run when the environment would
+// point the alias elsewhere.
 for (const name of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL']) {
   const value = process.env[name]
   if (value !== undefined && value !== '' && !/haiku/iu.test(value)) {
@@ -83,7 +84,7 @@ class Inbox {
 }
 
 // The TUI may itself run inside a Claude Code terminal; the child must not
-// inherit that session's identity or messaging socket (design §4.3 env row).
+// inherit that session's identity or messaging socket.
 const env = { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: 'dsh-tui-probe/0.0.0', CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' }
 for (const key of Object.keys(env)) {
   if (key === 'CLAUDECODE' || key === 'CLAUDE_CODE_ENTRYPOINT' || key === 'CLAUDE_CODE_SESSION_ID' || key.startsWith('CLAUDE_CODE_MESSAGING_')) delete env[key]
@@ -119,7 +120,7 @@ const q = query({
   },
 })
 
-// P3-2: does the runtime Query object carry undeclared queue controls?
+// Does the runtime Query object carry undeclared queue controls?
 {
   const names = new Set()
   for (let p = q; p && p !== Object.prototype; p = Object.getPrototypeOf(p)) {

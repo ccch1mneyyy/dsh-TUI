@@ -1,13 +1,13 @@
 /**
- * Maintainer cost rule (2026-10-02): every real-CLI run — live tests, probes,
- * fixture recordings — uses haiku only, never sonnet or opus. Live tests call
+ * Cost rule: every real-CLI run (live tests, probes, fixture recordings)
+ * uses haiku only, never sonnet or opus. Live tests call
  * {@link pinHaikuOrExit} before opening a session: it pins the child's
  * `ANTHROPIC_MODEL` to haiku and refuses to run when anything would point the
  * session elsewhere (an `ANTHROPIC_MODEL` / alias override in the
  * environment, or a persisted `/model` choice in the Claude backend's prefs
  * file, which wins over the environment at session start).
  *
- * Real model SWITCHING is covered by the fake-SDK `verify-claude-controls`.
+ * Real model switching is covered by the fake-SDK `verify-claude-controls`.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'

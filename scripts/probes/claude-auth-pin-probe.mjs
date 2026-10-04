@@ -1,19 +1,18 @@
-// Maintainer probe — NOT a regression test, NOT part of CI. OFFLINE as far as
-// billing goes: no real credential is ever used.
+// Maintainer probe, not a regression test and not part of CI. It bills
+// nothing: no real credential is ever used.
 //
-// Proves the route pin of an injected subscription token (Phase 4b review 1,
-// docs/agent-backend-design.md §4.12): a global config file the gate might
-// not read (`<CLAUDE_CONFIG_DIR>/.config.json`, which the CLI prefers over
-// `.claude.json`) sets `ANTHROPIC_BASE_URL` to a local HTTP listener; the CLI
-// is started with a SENTINEL `CLAUDE_CODE_OAUTH_TOKEN` (not a token at all)
-// and one prompt.
+// Checks the route pin auth.ts adds when it injects a subscription token. A
+// global config file the gate might not read (`<CLAUDE_CONFIG_DIR>/.config.json`,
+// which the CLI prefers over `.claude.json`) sets `ANTHROPIC_BASE_URL` to a
+// local HTTP listener; the CLI is started with a sentinel
+// `CLAUDE_CODE_OAUTH_TOKEN` (not a token at all) and one prompt.
 //
-//  - control (no pin): the listener is expected to receive the sentinel —
-//    the leak path exists;
+//  - control (no pin): the listener should receive the sentinel, i.e. the
+//    leak path exists;
 //  - pinned (the SDK `settings` option, the flag-settings layer, setting
 //    `ANTHROPIC_BASE_URL` to https://api.anthropic.com and blanking the
 //    other routing variables, as auth.ts does): the listener must receive
-//    NOTHING carrying the sentinel; the request goes to api.anthropic.com
+//    nothing carrying the sentinel; the request goes to api.anthropic.com
 //    and is refused (401), which costs nothing.
 //
 // The same two cases run with the base URL in `.claude.json` too.
@@ -31,7 +30,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 
-// Maintainer cost rule (2026-10-02): every real-CLI run uses haiku only.
+// Real-CLI runs use haiku only.
 for (const name of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL']) {
   const value = process.env[name]
   if (value !== undefined && value !== '' && !/haiku/iu.test(value)) {

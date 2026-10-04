@@ -1,6 +1,6 @@
 /**
- * Claude session lifecycle (docs/agent-backend-design.md §4.4, §4.7, §4.13)
- * against a FAKE SDK `query()` — no CLI, no network:
+ * Claude session lifecycle against a fake SDK `query()` (no CLI, no
+ * network):
  *
  *  - open → dispose ×50 leaves no listener, no timer, no live query (close +
  *    abort + closed input stream every time; dispose is idempotent);
@@ -10,7 +10,7 @@
  *    cancel on a CLI advertising it) and the confirmation clears the
  *    force-settle timer; with no confirmation the injected 30 s clock
  *    force-closes the turn with a notice and `requires-action`;
- *  - the cancel receipt carries its certainty (R2-1): rejection → failed,
+ *  - the cancel receipt carries its certainty: rejection → failed,
  *    an older CLI's undefined answer → unknown, still_queued → confirmed;
  *    the unconfirmed legs return the covered uuids (snapshot before the
  *    request — inputs pushed during it never ride the old batch);
@@ -20,7 +20,7 @@
  *  - a consumer error (process death) marks the session disposed, closes the
  *    open turn and says so; unknown message types are ignored;
  *  - a failed handshake throws after tearing the query down;
- *  - every handshake RESETS the CLI capabilities and picks the user-row
+ *  - every handshake resets the CLI capabilities and picks the user-row
  *    source explicitly: a missing/empty capabilities list (an older CLI
  *    without msg_lifecycle_v1) confirms inputs by their replay echo —
  *    one user row with origin user, and a reconnect never re-delivers an
@@ -30,10 +30,10 @@
  *    control reaches the CLI before the first turn; a reconnect never
  *    overwrites the model once set (a resumed session keeps the replay's);
  *  - env scrubbing, the Fidelity Profile options and the start-mode
- *    resolution are pinned as units (bypassPermissions only ever STARTS
+ *    resolution are pinned as units (bypassPermissions only ever starts
  *    from the env override, but the SDK's bypass gate
- *    `allowDangerouslySkipPermissions` rides along on every query so the
- *    session may enter bypass at runtime — options.ts; settings-level
+ *    `allowDangerouslySkipPermissions` rides along on every query, see
+ *    options.ts, so the session may enter bypass at runtime; settings-level
  *    bypass still downgrades).
  *
  * Run: node --import tsx/esm scripts/verify-claude-session-lifecycle.ts
@@ -203,8 +203,8 @@ const collect = (session: AgentSession) => {
   check('submit: idle followup is a plain push, then next/later/now', JSON.stringify(priorities) === JSON.stringify(['plain', 'next', 'later', 'now']), priorities)
   check('submit: uuid = clientMessageId', query.inputs[1]!.uuid === '00000000-0000-4000-8000-0000000000a2')
   check('submit: the confirmed input becomes the user row', sink.events().some(event => event.type === 'user.message' && event.text === 'first'))
-  // Phase 5b: images are sent (verify-claude-images); an image the session
-  // cannot send — an unreadable facade, an image block without one — is
+  // Images are sent (see verify-claude-images); an image the session
+  // cannot send (an unreadable facade, an image block without one) is
   // still refused loudly, never dropped from the message.
   await assert.rejects(session.submit({ text: 'img', clientMessageId: 'x', images: [{} as never] }, 'followup'), new RegExp(t('claude-image-type-refused', { name: 'undefined', type: '?' }).replace(/[()?]/gu, '\\$&')))
   await assert.rejects(session.submit({ text: 'pasted', clientMessageId: 'z', blocks: [{ type: 'text', text: 'pasted' }, { type: 'image' }] }, 'followup'), new RegExp(t('claude-image-gone')))
@@ -258,13 +258,14 @@ const collect = (session: AgentSession) => {
   check('no timer after dispose', outstanding() === 0)
 }
 
-// ── cancel receipts: failure never reads as an empty queue (R2-1) ─────
-// A rejected or answerless interrupt used to answer stillQueued [] — a
-// success-shaped receipt over a queue whose state was never confirmed.
-// The channel's dock would then offer a re-send over still-live backend
-// copies. The receipt now carries its certainty: only a CLI that answered
-// with still_queued is 'confirmed'; the other legs return the covered
-// snapshot (what the cancel saw, never what arrived during the request).
+// ── cancel receipts: failure never reads as an empty queue ────────────
+// A rejected or answerless interrupt must not answer stillQueued []: that
+// is a success-shaped receipt over a queue whose state was never confirmed,
+// and the channel's dock would offer a re-send over still-live backend
+// copies. The receipt carries its certainty instead: only a CLI that
+// answered with still_queued is 'confirmed'; the other legs return the
+// covered snapshot (what the cancel saw, never what arrived during the
+// request).
 {
   const uuid = (tag: string): string => `00000000-0000-4000-8000-0000000000${tag}`
   const queueOne = async (session: AgentSession, id: string): Promise<void> => {
@@ -414,7 +415,7 @@ const collect = (session: AgentSession) => {
   const set = Object.entries(OPTION_POLICY).filter(([key, policy]) => policy === 'set' && key !== 'pathToClaudeCodeExecutable').map(([key]) => key).sort()
   // The conditional ones: the persisted model/effort, the route pin of an
   // injected subscription token, and `resume` in place of `sessionId` for a
-  // credential reconnect. `allowDangerouslySkipPermissions` is NOT among
+  // credential reconnect. `allowDangerouslySkipPermissions` is not among
   // them: the gate is sent on every query (options.ts).
   const withChoices = buildQueryOptions({
     cwd: '/fixture/project', sessionId: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
@@ -462,7 +463,7 @@ const collect = (session: AgentSession) => {
 }
 
 // ── the explicit `model` parameter yields to the env slot routing ──────
-// CLI 2.1.284's SDK path resolves an EXPLICIT model against the bundled
+// CLI 2.1.284's SDK path resolves an explicit model against the bundled
 // official catalog and fail-fasts a non-official name (a relay model) as
 // [claude-code:unrecognized_model]; the env slot routing (ANTHROPIC_MODEL /
 // ANTHROPIC_DEFAULT_<TIER>_MODEL) serves those names fine. When the env the
@@ -541,8 +542,7 @@ const collect = (session: AgentSession) => {
     check(`capabilities (${label}): the capability list is empty, not inherited`, JSON.stringify((session.capabilities.native as { claude: { cliCapabilities: readonly string[] } }).claude.cliCapabilities) === '[]')
     await session.dispose()
   }
-  // A non-empty list without msg_lifecycle_v1: the echo path (a green pin —
-  // this is the one shape the old gate did switch for).
+  // A non-empty list without msg_lifecycle_v1: the echo path.
   {
     const { clock } = manualClock()
     const fake = fakeSdk({ capabilities: ['interrupt_receipt_v1'] })
@@ -598,7 +598,7 @@ const collect = (session: AgentSession) => {
 
 // ── the session's model is seeded from the open handshake (/effort) ─────
 // No submit, no stream init: the state right after open is what /effort
-// sees. The init shape is the real SDK contract — NO scalar model, the
+// sees. The init shape is the real SDK contract: no scalar model, the
 // catalog's `default` alias row carrying the resolved default.
 {
   const { clock } = manualClock()
@@ -616,7 +616,7 @@ const collect = (session: AgentSession) => {
   await session.dispose()
 }
 {
-  // The real SDK's initialize response carries NO scalar model — only the
+  // The real SDK's initialize response carries no scalar model, only the
   // catalog, whose `default` alias row names the resolved default. A cold
   // start (no prefs, no explicit model) must still seed from that row.
   const { clock } = manualClock()

@@ -1,7 +1,6 @@
-// Maintainer probe — NOT a regression test, NOT part of CI.
+// Maintainer probe, not a regression test and not part of CI.
 //
-// P-AUTH-1 (docs/agent-backend-design.md §8.8, §4.12): how the Claude CLI
-// behaves with an injected `CLAUDE_CODE_OAUTH_TOKEN`.
+// How the Claude CLI behaves with an injected `CLAUDE_CODE_OAUTH_TOKEN`.
 //
 //  - `dsh-auth`: when the dsh-auth credential file holds an `anthropic`
 //    credential (`$DSH_AUTH_CREDENTIALS`, `$DSH_HOME/dsh-auth/credentials.json`
@@ -10,11 +9,11 @@
 //    `accountInfo()` report? Skipped (and said so) when none is stored.
 //  - `rejected`: inject a syntactically plausible but invalid token and run
 //    one turn: the failure shape (`assistant.error`, `result.is_error`, its
-//    text) the backend's reconnect logic keys on; then reopen the SAME
+//    text) the backend's reconnect logic keys on; then reopen the same
 //    session with `resume` on the local login: does it resume a session
 //    whose only turn failed authentication?
 //
-// Prints field PRESENCE and error text only — never token material (the
+// Prints field presence and error text only, never token material (the
 // injected token is never echoed; account fields are reduced to presence).
 // Prerequisites: SDK 0.3.287 resolvable, a local `claude` CLI
 // (CLAUDE_CODE_EXECUTABLE), a local login for the resume half.
@@ -25,9 +24,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-// Maintainer cost rule (2026-10-02): every real-CLI run uses haiku only —
-// never sonnet or opus. The query pins `model: 'haiku'` and this guard
-// refuses to run when the environment would point the alias elsewhere.
+// Real-CLI runs use haiku only, never sonnet or opus. The query pins
+// `model: 'haiku'` and this guard refuses to run when the environment would
+// point the alias elsewhere.
 for (const name of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL']) {
   const value = process.env[name]
   if (value !== undefined && value !== '' && !/haiku/iu.test(value)) {

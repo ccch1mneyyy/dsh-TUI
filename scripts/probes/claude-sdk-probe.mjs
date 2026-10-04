@@ -1,28 +1,25 @@
-// Maintainer probe — NOT a regression test, NOT part of CI.
+// Maintainer probe, not a regression test and not part of CI.
 //
-// Drives the real Claude Code CLI through @anthropic-ai/claude-agent-sdk and
-// records every observed message shape, so the Claude backend contract in
-// docs/agent-backend-design.md is written from behaviour, not guesses.
+// Drives one streaming-input session of the real Claude Code CLI through
+// @anthropic-ai/claude-agent-sdk and records every message shape (truncated),
+// so the Claude backend contract in docs/agent-backend-design.md is written
+// from observed behaviour, not guesses.
 //
-// Prerequisites (see docs/agent-backend-design.md 附录 A):
+// Prerequisites:
 //   - a directory with `@anthropic-ai/claude-agent-sdk@0.3.287` installed
 //     (`npm i --ignore-scripts @anthropic-ai/claude-agent-sdk@0.3.287`); copy
 //     this file next to its node_modules and run it from there;
 //   - the SDK's bundled CLI, or a local one named by CLAUDE_CODE_EXECUTABLE;
 //   - valid Claude credentials. The run costs a few haiku turns of real usage.
-// Usage: node <this file> <output-dir>   → <output-dir>/trace*.jsonl
-//
-// Minimal runtime probe: drive one streaming-input Claude Agent SDK session
-// against the locally installed Claude Code CLI and record every message
-// shape (truncated) so the backend contract is written from observed
-// behavior, not guesses. Output: trace.jsonl + summary on stdout.
+// Usage: node <this file> <output-dir>   → <output-dir>/trace*.jsonl, plus a
+// summary on stdout.
 import { query, listSessions, getSessionInfo, getSessionMessages, listSubagents, getSubagentMessages } from '@anthropic-ai/claude-agent-sdk'
 import fs from 'node:fs'
 import path from 'node:path'
 
-// Maintainer cost rule (2026-10-02): every real-CLI run uses haiku only —
-// never sonnet or opus. The query pins `model: 'haiku'` and this guard
-// refuses to run when the environment would point the alias elsewhere.
+// Real-CLI runs use haiku only, never sonnet or opus. The query pins
+// `model: 'haiku'` and this guard refuses to run when the environment would
+// point the alias elsewhere.
 for (const name of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL']) {
   const value = process.env[name]
   if (value !== undefined && value !== '' && !/haiku/iu.test(value)) {
