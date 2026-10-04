@@ -237,6 +237,8 @@ The session manager paints the last successful list immediately while it checks 
 Removing a workspace registration keeps its sessions accessible under a "History only" directory in the rail.
 History-only directories offer edit and new-session actions; rename and remove are available for registered workspaces.
 
+**Background jobs**: long commands start folded, with `⎿` marking their continuations. Click a command or output preview to expand/fold it; `Ctrl+O` does the same in the transcript, and `e` toggles the focused job in `/jobs` or the side panel. Output keeps a three-line preview until expanded. Card headers still open the job panel.
+
 **Background sessions**: `/bg` or `←` on an empty prompt; `Esc` returns. They run in this process and stop when the TUI exits. Logs survive.
 
 Full commands: [Interaction and commands](docs/interaction.en.md).

@@ -278,6 +278,8 @@ function signatureParts(
       // unreachable scroll bottom (the subagent card's lesson).
       const group = row.jobGroup
       signatureScratch.push(
+        expanded,
+        expandedRows.has(row.id),
         row.job?.status ?? '',
         // The label drives the card's height: it wraps inside its column and
         // the rail is painted per line, so a label that lands later (the
@@ -290,7 +292,7 @@ function signatureParts(
         // text those tail lines carry decides how many rows actually paint.
         row.job === undefined
           ? ''
-          : row.job.outputLines.slice(-4).map(line => line.text.length).join(','),
+          : (expanded || expandedRows.has(row.id) ? row.job.outputLines : row.job.outputLines.slice(-4)).map(line => line.text.length).join(','),
         // Grouped members all render with the same 2-cell rail, so the only
         // shape inputs are "is it a member", "is it the head" and "is the run
         // folded" (a folded head paints the summary alone).
@@ -1996,6 +1998,8 @@ function TranscriptRow({
           {groupHead && jobGroup.folded ? null : (
             <JobCard
               job={job}
+              expanded={isExpanded || expanded}
+              onToggle={toggleJobGroup}
               marginTopOnTurn={groupHead ? false : marginTopOnTurn}
               // The bracket hugs the CARDS: the summary line above stays
               // outside it, and the head/last member round the two ends in

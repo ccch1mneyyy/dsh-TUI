@@ -511,10 +511,15 @@ console.log('--- G13: a long command label wraps in full ---')
   const longLabel = 'pwsh -Command "' + 'Get-ChildItem -Recurse | Where-Object { $_.Length -gt 0 } | ForEach-Object { $_.FullName } ; '.repeat(2) + TAIL + '"'
   const rows = [jobRow(1, makeJob('pwsh-1', 'completed', { label: longLabel }))]
   await withTerminal(() => renderList(rows), async frame => {
+    check('G13 长命令默认折叠并显示续行数', await settled(() => frame.screen().includes('lines (ctrl+o')) && !frame.screen().includes(TAIL), frame.lines().slice(0, 5).join('|'))
+    frame.rerender(renderList(rows, { expanded: true }))
     check('G13 长命令尾部可见（换行而非截断）', await settled(() => frame.screen().includes(TAIL)),
       frame.lines().filter(l => l.trim() !== '').slice(0, 5).join('|'))
     const cardLines = frame.lines().filter(l => l.includes('job: pwsh-1') || l.includes('Get-ChildItem'))
     check('G13 长命令占多行', cardLines.length >= 2, JSON.stringify(cardLines).slice(0, 300))
+    check('G13 续行带命令连接标记', frame.lines().some(line => line.trimStart().startsWith('⎿ ') && line.includes('Get-ChildItem')), frame.lines().slice(0, 6).join('|'))
+    frame.rerender(renderList(rows))
+    check('G13 可以再次折叠', await settled(() => !frame.screen().includes(TAIL) && frame.screen().includes('lines (ctrl+o')))
   })
 }
 console.log('--- G14: a long output line wraps and keeps the tail ---')
@@ -547,6 +552,8 @@ console.log('--- G15: the jobs panel wraps long command/output lines ---')
   await withTerminal(
     () => React.createElement(JobsPanel, { jobs: [panelJob], onClose: (): void => {}, onKill: (): void => {} }),
     async frame => {
+      check('G15 面板详情默认折叠长命令', await settled(() => frame.screen().includes('lines (e')) && !frame.screen().includes(CMD_TAIL), frame.lines().slice(0, 9).join('|'))
+      frame.stdin.write('e')
       check('G15 面板详情：长命令尾部可见', await settled(() => frame.screen().includes(CMD_TAIL)),
         frame.lines().filter(l => l.trim() !== '').slice(0, 8).join('|'))
       check('G15 面板列表：长任务名换行后尾部可见', frame.screen().includes(LABEL_TAIL),
@@ -591,7 +598,7 @@ console.log('--- G17: a wrapped label keeps the joint+glyph on its own line ---'
     jobRow(2, makeJob('pwsh-2', 'completed', { label: longLabel })),
     jobRow(3, makeJob('pwsh-3', 'completed', { label: longLabel })),
   ]
-  await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+  await withTerminal(() => renderList(rows, { jobGroupFold: 'never', expanded: true }), async frame => {
     check('G17 折行卡渲染出来', await settled(() => frame.lines().some(l => l.includes('several-rows'))),
       frame.lines().filter(l => l.trim() !== '').slice(0, 4).join('|'))
     const lines = frame.lines()
@@ -617,7 +624,7 @@ console.log('--- G18: every row of the group stays inside the rail ---')
     jobRow(1, makeJob('pwsh-1', 'completed', { label: longLabel })),
     jobRow(2, makeJob('pwsh-2', 'running', { label: longLabel, outputLines: [{ text: 'compiling module a …' }] })),
   ]
-  await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+  await withTerminal(() => renderList(rows, { jobGroupFold: 'never', expanded: true }), async frame => {
     check('G18 折行成员渲染出来', await settled(() => frame.lines().some(l => l.includes('compiling module a'))),
       frame.lines().filter(l => l.trim() !== '').slice(0, 5).join('|'))
     const lines = frame.lines().filter(l => l.trim() !== '')
@@ -646,7 +653,7 @@ console.log('--- G19: a live middle member keeps the rail on its output rows ---
     })),
     jobRow(3, makeJob('pwsh-3', 'completed')),
   ]
-  await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+  await withTerminal(() => renderList(rows, { jobGroupFold: 'never', expanded: true }), async frame => {
     check('G19 中间成员的输出行可见', await settled(() => frame.lines().some(l => l.includes('compiling module b'))),
       frame.lines().filter(l => l.trim() !== '').slice(0, 6).join('|'))
     const lines = frame.lines()
@@ -668,7 +675,7 @@ console.log('--- G20: the open group is a rounded bracket, the fold line is not 
     jobRow(1, makeJob('pwsh-1', 'completed', { label: 'gh pr view 1206 --repo ccch1mneyyy/dsh-TUI --json state,headRefName --jq x' })),
     jobRow(2, makeJob('pwsh-2', 'running', { label: 'pnpm run build', outputLines: [{ text: 'compiling module a …' }] })),
   ]
-  await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+  await withTerminal(() => renderList(rows, { jobGroupFold: 'never', expanded: true }), async frame => {
     check('G20 展开组渲染出来', await settled(() => frame.lines().some(l => l.includes('compiling module a'))),
       frame.lines().filter(l => l.trim() !== '').slice(0, 6).join('|'))
     const lines = frame.lines().filter(l => l.trim() !== '')
@@ -710,7 +717,7 @@ console.log('--- G21: the hand-painted bracket fits the cards at every width ---
     })),
   ]
   for (const cols of [60, 80, 140]) {
-    await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+    await withTerminal(() => renderList(rows, { jobGroupFold: 'never', expanded: true }), async frame => {
       const ok = await settled(() => frame.lines().some(l => l.includes('compiling module b')))
       const lines = frame.lines().filter(l => l.trim() !== '')
       const header = lines.findIndex(l => l.includes('background jobs ×2'))
@@ -734,25 +741,77 @@ console.log('--- G21: the hand-painted bracket fits the cards at every width ---
 // ---------------------------------------------------------------------------
 console.log('--- G22: command rows wrap at narrow widths inside the group rail ---')
 {
-  const tail = 'COMMAND-NARROW-TAIL'
+  const tail = 'NARROW-END'
   const command = 'pwsh -Command ' + "Write-Output 'long command part'; ".repeat(2) + tail
   const rows = [
     jobRow(1, makeJob('pwsh-28', 'completed', { label: command })),
     jobRow(2, makeJob('pwsh-34', 'running', { label: command, outputLines: [{ text: 'narrow output' }] })),
   ]
   for (const cols of [28, 34]) {
-    await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+    await withTerminal(() => renderList(rows, { jobGroupFold: 'never', expanded: true }), async frame => {
       const tailVisible = await settled(() => frame.screen().includes(tail))
       const lines = frame.lines().filter(line => line.trim() !== '')
       const firstCard = lines.findIndex(line => line.includes('job: pwsh-28'))
       const commandLine = lines.findIndex(line => line.includes('pwsh -Command'))
-      const lastOutput = lines.findIndex(line => line.includes('narrow output'))
+      const lastOutput = lines.findIndex((line, index) => index > firstCard && line.startsWith('╰ '))
       const body = firstCard >= 0 && lastOutput >= firstCard ? lines.slice(firstCard, lastOutput + 1) : []
       check('G22 ' + cols + ' columns: long command tail remains visible', tailVisible, frame.lines().slice(0, 10).join('|'))
       check('G22 ' + cols + ' columns: command starts below its job id', commandLine === firstCard + 1 && lines[commandLine]?.startsWith('│   pwsh -Command'), JSON.stringify(lines.slice(firstCard, firstCard + 4)))
       check('G22 ' + cols + ' columns: all wrapped rows stay in the group rail', body.length >= 6 && body.every((line, index) => line.startsWith(index === 0 ? '╭ ' : index === body.length - 1 ? '╰ ' : '│ ')), JSON.stringify(body))
     }, cols)
   }
+}
+
+console.log('--- G23: clicking command/output folds and keyboard expansion keep the rail ---')
+{
+  const rows = [jobRow(1, makeJob('pwsh-fold', 'running', {
+    label: 'cd D:/code/project\nWrite-Output COMMAND-SECOND-LINE\nWrite-Output COMMAND-LAST-LINE',
+    outputLines: Array.from({ length: 5 }, (_, index) => ({ text: 'OUTPUT-' + index })),
+  })), jobRow(2, makeJob('pwsh-tail', 'completed'))]
+  const toggled = new Set<number>()
+  const opened: string[] = []
+  let allExpanded = false
+  let frameRef: Frame | undefined
+  function Keys(): null {
+    useInput((input, key) => {
+      if (input === 'o' && (key as { ctrl?: boolean }).ctrl === true) {
+        allExpanded = !allExpanded
+        frameRef?.rerender(view())
+      }
+    })
+    return null
+  }
+  const view = (): React.ReactNode => React.createElement(AlternateScreen, null, React.createElement(Keys), React.createElement(MessageList, {
+    ...listProps(rows, { jobGroupFold: 'never', expanded: allExpanded, expandedRows: [...toggled], onToggleRow: id => {
+      if (toggled.has(id)) toggled.delete(id)
+      else toggled.add(id)
+      frameRef?.rerender(view())
+    } }),
+    onOpenJobs: (id: string) => { opened.push(id) },
+  }))
+  await withTerminal(view, async frame => {
+    frameRef = frame
+    check('G23 default: command tail hidden and three output rows remain', await settled(() => frame.screen().includes('OUTPUT-4') && frame.screen().includes('lines (ctrl+o')) && !frame.screen().includes('COMMAND-LAST-LINE') && !frame.screen().includes('OUTPUT-0'))
+    const clickText = async (text: string): Promise<void> => {
+      const hit = termTest.findText(frame.term, text)
+      check('G23 control is visible: ' + text, hit !== null)
+      if (hit === null) return
+      frame.stdin.write('\x1b[<0;' + (hit.col + 1) + ';' + (hit.row + 1) + 'M')
+      await sleep(30) // 固定窗:pacing 鼠标按下和松开分成两次事件
+      frame.stdin.write('\x1b[<0;' + (hit.col + 1) + ';' + (hit.row + 1) + 'm')
+    }
+    await clickText('ctrl+o to expand')
+    check('G23 click: command and full output expand', await settled(() => frame.screen().includes('COMMAND-LAST-LINE') && frame.screen().includes('OUTPUT-0')), frame.lines().slice(0, 12).join('|'))
+    check('G23 click: does not open the jobs panel', opened.length === 0, JSON.stringify(opened))
+    check('G23 expanded: command continuations use the tree marker', frame.lines().some(line => line.includes('⎿ Write-Output COMMAND-SECOND-LINE')))
+    check('G23 expanded: every row stays inside the group rail', frame.lines().filter(line => /^[│╭╰]/.test(line)).every(line => /^[│╭╰] /.test(line)))
+    await clickText('OUTPUT-0')
+    check('G23 output click folds back to its preview', await settled(() => !frame.screen().includes('COMMAND-LAST-LINE') && !frame.screen().includes('OUTPUT-0') && frame.screen().includes('OUTPUT-4')))
+    frame.stdin.write('\x0f')
+    check('G23 keyboard: Ctrl+O expands card details', await settled(() => frame.screen().includes('COMMAND-LAST-LINE') && frame.screen().includes('OUTPUT-0')))
+    frame.stdin.write('\x0f')
+    check('G23 keyboard: Ctrl+O folds them again', await settled(() => !frame.screen().includes('COMMAND-LAST-LINE') && !frame.screen().includes('OUTPUT-0')))
+  })
 }
 
 if (failed > 0) {

@@ -725,8 +725,11 @@ console.log('--- G16: panel commands wrap below the job header ---')
         onClose: (): void => {},
         onKill: (): void => {},
       }),
-      async screen => {
+      async (screen, _rerender, stdin) => {
         await sleep(150) // 固定窗:探针 G16 面板行布局落定
+        check('G16 ' + cols + ' columns: command folds by default', !screen().includes(tail) && screen().includes('lines (e'), screen().split('\n').slice(0, 7).join('|'))
+        stdin.write('e')
+        await settled(() => screen().includes(tail))
         const lines = screen().split('\n')
         const header = lines.findIndex(line => line.includes('pwsh-1'))
         const command = lines.findIndex(line => line.includes('pwsh -Command'))

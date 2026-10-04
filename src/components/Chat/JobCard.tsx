@@ -6,6 +6,7 @@ import type { BackgroundJobOutputChannel, BackgroundJobOutputLine } from '../../
 import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
 import wrapText from '../../ink/wrap-text.js'
+import { primaryComboString } from '../../utils/keymap.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import { ProgressBar } from '../design-system/ProgressBar.js'
 
@@ -73,8 +74,8 @@ interface WaterfallRow {
  * window still costs a constant number of rows, which is what the
  * transcript's virtualization measures.
  */
-function waterfallWindow(
-  entries: ReadonlyArray<{ kind: 'line'; line: BackgroundJobOutputLine } | { kind: 'gap' }>,
+export function jobOutputRows(
+  entries: readonly BackgroundJobOutputLine[],
   width: number,
   budget: number,
 ): WaterfallRow[] {
@@ -84,50 +85,38 @@ function waterfallWindow(
   const textWidth = Math.max(1, width - 1)
   for (let index = entries.length - 1; index >= 0 && rows.length < budget; index--) {
     const entry = entries[index]!
-    if (entry.kind === 'gap') {
-      rows.unshift({ key: `gap-${index}`, text: '', gap: true })
-      continue
-    }
-    const wrapped = wrapText(entry.line.text, textWidth, 'wrap').split('\n')
+    const wrapped = wrapText(entry.text, textWidth, 'wrap').split('\n')
     for (let row = wrapped.length - 1; row >= 0 && rows.length < budget; row--) {
       rows.unshift({
         key: `${index}-${row}`,
         text: wrapped[row] ?? '',
-        ...(entry.line.channel === undefined ? {} : { channel: entry.line.channel }),
+        ...(entry.channel === undefined ? {} : { channel: entry.channel }),
       })
     }
+    if (entry.gapBefore === true && rows.length < budget) rows.unshift({ key: `gap-${index}`, text: '', gap: true })
   }
   return rows
 }
 
+/** Command rows share wrapping and fold counts between the card and panel. */
+export function jobCommandRows(text: string, width: number, expanded: boolean, key: string): string[] {
+  const lines = wrapText(text, Math.max(1, width - 3), 'wrap').split('\n')
+  const shown = (expanded ? lines : lines.slice(0, 1)).map((line, index) => index === 0 ? line : `⎿ ${line}`)
+  if (lines.length > 1) shown.push('⎿ ' + (expanded ? t('jobs-details-collapse', { key }) : t('lines-folded-expand', { n: lines.length - 1, key })))
+  return shown
+}
+
 /**
- * Live background-job card embedded in the transcript (`kind: 'job'`),
- * sibling of the subagent card: header (id · kind · label · elapsed ·
- * status) plus a bounded output waterfall (up to three rows) while the job
- * is live — and only when mirrored output exists: background jobs are
- * usually silent, so an outputless card is just its header line, never a
- * row of empty gutters. Settled jobs fold to the header line alone (a
- * failed/killed job keeps one detail line); the `/jobs` panel holds the
- * fuller view the card clicks to.
- *
- * The waterfall is MIRRORED, never polled: the harness job registry's read
- * is consuming and reserved for the owning agent, so the card shows the
- * tail of the agent's own job_output results as they stream through the
- * transcript.
- *
- * `rail` marks the card as a member of a job GROUP (see JobGroupRow): the
- * card gets a 2-cell chain column on its left, and `rail.open` / `rail.close`
- * round its ends (`╭` on the first line, `╰` on the last) so the run reads as
- * one bracket from the first card to the last — the group's summary line stays
- * OUTSIDE it. A lone card renders as before.
- *
- * The rail is drawn per line, so this component measures the command row and
- * output tail before painting the matching rail glyphs.
+ * Transcript job card with a folded command and a three-row live output tail.
+ * Commands and retained output expand together through the transcript toggle.
+ * The group rail counts the rendered rows, including fold controls.
  */
-export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput }: {
+export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput, expanded = false, onToggle }: {
   job: JobRow
   marginTopOnTurn: boolean
   onClick?(): void
+  expanded?: boolean
+  onToggle?: () => void
   /** Job GROUP member: shared chain rail, optionally rounded at either end. */
   rail?: { open?: boolean; close?: boolean } | undefined
   /** A backend whose output is read on demand keeps a mounted (on-screen)
@@ -151,15 +140,14 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput }: 
   // would wrap a second time inside ink and the card would grow past the
   // height the rail was painted for.
   const rowWidth = Math.max(20, cardColumns - WATERFALL_GUTTER - (grouped ? 2 : 0))
-  // Waterfall entries: gap banners interleave as their own rows, then the
-  // window keeps the LAST WATERFALL_ROWS entries so a banner never pushes a
-  // fresher line out — the card stays constant-height.
-  const waterfall: Array<{ kind: 'line'; line: BackgroundJobOutputLine } | { kind: 'gap' }> = []
-  for (const line of settled ? [] : job.outputLines) {
-    if (line.gapBefore === true) waterfall.push({ kind: 'gap' })
-    waterfall.push({ kind: 'line', line })
-  }
-  const activity = waterfallWindow(waterfall, rowWidth, WATERFALL_ROWS)
+  // Collapsed live cards keep the newest visual rows; expansion shows the retained tail.
+  const outputRows = jobOutputRows(job.outputLines, rowWidth, Number.POSITIVE_INFINITY)
+  const activity = expanded ? outputRows : settled ? [] : outputRows.slice(-WATERFALL_ROWS)
+  const hiddenOutput = outputRows.length - activity.length
+  const toggleKey = primaryComboString('transcript')
+  const outputHint = outputRows.length === 0 ? undefined : expanded
+    ? t('jobs-details-collapse', { key: toggleKey })
+    : hiddenOutput > 0 ? t('lines-folded-expand', { n: hiddenOutput, key: toggleKey }) : undefined
   // A settled job's terminal detail ('exit code: 0') rides the header; a
   // failed/killed one also keeps it as the explanatory tail line.
   const headerDetail = job.detail !== undefined && job.detail !== '' ? job.detail : undefined
@@ -171,8 +159,8 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput }: 
 
   const railBody = settled && job.status !== 'completed' && headerDetail !== undefined
   const labelWidth = Math.max(8, rowWidth - 2)
-  const labelLines = wrapText(job.label, labelWidth, 'wrap').split('\n')
-  const contentLines = 1 + labelLines.length + activity.length + (railBody ? 1 : 0)
+  const labelLines = jobCommandRows(job.label, labelWidth, expanded, toggleKey)
+  const contentLines = 1 + labelLines.length + activity.length + (outputHint === undefined ? 0 : 1) + (railBody ? 1 : 0)
   const railGlyphs: string[] = []
   if (grouped) {
     for (let index = 0; index < contentLines; index++) {
@@ -182,24 +170,12 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput }: 
     }
   }
 
-  // 点击打开 /jobs 面板；hover 不刷整行背景（转录视觉保持安静），只把
-  // 状态 glyph 提亮为品牌色作为可点指示。无外层缩进：任务卡是上方工具
-  // 调用（run_in_background 卡）的延续，与工具卡通栏左对齐；子代理卡才
-  // 是嵌套子实体、保留缩进。瀑布的 `  │ ` 槽自带两格，正好与工具卡正文
-  // 的 `  ⎿ ` 槽位一致。
-  //
-  // 成组时的竖线不在 body 里：继续中的成员把 body 包进一个只有左边框的
-  // Box（见下方 bordered），边框覆盖整张卡的每一行——标签折行出的续行也
-  // 有线，链条不断。收口的尾成员用 `└ ` 字形 + 2 格空槽，两者都把正文
-  // 落在第 2 列。
+  // The header opens the panel; body controls fold details without opening it.
   const body = (
     <>
     {/* Keep status and timing beside the id; the command gets its own row below. */}
-    <Box flexDirection="row" gap={1}>
-      {/* The status glyph leads the row. flexShrink={0} like every other
-        * fixed column: a wrapped label over-constrains the row, and an
-        * unguarded text node shrinks with it, pushing the glyph onto a line of
-        * its own (the group's rail is the body border, never a glyph). */}
+    <Box flexDirection="row" gap={1} height={1} overflow="hidden">
+      {/* The fixed status columns stay on one header row. */}
       <Box flexShrink={0}>
         <Text color={hovered && clickable ? 'accent' : info.color}>{info.glyph}</Text>
       </Box>
@@ -219,30 +195,34 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput }: 
       {headerDetail !== undefined && <Box flexShrink={0}><Text dimColor wrap="truncate-end">{headerDetail}</Text></Box>}
       <Box flexShrink={0}><Text color={info.color}>{info.label}</Text></Box>
     </Box>
-    <Box width={rowWidth} flexShrink={0} flexDirection="column" paddingLeft={2}>
-      {labelLines.map((line, index) => <Text key={index}>{line}</Text>)}
+    <Box width={rowWidth} flexShrink={0} flexDirection="column" paddingLeft={2}
+      onClick={onToggle === undefined ? undefined : event => { event.stopImmediatePropagation(); onToggle() }}>
+      {labelLines.map((line, index) => <Text key={index} wrap="truncate-end">{line}</Text>)}
     </Box>
-    {!settled && activity.length > 0 && activity.map(entry => (
-      // key 不含 time（同 SubagentMessage 的约定）：内容更新走 in-place
-      // diff，避免每个 tick 都 unmount+mount。瀑布只在有镜像输出时出现
-      // （后台任务静默是常态——无输出时卡片就是头行，不摆空 gutter）。
-      // Rows are pre-wrapped to the row width, so truncate is a belt-and-braces
-      // guard against a re-wrap (which would break the constant height).
-      entry.gap === true ? (
-        <Text key={entry.key} dimColor italic wrap="truncate">
-          {`  · ${t('jobs-output-gap')}`}
-        </Text>
-      ) : (
-        <Text
-          key={entry.key}
-          color={entry.channel === 'stderr' ? 'error' : undefined}
-          dimColor={entry.channel !== 'stderr'}
-          wrap="truncate"
-        >
-          {`  │ ${entry.text}`}
-        </Text>
-      )
-    ))}
+    <Box flexDirection="column" onClick={onToggle === undefined ? undefined : event => { event.stopImmediatePropagation(); onToggle() }}>
+      {activity.map(entry => (
+        // key 不含 time（同 SubagentMessage 的约定）：内容更新走 in-place
+        // diff，避免每个 tick 都 unmount+mount。瀑布只在有镜像输出时出现
+        // （后台任务静默是常态——无输出时卡片就是头行，不摆空 gutter）。
+        // Rows are pre-wrapped to the row width, so truncate is a belt-and-braces
+        // guard against a re-wrap (which would break the constant height).
+        entry.gap === true ? (
+          <Text key={entry.key} dimColor italic wrap="truncate">
+            {`  · ${t('jobs-output-gap')}`}
+          </Text>
+        ) : (
+          <Text
+            key={entry.key}
+            color={entry.channel === 'stderr' ? 'error' : undefined}
+            dimColor={entry.channel !== 'stderr'}
+            wrap="truncate"
+          >
+            {`  │ ${entry.text}`}
+          </Text>
+        )
+      ))}
+      {outputHint !== undefined && <Text dimColor wrap="truncate-end">{'  ⎿ ' + outputHint}</Text>}
+    </Box>
     {railBody && (
       <Text dimColor>{`  └ ${headerDetail}`}</Text>
     )}

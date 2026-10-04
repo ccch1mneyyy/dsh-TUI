@@ -186,7 +186,7 @@ try {
   await settled(() => state().includes('active=jobs') && lines().some(l => l.includes('LLL1')), { timeout: 4000 })
   const roster = lines()
   check('open: jobs roster renders in the split panel',
-    roster.some(l => l.includes('LLL1')) && roster.some(l => l.includes('LLL2')) && roster.some(l => l.includes('LLL3')),
+    roster.some(l => l.includes('LLL1')) && roster.some(l => l.includes('LLL2')) && roster.filter(line => line.includes('job-')).length === 3,
     roster.filter(line => /LLL|job-|runni|comple|step/.test(line)).join('|'))
   check('open: focus starts at the roster head', focusedLabelLine().includes('LLL1'), focusedLine().trim() + ' | ' + focusedLabelLine().trim())
   check('open: summary line counts running', roster.some(l => l.includes('2 running')), roster.find(l => l.includes('running')) ?? '')
@@ -249,6 +249,22 @@ try {
   jobsFocusStore.request('job-done-2')
   await settled(() => focusedLabelLine().includes('LLL2'), { timeout: 4000 })
   check('focus lane: same id re-requested refocuses (nonce, not id)', focusedLabelLine().includes('LLL2'), focusedLine().trim() + ' | ' + focusedLabelLine().trim())
+
+  setJobs([{ ...J1, command: 'cd D:/project\nWrite-Output CMD-TAIL', outputLines: Array.from({ length: 5 }, (_, index) => ({ text: 'RAW-OUT-' + index })) }])
+  openJobs?.()
+  check('details: command folds and output keeps a three-line preview', await settled(() => lines().some(line => line.includes('RAW-OUT-4')) && lines().some(line => line.includes('e to expand'))) && !lines().some(line => line.includes('CMD-TAIL') || line.includes('RAW-OUT-0')))
+  stdin.write('e')
+  check('details: e expands the focused command and output', await settled(() => lines().some(line => line.includes('CMD-TAIL')) && lines().some(line => line.includes('RAW-OUT-0'))))
+  stdin.write('e')
+  check('details: e folds the command and output again', await settled(() => !lines().some(line => line.includes('CMD-TAIL') || line.includes('RAW-OUT-0'))))
+  const commandCell = findCell('cd D:/project')
+  check('details: command click target is visible', commandCell !== null)
+  if (commandCell !== null) {
+    stdin.write('\x1b[<0;' + (commandCell.col + 1) + ';' + (commandCell.row + 1) + 'M')
+    await sleep(30) // 固定窗:pacing 鼠标 press 和 release 分两次事件
+    stdin.write('\x1b[<0;' + (commandCell.col + 1) + ';' + (commandCell.row + 1) + 'm')
+    check('details: clicking command expands full output too', await settled(() => lines().some(line => line.includes('CMD-TAIL')) && lines().some(line => line.includes('RAW-OUT-0'))))
+  }
 } finally {
   await app.unmount()
   term.dispose()
