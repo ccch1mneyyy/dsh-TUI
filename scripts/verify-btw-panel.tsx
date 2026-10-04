@@ -4,7 +4,7 @@
  *    （Markdown）、badge（不可见期间落定 → ●；进入面板即清）、composer 键
  *    语义（打字/Enter 提交/Esc 分层保草稿/Tab 切焦点）、n 新话题、s 发送到
  *    聊天（attach 合同 + 截断提示）、28/40 列窄幅不崩；流式期间 badge 不变
- *    就不通知侧栏；连按键（两键之间
+ *    就不通知侧栏；失败的一轮保留已流出的部分答复；连按键（两键之间
  *    没有重渲染）不丢字、退格整删 emoji。
  *  - 全屏场景（BtwThreadScene）：Esc 退出编辑后 Tab 回到 composer 继续打字。
  *  - 浮层回退（BtwPanelFallback）：粘贴的换行、带修饰的 Enter 不关浮层，
@@ -234,6 +234,23 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
   // The panel is visible, so the badge stays 'info' while running and
   // clears at the end: a couple of changes at most, not one per delta.
   check('P10. 20 个流式 delta 的 badge 通知不超过 2 次', badgeEvents <= 2, 'badge events=' + badgeEvents)
+  await frame.app.unmount()
+}
+
+// ── P11: 失败的一轮保留已流出的部分答复 ───────────────────────────────────
+{
+  const ask = scriptedAsk()
+  const channel = makePanelChannel(ask)
+  const frame = await mountPanel(105, 'btw', true, channel)
+  btwThreads.submit('probe-session', 'failing question', channel.ask.ask)
+  await delay(200)
+  ask.emit('partial words before')
+  await delay(200)
+  ask.fail('upstream broke')
+  await delay(400)
+  const screen = frame.lines().join('\n')
+  check('P11. 失败后部分答复仍在、错误标在下面', screen.includes('partial words before') && screen.includes(t('btw-thread-error')) && screen.includes('upstream broke'),
+    screen.split('\n').filter(l => l.trim() !== '').slice(-6).join(' | '))
   await frame.app.unmount()
 }
 
