@@ -177,24 +177,31 @@ export function wrapHangLine(
   const out: string[] = [pieces[0]!]
   const budget = Math.max(1, maxWidth - hangWidth)
   for (let i = 1; i < pieces.length; i++) {
-    let piece = pieces[i]!
-    const trimmed = stripTrailingSpaces(piece)
-    if (trimmed.moved !== '') {
-      if (i + 1 < pieces.length && stringWidth(trimmed.rest) <= budget) {
-        pieces[i + 1] = trimmed.moved + pieces[i + 1]!
-        piece = trimmed.rest
-      } else if (i + 1 === pieces.length) {
-        piece = trimmed.rest
-      }
-    }
+    const piece = pieces[i]!
     if (stringWidth(piece) <= budget || budget < 2) {
-      if (piece !== '' || i + 1 < pieces.length) out.push(piece)
+      // Fits with the prefix: keep it byte-identical with the legacy
+      // wrap - shedding whitespace here would push the NEXT piece over
+      // the budget and grow the row count (inline math paragraphs hit
+      // exactly that: a space migrating onto a full-width URL piece).
+      out.push(piece)
+      continue
+    }
+    // Overflowing: a trailing separator space (trim:false keeps it on
+    // the piece, inside its SGR run) may be all that pushes it past
+    // the budget. Move it to the next piece's front - or drop it on
+    // the final piece - instead of re-breaking; the copy joins it
+    // back identically and no whitespace-only ghost row appears.
+    const trimmed = stripTrailingSpaces(piece)
+    if (trimmed.moved !== '' && stringWidth(trimmed.rest) <= budget) {
+      if (i + 1 < pieces.length) pieces[i + 1] = trimmed.moved + pieces[i + 1]!
+      out.push(trimmed.rest)
       continue
     }
     out.push(...wrap(piece, budget).split('\n'))
   }
   return out
 }
+
 /** Visual reset so a prefix's open SGR cannot bleed into the row body. */
 const ANSI_RESET = '\u001b[0m'
 
