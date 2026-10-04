@@ -57,6 +57,7 @@ let jobs: FakeJob[] = []
 let channelVersion = 0
 const channelListeners = new Set<() => void>()
 const kills: string[] = []
+const attachedContexts: Array<{ title: string; content: string }> = []
 const channel = {
   get version() { return channelVersion },
   get backgroundJobs() { return jobs },
@@ -67,6 +68,7 @@ const channel = {
   },
   notifications: [] as Array<{ text: string }>,
   notify(text: string) { channel.notifications.push({ text }) },
+  attachContext(context: { title: string; content: string }) { attachedContexts.push(context) },
   subscribe(listener: () => void) {
     channelListeners.add(listener)
     return () => { channelListeners.delete(listener) }
@@ -157,6 +159,10 @@ const findCell = (needle: string): { col: number; row: number } | null => {
   return null
 }
 const focusedLine = (): string => lines().find(l => l.includes('❯')) ?? ''
+const focusedLabelLine = (): string => {
+  const index = lines().findIndex(line => line.includes('❯'))
+  return index < 0 ? '' : lines()[index + 1] ?? ''
+}
 
 try {
   await settled(() => state().includes('split=1'))
@@ -180,9 +186,13 @@ try {
   await settled(() => state().includes('active=jobs') && lines().some(l => l.includes('LLL1')), { timeout: 4000 })
   const roster = lines()
   check('open: jobs roster renders in the split panel',
-    roster.some(l => l.includes('LLL1')) && roster.some(l => l.includes('LLL2')) && roster.some(l => l.includes('LLL4')))
-  check('open: focus starts at the roster head', focusedLine().includes('LLL1'), focusedLine().trim())
+    roster.some(l => l.includes('LLL1')) && roster.some(l => l.includes('LLL2')) && roster.some(l => l.includes('LLL3')),
+    roster.filter(line => /LLL|job-|runni|comple|step/.test(line)).join('|'))
+  check('open: focus starts at the roster head', focusedLabelLine().includes('LLL1'), focusedLine().trim() + ' | ' + focusedLabelLine().trim())
   check('open: summary line counts running', roster.some(l => l.includes('2 running')), roster.find(l => l.includes('running')) ?? '')
+  stdin.write('s')
+  await settled(() => attachedContexts.length === 1, { timeout: 4000 })
+  check('send-to-chat: title and summary use localized labels', attachedContexts[0]?.title === 'Background job job-run-1' && attachedContexts[0]?.content.includes('Background job job-run-1 (running)') && attachedContexts[0]?.content.includes('Command: gh run watch 1') && attachedContexts[0]?.content.includes('Output (last 1 lines):'), JSON.stringify(attachedContexts[0]))
   await settled(() => panelStore.get('jobs')?.badge?.level !== 'error', { timeout: 4000 })
   // PanelHost clears the badge on activation (children effects run first, so
   // the host's clear wins that frame); the adapter re-lights running>0 as
@@ -194,8 +204,8 @@ try {
 
   // --- 4. dispatcher keys: downArrow moves the focused row -----------------
   stdin.write('\x1b[B')
-  await settled(() => focusedLine().includes('LLL2'), { timeout: 4000 })
-  check('keys: downArrow moves focus to the second row (usePanelInput dispatch)', focusedLine().includes('LLL2'), focusedLine().trim())
+  await settled(() => focusedLabelLine().includes('LLL2'), { timeout: 4000 })
+  check('keys: downArrow moves focus to the second row (usePanelInput dispatch)', focusedLabelLine().includes('LLL2'), focusedLine().trim() + ' | ' + focusedLabelLine().trim())
 
   // --- 5. SGR click on another row focuses it ------------------------------
   const cell = findCell('LLL3')
@@ -203,8 +213,8 @@ try {
   if (cell !== null) {
     stdin.write('\x1b[<0;' + (cell.col + 1) + ';' + (cell.row + 1) + 'M')
     stdin.write('\x1b[<0;' + (cell.col + 1) + ';' + (cell.row + 1) + 'm')
-    await settled(() => focusedLine().includes('LLL3'), { timeout: 4000 })
-    check('click: SGR press on a roster row focuses that job', focusedLine().includes('LLL3'), focusedLine().trim())
+    await settled(() => focusedLabelLine().includes('LLL3'), { timeout: 4000 })
+    check('click: SGR press on a roster row focuses that job', focusedLabelLine().includes('LLL3'), focusedLine().trim() + ' | ' + focusedLabelLine().trim())
   }
 
   // --- 6. Esc yields to the host: focus back to chat, panel stays ----------
@@ -231,14 +241,14 @@ try {
   await settled(() => exposedFocus === 'chat', { timeout: 4000 })
   jobsFocusStore.request('job-done-2')
   openJobs?.()
-  await settled(() => focusedLine().includes('LLL2'), { timeout: 4000 })
-  check('focus lane: requested job focused on open', focusedLine().includes('LLL2'), focusedLine().trim())
+  await settled(() => focusedLabelLine().includes('LLL2'), { timeout: 4000 })
+  check('focus lane: requested job focused on open', focusedLabelLine().includes('LLL2'), focusedLine().trim() + ' | ' + focusedLabelLine().trim())
   // Move away, then re-request the SAME id — the nonce must re-apply.
   stdin.write('\x1b[B')
-  await settled(() => focusedLine().includes('LLL1'), { timeout: 4000 })
+  await settled(() => focusedLabelLine().includes('LLL1'), { timeout: 4000 })
   jobsFocusStore.request('job-done-2')
-  await settled(() => focusedLine().includes('LLL2'), { timeout: 4000 })
-  check('focus lane: same id re-requested refocuses (nonce, not id)', focusedLine().includes('LLL2'), focusedLine().trim())
+  await settled(() => focusedLabelLine().includes('LLL2'), { timeout: 4000 })
+  check('focus lane: same id re-requested refocuses (nonce, not id)', focusedLabelLine().includes('LLL2'), focusedLine().trim() + ' | ' + focusedLabelLine().trim())
 } finally {
   await app.unmount()
   term.dispose()

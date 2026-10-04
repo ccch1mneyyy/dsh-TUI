@@ -93,8 +93,9 @@ export function sameOptionConnection(
   from: BackendChannelOption | undefined,
   to: BackendChannelOption | undefined,
 ): boolean {
-  if (from === undefined || to === undefined) return from === to
-  if (from.connection === undefined || to.connection === undefined) return from.connection === to.connection
+  if (from?.connection === undefined && to?.connection === undefined) return true
+  if (from === undefined || to === undefined) return false
+  if (from.connection === undefined || to.connection === undefined) return false
   return from.connection.fingerprint === to.connection.fingerprint
 }
 

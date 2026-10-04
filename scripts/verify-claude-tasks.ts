@@ -434,7 +434,7 @@ mkdirSync(inside, { recursive: true })
       // The CLI's end report is a long sentence: only its exit code rides
       // the card header (a long detail would squeeze the label to nothing).
       query.emit({ type: 'system', subtype: 'task_notification', task_id: 'b7live', tool_use_id: 'c-live', status: 'completed', output_file: outputFile, summary: 'Background command "make all && make test && make install && make docs" completed (exit code 0)' })
-      check('render: the settled card keeps one header line (label, exit code)', await settled(() => screen().split('\n').some(line => line.includes(`${t('jobs-card-prefix')}b7live`) && line.includes('make all') && line.includes('exit code: 0'))), screen())
+      check('render: settled id and exit code stay in the header, command follows below', await settled(() => { const lines = screen().split('\n'); const header = lines.findIndex(line => line.includes(`${t('jobs-card-prefix')}b7live`)); return header >= 0 && lines[header]?.includes('exit code: 0') === true && lines[header + 1]?.trimStart().startsWith('make all') === true }), screen())
     } finally {
       app.unmount()
       terminal.dispose()

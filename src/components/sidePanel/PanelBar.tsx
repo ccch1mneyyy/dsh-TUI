@@ -1,30 +1,13 @@
-/**
- * PanelBar: the 1-row tab strip on top of the side panel (design doc §6.1).
- *
- * Visual language:
- * - the ACTIVE panel is a capsule: ‹ Title ›, accent + bold — one glance
- *   tells you where you are;
- * - inactive panels collapse to their single-cell icon (or first letter),
- *   dim, with a status dot only when the panel has something to say
- *   (● unread/active, ! warning, × error — theme colors, never emoji);
- * - overflow is windowed, never a trail of dots: what does not fit
- *   becomes a dim +N on the right edge.
- *
- * The bar's width demand is content-independent (capsule titles truncate
- * to a fixed budget, icons are fixed cells) — a panel MUST never make the
- * column want to resize (design doc §16.6).
- */
 import React from 'react'
 import { Box, Text } from '../../ui.js'
 import { stringWidth } from '../../ink/stringWidth.js'
+import { useTooltip } from '../Tooltip.js'
 
 export type PanelBadgeLevel = 'info' | 'warning' | 'error'
 
 export interface PanelBarTab {
   readonly id: string
   readonly title: string
-  /** Single-cell glyph; falls back to the title's first letter. */
-  readonly icon?: string
   readonly badge?: { readonly level: PanelBadgeLevel; readonly unread: number } | null
 }
 
@@ -32,25 +15,10 @@ export interface PanelBarProps {
   readonly tabs: readonly PanelBarTab[]
   readonly activeId: string | undefined
   readonly width: number
-  /** Focus is in the right column: the bar brightens to match the divider. */
   readonly focused: boolean
-  /** The ACTIVE panel has a fullscreen form (capabilities.fullscreen): the
-   *  bar reserves the two trailing cells and draws the clickable ⤢. */
   readonly canExpand?: boolean
-  /** Click/Enter on ⤢: switch the active panel to its fullscreen surface. */
   readonly onExpand?: () => void
-  /** Click on a tab (icon or capsule): make that panel active. The host
-   *  funnels this into the same openPanel() path the keyboard uses. */
   readonly onSelect?: (id: string) => void
-}
-
-/** Capsule title budget keeps one long plugin title from eating the bar. */
-const ACTIVE_TITLE_MAX = 12
-
-function badgeGlyph(level: PanelBadgeLevel): string {
-  if (level === 'warning') return '!'
-  if (level === 'error') return '×'
-  return '●'
 }
 
 function badgeColor(level: PanelBadgeLevel): 'warning' | 'error' | 'accent' {
@@ -64,129 +32,160 @@ function truncateCells(text: string, maxCells: number): string {
   let out = ''
   let cells = 0
   for (const char of text) {
-    const w = stringWidth(char)
-    if (cells + w > Math.max(1, maxCells - 1)) break
+    const width = stringWidth(char)
+    if (cells + width > Math.max(1, maxCells - 1)) break
     out += char
-    cells += w
+    cells += width
   }
   return out + '…'
 }
 
+function ActiveTitle({ title, left, width, focused }: { title: string; left: number; width: number; focused: boolean }): React.ReactNode {
+  const clipped = stringWidth(title) > width
+  const tooltip = useTooltip(title)
+  return (
+    <Box position="absolute" left={left} top={0} width={width} height={1} justifyContent="center" overflow="hidden" {...(clipped ? tooltip : {})}>
+      <Text bold color={focused ? 'accent' : 'inactive'} wrap="truncate-end">{truncateCells(title, width)}</Text>
+    </Box>
+  )
+}
+
+function PanelDot({ tab, left, width, focused, hovered, onHover, onSelect }: {
+  tab: PanelBarTab
+  left: number
+  width: number
+  focused: boolean
+  hovered: boolean
+  onHover: (id: string | null) => void
+  onSelect?: (id: string) => void
+}): React.ReactNode {
+  const tooltip = useTooltip(tab.title)
+  const unread = tab.badge?.unread ?? 0
+  const label = (tab.badge == null ? '○' : '●') + (unread > 0 ? String(unread) : '')
+  return (
+    <Box
+      position="absolute"
+      left={left}
+      top={0}
+      width={width}
+      height={1}
+      flexShrink={0}
+      justifyContent="center"
+      {...tooltip}
+      onMouseEnter={event => { tooltip.onMouseEnter(event); onHover(tab.id) }}
+      onMouseLeave={() => { tooltip.onMouseLeave(); onHover(null) }}
+      onClick={onSelect === undefined ? undefined : event => {
+        event.stopImmediatePropagation()
+        onSelect(tab.id)
+      }}
+    >
+      <Text
+        bold={hovered}
+        dimColor={!hovered && tab.badge == null && !focused}
+        color={tab.badge != null ? badgeColor(tab.badge.level) : hovered || focused ? 'accent' : undefined}
+      >
+        {label}
+      </Text>
+    </Box>
+  )
+}
+
 export function PanelBar({ tabs, activeId, width, focused, canExpand, onExpand, onSelect }: PanelBarProps): React.ReactNode {
   const [expandHovered, setExpandHovered] = React.useState(false)
-  // Mouse feedback is per-tab: the bar is the only place where a click
-  // switches WHAT the whole right column shows, so it must read as clickable
-  // (hover brightens the glyph; the click path mirrors the ←/→ host keys).
   const [hoveredTab, setHoveredTab] = React.useState<string | null>(null)
-  // The ⤢ affordance lives in the bar's own row (design: the panel column's
-  // chrome is fixed-height — a panel must never make the column want to
-  // resize). Reserve its two cells (one gap + one glyph) up front so tab
-  // windowing and the +N marker stay honest at every width.
-  const barWidth = Math.max(0, width - (canExpand === true ? 2 : 0))
-  // Windowing: the active tab is always rendered; inactive tabs fit in
-  // order around it and whatever remains folds into +N on the right.
-  const active = tabs.find(tab => tab.id === activeId) ?? tabs[0]
-  const segments: {
-    readonly key: string
-    readonly node: React.ReactNode
-    readonly clickable: boolean
-    readonly onHover: (next: boolean) => void
-  }[] = []
-  let hidden = 0
-  let used = 0
-  const moreCells = (n: number): number => stringWidth('+' + String(n)) + 1
-  for (const tab of tabs) {
-    const isActive = active !== undefined && tab.id === active.id
-    // Budget per segment includes the 1-col gap rendered between them
-    // (marginRight), otherwise the +N badge gets clipped at full bars.
-    const cells = (isActive ? Math.min(stringWidth(tab.title), ACTIVE_TITLE_MAX) + 4 : 2) + (segments.length > 0 ? 1 : 0)
-    // Reserve room for the eventual +N badge while tabs remain after this one.
-    const remaining = tabs.length - segments.length - hidden - 1
-    const reserve = remaining > 0 ? moreCells(remaining) : 0
-    if (!isActive && used + cells + reserve > barWidth) {
-      hidden += 1
-      continue
+  const activeIndex = Math.max(0, tabs.findIndex(tab => tab.id === activeId))
+  const active = tabs[activeIndex]
+  const hasArrows = tabs.length > 1
+  const contentWidth = Math.max(0, width - 2)
+  const arrowWidth = hasArrows ? 1 : 0
+  const expandWidth = canExpand === true ? 2 : 0
+  const middleStart = arrowWidth
+  const middleWidth = Math.max(0, contentWidth - arrowWidth * 2 - expandWidth)
+  const dots: Array<{ readonly tab: PanelBarTab; readonly side: 'left' | 'right' }> = []
+  for (let distance = 1; dots.length < tabs.length - 1; distance += 1) {
+    dots.push({ tab: tabs[(activeIndex + distance) % tabs.length]!, side: 'right' })
+    if (dots.length < tabs.length - 1) {
+      dots.push({ tab: tabs[(activeIndex - distance + tabs.length) % tabs.length]!, side: 'left' })
     }
-    used += cells
-    const hovered = hoveredTab === tab.id
-    segments.push({
-      key: tab.id,
-      node: isActive ? (
-        // An active capsule is already accent while focused, so hover needs a
-        // second channel to stay visible: underline (the glow alone would be a
-        // no-op exactly where the pointer most often lands).
-        <Text
-          bold
-          underline={hovered}
-          color={hovered || focused ? 'accent' : 'inactive'}
-          wrap="truncate-end"
-        >
-          {'‹ '}{truncateCells(tab.title, ACTIVE_TITLE_MAX)}{' ›'}
-        </Text>
-      ) : (
-        <Text
-          bold={hovered}
-          dimColor={!hovered && tab.badge == null}
-          color={tab.badge != null ? badgeColor(tab.badge.level) : hovered ? 'accent' : undefined}
-        >
-          {(tab.icon ?? tab.title.slice(0, 1)).slice(0, 1)}
-          {tab.badge != null ? badgeGlyph(tab.badge.level) : ''}
-        </Text>
-      ),
-      // Every tab is clickable: on an inactive one it switches the column,
-      // on the active one it just takes the focus (same three-state as the
-      // Ctrl+B smart toggle, minus the closing step).
-      clickable: onSelect !== undefined,
-      onHover: (next: boolean) => setHoveredTab(previous => (next ? tab.id : previous === tab.id ? null : previous)),
-    })
+  }
+  const dotWidth = Math.max(2, ...dots.map(dot => stringWidth((dot.tab.badge == null ? '○' : '●') + (dot.tab.badge !== undefined && dot.tab.badge !== null && dot.tab.badge.unread > 0 ? String(dot.tab.badge.unread) : ''))))
+  const titleWidth = active === undefined
+    ? 0
+    : Math.max(6, Math.min(stringWidth(active.title), Math.max(6, middleWidth - dots.length * dotWidth)))
+  const pitch = dots.length === 0 ? 0 : Math.max(2, Math.floor((middleWidth - titleWidth) / dots.length))
+  const titleLeft = middleStart + Math.floor((middleWidth - titleWidth) / 2)
+  let rightIndex = 0
+  let leftIndex = 0
+  const dotPositions = dots.map(dot => {
+    const index = dot.side === 'right' ? rightIndex++ : leftIndex++
+    return {
+      ...dot,
+      left: dot.side === 'right'
+        ? titleLeft + titleWidth + index * pitch
+        : titleLeft - (index + 1) * pitch,
+    }
+  })
+  const changePanel = (delta: number): void => {
+    if (active === undefined || tabs.length <= 1) return
+    onSelect?.(tabs[(activeIndex + delta + tabs.length) % tabs.length]!.id)
   }
   return (
     <Box height={1} flexShrink={0} paddingX={1} overflow="hidden">
-      <Box flexGrow={1} flexShrink={1} overflow="hidden">
-        {segments.map((segment, index) => (
-          <Box
-            key={segment.key}
-            flexShrink={0}
-            marginRight={index < segments.length - 1 ? 1 : 0}
-            onMouseEnter={() => { segment.onHover(true) }}
-            onMouseLeave={() => { segment.onHover(false) }}
-            onClick={segment.clickable
-              ? (event) => {
-                // Mouse contract: without this the page-level "click the
-                // column to focus it" fallback also fires on the same event.
-                event.stopImmediatePropagation()
-                onSelect?.(segment.key)
-              }
-              : undefined}
-          >
-            {segment.node}
-          </Box>
+      <Box width={contentWidth} height={1} position="relative" overflow="hidden" flexShrink={0}>
+        {active !== undefined && <ActiveTitle title={active.title} left={titleLeft} width={titleWidth} focused={focused} />}
+        {dotPositions.map(dot => (
+          <PanelDot
+            key={dot.tab.id}
+            tab={dot.tab}
+            left={dot.left}
+            width={pitch}
+            focused={focused}
+            hovered={hoveredTab === dot.tab.id}
+            onHover={setHoveredTab}
+            onSelect={onSelect}
+          />
         ))}
-      </Box>
-      {hidden > 0 && (
-        <Text dimColor>{'+'}{hidden}</Text>
-      )}
-      {canExpand === true && (
-        <Box
-          flexShrink={0}
-          marginLeft={1}
-          onMouseEnter={() => { setExpandHovered(true) }}
-          onMouseLeave={() => { setExpandHovered(false) }}
-          onClick={(event) => {
-            event.stopImmediatePropagation()
-            onExpand?.()
-          }}
-        >
-          <Text
-            bold={expandHovered}
-            color={expandHovered ? 'accent' : 'inactive'}
-            /* Single-cell glyph + tooltip-free contract: the hint row below
-               already documents the keys, and the glyph is the mouse path. */
+        {hasArrows && (
+          <>
+            <Box
+              position="absolute"
+              left={0}
+              top={0}
+              width={1}
+              height={1}
+              justifyContent="center"
+              onClick={event => { event.stopImmediatePropagation(); changePanel(-1) }}
+            >
+              <Text color={focused ? 'accent' : 'inactive'}>◀</Text>
+            </Box>
+            <Box
+              position="absolute"
+              left={contentWidth - expandWidth - 1}
+              top={0}
+              width={1}
+              height={1}
+              justifyContent="center"
+              onClick={event => { event.stopImmediatePropagation(); changePanel(1) }}
+            >
+              <Text color={focused ? 'accent' : 'inactive'}>▶</Text>
+            </Box>
+          </>
+        )}
+        {canExpand === true && (
+          <Box
+            position="absolute"
+            left={contentWidth - 1}
+            top={0}
+            width={1}
+            height={1}
+            onMouseEnter={() => { setExpandHovered(true) }}
+            onMouseLeave={() => { setExpandHovered(false) }}
+            onClick={event => { event.stopImmediatePropagation(); onExpand?.() }}
           >
-            {'⤢'}
-          </Text>
-        </Box>
-      )}
+            <Text bold={expandHovered} color={expandHovered || focused ? 'accent' : 'inactive'}>⤢</Text>
+          </Box>
+        )}
+      </Box>
     </Box>
   )
 }

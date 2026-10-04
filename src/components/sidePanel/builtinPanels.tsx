@@ -1,10 +1,4 @@
-/**
- * 内置 Panel 注册（设计文档 §16.3：内置与插件从第一天走同一个
- * PanelStore.register；source 只是标记）。模块首次导入时注册——
- * SidePanelColumn 引用本模块，所以任何挂到侧栏的树（含回归夹具）
- * 都会自动带上内置 Panel；插件 Panel 在 Phase 6 经准入外壳进同一个
- * store。
- */
+/** Register built-in panels in the shared panel store. */
 import React from 'react'
 import { t } from '../../i18n.js'
 import { GoalTodoPanel } from '../GoalTodoPanel.js'
@@ -110,18 +104,25 @@ function JobsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
         }
       }}
       onSendToChat={(job) => {
-        // Send to Chat（§6.7）：任务摘要附为下一次提交的上下文；chip 在
-        // 输入框上方出现，Esc 可撤、提交即消耗。
+        // Attach a localized job summary as the next message context.
         if (typeof channel.attachContext !== 'function') return
         const lines = job.outputLines ?? []
+        const statusLabel = {
+          running: t('jobs-status-running'),
+          stopping: t('jobs-status-stopping'),
+          completed: t('jobs-status-completed'),
+          failed: t('jobs-status-failed'),
+          killed: t('jobs-status-killed'),
+        }[job.status]
+        const command = job.command !== undefined && job.command !== '' ? job.command : job.label
         const summary = [
-          `后台任务 ${job.id}（${job.status}）`,
-          job.command !== undefined && job.command !== '' ? `命令：${job.command}` : `命令：${job.label}`,
+          t('jobs-panel-context-heading', { id: job.id, status: statusLabel }),
+          t('jobs-panel-context-command', { command }),
           lines.length > 0
-            ? `输出（末 ${Math.min(10, lines.length)} 行）：\n${lines.slice(-10).map(line => line.text).join('\n')}`
-            : '（暂无输出）',
+            ? t('jobs-panel-context-output', { n: Math.min(10, lines.length) }) + '\n' + lines.slice(-10).map(line => line.text).join('\n')
+            : t('jobs-panel-context-no-output'),
         ].join('\n')
-        channel.attachContext({ source: 'panel', sourceId: job.id, title: `Job ${job.id}`, content: summary })
+        channel.attachContext({ source: 'panel', sourceId: job.id, title: t('jobs-panel-context-title', { id: job.id }), content: summary })
         channel.notify(t('panel-sent-to-chat', { title: job.id }), { color: 'success' })
       }}
     />
@@ -136,12 +137,9 @@ type AgentsRoute = 'dashboard' | { readonly detail: string }
 let lastAgentsRoute: AgentsRoute = 'dashboard'
 
 /**
- * agents：SubagentDashboard / SubagentDetailScene 的 panel variant——同一份
- * channel.subagents 与 subagentControl，布局与键盘按侧栏契约重排。二级路由
- * 是组件内 state：mountPolicy:'enabled' 让它在切面板 / 收侧栏时保留（评审
- * §四的硬需求）。badge 派生：running/starting>0 → info；面板不可见期间新
- * 出现的 failed → error（unread 计数）；两者皆无 → 清空；可见时把当前
- * failed 集合记为已读。
+ * agents: the dashboard and detail scene share the panel's agent roster and
+ * message control. The route stays mounted while another panel is active. Badges
+ * reflect running agents and unseen failures.
  */
 function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
   const channel = useSidePanelChannel()
