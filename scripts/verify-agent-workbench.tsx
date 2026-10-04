@@ -22,8 +22,9 @@
  *       直接 useInput 收不到）；Esc 先让出编辑焦点、焦点仍在侧栏；焦点被
  *       宿主切回聊天后，聊天里的打字和 Enter 不进 composer、不发给子代理。
  *   W6  转录分页：代理消息只落在它所属的那一页（载入更早不重复、newest
- *       页不收更早页的消息）；载入更早在途时切换代理，旧代理的更早页不会
- *       拼进新代理的转录；live 合并不改写历史叶子。
+ *       页不收更早页的消息）；调用在旧页、结果在新页时载入旧页后卡片落定；
+ *       载入更早在途时切换代理，旧代理的更早页不会拼进新代理的转录；live
+ *       合并不改写历史叶子。
  *   W7  运行中跟尾：新输出把视图钉到底部；用户上滚后新输出不再把视图
  *       拽回底部，滚回底部后恢复跟随。
  *   W8  Detail 转录页：o 键载入更早一页（页脚提示）；运行中上滚到历史
@@ -469,6 +470,23 @@ console.log('--- W6: transcript paging ---')
   fold.foldTranscriptLeaves(older as never, olderLeaves as never, messages as never, { olderPagesRemain: false, before: from })
   const merged = fold.prependOlderLeaves(olderLeaves as never, leaves as never) as unknown as Array<Record<string, unknown>>
   check('W6 载入更早后每条消息恰好一次且按序', ids(merged).join(',') === 'm-old,m-mid,m-new', JSON.stringify(ids(merged)))
+
+  // A call on the older page whose result landed on the newer one: the
+  // card settles once the older page is folded in (it does not stay
+  // running forever).
+  const splitNewest = historyPage([
+    ev('tool.result', { callId: 'split-1', isError: false, text: 'split result body', time: NOW - 20_000, seq: 9, turn: 1, step: 1, content: [] }),
+    ev('assistant.message', { anchor: 'sn1', time: NOW - 10_000, blocks: [{ type: 'text', text: 'after the split call' }] }),
+  ], { hasOlder: true, skippedFromStart: 10 })
+  const splitOlder = historyPage([
+    ev('tool.call', { callId: 'split-1', name: 'Grep', argsJson: '{}', time: NOW - 30_000, seq: 8, turn: 1, step: 1 }),
+  ], { hasOlder: false, skippedFromStart: 0 })
+  const newestState = fold.foldNewestPage('agent-a', splitNewest as never, [])
+  check('W6 新页记下找不到调用的结果', newestState.orphanResults.has('split-1'), JSON.stringify([...newestState.orphanResults.keys()]))
+  const joined = fold.foldOlderPage(newestState, splitOlder as never, [])
+  const splitCard = joined.leaves.find(leaf => leaf.kind === 'tool') as { tool: { status: string; resultText?: string } } | undefined
+  check('W6 跨页的调用拿到新页里的结果（不停在 running）', splitCard?.tool.status === 'ok' && splitCard.tool.resultText === 'split result body', JSON.stringify(splitCard?.tool))
+  check('W6 配上的结果不再挂在待配表里', joined.orphanResults.size === 0)
 
   const live = makeRow('agent-a', { status: 'running', completedAt: undefined, toolCalls: [{ id: 'tc1', name: 'Read', status: 'completed', startedAt: NOW - 20_000, endedAt: NOW - 10_000, resultPreview: 'live result' }] })
   const history = [{ kind: 'tool', key: 'tc1', tool: { callId: 'tc1', name: 'Read', argsText: '{}', status: 'running', startedAt: NOW - 20_000 } }]

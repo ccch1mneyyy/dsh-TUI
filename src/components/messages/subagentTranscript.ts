@@ -35,12 +35,32 @@ export const TRANSCRIPT_SUPPRESSED_CARDS: ReadonlySet<string> = new Set(['subage
 export interface TranscriptPagePlacement {
   readonly olderPagesRemain?: boolean
   readonly before?: number
+  /** Collects the tool results whose call this page does not hold (the
+   *  call sits on an older page), keyed by call id. */
+  readonly orphans?: Map<string, ToolResultEvent>
+}
+
+type ToolResultEvent = Extract<AgentEvent, { type: 'tool.result' }>
+
+/** Settle a tool card with its recorded result. */
+function applyToolResult(tool: ToolRow, event: ToolResultEvent): void {
+  tool.durationMs = Math.max(0, event.time - tool.startedAt)
+  if (event.isError) {
+    tool.status = 'error'
+    tool.errorText = event.errorText ?? ''
+  } else {
+    tool.status = 'ok'
+    tool.resultText = event.text !== '' ? preview(event.text, RESULT_PREVIEW_LIMIT) : undefined
+    tool.resultFull = event.text !== '' ? event.text : undefined
+    tool.resultView = event.presentation as ToolRow['resultView']
+  }
 }
 
 /** Fold one history page's lane events into leaf rows (oldest first;
- *  `into` may already hold the older pages' rows). A tool result without
- *  its call is dropped — nothing to attach it to; consecutive blocks of
- *  one API message join (the store splits a message into per-block
+ *  `into` may already hold the older pages' rows). A tool result whose
+ *  call is not on this page goes to `page.orphans` (or is dropped without
+ *  one) until the older page with the call is folded; consecutive blocks
+ *  of one API message join (the store splits a message into per-block
  *  entries sharing the anchor).
  *
  *  `messages` (the agent↔agent feed for THIS child, newest last) is
@@ -84,18 +104,11 @@ export function foldTranscriptLeaves(events: readonly AgentEvent[], into: Transc
         const leaf = into[i]!
         if (leaf.kind === 'tool' && leaf.tool.callId === event.callId) { row = leaf; break }
       }
-      if (row === undefined) continue
-      const tool = row.tool
-      tool.durationMs = Math.max(0, event.time - tool.startedAt)
-      if (event.isError) {
-        tool.status = 'error'
-        tool.errorText = event.errorText ?? ''
-      } else {
-        tool.status = 'ok'
-        tool.resultText = event.text !== '' ? preview(event.text, RESULT_PREVIEW_LIMIT) : undefined
-        tool.resultFull = event.text !== '' ? event.text : undefined
-        tool.resultView = event.presentation as ToolRow['resultView']
+      if (row === undefined) {
+        page.orphans?.set(event.callId, event)
+        continue
       }
+      applyToolResult(row.tool, event)
       continue
     }
     if (event.type === 'assistant.message') {
@@ -131,7 +144,51 @@ export type TranscriptState =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'unavailable' }
-  | { status: 'ready'; agentId: string; leaves: TranscriptLeaf[]; parentAgentId: string | null; hasOlder: boolean; skippedFromStart: number; loadingOlder: boolean; messagesFrom: number }
+  | ReadyTranscript
+
+/** A loaded transcript. `messagesFrom` is where the placed agent messages
+ *  start (the next older page takes the ones before it); `orphanResults`
+ *  are results on the loaded pages whose call is on a page not loaded yet. */
+export interface ReadyTranscript {
+  readonly status: 'ready'
+  readonly agentId: string
+  readonly leaves: TranscriptLeaf[]
+  readonly parentAgentId: string | null
+  readonly hasOlder: boolean
+  readonly skippedFromStart: number
+  readonly loadingOlder: boolean
+  readonly messagesFrom: number
+  readonly orphanResults: ReadonlyMap<string, ToolResultEvent>
+}
+
+/** The newest page of a child's transcript, folded. */
+export function foldNewestPage(agentId: string, page: SubagentTranscriptView, messages: readonly AgentMessageView[]): ReadyTranscript {
+  const leaves: TranscriptLeaf[] = []
+  const orphans = new Map<string, ToolResultEvent>()
+  const messagesFrom = foldTranscriptLeaves(page.events, leaves, messages, { olderPagesRemain: page.hasOlder, orphans })
+  // The newest page can itself repeat one anchor (text, tool, text of one
+  // message): its rows carry unique render keys from the start.
+  return { status: 'ready', agentId, leaves: uniqueRenderKeys(leaves), parentAgentId: page.parentAgentId, hasOlder: page.hasOlder, skippedFromStart: page.skippedFromStart, loadingOlder: false, messagesFrom, orphanResults: orphans }
+}
+
+/** One older page folded in front of a loaded transcript: its agent
+ *  messages are the ones before the loaded span, and the results the newer
+ *  pages held for its calls settle those calls' cards. */
+export function foldOlderPage(current: ReadyTranscript, page: SubagentTranscriptView, messages: readonly AgentMessageView[]): ReadyTranscript {
+  const fresh: TranscriptLeaf[] = []
+  const orphans = new Map<string, ToolResultEvent>()
+  const messagesFrom = foldTranscriptLeaves(page.events, fresh, messages, { olderPagesRemain: page.hasOlder, before: current.messagesFrom, orphans })
+  const carried = new Map(current.orphanResults)
+  for (const leaf of fresh) {
+    if (leaf.kind !== 'tool') continue
+    const result = carried.get(leaf.tool.callId)
+    if (result === undefined) continue
+    applyToolResult(leaf.tool, result)
+    carried.delete(leaf.tool.callId)
+  }
+  for (const [callId, result] of orphans) carried.set(callId, result)
+  return { ...current, leaves: prependOlderLeaves(fresh, current.leaves), hasOlder: page.hasOlder, skippedFromStart: page.skippedFromStart, loadingOlder: false, messagesFrom, orphanResults: carried }
+}
 
 /** One load-older window (messages; matches the backend's newest page). */
 export const TRANSCRIPT_OLDER_CHUNK = 400
@@ -275,12 +332,7 @@ export function useSubagentTranscript(
     setTranscript(prev => prev.status === 'ready' && prev.agentId === agentId ? prev : { status: 'loading' })
     load(agentId).then(loaded => {
       if (!alive) return
-      if (loaded === null) { setTranscript({ status: 'unavailable' }); return }
-      const leaves: TranscriptLeaf[] = []
-      const messagesFrom = foldTranscriptLeaves(loaded.events, leaves, messagesRef.current, { olderPagesRemain: loaded.hasOlder })
-      // The newest page can itself repeat one anchor (text, tool, text of
-      // one message): its rows carry unique render keys from the start.
-      setTranscript({ status: 'ready', agentId, leaves: uniqueRenderKeys(leaves), parentAgentId: loaded.parentAgentId, hasOlder: loaded.hasOlder, skippedFromStart: loaded.skippedFromStart, loadingOlder: false, messagesFrom })
+      setTranscript(loaded === null ? { status: 'unavailable' } : foldNewestPage(agentId, loaded, messagesRef.current))
     }, () => { if (alive) setTranscript({ status: 'unavailable' }) })
     return () => { alive = false }
   }, [active, agentId, reloadKey])
@@ -291,15 +343,13 @@ export function useSubagentTranscript(
     const requestedFor = transcript
     const count = Math.min(TRANSCRIPT_OLDER_CHUNK, requestedFor.skippedFromStart)
     setTranscript(prev => prev === requestedFor ? { ...prev, loadingOlder: true } : prev)
-    const current = (prev: TranscriptState): prev is Extract<TranscriptState, { status: 'ready' }> =>
+    const current = (prev: TranscriptState): prev is ReadyTranscript =>
       prev.status === 'ready' && prev.agentId === requestedFor.agentId && prev.skippedFromStart === requestedFor.skippedFromStart
     load(requestedFor.agentId, { count, skipFromStart: requestedFor.skippedFromStart }).then(older => {
       setTranscript(prev => {
         if (!current(prev)) return prev
         if (older === null) return { ...prev, loadingOlder: false }
-        const fresh: TranscriptLeaf[] = []
-        const messagesFrom = foldTranscriptLeaves(older.events, fresh, messagesRef.current, { olderPagesRemain: older.hasOlder, before: prev.messagesFrom })
-        return { ...prev, leaves: prependOlderLeaves(fresh, prev.leaves), hasOlder: older.hasOlder, skippedFromStart: older.skippedFromStart, loadingOlder: false, messagesFrom }
+        return foldOlderPage(prev, older, messagesRef.current)
       })
     }, () => {
       setTranscript(prev => current(prev) ? { ...prev, loadingOlder: false } : prev)
