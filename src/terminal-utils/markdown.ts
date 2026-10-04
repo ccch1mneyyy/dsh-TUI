@@ -298,28 +298,13 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
   // Kimi Code style: a muted ```lang opening line (language tag + boundary
   // for unhighlighted blocks) + 2-space indent; no closing fence (syntax
   // colors or the indent already mark the end, it only cost vertical space).
+  // This ANSI form serves nested code (inside lists/quotes) and the narrow
+  // fallback of CodeBlockFrame; top-level fences render through the frame
+  // component sharing formatCodeBody below.
   const theme = getActiveTheme()
-  const openFence = colorize('```' + (token.lang ?? ''), theme.subtle, 'foreground')
+  const openFence = colorize('```' + codeLanguageTag(token), theme.subtle, 'foreground')
   const indent = '  '
-  const renderBody = (): string => {
-    if (!state.highlight) {
-      return token.text
-    }
-    let language = 'plaintext'
-    if (token.lang) {
-      if (state.highlight.supportsLanguage(token.lang)) {
-        language = token.lang
-      } else {
-        logForDebugging(
-          `Language not supported while highlighting code, falling back to plaintext: ${token.lang}`,
-        )
-      }
-    }
-    return state.highlight.highlight(token.text, { language, theme: buildSyntaxTheme(theme) })
-  }
-  // Strip ALL trailing newlines: trailing blank lines would otherwise leak a
-  // stray blank line at the end of the block.
-  const body = renderBody().replace(/\n+$/, '')
+  const body = formatCodeBody(token, state.highlight)
   if (body === '') {
     return `${openFence}${EOL}`
   }
@@ -331,6 +316,54 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
       .map(line => (line === '' ? line : indent + line))
       .join(EOL) + EOL
   )
+}
+
+/**
+ * The fence info string trimmed to its first word: a fence opening with
+ * "js meta" names js. Everything after the first whitespace run is meta
+ * the renderer never consumes; the full source stays in token.text.
+ */
+export function codeLanguageTag(token: Tokens.Code): string {
+  return (token.lang ?? '').trim().split(/\s+/)[0] ?? ''
+}
+
+/**
+ * Highlighted (or plain) body of a fenced code block, with trailing blank
+ * lines stripped. Shared by the ANSI fence and CodeBlockFrame so both
+ * surfaces agree on highlighting, language resolution and trimming.
+ *
+ * NEVER throws: cli-highlight feeds highlight.js, which converts to HTML
+ * fragments and can raise synchronously on hostile inputs. Any failure in
+ * the highlighting pipeline degrades to the plain body - the fence and
+ * language label survive - instead of unwinding the React render that
+ * called it.
+ */
+export function formatCodeBody(token: Tokens.Code, highlight: CliHighlight | null): string {
+  const plain = token.text.replace(/\n+$/, '')
+  if (!highlight || plain === '') return plain
+  try {
+    let language = 'plaintext'
+    const tag = codeLanguageTag(token)
+    if (tag) {
+      if (highlight.supportsLanguage(tag)) {
+        language = tag
+      } else {
+        logForDebugging(
+          `Language not supported while highlighting code, falling back to plaintext: ${tag}`,
+        )
+      }
+    }
+    const theme = getActiveTheme()
+    const highlighted = highlight.highlight(token.text, { language, theme: buildSyntaxTheme(theme) })
+    // Strip ALL trailing newlines: trailing blank lines would otherwise leak
+    // a stray blank line at the end of the block.
+    return highlighted.replace(/\n+$/, '') || plain
+  } catch (error) {
+    logForDebugging(
+      `Code highlighting threw, degrading the block to plaintext: ${String(error)}`,
+    )
+    return plain
+  }
 }
 
 function renderEmphasis(token: Tokens.Em, state: RenderState): string {

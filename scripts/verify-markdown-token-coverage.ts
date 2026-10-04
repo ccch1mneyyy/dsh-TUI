@@ -24,7 +24,7 @@ const [assertModule, { default: stripAnsi }, { marked }, markdown] = await Promi
   import('../src/terminal-utils/markdown.js'),
 ])
 const assert = assertModule.default
-const { applyMarkdown, configureMarked, formatToken } = markdown
+const { applyMarkdown, codeLanguageTag, configureMarked, formatCodeBody, formatToken } = markdown
 type Token = marked.Token
 
 configureMarked()
@@ -163,4 +163,50 @@ assert.equal(formatToken(defToken), '', 'def is the explicit invisible ignore')
 const htmlToken = { type: 'html', raw: '<br>' } as Token
 assert.equal(formatToken(htmlToken), '', 'html is the explicit invisible ignore')
 
-console.log('markdown token coverage passed (census, checkbox state, strikethrough, invisibles, fail-closed unknowns)')
+// -- 6. Highlighter isolation: sync throw degrades, never crashes --------
+
+const codeSrc = 'const boom = 1' + '\n' + 'return boom'
+const throwHighlight = {
+  supportsLanguage: () => true,
+  highlight: (): string => {
+    throw new Error('fake cli-highlight explosion')
+  },
+} as unknown as Parameters<typeof formatCodeBody>[1]
+const degraded = applyMarkdown('```ts' + '\n' + codeSrc + '\n' + '```' + '\n', throwHighlight)
+const degradedPlain = stripAnsi(degraded)
+assert.ok(degradedPlain.includes('const boom = 1'), 'body survives a throwing highlighter: ' + JSON.stringify(degradedPlain))
+assert.ok(degradedPlain.includes('```ts'), 'fence line and language label survive')
+
+const bodyDirect = formatCodeBody({ type: 'code' as const, raw: '', lang: 'ts', text: codeSrc }, throwHighlight)
+assert.equal(bodyDirect, codeSrc, 'formatCodeBody returns the plain body on throw')
+
+// Unknown language: no crash, plaintext body, label intact.
+const rejectHighlight = {
+  supportsLanguage: (name: string) => name === 'js',
+  highlight: (code: string, opts: { language: string }) =>
+    opts.language === 'plaintext' ? code : 'styled:' + code,
+} as unknown as Parameters<typeof formatCodeBody>[1]
+const unknownLang = formatCodeBody(
+  { type: 'code' as const, raw: '', lang: 'fancy-new-lang meta=x', text: codeSrc },
+  rejectHighlight,
+)
+assert.equal(unknownLang, codeSrc, 'unsupported language falls back to plaintext')
+
+// Happy path passthrough + first-word language resolution.
+const okHighlight = {
+  supportsLanguage: (name: string) => name === 'js',
+  highlight: (code: string, opts: { language: string }) => 'L:' + opts.language + ':' + code,
+} as unknown as Parameters<typeof formatCodeBody>[1]
+const styled = formatCodeBody(
+  { type: 'code' as const, raw: '', lang: 'js meta=1', text: codeSrc },
+  okHighlight,
+)
+assert.equal(styled, 'L:js:' + codeSrc, 'fence info resolves to its first word')
+
+// Trailing blank lines are trimmed in both paths.
+assert.equal(
+  formatCodeBody({ type: 'code' as const, raw: '', lang: '', text: 'a\n\n' }, null),
+  'a',
+  'trailing blank lines stripped',
+)
+console.log('markdown token coverage passed (census, checkbox, strikethrough, invisibles, fail-closed unknowns, highlighter isolation)')
