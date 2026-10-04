@@ -42,6 +42,9 @@ const EOL = '\n'
 /** Left one-quarter block (U+258E), the blockquote gutter marker. */
 const QUOTE_BAR = '\u258e'
 
+/** The horizontal-rule divider: three light box-drawing dashes. */
+const HR_DIVIDER = '\u2500\u2500\u2500'
+
 /** Tool-analysis tag blocks that carry no user-facing content; dropped before lexing. */
 const TOOL_ANALYSIS_TAG_BLOCKS =
   /<(commit_analysis|context|function_analysis|pr_analysis)>.*?<\/\1>\n?/gs
@@ -230,8 +233,7 @@ export function applyMarkdown(
   }
   return marked
     .lexer(stripPromptXMLTags(content))
-    .map(token => dispatch(token, rootState))
-    .join('')
+    .reduce((out: string, token: Token) => appendBlockText(out, dispatch(token, rootState)), '')
     // trimEnd only: the input is already trimmed, so leading whitespace in
     // the output is renderer-intended (e.g. the code block's 2-space indent
     // on its first line). A full trim() would eat that first-line indent.
@@ -262,7 +264,7 @@ function dispatch(token: Token, state: RenderState): string {
   if (isToken(token, 'strong')) return renderStrong(token, state)
   if (isToken(token, 'del')) return renderDel(token, state)
   if (isToken(token, 'heading')) return renderHeading(token, state)
-  if (isToken(token, 'hr')) return '---'
+  if (isToken(token, 'hr')) return renderHr()
   if (isToken(token, 'image')) return token.href
   if (isToken(token, 'link')) return renderLink(token, state)
   if (isToken(token, 'list')) return renderList(token, state)
@@ -405,6 +407,35 @@ function renderStrong(token: Tokens.Strong, state: RenderState): string {
 function renderDel(token: Tokens.Del, state: RenderState): string {
   const inner = token.tokens.map(child => dispatch(child, inlineChildren(state))).join('')
   return chalk.strikethrough(inner)
+}
+
+/**
+ * Subtle single-row hr divider (spec section 3, Batch D). Three dashes
+ * in the theme's muted color replace the bare `---` literal.
+ *
+ * Deliberately NO trailing newline: the surrounding space tokens already
+ * provide the block separation, so the divider costs exactly one row -
+ * appending EOL here would add a blank row below every rule. Block
+ * joins cover the unterminated tail via appendBlockText.
+ */
+function renderHr(): string {
+  return colorize(HR_DIVIDER, getActiveTheme().subtle, 'foreground')
+}
+
+/**
+ * Append one block token's rendered text to the accumulated run. Every
+ * visible block renderer ends its output with a newline except the hr
+ * divider; when such an unterminated block is followed directly by
+ * content that does not open with its own line break (a rule
+ * immediately before a heading, or two adjacent rules), the row break
+ * is inserted here so the divider never merges into the next block's
+ * first row.
+ */
+export function appendBlockText(accumulated: string, block: string): string {
+  if (accumulated !== '' && !accumulated.endsWith(EOL) && block !== '' && !block.startsWith(EOL)) {
+    return accumulated + EOL + block
+  }
+  return accumulated + block
 }
 
 function renderHeading(token: Tokens.Heading, state: RenderState): string {

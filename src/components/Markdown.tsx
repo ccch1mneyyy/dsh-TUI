@@ -1,7 +1,7 @@
 import React from 'react'
 import { marked, type Token, type Tokens } from 'marked'
 import { Box, Text } from '../ui.js'
-import { configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
+import { appendBlockText, configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { isMermaidLang } from '../terminal-utils/mermaid.js'
 import { isMathBlockToken, isMathToken } from '../terminal-utils/math.js'
@@ -223,7 +223,9 @@ function renderTokensToNodes(
         <CodeBlockFrame key={nodes.length} token={token as Tokens.Code} highlight={highlight} dimColor={dimColor} />,
       )
     } else {
-      ansiText += formatToken(token, 0, null, null, highlight)
+      // appendBlockText inserts the row break after the (newline-free) hr
+      // divider when the next block does not open its own line.
+      ansiText = appendBlockText(ansiText, formatToken(token, 0, null, null, highlight))
       // A top-level token boundary keeps inline formatting and code fences
       // intact while letting the painter cull finished offscreen text blocks.
       if (ansiText.length >= TEXT_BLOCK_BUDGET && ansiText.endsWith('\n')) {

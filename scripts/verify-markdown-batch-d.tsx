@@ -92,4 +92,24 @@ assert.ok(!depths[5]!.includes(BOLD) && !depths[5]!.includes(ITALIC), 'H6 is upr
 assert.ok(depths[4]!.includes('38;2') && depths[5]!.includes('38;2'), 'H5/H6 carry the subtle foreground color')
 assert.ok(!depths[2]!.includes('38;2'), 'H3 stays near-text')
 
+// -- 2. hr: subtle single-row divider -----------------------------------
+
+const hrStd = applyMarkdown('intro' + '\n' + '\n' + '---' + '\n' + '\n' + 'outro' + '\n')
+assert.equal(plain(hrStd), 'intro' + '\n' + '\n' + '\u2500\u2500\u2500' + '\n' + 'outro',
+  'divider replaces the ASCII dashes and keeps the exact one-row height budget: ' +
+    JSON.stringify(plain(hrStd)))
+assert.ok(hrStd.includes('38;2'), 'divider is subtle-styled')
+assert.ok(!plain(hrStd).endsWith('\n'), 'divider adds no trailing blank row')
+
+// Bad baseline: `---` had no trailing newline and nothing inserted the row
+// break, so a rule directly before a heading rendered `---H`. The join
+// guard (appendBlockText) now keeps them on separate rows.
+const hrThenHeading = applyMarkdown('---' + '\n' + '# H' + '\n')
+assert.equal(plain(hrThenHeading), '\u2500\u2500\u2500' + '\n' + 'H',
+  'divider never merges into the next block: ' + JSON.stringify(plain(hrThenHeading)))
+
+const doubleHr = applyMarkdown('---' + '\n' + '***' + '\n')
+assert.equal(plain(doubleHr), '\u2500\u2500\u2500' + '\n' + '\u2500\u2500\u2500',
+  'two adjacent rules stay on separate rows')
+
 console.log('markdown batch D: heading layering + compressed whitespace passed')

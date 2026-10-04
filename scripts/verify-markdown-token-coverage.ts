@@ -140,7 +140,11 @@ assert.equal(stripAnsi(applyMarkdown('inline <span>tag</span> text\n')), 'inline
 
 assert.ok(stripAnsi(applyMarkdown('**bold** and `code`\n')).includes('bold and code'))
 assert.ok(applyMarkdown('## head\n').includes('head'), 'heading text renders')
-assert.ok(applyMarkdown('---\n').includes('---'), 'hr renders its divider')
+// Batch D: the divider is three subtle-styled box-drawing dashes on one
+// row (no trailing newline); the literal ASCII dashes are gone.
+const hrOut = applyMarkdown('---\n')
+assert.equal(stripAnsi(hrOut), '\u2500\u2500\u2500', 'hr renders the single-row divider')
+assert.notEqual(hrOut, stripAnsi(hrOut), 'divider carries the subtle style under FORCE_COLOR=3')
 const fence = applyMarkdown('```ts\nconst a = 1\n```\n')
 assert.ok(fence.includes('const a = 1'), 'fenced code body renders')
 assert.ok(stripAnsi(fence).includes('```ts'), 'fence line names the language')
