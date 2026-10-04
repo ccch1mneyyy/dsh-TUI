@@ -183,6 +183,14 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
    *  事件发生时的 state.model（AC-A4）。 */
   let eventModel: string | undefined
   const assistantRowsByStep = new Map<string, ChatRow>()
+  /**
+   * Assistant rows by the seq they carry: a reconnect can replay a delta or
+   * settlement of a row already on screen, which must reuse that row. Live
+   * events only see rows this projector opened or settled since the last
+   * replay; rows prepended by "load earlier" come from a separate projection
+   * whose seqs may overlap live ones and are never matched.
+   */
+  const assistantRowsBySeq = new Map<number, ChatRow>()
   const lastTextDelta = new Map<ChatRow, string>()
   const stepKey = (turn: number, step: number): string => `${turn}:${step}`
   const touchRow = (row: ChatRow): void => { markChannelReadDirty(row); markChannelReadDirty(state.rows) }
@@ -203,6 +211,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     const sealedIndex = sealedReasoning.indexOf(row)
     if (sealedIndex !== -1) sealedReasoning.splice(sealedIndex, 1)
     lastTextDelta.delete(row)
+    if (row.seq !== undefined && assistantRowsBySeq.get(row.seq) === row) assistantRowsBySeq.delete(row.seq)
   }
 
   const discardAttempt = (turn: number, step: number): void => {
@@ -253,24 +262,31 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     touchRow(row)
   }
 
+  const indexAssistantRow = (row: ChatRow): void => {
+    if (row.seq !== undefined) assistantRowsBySeq.set(row.seq, row)
+  }
+
+  const openStreaming = (seq?: number): ChatRow => {
+    streaming = { id: deps.rowIds.value, kind: 'assistant', text: '', streaming: true, fresh: true, ...seq !== undefined ? { seq } : {} }
+    deps.rowIds.value += 1
+    appendRow(streaming)
+    indexAssistantRow(streaming)
+    return streaming
+  }
+
   const ensureStreaming = (seq?: number): ChatRow => {
     if (streaming !== undefined) return streaming
     // A reconnect can replay the first delta after the sealed message was
     // already observed. Reuse that durable row instead of opening a second
     // assistant bubble for the same event sequence.
-    const existing = seq === undefined
-      ? undefined
-      : [...state.rows].reverse().find(row => row.kind === 'assistant' && row.seq === seq)
+    const existing = seq === undefined ? undefined : assistantRowsBySeq.get(seq)
     if (existing !== undefined) {
       existing.streaming = true
       touchRow(existing)
       streaming = existing
       return existing
     }
-    streaming = { id: deps.rowIds.value, kind: 'assistant', text: '', streaming: true, fresh: true, ...seq !== undefined ? { seq } : {} }
-    deps.rowIds.value += 1
-    appendRow(streaming)
-    return streaming
+    return openStreaming(seq)
   }
 
   /** Latest reasoning row keyed by its (turn, step) — lets a resumed
@@ -554,17 +570,14 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       ? stepKey(msgTurn, msgStep)
       : undefined
     const row = (msgKey !== undefined ? assistantRowsByStep.get(msgKey) : undefined) ?? streaming ??
-      (text || images.length > 0
-        ? ([...state.rows].reverse().find(candidate =>
-            candidate.kind === 'assistant' && candidate.seq === event.seq,
-          ) ?? ensureStreaming(event.seq))
-        : undefined)
+      (text || images.length > 0 ? assistantRowsBySeq.get(event.seq) ?? openStreaming(event.seq) : undefined)
     if (row !== undefined && canonical && !text && images.length === 0) {
       removeRow(row)
       if (msgKey !== undefined) assistantRowsByStep.delete(msgKey)
     } else if (row !== undefined) {
       if (msgKey !== undefined) assistantRowsByStep.set(msgKey, row)
       row.seq ??= event.seq
+      indexAssistantRow(row)
       if (anchor !== undefined) row.anchor ??= anchor
       row.time = event.time
       if (text || canonical) row.text = text
@@ -1368,6 +1381,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     eventModel = undefined
     assistantRowsByStep.clear()
     lastTextDelta.clear()
+    // Rows still on screen when a replay starts keep matching by seq, so a
+    // replay over painted history reuses them instead of duplicating them.
+    assistantRowsBySeq.clear()
+    for (const row of state.rows) if (row.kind === 'assistant') indexAssistantRow(row)
     replaying = true
     try {
       for (const event of events) applyEvent(event)
@@ -1392,6 +1409,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     activeAttempt = undefined
     eventModel = undefined
     assistantRowsByStep.clear()
+    assistantRowsBySeq.clear()
     lastTextDelta.clear()
     tpsTurn = undefined
     tpsStep = undefined

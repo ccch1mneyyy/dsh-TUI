@@ -14,6 +14,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentEvent } from '../src/agent/events.js'
+import { prependHistoryRows, projectHistorySlice } from '../src/channel/history-restore.js'
 import { createDshTranslator, dshPricingWindow } from '../src/dsh-adapter/backend/translate.js'
 import { FIXTURE_DIR, buildFixtures } from './fixtures/dsh/generate.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
@@ -134,6 +135,31 @@ check('compaction bracket → compaction.start/end', of(live, 'compaction.start'
     presentation: { card: 'terminal', output: 'listing', exitCode: 0 },
   }])
   check('folded running card: the result keeps the preview, no full payload or view', card.tool?.status === 'ok' && card.tool.resultText === 'listing' && card.tool.resultFull === undefined && card.tool.resultView === undefined)
+}
+// Seq lookups only match rows the projector itself painted.
+{
+  const harness = createProjectorHarness()
+  harness.apply([
+    { type: 'turn.start', turn: 1, origin: 'user', time: 1 },
+    { type: 'step.start', turn: 1, step: 1 },
+    { type: 'assistant.delta', attemptId: 'seq:3', index: 0, time: 2, turn: 1, step: 1, seq: 3, delta: { kind: 'text', text: 'chunked' } },
+    { type: 'assistant.message', seq: 4, anchor: '4', turn: 1, step: 1, attemptId: 'seq:4', time: 3, canonical: false, blocks: [{ type: 'text', text: 'chunked' }] },
+    { type: 'step.end', turn: 1, step: 1 },
+    { type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 4 },
+  ])
+  // A reconnect re-delivers the durable chunk: it lands on the row it opened.
+  harness.apply([{ type: 'assistant.delta', attemptId: 'seq:3', index: 0, time: 2, turn: 1, step: 1, seq: 3, delta: { kind: 'text', text: 'chunked' } }], true)
+  harness.projector.settleStreaming()
+  check('a re-delivered chunk reuses the row it opened', harness.state.rows.filter(row => row.kind === 'assistant').length === 1)
+  // "Load earlier" prepends rows from a separate projection whose seqs can
+  // collide with live ones; a live settlement must never land on them.
+  const older = projectHistorySlice([
+    { type: 'assistant.message', seq: 7, anchor: 'older-7', turn: 1, step: 1, attemptId: 'older-7', time: 1, canonical: true, blocks: [{ type: 'text', text: 'older answer' }] },
+  ], 'preview')
+  prependHistoryRows(harness.state.rows, older)
+  harness.apply([{ type: 'assistant.message', seq: 7, anchor: 'live-7', attemptId: 'live-7', time: 9, canonical: true, blocks: [{ type: 'text', text: 'live answer' }] }])
+  const assistants = harness.state.rows.filter(row => row.kind === 'assistant')
+  check('a live settlement never overwrites a restored row with the same seq', assistants[0]?.text === 'older answer' && assistants.at(-1)?.text === 'live answer')
 }
 const customs = of(live, 'custom').map(event => event.nativeType)
 check('unknown plugin events → custom', customs.includes('fixture-plugin/note') && customs.includes('other-plugin/ping') && customs.includes('developer/message'))
