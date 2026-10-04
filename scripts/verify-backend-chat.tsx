@@ -130,6 +130,12 @@ try {
   await typeLine('/ne')
   check('the slash menu offers served commands', await settled(() => screen().includes(t('sugg-commands-title')) && screen().includes('Start a new conversation')), screen())
   await clearLine()
+  // The composition root serves /restart and /kernel by respawning the
+  // process (a Claude session included), so every backend lists them.
+  check('restart and kernel are offered on a non-DSH backend',
+    channel.commandCompletions('/rest').some(command => command.name === 'restart')
+      && channel.commandCompletions('/kern').some(command => command.name === 'kernel'),
+    JSON.stringify(channel.commandCompletions('/re').map(command => command.name)))
 
   await typeLine('/preset')
   stdin.write('\r')

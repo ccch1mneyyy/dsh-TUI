@@ -106,7 +106,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Help / exit
   { name: 'help', description: 'Show shortcuts and commands' },
   { name: 'tips', description: 'Show usage tips and shortcuts' },
-  { name: 'kernel', description: 'Choose the kernel (backend) dsh-tui runs on' },
+  { name: 'kernel', description: 'Choose the kernel dsh-tui runs on (DSH or Claude)' },
   { name: 'restart', description: 'Restart dsh-tui and resume this session' },
   { name: 'exit', description: 'Exit dsh-tui' },
   { name: 'quit', description: 'Exit dsh-tui', tag: 'alias of /exit' },
@@ -125,7 +125,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
  */
 export const BACKEND_PERMISSION_COMMAND: LocalCommand = {
   name: 'permission',
-  description: 'Show or switch the backend permission mode',
+  description: 'Show or switch the permission mode',
   descriptionKey: 'cmd-desc-permission',
 }
 
@@ -149,7 +149,7 @@ export const BACKEND_CHANNEL_COMMAND: LocalCommand = {
  * What a built-in command needs from the bound backend session: `any` works
  * on every backend (UI-only, or served by the channel's backend-neutral
  * core); a capability name needs that session capability; `dsh` needs the
- * DSH-only specialists (design §3.5, §5.3). Commands not listed here default
+ * DSH-only specialists. Commands not listed here default
  * to `dsh`, so a new built-in never silently appears on a backend that
  * cannot serve it.
  */
@@ -163,18 +163,16 @@ const LOCAL_COMMAND_REQUIREMENTS: ReadonlyMap<string, LocalCommandRequirement> =
   ['exit', 'any'], ['quit', 'any'], ['q', 'any'], ['theme', 'any'], ['lang', 'any'],
   ['activity', 'any'], ['thinking', 'any'], ['vim', 'any'], ['terminal-setup', 'any'],
   ['connect', 'any'], ['update', 'any'], ['export', 'any'], ['panel', 'any'],
-  // The kernel switch is served by the composition root (it respawns the
-  // process), so every backend offers it — including the way BACK from a
-  // non-DSH kernel, which never shows the launchpad (its boot screens are
-  // DSH screens).
-  ['kernel', 'any'],
+  // The composition root serves these by respawning the process, so every
+  // backend offers them. /kernel is also the only way back to DSH from
+  // inside a non-DSH conversation (the launchpad's kernel entry is the other).
+  ['kernel', 'any'], ['restart', 'any'],
   ['compact', 'compact'], ['resume', 'resume'], ['rewind', 'rewind'], ['fork', 'fork'],
   ['model', 'models'], ['effort', 'effort'], ['agents', 'subagents'], ['jobs', 'tasks'], ['mcp', 'mcp'],
   ['context', 'context'], ['login', 'login'],
   ['recap', 'sideQuery'], ['btw', 'sideQuery'], ['rename', 'rename'], ['color', 'color'],
-  // 三态契约（设计 §④）：/trace 在每个后端都入口一致——不开设「隐藏入口 +
-  // 点了再弹失败通知」的分叉；不支持的后端打开的是诚实的 unsupported 态，
-  // 由 channel.trajectorySource() 报告说了算（不是命令清单说了算）。
+  // /trace opens on every backend; one without trajectory data shows the
+  // unsupported state (channel.trajectorySource() decides, not this table).
   ['trace', 'any'],
 ])
 
