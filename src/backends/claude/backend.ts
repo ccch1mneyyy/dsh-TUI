@@ -18,8 +18,8 @@ import { t } from '../../i18n.js'
 import { CLAUDE_BACKEND_ID, CLAUDE_BACKEND_LABEL, cliVersionDrift, sdkVersionDrift, VALIDATED_SDK_VERSION } from './contract.js'
 import { CLAUDE_OAUTH_PROVIDER, ClaudeChannelConflictError, channelMissingCredential, detectClaudeAuth, originHost, refreshFailureDebugDetail, refreshFailureStatus, resolveClaudeAuth, type ClaudeChannelConnectionInput, type ClaudeRouteSettings } from './auth.js'
 import { createClaudeCatalog } from './catalog.js'
-import { resolveStartPermissionMode } from './options.js'
-import { fileClaudePrefs } from './prefs.js'
+import { resolveStartPermissionMode, type StartPermissionMode } from './options.js'
+import { fileClaudePrefs, type ClaudePrefs } from './prefs.js'
 import { buildClaudeEnv, readClaudeVersion, resolveClaudeExecutable } from './process.js'
 import { activeProfileOf, fileClaudeChannels, hasChannelConnection, type ClaudeChannelProfile, type ClaudeChannels } from './channels.js'
 import { fileClaudeChannelTokens, type ClaudeChannelTokens } from './channelTokens.js'
@@ -71,6 +71,25 @@ export function channelStartNotices(
     const superseded = SUPERSEDED_CREDENTIAL_KEYS.filter(key => firstNonEmpty(settingsEnv, key) !== undefined)
     if (superseded.length > 0) notices.push(t('channel-conn-creds-superseded', { keys: superseded.join(', ') }))
   }
+  return notices
+}
+
+/**
+ * The start notices of the resolved permission mode. A remembered bypass
+ * that was not carried into this session is said once and forgotten, so
+ * the next start resolves quietly.
+ */
+export function startModeNotices(start: StartPermissionMode, prefs: Pick<ClaudePrefs, 'write'>): string[] {
+  const notices: string[] = []
+  if (start.downgradedFrom !== undefined) notices.push(t('claude-start-mode-downgraded', { mode: start.downgradedFrom }))
+  // The developer override is never silent: a live-test leftover in the
+  // environment would otherwise change every approval without a trace.
+  if (start.source === 'env') notices.push(t('claude-start-mode-env', { mode: start.mode }))
+  if (start.bypassNotCarried === true) {
+    prefs.write({ permissionMode: null })
+    notices.push(t('claude-start-mode-bypass-not-carried'))
+  }
+  if (start.ignoredOverride !== undefined) notices.push(t('claude-start-mode-env-ignored', { mode: start.ignoredOverride }))
   return notices
 }
 
@@ -241,15 +260,7 @@ export const claudeBackend: AgentBackend = {
       startNotices.push(refreshFailedNotice(error))
       plan = await resolveClaudeAuth(baseEnv, undefined, { settings })
     }
-    if (start.downgradedFrom !== undefined) startNotices.push(t('claude-start-mode-downgraded', { mode: start.downgradedFrom }))
-    // The developer override is never silent: a live-test leftover in the
-    // environment would otherwise change every approval without a trace.
-    if (start.source === 'env') startNotices.push(t('claude-start-mode-env', { mode: start.mode }))
-    // A remembered bypass is never silent: the session really does start
-    // with every confirmation off, so the transcript must say so (and where
-    // the choice is changed: /permission).
-    if (start.source === 'pref' && start.mode === 'bypassPermissions') startNotices.push(t('claude-start-mode-pref-bypass'))
-    if (start.ignoredOverride !== undefined) startNotices.push(t('claude-start-mode-env-ignored', { mode: start.ignoredOverride }))
+    startNotices.push(...startModeNotices(start, prefs))
     if (sdkVersionDrift(sdkVersion) !== undefined) startNotices.push(t('claude-sdk-drift', { version: sdkVersion ?? '', validated: VALIDATED_SDK_VERSION }))
     return openClaudeSession({
       sdk,

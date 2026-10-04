@@ -130,22 +130,24 @@ export interface StartPermissionMode {
   readonly source: 'env' | 'pref' | 'settings' | 'default'
   /** `DSH_TUI_CLAUDE_PERMISSION_MODE` was set to a value the override refuses. */
   readonly ignoredOverride?: string
+  /** The remembered pick was `bypassPermissions`, which a new session never
+   *  starts in (it was resolved as if nothing were remembered). */
+  readonly bypassNotCarried?: true
 }
 
 /**
- * The explicit start permission mode (design §4.3: never omitted — the CLI
- * default may be `auto`). `DSH_TUI_CLAUDE_PERMISSION_MODE` is a developer
- * override for live tests; it is the one source that may START in
- * `bypassPermissions` (README documents it) — the user's explicit choice,
- * never a settings file. Next comes `pref`, the user's remembered
- * `/permission` pick (`~/.dsh-tui/backends/claude/prefs.json`, the same
- * store as the model and effort choices): it may also start in
- * `bypassPermissions` (the always-on gate pre-warms the process) — the
- * user chose it explicitly, here or in an earlier session, so it skips the
- * settings cascade entirely: no escalation filter, no downgrade notice.
- * An illegal persisted value reads as no choice. Otherwise the user's
- * settings cascade after the CLI's own trust filter for escalating modes
- * from repo-committed files; otherwise `default`.
+ * The explicit start permission mode (never omitted: the CLI default may be
+ * `auto`). `DSH_TUI_CLAUDE_PERMISSION_MODE` is a developer override for live
+ * tests and the only way to START in `bypassPermissions`
+ * (docs/configuration.md). Next comes `pref`, the user's remembered
+ * `/permission` pick (`~/.dsh-tui/backends/claude/prefs.json`): it skips the
+ * settings cascade (no escalation filter, no downgrade notice) — except a
+ * remembered `bypassPermissions`, which is never carried into a new session
+ * (Claude Code itself wants an explicit flag on every start): it resolves as
+ * if nothing were remembered and says so (`bypassNotCarried`). An illegal
+ * persisted value reads as no choice. Otherwise the user's settings cascade
+ * after the CLI's own trust filter for escalating modes from repo-committed
+ * files; otherwise `default`.
  *
  * Starting elsewhere restricts nothing: the bypass gate rides along on every
  * query (`buildQueryOptions`), so `/permission` may switch into
@@ -162,8 +164,11 @@ export async function resolveStartPermissionMode(
     return { mode: override as PermissionMode, source: 'env' }
   }
   const ignoredOverride = override === undefined || override === '' ? undefined : override
-  const ignored = ignoredOverride === undefined ? {} : { ignoredOverride }
-  if (isPermissionMode(pref)) return { mode: pref, source: 'pref', ...ignored }
+  const notes = {
+    ...(ignoredOverride === undefined ? {} : { ignoredOverride }),
+    ...(pref === 'bypassPermissions' ? { bypassNotCarried: true as const } : {}),
+  }
+  if (isPermissionMode(pref) && pref !== 'bypassPermissions') return { mode: pref, source: 'pref', ...notes }
   let configured: unknown
   try {
     const resolved = await sdk.resolveSettings({ cwd, settingSources: SETTING_SOURCES })
@@ -173,9 +178,9 @@ export async function resolveStartPermissionMode(
   } catch {
     configured = undefined
   }
-  if (!isPermissionMode(configured)) return { mode: 'default', source: 'default', ...ignored }
-  if (!(START_MODES as readonly string[]).includes(configured)) return { mode: 'default', downgradedFrom: configured, source: 'settings', ...ignored }
-  return { mode: configured, source: 'settings', ...ignored }
+  if (!isPermissionMode(configured)) return { mode: 'default', source: 'default', ...notes }
+  if (!(START_MODES as readonly string[]).includes(configured)) return { mode: 'default', downgradedFrom: configured, source: 'settings', ...notes }
+  return { mode: configured, source: 'settings', ...notes }
 }
 
 export type ProfileInput = {

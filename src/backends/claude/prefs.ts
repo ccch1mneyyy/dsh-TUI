@@ -17,8 +17,9 @@ import { DATA_DIR } from '../../utils/paths.js'
 import { writeFileAtomic } from './atomic-file.js'
 
 /** The permission modes the persisted choice may hold (the SDK's whole
- *  vocabulary, `bypassPermissions` included: the always-on query gate keeps
- *  it startable, options.ts). Anything else reads as no choice. */
+ *  vocabulary). A stored `bypassPermissions` is never started in; the next
+ *  start says so and clears it (options.ts, backend.ts). Anything else
+ *  reads as no choice. */
 export const CLAUDE_PERMISSION_MODES: readonly string[] = ['default', 'acceptEdits', 'plan', 'dontAsk', 'auto', 'bypassPermissions']
 
 /** What persists. */
