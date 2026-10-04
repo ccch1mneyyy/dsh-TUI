@@ -1847,20 +1847,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         import('../backends/claude/index.js'),
         import('./oauth-credential-source.js'),
       ])
-      const sources = new Map<string, ReturnType<typeof createOAuthCredentialSource>>()
       const detection = await claudeBackend.detect({
         cwd: sessionCwd,
         debug: message => logForDebugging(message),
         warn: message => ctx.logger.warn(message),
         stderr: () => undefined,
-        oauthCredential: provider => {
-          let source = sources.get(provider)
-          if (source === undefined) {
-            source = createOAuthCredentialSource(provider)
-            sources.set(provider, source)
-          }
-          return source
-        },
+        oauthCredential: perProvider(createOAuthCredentialSource),
       })
       return {
         installed: detection.installed,
@@ -2368,6 +2360,19 @@ async function resolveAgent(
   return { agent: created.agent, handle: created, agentPreset: composed.agentPreset, route }
 }
 
+/** Memoize a per-provider factory: one instance per provider id. */
+function perProvider<T>(create: (provider: string) => T): (provider: string) => T {
+  const instances = new Map<string, T>()
+  return provider => {
+    let instance = instances.get(provider)
+    if (instance === undefined) {
+      instance = create(provider)
+      instances.set(provider, instance)
+    }
+    return instance
+  }
+}
+
 /**
  * Open the startup session on the Claude Agent backend: a fresh
  * one, or — `dsh-tui --backend claude --resume <id>` (`DSH_TUI_RESUME_SESSION`,
@@ -2407,20 +2412,13 @@ async function openClaudeStartup(
   const prefs = fileClaudePrefs(undefined, message => logForDebugging(message))
   // The dsh-auth login the backend may run on: one source per provider,
   // shared by every session this process opens.
-  const credentialSources = new Map<string, ReturnType<typeof createOAuthCredentialSource>>()
+  const oauthCredential = perProvider(createOAuthCredentialSource)
   const host = (sessionCwd: string): BackendHost => ({
     cwd: sessionCwd,
     debug: message => logForDebugging(message),
     warn: message => ctx.logger.warn(message),
     stderr,
-    oauthCredential: provider => {
-      let source = credentialSources.get(provider)
-      if (source === undefined) {
-        source = createOAuthCredentialSource(provider)
-        credentialSources.set(provider, source)
-      }
-      return source
-    },
+    oauthCredential,
   })
   const requested = (configuredSessionId ?? resumeTargetFromArgv(argv, () => prefs.read().lastSession))?.trim()
   const resumeId = requested === undefined || requested === ''
