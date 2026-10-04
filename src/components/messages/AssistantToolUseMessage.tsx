@@ -757,11 +757,11 @@ export function AssistantToolUseMessage({
     }
     if (sendMessageRawOpen) {
       const rawArgs = (verbose ? tool.argsFull : undefined) ?? tool.argsText
-      body.push(dim('── args ──'))
+      body.push(dim(t('send-message-card-args')))
       body.push(...rawArgs.split('\n').map(dim))
       const rawResult = tool.resultFull ?? tool.resultText
       if (rawResult !== undefined && rawResult !== '') {
-        body.push(dim('── result ──'))
+        body.push(dim(t('send-message-card-result')))
         body.push(...rawResult.split('\n').map(dim))
       }
     }
