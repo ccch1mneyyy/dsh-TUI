@@ -27,7 +27,7 @@ DSH 翻译器与会话               Claude 翻译器、会话、目录、凭据
 ```
 
 依赖方向：界面 → ports；channel → agent + ports + 宿主服务；后端 → agent + 各自厂商
-SDK；agent 不依赖任何东西。目录与 import 规则由 `verify:boundary` 强制，规则表见
+SDK；agent 读取 ports 类型并使用中立 helper。目录与 import 规则由 `verify:boundary` 强制，规则表见
 [ADAPTER.md](../ADAPTER.md)。
 
 一个进程只跑一个后端，在启动时决定（`dsh-tui --backend`、配置行 `backend`、
@@ -52,9 +52,8 @@ SDK；agent 不依赖任何东西。目录与 import 规则由 `verify:boundary`
   transcript、mcp、sideQuery、rename、color、images、commands、context、account、
   auth、channels…）。缺席即不支持：Channel 对应的动作明确报 "当前后端不支持"，
   不做静默 no-op。
-- `native`：逃生舱。`native.dsh` 暴露 DSH 的 `agent`/`ctx` 给尚未能力化的 DSH
-  specialist，`native.claude` 只在 Claude 后端内部使用。`native.<后端>` 只能在对应
-  后端目录里读（`verify:boundary` 检查）。
+- `native.dsh`：只供 DSH specialist 使用的逃生舱，暴露 DSH 的 `agent`/`ctx`；
+  只能在 `src/dsh-adapter/` 内读（`verify:boundary` 检查）。
 - `backend.ts`、`refs.ts`、`presentation.ts`：后端注册契约、跨后端的会话标识
   `{backendId, sessionId}`、工具卡形态的中立描述（界面按 `presentation` 选卡片，
   不按工具名）。

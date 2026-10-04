@@ -26,8 +26,7 @@
  *   src/backends/<x>/**            no src/backends/<y>/** (each backend is an
  *                                  island: shared code belongs in src/agent/
  *                                  or src/channel/)
- *   native.dsh / .claude / .acp    only inside src/dsh-adapter/** /
- *                                  src/backends/claude/** / src/backends/acp/**
+ *   native.dsh    only inside src/dsh-adapter/**
  *
  * Plain fs + regex scan, no TypeScript program: it runs inside `verify:build`
  * on every build and must not depend on the compiled tree. Only real module
@@ -72,11 +71,12 @@ const LAYER_RULES: readonly { readonly dir: string; readonly forbidden: readonly
 ]
 
 const UI_DIRS = ['screens/', 'components/', 'hooks/', 'ink/']
+// channel/input-delivery.ts stays outside core because it builds DSH user
+// messages and ids for every backend through createUserMessage.
+const CORE_DIR = 'dsh-adapter/channel/core/'
 
 const NATIVE_RULES: readonly { readonly key: string; readonly allowedIn: string }[] = [
   { key: 'dsh', allowedIn: 'dsh-adapter/' },
-  { key: 'claude', allowedIn: 'backends/claude/' },
-  { key: 'acp', allowedIn: 'backends/acp/' },
 ]
 
 const NATIVE_PATTERNS = [
@@ -199,6 +199,14 @@ for (const file of files) {
 
   for (const ref of refs) {
     const where = `${path}:${ref.line}`
+    if (under(path, CORE_DIR)) {
+      if (ref.specifier.startsWith('@deepseek-ai/') && ref.specifier !== '@deepseek-ai/cordis') {
+        violations.push(`${where} imports '${ref.specifier}'; channel core may import only @deepseek-ai/cordis`)
+      }
+      if (ref.specifier === '../extensions.js' || ref.specifier.startsWith('../../backend/')) {
+        violations.push(`${where} imports '${ref.specifier}'; channel core must not depend on DSH extensions or backend code`)
+      }
+    }
     for (const rule of VENDOR_RULES) {
       if (rule.pattern.test(ref.specifier) && !rule.allowedIn.some(dir => under(path, dir))) {
         violations.push(`${where} imports ${rule.label} ('${ref.specifier}'); allowed only in ${rule.allowedIn.map(dir => `src/${dir}`).join(', ')}`)
@@ -234,7 +242,11 @@ for (const file of files) {
   for (const pattern of NATIVE_PATTERNS) {
     for (const match of code.matchAll(pattern)) {
       const rule = NATIVE_RULES.find(candidate => candidate.key === match[1])
-      if (rule && !under(path, rule.allowedIn)) {
+      if (rule === undefined) {
+        violations.push(`${path}:${lineAt(code, match.index)} reads native.${match[1]}; only native.dsh is declared`)
+      } else if (under(path, CORE_DIR) && rule.key === 'dsh') {
+        violations.push(`${path}:${lineAt(code, match.index)} reads native.dsh; channel core must not access native backend slots`)
+      } else if (rule && !under(path, rule.allowedIn)) {
         violations.push(`${path}:${lineAt(code, match.index)} reads native.${rule.key}; only src/${rule.allowedIn} may touch it`)
       }
     }
