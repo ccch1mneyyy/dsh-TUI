@@ -1,5 +1,5 @@
 /**
- * The `transcript` capability of a Claude session (design §4.11): "load
+ * The `transcript` capability of a Claude session: "load
  * earlier" restores folded rows from, and prepends history older than the
  * resumed chain out of, the session's own transcript file — read-only,
  * synchronous, bounded (transcript-file.ts), replayed by the same replay as

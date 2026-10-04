@@ -1,7 +1,6 @@
 /**
  * `/btw`, `/recap`, `/rename`, `/color` and `/mcp reconnect|toggle` on a
- * Claude session (docs/agent-backend-design.md §5.3; Phase 5b), over a fake
- * SDK — no CLI, no network:
+ * Claude session, over a fake SDK (no CLI, no network):
  *
  *  - the side query is a throwaway fork: `resume` = the current session id,
  *    `forkSession`, `persistSession:false`, no tools, one turn, the
@@ -27,7 +26,7 @@
  * Run: node --import tsx/esm scripts/verify-claude-session-commands.ts
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -123,7 +122,7 @@ function answer(query: { emit(message: unknown): void }, text: string): void {
     const side = fake.queries[1]!
     const options = side.options as Record<string, unknown>
     check('the side query forks the CURRENT session, writes no transcript, has no tools, one turn', options.resume === SESSION && options.forkSession === true && options.persistSession === false && Array.isArray(options.tools) && (options.tools as unknown[]).length === 0 && options.maxTurns === 1, options)
-    check('… with the session\'s model, environment and route pin', options.model === 'claude-haiku-4-5' && (options.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN === 'tok' && ((options.settings as { env: Record<string, string> }).env.ANTHROPIC_BASE_URL === 'https://api.anthropic.com'))
+    check('… with the session\'s model, environment and route pin', options.model === 'claude-haiku-4-5' && (options.env as Record<string, string>).CLAUDE_CODE_OAUTH_TOKEN === 'tok' && side.flagSettings?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com' && typeof options.settings === 'string')
     check('… and the session\'s system prompt and settings sources', JSON.stringify(options.systemPrompt) === JSON.stringify({ type: 'preset', preset: 'claude_code' }) && JSON.stringify(options.settingSources) === JSON.stringify(['user', 'project', 'local']))
     await settled(() => side.inputs.length === 1)
     check('the prompt is the one message', JSON.stringify((side.inputs[0]?.message as { content?: unknown })?.content) === JSON.stringify('What did we say?'))
@@ -131,6 +130,7 @@ function answer(query: { emit(message: unknown): void }, text: string): void {
     const outcome = await pending
     check('its text streams to the caller and is the answer', outcome.answer === 'You said hello.' && deltas.join('') === 'You said hello.', { outcome, deltas })
     check('the side query is closed after the answer', side.closed)
+    check('… and its flag settings file is removed', !existsSync(options.settings as string))
     check('… and the session\'s own query is untouched', !fake.queries[0]!.closed && session.status === 'idle')
     // Abort mid-answer.
     const controller = new AbortController()

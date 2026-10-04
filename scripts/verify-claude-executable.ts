@@ -1,15 +1,15 @@
 /**
- * `claude` executable resolution (docs/agent-backend-design.md §4.2): which
- * PATH hit this backend may hand to the SDK — offline, no CLI, no network.
+ * `claude` executable resolution: which PATH hit this backend may hand to the
+ * SDK. Offline: no CLI, no network.
  *
- *  - a candidate only wins when THIS process can spawn it (`--version`
+ *  - a candidate only wins when this process can spawn it (`--version`
  *    through the same execFile path the SDK uses). An npm install publishes
  *    the package bin as wrappers (an extensionless POSIX `sh` script first,
  *    a `.cmd` second), neither of which Windows can run without a shell —
  *    so "the file exists" is not enough, and handing one to the SDK fails
  *    the whole start with its own misleading "native binary … failed to
  *    launch";
- *  - a wrapper that merely forwards to the real binary is FOLLOWED instead
+ *  - a wrapper that merely forwards to the real binary is followed instead
  *    of skipped, so a Windows npm install still runs the user's own CLI
  *    (its version and session store) rather than silently switching to the
  *    SDK's bundled copy;

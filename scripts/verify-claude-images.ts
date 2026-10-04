@@ -1,22 +1,21 @@
 /**
- * Image input on a Claude session (Phase 5b), over a fake SDK — no CLI, no
- * network:
+ * Image input on a Claude session, over a fake SDK (no CLI, no network):
  *
- *  - the channel core stages composer images WITHOUT the DSH attachments
+ *  - the channel core stages composer images without the DSH attachments
  *    service when the session declares the `images` capability: bytes held
- *    in memory (local-images.ts) under the session's limits — the same limit
- *    model (media types, per-image and per-message bytes, count, pixel caps)
- *    — content-addressed, bounded (oldest dropped, its facade then reports
- *    itself unavailable);
+ *    in memory (local-images.ts) under the session's limits (the same limit
+ *    model: media types, per-image and per-message bytes, count, pixel
+ *    caps), content-addressed, bounded (oldest dropped, its facade then
+ *    reports itself unavailable);
  *  - `submit` sends `{type:'image', source:{type:'base64', media_type, data}}`
  *    blocks after the text, read back from the staged facades; the limits
  *    (PNG/JPEG/GIF/WebP, 5 MiB each, 20 per message, 20 MiB together) are
  *    enforced; an image block without its facade refuses the message;
  *  - the user row shows `TranscriptImage` facades backed by the staged
  *    bytes; an `@`-mentioned image file is staged and sent the same way;
- *  - the CONTENT wins over the label: a renamed file (a real WebP named
- *    .jpg) is staged and sent as its sniffed format (magic bytes only —
- *    no decode, no re-encode, animations untouched), so the backend's
+ *  - the content wins over the label: a renamed file (a real WebP named
+ *    .jpg) is staged and sent as its sniffed format (magic bytes only: no
+ *    decode, no re-encode, animations untouched), so the backend's
  *    media_type always matches the bytes; unmeasurable bytes are refused;
  *  - replay: base64 image blocks from `getSessionMessages` become lazy
  *    facades (size probed on first access, bytes decoded on read; no
@@ -215,7 +214,7 @@ const BLUE = png(5, 5, [0, 0, 255])
   await lone.dispose()
 }
 
-// ── end to end: a renamed image is SENT as its sniffed format ──────────
+// ── end to end: a renamed image is sent as its sniffed format ──────────
 {
   const cwd = mkdtempSync(join(home, 'project-sniff-'))
   const fake = fakeClaudeSdk(() => ({ capabilities: ['msg_lifecycle_v1'] }))
@@ -285,7 +284,7 @@ const BLUE = png(5, 5, [0, 0, 255])
 // ── a submit whose image read straddles a credential reconnect ──────────
 // The read of the staged bytes is async: an authentication failure can
 // stop the old CLI (closing its inbox) and be renewing while the read is
-// still pending. The input is legitimate — it must wait for the
+// still pending. The input is legitimate: it must wait for the
 // replacement CLI, never be mistaken for a closed session.
 {
   const fake = fakeClaudeSdk()
@@ -306,7 +305,7 @@ const BLUE = png(5, 5, [0, 0, 255])
   fake.queries[0]!.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' })
   for (let i = 0; i < 4; i += 1) await tick()
   check('the read is pending and the reconnect stopped the old CLI (renewing)', !fake.queries[1] && fake.queries[0]!.closed && releaseRenew !== undefined)
-  // The read completes MID-reconnect, then the renewal and handshake do.
+  // The read completes mid-reconnect, then the renewal and handshake do.
   releaseImage!()
   await tick()
   releaseRenew!()
@@ -319,7 +318,7 @@ const BLUE = png(5, 5, [0, 0, 255])
   check('the closed old inbox never saw it', !fake.queries[0]!.inputs.some(input => input.uuid === 'u-img'))
   await session.dispose()
 }
-// The reconnect may also COMPLETE while the read is still pending: the
+// The reconnect may also complete while the read is still pending: the
 // input then goes to the already-live replacement, exactly once.
 {
   const fake = fakeClaudeSdk()
@@ -379,7 +378,7 @@ const BLUE = png(5, 5, [0, 0, 255])
   const outcome = await within(submitting)
   check('a dispose during the read refuses the input', outcome !== 'accepted' && outcome !== 'timed out' && String(outcome).includes('closed'), outcome)
 }
-// A DEFERRED /login reconnect leaves the old CLI serving submits — the
+// A deferred /login reconnect leaves the old CLI serving submits: the
 // read's completion must not wait behind the running turn (self-deadlock).
 {
   const fake = fakeClaudeSdk()
@@ -403,8 +402,8 @@ const BLUE = png(5, 5, [0, 0, 255])
   check('a read under a DEFERRED reconnect goes to the serving CLI at once', outcome === 'accepted' && fake.queries[0]!.inputs.some(input => input.uuid === 'u-2'), outcome)
   fake.queries[0]!.emit({ type: 'result', subtype: 'success', is_error: false, result: 'done' })
   await tick()
-  // The old CLI starts the queued input too — only then is the session
-  // idle enough for the deferred swap (nothing is left to re-push).
+  // The old CLI starts the queued input too; only then is the session idle
+  // enough for the deferred swap (nothing is left to re-push).
   fake.queries[0]!.emit({ type: 'command_lifecycle', command_uuid: 'u-2', state: 'started' })
   fake.queries[0]!.emit({ type: 'result', subtype: 'success', is_error: false, result: 'done too' })
   await login

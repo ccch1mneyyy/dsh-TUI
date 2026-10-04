@@ -313,7 +313,7 @@ const dict = {
   'claude-start-mode-downgraded': { zh: '设置中的权限模式 {{mode}} 需在 /permission 里显式选择，本会话先以 default 启动', en: 'The configured permission mode {{mode}} needs an explicit choice in /permission; this session starts in default' },
   'claude-start-mode-env': { zh: '权限模式由 DSH_TUI_CLAUDE_PERMISSION_MODE 指定：{{mode}}', en: 'Permission mode set by DSH_TUI_CLAUDE_PERMISSION_MODE: {{mode}}' },
   'claude-start-mode-env-ignored': { zh: '已忽略 DSH_TUI_CLAUDE_PERMISSION_MODE={{mode}}（只接受 default/acceptEdits/plan/dontAsk/bypassPermissions）', en: 'Ignored DSH_TUI_CLAUDE_PERMISSION_MODE={{mode}} (accepts default/acceptEdits/plan/dontAsk/bypassPermissions)' },
-  'claude-start-mode-pref-bypass': { zh: '本会话按你记住的选择以跳过权限（bypassPermissions）启动；/permission 可改', en: 'This session starts with permissions skipped (bypassPermissions), as you chose before; change it in /permission' },
+  'claude-start-mode-bypass-not-carried': { zh: '上次的「跳过权限」不会带到新会话，本会话照常审批；可用 /permission 重新开启', en: 'Bypass permissions from the last session is not carried into a new one; approvals are on. Turn it back on with /permission' },
   'claude-input-refused': { zh: 'Claude 拒绝了这条输入', en: 'Claude refused this input' },
   'claude-assistant-error': { zh: 'Claude 错误：{{error}}', en: 'Claude error: {{error}}' },
   'claude-api-retry': { zh: 'API 重试 {{attempt}}/{{max}}{{detail}}…', en: 'API retry {{attempt}}/{{max}}{{detail}}…' },

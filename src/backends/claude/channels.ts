@@ -1,7 +1,7 @@
 /**
  * The Claude backend's channel profiles (`~/.dsh-tui/backends/claude/
  * channels.json`): the relay channels the user routes through, each with the
- * model mapping that says what a requested id ACTUALLY runs. First-class user
+ * model mapping that says what a requested id actually runs. First-class user
  * data on purpose — the settings-env tier heuristics (modelEnv.ts) guess the
  * mapping from ANTHROPIC_*_MODEL; a profile states it.
  *
@@ -30,25 +30,25 @@
  * fallback) to the model that serves it — the env heuristics promoted to
  * user data. Both fields are optional.
  *
- * Phase 3 promotes the profile to the session's CONNECTION truth:
- * `baseUrl` names the relay endpoint the CLI child is pointed at,
- * `tokenRef` names its credential in the DSH credential store
- * (`~/.dsh/.credentials.yaml`, the /provider precedent) — NEVER a literal
- * token; a regression asserts channels.json never carries one — and `env`
- * holds channel-private variables layered under those two. The active
- * profile's connection is injected at spawn (auth.ts: the child env plus
- * the SDK `settings` option, the flag-settings layer that outranks the
- * CLI settings `env` — see .local/agent-backend-review.md 第四批增补四
- * for the CLI 2.1.287 forensics).
+ * A profile can also carry the session's connection: `baseUrl` is the
+ * relay endpoint the CLI child is pointed at, `tokenRef` names its
+ * credential in the DSH credential store (`~/.dsh/.credentials.yaml`, as
+ * /provider does; channels.json never holds a token) and `env` holds
+ * channel-private variables. The active profile's connection is injected at
+ * spawn (auth.ts: the child env plus the SDK `settings` flag layer, which
+ * outranks the CLI settings `env`).
  *
  * Best-effort like every `~/.dsh-tui` preference (prefs.ts): a missing or
- * corrupt file reads as no channels, a failed write is reported to the
- * caller's debug log and the session carries on. The id is a stable slug of
- * the name, so a re-import (or a hand edit) refreshes the same row.
+ * corrupt file reads as no channels (a corrupt one is moved aside by the
+ * next save, never overwritten), a failed write is reported to the caller's
+ * debug log and the session carries on. The id is a stable slug of the name,
+ * so a re-import (or a hand edit) refreshes the same row.
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import { channelProfileSlug } from '../../channel/channel-slug.js'
 import { DATA_DIR } from '../../utils/paths.js'
+import { writeFileAtomic } from './atomic-file.js'
 
 /** One relay channel. */
 export interface ClaudeChannelProfile {
@@ -60,11 +60,10 @@ export interface ClaudeChannelProfile {
   readonly models?: Readonly<Record<string, string>>
   /** Tier keyword → actual model (optional; `default` = the any-model rule). */
   readonly tiers?: Readonly<Record<string, string>>
-  /** The relay endpoint the CLI child is pointed at (optional; the
-   *  connection truth of the phase-3 channel management). */
+  /** The relay endpoint the CLI child is pointed at (optional). */
   readonly baseUrl?: string
-  /** The credential-store ref holding the channel token (optional; NEVER a
-   *  literal token — channels.json must stay secret-free). */
+  /** The credential-store ref holding the channel token (optional; never
+   *  the token itself). */
   readonly tokenRef?: string
   /** Channel-private env layered under baseUrl/token at spawn (optional). */
   readonly env?: Readonly<Record<string, string>>
@@ -84,20 +83,15 @@ export interface ClaudeChannels {
   setActive(id: string): void
   /** Insert or refresh one profile by id (a re-import refreshes in place). */
   save(profile: ClaudeChannelProfile): void
-  /** Drop one profile by id (phase 3 wizard); a dangling `active` goes
+  /** Drop one profile by id; a dangling `active` goes
    *  with it (no channel left active until the next pick). */
   remove(id: string): void
 }
 
 const FILE = 'channels.json'
 
-/** The stable id of a channel name: lowercase, runs of non-alphanumerics
- *  collapsed to `-`, edges trimmed; a name without any alphanumeric reads
- *  as `channel` (still stable). */
-export function channelSlug(name: string): string {
-  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-  return slug === '' ? 'channel' : slug
-}
+/** The stable id of a channel name (shared with the /channel wizard). */
+export const channelSlug = channelProfileSlug
 
 /** Narrow one parsed object to a string→string record (empty keys/values drop). */
 function stringMap(value: unknown): Record<string, string> | undefined {
@@ -166,52 +160,30 @@ function removed(current: ClaudeChannelsData, id: string): ClaudeChannelsData {
   return { channels, ...(active === undefined ? {} : { active }) }
 }
 
-/** Names one not-yet-used temporary per commit (`writePinsAtomic` pattern). */
-let temporarySequence = 0
-
-/** The retry cell for the Windows EPERM/EBUSY rename (prefs.ts's pattern). */
-const waitCell = new Int32Array(new SharedArrayBuffer(4))
-
-/** Rename a same-directory temporary over the target, retrying the Windows
- *  transient-refusal pair briefly (see prefs.ts for the full rationale). */
-function renameIntoPlace(temporary: string, target: string): void {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      renameSync(temporary, target)
-      return
-    } catch (error) {
-      const code = typeof error === 'object' && error !== null ? String((error as NodeJS.ErrnoException).code) : ''
-      if (process.platform !== 'win32' || attempt >= 7 || (code !== 'EPERM' && code !== 'EBUSY')) throw error
-      Atomics.wait(waitCell, 0, 0, 2 ** attempt)
-    }
-  }
-}
-
 /** The file-backed profiles under `<dir>` (default `~/.dsh-tui/backends/claude`). */
 export function fileClaudeChannels(dir: string = join(DATA_DIR, 'backends', 'claude'), debug: (message: string) => void = () => undefined): ClaudeChannels {
   const path = join(dir, FILE)
-  const read = (): ClaudeChannelsData => {
+  /** The document, and whether a file is there that could not be read or
+   *  parsed (it reads as no channels). */
+  const load = (): { readonly data: ClaudeChannelsData; readonly damaged: boolean } => {
+    let text: string
     try {
-      return parseChannels(JSON.parse(readFileSync(path, 'utf8')))
+      text = readFileSync(path, 'utf8')
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      return { data: { channels: [] }, damaged: code !== 'ENOENT' && code !== 'ENOTDIR' }
+    }
+    try {
+      return { data: parseChannels(JSON.parse(text)), damaged: false }
     } catch {
-      return { channels: [] }
+      return { data: { channels: [] }, damaged: true }
     }
   }
+  const read = (): ClaudeChannelsData => load().data
   const commit = (next: ClaudeChannelsData): void => {
-    // Same-directory temporary + rename (prefs.ts's atomic pattern): a reader
-    // sees the old or the new document, never a truncated one, and a failed
-    // commit leaves the previous document intact.
-    const temporary = join(dir, `${FILE}.${process.pid}.${Date.now()}.${temporarySequence++}.tmp`)
     try {
-      mkdirSync(dir, { recursive: true })
-      writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-      renameIntoPlace(temporary, path)
+      writeFileAtomic(dir, FILE, `${JSON.stringify(next, null, 2)}\n`)
     } catch (error) {
-      try {
-        rmSync(temporary, { force: true })
-      } catch {
-        // The previous document is still intact; nothing else is safe to do.
-      }
       debug(`claude: channels write failed (${error instanceof Error ? error.message : String(error)})`)
     }
   }
@@ -226,7 +198,22 @@ export function fileClaudeChannels(dir: string = join(DATA_DIR, 'backends', 'cla
       }
       commit(activated(current, id))
     },
-    save: profile => { commit(saved(read(), profile)) },
+    save: profile => {
+      const current = load()
+      if (current.damaged) {
+        // A damaged file (a hand edit gone wrong) still holds the user's
+        // profiles: it moves aside instead of being replaced by this save.
+        const aside = `${path}.damaged-${Date.now()}`
+        try {
+          renameSync(path, aside)
+          debug(`claude: channels.json could not be read; kept as ${aside}`)
+        } catch (error) {
+          debug(`claude: channels.json could not be read nor moved aside (${error instanceof Error ? error.message : String(error)}); not saving`)
+          return
+        }
+      }
+      commit(saved(current.data, profile))
+    },
     remove: id => {
       const current = read()
       if (!current.channels.some(channel => channel.id === id)) {
@@ -294,9 +281,9 @@ export function importFromSettingsEnv(
   if (host === undefined && Object.keys(tiers).length === 0) return undefined
   const name = host ?? pickEnv(env, 'ANTHROPIC_CUSTOM_MODEL_OPTION_NAME') ?? 'settings'
   const id = channelSlug(name)
-  // A refresh of the same channel keeps the user's exact models AND the
+  // A refresh of the same channel keeps the user's exact models and the
   // connection fields the env cannot speak to (the import only owns what it
-  // can honestly derive: name + tiers + a PARSEABLE base URL — an invalid
+  // can honestly derive: name + tiers + a parseable base URL — an invalid
   // one names the channel but never becomes the connection).
   const keeps = existing !== undefined && existing.id === id
   const models = keeps ? existing.models : undefined
@@ -314,43 +301,11 @@ export function importFromSettingsEnv(
   }
 }
 
-/** The channel token hiding in the CLI settings env (phase 3): the value of
+/** The channel token in the CLI settings env: the value of
  *  `ANTHROPIC_AUTH_TOKEN`, for the caller to move into the credential store
  *  — the profile itself only ever records the derived `tokenRef`. */
 export function importTokenFromSettingsEnv(env: Record<string, string | undefined>): string | undefined {
   return pickEnv(env, 'ANTHROPIC_AUTH_TOKEN')
-}
-
-/** The connection slice of a profile (the phase-3 truth): everything about
- *  WHERE the session connects and WHAT it authenticates with, nothing about
- *  model mapping. Pure so the UI layer can compare two rosters' rows. */
-export interface ClaudeChannelConnection {
-  readonly baseUrl?: string
-  readonly tokenRef?: string
-  readonly env?: Readonly<Record<string, string>>
-}
-
-/** The profile's connection slice (a copy, never the profile itself). */
-export function connectionOf(profile: ClaudeChannelProfile): ClaudeChannelConnection {
-  return {
-    ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
-    ...(profile.tokenRef === undefined ? {} : { tokenRef: profile.tokenRef }),
-    ...(profile.env === undefined ? {} : { env: profile.env }),
-  }
-}
-
-const recordsEqual = (a: Readonly<Record<string, string>> | undefined, b: Readonly<Record<string, string>> | undefined): boolean => {
-  const ka = Object.keys(a ?? {}).sort()
-  const kb = Object.keys(b ?? {}).sort()
-  return ka.length === kb.length && ka.every((key, at) => key === kb[at] && (a ?? {})[key] === (b ?? {})[key])
-}
-
-/** Whether two connections are the SAME endpoint+credential+env: switching
- *  between such channels needs no restart (the running CLI child already
- *  sits on exactly this connection); any difference does. */
-export function sameChannelConnection(a: ClaudeChannelConnection | undefined, b: ClaudeChannelConnection | undefined): boolean {
-  if (a === undefined || b === undefined) return a === b
-  return a.baseUrl === b.baseUrl && a.tokenRef === b.tokenRef && recordsEqual(a.env, b.env)
 }
 
 /** A channel profile's connection carries anything spawn-shaping. */

@@ -10,7 +10,7 @@
  *
  * Suppression mechanism, chosen from a probed Node 24 fact: the default
  * warning printer is itself a `warning` listener (listenerCount is >= 1 on a
- * bare boot) and KEEPS printing even when user listeners are added, so
+ * bare boot) and keeps printing even when user listeners are added, so
  * listening cannot filter. The one reliable lever is not emitting the
  * warning at all: wrap `process.emitWarning` and drop exactly that code,
  * forwarding everything else to the original untouched (node keeps its own

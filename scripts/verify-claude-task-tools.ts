@@ -2,8 +2,8 @@
  * Claude Task* family → the shared todo panel (CLI 2.1.284: TaskCreate /
  * TaskUpdate / TaskList / TaskGet replaced TodoWrite for plan tracking; both
  * families are shouldDefer tools the preset does not list). Offline synthetic
- * SDK frames through the real translator + the ONE shared projector — no CLI,
- * no network, no credentials:
+ * SDK frames through the real translator + the one shared projector (no CLI,
+ * no network, no credentials):
  *
  *  - role: the four Task* tools are 'todo' (never a card — suppressed call
  *    presentation, no result view, no tool row), while 'Task' (the subagent)
@@ -13,16 +13,16 @@
  *    TaskGet results are authoritative and overwrite local state; every
  *    change emits one full 'todo.write' snapshot in TodoPanelItem shape
  *    (content/status only, creation order, 'deleted' simply absent);
- *  - a FAILED TaskUpdate (is_error or the in-contract success:false) rolls
- *    the task's view back to its CONFIRMED base — seeds / create / get /
- *    list results / patches whose results came back successful — with the
+ *  - a failed TaskUpdate (is_error or the in-contract success:false) rolls
+ *    the task's view back to its confirmed base (seeds, create / get / list
+ *    results, patches whose results came back successful) with the
  *    still-pending patches re-applied: a failure can neither hide behind a
- *    newer success nor resurrect a confirmed delete (RV follow-up), and the
+ *    newer success nor resurrect a confirmed delete, and the
  *    suppressed-card path lets a failure card through so the user sees the
  *    task change never happened;
  *  - resume: the replay's tracked tasks hand over to the live translator
  *    (serializable seeds), and a successful update of an untracked id
- *    completes the table from its own patch (R2/R6 reviews);
+ *    completes the table from its own patch;
  *  - TodoWrite itself stays byte-identical (its own snapshot from its own
  *    input; activeForm still dropped) and replaces the panel view wholesale;
  *  - buildQueryOptions: allowedTools adds + pre-approves the family while
@@ -88,14 +88,14 @@ const items = (event: AgentEvent | undefined): { content: string; status: string
   event !== undefined && event.type === 'todo.write' ? event.items.map(item => ({ content: item.content, status: item.status })) : []
 const same = (actual: unknown, expected: unknown): boolean => JSON.stringify(actual) === JSON.stringify(expected)
 
-// ── ⑥ role boundaries (checked first: everything below depends on them) ──
+// ── role boundaries (checked first: everything below depends on them) ────
 {
   check('role: the Task* family renders through the todo panel', ['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'TodoWrite'].every(name => claudeToolRole(name) === 'todo'))
   check("role: 'Task' is still the subagent delegation", claudeToolRole('Task') === 'subagent')
   check("role: 'TaskStop' is still an ordinary card", claudeToolRole('TaskStop') === 'card')
 }
 
-// ── ① create ×2 → update(completed): snapshot order and statuses ─────────
+// ── create ×2 → update(completed): snapshot order and statuses ───────────
 const first = scenario(f => [
   f.call('TaskCreate', { subject: 'First chore', description: 'Do the first thing', activeForm: 'Doing the first thing' }),
   f.resultOf(1, { task: { id: 'task-1', subject: 'First chore' } }),
@@ -125,7 +125,7 @@ const first = scenario(f => [
   ]).events.every(event => event.type !== 'todo.write'))
 }
 
-// ── ② update(deleted): the task disappears from the snapshot ─────────────
+// ── update(deleted): the task disappears from the snapshot ───────────────
 const deleted = scenario(f => [
   f.call('TaskCreate', { subject: 'Keep', description: 'stays' }),
   f.resultOf(1, { task: { id: 'task-1', subject: 'Keep' } }),
@@ -148,7 +148,7 @@ const deleted = scenario(f => [
 }
 
 
-// ── ③ TaskList / TaskGet results are authoritative ───────────────────────
+// ── TaskList / TaskGet results are authoritative ─────────────────────────
 const synced = scenario(f => [
   f.call('TaskCreate', { subject: 'Local A', description: 'a' }),
   f.resultOf(1, { task: { id: 'a', subject: 'Local A' } }),
@@ -190,7 +190,7 @@ const synced = scenario(f => [
     same(items(todosOf(missing.events).at(-1)), [{ content: 'Survivor', status: 'pending' }]), items(todosOf(missing.events).at(-1)))
 }
 
-// ── ④ TodoWrite: the original path, byte-identical ───────────────────────
+// ── TodoWrite: the original path, byte-identical ─────────────────────────
 {
   const legacy = scenario(f => [
     f.call('TodoWrite', { todos: [
@@ -219,7 +219,7 @@ const synced = scenario(f => [
     same(items(mixedWrites.at(-1)), [{ content: 'Legacy entry', status: 'completed' }]) && same(mixed.harness.state.todos, [{ content: 'Legacy entry', status: 'completed' }]), mixed.harness.state.todos)
 }
 
-// ── ⑤ options: additive + pre-approved, the preset untouched ─────────────
+// ── options: additive + pre-approved, the preset untouched ───────────────
 {
   const options = buildQueryOptions({
     cwd: '/fixture/project',
@@ -240,7 +240,7 @@ const synced = scenario(f => [
   check('options: OPTION_POLICY says the profile sets allowedTools', OPTION_POLICY.allowedTools === 'set', OPTION_POLICY.allowedTools)
 }
 
-// ── ⑦ resume: the task table hands over (R2 review) ──────────────────────
+// ── resume: the task table hands over ────────────────────────────────────
 {
   const at = (n: number): string => `2026-10-02T12:00:0${n}.000Z`
   /** A transcript chain whose Task* results carry the structured record (a
@@ -306,7 +306,7 @@ const synced = scenario(f => [
     quiet.events.every(event => event.type !== 'todo.write'), quiet.events.filter(event => event.type === 'todo.write').map(event => items(event)))
 }
 
-// ── ⑧ a failed TaskUpdate rolls its patch back and says so (R6 review) ───
+// ── a failed TaskUpdate rolls its patch back and says so ─────────────────
 {
   const failureCards = (h: ReturnType<typeof createProjectorHarness>) =>
     h.state.rows.filter(row => row.kind === 'tool' && row.tool?.name === 'TaskUpdate' && row.tool?.status === 'error')
@@ -341,11 +341,10 @@ const synced = scenario(f => [
     same(refused.harness.state.todos, [{ content: 'Chore', status: 'pending' }]), refused.harness.state.todos)
   check('… and both failures surface as error cards', failureCards(refused.harness).length === 2, failureCards(refused.harness).length)
 
-  // Parallel updates of one task, results out of order: the newer SUCCESS
-  // stands (its rename commits into the confirmed base); the older FAILED
-  // completion rolls back to that base — it must NOT survive by hiding
-  // behind the newer write (RV review: the old whole-record guard turned
-  // this into a false lock expecting completed).
+  // Parallel updates of one task, results out of order: the newer success
+  // stands (its rename commits into the confirmed base); the older failed
+  // completion rolls back to that base and must not survive by hiding
+  // behind the newer write.
   const outOfOrder = scenario(f => [
     f.call('TaskCreate', { subject: 'A', description: 'x' }),
     f.resultOf(1, { task: { id: 'a', subject: 'A' } }),
@@ -371,8 +370,8 @@ const synced = scenario(f => [
   check('both failed in reverse: stacked rollbacks reach the original state',
     same(bothFailed.harness.state.todos, [{ content: 'B', status: 'pending' }]), bothFailed.harness.state.todos)
 
-  // RV form ②: both fail, results in EMISSION order — the first rollback
-  // keeps the still-pending rename optimistic, the second drops it too.
+  // Both fail, results in emission order: the first rollback keeps the
+  // still-pending rename optimistic, the second drops it too.
   const bothFailedInOrder = scenario(f => [
     f.call('TaskCreate', { subject: 'B2', description: 'x' }),
     f.resultOf(1, { task: { id: 'b2', subject: 'B2' } }),
@@ -385,8 +384,8 @@ const synced = scenario(f => [
   check('both failed in emission order: the rollbacks still reach the original state',
     same(bothFailedInOrder.harness.state.todos, [{ content: 'B2', status: 'pending' }]), bothFailedInOrder.harness.state.todos)
 
-  // RV form ③: a delete SUCCEEDS, then the older update fails — the task
-  // stays deleted (no resurrection through the older failure's pre-image).
+  // A delete succeeds, then the older update fails: the task stays deleted
+  // (no resurrection through the older failure's pre-image).
   const deletedThenFail = scenario(f => [
     f.call('TaskCreate', { subject: 'C2', description: 'x' }),
     f.resultOf(1, { task: { id: 'c2', subject: 'C2' } }),
@@ -399,10 +398,10 @@ const synced = scenario(f => [
   check('delete success then older failure: the task stays deleted (no resurrection)',
     same(deletedThenFail.harness.state.todos, []), deletedThenFail.harness.state.todos)
 
-  // RV follow-up 3 (ghost task): a List that superseded an update — the
-  // update's LATE SUCCESS must not fabricate a task the list already
-  // ruled away (the unknown-id completion path is for fresh facts, not
-  // calls an authority discarded).
+  // Ghost task: a List superseded an update, so the update's late success
+  // must not fabricate a task the list already ruled out (the unknown-id
+  // completion path is for fresh results, not calls an authority
+  // discarded).
   const ghost = scenario(f => [
     f.call('TaskCreate', { subject: 'A', description: 'x' }),
     f.resultOf(1, { task: { id: 'a', subject: 'A' } }),
@@ -416,7 +415,7 @@ const synced = scenario(f => [
     same(ghost.harness.state.todos, []), ghost.harness.state.todos)
 
   // Superseding must not overreach: the list's own record stands, and a
-  // FRESH update after it confirms on that record normally (only the
+  // fresh update after it confirms on that record normally (only the
   // superseded call id is dropped, never the id itself).
   const rebuild = scenario(f => [
     f.call('TaskCreate', { subject: 'A', description: 'x' }),
@@ -432,10 +431,10 @@ const synced = scenario(f => [
   check('superseded drops only the stale call: the list\'s record stands and a fresh update confirms on it',
     same(rebuild.harness.state.todos, [{ content: 'A relaunched', status: 'completed' }]), rebuild.harness.state.todos)
 
-  // RV round 4 (ghost via an UNKNOWN id): an update of an id the table
-  // never tracked (a resumed/compacted table) is in flight just the same
-  // — an authoritative empty List must supersede ITS call too, or its
-  // late success walks the unknown-id completion and fabricates the task.
+  // Ghost via an unknown id: an update of an id the table never tracked (a
+  // resumed or compacted table) is in flight just the same. An
+  // authoritative empty List must supersede its call too, or its late
+  // success goes through the unknown-id completion and fabricates the task.
   const unknownGhost = scenario(f => [
     f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
     f.call('TaskList', {}),
@@ -446,7 +445,7 @@ const synced = scenario(f => [
   check('an unknown-id update superseded by an empty List fabricates nothing (the empty list stands)',
     same(unknownGhost.harness.state.todos, []), unknownGhost.harness.state.todos)
 
-  // Positive control: after that List re-introduces the id, a FRESH
+  // Positive control: after that List re-introduces the id, a fresh
   // update confirms on it normally (the superseded call id, not the id,
   // is what drops).
   const unknownRebuild = scenario(f => [
@@ -459,7 +458,9 @@ const synced = scenario(f => [
     f.turnEnd(),
   ])
   check('unknown-id supersede drops only the stale call: the reintroduced record confirms normally',
-    same(unknownRebuild.harness.state.todos, [{ content: 'A relaunched', status: 'completed' }]), unknownRebuild.harness.state.todos)  // An authoritative List between the patch and its late failure: the List
+    same(unknownRebuild.harness.state.todos, [{ content: 'A relaunched', status: 'completed' }]), unknownRebuild.harness.state.todos)
+
+  // An authoritative List between the patch and its late failure: the List
   // wins; the stale failure neither reverts it nor resurrects a delete.
   const authoritative = scenario(f => [
     f.call('TaskCreate', { subject: 'C', description: 'x' }),
@@ -484,10 +485,10 @@ const synced = scenario(f => [
   check('… a delete the List confirmed stays gone (the failure does not resurrect it)',
     same(deletedSync.harness.state.todos, []), deletedSync.harness.state.todos)
 
-  // RV follow-up 4 (mixed family): a successful TodoWrite is the WHOLE-LIST
-  // authority — the stale Task* view must go with its patches and bases,
-  // or a later update of a stale id first repaints the panel from a stale
-  // table and then empties it (the recompute finds no base).
+  // Mixed families: a successful TodoWrite is the whole-list authority. The
+  // stale Task* view must go with its patches and bases, or a later update
+  // of a stale id first repaints the panel from a stale table and then
+  // empties it (the recompute finds no base).
   const legacyWins = scenario(f => [
     f.call('TaskCreate', { subject: 'Chore', description: 'x' }),
     f.resultOf(1, { task: { id: 't', subject: 'Chore' } }),
@@ -510,7 +511,7 @@ const synced = scenario(f => [
     same(legacyOnly.harness.state.todos, [{ content: 'Legacy entry', status: 'pending' }]), legacyOnly.harness.state.todos)
 
   // Coexistence after the wipe: a fresh Task* family builds and confirms
-  // normally (the last FULL write owns the panel, as ever).
+  // normally (the last full write owns the panel).
   const coexist = scenario(f => [
     f.call('TodoWrite', { todos: [{ content: 'Legacy entry', status: 'pending' }] }),
     f.resultOf(1, { todos: { count: 1 } }),

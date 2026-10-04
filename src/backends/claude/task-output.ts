@@ -1,5 +1,5 @@
 /**
- * The output tail of a Claude background task (design §4.8 `readOutput`):
+ * The output tail of a Claude background task (`tasks.readOutput`):
  * the CLI writes each task's output to a file it names in its own reports
  * (the backgrounded command's acknowledgement, `task_notification.output_file`);
  * the TUI reads its last bytes, read-only, while the job's card or panel

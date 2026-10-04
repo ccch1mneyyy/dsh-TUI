@@ -1,8 +1,9 @@
 /**
- * Claude notices audit (docs/agent-backend-design.md §5.1, Phase 5b): every
- * SDK message kind that should tell the user something produces a notice
- * with a localized text and a dedupe key, asserted one kind at a time over
- * `scripts/fixtures/claude/notices/messages.jsonl` (messages shaped per the SDK d.ts):
+ * Claude notices audit: every SDK message kind that should tell the user
+ * something produces a notice with a localized text and a dedupe key,
+ * asserted one kind at a time over
+ * `scripts/fixtures/claude/notices/messages.jsonl` (messages shaped per the
+ * SDK d.ts):
  *
  *  api_retry (toast, key `api-retry`, the HTTP status when known) ·
  *  model_refusal_fallback (session: the model switches + a warning; local

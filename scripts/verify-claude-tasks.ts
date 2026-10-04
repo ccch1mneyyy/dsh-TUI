@@ -1,6 +1,5 @@
 /**
- * Claude background tasks end to end, over a fake SDK (docs/agent-backend-
- * design.md §4.8, Phase 5a) — no CLI, no network:
+ * Claude background tasks end to end, over a fake SDK (no CLI, no network):
  *
  *  - background Bash lifecycle (the recorded `background-bash` fixture
  *    through a real Claude session and the channel core): `task_started
@@ -9,7 +8,7 @@
  *    `task_updated` / `task_notification` settle it once (one toast), the
  *    notification turn; a foreground Bash (`is_backgrounded:false`) stays
  *    card-only; a foreground Bash moved to the background becomes a job;
- *  - `tasks.snapshot` REPLACE semantics: a job missing from the level is
+ *  - `tasks.snapshot` replace semantics: a job missing from the level is
  *    settled (inferred, no toast, "status unknown"), a later real end still
  *    wins, a job back in the level runs again;
  *  - kill: `jobControl.kill` → `q.stopTask(id)`, the CLI's `stopped` report
@@ -166,7 +165,7 @@ async function feed(name: string, session: Awaited<ReturnType<typeof openClaudeS
   }
 }
 
-// ── snapshot REPLACE semantics, kill, interrupt ───────────────────────
+// ── snapshot replace semantics, kill, interrupt ───────────────────────
 {
   const { channel, query, session } = await openChannel()
   const start = (id: string, callId: string, command: string): void => {
@@ -191,7 +190,7 @@ async function feed(name: string, session: Awaited<ReturnType<typeof openClaudeS
     query.emit({ type: 'system', subtype: 'task_notification', task_id: 'j1', tool_use_id: 'c1', status: 'stopped', output_file: '', summary: 'Background command "sleep 100" was stopped' })
     check('the stopped report settles it killed, one toast', await settled(() => channel.backgroundJobs.find(job => job.id === 'j1')?.status === 'killed') && channel.notifications.filter(item => item.text.startsWith('Background job killed')).length === 1)
     check('a settled job cannot be killed again (nothing asked)', !channel.jobControl.kill('j1') && query.calls.filter(call => call.method === 'stopTask').length === 1)
-    // REPLACE: the level now lists only j3 → j2 is gone without a bookend.
+    // Replace: the level now lists only j3, so j2 is gone without a bookend.
     query.emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'j3', task_type: 'local_bash', description: 'c' }] })
     check('a job missing from the level is settled (inferred) at once, the chip drops to 1', await settled(() => live(channel).length === 1) && channel.backgroundJobs.find(job => job.id === 'j2')?.detail === t('jobs-detail-unknown') && !channel.notifications.some(item => item.text.includes('sleep 200')))
     // The level lists it again (ordering is unspecified): it runs again.
@@ -318,7 +317,7 @@ mkdirSync(inside, { recursive: true })
   failing.dispose()
 }
 
-// ── the tail waits for the output path; a new path is a fresh start (5a review 2) ──
+// ── the tail waits for the output path; a new path is a fresh start ──────
 {
   const timers: (() => void)[] = []
   const reads: string[] = []
@@ -357,7 +356,7 @@ mkdirSync(inside, { recursive: true })
   activity.dispose()
 }
 
-// ── output paths with spaces; housekeeping tasks (5a review 2, 5) ──────
+// ── output paths with spaces; housekeeping tasks ───────────────────────
 {
   const { backgroundOutputPath, createClaudeTranslator } = await import('../src/backends/claude/translate.js')
   const ack = 'Command running in background with ID: b77. Output is being written to: /tmp/claude 1000/my project/tasks/b77.output. You will be notified when it completes.'
@@ -370,7 +369,7 @@ mkdirSync(inside, { recursive: true })
   check('… an ordinary background task is not hidden', shown.length === 1 && (shown[0] as { hidden?: boolean }).hidden === undefined)
 }
 
-// ── housekeeping tasks are not activity (5a review 5) ──────────────────
+// ── housekeeping tasks are not activity ────────────────────────────────
 {
   const toasts: string[] = []
   const state = { rows: [] as { kind: string }[], subagents: [] as never[], backgroundJobs: [] as never[] }

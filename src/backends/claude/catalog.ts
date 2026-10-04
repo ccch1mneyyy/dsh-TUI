@@ -1,13 +1,13 @@
 /**
- * The Claude Agent backend's offline session catalog (docs/agent-backend-design.md
- * §3.6, §4.11): the SDK's session-store API is the source of truth — the CLI
+ * The Claude Agent backend's offline session catalog: the SDK's session-store
+ * API is the source of truth — the CLI
  * writes `~/.claude/projects/<cwd>/<id>.jsonl`, the SDK lists, reads, renames,
  * deletes and forks — and this module only maps its records onto the session
  * browser's `SessionSummary` rows. Nothing is written to the transcripts here
  * beyond what the SDK's own mutations write (a rename appends a
  * `custom-title` entry), and no second index is kept.
  *
- * Listing (probe P4-1): `includeProgrammatic` is passed `true`. Sessions this
+ * Listing: `includeProgrammatic` is passed `true`. Sessions this
  * backend creates carry the SDK entrypoint `sdk-ts`, which
  * `includeProgrammatic:false` (the parity setting of the CLI's own `/resume`
  * picker) hides — they would vanish from the browser that made them. The

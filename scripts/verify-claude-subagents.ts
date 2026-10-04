@@ -1,6 +1,5 @@
 /**
- * Claude subagents end to end, over a fake SDK (docs/agent-backend-design.md
- * §4.8, Phase 5a) — no CLI, no network:
+ * Claude subagents end to end, over a fake SDK (no CLI, no network):
  *
  *  - live foreground subagent (the recorded `subagent` fixture through a real
  *    Claude session and the channel core): the `Agent` call pre-creates the
@@ -257,7 +256,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
 }
 
 
-// ── a finished subagent resumes under the same id: a new run (R6 M1) ─────
+// ── a finished subagent resumes under the same id: a new run ───────────
 {
   const { channel, query, session } = await openChannel()
   try {
@@ -271,7 +270,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     query.emit({ type: 'assistant', parent_tool_use_id: 'call-r', message: { id: 'sub-2', content: [{ type: 'text', text: 'run one finding' }] } })
     // The backend's own reports: a repeated progress does not double-count;
     // a lone last_tool_name updates only the last tool; the notification's
-    // usage is the final word (m2).
+    // usage is the final word.
     query.emit({ type: 'system', subtype: 'task_progress', task_id: 'rs-1', summary: 'reading', last_tool_name: 'Read', usage: { total_tokens: 90, tool_uses: 1, duration_ms: 800 } })
     query.emit({ type: 'system', subtype: 'task_progress', task_id: 'rs-1', summary: 'reading', last_tool_name: 'Read', usage: { total_tokens: 90, tool_uses: 1, duration_ms: 800 } })
     query.emit({ type: 'system', subtype: 'task_progress', task_id: 'rs-1', last_tool_name: 'Grep' })
@@ -282,7 +281,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     const first = channel.subagents.find(item => item.agentId === 'rs-1')!
     check('first run: the backend-reported tool count / duration / last tool are kept (reports overwrite, never add)', first.reportedToolUses === 1 && first.reportedDurationMs === 900 && first.lastTool === 'Grep' && first.tokens?.total === 100, first)
 
-    // SendMessage wakes the finished agent: the same task id starts a NEW run.
+    // SendMessage wakes the finished agent: the same task id starts a new run.
     query.emit({ type: 'system', subtype: 'task_started', task_id: 'rs-1', tool_use_id: 'call-r', description: 'resumable dig', is_backgrounded: true, spawn_depth: 1, task_type: 'local_agent' })
     check('resume: the same id runs again (a new epoch, not a dead card)', await settled(() => channel.subagents.some(item => item.agentId === 'rs-1' && item.status === 'running')), channel.subagents.map(item => item.status))
     const resumed = channel.subagents.find(item => item.agentId === 'rs-1')!
@@ -291,13 +290,13 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     check('resume: its transcript, tool records and cumulative tokens stay (not blindly cleared)', resumed !== undefined && resumed.toolCalls.length === 1 && (resumed.toolCalls[0]?.resultPreview ?? '').includes('first line') && resumed.tokens?.total === 100 && resumed.output.includes('run one finding'), resumed && { tools: resumed.toolCalls.length, tokens: resumed.tokens, output: resumed.output })
     check('resume: the run clock starts fresh', (resumed?.startedAt ?? 0) > (first?.startedAt ?? Infinity), [first?.startedAt, resumed?.startedAt])
 
-    // A duplicate start while it runs (moved to the background) is the SAME
+    // A duplicate start while it runs (moved to the background) is the same
     // run: the clock is not reset.
     const clock = resumed?.startedAt
     query.emit({ type: 'system', subtype: 'task_updated', task_id: 'rs-1', patch: { is_backgrounded: true } })
     check('resume: backgrounding the running agent keeps its run clock (same epoch)', await settled(() => { const s = channel.subagents.find(item => item.agentId === 'rs-1'); return s?.background === true && s?.startedAt === clock }))
 
-    // The second run FAILS: the new outcome must win over the first success.
+    // The second run fails: the new outcome must win over the first success.
     query.emit({ type: 'system', subtype: 'task_notification', task_id: 'rs-1', status: 'failed', summary: 'second run broke', usage: { total_tokens: 160, tool_uses: 2, duration_ms: 400 } })
     check('resume: the second run\'s failure wins (not shadowed by the first run\'s success)', await settled(() => { const s = channel.subagents.find(item => item.agentId === 'rs-1'); return s?.status === 'failed' && s.summary === 'second run broke' }))
     const second = channel.subagents.find(item => item.agentId === 'rs-1')!
@@ -313,7 +312,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
 }
 
 
-// ── reported tool stats render when the lane frames are gone (R6 m2) ────
+// ── reported tool stats render when the lane frames are gone ───────────
 {
   const [{ SubagentCard }, { SubagentDetailScene }] = await Promise.all([
     import('../src/components/SubagentCard.js'),
@@ -400,7 +399,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   const at = (n: number): string => `2026-10-02T13:00:0${n}.000Z`
   // The child's on-disk transcript (parent_agent_id null = a depth-1 child):
   // real thinking, one tool round-trip, a signature/count-only thinking
-  // entry, the answer text — and the initial prompt the translator hides.
+  // entry, the answer text, and the initial prompt the translator hides.
   const childMessages: Rec[] = [
     { type: 'user', uuid: 'c-u0', parent_tool_use_id: 'call-tx', parent_agent_id: null, message: { role: 'user', content: 'explore the fixture secret prompt' }, timestamp: at(0) },
     { type: 'assistant', uuid: 'c-a1', parent_tool_use_id: 'call-tx', parent_agent_id: null, message: { id: 'msg_t1', content: [{ type: 'thinking', thinking: 'planning the read', signature: 'x' }], usage: {} }, timestamp: at(1) },
@@ -417,8 +416,18 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   const store = {
     getSessionMessages: () => Promise.resolve([]),
     forkSession: () => Promise.reject(new Error('unused')) as never,
-    getSubagentMessages: (_sid: string, agentId: string, _options?: unknown) => Promise.resolve(agentId === 'agent-tx' ? childMessages : []) as never,
+    getSubagentMessages: (_sid: string, agentId: string, options?: { offset?: number; limit?: number }) => {
+      // Like a strict store: a negative offset or an empty / fractional
+      // limit is refused rather than sliced from the end.
+      reads.push({ ...options })
+      const { offset, limit } = options ?? {}
+      if (offset !== undefined && (!Number.isInteger(offset) || offset < 0)) return Promise.reject(new Error(`bad offset ${offset}`)) as never
+      if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) return Promise.reject(new Error(`bad limit ${limit}`)) as never
+      const all = agentId === 'agent-tx' ? childMessages : []
+      return Promise.resolve(offset === undefined ? all : all.slice(offset, limit === undefined ? undefined : offset + limit)) as never
+    },
   }
+  const reads: { offset?: number; limit?: number }[] = []
   const replay = replayClaudeTranscript(chain, { cwd: '/fixture/project', subagents: new Map([['call-tx', { agentId: 'agent-tx', messages: childMessages }]]) })
   const { channel, session } = await openChannel({ resume: replay, store })
   try {
@@ -428,6 +437,20 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     check('transcript: the page replays the child lane (assistant blocks + tool call/result), never the initial prompt', page !== null && kinds.includes('assistant.message') && kinds.includes('tool.call') && kinds.includes('tool.result') && !JSON.stringify(page.events).includes('secret prompt'), kinds)
     check('transcript: a signature/count-only thinking entry carries the honest unavailable marker', JSON.stringify(page?.events).includes('reasoning-tokens') && JSON.stringify(page?.events).includes('4321'))
     check('transcript: parent_agent_id rides the page (null = depth-1)', page?.parentAgentId === null && page?.hasOlder === false && page?.skippedFromStart === 0)
+    // Older windows: [skipFromStart - count, skipFromStart). A window at the
+    // bottom (skipFromStart 0) or for nothing (count 0) reads nothing.
+    const history = session.capabilities.subagents!.history!
+    reads.length = 0
+    const older = await history('agent-tx', { count: 2, skipFromStart: 3 })
+    check('transcript window: an older slice reads [skip - count, skip)', JSON.stringify(reads) === JSON.stringify([{ dir: '/fixture/project', offset: 1, limit: 2 }]) && older.hasOlder === true && older.skippedFromStart === 1, { reads, older: { hasOlder: older.hasOlder, skipped: older.skippedFromStart } })
+    reads.length = 0
+    const bottom = await history('agent-tx', { count: 5, skipFromStart: 0 }).catch((error: unknown) => error instanceof Error ? error.message : String(error))
+    check('transcript window: a window at the bottom reads nothing and stays at 0',
+      typeof bottom !== 'string' && reads.length === 0 && bottom.events.length === 0 && bottom.hasOlder === false && bottom.skippedFromStart === 0, { bottom, reads })
+    reads.length = 0
+    const nothing = await history('agent-tx', { count: 0, skipFromStart: 3 }).catch((error: unknown) => error instanceof Error ? error.message : String(error))
+    check('transcript window: a window for nothing reads nothing and keeps the cursor',
+      typeof nothing !== 'string' && reads.length === 0 && nothing.events.length === 0 && nothing.hasOlder === true && nothing.skippedFromStart === 3, { nothing, reads })
 
     // The scene: the page renders through the shared leaves, deduped
     // against the live tail, capability-gated.
@@ -535,10 +558,10 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
       h3.terminal.dispose()
     }
 
-    // Page-boundary split of ONE API message (RV review): the store splits a
-    // message into per-block entries sharing the anchor, and a load-older
-    // window boundary between two such entries must MERGE the compatible
-    // text/thinking parts — never swallow the older part whole.
+    // Page-boundary split of one API message: the store splits a message
+    // into per-block entries sharing the anchor, and a load-older window
+    // boundary between two such entries must merge the compatible
+    // text/thinking parts, never swallow the older part whole.
     const h4 = mk()
     const splitState = {
       agentId: 'agent-split', description: 'page boundary probe', status: 'completed' as const, startedAt: NOW - 2000, completedAt: NOW,
@@ -592,10 +615,10 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
       h4.terminal.dispose()
     }
 
-    // Heterogeneous same-anchor split (RV round 3): one API message with a
-    // reasoning AND a text block, paginated per block — the older page's
-    // reasoning part must survive (a taken key is never a drop reason) and
-    // stay ahead of the answer text.
+    // Heterogeneous same-anchor split: one API message with a reasoning and
+    // a text block, paginated per block. The older page's reasoning part
+    // must survive (a taken key is never a drop reason) and stay ahead of
+    // the answer text.
     const h5 = mk()
     const mixedState = {
       agentId: 'agent-mix', description: 'heterogeneous probe', status: 'completed' as const, startedAt: NOW - 3000, completedAt: NOW,
@@ -643,9 +666,9 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
       h5.terminal.dispose()
     }
 
-    // Interleaved split (RV round 3): text, tool, text of one message across
-    // the page boundary — the tool card must stay BETWEEN the two text
-    // parts, not hoisted ahead of the merged row.
+    // Interleaved split: text, tool, text of one message across the page
+    // boundary. The tool card must stay between the two text parts, not
+    // hoisted ahead of the merged row.
     const h6 = mk()
     const interState = {
       agentId: 'agent-inter', description: 'interleave probe', status: 'completed' as const, startedAt: NOW - 3000, completedAt: NOW,
@@ -753,7 +776,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   }
 }
 
-// ── nested delegations end on replay (5a review 3) ─────────────────────
+// ── nested delegations end on replay ───────────────────────────────────
 {
   const at = (n: number): string => `2026-10-02T11:00:0${n}.000Z`
   const chain: Rec[] = [
@@ -824,7 +847,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   ]
   const replay = replayClaudeTranscript(chain, { cwd: '/fixture/project', subagents: new Map([
     ['c-outer', { agentId: 'agent-outer', messages: outer }],
-    // NOT keyed by the call: reachable only through its own agent id +
+    // Not keyed by the call: reachable only through its own agent id +
     // parentAgentId healing.
     ['agent-healed', { agentId: 'agent-healed', messages: healed, parentAgentId: 'agent-outer' }],
   ]) })
@@ -833,9 +856,9 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   check('parent_agent_id: … and it ends from the result in its parent transcript', replay.events.some(event => event.type === 'subagent.end' && event.agentId === 'agent-healed' && event.status === 'completed'))
 
   // parent_agent_id null = a depth-1 child (or old metadata): the data
-  // cannot say WHICH main-loop call launched it, so the deterministic rule
-  // attaches it to the first main-loop call whose own transcript is missing
-  // — the child stays visible as a depth-1 spawn, never an orphan.
+  // cannot say which main-loop call launched it, so the deterministic rule
+  // attaches it to the first main-loop call whose own transcript is
+  // missing. The child stays visible as a depth-1 spawn, never an orphan.
   const depth1Replay = replayClaudeTranscript(chainDepth1, { cwd: '/fixture/project', subagents: new Map([
     ['c-outer', { agentId: 'agent-outer', messages: outer }],
     ['agent-d1', { agentId: 'agent-d1', messages: depth1 }],
@@ -845,8 +868,8 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
 
   const phantomReplay = replayClaudeTranscript(chain, { cwd: '/fixture/project', subagents: new Map([
     ['c-outer', { agentId: 'agent-outer', messages: outer }],
-    // Names a parent agent this chain never held: stays unattached — no
-    // fabricated parent, no orphan card.
+    // Names a parent agent this chain never held: stays unattached, with no
+    // fabricated parent and no orphan card.
     ['agent-phantom', { agentId: 'agent-phantom', messages: healed, parentAgentId: 'agent-nowhere' }],
   ]) })
   check('parent_agent_id: a transcript naming an unknown parent stays unattached (no fabricated nesting)', !phantomReplay.events.some(event => (event.type === 'subagent.start' || event.type === 'subagent.end') && event.agentId === 'agent-phantom') && !phantomReplay.events.some(event => 'blocks' in event && JSON.stringify(event).includes('healed works')))
@@ -856,7 +879,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
 {
   const at = (n: number): string => `2026-10-04T09:00:0${n}.000Z`
   // Two children of one parent, both without call-id metadata (parent_agent_id
-  // carries no call identity), Map insertion order REVERSED against the parent's
+  // carries no call identity), Map insertion order reversed against the parent's
   // call order (listSubagents traversal order).
   const twinsCalls: Rec = { type: 'assistant', uuid: 'a1', message: { id: 'm1', content: [
     { type: 'tool_use', id: 'c-A', name: 'Agent', input: { description: 'twin A', prompt: 'x' } },
@@ -866,7 +889,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     { type: 'user', message: { role: 'user', content: `${text} prompt` }, timestamp: at(1) },
     { type: 'assistant', message: { id: `msg_${text.replace(/\s/g, '')}`, content: [{ type: 'text', text: `${text} body` }] }, timestamp: at(2) },
   ]
-  // REVERSED insertion order: child-b first, whatever the call order is.
+  // Reversed insertion order: child-b first, whatever the call order is.
   const reversedMap = () => new Map([
     ['child-b', { agentId: 'child-b', messages: twinBody('child B') }],
     ['child-a', { agentId: 'child-a', messages: twinBody('child A') }],
@@ -880,9 +903,9 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     ] }, timestamp: at(4) },
   ]
 
-  // (a) Ambiguous: no hand-back agent id — pairing by Map order would wire
-  // child B's body onto call A's card. Fail-closed: neither attaches; each
-  // call's card keeps its OWN result as the summary.
+  // (a) Ambiguous: no hand-back agent id, and pairing by Map order would
+  // wire child B's body onto call A's card. Fail closed: neither attaches;
+  // each call's card keeps its own result as the summary.
   const ambiguous = replayClaudeTranscript(twinsChain(false), { cwd: '/fixture/project', subagents: reversedMap() })
   const starts = ambiguous.events.filter(event => event.type === 'subagent.start')
   check('attribution: ambiguous twins stay unattached (no Map-order pairing, no cross-wiring)', !starts.some(event => (event as { agentId?: string }).agentId === 'child-a' || (event as { agentId?: string }).agentId === 'child-b'), starts)
@@ -890,8 +913,8 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   const ends = new Map(ambiguous.events.flatMap(event => event.type === 'subagent.end' ? [[event.agentId, event] as const] : []))
   check('attribution: … each call keeps its own hand-back as the summary', ends.get('c-A')?.summary === 'result A' && ends.get('c-B')?.summary === 'result B', [...ends.entries()].map(([id, e]) => `${id}:${(e as { summary?: string }).summary}`))
 
-  // (b) Constructive: the hand-back results NAME their children (`agentId:`
-  // line) — exact, falsifiable attribution despite the reversed Map order.
+  // (b) Constructive: the hand-back results name their children (`agentId:`
+  // line), which attributes them exactly despite the reversed Map order.
   const named = replayClaudeTranscript(twinsChain(true), { cwd: '/fixture/project', subagents: reversedMap() })
   const namedStarts = new Map(named.events.filter(event => event.type === 'subagent.start').map(event => [(event as { agentId?: string }).agentId, event] as const))
   check('attribution: hand-back agent ids attach each twin to its OWN call', namedStarts.get('child-a')?.parentCallId === 'c-A' && namedStarts.get('child-b')?.parentCallId === 'c-B', [...namedStarts.entries()].map(([id, e]) => `${id}->${(e as { parentCallId?: string }).parentCallId}`))
@@ -899,7 +922,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   const namedEnds = new Map(named.events.flatMap(event => event.type === 'subagent.end' ? [[event.agentId, event] as const] : []))
   check('attribution: … summaries stay per-call (agentId line stripped)', namedEnds.get('child-a')?.summary === 'result A' && namedEnds.get('child-b')?.summary === 'result B', [...namedEnds.entries()].map(([id, e]) => `${id}:${(e as { summary?: string }).summary}`))
 }
-// ── a foreground subagent cannot outlive its turn (5a review 4) ───────
+// ── a foreground subagent cannot outlive its turn ──────────────────────
 {
   const { channel, query, session } = await openChannel()
   try {
@@ -909,10 +932,10 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     query.emit({ type: 'assistant', message: { id: 'm1', content: [{ type: 'tool_use', id: 'call-fg', name: 'Agent', input: { description: 'foreground', prompt: 'x' } }] } })
     query.emit({ type: 'system', subtype: 'task_started', task_id: 'fg-9', tool_use_id: 'call-fg', description: 'foreground', is_backgrounded: false, task_type: 'local_agent' })
     check('a foreground subagent runs', await settled(() => channel.subagents.find(item => item.agentId === 'fg-9')?.status === 'running'))
-    // A long subagent output line is capped (5a review 12).
+    // A long subagent output line is capped.
     query.emit({ type: 'assistant', parent_tool_use_id: 'call-fg', message: { id: 'sub-1', content: [{ type: 'text', text: 'x'.repeat(5000) }] } })
     check('a subagent output line is capped (400 chars + ellipsis)', await settled(() => (channel.subagents.find(item => item.agentId === 'fg-9')?.output.at(-1)?.length ?? 0) > 0) && channel.subagents.find(item => item.agentId === 'fg-9')!.output.at(-1)!.length === 401 && channel.subagents.find(item => item.agentId === 'fg-9')!.output.at(-1)!.endsWith('…'))
-    // A lane result keeps a bounded payload (5a review 11).
+    // A lane result keeps a bounded payload.
     const laneEvents: import('../src/agent/events.js').AgentEvent[] = []
     session.subscribe(batch => { laneEvents.push(...batch) })
     query.emit({ type: 'assistant', parent_tool_use_id: 'call-fg', message: { id: 'sub-2', content: [{ type: 'tool_use', id: 'lane-read', name: 'Read', input: { file_path: '/fixture/project/big.txt' } }] } })

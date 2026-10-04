@@ -1,36 +1,32 @@
 /**
- * Claude 权限模式名册回归：/permission 选择器里的「跳过权限」必须真的能选中，
- * 每一行都要带一句人话解释（此前每行把名字打两遍，等于没解释）。
+ * Claude 权限模式名册回归：/permission 选择器里的「跳过权限」能选中，每一行
+ * 都带一句说明（不是把名字再写一遍）。
  *
- * 钉住的四条契约：
+ * 覆盖：
  *
- *  1. **闸门常开、起始 mode 不变**：allowDangerouslySkipPermissions 是 SDK 的
- *     闸门参数（--allow-dangerously-skip-permissions），不是「强制进入 bypass」——
- *     sdk.d.ts:2001「Must be set to true when using permissionMode:
- *     'bypassPermissions'」、sdk.d.ts:331「没有这个参数预热起来的进程无法进入
- *     bypassPermissions」。所以它恒定随 query options 下发，而 permissionMode
- *     仍等于解析出的起始 mode（env / settings / default 的解析规则一字未改）。
- *  2. **运行期名册**：default → acceptEdits → plan → bypassPermissions →
- *     auto（模型声明 supportsAutoMode 时）→ 当前 mode 兜底；每行都有非空
- *     description，且 description 不等于自己的 label（不再重复名字）。
- *  3. **选择器真能切进去**：modes.set('bypassPermissions') 不再被 TUI 拦下
- *     （旧实现抛「不提供跳过权限模式」）；请求直达 CLI，失败由 CLI 返回、
- *     由 channel 的 guarded setMode 提示。
- *  4. **循环面收窄**：Shift+Tab 走 modes.cycle() —— default → acceptEdits →
- *     plan → auto（supportsAutoMode 时）→ 当前 mode 兜底；bypassPermissions
- *     只在 list()（/permission 选择器）里，循环永不进入（反射键一次误按
- *     不允许落进「全部确认关闭」；收窄在能力层声明，不在 UI 层硬编码）。
- *  5. **安全线不放松**：settings 文件里的 permissions.defaultMode =
- *     bypassPermissions 仍降级为 default 并给出指向 /permission 的提示
- *     （克隆来的仓库不能静默关掉全部确认）。
- *  6. **记住的选择**（「每次进会话都要重新选权限」）：modes.set 落盘到
- *     backend 作用域 prefs（permissionMode，与 model/effort 同一套
- *     best-effort）；下一次 resolveStartPermissionMode 的优先级是
- *     env 覆盖 > 持久化偏好 > settings 级联 > default，偏好命中时
- *     source='pref'（消费方可与 'settings' 分清）、不走 settings 降级、
- *     不发降级提示；非法偏好值读作没有；持久化的 bypassPermissions
- *     可以直接启动（闸门恒开）但绝不静默——backend.ts 会推一条指向
- *     /permission 的起始提示。
+ *  1. 闸门常开、起始 mode 不变：allowDangerouslySkipPermissions 对应 CLI 的
+ *     --allow-dangerously-skip-permissions，只让 bypass 可达（没有它启动的
+ *     进程以后进不了 bypassPermissions），不会直接进入 bypass。所以它总是随
+ *     query options 下发，permissionMode 仍是解析出的起始 mode。
+ *  2. 运行期名册：default → acceptEdits → plan → bypassPermissions →
+ *     auto（模型声明 supportsAutoMode 时）→ 当前 mode（不在名册里时）；每行
+ *     都有非空 description，且不等于自己的 label。
+ *  3. 选择器能切进去：modes.set('bypassPermissions') 直达 CLI，失败由 CLI
+ *     返回、由 channel 的 guarded setMode 提示。
+ *  4. 循环面更窄：Shift+Tab 走 modes.cycle()：default → acceptEdits → plan →
+ *     auto（supportsAutoMode 时）→ 当前 mode；bypassPermissions 只在 list()
+ *     （/permission 选择器）里，循环永不进入（误按一次不能关掉全部确认；这个
+ *     收窄在能力层声明，不在 UI 里写死）。
+ *  5. settings 文件里的 permissions.defaultMode = bypassPermissions 仍降级为
+ *     default，并给出指向 /permission 的提示（克隆来的仓库不能静默关掉全部
+ *     确认）。
+ *  6. 记住的选择：modes.set 写进 backend 作用域的 prefs（permissionMode，
+ *     与 model/effort 一样 best-effort）；下一次 resolveStartPermissionMode
+ *     的优先级是 env 覆盖 > 记住的选择 > settings 级联 > default，命中记住的
+ *     选择时 source='pref'，不走 settings 降级、不发降级提示；非法值读作没有。
+ *     记住的 bypassPermissions 不带进新会话：按 settings 级联 / default 启动，
+ *     起始提示说明一次（指向 /permission）并清掉这条记录；只有 env 覆盖能直接
+ *     以 bypass 启动。
  *
  * Run: node --import tsx/esm scripts/verify-claude-mode-roster.ts
  */
@@ -39,6 +35,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { modeDescription } from '../src/backends/claude/controls.js'
+import { startModeNotices } from '../src/backends/claude/backend.js'
 import { buildQueryOptions, resolveStartPermissionMode } from '../src/backends/claude/options.js'
 import { fileClaudePrefs, memoryClaudePrefs } from '../src/backends/claude/prefs.js'
 import { openClaudeSession } from '../src/backends/claude/session.js'
@@ -277,25 +274,37 @@ const fakeSettings = (defaultMode: unknown) => ({
     rmSync(scratch, { recursive: true, force: true })
   }
 
-  // ⑥ a remembered bypass starts in bypassPermissions (the always-on gate
-  //    allows it) and is NEVER silent: backend.ts pushes a notice that names
-  //    /permission as the way out, as a start notice like section 7's.
-  const bypassPrefs = memoryClaudePrefs({ permissionMode: 'bypassPermissions' })
+  // ⑥ a remembered bypass is NOT carried into a new session: the start
+  //    resolves as if nothing were remembered (settings, then default), the
+  //    start notices say so once and forget the pick. Only the env override
+  //    starts in bypass.
+  const bypassPrefs = memoryClaudePrefs({ permissionMode: 'bypassPermissions', model: 'claude-opus-x' })
   const start = await resolveStartPermissionMode(fakeSettings('default'), '/p', {}, bypassPrefs.read().permissionMode)
-  check('pref: a remembered bypass starts in bypassPermissions', start.mode === 'bypassPermissions' && start.source === 'pref' && start.downgradedFrom === undefined, start)
+  check('pref: a remembered bypass does not start in bypassPermissions', start.mode === 'default' && start.source === 'settings' && start.bypassNotCarried === true, start)
+  const bare = await resolveStartPermissionMode(fakeSettings(undefined), '/p', {}, 'bypassPermissions')
+  check('pref: … with nothing configured it starts in default', bare.mode === 'default' && bare.source === 'default' && bare.bypassNotCarried === true, bare)
+  const cascade = await resolveStartPermissionMode(fakeSettings('acceptEdits'), '/p', {}, 'bypassPermissions')
+  check('pref: … the settings cascade still applies', cascade.mode === 'acceptEdits' && cascade.source === 'settings' && cascade.bypassNotCarried === true, cascade)
+  const envBypass = await resolveStartPermissionMode(fakeSettings('default'), '/p', { DSH_TUI_CLAUDE_PERMISSION_MODE: 'bypassPermissions' }, 'bypassPermissions')
+  check('pref: the env override still starts in bypassPermissions', envBypass.mode === 'bypassPermissions' && envBypass.source === 'env' && envBypass.bypassNotCarried === undefined, envBypass)
   setLang('zh')
-  const zhNotice = t('claude-start-mode-pref-bypass')
+  const zhNotice = t('claude-start-mode-bypass-not-carried')
   setLang('en')
-  const notice = t('claude-start-mode-pref-bypass')
-  check('pref: the bypass notice is real copy in both languages, both naming /permission', zhNotice.includes('/permission') && notice.includes('/permission') && zhNotice !== notice && zhNotice !== 'claude-start-mode-pref-bypass', { zhNotice, notice })
+  const notice = t('claude-start-mode-bypass-not-carried')
+  check('pref: the not-carried notice is real copy in both languages, both naming /permission', zhNotice.includes('/permission') && notice.includes('/permission') && zhNotice !== notice && zhNotice !== 'claude-start-mode-bypass-not-carried', { zhNotice, notice })
+  const startNotices = startModeNotices(start, bypassPrefs)
+  check('pref: the start notices say the bypass was not carried', startNotices.includes(notice), startNotices)
+  check('pref: … and the remembered bypass is forgotten (other prefs kept)', bypassPrefs.read().permissionMode === undefined && bypassPrefs.read().model === 'claude-opus-x', bypassPrefs.read())
+  const after = await resolveStartPermissionMode(fakeSettings('default'), '/p', {}, bypassPrefs.read().permissionMode)
+  check('pref: the next start is quiet', after.bypassNotCarried === undefined && !startModeNotices(after, bypassPrefs).includes(notice), after)
   const fakeBypass = fakeClaudeSdk(() => ({ capabilities: [] }), controls)
-  const sessionBypass = await openClaudeSession(claudeDeps(fakeBypass.sdk, { start, startNotices: [notice] }))
+  const sessionBypass = await openClaudeSession(claudeDeps(fakeBypass.sdk, { start, startNotices }))
   const spawnBypass = fakeBypass.queries[0]!.options
-  check('pref: a remembered bypass spawns in bypass with the gate on', spawnBypass.permissionMode === 'bypassPermissions' && spawnBypass.allowDangerouslySkipPermissions === true, { mode: spawnBypass.permissionMode, gate: spawnBypass.allowDangerouslySkipPermissions })
+  check('pref: the new session spawns in default, the gate still on for /permission', spawnBypass.permissionMode === 'default' && spawnBypass.allowDangerouslySkipPermissions === true, { mode: spawnBypass.permissionMode, gate: spawnBypass.allowDangerouslySkipPermissions })
   const notices: string[] = []
   sessionBypass.subscribe(batch => { for (const event of batch) if (event.type === 'notice') notices.push(event.text) })
   await tick()
-  check('pref: the bypass notice reaches the transcript', notices.includes(notice), notices)
+  check('pref: the not-carried notice reaches the transcript', notices.includes(notice), notices)
   await sessionBypass.dispose()
 }
 

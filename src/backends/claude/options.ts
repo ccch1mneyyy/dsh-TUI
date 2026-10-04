@@ -1,12 +1,11 @@
 /**
- * The Claude Code Fidelity Profile (docs/agent-backend-design.md §4.3): the
- * `query()` options that make a dsh-tui Claude session behave like `claude`
+ * The Claude Code fidelity profile: the `query()` options that make a dsh-tui Claude session behave like `claude`
  * in the same project — the CLI's own system prompt, every settings source
  * (CLAUDE.md, hooks, MCP, plugins load as in the CLI), its tool preset, an
  * explicit start permission mode, streaming partials, subagent text and
  * per-task stop, file checkpoints, and the host's permission callback.
  *
- * `OPTION_POLICY` classifies EVERY SDK option. It is checked with
+ * `OPTION_POLICY` classifies every SDK option. It is checked with
  * `satisfies Record<keyof Options, …>`: an option the SDK adds or removes
  * fails `tsc` here until someone decides what the profile does with it.
  */
@@ -24,7 +23,7 @@ type OptionPolicy = 'set' | 'side' | 'omit' | 'later'
 
 export const OPTION_POLICY = {
   abortController: 'set',
-  additionalDirectories: 'later', // `/add-dir` (Phase 5)
+  additionalDirectories: 'later', // `/add-dir`
   projectConfigRoot: 'omit',
   agent: 'omit',
   agents: 'omit',
@@ -61,13 +60,13 @@ export const OPTION_POLICY = {
   forwardSubagentText: 'set',
   verbatimPrompts: 'omit',
   thinking: 'omit',
-  effort: 'set', // the persisted `/effort` choice (Phase 3)
+  effort: 'set', // the persisted `/effort` choice
   maxThinkingTokens: 'omit',
   maxTurns: 'side', // the side query: one turn
   maxBudgetUsd: 'omit',
   taskBudget: 'omit',
   mcpServers: 'omit',
-  model: 'set', // the persisted `/model` choice (Phase 3)
+  model: 'set', // the persisted `/model` choice
   outputFormat: 'omit',
   pathToClaudeCodeExecutable: 'set',
   permissionMode: 'set',
@@ -79,12 +78,12 @@ export const OPTION_POLICY = {
   pluginDelivery: 'omit',
   promptSuggestions: 'omit',
   agentProgressSummaries: 'omit',
-  resume: 'set', // credential reconnect (Phase 3); /resume is Phase 4
+  resume: 'set', // /resume and the credential reconnect
   sessionId: 'set',
   resumeSessionAt: 'later',
   resumeDropsTurn: 'later',
   sandbox: 'omit',
-  settings: 'set', // the route pin of an injected subscription token (auth.ts)
+  settings: 'set', // the auth plan's flag layer, as a private file (flag-settings.ts)
   managedSettings: 'omit',
   settingSources: 'set',
   skills: 'omit',
@@ -98,14 +97,13 @@ export const OPTION_POLICY = {
 } as const satisfies Record<keyof Options, OptionPolicy>
 
 /** Every settings source, so CLAUDE.md, hooks, MCP and plugins load as in
- *  the CLI (`project` is the one that brings CLAUDE.md, Phase 0 probe P1). */
+ *  the CLI (`project` is the one that brings CLAUDE.md). */
 export const SETTING_SOURCES: SettingSource[] = ['user', 'project', 'local']
 
-/** The plan-tracking tools the todo panel renders (CLI 2.1.284: the Task*
- *  family replaced TodoWrite; both are shouldDefer tools the preset does not
- *  list — `allowedTools` both pre-approves them and brings them in, while
- *  `tools` stays the preset: additive, never an explicit replacement that
- *  would swap the whole default set). */
+/** The plan-tracking tools the todo panel renders (the Task* family
+ *  replaced TodoWrite in CLI 2.1.284). The preset defers them, so
+ *  `allowedTools` brings them in and pre-approves them; `tools` stays the
+ *  preset (an explicit list would replace the whole default set). */
 export const TODO_PANEL_TOOLS: readonly string[] = ['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']
 
 /** Modes the start resolution accepts from settings. `bypassPermissions`
@@ -130,22 +128,24 @@ export interface StartPermissionMode {
   readonly source: 'env' | 'pref' | 'settings' | 'default'
   /** `DSH_TUI_CLAUDE_PERMISSION_MODE` was set to a value the override refuses. */
   readonly ignoredOverride?: string
+  /** The remembered pick was `bypassPermissions`, which a new session never
+   *  starts in (it was resolved as if nothing were remembered). */
+  readonly bypassNotCarried?: true
 }
 
 /**
- * The explicit start permission mode (design §4.3: never omitted — the CLI
- * default may be `auto`). `DSH_TUI_CLAUDE_PERMISSION_MODE` is a developer
- * override for live tests; it is the one source that may START in
- * `bypassPermissions` (README documents it) — the user's explicit choice,
- * never a settings file. Next comes `pref`, the user's remembered
- * `/permission` pick (`~/.dsh-tui/backends/claude/prefs.json`, the same
- * store as the model and effort choices): it may also start in
- * `bypassPermissions` (the always-on gate pre-warms the process) — the
- * user chose it explicitly, here or in an earlier session, so it skips the
- * settings cascade entirely: no escalation filter, no downgrade notice.
- * An illegal persisted value reads as no choice. Otherwise the user's
- * settings cascade after the CLI's own trust filter for escalating modes
- * from repo-committed files; otherwise `default`.
+ * The explicit start permission mode (never omitted: the CLI default may be
+ * `auto`). `DSH_TUI_CLAUDE_PERMISSION_MODE` is a developer override for live
+ * tests and the only way to start in `bypassPermissions`
+ * (docs/configuration.md). Next comes `pref`, the user's remembered
+ * `/permission` pick (`~/.dsh-tui/backends/claude/prefs.json`): it skips the
+ * settings cascade (no escalation filter, no downgrade notice) — except a
+ * remembered `bypassPermissions`, which is never carried into a new session
+ * (Claude Code itself wants an explicit flag on every start): it resolves as
+ * if nothing were remembered and says so (`bypassNotCarried`). An illegal
+ * persisted value reads as no choice. Otherwise the user's settings cascade
+ * after the CLI's own trust filter for escalating modes from repo-committed
+ * files; otherwise `default`.
  *
  * Starting elsewhere restricts nothing: the bypass gate rides along on every
  * query (`buildQueryOptions`), so `/permission` may switch into
@@ -162,8 +162,11 @@ export async function resolveStartPermissionMode(
     return { mode: override as PermissionMode, source: 'env' }
   }
   const ignoredOverride = override === undefined || override === '' ? undefined : override
-  const ignored = ignoredOverride === undefined ? {} : { ignoredOverride }
-  if (isPermissionMode(pref)) return { mode: pref, source: 'pref', ...ignored }
+  const notes = {
+    ...(ignoredOverride === undefined ? {} : { ignoredOverride }),
+    ...(pref === 'bypassPermissions' ? { bypassNotCarried: true as const } : {}),
+  }
+  if (isPermissionMode(pref) && pref !== 'bypassPermissions') return { mode: pref, source: 'pref', ...notes }
   let configured: unknown
   try {
     const resolved = await sdk.resolveSettings({ cwd, settingSources: SETTING_SOURCES })
@@ -173,9 +176,9 @@ export async function resolveStartPermissionMode(
   } catch {
     configured = undefined
   }
-  if (!isPermissionMode(configured)) return { mode: 'default', source: 'default', ...ignored }
-  if (!(START_MODES as readonly string[]).includes(configured)) return { mode: 'default', downgradedFrom: configured, source: 'settings', ...ignored }
-  return { mode: configured, source: 'settings', ...ignored }
+  if (!isPermissionMode(configured)) return { mode: 'default', source: 'default', ...notes }
+  if (!(START_MODES as readonly string[]).includes(configured)) return { mode: 'default', downgradedFrom: configured, source: 'settings', ...notes }
+  return { mode: configured, source: 'settings', ...notes }
 }
 
 export type ProfileInput = {
@@ -196,9 +199,9 @@ export type ProfileInput = {
   /** Start model / effort (the user's persisted choice); absent = the CLI's. */
   readonly model?: string
   readonly effort?: string
-  /** Flag-layer settings: the route pin of an injected subscription token
-   *  (auth.ts); absent = none. */
-  readonly settings?: { readonly env: Readonly<Record<string, string>> }
+  /** The auth plan's flag layer (auth.ts) as a file path
+   *  (flag-settings.ts); absent = none. */
+  readonly settingsFile?: string
 } & (
   /** A new session under this id … */
   | { readonly sessionId: string; readonly resume?: undefined }
@@ -212,7 +215,8 @@ export interface SideQueryInput {
   /** The session it forks (persisted). */
   readonly resume: string
   readonly env: Record<string, string>
-  readonly settings?: { readonly env: Readonly<Record<string, string>> }
+  /** The flag layer as a file path (flag-settings.ts). */
+  readonly settingsFile?: string
   readonly executable: string | undefined
   readonly abortController: AbortController
   readonly stderr: (data: string) => void
@@ -220,7 +224,7 @@ export interface SideQueryInput {
 }
 
 /**
- * The side query's options (design §5.3): a throwaway fork of the
+ * The side query's options: a throwaway fork of the
  * conversation (`resume` + `forkSession`, `persistSession:false` — no
  * transcript written), no tools, one turn, the session's model, and the
  * session's own system prompt, settings sources, environment, credential
@@ -244,7 +248,7 @@ export function buildSideQueryOptions(input: SideQueryInput): Options {
     stderr: input.stderr,
     ...(input.executable === undefined ? {} : { pathToClaudeCodeExecutable: input.executable }),
     ...(input.model === undefined ? {} : { model: input.model }),
-    ...(input.settings === undefined ? {} : { settings: { env: { ...input.settings.env } } }),
+    ...(input.settingsFile === undefined ? {} : { settings: input.settingsFile }),
   }
 }
 
@@ -262,16 +266,11 @@ export function buildQueryOptions(input: ProfileInput): Options {
     // prompts and surfaces it where the native build defers it.
     allowedTools: [...TODO_PANEL_TOOLS],
     permissionMode: input.permissionMode,
-    // The gate, always. `allowDangerouslySkipPermissions` becomes the CLI's
-    // `--allow-dangerously-skip-permissions`, which only PRE-WARMS the
-    // process: the SDK refuses `bypassPermissions` without it ("Must be set
-    // to true when using permissionMode: 'bypassPermissions'", sdk.d.ts:2001)
-    // and a process started without it can never enter that mode later
-    // (sdk.d.ts:331) — `setPermissionMode` is just a control request, with
-    // no SDK-side gate of its own. It does NOT force bypass: the session
-    // starts in `input.permissionMode` exactly as resolved, and bypass is
-    // entered only by an explicit `setPermissionMode('bypassPermissions')`
-    // (the /permission picker).
+    // Always on. It becomes `--allow-dangerously-skip-permissions`, which
+    // only makes bypass reachable: a process started without it can never
+    // enter `bypassPermissions` later. It does not start in bypass; the
+    // session starts in `input.permissionMode`, and bypass is entered only by
+    // an explicit `setPermissionMode` from the /permission picker.
     allowDangerouslySkipPermissions: true,
     canUseTool: input.canUseTool,
     ...(input.onElicitation === undefined ? {} : { onElicitation: input.onElicitation }),
@@ -287,7 +286,7 @@ export function buildQueryOptions(input: ProfileInput): Options {
     ...(input.executable === undefined ? {} : { pathToClaudeCodeExecutable: input.executable }),
     ...(input.model === undefined ? {} : { model: input.model }),
     ...(input.effort === undefined ? {} : { effort: input.effort as NonNullable<Options['effort']> }),
-    ...(input.settings === undefined ? {} : { settings: { env: { ...input.settings.env } } }),
+    ...(input.settingsFile === undefined ? {} : { settings: input.settingsFile }),
     ...(input.replayUserMessages ? { extraArgs: { 'replay-user-messages': null } } : {}),
   }
 }

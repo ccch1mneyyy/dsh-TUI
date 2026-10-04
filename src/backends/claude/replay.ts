@@ -1,13 +1,13 @@
 /**
- * Claude session transcript → Agent Domain replay (docs/agent-backend-design.md
- * §4.11, the replay column of §5.1): the durable history a resumed session
+ * Claude session transcript → Agent Domain replay: the durable history a
+ * resumed session
  * paints before it follows live events.
  *
  * Input is what the SDK's read API returns — `getSessionMessages(id,
  * {includeSystemMessages:true})`, the model-visible chain (after a
  * compaction: the boundary, the summary, the preserved tail and what came
  * later) — plus each subagent's `getSubagentMessages`. Output is the same
- * vocabulary the live translator emits, produced by the SAME translator
+ * vocabulary the live translator emits, produced by the same translator
  * (`translate.ts`): assistant blocks, tool calls and results, plan / todo /
  * question tools and the compaction rows map exactly as they do live. Only
  * the turn segmentation is replay's own, because the transcript has no
@@ -55,23 +55,13 @@
  * Pure: no I/O, no clock (event times come from the message timestamps).
  */
 import type { AgentEvent, SubagentUsage } from '../../agent/events.js'
-import type { ClaudeTaskSeed } from './translate.js'
 import { transcriptImages } from './images.js'
-import { createClaudeTranslator } from './translate.js'
-
-type Rec = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Rec | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
-const str = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
-const num = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined
-const arr = (value: unknown): readonly unknown[] => Array.isArray(value) ? value : []
+import { arr, num, rec, str, type Rec } from './narrow.js'
+import { COMMAND_TAG, createClaudeTranslator, INTERRUPT_ECHO, LOCAL_COMMAND_TAG, userText, type ClaudeTaskSeed } from './translate.js'
 
 /** The tool names the CLI uses for a subagent launch (current, legacy). */
 const AGENT_TOOLS: ReadonlySet<string> = new Set(['Agent', 'Task'])
 
-const INTERRUPT_ECHO = '[Request interrupted by user'
-const LOCAL_COMMAND_TAG = /^<local-command-(stdout|stderr|caveat)>/u
-const COMMAND_TAG = /^<command-(name|message|args)>/u
 const BASH_OUTPUT_TAG = /^<bash-(stdout|stderr)>/u
 const BASH_INPUT = /^<bash-input>([\s\S]*?)<\/bash-input>/u
 const TASK_NOTIFICATION = /^<task-notification>/u
@@ -86,7 +76,7 @@ const MAX_NESTING = 8
 export interface ClaudeSubagentTranscript {
   readonly agentId: string
   readonly messages: readonly unknown[]
-  /** `parent_agent_id` of the child's messages (sdk.d.ts:6437-6449): the
+  /** `parent_agent_id` of the child's messages: the
    *  agent that spawned it. Absent/null = a depth-1 child (spawned by the
    *  main loop) or old-format metadata that never recorded it — never an
    *  orphan: such a transcript heals onto a delegation by agent id. */
@@ -109,23 +99,13 @@ export interface ClaudeReplay {
   readonly start: { readonly turn: number; readonly seq: number; readonly model?: string }
   /** The replayed conversation's task table (the Task* family), handed to
    *  the live translator so a resumed update finds the ids the replay
-   *  tracked (R2 review). Absent when the history tracked none. */
+   *  tracked. Absent when the history tracked none. */
   readonly tasks?: readonly ClaudeTaskSeed[]
   /**
    * The chain began at a compaction (its boundary's uuid, or the summary's
    * when no boundary entry led it): older history exists on disk.
    */
   readonly compactedFrom?: string
-}
-
-/** First text of a user `message.content` (string or block array). */
-function userText(content: unknown): string | undefined {
-  if (typeof content === 'string') return content
-  for (const block of arr(content)) {
-    const value = rec(block)
-    if (value?.type === 'text') return str(value.text)
-  }
-  return undefined
 }
 
 /** `/name args` of a recorded slash-command echo. */
@@ -267,11 +247,10 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
   for (const transcript of uniqueTranscripts) indexHandBackIds(transcript.messages)
   /** Per delegator ('' = the main chain): how many of its `Agent` calls NO
    *  exact channel can attribute (neither a call-id keyed transcript nor a
-   *  hand-back result naming an available child). The fail-closed join
-   *  (RV round 4) only ever pairs a SOLE such call with a SOLE unclaimed
-   *  candidate — anything less is a guess, and a guess cross-wires bodies
-   *  onto the wrong call's card (the map order is the store's traversal
-   *  order, not the parent's call order). */
+   *  hand-back result naming an available child). Only a sole such call is
+   *  ever paired with a sole unclaimed candidate: anything less is a guess
+   *  that would put a body on the wrong call's card (the map order is the
+   *  store's traversal order, not the parent's call order). */
   const nonExactCalls = new Map<string, number>()
   const censusCalls = (source: readonly unknown[], owner: string): void => {
     for (const raw of source) {
@@ -301,9 +280,9 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
   const unclaimedCandidatesOf = (delegatorId: string | undefined): readonly ClaudeSubagentTranscript[] =>
     uniqueTranscripts.filter(seen => !claimed.has(seen.agentId) && (delegatorId === undefined ? seen.parentAgentId == null : seen.parentAgentId === delegatorId))
   /**
-   * The SOLE unclaimed candidate for a delegator, attached only when the
-   *  attribution is provably unique (design §2 / RV round 4): the delegator
-   *  made exactly ONE call no exact channel attributes, exactly one
+   * The sole unclaimed candidate for a delegator, attached only when the
+   *  attribution is provably unique: the delegator
+   *  made exactly one call no exact channel attributes, exactly one
    *  candidate names it as parent, and the transcript source is complete —
    *  a main chain that began at a compaction may have dropped the call the
    *  child actually belongs to. Otherwise undefined: the child stays
@@ -379,7 +358,7 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
         transcript = named === undefined ? undefined : unclaimedByAgentId(named)
         if (transcript !== undefined) via = 'hand-back agent id'
         else {
-          // Fail-closed bijection (RV round 4): provably-unique only.
+          // Only a provably unique pairing.
           transcript = soleUnclaimedChildOf(delegatorId)
           if (transcript !== undefined) via = 'unique-candidate bijection'
         }
@@ -388,13 +367,11 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
       launched.set(callId, { agentId: transcript?.agentId ?? callId, background })
       if (transcript === undefined) continue
       claimed.add(transcript.agentId)
-      // The parent fact the disk structure states: the recorded
-      // parent_agent_id wins; the transcript the delegating call sits in
-      // (delegatorId — undefined = the main chain) is the structural
-      // fallback. depth is emitted ALWAYS now: a main-chain delegation is
-      // a depth-1 spawn by construction, and the roster's parent/sibling
-      // math treats depth 1 as proof of a main-loop child (agent-team §2
-      // forbids inferring parents from depth any deeper than that).
+      // The recorded parent_agent_id wins; else the transcript the
+      // delegating call sits in (undefined = the main chain). depth is
+      // always emitted: a main-chain delegation is a depth-1 spawn, and the
+      // roster treats depth 1 as a main-loop child (parents are never
+      // inferred from a deeper depth).
       const parentAgentId = transcript.parentAgentId ?? delegatorId
       out.push({
         type: 'subagent.start',
@@ -543,23 +520,19 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
   }
 }
 
-
-/** A subagent's own transcript replayed as its child lane (design
- *  agent-team-panels §2): every user/assistant message goes through the
- *  SAME translator the live lane uses (thinking/text blocks, tool calls
- *  and results), with `parent_tool_use_id` forced to the child's own agent
- *  id — a message whose store metadata lacks the delegating call id must
- *  never fall through to the MAIN lane translation. Thinking the API only
- *  signed or counted (empty text) degrades honestly: a `reasoning-tokens`
- *  block carries the count, a `reasoning-signature` block says even that
- *  is unknown — the view renders "body unavailable", never fabricated
- *  prose. The child's initial prompt stays hidden (the translator's
- *  standing contract). Pure: no I/O, no clock (times come from the
- *  message timestamps). */
+/** A subagent's own transcript replayed as its child lane: every
+ *  user/assistant message goes through the translator the live lane uses,
+ *  with `parent_tool_use_id` forced to the child's own agent id (a message
+ *  whose metadata lacks the delegating call id must not land on the main
+ *  lane). Thinking the API only signed or counted (empty text) becomes a
+ *  `reasoning-tokens` block with the count, or a `reasoning-signature`
+ *  block when even that is unknown; the view says the body is
+ *  unavailable. The child's initial prompt stays hidden. Pure: no I/O, no
+ *  clock (times come from the message timestamps). */
 export interface ClaudeSubagentLane {
   readonly events: readonly AgentEvent[]
   /** `parent_agent_id` across the child's messages; null = depth-1 or
-   *  old-format metadata (sdk.d.ts:6437-6449). */
+   *  old-format metadata. */
   readonly parentAgentId: string | null
   readonly uuids: readonly string[]
 }

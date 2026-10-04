@@ -8,7 +8,7 @@
  * leaked the real `glm-5.3-flash` on the haiku tier). The user's own
  * ANTHROPIC_*_MODEL mapping in the settings `env` is the only honest source,
  * so the model list surfaces it: when a row's requested id maps to a
- * different configured model, the LABEL becomes the actual model and the
+ * different configured model, the label becomes the actual model and the
  * cosmetic name moves into the description. Real Claude setups (no such
  * env, or a mapping that resolves to the same model) render exactly as
  * before.
@@ -74,7 +74,7 @@ export function readSettingsEnvForModels(configDir: string): Record<string, stri
  * The user-maintained local map, `<DATA_DIR>/backends/claude/model-names.json`
  * (`{ "claude-opus-5-5[1m]": "glm-5.3[1M]", ... }`): ids a relay channel
  * disguises → the name to display. Optional and additive on top of the
- * settings env tiers; checked FIRST so a hand-written entry always wins
+ * settings env tiers; checked first so a hand-written entry always wins
  * (the /provider-style escape hatch when the channel tool renames its env
  * shape). Best-effort: absent/unreadable/malformed reads as no entries.
  */
@@ -162,8 +162,8 @@ const SLOT_ENV_KEYS: readonly string[] = [
  * Whether the env the CLI child runs with already routes to `model`
  * through its model slots: some slot's value — compared as base ids,
  * `[1M]`-style suffixes and letter case ignored — names the same model.
- * The session's explicit `model` query parameter can then be OMITTED:
- * the CLI's SDK path (2.1.284+) resolves an EXPLICIT model against the
+ * The session's explicit `model` query parameter can then be omitted:
+ * the CLI's SDK path (2.1.284+) resolves an explicit model against the
  * bundled official catalog and fail-fasts a non-official name (a relay
  * model) as `[claude-code:unrecognized_model]`, while the same name in
  * an env slot routes fine — the parameter would only add a failing
@@ -182,17 +182,12 @@ export function envSlotsServeModel(
   return false
 }
 
-/** The env the CLI child actually applies, in the CLI's own truth order
- *  (R3-5): **flag-injected keys > the settings file's `env` > the truly
- *  inherited env**. `injectedKeys` marks what the TUI itself pinned into the
- *  spawn env (the auth plan's flag layer — the channel connection, the
- *  first-party pin): those deliberately outrank the settings file, exactly
- *  like the flag-settings layer outranks user settings inside the CLI
- *  (binary forensics, CLI 2.1.287). Every OTHER live key is merely
- *  INHERITED environment, and the CLI provably applies the settings `env`
- *  OVER the process environment it inherited — so a settings value wins the
- *  clash and an inherited key only fills gaps the settings leave. Empty /
- *  undefined live values never clobber anything. */
+/** The env the CLI child actually applies, in the CLI's own order: keys
+ *  the TUI put in the flag layer (`injectedKeys`: the channel connection,
+ *  the first-party pin) > the settings file's `env` > the inherited env.
+ *  The CLI applies the settings `env` over the environment it inherited, so
+ *  an inherited key only fills gaps. Empty live values never clobber
+ *  anything. */
 export function mergedModelEnv(
   configDir: string,
   liveEnv: Readonly<Record<string, string | undefined>>,
@@ -207,12 +202,10 @@ export function mergedModelEnv(
   return merged
 }
 
-/** The env the settings IMPORT resolves from (R3-5): the user's own
- *  settings file plus the truly inherited environment (settings first —
- *  the CLI's own order), with the TUI's OWN injections REMOVED. Reading
- *  them back would import the channel the TUI itself activated (or the
- *  dsh-auth pin) instead of what the user's settings actually say — the
- *  cc-switch loop: switch settings to relay B, import, get relay A back. */
+/** The env "import from settings" reads: the settings file plus the
+ *  inherited environment (settings first), without the TUI's own
+ *  injections. Reading those back would import the channel the TUI itself
+ *  activated: switch settings to relay B, import, get relay A back. */
 export function importedModelEnv(
   configDir: string,
   liveEnv: Readonly<Record<string, string | undefined>>,

@@ -1,18 +1,18 @@
-// Maintainer probe — NOT a regression test, NOT part of CI.
+// Maintainer probe, not a regression test and not part of CI.
 //
-// Records COMPLETE (untruncated) Claude Agent SDK message sequences for the
-// translator fixtures in scripts/fixtures/claude/ (docs/agent-backend-design.md
-// §8.3). Each scenario runs one fresh streaming-input session in its own
-// throwaway project directory with the backend's Fidelity Profile options,
-// and writes `<output-dir>/<scenario>.raw.jsonl`:
+// Records complete (untruncated) Claude Agent SDK message sequences for the
+// translator fixtures in scripts/fixtures/claude/. Each scenario runs one
+// fresh streaming-input session in its own throwaway project directory with
+// the backend's Fidelity Profile options, and writes
+// `<output-dir>/<scenario>.raw.jsonl`:
 //
 //   {"t":ms,"dir":"in","placement":"turn|steer|followup|now","msg":<SDKUserMessage>}
 //   {"t":ms,"dir":"out","msg":<every SDK message, verbatim>}
 //   {"t":ms,"dir":"ctl","action":"interrupt","cancelQueued":bool,"receipt":…}
 //   {"t":ms,"dir":"perm","toolName":…,"toolUseID":…,"decision":"allow|deny"}
 //
-// Raw files contain real paths, ids and account-adjacent fields: NEVER commit
-// them. Run scripts/fixtures/claude/redact.mjs over the directory and commit
+// Raw files contain real paths, ids and account-adjacent fields. Never commit
+// them: run scripts/fixtures/claude/redact.mjs over the directory and commit
 // only its output.
 //
 // Prerequisites:
@@ -27,9 +27,9 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
-// Maintainer cost rule (2026-10-02): every real-CLI run uses haiku only —
-// never sonnet or opus. The query pins `model: 'haiku'` and this guard
-// refuses to run when the environment would point the alias elsewhere.
+// Real-CLI runs use haiku only, never sonnet or opus. The query pins
+// `model: 'haiku'` and this guard refuses to run when the environment would
+// point the alias elsewhere.
 for (const name of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL']) {
   const value = process.env[name]
   if (value !== undefined && value !== '' && !/haiku/iu.test(value)) {
@@ -48,7 +48,7 @@ fs.mkdirSync(root, { recursive: true })
 
 const DENY = 'dsh-tui: interactive approvals arrive in the next phase'
 
-/** The backend's child environment (design §4.3), minus parent-session vars. */
+/** The backend's child environment, minus parent-session vars. */
 function childEnv() {
   const env = {}
   for (const [key, value] of Object.entries(process.env)) {
@@ -248,7 +248,7 @@ const SCENARIOS = {
       await results(1)
     },
   },
-  // Resume replay (Phase 4b): a tool call and a foreground subagent in one
+  // Resume replay: a tool call and a foreground subagent in one
   // turn, a manual compaction, and a turn after it. Dump its read-API view
   // with scripts/probes/claude-transcript-dump.mjs afterwards. ~3 haiku calls.
   'resume-replay': {

@@ -1,10 +1,9 @@
 /**
- * Claude backend version contract (docs/agent-backend-design.md §4.2, §8.0
- * `verify:claude-contract`) — the one place every copy of the SDK pin must
- * agree, and the option classification must exist:
+ * Claude backend version contract: every copy of the SDK pin must agree, and
+ * the option classification must exist.
  *
  *  1. `package.json`: `@anthropic-ai/claude-agent-sdk` is an exact version
- *     (no range) as an OPTIONAL peer dependency AND as a dev dependency, the
+ *     (no range) as an optional peer dependency and as a dev dependency, the
  *     two equal;
  *  2. `src/backends/claude/contract.ts` `VALIDATED_SDK_VERSION` is that
  *     version;

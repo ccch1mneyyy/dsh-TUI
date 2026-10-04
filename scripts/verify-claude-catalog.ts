@@ -1,7 +1,6 @@
 /**
- * Claude session lifecycle off the live turn (docs/agent-backend-design.md
- * §4.11, Phase 4b), over a fake SDK and a temp data directory — no CLI, no
- * network:
+ * Claude session lifecycle off the live turn, over a fake SDK and a temp
+ * data directory (no CLI, no network):
  *
  *  - the catalog: listing (one project / every project, programmatic sessions
  *    included), the title sources, MRU-aware `updatedAt`, info / preview /
@@ -12,7 +11,7 @@
  *    conversation rewind cuts before the picked message, files restore by
  *    checkpoint (dry run first), `both` restores files then forks;
  *  - the channel flows (core): the browser listing (directory first, then
- *    every project), `/resume` painting history BEFORE live events, the
+ *    every project), `/resume` painting history before live events, the
  *    cross-process mount ledger under `claude:<id>` (a real peer process
  *    holds one: refused, nothing opened), a failing resume reported loudly
  *    with the bound session untouched, rename / delete (never the bound or
@@ -194,8 +193,8 @@ const chain = (id: string) => [
   check('files rewind restores by checkpoint and stays in the session', filesOnly.kind === 'rewound' && filesOnly.session.sessionId === 'sess-1' && filesOnly.files?.filesChanged.length === 1 && forks.length === 2)
   const both = await rewind.rewind('sess-1-u2', 'both')
   check('both: files first, then the fork', both.kind === 'rewound' && both.files !== undefined && both.session.sessionId === 'fork-3')
-  // Phase 4b review 2: the files moved, then the fork failed — a partial
-  // outcome, never one reported as nothing done.
+  // The files moved, then the fork failed: a partial outcome, never one
+  // reported as nothing done.
   failFork = true
   const partial = await rewind.rewind('sess-1-u2', 'both')
   check('both, fork failing after the files: files reported, the conversation error kept, the session stays', partial.kind === 'rewound' && partial.files?.filesChanged.length === 1 && partial.conversationError === 'disk full' && partial.session.sessionId === 'sess-1', partial)
@@ -246,8 +245,8 @@ const chain = (id: string) => [
   // a plain O_TRUNC write leaves the file truncated for.
   for (let i = 0; i < 200; i++) prefs.setColor(`s-${i}`, '#0a0b0c')
   for (let i = 0; i < 200; i++) prefs.touch(`t-${i}`)
-  // A real second process hammers the same file through the same API —
-  // two terminals, no synthetic fs — while this one keeps reading (and
+  // A real second process hammers the same file through the same API (two
+  // terminals, no synthetic fs) while this one keeps reading (and
   // writing); whatever a reader sees must be a complete JSON document,
   // and the shared fields (the model pick) must survive the storm.
   const PREFS_URL = new URL('../src/backends/claude/prefs.ts', import.meta.url).href
@@ -297,8 +296,8 @@ const chain = (id: string) => [
   rmSync(dir, { recursive: true, force: true })
 }
 
-// A rename that fails mid-commit leaves the previous document — a VALID
-// prefs file, byte-for-byte — and its temporary is cleaned; the next write
+// A rename that fails mid-commit leaves the previous document (a valid
+// prefs file, byte for byte) and its temporary is cleaned; the next write
 // still succeeds. The failure is injected through the default fs export
 // for this process only (`syncBuiltinESMExports` from node:module makes
 // the named bindings follow; the storm child above keeps the real one).

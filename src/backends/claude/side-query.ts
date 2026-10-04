@@ -1,6 +1,5 @@
 /**
- * `/btw` and `/recap` on a Claude session (docs/agent-backend-design.md §5.3,
- * §8.8 P5-3): one tool-less, single-turn side query over the current
+ * `/btw` and `/recap` on a Claude session: one tool-less, single-turn side query over the current
  * conversation, never a feature of its own —
  *
  *   query({ prompt, options: { resume: <session id>, forkSession: true,
@@ -11,10 +10,9 @@
  * arrives; the query is closed when the answer is complete, on the caller's
  * abort, and on any failure.
  *
- * Probe (Phase 5b, `scripts/probes/claude-sdk-probe-5b.mjs`, CLI 2.1.287 /
- * haiku): over a conversation that ended in a tool call, the fork answers
- * from the conversation with no tools offered (~3 s), and writes NO
- * transcript file (`persistSession:false` + `forkSession`) — the session's
+ * With CLI 2.1.287 the fork answers from the conversation with no tools
+ * offered (~3 s on haiku), even when it ended in a tool call, and writes no
+ * transcript file (`persistSession:false` + `forkSession`): the session's
  * own record is untouched.
  *
  * A session the CLI has not persisted yet has nothing to fork: the side
@@ -22,8 +20,10 @@
  */
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { t } from '../../i18n.js'
+import { writeFlagSettingsFile, type FlagSettingsFile } from './flag-settings.js'
 import { buildSideQueryOptions } from './options.js'
 import type { ClaudeSdkModule } from './sdk.js'
+import { errorText, rec, str } from './narrow.js'
 
 /** One side answer: the text, or why there is none (null + no error =
  *  the caller aborted). */
@@ -46,12 +46,6 @@ export interface ClaudeSideQueryDeps {
   debug(message: string): void
 }
 
-type Rec = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Rec | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
-const str = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
-const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
-
 /** The one prompt of a side query, as a closed single-message stream. */
 async function* singlePrompt(text: string): AsyncGenerator<SDKUserMessage> {
   yield { type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null }
@@ -68,19 +62,29 @@ export function createClaudeSideQuery(deps: ClaudeSideQueryDeps) {
       signal?.addEventListener('abort', onAbort, { once: true })
       const spawn = deps.spawn()
       const model = deps.model()
-      const query = deps.sdk.query({
-        prompt: singlePrompt(prompt),
-        options: buildSideQueryOptions({
-          cwd: deps.cwd,
-          resume: deps.sessionId(),
-          env: spawn.env,
-          ...(spawn.settings === undefined ? {} : { settings: spawn.settings }),
-          executable: spawn.executable,
-          abortController,
-          stderr: line => { deps.debug(`[claude-side-stderr] ${line.trimEnd()}`) },
-          ...(model === '' ? {} : { model }),
-        }),
-      })
+      // The flag layer goes by file, out of argv (flag-settings.ts).
+      let flagSettings: FlagSettingsFile | undefined
+      let query: ReturnType<ClaudeSideQueryDeps['sdk']['query']>
+      try {
+        flagSettings = spawn.settings === undefined ? undefined : writeFlagSettingsFile(spawn.settings)
+        query = deps.sdk.query({
+          prompt: singlePrompt(prompt),
+          options: buildSideQueryOptions({
+            cwd: deps.cwd,
+            resume: deps.sessionId(),
+            env: spawn.env,
+            ...(flagSettings === undefined ? {} : { settingsFile: flagSettings.path }),
+            executable: spawn.executable,
+            abortController,
+            stderr: line => { deps.debug(`[claude-side-stderr] ${line.trimEnd()}`) },
+            ...(model === '' ? {} : { model }),
+          }),
+        })
+      } catch (error) {
+        signal?.removeEventListener('abort', onAbort)
+        flagSettings?.dispose()
+        throw error
+      }
       let streamed = ''
       let settled = ''
       let failure: string | undefined
@@ -124,6 +128,7 @@ export function createClaudeSideQuery(deps: ClaudeSideQueryDeps) {
         signal?.removeEventListener('abort', onAbort)
         try { query.close() } catch (error) { deps.debug(`claude: side query close failed (${errorText(error)})`) }
         abortController.abort()
+        flagSettings?.dispose()
       }
       if (signal?.aborted) return { answer: null }
       // A gateway that does not stream still settles the whole text.

@@ -1,6 +1,6 @@
 /**
- * MCP elicitation and the CLI's user dialogs (docs/agent-backend-design.md
- * §4.3 `onElicitation` / `onUserDialog`, §4.7): the session's two other
+ * MCP elicitation and the CLI's user dialogs (`onElicitation` /
+ * `onUserDialog`): the session's two other
  * human-in-the-loop callbacks. Every request becomes a structured ask the
  * shared QuestionStore renders (`question.request`), answered through the
  * session's `questions` capability, and settles into the shape the SDK
@@ -35,16 +35,10 @@ import type { ElicitationRequest, ElicitationResult, OnElicitation, OnUserDialog
 import type { QuestionAnswers } from '../../agent/capabilities.js'
 import type { AgentEvent, QuestionItemView } from '../../agent/events.js'
 import { t } from '../../i18n.js'
+import { errorText, num, rec, str, type Rec } from './narrow.js'
 
 /** The dialog kinds this client renders (`supportedDialogKinds`). */
 export const SUPPORTED_DIALOG_KINDS: readonly string[] = ['refusal_fallback_prompt']
-
-type Rec = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Rec | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
-const str = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
-const num = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined
-const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
 /** A form value the MCP result carries. */
 type FormValue = string | number | boolean | string[]
@@ -332,8 +326,9 @@ interface Pending {
   withdraw(): void
   /** URL mode: the server reported the flow done (accept). */
   complete?(): void
-  /** A redelivered request (same request id) waits for the same answer. */
-  join(resolve: (result: never) => void): void
+  /** A redelivered request (same request id) waits for the same answer;
+   *  its own signal withdraws the flow like the first one's. */
+  join(resolve: (result: never) => void, signal: AbortSignal): void
   /** URL mode: the server and elicitation id `elicitation_complete` names. */
   readonly url?: { readonly server: string; readonly elicitationId?: string }
 }
@@ -392,11 +387,12 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
     let round = 0
     let entry: Pending | undefined
     const resolvers: ((result: R) => void)[] = [resolve]
+    const signals: AbortSignal[] = [signal]
     const onAbort = (): void => { entry?.withdraw() }
     const finish = (result: R): void => {
       if (settled) return
       settled = true
-      signal.removeEventListener('abort', onAbort)
+      for (const each of signals.splice(0)) each.removeEventListener('abort', onAbort)
       if (entry !== undefined) close(entry)
       for (const each of resolvers.splice(0)) each(result)
     }
@@ -415,7 +411,15 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
       answer: built.answer,
       dismiss: built.dismiss,
       withdraw: () => finish(built.cancelled),
-      join: (more: (result: never) => void) => { resolvers.push(more as (result: R) => void) },
+      join: (more: (result: never) => void, moreSignal: AbortSignal) => {
+        resolvers.push(more as (result: R) => void)
+        if (moreSignal.aborted) {
+          finish(built.cancelled)
+          return
+        }
+        signals.push(moreSignal)
+        moreSignal.addEventListener('abort', onAbort, { once: true })
+      },
       ...(built.url === undefined ? {} : { url: built.url }),
       ...(built.complete === undefined ? {} : { complete: built.complete }),
     }
@@ -510,13 +514,13 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
     try {
       const flow = `elicit-${options.requestId}`
       if (deps.closing()) { resolve({ action: 'cancel' }); return }
-      if (options.signal.aborted) { resolve({ action: 'cancel' }); return }
       const previous = byFlow.get(flow)
       if (previous !== undefined) {
         // A redelivered request (a transport gap) waits for the same answer.
-        previous.join(resolve as (result: never) => void)
+        previous.join(resolve as (result: never) => void, options.signal)
         return
       }
+      if (options.signal.aborted) { resolve({ action: 'cancel' }); return }
       const mode = request.mode ?? 'form'
       if (mode === 'form') form(request, flow, options.signal, resolve)
       else if (mode === 'url') url(request, flow, options.signal, resolve)
@@ -566,12 +570,13 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
   const onUserDialog: OnUserDialog = (request, options) => new Promise<UserDialogResult>(resolve => {
     try {
       const flow = `dialog-${options.requestId}`
-      if (deps.closing() || options.signal.aborted) { resolve({ behavior: 'cancelled' }); return }
+      if (deps.closing()) { resolve({ behavior: 'cancelled' }); return }
       const previous = byFlow.get(flow)
       if (previous !== undefined) {
-        previous.join(resolve as (result: never) => void)
+        previous.join(resolve as (result: never) => void, options.signal)
         return
       }
+      if (options.signal.aborted) { resolve({ behavior: 'cancelled' }); return }
       if (request.dialogKind === 'refusal_fallback_prompt') {
         refusalFallback(request, flow, options.signal, resolve)
         return

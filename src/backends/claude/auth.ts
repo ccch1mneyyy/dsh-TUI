@@ -1,66 +1,60 @@
 /**
- * Claude credentials for the CLI child (docs/agent-backend-design.md §4.12,
- * decision D-AUTH): which credential the session runs on, and the child
- * environment that selects it.
+ * Claude credentials for the CLI child: which credential the session runs
+ * on, and the child environment that selects it.
  *
  * Precedence:
  *  (a) the dsh-auth `anthropic` subscription login (the TUI's own `/login`) →
  *      `CLAUDE_CODE_OAUTH_TOKEN=<access>`, refreshed before spawn when it is
- *      about to expire. When (a) is used, `ANTHROPIC_API_KEY` and
- *      `ANTHROPIC_AUTH_TOKEN` are REMOVED from the child environment: the CLI
- *      ranks those above an OAuth token, and a stale key exported in the
- *      shell would silently override the login the user made in the TUI;
- *  (b) the user's own environment — `ANTHROPIC_API_KEY` /
- *      `ANTHROPIC_AUTH_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN`, or a cloud provider
- *      (any `CLAUDE_CODE_USE_<PROVIDER>` routing flag) — passed through;
- *  (c) nothing injected: the CLI discovers the local `claude login`.
+ *      about to expire. `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are
+ *      then removed from the child environment: the CLI ranks them above an
+ *      OAuth token, and a stale key in the shell would silently win;
+ *  (b) the user's own environment (`ANTHROPIC_API_KEY` /
+ *      `ANTHROPIC_AUTH_TOKEN` / `CLAUDE_CODE_OAUTH_TOKEN`, or a cloud
+ *      provider's `CLAUDE_CODE_USE_<PROVIDER>` flag), passed through;
+ *  (c) nothing injected: the CLI finds the local `claude login`.
  *
- * (a) applies ONLY on the first-party route (`claudeRouteOf`): with a custom
+ * (a) applies only on the first-party route (`claudeRouteOf`). A custom
  * `ANTHROPIC_BASE_URL` / `CLAUDE_CODE_API_BASE_URL`, a Unix socket, a cloud or
- * gateway route, a custom OAuth endpoint (`CLAUDE_CODE_CUSTOM_OAUTH_URL`), an
- * `apiKeyHelper`, a managed `policyHelper`, or unreadable settings, the
- * environment passes through untouched and the token is never read — the
- * CLI would otherwise send the claude.ai token to that host. The route reads
- * every place the CLI takes its environment from: the process environment,
- * EVERY global config file the CLI may pick (`<config>/.config.json`, which
- * wins when it exists, `.claude.json` and `.claude-custom-oauth.json` — any
- * one non-first-party or unreadable fails closed; `<config>` is the CLI's own
- * `CLAUDE_CONFIG_DIR`: exact case on POSIX, any case on Windows, and
- * spellings that disagree fail closed) and the settings' `env`. Other
- * variable names are matched case-insensitively (Windows semantics): a
- * broader match only ever fails closed.
+ * gateway route, a custom OAuth endpoint, an `apiKeyHelper`, a managed
+ * `policyHelper` or unreadable settings leave the environment untouched and
+ * the token unread: the CLI would send the claude.ai token to that host. The
+ * route is read from every place the CLI takes its environment from: the
+ * process environment, every global config file it may pick
+ * (`<config>/.config.json`, `.claude.json`, `.claude-custom-oauth.json`; one
+ * that is not first-party or cannot be read fails closed), and the settings'
+ * `env`. `<config>` is the CLI's own `CLAUDE_CONFIG_DIR` (exact case on POSIX,
+ * any case on Windows; spellings that disagree fail closed). Other names
+ * match case-insensitively (Windows semantics): a broader match only ever
+ * fails closed.
  *
- * Defense in depth: when the token IS injected, the route is also PINNED —
- * the flag-settings layer (the SDK `settings` option, the highest
- * user-controlled tier) sets `ANTHROPIC_BASE_URL` to the first-party origin
- * and blanks the other routing variables, and the child environment drops
- * them — so a non-policy source the gate missed (the process environment,
- * a global config file, user / project / local settings) still cannot send
- * the token elsewhere (proved offline by
- * scripts/probes/claude-auth-pin-probe.mjs). The same defense carries the
- * channel connection (R3-1): the CLI applies a settings file's `env` OVER
- * the process environment the child inherited, so an active channel pins
- * not just its endpoint but ALL THREE credential keys — its own token as
- * `ANTHROPIC_AUTH_TOKEN`, and explicit EMPTY strings for every key it does
- * not own (an empty flag-tier value suppresses the old value a user
- * settings file still holds; proved against the native CLI in
- * .local/review/r3-channels-security.md R3-1) — plus the routing blanks,
- * and the child environment loses the conflicting spellings. A custom
- * endpoint the profile gives no credential is refused before the spawn
- * (fail closed: no anonymous relay request, no ambient identity silently
- * riding the channel endpoint), and an `apiKeyHelper` in readable settings
- * conflicts with a channel the same way. The managed (policy) tier
- * outranks the flag tier and the SDK's `managedSettings` cannot carry `env`,
- * so the pin does not cover it: the gate reads the on-disk policy tier when
- * the session opens and fails closed on a non-first-party route there. The
- * residual case is managed settings that change their route while a session
- * runs (a policy reload the CLI picks up between turns): the gate is not
- * re-run until the next spawn.
+ * When the token IS injected the route is also pinned: the flag-settings
+ * layer (the SDK `settings` option, the highest user-controlled tier) sets
+ * `ANTHROPIC_BASE_URL` to the first-party origin and blanks the other
+ * routing variables, and the child environment drops them, so a source the
+ * gate missed still cannot send the token elsewhere
+ * (scripts/probes/claude-auth-pin-probe.mjs checks this offline).
+ *
+ * An active channel profile pins its connection the same way. The CLI
+ * applies a settings file's `env` over the environment it inherited, so a
+ * channel that carries the credential names all three credential keys in the
+ * flag layer: its own token as `ANTHROPIC_AUTH_TOKEN` and an empty string for
+ * the others (an empty flag-tier value suppresses what user settings still
+ * hold), plus the routing blanks; the child environment loses the
+ * conflicting spellings. A custom endpoint with no credential is refused
+ * before the spawn (no anonymous relay request, no ambient identity riding
+ * the channel endpoint), and so is an `apiKeyHelper` in readable settings.
+ *
+ * The managed (policy) tier outranks the flag tier and the SDK's
+ * `managedSettings` cannot carry `env`, so the pin does not cover it: the
+ * gate reads the on-disk policy tier when the session opens and fails closed
+ * on a non-first-party route there. Managed settings that change the route
+ * while a session runs are only seen at the next spawn.
  *
  * The host supplies the dsh-auth credential through `ClaudeCredentialSource`
  * (the backend never reads the credential file or runs an OAuth flow
  * itself). Token material never reaches a log, notice, trace or event: this
- * module only ever puts it into the child environment it returns.
+ * module only puts it into the child environment (and the flag settings) it
+ * returns.
  */
 
 import { existsSync, readFileSync } from 'node:fs'
@@ -107,31 +101,20 @@ export interface ClaudeAuthPlan {
   readonly expiresAt?: number
   readonly env: Record<string, string>
   /**
-   * dsh-auth: the flag-settings layer that pins the route to the first-party
-   * API (the SDK `settings` option); absent on every other source.
+   * The flag-settings layer (the SDK `settings` option, passed as a private
+   * file: flag-settings.ts): the first-party route pin of an injected
+   * dsh-auth token, or an active channel's connection; absent otherwise.
    */
   readonly settings?: { readonly env: Readonly<Record<string, string>> }
 }
 
 /**
- * The active channel profile's connection (phase 3, channels.ts), resolved
- * for one spawn: the endpoint, the token (already read from the credential
- * store — token material only ever travels into the child environment this
- * function returns, never into a log or event), and the channel-private
- * env. When present, the channel IS the session's connection: the spawn
- * env carries it AND the flag-settings layer (the SDK `settings` option)
- * re-states it — the CLI applies a settings file's `env` block OVER the
- * process environment it inherited (proved for CLI 2.1.287 in
- * .local/agent-backend-review.md 第四批增补四), so the process env alone
- * could not outrank e.g. a cc-switch-written `ANTHROPIC_BASE_URL`; the
- * flag layer (the `--settings` rank, above user settings) can and does
- * (the same layer `pinFirstParty` already relies on). When the channel
- * carries the credential itself (a `baseUrl` and/or a `token`), that pin
- * extends to EVERY credential key (R3-1): the three names ride the flag
- * layer verbatim — the channel token, or an empty string that suppresses
- * the old value user settings still holds — and the child environment
- * loses the conflicting spellings; the endpointless, tokenless profile (a
- * model mapping with private env) pins nothing and changes nothing.
+ * The active channel profile's connection (channels.ts), resolved for one
+ * spawn: the endpoint, the token (already read from the credential store)
+ * and the channel-private env. The spawn env carries it and the flag layer
+ * restates it, so a settings-file env (cc-switch's `ANTHROPIC_BASE_URL`, an
+ * old token) cannot override it. A profile with neither endpoint nor token
+ * (a model mapping with private env) pins no credential.
  */
 export interface ClaudeChannelConnectionInput {
   readonly baseUrl?: string
@@ -278,12 +261,6 @@ export function claudeGlobalConfigPaths(env: Readonly<Record<string, unknown>>, 
   return [join(configDir, '.config.json'), join(base, '.claude.json'), join(base, '.claude-custom-oauth.json')]
 }
 
-/** The `.claude.json` global config file (kept for diagnostics). */
-export function claudeGlobalConfigPath(env: Readonly<Record<string, unknown>>, platform: NodeJS.Platform = process.platform): string {
-  const dir = claudeConfigDirOf(env, platform)
-  return join(dir === undefined || dir === 'conflict' ? homeDir() : dir, '.claude.json')
-}
-
 /** One global config file's `env`: undefined when it does not exist. */
 function readConfigEnv(path: string): Readonly<Record<string, unknown>> | 'unreadable' | undefined {
   if (!existsSync(path)) return undefined
@@ -326,18 +303,16 @@ const PINNED_BLANK: readonly string[] = [
 ]
 
 /** The three credential keys the CLI merges from every tier it reads
- *  (process env, global config, settings files): when a channel owns the
- *  session's credential, the flag layer must name each one VERBATIM — an
- *  explicit empty string suppresses the value a lower tier still holds
- *  (R3-1; proved against the native CLI: user settings env is applied OVER
- *  the inherited process env, and only the flag tier outranks it). */
+ *  (process env, global config, settings files). When a channel owns the
+ *  credential the flag layer names each one: an empty string suppresses
+ *  the value a lower tier still holds. */
 const CREDENTIAL_KEYS: readonly string[] = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']
 
 /**
  * Every routing variable to neutralise for one environment: the known
  * names above plus every routing `CLAUDE_CODE_USE_*` spelling it carries
  * (a future flag routes too — blank it, never pass it through). The set is
- * collected BEFORE the child env drops the spellings, so the flag layer
+ * collected before the child env drops the spellings, so the flag layer
  * can re-state exactly what the environment spelled.
  */
 function routingKeysOf(env: Readonly<Record<string, string>>): Set<string> {
@@ -382,53 +357,42 @@ export async function resolveClaudeAuth(
     /** The access token the CLI just refused (a reconnect): refresh unless
      *  dsh-auth already holds a different one. */
     readonly rejected?: string
-    /** The active channel profile's connection (phase 3). When it carries
-     *  anything spawn-shaping, the channel IS the credential: the dsh-auth
-     *  subscription login is never injected alongside it (the user said the
-     *  channel manages this session's connection), the environment's own
-     *  conflicting spellings are replaced, and the flag-settings layer
-     *  re-states the connection so a settings-file env cannot override
-     *  it (see ClaudeChannelConnectionInput above). */
+    /** The active channel profile's connection. When it shapes the spawn,
+     *  the dsh-auth login is never injected alongside it, the environment's
+     *  conflicting spellings are replaced and the flag layer restates the
+     *  connection. */
     readonly channel?: ClaudeChannelConnectionInput
   } = {},
 ): Promise<ClaudeAuthPlan> {
   const env = { ...base }
-  // The channel connection wins over everything user-ambient: its base URL
-  // and token replace any spelling the environment carried (a stale shell
-  // export must not split the pair), and the channel-private env layers on
-  // top. The flag layer repeats the connection — plus, whenever the channel
-  // carries the credential, every credential key and routing blank — so
-  // every OTHER settings key (cc-switch's included) still applies, while no
-  // lower tier can hand an old credential back to the channel's endpoint.
+  // The channel connection wins over the ambient environment: its base URL
+  // and token replace any spelling there (a stale shell export must not
+  // split the pair), and the channel-private env goes on top. The flag
+  // layer repeats the connection (and, when the channel carries the
+  // credential, every credential key and routing blank); other settings
+  // keys still apply.
   const channel = options.channel
   const channelShapesSpawn = channel !== undefined
     && (channel.baseUrl !== undefined || channel.token !== undefined
       || (channel.env !== undefined && Object.keys(channel.env).length > 0))
-  // A channel that names the session's credential: a re-pointed endpoint
-  // and/or its own token. Only then does the isolation run — an env-only
-  // profile (a model mapping with private variables) re-points nothing,
-  // and the ambient credentials must survive it exactly as they were.
+  // Only a channel with an endpoint and/or a token replaces the ambient
+  // credentials; an env-only profile leaves them as they are.
   const channelCarriesCredential = channel !== undefined
     && (channel.baseUrl !== undefined || channel.token !== undefined)
   let channelRouting: ReadonlySet<string> | undefined
   if (channel !== undefined && channelShapesSpawn) {
     if (channel.baseUrl !== undefined) {
-      // The channel's endpoint replaces every spelling the environment
-      // carried; the Files API URL goes with it (pinFirstParty's rule —
-      // the channel owns the whole connection).
+      // The endpoint replaces every spelling; the Files API URL goes too.
       for (const key of BASE_URL_KEYS) deleteAll(env, key)
       env.ANTHROPIC_BASE_URL = channel.baseUrl
     }
     if (channelCarriesCredential) {
-      // The ambient credential spellings were issued for the endpoint the
-      // environment named, and the ambient routing variables would send
-      // the channel's credential somewhere else entirely (a cloud
-      // provider, a socket, a custom OAuth deployment, a headers override)
-      // — all go, in every casing. Deleting the child-env spellings alone
-      // is NOT the defense (R3-1): the CLI re-applies every settings
-      // tier's env OVER the process env, so user settings (cc-switch's)
-      // would hand the old credential right back. The flag layer below
-      // re-states the same blanks at the one tier that outranks it.
+      // Ambient credentials belong to another endpoint, and ambient routing
+      // variables would send the channel's credential elsewhere (a cloud
+      // provider, a socket, a custom OAuth deployment, a headers override):
+      // all go, in every casing. That alone is not enough, because the CLI
+      // applies settings env over the process env; the flag layer below
+      // restates the blanks.
       channelRouting = routingKeysOf(env)
       for (const key of [...channelRouting, ...CREDENTIAL_KEYS]) deleteAll(env, key)
       if (channel.token !== undefined) env.ANTHROPIC_AUTH_TOKEN = channel.token
@@ -457,11 +421,9 @@ export async function resolveClaudeAuth(
     }
   }
   if (channel !== undefined && channelShapesSpawn) {
-    // An explicit helper identity in settings this resolver could read: the
-    // CLI would attach the helper's x-api-key ALONGSIDE the channel
-    // credential (a request can expand both Authorization and x-api-key —
-    // R3-1 binary forensics), and no flag-tier env value can neutralise a
-    // settings FIELD. Refuse (fail closed) rather than send either
+    // An `apiKeyHelper` in settings: the CLI would send the helper's
+    // x-api-key alongside the channel credential, and no flag-tier env value
+    // can neutralise a settings field. Refuse rather than send either
     // credential to the other's host.
     if (channelCarriesCredential && routeSettings !== undefined
       && routeSettings.apiKeyHelper !== undefined && routeSettings.apiKeyHelper !== null && routeSettings.apiKeyHelper !== '') {
@@ -476,15 +438,10 @@ export async function resolveClaudeAuth(
         : set(env, 'ANTHROPIC_AUTH_TOKEN') ? 'auth-token'
           : set(env, 'CLAUDE_CODE_OAUTH_TOKEN') ? 'oauth-env'
             : 'claude-login'
-    // The flag layer (the SDK `settings` option, above user settings): the
-    // endpoint when the channel names one, and — whenever the channel
-    // carries the credential — every credential key VERBATIM (its own
-    // token, or the empty string that suppresses a lower tier's old value)
-    // plus the routing blanks the environment spelled. The channel's own
-    // env wins last: a profile may explicitly model its credential or
-    // routing there. The managed (policy) tier still outranks this layer —
-    // the same documented residual as pinFirstParty; the open-time gate
-    // reads the on-disk policy and fails closed on a non-first-party route.
+    // The flag layer: the endpoint, and when the channel carries the
+    // credential every credential key (its token, or '' to suppress a lower
+    // tier's value) plus the routing blanks. The channel's own env wins
+    // last: a profile may model its credential or routing there.
     const pinned: Record<string, string> = {
       ...(channel.baseUrl === undefined ? {} : { ANTHROPIC_BASE_URL: channel.baseUrl }),
       ...(channelCarriesCredential ? {
@@ -518,11 +475,10 @@ export async function resolveClaudeAuth(
 }
 
 /**
- * A channel connection the session must NOT run on (R3-1 acceptance 3/4):
- * thrown to refuse the start (or the reconnect) — the message is the whole
- * user-facing sentence (what conflicts, where to fix it), never a
- * credential value, and callers fail closed on it instead of falling back
- * to ambient credentials or an anonymous request.
+ * A channel connection the session must not run on: thrown to refuse the
+ * start (or the reconnect). The message is the user-facing sentence (what
+ * conflicts, where to fix it), never a credential value; callers do not
+ * fall back to ambient credentials or an anonymous request.
  */
 export class ClaudeChannelConflictError extends Error {
   constructor(message: string) {
@@ -532,14 +488,12 @@ export class ClaudeChannelConflictError extends Error {
 }
 
 /**
- * Whether an active channel names a NON-first-party endpoint without any
- * credential the profile itself modeled: no token, and no credential-shaped
- * key in its `env` (an explicitly modeled auth — the profile author's own
- * choice, which the pin lets win). Such a spawn is refused (fail closed):
- * the relay request would go out anonymous at best, and at worst carrying
- * a local `claude login` or helper identity the user never chose for that
- * host. A tokenless gateway is not a mode the product ships implicitly; a
- * profile that wants one says so in its `env`.
+ * Whether an active channel names a non-first-party endpoint without any
+ * credential of its own (no token, no credential key in its `env`). Such a
+ * spawn is refused: the relay request would go out anonymous at best, at
+ * worst carrying a local login or helper identity the user never chose for
+ * that host. A profile that really wants a tokenless gateway says so with a
+ * credential key in its `env`.
  */
 export function channelMissingCredential(channel: ClaudeChannelConnectionInput): boolean {
   if (channel.baseUrl === undefined) return false
@@ -577,7 +531,7 @@ export function refreshFailureDebugDetail(error: unknown): string {
   return status === undefined ? 'status unknown' : `HTTP ${status}`
 }
 
-/** The CLI's authentication-failure signatures (design §4.13). */
+/** The CLI's authentication-failure signatures. */
 const LOGIN_REQUIRED = /Please run \/login|Not logged in|Invalid API key|Failed to authenticate|OAuth (access )?token (is invalid|has expired|expired)|authentication_error/iu
 
 /** Whether one SDK message says the credential was refused. */

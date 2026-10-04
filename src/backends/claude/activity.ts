@@ -2,7 +2,7 @@
  * The Claude backend's working-activity fold (the counterpart of the DSH
  * `dsh-working-activity` plugin): the translator's own state
  * (`ClaudeActivityState` — nothing is re-parsed here) plus the permission
- * bridges' parked-prompt signal become ONE working-line value per phase or
+ * bridges' parked-prompt signal become one working-line value per phase or
  * line change, published through the session's `workingActivity` capability
  * to the same store the DSH projection feed fills.
  *
@@ -10,7 +10,7 @@
  *  - a turn works only inside itself — nothing is published before the first
  *    turn, so the classic random-verb spinner keeps its slot unchanged;
  *  - a parked permission/dialog prompt outranks everything (`waiting`: the
- *    model is waiting on YOU);
+ *    model is waiting on you);
  *  - the newest unsettled tool call is the `tool` phase (label = tool name,
  *    detail = the input's most DSH-like short field);
  *  - otherwise `thinking`: the ⏵ self-narration line when the reply
@@ -29,6 +29,7 @@
  */
 import type { WorkingActivityView } from '../../adapter/ports/channel-view.js'
 import { getLang, t } from '../../i18n.js'
+import type { Rec } from './narrow.js'
 import type { ClaudeActivityState } from './translate.js'
 
 /** Input fields that read like the DSH detail fragment, in priority order. */
@@ -36,8 +37,6 @@ const DETAIL_KEYS = ['file_path', 'command', 'pattern', 'url', 'path'] as const
 
 /** The longest detail fragment kept (mirrors the plugin's detail limit). */
 const DETAIL_CHARS = 60
-
-type Rec = Readonly<Record<string, unknown>>
 
 /**
  * The input's most DSH-like short field: the first string among

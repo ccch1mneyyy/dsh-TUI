@@ -1,9 +1,8 @@
 /**
- * Claude Agent SDK → Agent Domain translator (docs/agent-backend-design.md
- * §4.4–§4.8, §5.1, with the Phase 0 corrections): one pure state machine per
+ * Claude Agent SDK → Agent Domain translator: one pure state machine per
  * session that turns the SDK message stream (including the frames the SDK
  * types do not declare — `command_lifecycle`, `session_state_changed`,
- * `thinking_tokens` estimates, design appendix B) into `AgentEvent`s for the
+ * `thinking_tokens` estimates) into `AgentEvent`s for the
  * shared projector. No I/O: the session feeds it messages and the inputs it
  * pushed; fixtures feed it recorded JSON.
  *
@@ -22,6 +21,7 @@ import type { TodoPanelItem } from '../../adapter/ports/channel-view.js'
 import { t } from '../../i18n.js'
 import { claudeToolRole, presentClaudeToolCall, presentClaudeToolResult } from './tools.js'
 import { parseSendMessageInput, sendMessageCallView, sendMessageResultState, sendMessageResultView } from './send-message.js'
+import { arr, num, rec, str, type Rec } from './narrow.js'
 
 /** How confirmed user inputs become user rows. */
 export type ClaudeUserRows =
@@ -37,7 +37,7 @@ export interface ClaudeTranslatorOptions {
   readonly now?: () => number
   readonly debug?: (message: string) => void
   /**
-   * Where a resumed session's numbering continues (design §4.11): the turn
+   * Where a resumed session's numbering continues: the turn
    * and sequence counters the replayed history ended at, and the model it
    * last ran. Live events after a resume must neither reuse a replayed
    * (turn, step) — the projector binds attempts by position — nor a
@@ -49,17 +49,10 @@ export interface ClaudeTranslatorOptions {
     readonly tasks?: readonly ClaudeTaskSeed[] }
 }
 
-type Rec = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Rec | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
-const str = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
-const num = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined
-const arr = (value: unknown): readonly unknown[] => Array.isArray(value) ? value : []
-
 /** User texts the CLI injects that are not human bubbles. */
-const INTERRUPT_ECHO = '[Request interrupted by user'
-const LOCAL_COMMAND_TAG = /^<local-command-(stdout|stderr|caveat)>/u
-const COMMAND_TAG = /^<command-(name|message|args)>/u
+export const INTERRUPT_ECHO = '[Request interrupted by user'
+export const LOCAL_COMMAND_TAG = /^<local-command-(stdout|stderr|caveat)>/u
+export const COMMAND_TAG = /^<command-(name|message|args)>/u
 /** Abort diagnostics the CLI appends to `result.errors` (never shown). */
 const EDE_DIAGNOSTIC = '[ede_diagnostic]'
 /** Command output sent as a prompt (`!!` / the CLI's bash mode). */
@@ -120,6 +113,10 @@ export function formatDuration(ms: number): string {
  * `supersedePendingUpdates`). */
 const MAX_SUPERSEDED_UPDATES = 512
 
+/** Settled API message ids remembered (a late block only ever trails the
+ *  response it belongs to by a few messages). */
+const MAX_SETTLED_ATTEMPTS = 256
+
 /** A task report's usage (`total_tokens`, `tool_uses`, `duration_ms`). */
 function usageOfTask(value: unknown): SubagentUsage | undefined {
   const usage = rec(value)
@@ -173,8 +170,8 @@ export function claudeEmits(type: AgentEventType): boolean {
     // The session's `/color` (prefs-backed, session.ts).
     case 'session.color':
       return true
-    // The SendMessage relay observation (agent-team §5.4) — emitted by this
-    // translator as the call streams and again when its result settles.
+    // The SendMessage relay observation: emitted when the call arrives and
+    // again when its result settles.
     case 'agent.message':
       return true
     // Emitted by the session's permission bridge (permissions.ts), not by
@@ -261,7 +258,7 @@ const NARRATION_CHARS = 120
 
 /**
  * The leading ⏵ self-narration line of a streaming reply, when there is
- * one (the narrate contract puts exactly one at the very top; only a COMPLETE
+ * one (the narrate contract puts exactly one at the very top; only a complete
  * first line counts, so a narration still streaming shows nothing yet). The
  * line is flattened and capped — it is model output destined for a status
  * line, never for re-parsing.
@@ -277,7 +274,7 @@ function narrationOf(text: string | undefined): string | undefined {
 }
 
 /** First text of a user `message.content` (string or block array). */
-function userText(content: unknown): string | undefined {
+export function userText(content: unknown): string | undefined {
   if (typeof content === 'string') return content
   for (const block of arr(content)) {
     const value = rec(block)
@@ -332,11 +329,9 @@ interface TrackedTask {
 }
 
 /**
- * One tracked task as a resumed session hands it to its live translator (R2
- * review: the replayed conversation's task table must continue live — a
- * resumed TaskUpdate names an id the replay already tracked; a fresh empty
- * table would silently drop every such update). Serializable: the replay and
- * the live session are two translator instances.
+ * One tracked task as a resumed session hands it to its live translator (a
+ * resumed TaskUpdate names an id the replay tracked). Serializable: the
+ * replay and the live session are two translator instances.
  */
 export interface ClaudeTaskSeed {
   readonly id: string
@@ -347,9 +342,9 @@ export interface ClaudeTaskSeed {
   readonly seq: number
 }
 
-/** One optimistic TaskUpdate patch awaiting its result (R6 review, RV
- *  follow-up): only the fields the input named — an unspecified field keeps
- *  whatever the record had when the patch is applied or replayed. */
+/** One optimistic TaskUpdate patch awaiting its result: only the fields the
+ *  input named; the others keep whatever the record has when the patch is
+ *  applied or re-applied. */
 interface TaskPatch {
   readonly id: string
   readonly subject?: string
@@ -399,7 +394,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   let step = 0
   let stepOpen = false
   let attempt: OpenAttempt | undefined
-  /** API message ids already settled (late duplicate blocks are ignored). */
+  /** API message ids already settled (late duplicate blocks are ignored);
+   *  only the most recent {@link MAX_SETTLED_ATTEMPTS} are remembered. */
   const settledAttempts = new Set<string>()
   const openCalls = new Map<string, { readonly name: string; readonly input: unknown; readonly turn: number; readonly lane?: string }>()
   const inputs = new Map<string, RegisteredInput>()
@@ -449,7 +445,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   /** The session's plan-tracking tasks (the Task* family), projected onto
    *  the shared todo panel as full `todo.write` snapshots. */
   const trackedTasks = new Map<string, TrackedTask>()
-  /** Each task's CONFIRMED base: seeds, create / get / list results, updates
+  /** Each task's confirmed base: seeds, create / get / list results, updates
    *  whose results came back successful — never an optimistic write. A
    *  failed update rolls the view back here (with the still-pending patches
    *  re-applied), so a failure can neither hide behind a newer success nor
@@ -457,9 +453,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   const taskBases = new Map<string, TaskBase>()
   /** Task creation counter: the snapshots' row order. */
   let taskSeq = 0
-  // The resumed conversation's tasks start as the live table (R2 review):
-  // each translator owns its own Maps, so two sessions seeded from the same
-  // replay never share one.
+  // A resumed conversation's tasks start the live table (copied: two
+  // sessions seeded from one replay never share a record).
   for (const seed of options.start?.tasks ?? []) {
     const record: TrackedTask = {
       content: seed.content,
@@ -489,47 +484,29 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     items: [...trackedTasks.entries()].sort((a, b) => a[1].seq - b[1].seq).map(([, task]) => ({ content: task.content, status: task.status })),
   })
 
-  /** One optimistic TaskUpdate patch awaiting its result, by its call id
-   *  (issue order — a Map iterates in insertion order). */
-  const taskPatches = new Map<string, TaskPatch>()
-  /** Update call ids whose optimistic patches a later authoritative fact
-   *  discarded (a TaskList / TodoWrite result, a conversation reset — RV
-   * follow-up): a late SUCCESS for one must not fabricate a task the
-   * authority already ruled away, so its result drops whole (no base
-   * commit, no unknown-id completion, no recompute). Consumed by its own
-   * result; refilled only with the calls still in flight. */
+  /** Every TaskUpdate call (with a task id) awaiting its result, in issue
+   *  order: the optimistic patch it applied, or null when its id was not
+   *  tracked at the time. Capped FIFO: an evicted call's result has been
+   *  absent a long while. */
+  const pendingUpdates = new Map<string, TaskPatch | null>()
+  /** Update calls a later authoritative fact discarded (a TaskList or
+   *  TodoWrite result, a conversation reset): a late success must not
+   *  fabricate a task the authority ruled away, so the result is dropped
+   *  whole (no commit, no unknown-id completion). Capped FIFO. */
   const supersededUpdates = new Set<string>()
-  /** EVERY in-flight TaskUpdate call id — known-patch or UNKNOWN id (a
-   *  resumed/compacted table tracks ids the update still names; RV round
-   * 4): an authority that rules the table away supersedes these calls too,
-   * or their late successes would fabricate tasks through the unknown-id
-   * completion. Consumed by the call's own result. */
-  const inFlightUpdates = new Set<string>()
 
-  /** Remember one update call as in flight (capped FIFO, like the
-   *  superseded set: an evicted call's result has been absent a long
-   *  while). */
-  const noteInFlightUpdate = (callId: string): void => {
-    inFlightUpdates.add(callId)
-    if (inFlightUpdates.size > MAX_SUPERSEDED_UPDATES) {
-      const oldest = inFlightUpdates.values().next().value
-      if (oldest !== undefined) inFlightUpdates.delete(oldest)
-    }
+  const addCapped = <K, V>(map: Map<K, V>, key: K, value: V): void => {
+    map.set(key, value)
+    if (map.size > MAX_SUPERSEDED_UPDATES) map.delete(map.keys().next().value!)
   }
 
-  /** Move every in-flight update call id (known patch or unknown id) into
-   *  the superseded set — their authority has discarded them. Capped FIFO:
-   *  an evicted call's result has been absent a long while, and the cap
-   *  keeps a pathological session from growing the set without bound. */
+  /** The authority discarded every pending update. */
   const supersedePendingUpdates = (): void => {
-    for (const callId of inFlightUpdates) {
+    for (const callId of pendingUpdates.keys()) {
       supersededUpdates.add(callId)
-      if (supersededUpdates.size > MAX_SUPERSEDED_UPDATES) {
-        const oldest = supersededUpdates.values().next().value
-        if (oldest !== undefined) supersededUpdates.delete(oldest)
-      }
+      if (supersededUpdates.size > MAX_SUPERSEDED_UPDATES) supersededUpdates.delete(supersededUpdates.values().next().value!)
     }
-    inFlightUpdates.clear()
+    pendingUpdates.clear()
   }
 
   /** A patch applied to a record: unspecified fields keep theirs (a delete,
@@ -563,14 +540,14 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
 
   /** Recompute one task's view — its confirmed base with every still-pending
    *  patch re-applied in issue order — and announce the table when it
-   *  changed. This is the rollback (a failure restores the CONFIRMED base,
+   *  changed. This is the rollback (a failure restores the confirmed base,
    *  never a whole-record pre-image: that let failures hide behind newer
    *  successes and resurrect confirmed deletes) and the post-commit refresh
    *  (an earlier rollback may have wiped a patch whose success just landed). */
   const recomputeTask = (out: AgentEvent[], id: string): void => {
     const base = baseRecord(taskBases.get(id))
     let record: TrackedTask | undefined = base === undefined ? undefined : { ...base }
-    for (const patch of taskPatches.values()) if (patch.id === id) record = applyPatch(record, patch)
+    for (const patch of pendingUpdates.values()) if (patch !== null && patch.id === id) record = applyPatch(record, patch)
     const current = trackedTasks.get(id)
     if (record === undefined) {
       if (current === undefined) return
@@ -640,6 +617,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     if (open === undefined) return
     attempt = undefined
     settledAttempts.add(open.id)
+    if (settledAttempts.size > MAX_SETTLED_ATTEMPTS) settledAttempts.delete(settledAttempts.values().next().value!)
     // A reply that narrated keeps the working line narrating until the turn
     // ends (the fold's freshness window is the turn itself). A streamed
     // response never re-delivers its blocks; the settled message carries them.
@@ -679,7 +657,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     out.push({ type: 'step.start', turn, step })
     out.push({ type: 'assistant.attempt.start', attemptId: id, turn, step, ...(model === undefined ? {} : { model }) })
     // `message_start.model` is the CLI's own confirmation of the model a
-    // request ran on (design §4.10): an in-place switch shows up here first.
+    // request ran on: an in-place switch shows up here first.
     if (model !== undefined && model !== '' && currentModel !== '' && model !== currentModel) {
       currentModel = model
       out.push({ type: 'model.changed', model, source: 'settings' })
@@ -695,8 +673,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   const confirmInput = (out: AgentEvent[], uuid: string): void => {
     const input = inputs.get(uuid)
     if (pending.delete(uuid)) out.push({ type: 'pending.changed', items: [...pending.values()], claimed: [uuid] })
-    // Started while a turn is open = folded into that turn (Phase 0 P2-1):
-    // a user row, no new turn. Only an input this session pushed makes the
+    // Started while a turn is open = folded into that turn: a user row, no
+    // new turn. Only an input this session pushed makes the
     // turn the user's: an unknown uuid (another client's, a CLI-internal
     // command) opens a system turn.
     if (input === undefined) {
@@ -850,7 +828,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
 
   /**
    * The subagent an `Agent` / `Task` call delegates to, pre-created from the
-   * call itself (design §4.8: the call arrives before `task_started`): keyed
+   * call itself (the call arrives before `task_started`): keyed
    * by the call id until `task_started` names the subagent.
    */
   const delegation = (callId: string, input: unknown): AgentEvent => {
@@ -922,8 +900,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           ...(presentation === undefined ? {} : { presentation }),
         })
         if (claudeToolRole(name) === 'subagent') out.push(delegation(callId, block.input))
-        // agent-team §5.4: a SendMessage the SUBAGENT issued observes as a
-        // relay from that lane (the delegating call id names the sender).
+        // A SendMessage the subagent issued is a relay from that lane (the
+        // delegating call id names the sender).
         if (name === 'SendMessage') {
           const parsed = parseSendMessageInput(block.input)
           if (parsed !== undefined) out.push({ type: 'agent.message', message: sendMessageCallView({ callId, lane, input: parsed, observedAt: now() }) })
@@ -961,9 +939,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           ...(presentation === undefined ? {} : { presentation }),
           parentCallId: lane,
         })
-        // agent-team §5.4: settle the lane's SendMessage observation from
-        // its result — an explicit error is a refusal, an unrecognized
-        // result stays 'unknown', never a guessed delivery.
+        // Settle the lane's SendMessage from its result: an error is a
+        // refusal, anything unrecognized stays 'unknown'.
         if (call?.name === 'SendMessage') {
           out.push({ type: 'agent.message', message: sendMessageResultView({ callId, observedAt: now(), state: sendMessageResultState({ isError, structured: undefined }) }) })
         }
@@ -1035,8 +1012,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
             ...(presentation === undefined ? {} : { presentation }),
           })
           if (claudeToolRole(name) === 'subagent') out.push(delegation(callId, input))
-          // agent-team §5.4: the PARENT's own SendMessage observes as a relay
-          // from the parent (no from id — the sender is the session itself).
+          // The session's own SendMessage is a relay from the parent (no
+          // sender id).
           if (name === 'SendMessage') {
             const parsed = parseSendMessageInput(input)
             if (parsed !== undefined) out.push({ type: 'agent.message', message: sendMessageCallView({ callId, input: parsed, observedAt: now() }) })
@@ -1052,18 +1029,15 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
               })
               out.push({ type: 'todo.write', items: todos })
             } else if (name === 'TaskUpdate') {
-              // The input is the patch, applied when the call is seen; the
-              // patch itself waits for the result (R6 review: a FAILED
-              // update rolls back to the confirmed base — the CLI promises
-              // no corrective read).
+              // The input is the patch, applied when the call is seen; it
+              // stays pending until the result: a failed update rolls back
+              // to the confirmed base (the CLI sends no corrective read).
               const patch = rec(input)
               const id = str(patch?.taskId)
               const known = id === undefined ? undefined : trackedTasks.get(id)
-              // Every id-bearing update call is in flight, tracked or not —
-              // an authority that empties the table supersedes it all the
-              // same (see inFlightUpdates).
-              if (id !== undefined) noteInFlightUpdate(callId)
-              if (id !== undefined && known !== undefined) {
+              if (id !== undefined && known === undefined) {
+                addCapped(pendingUpdates, callId, null)
+              } else if (id !== undefined && known !== undefined) {
                 const applied: TaskPatch = {
                   id,
                   ...(str(patch?.subject) === undefined ? {} : { subject: str(patch?.subject) }),
@@ -1071,10 +1045,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
                   ...(str(patch?.activeForm) === undefined ? {} : { activeForm: str(patch?.activeForm) }),
                   deleted: patch?.status === 'deleted',
                 }
-                taskPatches.set(callId, applied)
-                // A partial update keeps the fields it does not mention —
-                // the CLI's own spinner keeps showing the remembered
-                // activeForm, and so does the working line's phrase.
+                addCapped(pendingUpdates, callId, applied)
+                // A partial update keeps the fields it does not mention.
                 const updated = applyPatch(known, applied)
                 if (updated === undefined) trackedTasks.delete(id)
                 else trackedTasks.set(id, updated)
@@ -1121,7 +1093,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
       return block?.type === 'tool_result' ? [block] : []
     })
     if (results.length > 0) {
-      // The open attempt is NOT settled here: the CLI drains finished tool
+      // The open attempt is not settled here: the CLI drains finished tool
       // results while the same API message is still streaming (parallel
       // calls), so a later block of that message — another tool_use, more
       // text, the closing usage — still belongs to it. It settles on
@@ -1135,10 +1107,9 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         if (callId === undefined) continue
         const call = openCalls.get(callId)
         openCalls.delete(callId)
-        // A TaskUpdate the CLI refused reports failure in its structured
-        // result (`success:false`) without always setting the block's
-        // `is_error` (R6 review): the call failed all the same — say so, so
-        // the suppressed card's failure path and the rollback both fire.
+        // A TaskUpdate the CLI refused may say so only in its structured
+        // result (`success:false`, no `is_error`): it failed all the same,
+        // so the failure card and the rollback both fire.
         const isError = block.is_error === true || (call !== undefined && call.name === 'TaskUpdate' && rec(structured)?.success === false)
         const rawText = toolResultText(block.content)
         if (call !== undefined && claudeToolRole(call.name) === 'plan') {
@@ -1168,74 +1139,58 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           ...(structured === undefined ? {} : { structured }),
           ...(presentation === undefined ? {} : { presentation }),
         })
-        // agent-team §5.4: settle the parent's SendMessage observation from
-        // its result — only an explicit structured field or an error marks
-        // more than 'unknown'; a bare success proves nothing.
+        // Settle the parent's SendMessage from its result: only an explicit
+        // structured field or an error says more than 'unknown'.
         if (call?.name === 'SendMessage') {
           out.push({ type: 'agent.message', message: sendMessageResultView({ callId, observedAt: now(), state: sendMessageResultState({ isError, structured }) }) })
         }
         // Every settled main-lane result is one tool done this turn (the
         // working line's toolCount; plan-mode tools continue'd above).
         toolResults += 1
-        // A TaskUpdate result settles its optimistic patch (R6 review, RV
-        // follow-up): a failure (`is_error`, or the in-contract
-        // `success:false`) rolls the task's view back to its CONFIRMED base
-        // — newer successes are already part of that base, so the failure
-        // neither hides behind them nor resurrects a confirmed delete; a
-        // success commits the patch into the base.
+        // A TaskUpdate result settles its optimistic patch: a failure
+        // (`is_error`, or `success:false`) rolls the task's view back to its
+        // confirmed base — newer successes are already part of that base, so
+        // the failure neither hides behind them nor resurrects a confirmed
+        // delete; a success commits the patch into the base.
         if (call !== undefined && call.name === 'TaskUpdate') {
-          inFlightUpdates.delete(callId)
+          const applied = pendingUpdates.get(callId) ?? undefined
+          pendingUpdates.delete(callId)
           if (supersededUpdates.delete(callId)) {
-            // An authoritative fact (a List/TodoWrite result, a reset)
-            // already discarded this call's optimistic patch: its late
-            // result drops whole — the unknown-id completion below is for
-            // fresh facts, and committing here would fabricate a task the
-            // authority ruled away (RV follow-up).
             debug(`claude: superseded TaskUpdate result dropped (${callId})`)
-          } else {
-            const applied = taskPatches.get(callId)
-            taskPatches.delete(callId)
-            if (isError || rec(structured)?.success === false) {
-              if (applied !== undefined) recomputeTask(out, applied.id)
-            } else if (applied === undefined) {
-            // A successful update of an id this table never tracked (R2
-            // review): the resumed transcript's structured results can be
-            // gone (the read API drops them; a compaction may cut the
-            // creating turn away) — the confirmed patch still proves the
-            // task exists, so the table completes from the patch itself,
-            // naming only the id the patch named (never a guess).
-              const patch = rec(call.input)
-              const record = rec(structured)
-              const id = str(patch?.taskId) ?? str(record?.taskId)
-              const status = panelStatus(patch?.status) ?? panelStatus(rec(record?.statusChange)?.to)
-              if (id !== undefined && status !== undefined && !trackedTasks.has(id)) {
-                const completed: TrackedTask = {
-                  content: str(patch?.subject) ?? t('claude-task-unnamed', { id }),
-                  status,
-                  ...(str(patch?.activeForm) === undefined ? {} : { activeForm: str(patch?.activeForm) }),
-                  seq: ++taskSeq,
-                }
-                trackedTasks.set(id, completed)
-                taskBases.set(id, completed)
-                out.push(taskSnapshot())
+          } else if (isError || rec(structured)?.success === false) {
+            if (applied !== undefined) recomputeTask(out, applied.id)
+          } else if (applied === undefined) {
+            // A successful update of an id this table never tracked: a
+            // resumed transcript can lack the structured results (the read
+            // API drops them; a compaction may cut the creating turn away).
+            // The confirmed patch still proves the task exists, so the table
+            // completes from the patch itself, naming only that id.
+            const patch = rec(call.input)
+            const record = rec(structured)
+            const id = str(patch?.taskId) ?? str(record?.taskId)
+            const status = panelStatus(patch?.status) ?? panelStatus(rec(record?.statusChange)?.to)
+            if (id !== undefined && status !== undefined && !trackedTasks.has(id)) {
+              const completed: TrackedTask = {
+                content: str(patch?.subject) ?? t('claude-task-unnamed', { id }),
+                status,
+                ...(str(patch?.activeForm) === undefined ? {} : { activeForm: str(patch?.activeForm) }),
+                seq: ++taskSeq,
               }
-            } else {
-              commitPatch(applied)
-              // An earlier rollback may have wiped this patch from the view.
-              recomputeTask(out, applied.id)
+              trackedTasks.set(id, completed)
+              taskBases.set(id, completed)
+              out.push(taskSnapshot())
             }
+          } else {
+            commitPatch(applied)
+            // An earlier rollback may have wiped this patch from the view.
+            recomputeTask(out, applied.id)
           }
         }
-        // A legacy TodoWrite result replaced the CLI's whole plan list (RV
-        // follow-up: the WHOLE-list authority): the stale Task* view goes
-        // with its patches and bases — leaving it would let a later update
-        // of a stale id repaint the panel from a dead table and then empty
-        // it (the recompute finds no base). Its pending patches are moot (a
-        // later result — success or failure — must not repaint the legacy
-        // list either).
+        // A TodoWrite result replaces the CLI's whole plan list: the Task*
+        // table, its bases and its pending updates go (a later update of a
+        // stale id must not repaint the panel from a dead table).
         if (call !== undefined && !isError && call.name === 'TodoWrite') {
           supersedePendingUpdates()
-          taskPatches.clear()
           taskBases.clear()
           trackedTasks.clear()
         }
@@ -1278,11 +1233,9 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
                 trackedTasks.set(id, task)
                 taskBases.set(id, task)
               }
-              // The authoritative list superseded every pending patch: a
-              // result arriving after it — failure OR late success — must
-              // not move the table off this truth.
+              // The list supersedes every pending patch: a result arriving
+              // after it, failure or late success, must not move the table.
               supersedePendingUpdates()
-              taskPatches.clear()
               out.push(taskSnapshot())
             }
           } else if (call.name === 'TaskGet') {
@@ -1336,8 +1289,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     const subtype = str(message.subtype)
     const terminal = str(message.terminal_reason)
     const isError = message.is_error === true
-    // Phase 0 correction: a `now`-interrupted turn is `subtype:'success'` with
-    // `terminal_reason:'aborted_*'` — the terminal reason decides first.
+    // A `now`-interrupted turn is `subtype:'success'` with
+    // `terminal_reason:'aborted_*'`: the terminal reason decides first.
     let reason: TurnEndReason
     if (terminal === 'aborted_streaming' || terminal === 'aborted_tools') reason = { kind: 'aborted' }
     else if (subtype === 'error_max_turns' || subtype === 'error_max_budget_usd' || subtype === 'error_max_structured_output_retries') reason = { kind: 'blocked', detail: subtype }
@@ -1479,8 +1432,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           // Completes the subagent the `Agent` call pre-created (same lane).
           return [{ type: 'subagent.start', agentId: taskId, ...(callId === undefined ? {} : { parentCallId: callId }), description, ...(str(message.subagent_type) === undefined ? {} : { kind: str(message.subagent_type) }), background, ...(depth === undefined ? {} : { depth }), time: now() }]
         }
-        // Phase 0 correction: a foreground Bash that runs ~3s also reports
-        // `task_started{is_backgrounded:false}` — not a background job.
+        // A foreground Bash that runs ~3s also reports
+        // `task_started{is_backgrounded:false}`: not a background job.
         if (!background) {
           taskKinds.set(taskId, 'foreground')
           return []
@@ -1679,28 +1632,22 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   }
 
   /**
-   * The conversation this translator tracked is gone (R2 review): the CLI
-   * continues under a new session id with a cleared context, so the old
-   * conversation's plan-tracking tasks, its pending optimistic patches, its
-   * unsettled main-lane tool contexts and its expectation markers must not
-   * leak into the new one (the CLI reuses short task ids, so a stale table
-   * could even mismatch a fresh TaskCreate). Kept: the queued-inputs
-   * contract (inputs this session pushed still run), the monotonic turn /
-   * seq numbering (the projector binds by position), and the identities of
-   * unended background process tasks — a backgrounded command or subagent
-   * outlives the reset and its notification still arrives.
+   * The conversation is gone (a reset): the CLI continues under a new
+   * session id with a cleared context, so the old conversation's tasks,
+   * pending patches, unsettled main-lane calls and expectation markers must
+   * not leak into the new one (the CLI reuses short task ids). Kept: the
+   * queued inputs (they still run), the monotonic turn / seq numbering (the
+   * projector binds by position), and background tasks that have not ended
+   * (their notification still arrives).
    */
   const resetConversation = (): void => {
     trackedTasks.clear()
     taskBases.clear()
     taskSeq = 0
-    // The old conversation's in-flight updates (known patch or unknown
-    // id) are superseded — a result that raced the reset must not
-    // fabricate a task in the new conversation; the set itself starts
-    // fresh, only those in-flight calls riding along (capped).
+    // A result of the old conversation's pending updates that races the
+    // reset must not fabricate a task in the new one.
     supersededUpdates.clear()
     supersedePendingUpdates()
-    taskPatches.clear()
     for (const [callId, call] of openCalls) if (call.lane === undefined) openCalls.delete(callId)
     deniedReasons.clear()
     settledAttempts.clear()
@@ -1848,16 +1795,21 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     /** The working-activity fold's inputs (see ClaudeActivityState): the
      *  translator's own view of the stream, nothing re-parsed. */
     activityState(): ClaudeActivityState {
-      // Only THIS turn's calls: a call the turn left unsettled is stale (the
-      // CLI moved on), so the working line never shows the last turn's tool.
-      const newest = [...openCalls.entries()].filter(([, call]) => call.turn === turn).at(-1)
-      const inProgress = [...trackedTasks.values()]
-        .filter(task => task.status === 'in_progress' && task.activeForm !== undefined && task.activeForm !== '')
-        .sort((a, b) => a.seq - b.seq)[0]
+      // Read after every streamed delta: plain scans, no copies. Only this
+      // turn's calls count: a call the turn left unsettled is stale (the CLI
+      // moved on), so the working line never shows the last turn's tool.
+      let newest: { readonly name: string; readonly input: unknown } | undefined
+      for (const call of openCalls.values()) if (call.turn === turn) newest = call
+      // The first-created in_progress task that has a spinner line.
+      let inProgress: TrackedTask | undefined
+      for (const task of trackedTasks.values()) {
+        if (task.status !== 'in_progress' || task.activeForm === undefined || task.activeForm === '') continue
+        if (inProgress === undefined || task.seq < inProgress.seq) inProgress = task
+      }
       return {
         turnOpen,
         turnStartedAt: turnTime,
-        openTool: newest === undefined ? undefined : { name: newest[1].name, input: newest[1].input },
+        openTool: newest === undefined ? undefined : { name: newest.name, input: newest.input },
         toolCount: toolResults,
         activeForm: inProgress?.activeForm,
         narration: attempt === undefined ? narrated : narrationOf(attempt.streamText !== '' ? attempt.streamText : attempt.text) ?? narrated,

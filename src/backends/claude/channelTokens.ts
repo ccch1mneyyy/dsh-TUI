@@ -1,5 +1,5 @@
 /**
- * The credential seam of the Claude channel profiles (phase 3): channel
+ * The credential seam of the Claude channel profiles: channel
  * tokens live in the DSH credential store — the same `~/.dsh/.credentials.yaml`
  * (0600) the /provider wizard writes through the dsh credentials service
  * (providerWizard.ts's deriveKeyRef convention) — and channels.json holds
@@ -7,16 +7,14 @@
  *
  * This module is a direct, host-side file view of that store (the Claude
  * backend has no cordis context to resolve `ctx.get('credentials')` from).
- * The store is edited through a REAL YAML document parser (`yaml`, already
- * a runtime dependency): the top-level `refs` mapping is located semantically
- * — block or flow (inline) style, quoted keys included — foreign fields,
- * comments and multiline scalars keep their meaning, and every commit must
- * parse back clean before it is allowed to replace the file (R3-3: the old
- * line-append once turned a legal `refs: { A: b }` into a duplicate top-level
- * `refs:` key, corrupting the shared library for every strict parser). A
- * store this module cannot honestly read — unreadable, or not valid YAML —
- * is never rebuilt over: reads answer undefined and writes refuse.
- * Commits stay atomic (channels.ts's temp+rename pattern).
+ * The store is edited through a YAML document parser (`yaml`): the top-level
+ * `refs` mapping is found in block or flow style, quoted keys included;
+ * foreign fields, comments and multiline scalars keep their meaning, and a
+ * commit must parse back clean before it replaces the file (the store is
+ * shared with the host, so a duplicate `refs:` key would break it for every
+ * strict reader). A store that cannot be read or does not parse is never
+ * rebuilt over: reads answer undefined and writes refuse.
+ * Commits are atomic (atomic-file.ts).
  * The ref namespace is `CHANNEL_<SLUG>_TOKEN` — derived from the channel id
  * the way deriveKeyRef derives `<ROUTE>_API_KEY`, so a re-import (or a hand
  * edit of the name's slug) refreshes the same credential row.
@@ -25,10 +23,11 @@
  * contract): this module only ever moves it between the file and the spawn
  * pipeline.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isMap, parseDocument, type Document, type YAMLMap } from 'yaml'
 import { dshHomeDir } from '../../utils/credentials.js'
+import { writeFileAtomic } from './atomic-file.js'
 
 /** The credential ref of one channel id (the deriveKeyRef convention:
  *  uppercase, runs of non-alphanumerics → `_`). */
@@ -57,11 +56,9 @@ const FILE = '.credentials.yaml'
 export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (message: string) => void = () => undefined): ClaudeChannelTokens {
   const path = join(home, FILE)
 
-  /** Parse the store into a YAML document. `undefined` = this module refuses
-   *  to interpret (let alone rewrite) what it cannot honestly read: an
-   *  unreadable file, or one that does not parse (a damaged or
-   *  duplicate-keyed library must never be rebuilt over — R3-3). An absent
-   *  file parses as an empty document, so the first write can create it. */
+  /** Parse the store into a YAML document; undefined for a file that
+   *  cannot be read or does not parse (never rebuilt over). An absent file
+   *  parses as an empty document, so the first write can create it. */
   const load = (): Document | undefined => {
     let text: string
     try {
@@ -91,22 +88,12 @@ export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (mes
   }
 
   const commit = (next: string): void => {
-    const temporary = join(home, FILE + '.' + process.pid + '.' + Date.now() + '.tmp')
     try {
-      mkdirSync(home, { recursive: true })
-      writeFileSync(temporary, next, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-      try { chmodSync(temporary, 0o600) } catch { /* best-effort on odd filesystems */ }
-      renameSync(temporary, path)
+      writeFileAtomic(home, FILE, next)
     } catch (error) {
-      try {
-        rmSync(temporary, { force: true })
-      } catch {
-        // The previous document is still intact; nothing else is safe to do.
-      }
       debug('claude: channel token write failed (' + (error instanceof Error ? error.message : String(error)) + ')')
     }
   }
-
   return {
     read: ref => {
       const doc = load()
@@ -130,8 +117,7 @@ export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (mes
       else refs.set(ref, value)
       // lineWidth 0: a token is one scalar and must never be line-folded.
       const next = doc.toString({ lineWidth: 0 })
-      // Self-check: nothing leaves this module unless it parses back clean
-      // — R3-3's duplicate-refs class of corruption cannot be committed.
+      // Nothing is committed unless it parses back clean.
       if (parseDocument(next).errors.length > 0) {
         debug('claude: channel token write self-check failed; refusing to commit')
         return
@@ -166,9 +152,4 @@ export function memoryClaudeChannelTokens(initial: Record<string, string> = {}):
     erase: ref => { const next: Record<string, string> = {}; for (const [key, value] of Object.entries(data)) if (key !== ref) next[key] = value; data = next },
     declared: ref => Object.hasOwn(data, ref),
   }
-}
-
-/** Whether the DSH credential store file exists at all (diagnostics only). */
-export function claudeChannelTokensFilePresent(home: string = dshHomeDir()): boolean {
-  return existsSync(join(home, FILE))
 }

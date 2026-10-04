@@ -1,10 +1,9 @@
 /**
- * Session-catalog benchmark (docs/agent-backend-design.md §4.11, §8.5 Gate):
- * how long the SDK's `listSessions` takes over synthetic Claude config trees
- * of 0 / 10 / 100 / 500 sessions, for one project (`{dir}`) and for every
- * project (no `dir`), cold (the first call of a fresh process) and warm (the
- * median of the next calls). Gate: 500 sessions ≤ 300 ms warm for the
- * project listing the browser paints first.
+ * Session-catalog benchmark: how long the SDK's `listSessions` takes over
+ * synthetic Claude config trees of 0 / 10 / 100 / 500 sessions, for one
+ * project (`{dir}`) and for every project (no `dir`), cold (the first call of
+ * a fresh process) and warm (the median of the next calls). Gate: 500
+ * sessions ≤ 300 ms warm for the project listing the browser paints first.
  *
  * The trees are built from one committed redacted transcript
  * (`scripts/fixtures/claude/disk/bench-transcript.jsonl`): each copy gets its own

@@ -1,10 +1,9 @@
 /**
- * One Claude Agent session (docs/agent-backend-design.md §4.4, §4.7, §4.13):
- * a single long-lived streaming-input `query()` per session, fed by a
+ * One Claude Agent session: a single long-lived streaming-input `query()` per session, fed by a
  * push-based inbox, consumed by one loop that translates every SDK message
  * and hands the batch to the channel.
  *
- * - Input placement (Phase 0 correction): `steer` → `priority:'next'` (joins
+ * - Input placement: `steer` → `priority:'next'` (joins
  *   the running turn after its tool round), `followup` → `priority:'later'`
  *   while a turn runs (a plain push when idle), `now` → `priority:'now'`;
  *   `uuid` = the channel's `clientMessageId`, so lifecycle frames and echoes
@@ -16,13 +15,13 @@
  *   Until a `result`/`idle` confirms, a 30 s timer stands by to force-close
  *   the turn (`turn.end{aborted}` + notice): an interrupted turn may never
  *   report.
- * - Permissions (Phase 3): the permission bridge (`permissions.ts`) parks
+ * - Permissions: the permission bridge (`permissions.ts`) parks
  *   every `canUseTool` prompt and announces it as `permission.request` /
  *   `question.request`; the user's answer returns through the
  *   `permissions` / `questions` capabilities. While prompts are parked the
  *   session is `requires-action`. Pending prompts are always settled: on
  *   answer, on the SDK's abort signal, at a forced turn close, on dispose.
- * - MCP elicitation and the CLI's user dialogs (Phase 5b, dialogs.ts) park
+ * - MCP elicitation and the CLI's user dialogs (dialogs.ts) park
  *   the same way (`question.request`), answered through the same
  *   `questions` capability; `system/elicitation_complete` closes a URL one.
  * - A `conversation_reset` (a plan-mode exit that clears the context) moves
@@ -64,7 +63,9 @@ import { envSlotsServeModel, importedModelEnv, mergedModelEnv, modelTruthFrom, r
 import { claudeConfigDir } from './transcript-file.js'
 import { CLAUDE_IMAGE_LIMITS, claudeImageBlocks } from './images.js'
 import { createClaudeSideQuery } from './side-query.js'
+import { writeFlagSettingsFile, type FlagSettingsFile } from './flag-settings.js'
 import { createClaudeTranslator } from './translate.js'
+import { errorText, rec, type Rec } from './narrow.js'
 
 declare module '../../agent/capabilities.js' {
   interface ClaudeNative {
@@ -93,7 +94,7 @@ const REAL_CLOCK: ClaudeClock = {
 }
 
 /** The subagent transcript's newest page (messages); older windows of the
- *  same size load on demand (design agent-team-panels §2, MVP pagination). */
+ *  same size load on demand. */
 const SUBAGENT_TRANSCRIPT_PAGE = 400
 
 export interface ClaudeSessionDeps {
@@ -104,7 +105,7 @@ export interface ClaudeSessionDeps {
   readonly cwd: string
   readonly sessionId: string
   /**
-   * Resume this persisted session instead of creating one (design §4.11):
+   * Resume this persisted session instead of creating one:
    * its replayed transcript is the session's `history()`, the first run
    * passes `resume` (never `sessionId`), and live numbering continues where
    * the replay ended.
@@ -115,7 +116,7 @@ export interface ClaudeSessionDeps {
   /** The child environment when no credential plan is given (tests). */
   readonly env: Record<string, string>
   /** The credential the session spawns with and how to renew it after an
-   *  authentication failure (design §4.12; auth.ts). */
+   *  authentication failure (auth.ts). */
   readonly auth?: {
     readonly plan: ClaudeAuthPlan
     /** A fresh plan; `rejected` is the token the CLI just refused (renew it
@@ -156,10 +157,9 @@ export interface ClaudeSessionDeps {
 }
 
 type Listener = (batch: readonly AgentEvent[], meta: AgentEventMeta) => void
-type Rec = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Rec | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
-const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
+
+/** A failed credential renewal, carrying only its user-facing sentence. */
+class RenewalFailed extends Error {}
 
 /** The CLI's answer to `resume` of a session it has no transcript for. */
 const NO_CONVERSATION = /No conversation found with session ID/iu
@@ -199,7 +199,7 @@ function createInbox<T>() {
   }
 }
 
-/** Renderer urgency of one translated message (design §3.3 `wake`). */
+/** Renderer urgency of one translated message. */
 function wakeOf(message: unknown, events: readonly AgentEvent[]): AgentEventMeta['wake'] {
   const value = rec(message)
   if (value?.type === 'stream_event' && rec(value.event)?.type === 'content_block_delta') return 'frame'
@@ -259,23 +259,22 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   let forceTimer: unknown
   /** The credential plan the live query runs on. */
   let authPlan: ClaudeAuthPlan = deps.auth?.plan ?? { source: 'claude-login', env: deps.env }
-  /** The model-routing env the CLI child actually applies for the live
-   *  run: the settings `env` of its config dir with the live auth-plan env
-   *  on top, in the CLI's own flag > settings > inherited order (the same
-   *  merged truth the model list reads — modelEnv.ts). Read per run, so a
-   *  reconnect's renewed plan is what the next child applies. */
+  /** The CLI's config directory under the live plan's environment. */
+  const configDir = (): string => claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env)
+  /** The model-routing env the CLI child applies (modelEnv.ts), read per
+   *  run so a reconnect's renewed plan counts. */
   const childModelEnv = (): Record<string, string | undefined> => mergedModelEnv(
-    claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
+    configDir(),
     authPlan.env,
     new Set(Object.keys(authPlan.settings?.env ?? {})),
   )
   /** Automatic reconnects after an authentication failure since the last
-   *  successful turn (design §4.12: one, then the user is sent to /login). */
+   *  successful turn (one; after that the user is sent to /login). */
   let authAttempts = 0
   let authFailed = false
   /**
    * The CLI wrote this session's transcript (an input started, or a turn
-   * reported its result). Until then a restart must CREATE the session with
+   * reported its result). Until then a restart must create the session with
    * the same id: `resume` of an id the CLI has no transcript for fails its
    * handshake ("No conversation found").
    */
@@ -300,8 +299,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     cwd: deps.cwd,
     userRows: 'lifecycle',
     debug: deps.host.debug,
-    // The replayed conversation's task table continues live (R2 review):
-    // resume carries it beside the counters the numbering needs.
+    // A resumed session continues the replay's numbering and task table.
     ...(resume === undefined ? {} : { start: { ...resume.start, ...(resume.tasks === undefined || resume.tasks.length === 0 ? {} : { tasks: resume.tasks }) } }),
   })
   translator.noteMode(deps.start.mode)
@@ -311,23 +309,14 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   // parked permission/dialog prompt is the waiting phase; the fold dedupes,
   // so folding after every emit publishes only real changes.
   const activityPublisher = createClaudeActivityPublisher()
-  const activityListeners = new Set<(view: WorkingActivityView) => void>()
   const publishActivity = (): void => {
-    const view = activityPublisher.fold(translator.activityState(), asking || dialogsOpen)
-    if (view === undefined) return
-    for (const listener of [...activityListeners]) {
-      try {
-        listener(view)
-      } catch (error) {
-        deps.host.debug(`claude: activity listener failed (${errorText(error)})`)
-      }
-    }
+    activityPublisher.fold(translator.activityState(), asking || dialogsOpen)
   }
 
   /**
-   * Observed agent↔agent relay facts (agent-team §5.4): the SendMessage tool
-   * traffic the translator observes, folded live at this funnel and from the
-   * replay seed at `history()` — one store, monotone by message id.
+   * Agent-to-agent relays (the SendMessage traffic the translator observes),
+   * folded live here and from the replay at `history()`; monotone by
+   * message id.
    */
   const agentMessages: AgentMessageView[] = []
   const foldAgentMessages = (events: readonly AgentEvent[]): void => {
@@ -357,7 +346,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     forceTimer = undefined
   }
 
-  /** Prompts are parked: the session needs the user (design §5.1). Only
+  /** Prompts are parked: the session needs the user. Only
    *  transitions are announced; the CLI's own `session_state_changed`
    *  frames say the same and are idempotent with these. */
   let asking = false
@@ -397,62 +386,66 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     deps.host.stderr?.(line)
   })
 
-  /** One live `query()`: its stdin, its controller and its generation. A
-   *  reconnect (credential renewal) replaces the run; the session, its id
-   *  and the translator state stay. */
+  /** One live `query()`: its stdin and its controller. A reconnect
+   *  (credential renewal) replaces the run; the session, its id and the
+   *  translator state stay. */
   interface Run {
-    readonly generation: number
     readonly inbox: ReturnType<typeof createInbox<SDKUserMessage>>
     readonly abortController: AbortController
     readonly query: ReturnType<ClaudeSessionDeps['sdk']['query']>
+    /** The flag-settings file this run's CLI reads (flag-settings.ts). */
+    readonly flagSettings?: FlagSettingsFile
     consumer: Promise<void>
   }
-  let generation = 0
   const startRun = (resume: boolean): Run => {
-    generation += 1
     const inbox = createInbox<SDKUserMessage>()
     const abortController = new AbortController()
     const startModel = prefs.read().model ?? deps.model
-    // The CLI's SDK path (2.1.284+) resolves an EXPLICIT `model` against
-    // its bundled official catalog and fail-fasts a non-official name (a
-    // relay model) as `[claude-code:unrecognized_model]`; the env slot
-    // routing (ANTHROPIC_MODEL / ANTHROPIC_DEFAULT_<TIER>_MODEL) serves
-    // those names fine. When the env the child actually applies already
-    // routes to the model the session would pin, the parameter is
-    // omitted — the CLI lands on the same model without the catalog
-    // check. Any other value keeps the explicit pin: a switch to an
-    // official model must still reach the CLI.
+    // The CLI checks an explicit `model` against its official catalog and
+    // refuses a relay model name (`[claude-code:unrecognized_model]`), while
+    // the same name in an env slot (ANTHROPIC_MODEL /
+    // ANTHROPIC_DEFAULT_<TIER>_MODEL) routes fine. When the child's env
+    // already routes to the model, the parameter is left out; anything
+    // else is still pinned explicitly.
     const explicitModel = startModel !== undefined && envSlotsServeModel(childModelEnv(), startModel)
       ? undefined
       : startModel
     const startEffort = prefs.read().effort ?? deps.effort
-    const query = deps.sdk.query({
-      prompt: inbox,
-      options: buildQueryOptions({
-        cwd: deps.cwd,
-        // A reconnect resumes the same session (same id, same transcript);
-        // the SDK refuses `sessionId` together with `resume`.
-        ...(resume ? { resume: currentSessionId } : { sessionId: currentSessionId }),
-        permissionMode: (translator.mode ?? deps.start.mode) as StartPermissionMode['mode'],
-        executable: deps.executable.path,
-        env: authPlan.env,
-        // The route pin of an injected subscription token (auth.ts).
-        ...(authPlan.settings === undefined ? {} : { settings: authPlan.settings }),
-        canUseTool: bridge.canUseTool,
-        onElicitation: dialogs.onElicitation,
-        onUserDialog: dialogs.onUserDialog,
-        supportedDialogKinds: SUPPORTED_DIALOG_KINDS,
-        stderr: stderrSink,
-        abortController,
-        ...(explicitModel === undefined ? {} : { model: explicitModel }),
-        ...(startEffort === undefined ? {} : { effort: startEffort }),
-        // Echoes are the user-row fallback for a CLI without lifecycle
-        // frames; requesting them is harmless when lifecycle frames win (the
-        // translator ignores an echo of an input it already confirmed).
-        replayUserMessages: true,
-      }),
-    })
-    return { generation, inbox, abortController, query, consumer: Promise.resolve() }
+    // The plan's flag layer (a channel token may ride it) goes by file, out
+    // of the CLI's argv; it lives as long as this run.
+    const flagSettings = authPlan.settings === undefined ? undefined : writeFlagSettingsFile(authPlan.settings)
+    let query: Run['query']
+    try {
+      query = deps.sdk.query({
+        prompt: inbox,
+        options: buildQueryOptions({
+          cwd: deps.cwd,
+          // A reconnect resumes the same session (same id, same transcript);
+          // the SDK refuses `sessionId` together with `resume`.
+          ...(resume ? { resume: currentSessionId } : { sessionId: currentSessionId }),
+          permissionMode: (translator.mode ?? deps.start.mode) as StartPermissionMode['mode'],
+          executable: deps.executable.path,
+          env: authPlan.env,
+          ...(flagSettings === undefined ? {} : { settingsFile: flagSettings.path }),
+          canUseTool: bridge.canUseTool,
+          onElicitation: dialogs.onElicitation,
+          onUserDialog: dialogs.onUserDialog,
+          supportedDialogKinds: SUPPORTED_DIALOG_KINDS,
+          stderr: stderrSink,
+          abortController,
+          ...(explicitModel === undefined ? {} : { model: explicitModel }),
+          ...(startEffort === undefined ? {} : { effort: startEffort }),
+          // Echoes are the user-row fallback for a CLI without lifecycle
+          // frames; requesting them is harmless when lifecycle frames win (the
+          // translator ignores an echo of an input it already confirmed).
+          replayUserMessages: true,
+        }),
+      })
+    } catch (error) {
+      flagSettings?.dispose()
+      throw error
+    }
+    return { inbox, abortController, query, ...(flagSettings === undefined ? {} : { flagSettings }), consumer: Promise.resolve() }
   }
   let run = startRun(resumed)
 
@@ -461,12 +454,13 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     target.inbox.close()
     try { target.query.close() } catch (error) { deps.host.debug(`claude: close failed (${errorText(error)})`) }
     target.abortController.abort()
+    target.flagSettings?.dispose()
   }
 
   /** Shut the session down; safe to call from any state. */
   const teardown = (): void => {
     clearForceTimer()
-    // Rule 4 (design §4.7): pending prompts are denied before the CLI goes.
+    // Pending prompts are denied before the CLI goes.
     bridge.settleAll()
     dialogs.settleAll()
     stopRun(run)
@@ -497,16 +491,11 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     })
   }
 
-  /** Seed the translator's (and so the channel's) model once, before any
-   *  UI asks for it — the model this session spawned with, at exactly the
-   *  priority `startRun` uses: the persisted choice, then the explicit
-   *  start model, else the CLI's own handshake account of its default —
-   *  the scalar `model` when it provides one, else the catalog's
-   *  `default` alias row (its resolvedModel, never a hardcoded name; no
-   *  default row at all leaves the model unknown). Only an EMPTY model is
-   *  seeded: a resumed session keeps the replay's model, and a later
-   *  reconnect must not overwrite a model the user switched to (the CLI's
-   *  own frames still correct it). */
+  /** Seed the model before any UI asks for it, with `startRun`'s priority:
+   *  the persisted choice, the start model, else what the handshake says
+   *  (its `model`, else the `default` catalog row's resolved model). Only
+   *  an empty model is seeded: a resumed session keeps the replay's, and a
+   *  reconnect keeps a model the user switched to. */
   const seedModel = (init: Rec | undefined): void => {
     if (translator.model !== '') return
     const catalog = (Array.isArray(init?.models) ? init.models : []).flatMap((row): { readonly value: string; readonly resolvedModel?: unknown }[] => {
@@ -533,10 +522,9 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       }),
     ]).finally(() => clock.clearTimeout(timer))
     const result = rec(init)
-    // Every handshake starts from scratch: a run that reports no
-    // capabilities at all must not inherit the previous CLI's — an older
-    // CLI without `msg_lifecycle_v1` confirms inputs by their replay
-    // echo, so the user-row source is picked explicitly each time.
+    // Capabilities come from this handshake alone (a run that reports none
+    // must not inherit the previous CLI's): without `msg_lifecycle_v1` user
+    // rows come from the replay echo.
     const capabilities = result?.capabilities
     cliCapabilities = Array.isArray(capabilities) ? capabilities.filter((item): item is string => typeof item === 'string') : []
     translator.setUserRows(cliCapabilities.includes(CLI_CAPABILITY.lifecycle) ? 'lifecycle' : 'replay')
@@ -566,9 +554,8 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     if (value?.type === 'system' && value.subtype === 'elicitation_complete' && typeof value.mcp_server_name === 'string' && typeof value.elicitation_id === 'string') {
       dialogs.complete(value.mcp_server_name, value.elicitation_id)
     }
-    // Probe (Phase 5b, claude-sdk-probe-5b `reset`): after a reset the CLI
-    // runs under a NEW session id, named by the frames that follow (not the
-    // frame's `new_conversation_id`).
+    // After a reset the CLI runs under a new session id, named by the frames
+    // that follow (not by the reset frame's `new_conversation_id`).
     if (value?.type === 'conversation_reset') {
       resetPending = true
     } else if (resetPending && typeof value?.session_id === 'string' && value.session_id !== '' && value.session_id !== currentSessionId) {
@@ -604,17 +591,15 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       for (const uuid of pushed.keys()) if (!unstarted.has(uuid)) pushed.delete(uuid)
     }
     for (const event of events) {
-      // R2-4: every authoritative confirmation of the model — a re-init's
-      // `model.changed`, the first init's `session.ready`, a
-      // `message_start` drift — converges the effort readout with the
-      // serving model's DECLARED capabilities (the explicit-refusal rule;
-      // missing metadata keeps the user's choice).
+      // Every confirmation of the model (a re-init's `model.changed`, the
+      // first init's `session.ready`, a `message_start` drift) re-checks
+      // the effort against what that model declares (controls.ts).
       if ((event.type === 'model.changed' || event.type === 'session.ready') && event.model !== '') {
         controls.noteConfirmedModel(event.model)
       }
       if (event.type !== 'session.ready' || event.backendVersion === undefined || cliVersion !== undefined) continue
       cliVersion = event.backendVersion
-      // Drift is reported, never a stop (design §4.2).
+      // Drift is reported, never a stop.
       if (cliVersionDrift(cliVersion) !== undefined) {
         emit([{ type: 'notice', level: 'warning', text: t('claude-version-drift', { version: cliVersion, validated: VALIDATED_CLI_VERSIONS.join(', ') }) }])
       }
@@ -680,12 +665,12 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   }
 
   /**
-   * Restart the CLI on the same session with a renewed credential (design
-   * §4.12): the old CLI's prompts are withdrawn and an open turn closed, the
+   * Restart the CLI on the same session with a renewed credential: the old
+   * CLI's prompts are withdrawn and an open turn closed, the
    * new query continues the session id, the translator keeps its state, and
    * the inputs the old CLI never started are pushed again, in order.
    *
-   * After an authentication failure the old CLI is stopped FIRST — before
+   * After an authentication failure the old CLI is stopped first — before
    * the renewal awaits — so its queue cannot start (and fail on the refused
    * credential) meanwhile: every input it had not started is re-pushed. A
    * `/login` reconnect instead waits for the running turn and the inputs
@@ -737,10 +722,13 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
           try {
             authPlan = await deps.auth.renew(renewal)
           } catch (error) {
+            // Only the sanitized sentence leaves: the refresh error itself
+            // can carry the OAuth endpoint's response body.
+            const failure = new RenewalFailed(renewalFailed(error))
             // The old CLI is already gone: reconnect on the current
             // credential (its inputs still run), report the renewal after.
-            if (stopped === undefined) throw error
-            renewError = error
+            if (stopped === undefined) throw failure
+            renewError = failure
           }
         }
         if (deferred) await waitIdleBounded()
@@ -813,17 +801,15 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     reconnect({ rejected: injectedToken() }).then(() => {
       emit([{ type: 'notice', level: 'warning', text: t('claude-auth-reconnected') }])
     }, (error: unknown) => {
-      emit([{ type: 'notice', level: 'error', text: renewalFailed(error) }])
+      emit([{ type: 'notice', level: 'error', text: error instanceof RenewalFailed ? error.message : renewalFailed(error) }])
     })
   }
 
-  /** The env keys the TUI itself injected into the spawn env — exactly the
-   *  auth plan's flag layer (the channel connection, or the first-party
-   *  pin; auth.ts re-states precisely these keys there). They are OURS, not
-   *  the user's settings: the settings import excludes them (reading them
-   *  back would re-import the channel the TUI itself activated), while the
-   *  model truth keeps them deliberately ABOVE the settings file — the
-   *  flag > settings > inherited order the CLI itself applies (R3-5). */
+  /** The env keys the TUI itself put into the spawn env: the auth plan's
+   *  flag layer (the channel connection, or the first-party pin). The
+   *  settings import leaves them out (it would re-import the channel the TUI
+   *  activated); the model truth ranks them above the settings file, the
+   *  flag > settings > inherited order the CLI applies. */
   const injectedEnvKeys = (): ReadonlySet<string> => new Set(Object.keys(authPlan.settings?.env ?? {}))
 
   const controls = createClaudeControls({
@@ -840,16 +826,15 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     channels,
     tokens: channelTokens,
     debug: deps.host.debug,
-    // The settings-import source (R3-5): the user's own settings file plus
-    // the truly inherited env (settings first, the CLI's own order) — the
-    // TUI's own injections are NOT settings material and are excluded, so a
-    // cc-switch-written settings.json is what "import from settings" sees.
+    // "Import from settings" reads the user's settings file plus the
+    // inherited env (settings first, as the CLI does), without the TUI's own
+    // injections: a cc-switch-written settings.json is what it sees.
     settingsEnv: () => importedModelEnv(
-      claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
+      configDir(),
       authPlan.env,
       injectedEnvKeys(),
     ),
-    // Channel model truth, lazily (the list reads it on demand): the ACTIVE
+    // Channel model truth, lazily (the list reads it on demand): the active
     // channel profile first (channels.json — the user's own data), then the
     // settings env of the same config dir the transcripts use, plus the
     // live auth env on top. A cosmetic tier name a relay channel wrote
@@ -857,7 +842,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     modelTruth: () => {
       const active = activeProfileOf(channels.read())
       return modelTruthFrom(
-        claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
+        configDir(),
         authPlan.env,
         readLocalModelNames(join(DATA_DIR, 'backends', 'claude')),
         active === undefined ? undefined : { models: active.models, tiers: active.tiers },
@@ -869,11 +854,9 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   try {
     const init = await handshake(run)
     controls.seed(init)
-    // R2-4: the seed itself is an authoritative confirmation — the model
-    // this session opened with (a fresh seed from prefs/handshake, or a
-    // resumed session's replay model, which no frame will re-announce).
-    // The catalog is in place now, so the effort readout converges with
-    // the serving model's DECLARED capabilities before any UI asks.
+    // The model the session opened with is confirmed too (a resumed
+    // session's replay model is never re-announced by a frame): with the
+    // catalog seeded, the effort readout is checked before any UI asks.
     controls.noteConfirmedModel(translator.model)
   } catch (error) {
     disposing = true
@@ -889,8 +872,8 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   const startColor = prefs.color(currentSessionId)
   if (startColor !== '') emit([{ type: 'session.color', color: startColor }])
   run.consumer = consume(run)
-  // A resumed transcript does not record the context window (design §4.11):
-  // ask the CLI once, so the status line has it before the first `result`.
+  // A resumed transcript does not record the context window: ask the CLI
+  // once, so the status line has it before the first `result`.
   if (resumed) {
     const query = run.query as Partial<Pick<Query, 'getContextUsage'>>
     if (typeof query.getContextUsage === 'function') {
@@ -916,7 +899,6 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     return { lines }
   }
 
-  /** This session in the backend's reference vocabulary. */
   /** This session in the backend's reference vocabulary (its id follows a
    *  conversation reset). */
   const ownRef: AgentSessionRef = { backendId: CLAUDE_BACKEND_ID, get sessionId() { return currentSessionId } }
@@ -935,7 +917,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   }
 
   /**
-   * `/fork` and the conversation rewind (design §4.11), both through the
+   * `/fork` and the conversation rewind, both through the
    * session store: a fork is a persisted copy under a new id (the live
    * session is untouched); a conversation rewind forks up to the entry
    * right before the picked user message, for the channel to open and adopt.
@@ -998,8 +980,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   }
 
   /**
-   * The child transcript source (design agent-team-panels §2): the
-   *  subagent's own messages, read from the store and replayed through the
+   * The child transcript source: the subagent's own messages, read from the store and replayed through the
    *  same translator the live lane uses. Absent when this session has no
    *  store read API (tests, a store-less open); a read that fails rejects
    *  and the transcript view says unavailable — an unreadable transcript is
@@ -1016,10 +997,13 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         }
         if (window !== undefined) {
           // An older slice: [skipFromStart - count, skipFromStart) of the disk
-          // transcript (the SDK paginates by offset from the START).
-          const count = Math.max(1, Math.min(window.count, window.skipFromStart))
-          const slice = await read(currentSessionId, agentId, { dir: deps.cwd, offset: window.skipFromStart - count, limit: count })
-          return laneOf(slice, window.skipFromStart - count > 0, window.skipFromStart - slice.length)
+          // transcript (the SDK paginates by offset from the start). An empty
+          // window reads nothing and leaves the cursor where it was.
+          const skip = Math.max(0, window.skipFromStart)
+          const count = Math.max(0, Math.min(window.count, skip))
+          if (count === 0) return laneOf([], skip > 0, skip)
+          const slice = await read(currentSessionId, agentId, { dir: deps.cwd, offset: skip - count, limit: count })
+          return laneOf(slice, skip - count > 0, skip - slice.length)
         }
         // The newest page: one full read (bounded below), the tail kept.
         const all = await read(currentSessionId, agentId, { dir: deps.cwd })
@@ -1030,7 +1014,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   }
 
   /**
-   * `/rename` (design §4.11): `renameSession()` writes the title into the
+   * `/rename`: `renameSession()` writes the title into the
    * transcript (the browser and `claude --resume` read it), and the live
    * session reports it at once. Before the CLI wrote the transcript there is
    * no file to append to: the title is kept and written with the first
@@ -1107,15 +1091,14 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
           emit([{ type: 'session.color', color }])
         },
       },
-      // Design §4.8: a subagent or background job is stopped by its task id
-      // (`stopTask`; the CLI reports the stop as its notification).
+      // A subagent or background job is stopped by its task id (`stopTask`;
+      // the CLI reports the stop as its notification).
       subagents: {
         interrupt: agentId => stopTask(agentId),
         ...subagentHistory(),
-        // agent-team §5.2/§5.4: the parent-mediated message support — the
-        // relay observations this session folds itself. The channel core
-        // composes the submit path (directed instruction + fixed followup)
-        // around this; the composer hides itself when the member is absent.
+        // The relays this session observed. The channel core builds the
+        // parent-mediated send around it (a directed instruction submitted
+        // as a followup); without it the composer is hidden.
         message: { messages: () => [...agentMessages] },
       },
       tasks: {
@@ -1133,7 +1116,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       transcript: createClaudeTranscriptHistory({
         sessionId: () => currentSessionId,
         cwd: deps.cwd,
-        configDir: () => claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
+        configDir,
         ...(compactedFrom === undefined ? {} : { compactedFrom }),
         debug: deps.host.debug,
       }),
@@ -1170,10 +1153,13 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       // a rebind shows the running line without waiting for a change.
       workingActivity: {
         subscribe(listener: (view: WorkingActivityView) => void) {
-          activityListeners.add(listener)
-          const last = activityPublisher.last()
-          if (last !== undefined) listener(last)
-          return () => { activityListeners.delete(listener) }
+          return activityPublisher.subscribe(view => {
+            try {
+              listener(view)
+            } catch (error) {
+              deps.host.debug(`claude: activity listener failed (${errorText(error)})`)
+            }
+          })
         },
       },
       diagnostics: {
@@ -1194,7 +1180,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     history: () => {
       const events = replayHistory ?? []
       replayHistory = undefined
-      // The replay seed carries the SAME relay observations the live lane
+      // The replay seed carries the same relay observations the live lane
       // emits (replay runs the same translator); fold them once here so a
       // resumed session's Messages page starts populated.
       foldAgentMessages(events)
@@ -1227,12 +1213,10 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       const staged = input.images ?? []
       if (imageBlocks > staged.length) throw new Error(t('claude-image-unreadable', { name: `#${staged.length + 1}`, err: t('claude-image-gone') }))
       const images = staged.length === 0 ? [] : await claudeImageBlocks(staged)
-      // The read may straddle a reconnect: an authentication failure
-      // stopped THIS run (its inbox is closed — temporarily, while the
-      // renewal and the replacement handshake are in flight). Pass the
-      // non-deferred gate again and only then judge: a deferred `/login`
-      // reconnect still leaves the old CLI serving submits, so waiting for
-      // it here would stall behind the running turn.
+      // An auth-failure reconnect may have started during the read (this
+      // run's inbox is then closed until the replacement is up): wait for
+      // it again before judging. A deferred `/login` reconnect is not waited
+      // for; the old CLI keeps serving until it swaps.
       if (reconnecting !== undefined && !reconnectDeferred) await reconnecting.catch(() => undefined)
       if (disposing || run.inbox.closed) throw new Error(t('claude-session-closed'))
       const texts = (input.blocks ?? [{ type: 'text', text: input.text }])
@@ -1284,13 +1268,11 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       // A CLI without the capability keeps its queue and runs it — the
       // cancel receipt's `still_queued` tells the channel, which un-docks.
       const cancelQueued = cause !== 'user' && cliCapabilities.includes(CLI_CAPABILITY.interruptCancelQueued)
-      // The queued-input previews this cancel covers and has not confirmed
-      // deleted, snapshotted BEFORE the request fires: an input pushed while
-      // the request is in flight belongs to a newer batch and never rides
-      // this receipt. Without a confirmed `still_queued` answer the snapshot
-      // IS the receipt's stillQueued — an answerless or failed interrupt
-      // must never read as a definite empty queue (the dock would sell a
-      // still-live backend copy as safe to re-send).
+      // The queued inputs this cancel covers, taken before the request (an
+      // input pushed meanwhile belongs to a newer batch). Without a
+      // `still_queued` answer they are reported as still queued: a failed
+      // or answerless interrupt must not read as an empty queue, or the
+      // dock would offer to re-send inputs the CLI still holds.
       const covered = translator.pendingInputs()
       // The documented `cancel_queued` interrupt field is reachable through
       // the runtime method's option bag (absent from the TS signature).
@@ -1300,7 +1282,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         const receipt = rec(await interrupt.call(query, cancelQueued ? { cancelQueued: true } : undefined))
         if (Array.isArray(receipt?.still_queued)) {
           // The receipt's `still_queued` is the CLI's live queue snapshot:
-          // exactly the uuids that WILL still run (sdk.d.ts).
+          // exactly the uuids that will still run (sdk.d.ts).
           const stillQueued = receipt.still_queued.filter((id): id is string => typeof id === 'string')
           return { stillQueued, outcome: 'confirmed' }
         }

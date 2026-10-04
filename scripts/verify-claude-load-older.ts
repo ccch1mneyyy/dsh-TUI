@@ -1,7 +1,7 @@
 /**
- * "Load earlier" for Claude sessions (docs/agent-backend-design.md §4.11
- * 压缩前历史, Phase 5a), over a synthetic transcript file with TWO
- * compactions and a fake SDK — no CLI, no network:
+ * "Load earlier" for Claude sessions: the history from before a compaction,
+ * read from a synthetic transcript file with two compactions, over a fake
+ * SDK (no CLI, no network):
  *
  *  - locating `<config>/projects/<any>/<sessionId>.jsonl` by scanning (never
  *    by computing the munged directory name); unsafe ids never resolve;
@@ -172,14 +172,14 @@ const texts = (events: readonly AgentEvent[]): string[] => events.flatMap(event 
   for (let guard = 0; guard < 10 && bounded.hasOlder(); guard += 1) pieces.push(texts(bounded.older()))
   check('a bounded slice is cut at a prompt; slices never overlap and add up to the same history', pieces.every(piece => piece.length > 0 && piece.length <= 4) && JSON.stringify(pieces.flatMap(piece => piece).sort()) === JSON.stringify([...texts(first), ...texts(second)].sort()), pieces)
   check('the default slice bound is generous but finite', MAX_SLICE_ENTRIES === 1000)
-  // Parsed once per file change (5a review 9): repeated presses reuse it.
+  // Parsed once per file change: repeated presses reuse it.
   const cached = createClaudeTranscriptHistory({ sessionId: SESSION, cwd: '/fixture/project', configDir: () => configDir })
   const once = cached.record()
   check('the record is parsed and replayed once while the file is unchanged', cached.record() === once)
   appendFileSync(transcriptPath, `${JSON.stringify(reply('c-a7', 'c-a6', 'msg-c7', 'appended later'))}\n`)
   const changed = cached.record()
   check('… a change to the file is read again', changed !== once && changed.some(event => event.type === 'assistant.message' && event.anchor === 'msg-c7'))
-  // A cyclic preserved segment cannot run the walk away (5a review 10).
+  // A cyclic preserved segment cannot run the walk away.
   const byUuid = new Map<string, Rec>([['t1', { uuid: 't1', parentUuid: 't2' }], ['t2', { uuid: 't2', parentUuid: 't1' }]])
   const started = Date.now()
   const preserved = preservedUuids({ compactMetadata: { preservedSegment: { headUuid: 'never', tailUuid: 't1' } } }, byUuid as never)
@@ -225,8 +225,8 @@ async function openChannel(resume?: ReturnType<typeof replayClaudeTranscript>, s
     await session.dispose()
   }
 }
-// The view-only `/clear` (5a review 13): older history never comes back above
-// a cleared view, and the divider is gone, as with DSH.
+// The view-only `/clear`: older history never comes back above a cleared
+// view, and the divider is gone, as with DSH.
 {
   const { channel, session } = await openChannel(replayClaudeTranscript(resumedChain, { cwd: '/fixture/project' }))
   try {

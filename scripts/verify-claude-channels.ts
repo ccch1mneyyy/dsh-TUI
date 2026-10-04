@@ -1,58 +1,57 @@
 /**
- * 渠道档案（channel profiles）回归：/channel 二期的存储、真源优先级、
- * settings 导入、命令门控与切换后的显示刷新。
+ * 渠道档案（channel profiles）回归：/channel 的存储、模型映射优先级、
+ * settings 导入、命令门控、切换后的显示刷新，以及渠道连接与凭据隔离。
  *
- * 钉住的契约：
+ * 覆盖：
  *
- *  1. **存储 best-effort**（channels.ts 照抄 prefs.ts 的 IO 模型）：缺文件/
+ *  1. 存储 best-effort（channels.ts 沿用 prefs.ts 的 IO 模型）：缺文件/
  *     坏文件读作空、写失败只进 debug 日志、提交走「同目录临时文件 +
- *     renameSync 原子落位」、窄化丢掉畸形条目（重复 id 取首个、悬空 active 丢弃）。
- *  2. **真源优先级**（modelEnv.ts 扩展，纯函数 + 会话接线两层）：active
- *     channel 的 models（精确 → base 归一）> active channel 的 tiers（档位
- *     关键字 + 保留 default）> 旧 model-names.json > settings env 档位推断 >
- *     原始 id。channel 未激活或文件缺省时行为与四期前逐字节一致。
- *  3. **导入形状**：ANTHROPIC_BASE_URL 的 host 作渠道名、
- *     ANTHROPIC_DEFAULT_{HAIKU,OPUS,SONNET,FABLE}_MODEL + ANTHROPIC_MODEL 吸成
- *     tiers（default 键）、绝不猜精确 models、重复导入刷新同 id 渠道（保留
+ *     renameSync 原子替换」、窄化丢掉畸形条目（重复 id 取首个、悬空 active 丢弃）。
+ *  2. 模型映射优先级（modelEnv.ts 的 readModelEnvTruth，纯函数 + 会话接线
+ *     两层）：active channel 的 models（精确 → base 归一）> active channel
+ *     的 tiers（档位关键字 + 保留 default）> 旧 model-names.json > settings
+ *     env 档位推断 > 原始 id。没有激活渠道或文件缺失时，行为与没有渠道时一致。
+ *  3. 导入形状：ANTHROPIC_BASE_URL 的 host 作渠道名，
+ *     ANTHROPIC_DEFAULT_{HAIKU,OPUS,SONNET,FABLE}_MODEL + ANTHROPIC_MODEL 归入
+ *     tiers（default 键），不猜精确 models，重复导入刷新同 id 渠道（保留
  *     手写的 models）。
- *  4. **命令门控（/channel）**：BACKEND_CHANNEL_COMMAND 随 channels 能力出现
- *     （claude 可见），DSH 快照永不列出（该 flag 刻意不吃 dsh 短路）。
- *  5. **切换即刷新**：channel.setChannel 在同一次调用里写存储并经
- *     session-controls 的 refreshModelDisplay 钩子重算 modelDisplay——页脚
- *     显示立即换名，不等下一次 model.changed。
- *  6. **三期：连接真源**：channels.json 增 baseUrl/tokenRef/env（token 只进
- *     ~/.dsh/.credentials.yaml 那套凭据库，channels.json 永不落明文——专项
- *     断言）；激活渠道的连接在 spawn 管线注入（authPlan.env + SDK settings
-     选项的 flag 层，CLI 2.1.287 的 settings env 会盖过进程 env，取证见
-     .local/agent-backend-review.md 第四批增补四）；导入吸收 baseUrl/token；
- *     同连接切换就地刷新 vs 异连接走新会话重启漏斗（sameOptionConnection）；
- *     问句式向导（src/channel/channel-wizard.ts，headless 驱动）走 saveChannel/
-     removeChannel/peekChannelImport 三动作。
- *
- *  7. **R3-1 凭据隔离**（.local/review/r3-channels-security.md）：携带连接的
- *     渠道在 flag 层逐字声明三个凭据键——API_KEY=''、OAUTH=''、AUTH_TOKEN=
- *     渠道 token 或 ''（空串压掉 user settings 里 cc-switch 写入的旧值）——
- *     并清空路由变量，child env 同步清理冲突拼写；自定义 endpoint 缺凭据
- *     fail-closed 拒绝启动（含 apiKeyHelper 冲突）；mismatch notice 扩展到
- *     被替换凭据的键名（不报值）。出站行为用隔离环回实证：真
- *     resolveClaudeAuth + 已装 CLI + 127.0.0.1 动态端口 listener，六格矩阵
- *     （tokenless/token × 三种旧凭据键）断言「出站请求不含旧 sentinel」——
- *     形状断言不替代行为断言；无 CLI 时显式 SKIP，不伪称覆盖。
+ *  4. 命令门控（/channel）：BACKEND_CHANNEL_COMMAND 随 channels 能力出现
+ *     （claude 可见），DSH 快照永不列出（该 flag 刻意不走 dsh 短路）。
+ *  5. 切换即刷新：channel.setChannel 在同一次调用里写存储，并经
+ *     session-controls 的 refreshModelDisplay 钩子重算 modelDisplay，页脚
+ *     立即换名，不等下一次 model.changed。
+ *  6. 渠道连接：channels.json 增加 baseUrl/tokenRef/env。token 只存进
+ *     ~/.dsh/.credentials.yaml 凭据库，channels.json 里不出现明文（有专门
+ *     断言）。激活渠道的连接在 spawn 时注入（authPlan.env + SDK settings
+ *     选项的 flag 层，因为 CLI 2.1.287 的 settings env 会覆盖进程 env）；
+ *     导入时一并吸收 baseUrl/token；同连接切换就地刷新，异连接走新会话
+ *     重启（sameOptionConnection）；问答式向导（src/channel/channel-wizard.ts，
+ *     headless 驱动）走 saveChannel/removeChannel/peekChannelImport 三个动作。
+ *  7. 凭据隔离：带连接的渠道在 flag 层显式写出三个凭据键：API_KEY=''、
+ *     OAUTH=''、AUTH_TOKEN=渠道 token 或 ''（空串用来覆盖 user settings 里
+ *     cc-switch 写入的旧值），并清空路由变量，child env 同步清理冲突拼写；
+ *     自定义 endpoint 缺凭据时拒绝启动（含 apiKeyHelper 冲突）；mismatch
+ *     notice 列出被替换凭据的键名（不报值）。出站行为用隔离的环回监听验证：
+ *     真实的 resolveClaudeAuth + 已装 CLI + 127.0.0.1 动态端口 listener，
+ *     六格矩阵（tokenless/token × 三种旧凭据键）断言出站请求不含旧
+ *     sentinel。没有 CLI 时显式 SKIP，不算通过。
  *
  * Run: node --import tsx/esm scripts/verify-claude-channels.ts
  */
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
+import { execFile, spawn as spawnProcess } from 'node:child_process'
 import http from 'node:http'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { channelCapabilities } from '../src/channel/capabilities.js'
-import { channelSlug, fileClaudeChannels, importFromSettingsEnv, importTokenFromSettingsEnv, memoryClaudeChannels, sameChannelConnection } from '../src/backends/claude/channels.js'
+import { channelSlug, fileClaudeChannels, importFromSettingsEnv, importTokenFromSettingsEnv, memoryClaudeChannels } from '../src/backends/claude/channels.js'
+import { channelProfileSlug } from '../src/channel/channel-slug.js'
 import { channelTokenRef, fileClaudeChannelTokens, memoryClaudeChannelTokens } from '../src/backends/claude/channelTokens.js'
 import { ClaudeChannelConflictError, channelMissingCredential, resolveClaudeAuth } from '../src/backends/claude/auth.js'
+import { writeFlagSettingsFile } from '../src/backends/claude/flag-settings.js'
 import { channelStartNotices } from '../src/backends/claude/backend.js'
 import { loadClaudeSdk } from '../src/backends/claude/sdk.js'
 import { runChannelWizard, sameOptionConnection } from '../src/channel/channel-wizard.js'
@@ -109,6 +108,16 @@ const init = {
     check('store: the document ends with a newline', readFileSync(join(dir, 'channels.json'), 'utf8').endsWith('\n'))
     writeFileSync(join(dir, 'channels.json'), '{ not json')
     check('store: a corrupt file reads as no channels (never throws)', fileClaudeChannels(dir).read().channels.length === 0)
+    // A hand edit gone wrong must not be lost to the next save: the damaged
+    // document moves aside, byte for byte, and the save still lands.
+    const damaged = '{ "channels": [ { "id": "kept", "name": "Kept", "models": { "a": "b" } }, ] }'
+    writeFileSync(join(dir, 'channels.json'), damaged)
+    fileClaudeChannels(dir).save({ id: 'fresh', name: 'Fresh' })
+    const aside = readdirSync(dir).filter(name => name.startsWith('channels.json.damaged-'))
+    check('store: saving over a corrupt file keeps the damaged document aside',
+      aside.length === 1 && readFileSync(join(dir, aside[0]!), 'utf8') === damaged, readdirSync(dir))
+    check('… and the save itself lands', fileClaudeChannels(dir).read().channels.map(channel => channel.id).join() === 'fresh')
+    for (const name of aside) rmSync(join(dir, name))
     writeFileSync(join(dir, 'channels.json'), JSON.stringify({
       active: 'ghost',
       channels: ['nope', 42, { id: 'x', name: 'X', models: { a: 1, '': 'y', ok: ' v ' }, tiers: null }, { id: 'x', name: 'dup' }, { id: '  ', name: 'blank id' }],
@@ -136,7 +145,9 @@ const init = {
 // ---- 2. slug + the settings import ----------------------------------------
 {
   check('slug: lowercases and collapses non-alphanumerics', channelSlug('Open.BigModel~CN') === 'open-bigmodel-cn', channelSlug('Open.BigModel~CN'))
-  check('slug: a name without alphanumerics still gets a STABLE id', channelSlug('智谱') === 'channel' && channelSlug('智谱') === channelSlug('智谱'), channelSlug('智谱'))
+  check('slug: a name without ASCII alphanumerics gets a stable hashed id', /^channel-[0-9a-f]{8}$/u.test(channelSlug('智谱')) && channelSlug('智谱') === channelSlug(' 智谱 '), channelSlug('智谱'))
+  check('slug: two such names get different ids (and token refs)', channelSlug('智谱') !== channelSlug('硅基流动') && channelTokenRef(channelSlug('智谱')) !== channelTokenRef(channelSlug('硅基流动')), [channelSlug('智谱'), channelSlug('硅基流动')])
+  check('slug: the wizard and the backend share one rule', channelSlug === channelProfileSlug)
   const env = {
     ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',
     ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: 'GLM',
@@ -158,7 +169,7 @@ const init = {
   check('import: a re-import refreshes tiers but keeps hand-written models', refreshed?.models?.keep === 'me' && refreshed?.tiers?.opus === 'glm-5.3[1M]' && refreshed?.tiers?.stale === undefined, refreshed)
 }
 
-// ---- 3. the truth-source priority chain (pure) ------------------------------
+// ---- 3. the model-mapping priority chain (pure) ----------------------------
 {
   const env = { ANTHROPIC_DEFAULT_OPUS_MODEL: 'env-opus', ANTHROPIC_MODEL: 'env-any' }
   const local = { 'claude-opus-zq9x[1m]': 'local-opus' }
@@ -182,7 +193,7 @@ const init = {
     readModelEnvTruth(env, {}, { tiers: { default: 'anything' } }).actualFor('default') === undefined)
 }
 
-// ---- 4. session wiring: the truth reads the store live ----------------------
+// ---- 4. session wiring: the mapping reads the store live -------------------
 {
   const store = memoryClaudeChannels({ active: 'zhipu', channels: [
     { id: 'zhipu', name: 'ZhiPu', models: { 'claude-opus-zq9x[1m]': 'glm-fix-5.3' }, tiers: { haiku: 'glm-fix-flash' } },
@@ -208,10 +219,10 @@ const init = {
     check('session: importFromSettings reads the CLI settings env (hostless env → the settings name)', imported?.id === 'settings' && imported?.tiers.some(rule => rule.tier === 'default' && rule.to === 'env-any-model'), imported)
     check('session: the import landed in the store behind the capability', store.read().channels.some(channel => channel.id === 'settings'), store.read().channels.map(channel => channel.id))
     await session.dispose()
-    // No active channel: the whole chain degrades to today's behavior. The
-    // fixture id deliberately carries NO tier keyword, so what stands is the
-    // ANTHROPIC_MODEL fallback (a tier-keyword id stops at the unset tier env
-    // and answers undefined — phase-1 semantics, unchanged).
+    // No active channel: the chain behaves as it does without channels. The
+    // fixture id deliberately carries no tier keyword, so the ANTHROPIC_MODEL
+    // fallback answers (a tier-keyword id stops at the unset tier env and
+    // answers undefined).
     const plainModel = [{ value: 'claude-fixture-zq9x[1m]', resolvedModel: 'claude-fixture-zq9x', displayName: 'Fixture', description: '' }]
     const inactive = memoryClaudeChannels({ channels: [{ id: 'zhipu', name: 'ZhiPu', models: { 'claude-fixture-zq9x[1m]': 'glm-fix-5.3' } }] })
     const fake2 = fakeClaudeSdk(() => ({ capabilities: [], models: plainModel }), { supportedModels: () => plainModel })
@@ -282,7 +293,7 @@ const init = {
   }
 }
 
-// ---- 7. wiring tripwires (source-level, the mode-roster precedent) ----------
+// ---- 7. wiring tripwires (source-level) ------------------------------------
 {
   const { readFileSync: readSrc } = await import('node:fs')
   const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url), 'utf8')
@@ -294,7 +305,7 @@ const init = {
   check('tripwire: the switch action re-resolves the model display in the same call', controlsSrc.includes('deps.controls.refreshModelDisplay(deps.session())'))
 }
 
-// ---- 8. phase 3: connection fields in the store ------------------------------
+// ---- 8. connection fields in the store -------------------------------------
 {
   const mem = memoryClaudeChannels({ active: 'conn', channels: [
     { id: 'conn', name: 'Conn', baseUrl: 'https://relay.example/api', tokenRef: 'CHANNEL_CONN_TOKEN', env: { ANTHROPIC_LOG: 'debug' }, tiers: { opus: 'o' } },
@@ -329,7 +340,7 @@ const init = {
   }
 }
 
-// ---- 9. phase 3: the token credential store ---------------------------------
+// ---- 9. the token credential store -----------------------------------------
 {
   check('tokens: the ref derives the deriveKeyRef way', channelTokenRef('open-bigmodel-cn') === 'CHANNEL_OPEN_BIGMODEL_CN_TOKEN' && channelTokenRef('智谱') === 'CHANNEL_CHANNEL_TOKEN', channelTokenRef('open-bigmodel-cn'))
   const dir = mkdtempSync(join(tmpdir(), 'dshtui-channel-tokens-'))
@@ -370,7 +381,7 @@ const init = {
     mem.read('CHANNEL_M_TOKEN') === 'mem' && (mem.write('CHANNEL_M_TOKEN', 'two'), mem.read('CHANNEL_M_TOKEN') === 'two') && (mem.erase('CHANNEL_M_TOKEN'), mem.read('CHANNEL_M_TOKEN') === undefined && mem.declared('CHANNEL_M_TOKEN') === false))
 }
 
-// ---- 9b. R3-3: every commit parses back as valid YAML (round-trip) --------
+// ---- 9b. every commit parses back as valid YAML (round-trip) ---------------
 {
   const yaml = await import('yaml')
   const dir = mkdtempSync(join(tmpdir(), 'dshtui-channel-tokens-yaml-'))
@@ -379,8 +390,8 @@ const init = {
   const text = (): string => readFileSync(storeFile, 'utf8')
   const parses = () => yaml.parseDocument(text())
   try {
-    // (a) a FLOW (inline) refs library: the write must extend the SAME
-    //     top-level key — the old line-append created a duplicate `refs:`.
+    // (a) a flow (inline) refs library: the write must extend the same
+    //     top-level key, never append a duplicate `refs:`.
     seeded('refs: { FOREIGN: synthetic }\n')
     const inline = fileClaudeChannelTokens(dir, () => undefined)
     check('yaml: a flow refs library reads its foreign ref', inline.read('FOREIGN') === 'synthetic')
@@ -431,7 +442,7 @@ const init = {
     seeded('refs: [1, 2]\n')
     fileClaudeChannelTokens(dir, () => undefined).write('CHANNEL_E_TOKEN', 'e')
     check('yaml: a non-mapping refs value refuses writes', text() === 'refs: [1, 2]\n')
-    // (h) only non-empty STRING scalars read as tokens.
+    // (h) only non-empty string scalars read as tokens.
     seeded('refs:\n  NULLV: null\n  NUMV: 42\n  TOK: real\n')
     const scalars = fileClaudeChannelTokens(dir, () => undefined)
     check('yaml: only string scalars read as tokens (non-strings: declared, not usable)',
@@ -448,7 +459,7 @@ const init = {
   }
 }
 
-// ---- 10. phase 3: the spawn injection shape (env + the flag layer) ----------
+// ---- 10. the spawn injection shape (env + the flag layer) ------------------
 {
   const noSettings = { settings: async () => ({}), globalConfig: () => undefined } as const
   // (a) a channel with a full connection replaces the environment's own
@@ -476,7 +487,7 @@ const init = {
     && plan.settings?.env?.ANTHROPIC_UNIX_SOCKET === '' && plan.settings?.env?.CLAUDE_CODE_USE_GATEWAY === '', plan.settings?.env)
   check('inject: the route names the channel endpoint and the source says auth-token',
     plan.route?.kind === 'custom-endpoint' && (plan.route as { host?: string }).host === 'relay.example' && plan.source === 'auth-token', plan)
-  // (b) the dsh-auth login is never injected alongside a channel connection —
+  // (b) the dsh-auth login is never injected alongside a channel connection,
   //     not even for a channel that pins the first-party origin.
   let freshCalls = 0
   const planFirstParty = await resolveClaudeAuth({ ...base }, { fresh: async () => { freshCalls += 1; return { access: 'oauth-token', expires: 0 } } }, {
@@ -485,10 +496,10 @@ const init = {
   })
   check('inject: a channel connection outranks the dsh-auth login (no oauth alongside)',
     freshCalls === 0 && planFirstParty.source === 'auth-token' && planFirstParty.env.CLAUDE_CODE_OAUTH_TOKEN === undefined, planFirstParty)
-  // (c) a channel without a stored token still pins the endpoint — and now
-  //     pins all three credential keys EMPTY: production refuses to SPAWN a
+  // (c) a channel without a stored token still pins the endpoint and pins
+  //     all three credential keys empty. Production refuses to spawn a
   //     tokenless custom endpoint (backend.ts, the fail-closed checks below),
-  //     but the plan itself stays defense-in-depth complete.
+  //     but the plan itself stays complete as a second line of defence.
   const planNoToken = await resolveClaudeAuth({ ...base }, undefined, { ...noSettings, channel: { baseUrl: 'https://relay.example/api' } })
   check('inject: a tokenless channel pins the base URL and drops the split-pair ambient credentials',
     planNoToken.env.ANTHROPIC_BASE_URL === 'https://relay.example/api' && planNoToken.env.ANTHROPIC_AUTH_TOKEN === undefined && planNoToken.env.ANTHROPIC_API_KEY === undefined && planNoToken.env.CLAUDE_CODE_OAUTH_TOKEN === undefined
@@ -504,13 +515,12 @@ const init = {
     && planTokenOnly.settings?.env?.ANTHROPIC_AUTH_TOKEN === 'chan-token' && planTokenOnly.settings?.env?.ANTHROPIC_API_KEY === ''
     && planTokenOnly.settings?.env?.CLAUDE_CODE_OAUTH_TOKEN === '' && planTokenOnly.settings?.env?.ANTHROPIC_BASE_URL === undefined, planTokenOnly)
   // (c3) an env-only profile (a model mapping with private variables) pins
-  //      nothing and leaves the ambient credentials exactly as they were —
-  //      the phase-1/-2 behavior is a contract, not an accident.
+  //      nothing and leaves the ambient credentials exactly as they were.
   const planEnvOnly = await resolveClaudeAuth({ ...base }, undefined, { ...noSettings, channel: { env: { ANTHROPIC_LOG: 'debug' } } })
   check('inject: an env-only channel pins only its env and keeps the ambient credentials',
     planEnvOnly.settings?.env?.ANTHROPIC_LOG === 'debug' && Object.keys(planEnvOnly.settings?.env ?? {}).length === 1
     && planEnvOnly.env.ANTHROPIC_API_KEY === 'stale-key' && planEnvOnly.env.ANTHROPIC_AUTH_TOKEN === 'stale-token' && planEnvOnly.source === 'api-key', planEnvOnly)
-  // (c4) fail-closed seams (R3-1 acceptance 3/4): a custom endpoint without
+  // (c4) fail-closed seams: a custom endpoint without
   //      a credential the profile modeled is refusable, and an explicit
   //      helper identity in readable settings conflicts with a channel.
   check('refuse: a custom endpoint with no token and no credential-shaped env key is refusable',
@@ -539,8 +549,8 @@ const init = {
     channel: { baseUrl: 'https://relay.example/api', token: 'chan-token' },
   })
   check('refuse: no helper declared, no conflict (the plan builds)', helperless.source === 'auth-token' && helperless.env.ANTHROPIC_AUTH_TOKEN === 'chan-token', helperless.source)
-  // (c5) the cc-switch notices (R3-1 acceptance 5): which settings
-  //      credentials the channel pin replaces — key names only.
+  // (c5) the cc-switch notices: which settings credentials the channel pin
+  //      replaces, by key name only.
   {
     const superseded = channelStartNotices({ name: 'ZhiPu', baseUrl: 'https://relay.example/api', tokenRef: 'CHANNEL_RELAY_TOKEN' },
       { ANTHROPIC_BASE_URL: 'https://old.invalid', ANTHROPIC_API_KEY: 'stale-key-secret', anthropic_auth_token: 'stale-token-secret', CLAUDE_CODE_OAUTH_TOKEN: 'stale-oauth-secret' })
@@ -554,12 +564,12 @@ const init = {
     check('notice: matching URLs and no settings credentials stay silent',
       channelStartNotices({ name: 'Same', baseUrl: 'https://relay.example/api' }, { ANTHROPIC_BASE_URL: 'https://relay.example/api' }).length === 0)
   }
-  // (d) NO channel connection: the plan stays byte-identical to phase 2 (no
-  //     flag layer, no env surgery) — the priority-chain regression guard.
+  // (d) no channel connection: the plan is what it is without channels (no
+  //     flag layer, the env untouched).
   const legacy = await resolveClaudeAuth({ ...base }, undefined, noSettings)
   check('inject: without a channel the plan is unchanged (no flag layer, env as-is)',
     legacy.settings === undefined && legacy.env.ANTHROPIC_BASE_URL === 'https://stale.example' && legacy.env.ANTHROPIC_API_KEY === 'stale-key' && legacy.source === 'api-key', legacy)
-  // (e) the session forwards BOTH layers into the SDK query options.
+  // (e) the session forwards both layers into the SDK query options.
   const fake = fakeClaudeSdk(() => ({ capabilities: [], models }), controls)
   const session = await openClaudeSession(claudeDeps(fake.sdk, {
     auth: {
@@ -568,13 +578,40 @@ const init = {
     },
   }))
   await tick()
-  const options = fake.queries[0]!.options as { env?: Record<string, string>; settings?: { env?: Record<string, string> } }
+  const first = fake.queries[0]!
+  const options = first.options as { env?: Record<string, string>; settings?: unknown }
   check('inject: startRun passes the channel env to the child', options.env?.ANTHROPIC_AUTH_TOKEN === 'chan-token' && options.env?.ANTHROPIC_BASE_URL === 'https://relay.example/api', options.env)
-  check('inject: startRun passes the flag layer through the SDK settings option', options.settings?.env?.ANTHROPIC_BASE_URL === 'https://relay.example/api' && options.settings?.env?.ANTHROPIC_AUTH_TOKEN === 'chan-token', options.settings)
+  check('inject: startRun passes the flag layer through the SDK settings option', first.flagSettings?.env?.ANTHROPIC_BASE_URL === 'https://relay.example/api' && first.flagSettings?.env?.ANTHROPIC_AUTH_TOKEN === 'chan-token', first.flagSettings)
+  // The SDK turns `settings` into `--settings <value>` on the CLI's command
+  // line: it must be a path, never the token-bearing JSON.
+  const settingsPath = typeof options.settings === 'string' ? options.settings : ''
+  check('inject: the flag layer goes by file path, so the token never reaches argv',
+    settingsPath !== '' && !settingsPath.includes('chan-token') && !JSON.stringify(Object.entries(options).filter(([key]) => key !== 'env')).includes('chan-token'), options.settings)
+  check('inject: the flag settings file is owner-only', process.platform === 'win32' || first.flagSettingsMode === 0o600, first.flagSettingsMode?.toString(8))
+  check('inject: … in its own owner-only directory', process.platform === 'win32' || (statSync(dirname(settingsPath)).mode & 0o777) === 0o700)
   await session.dispose()
+  check('inject: dispose removes the flag settings file', settingsPath !== '' && !existsSync(settingsPath) && !existsSync(dirname(settingsPath)))
+  // A reconnect retires the old run: its file goes with it, the new run has its own.
+  const reconnecting = await openClaudeSession(claudeDeps(fake.sdk, { auth: { plan, renew: () => Promise.resolve(plan) } }))
+  await tick()
+  const before = fake.queries.at(-1)!.options.settings as string
+  await reconnecting.capabilities.auth!.reconnect()
+  const after = fake.queries.at(-1)!.options.settings as string
+  check('inject: a reconnect removes the retired run\'s file and writes a fresh one', before !== after && !existsSync(before) && existsSync(after))
+  await reconnecting.dispose()
+  check('inject: … and dispose removes that one too', !existsSync(after))
+  // A file still open when the process exits (a crash path that skipped
+  // dispose) is removed on exit.
+  const flagUrl = new URL('../src/backends/claude/flag-settings.ts', import.meta.url).href
+  const leftover = await new Promise<string>(resolve => {
+    execFile(process.execPath, ['--import', 'tsx/esm', '--input-type=module', '-e',
+      `const { writeFlagSettingsFile } = await import(${JSON.stringify(flagUrl)}); const file = writeFlagSettingsFile({ env: { ANTHROPIC_AUTH_TOKEN: 'exit-token' } }); console.log(file.path); process.exit(0)`],
+    { cwd: fileURLToPath(new URL('..', import.meta.url)), timeout: 30_000 }, (_error, stdout) => resolve(String(stdout).trim()))
+  })
+  check('inject: a flag settings file left open is removed when the process exits', leftover.endsWith('settings.json') && !existsSync(leftover) && !existsSync(dirname(leftover)), leftover)
 }
 
-// ---- 11. phase 3: the settings import absorbs the connection ----------------
+// ---- 11. the settings import absorbs the connection ------------------------
 {
   const dir = mkdtempSync(join(tmpdir(), 'dshtui-channels-import-'))
   const store = fileClaudeChannels(dir)
@@ -617,7 +654,7 @@ const init = {
     withUrl?.baseUrl === 'https://x.example/api' && importFromSettingsEnv({ ANTHROPIC_BASE_URL: 'not a url', ANTHROPIC_MODEL: 'm' })?.baseUrl === undefined, withUrl)
 }
 
-// ---- 11b. R3-5: flag > settings > inherited; the import drops OUR injections --
+// ---- 11b. flag > settings > inherited; the import drops our own injections --
 {
   const envDir = mkdtempSync(join(tmpdir(), 'dshtui-channels-r35-'))
   writeFileSync(join(envDir, 'settings.json'), JSON.stringify({ env: {
@@ -649,9 +686,9 @@ const init = {
   } finally {
     rmSync(envDir, { recursive: true, force: true })
   }
-  // The cc-switch loop, end to end: the ACTIVE channel A injects itself at
-  // spawn (auth plan flag layer), cc-switch rewrote settings to relay B —
-  // "import from settings" must land B, not re-import A.
+  // The cc-switch loop, end to end: the active channel A injects itself at
+  // spawn (auth plan flag layer) and cc-switch has rewritten settings to
+  // relay B; "import from settings" must land B, not re-import A.
   {
     const envDir = mkdtempSync(join(tmpdir(), 'dshtui-channels-r35-e2e-'))
     writeFileSync(join(envDir, 'settings.json'), JSON.stringify({ env: {
@@ -695,7 +732,7 @@ const init = {
   }
 }
 
-// ---- 12. phase 3: save/remove through the capability (the wizard's seams) ---
+// ---- 12. save/remove through the capability (the wizard's seams) -----------
 {
   const dir = mkdtempSync(join(tmpdir(), 'dshtui-channels-manage-'))
   const store = fileClaudeChannels(dir)
@@ -735,14 +772,14 @@ const init = {
   }
 }
 
-// ---- 12b. R3-6: tokenRef ownership (rotation reuse, conservative erase) ---
+// ---- 12b. tokenRef ownership (rotation reuse, conservative erase) ----------
 {
   const dir = mkdtempSync(join(tmpdir(), 'dshtui-channels-refs-'))
   const store = fileClaudeChannels(dir)
   const tokens = memoryClaudeChannelTokens()
   // Hand-migrated profiles pointing at foreign-shaped refs, one of them
-  // SHARED by a second channel — the shapes the derived-ref-only paths left
-  // behind as orphans (R3-6's probe).
+  // shared by a second channel: code that only knows derived refs would
+  // orphan or wrongly erase these.
   store.save({ id: 'legacy-example', name: 'legacy', baseUrl: 'https://legacy.example/api', tokenRef: 'LEGACY_REF' })
   store.save({ id: 'sibling', name: 'sibling', tokenRef: 'SHARED_REF' })
   tokens.write('LEGACY_REF', 'old-secret')
@@ -760,27 +797,27 @@ const init = {
     const session = await openClaudeSession(claudeDeps(fake.sdk, { channels: store, channelTokens: tokens }))
     await tick()
     const channels = session.capabilities.channels!
-    // (a) a rotation reuses the row's EXISTING ref: no orphaned credential,
+    // (a) a rotation reuses the row's existing ref: no orphaned credential,
     //     no silent move to the derived ref.
     const rotated = channels.save!({ id: 'legacy-example', name: 'legacy', token: 'rotated-secret' })
     check('refs: a rotation reuses the existing (non-derived) ref in place',
       tokens.read('LEGACY_REF') === 'rotated-secret' && tokens.declared('CHANNEL_LEGACY_EXAMPLE_TOKEN') === false
         && rotated.connection?.hasToken === true && store.read().channels.find(channel => channel.id === 'legacy-example')?.tokenRef === 'LEGACY_REF', { rotated, rows: store.read() })
-    // (b) the settings import is a COPY rotating the same ref — settings.json
+    // (b) the settings import is a copy rotating the same ref; settings.json
     //     itself is never touched.
     const imported = channels.importFromSettings()
     check('refs: the import rotates the existing ref and never edits settings.json',
       imported?.connection?.hasToken === true && tokens.read('LEGACY_REF') === 'imported-token'
         && readFileSync(join(envDir, 'settings.json'), 'utf8') === settingsText, imported)
-    // (c) removing a channel SHARING a ref keeps it (the sibling still reads).
+    // (c) removing a channel sharing a ref keeps it (the sibling still reads).
     check('refs: remove of a ref-sharing channel keeps the shared credential',
       channels.remove!('sibling') === true && tokens.read('SHARED_REF') === 'shared-secret')
     // (d) removing the hand-written-ref channel keeps its (possibly foreign)
-    //     credential — only a DERIVED ref is provably ours to erase.
+    //     credential: only a derived ref is provably ours to erase.
     check('refs: remove keeps a non-derived ref (ownership guard)',
       channels.remove!('legacy-example') === true && tokens.read('LEGACY_REF') === 'imported-token' && store.read().channels.length === 0)
-    // (e) the derived-ref channel still erases on remove (the 12th section's
-    //     contract, restated as the ownership guard's positive control).
+    // (e) the derived-ref channel still erases on remove (section 12's
+    //     behaviour, as the positive control for the ownership guard).
     channels.save!({ id: 'derived', name: 'derived', token: 'd-token' })
     check('refs: a derived ref still erases with its channel',
       channels.remove!('derived') === true && tokens.read('CHANNEL_DERIVED_TOKEN') === undefined)
@@ -792,13 +829,13 @@ const init = {
   }
 }
 
-// ---- 12c. R3-6 followup: SHARED DERIVED refs never dangle a sibling -------
+// ---- 12c. shared derived refs never dangle a sibling -----------------------
 {
   const dir = mkdtempSync(join(tmpdir(), 'dshtui-channels-shared-derived-'))
   const store = fileClaudeChannels(dir)
   const tokens = memoryClaudeChannelTokens()
-  // B points at A's DERIVED ref (a hand edit or migration): the ref is legal
-  // and derived-for-A, yet TWO rows reference it. Erasing it on A's account
+  // B points at A's derived ref (a hand edit or migration): the ref is legal
+  // and derived for A, yet two rows reference it. Erasing it on A's account
   // (remove or clear-token) would dangle B: the row survives while its
   // credential dies.
   store.save({ id: 'a', name: 'A', baseUrl: 'https://a.example', tokenRef: 'CHANNEL_A_TOKEN' })
@@ -814,8 +851,8 @@ const init = {
     const session = await openClaudeSession(claudeDeps(fake.sdk, { channels: store, channelTokens: tokens }))
     await tick()
     const channels = session.capabilities.channels!
-    // (a) clearing A's token detaches the ROW but keeps the credential B
-    //     reads — B did nothing wrong and must not be downgraded.
+    // (a) clearing A's token detaches the row but keeps the credential B
+    //     reads: B must not lose its credential because of A.
     const cleared = channels.save!({ id: 'a', name: 'A', token: '' })
     check('shared-ref: clearing one row keeps the credential the sibling reads',
       cleared.connection?.hasToken === false
@@ -824,15 +861,15 @@ const init = {
         && bRow()?.tokenRef === 'CHANNEL_A_TOKEN',
       { cleared, rows: store.read(), token: tokens.read('CHANNEL_A_TOKEN') })
     // (b) removing A (which re-adopted its derived ref) keeps the credential
-    //     B still references — no dangling reference.
+    //     B still references: no dangling reference.
     channels.save!({ id: 'a', name: 'A', token: 're-set' })
     check('shared-ref: remove keeps a derived ref another row still references',
       channels.remove!('a') === true && tokens.read('CHANNEL_A_TOKEN') === 're-set'
         && bRow()?.tokenRef === 'CHANNEL_A_TOKEN' && tokens.declared('CHANNEL_A_TOKEN'),
       { rows: store.read(), token: tokens.read('CHANNEL_A_TOKEN') })
-    // (c) the LAST referent clears -> the credential dies with it (the
-    //     un-shared positive control of the clear path's guard). B never had
-    // a baseUrl, so the cleared row is mapping-only: no connection slice.
+    // (c) when the last referent clears, the credential goes with it (the
+    //     unshared positive control for the clear path's guard). B never had
+    //     a baseUrl, so the cleared row is mapping-only: no connection slice.
     const clearedLast = channels.save!({ id: 'b', name: 'B', token: '' })
     check('shared-ref: the last referent still clears the credential',
       clearedLast.connection === undefined && tokens.read('CHANNEL_A_TOKEN') === undefined && bRow()?.tokenRef === undefined,
@@ -845,7 +882,7 @@ const init = {
   }
 }
 
-// ---- 13. phase 3: same connection vs restart --------------------------------
+// ---- 13. same connection vs restart ----------------------------------------
 {
   const conn = (fingerprint: string, baseUrl?: string) => ({ baseUrl, hasToken: true, envKeys: [] as string[], fingerprint })
   const row = (id: string, connection?: ReturnType<typeof conn>) => ({ id, name: id, models: [], tiers: [], ...(connection === undefined ? {} : { connection }) })
@@ -857,12 +894,9 @@ const init = {
     sameOptionConnection(row('a'), row('b')) === true)
   check('restart: mapping-only vs connected differs (restart)',
     sameOptionConnection(row('a'), row('b', conn('fp1'))) === false)
-  check('restart: the backend comparator agrees on the profile level',
-    sameChannelConnection({ baseUrl: 'https://x', tokenRef: 'R', env: { A: '1' } }, { baseUrl: 'https://x', tokenRef: 'R', env: { A: '1' } }) === true
-    && sameChannelConnection({ baseUrl: 'https://x', tokenRef: 'R' }, { baseUrl: 'https://x', tokenRef: 'R', env: { A: '1' } }) === false)
 }
 
-// ---- 14. phase 3: the wizard, headless (scripted answers) -------------------
+// ---- 14. the wizard, headless (scripted answers) ---------------------------
 {
   const store = memoryClaudeChannels({ channels: [] })
   const tokens = memoryClaudeChannelTokens()
@@ -911,10 +945,9 @@ const init = {
     activate: (id: string) => { store.setActive(id); return true },
     peekSettings: () => ({ baseUrl: 'https://open.bigmodel.cn/api/anthropic', tiers: { opus: 'glm-5.3[1M]' } }),
   }
-  // The option labels come from i18n; the fake answers above return sentinels
-  // that match nothing, so patch t() indirectly: the wizard compares selected
-  // against t(...) — sentinels never match except where we map them. Drive the
-  // happy path by answering the REAL labels instead.
+  // The wizard compares a selected option against its i18n label, so the
+  // scripted answers pick the real t(...) labels; free-text questions are
+  // answered from `custom`.
   const { t } = await import('../src/i18n.js')
   const pick: Record<string, string[]> = {
     action: [t('channel-wiz-opt-add')],
@@ -935,12 +968,12 @@ const init = {
   check('wizard: the comparator drives the restart flag', sameOptionConnection(deps.roster().channels[0], deps.roster().channels[0]) === true)
 }
 
-// ---- 14b. R3-2: delete/overwrite of the ACTIVE connection restarts ---------
+// ---- 14b. deleting or overwriting the active connection restarts -----------
 {
   const { t } = await import('../src/i18n.js')
-  /** In-memory wizard harness whose roster rows carry REAL-shaped
+  /** In-memory wizard harness whose roster rows carry real-shaped
    * fingerprints (endpoint + ref + stored token, like controls.ts's
-   * connectionFingerprint — a token rotation changes the fingerprint). */
+   * connectionFingerprint: a token rotation changes the fingerprint). */
   const harness = (initial: { active?: string; channels: readonly { id: string; name: string; baseUrl?: string; tokenRef?: string }[] }) => {
     const store = memoryClaudeChannels({ channels: [...initial.channels], ...(initial.active === undefined ? {} : { active: initial.active }) })
     const tokens = memoryClaudeChannelTokens()
@@ -987,7 +1020,7 @@ const init = {
       wire((id: string) => (selected[id] === undefined ? { custom: custom[id] ?? '' } : { selected: selected[id]! }))
     return { store, tokens, deps }
   }
-  // (a) deleting the ACTIVE channel WITH a connection restarts (R3-2): the
+  // (a) deleting the active channel with a connection restarts: the
   //     running child still holds the erased endpoint/token.
   {
     const h = harness({ active: 'conn', channels: [
@@ -1004,7 +1037,7 @@ const init = {
     check('restart: deleting the ACTIVE connected channel demands a fresh session',
       outcome.kind === 'deleted' && outcome.restart === true, outcome)
   }
-  // (b) a mapping-only ACTIVE row never shaped the spawn → no restart.
+  // (b) a mapping-only active row never shaped the spawn → no restart.
   {
     const h = harness({ active: 'map', channels: [{ id: 'map', name: 'Map', tiers: { opus: 'x' } } as never] })
     const outcome = await runChannelWizard(h.deps({
@@ -1016,7 +1049,7 @@ const init = {
     check('restart: deleting a mapping-only ACTIVE channel restarts nothing',
       outcome.kind === 'deleted' && outcome.restart === false, outcome)
   }
-  // (c) deleting an INACTIVE connected channel leaves the running row alone.
+  // (c) deleting an inactive connected channel leaves the running row alone.
   {
     const h = harness({ active: 'keep', channels: [
       { id: 'keep', name: 'Keep', baseUrl: 'https://keep.example' },
@@ -1031,9 +1064,9 @@ const init = {
     check('restart: deleting an inactive connected channel needs no restart',
       outcome.kind === 'deleted' && outcome.restart === false, outcome)
   }
-  // (d) the add flow overwriting the ACTIVE row (same name → same id) with a
-  //     rotated token, then DECLINING the switch: the disk connection changed
-  //     under the running child — restart anyway (R3-2/R3-4).
+  // (d) the add flow overwriting the active row (same name → same id) with a
+  //     rotated token, then declining the switch: the connection on disk
+  //     changed under the running child, so it restarts anyway.
   {
     const h = harness({ active: 'conn', channels: [
       { id: 'conn', name: 'Conn', baseUrl: 'https://relay.example/api', tokenRef: 'CHANNEL_CONN_TOKEN' },
@@ -1059,17 +1092,16 @@ const init = {
   }
 }
 
-// ---- 14c. R3-4: an add colliding with another channel's id confirms ------
+// ---- 14c. an add colliding with another channel's id confirms --------------
 {
   const { t } = await import('../src/i18n.js')
-  // The slug folds every non-alphanumeric name the same way: both Chinese
-  // names derive id `channel` (the report's collision probe).
-  check('clash: two non-alphanumeric names collide on one id', channelSlug('智谱') === channelSlug('硅基流动') && channelSlug('智谱') === 'channel')
-  const h = () => {
-    const store = memoryClaudeChannels({ active: 'channel', channels: [
-      { id: 'channel', name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/anthropic', tokenRef: 'CHANNEL_CHANNEL_TOKEN' },
-    ] })
-    const tokens = memoryClaudeChannelTokens({ CHANNEL_CHANNEL_TOKEN: 'zhipu-secret' })
+  // Two different ASCII names that slug to one id.
+  check('clash: two different names can still share an id', channelSlug('Open BigModel') === channelSlug('open.bigmodel') && channelSlug('open.bigmodel') === 'open-bigmodel')
+  const h = (initial: { active?: string; channels: { id: string; name: string; baseUrl?: string; tokenRef?: string }[] } = { active: 'open-bigmodel', channels: [
+    { id: 'open-bigmodel', name: 'Open BigModel', baseUrl: 'https://open.bigmodel.cn/api/anthropic', tokenRef: 'CHANNEL_OPEN_BIGMODEL_TOKEN' },
+  ] }, initialTokens: Record<string, string> = { CHANNEL_OPEN_BIGMODEL_TOKEN: 'zhipu-secret' }) => {
+    const store = memoryClaudeChannels(initial)
+    const tokens = memoryClaudeChannelTokens(initialTokens)
     let saved = 0
     const deps = (selected: Record<string, string[]>, custom: Record<string, string> = {}) => ({
       ask: async (request: { questions: { id: string }[] }) => {
@@ -1089,8 +1121,9 @@ const init = {
       }),
       save: (input: { id: string; name: string; baseUrl?: string; token?: string }) => {
         saved += 1
-        tokens.write(channelTokenRef(input.id), input.token ?? 'kept')
-        store.save({ id: input.id, name: input.name, ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }), tokenRef: channelTokenRef(input.id) })
+        const ref = store.read().channels.find(row => row.id === input.id)?.tokenRef ?? channelTokenRef(input.id)
+        tokens.write(ref, input.token ?? 'kept')
+        store.save({ id: input.id, name: input.name, ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }), tokenRef: ref })
         return deps({} as never).roster().channels.find(row => row.id === input.id)
       },
       remove: (id: string) => { store.remove(id); return true },
@@ -1099,42 +1132,73 @@ const init = {
     })
     return { store, tokens, deps, savedCalls: () => saved }
   }
-  // (a) declining the overwrite writes NOTHING (R3-4's zero-write bar).
+  // (a) declining the overwrite writes nothing.
   {
     const c = h()
     const outcome = await runChannelWizard(c.deps({
       action: [t('channel-wiz-opt-add')],
       clash: [t('channel-wiz-opt-clash-cancel')],
-    }, { name: '硅基流动' }) as never)
+    }, { name: 'open.bigmodel' }) as never)
     const row = c.store.read().channels[0]
     check('clash: declining the overwrite writes nothing',
       outcome.kind === 'cancelled' && outcome.restart === false && c.savedCalls() === 0
-        && c.store.read().channels.length === 1 && row?.name === '智谱' && row?.baseUrl === 'https://open.bigmodel.cn/api/anthropic'
-        && c.tokens.read('CHANNEL_CHANNEL_TOKEN') === 'zhipu-secret', { outcome, row })
+        && c.store.read().channels.length === 1 && row?.name === 'Open BigModel' && row?.baseUrl === 'https://open.bigmodel.cn/api/anthropic'
+        && c.tokens.read('CHANNEL_OPEN_BIGMODEL_TOKEN') === 'zhipu-secret', { outcome, row })
   }
-  // (b) confirming the overwrite saves — and because the clobbered row is
-  //     ACTIVE with a changed connection, the funnel is owed (R3-2 link).
+  // (b) confirming the overwrite saves, and because the overwritten row is
+  //     active with a changed connection, a fresh-session restart follows.
   {
     const c = h()
     const outcome = await runChannelWizard(c.deps({
       action: [t('channel-wiz-opt-add')],
       clash: [t('channel-wiz-opt-clash-overwrite')],
       switch: [t('channel-wiz-opt-switch-no')],
-    }, { name: '硅基流动', baseurl: 'https://siliconflow.example/v1', token: 'sf-secret' }) as never)
+    }, { name: 'open.bigmodel', baseurl: 'https://siliconflow.example/v1', token: 'sf-secret' }) as never)
     const row = c.store.read().channels[0]
     check('clash: confirming the overwrite replaces the row and restarts the active connection',
-      outcome.kind === 'saved' && outcome.restart === true && row?.name === '硅基流动' && row?.baseUrl === 'https://siliconflow.example/v1'
-        && c.tokens.read('CHANNEL_CHANNEL_TOKEN') === 'sf-secret', { outcome, row })
+      outcome.kind === 'saved' && outcome.restart === true && row?.name === 'open.bigmodel' && row?.baseUrl === 'https://siliconflow.example/v1'
+        && c.tokens.read('CHANNEL_OPEN_BIGMODEL_TOKEN') === 'sf-secret', { outcome, row })
   }
-  // (c) re-adding the SAME-named channel is the edit path — no clash gate.
+  // (c) re-adding the same-named channel is the edit path: no clash gate.
   {
     const c = h()
     const outcome = await runChannelWizard(c.deps({
       action: [t('channel-wiz-opt-add')],
       switch: [t('channel-wiz-opt-switch-no')],
-    }, { name: '智谱', baseurl: 'https://open.bigmodel.cn/api/anthropic' }) as never)
+    }, { name: 'Open BigModel', baseurl: 'https://open.bigmodel.cn/api/anthropic' }) as never)
     check('clash: re-adding the same-named channel never trips the clash gate',
       outcome.kind === 'saved' && c.savedCalls() === 1, outcome)
+  }
+  // (d) Chinese names: 智谱 and 硅基流动 coexist, each with its own token ref.
+  {
+    const c = h({ channels: [] }, {})
+    await runChannelWizard(c.deps({ action: [t('channel-wiz-opt-add')], switch: [t('channel-wiz-opt-switch-no')] },
+      { name: '智谱', baseurl: 'https://open.bigmodel.cn/api/anthropic', token: 'zhipu-secret' }) as never)
+    const second = await runChannelWizard(c.deps({ action: [t('channel-wiz-opt-add')], switch: [t('channel-wiz-opt-switch-no')] },
+      { name: '硅基流动', baseurl: 'https://siliconflow.example/v1', token: 'sf-secret' }) as never)
+    const rows = c.store.read().channels
+    const zhipu = rows.find(row => row.name === '智谱')
+    const sf = rows.find(row => row.name === '硅基流动')
+    check('chinese names: 智谱 and 硅基流动 coexist without a clash prompt',
+      second.kind === 'saved' && rows.length === 2 && zhipu !== undefined && sf !== undefined && zhipu.id !== sf.id, rows)
+    check('chinese names: each keeps its own token ref and token',
+      zhipu?.tokenRef !== sf?.tokenRef && c.tokens.read(zhipu?.tokenRef ?? '') === 'zhipu-secret' && c.tokens.read(sf?.tokenRef ?? '') === 'sf-secret', { zhipu, sf })
+  }
+  // (e) a profile saved under the old rule (id `channel`) keeps its id: the
+  //     same name edits it in place, and a second Chinese name sits beside it.
+  {
+    const c = h({ active: 'channel', channels: [
+      { id: 'channel', name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/anthropic', tokenRef: 'CHANNEL_CHANNEL_TOKEN' },
+    ] }, { CHANNEL_CHANNEL_TOKEN: 'zhipu-secret' })
+    const edit = await runChannelWizard(c.deps({ action: [t('channel-wiz-opt-add')], switch: [t('channel-wiz-opt-switch-no')] },
+      { name: '智谱', baseurl: 'https://open.bigmodel.cn/api/anthropic', token: 'zhipu-rotated' }) as never)
+    check('legacy id: re-adding the same name edits the existing row (no clash, no duplicate)',
+      edit.kind === 'saved' && c.store.read().channels.length === 1 && c.store.read().channels[0]?.id === 'channel'
+        && c.tokens.read('CHANNEL_CHANNEL_TOKEN') === 'zhipu-rotated', c.store.read())
+    const add = await runChannelWizard(c.deps({ action: [t('channel-wiz-opt-add')], switch: [t('channel-wiz-opt-switch-no')] },
+      { name: '硅基流动', token: 'sf-secret' }) as never)
+    check('legacy id: a new Chinese name lands beside it, the old token untouched',
+      add.kind === 'saved' && c.store.read().channels.length === 2 && c.tokens.read('CHANNEL_CHANNEL_TOKEN') === 'zhipu-rotated', c.store.read())
   }
 }
 
@@ -1157,16 +1221,16 @@ const init = {
     actionsSrc.includes('saveChannel: input =>') && actionsSrc.includes('removeChannel: id =>') && actionsSrc.includes('peekChannelImport: () =>'))
 }
 
-// ---- 16. R3-1: fail-closed refusals through the real backend.open ---------
+// ---- 16. fail-closed refusals through the real backend.open ----------------
 //
-// The unit checks above cover the predicates; this drives the WIRING: an
+// The unit checks above cover the predicates; this drives the wiring: an
 // isolated child process (temp HOME/USERPROFILE/CLAUDE_CONFIG_DIR/DSH_HOME,
 // every ANTHROPIC_*/CLAUDE_CODE_* ambient variable scrubbed before the first
 // import) imports the real backend and opens a session with (a) an active
 // tokenless custom-endpoint channel and (b) a token channel under a settings
-// apiKeyHelper. Both opens must REJECT with the actionable sentence — never
-// spawn (the "CLI" is node itself, which exits at once on the SDK's args),
-// never leak the synthetic token or helper material.
+// apiKeyHelper. Both opens must reject with the actionable message, never
+// spawn (the "CLI" is node itself, which exits at once on the SDK's args)
+// and never leak the synthetic token or helper material.
 {
   const home = mkdtempSync(join(tmpdir(), 'dshtui-channels-refuse-'))
   const configDir = join(home, '.claude')
@@ -1243,25 +1307,31 @@ const init = {
   }
 }
 
-// ---- 17. R3-1: the outbound credential matrix (real CLI, loopback) --------
+// ---- 17. the outbound credential matrix (real CLI, loopback) ---------------
 //
-// The shape checks say the flag layer CARRIES the blanks; this proves what
-// the blanks DO against the really-installed CLI (the SDK's bundled native
-// binary — the one production ships): the isolated user settings hold an
-// OLD credential sentinel on one of the three keys (plus an old base URL,
-// the cc-switch shape), the active channel points at a 127.0.0.1 listener,
-// and NO outbound request may carry the old sentinel — with a token, only
-// the channel sentinel travels; tokenless, the requests are anonymous
-// (production refuses to spawn that shape at all; this proves the pin
-// holds even for it). One CONTROL cell first: the same settings with the
-// listener URL and NO channel — the sentinel MUST arrive, proving both
-// that the CLI applies user settings env over the child env (the R3-1
-// mechanism) and that the listener detects sentinels (otherwise every
-// "absent" below is vacuous). Isolation per cell: fresh HOME/USERPROFILE/
-// CLAUDE_CONFIG_DIR, a child env built from zero (PATH/SystemRoot/telemetry
-// flags only), the listener answers 401 so no turn ever succeeds, and only
-// booleans/counts leave the listener — never a header or body. Skipped
-// LOUDLY (never silently green) when the SDK or its bundled CLI is absent.
+// The shape checks say the flag layer carries the blanks; this checks what
+// the blanks do against the installed CLI (the SDK's bundled native binary,
+// the one production ships). The isolated user settings hold an old
+// credential sentinel on one of the three keys (plus an old base URL, the
+// cc-switch shape), the active channel points at a 127.0.0.1 listener, and
+// no outbound request may carry the old sentinel: with a token, only the
+// channel sentinel travels; tokenless, the requests are anonymous
+// (production refuses to spawn that shape at all; the pin must hold even
+// for it). One control cell runs first: the same settings with the
+// listener URL and no channel, where the sentinel must arrive. That shows
+// both that the CLI applies the user settings env over the child env (the
+// leak being guarded) and that the listener detects sentinels (otherwise
+// every "absent" below would mean nothing). Isolation per cell: fresh
+// HOME/USERPROFILE/CLAUDE_CONFIG_DIR, a child env built from scratch
+// (PATH/SystemRoot/telemetry flags only), the listener answers 401 so no
+// turn ever succeeds, and only booleans/counts leave the listener, never a
+// header or body. The flag layer goes the production way, as a private file
+// (flag-settings.ts): every cell also checks that neither the argv the SDK
+// built nor /proc/<pid>/cmdline carries a sentinel, and that the file is
+// gone afterwards. One last cell passes the same layer inline: the outcome
+// is the same, and the token is on the command line. Skipped with a
+// visible SKIP (never a silent pass) when the SDK or its bundled CLI is
+// absent.
 {
   const OLD_SENTINEL = 'r3-old-sentinel-not-a-token'
   const CHANNEL_SENTINEL = 'r3-channel-sentinel-not-a-token'
@@ -1280,7 +1350,9 @@ const init = {
   if (sdk !== undefined && cli !== undefined) {
     const root = mkdtempSync(join(tmpdir(), 'dshtui-channels-loop-'))
     try {
-      const cell = async (label: string, settingsEnv: Record<string, string>, mode: 'control' | { readonly token?: string }): Promise<void> => {
+      // `inline` passes the flag layer as an object (the SDK puts it in the
+      // CLI's argv); the default is the production form, a private file.
+      const cell = async (label: string, settingsEnv: Record<string, string>, mode: 'control' | { readonly token?: string; readonly inline?: true }): Promise<void> => {
         const home = join(root, label)
         const config = join(home, 'config')
         const cwd = join(home, 'cwd')
@@ -1289,9 +1361,9 @@ const init = {
         let seenOld = false
         let seenChannel = false
         let requests = 0
-        // Early finish (the report's methodology): once a credential-bearing
-        // request was observed a few times over, the process's fixed merged
-        // credentials have spoken — keep waiting only for the cap otherwise.
+        // Early finish: once a credential-bearing request has been seen a few
+        // times, the process's merged credentials are known; otherwise wait
+        // up to the cap.
         let verdictReady: (() => void) | undefined
         const early = new Promise<void>(resolve => { verdictReady = () => resolve() })
         const server = http.createServer((request, response) => {
@@ -1306,15 +1378,15 @@ const init = {
         })
         await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
         const loopbackUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`
-        // The synthetic user settings (written AFTER the listener exists —
-        // the control's base URL is the listener's own dynamic port).
+        // The synthetic user settings, written after the listener exists (the
+        // control's base URL is the listener's own dynamic port).
         writeFileSync(join(config, 'settings.json'), JSON.stringify({
           env: Object.fromEntries(Object.entries(settingsEnv).map(([key, value]) => [key, value === 'LOOPBACK' ? loopbackUrl : value])),
         }))
-        // The child env is built from ZERO (the SDK's `env` option replaces
-        // the child environment): only PATH, SystemRoot, the telemetry
-        // kill-switches and the isolated home/config pointers — nothing of
-        // the host's identity or credentials is inherited.
+        // The child env is built from scratch (the SDK's `env` option
+        // replaces the child environment): only PATH, SystemRoot, the
+        // telemetry kill-switches and the isolated home/config pointers.
+        // Nothing of the host's identity or credentials is inherited.
         const base: Record<string, string> = {
           PATH: process.env.PATH ?? '',
           ...(process.env.SystemRoot === undefined ? {} : { SystemRoot: process.env.SystemRoot }),
@@ -1331,18 +1403,33 @@ const init = {
         })
         const abort = new AbortController()
         const started = Date.now()
+        const inline = mode !== 'control' && mode.inline === true
+        const flagFile = plan?.settings === undefined || inline ? undefined : writeFlagSettingsFile(plan.settings)
+        // What the CLI was started with: the argv the SDK built and, on
+        // Linux, the kernel's view of it (/proc/<pid>/cmdline).
+        const argv: string[] = []
         const query = sdk.query({
           prompt: 'loopback probe: reply with the single word ok',
           options: {
             cwd,
             env: plan === undefined ? base : plan.env,
-            ...(plan?.settings === undefined ? {} : { settings: plan.settings }),
+            ...(plan?.settings === undefined ? {} : { settings: flagFile?.path ?? plan.settings }),
             settingSources: ['user'],
             permissionMode: 'default',
             model: 'haiku',
             maxTurns: 1,
             abortController: abort,
             stderr: () => undefined,
+            spawnClaudeCodeProcess: spawnOptions => {
+              const child = spawnProcess(spawnOptions.command, spawnOptions.args, {
+                cwd: spawnOptions.cwd, env: spawnOptions.env as NodeJS.ProcessEnv, signal: spawnOptions.signal, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true,
+              })
+              argv.push(...spawnOptions.args)
+              if (process.platform === 'linux' && child.pid !== undefined) {
+                try { argv.push(...readFileSync(`/proc/${child.pid}/cmdline`, 'utf8').split('\0')) } catch { /* already gone */ }
+              }
+              return child
+            },
           },
         })
         try {
@@ -1353,7 +1440,7 @@ const init = {
                   if ((message as { type?: string }).type === 'result') break
                 }
               } catch {
-                // The CLI died on our 401s — the observed window is the verdict.
+                // The CLI died on our 401s: what was observed so far decides.
               }
             })(),
             early,
@@ -1363,18 +1450,29 @@ const init = {
           abort.abort()
           try { await Promise.race([query.close().catch(() => undefined), new Promise(resolve => { setTimeout(resolve, 5000) })]) } catch { /* already gone */ }
           await new Promise<void>(resolve => server.close(() => resolve()))
+          flagFile?.dispose()
         }
-        console.log(`loopback ${label}: requests=${requests} old=${seenOld} channel=${seenChannel} in ${Date.now() - started}ms`)
+        console.log(`loopback ${label}: requests=${requests} old=${seenOld} channel=${seenChannel} argv=${argv.length} in ${Date.now() - started}ms`)
         if (mode === 'control') {
-          // The negative/positive control: the settings credential DOES
-          // reach the listener without any channel pin — the R3-1 leak
-          // mechanism itself, and the proof that absence below is meaningful.
+          // The control: without a channel pin the settings credential does
+          // reach the listener. That is the leak itself, and it makes the
+          // absence checks below meaningful.
           check(`loopback control: the settings credential reaches the listener (the leak mechanism is real and detectable)`,
             requests > 0 && seenOld && !seenChannel, { requests })
           return
         }
         check(`loopback ${label}: no outbound request carries the OLD settings sentinel`, requests > 0 && !seenOld, { requests })
         if (mode.token !== undefined) check(`loopback ${label}: the channel token is the credential that travels`, seenChannel)
+        const settingsArg = argv[argv.indexOf('--settings') + 1] ?? ''
+        if (inline) {
+          // The comparison cell: the inline form gives the same outcome, and
+          // it is the one that puts the token on the command line.
+          check(`loopback ${label}: the inline form puts the token in the CLI's argv`, argv.some(arg => arg.includes(CHANNEL_SENTINEL)), argv.length)
+        } else {
+          check(`loopback ${label}: the CLI gets the flag layer as a file path, the token is in no argv entry`,
+            argv.includes('--settings') && settingsArg === flagFile?.path && !argv.some(arg => arg.includes(CHANNEL_SENTINEL) || arg.includes(OLD_SENTINEL)), { settingsArg, entries: argv.length })
+          check(`loopback ${label}: the flag settings file is gone after the run`, flagFile !== undefined && !existsSync(flagFile.path))
+        }
       }
       // The control, then the six-cell matrix: tokenless/token × the three
       // credential keys cc-switch could have left in user settings.
@@ -1383,11 +1481,12 @@ const init = {
         await cell(`tokenless-${key}`, { ANTHROPIC_BASE_URL: 'https://old.invalid', [key]: OLD_SENTINEL }, {})
         await cell(`token-${key}`, { ANTHROPIC_BASE_URL: 'https://old.invalid', [key]: OLD_SENTINEL }, { token: CHANNEL_SENTINEL })
       }
+      await cell('token-ANTHROPIC_AUTH_TOKEN-inline', { ANTHROPIC_BASE_URL: 'https://old.invalid', ANTHROPIC_AUTH_TOKEN: OLD_SENTINEL }, { token: CHANNEL_SENTINEL, inline: true })
     } finally {
-      // The cleanup guard (the report's methodology): only ever remove the
-      // directory this run created under tmpdir, by exact prefix — retrying
-      // the Windows EPERM window where a just-killed CLI still holds a
-      // handle (channels.ts's renameIntoPlace retry pattern).
+      // Cleanup only ever removes the directory this run created under
+      // tmpdir, by exact prefix, retrying through the Windows EPERM window
+      // where a just-killed CLI still holds a handle (the same retry pattern
+      // as channels.ts's renameIntoPlace).
       if (root.startsWith(join(tmpdir(), 'dshtui-channels-loop-'))) {
         const waitCell = new Int32Array(new SharedArrayBuffer(4))
         for (let attempt = 0; ; attempt++) {

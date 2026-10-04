@@ -1,5 +1,5 @@
 /**
- * Version contract of the Claude backend (docs/agent-backend-design.md §4.2).
+ * Version contract of the Claude backend.
  * The SDK is pinned exactly (`package.json` optional peer + dev dependency);
  * the CLI it drives is validated per version read from
  * `system/init.claude_code_version`. Drift is reported (startup notice and a
@@ -11,7 +11,7 @@
 export const CLAUDE_BACKEND_ID = 'claude'
 
 /** User-facing backend name. Brand guidance allows "Claude Agent", never
- *  "Claude Code" (design §4.12). */
+ *  "Claude Code". */
 export const CLAUDE_BACKEND_LABEL = 'Claude Agent'
 
 /** How a user re-enters a Claude session from a shell: the launcher's

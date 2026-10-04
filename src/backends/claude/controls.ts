@@ -1,6 +1,5 @@
 /**
- * The Claude session's control capabilities (docs/agent-backend-design.md
- * §4.9–§4.10, §5.3–§5.4): model, effort, permission mode, compaction, the
+ * The Claude session's control capabilities: model, effort, permission mode, compaction, the
  * CLI's own slash commands, MCP status, context usage and the account — each
  * a thin typed wrapper over the live `Query`'s control requests.
  *
@@ -28,7 +27,7 @@ import type { ClaudePrefs } from './prefs.js'
 const ROSTER: readonly string[] = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
 
 /** The Shift+Tab cycle surface, in order: the pre-bypass roster, verbatim.
- *  `bypassPermissions` is deliberately NOT here: Shift+Tab is a reflexive
+ *  `bypassPermissions` is deliberately not here: Shift+Tab is a reflexive
  *  key (the user taps it repeatedly to move through modes), and one stray
  *  press landing in "all confirmations off" is unacceptable — bypass is
  *  entered only through the /permission picker's explicit, explained row.
@@ -110,7 +109,7 @@ export function accountView(info: AccountInfo, apiKeySource: string | undefined)
 }
 
 /** The connection fingerprint of one profile: a sha256 over the endpoint,
- *  the STORED token (when the seam holds one) and the channel-private env —
+ *  the stored token (when the seam holds one) and the channel-private env —
  *  equal fingerprints are the same connection, so the UI can decide
  *  restart-vs-refresh without ever seeing the token. */
 const connectionFingerprint = (profile: ClaudeChannelProfile, tokens: ClaudeChannelTokens | undefined): string => {
@@ -146,22 +145,14 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
 
   const currentRow = (): ModelInfo | undefined => rowOf(models, deps.currentModel())
 
-  /** Converge the remembered effort with a model's DECLARED effort
-   *  capabilities: the choice is cleared ONLY on an explicit refusal —
-   *  `supportsEffort === false`, or a DECLARED level list that does not
-   *  contain the tier. A row that declares neither (the real offline
-   *  catalog's Haiku rows, a relay channel's custom model rows, an old CLI
-   *  claiming support without tiers) keeps the choice: the CLI accepts any
-   *  effortLevel flag (applyFlagSettings — the user's own settings.json
-   *  ships a global one), and levels() serves the CLI-standard tiers for
-   *  exactly that shape. A remembered tier outside even the fallback ladder
-   *  is kept verbatim — the CLI is the authority on what it will run, and
-   *  the TUI neither rewrites the user's pref nor offers it in the picker
-   *  (the slider marks no tier as current). Returns the events the caller
-   *  must emit. (R2-4: EVERY authoritative confirmation of the model runs
-   *  this — a manual switch, the open/resume seed, a later `system/init`
-   *  or `message_start` frame — so the readout never claims a tier the
-   *  serving model refuses.) */
+  /** Check the remembered effort against what a model declares. It is
+   *  cleared only on an explicit refusal: `supportsEffort === false`, or a
+   *  declared level list without the tier. A row that declares neither
+   *  (the offline catalog's Haiku rows, a relay's custom rows) keeps it:
+   *  the CLI accepts any effortLevel flag and levels() offers the standard
+   *  tiers for that shape. Runs on every confirmation of the model (a
+   *  switch, the open/resume seed, `system/init`, `message_start`).
+   *  Returns the events to emit. */
   const convergeEffort = (row: ModelInfo | undefined): readonly AgentEvent[] => {
     if (row === undefined || effort === undefined) return []
     const levels = row.supportedEffortLevels as readonly string[] | undefined
@@ -181,34 +172,19 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
     return models
   }
 
-  const modeList = (): readonly ModeOption[] => {
-    const row = currentRow()
-    const ids = [...ROSTER]
-    if (row?.supportsAutoMode === true) ids.push('auto')
-    // The live mode stays listed (and cyclable away from) even when the
-    // roster would not offer it — a session started in `dontAsk`, say.
+  /** A roster as mode options: `auto` where the model supports it, and the
+   *  live mode last when the roster would not offer it (a session started
+   *  in `dontAsk`, say) — it stays listed and can be cycled away from. */
+  const modeOptions = (roster: readonly string[]): readonly ModeOption[] => {
+    const ids = [...roster]
+    if (currentRow()?.supportsAutoMode === true) ids.push('auto')
     const current = deps.currentMode()
     if (current !== '' && !ids.includes(current)) ids.push(current)
     return ids.map(id => ({ id, label: modeLabel(id), description: modeDescription(id) }))
   }
 
-  /** The cycle: the same assembly as `modeList`, over `CYCLE_ROSTER` — the
-   *  live mode still trails the cycle as the away-out when the roster would
-   *  not offer it, so a session in a non-roster mode can always cycle out. */
-  const modeCycle = (): readonly ModeOption[] => {
-    const row = currentRow()
-    const ids = [...CYCLE_ROSTER]
-    if (row?.supportsAutoMode === true) ids.push('auto')
-    const current = deps.currentMode()
-    if (current !== '' && !ids.includes(current)) ids.push(current)
-    return ids.map(id => ({ id, label: modeLabel(id), description: modeDescription(id) }))
-  }
-
-  /** R3-6 followup: whether any OTHER profile row still references `ref`.
-   *  Shared refs are legal data — a hand edit or migration can point a
-   *  second channel at another channel's DERIVED key — so erasing a
-   *  credential on one row's account must first prove no sibling still
-   *  reads it. */
+  /** Whether another profile row still references `ref` (a hand edit can
+   *  point two channels at one key): such a credential is not erased. */
   const refSharedElsewhere = (ref: string, exceptId: string): boolean =>
     deps.channels.read().channels.some(channel => channel.id !== exceptId && channel.tokenRef === ref)
 
@@ -218,7 +194,7 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         const truth = deps.modelTruth?.()
         return (await refreshModels()).map(model => {
           // Channel truth (modelEnv.ts): when the configuration says this
-          // row's id routes to a different model, the LABEL becomes the
+          // row's id routes to a different model, the label becomes the
           // actual model and the cosmetic name moves into the description.
           // No mapping (a real Claude setup, or one resolving to the same
           // model) renders exactly as before.
@@ -246,8 +222,7 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         deps.prefs.write({ model: row.value })
         deps.emit(deps.noteModel(row.resolvedModel ?? row.value))
         // An effort the new model refuses is cleared (the CLI would run its
-        // default anyway; the readout must not claim otherwise) — the
-        // explicit-refusal rule lives on convergeEffort (R2-4).
+        // default anyway).
         deps.emit(convergeEffort(row))
         return { kind: 'switched' }
       },
@@ -267,7 +242,7 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         // the catalog does not know (the lifecycle contract).
         if (row === undefined) return []
         if (row.supportsEffort === false) return []
-        // A KNOWN row that declares no list of its own (relay custom rows,
+        // A known row that declares no list of its own (relay custom rows,
         // the offline Haiku shape, old CLIs) falls back to the CLI's standard
         // tiers — the CLI accepts any effortLevel flag, so the standard
         // ladder is the honest compatibility offer, marked above for the
@@ -287,8 +262,8 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       },
     },
     modes: {
-      list: modeList,
-      cycle: modeCycle,
+      list: () => modeOptions(ROSTER),
+      cycle: () => modeOptions(CYCLE_ROSTER),
       current: (): string => deps.currentMode(),
       async set(id: string): Promise<void> {
         // No TUI-side vetting: the query was pre-warmed for `bypassPermissions`
@@ -314,11 +289,10 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         // user's hand-written exact models (channels.ts's contract).
         const existing = deps.channels.read().channels.find(channel => channel.id === draft.id)
         const imported = existing === undefined ? draft : importFromSettingsEnv(env, existing) ?? draft
-        // Phase 3: the settings env's auth token, when present, moves into
-        // the credential store — the profile keeps only the ref, so
-        // channels.json never carries a literal token. The import is a COPY
-        // (settings keeps its value); it rotates the row's EXISTING ref when
-        // the channel already holds one (R3-6), else the derived ref.
+        // The settings env's auth token, when present, is copied into the
+        // credential store (settings keeps its value); the profile keeps
+        // only the ref, so channels.json never holds a token. An existing
+        // ref is reused, else the derived one.
         const token = importTokenFromSettingsEnv(env)
         const ref = existing?.tokenRef ?? channelTokenRef(imported.id)
         const profile: ClaudeChannelProfile = token !== undefined && deps.tokens !== undefined
@@ -330,18 +304,14 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       },
       save: input => {
         const current = deps.channels.read().channels.find(channel => channel.id === input.id)
-        // The token, when the wizard collected one, lives in the credential
-        // store; '' removes it (and the profile's ref with it). A rotation
-        // (R3-6) reuses the row's EXISTING ref — a hand-written or migrated
-        // tokenRef keeps pointing at its credential instead of being left
-        // behind in the store while the row moves to the derived ref; only
-        // a row without one adopts the derived ref.
+        // A token the wizard collected goes to the credential store; ''
+        // removes it (and the profile's ref). A rotation reuses the row's
+        // existing ref (a hand-written one included); only a row without one
+        // takes the derived ref.
         let storedTokenRef = current?.tokenRef
         if (input.token !== undefined && deps.tokens !== undefined) {
           if (input.token === '') {
-            // Clearing THIS row detaches the ref from it, but the credential
-            // dies only with its last referent: another row sharing the ref
-            // (shared DERIVED keys included) must not dangle (R3-6 followup).
+            // The credential goes only with its last referent.
             if (storedTokenRef !== undefined) {
               if (refSharedElsewhere(storedTokenRef, input.id)) {
                 deps.debug(`claude: channel ${input.id} cleared its token; the shared ref ${storedTokenRef} stays in the store (another channel still references it)`)
@@ -371,13 +341,10 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       remove: id => {
         const current = deps.channels.read().channels.find(channel => channel.id === id)
         if (current === undefined) return false
-        // R3-6: a credential is erased only when no OTHER row still
-        // references its ref — shared DERIVED keys included (a hand edit
-        // can point a second channel at CHANNEL_<A>_TOKEN; removing A must
-        // not dangle B) — AND the ref is this channel's own derived one (a
-        // hand-written ref may be host-owned: "referenced" is not
-        // "exclusively deletable"). Everything kept is reported to the
-        // debug log; the ref name is not secret, it lives in channels.json.
+        // The credential is erased only when no other row references it and
+        // the ref is this channel's derived one (a hand-written ref may be
+        // owned by the host). What is kept goes to the debug log (a ref name
+        // is not secret).
         if (current.tokenRef !== undefined) {
           if (refSharedElsewhere(current.tokenRef, id)) {
             deps.debug(`claude: channel ${id} removed; its tokenRef ${current.tokenRef} stays in the store (another channel still references it)`)
@@ -401,7 +368,7 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       },
     },
     compact: {
-      // The CLI's own `/compact` (design §4.11): the translator turns its
+      // The CLI's own `/compact`: the translator turns its
       // `compacting` status and `compact_boundary` into the compaction rows.
       run: (): Promise<void> => deps.submitText('/compact'),
     },
@@ -441,7 +408,6 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
 
   return {
     capabilities,
-    commandInfos,
     /** The handshake's catalogs (`initializationResult().models/commands`),
      *  read without a round trip; malformed entries are skipped. */
     seed(init: Readonly<Record<string, unknown>> | undefined): void {
@@ -451,12 +417,9 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       models = list(init?.models).filter(row => typeof row.value === 'string' && typeof row.displayName === 'string') as unknown as ModelInfo[]
       commands = list(init?.commands).filter(row => typeof row.name === 'string') as unknown as SlashCommand[]
     },
-    /** R2-4: the session confirmed the model from an authoritative source
-     *  other than a manual switch — the open/resume seed, a `system/init`
-     *  frame, a `message_start` drift. The effort readout converges with
-     *  the model's DECLARED capabilities through the same explicit-refusal
-     *  rule; a model the seeded catalog has no row for is missing
-     *  metadata and keeps the choice. */
+    /** The session confirmed the model by other means than a switch (the
+     *  open/resume seed, `system/init`, `message_start`): check the effort
+     *  as convergeEffort does. A model without a catalog row keeps it. */
     noteConfirmedModel(model: string): void {
       if (model === '') return
       const events = convergeEffort(rowOf(models, model))
@@ -465,10 +428,6 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
     /** `system/init.terminal_slash_commands` (terminal-only, never offered). */
     setTerminalOnly(names: readonly string[]): void {
       terminalOnly = new Set(names)
-    },
-    /** The CLI said its commands changed: refresh and report the list. */
-    async refreshCommands(): Promise<readonly CommandInfo[]> {
-      return capabilities.commands.list()
     },
   }
 }
