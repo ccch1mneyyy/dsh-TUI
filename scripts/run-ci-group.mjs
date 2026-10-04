@@ -478,6 +478,13 @@ const GROUPS = {
 // 前写入直通/自恢复，以及真进程 e2e：ready 后旧父永不写 1049l、ready 前
 // 死亡与旧版 replacement 都恰一次收口回主屏。
     ["verify-handoff-atomic", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-atomic.ts']],
+// PTY/ConPTY 先行门（S05 完整版）：在真实 PTY 下跑完整交接链（旧父 1049 →
+// 过场帧 → replacement adopted/首帧/ready → 自然退出闭合 1049），断言
+// 1049h/l 各恰一次且闭合晚于首帧、旧父 spawn 前后 stdin 零 reader、
+// replacement 的 TTY facade（isTTY/尺寸/raw mode）。provider 自动选择：
+// node-pty（真 ConPTY/PTY + master 侧 DA1 应答器）→ POSIX script（真 PTY）
+// → pipe（协议级回退，设备断言显式 note）。Linux CI 走 script 档。
+    ["verify-handoff-pty-gate", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-pty-gate.mjs']],
 // 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：
 // 全程跑官方读取链——Session.append 生成骨架（turn 配对/reasoning/
 // provenance/空 system head/工具调用/中断/标题/压缩检查点）、
