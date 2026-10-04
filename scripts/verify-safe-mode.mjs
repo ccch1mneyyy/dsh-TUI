@@ -346,10 +346,14 @@ const cleanManifest = {
 // resumeEnvForRetry 的次序：本次启动之后写下的 ~/.dsh-tui/last-run.json >
 // env 里的 --resume（仅当没有这样的记录）> 按后端读上次会话。非 TTY 进不了
 // 重试菜单，所以用 node:vm 跑 bin/dsh-tui.js 里切出来的真实函数
-// （readLastRunRecord/envFromLastRun/noteLaunchChain/readClaudeLastSession/
+// （readLastRunRecord/envFromLastRun/noteLaunchChain/readBackendLastSession/
 // resumeEnvForRetry），注入受控的 homedir 与 process.env。
 {
   const binSource = readFileSync(bin, 'utf8')
+  const idsStart = binSource.indexOf('const KERNEL_IDS = [')
+  const idsEnd = binSource.indexOf('\n', idsStart)
+  if (idsStart < 0 || idsEnd < 0) throw new Error('bin kernel registry not found')
+  const KERNEL_IDS = new vm.Script(binSource.slice(idsStart, idsEnd) + '\nKERNEL_IDS').runInNewContext()
   const fromMarker = 'const readLastRunRecord = () => {'
   const from = binSource.indexOf(fromMarker)
   const to = binSource.indexOf('// TTY 判定：')
@@ -362,6 +366,7 @@ const cleanManifest = {
       join,
       homedir: () => home,
       process: sandboxProcess,
+      KERNEL_IDS,
     }
     context.globalThis = context
     const factory = new vm.Script(
@@ -389,7 +394,7 @@ const cleanManifest = {
       'backend=' + env.DSH_TUI_BACKEND + ' handoff=' + env.DSH_TUI_BACKEND_HANDOFF + ' resume=' + env.DSH_TUI_RESUME_SESSION,
     )
   }
-  // C2 空 env（第二形态）：外层什么都没带，kernel.json 已记 Claude——记录仍是权威。
+  // C2 空 env（第二形态）：外层没有带后端或会话 marker——记录仍是权威。
   {
     const launcher = makeLauncher({ env: {}, home: chainHome })
     launcher.noteLaunchChain()
