@@ -25,6 +25,7 @@ import { logForDebugging } from '../utils/debug.js'
 import { createHyperlink } from './hyperlink.js'
 import { fileLinkUrl, linkifyFilePaths, looksLikeFilePath } from '../utils/fileTarget.js'
 import { getMathRendering } from '../tuiDisplayPrefs.js'
+import { noteCodeHighlight, noteFormatToken } from '../ink/render-stats.js'
 import {
   isMathBlockToken,
   isMathToken,
@@ -75,11 +76,11 @@ export function stripPromptXMLTags(content: string): string {
 let markedInitialized = false
 
 /**
- * Configure the shared `marked` instance once. Strikethrough parsing is
- * disabled so that `~100` renders literally instead of as deleted text —
- * models use `~` far more often for "approximate" than for real
- * strikethrough. LaTeX math becomes `math`/`mathBlock` tokens (see
- * math.ts). Every lexer caller — Markdown and StreamingMarkdown's boundary
+ * Configure the shared `marked` instance once. Strikethrough stays on
+ * marked's built-in del tokenizer, which only matches double-tilde pairs —
+ * single tildes (`~100`, models' "approximate") never pair up and render
+ * literally. LaTeX math becomes `math`/`mathBlock` tokens (see math.ts).
+ * Every lexer caller — Markdown and StreamingMarkdown's boundary
  * lex — must run this first so both agree on block boundaries.
  */
 export function configureMarked(): void {
@@ -87,11 +88,6 @@ export function configureMarked(): void {
   markedInitialized = true
 
   marked.use({
-    tokenizer: {
-      del() {
-        return undefined
-      },
-    },
     extensions: [...MATH_MARKDOWN_EXTENSIONS],
   })
 }
@@ -151,6 +147,13 @@ interface RenderState {
   readonly listDepth: number
   /** Ordinal of the current ordered-list item, or null for unordered lists. */
   readonly ordinal: number | null
+  /**
+   * Rendered task checkbox of the enclosing tight list item ('[x] ' with
+   * styling). marked lifts the checkbox to a sibling token ahead of the
+   * text there; renderListItem stashes it here so it lands between the
+   * bullet and the body (loose items keep it inline in their paragraph).
+   */
+  readonly taskMark?: string
 }
 
 /** A fresh context for block-level children: list state reset, no parent. */
@@ -229,11 +232,14 @@ function isToken<K extends MarkedToken['type']>(
 
 /** Fan-out point: narrows the token union, then delegates to the per-type render functions. */
 function dispatch(token: Token, state: RenderState): string {
+  noteFormatToken(token.raw ?? '')
   if (isToken(token, 'blockquote')) return renderBlockquote(token, state)
+  if (isToken(token, 'checkbox')) return renderCheckbox(token)
   if (isToken(token, 'code')) return renderCodeBlock(token, state)
   if (isToken(token, 'codespan')) return renderCodeSpan(token)
   if (isToken(token, 'em')) return renderEmphasis(token, state)
   if (isToken(token, 'strong')) return renderStrong(token, state)
+  if (isToken(token, 'del')) return renderDel(token, state)
   if (isToken(token, 'heading')) return renderHeading(token, state)
   if (isToken(token, 'hr')) return '---'
   if (isToken(token, 'image')) return token.href
@@ -249,13 +255,18 @@ function dispatch(token: Token, state: RenderState): string {
   // Top-level math blocks are standalone MathBlock nodes; this path only
   // sees blocks nested in list items / blockquotes (or formatToken callers).
   if (isMathBlockToken(token)) return renderNestedMathBlock(token)
-  if (isToken(token, 'def') || isToken(token, 'del') || isToken(token, 'html')) {
-    // Link definitions, strikethrough, and raw HTML carry no ANSI
-    // representation.
+  if (isToken(token, 'def') || isToken(token, 'html')) {
+    // Link definitions and raw HTML carry no ANSI representation.
     return ''
   }
-  // Unknown / extension token types render as nothing.
-  return ''
+  // Fail closed: a token type this dispatcher does not know must not
+  // silently swallow content. A marked upgrade or plugin extension that
+  // introduces a new token shape would otherwise drop its text without a
+  // trace; echo the raw source so the user still sees it and the debug
+  // log flags the gap until the census gate forces an explicit decision
+  // (handler, or registration as a deliberate ignore like def/html).
+  logForDebugging(`Markdown token without a renderer, echoing raw source: ${token.type}`)
+  return (token as { raw?: string }).raw ?? ''
 }
 
 /** Inline math as single-line Unicode; the exact source when it has none
@@ -289,28 +300,13 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
   // Kimi Code style: a muted ```lang opening line (language tag + boundary
   // for unhighlighted blocks) + 2-space indent; no closing fence (syntax
   // colors or the indent already mark the end, it only cost vertical space).
+  // This ANSI form serves nested code (inside lists/quotes) and the narrow
+  // fallback of CodeBlockFrame; top-level fences render through the frame
+  // component sharing formatCodeBody below.
   const theme = getActiveTheme()
-  const openFence = colorize('```' + (token.lang ?? ''), theme.subtle, 'foreground')
+  const openFence = colorize('```' + codeLanguageTag(token), theme.subtle, 'foreground')
   const indent = '  '
-  const renderBody = (): string => {
-    if (!state.highlight) {
-      return token.text
-    }
-    let language = 'plaintext'
-    if (token.lang) {
-      if (state.highlight.supportsLanguage(token.lang)) {
-        language = token.lang
-      } else {
-        logForDebugging(
-          `Language not supported while highlighting code, falling back to plaintext: ${token.lang}`,
-        )
-      }
-    }
-    return state.highlight.highlight(token.text, { language, theme: buildSyntaxTheme(theme) })
-  }
-  // Strip ALL trailing newlines: trailing blank lines would otherwise leak a
-  // stray blank line at the end of the block.
-  const body = renderBody().replace(/\n+$/, '')
+  const body = formatCodeBody(token, state.highlight)
   if (body === '') {
     return `${openFence}${EOL}`
   }
@@ -324,6 +320,55 @@ function renderCodeBlock(token: Tokens.Code, state: RenderState): string {
   )
 }
 
+/**
+ * The fence info string trimmed to its first word: a fence opening with
+ * "js meta" names js. Everything after the first whitespace run is meta
+ * the renderer never consumes; the full source stays in token.text.
+ */
+export function codeLanguageTag(token: Tokens.Code): string {
+  return (token.lang ?? '').trim().split(/\s+/)[0] ?? ''
+}
+
+/**
+ * Highlighted (or plain) body of a fenced code block, with trailing blank
+ * lines stripped. Shared by the ANSI fence and CodeBlockFrame so both
+ * surfaces agree on highlighting, language resolution and trimming.
+ *
+ * NEVER throws: cli-highlight feeds highlight.js, which converts to HTML
+ * fragments and can raise synchronously on hostile inputs. Any failure in
+ * the highlighting pipeline degrades to the plain body - the fence and
+ * language label survive - instead of unwinding the React render that
+ * called it.
+ */
+export function formatCodeBody(token: Tokens.Code, highlight: CliHighlight | null): string {
+  const plain = token.text.replace(/\n+$/, '')
+  if (!highlight || plain === '') return plain
+  try {
+    let language = 'plaintext'
+    const tag = codeLanguageTag(token)
+    if (tag) {
+      if (highlight.supportsLanguage(tag)) {
+        language = tag
+      } else {
+        logForDebugging(
+          `Language not supported while highlighting code, falling back to plaintext: ${tag}`,
+        )
+      }
+    }
+    const theme = getActiveTheme()
+    noteCodeHighlight()
+    const highlighted = highlight.highlight(token.text, { language, theme: buildSyntaxTheme(theme) })
+    // Strip ALL trailing newlines: trailing blank lines would otherwise leak
+    // a stray blank line at the end of the block.
+    return highlighted.replace(/\n+$/, '') || plain
+  } catch (error) {
+    logForDebugging(
+      `Code highlighting threw, degrading the block to plaintext: ${String(error)}`,
+    )
+    return plain
+  }
+}
+
 function renderEmphasis(token: Tokens.Em, state: RenderState): string {
   const inner = token.tokens.map(child => dispatch(child, inlineChildren(state))).join('')
   return chalk.italic(inner)
@@ -332,6 +377,13 @@ function renderEmphasis(token: Tokens.Em, state: RenderState): string {
 function renderStrong(token: Tokens.Strong, state: RenderState): string {
   const inner = token.tokens.map(child => dispatch(child, inlineChildren(state))).join('')
   return chalk.bold(inner)
+}
+
+/** Double-tilde strikethrough; marked's del tokenizer never pairs single
+ *  tildes, so approximate notation like ~100 stays literal. */
+function renderDel(token: Tokens.Del, state: RenderState): string {
+  const inner = token.tokens.map(child => dispatch(child, inlineChildren(state))).join('')
+  return chalk.strikethrough(inner)
 }
 
 function renderHeading(token: Tokens.Heading, state: RenderState): string {
@@ -379,11 +431,33 @@ function renderList(token: Tokens.List, state: RenderState): string {
 
 function renderListItem(token: Tokens.ListItem, state: RenderState): string {
   const indent = '  '.repeat(state.listDepth)
+  // Tight task items carry their checkbox as a sibling token AHEAD of the
+  // text token (loose items inline it inside the paragraph). Lift it out
+  // here and hand it to renderText: otherwise the checkbox would render on
+  // its own line before the bullet instead of between bullet and body.
+  const isTightTask = token.task === true && token.tokens[0]?.type === 'checkbox'
+  const children = isTightTask ? token.tokens.slice(1) : token.tokens
   const childState = withParent(
-    { ...state, listDepth: state.listDepth + 1 },
+    {
+      ...state,
+      listDepth: state.listDepth + 1,
+      taskMark: isTightTask ? renderCheckbox(token.tokens[0] as Tokens.Checkbox) : '',
+    },
     token,
   )
-  return token.tokens.map(child => indent + dispatch(child, childState)).join('')
+  return children.map(child => indent + dispatch(child, childState)).join('')
+}
+
+/**
+ * Task checkbox as width-safe ASCII: literal [x] / [ ] keeps its state
+ * through display, copy, and ANSI-stripping measurements alike; a styled
+ * glyph pair would not survive every terminal font. The trailing space is
+ * the separator to the item text.
+ */
+function renderCheckbox(token: Tokens.Checkbox): string {
+  const mark = token.checked ? '[x]' : '[ ]'
+  const color = token.checked ? getActiveTheme().success : getActiveTheme().subtle
+  return colorize(mark, color, 'foreground') + ' '
 }
 
 function renderParagraph(token: Tokens.Paragraph, state: RenderState): string {
@@ -405,9 +479,10 @@ function renderText(token: Tokens.Text, state: RenderState): string {
       ? token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
       : linkifyText(token.text)
     // Blue bullet marker: list structure gets a tint without loading the
-    // whole item (kimi-style `•` in the accent color).
+    // whole item (kimi-style `•` in the accent color). A tight task item
+    // slots its rendered checkbox between the bullet and the body.
     const tinted = colorize(bullet, getActiveTheme().permission, 'foreground')
-    return `${tinted} ${body}${EOL}`
+    return `${tinted} ${state.taskMark ?? ''}${body}${EOL}`
   }
 
   return linkifyText(token.text)

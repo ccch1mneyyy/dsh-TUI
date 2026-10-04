@@ -3,6 +3,7 @@ import { createLayoutNode } from './layout/engine.js'
 import type { LayoutNode } from './layout/node.js'
 import { LayoutDisplay, LayoutMeasureMode } from './layout/node.js'
 import measureText from './measure-text.js'
+import { noteMeasureCompute } from './render-stats.js'
 import { addPendingClear, nodeCache, textPaintCache } from './node-cache.js'
 import squashTextNodes from './squash-text-nodes.js'
 import type { Styles, TextStyles } from './styles.js'
@@ -467,6 +468,7 @@ const measureTextNode = function (
   }
 
   // Check above before measureText walks every line, even on a wrap-cache hit.
+  noteMeasureCompute()
   const result = measureTextDimensions(cache.text, width, widthMode, textWrap)
   if (cache.entries.length === TEXT_MEASURE_CACHE_SIZE) cache.entries.shift()
   cache.entries.push({ width, widthMode, result })

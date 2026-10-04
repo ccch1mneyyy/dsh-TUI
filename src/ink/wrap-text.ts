@@ -2,6 +2,7 @@ import sliceAnsi from '../utils/sliceAnsi.js'
 import { stringWidth } from './stringWidth.js'
 import type { Styles } from './styles.js'
 import { wrapAnsi } from './wrapAnsi.js'
+import { noteWrapCompute } from './render-stats.js'
 
 const ELLIPSIS = '…'
 
@@ -38,10 +39,14 @@ function cachedWrap(
   wrapType: Styles['textWrap'],
   compute: () => string,
 ): string {
-  if (text.length < WRAP_CACHE_MIN_LENGTH) return compute()
+  if (text.length < WRAP_CACHE_MIN_LENGTH) {
+    noteWrapCompute()
+    return compute()
+  }
   const key = `${maxWidth}\u0000${wrapType}\u0000${text}`
   const hit = wrapCache.get(key)
   if (hit !== undefined) return hit
+  noteWrapCompute()
   const result = compute()
   if (wrapCache.size >= WRAP_CACHE_MAX_ENTRIES || wrapCacheChars + text.length > WRAP_CACHE_MAX_CHARS) {
     wrapCache.clear()
