@@ -17,6 +17,9 @@
  *   W4  peer roster（SubagentDashboard）：children 与 peers 分区呈现；
  *       无 peer 名册能力时如实降级一行（不伪装空名册）；served peers
  *       不混入 children、无发送入口（跨会话交互无上游支持面）。
+ *   W6  转录分页：代理消息只落在它所属的那一页（载入更早不重复、newest
+ *       页不收更早页的消息）；载入更早在途时切换代理，旧代理的更早页不会
+ *       拼进新代理的转录；live 合并不改写历史叶子。
  *   W5  侧栏 Detail 的 composer：按键经面板分发器进草稿（宿主吞掉普通键，
  *       直接 useInput 收不到）；Esc 先让出编辑焦点、焦点仍在侧栏；焦点被
  *       宿主切回聊天后，聊天里的打字和 Enter 不进 composer、不发给子代理。
@@ -437,6 +440,69 @@ console.log('--- W4: dashboard children/peers partition ---')
       check('W4 点击 peer 行不触发任何 child 导航', selected2.length === 0, JSON.stringify(selected2))
       const childrenCount = (frame.screen().match(/agent agent-a/g) ?? []).length
       check('W4 children 不重复出现在 peers 分区', childrenCount === 1, String(childrenCount))
+    },
+  )
+}
+
+// ── W6: transcript paging with the agent message feed ─────────────────────
+console.log('--- W6: transcript paging ---')
+{
+  const fold = await import('../src/components/messages/subagentTranscript.js')
+  const message = (id: string, observedAt: number): Record<string, unknown> => ({ messageId: id, from: 'parent', to: 'agent-a', via: 'dsh-agent-relay', text: 'note ' + id, state: 'queued', observedAt })
+  const messages = [message('m-old', NOW - 90_000), message('m-mid', NOW - 35_000), message('m-new', NOW - 5_000)]
+  const newest = [
+    ev('assistant.message', { anchor: 'n1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'newest page text' }] }),
+    ev('assistant.message', { anchor: 'n2', time: NOW - 30_000, blocks: [{ type: 'text', text: 'newest page tail' }] }),
+  ]
+  const older = [ev('assistant.message', { anchor: 'o1', time: NOW - 100_000, blocks: [{ type: 'text', text: 'older page text' }] })]
+  const leaves: Array<Record<string, unknown>> = []
+  const from = fold.foldTranscriptLeaves(newest as never, leaves as never, messages as never, { olderPagesRemain: true })
+  const ids = (rows: Array<Record<string, unknown>>): string[] => rows.filter(row => row.kind === 'agent-message').map(row => (row.message as { messageId: string }).messageId)
+  check('W6 newest 页不收更早页的消息', ids(leaves).join(',') === 'm-mid,m-new', JSON.stringify(ids(leaves)))
+  const olderLeaves: Array<Record<string, unknown>> = []
+  fold.foldTranscriptLeaves(older as never, olderLeaves as never, messages as never, { olderPagesRemain: false, before: from })
+  const merged = fold.prependOlderLeaves(olderLeaves as never, leaves as never) as unknown as Array<Record<string, unknown>>
+  check('W6 载入更早后每条消息恰好一次且按序', ids(merged).join(',') === 'm-old,m-mid,m-new', JSON.stringify(ids(merged)))
+
+  const live = makeRow('agent-a', { status: 'running', completedAt: undefined, toolCalls: [{ id: 'tc1', name: 'Read', status: 'completed', startedAt: NOW - 20_000, endedAt: NOW - 10_000, resultPreview: 'live result' }] })
+  const history = [{ kind: 'tool', key: 'tc1', tool: { callId: 'tc1', name: 'Read', argsText: '{}', status: 'running', startedAt: NOW - 20_000 } }]
+  const overlaid = fold.mergeLiveWindow(history as never, live as never, true) as unknown as Array<{ tool?: { status: string } }>
+  check('W6 live 状态叠加到合并结果', overlaid[0]?.tool?.status === 'ok', JSON.stringify(overlaid[0]))
+  check('W6 live 合并不改写历史叶子', history[0]!.tool.status === 'running', JSON.stringify(history[0]))
+
+  // Scene: the feed placed once across a load-older, then an older request
+  // left in flight while the view switches to another agent.
+  let releaseOlder: ((page: Record<string, unknown>) => void) | undefined
+  const scenePages = (agentId: string, window?: { count: number; skipFromStart: number }): Promise<Record<string, unknown>> => {
+    if (agentId === 'agent-b') return Promise.resolve(historyPage([ev('assistant.message', { anchor: 'b1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'beta newest body' }] })]))
+    if (window === undefined) return Promise.resolve(historyPage(newest, { hasOlder: true, skippedFromStart: 800 }))
+    if (window.skipFromStart === 800) return Promise.resolve(historyPage(older, { hasOlder: true, skippedFromStart: 400 }))
+    return new Promise(resolve => { releaseOlder = resolve })
+  }
+  const sceneProps = (row: Record<string, unknown>): Record<string, unknown> => ({
+    subagent: row,
+    source: { kind: 'agents-dashboard' },
+    onExit: () => {},
+    loadTranscript: scenePages as never,
+    messages: row.agentId === 'agent-a' ? messages : [],
+  })
+  const rowA = makeRow('agent-a')
+  const rowB = makeRow('agent-b')
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, sceneProps(rowA)),
+    async frame => {
+      await settled(() => frame.screen().includes('newest page tail'))
+      frame.stdin.write('o')
+      check('W6 场景载入更早页', await settled(() => frame.screen().includes('older page text')), frame.lines().slice(0, 12).join('|'))
+      const count = (needle: string): number => frame.screen().split(needle).length - 1
+      check('W6 场景里每条消息只画一次', count('note m-mid') === 1 && count('note m-new') === 1 && count('note m-old') === 1, JSON.stringify({ mid: count('note m-mid'), recent: count('note m-new'), old: count('note m-old') }))
+      frame.stdin.write('o')
+      await settled(() => releaseOlder !== undefined)
+      frame.rerender(React.createElement(AgentTranscriptScene, sceneProps(rowB)))
+      await settled(() => frame.screen().includes('beta newest body'))
+      releaseOlder?.(historyPage([ev('assistant.message', { anchor: 'z1', time: NOW - 200_000, blocks: [{ type: 'text', text: 'alpha oldest leak' }] })], { hasOlder: false, skippedFromStart: 0 }))
+      await sleep(100) // 固定窗:探针 负向断言：给迟到的更早页留出拼接的时间
+      check('W6 切换代理后旧代理的更早页不拼进来', !frame.screen().includes('alpha oldest leak') && frame.screen().includes('beta newest body'), frame.lines().slice(0, 10).join('|'))
     },
   )
 }

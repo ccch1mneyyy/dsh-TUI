@@ -1,23 +1,17 @@
 import React from 'react'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize } from '../ui.js'
 import type { SubagentOutputLine, SubagentState } from '../dsh-adapter/subagents.js'
-import type { SubagentTranscriptView } from '../adapter/ports/channel-view.js'
-import type { SubagentTranscriptWindow } from '../agent/capabilities.js'
 import { AgentMessageLeafRow, AssistantTextLeafRow, ThinkingLeafRow, ToolLeafRow } from './messages/TranscriptLeaves.js'
 import { AgentMessageFlowRow } from './messages/AgentMessageFlow.js'
 import { AgentMessageComposer, type ComposerKeyHandler } from './AgentMessageComposer.js'
 import type { AgentComposeTarget, AgentMessageControl, AgentMessageView } from './messages/agentTeam.js'
 import { subagentDetailMemory } from './subagentDetailMemory.js'
 import {
-  foldTranscriptLeaves,
   mergeLiveWindow,
   OUTPUT_WINDOW_CAP,
-  prependOlderLeaves,
   TRANSCRIPT_OLDER_CHUNK,
-  uniqueRenderKeys,
-  type LiveLeaf,
-  type TranscriptLeaf,
-  type TranscriptState,
+  useSubagentTranscript,
+  type TranscriptLoader,
 } from './messages/subagentTranscript.js'
 import { t } from '../i18n.js'
 import { Divider } from './design-system/Divider.js'
@@ -185,7 +179,7 @@ export interface SubagentDetailSceneProps {
    *  Claude's store read). Absent = this backend has no transcript data
    *  plane (DSH): the Transcript page is not rendered and the output tail
    *  keeps its retained-range note (design agent-team-panels §2). */
-  loadTranscript?: (agentId: string, window?: SubagentTranscriptWindow) => Promise<SubagentTranscriptView | null>
+  loadTranscript?: TranscriptLoader
   /** 主屏只读 Agent View（design agent-team-full §4.1 Detail 入口）。 */
   onOpenView?: () => void
   /** 代理↔代理消息流（§5.4）：非空时出现 Messages 页。 */
@@ -292,56 +286,17 @@ export function SubagentDetailScene({
     return -1
   })()
 
-  // ── the Agent-Transcript page (capability-driven; design §2) ─────────
-  const [transcript, setTranscript] = React.useState<TranscriptState>({ status: 'idle' })
+  // ── the Agent-Transcript page (only with a transcript source) ─────────
   /** The transcript page's one expanded tool card (a click toggles; the
    *  output page's single-fold rhythm, applied to cards). */
   const [expandedLeaf, setExpandedLeaf] = React.useState<string | null>(null)
-  // The loader rides a ref: the channel UI proxy mints a fresh function per
-  // read, and the load effect must key on WHAT changed (the page, the child,
-  // settlement) — not on a churning identity.
-  const loaderRef = React.useRef(loadTranscript)
-  loaderRef.current = loadTranscript
-  // 消息流按 observedAt 与历史事件交错进转录页（§5.4 共用分页）。
-  const messagesRef = React.useRef(messages)
-  messagesRef.current = messages
-  const transcriptAgent = subagent.agentId
+  // Settlement makes the disk copy final: the isRunning flip reloads the
+  // page once, picking up what streamed in live.
+  const transcriptActive = activePage === 'transcript'
+  const { transcript, loadOlder: loadOlderTranscript } = useSubagentTranscript(loadTranscript, subagent.agentId, transcriptActive, isRunning, messages)
   React.useEffect(() => {
-    if (activePage !== 'transcript' || loaderRef.current === undefined) return
-    const load = loaderRef.current
-    let alive = true
-    setExpandedLeaf(null)
-    setTranscript(prev => prev.status === 'ready' && prev.agentId === transcriptAgent ? prev : { status: 'loading' })
-    load(transcriptAgent).then(loaded => {
-      if (!alive) return
-      if (loaded === null) { setTranscript({ status: 'unavailable' }); return }
-      const leaves: TranscriptLeaf[] = []
-      foldTranscriptLeaves(loaded.events, leaves, messagesRef.current)
-      // The initial page can itself repeat one anchor (text, tool, text of
-      // one message): its rows carry unique render keys from the start.
-      setTranscript({ status: 'ready', agentId: transcriptAgent, leaves: uniqueRenderKeys(leaves), parentAgentId: loaded.parentAgentId, hasOlder: loaded.hasOlder, skippedFromStart: loaded.skippedFromStart, loadingOlder: false })
-    }, () => { if (alive) setTranscript({ status: 'unavailable' }) })
-    return () => { alive = false }
-    // Settlement makes the disk copy final: the isRunning flip reloads the
-    // page once, picking up what streamed in live.
-  }, [page, transcriptAgent, isRunning])
-
-  const loadOlderTranscript = (): void => {
-    if (transcript.status !== 'ready' || !transcript.hasOlder || transcript.loadingOlder || loaderRef.current === undefined) return
-    const load = loaderRef.current
-    const count = Math.min(TRANSCRIPT_OLDER_CHUNK, transcript.skippedFromStart)
-    setTranscript({ ...transcript, loadingOlder: true })
-    load(transcript.agentId, { count, skipFromStart: transcript.skippedFromStart }).then(older => {
-      setTranscript(prev => {
-        if (prev.status !== 'ready' || older === null) return older === null && prev.status === 'ready' ? { ...prev, loadingOlder: false } : prev
-        const fresh: TranscriptLeaf[] = []
-        foldTranscriptLeaves(older.events, fresh, messagesRef.current)
-        return { ...prev, leaves: prependOlderLeaves(fresh, prev.leaves), hasOlder: older.hasOlder, skippedFromStart: older.skippedFromStart, loadingOlder: false }
-      })
-    }, () => {
-      setTranscript(prev => prev.status === 'ready' ? { ...prev, loadingOlder: false } : prev)
-    })
-  }
+    if (transcriptActive) setExpandedLeaf(null)
+  }, [transcriptActive, subagent.agentId, isRunning])
 
   const hasTranscriptThinking = transcript.status === 'ready' && transcript.leaves.some(leaf => leaf.kind === 'thinking' || leaf.kind === 'thinking-unavailable')
 

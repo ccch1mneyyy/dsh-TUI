@@ -1,18 +1,13 @@
 import React from 'react'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize } from '../ui.js'
 import type { SubagentState } from '../dsh-adapter/subagents.js'
-import type { SubagentTranscriptView } from '../adapter/ports/channel-view.js'
-import type { SubagentTranscriptWindow } from '../agent/capabilities.js'
 import { AgentMessageLeafRow, AssistantTextLeafRow, ThinkingLeafRow, ToolLeafRow } from '../components/messages/TranscriptLeaves.js'
 import {
-  foldTranscriptLeaves,
   mergeLiveWindow,
   OUTPUT_WINDOW_CAP,
-  prependOlderLeaves,
   TRANSCRIPT_OLDER_CHUNK,
-  uniqueRenderKeys,
-  type TranscriptLeaf,
-  type TranscriptState,
+  useSubagentTranscript,
+  type TranscriptLoader,
 } from '../components/messages/subagentTranscript.js'
 import { AgentMessageComposer } from '../components/AgentMessageComposer.js'
 import { ExitButton } from '../components/SubagentDashboard.js'
@@ -85,7 +80,7 @@ export interface AgentTranscriptSceneProps {
   /** The child's full transcript source (`subagentControl.history`).
    *  Absent = no transcript data plane (DSH today): a bounded live tail plus
    *  its retained-range note — never a fabricated empty history. */
-  loadTranscript?: (agentId: string, window?: SubagentTranscriptWindow) => Promise<SubagentTranscriptView | null>
+  loadTranscript?: TranscriptLoader
   /** The durable agent↔agent feed for this child (newest last), if any. */
   readonly messages?: readonly AgentMessageView[]
   /** The channel's message control + resolved target (`subagentControl.message`);
@@ -123,47 +118,12 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
   const [panelFocused, setPanelFocused] = React.useState(false)
   const [siblingCursor, setSiblingCursor] = React.useState(0)
 
-  // ── history pages (same loader contract as the Detail transcript page) ──
-  const [transcript, setTranscript] = React.useState<TranscriptState>({ status: 'idle' })
+  // ── history pages (the same pager the Detail transcript page uses) ──
   const [expandedLeaf, setExpandedLeaf] = React.useState<string | null>(null)
-  const loaderRef = React.useRef(loadTranscript)
-  loaderRef.current = loadTranscript
-  const messagesRef = React.useRef(messages)
-  messagesRef.current = messages
   const agentId = subagent.agentId
-  React.useEffect(() => {
-    if (loaderRef.current === undefined) return
-    const load = loaderRef.current
-    let alive = true
-    setExpandedLeaf(null)
-    setTranscript(prev => prev.status === 'ready' && prev.agentId === agentId ? prev : { status: 'loading' })
-    load(agentId).then(loaded => {
-      if (!alive) return
-      if (loaded === null) { setTranscript({ status: 'unavailable' }); return }
-      const leaves: TranscriptLeaf[] = []
-      foldTranscriptLeaves(loaded.events, leaves, messagesRef.current)
-      setTranscript({ status: 'ready', agentId, leaves: uniqueRenderKeys(leaves), parentAgentId: loaded.parentAgentId, hasOlder: loaded.hasOlder, skippedFromStart: loaded.skippedFromStart, loadingOlder: false })
-    }, () => { if (alive) setTranscript({ status: 'unavailable' }) })
-    return () => { alive = false }
-    // Settlement makes the disk copy final: the isRunning flip reloads once.
-  }, [agentId, isRunning])
-
-  const loadOlder = (): void => {
-    if (transcript.status !== 'ready' || !transcript.hasOlder || transcript.loadingOlder || loaderRef.current === undefined) return
-    const load = loaderRef.current
-    const count = Math.min(TRANSCRIPT_OLDER_CHUNK, transcript.skippedFromStart)
-    setTranscript({ ...transcript, loadingOlder: true })
-    load(transcript.agentId, { count, skipFromStart: transcript.skippedFromStart }).then(older => {
-      setTranscript(prev => {
-        if (prev.status !== 'ready' || older === null) return older === null && prev.status === 'ready' ? { ...prev, loadingOlder: false } : prev
-        const fresh: TranscriptLeaf[] = []
-        foldTranscriptLeaves(older.events, fresh, messagesRef.current)
-        return { ...prev, leaves: prependOlderLeaves(fresh, prev.leaves), hasOlder: older.hasOlder, skippedFromStart: older.skippedFromStart, loadingOlder: false }
-      })
-    }, () => {
-      setTranscript(prev => prev.status === 'ready' ? { ...prev, loadingOlder: false } : prev)
-    })
-  }
+  // Settlement makes the disk copy final: the isRunning flip reloads once.
+  const { transcript, loadOlder } = useSubagentTranscript(loadTranscript, agentId, true, isRunning, messages)
+  React.useEffect(() => { setExpandedLeaf(null) }, [agentId, isRunning])
 
   // ── workbench neighbourhood (P3): the transcript's own parent fact wins
   // once loaded (the durable disk copy); until then the roster's fields
@@ -290,6 +250,11 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
   // （只剩有界 tail，范围标注自己解释）。
   const liveBadge = isRunning ? t('agent-view-live') : loadTranscript === undefined ? '' : t('agent-view-history')
   const hasHistory = loadTranscript !== undefined && transcript.status === 'ready'
+  // Narrow terminals keep the agent's name: read-only and the short id are
+  // repeated below the header, so they are the first to go.
+  const headerBadges = headerWidth < 64
+    ? (liveBadge === '' ? '' : ` · ${liveBadge}`)
+    : `${liveBadge === '' ? '' : ` · ${liveBadge}`} · ${t('agent-view-readonly')} · id ${agentId.slice(0, 8)}`
   const fallbackTail = subagent.outputEvents
   const retained = fallbackTail.length >= OUTPUT_WINDOW_CAP
 
@@ -298,11 +263,11 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
       {/* Header: identity + range + readonly (28/40-column safe: one
        *  truncating line, badges flexShrink=0). */}
       <Box flexDirection="row" gap={1}>
-        <Text color="accent" bold>⤢</Text>
-        <Text bold wrap="truncate-end">{headerLabel}</Text>
-        <Box flexShrink={0}><Text dimColor>{liveBadge === '' ? ` · ${t('agent-view-readonly')} · id ${agentId.slice(0, 8)}` : ` · ${liveBadge} · ${t('agent-view-readonly')} · id ${agentId.slice(0, 8)}`}</Text></Box>
+        <Box flexShrink={0}><Text color="accent" bold>⤢</Text></Box>
+        <Box flexShrink={1} minWidth={0}><Text bold wrap="truncate-end">{headerLabel}</Text></Box>
+        <Box flexShrink={0}><Text dimColor>{headerBadges}</Text></Box>
         <Box flexGrow={1} />
-        <ExitButton onClick={onExit} />
+        <Box flexShrink={0}><ExitButton onClick={onExit} /></Box>
       </Box>
       <Text dimColor wrap="truncate-end">{`${t('agent-view-title')} · ${sourceLabel(source)} · ${t('agent-view-back')}: Esc${headerWidth < 44 ? '' : ` · ↑/↓ ${t('subagent-hint-scroll')} · o ${t('subagent-transcript-load-older', { count: TRANSCRIPT_OLDER_CHUNK })}`}`}</Text>
 
@@ -311,7 +276,7 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
        * reflows the transcript's own wrapping, and below the width
        * threshold this whole row collapses to the P1 single column. */}
       <Box flexDirection="row" paddingX={1} maxHeight={Math.max(10, rows - (compose !== undefined ? 12 : 6))}>
-        <Box flexDirection="column" flexGrow={1} minWidth={44}>
+        <Box flexDirection="column" flexGrow={1} minWidth={panelEnabled ? 44 : 0}>
         <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
           {loadTranscript === undefined ? (
             <Box flexDirection="column">
