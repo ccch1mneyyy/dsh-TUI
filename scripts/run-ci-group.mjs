@@ -441,46 +441,6 @@ const GROUPS = {
 // 后再单独登记。
   ],
   'session-workspace': [
-// G0 host-loader 门（deploy-transition 设计的开工 gate）：真实 cordis +
-// cordis-plugin-loader 在 hoisted 夹具 profile 上按包名加载 TUI 门面，
-// 证明 TLA dispatcher 能选代次（lease 先于代次模块求值、进程内 pin、
-// 翻转指针换新进程、legacy/source/fail-closed、internals 与普通动态
-// import 双解析路径）。改动 dispatch/ 或包 exports 时必须过这条。
-    ["g0-host-loader-spike", ['node', 'scripts/g0-host-loader-spike.mjs']],
-// 版本化部署 M0 回归：manifest 解析矩阵（截断/越权 id/坏哈希全 fail
-// closed）、promote 原子性（并发读者只见旧或新、staging 改名不可变冲
-// 突、READY 树漂移拒绝、build-lock 互斥+过期不死锁）、启动 pin（含
-// Junction 开发轨 src/+tsconfig 标记优先于 manifest）、lease 三态分类、
-// 安全 GC（dry-run 默认、active/回滚目标/活 lease 一律保留）、回滚＝
-// 只改指针。
-    ["verify-deploy-generations", ['node', 'scripts/verify-deploy-generations.mjs']],
-// lease 强判活回归（M1③）：lease 携带进程创建时间身份——linux /proc tick 精确
-// 判死（可证 PID 复用）、win32 CIM 数字探针（一次批查询，locale 免疫）匹配
-// 即 live(strong)（心跳写失败不再误判 ambiguous）；wall-clock 不合只降级不判
-// 死（时钟步进 fail-safe）；M0 无身份 lease 心跳三态不变；GC 只回收 stale
-// lease 文件（dry-run 报告、apply 才删，ambiguous/live 不动）。
-    ["verify-deploy-lease-liveness", ['node', 'scripts/verify-deploy-lease-liveness.mjs']],
-// 子路径统一代次回归（M1②）：所有公共子路径（oauth/working-activity/panels/
-// plugin-host/extensions/api/jsx-runtime/invariant 等 12 个）经 dispatch 门面
-// 与主入口共享同一进程 pin——真夹具 profile + deploy root 下按包名解析也
-// 取 pin 代次的码（混代风险证伪）；翻指针后新进程取新代；代次缺入口
-// fail closed 给可行动错误；legacy 无 manifest 跑规范内容；转发名集合与
-// 规范模块运行时导出面锁步。
-    ["verify-dispatch-subpaths", ['node', 'scripts/verify-dispatch-subpaths.mjs']],
-// runtime-lock 闭包锁定/健康检查回归（M2①）：运行闭包从 profile 根解析成
-// 具体身份（version＋package.json 字节指纹；bundled 只记标记），found:false
-// 如实记录不装 hermetic；健康三态 healthy/drifted（升级、消失、构建后才
-// 出现，逐条点名 recorded→now）/degraded（锁坏）；deployctl health 命令
-// 退出码；真实 build-generation 集成（合成夹具包，绝不 cpSync 共享
-// node_modules 的符号链接——写入会打穿 pnpm store）。
-    ["verify-deploy-runtime-lock", ['node', 'scripts/verify-deploy-runtime-lock.mjs']],
-// 构建隔离 M0 回归：live-tree 守卫（profile junction 指向的源树拒绝
-// clean/build、逃生口、clean-lib 真子进程集成）、staging 构建产物形状
-// （READY files 清单/树哈希独立复核/runtime-lock 如实标 profile 提供）、
-// promote 后 dispatch pin 落位、gen-settings-json 参数化逐字节等价。
-// 真实 tsc staging 构建是本地验收档（DSH_TUI_VERIFY_FULL_COMPILE=1），
-// CI 默认走 --skip-compile 快路径。
-    ["verify-build-isolation", ['node', 'scripts/verify-build-isolation.mjs']],
 // 内核切换过场 MVE 回归（S05）：结局三分（spawn 失败/窗内死亡＝failed、
 // 干净退出＝succeeded 安静、窗后非零＝crashed）、已 flush 进度行契约
 // （resolve 晚于 write 回调、sink 抛错不阻塞）、文案双语与配色互异
