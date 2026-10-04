@@ -20,7 +20,14 @@ import {
   squashTextNodesToSegments,
 } from './squash-text-nodes.js'
 import type { Color, TextDecoration } from './styles.js'
-import { deriveHang, rebuildHangPrefix, wrapHangLine } from './text-decoration.js'
+import {
+  decoratedWrapBudget,
+  deriveHang,
+  hangWidthAt,
+  rebuildHangPrefix,
+  wrapDecoratedLine,
+  type HangInfo,
+} from './text-decoration.js'
 import { isXtermJs } from './terminal.js'
 import { terminalImageSourceFromAttributes } from './terminal-image.js'
 import type { TerminalImagePlacement } from './terminal-image.js'
@@ -662,21 +669,14 @@ function applyStylesToWrappedText(
  * they fall through with softWrap undefined — no tracking, no behavior
  * change from the pre-softWrap path.
  *
- * Two typed-decoration shapes change per-line wrapping: `budgets`
- * (prefix mode, the code frame rail) shrinks the wrap width per source
- * line so prefixed rows never overflow; `hangWidths` (hang mode) keeps
- * the legacy break points for the first row and only re-wraps
- * continuation pieces that would overflow once the hang prefix is
- * prepended (see wrapHangLine) - a just-fitting line never wraps.
- * Undefined or all-zero entries keep the legacy single-width wrap
- * byte-identical.
+ * `wrapLine` replaces the per-line wrap for decorated text (see
+ * wrapDecoratedLine); without it every line wraps at maxWidth.
  */
 function wrapWithSoftWrap(
   plainText: string,
   maxWidth: number,
   textWrap: Parameters<typeof wrapText>[2],
-  budgets?: readonly number[],
-  hangWidths?: readonly number[],
+  wrapLine?: (line: string) => string[],
 ): { wrapped: string; softWrap: boolean[] | undefined } {
   if (textWrap !== 'wrap' && textWrap !== 'wrap-trim') {
     return {
@@ -687,19 +687,10 @@ function wrapWithSoftWrap(
   const origLines = plainText.split('\n')
   const outLines: string[] = []
   const softWrap: boolean[] = []
-  for (let li = 0; li < origLines.length; li++) {
-    const orig = origLines[li]!
-    const hangWidth = hangWidths?.[li] ?? 0
-    const pieces =
-      hangWidth > 0
-        ? wrapHangLine(orig, maxWidth, hangWidth, (t, w) => wrapText(t, w, textWrap))
-        : wrapText(
-            orig,
-            budgets !== undefined && budgets.length > 0
-              ? Math.max(1, maxWidth - (budgets[li] ?? 0))
-              : maxWidth,
-            textWrap,
-          ).split('\n')
+  for (const orig of origLines) {
+    const pieces = wrapLine !== undefined
+      ? wrapLine(orig)
+      : wrapText(orig, maxWidth, textWrap).split('\n')
     for (let i = 0; i < pieces.length; i++) {
       outLines.push(pieces[i]!)
       softWrap.push(i > 0)
@@ -752,16 +743,13 @@ function pushNoSelectRuns(
 }
 
 /**
- * Paint one decorated text leaf (Styles.decoration, design §2 typed
- * decoration). Mirrors the legacy ink-text paint — squash to segments,
- * wrap (per-line budgets), re-apply styles — then injects the typed
- * decoration per VISUAL row: the header row above, the prefix before
- * every row, and hang prefixes on wrap continuations, all before ONE
- * output.write so cells, softWrap bookkeeping and copy-region clearing
- * see exactly the rows the screen ends up holding. Decorated columns are
- * marked through output.noSelect like the structural components this
- * replaces, so the selection consumers (overlay/extract/wordBounds/
- * fingerprint) read the same planes as before.
+ * Paint one decorated text leaf (Styles.decoration). Same steps as the
+ * plain ink-text paint (squash to segments, wrap, re-apply styles), then
+ * the decoration is added per visual row: the header row above, the
+ * prefix before every row, or hang prefixes on wrap continuations. It all
+ * goes out in one output.write so cells, softWrap bookkeeping and copy
+ * clearing see the rows the screen ends up holding. Decorated columns are
+ * marked with output.noSelect, the same plane NoSelect boxes use.
  */
 function paintDecoratedTextNode(
   node: DOMElement,
@@ -786,9 +774,10 @@ function paintDecoratedTextNode(
   const textWrap = node.style.textWrap ?? 'wrap'
   const wraps = textWrap === 'wrap' || textWrap === 'wrap-trim'
 
-  // The header row, padded to the painted node width when a fill unit is
-  // supplied (the wide code frame's divider run).
-  const headerRow =
+  // The header row, padded to the node width when a fill unit is given and
+  // cut to it when the header itself is wider: the measure counts it as
+  // exactly one row.
+  let headerRow =
     decoration.header === undefined
       ? undefined
       : decoration.headerFill === undefined
@@ -797,12 +786,14 @@ function paintDecoratedTextNode(
           decoration.headerFill.repeat(
             Math.max(0, maxWidth - stringWidth(decoration.header)),
           )
+  if (headerRow !== undefined && stringWidth(headerRow) > maxWidth) {
+    headerRow = wrapText(headerRow, maxWidth, 'truncate')
+  }
 
   // Header-only decoration (an empty fenced block): one noSelect row.
   if (plainText === '') {
     if (headerRow === undefined) return
-    // The whole header row is decoration: the hybrid header box stretched
-    // to the node width and excluded that full row, fill or not.
+    // The whole header row is excluded from selection, fill or not.
     const width = Math.max(stringWidth(headerRow), maxWidth)
     const runs: TextNoSelectRun[] = width > 0 ? [{ offset: 0, height: 1, width }] : []
     textPaintCache.set(node, {
@@ -815,34 +806,18 @@ function paintDecoratedTextNode(
     return
   }
 
-  // Per source-line decoration widths from the RAW lines: the paint and
-  // the measurement derive hangs from the same pre-expansion text.
-  // Prefix mode narrows every row's budget (budgets); hang mode keeps
-  // the legacy first-row width and only re-wraps overflowing
-  // continuations (hangWidths).
+  // Same decision and per-line wrap as measureDecoratedText: if any line
+  // overflows its budget, every line goes through wrapDecoratedLine.
   const rawLines = plainText.split('\n')
-  let budgets: number[] | undefined
-  let hangWidths: number[] | undefined
-  if (prefixWidth > 0) {
-    budgets = new Array<number>(rawLines.length).fill(prefixWidth)
-  } else if (decoration.hang === true) {
-    hangWidths = new Array<number>(rawLines.length)
-    for (let i = 0; i < rawLines.length; i++) {
-      hangWidths[i] = deriveHang(rawLines[i]!)?.width ?? 0
-    }
-  }
-  const needsWrapping =
-    wraps &&
-    rawLines.some((raw, i) => {
-      if (hangWidths !== undefined) return lineWidth(raw) > maxWidth
-      const budget = maxWidth - (budgets?.[i] ?? 0)
-      return lineWidth(raw) > budget
-    })
+  const budget = decoratedWrapBudget(decoration, maxWidth)
+  const needsWrapping = wraps && rawLines.some(raw => lineWidth(raw) > budget)
 
   let styled: string
   let softWrap: boolean[] | undefined
   if (needsWrapping) {
-    const w = wrapWithSoftWrap(plainText, maxWidth, textWrap, budgets, hangWidths)
+    const wrap = (t: string, w: number): string => wrapText(t, w, textWrap)
+    const w = wrapWithSoftWrap(plainText, maxWidth, textWrap, line =>
+      wrapDecoratedLine(line, line, maxWidth, decoration, wrap))
     softWrap = w.softWrap
     if (segments.length === 1) {
       const segment = segments[0]!
@@ -878,18 +853,20 @@ function paintDecoratedTextNode(
       .join('')
   }
 
+  const contentRows = softWrap?.length ?? rawLines.length
   styled = applyPaddingToText(node, styled, softWrap)
 
   const rows = styled.split('\n')
   const flags: boolean[] = softWrap ?? new Array<boolean>(rows.length).fill(false)
   const noSelectRuns: TextNoSelectRun[] = []
+  // Rows applyPaddingToText put above the content.
+  const paddingRows = rows.length - contentRows
 
   let headerOffset = 0
   if (headerRow !== undefined) {
     rows.unshift(headerRow)
     flags.unshift(false)
     headerOffset = 1
-    // Whole-row exclusion, matching the hybrid header box (see above).
     const headerWidth = Math.max(stringWidth(headerRow), maxWidth)
     if (headerWidth > 0) {
       noSelectRuns.push({ offset: 0, height: 1, width: headerWidth })
@@ -905,12 +882,15 @@ function paintDecoratedTextNode(
       noSelectRuns.push({ offset: headerOffset, height: rows.length - headerOffset, width: ns })
     }
   } else if (decoration.hang === true) {
-    // Continuation rows inherit their source line's leading structure:
-    // rails repeat as glyphs, markers/checkboxes/indents become spaces.
-    // The injected columns are noSelect so copied bytes stay identical to
-    // the unwrapped join.
+    // Continuation rows get their source line's leading structure: rails
+    // repeat as glyphs, markers/checkboxes/indents become spaces. The
+    // prefix is parsed from the line's first row and is never wider than
+    // the hang the wrap budgeted for. Injected columns are noSelect so
+    // copied bytes match the unwrapped line.
+    const firstContentRow = headerOffset + paddingRows
+    let sourceLine = -1
     let lineStart = headerOffset
-    let lineHang: ReturnType<typeof deriveHang> = undefined
+    let lineHang: HangInfo | null | undefined
     let runStart = -1
     let runWidth = 0
     const closeRun = (endRow: number): void => {
@@ -925,12 +905,17 @@ function paintDecoratedTextNode(
         closeRun(r)
         lineStart = r
         lineHang = undefined
+        if (r >= firstContentRow) sourceLine++
         continue
       }
       if (lineHang === undefined) {
-        lineHang = deriveHang(rows[lineStart]!)
+        // null: this line paints its continuations without a prefix
+        // (no structure, or too narrow for one; see hangWidthAt).
+        lineHang = hangWidthAt(rawLines[sourceLine] ?? '', maxWidth) > 0
+          ? deriveHang(rows[lineStart]!) ?? null
+          : null
       }
-      if (lineHang === undefined || lineHang.width <= 0) {
+      if (lineHang === null) {
         closeRun(r)
         continue
       }

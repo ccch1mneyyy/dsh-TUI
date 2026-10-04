@@ -1,23 +1,15 @@
 /**
  * Typed-decoration helpers shared by the text measure path (dom.ts) and
  * the text paint path (render-node-to-output.ts). See Styles.decoration.
+ *
+ * Both paths must wrap through wrapDecoratedLine with the same inputs, or
+ * the measured height drifts from the painted rows.
  */
 import { stringWidth } from './stringWidth.js'
-
-/**
- * The hang derivation reads a source line's LEADING STRUCTURE — the run
- * of quote rails, list markers, checkboxes and indentation the markdown
- * formatter bakes into every hard row — and turns it into the width (and
- * bar mask) a terminal-wrapped continuation needs to stay aligned with
- * that row's content column. Input may carry ANSI escape codes (the
- * formatter bakes styling into the same string, e.g. a tinted marker is
- * `SGR - RESET space`); escapes are zero-width and transparent to the
- * parse. Both call sites feed the same raw text so measurement and
- * paint agree row for row.
- */
+import type { TextDecoration } from './styles.js'
 
 /** The blockquote gutter glyphs the markdown formatter bakes per level. */
-const BAR_CHARS = new Set(['\u258e', '\u258f'])
+const BAR_CHARS = new Set(['▎', '▏'])
 
 /** A parsed leading-structure run: its width and which columns are bars. */
 export type HangInfo = {
@@ -29,13 +21,13 @@ export type HangInfo = {
 function escapeEnd(s: string, i: number): number {
   const c = s[i + 1]
   if (c === '[') {
-    // CSI: parameters/middle bytes then a final letter.
+    // CSI: parameter/intermediate bytes, then a final letter.
     let j = i + 2
     while (j < s.length && !/[A-Za-z]/.test(s[j]!)) j++
     return Math.min(s.length, j + 1)
   }
   if (c === ']') {
-    // OSC: BEL-terminated (our OSC 8 emitter's form) or ST-terminated.
+    // OSC, BEL-terminated (the form createHyperlink emits).
     let j = i + 2
     while (j < s.length && s[j] !== '\u0007') j++
     return Math.min(s.length, j + 1)
@@ -45,8 +37,7 @@ function escapeEnd(s: string, i: number): number {
 
 /**
  * The line's plain characters (escape sequences removed). Structure
- * glyphs are single-cell, so the array index IS the display column of
- * the run this module parses.
+ * glyphs are single-cell, so the array index is the display column.
  */
 function plainView(line: string): string[] {
   const chars: string[] = []
@@ -65,13 +56,10 @@ function plainView(line: string): string[] {
 
 /**
  * Length of the list marker starting at chars[k], or 0 when there is
- * none. Recognizes the shapes renderListItem emits: `- ` / `* ` bullets
- * and `N. ` / `a. ` / `iv. ` ordered markers (digits, letters or roman
- * numerals followed by a dot and a space). The dot only counts with the
- * space behind it, so prose like `3.5 GHz` or `e.g. foo` does not match;
- * an abbreviation like `vs. something` does and hangs its wrap a few
- * columns in — cosmetic, deterministic, and still aligned to where that
- * line's content starts.
+ * none: `- ` / `* ` bullets and `N. ` / `a. ` / `iv. ` ordered markers.
+ * The dot only counts with a space behind it, so `3.5 GHz` or `e.g. foo`
+ * do not match. `vs. something` does, and hangs its wrap a few columns
+ * in; harmless.
  */
 function markerLengthAt(chars: readonly string[], k: number): number {
   const c = chars[k]!
@@ -92,11 +80,12 @@ function checkboxLengthAt(chars: readonly string[], k: number): number {
 }
 
 /**
- * Parse one source line's leading structure. Returns undefined when the
- * line has none (content at column 0) or nothing after it (a bare rail
- * row has nothing to hang). `bars[n]` says whether display column n of
- * the run is a quote rail glyph; markers, checkboxes and indentation
- * columns are false and rebuild as spaces.
+ * Parse a line's leading structure: the quote rails, indentation, list
+ * marker and checkbox the markdown formatter bakes into every hard row.
+ * ANSI escapes are skipped. Returns undefined when the line has no
+ * structure or nothing after it (a bare rail row has nothing to hang).
+ * `bars[n]` says whether column n is a rail glyph; every other structure
+ * column is rebuilt as a space.
  */
 export function deriveHang(line: string): HangInfo | undefined {
   if (line.length === 0) return undefined
@@ -105,10 +94,8 @@ export function deriveHang(line: string): HangInfo | undefined {
   const bars: boolean[] = []
   let k = 0
   let sawStructure = false
-  // Indentation spaces and quote rails, in any order the formatter
-  // composes them: `▎ ▎ `, `  ▎ `, `    `. Consuming the whole
-  // space run is intentional: the content column is where content
-  // starts, which is exactly where the continuation should align.
+  // Spaces and rails in any order the formatter composes them
+  // (`▎ ▎ `, `  ▎ `, `    `); content starts after the whole run.
   while (k < chars.length) {
     const c = chars[k]!
     if (c === ' ' || BAR_CHARS.has(c)) {
@@ -119,8 +106,6 @@ export function deriveHang(line: string): HangInfo | undefined {
     }
     break
   }
-  // One optional list marker, then one optional task checkbox — the
-  // shapes renderListItem emits between structure and content.
   const marker = markerLengthAt(chars, k)
   if (marker > 0) {
     for (let n = 0; n < marker; n++) bars.push(false)
@@ -137,6 +122,17 @@ export function deriveHang(line: string): HangInfo | undefined {
 }
 
 /**
+ * Hang width of a source line at `maxWidth`: its leading-structure width,
+ * or 0 when it has none or when the prefix would leave fewer than two
+ * columns for content (a wide glyph needs two). With 0 the line wraps
+ * and paints exactly like undecorated text.
+ */
+export function hangWidthAt(rawLine: string, maxWidth: number): number {
+  const width = deriveHang(rawLine)?.width ?? 0
+  return width > 0 && maxWidth - width >= 2 ? width : 0
+}
+
+/**
  * Split trailing plain spaces (kept inside the piece's trailing SGR
  * tail) off a wrapped piece: `rest` is the piece without them (its SGR
  * codes re-attached), `moved` the whitespace to carry elsewhere.
@@ -150,21 +146,13 @@ function stripTrailingSpaces(piece: string): { rest: string; moved: string } {
 }
 
 /**
- * Wrap one source line for hang decoration. The FIRST row keeps the
- * legacy break points exactly (wrapped at `maxWidth`, byte-identical
- * with the undecorated renderer whenever the line fits or breaks the
- * way it always did); only continuation pieces that would overflow once
- * the hang prefix is prepended are re-wrapped at `maxWidth - hangWidth`.
- * A line that fits `maxWidth` in one piece is returned unwrapped — the
- * budget never pushes a just-fitting line over the edge (inline
- * scrollback repros lock the exact row shapes of just-fitting list
- * items). A trailing separator space that alone overflows the budget
- * moves to the next piece's front instead of re-breaking, so no
- * whitespace-only ghost row appears and the copy joins it back.
- *
- * `wrap` wraps one string at one width (wrapText). Both the measure
- * path and the paint path must call this exact function so their row
- * counts agree.
+ * Wrap one source line for hang decoration. The first row keeps the
+ * undecorated break points, and a line that fits `maxWidth` stays one
+ * row. Only continuation pieces that would overflow once the
+ * `hangWidth` prefix is prepended are re-wrapped at the narrower budget.
+ * When a trailing separator space is all that overflows, it moves to the
+ * front of the next piece (or is dropped on the last one) instead of
+ * forcing a whitespace-only row; copy joins it back identically.
  */
 export function wrapHangLine(
   line: string,
@@ -179,18 +167,11 @@ export function wrapHangLine(
   for (let i = 1; i < pieces.length; i++) {
     const piece = pieces[i]!
     if (stringWidth(piece) <= budget || budget < 2) {
-      // Fits with the prefix: keep it byte-identical with the legacy
-      // wrap - shedding whitespace here would push the NEXT piece over
-      // the budget and grow the row count (inline math paragraphs hit
-      // exactly that: a space migrating onto a full-width URL piece).
+      // Pieces that fit stay byte-identical: moving whitespace off them
+      // could push the next piece over the budget and add a row.
       out.push(piece)
       continue
     }
-    // Overflowing: a trailing separator space (trim:false keeps it on
-    // the piece, inside its SGR run) may be all that pushes it past
-    // the budget. Move it to the next piece's front - or drop it on
-    // the final piece - instead of re-breaking; the copy joins it
-    // back identically and no whitespace-only ghost row appears.
     const trimmed = stripTrailingSpaces(piece)
     if (trimmed.moved !== '' && stringWidth(trimmed.rest) <= budget) {
       if (i + 1 < pieces.length) pieces[i + 1] = trimmed.moved + pieces[i + 1]!
@@ -202,16 +183,40 @@ export function wrapHangLine(
   return out
 }
 
+/** Wrap budget for a decorated line: a prefix eats into every row. */
+export function decoratedWrapBudget(decoration: TextDecoration, maxWidth: number): number {
+  const prefixWidth = decoration.prefix?.width ?? 0
+  return prefixWidth > 0 ? Math.max(1, maxWidth - prefixWidth) : maxWidth
+}
+
+/**
+ * The rows one source line of a decorated text wraps to. Measure and
+ * paint both call this so their row counts agree. `line` is what gets
+ * wrapped; `rawLine` is the same line before tab expansion, which both
+ * sides parse the hang from.
+ */
+export function wrapDecoratedLine(
+  line: string,
+  rawLine: string,
+  maxWidth: number,
+  decoration: TextDecoration,
+  wrap: (text: string, width: number) => string,
+): string[] {
+  if ((decoration.prefix?.width ?? 0) <= 0 && decoration.hang === true) {
+    const hangWidth = hangWidthAt(rawLine, maxWidth)
+    if (hangWidth > 0) return wrapHangLine(line, maxWidth, hangWidth, wrap)
+  }
+  return wrap(line, decoratedWrapBudget(decoration, maxWidth)).split('\n')
+}
+
 /** Visual reset so a prefix's open SGR cannot bleed into the row body. */
 const ANSI_RESET = '\u001b[0m'
 
 /**
- * Rebuild the hang prefix as a styled string: ANSI sequences from the
- * line's own first visual row pass through (quote rails keep their
- * color), every plain structure column that is not a bar becomes a
- * space (markers and checkboxes must not repeat as glyphs), and a reset
- * closes any open SGR so the row body after the prefix starts clean.
- * Escape-free prefixes (pure indentation) append nothing.
+ * Build the hang prefix for a continuation row from its source line's
+ * first row: escapes pass through (rails keep their color), rail columns
+ * keep their glyph, every other structure column becomes a space, and a
+ * reset closes any open SGR. Escape-free prefixes get no reset.
  */
 export function rebuildHangPrefix(styledFirstRow: string, hang: HangInfo): string {
   let out = ''
@@ -227,8 +232,7 @@ export function rebuildHangPrefix(styledFirstRow: string, hang: HangInfo): strin
       i = end
       continue
     }
-    // Structure columns are single-cell glyphs (rails, spaces, markers);
-    // a wide char cannot be part of the parsed run.
+    // Structure glyphs are single-cell, so one char is one column.
     out += hang.bars[col] === true ? c : ' '
     col++
     i++

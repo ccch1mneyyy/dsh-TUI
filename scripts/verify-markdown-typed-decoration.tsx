@@ -453,4 +453,60 @@ assert.equal(resizeError, undefined, 'toggling decoration on one Text does not c
 await app3.unmount()
 console.log('8. decoration toggle on one Text keeps hooks stable')
 
-console.log('markdown typed decoration verified (engine equivalence, structure counts, copy contract, hanging continuations, fingerprint, mermaid sharing, cache identity, frame style, decoration toggle)')
+// -- 9. Measure matches paint; decoration never paints past the node -----
+
+const HANG = { hang: true }
+const withEnd = (el: React.ReactElement) => (
+  <Box flexDirection="column">{el}<Text>END</Text></Box>
+)
+// wrap-ansi counts a Devanagari vowel sign as one column where stringWidth
+// counts zero, so a line that fits by stringWidth still wraps once the
+// paint decides to wrap (because another line overflows). The decorated
+// measure must count those rows too, or END lands on the last body row.
+const VOWEL_SIGN = '\u093f'
+const fitsAt = (columns: number) => 'ab ' + VOWEL_SIGN + ' ' + 'c'.repeat(columns - 4)
+for (const width of [40, 60]) {
+  assert.equal(stringWidth(fitsAt(width - 2)), width - 2, 'fixture fits the framed body by stringWidth')
+  const code = 'x'.repeat(width + 10) + NL + fitsAt(width - 2)
+  process.env.DSH_TUI_CODE_FRAME = 'hybrid'
+  const h = snap(withEnd(<CodeBlockFrame token={codeToken('txt', code)} highlight={null} />), width)
+  process.env.DSH_TUI_CODE_FRAME = 'typed'
+  const t = snap(withEnd(<CodeBlockFrame token={codeToken('txt', code)} highlight={null} />), width)
+  assert.deepEqual(t.rows, h.rows, 'prefix measure counts the rows wrap-ansi paints @' + width)
+
+  const prose = 'x'.repeat(width + 10) + NL + fitsAt(width)
+  assert.deepEqual(
+    snap(withEnd(<Text decoration={HANG}>{prose}</Text>), width).rows,
+    snap(withEnd(<Text>{prose}</Text>), width).rows,
+    'hang on structure-free text paints and measures like plain text @' + width,
+  )
+}
+
+// A hang as wide as the column leaves no room for content: continuations
+// paint without a prefix instead of spilling past the node.
+const narrowTask = snap(
+  <Box width={4}><Text decoration={HANG}>{'- [ ] x alpha beta'}</Text></Box>,
+  20,
+)
+assert.ok(narrowTask.rows.every(r => stringWidth(r) <= 4),
+  'narrow hang stays inside its 4-column node: ' + JSON.stringify(narrowTask.rows))
+
+// A language label longer than the column is cut, not painted past it.
+const longLabel = 'averyveryverylonglanguagenamethatkeepsgoing'
+const longHeader = snap(
+  <Box width={30}><CodeBlockFrame token={codeToken(longLabel, 'x = 1')} highlight={null} forceWidth={30} /></Box>,
+  60,
+)
+assert.ok(longHeader.rows.every(r => stringWidth(r) <= 30),
+  'long label header stays inside the frame: ' + JSON.stringify(longHeader.rows))
+assert.ok(longHeader.rows[0]!.startsWith('\u250c\u2500 avery'), 'cut header keeps its start: ' + JSON.stringify(longHeader.rows[0]))
+// The header counts toward the node width: a short body in a row
+// container does not cut a label that fits.
+const shortBody = snap(
+  <Box width={30}><CodeBlockFrame token={codeToken('typescript', 'x')} highlight={null} forceWidth={30} /></Box>,
+  60,
+)
+assert.equal(shortBody.rows[0], '\u250c\u2500 typescript', 'a label that fits is painted whole')
+console.log('9. measure matches paint under wrap-ansi width drift; narrow hang and long header stay in the node')
+
+console.log('markdown typed decoration verified (engine equivalence, structure counts, copy contract, hanging continuations, fingerprint, mermaid sharing, cache identity, frame style, decoration toggle, measure/paint agreement)')
