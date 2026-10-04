@@ -415,4 +415,42 @@ assert.deepEqual(snap(<Markdown>{SRC}</Markdown>, 60).rows, target.rows,
   'switching back to light restores the exact default rows')
 console.log('7. codeFrameStyle: light default byte-identical, full closed box (walls/bottom/copy), narrow fallback, roundtrip')
 
-console.log('markdown typed decoration verified (engine equivalence, structure counts, copy contract, hanging continuations, fingerprint, mermaid sharing, cache identity, frame style)')
+// -- 8. Decoration toggle keeps the hook count -----------------------------
+
+// The frame narrowing into its plain fallback reuses the same Text fiber
+// with the decoration removed. Its hook count must not change (React
+// #300/#310 would take the whole app down).
+const resizeOut = new FrameOutput()
+const resizeTree = (columns: number) => (
+  <TerminalSizeContext.Provider value={{ columns, rows: 40 }}>
+    <CodeBlockFrame token={codeToken('ts', 'const a = 1')} highlight={null} />
+  </TerminalSizeContext.Provider>
+)
+const app3 = await render(resizeTree(80), {
+  stdout: resizeOut as unknown as NodeJS.WriteStream,
+  stdin: new FrameInput() as unknown as NodeJS.ReadStream,
+  exitOnCtrlC: false,
+  patchConsole: false,
+})
+let resizeError: unknown
+void app3.waitUntilExit().catch((error: unknown) => { resizeError = error })
+const resizeRow = () => {
+  const ink = instances.get(resizeOut as unknown as NodeJS.WriteStream) as unknown as
+    | { frontFrame: { screen: ReturnType<typeof snap>['screen'] } }
+    | undefined
+  if (ink === undefined) return ''
+  let line = ''
+  for (let x = 0; x < 10; x++) line += cellAtIndex(ink.frontFrame.screen, x).char
+  return line.trimEnd()
+}
+assert.ok(await settled(() => resizeRow().startsWith('\u250c')), 'wide frame paints its header')
+app3.rerender(resizeTree(12))
+assert.ok(await settled(() => resizeRow().startsWith('```ts')),
+  'narrowed frame falls back to the fence: ' + JSON.stringify(resizeRow()))
+app3.rerender(resizeTree(80))
+assert.ok(await settled(() => resizeRow().startsWith('\u250c')), 'widened frame paints its header again')
+assert.equal(resizeError, undefined, 'toggling decoration on one Text does not crash the app')
+await app3.unmount()
+console.log('8. decoration toggle on one Text keeps hooks stable')
+
+console.log('markdown typed decoration verified (engine equivalence, structure counts, copy contract, hanging continuations, fingerprint, mermaid sharing, cache identity, frame style, decoration toggle)')
