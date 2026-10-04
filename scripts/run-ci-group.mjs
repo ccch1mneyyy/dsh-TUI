@@ -424,6 +424,11 @@ const GROUPS = {
 // 真实 tsc staging 构建是本地验收档（DSH_TUI_VERIFY_FULL_COMPILE=1），
 // CI 默认走 --skip-compile 快路径。
     ["verify-build-isolation", ['node', 'scripts/verify-build-isolation.mjs']],
+// 内核切换过场 MVE 回归（S05）：结局三分（spawn 失败/窗内死亡＝failed、
+// 干净退出＝succeeded 安静、窗后非零＝crashed）、已 flush 进度行契约
+// （resolve 晚于 write 回调、sink 抛错不阻塞）、文案双语与配色互异
+// （青/黄/红，无色模式零 ANSI）、plugin.ts/update.ts 源接线 tripwire。
+    ["verify-handoff-transition", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-transition.ts']],
 // 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：
 // 全程跑官方读取链——Session.append 生成骨架（turn 配对/reasoning/
 // provenance/空 system head/工具调用/中断/标题/压缩检查点）、

@@ -9,6 +9,8 @@ import { shellQuote } from './utils/shellQuote.js'
 import { DATA_DIR } from './utils/paths.js'
 import { stripResumeArgs } from './sessionHistory.js'
 import { KERNEL_SWITCH_HANDOFF_ENV } from './kernelPrefs.js'
+import { kernelDisplayName } from './components/kernelCatalog.js'
+import { classifyReplacementOutcome, formatHandoffNotice, handoffEventTag, writeHandoffStage } from './handoffEvents.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
 // the compiled copy at lib/types/utils/shellQuote.js.
@@ -2078,6 +2080,16 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     dshHome: process.env.DSH_HOME ?? null,
   })
   const startedAt = Date.now()
+  // 内核切换的过场第二阶段（S05 MVE）：replacement spawn 之前由旧父进程
+  // 在已自由的控制台上写一行已 flush 的「正在启动 X…」——此后屏幕交给
+  // 新内核。写等待 drain 回调（不是定时 sleep），保证行落地早于 spawn。
+  if (options.backend !== undefined) {
+    await writeHandoffStage(
+      process.stdout,
+      formatHandoffNotice('stage-start', { name: kernelDisplayName(options.backend), color: process.stdout.isTTY === true }) + '\n',
+    )
+    logRestartEvent(handoffEventTag('stage-start'), { backend: options.backend })
+  }
   return new Promise(resolve => {
     const childEnv = restartChildEnv(process.env, sessionId, kind, options)
     const child = spawn(process.execPath, argv, {
@@ -2144,7 +2156,21 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     child.once('error', error => {
       clearTimeout(timer)
       logRestartEvent(`${tag}: spawn error`, { message: error.message })
-      writeHandoffNotice(`dsh-tui: failed to spawn the restart: ${error.message}\n`)
+      if (options.backend !== undefined) {
+        // 内核切换事件分类（S05 MVE）：spawn 失败＝切换未完成（黄色），
+        // 附安全模式修复路径；与崩溃（红）区分。
+        logRestartEvent(handoffEventTag('failed'), { reason: 'spawn-error', message: error.message })
+        writeHandoffNotice(
+          formatHandoffNotice('failed', {
+            name: kernelDisplayName(options.backend),
+            reason: 'spawn-error',
+            safeHint: true,
+            color: process.stderr.isTTY === true,
+          }) + `\n${error.message}\n`,
+        )
+      } else {
+        writeHandoffNotice(`dsh-tui: failed to spawn the restart: ${error.message}\n`)
+      }
       resolve(127)
     })
     child.once('close', (code, signal) => {
@@ -2155,7 +2181,34 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
         signal: signal ?? null,
         elapsedMs,
       })
-      if (elapsedMs < 4000) {
+      if (options.backend !== undefined) {
+        // 内核切换的结局三分（S05 MVE）：成功＝安静（新 UI 即成功信号，
+        // 只记 restart.log 事件）；启动失败＝黄色＋会话保留＋safe 提示；
+        // 运行后异常退出＝红色＋退出码。现有 4 秒窗仍是诊断口径，不升级
+        // 为启动成功事实（设计「明确不做」）。
+        const outcome = classifyReplacementOutcome({ closed: true, code, signal, elapsedMs })
+        logRestartEvent(handoffEventTag(outcome.kind), outcome.kind === 'crashed' ? { code: outcome.code } : outcome.kind === 'failed' ? { reason: outcome.reason } : {})
+        if (outcome.kind === 'failed') {
+          const suffix = childStderr.trim() === '' ? '' : `\n${childStderr.trimEnd()}`
+          writeHandoffNotice(
+            formatHandoffNotice('failed', {
+              name: kernelDisplayName(options.backend),
+              reason: outcome.reason,
+              safeHint: true,
+              color: process.stderr.isTTY === true,
+            }) + `${suffix}\n`,
+          )
+        } else if (outcome.kind === 'crashed') {
+          writeHandoffNotice(
+            '\n' + formatHandoffNotice('crashed', {
+              name: kernelDisplayName(options.backend),
+              code: outcome.code,
+              safeHint: true,
+              color: process.stderr.isTTY === true,
+            }) + '\n',
+          )
+        }
+      } else if (elapsedMs < 4000) {
         // Fast death: the TUI never came up. Synchronous stderr write —
         // process.exit() right after an async stream write skips the flush,
         // and a vanished diagnosis is indistinguishable from silent failure.

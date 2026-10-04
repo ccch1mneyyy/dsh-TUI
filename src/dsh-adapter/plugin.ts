@@ -46,6 +46,7 @@ import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './comp
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
 import { initialPromptFromCmdlineArgs } from './startup-args.js'
 import { readHomePrefs } from '../homePrefs.js'
+import { handoffEventTag, formatHandoffNotice } from '../handoffEvents.js'
 import { KERNEL_SWITCH_HANDOFF_ENV, readKernelPrefs, resolveRememberedBackend, writeKernelPrefs } from '../kernelPrefs.js'
 import { kernelDisplayName, type ClaudeKernelStatus } from '../components/kernelCatalog.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
@@ -1641,11 +1642,15 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       // kernel.json was already written when the choice was accepted.
       if (backendSwitchRequested !== undefined) {
         logRestartEvent('funnel: backend-switch branch entered', { backend: backendSwitchRequested })
+        // 切换过场第一阶段（S05 MVE）：finishExit 交界的稳定状态行——
+        // 终端恢复后由本进程写、经 writeStream 等待 flush，明确时态与
+        // 「原会话保留」，不给用户「整个 dsh-tui 消失了」的读法。
+        logRestartEvent(handoffEventTag('starting'), { backend: backendSwitchRequested })
         void finishExit(
           ctx,
           instance,
           bootedFullscreen,
-          t('kernel-switch-restarting', { name: kernelDisplayName(backendSwitchRequested) }),
+          formatHandoffNotice('starting', { name: kernelDisplayName(backendSwitchRequested), color: process.stdout.isTTY === true }),
           undefined,
           () => runRestart(ctx, profile, '', undefined, { backend: backendSwitchRequested }),
         )
