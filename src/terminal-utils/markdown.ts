@@ -153,10 +153,7 @@ interface RenderState {
   readonly listDepth: number
   /** Ordinal of the current ordered-list item, or null for unordered lists. */
   readonly ordinal: number | null
-  /**
-   * Nesting depth of the enclosing blockquote; each level gets a more
-   * muted gutter bar (spec §3, Batch D).
-   */
+  /** Nesting depth of the enclosing blockquote; deeper levels get a more muted bar. */
   readonly quoteDepth: number
   /**
    * Absolute column where the enclosing list item's body block starts
@@ -278,12 +275,9 @@ function dispatch(token: Token, state: RenderState): string {
     // Link definitions and raw HTML carry no ANSI representation.
     return ''
   }
-  // Fail closed: a token type this dispatcher does not know must not
-  // silently swallow content. A marked upgrade or plugin extension that
-  // introduces a new token shape would otherwise drop its text without a
-  // trace; echo the raw source so the user still sees it and the debug
-  // log flags the gap until the census gate forces an explicit decision
-  // (handler, or registration as a deliberate ignore like def/html).
+  // Unknown token types (a marked upgrade or extension) echo their raw
+  // source instead of silently dropping it; verify-markdown-token-coverage
+  // fails until the type gets a renderer or an explicit ignore.
   logForDebugging(`Markdown token without a renderer, echoing raw source: ${token.type}`)
   return (token as { raw?: string }).raw ?? ''
 }
@@ -305,10 +299,9 @@ function renderNestedMathBlock(token: MathToken): string {
 }
 
 /**
- * The gutter for one blockquote level (spec section 3, Batch D): the
- * first level carries the theme's muted color, the second dims the same
- * bar, deeper levels switch to the thinner one-eighth bar - nesting
- * reads as fading structure instead of N identical dim rails.
+ * The gutter for one blockquote level: the first level in the theme's
+ * muted color, the second dimmed, deeper levels the thinner one-eighth
+ * bar, so nesting fades instead of repeating identical rails.
  */
 function quoteGutter(depth: number): string {
   if (depth === 0) return colorize(QUOTE_BAR, getActiveTheme().subtle, 'foreground')
@@ -324,14 +317,11 @@ function renderBlockquote(token: Tokens.Blockquote, state: RenderState): string 
   const inner = token.tokens.map(child => dispatch(child, childState)).join('')
   // Gutter bar per line; keep the text italic but at normal brightness —
   // chalk.dim is nearly invisible on dark themes. Blank lines inside the
-  // quote keep a BARE gutter so the structure survives internal paragraph
-  // gaps (and an empty `>` quote still shows a rail); only the trailing
-  // split artifact (from inner's final newline) stays empty.
+  // quote keep a bare gutter so the quote stays visible across paragraph
+  // gaps; only the empty piece after inner's final newline stays empty.
   const gutter = quoteGutter(depth)
   const lines = inner.split(EOL)
-  // A quote with no visible content at all (`>` on its own line) still
-  // shows one rail - the structure exists in the source, collapsing to
-  // nothing hid it (spec: 空引用结构).
+  // An empty quote (`>` on its own line) still shows one rail.
   if (lines.every(line => line === '')) return gutter + EOL
   return lines
     .map((line, index) => {
@@ -434,13 +424,11 @@ function renderDel(token: Tokens.Del, state: RenderState): string {
 }
 
 /**
- * Subtle single-row hr divider (spec section 3, Batch D). Three dashes
- * in the theme's muted color replace the bare `---` literal.
+ * The hr divider: three dashes in the theme's muted color.
  *
- * Deliberately NO trailing newline: the surrounding space tokens already
- * provide the block separation, so the divider costs exactly one row -
- * appending EOL here would add a blank row below every rule. Block
- * joins cover the unterminated tail via appendBlockText.
+ * No trailing newline: the surrounding space tokens already separate the
+ * blocks, so the divider costs one row. appendBlockText adds the row
+ * break when the next block does not start with one.
  */
 function renderHr(): string {
   return colorize(HR_DIVIDER, getActiveTheme().subtle, 'foreground')
@@ -465,12 +453,8 @@ export function appendBlockText(accumulated: string, block: string): string {
 function renderHeading(token: Tokens.Heading, state: RenderState): string {
   const text = token.tokens.map(child => dispatch(child, fresh(state))).join('')
   // Blue-primary ladder (kimi-style): H1 gets the mist brand blue +
-  // underline, H2 the lighter border blue. The deeper levels previously
-  // all collapsed to plain bold (spec section 3: H3-H6 read as one
-  // level); they now step down through weight and muteness - H3 bold
-  // near-text, H4 bold+italic, H5 italic in the subtle color, H6 upright
-  // subtle - so six levels read as a monotone fade instead of two
-  // visible ones.
+  // underline, H2 the lighter border blue, then H3 bold, H4 bold italic,
+  // H5 italic subtle and H6 subtle, so each level reads one step quieter.
   const theme = getActiveTheme()
   const styled =
     token.depth === 1
@@ -484,21 +468,15 @@ function renderHeading(token: Tokens.Heading, state: RenderState): string {
             : token.depth === 5
               ? chalk.italic(colorize(text, theme.subtle, 'foreground'))
               : colorize(text, theme.subtle, 'foreground')
-  // Exactly one trailing newline: block separation comes from the
-  // source's own blank lines (the space token already emits the newline
-  // that ends the heading row). The old EOL + EOL stacked with that
-  // space token into TWO blank rows below every heading; tight
-  // h3-then-body sources also gained an invented blank row. Compressed
-  // rhythm, source-faithful air.
+  // One trailing newline: blank rows below a heading come from the
+  // source's own blank lines (the following space token), not from here.
   return styled + EOL
 }
 
 /**
- * Image reference (spec section 3, Batch D): alt text plus an OSC 8 link
- * to the source URL - the href is only a click target, nothing is
- * fetched and remote resources never download automatically. Width-safe
- * ASCII `[img]` marks the span; terminals without hyperlink support keep
- * a readable plain form carrying both the alt and the URL.
+ * Image reference: `[img]` plus the alt text, linked to the source URL
+ * with OSC 8. Nothing is fetched; the href is only a click target.
+ * Without hyperlink support the plain form shows both the alt and the URL.
  */
 function renderImage(token: Tokens.Image, state: RenderState): string {
   const alt = token.text.replace(/\s+/g, ' ').trim()
@@ -554,21 +532,17 @@ function renderListItem(token: Tokens.ListItem, state: RenderState): string {
     state.ordinal === null ? '-' : `${formatListMarker(state.listDepth + 1, state.ordinal)}.`
   // The body column: soft-break continuations, later paragraphs of loose
   // items, and nested blocks align one marker width (plus checkbox) past
-  // this item's indent. A nested list dispatched with this hang lines its
-  // own items up under the body, so the ladder advances by exactly one
-  // marker width per level (the old per-level indent double-counted the
-  // enclosing item and accelerated 2/6/10 instead of 2/4/6).
+  // this item's indent. A nested list gets this as its indent, so each
+  // level steps in by one marker width.
   const bodyHang = state.hang + marker.length + 1 + stripAnsi(taskMark).length
   const childState = withParent(
     { ...state, listDepth: state.listDepth + 1, hang: bodyHang },
     token,
   )
-  // Two kinds of children with two indenters. Text/paragraph/blockquote
-  // children render RAW lines - the assembly below pads their
-  // continuations to the body column (hanging indent). A nested list
-  // already carries its absolute indent (its items inherit bodyHang), so
-  // its lines pass through untouched; padding them again is what made the
-  // old per-level indent accelerate.
+  // Text/paragraph/blockquote children render unindented lines and the
+  // assembly below pads their continuations to the body column. A nested
+  // list already carries its absolute indent (its items inherit
+  // bodyHang), so its lines pass through untouched.
   const segments: Array<{ text: string; preindented: boolean }> = []
   let raw = ''
   for (const child of children) {
@@ -630,12 +604,9 @@ function renderText(token: Tokens.Text, state: RenderState): string {
     return token.text
   }
 
-  // List markers, checkboxes and per-line indentation live in
-  // renderListItem's assembly: firing them here meant a loose item's
-  // paragraph (dispatched through renderParagraph's fresh state) rendered
-  // with NO marker at all, and inline styling recursing through
-  // em/strong kept the list_item parent, so `- **bold** tail` grew one
-  // bullet per nested text token.
+  // List markers, checkboxes and indentation belong to renderListItem:
+  // a loose item's paragraph reaches here with a fresh state, and inline
+  // em/strong children recurse through here with the list_item parent.
   if (token.tokens) {
     return token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
   }

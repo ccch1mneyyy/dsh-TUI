@@ -12,16 +12,14 @@ type Props = PropsWithChildren<{ mouseTracking?: boolean }>
 /**
  * Own the alternate buffer and its input modes for the lifetime of this subtree.
  *
- * Kernel-switch handoff (S05 完整版): when the process booted as a handoff
- * replacement, the terminal is ALREADY in the alternate buffer — the old
- * parent entered it, kept it through the transition frame, and handed the
- * screen over instead of restoring the main buffer. Adoption then skips
- * ENTER_ALT_SCREEN (a second enter would push a stray save-cursor and can
- * double-buffer on some terminals) and reports "adopted" on the ACK pipe so
- * the old parent knows the screen has a new painter. Until the replacement
- * ACKs its first flushed frame, the 1049 EXIT also stays with the old parent
- * (a pre-ready death must be cleaned up by the process that still owns the
- * bracket — exactly one close for the whole attempt).
+ * Kernel-switch handoff: when the process booted as a handoff replacement,
+ * the terminal is already in the alternate buffer (the old parent entered
+ * it and handed the screen over instead of restoring the main buffer).
+ * Adoption skips ENTER_ALT_SCREEN (a second enter would push a stray
+ * save-cursor and can double-buffer on some terminals) and reports
+ * "adopted" on the ACK pipe. Until the replacement ACKs its first flushed
+ * frame the 1049 exit stays with the old parent, so a replacement that dies
+ * before it is ready leaves exactly one process to close the bracket.
  */
 export function AlternateScreen({ children, mouseTracking = true }: Props) {
   const size = useContext(TerminalSizeContext)

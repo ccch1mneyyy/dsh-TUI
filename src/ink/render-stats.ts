@@ -1,16 +1,13 @@
 /**
- * Structural render-work counters (streaming performance gate).
+ * Render-work counters: plain integer increments on the markdown and text
+ * hot paths, cheap enough to leave on. verify-markdown-codebox-performance
+ * reads them to assert that sealed blocks cause no work per streaming
+ * frame.
  *
- * The code-frame performance gate (verify-markdown-codebox-performance)
- * drives a real StreamingMarkdown for many frames and asserts that work
- * attributable to ALREADY-SEALED blocks stays at zero per frame. These
- * counters are the probes: plain integer increments on the hot paths,
- * cheap enough to ship in production and useful for future profiling.
- *
- * - formatToken: one per markdown dispatch call (lexer->ANSI formatting).
- * - codeHighlight: one per cli-highlight invocation from formatCodeBody.
- * - wrapCompute: one per real text wrap (wrap-text cache MISS or bypass).
- * - measureCompute: one per text measurement beyond dom.ts' node cache.
+ * - formatToken: markdown token dispatches (lexer token to ANSI).
+ * - codeHighlight: cli-highlight calls from formatCodeBody.
+ * - wrapCompute: text wraps not served by the wrap cache.
+ * - measureCompute: text measurements not served by dom.ts' node cache.
  */
 
 export type RenderWorkCounters = {
