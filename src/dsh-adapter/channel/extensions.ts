@@ -282,6 +282,10 @@ export function attachDshExtensions(
     loadOlder: dshLocal.loadOlder,
     // Subagents and jobs come from the DSH host services (projections above).
     ownsActivity: true,
+    // The DSH raw history IS the trajectory source (state.traceEvents /
+    // trajectorySource are replaced above): the core's AgentEvent fold
+    // would only duplicate it (design §④).
+    ownsTrajectory: true,
     // The DSH workspace may be remote: no local-disk stand-in for `fs`.
     localFs: false,
     dropRows: () => {

@@ -362,12 +362,15 @@ export function TrajectoryScene({
   })
 
   // ── unsupported state (design §④ 轨迹裁决) ─────────────────────────────────
-  // The same three-state contract the side panel applies: a backend whose
-  // composition mounted no trajectory source (Claude today) gets an honest
-  // "not adapted here" screen — never the empty-session chrome that promises
-  // a wake band after the first turn. Esc/q (the useInput above) and the ✕
-  // button still leave; there is simply nothing to navigate. Tolerant read:
-  // partial fixtures render the scene without a report = legacy behavior.
+  // The same three-state contract the side panel applies: a composition
+  // that mounted no trajectory source at all gets an honest "not adapted
+  // here" screen — never the empty-session chrome that promises a wake band
+  // after the first turn. (Every in-tree composition mounts one — DSH its
+  // raw history, everything else the AgentEvent fold — so this arm is the
+  // structural guard, exercised by fixtures.) Esc/q (the useInput above)
+  // and the ✕ button still leave; there is simply nothing to navigate.
+  // Tolerant read: partial fixtures render the scene without a report =
+  // legacy behavior.
   if (channel.trajectorySource?.() === 'unsupported') {
     const unsupportedLine =
       channel.backendCapabilities?.backendId === 'claude'

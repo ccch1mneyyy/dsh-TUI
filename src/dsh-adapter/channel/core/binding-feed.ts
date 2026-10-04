@@ -196,6 +196,9 @@ export function createSessionBinder(deps: {
   inputConvergence: InputConvergence
   route(batch: readonly AgentEvent[], meta: AgentEventMeta, current: () => boolean): void
   hooks(): BindingFeedHooks
+  /** Forget the core's trajectory fold before the seed replay paints (a
+   * session swap starts an empty raw-event log, exactly like the rows). */
+  resetTrajectory?(): void
   /** The stores a session's prompts park in (`ChannelLaunchOptions.interaction`). */
   interaction?: ChannelLaunchOptions['interaction']
   /** The session-level facts kept unless the extension owns them. */
@@ -221,6 +224,7 @@ export function createSessionBinder(deps: {
     const hooks = deps.hooks()
     try {
       state.agentBindingGeneration = binding.bind()
+      deps.resetTrajectory?.()
       hooks.onGeneration?.()
       inputConvergence.cancelInFlight = false
       inputConvergence.interruptSeq += 1
@@ -280,6 +284,8 @@ export function createBindingFeed(ctx: Context, deps: {
   hooks(): BindingFeedHooks
   /** A live `session.reset` (see createSessionBatchRouter). */
   onReset?(event: AgentEventOf<'session.reset'>): void
+  /** Passed to the binder: resets the core trajectory fold per bind. */
+  resetTrajectory?(): void
 }) {
   const { owner, binding, state, inputConvergence, controls } = deps
   // The projector reads its deps per use, so an extension can install its
@@ -345,6 +351,7 @@ export function createBindingFeed(ctx: Context, deps: {
     inputConvergence,
     route: router.route,
     hooks: deps.hooks,
+    ...(deps.resetTrajectory === undefined ? {} : { resetTrajectory: deps.resetTrajectory }),
     interaction: deps.options.interaction,
     facts: {
       observe: controls.observe,

@@ -23,6 +23,8 @@ export { inspectNode, type InspectDetail, type InspectSection } from './inspect.
 
 export { channelOf, columnOfIndex, dominantChannel, projectWave } from './wave.js'
 
+export { createAgentTrajectorySource, type AgentTrajectorySource } from './agent-source.js'
+
 export {
   BURST_MIN,
   burstDurationMs,

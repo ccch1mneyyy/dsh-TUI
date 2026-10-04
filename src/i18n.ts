@@ -1937,6 +1937,9 @@ const dict = {
   'trajectory-unsupported-claude': { zh: 'Claude 后端的轨迹映射尚未接入：唤醒带与账本不会在这里出现。', en: 'The Claude trajectory mapping is not wired up yet: the wake band and ledger will not appear here.' },
   'trajectory-unsupported-fullscreen': { zh: '⤢ 全屏已禁用：该后端没有轨迹数据。', en: '⤢ fullscreen is disabled: this backend has no trajectory data.' },
   'trajectory-unsupported-exit': { zh: 'q / Esc 返回对话', en: 'q / Esc to return' },
+  // 轨迹行的「观察时钟」标注（设计 §④）：事件本身没有时间戳时，数据源用收到
+  // 时刻充当行时间，检查器必须把这一点说清——这是观察时间，不是事件时间。
+  'trajectory-time-observed': { zh: '时间为观察时钟', en: 'time from observed clock' },
   'info-section-session': { zh: '会话', en: 'Session' },
   'info-section-model': { zh: '模型', en: 'Model' },
   'info-section-context': { zh: '上下文', en: 'Context' },

@@ -4,9 +4,12 @@
  * supported / empty / unsupported must be ONE contract across every state
  * and every entry — /trace, Ctrl+T, the sidebar tab and the ⤢ outlet.
  *
- *  - composition: the backend-neutral core structurally reports 'unsupported'
- *    (no trajectory source mounted); the DSH extension reports 'empty' /
- *    'supported' from its raw history — never a backendId lookup;
+ *  - composition: the backend-neutral core mounts the AgentEvent fold and
+ *    reports 'empty' / 'supported' as events flow; the DSH extension
+ *    replaces it with its raw history — never a backendId lookup, and
+ *    'unsupported' stays the structural report of a composition that
+ *    mounted no source at all (asserted through a hand-built state, the
+ *    way an extension-less future composition would produce it);
  *  - panel: unsupported renders the honest not-adapted copy (no
  *    "appears once this session has turns" promise, no ⤢ hint line); the
  *    claude backend gets its specifically-worded line; supported-empty
@@ -119,22 +122,31 @@ try {
       get: () => undefined,
       logger: { warn: () => undefined, info: () => undefined, debug: () => undefined },
     } as never
+    const coreListeners = new Set<(batch: readonly unknown[], meta: unknown) => void>()
     const fakeSession = {
       ref: { backendId: 'fake', sessionId: '33333333-3333-4333-8333-333333333333' },
       cwd: process.cwd(),
       status: 'idle',
       capabilities: { native: {} },
       history: () => Promise.resolve([]),
-      subscribe: () => () => undefined,
+      subscribe(listener: (batch: readonly unknown[], meta: unknown) => void) { coreListeners.add(listener); return () => { coreListeners.delete(listener) } },
       submit: () => Promise.resolve({ accepted: true }),
       removePending: () => false,
       cancel: () => Promise.resolve({ stillQueued: [] }),
       dispose: () => Promise.resolve(),
     }
     const plain = createChannel(ctx, fakeSession as never, { model: 'm', provider: '', cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent' })
-    check('compose: non-DSH core reports unsupported (structural)', sourceOf(plain) === 'unsupported')
-    check('compose: unsupported reports no events either', plain.traceEvents().length === 0)
+    check('compose: non-DSH core mounts the AgentEvent fold (empty)', sourceOf(plain) === 'empty', sourceOf(plain))
+    check('compose: fold reports no events yet', plain.traceEvents().length === 0)
+    for (const listener of coreListeners) {
+      listener([{ type: 'turn.start', turn: 1, origin: 'user', time: 1 }, { type: 'step.start', turn: 1, step: 1 }], { replay: false })
+    }
+    check('compose: fold reports supported once events flow', sourceOf(plain) === 'supported')
+    check('compose: folded raw events are readable', plain.traceEvents().length > 0)
     plain.releaseContributions()
+    // 'unsupported' remains the structural report of a composition that
+    // mounted no source at all; sections 2-3 drive it through explicit
+    // reports, the way a source-less composition would publish it.
 
     // A raw agent is wrapped as a DSH session (channel.ts), so the DSH
     // extension attaches and the source report flips to empty/supported.
@@ -264,7 +276,7 @@ try {
     await app.unmount(); h.term.dispose()
   }
 
-  // ── 4. /trace + Ctrl+T entries over a REAL unsupported channel ───────────
+  // ── 4. /trace + Ctrl+T entries over a REAL core channel (fold mounted) ──
   {
     const listeners = new Set<(batch: readonly unknown[], meta: unknown) => void>()
     const session = {
@@ -294,23 +306,32 @@ try {
       }),
       { stdout: h.stdout as unknown as NodeJS.WriteStream, stdin: h.stdin as unknown as NodeJS.ReadStream, stderr: h.stderr as unknown as NodeJS.WriteStream, exitOnCtrlC: false, patchConsole: false },
     )
-    check('entries: /trace is offered on the unsupported backend', channel.commandList.some(command => command.name === 'trace'))
+    check('entries: /trace is offered on the fold-backed backend', channel.commandList.some(command => command.name === 'trace'))
     await sleep(300) // 固定窗:pacing Chat 的按键处理器在首帧后才挂载
     // /trace entry
     for (const char of '/trace') h.stdin.write(char)
     await sleep(120) // 固定窗:pacing 输入按自身渲染 tick 应用，回车须另起一个 stdin chunk
     await writeKey(h.stdin, '\r')
-    check('entries//trace: opens the honest unsupported scene', await settled(() => h.screen().includes(t('trajectory-unsupported'))))
+    check('entries//trace: opens the scene in the empty state (fold mounted)', await settled(() => h.screen().includes(t('traj-title')) && !h.screen().includes(t('trajectory-unsupported'))))
     check('entries//trace: no capability notice', !toasts().includes(t('capability-unavailable-backend', { name: 'trace' })), toasts())
     check('entries//trace: no unavailable-command notice', !toasts().includes(t('cmd-unavailable-backend', { cmd: 'trace', backend: 'Fake Agent' })), toasts())
     await writeKey(h.stdin, 'q')
-    check('entries//trace: q returns to the conversation', await settled(() => !h.screen().includes(t('trajectory-unsupported'))))
-    // Ctrl+T entry
+    check('entries//trace: q returns to the conversation', await settled(() => !h.screen().includes(t('traj-title'))))
+    // Ctrl+T entry — now over a session with folded events: the scene must
+    // render the LEDGER (the Claude mapping's whole point), not chrome.
+    for (const listener of listeners) {
+      listener([
+        { type: 'turn.start', turn: 1, origin: 'user', time: 1_000 },
+        { type: 'step.start', turn: 1, step: 1 },
+        { type: 'tool.call', seq: 3, anchor: 'c1', turn: 1, step: 1, callId: 'c1', name: 'Grep', argsJson: '{"q":"states"}', time: 1_100 },
+        { type: 'tool.result', seq: 4, turn: 1, step: 1, callId: 'c1', isError: false, time: 1_200, content: [{ type: 'text', text: 'hit' }], text: 'hit' },
+      ], { replay: false })
+    }
     await writeKey(h.stdin, '\x14')
-    check('entries/Ctrl+T: opens the honest unsupported scene', await settled(() => h.screen().includes(t('trajectory-unsupported'))))
+    check('entries/Ctrl+T: folded ledger rows render over live events', await settled(() => h.screen().includes('Grep')), h.screen().split('\n').slice(0, 6).join(' / '))
     check('entries/Ctrl+T: no capability notice', !toasts().includes(t('capability-unavailable-backend', { name: 'trace' })), toasts())
     await writeKey(h.stdin, 'q')
-    check('entries/Ctrl+T: q returns to the conversation', await settled(() => !h.screen().includes(t('trajectory-unsupported'))))
+    check('entries/Ctrl+T: q returns to the conversation', await settled(() => !h.screen().includes(t('traj-title'))))
     await app.unmount()
     channel.releaseContributions()
     h.term.dispose()

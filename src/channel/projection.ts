@@ -66,6 +66,14 @@ export interface ChannelProjectionDeps {
    * whose specialists own these facts) = nothing is forwarded.
    */
   activity?: { apply(event: AgentEvent, replaying: boolean): void }
+  /**
+   * The core's trajectory fold (design agent-team-panels §④ 轨迹裁决):
+   * EVERY event in stream order — including child-lane ones, whose subagent
+   * lifecycle still maps onto the parent's ledger — feeds the neutral
+   * raw-event source behind `traceEvents()`. Absent (a DSH composition,
+   * whose raw history IS the source) = nothing is forwarded.
+   */
+  trajectory?: { observe(event: AgentEvent, replaying: boolean): void }
   inputConvergence: { cancelInFlight: boolean }
   renderer?: ProjectionRenderer
   /** What a submitted message's IDE selection attached (keyed by the message
@@ -987,6 +995,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
   }
 
   const applyEvent = (event: AgentEvent): void => {
+    // The trajectory fold sees every event BEFORE the lane split: a child's
+    // lifecycle row belongs to the parent's ledger even though its
+    // assistant/tool traffic is skipped inside the fold (child lane).
+    deps.trajectory?.observe(event, replaying)
     // A subagent's own lane (its assistant and tool traffic) belongs to its
     // card and panels, never to the main transcript.
     if (laneOf(event) !== undefined) {

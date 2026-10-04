@@ -982,6 +982,13 @@ const GROUPS = {
 // 照常可点、⤢ 全屏出口在 unsupported 收起而 supported 保留；supported-empty
 // 的现文案与 DSH golden 逐字节不变。
     ["verify-trajectory-source-states", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-source-states.tsx']],
+// AgentEvent 轨迹折叠回归（设计 §④ Claude MVP 映射）：中立 source 把共享
+// AgentEvent 词表逐行翻成轨迹 raw 事件（turn/step/attempt-retry/delta 时序/
+// thinking 估计/usage 消息级+回合级不双计/tool call-result-progress/审批问
+// 卷/压缩/子代理 child-lane 描述行且子流量不入父账/user/todo）、无时间戳
+// 事件走观察时钟并标注、durable seq 去重、乱序 close、增量=全量、组合三态
+// empty→supported、场景 40 列/侧栏 28 列渲染。
+    ["verify-trajectory-agent-fold", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-agent-fold.tsx']],
 // 信息栏回归：分组键值渲染（模型/思考深度/模式/权限/上下文/缓存/TPS/消耗/工作目录/
 // 会话标题与 ID）、无数据回落 ——、长值截断不溢出、窄列可读、visible=false 不订阅。
     ["verify-info-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-info-panel.tsx']],

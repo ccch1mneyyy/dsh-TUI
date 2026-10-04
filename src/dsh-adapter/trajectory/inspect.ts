@@ -12,6 +12,7 @@
  * The scene renders the returned sections without knowing what an event is.
  */
 
+import { t } from '../../i18n.js'
 import { asRawEvents, readRetry, type RawTrajEvent } from './guards.js'
 import type { TrajNode } from './types.js'
 
@@ -91,6 +92,13 @@ export function inspectNode(node: TrajNode, events: readonly RawTrajEvent[]): In
   if (node.tokens !== undefined) {
     const { input, output, think, cacheRead } = node.tokens
     facts.push(`in ${input} · out ${output}${think > 0 ? ` · think ${think}` : ''}${cacheRead > 0 ? ` · cache ${cacheRead}` : ''}`)
+  }
+  // The neutral AgentEvent source (design §④ 轨迹裁决) stamps rows whose envelope
+  // time came from the trace clock rather than the backend: "this is when
+  // we saw it", not "this is when it happened". DSH events never carry the
+  // stamp, so their facts are unchanged.
+  if ((data as Record<string, unknown> | undefined)?.observed === true) {
+    facts.push(t('trajectory-time-observed'))
   }
 
   const sections: InspectSection[] = []

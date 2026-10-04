@@ -137,6 +137,11 @@ interface FoldState {
   compactions: TrajNode[]
   /** Live turn context for events that carry none. */
   turn: number
+  /** Turns whose rows already carry message-level usage: a turn-level
+   * report arriving on top of them is a second accounting of the same
+   * tokens and must NOT attach anywhere (the no-double-count rule of
+   * design ④; see the turn/end backfill). */
+  tokenTurns: Set<number>
   /** Live step context; cleared at `step/end`. */
   step: number | undefined
   /** True until the first `session/end-seed`; marks replayed history. */
@@ -164,6 +169,7 @@ function newState(): FoldState {
     hooks: new Map(),
     compactions: [],
     turn: 0,
+    tokenTurns: new Set(),
     step: undefined,
     seeding: true,
     runKey: undefined,
@@ -202,6 +208,7 @@ function cloneState(previous: FoldState): FoldState {
     hooks: new Map(previous.hooks),
     compactions: [...previous.compactions],
     turn: previous.turn,
+    tokenTurns: new Set(previous.tokenTurns),
     step: previous.step,
     seeding: previous.seeding,
     runKey: previous.runKey,
@@ -376,6 +383,16 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
           ? (reason as Record<string, unknown>).kind
           : undefined
       close(state, open, event, kind === 'completed' ? 'ok' : 'error', typeof kind === 'string' && kind !== 'completed' ? kind : undefined)
+      // Turn-level usage (the close event's own accounting) backfills the
+      // turn row ONLY when no message of the turn carried usage — the two
+      // levels describe the same tokens (design ④: 分清，不双计). DSH
+      // turn/end payloads carry no usage, so this arm stays closed for
+      // every DSH log.
+      const usage = readTokens(data?.usage)
+      if (usage !== undefined && open !== undefined && !state.tokenTurns.has(turn)) {
+        open.tokens = usage
+        state.tokenTurns.add(turn)
+      }
       state.turns.delete(turn)
       state.step = undefined
       return
@@ -458,6 +475,7 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
           : undefined
       const tokens = readTokens(data?.usage)
       let first = true
+      let attached = false
       if (Array.isArray(content)) {
         for (const block of content) {
           if (typeof block !== 'object' || block === null) continue
@@ -477,7 +495,27 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
             // first row so the hotspot aggregate counts it exactly once.
             tokens: first ? tokens : undefined,
           })
+          if (first && tokens !== undefined) attached = true
           first = false
+        }
+      }
+      if (tokens !== undefined && attached) state.tokenTurns.add(turn)
+      // A message that settled no renderable block (a tool-only model
+      // response) still paid for its request: its usage parks on the open
+      // step row — the one bracket that already owns this model call — so
+      // the aggregate counts it exactly once. Merged, not replaced: several
+      // such responses can settle inside one step.
+      if (tokens !== undefined && !attached) {
+        const open = state.steps.get(`${turn}:${step ?? 0}`)
+        if (open !== undefined) {
+          open.tokens = open.tokens === undefined ? tokens : {
+            input: open.tokens.input + tokens.input,
+            output: open.tokens.output + tokens.output,
+            think: open.tokens.think + tokens.think,
+            cacheRead: open.tokens.cacheRead + tokens.cacheRead,
+            cacheWrite: open.tokens.cacheWrite + tokens.cacheWrite,
+          }
+          state.tokenTurns.add(turn)
         }
       }
       return
