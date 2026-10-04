@@ -446,6 +446,12 @@ const GROUPS = {
 // 安全 GC（dry-run 默认、active/回滚目标/活 lease 一律保留）、回滚＝
 // 只改指针。
     ["verify-deploy-generations", ['node', 'scripts/verify-deploy-generations.mjs']],
+// lease 强判活回归（M1③）：lease 携带进程创建时间身份——linux /proc tick 精确
+// 判死（可证 PID 复用）、win32 CIM 数字探针（一次批查询，locale 免疫）匹配
+// 即 live(strong)（心跳写失败不再误判 ambiguous）；wall-clock 不合只降级不判
+// 死（时钟步进 fail-safe）；M0 无身份 lease 心跳三态不变；GC 只回收 stale
+// lease 文件（dry-run 报告、apply 才删，ambiguous/live 不动）。
+    ["verify-deploy-lease-liveness", ['node', 'scripts/verify-deploy-lease-liveness.mjs']],
 // 构建隔离 M0 回归：live-tree 守卫（profile junction 指向的源树拒绝
 // clean/build、逃生口、clean-lib 真子进程集成）、staging 构建产物形状
 // （READY files 清单/树哈希独立复核/runtime-lock 如实标 profile 提供）、

@@ -28,7 +28,15 @@
 import { createHash } from "node:crypto"
 import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { parseActiveManifest, parseReadyManifest, isValidGenerationId, LEASE_HEARTBEAT_MS } from "../../dispatch/resolve.mjs"
+import {
+  LEASE_HEARTBEAT_MS,
+  currentProcessStartIdentity,
+  isValidGenerationId,
+  matchProcessStartIdentity,
+  parseActiveManifest,
+  parseReadyManifest,
+  primeProcessStartIdentities,
+} from "../../dispatch/resolve.mjs"
 
 /** A lease is "fresh" while within 3 heartbeat windows of its last beat. */
 const LEASE_FRESH_MS = LEASE_HEARTBEAT_MS * 3
@@ -291,7 +299,16 @@ export function rollbackGeneration(deployRoot, options = {}) {
   return { generationId: targetId, from: active.generationId }
 }
 
-/** Classify one lease file: live / stale / ambiguous (kept, never trusted dead). */
+/** Classify one lease file: live / stale / ambiguous (kept, never trusted dead).
+ *
+ * Strong liveness (design §S04 "lease 强判活"): when the lease carries a
+ * processStartIdentity, the pid's CURRENT creation identity decides first —
+ * a match is live even with a stale heartbeat (a heartbeat write can fail
+ * for reasons that do not kill the process), and a PROVEN mismatch (exact
+ * linux tick identity) is stale even with a fresh-looking pid. Only when the
+ * platform cannot probe (or the kinds are incomparable) does the classifier
+ * fall back to M0's heartbeat semantics — ambiguous, never deleted.
+ */
 export function classifyLease(leasePath, now = Date.now()) {
   let lease
   try {
@@ -311,20 +328,43 @@ export function classifyLease(leasePath, now = Date.now()) {
     else return { state: "ambiguous", reason: "pid probe failed: " + error.code }
   }
   if (!alive) return { state: "stale", reason: "pid " + pid + " is gone" }
+  const identity = lease.processStartIdentity
+  if (identity !== null && typeof identity === "object" && typeof identity.kind === "string") {
+    const current = currentProcessStartIdentity(pid)
+    if (current !== undefined) {
+      const match = matchProcessStartIdentity(identity, current)
+      if (match === true) {
+        return { state: "live", reason: "pid " + pid + " alive, creation time matches the lease", strong: true }
+      }
+      if (match === false) {
+        return { state: "stale", reason: "pid " + pid + " is a REUSED pid (process creation time differs from the lease)", strong: true }
+      }
+      // Incomparable (wall-clock mismatch can be a clock step): fall through
+      // to heartbeat semantics — never delete a generation on a maybe.
+    }
+  }
   const heartbeatAt = typeof lease.heartbeatAt === "number" ? lease.heartbeatAt : 0
   if (now - heartbeatAt > LEASE_FRESH_MS) {
-    // PID alive but the lease went quiet: PID reuse is the classic trap, and
-    // the design is explicit — an undecidable lease KEEPS the generation.
-    return { state: "ambiguous", reason: "pid " + pid + " alive but heartbeat is stale (possible pid reuse)" }
+    // PID alive but the lease went quiet and creation time could not prove
+    // identity: PID reuse stays possible — an undecidable lease KEEPS the gen.
+    return { state: "ambiguous", reason: "pid " + pid + " alive but heartbeat is stale and creation time is inconclusive" }
   }
   return { state: "live", reason: "pid " + pid + " heartbeating" }
 }
 
-/** All lease classifications for one generation id. */
+/** All lease classifications for one generation id (batch-primed so a
+ *  GC/status pass pays at most ONE platform creation-time query). */
 export function leasesFor(deployRoot, generationId) {
   const dir = join(deployRoot, "leases", generationId)
   if (!existsSync(dir)) return []
-  return readdirSync(dir).filter(name => name.endsWith(".json")).map(name => {
+  const names = readdirSync(dir).filter(name => name.endsWith(".json"))
+  const pids = []
+  for (const name of names) {
+    const pid = Number(name.split("-")[0])
+    if (Number.isInteger(pid) && pid > 0) pids.push(pid)
+  }
+  if (pids.length > 0) primeProcessStartIdentities(pids)
+  return names.map(name => {
     const path = join(dir, name)
     return { path, ...classifyLease(path) }
   })
@@ -388,13 +428,38 @@ export function gcGenerations(deployRoot, options = {}) {
     if (reasons.length > 0) keep.push({ ...candidate, reasons })
     else remove.push({ ...candidate, reason: "not active/rollback-target/leased/newest/young" })
   }
-  const plan = { apply, keep, remove }
+  // Crash-lease reclamation (design §S04: "crash lease 由下一次经过平台核验后
+  // 回收"): ONLY leases the strong liveness probe classified stale — the pid
+  // is gone, or (exact linux tick identity) the creation time proves reuse.
+  // Live and ambiguous lease files are never touched, including on
+  // generations this GC keeps anyway.
+  const reclaimLeases = []
+  for (const candidate of candidates) {
+    if (candidate.kind !== "generation") continue
+    for (const lease of leasesFor(deployRoot, candidate.id)) {
+      if (lease.state === "stale") reclaimLeases.push({ generationId: candidate.id, path: lease.path, reason: lease.reason })
+    }
+  }
+  const plan = { apply, keep, remove, reclaimLeases }
   if (apply) {
+    for (const lease of reclaimLeases) {
+      try {
+        unlinkSync(lease.path)
+      } catch {
+        // Raced a cleaner release — the file is gone either way.
+      }
+    }
     for (const target of remove) {
       rmSync(target.path, { recursive: true, force: true })
       if (existsSync(target.path)) throw new DeployError("GC removal silently failed for " + target.path + " — directory still exists after rmSync (platform rm no-op?)")
     }
-    if (remove.length > 0) appendHistory(deployRoot, { event: "gc", removed: remove.map(target => ({ kind: target.kind, id: target.id })) })
+    if (remove.length > 0 || reclaimLeases.length > 0) {
+      appendHistory(deployRoot, {
+        event: "gc",
+        removed: remove.map(target => ({ kind: target.kind, id: target.id })),
+        reclaimedLeases: reclaimLeases.map(lease => ({ id: lease.generationId, file: lease.path.split(/[\\/]/).pop(), reason: lease.reason })),
+      })
+    }
   }
   return plan
 }
