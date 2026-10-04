@@ -93,6 +93,11 @@ const GROUPS = {
     ['verify-text-measure-cache', ['node', '--import', 'tsx/esm', 'scripts/verify-text-measure-cache.ts']],
     ['verify-text-wrap-geometry', ['node', '--import', 'tsx/esm', 'scripts/verify-text-wrap-geometry.tsx']],
     ['verify-streaming-markdown-blocks', ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-blocks.tsx']],
+// Markdown token 级正确性门（渲染升级 Batch A）：真实 lexer 的递归 token
+// census 必须与 allowlist 精确相等（marked 升级引入新类型即红，fail
+// closed）；任务列表 checkbox 状态 [x]/[ ] 在紧/松/有序/嵌套/引用/CJK
+// 形态下都落在 bullet 与正文之间；def/html 保持刻意不可见。
+    ['verify-markdown-token-coverage', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-token-coverage.ts']],
     ['verify-text-paint-budget', ['node', '--import', 'tsx/esm', 'scripts/verify-text-paint-budget.tsx']],
     ['verify-text-viewport-paint', ['node', '--import', 'tsx/esm', 'scripts/verify-text-viewport-paint.ts']],
     ['verify-tool-history-window', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-history-window.tsx']],

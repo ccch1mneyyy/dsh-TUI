@@ -151,6 +151,13 @@ interface RenderState {
   readonly listDepth: number
   /** Ordinal of the current ordered-list item, or null for unordered lists. */
   readonly ordinal: number | null
+  /**
+   * Rendered task checkbox of the enclosing tight list item ('[x] ' with
+   * styling). marked lifts the checkbox to a sibling token ahead of the
+   * text there; renderListItem stashes it here so it lands between the
+   * bullet and the body (loose items keep it inline in their paragraph).
+   */
+  readonly taskMark?: string
 }
 
 /** A fresh context for block-level children: list state reset, no parent. */
@@ -230,6 +237,7 @@ function isToken<K extends MarkedToken['type']>(
 /** Fan-out point: narrows the token union, then delegates to the per-type render functions. */
 function dispatch(token: Token, state: RenderState): string {
   if (isToken(token, 'blockquote')) return renderBlockquote(token, state)
+  if (isToken(token, 'checkbox')) return renderCheckbox(token)
   if (isToken(token, 'code')) return renderCodeBlock(token, state)
   if (isToken(token, 'codespan')) return renderCodeSpan(token)
   if (isToken(token, 'em')) return renderEmphasis(token, state)
@@ -379,11 +387,33 @@ function renderList(token: Tokens.List, state: RenderState): string {
 
 function renderListItem(token: Tokens.ListItem, state: RenderState): string {
   const indent = '  '.repeat(state.listDepth)
+  // Tight task items carry their checkbox as a sibling token AHEAD of the
+  // text token (loose items inline it inside the paragraph). Lift it out
+  // here and hand it to renderText: otherwise the checkbox would render on
+  // its own line before the bullet instead of between bullet and body.
+  const isTightTask = token.task === true && token.tokens[0]?.type === 'checkbox'
+  const children = isTightTask ? token.tokens.slice(1) : token.tokens
   const childState = withParent(
-    { ...state, listDepth: state.listDepth + 1 },
+    {
+      ...state,
+      listDepth: state.listDepth + 1,
+      taskMark: isTightTask ? renderCheckbox(token.tokens[0] as Tokens.Checkbox) : '',
+    },
     token,
   )
-  return token.tokens.map(child => indent + dispatch(child, childState)).join('')
+  return children.map(child => indent + dispatch(child, childState)).join('')
+}
+
+/**
+ * Task checkbox as width-safe ASCII: literal [x] / [ ] keeps its state
+ * through display, copy, and ANSI-stripping measurements alike; a styled
+ * glyph pair would not survive every terminal font. The trailing space is
+ * the separator to the item text.
+ */
+function renderCheckbox(token: Tokens.Checkbox): string {
+  const mark = token.checked ? '[x]' : '[ ]'
+  const color = token.checked ? getActiveTheme().success : getActiveTheme().subtle
+  return colorize(mark, color, 'foreground') + ' '
 }
 
 function renderParagraph(token: Tokens.Paragraph, state: RenderState): string {
@@ -405,9 +435,10 @@ function renderText(token: Tokens.Text, state: RenderState): string {
       ? token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
       : linkifyText(token.text)
     // Blue bullet marker: list structure gets a tint without loading the
-    // whole item (kimi-style `•` in the accent color).
+    // whole item (kimi-style `•` in the accent color). A tight task item
+    // slots its rendered checkbox between the bullet and the body.
     const tinted = colorize(bullet, getActiveTheme().permission, 'foreground')
-    return `${tinted} ${body}${EOL}`
+    return `${tinted} ${state.taskMark ?? ''}${body}${EOL}`
   }
 
   return linkifyText(token.text)
