@@ -150,6 +150,146 @@ try {
     check('wait/raw: resolvable rows are not marked', inspectNode(toolRow, toolEvents as never).unresolved !== true)
   }
 
+  // ── 1b. the neutral AgentEvent source carries the same fields ─────────────
+  {
+    // W1: permission ask carries source identity + offered options through
+    // the fold; the settled outcome pairs by requestId.
+    source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
+    source.observe({ type: 'step.start', turn: 1, step: 1 }, false)
+    source.observe({
+      type: 'permission.request',
+      request: {
+        requestId: 'r1', toolName: 'Write', callId: 'cw', agentId: 'sa9',
+        title: 'Write outside the sandbox', command: 'rm -rf build', blockedPath: '../outside',
+        reason: 'outside sandbox',
+        options: [{ id: 'a', kind: 'allow-once' }, { id: 'd', kind: 'reject', label: 'No, and tell it why' }],
+      },
+    }, false)
+    let build = fold()
+    let approval = rowsOf(build, 'approval')[0]!
+    check('wait: asked row is a running approval bracket', approval.status === 'running' && approval.label === 'Write')
+    let detail = inspectNode(approval, source.events())
+    const sourceBody = detail.sections.find(section => section.title === 'source')?.body ?? ''
+    check('wait: ask-time source identity survives (agent/command/blocked/options)',
+      sourceBody.includes('sa9') && sourceBody.includes('rm -rf build') && sourceBody.includes('../outside')
+        && sourceBody.includes('allow-once') && sourceBody.includes('No, and tell it why'),
+      sourceBody.replace(/\s+/g, ' ').slice(0, 90))
+    check('wait: permission carries no question snapshot', detail.sections.every(section => section.title !== 'questions'))
+    source.observe({ type: 'permission.settled', requestId: 'r1', outcome: 'rejected' }, false)
+    build = fold()
+    approval = rowsOf(build, 'approval')[0]!
+    detail = inspectNode(approval, source.events())
+    check('wait: settled denial closes with the outcome + own duration',
+      approval.status === 'error' && approval.durationMs === 10 && approval.outcome === 'rejected'
+        && detail.sections.some(section => section.title === 'outcome' && section.body === 'rejected'))
+    check('wait: a settled permission reports no fabricated response body',
+      detail.sections.every(section => section.title !== 'response'))
+    source.reset()
+  }
+  {
+    // W2: a questionnaire snapshot folds bounded questions; the ANSWER is
+    // recovered from the ask tool's paired result (callId lookup).
+    source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
+    source.observe({
+      type: 'question.request',
+      request: {
+        requestId: 'q1', callId: 'q9', agentId: 'sa8',
+        questions: [
+          { header: 'Mode', question: 'Which mode?', options: [{ label: 'Fast' }, { label: 'Slow' }] },
+          { question: 'Any extras?', options: [{ label: 'None' }] },
+        ],
+      },
+    }, false)
+    let approval = rowsOf(fold(), 'approval')[0]!
+    let detail = inspectNode(approval, source.events())
+    const questions = detail.sections.find(section => section.title === 'questions')?.body ?? ''
+    check('wait: question snapshot renders headers + option labels',
+      questions.includes('[Mode] Which mode?') && questions.includes('Fast | Slow') && questions.includes('Any extras?'),
+      questions.replace(/\s+/g, ' ').slice(0, 80))
+    check('wait: waiting question has no response yet', detail.sections.every(section => section.title !== 'response'))
+    source.observe({ type: 'question.settled', requestId: 'q1' }, false)
+    source.observe({
+      type: 'tool.result', seq: 42, turn: 1, step: 1, callId: 'q9', isError: false, time: 2_000,
+      content: [{ type: 'text', text: 'Fast; None' }], text: 'Fast; None',
+    }, false)
+    approval = rowsOf(fold(), 'approval')[0]!
+    detail = inspectNode(approval, source.events())
+    const response = detail.sections.find(section => section.title === 'response')?.body
+    check('wait: settled answer recovered from the paired ask-tool result', response === 'Fast; None', String(response))
+    // The paired result folds no orphan tool row (no tool.call for q9).
+    check('wait: the paired result adds no orphan tool row', rowsOf(fold(), 'tool').length === 0)
+    source.reset()
+  }
+  {
+    // W3: an unreadable owning event degrades honestly instead of silently
+    // showing nothing (design §4 i18n trajectory-inspect-unavailable).
+    source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
+    source.observe({ type: 'step.start', turn: 1, step: 1 }, false)
+    source.observe({ type: 'tool.call', seq: 3, anchor: 'cx', turn: 1, step: 1, callId: 'cx', name: 'Read', argsJson: '{}', time: 1_100 }, false)
+    const whole = fold()
+    const toolRow = rowsOf(whole, 'tool')[0]!
+    const truncated = source.events().slice(0, 2)
+    const detail = inspectNode(toolRow, truncated)
+    check('wait: missing owning event marks the detail unresolved', detail.unresolved === true)
+    check('wait: resolvable rows are not marked', inspectNode(toolRow, source.events()).unresolved !== true)
+    source.reset()
+  }
+
+  // ── 2. cross-agent drilldown: lanes ───────────────────────────────────────
+  {
+    source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
+    source.observe({ type: 'step.start', turn: 1, step: 1 }, false)
+    source.observe({ type: 'tool.call', seq: 3, anchor: 't1', turn: 1, step: 1, callId: 't1', name: 'Task', argsJson: '{}', time: 1_100 }, false)
+    source.observe({ type: 'subagent.start', agentId: 'sa1', parentCallId: 't1', description: 'scan the repo', model: 'gpt-5.6-sol', background: false, time: 1_150 }, false)
+    source.observe({ type: 'tool.call', seq: 8, anchor: 'cc1', turn: 1, step: 1, callId: 'cc1', name: 'childtool', argsJson: '{}', time: 1_200, parentCallId: 't1' }, false)
+    source.observe({ type: 'tool.result', seq: 9, turn: 1, step: 1, callId: 'cc1', isError: false, time: 1_240, content: [{ type: 'text', text: 'child out' }], text: 'child out', parentCallId: 't1' }, false)
+    source.observe({ type: 'assistant.message', seq: 10, anchor: 'cm1', turn: 1, step: 1, attemptId: 'ca1', time: 1_250, blocks: [{ type: 'text', text: 'child says' }], canonical: true, parentCallId: 't1' }, false)
+    // A grandchild: the child's own Task call (inside lane sa1) spawns sa2.
+    source.observe({ type: 'tool.call', seq: 11, anchor: 'g0', turn: 1, step: 1, callId: 'g0', name: 'grandtask', argsJson: '{}', time: 1_260, parentCallId: 't1' }, false)
+    source.observe({ type: 'subagent.start', agentId: 'sa2', parentCallId: 'g0', description: 'grand scan', background: false, time: 1_270 }, false)
+    source.observe({ type: 'tool.call', seq: 12, anchor: 'gc1', turn: 1, step: 1, callId: 'gc1', name: 'grandtool', argsJson: '{}', time: 1_280, parentCallId: 'g0' }, false)
+    source.observe({ type: 'subagent.end', agentId: 'sa1', status: 'completed', usage: { total: 999 }, time: 1_400 }, false)
+
+    const build = fold()
+    check('lane: main ledger keeps child traffic out (R14 parity)',
+      rowsOf(build, 'tool').every(node => node.callId !== 'cc1') && rowsOf(build, 'assistant').every(node => node.detail !== 'child says'))
+    const descriptor = rowsOf(build, 'context').find(node => node.label === 'subagent')!
+    check('lane: descriptor row carries the drilldown anchor', descriptor.agentId === 'sa1')
+    const lanes = source.lanes()
+    check('lane: roster registers both lanes with tree facts',
+      lanes.length === 2 && lanes[0]!.agentId === 'sa1' && lanes[0]!.callId === 't1' && lanes[0]!.label === 'scan the repo'
+        && lanes[1]!.agentId === 'sa2' && lanes[1]!.parentAgentId === 'sa1' && lanes[1]!.depth === 2,
+      JSON.stringify(lanes.map(lane => [lane.agentId, lane.parentAgentId, lane.depth])))
+    const laneBuild = buildTrajectory(source.laneEvents('sa1'))
+    check('lane: lane log folds the child stream (own calls included, grandchild lane excluded)',
+      laneBuild.nodes.some(node => node.label === 'childtool') && laneBuild.nodes.some(node => node.detail === 'child says')
+        && laneBuild.nodes.some(node => node.label === 'grandtask')
+        && laneBuild.nodes.every(node => node.label !== 'grandtool'))
+    const grandBuild = buildTrajectory(source.laneEvents('sa2'))
+    check('lane: grandchild lane holds its own call', grandBuild.nodes.some(node => node.label === 'grandtool'))
+    const merged = source.descendantEvents('sa1')
+    const seqs = merged.map(event => event.seq)
+    check('lane: descendants merge is seq-sorted and covers both lanes',
+      seqs.length === 5 && seqs.every((seq, index) => index === 0 || seq > seqs[index - 1]!)
+        && merged.some(event => (event.data as Record<string, unknown>).name === 'grandtool'))
+    // Incremental lane fold === from-scratch (prefix identity contract).
+    let piecewise: ReturnType<typeof buildTrajectory> | null = null
+    const stages = [3, 5].map(count => Object.freeze([...merged.slice(0, count)]))
+    for (const stage of stages) piecewise = extendTrajectory(piecewise, stage)
+    const wholeLane = buildTrajectory(merged)
+    const pick = (nodes: readonly { kind: string; label: string; seq: number }[]) => nodes.map(node => node.kind + node.label + node.seq).join(';')
+    check('lane: incremental fold === from-scratch', pick(piecewise!.nodes) === pick(wholeLane.nodes))
+    // Re-key: a second start for the same anchor adopts the earlier events.
+    source.observe({ type: 'subagent.start', agentId: 'sa1-named', parentCallId: 't1', description: 'scan the repo', background: false, time: 1_500 }, false)
+    const rekeyed = source.lanes()
+    check('lane: re-key replaces the roster entry',
+      rekeyed.length === 2 && rekeyed.some(lane => lane.agentId === 'sa1-named') && !rekeyed.some(lane => lane.agentId === 'sa1'))
+    const adopted = buildTrajectory(source.laneEvents('sa1-named'))
+    check('lane: re-keyed lane adopts the earlier events', adopted.nodes.some(node => node.label === 'childtool'))
+    check('lane: the old id resolves through the alias', buildTrajectory(source.laneEvents('sa1')).nodes.length === adopted.nodes.length)
+    source.reset()
+  }
+
 } finally {
   // (each section resets the shared source)
 }
