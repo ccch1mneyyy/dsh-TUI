@@ -7,6 +7,7 @@ import { isMermaidLang } from '../terminal-utils/mermaid.js'
 import { isMathBlockToken, isMathToken } from '../terminal-utils/math.js'
 import { getMathRendering, subscribeMathRendering } from '../tuiDisplayPrefs.js'
 import { MarkdownTable } from './MarkdownTable.js'
+import { CodeBlockFrame } from './CodeBlockFrame.js'
 import { MermaidDiagram } from './MermaidDiagram.js'
 import { InlineMathParagraph } from './InlineMathParagraph.js'
 import { MathBlock } from './MathBlock.js'
@@ -113,10 +114,17 @@ function lexWithCache(content: string, allowCache: boolean): Token[] {
  * Tokens that render as their own layout node (a width-aware component)
  * instead of joining the ANSI text run. StreamingMarkdown consults the same
  * predicate: a standalone node has a fixed one-row gap to its neighbours
- * rather than the newline-derived spacing of text blocks.
+ * rather than the newline-derived spacing of text blocks. Fenced code
+ * blocks join the group: the CodeBlockFrame needs structural width (rail +
+ * padding) and per-visual-row gutter that an ANSI string cannot carry.
  */
 export function isStandaloneToken(token: Token): boolean {
-  return token.type === 'table' || isMermaidToken(token) || isMathBlockToken(token)
+  return (
+    token.type === 'table' ||
+    token.type === 'code' ||
+    isMermaidToken(token) ||
+    isMathBlockToken(token)
+  )
 }
 
 /** Whether a paragraph holds inline math anywhere in its inline tokens. */
@@ -204,6 +212,15 @@ function renderTokensToNodes(
           highlight={highlight}
           dimColor={dimColor}
         />,
+      )
+    } else if (token.type === 'code') {
+      // Top-level fences get the CodeBlockFrame (header/rail/padding);
+      // the mermaid branch above keeps diagram fences routed to
+      // MermaidDiagram (whose fallback re-enters the frame), and code
+      // nested in lists/quotes keeps formatToken's ANSI path.
+      flushAnsiText()
+      nodes.push(
+        <CodeBlockFrame key={nodes.length} token={token as Tokens.Code} highlight={highlight} dimColor={dimColor} />,
       )
     } else {
       ansiText += formatToken(token, 0, null, null, highlight)

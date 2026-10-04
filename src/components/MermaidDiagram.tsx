@@ -5,7 +5,7 @@ import { useTerminalSize } from '../ink/hooks/use-terminal-size.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
-import { formatToken } from '../terminal-utils/markdown.js'
+import { CodeBlockFrame } from './CodeBlockFrame.js'
 import type { CliHighlight } from '../terminal-utils/cliHighlight.js'
 import {
   getMermaidEnginePromise,
@@ -24,9 +24,9 @@ import { t } from '../i18n.js'
  * ```mermaid fence line is a code-block affordance and a diagram needs none.
  * Whenever there is no art to show (setting off, engine still loading or
  * unavailable, unsupported diagram type, nothing parsed, or the layout is
- * wider than the viewport) the block falls back to the ordinary code-block
- * rendering — fence line included, because that IS a code block — and a
- * too-wide diagram adds a caption with the width it needs.
+ * wider than the viewport) the block falls back to the shared
+ * CodeBlockFrame — because that IS a code block — and a too-wide diagram
+ * adds a caption with the width it needs.
  */
 
 /** Same viewport slack MarkdownTable keeps for gutters and message insets. */
@@ -77,9 +77,11 @@ export function MermaidDiagram({ token, highlight, dimColor, forceWidth }: Props
   )
 
   if (art === null || art.width > width - INDENT_WIDTH - SAFETY_MARGIN) {
+    // No art to show: this IS a code block, so it falls back to the
+    // ordinary CodeBlockFrame (shared with plain fences).
     return (
       <Box flexDirection="column">
-        <Text dimColor={dimColor}>{formatToken(token, 0, null, null, highlight).trimEnd()}</Text>
+        <CodeBlockFrame token={token} highlight={highlight} dimColor={dimColor} forceWidth={forceWidth} />
         {art !== null && (
           <Text color="inactive">{INDENT + t('mermaid-too-wide', { width: art.width })}</Text>
         )}
