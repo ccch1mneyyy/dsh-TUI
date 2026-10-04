@@ -2101,6 +2101,18 @@ const dict = {
   'kernel-unavailable-not-installed': { zh: '未安装', en: 'Not installed' },
   'kernel-unavailable-auth-missing': { zh: '未登录', en: 'Not signed in' },
   'kernel-switch-restarting': { zh: '正在以 {{name}} 内核重启…', en: 'Restarting on the {{name}} kernel…' },
+  // 内核切换过场（S05 MVE）：已 flush 的稳定进度行 + 结果事件区分。
+  // starting/stage-start 在 finishExit 交界与 replacement spawn 前落屏；
+  // failed/crashed 是旧父进程对替换进程结局的分类通报；安全模式提示
+  // 只挂在失败类事件后（launcher 的 safe 入口是修复路径，不是默认）。
+  'kernel-handoff-starting': { zh: '正在切换到 {{name}}，启动新会话…', en: 'Switching to {{name}} and starting a new session…' },
+  'kernel-handoff-session-kept': { zh: '当前会话仍保留，可随时切回', en: 'The current session is preserved; switch back anytime' },
+  'kernel-handoff-stage-start': { zh: '正在启动 {{name}}…', en: 'Starting {{name}}…' },
+  'kernel-handoff-failed': { zh: '切换未完成（{{reason}}）。当前会话仍保留。', en: 'Switch did not complete ({{reason}}). The current session is preserved.' },
+  'kernel-handoff-failed-reason-boot': { zh: '新会话启动失败', en: 'the new session failed to start' },
+  'kernel-handoff-failed-reason-spawn': { zh: '无法启动替换进程', en: 'could not spawn the replacement process' },
+  'kernel-handoff-crashed': { zh: '新会话异常退出（代码 {{code}}）。', en: 'The new session exited abnormally (code {{code}}).' },
+  'kernel-handoff-safe-hint': { zh: '可运行 dsh-tui safe 进入安全模式诊断。', en: 'Run dsh-tui safe for read-only diagnostics.' },
   // 选择器本体（阶段B）：标题、探测中态、当前项重复选择、环境不支持。
   'kernel-picker-title': { zh: '选择内核', en: 'Choose kernel' },
   'kernel-probing': { zh: '检测中…', en: 'Checking…' },
