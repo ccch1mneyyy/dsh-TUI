@@ -426,14 +426,14 @@ export function Chat({
    */
   onSwitchBackend?: (backend: 'dsh' | 'claude') => void
   /**
-   * 以新会话重启（组合根实现：退出进 backend-switch 漏斗的同款机器——不写
-   * resume 目标、新会话、内核不变）。/channel 三期在「激活渠道的连接信息
-   * 变了」时走这里：运行中的 CLI 子进程换不了 baseUrl/token，只能换会话。
+   * 以新会话重启（组合根实现：走切换内核的同一条退出路径，不写 resume 目标，
+   * 内核不变）。/channel 在激活渠道的连接变了时用它：运行中的 CLI 子进程
+   * 换不了 baseUrl/token，只能换会话。
    */
   onRestartFreshSession?: (notice: string) => void
   /**
-   * Claude 内核探测（组合根注入；Chat 不 import 任何具体后端）。首次
-   * 需要时调一次，结果缓存——探测失败按「未安装」答，宁可少一个入口。
+   * Claude 内核探测（组合根注入；Chat 不 import 任何具体后端）。首次需要时
+   * 调一次并缓存结果；探测失败按「未安装」处理。
    */
   onProbeKernels?: () => Promise<ClaudeKernelStatus>
   /** 启动参数（Config 行 / DSH_TUI_BACKEND）压过了记忆：选择器明说。 */
@@ -708,17 +708,15 @@ export function Chat({
    * on" has not been answered yet. Every later launch starts on the chat
    * screen, and the screen stays reachable.
    */
-  // #185 收尾：根边界恢复触发的重挂不是「启动」——启动页、首启引导与会话
-  // 管理屏都是启动入口，恢复的落点是对话页本身（一次性标记由 App 错误边界
-  // 的恢复路径写入，见 update-overflow-guard）。首渲染即消费；即便某次并发
-  // 渲染被丢弃也只是回到旧表现（多见一次启动入口），不会更糟。
+  // 根错误边界恢复后的重挂不是一次启动：启动页、首启引导与会话管理屏都
+  // 不再打开，直接回到对话页（一次性标记由错误边界的恢复路径写入，见
+  // update-overflow-guard）。首次渲染即消费；若这次渲染被丢弃，最坏只是
+  // 多显示一次启动入口。
   const recoveryRemountOnBoot = consumeBoundaryRecoveryRemount()
   // 第七版：启动页在开时**不再**预开会话浏览器。旧姿态是「先收落地页再开
   // 整屏」，浏览器必须提前藏在下面；现在整屏（会话/设置/任务面板）盖在
   // 落地页**之上**、Esc 退回落地页，按需打开即可——boot 时同时为真反而会
-  // 让浏览器盖住落地页（渲染顺序见各 early-return）。恢复重挂同样不开它
-  // （R4-R4）：recovery × openHome=true × launchpad=false 之前会把恢复落进
-  // 会话管理屏，偏离「恢复直接回对话」。
+  // 让浏览器盖住落地页（渲染顺序见各 early-return）。恢复重挂同样不开它。
   const [supervisorOpen, setSupervisorOpen] = React.useState(
     openHomeOnBoot === true && launchpadOnBoot !== true && !recoveryRemountOnBoot,
   )
@@ -1254,7 +1252,7 @@ export function Chat({
     btwThreads.abortActive(String(channel.agentId))
     setBtwOverlayOpen(false)
   }
-  /** 模态/整屏 surface 活跃时 /btw 的答案不抢开面板，只置 badge（§快路径）。 */
+  /** 有模态或整屏界面时，/btw 的回答不抢着打开面板，只标未读。 */
   const btwSurfaceFree = () =>
     approvalSnapshot === null && dialogSnapshot === null && questionSnapshot === null
     && overlay.kind === 'none' && !helpOpen && !starModal && !couponVisible
@@ -1469,17 +1467,15 @@ export function Chat({
   /** Detail view for a specific subagent (opened from dashboard). */
   const [subagentDetailId, setSubagentDetailId] = React.useState<string | null>(null)
   /**
-   * 主屏只读 Agent View（design agent-team-full §4）：Chat 自己的场景层——
-   * 父 Chat 树/Channel/PromptInput 保持挂载（draft 走 draftCache 往返），
-   * 场景只借走屏幕与键盘；Esc 按来源栈 pop（chat/dashboard/detail/card）。
-   * 不建第二个 Channel，不触碰 attach/resume/createChannel。
+   * 主屏只读 Agent View：Chat 自己的场景层。父 Chat、Channel 与 PromptInput
+   * 保持挂载（草稿经 draftCache 往返），场景只借用屏幕与键盘；Esc 回到打开它
+   * 的地方（对话 / 代理面板 / 详情 / 转录卡）。不建第二个 Channel。
    */
   const [agentView, setAgentView] = React.useState<{ agentId: string; source: AgentViewSource } | null>(null)
   const openAgentView = React.useCallback((agentId: string, source: AgentViewSource): void => {
     setAgentView({ agentId, source })
   }, [])
-  /** P3 工作台的 sibling/父切换：原地换被查看的代理，来源栈保持进入时
-   *  的样子（Esc 回原入口，不回上一个查看的代理）。 */
+  /** 工作台里切到同级或父代理：原地换被查看的代理，Esc 仍回最初的入口。 */
   const switchViewedAgent = React.useCallback((agentId: string): void => {
     setAgentView(prev => prev === null ? prev : { ...prev, agentId })
   }, [])
@@ -1575,11 +1571,10 @@ export function Chat({
    * straight back into the panel it is trying to leave.
    */
   const openScene = React.useCallback((options?: { readonly fullscreen?: boolean }) => {
-    // Three-state contract (design §④ 轨迹裁决): /trace, Ctrl+T, the sidebar
-    // tab and the ⤢ outlet all OPEN the trajectory — a backend whose
-    // composition mounted no trajectory source reports 'unsupported' and the
-    // scene/panel render that state honestly. No capability notice, no
-    // refusal: the entry points must never disagree about the capability.
+    // /trace, Ctrl+T, the sidebar tab and ⤢ all open the trajectory. A
+    // kernel without a trajectory source reports 'unsupported' and the
+    // scene/panel say so; no entry point refuses on its own, so they can
+    // never disagree about the capability.
     seenFailuresRef.current = trajectoryRef.current?.counts.errors ?? 0
     setTrajectorySeen(previous => {
       if (!previous) writeTrajectorySeen()
@@ -3498,9 +3493,9 @@ export function Chat({
         return true
       case 'login': {
         setHelpOpen(false)
-        // A non-DSH session signs in its own backend (design §4.12): its
-        // credential status, then the host's OAuth sign-in preselected on
-        // the backend's provider, then a reconnect on the fresh credential.
+        // A non-DSH session signs in its own backend: its credential status,
+        // then the host's OAuth sign-in preselected on the backend's
+        // provider, then a reconnect on the fresh credential.
         const backendAuth = channel.backendAuth?.()
         if (backendAuth !== undefined) {
           const backend = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendLabel ?? ''
@@ -3838,22 +3833,18 @@ export function Chat({
         return true
       }
       case 'channel': {
-        // 渠道档案选择器（/channel 仅 channels 能力的后端提供——BACKEND_CHANNEL_
-        // COMMAND 随能力快照出现，DSH 与其他后端既不列出也不拦这条线；能走到
-        // 这里说明命令在合并表里）。切换式语义与 /kernel 同款：再点一次收起。
+        // 渠道选择器。/channel 只在声明了 channels 能力的内核下进命令表，
+        // 能走到这里就说明可用。与 /kernel 一样，再执行一次就收起。
         setHelpOpen(false)
         if (overlay.kind === 'channel') dispatchOverlay({ type: 'close' })
         else openChannelPicker()
         return true
       }
       case 'kernel':
-        // 内核选择器（名册在 pickerPanels 的 kernel 分支渲染）。命令在**每个**
-        // 后端都可用——这也是从 Claude 切回 DSH 的唯一入口：非 DSH 会话根本
-        // 不出启动页（三个开机屏都是 DSH 的屏）。确认路径走组合根的
-        // onSwitchBackend（写 kernel.json → 通知 → 以新内核重启，新会话）。
+        // 内核选择器，每个内核下都可用（在对话页里切回 DSH 只有这一条路）。
+        // 确认后由组合根的 onSwitchBackend 记住选择并以新内核重启。与 /help、
+        // 参数行一致：选择器已开着就收起，没开才打开。
         setHelpOpen(false)
-        // 第八版切换式（与 /help、参数行同一套语义）：选择器已开着就收起，
-        // 没开才打开——再点一次同一个入口不会把人困在里面。
         if (overlay.kind === 'kernel') dispatchOverlay({ type: 'close' })
         else openKernelPicker()
         return true
@@ -3918,11 +3909,10 @@ export function Chat({
         return true
       }
       case 'btw': {
-        // `/btw`：单轮无工具侧问，线程是纯 UI 暂态（btwThreads，按
-        // session 隔离），不打断主回合、不写会话历史/转录。空参数只提
-        // 示用法。快路径（设计 §快路径）：面板启用时路由进线程并打开
-        // 聚焦；模态 surface 活跃时不抢开，落定只置未读 badge；面板未
-        // 启用时回退浮层——同一问答只落一个 surface。
+        // `/btw`：单轮无工具侧问，线程只在内存里（btwThreads，按会话
+        // 隔离），不打断主回合、不写会话历史。空参数只提示用法。启用了
+        // btw 面板就进面板线程（有模态界面时不抢开，只标未读）；没启用
+        // 就用浮层。同一个问答只出现在一处。
         setHelpOpen(false)
         const question = rawInput.trim()
         if (!question) {
@@ -6053,12 +6043,11 @@ export function Chat({
     return fullscreen ? screen : <AlternateScreen>{screen}</AlternateScreen>
   }
 
-  // Main-screen read-only Agent View (design agent-team-full §4): a scene
-  // layer over the mounted Chat — no second Channel and no Channel identity
-  // change (never attachToAgent/resumeTo/createChannel). Rendering INSTEAD of
-  // the conversation borrows the screen the same way the trajectory scene
-  // does; Chat stays mounted, so the parent's rows/draft/pending/usage live
-  // on and the round trip is invisible to them. Esc pops the source stack.
+  // Main-screen read-only Agent View: a scene over the mounted Chat, with no
+  // second Channel and no change of the bound session. It borrows the screen
+  // the way the trajectory scene does; Chat stays mounted, so the parent's
+  // rows, draft, pending queue and usage are untouched by the round trip.
+  // Esc returns to wherever the view was opened from.
   if (agentView !== null && launchpadGate()) {
     const viewSubagent = channel.subagents.find(s => s.agentId === agentView.agentId)
     if (!viewSubagent) {
@@ -6066,10 +6055,9 @@ export function Chat({
       setAgentView(null)
       return null
     }
-    // Optional chaining on the CONTROL too: headless stubs mount Chat without
-    // a subagentControl member at all — a bare read here crashed the render
-    // (verify-keymap's ctrl+a roundtrip) and took the whole key pipeline down.
+    // Headless stubs mount Chat without a subagentControl at all.
     const messageControl = channel.subagentControl?.message
+    const loadTranscript = channel.subagentControl?.history
     const viewMessages = messageControl === undefined ? [] : messageControl.messages().filter(m => m.from === agentView.agentId || m.to === agentView.agentId)
     const viewTarget = agentComposeTargetOf(agentView.agentId, new Map(channel.subagents.map(s => [s.agentId, s.description])))
     const viewScene = (
@@ -6077,14 +6065,12 @@ export function Chat({
         subagent={viewSubagent}
         source={agentView.source}
         onExit={() => exitAgentView(agentView.source)}
-        {...(channel.subagentControl.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
+        {...(loadTranscript === undefined ? {} : { loadTranscript })}
         messages={viewMessages}
         {...(messageControl === undefined ? {} : { compose: { control: messageControl, target: viewTarget } })}
         roster={channel.subagents}
-        // P3 workbench: switching a sibling/parent swaps the viewed agent
-        // IN PLACE — the source stack stays as entered, so Esc still returns
-        // to the original entry point (never to the previously viewed
-        // agent), and the Channel identity/parent queues are untouched.
+        // Switching to a sibling or the parent swaps the viewed agent in
+        // place; Esc still returns to the original entry point.
         onSwitchAgent={switchViewedAgent}
       />
     )
@@ -6158,11 +6144,8 @@ export function Chat({
   // Subagent dashboard: displays all active and completed subagents.
   // Like the browser and settings, it replaces the conversation entirely.
   if (subagentDashboardOpen && launchpadGate()) {
-    // P3 peer roster: deliberately NOT passed to the dashboard — no backend
-    // serves a cross-session roster today (the CLI ListAgents peer/teammate
-    // sections need a host control plane the SDK does not expose). When one
-    // grows a stable seam, hand the rows here; the dashboard partitions them
-    // from the children and keeps them non-sending.
+    // No kernel serves agents from other sessions yet, so the dashboard gets
+    // no `peers`; once one does, pass them here.
     const dashboard = (
       <SubagentDashboard
         subagents={[...channel.subagents]}
@@ -6374,8 +6357,7 @@ export function Chat({
         cwd={channel.displayCwd}
         branch={channel.gitBranch}
         tuiVersion={tuiVersion}
-        // 右下角的内核行（用户原话：「显示可以选择的内核 并且有箭头或者高亮
-        // 表明目前记忆中启动的内核」）：目录与选择器同源，点它开同一个选择器。
+        // 右下角的内核行：与选择器同一份目录，标出当前内核，点它打开选择器。
         kernels={kernelOptions}
         onKernelPick={() => openKernelPicker()}
         // 左下角工作目录铭牌（第七版）：点开/回车开既有 /workspace 菜单——
@@ -6762,8 +6744,7 @@ export function Chat({
             />
           </Box>
         ) : btwOverlayOpen && !sidePanel.enabledPanelIds.includes('btw') ? (
-          // Fallback surface（设计 §fallback）：仅当 btw 面板未启用/不存在/
-          // 配置禁用时显示；面板中途被启用则立即让位（同一问答不双份呈现）。
+          // 浮层只在 btw 面板未启用时显示；面板中途被启用就立即让位。
           <Box flexDirection="column" marginTop={1}>
             <BtwPanelFallback
               thread={btwOverlayThread}
