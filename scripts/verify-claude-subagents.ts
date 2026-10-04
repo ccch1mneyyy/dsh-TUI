@@ -814,7 +814,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   }
 }
 
-// ── parent_agent_id passthrough: nesting heals by agent id ──────────────
+// ── Child prompt evidence with parent lineage ──────────────────────────
 {
   const at = (n: number): string => `2026-10-02T12:00:0${n}.000Z`
   const chain: Rec[] = [
@@ -824,13 +824,12 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   ]
   const outer: Rec[] = [
     { type: 'user', message: { role: 'user', content: 'outer prompt' }, timestamp: at(1) },
-    { type: 'assistant', message: { id: 'o1', content: [{ type: 'tool_use', id: 'c-heal', name: 'Agent', input: { description: 'healed child', prompt: 'y' } }] }, timestamp: at(2) },
+    { type: 'assistant', message: { id: 'o1', content: [{ type: 'tool_use', id: 'c-heal', name: 'Agent', input: { description: 'healed child', prompt: 'healed prompt' } }] }, timestamp: at(2) },
     { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c-heal', content: 'The report follows:\n  healed finished' }] }, timestamp: at(3) },
     { type: 'assistant', message: { id: 'o2', content: [{ type: 'text', text: 'outer wraps up' }] }, timestamp: at(4) },
   ]
   const healed: Rec[] = [
-    // Old-format store: the child's messages never recorded the delegating
-    // call id, but parent_agent_id still names its true parent agent.
+    // The child transcript starts with the prompt from its parent call.
     { type: 'user', message: { role: 'user', content: 'healed prompt' }, timestamp: at(2) },
     { type: 'assistant', message: { id: 'h1', content: [{ type: 'text', text: 'healed works' }] }, timestamp: at(3) },
   ]
@@ -842,7 +841,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   ]
   const chainDepth1: Rec[] = [
     ...chain.slice(0, 2),
-    { type: 'assistant', uuid: 'a2', message: { id: 'm2', content: [{ type: 'tool_use', id: 'c-d1', name: 'Agent', input: { description: 'depth one', prompt: 'z' } }] }, timestamp: at(2) },
+    { type: 'assistant', uuid: 'a2', message: { id: 'm2', content: [{ type: 'tool_use', id: 'c-d1', name: 'Agent', input: { description: 'depth one', prompt: 'depth1 prompt' } }] }, timestamp: at(2) },
     { type: 'user', uuid: 'r2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c-d1', content: 'The report follows:\n  depth1 done' }] }, timestamp: at(3) },
   ]
   const replay = replayClaudeTranscript(chain, { cwd: '/fixture/project', subagents: new Map([
@@ -851,19 +850,16 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     // parentAgentId healing.
     ['agent-healed', { agentId: 'agent-healed', messages: healed, parentAgentId: 'agent-outer' }],
   ]) })
-  check('parent_agent_id: a nested transcript with no call attribution heals onto its true parent', replay.events.some(event => event.type === 'subagent.start' && event.agentId === 'agent-healed' && event.parentCallId === 'c-heal'), replay.events.filter(event => event.type === 'subagent.start'))
+  check('parent_agent_id: a nested transcript attaches to its unique matching prompt', replay.events.some(event => event.type === 'subagent.start' && event.agentId === 'agent-healed' && event.parentCallId === 'c-heal'), replay.events.filter(event => event.type === 'subagent.start'))
   check('parent_agent_id: … its messages replay on the delegating call lane', replay.events.some(event => event.type === 'assistant.message' && event.parentCallId === 'c-heal' && JSON.stringify((event as { blocks?: { text?: string }[] }).blocks).includes('healed works')))
   check('parent_agent_id: … and it ends from the result in its parent transcript', replay.events.some(event => event.type === 'subagent.end' && event.agentId === 'agent-healed' && event.status === 'completed'))
 
-  // parent_agent_id null = a depth-1 child (or old metadata): the data
-  // cannot say which main-loop call launched it, so the deterministic rule
-  // attaches it to the first main-loop call whose own transcript is
-  // missing. The child stays visible as a depth-1 spawn, never an orphan.
+  // A depth-1 transcript attaches only when its first prompt matches one call.
   const depth1Replay = replayClaudeTranscript(chainDepth1, { cwd: '/fixture/project', subagents: new Map([
     ['c-outer', { agentId: 'agent-outer', messages: outer }],
     ['agent-d1', { agentId: 'agent-d1', messages: depth1 }],
   ]) })
-  check('parent_agent_id: a null parent (depth-1 / old format) heals onto the first transcript-less main-loop call', depth1Replay.events.some(event => event.type === 'subagent.start' && event.agentId === 'agent-d1' && event.parentCallId === 'c-d1'), depth1Replay.events.filter(event => event.type === 'subagent.start'))
+  check('parent_agent_id: a depth-1 transcript attaches to its unique matching prompt', depth1Replay.events.some(event => event.type === 'subagent.start' && event.agentId === 'agent-d1' && event.parentCallId === 'c-d1'), depth1Replay.events.filter(event => event.type === 'subagent.start'))
   check('parent_agent_id: … its lane replays (no invisible child)', depth1Replay.events.some(event => event.type === 'assistant.message' && event.parentCallId === 'c-d1'))
 
   const phantomReplay = replayClaudeTranscript(chain, { cwd: '/fixture/project', subagents: new Map([

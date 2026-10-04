@@ -255,6 +255,28 @@ const userRows = (name: string) => run(name).harness.state.rows.filter(row => ro
     return Array.isArray(content) ? content.flatMap(block => (block as Rec).type === 'text' ? [String((block as Rec).text)] : []) : []
   })
   check('subagent messages stay off the main transcript', subTexts.length > 0 && !run('subagent').harness.state.rows.some(row => subTexts.some(text => text !== '' && row.text === text)))
+
+  const fixture = readTranscript('subagent')
+  const child = [...fixture.subagents.values()][0]!
+  const assistant = fixture.main.find(message => message.type === 'assistant' && ((message.message as Rec).content as Rec[]).some(block => block.name === 'Agent'))!
+  const callBlock = ((assistant.message as Rec).content as Rec[]).find(block => block.name === 'Agent')!
+  const callId = String(callBlock.id)
+  const firstUser = child.messages.find(message => (message as Rec).type === 'user') as Rec
+  const prompt = String((callBlock.input as Rec).prompt)
+  check('orphan fixture starts with its Agent prompt', firstUser.message && (firstUser.message as Rec).content === prompt)
+  const mainWithoutHandBack = fixture.main.filter(message => {
+    const content = (message.message as Rec | undefined)?.content
+    return message.type !== 'user' || !Array.isArray(content) || !content.some(block => (block as Rec).tool_use_id === callId)
+  })
+  const unkeyed = new Map([['unkeyed', child]])
+  const matched = replayClaudeTranscript(mainWithoutHandBack, { cwd: '/fixture/project', subagents: unkeyed }).events
+  check('orphan transcript attaches by its unique matching prompt', ofType(matched, 'subagent.start').some(event => event.agentId === child.agentId && event.parentCallId === callId))
+  const mismatch = { ...child, messages: [{ ...firstUser, message: { ...(firstUser.message as Rec), content: 'different prompt' } }, ...child.messages.slice(1)] }
+  const unmatched = replayClaudeTranscript(mainWithoutHandBack, { cwd: '/fixture/project', subagents: new Map([['unkeyed', mismatch]]) }).events
+  check('orphan transcript with a different prompt remains unattached', !ofType(unmatched, 'subagent.start').some(event => event.agentId === child.agentId))
+  const duplicate = { ...child, agentId: child.agentId + '-duplicate' }
+  const ambiguous = replayClaudeTranscript(mainWithoutHandBack, { cwd: '/fixture/project', subagents: new Map([['one', child], ['two', duplicate]]) }).events
+  check('duplicate prompt candidates remain unattached', !ofType(ambiguous, 'subagent.start').some(event => event.agentId === child.agentId || event.agentId === duplicate.agentId))
 }
 
 // ── replay = live for the same recorded session ─────────────────────────

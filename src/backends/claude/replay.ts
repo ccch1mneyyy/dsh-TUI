@@ -76,10 +76,7 @@ const MAX_NESTING = 8
 export interface ClaudeSubagentTranscript {
   readonly agentId: string
   readonly messages: readonly unknown[]
-  /** `parent_agent_id` of the child's messages: the
-   *  agent that spawned it. Absent/null = a depth-1 child (spawned by the
-   *  main loop) or old-format metadata that never recorded it — never an
-   *  orphan: such a transcript heals onto a delegation by agent id. */
+  /** `parent_agent_id` of the child's messages, when recorded. */
   readonly parentAgentId?: string
 }
 
@@ -245,54 +242,21 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
   }
   indexHandBackIds(messages)
   for (const transcript of uniqueTranscripts) indexHandBackIds(transcript.messages)
-  /** Per delegator ('' = the main chain): how many of its `Agent` calls NO
-   *  exact channel can attribute (neither a call-id keyed transcript nor a
-   *  hand-back result naming an available child). Only a sole such call is
-   *  ever paired with a sole unclaimed candidate: anything less is a guess
-   *  that would put a body on the wrong call's card (the map order is the
-   *  store's traversal order, not the parent's call order). */
-  const nonExactCalls = new Map<string, number>()
-  const censusCalls = (source: readonly unknown[], owner: string): void => {
-    for (const raw of source) {
-      const message = rec(raw)
-      if (message === undefined || message.type !== 'assistant') continue
-      for (const block of arr(rec(message.message)?.content).map(rec)) {
-        if (block?.type !== 'tool_use') continue
-        const callId = str(block.id)
-        const name = str(block.name)
-        if (callId === undefined || name === undefined || !AGENT_TOOLS.has(name)) continue
-        const keyed = options.subagents?.has(callId) === true
-        const namedChild = childOfResult.get(callId)
-        const namedAvailable = namedChild !== undefined && (options.subagents?.has(namedChild) === true || uniqueTranscripts.some(seen => seen.agentId === namedChild))
-        if (!keyed && !namedAvailable) nonExactCalls.set(owner, (nonExactCalls.get(owner) ?? 0) + 1)
-      }
-    }
-  }
-  censusCalls(messages, '')
-  for (const transcript of uniqueTranscripts) censusCalls(transcript.messages, transcript.agentId)
   /** The unclaimed transcript of an exact child id, if the store kept it. */
   const unclaimedByAgentId = (agentId: string): ClaudeSubagentTranscript | undefined => {
     if (claimed.has(agentId)) return undefined
     return uniqueTranscripts.find(seen => seen.agentId === agentId)
   }
-  /** The unclaimed candidates naming this delegator as parent (for the main
-   *  chain: no parent agent recorded — depth-1 or old-format metadata). */
   const unclaimedCandidatesOf = (delegatorId: string | undefined): readonly ClaudeSubagentTranscript[] =>
     uniqueTranscripts.filter(seen => !claimed.has(seen.agentId) && (delegatorId === undefined ? seen.parentAgentId == null : seen.parentAgentId === delegatorId))
-  /**
-   * The sole unclaimed candidate for a delegator, attached only when the
-   *  attribution is provably unique: the delegator
-   *  made exactly one call no exact channel attributes, exactly one
-   *  candidate names it as parent, and the transcript source is complete —
-   *  a main chain that began at a compaction may have dropped the call the
-   *  child actually belongs to. Otherwise undefined: the child stays
-   *  unattached rather than cross-wired onto an arbitrary call.
-   */
-  const soleUnclaimedChildOf = (delegatorId: string | undefined): ClaudeSubagentTranscript | undefined => {
-    if (delegatorId === undefined && compactedFrom !== undefined) return undefined
-    if ((nonExactCalls.get(delegatorId ?? '') ?? 0) !== 1) return undefined
-    const candidates = unclaimedCandidatesOf(delegatorId)
-    return candidates.length === 1 ? candidates[0] : undefined
+  const promptOfTranscript = (transcript: ClaudeSubagentTranscript): string | undefined => {
+    const firstUser = transcript.messages.map(rec).find(message => message?.type === 'user')
+    return userText(rec(firstUser?.message)?.content)
+  }
+  const childForPrompt = (delegatorId: string | undefined, prompt: string | undefined): ClaudeSubagentTranscript | undefined => {
+    if (prompt === undefined) return undefined
+    const matches = unclaimedCandidatesOf(delegatorId).filter(transcript => promptOfTranscript(transcript) === prompt)
+    return matches.length === 1 ? matches[0] : undefined
   }
 
   const closeTurn = (): void => {
@@ -339,7 +303,7 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
    * session kept that subagent's transcript, its own id completes it and its
    * messages follow as its lane. `delegatorId` is the agent whose transcript
    * the calls sit in (undefined = the main chain) — a transcript whose call
-   * attribution is missing heals onto it by `parent_agent_id`.
+   * attribution is missing requires a matching child prompt.
    */
   const delegations = (blocks: readonly (Rec | undefined)[], depth: number, delegatorId: string | undefined): void => {
     for (const block of blocks) {
@@ -353,14 +317,14 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
       let transcript: ClaudeSubagentTranscript | undefined = byCall !== undefined && !claimed.has(byCall.agentId) ? byCall : undefined
       let via = transcript !== undefined ? 'call id' : undefined
       if (transcript === undefined && depth < MAX_NESTING) {
-        // Exact, falsifiable: the call's recorded hand-back names the child.
+        // The recorded hand-back names the child.
         const named = childOfResult.get(callId)
         transcript = named === undefined ? undefined : unclaimedByAgentId(named)
         if (transcript !== undefined) via = 'hand-back agent id'
         else {
-          // Only a provably unique pairing.
-          transcript = soleUnclaimedChildOf(delegatorId)
-          if (transcript !== undefined) via = 'unique-candidate bijection'
+          // The prompt must match the transcript and identify one child.
+          transcript = childForPrompt(delegatorId, str(input?.prompt))
+          if (transcript !== undefined) via = 'unique prompt match'
         }
       }
       if (via !== undefined && transcript !== byCall) debug(`claude replay: subagent transcript attached by ${via}`)
