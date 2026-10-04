@@ -465,7 +465,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
       await settled(() => h.screen().includes('history · read-only'))
       const body = h.screen()
       check('transcript render: the page lands on the history view with its honest range line', body.includes('history') && body.includes('read-only'), body)
-      check('transcript render: the count-only thinking degrades to body-unavailable, not fabricated prose', body.includes('Thinking body unavailable') && body.includes('4321'), body)
+      check('transcript render: the count-only thinking degrades to body-unavailable, not fabricated prose', body.includes(t('subagent-thinking-unavailable')) && body.includes('4321'), body)
       check('transcript render: the tool card renders (presented title + result)', body.includes('README.md') && body.includes('fixture body'), body)
       check('transcript render: the answer text renders as markdown', body.includes('The fixture answer.'), body)
       check('transcript render: the hidden initial prompt stays hidden', !body.includes('secret prompt'), body)

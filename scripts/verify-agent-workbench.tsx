@@ -247,7 +247,7 @@ console.log('--- W3: workbench panel + sibling switching ---')
       onSwitchAgent: (id: string) => { switched.push(id) },
     }),
     async frame => {
-      check('W3 宽屏渲染右侧工作台面板', await settled(() => frame.screen().includes('workbench') && frame.screen().includes('metadata') && frame.screen().includes('context')), frame.lines().slice(0, 2).join('|'))
+      check('W3 宽屏渲染右侧工作台面板', await settled(() => frame.screen().includes('workbench') && frame.screen().includes('metadata') && frame.screen().includes('parent & siblings')), frame.lines().slice(0, 2).join('|'))
       check('W3 面板元数据：状态/模式/模型', frame.screen().includes('completed') && frame.screen().includes('continuable') && frame.screen().includes('fx-model'))
       check('W3 面板工具段保留记录', frame.screen().includes('Grep'))
       check('W3 父关系=主循环（depth 1 事实）', frame.screen().includes('main loop'))
@@ -361,9 +361,9 @@ console.log('--- W4: dashboard children/peers partition ---')
       onClose: () => {},
     }),
     async frame => {
-      check('W4 无 peer 名册能力：如实降级一行', await settled(() => frame.screen().includes('cross-session peers') && frame.screen().includes('no roster served')))
+      check('W4 无 peer 名册能力：如实降级一行', await settled(() => frame.screen().includes('agents in other sessions') && frame.screen().includes('not provided by this kernel')))
       const childrenAt = frame.screen().indexOf('agent agent-a')
-      const peersAt = frame.screen().indexOf('cross-session peers')
+      const peersAt = frame.screen().indexOf('agents in other sessions')
       check('W4 children 在 peers 分区之前（不混淆分区）', childrenAt >= 0 && peersAt > childrenAt)
       check('W4 纯直属名册保持 P1 平铺（无嵌套标记）', !frame.screen().includes('nested'))
       // keyboard walks the displayed order: ↓ then Enter selects agent-b
@@ -408,7 +408,7 @@ console.log('--- W4: dashboard children/peers partition ---')
     }),
     async frame => {
       check('W4 served peers 渲染在独立分区', await settled(() => frame.screen().includes('codex') && frame.screen().includes('teammate row') && frame.screen().includes('peer-ses')))
-      check('W4 peer 行注明无发送入口（跨会话降级）', frame.screen().includes('no send affordance'))
+      check('W4 peer 行注明无发送入口（跨会话降级）', frame.screen().includes('cannot be messaged from here'))
       await click(frame, 'codex')
       check('W4 点击 peer 行不触发任何 child 导航', selected2.length === 0, JSON.stringify(selected2))
       const childrenCount = (frame.screen().match(/agent agent-a/g) ?? []).length
