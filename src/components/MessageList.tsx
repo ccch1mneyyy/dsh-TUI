@@ -359,6 +359,7 @@ export function MessageList({
   jobGroupFold = 'auto',
   toolBackground = 'none',
   foldTerminalCommand = false,
+  turnUsageRow = false,
   smoothStreaming = false,
   activityFrames,
   showAll,
@@ -406,6 +407,11 @@ export function MessageList({
   toolBackground?: ToolBackground
   /** Terminal-card header folding from the live channel settings. */
   foldTerminalCommand?: boolean
+  /** Turn-usage ledger row from the live channel settings (default off):
+   *  off filters the rows out of the visible window BEFORE virtualization —
+   *  the ledger itself keeps feeding `turnUsage`, /tokens, /status and the
+   *  footer hover. */
+  turnUsageRow?: boolean
   /** Smooth streaming reveal from the live channel settings (default off at
    *  this layer — embedders and verify harnesses keep exact-paint behavior;
    *  Chat passes the channel's `dsh-tui.smoothStreaming` value). */
@@ -521,6 +527,9 @@ export function MessageList({
     /** Job-status/toggle fingerprint (see below): job cards settle IN PLACE,
      *  and a settling run changes how — and whether — its members render. */
     jobsSig: number
+    /** Turn-usage row toggle: flipping it adds/removes turn-summary rows
+     *  from the visible window without touching the row array. */
+    turnRowOn: boolean
   } | null>(null)
   /** Generation counter for the visibleRows cache (timeline memo key). */
   const visGenRef = React.useRef(0)
@@ -556,6 +565,7 @@ export function MessageList({
     visibleCache.showAll !== (showAll || hiddenCount <= 0) ||
     visibleCache.thinkingVisible !== thinkingVisible ||
     visibleCache.jobsSig !== jobsSig ||
+    visibleCache.turnRowOn !== turnUsageRow ||
     !streamBitsSame
   ) {
     const sliced = showAll || hiddenCount <= 0
@@ -597,7 +607,7 @@ export function MessageList({
     // objects (an in-place write throws on a frozen row and takes the TUI
     // down at startup — the resume/replay first frame delivers exactly
     // that shape).
-    const out: ChatRow[] = hasEmptyAssistant
+    let out: ChatRow[] = hasEmptyAssistant
       ? sliced.filter(row =>
           !rendersEmptyAssistant(row) &&
           (thinkingVisible || row.kind !== 'reasoning'),
@@ -605,6 +615,11 @@ export function MessageList({
       : thinkingVisible
         ? sliced.slice()
         : sliced.filter(row => row.kind !== 'reasoning')
+    // Turn-usage rows (settings `dsh-tui.turnUsageRow`, default off): a
+    // pure PRESENTATION gate — filtering here (not render-null) keeps the
+    // row out of the window entirely, so no cached height or mounted node
+    // survives the toggle. The ledger data itself is collected regardless.
+    if (!turnUsageRow) out = out.filter(row => row.kind !== 'turn-summary')
     // --- consecutive-job groups ------------------------------------------
     // A batch of run_in_background calls lands as N adjacent job cards (the
     // projection pushes the whole roster in one sync) and EVERY card pays
@@ -725,6 +740,7 @@ export function MessageList({
       margins,
       streamBits,
       jobsSig,
+      turnRowOn: turnUsageRow,
     }
     visGenRef.current++
   }
@@ -1898,11 +1914,14 @@ function TranscriptRow({
         </Box>
       )
     case 'turn-summary':
-      // The turn's closing ledger (design §C): one dim line after whatever
-      // closed the turn — no top margin, it belongs to the block above.
+      // The turn's closing ledger (design §C, restyled): a quiet RIGHT-aligned
+      // emblem — metadata does not lead the reading flow. No top margin, it
+      // belongs to the block above. width="100%" is what makes flex-end mean
+      // the transcript's right margin (an auto-width row has nothing to push
+      // against).
       if (turnUsage === undefined) return null
       return (
-        <Box paddingLeft={2} ref={ref}>
+        <Box paddingLeft={2} width="100%" flexDirection="row" justifyContent="flex-end" ref={ref}>
           <TurnUsageRow usage={turnUsage} />
         </Box>
       )

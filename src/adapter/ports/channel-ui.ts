@@ -208,6 +208,11 @@ export interface ChannelUi {
   /** Terminal-card header folding (settings `dsh-tui.foldTerminalCommand`):
    *  collapse a multi-line command title to its first line + count hint. */
   readonly foldTerminalCommand: boolean
+  /** Turn-usage ledger row in the transcript (settings `dsh-tui.turnUsageRow`;
+   *  off by default): the quiet right-aligned line that closes each turn.
+   *  Purely presentational — the ledger itself is always collected for
+   *  `turnUsage`, /tokens, /status and the footer hover. */
+  readonly turnUsageRow: boolean
   /** Whether the session-name chip shows on the prompt top border's right
    *  side (settings `dsh-tui.promptSessionLabel`; off by default). */
   readonly promptSessionLabel: boolean
@@ -859,6 +864,7 @@ export interface ChannelUi {
   setScrollGutter(mode: ScrollGutterMode): void
   setPageMargin(setting: PageMarginSetting): void
   setFoldTerminalCommand(enabled: boolean): void
+  setTurnUsageRow(enabled: boolean): void
   setPromptSessionLabel(enabled: boolean): void
   setExpandEditor(enabled: boolean): void
   setSmoothStreaming(enabled: boolean): void

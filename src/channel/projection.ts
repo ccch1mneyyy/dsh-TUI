@@ -141,6 +141,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
    *  (API retries): a set, because the same failure can be observed from
    *  both the superseding attempt.start and the positioned attempt.end. */
   const turnFailedAttempts = new Set<string>()
+  /** Model of the last EMITTED turn ledger: the row notes the model name
+   *  only when it changed (or on the first turn that has one) — repeating an
+   *  unchanged id every turn is noise. Commands read `model` regardless. */
+  let lastNotedTurnModel: string | undefined
   /** Tool cards by callId, so the result can settle the running card. */
   const toolCards = new Map<string, ChatRow>()
   /**
@@ -952,9 +956,11 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         retries: turnFailedAttempts.size,
         durationMs: Math.max(0, event.time - turnLedger.startedAt),
         ...(turnLedger.model === undefined ? {} : { model: turnLedger.model }),
+        ...(turnLedger.model === undefined || turnLedger.model === lastNotedTurnModel ? {} : { noteModel: true }),
         ...(state.reasoningEffort === undefined ? {} : { effort: state.reasoningEffort }),
         outcome,
       }
+      if (turnLedger.model !== undefined) lastNotedTurnModel = turnLedger.model
       state.turnUsage = summary
       appendRow({ id: deps.rowIds.value, kind: 'turn-summary', text: '', turnUsage: summary })
       deps.rowIds.value += 1

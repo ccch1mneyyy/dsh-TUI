@@ -486,6 +486,11 @@ export interface TurnUsageSummary {
   /** Model id the turn's last request ran on, when the backend reported
    * one; absent rather than guessed from the session model. */
   readonly model?: string
+  /** True when `model` DIFFERS from the previous turn's (or is the first
+   * turn with a model): the row renders the model name only then — an
+   * unchanged model repeated every turn is noise. Data stays available to
+   * the commands regardless. */
+  readonly noteModel?: boolean
   /** Reasoning effort the turn's requests pinned, when known. */
   readonly effort?: string
   /** How the turn ended — an interrupted turn's ledger is partial truth
