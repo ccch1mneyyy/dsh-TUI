@@ -297,7 +297,7 @@ const firstParty = { settings: () => Promise.resolve({}), globalConfig: () => un
   }
 }
 
-// ── failure shapes (as claude-sdk-probe-auth observed them) ───────────
+// ── failure shapes (as CLI 2.1.287 reports them) ──────────────────────
 check('assistant authentication_failed is an auth failure', isAuthFailure({ type: 'assistant', error: 'authentication_failed', message: {} }))
 check('result is_error "Failed to authenticate … 401" is an auth failure', isAuthFailure({ type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate. API Error: 401 OAuth access token is invalid.' }))
 check('result is_error "Please run /login" is an auth failure', isAuthFailure({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' }))

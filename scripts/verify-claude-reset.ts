@@ -10,7 +10,7 @@
  *  - a batch carrying the reset projects what came before it first and
  *    what follows it onto the cleared view;
  *  - the CLI then runs under a new session id, named by the frames after
- *    the reset (probe claude-sdk-probe-5b `reset`): the session's ref, the
+ *    the reset (as CLI 2.1.287 does): the session's ref, the
  *    channel's `sessionRef`, `/fork`, a reconnect and the launcher's resume
  *    marker all follow it;
  *  - the TUI's own `/clear` stays view-only for every backend: rows cleared
