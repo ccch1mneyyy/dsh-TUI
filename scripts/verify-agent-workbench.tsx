@@ -405,6 +405,20 @@ console.log('--- W4: dashboard children/peers partition ---')
     },
   )
 
+  // (1b) An empty peer roster is not useful panel content.
+  await withTerminal(
+    () => React.createElement(SubagentDashboard, {
+      subagents: [mainA] as never,
+      peers: [] as never,
+      variant: 'panel',
+      onSelect: () => {},
+    }),
+    async frame => {
+      await settled(() => frame.screen().includes('agent agent-a'))
+      check('W4 panel variant hides empty peers and its duplicate heading/footer', !frame.screen().includes(t('agents-peers-title')) && !frame.screen().includes(t('subagent-dashboard-title')) && !frame.screen().includes('Enter view detail'))
+    },
+  )
+
   // (2) partition: main-loop children first, nested spawns after with the
   // ↳ mark (known parent AND old-format unknown parent both nest).
   await withTerminal(

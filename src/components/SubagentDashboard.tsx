@@ -13,11 +13,7 @@ import type { AgentMessageView, AgentIdentity } from './messages/agentTeam.js'
 
 export interface SubagentDashboardProps {
   subagents: readonly SubagentState[]
-  /** Cross-session peers (the CLI's ListAgents peer/teammate sections).
-   *  undefined = no peer roster for this session: no section; a list
-   *  renders in its own section, apart from the children. No backend
-   *  serves one yet: the SDK's listSubagents lists this session's own
-   *  children, not peers. */
+  /** Optional cross-session agents, kept separate from this session children. */
   readonly peers?: readonly AgentIdentity[]
   /** 整屏/浮层形态的退出通道（Esc / ✕ 按钮）。panel 形态不传：面板不自己
    *  关侧栏——Esc 让给宿主（焦点回聊天，见 usePanelInput 契约）。 */
@@ -36,11 +32,7 @@ export interface SubagentDashboardProps {
   visible?: boolean
 }
 
-/**
- * Panel 分发器的 Enter 判定：ink 的 key 对象里这一位叫 `return`，而 v2.1
- * 的 SidePanelKeyFlags 拼作 `return_`——两个都认，再由共享的 plain-Enter
- * 守卫拦掉带修饰键的 Enter（那是换行，不是确认）。
- */
+/** Accept Ink's Enter flag and the panel dispatcher's normalized alias. */
 export function isPanelPlainReturn(input: string, key: SidePanelKeyFlags): boolean {
   return isPlainReturnInput(input, {
     return: key.return_ === true || (key as { return?: boolean }).return === true,
@@ -84,10 +76,7 @@ export function SubagentDashboard({
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows, columns } = useTerminalSize()
 
-  // ── roster partition: only a known nesting moves a row (a parent agent
-  // id or depth >= 2) below the main-loop children with a ↳ mark. Rows
-  // with neither stay in place, unmarked. Without any nesting the roster
-  // keeps its flat layout. ──────────────────────────────────────────────
+  // Keep top-level children first when the roster includes nested agents.
   const isNestedSpawn = (row: SubagentState): boolean =>
     row.parentAgentId !== undefined || (row.depth ?? 1) >= 2
   const nestedRows = subagents.filter(isNestedSpawn)
@@ -135,9 +124,7 @@ export function SubagentDashboard({
     event.stopImmediatePropagation()
   }, { isActive: !panelMode })
 
-  // Panel form（v2.1 键盘契约）：业务键先吃，其余让给宿主。Esc/Ctrl+C 返回
-  // false —— 收焦点回聊天是宿主的事（Dashboard 是这一栏的根，没有上一层可
-  // 回），[/]、数字、z、+/- 同样保持可用。
+  // Panel keys handle roster navigation; unhandled keys remain available to the host.
   const panelKeyHandler = (input: string, key: SidePanelKeyFlags): boolean => {
     if (key.escape === true || (key.ctrl === true && input === 'c')) return false
 
@@ -174,21 +161,16 @@ export function SubagentDashboard({
   const failed = subagents.filter(s => s.status === 'failed').length
   const nested = nestedRows.length
 
-  // 外层留白：整屏形态保持原样；侧栏形态只留左右各 1 格（PanelBar 与宿主
-  // 提示行已经承担其余 chrome）。卡片之间的分隔线按 `columns` 算，而
-  // PanelHost 把 TerminalSizeContext 收窄成面板宽度，所以那条公式自动跟随。
+  // Full-screen keeps its inset; the panel uses one cell on each side.
   const outer = panelMode
     ? { paddingLeft: 1, paddingRight: 1, paddingTop: 0 }
     : { paddingX: 2, paddingY: 1 }
 
   return (
     <Box flexDirection="column" {...outer}>
-      <Divider
-        color="accent"
-        title={t('subagent-dashboard-title')}
-      />
+      {!panelMode && <Divider color="accent" title={t('subagent-dashboard-title')} />}
 
-      <Box flexDirection="row" gap={3} marginTop={1} marginBottom={1}>
+      <Box flexDirection="row" gap={3} marginTop={panelMode ? 0 : 1} marginBottom={panelMode ? 0 : 1}>
         <Text>
           <Text color="accent">{running}</Text>
           <Text dimColor> {t('subagent-count-running')}</Text>
@@ -215,10 +197,7 @@ export function SubagentDashboard({
         {!panelMode && onClose !== undefined && <ExitButton onClick={onClose} />}
       </Box>
 
-      {/* 行数预算：整屏形态沿用原公式（rows 是整屏高度）；侧栏形态的 rows
-          已经是宿主高度（列高 - 4 行 chrome），再用整屏预算会把底部提示行
-          挤出可视区，所以单独收一档。 */}
-      <Box flexDirection="column" maxHeight={panelMode ? Math.max(6, rows - 8) : Math.max(10, rows - 10)} marginTop={1}>
+      <Box flexDirection="column" maxHeight={panelMode ? Math.max(6, rows - 4) : Math.max(10, rows - 10)} marginTop={panelMode ? 0 : 1}>
         <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
           {subagents.length === 0 ? (
             <Box flexDirection="column" alignItems="center" marginTop={Math.max(2, Math.floor((rows - 16) / 3))}>
@@ -234,6 +213,7 @@ export function SubagentDashboard({
                 )}
                 <SubagentCard
                   subagent={subagent}
+                  variant={panelMode ? 'panel' : 'default'}
                   focused={index === focusIndex}
                   onClick={onSelect !== undefined
                     // Click = view detail, same as Enter on the focused card.
@@ -246,12 +226,12 @@ export function SubagentDashboard({
                     selfAgentId={subagent.agentId}
                   />
                 )}
-                {onOpenView !== undefined && (
+                {onOpenView !== undefined && (!panelMode || index === focusIndex) && (
                   <Box paddingLeft={1} onClick={() => onOpenView(subagent.agentId)}>
                     <Text color="subtle">{`⤢ ${t('agent-view-open-action')}`}</Text>
                   </Box>
                 )}
-                {index < ordered.length - 1 && (
+                {!panelMode && index < ordered.length - 1 && (
                   <Text dimColor>{'─'.repeat(Math.max(20, Math.min(72, columns - 6)))}</Text>
                 )}
               </Box>
@@ -260,11 +240,8 @@ export function SubagentDashboard({
         </ScrollBox>
       </Box>
 
-      {/* Peer roster, kept apart from the children above. Without a peer
-       * roster (no backend serves one yet) the section is not drawn at all.
-       * Peers get no send action: the composer reaches only this session's
-       * children. The side panel collapses the section to one line. */}
-      {peers !== undefined && (
+      {/* Other-session agents are separate from this session children. */}
+      {peers !== undefined && (!panelMode || peers.length > 0) && (
         <Box flexDirection="column">
           {panelMode ? (
             <Text dimColor wrap="truncate-end">{t('agents-peers-title') + ' · ' + peers.length}</Text>
@@ -288,14 +265,16 @@ export function SubagentDashboard({
         </Box>
       )}
 
-      <Divider color="subtle" title="" />
-      <Box marginTop={0}>
-        <Text dimColor>
-          {onSelect
-            ? t(panelMode ? 'subagent-dashboard-hint-panel' : 'subagent-dashboard-hint-detail')
-            : t('subagent-dashboard-hint-basic')}
-        </Text>
-      </Box>
+      {!panelMode && (
+        <>
+          <Divider color="subtle" title="" />
+          <Box>
+            <Text dimColor>
+              {onSelect ? t('subagent-dashboard-hint-detail') : t('subagent-dashboard-hint-basic')}
+            </Text>
+          </Box>
+        </>
+      )}
     </Box>
   )
 }

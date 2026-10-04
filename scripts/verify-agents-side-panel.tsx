@@ -110,7 +110,6 @@ const A6 = agent('agent-done-6', 'AAA6', 'completed', { completedAt: NOW - 7_000
 let exposedFocus = ''
 let exposedActive = ''
 let exposedSplit = false
-let exposedPanelColumns = 0
 let exposedChatColumns = 0
 let openAgents: (() => void) | undefined
 let openTodo: (() => void) | undefined
@@ -121,7 +120,6 @@ function Harness(): React.ReactNode {
   exposedFocus = sp.focus
   exposedActive = sp.activePanelId ?? 'none'
   exposedSplit = sp.split
-  exposedPanelColumns = sp.panelColumns
   exposedChatColumns = sp.chatColumns
   openAgents = () => sp.openPanel('agents', { focus: true })
   openTodo = () => sp.openPanel('todo', { focus: true })
@@ -197,9 +195,6 @@ const findCell = (needle: string): { col: number; row: number } | null => {
 }
 const findRow = (needle: string): number => lines().findIndex(l => l.includes(needle))
 const has = (needle: string): boolean => lines().some(l => l.includes(needle))
-/** 面板内容的第一格：夹具只有「聊天列 + 面板列」两栏（不带 SidePanelLayout
- *  的 1 列接缝），所以它就是聊天列的宽度。 */
-const panelStart = (): number => exposedChatColumns
 /** 同一 tick 里的两次 stdin.write 会被 ink 解析成一条多字符（粘贴）事件，
  *  按键语义随之丢失——写一个键后让出一轮事件循环再写下一位。 */
 const writeKey = async (data: string): Promise<void> => {
@@ -213,8 +208,7 @@ function dumpScreen(): void {
 try {
   await settled(() => state().includes('split=1'))
   check('mount: split renders with the agents tab enabled', state().includes('split=1 focus=chat active=todo'), state())
-  // PanelBar 只展开当前页签的标题，其余页签只画图标：agents 的 ◆ 必须在。
-  check('mount: the Agents tab is on the PanelBar', has('◆'))
+  check('mount: the active Todo title is on the PanelBar', has('Todo'))
   check('badge: empty roster and no failure leaves the badge null', panelStore.get('agents')?.badge === null,
     JSON.stringify(panelStore.get('agents')?.badge ?? null))
 
@@ -236,17 +230,22 @@ try {
   await settled(() => state().includes('active=agents') && has('AAA1'))
   check('open: the dashboard renders in the split panel', has('AAA1') && has('AAA2') && has('AAA3'))
   check('open: summary line counts running', has('1 running'), (lines().find(l => l.includes('running')) ?? '').trim())
-  check('open: the panel form shows its own Esc hint', has('Esc chat'))
-  check('open: the PanelBar expands the active tab title', has('Agents'))
-  const start = panelStart()
-  const separator = '─'.repeat(Math.max(20, Math.min(72, exposedPanelColumns - 6)))
-  // 窄面板里卡片头会折行（描述落在第二行），所以按描述定位卡片，不按整行。
-  const y1 = findRow('AAA1')
-  const y2 = findRow('AAA2')
-  const between = y1 >= 0 && y2 > y1 ? lines().slice(y1 + 1, y2) : []
-  check('layout: the card separator sits one cell inside the panel and follows the panel columns',
-    between.some(l => l.slice(start).trimEnd() === ' ' + separator),
-    'panel=' + exposedPanelColumns + ' start=' + start + ' expected=' + separator.length)
+  check('open: the PanelBar carries the panel title', has('Agents'))
+  check('layout: no duplicate dashboard title or fixed footer', !has('Subagent Dashboard') && !has('Enter view detail'))
+  let agentRows = lines().filter(line => /AAA[123]/.test(line))
+  check('layout: three agents occupy three compact rows', agentRows.length === 3, JSON.stringify(agentRows))
+  const firstAgentRow = findRow('AAA1')
+  const secondAgentRow = findRow('AAA2')
+  const betweenAgentRows = firstAgentRow >= 0 && secondAgentRow > firstAgentRow ? lines().slice(firstAgentRow + 1, secondAgentRow) : []
+  check('layout: only the focused view action separates adjacent agents', secondAgentRow === firstAgentRow + 2 && betweenAgentRows.some(line => line.includes('open in main view')) && !betweenAgentRows.some(line => /─{20,}/.test(line)), JSON.stringify(betweenAgentRows))
+  check('layout: only the focused agent gets an open-view action', lines().filter(line => line.includes('open in main view')).length === 1)
+  setSubagents([A1, A2, A3, A4, A5])
+  check('layout: five agents fit in the panel host', await settled(() => has('AAA1') && has('AAA5')), lines().filter(line => /AAA[1-5]/.test(line)).join('|'))
+  agentRows = lines().filter(line => /AAA[1-5]/.test(line))
+  check('layout: five agents use one row each', agentRows.length === 5, JSON.stringify(agentRows))
+  check('layout: descriptions are not prefixed', !lines().some(line => line.includes('Subagent:')))
+  check('layout: empty tool count is omitted', !lines().some(line => line.includes('0 tools')))
+  setSubagents([A1, A2, A3])
   // The host clears the badge on activation (children effects run first, so
   // the host's clear wins that frame); the adapter re-lights running>0 as info
   // on the next channel version bump while visible.
@@ -311,18 +310,18 @@ try {
   // --- 9. ↑/↓ move the focus lane; x interrupts the running row -----------
   // 名册先长过视口：焦点高亮是样式、读不出文本，但 ↓/↑ 同时 scrollBy(±3)，
   // 位移才是可以从屏幕判定的「面板确实吃到了这个键」。
-  setSubagents([A1, A2, A3, A4, A5, A6])
+  setSubagents([A1, A2, A3, A4, A5, A6, ...Array.from({ length: 14 }, (_, index) => agent('agent-extra-' + index, 'AAA' + (index + 7), 'completed', { completedAt: NOW - 1000 }))])
   // 全新挂载（scroll=0 / focusIndex=0）：上面段落已经在面板里滚过、进出过
   // detail，滚动与焦点车道是会保留的内状态，不能带进滚动契约的断言里。
   await app.unmount()
   await mountApp()
   await settled(() => state().includes('split=1') && has('AAA1'))
   openAgents?.()
-  await settled(() => exposedFocus === 'panel' && has('AAA1') && !has('AAA6'))
-  check('keys: the roster overflows the panel viewport (AAA6 clipped)', has('AAA1') && !has('AAA6'))
+  await settled(() => exposedFocus === 'panel' && has('AAA1') && !has('AAA20'))
+  check('keys: a long roster overflows the panel viewport', has('AAA1') && !has('AAA20'))
   await writeKey('\x1b[B')
-  await settled(() => !has('AAA1'))
-  check('keys: downArrow is consumed by the panel (roster scrolls)', !has('AAA1'))
+  await settled(() => !lines().some(line => /\bAAA1\b/.test(line)))
+  check('keys: downArrow is consumed by the panel (roster scrolls)', !lines().some(line => /\bAAA1\b/.test(line)), lines().filter(line => /AAA[1-9]/.test(line)).join('|'))
   await writeKey('\r')
   await settled(() => has('1/3'))
   check('keys: Enter after downArrow opens the SECOND card detail', has('AAA2') && has('1/3'),
@@ -330,8 +329,8 @@ try {
   await writeKey('\x1b') // back to the dashboard, focus lane stays on AAA2
   await settled(() => has('AAA3') && !has('/3'))
   await writeKey('\x1b[A')
-  await settled(() => has('AAA1'))
-  check('keys: upArrow is consumed by the panel (roster scrolls back)', has('AAA1'))
+  await settled(() => lines().some(line => /\bAAA1\b/.test(line)))
+  check('keys: upArrow is consumed by the panel (roster scrolls back)', lines().some(line => /\bAAA1\b/.test(line)))
   await writeKey('\r')
   await settled(() => has('AAA1') && has('1/3'))
   check('keys: Enter after upArrow returns to the first card', has('AAA1') && has('1/3'))
