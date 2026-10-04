@@ -165,7 +165,7 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
       // 65ms @200k. The snapshot array is already frozen by the session, so
       // hand it back as-is; the lease/shadow `check()` above still gates the
       // call itself (same contract as before the Channel UI split).
-      if (key === 'traceEvents') return result
+      if (key === 'traceEvents' || key === 'trajectoryLaneEvents') return result
       if (key === 'agentViewRows' || key === 'settingsSections') return project(result)
       return settle(result)
     }

@@ -75,6 +75,10 @@
       "to": "dsh-adapter/trajectory/index.js"
     },
     {
+      "from": "components/trajectory/useTrajectoryScope.ts",
+      "to": "dsh-adapter/trajectory/index.js"
+    },
+    {
       "from": "ink/sixel-codec.ts",
       "to": "dsh-adapter/sharp.js"
     },

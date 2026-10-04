@@ -1,5 +1,5 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, TurnUsageSummary, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, TrajectorySource, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, TurnUsageSummary, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, TrajectoryLane, TrajectorySource, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { AgentCapabilities } from './channel-capabilities.js'
@@ -830,6 +830,21 @@ export interface ChannelUi {
    * turns yet".
    */
   trajectorySource(): TrajectorySource
+  /**
+   * The trajectory's drilldown lanes (design agent-team-panels §④ 完整档):
+   * every subagent whose child-lane events the mounted source folded into
+   * their own log. An EMPTY roster is the honest report of a composition
+   * whose source attributes no lanes (DSH raw history today): the scope
+   * filter is simply not offered, never fabricated over the main ledger.
+   */
+  trajectoryLanes(): readonly TrajectoryLane[]
+  /**
+   * One lane's own raw-event snapshot (`descendants` unset), or the agent's
+   * whole subtree merged in emission order (`descendants` set) — the same
+   * append-only, prefix-identity contract {@link traceEvents} offers, so the
+   * scoped fold stays incremental exactly like the main one.
+   */
+  trajectoryLaneEvents(agentId: string, descendants?: boolean): readonly RawTrajEvent[]
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   setThinkingFold(mode: 'preview' | 'full'): void
   setJobGroupFold(mode: JobGroupFoldMode): void

@@ -290,6 +290,117 @@ try {
     source.reset()
   }
 
+  // ── 3. scope filter in the fullscreen scene (a key + chip + Esc) ─────────
+  // (chip assertions match the glyph prefix: a chip label like 'agent x' is
+  // always a substring of the descriptor row's 'subagent x', so the text
+  // alone cannot distinguish chip from row.)
+  {
+    source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
+    source.observe({ type: 'step.start', turn: 1, step: 1 }, false)
+    source.observe({ type: 'tool.call', seq: 3, anchor: 't1', turn: 1, step: 1, callId: 't1', name: 'Task', argsJson: '{}', time: 1_100 }, false)
+    source.observe({ type: 'subagent.start', agentId: 'sa1', parentCallId: 't1', description: 'scan the repo', background: false, time: 1_150 }, false)
+    source.observe({ type: 'tool.call', seq: 8, anchor: 'cc1', turn: 1, step: 1, callId: 'cc1', name: 'childtool', argsJson: '{}', time: 1_200, parentCallId: 't1' }, false)
+    source.observe({ type: 'assistant.message', seq: 10, anchor: 'cm1', turn: 1, step: 1, attemptId: 'ca1', time: 1_250, blocks: [{ type: 'text', text: 'child says' }], canonical: true, parentCallId: 't1' }, false)
+    const build = fold()
+    const channel = {
+      sessionTitle: 'xl probe', cwd: 'C:/code/demo',
+      traceEvents: () => source.events(),
+      trajectorySource: () => 'supported',
+      trajectoryLanes: () => source.lanes(),
+      trajectoryLaneEvents: (agentId: string, descendants?: boolean) =>
+        (descendants === true ? source.descendantEvents(agentId) : source.laneEvents(agentId)),
+      trajectoryBackendLabel: () => t('trajectory-backend-agent-events'),
+      subscribe: () => () => {},
+    }
+    let closed = 0
+    const h = makeTerminalHarness(140, 24)
+    const app = await render(
+      <ThemeProvider theme="dark">
+        <TrajectoryScene channel={channel as never} build={build} onClose={() => { closed += 1 }} />
+      </ThemeProvider>,
+      { stdout: h.stdout as unknown as NodeJS.WriteStream, stdin: h.stdin as unknown as NodeJS.ReadStream, stderr: h.stderr as unknown as NodeJS.WriteStream, exitOnCtrlC: false, patchConsole: false },
+    )
+    // The descriptor row is the session ledger's last row; arrival pins the
+    // cursor to the tail, so 'a' drills straight into it.
+    check('scope/scene: drill hint appears once lanes exist', await settled(() => h.screen().includes('a drill into agent')))
+    await writeKey(h.stdin, 'a')
+    check('scope/scene: agent scope chip + lane rows render', await settled(() => h.screen().includes('\u25c6 agent') && h.screen().includes('childtool')))
+    await writeKey(h.stdin, 'a')
+    check('scope/scene: parent-turn scope shows the delegating turn only',
+      await settled(() => h.screen().includes('\u25c6 parent turn 1') && h.screen().includes('Task') && !h.screen().includes('childtool')))
+    await writeKey(h.stdin, 'a')
+    check('scope/scene: descendants scope renders the subtree lane',
+      await settled(() => h.screen().includes('\u25c6 descendants') && h.screen().includes('childtool')))
+    await writeKey(h.stdin, 'a')
+    check('scope/scene: cycle returns to the session scope', await settled(() => !h.screen().includes('\u25c6 ') && h.screen().includes('Task')))
+    // Esc layering: scope first, scene close second.
+    await writeKey(h.stdin, '\u001b[B'); await writeKey(h.stdin, '\u001b[B'); await writeKey(h.stdin, '\u001b[B')
+    await writeKey(h.stdin, 'a')
+    check('scope/scene: re-drill from the descriptor row', await settled(() => h.screen().includes('\u25c6 agent')))
+    await writeKey(h.stdin, '\u001b')
+    check('scope/scene: Esc pops the scope, not the scene', (await settled(() => !h.screen().includes('\u25c6 '))) && closed === 0)
+    await writeKey(h.stdin, '\u001b')
+    check('scope/scene: a second Esc leaves the scene', await settled(() => closed === 1))
+    await app.unmount(); h.term.dispose()
+    source.reset()
+  }
+
+  // ── 4. scope filter in the side panel (a key + chip; Esc stays host's) ────
+  {
+    source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
+    source.observe({ type: 'tool.call', seq: 3, anchor: 't1', turn: 1, step: 1, callId: 't1', name: 'Task', argsJson: '{}', time: 1_100 }, false)
+    source.observe({ type: 'subagent.start', agentId: 'sa1', parentCallId: 't1', description: 'scan the repo', background: false, time: 1_150 }, false)
+    source.observe({ type: 'tool.call', seq: 8, anchor: 'cc1', turn: 1, step: 1, callId: 'cc1', name: 'childtool', argsJson: '{}', time: 1_200, parentCallId: 't1' }, false)
+    const build = fold()
+    const channel = {
+      sessionTitle: 'panel probe', cwd: 'C:/code/demo',
+      traceEvents: () => source.events(),
+      trajectorySource: () => 'supported',
+      trajectoryLanes: () => source.lanes(),
+      trajectoryLaneEvents: (agentId: string, descendants?: boolean) =>
+        (descendants === true ? source.descendantEvents(agentId) : source.laneEvents(agentId)),
+      subscribe: () => () => {},
+    }
+    const registered = new Map<string, { handler: (input: string, key: Record<string, boolean | undefined>) => boolean | void; enabled: boolean }>()
+    const panelRuntime = {
+      registerInput(id: string, handler: (input: string, key: Record<string, boolean | undefined>) => boolean | void, enabled: boolean) {
+        registered.set(id, { handler, enabled })
+        return () => { registered.delete(id) }
+      },
+    }
+    function PanelHarness(): React.ReactNode {
+      useInput(() => {}, { isActive: true })
+      return (
+        <SidePanelRuntimeContext.Provider value={{ runtime: panelRuntime as never, channel: channel as never, trajectory: build }}>
+          <PanelContext.Provider value={{ panelId: 'trajectory' }}>
+            <Box width={60} height={18}>
+              <TrajectoryPanel width={60} height={18} focused visible mode="split" />
+            </Box>
+          </PanelContext.Provider>
+        </SidePanelRuntimeContext.Provider>
+      )
+    }
+    const h = makeTerminalHarness(64, 20)
+    const app = await render(<ThemeProvider theme="dark"><PanelHarness /></ThemeProvider>, {
+      stdout: h.stdout as unknown as NodeJS.WriteStream, stdin: h.stdin as unknown as NodeJS.ReadStream, stderr: h.stderr as unknown as NodeJS.WriteStream, exitOnCtrlC: false, patchConsole: false,
+    })
+    // (the panel hint truncates the drill teaching at real panel widths —
+    // truncateWidth is the intended behavior; the scene covers the hint.)
+    check('scope/panel: session rows render with lanes available', await settled(() => h.screen().includes('Task')))
+    const handler = Array.from(registered.values())[0]!.handler
+    await new Promise(resolve => setImmediate(resolve))
+    // The descriptor is the tail row; arrival pins the panel cursor there.
+    check('scope/panel: a key drills and is consumed', handler('a', {}) === true)
+    check('scope/panel: chip + lane rows render', await settled(() => h.screen().includes('\u25c6 agent') && h.screen().includes('childtool')))
+    check('scope/panel: scope hint names the cycle key', await settled(() => h.screen().includes('a cycle scope')))
+    check('scope/panel: Esc stays unconsumed (host owns it)', handler('', { escape: true }) === false)
+    // agent → parent-turn → descendants → session: three cycles home.
+    check('scope/panel: a cycles through the scopes', handler('a', {}) === true && handler('a', {}) === true && handler('a', {}) === true)
+    check('scope/panel: session scope restored', await settled(() => !h.screen().includes('\u25c6 ') && h.screen().includes('Task')))
+    await app.unmount(); h.term.dispose()
+    source.reset()
+  }
+
 } finally {
   // (each section resets the shared source)
 }

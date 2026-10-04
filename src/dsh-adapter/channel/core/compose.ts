@@ -536,6 +536,14 @@ export function createCoreChannel(
     // asRawEvents: the envelope is the contract, the payload stays
     // guard-mediated downstream.
     traceEvents: () => agentTrajectory.events() as unknown as readonly SessionEvent[],
+    // Lane drilldown (design ④ 完整档 跨 Agent drilldown): the same fold's
+    // per-agent logs. Under an extension that owns the trajectory (DSH: raw
+    // history) the fold receives no events, so lanes() is honestly empty
+    // and the scope filter is not offered — the raw DSH log carries no lane
+    // attribution to filter by.
+    trajectoryLanes: () => agentTrajectory.lanes() as unknown as readonly import('../../../adapter/ports/channel-view.js').TrajectoryLane[],
+    trajectoryLaneEvents: (agentId: string, descendants?: boolean) =>
+      (descendants === true ? agentTrajectory.descendantEvents(agentId) : agentTrajectory.laneEvents(agentId)) as unknown as readonly SessionEvent[],
     // The trajectory capability declaration (design doc ④ 轨迹裁决): the
     // core mounts the neutral AgentEvent fold, so a session it serves alone
     // reports 'empty' before the first mapped event and 'supported' from

@@ -1944,6 +1944,14 @@ const dict = {
   // 已不可读」的诚实降级——压缩掉的事件不假装还有正文。
   'trajectory-wait-elapsed': { zh: '已等待 {{duration}}', en: 'waiting {{duration}}' },
   'trajectory-inspect-unavailable': { zh: '事件原文已不可读（可能已被压缩）', en: 'source event no longer readable (likely compacted)' },
+  // 跨 Agent 下钻（设计 §④ 完整档）：scope chip 与提示。chip 标当前过滤的是
+  // 哪个范围（当前 Agent / 父回合 / 全部后代），a 键循环，Esc 先弹回会话。
+  'trajectory-view-agent': { zh: 'Agent {{label}}', en: 'agent {{label}}' },
+  'trajectory-view-parent': { zh: '父回合 {{turn}}', en: 'parent turn {{turn}}' },
+  'trajectory-view-descendants': { zh: '后代 {{label}}', en: 'descendants {{label}}' },
+  'trajectory-drill-hint': { zh: 'a 下钻该 Agent', en: 'a drill into agent' },
+  'trajectory-scope-hint-panel': { zh: 'a 切换范围', en: 'a cycle scope' },
+  'trajectory-scope-hint': { zh: 'a 切换范围 · Esc 返回会话', en: 'a cycle scope · Esc back to session' },
   'info-section-session': { zh: '会话', en: 'Session' },
   'info-section-model': { zh: '模型', en: 'Model' },
   'info-section-context': { zh: '上下文', en: 'Context' },
