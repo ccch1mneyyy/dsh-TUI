@@ -2123,6 +2123,12 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
   // 挂接（adopted）与首帧 flush（ready），ready 之后 1049 括号归它。
   const handoff = options.handoffScreen === 'alt' && options.backend !== undefined
   const attemptId = handoff ? 'hs-' + Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 8) : undefined
+  // Ctrl+C while the replacement boots reaches this process too: same process
+  // group, and nothing has the terminal in raw mode yet. Dying here would
+  // leave behind the alternate screen this process still holds; the
+  // replacement gets the same signal, and its close below restores the screen.
+  const ignoreInterrupt = (): void => {}
+  if (handoff) process.on('SIGINT', ignoreInterrupt)
   // 内核切换的过场第二阶段（S05）：replacement spawn 之前由旧父进程写一
   // 行已 flush 的「正在启动 X…」——此后屏幕交给新内核。写等待 drain 回调
   // （不是定时 sleep），保证行落地早于 spawn。handoff 模式下这行落在 alt
@@ -2247,6 +2253,7 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     timer.unref()
     child.once('error', error => {
       clearTimeout(timer)
+      process.removeListener('SIGINT', ignoreInterrupt)
       logRestartEvent(`${tag}: spawn error`, { message: error.message })
       if (options.backend !== undefined) {
         // spawn 失败＝没有任何东西挂上屏幕：supervisor 仍持有 1049 括号，
@@ -2270,6 +2277,7 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     })
     child.once('close', (code, signal) => {
       clearTimeout(timer)
+      process.removeListener('SIGINT', ignoreInterrupt)
       const elapsedMs = Date.now() - startedAt
       logRestartEvent(`${tag}: replacement exited`, {
         code: code ?? null,

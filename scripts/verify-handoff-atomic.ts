@@ -74,6 +74,13 @@ if (isReplacement) {
   } else if (scenario === 'die-pre-ready') {
     ack('adopted')
     setTimeout(() => process.exit(7), 150)
+  } else if (scenario === 'interrupt-pre-ready') {
+    // Ctrl+C during boot: the terminal delivers SIGINT to the whole process
+    // group, the old parent included. Signal only the parent here, then die
+    // the way an unhandled SIGINT would end the replacement.
+    ack('adopted')
+    process.kill(process.ppid, 'SIGINT')
+    setTimeout(() => process.exit(130), 200)
   } else {
     ack('adopted')
     process.stdout.write('CHILD-FIRST-FRAME\n', () => ack('ready'))
@@ -229,6 +236,16 @@ const stateTmp = mkdtempSync(join(tmpdir(), 'verify-handoff-atomic-'))
       (text.match(/\u001b\[\?1049l/g) ?? []).length === 1, JSON.stringify(text.slice(0, 160)))
     check('e2e die-pre-ready: restartTui resolves the child code (7) with the failed/boot-failure path',
       result !== undefined && JSON.parse(result).code === 7, stderr.slice(-200))
+  }
+  {
+    const run = runParent('interrupt-pre-ready')
+    const text = run.stdout ?? ''
+    const stderr = run.stderr ?? ''
+    const result = /E2E-RESULT (.*)/.exec(stderr)?.[1]
+    check('e2e interrupt-pre-ready: the old parent survives Ctrl+C and still restores the bracket once',
+      run.signal === null && (text.match(/\u001b\[\?1049l/g) ?? []).length === 1, 'signal=' + String(run.signal) + ' ' + JSON.stringify(text.slice(0, 160)))
+    check('e2e interrupt-pre-ready: restartTui resolves the child code (130)',
+      result !== undefined && JSON.parse(result).code === 130, stderr.slice(-200))
   }
   {
     const run = runParent('old-build')
