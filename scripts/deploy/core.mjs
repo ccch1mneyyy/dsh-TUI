@@ -354,6 +354,39 @@ export function classifyLease(leasePath, now = Date.now()) {
 }
 
 
+/**
+ * Staging owner liveness (M2②): the .owner.json stamp build-generation
+ * writes at staging creation, judged with the SAME strong rules as leases
+ * (pid probe + creation-time identity). Unknown/missing stamps read as
+ * "stale" — an unattributed staging past TTL is garbage by definition.
+ */
+function classifyStagingOwner(stagingDir) {
+  let stamp
+  try {
+    stamp = JSON.parse(readFileSync(join(stagingDir, ".owner.json"), "utf8"))
+  } catch {
+    return "unknown (no readable owner stamp)"
+  }
+  const pid = stamp.pid
+  if (typeof pid !== "number" || !Number.isInteger(pid)) return "unknown (no pid in stamp)"
+  let alive
+  try {
+    process.kill(pid, 0)
+    alive = true
+  } catch (error) {
+    if (error.code === "ESRCH") return "dead"
+    if (error.code !== "EPERM") return "undecidable (pid probe " + error.code + ")"
+    alive = true
+  }
+  if (!alive) return "dead"
+  const identity = stamp.processStartIdentity
+  if (identity !== null && typeof identity === "object" && typeof identity.kind === "string") {
+    const current = currentProcessStartIdentity(pid)
+    if (current !== undefined && matchProcessStartIdentity(identity, current) === false) return "dead (pid reused)"
+  }
+  return "live"
+}
+
 /** All lease classifications for one generation id (batch-primed so a
  *  GC/status pass pays at most ONE platform creation-time query). */
 export function leasesFor(deployRoot, generationId) {
@@ -387,10 +420,14 @@ export function gcGenerations(deployRoot, options = {}) {
   const apply = options.apply === true
   const minAgeDays = options.minAgeDays ?? 7
   const keepAtLeast = options.keepAtLeast ?? 2
+  // 测试可注入（Windows 无法回拨目录 mtime，靠缩小 TTL 制造「已过期」）。
+  const stagingTtlMs = options.stagingTtlMs ?? STAGING_TTL_MS
   const now = Date.now()
   const active = readActive(deployRoot)
   const generationsDir = join(deployRoot, "generations")
   const candidates = []
+  const keep = []
+  const remove = []
   if (existsSync(generationsDir)) {
     for (const name of readdirSync(generationsDir)) {
       const full = join(generationsDir, name)
@@ -399,9 +436,23 @@ export function gcGenerations(deployRoot, options = {}) {
       const staging = name.endsWith(".staging")
       const id = staging ? name.slice(0, -".staging".length) : name
       if (staging) {
+        // M2②：staging 回收按 owner 强判活——只有「过了 TTL 且 owner 印章
+        // 判死（pid 消失或创建时间证明复用）」才可回收；活 owner 的 staging
+        // 无论多老都保留（设计："staging 可在持锁确定 owner/TTL 后回收"）。
+        // promote 锁窗口内同样不动（staging 可能正被改名提交）。
         const age = now - stat.mtimeMs
-        const lockFree = !existsSync(join(deployRoot, "build-locks", "promote.lock"))
-        if (age > STAGING_TTL_MS && lockFree) candidates.push({ kind: "staging", id, path: full, reason: "staging older than " + Math.round(STAGING_TTL_MS / 3600000) + "h and no promote lock" })
+        const promoteLock = join(deployRoot, "build-locks", "promote.lock")
+        const promoteActive = existsSync(promoteLock) && now - statSync(promoteLock).mtimeMs <= BUILD_LOCK_STALE_MS
+        if (age <= stagingTtlMs || promoteActive) {
+          keep.push({ kind: "staging", id, path: full, reasons: [age <= stagingTtlMs ? "staging younger than TTL" : "promote lock active"] })
+          continue
+        }
+        const ownerState = classifyStagingOwner(full)
+        if (ownerState === "live") {
+          keep.push({ kind: "staging", id, path: full, reasons: ["staging owner alive (strong liveness)"] })
+          continue
+        }
+        candidates.push({ kind: "staging", id, path: full, reason: "staging past TTL, owner " + ownerState + ", no active promote lock" })
         continue
       }
       if (!isValidGenerationId(id)) continue
@@ -412,8 +463,6 @@ export function gcGenerations(deployRoot, options = {}) {
   }
   const readySorted = candidates.filter(c => c.kind === "generation").sort((a, b) => b.mtimeMs - a.mtimeMs)
   const newestKept = new Set(readySorted.slice(0, keepAtLeast).map(c => c.id))
-  const keep = []
-  const remove = []
   for (const candidate of candidates) {
     if (candidate.kind === "staging") {
       remove.push(candidate)

@@ -85,6 +85,16 @@ if (existsSync(stagingDir)) {
 }
 const packageDir = join(stagingDir, "package")
 mkdirSync(packageDir, { recursive: true })
+// staging owner stamp（M2②）：GC 以强判活核验 owner（pid＋进程创建时间），
+// 只回收「过了 TTL 且 owner 已死」的 staging；stamp 在 staging 根而非
+// package/ 内，不进 READY 哈希面。
+writeFileSync(join(stagingDir, ".owner.json"), JSON.stringify({
+  schemaVersion: 1,
+  pid: process.pid,
+  processStartIdentity: processStartIdentity(),
+  startedAt: Date.now(),
+  tool: "scripts/build-generation.mjs",
+}, null, 2))
 
 // ── 编译：经临时继承 tsconfig 直写 staging，不触碰源树 tsconfig/lib ─────
 if (has("--skip-compile")) {
