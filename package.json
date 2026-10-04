@@ -42,12 +42,12 @@
     "dsh-tui": "./bin/dsh-tui.js",
     "dst": "./bin/dsh-tui.js"
   },
-  "main": "lib/types/index.js",
+  "main": "./dispatch/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
-      "import": "./lib/types/index.js"
+      "import": "./dispatch/index.js"
     },
     "./working-activity": {
       "types": "./lib/types/working-activity.d.ts",
@@ -103,6 +103,7 @@
   },
   "files": [
     "bin",
+    "dispatch",
     "lib",
     "assets",
     "cordis.patch.yml",
