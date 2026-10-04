@@ -1,34 +1,9 @@
 /**
- * Claude Task* family → the shared todo panel (CLI 2.1.284: TaskCreate /
- * TaskUpdate / TaskList / TaskGet replaced TodoWrite for plan tracking; both
- * families are shouldDefer tools the preset does not list). Offline synthetic
- * SDK frames through the real translator + the one shared projector (no CLI,
- * no network, no credentials):
- *
- *  - role: the four Task* tools are 'todo' (never a card — suppressed call
- *    presentation, no result view, no tool row), while 'Task' (the subagent)
- *    and 'TaskStop' (a background task) keep their own roles;
- *  - state machine: TaskCreate's input names the content, its result the id;
- *    TaskUpdate's input patches in place ('deleted' removes); TaskList /
- *    TaskGet results are authoritative and overwrite local state; every
- *    change emits one full 'todo.write' snapshot in TodoPanelItem shape
- *    (content/status only, creation order, 'deleted' simply absent);
- *  - a failed TaskUpdate (is_error or the in-contract success:false) rolls
- *    the task's view back to its confirmed base (seeds, create / get / list
- *    results, patches whose results came back successful) with the
- *    still-pending patches re-applied: a failure can neither hide behind a
- *    newer success nor resurrect a confirmed delete, and the
- *    suppressed-card path lets a failure card through so the user sees the
- *    task change never happened;
- *  - resume: the replay's tracked tasks hand over to the live translator
- *    (serializable seeds), and a successful update of an untracked id
- *    completes the table from its own patch;
- *  - TodoWrite itself stays byte-identical (its own snapshot from its own
- *    input; activeForm still dropped) and replaces the panel view wholesale;
- *  - buildQueryOptions: allowedTools adds + pre-approves the family while
- *    'tools' stays the claude_code preset (never an explicit replacement),
- *    OPTION_POLICY.allowedTools is 'set'.
- *
+ * Offline Task* → todo panel regression through the translator and projector.
+ * TaskCreate/Update/List/Get apply from their results; failed updates preserve
+ * the current table, while TodoWrite keeps its input-driven whole-list path.
+ * Covers resume seeds and the additive allowedTools policy without replacing
+ * the Claude preset.
  * Run: node --import tsx/esm scripts/verify-claude-task-tools.ts
  */
 import assert from 'node:assert/strict'
@@ -93,6 +68,32 @@ const same = (actual: unknown, expected: unknown): boolean => JSON.stringify(act
   check('role: the Task* family renders through the todo panel', ['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'TodoWrite'].every(name => claudeToolRole(name) === 'todo'))
   check("role: 'Task' is still the subagent delegation", claudeToolRole('Task') === 'subagent')
   check("role: 'TaskStop' is still an ordinary card", claudeToolRole('TaskStop') === 'card')
+}
+
+// Task* calls leave the confirmed table unchanged until their results arrive.
+{
+  const translator = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle', now,
+    start: { turn: 0, seq: 0, tasks: [{ id: 't', content: 'Confirmed', status: 'pending', activeForm: 'Original form', seq: 1 }] },
+  })
+  const f = frames()
+  for (const [name, input] of [
+    ['TaskCreate', { subject: 'New', description: 'x' }],
+    ['TaskUpdate', { taskId: 't', subject: 'Renamed', status: 'in_progress', activeForm: 'New form' }],
+    ['TaskList', {}],
+    ['TaskGet', { taskId: 't' }],
+  ] as [string, Rec][]) {
+    check(name + ': no snapshot before its result', todosOf(translator.translate(f.call(name, input))).length === 0)
+  }
+  check('pending update: content, status and activeForm remain confirmed',
+    same(translator.taskSeeds(), [{ id: 't', content: 'Confirmed', status: 'pending', activeForm: 'Original form', seq: 1 }]))
+  check('successful update: result applies the complete input patch',
+    same(items(todosOf(translator.translate(f.resultOf(2, { success: true }))).at(-1)), [{ content: 'Renamed', status: 'in_progress' }])
+      && translator.activityState().activeForm === 'New form')
+  check('pending delete: task stays visible until the result',
+    todosOf(translator.translate(f.call('TaskUpdate', { taskId: 't', status: 'deleted' }))).length === 0
+      && translator.taskSeeds().length === 1)
+  check('successful delete: result removes the task',
+    same(items(todosOf(translator.translate(f.resultOf(5, { success: true }))).at(-1)), []) && translator.taskSeeds().length === 0)
 }
 
 // ── create ×2 → update(completed): snapshot order and statuses ───────────
@@ -306,12 +307,12 @@ const synced = scenario(f => [
     quiet.events.every(event => event.type !== 'todo.write'), quiet.events.filter(event => event.type === 'todo.write').map(event => items(event)))
 }
 
-// ── a failed TaskUpdate rolls its patch back and says so ─────────────────
+// Failed TaskUpdate results keep the confirmed state and show error cards.
 {
   const failureCards = (h: ReturnType<typeof createProjectorHarness>) =>
     h.state.rows.filter(row => row.kind === 'tool' && row.tool?.name === 'TaskUpdate' && row.tool?.status === 'error')
 
-  // A failed delete of a known id: the task returns, the failure card shows.
+  // A failed delete keeps the task and shows its failure card.
   const failedDelete = scenario(f => [
     f.call('TaskCreate', { subject: 'Keep', description: 'stays' }),
     f.resultOf(1, { task: { id: 'task-1', subject: 'Keep' } }),
@@ -321,13 +322,13 @@ const synced = scenario(f => [
     f.resultOf(3, undefined, true),
     f.turnEnd(),
   ])
-  check('failed delete: the task returns to the panel (the CLI did not drop it)',
+  check('failed delete: the task stays on the panel (the CLI did not drop it)',
     same(failedDelete.harness.state.todos, [{ content: 'Keep', status: 'pending' }, { content: 'Drop', status: 'pending' }]), failedDelete.harness.state.todos)
-  check('… the rollback re-emitted a snapshot after the optimistic one', todosOf(failedDelete.events).length === 4, todosOf(failedDelete.events).length)
+  check('… the pending delete and its failure emitted no snapshot', todosOf(failedDelete.events).length === 2, todosOf(failedDelete.events).length)
   check('… the suppressed-card path still renders the failure card (the user sees why)',
     failureCards(failedDelete.harness).length === 1 && failureCards(failedDelete.harness)[0]?.tool?.errorText === 'ok', failureCards(failedDelete.harness).map(card => card.tool))
 
-  // A failed complete and a failed rename (success:false without is_error).
+  // A failed completion and rename (`success:false` without `is_error`).
   const refused = scenario(f => [
     f.call('TaskCreate', { subject: 'Chore', description: 'x', activeForm: 'Doing the chore' }),
     f.resultOf(1, { task: { id: 't', subject: 'Chore' } }),
@@ -337,14 +338,11 @@ const synced = scenario(f => [
     f.resultOf(3, { success: false, taskId: 't', updatedFields: ['subject'], error: 'read-only' }),
     f.turnEnd(),
   ])
-  check('success:false without is_error: the status and the subject both roll back',
+  check('success:false without is_error: status and subject stay unchanged',
     same(refused.harness.state.todos, [{ content: 'Chore', status: 'pending' }]), refused.harness.state.todos)
   check('… and both failures surface as error cards', failureCards(refused.harness).length === 2, failureCards(refused.harness).length)
 
-  // Parallel updates of one task, results out of order: the newer success
-  // stands (its rename commits into the confirmed base); the older failed
-  // completion rolls back to that base and must not survive by hiding
-  // behind the newer write.
+  // The rename result arrives first; the later failed result changes nothing.
   const outOfOrder = scenario(f => [
     f.call('TaskCreate', { subject: 'A', description: 'x' }),
     f.resultOf(1, { task: { id: 'a', subject: 'A' } }),
@@ -354,10 +352,10 @@ const synced = scenario(f => [
     f.resultOf(2, undefined, true),
     f.turnEnd(),
   ])
-  check('out-of-order: the rename success commits, the failed completion still rolls back (Renamed/pending)',
+  check('out-of-order: rename succeeds, failed completion leaves Renamed/pending',
     same(outOfOrder.harness.state.todos, [{ content: 'Renamed', status: 'pending' }]), outOfOrder.harness.state.todos)
 
-  // Both fail, results in reverse order: the rollbacks stack to the original.
+  // Both updates fail, with their results arriving in reverse order.
   const bothFailed = scenario(f => [
     f.call('TaskCreate', { subject: 'B', description: 'x' }),
     f.resultOf(1, { task: { id: 'b', subject: 'B' } }),
@@ -367,11 +365,10 @@ const synced = scenario(f => [
     f.resultOf(2, undefined, true),
     f.turnEnd(),
   ])
-  check('both failed in reverse: stacked rollbacks reach the original state',
+  check('both failed in reverse: the confirmed state remains unchanged',
     same(bothFailed.harness.state.todos, [{ content: 'B', status: 'pending' }]), bothFailed.harness.state.todos)
 
-  // Both fail, results in emission order: the first rollback keeps the
-  // still-pending rename optimistic, the second drops it too.
+  // Both updates fail, with their results arriving in call order.
   const bothFailedInOrder = scenario(f => [
     f.call('TaskCreate', { subject: 'B2', description: 'x' }),
     f.resultOf(1, { task: { id: 'b2', subject: 'B2' } }),
@@ -381,11 +378,10 @@ const synced = scenario(f => [
     f.resultOf(3, undefined, true),
     f.turnEnd(),
   ])
-  check('both failed in emission order: the rollbacks still reach the original state',
+  check('both failed in emission order: the confirmed state remains unchanged',
     same(bothFailedInOrder.harness.state.todos, [{ content: 'B2', status: 'pending' }]), bothFailedInOrder.harness.state.todos)
 
-  // A delete succeeds, then the older update fails: the task stays deleted
-  // (no resurrection through the older failure's pre-image).
+  // A successful delete stays deleted after an earlier update fails.
   const deletedThenFail = scenario(f => [
     f.call('TaskCreate', { subject: 'C2', description: 'x' }),
     f.resultOf(1, { task: { id: 'c2', subject: 'C2' } }),
@@ -398,10 +394,7 @@ const synced = scenario(f => [
   check('delete success then older failure: the task stays deleted (no resurrection)',
     same(deletedThenFail.harness.state.todos, []), deletedThenFail.harness.state.todos)
 
-  // Ghost task: a List superseded an update, so the update's late success
-  // must not fabricate a task the list already ruled out (the unknown-id
-  // completion path is for fresh results, not calls an authority
-  // discarded).
+  // A TaskList result clears pending updates; their late results cannot rebuild omitted tasks.
   const ghost = scenario(f => [
     f.call('TaskCreate', { subject: 'A', description: 'x' }),
     f.resultOf(1, { task: { id: 'a', subject: 'A' } }),
@@ -411,12 +404,10 @@ const synced = scenario(f => [
     f.resultOf(2, { success: true, taskId: 'a', updatedFields: ['status'] }),
     f.turnEnd(),
   ])
-  check('late success of a superseded update fabricates nothing (the empty list stands)',
+  check('late success of an update cleared by TaskList fabricates nothing',
     same(ghost.harness.state.todos, []), ghost.harness.state.todos)
 
-  // Superseding must not overreach: the list's own record stands, and a
-  // fresh update after it confirms on that record normally (only the
-  // superseded call id is dropped, never the id itself).
+  // A new update after TaskList applies to the list's current record.
   const rebuild = scenario(f => [
     f.call('TaskCreate', { subject: 'A', description: 'x' }),
     f.resultOf(1, { task: { id: 'a', subject: 'A' } }),
@@ -428,13 +419,10 @@ const synced = scenario(f => [
     f.resultOf(4, { success: true, taskId: 'a', updatedFields: ['status'] }),
     f.turnEnd(),
   ])
-  check('superseded drops only the stale call: the list\'s record stands and a fresh update confirms on it',
+  check('TaskList record stands; a later update applies to its current state',
     same(rebuild.harness.state.todos, [{ content: 'A relaunched', status: 'completed' }]), rebuild.harness.state.todos)
 
-  // Ghost via an unknown id: an update of an id the table never tracked (a
-  // resumed or compacted table) is in flight just the same. An
-  // authoritative empty List must supersede its call too, or its late
-  // success goes through the unknown-id completion and fabricates the task.
+  // An empty TaskList also clears an unknown-id update before it can create an entry.
   const unknownGhost = scenario(f => [
     f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
     f.call('TaskList', {}),
@@ -442,12 +430,10 @@ const synced = scenario(f => [
     f.resultOf(1, { success: true, taskId: 'a', updatedFields: ['status'] }),
     f.turnEnd(),
   ])
-  check('an unknown-id update superseded by an empty List fabricates nothing (the empty list stands)',
+  check('an unknown-id update cleared by an empty TaskList fabricates nothing',
     same(unknownGhost.harness.state.todos, []), unknownGhost.harness.state.todos)
 
-  // Positive control: after that List re-introduces the id, a fresh
-  // update confirms on it normally (the superseded call id, not the id,
-  // is what drops).
+  // A new update applies after TaskList reintroduces the id.
   const unknownRebuild = scenario(f => [
     f.call('TaskUpdate', { taskId: 'a', status: 'completed' }),
     f.call('TaskList', {}),
@@ -457,11 +443,10 @@ const synced = scenario(f => [
     f.resultOf(3, { success: true, taskId: 'a', updatedFields: ['status'] }),
     f.turnEnd(),
   ])
-  check('unknown-id supersede drops only the stale call: the reintroduced record confirms normally',
+  check('unknown-id update after TaskList uses its reintroduced record',
     same(unknownRebuild.harness.state.todos, [{ content: 'A relaunched', status: 'completed' }]), unknownRebuild.harness.state.todos)
 
-  // An authoritative List between the patch and its late failure: the List
-  // wins; the stale failure neither reverts it nor resurrects a delete.
+  // A late failed update leaves the authoritative List result unchanged.
   const authoritative = scenario(f => [
     f.call('TaskCreate', { subject: 'C', description: 'x' }),
     f.resultOf(1, { task: { id: 'c', subject: 'C' } }),
@@ -471,7 +456,7 @@ const synced = scenario(f => [
     f.resultOf(2, undefined, true),
     f.turnEnd(),
   ])
-  check('authoritative List wins over the late failure (no rollback to the pre-image)',
+  check('authoritative List wins over the late failure',
     same(authoritative.harness.state.todos, [{ content: 'C', status: 'in_progress' }]), authoritative.harness.state.todos)
   const deletedSync = scenario(f => [
     f.call('TaskCreate', { subject: 'D', description: 'x' }),
@@ -485,10 +470,7 @@ const synced = scenario(f => [
   check('… a delete the List confirmed stays gone (the failure does not resurrect it)',
     same(deletedSync.harness.state.todos, []), deletedSync.harness.state.todos)
 
-  // Mixed families: a successful TodoWrite is the whole-list authority. The
-  // stale Task* view must go with its patches and bases, or a later update
-  // of a stale id first repaints the panel from a stale table and then
-  // empties it (the recompute finds no base).
+  // TodoWrite clears the task table; a subsequent update starts from its result.
   const legacyWins = scenario(f => [
     f.call('TaskCreate', { subject: 'Chore', description: 'x' }),
     f.resultOf(1, { task: { id: 't', subject: 'Chore' } }),

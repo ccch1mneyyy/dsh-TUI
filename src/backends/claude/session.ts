@@ -325,7 +325,8 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     }
   }
 
-  const emit = (events: readonly AgentEvent[], wake: AgentEventMeta['wake'] = 'sync'): void => {
+  const emit = (events: readonly AgentEvent[], wake: AgentEventMeta['wake'] = 'sync', duringDispose = false): void => {
+    if (disposing && !duringDispose) return
     if (events.length === 0) return
     foldAgentMessages(events)
     const meta: AgentEventMeta = { replay: false, wake }
@@ -479,7 +480,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       { type: 'tasks.snapshot', taskIds: [] },
       { type: 'notice', level: 'error', text: t('claude-process-exited', { reason }) },
       { type: 'session.status', status: 'disposed' },
-    ])
+    ], 'sync', true)
     settleIdleWaiters(new Error(t('claude-session-closed')))
   }
 
@@ -1267,6 +1268,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       // can drop them; a user cancel keeps them (they run as the next turn).
       // A CLI without the capability keeps its queue and runs it — the
       // cancel receipt's `still_queued` tells the channel, which un-docks.
+      translator.clearInterruptedCalls()
       const cancelQueued = cause !== 'user' && cliCapabilities.includes(CLI_CAPABILITY.interruptCancelQueued)
       // The queued inputs this cancel covers, taken before the request (an
       // input pushed meanwhile belongs to a newer batch). Without a
@@ -1307,7 +1309,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
           new Promise<void>(resolve => { timer = clock.setTimeout(resolve, deps.closeTimeoutMs ?? 5000) }),
         ])
         clock.clearTimeout(timer)
-        if (!wasDisposed) emit([{ type: 'session.status', status: 'disposed' }], 'none')
+        if (!wasDisposed) emit([{ type: 'session.status', status: 'disposed' }], 'none', true)
         settleIdleWaiters(new Error(t('claude-session-closed')))
         listeners.clear()
         backlog.length = 0

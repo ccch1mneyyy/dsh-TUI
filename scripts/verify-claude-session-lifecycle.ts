@@ -258,6 +258,28 @@ const collect = (session: AgentSession) => {
   check('no timer after dispose', outstanding() === 0)
 }
 
+// ── interrupted calls and emits after dispose ─────────────────────────
+{
+  const { clock } = manualClock()
+  const fake = fakeSdk()
+  const session = await openClaudeSession(baseDeps(fake.sdk, clock))
+  const query = fake.queries[0]!
+  const sink = collect(session)
+  query.emit({ type: 'assistant', message: { id: 'msg_task', model: 'fake', content: [{ type: 'tool_use', id: 'call_task', name: 'TaskUpdate', input: { taskId: 'unknown', status: 'completed' } }] } })
+  await tick()
+  await session.cancel('interrupt')
+  query.emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'call_task', content: 'ok' }] }, tool_use_result: { success: true, taskId: 'unknown', updatedFields: ['status'] } })
+  await tick()
+  check('interrupt drops the main call input before its late result', !sink.events().some(event => event.type === 'todo.write'))
+  sink.unsubscribe()
+  await session.dispose()
+  session.capabilities.color.set('red')
+  const late: readonly AgentEvent[][] = []
+  session.subscribe(events => (late as AgentEvent[][]).push(events))
+  await tick()
+  check('dispose ignores later emits instead of backlogging them', late.length === 0)
+}
+
 // ── cancel receipts: failure never reads as an empty queue ────────────
 // A rejected or answerless interrupt must not answer stillQueued []: that
 // is a success-shaped receipt over a queue whose state was never confirmed,
