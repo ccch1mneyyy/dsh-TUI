@@ -1,14 +1,14 @@
 /**
- * Shared F8 transcript fold/page/merge helpers (design agent-team-full
- * §4.3): the Detail scene and the main-screen AgentTranscriptScene fold a
- * child's history lane through the SAME pure pipeline, so a child row reads
- * exactly like a main one wherever it is shown. Extracted verbatim from
- * SubagentDetailScene — behavior-preserving; the Detail scene keeps its
- * pages/focus/fold state, this module keeps the leaf vocabulary.
+ * Fold, paging and live-merge helpers for a child's transcript, shared by
+ * the subagent Detail scene and the main-screen AgentTranscriptScene so a
+ * child row reads the same wherever it is shown.
  */
+import React from 'react'
 import type { SubagentOutputLine, SubagentState } from '../../dsh-adapter/subagents.js'
-import type { ToolRow } from '../../adapter/ports/channel-view.js'
+import type { SubagentTranscriptView, ToolRow } from '../../adapter/ports/channel-view.js'
+import type { SubagentTranscriptWindow } from '../../agent/capabilities.js'
 import type { AgentEvent } from '../../agent/events.js'
+import type { AgentMessageView } from './agentTeam.js'
 import { ARGS_PREVIEW_LIMIT, preview, RESULT_PREVIEW_LIMIT } from '../../channel/transcript.js'
 
 /** One folded leaf of the child's transcript: thinking (a real body, or
@@ -20,35 +20,68 @@ export type TranscriptLeaf =
   | { kind: 'thinking-unavailable'; key: string; tokens: number | undefined }
   | { kind: 'text'; key: string; text: string }
   | { kind: 'tool'; key: string; tool: ToolRow }
-  | { kind: 'agent-message'; key: string; message: import('./agentTeam.js').AgentMessageView }
+  | { kind: 'agent-message'; key: string; message: AgentMessageView }
 
 /** Presentations that never earn a duplicate card here either (the main
  *  projector's rule): a nested delegation renders as the subagent card, a
  *  todo write lives in the todo panel, a question in its dialog. */
 export const TRANSCRIPT_SUPPRESSED_CARDS: ReadonlySet<string> = new Set(['subagent', 'todo', 'question'])
 
+/** Where one history page sits among the pages, for placing the agent
+ *  message feed: `olderPagesRemain` = the page is not the oldest one, so
+ *  messages observed before its first event belong to an older page;
+ *  `before` = the start of the newer page already folded (that page holds
+ *  the messages from there on). */
+export interface TranscriptPagePlacement {
+  readonly olderPagesRemain?: boolean
+  readonly before?: number
+  /** Collects the tool results whose call this page does not hold (the
+   *  call sits on an older page), keyed by call id. */
+  readonly orphans?: Map<string, ToolResultEvent>
+}
+
+type ToolResultEvent = Extract<AgentEvent, { type: 'tool.result' }>
+
+/** Settle a tool card with its recorded result. */
+function applyToolResult(tool: ToolRow, event: ToolResultEvent): void {
+  tool.durationMs = Math.max(0, event.time - tool.startedAt)
+  if (event.isError) {
+    tool.status = 'error'
+    tool.errorText = event.errorText ?? ''
+  } else {
+    tool.status = 'ok'
+    tool.resultText = event.text !== '' ? preview(event.text, RESULT_PREVIEW_LIMIT) : undefined
+    tool.resultFull = event.text !== '' ? event.text : undefined
+    tool.resultView = event.presentation as ToolRow['resultView']
+  }
+}
+
 /** Fold one history page's lane events into leaf rows (oldest first;
- *  `into` may already hold the older pages' rows). A tool result without
- *  its call is dropped — nothing to attach it to; consecutive blocks of
- *  one API message join (the store splits a message into per-block
+ *  `into` may already hold the older pages' rows). A tool result whose
+ *  call is not on this page goes to `page.orphans` (or is dropped without
+ *  one) until the older page with the call is folded; consecutive blocks
+ *  of one API message join (the store splits a message into per-block
  *  entries sharing the anchor).
  *
- *  `messages` (the durable agent↔agent feed for THIS child, newest last)
- *  interleaves by observedAt: each is flushed as an `agent-message` leaf
- *  before the first event observed at/after it, so the flow shares the
- *  page window and the load-older walk with thinking/text/tool rows
- *  (design §5.4 — never copied into an ordinary message row). */
-export function foldTranscriptLeaves(events: readonly AgentEvent[], into: TranscriptLeaf[], messages: readonly import('./agentTeam.js').AgentMessageView[] = []): void {
+ *  `messages` (the agent↔agent feed for THIS child, newest last) is
+ *  interleaved by observedAt: each is flushed as an `agent-message` leaf
+ *  before the first event observed at/after it. Only the messages that
+ *  fall inside this page's span are placed (see TranscriptPagePlacement),
+ *  so loading an older page never repeats one. Returns the lower bound of
+ *  the span this page took — the `before` for the next older page. */
+export function foldTranscriptLeaves(events: readonly AgentEvent[], into: TranscriptLeaf[], messages: readonly AgentMessageView[] = [], page: TranscriptPagePlacement = {}): number {
+  const start = events.find(event => eventTime(event) !== undefined)
+  const from = page.olderPagesRemain === true && start !== undefined ? eventTime(start)! : Number.NEGATIVE_INFINITY
+  const until = page.before ?? Number.POSITIVE_INFINITY
+  const own = messages.filter(message => message.observedAt >= from && message.observedAt < until)
   let next = 0
   const flushMessages = (before: number): void => {
-    while (next < messages.length && messages[next]!.observedAt <= before) {
-      const message = messages[next]!
+    while (next < own.length && own[next]!.observedAt <= before) {
+      const message = own[next]!
       into.push({ kind: 'agent-message', key: `am-${message.messageId}`, message })
       next += 1
     }
   }
-  const eventTime = (event: AgentEvent): number | undefined =>
-    event.type === 'tool.call' || event.type === 'tool.result' || event.type === 'assistant.message' ? event.time : undefined
   for (const event of events) {
     const at = eventTime(event)
     if (at !== undefined) flushMessages(at)
@@ -71,18 +104,11 @@ export function foldTranscriptLeaves(events: readonly AgentEvent[], into: Transc
         const leaf = into[i]!
         if (leaf.kind === 'tool' && leaf.tool.callId === event.callId) { row = leaf; break }
       }
-      if (row === undefined) continue
-      const tool = row.tool
-      tool.durationMs = Math.max(0, event.time - tool.startedAt)
-      if (event.isError) {
-        tool.status = 'error'
-        tool.errorText = event.errorText ?? ''
-      } else {
-        tool.status = 'ok'
-        tool.resultText = event.text !== '' ? preview(event.text, RESULT_PREVIEW_LIMIT) : undefined
-        tool.resultFull = event.text !== '' ? event.text : undefined
-        tool.resultView = event.presentation as ToolRow['resultView']
+      if (row === undefined) {
+        page.orphans?.set(event.callId, event)
+        continue
       }
+      applyToolResult(row.tool, event)
       continue
     }
     if (event.type === 'assistant.message') {
@@ -106,7 +132,11 @@ export function foldTranscriptLeaves(events: readonly AgentEvent[], into: Transc
     }
   }
   flushMessages(Number.POSITIVE_INFINITY)
+  return from
 }
+
+const eventTime = (event: AgentEvent): number | undefined =>
+  event.type === 'tool.call' || event.type === 'tool.result' || event.type === 'assistant.message' ? event.time : undefined
 
 /** The transcript page's load state. `ready` keeps its rows while a newer
  *  page reloads (settlement) and while an older window prepends. */
@@ -114,7 +144,51 @@ export type TranscriptState =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'unavailable' }
-  | { status: 'ready'; agentId: string; leaves: TranscriptLeaf[]; parentAgentId: string | null; hasOlder: boolean; skippedFromStart: number; loadingOlder: boolean }
+  | ReadyTranscript
+
+/** A loaded transcript. `messagesFrom` is where the placed agent messages
+ *  start (the next older page takes the ones before it); `orphanResults`
+ *  are results on the loaded pages whose call is on a page not loaded yet. */
+export interface ReadyTranscript {
+  readonly status: 'ready'
+  readonly agentId: string
+  readonly leaves: TranscriptLeaf[]
+  readonly parentAgentId: string | null
+  readonly hasOlder: boolean
+  readonly skippedFromStart: number
+  readonly loadingOlder: boolean
+  readonly messagesFrom: number
+  readonly orphanResults: ReadonlyMap<string, ToolResultEvent>
+}
+
+/** The newest page of a child's transcript, folded. */
+export function foldNewestPage(agentId: string, page: SubagentTranscriptView, messages: readonly AgentMessageView[]): ReadyTranscript {
+  const leaves: TranscriptLeaf[] = []
+  const orphans = new Map<string, ToolResultEvent>()
+  const messagesFrom = foldTranscriptLeaves(page.events, leaves, messages, { olderPagesRemain: page.hasOlder, orphans })
+  // The newest page can itself repeat one anchor (text, tool, text of one
+  // message): its rows carry unique render keys from the start.
+  return { status: 'ready', agentId, leaves: uniqueRenderKeys(leaves), parentAgentId: page.parentAgentId, hasOlder: page.hasOlder, skippedFromStart: page.skippedFromStart, loadingOlder: false, messagesFrom, orphanResults: orphans }
+}
+
+/** One older page folded in front of a loaded transcript: its agent
+ *  messages are the ones before the loaded span, and the results the newer
+ *  pages held for its calls settle those calls' cards. */
+export function foldOlderPage(current: ReadyTranscript, page: SubagentTranscriptView, messages: readonly AgentMessageView[]): ReadyTranscript {
+  const fresh: TranscriptLeaf[] = []
+  const orphans = new Map<string, ToolResultEvent>()
+  const messagesFrom = foldTranscriptLeaves(page.events, fresh, messages, { olderPagesRemain: page.hasOlder, before: current.messagesFrom, orphans })
+  const carried = new Map(current.orphanResults)
+  for (const leaf of fresh) {
+    if (leaf.kind !== 'tool') continue
+    const result = carried.get(leaf.tool.callId)
+    if (result === undefined) continue
+    applyToolResult(leaf.tool, result)
+    carried.delete(leaf.tool.callId)
+  }
+  for (const [callId, result] of orphans) carried.set(callId, result)
+  return { ...current, leaves: prependOlderLeaves(fresh, current.leaves), hasOlder: page.hasOlder, skippedFromStart: page.skippedFromStart, loadingOlder: false, messagesFrom, orphanResults: carried }
+}
 
 /** One load-older window (messages; matches the backend's newest page). */
 export const TRANSCRIPT_OLDER_CHUNK = 400
@@ -128,10 +202,10 @@ export const OUTPUT_WINDOW_CAP = 160
 export type LiveLeaf = { kind: 'live'; line: SubagentOutputLine }
 
 /** Render keys must be unique per row: the store's block-per-entry split can
- *  legitimately repeat one anchor inside a page (a text, a tool and another
- *  text of ONE message), so a repeated key gets an ordinal suffix instead of
- *  colliding. A key collision is never a reason to drop a leaf (RV round 3).
- *  Pure — first occurrence keeps its key, later ones are copied. */
+ *  repeat one anchor inside a page (a text, a tool and another text of one
+ *  message), so a repeated key gets an ordinal suffix; a leaf is never
+ *  dropped for its key. The first occurrence keeps its key, later ones are
+ *  copied. */
 export function uniqueRenderKeys(leaves: readonly TranscriptLeaf[]): TranscriptLeaf[] {
   const seen = new Map<string, number>()
   return leaves.map(leaf => {
@@ -141,17 +215,15 @@ export function uniqueRenderKeys(leaves: readonly TranscriptLeaf[]): TranscriptL
   })
 }
 
-/** Prepend one older page's folded leaves (RV rounds 2+3). The store splits
- *  one API message into per-block entries sharing the anchor, so the ONLY
- *  place a block can be split across pages is the physical boundary: the
- *  older page's LAST leaf against the current list's FIRST leaf. Those two
- *  merge when they are the same key AND the same text/thinking kind (the
- *  fold already joined everything consecutive within a page; successive
- *  load-olders keep merging into the same head leaf). Every OTHER leaf
- *  keeps its own row in the older page's original order — a heterogeneous
- *  part under a taken key (a reasoning against a text of one message) is
- *  NEVER dropped, and a tool between two same-anchor text parts stays
- *  between them (no hoisting). Pure — no current leaf is mutated. */
+/** Prepend one older page's folded leaves. The store splits one API message
+ *  into per-block entries sharing the anchor, so a block can only be cut
+ *  across pages at the boundary: the older page's last leaf against the
+ *  current list's first. Those two merge when they share the key and the
+ *  text/thinking kind (the fold already joined everything consecutive
+ *  within a page). Every other leaf keeps its own row in the older page's
+ *  order: a different kind under the same key is kept, and a tool between
+ *  two text parts of one message stays between them. No current leaf is
+ *  mutated. */
 export function prependOlderLeaves(fresh: readonly TranscriptLeaf[], current: readonly TranscriptLeaf[]): TranscriptLeaf[] {
   let older: readonly TranscriptLeaf[] = fresh
   let head = current
@@ -180,22 +252,28 @@ const capLike = (line: string): string => (line.length > 400 ? `${line.slice(0, 
  *  history and live neither double a row nor drop a tail. */
 export function mergeLiveWindow(leaves: readonly TranscriptLeaf[], subagent: SubagentState, hasHistory: boolean): (TranscriptLeaf | LiveLeaf)[] {
   const rows: (TranscriptLeaf | LiveLeaf)[] = [...leaves]
-  for (const call of subagent.toolCalls) {
-    let leaf: Extract<TranscriptLeaf, { kind: 'tool' }> | undefined
+  subagent.toolCalls.forEach((call, callIndex) => {
+    let at = -1
     for (let i = rows.length - 1; i >= 0; i -= 1) {
       const row = rows[i]!
-      if (row.kind === 'tool' && row.tool.callId === call.id) { leaf = row; break }
+      if (row.kind === 'tool' && row.tool.callId === call.id) { at = i; break }
     }
-    if (leaf !== undefined) {
+    if (at >= 0) {
+      const leaf = rows[at] as Extract<TranscriptLeaf, { kind: 'tool' }>
+      // A copy: the history leaves are the transcript state, read again on
+      // every render — the live status only overlays them here.
       if (leaf.tool.status === 'running' && call.status !== 'running') {
-        leaf.tool.status = call.status === 'failed' ? 'error' : 'ok'
-        leaf.tool.errorText = call.error
-        leaf.tool.resultText = call.resultPreview
-        if (call.endedAt !== undefined) leaf.tool.durationMs = Math.max(0, call.endedAt - leaf.tool.startedAt)
+        rows[at] = { ...leaf, tool: {
+          ...leaf.tool,
+          status: call.status === 'failed' ? 'error' : 'ok',
+          errorText: call.error,
+          resultText: call.resultPreview,
+          ...(call.endedAt !== undefined ? { durationMs: Math.max(0, call.endedAt - leaf.tool.startedAt) } : {}),
+        } }
       }
-      continue
+      return
     }
-    rows.push({ kind: 'tool', key: call.id ?? call.name, tool: {
+    rows.push({ kind: 'tool', key: call.id ?? `live-call-${callIndex}`, tool: {
       callId: call.id ?? call.name,
       name: call.name,
       argsText: call.argsPreview ?? '',
@@ -205,7 +283,7 @@ export function mergeLiveWindow(leaves: readonly TranscriptLeaf[], subagent: Sub
       ...(call.resultPreview !== undefined ? { resultText: call.resultPreview } : {}),
       ...(call.error !== undefined ? { errorText: call.error } : {}),
     } })
-  }
+  })
   if (!hasHistory) {
     for (const line of subagent.outputEvents) rows.push({ kind: 'live', line })
     return rows
@@ -220,4 +298,63 @@ export function mergeLiveWindow(leaves: readonly TranscriptLeaf[], subagent: Sub
     rows.push({ kind: 'live', line })
   }
   return rows
+}
+
+export type TranscriptLoader = (agentId: string, window?: SubagentTranscriptWindow) => Promise<SubagentTranscriptView | null>
+
+/**
+ * The paged history of one child: loads the newest page while `active`,
+ * reloads once when `reloadKey` changes (settlement makes the disk copy
+ * final), and prepends older windows on demand.
+ *
+ * The loader and the message feed ride refs: the channel UI proxy mints a
+ * fresh loader per read, and a reload must key on what changed (the child,
+ * activation, settlement), not on a churning identity. An older window is
+ * dropped when the state it was requested for is gone (the view switched
+ * to another agent, or a reload moved the newest page under it).
+ */
+export function useSubagentTranscript(
+  loadTranscript: TranscriptLoader | undefined,
+  agentId: string,
+  active: boolean,
+  reloadKey: unknown,
+  messages: readonly AgentMessageView[],
+): { readonly transcript: TranscriptState; loadOlder(): void } {
+  const [transcript, setTranscript] = React.useState<TranscriptState>({ status: 'idle' })
+  const loaderRef = React.useRef(loadTranscript)
+  loaderRef.current = loadTranscript
+  const messagesRef = React.useRef(messages)
+  messagesRef.current = messages
+  React.useEffect(() => {
+    const load = loaderRef.current
+    if (!active || load === undefined) return
+    let alive = true
+    setTranscript(prev => prev.status === 'ready' && prev.agentId === agentId ? prev : { status: 'loading' })
+    load(agentId).then(loaded => {
+      if (!alive) return
+      setTranscript(loaded === null ? { status: 'unavailable' } : foldNewestPage(agentId, loaded, messagesRef.current))
+    }, () => { if (alive) setTranscript({ status: 'unavailable' }) })
+    return () => { alive = false }
+  }, [active, agentId, reloadKey])
+
+  const loadOlder = (): void => {
+    const load = loaderRef.current
+    if (transcript.status !== 'ready' || !transcript.hasOlder || transcript.loadingOlder || load === undefined) return
+    const requestedFor = transcript
+    const count = Math.min(TRANSCRIPT_OLDER_CHUNK, requestedFor.skippedFromStart)
+    setTranscript(prev => prev === requestedFor ? { ...prev, loadingOlder: true } : prev)
+    const current = (prev: TranscriptState): prev is ReadyTranscript =>
+      prev.status === 'ready' && prev.agentId === requestedFor.agentId && prev.skippedFromStart === requestedFor.skippedFromStart
+    load(requestedFor.agentId, { count, skipFromStart: requestedFor.skippedFromStart }).then(older => {
+      setTranscript(prev => {
+        if (!current(prev)) return prev
+        if (older === null) return { ...prev, loadingOlder: false }
+        return foldOlderPage(prev, older, messagesRef.current)
+      })
+    }, () => {
+      setTranscript(prev => current(prev) ? { ...prev, loadingOlder: false } : prev)
+    })
+  }
+
+  return { transcript, loadOlder }
 }

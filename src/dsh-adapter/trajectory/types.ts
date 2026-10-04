@@ -136,8 +136,8 @@ export interface TrajNode {
    */
   seed?: boolean
   /**
-   * The subagent a `subagent/descriptor` row names — the drilldown anchor
-   * (design ④ 完整档). Present only when the emitting source knew the id
+   * The subagent a `subagent/descriptor` row names — the drilldown anchor.
+   * Present only when the emitting source knew the id
    * (the neutral AgentEvent fold); DSH descriptor payloads predate the
    * field and their rows simply carry none.
    */
@@ -148,8 +148,8 @@ export interface TrajNode {
 export const BURST_MIN = 3
 
 /**
- * One trajectory drilldown lane (design agent-team-panels §④ 完整档) — the
- * ports module owns the vocabulary (same layering as {@link RawTrajEvent});
+ * One trajectory drilldown lane. The ports module owns the vocabulary
+ * (same layering as {@link RawTrajEvent});
  * re-exported here so the trajectory barrel stays the UI's single import.
  */
 export type { TrajectoryLane } from '../../adapter/ports/channel-view.js'

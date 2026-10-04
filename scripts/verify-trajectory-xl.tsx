@@ -1,5 +1,6 @@
 /**
- * Trajectory XL regression (design agent-team-panels.md §4 完整档):
+ * Trajectory regression for wait details, cross-agent drilldown and long-
+ * session windowing:
  *  1. approval/question wait-segment detail — asked-time source/options
  *     survive the fold, the inspector renders response (paired ask-tool
  *     result) + source + question snapshots, a waiting row shows a LIVE
@@ -139,8 +140,8 @@ try {
     const response = q.sections.find(section => section.title === 'response')?.body
     check('wait/raw: settled answer recovered from the paired ask-tool result', response === 'Fast; None', String(response))
     check('wait/raw: the paired result adds no orphan tool row', rowsOf(build, 'tool').length === 0)
-    // An unreadable owning event degrades honestly instead of silently
-    // showing nothing (design §4 i18n trajectory-inspect-unavailable).
+    // An unreadable owning event says so (trajectory-inspect-unavailable)
+    // instead of silently showing nothing.
     const toolEvents: Record<string, unknown>[] = [
       ev('tool/call', { turn: 1, step: 1, callId: 'cx', name: 'Read', arguments: '{}' }),
     ]

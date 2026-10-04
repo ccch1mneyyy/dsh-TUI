@@ -89,9 +89,9 @@ export function SidePanelColumn({ width, controller, channel, activity, attentio
   // ⤢ 只对「活动面板 + 声明了整屏形态 + 宿主接了出口」出现：能力位是
   // 声明的唯一真源，没有整屏对应物的面板（info/companion）不画。
   const activeEntry = entries.find(entry => entry.definition.id === controller.activePanelId)
-  // 三态契约（设计 §④）：轨迹的整屏出口在 unsupported 后端上收起——数据源
-  // 都没挂，全屏只会放大同一句「尚未适配」；面板自己的 unsupported 文案
-  // 说明禁用原因。报告缺位（旧夹具/部分 channel）= 旧行为，不收起。
+  // 没有轨迹来源（unsupported）时收起轨迹的 ⤢：全屏只会放大同一句「不支
+  // 持」，面板自己的文案说明了原因。channel 不报告来源（旧夹具/部分
+  // channel）时照旧显示。
   // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: partial fixture channels
   const trajectoryUnsupported = controller.activePanelId === 'trajectory' && channel.trajectorySource?.() === 'unsupported'
   const canExpand = activeEntry?.definition.capabilities?.fullscreen === true && onExpand !== undefined && !trajectoryUnsupported

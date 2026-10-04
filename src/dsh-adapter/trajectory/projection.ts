@@ -138,9 +138,8 @@ interface FoldState {
   /** Live turn context for events that carry none. */
   turn: number
   /** Turns whose rows already carry message-level usage: a turn-level
-   * report arriving on top of them is a second accounting of the same
-   * tokens and must NOT attach anywhere (the no-double-count rule of
-   * design ④; see the turn/end backfill). */
+   * report arriving on top of them counts the same tokens again and must
+   * not attach anywhere (see the turn/end backfill). */
   tokenTurns: Set<number>
   /** Live step context; cleared at `step/end`. */
   step: number | undefined
@@ -385,7 +384,7 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
       close(state, open, event, kind === 'completed' ? 'ok' : 'error', typeof kind === 'string' && kind !== 'completed' ? kind : undefined)
       // Turn-level usage (the close event's own accounting) backfills the
       // turn row ONLY when no message of the turn carried usage — the two
-      // levels describe the same tokens (design ④: 分清，不双计). DSH
+      // levels describe the same tokens, so they never add up. DSH
       // turn/end payloads carry no usage, so this arm stays closed for
       // every DSH log.
       const usage = readTokens(data?.usage)

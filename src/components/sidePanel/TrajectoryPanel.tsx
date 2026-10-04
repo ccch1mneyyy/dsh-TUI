@@ -62,9 +62,8 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
   const channel = React.useContext(SidePanelRuntimeContext)?.channel
   const mainBuild = useSidePanelTrajectory()
   const build = mainBuild ?? EMPTY_BUILD
-  // 跨 Agent 下钻（设计 ④ 完整档）：面板与全屏场景共用同一个 scope 数据
-  // 面——波形/账本/检查器随 scope 整体切换，不会出现会话波形盖在 lane
-  // 账本上的混搭。Esc 不归面板（v2.1 契约），范围循环走 a 键与 chip 点击。
+  // 跨 Agent 下钻：面板与全屏场景共用同一个 scope 数据面，波形/账本/检视器
+  // 随 scope 一起切换。面板不消费 Esc，范围循环走 a 键与 chip 点击。
   const { scope, lanes, scoped, drill } = useTrajectoryScope(channel, build)
   const nodes = scoped.build.nodes
   // The empty-state copy promises "data once turns happen" — that is only
@@ -148,8 +147,8 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
   const ledgerRows = Math.max(1, height - CHROME_ROWS - inspectorRows)
 
   const clampedCursor = filtered.length === 0 ? 0 : Math.min(cursor, filtered.length - 1)
-  // The shared windowing math (design ④ 完整档 长会话虚拟化), identical to
-  // the scene's: one viewport's worth of rows at any session length.
+  // The same windowing as the scene: one viewport's worth of rows at any
+  // session length.
   const windowStart = ledgerWindow(filtered.length, clampedCursor, ledgerRows).start
 
   const band = React.useMemo(
@@ -289,9 +288,9 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
         setSwitchTick(tick)
         return true
       }
-      // 跨 Agent 下钻（设计 ④ 完整档）：会话范围内 a 下钻焦点行所指的
-      // lane；范围内则循环 当前 Agent → 父回合 → 全部后代 → 会话。面板
-      // 不消费 Esc（v2.1 契约），循环也可以点 scope chip。
+      // 会话范围内 a 下钻到焦点行所指的 lane；已在范围内则循环
+      // 当前 Agent → 父回合 → 全部后代 → 会话。面板不消费 Esc，循环也可以
+      // 点 scope chip。
       if (input === 'a' && !key.ctrl && !key.meta && lanes.length > 0) {
         drill(filtered[clampedCursor])
         return true
@@ -314,16 +313,14 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
   )
   usePanelInput(onKey, { active: focused && visible })
 
-  // ── unsupported state (design §④ 轨迹裁决) ─────────────────────────────────
-  // The channel's trajectorySource() report decides, never the node count:
-  // a composition that mounted no source must not masquerade as "no turns
-  // yet". Every in-tree composition mounts one (DSH: raw history; other
-  // backends: the AgentEvent fold), so this arm is the structural guard —
-  // fixtures still exercise it. The copy names the gap, promises no future
-  // data, and the ⤢ outlet is gone (SidePanelColumn hides it) — the
-  // fullscreen line below explains why instead of leaving a dead button.
-  // Tolerant read: headless fallback probes mount this panel with a partial
-  // channel, and absence of the report means "legacy channel" = old behavior.
+  // ── unsupported state ──────────────────────────────────────────────────────
+  // The channel's trajectorySource() decides, not the node count: a session
+  // with no trajectory source must not read as "no turns yet". Every
+  // in-tree composition mounts one (DSH: raw history; other backends: the
+  // AgentEvent fold), so only fixtures reach this branch today. The ⤢
+  // outlet is hidden for it (SidePanelColumn) and the second line says
+  // why. A channel without the report (partial fixtures) keeps the old
+  // behavior.
   const source = channel?.trajectorySource?.()
   if (source === 'unsupported') {
     // Copy selection only (the STATE above is structural): the Claude
@@ -371,7 +368,7 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
   // ── tabs row: two clickable segments + the axis label (cycle on click) ───
   const tabTimelineText = `${view === 'timeline' ? '●' : '○'} ${t('traj-tab-timeline')}`
   const tabHotspotText = `${view === 'hotspot' ? '●' : '○'} ${t('traj-tab-hotspot')}`
-  // The scope chip (design ④ 完整档): shown exactly while a non-session scope
+  // The scope chip: shown exactly while a non-session scope
   // is active; its width is charged to the axis label's budget so a narrow
   // panel drops the axis before it drops the scope identity.
   const scopeChip = scopeChipParts(scope)

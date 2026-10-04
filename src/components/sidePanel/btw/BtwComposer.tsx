@@ -1,20 +1,16 @@
 /**
- * BtwComposer：btw 线程的追问输入框（设计 btw-panel.md §交互规格）。
+ * BtwComposer：btw 线程的追问输入框。草稿存在线程 store 里（面板与全屏
+ * 共享），Enter 发送，Esc 退出编辑焦点但保留草稿，失败或忙时草稿原样保留。
+ * 没有 steer/queue：sideQuery 是一次旁路问答，不进父会话。
  *
- * 照 AgentMessageComposer 的**交互模式**实现（team-ui 参考，类型不兼容
- * 不直接 import——设计 §当前接缝已注明）：独立草稿（存线程 store，跨
- * 面板/全屏共享）、Enter 发送、Esc 退出编辑焦点但保留草稿、失败/忙时
- * 草稿原样保留。无 steer/queue 选项——sideQuery 是旁路单轮，不是父
- * 会话投递。
- *
- * 键处理是**纯函数** btwComposerKey：面板形态（usePanelInput 分发）与
- * 全屏场景（useInput）两条路径共用同一份语义；组件本身受控渲染
- * （text 在 store，caret 是各 surface 的本地态）。
+ * 键处理是纯函数 btwComposerKey，面板（usePanelInput 分发）与全屏场景
+ * （useInput）共用；组件本身受控渲染（text 在 store，caret 是各处自己的）。
  */
 import React from 'react'
 import { Box, Text } from '../../../ui.js'
 import { t } from '../../../i18n.js'
 import type { SidePanelKeyFlags } from '../types.js'
+import { nextCodePoint, previousCodePoint } from '../../AgentMessageComposer.js'
 
 /** 编辑态（text 来自线程 store；caret 属于当前 surface）。 */
 export interface BtwComposerState {
@@ -22,7 +18,7 @@ export interface BtwComposerState {
   readonly caret: number
 }
 
-/** btwComposerKey 的裁决：undefined 字段 = 无此动作；null 整体 = 键未消费。 */
+/** btwComposerKey 的结果：undefined 字段 = 无此动作；整体为 null = 键未消费。 */
 export interface BtwComposerKeyResult {
   readonly state?: BtwComposerState
   readonly submit?: boolean
@@ -46,21 +42,25 @@ type BtwKeyFlags = SidePanelKeyFlags & {
  */
 export function btwComposerKey(state: BtwComposerState, input: string, key: BtwKeyFlags): BtwComposerKeyResult | null {
   if (key.escape === true) return { exitFocus: true }
+  // The caret is per surface while the draft is shared through the store:
+  // an edit on the other surface can leave this caret past the end.
+  const caret = Math.min(state.caret, state.text.length)
   const plainReturn = (key.return_ === true || key.return === true || /^[\r\n]+$/u.test(input))
     && key.ctrl !== true && key.meta !== true && key.shift !== true
   if (plainReturn) return { submit: true }
   // Tab 离开编辑层去列表（与 TrajectoryPanel 同款双形态判定）。
   if (key.tab === true || input === '\t') return { exitFocus: true }
   if (key.backspace === true || key.delete === true) {
-    if (state.caret <= 0) return { state }
-    return { state: { text: state.text.slice(0, state.caret - 1) + state.text.slice(state.caret), caret: state.caret - 1 } }
+    if (caret <= 0) return { state: { ...state, caret } }
+    const at = previousCodePoint(state.text, caret)
+    return { state: { text: state.text.slice(0, at) + state.text.slice(caret), caret: at } }
   }
-  if (key.leftArrow === true) return { state: { ...state, caret: Math.max(0, state.caret - 1) } }
-  if (key.rightArrow === true) return { state: { ...state, caret: Math.min(state.text.length, state.caret + 1) } }
+  if (key.leftArrow === true) return { state: { ...state, caret: previousCodePoint(state.text, caret) } }
+  if (key.rightArrow === true) return { state: { ...state, caret: nextCodePoint(state.text, caret) } }
   if (key.home === true) return { state: { ...state, caret: 0 } }
   if (key.end === true) return { state: { ...state, caret: state.text.length } }
   if (input !== '' && key.ctrl !== true && key.meta !== true) {
-    return { state: { text: state.text.slice(0, state.caret) + input + state.text.slice(state.caret), caret: state.caret + input.length } }
+    return { state: { text: state.text.slice(0, caret) + input + state.text.slice(caret), caret: caret + input.length } }
   }
   return null
 }

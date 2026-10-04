@@ -238,7 +238,7 @@ export interface SubagentPayload {
   readonly label?: string
   readonly model?: string
   readonly mode?: string
-  /** The child's agent id — the trajectory drilldown's anchor (design ④ XL). */
+  /** The child's agent id — the trajectory drilldown's anchor. */
   readonly agentId?: string
 }
 
@@ -256,8 +256,8 @@ export function readSubagent(data: unknown): SubagentPayload | undefined {
 /**
  * An `approval/asked` payload. `id` pairs it with the `approval/decided`.
  *
- * The wait-detail fields (design agent-team-panels §④ 完整档) are optional
- * ask-time presentation: the settled event carries only the outcome, so the
+ * The wait-detail fields are optional ask-time presentation: the settled
+ * event carries only the outcome, so the
  * source that still knows the choices and the asker must record them here or
  * they are lost. DSH logs predate the fields — the guard reads them
  * tolerantly and DSH rows simply render without them.

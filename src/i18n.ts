@@ -1609,6 +1609,7 @@ const dict = {
   'subagent-hint-page': { zh: '切页', en: 'page' },
   'subagent-hint-scroll': { zh: '滚动', en: 'scroll' },
   'subagent-hint-back': { zh: '返回', en: 'back' },
+  'subagent-hint-compose': { zh: '发消息', en: 'compose' },
   'subagent-empty-hint': { zh: '让主代理发起 Task 后，子代理会出现在这里', en: 'Subagents appear here once the main agent starts Task delegations' },
 
   // ── agent team：子代理转录视图、发消息输入框、消息流 ──
@@ -1650,8 +1651,6 @@ const dict = {
   'agent-view-select-sibling-focused': { zh: '↑↓ 选择 · ⏎ 切换 · Esc 退出面板', en: '↑↓ select · ⏎ switch · Esc leave panel' },
   // 代理面板里「其他会话的代理」一栏
   'agents-peers-title': { zh: '其他会话的代理', en: 'agents in other sessions' },
-  'agents-peers-unsupported': { zh: '当前内核不提供这份列表', en: 'not provided by this kernel' },
-  'agents-peers-unsupported-panel': { zh: '其他会话的代理：当前内核不提供', en: 'agents in other sessions: not provided by this kernel' },
   'agents-peers-empty': { zh: '列表为空', en: 'none' },
   'agents-peers-note': { zh: '无法从这里给其他会话的代理发消息', en: 'agents in other sessions cannot be messaged from here' },
   'subagent-count-nested': { zh: '嵌套', en: 'nested' },

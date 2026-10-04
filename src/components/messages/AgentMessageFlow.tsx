@@ -17,10 +17,9 @@ function partyLabels(message: AgentMessageView, selfAgentId: string): { from?: s
 }
 
 /**
- * The Messages page row (design §5.4 Detail): sender, target, body preview,
- * transport, state and sourceRef — one fact per durable message, newest
- * last. An endpoint pair the view cannot prove renders the unknown-relation
- * diagnostic WITHOUT the from→to arrow.
+ * One row of the Detail Messages page: sender, target, body, transport,
+ * state and sourceRef, newest last. Without both endpoints it shows the
+ * unknown-relation line and no arrow.
  */
 export function AgentMessageFlowRow({ message, selfAgentId }: {
   message: AgentMessageView
@@ -67,9 +66,8 @@ export function AgentMessageFlowRow({ message, selfAgentId }: {
 }
 
 /**
- * The dashboard/card summary line (design §5.4): the newest flow fact as one
- * dim `⇄ from → to · state` row under the agent's card. No unread count is
- * fabricated here — unseen tracking belongs to the panel badge wiring.
+ * The newest message as one dim `⇄ from → to · state` line under an agent's
+ * dashboard card (no unread count: that is the panel badge's job).
  */
 export function AgentMessagesSummary({ messages, selfAgentId }: {
   messages: readonly AgentMessageView[]

@@ -1,18 +1,13 @@
 import React from 'react'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize } from '../ui.js'
 import type { SubagentState } from '../dsh-adapter/subagents.js'
-import type { SubagentTranscriptView } from '../adapter/ports/channel-view.js'
-import type { SubagentTranscriptWindow } from '../agent/capabilities.js'
 import { AgentMessageLeafRow, AssistantTextLeafRow, ThinkingLeafRow, ToolLeafRow } from '../components/messages/TranscriptLeaves.js'
 import {
-  foldTranscriptLeaves,
   mergeLiveWindow,
   OUTPUT_WINDOW_CAP,
-  prependOlderLeaves,
   TRANSCRIPT_OLDER_CHUNK,
-  uniqueRenderKeys,
-  type TranscriptLeaf,
-  type TranscriptState,
+  useSubagentTranscript,
+  type TranscriptLoader,
 } from '../components/messages/subagentTranscript.js'
 import { AgentMessageComposer } from '../components/AgentMessageComposer.js'
 import { ExitButton } from '../components/SubagentDashboard.js'
@@ -20,9 +15,8 @@ import { t } from '../i18n.js'
 import type { AgentComposeTarget, AgentMessageControl, AgentMessageView, AgentViewSource } from '../components/messages/agentTeam.js'
 import { agentNeighbourhood, type AgentParentFact } from '../components/messages/agentTeam.js'
 
-/** The workbench side panel appears at all only on wide screens (design
- *  agent-team-panels §3 P3: the 28/40-column contracts of the P1 view are
- *  untouched — below the threshold the layout is byte-identical to P1). */
+/** The workbench rail only appears on wide terminals; below this the view
+ *  is the single transcript column. */
 const WORKBENCH_MIN_COLUMNS = 96
 const WORKBENCH_PANEL_COLUMNS = 30
 const WORKBENCH_TOOL_ROWS = 5
@@ -59,9 +53,8 @@ function AgentSwitchRow({ agent, selected, onSelect }: { readonly agent: Subagen
   )
 }
 
-/** The parent line: only facts (agent-team §2) — a named parent, the main
- *  loop (depth-1 proof), or an honest unknown. A parent the roster lost is
- *  named but not switchable. */
+/** The parent line: a named parent, the main loop (depth 1), or unknown —
+ *  never a guess. A parent the roster lost is named but not switchable. */
 function AgentParentRow({ fact, rosterIds }: { readonly fact: AgentParentFact; readonly rosterIds: ReadonlySet<string> }): React.ReactNode {
   if (fact.kind === 'main') return <Text dimColor>{'  ' + t('agent-view-parent-main')}</Text>
   if (fact.kind === 'unknown') return <Text dimColor>{'  ' + t('agent-view-parent-unknown')}</Text>
@@ -79,22 +72,21 @@ export interface AgentTranscriptSceneProps {
   /** The child this view reads. Readonly by contract — the scene never
    *  mutates the roster, the Channel or the parent's queues. */
   readonly subagent: SubagentState
-  /** Where Esc returns to (design §4.1 source stack). */
+  /** Where Esc returns to. */
   readonly source: AgentViewSource
   onExit(): void
-  /** The child's full transcript source (`subagentControl.history`).
-   *  Absent = no transcript data plane (DSH today): a bounded live tail plus
-   *  its retained-range note — never a fabricated empty history. */
-  loadTranscript?: (agentId: string, window?: SubagentTranscriptWindow) => Promise<SubagentTranscriptView | null>
+  /** The child's full transcript (`subagentControl.history`). Absent = no
+   *  transcript source: the bounded live tail with its retained-range note,
+   *  not an empty history. */
+  loadTranscript?: TranscriptLoader
   /** The durable agent↔agent feed for this child (newest last), if any. */
   readonly messages?: readonly AgentMessageView[]
-  /** The channel's message control + resolved target (`subagentControl.message`);
-   *  absent = no send path → no composer rendered (capability absence is
-   *  absence). */
+  /** The channel's message control + resolved target
+   *  (`subagentControl.message`); absent = no composer. */
   readonly compose?: { readonly control: AgentMessageControl; readonly target: AgentComposeTarget }
-  /** The session roster (workbench P3): drives the right-side panel's
-   *  metadata/tools/parent sections and the sibling switcher. Absent (or a
-   *  narrow terminal) = the P1 single-column layout, byte-identical. */
+  /** The session roster: drives the workbench rail (metadata, tools,
+   *  parent, sibling switcher). Absent, or a narrow terminal = the single
+   *  transcript column. */
   readonly roster?: readonly SubagentState[]
   /** Switch the viewed agent IN PLACE (sibling/parent navigation): the
    *  source stack is preserved — Esc still returns to the original entry
@@ -103,71 +95,38 @@ export interface AgentTranscriptSceneProps {
 }
 
 /**
- * AgentTranscriptScene — the main-screen READ-ONLY agent view (design
- * agent-team-full §4): a scene layer over the mounted parent Chat, not a
- * second Channel. The parent's rows/draft/pending/usage keep living while
- * this scene borrows the screen; Esc pops the source stack (chat /
- * agents-dashboard / agent-detail / transcript-card). The body reuses the
- * F8 fold/page/merge pipeline so a child row reads exactly like a main
- * one, with the live SubagentState tail merged in and one settlement
- * reload — no Channel rebuild, no attach/resume side effects.
+ * The main-screen read-only view of one subagent: a scene over the mounted
+ * parent Chat, not a second Channel. The parent's rows, draft, pending
+ * queue and usage keep living underneath; Esc returns to where the view
+ * was opened from (chat, agents dashboard, agent detail, transcript card).
+ * The body uses the same transcript pager as the Detail page, with the
+ * live SubagentState tail merged in.
  */
 export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript, messages = [], compose, roster, onSwitchAgent }: AgentTranscriptSceneProps): React.ReactNode {
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
+  const followRef = React.useRef(true)
+  React.useEffect(() => {
+    const handle = scrollRef.current
+    if (handle === null) return undefined
+    return handle.subscribe(() => { followRef.current = handle.isSticky() })
+  }, [])
   const { rows, columns } = useTerminalSize()
   const isRunning = subagent.status === 'running' || subagent.status === 'starting'
 
-  // ── workbench side panel (P3): only on wide terminals, and only with a
-  // roster. Everything below degrades to the P1 view when absent. ─────────
+  // ── workbench rail: only on wide terminals, and only with a roster ──────
   const panelEnabled = roster !== undefined && columns >= WORKBENCH_MIN_COLUMNS
   const [panelFocused, setPanelFocused] = React.useState(false)
   const [siblingCursor, setSiblingCursor] = React.useState(0)
 
-  // ── history pages (same loader contract as the Detail transcript page) ──
-  const [transcript, setTranscript] = React.useState<TranscriptState>({ status: 'idle' })
+  // ── history pages (the same pager the Detail transcript page uses) ──
   const [expandedLeaf, setExpandedLeaf] = React.useState<string | null>(null)
-  const loaderRef = React.useRef(loadTranscript)
-  loaderRef.current = loadTranscript
-  const messagesRef = React.useRef(messages)
-  messagesRef.current = messages
   const agentId = subagent.agentId
-  React.useEffect(() => {
-    if (loaderRef.current === undefined) return
-    const load = loaderRef.current
-    let alive = true
-    setExpandedLeaf(null)
-    setTranscript(prev => prev.status === 'ready' && prev.agentId === agentId ? prev : { status: 'loading' })
-    load(agentId).then(loaded => {
-      if (!alive) return
-      if (loaded === null) { setTranscript({ status: 'unavailable' }); return }
-      const leaves: TranscriptLeaf[] = []
-      foldTranscriptLeaves(loaded.events, leaves, messagesRef.current)
-      setTranscript({ status: 'ready', agentId, leaves: uniqueRenderKeys(leaves), parentAgentId: loaded.parentAgentId, hasOlder: loaded.hasOlder, skippedFromStart: loaded.skippedFromStart, loadingOlder: false })
-    }, () => { if (alive) setTranscript({ status: 'unavailable' }) })
-    return () => { alive = false }
-    // Settlement makes the disk copy final: the isRunning flip reloads once.
-  }, [agentId, isRunning])
+  // Settlement makes the disk copy final: the isRunning flip reloads once.
+  const { transcript, loadOlder } = useSubagentTranscript(loadTranscript, agentId, true, isRunning, messages)
+  React.useEffect(() => { setExpandedLeaf(null) }, [agentId, isRunning])
 
-  const loadOlder = (): void => {
-    if (transcript.status !== 'ready' || !transcript.hasOlder || transcript.loadingOlder || loaderRef.current === undefined) return
-    const load = loaderRef.current
-    const count = Math.min(TRANSCRIPT_OLDER_CHUNK, transcript.skippedFromStart)
-    setTranscript({ ...transcript, loadingOlder: true })
-    load(transcript.agentId, { count, skipFromStart: transcript.skippedFromStart }).then(older => {
-      setTranscript(prev => {
-        if (prev.status !== 'ready' || older === null) return older === null && prev.status === 'ready' ? { ...prev, loadingOlder: false } : prev
-        const fresh: TranscriptLeaf[] = []
-        foldTranscriptLeaves(older.events, fresh, messagesRef.current)
-        return { ...prev, leaves: prependOlderLeaves(fresh, prev.leaves), hasOlder: older.hasOlder, skippedFromStart: older.skippedFromStart, loadingOlder: false }
-      })
-    }, () => {
-      setTranscript(prev => prev.status === 'ready' ? { ...prev, loadingOlder: false } : prev)
-    })
-  }
-
-  // ── workbench neighbourhood (P3): the transcript's own parent fact wins
-  // once loaded (the durable disk copy); until then the roster's fields
-  // speak (agentNeighbourhood's resolution order, W1-verified). ───────────
+  // ── workbench neighbourhood: the loaded transcript's parent fact wins
+  // (the disk copy); until it loads the roster's fields speak. ────────────
   const transcriptParent = transcript.status === 'ready' ? transcript.parentAgentId : undefined
   const neighbourhood = React.useMemo(
     () => roster === undefined ? { parent: { kind: 'unknown' } as const, siblings: [] as readonly SubagentState[] } : agentNeighbourhood(subagent, roster, transcriptParent),
@@ -192,17 +151,17 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
   // the previously viewed agent lingers above the fold.
   React.useEffect(() => {
     setSiblingCursor(0)
+    followRef.current = true
     scrollRef.current?.scrollTo(0)
   }, [agentId])
 
   // ── keyboard: the scene owns the whole screen while open ────────────────
   const [composerFocused, setComposerFocused] = React.useState(true)
   useInput((input, key, event) => {
-    // The workbench panel layer: while focused it owns every key — the
-    // arrows walk the switch targets, Enter switches in place, Esc/Tab hand
-    // focus back (Esc here deliberately does NOT exit the scene: the panel
-    // is one focus layer inside it, §6's Esc ladder gets its exit only when
-    // no inner layer holds focus).
+    // The focused workbench rail owns every key: the arrows walk the switch
+    // targets, Enter switches in place, Esc/Tab hand focus back. Esc here
+    // does not exit the scene — that happens only when no inner layer
+    // holds focus.
     if (panelFocused && panelEnabled) {
       event.stopImmediatePropagation()
       if (key.escape || key.tab) {
@@ -221,17 +180,16 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
       }
       return
     }
-    // Tab enters the workbench panel when it exists (the composer takes no
-    // Tab — its editor has no tab stops), P1 layouts never see this branch.
+    // Tab enters the workbench rail when it exists (the composer editor has
+    // no tab stops).
     if (key.tab && panelEnabled) {
       event.stopImmediatePropagation()
       setPanelFocused(true)
       setComposerFocused(false)
       return
     }
-    // The composer editor layer owns plain typing while focused (§6.5: the
-    // scene still takes the vertical arrows — transcript scrolling never
-    // dies behind a focused editor).
+    // A focused composer owns plain typing; the scene still takes the
+    // vertical arrows so the transcript keeps scrolling.
     if (composerFocused && compose !== undefined) {
       if (key.pageUp || key.pageDown) {
         event.stopImmediatePropagation()
@@ -277,46 +235,51 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
     event.stopImmediatePropagation()
   }, { isActive: true })
 
-  // tail -f while the child runs (the Detail transcript page's rhythm).
+  // Follow the tail while the child runs, until the user scrolls away from
+  // the bottom (wheel, arrows, page keys); back at the bottom it follows
+  // again. The subscription reads the sticky bit when the scroll settles,
+  // so the view's own scrollTo/scrollToBottom calls land correctly too.
   const tailLength = subagent.outputEvents.length
   React.useEffect(() => {
-    if (!isRunning) return
-    scrollRef.current?.scrollToBottom()
+    const handle = scrollRef.current
+    if (!isRunning || handle === null) return
+    if (followRef.current || handle.isSticky()) handle.scrollToBottom()
   }, [isRunning, tailLength])
 
   const headerWidth = Math.max(20, columns - 8)
   const headerLabel = `${t('subagent-card-prefix')}${subagent.description}`
-  // live/history 说的是数据面真相：无 history capability 时不自称 history
-  // （只剩有界 tail，范围标注自己解释）。
+  // 没有 history 来源时不标 history（只剩有界 tail，由范围说明解释）。
   const liveBadge = isRunning ? t('agent-view-live') : loadTranscript === undefined ? '' : t('agent-view-history')
   const hasHistory = loadTranscript !== undefined && transcript.status === 'ready'
+  // Narrow terminals keep the agent's name: read-only and the short id are
+  // repeated below the header, so they are the first to go.
+  const headerBadges = headerWidth < 64
+    ? (liveBadge === '' ? '' : ` · ${liveBadge}`)
+    : `${liveBadge === '' ? '' : ` · ${liveBadge}`} · ${t('agent-view-readonly')} · id ${agentId.slice(0, 8)}`
   const fallbackTail = subagent.outputEvents
   const retained = fallbackTail.length >= OUTPUT_WINDOW_CAP
 
   return (
     <Box flexDirection="column" paddingX={2} paddingY={1}>
-      {/* Header: identity + range + readonly (28/40-column safe: one
-       *  truncating line, badges flexShrink=0). */}
+      {/* Header: identity + live/history + read-only, one truncating line. */}
       <Box flexDirection="row" gap={1}>
-        <Text color="accent" bold>⤢</Text>
-        <Text bold wrap="truncate-end">{headerLabel}</Text>
-        <Box flexShrink={0}><Text dimColor>{liveBadge === '' ? ` · ${t('agent-view-readonly')} · id ${agentId.slice(0, 8)}` : ` · ${liveBadge} · ${t('agent-view-readonly')} · id ${agentId.slice(0, 8)}`}</Text></Box>
+        <Box flexShrink={0}><Text color="accent" bold>⤢</Text></Box>
+        <Box flexShrink={1} minWidth={0}><Text bold wrap="truncate-end">{headerLabel}</Text></Box>
+        <Box flexShrink={0}><Text dimColor>{headerBadges}</Text></Box>
         <Box flexGrow={1} />
-        <ExitButton onClick={onExit} />
+        <Box flexShrink={0}><ExitButton onClick={onExit} /></Box>
       </Box>
       <Text dimColor wrap="truncate-end">{`${t('agent-view-title')} · ${sourceLabel(source)} · ${t('agent-view-back')}: Esc${headerWidth < 44 ? '' : ` · ↑/↓ ${t('subagent-hint-scroll')} · o ${t('subagent-transcript-load-older', { count: TRANSCRIPT_OLDER_CHUNK })}`}`}</Text>
 
-      {/* Body: the transcript column, plus the workbench panel on wide
-       * terminals (P3). The panel is a LEFT-bordered rail — it never
-       * reflows the transcript's own wrapping, and below the width
-       * threshold this whole row collapses to the P1 single column. */}
+      {/* Body: the transcript column, plus the workbench rail on wide
+       * terminals. */}
       <Box flexDirection="row" paddingX={1} maxHeight={Math.max(10, rows - (compose !== undefined ? 12 : 6))}>
-        <Box flexDirection="column" flexGrow={1} minWidth={44}>
+        <Box flexDirection="column" flexGrow={1} minWidth={panelEnabled ? 44 : 0}>
         <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
           {loadTranscript === undefined ? (
             <Box flexDirection="column">
-              {/* No transcript data plane: the honest bounded tail + retained
-               *  range note; no fake Transcript tab, no empty-history pose. */}
+              {/* No transcript source: the bounded tail and its retained
+               *  range note. */}
               <Text dimColor>{t('agent-view-no-transcript')}</Text>
               {retained && (
                 <Text dimColor>{t('agent-view-retained-tail', { count: fallbackTail.length })}</Text>
@@ -431,10 +394,9 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
         )}
       </Box>
 
-      {/* Composer: capability-driven; the scene yields plain typing to it.
-       *  Keyed by the target agent: a sibling switch remounts the editor —
-       *  the previous target's draft NEVER travels to the new target (the
-       *  no-mixing rule of the P3 workbench). */}
+      {/* Composer, when there is a send path. Keyed by the target agent: a
+       *  sibling switch remounts the editor, so a draft never moves to
+       *  another agent. */}
       {compose !== undefined && (
         <Box flexDirection="column" marginTop={1}>
           <AgentMessageComposer
@@ -463,13 +425,11 @@ function PanelMetaRow({ label, value }: { readonly label: string; readonly value
 }
 
 /**
- * WorkbenchPanel - the right rail of the full workbench (design
- * agent-team-panels §3 P3): metadata, the tool records the roster kept
- * (with the backend's own report when it stated one), and the parent /
- * sibling neighbourhood. Switching happens IN PLACE through the caller's
- * onSwitch - the panel never mutates the roster, the Channel, or the
- * source stack, and facts that are absent render as absent (an unknown
- * parent stays unknown; no tree is inferred from depth).
+ * The workbench rail: metadata, the tool records the roster kept (with the
+ * backend's own count when it reported one), and the parent / sibling
+ * neighbourhood. Switching goes through the caller's onSwitch; the rail
+ * never touches the roster, the Channel or the source stack, and an
+ * unknown parent stays unknown.
  */
 function WorkbenchPanel({ subagent, parent, parentRow, rosterIds, siblings, switchTargets, cursor, focused, onSwitch }: {
   readonly subagent: SubagentState

@@ -1,21 +1,16 @@
 /**
- * btw 线程 store（设计 btw-panel.md §线程状态）：sideQuery 的问答线程是
- * 纯 UI 暂态——按 session id 隔离、仅内存、进程重启即清空，绝不写主
- * session record（DSH SessionEvent / Claude JSONL 一概不碰）。每次追问
- * 显式携带最近 N 组完成问答（字符预算有界，按完整轮次从最旧裁剪），
- * 新话题清线程并 abort 在途回路。
+ * btw 线程 store：sideQuery 的问答线程只是 UI 状态——按 session id 隔离、
+ * 只在内存里、进程重启即清空，不写会话记录（DSH SessionEvent / Claude
+ * JSONL 都不碰）。每次追问带上最近 N 组完成的问答（有字符预算，按整轮从
+ * 最旧裁剪）；新话题清空线程并中止在途的一轮。
  *
- * 合同保全（capabilities.ts sideQuery：一次无工具单答案旁路调用）：
- * - submit 只经调用方注入的 ask（= channel.sideQuestion）发起**一次**
- *   调用，prompt 由 sideThreadQuestion 拼好整段作为 question 传入——
- *   两个后端的单问包装合同逐字节不变；
- * - 本模块不 import 任何后端，也没有 submit/steer/pushLocal 一类主
- *   会话写入口，结构上写不了转录。
+ * sideQuery 仍是一次无工具的单答调用：submit 只经调用方传入的 ask
+ * （= channel.sideQuestion）调用一次，上下文由 sideThreadQuestion 拼进
+ * question。本模块不 import 后端，也没有任何写主会话的入口。
  *
- * 竞态与并发：每线程最多一条 in-flight ask（busy 拒绝，不隐式取消）；
- * 全局并发上限 2（跨 session 的旧线程在切换后仍可流完）。代际守卫：
- * 每次写回前核对 thread generation 与 turn phase——新话题清线程或
- * abort 之后迟到的 onText/result 一律丢弃。
+ * 并发：每个线程最多一轮在途（忙则拒绝，不隐式取消）；全局最多 2 轮
+ * （切换 session 后旧线程仍可流完）。每次写回前核对线程 generation 与
+ * 这一轮的 phase，新话题或中止之后迟到的 onText/result 都丢弃。
  */
 import { sideThreadQuestion, type SideThreadPriorTurn } from '../../../channel/side-prompts.js'
 import { t } from '../../../i18n.js'
@@ -320,13 +315,6 @@ class BtwThreadStore {
     if (newestSettled === record.seenThroughSeq) return
     record.seenThroughSeq = newestSettled
     this.bump(record)
-  }
-
-  /** 显式丢弃某 session 的内存线程（切换时的最小档；默认保留作完整档）。 */
-  forget(sessionId: string): void {
-    this.abortActive(sessionId)
-    this.threads.delete(sessionId)
-    this.emit()
   }
 
   /** 测试/多夹具隔离用：清空全部线程状态。 */

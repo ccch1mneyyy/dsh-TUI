@@ -1,9 +1,10 @@
 /**
  * BtwThreadView：Q/A 轮次的滚动列表（面板 / 全屏场景 / 浮层 fallback
  * 共用）。Question 走用户侧视觉（accent ❯ 前缀），Answer 走共享
- * Markdown；运行中显示本轮 spinner；失败只标本轮错误、保留既有答复。
+ * Markdown；运行中显示本轮 spinner；失败或中止时保留已流出的部分答复，
+ * 下面标出错误/已中止。
  *
- * 跟尾契约（设计 §交互规格）：默认跟随尾部；用户上滚后暂停 follow，
+ * 跟尾：默认跟随尾部；用户上滚后暂停 follow，
  * 出现「有新回答」跳尾提示（点击回底）。ScrollBox 的 sticky 位就是
  * follow 信号——上滚打破 sticky，scrollToBottom/贴底恢复。
  */
@@ -120,10 +121,15 @@ export function BtwThreadView({
                 >
                   <Markdown cacheTokens={false}>{turn.answer}</Markdown>
                 </Box>
-              ) : turn.phase === 'failed' ? (
-                <Text color="error" wrap="wrap">{t('btw-thread-error')}{turn.error === undefined ? '' : ': ' + turn.error}</Text>
-              ) : turn.phase === 'cancelled' ? (
-                <Text dimColor italic>{t('btw-thread-cancelled')}</Text>
+              ) : turn.phase === 'failed' || turn.phase === 'cancelled' ? (
+                // What streamed before the failure or the abort stays readable
+                // above the marker.
+                <>
+                  {turn.answer !== '' && <Markdown cacheTokens={false}>{turn.answer}</Markdown>}
+                  {turn.phase === 'failed'
+                    ? <Text color="error" wrap="wrap">{t('btw-thread-error')}{turn.error === undefined ? '' : ': ' + turn.error}</Text>
+                    : <Text dimColor italic>{t('btw-thread-cancelled')}</Text>}
+                </>
               ) : turn.answer !== '' ? (
                 <Markdown cacheTokens={false}>{turn.answer}</Markdown>
               ) : (

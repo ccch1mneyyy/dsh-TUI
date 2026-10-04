@@ -1,8 +1,7 @@
 /**
- * btw 侧栏面板（设计 btw-panel.md）：线程滚动 + Markdown + 底部 composer
- * 连续追问。Esc 层级按面板系统契约：composer 编辑（Esc 收起草稿） >
- * 线程列表滚动（无独占 Esc）> 宿主回退（Esc 回聊天）；Tab 在列表与
- * composer 间切焦点；未消费键交宿主，不吞 ←/→ 的 panel cycling。
+ * btw 侧栏面板：线程滚动 + Markdown + 底部 composer 连续追问。Esc 先退出
+ * composer 编辑（草稿保留），列表层不消费 Esc，再交宿主回聊天；Tab 在列表
+ * 与 composer 间切焦点；未消费的键交宿主（←/→ 仍切面板）。
  *
  * badge 派生（镜像 jobs/agents 适配器）：面板不可见期间完成的新 answer
  * 增 info unread、失败 error level 计未读、运行中只亮点不计未读；进入
@@ -39,7 +38,14 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
   const version = thread?.version ?? 0
   const busy = thread !== undefined && thread.activeTurnId !== null
   const [composerFocus, setComposerFocus] = React.useState(true)
-  const [caret, setCaret] = React.useState(0)
+  // The caret rides a ref too: two keys arriving before a re-render must
+  // see each other's caret (the draft itself is read from the store).
+  const caretRef = React.useRef(0)
+  const [caret, setCaretState] = React.useState(0)
+  const setCaret = React.useCallback((next: number) => {
+    caretRef.current = next
+    setCaretState(next)
+  }, [])
   const [notice, setNotice] = React.useState<{ readonly text: string; readonly failure: boolean } | null>(null)
 
   // badge（镜像 jobs：version/visible 驱动；可见即已读）。
@@ -90,7 +96,7 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
     btwThreads.setDraft(sessionId, '')
     setCaret(0)
     setNotice(null)
-  }, [channel, sessionId])
+  }, [channel, sessionId, setCaret])
 
   const newTopic = React.useCallback(() => {
     btwThreads.newTopic(sessionId)
@@ -98,11 +104,11 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
     channel.notify(t('btw-thread-clear'), { timeoutMs: 2500 })
   }, [sessionId, channel])
 
-  // ── 键盘（v2.1：composer 层 > 列表层 > 宿主回退；未消费交宿主）───────
+  // ── 键盘：composer 层 > 列表层 > 宿主（未消费的键返回 false）──────────
   const onKey = React.useCallback<PanelKeyHandler>((input, key) => {
     if (composerFocus) {
       const text = btwThreads.get(sessionId)?.draft ?? ''
-      const result = btwComposerKey({ text, caret }, input, key as Parameters<typeof btwComposerKey>[2])
+      const result = btwComposerKey({ text, caret: caretRef.current }, input, key as Parameters<typeof btwComposerKey>[2])
       if (result === null) return false
       if (result.exitFocus === true) { setComposerFocus(false); return true }
       if (result.submit === true) { submitDraft(); return true }
@@ -124,7 +130,7 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
     // 列表层不独占 Esc/←/→：返回 false 交宿主（Esc 回聊天、←/→ 切面板）。
     return false
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [composerFocus, caret, sessionId, submitDraft, newTopic, attachTurn])
+  }, [composerFocus, sessionId, submitDraft, newTopic, attachTurn, setCaret])
   usePanelInput(onKey, { active: focused && visible })
 
   // ── 头部：/btw + 首问标题（单行裁切）+ 新话题 + 上下文覆盖提示 ────────

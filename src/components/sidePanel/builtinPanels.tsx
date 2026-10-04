@@ -131,8 +131,8 @@ function JobsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
 /** agents 面板的二级路由：dashboard ↔ detail。 */
 type AgentsRoute = 'dashboard' | { readonly detail: string }
 
-/** 路由的跨挂载记忆（design §4.1「Panel route 不丢」）：主屏 Agent View 盖过
- *  Chat 时整棵主树（含本面板）卸载，重挂载从这里恢复最后路由。 */
+/** 主屏 Agent View 盖过 Chat 时整棵主树（含本面板）会卸载；重挂载时从这里
+ *  恢复最后的路由。 */
 let lastAgentsRoute: AgentsRoute = 'dashboard'
 
 /**
@@ -149,9 +149,8 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
   const version = channel.version
   const [route, setRoute] = React.useState<AgentsRoute>(lastAgentsRoute)
   React.useEffect(() => { lastAgentsRoute = route }, [route])
-  // agent-team 能力面：通道的 subagentControl.message 成员（缺失 = 无此面，
-  // 不渲染 composer/Messages 数据）。
-  // 可选链兜底：无 subagentControl 的桩 channel（回归夹具）不炸渲染。
+  // subagentControl.message 缺失 = 没有 composer 和消息流。可选链是给没有
+  // subagentControl 的桩 channel（回归夹具）用的。
   const messageControl = channel.subagentControl?.message
   const detailAgentId = typeof route === 'object' ? route.detail : null
   const detailMessages = detailAgentId !== null && messageControl !== undefined

@@ -1,8 +1,7 @@
 /**
- * BtwThreadScene（⤢ 全屏，设计 btw-panel.md §⤢ 与 Send to Chat）：完整
- * 问题与 Markdown 长文、线程滚动、composer 追问。Esc 返回侧栏——路由/
- * 焦点/滚动由宿主保留（面板 mountPolicy=enabled 不卸载，thread 与
- * draft 都在线程 store，返回后原样）。不清 thread 或 draft。
+ * BtwThreadScene（btw 面板的 ⤢ 全屏）：完整问题与 Markdown 长文、线程
+ * 滚动、composer 追问。Esc 返回侧栏，面板状态原样（mountPolicy=enabled
+ * 不卸载，thread 与 draft 都在线程 store）。
  *
  * 键层级：composer 编辑（Esc 收起草稿）> 场景滚动/动作 > Esc 退出场景。
  */
@@ -27,7 +26,12 @@ export function BtwThreadScene({
   const sessionId = String(channel.agentId)
   const thread = React.useSyncExternalStore(btwThreads.subscribe, () => btwThreads.get(sessionId))
   const [composerFocus, setComposerFocus] = React.useState(true)
-  const [caret, setCaret] = React.useState(0)
+  const caretRef = React.useRef(0)
+  const [caret, setCaretState] = React.useState(0)
+  const setCaret = (next: number): void => {
+    caretRef.current = next
+    setCaretState(next)
+  }
   const [notice, setNotice] = React.useState<{ readonly text: string; readonly failure: boolean } | null>(null)
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const busy = thread !== undefined && thread.activeTurnId !== null
@@ -51,7 +55,7 @@ export function BtwThreadScene({
   useInput((input, key, event) => {
     if (composerFocus) {
       const text = btwThreads.get(sessionId)?.draft ?? ''
-      const result = btwComposerKey({ text, caret }, input, key as Parameters<typeof btwComposerKey>[2])
+      const result = btwComposerKey({ text, caret: caretRef.current }, input, key as Parameters<typeof btwComposerKey>[2])
       if (result !== null) {
         event.stopImmediatePropagation()
         if (result.exitFocus === true) { setComposerFocus(false); return }
@@ -85,7 +89,8 @@ export function BtwThreadScene({
     if (key.downArrow) { scrollRef.current?.scrollBy(3); event.stopImmediatePropagation(); return }
     if (key.pageUp) { scrollRef.current?.scrollBy(-(rows - 4)); event.stopImmediatePropagation(); return }
     if (key.pageDown) { scrollRef.current?.scrollBy(rows - 4); event.stopImmediatePropagation(); return }
-    if (input === '\t') { setComposerFocus(true); event.stopImmediatePropagation(); return }
+    // ink reports a plain Tab as key.tab with an empty input.
+    if (key.tab || input === '\t') { setComposerFocus(true); event.stopImmediatePropagation(); return }
     if (input === 'n' && !key.ctrl && !key.meta) {
       btwThreads.newTopic(sessionId)
       channel.notify(t('btw-thread-clear'), { timeoutMs: 2500 })

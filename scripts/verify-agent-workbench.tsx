@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 "use strict";
 /**
- * verify-agent-workbench — agent-team P3（design agent-team-panels 路线图
- * P3 行：完整工作台 / peer roster / 跨会话如实降级）的回归。
+ * verify-agent-workbench — Agent View 工作台、peer roster、侧栏 Detail
+ * composer 与转录分页的回归。
  *
  *   W1  父关系/兄弟纯函数（agentTeam.ts）：parentAgentId 是唯一父事实、
  *       depth 1 证明主循环、depth>=2 无父=unknown（不造假树）；transcript
@@ -13,10 +13,22 @@
  *   W3  工作台 UI（AgentTranscriptScene）：宽屏右侧 metadata/工具/父关系
  *       面板；sibling 原地切换不混消息（换代理即换转录源，旧代理行不
  *       残留、expandedLeaf 重置、消息按代理过滤）；来源栈不被 sibling
- *       切换推入；窄屏（40 列）面板整体退场。
+ *       切换推入；窄屏（40 列）面板整体退场、顶栏保留代理名，28 列下
+ *       长行在屏内折行（不按 44 列排版后被屏幕右缘裁掉）。
  *   W4  peer roster（SubagentDashboard）：children 与 peers 分区呈现；
- *       无 peer 名册能力时如实降级一行（不伪装空名册）；served peers
- *       不混入 children、无发送入口（跨会话交互无上游支持面）。
+ *       无 peer 名册能力时不画 peers 分区；served peers 不混入 children、
+ *       无发送入口（跨会话交互无上游支持面）。
+ *   W5  侧栏 Detail 的 composer：按键经面板分发器进草稿（宿主吞掉普通键，
+ *       直接 useInput 收不到）；Esc 先让出编辑焦点、焦点仍在侧栏；焦点被
+ *       宿主切回聊天后，聊天里的打字和 Enter 不进 composer、不发给子代理。
+ *   W6  转录分页：代理消息只落在它所属的那一页（载入更早不重复、newest
+ *       页不收更早页的消息）；调用在旧页、结果在新页时载入旧页后卡片落定；
+ *       载入更早在途时切换代理，旧代理的更早页不会拼进新代理的转录；live
+ *       合并不改写历史叶子。
+ *   W7  运行中跟尾：新输出把视图钉到底部；用户上滚后新输出不再把视图
+ *       拽回底部，滚回底部后恢复跟随。
+ *   W8  Detail 转录页：o 键载入更早一页（页脚提示）；运行中上滚到历史
+ *       后，新输出不把视图拽回底部。
  *
  * 运行：node --import tsx/esm scripts/verify-agent-workbench.tsx
  */
@@ -123,7 +135,9 @@ const [{ PassThrough, Writable }, { default: React }, { Terminal: XTerm }, uiMod
   import('../src/ui.js'),
   import('../src/screens/AgentTranscriptScene.js'),
 ])
-const { render, AlternateScreen, useInput } = uiMod as unknown as {
+const { render, AlternateScreen, useInput, Box, Text } = uiMod as unknown as {
+  Box: React.ComponentType<Record<string, unknown>>
+  Text: React.ComponentType<Record<string, unknown>>
   render: typeof import('../src/ui.js').render
   AlternateScreen: React.ComponentType<{ children?: React.ReactNode }>
   useInput: (handler: (input: string, key: unknown) => void, options?: { isActive?: boolean }) => void
@@ -136,7 +150,7 @@ const { settled, sleep, viewportLines, findText } = termTest as unknown as {
   viewportLines(term: InstanceType<typeof XTerm>, rows?: number): string[]
   findText(term: InstanceType<typeof XTerm>, needle: string): { col: number; row: number } | null
 }
-const { setLang } = await import('../src/i18n.js')
+const { setLang, t } = await import('../src/i18n.js')
 setLang('en')
 
 const COLS = 100
@@ -275,7 +289,7 @@ console.log('--- W3: workbench panel + sibling switching ---')
       check('W3 旧代理行不残留（不混消息）', await settled(() => !frame.screen().includes('alpha unique marker one') && !frame.screen().includes('alpha tool body')))
       check('W3 切换后顶栏换成新代理描述', frame.screen().includes('agent agent-b'))
       // Esc still exits to the ORIGINAL source (not the previous agent):
-      // the first Esc only leaves the focused panel (§6's ladder).
+      // the first Esc only leaves the focused panel.
       frame.stdin.write('\x1b')
       await sleep(30) // 固定窗:pacing 焦点层切换
       frame.stdin.write('\x1b')
@@ -326,7 +340,7 @@ console.log('--- W3: workbench panel + sibling switching ---')
     },
   )
 
-  // 40 columns: the P1 single-column contract is untouched.
+  // 40 columns: the single-column layout, no workbench rail.
   await withTerminal(
     () => React.createElement(AgentTranscriptScene, {
       subagent: roster[0],
@@ -337,8 +351,27 @@ console.log('--- W3: workbench panel + sibling switching ---')
     }),
     async frame => {
       check('W3 窄屏（40 列）面板退场', await settled(() => frame.screen().includes('alpha unique marker one')) && !frame.screen().includes('workbench'))
+      check('W3 窄屏顶栏仍显示代理名', frame.lines().slice(0, 3).some(line => line.includes(t('subagent-card-prefix') + 'agent')), frame.lines().slice(0, 3).join('|'))
     },
     40,
+  )
+
+  // A long line wraps inside the 28-column screen instead of being laid out
+  // wider than the terminal and clipped at the edge.
+  const longPage = historyPage([
+    ev('assistant.message', { anchor: 'w1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'first second third fourth fifth sixth seventh eighth ninth LASTWORD' }] }),
+  ])
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, {
+      subagent: roster[0],
+      source: { kind: 'agents-dashboard' },
+      onExit: () => {},
+      loadTranscript: (async () => longPage) as never,
+    }),
+    async frame => {
+      check('W3 28 列长行完整折行（末词可见）', await settled(() => frame.screen().includes('LASTWORD')), frame.lines().slice(0, 10).join('|'))
+    },
+    28,
   )
 }
 
@@ -351,8 +384,8 @@ console.log('--- W4: dashboard children/peers partition ---')
   const nestedKnown = makeRow('agent-n1', { depth: 2, parentAgentId: 'agent-a' })
   const nestedOld = makeRow('agent-n2', { depth: 2 })
 
-  // (1) children-only roster, no peers prop: the honest unsupported note;
-  // children stay ABOVE the peers section and carry no nested marks.
+  // (1) children-only roster, no peers prop: no peers section at all (no
+  // roster capability, nothing to draw), and no nested marks.
   const selected: string[] = []
   await withTerminal(
     () => React.createElement(SubagentDashboard, {
@@ -361,10 +394,8 @@ console.log('--- W4: dashboard children/peers partition ---')
       onClose: () => {},
     }),
     async frame => {
-      check('W4 无 peer 名册能力：如实降级一行', await settled(() => frame.screen().includes('agents in other sessions') && frame.screen().includes('not provided by this kernel')))
-      const childrenAt = frame.screen().indexOf('agent agent-a')
-      const peersAt = frame.screen().indexOf('agents in other sessions')
-      check('W4 children 在 peers 分区之前（不混淆分区）', childrenAt >= 0 && peersAt > childrenAt)
+      await settled(() => frame.screen().includes('agent agent-b'))
+      check('W4 无 peer 名册能力：不画 peers 分区', !frame.screen().includes(t('agents-peers-title')))
       check('W4 纯直属名册保持 P1 平铺（无嵌套标记）', !frame.screen().includes('nested'))
       // keyboard walks the displayed order: ↓ then Enter selects agent-b
       frame.stdin.write('\x1b[B')
@@ -397,7 +428,7 @@ console.log('--- W4: dashboard children/peers partition ---')
 
   // (3) served peers: own section, never mixed into children, and NO
   // interactive affordance (cross-session targets are not addressable
-  // through the dual channels — the honest P3 degrade).
+  // through the parent relay or the direct child prompt).
   const selected2: string[] = []
   await withTerminal(
     () => React.createElement(SubagentDashboard, {
@@ -408,12 +439,272 @@ console.log('--- W4: dashboard children/peers partition ---')
     }),
     async frame => {
       check('W4 served peers 渲染在独立分区', await settled(() => frame.screen().includes('codex') && frame.screen().includes('teammate row') && frame.screen().includes('peer-ses')))
-      check('W4 peer 行注明无发送入口（跨会话降级）', frame.screen().includes('cannot be messaged from here'))
+      const childrenAt = frame.screen().indexOf('agent agent-a')
+      const peersAt = frame.screen().indexOf(t('agents-peers-title'))
+      check('W4 children 在 peers 分区之前（不混淆分区）', childrenAt >= 0 && peersAt > childrenAt, JSON.stringify({ childrenAt, peersAt }))
+      check('W4 peer 行注明无发送入口（跨会话降级）', frame.screen().includes(t('agents-peers-note')))
       await click(frame, 'codex')
       check('W4 点击 peer 行不触发任何 child 导航', selected2.length === 0, JSON.stringify(selected2))
       const childrenCount = (frame.screen().match(/agent agent-a/g) ?? []).length
       check('W4 children 不重复出现在 peers 分区', childrenCount === 1, String(childrenCount))
     },
+  )
+}
+
+// ── W6: transcript paging with the agent message feed ─────────────────────
+console.log('--- W6: transcript paging ---')
+{
+  const fold = await import('../src/components/messages/subagentTranscript.js')
+  const message = (id: string, observedAt: number): Record<string, unknown> => ({ messageId: id, from: 'parent', to: 'agent-a', via: 'dsh-agent-relay', text: 'note ' + id, state: 'queued', observedAt })
+  const messages = [message('m-old', NOW - 90_000), message('m-mid', NOW - 35_000), message('m-new', NOW - 5_000)]
+  const newest = [
+    ev('assistant.message', { anchor: 'n1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'newest page text' }] }),
+    ev('assistant.message', { anchor: 'n2', time: NOW - 30_000, blocks: [{ type: 'text', text: 'newest page tail' }] }),
+  ]
+  const older = [ev('assistant.message', { anchor: 'o1', time: NOW - 100_000, blocks: [{ type: 'text', text: 'older page text' }] })]
+  const leaves: Array<Record<string, unknown>> = []
+  const from = fold.foldTranscriptLeaves(newest as never, leaves as never, messages as never, { olderPagesRemain: true })
+  const ids = (rows: Array<Record<string, unknown>>): string[] => rows.filter(row => row.kind === 'agent-message').map(row => (row.message as { messageId: string }).messageId)
+  check('W6 newest 页不收更早页的消息', ids(leaves).join(',') === 'm-mid,m-new', JSON.stringify(ids(leaves)))
+  const olderLeaves: Array<Record<string, unknown>> = []
+  fold.foldTranscriptLeaves(older as never, olderLeaves as never, messages as never, { olderPagesRemain: false, before: from })
+  const merged = fold.prependOlderLeaves(olderLeaves as never, leaves as never) as unknown as Array<Record<string, unknown>>
+  check('W6 载入更早后每条消息恰好一次且按序', ids(merged).join(',') === 'm-old,m-mid,m-new', JSON.stringify(ids(merged)))
+
+  // A call on the older page whose result landed on the newer one: the
+  // card settles once the older page is folded in (it does not stay
+  // running forever).
+  const splitNewest = historyPage([
+    ev('tool.result', { callId: 'split-1', isError: false, text: 'split result body', time: NOW - 20_000, seq: 9, turn: 1, step: 1, content: [] }),
+    ev('assistant.message', { anchor: 'sn1', time: NOW - 10_000, blocks: [{ type: 'text', text: 'after the split call' }] }),
+  ], { hasOlder: true, skippedFromStart: 10 })
+  const splitOlder = historyPage([
+    ev('tool.call', { callId: 'split-1', name: 'Grep', argsJson: '{}', time: NOW - 30_000, seq: 8, turn: 1, step: 1 }),
+  ], { hasOlder: false, skippedFromStart: 0 })
+  const newestState = fold.foldNewestPage('agent-a', splitNewest as never, [])
+  check('W6 新页记下找不到调用的结果', newestState.orphanResults.has('split-1'), JSON.stringify([...newestState.orphanResults.keys()]))
+  const joined = fold.foldOlderPage(newestState, splitOlder as never, [])
+  const splitCard = joined.leaves.find(leaf => leaf.kind === 'tool') as { tool: { status: string; resultText?: string } } | undefined
+  check('W6 跨页的调用拿到新页里的结果（不停在 running）', splitCard?.tool.status === 'ok' && splitCard.tool.resultText === 'split result body', JSON.stringify(splitCard?.tool))
+  check('W6 配上的结果不再挂在待配表里', joined.orphanResults.size === 0)
+
+  const live = makeRow('agent-a', { status: 'running', completedAt: undefined, toolCalls: [{ id: 'tc1', name: 'Read', status: 'completed', startedAt: NOW - 20_000, endedAt: NOW - 10_000, resultPreview: 'live result' }] })
+  const history = [{ kind: 'tool', key: 'tc1', tool: { callId: 'tc1', name: 'Read', argsText: '{}', status: 'running', startedAt: NOW - 20_000 } }]
+  const overlaid = fold.mergeLiveWindow(history as never, live as never, true) as unknown as Array<{ tool?: { status: string } }>
+  check('W6 live 状态叠加到合并结果', overlaid[0]?.tool?.status === 'ok', JSON.stringify(overlaid[0]))
+  check('W6 live 合并不改写历史叶子', history[0]!.tool.status === 'running', JSON.stringify(history[0]))
+
+  // Scene: the feed placed once across a load-older, then an older request
+  // left in flight while the view switches to another agent.
+  let releaseOlder: ((page: Record<string, unknown>) => void) | undefined
+  const scenePages = (agentId: string, window?: { count: number; skipFromStart: number }): Promise<Record<string, unknown>> => {
+    if (agentId === 'agent-b') return Promise.resolve(historyPage([ev('assistant.message', { anchor: 'b1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'beta newest body' }] })]))
+    if (window === undefined) return Promise.resolve(historyPage(newest, { hasOlder: true, skippedFromStart: 800 }))
+    if (window.skipFromStart === 800) return Promise.resolve(historyPage(older, { hasOlder: true, skippedFromStart: 400 }))
+    return new Promise(resolve => { releaseOlder = resolve })
+  }
+  const sceneProps = (row: Record<string, unknown>): Record<string, unknown> => ({
+    subagent: row,
+    source: { kind: 'agents-dashboard' },
+    onExit: () => {},
+    loadTranscript: scenePages as never,
+    messages: row.agentId === 'agent-a' ? messages : [],
+  })
+  const rowA = makeRow('agent-a')
+  const rowB = makeRow('agent-b')
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, sceneProps(rowA)),
+    async frame => {
+      await settled(() => frame.screen().includes('newest page tail'))
+      // useInput swaps in the new handler in a passive effect: a key sent in
+      // the same tick as the frame can still reach the previous render's.
+      await sleep(30) // 固定窗:pacing 等被动 effect 换上新的按键处理器
+      frame.stdin.write('o')
+      check('W6 场景载入更早页', await settled(() => frame.screen().includes('older page text')), frame.lines().slice(0, 12).join('|'))
+      const count = (needle: string): number => frame.screen().split(needle).length - 1
+      check('W6 场景里每条消息只画一次', count('note m-mid') === 1 && count('note m-new') === 1 && count('note m-old') === 1, JSON.stringify({ mid: count('note m-mid'), recent: count('note m-new'), old: count('note m-old') }))
+      frame.stdin.write('o')
+      await settled(() => releaseOlder !== undefined)
+      frame.rerender(React.createElement(AgentTranscriptScene, sceneProps(rowB)))
+      await settled(() => frame.screen().includes('beta newest body'))
+      releaseOlder?.(historyPage([ev('assistant.message', { anchor: 'z1', time: NOW - 200_000, blocks: [{ type: 'text', text: 'alpha oldest leak' }] })], { hasOlder: false, skippedFromStart: 0 }))
+      await sleep(100) // 固定窗:探针 负向断言：给迟到的更早页留出拼接的时间
+      check('W6 切换代理后旧代理的更早页不拼进来', !frame.screen().includes('alpha oldest leak') && frame.screen().includes('beta newest body'), frame.lines().slice(0, 10).join('|'))
+    },
+  )
+}
+
+// ── W7: tail follow yields to the user's scroll ──────────────────────────
+console.log('--- W7: tail follow ---')
+{
+  const lines = (count: number): Array<Record<string, unknown>> =>
+    Array.from({ length: count }, (_, index) => ({ kind: 'text', text: 'tail line ' + String(index).padStart(3, '0'), at: NOW, settled: true }))
+  const running = (count: number): Record<string, unknown> => makeRow('agent-tail', { status: 'running', completedAt: undefined, outputEvents: lines(count) })
+  const props = (count: number): Record<string, unknown> => ({ subagent: running(count), source: { kind: 'agents-dashboard' }, onExit: () => {} })
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, props(60)),
+    async frame => {
+      check('W7 运行中钉在尾部', await settled(() => frame.screen().includes('tail line 059')), frame.lines().slice(-6).join('|'))
+      for (let index = 0; index < 4; index += 1) {
+        frame.stdin.write('\x1b[A')
+        await sleep(20) // 固定窗:pacing 逐键滚动
+      }
+      await settled(() => !frame.screen().includes('tail line 059'))
+      frame.rerender(React.createElement(AgentTranscriptScene, props(64)))
+      await sleep(150) // 固定窗:探针 负向断言：给错误的跟尾留出发生的时间
+      check('W7 上滚后新输出不把视图拽回底部', !frame.screen().includes('tail line 063'), frame.lines().slice(-6).join('|'))
+      frame.stdin.write('\x1b[6~')
+      await sleep(20) // 固定窗:pacing 滚回底部
+      frame.stdin.write('\x1b[6~')
+      await settled(() => frame.screen().includes('tail line 063'))
+      frame.rerender(React.createElement(AgentTranscriptScene, props(68)))
+      check('W7 滚回底部后恢复跟随', await settled(() => frame.screen().includes('tail line 067')), frame.lines().slice(-6).join('|'))
+    },
+  )
+}
+
+// ── W8: Detail transcript page ────────────────────────────────────────────
+console.log('--- W8: detail transcript page ---')
+{
+  const { SubagentDetailScene } = (await import('../src/components/SubagentDetailScene.js')) as unknown as { SubagentDetailScene: React.ComponentType<Record<string, unknown>> }
+  const history = Array.from({ length: 40 }, (_, index) =>
+    ev('assistant.message', { anchor: 'h' + index, time: NOW - 50_000 + index, blocks: [{ type: 'text', text: 'history row ' + String(index).padStart(2, '0') }] }))
+  const olderRows = [ev('assistant.message', { anchor: 'old1', time: NOW - 90_000, blocks: [{ type: 'text', text: 'detail older row' }] })]
+  const loader = async (_agentId: string, window?: { skipFromStart: number }): Promise<Record<string, unknown>> =>
+    window === undefined ? historyPage(history, { hasOlder: true, skippedFromStart: 500 }) : historyPage(olderRows, { hasOlder: false, skippedFromStart: 0 })
+  const row = (outputs: number): Record<string, unknown> => makeRow('agent-detail', {
+    status: 'running',
+    completedAt: undefined,
+    outputEvents: Array.from({ length: outputs }, (_, index) => ({ kind: 'text', text: 'live out ' + index, at: NOW, settled: true })),
+  })
+  const props = (outputs: number): Record<string, unknown> => ({ subagent: row(outputs), onBack: () => {}, loadTranscript: loader as never })
+  await withTerminal(
+    () => React.createElement(SubagentDetailScene, props(1)),
+    async frame => {
+      await settled(() => frame.screen().includes(t('subagent-tab-summary')))
+      frame.stdin.write('\x1b[C')
+      await sleep(30) // 固定窗:pacing 逐页
+      frame.stdin.write('\x1b[C')
+      check('W8 进入转录页（历史已载入）', await settled(() => frame.screen().includes('history row')), frame.lines().slice(0, 12).join('|'))
+      const loadOlderHint = 'o ' + t('subagent-transcript-load-older', { count: 400 })
+      check('W8 页脚提示 o 载入更早', frame.screen().includes(loadOlderHint), frame.lines().slice(-3).join('|'))
+      await sleep(30) // 固定窗:pacing 等被动 effect 换上新的按键处理器
+      frame.stdin.write('o')
+      // The older page has no older one: the footer hint goes away.
+      check('W8 o 键载入更早一页（页脚提示随之消失）', await settled(() => !frame.screen().includes(loadOlderHint)), frame.lines().slice(-3).join('|'))
+      // Scroll up to the top of the history: the older row is there.
+      for (let press = 0; press < 40; press += 1) {
+        frame.stdin.write('\x1b[A')
+        await sleep(5) // 固定窗:pacing 逐键滚动
+      }
+      check('W8 更早一页拼在转录顶部', await settled(() => frame.screen().includes('detail older row')), frame.lines().slice(4, 12).join('|'))
+      // At the top of the history while the child keeps streaming: the view
+      // stays put.
+      for (const outputs of [2, 3, 4]) {
+        frame.rerender(React.createElement(SubagentDetailScene, props(outputs)))
+        await sleep(40) // 固定窗:pacing 让每条新输出各自渲染一帧
+      }
+      await sleep(100) // 固定窗:探针 负向断言：给错误的跟尾留出发生的时间
+      check('W8 运行中新输出不把转录页拽到底部', frame.screen().includes('detail older row') && !frame.screen().includes('live out 3'), frame.lines().slice(4, 14).join('|'))
+    },
+  )
+}
+
+// ── W5: side-panel Detail composer key routing ────────────────────────────
+console.log('--- W5: side-panel detail composer ---')
+{
+  const [{ SidePanelColumn }, { useSidePanel }, prefs, { ThemeProvider }] = await Promise.all([
+    import('../src/components/sidePanel/SidePanelColumn.js'),
+    import('../src/components/sidePanel/useSidePanel.js'),
+    import('../src/tuiDisplayPrefs.js'),
+    import('../src/ui.js'),
+  ])
+  prefs.applySidePanelOpen(true)
+  prefs.applySidePanelRatio(0.5)
+  const WIDE = 140
+  const submitted: Array<Record<string, unknown>> = []
+  const child = makeRow('agent-p1', { description: 'panel child', status: 'running', completedAt: undefined, mode: 'continuable' })
+  const channel = {
+    version: 1,
+    subagents: [child],
+    backgroundJobs: [],
+    subagentControl: {
+      interrupt: () => true,
+      message: {
+        via: 'dsh-agent-relay',
+        steer: false,
+        listTargets: async () => [],
+        messages: () => [],
+        submit: async (input: Record<string, unknown>) => {
+          submitted.push(input)
+          return { ok: true, intentId: 'intent-p' + submitted.length, state: 'queued' }
+        },
+      },
+    },
+    notifications: [],
+    notify: () => {},
+    subscribe: () => () => {},
+  }
+  let controller: ReturnType<typeof useSidePanel> | undefined
+  let chatTyped = ''
+  // Chat's shape: one listener mounted before any panel content, handing the
+  // real event to the host so its stopImmediatePropagation takes effect.
+  function Host(): React.ReactNode {
+    const sp = useSidePanel({ columns: WIDE, fullscreen: true, editorOpen: false })
+    controller = sp
+    const [, bump] = React.useState(0)
+    useInput(((input: string, key: Record<string, boolean | undefined>, event: unknown) => {
+      if (!sp.handleKey(input, key as never, event as never) && input !== '' && key.ctrl !== true && key.return !== true) chatTyped += input
+      bump(n => n + 1)
+    }) as never)
+    return React.createElement(ThemeProvider, { theme: 'dark' },
+      React.createElement(Box, { flexDirection: 'row', width: WIDE, height: ROWS },
+        React.createElement(Box, { width: sp.split ? sp.chatColumns : WIDE }, React.createElement(Text, null, 'chat-anchor focus=' + sp.focus)),
+        sp.split ? React.createElement(SidePanelColumn, { width: sp.panelColumns, controller: sp, channel: channel as never }) : null,
+      ))
+  }
+  const key = async (frame: Frame, data: string): Promise<void> => {
+    frame.stdin.write(data)
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  await withTerminal(
+    () => React.createElement(Host),
+    async frame => {
+      await settled(() => controller?.split === true)
+      controller?.openPanel('agents', { focus: true })
+      await settled(() => frame.screen().includes('panel child'))
+      await key(frame, '\r')
+      const composeTitle = t('agent-message-compose-title', { name: 'panel child' })
+      check('W5 侧栏 Detail 挂出 composer', await settled(() => frame.screen().includes(composeTitle)), frame.lines().slice(0, 6).join('|'))
+      await key(frame, 'i')
+      await sleep(30) // 固定窗:pacing 聚焦是 state 翻转，没有可读的屏幕变化
+      for (const ch of 'hi there') await key(frame, ch)
+      check('W5 i 聚焦后打字进 composer 草稿', await settled(() => frame.screen().includes('hi there')), frame.lines().filter(l => l.includes(composeTitle) || l.includes('there')).join('|'))
+      // The first Esc only leaves the editor (no visible change), the second
+      // one is the Detail's own Esc back to the dashboard — neither may hand
+      // the focus to chat.
+      await key(frame, '\x1b')
+      await sleep(80) // 固定窗:pacing 单独 Esc 要等 50ms 解析窗才成键
+      await key(frame, '\x1b')
+      check('W5 Esc 先让出编辑焦点、再回 Dashboard，焦点留在侧栏', await settled(() => !frame.screen().includes(composeTitle) && frame.screen().includes('1 ' + t('subagent-count-running'))) && controller?.focus === 'panel', String(controller?.focus))
+      // Back into the editor, then the host moves focus to chat (a click on
+      // the chat column does the same) while the composer still holds it.
+      await key(frame, '\r')
+      await settled(() => frame.screen().includes(composeTitle))
+      await key(frame, 'i')
+      await sleep(30) // 固定窗:pacing 同上
+      for (const ch of 'abc') await key(frame, ch)
+      check('W5 重新聚焦后草稿可编辑', await settled(() => frame.screen().includes('abc')))
+      controller?.focusChat()
+      await settled(() => frame.screen().includes('chat-anchor focus=chat'))
+      for (const ch of 'zq') await key(frame, ch)
+      await key(frame, '\r')
+      await sleep(60) // 固定窗:探针 负向断言：给错误投递留出发生的时间
+      check('W5 聊天里的键到了聊天', chatTyped.includes('zq'), JSON.stringify(chatTyped))
+      check('W5 聊天打字不进侧栏 composer', !frame.screen().includes('abczq'), frame.lines().filter(l => l.includes('abc')).join('|'))
+      check('W5 聊天 Enter 不把草稿发给子代理', submitted.length === 0, JSON.stringify(submitted))
+    },
+    WIDE,
   )
 }
 

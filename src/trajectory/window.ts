@@ -1,14 +1,8 @@
 /**
- * Ledger windowing — the trajectory's shared windowing math (design
- * agent-team-panels §4 完整档: 长会话虚拟化; the dock-row listWindow
- * precedent applied to the ledger).
- *
- * The ledger NEVER renders the whole session: both hosts (the fullscreen
- * scene and the side panel) paint exactly one viewport's worth of rows and
- * keep the focused row visible, so a ten-thousand-row session costs the
- * same frame as a ten-row one. The math lived twice, hand-rolled with the
- * same clamp; one named, tested function now owns it — the properties the
- * regression locks:
+ * Ledger windowing shared by the fullscreen scene and the side panel: both
+ * paint exactly one viewport's worth of rows and keep the focused row
+ * visible, so a ten-thousand-row session costs the same frame as a ten-row
+ * one. Properties (verify-trajectory-xl):
  *
  * - the window is rows tall (or as tall as the list allows);
  * - the focused row sits inside it, centered while room allows;

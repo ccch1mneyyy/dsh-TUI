@@ -1,9 +1,14 @@
 /**
- * btw 面板/快路径/回退/badge 回归（渲染层，设计 btw-panel.md §回归形状 4–7）：
+ * btw 面板/快路径/回退/badge 回归（渲染层）：
  *  - 面板级（XTerm + AlternateScreen + 真侧栏控制器）：空态、线程问答上屏
  *    （Markdown）、badge（不可见期间落定 → ●；进入面板即清）、composer 键
  *    语义（打字/Enter 提交/Esc 分层保草稿/Tab 切焦点）、n 新话题、s 发送到
- *    聊天（attach 合同 + 截断提示）、28/40 列窄幅不崩。
+ *    聊天（attach 合同 + 截断提示）、28/40 列窄幅不崩；流式期间 badge 不变
+ *    就不通知侧栏；失败的一轮保留已流出的部分答复；连按键（两键之间
+ *    没有重渲染）不丢字、退格整删 emoji。
+ *  - 全屏场景（BtwThreadScene）：Esc 退出编辑后 Tab 回到 composer 继续打字。
+ *  - 浮层回退（BtwPanelFallback）：粘贴的换行、带修饰的 Enter 不关浮层，
+ *    只有无修饰的 Enter 才关（关闭即中止在途侧问）。
  *  - Chat 级（真 Chat + fake channel）：/btw 快路由——面板启用时路由进侧栏
  *    且浮层反针不出现（单一 surface）；未启用时浮层回退，Esc 关闭即 abort。
  * 运行：node --import tsx/esm scripts/verify-btw-panel.tsx
@@ -19,7 +24,7 @@ const fixtureHome = mkdtempSync(join(tmpdir(), 'verify-btw-panel-'))
 process.env.HOME = fixtureHome
 process.env.USERPROFILE = fixtureHome
 
-const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }] = await Promise.all([
+const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang, t }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }, { BtwThreadScene }, { BtwPanelFallback }, { panelStore }] = await Promise.all([
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
@@ -32,6 +37,9 @@ const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn },
   import('../src/commands.js'),
   import('../src/screens/Chat.js'),
   import('../src/components/sidePanel/btw/threads.js'),
+  import('../src/components/sidePanel/btw/BtwThreadScene.js'),
+  import('../src/components/BtwPanel.js'),
+  import('../src/components/sidePanel/PanelStore.js'),
 ])
 const { render, ThemeProvider, Box, Text, AlternateScreen, useInput, useTerminalSize } = ui
 const { applySidePanelOpen, applySidePanelRatio, applySidePanelPanels } = prefs
@@ -101,8 +109,13 @@ class FakeStdout extends Writable {
   isTTY = true
   term: import('@xterm/headless').Terminal
   frames: string[] = []
+  /** Called once xterm has applied each write: the viewport is current. */
+  onFrame: (() => void) | undefined
   constructor(term: import('@xterm/headless').Terminal, cols: number) { super(); this.term = term; this.columns = cols }
-  _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { this.frames.push(String(chunk)); this.term.write(String(chunk), cb) }
+  _write(chunk: unknown, _e: BufferEncoding, cb: () => void) {
+    this.frames.push(String(chunk))
+    this.term.write(String(chunk), () => { this.onFrame?.(); cb() })
+  }
 }
 class FakeStderr extends Writable { isTTY = true; _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() } }
 class FakeStdin extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
@@ -202,6 +215,45 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
   await frame.app.unmount()
 }
 
+// ── P10: 流式期间 badge 不变就不通知侧栏 ─────────────────────────────────
+{
+  const ask = scriptedAsk()
+  const channel = makePanelChannel(ask)
+  const frame = await mountPanel(105, 'btw', true, channel)
+  btwThreads.submit('probe-session', 'stream question', channel.ask.ask)
+  await delay(200)
+  let badgeEvents = 0
+  const stop = panelStore.subscribe(event => { if (event.type === 'badge') badgeEvents += 1 })
+  for (let index = 0; index < 20; index += 1) {
+    ask.emit('delta ' + index + ' ')
+    await delay(15)
+  }
+  ask.finish('stream answer done')
+  await delay(400)
+  stop()
+  // The panel is visible, so the badge stays 'info' while running and
+  // clears at the end: a couple of changes at most, not one per delta.
+  check('P10. 20 个流式 delta 的 badge 通知不超过 2 次', badgeEvents <= 2, 'badge events=' + badgeEvents)
+  await frame.app.unmount()
+}
+
+// ── P11: 失败的一轮保留已流出的部分答复 ───────────────────────────────────
+{
+  const ask = scriptedAsk()
+  const channel = makePanelChannel(ask)
+  const frame = await mountPanel(105, 'btw', true, channel)
+  btwThreads.submit('probe-session', 'failing question', channel.ask.ask)
+  await delay(200)
+  ask.emit('partial words before')
+  await delay(200)
+  ask.fail('upstream broke')
+  await delay(400)
+  const screen = frame.lines().join('\n')
+  check('P11. 失败后部分答复仍在、错误标在下面', screen.includes('partial words before') && screen.includes(t('btw-thread-error')) && screen.includes('upstream broke'),
+    screen.split('\n').filter(l => l.trim() !== '').slice(-6).join(' | '))
+  await frame.app.unmount()
+}
+
 // ── P3: badge（不可见期间落定 → ●；进入面板清）─────────────────────────
 {
   const ask = scriptedAsk()
@@ -267,6 +319,54 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
   check('P6. n = 新话题（清线程 + 通知）', btwThreads.get('probe-session')?.turns.length === 0
     && channel.notices.some(text => text.includes('新话题')), channel.notices.join(' | '))
   await frame.app.unmount()
+}
+
+// ── P9: 连按键不丢字（两键之间不等重渲染）+ 退格整删 emoji ─────────────
+{
+  const ask = scriptedAsk()
+  const channel = makePanelChannel(ask)
+  const frame = await mountPanel(100, 'btw', true, channel)
+  for (const ch of ['x', 'y', 'z']) {
+    frame.stdin.write(ch)
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  await delay(200)
+  check('P9a. 连按三键草稿顺序完整', btwThreads.get('probe-session')?.draft === 'xyz', JSON.stringify(btwThreads.get('probe-session')?.draft))
+  await keys(frame, ['\u{1F44D}', '\x7f'])
+  await delay(150)
+  check('P9b. 退格整删一个 emoji（不留半个代理对）', btwThreads.get('probe-session')?.draft === 'xyz', JSON.stringify(btwThreads.get('probe-session')?.draft))
+  await frame.app.unmount()
+}
+
+// ── F1: 全屏场景 Esc 退出编辑、Tab 回到 composer ─────────────────────────
+{
+  btwThreads.resetForTest()
+  const ask = scriptedAsk()
+  const channel = makePanelChannel(ask)
+  const frame = await mountTree(100, <BtwThreadScene channel={channel as never} onClose={() => {}} />)
+  await keys(frame, ['a', 'b', ESC, '\t', 'c'])
+  await delay(150)
+  check('F1. Esc 后 Tab 回到 composer 继续编辑', btwThreads.get('probe-session')?.draft === 'abc', JSON.stringify(btwThreads.get('probe-session')?.draft))
+  await frame.app.unmount()
+}
+
+// ── F2: 浮层回退只认真正的 Enter ─────────────────────────────────────────
+{
+  btwThreads.resetForTest()
+  const ask = scriptedAsk()
+  btwThreads.submit('probe-session', 'fallback question', ask.ask)
+  let closes = 0
+  const frame = await mountTree(100, <BtwPanelFallback thread={btwThreads.get('probe-session')} onClose={() => { closes += 1 }} onCopy={() => {}} />)
+  frame.stdin.write(ESC + '[200~\r' + ESC + '[201~')
+  await delay(200)
+  check('F2a. 粘贴的换行不关闭浮层', closes === 0, 'closes=' + closes)
+  frame.stdin.write(ESC + '[13;2u')
+  await delay(200)
+  check('F2c. Shift+Enter 不关闭浮层（只认无修饰的 Enter）', closes === 0, 'closes=' + closes)
+  await keys(frame, ['\r'])
+  check('F2b. Enter 关闭浮层', closes === 1, 'closes=' + closes)
+  await frame.app.unmount()
+  btwThreads.resetForTest()
 }
 
 // ── P8: 面板 28 列最窄档不崩（CJK 长问题 + code fence；93 列终端）────────
@@ -338,8 +438,27 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>) {
     for (let y = 0; y < ROWS; y += 1) out.push((buf.getLine(y)?.translateToString(false) ?? '').padEnd(100, ' '))
     return out
   }
+  // Negative checks read the rendered viewport after every write instead of
+  // the raw frames: the renderer writes cell diffs, so a raw frame need not
+  // contain a whole string even while it is on screen.
+  const viewport = (): string => {
+    const buf = term.buffer.active
+    const out: string[] = []
+    for (let y = 0; y < ROWS; y += 1) out.push(buf.getLine(buf.viewportY + y)?.translateToString(true) ?? '')
+    return out.join('\n')
+  }
+  const watched = new Map<string, boolean>()
+  stdout.onFrame = () => {
+    if (watched.size === 0) return
+    const screen = viewport()
+    for (const needle of watched.keys()) if (screen.includes(needle)) watched.set(needle, true)
+  }
   return {
     channel, stdout, stdin, lines,
+    /** Start recording whether `needle` is ever on screen. */
+    viewport,
+    watch: (needle: string) => { watched.set(needle, viewport().includes(needle)) },
+    seen: (needle: string) => watched.get(needle) === true,
     since: (mark: number) => plainText(stdout.frames.slice(mark)),
     run: async (line: string) => {
       const from = stdout.frames.length
@@ -361,12 +480,14 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>) {
   btwThreads.resetForTest()
   const ask = scriptedAsk()
   const chat = await mountChat(ask)
+  const fallbackNote = t('btw-panel-unavailable').slice(0, 10)
+  chat.watch(fallbackNote)
   const after = await chat.run('/btw 快路由的问题一')
   check('C1a. 面板启用时 /btw 立即发起侧问（一次）', ask.calls.length === 1)
   const screen = chat.lines().join('\n')
   check('C1b. 侧栏打开且 btw 为活动面板（胶囊标题）', screen.includes('侧问'), screen.split('\n').slice(0, 3).join(' | '))
   check('C1c. 问题路由进面板', after.includes('快路由的问题一'))
-  check('C1d. 浮层回退不出现（单一 surface）', !after.includes('btw 面板未启用'))
+  check('C1d. 浮层回退不出现（单一 surface，任何一帧都没有）', !chat.seen(fallbackNote))
   ask.finish('快路由的答案')
   await delay(500)
   const answered = chat.lines().join('\n')
@@ -381,15 +502,23 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>) {
   btwThreads.resetForTest()
   const ask = scriptedAsk()
   const chat = await mountChat(ask)
-  const after = await chat.run('/btw 回退模式的问题')
-  check('C2a. 未启用面板时浮层回退出现', after.includes('btw 面板未启用') && after.includes('回退模式的问题'))
+  const fallbackNote = t('btw-panel-unavailable').slice(0, 10)
+  chat.watch(fallbackNote)
+  await chat.run('/btw 回退模式的问题')
+  check('C2e. 逐帧检测器看得到浮层（C1d 的对照组）', chat.seen(fallbackNote))
+  const open = chat.viewport()
+  check('C2a. 未启用面板时浮层回退出现', open.includes(fallbackNote) && open.includes('回退模式的问题'), open.split('\n').filter(l => l.trim() !== '').slice(-4).join(' | '))
   check('C2b. 侧问仍然发起（一次）', ask.calls.length === 1)
   chat.stdin.write(ESC)
   await delay(500)
   const turn = btwThreads.get('probe-session')?.turns[0]
   check('C2c. Esc 关闭浮层即中止在途轮', turn?.phase === 'cancelled', 'phase=' + (turn?.phase ?? 'none'))
-  const closed = plainText(chat.stdout.frames.slice(chat.stdout.frames.length - 20))
-  check('C2d. 浮层关闭后回到普通聊天', !closed.includes('btw 面板未启用'))
+  let closed = chat.viewport()
+  for (let waited = 0; closed.includes(fallbackNote) && waited < 3000; waited += 100) {
+    await delay(100)
+    closed = chat.viewport()
+  }
+  check('C2d. 浮层关闭后回到普通聊天（视口里没有浮层）', !closed.includes(fallbackNote), closed.split('\n').filter(l => l.trim() !== '').slice(-4).join(' | '))
   await chat.unmount()
 }
 
