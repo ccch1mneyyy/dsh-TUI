@@ -36,6 +36,7 @@ import {
   parseHandoffAckLine,
 } from '../src/handoffAck.js'
 import { restartChildEnv } from '../src/update.js'
+import { KERNEL_SWITCH_HANDOFF_ENV, resolveRememberedBackend } from '../src/kernelPrefs.js'
 
 let failures = 0
 function check(name: string, ok: boolean, detail = ''): void {
@@ -203,6 +204,21 @@ const stateTmp = mkdtempSync(join(tmpdir(), 'verify-handoff-atomic-'))
   check('restartChildEnv: stale handoff markers never leak into a plain replacement',
     env[HANDOFF_SCREEN_ENV] === undefined && env[HANDOFF_ACK_FD_ENV] === undefined && env[HANDOFF_ATTEMPT_ENV] === undefined)
 }
+{
+  // /restart on Claude after a switch, with `backend: dsh` in the config: the
+  // replacement must come back on Claude with the same session, not on DSH
+  // trying to resume a Claude id.
+  const env = restartChildEnv({ DSH_TUI_BACKEND: 'claude' } as NodeJS.ProcessEnv, 'claude-sess', 'restart', { kernel: 'claude' })
+  const lands = resolveRememberedBackend({ handoff: env[KERNEL_SWITCH_HANDOFF_ENV] as 'claude', configured: 'dsh', envRaw: env.DSH_TUI_BACKEND })
+  check('restartChildEnv: a plain restart keeps the current kernel over a pinning Config row',
+    lands === 'claude' && env.DSH_TUI_RESUME_SESSION === 'claude-sess', 'lands=' + lands)
+  const update = restartChildEnv({} as NodeJS.ProcessEnv, 'dsh-sess', 'update', { kind: 'update', kernel: 'dsh' })
+  check('restartChildEnv: an update restart keeps the current kernel too', update[KERNEL_SWITCH_HANDOFF_ENV] === 'dsh')
+  const switched = restartChildEnv({} as NodeJS.ProcessEnv, '', 'restart', { backend: 'claude', kernel: 'dsh' })
+  check('restartChildEnv: a kernel switch targets the new kernel, not the current one', switched[KERNEL_SWITCH_HANDOFF_ENV] === 'claude')
+  const plain = restartChildEnv({ [KERNEL_SWITCH_HANDOFF_ENV]: 'claude' } as NodeJS.ProcessEnv, 's', 'restart', {})
+  check('restartChildEnv: without a kernel no stale handoff is inherited', plain[KERNEL_SWITCH_HANDOFF_ENV] === undefined)
+}
 
 // ── e2e：真进程父/子角色（argv/env 复刻生产 spawn 链）────────────────────
 {
@@ -285,6 +301,10 @@ const stateTmp = mkdtempSync(join(tmpdir(), 'verify-handoff-atomic-'))
   check('update.ts: handoff spawn opens the ACK pipe (stdio[3])', /\['inherit', 'inherit', 'pipe', 'pipe'\]/.test(update))
   check('update.ts: close-without-ready restores the bracket', /if \(handoff && ackReadyAt === undefined\) restoreHandoffScreen\(\)/.test(update))
   check('update.ts: first-frame fact feeds the classification', /firstFrameAcked: ackReadyAt !== undefined/.test(update))
+  check('plugin.ts: /restart and /update pass the current kernel to the replacement',
+    /runRestart\(ctx, profile, handoffSessionId\(\), handoffHint, \{ kernel: backendChoice \}\)/.test(plugin)
+    && /runUpdate\(ctx, profile, handoffSessionId\(\), updateTargetVersion, backendChoice, handoffHint\)/.test(plugin)
+    && /updateTuiAndRestart\(sessionId, profile, targetVersion, kernel\)/.test(plugin))
 }
 
 if (!isReplacement && !process.argv.includes('--e2e-parent')) {

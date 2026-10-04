@@ -1851,12 +1851,14 @@ export async function updateTui(
  *   other profile would leave the running install untouched.
  * @param targetVersion - Exact version returned by the preflight registry
  *   check, or undefined when that check failed and pnpm should resolve latest.
+ * @param kernel - The kernel this process runs (TuiRestartOptions.kernel).
  * @returns Exit codes for the update run and the replacement process.
  */
 export async function updateTuiAndRestart(
   sessionId: string,
   profile: string,
   targetVersion?: string,
+  kernel?: 'dsh' | 'claude',
 ): Promise<TuiUpdateResult> {
   const outcome = await updateTui(profile, targetVersion)
   const { updatedFrom } = outcome
@@ -1872,6 +1874,7 @@ export async function updateTuiAndRestart(
   const restartCode = await restartTui(sessionId, {
     env: { [UPDATED_FROM_ENV]: updatedFrom },
     kind: 'update',
+    ...(kernel === undefined ? {} : { kernel }),
   })
   return { updateCode: 0, restartCode }
 }
@@ -2042,6 +2045,13 @@ export interface TuiRestartOptions {
    * sessions go back to the main screen before the spawn as before.
    */
   handoffScreen?: 'alt'
+  /**
+   * The kernel this process runs. A plain /restart or /update passes it in
+   * the one-shot KERNEL_SWITCH_HANDOFF_ENV so the replacement reopens the
+   * session on the same kernel even when a Config row names the other one
+   * (as it does after a kernel switch). Ignored when `backend` is set.
+   */
+  kernel?: 'dsh' | 'claude'
 }
 
 /**
@@ -2076,6 +2086,7 @@ export function restartChildEnv(
   delete childEnv[HANDOFF_SCREEN_ENV]
   delete childEnv[HANDOFF_ACK_FD_ENV]
   delete childEnv[HANDOFF_ATTEMPT_ENV]
+  if (options.backend === undefined && options.kernel !== undefined) childEnv[KERNEL_SWITCH_HANDOFF_ENV] = options.kernel
   if (options.backend !== undefined) {
     childEnv.DSH_TUI_BACKEND = options.backend
     // DSH_TUI_BACKEND alone loses to a Config row (config > env > memory),

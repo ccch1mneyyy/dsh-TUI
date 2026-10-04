@@ -1700,7 +1700,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           bootedFullscreen,
           hintText,
           undefined,
-          () => runUpdate(ctx, profile, handoffSessionId(), updateTargetVersion, handoffHint),
+          () => runUpdate(ctx, profile, handoffSessionId(), updateTargetVersion, backendChoice, handoffHint),
         )
         return
       }
@@ -1754,7 +1754,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           bootedFullscreen,
           t('restart-starting'),
           undefined,
-          () => runRestart(ctx, profile, handoffSessionId(), handoffHint),
+          () => runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice }),
         )
         return
       }
@@ -2823,6 +2823,7 @@ function runUpdate(
   profile: string | undefined,
   sessionId: string,
   targetVersion: string | undefined,
+  kernel: 'dsh' | 'claude',
   hint: (sessionId: string) => string = id => resumeCommand(profile, id),
 ): void {
   disposeRootAndThen(ctx, () => {
@@ -2830,7 +2831,7 @@ function runUpdate(
       process.stderr.write(`\n${t('update-aborted-no-profile')}\n`)
       process.exit(1)
     }
-    void updateTuiAndRestart(sessionId, profile, targetVersion).then(
+    void updateTuiAndRestart(sessionId, profile, targetVersion, kernel).then(
       ({ updateCode, restartCode }) => {
         if (updateCode !== 0) {
           process.stderr.write(
