@@ -137,6 +137,11 @@ export interface Config {
    *  `+N lines` hint; Ctrl+O / clicking the card expands it. Default off —
    *  the full title keeps rendering. */
   foldTerminalCommand?: boolean
+  /** Turn-usage ledger row (settings `dsh-tui.turnUsageRow`): the quiet
+   *  right-aligned line that closes each turn in the transcript (tokens
+   *  in/out, cache split, span, retries). Off by default; the ledger data
+   *  feeds /tokens, /status and the footer hover regardless. */
+  turnUsageRow?: boolean
   /** Show the session name as a chip on the prompt top border's right side
    *  (settings `dsh-tui.promptSessionLabel`); off by default. */
   promptSessionLabel?: boolean
@@ -301,6 +306,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
     value => normalizePageMargin(value),
   ),
   foldTerminalCommand: Schema.boolean().default(false),
+  turnUsageRow: Schema.boolean().default(false),
   promptSessionLabel: Schema.boolean().default(false),
   expandEditor: Schema.boolean().default(true),
   smoothStreaming: Schema.boolean().default(true),

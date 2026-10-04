@@ -470,6 +470,14 @@ export const SETTING_DEFINITIONS = {
       { value: 'strong', label: 'Strong', descriptions: { zh: '明显' } },
     ],
   },
+  'turnUsageRow': {
+    label: 'Turn usage row',
+    descriptions: { zh: '回合用量行' },
+    group: 'rendering',
+    hint: 'Show the quiet right-aligned ledger that closes each turn (tokens in/out, cache split, span, retries). Off by default — the /tokens and /status commands and the footer token hover keep reporting the same numbers either way.',
+    hintDescriptions: { zh: '在每回合末尾显示安静的右对齐用量小记（输入/输出、缓存分段、耗时、重试）。默认关闭——无论开关，/tokens、/status 与底栏 token 悬停都照常报告同样数字。' },
+    kind: 'boolean',
+  },
   'whale': {
     label: 'Header art',
     descriptions: { zh: '标题图形 logo' },

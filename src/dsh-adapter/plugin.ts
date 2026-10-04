@@ -717,6 +717,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     scrollGutter: config.scrollGutter,
     pageMargin: config.pageMargin,
     foldTerminalCommand: config.foldTerminalCommand,
+    turnUsageRow: config.turnUsageRow,
     promptSessionLabel: config.promptSessionLabel,
     expandEditor: config.expandEditor,
     smoothStreaming: config.smoothStreaming,
@@ -866,6 +867,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         // `?? config.foldTerminalCommand ?? false` already supplies the
         // default and keeps cordis.yml decisive.
         foldTerminalCommand: Schema.boolean(),
+        // Same no-default rule as foldTerminalCommand: applyDisplay resolves
+        // `?? config.turnUsageRow ?? false` so cordis.yml stays decisive.
+        turnUsageRow: Schema.boolean(),
         promptSessionLabel: Schema.boolean().default(false),
         // No schema default (same rule as foldTerminalCommand): applyDisplay
         // resolves `?? config.expandEditor ?? true` so cordis.yml stays
@@ -994,6 +998,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       scrollGutter?: ScrollGutterMode
       pageMargin?: PageMarginSetting
       foldTerminalCommand?: boolean
+      turnUsageRow?: boolean
       promptSessionLabel?: boolean
       expandEditor?: boolean
       smoothStreaming?: boolean
@@ -1086,6 +1091,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       channel.setPageMargin(pageMargin)
       applyPageMargin(pageMargin)
       channel.setFoldTerminalCommand(value.foldTerminalCommand ?? config.foldTerminalCommand ?? false)
+      channel.setTurnUsageRow(value.turnUsageRow ?? config.turnUsageRow ?? false)
       channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
       channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
@@ -1306,6 +1312,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
             // Unset in settings.yaml: show the effective resolution (cordis.yml
             // → off) instead of a blank — same rule as `fullscreen`'s field.
             return String(typeof value === 'boolean' ? value : config.foldTerminalCommand === true)
+          },
+        },
+        {
+          ...settingField('turnUsageRow'),
+          format(value: unknown): string {
+            // Same effective-resolution rule as foldTerminalCommand's field.
+            return String(typeof value === 'boolean' ? value : config.turnUsageRow === true)
           },
         },
         {

@@ -682,6 +682,11 @@ const GROUPS = {
 // 快照——result/turn 口径不双计、缓存缺席≠0、中断/通知/压缩/重放各形态、
 // 失败尝试（重试）只计一次。
     ["verify-usage-turn-summary", ['node', '--import', 'tsx/esm', 'scripts/verify-usage-turn-summary.ts']],
+// 回合用量行回炉（用户实测反馈）：设置 dsh-tui.turnUsageRow（默认关）只门
+// 渲染——关=visible 预过滤零行、数据照采（/tokens、/status、底栏 hover 不变）；
+// 开=右对齐安静徽记（无前缀、subtle 色阶）、模型名仅在与上一轮不同或首轮
+// 显示（noteModel 投影期标记，重复模型不刷屏）。
+    ["verify-turn-usage-row", ['node', '--import', 'tsx/esm', 'scripts/verify-turn-usage-row.tsx']],
 // 悬停浮层第二批回归：@ 文件补全面板长路径悬停弹全路径（完整可见的短路径
 // 不弹）、会话列表行标题截断悬停弹完整标题+绝对时间+cwd（未截断不重复
 // 标题）、状态栏 model/git 字段悬停明细（provider/ctx 窗口/完整分支）、

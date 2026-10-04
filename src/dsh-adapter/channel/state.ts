@@ -63,6 +63,7 @@ export interface ChannelLaunchOptions {
   scrollGutter?: ScrollGutterMode
   pageMargin?: PageMarginSetting
   foldTerminalCommand?: boolean
+  turnUsageRow?: boolean
   promptSessionLabel?: boolean
   expandEditor?: boolean
   smoothStreaming?: boolean
@@ -150,7 +151,7 @@ export function createInitialChannelView(
   'activityFrames' | 'configuredProvider' | 'configuredModel' |
   'configuredPreset' | 'configuredActivityFrames' | 'configuredLang' | 'diffLayout' |
   'thinkingFold' | 'jobGroupFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' |
-  'foldTerminalCommand' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' |
+  'foldTerminalCommand' | 'turnUsageRow' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' |
   'statusBar' | 'whale' | 'whaleIdle' | 'splashFont' | 'minimalUi' | 'activityEnabled' | 'contextBarEnabled' |
   'statusBar' | 'whale' | 'whaleIdle' | 'whaleGirl' | 'minimalUi' | 'activityEnabled' | 'contextBarEnabled' |
   'agentPreset' | 'goal' | 'todos' | 'loadedContext' | 'pending' | 'commandList' |
@@ -172,6 +173,7 @@ export function createInitialChannelView(
     jobGroupFold: normalizeJobGroupFold(options.jobGroupFold),
     toolBackground: normalizeToolBackground(options.toolBackground), scrollGutter: normalizeScrollGutter(options.scrollGutter),
     pageMargin: normalizePageMargin(options.pageMargin), foldTerminalCommand: options.foldTerminalCommand === true,
+    turnUsageRow: options.turnUsageRow === true,
     promptSessionLabel: options.promptSessionLabel === true, expandEditor: options.expandEditor !== false,
     smoothStreaming: options.smoothStreaming !== false, statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false, whaleIdle: options.whaleIdle !== false, whaleGirl: options.whaleGirl === true, splashFont: normalizeSplashFont(options.splashFont), minimalUi: options.minimalUi === true, activityEnabled: options.activity !== false,
