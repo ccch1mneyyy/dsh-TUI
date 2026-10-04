@@ -105,7 +105,7 @@ const settled = async (probe: () => boolean): Promise<boolean> => {
 try {
   // ── 1. mapping table, row by row ─────────────────────────────────────────
   {
-    // R1/R2 turn.start/end: bracket, duration, outcome (ok + error).
+    // turn.start/end: bracket, duration, outcome (ok + error).
     source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
     source.observe({ type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 1_400 }, false)
     let turns = rowsOf(fold(), 'turn')
@@ -119,7 +119,7 @@ try {
     source.reset()
   }
   {
-    // R3 step: bracket + timing slot; no timestamps → observed clock.
+    // step: bracket + timing slot; no timestamps → observed clock.
     source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
     source.observe({ type: 'step.start', turn: 1, step: 1 }, false)
     const stamped = source.events().find(event => event.type === 'step/start')!
@@ -133,7 +133,7 @@ try {
     source.reset()
   }
   {
-    // R4 attempt/retry: one api-retry notice + supersede = ONE row; an
+    // attempt/retry: one api-retry notice + supersede = ONE row; an
     // abandoned end that no notice announced adds its own.
     source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
     source.observe({ type: 'assistant.attempt.start', attemptId: 'a1', turn: 1, step: 1 }, false)
@@ -149,21 +149,33 @@ try {
     source.reset()
   }
   {
-    // R5 assistant.delta: chunk timing only (text, reasoning, tool-args).
+    // assistant.delta: chunk timing only (text, reasoning, tool-args).
     source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
     source.observe({ type: 'step.start', turn: 1, step: 1 }, false)
     source.observe({ type: 'assistant.attempt.start', attemptId: 'a1', turn: 1, step: 1 }, false)
     source.observe({ type: 'assistant.delta', attemptId: 'a1', index: 0, time: 1_050, delta: { kind: 'reasoning', text: 'hmm' } }, false)
+    const firstSnapshot = source.events()
     source.observe({ type: 'assistant.delta', attemptId: 'a1', index: 1, time: 1_080, delta: { kind: 'text', text: 'he' } }, false)
+    const secondSnapshot = source.events()
     source.observe({ type: 'assistant.delta', attemptId: 'a1', index: 2, time: 1_120, delta: { kind: 'tool-args', callId: 'c1', partialJson: '{' } }, false)
     const timing = fold().timing.get('1:1')!
     check('delta: first/last chunk timing (reasoning+text+args)', timing.firstChunk === 1_050 && timing.lastChunk === 1_120)
     const chunks = source.events().filter(event => event.type === 'assistant/chunk')
-    check('delta: one raw chunk per stream record', chunks.length === 3)
+    check('delta: one raw chunk per attempt boundary', chunks.length === 2)
+    check('delta: replacing the tail preserves earlier snapshots',
+      firstSnapshot.filter(event => event.type === 'assistant/chunk').length === 1
+        && secondSnapshot.filter(event => event.type === 'assistant/chunk').length === 2
+        && secondSnapshot.filter(event => event.type === 'assistant/chunk')[1]!.time === 1_080)
+    check('delta: the attempt tail carries its latest timestamp', chunks[1]!.time === 1_120)
+    source.reset()
+    source.observe({ type: 'assistant.delta', attemptId: 'no-start', index: 0, turn: 1, step: 1, time: 2_000, delta: { kind: 'text', text: 'a' } }, false)
+    source.observe({ type: 'assistant.delta', attemptId: 'no-start', index: 1, turn: 1, step: 1, time: 2_020, delta: { kind: 'text', text: 'b' } }, false)
+    source.observe({ type: 'assistant.delta', attemptId: 'no-start', index: 2, turn: 1, step: 1, time: 2_040, delta: { kind: 'text', text: 'c' } }, false)
+    check('delta: an attempt without an explicit start still retains first and tail', source.events().filter(event => event.type === 'assistant/chunk').length === 2)
     source.reset()
   }
   {
-    // R6 thinking estimate: marker row only without reasoning text.
+    // Thinking estimate: marker row only without reasoning text.
     source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
     source.observe({ type: 'step.start', turn: 1, step: 1 }, false)
     source.observe({ type: 'assistant.attempt.start', attemptId: 'a1', turn: 1, step: 1 }, false)
@@ -185,7 +197,7 @@ try {
     source.reset()
   }
   {
-    // R7 assistant usage: message-level attaches to the first row once.
+    // assistant usage: message-level attaches to the first row once.
     source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
     source.observe({ type: 'step.start', turn: 1, step: 1 }, false)
     source.observe({ type: 'assistant.message', seq: 2, anchor: 'm1', turn: 1, step: 1, attemptId: 'a1', time: 1_100, blocks: [{ type: 'text', text: 'one' }, { type: 'text', text: 'two' }], usage: { input: 10, output: 5, cacheRead: 100, cacheWrite: 7 }, canonical: true }, false)
@@ -197,7 +209,7 @@ try {
     source.reset()
   }
   {
-    // R8 turn-level usage: backfill only when no message carried usage.
+    // turn-level usage: backfill only when no message carried usage.
     source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
     source.observe({ type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 1_500, usage: { input: 7, output: 3 } }, false)
     const turns1 = rowsOf(fold(), 'turn')
@@ -220,7 +232,7 @@ try {
     source.reset()
   }
   {
-    // R9/R10 tool call/progress/result (ok + error).
+    // tool call/progress/result (ok + error).
     source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
     source.observe({ type: 'step.start', turn: 1, step: 1 }, false)
     source.observe({ type: 'tool.call', seq: 3, anchor: 'c1', turn: 1, step: 1, callId: 'c1', name: 'Read', argsJson: '{"path":"a.ts"}', time: 1_300 }, false)
@@ -237,7 +249,7 @@ try {
     source.reset()
   }
   {
-    // R11/R12 permission + question brackets.
+    // permission + question brackets.
     source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
     source.observe({ type: 'permission.request', request: { requestId: 'r1', toolName: 'Write', callId: 'c1', reason: 'outside sandbox', options: [{ id: 'a', kind: 'allow-once' }, { id: 'd', kind: 'reject' }] } }, false)
     source.observe({ type: 'permission.settled', requestId: 'r1', outcome: 'rejected' }, false)
@@ -250,7 +262,7 @@ try {
     source.reset()
   }
   {
-    // R13 compaction with pre/post tokens.
+    // compaction with pre/post tokens.
     source.observe({ type: 'compaction.start', trigger: 'auto', cancellable: false, time: 1_000 }, false)
     source.observe({ type: 'compaction.end', ok: true, preTokens: 1_200, postTokens: 700, time: 1_300 }, false)
     const compactions = rowsOf(fold(), 'compaction')
@@ -258,7 +270,7 @@ try {
     source.reset()
   }
   {
-    // R14 subagent child lane: descriptor row, child traffic excluded,
+    // subagent child lane: descriptor row, child traffic excluded,
     // subagent usage never folded into the parent totals.
     source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
     source.observe({ type: 'tool.call', seq: 3, anchor: 't1', turn: 1, step: 1, callId: 't1', name: 'Task', argsJson: '{}', time: 1_100 }, false)
@@ -274,7 +286,7 @@ try {
     source.reset()
   }
   {
-    // R15/R16 user.message + todo.write.
+    // user.message + todo.write.
     source.observe({ type: 'turn.start', turn: 1, origin: 'user', time: 1_000 }, false)
     source.observe({ type: 'user.message', id: 'u1', anchor: 'u1', seq: 1, turn: 1, time: 1_010, source: 'user', text: 'hello there', blocks: [{ type: 'text', text: 'hello there' }] }, false)
     source.observe({ type: 'user.message', id: 'u2', anchor: 'u2', seq: 2, time: 1_020, source: 'injected', text: '<skill body>', label: 'skill', blocks: [{ type: 'text', text: '<skill body>' }] }, false)

@@ -50,13 +50,10 @@
  * as an observation rather than a backend fact. `seq` is this source's own
  * monotonic counter: durable `seq`s the vocabulary carries are used ONLY for
  * deduplication (a reconnect may replay a durable chunk), never as envelope
- * identity — the envelope must stay monotonic in emission order for the
- * inspector's binary search. Emitted events and their payloads are frozen
- * and the backing array only appends, so the projection's incremental
- * prefix-identity contract holds exactly as it does for a DSH snapshot —
- * per lane: every lane snapshot satisfies the same contract, and a merged
- * descendants snapshot is rebuilt (and re-cached) only when a member lane
- * grew.
+ * identity — the envelope stays monotonic in emission order for the
+ * inspector's binary search. Emitted events and payloads are frozen. The
+ * current attempt's tail chunk may be replaced in a new snapshot; older
+ * snapshots remain unchanged. Merged descendants rebuild when a lane changes.
  */
 
 import type { AgentEvent } from '../../agent/events.js'
@@ -69,11 +66,11 @@ export interface AgentTrajectorySource {
   observe(event: AgentEvent, replaying: boolean): void
   /** Forget everything: a session swap or an in-place conversation reset. */
   reset(): void
-  /** The append-only raw-event snapshot (`traceEvents()`'s return). */
+  /** The raw-event snapshot (`traceEvents()`'s return). */
   events(): readonly RawTrajEvent[]
   /** Every registered child lane, in registration order (drilldown roster). */
   lanes(): readonly TrajectoryLane[]
-  /** One lane's own append-only raw-event snapshot (prefix-identity contract). */
+  /** One lane's raw-event snapshot. */
   laneEvents(agentId: string): readonly RawTrajEvent[]
   /** The agent's subtree merged in emission order (agent + all descendants). */
   descendantEvents(agentId: string): readonly RawTrajEvent[]
@@ -91,6 +88,8 @@ interface OpenAttempt {
   readonly step: number
   /** Summed `reasoning-tokens` estimates of this attempt. */
   thinkEstimated: number
+  firstChunkIndex: number | undefined
+  lastChunkIndex: number | undefined
 }
 
 /**
@@ -105,8 +104,7 @@ interface LaneFold {
   readonly agentId: string | undefined
   emitted: RawTrajEvent[]
   /**
-   * The published snapshot — rebuilt lazily after an append, exactly like
-   * the main lane's (see the clock/identity notes in the module header).
+   * The published snapshot, rebuilt lazily after a lane change.
    */
   snapshot: readonly RawTrajEvent[] | undefined
   /** Durable identities already folded into THIS lane (`type#seq`). */
@@ -164,15 +162,18 @@ export function createAgentTrajectorySource(options?: { readonly clock?: () => n
   let laneVersion = 0
   let mergedCache: { readonly agentId: string; readonly version: number; readonly snapshot: readonly RawTrajEvent[] } | undefined
 
-  const emitInto = (fold: LaneFold, type: string, time: number | undefined, data: Record<string, unknown>): void => {
+  const emitInto = (fold: LaneFold, type: string, time: number | undefined, data: Record<string, unknown>, replaceIndex?: number): void => {
     const observed = time === undefined || !Number.isFinite(time)
-    seq += 1
-    fold.emitted.push(Object.freeze({
+    const previous = replaceIndex === undefined ? undefined : fold.emitted[replaceIndex]
+    const eventSeq = previous?.seq ?? ++seq
+    const event = Object.freeze({
       type,
-      seq,
+      seq: eventSeq,
       time: observed ? clock() : time,
       data: Object.freeze(observed ? { ...data, observed: true } : data),
-    }))
+    })
+    if (replaceIndex === undefined) fold.emitted.push(event)
+    else fold.emitted[replaceIndex] = event
     fold.snapshot = undefined
     if (fold.agentId !== undefined) laneVersion += 1
   }
@@ -325,7 +326,7 @@ export function createAgentTrajectorySource(options?: { readonly clock?: () => n
         }
         closeRetry(fold)
         fold.retrySignaled = false
-        fold.attempt = { attemptId: event.attemptId, turn: event.turn, step: event.step, thinkEstimated: 0 }
+        fold.attempt = { attemptId: event.attemptId, turn: event.turn, step: event.step, thinkEstimated: 0, firstChunkIndex: undefined, lastChunkIndex: undefined }
         return
       }
       case 'assistant.attempt.end': {
@@ -343,16 +344,30 @@ export function createAgentTrajectorySource(options?: { readonly clock?: () => n
         if (event.delta.kind === 'other') return
         if (event.seq !== undefined) {
           if (duplicate(fold, 'delta', event.seq)) return
-        } else if (fold.attempt === undefined || fold.attempt.attemptId !== event.attemptId) {
+        } else if ((fold.attempt === undefined || fold.attempt.attemptId !== event.attemptId)
+          && (event.turn === undefined || event.step === undefined)) {
           return
         }
         const position = event.turn !== undefined && event.step !== undefined
           ? { turn: event.turn, step: event.step }
           : fold.attempt
         if (position === undefined) return
-        // The projection reads nothing from a chunk's payload — only its
-        // envelope time separates first-token from decode throughput.
-        emitInto(fold, 'assistant/chunk', event.time, { turn: position.turn, step: position.step })
+        // Preserve the first chunk and keep the latest chunk in one replaceable slot.
+        let current = fold.attempt?.attemptId === event.attemptId ? fold.attempt : undefined
+        if (current === undefined) {
+          current = { attemptId: event.attemptId, turn: position.turn, step: position.step, thinkEstimated: 0, firstChunkIndex: undefined, lastChunkIndex: undefined }
+          fold.attempt = current
+        }
+        if (current.firstChunkIndex === undefined) {
+          const index = fold.emitted.length
+          emitInto(fold, 'assistant/chunk', event.time, { turn: position.turn, step: position.step })
+          current.firstChunkIndex = index
+        } else if (current.lastChunkIndex === undefined) {
+          current.lastChunkIndex = fold.emitted.length
+          emitInto(fold, 'assistant/chunk', event.time, { turn: position.turn, step: position.step })
+        } else {
+          emitInto(fold, 'assistant/chunk', event.time, { turn: position.turn, step: position.step }, current.lastChunkIndex)
+        }
         return
       }
       case 'assistant.message': {
@@ -556,7 +571,7 @@ export function createAgentTrajectorySource(options?: { readonly clock?: () => n
     }
   }
 
-  /** A lane snapshot: lazily frozen copy, prefix-stable across appends. */
+  /** A lane snapshot: lazily frozen copy of the current fold. */
   const foldSnapshot = (fold: LaneFold): readonly RawTrajEvent[] => {
     fold.snapshot ??= Object.freeze([...fold.emitted])
     return fold.snapshot
