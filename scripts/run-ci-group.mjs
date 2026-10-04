@@ -118,6 +118,14 @@ const GROUPS = {
 // p50/p95/max 只打印观察（含 settle 轮询粒度），不作断言。
     ['verify-text-paint-budget', ['node', '--import', 'tsx/esm', 'scripts/verify-text-paint-budget.tsx']],
     ['verify-markdown-codebox-performance', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-codebox-performance.tsx']],
+// Typed decoration 门（渲染升级 Batch C，设计文档 §2）：typed 与 hybrid
+// （DSH_TUI_CODE_FRAME=hybrid＝Batch B 基线）在行/noSelect 位图/softWrap
+// 簿记/三类锚点复制字节上逐位等价；结构计数＝代码框 1 个 ink-text、
+// 零结构 ink-box（hybrid 回退保留组件布局）；复制契约（正文锚点得
+// 干净代码、rail/header 锚点只复制装饰）；D 批遗留的终端折行续行
+// 落列 0 在 quote/list/task/CJK 上治好（无装饰坏基线证红）、指纹守卫
+// 同源消费、mermaid fallback 共享、装饰对象身份参与 paint cache 键。
+    ['verify-markdown-typed-decoration', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-typed-decoration.tsx']],
     ['verify-text-viewport-paint', ['node', '--import', 'tsx/esm', 'scripts/verify-text-viewport-paint.ts']],
     ['verify-tool-history-window', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-history-window.tsx']],
 // 流式平滑揭示回归（dsh-tui.smoothStreaming）：调度器步进/游标生命周期
