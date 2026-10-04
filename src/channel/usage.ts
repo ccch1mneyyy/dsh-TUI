@@ -1,6 +1,6 @@
 /**
  * Backend-neutral token accounting helpers for the shared projector. Pricing
- * policy (which rate window a request ran in, what a token costs) is NOT here:
+ * policy (which rate window a request ran in, what a token costs) is not here:
  * the projector receives the window as an injected `pricingWindow` and only
  * buckets counts; pricing tables stay with their backend.
  */
@@ -105,11 +105,10 @@ function isDenseScript(codePoint: number): boolean {
  *
  * Pure and deterministic: non-negative, zero only for the empty string, and
  * monotonic — appending characters never lowers the result. A single call on
- * pure ASCII input is exactly the old `ceil(length / 4)` (there is an explicit
- * fast path), so per-message English numbers are unchanged; note that a caller
- * which used to sum characters and round once now rounds per call, so summing
- * this estimator over messages can differ from the legacy total by at most one
- * token per call (ASCII-only sums included). ANSI escapes are NOT stripped: they
+ * pure ASCII input is exactly `ceil(length / 4)` (there is an explicit fast
+ * path). Rounding happens per call, so summing this estimator over messages
+ * can differ from rounding the summed characters once by at most one token
+ * per call (ASCII-only sums included). ANSI escapes are not stripped: they
  * are ASCII, and the provider tokenizes the literal message bytes rather than
  * the rendered cells.
  *

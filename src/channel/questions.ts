@@ -1,5 +1,5 @@
 /**
- * Ask-user-question store — the UI-side half of every structured ask: the
+ * Ask-user-question store, the UI-side half of every structured ask: the
  * DSH user-interaction seam (`ctx.userQuestions`, the model-facing
  * `ask_user_question` tool), local wizards (`/provider`, `/login`) and a
  * non-DSH session's `question.request` events (Claude `AskUserQuestion`,
@@ -11,15 +11,15 @@
  * arrive one at a time in practice (the tool blocks until answered), but
  * concurrent asks from subagents are drained FIFO.
  *
- * This store owns the INTERACTION only. The answered-questionnaire transcript
- * record is a projection fact: it is folded from the persisted tool result
+ * This store owns the interaction only. The answered-questionnaire transcript
+ * record belongs to the projection: it is folded from the persisted tool result
  * (`channel/question-record.ts`, issue #1009), never pushed from here, so it
  * survives `/resume`, rewind and replay.
  *
  * Backend-neutral (`verify:boundary`): the request/answer shapes are the
  * store's own (structurally the DSH protocol's, so `src/dsh-adapter/` passes
  * its official types straight through), and the interruption error is
- * injected — the DSH store rejects with the protocol's `UserQuestionError`
+ * injected: the DSH store rejects with the protocol's `UserQuestionError`
  * (`src/dsh-adapter/questions.ts`), which dsh-plan-mode keys on.
  */
 
@@ -261,7 +261,7 @@ export class QuestionStore implements QuestionStoreLike {
   }
 
   /**
-   * Asker entry point — the DSH `ask_user_question` provider, local wizards
+   * Asker entry point for the DSH `ask_user_question` provider, local wizards
    * (e.g. `/provider`) and the channel's backend question bridge.
    * @param request - The ask request: questions plus optional abort signal.
    * @param options - `redact` hides answer text from the answered-questionnaire
@@ -411,7 +411,7 @@ export class QuestionStore implements QuestionStoreLike {
     pending.reject(this.interruption('the user cancelled ask_user_question', 'ASK_CANCELLED'))
   }
 
-  /** Asker-side interruption — abort signal fired or plugin teardown. */
+  /** Asker-side interruption: abort signal fired or plugin teardown. */
   private fail(pending: PendingQuestion): void {
     pending.reject(this.interruption('ask_user_question was interrupted before the user answered', 'ASK_ABORTED'))
   }

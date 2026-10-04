@@ -8,13 +8,12 @@
 import type { SelectionAttachment } from '../adapter/ports/channel-view.js'
 
 /**
- * Derive the transcript indicator from the DURABLE user-message content:
+ * Derive the transcript indicator from the durable user-message content:
  * the `<attached-file path="…" selection count="N">` block the submit path
  * appended is part of the persisted event, so a replayed session can rebuild
  * the "Selected N lines from <file>" line even though the in-memory
- * message-id → attachment map starts empty (maintainer review round 3: the
- * session log is the source of truth — the indicator must not depend on
- * process-local state).
+ * message-id → attachment map starts empty. The indicator must not depend
+ * on process-local state.
  */
 export function replaySelectionAttachment(
   content: readonly unknown[] | undefined,

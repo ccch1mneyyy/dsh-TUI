@@ -1,6 +1,6 @@
 /**
- * Backend registry contract (docs/agent-backend-design.md §3.4): how a
- * backend is detected, how a session is opened, and its offline catalog.
+ * Backend registry contract: how a backend is detected, how a session is
+ * opened, and its offline catalog.
  */
 import type { PreviewEntry, SessionSummary } from '../adapter/ports/channel-session.js'
 import type { AgentSessionRef } from './refs.js'
@@ -45,7 +45,7 @@ export interface OAuthCredentialSource {
    * undefined when none is stored. Rejects when a needed refresh fails.
    *
    * `rejected` is the access token the backend just refused: it is refreshed
-   * only while the store still holds that very token (compare-and-swap) — a
+   * only while the store still holds that very token (compare-and-swap). A
    * credential rotated meanwhile (a fresh `/login`, another process's
    * refresh) is returned as is, never force-refreshed.
    */
@@ -79,10 +79,10 @@ export interface SessionListScope {
 }
 
 /**
- * A backend's offline session catalog (design §4.11): no session needs to be
- * open. Rows are the browser's own `SessionSummary` shape with `backendId`
- * set; the backend's store stays the source of truth (nothing is indexed in
- * the TUI beyond what the catalog itself caches).
+ * A backend's offline session catalog: no session needs to be open. Rows
+ * are the browser's own `SessionSummary` shape with `backendId` set. The
+ * backend's own store stays authoritative; the TUI indexes nothing beyond
+ * what the catalog itself caches.
  */
 export interface SessionCatalog {
   list(scope?: SessionListScope): Promise<readonly SessionSummary[]>

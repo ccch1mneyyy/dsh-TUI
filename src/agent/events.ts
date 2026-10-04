@@ -1,17 +1,16 @@
 /**
- * The Agent Domain event vocabulary (docs/agent-backend-design.md §3.3): one
- * high-fidelity superset every backend translator emits and the one shared
- * projector (`src/channel/projection.ts`) consumes. Replay and live use the
- * same vocabulary; a backend that lacks a capability emits nothing for it
- * rather than a fake event.
+ * The Agent Domain event vocabulary (docs/agent-backend-design.md): one
+ * superset every backend translator emits and the shared projector
+ * (`src/channel/projection.ts`) consumes. Replay and live use the same
+ * vocabulary; a backend that lacks a capability emits nothing for it rather
+ * than a fake event.
  *
- * Identity (design §3.3 table): `seq` orders and deduplicates; `anchor` is the
- * backend's native resume/rewind anchor; `turn`/`step` position a model call;
- * `attemptId` names one streamed attempt; `callId` pairs a tool call with its
- * result.
+ * Identity: `seq` orders and deduplicates; `anchor` is the backend's native
+ * resume/rewind anchor; `turn`/`step` position a model call; `attemptId`
+ * names one streamed attempt; `callId` pairs a tool call with its result.
  *
- * Pure types plus no I/O: this module imports nothing but host-plane VIEW
- * types (the UI's own vocabulary), never a vendor package.
+ * Types only, no I/O: this module imports nothing but host-plane view types
+ * (the UI's own vocabulary), never a vendor package.
  */
 import type { AgentMessageView, ChannelGoal, TodoPanelItem, TranscriptImage } from '../adapter/ports/channel-view.js'
 import type { ToolCallPresentation, ToolResultPresentation } from './presentation.js'
@@ -19,7 +18,7 @@ import type { ToolCallPresentation, ToolResultPresentation } from './presentatio
 /**
  * Neutral view of one content block. Only `text` blocks carry text the
  * channel reads; every other kind passes through opaque (a translator may
- * hand its native block array over by reference — the projector only reads
+ * hand its native block array over by reference; the projector only reads
  * `type` and `text`).
  */
 export interface ContentBlockView {
@@ -87,7 +86,7 @@ export interface PermissionOptionView {
 }
 
 /**
- * One parked permission prompt (design §4.7). Everything but `requestId`,
+ * One parked permission prompt. Everything but `requestId`,
  * `toolName` and `options` is optional presentation the backend may know;
  * the panel shows what is present.
  */
@@ -225,10 +224,10 @@ export type AgentEvent =
    */
   | { readonly type: 'user.message'; readonly id: string; readonly anchor: string; readonly seq: number; readonly turn?: number; readonly time: number; readonly source: 'user' | 'injected' | 'goal' | 'compaction' | 'command-output' | 'notification'; readonly text: string; readonly blocks: readonly ContentBlockView[]; readonly images?: readonly ImageRef[]; readonly label?: string }
   /**
-   * Snapshot of the backend's queue of unclaimed user inputs (REPLACE
-   * semantics). `claimed`/`discarded` name the ids that left the queue in this
-   * change: a claimed input became part of a turn, a discarded one never will
-   * (its channel-side companions must be dropped too).
+   * Snapshot of the backend's queue of unclaimed user inputs (replaces the
+   * previous one). `claimed`/`discarded` name the ids that left the queue in
+   * this change: a claimed input became part of a turn, a discarded one never
+   * will (its channel-side companions must be dropped too).
    */
   | { readonly type: 'pending.changed'; readonly items: readonly PendingItem[]; readonly claimed?: readonly string[]; readonly discarded?: readonly string[] }
   // ── assistant stream ────────────────────────────────────────────────
@@ -236,7 +235,7 @@ export type AgentEvent =
   | { readonly type: 'assistant.attempt.start'; readonly attemptId: string; readonly turn: number; readonly step: number; readonly model?: string; readonly parentCallId?: string }
   /**
    * One stream delta. Live deltas route by `attemptId` (a delta of an attempt
-   * the projector never saw open adopts the open step — the reattach case);
+   * the projector never saw open adopts the open step: the reattach case);
    * positioned deltas (`seq` + `turn`/`step`, legacy durable chunks) apply to
    * that step directly and are deduplicated by `seq`. `other` marks a
    * non-content stream record (block boundary, usage, finish).
@@ -291,9 +290,9 @@ export type AgentEvent =
    * `parentAgentId` = the agent that spawned this child, when the backend
    * can state it as a fact (Claude resume: `parent_agent_id` from the disk
    * transcript, or the transcript the delegating call sits in). Absent =
-   * the parent is not known YET — depth 1 still proves a main-loop child,
-   * and nothing may infer a parent from depth alone (design agent-team
-   * §2: the tree only trusts real parent facts).
+   * the parent is not known yet. Depth 1 still means a main-loop child, but
+   * nothing infers a parent from depth alone: the agent tree is built only
+   * from parents the backend actually reported.
    */
   | { readonly type: 'subagent.start'; readonly agentId: string; readonly parentCallId?: string; readonly parentAgentId?: string; readonly description: string; readonly kind?: string; readonly model?: string; readonly background: boolean; readonly depth?: number; readonly time: number }
   /** A subagent reported progress. */
@@ -317,7 +316,7 @@ export type AgentEvent =
   | { readonly type: 'task.output'; readonly taskId: string; readonly text: string; readonly time: number; readonly callId?: string }
   /** A background task finished. */
   | { readonly type: 'task.end'; readonly taskId: string; readonly status: 'completed' | 'failed' | 'stopped'; readonly summary?: string; readonly outputFile?: string; readonly time: number }
-  /** The complete set of live background tasks (REPLACE semantics). */
+  /** The complete set of live background tasks (replaces the previous set). */
   | { readonly type: 'tasks.snapshot'; readonly taskIds: readonly string[] }
   // ── context and modes ───────────────────────────────────────────────
   /** A context compaction started (`cancellable` only for one this process may abort). */
@@ -361,12 +360,12 @@ export type AgentEvent =
    * session model) and the reasoning effort when stated.
    */
   | { readonly type: 'request.header'; readonly model?: string; readonly effort?: string }
-  // ── agent-to-agent messages (design agent-team-full §5.4) ─────────────
+  // ── agent-to-agent messages ─────────────────────────────────────────
   /**
-   * An agent↔agent relay OBSERVATION: a Claude parent's SendMessage tool
+   * An observed agent↔agent relay: a Claude parent's SendMessage tool
    * call/result, emitted by the backend translator as the call streams and
    * again when its result settles (same `message.messageId`; the state only
-   * advances — an unrecognized result is 'unknown', never a guessed
+   * advances, and an unrecognized result is 'unknown' rather than a guessed
    * delivery). DSH relay sources fold adapter-side straight from the durable
    * session events, so they emit no event here.
    */

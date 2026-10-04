@@ -2,7 +2,7 @@
  * The backend-neutral prompt contracts of the TUI's side calls (`/btw`,
  * `/recap`): what one tool-less, single-answer auxiliary call is asked, and
  * how a recap answer is read back. Every backend's side call uses the same
- * words — DSH sends them over its own derived history (`dsh-adapter/
+ * words: DSH sends them over its own derived history (`dsh-adapter/
  * sideQuestion.ts`, `recap.ts`), Claude over a throwaway fork of the
  * conversation (`backends/claude/side-query.ts`).
  *
@@ -41,11 +41,11 @@ export interface SideThreadPriorTurn {
 }
 
 /**
- * Carry the recent turns of a side thread into the NEXT single-turn ask:
+ * Carry the recent turns of a side thread into the next single-turn ask:
  * the pairs travel as explicit quoted context inside the question payload,
  * so every backend's one-shot side call keeps its own contract unchanged
  * (the wrapper still sees "one question, one answer, no tools"). The result
- * is what the caller passes to `sideQuery.ask` as the question — never a
+ * is what the caller passes to `sideQuery.ask` as the question, not a
  * second conversation: nothing here writes a session record anywhere.
  *
  * `omittedOlder` is the count of completed pairs the budget dropped from

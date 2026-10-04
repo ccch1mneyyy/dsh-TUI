@@ -1,5 +1,5 @@
 /**
- * Stable session identity across backends (docs/agent-backend-design.md §3.4).
+ * Stable session identity across backends.
  * A bare session id is only unique inside one backend's catalog, so every
  * cross-backend reference carries the backend id with it.
  */
@@ -17,8 +17,8 @@ export const DEFAULT_BACKEND_ID = 'dsh'
 
 /**
  * Serialize a reference as `<backendId>:<sessionId>`. DSH references
- * serialize WITHOUT a prefix, so every pre-multi-backend persisted id (MRU
- * lists, `--resume <id>`) stays valid as-is.
+ * serialize without a prefix, so DSH ids persisted by older builds (MRU
+ * lists, `--resume <id>`) stay valid as-is.
  */
 export function formatSessionRef(ref: AgentSessionRef): string {
   return ref.backendId === DEFAULT_BACKEND_ID ? ref.sessionId : `${ref.backendId}:${ref.sessionId}`
@@ -26,7 +26,7 @@ export function formatSessionRef(ref: AgentSessionRef): string {
 
 /**
  * Parse {@link formatSessionRef} output. Backend ids may themselves contain
- * a colon (`acp:gemini`), so the prefix is the LONGEST known backend id the
+ * a colon (`acp:gemini`), so the prefix is the longest known backend id the
  * text starts with (followed by `:` and a non-empty session id); any other
  * string is a bare DSH session id (DSH ids never need escaping this way).
  */

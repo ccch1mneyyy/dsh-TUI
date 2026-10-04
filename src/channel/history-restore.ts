@@ -1,7 +1,6 @@
 /**
  * "Load earlier" for a session whose durable record is read through the
- * `transcript` capability (docs/agent-backend-design.md §4.11): the
- * backend-neutral half.
+ * `transcript` capability: the backend-neutral half.
  *
  * - Folding: a row the record can restore is one with a stable identity —
  *   a tool card (its `callId`), a user / assistant / reasoning row stamped
@@ -10,7 +9,7 @@
  *   the record's replay events, matched by those identities, exactly as the
  *   DSH log restore rebuilds it (text, tool arguments, result, views).
  * - Older history: `projectHistorySlice` projects an older slice through the
- *   ONE shared projector (and the activity projection, so subagent cards
+ *   one shared projector (and the activity projection, so subagent cards
  *   render) into scratch rows, and `prependHistoryRows` puts them ahead of
  *   the transcript as restored rows (exempt from folding) with ids below
  *   every existing row (row ids order "new since" bookkeeping).

@@ -1,12 +1,11 @@
 /**
- * Backend-neutral subagent and background-task projection
- * (docs/agent-backend-design.md §4.8, §5.1): the `subagent.*`, `task.*` and
- * `tasks.snapshot` events of a session, plus the child-lane events of its
- * subagents (assistant / tool events carrying `parentCallId`), become the
- * `SubagentState` / `BackgroundJobState` rosters the subagent dashboard,
- * `/agents`, the `/jobs` panel and the status-line chip read — and one
- * transcript card per subagent (`kind: 'subagent'`) and per background job
- * (`kind: 'job'`), placed where the event arrived.
+ * Backend-neutral subagent and background-task projection: the
+ * `subagent.*`, `task.*` and `tasks.snapshot` events of a session, plus the
+ * child-lane events of its subagents (assistant / tool events carrying
+ * `parentCallId`), become the `SubagentState` / `BackgroundJobState` rosters
+ * the subagent dashboard, `/agents`, the `/jobs` panel and the status-line
+ * chip read, plus one transcript card per subagent (`kind: 'subagent'`) and
+ * per background job (`kind: 'job'`), placed where the event arrived.
  *
  * The shared projector hands this module every such event in stream order
  * (`apply`), so a card lands exactly where its delegation happened, in live
@@ -18,13 +17,13 @@
  * `subagent.start` for a known lane completes the first and re-keys it to the
  * new id (a backend may only learn the subagent's own id after the call).
  *
- * Terminal states: the first real end wins. `tasks.snapshot` is a REPLACE
- * level signal: a background subagent or job missing from it with no end of
- * its own is settled as inferred (`unknown` / killed + "status unknown"); a
- * real end arriving later still overrides an inferred one (the level may
- * precede its bookend). A foreground subagent still live when its turn
- * closes (`turn.end` — also the forced close of a process that exited or
- * reconnected) is settled the same way.
+ * Terminal states: the first real end wins. `tasks.snapshot` is a level
+ * signal that replaces the previous set: a background subagent or job
+ * missing from it with no end of its own is settled as inferred (`unknown` /
+ * killed + "status unknown"); a real end arriving later still overrides an
+ * inferred one (the level may precede its bookend). A foreground subagent
+ * still live when its turn closes (`turn.end`, which a process that exited
+ * or reconnected also forces) is settled the same way.
  *
  * Bounded: per-subagent output lines (160) and tool calls (200), tracked
  * subagents (100) and jobs (40), the job output tail (30 lines).
@@ -176,7 +175,7 @@ const JOB_DETAIL_CELLS = 32
 /**
  * A job's terminal detail from its end report: the exit code when the
  * report names one (`exit code: N`, the shape the card and panel expect),
- * else nothing — the full report is the backend's to keep, not the header's.
+ * else nothing. The full report is the backend's to keep, not the header's.
  */
 function jobDetailOf(summary: string | undefined): string | undefined {
   if (summary === undefined) return undefined
@@ -321,8 +320,8 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
     }
   }
 
-  /** The backend's own reports (absolute values — overwrite, never add): the
-   *  locally kept tool records miss lane frames, so the reports win (R6). */
+  /** The backend's own reports (absolute values: overwrite, never add). The
+   *  locally kept tool records miss lane frames, so the reports win. */
   const applyReports = (entry: SubagentEntry, usage: SubagentUsage | undefined): void => {
     if (usage === undefined) return
     if (usage.toolUses !== undefined) entry.state.reportedToolUses = usage.toolUses
@@ -376,13 +375,13 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
     } else {
       const state = entry.state
       if (!isLiveSubagent(state.status)) {
-        // A start for a settled subagent is a NEW RUN of the same agent (R6
-        // review: a SendMessage to a finished agent resumes it from its
-        // transcript under the same id, and the CLI re-registers it): the
-        // old run's terminal fields go, the identity, transcript, tool
-        // records and CUMULATIVE tokens stay, and the new run's own clock
-        // starts now. A start while it still runs (moved to the background)
-        // is the same run — no reset.
+        // A start for a settled subagent is a new run of the same agent (a
+        // SendMessage to a finished agent resumes it from its transcript
+        // under the same id, and the CLI re-registers it). The old run's
+        // terminal fields go; the identity, transcript, tool records and
+        // cumulative tokens stay; the new run's clock starts now. A start
+        // while it still runs (moved to the background) is the same run, so
+        // nothing resets.
         state.status = 'running'
         state.startedAt = event.time
         state.completedAt = undefined
@@ -734,9 +733,9 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
   /**
    * The turn closed (or the backend's process went away, which closes it):
    * a foreground subagent cannot outlive the turn that delegated to it. One
-   * still live never reported its end — settled `unknown`, inferred, so a
-   * real end that arrives late still wins. Background subagents are the
-   * level signal's (`tasks.snapshot`).
+   * still live never reported its end, so it is settled `unknown` as
+   * inferred and a real end that arrives late still wins. Background
+   * subagents are settled by the level signal (`tasks.snapshot`).
    */
   const settleForeground = (time: number): void => {
     for (const entry of subagents.values()) {
@@ -749,7 +748,7 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
 
   /**
    * The backend named (or renamed) a job's output file: a new path is a new
-   * read target — earlier failures (reads before the path was known, or of
+   * read target: earlier failures (reads before the path was known, or of
    * another path) no longer count, and a watched job is read again at once.
    */
   function noteOutputFile(entry: JobEntry, outputFile: string): void {

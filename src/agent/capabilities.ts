@@ -1,5 +1,5 @@
 /**
- * Typed optional session capabilities (docs/agent-backend-design.md §3.4).
+ * Typed optional session capabilities (docs/agent-backend-design.md).
  * Every member is optional: absence means the backend does not support it,
  * and the channel says so explicitly instead of a silent no-op.
  *
@@ -78,8 +78,8 @@ export interface ModeOption {
  * One relay channel profile (the Claude backend's channels.json): the exact
  * `models` map and the `tiers` rules that say which model actually serves
  * a requested id (backends/claude/channels.ts). Read-only rows for the
- * /channel picker, its mapping view, and the phase-3 connection-change
- * restart decision.
+ * /channel picker, its mapping view, and the restart decision when the
+ * connection changes.
  */
 export interface ChannelProfileView {
   readonly id: string
@@ -88,11 +88,11 @@ export interface ChannelProfileView {
   readonly models: readonly { readonly from: string; readonly to: string }[]
   /** Tier keyword → actual model, in file order (`default` = any-model rule). */
   readonly tiers: readonly { readonly tier: string; readonly to: string }[]
-  /** The phase-3 connection truth (endpoint + credential presence +
-   *  channel-private env KEYS — never a token literal); absent on
+  /** The connection: endpoint, whether a token is stored, and the
+   *  channel-private env keys (never a token literal); absent on
    *  mapping-only channels. `fingerprint` names the whole connection
    *  (endpoint + token + env) without exposing any secret: equal
-   *  fingerprints are the SAME connection — switching between them needs
+   *  fingerprints are the same connection, so switching between them needs
    *  no restart. */
   readonly connection?: {
     readonly baseUrl?: string
@@ -215,18 +215,18 @@ export interface SessionCapabilities {
     set(ref: ModelRef): Promise<ModelSwitchOutcome>
     /** The display name of the model that actually serves the session when
      *  a channel mapping says the live id is a cosmetic alias (relay
-     *  channels echo the requested id back — backends/claude/modelEnv.ts).
-     *  Undefined = the id itself is the truth; presenters render it instead
-     *  of the id, data surfaces (attribution, matching) keep the id. */
+     *  channels echo the requested id back; see backends/claude/modelEnv.ts).
+     *  Undefined = the id is what serves the session. Presenters render it
+     *  instead of the id; data surfaces (attribution, matching) keep the id. */
     display?(): string | undefined
   }
   readonly effort?: {
-    /** Read-only bit: `levels()` serves the CLI-standard compatibility
-     *  tiers (low → max) because the current model row declares no level
-     *  list of its own — the relay-channel custom-row shape. The CLI
-     *  accepts any effortLevel flag regardless, so the honest answer is
-     *  the standard ladder, marked here so the picker can say so.
-     *  Undefined = the list is the model's own (or there is no list). */
+    /** Set when `levels()` serves the CLI-standard tiers (low → max)
+     *  because the current model row declares no levels of its own (a
+     *  relay channel's custom row). The CLI accepts any effortLevel flag
+     *  anyway, so the standard ladder is offered and flagged here so the
+     *  picker can say so. Undefined = the list is the model's own (or there
+     *  is no list). */
     readonly levelsFallback?: true
     levels(): readonly EffortOption[]
     current(): string | undefined
@@ -235,13 +235,12 @@ export interface SessionCapabilities {
   readonly modes?: {
     list(): readonly ModeOption[]
     /**
-     * The mode surface the Shift+Tab reflex key may walk. Absent = the
-     * cycle walks `list()` unchanged. A backend MAY declare a cycle that
-     * is narrower than `list()`: a mode that must only ever be entered by
-     * an explicit pick (Claude's `bypassPermissions` in the /permission
-     * picker) stays out of the cycle, so one reflexive keypress can never
-     * land in it. The narrowing is declared here, in the capability layer —
-     * the UI never hardcodes mode names to shape the cycle.
+     * The modes the Shift+Tab cycle may walk. Absent = the cycle walks
+     * `list()` unchanged. A backend may declare a narrower cycle: a mode
+     * that should only be entered by an explicit pick (Claude's
+     * `bypassPermissions` in the /permission picker) stays out of it, so a
+     * reflexive keypress never lands there. The narrowing is declared here
+     * so the UI never hardcodes mode names to shape the cycle.
      */
     cycle?(): readonly ModeOption[]
     current(): string
@@ -250,8 +249,8 @@ export interface SessionCapabilities {
   /**
    * The backend's relay channel profiles (the Claude backend's channels.json):
    * the /channel picker's roster, the active pick (whose mapping the model
-   * display resolves through), and the settings import. Synchronous by
-   * contract — the store is a small best-effort file (prefs.ts's model).
+   * display resolves through), and the settings import. Synchronous: the
+   * store is a small best-effort file, like prefs.ts.
    */
   readonly channels?: {
     list(): readonly ChannelProfileView[]
@@ -259,12 +258,12 @@ export interface SessionCapabilities {
     activeId(): string | undefined
     /** Switch the active channel (persists; a no-op for an unknown id). */
     setActive(id: string): void
-    /** Import/refresh the channel profile hiding in the CLI settings env;
-     *  undefined when the env holds nothing importable. Phase 3: the
-     *  connection (base URL + auth token) is absorbed too — the token
-     *  moves into the credential store, the profile keeps only its ref. */
+    /** Import/refresh the channel profile implied by the CLI settings env;
+     *  undefined when the env holds nothing importable. The connection
+     *  (base URL + auth token) is imported too: the token moves into the
+     *  credential store and the profile keeps only its ref. */
     importFromSettings(): ChannelProfileView | undefined
-    /** Upsert one profile with connection fields (the phase-3 wizard): a
+    /** Upsert one profile with connection fields (the /channel wizard): a
      *  given token goes to the credential seam, the profile keeps only its
      *  ref. Absent on backends without the management surface. */
     save?(input: {
@@ -281,7 +280,7 @@ export interface SessionCapabilities {
     }): ChannelProfileView
     /** Drop one profile (and its stored token); false for an unknown id. */
     remove?(id: string): boolean
-    /** What the CLI settings env holds for an import (phase-3 wizard): the
+    /** What the CLI settings env holds for an import (the wizard's offer): the
      *  base URL and the absorbable tier rules, without creating anything. */
     peekSettingsImport?(): { readonly baseUrl?: string; readonly tiers: Readonly<Record<string, string>> } | undefined
   }
@@ -305,16 +304,15 @@ export interface SessionCapabilities {
   readonly subagents?: {
     interrupt(agentId: string): Promise<boolean>
     /** The child's own full transcript from the backend's durable store
-     *  (design agent-team-panels §2: history = getSubagentMessages → the
-     *  replay/translator → AgentEvent). Absent = the backend has no
-     *  transcript data source; rejects when the read fails. */
+     *  (Claude: getSubagentMessages through the replay translator into
+     *  AgentEvents). Absent = the backend has no transcript data source;
+     *  rejects when the read fails. */
     history?(agentId: string, window?: SubagentTranscriptWindow): Promise<SubagentTranscriptPage>
     /**
-     * The session's own relay observations (design agent-team-full §5.4:
-     * Claude folds its SendMessage tool traffic into neutral views). The
-     * channel core composes the parent-mediated submit path around it;
-     * absent = this backend serves no message capability (the composer is
-     * not rendered).
+     * The session's own relay observations (Claude folds its SendMessage
+     * tool traffic into neutral views). The channel core composes the
+     * parent-mediated submit path around it; absent = this backend serves no
+     * message capability (the composer is not rendered).
      */
     message?: { messages(): readonly AgentMessageView[] }
   }
@@ -325,15 +323,14 @@ export interface SessionCapabilities {
    */
   readonly tasks?: { stop(taskId: string): Promise<boolean>; readOutput?(taskId: string): Promise<string> }
   /**
-   * The durable record behind "load earlier" (design §4.11): read-only,
-   * synchronous and bounded (a user click waits for it).
-   * `record()` replays everything the backend persisted for the bound
-   * session — the source folded rows are restored from (rows match by their
-   * stable anchors: user / assistant `anchor`, tool `callId`); undefined when
-   * it cannot be read now. `older()` returns the next slice older than what
-   * `history()` replayed (history a compaction cut off), oldest first, and
-   * advances past it — an empty slice when nothing older remains;
-   * `hasOlder()` says whether one may still exist.
+   * The durable record behind "load earlier": read-only, synchronous and
+   * bounded (a user click waits for it). `record()` replays everything the
+   * backend persisted for the bound session; folded rows are restored from
+   * it, matched by their stable anchors (user / assistant `anchor`, tool
+   * `callId`). Undefined when it cannot be read now. `older()` returns the
+   * next slice older than what `history()` replayed (history a compaction
+   * cut off), oldest first, and advances past it; the slice is empty when
+   * nothing older remains. `hasOlder()` says whether one may still exist.
    */
   readonly transcript?: {
     record(): readonly AgentEvent[] | undefined
@@ -402,11 +399,11 @@ export interface SessionCapabilities {
 
 /**
  * One page of a subagent's own transcript, read from the backend's durable
- * store (design agent-team-panels §2). The events are the child-lane leaf
- * events (assistant.message / tool.call / tool.result, oldest first) in
- * the same vocabulary live lane traffic uses; parentAgentId is the
- * parent_agent_id of the child's messages — null = a depth-1 child
- * (spawned by the main loop) or old-format metadata that never recorded it.
+ * store. The events are the child-lane leaf events (assistant.message /
+ * tool.call / tool.result, oldest first) in the same vocabulary live lane
+ * traffic uses; parentAgentId is the parent_agent_id of the child's
+ * messages: null = a depth-1 child (spawned by the main loop) or old-format
+ * metadata that never recorded it.
  */
 export interface SubagentTranscriptPage {
   readonly events: readonly AgentEvent[]

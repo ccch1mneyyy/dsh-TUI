@@ -1,9 +1,9 @@
 /**
- * Agent Domain pure helpers for the unified agent-message model (design
- * agent-team-full §3/§5): delivery-state monotonicity, the neutral view
- * fold, the DSH durable relay source shape, and the stable prompt-failure
- * mapping both adapters share. Types come from the UI ports; there is no I/O
- * and no backend import — the same fold serves live traffic and replay.
+ * Agent Domain pure helpers for the agent-message model: delivery-state
+ * ordering, the neutral view fold, the DSH durable relay source shape, and
+ * the stable prompt-failure mapping both adapters share. Types come from the
+ * UI ports; no I/O and no backend import, so the same fold serves live
+ * traffic and replay.
  */
 import type {
   AgentMessageState,
@@ -12,11 +12,11 @@ import type {
 } from '../adapter/ports/channel-view.js'
 
 /**
- * Rank of each delivery state in the monotone fold (agent-team §3: states
- * only advance). `issued` = the request entered an observable path;
- * `queued` = an inbox accepted it; the four explicit outcomes and
- * `unknown` are terminal — an unrecognized or missing result is a LEGAL
- * terminal ("no delivery fact"), never a licence to guess one.
+ * Rank of each delivery state in the monotone fold (states only advance).
+ * `issued` = the request entered an observable path; `queued` = an inbox
+ * accepted it; the four explicit outcomes and `unknown` are final. An
+ * unrecognized or missing result ends as `unknown` ("no delivery fact")
+ * rather than a guessed outcome.
  */
 export const AGENT_MESSAGE_STATE_RANK: Readonly<Record<AgentMessageState, number>> = Object.freeze({
   issued: 0,
@@ -34,7 +34,7 @@ export const MAX_AGENT_MESSAGES = 200
 /**
  * Fold one observation into the ordered view list. `messageId` is the
  * identity: a re-observation (a tool result after its call, a replayed
- * event) updates the SAME row instead of appending a second one. A state
+ * event) updates the same row instead of appending a second one. A state
  * never regresses (a lower-ranked or same-ranked-different state is
  * dropped), `observedAt` refreshes only on an accepted update, and an
  * empty `next.text` (a settlement carries no text) keeps the row's text.
@@ -61,10 +61,9 @@ export function foldAgentMessage(views: AgentMessageView[], next: AgentMessageVi
 /**
  * The DSH durable relay attribution (`AgentMessageSource`,
  * @deepseek-ai/dsh-subagent continuation-messages): kind 'agent-message',
- * form 'relay' and the sending session id. Anything else — a plain user
- * prompt, plugin/injected context, the runtime's 'subagent-settled' notice —
- * is NOT a relay: an ordinary user text is never guessed into one
- * (agent-team §5.4).
+ * form 'relay' and the sending session id. Anything else (a plain user
+ * prompt, plugin/injected context, the runtime's 'subagent-settled' notice)
+ * is not a relay; an ordinary user text is never guessed into one.
  */
 export interface AgentRelaySource {
   readonly senderSessionId: string
@@ -91,7 +90,7 @@ export function agentMessageTextOf(content: unknown): string {
 
 /**
  * Map one `ctx.subagents.prompt` failure to the stable submission
- * vocabulary (agent-team §5.3): the continuation manager's RemoteError codes
+ * vocabulary: the continuation manager's RemoteError codes
  * (control-types.d.ts) and caller cancellation keep their names; anything
  * else is a plain failure whose text is safe to show (already an
  * Error#message, never credential material).

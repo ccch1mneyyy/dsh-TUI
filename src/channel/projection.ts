@@ -1,18 +1,17 @@
 /**
- * The one shared reducer (docs/agent-backend-design.md §3.5, §6.1): Agent
- * Domain events in, `ChannelState` mutations out — for every backend, for
- * durable replay and for the live stream alike. Decoding a backend's native
- * events is NOT done here: a translator (`src/dsh-adapter/backend/translate.ts`
- * for DSH) produces the `AgentEvent`s; this module only folds them.
+ * The shared reducer (docs/agent-backend-design.md): Agent Domain events in,
+ * `ChannelState` mutations out, for every backend and for durable replay and
+ * the live stream alike. Decoding a backend's native events is not done here:
+ * a translator (`src/dsh-adapter/backend/translate.ts` for DSH) produces the
+ * `AgentEvent`s; this module only folds them.
  *
- * Ported behaviour-for-behaviour from the former DSH reducer
- * (`src/dsh-adapter/channel/projection.ts`, Phase 0 golden
- * `scripts/fixtures/dsh/*.golden.json`): attempt start/discard/revive, `seq`
- * idempotency, legacy overlapping-prefix delta merge, thinking preview/full
- * folding, TPS turn/step accounting, token/cost bucketing, compaction context
- * reset, goal/todo/preset/title/colour, question/subagent card suppression and
- * the plugin renderer seam. The order of wall-clock reads is part of that
- * contract (the golden pins `startedAt`/`durationMs` with a stepping clock).
+ * The DSH projection goldens (`scripts/fixtures/dsh/*.golden.json`) pin its
+ * behaviour: attempt start/discard/revive, `seq` idempotency, legacy
+ * overlapping-prefix delta merge, thinking preview/full folding, TPS
+ * turn/step accounting, token/cost bucketing, compaction context reset,
+ * goal/todo/preset/title/colour, question/subagent card suppression and the
+ * plugin renderer seam. The order of wall-clock reads is part of that
+ * contract (the goldens pin `startedAt`/`durationMs` with a stepping clock).
  */
 import type { ChannelUi } from '../adapter/ports/channel-ui.js'
 import type { ChatRow, SelectionAttachment, TodoPanelItem, ToolCallView, TurnUsageSummary } from '../adapter/ports/channel-view.js'
@@ -29,10 +28,10 @@ import { addUsageToBucket, emptyCostBuckets, estimateTokens, usageOutputTokens, 
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 
-/** The channel state slice the projector writes. */
 /** Notice keys whose live toast is tracked (a repeat replaces it). */
 const MAX_KEYED_TOASTS = 32
 
+/** The channel state slice the projector writes. */
 export interface ProjectionState extends Mutable<Pick<ChannelUi,
   | 'thinkingFold' | 'activeToolCount' | 'spinnerMode' | 'goal' | 'contextSegments' | 'tokens' | 'mainCost'
   | 'model' | 'lastUsage' | 'turnUsage' | 'lastUserText' | 'responseChars' | 'tps' | 'cancelPending' | 'working'
@@ -67,11 +66,11 @@ export interface ChannelProjectionDeps {
    */
   activity?: { apply(event: AgentEvent, replaying: boolean): void }
   /**
-   * The core's trajectory fold (design agent-team-panels §④ 轨迹裁决):
-   * EVERY event in stream order — including child-lane ones, whose subagent
-   * lifecycle still maps onto the parent's ledger — feeds the neutral
-   * raw-event source behind `traceEvents()`. Absent (a DSH composition,
-   * whose raw history IS the source) = nothing is forwarded.
+   * The core's trajectory fold: every event in stream order, child-lane
+   * ones included (their subagent lifecycle still maps onto the parent's
+   * ledger), feeds the neutral raw-event source behind `traceEvents()`.
+   * Absent (a DSH composition, whose raw history is the source) = nothing
+   * is forwarded.
    */
   trajectory?: { observe(event: AgentEvent, replaying: boolean): void }
   inputConvergence: { cancelInFlight: boolean }
@@ -122,11 +121,11 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       outputChars: number
     }
     | undefined
-  /** Per-turn usage ledger (design §C): reset at turn.start, aggregated from
-   *  each assistant message's OWN request usage (messages report per-request
-   *  increments here — a turn-level backend report must never be added on
-   *  top of them), rendered as the turn-summary row at turn.end and parked
-   *  on `state.turnUsage` for the footer readouts. */
+  /** Per-turn usage ledger: reset at turn.start, summed from each assistant
+   *  message's own request usage (messages report per-request increments, so
+   *  a turn-level backend report must never be added on top), rendered as
+   *  the turn-summary row at turn.end and kept on `state.turnUsage` for the
+   *  footer readouts. */
   const turnLedger = {
     input: 0,
     output: 0,
@@ -141,8 +140,8 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
    *  (API retries): a set, because the same failure can be observed from
    *  both the superseding attempt.start and the positioned attempt.end. */
   const turnFailedAttempts = new Set<string>()
-  /** Model of the last EMITTED turn ledger: the row notes the model name
-   *  only when it changed (or on the first turn that has one) — repeating an
+  /** Model of the last emitted turn ledger: the row names the model only
+   *  when it changed (or on the first turn that has one), since repeating an
    *  unchanged id every turn is noise. Commands read `model` regardless. */
   let lastNotedTurnModel: string | undefined
   /** Tool cards by callId, so the result can settle the running card. */
@@ -150,21 +149,21 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
   /**
    * Question-presented calls by callId, holding their raw arguments. The ask
    * renders as the interactive panel rather than a tool card, so its result
-   * has no card to settle — but the answered record is still a transcript
-   * fact and must come from the durable log (issue #1009), never from the
-   * view. Remembering the call lets the result derive that record on the
-   * live stream AND on every replay (`/resume`, rewind, model switch).
+   * has no card to settle, but the answered record still belongs in the
+   * transcript and must come from the durable log (issue #1009), never from
+   * the view. Remembering the call lets the result derive that record on the
+   * live stream and on every replay (`/resume`, rewind, model switch).
    */
   const askCalls = new Map<string, string>()
-  /** Todo-panel calls by callId (cards suppressed: the panel tells the
-   *  story). Their arguments are remembered so a FAILED result can still
-   *  render its error card — without it a rejected TaskUpdate would vanish
-   *  silently (R6 review: the optimistic panel change was rolled back; the
-   *  user must see the task change never happened). */
+  /** Todo-panel calls by callId (cards suppressed: the panel shows the
+   *  list). Their arguments are remembered so a failed result can still
+   *  render its error card. Otherwise a rejected TaskUpdate would vanish
+   *  silently: the panel rolls back its optimistic change, and the user
+   *  needs to see that the task change never happened. */
   const todoCalls = new Map<string, { name: string; argsJson: string; seq: number; time: number }>()
   /** callId of the result that just settled an ok card: task feeds a
    *  translator derives from a result only reach the job registry when that
-   *  result actually settled a card here (the pre-split reducer's gate). */
+   *  result actually settled a card here. */
   let settledCardCallId: string | undefined
   /**
    * Session events are delivered live and can also be replayed around a
@@ -177,10 +176,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
    *  a freshly attached projector accept deltas whose attempt start it missed. */
   let openStep: { turn: number; step: number } | undefined
   let activeAttempt: { attemptId: string; turn: number; step: number } | undefined
-  /** 最近一次 request.header 的模型：durable usage 的模型归属真源。replay
+  /** 最近一次 request.header 的模型，durable usage 按它归属模型。replay
    *  会按历史请求逐个还原，因此 /model 切换（reset + replay 整个 seed）
    *  不会把换模型前的用量重估到新模型；旧日志没有 header 时回退
-   *  事件发生时的 state.model（AC-A4）。 */
+   *  事件发生时的 state.model。 */
   let eventModel: string | undefined
   const assistantRowsByStep = new Map<string, ChatRow>()
   /**
@@ -289,10 +288,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     return openStreaming(seq)
   }
 
-  /** Latest reasoning row keyed by its (turn, step) — lets a resumed
-   *  mid-step stream REVIVE the row the replay sealed (crash-orphan tail:
-   *  replay folds the partial row, live continuation deltas would otherwise
-   *  open a SECOND row for the same step, splitting one thinking block in
+  /** Latest reasoning row keyed by its (turn, step), so a resumed mid-step
+   *  stream revives the row the replay sealed (crash-orphan tail: replay
+   *  folds the partial row, and live continuation deltas would otherwise
+   *  open a second row for the same step, splitting one thinking block in
    *  two). */
   let lastReasoningRow: { row: ChatRow; turn: number; step: number } | undefined
 
@@ -328,16 +327,15 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     return reasoning
   }
 
-  /** Settle live reasoning the moment the model moves PAST thinking — the
-   *  answer's first text token or a tool call — not at the settled message
+  /** Settle live reasoning the moment the model moves past thinking (the
+   *  answer's first text token or a tool call), not at the settled message
    *  (end of step). A long reply pushes the thinking block into terminal
    *  scrollback long before the message seals, and scrollback rows cannot be
    *  repainted (the cursor cannot reach them), so a late fold leaves a stale
-   *  unfolded preview frozen above the window — the user scrolls up and the
-   *  thinking looks "not folded". Folding while the block still sits in the
-   *  live window keeps the shrink inside the diff engine's reachable region.
-   *  Full mode keeps the settled block open separately, so its spinner can
-   *  stop immediately. */
+   *  unfolded preview above the window. Folding while the block still sits
+   *  in the live window keeps the shrink inside the diff engine's reachable
+   *  region. Full mode keeps the settled block open separately, so its
+   *  spinner can stop immediately. */
   const settleLiveReasoning = (where: string): void => {
     if (reasoning === undefined) return
     const duration = Math.max(0, Date.now() - reasoningStart)
@@ -405,7 +403,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     if (state.activeToolCount > 0) {
       state.spinnerMode = 'tool-use'
     } else if (reasoning !== undefined) {
-      // Only LIVE reasoning counts — sealed rows stay streaming=true for
+      // Only live reasoning counts: sealed rows stay streaming=true for
       // transcript expansion until turn end but the model is past thinking.
       state.spinnerMode = 'thinking'
     } else if (streaming !== undefined) {
@@ -483,7 +481,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         appendTextDelta(row, delta.text, seq !== undefined)
       }
     } else if (delta.kind === 'reasoning-tokens') {
-      // Thinking reported only as an estimated token count (design §4.5 (b)):
+      // Thinking reported only as an estimated token count:
       // the reasoning row opens with no text and shows the live count; text
       // that arrives later still wins in the view.
       const row = ensureReasoning(seq, turn, step)
@@ -522,9 +520,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     const reasoningText = event.blocks
       .map(block => (block.type === 'reasoning' ? block.text : ''))
       .join('')
-    // A backend's own message anchor beyond the seq (DSH anchors ARE the
-    // seq: its rows stay as they were) is how "load earlier" finds the
-    // durable message a folded row came from.
+    // A backend's own message anchor beyond the seq (DSH anchors are the
+    // seq, so DSH rows carry none) is how "load earlier" finds the durable
+    // message a folded row came from.
     const anchor = event.anchor === '' || event.anchor === String(event.seq) ? undefined : event.anchor
     const settledReasoning = lastReasoningRow !== undefined && lastReasoningRow.turn === event.turn && lastReasoningRow.step === event.step
       ? lastReasoningRow.row : reasoning
@@ -585,18 +583,18 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       row.streaming = false
       // Live settles keep the smooth-reveal cursor alive (a one-shot
       // non-streaming delivery still paints as a flow); replayed settles
-      // must not — the transcript would typewrite on open.
+      // must not, or the transcript would typewrite on open.
       if (!replaying && text) row.fresh = true
       touchRow(row)
     }
     streaming = undefined
     if (reasoning !== undefined) {
       // Backstop fold: reasoning whose step ended with no text token and no
-      // tool call (settleLiveReasoning handles those earlier — while the block
+      // tool call (settleLiveReasoning handles those earlier, while the block
       // is still in the repaintable live window; here a long reply may
       // already have pushed it into scrollback, where the shrink cannot be
       // repainted). `full` mode (/settings opt-in) keeps the block expanded
-      // until turn settle — settleStreaming folds the sealed rows then.
+      // until turn settle; settleStreaming folds the sealed rows then.
       reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
       reasoning.streaming = false
       reasoning.thinkingOpen = state.thinkingFold === 'full'
@@ -621,16 +619,16 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       // never prices the whole session at the current window).
       const peak = (deps.pricingWindow?.(event.time) ?? 'idle') === 'peak'
       addUsageToBucket(peak ? state.tokens.peak : state.tokens.idle, usage)
-      // 主会话费用分桶（DESIGN D2）：与 tokens 同口径，但按事件发生时
-      // 的模型归属——replay 用 request.header 还原历史请求模型，旧日志
-      // 回退 channel 模型；换模型不会把历史 token 重估到新模型。
+      // 主会话费用分桶：计数方式与 tokens 相同，但按事件发生时的模型
+      // 归属。replay 用 request.header 还原历史请求模型，旧日志回退
+      // channel 模型；换模型不会把历史 token 重估到新模型。
       if ((usage.input ?? 0) !== 0 || (usage.output ?? 0) !== 0 || (usage.cacheRead ?? 0) !== 0 || (usage.cacheWrite ?? 0) !== 0) {
         const model = eventModel ?? state.model
         const cost = state.mainCost[model] ?? emptyCostBuckets()
         addUsageToBucket(peak ? cost.peak : cost.idle, usage)
         state.mainCost[model] = cost
       }
-      // The most recent request's usage describes the CURRENT context:
+      // The most recent request's usage describes the current context:
       // input (uncached) + cache hits all occupy the window. Cache hits
       // also drive the status-line `cache N` readout.
       state.lastUsage = {
@@ -640,9 +638,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         cacheWrite: usage.cacheWrite ?? 0,
         at: event.time,
       }
-      // Turn ledger (design §C): each message reports its OWN request's
-      // increment — summing them is the turn total. Cache fields absent on
-      // the wire stay absent (cacheKnown distinguishes zero from unreported).
+      // Turn ledger: each message reports its own request's increment, so
+      // the sum is the turn total. Cache fields absent on the wire stay
+      // absent (cacheKnown distinguishes zero from unreported).
       turnLedger.input += usage.input ?? 0
       turnLedger.output += usage.output ?? 0
       turnLedger.cacheRead += usage.cacheRead ?? 0
@@ -709,7 +707,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       // `compaction.end` (`postTokens`, below). `tokens.*` are cumulative
       // session counters and are never rewritten by a compaction.
       //
-      // The SEGMENTED bar keeps its own heuristic composition (system + the
+      // The segmented bar keeps its own heuristic composition (system + the
       // summary prompt): it describes what the surface is made of, never the
       // occupancy total.
       state.contextSegments = {
@@ -742,12 +740,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     if (text || images.length > 0) {
       // IDE selection indicator: the delivery path remembered what this
       // message attached; the durable event carries the same message id.
-      // On replay (session resumed in a NEW process) the in-memory map
+      // On replay (session resumed in a new process) the in-memory map
       // starts empty, so the indicator falls back to the durable content
-      // itself — the `<attached-file … selection>` block IS part of the
-      // persisted message, and the session log is the source of truth
-      // (maintainer review round 3: the indicator used to vanish after a
-      // restart because nothing re-derived it from the event).
+      // itself: the `<attached-file … selection>` block is part of the
+      // persisted message, so the indicator survives a restart.
       const selectionAttached = deps.selectionAttached(event.id)
         ?? replaySelectionAttachment(event.blocks)
       appendRow({
@@ -757,13 +753,13 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         ...(images.length === 0 ? {} : { images }),
         ...(selectionAttached === undefined ? {} : { selectionAttached }),
         seq: event.seq,
-        // A native anchor beyond the seq (DSH anchors ARE the seq: its rows
-        // stay as they were) is what a backend rewind needs.
+        // A native anchor beyond the seq (DSH anchors are the seq, so DSH
+        // rows carry none) is what a backend rewind needs.
         ...(event.anchor === '' || event.anchor === String(event.seq) ? {} : { anchor: event.anchor }),
       })
       state.lastUserText = text || t('transcript-image-message', { count: images.length })
-      // The context estimate counts everything sent to the model — typed
-      // text AND the `@`-mention attachment blocks.
+      // The context estimate counts everything sent to the model: typed
+      // text and the `@`-mention attachment blocks.
       state.contextSegments.prompt += estimateTokens(textOfBlocks(event.blocks))
       deps.rowIds.value += 1
     }
@@ -774,7 +770,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     // A question-presented call renders as the interactive questionnaire
     // panel, not as a tool card: the model is parked waiting for the human,
     // so no running card, no active-tool spinner, no args noise in the
-    // transcript. Only the ARGUMENTS are remembered: the paired result
+    // transcript. Only the arguments are remembered: the paired result
     // projects the answered record from them (issue #1009), so `/resume`,
     // rewind and replay rebuild it from the persisted log like every other
     // transcript row.
@@ -784,7 +780,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     }
     // A subagent delegation renders as the live subagent card (Kimi Code
     // semantics), so the raw args/result card would only duplicate it. The
-    // call still runs — only its transcript rendering is suppressed; the
+    // call still runs; only its transcript rendering is suppressed. The
     // subagent reducer owns pending descriptions, including delegations made
     // while this transcript is parked.
     if (presentation?.card === 'subagent') return
@@ -795,7 +791,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       todoCalls.set(event.callId, { name: event.name, argsJson: event.argsJson, seq: event.seq, time: event.time })
       return
     }
-    // Reasoning that led to a tool call is done thinking — fold the preview
+    // Reasoning that led to a tool call is done thinking: fold the preview
     // now, before the tool card grows the transcript past it (see
     // settleLiveReasoning).
     settleLiveReasoning('tool call')
@@ -831,9 +827,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     const callId = event.callId
     const card = toolCards.get(callId)
     const askArguments = askCalls.get(callId)
-    // A call with no card is usually a question-presented one (above) — its
-    // interaction lives in the panel, but its OUTCOME still belongs in the
-    // transcript. Project it from the durable log here: consumed before the
+    // A call with no card is usually a question-presented one (above). Its
+    // interaction lives in the panel, but its outcome still belongs in the
+    // transcript, projected from the durable log here: consumed before the
     // card branch so the two can never both fire, and deleted so a repeated
     // replay of the same result cannot double the record.
     if (card === undefined && askArguments !== undefined) {
@@ -939,7 +935,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       tpsTurnDecodeTokens = 0
       tpsTurnSampled = false
     }
-    // Occupancy is evaluated on EVERY turn end, not only a completed one:
+    // Occupancy is evaluated on every turn end, not only a completed one:
     // the request that overflowed the window is exactly the one whose turn
     // ends as an error (it writes no successful usage sample at all), and an
     // aborted turn has still grown the surface. Replay drains a resumed
@@ -947,11 +943,11 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     // not a live context-low state.
     if (!replaying) deps.checkContextWarning()
     const reason = event.reason
-    // Turn ledger → summary row + footer snapshot (design §C). Rendered as
-    // the turn's LAST row (after the interrupt/notice that closes it), so
-    // the ledger reads as the account of what just happened. A turn with no
-    // usage-bearing message emits nothing (nothing was measured); a fully
-    // successful zero-usage turn stays quiet too — a zero line is noise.
+    // Turn ledger → summary row + footer snapshot. Rendered as the turn's
+    // last row (after the interrupt/notice that closes it), so the ledger
+    // reads as the account of what just happened. A turn with no
+    // usage-bearing message emits nothing (nothing was measured), and a
+    // fully successful zero-usage turn stays quiet too.
     const outcome: 'completed' | 'interrupted' | 'error' =
       reason.kind === 'completed' ? 'completed'
         : reason.kind === 'aborted' || reason.kind === 'interrupted' ? 'interrupted'
@@ -1014,7 +1010,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
   }
 
   const applyEvent = (event: AgentEvent): void => {
-    // The trajectory fold sees every event BEFORE the lane split: a child's
+    // The trajectory fold sees every event before the lane split: a child's
     // lifecycle row belongs to the parent's ledger even though its
     // assistant/tool traffic is skipped inside the fold (child lane).
     deps.trajectory?.observe(event, replaying)
@@ -1129,8 +1125,8 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         deps.activity?.apply(event, replaying)
         return
       case 'task.start':
-        // A background-start ack pairs the job with its tool call: the FULL
-        // command (the registry label is the friendly description).
+        // A background-start ack pairs the job with its tool call and gives
+        // the full command (the registry label is the friendly description).
         if (event.command !== undefined && taskFeedAdmitted(event.callId)) deps.jobs.onStarted(event.taskId, event.command)
         deps.activity?.apply(event, replaying)
         return
@@ -1195,10 +1191,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'request.header':
         // Reasoning effort readout (status line) from the call config.
         if (event.effort !== undefined) state.reasoningEffort = event.effort
-        // 模型归属真源：该请求的 usage 按这里的 model 计价（replay 时逐请求
-        // 还原；live 时与 state.model 同步更新，AC-A4）。header 缺/空 model
-        // 必须清掉上一条 header 的值——否则后续 usage 会沿用旧模型进错桶；
-        // 归属时再回退 state.model（旧日志没有 header 的既有语义）。
+        // 该请求的 usage 按这里的 model 计价（replay 时逐请求还原；live 时
+        // 与 state.model 同步更新）。header 缺/空 model 时也要清掉上一条
+        // header 的值，否则后续 usage 会沿用旧模型进错桶；归属时再回退
+        // state.model（旧日志没有 header 时就是这样）。
         eventModel = event.model
         return
       case 'session.title':
@@ -1232,7 +1228,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       }
       case 'compaction.start':
         // Opening the bracket here rather than in the manual path is what
-        // makes an AUTOMATIC pressure compaction visible too. A manual
+        // makes an automatic pressure compaction visible too. A manual
         // request already installed its own cancellable row, so this only
         // fills the gap for one this process did not start. Replay is settled
         // history, and a process killed between start and end leaves an
@@ -1272,9 +1268,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         return
       case 'custom': {
         // Custom plugin events (tuiRenderers seam): a registered renderer maps
-        // the payload to text rows — title as a local row, body as
+        // the payload to text rows: title as a local row, body as
         // preview-clipped local-output rows, same shape pushLocal uses. Runs
-        // on the live stream AND on replay (resume/rewind), so the projection
+        // on the live stream and on replay (resume/rewind), so the projection
         // must stay total; the runtime isolates renderer crashes per type.
         if (deps.renderer === undefined) return
         const rendered = deps.renderer.render(event.nativeType, event.data)
@@ -1295,14 +1291,14 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       }
       case 'notice': {
         // A backend notice: `info` is a transcript fact (a dim notice row);
-        // `notice` is a passing toast; `warning`/`error` are both — the row
+        // `notice` is a passing toast; `warning`/`error` are both: the row
         // keeps the explanation next to the work it concerns, the toast makes
         // sure it is seen. Replay repaints rows only, never toasts.
         //
         // A `key` dedupes repeats of one condition (an API retry counting
         // up, a limit warning): its toast replaces the key's previous toast,
         // and its row is updated in place while that row is still the last
-        // one (once other rows follow, a new row keeps the history true).
+        // one (once other rows follow, a new row keeps the history in order).
         const text = cleanRenderText(event.text, NOTICE_CELLS)
         if (text === '') return
         if (event.level !== 'notice') {
@@ -1348,7 +1344,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'mode.changed':
       case 'commands.changed':
       case 'rate-limit':
-      // The agent↔agent relay observation (agent-team §5.4) is folded by the
+      // The agent↔agent relay observation is folded by the
       // session that observes it (the Claude session's message capability);
       // the transcript itself renders nothing for it here.
       case 'agent.message':
