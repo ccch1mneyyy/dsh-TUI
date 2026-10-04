@@ -1402,6 +1402,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     lastReasoningRow = undefined
     toolCards.clear()
     askCalls.clear()
+    todoCalls.clear()
     settledCardCallId = undefined
     handledAssistantMessages.clear()
     handledAssistantChunks.clear()
@@ -1411,6 +1412,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     assistantRowsByStep.clear()
     assistantRowsBySeq.clear()
     lastTextDelta.clear()
+    lastNotedTurnModel = undefined
     tpsTurn = undefined
     tpsStep = undefined
     tpsTurnDecodeMs = 0

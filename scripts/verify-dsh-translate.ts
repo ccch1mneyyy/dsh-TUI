@@ -136,6 +136,30 @@ check('compaction bracket → compaction.start/end', of(live, 'compaction.start'
   }])
   check('folded running card: the result keeps the preview, no full payload or view', card.tool?.status === 'ok' && card.tool.resultText === 'listing' && card.tool.resultFull === undefined && card.tool.resultView === undefined)
 }
+// The projector's reset forgets every per-session ledger: replaying a second
+// session through a reused projector paints what a fresh one paints.
+{
+  const history: AgentEvent[] = [
+    { type: 'turn.start', turn: 1, origin: 'user', time: 1 },
+    { type: 'user.message', id: 'u1', anchor: '1', seq: 1, turn: 1, time: 1, source: 'user', text: 'hi', blocks: [{ type: 'text', text: 'hi' }] },
+    { type: 'step.start', turn: 1, step: 1 },
+    { type: 'assistant.message', seq: 2, anchor: '2', turn: 1, step: 1, attemptId: 'seq:2', time: 2, model: 'model-a', canonical: true, blocks: [{ type: 'text', text: 'hello' }], usage: { input: 10, output: 5 } },
+    { type: 'step.end', turn: 1, step: 1 },
+    { type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 3 },
+  ]
+  const shape = (rows: readonly { kind: string; text: string; turnUsage?: unknown }[]): string => JSON.stringify(rows.map(row => [row.kind, row.text, row.turnUsage ?? null]))
+  const fresh = createProjectorHarness()
+  fresh.apply(history, true)
+  const reused = createProjectorHarness()
+  reused.apply(history, true)
+  reused.apply([{ type: 'tool.call', seq: 3, turn: 2, step: 1, callId: 'todo-1', name: 'TodoWrite', argsJson: '{}', presentation: { card: 'todo' }, time: 4 }])
+  reused.projector.reset()
+  reused.state.rows.length = 0
+  reused.apply(history, true)
+  check('reset + replay paints what a fresh projector paints (the turn summary names its model)', shape(reused.state.rows) === shape(fresh.state.rows) && fresh.state.rows.some(row => row.turnUsage?.noteModel === true))
+  reused.apply([{ type: 'tool.result', seq: 4, turn: 2, step: 1, callId: 'todo-1', isError: true, time: 5, content: [], text: '', errorText: 'stale' }])
+  check('reset forgets the suppressed todo calls of the previous session', !reused.state.rows.some(row => row.kind === 'tool'))
+}
 // Seq lookups only match rows the projector itself painted.
 {
   const harness = createProjectorHarness()
