@@ -1610,6 +1610,21 @@ const dict = {
   'jobs-panel-no-output-yet': { zh: '（暂无镜像输出——agent 读取后显示）', en: '(no mirrored output yet — appears when the agent reads it)' },
   'jobs-output-gap': { zh: '……较早的输出已丢弃……', en: '……earlier output discarded……' },
   'jobs-output-dropped': { zh: '部分输出未保留', en: 'some output not retained' },
+  // jobs 面板增量（信息展示完整度设计 §D）：焦点详情的最近进度（带观测时点
+  // 与生产者来源）、有界时间线（启动/进度/输出增量/缺口/收尾）、保留尾巴
+  // 如实标注。进度原文透传，绝不把任意字符串解析成百分比。
+  'jobs-progress-latest': { zh: '进度', en: 'progress' },
+  'jobs-progress-updated-at': { zh: '更新 {{time}}', en: 'updated {{time}}' },
+  'jobs-progress-source': { zh: '来源 {{source}}', en: 'source {{source}}' },
+  'jobs-timeline': { zh: '时间线（最近）', en: 'timeline (latest)' },
+  'jobs-timeline-started': { zh: '启动', en: 'started' },
+  'jobs-timeline-progress': { zh: '进度', en: 'progress' },
+  'jobs-timeline-output': { zh: '输出', en: 'output' },
+  'jobs-timeline-gap': { zh: '缺口', en: 'gap' },
+  'jobs-timeline-settled': { zh: '收尾', en: 'settled' },
+  'jobs-timeline-gap-count': { zh: '输出缺口 {{n}} 处', en: '{{n}} output gaps' },
+  'jobs-timeline-events-unavailable': { zh: '时间线不可用（任务早于本进程的观测）', en: 'timeline unavailable (job predates this process)' },
+  'jobs-output-retained-tail': { zh: '仅保留最近 {{n}} 行', en: 'last {{n}} lines retained' },
   'jobs-output-spill': { zh: '完整输出落盘：{{path}}', en: 'full output retained at: {{path}}' },
   'jobs-toast-completed': { zh: '后台任务完成：{{label}}（{{id}} · 用时 {{duration}}）', en: 'Background job completed: {{label}} ({{id}} · {{duration}})' },
   'jobs-toast-failed': { zh: '后台任务失败：{{label}}（{{id}} · {{detail}}）', en: 'Background job failed: {{label}} ({{id}} · {{detail}})' },

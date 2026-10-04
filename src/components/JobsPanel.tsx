@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize, useAnimationFrame } from '../ui.js'
-import { formatJobDuration, type BackgroundJobState, type BackgroundJobStatus } from '../dsh-adapter/jobs.js'
+import { formatJobDuration, JOBS_MAX_OUTPUT_LINES, type BackgroundJobState, type BackgroundJobStatus, type JobTimelineEvent } from '../dsh-adapter/jobs.js'
 import { JobProgress } from './Chat/JobCard.js'
 import { Markdown } from './Markdown.js'
 import type { Theme } from '../theme.js'
@@ -216,14 +216,32 @@ function JobRowLine({ job, focused, armed, columns, onFocus }: {
                 + (job.lastOutputAt !== undefined ? ` · ${t('jobs-panel-output-at')} ${timeOf(job.lastOutputAt)}` : '')}
             </Text>
           </Box>
-          {(job.outputTotalBytes !== undefined || job.outputDropped === true) && (
+          {(job.outputTotalBytes !== undefined || job.outputDropped === true || (job.outputLines?.length ?? 0) >= JOBS_MAX_OUTPUT_LINES) && (
             <Box flexDirection="row" gap={1}>
               <Box width={7} flexShrink={0}><Text dimColor>{t('jobs-panel-output')}</Text></Box>
               <Text dimColor>
                 {(job.outputTotalBytes !== undefined ? formatBytes(job.outputTotalBytes) : '')
                   + (job.outputDropped === true
                     ? `${job.outputTotalBytes !== undefined ? ' · ' : ''}${t('jobs-output-dropped')}`
+                    : '')
+                  // At the retention cap the visible tail is provably partial:
+                  // say so instead of letting it read as the whole stream.
+                  + ((job.outputLines?.length ?? 0) >= JOBS_MAX_OUTPUT_LINES
+                    ? `${job.outputTotalBytes !== undefined || job.outputDropped === true ? ' · ' : ''}${t('jobs-output-retained-tail', { n: job.outputLines?.length ?? 0 })}`
                     : '')}
+              </Text>
+            </Box>
+          )}
+          {job.lastProgress !== undefined && (
+            // The producer's last word outlives the live chip (design §D): the
+            // registry clears `progress` at settle, the detail keeps the last
+            // line with its observation time and the producer kind as source.
+            <Box flexDirection="row" gap={1}>
+              <Box width={7} flexShrink={0}><Text dimColor>{t('jobs-progress-latest')}</Text></Box>
+              <Text dimColor>
+                {job.lastProgress}
+                {job.lastProgressAt !== undefined ? ` · ${t('jobs-progress-updated-at', { time: timeOf(job.lastProgressAt) })}` : ''}
+                {` · ${t('jobs-progress-source', { source: job.kind })}`}
               </Text>
             </Box>
           )}
@@ -263,6 +281,29 @@ function JobRowLine({ job, focused, armed, columns, onFocus }: {
           ) : (
             <Text dimColor>{t('jobs-panel-no-output-yet')}</Text>
           )}
+          {/* Bounded observation timeline (design §D): started, progress
+              changes, output drains, gaps and the settle, in arrival order.
+              The ring is bounded — the slice says "latest", never "all"; a
+              job whose history predates this process (resumed roster) says
+              the timeline is unavailable instead of an empty fiction. */}
+          <Box flexDirection="column" marginTop={1}>
+            <Text dimColor bold>{t('jobs-timeline')}</Text>
+            {(job.timeline?.length ?? 0) === 0 ? (
+              <Text dimColor italic>{t('jobs-timeline-events-unavailable')}</Text>
+            ) : (
+              <>
+                {(job.gapCount ?? 0) > 0 && (
+                  <Text dimColor italic>{t('jobs-timeline-gap-count', { n: job.gapCount ?? 0 })}</Text>
+                )}
+                {(job.timeline?.length ?? 0) > JOBS_TIMELINE_DISPLAY && (
+                  <Text dimColor>{`… +${(job.timeline?.length ?? 0) - JOBS_TIMELINE_DISPLAY}`}</Text>
+                )}
+                {(job.timeline ?? []).slice(-JOBS_TIMELINE_DISPLAY).map((event, index) => (
+                  <Text key={index} dimColor>{timelineLine(event)}</Text>
+                ))}
+              </>
+            )}
+          </Box>
         </Box>
       )}
     </Box>
@@ -275,6 +316,32 @@ function timeOf(ms: number): string {
   const pad = (value: number): string => String(value).padStart(2, '0')
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
+
+/** The rendered form of one timeline observation: `HH:MM:SS <what>`.
+ * Progress keeps the producer's own line verbatim (never re-parsed into a
+ * percentage); an output drain names its byte advance and channel when the
+ * kernel labelled one. */
+function timelineLine(event: JobTimelineEvent): string {
+  const time = timeOf(event.at)
+  switch (event.kind) {
+    case 'started':
+      return `${time} ${t('jobs-timeline-started')}`
+    case 'progress':
+      return `${time} ${t('jobs-timeline-progress')} ${event.text ?? ''}`
+    case 'output':
+      return `${time} ${event.channel === 'stderr' ? 'stderr' : event.channel === 'log' ? 'log' : t('jobs-timeline-output')}${event.bytes === undefined ? '' : ` +${formatBytes(event.bytes)}`}`
+    case 'gap':
+      return `${time} ${t('jobs-timeline-gap')}`
+    case 'stopping':
+      return `${time} ${t('jobs-status-stopping')}`
+    case 'settled':
+      return `${time} ${t('jobs-timeline-settled')}${event.text === undefined || event.text === '' ? '' : ` · ${event.text}`}`
+  }
+}
+
+/** Latest timeline slice shown in the focused detail: enough to read the
+ * recent shape of the job without the block swallowing the panel. */
+const JOBS_TIMELINE_DISPLAY = 8
 
 /**
  * `/jobs` overlay panel — every background job of the current session with

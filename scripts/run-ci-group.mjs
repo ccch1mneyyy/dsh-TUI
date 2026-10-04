@@ -889,6 +889,12 @@ const GROUPS = {
 // toast、kill 权限传递、无 jobs 服务降级、/new 重置）、JobCard/JobsPanel
 // 渲染冒烟（三行瀑布、settled 折叠、面板行/提示）。
     ["verify-jobs-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-panel.tsx']],
+// jobs 面板增量（信息展示完整度设计 §D，与 job-mirror 在途批对齐）：最近
+// 进度跨 settle 保留（带观测时点与生产者来源）、有界时间线观察环
+// （启动/进度/输出增量/缺口/收尾，丢最旧、无第二读取器——事件来自既有
+// readAt drain 与 job_output 镜像）、保留尾巴如实标注、无观测历史的诚实
+// 提示。
+    ["verify-jobs-progress-timeline", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-progress-timeline.ts']],
 // jobs 侧栏迁移回归：SidePanelColumn/PanelHost 内挂真实 useSidePanel 与假
 // channel——badge（running→info、未见 failed→error、打开清错）、名册渲染、
 // usePanelInput 分派（↓ 移动 / 双 k kill / Esc 让出回聊天）、SGR 点击聚焦、
