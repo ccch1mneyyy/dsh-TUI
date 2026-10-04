@@ -114,6 +114,234 @@ console.log('--- W2: replay parent facts + projection fold ---')
   check('W2 无父刷新不清已有父事实', refreshed?.parentAgentId === 'fx-0', JSON.stringify(refreshed))
 }
 
+// ── terminal harness (the same shape verify-agent-view-ui uses) ───────────
+const NOW = Date.now()
+const [{ PassThrough, Writable }, { default: React }, { Terminal: XTerm }, uiMod, sceneMod] = await Promise.all([
+  import('node:stream'),
+  import('react'),
+  import('@xterm/headless'),
+  import('../src/ui.js'),
+  import('../src/screens/AgentTranscriptScene.js'),
+])
+const { render, AlternateScreen, useInput } = uiMod as unknown as {
+  render: typeof import('../src/ui.js').render
+  AlternateScreen: React.ComponentType<{ children?: React.ReactNode }>
+  useInput: (handler: (input: string, key: unknown) => void, options?: { isActive?: boolean }) => void
+}
+const { AgentTranscriptScene } = sceneMod as unknown as { AgentTranscriptScene: React.ComponentType<Record<string, unknown>> }
+const termTest = await import('./lib/term-test.mjs')
+const { settled, sleep, viewportLines, findText } = termTest as unknown as {
+  settled(pred: () => boolean, opts?: { timeoutMs?: number }): Promise<boolean>
+  sleep: (ms: number) => Promise<void>
+  viewportLines(term: InstanceType<typeof XTerm>, rows?: number): string[]
+  findText(term: InstanceType<typeof XTerm>, needle: string): { col: number; row: number } | null
+}
+const { setLang } = await import('../src/i18n.js')
+setLang('en')
+
+const COLS = 100
+const ROWS = 30
+
+class FakeStdout extends Writable {
+  columns: number
+  rows = ROWS
+  isTTY = true
+  constructor(private term: InstanceType<typeof XTerm>, cols = COLS) { super(); this.columns = cols }
+  _write(chunk: unknown, _e: unknown, cb: () => void): void { this.term.write(String(chunk), cb) }
+}
+class Input extends PassThrough {
+  isTTY = true
+  setRawMode(): this { return this }
+  ref(): this { return this }
+  unref(): this { return this }
+}
+
+/** 输入链路保持器（同 verify-jobs-transcript-group 的教训）：没有组件开
+ *  raw mode，注入的键鼠根本进不了管线。 */
+function RawMode(): null {
+  useInput((): void => {}, { isActive: true })
+  return null
+}
+
+interface Frame {
+  screen(): string
+  lines(): string[]
+  rerender(node: React.ReactNode): void
+  stdin: Input
+  term: InstanceType<typeof XTerm>
+}
+async function withTerminal(make: () => React.ReactNode, run: (frame: Frame) => Promise<void>, cols = COLS): Promise<void> {
+  const term = new XTerm({ cols, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(term, cols) as unknown as NodeJS.WriteStream
+  const stdin = new Input()
+  const instance = await render(React.createElement(AlternateScreen, null, React.createElement(RawMode, null), make()), {
+    stdout, stdin: stdin as unknown as NodeJS.ReadStream, exitOnCtrlC: false, patchConsole: false,
+  })
+  const lines = (): string[] => viewportLines(term, ROWS)
+  try {
+    await run({ screen: () => lines().join('\n'), lines, rerender: node => { instance.rerender(React.createElement(AlternateScreen, null, React.createElement(RawMode, null), node)) }, stdin, term })
+  } finally {
+    await instance.unmount()
+    term.dispose()
+  }
+}
+
+async function click(frame: Frame, needle: string): Promise<boolean> {
+  const hit = findText(frame.term, needle)
+  if (hit === null) return false
+  frame.stdin.write('\x1b[<0;' + (hit.col + 1) + ';' + (hit.row + 1) + 'M')
+  await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
+  frame.stdin.write('\x1b[<0;' + (hit.col + 1) + ';' + (hit.row + 1) + 'm')
+  return true
+}
+
+const ev = (type: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({ type, ...over })
+const historyPage = (events: Array<Record<string, unknown>>, over: Record<string, unknown> = {}): Record<string, unknown> => ({ events, parentAgentId: null, uuids: [], hasOlder: false, skippedFromStart: 0, ...over })
+
+function makeRow(id: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    agentId: id,
+    description: 'agent ' + id,
+    status: 'completed',
+    startedAt: NOW - 60_000,
+    completedAt: NOW - 10_000,
+    output: [],
+    outputEvents: [],
+    toolCalls: [],
+    ...over,
+  }
+}
+
+// ── W3: the workbench scene ───────────────────────────────────────────────
+console.log('--- W3: workbench panel + sibling switching ---')
+{
+  // Two depth-1 siblings (same main-loop parent) with distinct histories.
+  const pages = new Map<string, Record<string, unknown>>([
+    ['agent-a', historyPage([
+      ev('assistant.message', { anchor: 'aa1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'alpha unique marker one' }] }),
+      ev('tool.call', { callId: 'ac1', name: 'Grep', argsJson: '{}', time: NOW - 30_000, seq: 1, turn: 1, step: 1 }),
+      ev('tool.result', { callId: 'ac1', isError: false, text: 'alpha tool body', time: NOW - 20_000, seq: 2, turn: 1, step: 1, content: [] }),
+    ])],
+    ['agent-b', historyPage([
+      ev('assistant.message', { anchor: 'bb1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'beta unique marker two' }] }),
+    ])],
+  ])
+  const load = async (agentId: string): Promise<Record<string, unknown> | null> => pages.get(agentId) ?? null
+  const roster = [
+    makeRow('agent-a', { mode: 'continuable', model: 'fixture-model', tokens: { input: 10, output: 5, total: 15 }, toolCalls: [{ id: 't1', name: 'Grep', status: 'completed', startedAt: NOW - 30_000, endedAt: NOW - 20_000 }] }),
+    makeRow('agent-b', { depth: 1 }),
+    makeRow('agent-c', { depth: 1 }),
+    makeRow('agent-nested', { depth: 2, parentAgentId: 'agent-a' }),
+  ]
+  // roster rows carry depth 1 for a/b/c (the main-loop proof)
+  roster[0] = makeRow('agent-a', { depth: 1, mode: 'continuable', model: 'fx-model', tokens: { input: 10, output: 5, total: 15 }, toolCalls: [{ id: 't1', name: 'Grep', status: 'completed', startedAt: NOW - 30_000, endedAt: NOW - 20_000 }] })
+  const switched: string[] = []
+  let exited = 0
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, {
+      subagent: roster[0],
+      source: { kind: 'transcript-card', rowId: 3 },
+      onExit: () => { exited += 1 },
+      loadTranscript: load as never,
+      roster: roster as never,
+      onSwitchAgent: (id: string) => { switched.push(id) },
+    }),
+    async frame => {
+      check('W3 宽屏渲染右侧工作台面板', await settled(() => frame.screen().includes('workbench') && frame.screen().includes('metadata') && frame.screen().includes('context')), frame.lines().slice(0, 2).join('|'))
+      check('W3 面板元数据：状态/模式/模型', frame.screen().includes('completed') && frame.screen().includes('continuable') && frame.screen().includes('fx-model'))
+      check('W3 面板工具段保留记录', frame.screen().includes('Grep'))
+      check('W3 父关系=主循环（depth 1 事实）', frame.screen().includes('main loop'))
+      check('W3 同主循环兄弟列出（b/c）', frame.screen().includes('agent agent-b') && frame.screen().includes('agent agent-c'))
+      check('W3 嵌套不同父不混入兄弟列表', !frame.screen().includes('agent agent-nested'))
+      // keyboard: Tab focuses the panel, arrows walk, Enter switches
+      frame.stdin.write('\t')
+      await settled(() => frame.screen().includes('select'))
+      frame.stdin.write('\x1b[B') // ↓ past the first sibling (agent-b)
+      await sleep(30) // 固定窗:pacing 焦点移动重渲染
+      frame.stdin.write('\r')
+      check('W3 键盘 Enter 原地切换兄弟（调 onSwitchAgent）', await settled(() => switched.length === 1 && switched[0] === 'agent-c'), JSON.stringify(switched))
+      // rerender as the wiring would: subagent=b, same source (the panel
+      // keeps focus across the switch — Esc first leaves the panel, the
+      // second Esc exits the scene to the ORIGINAL source)
+      frame.rerender(React.createElement(AgentTranscriptScene, {
+        subagent: roster[1],
+        source: { kind: 'transcript-card', rowId: 3 },
+        onExit: () => { exited += 1 },
+        loadTranscript: load as never,
+        roster: roster as never,
+        onSwitchAgent: (id: string) => { switched.push(id) },
+      }))
+      check('W3 切换后新代理转录载入', await settled(() => frame.screen().includes('beta unique marker two')), frame.lines().slice(0, 4).join('|'))
+      check('W3 旧代理行不残留（不混消息）', await settled(() => !frame.screen().includes('alpha unique marker one') && !frame.screen().includes('alpha tool body')))
+      check('W3 切换后顶栏换成新代理描述', frame.screen().includes('agent agent-b'))
+      // Esc still exits to the ORIGINAL source (not the previous agent):
+      // the first Esc only leaves the focused panel (§6's ladder).
+      frame.stdin.write('\x1b')
+      await sleep(30) // 固定窗:pacing 焦点层切换
+      frame.stdin.write('\x1b')
+      check('W3 Esc 退出场景一次（来源栈未被切换推入）', await settled(() => exited === 1), String(exited))
+    },
+  )
+
+  // Mouse switching + the composer draft never travels across targets.
+  const dispatchLog: Array<Record<string, unknown>> = []
+  const control = {
+    via: 'claude-parent-mediated',
+    steer: false,
+    listTargets: async () => [],
+    messages: () => [],
+    submit: async (input: Record<string, unknown>) => {
+      dispatchLog.push(input)
+      return { ok: true, intentId: 'intent-' + (dispatchLog.length), state: 'issued' }
+    },
+  }
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, {
+      subagent: roster[0],
+      source: { kind: 'chat', returnFocus: 'prompt' },
+      onExit: () => {},
+      loadTranscript: load as never,
+      roster: roster as never,
+      onSwitchAgent: (id: string) => { switched.push(id) },
+      compose: { control, target: { agentId: 'agent-a', name: 'agent agent-a' } } as never,
+    }),
+    async frame => {
+      check('W3 composer 挂载', await settled(() => frame.screen().includes('Send to agent agent-a')))
+      frame.stdin.write('secret draft for a')
+      check('W3 草稿接收输入', await settled(() => frame.screen().includes('secret draft for a')))
+      check('W3 鼠标点击兄弟行切换', await click(frame, 'agent agent-c'), 'row not found')
+      check('W3 点击发出 onSwitchAgent(agent-c)', await settled(() => switched.includes('agent-c')), JSON.stringify(switched))
+      // wiring rerenders with target B: the composer remounts (keyed)
+      frame.rerender(React.createElement(AgentTranscriptScene, {
+        subagent: roster[2],
+        source: { kind: 'chat', returnFocus: 'prompt' },
+        onExit: () => {},
+        loadTranscript: load as never,
+        roster: roster as never,
+        onSwitchAgent: (id: string) => { switched.push(id) },
+        compose: { control, target: { agentId: 'agent-c', name: 'agent agent-c' } } as never,
+      }))
+      check('W3 草稿不随目标漂移（重挂清空）', await settled(() => !frame.screen().includes('secret draft for a') && frame.screen().includes('Send to agent agent-c')))
+      check('W3 未提交的草稿没有发往任何目标', dispatchLog.length === 0, JSON.stringify(dispatchLog))
+    },
+  )
+
+  // 40 columns: the P1 single-column contract is untouched.
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, {
+      subagent: roster[0],
+      source: { kind: 'agents-dashboard' },
+      onExit: () => {},
+      loadTranscript: load as never,
+      roster: roster as never,
+    }),
+    async frame => {
+      check('W3 窄屏（40 列）面板退场', await settled(() => frame.screen().includes('alpha unique marker one')) && !frame.screen().includes('workbench'))
+    },
+    40,
+  )
+}
+
 if (failed > 0) {
   console.error('verify-agent-workbench FAILED (' + failed + ' checks)')
   process.exit(1)
