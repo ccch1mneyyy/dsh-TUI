@@ -16,8 +16,8 @@
  *       切换推入；窄屏（40 列）面板整体退场、顶栏保留代理名，28 列下
  *       长行在屏内折行（不按 44 列排版后被屏幕右缘裁掉）。
  *   W4  peer roster（SubagentDashboard）：children 与 peers 分区呈现；
- *       无 peer 名册能力时如实降级一行（不伪装空名册）；served peers
- *       不混入 children、无发送入口（跨会话交互无上游支持面）。
+ *       无 peer 名册能力时不画 peers 分区；served peers 不混入 children、
+ *       无发送入口（跨会话交互无上游支持面）。
  *   W5  侧栏 Detail 的 composer：按键经面板分发器进草稿（宿主吞掉普通键，
  *       直接 useInput 收不到）；Esc 先让出编辑焦点、焦点仍在侧栏；焦点被
  *       宿主切回聊天后，聊天里的打字和 Enter 不进 composer、不发给子代理。
@@ -149,7 +149,7 @@ const { settled, sleep, viewportLines, findText } = termTest as unknown as {
   viewportLines(term: InstanceType<typeof XTerm>, rows?: number): string[]
   findText(term: InstanceType<typeof XTerm>, needle: string): { col: number; row: number } | null
 }
-const { setLang } = await import('../src/i18n.js')
+const { setLang, t } = await import('../src/i18n.js')
 setLang('en')
 
 const COLS = 100
@@ -383,8 +383,8 @@ console.log('--- W4: dashboard children/peers partition ---')
   const nestedKnown = makeRow('agent-n1', { depth: 2, parentAgentId: 'agent-a' })
   const nestedOld = makeRow('agent-n2', { depth: 2 })
 
-  // (1) children-only roster, no peers prop: the honest unsupported note;
-  // children stay ABOVE the peers section and carry no nested marks.
+  // (1) children-only roster, no peers prop: no peers section at all (no
+  // roster capability, nothing to draw), and no nested marks.
   const selected: string[] = []
   await withTerminal(
     () => React.createElement(SubagentDashboard, {
@@ -393,10 +393,8 @@ console.log('--- W4: dashboard children/peers partition ---')
       onClose: () => {},
     }),
     async frame => {
-      check('W4 无 peer 名册能力：如实降级一行', await settled(() => frame.screen().includes('cross-session peers') && frame.screen().includes('no roster served')))
-      const childrenAt = frame.screen().indexOf('agent agent-a')
-      const peersAt = frame.screen().indexOf('cross-session peers')
-      check('W4 children 在 peers 分区之前（不混淆分区）', childrenAt >= 0 && peersAt > childrenAt)
+      await settled(() => frame.screen().includes('agent agent-b'))
+      check('W4 无 peer 名册能力：不画 peers 分区', !frame.screen().includes(t('agents-peers-title')) && !frame.screen().includes(t('agents-peers-unsupported')))
       check('W4 纯直属名册保持 P1 平铺（无嵌套标记）', !frame.screen().includes('nested'))
       // keyboard walks the displayed order: ↓ then Enter selects agent-b
       frame.stdin.write('\x1b[B')
@@ -440,6 +438,9 @@ console.log('--- W4: dashboard children/peers partition ---')
     }),
     async frame => {
       check('W4 served peers 渲染在独立分区', await settled(() => frame.screen().includes('codex') && frame.screen().includes('teammate row') && frame.screen().includes('peer-ses')))
+      const childrenAt = frame.screen().indexOf('agent agent-a')
+      const peersAt = frame.screen().indexOf(t('agents-peers-title'))
+      check('W4 children 在 peers 分区之前（不混淆分区）', childrenAt >= 0 && peersAt > childrenAt, JSON.stringify({ childrenAt, peersAt }))
       check('W4 peer 行注明无发送入口（跨会话降级）', frame.screen().includes('no send affordance'))
       await click(frame, 'codex')
       check('W4 点击 peer 行不触发任何 child 导航', selected2.length === 0, JSON.stringify(selected2))

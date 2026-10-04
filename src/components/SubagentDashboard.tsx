@@ -14,10 +14,10 @@ import type { AgentMessageView, AgentIdentity } from './messages/agentTeam.js'
 export interface SubagentDashboardProps {
   subagents: readonly SubagentState[]
   /** Cross-session peers (the CLI's ListAgents peer/teammate sections).
-   *  undefined = no peer roster for this session: a one-line note says so;
-   *  a list renders in its own section, apart from the children. No
-   *  backend serves one yet: the SDK's listSubagents lists this session's
-   *  own children, not peers. */
+   *  undefined = no peer roster for this session: no section; a list
+   *  renders in its own section, apart from the children. No backend
+   *  serves one yet: the SDK's listSubagents lists this session's own
+   *  children, not peers. */
   readonly peers?: readonly AgentIdentity[]
   /** 整屏/浮层形态的退出通道（Esc / ✕ 按钮）。panel 形态不传：面板不自己
    *  关侧栏——Esc 让给宿主（焦点回聊天，见 usePanelInput 契约）。 */
@@ -260,37 +260,33 @@ export function SubagentDashboard({
         </ScrollBox>
       </Box>
 
-      {/* Peer roster, kept apart from the children above. No backend serves
-       * one yet, so the note says so. Peers would get no send action
-       * either: the composer reaches only this session's children. The
-       * side panel collapses this to one truncated line. */}
-      <Box flexDirection="column">
-        {panelMode ? (
-          <Text dimColor wrap="truncate-end">
-            {peers === undefined
-              ? t('agents-peers-unsupported-panel')
-              : t('agents-peers-title') + ' · ' + peers.length}
-          </Text>
-        ) : (
-          <>
-            <Text dimColor>{t('agents-peers-title')}</Text>
-            {peers === undefined ? (
-              <Text dimColor wrap="truncate-end">{'  ' + t('agents-peers-unsupported')}</Text>
-            ) : peers.length === 0 ? (
-              <Text dimColor>{'  ' + t('agents-peers-empty')}</Text>
-            ) : (
-              <Box flexDirection="column">
-                {peers.map(peer => (
-                  <Text key={peer.agentId} dimColor wrap="truncate-end">
-                    {'  · ' + (peer.name ?? peer.label ?? peer.agentId.slice(0, 8)) + ' · ' + peer.agentId.slice(0, 8)}
-                  </Text>
-                ))}
-                <Text dimColor wrap="truncate-end">{'  ' + t('agents-peers-note')}</Text>
-              </Box>
-            )}
-          </>
-        )}
-      </Box>
+      {/* Peer roster, kept apart from the children above. Without a peer
+       * roster (no backend serves one yet) the section is not drawn at all.
+       * Peers get no send action: the composer reaches only this session's
+       * children. The side panel collapses the section to one line. */}
+      {peers !== undefined && (
+        <Box flexDirection="column">
+          {panelMode ? (
+            <Text dimColor wrap="truncate-end">{t('agents-peers-title') + ' · ' + peers.length}</Text>
+          ) : (
+            <>
+              <Text dimColor>{t('agents-peers-title')}</Text>
+              {peers.length === 0 ? (
+                <Text dimColor>{'  ' + t('agents-peers-empty')}</Text>
+              ) : (
+                <Box flexDirection="column">
+                  {peers.map(peer => (
+                    <Text key={peer.agentId} dimColor wrap="truncate-end">
+                      {'  · ' + (peer.name ?? peer.label ?? peer.agentId.slice(0, 8)) + ' · ' + peer.agentId.slice(0, 8)}
+                    </Text>
+                  ))}
+                  <Text dimColor wrap="truncate-end">{'  ' + t('agents-peers-note')}</Text>
+                </Box>
+              )}
+            </>
+          )}
+        </Box>
+      )}
 
       <Divider color="subtle" title="" />
       <Box marginTop={0}>
