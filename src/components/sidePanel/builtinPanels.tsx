@@ -150,7 +150,8 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
   React.useEffect(() => { lastAgentsRoute = route }, [route])
   // agent-team 能力面：通道的 subagentControl.message 成员（缺失 = 无此面，
   // 不渲染 composer/Messages 数据）。
-  const messageControl = channel.subagentControl.message
+  // 可选链兜底：无 subagentControl 的桩 channel（回归夹具）不炸渲染。
+  const messageControl = channel.subagentControl?.message
   const detailAgentId = typeof route === 'object' ? route.detail : null
   const detailMessages = detailAgentId !== null && messageControl !== undefined
     ? messageControl.messages().filter(m => m.from === detailAgentId || m.to === detailAgentId)
@@ -197,8 +198,8 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
         focused={focused}
         visible={visible}
         onBack={() => setRoute('dashboard')}
-        onInterrupt={(id: string) => channel.subagentControl.interrupt(id)}
-        {...(channel.subagentControl.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
+        onInterrupt={(id: string) => channel.subagentControl?.interrupt(id)}
+        {...(channel.subagentControl?.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
         onOpenView={() => agentViewStore.request(detail.agentId, 'agent-detail', true)}
         messages={detailMessages}
         {...(detailCompose === undefined ? {} : { compose: detailCompose })}

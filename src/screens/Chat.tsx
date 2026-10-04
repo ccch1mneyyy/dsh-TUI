@@ -6036,7 +6036,10 @@ export function Chat({
       setAgentView(null)
       return null
     }
-    const messageControl = channel.subagentControl.message
+    // Optional chaining on the CONTROL too: headless stubs mount Chat without
+    // a subagentControl member at all — a bare read here crashed the render
+    // (verify-keymap's ctrl+a roundtrip) and took the whole key pipeline down.
+    const messageControl = channel.subagentControl?.message
     const viewMessages = messageControl === undefined ? [] : messageControl.messages().filter(m => m.from === agentView.agentId || m.to === agentView.agentId)
     const viewTarget = agentComposeTargetOf(agentView.agentId, new Map(channel.subagents.map(s => [s.agentId, s.description])))
     const viewScene = (
@@ -6062,16 +6065,17 @@ export function Chat({
       openSubagentDashboard()
       return null
     }
-    const detailMessages = channel.subagentControl.message === undefined ? [] : channel.subagentControl.message.messages().filter(m => m.from === subagent.agentId || m.to === subagent.agentId)
+    const detailControl = channel.subagentControl?.message
+    const detailMessages = detailControl === undefined ? [] : detailControl.messages().filter(m => m.from === subagent.agentId || m.to === subagent.agentId)
     const detailTarget = agentComposeTargetOf(subagent.agentId, new Map(channel.subagents.map(s => [s.agentId, s.description])))
     const scene = (
       <SubagentDetailScene
         subagent={subagent}
-        onInterrupt={(id) => channel.subagentControl.interrupt(id)}
-        {...(channel.subagentControl.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
+        onInterrupt={(id) => channel.subagentControl?.interrupt(id)}
+        {...(channel.subagentControl?.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
         onOpenView={() => openAgentView(subagent.agentId, { kind: 'agent-detail', agentId: subagent.agentId })}
         messages={detailMessages}
-        {...(channel.subagentControl.message === undefined ? {} : { compose: { control: channel.subagentControl.message, target: detailTarget } })}
+        {...(detailControl === undefined ? {} : { compose: { control: detailControl, target: detailTarget } })}
         onBack={() => {
           setSubagentDetailId(null)
           setSubagentDashboardOpen(true)
@@ -6113,7 +6117,7 @@ export function Chat({
           setSubagentDetailId(id)
         }}
         onOpenView={(id) => openAgentView(id, { kind: 'agents-dashboard' })}
-        messages={channel.subagentControl.message?.messages()}
+        messages={channel.subagentControl?.message?.messages()}
         onClose={() => setSubagentDashboardOpen(false)}
       />
     )
