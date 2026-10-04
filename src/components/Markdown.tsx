@@ -40,6 +40,14 @@ type Props = {
   inlineMathImages?: boolean
 }
 
+/**
+ * Hang decoration for the ANSI text runs: a terminal-wrapped continuation
+ * lines up under its line's quote rails, list marker or indentation
+ * instead of falling back to column 0. One shared object, because the
+ * style diff and the measure/paint caches compare it by reference.
+ */
+const HANG_DECORATION: TextDecoration = { hang: true }
+
 // ---- token 缓存 ----
 //
 // marked.lexer 在组件重挂载时是最贵的开销；消息内容不可变，相同文本
@@ -50,17 +58,6 @@ type Props = {
 // LRU 会保留大量接近最终形态的快照（1MB 消息 ≈ 500 条 × 1MB ≈
 // 500MB）。这里用字符预算限制保留量，超长内容干脆不缓存（重挂载时
 // 重跑 lexer，极少发生且远比常驻便宜）。
-/**
- * Typed hang decoration for the ANSI text runs (rendering-upgrade design
- * §2, the batch-D leftover fix): a terminal-wrapped continuation of a
- * line hangs under that line's own leading structure - quote rails repeat
- * as glyphs, list markers / checkboxes / indentation become spaces -
- * instead of falling at column 0. Hard rows are untouched. One frozen
- * identity: the style diff and the measure/paint caches key on it by
- * reference, so every text run shares this exact object.
- */
-const HANG_DECORATION: TextDecoration = { hang: true }
-
 const TOKEN_CACHE_CAPACITY = 200
 const TOKEN_CACHE_CHAR_BUDGET = 200_000
 const TOKEN_CACHE_MAX_SOURCE_LENGTH = 20_000
@@ -126,9 +123,8 @@ function lexWithCache(content: string, allowCache: boolean): Token[] {
  * Tokens that render as their own layout node (a width-aware component)
  * instead of joining the ANSI text run. StreamingMarkdown consults the same
  * predicate: a standalone node has a fixed one-row gap to its neighbours
- * rather than the newline-derived spacing of text blocks. Fenced code
- * blocks join the group: the CodeBlockFrame needs structural width (rail +
- * padding) and per-visual-row gutter that an ANSI string cannot carry.
+ * rather than the newline-derived spacing of text blocks. Top-level
+ * fenced code is one too (CodeBlockFrame).
  */
 export function isStandaloneToken(token: Token): boolean {
   return (

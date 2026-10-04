@@ -1,6 +1,5 @@
 /**
- * CodeBlockFrame regression (Batch B of the rendering upgrade, design
- * spec section 1): the light code frame's visual contract, its copy
+ * CodeBlockFrame regression: the light code frame's layout, its copy
  * contract (header/rail NoSelect, selectable body), the narrow-terminal
  * fallbacks, highlighter degradation at component level, and streaming
  * equivalence for a growing fence.
@@ -128,7 +127,7 @@ const cjkRows = cjk.rows.filter(r => r.startsWith('│'))
 assert.ok(cjkRows.length >= 2, 'CJK body wraps')
 assert.ok(cjkRows.every(r => r.startsWith('│ ')), 'CJK wrapped rows keep the rail')
 
-// -- Copy contract (spec 1.2) --------------------------------------------
+// -- Copy contract ---------------------------------------------------------
 
 const copyTarget = snap(<Markdown>{SRC_COPY}</Markdown>, 60)
 const copyHeader = copyTarget.rows.findIndex(r => r.startsWith('┌─ ts'))
@@ -141,8 +140,8 @@ selection.startSelection(bodySel, 2, firstBodyRow, copyTarget.screen)
 selection.updateSelection(bodySel, 59, lastBodyRow)
 selection.finishSelection(bodySel)
 const bodyText = selection.getSelectedText(bodySel, copyTarget.screen)
-// The single padding column belongs to the selectable body region (spec
-// 1.2: only header/rail are NoSelect), so full-row continuation rows carry
+// The single padding column belongs to the selectable body region (only
+// header and rail are NoSelect), so full-row continuation rows carry
 // its space; no rail glyph, header glyph or ANSI ever leaks.
 assert.equal(
   bodyText,

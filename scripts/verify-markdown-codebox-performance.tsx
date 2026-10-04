@@ -1,5 +1,5 @@
 /**
- * Streaming code-frame performance gate (design spec 2.5).
+ * Streaming code-frame performance gate.
  *
  * Drives a REAL StreamingMarkdown through a ConcurrentRoot app for 100
  * frames: 40 arrival frames grow the transcript through 100 sealed
@@ -179,7 +179,7 @@ async function drive(style: 'light' | 'full'): Promise<Sample[]> {
   const beforeSteady = new Map(formatSourceCounts)
   // ── Stage B: steady tail growth (60 frames) ──────────────────────────
   // Frame 1 absorbs the arrival-to-tail boundary transition (one-time
-  // token work the spec explicitly budgets as boundary cost). Everything
+  // token work, accepted as boundary cost). Everything
   // after it is the steady phase the structural assertions target.
   const samples: Sample[] = []
   let afterTransition: Map<string, number> | undefined

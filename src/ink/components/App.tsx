@@ -396,12 +396,10 @@ export default class App extends PureComponent<Props, State> {
 	// Initialized to now so startup doesn't false-trigger.
 	lastStdinTime = Date.now();
 
-	// Cached TerminalSizeContext value, renewed only when the dimensions
-	// actually change. An inline object literal gets a fresh identity on
-	// every App render, re-rendering EVERY width-aware consumer
-	// (MarkdownTable, CodeBlockFrame, panel geometry...) on each streaming
-	// frame even though nothing moved - measured as 53 redundant code
-	// re-highlights per frame by verify-markdown-codebox-performance.
+	// TerminalSizeContext value, renewed only when the dimensions change.
+	// A fresh object per App render would re-render every width-aware
+	// consumer (MarkdownTable, CodeBlockFrame, panel geometry) on each
+	// streaming frame.
 	private terminalSizeValue: { columns: number; rows: number } | null = null
 	private terminalSizeFor(columns: number, rows: number): { columns: number; rows: number } {
 		if (
@@ -510,18 +508,15 @@ export default class App extends PureComponent<Props, State> {
 		}
 	}
 	override componentDidCatch(error: Error, errorInfo: { componentStack?: string }) {
-		// A #185 reaching this ROOT boundary escaped every enqueue-site guard
-		// and surfaced inside React's own commit (e.g. updates chained through
-		// an effect) — the process-level backstop can never see it, because the
-		// boundary consumes the error. Historically that meant a full crash exit
-		// (componentDidCatch → handleExit), and it cost real users their sessions
-		// (four crash reports, all #185, zero stacks). Recover instead:
-		// react-reconciler resets the nested-update counter BEFORE throwing, so
-		// clearing the boundary state remounts the tree from a clean counter —
-		// the session lives, and the full detail block lands in crash.log for the
-		// root-cause hunt. Recoveries are capped per window; a sustained
-		// oscillation falls back to the original crash exit rather than
-		// remount-looping forever.
+		// A #185 that reaches the root boundary escaped every enqueue-site
+		// guard and was thrown inside React's own commit (e.g. updates
+		// chained through an effect); the process-level guard never sees it
+		// because the boundary consumes the error. react-reconciler resets
+		// its nested-update counter before throwing, so clearing the error
+		// remounts the tree from a clean counter and the session survives;
+		// the detail goes to crash.log. Recoveries are capped per window;
+		// past the cap the error goes to handleExit instead of remounting in
+		// a loop.
 		if (isNestedUpdateOverflow(error)) {
 			if (
 				typeof errorInfo?.componentStack === "string" &&

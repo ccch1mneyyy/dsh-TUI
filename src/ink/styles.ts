@@ -446,50 +446,41 @@ export type Styles = {
   readonly softWrapContinuation?: number
 
   /**
-   * Typed paint metadata for a text leaf (rendering-upgrade design §2,
-   * "typed decoration" batch): decoration that would otherwise cost
-   * structural Yoga nodes (a code frame's header row and per-row rail) or
-   * that a plain ANSI string cannot carry per visual row (a hanging indent
-   * on terminal-wrapped continuations) rides the text's own paint instead.
-   * Undefined on every other text — the legacy paint path is untouched.
-   *
-   * The decoration projects onto the same screen planes every consumer
-   * already reads: cells (the prefix/header glyphs are written as text),
-   * Screen.noSelect (decorated columns are marked non-selectable), and
-   * softWrap bookkeeping (prefixed rows keep the continuation encoding), so
-   * selection overlay/extract/wordBounds/fingerprint and scroll-off capture
-   * consume it without new channels.
+   * Paint-time decoration for a text leaf: a header row, a per-row
+   * prefix, or a hanging indent on wrapped continuations, painted as part
+   * of the text instead of as extra Yoga nodes. Decorated columns go into
+   * Screen.noSelect and prefixed rows keep their softWrap flags, so
+   * selection and copy need nothing new. Undefined on plain text, which
+   * takes the usual paint path. Only the wrap modes are supported: under a
+   * truncate mode decorated text is not truncated.
    */
   readonly decoration?: TextDecoration
 }
 
 /**
  * Paint-time decoration for one text leaf. See Styles.decoration.
+ * Producers must reuse one object while it is unchanged: the measure and
+ * paint caches compare it by reference.
  */
 export type TextDecoration = {
   /**
-   * One row painted above the first visual row (the code frame's top
-   * edge: corner, language label, divider). The whole row is excluded
-   * from selection — the hybrid frame's NoSelect header as typed
-   * metadata. ANSI-styled; its display width is measured at paint time.
+   * One row painted above the first row (the code frame's top edge). The
+   * whole row is excluded from selection. A header wider than the node is
+   * cut to it.
    */
   readonly header?: string
 
   /**
-   * Styled single-cell unit repeated after `header` until the header row
-   * reaches the text node's painted width (the wide code frame's divider
-   * run). The component cannot know the final column width — the hybrid
-   * header stretched to it via layout — so the paint pads to maxWidth.
+   * Single-cell unit repeated after `header` up to the node's painted
+   * width (the wide code frame's divider). The paint pads, because only
+   * layout knows the final width.
    */
   readonly headerFill?: string
 
   /**
-   * Styled prefix painted before EVERY visual row of the text (the code
-   * frame's rail plus its padding column). `width` is the prefix's
-   * display width in cells; the wrap budget shrinks by it so prefixed
-   * rows never overflow the column. `noSelect` leading columns are
-   * excluded from selection (the rail); the remaining prefix columns
-   * stay selectable (the padding space — spec §1.2's copy contract).
+   * Prefix painted before every row (the code frame's rail and padding).
+   * `width` is its display width; the wrap budget shrinks by it. The
+   * first `noSelect` columns are excluded from selection.
    */
   readonly prefix?: {
     readonly text: string
@@ -498,14 +489,10 @@ export type TextDecoration = {
   }
 
   /**
-   * Hang terminal-wrapped continuations of a source line under the line's
-   * own leading structure (design §2's "wrap continuation" consumer): quote
-   * rails repeat as painted glyphs, list markers / checkboxes / indents
-   * become spaces, and the continuation aligns with the line's content
-   * column. Hard rows are untouched — their structure is already in the
-   * text. A structured line's wrap budget shrinks by its hang width so
-   * prefixed continuations fit. The injected prefix columns are excluded
-   * from selection, keeping copied bytes identical to the unwrapped join.
+   * Hang wrapped continuations of a source line under the line's leading
+   * structure: quote rails repeat, list markers, checkboxes and indents
+   * become spaces. Hard rows are untouched. The injected columns are
+   * excluded from selection, so a copy matches the unwrapped line.
    */
   readonly hang?: boolean
 }

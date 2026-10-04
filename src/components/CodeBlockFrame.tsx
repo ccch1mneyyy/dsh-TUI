@@ -11,37 +11,28 @@ import { getCodeFrameStyle, subscribeCodeFrameStyle } from '../tuiDisplayPrefs.j
 import type { CliHighlight } from '../terminal-utils/cliHighlight.js'
 
 /**
- * A fenced code block rendered as a light frame (design spec §1):
+ * A fenced code block rendered as a light frame:
  *
  *     ┌─ ts ─────────────────
  *     │   const answer = await agent.run()
  *     │   return answer
  *
- * The top edge carries only the left corner, the language label and a
- * subtle divider; every body row gets the rail and one column of padding;
- * there is no right wall or bottom edge - chat transcripts want the block
- * visible without paying a card's height.
+ * The top edge carries only the corner, the language label and a subtle
+ * divider; every body row gets the rail and one column of padding. No
+ * right wall or bottom edge, so a block costs no extra rows.
  *
- * Two frame engines share this component's visual contract (spec §2):
+ * Two engines draw the same frame:
  *
- * - typed (default): ONE ink-text leaf. The header row and the per-row
- *   rail/padding are typed decoration carried by the Text paint - zero
- *   structural Yoga nodes per block, so the streaming stable-prefix memo
- *   and the paint budget behave exactly as for a plain ANSI string.
- * - hybrid (DSH_TUI_CODE_FRAME=hybrid): the Batch B layout - header/rail
- *   as NoSelect components around the body Text (~7 Yoga nodes/block).
- *   Retained as the fallback: if the typed path ever fails the streaming
- *   performance gate or the selection contract, the env switch restores
- *   it without a code change.
+ * - typed (default): one ink-text leaf. The header row and the per-row
+ *   rail are Text decoration, so a block adds no Yoga nodes and streams
+ *   like a plain ANSI string.
+ * - hybrid (DSH_TUI_CODE_FRAME=hybrid): header and rail as NoSelect boxes
+ *   around the body Text (~7 Yoga nodes per block). Kept as a fallback
+ *   that can be switched on without a code change.
  *
- * Copy contract (§1.2): header and rail are excluded from selection and
- * the body is selectable - in the typed engine via the decoration's
- * noSelect metadata (same Screen.noSelect bitmap the components used). A
- * selection anchored on the body copies the clean code; a selection
- * anchored on the decorations copies just the decorated region - the
- * existing anchor semantics, explicitly accepted. The pure-ANSI fence
- * stays as the fallback for very narrow terminals (net body width < 8)
- * where a frame would only squeeze the code.
+ * Header and rail are excluded from selection, the body is selectable.
+ * Below a net body width of 8 the block falls back to the plain ANSI
+ * fence, where a frame would only squeeze the code.
  */
 
 /** Same viewport slack MarkdownTable/MermaidDiagram keep for gutters and
@@ -56,8 +47,7 @@ const FRAME_OVERHEAD = 2
 
 /**
  * Which frame engine renders code fences. `typed` is the default;
- * `DSH_TUI_CODE_FRAME=hybrid` restores the Batch B component layout
- * (spec §2: hybrid stays the fallback, never a hard cut).
+ * `DSH_TUI_CODE_FRAME=hybrid` selects the component layout.
  */
 export function codeFrameEngine(): 'typed' | 'hybrid' {
   return process.env.DSH_TUI_CODE_FRAME === 'hybrid' ? 'hybrid' : 'typed'
@@ -88,45 +78,41 @@ export function CodeBlockFrame({ token, highlight, dimColor = false, forceWidth 
   const label = codeLanguageTag(token) || 'code'
   const body = formatCodeBody(token, highlight)
 
-  // Hooks run before every branch: the narrow fallback and the hybrid
-  // engine return early, so the typed memos must be unconditional.
+  // The narrow fallback and the hybrid engine return early, so these
+  // memos run before every branch.
   const headerText = React.useMemo(() => {
-    // The fixed part: corner, dash, label. The WIDE frame keeps one
-    // trailing space before the fill run; the narrow label stays tight
-    // (`┌─ ts` exactly - a trailing space would claim one extra
-    // noSelect column the hybrid header never marked).
+    // The wide frame keeps one space before the divider run; the narrow
+    // label stays tight (`┌─ ts`), matching the hybrid header's noSelect
+    // columns.
     const wide = contentWidth >= WIDE_HEADER_MIN_COLUMNS
     return colorize('┌─ ' + label + (wide ? ' ' : ''), theme.subtle, 'foreground')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [label, theme.subtle, contentWidth])
   const headerFill = React.useMemo(() => {
     if (contentWidth < WIDE_HEADER_MIN_COLUMNS) return undefined
     return colorize('─', theme.subtle, 'foreground')
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [theme.subtle, contentWidth])
+  // Keyed on emptiness, not the body: a streaming fence keeps one
+  // decoration object while its text grows.
+  const emptyBody = body === ''
   const decoration = React.useMemo<TextDecoration>(() => {
-    if (body === '') {
-      // Header-only frame: the empty fenced block still shows its rail
-      // header row, nothing else.
+    if (emptyBody) {
+      // An empty fence shows just the header row.
       return { header: headerText, headerFill }
     }
     return {
       header: headerText,
       headerFill,
       prefix: {
-        // Rail glyph colored subtle; the padding column stays unstyled and
-        // selectable (spec §1.2: only rail/header are excluded).
+        // The rail is excluded from selection; the padding column is not.
         text: colorize('│', theme.subtle, 'foreground') + ' ',
         width: FRAME_OVERHEAD,
         noSelect: 1,
       },
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [headerText, headerFill, body, theme.subtle])
+  }, [headerText, headerFill, emptyBody, theme.subtle])
 
   if (contentWidth - FRAME_OVERHEAD < MIN_NET_BODY_WIDTH) {
-    // Too narrow to frame: keep the existing pure-ANSI Kimi fence so the
-    // block never stretches or squeezes the surrounding column.
+    // Too narrow to frame: the plain ANSI fence.
     return <Text dimColor={dimColor}>{formatToken(token, 0, null, null, highlight).trimEnd()}</Text>
   }
 
@@ -237,7 +223,7 @@ function CodeBlockFrameFull({
   )
 }
 
-/** The Batch B hybrid layout, kept verbatim as the fallback engine. */
+/** The component layout behind DSH_TUI_CODE_FRAME=hybrid. */
 function CodeBlockFrameHybrid({
   contentWidth,
   label,

@@ -1,5 +1,5 @@
 /**
- * Markdown token-level correctness gate (Batch A of the rendering upgrade).
+ * Markdown token-level correctness gate.
  *
  * 1. Token census: the real lexer (configureMarked + math extensions) over a
  *    corpus that exercises every GFM/math construct must produce EXACTLY the
@@ -69,11 +69,9 @@ function collectTokenTypes(tokens: Token[], into: Set<string>): void {
 const census = new Set<string>()
 for (const sample of CORPUS) collectTokenTypes(marked.lexer(sample), census)
 
-// The 'del' entry arrived when the double-tilde tokenizer override was
-// removed (Batch A): marked's built-in del only pairs double tildes.
 // Every type dispatch knows how to render, plus the two deliberate
-// no-ops. 'del' is absent while the tokenizer override disables it
-// (Batch A re-enables it and this expectation grows with it).
+// no-ops (def, html). 'del' is marked's built-in tokenizer, which only
+// pairs double tildes.
 const EXPECTED = new Set([
   'blockquote', 'br', 'checkbox', 'code', 'codespan', 'def', 'del', 'em', 'escape',
   'heading', 'hr', 'html', 'image', 'link', 'list', 'list_item', 'math',
@@ -140,7 +138,7 @@ assert.equal(stripAnsi(applyMarkdown('inline <span>tag</span> text\n')), 'inline
 
 assert.ok(stripAnsi(applyMarkdown('**bold** and `code`\n')).includes('bold and code'))
 assert.ok(applyMarkdown('## head\n').includes('head'), 'heading text renders')
-// Batch D: the divider is three subtle-styled box-drawing dashes on one
+// The divider is three subtle-styled box-drawing dashes on one
 // row (no trailing newline); the literal ASCII dashes are gone.
 const hrOut = applyMarkdown('---\n')
 assert.equal(stripAnsi(hrOut), '\u2500\u2500\u2500', 'hr renders the single-row divider')

@@ -1,32 +1,24 @@
 /**
- * Typed decoration regression (Batch C of the rendering upgrade, design
- * spec §2 "Typed decoration 完整批"): the paint-time decoration
- * machinery (header row / per-row prefix / wrap-continuation hanging
- * indent) that replaces the hybrid code frame's structural components.
+ * Typed text decoration (header row, per-row prefix, hanging indent on
+ * wrapped continuations) and the code frame drawn with it.
  *
- * Sections (each anchored to a spec clause):
- *  1. Engine equivalence: typed and hybrid (DSH_TUI_CODE_FRAME=hybrid,
- *     the Batch B baseline) render identical rows, Screen.noSelect
- *     bitmaps, softWrap bookkeeping and selection-copy bytes across
- *     shapes and widths - the migration is behavior-preserving.
- *  2. Structure counts (§2 zero per-block Yoga increment): a typed code
- *     frame is ONE ink-text leaf with ZERO structural ink-box nodes; the
- *     hybrid engine still renders its component layout (retained
- *     fallback, env-switchable).
- *  3. Copy contract (§1.2 as a hard gate): body-anchored selection
- *     copies the clean payload; rail/header anchors copy the decoration
-     * only; the noSelect bitmap is the machinery.
- *  4. Wrap continuation (the batch-D leftover): without the hang
- *     decoration the continuation falls at column 0 (the pre-batch
- *     behavior, asserted as the bad baseline); with it, quote rails
- *     repeat, list/task continuations hang at the content column,
- *     CJK bodies keep the structure, copied bytes stay identical to the
- *     unwrapped join, and streaming equals the settled render.
- *  5. Selection consumers: the rolling fingerprint reads the same screen
- *     planes - a stationary selection survives a no-op frame and latches
- *     stale when the content under it is replaced.
+ *  1. Engine equivalence: typed and hybrid (DSH_TUI_CODE_FRAME=hybrid)
+ *     frames render identical rows, Screen.noSelect bitmaps, softWrap
+ *     flags and copied bytes across shapes and widths.
+ *  2. Structure counts: a typed code frame is one ink-text leaf with no
+ *     ink-box nodes; the hybrid engine still renders its component layout.
+ *  3. Copy contract: a body-anchored selection copies the clean code;
+ *     rail/header anchors copy only the decoration.
+ *  4. Wrap continuation: without the hang decoration a continuation falls
+ *     to column 0; with it quote rails repeat, list/task continuations
+ *     hang at the content column, CJK keeps the structure, copied bytes
+ *     match the unwrapped line, and streaming equals the settled render.
+ *  5. The selection fingerprint reads the same screen planes.
  *  6. Mermaid fallback shares the typed frame; a changed decoration
  *     object invalidates the paint cache.
+ *  7. codeFrameStyle setting: light default, full box, round trip.
+ *  8. A Text gaining or losing its decoration keeps its hook count.
+ *  9. Measure matches paint, and decoration never paints past its node.
  *
  * Run: node --import tsx/esm scripts/verify-markdown-typed-decoration.tsx
  */
@@ -104,7 +96,7 @@ const NL = '\n'
 const BAR = '\u258e'
 const RAIL = '\u2502'
 
-// -- 1. Engine equivalence (typed vs the Batch B hybrid baseline) --------
+// -- 1. Engine equivalence (typed vs hybrid) ------------------------------
 
 const SHAPES: Array<[string, string]> = [
   ['ts', 'const answer = await agent.run()' + NL + 'return answer'],
@@ -232,7 +224,7 @@ console.log('3. typed copy contract holds: body/rail/header anchors, bitmap mach
 const WORDS = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mik november oscar papa'
 
 // Bad baseline: the legacy paint (no decoration) drops the wrapped
-// continuation at column 0 - exactly the behavior this batch fixes.
+// continuation at column 0, which the hang decoration replaces.
 const legacy = snap(<Text>{BAR + ' ' + WORDS}</Text>, 40)
 const legacyCont = legacy.rows.filter(r => r !== '').slice(1)
 assert.ok(legacyCont.length >= 2 && legacyCont.every(r => !r.startsWith(BAR)),
@@ -415,4 +407,98 @@ assert.deepEqual(snap(<Markdown>{SRC}</Markdown>, 60).rows, target.rows,
   'switching back to light restores the exact default rows')
 console.log('7. codeFrameStyle: light default byte-identical, full closed box (walls/bottom/copy), narrow fallback, roundtrip')
 
-console.log('markdown typed decoration verified (engine equivalence, structure counts, copy contract, hanging continuations, fingerprint, mermaid sharing, cache identity, frame style)')
+// -- 8. Decoration toggle keeps the hook count -----------------------------
+
+// The frame narrowing into its plain fallback reuses the same Text fiber
+// with the decoration removed. Its hook count must not change (React
+// #300/#310 would take the whole app down).
+const resizeOut = new FrameOutput()
+const resizeTree = (columns: number) => (
+  <TerminalSizeContext.Provider value={{ columns, rows: 40 }}>
+    <CodeBlockFrame token={codeToken('ts', 'const a = 1')} highlight={null} />
+  </TerminalSizeContext.Provider>
+)
+const app3 = await render(resizeTree(80), {
+  stdout: resizeOut as unknown as NodeJS.WriteStream,
+  stdin: new FrameInput() as unknown as NodeJS.ReadStream,
+  exitOnCtrlC: false,
+  patchConsole: false,
+})
+let resizeError: unknown
+void app3.waitUntilExit().catch((error: unknown) => { resizeError = error })
+const resizeRow = () => {
+  const ink = instances.get(resizeOut as unknown as NodeJS.WriteStream) as unknown as
+    | { frontFrame: { screen: ReturnType<typeof snap>['screen'] } }
+    | undefined
+  if (ink === undefined) return ''
+  let line = ''
+  for (let x = 0; x < 10; x++) line += cellAtIndex(ink.frontFrame.screen, x).char
+  return line.trimEnd()
+}
+assert.ok(await settled(() => resizeRow().startsWith('\u250c')), 'wide frame paints its header')
+app3.rerender(resizeTree(12))
+assert.ok(await settled(() => resizeRow().startsWith('```ts')),
+  'narrowed frame falls back to the fence: ' + JSON.stringify(resizeRow()))
+app3.rerender(resizeTree(80))
+assert.ok(await settled(() => resizeRow().startsWith('\u250c')), 'widened frame paints its header again')
+assert.equal(resizeError, undefined, 'toggling decoration on one Text does not crash the app')
+await app3.unmount()
+console.log('8. decoration toggle on one Text keeps hooks stable')
+
+// -- 9. Measure matches paint; decoration never paints past the node -----
+
+const HANG = { hang: true }
+const withEnd = (el: React.ReactElement) => (
+  <Box flexDirection="column">{el}<Text>END</Text></Box>
+)
+// wrap-ansi counts a Devanagari vowel sign as one column where stringWidth
+// counts zero, so a line that fits by stringWidth still wraps once the
+// paint decides to wrap (because another line overflows). The decorated
+// measure must count those rows too, or END lands on the last body row.
+const VOWEL_SIGN = '\u093f'
+const fitsAt = (columns: number) => 'ab ' + VOWEL_SIGN + ' ' + 'c'.repeat(columns - 4)
+for (const width of [40, 60]) {
+  assert.equal(stringWidth(fitsAt(width - 2)), width - 2, 'fixture fits the framed body by stringWidth')
+  const code = 'x'.repeat(width + 10) + NL + fitsAt(width - 2)
+  process.env.DSH_TUI_CODE_FRAME = 'hybrid'
+  const h = snap(withEnd(<CodeBlockFrame token={codeToken('txt', code)} highlight={null} />), width)
+  process.env.DSH_TUI_CODE_FRAME = 'typed'
+  const t = snap(withEnd(<CodeBlockFrame token={codeToken('txt', code)} highlight={null} />), width)
+  assert.deepEqual(t.rows, h.rows, 'prefix measure counts the rows wrap-ansi paints @' + width)
+
+  const prose = 'x'.repeat(width + 10) + NL + fitsAt(width)
+  assert.deepEqual(
+    snap(withEnd(<Text decoration={HANG}>{prose}</Text>), width).rows,
+    snap(withEnd(<Text>{prose}</Text>), width).rows,
+    'hang on structure-free text paints and measures like plain text @' + width,
+  )
+}
+
+// A hang as wide as the column leaves no room for content: continuations
+// paint without a prefix instead of spilling past the node.
+const narrowTask = snap(
+  <Box width={4}><Text decoration={HANG}>{'- [ ] x alpha beta'}</Text></Box>,
+  20,
+)
+assert.ok(narrowTask.rows.every(r => stringWidth(r) <= 4),
+  'narrow hang stays inside its 4-column node: ' + JSON.stringify(narrowTask.rows))
+
+// A language label longer than the column is cut, not painted past it.
+const longLabel = 'averyveryverylonglanguagenamethatkeepsgoing'
+const longHeader = snap(
+  <Box width={30}><CodeBlockFrame token={codeToken(longLabel, 'x = 1')} highlight={null} forceWidth={30} /></Box>,
+  60,
+)
+assert.ok(longHeader.rows.every(r => stringWidth(r) <= 30),
+  'long label header stays inside the frame: ' + JSON.stringify(longHeader.rows))
+assert.ok(longHeader.rows[0]!.startsWith('\u250c\u2500 avery'), 'cut header keeps its start: ' + JSON.stringify(longHeader.rows[0]))
+// The header counts toward the node width: a short body in a row
+// container does not cut a label that fits.
+const shortBody = snap(
+  <Box width={30}><CodeBlockFrame token={codeToken('typescript', 'x')} highlight={null} forceWidth={30} /></Box>,
+  60,
+)
+assert.equal(shortBody.rows[0], '\u250c\u2500 typescript', 'a label that fits is painted whole')
+console.log('9. measure matches paint under wrap-ansi width drift; narrow hang and long header stay in the node')
+
+console.log('markdown typed decoration verified (engine equivalence, structure counts, copy contract, hanging continuations, fingerprint, mermaid sharing, cache identity, frame style, decoration toggle, measure/paint agreement)')
