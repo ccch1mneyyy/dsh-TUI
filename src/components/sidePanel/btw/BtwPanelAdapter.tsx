@@ -1,8 +1,7 @@
 /**
- * btw 侧栏面板（设计 btw-panel.md）：线程滚动 + Markdown + 底部 composer
- * 连续追问。Esc 层级按面板系统契约：composer 编辑（Esc 收起草稿） >
- * 线程列表滚动（无独占 Esc）> 宿主回退（Esc 回聊天）；Tab 在列表与
- * composer 间切焦点；未消费键交宿主，不吞 ←/→ 的 panel cycling。
+ * btw 侧栏面板：线程滚动 + Markdown + 底部 composer 连续追问。Esc 先退出
+ * composer 编辑（草稿保留），列表层不消费 Esc，再交宿主回聊天；Tab 在列表
+ * 与 composer 间切焦点；未消费的键交宿主（←/→ 仍切面板）。
  *
  * badge 派生（镜像 jobs/agents 适配器）：面板不可见期间完成的新 answer
  * 增 info unread、失败 error level 计未读、运行中只亮点不计未读；进入
@@ -105,7 +104,7 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
     channel.notify(t('btw-thread-clear'), { timeoutMs: 2500 })
   }, [sessionId, channel])
 
-  // ── 键盘（v2.1：composer 层 > 列表层 > 宿主回退；未消费交宿主）───────
+  // ── 键盘：composer 层 > 列表层 > 宿主（未消费的键返回 false）──────────
   const onKey = React.useCallback<PanelKeyHandler>((input, key) => {
     if (composerFocus) {
       const text = btwThreads.get(sessionId)?.draft ?? ''

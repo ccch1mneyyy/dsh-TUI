@@ -145,10 +145,10 @@ export const OUTPUT_WINDOW_CAP = 160
 export type LiveLeaf = { kind: 'live'; line: SubagentOutputLine }
 
 /** Render keys must be unique per row: the store's block-per-entry split can
- *  legitimately repeat one anchor inside a page (a text, a tool and another
- *  text of ONE message), so a repeated key gets an ordinal suffix instead of
- *  colliding. A key collision is never a reason to drop a leaf (RV round 3).
- *  Pure — first occurrence keeps its key, later ones are copied. */
+ *  repeat one anchor inside a page (a text, a tool and another text of one
+ *  message), so a repeated key gets an ordinal suffix; a leaf is never
+ *  dropped for its key. The first occurrence keeps its key, later ones are
+ *  copied. */
 export function uniqueRenderKeys(leaves: readonly TranscriptLeaf[]): TranscriptLeaf[] {
   const seen = new Map<string, number>()
   return leaves.map(leaf => {
@@ -158,17 +158,15 @@ export function uniqueRenderKeys(leaves: readonly TranscriptLeaf[]): TranscriptL
   })
 }
 
-/** Prepend one older page's folded leaves (RV rounds 2+3). The store splits
- *  one API message into per-block entries sharing the anchor, so the ONLY
- *  place a block can be split across pages is the physical boundary: the
- *  older page's LAST leaf against the current list's FIRST leaf. Those two
- *  merge when they are the same key AND the same text/thinking kind (the
- *  fold already joined everything consecutive within a page; successive
- *  load-olders keep merging into the same head leaf). Every OTHER leaf
- *  keeps its own row in the older page's original order — a heterogeneous
- *  part under a taken key (a reasoning against a text of one message) is
- *  NEVER dropped, and a tool between two same-anchor text parts stays
- *  between them (no hoisting). Pure — no current leaf is mutated. */
+/** Prepend one older page's folded leaves. The store splits one API message
+ *  into per-block entries sharing the anchor, so a block can only be cut
+ *  across pages at the boundary: the older page's last leaf against the
+ *  current list's first. Those two merge when they share the key and the
+ *  text/thinking kind (the fold already joined everything consecutive
+ *  within a page). Every other leaf keeps its own row in the older page's
+ *  order: a different kind under the same key is kept, and a tool between
+ *  two text parts of one message stays between them. No current leaf is
+ *  mutated. */
 export function prependOlderLeaves(fresh: readonly TranscriptLeaf[], current: readonly TranscriptLeaf[]): TranscriptLeaf[] {
   let older: readonly TranscriptLeaf[] = fresh
   let head = current

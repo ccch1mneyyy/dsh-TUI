@@ -35,8 +35,8 @@ export interface InspectDetail {
   /**
    * True when the row's owning event could not be re-read from the log (a
    * compacted-away bracket, a pruned lane): the header facts above still
-   * stand, but the full content is honestly unavailable (design ④ i18n
-   * `trajectory-inspect-unavailable`) rather than silently blank.
+   * stand, but the full content is shown as unavailable
+   * (`trajectory-inspect-unavailable`) rather than silently blank.
    */
   readonly unresolved?: boolean
 }
@@ -83,8 +83,8 @@ function allText(content: unknown): string {
  * The answer text of the ask-tool result paired with a question's `callId`.
  *
  * A settled questionnaire reports only its `requestId`; the answer the user
- * picked lands as the ask tool's own result. One bounded backwards scan (the
- * result always follows the ask) recovers it; absence stays absence.
+ * picked lands as the ask tool's own result, found by one backwards scan;
+ * absence stays absence.
  */
 function pairedResultText(events: readonly RawTrajEvent[], callId: string): string | undefined {
   for (let index = events.length - 1; index >= 0; index--) {
@@ -124,7 +124,7 @@ export function inspectNode(node: TrajNode, events: readonly RawTrajEvent[]): In
     const { input, output, think, cacheRead } = node.tokens
     facts.push(`in ${input} · out ${output}${think > 0 ? ` · think ${think}` : ''}${cacheRead > 0 ? ` · cache ${cacheRead}` : ''}`)
   }
-  // The neutral AgentEvent source (design §④ 轨迹裁决) stamps rows whose envelope
+  // The neutral AgentEvent source stamps rows whose envelope
   // time came from the trace clock rather than the backend: "this is when
   // we saw it", not "this is when it happened". DSH events never carry the
   // stamp, so their facts are unchanged.
@@ -173,18 +173,17 @@ export function inspectNode(node: TrajNode, events: readonly RawTrajEvent[]): In
     }
 
     case 'approval': {
-      // 审批/问卷等待段详情（设计 ④ 完整档）：等待时长在表头右侧（闭合
-      // 段）或检查器的 live 行（等待中）呈现；这里补齐响应与来源——
-      // settled 事件只带 outcome，问出去的来源与可选项只活在 asked 载荷
-      // 里，必须在折叠时保留、在这里懒读。
+      // 审批/问卷的等待时长在表头右侧（已结束）或检视器的 live 行（等待
+      // 中）呈现；这里补上响应与来源。settled 事件只带 outcome，来源与
+      // 可选项只在 asked 载荷里。
       if (node.detail !== undefined) sections.push({ title: 'reason', body: node.detail })
       if (node.outcome !== undefined) {
         sections.push({ title: 'outcome', body: node.outcome, tone: node.status === 'error' ? 'error' : undefined })
       }
       const ask = readApprovalAsked(open?.data)
       if (ask !== undefined) {
-        // 响应：问卷的 settled 只报 requestId；答案正文落在配对的 ask 工具
-        // 结果里（callId 配对，懒读一次，找不到就不假装有）。
+        // 问卷的 settled 只报 requestId；答案在 callId 配对的 ask 工具结果里，
+        // 找不到就不显示。
         if (ask.ask === 'question') {
           const answer = ask.callId === undefined ? undefined : pairedResultText(raw, ask.callId)
           if (answer !== undefined) {

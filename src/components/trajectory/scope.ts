@@ -1,7 +1,6 @@
 /**
- * Trajectory scope — the cross-agent drilldown selector (design
- * agent-team-panels §④ 完整档: Agent View 过滤当前 Agent / 父回合 / 全部
- * 后代).
+ * Trajectory scope — the cross-agent drilldown selector (current agent /
+ * delegating turn / all descendants).
  *
  * The scope is a pure value describing WHICH lane's rows the trajectory
  * surfaces render. `session` is the default and the pre-scope behavior;

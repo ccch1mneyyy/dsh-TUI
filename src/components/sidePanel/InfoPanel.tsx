@@ -85,7 +85,7 @@ export function InfoPanel({ width, height, focused, visible }: PanelProps): Reac
     : undefined
   const contextStep = contextPct !== undefined ? contextPressureStep(contextPct) : undefined
   const cacheText = formatCacheHitRate(usage) ?? none
-  // 花费：与状态栏同门控——后端自报的会话花费（Claude `total_cost_usd`）
+  // 花费：与状态栏同一规则——后端自报的会话花费（Claude `total_cost_usd`）
   // 优先；否则官方 DeepSeek 路由 + 有计价金额或未计价 token。
   // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the report
   const costReport = channel.costReport

@@ -1,11 +1,9 @@
 /**
- * UI-side agent-team helpers (design agent-team-full). The DOMAIN types
- * live in the channel port (`adapter/ports/channel-view.ts`, T-A's seam)
- * and are re-exported here so every UI import site names one source of
- * truth; this module keeps only what is genuinely scene-layer concerns:
- * the Agent View source stack and the compose-target resolution.
+ * UI-side agent-team helpers. The message domain types live in the channel
+ * port (`adapter/ports/channel-view.ts`) and are re-exported for the UI;
+ * this module adds the Agent View source stack, compose-target resolution
+ * and the parent/sibling math of the workbench.
  */
-import type { AgentIdentity } from '../../adapter/ports/channel-view.js'
 import type { SubagentState } from '../../dsh-adapter/subagents.js'
 
 export type {
@@ -18,7 +16,7 @@ export type {
   AgentMessageVia,
 } from '../../adapter/ports/channel-view.js'
 
-/** §4.1 the Agent View source stack — where Esc returns to. The optional
+/** Where the Agent View was opened from, i.e. where Esc returns to. The optional
  *  `panel` mark says the entry came from the side-panel agents surface, so
  *  the exit returns to the panel (route preserved) instead of the fullscreen
  *  form of the same screen. */
@@ -28,10 +26,9 @@ export type AgentViewSource =
   | { readonly kind: 'agent-detail'; readonly agentId: string; readonly panel?: true }
   | { readonly kind: 'transcript-card'; readonly rowId: number }
 
-/** §5.1 the composer's target face, resolved by the wiring from the roster
- *  (or the control's `listTargets`): a unique name addresses by name,
- *  duplicates address by stable id (disambiguated, still submittable), and
- *  no name at all has no submit affordance — only the notice. */
+/** The composer's target, resolved from the roster: a unique name addresses
+ *  by name, a duplicated one by stable id (still submittable), and no name
+ *  at all has no submit, only the notice. */
 export interface AgentComposeTarget {
   readonly agentId: string
   /** Unique across the roster → address by name. */
@@ -40,10 +37,9 @@ export interface AgentComposeTarget {
   readonly ambiguous?: true
 }
 
-/** Resolve a compose target from the roster's labels (the descriptions) or
- *  the control's own identity list: unique label addresses by name,
- *  duplicates carry `ambiguous` (the composer shows the stable id), no label
- *  at all stays nameless. */
+/** Resolve a compose target from the roster's labels (the descriptions):
+ *  a unique label addresses by name, duplicates carry `ambiguous` (the
+ *  composer shows the stable id), no label at all stays nameless. */
 export function agentComposeTargetOf(agentId: string, labels: ReadonlyMap<string, string>): AgentComposeTarget {
   const name = labels.get(agentId)
   if (name === undefined || name === '') return { agentId }
@@ -52,23 +48,13 @@ export function agentComposeTargetOf(agentId: string, labels: ReadonlyMap<string
   return duplicates > 1 ? { agentId, name, ambiguous: true } : { agentId, name }
 }
 
-/** The same resolution over the control's addressable identities
- *  (`listTargets` roster): name wins when unique, label stands in when the
- *  backend reports no stable name. */
-export function agentComposeTargetOfIdentity(agentId: string, targets: readonly AgentIdentity[]): AgentComposeTarget {
-  const labels = new Map<string, string>()
-  for (const target of targets) labels.set(target.agentId, target.name ?? target.label ?? '')
-  return agentComposeTargetOf(agentId, labels)
-}
+// ── workbench parent/sibling math ───────────────────────────────────────────
 
-// ── workbench parent/sibling math (design agent-team-panels §3 P3) ──────────
-
-/** Who spawned an agent, as a PROVABLE fact. 'main' = the session's main
- *  loop — proven by depth 1 alone (the SDK's spawn-depth definition).
- *  'agent' = a named parent agent. 'unknown' = no fact: depth >= 2 without
- *  a parent id (old metadata) must NEVER collapse into 'main' or a
- *  depth-mate (agent-team §2: the tree only trusts parent facts, orphans
- *  are not drawn). */
+/** Who spawned an agent, only as far as the data proves it. 'main' = the
+ *  session's main loop (depth 1, the SDK's spawn-depth definition).
+ *  'agent' = a named parent agent. 'unknown' = depth >= 2 without a parent
+ *  id (old metadata): never folded into 'main' or into an agent at the
+ *  same depth. */
 export type AgentParentFact = { readonly kind: 'main' } | { readonly kind: 'agent'; readonly agentId: string } | { readonly kind: 'unknown' }
 
 /** The parent fact of one roster row from the roster's own fields. */
@@ -89,10 +75,9 @@ export function viewedAgentParentFact(agent: SubagentState, transcriptParent: st
   return agentParentFactOf(agent)
 }
 
-/** The switchable neighbourhood of the viewed agent (design §3 P3
- *  workbench): its parent row and its siblings — roster agents PROVABLY
- *  spawned by the same parent. Depth-equality alone never makes siblings;
- *  an unknown parent yields no siblings (honest absence, not a guess). */
+/** The switchable neighbourhood of the viewed agent: its parent and its
+ *  siblings, i.e. roster agents with the same known parent. The same depth
+ *  alone never makes siblings; an unknown parent yields none. */
 export function agentNeighbourhood(
   self: SubagentState,
   roster: readonly SubagentState[],

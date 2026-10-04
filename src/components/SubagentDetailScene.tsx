@@ -169,22 +169,20 @@ function isActivityLine(text: string): boolean {
   return ACTIVITY_GLYPHS.includes(text.trimStart().slice(0, 1))
 }
 
-// ── the Agent-Transcript page helpers live in ./messages/subagentTranscript.ts ──
 
 export interface SubagentDetailSceneProps {
   subagent: SubagentState
   onBack: () => void
   onInterrupt?: (agentId: string) => void
-  /** The child's full transcript source (the channel's `subagentControl.history`,
-   *  Claude's store read). Absent = this backend has no transcript data
-   *  plane (DSH): the Transcript page is not rendered and the output tail
-   *  keeps its retained-range note (design agent-team-panels §2). */
+  /** The child's full transcript (`subagentControl.history`). Absent = no
+   *  transcript source for this session: no Transcript page, and the
+   *  output tail keeps its retained-range note. */
   loadTranscript?: TranscriptLoader
-  /** 主屏只读 Agent View（design agent-team-full §4.1 Detail 入口）。 */
+  /** 打开主屏只读 Agent View。 */
   onOpenView?: () => void
-  /** 代理↔代理消息流（§5.4）：非空时出现 Messages 页。 */
+  /** 代理↔代理消息流：非空时出现 Messages 页。 */
   messages?: readonly AgentMessageView[]
-  /** 发送能力（§5.1）：存在才渲染 composer；独立草稿，不经父 PromptInput。 */
+  /** 发送能力：存在才渲染 composer；独立草稿，不经父 PromptInput。 */
   compose?: { readonly control: AgentMessageControl; readonly target: AgentComposeTarget }
   /** 'panel' 挂在侧栏宿主里（去外层 padding、键盘走 usePanelInput 分发器）；
    *  default（缺省）与整屏形态逐字节一致。 */
@@ -216,14 +214,12 @@ export function SubagentDetailScene({
   const panelMode = variant === 'panel'
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows, columns } = useTerminalSize()
-  // 跨挂载记忆（design §4.1「返回同一 Detail page 和 scroll」）：主屏 Agent
-  // View 盖过 Detail 时组件卸载，重挂载从记忆恢复页码与滚动位置。
+  // 主屏 Agent View 盖过 Detail 时组件会卸载；从 Agent View 回来时按记忆
+  // 恢复页码与滚动位置。
   const remembered = subagentDetailMemory.read(subagent.agentId)
   const [page, setPage] = React.useState<DetailPage>(remembered === undefined ? 'summary' : remembered.page as DetailPage)
-  // The page roster is capability-driven: without a transcript source the
-  // page (and its tab) does not exist — a missing capability is not an error
-  // state to apologize for (design §2 graceful degradation). The Messages
-  // page rides the same rule on the agent-message feed (§5.4).
+  // Pages follow the capabilities: no transcript source, no Transcript page;
+  // no agent messages, no Messages page.
   const pages: readonly DetailPage[] = [
     ...(loadTranscript === undefined ? PAGES_WITHOUT_TRANSCRIPT : PAGES_WITH_TRANSCRIPT),
     ...(messages.length > 0 ? (['messages'] as const) : []),
@@ -261,8 +257,8 @@ export function SubagentDetailScene({
     : subagent.completedAt !== undefined ? subagent.completedAt - subagent.startedAt : undefined
   const info = statusGlyph(subagent.status)
   const totalTokens = subagent.tokens?.total ?? ((subagent.tokens?.input ?? 0) + (subagent.tokens?.output ?? 0) || 0)
-  // The backend's own reports win over locally kept records (R6 review); no
-  // report → the locally kept fallback.
+  // The backend's own counts win over the locally kept records (a missed
+  // lane frame must not undercount); no report → the local records.
   const toolsCount = subagent.reportedToolUses ?? subagent.toolCalls.length
   const shownDuration = subagent.reportedDurationMs ?? elapsed
   const pageIndex = pages.indexOf(activePage)
@@ -326,9 +322,8 @@ export function SubagentDetailScene({
     scrollRef.current?.scrollToBottom()
   }, [page, isRunning, outputLength])
 
-  // composer（§5.1）：Detail 的本地独立草稿。Detail 的主手势是翻页阅读，
-  // composer 默认不聚焦（'i' 聚焦、Esc 让焦）；聚焦期 ←/→/Esc/Enter 归编辑器，
-  // ↑/↓ 仍滚动正文（§6.4 分层）。
+  // Detail 的主手势是翻页阅读，composer 默认不聚焦（'i' 聚焦、Esc 让焦）；
+  // 聚焦期 ←/→/Esc/Enter 归编辑器，↑/↓ 仍滚动正文。
   const [composerFocused, setComposerFocused] = React.useState(false)
   const composerKeys = React.useRef<ComposerKeyHandler | null>(null)
   useInput((input, key, event) => {
@@ -370,7 +365,7 @@ export function SubagentDetailScene({
       onInterrupt(subagent.agentId)
       return
     }
-    // v = 主屏查看（design §4.1 Detail 入口）。
+    // v = 主屏查看。
     if (input.toLowerCase() === 'v' && onOpenView) {
       event.stopImmediatePropagation()
       openMainView()
@@ -399,7 +394,7 @@ export function SubagentDetailScene({
   // 的 Esc 回退是「焦点回聊天」）。其余未认的键返回 false，让 [/]、数字、
   // z、+/- 继续可用。
   const panelKeyHandler = (input: string, key: SidePanelKeyFlags): boolean => {
-    // composer 聚焦时让键（§6.4 Esc 分层：编辑器先吃；↑/↓ 仍滚动正文）。
+    // composer 聚焦时键先给编辑器（含 Esc）；↑/↓ 仍滚动正文。
     if (compose !== undefined && composerFocused) {
       if (key.upArrow === true || key.downArrow === true) {
         scrollRef.current?.scrollBy(key.upArrow === true ? -3 : 3)
@@ -483,8 +478,8 @@ export function SubagentDetailScene({
         {subagent.mode === 'continuable' && <Text color="warning">{t('subagent-mode-continuable')}</Text>}
         {subagent.mode === 'one-shot' && <Text dimColor>{t('subagent-mode-one-shot')}</Text>}
         <Box flexGrow={1} />
-        {/* 主屏查看（design §4.1 Detail 入口；'v' 键的鼠标等价）。字形位：
-            窄面板里身份行是恒定预算，长标签会把 Subagent: <名> 顶折行。 */}
+        {/* 主屏查看（'v' 键的鼠标等价）。只放字形：窄面板里长标签会把
+            Subagent: <名> 顶到下一行。 */}
         {onOpenView !== undefined && (
           <Box onClick={openMainView}>
             <Text color="subtle">⤢</Text>
@@ -512,10 +507,10 @@ export function SubagentDetailScene({
       <Box flexDirection="row" gap={0} marginTop={1}>
         {tab('summary', t('subagent-tab-summary'))}
         {tab('output', subagent.outputEvents.length > 0 ? `${t('subagent-output-label')} ${subagent.outputEvents.length}` : t('subagent-output-label'))}
-        {/* 能力缺失即无此页签（DSH 无转录数据面，不硬凑） */}
+        {/* 没有转录来源就没有这个页签 */}
         {loadTranscript !== undefined && tab('transcript', t('subagent-tab-transcript'))}
         {tab('tools', toolsCount > 0 ? `${t('subagent-tools')} ${toolsCount}` : t('subagent-tools'))}
-        {/* 消息流页：feed 非空才存在（§5.4，能力缺失即无此页签） */}
+        {/* 消息流页：feed 非空才存在 */}
         {messages.length > 0 && tab('messages', `${t('agent-messages-tab')} ${messages.length}`)}
         <Text dimColor>{`  ${pageIndex + 1}/${pages.length}`}</Text>
       </Box>
@@ -524,9 +519,8 @@ export function SubagentDetailScene({
       {/* Paged body */}
       {/* 行数预算：整屏形态沿用原公式；侧栏形态的 rows 已是宿主高度，单独
           收一档，保证底部提示行仍在可视区内。 */}
-      {/* 无转录数据源的后端（DSH）只有这个有界 tail：如实标注保留范围，
-          不假装完整（设计 §2 优雅降级）。置于分隔线上方——范围内标注必须
-          第一眼可见，而不是被 160 行 tail 淹没在滚动区顶部。 */}
+      {/* 没有转录来源时只有这段有界 tail：标出保留范围。放在分隔线上方，
+          免得被 160 行 tail 压到滚动区顶部看不见。 */}
       {activePage === 'output' && loadTranscript === undefined && subagent.outputEvents.length >= OUTPUT_WINDOW_CAP && (
         <Text dimColor>{t('subagent-transcript-retained', { count: subagent.outputEvents.length })}</Text>
       )}
@@ -623,8 +617,8 @@ export function SubagentDetailScene({
           )}
           {activePage === 'transcript' && loadTranscript !== undefined && (
             <Box flexDirection="column">
-              {/* 范围与谱系：历史/只读标注；parent_agent_id 非空=真实父代理，
-                  null 且嵌套=旧格式 metadata（按深度展示，不画孤儿）。 */}
+              {/* parent_agent_id 非空 = 父代理；为 null 且嵌套 = 旧格式
+                  metadata，只按深度说明，不猜父代理。 */}
               <Text dimColor>{`${t('subagent-transcript-history')} · ${t('subagent-transcript-readonly')}`}</Text>
               {transcript.status === 'ready' && transcript.parentAgentId !== null && (
                 <Text dimColor>{t('subagent-transcript-parent', { id: transcript.parentAgentId.slice(0, 8) })}</Text>
@@ -713,8 +707,8 @@ export function SubagentDetailScene({
             ) : (
               <Box flexDirection="column">
               {/* The backend reported N tool uses but only these records were
-                  kept (missed lane frames, window tail): say so — never
-                  fabricate the missing records (R6 review). */}
+                  kept (missed lane frames, window tail): say so rather than
+                  invent the missing ones. */}
               {subagent.reportedToolUses !== undefined && subagent.reportedToolUses !== subagent.toolCalls.length && (
                 <Text dimColor>{t('subagent-tools-kept', { kept: subagent.toolCalls.length, reported: subagent.reportedToolUses })}</Text>
               )}
@@ -749,8 +743,8 @@ export function SubagentDetailScene({
           )}
           {activePage === 'messages' && messages.length > 0 && (
             <Box flexDirection="column">
-              {/* 消息流页（§5.4 Detail）：sender/target/正文/transport/state/sourceRef，
-                  newest last；状态只认通道给的事实。 */}
+              {/* sender/target/正文/transport/state/sourceRef，最新在下；
+                  状态只显示通道给的事实。 */}
               {messages.map((message, index) => (
                 <Box key={message.messageId} marginTop={index === 0 ? 0 : 1}>
                   <AgentMessageFlowRow message={message} selfAgentId={subagent.agentId} />
@@ -761,7 +755,7 @@ export function SubagentDetailScene({
         </ScrollBox>
       </Box>
 
-      {/* composer（§5.1）：能力驱动渲染；Detail 的本地独立草稿，父输入框不被触碰。 */}
+      {/* 有发送能力才渲染；Detail 自己的草稿，不碰父输入框。 */}
       {compose !== undefined && (
         <Box flexDirection="column" marginTop={1}>
           <AgentMessageComposer

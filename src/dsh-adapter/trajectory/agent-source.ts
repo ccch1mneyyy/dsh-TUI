@@ -1,21 +1,16 @@
 /**
- * The backend-neutral trajectory source (design agent-team-panels.md §④
- * 轨迹裁决): an incremental fold of the shared AgentEvent vocabulary into
- * the raw-event envelope the trajectory projection already consumes.
+ * The backend-neutral trajectory source: an incremental fold of the shared
+ * AgentEvent vocabulary into the raw-event envelope the trajectory
+ * projection already consumes.
  *
- * ## Why this exists
+ * `/trace` and the trajectory panel fold {@link RawTrajEvent}s, the DSH
+ * session log's vocabulary. A session without that log (Claude) still
+ * streams the same AgentEvents every backend translator emits, so this
+ * module translates them for any composition that has no raw log. The
+ * channel reports 'empty' until the first mapped event and 'supported'
+ * from then on; 'unsupported' is left for a composition with no source.
  *
- * `/trace` and the trajectory panel fold {@link RawTrajEvent}s — the DSH
- * session log's vocabulary — because that is what a DSH composition's raw
- * history natively is. A session without that log (Claude today) still
- * streams the SAME high-fidelity AgentEvents every backend translator
- * emits, so its trajectory is a translation problem, not a missing
- * capability: this module is the neutral source that mounts for any such
- * composition and keeps the three-state report honest ('empty' before the
- * first mapped event, 'supported' from then on — 'unsupported' stays the
- * structural declaration of a composition that mounted no source at all).
- *
- * ## The mapping table (design line-by-line)
+ * ## The mapping table
  *
  * | AgentEvent | Raw event | Notes |
  * |---|---|---|
@@ -34,7 +29,7 @@
  * | `user.message` | `user/message` | human prompts as user rows, injected/goal/compaction output as context rows. |
  * | `todo.write` | `todo/write` | parity with the DSH row. |
  *
- * ## Lanes (design ④ 完整档: 跨 Agent drilldown)
+ * ## Lanes (cross-agent drilldown)
  *
  * The vocabulary marks child-lane traffic ONLY through `parentCallId` (the
  * delegating tool call). `subagent.start` registers that call id against the
@@ -426,9 +421,8 @@ export function createAgentTrajectorySource(options?: { readonly clock?: () => n
           ...(request.reason === undefined && request.title === undefined && request.displayName === undefined
             ? {}
             : { reason: request.reason ?? request.title ?? request.displayName }),
-          // 审批等待段详情（设计 ④ 完整档）：来源与可选项在 asked 时刻一次
-          // 记录——settled 事件只带 outcome，问出去的选择不留在 payload 里
-          // 就永远丢了。有界拷贝（≤8 个选项标签）。
+          // 来源与可选项只能在 asked 时记录：settled 事件只带 outcome。
+          // 有界拷贝（≤8 个选项标签）。
           ask: 'permission',
           ...(request.agentId === undefined ? {} : { agentId: request.agentId }),
           ...(request.title === undefined ? {} : { title: request.title }),
@@ -451,9 +445,8 @@ export function createAgentTrajectorySource(options?: { readonly clock?: () => n
           toolName: 'question',
           ...(event.request.callId === undefined ? {} : { callId: event.request.callId }),
           ...(first === undefined ? {} : { reason: first.question }),
-          // 问卷等待段详情（设计 ④ 完整档）：问卷结构有界快照（≤5 问 ×
-          // ≤6 选项标签）；settled 只报 requestId，答案要靠 callId 配对
-          // 工具结果（检查器侧懒读）。
+          // 问卷结构的有界快照（≤5 问 × ≤6 选项标签）；settled 只报
+          // requestId，答案由检视器按 callId 配对工具结果时读取。
           ask: 'question',
           ...(event.request.agentId === undefined ? {} : { agentId: event.request.agentId }),
           ...(event.request.questions.length === 0

@@ -1,8 +1,7 @@
 /**
- * BtwThreadScene（⤢ 全屏，设计 btw-panel.md §⤢ 与 Send to Chat）：完整
- * 问题与 Markdown 长文、线程滚动、composer 追问。Esc 返回侧栏——路由/
- * 焦点/滚动由宿主保留（面板 mountPolicy=enabled 不卸载，thread 与
- * draft 都在线程 store，返回后原样）。不清 thread 或 draft。
+ * BtwThreadScene（btw 面板的 ⤢ 全屏）：完整问题与 Markdown 长文、线程
+ * 滚动、composer 追问。Esc 返回侧栏，面板状态原样（mountPolicy=enabled
+ * 不卸载，thread 与 draft 都在线程 store）。
  *
  * 键层级：composer 编辑（Esc 收起草稿）> 场景滚动/动作 > Esc 退出场景。
  */

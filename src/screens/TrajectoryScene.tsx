@@ -102,12 +102,11 @@ export function TrajectoryScene({
   /** Hover state for the header ✕ exit button. */
   const [closeHovered, setCloseHovered] = React.useState(false)
 
-  // ── projection + scope (design ④ 完整档: 跨 Agent drilldown) ────────────
-  // Every region below renders from ONE scoped data plane: the session's
+  // ── projection + scope ────────────────────────────────────────────────────
+  // Every region below renders from one scoped data plane: the session's
   // rows by default, or one agent's lane / the delegating turn / the whole
   // subtree once the user drills in. The header, the wave, the hotspot and
-  // the inspector all follow the scope — a scoped view can never show the
-  // session's wave over a lane's ledger.
+  // the inspector all follow the scope.
   const { scope, lanes, scoped, drill, popScope } = useTrajectoryScope(channel, build)
   const nodes = scoped.build.nodes
 
@@ -164,8 +163,8 @@ export function TrajectoryScene({
   const bandWidth = Math.max(1, columns - 4)
 
   const clampedCursor = filtered.length === 0 ? 0 : Math.min(cursor, filtered.length - 1)
-  // The shared windowing math (design ④ 完整档 长会话虚拟化): the ledger
-  // paints exactly one viewport's worth of rows at any session length.
+  // The ledger paints exactly one viewport's worth of rows at any session
+  // length.
   const windowStart = ledgerWindow(filtered.length, clampedCursor, ledgerRows).start
 
   const band = React.useMemo(
@@ -322,8 +321,7 @@ export function TrajectoryScene({
         setQueryText('')
         return
       }
-      // Esc 的第一层是 scope（设计 ④ 完整档）：下钻视图先弹回会话整体，
-      // 再谈退出；q 保持「随时离开」的语义，落穿到 onClose。
+      // Esc 先退出下钻范围回到会话，再退出场景；q 任何时候都直接离开。
       if (key.escape && popScope()) return
       onClose()
       return
@@ -378,9 +376,9 @@ export function TrajectoryScene({
       setSwitchTick(tick)
       return
     }
-    // 跨 Agent 下钻（设计 ④ 完整档）：会话范围内 `a` 下钻到焦点行所指
-    // 的 lane（子代理描述行或委托工具调用）；范围内则循环 当前 Agent →
-    // 父回合 → 全部后代 → 会话。数据源没报 lane 就不提供过滤。
+    // 会话范围内 `a` 下钻到焦点行所指的 lane（子代理描述行或委托工具
+    // 调用）；已在范围内则循环 当前 Agent → 父回合 → 全部后代 → 会话。
+    // 数据源没有 lane 就没有这个键。
     if (input === 'a' && !key.ctrl && !key.meta && lanes.length > 0) {
       drill(filtered[clampedCursor])
       return
@@ -395,16 +393,13 @@ export function TrajectoryScene({
     }
   })
 
-  // ── unsupported state (design §④ 轨迹裁决) ─────────────────────────────────
-  // The same three-state contract the side panel applies: a composition
-  // that mounted no trajectory source at all gets an honest "not adapted
-  // here" screen — never the empty-session chrome that promises a wake band
-  // after the first turn. (Every in-tree composition mounts one — DSH its
-  // raw history, everything else the AgentEvent fold — so this arm is the
-  // structural guard, exercised by fixtures.) Esc/q (the useInput above)
-  // and the ✕ button still leave; there is simply nothing to navigate.
-  // Tolerant read: partial fixtures render the scene without a report =
-  // legacy behavior.
+  // ── unsupported state ──────────────────────────────────────────────────────
+  // Same rule as the side panel: a session with no trajectory source says
+  // so instead of showing the empty-session chrome that promises a wake
+  // band after the first turn. Every in-tree composition mounts a source
+  // (DSH: raw history, others: the AgentEvent fold), so only fixtures reach
+  // this branch today. Esc/q and ✕ still leave. A channel without the
+  // report (partial fixtures) keeps the old behavior.
   if (channel.trajectorySource?.() === 'unsupported') {
     const unsupportedLine =
       channel.backendCapabilities?.backendId === 'claude'
@@ -453,8 +448,7 @@ export function TrajectoryScene({
   // whole scene depends on. Padding to an exact column count is deterministic,
   // CJK-aware, and cheap (two strings per frame).
   const { totals } = agg
-  // The mounted source's own label (design §4 trajectory-backend-label):
-  // tolerant read keeps partial fixtures rendering without one.
+  // The mounted source's label; partial fixtures render without one.
   const backendLabel = channel.trajectoryBackendLabel?.() ?? ''
 
   /** Left text, a computed gap, right text — clipped to `width` columns. */
@@ -474,8 +468,7 @@ export function TrajectoryScene({
     (totals.errors > 0 ? ` \u00b7 ${t('traj-errors', { n: totals.errors })}` : '') +
     (totals.retries > 0 ? ` \u00b7 ${t('traj-retries', { n: totals.retries })}` : '') +
     ` \u00b7 ${formatDuration(totals.spanMs)}` +
-    // The mounted source rides the session summary (design §4 trajectory-
-    // backend-label): name what is being read, right where the numbers are.
+    // Name the source being read next to the numbers.
     (backendLabel === '' ? '' : ` \u00b7 ${t('trajectory-backend-label', { name: backendLabel })}`)
 
   // ✕ 退出按钮占 2 格（` ✕`）：预量测行给右端留出预算，按钮钉在末列
@@ -513,7 +506,7 @@ export function TrajectoryScene({
   const axisLabel = view === 'hotspot' ? t(`traj-sort-${sort}`) : t(`traj-proj-${projection}`)
   const tabTimelineText = `${view === 'timeline' ? '\u25cf' : '\u25cb'} ${t('traj-tab-timeline')}  `
   const tabHotspotText = `${view === 'hotspot' ? '\u25cf' : '\u25cb'} ${t('traj-tab-hotspot')}`
-  // The scope chip (design ④ 完整档): shown exactly while a non-session
+  // The scope chip: shown exactly while a non-session
   // scope is active; clicking cycles it (the a key's mouse equivalent).
   const scopeChip = scopeChipParts(scope)
   const scopeChipText = scopeChip === undefined ? '' : '◆ ' + t(scopeChip.key, scopeChip.params) + '  '

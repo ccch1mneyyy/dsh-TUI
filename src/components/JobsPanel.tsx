@@ -233,9 +233,9 @@ function JobRowLine({ job, focused, armed, columns, onFocus }: {
             </Box>
           )}
           {job.lastProgress !== undefined && (
-            // The producer's last word outlives the live chip (design §D): the
+            // The producer's last progress line outlives the live chip: the
             // registry clears `progress` at settle, the detail keeps the last
-            // line with its observation time and the producer kind as source.
+            // line with its observation time and the producer kind.
             <Box flexDirection="row" gap={1}>
               <Box width={7} flexShrink={0}><Text dimColor>{t('jobs-progress-latest')}</Text></Box>
               <Text dimColor>
@@ -281,11 +281,10 @@ function JobRowLine({ job, focused, armed, columns, onFocus }: {
           ) : (
             <Text dimColor>{t('jobs-panel-no-output-yet')}</Text>
           )}
-          {/* Bounded observation timeline (design §D): started, progress
-              changes, output drains, gaps and the settle, in arrival order.
-              The ring is bounded — the slice says "latest", never "all"; a
-              job whose history predates this process (resumed roster) says
-              the timeline is unavailable instead of an empty fiction. */}
+          {/* Bounded observation timeline: started, progress changes, output
+              drains, gaps and the settle, in arrival order. A job whose
+              history predates this process (resumed roster) says the
+              timeline is unavailable instead of showing it empty. */}
           <Box flexDirection="column" marginTop={1}>
             <Text dimColor bold>{t('jobs-timeline')}</Text>
             {(job.timeline?.length ?? 0) === 0 ? (

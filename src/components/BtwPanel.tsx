@@ -1,12 +1,11 @@
 /**
- * BtwPanelFallback：btw 面板未启用/不存在/配置禁用时的 /btw 浮层回退
- * （设计 btw-panel.md §快路径与 fallback）。同一问答不允许 overlay 与
- * side panel 双份呈现——Chat 只在面板未启用时挂本浮层。
+ * BtwPanelFallback：btw 侧栏面板未启用时的 /btw 浮层。同一问答只在一处
+ * 呈现，Chat 只在面板未启用时挂它。
  *
- * 数据源是线程 store 的当前 session 线程（read-only：无 composer、无
- * attach），键位沿用旧 BtwPanel 契约：Esc/Enter/Space 关闭（关闭即
- * abort 在途轮，Chat 侧接线）、↑/↓ 滚动、c 复制；浮层拥有键盘期间吞
- * 掉一切泄漏。footer 附「启用 btw 面板」引导（不偷改用户 panel 列表）。
+ * 内容是当前 session 的 btw 线程（只读：无 composer、无 attach）。键位：
+ * Esc/Enter/Space 关闭（关闭即中止在途的一轮，由 Chat 接线）、↑/↓ 滚动、
+ * c 复制；浮层打开时吞掉其余所有键。底部提示如何启用 btw 面板，不替用户
+ * 改面板列表。
  */
 import React from 'react'
 import { Box, Text, useInput, useTerminalSize, type ScrollBoxHandle } from '../ui.js'

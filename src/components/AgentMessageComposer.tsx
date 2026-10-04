@@ -11,8 +11,8 @@ import type {
   AgentMessageView,
 } from './messages/agentTeam.js'
 
-/** The stable §8 notice vocabulary this composer can show (the control's
- *  failure reasons, localized). */
+/** The notices this composer can show (the control's failure reasons,
+ *  localized). */
 type ComposerNoticeKey =
   | 'agent-message-unavailable'
   | 'agent-message-target-ambiguous'
@@ -35,10 +35,9 @@ const NOTICE_OF_REASON: Readonly<Record<Extract<AgentMessageSubmitResult, { ok: 
   failed: 'agent-message-dispatch-failed',
 }
 
-/** Local submit record: what THIS composer sent and what the channel said.
- *  The durable feed (`messages`) may later advance the same intent — the
- *  status line prefers the newest channel fact and never upgrades a state
- *  on its own (design §5.1). */
+/** What this composer sent and what the channel answered. The feed
+ *  (`messages`) may later advance the same intent; the status line shows
+ *  the newest channel fact and never upgrades a state on its own. */
 interface SentIntent {
   readonly intentId: string
   readonly text: string
@@ -98,12 +97,10 @@ export function nextCodePoint(text: string, caret: number): number {
 }
 
 /**
- * AgentMessageComposer — the user→child send box (design agent-team-full
- * §5.1): an INDEPENDENT draft owner, never the parent PromptInput. The
- * parent's draft, dock and queue are untouched by construction — this
- * component holds its own text and submits only through the channel's
- * AgentMessageControl (Claude parent mediation or DSH direct prompt). No
- * confirm dialog anywhere: failures keep the draft and say why in a notice.
+ * The user→child send box. It owns its own draft (never the parent's
+ * PromptInput, dock or queue) and submits only through the channel's
+ * AgentMessageControl (Claude: relayed by the parent; DSH: a direct prompt
+ * to a continuable child). A failure keeps the draft and says why.
  */
 export function AgentMessageComposer({ target, control, messages, focused, onFocusChange, keyHandlerRef }: AgentMessageComposerProps): React.ReactNode {
   // The draft lives in a ref as well as in state: keys can arrive faster

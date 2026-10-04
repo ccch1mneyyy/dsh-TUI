@@ -1,8 +1,7 @@
 /**
- * subagentDetailMemory：Detail 场景的 page/scroll 跨挂载记忆。主屏 Agent
- * View 盖过 Detail 时（Chat 的整屏 early-return）组件会卸载；设计 §4.1
- * 要求「从 Detail 进入返回同一 Detail page 和 scroll」，这里按 agentId 存
- * 最后一次的页码与滚动位置，重挂载时恢复。有界：只保留最近若干代理。
+ * subagentDetailMemory：Detail 场景的页码/滚动记忆。主屏 Agent View 盖过
+ * Detail 时（Chat 的整屏 early-return）组件会卸载；从 Agent View 返回时
+ * 按 agentId 恢复最后的页码与滚动位置。只保留最近 16 个代理。
  */
 
 export interface SubagentDetailSnapshot {

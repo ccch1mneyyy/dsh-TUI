@@ -65,8 +65,8 @@ export function SubagentMessage({ subagent, marginTopOnTurn, activityFrames, onC
   activityFrames?: string
   isExpanded: boolean
   onClick?(event: ClickEvent): void
-  /** 主屏查看（design agent-team-full §4.1）：与卡片点击（→详情）并立的
-   *  明确动作；拦截冒泡，普通正文点击与 selection 语义不变。 */
+  /** 主屏查看：与卡片点击（→详情）分开的动作；拦截冒泡，普通正文点击与
+   *  选区不受影响。 */
   onOpenView?(): void
 }): React.ReactNode {
   const settled = subagent.status === 'completed' || subagent.status === 'failed' || subagent.status === 'cancelled' || subagent.status === 'unknown'

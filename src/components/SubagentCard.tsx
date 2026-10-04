@@ -19,9 +19,9 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
   const elapsed = running
     ? Date.now() - subagent.startedAt
     : subagent.completedAt !== undefined ? subagent.completedAt - subagent.startedAt : undefined
-  // The backend's own reports win over locally kept records (R6 review):
-  // missed lane frames must not show 0 tools, and the reported duration
-  // carries no host receive delay. No report → the old fallback.
+  // The backend's own counts win over locally kept records: missed lane
+  // frames must not show 0 tools, and the reported duration carries no
+  // host receive delay. No report → the local records.
   const toolsCount = subagent.reportedToolUses ?? subagent.toolCalls.length
   const shownDuration = subagent.reportedDurationMs ?? elapsed
   const total = subagent.tokens?.total ?? ((subagent.tokens?.input ?? 0) + (subagent.tokens?.output ?? 0) || 0)

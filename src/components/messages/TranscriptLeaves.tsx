@@ -12,7 +12,7 @@ import { AssistantToolUseMessage } from './AssistantToolUseMessage.js'
 import { TranscriptImages } from './TranscriptImages.js'
 import type { AgentMessageState, AgentMessageVia, AgentMessageView } from './agentTeam.js'
 
-// ── agent↔agent message flow leaves (design agent-team-full §5.4) ─────────
+// ── agent↔agent message flow leaves ─────────────────────────────────────────
 
 /** Delivery-state badge color: only what the channel reported — green is
  *  reserved for an explicit `delivered` fact, dim for `unknown`/`expired`. */
@@ -41,17 +41,16 @@ export function agentMessagePartyLabel(id: string | undefined, selfAgentId: stri
   return id.length > 8 ? id.slice(0, 8) : id
 }
 
-/** The transport word under the §5 via vocabulary. */
+/** The localized transport word. */
 export function agentMessageViaText(via: AgentMessageVia): string {
   return t(`agent-message-via-${via}`)
 }
 
 /**
- * One agent↔agent message as a transcript leaf (design §5.4): `⇄ from → to ·
- * state` header plus an indented preview, sharing the page window with
- * thinking/text/tool leaves — never a copy of an ordinary message row. A
- * view without both endpoints renders the unknown-relation diagnostic and
- * NO arrow (from→to is a fact, not a guess).
+ * One agent↔agent message as a transcript leaf: a `⇄ from → to · state`
+ * header plus an indented preview, paged together with the thinking/text/
+ * tool leaves. Without both endpoints it shows the unknown-relation line
+ * and no arrow.
  */
 export function AgentMessageLeafRow({ message, selfAgentId, marginTopOnTurn }: {
   message: AgentMessageView
@@ -90,12 +89,10 @@ export function AgentMessageLeafRow({ message, selfAgentId, marginTopOnTurn }: {
 }
 
 /**
- * Neutral transcript leaf rows (agent-team panels design §2): the main
- * MessageList and the subagent Agent-Transcript page render thinking / tool /
- * text rows through the SAME thin adapters over the leaf components, so a
- * child transcript reads exactly like the main one. The leaves stay
- * presentation-only — fold state, reveal cursors and row anchoring stay with
- * their owners, which pass them in as props.
+ * Transcript leaf rows: the main MessageList and the subagent transcript
+ * pages render thinking / tool / text rows through these thin adapters, so
+ * a child transcript reads like the main one. Presentation only: fold
+ * state, reveal cursors and row anchoring stay with the callers.
  */
 
 /** A settled/live thinking row (`⚓ Thinking` preview or expanded body). */

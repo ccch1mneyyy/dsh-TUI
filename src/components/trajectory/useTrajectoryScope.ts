@@ -1,6 +1,6 @@
 /**
  * The scope state + scoped data plane shared by the trajectory scene and
- * the side panel (design agent-team-panels ∫4 完整档).
+ * the side panel.
  *
  * The hook owns three things the two surfaces would otherwise drift on:
  *

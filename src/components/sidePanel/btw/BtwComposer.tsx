@@ -1,15 +1,10 @@
 /**
- * BtwComposer：btw 线程的追问输入框（设计 btw-panel.md §交互规格）。
+ * BtwComposer：btw 线程的追问输入框。草稿存在线程 store 里（面板与全屏
+ * 共享），Enter 发送，Esc 退出编辑焦点但保留草稿，失败或忙时草稿原样保留。
+ * 没有 steer/queue：sideQuery 是一次旁路问答，不进父会话。
  *
- * 照 AgentMessageComposer 的**交互模式**实现（team-ui 参考，类型不兼容
- * 不直接 import——设计 §当前接缝已注明）：独立草稿（存线程 store，跨
- * 面板/全屏共享）、Enter 发送、Esc 退出编辑焦点但保留草稿、失败/忙时
- * 草稿原样保留。无 steer/queue 选项——sideQuery 是旁路单轮，不是父
- * 会话投递。
- *
- * 键处理是**纯函数** btwComposerKey：面板形态（usePanelInput 分发）与
- * 全屏场景（useInput）两条路径共用同一份语义；组件本身受控渲染
- * （text 在 store，caret 是各 surface 的本地态）。
+ * 键处理是纯函数 btwComposerKey，面板（usePanelInput 分发）与全屏场景
+ * （useInput）共用；组件本身受控渲染（text 在 store，caret 是各处自己的）。
  */
 import React from 'react'
 import { Box, Text } from '../../../ui.js'
@@ -23,7 +18,7 @@ export interface BtwComposerState {
   readonly caret: number
 }
 
-/** btwComposerKey 的裁决：undefined 字段 = 无此动作；null 整体 = 键未消费。 */
+/** btwComposerKey 的结果：undefined 字段 = 无此动作；整体为 null = 键未消费。 */
 export interface BtwComposerKeyResult {
   readonly state?: BtwComposerState
   readonly submit?: boolean

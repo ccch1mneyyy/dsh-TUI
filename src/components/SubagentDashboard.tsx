@@ -13,21 +13,20 @@ import type { AgentMessageView, AgentIdentity } from './messages/agentTeam.js'
 
 export interface SubagentDashboardProps {
   subagents: readonly SubagentState[]
-  /** Cross-session addressable peers (the CLI ListAgents peer/teammate
-   *  sections, design agent-team-panels P3). undefined = this backend
-   *  serves no peer roster — an honest one-line unsupported note renders;
-   *  a list = served (their own section, never mixed into the children).
-   *  NO backend wires a roster today: the SDK's listSubagents only reads
-   *  this session's disk transcript ids, which are CHILDREN, not peers. */
+  /** Cross-session peers (the CLI's ListAgents peer/teammate sections).
+   *  undefined = no peer roster for this session: a one-line note says so;
+   *  a list renders in its own section, apart from the children. No
+   *  backend serves one yet: the SDK's listSubagents lists this session's
+   *  own children, not peers. */
   readonly peers?: readonly AgentIdentity[]
   /** 整屏/浮层形态的退出通道（Esc / ✕ 按钮）。panel 形态不传：面板不自己
    *  关侧栏——Esc 让给宿主（焦点回聊天，见 usePanelInput 契约）。 */
   onClose?: () => void
   onSelect?: (agentId: string) => void
-  /** 主屏只读 Agent View（design agent-team-full §4.1 Dashboard 入口）：
-   *  行点击/Enter 仍是 Detail；这是并立的专用动作（'v' 键或行内 ⤢）。 */
+  /** 打开主屏只读 Agent View：行点击/Enter 仍进 Detail，这是另一个专用
+   *  动作（'v' 键或行内 ⤢）。 */
   onOpenView?: (agentId: string) => void
-  /** 代理↔代理消息流（§5.4）：每行卡下渲染最后一条 from → to 摘要。 */
+  /** 代理↔代理消息流：每张卡下显示最后一条 from → to 摘要。 */
   messages?: readonly AgentMessageView[]
   /** `panel` 挂在侧栏宿主里（去外层 padding、键盘走 usePanelInput 分发器）；
    *  default（缺省）与整屏形态逐字节一致。 */
@@ -85,11 +84,10 @@ export function SubagentDashboard({
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows, columns } = useTerminalSize()
 
-  // ── P3 roster partition: only PROVEN nesting moves a row — a parent
-  // agent fact or depth >= 2. Rows with no facts at all (a backend that
-  // reports neither) stay unmarked and in place: the ↳ mark claims
-  // "nested spawn", which nothing may infer (agent-team §2). A roster
-  // with no proven nesting keeps the exact P1 flat layout. ───────────────
+  // ── roster partition: only a known nesting moves a row (a parent agent
+  // id or depth >= 2) below the main-loop children with a ↳ mark. Rows
+  // with neither stay in place, unmarked. Without any nesting the roster
+  // keeps its flat layout. ──────────────────────────────────────────────
   const isNestedSpawn = (row: SubagentState): boolean =>
     row.parentAgentId !== undefined || (row.depth ?? 1) >= 2
   const nestedRows = subagents.filter(isNestedSpawn)
@@ -125,7 +123,7 @@ export function SubagentDashboard({
       return
     }
 
-    // v = 主屏查看（专用动作，与 Enter=详情并立；design §4.1）。
+    // v = 主屏查看（Enter 仍是详情）。
     if (input.toLowerCase() === 'v' && onOpenView) {
       event.stopImmediatePropagation()
       const selected = ordered[focusIndex]
@@ -262,17 +260,10 @@ export function SubagentDashboard({
         </ScrollBox>
       </Box>
 
-      {/* P3 peer roster: its own partition, NEVER mixed with the children
-       * above. No backend serves a peer roster today (the CLI ListAgents
-       * peer/teammate sections need a host control plane the SDK does not
-       * expose; listSubagents disk ids are children, not peers) — so the
-       * honest note renders instead of an invented list, and served peers
-       * would carry no send affordance either: cross-session targets are
-       * not addressable through the dual channels (parent relay / direct
-       * child prompt) this UI ships. */}
-      {/* The side-panel variant is space-critical (28–40 columns): the
-       *  partition statement collapses to ONE truncated line there, keeping
-       *  the cards above the fold; the fullscreen form spells it out. */}
+      {/* Peer roster, kept apart from the children above. No backend serves
+       * one yet, so the note says so. Peers would get no send action
+       * either: the composer reaches only this session's children. The
+       * side panel collapses this to one truncated line. */}
       <Box flexDirection="column">
         {panelMode ? (
           <Text dimColor wrap="truncate-end">

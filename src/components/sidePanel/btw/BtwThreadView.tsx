@@ -3,7 +3,7 @@
  * 共用）。Question 走用户侧视觉（accent ❯ 前缀），Answer 走共享
  * Markdown；运行中显示本轮 spinner；失败只标本轮错误、保留既有答复。
  *
- * 跟尾契约（设计 §交互规格）：默认跟随尾部；用户上滚后暂停 follow，
+ * 跟尾：默认跟随尾部；用户上滚后暂停 follow，
  * 出现「有新回答」跳尾提示（点击回底）。ScrollBox 的 sticky 位就是
  * follow 信号——上滚打破 sticky，scrollToBottom/贴底恢复。
  */
