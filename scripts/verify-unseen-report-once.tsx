@@ -7,6 +7,7 @@
 import React from 'react'
 import { render } from '../src/ui.js'
 import { MessageList } from '../src/components/MessageList.js'
+import { PassThrough, Writable } from 'node:stream'
 import { sleep, settled } from './lib/term-test.mjs'
 
 class Output extends Writable {
