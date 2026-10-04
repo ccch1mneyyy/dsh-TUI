@@ -1165,6 +1165,12 @@ const GROUPS = {
 // 与正文都出折叠标记且裁掉的尾巴不在屏上；Ctrl+O 逃生门恢复原文；
 // reasoning 行不折叠（自带三行预览）。
     ["verify-long-line-fold", ['node', '--import', 'tsx/esm', 'scripts/verify-long-line-fold.tsx']],
+// btw 面板/快路径/回退/badge 渲染层：侧栏面板（空态/线程 Markdown/composer
+// 键语义：Enter 提交、Esc 分层保草稿、Tab 切焦点、n 新话题、s 发送到聊天
+// 的 AttachedContext 合同与截断提示）、badge（不可见期间落定 → ●，进入面板
+// 清）、28/40 列窄幅不崩；真 Chat 的 /btw 快路由（面板启用路由进侧栏且浮层
+// 反针不出现——单一 surface；未启用回退浮层，Esc 关闭即 abort）。
+    ["verify-btw-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-btw-panel.tsx']],
   ],
   'flaky-observation': [
 // resize 时间稳定性（借鉴 Codex 的 resize 漂移维度）：落定后不得
