@@ -11,6 +11,7 @@
 import React from 'react'
 import { Box, Text, useInput, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import { t } from '../i18n.js'
+import { isPlainReturnInput } from '../utils/modifiers.js'
 import { BtwThreadView } from './sidePanel/btw/BtwThreadView.js'
 import type { BtwThreadSnapshot } from './sidePanel/btw/threads.js'
 
@@ -27,7 +28,9 @@ export function BtwPanelFallback({
   const { rows, columns } = useTerminalSize()
 
   useInput((input, key, event) => {
-    if (key.escape || key.return || input === ' ') {
+    // A pasted chunk can carry the return flag; it must not close the
+    // overlay (closing aborts the side question in flight).
+    if (key.escape || isPlainReturnInput(input, key) || input === ' ') {
       event.stopImmediatePropagation()
       onClose()
       return

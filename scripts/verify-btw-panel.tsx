@@ -6,6 +6,8 @@
  *    聊天（attach 合同 + 截断提示）、28/40 列窄幅不崩；连按键（两键之间
  *    没有重渲染）不丢字、退格整删 emoji。
  *  - 全屏场景（BtwThreadScene）：Esc 退出编辑后 Tab 回到 composer 继续打字。
+ *  - 浮层回退（BtwPanelFallback）：粘贴的换行、带修饰的 Enter 不关浮层，
+ *    只有无修饰的 Enter 才关（关闭即中止在途侧问）。
  *  - Chat 级（真 Chat + fake channel）：/btw 快路由——面板启用时路由进侧栏
  *    且浮层反针不出现（单一 surface）；未启用时浮层回退，Esc 关闭即 abort。
  * 运行：node --import tsx/esm scripts/verify-btw-panel.tsx
@@ -21,7 +23,7 @@ const fixtureHome = mkdtempSync(join(tmpdir(), 'verify-btw-panel-'))
 process.env.HOME = fixtureHome
 process.env.USERPROFILE = fixtureHome
 
-const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }, { BtwThreadScene }] = await Promise.all([
+const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }, { BtwThreadScene }, { BtwPanelFallback }] = await Promise.all([
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
@@ -35,6 +37,7 @@ const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn },
   import('../src/screens/Chat.js'),
   import('../src/components/sidePanel/btw/threads.js'),
   import('../src/components/sidePanel/btw/BtwThreadScene.js'),
+  import('../src/components/BtwPanel.js'),
 ])
 const { render, ThemeProvider, Box, Text, AlternateScreen, useInput, useTerminalSize } = ui
 const { applySidePanelOpen, applySidePanelRatio, applySidePanelPanels } = prefs
@@ -299,6 +302,25 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
   await delay(150)
   check('F1. Esc 后 Tab 回到 composer 继续编辑', btwThreads.get('probe-session')?.draft === 'abc', JSON.stringify(btwThreads.get('probe-session')?.draft))
   await frame.app.unmount()
+}
+
+// ── F2: 浮层回退只认真正的 Enter ─────────────────────────────────────────
+{
+  btwThreads.resetForTest()
+  const ask = scriptedAsk()
+  btwThreads.submit('probe-session', 'fallback question', ask.ask)
+  let closes = 0
+  const frame = await mountTree(100, <BtwPanelFallback thread={btwThreads.get('probe-session')} onClose={() => { closes += 1 }} onCopy={() => {}} />)
+  frame.stdin.write(ESC + '[200~\r' + ESC + '[201~')
+  await delay(200)
+  check('F2a. 粘贴的换行不关闭浮层', closes === 0, 'closes=' + closes)
+  frame.stdin.write(ESC + '[13;2u')
+  await delay(200)
+  check('F2c. Shift+Enter 不关闭浮层（只认无修饰的 Enter）', closes === 0, 'closes=' + closes)
+  await keys(frame, ['\r'])
+  check('F2b. Enter 关闭浮层', closes === 1, 'closes=' + closes)
+  await frame.app.unmount()
+  btwThreads.resetForTest()
 }
 
 // ── P8: 面板 28 列最窄档不崩（CJK 长问题 + code fence；93 列终端）────────
