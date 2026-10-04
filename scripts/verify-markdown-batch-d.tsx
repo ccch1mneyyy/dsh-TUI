@@ -112,4 +112,71 @@ const doubleHr = applyMarkdown('---' + '\n' + '***' + '\n')
 assert.equal(plain(doubleHr), '\u2500\u2500\u2500' + '\n' + '\u2500\u2500\u2500',
   'two adjacent rules stay on separate rows')
 
+// -- 3. Lists: hanging indent, steady ladder, loose-item markers --------
+
+// Bad baseline proofs: loose items (blank line between items) rendered
+// with NO marker at all - the paragraph went through renderParagraph's
+// fresh state, which reset the list_item parent the old bullet branch
+// keyed on. Soft-break continuations fell back to column 0. The old
+// per-level indent double-counted the enclosing item (2/6/10 instead of
+// 2/4/6), and inline styling recursing through em/strong kept that
+// parent, so a bold lead grew one bullet per nested text token.
+const tight = applyMarkdown('- a' + '\n' + '- b' + '\n')
+assert.equal(plain(tight), '- a' + '\n' + '- b', 'tight items keep the byte shape Batch A locked')
+
+const loose = applyMarkdown('- a para' + '\n' + '\n' + '  second para' + '\n' + '\n' + '- b' + '\n')
+assert.equal(plain(loose), '- a para' + '\n' + '\n' + '  second para' + '\n' + '- b',
+  'loose items keep their markers and hang follow-up paragraphs at the body column: ' +
+    JSON.stringify(plain(loose)))
+
+const softBreak = applyMarkdown('- first line' + '\n' + '  continued here' + '\n' + '- second' + '\n')
+assert.equal(plain(softBreak), '- first line' + '\n' + '  continued here' + '\n' + '- second',
+  'soft-break continuations hang under the item body')
+
+const nested4 = applyMarkdown('- a' + '\n' + '  - b' + '\n' + '    - c' + '\n' + '      - d' + '\n')
+assert.equal(plain(nested4), '- a' + '\n' + '  - b' + '\n' + '    - c' + '\n' + '      - d',
+  'nesting ladder advances one marker width per level: ' + JSON.stringify(plain(nested4)))
+
+const orderedNested = applyMarkdown('1. one' + '\n' + '   1. nested' + '\n')
+assert.equal(plain(orderedNested), '1. one' + '\n' + '   a. nested',
+  'nested ordered item aligns under the parent body column')
+
+const orderedHang = applyMarkdown('1. first' + '\n' + '   continued' + '\n')
+assert.equal(plain(orderedHang), '1. first' + '\n' + '   continued',
+  'ordered hanging matches the marker width (3 for one digit)')
+
+const taskHang = applyMarkdown('- [x] first' + '\n' + '  continued' + '\n')
+assert.equal(plain(taskHang), '- [x] first' + '\n' + '      continued',
+  'task-item continuation hangs past the checkbox (2 + 4 columns)')
+
+const boldTail = applyMarkdown('- **bold** tail' + '\n')
+assert.equal(plain(boldTail), '- bold tail', 'inline styling does not grow extra bullets')
+assert.ok(boldTail.includes(BOLD), 'the strong span still renders bold')
+
+const quoteInList = applyMarkdown('- item' + '\n' + '\n' + '  > quoted para' + '\n')
+assert.equal(plain(quoteInList), '- item' + '\n' + '\n' + '  \u258e quoted para',
+  'blockquote inside an item indents under the body column')
+
+const emptyItem = applyMarkdown('-' + '\n' + '- b' + '\n')
+assert.equal(plain(emptyItem), '- ' + '\n' + '- b', 'an empty item still shows its marker row')
+
+// Task-state shapes stay compatible with the Batch A gate (markers now
+// also cover loose items, which previously lost them).
+const tasks = applyMarkdown('- [x] done task' + '\n' + '- [ ] open task' + '\n')
+assert.equal(plain(tasks), '- [x] done task' + '\n' + '- [ ] open task')
+const looseTasks = applyMarkdown('- loose [x] a' + '\n' + '\n' + '- loose [ ] b' + '\n')
+assert.equal(plain(looseTasks), '- loose [x] a' + '\n' + '- loose [ ] b',
+  'loose task items carry bullets AND checkboxes')
+const orderedTask = applyMarkdown('1. [x] ordered task' + '\n' + '2. plain item' + '\n')
+assert.equal(plain(orderedTask), '1. [x] ordered task' + '\n' + '2. plain item')
+const nestedTask = applyMarkdown('- outer' + '\n' + '  - [ ] nested open' + '\n')
+assert.ok(plain(nestedTask).includes('  - [ ] nested open'), 'nested task keeps marker + checkbox')
+const quotedTask = applyMarkdown('> - [x] quoted task' + '\n')
+assert.equal(plain(quotedTask), '\u258e - [x] quoted task', 'quoted task line keeps marker + checkbox')
+const cjkTask = applyMarkdown('- [x] \u4e2d\u6587\u4efb\u52a1' + '\n')
+assert.equal(plain(cjkTask), '- [x] \u4e2d\u6587\u4efb\u52a1', 'CJK task text follows the checkbox')
+
+// Markers keep the permission tint (list structure reads as structure).
+assert.ok(applyMarkdown('- a' + '\n').includes('38;2'), 'bullet carries the theme tint')
+
 console.log('markdown batch D: heading layering + compressed whitespace passed')

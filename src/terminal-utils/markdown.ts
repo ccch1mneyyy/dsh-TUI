@@ -162,13 +162,6 @@ interface RenderState {
    * indent so the ladder advances by one marker width per level.
    */
   readonly hang: number
-  /**
-   * Rendered task checkbox of the enclosing tight list item ('[x] ' with
-   * styling). marked lifts the checkbox to a sibling token ahead of the
-   * text there; renderListItem stashes it here so it lands between the
-   * bullet and the body (loose items keep it inline in their paragraph).
-   */
-  readonly taskMark?: string
 }
 
 /** A fresh context for block-level children: list state reset, no parent. */
@@ -499,22 +492,68 @@ function renderList(token: Tokens.List, state: RenderState): string {
 }
 
 function renderListItem(token: Tokens.ListItem, state: RenderState): string {
-  const indent = '  '.repeat(state.listDepth)
   // Tight task items carry their checkbox as a sibling token AHEAD of the
   // text token (loose items inline it inside the paragraph). Lift it out
-  // here and hand it to renderText: otherwise the checkbox would render on
-  // its own line before the bullet instead of between bullet and body.
+  // here so it lands between the marker and the body.
   const isTightTask = token.task === true && token.tokens[0]?.type === 'checkbox'
   const children = isTightTask ? token.tokens.slice(1) : token.tokens
+  const taskMark = isTightTask ? renderCheckbox(token.tokens[0] as Tokens.Checkbox) : ''
+  const indent = ' '.repeat(state.hang)
+  const marker =
+    state.ordinal === null ? '-' : `${formatListMarker(state.listDepth + 1, state.ordinal)}.`
+  // The body column: soft-break continuations, later paragraphs of loose
+  // items, and nested blocks align one marker width (plus checkbox) past
+  // this item's indent. A nested list dispatched with this hang lines its
+  // own items up under the body, so the ladder advances by exactly one
+  // marker width per level (the old per-level indent double-counted the
+  // enclosing item and accelerated 2/6/10 instead of 2/4/6).
+  const bodyHang = state.hang + marker.length + 1 + stripAnsi(taskMark).length
   const childState = withParent(
-    {
-      ...state,
-      listDepth: state.listDepth + 1,
-      taskMark: isTightTask ? renderCheckbox(token.tokens[0] as Tokens.Checkbox) : '',
-    },
+    { ...state, listDepth: state.listDepth + 1, hang: bodyHang },
     token,
   )
-  return children.map(child => indent + dispatch(child, childState)).join('')
+  // Two kinds of children with two indenters. Text/paragraph/blockquote
+  // children render RAW lines - the assembly below pads their
+  // continuations to the body column (hanging indent). A nested list
+  // already carries its absolute indent (its items inherit bodyHang), so
+  // its lines pass through untouched; padding them again is what made the
+  // old per-level indent accelerate.
+  const segments: Array<{ text: string; preindented: boolean }> = []
+  let raw = ''
+  for (const child of children) {
+    const part = dispatch(child, childState)
+    if (child.type === 'list') {
+      if (raw !== '') {
+        segments.push({ text: raw, preindented: false })
+        raw = ''
+      }
+      segments.push({ text: part, preindented: true })
+    } else {
+      // appendBlockText: a text token does not end its own row, and the
+      // next child must start on a fresh line (a plain join would glue
+      // blocks together, a join(EOL) would double blank rows).
+      raw = appendBlockText(raw, part)
+    }
+  }
+  if (raw !== '') segments.push({ text: raw, preindented: false })
+  const tinted = colorize(marker, getActiveTheme().permission, 'foreground')
+  const bodyIndent = ' '.repeat(bodyHang)
+  let out = `${indent}${tinted} ${taskMark}`
+  let firstLine = true
+  for (const segment of segments) {
+    const lines = segment.text.split(EOL)
+    for (const line of lines) {
+      if (firstLine) {
+        out += line
+        firstLine = false
+        continue
+      }
+      out += EOL + (line === '' || segment.preindented ? line : bodyIndent + line)
+    }
+  }
+  if (out === '') return ''
+  if (!out.endsWith(EOL)) out += EOL
+  return out
 }
 
 /**
@@ -534,26 +573,21 @@ function renderParagraph(token: Tokens.Paragraph, state: RenderState): string {
 }
 
 function renderText(token: Tokens.Text, state: RenderState): string {
-  const { parent, listDepth, ordinal } = state
-
-  if (parent?.type === 'link') {
+  if (state.parent?.type === 'link') {
     // Already inside a link: the link handler wraps everything in one OSC 8
     // sequence, and a nested one would override the real href. Stay plain.
     return token.text
   }
 
-  if (parent?.type === 'list_item') {
-    const bullet = ordinal === null ? '-' : `${formatListMarker(listDepth, ordinal)}.`
-    const body = token.tokens
-      ? token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
-      : linkifyText(token.text)
-    // Blue bullet marker: list structure gets a tint without loading the
-    // whole item (kimi-style `•` in the accent color). A tight task item
-    // slots its rendered checkbox between the bullet and the body.
-    const tinted = colorize(bullet, getActiveTheme().permission, 'foreground')
-    return `${tinted} ${state.taskMark ?? ''}${body}${EOL}`
+  // List markers, checkboxes and per-line indentation live in
+  // renderListItem's assembly: firing them here meant a loose item's
+  // paragraph (dispatched through renderParagraph's fresh state) rendered
+  // with NO marker at all, and inline styling recursing through
+  // em/strong kept the list_item parent, so `- **bold** tail` grew one
+  // bullet per nested text token.
+  if (token.tokens) {
+    return token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
   }
-
   return linkifyText(token.text)
 }
 
