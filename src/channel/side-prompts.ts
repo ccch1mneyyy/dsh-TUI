@@ -31,6 +31,55 @@ When the available context is insufficient, state what is unknown without promis
 ${question}`
 }
 
+/**
+ * One earlier Q/A pair of a `/btw` side thread, as the thread store hands
+ * it to the next ask (answers already clipped to the per-answer budget).
+ */
+export interface SideThreadPriorTurn {
+  readonly question: string
+  readonly answer: string
+}
+
+/**
+ * Carry the recent turns of a side thread into the NEXT single-turn ask:
+ * the pairs travel as explicit quoted context inside the question payload,
+ * so every backend's one-shot side call keeps its own contract unchanged
+ * (the wrapper still sees "one question, one answer, no tools"). The result
+ * is what the caller passes to `sideQuery.ask` as the question — never a
+ * second conversation: nothing here writes a session record anywhere.
+ *
+ * `omittedOlder` is the count of completed pairs the budget dropped from
+ * the front of the thread (turn-window or character budget); the note lets
+ * the model know earlier turns existed instead of silently forgetting.
+ */
+export function sideThreadQuestion(
+  question: string,
+  prior: readonly SideThreadPriorTurn[] = [],
+  omittedOlder = 0,
+): string {
+  if (prior.length === 0 && omittedOlder === 0) return question
+  const omitted = omittedOlder > 0
+    ? `
+${omittedOlder} earlier pair(s) of this thread are omitted here to stay within the context budget.`
+    : ''
+  const pairs = prior
+    .map((turn, index) => `<side-thread-pair n="${index + 1}">
+Q: ${turn.question}
+A: ${turn.answer}
+</side-thread-pair>`)
+    .join('\n')
+  return `<side-thread-context>
+The quoted pairs below are the recent history of this side thread: quick
+questions the user asked alongside the main session, with the answers given
+at the time. Treat them as shared context for the new question at the end.
+They are not turns of the main conversation and carry no tool results.${omitted}
+</side-thread-context>
+
+${pairs}
+
+${question}`
+}
+
 /** The recap answer contract (one JSON object: title + one-line summary). */
 const RECAP_CONTRACT = `Use the user's language and describe the work and its current outcome accurately.
 Return one JSON object with two string fields:

@@ -129,7 +129,9 @@ import { FRAME_PRESETS, PRESET_NAMES } from '../components/activityFrames.js'
 import { ThinkingToggle } from '../components/ThinkingToggle.js'
 import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
-import { BtwPanel } from '../components/BtwPanel.js'
+import { BtwPanelFallback } from '../components/BtwPanel.js'
+import { btwThreads } from '../components/sidePanel/btw/threads.js'
+import { BtwThreadScene } from '../components/sidePanel/btw/BtwThreadScene.js'
 import { RecapPanel } from '../components/RecapPanel.js'
 import { isValidSessionColor, SESSION_COLOR_NAMES } from '../terminal-utils/sessionColors.js'
 import { TipsPanel } from '../components/TipsPanel.js'
@@ -1241,15 +1243,29 @@ export function Chat({
    *  plugin answering after the user moved on must not open a confirm for
    *  a row they are no longer looking at). */
   const rewindRequestRef = React.useRef(0)
-  /** /btw side-question overlay: pure UI state — the answer never
-   *  enters the transcript or the session log. */
-  const [btw, setBtw] = React.useState<{ question: string; answer: string; error?: string; done: boolean } | null>(null)
-  const btwAbortRef = React.useRef<AbortController | null>(null)
-  const closeBtw = () => {
-    btwAbortRef.current?.abort()
-    btwAbortRef.current = null
-    setBtw(null)
+  /** /btw side-question thread: pure UI state in btwThreads — the answers
+   *  never enter the transcript or the session log. The floating overlay is
+   *  only the FALLBACK surface (btw panel not enabled); with the panel
+   *  enabled the same thread routes to the sidebar instead — one answer,
+   *  exactly one surface. */
+  const [btwOverlayOpen, setBtwOverlayOpen] = React.useState(false)
+  /** ⤢ fullscreen thread scene (openPanelFullscreen 'btw' route). */
+  const [btwSceneOpen, setBtwSceneOpen] = React.useState(false)
+  const btwOverlayThread = React.useSyncExternalStore(btwThreads.subscribe, () => btwThreads.get(String(channel.agentId)))
+  const closeBtwOverlay = () => {
+    // Fallback parity with the pre-thread overlay: closing cancels the
+    // in-flight ask (completed turns stay in the thread).
+    btwThreads.abortActive(String(channel.agentId))
+    setBtwOverlayOpen(false)
   }
+  /** 模态/整屏 surface 活跃时 /btw 的答案不抢开面板，只置 badge（§快路径）。 */
+  const btwSurfaceFree = () =>
+    approvalSnapshot === null && dialogSnapshot === null && questionSnapshot === null
+    && overlay.kind === 'none' && !helpOpen && !starModal && !couponVisible
+    && !supervisorOpen && !treeOpen && !settingsOpen && !jobsPanelOpen
+    && !sceneOpen && channel.pluginScene === undefined
+    && !subagentDashboardOpen && subagentDetailId === null
+    && !onboardingOpen && !launchpadShown && !btwSceneOpen && !promptEditorOpen
   /** /recap overlay (pi-recap semantics): pure UI state like /btw — the
    *  summary never enters the transcript or session log; applying the
    *  proposed title goes through the normal /rename path. `auto` marks the
@@ -1298,14 +1314,11 @@ export function Chat({
     balanceSeqRef.current += 1
     setBalance(null)
   }, [balanceSessionId])
-  // A side question belongs to its captured session just like a recap. Chat
-  // remains mounted across /resume, so explicitly retire its request/UI when
-  // the binding changes instead of allowing a former conversation to finish.
-  React.useEffect(() => {
-    btwAbortRef.current?.abort()
-    btwAbortRef.current = null
-    setBtw(null)
-  }, [channel.agentId])
+  // A side question belongs to its captured session just like a recap. The
+  // THREAD stays in memory under its own session id (an archived thread may
+  // keep streaming); only the FALLBACK overlay is retired on a binding change
+  // (see the btwSessionIdRef effect above) so an old conversation never leaks
+  // onto the new one's screen.
   // Auto-recap (`dsh-tui.recapOnOpen`): every time the session switches
   // (mount = open/resume, rewind/fork included), summarize its tail into
   // the dim AutoRecapRow. Failures stay silent in auto mode — `/recap`
@@ -1391,7 +1404,7 @@ export function Chat({
     setSearchCursor(0)
     setSearchCount(0)
     setSearchCurrent(0)
-    closeBtw()
+    setBtwOverlayOpen(false)
     repaintTranscript()
   }, [channel.agentId]) // eslint-disable-line react-hooks/exhaustive-deps
   /** The session attached when the agent view opened; a close on a
@@ -1503,7 +1516,6 @@ export function Chat({
    * logo header remounts and replays the whale spout + text shimmer.
    */
   const [logoNonce, setLogoNonce] = React.useState(0)
-  React.useEffect(() => () => btwAbortRef.current?.abort(), [])
   React.useEffect(() => () => recapAbortRef.current?.abort(), [])
   /**
    * The trajectory scene (issue #80 evolution). Unlike every other overlay
@@ -1540,6 +1552,7 @@ export function Chat({
   const launchpadCoverScreenUp = supervisorOpen || treeOpen || settingsOpen
     || jobsPanelOpen || subagentDashboardOpen || subagentDetailId !== null || sceneOpen
     || agentView !== null
+    || btwSceneOpen
   React.useEffect(() => {
     if (!launchpadCoverScreenUp) launchpadCoverRef.current = false
   }, [launchpadCoverScreenUp])
@@ -3896,28 +3909,27 @@ export function Chat({
         return true
       }
       case 'btw': {
-        // `/btw`：单轮无工具侧问，overlay 态纯 UI，不打断主回合、不写
-        // 会话历史。空参数只提示用法。
+        // `/btw`：单轮无工具侧问，线程是纯 UI 暂态（btwThreads，按
+        // session 隔离），不打断主回合、不写会话历史/转录。空参数只提
+        // 示用法。快路径（设计 §快路径）：面板启用时路由进线程并打开
+        // 聚焦；模态 surface 活跃时不抢开，落定只置未读 badge；面板未
+        // 启用时回退浮层——同一问答只落一个 surface。
         setHelpOpen(false)
         const question = rawInput.trim()
         if (!question) {
           channel.notify(t('btw-usage'), { timeoutMs: 3000 })
           return true
         }
-        btwAbortRef.current?.abort()
-        const controller = new AbortController()
-        btwAbortRef.current = controller
-        setBtw({ question, answer: '', done: false })
-        void channel.sideQuestion(question, {
-          signal: controller.signal,
-          onText: delta => setBtw(prev => (prev ? { ...prev, answer: prev.answer + delta } : prev)),
-        }).then(result => {
-          if (controller.signal.aborted) return
-          setBtw(prev => (prev ? { ...prev, answer: result.answer ?? prev.answer, error: result.error, done: true } : prev))
-        }).catch(error => {
-          if (controller.signal.aborted) return
-          setBtw(prev => prev ? { ...prev, error: error instanceof Error ? error.message : String(error), done: true } : prev)
-        })
+        const btwResult = btwThreads.submit(String(channel.agentId), question, (q, options) => channel.sideQuestion(q, options))
+        if (!btwResult.ok) {
+          channel.notify(t('btw-thread-busy'), { color: 'warning', timeoutMs: 3000 })
+          return true
+        }
+        if (sidePanel.enabledPanelIds.includes('btw')) {
+          if (btwSurfaceFree()) sidePanel.openPanel('btw')
+        } else {
+          setBtwOverlayOpen(true)
+        }
         return true
       }
       case 'deepseek': {
@@ -4099,6 +4111,13 @@ export function Chat({
     if (panelId === 'workspace') {
       sidePanelRef.current?.focusChat()
       setSupervisorOpen(true)
+      return
+    }
+    if (panelId === 'btw') {
+      // ⤢ 进整屏线程场景：Esc 返回侧栏，不清 thread/draft（面板
+      // mountPolicy=enabled 保挂载，路由/焦点/滚动原样恢复）。
+      sidePanelRef.current?.focusChat()
+      setBtwSceneOpen(true)
     }
   }, [openScene])
   // openJobsPanel（在上方、identity 稳定）经 ref 读取最新控制器。
@@ -4278,9 +4297,10 @@ export function Chat({
   const lastModalEnterAtRef = React.useRef(0)
   const couponVisible = coupon !== null && starModal === null
     && approvalSnapshot === null && dialogSnapshot === null && questionSnapshot === null
-    && overlay.kind === 'none' && btw === null && recap === null
+    && overlay.kind === 'none' && !btwOverlayOpen && recap === null
     && !supervisorOpen && !treeOpen && !settingsOpen && !jobsPanelOpen
     && !sceneOpen && !subagentDashboardOpen && subagentDetailId === null
+    && !btwSceneOpen
   const markCouponShown = React.useCallback((orderId: Parameters<WhaleCouponStore['shown']>[0]) => {
     bonusNotices?.shown(orderId)
   }, [bonusNotices])
@@ -4299,7 +4319,7 @@ export function Chat({
     // suspended to preserve async command drafts, making this guard also
     // essential for Ctrl+C: it must never clear the hidden composer.
     if (
-      btw !== null
+      btwOverlayOpen
       || overlay.kind === 'tips'
       || (recap !== null && (!recap.auto || recap.expanded))
     ) return
@@ -4339,6 +4359,9 @@ export function Chat({
     // reached the chat:cancel branch below whenever a turn was in flight —
     // dismissing the panel and killing the turn with one key.
     if (jobsPanelOpen) return
+    // The ⤢ btw thread scene owns the keyboard the same way: Esc there
+    // returns to the sidebar (never the chat:cancel branch below).
+    if (btwSceneOpen) return
     // A plugin scene (dsh-tui-scenes) or the trajectory scene owns the whole
     // screen while open: every key belongs to it. Unguarded, an Esc meant to
     // CLOSE the scene also reached the chat:cancel branch below whenever a
@@ -6104,6 +6127,19 @@ export function Chat({
     return fullscreen ? panel : <AlternateScreen>{panel}</AlternateScreen>
   }
 
+  // ⤢ btw thread scene (openPanelFullscreen 'btw'): the whole-terminal form
+  // of the sidebar panel. Esc returns to the sidebar exactly as it was — the
+  // thread and the composer draft live in btwThreads, nothing is cleared.
+  if (btwSceneOpen && launchpadGate()) {
+    const scene = (
+      <BtwThreadScene
+        channel={channel}
+        onClose={() => setBtwSceneOpen(false)}
+      />
+    )
+    return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
+  }
+
   // Subagent dashboard: displays all active and completed subagents.
   // Like the browser and settings, it replaces the conversation entirely.
   if (subagentDashboardOpen && launchpadGate()) {
@@ -6126,7 +6162,7 @@ export function Chat({
    *  overlay union covers every picker/dialog and /tips in one check;
    *  message-selection mode and the /btw panel live outside it. */
   const promptSelectionActive =
-    selectionActive || overlay.kind !== 'none' || btw !== null
+    selectionActive || overlay.kind !== 'none' || btwOverlayOpen
 
   // These panels replace the visible composer, but PromptInput remains
   // mounted (suspended) so an async registry command cannot lose its exact
@@ -6136,7 +6172,7 @@ export function Chat({
     || dialogSnapshot !== null
     || overlay.kind === 'tips'
     || (recap !== null && (!recap.auto || recap.expanded))
-    || btw !== null
+    || btwOverlayOpen
     || questionPanelNode !== null
     || starModal !== null
     || couponVisible
@@ -6704,17 +6740,16 @@ export function Chat({
               }}
             />
           </Box>
-        ) : btw !== null ? (
+        ) : btwOverlayOpen && !sidePanel.enabledPanelIds.includes('btw') ? (
+          // Fallback surface（设计 §fallback）：仅当 btw 面板未启用/不存在/
+          // 配置禁用时显示；面板中途被启用则立即让位（同一问答不双份呈现）。
           <Box flexDirection="column" marginTop={1}>
-            <BtwPanel
-              question={btw.question}
-              answer={btw.answer}
-              error={btw.error}
-              streaming={!btw.done}
-              onClose={closeBtw}
-              onCopy={() => {
-                void setClipboard(btw.answer ?? '').then(raw => { if (raw) writeRaw?.(raw) })
-                channel.notify(t('copied-chars', { n: (btw.answer ?? '').length }), { timeoutMs: 1500 })
+            <BtwPanelFallback
+              thread={btwOverlayThread}
+              onClose={closeBtwOverlay}
+              onCopy={answer => {
+                void setClipboard(answer).then(raw => { if (raw) writeRaw?.(raw) })
+                channel.notify(t('copied-chars', { n: answer.length }), { timeoutMs: 1500 })
               }}
             />
           </Box>
@@ -6814,7 +6849,7 @@ export function Chat({
           订阅模块级 store，锚点/内容由各处 useTooltip hover props 写入；
           resize 时自行隐藏（几何失效）。 */}
       <TooltipLayer
-        invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`}
+        invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btwOverlayOpen}`}
         subscribeInvalidation={subscribeTooltipInvalidation}
       />
       </SidePanelLayout>

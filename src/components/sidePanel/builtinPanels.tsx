@@ -15,6 +15,7 @@ import { CompanionPanel } from './companion/CompanionPanel.js'
 import { InfoPanel } from './InfoPanel.js'
 import { TrajectoryPanel } from './TrajectoryPanel.js'
 import { WorkspacePanel } from './WorkspacePanel.js'
+import { BtwPanelAdapter } from './btw/BtwPanelAdapter.js'
 import { panelStore } from './PanelStore.js'
 import { useSidePanelChannel } from './SidePanelRuntimeContext.js'
 import { usePanelInput } from './usePanelInput.js'
@@ -298,6 +299,20 @@ export function registerBuiltinPanels(): void {
     // 整屏对应物 = /home 的工作区主页（分屏时 /home 也走本面板）。
     capabilities: { scroll: true, fullscreen: true },
     component: WorkspacePanel,
+  }, 'builtin')
+  panelStore.register({
+    id: 'btw',
+    titleKey: 'panel-title-btw',
+    icon: '?',
+    order: 22,
+    source: 'builtin',
+    mountPolicy: 'enabled',
+    // opt-in（/btw 快路径在未启用时回退浮层，启用后路由进面板）。
+    defaultEnabled: false,
+    minColumns: 28,
+    // 整屏对应物 = ⤢ 的 BtwThreadScene（Esc 返回侧栏，不清 thread/draft）。
+    capabilities: { scroll: true, sendToChat: true, fullscreen: true },
+    component: BtwPanelAdapter,
   }, 'builtin')
   panelStore.register({
     id: 'companion',
