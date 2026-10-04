@@ -375,15 +375,46 @@ export function resolveTuiRuntime(dispatchModuleUrl) {
   return promise
 }
 
+/**
+ * The source-mode build root (M2③ 阶段 3 迁移点): compile:src now emits to
+ * .local/build/<fingerprint>/package and leaves the tree's own lib/ alone,
+ * so the dev track's active runtime path is no longer the in-tree lib. The
+ * pointer is dev-local metadata (never shipped, never a release claim); a
+ * stale or corrupt pointer degrades to the canonical lib — never an error.
+ */
+function sourceBuildRoot(packageDir) {
+  try {
+    const pointerPath = join(packageDir, ".local", "build", "source-pointer.json")
+    if (!existsSync(pointerPath)) return undefined
+    const pointer = JSON.parse(readFileSync(pointerPath, "utf8"))
+    if (typeof pointer.dir !== "string" || pointer.dir === "") return undefined
+    const root = realpathSync(pointer.dir)
+    // Containment: the build root must live under this package's .local/build
+    // (a pointer naming some other tree is stale metadata, not a redirect).
+    if (!root.startsWith(realpathSync(join(packageDir, ".local", "build")))) return undefined
+    if (!existsSync(join(root, "package", "lib", "types", "index.js"))) return undefined
+    return root
+  } catch {
+    return undefined
+  }
+}
+
 function computePin(packageDirInput) {
   const packageDir = realpathSync(packageDirInput)
   const base = { packageDir, canonicalRoot: pathToFileURL(packageDir + "/").href }
   if (isSourceTree(packageDir)) {
+    const buildRoot = sourceBuildRoot(packageDir)
     return {
       ...base,
       mode: "source",
       generationId: "source-" + sourceFingerprint(packageDir),
-      reason: "development tree (src/ + tsconfig.json present on the real path)",
+      ...(buildRoot === undefined ? {} : {
+        sourceBuildRoot: buildRoot,
+        sourceEntryRoot: pathToFileURL(join(buildRoot, "package") + "/").href,
+      }),
+      reason: buildRoot === undefined
+        ? "development tree (src/ + tsconfig.json present on the real path)"
+        : "development tree serving the compile:src build root at " + buildRoot,
     }
   }
   const deployRoot = findDeployRoot(packageDir)
@@ -456,8 +487,11 @@ export async function resolveTuiEntry(dispatchModuleUrl, packageRelative) {
   if (pin.mode !== "generation") {
     // canonicalRoot is a DIRECTORY URL (trailing slash): resolve the
     // package-relative entry directly against it — a "../" prefix would
-    // escape one level ABOVE the package.
-    const canonical = new URL(packageRelative, pin.canonicalRoot).href
+    // escape one level ABOVE the package. Source mode with a compile:src
+    // build root resolves entries from THERE (same package-relative shape,
+    // mirrored files tree) instead of the stale in-tree lib.
+    const root = pin.mode === "source" && pin.sourceEntryRoot !== undefined ? pin.sourceEntryRoot : pin.canonicalRoot
+    const canonical = new URL(packageRelative, root).href
     return import(canonical)
   }
   const target = new URL(packageRelative, pin.packageRootUrl)

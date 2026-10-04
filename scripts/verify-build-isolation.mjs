@@ -22,7 +22,7 @@
  */
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -174,8 +174,99 @@ mkdirSync(join(deployRoot, "generations"), { recursive: true })
   }
 }
 
+// ── compile:src 迁移（M2③）：默认输出离开开发树 ─────────────────────────
+{
+  // 夹具包工厂：process pin 按「包目录」缓存在 globalThis——每个用例一个
+  // 全新夹具包目录，保证各自独立解析。
+  let fixtureSeq = 0
+  const makeFixture = () => {
+    const fixturePkg = join(tmp, "srcpkg-" + (fixtureSeq += 1))
+    mkdirSync(join(fixturePkg, "dispatch"), { recursive: true })
+    cpSync(join(repoRoot, "dispatch"), join(fixturePkg, "dispatch"), { recursive: true })
+    writeFileSync(join(fixturePkg, "tsconfig.json"), "{}\n")
+    mkdirSync(join(fixturePkg, "src"), { recursive: true })
+    mkdirSync(join(fixturePkg, ".local", "build"), { recursive: true })
+    mkdirSync(join(fixturePkg, "lib", "types"), { recursive: true })
+    writeFileSync(join(fixturePkg, "lib", "types", "index.js"), "export const where = 'canonical'\n")
+    return fixturePkg
+  }
+  const resolveUrl = pathToFileURL(join(repoRoot, "dispatch", "resolve.mjs")).href
+  const pinOf = async fixturePkg => (await import(resolveUrl)).resolveTuiRuntime(pathToFileURL(join(fixturePkg, "dispatch", "index.js")).href)
+  const entryOf = async fixturePkg => (await import(resolveUrl)).resolveTuiEntry(pathToFileURL(join(fixturePkg, "dispatch", "index.js")).href, "lib/types/index.js")
+
+  {
+    const fixturePkg = makeFixture()
+    const buildDir = join(fixturePkg, ".local", "build", "fp-one")
+    mkdirSync(join(buildDir, "package", "lib", "types"), { recursive: true })
+    writeFileSync(join(buildDir, "package", "lib", "types", "index.js"), "export const where = 'build-root'\n")
+    writeFileSync(join(fixturePkg, ".local", "build", "source-pointer.json"), JSON.stringify({ fingerprint: "fp-one", dir: buildDir }))
+    check("compile:src migration: source pin serves the build root", (await pinOf(fixturePkg)).sourceBuildRoot === realpathSync(buildDir))
+    check("compile:src migration: entries resolve from the build root (not the stale in-tree lib)",
+      (await entryOf(fixturePkg)).where === "build-root")
+  }
+  {
+    // 陈旧指针：目标目录没了 → 退回规范 lib，不报错。
+    const fixturePkg = makeFixture()
+    const stale = join(fixturePkg, ".local", "build", "fp-gone")
+    mkdirSync(join(stale, "package", "lib", "types"), { recursive: true })
+    rmSync(stale, { recursive: true, force: true })
+    writeFileSync(join(fixturePkg, ".local", "build", "source-pointer.json"), JSON.stringify({ fingerprint: "fp-gone", dir: stale }))
+    check("compile:src migration: stale pointer degrades to the canonical lib",
+      (await pinOf(fixturePkg)).sourceBuildRoot === undefined && (await entryOf(fixturePkg)).where === "canonical")
+  }
+  {
+    // 指针越界（指向别的树）→ 忽略，回规范 lib。
+    const fixturePkg = makeFixture()
+    const outside = join(tmp, "outside-build-root")
+    mkdirSync(join(outside, "package", "lib", "types"), { recursive: true })
+    writeFileSync(join(outside, "package", "lib", "types", "index.js"), "export const where = 'outside'\n")
+    writeFileSync(join(fixturePkg, ".local", "build", "source-pointer.json"), JSON.stringify({ fingerprint: "escape", dir: outside }))
+    check("compile:src migration: a pointer escaping .local/build is ignored (containment)",
+      (await pinOf(fixturePkg)).sourceBuildRoot === undefined && (await entryOf(fixturePkg)).where === "canonical")
+  }
+  {
+    // 无指针＝M2③ 之前的既有行为。
+    const fixturePkg = makeFixture()
+    check("compile:src migration: no pointer keeps the canonical-lib contract",
+      (await pinOf(fixturePkg)).sourceBuildRoot === undefined && (await entryOf(fixturePkg)).where === "canonical")
+  }
+
+  // pruneBuildRoots：保留最新 N 个（创建间隔定序），指针文件不动。
+  {
+    const pruneRoot = join(tmp, "prune-root")
+    mkdirSync(pruneRoot, { recursive: true })
+    for (const name of ["a", "b", "c", "d"]) {
+      mkdirSync(join(pruneRoot, name), { recursive: true })
+      writeFileSync(join(pruneRoot, name, "stamp"), name)
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    writeFileSync(join(pruneRoot, "source-pointer.json"), "{}")
+    const { pruneBuildRoots } = await import(pathToFileURL(join(repoRoot, "scripts", "compile-src.mjs")).href)
+    const removed = pruneBuildRoots(pruneRoot, 2)
+    check("compile:src migration: prune keeps the newest roots only",
+      removed.includes("a") && removed.includes("b") && existsSync(join(pruneRoot, "c")) && existsSync(join(pruneRoot, "d")),
+      "removed=" + JSON.stringify(removed))
+    check("compile:src migration: prune never touches the pointer", existsSync(join(pruneRoot, "source-pointer.json")))
+  }
+
+  // tripwire：脚本契约在位。
+  const pkgJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"))
+  const compileSrc = readFileSync(join(repoRoot, "scripts", "compile-src.mjs"), "utf8")
+  check("compile:src migration: package.json runs the migrated script", pkgJson.scripts["compile:src"] === "node scripts/compile-src.mjs")
+  check("compile:src migration: the in-tree escape hatch exists", compileSrc.includes("--in-tree") && compileSrc.includes("DSH_TUI_COMPILE_SRC_IN_TREE"))
+}
+
 // ── 真实 tsc staging 构建（本地验收档；CI 默认跳过）────────────────────
 if (process.env.DSH_TUI_VERIFY_FULL_COMPILE === "1" && existsSync(join(repoRoot, "lib", "types", "index.js"))) {
+  {
+    const before = readFileSync(join(repoRoot, "lib", "settings.json"))
+    const run = runNode([join(repoRoot, "scripts", "compile-src.mjs")], undefined, 600000)
+    const after = readFileSync(join(repoRoot, "lib", "settings.json"))
+    const pointer = JSON.parse(readFileSync(join(repoRoot, ".local", "build", "source-pointer.json"), "utf8"))
+    check("compile:src full: canonical lib untouched by the real run", run.status === 0 && before.equals(after), String(run.stderr).slice(0, 200))
+    check("compile:src full: pointer names a complete package tree",
+      existsSync(join(pointer.dir, "package", "lib", "types", "index.js")) && existsSync(join(pointer.dir, "package", "lib", "settings.json")))
+  }
   const genId = "9.9.9-full-" + Math.random().toString(16).slice(2, 8)
   const build = runNode([join(repoRoot, "scripts", "build-generation.mjs"), "--deploy-root", deployRoot, "--source", repoRoot, "--id", genId], undefined, 600000)
   check("build-full: real tsc staging build succeeds", build.status === 0 && existsSync(join(deployRoot, "generations", genId + ".staging", "READY.json")), String(build.stderr).slice(0, 300))

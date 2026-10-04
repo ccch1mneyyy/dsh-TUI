@@ -123,7 +123,7 @@
     "build:mathjax": "pnpm --filter @dsh-tui-vendor/mathjax-tex-svg run build",
     "build:vendor": "node scripts/build-vendor.mjs",
     "compile": "node scripts/build-vendor.mjs && npm run clean && tsc -p tsconfig.json && node scripts/gen-settings-json.mjs",
-    "compile:src": "tsc -p tsconfig.json && node scripts/gen-settings-json.mjs",
+    "compile:src": "node scripts/compile-src.mjs",
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "prepare": "node scripts/prepare-guard.mjs && npm run compile",
     "build": "npm run compile && npm run verify:build",
