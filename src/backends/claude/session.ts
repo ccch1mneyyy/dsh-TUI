@@ -985,10 +985,13 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         }
         if (window !== undefined) {
           // An older slice: [skipFromStart - count, skipFromStart) of the disk
-          // transcript (the SDK paginates by offset from the start).
-          const count = Math.max(1, Math.min(window.count, window.skipFromStart))
-          const slice = await read(currentSessionId, agentId, { dir: deps.cwd, offset: window.skipFromStart - count, limit: count })
-          return laneOf(slice, window.skipFromStart - count > 0, window.skipFromStart - slice.length)
+          // transcript (the SDK paginates by offset from the start). An empty
+          // window reads nothing and leaves the cursor where it was.
+          const skip = Math.max(0, window.skipFromStart)
+          const count = Math.max(0, Math.min(window.count, skip))
+          if (count === 0) return laneOf([], skip > 0, skip)
+          const slice = await read(currentSessionId, agentId, { dir: deps.cwd, offset: skip - count, limit: count })
+          return laneOf(slice, skip - count > 0, skip - slice.length)
         }
         // The newest page: one full read (bounded below), the tail kept.
         const all = await read(currentSessionId, agentId, { dir: deps.cwd })

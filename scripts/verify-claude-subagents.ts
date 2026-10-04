@@ -416,8 +416,18 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   const store = {
     getSessionMessages: () => Promise.resolve([]),
     forkSession: () => Promise.reject(new Error('unused')) as never,
-    getSubagentMessages: (_sid: string, agentId: string, _options?: unknown) => Promise.resolve(agentId === 'agent-tx' ? childMessages : []) as never,
+    getSubagentMessages: (_sid: string, agentId: string, options?: { offset?: number; limit?: number }) => {
+      // Like a strict store: a negative offset or an empty / fractional
+      // limit is refused rather than sliced from the end.
+      reads.push({ ...options })
+      const { offset, limit } = options ?? {}
+      if (offset !== undefined && (!Number.isInteger(offset) || offset < 0)) return Promise.reject(new Error(`bad offset ${offset}`)) as never
+      if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) return Promise.reject(new Error(`bad limit ${limit}`)) as never
+      const all = agentId === 'agent-tx' ? childMessages : []
+      return Promise.resolve(offset === undefined ? all : all.slice(offset, limit === undefined ? undefined : offset + limit)) as never
+    },
   }
+  const reads: { offset?: number; limit?: number }[] = []
   const replay = replayClaudeTranscript(chain, { cwd: '/fixture/project', subagents: new Map([['call-tx', { agentId: 'agent-tx', messages: childMessages }]]) })
   const { channel, session } = await openChannel({ resume: replay, store })
   try {
@@ -427,6 +437,20 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     check('transcript: the page replays the child lane (assistant blocks + tool call/result), never the initial prompt', page !== null && kinds.includes('assistant.message') && kinds.includes('tool.call') && kinds.includes('tool.result') && !JSON.stringify(page.events).includes('secret prompt'), kinds)
     check('transcript: a signature/count-only thinking entry carries the honest unavailable marker', JSON.stringify(page?.events).includes('reasoning-tokens') && JSON.stringify(page?.events).includes('4321'))
     check('transcript: parent_agent_id rides the page (null = depth-1)', page?.parentAgentId === null && page?.hasOlder === false && page?.skippedFromStart === 0)
+    // Older windows: [skipFromStart - count, skipFromStart). A window at the
+    // bottom (skipFromStart 0) or for nothing (count 0) reads nothing.
+    const history = session.capabilities.subagents!.history!
+    reads.length = 0
+    const older = await history('agent-tx', { count: 2, skipFromStart: 3 })
+    check('transcript window: an older slice reads [skip - count, skip)', JSON.stringify(reads) === JSON.stringify([{ dir: '/fixture/project', offset: 1, limit: 2 }]) && older.hasOlder === true && older.skippedFromStart === 1, { reads, older: { hasOlder: older.hasOlder, skipped: older.skippedFromStart } })
+    reads.length = 0
+    const bottom = await history('agent-tx', { count: 5, skipFromStart: 0 }).catch((error: unknown) => error instanceof Error ? error.message : String(error))
+    check('transcript window: a window at the bottom reads nothing and stays at 0',
+      typeof bottom !== 'string' && reads.length === 0 && bottom.events.length === 0 && bottom.hasOlder === false && bottom.skippedFromStart === 0, { bottom, reads })
+    reads.length = 0
+    const nothing = await history('agent-tx', { count: 0, skipFromStart: 3 }).catch((error: unknown) => error instanceof Error ? error.message : String(error))
+    check('transcript window: a window for nothing reads nothing and keeps the cursor',
+      typeof nothing !== 'string' && reads.length === 0 && nothing.events.length === 0 && nothing.hasOlder === true && nothing.skippedFromStart === 3, { nothing, reads })
 
     // The scene: the page renders through the shared leaves, deduped
     // against the live tail, capability-gated.
