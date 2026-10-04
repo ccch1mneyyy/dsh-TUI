@@ -24,7 +24,7 @@ const fixtureHome = mkdtempSync(join(tmpdir(), 'verify-btw-panel-'))
 process.env.HOME = fixtureHome
 process.env.USERPROFILE = fixtureHome
 
-const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }, { BtwThreadScene }, { BtwPanelFallback }, { panelStore }] = await Promise.all([
+const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang, t }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }, { BtwThreadScene }, { BtwPanelFallback }, { panelStore }] = await Promise.all([
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
@@ -109,8 +109,13 @@ class FakeStdout extends Writable {
   isTTY = true
   term: import('@xterm/headless').Terminal
   frames: string[] = []
+  /** Called once xterm has applied each write: the viewport is current. */
+  onFrame: (() => void) | undefined
   constructor(term: import('@xterm/headless').Terminal, cols: number) { super(); this.term = term; this.columns = cols }
-  _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { this.frames.push(String(chunk)); this.term.write(String(chunk), cb) }
+  _write(chunk: unknown, _e: BufferEncoding, cb: () => void) {
+    this.frames.push(String(chunk))
+    this.term.write(String(chunk), () => { this.onFrame?.(); cb() })
+  }
 }
 class FakeStderr extends Writable { isTTY = true; _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() } }
 class FakeStdin extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
@@ -416,8 +421,27 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>) {
     for (let y = 0; y < ROWS; y += 1) out.push((buf.getLine(y)?.translateToString(false) ?? '').padEnd(100, ' '))
     return out
   }
+  // Negative checks read the rendered viewport after every write instead of
+  // the raw frames: the renderer writes cell diffs, so a raw frame need not
+  // contain a whole string even while it is on screen.
+  const viewport = (): string => {
+    const buf = term.buffer.active
+    const out: string[] = []
+    for (let y = 0; y < ROWS; y += 1) out.push(buf.getLine(buf.viewportY + y)?.translateToString(true) ?? '')
+    return out.join('\n')
+  }
+  const watched = new Map<string, boolean>()
+  stdout.onFrame = () => {
+    if (watched.size === 0) return
+    const screen = viewport()
+    for (const needle of watched.keys()) if (screen.includes(needle)) watched.set(needle, true)
+  }
   return {
     channel, stdout, stdin, lines,
+    /** Start recording whether `needle` is ever on screen. */
+    viewport,
+    watch: (needle: string) => { watched.set(needle, viewport().includes(needle)) },
+    seen: (needle: string) => watched.get(needle) === true,
     since: (mark: number) => plainText(stdout.frames.slice(mark)),
     run: async (line: string) => {
       const from = stdout.frames.length
@@ -439,12 +463,14 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>) {
   btwThreads.resetForTest()
   const ask = scriptedAsk()
   const chat = await mountChat(ask)
+  const fallbackNote = t('btw-panel-unavailable').slice(0, 10)
+  chat.watch(fallbackNote)
   const after = await chat.run('/btw 快路由的问题一')
   check('C1a. 面板启用时 /btw 立即发起侧问（一次）', ask.calls.length === 1)
   const screen = chat.lines().join('\n')
   check('C1b. 侧栏打开且 btw 为活动面板（胶囊标题）', screen.includes('侧问'), screen.split('\n').slice(0, 3).join(' | '))
   check('C1c. 问题路由进面板', after.includes('快路由的问题一'))
-  check('C1d. 浮层回退不出现（单一 surface）', !after.includes('未启用 btw 面板'))
+  check('C1d. 浮层回退不出现（单一 surface，任何一帧都没有）', !chat.seen(fallbackNote))
   ask.finish('快路由的答案')
   await delay(500)
   const answered = chat.lines().join('\n')
@@ -459,15 +485,23 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>) {
   btwThreads.resetForTest()
   const ask = scriptedAsk()
   const chat = await mountChat(ask)
-  const after = await chat.run('/btw 回退模式的问题')
-  check('C2a. 未启用面板时浮层回退出现', after.includes('未启用 btw 面板') && after.includes('回退模式的问题'))
+  const fallbackNote = t('btw-panel-unavailable').slice(0, 10)
+  chat.watch(fallbackNote)
+  await chat.run('/btw 回退模式的问题')
+  check('C2e. 逐帧检测器看得到浮层（C1d 的对照组）', chat.seen(fallbackNote))
+  const open = chat.viewport()
+  check('C2a. 未启用面板时浮层回退出现', open.includes(fallbackNote) && open.includes('回退模式的问题'), open.split('\n').filter(l => l.trim() !== '').slice(-4).join(' | '))
   check('C2b. 侧问仍然发起（一次）', ask.calls.length === 1)
   chat.stdin.write(ESC)
   await delay(500)
   const turn = btwThreads.get('probe-session')?.turns[0]
   check('C2c. Esc 关闭浮层即中止在途轮', turn?.phase === 'cancelled', 'phase=' + (turn?.phase ?? 'none'))
-  const closed = plainText(chat.stdout.frames.slice(chat.stdout.frames.length - 20))
-  check('C2d. 浮层关闭后回到普通聊天', !closed.includes('未启用 btw 面板'))
+  let closed = chat.viewport()
+  for (let waited = 0; closed.includes(fallbackNote) && waited < 3000; waited += 100) {
+    await delay(100)
+    closed = chat.viewport()
+  }
+  check('C2d. 浮层关闭后回到普通聊天（视口里没有浮层）', !closed.includes(fallbackNote), closed.split('\n').filter(l => l.trim() !== '').slice(-4).join(' | '))
   await chat.unmount()
 }
 
