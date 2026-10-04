@@ -151,6 +151,37 @@ export function readModelEnvTruth(
   }
 }
 
+/** The model slots the CLI's env routing reads: `ANTHROPIC_MODEL` pins
+ *  every tier, `ANTHROPIC_DEFAULT_<TIER>_MODEL` one tier's slot. */
+const SLOT_ENV_KEYS: readonly string[] = [
+  'ANTHROPIC_MODEL',
+  ...TIER_ENV_KEYS.map(([, modelKey]) => modelKey),
+]
+
+/**
+ * Whether the env the CLI child runs with already routes to `model`
+ * through its model slots: some slot's value — compared as base ids,
+ * `[1M]`-style suffixes and letter case ignored — names the same model.
+ * The session's explicit `model` query parameter can then be OMITTED:
+ * the CLI's SDK path (2.1.284+) resolves an EXPLICIT model against the
+ * bundled official catalog and fail-fasts a non-official name (a relay
+ * model) as `[claude-code:unrecognized_model]`, while the same name in
+ * an env slot routes fine — the parameter would only add a failing
+ * catalog check on top of routing that already serves that model.
+ */
+export function envSlotsServeModel(
+  env: Record<string, string | undefined>,
+  model: string,
+): boolean {
+  if (model === '') return false
+  const base = baseOf(model)
+  for (const key of SLOT_ENV_KEYS) {
+    const slot = pick(env, key)
+    if (slot !== undefined && baseOf(slot) === base) return true
+  }
+  return false
+}
+
 /** The env the CLI child actually applies, in the CLI's own truth order
  *  (R3-5): **flag-injected keys > the settings file's `env` > the truly
  *  inherited env**. `injectedKeys` marks what the TUI itself pinned into the
