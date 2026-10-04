@@ -3,7 +3,8 @@
  *  - 面板级（XTerm + AlternateScreen + 真侧栏控制器）：空态、线程问答上屏
  *    （Markdown）、badge（不可见期间落定 → ●；进入面板即清）、composer 键
  *    语义（打字/Enter 提交/Esc 分层保草稿/Tab 切焦点）、n 新话题、s 发送到
- *    聊天（attach 合同 + 截断提示）、28/40 列窄幅不崩；连按键（两键之间
+ *    聊天（attach 合同 + 截断提示）、28/40 列窄幅不崩；流式期间 badge 不变
+ *    就不通知侧栏；连按键（两键之间
  *    没有重渲染）不丢字、退格整删 emoji。
  *  - 全屏场景（BtwThreadScene）：Esc 退出编辑后 Tab 回到 composer 继续打字。
  *  - 浮层回退（BtwPanelFallback）：粘贴的换行、带修饰的 Enter 不关浮层，
@@ -23,7 +24,7 @@ const fixtureHome = mkdtempSync(join(tmpdir(), 'verify-btw-panel-'))
 process.env.HOME = fixtureHome
 process.env.USERPROFILE = fixtureHome
 
-const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }, { BtwThreadScene }, { BtwPanelFallback }] = await Promise.all([
+const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }, { BtwThreadScene }, { BtwPanelFallback }, { panelStore }] = await Promise.all([
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
@@ -38,6 +39,7 @@ const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn },
   import('../src/components/sidePanel/btw/threads.js'),
   import('../src/components/sidePanel/btw/BtwThreadScene.js'),
   import('../src/components/BtwPanel.js'),
+  import('../src/components/sidePanel/PanelStore.js'),
 ])
 const { render, ThemeProvider, Box, Text, AlternateScreen, useInput, useTerminalSize } = ui
 const { applySidePanelOpen, applySidePanelRatio, applySidePanelPanels } = prefs
@@ -205,6 +207,28 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
   check('P2b. 问题文本上屏', shown.includes('第一个很长很长的问题'))
   check('P2c. 答案文本上屏（Markdown 渲染无崩溃）', shown.includes('回答完成版'))
   check('P2d. composer 在面板底部可见（› 提示）', shown.includes('›'))
+  await frame.app.unmount()
+}
+
+// ── P10: 流式期间 badge 不变就不通知侧栏 ─────────────────────────────────
+{
+  const ask = scriptedAsk()
+  const channel = makePanelChannel(ask)
+  const frame = await mountPanel(105, 'btw', true, channel)
+  btwThreads.submit('probe-session', 'stream question', channel.ask.ask)
+  await delay(200)
+  let badgeEvents = 0
+  const stop = panelStore.subscribe(event => { if (event.type === 'badge') badgeEvents += 1 })
+  for (let index = 0; index < 20; index += 1) {
+    ask.emit('delta ' + index + ' ')
+    await delay(15)
+  }
+  ask.finish('stream answer done')
+  await delay(400)
+  stop()
+  // The panel is visible, so the badge stays 'info' while running and
+  // clears at the end: a couple of changes at most, not one per delta.
+  check('P10. 20 个流式 delta 的 badge 通知不超过 2 次', badgeEvents <= 2, 'badge events=' + badgeEvents)
   await frame.app.unmount()
 }
 
