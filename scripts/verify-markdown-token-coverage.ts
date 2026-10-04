@@ -145,4 +145,22 @@ const fence = applyMarkdown('```ts\nconst a = 1\n```\n')
 assert.ok(fence.includes('const a = 1'), 'fenced code body renders')
 assert.ok(stripAnsi(fence).includes('```ts'), 'fence line names the language')
 
-console.log('markdown token coverage passed (census, checkbox state, invisibles, handler sanity)')
+// -- 5. Unknown tokens fail closed --------------------------------------
+
+// A fabricated token type no dispatcher branch knows: the raw source must
+// survive (visible fail-closed), not collapse to the silent empty string
+// the old catch-all returned. Bad-baseline red: '' swallowed the text.
+const bogus = { type: 'zzz-unknown-extension', raw: 'RAW-SENTINEL' } as Token
+const bogusOut = formatToken(bogus)
+assert.equal(bogusOut, 'RAW-SENTINEL', 'unknown token echoes its raw source: ' + JSON.stringify(bogusOut))
+
+const bogusEmpty = { type: 'zzz-empty', raw: '' } as Token
+assert.equal(formatToken(bogusEmpty), '', 'unknown token without raw renders nothing')
+
+// The two deliberate ignores stay explicit and silent.
+const defToken = { type: 'def', raw: '[x]: /y' } as Token
+assert.equal(formatToken(defToken), '', 'def is the explicit invisible ignore')
+const htmlToken = { type: 'html', raw: '<br>' } as Token
+assert.equal(formatToken(htmlToken), '', 'html is the explicit invisible ignore')
+
+console.log('markdown token coverage passed (census, checkbox state, strikethrough, invisibles, fail-closed unknowns)')

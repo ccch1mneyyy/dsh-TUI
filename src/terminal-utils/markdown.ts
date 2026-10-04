@@ -257,8 +257,14 @@ function dispatch(token: Token, state: RenderState): string {
     // Link definitions and raw HTML carry no ANSI representation.
     return ''
   }
-  // Unknown / extension token types render as nothing.
-  return ''
+  // Fail closed: a token type this dispatcher does not know must not
+  // silently swallow content. A marked upgrade or plugin extension that
+  // introduces a new token shape would otherwise drop its text without a
+  // trace; echo the raw source so the user still sees it and the debug
+  // log flags the gap until the census gate forces an explicit decision
+  // (handler, or registration as a deliberate ignore like def/html).
+  logForDebugging(`Markdown token without a renderer, echoing raw source: ${token.type}`)
+  return (token as { raw?: string }).raw ?? ''
 }
 
 /** Inline math as single-line Unicode; the exact source when it has none
