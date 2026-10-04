@@ -261,7 +261,7 @@ export async function readChildTranscriptPage(
       // An older slice: `count` own events ending just before `skipFromStart`
       // (the pagination bookkeeping of the page already shown).
       const skip = Math.max(0, Math.min(window.skipFromStart, own))
-      length = Math.max(1, Math.min(window.count, skip))
+      length = Math.max(0, Math.min(window.count, skip))
       start = cut + skip - length
     }
     const events = length === 0 ? [] : (await handle.read(start, length, signal === undefined ? undefined : { signal })).events

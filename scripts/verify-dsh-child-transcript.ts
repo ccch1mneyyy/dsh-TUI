@@ -132,6 +132,8 @@ const createMemoryPersistence = () => {
         inheritedEventCount: stored.inheritedEventCount,
         async read(offset = 0, length = Number.MAX_SAFE_INTEGER) {
           if (closed) throw new Error('handle closed')
+          // The host's range reader rejects what a slice would quietly clamp.
+          if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0) throw new TypeError(`invalid range ${offset}+${length}`)
           if (stored.failRead !== undefined) throw stored.failRead
           reads.push({ id, offset, length })
           return { eventState: 'shared', events: stored.events.slice(offset, offset + length) as never }
@@ -330,6 +332,24 @@ const rosterService = (ids: readonly string[]) => ({
   const emptyDeps = makeDeps({ subagents: () => rosterService([CHILD]), persistence: () => emptyMemory.source })
   const emptyPage = await readChildTranscriptPage(emptyDeps.deps, CHILD)
   check('W9 a child with no own events pages empty (never fabricated)', emptyPage !== null && emptyPage.events.length === 0 && emptyPage.hasOlder === false && emptyPage.skippedFromStart === 0)
+
+  // An older request at the bottom of the history (or for nothing) reads no
+  // event: never the inherited prefix's last event, never a negative offset.
+  const bottomStart = memory.reads.length
+  const bottom = await readChildTranscriptPage(deps, CHILD, { count: 400, skipFromStart: 0 })
+  check('W10 an older window at the cut reads nothing below it',
+    bottom !== null && bottom.events.length === 0 && bottom.uuids.length === 0 && bottom.skippedFromStart === 0 && bottom.hasOlder === false
+    && memory.reads.slice(bottomStart).every(read => read.offset >= cut - 1 && read.length === 1),
+    JSON.stringify(memory.reads.slice(bottomStart)))
+  const unseeded = makeDeps({ subagents: () => rosterService([CHILD]), persistence: () => statMemory.source })
+  const unseededBottom = await readChildTranscriptPage(unseeded.deps, CHILD, { count: 400, skipFromStart: 0 })
+  const zeroStart = statMemory.reads.length
+  const zeroCount = await readChildTranscriptPage(unseeded.deps, CHILD, { count: 0, skipFromStart: 120 })
+  check('W11 an unseeded bottom window and a zero count page empty, cursor unchanged',
+    unseededBottom !== null && unseededBottom.events.length === 0 && unseededBottom.hasOlder === false
+    && zeroCount !== null && zeroCount.events.length === 0 && zeroCount.skippedFromStart === 120 && zeroCount.hasOlder === true
+    && statMemory.reads.slice(zeroStart).every(read => read.length === 1),
+    JSON.stringify(statMemory.reads.slice(zeroStart)))
 }
 
 // ── Section B: read budget on a 50k+ log ───────────────────────────────────
