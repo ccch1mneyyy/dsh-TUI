@@ -286,6 +286,14 @@ const POINTER = '\u276f'
   const over = narrow.lines().map((line, i) => ({ w: stringWidth(line.replace(/\s+$/u, '')), i })).filter(x => x.w > 34)
   check('16 窄终端（34 列）任何一行都不超宽', over.length === 0, over.map(x => 'row=' + x.i + ' w=' + x.w).join(' '))
   narrow.close()
+  // pinned 提示是一句话：窄屏折行而不是截断，句尾必须还在屏上。
+  const narrowPinned = await mountPicker({ options: PROBING, focusIndex: 0, pinned: true, columns: 34, rows: 16 })
+  const pinnedText = narrowPinned.lines().map(line => line.trim()).join('')
+  const hintTail = t('kernel-pinned-hint').slice(-6)
+  check('16b 窄终端 pinned 提示折行显示完整（句尾在屏上）',
+    await settled(() => narrowPinned.lines().map(line => line.trim()).join('').includes(hintTail)),
+    pinnedText)
+  narrowPinned.close()
 }
 
 // ── 6. 没接 onPick：行不可点、也没有 hover 反馈 ──────────────────────────────
