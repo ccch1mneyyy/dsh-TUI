@@ -509,19 +509,15 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // selector, never by boot); else dsh. An INVALID env value still means dsh
   // (the warning below says exactly that), never the memory.
   const rawBackend = process.env.DSH_TUI_BACKEND
-  // One-shot switch handoff (r1-stability S01): restartTui's backend option
-  // and the launcher's crash retry set it so THIS boot lands on the chosen
-  // kernel even when a Config row pins the other one (a switch that only
-  // writes DSH_TUI_BACKEND loses to config-over-env). Consumed here — deleted
-  // from the env so no child of this process inherits a stale override; an
-  // invalid value reads as "no handoff" and the normal priority applies.
+  // A kernel switch (restartTui's backend option) and the launcher's crash
+  // retry set this so the boot lands on the chosen kernel even when a Config
+  // row pins the other one. Deleted right away so no child inherits it; an
+  // invalid value is ignored.
   const handoffBackendRaw = process.env[KERNEL_SWITCH_HANDOFF_ENV]
   if (handoffBackendRaw !== undefined) delete process.env[KERNEL_SWITCH_HANDOFF_ENV]
   const handoffBackend = normalizeBackendChoice(handoffBackendRaw)
-  // S05 完整版 boot 侧：supervisor（旧 TUI 进程）在本进程 spawn 时给了
-  // ACK 管道（fd 3）与它仍持有的 alt 屏。这里一次性消费 env（host
-  // recompose、本进程的孩子都读不到陈旧标记）；此后 AlternateScreen 挂接
-  // 时发 adopted、首帧 flush 后发 ready，ready 之前本进程不写 1049l。
+  // Fullscreen kernel switch: the old process spawned this one with an ACK
+  // pipe on fd 3 and the alternate screen still open (see handoffAck.ts).
   const handoffAck = beginHandoffAck()
   if (handoffAck !== undefined) {
     logRestartEvent('handoff/boot: ack armed', { attemptId: handoffAttemptId() ?? '' })
@@ -536,10 +532,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     ctx.logger.warn(`dsh-tui: DSH_TUI_BACKEND="${rawBackend}" names no known backend (dsh, claude); starting on dsh`)
   }
   /**
-   * 启动参数是否压过了选择器的记忆（见 resolveRememberedBackend：Config 行
-   * 与 DSH_TUI_BACKEND 都优先于 kernel.json）。为真时选择器多画一行提示——
-   * 本次切换仍会重启进所选内核，但下一次「直接启动」还是按参数走，这事不能
-   * 瞒着用户。
+   * Whether a Config row or DSH_TUI_BACKEND overrides the selector's
+   * remembered kernel. The selector then says so: a switch still restarts
+   * onto the chosen kernel, but the next plain launch follows the override.
    */
   const backendPinned = config.backend !== undefined
     || (rawBackend !== undefined && rawBackend.trim() !== '')
@@ -560,9 +555,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       })
     }, 'dsh-tui Claude startup session')
   }
-  // A non-DSH session's permission prompts park in the shared store (design
-  // §4.7) the approval panel renders; its questions share the DSH
-  // questionnaire store. Teardown withdraws whatever is still parked.
+  // A non-DSH session's permission prompts park in the shared store the
+  // approval panel renders; its questions share the DSH questionnaire store.
+  // Teardown withdraws whatever is still parked.
   const backendPermissions = claudeStart === undefined ? undefined : new PermissionStore()
   if (backendPermissions !== undefined) ctx.effect(() => () => backendPermissions.settleAll())
   const { agent, handle, agentPreset, route: createdRoute } = claudeStart !== undefined
@@ -657,7 +652,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       backendLabel: claudeStart.label,
       openSession: claudeStart.open,
       interaction: { permissions: backendPermissions, questions: questionStore },
-      // Phase 4b: the session browser, /resume, /fork and the rewind.
+      // The session browser, /resume, /fork and rewind.
       sessionCatalog: claudeStart.catalog,
       sessionPrefs: claudeStart.sessionPrefs,
       initialHistory: claudeStart.initialHistory,
@@ -742,12 +737,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const uiMount = mountChannelUi(ctx, rawChannel, pluginHost, adapterRuntime.mode)
   const channel = uiMount.channel
   bindChannelCommands(rawChannel, channel)
-  // 后端限定的最后运行记录（r1-stability S02）：本实例的身份（内核/会话/
-  // 目录/代次）落盘，launcher 的崩溃重试以它为权威——内核切换后外层 env
-  // 仍指向原内核，按旧 env 重试会把刚崩的会话换成旧内核（或拿 DSH 的会话
-  // id 去恢复 Claude）。boot 在此写一次，退出漏斗按当时的可恢复性刷新（见
-  // funnel 各分支的 refreshLastRunRecord）；内核切换分支不写：替换进程自己
-  // 是「最后运行的实例」，它 boot 就会盖掉这条。
+  // last-run.json for the launcher's crash retry (see writeLastRunRecord):
+  // written once here, refreshed by the exit funnel with what is resumable
+  // at that point. The kernel-switch branch skips the refresh because the
+  // replacement writes its own record when it boots.
   const bootAttemptId = `${process.pid.toString(36)}-${Date.now().toString(36)}`
   const refreshLastRunRecord = (): void => {
     // An observational composition (replay/embedding) is not "the instance the
@@ -1488,8 +1481,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           },
         },
         {
-          // number 字段照 sidePanel.ratio 先例：范围门禁拒绝越界草稿（保存
-          // 前就报错），store 侧 normalize 仍兜底同规则钳制。
+          // Like sidePanel.ratio: an out-of-range draft is rejected before
+          // saving, and the store clamps to the same range anyway.
           ...settingField('btw.contextTurns'),
           placeholder: '4',
           format(value: unknown): string {
@@ -1557,8 +1550,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // (/new, /resume, rewind), so ownership is re-evaluated per request.
   const approvalStore = new ApprovalStore(adapterRuntimeFor(ctx))
   bindApprovalStore(ctx, approvalStore)
-  // A non-DSH backend owns its own permission prompts (Phase 3 bridge): the
-  // DSH answerer is not registered for it.
+  // A non-DSH backend answers its own permission prompts: the DSH answerer
+  // is not registered for it.
   if (ctx.get('approval') !== undefined && claudeStart === undefined) {
     ctx.on('approval/request', (req, next) =>
       approvalStore.park(req).catch(() => next()))
@@ -1647,11 +1640,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       // background-check guards that still read the outer one.
       exited = true
       if (error !== undefined) {
-        // The crash tail lives in runCrashExit (S03): its diagnostics are
-        // fully degradable while the resume markers (plus the S02 last-run
-        // record refresh) and the terminal cleanup run independently — an
-        // escape inside the funnel used to skip finishExit entirely and
-        // leave the process "exited but not cleaned up".
+        // runCrashExit keeps the diagnostics apart from the resume markers
+        // and the terminal cleanup, so a throw while describing the error
+        // cannot skip finishExit.
         runCrashExit({
           error,
           logError: message => { ctx.logger.error(message) },
@@ -1674,8 +1665,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
             }
             // A Claude session's marker is its backend's own (never resume.txt).
             if (claudeStart !== undefined && claudeStart.persisted(channel.agentId, channel.rows)) claudeStart.sessionPrefs.setLastSession(channel.agentId)
-            // S02: re-stamp what is actually resumable RIGHT NOW so the
-            // launcher's retry targets this session, not the boot-time one.
+            // So the launcher's retry reopens this session, not the boot-time one.
             refreshLastRunRecord()
           },
           finish: crashLine => {
@@ -1722,11 +1712,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       // kernel.json was already written when the choice was accepted.
       if (backendSwitchRequested !== undefined) {
         logRestartEvent('funnel: backend-switch branch entered', { backend: backendSwitchRequested })
-        // 切换过场第一阶段（S05；fullscreen 走完整版）：本进程作为
-        // supervisor 持有 alt 屏不退——过场文案写进 alt buffer（清屏归
-        // 位后），replacement adopted/首帧 ACK 后移交；inline 会话仍按
-        // MVE 恢复主屏写状态行。两态都明确时态与「原会话保留」，不给
-        // 用户「整个 dsh-tui 消失了」的读法。
+        // Fullscreen keeps the alternate screen and writes the "switching"
+        // notice into it until the replacement takes over (see handoffAck.ts);
+        // inline restores the main screen and writes the notice there.
         logRestartEvent(handoffEventTag('starting'), { backend: backendSwitchRequested })
         const keepAlt = bootedFullscreen
         void finishExit(
@@ -1803,8 +1791,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           ? `Resume with the command below:\n${resumeCommand(profile, channel.agentId)}`
           : undefined
       }
-      // S02: the exit-time record (the markers above and this share the same
-      // resumability view of the live channel session).
+      // Same resumability as the markers above.
       refreshLastRunRecord()
       void finishExit(
         ctx,
@@ -1834,9 +1821,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     handleExit()
   }
 
-  /** /channel 三期：激活渠道的连接信息变了——运行中的 CLI 子进程换不了
-  *  baseUrl/token，就复用 backend-switch 漏斗的同款机器以新会话重启
-  *  （内核不变、不写 resume 目标；通知文案由调用方给，说渠道而不是内核）。 */
+  /** /channel changed the active channel's connection. The running CLI child
+   *  cannot change its baseUrl or token, so restart through the same funnel
+   *  branch as a kernel switch: same kernel, new session, no resume target.
+   *  The caller supplies the notice. */
   const restartFreshSession = (notice: string): void => {
     if (exited || restartRequested || backendSwitchRequested !== undefined) return
     backendSwitchRequested = backendChoice
@@ -1846,12 +1834,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   }
 
   /**
-   * 内核选择器的 Claude 探测（/kernel 与启动页右下角的「可选内核」行）：
-   * 与 boot 用的是同一个 detect()，宿主只补它需要的几样。SDK 与 dsh-auth
-   * 凭证源都延迟到真正探测时才 import——DSH 首帧不为它付代价。
+   * Claude availability for the kernel selector (/kernel and the launchpad
+   * row), using the same detect() as boot. The SDK and the dsh-auth
+   * credential source are imported only when a probe runs, so a DSH boot
+   * does not load them.
    *
-   * 探测失败按「未安装」作答：选择器只会把那一行画灰。宁可少一个入口，
-   * 也不给人一个按下去会炸的入口。
+   * A failed probe reads as "not installed", which greys the row out.
    */
   const probeClaudeKernel = async (): Promise<ClaudeKernelStatus> => {
     try {
@@ -1901,11 +1889,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // the funnel as-is: `error !== undefined` is what selects the crash path, so
     // a bare undefined would exit 0 while this sink claims the process.
     const fatal = fatalReasonForExit(error, origin)
-    // The description is degradable (S03): reading .message / String() on a
-    // hostile value can throw, and this sink runs BEFORE the funnel latch —
-    // an escape here would hand the process to Node's default crash with no
-    // terminal cleanup at all. runCrashExit downstream serializes the same
-    // hostile value safely.
+    // Reading .message or String() can throw on a hostile value, and this
+    // runs before the funnel latch: an escape here would reach Node's default
+    // crash handler with no terminal cleanup. runCrashExit serializes the
+    // value safely later.
     try {
       ctx.logger.error(`dsh-tui: fatal ${origin}: ${fatal instanceof Error ? fatal.message : String(fatal)}`)
     } catch {
@@ -2014,11 +2001,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       notifyChannel(t('restart-starting'))
       handleExit()
     },
-    // 内核选择器（/kernel 与启动页「内核」入口）：选择落进 kernel.json，
-    // 退出漏斗以那个内核重启——新内核开的是**新会话**，旧内核的会话仍然
-    // 留在名册里（切回去 /resume 就能找到）。
+    // Kernel selector (/kernel and the launchpad row): the choice goes to
+    // kernel.json and the exit funnel restarts onto that kernel with a new
+    // session. The old kernel's sessions stay listed for /resume.
     onSwitchBackend: switchBackend,
-    // /channel 三期：渠道连接切换的新会话重启（同款漏斗机器，内核不变）。
+    // /channel: restart with a new session after the connection changed.
     onRestartFreshSession: restartFreshSession,
     onProbeKernels: probeClaudeKernel,
     kernelPinned: backendPinned,
@@ -2095,8 +2082,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     themeHost,
     children: marginChildren,
   })
-  // 首帧观察（S05 完整版）：adoption 之后第一次 stdout write 的 flush 回调
-  // 触发 ready ACK。补丁一次性自恢复；未武装时零开销。
+  // Kernel-switch replacement: send the ready ACK once the first frame after
+  // adoption is flushed. Does nothing on an ordinary boot.
   armFirstFrameAck(process.stdout)
   instance = await render(tree, { exitOnCtrlC: false, terminalImages: bootedTerminalImages })
   const isRecompose = lastBootedFullscreen !== undefined
@@ -2382,7 +2369,7 @@ async function resolveAgent(
 }
 
 /**
- * Open the startup session on the Claude Agent backend (design §4): a fresh
+ * Open the startup session on the Claude Agent backend: a fresh
  * one, or — `dsh-tui --backend claude --resume <id>` (`DSH_TUI_RESUME_SESSION`,
  * or the app argv; a bare `--resume` means the last Claude session this
  * install used, never DSH's `resume.txt`) — a persisted one. Loaded lazily: a
@@ -2418,8 +2405,8 @@ async function openClaudeStartup(
     import('./oauth-credential-source.js'),
   ])
   const prefs = fileClaudePrefs(undefined, message => logForDebugging(message))
-  // The dsh-auth login the backend may run on (design §4.12): one source
-  // per provider, shared by every session this process opens.
+  // The dsh-auth login the backend may run on: one source per provider,
+  // shared by every session this process opens.
   const credentialSources = new Map<string, ReturnType<typeof createOAuthCredentialSource>>()
   const host = (sessionCwd: string): BackendHost => ({
     cwd: sessionCwd,
@@ -2533,24 +2520,16 @@ export function createExitFunnel(deps: { onUserExit: (error?: unknown) => void }
 }
 
 /**
- * The exit funnel's crash tail (r1-stability S03), extracted so the failure
- * contract is testable (scripts/verify-shutdown-fallback drives the REAL
- * createExitFunnel around it with fault-injected sinks):
+ * The exit funnel's crash tail, separate so scripts/verify-shutdown-fallback
+ * can drive it with failing sinks:
  *
- *  - Diagnostics (serialization + every log sink) are FULLY DEGRADABLE: an
- *    escape anywhere in the block — a hostile throwable with throwing
- *    getters, a Proxy trap, or a failing sink — falls back to the
- *    fixed-literal unserializableCrashDetail (built from literals only, it
- *    never re-reads the thrown value) and one best-effort re-log attempt.
- *    Before this, a throwing getter escaped serializeCrashDetail AFTER the
- *    funnel latch was set, so appendCrashLog, the resume marker and
- *    finishExit never ran: the process died "exited but not cleaned up",
- *    without its terminal restore.
- *  - The resume-marker write (plus the S02 last-run record refresh, via
- *    the writeResumeMarkers sink) and the terminal cleanup (finish +
- *    disposeRootAndExit(1)) are MUST-RUN and sit OUTSIDE the diagnostics'
- *    fate: each has its own degradation, and finish is reached on every path
- *    through this function.
+ *  - Diagnostics (serialization and every log sink) may fail: a throwing
+ *    getter or Proxy trap on the error, or a sink that throws, falls back to
+ *    unserializableCrashDetail and one more logging attempt. The funnel latch
+ *    is already set here, so an exception escaping would skip the rest.
+ *  - The resume markers (and the last-run record, via writeResumeMarkers)
+ *    and the terminal cleanup (finish, then disposeRootAndExit(1)) always
+ *    run, whatever happened to the diagnostics.
  */
 export interface CrashExitDeps {
   /** The crash value itself (may be hostile: throwing getters, Proxy traps). */
@@ -2701,13 +2680,11 @@ export async function finishExit(
     } catch {
       ctx.logger.debug('dsh-tui: Ink shutdown detach failed; continuing with generic terminal cleanup')
     }
-    // S05 完整版屏幕托管：
-    //  - keepAltScreen（旧进程的切换分支）: 本进程作为 supervisor 持有
-    //    1049 括号穿过 spawn——不写 1049l，清屏归位后把过场文案写进
-    //    alt buffer（用户全程停留在同一块屏上，不闪主屏）。
-    //  - ownsAltScreenExit()=false（新进程 ready 前的退出）：括号属于旧
-    //    父进程，本进程的清理跳过 1049l（失败收口由持有者做——全链路
-    //    恰好一次闭合）。
+    // Kernel-switch handoff (see handoffAck.ts):
+    //  - keepAltScreen: the old process stays in the alternate screen across
+    //    the spawn; it clears it and writes the switch notice there.
+    //  - ownsAltScreenExit() false: this is a replacement exiting before its
+    //    first frame, and the old process will close the alternate screen.
     const exitAlt = fullscreen && !(options.keepAltScreen === true) && ownsAltScreenExit() ? EXIT_ALT_SCREEN : ''
     const cleanup = [
       exitAlt,

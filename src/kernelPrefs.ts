@@ -1,34 +1,35 @@
 /**
- * 内核选择器的记忆（~/.dsh-tui/kernel.json，形状 `{ "backend": "claude" }`）：
- * 上次在启动页选择器里选过的内核——只是下一次启动的便利默认，仅此而已。
- * 显式选择（`dsh-tui --backend`、Config 行、DSH_TUI_BACKEND）永远压过它；
- * boot 只读不写：唯一写入口是选择器的确认路径（显式 --backend 启动不改写
- * 记忆）。
+ * The kernel last picked in the launchpad kernel selector, at
+ * `~/.dsh-tui/kernel.json` (`{ "backend": "claude" }`). It is only the
+ * default for the next launch: `dsh-tui --backend`, the Config row and
+ * DSH_TUI_BACKEND all win over it. Boot only reads it; the selector's accept
+ * path is the only writer, so an explicit `--backend` launch does not change
+ * it.
  *
- * 与所有 ~/.dsh-tui 偏好同样 best-effort（见 Claude 后端 prefs.ts）：文件
- * 缺失或损坏读作「无记忆」；写入用同目录临时文件 + rename 的原子提交，并
- * 发读者永远只会看到旧文档或新文档、绝不会看到截断的半个。
+ * Best effort like the other ~/.dsh-tui preferences: a missing or broken file
+ * reads as no preference, and writes go through a temp file + rename so a
+ * reader sees the old or the new document, never half of one.
  */
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { DATA_DIR } from './utils/paths.js'
 
-/** 可运行的内核（Config.backend 的取值域）。 */
+/** Kernels the TUI can run on (the Config.backend values). */
 export type KernelBackendId = 'dsh' | 'claude'
 
-/** 持久化的内容。 */
+/** Stored shape. */
 export interface KernelPrefsData {
   readonly backend?: KernelBackendId
 }
 
-/** 收窄解析结果：只有合法 backend 值存活，其余一律读作无记忆。 */
+/** Keep only a valid backend value; anything else reads as no preference. */
 function parseKernelPrefs(parsed: unknown): KernelPrefsData {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
   const backend = (parsed as Record<string, unknown>).backend
   return backend === 'dsh' || backend === 'claude' ? { backend } : {}
 }
 
-/** 读记忆；任何失败（缺失、损坏、不可读）= 无记忆，绝不抛。 */
+/** Read the preference; missing, broken or unreadable means none. Never throws. */
 export function readKernelPrefs(file: string = join(DATA_DIR, 'kernel.json')): KernelPrefsData {
   try {
     return parseKernelPrefs(JSON.parse(readFileSync(file, 'utf8')))
@@ -37,13 +38,14 @@ export function readKernelPrefs(file: string = join(DATA_DIR, 'kernel.json')): K
   }
 }
 
-/** 每次提交用一个未用过的临时名（prefs.ts 的 writePinsAtomic 模式）。 */
+/** Makes every temp file name unique within this process. */
 let temporarySequence = 0
-/** Windows rename 重试的等待单元（prefs.ts 同款）。 */
+/** Wait cell for the Windows rename retry below. */
 const waitCell = new Int32Array(new SharedArrayBuffer(4))
 
-/** 把同目录临时文件 rename 到目标上（prefs.ts 模式：Windows 的瞬时
- *  EPERM/EBUSY 短同步等待重试，其他拒绝立即抛出、旧文档保持原样）。 */
+/** Rename the temp file over the target. Windows can refuse with a
+ *  transient EPERM/EBUSY while another process reads the file, so those are
+ *  retried briefly; any other error throws and leaves the old file alone. */
 function renameIntoPlace(temporary: string, target: string): void {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -57,7 +59,7 @@ function renameIntoPlace(temporary: string, target: string): void {
   }
 }
 
-/** 原子持久化记忆（tmp + rename）；失败落 debug 日志，绝不抛。 */
+/** Write the preference atomically; a failure goes to the debug log, never throws. */
 export function writeKernelPrefs(
   data: KernelPrefsData,
   file: string = join(DATA_DIR, 'kernel.json'),
@@ -72,14 +74,15 @@ export function writeKernelPrefs(
     try {
       rmSync(temporary, { force: true })
     } catch {
-      // 旧文档仍完好；别无安全的补救。
+      // The old file is still intact; nothing else to do.
     }
     debug(`dsh-tui: kernel prefs write failed (${error instanceof Error ? error.message : String(error)})`)
   }
 }
 
-/** 镜像 dsh-adapter 的 normalizeBackendChoice（刻意本地实现，本模块不背
- *  adapter 依赖）：大小写不敏感、去空白；空或未知 → undefined。 */
+/** Same rules as dsh-adapter's normalizeBackendChoice (kept local so this
+ *  module does not import the adapter): trimmed, case-insensitive; empty or
+ *  unknown gives undefined. */
 function normalizeBackend(value: string | undefined): KernelBackendId | undefined {
   if (typeof value !== 'string') return undefined
   const id = value.trim().toLowerCase()
@@ -87,34 +90,30 @@ function normalizeBackend(value: string | undefined): KernelBackendId | undefine
 }
 
 /**
- * 一次性内核切换 handoff 的 env 载体（r1-stability S01）。restartTui 的
- * backend 选项与 launcher 的崩溃重试把**本次 boot 必须落到的内核**放进
- * 它；boot（plugin.ts）读到后立即从 process.env 删除——一次性、只属于
- * 这一个进程。它与普通 DSH_TUI_BACKEND 的区别正是它在 resolver 里的
- * 位置：压过 Config 行。没有它，显式 backend: dsh 的配置会让「选择器
- * 本次切换」白重启一回（替换进程明明带着 DSH_TUI_BACKEND=claude 来，
- * 却被 config 行挡回 dsh）。普通冷启动的 config > env > memory 合同
- * （K7）不动。
+ * The kernel this one boot must land on, set by a kernel switch (restartTui's
+ * backend option) and by the launcher's crash retry. Boot deletes it from
+ * process.env as soon as it reads it. Unlike DSH_TUI_BACKEND it ranks above
+ * the Config row: with `backend: dsh` in the config, a switch to claude would
+ * otherwise restart straight back onto dsh. Ordinary launches keep
+ * config > env > remembered choice.
  */
 export const KERNEL_SWITCH_HANDOFF_ENV = 'DSH_TUI_BACKEND_HANDOFF'
 
 /**
- * boot 时的内核选择（plugin.ts 的 backendChoice）：一次性切换 handoff
- * （KERNEL_SWITCH_HANDOFF_ENV 的合法值）压过一切；否则显式 Config 行或
- * DSH_TUI_BACKEND 永远优先；其次选择器记忆；否则 dsh。**非法** env 值仍落
- * dsh——boot 警告原文就是 "starting on dsh"，不能让它掉到记忆上；非法
- * handoff 同理按不存在处理。纯函数：不读不写（记忆只被选择器的确认路径
- * 写，见 writeKernelPrefs 的注释）。
+ * The kernel boot runs on (plugin.ts backendChoice): a valid switch handoff
+ * first, then the Config row, then DSH_TUI_BACKEND, then the remembered
+ * choice, else dsh. An invalid DSH_TUI_BACKEND still means dsh, which is what
+ * the boot warning says, rather than falling through to the remembered
+ * choice; an invalid handoff value is ignored. Pure.
  */
 export function resolveRememberedBackend(input: {
-  /** 一次性切换 handoff（KERNEL_SWITCH_HANDOFF_ENV 归一后）；只在切换/
-   *  崩溃重试链上出现，普通启动恒 undefined。 */
+  /** KERNEL_SWITCH_HANDOFF_ENV, normalized; undefined on ordinary launches. */
   readonly handoff?: KernelBackendId | undefined
-  /** Config.backend（schema 已归一）。 */
+  /** Config.backend (normalized by the schema). */
   readonly configured?: KernelBackendId | undefined
-  /** process.env.DSH_TUI_BACKEND 原文。 */
+  /** process.env.DSH_TUI_BACKEND as given. */
   readonly envRaw?: string | undefined
-  /** kernel.json 记住的内核。 */
+  /** The kernel remembered in kernel.json. */
   readonly memory?: KernelBackendId | undefined
 }): KernelBackendId {
   if (input.handoff === 'dsh' || input.handoff === 'claude') return input.handoff
