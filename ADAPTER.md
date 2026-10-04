@@ -2,19 +2,22 @@
 
 ## 边界规则
 
-厂商包只允许在各自目录内被 import:`@deepseek-ai/*` 仅 `src/dsh-adapter/`,
-`@anthropic-ai/*` 仅 `src/backends/claude/`,`@agentclientprotocol/*` 仅 `src/backends/acp/`,
-`@dsh-std/*` 仅 `src/adapter/standard/` 与 `src/dsh-adapter/`。中立层 `src/agent/`、`src/channel/`
-不得 import 厂商包、`src/dsh-adapter/` 与 `src/backends/`(`src/agent/` 也不得 import `src/channel/`),
-也不碰 `src/ink/`(唯一登记的允许边:`src/channel/sanitize.ts → src/ink/stringWidth.ts`)。
-`src/backends/<x>/` 不得 import 其他后端目录(共享代码放 `src/agent/` 或 `src/channel/`)。
-UI 层(`screens/`、`components/`、`hooks/`、`ink/`)不得 import `src/backends/`,从 `src/dsh-adapter/`
-只取类型,经 adapter 的 facade(`src/dsh-adapter/types.ts` 的类型 re-export、`channel.ts`/`plugin.ts`
-等运行期服务)间接接触上游;存量值 import 登记在 `scripts/adapter-boundary.allowlist.json`,只减不增。
-`native.dsh`/`native.claude`/`native.acp` 只能在对应后端目录内访问。
+厂商包按目录隔离,中立层不碰厂商代码:
 
-门禁:`pnpm run verify:boundary`(按 [多后端方案](docs/agent-backend-design.md) §8.0 规则表扫描全部源码的
-真实 import,发现越界即失败;已挂进 `build`)。
+| 目录 / 包 | 规则 |
+| --- | --- |
+| `@deepseek-ai/*` | 只在 `src/dsh-adapter/` 内 import |
+| `@anthropic-ai/*` | 只在 `src/backends/claude/` 内 import |
+| `@agentclientprotocol/*` | 只在 `src/backends/acp/` 内 import(为将来的 ACP 后端预留,目录尚不存在) |
+| `@dsh-std/*` | 只在 `src/adapter/standard/` 与 `src/dsh-adapter/` 内 import |
+| `src/agent/`、`src/channel/` | 不 import 厂商包、`src/dsh-adapter/`、`src/backends/` 与 `src/ink/`;`src/agent/` 也不 import `src/channel/`。唯一例外:`src/channel/sanitize.ts → src/ink/stringWidth.ts` |
+| `src/backends/<x>/` | 不 import 其他后端目录;共享代码放 `src/agent/` 或 `src/channel/` |
+| UI 层(`screens/`、`components/`、`hooks/`、`ink/`) | 不 import `src/backends/`;从 `src/dsh-adapter/` 只取类型,运行期经 facade(`src/dsh-adapter/types.ts` 的类型 re-export、`channel.ts`/`plugin.ts` 提供的服务)接触上游。存量值 import 登记在 `scripts/adapter-boundary.allowlist.json`,只减不增 |
+| `native.dsh` / `native.claude` / `native.acp` | 只在对应后端目录内访问 |
+
+门禁:`pnpm run verify:boundary`(`scripts/verify-adapter-boundary.ts`,扫描全部源码的
+真实 import,越界即失败;已挂进 `build`)。多后端的分层见
+[docs/agent-backend-design.md](docs/agent-backend-design.md)。
 
 ## 上游契约
 
