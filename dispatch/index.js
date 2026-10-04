@@ -12,8 +12,9 @@
  * them in lockstep with the canonical module. "default" carries the raw
  * module so non-loader consumers of the bare package name keep working.
  *
- * M0 scope note: only the MAIN plugin row dispatches; the subpath export
- * rows stay canonical until the design's M1/M2 subpath coverage.
+ * M1: every public subpath (dispatch/<name>.js) forwards through the SAME
+ * resolveTuiEntry pin, so oauth/working-activity/panels/... Cordis rows can
+ * never mix generations with this entry within one process.
  */
 import { resolveTuiEntry } from "./resolve.mjs"
 
