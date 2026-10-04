@@ -1,9 +1,9 @@
 /**
- * DSH translator coverage (docs/agent-backend-design.md §6.2, §8.2): runs the
- * DSH projection fixtures (scripts/fixtures/dsh/) through
- * `createDshTranslator` — live per event, replay via `translateReplay`, plus
- * the stream frames — and asserts that every §6.2 row produces its Agent
- * Domain event with the identity fields the shared projector relies on. The
+ * DSH translator coverage: runs the DSH projection fixtures
+ * (scripts/fixtures/dsh/) through `createDshTranslator` (live per event,
+ * replay via `translateReplay`, plus the stream frames) and asserts that
+ * every DSH event family produces its Agent Domain event with the identity
+ * fields the shared projector relies on. The
  * projected outcome itself is pinned by verify-projection-golden; this gate
  * pins the vocabulary in between, so a translator change that happens to
  * cancel out in the projection still fails here.
@@ -117,10 +117,9 @@ check('compaction bracket → compaction.start/end', of(live, 'compaction.start'
   harness.apply([{ type: 'preset.selected', preset: 'code', aliases: 'ptc' as unknown as readonly string[] }])
   check('prototype-key preset projects without throwing', harness.state.rows.filter(row => row.kind === 'notice').length === 2)
 }
-// Documented deviation (design §6.4): a card the window cap folded while it
-// ran keeps only its preview when the result lands — the full payload and the
-// presentation view are NOT re-attached past the fold line (pre-split code
-// re-attached them, defeating the fold's memory bound).
+// A card the window cap folded while it ran keeps only its preview when the
+// result lands: the full payload and the presentation view are not
+// re-attached past the fold line, or the fold would no longer bound memory.
 {
   const harness = createProjectorHarness()
   harness.apply([

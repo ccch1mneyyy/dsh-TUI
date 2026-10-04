@@ -678,9 +678,9 @@ const integrationClaimChecks: ReadonlyArray<{ file: string; label: string; check
   // not the composition root; keep the AST proof at its real ownership seam.
   { file: 'dsh-adapter/channel/reports.ts', label: 'getHostFacade(...)', check: () => fileHasNamedCall('dsh-adapter/channel/reports.ts', 'getHostFacade') },
   { file: 'dsh-adapter/channel/reports.ts', label: 'collectAdapterDiagnostics(...)', check: () => fileHasNamedCall('dsh-adapter/channel/reports.ts', 'collectAdapterDiagnostics') },
-  // Phase 4a: every composition installs it through the core host seam.
+  // Every composition installs it through the core host seam…
   { file: 'dsh-adapter/channel/core/host.ts', label: 'markDecisionDispatchTopology(...)', check: () => fileHasNamedCall('dsh-adapter/channel/core/host.ts', 'markDecisionDispatchTopology') },
-  // …and the core composition actually runs that seam (Phase 4a review 11).
+  // …and the core composition actually runs that seam.
   { file: 'dsh-adapter/channel/core/compose.ts', label: 'resolveCoreHost(...)', check: () => fileHasNamedCall('dsh-adapter/channel/core/compose.ts', 'resolveCoreHost') },
   { file: 'dsh-adapter/effect-ledger.ts', label: 'createKernelLedger(...)', check: () => fileHasNamedCall('dsh-adapter/effect-ledger.ts', 'createKernelLedger') },
   { file: 'adapter/upstream/host-descriptor-driver.ts', label: 'commands.list(undefined)', check: () => fileHasMethodCallNamedWithUndefinedArg('adapter/upstream/host-descriptor-driver.ts', 'list') },

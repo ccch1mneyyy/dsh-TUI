@@ -1,11 +1,11 @@
 /**
- * A minimal in-process IDE selection server for regressions (moved verbatim
- * from verify-ide-channel.tsx so channel-level tests can drive the same
- * protocol): an HTTP upgrade answer, masked client text-frame decoding,
- * unmasked server text frames. On `ide/hello` with the right token it acks
- * (protocol 2, the given workspace folders) and pushes one selection —
- * `src/a.ts` lines 2–4 with the buffer text `fa.ts\nfb.ts\nfc.ts` — then,
- * unless `clearSelectionAfterMs` is null, an empty one 50 ms later.
+ * A minimal in-process IDE selection server, shared by verify-ide-channel.tsx
+ * and the channel-level regressions so they all drive the same protocol: an
+ * HTTP upgrade answer, masked client text-frame decoding, unmasked server text
+ * frames. On `ide/hello` with the right token it acks (protocol 2, the given
+ * workspace folders) and pushes one selection (`src/a.ts` lines 2–4 with the
+ * buffer text `fa.ts\nfb.ts\nfc.ts`), then, unless `clearSelectionAfterMs` is
+ * null, an empty one 50 ms later.
  *
  * Import from TypeScript scripts run with `node --import tsx/esm`.
  */
@@ -100,8 +100,8 @@ export function startWsFixture(
           startLine: 2,
           endLine: 4,
           isEmpty,
-          // Protocol 2: the editor buffer's own text — 3 selected lines here,
-          // deliberately DIFFERENT from any on-disk fixture so a test can
+          // Protocol 2: the editor buffer's own text (3 selected lines),
+          // deliberately different from any on-disk fixture so a test can
           // prove the attach path used the pushed text, not a disk read.
           text: isEmpty ? '' : 'fa.ts\nfb.ts\nfc.ts',
           documentVersion: 7,
@@ -145,7 +145,7 @@ export function startWsFixture(
             : null
           const received = typeof params?.token === 'string' ? params.token : ''
           helloResolve({ token: received })
-          // Protocol 2 server semantics: a wrong token gets NO ack — the
+          // Protocol 2 server semantics: a wrong token gets no ack, the
           // socket is dropped (mirrors the extension's IdeServer).
           if (received !== token) {
             socket.destroy()

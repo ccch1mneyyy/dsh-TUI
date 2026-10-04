@@ -965,8 +965,8 @@ assert.match(plugin, /bindChannelCommands\(rawChannel, channel\)/)
 assert.ok(!plugin.includes('ViaChannelFacade('), 'bootstrap must not use legacy raw-fallback helpers')
 const rawCalls = [...plugin.matchAll(/rawChannel\.([A-Za-z]+)\s*\(/g)].map(match => match[1])
 assert.deepEqual(rawCalls.sort(), ['bindApprovalStore', 'releaseContributions'])
-// Phase 4a: every composition root (channel.ts + core/compose.ts + extensions.ts)
-// and every channel core module the composition moved into.
+// Every composition root (channel.ts + core/compose.ts + extensions.ts) plus
+// the channel core modules they compose.
 const impl = compositionAndCoreSource()
 for (const [name, effect] of Object.entries(CHANNEL_UI_EFFECTS)) {
   if (effect === 'mutate') assert.ok(!new RegExp(`\\bstate\\.${name}\\s*\\(`).test(impl), `internal raw mutation: ${name}`)

@@ -1,8 +1,7 @@
 /**
- * Channel construction is one owner transaction (Phase 4a,
- * docs/agent-backend-design.md §3.5): a throw anywhere while the core is
- * built, while the DSH extensions attach, or while the composed channel
- * starts must release everything acquired so far —
+ * Channel construction is one owner transaction: a throw anywhere while the
+ * core is built, while the DSH extensions attach, or while the composed
+ * channel starts must release everything acquired so far:
  *
  *  - every host listener (`ctx.on`) and every listener on the DSH agent's
  *    own context;

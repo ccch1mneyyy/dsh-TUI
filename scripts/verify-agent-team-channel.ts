@@ -1,9 +1,8 @@
 /**
- * Agent-team channel layer regression (design agent-team-full §3/§5/§6/§7,
- * the channel entries of the §7 regression matrix): the unified
- * agent-message domain and both backends' message capabilities, over pure
- * helpers, the DSH subagent projection, the Claude translator and the
- * channel core — no UI components, no live backend.
+ * Agent-team channel layer regression: the unified agent-message domain and
+ * both backends' message capabilities, over pure helpers, the DSH subagent
+ * projection, the Claude translator and the channel core. No UI components,
+ * no live backend.
  *
  *  A. the neutral fold and vocabulary helpers (agent/messages.ts): state
  *     monotonicity, the DSH relay source shape (a plain user text is never
@@ -13,10 +12,11 @@
  *     continuable prompt submit (receipt → queued; RemoteError codes →
  *     stable reasons; one-shot fail-closed; service absent = no capability),
  *     listChildren roster filtering (continuable only), reset clears;
- *  C. the Claude SendMessage observation: parse honesty, call = issued
- *     only, result states (explicit error → refused, structured field →
- *     its state, bare success / unknown shape → unknown), main lane and
- *     subagent lane through the real translator;
+ *  C. the Claude SendMessage observation: input parsing (no recipient or no
+ *     body = no message), a call is only ever issued, result states
+ *     (explicit error → refused, structured field → its state, bare success
+ *     / unknown shape → unknown), main lane and subagent lane through the
+ *     real translator;
  *  D. the channel core over bare sessions: the parent-mediated control is
  *     composed only when the session declares the capability (absence = no
  *     member, no UI), the submit envelope rides the ordinary FIFO as a
@@ -146,7 +146,7 @@ const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
   const control = projection.control
   check('B0 the control exposes the direct continuable capability', control.message !== undefined && control.message.via === 'dsh-direct-continuable' && control.message.steer === true)
 
-  // A relay INTO the parent: durable user/message with AgentMessageSource.
+  // A relay into the parent: durable user/message with AgentMessageSource.
   projection.onSessionEvent(parentSession, { type: 'user/message', seq: 11, time: 111, data: { id: 'relay-1', source: { kind: 'agent-message', form: 'relay', senderSessionId: 'sess-child-1' }, content: [{ type: 'text', text: 'scan finished' }] } })
   let messages = control.message!.messages()
   check('B1 a durable relay folds into a queued child→parent view',
@@ -154,13 +154,13 @@ const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
     && messages[0]!.via === 'dsh-agent-relay' && messages[0]!.state === 'queued' && messages[0]!.text === 'scan finished' && messages[0]!.sourceRef === 'seq:11' && messages[0]!.parentSessionId === 'sess-parent-1',
     messages)
 
-  // Plain user text, injected context and settlement notices are NOT relays.
+  // Plain user text, injected context and settlement notices are not relays.
   projection.onSessionEvent(parentSession, { type: 'user/message', seq: 12, time: 112, data: { id: 'plain-1', source: { kind: 'user' }, content: [{ type: 'text', text: 'just typing' }] } })
   projection.onSessionEvent(parentSession, { type: 'user/message', seq: 13, time: 113, data: { id: 'inj-1', source: { kind: 'some-plugin' }, content: [{ type: 'text', text: 'injected' }] } })
   projection.onSessionEvent(parentSession, { type: 'user/message', seq: 14, time: 114, data: { id: 'settle-1', source: { kind: 'subagent-settled', form: 'notice', summary: 'done', senderSessionId: 'sess-child-1' }, content: [] } })
   check('B2 ordinary user text is never guessed into a relay', control.message!.messages().length === 1)
 
-  // A relay INTO a tracked child.
+  // A relay into a tracked child.
   projection.store.onSpawned('child-1', 'subagent')
   projection.store.linkSession('child-1', childSession)
   projection.onSessionEvent(childSession, { type: 'user/message', seq: 21, time: 121, data: { id: 'relay-2', source: { kind: 'agent-message', form: 'relay', senderSessionId: 'sess-parent-1' }, content: [{ type: 'text', text: 'please continue' }] } })

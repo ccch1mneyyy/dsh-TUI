@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { compositionSource } from './lib/channel-composition.mjs'
 
-// Phase 4a: the root is the composition (channel.ts + core/compose.ts + extensions.ts).
+// The root is the composition: channel.ts + core/compose.ts + extensions.ts.
 const channel = compositionSource()
 const sessionSwitch = readFileSync(new URL('../src/dsh-adapter/channel/core/session-switch.ts', import.meta.url), 'utf8')
 const compaction = readFileSync(new URL('../src/dsh-adapter/channel/compaction.ts', import.meta.url), 'utf8')
@@ -59,9 +59,9 @@ assert.match(liveAdoption, /deps\.binding\.switchTo/u)
 assert.match(resume, /export function createSessionResumeActions/u)
 assert.match(resume, /const resumeInto/u)
 assert.match(resume, /const resumeTo/u)
-// Phase 4a: `/new` is one core transaction (core/session-switch.ts) over an
-// injected opener; the DSH create path (preset, route, mount reservation,
-// workspace attach, adoption half) stays in session-resume.ts.
+// `/new` is one core transaction (core/session-switch.ts) over an injected
+// opener; the DSH create path (preset, route, mount reservation, workspace
+// attach, adoption half) stays in session-resume.ts.
 assert.match(resume, /const newSessionOpener: NewSessionOpener/u)
 assert.match(sessionSwitch, /const newSession = async/u)
 assert.match(sessionSwitch, /binding\.prepare\(adoption/u)

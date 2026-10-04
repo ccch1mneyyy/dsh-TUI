@@ -1,7 +1,6 @@
 /**
- * Channel over a NON-DSH session (docs/agent-backend-design.md §3.5, Phase 2
- * checkpoint B): a fake `AgentSession` with no `native.dsh` goes through the
- * real `createChannel`, and the channel must
+ * Channel over a non-DSH session: a fake `AgentSession` with no `native.dsh`
+ * goes through the real `createChannel`, and the channel must
  *
  *  - publish a capability snapshot (`backendCapabilities`, `sessionRef`,
  *    `costReport`) and offer only the commands the backend serves;
@@ -15,15 +14,15 @@
  *  - delegate to a typed capability when the session declares it;
  *  - fence events of a replaced session by binding generation.
  *
- * A DSH channel built from the same entry point keeps today's command list
- * exactly (capability snapshot = every built-in, `commandList` untouched).
+ * A DSH channel built from the same entry point keeps its full command list
+ * (capability snapshot = every built-in, `commandList` untouched).
  *
- * Phase 4a: a non-DSH session is served by the same channel core as DSH, so
- * the backend-neutral features reach it too — the IDE selection channel
- * (consumed into the submitted message, indicator on the user row), the git
- * branch breadcrumb, `/export` from the projected rows, `!cmd` with its
- * workspace target — and `/new` never tears down a turn that started (or a
- * prompt that arrived) while the new session was opening (review item 9).
+ * A non-DSH session is served by the same channel core as DSH, so the
+ * backend-neutral features reach it too: the IDE selection channel (consumed
+ * into the submitted message, indicator on the user row), the git branch
+ * breadcrumb, `/export` from the projected rows, `!cmd` with its workspace
+ * target. `/new` never tears down a turn that started (or a prompt that
+ * arrived) while the new session was opening.
  *
  * Run: node --import tsx/esm scripts/verify-backend-channel.ts
  */
@@ -147,13 +146,13 @@ try {
     check(`/${name} is hidden without its capability`, !offered.includes(name))
   }
   check('snapshot commands == offered list', JSON.stringify(channel.backendCapabilities.commands) === JSON.stringify(offered))
-  // 三态契约（设计 §④ 轨迹裁决）：/trace 的入口在每个后端一致（四入口同
-  // 口径）；核心已挂中立 AgentEvent 折叠源，所以事件到来前报 empty、到来
-  // 后报 supported——能力判定读组合的结构声明，不是命令清单、更不是
-  // backendId；unsupported 只属于未挂数据源的组合。
+  // /trace 是三态契约：每个后端都提供这个入口，四个入口的判定一致。核心挂了
+  // 中立的 AgentEvent 折叠源，所以事件到来前报 empty，到来后报 supported。
+  // 能力判定读组合的结构声明，不看命令清单，也不看 backendId；只有没挂数据源
+  // 的组合才报 unsupported。
   check('/trace is offered on every backend (three-state entry contract)', offered.includes('trace'))
   check('the core trajectory source reports empty before events (fold mounted)', channel.trajectorySource() === 'empty')
-  // main's composition facts (`ChannelUi.capabilities()`) for a session no
+  // The composition facts (`ChannelUi.capabilities()`) for a session no
   // extension describes: no compact capability → `/compact` has no route.
   check('composition facts without compact: /compact and /plan have no route', channel.capabilities().compact.route === 'none' && channel.capabilities().plan.route === 'none' && !channel.capabilities().skills)
   check('Tab completion offers only served commands', channel.commandCompletions('/pre').length === 0 && channel.commandCompletions('/ne').some(item => item.name === 'new'))
@@ -232,8 +231,8 @@ try {
   check('job kill → false', channel.jobControl.kill('j') === false)
   check('runExternalCommand → undefined (the line goes to the model)', await channel.runExternalCommand('anything', '') === undefined)
   check('mcpStatus answers with the unavailable line', channel.mcpStatus().join('\n').includes(unavailableText('mcp')))
-  // 核心轨迹源（设计 §④）：off-DSH 会话的 traceEvents 是 AgentEvent 折叠
-  // 出的 raw 事件（上面发出的回合已成行），不是 DSH 的 rawHistory。
+  // 核心轨迹源：非 DSH 会话的 traceEvents 是从 AgentEvent 折叠出的 raw 事件
+  // （上面发出的回合已成行），不是 DSH 的 rawHistory。
   check('traceEvents carries the folded stream off DSH', channel.traceEvents().some(event => event.type === 'turn/start'))
   check('permission presets are unavailable', channel.permissionPresets().availability === 'unavailable')
 
@@ -284,8 +283,8 @@ try {
   }
 }
 
-// ── review fixes: rejecting capabilities, silent boot effort, no fold,
-//    `!!` after the session closed, backend config normalization ──────────
+// ── rejecting capabilities, silent boot effort, no fold, `!!` after the
+//    session closed, backend config normalization ────────────────────────
 {
   const failing = fakeSession('44444444-4444-4444-8444-444444444444', {
     modes: { list: () => [{ id: 'default', label: 'Default' }, { id: 'plan', label: 'Plan' }], current: () => 'default', set: () => Promise.reject(new Error('mode refused by cli')) },
@@ -328,7 +327,7 @@ try {
   check('Config accepts a stray DSH_TUI_BACKEND value without failing the boot', parse('Claude') === 'claude' && parse('') === undefined && parse('nonsense') === undefined && parse(undefined) === undefined)
 }
 
-// ── prompts park in the stores Chat renders, per binding (Phase 3) ────
+// ── prompts park in the stores Chat renders, per binding ──────────────
 {
   const permissions = new PermissionStore()
   const questions = new QuestionStore()
@@ -364,7 +363,7 @@ try {
   check('releasing the channel withdraws the open prompt', permissions.getSnapshot() === null && responses.length === 1)
 }
 
-// ── /new never races a turn or a prompt during the open (item 9) ─────
+// ── /new never races a turn or a prompt during the open ──────────────
 {
   const current = fakeSession('77777777-7777-4777-8777-777777777777')
   let release: ((session: FakeSession) => void) | undefined
@@ -405,8 +404,8 @@ try {
     const candidate3 = fakeSession('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
     release!(candidate3)
     check('an uncontested /new still switches', await third === true && racing.sessionRef.sessionId === candidate3.ref.sessionId && await settled(() => current.disposed))
-    // Phase 4a review 5: a WHOLE turn that started and ended during the open
-    // (`working` is false again, nothing pending) still races the switch.
+    // A whole turn that started and ended during the open (`working` is
+    // false again, nothing pending) still races the switch.
     const fourth = racing.newSession()
     await opening()
     candidate3.emit([{ type: 'turn.start', turn: 1, origin: 'user', time: 1 }])
@@ -419,7 +418,7 @@ try {
   }
 }
 
-// ── /new never drops an input still in the channel's FIFO (Phase 4a review 6) ──
+// ── /new never drops an input still in the channel's FIFO ──────────
 {
   let releaseRead: (() => void) | undefined
   const slowFs = {
@@ -449,7 +448,7 @@ try {
     // The `@` read parks the input in the FIFO: not pending, not working.
     parked.submit('read @notes.txt please')
     check('an @-mention read parks the input in the FIFO', await settled(() => releaseRead !== undefined) && parked.pending.length === 0 && current.submits.length === 0)
-    // Phase 4b review 6: refused at once (no handshake first), naming it.
+    // Refused at once (no handshake first), and the toast names the input.
     check('/new is refused at once while an input is still on its way, naming it', await parked.newSession() === false && opens === 0
       && toasts().includes(t('session-switch-input-parked', { input: 'read @notes.txt please' })) && parked.sessionRef.sessionId === current.ref.sessionId, toasts())
     const before = toasts().filter(text => text === t('session-switch-input-parked', { input: 'read @notes.txt please' })).length
@@ -463,7 +462,7 @@ try {
     check('/new is refused at once while a `!!` command is on its way', await parked.newSession() === false && opens === 0 && toasts().includes(t('session-switch-input-parked', { input: '!!' })), toasts())
     releaseShell!()
     check('… and its output reaches the session it ran for', await settled(() => current.submits.length === 2) && (current.submits[1]!.input.text).includes('shell output'))
-    // An input parked DURING the open still abandons the candidate (the race).
+    // An input parked during the open still abandons the candidate (the race).
     releaseRead = undefined
     const opening = parked.newSession()
     await settled(() => release !== undefined)
@@ -479,7 +478,7 @@ try {
   }
 }
 
-// ── a raced /new never attaches its candidate first (Phase 4a review 7) ──
+// ── a raced /new never attaches its candidate first ─────────────────
 {
   const { createCoreChannel } = await import('../src/dsh-adapter/channel/core/compose.js')
   const { createChannelOwner } = await import('../src/dsh-adapter/channel/owner.js')
@@ -511,7 +510,7 @@ try {
   }
 }
 
-// ── backend-neutral features on a non-DSH session (Phase 4a core) ────
+// ── backend-neutral features on a non-DSH session ────────────────────
 {
   // IDE selection: a real loopback IDE fixture pushes a selection; the
   // submit attaches it and the confirmed user row shows the indicator.
@@ -560,7 +559,7 @@ try {
   check('releasing the channel disposes the session it owns', await settled(() => neutral.disposed))
 }
 
-// ── DSH keeps today's command list ────────────────────────────────────
+// ── DSH keeps its full command list ───────────────────────────────────
 {
   const stubAgentCtx = { on: () => () => undefined }
   const agent = {
@@ -570,10 +569,10 @@ try {
   const dsh = createChannel(ctx, agent as never, { model: 'deepseek-chat', provider: 'deepseek', cwd: workdir, activity: false })
   try {
     check('a DSH session supports every built-in command', JSON.stringify(dsh.backendCapabilities.commands) === JSON.stringify(LOCAL_COMMANDS.map(command => command.name)))
-    // Today's list is main's: the built-ins, with the entries whose
-    // composition route is missing re-described (main 6acd1ca3,
-    // `annotateCommandCapabilities`; this bare fixture mounts neither a
-    // compaction service nor a `/plan` registry command).
+    // The expected list: the built-ins, with the entries whose composition
+    // route is missing re-described by `annotateCommandCapabilities` (this
+    // bare fixture mounts neither a compaction service nor a `/plan`
+    // registry command).
     const today = annotateCommandCapabilities(LOCAL_COMMANDS, dsh.capabilities())
     check('the DSH command list is today\'s list', JSON.stringify(dsh.commandList) === JSON.stringify(today) && today.some(command => command.descriptionKey === 'cmd-desc-compact-unavailable'))
     check('DSH snapshot is all-capable', dsh.backendCapabilities.backendId === 'dsh' && dsh.backendCapabilities.retractPending && dsh.backendCapabilities.rewind && dsh.backendCapabilities.models && dsh.backendCapabilities.resume)
@@ -586,12 +585,12 @@ try {
 
 // ── /mcp reports and controls are fenced by the bound session ────────
 {
-  // An MCP answer is a fact of ONE session: a slow /mcp on A must not
+  // An MCP answer belongs to one session: a slow /mcp on A must not
   // overwrite the report (or the `/mcp reconnect|toggle` completion) of the
-  // session that replaced it — including when the user comes BACK to A (a
-  // promise of the old binding generation is still old), and a reconnect or
-  // toggle completing after a switch must neither refresh nor toast for the
-  // new session.
+  // session that replaced it, also when the user comes back to A (a promise
+  // of the old binding generation is still old). A reconnect or toggle
+  // completing after a switch must neither refresh nor toast for the new
+  // session.
   interface Row { name: string; status: string; toolCount?: number }
   const rows = (names: string[]): Row[] => names.map(name => ({ name, status: 'connected', toolCount: 1 }))
   const probe = () => {
@@ -647,9 +646,9 @@ try {
     check('a delayed status of the replaced session does not pollute the completion', JSON.stringify(serversOf()) === JSON.stringify(['beta-server']), serversOf().join(','))
     check('… nor the report the next /mcp reads', mcpChannel.mcpStatus().some(line => line.includes('beta-server')) && !mcpChannel.mcpStatus().join('\n').includes('alpha-stale-server'), mcpChannel.mcpStatus().join('\n'))
 
-    // Back on A (a NEW binding generation): the promise parked by the FIRST
-    // A binding is old even though the very same session object is bound
-    // again — only the binding generation tells those two A bindings apart.
+    // Back on A (a new binding generation): the promise parked by the first
+    // A binding is old even though the same session object is bound again;
+    // only the binding generation tells the two A bindings apart.
     A.state.auto = true; A.state.servers = rows(['alpha-fresh'])
     check('resume lands back on A', (await mcpChannel.resumeTo(sessionA.ref.sessionId)).ok === true)
     await settled(() => serversOf().includes('alpha-fresh'))
@@ -677,11 +676,11 @@ try {
   }
 }
 
-// ── bare /effort answers honestly on 0/1-tier routes ────────────────
+// ── bare /effort explains itself on 0/1-tier routes ─────────────────
 {
   // The Chat slider assumes listEfforts already said why it cannot open
-  // (Chat.tsx returns silently for <= 1 tiers). That contract holds for the
-  // DSH specialist today; every other backend needs the same honesty here.
+  // (Chat.tsx returns silently for <= 1 tiers). The DSH specialist does
+  // that, and every other backend has to as well.
   const empty = fakeSession('d1d1d1d1-d1d1-41d1-81d1-d1d1d1d1d1d1', {
     effort: { levels: () => [], current: () => undefined, set: () => Promise.resolve() },
   })
@@ -700,12 +699,12 @@ try {
   } finally { singleChannel.releaseContributions() }
 }
 // ── backend-native permission modes (capabilities.modes) ────────────
-// /permission generalized over the typed `modes` capability: the channel
-// exposes the roster (listModes) and the switch (setMode), the command
-// surface offers /permission exactly when the session declares modes, and
-// Tab completion lists the mode ids with the current one tagged. A backend
-// without modes keeps today's behavior: no command, no completion, and the
-// passive roster read stays silent (an empty list IS the answer).
+// /permission over the typed `modes` capability: the channel exposes the
+// roster (listModes) and the switch (setMode), the command surface offers
+// /permission exactly when the session declares modes, and Tab completion
+// lists the mode ids with the current one tagged. A backend without modes
+// gets no command and no completion, and the passive roster read stays
+// silent (an empty list is the answer).
 {
   const sets: string[] = []
   let current = 'acceptEdits'

@@ -1,19 +1,16 @@
 /**
  * Projection golden pipeline shared by scripts/capture-projection-golden.ts
- * (writes) and scripts/verify-projection-golden.ts (compares) — the
- * equivalence anchor of docs/agent-backend-design.md §6.4.
+ * (writes) and scripts/verify-projection-golden.ts (compares).
  *
  * Each fixture under scripts/fixtures/dsh/ runs through the DSH translator
  * (`createDshTranslator`, src/dsh-adapter/backend/translate.ts) feeding the
- * shared projector (`createChannelProjection`, src/channel/projection.ts) —
- * the pipeline the channel uses — twice:
+ * shared projector (`createChannelProjection`, src/channel/projection.ts),
+ * the same pipeline the channel uses, twice:
  *   - replay: `apply(translateReplay(log), { replay: true })`, then every
- *     frame through `translateFrame`, then `settleStreaming()` — what
+ *     frame through `translateFrame`, then `settleStreaming()`: what
  *     /resume, rewind and a reattaching client produce;
  *   - live: `translateEvent` per durable event in order, then the same frames
- *     and settle — what an attached client accumulates.
- * The goldens were captured in Phase 0 from the single pre-split DSH reducer;
- * Phase 1 must reproduce them byte-for-byte.
+ *     and settle: what an attached client accumulates.
  * The golden stores the replay snapshot in full and documents every place the
  * live snapshot differs (`liveRows` / `liveState` / `liveDiff`), each with the
  * reason it is legitimate; an unexplained difference fails both scripts. It
@@ -21,9 +18,10 @@
  * behaviour (spinner phases, when a thinking row folds) is pinned too.
  *
  * Determinism: the language is pinned to zh, debug logging is off, and
- * `Date.now` is replaced BEFORE the projection modules load by a clock that
- * starts at a fixed instant for every run and advances 1ms per call, so
- * `startedAt`/`durationMs`/`turnStart` are stable. Event and frame times come
+ * `Date.now` is replaced by a clock that starts at a fixed instant for every
+ * run and advances 1ms per call, so `startedAt`/`durationMs`/`turnStart` are
+ * stable. The swap has to happen before the projection modules load, hence
+ * the dynamic imports below. Event and frame times come
  * from the fixtures, so TPS and peak/idle cost buckets are stable too.
  * Dependencies are stubs without Cordis: no tools registry (cards keep raw
  * text), no attachments, no IDE selections; notify, jobs, context-warning
@@ -261,7 +259,7 @@ export function valueAt(root: unknown, path: string): unknown {
 
 export interface GoldenBuild {
   readonly golden: JsonValue
-  /** Live differences with no legitimate reason — a capture must not bless them. */
+  /** Live differences with no legitimate reason; a capture must not bless them. */
   readonly unexplained: readonly string[]
 }
 

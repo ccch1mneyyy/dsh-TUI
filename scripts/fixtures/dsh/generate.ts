@@ -1,12 +1,13 @@
 /**
- * Deterministic generator for the DSH projection fixtures — the equivalence
- * anchor of docs/agent-backend-design.md §6.4. Every `<name>.jsonl` holds one
- * durable `SessionEvent` per line (the persisted log a resume replays); the
- * optional `<name>.frames.jsonl` holds the transient `agent/assistant-stream`
- * frames a client receives AFTER that log (an in-flight attempt), one
+ * Deterministic generator for the DSH projection fixtures the projection
+ * goldens replay. Every `<name>.jsonl` holds one durable `SessionEvent` per
+ * line (the persisted log a resume replays); the optional
+ * `<name>.frames.jsonl` holds the transient `agent/assistant-stream` frames a
+ * client receives after that log (an in-flight attempt), one
  * `AssistantStreamFrame` per line.
  *
- * Together the fixtures cover every DSH event family of design §6.2. Shapes
+ * Together the fixtures cover every DSH event family the translator
+ * (src/dsh-adapter/backend/translate.ts) handles. Shapes
  * follow the installed declarations (`@deepseek-ai/dsh-session` SessionEventMap,
  * `@deepseek-ai/dsh-llm` messages/streams, `@deepseek-ai/dsh-agent`
  * AssistantStreamFrame, plugin augmentations for todo/write, agent-preset/
