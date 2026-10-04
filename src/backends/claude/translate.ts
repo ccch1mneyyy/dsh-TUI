@@ -21,6 +21,7 @@ import type { AgentEvent, AgentEventOf, AgentEventType, ContentBlockView, ImageR
 import type { TodoPanelItem } from '../../adapter/ports/channel-view.js'
 import { t } from '../../i18n.js'
 import { claudeToolRole, presentClaudeToolCall, presentClaudeToolResult } from './tools.js'
+import { parseSendMessageInput, sendMessageCallView, sendMessageResultState, sendMessageResultView } from './send-message.js'
 
 /** How confirmed user inputs become user rows. */
 export type ClaudeUserRows =
@@ -171,6 +172,10 @@ export function claudeEmits(type: AgentEventType): boolean {
     case 'rate-limit':
     // The session's `/color` (prefs-backed, session.ts).
     case 'session.color':
+      return true
+    // The SendMessage relay observation (agent-team §5.4) — emitted by this
+    // translator as the call streams and again when its result settles.
+    case 'agent.message':
       return true
     // Emitted by the session's permission bridge (permissions.ts), not by
     // this translator: the prompts arrive through `canUseTool`.
@@ -917,6 +922,12 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           ...(presentation === undefined ? {} : { presentation }),
         })
         if (claudeToolRole(name) === 'subagent') out.push(delegation(callId, block.input))
+        // agent-team §5.4: a SendMessage the SUBAGENT issued observes as a
+        // relay from that lane (the delegating call id names the sender).
+        if (name === 'SendMessage') {
+          const parsed = parseSendMessageInput(block.input)
+          if (parsed !== undefined) out.push({ type: 'agent.message', message: sendMessageCallView({ callId, lane, input: parsed, observedAt: now() }) })
+        }
       }
       return out
     }
@@ -950,6 +961,12 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           ...(presentation === undefined ? {} : { presentation }),
           parentCallId: lane,
         })
+        // agent-team §5.4: settle the lane's SendMessage observation from
+        // its result — an explicit error is a refusal, an unrecognized
+        // result stays 'unknown', never a guessed delivery.
+        if (call?.name === 'SendMessage') {
+          out.push({ type: 'agent.message', message: sendMessageResultView({ callId, observedAt: now(), state: sendMessageResultState({ isError, structured: undefined }) }) })
+        }
         // A background command a subagent started names its output file in
         // its acknowledgement too.
         const backgroundTask = str(structured?.backgroundTaskId)
@@ -1018,6 +1035,12 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
             ...(presentation === undefined ? {} : { presentation }),
           })
           if (claudeToolRole(name) === 'subagent') out.push(delegation(callId, input))
+          // agent-team §5.4: the PARENT's own SendMessage observes as a relay
+          // from the parent (no from id — the sender is the session itself).
+          if (name === 'SendMessage') {
+            const parsed = parseSendMessageInput(input)
+            if (parsed !== undefined) out.push({ type: 'agent.message', message: sendMessageCallView({ callId, input: parsed, observedAt: now() }) })
+          }
           if (claudeToolRole(name) === 'todo') {
             if (name === 'TodoWrite') {
               const todos = arr(rec(input)?.todos).flatMap((item): TodoPanelItem[] => {
@@ -1145,6 +1168,12 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           ...(structured === undefined ? {} : { structured }),
           ...(presentation === undefined ? {} : { presentation }),
         })
+        // agent-team §5.4: settle the parent's SendMessage observation from
+        // its result — only an explicit structured field or an error marks
+        // more than 'unknown'; a bare success proves nothing.
+        if (call?.name === 'SendMessage') {
+          out.push({ type: 'agent.message', message: sendMessageResultView({ callId, observedAt: now(), state: sendMessageResultState({ isError, structured }) }) })
+        }
         // Every settled main-lane result is one tool done this turn (the
         // working line's toolCount; plan-mode tools continue'd above).
         toolResults += 1

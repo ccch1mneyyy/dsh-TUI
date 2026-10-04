@@ -743,6 +743,14 @@ const GROUPS = {
 // 层级信号（缺席即推断 unknown，真实结束仍覆盖）、resume 回放子转录内容与终态推断，
 // 以及 /agents、仪表盘与详情场景的无头渲染。
     ["verify-claude-subagents", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-subagents.ts']],
+// agent-team 通道层回归（设计 agent-team-full §3/§5/§6/§7 通道条目）：统一
+// 代理消息领域模型（via/state 词汇、单调 fold、relay 源形状——普通 user 文本
+// 绝不猜成 relay）、DSH 子代理投影的 durable relay/直发 prompt 回执
+// （RemoteError 稳定映射、one-shot fail-closed、listChildren 只列 continuable）、
+// Claude SendMessage 观察（call=issued、裸成功=unknown、明确结构化字段才
+// delivered/held）、通道核的父中介提交（信封走常规 FIFO 固定 followup、
+// 无能力不渲染）。
+    ["verify-agent-team-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-team-channel.ts']],
 // Claude 后台任务（假 SDK + 录制 fixture）：后台 Bash 生命周期（任务卡、确认文本里的
 // 输出文件、状态栏 chip、一次落定提示）、前台 Bash 只有工具卡、tasks.snapshot 的
 // REPLACE 语义、kill → stopTask、用户中断不停任务；输出尾部只读 CLI 报告的路径并校验
@@ -982,6 +990,12 @@ const GROUPS = {
 // 分代（含上一 epoch 迟到 end 不得错杀）、resume 日志 bootstrap（历史行
 // 不进转录）、会话绑定延迟愈合与 peer 会话不污染。
     ["verify-subagent-panel-sync", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-panel-sync.tsx']],
+// 主屏只读 Agent View / 子代理消息 composer / 代理↔代理消息流（design
+// agent-team-full §7 UI 条目）：三入口来源栈与 Esc 分层、父 rows/草稿往返
+// 不变、无 history 回退 tail+范围标注（不自称 history）、composer queue/steer
+// 与失败保草稿、无 name/重名/无能力降级、状态词表只认通道给的、未知关系
+// 不画箭头、28/40 列顶栏不溢出、Detail Messages 页与 Dashboard 摘要行。
+    ["verify-agent-view-ui", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-view-ui.tsx']],
 // 子进程 stderr 接管回归（issue #17）：inherit 的 MCP 子进程 stderr
 // 不再裸写终端破坏 alt-screen，输出去重聚合为受控通知。
     ["verify-child-stderr", ['node', '--import', 'tsx/esm', 'scripts/verify-child-stderr.tsx']],

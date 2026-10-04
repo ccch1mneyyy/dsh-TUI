@@ -1,11 +1,24 @@
 import React from 'react'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize } from '../ui.js'
 import type { SubagentOutputLine, SubagentState } from '../dsh-adapter/subagents.js'
-import type { SubagentTranscriptView, ToolRow } from '../adapter/ports/channel-view.js'
+import type { SubagentTranscriptView } from '../adapter/ports/channel-view.js'
 import type { SubagentTranscriptWindow } from '../agent/capabilities.js'
-import type { AgentEvent } from '../agent/events.js'
-import { ARGS_PREVIEW_LIMIT, preview, RESULT_PREVIEW_LIMIT } from '../channel/transcript.js'
-import { AssistantTextLeafRow, ThinkingLeafRow, ToolLeafRow } from './messages/TranscriptLeaves.js'
+import { AgentMessageLeafRow, AssistantTextLeafRow, ThinkingLeafRow, ToolLeafRow } from './messages/TranscriptLeaves.js'
+import { AgentMessageFlowRow } from './messages/AgentMessageFlow.js'
+import { AgentMessageComposer } from './AgentMessageComposer.js'
+import type { AgentComposeTarget, AgentMessageControl, AgentMessageView } from './messages/agentTeam.js'
+import { subagentDetailMemory } from './subagentDetailMemory.js'
+import {
+  foldTranscriptLeaves,
+  mergeLiveWindow,
+  OUTPUT_WINDOW_CAP,
+  prependOlderLeaves,
+  TRANSCRIPT_OLDER_CHUNK,
+  uniqueRenderKeys,
+  type LiveLeaf,
+  type TranscriptLeaf,
+  type TranscriptState,
+} from './messages/subagentTranscript.js'
 import { t } from '../i18n.js'
 import { Divider } from './design-system/Divider.js'
 import { ExitButton, isPanelPlainReturn } from './SubagentDashboard.js'
@@ -42,7 +55,7 @@ function statusGlyph(status: SubagentState['status']): { glyph: string; color: k
 
 const PAGES_WITHOUT_TRANSCRIPT = ['summary', 'output', 'tools'] as const
 const PAGES_WITH_TRANSCRIPT = ['summary', 'output', 'transcript', 'tools'] as const
-type DetailPage = (typeof PAGES_WITH_TRANSCRIPT)[number]
+type DetailPage = (typeof PAGES_WITH_TRANSCRIPT)[number] | 'messages'
 
 /** One label/value row of the summary stats card. */
 function StatRow({ label, children }: { label: string; children: React.ReactNode }): React.ReactNode {
@@ -162,197 +175,7 @@ function isActivityLine(text: string): boolean {
   return ACTIVITY_GLYPHS.includes(text.trimStart().slice(0, 1))
 }
 
-// ── the Agent-Transcript page (design agent-team-panels §2) ──────────────
-
-/** One folded leaf of the child's transcript: thinking (a real body, or
- *  the honest "body unavailable" marker a signature/count-only block
- *  degrades to), text and tool cards — the vocabulary the shared leaf
- *  renderers paint, so a child row reads exactly like a main one. */
-type TranscriptLeaf =
-  | { kind: 'thinking'; key: string; text: string }
-  | { kind: 'thinking-unavailable'; key: string; tokens: number | undefined }
-  | { kind: 'text'; key: string; text: string }
-  | { kind: 'tool'; key: string; tool: ToolRow }
-
-/** Presentations that never earn a duplicate card here either (the main
- *  projector's rule): a nested delegation renders as the subagent card, a
- *  todo write lives in the todo panel, a question in its dialog. */
-const TRANSCRIPT_SUPPRESSED_CARDS: ReadonlySet<string> = new Set(['subagent', 'todo', 'question'])
-
-/** Fold one history page's lane events into leaf rows (oldest first;
- *  `into` may already hold the older pages' rows). A tool result without
- *  its call is dropped — nothing to attach it to; consecutive blocks of
- *  one API message join (the store splits a message into per-block
- *  entries sharing the anchor). */
-function foldTranscriptLeaves(events: readonly AgentEvent[], into: TranscriptLeaf[]): void {
-  for (const event of events) {
-    if (event.type === 'tool.call') {
-      if (event.presentation !== undefined && TRANSCRIPT_SUPPRESSED_CARDS.has(event.presentation.card)) continue
-      into.push({ kind: 'tool', key: event.callId, tool: {
-        callId: event.callId,
-        name: event.name,
-        argsText: preview(event.argsJson, ARGS_PREVIEW_LIMIT),
-        argsFull: event.argsJson,
-        status: 'running',
-        callView: event.presentation as ToolRow['callView'],
-        startedAt: event.time,
-      } })
-      continue
-    }
-    if (event.type === 'tool.result') {
-      let row: Extract<TranscriptLeaf, { kind: 'tool' }> | undefined
-      for (let i = into.length - 1; i >= 0; i -= 1) {
-        const leaf = into[i]!
-        if (leaf.kind === 'tool' && leaf.tool.callId === event.callId) { row = leaf; break }
-      }
-      if (row === undefined) continue
-      const tool = row.tool
-      tool.durationMs = Math.max(0, event.time - tool.startedAt)
-      if (event.isError) {
-        tool.status = 'error'
-        tool.errorText = event.errorText ?? ''
-      } else {
-        tool.status = 'ok'
-        tool.resultText = event.text !== '' ? preview(event.text, RESULT_PREVIEW_LIMIT) : undefined
-        tool.resultFull = event.text !== '' ? event.text : undefined
-        tool.resultView = event.presentation as ToolRow['resultView']
-      }
-      continue
-    }
-    if (event.type === 'assistant.message') {
-      for (const block of event.blocks) {
-        if (block.type === 'reasoning') {
-          const last = into.at(-1)
-          if (last !== undefined && last.kind === 'thinking' && last.key === event.anchor) last.text = last.text === '' ? block.text ?? '' : `${last.text}\n${block.text ?? ''}`
-          else into.push({ kind: 'thinking', key: event.anchor, text: block.text ?? '' })
-          continue
-        }
-        if (block.type === 'reasoning-tokens' || block.type === 'reasoning-signature') {
-          into.push({ kind: 'thinking-unavailable', key: `${event.anchor}:ua`, tokens: block.type === 'reasoning-tokens' && Number.isFinite(Number(block.text)) ? Number(block.text) : undefined })
-          continue
-        }
-        if (block.type === 'text') {
-          const last = into.at(-1)
-          if (last !== undefined && last.kind === 'text' && last.key === event.anchor) last.text = `${last.text}\n${block.text ?? ''}`
-          else into.push({ kind: 'text', key: event.anchor, text: block.text ?? '' })
-        }
-      }
-    }
-  }
-}
-
-/** The transcript page's load state. `ready` keeps its rows while a newer
- *  page reloads (settlement) and while an older window prepends. */
-type TranscriptState =
-  | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'unavailable' }
-  | { status: 'ready'; agentId: string; leaves: TranscriptLeaf[]; parentAgentId: string | null; hasOlder: boolean; skippedFromStart: number; loadingOlder: boolean }
-
-/** One load-older window (messages; matches the backend's newest page). */
-const TRANSCRIPT_OLDER_CHUNK = 400
-
-/** The retained output window both stores keep (channel/activity.ts and
- *  dsh-adapter/subagents.ts): a tail at this size is a WINDOW, and the
- *  output page says so when no transcript source can show the rest. */
-const OUTPUT_WINDOW_CAP = 160
-
-/** A live tail line as the transcript page renders it below the history. */
-type LiveLeaf = { kind: 'live'; line: SubagentOutputLine }
-/** Render keys must be unique per row: the store's block-per-entry split can
- *  legitimately repeat one anchor inside a page (a text, a tool and another
- *  text of ONE message), so a repeated key gets an ordinal suffix instead of
- *  colliding. A key collision is never a reason to drop a leaf (RV round 3).
- *  Pure — first occurrence keeps its key, later ones are copied. */
-function uniqueRenderKeys(leaves: readonly TranscriptLeaf[]): TranscriptLeaf[] {
-  const seen = new Map<string, number>()
-  return leaves.map(leaf => {
-    const n = seen.get(leaf.key) ?? 0
-    seen.set(leaf.key, n + 1)
-    return n === 0 ? leaf : { ...leaf, key: `${leaf.key}#${n + 1}` }
-  })
-}
-
-/** Prepend one older page's folded leaves (RV rounds 2+3). The store splits
- *  one API message into per-block entries sharing the anchor, so the ONLY
- *  place a block can be split across pages is the physical boundary: the
- *  older page's LAST leaf against the current list's FIRST leaf. Those two
- *  merge when they are the same key AND the same text/thinking kind (the
- *  fold already joined everything consecutive within a page; successive
- *  load-olders keep merging into the same head leaf). Every OTHER leaf
- *  keeps its own row in the older page's original order — a heterogeneous
- *  part under a taken key (a reasoning against a text of one message) is
- *  NEVER dropped, and a tool between two same-anchor text parts stays
- *  between them (no hoisting). Pure — no current leaf is mutated. */
-function prependOlderLeaves(fresh: readonly TranscriptLeaf[], current: readonly TranscriptLeaf[]): TranscriptLeaf[] {
-  let older: readonly TranscriptLeaf[] = fresh
-  let head = current
-  const last = fresh.at(-1)
-  const first = current[0]
-  if (
-    last !== undefined && first !== undefined &&
-    (first.kind === 'text' || first.kind === 'thinking') &&
-    first.kind === last.kind && first.key === last.key
-  ) {
-    // Same-kind boundary blocks of one message: one continuous block the
-    // page slice cut — the older text precedes, the order it was written in.
-    head = [{ ...first, text: `${last.text}\n${first.text}` }, ...current.slice(1)]
-    older = fresh.slice(0, -1)
-  }
-  return uniqueRenderKeys([...older, ...head])
-}
-
-const capLike = (line: string): string => (line.length > 400 ? `${line.slice(0, 400)}…` : line)
-
-/** Merge the channel's live window into the folded history: tool records
- *  pair by call id (live status/previews win while the disk has not
- *  recorded the result; a call the history never saw appends as live),
- *  and text/thinking tail lines the loaded history already paints are
- *  suppressed — a settled block's lines are identical on both sides — so
- *  history and live neither double a row nor drop a tail. */
-function mergeLiveWindow(leaves: readonly TranscriptLeaf[], subagent: SubagentState, hasHistory: boolean): (TranscriptLeaf | LiveLeaf)[] {
-  const rows: (TranscriptLeaf | LiveLeaf)[] = [...leaves]
-  for (const call of subagent.toolCalls) {
-    let leaf: Extract<TranscriptLeaf, { kind: 'tool' }> | undefined
-    for (let i = rows.length - 1; i >= 0; i -= 1) {
-      const row = rows[i]!
-      if (row.kind === 'tool' && row.tool.callId === call.id) { leaf = row; break }
-    }
-    if (leaf !== undefined) {
-      if (leaf.tool.status === 'running' && call.status !== 'running') {
-        leaf.tool.status = call.status === 'failed' ? 'error' : 'ok'
-        leaf.tool.errorText = call.error
-        leaf.tool.resultText = call.resultPreview
-        if (call.endedAt !== undefined) leaf.tool.durationMs = Math.max(0, call.endedAt - leaf.tool.startedAt)
-      }
-      continue
-    }
-    rows.push({ kind: 'tool', key: call.id ?? call.name, tool: {
-      callId: call.id ?? call.name,
-      name: call.name,
-      argsText: call.argsPreview ?? '',
-      status: call.status === 'failed' ? 'error' : call.status === 'running' ? 'running' : 'ok',
-      startedAt: call.startedAt,
-      ...(call.endedAt !== undefined ? { durationMs: Math.max(0, call.endedAt - call.startedAt) } : {}),
-      ...(call.resultPreview !== undefined ? { resultText: call.resultPreview } : {}),
-      ...(call.error !== undefined ? { errorText: call.error } : {}),
-    } })
-  }
-  if (!hasHistory) {
-    for (const line of subagent.outputEvents) rows.push({ kind: 'live', line })
-    return rows
-  }
-  const seen = new Set<string>()
-  for (const leaf of leaves) {
-    if (leaf.kind !== 'text' && leaf.kind !== 'thinking') continue
-    for (const line of leaf.text.split('\n')) if (line.trim() !== '') seen.add(capLike(line))
-  }
-  for (const line of subagent.outputEvents) {
-    if (line.text.trim() !== '' && seen.has(capLike(line.text))) continue
-    rows.push({ kind: 'live', line })
-  }
-  return rows
-}
+// ── the Agent-Transcript page helpers live in ./messages/subagentTranscript.ts ──
 
 export interface SubagentDetailSceneProps {
   subagent: SubagentState
@@ -363,6 +186,12 @@ export interface SubagentDetailSceneProps {
    *  plane (DSH): the Transcript page is not rendered and the output tail
    *  keeps its retained-range note (design agent-team-panels §2). */
   loadTranscript?: (agentId: string, window?: SubagentTranscriptWindow) => Promise<SubagentTranscriptView | null>
+  /** 主屏只读 Agent View（design agent-team-full §4.1 Detail 入口）。 */
+  onOpenView?: () => void
+  /** 代理↔代理消息流（§5.4）：非空时出现 Messages 页。 */
+  messages?: readonly AgentMessageView[]
+  /** 发送能力（§5.1）：存在才渲染 composer；独立草稿，不经父 PromptInput。 */
+  compose?: { readonly control: AgentMessageControl; readonly target: AgentComposeTarget }
   /** 'panel' 挂在侧栏宿主里（去外层 padding、键盘走 usePanelInput 分发器）；
    *  default（缺省）与整屏形态逐字节一致。 */
   variant?: 'default' | 'panel'
@@ -383,6 +212,9 @@ export function SubagentDetailScene({
   onBack,
   onInterrupt,
   loadTranscript,
+  onOpenView,
+  messages = [],
+  compose,
   variant = 'default',
   focused = true,
   visible = true,
@@ -390,11 +222,43 @@ export function SubagentDetailScene({
   const panelMode = variant === 'panel'
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows, columns } = useTerminalSize()
-  const [page, setPage] = React.useState<DetailPage>('summary')
+  // 跨挂载记忆（design §4.1「返回同一 Detail page 和 scroll」）：主屏 Agent
+  // View 盖过 Detail 时组件卸载，重挂载从记忆恢复页码与滚动位置。
+  const remembered = subagentDetailMemory.read(subagent.agentId)
+  const [page, setPage] = React.useState<DetailPage>(remembered === undefined ? 'summary' : remembered.page as DetailPage)
   // The page roster is capability-driven: without a transcript source the
   // page (and its tab) does not exist — a missing capability is not an error
-  // state to apologize for (design §2 graceful degradation).
-  const pages: readonly DetailPage[] = loadTranscript === undefined ? PAGES_WITHOUT_TRANSCRIPT : PAGES_WITH_TRANSCRIPT
+  // state to apologize for (design §2 graceful degradation). The Messages
+  // page rides the same rule on the agent-message feed (§5.4).
+  const pages: readonly DetailPage[] = [
+    ...(loadTranscript === undefined ? PAGES_WITHOUT_TRANSCRIPT : PAGES_WITH_TRANSCRIPT),
+    ...(messages.length > 0 ? (['messages'] as const) : []),
+  ]
+  const rememberedPageValid = pages.includes(page)
+  const activePage: DetailPage = rememberedPageValid ? page : pages[0]!
+  const setPageSafe = (next: DetailPage): void => { setPage(pages.includes(next) ? next : pages[0]!) }
+  // 记忆只在主屏 Agent View 往返间生效：打开视图时置位，卸载时据位决定
+  // 保存（page+scroll）还是清除（常规返回 Dashboard = 全新一次浏览）。
+  const activePageRef = React.useRef(activePage)
+  activePageRef.current = activePage
+  const viewOpenedRef = React.useRef(false)
+  const openMainView = (): void => {
+    if (onOpenView === undefined) return
+    viewOpenedRef.current = true
+    onOpenView()
+  }
+  React.useEffect(() => {
+    if (remembered !== undefined && remembered.scrollTop > 0) scrollRef.current?.scrollTo?.(remembered.scrollTop)
+    return () => {
+      if (viewOpenedRef.current) {
+        const top = scrollRef.current?.getScrollTop?.() ?? 0
+        subagentDetailMemory.save(subagent.agentId, { page: activePageRef.current, scrollTop: top })
+      } else {
+        subagentDetailMemory.clear(subagent.agentId)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- save-on-unmount only
+  }, [])
 
   const isRunning = subagent.status === 'running' || subagent.status === 'starting'
   // Only a live run ticks; discovered history (`unknown`) shows no duration.
@@ -407,7 +271,7 @@ export function SubagentDetailScene({
   // report → the locally kept fallback.
   const toolsCount = subagent.reportedToolUses ?? subagent.toolCalls.length
   const shownDuration = subagent.reportedDurationMs ?? elapsed
-  const pageIndex = pages.indexOf(page)
+  const pageIndex = pages.indexOf(activePage)
 
   /** Folded reasoning runs (the transcript's thinking grammar). Enter flips
    *  every run at once so one key stays predictable across thought steps. */
@@ -438,9 +302,12 @@ export function SubagentDetailScene({
   // settlement) — not on a churning identity.
   const loaderRef = React.useRef(loadTranscript)
   loaderRef.current = loadTranscript
+  // 消息流按 observedAt 与历史事件交错进转录页（§5.4 共用分页）。
+  const messagesRef = React.useRef(messages)
+  messagesRef.current = messages
   const transcriptAgent = subagent.agentId
   React.useEffect(() => {
-    if (page !== 'transcript' || loaderRef.current === undefined) return
+    if (activePage !== 'transcript' || loaderRef.current === undefined) return
     const load = loaderRef.current
     let alive = true
     setExpandedLeaf(null)
@@ -449,7 +316,7 @@ export function SubagentDetailScene({
       if (!alive) return
       if (loaded === null) { setTranscript({ status: 'unavailable' }); return }
       const leaves: TranscriptLeaf[] = []
-      foldTranscriptLeaves(loaded.events, leaves)
+      foldTranscriptLeaves(loaded.events, leaves, messagesRef.current)
       // The initial page can itself repeat one anchor (text, tool, text of
       // one message): its rows carry unique render keys from the start.
       setTranscript({ status: 'ready', agentId: transcriptAgent, leaves: uniqueRenderKeys(leaves), parentAgentId: loaded.parentAgentId, hasOlder: loaded.hasOlder, skippedFromStart: loaded.skippedFromStart, loadingOlder: false })
@@ -468,7 +335,7 @@ export function SubagentDetailScene({
       setTranscript(prev => {
         if (prev.status !== 'ready' || older === null) return older === null && prev.status === 'ready' ? { ...prev, loadingOlder: false } : prev
         const fresh: TranscriptLeaf[] = []
-        foldTranscriptLeaves(older.events, fresh)
+        foldTranscriptLeaves(older.events, fresh, messagesRef.current)
         return { ...prev, leaves: prependOlderLeaves(fresh, prev.leaves), hasOlder: older.hasOlder, skippedFromStart: older.skippedFromStart, loadingOlder: false }
       })
     }, () => {
@@ -480,7 +347,7 @@ export function SubagentDetailScene({
 
   const turnPage = (delta: number): void => {
     const next = (pageIndex + delta + pages.length) % pages.length
-    setPage(pages[next]!)
+    setPageSafe(pages[next]!)
     scrollRef.current?.scrollTo?.(0)
   }
 
@@ -493,19 +360,30 @@ export function SubagentDetailScene({
   // of sight. Re-anchor AFTER that frame: the first immediate lands behind the
   // renderer's own scheduling, and the second behind the re-pin frame it caused.
   React.useEffect(() => {
-    if (page !== 'output' && page !== 'transcript') return
+    if (page !== 'output' && activePage !== 'transcript') return
     const first = setImmediate(() => scrollRef.current?.scrollTo?.(0))
     return () => clearImmediate(first)
   }, [thinkingOpen, page])
 
   const outputLength = subagent.outputEvents.length
   React.useEffect(() => {
-    if ((page !== 'output' && page !== 'transcript') || !isRunning) return
+    if ((page !== 'output' && activePage !== 'transcript') || !isRunning) return
     scrollRef.current?.scrollToBottom()
   }, [page, isRunning, outputLength])
 
+  // composer（§5.1）：Detail 的本地独立草稿。Detail 的主手势是翻页阅读，
+  // composer 默认不聚焦（'i' 聚焦、Esc 让焦）；聚焦期 ←/→/Esc/Enter 归编辑器，
+  // ↑/↓ 仍滚动正文（§6.4 分层）。
+  const [composerFocused, setComposerFocused] = React.useState(false)
   useInput((input, key, event) => {
     if (panelMode) return
+    if (compose !== undefined && composerFocused) {
+      if (key.upArrow || key.downArrow) {
+        event.stopImmediatePropagation()
+        scrollRef.current?.scrollBy(key.upArrow ? -3 : 3)
+      }
+      return
+    }
     if (key.escape || (key.ctrl && input === 'c')) {
       event.stopImmediatePropagation()
       onBack()
@@ -536,12 +414,24 @@ export function SubagentDetailScene({
       onInterrupt(subagent.agentId)
       return
     }
+    // v = 主屏查看（design §4.1 Detail 入口）。
+    if (input.toLowerCase() === 'v' && onOpenView) {
+      event.stopImmediatePropagation()
+      openMainView()
+      return
+    }
+    // i = 聚焦 composer（发送输入的入口；Esc 让焦回来）。
+    if (input.toLowerCase() === 'i' && compose !== undefined) {
+      event.stopImmediatePropagation()
+      setComposerFocused(true)
+      return
+    }
     if (isPlainReturnInput(input, key)) {
       event.stopImmediatePropagation()
       // Enter folds the reasoning while the output or transcript page is
       // showing (the transcript's ctrl+o equivalent). Elsewhere it keeps its
       // "leave the detail" meaning, which Esc and the ✕ button still provide.
-      if ((page === 'output' && hasThinking) || (page === 'transcript' && hasTranscriptThinking)) setThinkingOpen(open => !open)
+      if ((activePage === 'output' && hasThinking) || (activePage === 'transcript' && hasTranscriptThinking)) setThinkingOpen(open => !open)
       else onBack()
       return
     }
@@ -553,6 +443,14 @@ export function SubagentDetailScene({
   // 的 Esc 回退是「焦点回聊天」）。其余未认的键返回 false，让 [/]、数字、
   // z、+/- 继续可用。
   const panelKeyHandler = (input: string, key: SidePanelKeyFlags): boolean => {
+    // composer 聚焦时让键（§6.4 Esc 分层：编辑器先吃；↑/↓ 仍滚动正文）。
+    if (compose !== undefined && composerFocused) {
+      if (key.upArrow === true || key.downArrow === true) {
+        scrollRef.current?.scrollBy(key.upArrow === true ? -3 : 3)
+        return true
+      }
+      return false
+    }
     if (key.escape === true || (key.ctrl === true && input === 'c')) {
       onBack()
       return true
@@ -577,9 +475,17 @@ export function SubagentDetailScene({
       onInterrupt(subagent.agentId)
       return true
     }
+    if (input.toLowerCase() === 'v' && onOpenView !== undefined) {
+      openMainView()
+      return true
+    }
+    if (input.toLowerCase() === 'i' && compose !== undefined) {
+      setComposerFocused(true)
+      return true
+    }
     if (isPanelPlainReturn(input, key)) {
       // Enter 与整屏形态同义：输出/转录页有思考块时先折叠它，别处退回 Dashboard。
-      if ((page === 'output' && hasThinking) || (page === 'transcript' && hasTranscriptThinking)) setThinkingOpen(open => !open)
+      if ((activePage === 'output' && hasThinking) || (activePage === 'transcript' && hasTranscriptThinking)) setThinkingOpen(open => !open)
       else onBack()
       return true
     }
@@ -588,11 +494,11 @@ export function SubagentDetailScene({
   usePanelInput(panelKeyHandler, { active: panelMode && focused && visible })
 
   const tab = (name: DetailPage, label: string): React.ReactNode => {
-    const active = page === name
+    const active = activePage === name
     return (
       <React.Fragment key={name}>
         <Box
-          onClick={() => setPage(name)}
+          onClick={() => setPageSafe(name)}
           backgroundColor={!active ? 'userMessageBackgroundHover' : undefined}
         >
           <Text color={active ? 'accent' : undefined} bold={active} inverse={active}>
@@ -621,6 +527,13 @@ export function SubagentDetailScene({
         {subagent.mode === 'continuable' && <Text color="warning">{t('subagent-mode-continuable')}</Text>}
         {subagent.mode === 'one-shot' && <Text dimColor>{t('subagent-mode-one-shot')}</Text>}
         <Box flexGrow={1} />
+        {/* 主屏查看（design §4.1 Detail 入口；'v' 键的鼠标等价）。字形位：
+            窄面板里身份行是恒定预算，长标签会把 Subagent: <名> 顶折行。 */}
+        {onOpenView !== undefined && (
+          <Box onClick={openMainView}>
+            <Text color="subtle">⤢</Text>
+          </Box>
+        )}
         {/* 可点击退出（Esc/Enter 的鼠标等价），hover 提亮 */}
         <ExitButton onClick={onBack} />
       </Box>
@@ -646,6 +559,8 @@ export function SubagentDetailScene({
         {/* 能力缺失即无此页签（DSH 无转录数据面，不硬凑） */}
         {loadTranscript !== undefined && tab('transcript', t('subagent-tab-transcript'))}
         {tab('tools', toolsCount > 0 ? `${t('subagent-tools')} ${toolsCount}` : t('subagent-tools'))}
+        {/* 消息流页：feed 非空才存在（§5.4，能力缺失即无此页签） */}
+        {messages.length > 0 && tab('messages', `${t('agent-messages-tab')} ${messages.length}`)}
         <Text dimColor>{`  ${pageIndex + 1}/${pages.length}`}</Text>
       </Box>
       <Text dimColor>{'─'.repeat(Math.max(20, Math.min(72, columns - 6)))}</Text>
@@ -656,12 +571,12 @@ export function SubagentDetailScene({
       {/* 无转录数据源的后端（DSH）只有这个有界 tail：如实标注保留范围，
           不假装完整（设计 §2 优雅降级）。置于分隔线上方——范围内标注必须
           第一眼可见，而不是被 160 行 tail 淹没在滚动区顶部。 */}
-      {page === 'output' && loadTranscript === undefined && subagent.outputEvents.length >= OUTPUT_WINDOW_CAP && (
+      {activePage === 'output' && loadTranscript === undefined && subagent.outputEvents.length >= OUTPUT_WINDOW_CAP && (
         <Text dimColor>{t('subagent-transcript-retained', { count: subagent.outputEvents.length })}</Text>
       )}
       <Box flexDirection="column" paddingX={1} maxHeight={panelMode ? Math.max(6, rows - 10) : Math.max(10, rows - 14)}>
         <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
-          {page === 'summary' && (
+          {activePage === 'summary' && (
             <Box flexDirection="column">
               {/* Stats card: two-column key/value grid (Kimi Code settled
                * summary style) above the final answer. */}
@@ -677,7 +592,7 @@ export function SubagentDetailScene({
               )}
             </Box>
           )}
-          {page === 'output' && (
+          {activePage === 'output' && (
             subagent.outputEvents.length === 0 && subagent.output.length === 0 ? (
               <Text dimColor>{t('subagent-no-output')}</Text>
             ) : (
@@ -750,7 +665,7 @@ export function SubagentDetailScene({
               </>
             )
           )}
-          {page === 'transcript' && loadTranscript !== undefined && (
+          {activePage === 'transcript' && loadTranscript !== undefined && (
             <Box flexDirection="column">
               {/* 范围与谱系：历史/只读标注；parent_agent_id 非空=真实父代理，
                   null 且嵌套=旧格式 metadata（按深度展示，不画孤儿）。 */}
@@ -817,6 +732,9 @@ export function SubagentDetailScene({
                       if (row.kind === 'text') {
                         return <AssistantTextLeafRow key={`text-${row.key}`} text={row.text} marginTopOnTurn={margin} />
                       }
+                      if (row.kind === 'agent-message') {
+                        return <AgentMessageLeafRow key={`am-${row.key}`} message={row.message} selfAgentId={subagent.agentId} marginTopOnTurn={margin} />
+                      }
                       return (
                         <ToolLeafRow
                           key={`tool-${row.key}`}
@@ -833,7 +751,7 @@ export function SubagentDetailScene({
               })()}
             </Box>
           )}
-          {page === 'tools' && (
+          {activePage === 'tools' && (
             subagent.toolCalls.length === 0 && subagent.reportedToolUses === undefined ? (
               <Text dimColor>{t('subagent-no-tools')}</Text>
             ) : (
@@ -873,15 +791,39 @@ export function SubagentDetailScene({
               </Box>
             )
           )}
+          {activePage === 'messages' && messages.length > 0 && (
+            <Box flexDirection="column">
+              {/* 消息流页（§5.4 Detail）：sender/target/正文/transport/state/sourceRef，
+                  newest last；状态只认通道给的事实。 */}
+              {messages.map((message, index) => (
+                <Box key={message.messageId} marginTop={index === 0 ? 0 : 1}>
+                  <AgentMessageFlowRow message={message} selfAgentId={subagent.agentId} />
+                </Box>
+              ))}
+            </Box>
+          )}
         </ScrollBox>
       </Box>
+
+      {/* composer（§5.1）：能力驱动渲染；Detail 的本地独立草稿，父输入框不被触碰。 */}
+      {compose !== undefined && (
+        <Box flexDirection="column" marginTop={1}>
+          <AgentMessageComposer
+            target={compose.target}
+            control={compose.control}
+            messages={messages}
+            focused={composerFocused}
+            onFocusChange={setComposerFocused}
+          />
+        </Box>
+      )}
 
       <Divider color="subtle" title="" />
       {/* Footer hint */}
       <Box marginTop={0} flexDirection="row">
         <Text dimColor>
           {`←/→ ${t('subagent-hint-page')} · ↑/↓ ${t('subagent-hint-scroll')}`
-            + (page === 'output' && hasThinking ? ` · ${t('subagent-hint-fold')}` : '')}
+            + (activePage === 'output' && hasThinking ? ` · ${t('subagent-hint-fold')}` : '')}
         </Text>
         {isRunning && onInterrupt && (
           <>
@@ -891,6 +833,7 @@ export function SubagentDetailScene({
             </Box>
           </>
         )}
+        {compose !== undefined && <Text dimColor>{' · i compose'}</Text>}
         <Text dimColor>{` · Esc ${t('subagent-hint-back')}`}</Text>
       </Box>
     </Box>

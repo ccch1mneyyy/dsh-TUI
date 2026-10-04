@@ -72,7 +72,7 @@ import { createRewindToAction } from './session-rewind.js'
 import { createSessionTreeReader } from './session-tree.js'
 import { createTreeRewindAction } from './session-tree-actions.js'
 import { createSkillCatalog } from './skill-catalog.js'
-import { createSubagentProjection } from './subagent-projection.js'
+import { createSubagentProjection, type SubagentsServiceView } from './subagent-projection.js'
 import { DSH_BACKEND_LABEL, type ChannelLaunchOptions } from './state.js'
 import { foldBack } from './transcript.js'
 import type { BackgroundResult, ResumeResult } from './types.js'
@@ -142,7 +142,11 @@ export function attachDshExtensions(
   const subagentProjection = createSubagentProjection(() => state, {
     rowIds,
     agent: () => binding.agent,
-    subagents: () => (ctx as { get(name: string): unknown }).get('subagents') as { interrupt?(target: string, reason: unknown): void } | undefined,
+    // The continuation service is an optional host plugin: the projection's
+    // message capability (direct prompt, catalog roster) exists exactly when
+    // the service and its methods do — never a fabricated capability.
+    subagents: () => (ctx as { get(name: string): unknown }).get('subagents') as SubagentsServiceView | undefined,
+    ownerSignal: owner.signal,
     lookupChild: id => {
       const agents = ctx.get('agents') as { get(id: string): { status?: string; session?: unknown; options?: { provider?: string; model?: string } } | undefined } | undefined
       return agents?.get(id)

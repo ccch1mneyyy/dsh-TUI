@@ -19,6 +19,8 @@ import { panelStore } from './PanelStore.js'
 import { useSidePanelChannel } from './SidePanelRuntimeContext.js'
 import { usePanelInput } from './usePanelInput.js'
 import { jobsFocusStore } from './jobsFocusStore.js'
+import { agentViewStore } from './agentViewStore.js'
+import { agentComposeTargetOf, type AgentComposeTarget } from '../messages/agentTeam.js'
 import type { PanelProps } from './types.js'
 
 /** todo：GoalTodoPanel 的 panel variant（同一份 store，不重写业务）。 */
@@ -128,6 +130,10 @@ function JobsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
 /** agents 面板的二级路由：dashboard ↔ detail。 */
 type AgentsRoute = 'dashboard' | { readonly detail: string }
 
+/** 路由的跨挂载记忆（design §4.1「Panel route 不丢」）：主屏 Agent View 盖过
+ *  Chat 时整棵主树（含本面板）卸载，重挂载从这里恢复最后路由。 */
+let lastAgentsRoute: AgentsRoute = 'dashboard'
+
 /**
  * agents：SubagentDashboard / SubagentDetailScene 的 panel variant——同一份
  * channel.subagents 与 subagentControl，布局与键盘按侧栏契约重排。二级路由
@@ -140,7 +146,24 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
   const channel = useSidePanelChannel()
   const subagents = channel.subagents
   const version = channel.version
-  const [route, setRoute] = React.useState<AgentsRoute>('dashboard')
+  const [route, setRoute] = React.useState<AgentsRoute>(lastAgentsRoute)
+  React.useEffect(() => { lastAgentsRoute = route }, [route])
+  // agent-team 能力面：通道的 subagentControl.message 成员（缺失 = 无此面，
+  // 不渲染 composer/Messages 数据）。
+  const messageControl = channel.subagentControl.message
+  const detailAgentId = typeof route === 'object' ? route.detail : null
+  const detailMessages = detailAgentId !== null && messageControl !== undefined
+    ? messageControl.messages().filter(m => m.from === detailAgentId || m.to === detailAgentId)
+    : []
+  const detailTarget: AgentComposeTarget | undefined = React.useMemo(() => {
+    if (detailAgentId === null) return undefined
+    const labels = new Map(subagents.map(s => [s.agentId, s.description]))
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- roster may lag the route
+    return labels.has(detailAgentId) ? agentComposeTargetOf(detailAgentId, labels) : undefined
+  }, [detailAgentId, subagents])
+  const detailCompose = detailTarget !== undefined && messageControl !== undefined
+    ? { control: messageControl, target: detailTarget }
+    : undefined
   // 已读基线：上次 visible=true 时见过的 failed id 集合。
   const seenFailedRef = React.useRef<ReadonlySet<string>>(new Set())
   React.useEffect(() => {
@@ -176,6 +199,9 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
         onBack={() => setRoute('dashboard')}
         onInterrupt={(id: string) => channel.subagentControl.interrupt(id)}
         {...(channel.subagentControl.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
+        onOpenView={() => agentViewStore.request(detail.agentId, 'agent-detail', true)}
+        messages={detailMessages}
+        {...(detailCompose === undefined ? {} : { compose: detailCompose })}
       />
     )
   }
@@ -186,6 +212,8 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
       focused={focused}
       visible={visible}
       onSelect={(id: string) => setRoute({ detail: id })}
+      onOpenView={(id: string) => agentViewStore.request(id, 'agents-dashboard', true)}
+      messages={messageControl?.messages()}
     />
   )
 }

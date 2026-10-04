@@ -87,7 +87,10 @@ export function dshEmits(type: AgentEventType): boolean {
     case 'custom':
       return true
     // Owned elsewhere on DSH (subagent/job specialists, approval and question
-    // stores, model/mode actions) or not a DSH concept.
+    // stores, model/mode actions) or not a DSH concept. The agent↔agent relay
+    // observation (agent-team §5.4) folds in the adapter's subagent projection
+    // straight from the durable session events — the translator emits none.
+    case 'agent.message':
     case 'session.ready':
     case 'session.reset':
     case 'tool.progress':
@@ -110,6 +113,7 @@ export function dshEmits(type: AgentEventType): boolean {
     case 'rate-limit':
       return false
     default: {
+      // Exhaustiveness: a new AgentEvent variant must be classified above.
       const unhandled: never = type
       return unhandled
     }

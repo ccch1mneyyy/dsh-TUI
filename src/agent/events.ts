@@ -13,7 +13,7 @@
  * Pure types plus no I/O: this module imports nothing but host-plane VIEW
  * types (the UI's own vocabulary), never a vendor package.
  */
-import type { ChannelGoal, TodoPanelItem, TranscriptImage } from '../adapter/ports/channel-view.js'
+import type { AgentMessageView, ChannelGoal, TodoPanelItem, TranscriptImage } from '../adapter/ports/channel-view.js'
 import type { ToolCallPresentation, ToolResultPresentation } from './presentation.js'
 
 /**
@@ -355,6 +355,16 @@ export type AgentEvent =
    * session model) and the reasoning effort when stated.
    */
   | { readonly type: 'request.header'; readonly model?: string; readonly effort?: string }
+  // ── agent-to-agent messages (design agent-team-full §5.4) ─────────────
+  /**
+   * An agent↔agent relay OBSERVATION: a Claude parent's SendMessage tool
+   * call/result, emitted by the backend translator as the call streams and
+   * again when its result settles (same `message.messageId`; the state only
+   * advances — an unrecognized result is 'unknown', never a guessed
+   * delivery). DSH relay sources fold adapter-side straight from the durable
+   * session events, so they emit no event here.
+   */
+  | { readonly type: 'agent.message'; readonly message: AgentMessageView }
   // ── notices ─────────────────────────────────────────────────────────
   /** A backend notice for the user. */
   | { readonly type: 'notice'; readonly level: 'info' | 'notice' | 'warning' | 'error'; readonly text: string; readonly key?: string; readonly callId?: string }

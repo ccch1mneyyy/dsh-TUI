@@ -610,7 +610,123 @@ export interface SubagentControl {
    *  not rendered for it — a degraded tail with its retained-range note is
    *  shown instead (design agent-team-panels §2). Null = no such child. */
   history?(agentId: string, window?: import('../../agent/capabilities.js').SubagentTranscriptWindow): Promise<SubagentTranscriptView | null>
+  /** The user→agent message capability (design agent-team-full §5): present
+   *  only when the bound session's backend actually serves one — the MEMBER's
+   *  absence is the signal the composer reads to not render. Backed by real
+   *  transports only: Claude's parent-mediated relay, DSH's direct
+   *  continuable prompt control plane. */
+  message?: AgentMessageControl
 }
+
+// ── agent-team unified message domain (design agent-team-full §3) ─────────
+
+/** How one message to an agent travelled (agent-team §3). The transport is a
+ *  FACT the backend states, never a guess:
+ *  'claude-parent-mediated' — the parent model relays through its own
+ *  SendMessage tool (no public child Query send exists);
+ *  'dsh-direct-continuable' — the human prompt control plane
+ *  (ctx.subagents.prompt) straight into a direct continuable child's inbox,
+ *  through the continuation manager;
+ *  'dsh-agent-relay' — a model-authored relay between adjacent agents (the
+ *  DSH durable AgentMessageSource, form 'relay'). */
+export type AgentMessageVia = 'claude-parent-mediated' | 'dsh-direct-continuable' | 'dsh-agent-relay'
+
+/** Delivery state of one message (agent-team §3/§1.4). The fold is monotone:
+ *  a view only ever advances, 'unknown' is a legal TERMINAL (no delivery
+ *  fact was ever observable), and nothing may be claimed past 'queued'
+ *  without an explicit backend fact — an accepted inbox is 'queued', never
+ *  read or executed. */
+export type AgentMessageState = 'issued' | 'queued' | 'delivered' | 'held' | 'refused' | 'expired' | 'unknown'
+
+/** Neutral identity of one agent in a team (agent-team §3): the stable id
+ *  its backend addresses it by (a Claude task/call id, a DSH durable child
+ *  session id) plus the presentation facts that are actually known. */
+export interface AgentIdentity {
+  readonly agentId: string
+  readonly parentAgentId?: string
+  readonly sessionId?: string
+  /** A stable name the parent can address the child by. Absent = no name
+   *  addressing: disambiguate by id or hide the submit affordance
+   *  (agent-team §2.2). */
+  readonly name?: string
+  /** Creation label (the delegation's description). */
+  readonly label?: string
+  readonly mode?: 'one-shot' | 'continuable' | 'unknown'
+  readonly status?: SubagentStatus
+}
+
+/** One observed or submitted message to an agent (agent-team §3). */
+export interface AgentMessageView {
+  /** The durable inbox/session message id of the accepted message — NEVER
+   *  the local submission id (that is intentId; the two cannot be mixed).
+   *  Claude's SendMessage observation has no child inbox id: the parent tool
+   *  call id (durable in the parent transcript) names it. */
+  readonly messageId: string
+  /** The channel-minted submission id, present when this view originated
+   *  from a local composer submit (agent-team §5.2's AgentMessageIntent). */
+  readonly intentId?: string
+  /** Sender: an agent id / session id, the reserved 'user', or absent when
+   *  only the lane is known (a parent-lane observation renders as the
+   *  parent). */
+  readonly from?: string
+  /** Target: an agent id / session id, or the name the parent was asked to
+   *  address (Claude parent-mediated, before resolution). */
+  readonly to?: string
+  readonly via: AgentMessageVia
+  readonly text: string
+  readonly state: AgentMessageState
+  /** Back-reference to the fact this view came from: a parent tool call id,
+   *  a durable session seq, or a prompt receipt's message id. */
+  readonly sourceRef?: string
+  readonly observedAt: number
+  /** The parent session the observation rode; absent when unknown. */
+  readonly parentSessionId?: string
+}
+
+/** One composer submission to an agent (agent-team §5.1). */
+export interface AgentMessageSubmitInput {
+  /** Stable child id (the AgentIdentity the picker chose). */
+  readonly targetId: string
+  /** Display name, when the transport addresses by name (Claude). */
+  readonly targetName?: string
+  readonly text: string
+  /** Enter = 'queue'; Ctrl+Enter = 'steer' only where the control says so. */
+  readonly delivery: 'queue' | 'steer'
+  /** Caller cancellation before acceptance. */
+  readonly signal?: AbortSignal
+}
+
+/** The stable outcome of one submission. ok means the transport ACCEPTED the
+ *  message (state names how far the fact goes — never past 'queued' without
+ *  a backend fact); the failure reasons are the stable vocabulary the
+ *  notices render (no raw provider error text required). */
+export type AgentMessageSubmitResult =
+  | { readonly ok: true; readonly intentId: string; readonly messageId?: string; readonly state: AgentMessageState }
+  | { readonly ok: false; readonly reason: 'not-resumable' | 'unauthorized' | 'delivery-unavailable' | 'parent-unavailable' | 'target-ambiguous' | 'unavailable' | 'cancelled' | 'failed'; readonly message?: string }
+
+/** The user→agent message capability a channel may serve (agent-team §5).
+ *  Present only when the backend's transport is real; the composer is not
+ *  rendered otherwise (no capability, no UI). */
+export interface AgentMessageControl {
+  readonly via: AgentMessageVia
+  /** Whether steer delivery (Ctrl+Enter) is a real capability here
+   *  (agent-team §6.3: DSH direct yes; Claude parent-mediated is always
+   *  followup and never interrupts the parent turn). */
+  readonly steer: boolean
+  /** Addressable children, in roster order. Only children the transport may
+   *  actually take (DSH: direct continuable catalog entries; Claude: the
+   *  known subagent roster) are listed. Rejects when the backend's roster
+   *  read fails — a failed read is never an empty roster. */
+  listTargets(): Promise<readonly AgentIdentity[]>
+  /** Submit one composer text. Resolves once the transport accepted it or
+   *  failed with a stable reason (the draft stays with the caller). */
+  submit(input: AgentMessageSubmitInput): Promise<AgentMessageSubmitResult>
+  /** Observed relay facts of this session, oldest first (from → to
+   *  summaries, the Messages page). Only messages with a real source: a DSH
+   *  AgentMessageSource relay or a Claude SendMessage observation. */
+  messages(): readonly AgentMessageView[]
+}
+
 
 /** One tracked job as the UI renders it. */
 export interface BackgroundJobState {
