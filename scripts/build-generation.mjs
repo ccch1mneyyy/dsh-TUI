@@ -116,6 +116,7 @@ if (has("--skip-compile")) {
   })
   if (compiled.status !== 0) {
     rmSync(stagingDir, { recursive: true, force: true })
+    rmSync(buildScratch, { recursive: true, force: true })
     throw new Error("tsc failed for the staging build:\n" + (compiled.stdout || "") + (compiled.stderr || ""))
   }
   rmSync(buildScratch, { recursive: true, force: true })
