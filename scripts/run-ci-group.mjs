@@ -867,6 +867,16 @@ const GROUPS = {
 // delivered/held）、通道核的父中介提交（信封走常规 FIFO 固定 followup、
 // 无能力不渲染）。
     ["verify-agent-team-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-team-channel.ts']],
+// DSH 子会话转录页回归（设计 dsh-child-transcript）：SubagentControl.history 的第二个实现。
+// 只经公开 sessionPersistence.open(read)+handle.read(offset,length) 读 direct child 的
+// durable 日志（禁 deprecated Session snapshot、禁直读 JSONL）；listChildren 验权、
+// 活跃 child 先 ctx.sessions.flush 持久屏障（失败降级为已落盘前缀+live tail）、
+// seeded child 从精确 inherited cut 起页（缺 cut fail-closed）、stat 无 eventCount 时
+// 有界单事件探尾（禁无界全读后 slice，50k+ 日志预算断言）、每次调用一次性 translator
+// 只出三种 leaf 事件并强制 parentCallId、binding generation 栅栏、每路 finally close 恰一次；
+// 共享 fold/prepend/mergeLiveWindow 去重与 overlap；真实 channel 下能力点亮
+// （有 persistence 才有 history 方法，无则无页签——UI 零分叉）。
+    ["verify-dsh-child-transcript", ['node', '--import', 'tsx/esm', 'scripts/verify-dsh-child-transcript.ts']],
 // Claude 后台任务（假 SDK + 录制 fixture）：后台 Bash 生命周期（任务卡、确认文本里的
 // 输出文件、状态栏 chip、一次落定提示）、前台 Bash 只有工具卡、tasks.snapshot 的
 // REPLACE 语义、kill → stopTask、用户中断不停任务；输出尾部只读 CLI 报告的路径并校验

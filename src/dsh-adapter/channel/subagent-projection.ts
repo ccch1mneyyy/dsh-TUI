@@ -3,6 +3,7 @@ import type { Agent, AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
 import { agentMessageFailureOf, agentMessageTextOf, agentRelaySourceOf, foldAgentMessage } from '../../agent/messages.js'
 import { SubagentActivityStore, type SubagentState } from '../subagents.js'
+import type { SubagentTranscriptPage, SubagentTranscriptWindow } from '../../agent/capabilities.js'
 import type { AgentIdentity, AgentMessageControl, AgentMessageSubmitInput, AgentMessageSubmitResult, AgentMessageView } from '../../adapter/ports/channel-view.js'
 import type { ChannelState, ChatRow, SubagentControl, SubagentRow } from './types.js'
 import { isSubagentToolName } from './projection-helpers.js'
@@ -52,6 +53,13 @@ interface ProjectionDependencies {
    *  been accepted yet (agent-team §7 — an accepted child inbox belongs to
    *  the continuation manager from then on). */
   ownerSignal?: AbortSignal
+  /** The DSH child transcript source (design dsh-child-transcript), injected
+   *  only when the host composition serves session persistence: its presence
+   *  IS the `SubagentControl.history` capability — the shared transcript tab
+   *  renders exactly when it exists, with no backend-specific UI. The reader
+   *  re-captures parent identity, binding generation and child ownership on
+   *  every call, so a plain pass-through is fence-safe. */
+  readChildTranscript?: (agentId: string, window?: SubagentTranscriptWindow) => Promise<SubagentTranscriptPage | null>
 }
 
 /**
@@ -146,6 +154,9 @@ export function createSubagentProjection(getState: () => ProjectionState, deps: 
     get pendingTaskDescriptions() { return active.pendingTaskDescriptions },
     control: {
       interrupt: (id: string) => active.control.interrupt(id),
+      // The shared transcript page source (design dsh-child-transcript): the
+      // capability exists exactly when the injected reader does.
+      ...(deps.readChildTranscript === undefined ? {} : { history: deps.readChildTranscript }),
       message: {
         via: 'dsh-direct-continuable',
         // The prompt control plane takes both deliveries natively; the

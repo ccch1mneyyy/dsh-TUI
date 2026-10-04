@@ -37,7 +37,7 @@ import { isCommandCompletionToken, LOCAL_COMMANDS } from '../../commands.js'
 import { touchSession } from '../../sessionHistory.js'
 import { DEFAULT_SESSION_MODES, resolveSessionModes } from '../../sessionModes.js'
 import { createDshSession } from '../backend/session.js'
-import { dshPricingWindow } from '../backend/translate.js'
+import { createDshTranslator, dshPricingWindow } from '../backend/translate.js'
 import { getHostMessageObserver, type TuiMessageObserverRuntime } from '../message-observer.js'
 import { createForeignBrowser } from '../migrate/browse.js'
 import type { JobsRuntime } from '../jobs.js'
@@ -74,6 +74,7 @@ import { createSessionTreeReader } from './session-tree.js'
 import { createTreeRewindAction } from './session-tree-actions.js'
 import { createSkillCatalog } from './skill-catalog.js'
 import { createSubagentProjection, type SubagentsServiceView } from './subagent-projection.js'
+import { readChildTranscriptPage } from './subagent-transcript.js'
 import { DSH_BACKEND_LABEL, type ChannelLaunchOptions } from './state.js'
 import { foldBack } from './transcript.js'
 import type { BackgroundResult, ResumeResult } from './types.js'
@@ -138,6 +139,37 @@ export function attachDshExtensions(
   let backgroundCurrentAction!: () => Promise<BackgroundResult>
   let agentView!: ReturnType<typeof createAgentViewProjection>
 
+  // The DSH child transcript source (design dsh-child-transcript): built
+  // only when the host composition serves session persistence at attach —
+  // its absence means NO history capability, so the shared transcript tab
+  // never renders for this session. Every dependency is re-resolved per call;
+  // the reader itself fences on the binding capture and closes its handle.
+  const lookupChild = (id: string): { status?: string; session?: unknown; options?: { provider?: string; model?: string } } | undefined => {
+    const agents = ctx.get('agents') as { get(id: string): { status?: string; session?: unknown; options?: { provider?: string; model?: string } } | undefined } | undefined
+    return agents?.get(id)
+  }
+  const childTranscript = ctx.get('sessionPersistence') === undefined ? undefined : readChildTranscriptPage.bind(null, {
+    capture: () => {
+      const captured = binding.capture()
+      return { sessionId: String(captured.agent.session.id), generation: captured.generation, session: captured.session }
+    },
+    isCurrent: capture => binding.isCurrent({ session: capture.session as never, agent: binding.agent, generation: capture.generation }),
+    subagents: () => (ctx as { get(name: string): unknown }).get('subagents') as SubagentsServiceView | undefined,
+    persistence: () => (ctx as { get(name: string): unknown }).get('sessionPersistence') as import('./subagent-transcript.js').ChildPersistenceSource | undefined,
+    sessionsStore: () => (ctx as { get(name: string): unknown }).get('sessions') as import('./subagent-transcript.js').ChildSessionsStore | undefined,
+    lookupChild,
+    // A THROWAWAY translator per call, mirroring backend/session.ts's own
+    // `history()`: the live translator's frame fence and open-call ledger
+    // stay untouched. The presenter scope is the parent agent — the child's
+    // own Agent is not loadable without resuming it (design 路径裁定), and a
+    // wrong-scope presenter only degrades a card to plain text.
+    createTranslator: () => createDshTranslator({
+      tools: () => ctx.get('tools') as import('./types.js').ToolsRegistryLike | undefined,
+      scope: () => binding.agent,
+      attachments: () => ctx.get('attachments'),
+    }),
+    ownerSignal: owner.signal,
+  })
   // Subagent projection owns the child store, transcript row identity and
   // stream batching. Transport subscriptions below only route scoped events.
   const subagentProjection = createSubagentProjection(() => state, {
@@ -148,10 +180,8 @@ export function attachDshExtensions(
     // the service and its methods do — never a fabricated capability.
     subagents: () => (ctx as { get(name: string): unknown }).get('subagents') as SubagentsServiceView | undefined,
     ownerSignal: owner.signal,
-    lookupChild: id => {
-      const agents = ctx.get('agents') as { get(id: string): { status?: string; session?: unknown; options?: { provider?: string; model?: string } } | undefined } | undefined
-      return agents?.get(id)
-    },
+    lookupChild,
+    ...(childTranscript === undefined ? {} : { readChildTranscript: childTranscript }),
   })
   owner.own(() => subagentProjection.dispose())
   // Job projection owns registry callbacks and transcript rows. The optional
