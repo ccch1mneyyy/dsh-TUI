@@ -385,6 +385,43 @@ export const getSidePanelPanels = sidePanelPanelsStore.get
 export const applySidePanelPanels = sidePanelPanelsStore.apply
 
 /**
+ * btw 线程上下文设置（设置 `dsh-tui.btw.*`）：追问携带的最近完成轮数
+ * 与总字符预算。clamp 规则与线程 store 的防御性钳制（sidePanel/btw/
+ * threads.ts 的 normalizeRecentTurnsLimit / selectContextTurns）一致——
+ * 两道闸门同规则，先到者生效；这里管 /settings 与 cordis.yml 的入口，
+ * store 侧兜住不经设置的直接调用。
+ */
+export const BTW_CONTEXT_TURNS_MIN = 1
+export const BTW_CONTEXT_TURNS_MAX = 8
+export const BTW_CONTEXT_TURNS_DEFAULT = 4
+
+/** 总预算下限护住单答派生（perAnswer = min(8k, budget/2)）：再小就只剩
+ *  当前问句本身，上下文功能名存实亡。 */
+export const BTW_CONTEXT_BUDGET_MIN = 1_000
+export const BTW_CONTEXT_BUDGET_MAX = 200_000
+export const BTW_CONTEXT_BUDGET_DEFAULT = 24_000
+
+export function normalizeBtwContextTurns(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return BTW_CONTEXT_TURNS_DEFAULT
+  return Math.min(BTW_CONTEXT_TURNS_MAX, Math.max(BTW_CONTEXT_TURNS_MIN, Math.round(value)))
+}
+
+export function normalizeBtwContextBudget(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return BTW_CONTEXT_BUDGET_DEFAULT
+  return Math.min(BTW_CONTEXT_BUDGET_MAX, Math.max(BTW_CONTEXT_BUDGET_MIN, Math.round(value)))
+}
+
+const btwContextTurnsStore = createLiveSetting<number>(BTW_CONTEXT_TURNS_DEFAULT, normalizeBtwContextTurns)
+export const subscribeBtwContextTurns = btwContextTurnsStore.subscribe
+export const getBtwContextTurns = btwContextTurnsStore.get
+export const applyBtwContextTurns = btwContextTurnsStore.apply
+
+const btwContextBudgetStore = createLiveSetting<number>(BTW_CONTEXT_BUDGET_DEFAULT, normalizeBtwContextBudget)
+export const subscribeBtwContextBudget = btwContextBudgetStore.subscribe
+export const getBtwContextBudget = btwContextBudgetStore.get
+export const applyBtwContextBudget = btwContextBudgetStore.apply
+
+/**
  * Companion 皮肤（设置 `dsh-tui.companion.skin`）：内置 'deepy'（默认，
  * assets/deepy 素材包）、'whaleGirl'（用户提供的鲸娘素材包，assets/
  * whaleGirl）与 'whale'（开屏像素鲸鱼同款分层动画）；插件

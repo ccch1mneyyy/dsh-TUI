@@ -9,7 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
-import { DEFAULT_COMPANION_SKIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { BTW_CONTEXT_BUDGET_DEFAULT, BTW_CONTEXT_TURNS_DEFAULT, DEFAULT_COMPANION_SKIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, normalizeBtwContextBudget, normalizeBtwContextTurns, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../components/splashFonts.js'
 import { editableConfig, type RuntimeConfig } from './compat/settings.js'
@@ -212,6 +212,16 @@ export interface Config {
      *  layered pixel whale). Unknown ids normalize to deepy. */
     skin?: string
   }
+  /** btw thread context (settings `dsh-tui.btw.*`): how much of the side
+   *  thread follows into the next ask. Members normalize (turns clamp
+   *  1-8, budget clamps 1k-200k), so junk cannot wedge the thread. */
+  btw?: {
+    /** Completed Q/A pairs carried into a follow-up ask, 1-8 (default 4). */
+    contextTurns?: number
+    /** Total character budget of that carried context (default 24000;
+     *  the per-answer cap derives internally as min(8k, budget/2)). */
+    contextBudget?: number
+  }
   /** Built-in action-shortcut overrides (`paste: 'alt+v'`), keyed by action
    *  id (see the keymap utility). Combos are `ctrl+`/`alt+`/`shift+` plus a
    *  key; several combos may be comma-separated. Unset actions keep their
@@ -344,6 +354,20 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
       value => normalizeCompanionSkin(value),
     ),
   }).default({ skin: DEFAULT_COMPANION_SKIN }),
+  // btw thread context: schema defaults + transforms (same shape as
+  // sidePanel above) so an unset cordis.yml block and junk values both
+  // resolve to the documented 4 turns / 24k chars before the stores see
+  // them (the store normalize remains the second, identical gate).
+  btw: Schema.object({
+    contextTurns: Schema.transform(
+      Schema.number().default(BTW_CONTEXT_TURNS_DEFAULT),
+      value => normalizeBtwContextTurns(value),
+    ),
+    contextBudget: Schema.transform(
+      Schema.number().default(BTW_CONTEXT_BUDGET_DEFAULT),
+      value => normalizeBtwContextBudget(value),
+    ),
+  }).default({ contextTurns: BTW_CONTEXT_TURNS_DEFAULT, contextBudget: BTW_CONTEXT_BUDGET_DEFAULT }),
   // One optional combo string per customizable action (no defaults: unset
   // keeps the built-in binding; see Config.shortcuts).
   shortcuts: Schema.object(

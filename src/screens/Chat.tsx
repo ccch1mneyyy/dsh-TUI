@@ -132,6 +132,7 @@ import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
 import { BtwPanelFallback } from '../components/BtwPanel.js'
 import { btwThreads } from '../components/sidePanel/btw/threads.js'
+import { getBtwContextBudget, getBtwContextTurns } from '../tuiDisplayPrefs.js'
 import { BtwThreadScene } from '../components/sidePanel/btw/BtwThreadScene.js'
 import { RecapPanel } from '../components/RecapPanel.js'
 import { isValidSessionColor, SESSION_COLOR_NAMES } from '../terminal-utils/sessionColors.js'
@@ -3951,7 +3952,7 @@ export function Chat({
           channel.notify(t('btw-usage'), { timeoutMs: 3000 })
           return true
         }
-        const btwResult = btwThreads.submit(String(channel.agentId), question, (q, options) => channel.sideQuestion(q, options))
+        const btwResult = btwThreads.submit(String(channel.agentId), question, (q, options) => channel.sideQuestion(q, options), { recentTurnsLimit: getBtwContextTurns(), contextBudget: getBtwContextBudget() })
         if (!btwResult.ok) {
           channel.notify(t('btw-thread-busy'), { color: 'warning', timeoutMs: 3000 })
           return true

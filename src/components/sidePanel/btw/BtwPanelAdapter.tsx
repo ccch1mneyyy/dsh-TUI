@@ -16,7 +16,8 @@ import { useSidePanelChannel } from '../SidePanelRuntimeContext.js'
 import { usePanelInput } from '../usePanelInput.js'
 import { truncateWidth } from '../../../trajectory/format.js'
 import { stringWidth } from '../../../ink/stringWidth.js'
-import { btwThreads, BTW_RECENT_TURNS_DEFAULT } from './threads.js'
+import { btwThreads } from './threads.js'
+import { getBtwContextBudget, getBtwContextTurns, subscribeBtwContextTurns } from '../../../tuiDisplayPrefs.js'
 import { BtwComposer, btwComposerKey, type BtwComposerState } from './BtwComposer.js'
 import { BtwThreadView } from './BtwThreadView.js'
 import type { PanelKeyHandler, PanelProps } from '../types.js'
@@ -24,6 +25,11 @@ import type { BtwTurn } from './threads.js'
 
 function useBtwThread(sessionId: string) {
   return React.useSyncExternalStore(btwThreads.subscribe, () => btwThreads.get(sessionId))
+}
+
+/** 提交时一次性读取线程上下文设置（dsh-tui.btw.*，live store）。 */
+function btwContextOptions(): { readonly recentTurnsLimit: number; readonly contextBudget: number } {
+  return { recentTurnsLimit: getBtwContextTurns(), contextBudget: getBtwContextBudget() }
 }
 
 export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps): React.ReactNode {
@@ -72,7 +78,7 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
   const submitDraft = React.useCallback(() => {
     const text = btwThreads.get(sessionId)?.draft ?? ''
     if (text.trim() === '') return
-    const result = btwThreads.submit(sessionId, text, (question, options) => channel.sideQuestion(question, options))
+    const result = btwThreads.submit(sessionId, text, (question, options) => channel.sideQuestion(question, options), btwContextOptions())
     if (!result.ok) {
       setNotice({
         text: t(result.reason === 'busy' || result.reason === 'congested' ? 'btw-thread-busy' : 'btw-thread-followup'),
@@ -124,7 +130,9 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
   // ── 头部：/btw + 首问标题（单行裁切）+ 新话题 + 上下文覆盖提示 ────────
   const title = thread !== undefined && thread.turns.length > 0 ? thread.turns[0]!.question : ''
   const newLabel = t('btw-thread-new')
-  const contextLabel = t('btw-thread-context-recent', { n: BTW_RECENT_TURNS_DEFAULT })
+  // 覆盖提示跟随 dsh-tui.btw.contextTurns 的活值（/settings 改完即换词）。
+  const contextTurns = React.useSyncExternalStore(subscribeBtwContextTurns, getBtwContextTurns)
+  const contextLabel = t('btw-thread-context-recent', { n: contextTurns })
   const budget = Math.max(6, width - 2)
   const titleRoom = budget - stringWidth(newLabel) - stringWidth(contextLabel) - 5
   const header = (

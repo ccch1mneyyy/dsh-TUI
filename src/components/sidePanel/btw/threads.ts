@@ -105,7 +105,9 @@ export function selectContextTurns(
 ): BtwContextSelection {
   const window = normalizeRecentTurnsLimit(limit)
   const total = budgets.total ?? BTW_CONTEXT_CHAR_BUDGET
-  const perAnswer = budgets.perAnswer ?? BTW_ANSWER_CHAR_BUDGET
+  // 单答预算内部派生（设置裁定：用户心智一个总量键就够）：默认 8k，
+  // 但永远不超过总量的一半——一个收紧的总量不该被单答上限架空。
+  const perAnswer = budgets.perAnswer ?? Math.min(BTW_ANSWER_CHAR_BUDGET, Math.floor(total / 2))
   const completed = turns.filter(turn => turn.phase === 'completed')
   if (completed.length === 0) return { included: [], omittedOlderCount: 0 }
   const recent = completed.slice(-window)
@@ -183,7 +185,12 @@ class BtwThreadStore {
    * sideQuery 调用），流式增量与落定都经代际/相位守卫写回。同线程
    * 在途时 busy 拒绝；全局并发超上限 congested 拒绝（都不隐式取消）。
    */
-  submit(sessionId: string, question: string, ask: BtwAskFacade, opts?: { readonly recentTurnsLimit?: number }): BtwSubmitResult {
+  submit(
+    sessionId: string,
+    question: string,
+    ask: BtwAskFacade,
+    opts?: { readonly recentTurnsLimit?: number; readonly contextBudget?: number },
+  ): BtwSubmitResult {
     const trimmed = question.trim()
     if (trimmed === '') return { ok: false, reason: 'empty' }
     const record = this.recordOf(sessionId)
@@ -197,7 +204,9 @@ class BtwThreadStore {
     }
     if (runningElsewhere >= BTW_MAX_CONCURRENT_ASKS) return { ok: false, reason: 'congested' }
 
-    const selection = selectContextTurns(record.turns, opts?.recentTurnsLimit)
+    const selection = selectContextTurns(record.turns, opts?.recentTurnsLimit, {
+      ...(opts?.contextBudget === undefined ? {} : { total: opts.contextBudget }),
+    })
     const seq = ++this.turnSeq
     const turn: BtwTurn = {
       turnId: `btw-${seq}`,

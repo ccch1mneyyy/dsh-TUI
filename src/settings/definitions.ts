@@ -16,6 +16,22 @@ import type { ShortcutActionId } from '../utils/keymap.js'
 export type SettingDefinition = Pick<TuiSettingsField, 'label' | 'descriptions' | 'hint' | 'hintDescriptions' | 'kind' | 'group' | 'options'>
 
 export const SETTING_DEFINITIONS = {
+  'btw.contextBudget': {
+    label: 'btw context budget',
+    descriptions: { zh: 'btw 上下文预算' },
+    group: 'side-panel',
+    hint: 'Total characters of recent Q/A pairs a /btw follow-up carries, 1000-200000 (default 24000). Whole older pairs drop first; the per-answer cap derives as min(8k, budget/2). Enable the btw panel via sidePanel.panels.',
+    hintDescriptions: { zh: '追问携带的最近问答总字符预算，1000-200000（默认 24000）。超出时从最旧的整组开始裁剪；单条答案上限内部派生为 min(8k, 预算/2)。btw 面板需在 sidePanel.panels 里启用。立即生效。' },
+    kind: 'number',
+  },
+  'btw.contextTurns': {
+    label: 'btw context turns',
+    descriptions: { zh: 'btw 上下文轮数' },
+    group: 'side-panel',
+    hint: 'Completed Q/A pairs a /btw follow-up explicitly carries, 1-8 (default 4). Pairs beyond the window are omitted from the ask (the thread and the panel still keep them). Enable the btw panel via sidePanel.panels.',
+    hintDescriptions: { zh: '追问显式携带的最近完成问答组数，1-8（默认 4）。窗口外的旧组不进请求（线程与面板仍保留全文）。btw 面板需在 sidePanel.panels 里启用。立即生效。' },
+    kind: 'number',
+  },
   'companion.skin': {
     label: 'Companion skin',
     descriptions: { zh: '宠物皮肤' },
