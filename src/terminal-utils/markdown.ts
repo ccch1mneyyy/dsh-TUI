@@ -75,11 +75,11 @@ export function stripPromptXMLTags(content: string): string {
 let markedInitialized = false
 
 /**
- * Configure the shared `marked` instance once. Strikethrough parsing is
- * disabled so that `~100` renders literally instead of as deleted text —
- * models use `~` far more often for "approximate" than for real
- * strikethrough. LaTeX math becomes `math`/`mathBlock` tokens (see
- * math.ts). Every lexer caller — Markdown and StreamingMarkdown's boundary
+ * Configure the shared `marked` instance once. Strikethrough stays on
+ * marked's built-in del tokenizer, which only matches double-tilde pairs —
+ * single tildes (`~100`, models' "approximate") never pair up and render
+ * literally. LaTeX math becomes `math`/`mathBlock` tokens (see math.ts).
+ * Every lexer caller — Markdown and StreamingMarkdown's boundary
  * lex — must run this first so both agree on block boundaries.
  */
 export function configureMarked(): void {
@@ -87,11 +87,6 @@ export function configureMarked(): void {
   markedInitialized = true
 
   marked.use({
-    tokenizer: {
-      del() {
-        return undefined
-      },
-    },
     extensions: [...MATH_MARKDOWN_EXTENSIONS],
   })
 }
@@ -242,6 +237,7 @@ function dispatch(token: Token, state: RenderState): string {
   if (isToken(token, 'codespan')) return renderCodeSpan(token)
   if (isToken(token, 'em')) return renderEmphasis(token, state)
   if (isToken(token, 'strong')) return renderStrong(token, state)
+  if (isToken(token, 'del')) return renderDel(token, state)
   if (isToken(token, 'heading')) return renderHeading(token, state)
   if (isToken(token, 'hr')) return '---'
   if (isToken(token, 'image')) return token.href
@@ -257,9 +253,8 @@ function dispatch(token: Token, state: RenderState): string {
   // Top-level math blocks are standalone MathBlock nodes; this path only
   // sees blocks nested in list items / blockquotes (or formatToken callers).
   if (isMathBlockToken(token)) return renderNestedMathBlock(token)
-  if (isToken(token, 'def') || isToken(token, 'del') || isToken(token, 'html')) {
-    // Link definitions, strikethrough, and raw HTML carry no ANSI
-    // representation.
+  if (isToken(token, 'def') || isToken(token, 'html')) {
+    // Link definitions and raw HTML carry no ANSI representation.
     return ''
   }
   // Unknown / extension token types render as nothing.
@@ -340,6 +335,13 @@ function renderEmphasis(token: Tokens.Em, state: RenderState): string {
 function renderStrong(token: Tokens.Strong, state: RenderState): string {
   const inner = token.tokens.map(child => dispatch(child, inlineChildren(state))).join('')
   return chalk.bold(inner)
+}
+
+/** Double-tilde strikethrough; marked's del tokenizer never pairs single
+ *  tildes, so approximate notation like ~100 stays literal. */
+function renderDel(token: Tokens.Del, state: RenderState): string {
+  const inner = token.tokens.map(child => dispatch(child, inlineChildren(state))).join('')
+  return chalk.strikethrough(inner)
 }
 
 function renderHeading(token: Tokens.Heading, state: RenderState): string {

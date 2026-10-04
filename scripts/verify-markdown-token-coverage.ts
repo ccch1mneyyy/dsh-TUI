@@ -69,11 +69,13 @@ function collectTokenTypes(tokens: Token[], into: Set<string>): void {
 const census = new Set<string>()
 for (const sample of CORPUS) collectTokenTypes(marked.lexer(sample), census)
 
+// The 'del' entry arrived when the double-tilde tokenizer override was
+// removed (Batch A): marked's built-in del only pairs double tildes.
 // Every type dispatch knows how to render, plus the two deliberate
 // no-ops. 'del' is absent while the tokenizer override disables it
 // (Batch A re-enables it and this expectation grows with it).
 const EXPECTED = new Set([
-  'blockquote', 'br', 'checkbox', 'code', 'codespan', 'def', 'em', 'escape',
+  'blockquote', 'br', 'checkbox', 'code', 'codespan', 'def', 'del', 'em', 'escape',
   'heading', 'hr', 'html', 'image', 'link', 'list', 'list_item', 'math',
   'mathBlock', 'paragraph', 'space', 'strong', 'table', 'text',
 ])
@@ -113,6 +115,17 @@ assert.ok(stripAnsi(cjk).includes('- [x] \u4e2d\u6587\u4efb\u52a1'),
 assert.ok(tasks !== stripAnsi(tasks), 'checkbox marks are styled under FORCE_COLOR=3')
 const checkedMark = tasks.slice(tasks.indexOf('[x]') - 20, tasks.indexOf('[x]') + 3)
 assert.notEqual(checkedMark, '', 'checked glyph present')
+
+// -- 2b. Strikethrough (double tilde only) ------------------------------
+
+const struck = applyMarkdown('a ~~gone~~ b ~100 approx\n')
+const struckPlain = stripAnsi(struck)
+assert.ok(struckPlain.includes('gone'), 'strikethrough content renders: ' + JSON.stringify(struck))
+assert.ok(!struckPlain.includes('~~'), 'double-tilde markers are consumed, not echoed')
+assert.ok(struckPlain.includes('~100 approx'), 'single tilde stays literal')
+assert.ok(struck.includes('\u001b[9m'), 'strikethrough SGR applied under FORCE_COLOR=3')
+const strikeInside = applyMarkdown('~~**bold gone**~~\n')
+assert.ok(stripAnsi(strikeInside).includes('bold gone'), 'strong inside del renders')
 
 // -- 3. Deliberate invisibility -----------------------------------------
 
