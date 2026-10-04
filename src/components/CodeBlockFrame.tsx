@@ -91,8 +91,11 @@ export function CodeBlockFrame({ token, highlight, dimColor = false, forceWidth 
     if (contentWidth < WIDE_HEADER_MIN_COLUMNS) return undefined
     return colorize('─', theme.subtle, 'foreground')
   }, [theme.subtle, contentWidth])
+  // Keyed on emptiness, not the body: a streaming fence keeps one
+  // decoration object while its text grows.
+  const emptyBody = body === ''
   const decoration = React.useMemo<TextDecoration>(() => {
-    if (body === '') {
+    if (emptyBody) {
       // An empty fence shows just the header row.
       return { header: headerText, headerFill }
     }
@@ -106,7 +109,7 @@ export function CodeBlockFrame({ token, highlight, dimColor = false, forceWidth 
         noSelect: 1,
       },
     }
-  }, [headerText, headerFill, body, theme.subtle])
+  }, [headerText, headerFill, emptyBody, theme.subtle])
 
   if (contentWidth - FRAME_OVERHEAD < MIN_NET_BODY_WIDTH) {
     // Too narrow to frame: the plain ANSI fence.
