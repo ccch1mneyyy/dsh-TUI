@@ -1,6 +1,6 @@
 /**
- * Trajectory source three-state regression (design agent-team-panels.md §④
- * 轨迹裁决；review R6-m1「unsupported 伪装 empty」的消解回归):
+ * Trajectory source three-state regression (an unsupported source must not
+ * read as an empty session):
  * supported / empty / unsupported must be ONE contract across every state
  * and every entry — /trace, Ctrl+T, the sidebar tab and the ⤢ outlet.
  *

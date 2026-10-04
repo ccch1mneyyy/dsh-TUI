@@ -1,8 +1,8 @@
 /**
- * AgentEvent trajectory fold regression (design agent-team-panels.md §④
- * 轨迹裁决 — Claude MVP 映射): the backend-neutral source must translate the
- * shared AgentEvent vocabulary into the raw-event envelope the projection
- * already folds, row by row per the design's mapping table, and the
+ * AgentEvent trajectory fold regression: the backend-neutral source must
+ * translate the shared AgentEvent vocabulary into the raw-event envelope
+ * the projection already folds, row by row per the mapping table in
+ * agent-source.ts, and the
  * composition must mount it so the three-state report flips to
  * empty/supported for a session without a DSH raw history.
  *
@@ -26,7 +26,7 @@
  *  - composition: a real core channel reports empty → supported as events
  *    flow, and traceEvents() feeds the same fold;
  *  - surfaces: the scene renders the folded ledger at 40 columns and the
- *    side panel at 28 (design MVP: 28/40 列).
+ *    side panel at 28.
  *
  * Run: node --import tsx/esm scripts/verify-trajectory-agent-fold.tsx
  */

@@ -1,5 +1,5 @@
 /**
- * btw 面板/快路径/回退/badge 回归（渲染层，设计 btw-panel.md §回归形状 4–7）：
+ * btw 面板/快路径/回退/badge 回归（渲染层）：
  *  - 面板级（XTerm + AlternateScreen + 真侧栏控制器）：空态、线程问答上屏
  *    （Markdown）、badge（不可见期间落定 → ●；进入面板即清）、composer 键
  *    语义（打字/Enter 提交/Esc 分层保草稿/Tab 切焦点）、n 新话题、s 发送到

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * btw 线程回归（纯逻辑层，设计 btw-panel.md §回归形状 1–3）：
+ * btw 线程回归（纯逻辑层）：
  *  - sideThreadQuestion / selectContextTurns：最近 N 轮窗口边界、单答案
  *    8k / 总 24k 字符预算按整轮裁剪、omitted 计数、无上下文时单问合同
  *    逐字节不变（sideQuestionPrompt 原文钉死——不改变单问原合同）。

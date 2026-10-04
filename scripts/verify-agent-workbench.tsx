@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 "use strict";
 /**
- * verify-agent-workbench — agent-team P3（design agent-team-panels 路线图
- * P3 行：完整工作台 / peer roster / 跨会话如实降级）的回归。
+ * verify-agent-workbench — Agent View 工作台、peer roster、侧栏 Detail
+ * composer 与转录分页的回归。
  *
  *   W1  父关系/兄弟纯函数（agentTeam.ts）：parentAgentId 是唯一父事实、
  *       depth 1 证明主循环、depth>=2 无父=unknown（不造假树）；transcript
@@ -13,16 +13,17 @@
  *   W3  工作台 UI（AgentTranscriptScene）：宽屏右侧 metadata/工具/父关系
  *       面板；sibling 原地切换不混消息（换代理即换转录源，旧代理行不
  *       残留、expandedLeaf 重置、消息按代理过滤）；来源栈不被 sibling
- *       切换推入；窄屏（40 列）面板整体退场。
+ *       切换推入；窄屏（40 列）面板整体退场、顶栏保留代理名，28 列下
+ *       长行在屏内折行（不按 44 列排版后被屏幕右缘裁掉）。
  *   W4  peer roster（SubagentDashboard）：children 与 peers 分区呈现；
  *       无 peer 名册能力时如实降级一行（不伪装空名册）；served peers
  *       不混入 children、无发送入口（跨会话交互无上游支持面）。
- *   W6  转录分页：代理消息只落在它所属的那一页（载入更早不重复、newest
- *       页不收更早页的消息）；载入更早在途时切换代理，旧代理的更早页不会
- *       拼进新代理的转录；live 合并不改写历史叶子。
  *   W5  侧栏 Detail 的 composer：按键经面板分发器进草稿（宿主吞掉普通键，
  *       直接 useInput 收不到）；Esc 先让出编辑焦点、焦点仍在侧栏；焦点被
  *       宿主切回聊天后，聊天里的打字和 Enter 不进 composer、不发给子代理。
+ *   W6  转录分页：代理消息只落在它所属的那一页（载入更早不重复、newest
+ *       页不收更早页的消息）；载入更早在途时切换代理，旧代理的更早页不会
+ *       拼进新代理的转录；live 合并不改写历史叶子。
  *
  * 运行：node --import tsx/esm scripts/verify-agent-workbench.tsx
  */
@@ -283,7 +284,7 @@ console.log('--- W3: workbench panel + sibling switching ---')
       check('W3 旧代理行不残留（不混消息）', await settled(() => !frame.screen().includes('alpha unique marker one') && !frame.screen().includes('alpha tool body')))
       check('W3 切换后顶栏换成新代理描述', frame.screen().includes('agent agent-b'))
       // Esc still exits to the ORIGINAL source (not the previous agent):
-      // the first Esc only leaves the focused panel (§6's ladder).
+      // the first Esc only leaves the focused panel.
       frame.stdin.write('\x1b')
       await sleep(30) // 固定窗:pacing 焦点层切换
       frame.stdin.write('\x1b')
@@ -334,7 +335,7 @@ console.log('--- W3: workbench panel + sibling switching ---')
     },
   )
 
-  // 40 columns: the P1 single-column contract is untouched.
+  // 40 columns: the single-column layout, no workbench rail.
   await withTerminal(
     () => React.createElement(AgentTranscriptScene, {
       subagent: roster[0],
@@ -424,7 +425,7 @@ console.log('--- W4: dashboard children/peers partition ---')
 
   // (3) served peers: own section, never mixed into children, and NO
   // interactive affordance (cross-session targets are not addressable
-  // through the dual channels — the honest P3 degrade).
+  // through the parent relay or the direct child prompt).
   const selected2: string[] = []
   await withTerminal(
     () => React.createElement(SubagentDashboard, {
