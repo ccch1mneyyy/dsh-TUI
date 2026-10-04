@@ -117,6 +117,7 @@ const GROUPS = {
 // 增长、半开 fence 闭合后与整段渲染逐行相等、重渲染不触碰封口内容；
 // p50/p95/max 只打印观察（含 settle 轮询粒度），不作断言。
     ['verify-text-paint-budget', ['node', '--import', 'tsx/esm', 'scripts/verify-text-paint-budget.tsx']],
+    ['verify-markdown-codebox-performance', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-codebox-performance.tsx']],
     ['verify-text-viewport-paint', ['node', '--import', 'tsx/esm', 'scripts/verify-text-viewport-paint.ts']],
     ['verify-tool-history-window', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-history-window.tsx']],
 // 流式平滑揭示回归（dsh-tui.smoothStreaming）：调度器步进/游标生命周期
