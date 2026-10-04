@@ -142,7 +142,6 @@ export function armFirstFrameAck(stdout: NodeJS.WriteStream): void {
       if (userCallback !== undefined) userCallback(error)
     }
     if (typeof args[1] === 'string') return original.call(stdout, args[0], args[1], chained)
-    if (userCallback === undefined) return original.call(stdout, args[0], chained)
     return original.call(stdout, args[0], chained)
   }
   try {
