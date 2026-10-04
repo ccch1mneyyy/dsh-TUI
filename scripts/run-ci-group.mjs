@@ -19,12 +19,12 @@
  * 不会漏跑。新增测试只登记 GROUPS，不必改分片。
  * --list 只打印本片条目与预计耗时，不运行。--record-timings 在跑完后把本次
  * 通过条目的实测耗时写回 ci-group-timings.json（重新均衡分片时用）。
- * --jobs N：组内并发（缺省 1 = 逐条串行，CI 行为逐字节不变）。本地提速用：
- * 每条仍是独立渲染日志 + 一次性 HOME，输出按条缓冲、完成后整段透传；并行
- * 失败的条目自动串行复跑一次——复跑绿按「CPU 竞争假红」放行但显式记录
- * （::error + 汇总标注），复跑仍红才算真失败。渲染类组在 CPU 争抢下本就有
- * 假红前科（#513/#734），并发只用于本地往返；--jobs > 1 与 --record-timings
- * 互斥（并发耗时失真，会污染装箱表）。
+ * --jobs N：组内同时跑 N 条，只给本地用（缺省 1 = 逐条串行，与 CI 相同；
+ * CI 环境里 N > 1 直接拒绝）。每条仍有独立渲染日志与一次性 HOME，输出整条
+ * 缓冲、跑完再打印。并行失败的条目随后单独串行重跑一次：重跑通过记为 CPU
+ * 争抢造成的假红（::error 与汇总里都标出来），重跑仍失败才算失败。渲染类
+ * 测试在 CPU 争抢下有过假红（#513/#734），所以这条放行规则不能进 CI。
+ * --jobs > 1 不能与 --record-timings 同用：并发下的耗时不能拿来装箱。
  *
  * 组定义在下方 GROUPS 表：名称 + 完整 argv + 可选附加 env。所有条目默认
  * NODE_ENV=production：产品入口本就强制生产版 React，dev 版 reconciler 每次
@@ -1394,6 +1394,12 @@ if (jobs > 1 && recordTimings) {
   console.error('[run-ci-group] --jobs > 1 与 --record-timings 互斥：并发耗时失真，会污染 ci-group-timings.json 装箱表')
   process.exit(2)
 }
+// 并行失败后「串行重跑通过即放行」只适合本地往返；CI 里放行会把真实的时序
+// 竞争变成绿灯，所以 CI 只接受逐条串行。
+if (jobs > 1 && (process.env.CI || process.env.GITHUB_ACTIONS)) {
+  console.error('[run-ci-group] CI 环境不接受 --jobs > 1：并行失败后重跑放行的规则只用于本地')
+  process.exit(2)
+}
 const TIMINGS_FILE = new URL('./ci-group-timings.json', import.meta.url)
 const timings = JSON.parse(readFileSync(TIMINGS_FILE, 'utf8'))
 const measured = timings[groupName] ?? {}
@@ -1481,9 +1487,8 @@ if (jobs === 1) {
     else rmSync(renderLog, { force: true })
   }
 } else {
-  // 并发路径：输出按条缓冲、完成后整段透传（前缀仍是 ===== name =====，日志
-  // 可按条归因）；每条独立 HOME/渲染日志与串行完全一致。失败条目随后串行
-  // 复跑一次分家「CPU 竞争假红」与真失败——两种结果都落盘，不静默放行。
+  // 并行路径：每条的输出缓冲到跑完再整段打印（仍以 ===== name ===== 开头），
+  // HOME 与渲染日志的安排与串行相同。失败的条目随后串行重跑一次。
   const pending = group.slice()
   const runOne = entry => new Promise(resolve => {
     const [name, argv, extraEnv] = entry
@@ -1518,8 +1523,10 @@ if (jobs === 1) {
     }
   }
   await Promise.all(Array.from({ length: Math.min(jobs, group.length) }, worker))
+  // 汇总按登记顺序列出，与串行一致（worker 按完成先后 push）。
+  results.sort((a, b) => group.findIndex(([name]) => name === a.name) - group.findIndex(([name]) => name === b.name))
   for (const r of results.filter(item => item.failed)) {
-    console.log('\n[run-ci-group] ' + r.name + ' 并行失败（exit ' + r.status + '），串行复跑一次：分家 CPU 竞争假红与真失败')
+    console.log('\n[run-ci-group] ' + r.name + ' 并行失败（exit ' + r.status + '），单独串行重跑一次')
     const renderLog = join(RENDER_LOG_DIR, r.name + '.log')
     rmSync(renderLog, { force: true })
     const scriptHome = mkdtempSync(join(tmpdir(), 'dsh-tui-group-home-'))
