@@ -62,7 +62,7 @@ const session: AgentSession = {
     submits.push({ input, placement })
     return Promise.resolve({ accepted: true })
   },
-  removePending: () => false,
+
   cancel: () => Promise.resolve({ stillQueued: [] }),
   dispose: () => Promise.resolve(),
 }
@@ -210,7 +210,7 @@ const freshSession = (capabilities: Partial<AgentSession['capabilities']>): Agen
   history: () => Promise.resolve([]),
   subscribe: () => () => undefined,
   submit: () => Promise.resolve({ accepted: true }),
-  removePending: () => false,
+
   cancel: () => Promise.resolve({ stillQueued: [] }),
   dispose: () => Promise.resolve(),
 })

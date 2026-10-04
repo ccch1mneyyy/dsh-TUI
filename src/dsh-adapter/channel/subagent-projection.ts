@@ -158,7 +158,7 @@ export function createSubagentProjection(getState: () => ProjectionState, deps: 
       // when the injected reader does.
       ...(deps.readChildTranscript === undefined ? {} : { history: deps.readChildTranscript }),
       message: {
-        via: 'dsh-direct-continuable',
+        via: 'direct-continuable',
         // The prompt control plane takes both deliveries natively; the
         // composer shows steer for Ctrl+Enter only because this says so.
         steer: true,
@@ -298,7 +298,7 @@ function createSessionSubagentProjection(
       messageId: data.id,
       from: relay.senderSessionId,
       to: childId,
-      via: 'dsh-agent-relay',
+      via: 'agent-relay',
       text: agentMessageTextOf(data.content),
       state: 'queued',
       ...(typeof (event as { seq?: unknown }).seq === 'number' ? { sourceRef: `seq:${(event as { seq: number }).seq}` } : {}),
@@ -403,7 +403,7 @@ function createSessionSubagentProjection(
           messageId: data.id,
           from: relay.senderSessionId,
           ...(parentSessionId === undefined ? {} : { to: parentSessionId, parentSessionId }),
-          via: 'dsh-agent-relay',
+          via: 'agent-relay',
           text: agentMessageTextOf(data.content),
           state: 'queued',
           ...(typeof ev.seq === 'number' ? { sourceRef: `seq:${ev.seq}` } : {}),
@@ -545,7 +545,7 @@ function createSessionSubagentProjection(
         intentId: requestId,
         from: 'user',
         to: input.targetId,
-        via: 'dsh-direct-continuable',
+        via: 'direct-continuable',
         text,
         state: 'queued',
         sourceRef: receipt.messageId,

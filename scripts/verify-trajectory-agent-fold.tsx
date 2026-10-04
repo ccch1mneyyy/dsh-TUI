@@ -389,7 +389,7 @@ try {
       history: () => Promise.resolve([]),
       subscribe(listener: (batch: readonly unknown[], meta: unknown) => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
       submit: () => Promise.resolve({ accepted: true }),
-      removePending: () => false,
+
       cancel: () => Promise.resolve({ stillQueued: [] }),
       dispose: () => Promise.resolve(),
     }

@@ -131,7 +131,7 @@ try {
       history: () => Promise.resolve([]),
       subscribe(listener: (batch: readonly unknown[], meta: unknown) => void) { coreListeners.add(listener); return () => { coreListeners.delete(listener) } },
       submit: () => Promise.resolve({ accepted: true }),
-      removePending: () => false,
+
       cancel: () => Promise.resolve({ stillQueued: [] }),
       dispose: () => Promise.resolve(),
     }
@@ -287,7 +287,7 @@ try {
       history: () => Promise.resolve([]),
       subscribe(listener: (batch: readonly unknown[], meta: unknown) => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
       submit: () => Promise.resolve({ accepted: true }),
-      removePending: () => false,
+
       cancel: () => Promise.resolve({ stillQueued: [] }),
       dispose: () => Promise.resolve(),
     }

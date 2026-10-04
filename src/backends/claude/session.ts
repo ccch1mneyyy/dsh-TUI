@@ -36,9 +36,8 @@
 import type { AccountInfo, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { randomUUID } from 'node:crypto'
 import type { AccountView, RewindOutcome, RewindPreview, SessionAuthView } from '../../agent/capabilities.js'
-import type { AgentMessageView, WorkingActivityView } from '../../adapter/ports/channel-view.js'
+import type { WorkingActivityView } from '../../adapter/ports/channel-view.js'
 import type { AgentEvent, AgentEventMeta } from '../../agent/events.js'
-import { foldAgentMessage } from '../../agent/messages.js'
 import type { AgentSessionRef } from '../../agent/refs.js'
 import type { AgentInput, AgentSession, AgentSessionStatus, CancelCause, SubmitPlacement } from '../../agent/session.js'
 import { t } from '../../i18n.js'
@@ -66,17 +65,6 @@ import { createClaudeSideQuery } from './side-query.js'
 import { writeFlagSettingsFile, type FlagSettingsFile } from './flag-settings.js'
 import { createClaudeTranslator } from './translate.js'
 import { errorText, rec, type Rec } from './narrow.js'
-
-declare module '../../agent/capabilities.js' {
-  interface ClaudeNative {
-    /** The SDK session id (also `ref.sessionId`). */
-    readonly sessionId: string
-    /** `system/init.claude_code_version`, once known. */
-    readonly cliVersion: string | undefined
-    /** `system/init.capabilities` (open set; feature-detect, never sniff). */
-    readonly cliCapabilities: readonly string[]
-  }
-}
 
 /** Timer seam (tests inject a manual clock). */
 export interface ClaudeClock {
@@ -313,21 +301,8 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     activityPublisher.fold(translator.activityState(), asking || dialogsOpen)
   }
 
-  /**
-   * Agent-to-agent relays (the SendMessage traffic the translator observes),
-   * folded live here and from the replay at `history()`; monotone by
-   * message id.
-   */
-  const agentMessages: AgentMessageView[] = []
-  const foldAgentMessages = (events: readonly AgentEvent[]): void => {
-    for (const event of events) {
-      if (event.type === 'agent.message') foldAgentMessage(agentMessages, event.message)
-    }
-  }
-
   const emit = (events: readonly AgentEvent[], wake: AgentEventMeta['wake'] = 'sync'): void => {
     if (events.length === 0) return
-    foldAgentMessages(events)
     const meta: AgentEventMeta = { replay: false, wake }
     if (listeners.size === 0) { backlog.push([events, meta]); publishActivity(); return }
     for (const listener of [...listeners]) {
@@ -1055,6 +1030,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       return translator.turnOpen ? 'running' : status
     },
     capabilities: {
+      native: {},
       permissions: {
         respond: (requestId, decision) => bridge.respond(requestId, decision),
         pending: () => bridge.pendingViews(),
@@ -1096,10 +1072,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       subagents: {
         interrupt: agentId => stopTask(agentId),
         ...subagentHistory(),
-        // The relays this session observed. The channel core builds the
-        // parent-mediated send around it (a directed instruction submitted
-        // as a followup); without it the composer is hidden.
-        message: { messages: () => [...agentMessages] },
+        messaging: 'parent-mediated',
       },
       tasks: {
         stop: taskId => stopTask(taskId),
@@ -1138,14 +1111,6 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
           await reconnect({}, { waitIdle: true })
         },
       },
-      native: {
-        claude: {
-          kind: 'claude',
-          get sessionId() { return currentSessionId },
-          get cliVersion() { return cliVersion },
-          get cliCapabilities() { return cliCapabilities },
-        },
-      },
       // The working-activity line this backend folds itself (activity.ts):
       // the channel subscribes per binding and forwards into the store the
       // DSH projection feed fills, so the UI's working line stays
@@ -1180,10 +1145,6 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     history: () => {
       const events = replayHistory ?? []
       replayHistory = undefined
-      // The replay seed carries the same relay observations the live lane
-      // emits (replay runs the same translator); fold them once here so a
-      // resumed session's Messages page starts populated.
-      foldAgentMessages(events)
       return Promise.resolve(events)
     },
     subscribe(listener: Listener) {
@@ -1242,8 +1203,6 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       pushed.set(input.clientMessageId, message)
       return { accepted: true }
     },
-    // No synchronous withdrawal (`retractPending` absent): never called.
-    removePending: () => false,
     async cancel(cause: CancelCause) {
       // The session is going away; nothing queues behind a disposed CLI.
       if (disposing) return { stillQueued: [], outcome: 'unknown' }

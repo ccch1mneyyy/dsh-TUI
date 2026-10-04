@@ -171,7 +171,7 @@ const msg = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   messageId: 'm1',
   from: 'parent-session-1',
   to: 'agent-child-0001',
-  via: 'dsh-agent-relay',
+  via: 'agent-relay',
   text: 'please focus on §7',
   state: 'queued',
   observedAt: NOW - 50_000,
@@ -188,7 +188,7 @@ function historyPage(events: Array<Record<string, unknown>>, over: Record<string
 /** 真通道面形状（channel-view 的 AgentMessageControl）的 mock。 */
 function makeControl(log: Array<Record<string, unknown>>, over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    via: over.via ?? 'claude-parent-mediated',
+    via: over.via ?? 'parent-mediated',
     steer: over.steer === true,
     listTargets: async () => [],
     messages: () => over.feed ?? [],
@@ -359,7 +359,7 @@ console.log('--- S4: esc layering + queue/steer ---')
       subagent: makeSubagent(),
       source: { kind: 'chat', returnFocus: 'prompt' },
       onExit: () => {},
-      compose: { control: makeControl(steerLog, { steer: true, via: 'dsh-direct-continuable', state: 'queued' }), target: { agentId: 'agent-child-0001', name: 'research the spec' } } as never,
+      compose: { control: makeControl(steerLog, { steer: true, via: 'direct-continuable', state: 'queued' }), target: { agentId: 'agent-child-0001', name: 'research the spec' } } as never,
     }),
     async frame => {
       await settled(() => frame.screen().includes('direct to child'))

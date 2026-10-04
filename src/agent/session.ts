@@ -72,12 +72,6 @@ export interface AgentSession {
   /** Follow live events; returns the unsubscriber. */
   subscribe(listener: (batch: readonly AgentEvent[], meta: AgentEventMeta) => void): () => void
   submit(input: AgentInput, placement: SubmitPlacement): Promise<{ readonly accepted: boolean; readonly reason?: string }>
-  /**
-   * Withdraw a queued input; false when the backend already claimed it. A
-   * backend that can answer synchronously does (the channel's Alt+Up
-   * contract is synchronous); an async answer is not-yet-withdrawn to it.
-   */
-  removePending(clientMessageId: string): boolean | Promise<boolean>
   /** Cancel the running turn. An `interrupt` also asks the backend to drop
    *  its queued inputs; the receipt says which copies are still live. A
    *  receipt whose `outcome` is not `confirmed` must never be read as an

@@ -56,7 +56,6 @@ const check = (label: string, ok: boolean, detail?: unknown): void => {
 interface FakeSession extends AgentSession {
   readonly submits: { input: AgentInput; placement: SubmitPlacement }[]
   readonly cancels: string[]
-  removeCalls: number
   disposed: boolean
   emit(events: readonly AgentEvent[], meta?: Partial<AgentEventMeta>): void
   listenerCount(): number
@@ -71,7 +70,6 @@ const fakeSession = (sessionId: string, capabilities: Omit<SessionCapabilities, 
     capabilities: { ...capabilities, native: {} },
     submits: [],
     cancels: [],
-    removeCalls: 0,
     disposed: false,
     history: () => Promise.resolve([]),
     subscribe(listener) {
@@ -81,10 +79,6 @@ const fakeSession = (sessionId: string, capabilities: Omit<SessionCapabilities, 
     submit(input, placement) {
       session.submits.push({ input, placement })
       return Promise.resolve({ accepted: true })
-    },
-    removePending() {
-      session.removeCalls += 1
-      return Promise.resolve(true)
     },
     cancel(cause) {
       session.cancels.push(cause)
@@ -163,7 +157,7 @@ try {
   check('submit reaches session.submit as a followup', await settled(() => first.submits.length === 1) && first.submits[0]!.placement === 'followup' && first.submits[0]!.input.text === 'hello backend')
   const clientId = first.submits[0]!.input.clientMessageId
   check('submit tracks a pending preview under the client id', channel.pending.some(item => item.id === clientId))
-  check('Alt+Up never starts an async retraction', channel.removePending(clientId) === false && first.removeCalls === 0 && channel.pending.some(item => item.id === clientId))
+  check('Alt+Up never starts an async retraction', channel.removePending(clientId) === false && channel.pending.some(item => item.id === clientId))
   first.emit([{ type: 'pending.changed', items: [], claimed: [clientId] }], { wake: 'none' })
   check('a claim retires the preview', !channel.pending.some(item => item.id === clientId))
   first.emit([
@@ -258,7 +252,7 @@ try {
   const calls: string[] = []
   let mode = 'default'
   const capable = fakeSession('33333333-3333-4333-8333-333333333333', {
-    retractPending: true,
+    pendingRetraction: { remove: () => true },
     compact: { run: () => { calls.push('compact'); return Promise.resolve() } },
     modes: { list: () => [{ id: 'default', label: 'Default' }, { id: 'plan', label: 'Plan' }], current: () => mode, set: id => { mode = id; calls.push(`mode:${id}`); return Promise.resolve() } },
     models: { list: () => Promise.resolve([{ id: 'haiku', label: 'Haiku' }]), current: () => ({ model: 'haiku' }), set: ref => { calls.push(`model:${ref.model}`); return Promise.resolve({ kind: 'switched' as const }) } },
@@ -636,7 +630,7 @@ try {
   const serversOf = (): string[] => mcpChannel.commandCompletions('/mcp reconnect ').map(item => item.name.replace(/^mcp reconnect /u, ''))
   const toastsOf = (): string[] => mcpChannel.notifications.map(item => item.text)
   try {
-    check('a fresh /mcp answers the loading line', mcpChannel.mcpStatus().join('\n') === t('claude-mcp-loading'))
+    check('a fresh /mcp answers the loading line', mcpChannel.mcpStatus().join('\n') === t('backend-mcp-loading'))
     mcpChannel.mcpStatus() // a second ask of the same binding, kept pending for the generation case
     check('/new switches to the second session', await mcpChannel.newSession() === true)
     await settled(() => serversOf().includes('beta-server'))
@@ -799,7 +793,7 @@ try {
     const toastsBefore = dock.notifications.length
     receipts[2]!({ stillQueued: [], outcome: 'failed' })
     await tick()
-    check('a receipt of the session left behind raises nothing on the new one', dock.notifications.length === toastsBefore && !dock.notifications.some(item => item.text === t('claude-interrupt-failed')))
+    check('a receipt of the session left behind raises nothing on the new one', dock.notifications.length === toastsBefore && !dock.notifications.some(item => item.text === t('interrupt-failed')))
     next.emit([{ type: 'turn.start', turn: 1, origin: 'user', time: 7 }])
     const before = next.submits.length
     dock.submit('queued on the new session')

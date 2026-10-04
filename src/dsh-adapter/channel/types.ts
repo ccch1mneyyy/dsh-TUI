@@ -1,5 +1,5 @@
 import type { ChannelUi } from '../../adapter/ports/channel-ui.js'
-import type { ChatRow, ToolRow, ToolCallView, ToolFileDiff, ToolResultView, SubagentRow, JobGroupRow, JobRow, TokenUsage, TokenBucket, CostTokenBuckets, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, PendingMessage, SubagentControl, SubagentTranscriptView, JobControl, StagedImageInput, StagedImageAdjustment, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PermissionPresetAvailability, PermissionPresetOption, PermissionPresetCurrent, PresetOption, SkillInfo, CredentialStatus, AgentViewRow, AgentViewStatus, AgentViewDispatchResult, BackgroundResult, BackendModeOption, BackendChannelOption, TrajectorySource } from '../../adapter/ports/channel-view.js'
+import type { RawTrajEvent, ChatRow, ToolRow, ToolCallView, ToolFileDiff, ToolResultView, SubagentRow, JobGroupRow, JobRow, TokenUsage, TokenBucket, CostTokenBuckets, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, PendingMessage, SubagentControl, SubagentTranscriptView, JobControl, StagedImageInput, StagedImageAdjustment, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PermissionPresetAvailability, PermissionPresetOption, PermissionPresetCurrent, PresetOption, SkillInfo, CredentialStatus, AgentViewRow, AgentViewStatus, AgentViewDispatchResult, BackgroundResult, BackendModeOption, BackendChannelOption, TrajectorySource } from '../../adapter/ports/channel-view.js'
 export type { ChatRow, ToolRow, ToolCallView, ToolFileDiff, ToolResultView, SubagentRow, JobGroupRow, JobRow, TokenUsage, TokenBucket, CostTokenBuckets, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, PendingMessage, SubagentControl, SubagentTranscriptView, JobControl, StagedImageInput, StagedImageAdjustment, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PermissionPresetAvailability, PermissionPresetOption, PermissionPresetCurrent, PresetOption, SkillInfo, CredentialStatus, AgentViewRow, AgentViewStatus, AgentViewDispatchResult, BackgroundResult, BackendModeOption, BackendChannelOption, TrajectorySource } from '../../adapter/ports/channel-view.js'
 import { type AgentStatus } from '@deepseek-ai/dsh-agent'
 import type { LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
@@ -40,7 +40,7 @@ export type SideQuestionLlm = {
 
 export type PermissionPresetService = {
   names?: unknown
-  current?: (events: readonly SessionEvent[]) => unknown
+  current?: (events: readonly RawTrajEvent[]) => unknown
   optionOf?: (name: string) => unknown
 }
 
@@ -68,12 +68,12 @@ export interface ToolViewPresenter {
 /** Raw host implementation; the renderer receives ChannelUi instead. */
 export interface Channel extends Omit<ChannelUi, 'pluginScene' | 'traceEvents' | 'trajectorySource' | 'trajectoryLaneEvents'> {
  readonly pluginScene: TuiSceneDescriptor | undefined
- traceEvents(): readonly SessionEvent[]
+ traceEvents(): readonly RawTrajEvent[]
  /** The mounted trajectory source's three-state report (see ChannelUi). */
  trajectorySource(): TrajectorySource
- /** Lane drilldown reads (see ChannelUi); events carry the SessionEvent envelope. */
+ /** Lane drilldown reads (see ChannelUi). */
  trajectoryLanes(): readonly import('../../adapter/ports/channel-view.js').TrajectoryLane[]
- trajectoryLaneEvents(agentId: string, descendants?: boolean): readonly SessionEvent[]
+ trajectoryLaneEvents(agentId: string, descendants?: boolean): readonly RawTrajEvent[]
  /** Localized mounted-source label (see ChannelUi). */
  trajectoryBackendLabel(): string
  releaseContributions(): void
@@ -117,7 +117,7 @@ export interface ChannelState extends Omit<MutableChannelView, 'rows' | 'notific
   /** See {@link Channel.releaseContributions}. */
   releaseContributions(): void
   /** Live session event log (see the public Channel type, `/trace`). */
-  traceEvents(): readonly SessionEvent[]
+  traceEvents(): readonly RawTrajEvent[]
   /** The mounted trajectory source's three-state report (see ChannelUi). */
   trajectorySource(): TrajectorySource
 }

@@ -3,13 +3,11 @@
  * opened, and its offline catalog.
  */
 import type { PreviewEntry, SessionSummary } from '../adapter/ports/channel-session.js'
-import type { AgentSessionRef } from './refs.js'
 import type { AgentSession } from './session.js'
 
 /** What `detect()` found. Detection never throws: failures land here. */
 export interface BackendDetection {
   readonly installed: boolean
-  readonly authenticated?: boolean
   /**
    * Whether a credential the backend can use was found without a network
    * call: `unknown` when the backend cannot tell (a platform keychain).
@@ -29,7 +27,6 @@ export type OpenTarget =
    *  looks for it (absent = the session's own recorded directory, else
    *  every project the backend knows). */
   | { readonly kind: 'resume'; readonly sessionId: string; readonly cwd?: string }
-  | { readonly kind: 'fork'; readonly from: AgentSessionRef; readonly anchor?: string }
 
 /** A usable OAuth access token and its expiry (epoch ms). Token material:
  *  only ever handed to the backend's child process, never logged. */
@@ -98,7 +95,7 @@ export interface SessionCatalog {
 export interface AgentBackend {
   /** `dsh` | `claude` | `acp:<agent>`. */
   readonly id: string
-  readonly descriptor: { readonly label: string; readonly vendor: string; readonly version?: string; readonly brand?: 'neutral' }
+  readonly descriptor: { readonly label: string }
   detect(host: BackendHost): Promise<BackendDetection>
   open(target: OpenTarget, host: BackendHost): Promise<AgentSession>
   readonly catalog?: SessionCatalog

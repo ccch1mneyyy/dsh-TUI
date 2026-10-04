@@ -44,7 +44,7 @@ export function sendMessageCallView(input: { readonly callId: string; readonly l
     messageId: input.callId,
     ...(input.lane === undefined ? {} : { from: input.lane }),
     to: input.input.to,
-    via: 'claude-parent-mediated',
+    via: 'parent-mediated',
     text: input.input.text,
     state: 'issued',
     sourceRef: input.callId,
@@ -83,7 +83,7 @@ export function sendMessageResultState(result: { readonly isError: boolean; read
 export function sendMessageResultView(input: { readonly callId: string; readonly observedAt: number; readonly state: AgentMessageState }): AgentMessageView {
   return {
     messageId: input.callId,
-    via: 'claude-parent-mediated',
+    via: 'parent-mediated',
     text: '',
     state: input.state,
     sourceRef: input.callId,

@@ -662,14 +662,11 @@ export interface SubagentControl {
 
 /** How one message to an agent travelled. The backend states the
  *  transport; it is never guessed:
- *  'claude-parent-mediated' — the parent model relays through its own
- *  SendMessage tool (no public child Query send exists);
- *  'dsh-direct-continuable' — the human prompt control plane
- *  (ctx.subagents.prompt) straight into a direct continuable child's inbox,
- *  through the continuation manager;
- *  'dsh-agent-relay' — a model-authored relay between adjacent agents (the
- *  DSH durable AgentMessageSource, form 'relay'). */
-export type AgentMessageVia = 'claude-parent-mediated' | 'dsh-direct-continuable' | 'dsh-agent-relay'
+ *  'parent-mediated' — the parent model relays through its own SendMessage tool;
+ *  'direct-continuable' — the human prompt control plane sends to a
+ *  continuable child's inbox;
+ *  'agent-relay' — a model-authored relay between adjacent agents. */
+export type AgentMessageVia = 'parent-mediated' | 'direct-continuable' | 'agent-relay'
 
 /** Delivery state of one message. The fold is monotone: a view only ever
  *  advances, 'unknown' is a valid final state (no delivery fact was ever
