@@ -194,6 +194,7 @@ export function createCoreSessionActions(deps: {
         return null
       }
       const kind = mode === 'files' ? 'files' : mode === 'both' ? 'both' : 'conversation'
+      const session = deps.session()
       let outcome: Awaited<ReturnType<typeof rewind.rewind>>
       try {
         outcome = await rewind.rewind(row.anchor, kind)
@@ -212,16 +213,20 @@ export function createCoreSessionActions(deps: {
         notify(t('rewind-conversation-failed', { err: outcome.conversationError }), { color: 'warning', timeoutMs: 10000 })
         return null
       }
-      if (kind === 'files' || outcome.session.sessionId === deps.session().ref.sessionId) return null
-      const adopted = await deps.resume(outcome.session.sessionId, 'rewind')
-      if (!adopted.ok) {
-        // The fork is persisted either way (an open abandoned as a race
-        // too): say where it is.
+      if (kind === 'files' || outcome.session.sessionId === session.ref.sessionId) return null
+      const forkId = outcome.session.sessionId
+      const forkKept = (): null => {
         if (deps.owner.current()) {
-          notify(t('rewind-fork-kept', { command: deps.resumeCommand?.(outcome.session.sessionId) ?? `/resume ${outcome.session.sessionId}` }), { color: 'warning', timeoutMs: 10000 })
+          notify(t('rewind-fork-kept', { command: deps.resumeCommand?.(forkId) ?? `/resume ${forkId}` }), { color: 'warning', timeoutMs: 10000 })
         }
         return null
       }
+      // The fork is persisted whatever happens next, so a fork the channel
+      // does not adopt is named. The user may have moved to another session
+      // while the backend forked: that session stays.
+      if (deps.session() !== session) return forkKept()
+      const adopted = await deps.resume(forkId, 'rewind')
+      if (!adopted.ok) return forkKept()
       return row.text
     },
   }

@@ -809,6 +809,33 @@ try {
     dock.releaseContributions()
   }
 }
+// ── a rewind that outlives its session never replaces the next one ──
+{
+  type Outcome = Awaited<ReturnType<NonNullable<SessionCapabilities['rewind']>['rewind']>>
+  let finishRewind: ((outcome: Outcome) => void) | undefined
+  const rewound = fakeSession('e0e0e0e0-e0e0-40e0-80e0-e0e0e0e0e0e0', {
+    rewind: { rewind: () => new Promise<Outcome>(resolve => { finishRewind = resolve }) },
+  })
+  const fresh = fakeSession('e1e1e1e1-e1e1-41e1-81e1-e1e1e1e1e1e1')
+  const opens: string[] = []
+  const rewinder = createChannel(ctx, rewound, {
+    model: 'm', provider: '', cwd: workdir, activity: false,
+    openSession: target => {
+      opens.push(target.kind)
+      return Promise.resolve(target.kind === 'create' ? fresh : fakeSession('e2e2e2e2-e2e2-42e2-82e2-e2e2e2e2e2e2'))
+    },
+  })
+  try {
+    const pending = rewinder.rewindTo({ id: 1, kind: 'user', text: 'edit me', anchor: 'msg-1' })
+    await settled(() => finishRewind !== undefined)
+    check('/new lands while the backend is still forking', await rewinder.newSession() === true && rewinder.sessionRef.sessionId === fresh.ref.sessionId)
+    finishRewind!({ kind: 'rewound', session: { backendId: 'fake', sessionId: 'fork-1' } })
+    check('the late fork does not replace the session the user moved to', await pending === null && rewinder.sessionRef.sessionId === fresh.ref.sessionId && !opens.includes('resume'), opens)
+    check('… and the user is told where the fork is', rewinder.notifications.some(item => item.text === t('rewind-fork-kept', { command: '/resume fork-1' })))
+  } finally {
+    rewinder.releaseContributions()
+  }
+}
 rmSync(workdir, { recursive: true, force: true })
 console.log(`\nverify-backend-channel OK (${passed} checks)`)
 process.exit(0)
