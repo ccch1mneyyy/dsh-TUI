@@ -843,6 +843,7 @@ const dict = {
   'permission-roster-unavailable': { zh: '权限预设名册不可用', en: 'Permission preset roster unavailable' },
   'permission-picker-title': { zh: '权限预设', en: 'Permission preset' },
   'permission-mode-picker-title': { zh: '权限模式', en: 'Permission mode' },
+  'permission-mode-current': { zh: '当前权限模式  {{name}}', en: 'Current permission mode  {{name}}' },
   'permission-mode-switch-hint': { zh: '切换：/permission <模式>，或点击底栏模式段', en: 'Switch with /permission <mode>, or click the mode segment in the footer' },
   'permission-mode-unknown': { zh: '没有这个权限模式：{{id}}', en: 'No such permission mode: {{id}}' },
   'permission-preset-readonly': { zh: '只读', en: 'Read-only' },

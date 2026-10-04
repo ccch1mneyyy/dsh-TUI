@@ -3654,10 +3654,11 @@ export function Chat({
         const backendModes = typeof channel.listModes === 'function'
           ? channel.listModes()
           : { modes: [], currentIndex: -1 }
+        const backendModeCurrent = backendModes.currentIndex >= 0 ? backendModes.modes[backendModes.currentIndex] : undefined
         if (backendModes.modes.length > 0 && parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/permission', [
-            t('permission-current', { name: modeDisplayName(channel.mode) }),
+            t('permission-mode-current', { name: backendModeCurrent?.name ?? modeDisplayName(channel.mode) }),
             t('permission-mode-switch-hint'),
           ])
           return true
@@ -3671,7 +3672,9 @@ export function Chat({
               kind: 'mode',
               index,
               modes: backendModes.modes.map(mode => ({ id: mode.id, name: mode.name, ...(mode.description === undefined ? {} : { description: mode.description }) })),
-              currentId: backendModes.modes[index]?.id,
+              // No ✓ when the live mode is not in the roster: the focus falls
+              // back to the first row, the checkmark must not follow it.
+              currentId: backendModeCurrent?.id,
             },
           })
           return true

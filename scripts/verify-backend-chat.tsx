@@ -455,7 +455,7 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
     for (const char of '/permission status') stdin.write(char)
     await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
     stdin.write('\r')
-    check('/permission status reports the current mode', await settled(() => screen().includes(t('permission-current', { name: '' }).trim()) && screen().includes('Plan')), screen())
+    check('/permission status reports the current mode', await settled(() => screen().includes(t('permission-mode-current', { name: '' }).trim()) && screen().includes('Plan')), screen())
     check('no permission line ever reached the model', submits.length === 0, JSON.stringify(submits.map(input => input.text)))
     await clearLineStdin(stdin)
     for (const char of '/permission bogus') stdin.write(char)
