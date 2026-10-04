@@ -249,6 +249,12 @@ export function attachDshExtensions(
   // Immutable per-append snapshot (dsh-session caches the frozen array);
   // reads follow session swaps (/resume /rewind /new) automatically.
   state.traceEvents = () => dshNative().rawHistory()
+  // The DSH side of the trajectory capability declaration: a source IS
+  // mounted, so the report flips off the core's 'unsupported' — 'empty'
+  // until the session logs its first event, 'supported' from then on. Read
+  // per call over the same cached snapshot, so it follows session swaps and
+  // appends with no extra bookkeeping.
+  state.trajectorySource = () => (dshNative().rawHistory().length === 0 ? 'empty' : 'supported')
 
   // The DSH log restores folded rows; the projector prices by the DeepSeek
   // rate window and feeds the job registry. Installed before the seed replay.

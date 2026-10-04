@@ -982,6 +982,21 @@ export interface ChannelSceneMetadata { readonly id: string; readonly title?: st
 export interface RawTrajEvent { readonly type: string; readonly seq: number; readonly time: number; readonly data: unknown }
 
 /**
+ * What the channel's trajectory source can honestly report (design doc
+ * 「④ 轨迹裁决」): a composition either mounted a trajectory source or it did
+ * not — that fact is declared structurally (the backend-neutral core reports
+ * 'unsupported'; the DSH extension flips it), never by backendId lookup.
+ *
+ *   'supported'    a source is mounted and has events (the golden DSH view);
+ *   'empty'        a source is mounted, the session just has no events yet —
+ *                  the ONLY state that may promise "data once turns happen";
+ *   'unsupported'  no source is mounted (Claude today): surfaces must say
+ *                  THAT instead of masquerading as an empty session, promise
+ *                  no future data, and keep the fullscreen outlet disabled.
+ */
+export type TrajectorySource = 'supported' | 'empty' | 'unsupported'
+
+/**
  * The ONE context-occupancy reading every occupancy surface shares: the
  * footer's `ctx` field and its hover detail, the segmented context bar, the
  * working-activity line's `⚠ ctx N%` prefix, `/tokens` + `/status`, and the
