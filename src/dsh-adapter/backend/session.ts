@@ -318,18 +318,6 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
   return session
 }
 
-/** The DSH escape hatch of a session, when it is a DSH session. */
-export function dshNativeOf(session: AgentSession) {
-  return session.capabilities.native.dsh
-}
-
-/** The DSH agent behind a session; throws for a non-DSH session. */
-export function dshAgentOf(session: AgentSession): Agent {
-  const native = session.capabilities.native.dsh
-  if (native === undefined) throw new Error(`dsh-tui: session ${session.ref.backendId}:${session.ref.sessionId} is not a DSH session`)
-  return native.agent
-}
-
 /** The lifetime handle of a DSH session this process created or resumed;
  *  throws when the session borrows its agent (or is not a DSH session). */
 export function dshHandleOf(session: AgentSession): AgentHandle {

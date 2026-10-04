@@ -1,14 +1,12 @@
 /**
- * DSH projection surface over the split pipeline: the DSH translator
- * (`../backend/translate.ts`) decodes session events and stream frames into
- * Agent Domain events, the shared projector (`src/channel/projection.ts`) folds
- * them into the channel state. This wrapper keeps the pre-split
- * `renderEvent`/`renderStreamFrame`/`replayEvents` surface for the channel
- * wiring and the regression scripts that drive it directly.
+ * DSH session events and stream frames through the DSH translator
+ * (`../backend/translate.ts`) into the shared projector
+ * (`src/channel/projection.ts`), behind one `renderEvent` /
+ * `renderStreamFrame` / `replayEvents` surface. The channel wires the two
+ * halves itself; regression scripts that feed raw DSH events use this.
  */
 import type { Agent, AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SelectionAttachment } from '../../adapter/ports/channel-view.js'
 import { createChannelProjection as createSharedProjection, type ProjectionState } from '../../channel/projection.js'
 import type { BackgroundJobStore } from '../jobs.js'
@@ -38,16 +36,7 @@ interface ProjectionDependencies {
 const LIVE = { replay: false } as const
 const REPLAY = { replay: true } as const
 
-// ContentBlockMap is merge-extensible: plugin-added block types are
-// silently skipped (v1 renders text blocks only) — never crashes.
-const textOf = (content: readonly ContentBlock[] | undefined): string =>
-  (content ?? []).map(block => (block.type === 'text' ? block.text : '')).join('').trim()
-
-/** First text block only: the transcript-facing text of a user message. */
-const firstTextOf = (content: readonly ContentBlock[] | undefined): string =>
-  (content ?? []).find(block => block.type === 'text')?.text.trim() ?? ''
-
-/** One authoritative reducer for both durable replay and live session events. */
+/** One reducer for both durable replay and live session events. */
 export function createChannelProjection(state: ProjectionState, deps: ProjectionDependencies) {
   const translator = createDshTranslator({
     tools: () => deps.tools,
@@ -82,9 +71,5 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     },
     settleStreaming: projector.settleStreaming,
     updateSpinnerMode: projector.updateSpinnerMode,
-    presentCallView: translator.presentCallView,
-    presentResultView: translator.presentResultView,
-    textOf,
-    firstTextOf,
   }
 }
