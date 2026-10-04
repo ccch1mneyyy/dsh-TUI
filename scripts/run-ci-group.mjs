@@ -265,6 +265,11 @@ const GROUPS = {
 // 代理探针）、SGR 点击艺术区触发 heart pass、Enter poke 显示完整 activity.line、
 // 左栏 §16.6 零 diff（50 次 version bump 重渲染逐行恒等）。
     ["verify-companion-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-companion-panel.tsx']],
+// btw 线程纯逻辑层：最近 N=4 轮窗口与 8k/24k 字符预算按整轮裁剪、单问合同
+// 逐字节不变（sideQuestionPrompt 钉死）、线程生命周期（busy/abort 代际守卫/
+// 新话题/双 session 隔离/unread 记账）、合同保全审计（线程层只经 sideQuery
+// 门面说话，毒化代理断言无 submit/steer/pushLocal 触碰）。
+    ["verify-btw-thread", ['node', '--import', 'tsx/esm', 'scripts/verify-btw-thread.mjs']],
   ],
   'input-terminal': [
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
