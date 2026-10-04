@@ -1,35 +1,27 @@
 /**
- * Kernel-switch handoff events — S05 MVE (deploy-transition design §S05
- * "MVE：先解决『点了像消失』").
+ * What the user sees while a kernel switch restarts the TUI.
  *
- * The old process OWNS the visible transition between the teardown and the
- * replacement's first frame: a flushed, stable status line with a clear
- * tense (switching to X / starting X), and — when the replacement fails —
- * a classified, colored outcome instead of a bare exit-code dump. Success
- * stays quiet: the new kernel's own UI is the success signal (the design
- * forbids pretending a first-frame ACK exists before M1).
+ * Between the old process's teardown and the replacement's first frame the
+ * old process prints a short status line, so the switch does not look like
+ * the TUI just vanished. If the replacement fails, it prints a classified,
+ * colored outcome instead of a bare exit code. Success prints nothing: the
+ * new kernel's UI is the signal.
  *
- * Event kinds and their contract:
- *  - starting      shown at the finishExit boundary (after terminal
- *                  cleanup, via the flushed notice write): target kernel
- *                  + "the current session is preserved".
- *  - stage-start   shown by the old parent right BEFORE spawning the
- *                  replacement (console is free; written with a drain-
- *                  awaited flush, never a fire-and-forget write).
- *  - succeeded     replacement exited cleanly after owning the terminal —
- *                  restart-log event only, no terminal noise.
- *  - failed        the replacement never came up (spawn error, or death
- *                  inside the 4s survival window): yellow, actionable,
- *                  with the safe-mode remediation hint. The old session is
- *                  preserved — say so.
- *  - crashed       the replacement ran and exited nonzero later: red, with
+ * Event kinds:
+ *  - starting      written by finishExit with the terminal cleanup: target
+ *                  kernel, and that the current session is kept.
+ *  - stage-start   written by the old process right before the spawn,
+ *                  waiting for the write callback.
+ *  - first-frame   the replacement reported its first flushed frame
+ *                  (restart.log only).
+ *  - succeeded     the replacement exited cleanly (restart.log only).
+ *  - failed        the replacement never came up: yellow, with the
+ *                  safe-mode hint; the old session is kept.
+ *  - crashed       the replacement ran and later exited nonzero: red, with
  *                  the exit code.
  *
- * Coloring is caller-gated (TTY only) so headless regressions and piped
- * output see clean text; the formatter itself is pure and unit-tested.
- *
- * NOT in the MVE: a supervisor owning stdout/stdin across processes, or a
- * first-frame ACK — those are the M1 atomic-screen-handoff work.
+ * Callers decide on color (TTY only), so headless tests and piped output get
+ * plain text.
  */
 import { Chalk } from 'chalk'
 import { t } from './i18n.js'
@@ -46,20 +38,14 @@ export type ReplacementOutcome =
   | { kind: 'crashed'; code: number | null }
 
 /**
- * Classify a replacement's end. The 4s survival window stays a DIAGNOSIS
- * marker (design: never promoted to a success fact): a death inside it
- * means the TUI never came up (failed); a clean exit after it means the
- * user owned and closed a working session (succeeded); a later nonzero
- * exit is a session-level crash, not a handoff failure.
+ * Classify how a replacement ended. Without a handoff pipe the only signal is
+ * time: a death within 4s means the TUI never came up (failed), a clean exit
+ * means the user ran and closed a working session (succeeded), and a later
+ * nonzero exit is a crash of that session.
  *
- * firstFrameAcked upgrades the fact behind those heuristics (S05 完整版):
- * when the handoff ACK pipe reports the replacement's first frame flushed,
- * every death is post-boot (crashed/succeeded — the user saw a UI); when it
- * reports the replacement died WITHOUT ever flushing a frame, the failure
- * is a boot failure whenever it happens — the 4s timer was only ever a
- * proxy for exactly this observation. Undefined keeps the M0 timer
- * semantics for callers without the protocol (plain /restart, /update,
- * older replacements that predate the ACK pipe).
+ * With the pipe (firstFrameAcked defined) the first flushed frame decides
+ * instead: after it every death is post-boot (crashed or succeeded); without
+ * it the switch failed however long the process lived.
  */
 export function classifyReplacementOutcome(input: {
   spawnError?: unknown
@@ -84,10 +70,8 @@ export function classifyReplacementOutcome(input: {
 }
 
 /**
- * Forced-level chalk instance: auto-detection would follow the CREATING
- * process's pipes (a headless regression or a piped run would silently drop
- * the distinction this module exists to provide). The caller decides via
- * the color option; TTY gating belongs to the call sites.
+ * Fixed color level: chalk's auto-detection would look at this process's
+ * own pipes. Callers pass color: true only for a TTY.
  */
 const COLOR = new Chalk({ level: 2 })
 
@@ -101,18 +85,14 @@ const KIND_COLOR: Record<HandoffEventKind, (text: string) => string> = {
   crashed: COLOR.red,
 }
 
-/** restart.log event tag for a kind (shared attempt vocabulary, §S05). */
+/** restart.log event tag for a kind. */
 export function handoffEventTag(kind: HandoffEventKind): string {
   return 'handoff/' + kind
 }
 
 /**
- * Format one event's visible text. Pure: no stream I/O, no clock, no env.
- * Passing color: false yields plain text (headless/piped consumers and the
- * regression oracle). The succeeded kind formats to an empty string — the
- * new UI is the success signal, the event only reaches restart.log. The
- * first-frame kind is likewise terminal-quiet: the flushed frame ITSELF
- * replaces the transition surface (design: "随后 transition 消失").
+ * Format one event's visible text. Pure: no I/O, clock or env. succeeded and
+ * first-frame format to '' because they only go to restart.log.
  */
 export function formatHandoffNotice(
   kind: HandoffEventKind,
@@ -146,12 +126,10 @@ export function formatHandoffNotice(
 }
 
 /**
- * Write a stage line and WAIT for the stream to acknowledge the bytes (the
- * design's flushed contract — no fixed sleeps): the promise resolves on
- * the write callback, which the underlying handle fires once the data left
- * the process. setImmediate covers sinks that never invoke the callback;
- * the caller only needs ordering (the spawn happens strictly after this
- * resolves).
+ * Write a stage line and resolve once the stream's write callback fires, so
+ * the line is out before the caller spawns the replacement. A write that
+ * returns true also resolves on the next setImmediate, for sinks that never
+ * call back.
  */
 export function writeHandoffStage(stream: Pick<NodeJS.WriteStream, 'write'>, text: string): Promise<void> {
   return new Promise(resolve => {

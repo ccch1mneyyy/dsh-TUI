@@ -1,17 +1,13 @@
 /**
  * Crash serialization for the exit funnel (src/dsh-adapter/plugin.ts).
  *
- * The user's React #185 crashes (maximum update depth exceeded) reached the
- * funnel as nothing but `dsh-tui crashed: Minified React error #185` — the
- * message-only line drops the stack, the whole `.cause` chain, and the React
- * extras (componentStack / digest) a minified production build still carries,
- * so four real crashes left zero post-mortem evidence. These helpers turn an
- * unknown crash value into a fully serialized detail block plus the
- * crash.log line format, so the next crash leaves its stack on disk.
+ * A message-only crash line (`Minified React error #185`) loses the stack,
+ * the `.cause` chain and the React extras (componentStack, digest) that a
+ * production build still carries. These helpers serialize all of it and
+ * append it to ~/.dsh-tui/crash.log.
  *
- * Deliberately dependency-free (node builtins + paths only): verify scripts
- * load it without the whole plugin graph (initialPromptFromCmdlineArgs
- * precedent, plugin.ts's "moved to its own dependency-free module" note).
+ * Dependency-free (node builtins and paths only) so verify scripts can load
+ * it without the plugin graph.
  */
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
@@ -51,16 +47,14 @@ const MAX_TEXT_CHARS = 32 * 1024
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
 
-/** Fixed literal for values whose own conversion machinery throws: the crash
- * path's diagnostics must degrade to SOMETHING, never re-read the hostile
- * value (r1-stability S03). */
+/** Stand-in text for a value whose own string conversion throws. */
 export const UNSERIALIZABLE = '[unserializable value]'
 
 /**
- * Read one property of a maybe-hostile record; a throwing getter (defined
- * accessor, Proxy get trap) degrades to undefined instead of escaping the
- * serializer. The crash funnel runs AFTER the exit latch is set, so an
- * escaping read here would skip every cleanup below it (S03).
+ * Read one property of a value that may throw on access (a getter or a Proxy
+ * trap); a throw reads as undefined. The crash funnel runs after the exit
+ * latch is set, so an exception escaping from here would skip the cleanup
+ * that follows it.
  */
 function safeProp(record: Record<string, unknown>, key: string): unknown {
   try {
@@ -164,11 +158,8 @@ export function serializeCrashDetail(error: unknown): CrashDetail {
 }
 
 /**
- * The fixed-literal crash detail for when the diagnostics chain itself fails
- * (a serializer escape, a throwing log sink): built ONLY from literals — it
- * never re-reads anything on the thrown value, so it cannot throw either.
- * The funnel's crash tail falls back to this so the resume-marker write and
- * the terminal cleanup below it still run (r1-stability S03).
+ * Crash detail built from literals only, for when serializing or logging
+ * the real one failed. It never touches the thrown value, so it cannot throw.
  */
 export function unserializableCrashDetail(): CrashDetail {
   const text = [

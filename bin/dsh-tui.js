@@ -768,13 +768,12 @@ const rescueEnv = () => {
   return env
 }
 
-// ─── 后端限定的最后运行记录（r1-stability S02）──────────────────────────────
-// 最后一个真正跑起来的 TUI 实例把 {backendId,sessionId,cwd,attemptId} 写进
-// ~/.dsh-tui/last-run.json（TUI 侧 boot 落一次、退出漏斗按当时的可恢复性刷
-// 新，见 src/update.ts 的 writeLastRunRecord）。安全模式重试以**本链**写下的
-// 记录为权威：内核切换后外层 launcher 的 env 仍指向原内核，按旧 env 嗅探
-// resume.txt / claude prefs 会把崩溃重试带回旧内核、甚至拿 DSH 的会话 id
-// 去恢复 Claude。kernel.json 不够——它只有后端，没有会话身份与失败代次。
+// ─── 最后运行记录 ────────────────────────────────────────────────────────────
+// TUI 把 {backendId,sessionId,cwd,attemptId} 写进 ~/.dsh-tui/last-run.json
+// （boot 写一次，退出时刷新，见 src/update.ts 的 writeLastRunRecord）。
+// 内核切换后本进程的 env 仍是原内核，安全模式重试若按 env 去读 resume.txt
+// 或 Claude 偏好，会回到原内核，甚至拿 DSH 的会话 id 去恢复 Claude；所以
+// 本次启动之后写下的记录优先。
 const readLastRunRecord = () => {
   try {
     const parsed = JSON.parse(readFileSync(join(homedir(), '.dsh-tui', 'last-run.json'), 'utf8'))
@@ -787,10 +786,9 @@ const readLastRunRecord = () => {
     return undefined
   }
 }
-// 记录 → 重试 env：明确置新 backend（含一次性 DSH_TUI_BACKEND_HANDOFF，压过
-// Config 行——TUI boot 的 S01 同款通道），会话身份只在记录带了可恢复 id 时才
-// 给；记录没有可恢复 id、或旧 marker 属于别的内核时，旧 marker 一律滤掉
-// （在目标内核上冷启动优于跨域恢复一个不存在的会话）。
+// 记录 → 重试 env：DSH_TUI_BACKEND 与一次性的 DSH_TUI_BACKEND_HANDOFF（后者
+// 压过 Config 行）都设成记录里的内核；记录有可恢复的会话 id 才设
+// DSH_TUI_RESUME_SESSION，否则删掉继承来的值，在该内核上冷启动。
 const envFromLastRun = record => {
   const env = { ...process.env }
   env.DSH_TUI_BACKEND = record.backendId
@@ -802,12 +800,11 @@ const envFromLastRun = record => {
   }
   return env
 }
-// 本次启动链的身份：launch 路径在首次 spawn 前登记（显式 --resume = 用户在
-// 这条命令行上亲手输入过 resume；startedAt = 本进程第一次 spawn 之前的时
-// 刻，凡是晚于它的记录都是本链后代实例写的）。
+// 首次 spawn 前记下的时刻：updatedAt 不早于它的记录是本次启动的 TUI 写的，
+// 更早的是上一次启动留下的。
 let launchChain = null
-const noteLaunchChain = explicitResume => {
-  launchChain = { explicitResume, startedAt: Date.now() }
+const noteLaunchChain = () => {
+  launchChain = { startedAt: Date.now() }
 }
 
 // Claude 后端（`--backend claude`）的"上次会话"记在它自己的偏好文件里
@@ -821,19 +818,12 @@ const readClaudeLastSession = () => {
     return ''
   }
 }
-// 安全模式「重试正常启动」的环境（菜单选项 1，首启 fallback 与 `safe` 共用）。
-// 权威次序（r1-stability S02）：
-//   1. **本链**的最后运行记录——崩溃前真正在跑的那个实例写的内核/会话。
-//      内核切换后，外层旧 env（含旧自动 resume marker）不再算数；用户在
-//      命令行显式输入的 --resume 也让位给本链内更新的选择（切换就是用户
-//      更新的决定）。
-//   2. 都没有本链记录时（崩溃太早没写成、或旧安装根本不写记录）：
-//      a. 用户在这条命令行上显式输入的 resume（DSH_TUI_RESUME_SESSION 已
-//         在 env 里）不覆盖——「显式输入」与「启动链自动继承的 marker」
-//         的来源差异保留在这；自动继承的 marker 同样保持原样（无记录时
-//         它是仅有的线索）。
-//      b. 否则按外层 env 的 backend 读对应后端的"上次会话"
-//         （resume.txt / claude prefs），保持指针缺失/不可读 = 冷启动。
+// 安全模式「重试正常启动」的环境（菜单选项 1，首启 fallback 与 `safe` 共用）：
+//   1. 本次启动之后写下的最后运行记录：崩溃时实际在跑的内核与会话，压过
+//      env 里的 --resume（内核切换是用户更新的选择）。
+//   2. 没有这样的记录（崩得太早，或旧版本不写）：env 里已有
+//      DSH_TUI_RESUME_SESSION 就照用；否则按 env 的后端读它的上次会话
+//      （resume.txt 或 Claude 偏好），读不到就冷启动。
 const resumeEnvForRetry = () => {
   const chain = launchChain
   const record = readLastRunRecord()
@@ -1519,9 +1509,7 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
   // DSH consumes its own --; only the app tail belongs behind it. Preserve
   // the app-level separator too, and replay this same argv on a safe retry.
   const firstArgs = [...hostArgs, ...(args.length > 0 ? ['--', ...args] : [])]
-  // 登记本启动链（S02）：显式 --resume = 用户亲手输入过 resume；首次 spawn
-  // 前的时刻把「本链记录」与「上一次启动的残留记录」分开。必须在
-  // startDshSession 之前——链上任何后代实例的记录都晚于这个时刻。
-  noteLaunchChain(resumeFlags.length > 0)
+  // 必须在首次 spawn 之前：本次启动的 TUI 写的记录都晚于这个时刻。
+  noteLaunchChain()
   settleFirstResult(await startDshSession(firstArgs), firstArgs)
 }

@@ -1,20 +1,15 @@
 /**
- * verify-handoff-transition — 内核切换过场 MVE 回归（S05「最小可见过场」）。
+ * verify-handoff-transition — 内核切换过场的文案与结局分类。
  *
- * 覆盖（纯函数 + 源接线两层）：
- *   - 结局三分 classifyReplacementOutcome：spawn 失败 / 4 秒窗内死亡＝
- *     failed（boot-failure）；干净退出或纯 signal 关闭＝succeeded；窗后
- *     非零＝crashed——4 秒窗保持诊断口径，不升级为启动成功事实；
- *   - 文案与配色 formatHandoffNotice：starting 两行（目标内核＋原会话
- *     保留）、stage-start 单行、failed 带分类 reason＋safe 提示、crashed
- *     带退出码、succeeded 空文案（新 UI 即成功信号）；color=false 时无
- *     ANSI 码（headless/管道消费干净文本），color=true 时各事件颜色互异
- *     （失败黄、崩溃红、进行中青）；
- *   - flush 契约 writeHandoffStage：resolve 必须发生在 write 回调之后
- *     （不是定时 sleep）；write 抛错也必须 resolve（过场永不阻塞交接）；
- *   - 源接线：plugin.ts 切换分支的 finishExit notice 走 starting 事件、
- *     update.ts 在 spawn 前写 stage-start 且结局走 handoff/ 事件分类
- *     （verify-handoff-stdin 同款源码 tripwire）。
+ *   - classifyReplacementOutcome：spawn 失败或 4 秒内死亡＝failed
+ *     （boot-failure）；干净退出＝succeeded；之后非零退出＝crashed；
+ *   - formatHandoffNotice：starting 两行（目标内核、原会话保留）、
+ *     stage-start 一行、failed 带原因与安全模式提示、crashed 带退出码、
+ *     succeeded 为空；color=false 时没有 ANSI，color=true 时失败黄、崩溃红、
+ *     进行中青；
+ *   - writeHandoffStage 在 write 回调之后才 resolve，write 抛错也 resolve；
+ *   - 源码检查：plugin.ts 切换分支用 starting 文案，update.ts 在 spawn 前写
+ *     stage-start、结局记 handoff/ 事件。
  *
  * 运行：node --import tsx/esm scripts/verify-handoff-transition.ts
  */

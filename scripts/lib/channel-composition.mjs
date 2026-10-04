@@ -2,9 +2,8 @@
  * The channel's composition roots, as the structural gates read them:
  * `src/dsh-adapter/channel.ts` (the entry: core + DSH extensions),
  * `channel/core/compose.ts` (the backend-neutral core) and
- * `channel/extensions.ts` (the DSH specialists' wiring). A gate that pins
- * "the root composes X / does not retain Y" reads their concatenation, so it
- * holds whichever of the three files the wiring lives in.
+ * `channel/extensions.ts` (the DSH-specific wiring). A gate that checks
+ * "the root composes X / does not retain Y" reads their concatenation.
  */
 import { readdirSync, readFileSync } from 'node:fs'
 
@@ -23,10 +22,10 @@ export function compositionSource() {
 
 /**
  * The composition roots plus every module of the channel core
- * (`channel/core/*.ts`). Negative fences ("the composition never mutates raw
- * state", "never resolves command ownership itself") read this, because
+ * (`channel/core/*.ts`), for negative checks ("the composition never
+ * mutates raw state", "never resolves command ownership itself"), since
  * composition code also lives in the core modules. Positive "the root
- * composes X" gates read {@link compositionSource}.
+ * composes X" checks read {@link compositionSource}.
  */
 export function compositionAndCoreSource() {
   const coreDir = new URL('../../src/dsh-adapter/channel/core/', import.meta.url)

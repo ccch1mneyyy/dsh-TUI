@@ -12,7 +12,8 @@ import { KERNEL_SWITCH_HANDOFF_ENV } from './kernelPrefs.js'
 import { kernelDisplayName } from './components/kernelCatalog.js'
 import { classifyReplacementOutcome, formatHandoffNotice, handoffEventTag, writeHandoffStage } from './handoffEvents.js'
 import { HANDOFF_ACK_FD_ENV, HANDOFF_ATTEMPT_ENV, HANDOFF_SCREEN_ENV, parseHandoffAckLine } from './handoffAck.js'
-import { EXIT_ALT_SCREEN } from './ink/termio/dec.js'
+import { DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from './ink/termio/csi.js'
+import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from './ink/termio/dec.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
 // the compiled copy at lib/types/utils/shellQuote.js.
@@ -74,15 +75,12 @@ export function logRestartEvent(event: string, data?: Record<string, unknown>): 
 }
 
 /**
- * `~/.dsh-tui/last-run.json` (r1-stability S02): the backend-scoped identity
- * of the instance that ran LAST — which kernel, which session, where, and
- * which attempt wrote it. The TUI stamps it (boot identity in plugin.ts plus
- * a refresh in the exit funnel); the LAUNCHER's safe-mode retry re-reads it
- * and explicitly restarts that backend+session. Without it, a crash after a
- * kernel switch retries per the OUTER launcher env, which still names the
- * ORIGINAL backend: the retry lands on the old kernel (or worse, hands a DSH
- * session id to a Claude boot). kernel.json alone is not enough — it carries
- * the backend but neither the session identity nor the failure generation.
+ * `~/.dsh-tui/last-run.json`: which kernel and session the most recent TUI
+ * instance ran, written at boot (plugin.ts) and refreshed by the exit funnel.
+ * The launcher's safe-mode retry reads it. After a kernel switch the
+ * launcher's own env still names the original backend, so retrying from that
+ * env would reopen the old kernel, or hand a DSH session id to a Claude boot.
+ * kernel.json has the backend but not the session or when it was written.
  */
 export interface LastRunRecord {
   /** The kernel THIS instance ran on (Config domain: 'dsh' | 'claude'). */
@@ -202,19 +200,22 @@ export function writeHandoffNotice(text: string): void {
 }
 
 /**
- * Close the alt-screen bracket THIS process still holds (S05 完整版): a
- * replacement that died before its first flushed frame never took ownership,
- * so the supervisor restores the main buffer FIRST — the failure notice then
- * lands on the persistent main screen instead of vanishing with the alt
- * buffer. Synchronous fd-1 write with the stream fallback, same flush
- * discipline as writeHandoffNotice.
+ * Hand the terminal back after a kernel-switch replacement that cannot clean
+ * up after itself: one that died before its first frame (this process still
+ * holds the alternate screen) or one killed by a signal. Besides leaving the
+ * alternate screen it turns off the input modes the replacement may already
+ * have enabled; each reset is harmless if the mode was never on. Written
+ * synchronously to fd 1 so the failure notice that follows lands on the main
+ * screen.
  */
 export function restoreHandoffScreen(): void {
+  const reset = DISABLE_MOUSE_TRACKING + DISABLE_MODIFY_OTHER_KEYS + DISABLE_KITTY_KEYBOARD
+    + DISABLE_WIN32_INPUT_MODE + DFE + DBP + SHOW_CURSOR + EXIT_ALT_SCREEN + '\r\n'
   try {
-    writeFileSync(1, EXIT_ALT_SCREEN + '\r\n')
+    writeFileSync(1, reset)
   } catch {
     try {
-      process.stdout.write(EXIT_ALT_SCREEN + '\r\n')
+      process.stdout.write(reset)
     } catch {
       // Even a dead stdout must not block the exit path.
     }
@@ -1850,12 +1851,14 @@ export async function updateTui(
  *   other profile would leave the running install untouched.
  * @param targetVersion - Exact version returned by the preflight registry
  *   check, or undefined when that check failed and pnpm should resolve latest.
+ * @param kernel - The kernel this process runs (TuiRestartOptions.kernel).
  * @returns Exit codes for the update run and the replacement process.
  */
 export async function updateTuiAndRestart(
   sessionId: string,
   profile: string,
   targetVersion?: string,
+  kernel?: 'dsh' | 'claude',
 ): Promise<TuiUpdateResult> {
   const outcome = await updateTui(profile, targetVersion)
   const { updatedFrom } = outcome
@@ -1871,6 +1874,7 @@ export async function updateTuiAndRestart(
   const restartCode = await restartTui(sessionId, {
     env: { [UPDATED_FROM_ENV]: updatedFrom },
     kind: 'update',
+    ...(kernel === undefined ? {} : { kernel }),
   })
   return { updateCode: 0, restartCode }
 }
@@ -2026,32 +2030,34 @@ export interface TuiRestartOptions {
    */
   kind?: 'restart' | 'update'
   /**
-   * The launchpad kernel selector's switch: restart.log events carry the
-   * backend-switch tag, the replacement env pins DSH_TUI_BACKEND AND the
-   * one-shot KERNEL_SWITCH_HANDOFF_ENV to the chosen kernel (the handoff
-   * var is what makes the switch survive a pinning Config row — S01; the
-   * plain env var stays for determinism even though kernel.json also
-   * remembers it), and DSH_TUI_RESUME_SESSION is DELETED — the new kernel
-   * starts a new session, never this one.
+   * A kernel switch from the launchpad selector. restart.log events use the
+   * backend-switch tag; the replacement gets DSH_TUI_BACKEND and the one-shot
+   * KERNEL_SWITCH_HANDOFF_ENV set to the chosen kernel (the latter beats a
+   * Config row that pins the other one), and no DSH_TUI_RESUME_SESSION: the
+   * new kernel starts a new session.
    */
   backend?: 'dsh' | 'claude'
   /**
-   * 'alt'（S05 完整版，fullscreen 切换专属）: the old process keeps the
-   * alternate buffer through the spawn — the transition frame lives in the
-   * alt screen, the replacement adopts it (no second 1049h), and the first
-   * flushed frame ACK hands the bracket over. Plain /restart, /update and
-   * inline sessions keep the MVE main-screen handoff (design: 只有切换存在
-   * 差别，不把每次退出变成部署向导).
+   * 'alt' (fullscreen kernel switch only): this process keeps the alternate
+   * screen open through the spawn, the replacement adopts it without a
+   * second 1049h, and its first flushed frame (ACKed on fd 3) hands the
+   * screen over; see src/handoffAck.ts. /restart, /update and inline
+   * sessions go back to the main screen before the spawn as before.
    */
   handoffScreen?: 'alt'
+  /**
+   * The kernel this process runs. A plain /restart or /update passes it in
+   * the one-shot KERNEL_SWITCH_HANDOFF_ENV so the replacement reopens the
+   * session on the same kernel even when a Config row names the other one
+   * (as it does after a kernel switch). Ignored when `backend` is set.
+   */
+  kernel?: 'dsh' | 'claude'
 }
 
 /**
- * The replacement's env, pure: the launcher resume contract marker, the
- * /restart child stamp, the caller's extra markers, and the kernel-switch
- * overrides. Exported for scripts/verify-launchpad — the captured switch env,
- * fed through the real boot resolver, must land on the chosen kernel even
- * under a pinning Config row (r1-stability S01).
+ * The replacement's env, pure: the resume marker, the /restart child stamp,
+ * the caller's extra markers and the kernel-switch overrides. Exported for
+ * scripts/verify-launchpad, which feeds it through the boot resolver.
  */
 export function restartChildEnv(
   parentEnv: NodeJS.ProcessEnv,
@@ -2074,19 +2080,17 @@ export function restartChildEnv(
   // switching kernels keeps this process's kernel by config/env/memory as
   // usual.
   delete childEnv[KERNEL_SWITCH_HANDOFF_ENV]
-  // Same one-shot hygiene for the S05 handoff contract markers: a replacement
-  // that is NOT part of an armed handoff must never adopt a screen bracket or
-  // ACK pipe from an earlier attempt (the parent re-arms them explicitly when
-  // it actually opens one).
+  // Same for the alt-screen handoff markers: a replacement must not adopt a
+  // screen or ACK pipe from an earlier attempt. restartTui sets them again
+  // when it opens a handoff.
   delete childEnv[HANDOFF_SCREEN_ENV]
   delete childEnv[HANDOFF_ACK_FD_ENV]
   delete childEnv[HANDOFF_ATTEMPT_ENV]
+  if (options.backend === undefined && options.kernel !== undefined) childEnv[KERNEL_SWITCH_HANDOFF_ENV] = options.kernel
   if (options.backend !== undefined) {
     childEnv.DSH_TUI_BACKEND = options.backend
-    // The one-shot switch override (S01): DSH_TUI_BACKEND alone loses to an
-    // explicit Config row (K7: config > env > memory), so the switch also
-    // rides the variable the boot resolver ranks ABOVE config — a kernel
-    // switch must actually switch, not just restart onto the same kernel.
+    // DSH_TUI_BACKEND alone loses to a Config row (config > env > memory),
+    // so the switch also sets the one-shot variable that ranks above config.
     childEnv[KERNEL_SWITCH_HANDOFF_ENV] = options.backend
     // A kernel switch never resumes: the id of THIS backend's session means
     // nothing to the next one, and an inherited marker (this process may
@@ -2118,15 +2122,18 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     dshHome: process.env.DSH_HOME ?? null,
   })
   const startedAt = Date.now()
-  // S05 完整版：fullscreen 内核切换时，本进程（supervisor 角色）持有
-  // alt buffer 不放——过场帧写在 alt 屏内，replacement 通过 ACK 管道报告
-  // 挂接（adopted）与首帧 flush（ready），ready 之后 1049 括号归它。
+  // Fullscreen kernel switch: keep the alternate screen until the replacement
+  // reports its first flushed frame on the ACK pipe (see handoffScreen).
   const handoff = options.handoffScreen === 'alt' && options.backend !== undefined
   const attemptId = handoff ? 'hs-' + Date.now().toString(16) + '-' + Math.random().toString(16).slice(2, 8) : undefined
-  // 内核切换的过场第二阶段（S05）：replacement spawn 之前由旧父进程写一
-  // 行已 flush 的「正在启动 X…」——此后屏幕交给新内核。写等待 drain 回调
-  // （不是定时 sleep），保证行落地早于 spawn。handoff 模式下这行落在 alt
-  // 屏的过场帧之下；MVE 模式落在已恢复的主屏上。
+  // Ctrl+C while the replacement boots reaches this process too: same process
+  // group, and nothing has the terminal in raw mode yet. Dying here would
+  // leave behind the alternate screen this process still holds; the
+  // replacement gets the same signal, and its close below restores the screen.
+  const ignoreInterrupt = (): void => {}
+  if (handoff) process.on('SIGINT', ignoreInterrupt)
+  // "Starting X…" goes out before the spawn, waiting for the write callback
+  // so it lands before the replacement draws anything.
   if (options.backend !== undefined) {
     await writeHandoffStage(
       process.stdout,
@@ -2137,7 +2144,7 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
   return new Promise(resolve => {
     const childEnv = restartChildEnv(process.env, sessionId, kind, options)
     if (handoff) {
-      // stdio[3] 是 ACK 管道；env 把 fd 号与 attemptId 交给 replacement。
+      // stdio[3] is the ACK pipe; the env tells the replacement its fd and the attempt id.
       childEnv[HANDOFF_SCREEN_ENV] = 'alt'
       childEnv[HANDOFF_ACK_FD_ENV] = '3'
       childEnv[HANDOFF_ATTEMPT_ENV] = attemptId!
@@ -2173,8 +2180,8 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
           }
           if (ack.kind === 'ready' && ackReadyAt === undefined) {
             ackReadyAt = Date.now()
-            // ready 的定义＝新 renderer 首帧 write 已 flush（不是 mount、
-            // 不是进程存在、不是 4 秒计时）——设计「明确不做」的反面。
+            // ready means the replacement's first frame was flushed, not just
+            // that it mounted or is still alive.
             logRestartEvent(handoffEventTag('first-frame'), { attemptId, backend: options.backend, elapsedMs: ackReadyAt - startedAt })
           }
         }
@@ -2247,13 +2254,13 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     timer.unref()
     child.once('error', error => {
       clearTimeout(timer)
+      process.removeListener('SIGINT', ignoreInterrupt)
       logRestartEvent(`${tag}: spawn error`, { message: error.message })
       if (options.backend !== undefined) {
-        // spawn 失败＝没有任何东西挂上屏幕：supervisor 仍持有 1049 括号，
-        // 先恢复主屏再落失败文案（与 close 分支同一收口纪律）。
+        // Nothing took the screen over: restore it before the notice.
         if (handoff) restoreHandoffScreen()
-        // 内核切换事件分类（S05 MVE）：spawn 失败＝切换未完成（黄色），
-        // 附安全模式修复路径；与崩溃（红）区分。
+        // A spawn failure is a failed switch (yellow, with the safe-mode hint),
+        // not a crash.
         logRestartEvent(handoffEventTag('failed'), { reason: 'spawn-error', message: error.message })
         writeHandoffNotice(
           formatHandoffNotice('failed', {
@@ -2270,6 +2277,7 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     })
     child.once('close', (code, signal) => {
       clearTimeout(timer)
+      process.removeListener('SIGINT', ignoreInterrupt)
       const elapsedMs = Date.now() - startedAt
       logRestartEvent(`${tag}: replacement exited`, {
         code: code ?? null,
@@ -2277,11 +2285,11 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
         elapsedMs,
       })
       if (options.backend !== undefined) {
-        // 内核切换的结局三分（S05；M1 起事实来自 ACK 管道）：成功＝安静
-        // （新 UI 即成功信号，只记 restart.log 事件）；启动失败＝黄色＋会话
-        // 保留＋safe 提示；运行后异常退出＝红色＋退出码。ACK 在场时以
-        // 「首帧是否 flush」为准（4 秒窗只对无协议 replacement 保留诊断
-        // 口径，不升级为启动成功事实——设计「明确不做」）。
+        // Kernel switch outcome: success is quiet (restart.log only), a
+        // replacement that never came up is a yellow failure with the session
+        // kept and the safe-mode hint, and a later nonzero exit is a red
+        // crash. With the ACK pipe the first frame decides which of the two
+        // failures it was; see classifyReplacementOutcome.
         const outcome = classifyReplacementOutcome({
           closed: true, code, signal, elapsedMs,
           ...(handoff ? { firstFrameAcked: ackReadyAt !== undefined } : {}),
@@ -2291,9 +2299,9 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
           ...(attemptId === undefined ? {} : { attemptId }),
         })
         if (outcome.kind === 'failed') {
-          // ready 之前死亡＝alt buffer 仍由本进程持有（replacement 从未接
-          // 管）：先退出 1049 回主屏，失败文案才能留在持久主屏上；ready
-          // 之后死亡＝括号归 replacement 自己的退出清理，这里不碰。
+          // Before ready this process still holds the alternate screen:
+          // restore it first so the notice lands on the main screen. After
+          // ready the replacement's own exit cleanup closed it.
           if (handoff && ackReadyAt === undefined) restoreHandoffScreen()
           const suffix = childStderr.trim() === '' ? '' : `\n${childStderr.trimEnd()}`
           writeHandoffNotice(
@@ -2305,6 +2313,9 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
             }) + `${suffix}\n`,
           )
         } else if (outcome.kind === 'crashed') {
+          // A signal death after the first frame skipped the replacement's
+          // own exit cleanup, so the screen and input modes are still its.
+          if (handoff && signal !== null) restoreHandoffScreen()
           writeHandoffNotice(
             '\n' + formatHandoffNotice('crashed', {
               name: kernelDisplayName(options.backend),
