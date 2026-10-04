@@ -722,5 +722,66 @@ console.log('--- Chat: source stack + parent state preservation ---')
   }
 }
 
+// ── S10: SendMessage 专用工具卡（design §5.4 父工具卡） ────────────────────
+console.log('--- S10: SendMessage tool card shapes ---')
+{
+  const { AssistantToolUseMessage } = await import('../src/components/messages/AssistantToolUseMessage.js') as unknown as { AssistantToolUseMessage: React.ComponentType<Record<string, unknown>> }
+  const card = (tool: Record<string, unknown>, over: Record<string, unknown> = {}): React.ReactNode =>
+    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose: false, ...over })
+  const smTool = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    callId: 'sm1',
+    name: 'SendMessage',
+    argsText: JSON.stringify({ to: 'agent-child-0001', message: 'please focus on §7', summary: 'focus ask', pin: { name: 'researcher' } }),
+    status: 'ok',
+    resultText: '{"delivery":"delivered"}',
+    startedAt: NOW - 5000,
+    durationMs: 1200,
+    ...over,
+  })
+  await withTerminal(() => card(smTool()), async frame => {
+    check('S10 头部：名称 + → pin.name 目标', await settled(() => frame.screen().includes('SendMessage → researcher')), frame.lines()[0] ?? '')
+    check('S10 正文：message 文本预览', frame.screen().includes('please focus on §7'))
+    check('S10 副行：summary', frame.screen().includes('summary: focus ask'))
+    check('S10 结果行：delivered 徽标', frame.lines().some(l => l.includes('delivered')))
+    check('S10 折叠态不倒原始 JSON 字段', !frame.screen().includes('"to"') && !frame.screen().includes('"message"') && !frame.screen().includes('"pin"'), frame.lines().slice(0, 8).join('|'))
+  })
+  await withTerminal(() => card(smTool({ resultText: 'ok' })), async frame => {
+    await settled(() => frame.lines().some(l => l.includes('unknown')))
+    check('S10 裸成功 = unknown（不猜 delivered）', frame.lines().some(l => l.includes('unknown')), frame.lines().slice(0, 8).join('|'))
+    check('S10 unknown 附不推断说明', frame.screen().includes('no delivery fact'))
+  })
+  await withTerminal(() => card(smTool({ status: 'error', errorText: 'agent not found', resultText: '' })), async frame => {
+    check('S10 失败态：refused + 原因可见', await settled(() => frame.lines().some(l => l.includes('refused')) && frame.screen().includes('agent not found')), frame.lines().slice(0, 8).join('|'))
+  })
+  await withTerminal(() => card(smTool({ status: 'running', resultText: undefined, durationMs: undefined })), async frame => {
+    check('S10 运行态：issued 徽标', await settled(() => frame.lines().some(l => l.includes('issued'))), frame.lines().slice(0, 8).join('|'))
+  })
+  await withTerminal(() => card(smTool({ argsText: JSON.stringify({ to: 'agent-child-0001', message: 'wake up', resuming: true }), resultText: JSON.stringify({ delivery: 'delivered', resumedAgentId: 'agent-resumed-1234' }) })), async frame => {
+    check('S10 resuming 标注', await settled(() => frame.screen().includes('· resuming')), frame.lines()[0] ?? '')
+    check('S10 已唤醒短 id', frame.screen().includes('resumed agent-r'), frame.lines().slice(2, 8).join('|'))
+  })
+  await withTerminal(() => card(smTool({ argsText: JSON.stringify({ to: 'agent-child-0001', message: Array.from({ length: 6 }, (_, i) => 'line-' + i).join('\n') }) })), async frame => {
+    await settled(() => frame.screen().includes('line-0'))
+    check('S10 长文折叠：第 5 行不可见', !frame.screen().includes('line-4'), frame.lines().slice(0, 8).join('|'))
+    check('S10 折叠提示出现', frame.screen().includes('line-2') && !frame.screen().includes('line-3'))
+  })
+  await withTerminal(() => card(smTool(), { verbose: true }), async frame => {
+    check('S10 verbose：raw args 层可见', await settled(() => frame.screen().includes('── args ──') && frame.screen().includes('\"pin\"')), frame.lines().slice(0, 12).join('|'))
+    check('S10 verbose：raw result 层可见', frame.screen().includes('── result ──') && frame.screen().includes('\"delivery\"'))
+  })
+  // 其他工具卡不回归：generic Read 卡形状保持（名称 + 参数括号）。
+  await withTerminal(() => card({
+    callId: 'r1',
+    name: 'Read',
+    argsText: '{"file_path":"/tmp/a.md"}',
+    status: 'ok',
+    resultText: 'file body',
+    startedAt: NOW - 5000,
+    durationMs: 300,
+  }), async frame => {
+    check('S10 generic 卡保持名称+参数括号', await settled(() => frame.screen().includes('Read') && frame.screen().includes('file_path')), frame.lines()[0] ?? '')
+  })
+}
+
 console.log(failed === 0 ? `ALL PASS (${passed})` : `FAILED: ${failed}`)
 process.exit(failed === 0 ? 0 : 1)
