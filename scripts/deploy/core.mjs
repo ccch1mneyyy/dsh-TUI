@@ -25,8 +25,9 @@
  *    rollback target, nor lease-pinned, nor inside the retention window —
  *    and it defaults to dry-run.
  */
+import { createRequire } from "node:module"
 import { createHash } from "node:crypto"
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import {
   LEASE_HEARTBEAT_MS,
@@ -352,6 +353,7 @@ export function classifyLease(leasePath, now = Date.now()) {
   return { state: "live", reason: "pid " + pid + " heartbeating" }
 }
 
+
 /** All lease classifications for one generation id (batch-primed so a
  *  GC/status pass pays at most ONE platform creation-time query). */
 export function leasesFor(deployRoot, generationId) {
@@ -469,6 +471,136 @@ export function deployRootFor(profileDir) {
   const candidate = join(profileDir, ".dsh-tui", "deploy")
   if (!existsSync(candidate)) throw new DeployError("no deploy root at " + candidate + " (expected <profile>/.dsh-tui/deploy)")
   return candidate
+}
+
+
+// ── runtime-lock 闭包与健康检查（M2①）───────────────────────────────────
+
+/**
+ * Resolve one dependency's runtime identity from a resolution root:
+ * the package's declared version plus a content fingerprint (sha256 of
+ * its package.json bytes). found:false entries are recorded honestly —
+ * a lock must never pretend a closure it could not see (design: "健康检查
+ * 不能虚称完整 hermetic snapshot").
+ */
+function resolvePackageIdentity(name, requireFn) {
+  try {
+    const manifestPath = requireFn.resolve(name + "/package.json")
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
+    return {
+      name,
+      version: typeof manifest.version === "string" ? manifest.version : "unknown",
+      integrity: sha256Bytes(readFileSync(manifestPath)),
+      resolved: dirname(realpathSync(manifestPath)),
+      found: true,
+    }
+  } catch {
+    try {
+      // Some packages restrict the ./package.json subpath; fall back to the
+      // entry point and walk up to the nearest manifest.
+      const entry = requireFn.resolve(name)
+      let dir = dirname(realpathSync(entry))
+      for (let i = 0; i < 16; i += 1) {
+        const candidate = join(dir, "package.json")
+        if (existsSync(candidate)) {
+          const manifest = JSON.parse(readFileSync(candidate, "utf8"))
+          return { name, version: typeof manifest.version === "string" ? manifest.version : "unknown", integrity: sha256Bytes(readFileSync(candidate)), resolved: dir, found: true }
+        }
+        const parent = dirname(dir)
+        if (parent === dir) break
+        dir = parent
+      }
+    } catch {
+      // fall through to not-found
+    }
+    return { name, version: null, integrity: null, resolved: null, found: false }
+  }
+}
+
+/** The profile directory that owns a deploy root (<profile>/.dsh-tui/deploy). */
+export function profileDirFor(deployRoot) {
+  return dirname(dirname(realpathSync(deployRoot)))
+}
+
+/**
+ * Resolve the generation's RUNTIME closure. Runtime dependencies and peers
+ * both live in the profile's (hoisted) node_modules at run time, so both
+ * resolve from the profile root — the build tree's own node_modules only
+ * feeds compilation. Bundled workspace dependencies (@dsh-std/*, the mathjax
+ * vendor) ship INSIDE the package tree (already committed in
+ * packageTreeSha256) and are recorded as bundled, not re-resolved.
+ * @returns {{dependencies: object[], peers: object[], closureSha256: string}}
+ */
+export function resolveRuntimeClosure(pkg, deployRoot) {
+  const requireFn = createRequire(join(profileDirFor(deployRoot), "package.json"))
+  const bundled = new Set(pkg.bundledDependencies ?? [])
+  const dependencies = []
+  for (const name of Object.keys(pkg.dependencies ?? {}).sort()) {
+    if (bundled.has(name)) {
+      dependencies.push({ name, bundled: true })
+      continue
+    }
+    dependencies.push(resolvePackageIdentity(name, requireFn))
+  }
+  const peers = []
+  for (const name of Object.keys(pkg.peerDependencies ?? {}).sort()) {
+    if (bundled.has(name)) continue
+    peers.push(resolvePackageIdentity(name, requireFn))
+  }
+  const closureSha256 = sha256Bytes(Buffer.from(JSON.stringify({ dependencies, peers }), "utf8"))
+  return { dependencies, peers, closureSha256 }
+}
+
+/**
+ * Health of one generation's recorded runtime closure against the profile's
+ * CURRENT state: re-resolve every recorded entry and diff.
+ *  - healthy : every recorded identity still resolves to the same bytes;
+ *  - drifted : some entry's version/integrity changed or vanished (the
+ *              profile moved under the generation — exactly what the design
+ *              wants surfaced instead of best-effort running);
+ *  - degraded: the lock itself is unreadable/malformed (report, never guess).
+ * Bundled entries are skipped: their bytes are committed in the package
+ * tree, not provided by the profile.
+ */
+export function runtimeLockHealth(deployRoot, generationId, pkg) {
+  const lockPath = join(deployRoot, "generations", generationId, "runtime-lock.json")
+  let lock
+  try {
+    lock = JSON.parse(readFileSync(lockPath, "utf8"))
+  } catch {
+    return { status: "degraded", reason: "runtime-lock.json missing or unreadable", drift: [] }
+  }
+  if (lock.schemaVersion !== 2 || !Array.isArray(lock.dependencies) || !Array.isArray(lock.peers)) {
+    return { status: "degraded", reason: "runtime-lock.json is not schema 2", drift: [] }
+  }
+  const current = resolveRuntimeClosure(pkg, deployRoot)
+  const byName = new Map([...current.dependencies, ...current.peers].map(entry => [entry.name, entry]))
+  const drift = []
+  for (const recorded of [...lock.dependencies, ...lock.peers]) {
+    if (recorded.bundled === true) continue
+    const nowEntry = byName.get(recorded.name)
+    if (recorded.found === true && (nowEntry === undefined || nowEntry.found !== true)) {
+      drift.push({ name: recorded.name, recorded: entrySummary(recorded), current: "absent" })
+      continue
+    }
+    if (recorded.found !== true) {
+      // The lock never saw it; only flag when it EXISTS now (the closure the
+      // build ran without has appeared — worth knowing, still drift).
+      if (nowEntry !== undefined && nowEntry.found === true) {
+        drift.push({ name: recorded.name, recorded: "absent-at-build", current: entrySummary(nowEntry) })
+      }
+      continue
+    }
+    if (nowEntry !== undefined && nowEntry.found === true && recorded.integrity !== nowEntry.integrity) {
+      drift.push({ name: recorded.name, recorded: entrySummary(recorded), current: entrySummary(nowEntry) })
+    }
+  }
+  return { status: drift.length === 0 ? "healthy" : "drifted", drift, closureSha256: current.closureSha256 }
+}
+
+function entrySummary(entry) {
+  if (entry.found !== true) return "absent"
+  return entry.version + "@" + String(entry.integrity).slice(0, 12)
 }
 
 /** Operator-facing status snapshot. */

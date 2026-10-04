@@ -459,6 +459,13 @@ const GROUPS = {
 // fail closed 给可行动错误；legacy 无 manifest 跑规范内容；转发名集合与
 // 规范模块运行时导出面锁步。
     ["verify-dispatch-subpaths", ['node', 'scripts/verify-dispatch-subpaths.mjs']],
+// runtime-lock 闭包锁定/健康检查回归（M2①）：运行闭包从 profile 根解析成
+// 具体身份（version＋package.json 字节指纹；bundled 只记标记），found:false
+// 如实记录不装 hermetic；健康三态 healthy/drifted（升级、消失、构建后才
+// 出现，逐条点名 recorded→now）/degraded（锁坏）；deployctl health 命令
+// 退出码；真实 build-generation 集成（合成夹具包，绝不 cpSync 共享
+// node_modules 的符号链接——写入会打穿 pnpm store）。
+    ["verify-deploy-runtime-lock", ['node', 'scripts/verify-deploy-runtime-lock.mjs']],
 // 构建隔离 M0 回归：live-tree 守卫（profile junction 指向的源树拒绝
 // clean/build、逃生口、clean-lib 真子进程集成）、staging 构建产物形状
 // （READY files 清单/树哈希独立复核/runtime-lock 如实标 profile 提供）、
