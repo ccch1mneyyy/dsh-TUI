@@ -14,7 +14,9 @@
  * dry-run plan unless --apply is passed, and no command ever writes outside
  * the deploy root.
  */
-import { deployRootFor, deployStatus, gcGenerations, promoteGeneration, rollbackGeneration } from "./deploy/core.mjs"
+import { deployRootFor, deployStatus, gcGenerations, promoteGeneration, readActive, rollbackGeneration, runtimeLockHealth } from "./deploy/core.mjs"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 
 function usage(exitCode) {
   console.log([
@@ -26,6 +28,7 @@ function usage(exitCode) {
     "                                  (--steal-lock removes a stale build lock)",
     "  rollback [--to <id>]            repoint active at the previous (or given) generation",
     "  gc [--apply]                    dry-run (default) or execute safe garbage collection",
+"  health [--generation <id>]      runtime-lock closure health of the active (or given) generation",
     "",
     "options:",
     "  --profile <dir>                 dsh profile directory",
@@ -101,6 +104,23 @@ try {
   } else if (command === "rollback") {
     const result = rollbackGeneration(deployRoot, { to: argv.flags.to })
     console.log("rolled back to " + result.generationId + " (from " + result.from + ") — new processes pick it up; running processes keep their lease")
+  } else if (command === "health") {
+    const active = readActive(deployRoot)
+    const generationId = argv.flags.generation ?? active?.generationId
+    if (generationId === undefined) {
+      console.log("health: no active generation and none passed via --generation (legacy runtime has no runtime-lock)")
+      process.exit(0)
+    }
+    const pkgPath = join(deployRoot, "generations", generationId, "package", "package.json")
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"))
+    const health = runtimeLockHealth(deployRoot, generationId, pkg)
+    console.log("runtime-lock health for " + generationId + ": " + health.status.toUpperCase())
+    if (health.reason !== undefined) console.log("  " + health.reason)
+    for (const drift of health.drift) {
+      console.log("  drifted " + drift.name + ": recorded " + drift.recorded + " → now " + drift.current)
+    }
+    if (health.drift.length === 0) console.log("  every recorded runtime dependency and peer resolves to the same bytes as at build time")
+    if (health.status !== "healthy") process.exitCode = 1
   } else if (command === "gc") {
     const plan = gcGenerations(deployRoot, {
       apply: argv.flags.apply === true,

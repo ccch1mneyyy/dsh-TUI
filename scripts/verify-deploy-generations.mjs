@@ -33,6 +33,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import {
+  STAGING_TTL_MS,
   atomicWriteJson,
   classifyLease,
   gcGenerations,
@@ -395,6 +396,44 @@ const RESOLVE_ONCE = [
       && existsSync(join(deployRoot, "generations", "gen-leased"))
       && existsSync(join(deployRoot, "generations", "gen-newest")))
   holder.kill()
+}
+
+// ── staging owner 强判活（M2②）────────────────────────────────────────────
+{
+  const ownerDeploy = join(tmp, "owner-profile", ".dsh-tui", "deploy")
+  mkdirSync(join(ownerDeploy, "generations"), { recursive: true })
+  mkdirSync(join(ownerDeploy, "leases"), { recursive: true })
+  function stagingWith(id, owner) {
+    const dir = join(ownerDeploy, "generations", id + ".staging")
+    mkdirSync(dir, { recursive: true })
+    if (owner !== "none") writeFileSync(join(dir, ".owner.json"), JSON.stringify(owner))
+    return dir
+  }
+  // Windows 无法回拨目录 mtime：用过期阈值 0ms＋间隔 5ms 制造「全部已过期」。
+  const ttl = { stagingTtlMs: 0 }
+  const liveChild = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore" })
+  await new Promise(resolve => liveChild.once("spawn", resolve))
+  stagingWith("st-dead", { schemaVersion: 1, pid: 0x7ffffff0, processStartIdentity: { kind: "wall-start-ms", wallMs: 1 }, startedAt: Date.now() })
+  stagingWith("st-none", "none")
+  stagingWith("st-live", { schemaVersion: 1, pid: liveChild.pid, processStartIdentity: { kind: "wall-start-ms", wallMs: Date.now() - 60000 }, startedAt: Date.now() })
+  stagingWith("st-young", "none")
+  await new Promise(resolve => setTimeout(resolve, 5))
+  const plan = gcGenerations(ownerDeploy, { ...ttl, apply: false })
+  const removedIds = plan.remove.map(entry => entry.id)
+  const keptIds = plan.keep.map(entry => entry.id)
+  check("staging GC: dead-owner staging past TTL is scheduled", removedIds.includes("st-dead"))
+  check("staging GC: unattributed staging past TTL is scheduled", removedIds.includes("st-none"))
+  check("staging GC: live-owner staging is KEPT regardless of age (strong liveness)",
+    !removedIds.includes("st-live") && keptIds.includes("st-live"), JSON.stringify(plan.keep.find(entry => entry.id === "st-live")?.reasons))
+  check("staging GC: young staging kept by the REAL TTL window",
+    !gcGenerations(ownerDeploy, { apply: false }).remove.some(entry => entry.id === "st-young"))
+  gcGenerations(ownerDeploy, { ...ttl, apply: true })
+  check("staging GC: apply removes exactly the dead set",
+    !existsSync(join(ownerDeploy, "generations", "st-dead.staging"))
+    && !existsSync(join(ownerDeploy, "generations", "st-none.staging"))
+    && existsSync(join(ownerDeploy, "generations", "st-live.staging")))
+  liveChild.kill()
+  await new Promise(resolve => liveChild.once("exit", resolve))
 }
 
 // ── rollback = pointer change only ───────────────────────────────────────

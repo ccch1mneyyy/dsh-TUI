@@ -25,10 +25,19 @@
  *    rollback target, nor lease-pinned, nor inside the retention window —
  *    and it defaults to dry-run.
  */
+import { createRequire } from "node:module"
 import { createHash } from "node:crypto"
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
-import { parseActiveManifest, parseReadyManifest, isValidGenerationId, LEASE_HEARTBEAT_MS } from "../../dispatch/resolve.mjs"
+import {
+  LEASE_HEARTBEAT_MS,
+  currentProcessStartIdentity,
+  isValidGenerationId,
+  matchProcessStartIdentity,
+  parseActiveManifest,
+  parseReadyManifest,
+  primeProcessStartIdentities,
+} from "../../dispatch/resolve.mjs"
 
 /** A lease is "fresh" while within 3 heartbeat windows of its last beat. */
 const LEASE_FRESH_MS = LEASE_HEARTBEAT_MS * 3
@@ -291,7 +300,16 @@ export function rollbackGeneration(deployRoot, options = {}) {
   return { generationId: targetId, from: active.generationId }
 }
 
-/** Classify one lease file: live / stale / ambiguous (kept, never trusted dead). */
+/** Classify one lease file: live / stale / ambiguous (kept, never trusted dead).
+ *
+ * Strong liveness (design §S04 "lease 强判活"): when the lease carries a
+ * processStartIdentity, the pid's CURRENT creation identity decides first —
+ * a match is live even with a stale heartbeat (a heartbeat write can fail
+ * for reasons that do not kill the process), and a PROVEN mismatch (exact
+ * linux tick identity) is stale even with a fresh-looking pid. Only when the
+ * platform cannot probe (or the kinds are incomparable) does the classifier
+ * fall back to M0's heartbeat semantics — ambiguous, never deleted.
+ */
 export function classifyLease(leasePath, now = Date.now()) {
   let lease
   try {
@@ -311,20 +329,77 @@ export function classifyLease(leasePath, now = Date.now()) {
     else return { state: "ambiguous", reason: "pid probe failed: " + error.code }
   }
   if (!alive) return { state: "stale", reason: "pid " + pid + " is gone" }
+  const identity = lease.processStartIdentity
+  if (identity !== null && typeof identity === "object" && typeof identity.kind === "string") {
+    const current = currentProcessStartIdentity(pid)
+    if (current !== undefined) {
+      const match = matchProcessStartIdentity(identity, current)
+      if (match === true) {
+        return { state: "live", reason: "pid " + pid + " alive, creation time matches the lease", strong: true }
+      }
+      if (match === false) {
+        return { state: "stale", reason: "pid " + pid + " is a REUSED pid (process creation time differs from the lease)", strong: true }
+      }
+      // Incomparable (wall-clock mismatch can be a clock step): fall through
+      // to heartbeat semantics — never delete a generation on a maybe.
+    }
+  }
   const heartbeatAt = typeof lease.heartbeatAt === "number" ? lease.heartbeatAt : 0
   if (now - heartbeatAt > LEASE_FRESH_MS) {
-    // PID alive but the lease went quiet: PID reuse is the classic trap, and
-    // the design is explicit — an undecidable lease KEEPS the generation.
-    return { state: "ambiguous", reason: "pid " + pid + " alive but heartbeat is stale (possible pid reuse)" }
+    // PID alive but the lease went quiet and creation time could not prove
+    // identity: PID reuse stays possible — an undecidable lease KEEPS the gen.
+    return { state: "ambiguous", reason: "pid " + pid + " alive but heartbeat is stale and creation time is inconclusive" }
   }
   return { state: "live", reason: "pid " + pid + " heartbeating" }
 }
 
-/** All lease classifications for one generation id. */
+
+/**
+ * Staging owner liveness (M2②): the .owner.json stamp build-generation
+ * writes at staging creation, judged with the SAME strong rules as leases
+ * (pid probe + creation-time identity). Unknown/missing stamps read as
+ * "stale" — an unattributed staging past TTL is garbage by definition.
+ */
+function classifyStagingOwner(stagingDir) {
+  let stamp
+  try {
+    stamp = JSON.parse(readFileSync(join(stagingDir, ".owner.json"), "utf8"))
+  } catch {
+    return "unknown (no readable owner stamp)"
+  }
+  const pid = stamp.pid
+  if (typeof pid !== "number" || !Number.isInteger(pid)) return "unknown (no pid in stamp)"
+  let alive
+  try {
+    process.kill(pid, 0)
+    alive = true
+  } catch (error) {
+    if (error.code === "ESRCH") return "dead"
+    if (error.code !== "EPERM") return "undecidable (pid probe " + error.code + ")"
+    alive = true
+  }
+  if (!alive) return "dead"
+  const identity = stamp.processStartIdentity
+  if (identity !== null && typeof identity === "object" && typeof identity.kind === "string") {
+    const current = currentProcessStartIdentity(pid)
+    if (current !== undefined && matchProcessStartIdentity(identity, current) === false) return "dead (pid reused)"
+  }
+  return "live"
+}
+
+/** All lease classifications for one generation id (batch-primed so a
+ *  GC/status pass pays at most ONE platform creation-time query). */
 export function leasesFor(deployRoot, generationId) {
   const dir = join(deployRoot, "leases", generationId)
   if (!existsSync(dir)) return []
-  return readdirSync(dir).filter(name => name.endsWith(".json")).map(name => {
+  const names = readdirSync(dir).filter(name => name.endsWith(".json"))
+  const pids = []
+  for (const name of names) {
+    const pid = Number(name.split("-")[0])
+    if (Number.isInteger(pid) && pid > 0) pids.push(pid)
+  }
+  if (pids.length > 0) primeProcessStartIdentities(pids)
+  return names.map(name => {
     const path = join(dir, name)
     return { path, ...classifyLease(path) }
   })
@@ -345,10 +420,14 @@ export function gcGenerations(deployRoot, options = {}) {
   const apply = options.apply === true
   const minAgeDays = options.minAgeDays ?? 7
   const keepAtLeast = options.keepAtLeast ?? 2
+  // 测试可注入（Windows 无法回拨目录 mtime，靠缩小 TTL 制造「已过期」）。
+  const stagingTtlMs = options.stagingTtlMs ?? STAGING_TTL_MS
   const now = Date.now()
   const active = readActive(deployRoot)
   const generationsDir = join(deployRoot, "generations")
   const candidates = []
+  const keep = []
+  const remove = []
   if (existsSync(generationsDir)) {
     for (const name of readdirSync(generationsDir)) {
       const full = join(generationsDir, name)
@@ -357,9 +436,23 @@ export function gcGenerations(deployRoot, options = {}) {
       const staging = name.endsWith(".staging")
       const id = staging ? name.slice(0, -".staging".length) : name
       if (staging) {
+        // M2②：staging 回收按 owner 强判活——只有「过了 TTL 且 owner 印章
+        // 判死（pid 消失或创建时间证明复用）」才可回收；活 owner 的 staging
+        // 无论多老都保留（设计："staging 可在持锁确定 owner/TTL 后回收"）。
+        // promote 锁窗口内同样不动（staging 可能正被改名提交）。
         const age = now - stat.mtimeMs
-        const lockFree = !existsSync(join(deployRoot, "build-locks", "promote.lock"))
-        if (age > STAGING_TTL_MS && lockFree) candidates.push({ kind: "staging", id, path: full, reason: "staging older than " + Math.round(STAGING_TTL_MS / 3600000) + "h and no promote lock" })
+        const promoteLock = join(deployRoot, "build-locks", "promote.lock")
+        const promoteActive = existsSync(promoteLock) && now - statSync(promoteLock).mtimeMs <= BUILD_LOCK_STALE_MS
+        if (age <= stagingTtlMs || promoteActive) {
+          keep.push({ kind: "staging", id, path: full, reasons: [age <= stagingTtlMs ? "staging younger than TTL" : "promote lock active"] })
+          continue
+        }
+        const ownerState = classifyStagingOwner(full)
+        if (ownerState === "live") {
+          keep.push({ kind: "staging", id, path: full, reasons: ["staging owner alive (strong liveness)"] })
+          continue
+        }
+        candidates.push({ kind: "staging", id, path: full, reason: "staging past TTL, owner " + ownerState + ", no active promote lock" })
         continue
       }
       if (!isValidGenerationId(id)) continue
@@ -370,8 +463,6 @@ export function gcGenerations(deployRoot, options = {}) {
   }
   const readySorted = candidates.filter(c => c.kind === "generation").sort((a, b) => b.mtimeMs - a.mtimeMs)
   const newestKept = new Set(readySorted.slice(0, keepAtLeast).map(c => c.id))
-  const keep = []
-  const remove = []
   for (const candidate of candidates) {
     if (candidate.kind === "staging") {
       remove.push(candidate)
@@ -388,13 +479,38 @@ export function gcGenerations(deployRoot, options = {}) {
     if (reasons.length > 0) keep.push({ ...candidate, reasons })
     else remove.push({ ...candidate, reason: "not active/rollback-target/leased/newest/young" })
   }
-  const plan = { apply, keep, remove }
+  // Crash-lease reclamation (design §S04: "crash lease 由下一次经过平台核验后
+  // 回收"): ONLY leases the strong liveness probe classified stale — the pid
+  // is gone, or (exact linux tick identity) the creation time proves reuse.
+  // Live and ambiguous lease files are never touched, including on
+  // generations this GC keeps anyway.
+  const reclaimLeases = []
+  for (const candidate of candidates) {
+    if (candidate.kind !== "generation") continue
+    for (const lease of leasesFor(deployRoot, candidate.id)) {
+      if (lease.state === "stale") reclaimLeases.push({ generationId: candidate.id, path: lease.path, reason: lease.reason })
+    }
+  }
+  const plan = { apply, keep, remove, reclaimLeases }
   if (apply) {
+    for (const lease of reclaimLeases) {
+      try {
+        unlinkSync(lease.path)
+      } catch {
+        // Raced a cleaner release — the file is gone either way.
+      }
+    }
     for (const target of remove) {
       rmSync(target.path, { recursive: true, force: true })
       if (existsSync(target.path)) throw new DeployError("GC removal silently failed for " + target.path + " — directory still exists after rmSync (platform rm no-op?)")
     }
-    if (remove.length > 0) appendHistory(deployRoot, { event: "gc", removed: remove.map(target => ({ kind: target.kind, id: target.id })) })
+    if (remove.length > 0 || reclaimLeases.length > 0) {
+      appendHistory(deployRoot, {
+        event: "gc",
+        removed: remove.map(target => ({ kind: target.kind, id: target.id })),
+        reclaimedLeases: reclaimLeases.map(lease => ({ id: lease.generationId, file: lease.path.split(/[\\/]/).pop(), reason: lease.reason })),
+      })
+    }
   }
   return plan
 }
@@ -404,6 +520,136 @@ export function deployRootFor(profileDir) {
   const candidate = join(profileDir, ".dsh-tui", "deploy")
   if (!existsSync(candidate)) throw new DeployError("no deploy root at " + candidate + " (expected <profile>/.dsh-tui/deploy)")
   return candidate
+}
+
+
+// ── runtime-lock 闭包与健康检查（M2①）───────────────────────────────────
+
+/**
+ * Resolve one dependency's runtime identity from a resolution root:
+ * the package's declared version plus a content fingerprint (sha256 of
+ * its package.json bytes). found:false entries are recorded honestly —
+ * a lock must never pretend a closure it could not see (design: "健康检查
+ * 不能虚称完整 hermetic snapshot").
+ */
+function resolvePackageIdentity(name, requireFn) {
+  try {
+    const manifestPath = requireFn.resolve(name + "/package.json")
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
+    return {
+      name,
+      version: typeof manifest.version === "string" ? manifest.version : "unknown",
+      integrity: sha256Bytes(readFileSync(manifestPath)),
+      resolved: dirname(realpathSync(manifestPath)),
+      found: true,
+    }
+  } catch {
+    try {
+      // Some packages restrict the ./package.json subpath; fall back to the
+      // entry point and walk up to the nearest manifest.
+      const entry = requireFn.resolve(name)
+      let dir = dirname(realpathSync(entry))
+      for (let i = 0; i < 16; i += 1) {
+        const candidate = join(dir, "package.json")
+        if (existsSync(candidate)) {
+          const manifest = JSON.parse(readFileSync(candidate, "utf8"))
+          return { name, version: typeof manifest.version === "string" ? manifest.version : "unknown", integrity: sha256Bytes(readFileSync(candidate)), resolved: dir, found: true }
+        }
+        const parent = dirname(dir)
+        if (parent === dir) break
+        dir = parent
+      }
+    } catch {
+      // fall through to not-found
+    }
+    return { name, version: null, integrity: null, resolved: null, found: false }
+  }
+}
+
+/** The profile directory that owns a deploy root (<profile>/.dsh-tui/deploy). */
+export function profileDirFor(deployRoot) {
+  return dirname(dirname(realpathSync(deployRoot)))
+}
+
+/**
+ * Resolve the generation's RUNTIME closure. Runtime dependencies and peers
+ * both live in the profile's (hoisted) node_modules at run time, so both
+ * resolve from the profile root — the build tree's own node_modules only
+ * feeds compilation. Bundled workspace dependencies (@dsh-std/*, the mathjax
+ * vendor) ship INSIDE the package tree (already committed in
+ * packageTreeSha256) and are recorded as bundled, not re-resolved.
+ * @returns {{dependencies: object[], peers: object[], closureSha256: string}}
+ */
+export function resolveRuntimeClosure(pkg, deployRoot) {
+  const requireFn = createRequire(join(profileDirFor(deployRoot), "package.json"))
+  const bundled = new Set(pkg.bundledDependencies ?? [])
+  const dependencies = []
+  for (const name of Object.keys(pkg.dependencies ?? {}).sort()) {
+    if (bundled.has(name)) {
+      dependencies.push({ name, bundled: true })
+      continue
+    }
+    dependencies.push(resolvePackageIdentity(name, requireFn))
+  }
+  const peers = []
+  for (const name of Object.keys(pkg.peerDependencies ?? {}).sort()) {
+    if (bundled.has(name)) continue
+    peers.push(resolvePackageIdentity(name, requireFn))
+  }
+  const closureSha256 = sha256Bytes(Buffer.from(JSON.stringify({ dependencies, peers }), "utf8"))
+  return { dependencies, peers, closureSha256 }
+}
+
+/**
+ * Health of one generation's recorded runtime closure against the profile's
+ * CURRENT state: re-resolve every recorded entry and diff.
+ *  - healthy : every recorded identity still resolves to the same bytes;
+ *  - drifted : some entry's version/integrity changed or vanished (the
+ *              profile moved under the generation — exactly what the design
+ *              wants surfaced instead of best-effort running);
+ *  - degraded: the lock itself is unreadable/malformed (report, never guess).
+ * Bundled entries are skipped: their bytes are committed in the package
+ * tree, not provided by the profile.
+ */
+export function runtimeLockHealth(deployRoot, generationId, pkg) {
+  const lockPath = join(deployRoot, "generations", generationId, "runtime-lock.json")
+  let lock
+  try {
+    lock = JSON.parse(readFileSync(lockPath, "utf8"))
+  } catch {
+    return { status: "degraded", reason: "runtime-lock.json missing or unreadable", drift: [] }
+  }
+  if (lock.schemaVersion !== 2 || !Array.isArray(lock.dependencies) || !Array.isArray(lock.peers)) {
+    return { status: "degraded", reason: "runtime-lock.json is not schema 2", drift: [] }
+  }
+  const current = resolveRuntimeClosure(pkg, deployRoot)
+  const byName = new Map([...current.dependencies, ...current.peers].map(entry => [entry.name, entry]))
+  const drift = []
+  for (const recorded of [...lock.dependencies, ...lock.peers]) {
+    if (recorded.bundled === true) continue
+    const nowEntry = byName.get(recorded.name)
+    if (recorded.found === true && (nowEntry === undefined || nowEntry.found !== true)) {
+      drift.push({ name: recorded.name, recorded: entrySummary(recorded), current: "absent" })
+      continue
+    }
+    if (recorded.found !== true) {
+      // The lock never saw it; only flag when it EXISTS now (the closure the
+      // build ran without has appeared — worth knowing, still drift).
+      if (nowEntry !== undefined && nowEntry.found === true) {
+        drift.push({ name: recorded.name, recorded: "absent-at-build", current: entrySummary(nowEntry) })
+      }
+      continue
+    }
+    if (nowEntry !== undefined && nowEntry.found === true && recorded.integrity !== nowEntry.integrity) {
+      drift.push({ name: recorded.name, recorded: entrySummary(recorded), current: entrySummary(nowEntry) })
+    }
+  }
+  return { status: drift.length === 0 ? "healthy" : "drifted", drift, closureSha256: current.closureSha256 }
+}
+
+function entrySummary(entry) {
+  if (entry.found !== true) return "absent"
+  return entry.version + "@" + String(entry.integrity).slice(0, 12)
 }
 
 /** Operator-facing status snapshot. */

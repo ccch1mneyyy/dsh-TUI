@@ -34,7 +34,7 @@
 import { Chalk } from 'chalk'
 import { t } from './i18n.js'
 
-export type HandoffEventKind = 'starting' | 'stage-start' | 'succeeded' | 'failed' | 'crashed'
+export type HandoffEventKind = 'starting' | 'stage-start' | 'first-frame' | 'succeeded' | 'failed' | 'crashed'
 
 /** One-line reason vocabulary for failed events (classified, not raw stacks). */
 export type HandoffFailureReason = 'spawn-error' | 'boot-failure'
@@ -51,6 +51,15 @@ export type ReplacementOutcome =
  * means the TUI never came up (failed); a clean exit after it means the
  * user owned and closed a working session (succeeded); a later nonzero
  * exit is a session-level crash, not a handoff failure.
+ *
+ * firstFrameAcked upgrades the fact behind those heuristics (S05 完整版):
+ * when the handoff ACK pipe reports the replacement's first frame flushed,
+ * every death is post-boot (crashed/succeeded — the user saw a UI); when it
+ * reports the replacement died WITHOUT ever flushing a frame, the failure
+ * is a boot failure whenever it happens — the 4s timer was only ever a
+ * proxy for exactly this observation. Undefined keeps the M0 timer
+ * semantics for callers without the protocol (plain /restart, /update,
+ * older replacements that predate the ACK pipe).
  */
 export function classifyReplacementOutcome(input: {
   spawnError?: unknown
@@ -58,10 +67,16 @@ export function classifyReplacementOutcome(input: {
   code: number | null
   signal: NodeJS.Signals | null
   elapsedMs: number
+  firstFrameAcked?: boolean
 }): ReplacementOutcome {
   if (input.spawnError !== undefined || !input.closed) return { kind: 'failed', reason: 'spawn-error' }
+  if (input.firstFrameAcked === false) return { kind: 'failed', reason: 'boot-failure' }
   if (input.code === 0) return { kind: 'succeeded' }
   if (input.code === null && input.signal === null) return { kind: 'succeeded' }
+  if (input.firstFrameAcked === true) {
+    // Post-frame deaths are session-level, not handoff failures.
+    return { kind: 'crashed', code: input.code === null && input.signal !== null ? null : input.code }
+  }
   if (input.elapsedMs < 4000) return { kind: 'failed', reason: 'boot-failure' }
   // A signal death (code null, signal set) after the window is a crash —
   // the copy renders "signal" instead of a fake code.
@@ -80,6 +95,7 @@ const COLOR = new Chalk({ level: 2 })
 const KIND_COLOR: Record<HandoffEventKind, (text: string) => string> = {
   starting: COLOR.cyan,
   'stage-start': COLOR.cyan,
+  'first-frame': COLOR.cyan,
   succeeded: COLOR.green,
   failed: COLOR.yellow,
   crashed: COLOR.red,
@@ -94,7 +110,9 @@ export function handoffEventTag(kind: HandoffEventKind): string {
  * Format one event's visible text. Pure: no stream I/O, no clock, no env.
  * Passing color: false yields plain text (headless/piped consumers and the
  * regression oracle). The succeeded kind formats to an empty string — the
- * new UI is the success signal, the event only reaches restart.log.
+ * new UI is the success signal, the event only reaches restart.log. The
+ * first-frame kind is likewise terminal-quiet: the flushed frame ITSELF
+ * replaces the transition surface (design: "随后 transition 消失").
  */
 export function formatHandoffNotice(
   kind: HandoffEventKind,
@@ -107,7 +125,7 @@ export function formatHandoffNotice(
   },
 ): string {
   const paint = options.color === true ? KIND_COLOR[kind] : (text: string) => text
-  if (kind === 'succeeded') return ''
+  if (kind === 'succeeded' || kind === 'first-frame') return ''
   if (kind === 'starting') {
     return paint('⟳ ' + t('kernel-handoff-starting', { name: options.name }))
       + '\n  ' + t('kernel-handoff-session-kept')

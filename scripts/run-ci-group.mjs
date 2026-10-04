@@ -446,6 +446,26 @@ const GROUPS = {
 // 安全 GC（dry-run 默认、active/回滚目标/活 lease 一律保留）、回滚＝
 // 只改指针。
     ["verify-deploy-generations", ['node', 'scripts/verify-deploy-generations.mjs']],
+// lease 强判活回归（M1③）：lease 携带进程创建时间身份——linux /proc tick 精确
+// 判死（可证 PID 复用）、win32 CIM 数字探针（一次批查询，locale 免疫）匹配
+// 即 live(strong)（心跳写失败不再误判 ambiguous）；wall-clock 不合只降级不判
+// 死（时钟步进 fail-safe）；M0 无身份 lease 心跳三态不变；GC 只回收 stale
+// lease 文件（dry-run 报告、apply 才删，ambiguous/live 不动）。
+    ["verify-deploy-lease-liveness", ['node', 'scripts/verify-deploy-lease-liveness.mjs']],
+// 子路径统一代次回归（M1②）：所有公共子路径（oauth/working-activity/panels/
+// plugin-host/extensions/api/jsx-runtime/invariant 等 12 个）经 dispatch 门面
+// 与主入口共享同一进程 pin——真夹具 profile + deploy root 下按包名解析也
+// 取 pin 代次的码（混代风险证伪）；翻指针后新进程取新代；代次缺入口
+// fail closed 给可行动错误；legacy 无 manifest 跑规范内容；转发名集合与
+// 规范模块运行时导出面锁步。
+    ["verify-dispatch-subpaths", ['node', 'scripts/verify-dispatch-subpaths.mjs']],
+// runtime-lock 闭包锁定/健康检查回归（M2①）：运行闭包从 profile 根解析成
+// 具体身份（version＋package.json 字节指纹；bundled 只记标记），found:false
+// 如实记录不装 hermetic；健康三态 healthy/drifted（升级、消失、构建后才
+// 出现，逐条点名 recorded→now）/degraded（锁坏）；deployctl health 命令
+// 退出码；真实 build-generation 集成（合成夹具包，绝不 cpSync 共享
+// node_modules 的符号链接——写入会打穿 pnpm store）。
+    ["verify-deploy-runtime-lock", ['node', 'scripts/verify-deploy-runtime-lock.mjs']],
 // 构建隔离 M0 回归：live-tree 守卫（profile junction 指向的源树拒绝
 // clean/build、逃生口、clean-lib 真子进程集成）、staging 构建产物形状
 // （READY files 清单/树哈希独立复核/runtime-lock 如实标 profile 提供）、
@@ -458,6 +478,20 @@ const GROUPS = {
 // （resolve 晚于 write 回调、sink 抛错不阻塞）、文案双语与配色互异
 // （青/黄/红，无色模式零 ANSI）、plugin.ts/update.ts 源接线 tripwire。
     ["verify-handoff-transition", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-transition.ts']],
+// 内核切换原子屏交接回归（S05 完整版，M1①）：ACK 协议解析、结局分类的
+// 首帧事实（flush 过＝post-boot、没 flush＝boot-failure，4 秒窗只留给无
+// 协议 replacement）、子进程状态机（armed→adopted→ready、ready 前不写
+// 1049l、管道亡自持兜底、env 一次性消费）、armFirstFrameAck 对 adoption
+// 前写入直通/自恢复，以及真进程 e2e：ready 后旧父永不写 1049l、ready 前
+// 死亡与旧版 replacement 都恰一次收口回主屏。
+    ["verify-handoff-atomic", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-atomic.ts']],
+// PTY/ConPTY 先行门（S05 完整版）：在真实 PTY 下跑完整交接链（旧父 1049 →
+// 过场帧 → replacement adopted/首帧/ready → 自然退出闭合 1049），断言
+// 1049h/l 各恰一次且闭合晚于首帧、旧父 spawn 前后 stdin 零 reader、
+// replacement 的 TTY facade（isTTY/尺寸/raw mode）。provider 自动选择：
+// node-pty（真 ConPTY/PTY + master 侧 DA1 应答器）→ POSIX script（真 PTY）
+// → pipe（协议级回退，设备断言显式 note）。Linux CI 走 script 档。
+    ["verify-handoff-pty-gate", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-pty-gate.mjs']],
 // 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：
 // 全程跑官方读取链——Session.append 生成骨架（turn 配对/reasoning/
 // provenance/空 system head/工具调用/中断/标题/压缩检查点）、

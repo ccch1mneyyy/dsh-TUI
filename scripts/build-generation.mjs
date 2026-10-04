@@ -34,9 +34,9 @@ import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, r
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { hashPackageTree } from "./deploy/core.mjs"
+import { hashPackageTree, resolveRuntimeClosure } from "./deploy/core.mjs"
 import { assertBuildableTree } from "./deploy/guard.mjs"
-import { isValidGenerationId } from "../dispatch/resolve.mjs"
+import { isValidGenerationId, processStartIdentity } from "../dispatch/resolve.mjs"
 
 function flag(name, fallback) {
   const index = process.argv.indexOf(name)
@@ -85,6 +85,16 @@ if (existsSync(stagingDir)) {
 }
 const packageDir = join(stagingDir, "package")
 mkdirSync(packageDir, { recursive: true })
+// staging owner stamp（M2②）：GC 以强判活核验 owner（pid＋进程创建时间），
+// 只回收「过了 TTL 且 owner 已死」的 staging；stamp 在 staging 根而非
+// package/ 内，不进 READY 哈希面。
+writeFileSync(join(stagingDir, ".owner.json"), JSON.stringify({
+  schemaVersion: 1,
+  pid: process.pid,
+  processStartIdentity: processStartIdentity(),
+  startedAt: Date.now(),
+  tool: "scripts/build-generation.mjs",
+}, null, 2))
 
 // ── 编译：经临时继承 tsconfig 直写 staging，不触碰源树 tsconfig/lib ─────
 if (has("--skip-compile")) {
@@ -130,7 +140,7 @@ const settingsRun = spawnSync(process.execPath, [join(sourceRoot, "scripts", "ge
 })
 if (settingsRun.status !== 0) {
   rmSync(stagingDir, { recursive: true, force: true })
-  throw new Error("settings generation failed for the staging build:\n" + (settingsRun.stdout || "") + (settingsRun.stderr || ""))
+  throw new Error("settings generation failed for the staging build (status " + settingsRun.status + ", signal " + settingsRun.signal + "):\n" + (settingsRun.stdout || "") + (settingsRun.stderr || ""))
 }
 
 // ── 静态 files 树复制（以 package.json files 为准）──────────────────────
@@ -150,18 +160,28 @@ const lockfilePath = join(sourceRoot, "pnpm-lock.yaml")
 const lockfileHash = existsSync(lockfilePath)
   ? createHash("sha256").update(readFileSync(lockfilePath)).digest("hex")
   : undefined
+// runtime-lock v2（M2①）：把「运行时闭包」解析成具体身份记录——运行依赖
+// 与 peer 都在 profile 的 hoisted node_modules 里跑，因此统一从 profile
+// 根解析（构建树自己的 node_modules 只喂编译）。bundled workspace 依赖
+// （@dsh-std/*、mathjax vendor）随包树发布、已计入 packageTreeSha256，
+// 记 bundled 不再外查。found:false 的条目如实记录——锁绝不虚称没看见
+// 的闭包（设计：「健康检查不能虚称完整 hermetic snapshot」）。
+const closure = resolveRuntimeClosure(pkg, deployRoot)
 writeFileSync(join(stagingDir, "runtime-lock.json"), JSON.stringify({
-  schemaVersion: 1,
+  schemaVersion: 2,
   generationId,
   packageVersion: pkg.version,
   sourceCommit: gitSha(sourceRoot),
   nodeMajor: Number(process.versions.node.split(".")[0]),
   // 运行依赖由 profile 的 hoisted node_modules 提供（dsh profile 模板
-  // nodeLinker: hoisted）——M0 如实记录 peer 面与 lockfile 指纹，不声称
-  // 闭包已锁定（那是 M2 的 runtime-lock 验证范围）。
+  // nodeLinker: hoisted）——身份已锁定到字节指纹，但闭包物理上仍由
+  // profile 提供：这不是 hermetic snapshot，漂移由 health 命令显影。
   providedByProfile: true,
   peerDependencies: pkg.peerDependencies,
   ...(lockfileHash === undefined ? {} : { lockfileSha256: lockfileHash }),
+  dependencies: closure.dependencies,
+  peers: closure.peers,
+  closureSha256: closure.closureSha256,
 }, null, 2))
 
 // ── READY.json：代次内部提交标志（tmp + rename）───────────────────────

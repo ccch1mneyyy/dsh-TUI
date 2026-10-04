@@ -51,51 +51,51 @@
     },
     "./working-activity": {
       "types": "./lib/types/working-activity.d.ts",
-      "import": "./lib/types/working-activity.js"
+      "import": "./dispatch/working-activity.js"
     },
     "./oauth": {
       "types": "./lib/types/oauth.d.ts",
-      "import": "./lib/types/oauth.js"
+      "import": "./dispatch/oauth.js"
     },
     "./workspaces": {
       "types": "./lib/types/workspaces.d.ts",
-      "import": "./lib/types/workspaces.js"
+      "import": "./dispatch/workspaces.js"
     },
     "./command-trees": {
       "types": "./lib/types/command-trees.d.ts",
-      "import": "./lib/types/command-trees.js"
+      "import": "./dispatch/command-trees.js"
     },
     "./settings-sections": {
       "types": "./lib/types/settings-sections.d.ts",
-      "import": "./lib/types/settings-sections.js"
+      "import": "./dispatch/settings-sections.js"
     },
     "./scenes": {
       "types": "./lib/types/scenes.d.ts",
-      "import": "./lib/types/scenes.js"
+      "import": "./dispatch/scenes.js"
     },
     "./panels": {
       "types": "./lib/types/panels.d.ts",
-      "import": "./lib/types/panels.js"
+      "import": "./dispatch/panels.js"
     },
     "./extensions": {
       "types": "./lib/types/extensions.d.ts",
-      "import": "./lib/types/extensions.js"
+      "import": "./dispatch/extensions.js"
     },
     "./plugin-host": {
       "types": "./lib/types/plugin-host.d.ts",
-      "import": "./lib/types/plugin-host.js"
+      "import": "./dispatch/plugin-host.js"
     },
     "./api": {
       "types": "./lib/types/api.d.ts",
-      "import": "./lib/types/api.js"
+      "import": "./dispatch/api.js"
     },
     "./jsx-runtime": {
       "types": "./lib/types/jsx-runtime.d.ts",
-      "import": "./lib/types/jsx-runtime.js"
+      "import": "./dispatch/jsx-runtime.js"
     },
     "./invariant": {
       "types": "./lib/types/dsh-adapter/invariant.d.ts",
-      "default": "./lib/types/dsh-adapter/invariant.js"
+      "default": "./dispatch/invariant.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./settings.json": "./lib/settings.json",
@@ -123,7 +123,7 @@
     "build:mathjax": "pnpm --filter @dsh-tui-vendor/mathjax-tex-svg run build",
     "build:vendor": "node scripts/build-vendor.mjs",
     "compile": "node scripts/build-vendor.mjs && npm run clean && tsc -p tsconfig.json && node scripts/gen-settings-json.mjs",
-    "compile:src": "tsc -p tsconfig.json && node scripts/gen-settings-json.mjs",
+    "compile:src": "node scripts/compile-src.mjs",
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "prepare": "node scripts/prepare-guard.mjs && npm run compile",
     "build": "npm run compile && npm run verify:build",

@@ -35,6 +35,7 @@
  * dependency closure is guaranteed to resolve, and the thin bin launcher
  * loads it by absolute path (migrate subcommand) without any lib/ present.
  */
+import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -166,6 +167,148 @@ function sourceFingerprint(packageDir) {
 }
 
 /**
+ * Strong liveness identity for THIS process (design §S04: the cleaner must
+ * verify leases "通过平台进程创建时间" — a bare pid proves nothing once the
+ * OS reuses it).
+ *
+ *  - linux: /proc/<pid>/stat field 22 (starttime, clock ticks since boot) —
+ *    boot-relative, immune to clock steps, and EXACT: a mismatch proves the
+ *    pid was reused; a match proves the very same process.
+ *  - elsewhere: wall-clock start (Date.now() - uptime), compared with a
+ *    tolerance. A match upgrades an ambiguous lease to live; a mismatch can
+ *    also be caused by a clock step, so it never proves reuse by itself —
+ *    the checker falls back to heartbeat semantics instead (fail-safe).
+ * Cheap by contract: no child process, no query — acquireLease runs on the
+ * TUI boot path before the generation module is imported.
+ */
+export function processStartIdentity() {
+  if (process.platform === "linux") {
+    const ticks = linuxStarttimeTicks("/proc/self/stat")
+    if (ticks !== undefined) return { kind: "linux-starttime-ticks", ticks }
+  }
+  return { kind: "wall-start-ms", wallMs: Date.now() - Math.round(process.uptime() * 1000) }
+}
+
+/** /proc stat field 22 (starttime in clock ticks); undefined when unreadable. */
+function linuxStarttimeTicks(statPath) {
+  try {
+    const stat = readFileSync(statPath, "utf8")
+    // comm (field 2) may contain spaces; everything after ") " starts at
+    // field 3 (state), so starttime (field 22) sits at index 19.
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ")
+    const ticks = Number(fields[19])
+    if (Number.isFinite(ticks) && ticks > 0) return ticks
+  } catch {
+    // Not linux, procfs hidden, or the process is gone — undefined.
+  }
+  return undefined
+}
+
+const currentIdentityCache = new Map()
+
+function platformSpawnSync(command, timeoutMs) {
+  const run = spawnSync(command[0], command.slice(1), { encoding: "utf8", timeout: timeoutMs, windowsHide: true })
+  if (run.error !== undefined || run.status !== 0 || typeof run.stdout !== "string") return undefined
+  return run.stdout
+}
+
+/**
+ * Windows creation-time probe: PowerShell converts CIM DateTime values to
+ * LOCALE strings when printed, so the probe forces them to plain Unix
+ * milliseconds ([DateTimeOffset] handles the CIM local-offset conversion) —
+ * output is digits only, immune to code page and locale.
+ */
+function windowsCreationTimeFilter(pids) {
+  const filter = pids.map(pid => "ProcessId=" + pid).join(" OR ")
+  return "Get-CimInstance Win32_Process -Filter \"" + filter + "\""
+    + " | ForEach-Object { \"$($_.ProcessId) $([DateTimeOffset]::new($_.CreationDate).ToUnixTimeMilliseconds())\" }"
+}
+
+function parseWindowsCreationLine(line) {
+  const match = /^(\d+) (\d+)$/.exec(line.trim())
+  if (match === null) return undefined
+  const wallMs = Number(match[2])
+  // Digits only, and a plausible Unix epoch (after 2001-09-09): a locale or
+  // error string must never masquerade as an identity.
+  if (!Number.isSafeInteger(wallMs) || wallMs < 1e12) return undefined
+  return { pid: Number(match[1]), identity: { kind: "wall-start-ms", wallMs } }
+}
+
+/**
+ * The CURRENT start identity of an arbitrary pid, or undefined when the
+ * platform offers no probe. Linux reads /proc directly; other platforms
+ * shell out once per pid (cached per process) — batch paths (GC, status)
+ * prime the cache with a single query for all pids first.
+ */
+export function currentProcessStartIdentity(pid) {
+  if (process.platform === "linux") {
+    const ticks = linuxStarttimeTicks("/proc/" + pid + "/stat")
+    return ticks === undefined ? undefined : { kind: "linux-starttime-ticks", ticks }
+  }
+  if (currentIdentityCache.has(pid)) {
+    const cached = currentIdentityCache.get(pid)
+    return cached === null ? undefined : cached
+  }
+  let probed
+  if (process.platform === "win32") {
+    // One line "pid epoch-ms"; parseWindowsCreationLine rejects locale noise.
+    const run = platformSpawnSync([
+      "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+      windowsCreationTimeFilter([pid]),
+    ], 8000)
+    probed = run === undefined ? undefined : (parseWindowsCreationLine(run.split("\n")[0] ?? "")?.identity)
+  } else if (process.platform === "darwin" || process.platform === "freebsd") {
+    // ps lstart has second granularity; the match tolerance absorbs it.
+    const run = platformSpawnSync(["ps", "-o", "lstart=", "-p", String(pid)], 5000)
+    const parsed = run === undefined ? NaN : Date.parse(run.trim().replace(/\s+/g, " "))
+    probed = Number.isNaN(parsed) ? undefined : { kind: "wall-start-ms", wallMs: parsed }
+  }
+  currentIdentityCache.set(pid, probed ?? null)
+  return probed
+}
+
+/**
+ * Prime the identity cache for a batch of pids with ONE platform query so a
+ * GC/status pass does not pay one child process per lease. Failures mark the
+ * pids unprobed (their leases fall back to heartbeat classification).
+ * @returns {number} how many pids were resolved.
+ */
+export function primeProcessStartIdentities(pids) {
+  if (process.platform !== "win32") return 0
+  const missing = pids.filter(pid => !currentIdentityCache.has(pid))
+  if (missing.length === 0) return 0
+  const run = platformSpawnSync([
+    "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+    windowsCreationTimeFilter(missing),
+  ], 15000)
+  let resolved = 0
+  if (run !== undefined) {
+    for (const line of run.split("\n")) {
+      const parsed = parseWindowsCreationLine(line)
+      if (parsed === undefined) continue
+      currentIdentityCache.set(parsed.pid, parsed.identity)
+      resolved += 1
+    }
+  }
+  if (resolved === 0) for (const pid of missing) currentIdentityCache.set(pid, null)
+  return resolved
+}
+
+/**
+ * Compare a recorded lease identity against the pid's current one.
+ *  - true  — the very same process (strong live, heartbeat-independent);
+ *  - false — PROVEN pid reuse (only the exact linux tick identity can);
+ *  - undefined — incomparable (kind mismatch / wall-clock ambiguity): the
+ *    caller falls back to heartbeat semantics.
+ */
+export function matchProcessStartIdentity(recorded, current) {
+  if (recorded === undefined || current === undefined) return undefined
+  if (recorded.kind !== current.kind) return undefined
+  if (recorded.kind === "linux-starttime-ticks") return recorded.ticks === current.ticks
+  return Math.abs(recorded.wallMs - current.wallMs) <= 2500 ? true : undefined
+}
+
+/**
  * Write the process's lease for a generation and keep it fresh. The lease is
  * the GC visibility contract: it exists BEFORE the generation module is
  * imported, heartbeats while the process lives, and is removed best-effort
@@ -177,6 +320,7 @@ export function acquireLease(deployRoot, generationId, mode = "generation") {
   const leaseDir = join(deployRoot, "leases", generationId)
   mkdirSync(leaseDir, { recursive: true })
   const startedAt = Date.now()
+  const identity = processStartIdentity()
   const nonce = Math.random().toString(16).slice(2, 10) + process.pid.toString(16)
   const leasePath = join(leaseDir, process.pid + "-" + nonce + ".json")
   const payload = () => JSON.stringify({
@@ -186,6 +330,7 @@ export function acquireLease(deployRoot, generationId, mode = "generation") {
     pid: process.pid,
     nonce,
     startedAt,
+    processStartIdentity: identity,
     heartbeatAt: Date.now(),
     nodeMajor: Number(process.versions.node.split(".")[0]),
   })
@@ -230,15 +375,46 @@ export function resolveTuiRuntime(dispatchModuleUrl) {
   return promise
 }
 
+/**
+ * The source-mode build root (M2③ 阶段 3 迁移点): compile:src now emits to
+ * .local/build/<fingerprint>/package and leaves the tree's own lib/ alone,
+ * so the dev track's active runtime path is no longer the in-tree lib. The
+ * pointer is dev-local metadata (never shipped, never a release claim); a
+ * stale or corrupt pointer degrades to the canonical lib — never an error.
+ */
+function sourceBuildRoot(packageDir) {
+  try {
+    const pointerPath = join(packageDir, ".local", "build", "source-pointer.json")
+    if (!existsSync(pointerPath)) return undefined
+    const pointer = JSON.parse(readFileSync(pointerPath, "utf8"))
+    if (typeof pointer.dir !== "string" || pointer.dir === "") return undefined
+    const root = realpathSync(pointer.dir)
+    // Containment: the build root must live under this package's .local/build
+    // (a pointer naming some other tree is stale metadata, not a redirect).
+    if (!root.startsWith(realpathSync(join(packageDir, ".local", "build")))) return undefined
+    if (!existsSync(join(root, "package", "lib", "types", "index.js"))) return undefined
+    return root
+  } catch {
+    return undefined
+  }
+}
+
 function computePin(packageDirInput) {
   const packageDir = realpathSync(packageDirInput)
   const base = { packageDir, canonicalRoot: pathToFileURL(packageDir + "/").href }
   if (isSourceTree(packageDir)) {
+    const buildRoot = sourceBuildRoot(packageDir)
     return {
       ...base,
       mode: "source",
       generationId: "source-" + sourceFingerprint(packageDir),
-      reason: "development tree (src/ + tsconfig.json present on the real path)",
+      ...(buildRoot === undefined ? {} : {
+        sourceBuildRoot: buildRoot,
+        sourceEntryRoot: pathToFileURL(join(buildRoot, "package") + "/").href,
+      }),
+      reason: buildRoot === undefined
+        ? "development tree (src/ + tsconfig.json present on the real path)"
+        : "development tree serving the compile:src build root at " + buildRoot,
     }
   }
   const deployRoot = findDeployRoot(packageDir)
@@ -311,8 +487,11 @@ export async function resolveTuiEntry(dispatchModuleUrl, packageRelative) {
   if (pin.mode !== "generation") {
     // canonicalRoot is a DIRECTORY URL (trailing slash): resolve the
     // package-relative entry directly against it — a "../" prefix would
-    // escape one level ABOVE the package.
-    const canonical = new URL(packageRelative, pin.canonicalRoot).href
+    // escape one level ABOVE the package. Source mode with a compile:src
+    // build root resolves entries from THERE (same package-relative shape,
+    // mirrored files tree) instead of the stale in-tree lib.
+    const root = pin.mode === "source" && pin.sourceEntryRoot !== undefined ? pin.sourceEntryRoot : pin.canonicalRoot
+    const canonical = new URL(packageRelative, root).href
     return import(canonical)
   }
   const target = new URL(packageRelative, pin.packageRootUrl)
