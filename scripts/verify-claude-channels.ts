@@ -109,6 +109,16 @@ const init = {
     check('store: the document ends with a newline', readFileSync(join(dir, 'channels.json'), 'utf8').endsWith('\n'))
     writeFileSync(join(dir, 'channels.json'), '{ not json')
     check('store: a corrupt file reads as no channels (never throws)', fileClaudeChannels(dir).read().channels.length === 0)
+    // A hand edit gone wrong must not be lost to the next save: the damaged
+    // document moves aside, byte for byte, and the save still lands.
+    const damaged = '{ "channels": [ { "id": "kept", "name": "Kept", "models": { "a": "b" } }, ] }'
+    writeFileSync(join(dir, 'channels.json'), damaged)
+    fileClaudeChannels(dir).save({ id: 'fresh', name: 'Fresh' })
+    const aside = readdirSync(dir).filter(name => name.startsWith('channels.json.damaged-'))
+    check('store: saving over a corrupt file keeps the damaged document aside',
+      aside.length === 1 && readFileSync(join(dir, aside[0]!), 'utf8') === damaged, readdirSync(dir))
+    check('… and the save itself lands', fileClaudeChannels(dir).read().channels.map(channel => channel.id).join() === 'fresh')
+    for (const name of aside) rmSync(join(dir, name))
     writeFileSync(join(dir, 'channels.json'), JSON.stringify({
       active: 'ghost',
       channels: ['nope', 42, { id: 'x', name: 'X', models: { a: 1, '': 'y', ok: ' v ' }, tiers: null }, { id: 'x', name: 'dup' }, { id: '  ', name: 'blank id' }],

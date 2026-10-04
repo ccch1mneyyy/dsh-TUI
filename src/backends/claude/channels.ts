@@ -42,11 +42,12 @@
  * for the CLI 2.1.287 forensics).
  *
  * Best-effort like every `~/.dsh-tui` preference (prefs.ts): a missing or
- * corrupt file reads as no channels, a failed write is reported to the
- * caller's debug log and the session carries on. The id is a stable slug of
- * the name, so a re-import (or a hand edit) refreshes the same row.
+ * corrupt file reads as no channels (a corrupt one is moved aside by the
+ * next save, never overwritten), a failed write is reported to the caller's
+ * debug log and the session carries on. The id is a stable slug of the name,
+ * so a re-import (or a hand edit) refreshes the same row.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from '../../utils/paths.js'
 import { writeFileAtomic } from './atomic-file.js'
@@ -170,13 +171,23 @@ function removed(current: ClaudeChannelsData, id: string): ClaudeChannelsData {
 /** The file-backed profiles under `<dir>` (default `~/.dsh-tui/backends/claude`). */
 export function fileClaudeChannels(dir: string = join(DATA_DIR, 'backends', 'claude'), debug: (message: string) => void = () => undefined): ClaudeChannels {
   const path = join(dir, FILE)
-  const read = (): ClaudeChannelsData => {
+  /** The document, and whether a file is there that could not be read or
+   *  parsed (it reads as no channels). */
+  const load = (): { readonly data: ClaudeChannelsData; readonly damaged: boolean } => {
+    let text: string
     try {
-      return parseChannels(JSON.parse(readFileSync(path, 'utf8')))
+      text = readFileSync(path, 'utf8')
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      return { data: { channels: [] }, damaged: code !== 'ENOENT' && code !== 'ENOTDIR' }
+    }
+    try {
+      return { data: parseChannels(JSON.parse(text)), damaged: false }
     } catch {
-      return { channels: [] }
+      return { data: { channels: [] }, damaged: true }
     }
   }
+  const read = (): ClaudeChannelsData => load().data
   const commit = (next: ClaudeChannelsData): void => {
     try {
       writeFileAtomic(dir, FILE, `${JSON.stringify(next, null, 2)}\n`)
@@ -195,7 +206,22 @@ export function fileClaudeChannels(dir: string = join(DATA_DIR, 'backends', 'cla
       }
       commit(activated(current, id))
     },
-    save: profile => { commit(saved(read(), profile)) },
+    save: profile => {
+      const current = load()
+      if (current.damaged) {
+        // A damaged file (a hand edit gone wrong) still holds the user's
+        // profiles: it moves aside instead of being replaced by this save.
+        const aside = `${path}.damaged-${Date.now()}`
+        try {
+          renameSync(path, aside)
+          debug(`claude: channels.json could not be read; kept as ${aside}`)
+        } catch (error) {
+          debug(`claude: channels.json could not be read nor moved aside (${error instanceof Error ? error.message : String(error)}); not saving`)
+          return
+        }
+      }
+      commit(saved(current.data, profile))
+    },
     remove: id => {
       const current = read()
       if (!current.channels.some(channel => channel.id === id)) {
