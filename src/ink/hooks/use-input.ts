@@ -1,10 +1,19 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import { useEventCallback } from 'usehooks-ts'
 import type { InputEvent, Key } from '../events/input-event.js'
 import { isInputSuppressed } from '../input-suppression.js'
 import useStdin from './use-stdin.js'
 
 type Handler = (input: string, key: Key, event: InputEvent) => void
+
+type EventCallback<T extends (...args: never[]) => unknown> = T
+
+function useEventCallback<T extends (...args: never[]) => unknown>(fn: T): EventCallback<T> {
+  const callbackRef = useRef(fn)
+  useLayoutEffect(() => {
+    callbackRef.current = fn
+  }, [fn])
+  return useRef(((...args: Parameters<T>) => callbackRef.current(...args)) as T).current
+}
 
 type Options = {
   /**
@@ -79,9 +88,8 @@ const useInput = (inputHandler: Handler, options: Options = {}): void => {
   // listener array is stable. If isActive were in the effect's deps, the
   // listener would re-append on false→true, moving it behind listeners
   // that registered while it was inactive — breaking
-  // stopImmediatePropagation() ordering. useEventCallback keeps the
-  // reference stable while reading latest isActive/inputHandler from
-  // closure (it syncs via useLayoutEffect, so it's compiler-safe).
+  // stopImmediatePropagation() ordering. The callback ref updates in the
+  // layout phase so a key after commit sees this render's handler.
   const handleData = useEventCallback((event: InputEvent) => {
     if (options.isActive === false) {
       return

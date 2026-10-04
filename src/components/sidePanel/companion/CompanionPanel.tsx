@@ -1,50 +1,8 @@
 /**
- * CompanionPanel（设计分文档 §4 + v2.1 + 2026-10 沉底/互动/气泡改造）：
- *
- *   信号 ─▶ mood.ts 的派生 + 平滑层（防闪烁五规则）─▶ 显示语义
- *         ─▶ deepy 动画键（20 个全接上）─▶ 半块渲染（42×15）
- *
- * 布局（沉底）：宠物锚定在面板最底部（贴着 SidePanelColumn 底部 hint 行
- * 上方），腾出的上方空间放一个克制的状态区：心情 + 会话/工具统计行、
- * 「当前动作」行（kit 自带中文 title，不走 i18n）、互动提示行。
- * 宽度分三档：<44 列紧凑（不画皮肤，只留紧凑行）；连紧凑形态都摆不下
- * （< PANEL_MIN_COLUMNS，分栏几何的列宽下限）只留一条居中的「好挤呀，
- * 暂时躲起来了」标语（companion-cramped，{{name}}=皮肤 title；皮肤无关，
- * 判定在面板层）。
- *
- * 互动（鼠标）：
- * - 点击宠物左半/右半 → poke-left / poke-right（ClickEvent.localCol），
- *   保留爱心 pass（whale 回退皮肤的 pose.heart）；
- * - TICKLE_WINDOW_MS 内 ≥3 次点击 → tickle，窗口结束回平滑情绪；
- * - 按住拖动（onDragStart/Move/End）→ drag 动画 + **真拖动**：本体跟着
- *   指针在面板内容区内移动（clamp 在面板盒内，可以窜到状态区文字上面
- *   ——调皮是特性），松手后 PET_REBOUND_MS 内插值弹回底部 home。位移是
- *   面板层状态（两套皮肤共用），皮肤输出不动：水平=行内定宽 spacer
- *   （左 spacer + 宠物 + 右 spacer 恒等于面板宽，§16.6 列宽不变式天然
- *   成立），垂直=定高 home 槽行内负 marginTop（溢出可见）——刻意不用
- *   position:absolute：图像版皮肤的可见性门与渲染路径要求宠物留在流内；
- * - 指针进面板（near/左/右）→ idle-look（东张西望）；碰到宠物本体 →
- *   idle-spout（开心喷水）；睡眠中被碰到 → waking（官方 trigger）。
- * 鼠标契约：点击/拖拽 stopImmediatePropagation，hover 离开面板即复原。
- *
- * 通知气泡：channel.notifications（最新在最后）的新条目由宠物用圆角对话
- * 气泡说出来（面板内的**加一层**表达；输入框上方的 toast 照旧，不动）。
- * 颜色配反应动画：error→error、success→happy、warning→notification、
- * 无色→idle-look。visible=false 期间清空队列，切回来不弹旧账。
- *
- * 活动自述气泡：working 回合里聊天区 ⏵ 工作行（ActivityLine）的那句
- * 模型自述，由头顶气泡**逐字同步转述**（同一数据源 runtimeCtx.activity
- * 的 line 字段，不自行派生；判定条件与 Chat 相同：working 且 line 非空
- * 且 phase≠idle）。派生值、随渲染实时换词，无进出场可重触发；瞬态气泡
- * （通知/戳一戳）有效期内盖过它，到期仍在 working 则回落。回合结束
- * （working=false）即收起——庆祝动画走 mood 层，与此无关。拖动会话
- * （含回弹）期间两层气泡都抑制，落定后恢复（气泡不跟宠物走：孤零零
- * 留在 home 上方出戏，选抑制）。
- *
- * 时钟：visible=false 零订阅（useAnimationFrame 传 null）+ 零自有定时器；
- * 可见时由 160ms（睡眠 1000ms）的本地 tick 驱动动画帧与气泡/互动过期——
- * PanelHost 内 useAnimationFrame 因视口测量问题不订阅（见
- * verify-companion-panel.tsx 文件头的既有 finding），本地 tick 是等价替代。
+ * CompanionPanel derives mood, interaction animations and bubbles from the
+ * channel state. The companion stays at the bottom while status and activity
+ * occupy the space above it. A local visible-only tick advances frames and
+ * expires temporary reactions; dragging keeps the skin in normal document flow.
  */
 import React from 'react'
 import { Box, Text, useAnimationFrame } from '../../../ui.js'
@@ -109,7 +67,7 @@ const ENTER_POKE_SIDE = 'poke-right'
 const BUBBLE_MAX_LINES = 3
 /** 松手弹回的插值时长（约两个动画 tick；无弹簧物理，克制优先）。 */
 const PET_REBOUND_MS = 360
-/** 本地动画 tick：PanelHost 内 useAnimationFrame 不订阅（既有 finding），由它代位。 */
+/** Local animation tick for the visible companion. */
 const TICK_MS = 160
 const TICK_MS_SLEEPING = 1000
 
@@ -250,7 +208,7 @@ export function CompanionPanel({ width, height, focused, visible }: PanelProps):
   const dragPosRef = React.useRef<{ left: number; top: number } | undefined>(undefined)
   const flybackRef = React.useRef<PetFlyback | undefined>(undefined)
   const [hoverState, setHoverState] = React.useState<{ zone: HoverZone; since: number } | undefined>(undefined)
-  // 悬停展示语义（驻留平滑后的）：渲染期 ref 步进，同 displayRef 模式。
+  // 悬停展示语义，提交后按驻留时长推进。
   const hoverDisplayRef = React.useRef<CompanionHoverState>(initialCompanionHoverState)
 
   const now = Date.now()
@@ -342,8 +300,10 @@ export function CompanionPanel({ width, height, focused, visible }: PanelProps):
   const hover = hoverState !== undefined && visible ? hoverState : undefined
   // 悬停驻留平滑（mood.stepCompanionHover）：zone 直读是期望值，指针驻留
   // 满窗才真正换脸（快速划过不触发）；tick 档位判定仍用原始 zone。
-  hoverDisplayRef.current = stepCompanionHover(hoverDisplayRef.current, hoverSemantic(hover?.zone), now)
   const hoverDisplay = hoverDisplayRef.current
+  React.useEffect(() => {
+    hoverDisplayRef.current = stepCompanionHover(hoverDisplayRef.current, hoverSemantic(hover?.zone), now)
+  }, [hover?.zone, now])
   let animationSemantic: string
   let animSince: number
   if (activeOverride !== undefined) {
@@ -365,7 +325,7 @@ export function CompanionPanel({ width, height, focused, visible }: PanelProps):
   }
   const animationKey = deepyAnimationFor(animationSemantic)
 
-  // 时钟（v2.1 契约保持）：visible=false 零订阅；本地 tick 代位驱动帧。
+  // Pause the shared clock while this panel is hidden; the local tick drives visible frames.
   const [clockRef] = useAnimationFrame(!visible ? null : display.semantic === 'sleeping' ? 1000 : 120)
   const tickMs = !visible
     ? 0
@@ -623,9 +583,7 @@ export function CompanionPanel({ width, height, focused, visible }: PanelProps):
     )
   }
 
-  // 连紧凑形态都摆不下（紧凑阈值体系的地板 = PANEL_MIN_COLUMNS，分栏
-  // 几何的列宽下限）：不硬塞——宠物本体与紧凑行都不渲染，只留一条居中
-  // 标语；对列宽的需求不变（§16.6）。
+  // Below the panel minimum, keep only the centered cramped-layout message.
   if (width < PANEL_MIN_COLUMNS) {
     return (
       <Box ref={clockRef} flexDirection="column" flexGrow={1} overflow="hidden"
@@ -639,7 +597,7 @@ export function CompanionPanel({ width, height, focused, visible }: PanelProps):
   }
 
   if (compact) {
-    // 窄栏 compact：心情图标 + 气泡/统计，不画皮肤（永不超宽，§16.6）。
+    // Compact panels show mood and status without the skin.
     return (
       <Box ref={clockRef} flexDirection="column" flexGrow={1} overflow="hidden">
         <Box flexDirection="column" paddingX={1} paddingTop={1}>
@@ -692,10 +650,7 @@ export function CompanionPanel({ width, height, focused, visible }: PanelProps):
 
       {bubbleNode}
 
-      {/* home 槽行（定高=皮肤行数）：底部锚 + 左/右悬停分区。水平位移用
-          定宽 spacer（左+宠物+右 ≡ 面板宽，永不撑宽，§16.6）；垂直位移用
-          宠物盒的负 marginTop 溢出行顶（行 overflow 默认可见）——宠物留在
-          流内，图像版皮肤的可见性门/渲染路径不受扰。 */}
+      {/* The home row fixes the skin's height and keeps it in layout flow while it moves. */}
       <Box flexDirection="row" flexShrink={0} height={petRows}>
         <Box width={petLeft} flexShrink={0} onMouseEnter={() => enterZone('left')} />
         <Box
