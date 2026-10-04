@@ -1,15 +1,12 @@
 /**
- * Markdown token-shape regression (Batch D of the rendering upgrade,
- * design spec section 3/4): heading layering + compressed whitespace, the
- * subtle single-row hr divider, list hanging indent / steady nesting
- * ladder / loose-item bullets, per-level blockquote gutters with
- * empty-line structure, and image alt + OSC 8 links.
+ * Markdown block shapes: heading levels and the blank rows around them,
+ * the single-row hr divider, list hanging indent / nesting ladder /
+ * loose-item bullets, per-level blockquote gutters (including blank and
+ * empty quote lines), and image alt text with an OSC 8 link.
  *
- * Every section starts from a bad-baseline proof: the assertion is red on
- * the pre-batch renderer (double blank rows under headings, `---` glued to
- * the next block, loose items without bullets, col-0 soft-break
- * continuations, structure-less empty quote lines, bare image URLs) and
- * green after the batch.
+ * Each section notes the broken shape it guards against (double blank
+ * rows under headings, `---` glued to the next block, loose items without
+ * bullets, column-0 soft-break continuations, bare image URLs).
  *
  * Run: node --import tsx/esm scripts/verify-markdown-batch-d.tsx
  */
@@ -82,7 +79,7 @@ assert.equal(plain(twoHeadings), 'A' + '\n' + '\n' + 'B' + '\n' + '\n' + 'text',
 
 assert.equal(plain(applyMarkdown('# End' + '\n')), 'End', 'trailing heading trims clean')
 
-// Six distinct visual levels (spec: H3-H6 were near-identical bold).
+// Six distinct visual levels (H3-H6 used to be the same plain bold).
 const depths = [1, 2, 3, 4, 5, 6].map(d => applyMarkdown('#'.repeat(d) + ' X' + '\n'))
 const styledSet = new Set(depths)
 assert.equal(styledSet.size, 6, 'all six heading depths render distinctly')
@@ -131,7 +128,7 @@ assert.equal(plain(doubleHr), '\u2500\u2500\u2500' + '\n' + '\u2500\u2500\u2500'
 // 2/4/6), and inline styling recursing through em/strong kept that
 // parent, so a bold lead grew one bullet per nested text token.
 const tight = applyMarkdown('- a' + '\n' + '- b' + '\n')
-assert.equal(plain(tight), '- a' + '\n' + '- b', 'tight items keep the byte shape Batch A locked')
+assert.equal(plain(tight), '- a' + '\n' + '- b', 'tight items keep their byte shape')
 
 const loose = applyMarkdown('- a para' + '\n' + '\n' + '  second para' + '\n' + '\n' + '- b' + '\n')
 assert.equal(plain(loose), '- a para' + '\n' + '\n' + '  second para' + '\n' + '- b',
@@ -169,8 +166,8 @@ assert.equal(plain(quoteInList), '- item' + '\n' + '\n' + '  \u258e quoted para'
 const emptyItem = applyMarkdown('-' + '\n' + '- b' + '\n')
 assert.equal(plain(emptyItem), '- ' + '\n' + '- b', 'an empty item still shows its marker row')
 
-// Task-state shapes stay compatible with the Batch A gate (markers now
-// also cover loose items, which previously lost them).
+// Task-state shapes match verify-markdown-token-coverage; loose items
+// keep their markers too.
 const tasks = applyMarkdown('- [x] done task' + '\n' + '- [ ] open task' + '\n')
 assert.equal(plain(tasks), '- [x] done task' + '\n' + '- [ ] open task')
 const looseTasks = applyMarkdown('- loose [x] a' + '\n' + '\n' + '- loose [ ] b' + '\n')

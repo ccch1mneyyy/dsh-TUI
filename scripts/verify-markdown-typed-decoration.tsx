@@ -1,32 +1,24 @@
 /**
- * Typed decoration regression (Batch C of the rendering upgrade, design
- * spec §2 "Typed decoration 完整批"): the paint-time decoration
- * machinery (header row / per-row prefix / wrap-continuation hanging
- * indent) that replaces the hybrid code frame's structural components.
+ * Typed text decoration (header row, per-row prefix, hanging indent on
+ * wrapped continuations) and the code frame drawn with it.
  *
- * Sections (each anchored to a spec clause):
- *  1. Engine equivalence: typed and hybrid (DSH_TUI_CODE_FRAME=hybrid,
- *     the Batch B baseline) render identical rows, Screen.noSelect
- *     bitmaps, softWrap bookkeeping and selection-copy bytes across
- *     shapes and widths - the migration is behavior-preserving.
- *  2. Structure counts (§2 zero per-block Yoga increment): a typed code
- *     frame is ONE ink-text leaf with ZERO structural ink-box nodes; the
- *     hybrid engine still renders its component layout (retained
- *     fallback, env-switchable).
- *  3. Copy contract (§1.2 as a hard gate): body-anchored selection
- *     copies the clean payload; rail/header anchors copy the decoration
-     * only; the noSelect bitmap is the machinery.
- *  4. Wrap continuation (the batch-D leftover): without the hang
- *     decoration the continuation falls at column 0 (the pre-batch
- *     behavior, asserted as the bad baseline); with it, quote rails
- *     repeat, list/task continuations hang at the content column,
- *     CJK bodies keep the structure, copied bytes stay identical to the
- *     unwrapped join, and streaming equals the settled render.
- *  5. Selection consumers: the rolling fingerprint reads the same screen
- *     planes - a stationary selection survives a no-op frame and latches
- *     stale when the content under it is replaced.
+ *  1. Engine equivalence: typed and hybrid (DSH_TUI_CODE_FRAME=hybrid)
+ *     frames render identical rows, Screen.noSelect bitmaps, softWrap
+ *     flags and copied bytes across shapes and widths.
+ *  2. Structure counts: a typed code frame is one ink-text leaf with no
+ *     ink-box nodes; the hybrid engine still renders its component layout.
+ *  3. Copy contract: a body-anchored selection copies the clean code;
+ *     rail/header anchors copy only the decoration.
+ *  4. Wrap continuation: without the hang decoration a continuation falls
+ *     to column 0; with it quote rails repeat, list/task continuations
+ *     hang at the content column, CJK keeps the structure, copied bytes
+ *     match the unwrapped line, and streaming equals the settled render.
+ *  5. The selection fingerprint reads the same screen planes.
  *  6. Mermaid fallback shares the typed frame; a changed decoration
  *     object invalidates the paint cache.
+ *  7. codeFrameStyle setting: light default, full box, round trip.
+ *  8. A Text gaining or losing its decoration keeps its hook count.
+ *  9. Measure matches paint, and decoration never paints past its node.
  *
  * Run: node --import tsx/esm scripts/verify-markdown-typed-decoration.tsx
  */
@@ -104,7 +96,7 @@ const NL = '\n'
 const BAR = '\u258e'
 const RAIL = '\u2502'
 
-// -- 1. Engine equivalence (typed vs the Batch B hybrid baseline) --------
+// -- 1. Engine equivalence (typed vs hybrid) ------------------------------
 
 const SHAPES: Array<[string, string]> = [
   ['ts', 'const answer = await agent.run()' + NL + 'return answer'],
@@ -232,7 +224,7 @@ console.log('3. typed copy contract holds: body/rail/header anchors, bitmap mach
 const WORDS = 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mik november oscar papa'
 
 // Bad baseline: the legacy paint (no decoration) drops the wrapped
-// continuation at column 0 - exactly the behavior this batch fixes.
+// continuation at column 0, which the hang decoration replaces.
 const legacy = snap(<Text>{BAR + ' ' + WORDS}</Text>, 40)
 const legacyCont = legacy.rows.filter(r => r !== '').slice(1)
 assert.ok(legacyCont.length >= 2 && legacyCont.every(r => !r.startsWith(BAR)),

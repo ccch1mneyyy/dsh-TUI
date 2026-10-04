@@ -9,12 +9,12 @@
  *   B1 clock.tick：订阅者抛 #185 被吞，后续订阅者仍执行，时钟继续。
  *   B2 reveal.tick：listener 抛 #185 被吞，调度器后续 tick 正常推进。
  *   B3 channel.emit/emitStream：listener 抛 #185 不炸 channel。
- * Group C — 根边界恢复：commit 期 #185（热点守卫与进程兜底都看不到的
- *   类别）由根 App 边界恢复（清 state 重挂载，细节落 crash.log），窗口
- *   内恢复次数封顶，耗尽回落原崩溃退出。
- * Group D — 恢复落点：一次性重挂标记（note/consume）+ 三处接线 tripwire
- *   （App 记标记、Chat 消费、皮肤 hook 停逐 commit 入队——真凶修复的
- *   源码级断言，crash.log 2026-10-03 栈直指 skins 的 setDisplayed）。
+ * Group C — 根边界恢复：commit 期抛出的 #185（热点守卫和进程级守卫
+ *   都看不到）由根 App 边界恢复（清 state 重挂载，细节写 crash.log），
+ *   窗口内恢复次数封顶，超出后照常崩溃退出。
+ * Group D — 恢复后的去向：一次性重挂标记（note/consume）+ 三处源码
+ *   tripwire（App 记标记、Chat 消费、皮肤 hook 不再每次 commit 都
+ *   setDisplayed）。
  *
  * 运行：node --import tsx/esm scripts/verify-update-overflow-guard.tsx
  */
@@ -244,11 +244,11 @@ console.log('--- B: hotspots ---')
 }
 
 // --- Group C: root-boundary recovery ---------------------------------------
-// 真实用户级 #185：throw 发生在 React 自己的 commit 里（无依赖 layout
-// effect 链式排更新 → 嵌套 commit 计数），热点守卫与进程兜底都看不到——只有根 App 边界接得住，历史上
-// componentDidCatch 直接 handleExit 整应用崩溃。C 组锁定恢复契约：
-// react-reconciler 抛出前已清零嵌套计数器，边界清掉 error 态即从干净
-// 计数器重挂载整树；窗口内恢复次数封顶，耗尽回落原崩溃退出。
+// commit 期的 #185：无依赖 layout effect 每次 commit 都排下一次更新，
+// 嵌套 commit 计数攒满后在 React 自己的 commit 里抛出，热点守卫和进程级
+// 守卫都看不到，只有根 App 边界接得住。react-reconciler 抛出前已清零
+// 计数器，边界清掉 error 态就从干净的计数器重挂载整树；窗口内恢复次数
+// 封顶，超出后照常崩溃退出。
 {
   console.log('--- C: root-boundary recovery ---')
   resetUpdateOverflowGuardForTest()
@@ -269,9 +269,8 @@ console.log('--- B: hotspots ---')
     const [tick, setTick] = React.useState(0)
     // 只在第一次挂载振荡：无依赖 layout effect 每次 commit 排下一次更新 →
     // 嵌套 commit 计数 → #185 于 commit 期抛出、componentStack 指向本组件
-    //（探针 .local/tmp-probe-osc.tsx 实证 ~52 拍必现；正是逃过热点守卫与
-    // 进程兜底、只能被根边界接住的类别）。恢复后的新树（mount ≥ 2）不振荡
-    // ——模拟「重挂载后状态归零，振荡消失」的真实自愈形态。
+    //（约 52 次 commit 后抛出，热点守卫和进程级守卫都接不到）。恢复后
+    // 的新树（mount ≥ 2）不振荡，模拟重挂载后状态归零、振荡消失。
     React.useLayoutEffect(() => { if (mount === 1) setTick(tick + 1) })
     return <Box><Text>osc{mount}</Text></Box>
   }
@@ -311,8 +310,8 @@ console.log('--- B: hotspots ---')
   const countCrashLines = (): number => {
     try { return readFileSync(crashPath, 'utf8').split('\n').filter((l: string) => l.includes('pid=')).length } catch { return 0 }
   }
-  // 计数窗必须在 render 之前开：整条振荡→恢复→耗尽→拆除链在首次同步
-  // render 里就全部完成（探针与 C3 首跑实证 mounts 在 render 返回时已=4）。
+  // 计数必须在 render 之前开始：振荡→恢复→耗尽→拆除整条链在首次同步
+  // render 里就全部完成（render 返回时 mounts 已经是 4）。
   const before = countCrashLines()
   const instance = await render(<AlwaysOscillator />, {
     stdout, stdin: new FakeInput() as unknown as NodeJS.ReadStream,
@@ -340,8 +339,8 @@ console.log('--- B: hotspots ---')
   resetUpdateOverflowGuardForTest()
   check('D1 重置清标记', !consumeBoundaryRecoveryRemount())
 
-  // 接线 tripwire：三处关键落点各在源码里存在（行为级端到端由 C 组的
-  // 边界恢复 + 用户真机覆盖；源码断言防未来重构悄悄拆线）。
+  // 源码 tripwire：三处接线都还在（行为由 C 组覆盖；这里防重构时悄悄
+  // 拆掉）。
   const { readFileSync: readSrc } = await import('node:fs')
   const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url), 'utf8')
   const appSrc = readRepo('../src/ink/components/App.tsx')
