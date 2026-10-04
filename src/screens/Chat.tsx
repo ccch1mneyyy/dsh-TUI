@@ -6180,6 +6180,11 @@ export function Chat({
   // Subagent dashboard: displays all active and completed subagents.
   // Like the browser and settings, it replaces the conversation entirely.
   if (subagentDashboardOpen && launchpadGate()) {
+    // P3 peer roster: deliberately NOT passed to the dashboard — no backend
+    // serves a cross-session roster today (the CLI ListAgents peer/teammate
+    // sections need a host control plane the SDK does not expose). When one
+    // grows a stable seam, hand the rows here; the dashboard partitions them
+    // from the children and keeps them non-sending.
     const dashboard = (
       <SubagentDashboard
         subagents={[...channel.subagents]}

@@ -342,6 +342,81 @@ console.log('--- W3: workbench panel + sibling switching ---')
   )
 }
 
+// ── W4: peer roster partition (Dashboard) ─────────────────────────────────
+console.log('--- W4: dashboard children/peers partition ---')
+{
+  const { SubagentDashboard } = (await import('../src/components/SubagentDashboard.js')) as unknown as { SubagentDashboard: React.ComponentType<Record<string, unknown>> }
+  const mainA = makeRow('agent-a', { depth: 1 })
+  const mainB = makeRow('agent-b', { depth: 1 })
+  const nestedKnown = makeRow('agent-n1', { depth: 2, parentAgentId: 'agent-a' })
+  const nestedOld = makeRow('agent-n2', { depth: 2 })
+
+  // (1) children-only roster, no peers prop: the honest unsupported note;
+  // children stay ABOVE the peers section and carry no nested marks.
+  const selected: string[] = []
+  await withTerminal(
+    () => React.createElement(SubagentDashboard, {
+      subagents: [mainA, mainB] as never,
+      onSelect: (id: string) => { selected.push(id) },
+      onClose: () => {},
+    }),
+    async frame => {
+      check('W4 无 peer 名册能力：如实降级一行', await settled(() => frame.screen().includes('cross-session peers') && frame.screen().includes('no roster served')))
+      const childrenAt = frame.screen().indexOf('agent agent-a')
+      const peersAt = frame.screen().indexOf('cross-session peers')
+      check('W4 children 在 peers 分区之前（不混淆分区）', childrenAt >= 0 && peersAt > childrenAt)
+      check('W4 纯直属名册保持 P1 平铺（无嵌套标记）', !frame.screen().includes('nested'))
+      // keyboard walks the displayed order: ↓ then Enter selects agent-b
+      frame.stdin.write('\x1b[B')
+      await sleep(30) // 固定窗:pacing 焦点移动重渲染
+      frame.stdin.write('\r')
+      check('W4 键盘走显示顺序选择 agent-b', await settled(() => selected.length === 1 && selected[0] === 'agent-b'), JSON.stringify(selected))
+    },
+  )
+
+  // (2) partition: main-loop children first, nested spawns after with the
+  // ↳ mark (known parent AND old-format unknown parent both nest).
+  await withTerminal(
+    () => React.createElement(SubagentDashboard, {
+      subagents: [mainA, nestedKnown, mainB, nestedOld] as never,
+      onSelect: () => {},
+      onClose: () => {},
+    }),
+    async frame => {
+      const screen = () => frame.screen()
+      await settled(() => screen().includes('agent agent-b'))
+      const a = screen().indexOf('agent agent-a')
+      const b = screen().indexOf('agent agent-b')
+      const n1 = screen().indexOf('agent agent-n1')
+      const n2 = screen().indexOf('agent agent-n2')
+      check('W4 直属在前嵌套在后（分区排序）', a >= 0 && b > a && n1 > b && n2 > n1, JSON.stringify({ a, b, n1, n2 }))
+      check('W4 嵌套行带 ↳ 标记', screen().includes('↳'))
+      check('W4 计数行含嵌套数', screen().includes('nested'))
+    },
+  )
+
+  // (3) served peers: own section, never mixed into children, and NO
+  // interactive affordance (cross-session targets are not addressable
+  // through the dual channels — the honest P3 degrade).
+  const selected2: string[] = []
+  await withTerminal(
+    () => React.createElement(SubagentDashboard, {
+      subagents: [mainA] as never,
+      peers: [{ agentId: 'peer-session-0001', name: 'codex' }, { agentId: 'peer-session-0002', label: 'teammate row' }] as never,
+      onSelect: (id: string) => { selected2.push(id) },
+      onClose: () => {},
+    }),
+    async frame => {
+      check('W4 served peers 渲染在独立分区', await settled(() => frame.screen().includes('codex') && frame.screen().includes('teammate row') && frame.screen().includes('peer-ses')))
+      check('W4 peer 行注明无发送入口（跨会话降级）', frame.screen().includes('no send affordance'))
+      await click(frame, 'codex')
+      check('W4 点击 peer 行不触发任何 child 导航', selected2.length === 0, JSON.stringify(selected2))
+      const childrenCount = (frame.screen().match(/agent agent-a/g) ?? []).length
+      check('W4 children 不重复出现在 peers 分区', childrenCount === 1, String(childrenCount))
+    },
+  )
+}
+
 if (failed > 0) {
   console.error('verify-agent-workbench FAILED (' + failed + ' checks)')
   process.exit(1)
