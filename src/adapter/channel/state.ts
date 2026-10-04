@@ -48,6 +48,7 @@ export function projectChannelState(channel: Channel): HostChannelStateSnapshot 
     lastUserText: channel.lastUserText,
     tokens: asNumberRecord(channel.tokens),
     ...(channel.lastUsage === undefined ? {} : { lastUsage: asNumberRecord(channel.lastUsage) }),
+    ...(channel.turnUsage === undefined ? {} : { turnUsage: asRecord(channel.turnUsage) }),
     ...(channel.activityFrames === undefined ? {} : { activityFrames: channel.activityFrames }),
     ...(channel.goal === undefined ? {} : { goal: asRecord(channel.goal) }),
     todos: Object.freeze(channel.todos.map(todo => Object.freeze({ ...todo }))),

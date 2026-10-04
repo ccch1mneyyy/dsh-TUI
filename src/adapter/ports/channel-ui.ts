@@ -1,5 +1,5 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, TrajectorySource, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, TurnUsageSummary, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, TrajectorySource, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { AgentCapabilities } from './channel-capabilities.js'
@@ -148,10 +148,17 @@ export interface ChannelUi {
    *  is the top tier). Consumed by top-tier-triggered UI (effort ignition). */
   readonly effortLevels: readonly string[] | undefined
   /** Usage of the most recent request (context share + cache hits come from
-   *  this, not the running totals — each request's input IS the context). */
+   *  this, not the running totals — each request's input IS the context).
+   *  `at` is the sampling wall-clock (the producing message's event time) —
+   *  the readouts that quote this request stamp WHEN it was measured. */
   readonly lastUsage:
-    | { input: number; output: number; cacheRead: number; cacheWrite: number }
+    | { input: number; output: number; cacheRead: number; cacheWrite: number; at: number }
     | undefined
+  /** Ledger of the most recently ENDED turn (design §C): per-turn usage
+   *  aggregate, retry count, span, model/effort. Kept until the next turn
+   *  ends — the footer's turn mini-summary reads it mid-flight of the next
+   *  turn without conflating the two. Undefined before any turn ended. */
+  readonly turnUsage: TurnUsageSummary | undefined
   /**
    * Context occupancy — the ONE source of truth for the footer's `ctx` field,
    * the segmented context bar, the working-activity line's `⚠ ctx N%` prefix,

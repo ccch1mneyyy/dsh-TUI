@@ -38,8 +38,8 @@
         "status": "ok",
         "startedAt": 1767571200001,
         "durationMs": 4,
-        "resultFull": "Line 1: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 2: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 3: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 4: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 5: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 6: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 7: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 8: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 9: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 10: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 11: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 12: the fixture guide explains one synthetic step in a deliberately long sentence.",
-        "resultText": "Line 1: the fixture guide explains one synthetic step in a deliberately long sentence. Line 2: the fixture guide explains one synthetic step in a deliberately long sentence. Line 3: the fixture guide explains one synthetic step in a deliber…"
+        "resultText": "Line 1: the fixture guide explains one synthetic step in a deliberately long sentence. Line 2: the fixture guide explains one synthetic step in a deliberately long sentence. Line 3: the fixture guide explains one synthetic step in a deliber…",
+        "resultFull": "Line 1: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 2: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 3: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 4: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 5: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 6: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 7: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 8: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 9: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 10: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 11: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 12: the fixture guide explains one synthetic step in a deliberately long sentence."
       }
     },
     {
@@ -73,8 +73,8 @@
         "status": "ok",
         "startedAt": 1767571200003,
         "durationMs": 4,
-        "resultFull": "legacy ok",
-        "resultText": "legacy ok"
+        "resultText": "legacy ok",
+        "resultFull": "legacy ok"
       }
     },
     {
@@ -132,8 +132,8 @@
         "status": "ok",
         "startedAt": 1767571200009,
         "durationMs": 5,
-        "resultFull": "started background job job-7 (Build)",
-        "resultText": "started background job job-7 (Build)"
+        "resultText": "started background job job-7 (Build)",
+        "resultFull": "started background job job-7 (Build)"
       }
     },
     {
@@ -150,8 +150,8 @@
         "status": "ok",
         "startedAt": 1767571200010,
         "durationMs": 5,
-        "resultFull": "compiling fixtures...\ndone in 3s",
-        "resultText": "compiling fixtures... done in 3s"
+        "resultText": "compiling fixtures... done in 3s",
+        "resultFull": "compiling fixtures...\ndone in 3s"
       }
     },
     {
@@ -168,8 +168,8 @@
         "status": "ok",
         "startedAt": 1767571200011,
         "durationMs": 5,
-        "resultFull": "{\"goal\":{\"objective\":\"Ship the fixtures\",\"phase\":\"active\",\"roundsStarted\":1,\"maxGoalRounds\":3},\"activation\":\"resumed\"}",
         "resultText": "{\"goal\":{\"objective\":\"Ship the fixtures\",\"phase\":\"active\",\"roundsStarted\":1,\"maxGoalRounds\":3},\"activation\":\"resumed\"}",
+        "resultFull": "{\"goal\":{\"objective\":\"Ship the fixtures\",\"phase\":\"active\",\"roundsStarted\":1,\"maxGoalRounds\":3},\"activation\":\"resumed\"}",
         "resultView": {
           "card": "generic",
           "content": [
@@ -199,8 +199,8 @@
         "status": "ok",
         "startedAt": 1767571200012,
         "durationMs": 5,
-        "resultFull": "{\"todos\":[{\"content\":\"Write generator\",\"status\":\"completed\"},{\"content\":\"Capture goldens\",\"status\":\"in_progress\"},{\"content\":\"Wire CI\",\"status\":\"pending\"}]}",
         "resultText": "{\"todos\":[{\"content\":\"Write generator\",\"status\":\"completed\"},{\"content\":\"Capture goldens\",\"status\":\"in_progress\"},{\"content\":\"Wire CI\",\"status\":\"pending\"}]}",
+        "resultFull": "{\"todos\":[{\"content\":\"Write generator\",\"status\":\"completed\"},{\"content\":\"Capture goldens\",\"status\":\"in_progress\"},{\"content\":\"Wire CI\",\"status\":\"pending\"}]}",
         "resultView": {
           "card": "generic",
           "content": [
@@ -233,6 +233,21 @@
     },
     {
       "id": 15,
+      "kind": "turn-summary",
+      "text": "",
+      "turnUsage": {
+        "input": 830,
+        "output": 220,
+        "cacheRead": 3000,
+        "cacheWrite": 700,
+        "cacheKnown": true,
+        "retries": 0,
+        "durationMs": 7700,
+        "outcome": "completed"
+      }
+    },
+    {
+      "id": 16,
       "kind": "user",
       "text": "Continue after reconnect.",
       "seq": 38
@@ -260,7 +275,8 @@
     "input": 50,
     "output": 90,
     "cacheRead": 1600,
-    "cacheWrite": 0
+    "cacheWrite": 0,
+    "at": 1767618004500
   },
   "contextSegments": {
     "system": 0,
@@ -302,7 +318,7 @@
       }
     }
   },
-  "nextRowId": 17,
+  "nextRowId": 18,
   "inputConvergence": {
     "cancelInFlight": false
   },
@@ -356,8 +372,8 @@
         "status": "ok",
         "startedAt": 1767571200001,
         "durationMs": 4,
-        "resultFull": "Line 1: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 2: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 3: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 4: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 5: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 6: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 7: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 8: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 9: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 10: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 11: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 12: the fixture guide explains one synthetic step in a deliberately long sentence.",
-        "resultText": "Line 1: the fixture guide explains one synthetic step in a deliberately long sentence. Line 2: the fixture guide explains one synthetic step in a deliberately long sentence. Line 3: the fixture guide explains one synthetic step in a deliber…"
+        "resultText": "Line 1: the fixture guide explains one synthetic step in a deliberately long sentence. Line 2: the fixture guide explains one synthetic step in a deliberately long sentence. Line 3: the fixture guide explains one synthetic step in a deliber…",
+        "resultFull": "Line 1: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 2: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 3: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 4: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 5: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 6: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 7: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 8: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 9: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 10: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 11: the fixture guide explains one synthetic step in a deliberately long sentence.\nLine 12: the fixture guide explains one synthetic step in a deliberately long sentence."
       }
     },
     {
@@ -391,8 +407,8 @@
         "status": "ok",
         "startedAt": 1767571200003,
         "durationMs": 4,
-        "resultFull": "legacy ok",
-        "resultText": "legacy ok"
+        "resultText": "legacy ok",
+        "resultFull": "legacy ok"
       }
     },
     {
@@ -450,8 +466,8 @@
         "status": "ok",
         "startedAt": 1767571200009,
         "durationMs": 5,
-        "resultFull": "started background job job-7 (Build)",
-        "resultText": "started background job job-7 (Build)"
+        "resultText": "started background job job-7 (Build)",
+        "resultFull": "started background job job-7 (Build)"
       }
     },
     {
@@ -468,8 +484,8 @@
         "status": "ok",
         "startedAt": 1767571200010,
         "durationMs": 5,
-        "resultFull": "compiling fixtures...\ndone in 3s",
-        "resultText": "compiling fixtures... done in 3s"
+        "resultText": "compiling fixtures... done in 3s",
+        "resultFull": "compiling fixtures...\ndone in 3s"
       }
     },
     {
@@ -486,8 +502,8 @@
         "status": "ok",
         "startedAt": 1767571200011,
         "durationMs": 5,
-        "resultFull": "{\"goal\":{\"objective\":\"Ship the fixtures\",\"phase\":\"active\",\"roundsStarted\":1,\"maxGoalRounds\":3},\"activation\":\"resumed\"}",
         "resultText": "{\"goal\":{\"objective\":\"Ship the fixtures\",\"phase\":\"active\",\"roundsStarted\":1,\"maxGoalRounds\":3},\"activation\":\"resumed\"}",
+        "resultFull": "{\"goal\":{\"objective\":\"Ship the fixtures\",\"phase\":\"active\",\"roundsStarted\":1,\"maxGoalRounds\":3},\"activation\":\"resumed\"}",
         "resultView": {
           "card": "generic",
           "content": [
@@ -517,8 +533,8 @@
         "status": "ok",
         "startedAt": 1767571200012,
         "durationMs": 5,
-        "resultFull": "{\"todos\":[{\"content\":\"Write generator\",\"status\":\"completed\"},{\"content\":\"Capture goldens\",\"status\":\"in_progress\"},{\"content\":\"Wire CI\",\"status\":\"pending\"}]}",
         "resultText": "{\"todos\":[{\"content\":\"Write generator\",\"status\":\"completed\"},{\"content\":\"Capture goldens\",\"status\":\"in_progress\"},{\"content\":\"Wire CI\",\"status\":\"pending\"}]}",
+        "resultFull": "{\"todos\":[{\"content\":\"Write generator\",\"status\":\"completed\"},{\"content\":\"Capture goldens\",\"status\":\"in_progress\"},{\"content\":\"Wire CI\",\"status\":\"pending\"}]}",
         "resultView": {
           "card": "generic",
           "content": [
@@ -551,6 +567,21 @@
     },
     {
       "id": 15,
+      "kind": "turn-summary",
+      "text": "",
+      "turnUsage": {
+        "input": 830,
+        "output": 220,
+        "cacheRead": 3000,
+        "cacheWrite": 700,
+        "cacheKnown": true,
+        "retries": 0,
+        "durationMs": 7700,
+        "outcome": "completed"
+      }
+    },
+    {
+      "id": 16,
       "kind": "user",
       "text": "Continue after reconnect.",
       "seq": 38
@@ -657,13 +688,13 @@
     "#33 tool/result | rows=15 streaming=[] spin=tool-use working=1 tools=2 chars=0 goal=- todos=0 compaction=-",
     "#34 tool/result | rows=15 streaming=[] spin=tool-use working=1 tools=1 chars=0 goal=- todos=0 compaction=-",
     "#35 step/end | rows=15 streaming=[] spin=tool-use working=1 tools=1 chars=0 goal=- todos=0 compaction=-",
-    "#36 turn/end | rows=15 streaming=[] spin=tool-use working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#37 turn/start | rows=15 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#38 user/message | rows=16 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#39 step/start | rows=16 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "frame r1 chunk attempt-reattach | rows=16 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "frame r2 chunk attempt-reattach | rows=17 streaming=[16] spin=responding working=1 tools=0 chars=18 goal=- todos=0 compaction=-",
-    "frame r3 end attempt-reattach | rows=16 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "settleStreaming | rows=16 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-"
+    "#36 turn/end | rows=16 streaming=[] spin=tool-use working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#37 turn/start | rows=16 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#38 user/message | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#39 step/start | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "frame r1 chunk attempt-reattach | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "frame r2 chunk attempt-reattach | rows=18 streaming=[17] spin=responding working=1 tools=0 chars=18 goal=- todos=0 compaction=-",
+    "frame r3 end attempt-reattach | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "settleStreaming | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-"
   ]
 }

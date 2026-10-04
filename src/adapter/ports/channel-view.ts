@@ -104,7 +104,7 @@ export interface WorkingActivityView {
  */
 export interface ChatRow {
   id: number
-  kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact' | 'subagent' | 'job'
+  kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact' | 'subagent' | 'job' | 'turn-summary'
   /** Extra label for non-human user rows (e.g. `steering`). */
   label?: string
   /** Actual execution location for `!command` rows. */
@@ -118,6 +118,8 @@ export interface ChatRow {
   thinkingOpen?: boolean
   /** Present on `tool` rows; the card model. */
   tool?: ToolRow
+  /** Present on `turn-summary` rows; the turn's usage ledger. */
+  turnUsage?: TurnUsageSummary
   /** Present on `subagent` rows; the subagent state snapshot. */
   subagent?: SubagentRow
   /** Present on `job` rows; the background-job state snapshot. */
@@ -455,6 +457,35 @@ export interface CostTokenBuckets {
   idle: TokenBucket
 }
 
+/** One completed turn's usage ledger (info-display design §C). Per-turn
+ * aggregate of that turn's assistant-message usages — every message reports
+ * its OWN request, so the sum is the turn total and never mixes with the
+ * cumulative `tokens` (a turn-level report from the backend must not be
+ * added on top). Absent wire fields stay absent: `cacheKnown` distinguishes
+ * "the route reported zero cache" from "the route reports no cache at
+ * all", so the UI never fabricates a zero. */
+export interface TurnUsageSummary {
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  /** True when any cache field was present on the wire this turn. */
+  readonly cacheKnown: boolean
+  /** Attempts within the turn that failed and were superseded (API
+   * retries) — 0 means no retry segment renders at all. */
+  readonly retries: number
+  /** turn.start → turn.end wall-clock span (ms). */
+  readonly durationMs: number
+  /** Model id the turn's last request ran on, when the backend reported
+   * one; absent rather than guessed from the session model. */
+  readonly model?: string
+  /** Reasoning effort the turn's requests pinned, when known. */
+  readonly effort?: string
+  /** How the turn ended — an interrupted turn's ledger is partial truth
+   * and says so. */
+  readonly outcome: 'completed' | 'interrupted' | 'error'
+}
+
 /**
  * 本会话主会话用量按模型分桶（费用估算输入，见 estimateCostFromBucketsCny）。
  * `channel.tokens` 的语义与既有显示不变；本字段只服务计价，会话中途换模型时
@@ -728,6 +759,24 @@ export interface AgentMessageControl {
 }
 
 
+
+/** One bounded timeline occurrence of a tracked job (info-display design
+ * §D): lifecycle and output-drain observations in arrival order, wall-clock
+ * stamped at receipt. The store keeps a bounded ring per job — this is an
+ * observation log, not a complete history: entries older than the ring are
+ * gone and the panel says "latest" rather than implying completeness. */
+export interface JobTimelineEvent {
+  readonly kind: 'started' | 'progress' | 'output' | 'gap' | 'stopping' | 'settled'
+  readonly at: number
+  /** The progress line (progress) or terminal detail (settled), when the
+   *  event carries text. */
+  readonly text?: string
+  /** Bytes observed in this output drain (output events). */
+  readonly bytes?: number
+  /** The drain's channel label, when the kernel chunk carried one. */
+  readonly channel?: BackgroundJobOutputChannel
+}
+
 /** One tracked job as the UI renders it. */
 export interface BackgroundJobState {
   id: string
@@ -760,6 +809,20 @@ export interface BackgroundJobState {
   /** Where the backend writes the job's output (as the backend reported
    *  it); the output tail is read from it while the job is on screen. */
   outputFile?: string
+  /** Last producer progress line SEEN (design §D): the live `progress` is
+   *  cleared at settle, but the focused detail keeps showing what the
+   *  producer last said (with its observation time and the producer kind as
+   *  the source) instead of dropping the fact. */
+  lastProgress?: string
+  /** When `lastProgress` was observed (receipt wall-clock). */
+  lastProgressAt?: number
+  /** Output discontinuities observed for this job (ring evictions and
+   *  producer gaps) — a count, because the bytes behind a gap are gone by
+   *  definition and are never estimated. */
+  gapCount?: number
+  /** Bounded observation timeline (design §D); undefined/empty for jobs
+   *  whose history predates the store's lifetime (a resumed roster). */
+  timeline?: readonly JobTimelineEvent[]
 }
 
 /**

@@ -99,6 +99,10 @@
     {
       "kind": "assistant",
       "text": "The first command succeeded and echoed \"fixture-ok\", while the second failed with exit code 2 because the directory doesn't exist."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

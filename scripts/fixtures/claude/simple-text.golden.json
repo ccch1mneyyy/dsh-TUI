@@ -27,6 +27,10 @@
     {
       "kind": "assistant",
       "text": "hello fixture"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

@@ -27,6 +27,7 @@ type LiveAdoptionState = Pick<
   | 'tps'
   | 'tpsSamples'
   | 'lastUsage'
+  | 'turnUsage'
   | 'working'
   | 'emit'
 > & Parameters<typeof resetSessionProjection>[0]

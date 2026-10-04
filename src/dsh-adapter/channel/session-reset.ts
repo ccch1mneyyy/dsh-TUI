@@ -22,6 +22,7 @@ export type SessionResetState = Pick<
   | 'tps'
   | 'tpsSamples'
   | 'lastUsage'
+  | 'turnUsage'
   | 'contextSegments'
   | 'costReport'
   /** Staged "Send to Chat" contexts belong to the composer that staged them:
@@ -77,6 +78,8 @@ export function resetSessionProjection(
   state.tps = undefined
   state.tpsSamples = []
   state.lastUsage = undefined
+  // The last turn's ledger belongs to the old session just as much.
+  state.turnUsage = undefined
   // A backend-reported cost belongs to the session that reported it.
   state.costReport = undefined
   state.attachedContexts = []

@@ -117,6 +117,10 @@
     {
       "kind": "assistant",
       "text": "README.md starts with \"# Fixture project\" and src/app.js starts with \"export function greet(name) {\"."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

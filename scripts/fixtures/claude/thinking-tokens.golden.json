@@ -44,6 +44,10 @@
     {
       "kind": "assistant",
       "text": "17 × 23 = (17 × 20) + (17 × 3) = 340 + 51 = 391\n\n**391**"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

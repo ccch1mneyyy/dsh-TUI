@@ -170,6 +170,10 @@
       "text": "The README describes a fixture project for Claude SDK, and src/app.js exports a function named `greet`."
     },
     {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
       "kind": "notice",
       "text": "Session summary is ready"
     },
@@ -189,6 +193,10 @@
     {
       "kind": "assistant",
       "text": "README.md"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

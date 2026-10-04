@@ -15,7 +15,7 @@
  * contract (the golden pins `startedAt`/`durationMs` with a stepping clock).
  */
 import type { ChannelUi } from '../adapter/ports/channel-ui.js'
-import type { ChatRow, SelectionAttachment, TodoPanelItem, ToolCallView } from '../adapter/ports/channel-view.js'
+import type { ChatRow, SelectionAttachment, TodoPanelItem, ToolCallView, TurnUsageSummary } from '../adapter/ports/channel-view.js'
 import { markChannelReadDirty } from '../adapter/channel/read-view.js'
 import type { AgentEvent, AgentEventMeta, AgentEventOf, ContentBlockView, GoalSnapshot, ImageRef } from '../agent/events.js'
 import { t } from '../i18n.js'
@@ -35,7 +35,7 @@ const MAX_KEYED_TOASTS = 32
 
 export interface ProjectionState extends Mutable<Pick<ChannelUi,
   | 'thinkingFold' | 'activeToolCount' | 'spinnerMode' | 'goal' | 'contextSegments' | 'tokens' | 'mainCost'
-  | 'model' | 'lastUsage' | 'lastUserText' | 'responseChars' | 'tps' | 'cancelPending' | 'working'
+  | 'model' | 'lastUsage' | 'turnUsage' | 'lastUserText' | 'responseChars' | 'tps' | 'cancelPending' | 'working'
   | 'compaction' | 'turnStart' | 'contextWindow' | 'reasoningEffort' | 'sessionTitle' | 'agentPreset' | 'sessionColor'
   | 'costReport'
 >> {
@@ -114,6 +114,25 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       outputChars: number
     }
     | undefined
+  /** Per-turn usage ledger (design §C): reset at turn.start, aggregated from
+   *  each assistant message's OWN request usage (messages report per-request
+   *  increments here — a turn-level backend report must never be added on
+   *  top of them), rendered as the turn-summary row at turn.end and parked
+   *  on `state.turnUsage` for the footer readouts. */
+  const turnLedger = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cacheKnown: false,
+    usageSeen: false,
+    startedAt: 0,
+    model: undefined as string | undefined,
+  }
+  /** Attempt ids that failed and were superseded within the current turn
+   *  (API retries): a set, because the same failure can be observed from
+   *  both the superseding attempt.start and the positioned attempt.end. */
+  const turnFailedAttempts = new Set<string>()
   /** Tool cards by callId, so the result can settle the running card. */
   const toolCards = new Map<string, ChatRow>()
   /**
@@ -594,7 +613,18 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         output: usage.output ?? 0,
         cacheRead: usage.cacheRead ?? 0,
         cacheWrite: usage.cacheWrite ?? 0,
+        at: event.time,
       }
+      // Turn ledger (design §C): each message reports its OWN request's
+      // increment — summing them is the turn total. Cache fields absent on
+      // the wire stay absent (cacheKnown distinguishes zero from unreported).
+      turnLedger.input += usage.input ?? 0
+      turnLedger.output += usage.output ?? 0
+      turnLedger.cacheRead += usage.cacheRead ?? 0
+      turnLedger.cacheWrite += usage.cacheWrite ?? 0
+      if (usage.cacheRead !== undefined || usage.cacheWrite !== undefined) turnLedger.cacheKnown = true
+      turnLedger.usageSeen = true
+      if (event.model !== undefined && event.model !== '') turnLedger.model = event.model
     }
     const tpsMessageStep = tpsStep
     if (
@@ -892,7 +922,37 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     // not a live context-low state.
     if (!replaying) deps.checkContextWarning()
     const reason = event.reason
+    // Turn ledger → summary row + footer snapshot (design §C). Rendered as
+    // the turn's LAST row (after the interrupt/notice that closes it), so
+    // the ledger reads as the account of what just happened. A turn with no
+    // usage-bearing message emits nothing (nothing was measured); a fully
+    // successful zero-usage turn stays quiet too — a zero line is noise.
+    const outcome: 'completed' | 'interrupted' | 'error' =
+      reason.kind === 'completed' ? 'completed'
+        : reason.kind === 'aborted' || reason.kind === 'interrupted' ? 'interrupted'
+          : 'error'
+    const emitTurnSummary = (): void => {
+      if (!turnLedger.usageSeen) return
+      const total = turnLedger.input + turnLedger.output + turnLedger.cacheRead + turnLedger.cacheWrite
+      if (outcome === 'completed' && total === 0 && turnFailedAttempts.size === 0) return
+      const summary: TurnUsageSummary = {
+        input: turnLedger.input,
+        output: turnLedger.output,
+        cacheRead: turnLedger.cacheRead,
+        cacheWrite: turnLedger.cacheWrite,
+        cacheKnown: turnLedger.cacheKnown,
+        retries: turnFailedAttempts.size,
+        durationMs: Math.max(0, event.time - turnLedger.startedAt),
+        ...(turnLedger.model === undefined ? {} : { model: turnLedger.model }),
+        ...(state.reasoningEffort === undefined ? {} : { effort: state.reasoningEffort }),
+        outcome,
+      }
+      state.turnUsage = summary
+      appendRow({ id: deps.rowIds.value, kind: 'turn-summary', text: '', turnUsage: summary })
+      deps.rowIds.value += 1
+    }
     if (reason.kind === 'completed') {
+      emitTurnSummary()
       return
     }
     if (reason.kind === 'aborted' || reason.kind === 'interrupted') {
@@ -905,6 +965,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         text: t('interrupted-by-user') + t('interrupted-ask-next'),
       })
       deps.rowIds.value += 1
+      emitTurnSummary()
       return
     }
     // The notice renders as a single-line Divider title: the error message
@@ -915,6 +976,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     const detail = reason.kind === 'error' ? cleanRenderText(reason.message, NOTICE_CELLS) : ''
     appendRow({ id: deps.rowIds.value, kind: 'notice', text: `turn ${label}${detail ? ` · ${detail}` : ''}` })
     deps.rowIds.value += 1
+    emitTurnSummary()
     // Historical failure notices belong to the transcript row above;
     // re-raising them as a live toast on every /resume re-alarms the user
     // over a turn that already ended.
@@ -972,20 +1034,32 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'assistant.attempt.start':
         // Start owns the attempt's (turn, step); a superseded attempt that
         // never settled loses its provisional rows.
-        if (activeAttempt !== undefined) discardAttempt(activeAttempt.turn, activeAttempt.step)
+        if (activeAttempt !== undefined) {
+          // Capture before discardAttempt: clearing the superseded attempt's
+          // rows also clears the `activeAttempt` ref itself (its last line).
+          const superseded = activeAttempt.attemptId
+          discardAttempt(activeAttempt.turn, activeAttempt.step)
+          // The superseded attempt failed mid-flight (an API retry opens the
+          // replacement): it counts toward the turn's retry tally.
+          turnFailedAttempts.add(superseded)
+        }
         activeAttempt = { attemptId: event.attemptId, turn: event.turn, step: event.step }
         return
       case 'assistant.attempt.end':
         // A positioned end is a durable record of a failed attempt: drop that
         // step's provisional rows whether or not a live attempt matched.
         if (event.turn !== undefined && event.step !== undefined) {
+          if (event.outcome !== 'committed') turnFailedAttempts.add(event.attemptId)
           discardAttempt(event.turn, event.step)
           return
         }
         // Settlement owns the text; an abandoned end must discard provisional
         // rows even when no durable event was written.
         if (activeAttempt?.attemptId !== event.attemptId) return
-        if (event.outcome !== 'committed') discardAttempt(activeAttempt.turn, activeAttempt.step)
+        if (event.outcome !== 'committed') {
+          turnFailedAttempts.add(activeAttempt.attemptId)
+          discardAttempt(activeAttempt.turn, activeAttempt.step)
+        }
         activeAttempt = undefined
         return
       case 'assistant.delta':
@@ -1044,6 +1118,17 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         state.turnStart = Date.now()
         state.responseChars = 0
         state.spinnerMode = 'requesting'
+        // Fresh turn ledger: the previous turn's summary stays on
+        // `state.turnUsage` (the footer reads it) while this one accrues.
+        turnLedger.input = 0
+        turnLedger.output = 0
+        turnLedger.cacheRead = 0
+        turnLedger.cacheWrite = 0
+        turnLedger.cacheKnown = false
+        turnLedger.usageSeen = false
+        turnLedger.startedAt = event.time
+        turnLedger.model = undefined
+        turnFailedAttempts.clear()
         // Keep the prior turn visible until this turn produces a measurable
         // decode span, while starting a fresh weighted step fold.
         tpsBeforeTurn = state.tps
@@ -1151,7 +1236,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         // fallback reading would keep the pre-compact size until the next
         // turn. DSH reports no `postTokens` (its token meter owns occupancy).
         if (event.ok && event.postTokens !== undefined) {
-          state.lastUsage = { input: event.postTokens, output: 0, cacheRead: 0, cacheWrite: 0 }
+          state.lastUsage = { input: event.postTokens, output: 0, cacheRead: 0, cacheWrite: 0, at: event.time }
         }
         return
       case 'custom': {

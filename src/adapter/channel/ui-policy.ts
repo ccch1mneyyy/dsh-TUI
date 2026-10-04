@@ -190,6 +190,7 @@ export const CHANNEL_UI_PROPERTIES = [
   'reasoningEffort',
   'effortLevels',
   'lastUsage',
+  'turnUsage',
   'contextOccupancy',
   'tps',
   'tpsSamples',

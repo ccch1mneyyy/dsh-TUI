@@ -1198,6 +1198,26 @@ const dict = {
   // （foldTerminalCommand）、分屏 diff 隐藏行（SplitDiffView）。按字符折叠
   // 的行内标记见 long-line-folded。
   'lines-folded-expand': { zh: '… +{{n}} 行（{{key}} 展开）', en: '… +{{n}} lines ({{key}} to expand)' },
+  // 工具卡完整度（信息展示完整度设计 §B）：折叠量指示（行/字符单位词 +
+  // 组合句）、展开态的源截断/仅结构化披露、verbose 行窗口告知。
+  'tool-card-lines-unit': { zh: '{{n}} 行', en: '{{n}} lines' },
+  'tool-card-chars-unit': { zh: '{{n}} 字符', en: '{{n}} chars' },
+  'tool-card-lines-hidden': { zh: '… 已折叠 {{parts}}（{{key}} 展开）', en: '… folded {{parts}} ({{key}} to expand)' },
+  'tool-card-source-truncated': { zh: '源数据已折叠：以上为预览，全文保留在会话日志', en: 'Source folded: preview above — the session log retains the full text' },
+  'tool-card-full-unavailable': { zh: '以上为结构化呈现；源未保留可展开的原始全文', en: 'Structured view above; no expandable raw full text was retained' },
+  'tool-card-window-shown': { zh: '… 已显示前 {{shown}}/{{total}} 行，源保留全文', en: '… first {{shown}}/{{total}} lines shown; the source retains all' },
+  // 模型/用量表面（信息展示完整度设计 §C）：回合账本行的分段词、采样时点、
+  // 底栏 hover 的上一轮摘要标签。缓存分段只在 wire 真带缓存 token 时渲染
+  //（未上报 ≠ 0，不虚构零）。
+  'usage-turn-summary': { zh: '本轮', en: 'turn' },
+  'usage-cache-read': { zh: '读 {{n}}', en: 'read {{n}}' },
+  'usage-cache-write': { zh: '写 {{n}}', en: 'write {{n}}' },
+  'usage-cache-segment': { zh: '缓存 {{parts}}', en: 'cache {{parts}}' },
+  'usage-retry-segment': { zh: '重试 {{n}} 次', en: '{{n}} retries' },
+  'usage-turn-outcome-interrupted': { zh: '已中断', en: 'interrupted' },
+  'usage-turn-outcome-error': { zh: '未完成', en: 'unfinished' },
+  'usage-sampled-at': { zh: '采样 {{time}}', en: 'sampled {{time}}' },
+  'usage-last-turn': { zh: '上一轮', en: 'last turn' },
 
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },
@@ -1662,6 +1682,21 @@ const dict = {
   'jobs-panel-no-output-yet': { zh: '（暂无镜像输出——agent 读取后显示）', en: '(no mirrored output yet — appears when the agent reads it)' },
   'jobs-output-gap': { zh: '……较早的输出已丢弃……', en: '……earlier output discarded……' },
   'jobs-output-dropped': { zh: '部分输出未保留', en: 'some output not retained' },
+  // jobs 面板增量（信息展示完整度设计 §D）：焦点详情的最近进度（带观测时点
+  // 与生产者来源）、有界时间线（启动/进度/输出增量/缺口/收尾）、保留尾巴
+  // 如实标注。进度原文透传，绝不把任意字符串解析成百分比。
+  'jobs-progress-latest': { zh: '进度', en: 'progress' },
+  'jobs-progress-updated-at': { zh: '更新 {{time}}', en: 'updated {{time}}' },
+  'jobs-progress-source': { zh: '来源 {{source}}', en: 'source {{source}}' },
+  'jobs-timeline': { zh: '时间线（最近）', en: 'timeline (latest)' },
+  'jobs-timeline-started': { zh: '启动', en: 'started' },
+  'jobs-timeline-progress': { zh: '进度', en: 'progress' },
+  'jobs-timeline-output': { zh: '输出', en: 'output' },
+  'jobs-timeline-gap': { zh: '缺口', en: 'gap' },
+  'jobs-timeline-settled': { zh: '收尾', en: 'settled' },
+  'jobs-timeline-gap-count': { zh: '输出缺口 {{n}} 处', en: '{{n}} output gaps' },
+  'jobs-timeline-events-unavailable': { zh: '时间线不可用（任务早于本进程的观测）', en: 'timeline unavailable (job predates this process)' },
+  'jobs-output-retained-tail': { zh: '仅保留最近 {{n}} 行', en: 'last {{n}} lines retained' },
   'jobs-output-spill': { zh: '完整输出落盘：{{path}}', en: 'full output retained at: {{path}}' },
   'jobs-toast-completed': { zh: '后台任务完成：{{label}}（{{id}} · 用时 {{duration}}）', en: 'Background job completed: {{label}} ({{id}} · {{duration}})' },
   'jobs-toast-failed': { zh: '后台任务失败：{{label}}（{{id}} · {{detail}}）', en: 'Background job failed: {{label}} ({{id}} · {{detail}})' },

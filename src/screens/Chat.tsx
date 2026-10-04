@@ -15,7 +15,8 @@ import { usePageInset } from '../components/PageMargin.js'
 import { POINTER } from '../terminal-utils/figures.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { actionMatches, effectiveComboDisplay, primaryComboString } from '../utils/keymap.js'
-import { formatTokens } from '../terminal-utils/format.js'
+import { formatTokens, formatDuration } from '../terminal-utils/format.js'
+import { formatClock } from '../trajectory/format.js'
 import { homeDir } from '../utils/paths.js'
 import { execFileNoThrow } from '../utils/execFileNoThrow.js'
 import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-view.js'
@@ -3043,23 +3044,36 @@ export function Chat({
         })
         return true
       case 'tokens': {
-        // Three separately-labelled facts, never two measures side by side:
-        // what THIS request uploaded (the provider's mutually-exclusive prompt
-        // buckets), what the session has accumulated (the token counters), and
-        // how full the window is (the channel's single occupancy reading — the
-        // same number the footer and the context-low warning show).
+        // Four separately-labelled facts, never two measures side by side
+        // (design §C): what THIS request uploaded (the provider's
+        // mutually-exclusive prompt buckets, stamped with when it was
+        // sampled), what the LAST TURN aggregated (per-turn ledger — never
+        // added into the session counters), what the session has accumulated
+        // (the token counters), and how full the window is (the channel's
+        // single occupancy reading — the same number the footer and the
+        // context-low warning show).
         const usage = channel.lastUsage
         const lines: string[] = []
         if (usage !== undefined) {
           const upload = usage.input + usage.cacheRead + usage.cacheWrite
           const rate = upload > 0 ? ((usage.cacheRead / upload) * 100).toFixed(1) : '0.0'
-          lines.push(t('tokens-request-upload', {
+          lines.push(`${t('tokens-request-upload', {
             upload: formatTokens(upload),
             input: formatTokens(usage.input),
             read: formatTokens(usage.cacheRead),
             write: formatTokens(usage.cacheWrite),
             rate,
-          }))
+          })} · ${t('usage-sampled-at', { time: formatClock(usage.at) })}`)
+        }
+        const turn = channel.turnUsage
+        if (turn !== undefined) {
+          const turnParts = [`↑${formatTokens(turn.input)}`, `↓${formatTokens(turn.output)}`]
+          if (turn.cacheKnown && turn.cacheRead + turn.cacheWrite > 0) {
+            turnParts.push(t('usage-cache-segment', { parts: `${formatTokens(turn.cacheRead)}/${formatTokens(turn.cacheWrite)}` }))
+          }
+          if (turn.retries > 0) turnParts.push(t('usage-retry-segment', { n: turn.retries }))
+          turnParts.push(formatDuration(turn.durationMs))
+          lines.push(`${t('usage-turn-summary')} ${turnParts.join(' · ')}`)
         }
         lines.push(t('tokens-session-breakdown', {
           input: formatTokens(channel.tokens.input),
@@ -3211,7 +3225,19 @@ export function Chat({
         if (usage !== undefined) {
           const total = usage.input + usage.cacheRead + usage.cacheWrite
           const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
-          lines.push(t('cost-cache-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) }))
+          lines.push(`${t('cost-cache-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) })} · ${t('usage-sampled-at', { time: formatClock(usage.at) })}`)
+        }
+        // Design §C: the per-turn ledger sits next to the session totals as
+        // its own labelled line — turn and session aggregates stay visually
+        // separate so neither reads as the other.
+        const turn = channel.turnUsage
+        if (turn !== undefined) {
+          const turnParts = [`↑${formatTokens(turn.input)}`, `↓${formatTokens(turn.output)}`, formatDuration(turn.durationMs)]
+          if (turn.cacheKnown && turn.cacheRead + turn.cacheWrite > 0) {
+            turnParts.push(t('usage-cache-segment', { parts: `${formatTokens(turn.cacheRead)}/${formatTokens(turn.cacheWrite)}` }))
+          }
+          if (turn.retries > 0) turnParts.push(t('usage-retry-segment', { n: turn.retries }))
+          lines.push(`${t('usage-turn-summary')} ${turnParts.join(' · ')}`)
         }
         const occupancyLine = contextOccupancyLine(channel)
         if (occupancyLine !== undefined) lines.push(occupancyLine)

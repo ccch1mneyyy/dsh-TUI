@@ -623,6 +623,16 @@ const GROUPS = {
 // 运行中占位、搜索截断——必须在 zh/en 双语都走字典渲染；与 verify-i18n
 // 的字面量 tripwire 互补（那边管源码侧，这边管渲染侧）。
     ["verify-toolcard-i18n", ['node', '--import', 'tsx/esm', 'scripts/verify-toolcard-i18n.tsx']],
+// 工具卡完整度回归（信息展示完整度设计 §B）：终端非零退出码/信号行不被
+// 行预算折叠（长输出不再把失败判定折没了）、行折叠提示聚合被折字符量、
+// verbose 有界行窗口 + 如实告知、展开卡的源截断/仅结构化披露、错误长文
+// 走与输出同一套行预算。
+    ["verify-tool-card-completeness", ['node', '--import', 'tsx/esm', 'scripts/verify-tool-card-completeness.tsx']],
+// 每回合用量账本回归（信息展示完整度设计 §C）：共享投影器把回合内各
+// assistant.message 的 per-request usage 求和成 turn-summary 行与底栏
+// 快照——result/turn 口径不双计、缓存缺席≠0、中断/通知/压缩/重放各形态、
+// 失败尝试（重试）只计一次。
+    ["verify-usage-turn-summary", ['node', '--import', 'tsx/esm', 'scripts/verify-usage-turn-summary.ts']],
 // 悬停浮层第二批回归：@ 文件补全面板长路径悬停弹全路径（完整可见的短路径
 // 不弹）、会话列表行标题截断悬停弹完整标题+绝对时间+cwd（未截断不重复
 // 标题）、状态栏 model/git 字段悬停明细（provider/ctx 窗口/完整分支）、
@@ -934,6 +944,12 @@ const GROUPS = {
 // toast、kill 权限传递、无 jobs 服务降级、/new 重置）、JobCard/JobsPanel
 // 渲染冒烟（三行瀑布、settled 折叠、面板行/提示）。
     ["verify-jobs-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-panel.tsx']],
+// jobs 面板增量（信息展示完整度设计 §D，与 job-mirror 在途批对齐）：最近
+// 进度跨 settle 保留（带观测时点与生产者来源）、有界时间线观察环
+// （启动/进度/输出增量/缺口/收尾，丢最旧、无第二读取器——事件来自既有
+// readAt drain 与 job_output 镜像）、保留尾巴如实标注、无观测历史的诚实
+// 提示。
+    ["verify-jobs-progress-timeline", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-progress-timeline.ts']],
 // jobs 侧栏迁移回归：SidePanelColumn/PanelHost 内挂真实 useSidePanel 与假
 // channel——badge（running→info、未见 failed→error、打开清错）、名册渲染、
 // usePanelInput 分派（↓ 移动 / 双 k kill / Esc 让出回聊天）、SGR 点击聚焦、

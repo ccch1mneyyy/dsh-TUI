@@ -50,12 +50,20 @@
       "text": "Interrupted · What should DeepSeek do instead?"
     },
     {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
       "kind": "user",
       "text": "Stop. Reply with exactly: NOW-OK"
     },
     {
       "kind": "assistant",
       "text": "NOW-OK"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {
