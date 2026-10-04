@@ -1,7 +1,7 @@
 /**
- * LIVE Claude backend check — real `claude` CLI, real credentials, real (small)
- * usage. NOT part of CI: it runs only with DSH_TUI_CLAUDE_LIVE=1 and prints
- * SKIP otherwise. HAIKU ONLY (maintainer cost rule, 2026-10-02): the child's
+ * Live Claude backend check: real `claude` CLI, real credentials, real (small)
+ * usage. Not part of CI: it runs only with DSH_TUI_CLAUDE_LIVE=1 and prints
+ * SKIP otherwise. Haiku only (the maintainer's cost rule): the child's
  * model is pinned to haiku and the run refuses to start when the environment
  * or a persisted `/model` choice names another model
  * (scripts/lib/claude-haiku-only.mjs). Throwaway project directory.
@@ -12,29 +12,29 @@
  *  3. a mid-stream cancel closes the turn as aborted;
  *  4. open → dispose ×5, then no `claude` child process of this process
  *     remains (`ps --ppid`);
- *  5. approvals (Phase 3), answered through the real PermissionStore and the
+ *  5. approvals, answered through the real PermissionStore and the
  *     channel's interaction bridge, in `default` mode: a Write approved once
  *     writes the file; a Bash rejected with a reason errors its card and the
  *     model carries on; an interrupt while a prompt is pending closes the
  *     panel and aborts the turn;
- *  6. controls (Phase 3): a haiku-only `/model` round trip — the `haiku`
+ *  6. controls: a haiku-only `/model` round trip — the `haiku`
  *     alias, then its full id, each switched in place (`setModel`, reported
  *     as `model.changed`) and confirmed by the next reply's model; `/effort`
  *     when haiku offers levels; Shift+Tab's acceptEdits then a Write with no
  *     prompt; `/compact` (compaction start/end). Switching to OTHER models is
  *     covered by the fake-SDK verify-claude-controls only. The persisted
  *     `/model` / `/effort` choice file is restored afterwards;
- *  7. reconnect (Phase 3 review item 1): `/login`'s reconnect on a session
+ *  7. reconnect: `/login`'s reconnect on a session
  *     the CLI never persisted creates it again under the same id (no "No
  *     conversation found"); after a turn it resumes the same transcript.
- *  8. sessions (Phase 4b, 2 turns): create → 1 turn → dispose → the catalog
+ *  8. sessions (2 turns): create → 1 turn → dispose → the catalog
  *     lists it → resume (the replayed history comes first, the live turn
  *     continues the numbering, the model sees the earlier turn) → `/fork`
  *     (a persisted copy with both turns; the live session untouched) →
  *     rewind the conversation to turn 1 (a fork cut before turn 2's
  *     prompt — the anchor is the uuid the session pushed, which the
  *     transcript keeps) → the catalog deletes the copies.
- *  9. phase 5b (`DSH_TUI_CLAUDE_LIVE_SECTIONS=5b`, 2 turns): a tiny PNG
+ *  9. images and side questions (`DSH_TUI_CLAUDE_LIVE_SECTIONS=5b`, 2 turns): a tiny PNG
  *     sent as a base64 image block is seen ("what color is this
  *     square?" → red); `/btw` over that conversation answers through the
  *     side query (a throwaway fork) and writes NO transcript file;
@@ -342,7 +342,7 @@ try {
     check('reconnect: no claude child survives', (await waitForNoChildren()).length === 0, claudeChildren())
   }
 
-  // 8. sessions: resume, /fork, rewind (Phase 4b)
+  // 8. sessions: resume, /fork, rewind
   if (sections.has('sessions')) {
     const { getSessionMessages } = await import('@anthropic-ai/claude-agent-sdk')
     const original = await openSession({ kind: 'create', cwd: project })
