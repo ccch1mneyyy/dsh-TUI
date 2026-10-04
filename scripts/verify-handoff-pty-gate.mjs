@@ -42,9 +42,12 @@ if (isDriver) {
   const markerPath = process.env.PTY_GATE_MARKER ?? ''
   const { writeSync } = await import('node:fs')
   const attempt = process.env.DSH_TUI_HANDOFF_ATTEMPT ?? ''
+  // Each role reports to its own file: the parent finishes last and would
+  // otherwise overwrite the replacement's TTY facts.
   const report = (payload) => {
     if (markerPath !== '') {
-      try { writeFileSync(markerPath, JSON.stringify(payload)) } catch { /* diagnosis only */ }
+      const target = payload.role === 'replacement' ? markerPath + '.replacement' : markerPath
+      try { writeFileSync(target, JSON.stringify(payload)) } catch { /* diagnosis only */ }
     }
   }
 
@@ -162,7 +165,9 @@ if (provider === 'node-pty') {
   const exit = await new Promise(resolve => term.onExit(() => resolve(true)))
   run = { status: exit ? 0 : 1, stdout: chunks.join('') }
 } else if (provider === 'script') {
-  const quoted = driverCommand.map(part => '"' + part + '"').join(' ')
+  // script copies its own terminal's size onto the new PTY; run headless (CI)
+  // that is 0x0, so set the same 100x30 the node-pty provider uses.
+  const quoted = 'stty cols 100 rows 30 && exec ' + driverCommand.map(part => '"' + part + '"').join(' ')
   run = spawnSync('script', ['-qec', quoted, marker + '.typescript'], {
     encoding: 'utf8', timeout: 120000, env, cwd: dirname(selfPath),
   })
@@ -174,6 +179,7 @@ if (provider === 'node-pty') {
 
 const text = run.stdout ?? ''
 const parentReport = existsSync(marker) ? JSON.parse(readFileSync(marker, 'utf8')) : undefined
+const replacementReport = existsSync(marker + '.replacement') ? JSON.parse(readFileSync(marker + '.replacement', 'utf8')) : undefined
 
 check('chain: driver completed', run.status === 0, 'status=' + String(run.status))
 check("sequence: 1049h exactly once (the old parent's boot)", (text.match(/\u001b\[\?1049h/g) ?? []).length === 1)
@@ -190,11 +196,11 @@ check('single owner: the old parent holds zero stdin readers across the spawn',
 if (provider === 'pipe') {
   note('provider=pipe: no real PTY device available in this environment — TTY facade and DA1 probe assertions are device-gated (sequence/owner invariants still enforced). Run with node-pty installed or on POSIX script for the device-level gate.')
 } else {
-  check("tty facade: the replacement's stdout is a real TTY (not a disguised pipe)", parentReport?.isTTY === true)
-  check('tty facade: columns/rows are positive', (parentReport?.columns ?? 0) >= 40 && (parentReport?.rows ?? 0) >= 10, JSON.stringify({ c: parentReport?.columns, r: parentReport?.rows }))
-  check('tty facade: raw mode is available to the replacement', parentReport?.hasSetRawMode === true)
+  check("tty facade: the replacement's stdout is a real TTY (not a disguised pipe)", replacementReport?.role === 'replacement' && replacementReport.isTTY === true)
+  check('tty facade: columns/rows are positive', (replacementReport?.columns ?? 0) >= 40 && (replacementReport?.rows ?? 0) >= 10, JSON.stringify({ c: replacementReport?.columns, r: replacementReport?.rows }))
+  check('tty facade: raw mode is available to the replacement', replacementReport?.hasSetRawMode === true)
   if (provider === 'node-pty') {
-    check('probe round-trip: a DA1 query through the shared console gets a reply (image/kitty/sixel probing premise)', parentReport?.probeSeen === true, 'probeSeen=' + String(parentReport?.probeSeen))
+    check('probe round-trip: a DA1 query through the shared console gets a reply (image/kitty/sixel probing premise)', replacementReport?.probeSeen === true, 'probeSeen=' + String(replacementReport?.probeSeen))
   } else {
     note('provider=' + provider + ': a real PTY without an emulator on the master side answers no DA1 probe — the round-trip assertion is node-pty-gated (this run still asserts the real-PTY facade).')
   }
