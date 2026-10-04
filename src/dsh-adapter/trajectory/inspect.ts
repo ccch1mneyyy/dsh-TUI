@@ -13,7 +13,7 @@
  */
 
 import { t } from '../../i18n.js'
-import { asRawEvents, readRetry, type RawTrajEvent } from './guards.js'
+import { asRawEvents, readApprovalAsked, readRetry, type RawTrajEvent } from './guards.js'
 import type { TrajNode } from './types.js'
 
 
@@ -32,6 +32,13 @@ export interface InspectDetail {
   /** Short `key value` facts rendered on the header line. */
   readonly facts: readonly string[]
   readonly sections: readonly InspectSection[]
+  /**
+   * True when the row's owning event could not be re-read from the log (a
+   * compacted-away bracket, a pruned lane): the header facts above still
+   * stand, but the full content is honestly unavailable (design ④ i18n
+   * `trajectory-inspect-unavailable`) rather than silently blank.
+   */
+  readonly unresolved?: boolean
 }
 
 /** Binary search for an event by seq; the log is seq-monotonic. */
@@ -70,6 +77,30 @@ function allText(content: unknown): string {
     else if (record.type === 'image') parts.push('[image]')
   }
   return parts.join('\n')
+}
+
+/**
+ * The answer text of the ask-tool result paired with a question's `callId`.
+ *
+ * A settled questionnaire reports only its `requestId`; the answer the user
+ * picked lands as the ask tool's own result. One bounded backwards scan (the
+ * result always follows the ask) recovers it; absence stays absence.
+ */
+function pairedResultText(events: readonly RawTrajEvent[], callId: string): string | undefined {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]!
+    if (event.type !== 'tool/result') continue
+    const message = (event.data as Record<string, unknown> | undefined)?.message
+    const source =
+      typeof message === 'object' && message !== null
+        ? (message as Record<string, unknown>).source
+        : undefined
+    if (typeof source !== 'object' || source === null) continue
+    if ((source as Record<string, unknown>).callId !== callId) continue
+    const body = allText((message as Record<string, unknown>).content)
+    return body === '' ? undefined : body
+  }
+  return undefined
 }
 
 /**
@@ -142,9 +173,39 @@ export function inspectNode(node: TrajNode, events: readonly RawTrajEvent[]): In
     }
 
     case 'approval': {
+      // 审批/问卷等待段详情（设计 ④ 完整档）：等待时长在表头右侧（闭合
+      // 段）或检查器的 live 行（等待中）呈现；这里补齐响应与来源——
+      // settled 事件只带 outcome，问出去的来源与可选项只活在 asked 载荷
+      // 里，必须在折叠时保留、在这里懒读。
       if (node.detail !== undefined) sections.push({ title: 'reason', body: node.detail })
       if (node.outcome !== undefined) {
         sections.push({ title: 'outcome', body: node.outcome, tone: node.status === 'error' ? 'error' : undefined })
+      }
+      const ask = readApprovalAsked(open?.data)
+      if (ask !== undefined) {
+        // 响应：问卷的 settled 只报 requestId；答案正文落在配对的 ask 工具
+        // 结果里（callId 配对，懒读一次，找不到就不假装有）。
+        if (ask.ask === 'question') {
+          const answer = ask.callId === undefined ? undefined : pairedResultText(raw, ask.callId)
+          if (answer !== undefined) {
+            sections.push({ title: 'response', body: answer })
+          }
+        }
+        const source: string[] = []
+        if (ask.agentId !== undefined) source.push(`agent ${ask.agentId.slice(0, 12)}`)
+        if (ask.title !== undefined && ask.title !== ask.reason) source.push(ask.title)
+        if (ask.command !== undefined) source.push(`command: ${ask.command}`)
+        if (ask.blockedPath !== undefined) source.push(`blocked: ${ask.blockedPath}`)
+        if (ask.options !== undefined && ask.options.length > 0) source.push(`options: ${ask.options.join(' | ')}`)
+        if (source.length > 0) sections.push({ title: 'source', body: source.join('\n'), tone: 'dim' })
+        if (ask.questions !== undefined && ask.questions.length > 0) {
+          const lines = ask.questions.map((question, index) => {
+            const head = question.header === undefined ? '' : `[${question.header}] `
+            const options = question.options.length === 0 ? '' : `  (${question.options.join(' | ')})`
+            return `${index + 1}. ${head}${question.question}${options}`
+          })
+          sections.push({ title: 'questions', body: lines.join('\n') })
+        }
       }
       break
     }
@@ -177,5 +238,5 @@ export function inspectNode(node: TrajNode, events: readonly RawTrajEvent[]): In
   }
 
   const title = node.label === '' ? node.kind : node.label
-  return { title, facts, sections }
+  return { title, facts, sections, ...(open === undefined ? { unresolved: true } : {}) }
 }

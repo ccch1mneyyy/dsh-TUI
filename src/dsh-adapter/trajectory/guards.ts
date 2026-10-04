@@ -238,6 +238,8 @@ export interface SubagentPayload {
   readonly label?: string
   readonly model?: string
   readonly mode?: string
+  /** The child's agent id — the trajectory drilldown's anchor (design ④ XL). */
+  readonly agentId?: string
 }
 
 /** Narrow a `subagent/descriptor` payload. */
@@ -247,15 +249,57 @@ export function readSubagent(data: unknown): SubagentPayload | undefined {
     label: str(data, 'label'),
     model: str(data, 'agentModel'),
     mode: str(data, 'mode'),
+    agentId: str(data, 'agentId'),
   }
 }
 
-/** An `approval/asked` payload. `id` pairs it with the `approval/decided`. */
+/**
+ * An `approval/asked` payload. `id` pairs it with the `approval/decided`.
+ *
+ * The wait-detail fields (design agent-team-panels §④ 完整档) are optional
+ * ask-time presentation: the settled event carries only the outcome, so the
+ * source that still knows the choices and the asker must record them here or
+ * they are lost. DSH logs predate the fields — the guard reads them
+ * tolerantly and DSH rows simply render without them.
+ */
 export interface ApprovalAskedPayload {
   readonly id: string
   readonly toolName?: string
   readonly callId?: string
   readonly reason?: string
+  /** Which kind of wait segment this is (permission prompt or questionnaire). */
+  readonly ask?: 'permission' | 'question'
+  /** The subagent whose call triggered the ask, when it ran inside one. */
+  readonly agentId?: string
+  /** Full prompt sentence the backend rendered for the ask. */
+  readonly title?: string
+  /** One-line rendering of the gated action (command, file, URL). */
+  readonly command?: string
+  /** The path outside the allowed directories that triggered the ask. */
+  readonly blockedPath?: string
+  /** Option identities offered at ask time (bounded by the source). */
+  readonly options?: readonly string[]
+  /** The questionnaire's structure (bounded by the source), for `ask: 'question'`. */
+  readonly questions?: readonly ApprovalQuestionSummary[]
+}
+
+/** One ask-time questionnaire entry (bounded by the emitting source). */
+export interface ApprovalQuestionSummary {
+  readonly header?: string
+  readonly question: string
+  readonly options: readonly string[]
+}
+
+/** Read one bounded ask-time question structure, or `undefined` when malformed. */
+function readAskQuestion(record: Record<string, unknown>): ApprovalQuestionSummary | undefined {
+  const question = str(record, 'question')
+  if (question === undefined) return undefined
+  const options = record.options
+  return {
+    ...(str(record, 'header') === undefined ? {} : { header: str(record, 'header') }),
+    question,
+    options: Array.isArray(options) ? options.filter((entry): entry is string => typeof entry === 'string') : [],
+  }
 }
 
 /** Narrow an `approval/asked` payload. */
@@ -263,11 +307,26 @@ export function readApprovalAsked(data: unknown): ApprovalAskedPayload | undefin
   if (!isRecord(data)) return undefined
   const id = str(data, 'id')
   if (id === undefined) return undefined
+  const ask = str(data, 'ask')
+  const options = data.options
+  const questions = data.questions
   return {
     id,
     toolName: str(data, 'toolName'),
     callId: str(data, 'callId'),
     reason: str(data, 'reason'),
+    ...(ask === 'permission' || ask === 'question' ? { ask } : {}),
+    agentId: str(data, 'agentId'),
+    title: str(data, 'title'),
+    command: str(data, 'command'),
+    blockedPath: str(data, 'blockedPath'),
+    options: Array.isArray(options) ? options.filter((entry): entry is string => typeof entry === 'string') : undefined,
+    questions: Array.isArray(questions)
+      ? questions
+          .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+          .map(readAskQuestion)
+          .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
+      : undefined,
   }
 }
 

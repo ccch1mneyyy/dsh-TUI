@@ -1940,6 +1940,10 @@ const dict = {
   // 轨迹行的「观察时钟」标注（设计 §④）：事件本身没有时间戳时，数据源用收到
   // 时刻充当行时间，检查器必须把这一点说清——这是观察时间，不是事件时间。
   'trajectory-time-observed': { zh: '时间为观察时钟', en: 'time from observed clock' },
+  // 审批/问卷等待段详情（设计 §④ 完整档）：等待中的 live 时长，与「检查内容
+  // 已不可读」的诚实降级——压缩掉的事件不假装还有正文。
+  'trajectory-wait-elapsed': { zh: '已等待 {{duration}}', en: 'waiting {{duration}}' },
+  'trajectory-inspect-unavailable': { zh: '事件原文已不可读（可能已被压缩）', en: 'source event no longer readable (likely compacted)' },
   'info-section-session': { zh: '会话', en: 'Session' },
   'info-section-model': { zh: '模型', en: 'Model' },
   'info-section-context': { zh: '上下文', en: 'Context' },
