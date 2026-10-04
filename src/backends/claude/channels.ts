@@ -46,6 +46,7 @@
  */
 import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import { channelProfileSlug } from '../../channel/channel-slug.js'
 import { DATA_DIR } from '../../utils/paths.js'
 import { writeFileAtomic } from './atomic-file.js'
 
@@ -89,13 +90,8 @@ export interface ClaudeChannels {
 
 const FILE = 'channels.json'
 
-/** The stable id of a channel name: lowercase, runs of non-alphanumerics
- *  collapsed to `-`, edges trimmed; a name without any alphanumeric reads
- *  as `channel` (still stable). */
-export function channelSlug(name: string): string {
-  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-  return slug === '' ? 'channel' : slug
-}
+/** The stable id of a channel name (shared with the /channel wizard). */
+export const channelSlug = channelProfileSlug
 
 /** Narrow one parsed object to a string→string record (empty keys/values drop). */
 function stringMap(value: unknown): Record<string, string> | undefined {

@@ -48,6 +48,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { channelCapabilities } from '../src/channel/capabilities.js'
 import { channelSlug, fileClaudeChannels, importFromSettingsEnv, importTokenFromSettingsEnv, memoryClaudeChannels } from '../src/backends/claude/channels.js'
+import { channelProfileSlug } from '../src/channel/channel-slug.js'
 import { channelTokenRef, fileClaudeChannelTokens, memoryClaudeChannelTokens } from '../src/backends/claude/channelTokens.js'
 import { ClaudeChannelConflictError, channelMissingCredential, resolveClaudeAuth } from '../src/backends/claude/auth.js'
 import { channelStartNotices } from '../src/backends/claude/backend.js'
@@ -143,7 +144,9 @@ const init = {
 // ---- 2. slug + the settings import ----------------------------------------
 {
   check('slug: lowercases and collapses non-alphanumerics', channelSlug('Open.BigModel~CN') === 'open-bigmodel-cn', channelSlug('Open.BigModel~CN'))
-  check('slug: a name without alphanumerics still gets a STABLE id', channelSlug('智谱') === 'channel' && channelSlug('智谱') === channelSlug('智谱'), channelSlug('智谱'))
+  check('slug: a name without ASCII alphanumerics gets a stable hashed id', /^channel-[0-9a-f]{8}$/u.test(channelSlug('智谱')) && channelSlug('智谱') === channelSlug(' 智谱 '), channelSlug('智谱'))
+  check('slug: two such names get different ids (and token refs)', channelSlug('智谱') !== channelSlug('硅基流动') && channelTokenRef(channelSlug('智谱')) !== channelTokenRef(channelSlug('硅基流动')), [channelSlug('智谱'), channelSlug('硅基流动')])
+  check('slug: the wizard and the backend share one rule', channelSlug === channelProfileSlug)
   const env = {
     ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',
     ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: 'GLM',
@@ -1064,14 +1067,13 @@ const init = {
 // ---- 14c. an add colliding with another channel's id confirms --------------
 {
   const { t } = await import('../src/i18n.js')
-  // The slug folds every non-alphanumeric name the same way: both Chinese
-  // names derive id `channel`.
-  check('clash: two non-alphanumeric names collide on one id', channelSlug('智谱') === channelSlug('硅基流动') && channelSlug('智谱') === 'channel')
-  const h = () => {
-    const store = memoryClaudeChannels({ active: 'channel', channels: [
-      { id: 'channel', name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/anthropic', tokenRef: 'CHANNEL_CHANNEL_TOKEN' },
-    ] })
-    const tokens = memoryClaudeChannelTokens({ CHANNEL_CHANNEL_TOKEN: 'zhipu-secret' })
+  // Two different ASCII names that slug to one id.
+  check('clash: two different names can still share an id', channelSlug('Open BigModel') === channelSlug('open.bigmodel') && channelSlug('open.bigmodel') === 'open-bigmodel')
+  const h = (initial: { active?: string; channels: { id: string; name: string; baseUrl?: string; tokenRef?: string }[] } = { active: 'open-bigmodel', channels: [
+    { id: 'open-bigmodel', name: 'Open BigModel', baseUrl: 'https://open.bigmodel.cn/api/anthropic', tokenRef: 'CHANNEL_OPEN_BIGMODEL_TOKEN' },
+  ] }, initialTokens: Record<string, string> = { CHANNEL_OPEN_BIGMODEL_TOKEN: 'zhipu-secret' }) => {
+    const store = memoryClaudeChannels(initial)
+    const tokens = memoryClaudeChannelTokens(initialTokens)
     let saved = 0
     const deps = (selected: Record<string, string[]>, custom: Record<string, string> = {}) => ({
       ask: async (request: { questions: { id: string }[] }) => {
@@ -1091,8 +1093,9 @@ const init = {
       }),
       save: (input: { id: string; name: string; baseUrl?: string; token?: string }) => {
         saved += 1
-        tokens.write(channelTokenRef(input.id), input.token ?? 'kept')
-        store.save({ id: input.id, name: input.name, ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }), tokenRef: channelTokenRef(input.id) })
+        const ref = store.read().channels.find(row => row.id === input.id)?.tokenRef ?? channelTokenRef(input.id)
+        tokens.write(ref, input.token ?? 'kept')
+        store.save({ id: input.id, name: input.name, ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }), tokenRef: ref })
         return deps({} as never).roster().channels.find(row => row.id === input.id)
       },
       remove: (id: string) => { store.remove(id); return true },
@@ -1107,12 +1110,12 @@ const init = {
     const outcome = await runChannelWizard(c.deps({
       action: [t('channel-wiz-opt-add')],
       clash: [t('channel-wiz-opt-clash-cancel')],
-    }, { name: '硅基流动' }) as never)
+    }, { name: 'open.bigmodel' }) as never)
     const row = c.store.read().channels[0]
     check('clash: declining the overwrite writes nothing',
       outcome.kind === 'cancelled' && outcome.restart === false && c.savedCalls() === 0
-        && c.store.read().channels.length === 1 && row?.name === '智谱' && row?.baseUrl === 'https://open.bigmodel.cn/api/anthropic'
-        && c.tokens.read('CHANNEL_CHANNEL_TOKEN') === 'zhipu-secret', { outcome, row })
+        && c.store.read().channels.length === 1 && row?.name === 'Open BigModel' && row?.baseUrl === 'https://open.bigmodel.cn/api/anthropic'
+        && c.tokens.read('CHANNEL_OPEN_BIGMODEL_TOKEN') === 'zhipu-secret', { outcome, row })
   }
   // (b) confirming the overwrite saves, and because the overwritten row is
   //     active with a changed connection, a fresh-session restart follows.
@@ -1122,11 +1125,11 @@ const init = {
       action: [t('channel-wiz-opt-add')],
       clash: [t('channel-wiz-opt-clash-overwrite')],
       switch: [t('channel-wiz-opt-switch-no')],
-    }, { name: '硅基流动', baseurl: 'https://siliconflow.example/v1', token: 'sf-secret' }) as never)
+    }, { name: 'open.bigmodel', baseurl: 'https://siliconflow.example/v1', token: 'sf-secret' }) as never)
     const row = c.store.read().channels[0]
     check('clash: confirming the overwrite replaces the row and restarts the active connection',
-      outcome.kind === 'saved' && outcome.restart === true && row?.name === '硅基流动' && row?.baseUrl === 'https://siliconflow.example/v1'
-        && c.tokens.read('CHANNEL_CHANNEL_TOKEN') === 'sf-secret', { outcome, row })
+      outcome.kind === 'saved' && outcome.restart === true && row?.name === 'open.bigmodel' && row?.baseUrl === 'https://siliconflow.example/v1'
+        && c.tokens.read('CHANNEL_OPEN_BIGMODEL_TOKEN') === 'sf-secret', { outcome, row })
   }
   // (c) re-adding the same-named channel is the edit path: no clash gate.
   {
@@ -1134,9 +1137,40 @@ const init = {
     const outcome = await runChannelWizard(c.deps({
       action: [t('channel-wiz-opt-add')],
       switch: [t('channel-wiz-opt-switch-no')],
-    }, { name: '智谱', baseurl: 'https://open.bigmodel.cn/api/anthropic' }) as never)
+    }, { name: 'Open BigModel', baseurl: 'https://open.bigmodel.cn/api/anthropic' }) as never)
     check('clash: re-adding the same-named channel never trips the clash gate',
       outcome.kind === 'saved' && c.savedCalls() === 1, outcome)
+  }
+  // (d) Chinese names: 智谱 and 硅基流动 coexist, each with its own token ref.
+  {
+    const c = h({ channels: [] }, {})
+    await runChannelWizard(c.deps({ action: [t('channel-wiz-opt-add')], switch: [t('channel-wiz-opt-switch-no')] },
+      { name: '智谱', baseurl: 'https://open.bigmodel.cn/api/anthropic', token: 'zhipu-secret' }) as never)
+    const second = await runChannelWizard(c.deps({ action: [t('channel-wiz-opt-add')], switch: [t('channel-wiz-opt-switch-no')] },
+      { name: '硅基流动', baseurl: 'https://siliconflow.example/v1', token: 'sf-secret' }) as never)
+    const rows = c.store.read().channels
+    const zhipu = rows.find(row => row.name === '智谱')
+    const sf = rows.find(row => row.name === '硅基流动')
+    check('chinese names: 智谱 and 硅基流动 coexist without a clash prompt',
+      second.kind === 'saved' && rows.length === 2 && zhipu !== undefined && sf !== undefined && zhipu.id !== sf.id, rows)
+    check('chinese names: each keeps its own token ref and token',
+      zhipu?.tokenRef !== sf?.tokenRef && c.tokens.read(zhipu?.tokenRef ?? '') === 'zhipu-secret' && c.tokens.read(sf?.tokenRef ?? '') === 'sf-secret', { zhipu, sf })
+  }
+  // (e) a profile saved under the old rule (id `channel`) keeps its id: the
+  //     same name edits it in place, and a second Chinese name sits beside it.
+  {
+    const c = h({ active: 'channel', channels: [
+      { id: 'channel', name: '智谱', baseUrl: 'https://open.bigmodel.cn/api/anthropic', tokenRef: 'CHANNEL_CHANNEL_TOKEN' },
+    ] }, { CHANNEL_CHANNEL_TOKEN: 'zhipu-secret' })
+    const edit = await runChannelWizard(c.deps({ action: [t('channel-wiz-opt-add')], switch: [t('channel-wiz-opt-switch-no')] },
+      { name: '智谱', baseurl: 'https://open.bigmodel.cn/api/anthropic', token: 'zhipu-rotated' }) as never)
+    check('legacy id: re-adding the same name edits the existing row (no clash, no duplicate)',
+      edit.kind === 'saved' && c.store.read().channels.length === 1 && c.store.read().channels[0]?.id === 'channel'
+        && c.tokens.read('CHANNEL_CHANNEL_TOKEN') === 'zhipu-rotated', c.store.read())
+    const add = await runChannelWizard(c.deps({ action: [t('channel-wiz-opt-add')], switch: [t('channel-wiz-opt-switch-no')] },
+      { name: '硅基流动', token: 'sf-secret' }) as never)
+    check('legacy id: a new Chinese name lands beside it, the old token untouched',
+      add.kind === 'saved' && c.store.read().channels.length === 2 && c.tokens.read('CHANNEL_CHANNEL_TOKEN') === 'zhipu-rotated', c.store.read())
   }
 }
 

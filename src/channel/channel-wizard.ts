@@ -1,5 +1,6 @@
 import type { BackendChannelOption } from '../adapter/ports/channel-view.js'
 import { t } from '../i18n.js'
+import { channelProfileSlug } from './channel-slug.js'
 import { isQuestionInterruption, type QuestionAnswer, type QuestionItem, type QuestionRequest } from './questions.js'
 
 /**
@@ -133,14 +134,14 @@ async function runAddFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutcome
     if (name === '') notify(t('channel-wiz-name-required'), { color: 'warning' })
   }
   if (name === '') return { kind: 'cancelled', restart: false }
-  const id = channelWizardSlug(name)
-  // ── 1b. id-clash guard (R3-4): the slug folds every name without
-  // alphanumerics the same way ("智谱" and "硅基流动" are both `channel`),
-  // so an add can silently land on ANOTHER channel's row and overwrite
-  // its connection + stored token. Re-adding the SAME-named channel is
-  // the edit path (the name-detail says so) and stays uninterrupted;
-  // a DIFFERENT-named clash needs an explicit overwrite confirmation —
-  // declining writes nothing.
+  // Re-adding a channel under its own name is the edit path (the
+  // name-detail says so): it keeps that row's id, whatever rule made it.
+  const sameName = deps.roster().channels.find(option => option.name === name)
+  const id = sameName?.id ?? channelProfileSlug(name)
+  // ── 1b. id-clash guard: two different names can still slug to one id
+  // ("Open BigModel" / "open.bigmodel"); landing on the other row would
+  // overwrite its connection and stored token, so that needs an explicit
+  // confirmation, and declining writes nothing.
   const clash = deps.roster().channels.find(option => option.id === id && option.name !== name)
   if (clash !== undefined) {
     const clashAnswer = await ask({
@@ -306,11 +307,4 @@ function buildSummary(name: string, hasUrl: boolean, hasToken: boolean, tiers: R
     : t('channel-wiz-summary-tiers-none'))
   lines.push(t('channel-wiz-summary-store'))
   return lines
-}
-
-/** The wizard's slug of a channel name — identical to the backend's
- * channelSlug (restated so this module never imports the backend). */
-function channelWizardSlug(name: string): string {
-  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-  return slug === '' ? 'channel' : slug
 }
