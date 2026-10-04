@@ -64,7 +64,8 @@ DSH 是 `SubagentControl.history` → `SubagentTranscriptPage` 契约的第二�
 |---|---|
 | 无 sessionPersistence（组合未装载） | 无 `history` 方法 → 转录页签不渲染（共享 UI 规则） |
 | continuation service 缺失 / persistence 调用时消失 | 拒绝 → unavailable |
-| child 未物化 / 格式版本未知 / torn tail / corrupt（日志短于 cut） | 拒绝 → unavailable |
+| child 还没有写入任何事件（pending） | 宿主能打开，读到空日志 → 空的转录页 |
+| 格式版本未知 / torn tail / corrupt（日志短于 cut） | 拒绝 → unavailable |
 | flush 失败 | 已落盘前缀 + live tail（partial，如实） |
 | 探测预算耗尽（>2^24 事件） | 拒绝 → unavailable（不做无界扫描） |
 | catalog miss / 非 direct child | `null`（无此 child） |
@@ -96,9 +97,10 @@ snapshot API、不自己读日志文件）。
 ## 已知限制
 
 - 当前钉住的 JSONL 持久化后端 `stat()` 不含 `eventCount`，日志末端靠上面的有界探测
-  找到。探测次数很少（最多 48 次单事件读取），但宿主实现的每次 `read` 都会重读整份
-  日志。如果大日志出现明显延迟，需要上游 sessionPersistence 提供廉价的 eventCount 或
-  定位到末尾的 API，这里只需替换「总长发现」一步。
+  找到，最多 2·log2(2^24)+1 = 49 次单事件读取。宿主按文件修订缓存解码后的日志，文件
+  不变时这些读取不会重复解码；仍在写入的 child 日志每变一次就要重新读一遍。如果大日志
+  出现明显延迟，需要上游 sessionPersistence 提供廉价的 eventCount 或定位到末尾的 API，
+  这里只需替换「总长发现」一步。
 - 页界切开的 tool call/result：result 落在 newer 页时其 call 在 older 页，
   fold 按共享规则丢弃孤儿 result（与 Claude 同语义）；活跃 child 由
   `mergeLiveWindow` 按 callId 补齐状态。
