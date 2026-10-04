@@ -892,6 +892,10 @@ const init = {
     sameOptionConnection(row('a', conn('fp1')), row('a', conn('fp2'))) === false)
   check('restart: mapping-only channels are the same connection',
     sameOptionConnection(row('a'), row('b')) === true)
+  check('restart: no active channel to mapping-only channel keeps the process',
+    sameOptionConnection(undefined, row('mapping-only')) === true)
+  check('restart: no active channel to connected channel restarts',
+    sameOptionConnection(undefined, row('connected', conn('fp1'))) === false)
   check('restart: mapping-only vs connected differs (restart)',
     sameOptionConnection(row('a'), row('b', conn('fp1'))) === false)
 }
