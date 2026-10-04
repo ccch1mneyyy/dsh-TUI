@@ -68,6 +68,14 @@ const compiledSessionHistoryPath = fileURLToPath(new URL('../lib/types/sessionHi
 // handoff is one-shot) — the scratch mirror has to carry it or the copy
 // fails to link.
 const compiledKernelPrefsPath = fileURLToPath(new URL('../lib/types/kernelPrefs.js', import.meta.url))
+// update.js imports the kernel-switch transition events (S05 MVE) from
+// handoffEvents.js, which in turn pulls kernelCatalog.js (display names)
+// and i18n.js (bilingual copy). The scratch mirrors must carry all of
+// them or the copy fails to link; npm deps (chalk, semver) resolve via
+// the scratch node_modules junction below.
+const compiledHandoffEventsPath = fileURLToPath(new URL('../lib/types/handoffEvents.js', import.meta.url))
+const compiledKernelCatalogPath = fileURLToPath(new URL('../lib/types/components/kernelCatalog.js', import.meta.url))
+const compiledI18nPath = fileURLToPath(new URL('../lib/types/i18n.js', import.meta.url))
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 
 /**
@@ -77,11 +85,15 @@ const repoRoot = fileURLToPath(new URL('..', import.meta.url))
  */
 function copyUpdateModule(dstDir) {
   mkdirSync(join(dstDir, 'utils'), { recursive: true })
+  mkdirSync(join(dstDir, 'components'), { recursive: true })
   cpSync(compiledModulePath, join(dstDir, 'update.js'))
   cpSync(compiledShellQuotePath, join(dstDir, 'utils', 'shellQuote.js'))
   cpSync(compiledPathsPath, join(dstDir, 'utils', 'paths.js'))
   cpSync(compiledSessionHistoryPath, join(dstDir, 'sessionHistory.js'))
   cpSync(compiledKernelPrefsPath, join(dstDir, 'kernelPrefs.js'))
+  cpSync(compiledHandoffEventsPath, join(dstDir, 'handoffEvents.js'))
+  cpSync(compiledKernelCatalogPath, join(dstDir, 'components', 'kernelCatalog.js'))
+  cpSync(compiledI18nPath, join(dstDir, 'i18n.js'))
 }
 
 // ---- installedTuiVersion: compiled layout is this module's own real layout
