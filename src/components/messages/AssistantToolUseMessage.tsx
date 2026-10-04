@@ -18,6 +18,8 @@ import type { ClickEvent } from '../../ink/events/click-event.js'
 import { revealLinesOf, snapReveal } from '../smoothReveal.js'
 import { useRevealVersion } from '../../hooks/useRevealVersion.js'
 import { primaryComboString } from '../../utils/keymap.js'
+import { agentMessageStateColor, agentMessageStateText } from './TranscriptLeaves.js'
+import type { AgentMessageState } from './agentTeam.js'
 
 type Props = {
   tool: ToolRow
@@ -113,6 +115,87 @@ function parseJsonArgs(args: string): unknown {
 
 function jsonArgsLanguage(args: string): 'json' | undefined {
   return parseJsonArgs(args) === undefined ? undefined : 'json'
+}
+
+// --- SendMessage dedicated card (design agent-team-full §5.4 父工具卡) -------
+
+/** The CC relay tool as the card claims it. Task* delegations already have
+ *  a first-class surface (the subagent card + waterfall), so the raw-JSON
+ *  dump this card replaces is SendMessage's alone — a second message-style
+ *  card for Task would duplicate that surface. */
+const SEND_MESSAGE_TOOL = 'SendMessage'
+
+/** What the SendMessage card needs from the call's args: the addressed
+ *  target (pin.name, else the `to` short id), the body, the summary and
+ *  the resume mark. Redundant transport fields (to/type/recipient/content)
+ *  never render — they live in the raw layer only. */
+interface SendMessageCard {
+  readonly target: string
+  readonly resuming: boolean
+  readonly text: string
+  readonly summary?: string
+}
+
+const recOf = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+const strOf = (value: unknown): string | undefined =>
+  typeof value === 'string' && value !== '' ? value : undefined
+
+/** Parse one SendMessage call; undefined when the args are not the
+ *  recognizable relay shape (then the generic card stands). */
+function sendMessageCardOf(tool: ToolRow): SendMessageCard | undefined {
+  if (tool.name !== SEND_MESSAGE_TOOL) return undefined
+  const args = recOf(parseJsonArgs(tool.argsFull ?? tool.argsText))
+  if (args === undefined) return undefined
+  const to = strOf(args.to) ?? strOf(args.recipient)
+  const text = strOf(args.message) ?? strOf(args.text)
+  if (to === undefined || text === undefined) return undefined
+  const pin = recOf(args.pin)
+  const pinName = strOf(pin?.name)
+  const target = pinName ?? (to.length > 8 ? `${to.slice(0, 8)}…` : to)
+  return {
+    target,
+    resuming: args.resuming === true || args.resume === true,
+    text,
+    ...(strOf(args.summary) === undefined ? {} : { summary: strOf(args.summary) }),
+  }
+}
+
+/** The states a structured result may explicitly name (agent-team §5.2). */
+const SEND_MESSAGE_EXPLICIT: Readonly<Record<string, AgentMessageState>> = Object.freeze({
+  delivered: 'delivered',
+  held: 'held',
+  refused: 'refused',
+  expired: 'expired',
+})
+
+/** The settled state of one SendMessage card — the UI-side mirror of
+ *  backends/claude/send-message.ts's rules (UI layers must not import
+ *  backends, verify:boundary): a call alone is `issued`; an error result is
+ *  a refusal fact; a structured `delivery`/`status` field naming a state
+ *  marks exactly that; any other shape — including bare success — is
+ *  `unknown`, never a guessed delivery. */
+function sendMessageCardState(tool: ToolRow): AgentMessageState {
+  if (tool.status === 'running') return 'issued'
+  if (tool.status === 'error') return 'refused'
+  const structured = recOf(parseJsonArgs(tool.resultFull ?? tool.resultText ?? ''))
+  if (structured !== undefined) {
+    for (const key of ['delivery', 'status'] as const) {
+      const named = SEND_MESSAGE_EXPLICIT[strOf(structured[key]) ?? '']
+      if (named !== undefined) return named
+    }
+  }
+  return 'unknown'
+}
+
+/** The resumed fact of a structured result: resumedAgentId, or the pin's
+ *  agent id — displayed as「已唤醒 <短id>」. */
+function sendMessageResumedOf(tool: ToolRow): string | undefined {
+  if (tool.status === 'running') return undefined
+  const structured = recOf(parseJsonArgs(tool.resultFull ?? tool.resultText ?? ''))
+  if (structured === undefined) return undefined
+  const resumed = strOf(structured.resumedAgentId) ?? strOf(recOf(structured.pin)?.agentId) ?? strOf(recOf(structured.pin)?.id)
+  return resumed === undefined ? undefined : resumed.length > 8 ? `${resumed.slice(0, 8)}…` : resumed
 }
 
 function filePathFromTool(tool: ToolRow, view: ToolCallView | ToolResultView | undefined): string | undefined {
@@ -551,6 +634,10 @@ export function AssistantToolUseMessage({
   useRevealVersion(revealVersion === undefined)
   const isRunning = tool.status === 'running'
   const isError = tool.status === 'error'
+  const sendMessage = sendMessageCardOf(tool)
+  // The send-message card's raw layer (args/result JSON) shows on verbose OR
+  // a row click — the click is the mouse user's only「看全量」path.
+  const sendMessageRawOpen = sendMessage !== undefined && (verbose || isExpanded)
   const displayArgs = verbose ? tool.argsFull ?? tool.argsText : tool.argsText
   const result = tool.resultFull ?? tool.resultText
   // The settled view carries the applied diff / actual output; while running,
@@ -563,8 +650,12 @@ export function AssistantToolUseMessage({
     ? languageFromPath(filePath)
     : undefined
   // presentResult may omit a title (terminal results carry output, not a
-  // command) — then the call view's title stands.
-  const headerTitle = tool.resultView?.title ?? tool.callView?.title
+  // command) — then the call view's title stands. The SendMessage card owns
+  // its header outright: `SendMessage → <target>` (+ the resume mark), the
+  // raw args parens stay out of the header.
+  const headerTitle = sendMessage !== undefined
+    ? `${displayName(tool.name)} → ${sendMessage.target}${sendMessage.resuming ? ` · ${t('send-message-card-resuming')}` : ''}`
+    : tool.resultView?.title ?? tool.callView?.title
   const headerIsTerminal = view?.card === 'terminal'
   // Fold the terminal header: multi-line command script (setting-gated) plus
   // the always-on long-line clip, both off once the card is verbose/expanded
@@ -617,7 +708,28 @@ export function AssistantToolUseMessage({
   const useSplitDiff = !isError && view?.card === 'diff' &&
     (diffLayout === 'split' || (diffLayout !== 'unified' && columns >= SPLIT_DIFF_MIN_COLS))
   let body: BodyLine[] = []
-  if (isError) {
+  if (sendMessage !== undefined) {
+    // 正文 = message 文本预览（长文走既有的三行折叠），summary 作副行；
+    // to/type/recipient/content 等原始字段只在 raw 层出现。
+    body = sendMessage.text.split('\n').map(plain)
+    if (sendMessage.summary !== undefined) {
+      body.push(dim(`${t('send-message-card-summary-label')}: ${sendMessage.summary}`))
+    }
+    // 失败文案不属于 raw 层：折叠态也要看得见拒绝原因。
+    if (isError && tool.errorText !== undefined && tool.errorText !== '') {
+      body.push(...tool.errorText.split('\n').map(line => ({ text: line, tone: 'error' as const })))
+    }
+    if (sendMessageRawOpen) {
+      const rawArgs = (verbose ? tool.argsFull : undefined) ?? tool.argsText
+      body.push(dim('── args ──'))
+      body.push(...rawArgs.split('\n').map(dim))
+      const rawResult = tool.resultFull ?? tool.resultText
+      if (rawResult !== undefined && rawResult !== '') {
+        body.push(dim('── result ──'))
+        body.push(...rawResult.split('\n').map(dim))
+      }
+    }
+  } else if (isError) {
     if (tool.errorText) body = [{ text: tool.errorText, tone: 'error' }]
   } else if (!useSplitDiff) {
     if (view !== undefined) body = viewLines(view)
@@ -629,6 +741,8 @@ export function AssistantToolUseMessage({
     }
   }
   const cap = view?.card === 'diff' ? DIFF_BODY_MAX_LINES : TEXT_BODY_MAX_LINES
+  // 展开态（点击/verbose）的 SendMessage 卡不截断——raw 层就是「全量」。
+  const bodyUncapped = verbose || sendMessageRawOpen
   // Long-line clip before anything downstream reads the body: the syntax
   // highlighter walks `bodySource` by line index, so the folded text must be
   // the single source of truth for both.
@@ -637,7 +751,7 @@ export function AssistantToolUseMessage({
   const argsLanguage = jsonArgsLanguage(displayArgs)
   // The footnote rides OUTSIDE the cap: it is a pointer, not content, and a
   // long error body must not be the reason it disappears.
-  const lines = capLines(bodyLines, cap, verbose)
+  const lines = capLines(bodyLines, cap, bodyUncapped)
   const rendered: BodyLine[] =
     footnote === undefined ? lines : [...lines, { text: footnote, tone: 'hint' }]
   // Smooth reveal (line-unit, pending CALL body only): model-authored prose
@@ -672,6 +786,10 @@ export function AssistantToolUseMessage({
   // body never moves.
   const [hovered, setHovered] = React.useState(false)
   const hoverTint = interactive && hovered && !isSelected
+  // SendMessage 结果行：状态徽标只认结果里的事实（§5.2 镜像规则），
+  // resumedAgentId/pin 显示为「已唤醒 <短id>」；unknown 附不推断说明。
+  const sendMessageState = sendMessage === undefined ? undefined : sendMessageCardState(tool)
+  const sendMessageResumed = sendMessage === undefined ? undefined : sendMessageResumedOf(tool)
 
   return (
     <Box
@@ -780,6 +898,20 @@ export function AssistantToolUseMessage({
               </Box>
             </Box>
           ))
+        )}
+        {sendMessage !== undefined && sendMessageState !== undefined && (
+          <Box flexDirection="row">
+            <Box width={3} flexShrink={0}>
+              <Text dimColor>{GUTTER_REST}</Text>
+            </Box>
+            <Text color={agentMessageStateColor(sendMessageState)}>{agentMessageStateText(sendMessageState)}</Text>
+            {sendMessageResumed !== undefined && (
+              <Text dimColor>{` · ${t('send-message-card-resumed', { id: sendMessageResumed })}`}</Text>
+            )}
+            {sendMessageState === 'unknown' && (
+              <Text dimColor italic>{` · ${t('agent-message-no-delivery-fact')}`}</Text>
+            )}
+          </Box>
         )}
         {useSplitDiff && footnote !== undefined && (
           <Box flexDirection="row">
