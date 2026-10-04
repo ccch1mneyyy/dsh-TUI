@@ -12,6 +12,7 @@ import { t } from '../../../i18n.js'
 import type { ChannelUi } from '../../../adapter/channel/ui-policy.js'
 import { setClipboard } from '../../../ink/termio/osc.js'
 import { btwThreads } from './threads.js'
+import { getBtwContextBudget, getBtwContextTurns } from '../../../tuiDisplayPrefs.js'
 import { BtwComposer, btwComposerKey } from './BtwComposer.js'
 import { BtwThreadView } from './BtwThreadView.js'
 
@@ -56,7 +57,7 @@ export function BtwThreadScene({
         if (result.exitFocus === true) { setComposerFocus(false); return }
         if (result.submit === true) {
           if (text.trim() !== '') {
-            const outcome = btwThreads.submit(sessionId, text, (question, options) => channel.sideQuestion(question, options))
+            const outcome = btwThreads.submit(sessionId, text, (question, options) => channel.sideQuestion(question, options), { recentTurnsLimit: getBtwContextTurns(), contextBudget: getBtwContextBudget() })
             if (!outcome.ok) setNotice({ text: t('btw-thread-busy'), failure: true })
             else {
               btwThreads.setDraft(sessionId, '')

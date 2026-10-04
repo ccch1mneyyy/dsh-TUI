@@ -12,6 +12,10 @@
  *    prompt 是单个 question 字符串；毒化 channel 代理断言线程层除 ask
  *    外碰不到任何主会话写入口（不 submit/steer/pushLocal——sideQuery
  *    单轮无工具、问答不写主 session record，capabilities.ts:342 语义）。
+ *  - 设置层（dsh-tui.btw.*）：normalize/apply 往返与越界钳制、
+ *    recentTurnsLimit 三档（1/4/8）实测 prompt 携带配对数、
+ *    contextBudget 透传与收紧预算挤掉旧轮、单答上限随总量派生
+ *    （min(8k, budget/2)——收紧的总量不被 8k 架空）。
  * 运行：node --import tsx/esm scripts/verify-btw-thread.mjs
  */
 process.env.DSH_TUI_LANG = 'zh'
@@ -20,10 +24,12 @@ const [
   { sideQuestionPrompt, sideThreadQuestion },
   { btwThreads, selectContextTurns, normalizeRecentTurnsLimit, BTW_RECENT_TURNS_DEFAULT, BTW_ANSWER_CHAR_BUDGET, BTW_CONTEXT_CHAR_BUDGET, BTW_MAX_CONCURRENT_ASKS },
   { btwComposerKey },
+  prefs,
 ] = await Promise.all([
   import('../src/channel/side-prompts.js'),
   import('../src/components/sidePanel/btw/threads.js'),
   import('../src/components/sidePanel/btw/BtwComposer.js'),
+  import('../src/tuiDisplayPrefs.js'),
 ])
 
 let failures = 0
@@ -230,6 +236,80 @@ function poisonedChannel(touched) {
   check('G7. Tab 退出编辑焦点切列表', tab !== null && tab.exitFocus === true)
   const unconsumed = btwComposerKey({ text: 'ab', caret: 0 }, 'c', { ctrl: true })
   check('G8. Ctrl 组合未消费（交宿主：interrupt/exit 保持可用）', unconsumed === null)
+}
+
+// ── H. 设置层（dsh-tui.btw.*）：往返、钳制、三档实测、预算派生 ─────────
+{
+  const pairsOf = prompt => (prompt.match(/<side-thread-pair n=/g) ?? []).length
+
+  // H1/H2. normalize 越界钳制（设置入口与 store 兜底同规则）
+  check('H1. contextTurns 钳制 1–8（junk/越界回默认或边界）',
+    prefs.normalizeBtwContextTurns(0) === 1 && prefs.normalizeBtwContextTurns(-3) === 1
+    && prefs.normalizeBtwContextTurns(9) === 8 && prefs.normalizeBtwContextTurns(3.6) === 4
+    && prefs.normalizeBtwContextTurns(Number.NaN) === 4 && prefs.normalizeBtwContextTurns('x') === 4)
+  check('H2. contextBudget 钳制 1k–200k',
+    prefs.normalizeBtwContextBudget(999) === 1000 && prefs.normalizeBtwContextBudget(300000) === 200000
+    && prefs.normalizeBtwContextBudget(Number.NaN) === 24000 && prefs.normalizeBtwContextBudget('y') === 24000)
+
+  // H3. 设置往返：apply → get 生效 + subscribe 通知（/settings 与 cordis.yml 的镜像路径）
+  let notified = 0
+  const unsubscribe = prefs.subscribeBtwContextTurns(() => { notified += 1 })
+  const applied = prefs.applyBtwContextTurns(8)
+  check('H3. apply→get 往返 + 订阅通知', applied === 8 && prefs.getBtwContextTurns() === 8 && notified === 1)
+  prefs.applyBtwContextBudget(4000)
+  check('H3b. budget 往返', prefs.getBtwContextBudget() === 4000)
+  unsubscribe
+
+  // H4. 三档实测（1/4/8）：submit 透传 recentTurnsLimit → prompt 配对数
+  btwThreads.resetForTest()
+  const s = scriptedAsk()
+  for (let index = 1; index <= 6; index += 1) {
+    btwThreads.submit('sess-set', 'q' + index, s.ask)
+    s.settleLast({ answer: 'a' + index })
+    await waitFor(() => btwThreads.get('sess-set')?.turns.at(-1)?.phase === 'completed')
+  }
+  for (const turns of [1, 4, 8]) {
+    // 前两档的 followup 落定后也成了完成轮——期望取 min(档位, 当时完成轮数)。
+    const priorCompleted = btwThreads.get('sess-set')?.turns.filter(turn => turn.phase === 'completed').length ?? 0
+    const expected = Math.min(turns, priorCompleted)
+    const before = s.count()
+    const r = btwThreads.submit('sess-set', 'follow@' + turns, s.ask, { recentTurnsLimit: turns, contextBudget: prefs.getBtwContextBudget() })
+    await waitFor(() => s.count() === before + 1)
+    const prompt = s.calls.at(-1).question
+    const pairs = pairsOf(prompt)
+    s.settleLast({ answer: 'ok' })
+    await waitFor(() => btwThreads.get('sess-set')?.turns.at(-1)?.phase === 'completed')
+    check(`H4. recentTurnsLimit=${turns} → prompt 携带 min(${turns}, 完成${priorCompleted})=${expected} 组`, r.ok === true && pairs === expected,
+      'pairs=' + pairs)
+  }
+
+  // H5. 收紧预算挤掉旧轮（budget 透传 selectContextTurns.total）
+  btwThreads.resetForTest()
+  const s2 = scriptedAsk()
+  for (let index = 1; index <= 3; index += 1) {
+    btwThreads.submit('sess-bud', 'q' + index, s2.ask)
+    s2.settleLast({ answer: 'x'.repeat(3000) })
+    await waitFor(() => btwThreads.get('sess-bud')?.turns.at(-1)?.phase === 'completed')
+  }
+  const tight = btwThreads.submit('sess-bud', 'tight question', s2.ask, { recentTurnsLimit: 8, contextBudget: 6500 })
+  await waitFor(() => s2.count() === 4)
+  const tightPairs = pairsOf(s2.calls.at(-1).question)
+  check('H5. contextBudget=6500：~2 组 3k 答案后旧轮整组挤出', tight.ok === true && tightPairs === 2, 'pairs=' + tightPairs)
+  const tightTurn = btwThreads.get('sess-bud')?.turns.at(-1)
+  check('H5b. omitted 计数随预算裁剪上报', tightTurn?.omittedOlderCount === 1, 'omitted=' + (tightTurn?.omittedOlderCount ?? 'x'))
+  s2.settleLast({ answer: 'done' })
+
+  // H6. 单答上限随总量派生：budget=4000 → perAnswer=min(8000,2000)=2000
+  const derived = selectContextTurns([completed('q', 'y'.repeat(9000), 1)], 4, { total: 4000 })
+  check('H6. perAnswer 内部派生 min(8k, budget/2)——收紧总量不被 8k 架空',
+    derived.included[0].answer.length <= 2001 && derived.included[0].answer.endsWith('…'),
+    'len=' + derived.included[0].answer.length)
+  const wide = selectContextTurns([completed('q', 'y'.repeat(9000), 1)], 4, { total: 24000 })
+  check('H6b. 默认预算下 perAnswer 仍是 8k', wide.included[0].answer.length <= 8001, 'len=' + wide.included[0].answer.length)
+
+  // 还原设置默认，避免污染同进程的其他夹具
+  prefs.applyBtwContextTurns(4)
+  prefs.applyBtwContextBudget(24000)
 }
 
 console.log(failures === 0 ? '\nbtw-thread: ALL PASS' : `\nbtw-thread: ${failures} FAIL`)

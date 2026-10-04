@@ -53,7 +53,7 @@ import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, applyBtwContextBudget, applyBtwContextTurns, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -786,6 +786,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   applySidePanelRatio(config.sidePanel?.ratio)
   applySidePanelPanels(config.sidePanel?.panels)
   applyCompanionSkin(config.companion?.skin)
+  applyBtwContextTurns(config.btw?.contextTurns)
+  applyBtwContextBudget(config.btw?.contextBudget)
   applyMermaidDiagrams(config.mermaidDiagrams)
   applyMathRendering(resolveMathRendering({}, config))
   applyMathImageScale(config.mathImageScale ?? 'auto')
@@ -913,6 +915,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         companion: Schema.object({
           skin: Schema.string(),
         }),
+        // btw thread-context budgets (settings `btw.*`): no schema defaults
+        // (same rule as sidePanel above) — the apply* stores normalize an
+        // unset value to 4 turns / 24k chars.
+        btw: Schema.object({
+          contextTurns: Schema.number(),
+          contextBudget: Schema.number(),
+        }),
         // Header pixel whale art; on unless settings.yaml says otherwise.
         whale: Schema.boolean().default(true),
         // Idle whale behaviors after the intro settles; on by default —
@@ -993,6 +1002,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       }
       companion?: {
         skin?: string
+      }
+      /** btw thread context (settings `btw.*`): turns carried into the
+       * next ask and the total character budget; both optional, falling
+       * through to cordis.yml and then the store defaults (4 / 24000). */
+      btw?: {
+        contextTurns?: number
+        contextBudget?: number
       }
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
@@ -1075,6 +1091,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       applySidePanelRatio(value.sidePanel?.ratio ?? config.sidePanel?.ratio)
       applySidePanelPanels(value.sidePanel?.panels ?? config.sidePanel?.panels)
       applyCompanionSkin(value.companion?.skin ?? config.companion?.skin)
+      applyBtwContextTurns(value.btw?.contextTurns ?? config.btw?.contextTurns)
+      applyBtwContextBudget(value.btw?.contextBudget ?? config.btw?.contextBudget)
     }
     // Legacy user scopes layer over cordis.yml. Modern Config is already
     // resolved: an unset action must not revive its startup override.
@@ -1437,6 +1455,38 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
             const tokens = draft.split(',').map(token => token.trim().toLowerCase()).filter(token => token !== '')
             if (tokens.length === 0 || tokens.some(token => !SIDE_PANEL_ID_PATTERN.test(token))) return undefined
             return { kind: 'set', value: normalizeSidePanelPanels(draft) }
+          },
+        },
+        {
+          // number 字段照 sidePanel.ratio 先例：范围门禁拒绝越界草稿（保存
+          // 前就报错），store 侧 normalize 仍兜底同规则钳制。
+          ...settingField('btw.contextTurns'),
+          placeholder: '4',
+          format(value: unknown): string {
+            const turns = typeof value === 'number' && Number.isFinite(value) ? value : config.btw?.contextTurns
+            return String(turns ?? 4)
+          },
+          parse(text: string) {
+            const draft = text.trim()
+            if (draft === '') return { kind: 'clear' }
+            const turns = Number(draft)
+            if (!Number.isInteger(turns) || turns < BTW_CONTEXT_TURNS_MIN || turns > BTW_CONTEXT_TURNS_MAX) return undefined
+            return { kind: 'set', value: turns }
+          },
+        },
+        {
+          ...settingField('btw.contextBudget'),
+          placeholder: '24000',
+          format(value: unknown): string {
+            const budget = typeof value === 'number' && Number.isFinite(value) ? value : config.btw?.contextBudget
+            return String(budget ?? 24000)
+          },
+          parse(text: string) {
+            const draft = text.trim()
+            if (draft === '') return { kind: 'clear' }
+            const budget = Number(draft)
+            if (!Number.isInteger(budget) || budget < BTW_CONTEXT_BUDGET_MIN || budget > BTW_CONTEXT_BUDGET_MAX) return undefined
+            return { kind: 'set', value: budget }
           },
         },
         {
