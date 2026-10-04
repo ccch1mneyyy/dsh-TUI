@@ -420,27 +420,6 @@ const GROUPS = {
 // 后再单独登记。
   ],
   'session-workspace': [
-// 版本化部署：真实 cordis + plugin-loader 按包名加载 TUI 入口，dispatch 选代次（lease
-// 先于代次模块求值、进程内 pin、指针翻转后新进程取新代、legacy/源码/失败关闭）。
-// 改 dispatch/ 或包 exports 时必须过这条。
-    ["g0-host-loader-spike", ['node', 'scripts/g0-host-loader-spike.mjs']],
-// 版本化部署：manifest 解析（截断、越权 id、坏哈希一律拒绝）、promote 原子性与
-// build-lock 互斥、启动 pin、lease 分类、GC（默认 dry-run，保留活跃代次/回滚目标/
-// 活 lease）、回滚只改指针。
-    ["verify-deploy-generations", ['node', 'scripts/verify-deploy-generations.mjs']],
-// 部署 lease 判活：按进程创建时间识别 PID 复用（linux /proc、win32 CIM），时钟
-// 不一致只降级不判死；GC 只回收 stale lease（dry-run 只报告）。
-    ["verify-deploy-lease-liveness", ['node', 'scripts/verify-deploy-lease-liveness.mjs']],
-// 公共子路径（oauth、panels、plugin-host 等）经 dispatch 入口与主入口共享同一进程
-// pin；指针翻转后新进程取新代；代次缺入口时报可操作的错误；转发的导出名与源模块一致。
-    ["verify-dispatch-subpaths", ['node', 'scripts/verify-dispatch-subpaths.mjs']],
-// runtime-lock：运行闭包解析成具体身份（版本 + package.json 指纹）、健康检查
-// healthy/drifted/degraded 与 deployctl health 退出码；用合成夹具包，不复制共享 node_modules。
-    ["verify-deploy-runtime-lock", ['node', 'scripts/verify-deploy-runtime-lock.mjs']],
-// 构建隔离：profile 指向的源码树拒绝 clean/build（含逃生口与 clean-lib 子进程）、
-// staging 产物形状与树哈希、promote 后的 dispatch pin、gen-settings-json 参数化输出不变。
-// CI 走 --skip-compile；真实 tsc staging 构建用 DSH_TUI_VERIFY_FULL_COMPILE=1 在本地跑。
-    ["verify-build-isolation", ['node', 'scripts/verify-build-isolation.mjs']],
 // 内核切换过场：结局分类（spawn 失败或启动期死亡＝failed，干净退出＝succeeded 不出声，
 // 之后非零退出＝crashed）、进度行写完才 spawn、双语文案与配色、plugin.ts/update.ts 接线。
     ["verify-handoff-transition", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-transition.ts']],

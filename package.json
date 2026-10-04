@@ -42,60 +42,60 @@
     "dsh-tui": "./bin/dsh-tui.js",
     "dst": "./bin/dsh-tui.js"
   },
-  "main": "./dispatch/index.js",
+  "main": "lib/types/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
-      "import": "./dispatch/index.js"
+      "import": "./lib/types/index.js"
     },
     "./working-activity": {
       "types": "./lib/types/working-activity.d.ts",
-      "import": "./dispatch/working-activity.js"
+      "import": "./lib/types/working-activity.js"
     },
     "./oauth": {
       "types": "./lib/types/oauth.d.ts",
-      "import": "./dispatch/oauth.js"
+      "import": "./lib/types/oauth.js"
     },
     "./workspaces": {
       "types": "./lib/types/workspaces.d.ts",
-      "import": "./dispatch/workspaces.js"
+      "import": "./lib/types/workspaces.js"
     },
     "./command-trees": {
       "types": "./lib/types/command-trees.d.ts",
-      "import": "./dispatch/command-trees.js"
+      "import": "./lib/types/command-trees.js"
     },
     "./settings-sections": {
       "types": "./lib/types/settings-sections.d.ts",
-      "import": "./dispatch/settings-sections.js"
+      "import": "./lib/types/settings-sections.js"
     },
     "./scenes": {
       "types": "./lib/types/scenes.d.ts",
-      "import": "./dispatch/scenes.js"
+      "import": "./lib/types/scenes.js"
     },
     "./panels": {
       "types": "./lib/types/panels.d.ts",
-      "import": "./dispatch/panels.js"
+      "import": "./lib/types/panels.js"
     },
     "./extensions": {
       "types": "./lib/types/extensions.d.ts",
-      "import": "./dispatch/extensions.js"
+      "import": "./lib/types/extensions.js"
     },
     "./plugin-host": {
       "types": "./lib/types/plugin-host.d.ts",
-      "import": "./dispatch/plugin-host.js"
+      "import": "./lib/types/plugin-host.js"
     },
     "./api": {
       "types": "./lib/types/api.d.ts",
-      "import": "./dispatch/api.js"
+      "import": "./lib/types/api.js"
     },
     "./jsx-runtime": {
       "types": "./lib/types/jsx-runtime.d.ts",
-      "import": "./dispatch/jsx-runtime.js"
+      "import": "./lib/types/jsx-runtime.js"
     },
     "./invariant": {
       "types": "./lib/types/dsh-adapter/invariant.d.ts",
-      "default": "./dispatch/invariant.js"
+      "default": "./lib/types/dsh-adapter/invariant.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./settings.json": "./lib/settings.json",
@@ -103,7 +103,6 @@
   },
   "files": [
     "bin",
-    "dispatch",
     "lib",
     "assets",
     "cordis.patch.yml",
@@ -123,7 +122,7 @@
     "build:mathjax": "pnpm --filter @dsh-tui-vendor/mathjax-tex-svg run build",
     "build:vendor": "node scripts/build-vendor.mjs",
     "compile": "node scripts/build-vendor.mjs && npm run clean && tsc -p tsconfig.json && node scripts/gen-settings-json.mjs",
-    "compile:src": "node scripts/compile-src.mjs",
+    "compile:src": "tsc -p tsconfig.json && node scripts/gen-settings-json.mjs",
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "prepare": "node scripts/prepare-guard.mjs && npm run compile",
     "build": "npm run compile && npm run verify:build",

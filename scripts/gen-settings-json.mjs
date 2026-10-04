@@ -10,30 +10,18 @@
  * lacks a Chinese label, or keys are out of order — so `pnpm compile` stops
  * on an incomplete definition before anything is published.
  *
- * Usage: node scripts/gen-settings-json.mjs [--check] [--lib-dir <dir>] [--out <file>]
+ * Usage: node scripts/gen-settings-json.mjs [--check]
  *   --check  validate, and fail unless lib/settings.json matches exactly.
- *   --lib-dir <dir>  read the compiled definitions from this lib tree
- *                    (default: the repo's own lib/); used by
- *                    scripts/build-generation.mjs to generate settings for a
- *                    staging package without touching the dev tree.
- *   --out <file>     write settings.json here (default: <lib-dir>/settings.json).
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const check = process.argv.includes('--check')
-function flagValue(name) {
-  const index = process.argv.indexOf(name)
-  return index === -1 ? undefined : resolve(process.argv[index + 1])
-}
-const libDir = flagValue('--lib-dir') ?? fileURLToPath(new URL('../lib', import.meta.url))
-const output = flagValue('--out') ?? resolve(libDir, 'settings.json')
+const output = new URL('../lib/settings.json', import.meta.url)
 
 // URLs, not paths: a Windows path (C:\...) is not a valid import specifier.
-const { SETTING_DEFINITIONS, SETTING_GROUPS, SHORTCUT_FIELD_META } = await import(pathToFileURL(resolve(libDir, 'types/settings/definitions.js')).href)
-const { SHORTCUT_ACTIONS } = await import(pathToFileURL(resolve(libDir, 'types/utils/keymap.js')).href)
-const { Config } = await import(pathToFileURL(resolve(libDir, 'types/dsh-adapter/index.js')).href)
+const { SETTING_DEFINITIONS, SETTING_GROUPS, SHORTCUT_FIELD_META } = await import(new URL('../lib/types/settings/definitions.js', import.meta.url).href)
+const { SHORTCUT_ACTIONS } = await import(new URL('../lib/types/utils/keymap.js', import.meta.url).href)
+const { Config } = await import(new URL('../lib/types/dsh-adapter/index.js', import.meta.url).href)
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
 const problems = []
