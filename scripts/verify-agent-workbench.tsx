@@ -351,7 +351,7 @@ console.log('--- W3: workbench panel + sibling switching ---')
     }),
     async frame => {
       check('W3 窄屏（40 列）面板退场', await settled(() => frame.screen().includes('alpha unique marker one')) && !frame.screen().includes('workbench'))
-      check('W3 窄屏顶栏仍显示代理名', frame.lines().slice(0, 3).some(line => line.includes('Subagent: agent')), frame.lines().slice(0, 3).join('|'))
+      check('W3 窄屏顶栏仍显示代理名', frame.lines().slice(0, 3).some(line => line.includes(t('subagent-card-prefix') + 'agent')), frame.lines().slice(0, 3).join('|'))
     },
     40,
   )
@@ -581,16 +581,17 @@ console.log('--- W8: detail transcript page ---')
   await withTerminal(
     () => React.createElement(SubagentDetailScene, props(1)),
     async frame => {
-      await settled(() => frame.screen().includes('Summary'))
+      await settled(() => frame.screen().includes(t('subagent-tab-summary')))
       frame.stdin.write('\x1b[C')
       await sleep(30) // 固定窗:pacing 逐页
       frame.stdin.write('\x1b[C')
       check('W8 进入转录页（历史已载入）', await settled(() => frame.screen().includes('history row')), frame.lines().slice(0, 12).join('|'))
-      check('W8 页脚提示 o 载入更早', frame.screen().includes('o Load 400 older'), frame.lines().slice(-3).join('|'))
+      const loadOlderHint = 'o ' + t('subagent-transcript-load-older', { count: 400 })
+      check('W8 页脚提示 o 载入更早', frame.screen().includes(loadOlderHint), frame.lines().slice(-3).join('|'))
       await sleep(30) // 固定窗:pacing 等被动 effect 换上新的按键处理器
       frame.stdin.write('o')
       // The older page has no older one: the footer hint goes away.
-      check('W8 o 键载入更早一页（页脚提示随之消失）', await settled(() => !frame.screen().includes('o Load')), frame.lines().slice(-3).join('|'))
+      check('W8 o 键载入更早一页（页脚提示随之消失）', await settled(() => !frame.screen().includes(loadOlderHint)), frame.lines().slice(-3).join('|'))
       // Scroll up to the top of the history: the older row is there.
       for (let press = 0; press < 40; press += 1) {
         frame.stdin.write('\x1b[A')
@@ -673,22 +674,23 @@ console.log('--- W5: side-panel detail composer ---')
       controller?.openPanel('agents', { focus: true })
       await settled(() => frame.screen().includes('panel child'))
       await key(frame, '\r')
-      check('W5 侧栏 Detail 挂出 composer', await settled(() => frame.screen().includes('Send to panel child')), frame.lines().slice(0, 6).join('|'))
+      const composeTitle = t('agent-message-compose-title', { name: 'panel child' })
+      check('W5 侧栏 Detail 挂出 composer', await settled(() => frame.screen().includes(composeTitle)), frame.lines().slice(0, 6).join('|'))
       await key(frame, 'i')
       await sleep(30) // 固定窗:pacing 聚焦是 state 翻转，没有可读的屏幕变化
       for (const ch of 'hi there') await key(frame, ch)
-      check('W5 i 聚焦后打字进 composer 草稿', await settled(() => frame.screen().includes('hi there')), frame.lines().filter(l => l.includes('Send to') || l.includes('there')).join('|'))
+      check('W5 i 聚焦后打字进 composer 草稿', await settled(() => frame.screen().includes('hi there')), frame.lines().filter(l => l.includes(composeTitle) || l.includes('there')).join('|'))
       // The first Esc only leaves the editor (no visible change), the second
       // one is the Detail's own Esc back to the dashboard — neither may hand
       // the focus to chat.
       await key(frame, '\x1b')
       await sleep(80) // 固定窗:pacing 单独 Esc 要等 50ms 解析窗才成键
       await key(frame, '\x1b')
-      check('W5 Esc 先让出编辑焦点、再回 Dashboard，焦点留在侧栏', await settled(() => !frame.screen().includes('Send to panel child') && frame.screen().includes('1 running')) && controller?.focus === 'panel', String(controller?.focus))
+      check('W5 Esc 先让出编辑焦点、再回 Dashboard，焦点留在侧栏', await settled(() => !frame.screen().includes(composeTitle) && frame.screen().includes('1 ' + t('subagent-count-running'))) && controller?.focus === 'panel', String(controller?.focus))
       // Back into the editor, then the host moves focus to chat (a click on
       // the chat column does the same) while the composer still holds it.
       await key(frame, '\r')
-      await settled(() => frame.screen().includes('Send to panel child'))
+      await settled(() => frame.screen().includes(composeTitle))
       await key(frame, 'i')
       await sleep(30) // 固定窗:pacing 同上
       for (const ch of 'abc') await key(frame, ch)
