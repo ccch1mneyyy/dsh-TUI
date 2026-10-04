@@ -261,6 +261,25 @@ const answer = (...items: { selected?: string[]; custom?: string }[]) => ({ answ
   await tick()
   controller.abort()
   check('the SDK abort withdraws the dialog', JSON.stringify(await aborted) === '{"behavior":"cancelled"}')
+  // A redelivery's own signal counts like the first one's: aborting it
+  // withdraws the shared panel and answers both deliveries.
+  const first = dialog({ dialogKind: 'refusal_fallback_prompt', payload }, { signal: new AbortController().signal, requestId: 'd6' })
+  await tick()
+  const second = new AbortController()
+  const again = dialog({ dialogKind: 'refusal_fallback_prompt', payload }, { signal: second.signal, requestId: 'd6' })
+  await tick()
+  second.abort()
+  const outcomes = await Promise.race([Promise.all([first, again]), new Promise(resolve => { setTimeout(() => resolve('hung'), 1000) })])
+  check('a redelivery\'s abort withdraws the shared dialog for both deliveries',
+    JSON.stringify(outcomes) === '[{"behavior":"cancelled"},{"behavior":"cancelled"}]' && events.some(event => event.type === 'question.settled' && event.requestId === 'dialog-d6'), outcomes)
+  const third = dialog({ dialogKind: 'refusal_fallback_prompt', payload }, { signal: new AbortController().signal, requestId: 'd7' })
+  await tick()
+  const gone = new AbortController()
+  gone.abort()
+  const late = dialog({ dialogKind: 'refusal_fallback_prompt', payload }, { signal: gone.signal, requestId: 'd7' })
+  const both = await Promise.race([Promise.all([third, late]), new Promise(resolve => { setTimeout(() => resolve('hung'), 1000) })])
+  check('… and one that arrives already aborted settles the group at once',
+    JSON.stringify(both) === '[{"behavior":"cancelled"},{"behavior":"cancelled"}]' && session.status !== 'requires-action', both)
   await session.dispose()
 }
 
