@@ -148,6 +148,18 @@ interface RenderState {
   /** Ordinal of the current ordered-list item, or null for unordered lists. */
   readonly ordinal: number | null
   /**
+   * Nesting depth of the enclosing blockquote; each level gets a more
+   * muted gutter bar (spec §3, Batch D).
+   */
+  readonly quoteDepth: number
+  /**
+   * Absolute column where the enclosing list item's body block starts
+   * (indent + marker + checkbox). Soft-break continuations and nested
+   * blocks align there, and a nested list's items inherit it as their
+   * indent so the ladder advances by one marker width per level.
+   */
+  readonly hang: number
+  /**
    * Rendered task checkbox of the enclosing tight list item ('[x] ' with
    * styling). marked lifts the checkbox to a sibling token ahead of the
    * text there; renderListItem stashes it here so it lands between the
@@ -158,7 +170,7 @@ interface RenderState {
 
 /** A fresh context for block-level children: list state reset, no parent. */
 function fresh(state: RenderState): RenderState {
-  return { highlight: state.highlight, parent: null, listDepth: 0, ordinal: null }
+  return { highlight: state.highlight, parent: null, listDepth: 0, ordinal: null, quoteDepth: 0, hang: 0 }
 }
 
 /** Same context, different parent token. */
@@ -168,7 +180,7 @@ function withParent(state: RenderState, parent: Token | null): RenderState {
 
 /** Inline-styled children keep the outer parent but shed list context. */
 function inlineChildren(state: RenderState): RenderState {
-  return { ...state, listDepth: 0, ordinal: null }
+  return { ...state, listDepth: 0, ordinal: null, quoteDepth: 0, hang: 0 }
 }
 
 /**
@@ -187,7 +199,14 @@ export function formatToken(
   parent: Token | null = null,
   highlight: CliHighlight | null = null,
 ): string {
-  return dispatch(token, { highlight, parent, listDepth, ordinal: orderedListNumber })
+  return dispatch(token, {
+    highlight,
+    parent,
+    listDepth,
+    ordinal: orderedListNumber,
+    quoteDepth: 0,
+    hang: 0,
+  })
 }
 
 /**
@@ -206,6 +225,8 @@ export function applyMarkdown(
     parent: null,
     listDepth: 0,
     ordinal: null,
+    quoteDepth: 0,
+    hang: 0,
   }
   return marked
     .lexer(stripPromptXMLTags(content))
@@ -388,16 +409,33 @@ function renderDel(token: Tokens.Del, state: RenderState): string {
 
 function renderHeading(token: Tokens.Heading, state: RenderState): string {
   const text = token.tokens.map(child => dispatch(child, fresh(state))).join('')
-  // Blue-primary progression: H1 gets the mist brand blue + underline, H2 the
-  // lighter border blue, deeper levels stay bold near-text (kimi-style).
+  // Blue-primary ladder (kimi-style): H1 gets the mist brand blue +
+  // underline, H2 the lighter border blue. The deeper levels previously
+  // all collapsed to plain bold (spec section 3: H3-H6 read as one
+  // level); they now step down through weight and muteness - H3 bold
+  // near-text, H4 bold+italic, H5 italic in the subtle color, H6 upright
+  // subtle - so six levels read as a monotone fade instead of two
+  // visible ones.
   const theme = getActiveTheme()
   const styled =
     token.depth === 1
       ? chalk.bold.underline(colorize(text, theme.accent, 'foreground'))
       : token.depth === 2
         ? chalk.bold(colorize(text, theme.permission, 'foreground'))
-        : chalk.bold(text)
-  return styled + EOL + EOL
+        : token.depth === 3
+          ? chalk.bold(text)
+          : token.depth === 4
+            ? chalk.bold.italic(text)
+            : token.depth === 5
+              ? chalk.italic(colorize(text, theme.subtle, 'foreground'))
+              : colorize(text, theme.subtle, 'foreground')
+  // Exactly one trailing newline: block separation comes from the
+  // source's own blank lines (the space token already emits the newline
+  // that ends the heading row). The old EOL + EOL stacked with that
+  // space token into TWO blank rows below every heading; tight
+  // h3-then-body sources also gained an invented blank row. Compressed
+  // rhythm, source-faithful air.
+  return styled + EOL
 }
 
 function renderLink(token: Tokens.Link, state: RenderState): string {
