@@ -2,7 +2,7 @@
  * SidePanelColumn: the right surface's chrome — PanelBar on top, PanelHost
  * in the middle, and a 1-row key hint at the bottom (design doc §6.1).
  *
- * The hint row swaps text with focus: unfocused it advertises Ctrl+B,
+ * The hint row swaps text with focus: unfocused it advertises click-to-focus,
  * focused it lists the panel keys. The two thin rules frame the host and
  * brighten to 'accent' together with the divider when the column has the
  * focus — the whole seam lights up as one surface.
@@ -13,6 +13,7 @@
 import React from 'react'
 import { Box, Text, useTerminalSize } from '../../ui.js'
 import { t } from '../../i18n.js'
+import { effectiveComboDisplay } from '../../utils/keymap.js'
 import type { ChannelUi } from '../../adapter/channel/ui-policy.js'
 import { useSurfaceEdges } from '../SurfaceEdges.js'
 import { PanelBar, type PanelBarTab } from './PanelBar.js'
@@ -130,7 +131,7 @@ export function SidePanelColumn({ width, controller, channel, activity, attentio
       <Rule focused={focused} />
       <Box height={1} flexShrink={0} paddingX={1} overflow="hidden">
         <Text dimColor wrap="truncate-end">
-          {focused ? t('panel-hint-focused') : t('panel-hint-unfocused')}
+          {focused ? t('panel-hint-focused') : t('panel-hint-unfocused', { key: effectiveComboDisplay('sidePanel') })}
         </Text>
       </Box>
     </Box>

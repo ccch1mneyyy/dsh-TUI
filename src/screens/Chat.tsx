@@ -5781,9 +5781,11 @@ export function Chat({
           左栏拿到 chatColumns 的 TerminalSizeContext 覆盖与出血边界。 */}
       <SidePanelLayout
         geometry={sidePanel.geometry}
+        panelId={sidePanel.activePanelId}
         focus={sidePanel.focus}
         onActivateChat={sidePanel.focusChat}
         onActivatePanel={sidePanel.focusPanel}
+        onResize={sidePanel.resize}
         side={
           <SidePanelColumn
             width={sidePanel.panelColumns}

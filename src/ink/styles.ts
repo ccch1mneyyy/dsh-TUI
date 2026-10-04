@@ -444,6 +444,8 @@ export type Styles = {
    * images); selection-only, no effect on painting.
    */
   readonly softWrapContinuation?: number
+  /** Stable selectable pane identity; descendants inherit its copy/scroll scope. */
+  readonly selectionPane?: string
 }
 
 const applyPositionStyles = (node: LayoutNode, style: Styles): void => {

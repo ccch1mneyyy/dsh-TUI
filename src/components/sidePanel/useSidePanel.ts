@@ -37,6 +37,7 @@ import {
 } from '../../tuiDisplayPrefs.js'
 import {
   canSplit,
+  clampRatio,
   nudgeRatio,
   resolveSidePanelGeometry,
   RESIZE_STEP_COLUMNS,
@@ -78,12 +79,12 @@ export interface SidePanelController {
   readonly runtime: SidePanelRuntime
   focusChat: () => void
   focusPanel: () => void
-  /** Ctrl+B smart three-state: closed → open+focus; chat → panel; panel → close. */
-  toggleSmart: () => void
-  /** /panel toggle: plain open/close (focus returns to chat on close). */
+  /** Toggle visibility and return keyboard focus to chat. */
   toggleOpen: () => void
   toggleZoom: () => void
   nudge: (deltaColumns: number) => void
+  /** Set the visible chat width, leaving zoom and keeping keyboard focus. */
+  resize: (chatColumns: number) => void
   openPanel: (id: string, opts?: { readonly focus?: boolean }) => void
   /** /panel command dispatcher; false = unknown argument. */
   command: (raw: string) => boolean
@@ -142,25 +143,10 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
   const focusChat = React.useCallback(() => setFocus('chat'), [])
   const focusPanel = React.useCallback(() => setFocus('panel'), [])
 
-  const toggleSmart = React.useCallback(() => {
-    if (!splitAvailable) return
-    if (!getSidePanelOpen()) {
-      applySidePanelOpen(true)
-      setFocus('panel')
-      return
-    }
-    if (focus === 'chat') {
-      setFocus('panel')
-      return
-    }
-    applySidePanelOpen(false)
-    setFocus('chat')
-  }, [splitAvailable, focus])
-
   const toggleOpen = React.useCallback(() => {
     const next = !getSidePanelOpen()
     applySidePanelOpen(next)
-    if (!next) setFocus('chat')
+    setFocus('chat')
   }, [])
 
   const toggleZoom = React.useCallback(() => {
@@ -170,6 +156,14 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
   const nudge = React.useCallback((deltaColumns: number) => {
     applySidePanelRatio(nudgeRatio(columns, getSidePanelRatio(), deltaColumns))
   }, [columns])
+
+  const resize = React.useCallback((chatColumns: number) => {
+    if (!split || !Number.isFinite(chatColumns)) return
+    // resolveSplit floors the ratio-derived width. Use the cell midpoint
+    // so division/multiplication rounding cannot lose a requested column.
+    applySidePanelRatio(clampRatio(columns, (Math.round(chatColumns) + 0.5) / columns))
+    setZoom(false)
+  }, [columns, split])
 
   const openPanel = React.useCallback((id: string, opts?: { readonly focus?: boolean }) => {
     if (!parseSidePanelIds(getSidePanelPanels()).includes(id)) return
@@ -227,7 +221,7 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
     const stop = () => event?.stopImmediatePropagation?.()
     if (actionMatches('sidePanel', input, key)) {
       if (!splitAvailable) return false
-      toggleSmart()
+      toggleOpen()
       stop()
       return true
     }
@@ -292,7 +286,7 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
     // keyboard while focused (Phase 3 dispatches to the active panel first).
     stop()
     return true
-  }, [splitAvailable, split, focus, activePanelId, runtime, toggleSmart, toggleZoom, cyclePanel, nudge])
+  }, [splitAvailable, split, focus, activePanelId, runtime, toggleOpen, toggleZoom, cyclePanel, nudge])
 
   // ctx.tuiPanels 的 UI 通道（设计文档 §18.2）：bridge 只在 Chat 挂载期间
   // 有消费者（open() 无消费者时向插件返回 false）；请求在本地启用集合里
@@ -340,10 +334,10 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
     runtime,
     focusChat,
     focusPanel,
-    toggleSmart,
     toggleOpen,
     toggleZoom,
     nudge,
+    resize,
     openPanel,
     command,
     handleKey,

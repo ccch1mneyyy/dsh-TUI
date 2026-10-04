@@ -547,7 +547,7 @@ const plugin = pluginCtx
   plugin.tuiShortcuts.register('ctrl+shift+t', { description: 'x', handler: noop })
   check('tuiShortcuts: shift-supersets of reserved combos refused (ctrl+shift+g/t)',
     plugin.tuiShortcuts.list().length === 0 && warnCount('reserved by a built-in binding') === 6)
-  // The side panel's two built-in combos (ctrl+b toggles the three states,
+  // The side panel's two built-in combos (ctrl+b toggles sidebar visibility,
   // alt+z zooms) are reserved like every other action default — a plugin can
   // never shadow them, and the free-combo fixtures below must stay off them.
   plugin.tuiShortcuts.register('ctrl+b', { description: 'x', handler: noop })

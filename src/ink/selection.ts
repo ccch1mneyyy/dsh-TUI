@@ -141,6 +141,8 @@ export type SelectionState = {
    *  panel's columns on every covered row — the chat column on intermediate
    *  rows is never captured. Undefined for gestures without the fence. */
   fence?: { colStart: number; colEnd: number }
+  /** Pane identity and geometry fixed at mouse-down. */
+  pane?: { id: string; x: number; y: number; width: number; height: number }
 }
 
 /**
@@ -208,6 +210,14 @@ export function startSelection(
   } else {
     s.fence = undefined
   }
+  s.pane = undefined
+  for (const [id, pane] of screen?.selectionPanes ?? []) {
+    if (col < pane.x || col >= pane.x + pane.width ||
+        row < pane.y || row >= pane.y + pane.height) continue
+    s.pane = { id, x: pane.x, y: pane.y, width: pane.width, height: pane.height }
+    s.fence = { colStart: pane.x, colEnd: pane.x + pane.width - 1 }
+    s.includeNoSelectCells = false
+  }
   // Focus is not set until the first drag motion. A click-release with no
   // drag leaves focus null → hasSelection/selectionBounds return false/null
   // via the `!s.focus` check, so a bare click never highlights a cell.
@@ -247,7 +257,7 @@ export function updateSelection(
   // focus is set (real drag), we track normally including back to anchor.
   if (!s.focus && s.anchor && s.anchor.col === col && s.anchor.row === row)
     return
-  s.focus = { col, row }
+  s.focus = clampSelectionPoint(s, { col, row })
   // Fresh mouse position supersedes any virtual focus a resize clamp left
   // behind (shiftSelection clamps focus when the chrome covered its row) —
   // the same reset moveFocus does. Without this, the next shift computes
@@ -302,6 +312,7 @@ export function clearSelection(s: SelectionState): void {
   s.stale = false
   s.includeNoSelectCells = false
   s.fence = undefined
+  s.pane = undefined
 }
 
 // Unicode-aware word character matcher: letters (any script), digits,
@@ -421,8 +432,8 @@ export function selectWordAt(
 ): void {
   const b = wordBoundsAt(screen, col, row, s.includeNoSelectCells)
   if (!b) return
-  const lo = { col: b.lo, row }
-  const hi = { col: b.hi, row }
+  const lo = clampSelectionPoint(s, { col: b.lo, row })
+  const hi = clampSelectionPoint(s, { col: b.hi, row })
   s.anchor = lo
   s.focus = hi
   s.isDragging = true
@@ -555,8 +566,8 @@ export function selectLineAt(
   row: number,
 ): void {
   if (row < 0 || row >= screen.height) return
-  const lo = { col: 0, row }
-  const hi = { col: screen.width - 1, row }
+  const lo = clampSelectionPoint(s, { col: 0, row })
+  const hi = clampSelectionPoint(s, { col: screen.width - 1, row })
   s.anchor = lo
   s.focus = hi
   s.isDragging = true
@@ -581,6 +592,9 @@ export function extendSelection(
   row: number,
 ): void {
   if (!s.isDragging || !s.anchorSpan) return
+  const point = clampSelectionPoint(s, { col, row })
+  col = point.col
+  row = point.row
   const span = s.anchorSpan
   s.virtualFocusRow = undefined
   let mLo: Point
@@ -634,7 +648,7 @@ export type FocusMove =
 export function moveFocus(s: SelectionState, col: number, row: number): void {
   if (!s.focus) return
   s.anchorSpan = null
-  s.focus = { col, row }
+  s.focus = clampSelectionPoint(s, { col, row })
   // Explicit user repositioning — any stale virtual focus (from a prior
   // shiftSelection clamp) no longer reflects intent. Anchor stays put so
   // virtualAnchorRow is still valid for its own round-trip.
@@ -1098,6 +1112,7 @@ export function shiftSelectionForViewportResize(
  *  drain): signed delta plus the box's viewport bounds. Structurally
  *  identical to FollowScroll in render-node-to-output. */
 export type ScrollEvent = {
+  selectionPane?: string
   delta: number
   viewportTop: number
   viewportBottom: number
@@ -1122,11 +1137,13 @@ export type ScrollEvent = {
 export function pickFollowForSelection<T extends ScrollEvent>(
   events: T[],
   anchorRow: number | null,
+  paneId?: string,
 ): T | null {
   if (anchorRow === null) return null
   let best: T | null = null
   let bestHeight = Infinity
   for (const e of events) {
+    if (e.selectionPane !== paneId) continue
     if (anchorRow < e.viewportTop || anchorRow > e.viewportBottom) continue
     const height = e.viewportBottom - e.viewportTop
     if (best === null || height < bestHeight) {
@@ -1146,6 +1163,31 @@ export function hasSelection(s: SelectionState): boolean {
   return s.anchor !== null && s.focus !== null
 }
 
+/** Clamp each endpoint independently; a multi-row range is not a rectangle. */
+function clampSelectionPoint(s: SelectionState, point: Point): Point {
+  return {
+    col: s.fence ? clamp(point.col, s.fence.colStart, s.fence.colEnd) : point.col,
+    row: s.pane ? clamp(point.row, s.pane.y, s.pane.y + s.pane.height - 1) : point.row,
+  }
+}
+
+/** Invalidate a pane selection when its surface disappears or reflows horizontally. */
+export function reconcileSelectionPane(s: SelectionState, screen: Screen): void {
+  if (!s.pane) return
+  const pane = screen.selectionPanes?.get(s.pane.id)
+  if (!pane || pane.width <= 0 || pane.height <= 0 ||
+      pane.x !== s.pane.x || pane.width !== s.pane.width) {
+    clearSelection(s)
+  } else {
+    s.pane = { id: s.pane.id, x: pane.x, y: pane.y, width: pane.width, height: pane.height }
+  }
+}
+
+function selectionWraps(s: SelectionState, screen: Screen): Int32Array {
+  return s.pane ? screen.selectionPanes?.get(s.pane.id)?.softWrap ?? new Int32Array(screen.height)
+    : screen.softWrap
+}
+
 /**
  * Normalized selection bounds: start is always before end in reading order.
  * Returns null if no active selection.
@@ -1158,19 +1200,11 @@ export function selectionBounds(s: SelectionState): {
   end: { col: number; row: number }
 } | null {
   if (!s.anchor || !s.focus) return null
-  const start = comparePoints(s.anchor, s.focus) <= 0 ? s.anchor : s.focus
-  const end = comparePoints(s.anchor, s.focus) <= 0 ? s.focus : s.anchor
-  // Fence clamp (panel-origin gestures): restrict the rectangle to the
-  // anchor's noSelect column run on EVERY row — a vertical drag inside the
-  // side panel selects only panel columns, never the chat column that
-  // shares the intermediate rows.
-  if (s.fence !== undefined) {
-    const colStart = Math.max(start.col, s.fence.colStart)
-    const colEnd = Math.min(end.col, s.fence.colEnd)
-    if (colStart > colEnd) return null
-    return { start: { col: colStart, row: start.row }, end: { col: colEnd, row: end.row } }
-  }
-  return { start, end }
+  const anchor = clampSelectionPoint(s, s.anchor)
+  const focus = clampSelectionPoint(s, s.focus)
+  return comparePoints(anchor, focus) <= 0
+    ? { start: anchor, end: focus }
+    : { start: focus, end: anchor }
 }
 
 /**
@@ -1189,6 +1223,7 @@ export function isCellSelected(
   const b = selectionBounds(s)
   if (!b) return false
   const { start, end } = b
+  if (s.fence && (col < s.fence.colStart || col > s.fence.colEnd)) return false
   if (row < start.row || row > end.row) return false
   if (row === start.row && col < start.col) return false
   if (row === end.row && col > end.col) return false
@@ -1206,11 +1241,12 @@ function extractRowText(
   colStart: number,
   colEnd: number,
   includeNoSelect = false,
+  softWrap = screen.softWrap,
 ): SelectionRow {
   const noSelect = screen.noSelect
   const copyRegion = screen.copyRegion
   const rowOff = row * screen.width
-  const contentEnd = row + 1 < screen.height ? screen.softWrap[row + 1]! : 0
+  const contentEnd = row + 1 < screen.height ? softWrap[row + 1]! : 0
   const lastCol = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) : colEnd
   let line = ''
   const regions: SelectionRegion[] = []
@@ -1252,7 +1288,7 @@ function extractRowText(
   const tail = regions.length > 0 ? regions[regions.length - 1]!.at : 0
   return {
     text: contentEnd > 0 ? line : line.slice(0, tail) + line.slice(tail).replace(/\s+$/, ''),
-    sw: screen.softWrap[row]! > 0,
+    sw: softWrap[row]! > 0,
     regions,
   }
 }
@@ -1395,7 +1431,8 @@ export function refreshSelectionFingerprint(
     s.coveredFingerprint = null
     s.coveredText = null
   }
-  const { cells, noSelect, width, height, charPool, softWrap } = screen
+  const { cells, noSelect, width, height, charPool } = screen
+  const softWrap = selectionWraps(s, screen)
   const copyRegion = screen.copyRegion
   const copyTexts = screen.copyTexts
   const coveredRegions = new Set<number>()
@@ -1544,7 +1581,7 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
       rowEnd = Math.min(rowEnd, s.fence.colEnd)
       if (rowStart > rowEnd) continue
     }
-    rows.push(extractRowText(screen, row, rowStart, rowEnd, s.includeNoSelectCells))
+    rows.push(extractRowText(screen, row, rowStart, rowEnd, s.includeNoSelectCells, selectionWraps(s, screen)))
   }
 
   for (let i = 0; i < s.scrolledOffBelow.length; i++) {
@@ -1597,10 +1634,10 @@ export function captureScrolledRows(
   const width = screen.width
   const captured: SelectionRow[] = []
   for (let row = lo; row <= hi; row++) {
-    const colStart = row === start.row ? start.col : 0
-    const colEnd = row === end.row ? end.col : width - 1
+    const colStart = Math.max(row === start.row ? start.col : 0, s.fence?.colStart ?? 0)
+    const colEnd = Math.min(row === end.row ? end.col : width - 1, s.fence?.colEnd ?? width - 1)
     const screenRow = row - screenRowOffset
-    captured.push(extractRowText(screen, screenRow, colStart, colEnd, s.includeNoSelectCells))
+    captured.push(extractRowText(screen, screenRow, colStart, colEnd, s.includeNoSelectCells, selectionWraps(s, screen)))
   }
 
   if (side === 'above') {

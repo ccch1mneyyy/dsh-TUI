@@ -257,16 +257,17 @@ one-column seam between the two surfaces.
   default page margin); narrow terminals, inline mode and the expanded draft editor fall back —
   `/jobs` and friends keep their full-screen panels there, while `Ctrl+B` and `/panel` do not split at all.
 - **Focus model**: one keyboard focus at a time; while the panel holds it, its frame and the seam
-  brighten together. `Ctrl+B` is three-state: closed → open and focus the panel; open but
-  chat-focused → focus the panel; panel-focused → close and return to the chat.
+  brighten together. `Ctrl+B` toggles the sidebar open/closed and leaves keyboard focus in
+  chat so typing can continue. Click the panel or run `/panel focus` to operate it.
 - **Panel keys**: `Esc` steps back to the input (the panel stays open) · `←`/`→` or `[`/`]` switch
   panels · `1`-`9` jump to the Nth · `z` or `Alt+Z` zoom · `+`/`-` resize (`+` widens the panel by 4 columns) · `↑`/`↓`/`PgUp`/`PgDn`
   go to the active panel (jobs selects and scrolls with them). Keys the panel does not take never
   reach the chat, while `Ctrl+C`/`Ctrl+D`/`Ctrl+L` and the other Ctrl combos still do.
 - **Mouse**: click the chat column to focus the chat, click the panel column to focus the panel;
   clicking a tab on the bar switches to that panel (hover highlights it), and the `⤢` on its right
-  edge blows the active panel up to the full screen. The panel column is excluded from
-  drag-selection.
+  edge blows the active panel up to the full screen. Left-drag the seam to resize, retaining
+  at least 64 chat columns and 28 panel columns, keeping focus and leaving zoom. The ratio
+  is reused for the current run. Drag text in either column to select it; selection stays within the column where the drag started. Copying and scroll-follow use that column’s own wrapping and viewport.
 - **Panels**: `todo` (Goals/Todos — with a split it moves here from above the input), `jobs`
   (background jobs; clicking a job card in the transcript focuses that job here), `agents`
   (subagent dashboard and detail: Enter opens the detail, Esc steps back), `companion`

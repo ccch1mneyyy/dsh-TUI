@@ -134,8 +134,7 @@ export function PanelBar({ tabs, activeId, width, focused, canExpand, onExpand, 
         </Text>
       ),
       // Every tab is clickable: on an inactive one it switches the column,
-      // on the active one it just takes the focus (same three-state as the
-      // Ctrl+B smart toggle, minus the closing step).
+      // on the active one it just takes the keyboard focus.
       clickable: onSelect !== undefined,
       onHover: (next: boolean) => setHoveredTab(previous => (next ? tab.id : previous === tab.id ? null : previous)),
     })
