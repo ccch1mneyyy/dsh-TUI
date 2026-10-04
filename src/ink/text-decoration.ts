@@ -5,7 +5,7 @@
  * Both paths must wrap through wrapDecoratedLine with the same inputs, or
  * the measured height drifts from the painted rows.
  */
-import { stringWidth } from './stringWidth.js'
+import { lineWidth } from './line-width-cache.js'
 import type { TextDecoration } from './styles.js'
 
 /** The blockquote gutter glyphs the markdown formatter bakes per level. */
@@ -23,7 +23,7 @@ function escapeEnd(s: string, i: number): number {
   if (c === '[') {
     // CSI: parameter/intermediate bytes, then a final letter.
     let j = i + 2
-    while (j < s.length && !/[A-Za-z]/.test(s[j]!)) j++
+    while (j < s.length && !isAsciiLetter(s.charCodeAt(j))) j++
     return Math.min(s.length, j + 1)
   }
   if (c === ']') {
@@ -35,48 +35,64 @@ function escapeEnd(s: string, i: number): number {
   return i + 2
 }
 
-/**
- * The line's plain characters (escape sequences removed). Structure
- * glyphs are single-cell, so the array index is the display column.
- */
-function plainView(line: string): string[] {
-  const chars: string[] = []
-  let i = 0
-  while (i < line.length) {
-    const c = line[i]!
-    if (c === '\u001b') {
-      i = escapeEnd(line, i)
-      continue
-    }
-    chars.push(c)
-    i++
-  }
-  return chars
+function isAsciiLetter(code: number): boolean {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
+}
+
+function isAsciiAlnum(c: string): boolean {
+  const code = c.charCodeAt(0)
+  return isAsciiLetter(code) || (code >= 48 && code <= 57)
 }
 
 /**
- * Length of the list marker starting at chars[k], or 0 when there is
+ * Plain (escape-free) characters of a line, read on demand. The parse
+ * only looks at the leading structure plus one character after it, so a
+ * long paragraph line costs O(structure) instead of O(line).
+ */
+class PlainChars {
+  private readonly chars: string[] = []
+  private i = 0
+  constructor(private readonly line: string) {}
+
+  at(k: number): string | undefined {
+    while (this.chars.length <= k && this.i < this.line.length) {
+      const c = this.line[this.i]!
+      if (c === '\u001b') {
+        this.i = escapeEnd(this.line, this.i)
+        continue
+      }
+      this.chars.push(c)
+      this.i++
+    }
+    return this.chars[k]
+  }
+}
+
+/**
+ * Length of the list marker starting at column k, or 0 when there is
  * none: `- ` / `* ` bullets and `N. ` / `a. ` / `iv. ` ordered markers.
  * The dot only counts with a space behind it, so `3.5 GHz` or `e.g. foo`
  * do not match. `vs. something` does, and hangs its wrap a few columns
  * in; harmless.
  */
-function markerLengthAt(chars: readonly string[], k: number): number {
-  const c = chars[k]!
+function markerLengthAt(chars: PlainChars, k: number): number {
+  const c = chars.at(k)
+  if (c === undefined) return 0
   if (c === '-' || c === '*') {
-    return chars[k + 1] === ' ' ? 2 : 0
+    return chars.at(k + 1) === ' ' ? 2 : 0
   }
-  if (!/[0-9A-Za-z]/.test(c)) return 0
+  if (!isAsciiAlnum(c)) return 0
   let j = k
-  while (j < chars.length && /[0-9A-Za-z]/.test(chars[j]!)) j++
-  if (j > k && chars[j] === '.' && chars[j + 1] === ' ') return j + 2 - k
+  for (let d = chars.at(j); d !== undefined && isAsciiAlnum(d); d = chars.at(j)) j++
+  if (chars.at(j) === '.' && chars.at(j + 1) === ' ') return j + 2 - k
   return 0
 }
 
-/** Length of the task checkbox at chars[k] (`[x] ` / `[ ] `), else 0. */
-function checkboxLengthAt(chars: readonly string[], k: number): number {
-  const rest = chars.slice(k, k + 4).join('')
-  return rest === '[x] ' || rest === '[ ] ' ? 4 : 0
+/** Length of the task checkbox at column k (`[x] ` / `[ ] `), else 0. */
+function checkboxLengthAt(chars: PlainChars, k: number): number {
+  if (chars.at(k) !== '[' || chars.at(k + 2) !== ']' || chars.at(k + 3) !== ' ') return 0
+  const mark = chars.at(k + 1)
+  return mark === 'x' || mark === ' ' ? 4 : 0
 }
 
 /**
@@ -89,22 +105,16 @@ function checkboxLengthAt(chars: readonly string[], k: number): number {
  */
 export function deriveHang(line: string): HangInfo | undefined {
   if (line.length === 0) return undefined
-  const chars = plainView(line)
-  if (chars.length === 0) return undefined
+  const chars = new PlainChars(line)
   const bars: boolean[] = []
   let k = 0
   let sawStructure = false
   // Spaces and rails in any order the formatter composes them
   // (`▎ ▎ `, `  ▎ `, `    `); content starts after the whole run.
-  while (k < chars.length) {
-    const c = chars[k]!
-    if (c === ' ' || BAR_CHARS.has(c)) {
-      bars.push(BAR_CHARS.has(c))
-      sawStructure = true
-      k++
-      continue
-    }
-    break
+  for (let c = chars.at(k); c !== undefined && (c === ' ' || BAR_CHARS.has(c)); c = chars.at(k)) {
+    bars.push(c !== ' ')
+    sawStructure = true
+    k++
   }
   const marker = markerLengthAt(chars, k)
   if (marker > 0) {
@@ -117,7 +127,7 @@ export function deriveHang(line: string): HangInfo | undefined {
     for (let n = 0; n < checkbox; n++) bars.push(false)
     k += checkbox
   }
-  if (!sawStructure || bars.length === 0 || k >= chars.length) return undefined
+  if (!sawStructure || bars.length === 0 || chars.at(k) === undefined) return undefined
   return { width: bars.length, bars }
 }
 
@@ -166,14 +176,14 @@ export function wrapHangLine(
   const budget = Math.max(1, maxWidth - hangWidth)
   for (let i = 1; i < pieces.length; i++) {
     const piece = pieces[i]!
-    if (stringWidth(piece) <= budget || budget < 2) {
+    if (lineWidth(piece) <= budget || budget < 2) {
       // Pieces that fit stay byte-identical: moving whitespace off them
       // could push the next piece over the budget and add a row.
       out.push(piece)
       continue
     }
     const trimmed = stripTrailingSpaces(piece)
-    if (trimmed.moved !== '' && stringWidth(trimmed.rest) <= budget) {
+    if (trimmed.moved !== '' && lineWidth(trimmed.rest) <= budget) {
       if (i + 1 < pieces.length) pieces[i + 1] = trimmed.moved + pieces[i + 1]!
       out.push(trimmed.rest)
       continue
