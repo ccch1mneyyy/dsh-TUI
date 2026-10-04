@@ -44,15 +44,17 @@ import type { SubagentsServiceView } from './subagent-projection.js'
  */
 export const CHILD_TRANSCRIPT_PAGE_EVENTS = 400
 
+/** Span ceiling for the exponential probe (2^24 ≈ 16.7M events). */
+const PROBE_SPAN_MAX = 2 ** 24
 /**
  * Tail-probe budget when `stat()` states no `eventCount` (the pinned JSONL
  * backend does not): exponential-then-binary single-event probes locate the
  * log end. Every probe reads EXACTLY one event; the count is hard-capped so a
- * pathological log degrades to "unavailable" instead of scanning.
+ * pathological log degrades to "unavailable" instead of scanning. The worst
+ * log under the span ceiling takes 24 exponential hits, one miss and 24
+ * bisection steps.
  */
-const PROBE_LIMIT = 48
-/** Span ceiling for the exponential probe (2^24 ≈ 16.7M events). */
-const PROBE_SPAN_MAX = 2 ** 24
+const PROBE_LIMIT = 2 * Math.log2(PROBE_SPAN_MAX) + 1
 
 /** The binding identity one read captures and re-checks after every await. */
 export interface ChildTranscriptCapture {
