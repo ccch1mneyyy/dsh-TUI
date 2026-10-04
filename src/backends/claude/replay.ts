@@ -388,6 +388,14 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
       launched.set(callId, { agentId: transcript?.agentId ?? callId, background })
       if (transcript === undefined) continue
       claimed.add(transcript.agentId)
+      // The parent fact the disk structure states: the recorded
+      // parent_agent_id wins; the transcript the delegating call sits in
+      // (delegatorId — undefined = the main chain) is the structural
+      // fallback. depth is emitted ALWAYS now: a main-chain delegation is
+      // a depth-1 spawn by construction, and the roster's parent/sibling
+      // math treats depth 1 as proof of a main-loop child (agent-team §2
+      // forbids inferring parents from depth any deeper than that).
+      const parentAgentId = transcript.parentAgentId ?? delegatorId
       out.push({
         type: 'subagent.start',
         agentId: transcript.agentId,
@@ -395,7 +403,8 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
         description: str(input?.description) ?? '',
         ...(str(input?.subagent_type) === undefined ? {} : { kind: str(input?.subagent_type) }),
         background,
-        ...(depth > 0 ? { depth: depth + 1 } : {}),
+        depth: depth + 1,
+        ...(parentAgentId === undefined ? {} : { parentAgentId }),
         time: clock,
       })
       lane(callId, transcript, depth + 1)

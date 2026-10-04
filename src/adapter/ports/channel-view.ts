@@ -296,6 +296,13 @@ export interface SubagentState {
   background?: boolean
   /** Spawn nesting: 1 = spawned by the main loop, N+1 = by a depth-N agent. */
   depth?: number
+  /** The agent that spawned this child, when the backend stated it as a
+   *  fact (Claude resume back-fill: `parent_agent_id` / the delegating
+   *  transcript). Absent = parent unknown — depth 1 still proves a
+   *  main-loop child, but nothing deeper may be inferred from depth
+   *  (agent-team §2: no fake trees). Drives the workbench parent/sibling
+   *  panel. */
+  parentAgentId?: string
 }
 
 /** Unified subagent activity domain model used by the adapter and every view. */

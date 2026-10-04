@@ -1080,6 +1080,11 @@ const GROUPS = {
 // 与失败保草稿、无 name/重名/无能力降级、状态词表只认通道给的、未知关系
 // 不画箭头、28/40 列顶栏不溢出、Detail Messages 页与 Dashboard 摘要行。
     ["verify-agent-view-ui", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-view-ui.tsx']],
+// agent-team P3 工作台回归（design agent-team-panels 路线图 P3 行）：
+// 父关系/兄弟纯函数（不造假树）、replay/投影的 parentAgentId 事实、
+// Agent View 右侧工作台面板与 sibling 原地切换不混消息、Dashboard 的
+// children/peers 分区与跨会话无控制面的如实降级。
+    ["verify-agent-workbench", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-workbench.tsx']],
 // 子进程 stderr 接管回归（issue #17）：inherit 的 MCP 子进程 stderr
 // 不再裸写终端破坏 alt-screen，输出去重聚合为受控通知。
     ["verify-child-stderr", ['node', '--import', 'tsx/esm', 'scripts/verify-child-stderr.tsx']],

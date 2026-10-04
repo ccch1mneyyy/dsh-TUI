@@ -288,8 +288,14 @@ export type AgentEvent =
    * subagent's own id after the call (Claude: `task_started` follows the
    * `Agent` tool call) re-keys the lane's subagent to the new `agentId`.
    * `depth` = spawn nesting (1 = spawned by the main loop).
+   * `parentAgentId` = the agent that spawned this child, when the backend
+   * can state it as a fact (Claude resume: `parent_agent_id` from the disk
+   * transcript, or the transcript the delegating call sits in). Absent =
+   * the parent is not known YET — depth 1 still proves a main-loop child,
+   * and nothing may infer a parent from depth alone (design agent-team
+   * §2: the tree only trusts real parent facts).
    */
-  | { readonly type: 'subagent.start'; readonly agentId: string; readonly parentCallId?: string; readonly description: string; readonly kind?: string; readonly model?: string; readonly background: boolean; readonly depth?: number; readonly time: number }
+  | { readonly type: 'subagent.start'; readonly agentId: string; readonly parentCallId?: string; readonly parentAgentId?: string; readonly description: string; readonly kind?: string; readonly model?: string; readonly background: boolean; readonly depth?: number; readonly time: number }
   /** A subagent reported progress. */
   | { readonly type: 'subagent.progress'; readonly agentId: string; readonly summary?: string; readonly lastTool?: string; readonly usage?: SubagentUsage }
   /** A subagent finished. */
