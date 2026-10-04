@@ -1,10 +1,9 @@
 /**
- * The Claude Agent backend (docs/agent-backend-design.md §3.4, §4): detection
- * (SDK importable? executable found? validated versions? a credential?),
- * session creation and resume with the credential plan of §4.12 (auth.ts),
- * and the offline session catalog (catalog.ts).
+ * The Claude Agent backend: detection (SDK importable? executable found?
+ * validated versions? a credential?), session creation and resume with the
+ * credential plan of auth.ts, and the offline session catalog (catalog.ts).
  *
- * Resume (§4.11): the session's record is looked up (its recorded working
+ * Resume: the session's record is looked up (its recorded working
  * directory is where the CLI must run), its model-visible transcript and
  * subagent transcripts are read and replayed (replay.ts), and only then is
  * the CLI started with `resume` — the replay fixes the turn / sequence
@@ -30,15 +29,15 @@ import { errorText } from './narrow.js'
 
 /** The user-facing refresh failure: a fixed sentence, the HTTP status at most. */
 function refreshFailedNotice(error: unknown): string {
-  // A channel connection the session must not run on says so itself
-  // (R3-1): the refusal sentence is already the actionable one.
+  // A channel connection the session must not run on says so itself: the
+  // refusal sentence is already the actionable one.
   if (error instanceof ClaudeChannelConflictError) return error.message
   const status = refreshFailureStatus(error)
   return t('claude-auth-refresh-failed', { detail: status === undefined ? '' : t('claude-auth-refresh-status', { status }) })
 }
 
-/** The settings credentials a channel connection replaces (names only —
- *  R3-1 acceptance 5: a notice never carries a value). */
+/** The settings credentials a channel connection replaces (named in a
+ *  notice; a value never is). */
 const SUPERSEDED_CREDENTIAL_KEYS: readonly string[] = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']
 
 /** The first non-empty value of `key` in an env record, the name matched
@@ -52,11 +51,10 @@ function firstNonEmpty(env: Readonly<Record<string, unknown>>, key: string): str
 }
 
 /**
- * The one-line start notices of an active channel profile against the
- * effective settings `env` (R3-1 acceptance 5): the cc-switch base-URL
- * mismatch (unchanged), plus WHICH settings credentials the channel's flag
- * pin replaces this session — key names only, never values. Pure, so the
- * regression drives it directly.
+ * The start notices of an active channel profile against the effective
+ * settings `env`: a base URL that differs from the settings' (cc-switch),
+ * and which settings credentials the channel replaces this session (key
+ * names only, never values).
  */
 export function channelStartNotices(
   channel: Pick<ClaudeChannelProfile, 'name' | 'baseUrl' | 'tokenRef'>,
@@ -193,7 +191,7 @@ export const claudeBackend: AgentBackend = {
       resolveStartPermissionMode(sdk, cwd, process.env, prefs.read().permissionMode),
     ])
     const sdkVersion = installedSdkVersion()
-    // The credential (design §4.12): a dsh-auth login wins (refreshed now if
+    // The credential: a dsh-auth login wins (refreshed now if
     // it is about to expire), else the environment, else the local login.
     const credentials = host.oauthCredential?.(CLAUDE_OAUTH_PROVIDER)
     const baseEnv = buildClaudeEnv()
@@ -202,18 +200,14 @@ export const claudeBackend: AgentBackend = {
     // in ~/.claude/settings.json counts like one in the environment.
     const settings = async (): Promise<ClaudeRouteSettings> =>
       (await sdk.resolveSettings({ cwd, settingSources: ['user', 'project', 'local'] })).effective as ClaudeRouteSettings
-    // The active channel profile's connection (phase 3): the channel
-    // store + the credential seam are read fresh for EVERY plan (the open
-    // and each reconnect), so a /channel switch while the session lives is
-    // picked up by the next spawn on this session.
+    // The channel store and the token store are read fresh for every plan
+    // (the open and each reconnect): a /channel switch while the session
+    // lives is picked up by its next spawn.
     const channels: ClaudeChannels = fileClaudeChannels(undefined, message => host.debug(message))
     const tokens: ClaudeChannelTokens = fileClaudeChannelTokens(undefined, message => host.debug(message))
-    // The active profile's connection, fail-closed (R3-1 acceptance 3): a
-    // custom endpoint the profile gives no credential — no token (a missing
-    // or dangling ref reads the same) and no credential-shaped env key —
-    // never spawns. No anonymous relay requests, and no ambient or local
-    // login identity silently riding the channel endpoint; the refusal
-    // sentence says where to add the token.
+    // A custom endpoint the profile gives no credential (no token, a
+    // dangling ref, no credential key in its env) never spawns; the refusal
+    // says where to add the token.
     const channelConnection = (): ClaudeChannelConnectionInput | undefined => {
       const active = activeProfileOf(channels.read())
       if (active === undefined || !hasChannelConnection(active)) return undefined
@@ -228,10 +222,9 @@ export const claudeBackend: AgentBackend = {
       return connection
     }
     const startNotices: string[] = []
-    // cc-switch coexistence (once per session start): which base URL wins
-    // this session (the channel profile's — the settings file keeps its row
-    // for the next plain `claude` run), and which settings credentials the
-    // channel's flag pin replaces (key names only, never values — R3-1).
+    // Once per start: which base URL wins this session (the profile's; the
+    // settings file keeps its own for a plain `claude` run) and which
+    // settings credentials the channel replaces (names only).
     try {
       const effective = await settings()
       const settingsEnv = typeof effective.env === 'object' && effective.env !== null ? effective.env as Record<string, unknown> : {}
@@ -247,9 +240,8 @@ export const claudeBackend: AgentBackend = {
       plan = await resolveClaudeAuth(baseEnv, credentials, { settings, ...(connection === undefined ? {} : { channel: connection }) })
     } catch (error) {
       // A channel connection that must not run (a tokenless custom
-      // endpoint, an apiKeyHelper conflict) fails CLOSED: the start is
-      // refused with the actionable sentence — never a silent fallback to
-      // ambient credentials or an anonymous request (R3-1).
+      // endpoint, an apiKeyHelper conflict) refuses the start: never a
+      // silent fallback to ambient credentials or an anonymous request.
       if (error instanceof ClaudeChannelConflictError) throw error
       // A failed refresh must not stop the start: the session runs on the
       // environment or the local login, and says why. The debug log gets a

@@ -1,6 +1,5 @@
 /**
- * The Claude Code Fidelity Profile (docs/agent-backend-design.md §4.3): the
- * `query()` options that make a dsh-tui Claude session behave like `claude`
+ * The Claude Code fidelity profile: the `query()` options that make a dsh-tui Claude session behave like `claude`
  * in the same project — the CLI's own system prompt, every settings source
  * (CLAUDE.md, hooks, MCP, plugins load as in the CLI), its tool preset, an
  * explicit start permission mode, streaming partials, subagent text and
@@ -24,7 +23,7 @@ type OptionPolicy = 'set' | 'side' | 'omit' | 'later'
 
 export const OPTION_POLICY = {
   abortController: 'set',
-  additionalDirectories: 'later', // `/add-dir` (Phase 5)
+  additionalDirectories: 'later', // `/add-dir`
   projectConfigRoot: 'omit',
   agent: 'omit',
   agents: 'omit',
@@ -61,13 +60,13 @@ export const OPTION_POLICY = {
   forwardSubagentText: 'set',
   verbatimPrompts: 'omit',
   thinking: 'omit',
-  effort: 'set', // the persisted `/effort` choice (Phase 3)
+  effort: 'set', // the persisted `/effort` choice
   maxThinkingTokens: 'omit',
   maxTurns: 'side', // the side query: one turn
   maxBudgetUsd: 'omit',
   taskBudget: 'omit',
   mcpServers: 'omit',
-  model: 'set', // the persisted `/model` choice (Phase 3)
+  model: 'set', // the persisted `/model` choice
   outputFormat: 'omit',
   pathToClaudeCodeExecutable: 'set',
   permissionMode: 'set',
@@ -79,7 +78,7 @@ export const OPTION_POLICY = {
   pluginDelivery: 'omit',
   promptSuggestions: 'omit',
   agentProgressSummaries: 'omit',
-  resume: 'set', // credential reconnect (Phase 3); /resume is Phase 4
+  resume: 'set', // /resume and the credential reconnect
   sessionId: 'set',
   resumeSessionAt: 'later',
   resumeDropsTurn: 'later',
@@ -98,14 +97,13 @@ export const OPTION_POLICY = {
 } as const satisfies Record<keyof Options, OptionPolicy>
 
 /** Every settings source, so CLAUDE.md, hooks, MCP and plugins load as in
- *  the CLI (`project` is the one that brings CLAUDE.md, Phase 0 probe P1). */
+ *  the CLI (`project` is the one that brings CLAUDE.md). */
 export const SETTING_SOURCES: SettingSource[] = ['user', 'project', 'local']
 
-/** The plan-tracking tools the todo panel renders (CLI 2.1.284: the Task*
- *  family replaced TodoWrite; both are shouldDefer tools the preset does not
- *  list — `allowedTools` both pre-approves them and brings them in, while
- *  `tools` stays the preset: additive, never an explicit replacement that
- *  would swap the whole default set). */
+/** The plan-tracking tools the todo panel renders (the Task* family
+ *  replaced TodoWrite in CLI 2.1.284). The preset defers them, so
+ *  `allowedTools` brings them in and pre-approves them; `tools` stays the
+ *  preset (an explicit list would replace the whole default set). */
 export const TODO_PANEL_TOOLS: readonly string[] = ['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']
 
 /** Modes the start resolution accepts from settings. `bypassPermissions`
@@ -225,7 +223,7 @@ export interface SideQueryInput {
 }
 
 /**
- * The side query's options (design §5.3): a throwaway fork of the
+ * The side query's options: a throwaway fork of the
  * conversation (`resume` + `forkSession`, `persistSession:false` — no
  * transcript written), no tools, one turn, the session's model, and the
  * session's own system prompt, settings sources, environment, credential
@@ -267,16 +265,11 @@ export function buildQueryOptions(input: ProfileInput): Options {
     // prompts and surfaces it where the native build defers it.
     allowedTools: [...TODO_PANEL_TOOLS],
     permissionMode: input.permissionMode,
-    // The gate, always. `allowDangerouslySkipPermissions` becomes the CLI's
-    // `--allow-dangerously-skip-permissions`, which only PRE-WARMS the
-    // process: the SDK refuses `bypassPermissions` without it ("Must be set
-    // to true when using permissionMode: 'bypassPermissions'", sdk.d.ts:2001)
-    // and a process started without it can never enter that mode later
-    // (sdk.d.ts:331) — `setPermissionMode` is just a control request, with
-    // no SDK-side gate of its own. It does NOT force bypass: the session
-    // starts in `input.permissionMode` exactly as resolved, and bypass is
-    // entered only by an explicit `setPermissionMode('bypassPermissions')`
-    // (the /permission picker).
+    // Always on. It becomes `--allow-dangerously-skip-permissions`, which
+    // only makes bypass reachable: a process started without it can never
+    // enter `bypassPermissions` later. It does not start in bypass; the
+    // session starts in `input.permissionMode`, and bypass is entered only by
+    // an explicit `setPermissionMode` from the /permission picker.
     allowDangerouslySkipPermissions: true,
     canUseTool: input.canUseTool,
     ...(input.onElicitation === undefined ? {} : { onElicitation: input.onElicitation }),
