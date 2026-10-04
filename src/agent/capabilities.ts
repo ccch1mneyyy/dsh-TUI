@@ -160,16 +160,6 @@ export interface AccountView {
   readonly apiKeySource?: string
 }
 
-/** Signed-in account summary (never an email address). */
-export interface AccountView {
-  readonly organization?: string
-  readonly subscription?: string
-  readonly provider?: string
-  /** Where the credential the backend uses comes from (backend vocabulary). */
-  readonly tokenSource?: string
-  readonly apiKeySource?: string
-}
-
 /** The credential a session runs on and how to renew it. */
 export interface SessionAuthView {
   /** Localized lines for `/login` (source, account; never token material). */
