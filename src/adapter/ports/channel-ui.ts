@@ -822,9 +822,9 @@ export interface ChannelUi {
   /**
    * The trajectory source's own three-state report (see
    * {@link TrajectorySource}): 'unsupported' when the composition mounted no
-   * trajectory source at all (the backend-neutral core's declaration —
-   * Claude today), 'empty'/'supported' when it did (the DSH extension's
-   * override reading its raw history). Every trajectory surface — /trace,
+   * trajectory source at all, 'empty'/'supported' when it did (the DSH
+   * extension reading its raw history; any other backend via the core's
+   * AgentEvent fold). Every trajectory surface — /trace,
    * Ctrl+T, the sidebar tab and the ⤢ outlet — reads THIS instead of guessing
    * from the event count, so "not adapted yet" can never masquerade as "no
    * turns yet".

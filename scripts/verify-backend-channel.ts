@@ -148,10 +148,11 @@ try {
   }
   check('snapshot commands == offered list', JSON.stringify(channel.backendCapabilities.commands) === JSON.stringify(offered))
   // 三态契约（设计 §④ 轨迹裁决）：/trace 的入口在每个后端一致（四入口同
-  // 口径）；不支持的后端由 channel.trajectorySource() 报告 unsupported——
-  // 能力判定读组合的结构声明，不是命令清单、更不是 backendId。
+  // 口径）；核心已挂中立 AgentEvent 折叠源，所以事件到来前报 empty、到来
+  // 后报 supported——能力判定读组合的结构声明，不是命令清单、更不是
+  // backendId；unsupported 只属于未挂数据源的组合。
   check('/trace is offered on every backend (three-state entry contract)', offered.includes('trace'))
-  check('the trajectory source reports unsupported structurally', channel.trajectorySource() === 'unsupported')
+  check('the core trajectory source reports empty before events (fold mounted)', channel.trajectorySource() === 'empty')
   // main's composition facts (`ChannelUi.capabilities()`) for a session no
   // extension describes: no compact capability → `/compact` has no route.
   check('composition facts without compact: /compact and /plan have no route', channel.capabilities().compact.route === 'none' && channel.capabilities().plan.route === 'none' && !channel.capabilities().skills)
@@ -176,6 +177,7 @@ try {
   ])
   check('session.ready sets the model', channel.model === 'fake-model-x')
   check('turn.start opens the working state', channel.working)
+  check('the fold reports supported once events flow', channel.trajectorySource() === 'supported' && channel.traceEvents().length > 0)
   check('the confirmed user message is a bubble', channel.rows.some(row => row.kind === 'user' && row.text === 'hello backend'))
   const thinking = channel.rows.find(row => row.kind === 'reasoning')
   check('reasoning-tokens opens a count-only thinking row', thinking !== undefined && thinking.text === '' && thinking.reasoningTokens === 120 && thinking.streaming === true)
@@ -230,7 +232,9 @@ try {
   check('job kill → false', channel.jobControl.kill('j') === false)
   check('runExternalCommand → undefined (the line goes to the model)', await channel.runExternalCommand('anything', '') === undefined)
   check('mcpStatus answers with the unavailable line', channel.mcpStatus().join('\n').includes(unavailableText('mcp')))
-  check('traceEvents is empty off DSH', channel.traceEvents().length === 0)
+  // 核心轨迹源（设计 §④）：off-DSH 会话的 traceEvents 是 AgentEvent 折叠
+  // 出的 raw 事件（上面发出的回合已成行），不是 DSH 的 rawHistory。
+  check('traceEvents carries the folded stream off DSH', channel.traceEvents().some(event => event.type === 'turn/start'))
   check('permission presets are unavailable', channel.permissionPresets().availability === 'unavailable')
 
   // ── /new through the backend's own open ─────────────────────────────
@@ -240,6 +244,7 @@ try {
   check('the replaced session is unsubscribed', first.listenerCount() === 0 && second.listenerCount() === 1)
   check('sessionRef follows /new', channel.sessionRef.sessionId === second.ref.sessionId && channel.agentId === second.ref.sessionId)
   check('cost report resets with the session', channel.costReport === undefined)
+  check('the trajectory fold resets with the session', channel.traceEvents().length === 0 && channel.trajectorySource() === 'empty')
   const rowsBefore = channel.rows.length
   first.emit([{ type: 'notice', level: 'info', text: 'stale event from the old session' }])
   check('a replaced session cannot write the transcript', channel.rows.length === rowsBefore)

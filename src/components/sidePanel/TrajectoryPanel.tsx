@@ -283,8 +283,10 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
 
   // ── unsupported state (design §④ 轨迹裁决) ─────────────────────────────────
   // The channel's trajectorySource() report decides, never the node count:
-  // a backend that mounted no source (Claude today) must not masquerade as
-  // "no turns yet". The copy names the backend's gap, promises no future
+  // a composition that mounted no source must not masquerade as "no turns
+  // yet". Every in-tree composition mounts one (DSH: raw history; other
+  // backends: the AgentEvent fold), so this arm is the structural guard —
+  // fixtures still exercise it. The copy names the gap, promises no future
   // data, and the ⤢ outlet is gone (SidePanelColumn hides it) — the
   // fullscreen line below explains why instead of leaving a dead button.
   // Tolerant read: headless fallback probes mount this panel with a partial

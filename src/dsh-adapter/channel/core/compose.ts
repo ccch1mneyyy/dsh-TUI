@@ -20,6 +20,7 @@
  * unavailable.
  */
 import type { Context } from '@deepseek-ai/cordis'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { markChannelReadDirty } from '../../../adapter/channel/read-view.js'
 import type { AgentCapabilities } from '../../../adapter/ports/channel-capabilities.js'
 import type { AgentIdentity, AgentMessageSubmitInput, AgentMessageSubmitResult } from '../../../adapter/ports/channel-view.js'
@@ -60,12 +61,10 @@ import { createSessionControls, localCommandsFor } from './session-controls.js'
 import { createCoreSessionActions } from './sessions.js'
 import { createWorkspaceActions } from '../workspace-actions.js'
 import { createBackendOpener, createSessionSwitch, SESSION_MOUNT_LEDGER, type NewSessionOpener, type ResumeSessionOpener } from './session-switch.js'
+import { createAgentTrajectorySource } from '../../trajectory/agent-source.js'
 
 /** Token buffer below the context window at which the context-low warning fires. */
 const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
-
-/** A session without a durable log of its own for `/trace`. */
-const NO_TRACE: readonly never[] = Object.freeze([])
 
 /** No image may be staged (a session lost the capability mid-call). */
 const NO_IMAGES = Object.freeze({ mediaTypes: Object.freeze([]), maxImageBytes: 0, maxImagesPerMessage: 0, maxMessageImageBytes: 0, maxImageDimension: 0, maxImagePixels: 0 })
@@ -93,6 +92,10 @@ export interface ChannelExtension {
    *  host-service specialists): the core's event-driven activity projection
    *  stays inert and its controls are the extension's. */
   readonly ownsActivity?: boolean
+  /** The extension serves the trajectory surface itself (DSH: the raw
+   *  session history IS the source): the core's AgentEvent fold stays inert
+   *  and its accessors are replaced by the extension's (design §④). */
+  readonly ownsTrajectory?: boolean
   /** Whether the local disk stands in for a missing host `fs` service
    *  (default true; the DSH workspace may be remote, so DSH says false). */
   localFs?: boolean
@@ -175,6 +178,17 @@ export function createCoreChannel(
   })
   owner.own(() => { activity.dispose() })
   const activityOwned = (): boolean => extension.ownsActivity !== true
+  /**
+   * The core's own trajectory source (design agent-team-panels §④ 轨迹
+   * 裁决): an incremental fold of the neutral AgentEvent stream into the
+   * raw-event vocabulary the trajectory projection consumes — the source a
+   * session without a durable DSH log (Claude today) mounts, so its report
+   * is 'empty'/'supported' rather than a dishonest 'unsupported'. A session
+   * an extension claims the trajectory for (DSH: raw history) keeps this
+   * fold inert — same ownership rule as the activity projection above.
+   */
+  const agentTrajectory = createAgentTrajectorySource()
+  const trajectoryOwned = (): boolean => extension.ownsTrajectory !== true
   /**
    * The binding generation the view was last `/clear`ed in. `/clear` is
    * view-only (every backend, as DSH): history older than the cleared view
@@ -516,15 +530,20 @@ export function createCoreChannel(
         try { emitter.dispose() } finally { ideChannel.stop() }
       }
     },
-    traceEvents: () => NO_TRACE,
+    // The core's trajectory snapshot: the AgentEvent fold's raw-event log
+    // (append-only, frozen payloads — the same prefix-identity contract a
+    // DSH snapshot offers). The structural-only widening mirrors
+    // asRawEvents: the envelope is the contract, the payload stays
+    // guard-mediated downstream.
+    traceEvents: () => agentTrajectory.events() as unknown as readonly SessionEvent[],
     // The trajectory capability declaration (design doc ④ 轨迹裁决): the
-    // backend-neutral core mounts NO trajectory source, so an unsupported
-    // backend is a structural fact read from the composition — never a
-    // backendId lookup. The DSH extension overrides this with its raw
-    // history ('empty' before the first event, 'supported' after), and the
-    // trajectory surfaces (/trace, Ctrl+T, the sidebar tab, ⤢) render the
-    // three states from THIS report.
-    trajectorySource: () => 'unsupported',
+    // core mounts the neutral AgentEvent fold, so a session it serves alone
+    // reports 'empty' before the first mapped event and 'supported' from
+    // then on — never 'unsupported', which stays the structural report of a
+    // composition that mounted no source at all (read from the composition,
+    // never a backendId lookup). The DSH extension overrides both accessors
+    // with its raw history.
+    trajectorySource: () => (agentTrajectory.events().length === 0 ? 'empty' : 'supported'),
   }
 
   // Register the raw state before any specialist can synchronously publish a
@@ -555,10 +574,12 @@ export function createCoreChannel(
       rowIds, resetContextWarning,
       jobs: NO_JOB_FEED,
       activity: { apply: (event, replaying) => { if (activityOwned()) activity.apply(event, replaying) } },
+      trajectory: { observe: (event, replaying) => { if (trajectoryOwned()) agentTrajectory.observe(event, replaying) } },
       checkContextWarning, notify: (...args) => notify(...args),
       renderer: host.rendererRuntime,
       selectionAttached: messageId => selectionAttachments.take(messageId),
     },
+    resetTrajectory: () => { if (trajectoryOwned()) agentTrajectory.reset() },
     retireAttachment: inputDelivery.retireAttachment,
     controls,
     hooks: () => extension.bind ?? {},
@@ -580,6 +601,9 @@ export function createCoreChannel(
     feed.resetProjection()
     extension.dropRows?.()
     if (activityOwned()) activity.reset()
+    // The discarded conversation's trajectory goes with its rows: the fold
+    // restarts empty, so the report honestly returns to 'empty'.
+    if (trajectoryOwned()) agentTrajectory.reset()
     state.todos = []
     state.sessionTitle = ''
     state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }

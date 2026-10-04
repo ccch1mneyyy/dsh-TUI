@@ -150,11 +150,12 @@ try {
   stdin.write('\x1b[Z')
   check('Shift+Tab without native modes explains itself', await settled(() => toasts().includes(t('capability-unavailable-backend', { name: 'mode' }))), toasts())
   stdin.write('\x14')
-  // 三态契约（设计 §④）：无轨迹源的后端上 Ctrl+T 照常打开轨迹场景，场景
-  // 渲染诚实的 unsupported 文案——不再弹能力缺失通知、不再拒绝入口。
-  check('Ctrl+T without a trace source opens the honest unsupported scene', await settled(() => screen().includes(t('trajectory-unsupported'))) && !toasts().includes(t('capability-unavailable-backend', { name: 'trace' })), screen())
+  // 三态契约（设计 §④）：核心已挂中立 AgentEvent 折叠源——Ctrl+T 打开
+  // 的轨迹场景渲染折叠账本（上面发出的 turn 已成行），不弹能力缺失通
+  // 知、不拒绝入口；unsupported 只属于未挂数据源的组合。
+  check('Ctrl+T over the folded core renders the trajectory ledger', await settled(() => screen().includes(t('traj-title')) && screen().includes('1 turns')) && !screen().includes(t('trajectory-unsupported')) && !toasts().includes(t('capability-unavailable-backend', { name: 'trace' })), screen())
   stdin.write('q')
-  check('the unsupported scene returns to the conversation', await settled(() => !screen().includes(t('trajectory-unsupported'))))
+  check('the trajectory scene returns to the conversation', await settled(() => !screen().includes(t('traj-title'))))
   stdin.write('\x1b')
   // 固定窗:pacing the double-Esc detector needs two distinct key events.
   await sleep(80)
