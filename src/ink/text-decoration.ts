@@ -1,7 +1,10 @@
 /**
  * Typed-decoration helpers shared by the text measure path (dom.ts) and
  * the text paint path (render-node-to-output.ts). See Styles.decoration.
- *
+ */
+import { stringWidth } from './stringWidth.js'
+
+/**
  * The hang derivation reads a source line's LEADING STRUCTURE — the run
  * of quote rails, list markers, checkboxes and indentation the markdown
  * formatter bakes into every hard row — and turns it into the width (and
@@ -133,6 +136,65 @@ export function deriveHang(line: string): HangInfo | undefined {
   return { width: bars.length, bars }
 }
 
+/**
+ * Split trailing plain spaces (kept inside the piece's trailing SGR
+ * tail) off a wrapped piece: `rest` is the piece without them (its SGR
+ * codes re-attached), `moved` the whitespace to carry elsewhere.
+ */
+function stripTrailingSpaces(piece: string): { rest: string; moved: string } {
+  const m = piece.match(/ +(?=(?:\u001b\[[0-9;]*m)*$)/)
+  if (m === null || m.index === undefined) return { rest: piece, moved: '' }
+  const head = piece.slice(0, m.index)
+  const tail = piece.slice(m.index + m[0].length)
+  return { rest: head + tail, moved: m[0] }
+}
+
+/**
+ * Wrap one source line for hang decoration. The FIRST row keeps the
+ * legacy break points exactly (wrapped at `maxWidth`, byte-identical
+ * with the undecorated renderer whenever the line fits or breaks the
+ * way it always did); only continuation pieces that would overflow once
+ * the hang prefix is prepended are re-wrapped at `maxWidth - hangWidth`.
+ * A line that fits `maxWidth` in one piece is returned unwrapped — the
+ * budget never pushes a just-fitting line over the edge (inline
+ * scrollback repros lock the exact row shapes of just-fitting list
+ * items). A trailing separator space that alone overflows the budget
+ * moves to the next piece's front instead of re-breaking, so no
+ * whitespace-only ghost row appears and the copy joins it back.
+ *
+ * `wrap` wraps one string at one width (wrapText). Both the measure
+ * path and the paint path must call this exact function so their row
+ * counts agree.
+ */
+export function wrapHangLine(
+  line: string,
+  maxWidth: number,
+  hangWidth: number,
+  wrap: (text: string, width: number) => string,
+): string[] {
+  const pieces = wrap(line, maxWidth).split('\n')
+  if (pieces.length === 1) return pieces
+  const out: string[] = [pieces[0]!]
+  const budget = Math.max(1, maxWidth - hangWidth)
+  for (let i = 1; i < pieces.length; i++) {
+    let piece = pieces[i]!
+    const trimmed = stripTrailingSpaces(piece)
+    if (trimmed.moved !== '') {
+      if (i + 1 < pieces.length && stringWidth(trimmed.rest) <= budget) {
+        pieces[i + 1] = trimmed.moved + pieces[i + 1]!
+        piece = trimmed.rest
+      } else if (i + 1 === pieces.length) {
+        piece = trimmed.rest
+      }
+    }
+    if (stringWidth(piece) <= budget || budget < 2) {
+      if (piece !== '' || i + 1 < pieces.length) out.push(piece)
+      continue
+    }
+    out.push(...wrap(piece, budget).split('\n'))
+  }
+  return out
+}
 /** Visual reset so a prefix's open SGR cannot bleed into the row body. */
 const ANSI_RESET = '\u001b[0m'
 

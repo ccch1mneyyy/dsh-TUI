@@ -20,7 +20,7 @@ import {
   squashTextNodesToSegments,
 } from './squash-text-nodes.js'
 import type { Color, TextDecoration } from './styles.js'
-import { deriveHang, rebuildHangPrefix } from './text-decoration.js'
+import { deriveHang, rebuildHangPrefix, wrapHangLine } from './text-decoration.js'
 import { isXtermJs } from './terminal.js'
 import { terminalImageSourceFromAttributes } from './terminal-image.js'
 import type { TerminalImagePlacement } from './terminal-image.js'
@@ -662,17 +662,21 @@ function applyStylesToWrappedText(
  * they fall through with softWrap undefined — no tracking, no behavior
  * change from the pre-softWrap path.
  *
- * `budgets` (typed decoration) shrinks the wrap width per source line by
- * that line's decoration width, so injected prefixes (a code rail on
- * every row, a hanging indent on continuations) never overflow the
- * column. Undefined or all-zero budgets keep the legacy single-width
- * wrap byte-identical.
+ * Two typed-decoration shapes change per-line wrapping: `budgets`
+ * (prefix mode, the code frame rail) shrinks the wrap width per source
+ * line so prefixed rows never overflow; `hangWidths` (hang mode) keeps
+ * the legacy break points for the first row and only re-wraps
+ * continuation pieces that would overflow once the hang prefix is
+ * prepended (see wrapHangLine) - a just-fitting line never wraps.
+ * Undefined or all-zero entries keep the legacy single-width wrap
+ * byte-identical.
  */
 function wrapWithSoftWrap(
   plainText: string,
   maxWidth: number,
   textWrap: Parameters<typeof wrapText>[2],
   budgets?: readonly number[],
+  hangWidths?: readonly number[],
 ): { wrapped: string; softWrap: boolean[] | undefined } {
   if (textWrap !== 'wrap' && textWrap !== 'wrap-trim') {
     return {
@@ -685,11 +689,17 @@ function wrapWithSoftWrap(
   const softWrap: boolean[] = []
   for (let li = 0; li < origLines.length; li++) {
     const orig = origLines[li]!
-    const budget =
-      budgets !== undefined && budgets.length > 0
-        ? Math.max(1, maxWidth - (budgets[li] ?? 0))
-        : maxWidth
-    const pieces = wrapText(orig, budget, textWrap).split('\n')
+    const hangWidth = hangWidths?.[li] ?? 0
+    const pieces =
+      hangWidth > 0
+        ? wrapHangLine(orig, maxWidth, hangWidth, (t, w) => wrapText(t, w, textWrap))
+        : wrapText(
+            orig,
+            budgets !== undefined && budgets.length > 0
+              ? Math.max(1, maxWidth - (budgets[li] ?? 0))
+              : maxWidth,
+            textWrap,
+          ).split('\n')
     for (let i = 0; i < pieces.length; i++) {
       outLines.push(pieces[i]!)
       softWrap.push(i > 0)
@@ -805,25 +815,34 @@ function paintDecoratedTextNode(
     return
   }
 
-  // Per source-line wrap budgets from the RAW lines: the paint and the
-  // measurement derive hangs from the same pre-expansion text.
+  // Per source-line decoration widths from the RAW lines: the paint and
+  // the measurement derive hangs from the same pre-expansion text.
+  // Prefix mode narrows every row's budget (budgets); hang mode keeps
+  // the legacy first-row width and only re-wraps overflowing
+  // continuations (hangWidths).
   const rawLines = plainText.split('\n')
-  const budgets: number[] = new Array<number>(rawLines.length)
-  for (let i = 0; i < rawLines.length; i++) {
-    budgets[i] =
-      prefixWidth > 0
-        ? prefixWidth
-        : decoration.hang === true
-          ? (deriveHang(rawLines[i]!)?.width ?? 0)
-          : 0
+  let budgets: number[] | undefined
+  let hangWidths: number[] | undefined
+  if (prefixWidth > 0) {
+    budgets = new Array<number>(rawLines.length).fill(prefixWidth)
+  } else if (decoration.hang === true) {
+    hangWidths = new Array<number>(rawLines.length)
+    for (let i = 0; i < rawLines.length; i++) {
+      hangWidths[i] = deriveHang(rawLines[i]!)?.width ?? 0
+    }
   }
   const needsWrapping =
-    wraps && rawLines.some((raw, i) => lineWidth(raw) > maxWidth - budgets[i]!)
+    wraps &&
+    rawLines.some((raw, i) => {
+      if (hangWidths !== undefined) return lineWidth(raw) > maxWidth
+      const budget = maxWidth - (budgets?.[i] ?? 0)
+      return lineWidth(raw) > budget
+    })
 
   let styled: string
   let softWrap: boolean[] | undefined
   if (needsWrapping) {
-    const w = wrapWithSoftWrap(plainText, maxWidth, textWrap, budgets)
+    const w = wrapWithSoftWrap(plainText, maxWidth, textWrap, budgets, hangWidths)
     softWrap = w.softWrap
     if (segments.length === 1) {
       const segment = segments[0]!

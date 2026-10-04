@@ -8,7 +8,7 @@ import { noteMeasureCompute } from './render-stats.js'
 import { addPendingClear, nodeCache, textPaintCache } from './node-cache.js'
 import squashTextNodes from './squash-text-nodes.js'
 import type { Styles, TextDecoration, TextStyles } from './styles.js'
-import { deriveHang } from './text-decoration.js'
+import { deriveHang, wrapHangLine } from './text-decoration.js'
 import { expandTabs } from './tabstops.js'
 import wrapText from './wrap-text.js'
 
@@ -500,9 +500,20 @@ const measureTextNode = function (
  * by that line's decoration width (the code frame's rail for every row,
  * the parsed leading structure for hang mode), the header adds one row
  * above, and a prefix-mode prefix widens the reported intrinsic width.
- * Row accounting mirrors measureText's per-line math (ceil of
- * line-width over budget, empty line = one row) so the painted rows and
- * the measured height agree.
+ *
+ * Both outputs mirror the legacy wrap-then-count semantics exactly
+ * (wrapText per line at the line's budget, then measure the result):
+ * height counts the wrapped rows — a naive ceil undercounts word-wrap
+ * because spaces are consumed at break points, and long tails lose
+ * rows against the painted screen — and width reports the widest
+ * WRAPPED piece, never the unwrapped line, so a constrained probe
+ * (AtMost under an overlay) cannot inflate the node's reported content
+ * width and starve flex siblings after the constraint lifts.
+ *
+ * Prefix mode wraps every line at `width - prefixWidth` (the hybrid
+ * frame's body box); hang mode keeps the legacy first-row width and only
+ * re-wraps overflowing continuations (wrapHangLine) — a just-fitting
+ * line never wraps.
  *
  * Budgets derive from the RAW lines (pre tab-expansion) — the paint
  * path parses the same raw text, and expansion would change the column
@@ -526,26 +537,50 @@ function measureDecoratedText(
   }
   const rawLines = rawText.split('\n')
   const expandedLines = text.split('\n')
-  // Truncate modes never add rows; budgets still apply for the prefix's
-  // horizontal reservation.
   const wraps = textWrap === 'wrap' || textWrap === 'wrap-trim'
-  // No-wrap probes (intrinsic, or a fractional shrunken probe like the
-  // legacy path guards): every line is one visual row.
+  // No-wrap probes (intrinsic, truncate, or a fractional shrunken probe
+  // like the legacy path guards): every line is one visual row and the
+  // unwrapped line width stands.
   const noWrap = !wraps || width <= 0 || !Number.isFinite(width) || (width > 0 && width < 1)
   let height = 0
   let widest = 0
+  const count = (pieces: readonly string[]): void => {
+    height += pieces.length
+    for (const piece of pieces) {
+      widest = Math.max(widest, lineWidth(piece))
+    }
+  }
   for (let i = 0; i < rawLines.length; i++) {
     const raw = rawLines[i]!
-    const decorated =
-      prefixWidth > 0
-        ? prefixWidth
-        : decoration.hang === true
-          ? (deriveHang(raw)?.width ?? 0)
-          : 0
-    const w = lineWidth(noWrap ? raw : expandedLines[i] ?? raw)
+    const line = noWrap ? raw : expandedLines[i] ?? raw
+    const w = lineWidth(line)
+    if (noWrap) {
+      widest = Math.max(widest, w)
+      height += 1
+      continue
+    }
+    if (prefixWidth > 0) {
+      const budget = Math.max(1, width - prefixWidth)
+      if (w === 0 || w <= budget) {
+        widest = Math.max(widest, w)
+        height += 1
+        continue
+      }
+      count(wrapText(line, budget, textWrap).split('\n'))
+      continue
+    }
+    if (decoration.hang === true) {
+      const hangWidth = deriveHang(raw)?.width ?? 0
+      if (w === 0 || w <= width) {
+        widest = Math.max(widest, w)
+        height += 1
+        continue
+      }
+      count(wrapHangLine(line, width, hangWidth, (t, bw) => wrapText(t, bw, textWrap)))
+      continue
+    }
     widest = Math.max(widest, w)
-    const budget = Math.max(1, width - decorated)
-    height += noWrap || w === 0 ? 1 : Math.ceil(w / budget)
+    height += 1
   }
   return { width: widest + prefixWidth, height: height + headerRows }
 }
