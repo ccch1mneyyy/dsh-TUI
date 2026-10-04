@@ -328,6 +328,7 @@ The command menu = built-in commands (58, aliases included) + DSH registry comma
 | `/tree` | none | session fork tree: hover to preview, click to rewind / fork / switch branch |
 | `/fork` | none | copy the current session into a resumable clone (original unaffected) |
 | `/restart` | none | restart the process and resume this session (rejected mid-turn, `Ctrl+C` first) |
+| `/kernel` | none | kernel picker: switch between DSH and the experimental Claude backend; remembers the pick and restarts into a new session (rejected mid-turn); see [Claude backend](claude-backend.en.md) |
 | `/rename` | `<新名称>` | rename the current session (no arg shows the current title and usage) |
 | `/recap` | none | recent-activity summary (one line) + suggested title; press `a` or click to apply the title. With `dsh-tui.recapOnOpen` (default on), opening/resuming a session auto-shows a divider + `回顾：` summary line at the bottom; hover to view actions, click to expand, gone after the next message |
 | `/workspace` | `resume` / `rename <名称>` / `open <路径或URI>` | manage workspaces; `open` accepts an absolute path, file URI, or plugin scheme |
@@ -361,6 +362,7 @@ The command menu = built-in commands (58, aliases included) + DSH registry comma
 
 | Command | Args | Effect |
 |---|---|---|
+| `/channel` | none | relay channel profiles (Claude backend only), see [Interaction](interaction.en.md#channel-profiles-channel-claude-only) |
 | `/model` | none | model selector; **switching = fork the session** (history kept, only routing changes; a session nobody has typed into records no branch, keeping automatic titles for its first prompt), choice persisted to `~/.dsh-tui/model.json` |
 | `/effort` | `status` / `<id>` | reasoning effort: no-arg slider (`←/→` adjust); `status` current level; `<id>` set directly. Persisted to `~/.dsh-tui/effort.json`; new-session start level follows /settings `effortDefault` (§5.3) |
 | `/thinking` | none | extended-thinking display toggle (thinking expands item by item while streaming) |

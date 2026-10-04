@@ -298,6 +298,7 @@ dsh-tui
 | `/tree` | 无 | 会话分叉树：悬停预览、点击回退 / 分叉 / 切换分支 |
 | `/fork` | 无 | 把当前会话复制成可恢复的副本（原会话不受影响） |
 | `/restart` | 无 | 重启进程并恢复本会话（回合运行中会被拒绝，先 `Ctrl+C`） |
+| `/kernel` | 无 | 内核选择器：在 DSH 与实验性的 Claude 后端之间切换，记住选择并重启进入新会话（回合运行中会被拒绝）；见 [Claude 后端](claude-backend.md) |
 | `/rename` | `<新名称>` | 重命名当前会话（无参时显示当前标题与用法） |
 | `/recap` | 无 | 最近活动摘要（一行）+ 建议标题；面板内 `a` 键或点击一键应用标题。设置 `dsh-tui.recapOnOpen`（默认开）开启时，打开/恢复会话自动在底部显示一条分隔线 + `回顾：` 摘要行，悬停可查看操作、点击展开，发送新消息后自动消失 |
 | `/workspace` | `resume` / `rename <名称>` / `open <路径或URI>` | 管理工作区；`open` 支持绝对路径、file URI、插件 scheme |
@@ -331,6 +332,7 @@ dsh-tui
 
 | 命令 | 参数 | 作用 |
 |---|---|---|
+| `/channel` | 无 | 中转渠道档案（仅 Claude 后端），见 [交互与命令](interaction.md#渠道档案channel仅-claude) |
 | `/model` | 无 | 模型选择器；**切换 = fork 会话续聊**（历史保留、仅换路由；还没有人说过话的会话不记分支，保留首个 prompt 的自动标题），选择持久化到 `~/.dsh-tui/model.json` |
 | `/effort` | `status` / `<id>` | 推理强度：无参滑杆（`←/→` 实时调整）；`status` 当前档位；`<id>` 直接设定。持久化 `~/.dsh-tui/effort.json`；新会话起始档看 /settings 的 `effortDefault`（§5.3） |
 | `/thinking` | 无 | 扩展思考显示开关（流式时思考逐条展开） |

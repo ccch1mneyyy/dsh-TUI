@@ -8,7 +8,7 @@
 Cordis profile
   -> src/index.ts (plugin contract and Schema)
   -> src/dsh-adapter/plugin.ts (services, Agent, and React lifecycle)
-  -> DSH Agent / session / tool services
+  -> AgentSession (the DSH Agent, or the experimental Claude Agent backend)
   -> src/dsh-adapter/channel.ts (core + DSH extensions; AgentEvent -> shared projector -> Channel)
   -> src/screens/Chat.tsx (keyboard and mode orchestration)
   -> src/components/* (views)
@@ -28,6 +28,8 @@ Cordis profile
 | `src/dsh-adapter/channel.ts` | Channel entry: builds the core, attaches the DSH extensions by `native.dsh`, starts; a construction failure rolls back through one owner; compatibility exports (including a raw DSH `Agent`) |
 | `src/dsh-adapter/channel/core/` | The backend-neutral core every `AgentSession` goes through (table below) |
 | `src/dsh-adapter/channel/extensions.ts` | DSH extensions: wiring only, DSH specialist internals unchanged |
+| `src/agent/`, `src/channel/` | The backend-neutral session domain (`AgentEvent`, `AgentSession`, capabilities), the shared projector and neutral stores |
+| `src/dsh-adapter/backend/`, `src/backends/claude/` | Each backend's translator and session; see [Agent backends](agent-backend-design.md) for the structure (Chinese) |
 | `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |
@@ -50,7 +52,7 @@ credentials, and model routing to `ctx.deepseekAccount`. The TUI-only
 does not insert these rows and has a different topology.
 
 The channel is one backend-neutral core plus the DSH extensions (see
-[agent-backend-design.md](agent-backend-design.md) §3.5):
+[Agent backends](agent-backend-design.md)):
 
 | File | Responsibility |
 | --- | --- |
@@ -60,12 +62,14 @@ The channel is one backend-neutral core plus the DSH extensions (see
 | `channel/core/session-controls.ts` | Session facts a backend reports by capability: native mode, effort, backend commands, `/mcp` and `/context` reports, subscription usage |
 | `channel/core/session-switch.ts` | `tui/session-switch` veto, `tui/session-switched` notice, the generic `/new` (injected opener; re-checked after a slow handshake, never tears down a running turn) |
 | `channel/core/local-actions.ts` | `/clear`, local rows, `!cmd`/`!!cmd` (workspace shell), `/activity frames`, "load earlier" dispatch |
+| `channel/core/sessions.ts` | The session browser catalog, `/resume`, `/fork` and double-Esc rewind for non-DSH sessions (backed by the backend's session catalog and its `fork`/`rewind` capabilities) |
+| `channel/core/local-images.ts` | Image staging for a backend without the DSH attachments service (memory only, under the limits the backend declares) |
 | `channel/core/actions.ts` | One install: unavailable → capability delegates (re-resolved per call) → core → extension |
 | `channel/core/files.ts`, `core/reports.ts` | File queries and completion; `/doctor`, `/export` (from the projected rows) |
 | `channel/extensions.ts` | DSH extensions: synchronous seed replay, subagents/jobs, resume/agent view/rewind/fork, model/preset/mode, recap, DSH reports |
 | `channel/binding-events.ts` | The DSH bind hooks: child-session listeners, model-selection waterfalls, raw event subscribers |
 | `channel/action-readiness.ts`, `lifetime-resources.ts`, `context-bookkeeping.ts`, `state.ts`, `command-completions.ts`, `local-actions.ts` | Typed action forwarding/readiness, detached handles, context warning/pending, neutral initial fields, completion, the DSH subagent report and log fold restore |
-| `channel/projection.ts` | Compatibility shell — the DSH translator (`backend/translate.ts`) plus the one shared projector, `src/channel/projection.ts` (§6) |
+| `channel/projection.ts` | Compatibility shell: the DSH translator (`backend/translate.ts`) plus the shared projector `src/channel/projection.ts`, keeping the old `renderEvent`/`replayEvents` surface |
 
 An uninstalled or released action fails explicitly; it never pretends
 success with a no-op.
@@ -87,8 +91,9 @@ missing configuration, placeholders, or fallback branches.
 
 ## The session log is the source of truth
 
-The channel does not treat a React-local array as conversation truth. DSH
-`session/event` records own:
+The channel does not treat a React-local array as conversation truth. A Claude
+session follows the Claude CLI's own transcript (read through the SDK); DSH is
+the example below. DSH `session/event` records own:
 
 - initial replay and incremental streaming events;
 - assistant/reasoning/tool association and sequence anchors;
@@ -170,6 +175,8 @@ be checked in both modes, especially on narrow terminals and Windows ConPTY.
 | `~/.dsh-tui/themes/` | User theme JSON files; runtime plugin themes do not write here |
 | `~/.dsh-tui/working-activity.json` | Activity animation selection |
 | `~/.dsh-tui/agent-preset.json` | Default Agent preset for new sessions |
+| `~/.dsh-tui/kernel.json` | The backend `/kernel` remembers (`dsh` / `claude`) |
+| `~/.dsh-tui/backends/claude/` | Claude backend preferences (`prefs.json`), pins and channel profiles (`channels.json`); Claude sessions themselves live in `~/.claude/projects/` |
 
 `DSH_TUI_SESSION_ROOT` overrides the JSONL root in either composition. The
 profile defaults to `$DSH_HOME/sessions` (normally `~/.dsh/sessions/`);
@@ -213,6 +220,8 @@ relevant when maintaining the dsh-tui side:
 `dsh-TUI` does not provide a separate sandbox. It implements the tool-level
 approval UI (a local panel answering the `approval/request` waterfall), while
 `/permission` preset switching comes from the dsh-base `permission-presets` row.
+On the Claude backend approvals come from the CLI's `canUseTool` callback and add
+"allow always" and a rejection reason; see [Agent backends](agent-backend-design.md).
 
 Effective capability comes from the DSH services mounted by
 `cordis.patch.yml`:
@@ -261,6 +270,8 @@ visual TUI alone does not describe the effective policy.
 
 ## Known limitations
 
+- The experimental Claude backend's limitations are listed in
+  [Agent backends](agent-backend-design.md) (Chinese).
 - Plugin-source context injected into the system prompt is not shown as a
   separate UI segment; it is included in the system/context meter.
 - `/model` switches through a session fork rather than an in-place update; the

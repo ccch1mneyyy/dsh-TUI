@@ -140,6 +140,10 @@ boundaries and helpers over introducing parallel abstractions.
   - Backend translators turn session events into `AgentEvent`s; the one
     shared projector, `src/channel/projection.ts`, turns those into
     transcript rows. Adding a backend needs no channel code.
+- `src/agent/`, `src/channel/`, `src/backends/claude/`, `src/dsh-adapter/backend/`:
+  the backend-neutral session domain and shared projector, plus each backend's
+  translator and session. The structure, the rules and the steps to add a
+  backend are in [Agent backends](agent-backend-design.md) (Chinese).
 - `src/screens/Chat.tsx`: top-level interaction coordinator. It owns modal
   precedence, global keyboard handling, scroll/search/selection state, slash
   command dispatch, and composition of the chat screen.
@@ -350,16 +354,15 @@ CI shards each test group by the measured durations in
 table only affects balance). New scripts need no table entry; to rebalance, run
 the whole group once with `node scripts/run-ci-group.mjs <group> --record-timings`.
 
-For local speed add `--jobs N` (default 1 = exactly what CI runs today): entries
-run concurrently, each still with its own throwaway HOME and render log, and each
-script's output is printed as one block when it finishes. An entry that fails
-under concurrency is re-run once, serially — a serial pass is released as a
-CPU-contention flake but recorded loudly (`::error` plus a summary marker); a
-serial failure counts as real. `--jobs > 1` refuses to combine with
-`--record-timings` (contended timings would poison the packing table). Daily
-loop in three tiers: focused script for the touched area (table above) → the
-affected group with `--jobs 4` → before merging, `pnpm build` plus all four
-groups in full.
+For local speed add `--jobs N` (default 1, the same as CI): entries run
+concurrently, each with its own throwaway HOME and render log, and each script's
+output is printed as one block when it finishes. An entry that fails under
+concurrency is re-run once on its own: a pass there is treated as a CPU-contention
+flake but still reported (`::error` plus a summary marker); a failure there is a
+real failure. `--jobs > 1` cannot be combined with `--record-timings` (timings
+under contention are wrong). A typical loop: the focused script for the touched
+area (table below), then the affected group with `--jobs 4`, and before merging
+`pnpm build` plus the four test groups in full.
 
 CI runs these commands after installation:
 
@@ -402,6 +405,8 @@ change, also run the closest focused script:
 | Change area | Focused verification |
 | --- | --- |
 | General headless screen composition | `pnpm smoke` |
+| Shared projector, DSH translator | `pnpm verify:projection-golden`, `node --import tsx/esm scripts/verify-dsh-translate.ts`, `pnpm verify:agent-domain` |
+| Claude backend | The matching `scripts/verify-claude-*` (fake SDK, no cost) and `pnpm verify:backend-channel`; `verify:claude-live`/`verify:claude-headless` drive the real CLI, so run them by hand only when you mean to spend (pinned to haiku) |
 | Channel submit/steer/pending behavior | `node scripts/verify-submit.mjs` |
 | Rewind/edit/resend and historical inbox cancellation | `pnpm verify:rewind-edit` |
 | Prompt queue behavior | `node scripts/verify-queue.mjs` |
@@ -647,6 +652,7 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 | User-facing documented behavior | Chinese and English READMEs, plus config comments/help text where applicable |
 | Contribution intake or PR gate | `.mergify.yml`, `docs/contributing.md`, `docs/contributing.en.md`, `.github/workflows/pr-gate.yml`, `.github/scripts/pr-intake/`, `.github/APPROVED_CONTRIBUTORS` |
 | Package version or dependency | `package.json`, `pnpm-lock.yaml`, generated/published artifacts as applicable; do not churn the legacy npm lock incidentally |
+| Claude Agent SDK version | The exact version in both the optional peer and dev entries of `package.json`, `pnpm-lock.yaml`, `src/backends/claude/contract.ts` (`VALIDATED_SDK_VERSION`/`VALIDATED_CLI_VERSIONS`), the install command in `docs/claude-backend{,.en}.md`; `verify:claude-contract` checks they agree |
 | Upstream validated-line bump | `src/dsh-adapter/contract.ts`, `src/dsh-adapter/oauth/`, both peer and dev ranges in `package.json`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
 
 ## Git And Release Safety
