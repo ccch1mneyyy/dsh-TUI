@@ -43,7 +43,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { OAuthAccess, OAuthCredentialSource } from '../src/agent/backend.js'
 import type { AgentEvent } from '../src/agent/events.js'
-import { claudeConfigDirOf, claudeGlobalConfigPath, claudeGlobalConfigPaths, detectClaudeAuth, fileGlobalConfigReader, isAuthFailure, refreshFailureStatus, resolveClaudeAuth } from '../src/backends/claude/auth.js'
+import { claudeConfigDirOf, claudeGlobalConfigPaths, detectClaudeAuth, fileGlobalConfigReader, isAuthFailure, refreshFailureStatus, resolveClaudeAuth } from '../src/backends/claude/auth.js'
 import { openClaudeSession } from '../src/backends/claude/session.js'
 import { createOAuthCredentialSource } from '../src/dsh-adapter/oauth-credential-source.js'
 import { setLang, t } from '../src/i18n.js'
@@ -176,7 +176,7 @@ const firstParty = { settings: () => Promise.resolve({}), globalConfig: () => un
     try {
       const reader = fileGlobalConfigReader({ CLAUDE_CONFIG_DIR: dir })
       const absent = reader()
-      check('global config: absent files are no source', Array.isArray(absent) && absent.length === 0 && claudeGlobalConfigPath({ CLAUDE_CONFIG_DIR: dir }) === join(dir, '.claude.json'))
+      check('global config: absent files are no source', Array.isArray(absent) && absent.length === 0 && (claudeGlobalConfigPaths({ CLAUDE_CONFIG_DIR: dir }) as string[]).includes(join(dir, '.claude.json')))
       writeFileSync(join(dir, '.claude.json'), JSON.stringify({ numStartups: 3, env: { ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic' } }))
       const source = fakeSource(stored)
       const plan = await resolveClaudeAuth({ PATH: '/usr/bin', CLAUDE_CONFIG_DIR: dir }, source, { settings: none })

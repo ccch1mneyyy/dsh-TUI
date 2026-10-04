@@ -278,12 +278,6 @@ export function claudeGlobalConfigPaths(env: Readonly<Record<string, unknown>>, 
   return [join(configDir, '.config.json'), join(base, '.claude.json'), join(base, '.claude-custom-oauth.json')]
 }
 
-/** The `.claude.json` global config file (kept for diagnostics). */
-export function claudeGlobalConfigPath(env: Readonly<Record<string, unknown>>, platform: NodeJS.Platform = process.platform): string {
-  const dir = claudeConfigDirOf(env, platform)
-  return join(dir === undefined || dir === 'conflict' ? homeDir() : dir, '.claude.json')
-}
-
 /** One global config file's `env`: undefined when it does not exist. */
 function readConfigEnv(path: string): Readonly<Record<string, unknown>> | 'unreadable' | undefined {
   if (!existsSync(path)) return undefined

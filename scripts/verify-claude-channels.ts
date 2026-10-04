@@ -50,7 +50,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { channelCapabilities } from '../src/channel/capabilities.js'
-import { channelSlug, fileClaudeChannels, importFromSettingsEnv, importTokenFromSettingsEnv, memoryClaudeChannels, sameChannelConnection } from '../src/backends/claude/channels.js'
+import { channelSlug, fileClaudeChannels, importFromSettingsEnv, importTokenFromSettingsEnv, memoryClaudeChannels } from '../src/backends/claude/channels.js'
 import { channelTokenRef, fileClaudeChannelTokens, memoryClaudeChannelTokens } from '../src/backends/claude/channelTokens.js'
 import { ClaudeChannelConflictError, channelMissingCredential, resolveClaudeAuth } from '../src/backends/claude/auth.js'
 import { channelStartNotices } from '../src/backends/claude/backend.js'
@@ -867,9 +867,6 @@ const init = {
     sameOptionConnection(row('a'), row('b')) === true)
   check('restart: mapping-only vs connected differs (restart)',
     sameOptionConnection(row('a'), row('b', conn('fp1'))) === false)
-  check('restart: the backend comparator agrees on the profile level',
-    sameChannelConnection({ baseUrl: 'https://x', tokenRef: 'R', env: { A: '1' } }, { baseUrl: 'https://x', tokenRef: 'R', env: { A: '1' } }) === true
-    && sameChannelConnection({ baseUrl: 'https://x', tokenRef: 'R' }, { baseUrl: 'https://x', tokenRef: 'R', env: { A: '1' } }) === false)
 }
 
 // ---- 14. phase 3: the wizard, headless (scripted answers) -------------------

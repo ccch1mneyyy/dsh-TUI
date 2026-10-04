@@ -181,24 +181,12 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
     return models
   }
 
-  const modeList = (): readonly ModeOption[] => {
-    const row = currentRow()
-    const ids = [...ROSTER]
-    if (row?.supportsAutoMode === true) ids.push('auto')
-    // The live mode stays listed (and cyclable away from) even when the
-    // roster would not offer it — a session started in `dontAsk`, say.
-    const current = deps.currentMode()
-    if (current !== '' && !ids.includes(current)) ids.push(current)
-    return ids.map(id => ({ id, label: modeLabel(id), description: modeDescription(id) }))
-  }
-
-  /** The cycle: the same assembly as `modeList`, over `CYCLE_ROSTER` — the
-   *  live mode still trails the cycle as the away-out when the roster would
-   *  not offer it, so a session in a non-roster mode can always cycle out. */
-  const modeCycle = (): readonly ModeOption[] => {
-    const row = currentRow()
-    const ids = [...CYCLE_ROSTER]
-    if (row?.supportsAutoMode === true) ids.push('auto')
+  /** A roster as mode options: `auto` where the model supports it, and the
+   *  live mode last when the roster would not offer it (a session started
+   *  in `dontAsk`, say) — it stays listed and can be cycled away from. */
+  const modeOptions = (roster: readonly string[]): readonly ModeOption[] => {
+    const ids = [...roster]
+    if (currentRow()?.supportsAutoMode === true) ids.push('auto')
     const current = deps.currentMode()
     if (current !== '' && !ids.includes(current)) ids.push(current)
     return ids.map(id => ({ id, label: modeLabel(id), description: modeDescription(id) }))
@@ -287,8 +275,8 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       },
     },
     modes: {
-      list: modeList,
-      cycle: modeCycle,
+      list: () => modeOptions(ROSTER),
+      cycle: () => modeOptions(CYCLE_ROSTER),
       current: (): string => deps.currentMode(),
       async set(id: string): Promise<void> {
         // No TUI-side vetting: the query was pre-warmed for `bypassPermissions`
@@ -441,7 +429,6 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
 
   return {
     capabilities,
-    commandInfos,
     /** The handshake's catalogs (`initializationResult().models/commands`),
      *  read without a round trip; malformed entries are skipped. */
     seed(init: Readonly<Record<string, unknown>> | undefined): void {
@@ -465,10 +452,6 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
     /** `system/init.terminal_slash_commands` (terminal-only, never offered). */
     setTerminalOnly(names: readonly string[]): void {
       terminalOnly = new Set(names)
-    },
-    /** The CLI said its commands changed: refresh and report the list. */
-    async refreshCommands(): Promise<readonly CommandInfo[]> {
-      return capabilities.commands.list()
     },
   }
 }

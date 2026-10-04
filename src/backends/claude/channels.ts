@@ -316,38 +316,6 @@ export function importTokenFromSettingsEnv(env: Record<string, string | undefine
   return pickEnv(env, 'ANTHROPIC_AUTH_TOKEN')
 }
 
-/** The connection slice of a profile (the phase-3 truth): everything about
- *  WHERE the session connects and WHAT it authenticates with, nothing about
- *  model mapping. Pure so the UI layer can compare two rosters' rows. */
-export interface ClaudeChannelConnection {
-  readonly baseUrl?: string
-  readonly tokenRef?: string
-  readonly env?: Readonly<Record<string, string>>
-}
-
-/** The profile's connection slice (a copy, never the profile itself). */
-export function connectionOf(profile: ClaudeChannelProfile): ClaudeChannelConnection {
-  return {
-    ...(profile.baseUrl === undefined ? {} : { baseUrl: profile.baseUrl }),
-    ...(profile.tokenRef === undefined ? {} : { tokenRef: profile.tokenRef }),
-    ...(profile.env === undefined ? {} : { env: profile.env }),
-  }
-}
-
-const recordsEqual = (a: Readonly<Record<string, string>> | undefined, b: Readonly<Record<string, string>> | undefined): boolean => {
-  const ka = Object.keys(a ?? {}).sort()
-  const kb = Object.keys(b ?? {}).sort()
-  return ka.length === kb.length && ka.every((key, at) => key === kb[at] && (a ?? {})[key] === (b ?? {})[key])
-}
-
-/** Whether two connections are the SAME endpoint+credential+env: switching
- *  between such channels needs no restart (the running CLI child already
- *  sits on exactly this connection); any difference does. */
-export function sameChannelConnection(a: ClaudeChannelConnection | undefined, b: ClaudeChannelConnection | undefined): boolean {
-  if (a === undefined || b === undefined) return a === b
-  return a.baseUrl === b.baseUrl && a.tokenRef === b.tokenRef && recordsEqual(a.env, b.env)
-}
-
 /** A channel profile's connection carries anything spawn-shaping. */
 export function hasChannelConnection(profile: ClaudeChannelProfile | undefined): boolean {
   return profile !== undefined && (profile.baseUrl !== undefined || profile.tokenRef !== undefined
