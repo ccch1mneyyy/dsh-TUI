@@ -20,6 +20,7 @@
  */
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { t } from '../../i18n.js'
+import { writeFlagSettingsFile, type FlagSettingsFile } from './flag-settings.js'
 import { buildSideQueryOptions } from './options.js'
 import type { ClaudeSdkModule } from './sdk.js'
 import { errorText, rec, str } from './narrow.js'
@@ -61,19 +62,29 @@ export function createClaudeSideQuery(deps: ClaudeSideQueryDeps) {
       signal?.addEventListener('abort', onAbort, { once: true })
       const spawn = deps.spawn()
       const model = deps.model()
-      const query = deps.sdk.query({
-        prompt: singlePrompt(prompt),
-        options: buildSideQueryOptions({
-          cwd: deps.cwd,
-          resume: deps.sessionId(),
-          env: spawn.env,
-          ...(spawn.settings === undefined ? {} : { settings: spawn.settings }),
-          executable: spawn.executable,
-          abortController,
-          stderr: line => { deps.debug(`[claude-side-stderr] ${line.trimEnd()}`) },
-          ...(model === '' ? {} : { model }),
-        }),
-      })
+      // The flag layer goes by file, out of argv (flag-settings.ts).
+      let flagSettings: FlagSettingsFile | undefined
+      let query: ReturnType<ClaudeSideQueryDeps['sdk']['query']>
+      try {
+        flagSettings = spawn.settings === undefined ? undefined : writeFlagSettingsFile(spawn.settings)
+        query = deps.sdk.query({
+          prompt: singlePrompt(prompt),
+          options: buildSideQueryOptions({
+            cwd: deps.cwd,
+            resume: deps.sessionId(),
+            env: spawn.env,
+            ...(flagSettings === undefined ? {} : { settingsFile: flagSettings.path }),
+            executable: spawn.executable,
+            abortController,
+            stderr: line => { deps.debug(`[claude-side-stderr] ${line.trimEnd()}`) },
+            ...(model === '' ? {} : { model }),
+          }),
+        })
+      } catch (error) {
+        signal?.removeEventListener('abort', onAbort)
+        flagSettings?.dispose()
+        throw error
+      }
       let streamed = ''
       let settled = ''
       let failure: string | undefined
@@ -117,6 +128,7 @@ export function createClaudeSideQuery(deps: ClaudeSideQueryDeps) {
         signal?.removeEventListener('abort', onAbort)
         try { query.close() } catch (error) { deps.debug(`claude: side query close failed (${errorText(error)})`) }
         abortController.abort()
+        flagSettings?.dispose()
       }
       if (signal?.aborted) return { answer: null }
       // A gateway that does not stream still settles the whole text.

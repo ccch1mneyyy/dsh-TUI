@@ -101,8 +101,9 @@ export interface ClaudeAuthPlan {
   readonly expiresAt?: number
   readonly env: Record<string, string>
   /**
-   * dsh-auth: the flag-settings layer that pins the route to the first-party
-   * API (the SDK `settings` option); absent on every other source.
+   * The flag-settings layer (the SDK `settings` option, passed as a private
+   * file: flag-settings.ts): the first-party route pin of an injected
+   * dsh-auth token, or an active channel's connection; absent otherwise.
    */
   readonly settings?: { readonly env: Readonly<Record<string, string>> }
 }

@@ -39,18 +39,19 @@
  * Run: node --import tsx/esm scripts/verify-claude-channels.ts
  */
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
+import { execFile, spawn as spawnProcess } from 'node:child_process'
 import http from 'node:http'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { channelCapabilities } from '../src/channel/capabilities.js'
 import { channelSlug, fileClaudeChannels, importFromSettingsEnv, importTokenFromSettingsEnv, memoryClaudeChannels } from '../src/backends/claude/channels.js'
 import { channelProfileSlug } from '../src/channel/channel-slug.js'
 import { channelTokenRef, fileClaudeChannelTokens, memoryClaudeChannelTokens } from '../src/backends/claude/channelTokens.js'
 import { ClaudeChannelConflictError, channelMissingCredential, resolveClaudeAuth } from '../src/backends/claude/auth.js'
+import { writeFlagSettingsFile } from '../src/backends/claude/flag-settings.js'
 import { channelStartNotices } from '../src/backends/claude/backend.js'
 import { loadClaudeSdk } from '../src/backends/claude/sdk.js'
 import { runChannelWizard, sameOptionConnection } from '../src/channel/channel-wizard.js'
@@ -577,10 +578,37 @@ const init = {
     },
   }))
   await tick()
-  const options = fake.queries[0]!.options as { env?: Record<string, string>; settings?: { env?: Record<string, string> } }
+  const first = fake.queries[0]!
+  const options = first.options as { env?: Record<string, string>; settings?: unknown }
   check('inject: startRun passes the channel env to the child', options.env?.ANTHROPIC_AUTH_TOKEN === 'chan-token' && options.env?.ANTHROPIC_BASE_URL === 'https://relay.example/api', options.env)
-  check('inject: startRun passes the flag layer through the SDK settings option', options.settings?.env?.ANTHROPIC_BASE_URL === 'https://relay.example/api' && options.settings?.env?.ANTHROPIC_AUTH_TOKEN === 'chan-token', options.settings)
+  check('inject: startRun passes the flag layer through the SDK settings option', first.flagSettings?.env?.ANTHROPIC_BASE_URL === 'https://relay.example/api' && first.flagSettings?.env?.ANTHROPIC_AUTH_TOKEN === 'chan-token', first.flagSettings)
+  // The SDK turns `settings` into `--settings <value>` on the CLI's command
+  // line: it must be a path, never the token-bearing JSON.
+  const settingsPath = typeof options.settings === 'string' ? options.settings : ''
+  check('inject: the flag layer goes by file path, so the token never reaches argv',
+    settingsPath !== '' && !settingsPath.includes('chan-token') && !JSON.stringify(Object.entries(options).filter(([key]) => key !== 'env')).includes('chan-token'), options.settings)
+  check('inject: the flag settings file is owner-only', process.platform === 'win32' || first.flagSettingsMode === 0o600, first.flagSettingsMode?.toString(8))
+  check('inject: … in its own owner-only directory', process.platform === 'win32' || (statSync(dirname(settingsPath)).mode & 0o777) === 0o700)
   await session.dispose()
+  check('inject: dispose removes the flag settings file', settingsPath !== '' && !existsSync(settingsPath) && !existsSync(dirname(settingsPath)))
+  // A reconnect retires the old run: its file goes with it, the new run has its own.
+  const reconnecting = await openClaudeSession(claudeDeps(fake.sdk, { auth: { plan, renew: () => Promise.resolve(plan) } }))
+  await tick()
+  const before = fake.queries.at(-1)!.options.settings as string
+  await reconnecting.capabilities.auth!.reconnect()
+  const after = fake.queries.at(-1)!.options.settings as string
+  check('inject: a reconnect removes the retired run\'s file and writes a fresh one', before !== after && !existsSync(before) && existsSync(after))
+  await reconnecting.dispose()
+  check('inject: … and dispose removes that one too', !existsSync(after))
+  // A file still open when the process exits (a crash path that skipped
+  // dispose) is removed on exit.
+  const flagUrl = new URL('../src/backends/claude/flag-settings.ts', import.meta.url).href
+  const leftover = await new Promise<string>(resolve => {
+    execFile(process.execPath, ['--import', 'tsx/esm', '--input-type=module', '-e',
+      `const { writeFlagSettingsFile } = await import(${JSON.stringify(flagUrl)}); const file = writeFlagSettingsFile({ env: { ANTHROPIC_AUTH_TOKEN: 'exit-token' } }); console.log(file.path); process.exit(0)`],
+    { cwd: fileURLToPath(new URL('..', import.meta.url)), timeout: 30_000 }, (_error, stdout) => resolve(String(stdout).trim()))
+  })
+  check('inject: a flag settings file left open is removed when the process exits', leftover.endsWith('settings.json') && !existsSync(leftover) && !existsSync(dirname(leftover)), leftover)
 }
 
 // ---- 11. the settings import absorbs the connection ------------------------
@@ -1297,8 +1325,13 @@ const init = {
 // HOME/USERPROFILE/CLAUDE_CONFIG_DIR, a child env built from scratch
 // (PATH/SystemRoot/telemetry flags only), the listener answers 401 so no
 // turn ever succeeds, and only booleans/counts leave the listener, never a
-// header or body. Skipped with a visible SKIP (never a silent pass) when
-// the SDK or its bundled CLI is absent.
+// header or body. The flag layer goes the production way, as a private file
+// (flag-settings.ts): every cell also checks that neither the argv the SDK
+// built nor /proc/<pid>/cmdline carries a sentinel, and that the file is
+// gone afterwards. One last cell passes the same layer inline: the outcome
+// is the same, and the token is on the command line. Skipped with a
+// visible SKIP (never a silent pass) when the SDK or its bundled CLI is
+// absent.
 {
   const OLD_SENTINEL = 'r3-old-sentinel-not-a-token'
   const CHANNEL_SENTINEL = 'r3-channel-sentinel-not-a-token'
@@ -1317,7 +1350,9 @@ const init = {
   if (sdk !== undefined && cli !== undefined) {
     const root = mkdtempSync(join(tmpdir(), 'dshtui-channels-loop-'))
     try {
-      const cell = async (label: string, settingsEnv: Record<string, string>, mode: 'control' | { readonly token?: string }): Promise<void> => {
+      // `inline` passes the flag layer as an object (the SDK puts it in the
+      // CLI's argv); the default is the production form, a private file.
+      const cell = async (label: string, settingsEnv: Record<string, string>, mode: 'control' | { readonly token?: string; readonly inline?: true }): Promise<void> => {
         const home = join(root, label)
         const config = join(home, 'config')
         const cwd = join(home, 'cwd')
@@ -1368,18 +1403,33 @@ const init = {
         })
         const abort = new AbortController()
         const started = Date.now()
+        const inline = mode !== 'control' && mode.inline === true
+        const flagFile = plan?.settings === undefined || inline ? undefined : writeFlagSettingsFile(plan.settings)
+        // What the CLI was started with: the argv the SDK built and, on
+        // Linux, the kernel's view of it (/proc/<pid>/cmdline).
+        const argv: string[] = []
         const query = sdk.query({
           prompt: 'loopback probe: reply with the single word ok',
           options: {
             cwd,
             env: plan === undefined ? base : plan.env,
-            ...(plan?.settings === undefined ? {} : { settings: plan.settings }),
+            ...(plan?.settings === undefined ? {} : { settings: flagFile?.path ?? plan.settings }),
             settingSources: ['user'],
             permissionMode: 'default',
             model: 'haiku',
             maxTurns: 1,
             abortController: abort,
             stderr: () => undefined,
+            spawnClaudeCodeProcess: spawnOptions => {
+              const child = spawnProcess(spawnOptions.command, spawnOptions.args, {
+                cwd: spawnOptions.cwd, env: spawnOptions.env as NodeJS.ProcessEnv, signal: spawnOptions.signal, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true,
+              })
+              argv.push(...spawnOptions.args)
+              if (process.platform === 'linux' && child.pid !== undefined) {
+                try { argv.push(...readFileSync(`/proc/${child.pid}/cmdline`, 'utf8').split('\0')) } catch { /* already gone */ }
+              }
+              return child
+            },
           },
         })
         try {
@@ -1400,8 +1450,9 @@ const init = {
           abort.abort()
           try { await Promise.race([query.close().catch(() => undefined), new Promise(resolve => { setTimeout(resolve, 5000) })]) } catch { /* already gone */ }
           await new Promise<void>(resolve => server.close(() => resolve()))
+          flagFile?.dispose()
         }
-        console.log(`loopback ${label}: requests=${requests} old=${seenOld} channel=${seenChannel} in ${Date.now() - started}ms`)
+        console.log(`loopback ${label}: requests=${requests} old=${seenOld} channel=${seenChannel} argv=${argv.length} in ${Date.now() - started}ms`)
         if (mode === 'control') {
           // The control: without a channel pin the settings credential does
           // reach the listener. That is the leak itself, and it makes the
@@ -1412,6 +1463,16 @@ const init = {
         }
         check(`loopback ${label}: no outbound request carries the OLD settings sentinel`, requests > 0 && !seenOld, { requests })
         if (mode.token !== undefined) check(`loopback ${label}: the channel token is the credential that travels`, seenChannel)
+        const settingsArg = argv[argv.indexOf('--settings') + 1] ?? ''
+        if (inline) {
+          // The comparison cell: the inline form gives the same outcome, and
+          // it is the one that puts the token on the command line.
+          check(`loopback ${label}: the inline form puts the token in the CLI's argv`, argv.some(arg => arg.includes(CHANNEL_SENTINEL)), argv.length)
+        } else {
+          check(`loopback ${label}: the CLI gets the flag layer as a file path, the token is in no argv entry`,
+            argv.includes('--settings') && settingsArg === flagFile?.path && !argv.some(arg => arg.includes(CHANNEL_SENTINEL) || arg.includes(OLD_SENTINEL)), { settingsArg, entries: argv.length })
+          check(`loopback ${label}: the flag settings file is gone after the run`, flagFile !== undefined && !existsSync(flagFile.path))
+        }
       }
       // The control, then the six-cell matrix: tokenless/token × the three
       // credential keys cc-switch could have left in user settings.
@@ -1420,6 +1481,7 @@ const init = {
         await cell(`tokenless-${key}`, { ANTHROPIC_BASE_URL: 'https://old.invalid', [key]: OLD_SENTINEL }, {})
         await cell(`token-${key}`, { ANTHROPIC_BASE_URL: 'https://old.invalid', [key]: OLD_SENTINEL }, { token: CHANNEL_SENTINEL })
       }
+      await cell('token-ANTHROPIC_AUTH_TOKEN-inline', { ANTHROPIC_BASE_URL: 'https://old.invalid', ANTHROPIC_AUTH_TOKEN: OLD_SENTINEL }, { token: CHANNEL_SENTINEL, inline: true })
     } finally {
       // Cleanup only ever removes the directory this run created under
       // tmpdir, by exact prefix, retrying through the Windows EPERM window

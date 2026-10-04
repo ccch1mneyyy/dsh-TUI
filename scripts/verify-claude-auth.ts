@@ -326,7 +326,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   await tick()
   const first = fake.queries[0]!
   check('the first query names the new session and runs on the injected token', first.options.sessionId === '00000000-0000-4000-8000-0000000000ab' && first.options.resume === undefined && first.options.env?.CLAUDE_CODE_OAUTH_TOKEN === TOKEN)
-  check('… with the plan\'s route pin as the flag settings', (first.options.settings as { env?: Record<string, string> } | undefined)?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com', first.options.settings)
+  check('… with the plan\'s route pin as the flag settings', first.flagSettings?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com', first.flagSettings)
   const failTurn = async (query: typeof first): Promise<void> => {
     query.emit({ type: 'system', subtype: 'status', status: 'requesting' })
     query.emit({ type: 'assistant', error: 'authentication_failed', message: { id: `m-${fake.queries.length}`, model: 'haiku', content: [{ type: 'text', text: 'Failed to authenticate. API Error: 401 OAuth access token is invalid.' }], usage: {} } })
@@ -338,7 +338,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   check('… naming the refused token (compare-and-swap renewal)', renewalsAsked[0] === TOKEN)
   check('… closes the old CLI and resumes the SAME session', first.closed && fake.queries.length === 2 && fake.queries[1]!.options.resume === '00000000-0000-4000-8000-0000000000ab' && fake.queries[1]!.options.sessionId === undefined)
   check('… on the renewed credential', fake.queries[1]!.options.env?.CLAUDE_CODE_OAUTH_TOKEN === `${TOKEN}-1`)
-  check('… still pinned', (fake.queries[1]!.options.settings as { env?: Record<string, string> } | undefined)?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com')
+  check('… still pinned', fake.queries[1]!.flagSettings?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com')
   check('… and says it reconnected', events.some(event => event.type === 'notice' && event.text === t('claude-auth-reconnected')))
   check('the session is still the same live session', session.status !== 'disposed' && session.ref.sessionId === '00000000-0000-4000-8000-0000000000ab')
   const turnsBefore = events.filter(event => event.type === 'turn.start').length
@@ -389,7 +389,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   // An injected (pinned) credential: every spawn of this block — the
   // create-again, the refused resume and its fallback — carries the pin.
   const plan = { source: 'dsh-auth' as const, expiresAt: 1, env: { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } } }
-  const pinnedAt = (index: number): boolean => (fake.queries[index]?.options.settings as { env?: Record<string, string> } | undefined)?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com'
+  const pinnedAt = (index: number): boolean => fake.queries[index]?.flagSettings?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com'
   const session = await openClaudeSession(claudeDeps(fake.sdk, { auth: { plan, renew: () => Promise.resolve(plan) } }))
   const events: AgentEvent[] = []
   session.subscribe(batch => { events.push(...batch) })
@@ -417,7 +417,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   // A pinned dsh-auth plan: the `/login` reconnect and the auth-failure
   // reconnects must spawn with the route pin.
   const plan = { source: 'dsh-auth' as const, expiresAt: 1, env: { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } } }
-  const pinnedAt = (index: number): boolean => (fake.queries[index]?.options.settings as { env?: Record<string, string> } | undefined)?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com'
+  const pinnedAt = (index: number): boolean => fake.queries[index]?.flagSettings?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com'
   let renewGate: (() => void) | undefined
   let renewals = 0
   const session = await openClaudeSession(claudeDeps(fake.sdk, {
@@ -537,7 +537,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   // A pinned dsh-auth plan: the `/login` reconnect and the auth-failure
   // reconnects must spawn with the route pin.
   const plan = { source: 'dsh-auth' as const, expiresAt: 1, env: { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'tok' }, settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } } }
-  const pinnedAt = (index: number): boolean => (fake.queries[index]?.options.settings as { env?: Record<string, string> } | undefined)?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com'
+  const pinnedAt = (index: number): boolean => fake.queries[index]?.flagSettings?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com'
   let renewGate: (() => void) | undefined
   const session = await openClaudeSession(claudeDeps(fake.sdk, { auth: { plan, renew: () => new Promise(resolve => { renewGate = () => resolve(plan) }) } }))
   const events: AgentEvent[] = []

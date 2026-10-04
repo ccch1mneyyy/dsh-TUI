@@ -420,7 +420,7 @@ const collect = (session: AgentSession) => {
   const withChoices = buildQueryOptions({
     cwd: '/fixture/project', sessionId: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
     stderr: () => undefined, abortController: new AbortController(), replayUserMessages: true, model: 'haiku', effort: 'low',
-    settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } },
+    settingsFile: '/fixture/flag-settings.json',
     onElicitation: (() => undefined) as unknown as Options['onElicitation'], onUserDialog: (() => undefined) as unknown as Options['onUserDialog'], supportedDialogKinds: ['refusal_fallback_prompt'],
   })
   const resumed = buildQueryOptions({
@@ -444,7 +444,7 @@ const collect = (session: AgentSession) => {
   check('profile: exactly the `set` options are built', JSON.stringify(set) === JSON.stringify(built), { set, built })
   check('profile: a reconnect resumes instead of naming a new session', resumed.resume === 's' && resumed.sessionId === undefined && options.sessionId === 's' && options.resume === undefined)
   check('profile: no model/effort unless chosen', options.model === undefined && options.effort === undefined && withChoices.model === 'haiku' && withChoices.effort === 'low')
-  check('profile: flag settings only with a route pin', options.settings === undefined && resumed.settings === undefined && (withChoices.settings as { env?: Record<string, string> } | undefined)?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com')
+  check('profile: flag settings only with a route pin, and by file path', options.settings === undefined && resumed.settings === undefined && withChoices.settings === '/fixture/flag-settings.json')
   const fakeSettings = (defaultMode: unknown) => ({
     resolveSettings: () => Promise.resolve({ effective: { permissions: { defaultMode } } }),
     filterEscalatingDefaultMode: (resolved: unknown) => (resolved as { effective: unknown }).effective,

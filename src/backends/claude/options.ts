@@ -83,7 +83,7 @@ export const OPTION_POLICY = {
   resumeSessionAt: 'later',
   resumeDropsTurn: 'later',
   sandbox: 'omit',
-  settings: 'set', // the route pin of an injected subscription token (auth.ts)
+  settings: 'set', // the auth plan's flag layer, as a private file (flag-settings.ts)
   managedSettings: 'omit',
   settingSources: 'set',
   skills: 'omit',
@@ -199,9 +199,9 @@ export type ProfileInput = {
   /** Start model / effort (the user's persisted choice); absent = the CLI's. */
   readonly model?: string
   readonly effort?: string
-  /** Flag-layer settings: the route pin of an injected subscription token
-   *  (auth.ts); absent = none. */
-  readonly settings?: { readonly env: Readonly<Record<string, string>> }
+  /** The auth plan's flag layer (auth.ts) as a file path
+   *  (flag-settings.ts); absent = none. */
+  readonly settingsFile?: string
 } & (
   /** A new session under this id … */
   | { readonly sessionId: string; readonly resume?: undefined }
@@ -215,7 +215,8 @@ export interface SideQueryInput {
   /** The session it forks (persisted). */
   readonly resume: string
   readonly env: Record<string, string>
-  readonly settings?: { readonly env: Readonly<Record<string, string>> }
+  /** The flag layer as a file path (flag-settings.ts). */
+  readonly settingsFile?: string
   readonly executable: string | undefined
   readonly abortController: AbortController
   readonly stderr: (data: string) => void
@@ -247,7 +248,7 @@ export function buildSideQueryOptions(input: SideQueryInput): Options {
     stderr: input.stderr,
     ...(input.executable === undefined ? {} : { pathToClaudeCodeExecutable: input.executable }),
     ...(input.model === undefined ? {} : { model: input.model }),
-    ...(input.settings === undefined ? {} : { settings: { env: { ...input.settings.env } } }),
+    ...(input.settingsFile === undefined ? {} : { settings: input.settingsFile }),
   }
 }
 
@@ -285,7 +286,7 @@ export function buildQueryOptions(input: ProfileInput): Options {
     ...(input.executable === undefined ? {} : { pathToClaudeCodeExecutable: input.executable }),
     ...(input.model === undefined ? {} : { model: input.model }),
     ...(input.effort === undefined ? {} : { effort: input.effort as NonNullable<Options['effort']> }),
-    ...(input.settings === undefined ? {} : { settings: { env: { ...input.settings.env } } }),
+    ...(input.settingsFile === undefined ? {} : { settings: input.settingsFile }),
     ...(input.replayUserMessages ? { extraArgs: { 'replay-user-messages': null } } : {}),
   }
 }

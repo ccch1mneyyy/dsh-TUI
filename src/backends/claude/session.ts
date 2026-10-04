@@ -63,6 +63,7 @@ import { envSlotsServeModel, importedModelEnv, mergedModelEnv, modelTruthFrom, r
 import { claudeConfigDir } from './transcript-file.js'
 import { CLAUDE_IMAGE_LIMITS, claudeImageBlocks } from './images.js'
 import { createClaudeSideQuery } from './side-query.js'
+import { writeFlagSettingsFile, type FlagSettingsFile } from './flag-settings.js'
 import { createClaudeTranslator } from './translate.js'
 import { errorText, rec, type Rec } from './narrow.js'
 
@@ -392,6 +393,8 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     readonly inbox: ReturnType<typeof createInbox<SDKUserMessage>>
     readonly abortController: AbortController
     readonly query: ReturnType<ClaudeSessionDeps['sdk']['query']>
+    /** The flag-settings file this run's CLI reads (flag-settings.ts). */
+    readonly flagSettings?: FlagSettingsFile
     consumer: Promise<void>
   }
   const startRun = (resume: boolean): Run => {
@@ -408,33 +411,41 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       ? undefined
       : startModel
     const startEffort = prefs.read().effort ?? deps.effort
-    const query = deps.sdk.query({
-      prompt: inbox,
-      options: buildQueryOptions({
-        cwd: deps.cwd,
-        // A reconnect resumes the same session (same id, same transcript);
-        // the SDK refuses `sessionId` together with `resume`.
-        ...(resume ? { resume: currentSessionId } : { sessionId: currentSessionId }),
-        permissionMode: (translator.mode ?? deps.start.mode) as StartPermissionMode['mode'],
-        executable: deps.executable.path,
-        env: authPlan.env,
-        // The route pin of an injected subscription token (auth.ts).
-        ...(authPlan.settings === undefined ? {} : { settings: authPlan.settings }),
-        canUseTool: bridge.canUseTool,
-        onElicitation: dialogs.onElicitation,
-        onUserDialog: dialogs.onUserDialog,
-        supportedDialogKinds: SUPPORTED_DIALOG_KINDS,
-        stderr: stderrSink,
-        abortController,
-        ...(explicitModel === undefined ? {} : { model: explicitModel }),
-        ...(startEffort === undefined ? {} : { effort: startEffort }),
-        // Echoes are the user-row fallback for a CLI without lifecycle
-        // frames; requesting them is harmless when lifecycle frames win (the
-        // translator ignores an echo of an input it already confirmed).
-        replayUserMessages: true,
-      }),
-    })
-    return { inbox, abortController, query, consumer: Promise.resolve() }
+    // The plan's flag layer (a channel token may ride it) goes by file, out
+    // of the CLI's argv; it lives as long as this run.
+    const flagSettings = authPlan.settings === undefined ? undefined : writeFlagSettingsFile(authPlan.settings)
+    let query: Run['query']
+    try {
+      query = deps.sdk.query({
+        prompt: inbox,
+        options: buildQueryOptions({
+          cwd: deps.cwd,
+          // A reconnect resumes the same session (same id, same transcript);
+          // the SDK refuses `sessionId` together with `resume`.
+          ...(resume ? { resume: currentSessionId } : { sessionId: currentSessionId }),
+          permissionMode: (translator.mode ?? deps.start.mode) as StartPermissionMode['mode'],
+          executable: deps.executable.path,
+          env: authPlan.env,
+          ...(flagSettings === undefined ? {} : { settingsFile: flagSettings.path }),
+          canUseTool: bridge.canUseTool,
+          onElicitation: dialogs.onElicitation,
+          onUserDialog: dialogs.onUserDialog,
+          supportedDialogKinds: SUPPORTED_DIALOG_KINDS,
+          stderr: stderrSink,
+          abortController,
+          ...(explicitModel === undefined ? {} : { model: explicitModel }),
+          ...(startEffort === undefined ? {} : { effort: startEffort }),
+          // Echoes are the user-row fallback for a CLI without lifecycle
+          // frames; requesting them is harmless when lifecycle frames win (the
+          // translator ignores an echo of an input it already confirmed).
+          replayUserMessages: true,
+        }),
+      })
+    } catch (error) {
+      flagSettings?.dispose()
+      throw error
+    }
+    return { inbox, abortController, query, ...(flagSettings === undefined ? {} : { flagSettings }), consumer: Promise.resolve() }
   }
   let run = startRun(resumed)
 
@@ -443,6 +454,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     target.inbox.close()
     try { target.query.close() } catch (error) { deps.host.debug(`claude: close failed (${errorText(error)})`) }
     target.abortController.abort()
+    target.flagSettings?.dispose()
   }
 
   /** Shut the session down; safe to call from any state. */

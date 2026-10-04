@@ -7,6 +7,7 @@
  *
  * Import from TypeScript scripts run with `node --import tsx/esm`.
  */
+import { readFileSync, statSync } from 'node:fs'
 import type { ClaudeClock, ClaudeSessionDeps } from '../../src/backends/claude/session.js'
 
 export type FakeQueryOptions = Record<string, unknown> & { readonly canUseTool?: unknown; readonly env?: Record<string, string> }
@@ -21,7 +22,18 @@ export interface FakeQuery {
   /** Every control call: method name and arguments. */
   readonly calls: { method: string; args: unknown[] }[]
   readonly closed: boolean
+  /** The flag settings as the CLI would read them when the query started:
+   *  the file `options.settings` names (parsed), or an inline object. */
+  readonly flagSettings: { readonly env?: Record<string, string> } | undefined
+  /** The permission bits of that file (POSIX), when it was a file. */
+  readonly flagSettingsMode: number | undefined
   emit(message: unknown): void
+}
+
+/** What `options.settings` holds right now (undefined when absent). */
+function readFlagSettings(settings: unknown): { value: { readonly env?: Record<string, string> } | undefined; mode: number | undefined } {
+  if (typeof settings !== 'string') return { value: settings as { readonly env?: Record<string, string> } | undefined, mode: undefined }
+  return { value: JSON.parse(readFileSync(settings, 'utf8')) as { readonly env?: Record<string, string> }, mode: statSync(settings).mode & 0o777 }
 }
 
 /** The fake SDK: `queries` in creation order. */
@@ -34,6 +46,7 @@ export function fakeClaudeSdk(init: (index: number, options: FakeQueryOptions) =
     const inputs: Record<string, unknown>[] = []
     const calls: { method: string; args: unknown[] }[] = []
     let ended = false
+    const flag = readFlagSettings(params.options.settings)
     void (async () => { for await (const message of params.prompt) inputs.push(message) })()
     const flush = (): void => {
       while (waiters.length > 0 && (outbox.length > 0 || ended)) {
@@ -57,6 +70,8 @@ export function fakeClaudeSdk(init: (index: number, options: FakeQueryOptions) =
       inputs,
       calls,
       closed: false,
+      flagSettings: flag.value,
+      flagSettingsMode: flag.mode,
       emit(message: unknown) { outbox.push(message); flush() },
       // A throwing (or rejecting) `init` is a CLI that fails its handshake.
       initializationResult: (): Promise<unknown> => {
