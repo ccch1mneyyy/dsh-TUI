@@ -21,6 +21,7 @@ import type { ImageLimitsView } from '../../agent/capabilities.js'
 import type { ImageRef } from '../../agent/events.js'
 import { t } from '../../i18n.js'
 import { probeImageSize } from '../../utils/imageResize.js'
+import { rec } from './narrow.js'
 
 /** What a Claude message may carry (see the module comment). */
 export const CLAUDE_IMAGE_LIMITS: ImageLimitsView = Object.freeze({
@@ -100,10 +101,6 @@ export function base64ImageFacade(id: string, mediaType: string, data: string): 
     read: () => Promise.resolve(new Uint8Array(Buffer.from(data, 'base64'))),
   }
 }
-
-type Rec = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Rec | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
 
 /** The base64 image blocks of a user message's content, as lazy facades
  *  (`<idPrefix>#<n>`); other sources (URLs, files) are not shown. */

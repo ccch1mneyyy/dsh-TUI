@@ -26,8 +26,7 @@ import { fileClaudeChannelTokens, type ClaudeChannelTokens } from './channelToke
 import { replayClaudeTranscript, type ClaudeReplay, type ClaudeSubagentTranscript } from './replay.js'
 import { installedSdkVersion, loadClaudeSdk, type ClaudeSessionStoreSdk } from './sdk.js'
 import { openClaudeSession } from './session.js'
-
-const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
+import { errorText } from './narrow.js'
 
 /** The user-facing refresh failure: a fixed sentence, the HTTP status at most. */
 function refreshFailedNotice(error: unknown): string {

@@ -29,6 +29,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { t } from '../../i18n.js'
 import { parseJsonl, type JsonRecord } from '../../utils/jsonl.js'
+import { str } from './narrow.js'
 
 /** The largest transcript file read (larger is refused). */
 export const MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024
@@ -37,7 +38,6 @@ export const MAX_SLICE_ENTRIES = 1000
 /** Steps a chain walk takes at most (a corrupted tree cannot loop us). */
 const MAX_WALK = 1_000_000
 
-const str = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
 const rec = (value: unknown): JsonRecord | undefined =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? value as JsonRecord : undefined
 

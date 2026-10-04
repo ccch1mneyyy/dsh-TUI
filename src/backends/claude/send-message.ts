@@ -16,11 +16,7 @@
  *    terminal. Nothing is ever inferred from the tool having succeeded.
  */
 import type { AgentMessageState, AgentMessageView } from '../../adapter/ports/channel-view.js'
-
-type Record_ = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Record_ | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record_ : undefined
-const str = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
+import { rec, str } from './narrow.js'
 
 /** The SendMessage tool input as this module recognizes it: the addressed
  *  agent (`to`) and the body (`message`, falling back to `text`). An input

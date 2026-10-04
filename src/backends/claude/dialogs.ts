@@ -35,16 +35,10 @@ import type { ElicitationRequest, ElicitationResult, OnElicitation, OnUserDialog
 import type { QuestionAnswers } from '../../agent/capabilities.js'
 import type { AgentEvent, QuestionItemView } from '../../agent/events.js'
 import { t } from '../../i18n.js'
+import { errorText, num, rec, str, type Rec } from './narrow.js'
 
 /** The dialog kinds this client renders (`supportedDialogKinds`). */
 export const SUPPORTED_DIALOG_KINDS: readonly string[] = ['refusal_fallback_prompt']
-
-type Rec = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Rec | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
-const str = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
-const num = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined
-const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
 /** A form value the MCP result carries. */
 type FormValue = string | number | boolean | string[]

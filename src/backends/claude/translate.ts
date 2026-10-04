@@ -22,6 +22,7 @@ import type { TodoPanelItem } from '../../adapter/ports/channel-view.js'
 import { t } from '../../i18n.js'
 import { claudeToolRole, presentClaudeToolCall, presentClaudeToolResult } from './tools.js'
 import { parseSendMessageInput, sendMessageCallView, sendMessageResultState, sendMessageResultView } from './send-message.js'
+import { arr, num, rec, str, type Rec } from './narrow.js'
 
 /** How confirmed user inputs become user rows. */
 export type ClaudeUserRows =
@@ -49,17 +50,10 @@ export interface ClaudeTranslatorOptions {
     readonly tasks?: readonly ClaudeTaskSeed[] }
 }
 
-type Rec = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Rec | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
-const str = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
-const num = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined
-const arr = (value: unknown): readonly unknown[] => Array.isArray(value) ? value : []
-
 /** User texts the CLI injects that are not human bubbles. */
-const INTERRUPT_ECHO = '[Request interrupted by user'
-const LOCAL_COMMAND_TAG = /^<local-command-(stdout|stderr|caveat)>/u
-const COMMAND_TAG = /^<command-(name|message|args)>/u
+export const INTERRUPT_ECHO = '[Request interrupted by user'
+export const LOCAL_COMMAND_TAG = /^<local-command-(stdout|stderr|caveat)>/u
+export const COMMAND_TAG = /^<command-(name|message|args)>/u
 /** Abort diagnostics the CLI appends to `result.errors` (never shown). */
 const EDE_DIAGNOSTIC = '[ede_diagnostic]'
 /** Command output sent as a prompt (`!!` / the CLI's bash mode). */
@@ -281,7 +275,7 @@ function narrationOf(text: string | undefined): string | undefined {
 }
 
 /** First text of a user `message.content` (string or block array). */
-function userText(content: unknown): string | undefined {
+export function userText(content: unknown): string | undefined {
   if (typeof content === 'string') return content
   for (const block of arr(content)) {
     const value = rec(block)

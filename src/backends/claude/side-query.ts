@@ -24,6 +24,7 @@ import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { t } from '../../i18n.js'
 import { buildSideQueryOptions } from './options.js'
 import type { ClaudeSdkModule } from './sdk.js'
+import { errorText, rec, str } from './narrow.js'
 
 /** One side answer: the text, or why there is none (null + no error =
  *  the caller aborted). */
@@ -45,12 +46,6 @@ export interface ClaudeSideQueryDeps {
   spawn(): { readonly env: Record<string, string>; readonly settings?: { readonly env: Readonly<Record<string, string>> }; readonly executable: string | undefined }
   debug(message: string): void
 }
-
-type Rec = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Rec | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
-const str = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
-const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
 /** The one prompt of a side query, as a closed single-message stream. */
 async function* singlePrompt(text: string): AsyncGenerator<SDKUserMessage> {

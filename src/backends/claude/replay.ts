@@ -55,23 +55,13 @@
  * Pure: no I/O, no clock (event times come from the message timestamps).
  */
 import type { AgentEvent, SubagentUsage } from '../../agent/events.js'
-import type { ClaudeTaskSeed } from './translate.js'
 import { transcriptImages } from './images.js'
-import { createClaudeTranslator } from './translate.js'
-
-type Rec = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Rec | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
-const str = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
-const num = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined
-const arr = (value: unknown): readonly unknown[] => Array.isArray(value) ? value : []
+import { arr, num, rec, str, type Rec } from './narrow.js'
+import { COMMAND_TAG, createClaudeTranslator, INTERRUPT_ECHO, LOCAL_COMMAND_TAG, userText, type ClaudeTaskSeed } from './translate.js'
 
 /** The tool names the CLI uses for a subagent launch (current, legacy). */
 const AGENT_TOOLS: ReadonlySet<string> = new Set(['Agent', 'Task'])
 
-const INTERRUPT_ECHO = '[Request interrupted by user'
-const LOCAL_COMMAND_TAG = /^<local-command-(stdout|stderr|caveat)>/u
-const COMMAND_TAG = /^<command-(name|message|args)>/u
 const BASH_OUTPUT_TAG = /^<bash-(stdout|stderr)>/u
 const BASH_INPUT = /^<bash-input>([\s\S]*?)<\/bash-input>/u
 const TASK_NOTIFICATION = /^<task-notification>/u
@@ -116,16 +106,6 @@ export interface ClaudeReplay {
    * when no boundary entry led it): older history exists on disk.
    */
   readonly compactedFrom?: string
-}
-
-/** First text of a user `message.content` (string or block array). */
-function userText(content: unknown): string | undefined {
-  if (typeof content === 'string') return content
-  for (const block of arr(content)) {
-    const value = rec(block)
-    if (value?.type === 'text') return str(value.text)
-  }
-  return undefined
 }
 
 /** `/name args` of a recorded slash-command echo. */
@@ -542,7 +522,6 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
     ...(compactedFrom === undefined ? {} : { compactedFrom }),
   }
 }
-
 
 /** A subagent's own transcript replayed as its child lane (design
  *  agent-team-panels §2): every user/assistant message goes through the

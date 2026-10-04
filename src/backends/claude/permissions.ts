@@ -38,6 +38,7 @@ import type { PermissionDecision, QuestionAnswers } from '../../agent/capabiliti
 import type { AgentEvent, PermissionOptionView, PermissionOutcome, PermissionRequestView, QuestionItemView } from '../../agent/events.js'
 import { t } from '../../i18n.js'
 import { displayPath } from './tools.js'
+import { errorText, rec, str, type Rec } from './narrow.js'
 
 /** The model-facing refusal (design §4.7). */
 export const REJECT_MESSAGE = 'User refused permission to run tool'
@@ -89,12 +90,6 @@ export interface ClaudePermissionBridgeDeps {
   /** The session is closing: new prompts are refused at once. */
   closing(): boolean
 }
-
-type Rec = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Rec | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
-const str = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
-const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
 /** One line naming what the tool would do. */
 export function promptCommand(toolName: string, input: Rec, cwd: string): string | undefined {

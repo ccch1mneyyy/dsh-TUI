@@ -12,6 +12,7 @@
 import { isAbsolute, relative } from 'node:path'
 import type { ToolFileDiff } from '../../adapter/ports/channel-view.js'
 import type { ToolCallPresentation, ToolPresentationMeta, ToolResultPresentation } from '../../agent/presentation.js'
+import { num, rec, str, type Rec } from './narrow.js'
 
 /** How a tool call is projected besides (or instead of) a card. */
 export type ClaudeToolRole =
@@ -29,12 +30,6 @@ export type ClaudeToolRole =
   /** `EnterPlanMode` / `ExitPlanMode`: the mode and the plan-review panel,
    *  never a card (the translator emits no call for them). */
   | 'plan'
-
-type Record_ = Readonly<Record<string, unknown>>
-const asRecord = (value: unknown): Record_ | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record_ : undefined
-const str = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined
-const num = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined
 
 const META: Readonly<Record<string, ToolPresentationMeta>> = {
   Read: { displayKey: 'tool-name-read', category: 'other' },
@@ -108,11 +103,11 @@ function editDiffs(path: string, edits: readonly { old: string; new: string; all
   return edits.map(edit => ({ path, oldText: edit.old, newText: edit.new }))
 }
 
-function editsOf(name: string, input: Record_): { old: string; new: string; all: boolean }[] {
+function editsOf(name: string, input: Rec): { old: string; new: string; all: boolean }[] {
   if (name === 'MultiEdit') {
     const list = Array.isArray(input.edits) ? input.edits : []
     return list.flatMap(item => {
-      const edit = asRecord(item)
+      const edit = rec(item)
       const from = str(edit?.old_string)
       const to = str(edit?.new_string)
       return from === undefined || to === undefined ? [] : [{ old: from, new: to, all: edit?.replace_all === true }]
@@ -130,7 +125,7 @@ export function presentClaudeToolCall(name: string, rawInput: unknown, cwd: stri
   if (role === 'question') return { card: 'question' }
   if (role === 'todo') return { card: 'todo' }
   // Plan-mode tools never reach here as calls; a stray one stays a plain card.
-  const input = asRecord(rawInput) ?? {}
+  const input = rec(rawInput) ?? {}
   const meta = metaOf(name)
   const filePath = str(input.file_path) ?? str(input.notebook_path)
   switch (name) {
@@ -207,12 +202,12 @@ function grepMatches(content: string): { path: string; matches: { lineNumber: nu
 /** How a settled result renders (undefined = the plain text card). */
 export function presentClaudeToolResult(name: string, rawInput: unknown, outcome: ClaudeToolOutcome, cwd: string): ToolResultPresentation | undefined {
   if (outcome.isError || claudeToolRole(name) !== 'card') return undefined
-  const input = asRecord(rawInput) ?? {}
-  const result = asRecord(outcome.structured)
+  const input = rec(rawInput) ?? {}
+  const result = rec(outcome.structured)
   const meta = metaOf(name)
   switch (name) {
     case 'Read': {
-      const file = asRecord(result?.file)
+      const file = rec(result?.file)
       const path = str(file?.filePath) ?? str(input.file_path)
       const content = str(file?.content)
       if (path === undefined || content === undefined) return undefined

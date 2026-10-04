@@ -29,6 +29,7 @@
  */
 import type { WorkingActivityView } from '../../adapter/ports/channel-view.js'
 import { getLang, t } from '../../i18n.js'
+import type { Rec } from './narrow.js'
 import type { ClaudeActivityState } from './translate.js'
 
 /** Input fields that read like the DSH detail fragment, in priority order. */
@@ -36,8 +37,6 @@ const DETAIL_KEYS = ['file_path', 'command', 'pattern', 'url', 'path'] as const
 
 /** The longest detail fragment kept (mirrors the plugin's detail limit). */
 const DETAIL_CHARS = 60
-
-type Rec = Readonly<Record<string, unknown>>
 
 /**
  * The input's most DSH-like short field: the first string among

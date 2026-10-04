@@ -65,6 +65,7 @@ import { claudeConfigDir } from './transcript-file.js'
 import { CLAUDE_IMAGE_LIMITS, claudeImageBlocks } from './images.js'
 import { createClaudeSideQuery } from './side-query.js'
 import { createClaudeTranslator } from './translate.js'
+import { errorText, rec, type Rec } from './narrow.js'
 
 declare module '../../agent/capabilities.js' {
   interface ClaudeNative {
@@ -156,10 +157,6 @@ export interface ClaudeSessionDeps {
 }
 
 type Listener = (batch: readonly AgentEvent[], meta: AgentEventMeta) => void
-type Rec = Readonly<Record<string, unknown>>
-const rec = (value: unknown): Rec | undefined =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
-const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
 /** A failed credential renewal, carrying only its user-facing sentence. */
 class RenewalFailed extends Error {}
