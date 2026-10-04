@@ -246,6 +246,11 @@ function signatureParts(
         tool?.resultText?.length ?? 0,
         tool?.resultFull?.length ?? 0,
         tool?.errorText?.length ?? 0,
+        // Source-fold disclosure and the uncapped terminal exit/signal tail
+        // change the card's height when they (dis)appear — the window fold
+        // drops payloads and a settled terminal view adds its verdict lines.
+        row.folded === true,
+        tool?.resultView?.card ?? '',
         row.id === failureHintRowId ? failureHint ?? '' : '',
       )
       break
@@ -1467,6 +1472,7 @@ export function MessageList({
               toolResultView={tool?.resultView}
               toolStartedAt={tool?.startedAt}
               toolDurationMs={tool?.durationMs}
+              toolSourceFolded={row.folded === true}
               subagent={subagent}
               job={job}
               jobGroup={jobGroup}
@@ -1556,6 +1562,9 @@ type MemoRowProps = {
   toolResultView: ToolResultView | undefined
   toolStartedAt: number | undefined
   toolDurationMs: number | undefined
+  /** Row-level source fold (window cap dropped full payloads): the expanded
+   *  card discloses preview-only instead of passing it off as full text. */
+  toolSourceFolded: boolean
   // SubagentRow, stable ref (subagent lifecycle events update the store, not
   // the row ref itself, so a plain ref compare stays correct).
   subagent: SubagentRow | undefined
@@ -1635,6 +1644,7 @@ function TranscriptRow({
   toolResultView,
   toolStartedAt,
   toolDurationMs,
+  toolSourceFolded,
   subagent,
   job,
   jobGroup,
@@ -1853,6 +1863,7 @@ function TranscriptRow({
             images={images}
             onPreviewImage={onPreviewImage}
             suppressImageGraphics={suppressImageGraphics}
+            sourceFolded={toolSourceFolded}
           />
         </Box>
       )

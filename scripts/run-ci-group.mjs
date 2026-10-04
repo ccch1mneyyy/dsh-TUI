@@ -576,6 +576,11 @@ const GROUPS = {
 // 运行中占位、搜索截断——必须在 zh/en 双语都走字典渲染；与 verify-i18n
 // 的字面量 tripwire 互补（那边管源码侧，这边管渲染侧）。
     ["verify-toolcard-i18n", ['node', '--import', 'tsx/esm', 'scripts/verify-toolcard-i18n.tsx']],
+// 工具卡完整度回归（信息展示完整度设计 §B）：终端非零退出码/信号行不被
+// 行预算折叠（长输出不再把失败判定折没了）、行折叠提示聚合被折字符量、
+// verbose 有界行窗口 + 如实告知、展开卡的源截断/仅结构化披露、错误长文
+// 走与输出同一套行预算。
+    ["verify-tool-card-completeness", ['node', '--import', 'tsx/esm', 'scripts/verify-tool-card-completeness.tsx']],
 // 悬停浮层第二批回归：@ 文件补全面板长路径悬停弹全路径（完整可见的短路径
 // 不弹）、会话列表行标题截断悬停弹完整标题+绝对时间+cwd（未截断不重复
 // 标题）、状态栏 model/git 字段悬停明细（provider/ctx 窗口/完整分支）、

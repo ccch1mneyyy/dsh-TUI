@@ -78,6 +78,7 @@ export function ToolLeafRow({
   images,
   onPreviewImage,
   suppressImageGraphics,
+  sourceFolded,
 }: {
   tool: ToolRow
   marginTopOnTurn: boolean
@@ -96,6 +97,8 @@ export function ToolLeafRow({
   images?: readonly TranscriptImage[]
   onPreviewImage?(image: TranscriptImage): void
   suppressImageGraphics?: boolean
+  /** The transcript window folded this row's source (previews only). */
+  sourceFolded?: boolean
 }): React.ReactNode {
   return (
     <>
@@ -114,6 +117,7 @@ export function ToolLeafRow({
         foldTerminalCommand={foldTerminalCommand}
         onClick={onClick}
         onOpenFile={onOpenFile}
+        sourceFolded={sourceFolded}
       />
       {images !== undefined && <TranscriptImages images={images} indent={4} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
     </>

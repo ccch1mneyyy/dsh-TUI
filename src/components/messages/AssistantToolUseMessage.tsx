@@ -75,6 +75,11 @@ type Props = {
   fresh?: boolean
   /** Reveal version supplied by MessageList to avoid one store subscriber per card. */
   revealVersion?: number
+  /** The transcript window cap folded this row's source: full args/result
+   *  payloads were dropped (the session log retains them) and only previews
+   *  remain — the expanded card says so instead of passing the preview off
+   *  as the full text. */
+  sourceFolded?: boolean
 }
 
 /** Tool display names localize through the `tool-name-*` dictionary family
@@ -154,6 +159,12 @@ const DIFF_BODY_MAX_LINES = 8
 /** Minimum terminal width for the two-pane diff: below this the panes
  *  would squeeze under ~50 columns each and the unified view reads better. */
 const SPLIT_DIFF_MIN_COLS = 110
+/** Verbose (Ctrl+O / expanded) bodies render through a bounded line window:
+ *  a full result can be tens of thousands of lines, and laying that out in
+ *  one render builds a Yoga tree the frame budget cannot pay. The window
+ *  keeps the head readable and says exactly how much of the retained source
+ *  it is showing — the source itself keeps every line. */
+const VERBOSE_BODY_WINDOW = 400
 
 const GUTTER_FIRST = ' ⎿ '
 const GUTTER_REST = '   '
@@ -225,16 +236,12 @@ function viewLines(view: ToolCallView | ToolResultView): BodyLine[] {
       return diffLines(view.diffs)
     case 'terminal': {
       // The call-side terminal card has no output yet; only presentResult's
-      // does. `in` narrows the call/result union without extra types.
+      // does. `in` narrows the call/result union without extra types. The
+      // exit-code / signal lines are NOT body content: the component renders
+      // them after the line cap (see terminalExitLines) so a long output can
+      // never fold the failure verdict away.
       const out = (('output' in view ? view.output : undefined) ?? '').trimEnd()
-      const lines: BodyLine[] = out === '' ? [] : out.split('\n').map(plain)
-      if ('exitCode' in view && view.exitCode !== undefined && view.exitCode !== 0) {
-        lines.push({ text: t('tool-exit-code', { code: view.exitCode }), tone: 'error' })
-      }
-      if ('signal' in view && view.signal !== undefined) {
-        lines.push({ text: t('tool-killed-signal', { name: String(view.signal) }), tone: 'error' })
-      }
-      return lines
+      return out === '' ? [] : out.split('\n').map(plain)
     }
     case 'read':
       return contentLines('content' in view ? view.content : undefined)
@@ -261,15 +268,41 @@ function viewLines(view: ToolCallView | ToolResultView): BodyLine[] {
   }
 }
 
+/** Compact char counter for fold hints (1.2k / 3.4M). */
+function compactChars(count: number): string {
+  if (count < 10_000) return String(count)
+  if (count < 10_000_000) return `${(count / 1000).toFixed(1)}k`
+  return `${(count / 1_000_000).toFixed(1)}M`
+}
+
+/** Fold-hint parts: "3 行", "1.2k 字符" or "3 行 · 1.2k 字符" — one count per
+ *  fold kind that actually hid something, composed in the localized unit
+ *  words so the sentence grammar stays with i18n. */
+function foldHintParts(hiddenLines: number, hiddenChars: number): string {
+  const parts: string[] = []
+  if (hiddenLines > 0) parts.push(t('tool-card-lines-unit', { n: hiddenLines }))
+  if (hiddenChars > 0) parts.push(t('tool-card-chars-unit', { n: compactChars(hiddenChars) }))
+  return parts.join(' · ')
+}
+
 /** Collapsed bodies fold past the card's line budget; verbose (Ctrl+O) is
- *  always uncapped. Mirrors wrapText's "one extra line is shown directly". */
-function capLines(lines: BodyLine[], max: number, verbose: boolean): BodyLine[] {
+ *  always uncapped. Mirrors wrapText's "one extra line is shown directly".
+ *  A lines-only fold keeps the historical shared hint (lines-folded-expand)
+ *  byte-identical; a fold that also (or only) clipped CHARACTERS inside long
+ *  lines uses the combined indicator so the hidden volume stays honest. */
+function capLines(lines: BodyLine[], max: number, verbose: boolean, hiddenChars: number): BodyLine[] {
   if (verbose || lines.length <= max) return lines
   if (lines.length - max === 1) return lines
-  return [
-    ...lines.slice(0, max),
-    { ...dim(t('lines-folded-expand', { n: lines.length - max, key: primaryComboString('transcript') })), revealOnHover: true },
-  ]
+  const hiddenLines = lines.length - max
+  // Chars clipped inside the VISIBLE lines carry their own inline marker
+  // (fold-long-lines); the hint aggregates what the line fold hid — the
+  // clipped characters of the sliced-away rows included — so "how much is
+  // hidden" answers in one place. A lines-only fold keeps the historical
+  // shared hint byte-identical.
+  const hint = hiddenChars > 0
+    ? { ...dim(t('tool-card-lines-hidden', { parts: foldHintParts(hiddenLines, hiddenChars), key: primaryComboString('transcript') })), revealOnHover: true }
+    : { ...dim(t('lines-folded-expand', { n: hiddenLines, key: primaryComboString('transcript') })), revealOnHover: true }
+  return [...lines.slice(0, max), hint]
 }
 
 /** Long-line clip for the body rows (utils/fold-long-lines.ts): the line cap
@@ -280,8 +313,9 @@ function capLines(lines: BodyLine[], max: number, verbose: boolean): BodyLine[] 
  *  no matter what the line budget says. Identity-preserving (same array, same
  *  line objects) when every line fits, so the ordinary card allocates
  *  nothing. */
-function foldBodyLines(lines: BodyLine[]): BodyLine[] {
+function foldBodyLines(lines: BodyLine[]): { lines: BodyLine[]; hiddenChars: number } {
   let out: BodyLine[] | undefined
+  let hiddenChars = 0
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]!
     const folded = foldLongLines(line.text)
@@ -291,8 +325,9 @@ function foldBodyLines(lines: BodyLine[]): BodyLine[] {
     }
     out ??= lines.slice(0, index)
     out.push({ ...line, text: folded.text })
+    hiddenChars += folded.hiddenChars
   }
-  return out ?? lines
+  return out === undefined ? { lines, hiddenChars: 0 } : { lines: out, hiddenChars }
 }
 
 /** Header title from the presentation view: terminal cards keep the
@@ -541,6 +576,7 @@ export function AssistantToolUseMessage({
   smoothReveal = false,
   fresh = false,
   revealVersion,
+  sourceFolded = false,
 }: Props): React.ReactNode {
   // MessageList owns the single production subscription and passes a version
   // prop only to active reveal rows. Standalone consumers keep the fallback
@@ -618,7 +654,11 @@ export function AssistantToolUseMessage({
     (diffLayout === 'split' || (diffLayout !== 'unified' && columns >= SPLIT_DIFF_MIN_COLS))
   let body: BodyLine[] = []
   if (isError) {
-    if (tool.errorText) body = [{ text: tool.errorText, tone: 'error' }]
+    // Line-aware like every other body: a multi-line error (a stack trace)
+    // goes through the SAME line budget and fold hint as tool output — the
+    // verdict visibility problem the exit lines solve does not excuse an
+    // unbounded error body in a collapsed card.
+    if (tool.errorText) body = tool.errorText.split('\n').map((text): BodyLine => ({ text, tone: 'error' }))
   } else if (!useSplitDiff) {
     if (view !== undefined) body = viewLines(view)
     if (body.length === 0 && result) {
@@ -632,14 +672,52 @@ export function AssistantToolUseMessage({
   // Long-line clip before anything downstream reads the body: the syntax
   // highlighter walks `bodySource` by line index, so the folded text must be
   // the single source of truth for both.
-  const bodyLines = verbose ? body : foldBodyLines(body)
+  const foldedBody = verbose ? { lines: body, hiddenChars: 0 } : foldBodyLines(body)
+  const bodyLines = foldedBody.lines
   const bodySource = bodyLines.map(line => line.text).join('\n')
   const argsLanguage = jsonArgsLanguage(displayArgs)
+  const capped = capLines(bodyLines, cap, verbose, foldedBody.hiddenChars)
+  // Verbose bodies walk a bounded window (see VERBOSE_BODY_WINDOW): the tail
+  // stays in the retained source, and the card says what it is showing.
+  const lines = verbose && capped.length > VERBOSE_BODY_WINDOW
+    ? [
+        ...capped.slice(0, VERBOSE_BODY_WINDOW),
+        { ...dim(t('tool-card-window-shown', { shown: VERBOSE_BODY_WINDOW, total: capped.length })), revealOnHover: false },
+      ]
+    : capped
+  // The terminal verdict rides OUTSIDE every cap (the footnote's rule): a
+  // long output must never fold the non-zero exit code or kill signal away —
+  // the settled card keeps the failure readable without the hover tooltip.
+  const terminalExitLines: BodyLine[] = []
+  if (!isError && tool.resultView !== undefined && tool.resultView.card === 'terminal') {
+    const rv = tool.resultView
+    if (rv.exitCode !== undefined && rv.exitCode !== 0) {
+      terminalExitLines.push({ text: t('tool-exit-code', { code: rv.exitCode }), tone: 'error' })
+    }
+    if (rv.signal !== undefined) {
+      terminalExitLines.push({ text: t('tool-killed-signal', { name: String(rv.signal) }), tone: 'error' })
+    }
+  }
+  // Full-vs-preview disclosure (expanded cards only — the collapsed card is
+  // a preview by design and its fold indicator already says so): a folded
+  // SOURCE cannot expand past its preview, and a structured-only result has
+  // no raw full text to expand into. Both say so instead of passing the
+  // visible slice off as everything.
+  const disclosure: BodyLine[] = verbose
+    ? sourceFolded
+      ? [dim(t('tool-card-source-truncated'))]
+      : tool.resultFull === undefined && tool.resultView !== undefined && !isRunning
+        ? [dim(t('tool-card-full-unavailable'))]
+        : []
+    : []
   // The footnote rides OUTSIDE the cap: it is a pointer, not content, and a
   // long error body must not be the reason it disappears.
-  const lines = capLines(bodyLines, cap, verbose)
-  const rendered: BodyLine[] =
-    footnote === undefined ? lines : [...lines, { text: footnote, tone: 'hint' }]
+  const rendered: BodyLine[] = [
+    ...lines,
+    ...disclosure,
+    ...terminalExitLines,
+    ...(footnote === undefined ? [] : [{ text: footnote, tone: 'hint' as const }]),
+  ]
   // Smooth reveal (line-unit, pending CALL body only): model-authored prose
   // (diff hunks, write content) flows in at ~30fps; the settled RESULT view,
   // error bodies, verbose/expanded cards, and replayed (non-fresh) cards all
@@ -781,6 +859,14 @@ export function AssistantToolUseMessage({
             </Box>
           ))
         )}
+        {useSplitDiff && disclosure.length > 0 && disclosure.map((line, index) => (
+          <Box key={`disclosure-${index}`} flexDirection="row">
+            <Box width={3} flexShrink={0}>
+              <Text dimColor>{GUTTER_REST}</Text>
+            </Box>
+            <Text dimColor>{line.text}</Text>
+          </Box>
+        ))}
         {useSplitDiff && footnote !== undefined && (
           <Box flexDirection="row">
             <Box width={3} flexShrink={0}>

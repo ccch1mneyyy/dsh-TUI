@@ -1176,6 +1176,14 @@ const dict = {
   // （foldTerminalCommand）、分屏 diff 隐藏行（SplitDiffView）。按字符折叠
   // 的行内标记见 long-line-folded。
   'lines-folded-expand': { zh: '… +{{n}} 行（{{key}} 展开）', en: '… +{{n}} lines ({{key}} to expand)' },
+  // 工具卡完整度（信息展示完整度设计 §B）：折叠量指示（行/字符单位词 +
+  // 组合句）、展开态的源截断/仅结构化披露、verbose 行窗口告知。
+  'tool-card-lines-unit': { zh: '{{n}} 行', en: '{{n}} lines' },
+  'tool-card-chars-unit': { zh: '{{n}} 字符', en: '{{n}} chars' },
+  'tool-card-lines-hidden': { zh: '… 已折叠 {{parts}}（{{key}} 展开）', en: '… folded {{parts}} ({{key}} to expand)' },
+  'tool-card-source-truncated': { zh: '源数据已折叠：以上为预览，全文保留在会话日志', en: 'Source folded: preview above — the session log retains the full text' },
+  'tool-card-full-unavailable': { zh: '以上为结构化呈现；源未保留可展开的原始全文', en: 'Structured view above; no expandable raw full text was retained' },
+  'tool-card-window-shown': { zh: '… 已显示前 {{shown}}/{{total}} 行，源保留全文', en: '… first {{shown}}/{{total}} lines shown; the source retains all' },
 
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },
@@ -1824,6 +1832,12 @@ const dict = {
   'panel-title-workspace': { zh: '工作区', en: 'Workspace' },
   'panel-trajectory-empty': { zh: '本次会话还没有轨迹：发出第一条消息后，这里会画出唤醒带与账本。', en: 'No trajectory yet — the wake band and ledger appear once this session has turns.' },
   'panel-trajectory-hint': { zh: '↑/↓ 选中 · Enter 展开 · Tab 热点 · ⤢ 全屏', en: '↑/↓ select · Enter expand · Tab hotspots · ⤢ fullscreen' },
+  // 轨迹三态（设计 agent-team-panels §④）：unsupported 是「当前后端尚未接入数据源」，
+  // 与 supported-empty（上面那条「发出第一条消息后…」）必须分态——不承诺下一回合有数据。
+  'trajectory-unsupported': { zh: '当前后端尚未接入轨迹数据源，本会话没有可展示的时序。', en: 'This backend does not feed trajectory data; there is no session timeline to show.' },
+  'trajectory-unsupported-claude': { zh: 'Claude 后端的轨迹映射尚未接入：唤醒带与账本不会在这里出现。', en: 'The Claude trajectory mapping is not wired up yet: the wake band and ledger will not appear here.' },
+  'trajectory-unsupported-fullscreen': { zh: '⤢ 全屏已禁用：该后端没有轨迹数据。', en: '⤢ fullscreen is disabled: this backend has no trajectory data.' },
+  'trajectory-unsupported-exit': { zh: 'q / Esc 返回对话', en: 'q / Esc to return' },
   'info-section-session': { zh: '会话', en: 'Session' },
   'info-section-model': { zh: '模型', en: 'Model' },
   'info-section-context': { zh: '上下文', en: 'Context' },
