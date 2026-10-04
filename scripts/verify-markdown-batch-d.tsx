@@ -27,7 +27,8 @@ const [
   React,
   { Writable },
   { Terminal: XTerm },
-  { Box, Text },
+  { Box, Text, render },
+  { TerminalSizeContext },
   { renderToScreen },
   { cellAtIndex },
   { Markdown },
@@ -39,6 +40,7 @@ const [
   import('node:stream'),
   import('@xterm/headless'),
   import('../src/ui.js'),
+  import('../src/ink/components/TerminalSizeContext.js'),
   import('../src/ink/render-to-screen.js'),
   import('../src/ink/screen.js'),
   import('../src/components/Markdown.js'),
@@ -258,4 +260,107 @@ const imgHostile = applyMarkdown('![alt](javascript:alert(1))' + '\n')
 assert.equal(visible(imgHostile), '[img] alt', 'non-whitelisted scheme shows alt only')
 assert.ok(!imgHostile.includes(OSC8_START + 'javascript:'), 'no OSC 8 wrap for a rejected scheme')
 
-console.log('markdown batch D: heading layering + compressed whitespace passed')
+// -- 6. Screen-level rows + streaming equivalence ----------------------
+
+const DOC =
+  '# Title' + '\n' + '\n' +
+  '- first item line' + '\n' + '  continued under body' + '\n' + '  - nested child' + '\n' +
+  '- second' + '\n' + '\n' +
+  '> quoted one' + '\n' + '> > quoted two' + '\n' + '\n' +
+  '---' + '\n' + '\n' +
+  '![chart](https://example.invalid/chart.png)' + '\n'
+
+function snap(el: React.ReactElement, width: number): string[] {
+  const wrapped = (
+    <TerminalSizeContext.Provider value={{ columns: width, rows: 40 }}>
+      <Box flexDirection="column" width={width}>{el}</Box>
+    </TerminalSizeContext.Provider>
+  )
+  const rendered = renderToScreen(wrapped, width)
+  const rowsOut: string[] = []
+  for (let y = 0; y < Math.max(1, rendered.height); y++) {
+    let line = ''
+    for (let x = 0; x < width; x++) line += cellAtIndex(rendered.screen, y * width + x).char
+    rowsOut.push(line.replace(/\u001b\]8;;[^\u0007]*\u0007/g, '').trimEnd())
+  }
+  return rowsOut.filter((row, index, all) => index < all.length - 1 || row !== '')
+}
+
+const expectedRows = [
+  'Title',
+  '',
+  '- first item line',
+  '  continued under body',
+  '  - nested child',
+  '- second',
+  '',
+  '\u258e quoted one',
+  '\u258e \u258e quoted two',
+  '',
+  '\u2500\u2500\u2500',
+  '[img] chart',
+]
+for (const width of [56, 34]) {
+  assert.deepEqual(snap(<Markdown>{DOC}</Markdown>, width), expectedRows,
+    'rendered rows at width ' + width)
+}
+
+// Streaming: the growing suffix must keep the whole-document row shape
+// (sealed heading/list/quote blocks do not re-space when the divider and
+// image arrive).
+const COLS = 56
+const ROWS = 30
+async function renderRows(stages: readonly string[], streaming: boolean): Promise<string[]> {
+  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  class FakeStdout extends Writable {
+    columns = COLS
+    rows = ROWS
+    isTTY = true
+    _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
+      term.write(String(chunk), callback)
+    }
+  }
+  const tree = (source: string): React.ReactNode => (
+    <Box flexDirection="column" width={COLS}>
+      <Text>{'D-START'}</Text>
+      {streaming
+        ? <StreamingMarkdown>{source}</StreamingMarkdown>
+        : <Markdown>{source}</Markdown>}
+      <Text>{'D-END'}</Text>
+    </Box>
+  )
+  const app = await render(tree(stages[0]!), {
+    stdout: new FakeStdout() as NodeJS.WriteStream,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  })
+  for (const stage of stages.slice(1)) {
+    await new Promise(resolve => setTimeout(resolve, 60))
+    app.rerender(tree(stage))
+  }
+  await new Promise(resolve => setTimeout(resolve, 150))
+  const screen = Array.from(
+    { length: ROWS },
+    (_, y) => term.buffer.active.getLine(y)?.translateToString(true).trimEnd() ?? '',
+  )
+  await app.unmount()
+  term.dispose()
+  const start = screen.findIndex(line => line.includes('D-START'))
+  const end = screen.findIndex(line => line.includes('D-END'))
+  if (start < 0 || end <= start) throw new Error('sentinels missing\n' + screen.join('\n'))
+  return screen.slice(start + 1, end)
+}
+
+const STAGES = [
+  '# Title' + '\n' + '\n' + '- first item line' + '\n' + '  continued under body' + '\n' + '  - nested child' + '\n',
+  '# Title' + '\n' + '\n' + '- first item line' + '\n' + '  continued under body' + '\n' + '  - nested child' + '\n' +
+    '- second' + '\n' + '\n' + '> quoted one' + '\n' + '> > quoted two' + '\n',
+  DOC,
+]
+for (let i = 0; i < STAGES.length; i++) {
+  const settledRows = await renderRows(STAGES.slice(0, i + 1), false)
+  const streamedRows = await renderRows(STAGES.slice(0, i + 1), true)
+  assert.deepEqual(streamedRows, settledRows, 'streaming stage ' + i + ' equals settled render')
+}
+
+console.log('markdown batch D verified (headings, hr, lists, quotes, images, screen rows, streaming equivalence)')
