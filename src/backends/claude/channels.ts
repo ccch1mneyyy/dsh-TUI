@@ -46,9 +46,10 @@
  * caller's debug log and the session carries on. The id is a stable slug of
  * the name, so a re-import (or a hand edit) refreshes the same row.
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from '../../utils/paths.js'
+import { writeFileAtomic } from './atomic-file.js'
 
 /** One relay channel. */
 export interface ClaudeChannelProfile {
@@ -166,27 +167,6 @@ function removed(current: ClaudeChannelsData, id: string): ClaudeChannelsData {
   return { channels, ...(active === undefined ? {} : { active }) }
 }
 
-/** Names one not-yet-used temporary per commit (`writePinsAtomic` pattern). */
-let temporarySequence = 0
-
-/** The retry cell for the Windows EPERM/EBUSY rename (prefs.ts's pattern). */
-const waitCell = new Int32Array(new SharedArrayBuffer(4))
-
-/** Rename a same-directory temporary over the target, retrying the Windows
- *  transient-refusal pair briefly (see prefs.ts for the full rationale). */
-function renameIntoPlace(temporary: string, target: string): void {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      renameSync(temporary, target)
-      return
-    } catch (error) {
-      const code = typeof error === 'object' && error !== null ? String((error as NodeJS.ErrnoException).code) : ''
-      if (process.platform !== 'win32' || attempt >= 7 || (code !== 'EPERM' && code !== 'EBUSY')) throw error
-      Atomics.wait(waitCell, 0, 0, 2 ** attempt)
-    }
-  }
-}
-
 /** The file-backed profiles under `<dir>` (default `~/.dsh-tui/backends/claude`). */
 export function fileClaudeChannels(dir: string = join(DATA_DIR, 'backends', 'claude'), debug: (message: string) => void = () => undefined): ClaudeChannels {
   const path = join(dir, FILE)
@@ -198,20 +178,9 @@ export function fileClaudeChannels(dir: string = join(DATA_DIR, 'backends', 'cla
     }
   }
   const commit = (next: ClaudeChannelsData): void => {
-    // Same-directory temporary + rename (prefs.ts's atomic pattern): a reader
-    // sees the old or the new document, never a truncated one, and a failed
-    // commit leaves the previous document intact.
-    const temporary = join(dir, `${FILE}.${process.pid}.${Date.now()}.${temporarySequence++}.tmp`)
     try {
-      mkdirSync(dir, { recursive: true })
-      writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-      renameIntoPlace(temporary, path)
+      writeFileAtomic(dir, FILE, `${JSON.stringify(next, null, 2)}\n`)
     } catch (error) {
-      try {
-        rmSync(temporary, { force: true })
-      } catch {
-        // The previous document is still intact; nothing else is safe to do.
-      }
       debug(`claude: channels write failed (${error instanceof Error ? error.message : String(error)})`)
     }
   }

@@ -16,7 +16,7 @@
  * `refs:` key, corrupting the shared library for every strict parser). A
  * store this module cannot honestly read — unreadable, or not valid YAML —
  * is never rebuilt over: reads answer undefined and writes refuse.
- * Commits stay atomic (channels.ts's temp+rename pattern).
+ * Commits are atomic (atomic-file.ts).
  * The ref namespace is `CHANNEL_<SLUG>_TOKEN` — derived from the channel id
  * the way deriveKeyRef derives `<ROUTE>_API_KEY`, so a re-import (or a hand
  * edit of the name's slug) refreshes the same credential row.
@@ -25,10 +25,11 @@
  * contract): this module only ever moves it between the file and the spawn
  * pipeline.
  */
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isMap, parseDocument, type Document, type YAMLMap } from 'yaml'
 import { dshHomeDir } from '../../utils/credentials.js'
+import { writeFileAtomic } from './atomic-file.js'
 
 /** The credential ref of one channel id (the deriveKeyRef convention:
  *  uppercase, runs of non-alphanumerics → `_`). */
@@ -91,22 +92,12 @@ export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (mes
   }
 
   const commit = (next: string): void => {
-    const temporary = join(home, FILE + '.' + process.pid + '.' + Date.now() + '.tmp')
     try {
-      mkdirSync(home, { recursive: true })
-      writeFileSync(temporary, next, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-      try { chmodSync(temporary, 0o600) } catch { /* best-effort on odd filesystems */ }
-      renameSync(temporary, path)
+      writeFileAtomic(home, FILE, next)
     } catch (error) {
-      try {
-        rmSync(temporary, { force: true })
-      } catch {
-        // The previous document is still intact; nothing else is safe to do.
-      }
       debug('claude: channel token write failed (' + (error instanceof Error ? error.message : String(error)) + ')')
     }
   }
-
   return {
     read: ref => {
       const doc = load()
@@ -166,9 +157,4 @@ export function memoryClaudeChannelTokens(initial: Record<string, string> = {}):
     erase: ref => { const next: Record<string, string> = {}; for (const [key, value] of Object.entries(data)) if (key !== ref) next[key] = value; data = next },
     declared: ref => Object.hasOwn(data, ref),
   }
-}
-
-/** Whether the DSH credential store file exists at all (diagnostics only). */
-export function claudeChannelTokensFilePresent(home: string = dshHomeDir()): boolean {
-  return existsSync(join(home, FILE))
 }
