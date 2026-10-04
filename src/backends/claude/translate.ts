@@ -120,6 +120,10 @@ export function formatDuration(ms: number): string {
  * `supersedePendingUpdates`). */
 const MAX_SUPERSEDED_UPDATES = 512
 
+/** Settled API message ids remembered (a late block only ever trails the
+ *  response it belongs to by a few messages). */
+const MAX_SETTLED_ATTEMPTS = 256
+
 /** A task report's usage (`total_tokens`, `tool_uses`, `duration_ms`). */
 function usageOfTask(value: unknown): SubagentUsage | undefined {
   const usage = rec(value)
@@ -399,7 +403,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   let step = 0
   let stepOpen = false
   let attempt: OpenAttempt | undefined
-  /** API message ids already settled (late duplicate blocks are ignored). */
+  /** API message ids already settled (late duplicate blocks are ignored);
+   *  only the most recent {@link MAX_SETTLED_ATTEMPTS} are remembered. */
   const settledAttempts = new Set<string>()
   const openCalls = new Map<string, { readonly name: string; readonly input: unknown; readonly turn: number; readonly lane?: string }>()
   const inputs = new Map<string, RegisteredInput>()
@@ -640,6 +645,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     if (open === undefined) return
     attempt = undefined
     settledAttempts.add(open.id)
+    if (settledAttempts.size > MAX_SETTLED_ATTEMPTS) settledAttempts.delete(settledAttempts.values().next().value!)
     // A reply that narrated keeps the working line narrating until the turn
     // ends (the fold's freshness window is the turn itself). A streamed
     // response never re-delivers its blocks; the settled message carries them.
@@ -1848,16 +1854,21 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     /** The working-activity fold's inputs (see ClaudeActivityState): the
      *  translator's own view of the stream, nothing re-parsed. */
     activityState(): ClaudeActivityState {
-      // Only THIS turn's calls: a call the turn left unsettled is stale (the
-      // CLI moved on), so the working line never shows the last turn's tool.
-      const newest = [...openCalls.entries()].filter(([, call]) => call.turn === turn).at(-1)
-      const inProgress = [...trackedTasks.values()]
-        .filter(task => task.status === 'in_progress' && task.activeForm !== undefined && task.activeForm !== '')
-        .sort((a, b) => a.seq - b.seq)[0]
+      // Read after every streamed delta: plain scans, no copies. Only THIS
+      // turn's calls count: a call the turn left unsettled is stale (the CLI
+      // moved on), so the working line never shows the last turn's tool.
+      let newest: { readonly name: string; readonly input: unknown } | undefined
+      for (const call of openCalls.values()) if (call.turn === turn) newest = call
+      // The first-created in_progress task that has a spinner line.
+      let inProgress: TrackedTask | undefined
+      for (const task of trackedTasks.values()) {
+        if (task.status !== 'in_progress' || task.activeForm === undefined || task.activeForm === '') continue
+        if (inProgress === undefined || task.seq < inProgress.seq) inProgress = task
+      }
       return {
         turnOpen,
         turnStartedAt: turnTime,
-        openTool: newest === undefined ? undefined : { name: newest[1].name, input: newest[1].input },
+        openTool: newest === undefined ? undefined : { name: newest.name, input: newest.input },
         toolCount: toolResults,
         activeForm: inProgress?.activeForm,
         narration: attempt === undefined ? narrated : narrationOf(attempt.streamText !== '' ? attempt.streamText : attempt.text) ?? narrated,
