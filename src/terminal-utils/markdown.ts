@@ -25,6 +25,7 @@ import { logForDebugging } from '../utils/debug.js'
 import { createHyperlink } from './hyperlink.js'
 import { fileLinkUrl, linkifyFilePaths, looksLikeFilePath } from '../utils/fileTarget.js'
 import { getMathRendering } from '../tuiDisplayPrefs.js'
+import { noteCodeHighlight, noteFormatToken } from '../ink/render-stats.js'
 import {
   isMathBlockToken,
   isMathToken,
@@ -231,6 +232,7 @@ function isToken<K extends MarkedToken['type']>(
 
 /** Fan-out point: narrows the token union, then delegates to the per-type render functions. */
 function dispatch(token: Token, state: RenderState): string {
+  noteFormatToken(token.raw ?? '')
   if (isToken(token, 'blockquote')) return renderBlockquote(token, state)
   if (isToken(token, 'checkbox')) return renderCheckbox(token)
   if (isToken(token, 'code')) return renderCodeBlock(token, state)
@@ -354,6 +356,7 @@ export function formatCodeBody(token: Tokens.Code, highlight: CliHighlight | nul
       }
     }
     const theme = getActiveTheme()
+    noteCodeHighlight()
     const highlighted = highlight.highlight(token.text, { language, theme: buildSyntaxTheme(theme) })
     // Strip ALL trailing newlines: trailing blank lines would otherwise leak
     // a stray blank line at the end of the block.
