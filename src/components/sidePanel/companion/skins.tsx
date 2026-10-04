@@ -252,13 +252,13 @@ export const WhaleGirlSkin: CompanionSkin = {
 //
 // 分层：
 // - WhaleGirlImageSkin：协议裁决（useTerminalImageProtocol）——无 kitty/
-//   sixel 直接退字母格（现有 42×15 半块路径）；
+//   sixel 直接退字母格（31×15 开窗半块路径）；
 // - WhaleGirlRasterSkin：timings 选帧（dur 累加取模，与 frameAt 同语义）
 //   + 惰性解码（只解当前动画，PNG→RGBA 走 sharp，进程内 LRU 缓存）。
 //   解码期间保持上一帧，直到新帧就绪；字母格只在冷启动（本会话还没
 //   显示过图像）时出现；常用互动键在可见后预热，换键时不闪回字母格；
 // - 尺寸：15 行预算 + 帧宽高比 + useTerminalImageCellSize() 真实像元，
-//   宽度钳在 42 列（§16.6 列宽不变），16px 像元下正好 1:1 像素显示；
+//   宽度钳在 WHALE_GIRL_CELLS.columns（31 列），16px 像元下正好 1:1 像素显示；
 // - presentation='transcript'：唯一非模态且 opt-in Sixel 的档位——宠物
 //   是面板里的常驻位（固定不滚区），归 transcript 生命周期；'preview'
 //   是模态卡片专属（更大字节预算 + 编码优先级），不能占。
@@ -606,7 +606,7 @@ export function useHeldCommittedImage(
 }
 
 /** 图像渲染层：timings 选帧 + 惰性解码 + 单元格盒（15 行预算、宽按
- *  帧比例钳 42 列）。解码期间保持上一帧；字母格只在冷启动时出现；常用
+ *  帧比例钳 31 列）。解码期间保持上一帧；字母格只在冷启动时出现；常用
  *  互动键在可见后预热。保持和预热都只看已提交的 render。 */
 function WhaleGirlRasterSkin(input: CompanionSkinRenderInput): React.ReactNode {
   const { pose, moodSince, now, animationSemantic } = input
@@ -635,9 +635,9 @@ function WhaleGirlRasterSkin(input: CompanionSkinRenderInput): React.ReactNode {
   }, [now, displayed, imageKit])
 
   // 单元格盒：15 行预算 + 帧自身宽高比（source.width/height，与档位
-  // 无关）+ 真实像元；宽钳 42 列（§16.6）。8×16 像元下 288px 档
+  // 无关）+ 真实像元；宽钳 31 列。8×16 像元下 288px 档
   // （301×288）≈ 31 列，渲染层 fit 只降采样，显示恒 1:1 或更密。
-  // 外层盒恒定 42×15：ref 挂在它上面（可见性门要求任何分支都在树里），
+  // 外层盒恒定 31×15：ref 挂在它上面（可见性门要求任何分支都在树里），
   // 字母格→图像切换时面板几何零跳动。
   let image: React.ReactNode
   if (imageKit !== undefined && cellSize !== undefined && frames !== undefined && animation !== undefined) {
