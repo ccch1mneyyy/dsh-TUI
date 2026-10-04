@@ -1,10 +1,6 @@
 /**
- * Crash-detail serialization regression (React #185 follow-up): the exit
- * funnel's crash line used to carry error.message only, so the user's four
- * production #185 crashes left nothing but "dsh-tui crashed: Minified React
- * error #185" — no stack, no cause chain, no React extras, no post-mortem
- * file. Pure-function checks against src/utils/crashDetail.ts (the module
- * the funnel calls), offline, no plugin graph:
+ * Crash-detail serialization (src/utils/crashDetail.ts, used by the exit
+ * funnel). Pure-function checks, offline, no plugin graph:
  *
  *  - multi-frame stack survives verbatim (head frame and deeper frames);
  *  - the .cause chain is serialized level by level, in order, and a
@@ -123,7 +119,7 @@ try {
   rmSync(dir, { recursive: true, force: true })
 }
 
-// ── hostile throwables (r1-stability S03): getters, Proxy traps, and a
+// ── hostile throwables: getters, Proxy traps, and a
 // toString + Symbol.toStringTag double-throw must degrade, never escape ──
 class HostileError extends Error {
   constructor() {
@@ -209,7 +205,7 @@ check(
 const plugin = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
 check('funnel serializes the crash', plugin.includes('(deps.serialize ?? serializeCrashDetail)(deps.error)'), 'plugin.ts crash branch no longer calls serializeCrashDetail')
 check('funnel appends to crash.log', plugin.includes('appendLog: appendCrashLog'), 'plugin.ts crash branch no longer calls appendCrashLog')
-check('funnel crash tail degrades diagnostics independently of cleanup (S03)', plugin.includes('export function runCrashExit'), 'plugin.ts runCrashExit extraction is gone')
+check('funnel crash tail degrades diagnostics independently of cleanup', plugin.includes('export function runCrashExit'), 'plugin.ts runCrashExit extraction is gone')
 
 // ── regression note: a deep-but-finite chain is capped, not dropped ──
 const chain: Error[] = []

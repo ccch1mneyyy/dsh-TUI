@@ -1,29 +1,18 @@
 #!/usr/bin/env node
 /**
- * verify-handoff-pty-gate.mjs — S05 完整版的 PTY/ConPTY 先行门
- * （deploy-transition 设计 §S05："完整实现之前先在 PTY/ConPTY 验证
- * stdout pipe/TTY facade 的尺寸、Image/kitty/sixel 探测、raw mode 与
- * input single-owner"）。
+ * verify-handoff-pty-gate.mjs — 在真实 PTY 里跑一遍全屏内核切换的交接链：
+ * 旧进程进 1049 → 过场文案 → spawn replacement → adopted / 首帧 / ready →
+ * replacement 退出时关 1049。断言：
  *
- * 本仓选择的交接路径是「继承控制台的进程接力」而非透明 PTY relay，因此
- * 门要证明的是这条路径的设备级性质：在**真实 PTY** 下跑一遍完整交接链
- * （旧父 boot 进 1049 → 过场帧 → spawn replacement → adopted/首帧/ready
- * ACK → replacement 自然退出时闭合 1049），并断言：
+ *   1. replacement 的 stdout 是 TTY、有 columns/rows、能 setRawMode；
+ *   2. DA1 查询（ESC[c）能收到回复（图片协议探测的前提；只在 node-pty 下
+ *      断言，script 的 PTY 另一端没有终端模拟器应答）；
+ *   3. 旧进程 spawn 前后 stdin 上没有 reader，replacement 是唯一读者；
+ *   4. 1049h、1049l 各恰好一次，1049l 晚于首帧，过场文案在 alt 屏内。
  *
- *   1. 尺寸/TTY facade：replacement 的 stdout 是 TTY、columns/rows 有值、
- *      setRawMode 可用（一个「普通 pipe 伪装终端」会在这里现形）；
- *   2. 探测往返：DA1 查询（ESC[c）在链路共享的控制台上能收到回复
- *      （Image/kitty/sixel 探测的底层前提；仅真实 PTY 断言）；
- *   3. 输入单 owner：旧父 spawn 前后 stdin 的 reader 数为 0
- *      （detachHandoffStdin 纪律），replacement 是唯一读者；
- *   4. 序列不变量：整条会话 1049h 恰一次、1049l 恰一次且晚于首帧、
- *      过场帧在 alt buffer 内、失败收口回主屏。
- *
- * Provider 自动选择（DSH_TUI_PTY_GATE 可显式指定）：
- *   node-pty —— 可 import 时（Windows=真 ConPTY，POSIX=真 PTY）；
- *   script   —— POSIX 的 util-linux script（CI Linux 的真 PTY 路径）；
- *   pipe     —— 无 PTY 设备时的协议级回退（序列与单 owner 仍断言，
- *              TTY/DA1 断言显式标注 provider 受限，不算失败）。
+ * PTY 来源按顺序自动选择（DSH_TUI_PTY_GATE 可指定）：node-pty（Windows 为
+ * ConPTY）、POSIX script（Linux CI 走这条）、pipe（没有 PTY 时只查 3、4，
+ * 并注明跳过了设备相关断言）。
  *
  * 运行：node --import tsx/esm scripts/verify-handoff-pty-gate.mjs
  */
@@ -52,8 +41,8 @@ if (isDriver) {
   }
 
   if (process.env.DSH_TUI_HANDOFF_ACK_FD !== undefined) {
-    // replacement 角色：模拟 boot（已由旧父带入 1049——不发 1049h）、
-    // 探测、首帧、ready ACK，然后作为「用户用完退出」的一方闭合 1049。
+    // replacement：屏幕已在 1049 里（不再发 1049h），探测、画首帧、发
+    // ready，然后像用户正常退出那样自己关 1049。
     const fd = Number(process.env.DSH_TUI_HANDOFF_ACK_FD)
     const ack = kind => writeSync(fd, 'dsh-tui-handoff ' + kind + ' ' + attempt + '\n')
     const probeSeen = await new Promise(resolve => {
@@ -68,7 +57,7 @@ if (isDriver) {
       stdin.pause()
       if (stdin.isTTY !== true) { resolve(undefined); return }
       stdin.on('readable', onReadable)
-      process.stdout.write('\u001b[c') // DA1（能力探测的往返代表）
+      process.stdout.write('\u001b[c') // DA1，代表一次能力探测往返
       setTimeout(() => { cleanup(); resolve(saw) }, 1200)
     })
     report({
@@ -82,14 +71,14 @@ if (isDriver) {
     ack('adopted')
     process.stdout.write('GATE-CHILD-FIRST-FRAME\n', () => ack('ready'))
     setTimeout(() => {
-      // ready 后自然退出：replacement 拥有 1049 括号，自己闭合。
+      // ready 之后屏幕归 replacement，由它关 1049。
       process.stdout.write('\u001b[?1049l\r\n')
       process.exit(0)
     }, 150)
     await new Promise(() => {})
   }
 
-  // 旧父角色：boot 时进 1049（模拟自己开屏），detach 后跑真 restartTui。
+  // 旧进程：先进 1049（相当于它自己的全屏），再跑真实的 restartTui。
   process.stdout.write('\u001b[?1049h\u001b[2J\u001b[H')
   const stdinBefore = {
     readable: process.stdin.listenerCount('readable'),
@@ -124,7 +113,7 @@ async function detectProvider() {
   const forced = process.env.DSH_TUI_PTY_GATE
   if (forced !== undefined && forced !== '') return forced
   try {
-    // node-pty 是可选 provider：能装就能用（Windows=ConPTY）。
+    // node-pty 是可选依赖，装了就用（Windows 上是 ConPTY）。
     const require = (await import('node:module')).createRequire(import.meta.url)
     require.resolve('node-pty')
     return 'node-pty'
@@ -153,7 +142,7 @@ if (provider === 'node-pty') {
   const term = pty.spawn(driverCommand[0], driverCommand.slice(1), {
     name: 'xterm-256color', cols: 100, rows: 30, env, cwd: dirname(selfPath),
   })
-  // 最小「终端模拟器」：在 master 侧应答 DA1，让探测往返可断言。
+  // 在 master 一侧应答 DA1，充当最小的终端模拟器。
   let probeAnswered = false
   term.onData(data => {
     chunks.push(data)

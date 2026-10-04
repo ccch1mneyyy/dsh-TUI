@@ -1,17 +1,15 @@
 /**
- * KernelPicker 回归（第八版内核选择器的展示组件）。
- *
- * 钉住的契约：
+ * KernelPicker 回归（内核选择器的展示组件）：
  *   1. 视觉照 ModePicker：Pane + 标题（kernel-picker-title）+ 行列表 + Enter/Esc
  *      提示行（hint-confirm-exit）；
  *   2. 一行一个内核：标签走 i18n（kernel-label-*），副标题是 kernelSubtitle 的
  *      「版本 · 置灰原因」（版本串带产品前缀：dsh-core / claude-code）；
- *   3. 当前内核行打勾（✓ 落在**那一行**，跟着 current 走而不是钉死第一行）；
- *   4. 不可选行**变暗**（dim = 主题 inactive 色，与该行副标题同色），但焦点落在
+ *   3. 当前内核行打勾（✓ 跟着 current 走，不是固定在第一行）；
+ *   4. 不可选行变暗（主题 inactive 色，与该行副标题同色），但焦点落在
  *      它上面时 ❯ 指针照样看得见——这正是不能用 ListItem 的 disabled 的原因
  *      （renderIndicator 在 disabled 时只画一格空格，指针被吞掉）；
  *   5. pinned 时才多画一行 kernel-pinned-hint；
- *   6. 鼠标点行回**行号**（宿主拿去走与 Enter 完全相同的那条确认路径）；没接
+ *   6. 鼠标点行回调行号（宿主走与 Enter 相同的确认路径）；没接
  *      onPick 时行不可点、也没有 hover 反馈（挂得上 onClick 才给 hover）。
  *
  * 运行：node --import tsx/esm scripts/verify-kernel-picker.tsx

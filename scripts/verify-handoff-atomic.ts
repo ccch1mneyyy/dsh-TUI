@@ -1,29 +1,21 @@
 /**
- * verify-handoff-atomic.ts — S05 完整版回归：supervisor 单 owner 终端交接
- * （deploy-transition 设计 §S05「完整版」的 M1 落点）。
+ * verify-handoff-atomic.ts — 全屏内核切换的屏幕交接（src/handoffAck.ts 与
+ * update.ts 的 restartTui）。
  *
- * 覆盖：
- *   - ACK 协议解析 parseHandoffAckLine（合法 adopted/ready、垃圾行、错前缀）；
- *   - 结局分类的第一帧事实（classifyReplacementOutcome.firstFrameAcked）：
- *     首帧已 flush → 任何死亡都是 post-boot（早期非零也是 crashed）；
- *     首帧未 flush → 无论多久都是 boot-failure（4 秒计时只是它的代理）；
- *     undefined → M0 计时语义逐字保留（/restart、/update、旧版 replacement）；
- *   - 子进程状态机（真 fd 写入）：armed→adopted→ready；ready 前不拥有
- *     1049 退出权；管道亡＝自持兜底；beginHandoffAck 一次性消费 env；
- *     armFirstFrameAck 对 adoption 前的写入直通、adoption 后首次写入的
- *     flush 回调触发 ready、补丁自恢复；
- *   - 真进程 e2e（父子角色同文件切换，argv/env 复刻真实 spawn 链）：
- *     · ready 场景：replacement 发 adopted→首帧→ready 后退出 0——旧父
- *       进程 stdout **不含 1049l**（括号已移交，不双重退出）；
- *     · ready 前死亡：exit 7——旧父 stdout 含 1049l（收口），结局
- *       failed/boot-failure（不看计时）；
- *     · 旧版 replacement（不说话协议）：同收口 + boot-failure 分类；
- *   - 源接线 tripwire：AlternateScreen 的 adoption 门、plugin.ts 的
- *     beginHandoffAck/armFirstFrameAck/keepAltScreen、update.ts 的 ACK
- *     管道 spawn 与失败收口、restartChildEnv 的陈旧标记清除。
+ *   - parseHandoffAckLine：adopted/ready、垃圾行、错前缀；
+ *   - 结局分类：首帧已 flush 后任何死亡都算 post-boot（早死也是 crashed），
+ *     没有首帧则不论多久都是 boot-failure；不带 ACK 管道时仍按 4 秒计时；
+ *   - 子进程状态（真 fd）：armed → adopted → ready，ready 前不写 1049l，
+ *     管道断开后自己收尾，env 只消费一次；armFirstFrameAck 放过 adoption
+ *     之前的写入，在之后第一次写入的 flush 回调里发 ready 并自行卸下；
+ *   - 真进程端到端（同一文件分父子角色，走真实 spawn）：ready 后旧进程不写
+ *     1049l；ready 前死亡、ready 前 Ctrl+C、ready 后被 SIGKILL、不认协议的
+ *     旧版 replacement，旧进程都恰好恢复一次屏幕；
+ *   - 源码检查：AlternateScreen、plugin.ts、update.ts 的接线，
+ *     restartChildEnv 清除旧标记。
  *
  * 运行：node --import tsx/esm scripts/verify-handoff-atomic.ts
- * （e2e 子进程以隔离 USERPROFILE/HOME 运行，不碰真实 restart.log）。
+ * （e2e 子进程用临时 USERPROFILE/HOME，不碰真实 restart.log）。
  */
 import { spawnSync } from 'node:child_process'
 import { closeSync, mkdtempSync, openSync, readFileSync, readFileSync as readFileText, rmSync, writeFileSync } from 'node:fs'
@@ -91,8 +83,8 @@ if (isReplacement) {
   } else {
     ack('adopted')
     process.stdout.write('CHILD-FIRST-FRAME\n', () => ack('ready'))
-    // 兜底：帧 write 的回调若被文件重定向吃掉，也要发 ready 并退出——
-    // e2e 断言的是进程管道链路，flush 链契约由上面的单测证明。
+    // 写回调若没触发也发 ready 再退出：这里测的是进程间管道，flush 回调
+    // 的时序由上面的单测覆盖。
     setTimeout(() => {
       ack('ready')
       process.exit(0)
@@ -131,10 +123,10 @@ check('no frame + LATE nonzero → failed/boot-failure (the 4s timer was only a 
   && outcomeOf({ closed: true, code: 3, signal: null, elapsedMs: 90000, firstFrameAcked: false }).reason === 'boot-failure')
 check('no frame + clean exit → failed/boot-failure (nothing the user saw means the switch did not complete)',
   outcomeOf({ closed: true, code: 0, signal: null, elapsedMs: 60000, firstFrameAcked: false }).kind === 'failed')
-check('undefined keeps the M0 window semantics (early nonzero → boot-failure)',
+check('without the ACK pipe the 4s window still applies (early nonzero → boot-failure)',
   outcomeOf({ closed: true, code: 3, signal: null, elapsedMs: 1200 }).kind === 'failed'
   && outcomeOf({ closed: true, code: 3, signal: null, elapsedMs: 1200 }).reason === 'boot-failure')
-check('undefined keeps the M0 window semantics (late nonzero → crashed)',
+check('without the ACK pipe the 4s window still applies (late nonzero → crashed)',
   outcomeOf({ closed: true, code: 3, signal: null, elapsedMs: 9000 }).kind === 'crashed')
 check('first-frame formats terminal-quiet (the flushed frame replaces the transition)',
   formatHandoffNotice('first-frame', { name: 'Claude' }) === '')
@@ -175,7 +167,7 @@ const stateTmp = mkdtempSync(join(tmpdir(), 'verify-handoff-atomic-'))
   closeSync(fd)
 }
 {
-  // 管道先亡：ACK 不可写＝不误判移交，但退出权自持（兜底收口）。
+  // 管道已关：ACK 写失败不算移交，但本进程自己负责关屏。
   const goneFile = join(stateTmp, 'gone.log')
   const goneFd = openSync(goneFile, 'w')
   closeSync(goneFd)
