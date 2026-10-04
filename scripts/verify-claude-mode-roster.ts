@@ -302,7 +302,15 @@ const fakeSettings = (defaultMode: unknown) => ({
 
 // ---- 7. model labels tell the channel truth (modelEnv) ---------------------
 {
-  const { readModelEnvTruth } = await import('../src/backends/claude/modelEnv.js')
+  const { envSlotsServeModel, readModelEnvTruth } = await import('../src/backends/claude/modelEnv.js')
+  // The session's explicit-model omission predicate: an env slot already
+  // routing to the model (base id, [1M] suffixes and case ignored) serves
+  // it; anything else does not.
+  check('modelEnv: env slots serve the model they route to (base-normalized)', envSlotsServeModel({ ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.3' }, 'GLM-5.3[1m]') === true)
+  check('modelEnv: ANTHROPIC_MODEL and every tier slot counts', envSlotsServeModel({ ANTHROPIC_MODEL: 'glm-5.3' }, 'glm-5.3') === true && envSlotsServeModel({ ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-5.3' }, 'glm-5.3') === true && envSlotsServeModel({ ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3' }, 'glm-5.3') === true && envSlotsServeModel({ ANTHROPIC_DEFAULT_FABLE_MODEL: 'glm-5.3' }, 'glm-5.3') === true)
+  check('modelEnv: a slot routing elsewhere does not serve the model', envSlotsServeModel({ ANTHROPIC_MODEL: 'glm-4.7' }, 'glm-5.3[1M]') === false)
+  check('modelEnv: no slots set serves nothing', envSlotsServeModel({}, 'glm-5.3') === false)
+  check('modelEnv: an empty-string slot counts as unset', envSlotsServeModel({ ANTHROPIC_MODEL: '  ' }, 'glm-5.3') === false)
   const truth = readModelEnvTruth({
     ANTHROPIC_MODEL: 'glm-5.3[1M]',
     ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1M]',

@@ -60,7 +60,7 @@ import type { ClaudeSdkModule, ClaudeSessionStoreSdk } from './sdk.js'
 import { readTaskOutputTail, taskOutputRoots } from './task-output.js'
 import { join } from 'node:path'
 import { DATA_DIR } from '../../utils/paths.js'
-import { importedModelEnv, modelTruthFrom, readLocalModelNames } from './modelEnv.js'
+import { envSlotsServeModel, importedModelEnv, mergedModelEnv, modelTruthFrom, readLocalModelNames } from './modelEnv.js'
 import { claudeConfigDir } from './transcript-file.js'
 import { CLAUDE_IMAGE_LIMITS, claudeImageBlocks } from './images.js'
 import { createClaudeSideQuery } from './side-query.js'
@@ -259,6 +259,16 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   let forceTimer: unknown
   /** The credential plan the live query runs on. */
   let authPlan: ClaudeAuthPlan = deps.auth?.plan ?? { source: 'claude-login', env: deps.env }
+  /** The model-routing env the CLI child actually applies for the live
+   *  run: the settings `env` of its config dir with the live auth-plan env
+   *  on top, in the CLI's own flag > settings > inherited order (the same
+   *  merged truth the model list reads — modelEnv.ts). Read per run, so a
+   *  reconnect's renewed plan is what the next child applies. */
+  const childModelEnv = (): Record<string, string | undefined> => mergedModelEnv(
+    claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
+    authPlan.env,
+    new Set(Object.keys(authPlan.settings?.env ?? {})),
+  )
   /** Automatic reconnects after an authentication failure since the last
    *  successful turn (design §4.12: one, then the user is sent to /login). */
   let authAttempts = 0
@@ -403,6 +413,18 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     const inbox = createInbox<SDKUserMessage>()
     const abortController = new AbortController()
     const startModel = prefs.read().model ?? deps.model
+    // The CLI's SDK path (2.1.284+) resolves an EXPLICIT `model` against
+    // its bundled official catalog and fail-fasts a non-official name (a
+    // relay model) as `[claude-code:unrecognized_model]`; the env slot
+    // routing (ANTHROPIC_MODEL / ANTHROPIC_DEFAULT_<TIER>_MODEL) serves
+    // those names fine. When the env the child actually applies already
+    // routes to the model the session would pin, the parameter is
+    // omitted — the CLI lands on the same model without the catalog
+    // check. Any other value keeps the explicit pin: a switch to an
+    // official model must still reach the CLI.
+    const explicitModel = startModel !== undefined && envSlotsServeModel(childModelEnv(), startModel)
+      ? undefined
+      : startModel
     const startEffort = prefs.read().effort ?? deps.effort
     const query = deps.sdk.query({
       prompt: inbox,
@@ -422,7 +444,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         supportedDialogKinds: SUPPORTED_DIALOG_KINDS,
         stderr: stderrSink,
         abortController,
-        ...(startModel === undefined ? {} : { model: startModel }),
+        ...(explicitModel === undefined ? {} : { model: explicitModel }),
         ...(startEffort === undefined ? {} : { effort: startEffort }),
         // Echoes are the user-row fallback for a CLI without lifecycle
         // frames; requesting them is harmless when lifecycle frames win (the

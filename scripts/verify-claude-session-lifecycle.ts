@@ -39,6 +39,9 @@
  * Run: node --import tsx/esm scripts/verify-claude-session-lifecycle.ts
  */
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { AgentEvent, AgentEventMeta } from '../src/agent/events.js'
 import type { AgentSession } from '../src/agent/session.js'
 import { buildQueryOptions, OPTION_POLICY, resolveStartPermissionMode } from '../src/backends/claude/options.js'
@@ -455,6 +458,58 @@ const collect = (session: AgentSession) => {
   for (const refused of ['auto', 'nonsense']) {
     const start = await resolveStartPermissionMode(fakeSettings('plan'), '/p', { DSH_TUI_CLAUDE_PERMISSION_MODE: refused })
     check(`start mode: the override refuses ${refused} (settings win, the refusal is reported)`, start.mode === 'plan' && start.source === 'settings' && start.ignoredOverride === refused, start)
+  }
+}
+
+// ── the explicit `model` parameter yields to the env slot routing ──────
+// CLI 2.1.284's SDK path resolves an EXPLICIT model against the bundled
+// official catalog and fail-fasts a non-official name (a relay model) as
+// [claude-code:unrecognized_model]; the env slot routing (ANTHROPIC_MODEL /
+// ANTHROPIC_DEFAULT_<TIER>_MODEL) serves those names fine. When the env the
+// child actually applies already routes to the persisted model, the
+// parameter is omitted; anything else keeps the pin (an official switch
+// must still reach the CLI). The config dir is a fixture, so the machine's
+// own ~/.claude/settings.json cannot leak routing into the assertions.
+{
+  const configDir = mkdtempSync(join(tmpdir(), 'dsh-tui-claude-modelenv-'))
+  try {
+    writeFileSync(join(configDir, 'settings.json'), JSON.stringify({ env: {} }))
+    const openWith = async (env: Record<string, string>, model: string | undefined) => {
+      const { clock } = manualClock()
+      const fake = fakeSdk()
+      const session = await openClaudeSession(baseDeps(fake.sdk, clock, {
+        env: { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: configDir, ...env },
+        prefs: memoryClaudePrefs(model === undefined ? {} : { model }),
+      }))
+      return { session, options: fake.queries[0]!.params.options }
+    }
+    // ① the env the child applies already routes to the persisted model →
+    //    the parameter is omitted (the fail-fast catalog check never runs).
+    const omitted = await openWith({ ANTHROPIC_MODEL: 'glm-5.3[1M]' }, 'glm-5.3[1M]')
+    check('model param: an env slot serving the persisted model omits the parameter', omitted.options.model === undefined, omitted.options.model)
+    await omitted.session.dispose()
+    // ①b base-normalized: a tier slot naming the base id (no [1M] suffix)
+    //     serves the same model.
+    const baseSlot = await openWith({ ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.3' }, 'glm-5.3[1M]')
+    check('model param: a tier slot naming the base id omits the parameter too', baseSlot.options.model === undefined, baseSlot.options.model)
+    await baseSlot.session.dispose()
+    // ①c the settings file's own env routing counts as well (the CLI applies
+    //     it over the inherited spawn env — mergedModelEnv's order).
+    writeFileSync(join(configDir, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_MODEL: 'glm-5.3[1M]' } }))
+    const settingsRouted = await openWith({}, 'glm-5.3[1M]')
+    check('model param: the settings env routing omits the parameter as well', settingsRouted.options.model === undefined, settingsRouted.options.model)
+    await settingsRouted.session.dispose()
+    writeFileSync(join(configDir, 'settings.json'), JSON.stringify({ env: {} }))
+    // ② an official model with no env routing: the parameter rides along.
+    const official = await openWith({}, 'claude-opus-5-5')
+    check('model param: an official model with no env routing is passed', official.options.model === 'claude-opus-5-5', official.options.model)
+    await official.session.dispose()
+    // ③ the env routes elsewhere: the explicit pin survives.
+    const mismatch = await openWith({ ANTHROPIC_MODEL: 'glm-4.7' }, 'glm-5.3[1M]')
+    check('model param: an env slot routing elsewhere keeps the parameter', mismatch.options.model === 'glm-5.3[1M]', mismatch.options.model)
+    await mismatch.session.dispose()
+  } finally {
+    rmSync(configDir, { recursive: true, force: true })
   }
 }
 
