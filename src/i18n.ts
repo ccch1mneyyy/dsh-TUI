@@ -1612,6 +1612,7 @@ const dict = {
   'subagent-hint-page': { zh: '切页', en: 'page' },
   'subagent-hint-scroll': { zh: '滚动', en: 'scroll' },
   'subagent-hint-back': { zh: '返回', en: 'back' },
+  'subagent-hint-compose': { zh: '发消息', en: 'compose' },
   'subagent-empty-hint': { zh: '让主代理发起 Task 后，子代理会出现在这里', en: 'Subagents appear here once the main agent starts Task delegations' },
 
   // ── agent team（design agent-team-full §8）：Agent View / composer / 消息流 ──

@@ -318,8 +318,16 @@ export function SubagentDetailScene({
 
   const outputLength = subagent.outputEvents.length
   React.useEffect(() => {
-    if ((page !== 'output' && activePage !== 'transcript') || !isRunning) return
-    scrollRef.current?.scrollToBottom()
+    if (!isRunning) return
+    if (page === 'output') {
+      scrollRef.current?.scrollToBottom()
+      return
+    }
+    // The transcript page follows only while it is pinned to the bottom: a
+    // reader who scrolled up into the history (or towards "load older")
+    // must not be pulled back down by every streamed line.
+    const handle = scrollRef.current
+    if (activePage === 'transcript' && handle !== null && handle.isSticky()) handle.scrollToBottom()
   }, [page, isRunning, outputLength])
 
   // Detail 的主手势是翻页阅读，composer 默认不聚焦（'i' 聚焦、Esc 让焦）；
@@ -377,6 +385,12 @@ export function SubagentDetailScene({
       setComposerFocused(true)
       return
     }
+    // o = 转录页载入更早一页（与页首按钮同一动作）。
+    if (input.toLowerCase() === 'o' && activePage === 'transcript') {
+      event.stopImmediatePropagation()
+      loadOlderTranscript()
+      return
+    }
     if (isPlainReturnInput(input, key)) {
       event.stopImmediatePropagation()
       // Enter folds the reasoning while the output or transcript page is
@@ -432,6 +446,10 @@ export function SubagentDetailScene({
     }
     if (input.toLowerCase() === 'i' && compose !== undefined) {
       setComposerFocused(true)
+      return true
+    }
+    if (input.toLowerCase() === 'o' && activePage === 'transcript') {
+      loadOlderTranscript()
       return true
     }
     if (isPanelPlainReturn(input, key)) {
@@ -774,7 +792,10 @@ export function SubagentDetailScene({
       <Box marginTop={0} flexDirection="row">
         <Text dimColor>
           {`←/→ ${t('subagent-hint-page')} · ↑/↓ ${t('subagent-hint-scroll')}`
-            + (activePage === 'output' && hasThinking ? ` · ${t('subagent-hint-fold')}` : '')}
+            + ((activePage === 'output' && hasThinking) || (activePage === 'transcript' && hasTranscriptThinking) ? ` · ${t('subagent-hint-fold')}` : '')
+            + (activePage === 'transcript' && transcript.status === 'ready' && transcript.hasOlder
+              ? ` · o ${t('subagent-transcript-load-older', { count: Math.min(TRANSCRIPT_OLDER_CHUNK, transcript.skippedFromStart) })}`
+              : '')}
         </Text>
         {isRunning && onInterrupt && (
           <>
@@ -784,7 +805,7 @@ export function SubagentDetailScene({
             </Box>
           </>
         )}
-        {compose !== undefined && <Text dimColor>{' · i compose'}</Text>}
+        {compose !== undefined && <Text dimColor>{` · i ${t('subagent-hint-compose')}`}</Text>}
         <Text dimColor>{` · Esc ${t('subagent-hint-back')}`}</Text>
       </Box>
     </Box>

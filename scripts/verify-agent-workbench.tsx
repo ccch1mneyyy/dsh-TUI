@@ -26,6 +26,8 @@
  *       拼进新代理的转录；live 合并不改写历史叶子。
  *   W7  运行中跟尾：新输出把视图钉到底部；用户上滚后新输出不再把视图
  *       拽回底部，滚回底部后恢复跟随。
+ *   W8  Detail 转录页：o 键载入更早一页（页脚提示）；运行中上滚到历史
+ *       后，新输出不把视图拽回底部。
  *
  * 运行：node --import tsx/esm scripts/verify-agent-workbench.tsx
  */
@@ -538,6 +540,52 @@ console.log('--- W7: tail follow ---')
       await settled(() => frame.screen().includes('tail line 063'))
       frame.rerender(React.createElement(AgentTranscriptScene, props(68)))
       check('W7 滚回底部后恢复跟随', await settled(() => frame.screen().includes('tail line 067')), frame.lines().slice(-6).join('|'))
+    },
+  )
+}
+
+// ── W8: Detail transcript page ────────────────────────────────────────────
+console.log('--- W8: detail transcript page ---')
+{
+  const { SubagentDetailScene } = (await import('../src/components/SubagentDetailScene.js')) as unknown as { SubagentDetailScene: React.ComponentType<Record<string, unknown>> }
+  const history = Array.from({ length: 40 }, (_, index) =>
+    ev('assistant.message', { anchor: 'h' + index, time: NOW - 50_000 + index, blocks: [{ type: 'text', text: 'history row ' + String(index).padStart(2, '0') }] }))
+  const olderRows = [ev('assistant.message', { anchor: 'old1', time: NOW - 90_000, blocks: [{ type: 'text', text: 'detail older row' }] })]
+  const loader = async (_agentId: string, window?: { skipFromStart: number }): Promise<Record<string, unknown>> =>
+    window === undefined ? historyPage(history, { hasOlder: true, skippedFromStart: 500 }) : historyPage(olderRows, { hasOlder: false, skippedFromStart: 0 })
+  const row = (outputs: number): Record<string, unknown> => makeRow('agent-detail', {
+    status: 'running',
+    completedAt: undefined,
+    outputEvents: Array.from({ length: outputs }, (_, index) => ({ kind: 'text', text: 'live out ' + index, at: NOW, settled: true })),
+  })
+  const props = (outputs: number): Record<string, unknown> => ({ subagent: row(outputs), onBack: () => {}, loadTranscript: loader as never })
+  await withTerminal(
+    () => React.createElement(SubagentDetailScene, props(1)),
+    async frame => {
+      await settled(() => frame.screen().includes('Summary'))
+      frame.stdin.write('\x1b[C')
+      await sleep(30) // 固定窗:pacing 逐页
+      frame.stdin.write('\x1b[C')
+      check('W8 进入转录页（历史已载入）', await settled(() => frame.screen().includes('history row')), frame.lines().slice(0, 12).join('|'))
+      check('W8 页脚提示 o 载入更早', frame.screen().includes('o Load 400 older'), frame.lines().slice(-3).join('|'))
+      await sleep(30) // 固定窗:pacing 等被动 effect 换上新的按键处理器
+      frame.stdin.write('o')
+      // The older page has no older one: the footer hint goes away.
+      check('W8 o 键载入更早一页（页脚提示随之消失）', await settled(() => !frame.screen().includes('o Load')), frame.lines().slice(-3).join('|'))
+      // Scroll up to the top of the history: the older row is there.
+      for (let press = 0; press < 40; press += 1) {
+        frame.stdin.write('\x1b[A')
+        await sleep(5) // 固定窗:pacing 逐键滚动
+      }
+      check('W8 更早一页拼在转录顶部', await settled(() => frame.screen().includes('detail older row')), frame.lines().slice(4, 12).join('|'))
+      // At the top of the history while the child keeps streaming: the view
+      // stays put.
+      for (const outputs of [2, 3, 4]) {
+        frame.rerender(React.createElement(SubagentDetailScene, props(outputs)))
+        await sleep(40) // 固定窗:pacing 让每条新输出各自渲染一帧
+      }
+      await sleep(100) // 固定窗:探针 负向断言：给错误的跟尾留出发生的时间
+      check('W8 运行中新输出不把转录页拽到底部', frame.screen().includes('detail older row') && !frame.screen().includes('live out 3'), frame.lines().slice(4, 14).join('|'))
     },
   )
 }
