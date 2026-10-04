@@ -30,8 +30,10 @@
  */
 import { SESSION_FORMAT_VERSION, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SubagentTranscriptPage, SubagentTranscriptWindow } from '../../agent/capabilities.js'
-import type { AgentEvent } from '../../agent/events.js'
+import type { AgentEvent, AgentEventOf } from '../../agent/events.js'
+import { textOfBlocks } from '../../channel/projection.js'
 import type { DshTranslator } from '../backend/translate.js'
+import { toolErrorText } from './transcript.js'
 import type { SubagentsServiceView } from './subagent-projection.js'
 
 /**
@@ -272,11 +274,18 @@ export async function readChildTranscriptPage(
     const translator = deps.createTranslator()
     const lane: AgentEvent[] = []
     const uuids: string[] = []
+    const pageCalls = new Set<string>()
     for (const event of events) {
       const messageId = durableMessageId(event)
       if (messageId !== undefined) uuids.push(messageId)
       for (const translated of translator.translateEvent(event)) {
-        if (translated.type === 'assistant.message' || translated.type === 'tool.call' || translated.type === 'tool.result') {
+        if (translated.type === 'tool.call') pageCalls.add(translated.callId)
+        if (translated.type === 'tool.result' && !pageCalls.has(translated.callId)) {
+          // Its call sits on an older page, so the translator never saw it
+          // and left the body out. Keep the body, so whoever pairs this result
+          // with the call from that page has what the card shows.
+          lane.push({ ...orphanResult(translated, event as SessionEvent<'tool/result'>), parentCallId: agentId })
+        } else if (translated.type === 'assistant.message' || translated.type === 'tool.call' || translated.type === 'tool.result') {
           lane.push({ ...translated, parentCallId: agentId })
         }
       }
@@ -295,6 +304,13 @@ export async function readChildTranscriptPage(
     // not discard a page that was already read.
     await handle.close().catch(() => undefined)
   }
+}
+
+/** A result whose call was not on the page, with the body a paired card shows. */
+function orphanResult(result: AgentEventOf<'tool.result'>, event: SessionEvent<'tool/result'>): AgentEventOf<'tool.result'> {
+  return result.isError
+    ? { ...result, text: '', errorText: toolErrorText(event) }
+    : { ...result, text: textOfBlocks(result.content) }
 }
 
 /**

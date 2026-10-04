@@ -495,6 +495,32 @@ const rosterService = (ids: readonly string[]) => ({
   assert.ok(again !== null)
   check('D7 a repeated load is idempotent', JSON.stringify(again.events) === JSON.stringify(newest.events))
 }
+{
+  // A call that closes one page and its result that opens the next: the
+  // newest page still carries the result body (and an error's text) for the
+  // card the older page paints.
+  const child = new Log()
+  for (let i = 0; i < 398; i += 1) child.assistant(`m-${i}`, [text(`part ${i}`)])
+  child.call('call-split-error', 'bash', { command: 'false' })
+  child.call('call-split', 'bash', { command: 'ls' })
+  child.result('call-split', [text('SPLIT RESULT BODY')])
+  for (let i = 0; i < 398; i += 1) child.assistant(`n-${i}`, [text(`more ${i}`)])
+  child.result('call-split-error', [text('exit 1')], true)
+  const memory = createMemoryPersistence()
+  memory.sessions.set(CHILD, { header: { version: 4, id: CHILD, createdAt: 1, isSeeded: false }, events: child.events, inheritedEventCount: 0, statEventCount: child.events.length })
+  const { deps } = makeDeps({ subagents: () => rosterService([CHILD]), persistence: () => memory.source })
+  const newest = await readChildTranscriptPage(deps, CHILD)
+  assert.ok(newest !== null)
+  const results = newest.events.filter((event): event is Extract<typeof event, { type: 'tool.result' }> => event.type === 'tool.result')
+  const split = results.find(event => event.callId === 'call-split')
+  const failed = results.find(event => event.callId === 'call-split-error')
+  check('D8 a result whose call is on the older page keeps its body',
+    newest.events.every(event => event.type !== 'tool.call') && split?.text === 'SPLIT RESULT BODY' && split.parentCallId === CHILD,
+    JSON.stringify(split))
+  check('D9 an error result whose call is on the older page keeps its error text',
+    failed?.isError === true && (failed.errorText ?? '').includes('tool/failed'),
+    JSON.stringify(failed))
+}
 
 // ── Section C: capability lighting through the real channel ────────────────
 {
