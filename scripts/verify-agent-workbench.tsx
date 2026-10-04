@@ -17,6 +17,9 @@
  *   W4  peer roster（SubagentDashboard）：children 与 peers 分区呈现；
  *       无 peer 名册能力时如实降级一行（不伪装空名册）；served peers
  *       不混入 children、无发送入口（跨会话交互无上游支持面）。
+ *   W5  侧栏 Detail 的 composer：按键经面板分发器进草稿（宿主吞掉普通键，
+ *       直接 useInput 收不到）；Esc 先让出编辑焦点、焦点仍在侧栏；焦点被
+ *       宿主切回聊天后，聊天里的打字和 Enter 不进 composer、不发给子代理。
  *
  * 运行：node --import tsx/esm scripts/verify-agent-workbench.tsx
  */
@@ -123,7 +126,9 @@ const [{ PassThrough, Writable }, { default: React }, { Terminal: XTerm }, uiMod
   import('../src/ui.js'),
   import('../src/screens/AgentTranscriptScene.js'),
 ])
-const { render, AlternateScreen, useInput } = uiMod as unknown as {
+const { render, AlternateScreen, useInput, Box, Text } = uiMod as unknown as {
+  Box: React.ComponentType<Record<string, unknown>>
+  Text: React.ComponentType<Record<string, unknown>>
   render: typeof import('../src/ui.js').render
   AlternateScreen: React.ComponentType<{ children?: React.ReactNode }>
   useInput: (handler: (input: string, key: unknown) => void, options?: { isActive?: boolean }) => void
@@ -414,6 +419,103 @@ console.log('--- W4: dashboard children/peers partition ---')
       const childrenCount = (frame.screen().match(/agent agent-a/g) ?? []).length
       check('W4 children 不重复出现在 peers 分区', childrenCount === 1, String(childrenCount))
     },
+  )
+}
+
+// ── W5: side-panel Detail composer key routing ────────────────────────────
+console.log('--- W5: side-panel detail composer ---')
+{
+  const [{ SidePanelColumn }, { useSidePanel }, prefs, { ThemeProvider }] = await Promise.all([
+    import('../src/components/sidePanel/SidePanelColumn.js'),
+    import('../src/components/sidePanel/useSidePanel.js'),
+    import('../src/tuiDisplayPrefs.js'),
+    import('../src/ui.js'),
+  ])
+  prefs.applySidePanelOpen(true)
+  prefs.applySidePanelRatio(0.5)
+  const WIDE = 140
+  const submitted: Array<Record<string, unknown>> = []
+  const child = makeRow('agent-p1', { description: 'panel child', status: 'running', completedAt: undefined, mode: 'continuable' })
+  const channel = {
+    version: 1,
+    subagents: [child],
+    backgroundJobs: [],
+    subagentControl: {
+      interrupt: () => true,
+      message: {
+        via: 'dsh-agent-relay',
+        steer: false,
+        listTargets: async () => [],
+        messages: () => [],
+        submit: async (input: Record<string, unknown>) => {
+          submitted.push(input)
+          return { ok: true, intentId: 'intent-p' + submitted.length, state: 'queued' }
+        },
+      },
+    },
+    notifications: [],
+    notify: () => {},
+    subscribe: () => () => {},
+  }
+  let controller: ReturnType<typeof useSidePanel> | undefined
+  let chatTyped = ''
+  // Chat's shape: one listener mounted before any panel content, handing the
+  // real event to the host so its stopImmediatePropagation takes effect.
+  function Host(): React.ReactNode {
+    const sp = useSidePanel({ columns: WIDE, fullscreen: true, editorOpen: false })
+    controller = sp
+    const [, bump] = React.useState(0)
+    useInput(((input: string, key: Record<string, boolean | undefined>, event: unknown) => {
+      if (!sp.handleKey(input, key as never, event as never) && input !== '' && key.ctrl !== true && key.return !== true) chatTyped += input
+      bump(n => n + 1)
+    }) as never)
+    return React.createElement(ThemeProvider, { theme: 'dark' },
+      React.createElement(Box, { flexDirection: 'row', width: WIDE, height: ROWS },
+        React.createElement(Box, { width: sp.split ? sp.chatColumns : WIDE }, React.createElement(Text, null, 'chat-anchor focus=' + sp.focus)),
+        sp.split ? React.createElement(SidePanelColumn, { width: sp.panelColumns, controller: sp, channel: channel as never }) : null,
+      ))
+  }
+  const key = async (frame: Frame, data: string): Promise<void> => {
+    frame.stdin.write(data)
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  await withTerminal(
+    () => React.createElement(Host),
+    async frame => {
+      await settled(() => controller?.split === true)
+      controller?.openPanel('agents', { focus: true })
+      await settled(() => frame.screen().includes('panel child'))
+      await key(frame, '\r')
+      check('W5 侧栏 Detail 挂出 composer', await settled(() => frame.screen().includes('Send to panel child')), frame.lines().slice(0, 6).join('|'))
+      await key(frame, 'i')
+      await sleep(30) // 固定窗:pacing 聚焦是 state 翻转，没有可读的屏幕变化
+      for (const ch of 'hi there') await key(frame, ch)
+      check('W5 i 聚焦后打字进 composer 草稿', await settled(() => frame.screen().includes('hi there')), frame.lines().filter(l => l.includes('Send to') || l.includes('there')).join('|'))
+      // The first Esc only leaves the editor (no visible change), the second
+      // one is the Detail's own Esc back to the dashboard — neither may hand
+      // the focus to chat.
+      await key(frame, '\x1b')
+      await sleep(80) // 固定窗:pacing 单独 Esc 要等 50ms 解析窗才成键
+      await key(frame, '\x1b')
+      check('W5 Esc 先让出编辑焦点、再回 Dashboard，焦点留在侧栏', await settled(() => !frame.screen().includes('Send to panel child') && frame.screen().includes('1 running')) && controller?.focus === 'panel', String(controller?.focus))
+      // Back into the editor, then the host moves focus to chat (a click on
+      // the chat column does the same) while the composer still holds it.
+      await key(frame, '\r')
+      await settled(() => frame.screen().includes('Send to panel child'))
+      await key(frame, 'i')
+      await sleep(30) // 固定窗:pacing 同上
+      for (const ch of 'abc') await key(frame, ch)
+      check('W5 重新聚焦后草稿可编辑', await settled(() => frame.screen().includes('abc')))
+      controller?.focusChat()
+      await settled(() => frame.screen().includes('chat-anchor focus=chat'))
+      for (const ch of 'zq') await key(frame, ch)
+      await key(frame, '\r')
+      await sleep(60) // 固定窗:探针 负向断言：给错误投递留出发生的时间
+      check('W5 聊天里的键到了聊天', chatTyped.includes('zq'), JSON.stringify(chatTyped))
+      check('W5 聊天打字不进侧栏 composer', !frame.screen().includes('abczq'), frame.lines().filter(l => l.includes('abc')).join('|'))
+      check('W5 聊天 Enter 不把草稿发给子代理', submitted.length === 0, JSON.stringify(submitted))
+    },
+    WIDE,
   )
 }
 

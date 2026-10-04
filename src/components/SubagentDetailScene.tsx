@@ -5,7 +5,7 @@ import type { SubagentTranscriptView } from '../adapter/ports/channel-view.js'
 import type { SubagentTranscriptWindow } from '../agent/capabilities.js'
 import { AgentMessageLeafRow, AssistantTextLeafRow, ThinkingLeafRow, ToolLeafRow } from './messages/TranscriptLeaves.js'
 import { AgentMessageFlowRow } from './messages/AgentMessageFlow.js'
-import { AgentMessageComposer } from './AgentMessageComposer.js'
+import { AgentMessageComposer, type ComposerKeyHandler } from './AgentMessageComposer.js'
 import type { AgentComposeTarget, AgentMessageControl, AgentMessageView } from './messages/agentTeam.js'
 import { subagentDetailMemory } from './subagentDetailMemory.js'
 import {
@@ -375,6 +375,7 @@ export function SubagentDetailScene({
   // composer 默认不聚焦（'i' 聚焦、Esc 让焦）；聚焦期 ←/→/Esc/Enter 归编辑器，
   // ↑/↓ 仍滚动正文（§6.4 分层）。
   const [composerFocused, setComposerFocused] = React.useState(false)
+  const composerKeys = React.useRef<ComposerKeyHandler | null>(null)
   useInput((input, key, event) => {
     if (panelMode) return
     if (compose !== undefined && composerFocused) {
@@ -449,7 +450,7 @@ export function SubagentDetailScene({
         scrollRef.current?.scrollBy(key.upArrow === true ? -3 : 3)
         return true
       }
-      return false
+      return composerKeys.current?.(input, key) ?? false
     }
     if (key.escape === true || (key.ctrl === true && input === 'c')) {
       onBack()
@@ -812,8 +813,9 @@ export function SubagentDetailScene({
             target={compose.target}
             control={compose.control}
             messages={messages}
-            focused={composerFocused}
+            focused={composerFocused && (!panelMode || (focused && visible))}
             onFocusChange={setComposerFocused}
+            {...(panelMode ? { keyHandlerRef: composerKeys } : {})}
           />
         </Box>
       )}
