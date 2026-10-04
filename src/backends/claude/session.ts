@@ -249,6 +249,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   const backlog: [readonly AgentEvent[], AgentEventMeta][] = []
   let status: AgentSessionStatus = 'starting'
   let disposing = false
+  let settlingPrompts = false
   let disposePromise: Promise<void> | undefined
   let cliVersion: string | undefined
   let cliCapabilities: readonly string[] = []
@@ -353,7 +354,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   let asking = false
   const bridge = createClaudePermissionBridge({
     cwd: deps.cwd,
-    emit: events => emit(events),
+    emit: events => emit(events, 'sync', settlingPrompts),
     debug: deps.host.debug,
     closing: () => disposing,
     onPendingChange: count => {
@@ -369,7 +370,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   /** MCP elicitation and user dialogs (dialogs.ts): parked like prompts. */
   let dialogsOpen = false
   const dialogs = createClaudeDialogBridge({
-    emit: events => emit(events),
+    emit: events => emit(events, 'sync', settlingPrompts),
     debug: deps.host.debug,
     closing: () => disposing,
     onPendingChange: count => {
@@ -461,9 +462,11 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   /** Shut the session down; safe to call from any state. */
   const teardown = (): void => {
     clearForceTimer()
-    // Pending prompts are denied before the CLI goes.
+    // Pending prompt settlements must reach the channel before the query closes.
+    settlingPrompts = true
     bridge.settleAll()
     dialogs.settleAll()
+    settlingPrompts = false
     stopRun(run)
   }
 
