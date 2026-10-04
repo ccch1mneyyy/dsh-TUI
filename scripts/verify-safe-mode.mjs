@@ -380,7 +380,7 @@ const cleanManifest = {
   // 替换的 Claude 实例写下记录 → 非零退出 → 重试必须恢复刚崩的 Claude 会话。
   {
     const launcher = makeLauncher({ env: { DSH_TUI_BACKEND: 'dsh', DSH_TUI_RESUME_SESSION: 'dsh-old-1' }, home: chainHome })
-    launcher.noteLaunchChain(false)
+    launcher.noteLaunchChain()
     // 替换实例在链上晚于 launcher 启动写下记录（updatedAt > startedAt）。
     writeRecord(chainHome, { backendId: 'claude', sessionId: 'claude-42', cwd: 'D:/w', attemptId: 'b2', updatedAt: Date.now() + 5000 })
     const env = launcher.resumeEnvForRetry()
@@ -393,7 +393,7 @@ const cleanManifest = {
   // C2 空 env（第二形态）：外层什么都没带，kernel.json 已记 Claude——记录仍是权威。
   {
     const launcher = makeLauncher({ env: {}, home: chainHome })
-    launcher.noteLaunchChain(false)
+    launcher.noteLaunchChain()
     writeRecord(chainHome, { backendId: 'claude', sessionId: 'claude-43', cwd: 'D:/w', attemptId: 'b3', updatedAt: Date.now() + 5000 })
     const env = launcher.resumeEnvForRetry()
     check(
@@ -405,7 +405,7 @@ const cleanManifest = {
   // C3 显式旧 marker：本链有记录（切换是用户更新的选择）→ 记录赢、旧输入滤掉。
   {
     const launcher = makeLauncher({ env: { DSH_TUI_RESUME_SESSION: 'user-typed-dsh' }, home: chainHome })
-    launcher.noteLaunchChain(true)
+    launcher.noteLaunchChain()
     writeRecord(chainHome, { backendId: 'claude', sessionId: 'claude-44', cwd: 'D:/w', attemptId: 'b4', updatedAt: Date.now() + 5000 })
     const env = launcher.resumeEnvForRetry()
     check(
@@ -417,7 +417,7 @@ const cleanManifest = {
   // C3b 显式 marker + 上一次启动的残留记录（updatedAt 早于本进程）→ 显式输入保留。
   {
     const launcher = makeLauncher({ env: { DSH_TUI_RESUME_SESSION: 'user-typed-dsh' }, home: chainHome })
-    launcher.noteLaunchChain(true)
+    launcher.noteLaunchChain()
     writeRecord(chainHome, { backendId: 'claude', sessionId: 'stale-9', cwd: 'D:/w', attemptId: 'b5', updatedAt: Date.now() - 600000 })
     const env = launcher.resumeEnvForRetry()
     check(
@@ -429,7 +429,7 @@ const cleanManifest = {
   // C4 反向切换：Claude → DSH 崩溃，重试回 dsh + 刚崩的 dsh 会话。
   {
     const launcher = makeLauncher({ env: { DSH_TUI_BACKEND: 'claude', DSH_TUI_RESUME_SESSION: 'claude-old' }, home: chainHome })
-    launcher.noteLaunchChain(false)
+    launcher.noteLaunchChain()
     writeRecord(chainHome, { backendId: 'dsh', sessionId: 'dsh-9', cwd: 'D:/w', attemptId: 'b6', updatedAt: Date.now() + 5000 })
     const env = launcher.resumeEnvForRetry()
     check(
@@ -441,7 +441,7 @@ const cleanManifest = {
   // C5 记录无可恢复会话（崩溃时没有 user 消息）：旧 marker 滤掉、目标内核冷启动。
   {
     const launcher = makeLauncher({ env: { DSH_TUI_BACKEND: 'dsh', DSH_TUI_RESUME_SESSION: 'dsh-old-2' }, home: chainHome })
-    launcher.noteLaunchChain(false)
+    launcher.noteLaunchChain()
     writeRecord(chainHome, { backendId: 'claude', sessionId: '', cwd: 'D:/w', attemptId: 'b7', updatedAt: Date.now() + 5000 })
     const env = launcher.resumeEnvForRetry()
     check(
@@ -459,19 +459,19 @@ const cleanManifest = {
     writeFileSync(join(legacyHome, '.dsh-tui', 'backends', 'claude', 'prefs.json'), JSON.stringify({ lastSession: 'claude-prefs-7' }), 'utf8')
     {
       const launcher = makeLauncher({ env: { DSH_TUI_RESUME_SESSION: 'explicit-keep' }, home: legacyHome })
-      launcher.noteLaunchChain(true)
+      launcher.noteLaunchChain()
       const env = launcher.resumeEnvForRetry()
       check('S02 回落: 无记录时显式 marker 不被覆盖（来源差异保留）', env.DSH_TUI_RESUME_SESSION === 'explicit-keep' && env.DSH_TUI_BACKEND_HANDOFF === undefined)
     }
     {
       const launcher = makeLauncher({ env: { DSH_TUI_BACKEND: 'claude' }, home: legacyHome })
-      launcher.noteLaunchChain(false)
+      launcher.noteLaunchChain()
       const env = launcher.resumeEnvForRetry()
       check('S02 回落: 无记录 + claude env → 读 claude prefs 的 lastSession（旧逻辑不变）', env.DSH_TUI_RESUME_SESSION === 'claude-prefs-7')
     }
     {
       const launcher = makeLauncher({ env: {}, home: legacyHome })
-      launcher.noteLaunchChain(false)
+      launcher.noteLaunchChain()
       const env = launcher.resumeEnvForRetry()
       check('S02 回落: 无记录 + 空 env → 读 resume.txt（旧逻辑不变）', env.DSH_TUI_RESUME_SESSION === 'dsh-marker-3')
     }
@@ -481,7 +481,6 @@ const cleanManifest = {
     const noteAt = binSource.indexOf('noteLaunchChain(')
     const spawnAt = binSource.indexOf('settleFirstResult(await startDshSession(')
     check('S02 接线: noteLaunchChain 在首次 startDshSession 之前（链时刻先于任何后代）', noteAt > 0 && spawnAt > 0 && noteAt < spawnAt)
-    check('S02 接线: 显式 resume 的来源 = 命令行 resume flags', binSource.includes('noteLaunchChain(resumeFlags.length > 0)'))
   }
 }
 

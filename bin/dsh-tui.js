@@ -803,8 +803,8 @@ const envFromLastRun = record => {
 // 首次 spawn 前记下的时刻：updatedAt 不早于它的记录是本次启动的 TUI 写的，
 // 更早的是上一次启动留下的。
 let launchChain = null
-const noteLaunchChain = explicitResume => {
-  launchChain = { explicitResume, startedAt: Date.now() }
+const noteLaunchChain = () => {
+  launchChain = { startedAt: Date.now() }
 }
 
 // Claude 后端（`--backend claude`）的"上次会话"记在它自己的偏好文件里
@@ -1509,9 +1509,7 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
   // DSH consumes its own --; only the app tail belongs behind it. Preserve
   // the app-level separator too, and replay this same argv on a safe retry.
   const firstArgs = [...hostArgs, ...(args.length > 0 ? ['--', ...args] : [])]
-  // 登记本启动链（S02）：显式 --resume = 用户亲手输入过 resume；首次 spawn
-  // 前的时刻把「本链记录」与「上一次启动的残留记录」分开。必须在
-  // startDshSession 之前——链上任何后代实例的记录都晚于这个时刻。
-  noteLaunchChain(resumeFlags.length > 0)
+  // 必须在首次 spawn 之前：本次启动的 TUI 写的记录都晚于这个时刻。
+  noteLaunchChain()
   settleFirstResult(await startDshSession(firstArgs), firstArgs)
 }
