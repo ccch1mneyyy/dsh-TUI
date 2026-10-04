@@ -1,11 +1,11 @@
 /**
  * Session lifecycle actions the core serves for a session no extension
- * claims (docs/agent-backend-design.md §4.11, Phase 4b): the session
- * browser's catalog (listing, preview, rename, delete, the launcher's
- * last-session marker), `/resume`, `/fork` and the double-Esc rewind — each
- * backed by the backend's offline `SessionCatalog`, its `openSession` and
- * the bound session's `fork` / `rewind` capabilities. A missing backing is
- * an explicit `capability-unavailable-backend`, never a silent no-op.
+ * claims: the session browser's catalog (listing, preview, rename, delete,
+ * the launcher's last-session marker), `/resume`, `/fork` and the double-Esc
+ * rewind. They are backed by the backend's offline `SessionCatalog`, its
+ * `openSession` and the bound session's `fork` / `rewind` capabilities. A
+ * missing backing is an explicit `capability-unavailable-backend`, never a
+ * silent no-op.
  *
  * Within one backend per process: the catalog lists the bound backend's
  * sessions and a resume opens one of them; switching backends inside one
@@ -47,7 +47,7 @@ export function createCoreSessionActions(deps: {
 }) {
   const { notify, unavailable } = deps
   const caps = (): AgentSession['capabilities'] => deps.session().capabilities
-  /** The last successful listing (first paint of the browser; never truth). */
+  /** The last successful listing (the browser's first paint; may be stale). */
   let cached: readonly SessionSummary[] | undefined
   const rowOf = (sessionId: string): SessionSummary | undefined => cached?.find(row => row.id === sessionId)
   const isBound = (sessionId: string): boolean => deps.session().ref.sessionId === sessionId
@@ -60,8 +60,8 @@ export function createCoreSessionActions(deps: {
 
     /**
      * The bound backend's sessions: the working directory's first (painted
-     * at once through `onPartial`), then every project the backend knows —
-     * the browser's rail groups them by directory. A failing all-projects
+     * at once through `onPartial`), then every project the backend knows,
+     * which the browser's rail groups by directory. A failing all-projects
      * read keeps the directory's rows.
      */
     async listSessions(_onEnriched, onPartial) {
@@ -176,11 +176,11 @@ export function createCoreSessionActions(deps: {
     },
 
     /**
-     * The double-Esc rewind (design §4.11): `files` restores the tracked
-     * files to their state at the picked message; the conversation rewind
-     * (the plain confirm, or `both` after the files) continues in the
-     * backend's fork cut just before it — opened and adopted like a resume —
-     * and hands the picked message back for re-editing.
+     * The double-Esc rewind: `files` restores the tracked files to their
+     * state at the picked message. The conversation rewind (the plain
+     * confirm, or `both` after the files) continues in the backend's fork cut
+     * just before that message, opened and adopted like a resume, and hands
+     * the picked message back for re-editing.
      */
     async rewindTo(row: ChatRow, mode: string | null = null) {
       const rewind = caps().rewind
@@ -194,6 +194,7 @@ export function createCoreSessionActions(deps: {
         return null
       }
       const kind = mode === 'files' ? 'files' : mode === 'both' ? 'both' : 'conversation'
+      const session = deps.session()
       let outcome: Awaited<ReturnType<typeof rewind.rewind>>
       try {
         outcome = await rewind.rewind(row.anchor, kind)
@@ -212,16 +213,20 @@ export function createCoreSessionActions(deps: {
         notify(t('rewind-conversation-failed', { err: outcome.conversationError }), { color: 'warning', timeoutMs: 10000 })
         return null
       }
-      if (kind === 'files' || outcome.session.sessionId === deps.session().ref.sessionId) return null
-      const adopted = await deps.resume(outcome.session.sessionId, 'rewind')
-      if (!adopted.ok) {
-        // The fork is persisted either way (an open abandoned as a race
-        // too): say where it is.
+      if (kind === 'files' || outcome.session.sessionId === session.ref.sessionId) return null
+      const forkId = outcome.session.sessionId
+      const forkKept = (): null => {
         if (deps.owner.current()) {
-          notify(t('rewind-fork-kept', { command: deps.resumeCommand?.(outcome.session.sessionId) ?? `/resume ${outcome.session.sessionId}` }), { color: 'warning', timeoutMs: 10000 })
+          notify(t('rewind-fork-kept', { command: deps.resumeCommand?.(forkId) ?? `/resume ${forkId}` }), { color: 'warning', timeoutMs: 10000 })
         }
         return null
       }
+      // The fork is persisted whatever happens next, so a fork the channel
+      // does not adopt is named. The user may have moved to another session
+      // while the backend forked: that session stays.
+      if (deps.session() !== session) return forkKept()
+      const adopted = await deps.resume(forkId, 'rewind')
+      if (!adopted.ok) return forkKept()
       return row.text
     },
   }

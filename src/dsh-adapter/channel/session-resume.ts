@@ -415,16 +415,16 @@ export function createSessionResumeActions(
   }
 
   /**
-   * How a DSH `/new` opens its fresh session (the transaction itself —
-   * working check, veto, prepare/adopt, the re-check after a slow open — is
-   * the core's, core/session-switch.ts): the capability shadow gate, the
-   * agents service, compaction settled first, the preset and validated model
-   * route, the cross-process mount reservation, `agents.create`, workspace
-   * ownership, and the DSH half of the adoption tail.
+   * How a DSH `/new` opens its fresh session: the capability shadow gate,
+   * the agents service, compaction settled first, the preset and validated
+   * model route, the cross-process mount reservation, `agents.create`,
+   * workspace ownership, and the DSH half of the adoption tail. The
+   * transaction itself (working check, veto, prepare/adopt, the re-check
+   * after a slow open) lives in core/session-switch.ts.
    */
   const newSessionOpener: NewSessionOpener = {
     // An input still in the FIFO when /new adopts is stale-dropped (with a
-    // notice), never delivered to either session — the DSH contract.
+    // notice), never delivered to either session; that is the DSH contract.
     dropsParkedInputs: true,
     // The typed workspace target seam still creates a real Agent/session; it
     // must pass the same shadow policy gate as the public /new action.
@@ -461,7 +461,7 @@ export function createSessionResumeActions(
       const targetCwd = target.cwd
       let reservation: MountReservation | undefined
       return {
-        // Reserve BEFORE the factory runs: the moment `agents.create`
+        // Reserve before the factory runs: the moment `agents.create`
         // returns, this process holds the only write handle on a log no peer
         // has been told about yet, and the publisher would not name it until
         // its next beat.

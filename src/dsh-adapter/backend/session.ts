@@ -1,13 +1,12 @@
 /**
- * DSH backend session (docs/agent-backend-design.md §3.4, §6): one `Agent`
- * (plus the `AgentHandle` that owns its lifetime, when this process created
- * or resumed it) presented as an `AgentSession`. Live session events and
- * stream frames are translated by the session's own `createDshTranslator`
- * instance, so the translator state (frame fence, open calls) lives exactly as
- * long as the session; inbox, status and compaction-stream bus events become
- * `pending.changed` / `session.status` / `compaction.progress`.
+ * DSH backend session: one `Agent` (plus the `AgentHandle` that owns its
+ * lifetime, when this process created or resumed it) presented as an
+ * `AgentSession`. Each session has its own `createDshTranslator` instance, so
+ * translator state (frame fence, open calls) lives as long as the session.
+ * Inbox, status and compaction-stream bus events become `pending.changed`,
+ * `session.status` and `compaction.progress`.
  *
- * DSH specialists that are not capability-shaped yet reach the agent through
+ * DSH features that have no typed capability yet reach the agent through
  * `capabilities.native.dsh` (only `src/dsh-adapter/**` may read it).
  */
 import type { Context } from '@deepseek-ai/cordis'
@@ -78,9 +77,8 @@ export function isAgentSession(value: unknown): value is AgentSession {
 export function createDshSession(ctx: Context, target: DshSessionTarget): AgentSession {
   const agent = target.agent
   const handle = isHandle(target) ? target : target.handle
-  // The tools registry is read once per session (the pre-split reducer read
-  // it once per channel), on the first presenter call: wrapping an agent
-  // touches no host service.
+  // The tools registry is read lazily, once per session, on the first
+  // presenter call, so wrapping an agent touches no host service.
   let tools: { readonly registry: ToolsRegistryLike | undefined } | undefined
   const translatorDeps = {
     tools: () => (tools ??= { registry: ctx.get('tools') as ToolsRegistryLike | undefined }).registry,
@@ -94,10 +92,10 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
 
   /**
    * One `session/event` listener per subscription period, shared by raw and
-   * translated subscribers: raw subscribers (the DSH specialists) see each
-   * main-session event before the translated batch reaches the projector —
-   * the pre-split single listener's order — and the bus sees exactly one
-   * foreground listener, as before. Each install is inert once removed.
+   * translated subscribers. Raw subscribers (the DSH extensions) see each
+   * main-session event before the translated batch reaches the projector, and
+   * the bus only ever sees one foreground listener. A removed install is
+   * inert.
    */
   const rawListeners = new Set<(event: SessionEvent) => void>()
   const eventListeners = new Set<(event: SessionEvent) => void>()
@@ -130,9 +128,9 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
   }
 
   const messageFor = (input: AgentInput): UserMessage => {
-    // The channel's DSH input pipeline already built the durable message (its
-    // id IS the clientMessageId the channel tracked pending/selection/context
-    // under); any other caller gets a fresh message from its blocks.
+    // The channel's DSH input pipeline already built the durable message; its
+    // id is the clientMessageId the channel tracks pending/selection/context
+    // under. Any other caller gets a fresh message from its blocks.
     const native = input.native as UserMessage | undefined
     if (native !== undefined && native.id === input.clientMessageId) return native
     return createUserMessage({
@@ -202,8 +200,8 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
         }))
         /**
          * The inbox removed one message. Both events retire the pending entry;
-         * the channel retires attached context only for a discard:
-         * `agent/inbox/claimed` fires while the loop claims the batch, BEFORE
+         * the channel retires attached context only for a discard.
+         * `agent/inbox/claimed` fires while the loop claims the batch, before
          * the resident `agent/pre-step` listener can append the attachment
          * (dsh-agent-loop: `inbox.claim()` → claimed event → `agent/pre-step`).
          */
@@ -231,26 +229,23 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
           untapEvents()
         })
         tapEvents()
-        // 0.1.5 live streaming: per-token chunks are transient attempt frames
-        // on this agent-scoped channel; the durable settlement still arrives
-        // through `session/event`. Pre-0.1.5 hosts never emit it. Start frames
-        // change nothing renderer-visible on their own.
+        // Live streaming (dsh 0.1.5+; older hosts never emit this): per-token
+        // chunks are transient attempt frames on this agent-scoped event, and
+        // the durable result still arrives through `session/event`. A start
+        // frame alone changes nothing visible, so it does not wake the
+        // renderer.
         own(ctx.on('agent/assistant-stream', ({ agent: subject, frame }) => {
           if (!active || subject !== agent) return
           listener(translator.translateFrame(frame), frame.type === 'chunk' ? FRAME : frame.type === 'end' ? SYNC : QUIET)
         }))
-        /**
-         * Live compaction progress. The summarizer is one `ctx.llm.stream()`
-         * call, so its chunks are the only work signal a compaction has between
-         * `compaction/start` and `compaction/end` (dsh-llm tags the call
-         * `purpose: 'compaction'`, and a manual one runs while the session is
-         * idle, so it cannot be confused with the foreground turn's stream).
-         * Everything else passes through untouched: the original iterable is
-         * returned for any other purpose or session.
-         */
+        // Live compaction progress. The summarizer is one `ctx.llm.stream()`
+        // call, so its chunks are the only sign of work between
+        // `compaction/start` and `compaction/end`. dsh-llm tags that call
+        // `purpose: 'compaction'`, and a manual compaction runs while the
+        // session is idle, so it cannot be mixed up with a turn's stream. Any
+        // other purpose or session gets the original iterable back.
         // A summary stream that started while subscribed keeps reporting until
-        // it ends (the pre-split stream wrapper did; the channel decides what
-        // a late report may still touch).
+        // it ends; the channel decides what a late report may still touch.
         own(ctx.on('llm/stream', (options, next) => {
           const stream = next()
           if (!active || options.purpose !== 'compaction') return stream
@@ -287,10 +282,10 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
       return Promise.resolve({ accepted: true })
     },
 
-    // Official dsh-agent rc.6: withdrawal goes through the agent's inbox
-    // projection — `Inbox.remove(messageId)` durably records the cancellation
-    // (an `agent/inbox/spliced` session event) and publishes
-    // `agent/inbox/discarded`. False when the message was already claimed.
+    // Withdrawal goes through the agent inbox: `Inbox.remove(messageId)`
+    // records the cancellation durably (an `agent/inbox/spliced` session
+    // event) and publishes `agent/inbox/discarded`. Returns false when the
+    // message was already claimed.
     removePending(clientMessageId: string): boolean {
       const removed = agent.inbox.remove(MessageId(clientMessageId))
       if (removed) pending.delete(clientMessageId)
@@ -298,11 +293,11 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
     },
 
     cancel(cause: CancelCause) {
-      // `user` keeps the queue (queued/steered inputs run as the next turn);
-      // `interrupt` drops it — the channel parks those inputs as a dock and
-      // re-delivers nothing until the user sends it (keepInbox stays
-      // exclusive to the user-cancel / normal-turn-end paths); a
-      // switch/dispose never resumes the old queue either.
+      // `user` keeps the queue, so queued/steered inputs run as the next turn.
+      // Every other cause drops it: after `interrupt` the channel parks those
+      // inputs in a dock and re-delivers nothing until the user sends it, and
+      // a switch/dispose never resumes the old queue. keepInbox is only for
+      // the user-cancel and normal turn-end paths.
       if (cause === 'user') agent.cancel({ kind: 'user' }, { keepInbox: true })
       else agent.cancel({ kind: 'user' })
       // The kernel cancel settles its bookkeeping synchronously: the answer
@@ -316,18 +311,6 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
     },
   }
   return session
-}
-
-/** The DSH escape hatch of a session, when it is a DSH session. */
-export function dshNativeOf(session: AgentSession) {
-  return session.capabilities.native.dsh
-}
-
-/** The DSH agent behind a session; throws for a non-DSH session. */
-export function dshAgentOf(session: AgentSession): Agent {
-  const native = session.capabilities.native.dsh
-  if (native === undefined) throw new Error(`dsh-tui: session ${session.ref.backendId}:${session.ref.sessionId} is not a DSH session`)
-  return native.agent
 }
 
 /** The lifetime handle of a DSH session this process created or resumed;

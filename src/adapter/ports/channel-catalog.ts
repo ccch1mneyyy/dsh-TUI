@@ -36,9 +36,9 @@ export interface LocalCommand {
   skill?: boolean
   /**
    * `backend`: a command of the bound backend itself (Claude's own slash
-   * commands). Like a skill entry it is completion-only — the typed line goes
-   * to the backend verbatim as prompt text — and a local command of the same
-   * name always wins.
+   * commands). Like a skill entry it is completion-only: the typed line goes
+   * to the backend verbatim as prompt text. A local command of the same name
+   * always wins.
    */
   origin?: 'backend'
 }

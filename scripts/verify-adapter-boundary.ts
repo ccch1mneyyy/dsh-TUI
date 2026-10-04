@@ -1,5 +1,5 @@
 /**
- * Adapter boundary gate — the rule table of docs/agent-backend-design.md §8.0.
+ * Adapter boundary gate. The rules (also in ADAPTER.md 「边界规则」):
  *
  *   vendor package            may only be imported from
  *   @deepseek-ai/*            src/dsh-adapter/**
@@ -18,7 +18,7 @@
  *   src/{screens,components,hooks,ink}/**
  *                                  no src/backends/** at all; type-only imports
  *                                  of src/dsh-adapter/** are fine, value imports
- *                                  are not — the ones that predate this rule are
+ *                                  are not; the ones that predate this rule are
  *                                  listed in adapter-boundary.allowlist.json
  *                                  (reported as one warning); an unlisted one
  *                                  fails, and so does a listed one that no
@@ -37,7 +37,7 @@
  * import is type-only when it is `import type`/`export type`, when every
  * named specifier carries an inline `type` (TypeScript elides those), when it
  * sits in a `.d.ts`, or when a dynamic import() is used in a type position.
- * Only direct specifiers are checked — a value import that reaches a vendor
+ * Only direct specifiers are checked; a value import that reaches a vendor
  * package through another module is out of scope for this gate.
  *
  * Run via `node --import tsx/esm scripts/verify-adapter-boundary.ts [--verbose]`
@@ -65,7 +65,7 @@ const VENDOR_RULES: readonly VendorRule[] = [
 ]
 
 /** Internal targets each neutral layer must not reach; `allow` lists the
- *  explicit file→file edges that are exempt (pure leaves, design §3.1). */
+ *  explicit file→file edges that are exempt (pure leaves). */
 const LAYER_RULES: readonly { readonly dir: string; readonly forbidden: readonly string[]; readonly allow?: readonly string[] }[] = [
   { dir: 'agent/', forbidden: ['dsh-adapter/', 'backends/', 'channel/', 'ink/'] },
   { dir: 'channel/', forbidden: ['dsh-adapter/', 'backends/', 'ink/'], allow: ['channel/sanitize.ts -> ink/stringWidth.ts'] },
@@ -124,7 +124,7 @@ function maskCommentLines(source: string): string {
 const lineAt = (code: string, index: number): number => code.slice(0, index).split('\n').length
 
 // The clause between the keyword and `from` never holds quotes, parens, `=`,
-// `;` or `:`, and must not run into the next import/export statement — that
+// `;` or `:`, and must not run into the next import/export statement. That
 // keeps a multi-line import matchable without swallowing unrelated code.
 const STATIC_IMPORT = /^[ \t]*(?:import|export)\b((?:(?!\n[ \t]*(?:import|export)\b)[^'"`()=;:])*?)\bfrom\s*(['"])([^'"\n]+)\2/gmu
 const SIDE_EFFECT_IMPORT = /^[ \t]*import\s*(['"])([^'"\n]+)\1/gmu

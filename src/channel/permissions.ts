@@ -1,8 +1,8 @@
 /**
- * The shared permission prompt surface (docs/agent-backend-design.md §4.7,
- * §8.4): one view shape the approval panel renders for every backend, the
- * small interface Chat drives it through, and `PermissionStore` — the FIFO
- * store a non-DSH session's `permission.request` events park in.
+ * The shared permission prompt surface: one view shape the approval panel
+ * renders for every backend, the small interface Chat drives it through, and
+ * `PermissionStore`, the FIFO store a non-DSH session's `permission.request`
+ * events park in.
  *
  * Queue semantics mirror the DSH `ApprovalStore`: parallel tool calls can
  * raise several prompts before any answer, so they drain first in, first out
@@ -101,8 +101,8 @@ export function panelOutcomeOf(kind: PermissionOptionView['kind']): PermissionPa
 /**
  * The options a panel may show for one prompt, in display order: an
  * allow-always option is dropped when the prompt forbids it (suppressed, or
- * forced by an ask rule — defence in depth: backends already omit it), and
- * `defaultToNo` moves the rejections to the front.
+ * forced by an ask rule; backends already omit it, so this is a second
+ * guard), and `defaultToNo` moves the rejections to the front.
  */
 export function visiblePermissionOptions(snapshot: Pick<PermissionPanelSnapshot, 'options' | 'defaultToNo' | 'suppressAlwaysAllow' | 'matchedAskRule'>): readonly PermissionOptionView[] {
   const all = snapshot.options ?? DEFAULT_PERMISSION_OPTIONS
@@ -134,9 +134,9 @@ interface Parked {
 const idOf = (sessionId: string, requestId: string): string => `${sessionId}\u0000${requestId}`
 
 /**
- * FIFO permission store for backend sessions (the shared half of design
- * §4.7). Chat renders `getSnapshot()` through the approval panel; the
- * channel parks and withdraws as the session's events arrive.
+ * FIFO permission store for backend sessions (the shared half of the
+ * approval flow). Chat renders `getSnapshot()` through the approval panel;
+ * the channel parks and withdraws as the session's events arrive.
  */
 export class PermissionStore implements PermissionPanelSource {
   private readonly queue: Parked[] = []

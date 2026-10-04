@@ -29,8 +29,8 @@ type PreviousDisposition = 'dispose' | 'park'
  * The cell holds an `AgentSession` of any backend and every identity rule
  * below is decided on that session object (plus the generation, which every
  * adoption advances). `agent`/`handle` are DSH convenience views of
- * `capabilities.native.dsh` for the DSH specialists — `undefined` on a
- * non-DSH session; a DSH session's lifetime is still keyed by its handle, so
+ * `capabilities.native.dsh` for the DSH specialists (`undefined` on a
+ * non-DSH session); a DSH session's lifetime is still keyed by its handle, so
  * two wrappers of one owned agent close it once. A prepared session remains
  * owned by this cell until its synchronous adoption tail returns. The tail
  * is deliberately callback-shaped: it cannot leave a committed identity
@@ -292,7 +292,7 @@ export function createChannelBinding(initial: AgentSession, owner: ChannelOwner)
     /**
      * Close the bound session at channel release when this cell owns its
      * lifetime: any session that is not a DSH session (a backend session no
-     * host registry disposes — for the Claude backend, its CLI child). A DSH
+     * host registry disposes; for the Claude backend, its CLI child). A DSH
      * session's lifetime belongs to its handle's owner, never to the UI
      * release. Deferred one microtask, so release itself never awaits or
      * throws; idempotent with every other close of the same session.
@@ -336,13 +336,6 @@ export interface DshBindingCapture extends BindingCapture {
   readonly agent: Agent
 }
 
-/**
- * The binding as the DSH specialists see it: `agent` (and every capture's
- * agent) is the bound DSH agent. The specialists attach only when the bound
- * session is a DSH session (design §3.5), so reading `agent` through this
- * view on a non-DSH binding is a wiring bug and throws loudly instead of
- * handing a specialist `undefined`.
- */
 /** A commit seen through the DSH view: the replaced session's agent. */
 export interface DshBindingCommit extends BindingCommit {
   readonly agent: Agent
@@ -350,6 +343,13 @@ export interface DshBindingCommit extends BindingCommit {
 
 type Disposition = (next: PreviousDisposition) => void
 
+/**
+ * The binding as the DSH specialists see it: `agent` (and every capture's
+ * agent) is the bound DSH agent. The specialists attach only when the bound
+ * session is a DSH session, so reading `agent` through this view on a
+ * non-DSH binding is a wiring bug and throws loudly instead of handing a
+ * specialist `undefined`.
+ */
 export type DshChannelBinding = Omit<ChannelBinding, 'agent' | 'capture' | 'adopt' | 'switchTo'> & {
   readonly agent: Agent
   capture(): DshBindingCapture

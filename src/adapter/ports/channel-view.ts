@@ -64,12 +64,11 @@ export interface AttachedContext {
 }
 
 /**
- * One working-activity line value a backend publishes for its own session —
- * the wire shape of the DSH `dsh-working-activity` plugin's session
- * projection, which this port mirrors so a backend without that plugin (the
- * Claude backend folds its own) can serve the same working line. Structural
- * copy only: consumers narrow with `asActivityView` before rendering, so a
- * malformed value is dropped rather than shown half-formed.
+ * One working-activity line value a backend publishes for its own session.
+ * Same shape as the DSH `dsh-working-activity` plugin's session projection,
+ * so a backend without that plugin (Claude folds its own) can serve the same
+ * working line. Consumers narrow with `asActivityView` before rendering, so
+ * a malformed value is dropped rather than shown half-formed.
  */
 export interface WorkingActivityView {
   /** Which phase the line is in; `idle` means "render nothing". */
@@ -91,7 +90,7 @@ export interface WorkingActivityView {
   readonly phaseStartedAt: number
   /** Wall clock the current turn began (0 when no turn has started). */
   readonly turnStartedAt: number
-  /** Timestamp of the last folded event — the value's freshness signal. */
+  /** Timestamp of the last folded event (how fresh the value is). */
   readonly updatedAt: number
   /** Language the line was rendered in. */
   readonly lang: 'zh' | 'en'
@@ -143,9 +142,9 @@ export interface ChatRow {
   seq?: number
   /** The backend's own durable anchor of a row when it is not the row's
    *  `seq`: a `user` row's rewind anchor (a Claude message uuid), an
-   *  `assistant`/`reasoning` row's message (a Claude API message id — how
-   *  "load earlier" finds the record a folded row came from); absent on DSH
-   *  rows, whose anchor is the seq itself. */
+   *  `assistant`/`reasoning` row's message (a Claude API message id, which
+   *  "load earlier" uses to find the record a folded row came from); absent
+   *  on DSH rows, whose anchor is the seq itself. */
   anchor?: string
   /** True when the row's full text was folded to keep the transcript window
    *  bounded (see MAX_ROWS); the session log still holds the full content
@@ -283,10 +282,10 @@ export interface SubagentState {
   outputEvents: SubagentOutputLine[]
   toolCalls: SubagentToolCall[]
   tokens?: SubagentTokenUsage
-  /** The backend's own tool-count report (`usage.tool_uses`) — preferred
-   *  over the locally kept records, which miss lane frames (R6 review). */
+  /** The backend's own tool-count report (`usage.tool_uses`). Preferred
+   *  over the locally kept records, which miss lane frames. */
   reportedToolUses?: number
-  /** The backend's own duration report (`usage.duration_ms`) — free of the
+  /** The backend's own duration report (`usage.duration_ms`), free of the
    *  host's receive delay; per run (a resumed run reports its own). */
   reportedDurationMs?: number
   /** The tool the backend last saw the subagent run (`task_progress`). */
@@ -298,10 +297,9 @@ export interface SubagentState {
   depth?: number
   /** The agent that spawned this child, when the backend stated it as a
    *  fact (Claude resume back-fill: `parent_agent_id` / the delegating
-   *  transcript). Absent = parent unknown — depth 1 still proves a
-   *  main-loop child, but nothing deeper may be inferred from depth
-   *  (agent-team §2: no fake trees). Drives the workbench parent/sibling
-   *  panel. */
+   *  transcript). Absent = parent unknown: depth 1 still means a main-loop
+   *  child, but no deeper tree is inferred from depth alone. Drives the
+   *  workbench parent/sibling panel. */
   parentAgentId?: string
 }
 
@@ -464,13 +462,13 @@ export interface CostTokenBuckets {
   idle: TokenBucket
 }
 
-/** One completed turn's usage ledger (info-display design §C). Per-turn
- * aggregate of that turn's assistant-message usages — every message reports
- * its OWN request, so the sum is the turn total and never mixes with the
- * cumulative `tokens` (a turn-level report from the backend must not be
- * added on top). Absent wire fields stay absent: `cacheKnown` distinguishes
- * "the route reported zero cache" from "the route reports no cache at
- * all", so the UI never fabricates a zero. */
+/** One completed turn's usage ledger: the sum of that turn's
+ * assistant-message usages. Each message reports its own request, so the sum
+ * is the turn total and stays separate from the cumulative `tokens` (a
+ * turn-level report from the backend must not be added on top). Absent wire
+ * fields stay absent: `cacheKnown` tells "the route reported zero cache"
+ * from "the route reports no cache at all", so the UI never shows a made-up
+ * zero. */
 export interface TurnUsageSummary {
   readonly input: number
   readonly output: number
@@ -479,22 +477,21 @@ export interface TurnUsageSummary {
   /** True when any cache field was present on the wire this turn. */
   readonly cacheKnown: boolean
   /** Attempts within the turn that failed and were superseded (API
-   * retries) — 0 means no retry segment renders at all. */
+   * retries); 0 means no retry segment renders. */
   readonly retries: number
   /** turn.start → turn.end wall-clock span (ms). */
   readonly durationMs: number
   /** Model id the turn's last request ran on, when the backend reported
    * one; absent rather than guessed from the session model. */
   readonly model?: string
-  /** True when `model` DIFFERS from the previous turn's (or is the first
-   * turn with a model): the row renders the model name only then — an
-   * unchanged model repeated every turn is noise. Data stays available to
-   * the commands regardless. */
+  /** True when `model` differs from the previous turn's (or is the first
+   * turn with a model). The row names the model only then, since repeating
+   * an unchanged model every turn is noise; the commands still see it. */
   readonly noteModel?: boolean
   /** Reasoning effort the turn's requests pinned, when known. */
   readonly effort?: string
-  /** How the turn ended — an interrupted turn's ledger is partial truth
-   * and says so. */
+  /** How the turn ended; an interrupted turn's ledger is partial and the
+   * row says so. */
   readonly outcome: 'completed' | 'interrupted' | 'error'
 }
 
@@ -630,7 +627,7 @@ export interface PendingMessage {
   text: string
   images: readonly ComposerImageRef[]
   placement: 'steer' | 'followup'
-  /** Parked channel-side by an interrupt (Esc, Claude Code parity): the
+  /** Parked channel-side by an interrupt (Esc, as in Claude Code): the
    *  backend dropped its queued copy with the aborted turn, this preview is
    *  the only remaining copy, and nothing delivers it until the user sends
    *  the dock (⏎ / deliverDocked) or retracts it (Alt+↑ / the ↑ editor). */
@@ -643,28 +640,28 @@ export interface PendingMessage {
  */
 /**
  * One page of a subagent's own transcript (the agent capability's return;
- *  aliased here so the UI port stays free of module imports).
+ * aliased here so the UI port stays free of module imports).
  */
 export type SubagentTranscriptView = import('../../agent/capabilities.js').SubagentTranscriptPage
 export interface SubagentControl {
   interrupt(agentId: string): boolean
-  /** The child's full transcript source (Claude's on-disk child lane).
-   *  Absent = this backend has no transcript data (DSH): transcript UI is
-   *  not rendered for it — a degraded tail with its retained-range note is
-   *  shown instead (design agent-team-panels §2). Null = no such child. */
+  /** The child's full transcript source (Claude's on-disk child lane, or
+   *  the DSH child's own session log when the composition serves session
+   *  persistence). Absent = no transcript source: the transcript UI is not
+   *  rendered, and a degraded tail with its retained-range note shows
+   *  instead. Null = no such child. */
   history?(agentId: string, window?: import('../../agent/capabilities.js').SubagentTranscriptWindow): Promise<SubagentTranscriptView | null>
-  /** The user→agent message capability (design agent-team-full §5): present
-   *  only when the bound session's backend actually serves one — the MEMBER's
-   *  absence is the signal the composer reads to not render. Backed by real
-   *  transports only: Claude's parent-mediated relay, DSH's direct
-   *  continuable prompt control plane. */
+  /** The user→agent message capability, present only when the bound
+   *  session's backend actually serves one; when the member is absent the
+   *  composer does not render. Backed by real transports only: Claude's
+   *  parent-mediated relay, DSH's direct continuable prompt control plane. */
   message?: AgentMessageControl
 }
 
-// ── agent-team unified message domain (design agent-team-full §3) ─────────
+// ── agent-team message domain ───────────────────────────────────────────
 
-/** How one message to an agent travelled (agent-team §3). The transport is a
- *  FACT the backend states, never a guess:
+/** How one message to an agent travelled. The backend states the
+ *  transport; it is never guessed:
  *  'claude-parent-mediated' — the parent model relays through its own
  *  SendMessage tool (no public child Query send exists);
  *  'dsh-direct-continuable' — the human prompt control plane
@@ -674,14 +671,13 @@ export interface SubagentControl {
  *  DSH durable AgentMessageSource, form 'relay'). */
 export type AgentMessageVia = 'claude-parent-mediated' | 'dsh-direct-continuable' | 'dsh-agent-relay'
 
-/** Delivery state of one message (agent-team §3/§1.4). The fold is monotone:
- *  a view only ever advances, 'unknown' is a legal TERMINAL (no delivery
- *  fact was ever observable), and nothing may be claimed past 'queued'
- *  without an explicit backend fact — an accepted inbox is 'queued', never
- *  read or executed. */
+/** Delivery state of one message. The fold is monotone: a view only ever
+ *  advances, 'unknown' is a valid final state (no delivery fact was ever
+ *  observable), and nothing goes past 'queued' without an explicit backend
+ *  fact. An accepted inbox is 'queued', not read or executed. */
 export type AgentMessageState = 'issued' | 'queued' | 'delivered' | 'held' | 'refused' | 'expired' | 'unknown'
 
-/** Neutral identity of one agent in a team (agent-team §3): the stable id
+/** Backend-neutral identity of one agent in a team: the stable id
  *  its backend addresses it by (a Claude task/call id, a DSH durable child
  *  session id) plus the presentation facts that are actually known. */
 export interface AgentIdentity {
@@ -689,8 +685,7 @@ export interface AgentIdentity {
   readonly parentAgentId?: string
   readonly sessionId?: string
   /** A stable name the parent can address the child by. Absent = no name
-   *  addressing: disambiguate by id or hide the submit affordance
-   *  (agent-team §2.2). */
+   *  addressing: disambiguate by id or hide the submit affordance. */
   readonly name?: string
   /** Creation label (the delegation's description). */
   readonly label?: string
@@ -698,15 +693,15 @@ export interface AgentIdentity {
   readonly status?: SubagentStatus
 }
 
-/** One observed or submitted message to an agent (agent-team §3). */
+/** One observed or submitted message to an agent. */
 export interface AgentMessageView {
-  /** The durable inbox/session message id of the accepted message — NEVER
-   *  the local submission id (that is intentId; the two cannot be mixed).
+  /** The durable inbox/session message id of the accepted message, never
+   *  the local submission id (that is intentId; keep the two apart).
    *  Claude's SendMessage observation has no child inbox id: the parent tool
    *  call id (durable in the parent transcript) names it. */
   readonly messageId: string
   /** The channel-minted submission id, present when this view originated
-   *  from a local composer submit (agent-team §5.2's AgentMessageIntent). */
+   *  from a local composer submit. */
   readonly intentId?: string
   /** Sender: an agent id / session id, the reserved 'user', or absent when
    *  only the lane is known (a parent-lane observation renders as the
@@ -726,7 +721,7 @@ export interface AgentMessageView {
   readonly parentSessionId?: string
 }
 
-/** One composer submission to an agent (agent-team §5.1). */
+/** One composer submission to an agent. */
 export interface AgentMessageSubmitInput {
   /** Stable child id (the AgentIdentity the picker chose). */
   readonly targetId: string
@@ -739,27 +734,27 @@ export interface AgentMessageSubmitInput {
   readonly signal?: AbortSignal
 }
 
-/** The stable outcome of one submission. ok means the transport ACCEPTED the
- *  message (state names how far the fact goes — never past 'queued' without
- *  a backend fact); the failure reasons are the stable vocabulary the
- *  notices render (no raw provider error text required). */
+/** The stable outcome of one submission. ok means the transport accepted
+ *  the message (`state` says how far it got, never past 'queued' without a
+ *  backend fact). The failure reasons are the fixed vocabulary the notices
+ *  render, so no raw provider error text is needed. */
 export type AgentMessageSubmitResult =
   | { readonly ok: true; readonly intentId: string; readonly messageId?: string; readonly state: AgentMessageState }
   | { readonly ok: false; readonly reason: 'not-resumable' | 'unauthorized' | 'delivery-unavailable' | 'parent-unavailable' | 'target-ambiguous' | 'unavailable' | 'cancelled' | 'failed'; readonly message?: string }
 
-/** The user→agent message capability a channel may serve (agent-team §5).
- *  Present only when the backend's transport is real; the composer is not
- *  rendered otherwise (no capability, no UI). */
+/** The user→agent message capability a channel may serve. Present only
+ *  when the backend has a real transport; without it the composer is not
+ *  rendered. */
 export interface AgentMessageControl {
   readonly via: AgentMessageVia
-  /** Whether steer delivery (Ctrl+Enter) is a real capability here
-   *  (agent-team §6.3: DSH direct yes; Claude parent-mediated is always
-   *  followup and never interrupts the parent turn). */
+  /** Whether steer delivery (Ctrl+Enter) is supported here (DSH direct:
+   *  yes; Claude parent-mediated is always a followup and never interrupts
+   *  the parent turn). */
   readonly steer: boolean
   /** Addressable children, in roster order. Only children the transport may
    *  actually take (DSH: direct continuable catalog entries; Claude: the
    *  known subagent roster) are listed. Rejects when the backend's roster
-   *  read fails — a failed read is never an empty roster. */
+   *  read fails, so a failed read is never mistaken for an empty roster. */
   listTargets(): Promise<readonly AgentIdentity[]>
   /** Submit one composer text. Resolves once the transport accepted it or
    *  failed with a stable reason (the draft stays with the caller). */
@@ -772,11 +767,11 @@ export interface AgentMessageControl {
 
 
 
-/** One bounded timeline occurrence of a tracked job (info-display design
- * §D): lifecycle and output-drain observations in arrival order, wall-clock
- * stamped at receipt. The store keeps a bounded ring per job — this is an
- * observation log, not a complete history: entries older than the ring are
- * gone and the panel says "latest" rather than implying completeness. */
+/** One bounded timeline occurrence of a tracked job: lifecycle and
+ * output-drain observations in arrival order, wall-clock stamped at receipt.
+ * The store keeps a bounded ring per job, so this is an observation log, not
+ * a complete history: entries older than the ring are gone and the panel
+ * says "latest" rather than implying completeness. */
 export interface JobTimelineEvent {
   readonly kind: 'started' | 'progress' | 'output' | 'gap' | 'stopping' | 'settled'
   readonly at: number
@@ -821,18 +816,17 @@ export interface BackgroundJobState {
   /** Where the backend writes the job's output (as the backend reported
    *  it); the output tail is read from it while the job is on screen. */
   outputFile?: string
-  /** Last producer progress line SEEN (design §D): the live `progress` is
-   *  cleared at settle, but the focused detail keeps showing what the
-   *  producer last said (with its observation time and the producer kind as
-   *  the source) instead of dropping the fact. */
+  /** Last producer progress line seen. The live `progress` is cleared at
+   *  settle, but the focused detail keeps showing what the producer last
+   *  said (with its observation time and the producer kind as the source). */
   lastProgress?: string
   /** When `lastProgress` was observed (receipt wall-clock). */
   lastProgressAt?: number
   /** Output discontinuities observed for this job (ring evictions and
-   *  producer gaps) — a count, because the bytes behind a gap are gone by
-   *  definition and are never estimated. */
+   *  producer gaps). A count only: the bytes behind a gap are gone and are
+   *  never estimated. */
   gapCount?: number
-  /** Bounded observation timeline (design §D); undefined/empty for jobs
+  /** Bounded observation timeline; undefined/empty for jobs
    *  whose history predates the store's lifetime (a resumed roster). */
   timeline?: readonly JobTimelineEvent[]
 }
@@ -998,7 +992,7 @@ export interface BackendModeOption {
  * One relay channel profile (the typed `channels` capability a Claude
  * session declares; the store is backends/claude/channels.json). The port
  * restates the capability's own view so the UI layer never imports the
- * agent domain — the picker's rows and the mapping view both render from
+ * agent domain. The picker's rows and the mapping view both render from
  * these entries.
  */
 export interface BackendChannelOption {
@@ -1009,7 +1003,7 @@ export interface BackendChannelOption {
   /** Tier keyword → actual model entries, in file order (`default` = the
    *  any-model rule). */
   readonly tiers: readonly { readonly tier: string; readonly to: string }[]
-  /** The phase-3 connection slice (never a token literal); absent on
+  /** The connection fields (never a token literal); absent on
    *  mapping-only channels. Equal fingerprints = the same connection, so
    *  the picker can decide restart-vs-refresh without the secret. */
   readonly connection?: {
@@ -1133,8 +1127,8 @@ export interface ChannelCapabilities {
   /** `/color` keeps a per-session accent. */
   readonly color: boolean
   /** `/channel` manages the backend's relay channel profiles (Claude's
-   *  channels.json; false on every other backend, DSH included — the only
-   *  flag without the "a DSH session supports everything" shortcut). */
+   *  channels.json). False on every other backend, DSH included: the only
+   *  flag a DSH session does not get by default. */
   readonly channels: boolean
   /** `/mcp reconnect|toggle` control the backend's MCP servers (a DSH
    *  session reports status only). */
@@ -1173,31 +1167,30 @@ export interface ChannelSceneMetadata { readonly id: string; readonly title?: st
 export interface RawTrajEvent { readonly type: string; readonly seq: number; readonly time: number; readonly data: unknown }
 
 /**
- * What the channel's trajectory source can honestly report (design doc
- * 「④ 轨迹裁决」): a composition either mounted a trajectory source or it did
- * not — that fact is declared structurally (the backend-neutral core mounts
- * the AgentEvent fold; the DSH extension replaces it with its raw history),
- * never by backendId lookup.
+ * What the channel's trajectory source reports. A composition either mounted
+ * a trajectory source or it did not, and that is decided by what was mounted
+ * (the backend-neutral core mounts the AgentEvent fold; the DSH extension
+ * replaces it with its raw history), never by a backendId lookup.
  *
- *   'supported'    a source is mounted and has events (the golden DSH view;
+ *   'supported'    a source is mounted and has events (the DSH raw view;
  *                  Claude via the AgentEvent fold);
- *   'empty'        a source is mounted, the session just has no events yet —
- *                  the ONLY state that may promise "data once turns happen";
- *   'unsupported'  no source is mounted at all: surfaces must say THAT
- *                  instead of masquerading as an empty session, promise
- *                  no future data, and keep the fullscreen outlet disabled.
+ *   'empty'        a source is mounted, the session just has no events yet;
+ *                  the only state that may promise "data once turns happen";
+ *   'unsupported'  no source is mounted at all: surfaces say so instead of
+ *                  posing as an empty session, promise no future data, and
+ *                  keep the fullscreen outlet disabled.
  */
 export type TrajectorySource = 'supported' | 'empty' | 'unsupported'
 
 /**
- * One trajectory drilldown lane (design doc 「④ 轨迹裁决」完整档: 跨 Agent
- * drilldown): a subagent whose child-lane events the mounted source folded
- * into their own raw-event log. The scope filter (当前 Agent / 父回合 /
- * 全部后代) refolds those logs on demand; a composition whose source
- * attributes no lanes reports none and the filter is simply not offered.
+ * One trajectory drilldown lane (cross-agent drilldown): a subagent whose
+ * child-lane events the mounted source folded into their own raw-event log.
+ * The scope filter (当前 Agent / 父回合 / 全部后代) refolds those logs on
+ * demand; a source that attributes no lanes reports none and the filter is
+ * not offered.
  */
 export interface TrajectoryLane {
-  /** The subagent's id — the lane log's lookup key. */
+  /** The subagent's id (the lane log's lookup key). */
   readonly agentId: string
   /** The delegating tool call that anchors this lane (the lane router's key). */
   readonly callId?: string

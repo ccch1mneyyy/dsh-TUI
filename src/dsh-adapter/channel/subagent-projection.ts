@@ -13,15 +13,15 @@ type ProjectionState = Pick<ChannelState, 'rows' | 'subagents' | 'subagentCost' 
 /**
  * Structural view of the host `ctx.subagents` continuation service
  * (@deepseek-ai/dsh-subagent's SubagentRuntime) as this projection uses it.
- * Reached by OPTIONAL service lookup, so every member is optional — the
- * capability IS the method's presence. Nothing here bypasses the
+ * Reached by an optional service lookup, so every member is optional and
+ * the capability is the method's presence. Nothing here bypasses the
  * continuation manager: `prompt` goes through its exact-parent authority,
  * cold resume and inbox admission, `interrupt` through its authority check.
  */
 export interface SubagentsServiceView {
   interrupt?(target: string, reason: unknown): void
-  /** Browser-authored prompt to a direct continuable child (agent-team
-   *  §5.3): resolves with the accepted message's inbox id. */
+  /** Browser-authored prompt to a direct continuable child: resolves with
+   *  the accepted message's inbox id. */
   prompt?(request: {
     readonly requestId: string
     readonly parentSessionId: string
@@ -30,8 +30,8 @@ export interface SubagentsServiceView {
     readonly delivery: 'queue' | 'steer'
     readonly content: readonly { readonly type: 'text'; readonly text: string }[]
   }, signal: AbortSignal): Promise<{ readonly messageId: string }>
-  /** Durable direct-child catalog read; no Agent is loaded (agent-team
-   *  §2.1), so the rows carry no liveness guarantee. */
+  /** Durable direct-child catalog read; no Agent is loaded, so the rows
+   *  carry no liveness guarantee. */
   listChildren?(parentSessionId: string, signal?: AbortSignal): Promise<readonly SubagentCatalogEntryView[]>
 }
 
@@ -50,15 +50,15 @@ interface ProjectionDependencies {
   /** Optional child metadata lookup; failures must not suppress spawning. */
   lookupChild(id: string): { status?: string; session?: unknown; options?: { provider?: string; model?: string } } | undefined
   /** Aborted when the channel owner releases: cancels a prompt that has not
-   *  been accepted yet (agent-team §7 — an accepted child inbox belongs to
-   *  the continuation manager from then on). */
+   *  been accepted yet (an accepted child inbox belongs to the continuation
+   *  manager from then on). */
   ownerSignal?: AbortSignal
-  /** The DSH child transcript source (design dsh-child-transcript), injected
-   *  only when the host composition serves session persistence: its presence
-   *  IS the `SubagentControl.history` capability — the shared transcript tab
-   *  renders exactly when it exists, with no backend-specific UI. The reader
-   *  re-captures parent identity, binding generation and child ownership on
-   *  every call, so a plain pass-through is fence-safe. */
+  /** The DSH child transcript source (docs/dsh-child-transcript.md),
+   *  injected only when the host composition serves session persistence.
+   *  Its presence is the `SubagentControl.history` capability: the shared
+   *  transcript tab renders exactly when it exists, with no backend-specific
+   *  UI. The reader re-captures parent identity, binding generation and
+   *  child ownership on every call, so a plain pass-through is fence-safe. */
   readChildTranscript?: (agentId: string, window?: SubagentTranscriptWindow) => Promise<SubagentTranscriptPage | null>
 }
 
@@ -126,10 +126,10 @@ export function createSubagentProjection(getState: () => ProjectionState, deps: 
     }
   }
   /**
-   * The addressable roster (agent-team §5.3): the parent's durable direct-child
-   * catalog, filtered to continuable children only — one-shot, unknown-mode and
-   * diagnostic rows are deliberately NOT addressable (fail closed), and a
-   * missing continuation service rejects instead of answering an empty roster.
+   * The addressable roster: the parent's durable direct-child catalog,
+   * filtered to continuable children only. One-shot, unknown-mode and
+   * diagnostic rows are not addressable (fail closed), and a missing
+   * continuation service rejects instead of answering an empty roster.
    */
   const listTargets = async (): Promise<readonly AgentIdentity[]> => {
     const service = deps.subagents()
@@ -154,8 +154,8 @@ export function createSubagentProjection(getState: () => ProjectionState, deps: 
     get pendingTaskDescriptions() { return active.pendingTaskDescriptions },
     control: {
       interrupt: (id: string) => active.control.interrupt(id),
-      // The shared transcript page source (design dsh-child-transcript): the
-      // capability exists exactly when the injected reader does.
+      // The shared transcript page source: the capability exists exactly
+      // when the injected reader does.
       ...(deps.readChildTranscript === undefined ? {} : { history: deps.readChildTranscript }),
       message: {
         via: 'dsh-direct-continuable',
@@ -230,8 +230,8 @@ function createSessionSubagentProjection(
   deps: ProjectionDependencies & { visible(): boolean },
 ) {
   const store = new SubagentActivityStore()
-  /** Observed agent↔agent relay facts and prompt receipts of THIS parent
-   *  (agent-team §5.3/§5.4), oldest first, folded by durable message id. */
+  /** Observed agent↔agent relay facts and prompt receipts of this parent,
+   *  oldest first, folded by durable message id. */
   const agentMessages: AgentMessageView[] = []
   const rowsByAgentId = new Map<string, ChatRow>()
   const pendingTaskDescriptions: string[] = []
@@ -284,11 +284,11 @@ function createSessionSubagentProjection(
     syncNow()
     return true
   }
-  /** A relay delivered INTO a tracked child (agent-team §5.4): the durable
+  /** A relay delivered into a tracked child: the durable
    *  AgentMessageSource names the sending session, the receiving side is
-   *  this child. An admitted relay is 'queued' — nothing stronger is
-   *  provable from the log alone, and a plain user/message (no relay
-   *  source) never becomes one. */
+   *  this child. An admitted relay is 'queued', since nothing stronger is
+   *  provable from the log alone; a plain user/message (no relay source)
+   *  never becomes one. */
   const noteChildRelay = (childId: string, event: unknown): void => {
     const data = (event as { readonly data?: { readonly id?: unknown; readonly source?: unknown; readonly content?: unknown } }).data
     if (data === undefined || typeof data.id !== 'string' || data.id === '') return
@@ -393,10 +393,10 @@ function createSessionSubagentProjection(
     const data = ev.data ?? {}
     const childId = typeof data.childId === 'string' ? data.childId : undefined
     if (ev.type === 'user/message') {
-      // A relay delivered INTO this parent (agent-team §5.4): the durable
-      // AgentMessageSource names the sending session. Plain user text,
-      // injected context and settlement notices are NOT relays — they stay
-      // invisible here exactly as the translator keeps them out of bubbles.
+      // A relay delivered into this parent: the durable AgentMessageSource
+      // names the sending session. Plain user text, injected context and
+      // settlement notices are not relays; they stay invisible here, just as
+      // the translator keeps them out of bubbles.
       const relay = agentRelaySourceOf(data.source)
       if (relay !== undefined && typeof data.id === 'string' && data.id !== '') {
         foldAgentMessage(agentMessages, {
@@ -511,11 +511,11 @@ function createSessionSubagentProjection(
     getState().emit()
   }
   /**
-   * The direct continuable prompt (agent-team §5.3): one browser-authored
-   * message through the continuation manager — exact-parent authority, cold
-   * resume and inbox admission all stay ITS rules; this facade only shapes
-   * the request and folds the receipt. An accepted inbox is 'queued',
-   * never more; a failure maps to the stable vocabulary.
+   * The direct continuable prompt: one browser-authored message through
+   * the continuation manager, whose rules cover exact-parent authority,
+   * cold resume and inbox admission; this facade only shapes the request
+   * and folds the receipt. An accepted inbox is 'queued', never more; a
+   * failure maps to the stable vocabulary.
    */
   const submitPrompt = async (input: AgentMessageSubmitInput): Promise<AgentMessageSubmitResult> => {
     const service = deps.subagents()
@@ -523,8 +523,7 @@ function createSessionSubagentProjection(
     const text = input.text.trim()
     if (text === '') return { ok: false, reason: 'failed', message: 'empty text' }
     // Fail closed on a child this roster already knows cannot take a
-    // continuation (agent-team §12.5); the service re-checks with full
-    // authority regardless.
+    // continuation; the service re-checks with full authority regardless.
     if (store.get(input.targetId)?.mode === 'one-shot') return { ok: false, reason: 'not-resumable' }
     const parentSessionId = String(deps.agent().session.id)
     const requestId = `tui-${randomUUID()}`

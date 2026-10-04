@@ -1,10 +1,10 @@
 /**
- * Host seams every channel composition reads (docs/agent-backend-design.md
- * §3.5 item 6): the optional Cordis service rows (themes, workspaces, command
- * trees, scenes, settings sections, custom-entry renderers), the default-deny
- * decision gate with its dispatch-topology marker, the runtime subscriptions
- * that re-render on host changes, and the git-branch breadcrumb. Each lookup
- * degrades when its row is not mounted, whatever backend serves the session.
+ * Host seams every channel composition reads: the optional Cordis service
+ * rows (themes, workspaces, command trees, scenes, settings sections,
+ * custom-entry renderers), the default-deny decision gate with its
+ * dispatch-topology marker, the runtime subscriptions that re-render on host
+ * changes, and the git-branch breadcrumb. Each lookup degrades when its row
+ * is not mounted, whatever backend serves the session.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { adapterRuntimeFor } from '../../../adapter/kernel/runtime-context.js'
@@ -45,12 +45,12 @@ export interface CoreHost {
 export function resolveCoreHost(ctx: Context, owner: Pick<ChannelOwner, 'own'>): CoreHost {
   const adapterRuntime = adapterRuntimeFor(ctx)
   const themeHost = getHostThemes(ctx.get('tuiThemes') as TuiThemeRuntime | undefined)
-  // D-7 backstop: the extensions row installs the decision-subscription
-  // gate, but the channel IS the dispatch path — a stale patch without that
-  // row (or a bare embed mounting neither) would otherwise leave tui/input
-  // & friends subscribable by default, silently voiding the default-deny
-  // posture. Idempotent per cordis root, so the full-patch path installs
-  // exactly once whichever side runs first. Keep a private fallback for
+  // Backstop: the extensions row installs the decision-subscription gate,
+  // but the channel is the dispatch path. A stale patch without that row (or
+  // a bare embed mounting neither) would otherwise leave tui/input and
+  // friends subscribable by default, silently voiding default-deny.
+  // Idempotent per cordis root, so the full-patch path installs exactly
+  // once whichever side runs first. Keep a private fallback for
   // bare embedders, but resolve the host-owned store on every operation so
   // a plugin-host row mounted later (or a custom live GrantStore) is not
   // shadowed by an early snapshot.
@@ -128,8 +128,8 @@ export function createGitBranchRefresher(ctx: Context, deps: {
     const shell = ctx.get('shell') as ForegroundShell | undefined
     if (!shell) return
     // Capture the requested cwd: a /resume landing while this query is in
-    // flight refreshes the branch for the NEW cwd, so a late reply from the
-    // old workspace must be dropped (statusline staleness, issue #96 review).
+    // flight refreshes the branch for the new cwd, so a late reply from the
+    // old workspace must be dropped (stale statusline, issue #96).
     const requestedCwd = state.cwd
     void runForegroundShell(shell, {
       command: 'git branch --show-current',

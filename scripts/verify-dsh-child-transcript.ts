@@ -1,27 +1,29 @@
 /**
- * DSH child transcript regression (design dsh-child-transcript): the second
- * `SubagentControl.history` implementation, read through the PUBLIC
- * sessionPersistence range API and folded by the SAME shared leaf pipeline
- * Claude uses — no backend-specific UI anywhere.
+ * DSH child transcript regression (docs/dsh-child-transcript.md): the DSH
+ * implementation of `SubagentControl.history`, read through the public
+ * sessionPersistence range API and folded by the same shared leaf pipeline
+ * Claude uses, so no UI is backend-specific.
  *
- *  T. lane translation fixtures — user/assistant/tool/reasoning/image
+ *  T. lane translation fixtures: user/assistant/tool/reasoning/image
  *     payloads, error results, unknown required/optional events (only the
  *     three leaf kinds survive; todo/job/goal side events are filtered);
- *  O. ownership — parent-owned roster gate, catalog miss = null (no open),
+ *  O. ownership: parent-owned roster gate, catalog miss = null (no open),
  *     wrong stored parent/id/version/seeded-cut fail closed;
- *  W. windows — newest page and older slices over the child's OWN events
+ *  W. windows: newest page and older slices over the child's own events
  *     (`[inheritedEventCount, total)`), fork prefix never paged, eventCount
  *     from stat (with the freshness probe) and from bounded tail probes;
- *  B. budget — a 50k+ event log issues only bounded reads (probe reads are
+ *  B. budget: a 50k+ event log issues only bounded reads (probe reads are
  *     single-event and hard-capped; no unbounded whole-log read + slice);
- *  G. guards — binding-generation fence, cancellation, read/open failures =
- *     honest rejections, close exactly once, live-child flush barrier and its
- *     failure degradation, stale stat growth race;
- *  D. shared dedup/merge — durable ids/seq anchors/callIds, page prepend,
+ *  G. guards: binding-generation fence, cancellation, read/open failures
+ *     reject (unavailable, not empty), close exactly once, live-child flush
+ *     barrier and its failure degradation, stale stat growth race;
+ *  D. shared dedup/merge: durable ids/seq anchors/callIds, page prepend,
  *     history/live overlap through mergeLiveWindow;
- *  C. capability lighting — the real channel exposes `subagentControl.history`
+ *  C. capability lighting: the real channel exposes `subagentControl.history`
  *     exactly when the composition serves sessionPersistence (the shared
- *     transcript tab renders on it), and serves a page end to end.
+ *     transcript tab renders on it), and serves a page end to end;
+ *  S. source hygiene: the reader never touches the deprecated snapshot API
+ *     or a raw session-log reader.
  *
  * Run: node --import tsx/esm scripts/verify-dsh-child-transcript.ts
  */
@@ -132,6 +134,8 @@ const createMemoryPersistence = () => {
         inheritedEventCount: stored.inheritedEventCount,
         async read(offset = 0, length = Number.MAX_SAFE_INTEGER) {
           if (closed) throw new Error('handle closed')
+          // The host's range reader rejects what a slice would quietly clamp.
+          if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0) throw new TypeError(`invalid range ${offset}+${length}`)
           if (stored.failRead !== undefined) throw stored.failRead
           reads.push({ id, offset, length })
           return { eventState: 'shared', events: stored.events.slice(offset, offset + length) as never }
@@ -200,7 +204,7 @@ const rosterService = (ids: readonly string[]) => ({
   check('T6 tool call ids ride verbatim', (lane[1] as { callId: string }).callId === 'call-a' && (lane[3] as { callId: string }).callId === 'call-b')
   check('T7 an image block degrades safely (no attachments service)', (lane[5] as { blocks?: readonly unknown[] }).blocks !== undefined)
 
-  // The SAME page folds through the shared leaf pipeline.
+  // The same page folds through the shared leaf pipeline.
   const leaves: Leaf[] = []
   shared.foldTranscriptLeaves(page.events, leaves)
   const kinds = leaves.map(leaf => leaf.kind)
@@ -324,12 +328,30 @@ const rosterService = (ids: readonly string[]) => ({
   assert.ok(grownPage !== null)
   check('W8 a stale stat falls into the bounded probe and still finds the newest page', grownPage.uuids.at(-1) === 'grown-1', JSON.stringify(grownPage.uuids.slice(-2)))
 
-  // An empty child (cut === total): an honest empty page, not an error.
+  // An empty child (cut === total) gets an empty page, not an error.
   const emptyMemory = createMemoryPersistence()
   emptyMemory.sessions.set(CHILD, { header: { version: 4, id: CHILD, createdAt: 1, isSeeded: true, parentSession: PARENT }, events: child.events.slice(0, cut), inheritedEventCount: cut })
   const emptyDeps = makeDeps({ subagents: () => rosterService([CHILD]), persistence: () => emptyMemory.source })
   const emptyPage = await readChildTranscriptPage(emptyDeps.deps, CHILD)
   check('W9 a child with no own events pages empty (never fabricated)', emptyPage !== null && emptyPage.events.length === 0 && emptyPage.hasOlder === false && emptyPage.skippedFromStart === 0)
+
+  // An older request at the bottom of the history (or for nothing) reads no
+  // event: never the inherited prefix's last event, never a negative offset.
+  const bottomStart = memory.reads.length
+  const bottom = await readChildTranscriptPage(deps, CHILD, { count: 400, skipFromStart: 0 })
+  check('W10 an older window at the cut reads nothing below it',
+    bottom !== null && bottom.events.length === 0 && bottom.uuids.length === 0 && bottom.skippedFromStart === 0 && bottom.hasOlder === false
+    && memory.reads.slice(bottomStart).every(read => read.offset >= cut - 1 && read.length === 1),
+    JSON.stringify(memory.reads.slice(bottomStart)))
+  const unseeded = makeDeps({ subagents: () => rosterService([CHILD]), persistence: () => statMemory.source })
+  const unseededBottom = await readChildTranscriptPage(unseeded.deps, CHILD, { count: 400, skipFromStart: 0 })
+  const zeroStart = statMemory.reads.length
+  const zeroCount = await readChildTranscriptPage(unseeded.deps, CHILD, { count: 0, skipFromStart: 120 })
+  check('W11 an unseeded bottom window and a zero count page empty, cursor unchanged',
+    unseededBottom !== null && unseededBottom.events.length === 0 && unseededBottom.hasOlder === false
+    && zeroCount !== null && zeroCount.events.length === 0 && zeroCount.skippedFromStart === 120 && zeroCount.hasOlder === true
+    && statMemory.reads.slice(zeroStart).every(read => read.length === 1),
+    JSON.stringify(statMemory.reads.slice(zeroStart)))
 }
 
 // ── Section B: read budget on a 50k+ log ───────────────────────────────────
@@ -474,7 +496,7 @@ const rosterService = (ids: readonly string[]) => ({
 
   // history/live overlap: the live window's settled tool pairs by callId, its
   // text lines the history already paints are suppressed, a live-only call
-  // appends — exactly the Claude contract.
+  // appends. Same contract as Claude.
   const state = {
     agentId: CHILD, description: 'scan', status: 'running' as const, startedAt: 1,
     output: [], outputEvents: [{ kind: 'text' as const, text: 'part 899', at: 1, settled: true }],
@@ -494,6 +516,32 @@ const rosterService = (ids: readonly string[]) => ({
   const again = await readChildTranscriptPage(deps, CHILD)
   assert.ok(again !== null)
   check('D7 a repeated load is idempotent', JSON.stringify(again.events) === JSON.stringify(newest.events))
+}
+{
+  // A call that closes one page and its result that opens the next: the
+  // newest page still carries the result body (and an error's text) for the
+  // card the older page paints.
+  const child = new Log()
+  for (let i = 0; i < 398; i += 1) child.assistant(`m-${i}`, [text(`part ${i}`)])
+  child.call('call-split-error', 'bash', { command: 'false' })
+  child.call('call-split', 'bash', { command: 'ls' })
+  child.result('call-split', [text('SPLIT RESULT BODY')])
+  for (let i = 0; i < 398; i += 1) child.assistant(`n-${i}`, [text(`more ${i}`)])
+  child.result('call-split-error', [text('exit 1')], true)
+  const memory = createMemoryPersistence()
+  memory.sessions.set(CHILD, { header: { version: 4, id: CHILD, createdAt: 1, isSeeded: false }, events: child.events, inheritedEventCount: 0, statEventCount: child.events.length })
+  const { deps } = makeDeps({ subagents: () => rosterService([CHILD]), persistence: () => memory.source })
+  const newest = await readChildTranscriptPage(deps, CHILD)
+  assert.ok(newest !== null)
+  const results = newest.events.filter((event): event is Extract<typeof event, { type: 'tool.result' }> => event.type === 'tool.result')
+  const split = results.find(event => event.callId === 'call-split')
+  const failed = results.find(event => event.callId === 'call-split-error')
+  check('D8 a result whose call is on the older page keeps its body',
+    newest.events.every(event => event.type !== 'tool.call') && split?.text === 'SPLIT RESULT BODY' && split.parentCallId === CHILD,
+    JSON.stringify(split))
+  check('D9 an error result whose call is on the older page keeps its error text',
+    failed?.isError === true && (failed.errorText ?? '').includes('tool/failed'),
+    JSON.stringify(failed))
 }
 
 // ── Section C: capability lighting through the real channel ────────────────
@@ -540,7 +588,7 @@ const rosterService = (ids: readonly string[]) => ({
   check('C4 without sessionPersistence the capability is absent (no tab)', withoutPersistence.subagentControl?.history === undefined)
 }
 
-// ── Section S: source hygiene — the banned paths stay banned ───────────────
+// ── Section S: source hygiene (the banned paths stay banned) ───────────────
 {
   const source = readFileSync(join(here, '..', 'src', 'dsh-adapter', 'channel', 'subagent-transcript.ts'), 'utf8')
   check('S1 the reader never touches the deprecated snapshot API', !source.includes('snapshotEvents'))

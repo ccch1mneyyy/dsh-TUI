@@ -1,7 +1,7 @@
 /**
- * The live session handle a channel holds (docs/agent-backend-design.md §3.4):
- * one replay source, one event subscription, one input path, cancellation and
- * disposal. Everything backend-specific beyond that is a typed capability.
+ * The live session handle a channel holds: one replay source, one event
+ * subscription, one input path, cancellation and disposal. Everything
+ * backend-specific beyond that is a typed capability.
  */
 import type { SessionCapabilities } from './capabilities.js'
 import type { AgentEvent, AgentEventMeta, ContentBlockView, ImageRef } from './events.js'
@@ -37,25 +37,25 @@ export type AgentSessionStatus = 'starting' | 'idle' | 'running' | 'requires-act
 
 /**
  * Why a cancellation was requested: `user` keeps queued inputs for the next
- * turn; `interrupt` drops them — the channel parks the dropped copies as a
- * dock and re-delivers nothing until the user asks (Claude Code parity);
+ * turn; `interrupt` drops them, and the channel parks the dropped copies as
+ * a dock and re-delivers nothing until the user asks (as Claude Code does);
  * `switch`/`dispose` leave the session.
  */
 export type CancelCause = 'user' | 'interrupt' | 'switch' | 'dispose'
 
 /** How definite a cancel receipt's `stillQueued` list is. The channel's
- * dock grants edit/resend rights on the backend's copies being GONE, so
- * only a `confirmed` answer may ever read as "the queue is empty":
- * `unknown` (no receipt came back — an older CLI) and `failed` (the cancel
- * request itself failed) carry the conservative request-time snapshot of
- * what the cancel covered instead. */
+ * dock only allows edit/resend once the backend's copies are gone, so only
+ * a `confirmed` answer may read as "the queue is empty". `unknown` (no
+ * receipt came back, e.g. an older CLI) and `failed` (the cancel request
+ * itself failed) carry the conservative request-time snapshot of what the
+ * cancel covered instead. */
 export type CancelOutcome = 'confirmed' | 'unknown' | 'failed'
 
 /** The receipt of a cancel: `stillQueued` names the inputs (channel
- * clientMessageIds) whose backend copies were NOT confirmed withdrawn. A
+ * clientMessageIds) whose backend copies were not confirmed withdrawn. A
  * `confirmed` answer is the backend's live queue snapshot (the copies that
  * will still run); anything else is the request-time snapshot of the
- * covered inputs — never a definite empty queue. */
+ * covered inputs, never a definite empty queue. */
 export interface CancelReceipt {
   readonly stillQueued: readonly string[]
   readonly outcome: CancelOutcome
@@ -81,7 +81,7 @@ export interface AgentSession {
   /** Cancel the running turn. An `interrupt` also asks the backend to drop
    *  its queued inputs; the receipt says which copies are still live. A
    *  receipt whose `outcome` is not `confirmed` must never be read as an
-   *  empty queue — the backend may still hold every copy. */
+   *  empty queue: the backend may still hold every copy. */
   cancel(cause: CancelCause): Promise<CancelReceipt>
   dispose(): Promise<void>
 }

@@ -26,11 +26,11 @@ export interface ChannelLaunchOptions {
    *  projection value only arrives on change, so a resumed session needs this
    *  read to render its line before the next event lands. */
   seedActivity?: (session: unknown) => void
-  /** Land one BACKEND-authored working-activity value for the bound session
+  /** Land one backend-authored working-activity value for the bound session
    *  (the Claude backend's counterpart of the projection feed: the session's
-   *  `workingActivity` capability, wired per binding — see
+   *  `workingActivity` capability, wired per binding in
    *  `channel/session-activity.ts`). Values are narrowed (`asActivityView`)
-   *  before this is called; absent → the capability is simply not consumed. */
+   *  before this is called; absent → the capability is not consumed. */
   publishActivity?: (sessionId: string, view: ActivityView) => void
   /** Drop the bound session's backend-authored working-activity value (its
    *  session went away: the next binding, or the channel's release). */
@@ -99,14 +99,14 @@ export interface ChannelLaunchOptions {
    */
   openSession?: (target: Extract<OpenTarget, { readonly kind: 'create' | 'resume' }>) => Promise<AgentSession>
   /**
-   * The backend's offline session catalog (design §4.11): the session
-   * browser's listing, preview, rename and delete for a non-DSH session.
+   * The backend's offline session catalog: the session browser's
+   * listing, preview, rename and delete for a non-DSH session.
    * With `openSession` it enables `/resume`. DSH sessions ignore it.
    */
   sessionCatalog?: SessionCatalog
   /**
-   * The backend's session preferences (design §3.6: TUI-side notes only,
-   * never the transcripts): the MRU note of each use, the launcher's
+   * The backend's session preferences (TUI-side notes only, never the
+   * transcripts): the MRU note of each use, the launcher's
    * last-session marker, and forgetting a deleted session.
    */
   sessionPrefs?: {
@@ -115,13 +115,13 @@ export interface ChannelLaunchOptions {
     forget(sessionId: string): void
   }
   /** The startup session's durable history, read before construction so
-   *  the first bind paints it ahead of any live event (design §4.11). */
+   *  the first bind paints it ahead of any live event. */
   initialHistory?: readonly AgentEvent[]
   /** How a user re-enters a session of this backend from a shell (the
    *  `/fork` notice); absent → the in-TUI `/resume` hint. */
   resumeCommand?: (sessionId: string) => string
   /**
-   * The stores a non-DSH session's prompts park in (design §4.7): its
+   * The stores a non-DSH session's prompts park in: its
    * `permission.request` events go to `permissions` (the panel Chat renders
    * for this channel), its `question.request` events to `questions`. Absent →
    * such events are dropped (a backend that declares no prompt capability).

@@ -1,9 +1,9 @@
 {
   "$comment": [
-    "UI value imports from src/dsh-adapter/ that predate the §8.0 rule table (docs/agent-backend-design.md §2.3, §8.7).",
+    "UI value imports from src/dsh-adapter/ that predate the boundary rules (ADAPTER.md 「边界规则」).",
     "verify-adapter-boundary.ts reports these as one warning; a new pair fails the gate, and a pair that no longer matches must be deleted here.",
-    "Planned cleanup: Phase 2 (Chat.tsx sessionCwdMatches) and Phase 3 (dialog/status/approval fallback stores); the rest move to neutral modules as they are touched.",
-    "Merge of main bca29675 (2026-10-02): five pairs main added (side panels, launchpad version banner, StatusMetrics occupancy fallback) are registered as they landed; same cleanup rule."
+    "Planned cleanup: Chat.tsx sessionCwdMatches and the dialog/status/approval fallback stores first; the rest move to neutral modules as they are touched.",
+    "The side-panel, launchpad version banner and StatusMetrics occupancy-fallback pairs arrived with a merge from main; same cleanup rule."
   ],
   "entries": [
     {

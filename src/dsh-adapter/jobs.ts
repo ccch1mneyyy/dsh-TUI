@@ -108,8 +108,8 @@ export const JOBS_MAX_TRACKED = 40
 /** Output tail lines retained per job (the card waterfall shows the last 3;
  *  the /jobs panel detail shows the whole retained tail). */
 export const JOBS_MAX_OUTPUT_LINES = 30
-/** Timeline events retained per job (design §D): the /jobs detail renders
- *  the latest slice; older observations are dropped, never re-derived. */
+/** Timeline events retained per job: the /jobs detail renders the latest
+ *  slice; older observations are dropped, never re-derived. */
 export const JOBS_MAX_TIMELINE = 40
 /** A `job_output` result's trailing status suffix — never a waterfall line. */
 const STATUS_SUFFIX_PATTERN = /^\s*\[status:\s/
@@ -136,10 +136,10 @@ interface KernelReadState {
   partial: string
 }
 
-/** Append one bounded timeline observation (design §D). Timeline events
- *  live directly on the job state so a snapshot reader sees them without a
- *  second lookup; the ring drops the OLDEST entries — the detail renders
- *  the latest slice and never implies a complete history. */
+/** Append one bounded timeline observation. Timeline events live directly
+ *  on the job state so a snapshot reader sees them without a second lookup;
+ *  the ring drops the oldest entries, and the detail renders the latest
+ *  slice without implying a complete history. */
 function recordTimeline(job: BackgroundJobState, event: JobTimelineEvent): void {
   const timeline = [...(job.timeline ?? []), event]
   job.timeline = timeline.length > JOBS_MAX_TIMELINE ? timeline.slice(timeline.length - JOBS_MAX_TIMELINE) : timeline
@@ -182,12 +182,12 @@ export class BackgroundJobStore {
           status: snap.status,
           ...(snap.detail === undefined ? {} : { detail: snap.detail }),
           ...(snap.progress === undefined ? {} : { progress: snap.progress }),
-          // First sight already terminal (a roster refresh mid-flight missed
-          // the live phase): the timeline starts at the settle fact.
           ...(snap.progress === undefined || snap.progress === '' ? {} : { lastProgress: snap.progress, lastProgressAt: Date.now() }),
           startedAt: snap.startedAt,
           ...(snap.finishedAt === undefined ? {} : { finishedAt: snap.finishedAt }),
           outputLines: [],
+          // First sight already terminal (a roster refresh mid-flight missed
+          // the live phase): the timeline starts at the settle fact.
           timeline: [{ kind: isTerminal(snap.status) ? 'settled' : 'started', at: snap.startedAt, ...(snap.detail === undefined ? {} : { text: snap.detail }) }],
           ...(snap.output === undefined ? {} : {
             outputTotalBytes: snap.output.total,
@@ -206,8 +206,8 @@ export class BackgroundJobStore {
         prev.finishedAt === snap.finishedAt
       ) continue
       const wasLive = !isTerminal(prev.status)
-      // Captured BEFORE the write below: the lifecycle-event gate compares
-      // against the PREVIOUS status, which the assignment would erase.
+      // Captured before the write below: the lifecycle-event gate compares
+      // against the previous status, which the assignment overwrites.
       const prevStatus = prev.status
       prev.status = snap.status
       prev.label = snap.label
@@ -216,8 +216,8 @@ export class BackgroundJobStore {
       if (snap.progress === undefined) delete prev.progress
       else prev.progress = snap.progress
       // The live progress line dies at settle, but the last thing the producer
-      // said survives for the focused detail (design §D) with its observation
-      // time — the source is the producer kind the row already names.
+      // said survives for the focused detail, with its observation time (the
+      // source is the producer kind the row already names).
       if (snap.progress !== undefined && snap.progress !== '') {
         prev.lastProgress = snap.progress
         prev.lastProgressAt = Date.now()

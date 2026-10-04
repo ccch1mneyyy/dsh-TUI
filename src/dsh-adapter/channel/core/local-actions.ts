@@ -1,10 +1,9 @@
 /**
- * Local-only transcript actions every session gets
- * (docs/agent-backend-design.md §3.5): `/clear`, local report rows, `!cmd` /
- * `!!cmd` through the session's workspace shell, `/activity frames`, and the
- * "load earlier" restore of folded rows — the latter only when the backend
- * can slice its own durable history (otherwise nothing is ever folded and
- * the action restores 0 rows).
+ * Local-only transcript actions every session gets: `/clear`, local report
+ * rows, `!cmd` / `!!cmd` through the session's workspace shell,
+ * `/activity frames`, and the "load earlier" restore of folded rows. The
+ * restore only works when the backend can slice its own durable history;
+ * otherwise nothing is ever folded and the action restores 0 rows.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'

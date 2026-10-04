@@ -1,5 +1,5 @@
 /**
- * Agent Domain gate (docs/agent-backend-design.md §8.0 `verify:agent-domain`):
+ * Agent Domain gate (`pnpm run verify:agent-domain`):
  *
  *  1. Session references round-trip through `formatSessionRef` /
  *     `parseSessionRef`, including backend ids that contain a colon
@@ -8,7 +8,7 @@
  *     `AgentEvent` in a `switch (event.type)` whose default is a `never`
  *     check, and every translator (`src/dsh-adapter/backend/translate.ts`,
  *     `src/backends/<id>/translate.ts`) carries an exhaustive
- *     `switch (type)` over `AgentEventType` with a `never` default — so a new
+ *     `switch (type)` over `AgentEventType` with a `never` default, so a new
  *     event variant fails `tsc` in each place until it is decided.
  *  3. The DSH translator only emits the event types it declares
  *     (`dshEmits`), over every DSH fixture (live and replay).

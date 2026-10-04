@@ -1,6 +1,6 @@
 /**
- * The backend-neutral channel core (docs/agent-backend-design.md §3.5): one
- * composition for every `AgentSession`, whatever backend serves it.
+ * The backend-neutral channel core: one composition for every
+ * `AgentSession`, whatever backend serves it.
  *
  * `createCoreChannel` acquires, in one owner transaction, the binding, the
  * host seams and decision gate, the emitter, notifications, context
@@ -11,7 +11,7 @@
  * the common half of the `ChannelState`. Nothing is subscribed and no action
  * is callable yet.
  *
- * An extension (the DSH specialists, `../extensions.ts`) then `extend`s the
+ * An extension (the DSH extensions, `../extensions.ts`) then `extend`s the
  * core: hooks into the feed and the emitter, state fields it serves, and its
  * action delegates on top of the core's. `start()` installs the action table
  * once, starts the runtime subscriptions, binds the session, and hands the
@@ -88,13 +88,13 @@ export interface ChannelExtension {
    *  `transcript` capability does (folding only the rows it can restore),
    *  and without either nothing folds. */
   loadOlder?(): number
-  /** The extension projects subagents and background jobs itself (DSH: its
-   *  host-service specialists): the core's event-driven activity projection
-   *  stays inert and its controls are the extension's. */
+  /** The extension projects subagents and background jobs itself (DSH, from
+   *  its host services): the core's event-driven activity projection stays
+   *  inert and its controls are the extension's. */
   readonly ownsActivity?: boolean
   /** The extension serves the trajectory surface itself (DSH: the raw
-   *  session history IS the source): the core's AgentEvent fold stays inert
-   *  and its accessors are replaced by the extension's (design §④). */
+   *  session history is the source): the core's AgentEvent fold stays inert
+   *  and its accessors are replaced by the extension's. */
   readonly ownsTrajectory?: boolean
   /** Whether the local disk stands in for a missing host `fs` service
    *  (default true; the DSH workspace may be remote, so DSH says false). */
@@ -135,9 +135,9 @@ export function createCoreChannel(
 ) {
   const rowIds = { value: 0 }
   const binding: ChannelBinding = createChannelBinding(initialSession, owner)
-  // A session that owns its own lifetime (no host registry disposes it — any
-  // non-DSH backend) is closed when the channel releases; registered first,
-  // so a throw anywhere later in construction still stops it. Replaced
+  // A session that owns its own lifetime (no host registry disposes it, i.e.
+  // any non-DSH backend) is closed when the channel releases. Registered
+  // first, so a throw anywhere later in construction still stops it. Replaced
   // sessions are closed by the binding at adoption.
   owner.own(() => { binding.releaseOwned() })
   const host: CoreHost = resolveCoreHost(ctx, owner)
@@ -160,15 +160,15 @@ export function createCoreChannel(
     if (!owner.current()) return () => undefined
     return channelCommands(state).notify(...args)
   }
-  /** The explicit failure every unbacked action reports (design §3.5). */
+  /** The explicit failure every unbacked action reports. */
   const unavailable = (name: string): void => {
     notify(t('capability-unavailable-backend', { name }), { color: 'warning', timeoutMs: 4000 })
   }
   const unavailableLines = (name: string): string[] => [t('capability-unavailable-backend', { name })]
   /**
-   * Subagents and background jobs of a session no extension projects
-   * (design §4.8): fed by the shared projector in stream order; output tails
-   * read through the session's `tasks` capability while a card is watched.
+   * Subagents and background jobs of a session no extension projects: fed by
+   * the shared projector in stream order. Output tails are read through the
+   * session's `tasks` capability while a card is watched.
    */
   const activity = createActivityProjection(() => state, {
     rowIds,
@@ -179,22 +179,20 @@ export function createCoreChannel(
   owner.own(() => { activity.dispose() })
   const activityOwned = (): boolean => extension.ownsActivity !== true
   /**
-   * The core's own trajectory source (design agent-team-panels §④ 轨迹
-   * 裁决): an incremental fold of the neutral AgentEvent stream into the
-   * raw-event vocabulary the trajectory projection consumes — the source a
-   * session without a durable DSH log (Claude today) mounts, so its report
-   * is 'empty'/'supported' rather than a dishonest 'unsupported'. A session
-   * an extension claims the trajectory for (DSH: raw history) keeps this
-   * fold inert — same ownership rule as the activity projection above.
+   * The core's own trajectory source: an incremental fold of the neutral
+   * AgentEvent stream into the raw-event vocabulary the trajectory
+   * projection consumes. Sessions without a durable DSH log (Claude today)
+   * use it, so they report 'empty'/'supported' instead of 'unsupported'.
+   * When an extension owns the trajectory (DSH: raw history) this fold stays
+   * inert, the same ownership rule as the activity projection above.
    */
   const agentTrajectory = createAgentTrajectorySource()
   const trajectoryOwned = (): boolean => extension.ownsTrajectory !== true
   /**
    * The binding generation the view was last `/clear`ed in. `/clear` is
-   * view-only (every backend, as DSH): history older than the cleared view
-   * must not come back through "load earlier" — rows folded after the
-   * clear still restore — and the divider is hidden, until another session
-   * is bound.
+   * view-only on every backend. Until another session is bound, history
+   * older than the cleared view must not come back through "load earlier"
+   * (rows folded after the clear still restore) and the divider is hidden.
    */
   let clearedGeneration: number | undefined
   const viewCleared = (): boolean => clearedGeneration !== undefined && clearedGeneration === state.agentBindingGeneration
@@ -227,11 +225,11 @@ export function createCoreChannel(
   )
   const { resetContextWarning, checkContextWarning, trackPending, untrackPending } = bookkeeping
 
-  // IDE selection channel (AC-5): one IdeChannel per channel, started in the
-  // background against the session cwd — lock discovery needs it, env
-  // direct-connect does not but tolerates the extra hint. start() is fully
-  // non-throwing and self-degrading, so a missing IDE costs nothing and
-  // startup never waits on the loopback dial.
+  // IDE selection link: one IdeChannel per channel, started in the
+  // background against the session cwd (lock discovery needs it; env
+  // direct-connect does not). start() never throws and degrades on its
+  // own, so a missing IDE costs nothing and startup never waits on the
+  // loopback dial.
   const ideChannel = new IdeChannel()
   // The loopback link lives outside every other owner: own its stop at once
   // so a construction failure past this line releases it (`stop` is
@@ -243,20 +241,20 @@ export function createCoreChannel(
     // The channel already clears empty snapshots internally; mirror that here
     // so consumption reads one consistent variable.
     currentSelection = snapshot.isEmpty ? undefined : snapshot
-    // Live prompt-footer badge: the projection must reach the screen BEFORE
-    // the user submits — emit() bumps `version` so the useSyncExternalStore
+    // Live prompt-footer badge: the selection must reach the screen before
+    // the user submits. emit() bumps `version` so the useSyncExternalStore
     // tree re-renders with the new badge immediately.
     state.selection = currentSelection
     state.emit()
   })
   /**
    * Re-target the IDE selection link when the session's working directory
-   * changes (/resume, /workspace, /new, an adopted background session): a
-   * selection made in the OLD workspace would otherwise stay projected — the
-   * badge shows it and the next submit attaches the wrong file — and the OLD
-   * link would keep pushing the old window's selections into the new one.
-   * rebind() drops the link and rediscovers against the new cwd. Callers
-   * set state.cwd BEFORE this runs, so it reads the fresh value.
+   * changes (/resume, /workspace, /new, an adopted background session).
+   * Otherwise a selection from the old workspace stays visible (the badge
+   * shows it and the next submit attaches the wrong file) and the old link
+   * keeps pushing the old window's selections into the new one. rebind()
+   * drops the link and rediscovers against the new cwd. Callers set
+   * state.cwd before this runs, so it reads the fresh value.
    */
   const resetIdeSelection = (): void => {
     currentSelection = undefined
@@ -265,11 +263,11 @@ export function createCoreChannel(
     void ideChannel.rebind(state.cwd).catch(() => {})
   }
   const selectionAttachments = createSelectionAttachments()
-  // "Send to Chat" (side-panel §6.7): staged panel contexts are a session-scoped
-  // projection like the selection above — the registry writes through the live
-  // state (so every session-projection reset clears them with everything else)
-  // and the submit path takes them off in one step. Backend-neutral: the
-  // context rides the submission as one more text block.
+  // "Send to Chat": staged panel contexts are session-scoped like the
+  // selection above. The registry writes through the live state, so every
+  // session-projection reset clears them with everything else, and the
+  // submit path takes them all in one step. Backend-neutral: the context is
+  // sent as one more text block of the submission.
   const contextRegistry = createAttachedContextRegistry(() => state, () => state.emit())
   /**
    * Images for a session that takes them itself (the `images` capability):
@@ -301,10 +299,10 @@ export function createCoreChannel(
    *  second interrupt while the abort settles cannot double-deliver. */
   const inputConvergence: InputConvergence = { interruptSeq: 0, cancelInFlight: false, cancelCause: undefined }
   /**
-   * Monotonic counter for the parent-mediated message intents (agent-team
-   * §5.2): the intentId names the LOCAL submission only — it is never a
-   * durable message id, and the parent's own SendMessage call (whenever the
-   * model makes it) is correlated by its call id, not by this.
+   * Monotonic counter for parent-mediated message intents. The intentId
+   * names the local submission only. It is never a durable message id, and
+   * the parent's own SendMessage call (whenever the model makes it) is
+   * matched by its call id, not by this.
    */
   let agentMessageIntents = 0
 
@@ -379,11 +377,11 @@ export function createCoreChannel(
       return state.minimalUi
     },
     /**
-     * Context occupancy is DERIVED here, not stored: it combines the cached
-     * host projection value (a map lookup) with this channel's own fallback
-     * sample and capacity. An accessor is what keeps "one source of truth"
-     * true without republishing a derived value from every mutation site that
-     * can move the window or the sample (replay, resume, model switch, reset).
+     * Context occupancy is derived on read, not stored: the cached host
+     * projection value (a map lookup) combined with this channel's own
+     * fallback sample and capacity. An accessor avoids republishing it from
+     * every site that can move the window or the sample (replay, resume,
+     * model switch, reset).
      */
     get contextOccupancy() {
       return resolveContextOccupancy(
@@ -431,10 +429,11 @@ export function createCoreChannel(
         return true
       },
       // The child transcript source exists only while the bound session's
-      // backend offers it (Claude's store read; a DSH session has no such
-      // data plane): the METHOD's absence is what the detail scene reads to
-      // decide whether a Transcript page renders at all. A failed read
-      // resolves null — the scene says unavailable, never empty.
+      // `subagents.history` capability does (Claude's store read; the DSH
+      // extension replaces this whole control with one backed by its own
+      // child transcript reader). The detail scene renders a Transcript page
+      // only when this method exists. A failed read resolves null, so the
+      // scene shows "unavailable" rather than an empty transcript.
       ...(binding.session.capabilities.subagents?.history === undefined ? {} : {
         history: (agentId: string, window?: import('../../../agent/capabilities.js').SubagentTranscriptWindow): Promise<SubagentTranscriptView | null> => {
           const history = binding.session.capabilities.subagents?.history
@@ -443,15 +442,14 @@ export function createCoreChannel(
         },
       }),
       /**
-       * agent-team §5.2: the parent-mediated message control, composed only
-       * when the bound session declares the relay-observation capability
-       * (Claude; a DSH session's extension replaces this whole control with
-       * its direct continuable one). The submit path is the PARENT's own
-       * submission pipeline: one directed-instruction envelope, fixed
-       * 'followup' (never steer, never the dock — agent-team §6), through
-       * the same FIFO/decision chain a typed message takes; 'issued' is the
-       * honest ceiling of what that acceptance proves. The parent model
-       * decides autonomously whether and when to relay (SendMessage).
+       * Parent-mediated message control, composed only when the bound
+       * session declares the relay-observation capability (Claude; the DSH
+       * extension replaces this whole control with its direct one). Submit
+       * goes through the parent's own input pipeline: one directed-instruction
+       * envelope, always 'followup' (never steer, never the dock), through
+       * the same FIFO/decision chain a typed message takes. 'issued' is all
+       * that acceptance proves; the parent model decides whether and when to
+       * relay it (SendMessage).
        */
       ...(binding.session.capabilities.subagents?.message === undefined ? {} : {
         message: {
@@ -520,10 +518,10 @@ export function createCoreChannel(
     closePluginScene: () => { host.sceneRuntime?.close() },
     releaseContributions() {
       // Owner cleanup is exhaustive, but it can report an external cleanup
-      // failure. The emitter and the IDE loopback link are both OUTSIDE the
-      // owner and must still stop no matter which earlier step throws — a
-      // bare trailing ideChannel.stop() used to be skipped whenever
-      // owner.dispose() threw, leaking the socket (maintainer review round 3).
+      // failure. The emitter and the IDE loopback link live outside the owner
+      // and must still stop whichever earlier step throws; a plain trailing
+      // ideChannel.stop() would be skipped when owner.dispose() throws and
+      // leak the socket.
       try {
         owner.dispose()
       } finally {
@@ -531,34 +529,31 @@ export function createCoreChannel(
       }
     },
     // The core's trajectory snapshot: the AgentEvent fold's raw-event log
-    // (append-only, frozen payloads — the same prefix-identity contract a
-    // DSH snapshot offers). The structural-only widening mirrors
-    // asRawEvents: the envelope is the contract, the payload stays
-    // guard-mediated downstream.
+    // (append-only, frozen payloads; the same prefix-identity contract a DSH
+    // snapshot offers). The cast mirrors asRawEvents: the envelope is the
+    // contract, and payloads are still checked by guards downstream.
     traceEvents: () => agentTrajectory.events() as unknown as readonly SessionEvent[],
-    // Lane drilldown (design ④ 完整档 跨 Agent drilldown): the same fold's
-    // per-agent logs. Under an extension that owns the trajectory (DSH: raw
-    // history) the fold receives no events, so lanes() is honestly empty
-    // and the scope filter is not offered — the raw DSH log carries no lane
-    // attribution to filter by.
-    trajectoryLanes: () => agentTrajectory.lanes() as unknown as readonly import('../../../adapter/ports/channel-view.js').TrajectoryLane[],
+    // Per-agent lane drilldown from the same fold. When an extension owns the
+    // trajectory (DSH: raw history) the fold receives no events, so lanes()
+    // is empty and the scope filter is not offered; the raw DSH log has no
+    // lane attribution to filter by.
+    trajectoryLanes: () => agentTrajectory.lanes(),
     trajectoryLaneEvents: (agentId: string, descendants?: boolean) =>
       (descendants === true ? agentTrajectory.descendantEvents(agentId) : agentTrajectory.laneEvents(agentId)) as unknown as readonly SessionEvent[],
-    // The source label (design §④ i18n trajectory-backend-label): this core
-    // serves the trajectory from the neutral AgentEvent fold; the DSH
-    // extension overrides the label together with the source accessors.
+    // The source label: the core serves the trajectory from the neutral
+    // AgentEvent fold; the DSH extension overrides the label together with
+    // the source accessors.
     trajectoryBackendLabel: () => t('trajectory-backend-agent-events'),
-    // The trajectory capability declaration (design doc ④ 轨迹裁决): the
-    // core mounts the neutral AgentEvent fold, so a session it serves alone
-    // reports 'empty' before the first mapped event and 'supported' from
-    // then on — never 'unsupported', which stays the structural report of a
-    // composition that mounted no source at all (read from the composition,
-    // never a backendId lookup). The DSH extension overrides both accessors
-    // with its raw history.
+    // Trajectory availability: the core mounts the neutral AgentEvent fold,
+    // so a session it serves alone reports 'empty' before the first mapped
+    // event and 'supported' after. 'unsupported' is only for a composition
+    // that mounted no source at all (decided from the composition, never by
+    // backendId). The DSH extension overrides both accessors with its raw
+    // history.
     trajectorySource: () => (agentTrajectory.events().length === 0 ? 'empty' : 'supported'),
   }
 
-  // Register the raw state before any specialist can synchronously publish a
+  // Register the raw state before any extension can synchronously publish a
   // callback. The renderer lease binds its external authority later, but this
   // owner already makes teardown and construction failure fail closed.
   registerChannelOwner(state, owner)
@@ -567,7 +562,7 @@ export function createCoreChannel(
   // between session events (a compaction rewriting the surface, the prompt
   // growing before the next request); republish so the footer, the status
   // commands and the warning read the fresh value immediately. The store is
-  // host-wide, so the emit is unconditional — the accessor already ignores
+  // host-wide and the emit is unconditional; the accessor already ignores
   // another session's value.
   if (contextPressure !== undefined) {
     owner.own(contextPressure.subscribe(() => {
@@ -599,12 +594,12 @@ export function createCoreChannel(
   })
   /**
    * The backend reset the conversation in place (Claude `conversation_reset`:
-   * a plan-mode exit that clears the context, a fresh-session flow): what the
-   * view shows belonged to the discarded conversation — the rows, the
-   * subagent and job rosters, the usage and cost of it, its title — so it
-   * goes, as on a session switch, and a notice row says why. Queued inputs
-   * stay (the backend still runs them). Unlike the TUI's own view-only
-   * `/clear`, this follows a reset the backend made.
+   * a plan-mode exit that clears the context, a fresh-session flow). The
+   * rows, subagent and job rosters, usage, cost and title all belonged to
+   * the discarded conversation, so they go as on a session switch and a
+   * notice row says why. Queued inputs stay (the backend still runs them).
+   * Unlike the TUI's own view-only `/clear`, this follows a reset the
+   * backend made.
    */
   const resetConversation = (event: { readonly trigger: string }): void => {
     state.rows.length = 0
@@ -614,7 +609,7 @@ export function createCoreChannel(
     extension.dropRows?.()
     if (activityOwned()) activity.reset()
     // The discarded conversation's trajectory goes with its rows: the fold
-    // restarts empty, so the report honestly returns to 'empty'.
+    // restarts empty and the report goes back to 'empty'.
     if (trajectoryOwned()) agentTrajectory.reset()
     state.todos = []
     state.sessionTitle = ''
@@ -692,7 +687,7 @@ export function createCoreChannel(
     prefs: options.sessionPrefs,
     resumeCommand: options.resumeCommand,
     resume: (sessionId, kind) => sessionSwitch.resumeSession(sessionId, kind),
-    // `/resume` (the browser's open) needs the catalog too — the same rule
+    // `/resume` (the browser's open) also needs the catalog, the same rule
     // as the capability snapshot; a rewind adopts its fork by `open` alone.
     canOpen: options.openSession !== undefined && options.sessionCatalog !== undefined,
   })

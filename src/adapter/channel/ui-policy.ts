@@ -146,9 +146,9 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   // Pure composition fact (which trajectory source is mounted); no service
   // is acquired and no cache warmed by answering it.
   'trajectorySource': 'read-only',
-  // Lane drilldown reads over the fold's own logs (design ④ 完整档): the
-  // same append-only snapshots traceEvents hands back, plus a small roster —
-  // no upstream service, no host cache.
+  // Lane drilldown reads over the fold's own logs: the same append-only
+  // snapshots traceEvents hands back, plus a small roster. No upstream
+  // service, no host cache.
   'trajectoryLanes': 'read-only',
   'trajectoryLaneEvents': 'read-only',
   'trajectoryBackendLabel': 'read-only',

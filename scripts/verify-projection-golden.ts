@@ -1,10 +1,10 @@
 /**
- * Projection golden gate (docs/agent-backend-design.md §6.4): replays every
- * DSH fixture in scripts/fixtures/dsh/ through the DSH translator + shared
- * projector (replay and live paths, pipeline in
- * scripts/lib/projection-golden.ts) and deep-compares the result with the
- * committed `*.golden.json`, captured in Phase 0 from the pre-split reducer.
- * The split pipeline must keep this gate green without touching a golden.
+ * Projection golden gate: replays every DSH fixture in scripts/fixtures/dsh/
+ * through the DSH translator + shared projector (replay and live paths,
+ * pipeline in scripts/lib/projection-golden.ts) and deep-compares the result
+ * with the committed `*.golden.json`. The goldens are the baseline for the
+ * DSH projection: a refactor keeps this gate green without touching them;
+ * only an intended behaviour change rewrites one.
  *
  * Fails when: a fixture file drifted from scripts/fixtures/dsh/generate.ts; a
  * golden is missing, orphaned or differs (the first differing paths are
@@ -12,7 +12,7 @@
  * documented reason covers.
  *
  * Run: node --import tsx/esm scripts/verify-projection-golden.ts [--update]
- * (`--update` rewrites the goldens instead of comparing — review the diff.)
+ * (`--update` rewrites the goldens instead of comparing; review the diff.)
  */
 import { buildGolden, diffPaths, goldenPath, goldenVariants, orphanGoldens, readGolden, staleFixtureFiles, valueAt, writeGolden } from './lib/projection-golden.js'
 import { relative } from 'node:path'

@@ -1,7 +1,7 @@
 /**
  * Minimal shared-projector harness for translator gates: a fresh channel view
  * (`createInitialChannelView`) plus recording projector deps, so a script can
- * fold translated `AgentEvent`s through the ONE production reducer
+ * fold translated `AgentEvent`s through the production reducer
  * (`src/channel/projection.ts`) and inspect the resulting rows/state without
  * mounting a channel. The golden pipeline keeps its own richer harness
  * (scripts/lib/projection-golden.ts); this one is for focused assertions.

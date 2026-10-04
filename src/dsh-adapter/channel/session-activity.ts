@@ -5,9 +5,9 @@
  * typed `workingActivity` capability (a DSH session publishes through the
  * projection instead and never lands here).
  *
- * Values are narrowed with `asActivityView` — the same defensive gate the
- * projection feed applies — so a malformed backend value is dropped instead
- * of reaching a renderer half-formed. Leaving a session (the next binding,
+ * Values are narrowed with `asActivityView` (the same gate the projection
+ * feed applies), so a malformed backend value is dropped instead of
+ * reaching a renderer half-formed. Leaving a session (the next binding,
  * the channel's release) drops its value, so a stale done card can never
  * survive a rebind.
  *

@@ -1,9 +1,8 @@
 /**
- * Backend-neutral tool-card presentation (docs/agent-backend-design.md §3.2,
- * §5.2). The card SHAPES are the host-plane view types the UI already renders
- * (`ToolCallView`/`ToolResultView`); a backend translator decides which shape
- * a call gets, so neither the shared projector nor the UI ever picks a card by
- * tool name.
+ * Backend-neutral tool-card presentation. The card shapes are the
+ * host-plane view types the UI already renders (`ToolCallView` /
+ * `ToolResultView`); a backend translator decides which shape a call gets,
+ * so neither the shared projector nor the UI ever picks a card by tool name.
  */
 import type { ToolCallView, ToolResultView, ToolViewMeta } from '../adapter/ports/channel-view.js'
 

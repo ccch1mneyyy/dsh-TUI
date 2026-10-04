@@ -41,8 +41,8 @@ export function channelCapabilities(input: {
     sideQuery: input.dsh || caps.sideQuery !== undefined,
     rename: input.dsh || caps.rename !== undefined,
     color: input.dsh || caps.color !== undefined,
-    // The ONLY flag without the dsh shortcut: /channel manages the Claude
-    // backend's own channels.json, which a DSH session does not have — the
+    // The only flag without the dsh shortcut: /channel manages the Claude
+    // backend's own channels.json, which a DSH session does not have, so the
     // command must not appear there even though dsh sessions list every
     // built-in.
     channels: caps.channels !== undefined,

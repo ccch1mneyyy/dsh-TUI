@@ -192,10 +192,10 @@ export function createChannelActionReadiness() {
 }
 
 /**
- * The explicit-unavailable half of a non-DSH composition (design §3.5): one
- * delegate per public action, each failing per its own contract — `false`,
- * `null`, `undefined`, an empty list or an `{ ok: false }` result — and, for
- * an action the user invoked, saying so through `unavailable(name)` (which
+ * The explicit-unavailable half of a non-DSH composition: one delegate per
+ * public action, each failing per its own contract (`false`, `null`,
+ * `undefined`, an empty list or an `{ ok: false }` result) and, for an
+ * action the user invoked, saying so through `unavailable(name)` (which
  * notifies `capability-unavailable-backend`). Nothing here pretends to succeed.
  *
  * Passive reads the renderer performs on its own (agent-view rows and their
@@ -241,18 +241,18 @@ export function createUnavailableActionDelegates(
     // boot (not a user action), and a toast per launch would be noise.
     setDefaultEffort: () => undefined,
     cycleMode: () => refuseAsync('mode', undefined),
-    // Silent like permissionPresets: the empty roster IS the answer (the
-    // picker decides from it); only the explicit switch toasts its refusal.
+    // Silent: the empty roster is the answer (the picker decides from it);
+    // only the explicit switch toasts its refusal.
     listModes: () => ({ modes: [], currentIndex: -1 }),
     setMode: () => refuseAsync('mode', false),
     // Silent like listModes: the empty roster is the /channel picker's
-    // honest answer; the switch and the import are user actions and toast.
+    // answer; the switch and the import are user actions and toast.
     listChannels: () => ({ channels: [], activeId: undefined }),
     setChannel: () => refuse('channel', false),
     importChannel: () => refuse('channel', undefined),
     saveChannel: () => refuse('channel', undefined),
     removeChannel: () => refuse('channel', false),
-    // Silent like listChannels: nothing-to-absorb IS the answer.
+    // Silent like listChannels: nothing-to-absorb is the answer.
     peekChannelImport: () => undefined,
     clear: () => { unavailable('clear') },
     setActivityFrames: () => refuse('activity', false),
@@ -305,7 +305,7 @@ export function createUnavailableActionDelegates(
     runExternalCommand: () => Promise.resolve(undefined),
     runExternalCommandOutcome: () => Promise.resolve(undefined),
     pushLocal: () => { unavailable('pushLocal') },
-    // Report lines ARE the explicit answer for these three reports.
+    // The report lines are the explicit answer for these three reports.
     mcpStatus: () => unavailableLines('mcp'),
     mcpControl: () => refuseAsync('mcp', false),
     exportSession: () => refuse('export', null),

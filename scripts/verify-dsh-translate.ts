@@ -1,9 +1,9 @@
 /**
- * DSH translator coverage (docs/agent-backend-design.md §6.2, §8.2): runs the
- * DSH projection fixtures (scripts/fixtures/dsh/) through
- * `createDshTranslator` — live per event, replay via `translateReplay`, plus
- * the stream frames — and asserts that every §6.2 row produces its Agent
- * Domain event with the identity fields the shared projector relies on. The
+ * DSH translator coverage: runs the DSH projection fixtures
+ * (scripts/fixtures/dsh/) through `createDshTranslator` (live per event,
+ * replay via `translateReplay`, plus the stream frames) and asserts that
+ * every DSH event family produces its Agent Domain event with the identity
+ * fields the shared projector relies on. The
  * projected outcome itself is pinned by verify-projection-golden; this gate
  * pins the vocabulary in between, so a translator change that happens to
  * cancel out in the projection still fails here.
@@ -14,6 +14,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentEvent } from '../src/agent/events.js'
+import { prependHistoryRows, projectHistorySlice } from '../src/channel/history-restore.js'
 import { createDshTranslator, dshPricingWindow } from '../src/dsh-adapter/backend/translate.js'
 import { FIXTURE_DIR, buildFixtures } from './fixtures/dsh/generate.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
@@ -116,10 +117,9 @@ check('compaction bracket → compaction.start/end', of(live, 'compaction.start'
   harness.apply([{ type: 'preset.selected', preset: 'code', aliases: 'ptc' as unknown as readonly string[] }])
   check('prototype-key preset projects without throwing', harness.state.rows.filter(row => row.kind === 'notice').length === 2)
 }
-// Documented deviation (design §6.4): a card the window cap folded while it
-// ran keeps only its preview when the result lands — the full payload and the
-// presentation view are NOT re-attached past the fold line (pre-split code
-// re-attached them, defeating the fold's memory bound).
+// A card the window cap folded while it ran keeps only its preview when the
+// result lands: the full payload and the presentation view are not
+// re-attached past the fold line, or the fold would no longer bound memory.
 {
   const harness = createProjectorHarness()
   harness.apply([
@@ -134,6 +134,55 @@ check('compaction bracket → compaction.start/end', of(live, 'compaction.start'
     presentation: { card: 'terminal', output: 'listing', exitCode: 0 },
   }])
   check('folded running card: the result keeps the preview, no full payload or view', card.tool?.status === 'ok' && card.tool.resultText === 'listing' && card.tool.resultFull === undefined && card.tool.resultView === undefined)
+}
+// The projector's reset forgets every per-session ledger: replaying a second
+// session through a reused projector paints what a fresh one paints.
+{
+  const history: AgentEvent[] = [
+    { type: 'turn.start', turn: 1, origin: 'user', time: 1 },
+    { type: 'user.message', id: 'u1', anchor: '1', seq: 1, turn: 1, time: 1, source: 'user', text: 'hi', blocks: [{ type: 'text', text: 'hi' }] },
+    { type: 'step.start', turn: 1, step: 1 },
+    { type: 'assistant.message', seq: 2, anchor: '2', turn: 1, step: 1, attemptId: 'seq:2', time: 2, model: 'model-a', canonical: true, blocks: [{ type: 'text', text: 'hello' }], usage: { input: 10, output: 5 } },
+    { type: 'step.end', turn: 1, step: 1 },
+    { type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 3 },
+  ]
+  const shape = (rows: readonly { kind: string; text: string; turnUsage?: unknown }[]): string => JSON.stringify(rows.map(row => [row.kind, row.text, row.turnUsage ?? null]))
+  const fresh = createProjectorHarness()
+  fresh.apply(history, true)
+  const reused = createProjectorHarness()
+  reused.apply(history, true)
+  reused.apply([{ type: 'tool.call', seq: 3, turn: 2, step: 1, callId: 'todo-1', name: 'TodoWrite', argsJson: '{}', presentation: { card: 'todo' }, time: 4 }])
+  reused.projector.reset()
+  reused.state.rows.length = 0
+  reused.apply(history, true)
+  check('reset + replay paints what a fresh projector paints (the turn summary names its model)', shape(reused.state.rows) === shape(fresh.state.rows) && fresh.state.rows.some(row => row.turnUsage?.noteModel === true))
+  reused.apply([{ type: 'tool.result', seq: 4, turn: 2, step: 1, callId: 'todo-1', isError: true, time: 5, content: [], text: '', errorText: 'stale' }])
+  check('reset forgets the suppressed todo calls of the previous session', !reused.state.rows.some(row => row.kind === 'tool'))
+}
+// Seq lookups only match rows the projector itself painted.
+{
+  const harness = createProjectorHarness()
+  harness.apply([
+    { type: 'turn.start', turn: 1, origin: 'user', time: 1 },
+    { type: 'step.start', turn: 1, step: 1 },
+    { type: 'assistant.delta', attemptId: 'seq:3', index: 0, time: 2, turn: 1, step: 1, seq: 3, delta: { kind: 'text', text: 'chunked' } },
+    { type: 'assistant.message', seq: 4, anchor: '4', turn: 1, step: 1, attemptId: 'seq:4', time: 3, canonical: false, blocks: [{ type: 'text', text: 'chunked' }] },
+    { type: 'step.end', turn: 1, step: 1 },
+    { type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 4 },
+  ])
+  // A reconnect re-delivers the durable chunk: it lands on the row it opened.
+  harness.apply([{ type: 'assistant.delta', attemptId: 'seq:3', index: 0, time: 2, turn: 1, step: 1, seq: 3, delta: { kind: 'text', text: 'chunked' } }], true)
+  harness.projector.settleStreaming()
+  check('a re-delivered chunk reuses the row it opened', harness.state.rows.filter(row => row.kind === 'assistant').length === 1)
+  // "Load earlier" prepends rows from a separate projection whose seqs can
+  // collide with live ones; a live settlement must never land on them.
+  const older = projectHistorySlice([
+    { type: 'assistant.message', seq: 7, anchor: 'older-7', turn: 1, step: 1, attemptId: 'older-7', time: 1, canonical: true, blocks: [{ type: 'text', text: 'older answer' }] },
+  ], 'preview')
+  prependHistoryRows(harness.state.rows, older)
+  harness.apply([{ type: 'assistant.message', seq: 7, anchor: 'live-7', attemptId: 'live-7', time: 9, canonical: true, blocks: [{ type: 'text', text: 'live answer' }] }])
+  const assistants = harness.state.rows.filter(row => row.kind === 'assistant')
+  check('a live settlement never overwrites a restored row with the same seq', assistants[0]?.text === 'older answer' && assistants.at(-1)?.text === 'live answer')
 }
 const customs = of(live, 'custom').map(event => event.nativeType)
 check('unknown plugin events → custom', customs.includes('fixture-plugin/note') && customs.includes('other-plugin/ping') && customs.includes('developer/message'))

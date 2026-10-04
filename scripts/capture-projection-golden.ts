@@ -1,14 +1,13 @@
 /**
- * Capture the projection goldens (docs/agent-backend-design.md §6.4; the
- * committed ones are the Phase 0 capture of the pre-split reducer): runs
- * every DSH fixture through the DSH translator + shared projector (pipeline
- * and determinism rules in scripts/lib/projection-golden.ts) and writes
+ * Capture the projection goldens: runs every DSH fixture through the DSH
+ * translator + shared projector (pipeline and determinism rules in
+ * scripts/lib/projection-golden.ts) and writes
  * `scripts/fixtures/dsh/<fixture>[.<variant>].golden.json`.
  *
  * Refuses to write when a fixture drifted from its generator or when live and
- * replay differ somewhere no documented reason covers — a golden must never
+ * replay differ somewhere no documented reason covers: a golden must never
  * bless a projection inconsistency. `verify-projection-golden.ts` is the
- * comparing counterpart (and `--update` there does the same as this script).
+ * comparing counterpart (its `--update` also rewrites the goldens).
  *
  * Run: node --import tsx/esm scripts/capture-projection-golden.ts
  */

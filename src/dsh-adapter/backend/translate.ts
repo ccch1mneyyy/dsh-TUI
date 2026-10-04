@@ -1,18 +1,18 @@
 /**
- * DSH → Agent Domain translator (docs/agent-backend-design.md §6.2): decodes
- * durable DSH `SessionEvent`s and transient `agent/assistant-stream` frames
- * into `AgentEvent`s for the shared projector (`src/channel/projection.ts`).
- * Every piece of DSH-specific knowledge the former single reducer held lives
- * here: message source kinds, compaction checkpoint sources, the 0.1.7 tool
- * result payload shape, goal payloads, `request/header` model/effort, the
- * optional todo/preset/colour/compaction plugin events, subagent and
- * `ask_user_question` tool names, `job_output` reads and background-start
- * acks, durable image attachments and the dsh-tools presenters.
+ * DSH to Agent Domain translator: decodes durable DSH `SessionEvent`s and
+ * transient `agent/assistant-stream` frames into `AgentEvent`s for the shared
+ * projector (`src/channel/projection.ts`). All DSH-specific knowledge the
+ * projector needs lives here: message source kinds, compaction checkpoint
+ * sources, the 0.1.7 tool result payload shape, goal payloads,
+ * `request/header` model/effort, the optional todo/preset/colour/compaction
+ * plugin events, subagent and `ask_user_question` tool names, `job_output`
+ * reads and background-start acks, durable image attachments and the
+ * dsh-tools presenters.
  *
- * State is deliberately small: the frame revision fence (transport-level
- * dedupe) and the open calls whose results still need a presenter. Attempt
- * binding and `seq` idempotency belong to the projector, so a projector reset
- * (`/clear`) keeps the pre-split semantics.
+ * State is kept small: the frame revision fence (transport-level dedupe) and
+ * the open calls whose results still need a presenter. Attempt binding and
+ * `seq` idempotency belong to the projector, so a projector reset (`/clear`)
+ * does not depend on translator state.
  */
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
@@ -28,8 +28,8 @@ import { isCompactionCheckpointSource, toolResultPayload } from '../compat/messa
 import { transcriptImagesOf } from '../transcript-images.js'
 
 export interface DshTranslatorDeps {
-  /** The host-plane tools registry (dsh-tools); absent in bare embedders —
-   *  every presenter call then soft-fails to a plain text card. Read per
+  /** The host-plane tools registry (dsh-tools); absent in bare embedders,
+   *  where every presenter call falls back to a plain text card. Read per
    *  presenter call (a session wrapper memoizes it). */
   tools(): ToolsRegistryLike | undefined
   /** Presenter scope: the live agent, so preset-owned tool definitions
@@ -86,10 +86,10 @@ export function dshEmits(type: AgentEventType): boolean {
     case 'request.header':
     case 'custom':
       return true
-    // Owned elsewhere on DSH (subagent/job specialists, approval and question
-    // stores, model/mode actions) or not a DSH concept. The agent↔agent relay
-    // observation (agent-team §5.4) folds in the adapter's subagent projection
-    // straight from the durable session events — the translator emits none.
+    // Owned elsewhere on DSH (subagent/job extensions, approval and question
+    // stores, model/mode actions) or not a DSH concept. Agent-to-agent relay
+    // messages are folded by the adapter's subagent projection straight from
+    // the durable session events, so the translator emits none.
     case 'agent.message':
     case 'session.ready':
     case 'session.reset':
@@ -161,10 +161,10 @@ const textOf = (content: readonly ContentBlock[] | undefined): string =>
   (content ?? []).map(block => (block.type === 'text' ? block.text : '')).join('').trim()
 
 /**
- * Transcript-facing text of a user message: the FIRST text block only.
- * `@`-mention attachments (issue #15) ride as later blocks — model-facing
- * only — so joining every block would dump file contents into the bubble,
- * the sticky header, and session titles.
+ * Transcript-facing text of a user message: the first text block only.
+ * `@`-mention attachments (issue #15) travel as later, model-facing blocks,
+ * so joining every block would dump file contents into the bubble, the
+ * sticky header and session titles.
  */
 const firstTextOf = (content: readonly ContentBlock[] | undefined): string =>
   (content ?? []).find(block => block.type === 'text')?.text.trim() ?? ''
@@ -242,9 +242,9 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
    *  its result-time contextual diff back from here). */
   const presentResultView = (name: string, rawArgs: string, data: SessionEvent<'tool/result'>['data']): ToolResultView | undefined => {
     try {
-      // Harness goal/todo tools first: their raw JSON reads as noise in the
-      // transcript — fold recognizable shapes into a summary card before the
-      // registry gets a chance to (not) know them.
+      // Harness goal/todo tools first: their raw JSON is noise in the
+      // transcript, so known shapes fold into a summary card before the
+      // registry is asked (it may not know these tools).
       const local = harnessToolResultView(name, data)
       if (local !== undefined) return local
       const tool = deps.tools()?.get(name, deps.scope())
@@ -300,7 +300,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
     const payload = toolResultPayload(data.message)
     const isError = data.error !== undefined || payload.isError
     // Text/presentation/images are derived only for results something
-    // projects (a card or a question record), as before the split.
+    // projects (a card or a question record).
     const text = call === undefined || isError ? '' : textOf(payload.content)
     const card = call?.card === true ? call : undefined
     const result: AgentEventOf<'tool.result'> = {
@@ -326,9 +326,9 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       const id = parseJobOutputId(card.args)
       if (id !== undefined) events.push({ type: 'task.output', taskId: id, text, time: event.time, callId })
     }
-    // A `started background job <id>` ack pairs the job with its tool call:
-    // capture the FULL command from the args (the registry label is the
-    // friendly description).
+    // A `started background job <id>` ack pairs the job with its tool call.
+    // Take the full command from the args; the registry label is only the
+    // friendly description.
     const startAck = BACKGROUND_START_ACK.exec(text)
     if (startAck !== null) {
       const command = toolCommandOf(card.args)
@@ -415,7 +415,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
         const headerModel = (event.data.header.config as { model?: unknown } | undefined)?.model
         const header: AgentEvent = {
           type: 'request.header',
-          // A missing/empty model must CLEAR the previous header's value, or
+          // A missing/empty model must clear the previous header's value, or
           // later usage would keep billing the old model.
           model: typeof headerModel === 'string' && headerModel !== '' ? headerModel : undefined,
           effort: typeof effort === 'string' ? effort : undefined,
@@ -472,8 +472,8 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       // The compaction bracket is a plugin-appended event pair (not part of
       // dsh-session's typed map): the host writes `compaction/start` before
       // the summarizer runs and `compaction/end` once the checkpoint is
-      // committed or abandoned — which one is told by the checkpoint
-      // `user/message`, so the close itself carries no outcome.
+      // committed or abandoned. The checkpoint `user/message` tells which,
+      // so the close itself carries no outcome.
       case 'compaction/start':
         return [{ type: 'compaction.start', trigger: 'auto', cancellable: false, time: event.time }]
       case 'compaction/end':

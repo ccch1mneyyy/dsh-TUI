@@ -1,24 +1,24 @@
 /**
- * Session switching every composition shares (docs/agent-backend-design.md
- * §3.5, §4.11): the `tui/session-switch` veto, the fire-and-forget
- * `tui/session-switched` notice, `/new` and the generic `/resume` — each one
- * prepare → adopt transaction over the binding, with the backend's way of
- * opening the session injected. The DSH extension injects its preset / route
- * / mount-reservation / workspace-attach create path (and keeps its own
- * `/resume`, which parks sessions in this process); any other backend opens
- * through `ChannelLaunchOptions.openSession`.
+ * Session switching every composition shares: the `tui/session-switch` veto,
+ * the fire-and-forget `tui/session-switched` notice, `/new` and the generic
+ * `/resume`. Each is one prepare-then-adopt transaction over the binding,
+ * with the backend's way of opening the session injected. The DSH extension
+ * injects its create path (preset, route, mount reservation, workspace
+ * attach) and keeps its own `/resume`, which parks sessions in this process;
+ * any other backend opens through `ChannelLaunchOptions.openSession`.
  *
- * `/new` and `/resume` refuse while a turn runs, and re-check after the open:
- * a backend handshake can take long (the Claude CLI: up to a minute), and a
+ * `/new` and `/resume` refuse while a turn runs, and re-check after the open.
+ * A backend handshake can take long (the Claude CLI: up to a minute), and a
  * prompt the user sent to the current session meanwhile must not be torn
- * down by the adoption that disposes it — the candidate is abandoned instead.
+ * down by the adoption that disposes it, so the candidate is abandoned
+ * instead.
  *
- * `/resume` reads the target's durable history BEFORE the synchronous
- * adoption and paints it inside the adoption, ahead of the subscription:
- * nothing the live session emits can land before its history (design
- * §4.11). The cross-process mount ledger is claimed under the backend-
- * qualified key (`claude:<id>`) for the whole attempt, exactly like a DSH
- * disk resume: a session another TUI process drives is refused.
+ * `/resume` reads the target's durable history before the synchronous
+ * adoption and paints it inside the adoption, ahead of the subscription, so
+ * nothing the live session emits can land before its history. The
+ * cross-process mount ledger is claimed under the backend-qualified key
+ * (`claude:<id>`) for the whole attempt, like a DSH disk resume: a session
+ * another TUI process drives is refused.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentEvent } from '../../../agent/events.js'
@@ -65,12 +65,12 @@ export interface NewSessionPlan {
 /** How a backend opens a fresh session for `/new`. */
 export interface NewSessionOpener {
   /**
-   * The backend's own contract for an input still in the channel's FIFO
-   * when `/new` adopts (a parked `tui/input` decision, an `@` or IDE read):
-   * `true` = it is stale-dropped with a notice, never delivered anywhere
-   * (DSH, pinned by verify-session-reset-hygiene scenario 8); absent = the
-   * input belongs to the session it was typed in, so `/new` is abandoned
-   * instead (a backend handshake can take a minute — Phase 4a review 6).
+   * What happens to an input still in the channel's FIFO when `/new` adopts
+   * (a parked `tui/input` decision, an `@` or IDE read). `true`: it is
+   * stale-dropped with a notice and never delivered (DSH, pinned by
+   * verify-session-reset-hygiene scenario 8). Absent: the input belongs to
+   * the session it was typed in, so `/new` is abandoned instead (a backend
+   * handshake can take a minute).
    */
   readonly dropsParkedInputs?: boolean
   /** Synchronous gate before anything else (throws to refuse). */
@@ -88,7 +88,7 @@ export interface ResumeSessionPlan {
   /** Claim the session before it opens (the cross-process mount ledger);
    *  a returned result refuses the resume. Runs once, after the veto. */
   reserve?(): Promise<ResumeResult | undefined>
-  /** Open the session AND read its durable history; runs inside the
+  /** Open the session and read its durable history; runs inside the
    *  binding's `prepare`. */
   open(): Promise<AgentSession>
   /** The backend's half of the synchronous adoption tail (paints the history
@@ -135,9 +135,9 @@ export function createSessionSwitch(ctx: Context, deps: {
    * the reason is toasted here so the fallback string stays host-localized.
    */
   const sessionSwitchVetoed = async (kind: SessionSwitchKind, targetSessionId?: string): Promise<boolean> => {
-    // D-6 stale detection captures the CONVERSATION REFERENCE (session ids
-    // are reusable — ABA): a slow decision must not let an older switch roll
-    // over a newer session the user already switched to mid-await.
+    // Stale detection compares the conversation reference, not the session
+    // id (ids are reusable: ABA). A slow decision must not let an older
+    // switch roll over a newer session the user switched to mid-await.
     const origin = deps.conversationKey(binding.session)
     const state = deps.state()
     const decision = await deps.withDecisionPending('tui/session-switch', dispatchTuiDecision(ctx, 'tui/session-switch', {
@@ -160,7 +160,7 @@ export function createSessionSwitch(ctx: Context, deps: {
   }
 
   /** Fire-and-forget `tui/session-switched` (parallel): per-session plugin
-   *  state rebinds here. Listener failures are logged, never propagated —
+   *  state rebinds here. Listener failures are logged, never propagated;
    *  the switch itself already succeeded. */
   const notifySessionSwitched = (kind: SessionSwitchedKind, sessionId: string, previousSessionId: string): void => {
     try {
@@ -175,11 +175,10 @@ export function createSessionSwitch(ctx: Context, deps: {
   }
 
   /**
-   * Review 6 (Phase 4b): an input still on its way to the bound session (a
-   * parked decision, an `@` read, a `!!` command) would race any switch —
-   * refuse at once, naming it, instead of after a handshake of up to a
-   * minute. Not for an opener that stale-drops parked inputs (the DSH
-   * contract).
+   * An input still on its way to the bound session (a parked decision, an
+   * `@` read, a `!!` command) would race any switch, so refuse at once and
+   * name it, instead of after a handshake of up to a minute. Skipped for an
+   * opener that stale-drops parked inputs (DSH).
    */
   const parkedInputRefused = (dropsParkedInputs: boolean): boolean => {
     if (dropsParkedInputs) return false
@@ -196,17 +195,16 @@ export function createSessionSwitch(ctx: Context, deps: {
   }
 
   /**
-   * Review item 9 (and its Phase 4a follow-up), for `/new` and `/resume`:
-   * the open may take long (a backend handshake), and the bound session may
-   * run — or still be running — work the user started meanwhile: a turn
-   * (even one that already finished: `working` alone misses it), a prompt
+   * For `/new` and `/resume`: the open may take long (a backend handshake),
+   * and meanwhile the user may start work on the bound session: a turn (even
+   * one that already finished, which `working` alone misses), a prompt
    * queued in the backend, or an input still in the channel's own FIFO (a
    * parked decision, an `@` or IDE-selection read, a `!!` command). Adopting
-   * then would dispose that session and lose the work: the caller abandons
-   * its candidate. What was already queued when the switch began does not
-   * count (a backend that holds queued inputs while idle keeps them).
-   * `dropsParkedInputs`: the backend stale-drops FIFO inputs at adoption
-   * instead (the DSH contract), so they do not race it.
+   * then would dispose that session and lose the work, so the caller
+   * abandons its candidate. Inputs already queued when the switch began do
+   * not count (a backend that holds queued inputs while idle keeps them).
+   * With `dropsParkedInputs` the backend stale-drops FIFO inputs at adoption
+   * instead (DSH), so they do not race it.
    */
   const raceProbe = (dropsParkedInputs: boolean): (() => boolean) => {
     const queuedAtStart = new Set(deps.state().pending.map(item => item.id))
@@ -285,10 +283,11 @@ export function createSessionSwitch(ctx: Context, deps: {
         tail.cwd = targetCwd
         tail.displayCwd = targetDisplayCwd ?? deps.describeWorkspace(targetCwd).description ?? targetCwd
         deps.resetIdeSelection()
-        // Reset the input FIFO and the pending-decision indicators BEFORE the
-        // first emit: a submit enqueued from a session-changed subscriber must
-        // land on a fresh chain instead of behind the replaced session's
-        // parked promise (main's bind → clear → refresh order).
+        // clearStagedImages() also resets the input FIFO and the
+        // pending-decision indicators. It must run before the adoption's
+        // first emit: a submit enqueued from a session-changed subscriber has
+        // to land on a fresh chain, not behind the replaced session's parked
+        // promise.
         deps.clearStagedImages()
         const sessionId = plan.adopt(candidate)
         disposePrevious('dispose')

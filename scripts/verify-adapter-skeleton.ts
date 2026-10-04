@@ -6,8 +6,8 @@
  * - kernel/ may not import @deepseek-ai or @dsh-std directly.
  * - upstream/ must not import @dsh-std or tui-profile private protocol.
  *   @deepseek-ai/* is confined to src/dsh-adapter/ by
- *   verify-adapter-boundary.ts (design §8.0 rule table), so upstream/ may not
- *   import it either; its drivers wrap dsh-tui's own Cordis services.
+ *   verify-adapter-boundary.ts (ADAPTER.md 「边界规则」), so upstream/ may
+ *   not import it either; its drivers wrap dsh-tui's own Cordis services.
  * - standard/ may import @dsh-std and tui-profile, but never
  *   @deepseek-ai.
  * - legacy shim paths are verified absent.

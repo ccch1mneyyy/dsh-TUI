@@ -1,19 +1,15 @@
 /**
- * Answered-questionnaire transcript record — a PURE fold of the durable
+ * Answered-questionnaire transcript record: a pure fold of the durable
  * session log (issue #1009).
  *
  * `ask_user_question` renders as the interactive panel, not as a tool card,
- * so its `tool/result` had no renderer at all: the answers lived only in the
- * current process's view rows (the TUI used to push a summary when the panel
- * closed). That violated the transcript's source-of-truth rule — `/resume`,
- * rewind, `loadOlder` and any replay lost the record, and an ask that was
- * never observed closing produced none at all.
- *
- * The record now derives from the same log every other transcript row comes
- * from: the `tool/call` arguments carry the questions, the `tool/result`
- * payload carries the answers. Both are parsed at the caller's edge here, so
- * this module stays pure (no store, no i18n state, no projection imports) and
- * is directly testable.
+ * so its `tool/result` has no card to land in. The record is derived from
+ * the same log every other transcript row comes from, so `/resume`, rewind,
+ * `loadOlder` and replay all rebuild it, including for an ask whose panel
+ * was never seen closing: the `tool/call` arguments carry the questions, the
+ * `tool/result` payload carries the answers. Both are parsed at the caller's
+ * edge here, so this module stays pure (no store, no i18n state, no
+ * projection imports) and is directly testable.
  */
 
 import { t } from '../i18n.js'

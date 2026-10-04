@@ -140,9 +140,9 @@ export function createInputDelivery(
     attachedByMessageId.clear()
   })
 
-  /** D-6 fence: the submission belongs to the session it was typed in (the
+  /** Stale fence: the submission belongs to the session it was typed in (the
    *  bound session object plus the binding generation every adoption
-   *  advances — any backend, no DSH agent needed). */
+   *  advances; works for any backend, no DSH agent needed). */
   const current = (origin: UserTextOrigin): boolean =>
     owner.current() && binding.session === origin.session && state().agentBindingGeneration === origin.generation
 
@@ -221,7 +221,7 @@ export function createInputDelivery(
     })
     if (selectionAttached !== undefined) rememberSelection(message.id, selectionAttached)
     // The message is real from here on: remember its attached context BEFORE
-    // the submit so the pre-step listener can find it (D6). A throwing submit
+    // the submit so the pre-step listener can find it. A throwing submit
     // rolls both the pending preview and this entry back.
     if (attach !== undefined) attachedByMessageId.set(message.id, attach)
     // Track BEFORE the submit: a synchronous throw inside it rolls the

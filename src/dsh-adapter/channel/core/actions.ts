@@ -1,19 +1,19 @@
 /**
- * The channel's one action install (docs/agent-backend-design.md §3.5 item 4):
- * every `ChannelUi` action resolves, in layers,
+ * The channel's single action install. Every `ChannelUi` action resolves
+ * through these layers, later ones overriding earlier ones:
  *
- *   1. explicitly unavailable — `capability-unavailable-backend` + the contract's
+ *   1. unavailable: `capability-unavailable-backend` plus the contract's
  *      failure value (`createUnavailableActionDelegates`);
- *   2. backed by a typed session capability — resolved on the bound session
- *      at every call (a `/new` may land on a session with other
- *      capabilities); a rejecting capability is reported and answers the
- *      action's failure value, never an unhandled rejection;
+ *   2. a typed session capability, looked up on the bound session at every
+ *      call since a `/new` may land on a session with other capabilities. A
+ *      rejecting capability is reported and returns the action's failure
+ *      value instead of an unhandled rejection;
  *   3. the backend-neutral core actions (local rows, shell, files,
  *      completions, `/doctor`, `/export`, `/new`);
- *   4. the extension's delegates on top (the DSH specialists).
+ *   4. the extension's delegates (the DSH extensions).
  *
- * The readiness cell installs the merged table exactly once, after every
- * layer exists; no construction-time placeholder is callable.
+ * The readiness cell installs the merged table once, after every layer
+ * exists, so no construction-time placeholder is ever callable.
  */
 import type { AgentSession } from '../../../agent/session.js'
 import { conversationRecapPrompt, parseRecapResponse, sideQuestionPrompt } from '../../../channel/side-prompts.js'
@@ -36,12 +36,12 @@ export function createCapabilityDelegates(deps: {
   const { notify, unavailable } = deps
   const caps = (): AgentSession['capabilities'] => deps.session().capabilities
   /**
-   * An MCP answer is a fact of ONE session: both /mcp and the server controls
-   * run async against the bound session, and a '/new' or '/resume' may land
-   * before the answer does. The channel owner staying alive is not enough —
-   * this fence also captures the session and its binding generation, so a
-   * late answer of the replaced session (even of the SAME session re-bound a
-   * round trip later) writes neither the report nor a toast for its successor.
+   * An MCP answer belongs to one session. /mcp and the server controls run
+   * async against the bound session, and a '/new' or '/resume' may land
+   * before the answer does. A live channel owner is not enough, so the fence
+   * also captures the session and its binding generation: a late answer for
+   * a replaced session (even the same session re-bound later) writes neither
+   * the report nor a toast for its successor.
    */
   const mcpFence = (): { session: AgentSession; current(): boolean } => {
     const session = deps.session()
@@ -83,11 +83,11 @@ export function createCapabilityDelegates(deps: {
       const index = list.findIndex(mode => mode.id === modes.current())
       await modes.set(list[(index + 1) % list.length]!.id)
     }),
-    // Passive roster read for the /permission picker: sync (modes.list() is
-    // synchronous by contract) and silent when absent — the empty list is
-    // the answer, exactly what permissionPresets() answers for a missing
-    // roster. DSH sessions declare no modes capability, so they read empty
-    // and their preset pipeline stays the only /permission.
+    // Roster read for the /permission picker. Sync (modes.list() is sync by
+    // contract) and silent when absent: an empty list is the answer, same as
+    // permissionPresets() for a missing roster. DSH sessions declare no modes
+    // capability, so they read empty and keep their preset pipeline as
+    // /permission.
     listModes: () => {
       const modes = caps().modes
       if (modes === undefined) return { modes: [], currentIndex: -1 }
@@ -101,8 +101,8 @@ export function createCapabilityDelegates(deps: {
       await modes.set(id)
       return true
     }),
-    // `/channel`: the typed `channels` capability's roster — sync and
-    // silent when absent (the empty roster IS the answer, like listModes).
+    // `/channel`: the `channels` capability's roster. Sync, and silent when
+    // absent (an empty roster is the answer, like listModes).
     listChannels: () => {
       const channels = caps().channels
       if (channels === undefined) return { channels: [], activeId: undefined }
@@ -112,10 +112,10 @@ export function createCapabilityDelegates(deps: {
       const channels = caps().channels
       if (channels === undefined || !channels.list().some(channel => channel.id === id)) { unavailable('channel'); return false }
       channels.setActive(id)
-      // The active channel's mapping is the model display's truth source
+      // The model display is derived from the active channel's mapping
       // (backends/claude/modelEnv.ts reads the store lazily), so one refresh
-      // repaints the footer and the /model labels immediately — no
-      // model.changed round trip needed.
+      // repaints the footer and /model labels without waiting for a
+      // model.changed event.
       try {
         deps.controls.refreshModelDisplay(deps.session())
         deps.state().emit()
@@ -134,9 +134,9 @@ export function createCapabilityDelegates(deps: {
         return undefined
       }
     },
-    // The phase-3 wizard's writes: upsert with connection fields (the
-    // token travels capability→credential seam, never through the UI), and
-    // the delete. Both refuse politely on backends without the surface.
+    // The channel wizard's writes: upsert with connection fields (a given
+    // token goes to the credential store, the profile keeps only its ref)
+    // and delete. Both report unavailable on backends without them.
     saveChannel: input => {
       const channels = caps().channels
       if (channels?.save === undefined) { unavailable('channel'); return undefined }
@@ -189,15 +189,14 @@ export function createCapabilityDelegates(deps: {
       const effort = caps().effort
       if (effort === undefined) { unavailable('effort'); return Promise.resolve({ efforts: [], defaultEffort: undefined }) }
       const levels = effort.levels()
-      // The slider trusts this answer to have said why it cannot open (Chat
-      // returns silently for <= 1 tiers): a backend whose route exposes no (or
-      // a single) effort tier gets the same honesty the DSH specialist gives.
+      // The slider relies on this call to explain why it cannot open (Chat
+      // returns silently for <= 1 tiers), so a route with zero or one effort
+      // tier gets the same warning the DSH extension shows.
       if (levels.length === 0) notify(t('effort-unsupported'), { color: 'warning' })
       else if (levels.length === 1) notify(t('effort-single-tier', { name: levels[0]!.label }), { color: 'warning' })
-      // levelsFallback rides along when the backend marks the ladder as
-      // the CLI-standard compatibility offer (a model row that declares no
-      // tiers of its own) — the slider says so instead of pretending the
-      // tiers are the model's own list.
+      // levelsFallback is passed on when the backend marks the ladder as the
+      // CLI-standard fallback (the model row declares no tiers of its own), so
+      // the slider can say so instead of presenting them as the model's tiers.
       return Promise.resolve({ efforts: levels.map(level => ({ id: level.id, name: level.label })), defaultEffort: effort.current(), ...(effort.levelsFallback === true ? { levelsFallback: true as const } : {}) })
     },
     setEffort: id => guarded('effort', false, async () => {

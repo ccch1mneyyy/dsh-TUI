@@ -1,11 +1,10 @@
 /**
- * Session-level facts a backend reports through its typed capabilities
- * (docs/agent-backend-design.md §4.9–4.10, §5.3–5.4): its native permission
- * mode, reasoning effort, own slash commands, subscription usage, and the
- * context / MCP reports the synchronous `/context` and `/mcp` read. The
- * shared projector owns the transcript; these are the facts it leaves to the
- * channel. A composition whose extension maintains these facts itself (the
- * DSH specialists) never installs the observer (`ownsSessionFacts`).
+ * Session-level facts a backend reports through its typed capabilities: its
+ * native permission mode, reasoning effort, own slash commands, subscription
+ * usage, and the context / MCP reports the synchronous `/context` and `/mcp`
+ * read. The shared projector owns the transcript; these are the facts it
+ * leaves to the channel. A composition whose extension maintains these facts
+ * itself (DSH) never installs the observer (`ownsSessionFacts`).
  */
 import type { LocalCommand } from '../../../adapter/ports/channel-catalog.js'
 import type { AgentEvent } from '../../../agent/events.js'
@@ -155,12 +154,12 @@ export function createSessionControls(deps: {
   }
 
   /**
-   * Channel model truth: when the backend maps the live model id to the
-   * model that actually serves the request (relay channels echo the
-   * requested id back — backends/claude/modelEnv.ts), the footer shows the
-   * mapped name. Data surfaces keep the raw id. Also the refresh path of a
-   * channel-profile switch (/channel): the backend's truth read is lazy, so
-   * re-running it after the store changed repaints the footer immediately.
+   * Footer model name: when the backend maps the live model id to the model
+   * that actually serves the request (relay channels echo the requested id
+   * back, see backends/claude/modelEnv.ts), the footer shows the mapped
+   * name; data surfaces keep the raw id. A /channel switch also calls this:
+   * the backend reads the mapping lazily, so re-running it after the store
+   * changed repaints the footer immediately.
    */
   const refreshModelDisplay = (session: AgentSession): void => {
     const state = deps.state()

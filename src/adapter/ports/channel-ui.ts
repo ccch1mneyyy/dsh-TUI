@@ -56,10 +56,10 @@ export interface ChannelUi {
    *  commands and affordances whose capability is absent instead of letting
    *  them fail. A DSH session supports everything the TUI offers. Distinct
    *  from {@link ChannelUi.capabilities}, which describes what the current
-   *  DSH agent's COMPOSITION mounts (compaction, `/plan`, skills, …). */
+   *  DSH agent's composition mounts (compaction, `/plan`, skills, …). */
   readonly backendCapabilities: ChannelCapabilities
   /** The session cost the backend itself reported (Claude
-   *  `total_cost_usd`), or undefined when the backend reports none — the
+   *  `total_cost_usd`), or undefined when the backend reports none; the
    *  status line then falls back to its local estimate. */
   readonly costReport: ChannelCostReport | undefined
   /** Subscription usage windows the backend reported (Claude
@@ -149,15 +149,15 @@ export interface ChannelUi {
   readonly effortLevels: readonly string[] | undefined
   /** Usage of the most recent request (context share + cache hits come from
    *  this, not the running totals — each request's input IS the context).
-   *  `at` is the sampling wall-clock (the producing message's event time) —
-   *  the readouts that quote this request stamp WHEN it was measured. */
+   *  `at` is the producing message's event time, so readouts that quote
+   *  this request can say when it was measured. */
   readonly lastUsage:
     | { input: number; output: number; cacheRead: number; cacheWrite: number; at: number }
     | undefined
-  /** Ledger of the most recently ENDED turn (design §C): per-turn usage
-   *  aggregate, retry count, span, model/effort. Kept until the next turn
-   *  ends — the footer's turn mini-summary reads it mid-flight of the next
-   *  turn without conflating the two. Undefined before any turn ended. */
+  /** Ledger of the most recently ended turn: per-turn usage aggregate,
+   *  retry count, span, model/effort. Kept until the next turn ends, so the
+   *  footer's turn mini-summary can read it while the next turn runs without
+   *  mixing the two. Undefined before any turn ended. */
   readonly turnUsage: TurnUsageSummary | undefined
   /**
    * Context occupancy — the ONE source of truth for the footer's `ctx` field,
@@ -210,8 +210,8 @@ export interface ChannelUi {
   readonly foldTerminalCommand: boolean
   /** Turn-usage ledger row in the transcript (settings `dsh-tui.turnUsageRow`;
    *  off by default): the quiet right-aligned line that closes each turn.
-   *  Purely presentational — the ledger itself is always collected for
-   *  `turnUsage`, /tokens, /status and the footer hover. */
+   *  Display only: the ledger itself is always collected for `turnUsage`,
+   *  /tokens, /status and the footer hover. */
   readonly turnUsageRow: boolean
   /** Whether the session-name chip shows on the prompt top border's right
    *  side (settings `dsh-tui.promptSessionLabel`; off by default). */
@@ -438,27 +438,27 @@ export interface ChannelUi {
    *  with queued input): each text is re-queued as a followup once the abort
    *  settles, so the new turn starts immediately. Returns the count queued. */
   interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number
-  /** Esc with queued input: abort the turn and PARK the queued previews as a
-   *  dock (Claude Code parity) — the backend drops its queued copies with
-   *  the aborted turn and nothing re-delivers them until the user sends the
+  /** Esc with queued input: abort the turn and park the queued previews as a
+   *  dock, as Claude Code does. The backend drops its queued copies with the
+   *  aborted turn, and nothing re-delivers them until the user sends the
    *  dock (⏎ / `deliverDocked`) or retracts items (Alt+↑ / the ↑ editor).
-   *  Returns the count docked; 0 = nothing new parked (the caller may still
-   *  `cancel`). */
+   *  Returns the count docked; 0 means nothing new was parked (the caller
+   *  may still `cancel`). */
   interruptAndDock(): number
   /** Deliver every docked queued message now (⏎ on an empty draft), FIFO,
    *  exactly once. Rows still awaiting their interrupt receipt's verdict
-   *  (R7) are held parked — their backend copies may yet run — and the call
+   *  stay parked, since their backend copies may yet run, and the call
    *  notifies how many were held. Returns the count sent. */
   deliverDocked(): number
   /**
-   * Lossless swap (R4-R1): retract the docked row `id` into the composer and
-   * park the live draft (text + staged images) at the pending tail as a NEW
-   * docked row, in one atomic queue write — nothing sends, no undo history is
-   * lost. The parked row is a purely channel-side asset (the backend never
-   * saw the draft), so it stays outside the interrupt-receipt fence: a
-   * settling receipt must not un-dock it (F2). Returns false when `id` is no
-   * longer a docked row (claimed / discarded / un-docked meanwhile), or while
-   * the row's dock rights are held by an unsettled interrupt receipt (R7).
+   * Lossless swap: retract the docked row `id` into the composer and park
+   * the live draft (text + staged images) at the pending tail as a new
+   * docked row, in one queue write. Nothing sends and no undo history is
+   * lost. The backend never saw the parked draft, so it stays outside the
+   * interrupt-receipt fence: a settling receipt must not un-dock it.
+   * Returns false when `id` is no longer a docked row (claimed, discarded or
+   * un-docked meanwhile), or while an unsettled interrupt receipt still
+   * holds the row.
    */
   swapDockedForDraft(id: string, draft: { text: string; images?: readonly ComposerImageRef[] }): boolean
   /** Rewind the conversation to a past user message (the double-Esc rewind):
@@ -551,9 +551,9 @@ export interface ChannelUi {
   /**
    * The bound session's backend-native permission modes (its typed `modes`
    * capability), with the index of the current one (-1 when the live mode is
-   * not in the list). Synchronous and SILENT: an absent capability answers
-   * an empty list — the same honesty `permissionPresets()` gives an
-   * unavailable roster, so the UI can probe without toasting.
+   * not in the list). Synchronous and silent: an absent capability answers
+   * an empty list, as `permissionPresets()` does for an unavailable roster,
+   * so the UI can probe without toasting.
    */
   listModes(): { modes: readonly BackendModeOption[]; currentIndex: number }
   /**
@@ -565,9 +565,9 @@ export interface ChannelUi {
   setMode(id: string): Promise<boolean>
   /**
    * The bound session's relay channel profiles (its typed `channels`
-   * capability), with the active id. Synchronous and SILENT: an absent
-   * capability answers the empty roster — the /channel picker renders from
-   * it (its import row stays the only entry when the file holds nothing).
+   * capability), with the active id. Synchronous and silent: an absent
+   * capability answers the empty roster, and the /channel picker renders
+   * from it (its import row is the only entry when the file holds nothing).
    */
   listChannels(): { channels: readonly BackendChannelOption[]; activeId: string | undefined }
   /**
@@ -578,17 +578,17 @@ export interface ChannelUi {
    */
   setChannel(id: string): boolean
   /**
-   * Import (or refresh) the channel profile hiding in the CLI settings env
-   * — the ANTHROPIC_BASE_URL host names it, ANTHROPIC_*_MODEL become its
-   * tiers, and phase 3 absorbs the connection too: the base URL becomes
-   * the profile's, the ANTHROPIC_AUTH_TOKEN moves into the credential
-   * store (the profile keeps only its ref). Undefined when the env holds
-   * nothing importable; the caller notifies either way.
+   * Import (or refresh) the channel profile implied by the CLI settings
+   * env: the ANTHROPIC_BASE_URL host names it, ANTHROPIC_*_MODEL become its
+   * tiers, the base URL becomes the profile's, and ANTHROPIC_AUTH_TOKEN
+   * moves into the credential store (the profile keeps only its ref).
+   * Undefined when the env holds nothing importable; the caller notifies
+   * either way.
    */
   importChannel(): BackendChannelOption | undefined
   /**
    * Upsert one channel profile with connection fields (the /channel
-   * wizard, phase 3): a collected token goes to the credential seam,
+   * wizard): a collected token goes to the credential seam,
    * channels.json keeps only the ref. Undefined when the backend has no
    * management surface; the caller notifies.
    */
@@ -829,32 +829,31 @@ export interface ChannelUi {
    * {@link TrajectorySource}): 'unsupported' when the composition mounted no
    * trajectory source at all, 'empty'/'supported' when it did (the DSH
    * extension reading its raw history; any other backend via the core's
-   * AgentEvent fold). Every trajectory surface — /trace,
-   * Ctrl+T, the sidebar tab and the ⤢ outlet — reads THIS instead of guessing
-   * from the event count, so "not adapted yet" can never masquerade as "no
-   * turns yet".
+   * AgentEvent fold). Every trajectory surface (/trace, Ctrl+T, the sidebar
+   * tab, the ⤢ outlet) reads this instead of guessing from the event count,
+   * so "not adapted yet" never shows up as "no turns yet".
    */
   trajectorySource(): TrajectorySource
   /**
-   * The trajectory's drilldown lanes (design agent-team-panels §④ 完整档):
-   * every subagent whose child-lane events the mounted source folded into
-   * their own log. An EMPTY roster is the honest report of a composition
-   * whose source attributes no lanes (DSH raw history today): the scope
-   * filter is simply not offered, never fabricated over the main ledger.
+   * The trajectory's drilldown lanes: every subagent whose child-lane
+   * events the mounted source folded into their own log. A source that
+   * attributes no lanes (DSH raw history today) answers an empty roster, and
+   * the scope filter is then not offered rather than faked over the main
+   * ledger.
    */
   trajectoryLanes(): readonly TrajectoryLane[]
   /**
    * One lane's own raw-event snapshot (`descendants` unset), or the agent's
-   * whole subtree merged in emission order (`descendants` set) — the same
-   * append-only, prefix-identity contract {@link traceEvents} offers, so the
-   * scoped fold stays incremental exactly like the main one.
+   * whole subtree merged in emission order (`descendants` set). Same
+   * append-only, prefix-identity contract as {@link traceEvents}, so the
+   * scoped fold stays incremental like the main one.
    */
   trajectoryLaneEvents(agentId: string, descendants?: boolean): readonly RawTrajEvent[]
   /**
-   * Localized one-phrase label naming the mounted trajectory SOURCE (the
-   * raw DSH session log, or the backend-neutral AgentEvent fold) — the
-   * design §④ trajectory-backend-label affordance: the fullscreen view says
-   * what it is reading, never guessing from the backend id.
+   * Localized one-phrase label naming the mounted trajectory source (the
+   * raw DSH session log, or the backend-neutral AgentEvent fold), so the
+   * fullscreen view says what it is reading instead of guessing from the
+   * backend id.
    */
   trajectoryBackendLabel(): string
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void

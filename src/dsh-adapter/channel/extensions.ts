@@ -1,8 +1,7 @@
 /**
- * The DSH extensions of the channel core (docs/agent-backend-design.md §3.5):
- * everything only a DSH session can serve, attached when the bound session
- * carries `native.dsh`. The specialists are the same modules as before the
- * core existed — their internals are unchanged; this file is their wiring.
+ * The DSH extensions of the channel core: everything only a DSH session can
+ * serve, attached when the bound session carries `native.dsh`. The
+ * specialists live in their own modules; this file only wires them up.
  *
  * - transcript: the synchronous seed replay of the DSH log (subagent catalog
  *   included), `/trace`, "load earlier" restored from the log, the DeepSeek
@@ -18,12 +17,11 @@
  * - reports: `/doctor`, `/export` (from the log), `/mcp`, `/init`, `/balance`,
  *   `/plugins`, `/login` credential descriptions.
  *
- * Construction order mirrors the pre-core composition wherever it is
- * observable: the job feed and pricing are installed before the seed replay,
- * the replay runs before the model / mode actions read the replayed state,
- * the child-route `agent/request` listener registers before the first bind's
- * own, and the runtime starts keep their order around the core's host
- * subscriptions.
+ * Construction order matters where it is observable: the job feed and
+ * pricing are installed before the seed replay, the replay runs before the
+ * model / mode actions read the replayed state, the child-route
+ * `agent/request` listener registers before the first bind's own, and the
+ * runtime starts keep their order around the core's host subscriptions.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { t } from '../../i18n.js'
@@ -88,17 +86,17 @@ type CoreServedAction =
   // is the status report, `capabilities.mcpControl` false).
   | 'mcpControl'
   // Capability-backed only: a DSH session declares no native `modes`
-  // capability, so listModes answers the silent empty roster and setMode its
-  // explicit refusal — the DSH /permission pipeline never routes through them.
+  // capability, so listModes returns an empty roster and setMode reports
+  // unavailable. The DSH /permission pipeline never routes through them.
   | 'listModes' | 'setMode'
-  // Capability-backed only: the typed `channels` capability is the Claude
-  // backend's own profile store — a DSH session answers the silent empty
-  // roster and the explicit refusals, and /channel never appears there.
+  // Capability-backed only: the `channels` capability is the Claude
+  // backend's own profile store. A DSH session returns an empty roster and
+  // reports unavailable, and /channel never appears there.
   | 'listChannels' | 'setChannel' | 'importChannel' | 'saveChannel' | 'removeChannel' | 'peekChannelImport'
 
 /**
- * Read the persistence backend's full session list (empty without one) —
- * the agent view's "stopped" rows come from this snapshot.
+ * Read the persistence backend's full session list (empty without one). The
+ * agent view's "stopped" rows come from this snapshot.
  */
 async function listSessionsSnapshot(ctx: Context): Promise<readonly SessionSummary[]> {
   const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
@@ -139,11 +137,11 @@ export function attachDshExtensions(
   let backgroundCurrentAction!: () => Promise<BackgroundResult>
   let agentView!: ReturnType<typeof createAgentViewProjection>
 
-  // The DSH child transcript source (design dsh-child-transcript): built
-  // only when the host composition serves session persistence at attach —
-  // its absence means NO history capability, so the shared transcript tab
-  // never renders for this session. Every dependency is re-resolved per call;
-  // the reader itself fences on the binding capture and closes its handle.
+  // The DSH child transcript source (docs/dsh-child-transcript.md). Built
+  // only when the host composition serves session persistence at attach;
+  // without it there is no history method, so the shared transcript tab
+  // never renders for this session. Every dependency is re-resolved per
+  // call; the reader fences on the binding capture and closes its handle.
   const lookupChild = (id: string): { status?: string; session?: unknown; options?: { provider?: string; model?: string } } | undefined => {
     const agents = ctx.get('agents') as { get(id: string): { status?: string; session?: unknown; options?: { provider?: string; model?: string } } | undefined } | undefined
     return agents?.get(id)
@@ -158,11 +156,11 @@ export function attachDshExtensions(
     persistence: () => (ctx as { get(name: string): unknown }).get('sessionPersistence') as import('./subagent-transcript.js').ChildPersistenceSource | undefined,
     sessionsStore: () => (ctx as { get(name: string): unknown }).get('sessions') as import('./subagent-transcript.js').ChildSessionsStore | undefined,
     lookupChild,
-    // A THROWAWAY translator per call, mirroring backend/session.ts's own
-    // `history()`: the live translator's frame fence and open-call ledger
-    // stay untouched. The presenter scope is the parent agent — the child's
-    // own Agent is not loadable without resuming it (design 路径裁定), and a
-    // wrong-scope presenter only degrades a card to plain text.
+    // A fresh translator per call, like backend/session.ts's `history()`,
+    // so the live translator's frame fence and open-call ledger stay
+    // untouched. The presenter scope is the parent agent: the child's own
+    // Agent cannot be loaded without resuming it, and a wrong-scope
+    // presenter only degrades a card to plain text.
     createTranslator: () => createDshTranslator({
       tools: () => ctx.get('tools') as import('./types.js').ToolsRegistryLike | undefined,
       scope: () => binding.agent,
@@ -176,8 +174,8 @@ export function attachDshExtensions(
     rowIds,
     agent: () => binding.agent,
     // The continuation service is an optional host plugin: the projection's
-    // message capability (direct prompt, catalog roster) exists exactly when
-    // the service and its methods do — never a fabricated capability.
+    // message capability (direct prompt, catalog roster) exists only when the
+    // service and its methods do.
     subagents: () => (ctx as { get(name: string): unknown }).get('subagents') as SubagentsServiceView | undefined,
     ownerSignal: owner.signal,
     lookupChild,
@@ -229,7 +227,7 @@ export function attachDshExtensions(
   state.agentId = binding.agent.id
   state.sessionId = binding.agent.session.id
   state.mode = sessionModes[0]!
-  // A DSH session supports everything the TUI offers (design §3.5).
+  // A DSH session supports everything the TUI offers.
   state.backendCapabilities = channelCapabilities({
     backendId: initialSession.ref.backendId,
     backendLabel: options.backendLabel ?? DSH_BACKEND_LABEL,
@@ -284,15 +282,13 @@ export function attachDshExtensions(
   // Immutable per-append snapshot (dsh-session caches the frozen array);
   // reads follow session swaps (/resume /rewind /new) automatically.
   state.traceEvents = () => dshNative().rawHistory()
-  // The DSH side of the trajectory capability declaration: a source IS
-  // mounted, so the report flips off the core's 'unsupported' — 'empty'
-  // until the session logs its first event, 'supported' from then on. Read
-  // per call over the same cached snapshot, so it follows session swaps and
-  // appends with no extra bookkeeping.
+  // Trajectory availability for DSH: the raw log is always mounted, so the
+  // report is 'empty' until the session logs its first event and
+  // 'supported' after. Read per call over the same cached snapshot, so it
+  // follows session swaps and appends with no extra bookkeeping.
   state.trajectorySource = () => (dshNative().rawHistory().length === 0 ? 'empty' : 'supported')
-  // The source label (design §④ i18n trajectory-backend-label): name what
-  // feeds the trajectory — the raw DSH session log, not the AgentEvent fold
-  // the core would otherwise mount.
+  // The source label names what feeds the trajectory: the raw DSH session
+  // log, not the AgentEvent fold the core would otherwise mount.
   state.trajectoryBackendLabel = () => t('trajectory-backend-dsh')
 
   // The DSH log restores folded rows; the projector prices by the DeepSeek
@@ -310,16 +306,16 @@ export function attachDshExtensions(
     foldBack,
   })
   core.extend({
-    // D-6 stale detection follows the AGENT (session wrappers are recreated
-    // per adoption; an A→B→A return is the same conversation).
+    // Stale detection follows the agent: session wrappers are recreated per
+    // adoption, and switching A to B and back to A is the same conversation.
     conversationKey: session => session.capabilities.native.dsh?.agent ?? session,
     flushDeferred: () => subagentProjection.flush(),
     loadOlder: dshLocal.loadOlder,
     // Subagents and jobs come from the DSH host services (projections above).
     ownsActivity: true,
-    // The DSH raw history IS the trajectory source (state.traceEvents /
-    // trajectorySource are replaced above): the core's AgentEvent fold
-    // would only duplicate it (design §④).
+    // The DSH raw history is the trajectory source (state.traceEvents /
+    // trajectorySource are replaced above); the core's AgentEvent fold
+    // would only duplicate it.
     ownsTrajectory: true,
     // The DSH workspace may be remote: no local-disk stand-in for `fs`.
     localFs: false,

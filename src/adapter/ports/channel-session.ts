@@ -121,7 +121,7 @@ export interface SessionSummary {
   readonly id: string
   /**
    * The backend whose catalog lists this session (`claude`, `acp:<agent>`);
-   * absent = a DSH session (every pre-multi-backend row, unchanged).
+   * absent for a DSH session.
    */
   readonly backendId?: string
   readonly kind: SessionKind

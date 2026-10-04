@@ -1,8 +1,8 @@
 /**
- * The channel half of the human-in-the-loop bridge (docs/agent-backend-design.md
- * §4.7, §5.1): a non-DSH session announces its prompts as events, this module
- * parks them in the stores the TUI renders and routes the user's answers back
- * through the session's typed capabilities.
+ * The channel half of the human-in-the-loop bridge: a non-DSH session
+ * announces its prompts as events, this module parks them in the stores the
+ * TUI renders and routes the user's answers back through the session's typed
+ * capabilities.
  *
  *   permission.request  → PermissionStore.park  → panel → permissions.respond
  *   permission.settled  → PermissionStore.withdraw (the backend took it back)
