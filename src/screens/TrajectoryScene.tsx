@@ -9,6 +9,7 @@ import { Ledger } from '../components/trajectory/Ledger.js'
 import { Inspector } from '../components/trajectory/Inspector.js'
 import { HotspotView, hotspotRows } from '../components/trajectory/HotspotView.js'
 import { applyQuery, parseQuery } from '../trajectory/query.js'
+import { ledgerWindow } from '../trajectory/window.js'
 import { MOTION_TICK_MS } from '../trajectory/motion.js'
 import { formatDuration, formatTokens, truncateWidth } from '../trajectory/format.js'
 import { stringWidth } from '../ink/stringWidth.js'
@@ -163,10 +164,9 @@ export function TrajectoryScene({
   const bandWidth = Math.max(1, columns - 4)
 
   const clampedCursor = filtered.length === 0 ? 0 : Math.min(cursor, filtered.length - 1)
-  const windowStart = Math.max(
-    0,
-    Math.min(clampedCursor - Math.floor(ledgerRows / 2), filtered.length - ledgerRows),
-  )
+  // The shared windowing math (design ④ 完整档 长会话虚拟化): the ledger
+  // paints exactly one viewport's worth of rows at any session length.
+  const windowStart = ledgerWindow(filtered.length, clampedCursor, ledgerRows).start
 
   const band = React.useMemo(
     // oxlint-disable-next-line react-hooks/exhaustive-deps

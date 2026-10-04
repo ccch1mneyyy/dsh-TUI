@@ -9,6 +9,7 @@ import { Inspector } from '../trajectory/Inspector.js'
 import { HotspotView, hotspotRows } from '../trajectory/HotspotView.js'
 import { Divider } from '../design-system/Divider.js'
 import { MOTION_TICK_MS } from '../../trajectory/motion.js'
+import { ledgerWindow } from '../../trajectory/window.js'
 import { truncateWidth } from '../../trajectory/format.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { t } from '../../i18n.js'
@@ -147,10 +148,9 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
   const ledgerRows = Math.max(1, height - CHROME_ROWS - inspectorRows)
 
   const clampedCursor = filtered.length === 0 ? 0 : Math.min(cursor, filtered.length - 1)
-  const windowStart = Math.max(
-    0,
-    Math.min(clampedCursor - Math.floor(ledgerRows / 2), filtered.length - ledgerRows),
-  )
+  // The shared windowing math (design ④ 完整档 长会话虚拟化), identical to
+  // the scene's: one viewport's worth of rows at any session length.
+  const windowStart = ledgerWindow(filtered.length, clampedCursor, ledgerRows).start
 
   const band = React.useMemo(
     // oxlint-disable-next-line react-hooks/exhaustive-deps

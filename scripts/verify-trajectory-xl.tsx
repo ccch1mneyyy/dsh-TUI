@@ -401,6 +401,61 @@ try {
     source.reset()
   }
 
+  // ── 5. long-session virtualization ────────────────────────────────────────
+  {
+    const { ledgerWindow } = windowApi
+    const head = ledgerWindow(100, 0, 10)
+    const mid = ledgerWindow(100, 50, 10)
+    const tail = ledgerWindow(100, 99, 10)
+    check('window: head pins to 0', head.start === 0 && head.end === 10)
+    check('window: cursor stays inside, centered while room allows', mid.start === 45 && mid.end === 55 && 50 >= mid.start && 50 < mid.end)
+    check('window: tail shows the last full page', tail.start === 90 && tail.end === 100)
+    check('window: short list windows from 0', ledgerWindow(4, 3, 10).start === 0 && ledgerWindow(4, 3, 10).end === 10)
+    check('window: empty list windows to (0, rows)', ledgerWindow(0, 7, 10).start === 0 && ledgerWindow(0, 7, 10).end === 10)
+    check('window: stale cursor past the end is clamped', ledgerWindow(30, 999, 10).start === 20)
+
+    // A ~2k-row session renders exactly one viewport of rows; G/g still jump.
+    const events: Record<string, unknown>[] = []
+    let seq = 0
+    const T0 = 1_700_000_000_000
+    const ev = (type: string, data: Record<string, unknown>): void => {
+      seq += 1
+      events.push({ type, seq, time: T0 + seq * 7, data })
+    }
+    for (let index = 0; index < 1000; index++) {
+      const name = 'zq' + String(index).padStart(4, '0')
+      ev('tool/call', { turn: 1, step: 1, callId: 'c' + index, name, arguments: '{}' })
+      ev('tool/result', { turn: 1, step: 1, message: { source: { callId: 'c' + index }, content: [{ type: 'text', text: 'o' }] } })
+    }
+    const long = buildTrajectory(events as never)
+    check('window: synthetic long session folds 1k rows', long.nodes.length === 1000, String(long.nodes.length))
+    const channel = {
+      sessionTitle: 'long probe', cwd: 'C:/code/demo',
+      traceEvents: () => events as never,
+      trajectorySource: () => 'supported',
+      trajectoryLanes: () => [],
+      trajectoryLaneEvents: () => [],
+      trajectoryBackendLabel: () => t('trajectory-backend-agent-events'),
+      subscribe: () => () => {},
+    }
+    const startedAt = Date.now()
+    const h = makeTerminalHarness(100, 24)
+    const app = await render(
+      <ThemeProvider theme="dark">
+        <TrajectoryScene channel={channel as never} build={long} onClose={() => {}} />
+      </ThemeProvider>,
+      { stdout: h.stdout as unknown as NodeJS.WriteStream, stdin: h.stdin as unknown as NodeJS.ReadStream, stderr: h.stderr as unknown as NodeJS.WriteStream, exitOnCtrlC: false, patchConsole: false },
+    )
+    check('window: tail window renders after arrival', await settled(() => h.screen().includes('zq0999')))
+    check('window: rows above the window stay unpainted', await settled(() => !h.screen().includes('zq0005')))
+    await writeKey(h.stdin, 'g')
+    check('window: g jumps to the head window', await settled(() => h.screen().includes('zq0000') && !h.screen().includes('zq0999')))
+    await writeKey(h.stdin, 'G')
+    check('window: G jumps back to the tail window', await settled(() => h.screen().includes('zq0999') && !h.screen().includes('zq0000')))
+    const elapsed = Date.now() - startedAt
+    check('window: the long-session round trip stays within budget', elapsed < 15_000, elapsed + 'ms')
+    await app.unmount(); h.term.dispose()
+  }
 } finally {
   // (each section resets the shared source)
 }
