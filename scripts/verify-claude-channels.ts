@@ -26,7 +26,7 @@
      选项的 flag 层，CLI 2.1.287 的 settings env 会盖过进程 env，取证见
      .local/agent-backend-review.md 第四批增补四）；导入吸收 baseUrl/token；
  *     同连接切换就地刷新 vs 异连接走新会话重启漏斗（sameOptionConnection）；
- *     问句式向导（channelWizard.ts，headless 驱动）走 saveChannel/
+ *     问句式向导（src/channel/channel-wizard.ts，headless 驱动）走 saveChannel/
      removeChannel/peekChannelImport 三动作。
  *
  *  7. **R3-1 凭据隔离**（.local/review/r3-channels-security.md）：携带连接的
@@ -55,7 +55,7 @@ import { channelTokenRef, fileClaudeChannelTokens, memoryClaudeChannelTokens } f
 import { ClaudeChannelConflictError, channelMissingCredential, resolveClaudeAuth } from '../src/backends/claude/auth.js'
 import { channelStartNotices } from '../src/backends/claude/backend.js'
 import { loadClaudeSdk } from '../src/backends/claude/sdk.js'
-import { runChannelWizard, sameOptionConnection } from '../src/dsh-adapter/channelWizard.js'
+import { runChannelWizard, sameOptionConnection } from '../src/channel/channel-wizard.js'
 import { importedModelEnv, mergedModelEnv, readModelEnvTruth } from '../src/backends/claude/modelEnv.js'
 import { openClaudeSession } from '../src/backends/claude/session.js'
 import { BACKEND_CHANNEL_COMMAND, LOCAL_COMMANDS } from '../src/commands.js'
@@ -285,7 +285,7 @@ const init = {
 // ---- 7. wiring tripwires (source-level, the mode-roster precedent) ----------
 {
   const { readFileSync: readSrc } = await import('node:fs')
-  const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url).pathname.replace(/^\//, ''), 'utf8')
+  const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url), 'utf8')
   const chatSrc = readRepo('../src/screens/Chat.tsx')
   check('tripwire: Chat hosts the channel overlay key branch', chatSrc.includes("overlay.kind === 'channel'"))
   check('tripwire: Chat renders ChannelPicker inside pickerPanels', chatSrc.includes('<ChannelPicker') && chatSrc.includes("import { ChannelPicker, type ChannelPickerRow } from '../components/ChannelPicker.js'"))
@@ -1141,7 +1141,7 @@ const init = {
 // ---- 15. wiring tripwires (source-level) ------------------------------------
 {
   const { readFileSync: readSrc } = await import('node:fs')
-  const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url).pathname.replace(/^\//, ''), 'utf8')
+  const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url), 'utf8')
   const chatSrc = readRepo('../src/screens/Chat.tsx')
   check('tripwire: Chat runs the wizard from the add/manage rows', chatSrc.includes('runChannelWizard({') && chatSrc.includes("{ kind: 'add' }") && chatSrc.includes("{ kind: 'manage' }"))
   check('tripwire: Chat routes a connection change through the fresh-session funnel', chatSrc.includes('onRestartFreshSession(t(\'channel-switch-restart\'') && chatSrc.includes('sameOptionConnection(before, row.option)'))

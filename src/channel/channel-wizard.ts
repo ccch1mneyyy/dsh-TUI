@@ -1,28 +1,20 @@
 import type { BackendChannelOption } from '../adapter/ports/channel-view.js'
 import { t } from '../i18n.js'
-import {
-  UserQuestionError,
-  type AskUserQuestionAnswer,
-  type AskUserQuestionItem,
-  type AskUserQuestionRequest,
-} from '@deepseek-ai/dsh-user-questions'
+import { isQuestionInterruption, type QuestionAnswer, type QuestionItem, type QuestionRequest } from './questions.js'
 
 /**
- * `/channel` 管理向导（三期）——问句式驱动，照 providerWizard.ts 的先例：
- * 一串 QuestionStore ask（模型侧 ask_user_question 共用的那个面板），自身
- * 没有 UI 状态；全部副作用走 deps 上的通道动作（saveChannel /
- * removeChannel / setChannel / peekChannelImport），token 只经能力层进
- * 凭据库，向导与 UI 层全程见不到明文之外的东西（redact 输入直接转交）。
+ * `/channel` 管理向导：与 providerWizard.ts 一样由一串 QuestionStore ask 驱动
+ * （模型 ask_user_question 用的同一个面板），自身不持有 UI 状态，所有副作用
+ * 都经 deps 上的通道动作。token 以 redact 方式询问，直接交给凭据库。
  *
- * 本模块 React-free，scripts/verify-claude-channels.ts 可以用脚本化答案
- * headless 驱动（同 verify-provider-wizard 的方式）。
+ * 不依赖 React，scripts/verify-claude-channels.ts 用脚本化答案无头驱动。
  */
 
 export interface ChannelWizardDeps {
   readonly ask: (
-    request: AskUserQuestionRequest,
+    request: QuestionRequest,
     options?: { redact?: boolean },
-  ) => Promise<AskUserQuestionAnswer>
+  ) => Promise<QuestionAnswer>
   readonly notify: (
     text: string,
     options?: { color?: 'error' | 'warning' | 'success'; timeoutMs?: number },
@@ -60,22 +52,20 @@ const MAX_RETRY = 3
 /** The edit fields' clear sentinel: typing exactly this removes the value. */
 const CLEAR = '-'
 
-function answerText(answer: AskUserQuestionAnswer, id: string): string {
+function answerText(answer: QuestionAnswer, id: string): string {
   return answer.answers.find(item => item.id === id)?.custom?.trim() ?? ''
 }
 
-function answerSelected(answer: AskUserQuestionAnswer, id: string): readonly string[] {
+function answerSelected(answer: QuestionAnswer, id: string): readonly string[] {
   return answer.answers.find(item => item.id === id)?.selected ?? []
 }
-
-type WizardQuestionItem = AskUserQuestionItem & { hideCustomInput?: boolean }
 
 function optionQuestion(
   id: string,
   question: string,
   options: readonly { label: string; description?: string }[],
   extra?: { detail?: string; hideCustomInput?: boolean },
-): WizardQuestionItem {
+): QuestionItem {
   return {
     id,
     question,
@@ -86,7 +76,7 @@ function optionQuestion(
   }
 }
 
-function textQuestion(id: string, question: string, detail?: string): AskUserQuestionItem {
+function textQuestion(id: string, question: string, detail?: string): QuestionItem {
   return {
     id,
     question,
@@ -121,7 +111,7 @@ export async function runChannelWizard(deps: ChannelWizardDeps): Promise<Channel
     managing = answerSelected(actionAnswer, 'action')[0] === t('channel-wiz-opt-manage')
     return await (managing ? runManageFlow(deps) : runAddFlow(deps))
   } catch (error) {
-    if (error instanceof UserQuestionError) {
+    if (isQuestionInterruption(error)) {
       notify(t('channel-wiz-cancelled'))
       return { kind: 'cancelled', restart: false }
     }

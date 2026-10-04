@@ -100,6 +100,13 @@ export class QuestionInterruptedError extends Error {
   }
 }
 
+/** Whether `error` is an ask rejected by the user or by an abort (either
+ *  store's interruption error carries the code). */
+export function isQuestionInterruption(error: unknown): boolean {
+  const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined
+  return code === 'ASK_CANCELLED' || code === 'ASK_ABORTED'
+}
+
 /** The ask surface the channel and wizards drive. */
 export interface QuestionStoreLike {
   ask(request: QuestionRequest, options?: { redact?: boolean }): Promise<QuestionAnswer>
