@@ -228,8 +228,8 @@ export const SETTING_DEFINITIONS = {
     label: 'Enabled panels',
     descriptions: { zh: '启用的面板' },
     group: 'side-panel',
-    hint: 'Comma-separated panel ids in PanelBar order (default `todo,jobs,agents`). Ids are lowercase words (a-z, 0-9, _, -) or a `plugin:panel` namespace; a well-formed id no panel claims yet stays in the bar for a plugin that registers it later, while a malformed entry is refused. Add `companion` to enable the pet panel. Applies immediately.',
-    hintDescriptions: { zh: '按标签栏顺序排列的面板 id，逗号分隔（默认 `todo,jobs,agents`）。id 为小写词组（a-z、0-9、_、-）或 `plugin:panel` 命名空间；格式合法但尚无面板认领的 id 会留在标签栏，等插件稍后注册，格式非法的输入会被直接拒绝。加上 `companion` 可启用宠物面板。立即生效。' },
+    hint: 'Tick the panels the side panel bar shows: a new tick appends at the end, unticking removes. Panels registered by plugins appear here automatically, and a well-formed id nothing claims yet stays as a checked placeholder. The Advanced row edits the raw comma list (e.g. to reorder). Applies immediately.',
+    hintDescriptions: { zh: '勾选侧栏标签栏要显示的面板：新勾选的追加在末尾，取消即移除。插件注册的面板会自动出现在这里；格式合法但尚无面板认领的 id 会保留为已勾选的占位行。「高级」行可编辑原始逗号列表（如调整顺序）。立即生效。' },
     kind: 'text',
   },
   'sidePanel.ratio': {

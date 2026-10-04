@@ -1317,6 +1317,11 @@ const dict = {
   'settings-saved': { zh: '已保存 {{ns}}', en: 'Saved {{ns}}' },
   'settings-save-failed': { zh: '保存 {{ns}} 失败——请重试', en: 'Saving {{ns}} failed — please retry' },
   'settings-secret-ref-reserved': { zh: '凭据 {{ref}} 由宿主保留，写入被拒绝：第三方设置区块不能覆盖宿主共享凭据', en: 'Credential {{ref}} is reserved by the host; write rejected: third-party settings sections cannot overwrite host-shared credentials' },
+  // sidePanel.panels 勾选列表（面板多选）：占位行 / 插件行 / 高级行 / 至少一个守卫。
+  'settings-panels-unclaimed': { zh: '尚无面板认领——保留此 id，插件注册后自动生效', en: 'No panel claims this id yet — kept for a plugin to register later' },
+  'settings-panels-plugin': { zh: '插件面板（{{plugin}}）', en: 'Plugin panel ({{plugin}})' },
+  'settings-panels-advanced': { zh: '高级：编辑原始面板列表', en: 'Advanced: edit raw panel list' },
+  'settings-panels-min-one': { zh: '至少保留一个启用的面板', en: 'Keep at least one panel enabled' },
   'settings-hint-list': { zh: '**Enter** 进入/编辑/切换（改动即保存） · Esc 退出', en: '**Enter** open/edit/toggle (auto-saves) · Esc exit' },
   'settings-hint-group': { zh: '**Enter** 编辑/切换（改动即保存） · Esc 返回', en: '**Enter** edit/toggle (auto-saves) · Esc back' },
   'settings-hint-edit': { zh: '**Enter** 确认并保存 · Esc 取消', en: '**Enter** to confirm & save · Esc to cancel' },
@@ -1929,6 +1934,15 @@ const dict = {
   'panel-title-trajectory': { zh: '轨迹', en: 'Trajectory' },
   'panel-title-info': { zh: '信息', en: 'Info' },
   'panel-title-workspace': { zh: '工作区', en: 'Workspace' },
+  // 面板一句话描述：/settings 的 sidePanel.panels 勾选行用（panel-desc-<id>）。
+  'panel-desc-todo': { zh: '目标与待办清单，Enter 勾选完成', en: 'Goal and todo checklist; Enter ticks items done' },
+  'panel-desc-info': { zh: '模型、上下文与消耗的信息栏', en: 'Model, context and cost readout' },
+  'panel-desc-trajectory': { zh: '回合轨迹：耗时、工具与重试', en: 'Per-turn trace: timing, tools, retries' },
+  'panel-desc-jobs': { zh: '后台任务名册与实时输出', en: 'Background jobs roster and live output' },
+  'panel-desc-agents': { zh: '子代理列表与详情', en: 'Subagent list and detail' },
+  'panel-desc-workspace': { zh: '工作区目录与最近会话', en: 'Workspace directories and recent sessions' },
+  'panel-desc-btw': { zh: '侧问线程：不打断主线的旁路问答', en: 'btw threads: side questions without derailing' },
+  'panel-desc-companion': { zh: '桌面宠物：状态、互动与通知气泡', en: 'Desktop pet: mood, interactions, notice bubbles' },
   'panel-trajectory-empty': { zh: '本次会话还没有轨迹：发出第一条消息后，这里会画出唤醒带与账本。', en: 'No trajectory yet — the wake band and ledger appear once this session has turns.' },
   'panel-trajectory-hint': { zh: '↑/↓ 选中 · Enter 展开 · Tab 热点 · ⤢ 全屏', en: '↑/↓ select · Enter expand · Tab hotspots · ⤢ fullscreen' },
   // 轨迹三态（设计 agent-team-panels §④）：unsupported 是「当前后端尚未接入数据源」，
