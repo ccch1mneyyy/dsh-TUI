@@ -417,6 +417,13 @@ const GROUPS = {
 // 安全 GC（dry-run 默认、active/回滚目标/活 lease 一律保留）、回滚＝
 // 只改指针。
     ["verify-deploy-generations", ['node', 'scripts/verify-deploy-generations.mjs']],
+// 构建隔离 M0 回归：live-tree 守卫（profile junction 指向的源树拒绝
+// clean/build、逃生口、clean-lib 真子进程集成）、staging 构建产物形状
+// （READY files 清单/树哈希独立复核/runtime-lock 如实标 profile 提供）、
+// promote 后 dispatch pin 落位、gen-settings-json 参数化逐字节等价。
+// 真实 tsc staging 构建是本地验收档（DSH_TUI_VERIFY_FULL_COMPILE=1），
+// CI 默认走 --skip-compile 快路径。
+    ["verify-build-isolation", ['node', 'scripts/verify-build-isolation.mjs']],
 // 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：
 // 全程跑官方读取链——Session.append 生成骨架（turn 配对/reasoning/
 // provenance/空 system head/工具调用/中断/标题/压缩检查点）、
