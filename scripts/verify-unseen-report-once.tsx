@@ -1,24 +1,14 @@
 /**
- * Contract verifier for the #185 follow-up fix (MessageList unseen-count
- * report): onUnseenCount must fire ONLY when the reported count changes.
- *
- * Why this matters: the report calls the parent's setUnseenCount. Under dense
- * streaming commits, pending passive effects flush INSIDE the next commit, so
- * a same-value report dispatches an in-commit setState whose SyncLane stays
- * pending at the commit epilogue — React's nested-update counter climbs, and
- * 50+ consecutive dirty commits crash with React error #185 (post-#146 this
- * chain, not the measure tick, was the live one). The ref gate in MessageList
- * breaks it by never re-reporting an unchanged count.
- *
- * A/B: on unpatched HEAD every no-op commit re-reports (fails here); patched
- * reports the settled value once (passes). Production mode like the
- * measure-depth verifier.
+ * onUnseenCount fires only when the unseen-row count changes.
+ * The initial baseline starts after measurements and reports stay quiet for 500ms;
+ * subsequent no-op commits and a real count change retain separate assertions.
+ * Production React mirrors runtime commits.
  */
-import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import { render } from '../src/ui.js'
 import { MessageList } from '../src/components/MessageList.js'
-import { sleep } from './lib/term-test.mjs'
+import { PassThrough, Writable } from 'node:stream'
+import { sleep, settled } from './lib/term-test.mjs'
 
 class Output extends Writable {
   columns = 100
@@ -48,6 +38,7 @@ const rows = Array.from({ length: 30 }, (_, i) => ({
 const ANCHOR_ID = 5
 
 const reports: number[] = []
+let lastReportAt = 0
 const props = {
   expanded: false,
   expandedRows: new Set<number>(),
@@ -59,7 +50,7 @@ const props = {
   showAll: true,
   onToggleAll: () => {},
   newSinceRowId: ANCHOR_ID as number | null,
-  onUnseenCount: (count: number) => { reports.push(count) },
+  onUnseenCount: (count: number) => { reports.push(count); lastReportAt = Date.now() },
 }
 
 const stdout = new Output()
@@ -72,14 +63,11 @@ const instance = await render(<MessageList rows={rows} {...props} />, {
   patchConsole: false,
 })
 
-// 固定窗:探针 the baseline below is "reports have STOPPED arriving" — the
-// window lets measurements settle (heights land, base corrects, count
-// stabilizes); polling for the first positive report would capture settledLen
-// too early and misread later settling reports as no-op re-reports.
-await sleep(500)
+// Start the baseline only after measurements and unseen reports have gone quiet.
+const baselineReady = await settled(() => reports.length > 0 && Date.now() - lastReportAt >= 500)
 const settledLen = reports.length
 const settledValue = reports[settledLen - 1]
-if (settledLen === 0 || settledValue === undefined || settledValue <= 0) {
+if (!baselineReady || settledLen === 0 || settledValue === undefined || settledValue <= 0) {
   console.error(`FAIL: expected a positive settled unseen count, got reports=${JSON.stringify(reports)}`)
   process.exit(1)
 }
