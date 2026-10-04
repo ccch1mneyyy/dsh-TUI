@@ -484,7 +484,7 @@ export function MessageList({
   failureHint?: string
   /** 打开子代理详情场景（transcript 内点击子代理卡）。 */
   onOpenSubagent?: (agentId: string) => void
-  /** 主屏只读 Agent View（design agent-team-full §4.1 转录卡入口）。 */
+  /** 从转录里的子代理卡打开主屏只读 Agent View。 */
   onOpenSubagentView?: (agentId: string, rowId: number) => void
   /** 打开 /jobs 后台任务面板（transcript 内点击任务卡）。 */
   onOpenJobs?: (focusId?: string) => void
@@ -1914,7 +1914,7 @@ function TranscriptRow({
         </Box>
       )
     case 'turn-summary':
-      // The turn's closing ledger (design §C, restyled): a quiet RIGHT-aligned
+      // The turn's closing ledger: a quiet RIGHT-aligned
       // emblem — metadata does not lead the reading flow. No top margin, it
       // belongs to the block above. width="100%" is what makes flex-end mean
       // the transcript's right margin (an auto-width row has nothing to push

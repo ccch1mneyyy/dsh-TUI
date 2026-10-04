@@ -1,6 +1,6 @@
 /**
- * The approval panel — the permission prompt every backend renders through
- * (docs/agent-backend-design.md §4.7). One ask per panel: a
+ * The approval panel — the permission prompt every backend renders
+ * through. One ask per panel: a
  * permission-colored divider header naming the tool, the gated command, the
  * asker's reason, "Allow this operation?", and a numbered option list.
  *

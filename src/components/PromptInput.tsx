@@ -1477,12 +1477,10 @@ export function PromptInput({
     // this edit replaces, and `diffSpan` needs both texts. `reset` ends the
     // draft's history, `silent` (undo itself, a recall) leaves it untouched.
     if (next !== prev) {
-      // R4-R3: EVERY real text mutation hands the arrows back to the draft.
-      // This is the one owner for paste/clipboard/history/external-editor/
-      // undo refills alike — a dock selection surviving an edited draft is
-      // exactly the stale-focus bug (↑/↓ steering an invisible selector
-      // over the user's text). Caret-only moves (next === prev) never land
-      // here, so the empty-draft selector keeps its keys untouched.
+      // Every real text change (typing, paste, history, external editor,
+      // undo) hands the arrows back to the draft: a held-queue selection
+      // must not survive an edited draft and steer ↑/↓ over the text.
+      // Caret-only moves (next === prev) never land here.
       if (dockSelectedRef.current !== null) setDockSelected(null)
       if (undo === 'reset') clearDraftUndo()
       else if (undo !== 'silent') {
@@ -1840,8 +1838,8 @@ export function PromptInput({
    *  click, Alt+↑ on the last): purely local — the backend dropped its copy
    *  with the aborted turn, so every backend can do it.
    *
-   *  A draft with real content is never destroyed by the retraction (R4-R1
-   *  blocker): it SWAPS — the whole draft (text + staged images) parks at
+   *  A draft with real content is never destroyed by the retraction: it
+   *  SWAPS — the whole draft (text + staged images) parks at
    *  the dock's tail while the clicked row comes into the input. Nothing
    *  sends; the swap is one undo step, so Ctrl+Z brings the parked draft
    *  back (text, caret, images and fold block; the parked row retains the
@@ -1896,7 +1894,7 @@ export function PromptInput({
   // A dock that empties or shrinks under an open selector (rows claimed,
   // a receipt un-docking them, a session reset) leaves the highlight
   // pointing past the list — fold it instead of steering arrows at an
-  // invisible row (R4-R3's "never operate a hidden focus").
+  // invisible row.
   React.useEffect(() => {
     if (dockSelected !== null && (dockSelected >= dockCount || dockCount === 0)) {
       setDockSelected(null)
@@ -4076,10 +4074,10 @@ export function PromptInput({
   // 的 style.position，常驻浮层 + 移除普通子节点不会触发 blit 解毒，被
   // 覆盖的转录行会留空（见 Chat.tsx dialogOverlayOpen 注释）。展开态由
   // 全屏编辑器接管，内联浮层全部撤下。
-  // R4-R2: the dock rows are WINDOWED, never rendered in full — the
-  // OverlayAbove clips overflow from the top without scrolling, so a long
-  // dock put the highlighted row (and every row above it) off-screen while
-  // Enter still retracted by index. The window keeps the focused row
+  // The dock rows are windowed, never rendered in full: OverlayAbove clips
+  // overflow from the top without scrolling, so a long dock would push the
+  // highlighted row off-screen while Enter still retracts by index. The
+  // window keeps the focused row
   // visible (listWindow centers on it); Enter and the row click both
   // operate on the absolute dock index, so they always name the row the
   // user SEES highlighted. The budget subtracts every other row the
@@ -4334,7 +4332,7 @@ export function PromptInput({
                 <Text dimColor>⏸ {t('input-pending-dock-label')}</Text>
                 {dockedPending.slice(dockStart, dockEnd).map((item, index) => {
                   // The window maps to absolute dock indices: the click and
-                  // the highlight name the same row the user sees (R4-R2).
+                  // the highlight name the same row the user sees.
                   const absoluteIndex = dockStart + index
                   return (
                     <Box

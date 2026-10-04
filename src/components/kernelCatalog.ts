@@ -1,12 +1,10 @@
 /**
- * 内核选择器的目录（launchpad「内核」入口；用户原话：「启动页先起 TUI 前端
- * 再拉内核，现在多内核了，想在启动页加一个选项选进哪个内核」）。
+ * 内核选择器的目录（启动页「内核」入口、/kernel 与右下角内核区）。
  *
- * 纯数据：Claude 的异步探测（claudeBackend.detect()，src/backends/claude/
- * backend.ts，返回 BackendDetection）由 Chat 侧拉取后**传入**——本模块零
- * import、同输入恒同输出，表驱动回归离线钉死每种组合。
+ * 纯数据：Claude 的异步探测（claudeBackend.detect()）由 Chat 侧拉取后传入，
+ * 本模块不 import 任何东西，同输入同输出，回归脚本可以离线覆盖每种组合。
  *
- * 三个消费面共用这里的派生值，口径必须一致，谁都不许自己拼串：
+ * 三处共用这里的派生值，不要各自拼串：
  *   ① 右下角内核区（Launchpad，名字 · 副标题 一行一个内核）；
  *   ② 内核选择器（KernelPicker，副标题走 ListItem 的第二行）；
  *   ③ Chat 的确认路径（读 selectable/current/reasonKey 决定提示还是重启）。
@@ -25,7 +23,7 @@ export function kernelDisplayName(id: string): string {
  * - kernel-unavailable-not-installed / kernel-unavailable-auth-missing：
  *   探测**已经回来**、明确不可用；
  * - kernel-probing：探测**还没回来**。置灰是因为此刻不能选它，但绝不算
- *   「未安装」——把「还不知道」说成「没有」是撒谎（用户会以为自己的 CLI 丢了）。
+ *   「未安装」（用户会以为自己的 CLI 不见了）。
  */
 export type KernelUnavailableReason =
   | 'kernel-unavailable-not-installed'

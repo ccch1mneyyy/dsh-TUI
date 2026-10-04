@@ -43,8 +43,8 @@ export interface LaunchpadActionState {
   readonly updateAvailable: boolean
   /** 用量到档且从未 star（条件位③）。 */
   readonly starDue: boolean
-  /** 当前内核（channel.backendCapabilities.backendId；缺省 = 未知 → 内核
-   *  入口用短标签，不带名。阶段A由 Chat 侧接线）。 */
+  /** 当前内核（channel.backendCapabilities.backendId）；缺省 = 未知，内核
+   *  入口用不带名的短标签。 */
   readonly backendId?: string | undefined
 }
 

@@ -224,7 +224,7 @@ export function AssistantThinkingMessage({
 }
 
 /**
- * Count-only thinking (design §4.5 state (b)): the backend streams an
+ * Count-only thinking: the backend streams an
  * estimated token count but no thinking text. One header line in the same
  * visual language as a text block — the pulsing braille spinner while live,
  * the settled anchor afterwards — with nothing to expand.
