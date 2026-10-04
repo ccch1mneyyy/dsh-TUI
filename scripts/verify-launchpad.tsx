@@ -1,38 +1,10 @@
 /**
- * verify-launchpad — 启动落地页（Launchpad）回归。
+ * verify-launchpad — 启动页版面、输入、动作、降级档位与内核目录回归。
  *
- * 钉住的契约（2026-10 第三版改版）：
+ * The controlled query loop mirrors Chat; callbacks and screen text are both
+ * observable so focus-only and tip-only input can settle early.
  *
- *   A. 版面：头部走 LogoV2 chrome=minimal + arrangement=column——**立绘在上、
- *      DEEPSEEK/HARNESS 大字在下**，两块各自水平居中；头部里没有版号/模型/
- *      工作目录/启动提示/欢迎语（它们各有更低频的位置：参数进卡片、目录与
- *      版本进双角铭牌）。居中主体 = 头部 + **复合卡片**：圆角边框（只有一层，
- *      不框套框）里只有输入行（SearchBox borderless），参数条移出框外紧贴框下
- *      ——第四版只画值不画字段名（第六版模式段 = preset 显示名）：
- *      `glm-5.3  ·  Max  ·  Standard  ·  default`
- *      （任一段拿不到就省掉，全空整条不画）。框下再一行**纯文字动作入口**
- *      （ActionChip：无键帽/键位前缀/指针，悬停或焦点 = 整块矩形高亮，恒 1 行高，
- *      整行右对齐输入框右缘）；居中 Tips 行（● 前置圆点，首启 warning 色 +
- *      `launchpad-first-run`）；双角铭牌：左下 `displayCwd:branch`、右下 `dsh-tui v<版本>`
- *      + **内核区**（S 组：一行一个内核，当前那个打 ▸ 且主题蓝、其余行 dim；整块
- *      一个可点目标，键盘等价操作 = 焦点环末格 + Enter）。
- *   B. 输入：这一屏是**受控**的（query 由 Chat 持有），夹具必须闭环回写。
- *      敲字进 query、退格/←/→/Home/End 走 caret、Enter 把整行**原文**交给
- *      onSubmit、Esc 有字先清空而空输入才去看会话、Ctrl+C 空输入交 exit；
- *      前缀随行首 `/` 从 `❯` 变 `⌘`。
- *   C. 动作入口：纯文字标签（无键帽）；真 SGR 点击触发动作、悬停移焦点并
- *      整块高亮；↑/↓/Tab 焦点环 = 输入框(-1) + **画出来的**入口（第一行再 ↑
- *      回输入框）；整行右对齐（含 fitChips 裁掉尾部后的窄屏）；行高恒 1。
- *   D. 纯函数：resolveLaunchpadActions 表驱动（第七版四格 + 内核入口，命令名是
- *      `kernel`：Continue(条件) · 会话与工作区 · 设置 · 条件位 jobs>update>star>help
- *      优先级，单独/多重/全不成立各一行）、truncateContinueTitle 边界、fitChips
- *      不切半个标签、阶梯阈值（full → no-tip → no-hints → no-art → input-only）、
- *      kernelCatalog 的目录/版本显示串/副标题（K 组）。theme/lang/doctor 永不出现；
- *      settings 固定在第三格。
- *   E. 宽度不变量：120/100/72/60/48 列下任何一行都不超宽；标签/Tips/参数条
- *      要么完整出现在同一行、要么整条不出现（不许被切断的半句）。
- *
- * 运行：node --import tsx/esm scripts/verify-launchpad.tsx
+ * Run: node --import tsx/esm scripts/verify-launchpad.tsx
  */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
@@ -71,12 +43,12 @@ const [
 // （吉祥物形态归 verify-splash-mascot 管）。
 applyCompanionSkin('whale')
 
-/** 内核目录的真实派生（与 Chat 同一函数——夹具不手写形状，R4/S 组共用）。 */
+/** 内核目录由 buildKernelCatalog 生成，与 Chat 使用同一构造函数。 */
 const { buildKernelCatalog } = await import('../src/components/kernelCatalog.js')
 
 /** 夹具的默认状态：有上次会话 + 条件位全不成立（动作表 = Continue·会话与工作区·设置·内核·帮助）。 */
 const DEFAULT_ACTIONS = resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false })
-/** 默认档五个入口的屏上标签（zh，第七版四格 + 内核入口；backendId 缺省 → 短标签）。 */
+/** 默认五个入口的屏上标签（zh）；缺省 backendId 使用短标签。 */
 const CONTINUE_LABEL = '继续「修个登录页」'
 const SESSIONS_WORKSPACE_LABEL = '会话与工作区'
 const SETTINGS_LABEL = '设置'
@@ -102,8 +74,7 @@ const ROWS = 40
 const CWD = '/tmp/verify-launchpad'
 const BRANCH = 'main'
 const VERSION = '9.9.9'
-/** 第五版参数行：只画值、模型段**只显示模型名**（无 provider/ 前缀）。
- * 第六版设计 1：模式段换成 agent preset 的显示名（Standard/PTC/极简…）。 */
+/** 参数行只画值，模型段显示模型名；模式段使用 agent preset 显示名。 */
 const PARAM_LINE = 'glm-5.3  ·  Max  ·  Standard  ·  default'
 /** 夹具固定 bold 字面：大字 needle 与阶梯阈值都不随当天轮换的字体漂。 */
 const FONT = splashFontById('bold')
@@ -147,28 +118,28 @@ interface OpenOptions {
   clipboard?: string | null
   /** 剪贴板读回延迟（ms）——异步落点守则用例在延迟窗口里继续打字。 */
   clipboardDelay?: number
-  /** 动作表（第四版：默认 = 有上次会话的常态档）。 */
+  /** 默认动作表：已有上次会话，条件动作均未触发。 */
   actions?: readonly ReturnType<typeof resolveLaunchpadActions>[number][]
   /** 终端焦点标志；false = 模拟"从未收到 focus 事件"（光标仍必须自动呼吸）。 */
   terminalFocused?: boolean
-  /** 传一个探针面板给 overlayPanel（第五版：选择器盖在落地页之上）。 */
+  /** 为 overlayPanel 提供测试内容。 */
   overlayPanel?: boolean
-  /** 高探针面板（第七版：透明浮层回归）——探针行 + 6 行空白，盖住大字若干行。 */
+  /** 高探针面板：探针行加六行空白，覆盖部分大字。 */
   overlayPanelTall?: boolean
-  /** 命令补全面板数据源（第六版 BUG 1）：给了才会弹面板。 */
+  /** 提供时才显示命令补全面板。 */
   commands?: readonly { name: string; description: string; commandLine?: string }[]
-  /** 命令补全面板数据源（第六版 BUG 1）：给了才会弹面板。 */
+  /** 提供时才显示命令补全面板。 */
   commands?: readonly { name: string; description: string; commandLine?: string }[]
-  /** 命令补全面板数据源（第六版 BUG 1）：给了才会弹面板。 */
+  /** 提供时才显示命令补全面板。 */
   commands?: readonly { name: string; description: string; commandLine?: string }[]
-  /** 模拟"选择器开着"（第五版：本屏键盘整块让位）。 */
+  /** 模拟键盘交给覆盖层处理。 */
   inputPaused?: boolean
-  /** Tips 自动轮换间隔（第七版；短间隔确定性驱动相位）。 */
+  /** Tips 轮换间隔。 */
   tipRotateMs?: number
   /** 接上左下角铭牌的 onOpenWorkspace（true = 记 workspace 事件）。 */
   cornerWorkspace?: boolean
   /**
-   * 右下角内核区的目录行（第八版；用 buildKernelCatalog 造真实形状）。
+   * 右下角内核区的目录行，由 buildKernelCatalog 生成。
    * 不给 = 只画 TUI 版本那一行。
    */
   kernels?: readonly KernelOption[]
@@ -274,19 +245,30 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
   )
 
   const screen = () => viewportLines(term).join('\n')
-  /** 注入按键并等到它**产生了事件**（比固定 sleep 稳，且失败即断言失败）。 */
+  /** 输入可只改变局部焦点或 Tips，不一定触发宿主回调。 */
   const send = async (data: string): Promise<void> => {
+    await settled(() => screen().length > 0)
     const before = events.length
+    const frame = screen()
+    const writes = out.writeCount
     input.write(data)
-    await settle(() => events.length > before)
+    await settle(() => events.length > before || screen() !== frame)
+    if (events.length > before && screen() === frame && out.writeCount === writes) {
+      await settle(() => out.writeCount > writes)
+    }
   }
   const click = async (needle: string): Promise<void> => {
     await settled(() => findCell(term, needle) !== null)
     const found = findCell(term, needle)
     if (found === null) throw new Error(`click target not on screen: ${needle}`)
     const before = events.length
+    const frame = screen()
+    const writes = out.writeCount
     input.write(`\u001b[<0;${found.col};${found.row}M\u001b[<0;${found.col};${found.row}m`)
-    await settle(() => events.length > before)
+    await settle(() => events.length > before || screen() !== frame)
+    if (events.length > before && screen() === frame && out.writeCount === writes) {
+      await settle(() => out.writeCount > writes)
+    }
   }
   return { term, input, app, out, screen, send, click, close: () => { app.unmount() } }
 }
@@ -421,7 +403,7 @@ check('A2 模型串只出现在参数条那一行（头部不画模型行）',
     countOf(base.term, VERSION) === 1 && bottom.includes('dsh-tui v' + VERSION),
     `count=${countOf(base.term, VERSION)}`)
 }
-// 动作入口行（第四版：纯文字标签、无键帽；悬停/焦点 = 整块矩形高亮）。
+// 动作入口为纯文字；悬停和焦点会高亮整块。
 {
   const lines = viewportLines(base.term)
   const hintRow = lines.find(l => l.includes(CONTINUE_LABEL)) ?? ''
@@ -453,7 +435,7 @@ check('A2 模型串只出现在参数条那一行（头部不画模型行）',
 }
 check('A5 输入框占位提示到位', await settled(() => base.screen().includes('说点什么')))
 check('A6 极简头部：启动提示行不上屏', await settled(() => !base.screen().includes('提示：')))
-// 欢迎语曾经画了两遍（LogoV2 一行 + 落地页自己一行），改版后整块删除。
+// 欢迎语不在落地页重复显示。
 check('A6b 欢迎语不再出现（重复的 tagline 已删干净，一处都不剩）',
   await settled(() => !base.screen().includes('探索未至之境')))
 // 复合卡片：圆角边框**只有一层**（SearchBox 自己那圈收起来了，不框套框）。
@@ -478,7 +460,7 @@ check('A6c 输入卡片只有一层圆角边框（╭ ╰ 各恰好一个，不�
   check('A6f 参数行左对齐输入框（行首 = 卡片左缘 + 2）',
     Math.abs(leftGap(viewportLines(base.term)[param] ?? '') - (cardLeft + 2)) <= 1,
     `paramLeft=${leftGap(viewportLines(base.term)[param] ?? '')} cardLeft=${cardLeft}`)
-  // 第五版：参数行与入口行之间隔一行呼吸留白（用户实测要求；矮屏阶梯可撤）。
+  // 参数行与入口行之间留一行空白；窄屏可移除。
   const lines = viewportLines(base.term)
   const hint = lines.findIndex(l => l.includes(CONTINUE_LABEL))
   const tip = lines.findIndex(l => l.includes('● Tips'))
@@ -486,7 +468,7 @@ check('A6c 输入卡片只有一层圆角边框（╭ ╰ 各恰好一个，不�
   check('A6g 参数行仍紧贴框、入口行隔一行呼吸留白（hint = param + 2，中间是空行）',
     hint === param + 2 && (lines[param + 1] ?? 'x').trim() === '',
     'hint=' + hint + ' param=' + param + ' mid=' + JSON.stringify(lines[param + 1]))
-  // 第六版：词标（大字末行）与输入框之间隔两行呼吸留白（用户实测要求）。
+  // 词标与输入框之间留两行空白。
   const titleBottom = lines.reduce((acc, l, i) => l.includes('█') ? i : acc, -1)
   const cardTop = lines.findIndex(l => l.includes('╭'))
   check('A6g2 词标与输入框之间隔两行呼吸留白（第六版，cardTop = titleBottom + 3）',
@@ -550,7 +532,7 @@ base.close()
     `diff=${diff} line=${JSON.stringify(line.trim())}`)
   s.close()
 }
-// 光标闪烁（第三版）：相位只切换样式、绝不增删字符——输入行的视口纯文本跨相位
+// 光标闪烁只切换样式，不增删字符；输入行文本跨相位保持不变。
 // 必须逐字节一致，否则无头回归会随相位抖动、测试变成看运气。
 {
   const ev: Ev[] = []
@@ -590,12 +572,14 @@ base.close()
 {
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, { query: '半句话' })
+  await settled(() => s.screen().includes('半句话'))
   await s.send('\u001b')
   check('B6 有字时 Esc 只清空（不去看会话）',
     last(ev, 'query')?.value === '' && last(ev, 'escape') === undefined,
     JSON.stringify(ev))
+  await new Promise(resolve => setTimeout(resolve, 60)) // 固定窗:pacing 超过 Ink 单独 Escape 的 50ms 消歧窗口
   await s.send('\u001b')
-  check('B7 空输入再按 Esc 才交 sessions', last(ev, 'escape')?.value === 'sessions')
+  check('B7 空输入再按 Esc 才交 sessions', last(ev, 'escape')?.value === 'sessions', JSON.stringify(ev))
   s.close()
 }
 {
@@ -622,7 +606,7 @@ base.close()
   s2.close()
 }
 
-// ── B12+ 粘贴（2026-10 第三版新增：曾经 Ctrl+V 被组合键兜底吞掉，粘贴全死）──
+// ── B12+ 粘贴 ──
 {
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, { clipboard: 'UI粘贴内容' })
@@ -691,7 +675,7 @@ base.close()
   await s.send('\u001b[A')
   check('C3b 第一段再 ↑ 回到输入框（环的上一格就是 -1）', last(ev, 'focus')?.value === -1,
     JSON.stringify(last(ev, 'focus')))
-  // 环顺序 = 输入框 → 参数四段 → 入口（第五版）：连 ↓ 穿过参数行落到第一条入口。
+  // 焦点环依次经过输入框、参数段和入口。
   for (let i = 0; i < 5; i++) await s.send('\u001b[B')
   check('C3c 连 ↓ 穿过参数行落到第一条入口（focus=0）', last(ev, 'focus')?.value === 0,
     JSON.stringify(last(ev, 'focus')))
@@ -722,7 +706,7 @@ base.close()
 }
 {
   // hover（mode 1003 motion，无按键）→ ActionChip 的 onMouseEnter → onFocusChange；
-  // 移出（BUG 2：移开必须复原）→ onMouseLeave 把悬停带进的焦点交还输入框。
+  // 移开指针后，onMouseLeave 将焦点还给输入框。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev)
   await settled(() => findCell(s.term, HELP_LABEL) !== null)
@@ -748,7 +732,7 @@ base.close()
   await s.send('\t')
   check('C9 再 Tab 前进一段（思考深度，focus=-3）', last(ev, 'focus')?.value === -3,
     JSON.stringify(ev.slice(beforeBlank)))
-  // 焦点环 = 输入框 + 参数四段 + 画出来的入口（含内核，五条）+ Tips 行（第六版设计 2，环尾）。
+  // 焦点环依次包含输入框、参数段、入口和 Tips 行。
   // 从 -3 再 Tab 8 次：-4→-5→0→1→2→3→4→-6（Tips），第 9 次绕回输入框。
   for (let i = 0; i < 8; i++) await s.send('\t')
   check('C9b Tab 走到环尾的 Tips 行（focus=-6，可点击目标进了焦点环）',
@@ -765,7 +749,7 @@ base.close()
   await s.send('\r')
   await settled(() => last(ev, 'action') !== undefined)
   const beforeBlank = ev.length
-  // 点大字区的空白格（Tips 行第六版起可点击轮换、会拦住冒泡，不再算空白）。
+  // 点大字区空白格；Tips 行是可点击目标，不触发空白回调。
   await s.click('██▀▀▄▄')
   check('C10 空白点击（onBlankClick）把焦点收回输入框',
     last(ev, 'blank') !== undefined, JSON.stringify(ev.slice(beforeBlank)))
@@ -779,7 +763,7 @@ base.close()
   check('C11 光标边界不落在代理对中间', prev === 1 && next === 3, 'prev=' + prev + ' next=' + next)
 }
 {
-  // 第七版：入口是纯文字标签，没有键帽键位——任何状态下都不该出现 theme/lang；
+  // 入口使用纯文字标签；theme 和 lang 不属于动作表；
   // settings 由第三格承担（用户拍板），doctor 已移除。
   const all = [
     resolveLaunchpadActions({ lastSessionTitle: 'x', jobsRunning: false, updateAvailable: false, starDue: false }),
@@ -822,7 +806,7 @@ base.close()
     full.totalRows > noTip.totalRows && noTip.totalRows > noHints.totalRows
       && noHints.totalRows > noArt.totalRows && noArt.totalRows === only.totalRows,
     [full.totalRows, noTip.totalRows, noHints.totalRows, noArt.totalRows, only.totalRows].join(','))
-  // 第五版呼吸留白：full 默认带 1 行留白；矮一行先撤留白（stage 仍是 full），
+  // full 档默认保留一行间隔；少一行时先移除间隔（stage 仍为 full），
   // 再矮才撤 Tips——撤留白永远排在撤 Tips / 撤键帽之前。
   // firstRow('full') 命中的是**紧凑 full**（留白已撤）：阶梯里 full+留白比它高一行。
   check('D1c full 默认带呼吸留白；矮一行先撤留白（gap 1→0，stage 仍 full）',
@@ -922,7 +906,7 @@ base.close()
 
 // ── E. 纯函数（resolveLaunchpadActions 表驱动 + fitChips + 截断）──────────────
 {
-  // 表驱动回归（第七版）：每行钉死入口行放什么；条件位按优先级表驱动——
+  // 表驱动回归：每种条件组合都核对入口行与优先级——
   // 单独成立、多个同时成立、全不成立三类都要钉（详见 launchpadActions.ts）。
   const BASE = { lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false }
   const rows: readonly { name: string; state: Record<string, unknown>; ids: readonly string[]; commands: readonly string[]; firstLabelKey?: string }[] = [
@@ -970,7 +954,7 @@ base.close()
   check('E6 lastSessionTitle 为空白 = 无历史（不造 Continue，落常态档）',
     resolveLaunchpadActions({ lastSessionTitle: '   ', jobsRunning: false, updateAvailable: false, starDue: false })[0]?.id === 'sessions-workspace',
     resolveLaunchpadActions({ lastSessionTitle: '   ', jobsRunning: false, updateAvailable: false, starDue: false }).map(a => a.id).join(','))
-  // 内核入口（阶段A）：backendId 缺省 → 短标签；给出 → 带名插值（显示名来自
+  // 内核入口：backendId 缺省时使用短标签，提供时显示对应名称（名称来自
   // kernelCatalog 的 displayName，chip 上屏「内核 · Claude」/「Kernel · DSH」）。
   const namedBackend = resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false, backendId: 'claude' })
   check('E6b backendId=claude：内核入口带名（labelKey = backend-named，values.name = Claude）',
@@ -994,7 +978,7 @@ base.close()
   // 48 列：预算 44，四条 zh 标签装不下最后一条（模型）——整条裁掉、不切半。
 }
 
-// ── K. 内核选择（阶段A：目录纯函数 + kernel.json 记忆 + boot 优先级）──────
+// ── K. 内核选择：目录、kernel.json 记忆与 boot 优先级 ──
 {
   const { buildKernelCatalog, kernelDisplayName, kernelVersionLabel, kernelSubtitle } = await import('../src/components/kernelCatalog.js')
   const { readKernelPrefs, writeKernelPrefs, resolveRememberedBackend } = await import('../src/kernelPrefs.js')
@@ -1070,7 +1054,7 @@ base.close()
   void P(); void P(undefined, undefined, 'dsh'); void P('claude'); void P(undefined, 'dsh')
   check('K8 记忆不被 boot 读取改写（读路径零写入；显式 --backend 启动也不改写——boot 不调 write）', readFileSync(file, 'utf8') === before)
 
-  // 一次性切换 handoff（S01）：选择器的「本次切换」必须真的切过去——
+  // 一次性内核切换必须让替换进程启动到目标内核——
   // restartTui 的 backend 选项把 KERNEL_SWITCH_HANDOFF_ENV 放进替换进程
   // env，boot 的 resolver 把它排在 Config 行之前；没有它，显式 backend: dsh
   // 的配置行让切换白重启一回。普通冷启动合同（K7）不动。
@@ -1084,7 +1068,7 @@ base.close()
     resolveRememberedBackend({ handoff: 'nonsense' as never, configured: 'claude' }) === 'claude'
       && resolveRememberedBackend({ handoff: '' as never, memory: 'claude' }) === 'claude')
 
-  // 组合根整链（S01）：真实 restartChildEnv 造出切换替换进程的 env →
+  // 组合根整链：restartChildEnv 生成切换进程环境变量 →
   // 用 boot 同款输入喂真实 resolver，断言落到目标内核（选择器侧的
   // onSwitchBackend 驱动由 verify-launchpad-onboarding-chat X5 锁定）。
   const { restartChildEnv, writeLastRunRecord, readLastRunRecord } = await import('../src/update.js')
@@ -1113,7 +1097,7 @@ base.close()
   check('K12 plugin.ts boot 消费 handoff 后从 process.env 删除（一次性语义）',
     bootSource.includes('delete process.env[KERNEL_SWITCH_HANDOFF_ENV]'))
 
-  // ── 后端限定的最后运行记录（S02）：切换后崩溃的安全重试身份 ──
+  // ── 内核切换后的最后运行记录 ──
   // 记录由最后运行的实例写（plugin boot + 退出漏斗刷新），launcher 的
   // fallback retry 重新读取并明确置新 backend。这里锁 src 侧的往返与容错，
   // 以及组合根的写入接线；bin 侧的 retry 权威次序在 verify-safe-mode。
@@ -1143,7 +1127,7 @@ base.close()
   }
   check('LR3 写失败绝不抛（best-effort，退化到 launcher 旧逻辑）', !recordThrew)
   rmSync(recordDir, { recursive: true, force: true })
-  // 组合根写入接线（变异陷阱：漏斗/启动忘记写记录 → S02 静默失效）。
+  // 组合根写入接线：启动与退出路径都要更新最后运行记录。
   const funnelSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
   const refreshCalls = funnelSource.split('refreshLastRunRecord()').length - 1
   check('LR4 plugin.ts 写记录接线齐：boot 落盘 + 崩溃/更新//restart/干净退出四个漏斗分支刷新（内核切换分支不写——替换进程自己写）',
@@ -1170,7 +1154,7 @@ base.close()
 }
 
 // ── F. 宽度不变量（整屏：任何一行都不超宽、没有切断的半句） ─────────────────
-// 旧的「提示行不许出现被切断的半句」升级成整屏不变量：每个键位标签、Tips 文案、
+// 整屏不变量：键位标签、Tips 文案、
 // 参数条要么完整出现在**同一行**，要么整条不出现；任何一行 trim 后 ≤ 列数。
 // 半句检测用**渲染后的形态**：键帽文本 ` /key ` + 分隔空格 + 标签，键与标签
 // 之间是两个空格（键帽右内边距一格 + 分隔一格）。
@@ -1201,7 +1185,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s.close()
 }
 
-// ── G. 第四版专项：裁剪后仍右对齐、行高恒 1、自动闪烁、占位左对齐 ─────────
+// ── G. 入口裁剪、输入光标与占位 ──
 {
   // 48 列：fitChips 裁掉尾部（帮助），剩下三条**仍然右对齐输入框右缘**。
   const ev: Ev[] = []
@@ -1223,7 +1207,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s.close()
 }
 {
-  // 第七版：条件位切换不许破坏这一排的对齐/行高契约——jobs/update/star/help
+  // 条件动作不得破坏入口行的对齐和行高——jobs/update/star/help
   // 四种条件位各挂一次，入口行仍然恒 1 行、右对齐输入框右缘、四格齐整。
   const variants: [string, string, Record<string, unknown>][] = [
     ['jobs', JOBS_LABEL, { jobsRunning: true, updateAvailable: false, starDue: false }],
@@ -1261,7 +1245,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s.close()
 }
 {
-  // 占位左对齐（第四版）：紧跟 ❯ + 块状光标之后；有输入时消失。
+  // 占位文本紧跟 ❯ 和块状光标；有输入时隐藏。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev)
   await settled(() => s.screen().includes('说点什么'))
@@ -1282,7 +1266,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
 }
 
 {
-  // 第七版：doctor / setup / setup-provider 入口退役——任何状态下都不再渲染
+  // doctor、setup 和 setup-provider 不属于落地页入口；
   // （首启由引导向导承担，provider 配置经向导或 /settings 可达）。
   const evn: Ev[] = []
   const normal = await openLaunchpad(evn, { firstRun: true })
@@ -1294,7 +1278,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   normal.close()
 }
 
-// ── H. 第五版专项：参数行四段可点 + 选择器盖在落地页之上 ─────────────────
+// ── H. 参数段选择器 ──
 {
   // 键盘路径（仓库硬规矩：每个可点目标都要有键盘路径）：↓ 走到段、Enter 打开。
   const cases: [string, number][] = [['model', 1], ['effort', 2], ['preset', 3], ['permission', 4]]
@@ -1375,7 +1359,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   check('H6 矮屏撤掉呼吸留白后入口行紧贴参数行（输入框还在，没被留白挤掉）',
     param >= 0 && hint === param + 1 && s.screen().includes('╭'),
     'rows=' + fullGap + ' param=' + param + ' hint=' + hint)
-  // 第六版呼吸也撤干净：紧凑档下词标→输入框回到 1 行留白、入口行→Tips 回到
+  // 紧凑档的间隔恢复到一行：词标→输入框、入口行→Tips
   // 1 行留白——撤留白绝不把输入框挤掉（卡片与 Tips 都还在）。
   const tip = lines.findIndex(l => l.includes('● Tips'))
   const titleBottom = lines.reduce((acc, l, i) => l.includes('█') ? i : acc, -1)
@@ -1387,7 +1371,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s.close()
 }
 
-// ── K. 第六版 BUG 1：行首 / 弹命令补全面板（与聊天页同源组件/数据） ────────
+// ── K. 命令补全面板 ──
 {
   // 输入 / 即上面板：候选来自 commands（Chat 传 channel.commandCompletions）。
   const ev: Ev[] = []
@@ -1453,7 +1437,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s.close()
 }
 {
-  // BUG 1 回归②（组件层）：普通文本即使给了 commands 也走 submit、绝不 onCommandPick。
+  // 普通文本走 submit，不触发 onCommandPick。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, {
     commands: [{ name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup ' }],
@@ -1480,7 +1464,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s.close()
 }
 
-// ── L. 第六版设计 2：Tips 可点击轮换（键盘路径 = 焦点环 + Enter） ──────────
+// ── L. Tips 点击与键盘轮换 ──
 {
   const ev: Ev[] = []
   const s = await openLaunchpad(ev)
@@ -1488,12 +1472,14 @@ for (const cols of [120, 100, 72, 60, 48]) {
   await s.click('输入 / 看全部命令')
   check('L1 点击 Tips 切到第二条（launchpad-tip-2 上屏）',
     await settled(() => s.screen().includes('Ctrl+V 直接粘贴')), s.screen().slice(0, 160))
+  await new Promise(resolve => setTimeout(resolve, 550)) // 固定窗:pacing 连续点击靠近同一行时避开双击判定
   await s.click('Ctrl+V 直接粘贴')
   check('L2 再点切到第三条（launchpad-tip-3 上屏）',
     await settled(() => s.screen().includes('参数行四段都能点')), '')
+  await new Promise(resolve => setTimeout(resolve, 550)) // 固定窗:pacing 同上，确保这是第三次单击
   await s.click('参数行四段都能点')
   check('L3 第三次点击循环回第一条',
-    await settled(() => s.screen().includes('输入 / 看全部命令')), '')
+    await settled(() => s.screen().includes('输入 / 看全部命令')), s.screen().slice(-240))
   s.close()
 }
 {
@@ -1523,7 +1509,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s.close()
 }
 
-// ── M. 第六版 BUG 3：浮层的点击语义（里面不算空白、外面算） ────────────────
+// ── M. 覆盖层内外的点击语义 ──
 {
   // 浮层内部点击：拦住冒泡，不触发整页 onBlankClick（否则选行=既选又关）。
   const ev: Ev[] = []
@@ -1541,7 +1527,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
 }
 
 
-// ── N. 第七版：光标压在字身上（VS Code 式反显块）──────────────────────────
+// ── N. 输入光标反显 ──
 {
   // ① 行尾打字：刚输入的字符与光标**同时可见**（EN + ZH 各一次）。判据用
   //    终端格级属性：行里既有非反显的字符格、又有反显格（行尾反显空格），
@@ -1609,7 +1595,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   // ③ 闪烁相位逐字节不变已由 A11 钉死（相位只切样式）；此处补「反显 ↔ 常规」
   //    的相位语义：相位帧数 ≥2 已由 G3 钉死，不重复挂机。
   {
-    // ④ 空输入（第七版重做）：光标压在**占位文本的第一个字符**身上——行内
+    // ④ 空输入：光标压在占位文本的第一个字符上。
     //    文本与「无光标」逐字节相同（没有多出来的块字符格），首字符带反显。
     const ev: Ev[] = []
     const s = await openLaunchpad(ev)
@@ -1684,7 +1670,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   }
 }
 
-// ── R. 第七版追加：Tips 自动轮换 · 左下角铭牌可点 · 双版本铭牌 ────────────
+// ── R. Tips 轮换与角标点击 ──
 {
   // Tips 自动轮换：短间隔（300ms）注入，跨一次自动轮换后文案换到下一条、
   // **Tips 行之外的行逐字节不变**（呼吸感不许带来布局抖动）。手动切换后计时
@@ -1750,7 +1736,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s.close()
 }
 {
-  // 右下角铭牌带（第八版）：第一行仍是 dsh-tui，其后一行一个内核（当前那个打
+  // 右下角铭牌：第一行显示 dsh-tui，其后一行显示一个内核（当前项标记为
   // ▸、主题蓝），行与行右缘对齐（同一块铭牌带）；kernels 缺省时右侧只有第一行
   // （降级不编造内核号）。底部带满 3 行后，输入框在任何档位都不被挤掉
   // （input-only 档由 D 组钉死；这里再钉 corners 行数）。
@@ -1774,7 +1760,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s2.close()
 }
 
-// ── S. 第八版：右下角内核区（可选内核 + 当前内核标记 + 鼠标/键盘两条路径）──
+// ── S. 右下角内核区 ──
 // 用户原话：「在这里显示可以选择的内核 并且有箭头或者高亮 表明目前记忆中启动
 // 的内核」——目录由 kernelCatalog 的真实派生函数造（夹具不手写形状）。
 {
@@ -1795,7 +1781,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   const dshRow = lines.findIndex(l => l.includes(MARK + DSH_LABEL))
   const claudeRow = lines.findIndex(l => l.includes(CLAUDE_LABEL))
   const firstGlyph = (row: number) => firstGlyphCell(s.term, row, COLS)
-  /** 对照基准：同一屏上**既有的 dim 行**（右下第一行的 TUI 版本号）。 */
+  /** 对照基准：右下角第一行 TUI 版本号。 */
   const tuiCell = cellAtText(s.term, lines, tuiRow, 'dsh-tui v' + VERSION)
   check('S1 内核区排在 TUI 版本之下，一行一个内核：当前行打 ▸ 且带版本串',
     tuiRow >= 0 && dshRow === tuiRow + 1 && claudeRow === tuiRow + 2
@@ -1824,7 +1810,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   check('S4 点击内核区 → onKernelPick（整块一个目标，且不是「点空白」）',
     last(ev, 'kernel') !== undefined && !ev.slice(beforeClick).some(e => e.type === 'blank'),
     JSON.stringify(ev.slice(beforeClick)))
-  // 悬停 = CornerChip 那套：焦点挪到内核区那一格（-8），且原来 dim 的非当前
+  // 悬停将焦点移到内核区；非当前项从 dim 切换为高亮，
   // 行**亮起来**（加粗）——这就是「可以点」的鼠标反馈。
   const beforeHover = ev.length
   const hoverAt = findCell(s.term, CLAUDE_LABEL)!
@@ -1876,7 +1862,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   }
 }
 
-// ── O. 第七版：落地页浮层 = 干净镂空（遮挡不叠加、无底色）──────────────
+// ── O. 落地页浮层遮挡 ──
 {
   // 形态（用户实测两轮定的）：浮层矩形内**每一格都被空格占位**——宿主屏的
   // 字形（大字/立绘字符画）不得残留（防重影）；但**不发背景色 SGR**（无白底；
@@ -1925,7 +1911,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   withOverlay.close()
 }
 
-// ── P. 第七版：Continue 的 Alt+R 快捷键 ────────────────────────────────
+// ── P. Continue 的 Alt+R 快捷键 ──
 {
   const ev: Ev[] = []
   const s = await openLaunchpad(ev)

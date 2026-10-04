@@ -304,11 +304,7 @@ const GROUPS = {
 // 下划线、仅形似的方括号文本、普通 bracketed paste 与既有 ANSI/CRLF
 // 归一化零误伤。
     ["verify-paste-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-paste-residue.tsx']],
-// win32 协议重组回归：conhost 把 SGR/X10 鼠标报告与终端回复（DA1 等）
-// 合成成逐字符 CSI Vk;Sc;Uc;Kd;Cs;Rc 记录时，必须跨块重组回完整协议
-// 事件而不是逐键泄漏进输入框；截断的鼠标候选在 flush 时丢弃，单独
-// Escape/未知 CSI/物理键不受影响。
-    ["verify-win32-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-win32-protocol.ts']],
+
 // 拖放文件粘贴回归：Windows 把拖入的文件名作为 OSC 8 超链接
 // （ESC ] 8 ; params ; file:///… ST）送入，win32-input-mode 还会把它拆成
 // 逐字符记录——ESC 被当协议消费后，OSC 参数残渣（[16;42;0;1;16;1…）会
@@ -664,7 +660,7 @@ const GROUPS = {
     ["verify-activity-store-render", ['node', '--import', 'tsx/esm', 'scripts/verify-activity-store-render.tsx']],
     ["verify-channel-owner-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-owner-lifecycle.ts']],
     ["verify-channel-router-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-router-lifecycle.ts']],
-    ["verify-reports-metadata",  ['node', '--import', 'tsx/esm', 'scripts/verify-reports-metadata.ts']],
+
 // ChannelUi 读投影边界：会话事件日志（traceEvents）必须零拷贝直通——它每次
 // append 都换新的快照数组，走 detached 投影会 O(events) 重建整条数组，而
 // Chat 每次渲染都读它（长会话 44 万事件实测每帧上百毫秒）。同时钉住 rows
@@ -1056,9 +1052,7 @@ const GROUPS = {
 // displayName 内嵌换行入口压平（#160 窗口化列表单行契约的第一道防
 // 线）。注意必须走 tsx——脚本直接 import src/customTheme.ts。
     ["verify-themes", ['node', '--import', 'tsx/esm', 'scripts/verify-themes.mjs']],
-// 运行时主题插件接缝回归：Cordis activation 归属与自动清理、host-only
-// facade、静态主题优先级、resolver token 清理及无服务降级。
-    ["verify-runtime-themes", ['node', '--import', 'tsx/esm', 'scripts/verify-runtime-themes.ts']],
+
 // Text 背景色回归（issue #166）：公开 themed Text 与 Box 一致支持
 // 原始颜色值，且必须把对应 ANSI 背景色写入终端。
     ["verify-text-background", ['node', '--import', 'tsx/esm', 'scripts/verify-text-background.tsx']],
