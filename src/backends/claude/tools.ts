@@ -1,12 +1,12 @@
 /**
- * Claude tool presentations (docs/agent-backend-design.md §4.6, §5.2): which
+ * Claude tool presentations: which
  * card shape each Claude Code tool call and result renders as, in the
  * backend-neutral `ToolPresentation` vocabulary the shared projector and the
  * tool card already understand. The UI never picks a card by tool name; this
  * table does, from the tool input and the structured `tool_use_result`.
  *
  * Every reader narrows `unknown`: inputs come from the model and structured
- * results are undeclared in the SDK types (design appendix B). A shape this
+ * results are undeclared in the SDK types. A shape this
  * module does not recognise degrades to the plain text card.
  */
 import { isAbsolute, relative } from 'node:path'

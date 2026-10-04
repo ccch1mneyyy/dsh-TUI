@@ -1,5 +1,5 @@
 /**
- * Image input for Claude sessions (Phase 5b): the limits the composer stages
+ * Image input for Claude sessions: the limits the composer stages
  * images under (the `images` capability), the base64 image blocks a user
  * message carries after its text, and the lazy facades a transcript image
  * block replays as.

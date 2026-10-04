@@ -311,7 +311,7 @@ const CREDENTIAL_KEYS: readonly string[] = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH
  * Every routing variable to neutralise for one environment: the known
  * names above plus every routing `CLAUDE_CODE_USE_*` spelling it carries
  * (a future flag routes too — blank it, never pass it through). The set is
- * collected BEFORE the child env drops the spellings, so the flag layer
+ * collected before the child env drops the spellings, so the flag layer
  * can re-state exactly what the environment spelled.
  */
 function routingKeysOf(env: Readonly<Record<string, string>>): Set<string> {

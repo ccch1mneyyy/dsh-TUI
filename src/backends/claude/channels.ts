@@ -1,7 +1,7 @@
 /**
  * The Claude backend's channel profiles (`~/.dsh-tui/backends/claude/
  * channels.json`): the relay channels the user routes through, each with the
- * model mapping that says what a requested id ACTUALLY runs. First-class user
+ * model mapping that says what a requested id actually runs. First-class user
  * data on purpose — the settings-env tier heuristics (modelEnv.ts) guess the
  * mapping from ANTHROPIC_*_MODEL; a profile states it.
  *
@@ -30,16 +30,13 @@
  * fallback) to the model that serves it — the env heuristics promoted to
  * user data. Both fields are optional.
  *
- * Phase 3 promotes the profile to the session's CONNECTION truth:
- * `baseUrl` names the relay endpoint the CLI child is pointed at,
- * `tokenRef` names its credential in the DSH credential store
- * (`~/.dsh/.credentials.yaml`, the /provider precedent) — NEVER a literal
- * token; a regression asserts channels.json never carries one — and `env`
- * holds channel-private variables layered under those two. The active
- * profile's connection is injected at spawn (auth.ts: the child env plus
- * the SDK `settings` option, the flag-settings layer that outranks the
- * CLI settings `env` — see .local/agent-backend-review.md 第四批增补四
- * for the CLI 2.1.287 forensics).
+ * A profile can also carry the session's connection: `baseUrl` is the
+ * relay endpoint the CLI child is pointed at, `tokenRef` names its
+ * credential in the DSH credential store (`~/.dsh/.credentials.yaml`, as
+ * /provider does; channels.json never holds a token) and `env` holds
+ * channel-private variables. The active profile's connection is injected at
+ * spawn (auth.ts: the child env plus the SDK `settings` flag layer, which
+ * outranks the CLI settings `env`).
  *
  * Best-effort like every `~/.dsh-tui` preference (prefs.ts): a missing or
  * corrupt file reads as no channels (a corrupt one is moved aside by the
@@ -62,11 +59,10 @@ export interface ClaudeChannelProfile {
   readonly models?: Readonly<Record<string, string>>
   /** Tier keyword → actual model (optional; `default` = the any-model rule). */
   readonly tiers?: Readonly<Record<string, string>>
-  /** The relay endpoint the CLI child is pointed at (optional; the
-   *  connection truth of the phase-3 channel management). */
+  /** The relay endpoint the CLI child is pointed at (optional). */
   readonly baseUrl?: string
-  /** The credential-store ref holding the channel token (optional; NEVER a
-   *  literal token — channels.json must stay secret-free). */
+  /** The credential-store ref holding the channel token (optional; never
+   *  the token itself). */
   readonly tokenRef?: string
   /** Channel-private env layered under baseUrl/token at spawn (optional). */
   readonly env?: Readonly<Record<string, string>>
@@ -86,7 +82,7 @@ export interface ClaudeChannels {
   setActive(id: string): void
   /** Insert or refresh one profile by id (a re-import refreshes in place). */
   save(profile: ClaudeChannelProfile): void
-  /** Drop one profile by id (phase 3 wizard); a dangling `active` goes
+  /** Drop one profile by id; a dangling `active` goes
    *  with it (no channel left active until the next pick). */
   remove(id: string): void
 }
@@ -289,9 +285,9 @@ export function importFromSettingsEnv(
   if (host === undefined && Object.keys(tiers).length === 0) return undefined
   const name = host ?? pickEnv(env, 'ANTHROPIC_CUSTOM_MODEL_OPTION_NAME') ?? 'settings'
   const id = channelSlug(name)
-  // A refresh of the same channel keeps the user's exact models AND the
+  // A refresh of the same channel keeps the user's exact models and the
   // connection fields the env cannot speak to (the import only owns what it
-  // can honestly derive: name + tiers + a PARSEABLE base URL — an invalid
+  // can honestly derive: name + tiers + a parseable base URL — an invalid
   // one names the channel but never becomes the connection).
   const keeps = existing !== undefined && existing.id === id
   const models = keeps ? existing.models : undefined
@@ -309,7 +305,7 @@ export function importFromSettingsEnv(
   }
 }
 
-/** The channel token hiding in the CLI settings env (phase 3): the value of
+/** The channel token in the CLI settings env: the value of
  *  `ANTHROPIC_AUTH_TOKEN`, for the caller to move into the credential store
  *  — the profile itself only ever records the derived `tokenRef`. */
 export function importTokenFromSettingsEnv(env: Record<string, string | undefined>): string | undefined {

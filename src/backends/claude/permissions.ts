@@ -1,6 +1,5 @@
 /**
- * The Claude permission bridge (docs/agent-backend-design.md §4.7): the
- * session's `canUseTool` callback. Every prompt parks here, keyed by the
+ * The Claude permission bridge: the session's `canUseTool` callback. Every prompt parks here, keyed by the
  * control request id, and surfaces to the channel as an Agent Domain event:
  *
  *  - an ordinary tool prompt → `permission.request` with backend-generated
@@ -15,18 +14,18 @@
  * The user's answer comes back through `respond` / `respondQuestion` /
  * `cancelQuestion` and becomes the `PermissionResult` the CLI expects.
  *
- * Deadlock rules (design §4.7, each pinned by verify-claude-permissions):
+ * Deadlock rules (each covered by verify-claude-permissions):
  *  1. the SDK's abort signal (interrupt, turn end, process exit, `close()`)
  *     settles the prompt as withdrawn and closes the panel
- *     (`permission.settled{cancelled}` / `question.settled`) — EVERY
- *     delivered signal, a redelivery's included (R2-5);
+ *     (`permission.settled{cancelled}` / `question.settled`), whichever
+ *     delivery of the request it came with;
  *  2. a user cancel only interrupts the CLI (the session's `cancel()`); the
  *     abort that follows is rule 1 — this bridge never answers on its own;
  *  3. a dismissed panel is a rejection (the panel's Esc);
  *  4. dispose / switch denies every pending prompt (`settleAll`) before the
  *     query closes;
  *  5. parallel prompts all park; the shared store shows them FIFO, one at a
- *     time (the CLI itself asks one at a time — Phase 3 probe);
+ *     time (the CLI itself asks one at a time);
  *  6. the callback never throws: a failure while building a prompt denies it.
  *
  * Persistence of an allow-always choice is entirely the CLI's: the bridge
@@ -40,7 +39,7 @@ import { t } from '../../i18n.js'
 import { displayPath } from './tools.js'
 import { errorText, rec, str, type Rec } from './narrow.js'
 
-/** The model-facing refusal (design §4.7). */
+/** The model-facing refusal. */
 export const REJECT_MESSAGE = 'User refused permission to run tool'
 /** The model-facing answer to a cancelled `AskUserQuestion`. */
 export const QUESTION_CANCEL_MESSAGE = 'User cancelled the question'
@@ -74,8 +73,8 @@ interface Pending {
   readonly plan?: PlanLabels
   /** Resolve every callback waiting on this request id. */
   readonly resolvers: ((result: PermissionResult) => void)[]
-  /** One unsubscriber per delivered signal (a redelivery adds its own,
-   *  R2-5); settle detaches them all. */
+  /** One unsubscriber per delivered signal (a redelivery adds its own);
+   *  settle detaches them all. */
   readonly detachers: (() => void)[]
 }
 
@@ -220,9 +219,8 @@ export function createClaudePermissionBridge(deps: ClaudePermissionBridgeDeps) {
         resolve(deny(options, CLOSED_MESSAGE))
         return
       }
-      // Any of the request's delivered signals aborting cancels the shared
-      // prompt (rule 1): one listener per signal, every one detached on
-      // settle (R2-5 — a redelivery's signal included).
+      // Any delivered signal aborting cancels the shared prompt (rule 1);
+      // every listener is detached on settle.
       const onAbort = (): void => {
         const entry = pending.get(requestId)
         if (entry !== undefined) settle(entry, deny(entry, WITHDRAWN_MESSAGE, { classify: false }), 'cancelled')
@@ -231,13 +229,10 @@ export function createClaudePermissionBridge(deps: ClaudePermissionBridgeDeps) {
         signal.addEventListener('abort', onAbort, { once: true })
         return () => { signal.removeEventListener('abort', onAbort) }
       }
-      // The SDK may redeliver a request it already handed us (reinitialize
-      // after a transport gap): the second callback waits for the same
-      // answer — a SHARED request, so its signal is honoured exactly like
-      // the first's (R2-5): a redelivery that arrives already aborted, or
-      // is cancelled later, settles the whole group once with the same
-      // withdrawn-deny — no resolver may be left hanging on a cancellation
-      // the bridge was told about.
+      // The SDK may redeliver a request (reinitialize after a transport
+      // gap): the second callback waits for the same answer, and its signal
+      // counts like the first's (already aborted, or aborted later, it
+      // withdraws the whole group).
       const existing = pending.get(requestId)
       if (existing !== undefined) {
         existing.resolvers.push(resolve)

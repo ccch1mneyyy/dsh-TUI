@@ -27,7 +27,7 @@ import type { ClaudePrefs } from './prefs.js'
 const ROSTER: readonly string[] = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
 
 /** The Shift+Tab cycle surface, in order: the pre-bypass roster, verbatim.
- *  `bypassPermissions` is deliberately NOT here: Shift+Tab is a reflexive
+ *  `bypassPermissions` is deliberately not here: Shift+Tab is a reflexive
  *  key (the user taps it repeatedly to move through modes), and one stray
  *  press landing in "all confirmations off" is unacceptable — bypass is
  *  entered only through the /permission picker's explicit, explained row.
@@ -109,7 +109,7 @@ export function accountView(info: AccountInfo, apiKeySource: string | undefined)
 }
 
 /** The connection fingerprint of one profile: a sha256 over the endpoint,
- *  the STORED token (when the seam holds one) and the channel-private env —
+ *  the stored token (when the seam holds one) and the channel-private env —
  *  equal fingerprints are the same connection, so the UI can decide
  *  restart-vs-refresh without ever seeing the token. */
 const connectionFingerprint = (profile: ClaudeChannelProfile, tokens: ClaudeChannelTokens | undefined): string => {
@@ -194,7 +194,7 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         const truth = deps.modelTruth?.()
         return (await refreshModels()).map(model => {
           // Channel truth (modelEnv.ts): when the configuration says this
-          // row's id routes to a different model, the LABEL becomes the
+          // row's id routes to a different model, the label becomes the
           // actual model and the cosmetic name moves into the description.
           // No mapping (a real Claude setup, or one resolving to the same
           // model) renders exactly as before.
@@ -242,7 +242,7 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         // the catalog does not know (the lifecycle contract).
         if (row === undefined) return []
         if (row.supportsEffort === false) return []
-        // A KNOWN row that declares no list of its own (relay custom rows,
+        // A known row that declares no list of its own (relay custom rows,
         // the offline Haiku shape, old CLIs) falls back to the CLI's standard
         // tiers — the CLI accepts any effortLevel flag, so the standard
         // ladder is the honest compatibility offer, marked above for the

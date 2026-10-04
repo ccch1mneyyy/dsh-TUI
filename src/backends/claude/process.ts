@@ -1,5 +1,5 @@
 /**
- * The `claude` child process as this backend starts it (design §4.2, §4.3):
+ * The `claude` child process as this backend starts it:
  * which executable, with which environment, and where its stderr goes.
  *
  * - Executable: `CLAUDE_CODE_EXECUTABLE` → the first `claude` on PATH that
@@ -11,7 +11,7 @@
  *   `where` reports first, and a `.cmd` Node refuses to run without a
  *   shell), and handing one to the SDK fails the whole start with its own
  *   misleading "native binary … failed to launch" error.
- * - Environment: the SDK's `env` option REPLACES the child environment, so it
+ * - Environment: the SDK's `env` option replaces the child environment, so it
  *   is built from `process.env`, tagged with the client app and the session
  *   state events this backend reads, and scrubbed of the variables a parent
  *   Claude Code terminal exports (dsh-tui may itself run inside one; the
@@ -112,7 +112,7 @@ export async function resolveClaudeExecutable(env: NodeJS.ProcessEnv = process.e
   return { path: undefined, source: 'bundled' }
 }
 
-/** The child environment (design §4.3 `env` row). */
+/** The child environment. */
 export function buildClaudeEnv(base: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(base)) {
@@ -122,7 +122,7 @@ export function buildClaudeEnv(base: NodeJS.ProcessEnv = process.env): Record<st
   }
   env.CLAUDE_AGENT_SDK_CLIENT_APP = `dsh-tui/${installedTuiVersion() ?? 'dev'}`
   // `system/session_state_changed` is the authoritative idle signal; the CLI
-  // only emits it when asked (Phase 0 probe P3-1).
+  // only emits it when asked.
   env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1'
   return env
 }

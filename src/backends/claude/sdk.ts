@@ -1,5 +1,5 @@
 /**
- * Loader for the optional `@anthropic-ai/claude-agent-sdk` peer (design §4.2).
+ * Loader for the optional `@anthropic-ai/claude-agent-sdk` peer.
  * The package is an optional peer dependency: a DSH-only install never has
  * it, so it is only ever reached through a dynamic `import()` whose
  * specifier is not a string literal — bundlers, `verify:package` and the bun
@@ -11,7 +11,7 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk'
 
-/** The SDK's session-store read/write API (design §4.11): the catalog, the
+/** The SDK's session-store read/write API: the catalog, the
  *  resume replay, fork and conversation rewind. */
 export type ClaudeSessionStoreSdk = Pick<typeof ClaudeSdk,
   | 'listSessions' | 'getSessionInfo' | 'getSessionMessages' | 'listSubagents' | 'getSubagentMessages'

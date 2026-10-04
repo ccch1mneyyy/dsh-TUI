@@ -1,6 +1,6 @@
 /**
- * The host side of a backend's OAuth credential (`BackendHost.oauthCredential`,
- * docs/agent-backend-design.md §4.12): the dsh-auth credential file, read and
+ * The host side of a backend's OAuth credential (`BackendHost.oauthCredential`):
+ * the dsh-auth credential file, read and
  * refreshed through dsh-auth's own public pieces — `CredentialFile` (whose
  * `modify` serializes a refresh across requests and processes) and the
  * provider's pi-ai OAuth flow (`refresh`). Nothing here runs a login (that

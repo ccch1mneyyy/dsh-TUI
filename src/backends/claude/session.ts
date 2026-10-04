@@ -273,7 +273,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   let authFailed = false
   /**
    * The CLI wrote this session's transcript (an input started, or a turn
-   * reported its result). Until then a restart must CREATE the session with
+   * reported its result). Until then a restart must create the session with
    * the same id: `resume` of an id the CLI has no transcript for fails its
    * handshake ("No conversation found").
    */
@@ -658,7 +658,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
    * new query continues the session id, the translator keeps its state, and
    * the inputs the old CLI never started are pushed again, in order.
    *
-   * After an authentication failure the old CLI is stopped FIRST — before
+   * After an authentication failure the old CLI is stopped first — before
    * the renewal awaits — so its queue cannot start (and fail on the refused
    * credential) meanwhile: every input it had not started is re-pushed. A
    * `/login` reconnect instead waits for the running turn and the inputs
@@ -822,7 +822,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       authPlan.env,
       injectedEnvKeys(),
     ),
-    // Channel model truth, lazily (the list reads it on demand): the ACTIVE
+    // Channel model truth, lazily (the list reads it on demand): the active
     // channel profile first (channels.json — the user's own data), then the
     // settings env of the same config dir the transcripts use, plus the
     // live auth env on top. A cosmetic tier name a relay channel wrote
@@ -985,7 +985,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         }
         if (window !== undefined) {
           // An older slice: [skipFromStart - count, skipFromStart) of the disk
-          // transcript (the SDK paginates by offset from the START).
+          // transcript (the SDK paginates by offset from the start).
           const count = Math.max(1, Math.min(window.count, window.skipFromStart))
           const slice = await read(currentSessionId, agentId, { dir: deps.cwd, offset: window.skipFromStart - count, limit: count })
           return laneOf(slice, window.skipFromStart - count > 0, window.skipFromStart - slice.length)
@@ -1165,7 +1165,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     history: () => {
       const events = replayHistory ?? []
       replayHistory = undefined
-      // The replay seed carries the SAME relay observations the live lane
+      // The replay seed carries the same relay observations the live lane
       // emits (replay runs the same translator); fold them once here so a
       // resumed session's Messages page starts populated.
       foldAgentMessages(events)
@@ -1267,7 +1267,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         const receipt = rec(await interrupt.call(query, cancelQueued ? { cancelQueued: true } : undefined))
         if (Array.isArray(receipt?.still_queued)) {
           // The receipt's `still_queued` is the CLI's live queue snapshot:
-          // exactly the uuids that WILL still run (sdk.d.ts).
+          // exactly the uuids that will still run (sdk.d.ts).
           const stillQueued = receipt.still_queued.filter((id): id is string => typeof id === 'string')
           return { stillQueued, outcome: 'confirmed' }
         }

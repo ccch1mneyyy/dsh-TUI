@@ -1,6 +1,5 @@
 /**
- * `/btw` and `/recap` on a Claude session (docs/agent-backend-design.md §5.3,
- * §8.8 P5-3): one tool-less, single-turn side query over the current
+ * `/btw` and `/recap` on a Claude session: one tool-less, single-turn side query over the current
  * conversation, never a feature of its own —
  *
  *   query({ prompt, options: { resume: <session id>, forkSession: true,
@@ -11,10 +10,9 @@
  * arrives; the query is closed when the answer is complete, on the caller's
  * abort, and on any failure.
  *
- * Probe (Phase 5b, `scripts/probes/claude-sdk-probe-5b.mjs`, CLI 2.1.287 /
- * haiku): over a conversation that ended in a tool call, the fork answers
- * from the conversation with no tools offered (~3 s), and writes NO
- * transcript file (`persistSession:false` + `forkSession`) — the session's
+ * With CLI 2.1.287 the fork answers from the conversation with no tools
+ * offered (~3 s on haiku), even when it ended in a tool call, and writes no
+ * transcript file (`persistSession:false` + `forkSession`): the session's
  * own record is untouched.
  *
  * A session the CLI has not persisted yet has nothing to fork: the side

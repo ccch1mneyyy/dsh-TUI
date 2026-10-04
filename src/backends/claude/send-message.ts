@@ -1,15 +1,15 @@
 /**
- * The Claude SendMessage tool's neutral observation (design agent-team-full
- * §2.2/§5.4): the parent's model-authored relay to another agent is the ONLY
- * child-directed send Claude exposes, and its tool call/result on the parent
+ * The Claude SendMessage tool as a backend-neutral observation: the
+ * model-authored relay to another agent is the only child-directed send
+ * Claude exposes, and its tool call/result on the parent
  * lane is the observable fact. Pure parsing/projection only — the hooks in
  * translate.ts decide where an observation belongs (main lane = the parent
  * itself sent it; a subagent lane = that subagent sent it, keyed by the
  * delegating call).
  *
- * Delivery honesty rules (agent-team §5.2):
+ * Delivery rules:
  *  - a call alone proves nothing beyond `issued` (a successful tool call is
- *    NOT a delivery fact);
+ *    not a delivery);
  *  - only a structured result field naming a state (`delivery`/`status` in
  *    {delivered, held, refused, expired}) or an explicit error marks more;
  *  - any other shape — including a bare success — is `unknown`, the legal
@@ -36,7 +36,7 @@ export function parseSendMessageInput(input: unknown): SendMessageInput | undefi
   return { to, text: body }
 }
 
-/** The observation of one call (agent-team §5.4): state `issued`. `lane`
+/** The observation of one call: state `issued`. `lane`
  *  names the sending subagent's delegating call id; on the main lane the
  *  sender is the parent itself (rendered from the absent `from`). */
 export function sendMessageCallView(input: { readonly callId: string; readonly lane?: string; readonly observedAt: number; readonly input: SendMessageInput }): AgentMessageView {
@@ -52,7 +52,7 @@ export function sendMessageCallView(input: { readonly callId: string; readonly l
   }
 }
 
-/** The states a structured result may explicitly name (agent-team §3). */
+/** The states a structured result may explicitly name. */
 const EXPLICIT_STATES: Readonly<Record<string, AgentMessageState>> = Object.freeze({
   delivered: 'delivered',
   held: 'held',

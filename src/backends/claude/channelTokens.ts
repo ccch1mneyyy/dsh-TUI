@@ -1,5 +1,5 @@
 /**
- * The credential seam of the Claude channel profiles (phase 3): channel
+ * The credential seam of the Claude channel profiles: channel
  * tokens live in the DSH credential store — the same `~/.dsh/.credentials.yaml`
  * (0600) the /provider wizard writes through the dsh credentials service
  * (providerWizard.ts's deriveKeyRef convention) — and channels.json holds
@@ -7,15 +7,13 @@
  *
  * This module is a direct, host-side file view of that store (the Claude
  * backend has no cordis context to resolve `ctx.get('credentials')` from).
- * The store is edited through a REAL YAML document parser (`yaml`, already
- * a runtime dependency): the top-level `refs` mapping is located semantically
- * — block or flow (inline) style, quoted keys included — foreign fields,
- * comments and multiline scalars keep their meaning, and every commit must
- * parse back clean before it is allowed to replace the file (R3-3: the old
- * line-append once turned a legal `refs: { A: b }` into a duplicate top-level
- * `refs:` key, corrupting the shared library for every strict parser). A
- * store this module cannot honestly read — unreadable, or not valid YAML —
- * is never rebuilt over: reads answer undefined and writes refuse.
+ * The store is edited through a YAML document parser (`yaml`): the top-level
+ * `refs` mapping is found in block or flow style, quoted keys included;
+ * foreign fields, comments and multiline scalars keep their meaning, and a
+ * commit must parse back clean before it replaces the file (the store is
+ * shared with the host, so a duplicate `refs:` key would break it for every
+ * strict reader). A store that cannot be read or does not parse is never
+ * rebuilt over: reads answer undefined and writes refuse.
  * Commits are atomic (atomic-file.ts).
  * The ref namespace is `CHANNEL_<SLUG>_TOKEN` — derived from the channel id
  * the way deriveKeyRef derives `<ROUTE>_API_KEY`, so a re-import (or a hand
@@ -58,11 +56,9 @@ const FILE = '.credentials.yaml'
 export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (message: string) => void = () => undefined): ClaudeChannelTokens {
   const path = join(home, FILE)
 
-  /** Parse the store into a YAML document. `undefined` = this module refuses
-   *  to interpret (let alone rewrite) what it cannot honestly read: an
-   *  unreadable file, or one that does not parse (a damaged or
-   *  duplicate-keyed library must never be rebuilt over — R3-3). An absent
-   *  file parses as an empty document, so the first write can create it. */
+  /** Parse the store into a YAML document; undefined for a file that
+   *  cannot be read or does not parse (never rebuilt over). An absent file
+   *  parses as an empty document, so the first write can create it. */
   const load = (): Document | undefined => {
     let text: string
     try {
@@ -121,8 +117,7 @@ export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (mes
       else refs.set(ref, value)
       // lineWidth 0: a token is one scalar and must never be line-folded.
       const next = doc.toString({ lineWidth: 0 })
-      // Self-check: nothing leaves this module unless it parses back clean
-      // — R3-3's duplicate-refs class of corruption cannot be committed.
+      // Nothing is committed unless it parses back clean.
       if (parseDocument(next).errors.length > 0) {
         debug('claude: channel token write self-check failed; refusing to commit')
         return

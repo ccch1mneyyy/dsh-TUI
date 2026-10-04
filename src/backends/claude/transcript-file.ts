@@ -1,5 +1,5 @@
 /**
- * The Claude session transcript file, read-only (design §4.11 "压缩前历史"):
+ * The Claude session transcript file, read-only:
  * what "load earlier" reads beyond the SDK's read API, which returns only
  * the model-visible chain after the latest compaction.
  *
@@ -18,7 +18,7 @@
  * stops there) and `logicalParentUuid` = the last entry before it, and lists
  * the entries it preserved (`compactMetadata.preservedMessages.uuids`, or
  * the older `preservedSegment` head…tail), which the loader splices after
- * the summary (`anchorUuid`). One older SEGMENT is the chain walked back from
+ * the summary (`anchorUuid`). One older segment is the chain walked back from
  * a boundary's logical parent to the next `parentUuid: null` entry — an older
  * boundary or the session's first entry — with that older boundary's
  * preserved entries spliced in, and without the entries the newer boundary

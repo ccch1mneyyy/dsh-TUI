@@ -1,6 +1,6 @@
 /**
- * MCP elicitation and the CLI's user dialogs (docs/agent-backend-design.md
- * §4.3 `onElicitation` / `onUserDialog`, §4.7): the session's two other
+ * MCP elicitation and the CLI's user dialogs (`onElicitation` /
+ * `onUserDialog`): the session's two other
  * human-in-the-loop callbacks. Every request becomes a structured ask the
  * shared QuestionStore renders (`question.request`), answered through the
  * session's `questions` capability, and settles into the shape the SDK

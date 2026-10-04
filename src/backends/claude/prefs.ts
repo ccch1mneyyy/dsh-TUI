@@ -1,6 +1,6 @@
 /**
  * The Claude backend's persisted user choices
- * (`~/.dsh-tui/backends/claude/prefs.json`, design §3.6): the `/model`,
+ * (`~/.dsh-tui/backends/claude/prefs.json`): the `/model`,
  * `/effort` and `/permission` picks a later session starts with. Backend-
  * scoped on purpose —
  * a Claude model id means nothing to the DSH `/model` preference, and the

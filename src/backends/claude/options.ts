@@ -5,7 +5,7 @@
  * explicit start permission mode, streaming partials, subagent text and
  * per-task stop, file checkpoints, and the host's permission callback.
  *
- * `OPTION_POLICY` classifies EVERY SDK option. It is checked with
+ * `OPTION_POLICY` classifies every SDK option. It is checked with
  * `satisfies Record<keyof Options, …>`: an option the SDK adds or removes
  * fails `tsc` here until someone decides what the profile does with it.
  */
@@ -136,7 +136,7 @@ export interface StartPermissionMode {
 /**
  * The explicit start permission mode (never omitted: the CLI default may be
  * `auto`). `DSH_TUI_CLAUDE_PERMISSION_MODE` is a developer override for live
- * tests and the only way to START in `bypassPermissions`
+ * tests and the only way to start in `bypassPermissions`
  * (docs/configuration.md). Next comes `pref`, the user's remembered
  * `/permission` pick (`~/.dsh-tui/backends/claude/prefs.json`): it skips the
  * settings cascade (no escalation filter, no downgrade notice) — except a
