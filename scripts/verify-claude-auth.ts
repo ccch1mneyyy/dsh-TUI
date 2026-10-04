@@ -659,6 +659,20 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   const logged2 = debug2.join('\n')
   check('reconnect: a failure with no status is logged as the fixed category, not the error text', logged2.includes('reconnect failed') && !logged2.includes('socket hang up'), logged2)
   await session2.dispose()
+  // `/login`'s reconnect rejects to the caller, which shows the message in a
+  // toast: it must be the sanitized sentence, never the refresh error body.
+  const debug3: string[] = []
+  const refusedNotice = t('claude-auth-refresh-failed', { detail: t('claude-auth-refresh-status', { status: '401' }) })
+  const session3 = await openClaudeSession(claudeDeps(fake.sdk, {
+    host: { debug: message => { debug3.push(message) } },
+    auth: { plan, renew: () => Promise.reject(renewal), failureNotice: () => refusedNotice },
+  }))
+  session3.subscribe(() => undefined)
+  await tick()
+  const rejection = await session3.capabilities.auth!.reconnect().then(() => 'resolved', (error: unknown) => error instanceof Error ? error.message : String(error))
+  check('/login reconnect: the rejection is the sanitized sentence, never the error body', rejection === refusedNotice, rejection)
+  check('/login reconnect: logged as category + HTTP status only', debug3.join('\n').includes('reconnect failed (HTTP 401)') && !debug3.join('\n').includes(SECRET), debug3.join('\n'))
+  await session3.dispose()
 }
 
 // ── a failed pre-start refresh is logged the same way (startup path) ──

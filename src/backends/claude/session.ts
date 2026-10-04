@@ -161,6 +161,9 @@ const rec = (value: unknown): Rec | undefined =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
+/** A failed credential renewal, carrying only its user-facing sentence. */
+class RenewalFailed extends Error {}
+
 /** The CLI's answer to `resume` of a session it has no transcript for. */
 const NO_CONVERSATION = /No conversation found with session ID/iu
 
@@ -737,10 +740,13 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
           try {
             authPlan = await deps.auth.renew(renewal)
           } catch (error) {
+            // Only the sanitized sentence leaves: the refresh error itself
+            // can carry the OAuth endpoint's response body.
+            const failure = new RenewalFailed(renewalFailed(error))
             // The old CLI is already gone: reconnect on the current
             // credential (its inputs still run), report the renewal after.
-            if (stopped === undefined) throw error
-            renewError = error
+            if (stopped === undefined) throw failure
+            renewError = failure
           }
         }
         if (deferred) await waitIdleBounded()
@@ -813,7 +819,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     reconnect({ rejected: injectedToken() }).then(() => {
       emit([{ type: 'notice', level: 'warning', text: t('claude-auth-reconnected') }])
     }, (error: unknown) => {
-      emit([{ type: 'notice', level: 'error', text: renewalFailed(error) }])
+      emit([{ type: 'notice', level: 'error', text: error instanceof RenewalFailed ? error.message : renewalFailed(error) }])
     })
   }
 
