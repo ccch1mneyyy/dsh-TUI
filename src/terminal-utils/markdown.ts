@@ -261,7 +261,7 @@ function dispatch(token: Token, state: RenderState): string {
   if (isToken(token, 'del')) return renderDel(token, state)
   if (isToken(token, 'heading')) return renderHeading(token, state)
   if (isToken(token, 'hr')) return renderHr()
-  if (isToken(token, 'image')) return token.href
+  if (isToken(token, 'image')) return renderImage(token, state)
   if (isToken(token, 'link')) return renderLink(token, state)
   if (isToken(token, 'list')) return renderList(token, state)
   if (isToken(token, 'list_item')) return renderListItem(token, state)
@@ -491,6 +491,26 @@ function renderHeading(token: Tokens.Heading, state: RenderState): string {
   // h3-then-body sources also gained an invented blank row. Compressed
   // rhythm, source-faithful air.
   return styled + EOL
+}
+
+/**
+ * Image reference (spec section 3, Batch D): alt text plus an OSC 8 link
+ * to the source URL - the href is only a click target, nothing is
+ * fetched and remote resources never download automatically. Width-safe
+ * ASCII `[img]` marks the span; terminals without hyperlink support keep
+ * a readable plain form carrying both the alt and the URL.
+ */
+function renderImage(token: Tokens.Image, state: RenderState): string {
+  const alt = token.text.replace(/\s+/g, ' ').trim()
+  if (state.parent?.type === 'link') {
+    // Inside a link's OSC 8 wrap a nested sequence would override the real
+    // href; show the alt (or the URL) as plain text, like nested labels.
+    return alt || token.href
+  }
+  if (!supportsHyperlinks()) {
+    return alt ? `[img] ${alt} (${token.href})` : token.href
+  }
+  return createHyperlink(token.href, alt ? `[img] ${alt}` : '[img]')
 }
 
 function renderLink(token: Tokens.Link, state: RenderState): string {

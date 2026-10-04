@@ -15,6 +15,10 @@
  */
 process.env.DSH_TUI_LANG = 'en'
 process.env.FORCE_COLOR = '3'
+// OSC 8-capable terminal for the hyperlink path; the plain-degradation
+// path toggles this off below (supports-hyperlinks reads env live, only
+// its stdout probe is cached - false in this non-TTY process).
+process.env.TERM_PROGRAM = 'kitty'
 
 // Env first, then dynamic imports: static imports hoist above the env
 // setup and chalk would cache a colorless level before FORCE_COLOR lands.
@@ -48,6 +52,9 @@ configureMarked()
 const ESC = '\u001b'
 /** Strip SGR sequences for plain-shape assertions. */
 const plain = (s: string): string => s.replace(/\u001b\[[0-9;]*m/g, '')
+/** SGR + OSC 8 stripped: what the row actually reads like on screen. */
+const visible = (s: string): string =>
+  plain(s).replace(/\u001b\]8;;[^\u0007]*\u0007/g, '')
 const BOLD = ESC + '[1m'
 const ITALIC = ESC + '[3m'
 const UNDERLINE = ESC + '[4m'
@@ -208,5 +215,47 @@ assert.ok(nestedLines[2]!.includes('\u258f'), 'third level switches to the thinn
 // Level styling: first rail colorized, deeper rails dim.
 const secondLineAnsi = applyMarkdown('> one' + '\n' + '> > two' + '\n').split('\n')[1]!
 assert.ok(secondLineAnsi.includes(ESC + '[2m'), 'the nested rail is dim, not colorized')
+
+// -- 5. Images: alt text + OSC 8 link, never a download -------------
+
+// Bad baseline: the image token echoed the bare href; the alt text was
+// dropped entirely.
+const OSC8_START = ESC + ']8;;'
+const OSC8_END = String.fromCharCode(7)
+const imgLine = applyMarkdown('![alt text](https://example.invalid/i.png) tail' + '\n')
+assert.equal(visible(imgLine), '[img] alt text tail',
+  'image renders the [img] marker + alt, not the bare URL: ' + JSON.stringify(visible(imgLine)))
+assert.ok(imgLine.includes(OSC8_START + 'https://example.invalid/i.png' + OSC8_END),
+  'the href rides an OSC 8 wrap (click target only)')
+assert.ok(imgLine.indexOf(OSC8_START) < imgLine.indexOf('[img] alt text'), 'the label sits inside the wrap')
+
+const imgNoAlt = applyMarkdown('![](https://example.invalid/i.png)' + '\n')
+assert.equal(visible(imgNoAlt), '[img]', 'an empty alt still shows the linked marker')
+
+// Multi-line alt collapses to single spaces.
+const imgMultiAlt = applyMarkdown('![line one\nline two](https://example.invalid/i.png)' + '\n')
+assert.equal(visible(imgMultiAlt), '[img] line one line two')
+
+// Terminals without hyperlink support keep a readable plain form that
+// still carries both the alt and the URL.
+const savedTermProgram = process.env.TERM_PROGRAM
+delete process.env.TERM_PROGRAM
+const imgPlain = applyMarkdown('![alt text](https://example.invalid/i.png) tail' + '\n')
+process.env.TERM_PROGRAM = savedTermProgram
+assert.equal(visible(imgPlain), '[img] alt text (https://example.invalid/i.png) tail',
+  'no-OSC8 terminals show alt + url as text: ' + JSON.stringify(visible(imgPlain)))
+
+// An image nested in a link must not smuggle a second OSC 8 sequence
+// (it would override the outer href).
+const imgInLink = applyMarkdown('[![alt](https://img.invalid/x.png)](https://page.invalid)' + '\n')
+assert.ok(imgInLink.includes(OSC8_START + 'https://page.invalid' + OSC8_END), 'the outer link keeps its href')
+assert.ok(!imgInLink.includes('https://img.invalid/x.png' + OSC8_END), 'no nested OSC 8 for the inner image')
+assert.ok(visible(imgInLink).includes('alt'), 'the inner alt survives as the link label')
+
+// Rejected schemes degrade to the label only - the hostile href never
+// reaches the screen as a clickable or printed URL.
+const imgHostile = applyMarkdown('![alt](javascript:alert(1))' + '\n')
+assert.equal(visible(imgHostile), '[img] alt', 'non-whitelisted scheme shows alt only')
+assert.ok(!imgHostile.includes(OSC8_START + 'javascript:'), 'no OSC 8 wrap for a rejected scheme')
 
 console.log('markdown batch D: heading layering + compressed whitespace passed')
