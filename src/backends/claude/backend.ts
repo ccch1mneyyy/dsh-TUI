@@ -134,7 +134,7 @@ const catalogPrefs = fileClaudePrefs()
 
 export const claudeBackend: AgentBackend = {
   id: CLAUDE_BACKEND_ID,
-  descriptor: { label: CLAUDE_BACKEND_LABEL, vendor: 'Anthropic', version: VALIDATED_SDK_VERSION },
+  descriptor: { label: CLAUDE_BACKEND_LABEL },
 
   /** What is installed and whether it is the validated pair. Never throws. */
   async detect(host: BackendHost): Promise<BackendDetection> {
@@ -170,7 +170,6 @@ export const claudeBackend: AgentBackend = {
   /** Create a session in `target.cwd` (an explicit session id, so the TUI
    *  knows it before the CLI's first `init`), or resume a persisted one. */
   async open(target: OpenTarget, host: BackendHost): Promise<AgentSession> {
-    if (target.kind === 'fork') throw new Error(t('claude-open-fork-unsupported'))
     let sdk: Awaited<ReturnType<typeof loadClaudeSdk>>
     try {
       sdk = await loadClaudeSdk()

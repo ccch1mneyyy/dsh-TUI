@@ -1,14 +1,7 @@
 /**
- * SidePanelColumn: the right surface's chrome — PanelBar on top, PanelHost
- * in the middle, and a 1-row key hint at the bottom (design doc §6.1).
- *
- * The hint row swaps text with focus: unfocused it advertises Ctrl+B,
- * focused it lists the panel keys. The two thin rules frame the host and
- * brighten to 'accent' together with the divider when the column has the
- * focus — the whole seam lights up as one surface.
- *
- * Tabs come from the PanelStore (enabled ∩ registered, badge included);
- * builtin registrations arrive via registerBuiltinPanels on module import.
+ * SidePanelColumn: PanelBar, the active panel surface and a one-row key hint.
+ * The hint follows focus, and the rules brighten with the divider as one surface.
+ * Tabs follow the enabled registration order and carry each panel's badge.
  */
 import React from 'react'
 import { Box, Text, useTerminalSize } from '../../ui.js'
@@ -80,7 +73,6 @@ export function SidePanelColumn({ width, controller, channel, activity, attentio
     return {
       id,
       title: def.titleKey !== undefined ? t(def.titleKey) : def.title ?? fallbackTitle(id),
-      icon: def.icon,
       badge: entry.badge,
     }
   })

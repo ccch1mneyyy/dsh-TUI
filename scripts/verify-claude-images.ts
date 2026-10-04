@@ -267,7 +267,7 @@ const BLUE = png(5, 5, [0, 0, 255])
     history: () => Promise.resolve([]),
     subscribe: () => { const off = (): void => undefined; listeners.add(off); return off },
     submit: () => Promise.resolve({ accepted: true }),
-    removePending: () => false,
+
     cancel: () => Promise.resolve({ stillQueued: [] }),
     dispose: () => Promise.resolve(),
   }

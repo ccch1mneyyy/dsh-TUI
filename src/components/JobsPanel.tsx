@@ -15,10 +15,8 @@ import type { PanelKeyHandler } from './sidePanel/types.js'
 /**
  * Pure width→column allocation for the roster row (kept side-effect free so
  * regressions can assert the table directly). There is no pid column in this
- * roster. Side-panel tiers: the label always truncates and every column
- * leaves it ≥8 cells — progress drops first, then duration, then the
- * id/status columns narrow — so a 38-col panel never folds a command into
- * per-word lines. The full-screen form keeps its wrap-the-label contract.
+ * roster. In the side panel, the command gets a wrapped row under the id and
+ * status header; full-screen keeps the flexible inline label column.
  */
 export interface JobsRowColumns {
   readonly showProgress: boolean
@@ -26,8 +24,7 @@ export interface JobsRowColumns {
   readonly showStatus: boolean
   readonly idWidth: number
   readonly statusWidth: number
-  /** 整屏形态 label 折行（长命令可读全文）；panel 形态 truncate-end
-   *  （行高恒定，全文由焦点行的 detail 块承担）。 */
+  /** Full-screen keeps the label in the header; panel rows place it below. */
   readonly labelWrap: boolean
 }
 
@@ -53,8 +50,7 @@ export interface JobsPanelProps {
   /** Keep the focused job's output tail fresh while the panel shows it
    *  (a backend whose output is read on demand); returns the unwatch. */
   onWatchOutput?: (id: string) => () => void
-  /** Send to Chat（§6.7）：把焦点任务作为附加上下文送进草稿（chip 出现在
-   *  输入框上方，随下一次提交附给模型）。仅 panel 形态；未接时不提供 's'。 */
+  /** Attach the focused job to the next submitted message. Panel mode only. */
   onSendToChat?: (job: BackgroundJobState) => void
   /** 'panel' mounts inside the side-panel host (no outer padding, host-owned
    *  chrome, keyboard via usePanelInput). Default keeps the full-screen
@@ -164,13 +160,12 @@ function JobRowLine({ job, focused, armed, columns, onFocus }: {
         <Box width={columns.idWidth} flexShrink={0}>
           <Text bold={focused} color={focused ? 'accent' : undefined} wrap="truncate-end">{job.id}</Text>
         </Box>
-        {/* The label is the row's flexible column and WRAPS: a long command
-          * folds onto the following lines (hanging under its own column)
-          * instead of collapsing to an ellipsis when the terminal is narrow.
-          * The id, progress, duration and status columns keep their grid. */}
-        <Box flexGrow={1} flexShrink={1}>
-          <Text bold={focused} wrap={columns.labelWrap ? undefined : 'truncate-end'}>{job.label}</Text>
-        </Box>
+        {/* Full-screen keeps the command in its flexible header column. */}
+        {columns.labelWrap ? (
+          <Box flexGrow={1} flexShrink={1}>
+            <Text bold={focused}>{job.label}</Text>
+          </Box>
+        ) : <Box flexGrow={1} />}
         {columns.showProgress && (
           <Box width={11} flexShrink={0} justifyContent="flex-end">
             {progress !== undefined ? <JobProgress progress={progress} /> : <Text> </Text>}
@@ -193,10 +188,13 @@ function JobRowLine({ job, focused, armed, columns, onFocus }: {
           </>
         )}
       </Box>
+      {!columns.labelWrap && (
+        <Box paddingLeft={2}>
+          <Text bold={focused} wrap="wrap">{job.label}</Text>
+        </Box>
+      )}
       {focused && (
-        // Detail block on one label gutter (width 6 in both languages): the
-        // row above already names the job, so the old `任务：…` line was pure
-        // repetition, and the command only earns a line when it differs.
+        // The detail block starts below the focused job row.
         <Box flexDirection="column" paddingLeft={4}>
           {job.command !== undefined && job.command !== '' && job.command !== job.label && (
             <Box flexDirection="row" gap={1}>

@@ -6,6 +6,7 @@ import { constants as fsConstants } from 'node:fs'
 import { open, unlink } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { t } from '../i18n.js'
+import { kernelDisplayName } from './kernelCatalog.js'
 import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
 import { EffortInputBorder, type InputBorderLabel } from './EffortInputBorder.js'
@@ -1947,7 +1948,7 @@ export function PromptInput({
     // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the snapshot
     const capabilities = channel.backendCapabilities as Channel['backendCapabilities'] | undefined
     if (command === undefined && isUnavailableLocalCommand(parsed.name, capabilities)) {
-      channel.notify(t('cmd-unavailable-backend', { cmd: parsed.name, backend: capabilities?.backendLabel ?? '' }), {
+      channel.notify(t('cmd-unavailable-backend', { cmd: parsed.name, backend: capabilities === undefined ? '' : kernelDisplayName(capabilities.backendId) }), {
         color: 'warning',
         timeoutMs: 4000,
       })

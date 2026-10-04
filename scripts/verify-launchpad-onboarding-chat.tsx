@@ -1,24 +1,10 @@
 /**
- * verify-launchpad-onboarding-chat — 落地页 / 首次引导在**真实 Chat** 里的编排契约。
+ * verify-launchpad-onboarding-chat — launchpad and onboarding flows through Chat.
  *
- * 两个屏幕自己的回归（verify-launchpad / verify-onboarding-wizard）只挂孤立组件，
- * 夹具"照抄"Chat 的接线——接线一旦漂移，那边照绿。这一层专钉漂移，案例全部来自
- * 真实缺陷（审查 B 轮在人肉读码时发现的那三条都出在这里）：
+ * Covers overlays, draft submission, onboarding persistence, model/effort/preset/
+ * permission selection, command completion and recovery mounting.
  *
- *   A. `/setup` 打开向导：落地页里敲 `/setup` 回车 → 向导盖在落地页之上；
- *      Esc 跳过**回到落地页**（第七版：不再收掉落地页落到对话页）。
- *   B. 提交首句的落点：提交一句 → 落在对话页、草稿就在输入框里、会话浏览器
- *      不再盖着（第七版起 boot 不预开浏览器，落地页是第一屏）。
- *   C. 会开整屏界面的快捷入口（第七版：**盖在落地页之上**，Esc 回落地页——
- *      从启动页进入对话页的唯一路径 = Enter 提交一条非命令消息）。
- *   D. 覆盖层动作（模型 / 主题 / 语言）不收落地页。
- *   E. 记账：向导里 Esc（跳过）**不写** onboarding.json；→→→Enter 走完才写。
- *   F. 最小模式：落地页整体不存在（launchpadVisible 真的接在渲染链上）。
- *   G. 首启 Tips 行（launchpad-first-run，首启专用文案）不再 stale：完成引导后
- *      它立刻换回平时的 launchpad-tip（跳过则保留首启那句，因为没记账）。
- *   H. 向导招式卡的"试一下"：会开整屏界面的命令同样先把向导收掉，不留滞留状态。
- *
- * 运行：node --import tsx/esm scripts/verify-launchpad-onboarding-chat.tsx
+ * Run: node --import tsx/esm scripts/verify-launchpad-onboarding-chat.tsx
  */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
@@ -106,11 +92,8 @@ const plainText = (frames: readonly string[]) => frames.join('')
   .replace(/\x1b\][^\x07]*\x07/g, '')
 
 /**
- * 桩 channel：Chat 只读它渲染要用的面（形状取自 verify-whale-girl 的 smoke 夹具）。
- * 第五版扩展：参数行四段点开的选择器（/model · /effort · /preset · /permission）
- * 需要可变的 model/effort/preset/权限现状 + subscribe 通知（值就地更新靠它重渲染）。
- * 第六版扩展：命令补全面板（commandCompletions——直接用仓库的 completeCommands
- * 过滤同一张 commandList，与聊天页同源）+ agent preset 名册（/preset 段数据源）。
+ * Chat reads only the channel surface needed to render these flows.
+ * Mutable settings and subscriptions let picker changes redraw the screen.
  */
 function makeChannel(over: Record<string, unknown> = {}) {
   const notifications: string[] = []
@@ -127,8 +110,7 @@ function makeChannel(over: Record<string, unknown> = {}) {
     agentId: 'probe',
     model: 'deepseek-chat',
     provider: 'deepseek',
-    // 第四版落地页动作表读的真实信号：provider 已配（否则第一位入口会变成
-    // 条件按钮 Set up provider，焦点步进的全套断言都要跟着换档）。
+    // 配置 provider，使动作表显示正常入口而非 provider 设置入口。
     configuredProvider: 'deepseek',
     reasoningEffort: 'high',
     tokens: { input: 0, output: 0 },
@@ -157,10 +139,9 @@ function makeChannel(over: Record<string, unknown> = {}) {
       questionTool: true,
       skills: true,
     }),
-    // 命令补全面板（第六版 BUG 1）：与 composer 同源——completeCommands 过滤
-    // 合并命令表（含上面的 registry 命令 plan）。
+    // 命令补全面板与 composer 共用 completeCommands 过滤器和命令表。
     commandCompletions: (input: string) => completeCommands(input, channel.commandList as never) as never,
-    // agent preset（第六版设计 1：参数行"模式"段 = preset 显示名）。
+    // 参数行的模式段显示 agent preset 名称。
     agentPreset: 'standard',
     listPresets: async () => [
       { id: 'standard', name: 'Standard', isDefault: true },
@@ -191,7 +172,7 @@ function makeChannel(over: Record<string, unknown> = {}) {
       defaultEffort: 'high',
     }),
     listWorkspaces: () => Promise.resolve([]),
-    // Settings 整屏（第七版 C2：从落地页打开设置）只需要这三条缝；host
+    // Settings 整屏只需要这三条接口；host
     // 给 undefined = 渲染「设置不可用」提示（真 channel 由 dsh-adapter 提供）。
     settingsHost: () => undefined,
     settingsSections: () => [],
@@ -313,7 +294,7 @@ async function mountChat(flags: Flags, over: Record<string, unknown> = {}, chatP
 
 const LAUNCHPAD_MARK = '说点什么，或输入 /' + ' 看命令…'
 const WIZARD_MARK = '第 1 / 4 步'
-/** 帮助盖屏（第八版）的在屏标记：HelpMenu 的快捷键列头 + 命令区标题。 */
+/** 帮助盖屏的标记：HelpMenu 快捷键列头与命令区标题。 */
 const HELP_MARK = '? 查看本帮助'
 /**
  * 模型选择器「展开」的双标记：套件前面的用例（D2/Q1）切过模型 →
@@ -379,7 +360,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   check('A2 落地页里 /setup 打开向导（向导盖在落地页之上）',
     await settled(() => chat.screen().includes(WIZARD_MARK) && !chat.screen().includes('说点什么')),
     chat.screen().slice(0, 200))
-  // 第七版：Esc 跳过向导必须**回到落地页**（不再收掉落地页落到对话页）。
+  // Esc 跳过向导后回到落地页。
   // 草稿 '/setup' 还在输入框里（前缀 ⌘）——落地页状态原样保留。
   await chat.send('\x1b')
   check('A2b 向导 Esc 跳过回到落地页（不是对话页；草稿 /setup 原样在）',
@@ -389,7 +370,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.unmount()
 }
 
-// ── B. 提交首句的落点（第五版：回车直接发送，与 composer 回车同一条路径）──────
+// ── B. 提交首句 ──
 {
   const chat = await mountChat({ launchpadOnBoot: true, openHomeOnBoot: true })
   check('B1 落地页是第一屏（第七版：boot 不预开会话浏览器）',
@@ -417,8 +398,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await settled(() => chat.screen().includes('说点什么'))
   await chat.type('/help')
   await chat.send('\r')
-  // 第八版新契约：/help 不再收掉落地页进对话页——帮助盖屏浮层盖在启动页
-  // 之上（聊天页不上屏、启动页仍在），且绝不 submit。
+  // /help 的帮助浮层盖在启动页之上，不切换到对话页，也不触发 submit。
   check('B6 命令行走命令表：不触发 channel.submit（本地命令不发模型）',
     await settled(() => chat.screen().includes(HELP_MARK) && chat.screen().includes('⌘'))
       && !chat.calls.some(c => c.startsWith('submit:')),
@@ -431,7 +411,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.unmount()
 }
 
-// ── C. 会开整屏界面的快捷入口（第七版：盖在落地页之上，Esc 回落地页）────────
+// ── C. 会话管理与设置入口 ──
 {
   // 合并入口「会话与工作区」（home 那条）：打开后盖在落地页之上。
   const chat = await mountChat({ launchpadOnBoot: true })
@@ -442,7 +422,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   check('C1 会话与工作区：会话管理上屏、盖在落地页之上（动作有可见效果）',
     await settled(() => !chat.screen().includes('说点什么') && chat.screen().includes('新建会话')),
     chat.screen().slice(0, 300))
-  // 第七版硬约束回归①：从启动页开会话浏览 → Esc → 仍在启动页（不是对话页）。
+  // 从启动页打开会话浏览后按 Esc，必须回到启动页。
   await chat.send('\x1b')
   check('C1b 会话浏览 Esc 退出 → 回到启动页（草稿/参数/焦点都在，不是对话页）',
     await settled(() => chat.screen().includes('说点什么') && !chat.screen().includes('新建会话')),
@@ -479,8 +459,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.unmount()
 }
 
-// ── D/J. 参数行四段点开既有选择器（第五版：盖在落地页之上、键盘可达、
-//          选完就地更新、Esc 回落地页、草稿不动）────────────────────────────
+// ── D/J. 参数选择器与键盘路径（覆盖层显示时启动页保持可见，选择后更新参数并保留草稿） ──
 {
   // 模型段（也是旧 D1 的加强版：不止落地页留着，选择器真的画出来了）。
   const chat = await mountChat({ launchpadOnBoot: true })
@@ -506,11 +485,12 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.type('半句话')
   await chat.send('\u001b[B')
   await chat.send('\r')
-  await settled(() => chat.screen().includes('deepseek-reasoner'))
+  check('D3a 关闭前模型选择器确实展开',
+    await settled(() => modelOpen(chat.screen())), chat.screen().slice(0, 240))
   await chat.send('\x1b')
   check('D3 Esc 关掉选择器回到落地页（半句话草稿原样在）',
     await settled(() => chat.screen().includes('半句话')
-      && !chat.screen().includes('deepseek-reasoner')), chat.screen().slice(0, 240))
+      && !modelOpen(chat.screen()) && chat.screen().includes('● Tips：')), chat.screen().slice(0, 240))
   // 落地页自己的 Esc 语义不变：有字先清空。
   await chat.send('\x1b')
   check('D4 选择器关掉后落地页 Esc 语义不变（有字先清空、不去看会话）',
@@ -535,8 +515,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.unmount()
 }
 {
-  // 模式段（第六版设计 1：agent preset，不是 plan/act）：/preset 选择器，
-  // Enter 切到 PTC，参数行就地更新（Standard→PTC）。
+  // 模式段打开 /preset 选择器，Enter 切换到 PTC 并更新参数行。
   const chat = await mountChat({ launchpadOnBoot: true })
   await settled(() => chat.screen().includes('Standard'))
   await chat.send('\u001b[B')
@@ -632,7 +611,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
 }
 
 // ── I. 启动口径（实测事故：本机 dst 每次都喂 DSH_TUI_WORKSPACE_TARGET，
-//      旧判定把工作区目标算进「非普通启动」→ 两个屏在主流启动方式下永远不出） ──
+//      工作区目标不参与普通启动判定） ──
 {
   check('I1 无 resume、无首句 → 普通启动（工作区目标不参与判定，dst 场景）',
     isLandingLaunch({ initialPrompt: '' }) === true)
@@ -644,10 +623,9 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
     isLandingLaunch.length <= 1)
 }
 
-// ── N. 第六版 BUG 1：命令识别接上 composer 的合并命令表 ──────────────────
+// ── N. 命令识别与补全 ──
 {
-  // registry 命令（plan 由 dsh-base 注册，不在 LOCAL_COMMANDS）：旧判定
-  // isLocalCommandName 认不出它 → 整行 channel.submit 发给模型（用户实测bug）。
+  // registry 命令 plan 由 dsh-base 注册，不在 LOCAL_COMMANDS；若当作普通消息会发给模型。
   const chat = await mountChat({ launchpadOnBoot: true })
   await settled(() => chat.screen().includes('说点什么'))
   await chat.type('/plan')
@@ -672,7 +650,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.unmount()
 }
 {
-  // 补全面板（第六版 BUG 1）：行首 / 弹面板，Enter 执行选中命令（不 submit）。
+  // 行首 / 打开补全面板，Enter 执行选中命令，不调用 submit。
   const chat = await mountChat({ launchpadOnBoot: true })
   await settled(() => chat.screen().includes('说点什么'))
   await chat.type('/pre')
@@ -686,17 +664,18 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.unmount()
 }
 
-// ── P. 第六版 BUG 3：选择器点空白关闭、点另一段直接切换 ───────────────────
+// ── P. 选择器的空白关闭与段间切换 ──
 {
   // 点空白 → 关掉选择器（复用落地页"点空白"兜底：onBlankClick 里 close overlay）。
   const chat = await mountChat({ launchpadOnBoot: true })
   await settled(() => chat.screen().includes('说点什么'))
   await chat.send('\u001b[B') // 参数行第一段（模型）
   await chat.send('\r')
-  await settled(() => chat.screen().includes('deepseek-reasoner'))
+  check('P1a 点空白前模型选择器确实展开',
+    await settled(() => modelOpen(chat.screen())), chat.screen().slice(0, 240))
   await chat.click('╭') // 点输入卡片边框（浮层之外的"空白"）
   check('P1 点空白关掉模型选择器（落地页仍在、列表消失）',
-    await settled(() => !chat.screen().includes('deepseek-reasoner')
+    await settled(() => !modelOpen(chat.screen())
       && chat.screen().includes('说点什么')),
     chat.screen().slice(0, 200))
   await chat.unmount()
@@ -707,17 +686,18 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await settled(() => chat.screen().includes('说点什么'))
   await chat.send('\u001b[B')
   await chat.send('\r')
-  await settled(() => chat.screen().includes('deepseek-reasoner'))
+  check('P2a 切换参数段前模型选择器确实展开',
+    await settled(() => modelOpen(chat.screen())), chat.screen().slice(0, 240))
   await chat.click('High') // 参数行的思考深度段
   check('P2 开着模型选择器时点思考深度段：切成 effort 滑杆（且只有一个选择器在屏）',
-    await settled(() => !chat.screen().includes('deepseek-reasoner')
+    await settled(() => !modelOpen(chat.screen())
       && chat.screen().includes('Max') && chat.screen().includes('说点什么')),
     chat.screen().slice(0, 240))
   await chat.unmount()
 }
 
 
-// ── T. 第八版任务①：参数段「切换式」——同一段再点 = 收起，启动页原样恢复 ──
+// ── T. 参数段点击可切换展开状态 ──
 {
   // 四段各一条：点开 → 再点同一段 → 关；关掉后启动页原样恢复（浮层矩形
   // 不留痕、无重影——大字行内容逐字节一致）。
@@ -776,7 +756,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.unmount()
 }
 
-// ── V. 第八版任务②：帮助入口 = 盖屏浮层（绝不进对话页）────────────────────
+// ── V. 帮助入口显示覆盖层 ──
 {
   // ① 点帮助 → 帮助盖在启动页之上（聊天页不上屏、启动页仍在）；
   // ② Esc → 关闭回启动页（草稿/参数/焦点都在）；
@@ -827,7 +807,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.unmount()
 }
 
-// ── W. 第八版任务③：启动页必须持续存在（用户上一轮报过「一闪而过」）────
+// ── W. 覆盖层显示期间启动页保持稳定 ──
 {
   // 无头挂真实 Chat（boot 标志）后，跨 ~1.1s 多次采样：启动页一直在屏上
   // （不是只看第一帧），且没有任何整屏被异步打开顶掉它（无浏览器/向导/
@@ -852,13 +832,13 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.unmount()
 }
 
-// ── Q. 第七版：命令面板开 /model、Continue 快捷键、条件位真接线 ────────────
+// ── Q. 命令面板与入口动作 ──
 {
-  // 面板选中 /model：模型选择器盖在落地页之上，Esc 回**启动页**（回归③）。
+  // 面板选中 /model 后，选择器盖在落地页上，Esc 返回启动页。
   const chat = await mountChat({ launchpadOnBoot: true })
   check('Q0 Q1 夹具挂起来了（落地页上屏）', await settled(() => chat.screen().includes('说点什么')),
     chat.screen().slice(0, 200))
-  // 第七版镂空浮层的恢复契约：关掉浮层后，启动页原样回来（大字行逐字节一致）。
+  // 关掉浮层后，启动页与大字行逐字节恢复。
   const heroBefore = chat.screen().split('\n').filter(l => l.includes('█'))
   await chat.type('/model')
   await settled(() => chat.screen().includes('model'))
@@ -937,9 +917,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
 
 
 {
-  // 第七版硬约束（澄清版）：从启动页开会话浏览 → **明确选中一个会话** = 有意导航，
-  // 必须真的进入那个会话的聊天页（浏览页与落地页都不在屏上）；同场景 Esc 则回
-  // 启动页（C1b/C3b 已钉）——两条判据是"选中目标"还是"退出"，不许互相挡。
+  // 明确选择会话表示有意导航，必须进入该会话的聊天页；同一浏览页按 Esc 则返回启动页。
   const rows = [{
     id: 's9', title: '目标会话', current: false, live: false,
     status: 'idle', updatedAt: 9, summary: '',
@@ -975,8 +953,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
 }
 
 {
-  // 第七版：左下角工作目录铭牌 → 既有 /workspace 菜单盖在落地页之上，Esc 回
-  // 落地页（与参数行选择器同一姿态；不新造面板）。
+  // 左下角工作目录铭牌打开现有 /workspace 菜单，Esc 返回启动页。
   const chat = await mountChat({ launchpadOnBoot: true })
   await settled(() => chat.screen().includes('说点什么'))
   await chat.click('C:/code/demo-project')
@@ -1161,9 +1138,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
 
 
 
-// ── R. 错误边界恢复重挂的落点矩阵（R4-R4）：recovery 标志必须把全部启动
-//      入口（启动页/首启引导/会话管理屏）都压下——恢复直接回对话，且标志
-//      只消费一次（下一个正常挂载不受影响）。──────────────────────────────
+// ── R. 错误边界恢复重挂的落点矩阵：recovery 标志会压下所有启动入口，恢复后回到对话页且只消费一次。 ──
 /**
  * 固定窗:探针 观察窗内不得出现任何启动入口屏。会话管理屏的内容（工作区/会话
  * 列表）是异步解析后才上屏的，一次读屏会跑到它前面——坏基线上假绿（实测）。

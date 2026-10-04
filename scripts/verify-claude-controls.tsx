@@ -416,7 +416,7 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
     query.emit({ type: 'system', subtype: 'status', status: 'requesting' })
     query.emit({ type: 'result', subtype: 'success', is_error: false, result: 'done', total_cost_usd: 0.01, modelUsage: { x: { contextWindow: 200000 } } })
     check('channel: /context is the backend\'s report', await settled(() => channel.loadedContext?.sections[0]?.name === 'Core instructions') && channel.loadedContext?.files[0]?.displayPath === './CLAUDE.md' && channel.loadedContext.tools.some(tool => tool.name === 'docs › search'))
-    check('channel: /mcp reads the report', await settled(() => channel.mcpStatus()[0] === t('claude-mcp-heading', { n: 2 })) && channel.mcpStatus().some(line => line.includes('needs-auth')))
+    check('channel: /mcp reads the report', await settled(() => channel.mcpStatus()[0] === t('backend-mcp-heading', { n: 2 })) && channel.mcpStatus().some(line => line.includes('needs-auth')))
     const auth = channel.backendAuth()
     check('channel: /login gets the backend sign-in host (dsh-auth surface, anthropic)', auth?.provider === 'anthropic' && auth.oauth !== undefined)
     check('channel: its status names the source', (await auth!.status()).some(line => line === t('claude-auth-source', { source: t('claude-auth-source-claude-login') })))

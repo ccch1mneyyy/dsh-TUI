@@ -561,7 +561,6 @@ const collect = (session: AgentSession) => {
     fake.queries[0]!.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' })
     for (let i = 0; i < 6; i += 1) await tick()
     check(`capabilities (${label}): a reconnect re-delivers nothing the CLI confirmed`, fake.queries.length === 2 && fake.queries[1]!.inputs.length === 0, fake.queries[1]?.inputs)
-    check(`capabilities (${label}): the capability list is empty, not inherited`, JSON.stringify((session.capabilities.native as { claude: { cliCapabilities: readonly string[] } }).claude.cliCapabilities) === '[]')
     await session.dispose()
   }
   // A non-empty list without msg_lifecycle_v1: the echo path.

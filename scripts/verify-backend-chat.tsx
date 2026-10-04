@@ -41,7 +41,7 @@ const submits: { input: AgentInput; placement: SubmitPlacement }[] = []
 const mcpCalls: string[] = []
 const listeners = new Set<(batch: readonly AgentEvent[], meta: AgentEventMeta) => void>()
 const session: AgentSession = {
-  ref: { backendId: 'fake', sessionId: '44444444-4444-4444-8444-444444444444' },
+  ref: { backendId: 'claude', sessionId: '44444444-4444-4444-8444-444444444444' },
   cwd: process.cwd(),
   status: 'idle',
   capabilities: {
@@ -62,7 +62,7 @@ const session: AgentSession = {
     submits.push({ input, placement })
     return Promise.resolve({ accepted: true })
   },
-  removePending: () => false,
+
   cancel: () => Promise.resolve({ stillQueued: [] }),
   dispose: () => Promise.resolve(),
 }
@@ -139,7 +139,7 @@ try {
 
   await typeLine('/preset')
   stdin.write('\r')
-  const refusal = t('cmd-unavailable-backend', { cmd: 'preset', backend: 'Fake Agent' })
+  const refusal = t('cmd-unavailable-backend', { cmd: 'preset', backend: 'Claude' })
   check('a typed unavailable command explains itself', await settled(() => toasts().includes(refusal)), toasts())
   check('the refused command never reaches the model', submits.length === 0)
   await clearLine()
@@ -147,7 +147,7 @@ try {
   emit([{ type: 'turn.start', turn: 1, origin: 'user', time: Date.now() }])
   await typeLine('/rewind')
   stdin.write('\r')
-  const rewindRefusal = t('cmd-unavailable-backend', { cmd: 'rewind', backend: 'Fake Agent' })
+  const rewindRefusal = t('cmd-unavailable-backend', { cmd: 'rewind', backend: 'Claude' })
   check('while working it is refused, not steered in', await settled(() => toasts().includes(rewindRefusal)) && submits.length === 0, toasts())
   emit([{ type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: Date.now() }])
   await clearLine()
@@ -210,7 +210,7 @@ const freshSession = (capabilities: Partial<AgentSession['capabilities']>): Agen
   history: () => Promise.resolve([]),
   subscribe: () => () => undefined,
   submit: () => Promise.resolve({ accepted: true }),
-  removePending: () => false,
+
   cancel: () => Promise.resolve({ stillQueued: [] }),
   dispose: () => Promise.resolve(),
 })

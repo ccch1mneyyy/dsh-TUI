@@ -20,7 +20,6 @@
  * unavailable.
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { markChannelReadDirty } from '../../../adapter/channel/read-view.js'
 import type { AgentCapabilities } from '../../../adapter/ports/channel-capabilities.js'
 import type { AgentIdentity, AgentMessageSubmitInput, AgentMessageSubmitResult } from '../../../adapter/ports/channel-view.js'
@@ -305,6 +304,7 @@ export function createCoreChannel(
    * matched by its call id, not by this.
    */
   let agentMessageIntents = 0
+  const messaging = binding.session.capabilities.subagents?.messaging
 
   const actionReadiness = createChannelActionReadiness()
   const getReadyActions = (): ChannelActionDelegates => {
@@ -441,19 +441,10 @@ export function createCoreChannel(
           return history(agentId, window).catch(() => null)
         },
       }),
-      /**
-       * Parent-mediated message control, composed only when the bound
-       * session declares the relay-observation capability (Claude; the DSH
-       * extension replaces this whole control with its direct one). Submit
-       * goes through the parent's own input pipeline: one directed-instruction
-       * envelope, always 'followup' (never steer, never the dock), through
-       * the same FIFO/decision chain a typed message takes. 'issued' is all
-       * that acceptance proves; the parent model decides whether and when to
-       * relay it (SendMessage).
-       */
-      ...(binding.session.capabilities.subagents?.message === undefined ? {} : {
+      /** Parent-mediated messaging uses the session's submit pipeline. */
+      ...(messaging === undefined ? {} : {
         message: {
-          via: 'claude-parent-mediated' as const,
+          via: messaging,
           steer: false as const,
           listTargets: (): Promise<readonly AgentIdentity[]> => Promise.resolve(state.subagents.map(sub => ({
             agentId: sub.agentId,
@@ -471,7 +462,7 @@ export function createCoreChannel(
             dispatchUserText(envelope, 'followup', [], undefined)
             return Promise.resolve({ ok: true, intentId, state: 'issued' })
           },
-          messages: () => binding.session.capabilities.subagents?.message?.messages() ?? [],
+          messages: () => activity.agentMessages(),
         },
       }),
     },
@@ -528,18 +519,15 @@ export function createCoreChannel(
         try { emitter.dispose() } finally { ideChannel.stop() }
       }
     },
-    // The core's trajectory snapshot: the AgentEvent fold's raw-event log
-    // (append-only, frozen payloads; the same prefix-identity contract a DSH
-    // snapshot offers). The cast mirrors asRawEvents: the envelope is the
-    // contract, and payloads are still checked by guards downstream.
-    traceEvents: () => agentTrajectory.events() as unknown as readonly SessionEvent[],
+    // The core trajectory uses the same raw-event port shape as each source.
+    traceEvents: () => agentTrajectory.events(),
     // Per-agent lane drilldown from the same fold. When an extension owns the
     // trajectory (DSH: raw history) the fold receives no events, so lanes()
     // is empty and the scope filter is not offered; the raw DSH log has no
     // lane attribution to filter by.
     trajectoryLanes: () => agentTrajectory.lanes(),
     trajectoryLaneEvents: (agentId: string, descendants?: boolean) =>
-      (descendants === true ? agentTrajectory.descendantEvents(agentId) : agentTrajectory.laneEvents(agentId)) as unknown as readonly SessionEvent[],
+      descendants === true ? agentTrajectory.descendantEvents(agentId) : agentTrajectory.laneEvents(agentId),
     // The source label: the core serves the trajectory from the neutral
     // AgentEvent fold; the DSH extension overrides the label together with
     // the source accessors.

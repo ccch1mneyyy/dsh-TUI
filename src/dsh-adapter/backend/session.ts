@@ -174,8 +174,16 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
       if (disposed) return 'disposed'
       return agent.status === 'running' ? 'running' : 'idle'
     },
-    // DSH withdraws through the agent inbox synchronously (`removePending`).
-    capabilities: { retractPending: true, native: { dsh: native } },
+    capabilities: {
+      pendingRetraction: {
+        remove(clientMessageId: string): boolean {
+          const removed = agent.inbox.remove(MessageId(clientMessageId))
+          if (removed) pending.delete(clientMessageId)
+          return removed
+        },
+      },
+      native: { dsh: native },
+    },
     // A throwaway translator: `history()` is a read, so it must neither reset
     // the live translator's frame fence nor leave the replay's open calls in
     // the live open-call ledger. (Adoption seeds still go through
@@ -280,16 +288,6 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
         throw error
       }
       return Promise.resolve({ accepted: true })
-    },
-
-    // Withdrawal goes through the agent inbox: `Inbox.remove(messageId)`
-    // records the cancellation durably (an `agent/inbox/spliced` session
-    // event) and publishes `agent/inbox/discarded`. Returns false when the
-    // message was already claimed.
-    removePending(clientMessageId: string): boolean {
-      const removed = agent.inbox.remove(MessageId(clientMessageId))
-      if (removed) pending.delete(clientMessageId)
-      return removed
     },
 
     cancel(cause: CancelCause) {

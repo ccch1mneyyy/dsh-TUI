@@ -195,10 +195,11 @@ console.log('--- G1: two settled jobs group without folding ---')
     const i1 = idxOf(lines, 'job: pwsh-1')
     const i2 = idxOf(lines, 'job: pwsh-2')
     check('G1 两张卡都在屏上', i1 >= 0 && i2 >= 0, 'i1=' + i1 + ' i2=' + i2)
-    check('G1 组内不留空行（成员相邻）', i2 === i1 + 1, 'i1=' + i1 + ' i2=' + i2)
-    // 两张卡 = 括号的两端：首张 `╭` 起手、末张 `╰` 收口，正文都在括号内
-    check('G1 成员共用同一条连接线', (lines[i1] ?? '').startsWith('╭ ') && (lines[i2] ?? '').startsWith('╰ '),
-      JSON.stringify([lines[i1], lines[i2]]))
+    check('G1 相邻卡片之间只有命令行、没有空行', i2 === i1 + 2, 'i1=' + i1 + ' i2=' + i2)
+    const firstCommand = lines[i1 + 1] ?? ''
+    const lastCommand = lines[i2 + 1] ?? ''
+    check('G1 组轨道覆盖两张卡的命令行', (lines[i1] ?? '').startsWith('╭ ') && firstCommand.startsWith('│ ') && (lines[i2] ?? '').startsWith('│ ') && lastCommand.startsWith('╰ '),
+      JSON.stringify([lines[i1], firstCommand, lines[i2], lastCommand]))
     check('G1 两张不触发自动折叠', !frame.screen().includes('background jobs folded'))
     check('G1 组头报已完成数', frame.screen().includes('2 completed'))
   })
@@ -560,7 +561,7 @@ console.log('--- G15: the jobs panel wraps long command/output lines ---')
 // G16 — 冻结行契约：会话投影把行数组与每一行都 Object.freeze 后交给渲染
 // （resume/replay 首帧正是这条路）。成组预补必须把装饰写到浅拷贝上；直接写
 // 共享行对象会在启动即抛 "Cannot add property jobGroup, object is not
-// extensible"（2026-09-30 实机 resume 闪退实证）。
+// extensible" when a frozen resume snapshot is decorated in place.
 // ---------------------------------------------------------------------------
 console.log('--- G16: frozen rows survive grouping (session snapshot contract) ---')
 {
@@ -578,9 +579,8 @@ console.log('--- G16: frozen rows survive grouping (session snapshot contract) -
 }
 
 // ---------------------------------------------------------------------------
-// G17 — 长标签折行时，状态标必须留在首行（flexShrink 回归）
-// 现场：标签一折行，行就超约束；未加 flexShrink 的 glyph 文本节点被压缩，
-// 被挤到下一行、孤零零掉到组外（2026-09-30 用户截图实证）。
+// G17 — 长命令折行时，状态标必须留在首行。
+// 固定列不收缩，标签在下一行按卡片宽度折行。
 // ---------------------------------------------------------------------------
 console.log('--- G17: a wrapped label keeps the joint+glyph on its own line ---')
 {
@@ -605,16 +605,14 @@ console.log('--- G17: a wrapped label keeps the joint+glyph on its own line ---'
 // ---------------------------------------------------------------------------
 // G18 — 组内每一行都必须在竖线内（竖线由卡片逐行自绘：标签折行数由
 // 组件自己算准，见 JobCard 的 `rail`）
-// 现场：逐行手写前缀时，折行出来的续行在 label 列内部，没有前缀可加 →
-// 组里第一张卡的续行掉线（2026-09-30 用户截图实证）。
+// 组内命令折行后必须仍由卡片 rail 包住。
 // ---------------------------------------------------------------------------
 console.log('--- G18: every row of the group stays inside the rail ---')
 {
   const longLabel = "gh pr view 1206 --repo ccch1mneyyy/dsh-TUI --json maintainerCanModify,state,headRefName --jq " +
     "'{canModify: .maintainerCanModify, state: .state, head: .headRefName}'"
   // BOTH members carry a wrapping label, and the LAST one also has a live
-  // output row: the rail must cover all of it (2026-09-30 用户截图实证：
-  // 最后一张的续行掉在竖线外，整组看着散)。
+  // output row: every command and output line stays inside the rail.
   const rows = [
     jobRow(1, makeJob('pwsh-1', 'completed', { label: longLabel })),
     jobRow(2, makeJob('pwsh-2', 'running', { label: longLabel, outputLines: [{ text: 'compiling module a …' }] })),
@@ -655,8 +653,8 @@ console.log('--- G19: a live middle member keeps the rail on its output rows ---
     const out = lines.findIndex(l => l.includes('compiling module a'))
     check('G19 输出行在竖线之内', out >= 0 && (lines[out] ?? '').startsWith('│ '), JSON.stringify(lines[out]))
     check('G19 第二行输出同样有线', out >= 0 && (lines[out + 1] ?? '').startsWith('│ '), JSON.stringify(lines[out + 1]))
-    const tail = lines.findIndex(l => l.includes('job: pwsh-3'))
-    check('G19 末成员在竖线内收口', tail >= 0 && (lines[tail] ?? '').startsWith('╰ '), JSON.stringify(lines[tail]))
+    const tail = lines.findIndex(l => l.includes('run pwsh-3'))
+    check('G19 末成员命令行在竖线内收口', tail >= 0 && (lines[tail] ?? '').startsWith('╰ '), JSON.stringify(lines[tail]))
   })
 }
 
@@ -727,6 +725,32 @@ console.log('--- G21: the hand-painted bracket fits the cards at every width ---
       check(`G21 ${cols} 列：收口行带正文（没有空行）`,
         (body[body.length - 1] ?? '').trim().length > 2 && !body.some(l => /^[│╭╰]\s*$/.test(l)),
         'cols=' + cols + ' ' + JSON.stringify(body.slice(-2)))
+    }, cols)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// G22 — command rows wrap in the actual narrow transcript width and stay in the rail
+// ---------------------------------------------------------------------------
+console.log('--- G22: command rows wrap at narrow widths inside the group rail ---')
+{
+  const tail = 'COMMAND-NARROW-TAIL'
+  const command = 'pwsh -Command ' + "Write-Output 'long command part'; ".repeat(2) + tail
+  const rows = [
+    jobRow(1, makeJob('pwsh-28', 'completed', { label: command })),
+    jobRow(2, makeJob('pwsh-34', 'running', { label: command, outputLines: [{ text: 'narrow output' }] })),
+  ]
+  for (const cols of [28, 34]) {
+    await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+      const tailVisible = await settled(() => frame.screen().includes(tail))
+      const lines = frame.lines().filter(line => line.trim() !== '')
+      const firstCard = lines.findIndex(line => line.includes('job: pwsh-28'))
+      const commandLine = lines.findIndex(line => line.includes('pwsh -Command'))
+      const lastOutput = lines.findIndex(line => line.includes('narrow output'))
+      const body = firstCard >= 0 && lastOutput >= firstCard ? lines.slice(firstCard, lastOutput + 1) : []
+      check('G22 ' + cols + ' columns: long command tail remains visible', tailVisible, frame.lines().slice(0, 10).join('|'))
+      check('G22 ' + cols + ' columns: command starts below its job id', commandLine === firstCard + 1 && lines[commandLine]?.startsWith('│   pwsh -Command'), JSON.stringify(lines.slice(firstCard, firstCard + 4)))
+      check('G22 ' + cols + ' columns: all wrapped rows stay in the group rail', body.length >= 6 && body.every((line, index) => line.startsWith(index === 0 ? '╭ ' : index === body.length - 1 ? '╰ ' : '│ ')), JSON.stringify(body))
     }, cols)
   }
 }

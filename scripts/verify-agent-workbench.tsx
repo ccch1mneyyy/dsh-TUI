@@ -300,7 +300,7 @@ console.log('--- W3: workbench panel + sibling switching ---')
   // Mouse switching + the composer draft never travels across targets.
   const dispatchLog: Array<Record<string, unknown>> = []
   const control = {
-    via: 'claude-parent-mediated',
+    via: 'parent-mediated',
     steer: false,
     listTargets: async () => [],
     messages: () => [],
@@ -405,6 +405,20 @@ console.log('--- W4: dashboard children/peers partition ---')
     },
   )
 
+  // (1b) An empty peer roster is not useful panel content.
+  await withTerminal(
+    () => React.createElement(SubagentDashboard, {
+      subagents: [mainA] as never,
+      peers: [] as never,
+      variant: 'panel',
+      onSelect: () => {},
+    }),
+    async frame => {
+      await settled(() => frame.screen().includes('agent agent-a'))
+      check('W4 panel variant hides empty peers and its duplicate heading/footer', !frame.screen().includes(t('agents-peers-title')) && !frame.screen().includes(t('subagent-dashboard-title')) && !frame.screen().includes('Enter view detail'))
+    },
+  )
+
   // (2) partition: main-loop children first, nested spawns after with the
   // ↳ mark (known parent AND old-format unknown parent both nest).
   await withTerminal(
@@ -455,7 +469,7 @@ console.log('--- W4: dashboard children/peers partition ---')
 console.log('--- W6: transcript paging ---')
 {
   const fold = await import('../src/components/messages/subagentTranscript.js')
-  const message = (id: string, observedAt: number): Record<string, unknown> => ({ messageId: id, from: 'parent', to: 'agent-a', via: 'dsh-agent-relay', text: 'note ' + id, state: 'queued', observedAt })
+  const message = (id: string, observedAt: number): Record<string, unknown> => ({ messageId: id, from: 'parent', to: 'agent-a', via: 'agent-relay', text: 'note ' + id, state: 'queued', observedAt })
   const messages = [message('m-old', NOW - 90_000), message('m-mid', NOW - 35_000), message('m-new', NOW - 5_000)]
   const newest = [
     ev('assistant.message', { anchor: 'n1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'newest page text' }] }),
@@ -631,7 +645,7 @@ console.log('--- W5: side-panel detail composer ---')
     subagentControl: {
       interrupt: () => true,
       message: {
-        via: 'dsh-agent-relay',
+        via: 'agent-relay',
         steer: false,
         listTargets: async () => [],
         messages: () => [],

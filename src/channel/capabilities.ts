@@ -62,7 +62,7 @@ export function channelCapabilities(input: {
       // offered on a session that does not declare it (DSH included).
       ...(input.dsh || caps.channels === undefined ? [] : ['channel']),
     ]),
-    retractPending: caps.retractPending === true,
+    retractPending: caps.pendingRetraction !== undefined,
     ...flags,
     // Not a command requirement: `/mcp` itself stays on every backend.
     mcpControl: !input.dsh && caps.mcp?.reconnect !== undefined && caps.mcp.toggle !== undefined,

@@ -161,22 +161,24 @@ const app = await render(
 )
 
 try {
-  check('c mount: todo is the active capsule', await settled(() => has('‹ Todo ›'), { timeoutMs: 4000 }))
-  check('c mount: the three enabled tabs are drawn', has('ⓘ') && has('∿'))
+  check('c mount: todo is the active carousel title', await settled(() => has('Todo'), { timeoutMs: 4000 }))
+  check('c mount: two inactive panels use dots', (viewportLines(term, ROWS)[0]?.match(/[○●]/g) ?? []).length === 2)
   check('c mount: no ⤢ while a fullscreen-less panel is active', !has('⤢'))
 
-  const infoTab = findText('ⓘ')
-  if (infoTab !== null) click(infoTab.col, infoTab.row)
-  check('c info: capsule switched', await settled(() => has('‹ Info ›'), { timeoutMs: 4000 }))
+  const infoArrow = findText('▶')
+  if (infoArrow !== null) click(infoArrow.col, infoArrow.row)
+  check('c info: right arrow selects the next carousel title', await settled(() => has('Info') && !has('Todo'), { timeoutMs: 4000 }))
   // Labels come from i18n so a copy change cannot make this silently vacuous.
   check('c info: session section rendered', await settled(() => has(t('info-section-session')), { timeoutMs: 4000 }))
   check('c info: cache row rendered', has(t('info-row-cache')))
   check('c info: working dir row rendered', has(t('info-row-cwd')))
   check('c info: still no ⤢ (no fullscreen form)', !has('⤢'))
 
-  const trajTab = findText('∿')
-  if (trajTab !== null) click(trajTab.col, trajTab.row)
-  check('c trajectory: capsule switched', await settled(() => has('‹ Trajectory ›'), { timeoutMs: 4000 }))
+  const row = viewportLines(term, ROWS)[0] ?? ''
+  const rightDot = { col: row.indexOf('○', row.indexOf('Info') + 'Info'.length), row: 0 }
+  check('c trajectory: the next panel dot is visible', rightDot.col > 0, row)
+  if (rightDot.col > 0) click(rightDot.col + 1, rightDot.row)
+  check('c trajectory: clicking its dot selects the panel title', await settled(() => has('Trajectory') && !has('Info'), { timeoutMs: 4000 }), viewportLines(term, ROWS).slice(0, 5).join('|'))
   check('c trajectory: empty state without a build', await settled(() => has(t('panel-trajectory-empty').slice(0, 24)), { timeoutMs: 4000 }))
   check('c trajectory: ⤢ appears (declares capabilities.fullscreen)', has('⤢'))
 } finally {

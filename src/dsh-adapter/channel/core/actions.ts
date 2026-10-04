@@ -64,14 +64,6 @@ export function createCapabilityDelegates(deps: {
         notify(t('compact-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error' })
       })
     },
-    // Contract: a no-op when this process runs no compaction it may abort.
-    cancelCompact: () => {
-      try {
-        caps().compact?.cancel?.()
-      } catch (error) {
-        logForDebugging(`channel: compact cancel failed (${error instanceof Error ? error.message : String(error)})`)
-      }
-    },
     cycleMode: () => guarded('mode', undefined, async () => {
       const modes = caps().modes
       if (modes === undefined) { unavailable('mode'); return }
@@ -209,7 +201,7 @@ export function createCapabilityDelegates(deps: {
       if (caps().mcp === undefined) return deps.unavailableLines('mcp')
       // Synchronous by contract: the last report, and a fresh one for next time.
       const fence = mcpFence()
-      return deps.controls.mcpReport(fence.session, fence.current) ?? [t('claude-mcp-loading')]
+      return deps.controls.mcpReport(fence.session, fence.current) ?? [t('backend-mcp-loading')]
     },
     mcpControl: request => guarded('mcp', false, async () => {
       const mcp = caps().mcp

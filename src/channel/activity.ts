@@ -1,6 +1,6 @@
 /**
- * Backend-neutral subagent and background-task projection: the
- * `subagent.*`, `task.*` and `tasks.snapshot` events of a session, plus the
+ * Backend-neutral activity projection: `agent.message`, `subagent.*`,
+ * `task.*` and `tasks.snapshot` events of a session, plus the
  * child-lane events of its subagents (assistant / tool events carrying
  * `parentCallId`), become the `SubagentState` / `BackgroundJobState` rosters
  * the subagent dashboard, `/agents`, the `/jobs` panel and the status-line
@@ -31,10 +31,11 @@
 import { markChannelReadDirty } from '../adapter/channel/read-view.js'
 import type { ChannelUi } from '../adapter/ports/channel-ui.js'
 import type {
-  BackgroundJobOutputLine, BackgroundJobState, BackgroundJobStatus, ChatRow, JobRow, SubagentOutputKind,
+  AgentMessageView, BackgroundJobOutputLine, BackgroundJobState, BackgroundJobStatus, ChatRow, JobRow, SubagentOutputKind,
   SubagentOutputLine, SubagentRow, SubagentState, SubagentToolCall,
 } from '../adapter/ports/channel-view.js'
 import type { AgentEvent, AgentEventOf, SubagentUsage, TaskStatus } from '../agent/events.js'
+import { foldAgentMessage } from '../agent/messages.js'
 import { t } from '../i18n.js'
 import { formatJobDuration } from './job-format.js'
 import { preview } from './transcript.js'
@@ -190,6 +191,7 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
   const subagents = new Map<string, SubagentEntry>()
   const lanes = new Map<string, string>()
   const jobs = new Map<string, JobEntry>()
+  const agentMessages: AgentMessageView[] = []
   const watchers = new Map<string, number>()
   let tick: unknown
   let disposed = false
@@ -865,6 +867,9 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
         return
       }
       switch (event.type) {
+        case 'agent.message':
+          foldAgentMessage(agentMessages, event.message)
+          return
         case 'subagent.start':
           startSubagent(event)
           return
@@ -913,6 +918,7 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
     subagents.clear()
     lanes.clear()
     jobs.clear()
+    agentMessages.length = 0
     watchers.clear()
     stopTimer()
     const state = getState()
@@ -937,6 +943,9 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
     },
     job(id: string): BackgroundJobState | undefined {
       return jobs.get(id)?.state
+    },
+    agentMessages(): readonly AgentMessageView[] {
+      return agentMessages
     },
     /** `/agents`: one line per tracked subagent. */
     listLines(): string[] {

@@ -104,6 +104,7 @@ const stdin = new FakeStdin()
 
 // The chat column ends around 68% of the width; the divider sits just past it.
 const CHAT_COLUMN_END = Math.floor(COLS * 0.68) - 2
+const panelBar = (): string => termTest.viewportLines(term, ROWS)[0] ?? ''
 const occurrencesInChatColumn = (s: string): number => {
   const view = termTest.viewportLines(term, ROWS)
   let count = 0
@@ -143,7 +144,7 @@ try {
   stdin.write('\x02') // Ctrl+B: open(已开) + focus chat → focus panel
   check('focus: keyboard is in the panel', await settled(() => termTest.viewportLines(term, ROWS).some(l => l.includes('Esc chat')), { timeoutMs: 5000 }))
   stdin.write('2') // jump to the 2nd enabled panel = companion
-  check('active: companion capsule', await settled(() => termTest.viewportLines(term, ROWS).some(l => l.includes('‹ Companion ›')), { timeoutMs: 5000 }))
+  check('active: companion carousel title with navigation dots', await settled(() => panelBar().includes('Companion') && panelBar().includes('◀') && panelBar().includes('▶') && panelBar().includes('○'), { timeoutMs: 5000 }), panelBar().trim())
 
   // a. plain notice on the pet panel → bubble owns it; the chat column stays clean
   push({ id: 1, text: 'NOTICE-A-PET-SAYS' })
@@ -152,13 +153,13 @@ try {
 
   // b. switch to another panel → toast shows in the chat column
   stdin.write('[') // previous panel
-  check('switch: todo capsule again', await settled(() => termTest.viewportLines(term, ROWS).some(l => l.includes('‹ Todo ›')), { timeoutMs: 5000 }))
+  check('switch: todo carousel title again', await settled(() => panelBar().includes('Todo') && !panelBar().includes('Companion'), { timeoutMs: 5000 }), panelBar().trim())
   push({ id: 2, text: 'NOTICE-B-TOAST' })
   check('b: other panel active → toast shows in the chat column', await settled(() => occurrencesInChatColumn('NOTICE-B-TOAST') > 0, { timeoutMs: 5000 }))
 
   // c. error notice toasts even on the pet panel
   stdin.write('2')
-  check('back: companion capsule', await settled(() => termTest.viewportLines(term, ROWS).some(l => l.includes('‹ Companion ›')), { timeoutMs: 5000 }))
+  check('back: companion carousel title', await settled(() => panelBar().includes('Companion') && !panelBar().includes('Todo'), { timeoutMs: 5000 }), panelBar().trim())
   push({ id: 3, text: 'NOTICE-C-ERROR', color: 'error' })
   check('c: error notice still toasts on the pet panel', await settled(() => occurrencesInChatColumn('NOTICE-C-ERROR') > 0, { timeoutMs: 5000 }))
 } finally {

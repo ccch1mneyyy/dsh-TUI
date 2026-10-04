@@ -6,7 +6,6 @@ import type { BackgroundJobOutputChannel, BackgroundJobOutputLine } from '../../
 import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
 import wrapText from '../../ink/wrap-text.js'
-import { stringWidth } from '../../ink/stringWidth.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import { ProgressBar } from '../design-system/ProgressBar.js'
 
@@ -122,11 +121,8 @@ function waterfallWindow(
  * one bracket from the first card to the last — the group's summary line stays
  * OUTSIDE it. A lone card renders as before.
  *
- * The rail is drawn per line, which means this component owns the card's
- * HEIGHT: the label is pre-wrapped against an explicit column width (so the
- * wrap count is known, not guessed from the flex result), and the rail column
- * paints exactly that many glyphs. Both use ink's own `wrapText`/`stringWidth`,
- * so the pre-wrap breaks where the renderer would have broken.
+ * The rail is drawn per line, so this component measures the command row and
+ * output tail before painting the matching rail glyphs.
  */
 export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput }: {
   job: JobRow
@@ -173,31 +169,10 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput }: 
   // reserving width for it unconditionally would clip the label for nothing.
   const liveProgress = settled || job.progress === undefined || job.progress === '' ? undefined : job.progress
 
-  // A grouped card paints its rail line by line, so its HEIGHT must be known
-  // before the render: measure every fixed column and pre-wrap the label into
-  // whatever is left. The label column is then given that width EXPLICITLY —
-  // never a flex leftover — so the pre-wrapped line count is exactly what the
-  // renderer paints (both sides use ink's own wrapText/stringWidth, so the
-  // breaks match the ones a plain wrapping Text would have chosen).
   const railBody = settled && job.status !== 'completed' && headerDetail !== undefined
-  const fixedWidths = [
-    stringWidth(info.glyph),
-    stringWidth(headerName),
-    stringWidth(job.kind),
-    ...(liveProgress === undefined ? [] : [12]),
-    stringWidth(duration),
-    ...(headerDetail === undefined ? [] : [stringWidth(headerDetail)]),
-    stringWidth(info.label),
-  ]
-  // One gap between each pair of columns: (fixed + label) - 1 = fixed count.
-  const labelWidth = Math.max(
-    8,
-    cardColumns - (grouped ? 2 : 0) - fixedWidths.reduce((sum, width) => sum + width, 0) - fixedWidths.length,
-  )
-  // wrapText returns the wrapped STRING (newline separated), so the line
-  // count comes straight out of it.
-  const labelLines = grouped ? wrapText(job.label, labelWidth, 'wrap').split('\n') : undefined
-  const contentLines = (labelLines?.length ?? 1) + activity.length + (railBody ? 1 : 0)
+  const labelWidth = Math.max(8, rowWidth - 2)
+  const labelLines = wrapText(job.label, labelWidth, 'wrap').split('\n')
+  const contentLines = 1 + labelLines.length + activity.length + (railBody ? 1 : 0)
   const railGlyphs: string[] = []
   if (grouped) {
     for (let index = 0; index < contentLines; index++) {
@@ -219,10 +194,7 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput }: 
   // 落在第 2 列。
   const body = (
     <>
-    {/* Fixed columns around ONE flexible label: the other columns hold their
-      * width while the label wraps, so the grid survives any label length and
-      * the progress chip (the old header reserved a hand-counted width and
-      * overflowed by exactly the chip's width). */}
+    {/* Keep status and timing beside the id; the command gets its own row below. */}
     <Box flexDirection="row" gap={1}>
       {/* The status glyph leads the row. flexShrink={0} like every other
         * fixed column: a wrapped label over-constrains the row, and an
@@ -237,18 +209,7 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput }: 
         </Text>
       </Box>
       <Box flexShrink={0}><Text dimColor>{job.kind}</Text></Box>
-      {/* The label is the one flexible column: it WRAPS here (a long
-        * command stays readable instead of vanishing into an ellipsis in a
-        * narrow terminal) while every other column keeps its fixed width. */}
-      {labelLines === undefined ? (
-        <Box flexGrow={1} flexShrink={1}>
-          <Text>{job.label}</Text>
-        </Box>
-      ) : (
-        <Box width={labelWidth} flexShrink={0} flexDirection="column">
-          {labelLines.map((line, index) => <Text key={index}>{line}</Text>)}
-        </Box>
-      )}
+
       {liveProgress !== undefined && (
         <Box width={12} flexShrink={0}>
           <JobProgress progress={liveProgress} />
@@ -257,6 +218,9 @@ export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput }: 
       <Box flexShrink={0}><Text dimColor>{duration}</Text></Box>
       {headerDetail !== undefined && <Box flexShrink={0}><Text dimColor wrap="truncate-end">{headerDetail}</Text></Box>}
       <Box flexShrink={0}><Text color={info.color}>{info.label}</Text></Box>
+    </Box>
+    <Box width={rowWidth} flexShrink={0} flexDirection="column" paddingLeft={2}>
+      {labelLines.map((line, index) => <Text key={index}>{line}</Text>)}
     </Box>
     {!settled && activity.length > 0 && activity.map(entry => (
       // key 不含 time（同 SubagentMessage 的约定）：内容更新走 in-place

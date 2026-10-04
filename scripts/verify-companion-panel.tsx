@@ -443,8 +443,8 @@ try {
   fakeChannel.notifications = []
   const a = await scene(140, 30, fakeActivity, { approvals: 0, questions: 0 }, 'todo,jobs,agents,companion')
   try {
-    await settled(() => a.lines().some(l => l.includes('♥')))
-    check('enable: companion ♥ tab appears in the bar', a.lines().some(l => l.includes('♥')))
+    await settled(() => (a.lines()[0]?.match(/[○●]/g) ?? []).length === 3)
+    check('enable: companion panel appears as an inactive carousel dot', (a.lines()[0]?.match(/[○●]/g) ?? []).length === 3)
     a.controller?.openPanel('companion', { focus: true })
     await settled(() => artRows(a.lines()).length > 0, { timeoutMs: 8000 })
     check('wide: deepy sprite frames render (half-block art rows)', artRows(a.lines()).length > 0)

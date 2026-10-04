@@ -99,15 +99,15 @@ export function createSessionControls(deps: {
       if (!current()) return
       mcpNames = servers.map(server => server.name)
       mcpLines = servers.length === 0
-        ? [t('claude-mcp-none')]
+        ? [t('backend-mcp-none')]
         : [
-            t('claude-mcp-heading', { n: servers.length }),
-            ...servers.map(server => t('claude-mcp-row', {
+            t('backend-mcp-heading', { n: servers.length }),
+            ...servers.map(server => t('backend-mcp-row', {
               name: server.name,
               status: server.status,
-              tools: server.toolCount === undefined ? '' : t('claude-mcp-tools', { n: server.toolCount }),
+              tools: server.toolCount === undefined ? '' : t('backend-mcp-tools', { n: server.toolCount }),
             })),
-            ...(servers.some(server => server.status === 'needs-auth') ? [t('claude-mcp-needs-auth')] : []),
+            ...(servers.some(server => server.status === 'needs-auth') ? [t('backend-mcp-needs-auth')] : []),
           ]
     }).catch(debugFailure('mcp status'))
   }
@@ -119,7 +119,7 @@ export function createSessionControls(deps: {
     void context.usage('summary').then(usage => {
       if (!current()) return
       const state = deps.state()
-      const tokens = (n: number): string => t('claude-context-tokens', { n: n.toLocaleString() })
+      const tokens = (n: number): string => t('context-tokens', { n: n.toLocaleString() })
       // The summary report may carry no per-section split (the CLI answers
       // it from the last response's usage): the used categories stand in.
       const sections = usage.sections ?? []

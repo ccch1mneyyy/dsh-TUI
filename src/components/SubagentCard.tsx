@@ -10,29 +10,27 @@ function formatDuration(ms: number): string {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m${seconds % 60}s`
 }
 
-export interface SubagentCardProps { subagent: SubagentState; focused?: boolean; onClick?(event: ClickEvent): void }
+export interface SubagentCardProps {
+  subagent: SubagentState
+  focused?: boolean
+  onClick?(event: ClickEvent): void
+  variant?: 'default' | 'panel'
+}
 
-export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps): React.ReactNode {
+export function SubagentCard({ subagent, focused, onClick, variant = 'default' }: SubagentCardProps): React.ReactNode {
+  const panelMode = variant === 'panel'
   const running = subagent.status === 'running' || subagent.status === 'starting'
-  // Only a live run ticks; discovered history (`unknown`) has no end time to
-  // count from, so it must not accumulate a fake growing duration.
+  // Unknown rows have no completion time, so they do not get a fabricated duration.
   const elapsed = running
     ? Date.now() - subagent.startedAt
     : subagent.completedAt !== undefined ? subagent.completedAt - subagent.startedAt : undefined
-  // The backend's own counts win over locally kept records: missed lane
-  // frames must not show 0 tools, and the reported duration carries no
-  // host receive delay. No report → the local records.
+  // Prefer backend-reported totals; fall back to the locally observed records.
   const toolsCount = subagent.reportedToolUses ?? subagent.toolCalls.length
   const shownDuration = subagent.reportedDurationMs ?? elapsed
   const total = subagent.tokens?.total ?? ((subagent.tokens?.input ?? 0) + (subagent.tokens?.output ?? 0) || 0)
   // Mouse affordance: clickable cards tint on hover; the keyboard-focused
   // card keeps its brand-color header (no double highlight).
   const [hovered, setHovered] = useState(false)
-  // Live preview: the newest streamed line rides under the header while the
-  // subagent runs, then folds away — the dashboard stays one line per settled
-  // subagent. Deliberately NOT revived on hover: an extra line would grow
-  // the card mid-gesture and reshuffle the whole dashboard list (user
-  // feedback: hover must never change layout). The hover tint stays.
   const liveLine = running ? subagent.output[subagent.output.length - 1] : undefined
   const minimalUi = isMinimalUiMode()
   const glyph = running ? (minimalUi ? '·' : '🟡')
@@ -45,21 +43,18 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
     : subagent.status === 'failed' || subagent.status === 'cancelled' ? 'error' as const
     : 'success' as const
   const hoverTint = onClick !== undefined && hovered && !focused
-  // 窄宽排版（侧栏 Panel 常态 28~44 列）：meta 按优先级分段降级——
-  // 时长永远在，tools / tokens / model 随宽度依次退出；描述拿剩余预算
-  // truncate-end，绝不在行中间任意折行（38 列面板上描述被拦腰截断、
-  // 统计列挤进第二行的旧渲染就是这么来的）。
+  // Keep the description on one row; narrower panels progressively drop metadata.
   const { columns } = useTerminalSize()
   const metaParts: string[] = []
   if (columns >= 56) metaParts.push(subagent.model ?? subagent.provider ?? 'default')
   if (shownDuration !== undefined) metaParts.push(formatDuration(shownDuration))
   if (columns >= 44) metaParts.push(`${total || '—'} tok`)
-  if (columns >= 34) metaParts.push(`${toolsCount} tools`)
+  if (columns >= 34 && (!panelMode || toolsCount > 0)) metaParts.push(`${toolsCount} tools`)
   const meta = metaParts.join(' · ')
   return <Box
     flexDirection="column"
     paddingLeft={1}
-    marginBottom={1}
+    marginBottom={panelMode ? 0 : 1}
     onClick={onClick}
     onMouseEnter={onClick !== undefined ? () => setHovered(true) : undefined}
     onMouseLeave={onClick !== undefined ? () => setHovered(false) : undefined}
@@ -70,7 +65,7 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
         <Text color={glyphColor}>{glyph}</Text>
       </Box>
       <Box flexGrow={1} flexShrink={1} overflow="hidden">
-        <Text bold color={focused ? 'accent' : undefined} wrap="truncate-end">{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
+        <Text bold color={focused ? 'accent' : undefined} wrap="truncate-end">{panelMode ? subagent.description : `${t('subagent-card-prefix')}${subagent.description}`}</Text>
       </Box>
       {subagent.mode === 'continuable' && (
         <Box flexShrink={0} marginLeft={1}>
@@ -88,6 +83,6 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
         </Box>
       )}
     </Box>
-    {liveLine && <Text dimColor wrap="truncate">{`  │ ${liveLine}`}</Text>}
+    {liveLine !== undefined && !panelMode && <Text dimColor wrap="truncate">{`  │ ${liveLine}`}</Text>}
   </Box>
 }

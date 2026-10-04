@@ -101,9 +101,8 @@ export function createInputActions(
       if (index === -1) return false
       // A docked preview is a channel-side asset: the backend dropped its
       // queued copy with the aborted turn, so pulling it back is purely
-      // local and works on every backend, including those without
-      // live-inbox withdrawal (`retractPending` false, the Claude CLI);
-      // the gate below only governs live queue items.
+      // local and works on every backend, including backends without
+      // pending-message withdrawal; the gate below only governs live queue items.
       if (state.pending[index]!.docked === true) {
         // A dock the pending receipt has not vouched for is view-only:
         // its backend copy may still run, so editing the row out now would
@@ -114,23 +113,9 @@ export function createInputActions(
         state.emit()
         return true
       }
-      // A backend that cannot withdraw synchronously is never asked: starting
-      // an async removal and reporting failure here would leave the message
-      // both "kept" in the UI and maybe-withdrawn in the backend. The caller
-      // (PromptInput) keeps it queued and says it cannot be retracted.
-      if (!state.backendCapabilities.retractPending) return false
-      // The backend withdraws it (DSH: through the agent's inbox, which durably
-      // records the cancellation and reports the discard that retires the
-      // preview). Refuse when the message was already claimed so the UI never
-      // pretends a ghost send was pulled back; this contract is synchronous.
-      const removed = session.removePending(id)
-      if (typeof removed !== 'boolean') {
-        // Contract violation (retractPending declared, async answer): never
-        // report a withdrawal that has not happened; the backend's own
-        // pending.changed retires the preview if it does go through.
-        void Promise.resolve(removed).catch(() => false)
-        return false
-      }
+      const retraction = session.capabilities.pendingRetraction
+      if (retraction === undefined) return false
+      const removed = retraction.remove(id)
       if (!removed) return false
       state.pending = state.pending.filter(item => item.id !== id)
       state.emit()
@@ -252,9 +237,9 @@ export function createInputActions(
         }
         // The unconfirmed legs are loud: a failed or answerless interrupt
         // must not leave a success-shaped dock (or a silently failed Esc).
-        const notice = outcome === 'failed' ? t('claude-interrupt-failed')
+        const notice = outcome === 'failed' ? t('interrupt-failed')
           : revoke.size === 0 ? undefined
-          : t('claude-interrupt-unconfirmed')
+          : t('interrupt-unconfirmed')
         if (notice !== undefined) state.notify(notice, { color: 'warning', timeoutMs: 6000 })
       }
       void session.cancel('interrupt')

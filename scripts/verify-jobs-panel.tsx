@@ -564,7 +564,7 @@ class FakeStdout extends Writable {
   columns = COLS
   rows = ROWS
   isTTY = true
-  constructor(private term: InstanceType<typeof XTerm>) { super() }
+  constructor(private term: InstanceType<typeof XTerm>, columns = COLS) { super(); this.columns = columns }
   _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
     this.term.write(String(chunk), callback)
   }
@@ -578,9 +578,10 @@ class Input extends PassThrough {
 async function withTerminal(
   make: () => React.ReactNode,
   run: (screen: () => string, rerender: (node: React.ReactNode) => void, stdin: Input) => Promise<void>,
+  cols = COLS,
 ): Promise<void> {
-  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
-  const stdout = new FakeStdout(term) as unknown as NodeJS.WriteStream
+  const term = new XTerm({ cols, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(term, cols) as unknown as NodeJS.WriteStream
   const stdin = new Input()
   const instance = await render(make(), {
     stdout,
@@ -711,6 +712,32 @@ await withTerminal(
     check('C4 未知 initialFocusId 回退首行', text.includes('❯') && text.includes('pwsh-1'))
   },
 )
+// G16 — side-panel rows put each command under its fixed id/status header.
+console.log('--- G16: panel commands wrap below the job header ---')
+{
+  const tail = 'PANEL-COMMAND-TAIL'
+  const label = 'pwsh -Command ' + 'Write-Output long-command-segment; '.repeat(3) + tail
+  for (const cols of [28, 34]) {
+    await withTerminal(
+      () => React.createElement(JobsPanel, {
+        jobs: [{ ...runningJob, label, command: label }],
+        variant: 'panel',
+        onClose: (): void => {},
+        onKill: (): void => {},
+      }),
+      async screen => {
+        await sleep(150) // 固定窗:探针 G16 面板行布局落定
+        const lines = screen().split('\n')
+        const header = lines.findIndex(line => line.includes('pwsh-1'))
+        const command = lines.findIndex(line => line.includes('pwsh -Command'))
+        check('G16 ' + cols + ' columns: command tail remains visible', screen().includes(tail), lines.slice(0, 8).join('|'))
+        check('G16 ' + cols + ' columns: command starts below its id row', command > header && lines[command]?.startsWith('   pwsh -Command'), JSON.stringify(lines.slice(header, command + 2)))
+      },
+      cols,
+    )
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Group D — 按键归属：/jobs 面板打开时 Esc 关面板，不得同时中断对话
 // ---------------------------------------------------------------------------

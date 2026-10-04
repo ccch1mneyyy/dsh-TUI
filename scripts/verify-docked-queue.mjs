@@ -149,13 +149,12 @@ const launchOptions = { model: 'deepseek-chat', cwd: '/tmp', provider: 'deepseek
 
 // ─────────────────────── Section B: Claude fixture ────────────────────────
 // A raw AgentSession shaped like the Claude backend: no live-inbox
-// withdrawal (removePending false, retractPending therefore false) and an
+// withdrawal capability and an
 // interrupt receipt that answers still_queued.
 function makeClaudeSession({ stillQueuedOnInterrupt, cancelReceipt } = {}) {
   const state = {
     submits: [],
     cancels: [],
-    removePendingCalls: [],
     listeners: new Set(),
     keptIds: [],
   }
@@ -173,10 +172,6 @@ function makeClaudeSession({ stillQueuedOnInterrupt, cancelReceipt } = {}) {
       state.submits.push(input)
       if (stillQueuedOnInterrupt === true) state.keptIds.push(input.clientMessageId)
       return Promise.resolve({ accepted: true })
-    },
-    removePending(id) {
-      state.removePendingCalls.push(id)
-      return false
     },
     cancel(cause) {
       state.cancels.push(cause)
@@ -212,7 +207,7 @@ function makeClaudeSession({ stillQueuedOnInterrupt, cancelReceipt } = {}) {
   // THE retract fix: a docked row retracts locally even though the session
   // reports no withdrawal capability at all.
   const dockedId = channel.pending[0]?.id
-  check('B4 docked retract works without retractPending', channel.removePending(dockedId) === true && state.removePendingCalls.length === 0 && channel.pending.length === 1)
+  check('B4 docked retract works without retractPending', channel.removePending(dockedId) === true && channel.pending.length === 1)
 
   check('B5 deliverDocked counts', channel.deliverDocked() === 1)
   check('B5 docked text delivered exactly once', await settled(() => {
@@ -251,14 +246,14 @@ function makeClaudeSession({ stillQueuedOnInterrupt, cancelReceipt } = {}) {
   await settle(() => channel.pending.length === 1)
   check('C1 dock counted', channel.interruptAndDock() === 1)
   check('C1 a rejected interrupt un-docks the row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
-  check('C1 the failure is notified', channel.notifications.some(item => item.text === t('claude-interrupt-failed')), JSON.stringify(channel.notifications))
+  check('C1 the failure is notified', channel.notifications.some(item => item.text === t('interrupt-failed')), JSON.stringify(channel.notifications))
   check('C1 nothing re-delivers over the live copy', channel.deliverDocked() === 0)
   check('C1 the SDK accepted exactly one copy of the intent', state.submits.filter(input => input.text === 'queued').length === 1, JSON.stringify(state.submits.map(input => input.text)))
   // Only a CONFIRMED-cancelled (docked) copy may be retracted locally
   // (B4): the un-docked row's backend copy still lives, so withdrawal
   // belongs to the backend — which this fixture (Claude shape) cannot do,
   // and the row stays queued rather than silently vanishing.
-  check('C1 an un-docked row is not locally retractable', channel.removePending(channel.pending[0]?.id) === false && state.removePendingCalls.length === 0 && channel.pending.length === 1, JSON.stringify(channel.pending))
+  check('C1 an un-docked row is not locally retractable', channel.removePending(channel.pending[0]?.id) === false && channel.pending.length === 1, JSON.stringify(channel.pending))
 }
 {
   // C2 — an older CLI answers no receipt (undefined → unknown) and keeps
@@ -269,7 +264,7 @@ function makeClaudeSession({ stillQueuedOnInterrupt, cancelReceipt } = {}) {
   await settle(() => channel.pending.length === 1)
   check('C2 dock counted', channel.interruptAndDock() === 1)
   check('C2 an answerless interrupt un-docks the row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
-  check('C2 the unconfirmed dock is notified', channel.notifications.some(item => item.text === t('claude-interrupt-unconfirmed')), JSON.stringify(channel.notifications))
+  check('C2 the unconfirmed dock is notified', channel.notifications.some(item => item.text === t('interrupt-unconfirmed')), JSON.stringify(channel.notifications))
   check('C2 deliverDocked sends nothing', channel.deliverDocked() === 0)
   check('C2 exactly one copy accepted', state.submits.filter(input => input.text === 'old cli msg').length === 1, JSON.stringify(state.submits.map(input => input.text)))
 }
@@ -292,7 +287,7 @@ function makeClaudeSession({ stillQueuedOnInterrupt, cancelReceipt } = {}) {
     const uncovered = channel.pending.find(item => item.text === 'during request')
     return covered?.docked === true && uncovered?.docked !== true
   }), JSON.stringify(channel.pending))
-  check('C3 the uncovered row is notified as unconfirmed', channel.notifications.some(item => item.text === t('claude-interrupt-unconfirmed')), JSON.stringify(channel.notifications))
+  check('C3 the uncovered row is notified as unconfirmed', channel.notifications.some(item => item.text === t('interrupt-unconfirmed')), JSON.stringify(channel.notifications))
   check('C3 only the confirmed-cancelled copy re-sends', channel.deliverDocked() === 1)
   const texts = () => state.submits.map(input => input.text)
   await settle(() => texts().length === 3)
@@ -874,7 +869,7 @@ const selectorHighlightVisible = (term, texts) =>
     JSON.stringify(channel.pending))
   release({ stillQueued: [], outcome: 'unknown' })
   check('E3 an answerless receipt un-docks the provisional row', await settled(() => channel.pending.length === 1 && channel.pending[0]?.docked !== true), JSON.stringify(channel.pending))
-  check('E3 the unconfirmed verdict is notified', channel.notifications.some(item => item.text === t('claude-interrupt-unconfirmed')), JSON.stringify(channel.notifications))
+  check('E3 the unconfirmed verdict is notified', channel.notifications.some(item => item.text === t('interrupt-unconfirmed')), JSON.stringify(channel.notifications))
   const texts = () => state.submits.map(input => input.text)
   check('E3 the SDK accepted exactly one copy', texts().filter(text => text === 'e3 intent').length === 1, JSON.stringify(texts()))
 }

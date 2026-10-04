@@ -129,7 +129,7 @@ const NEW = '00000000-0000-4000-8000-00000000beef'
     history: () => Promise.resolve([]),
     subscribe(listener: (batch: readonly import('../src/agent/events.js').AgentEvent[], meta: import('../src/agent/events.js').AgentEventMeta) => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
     submit: () => Promise.resolve({ accepted: true }),
-    removePending: () => false,
+
     cancel: () => Promise.resolve({ stillQueued: [] }),
     dispose: () => Promise.resolve(),
   }
