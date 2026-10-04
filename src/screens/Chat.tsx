@@ -1245,7 +1245,13 @@ export function Chat({
   const [btwOverlayOpen, setBtwOverlayOpen] = React.useState(false)
   /** ⤢ fullscreen thread scene (openPanelFullscreen 'btw' route). */
   const [btwSceneOpen, setBtwSceneOpen] = React.useState(false)
-  const btwOverlayThread = React.useSyncExternalStore(btwThreads.subscribe, () => btwThreads.get(String(channel.agentId)))
+  // Only the fallback overlay reads the thread here. With the overlay closed
+  // the snapshot stays undefined, so an answer streaming into the sidebar
+  // panel does not re-render the whole Chat on every delta.
+  const btwOverlayThread = React.useSyncExternalStore(
+    btwThreads.subscribe,
+    () => (btwOverlayOpen ? btwThreads.get(String(channel.agentId)) : undefined),
+  )
   const closeBtwOverlay = () => {
     // Fallback parity with the pre-thread overlay: closing cancels the
     // in-flight ask (completed turns stay in the thread).
