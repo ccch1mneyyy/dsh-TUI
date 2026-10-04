@@ -22,6 +22,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { markChannelReadDirty } from '../../../adapter/channel/read-view.js'
 import type { AgentCapabilities } from '../../../adapter/ports/channel-capabilities.js'
+import type { AgentIdentity, AgentMessageSubmitInput, AgentMessageSubmitResult } from '../../../adapter/ports/channel-view.js'
 import type { OAuthSetupHost } from '../../../adapter/ports/channel-settings.js'
 import type { AgentSession } from '../../../agent/session.js'
 import { createActivityProjection } from '../../../channel/activity.js'
@@ -285,6 +286,13 @@ export function createCoreChannel(
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
   const inputConvergence: InputConvergence = { interruptSeq: 0, cancelInFlight: false, cancelCause: undefined }
+  /**
+   * Monotonic counter for the parent-mediated message intents (agent-team
+   * §5.2): the intentId names the LOCAL submission only — it is never a
+   * durable message id, and the parent's own SendMessage call (whenever the
+   * model makes it) is correlated by its call id, not by this.
+   */
+  let agentMessageIntents = 0
 
   const actionReadiness = createChannelActionReadiness()
   const getReadyActions = (): ChannelActionDelegates => {
@@ -418,6 +426,40 @@ export function createCoreChannel(
           const history = binding.session.capabilities.subagents?.history
           if (history === undefined) return Promise.resolve(null)
           return history(agentId, window).catch(() => null)
+        },
+      }),
+      /**
+       * agent-team §5.2: the parent-mediated message control, composed only
+       * when the bound session declares the relay-observation capability
+       * (Claude; a DSH session's extension replaces this whole control with
+       * its direct continuable one). The submit path is the PARENT's own
+       * submission pipeline: one directed-instruction envelope, fixed
+       * 'followup' (never steer, never the dock — agent-team §6), through
+       * the same FIFO/decision chain a typed message takes; 'issued' is the
+       * honest ceiling of what that acceptance proves. The parent model
+       * decides autonomously whether and when to relay (SendMessage).
+       */
+      ...(binding.session.capabilities.subagents?.message === undefined ? {} : {
+        message: {
+          via: 'claude-parent-mediated' as const,
+          steer: false as const,
+          listTargets: (): Promise<readonly AgentIdentity[]> => Promise.resolve(state.subagents.map(sub => ({
+            agentId: sub.agentId,
+            ...(sub.sessionId === undefined ? {} : { sessionId: sub.sessionId }),
+            label: sub.description,
+            ...(sub.mode === undefined ? {} : { mode: sub.mode }),
+            status: sub.status,
+          }))),
+          submit: (input: AgentMessageSubmitInput): Promise<AgentMessageSubmitResult> => {
+            const text = input.text.trim()
+            if (text === '') return Promise.resolve({ ok: false, reason: 'failed', message: 'empty text' })
+            const name = input.targetName !== undefined && input.targetName.trim() !== '' ? input.targetName.trim() : input.targetId
+            const envelope = t('agent-message-envelope', { name, id: input.targetId, text })
+            const intentId = `agent-message-${(agentMessageIntents += 1)}`
+            dispatchUserText(envelope, 'followup', [], undefined)
+            return Promise.resolve({ ok: true, intentId, state: 'issued' })
+          },
+          messages: () => binding.session.capabilities.subagents?.message?.messages() ?? [],
         },
       }),
     },

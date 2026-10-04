@@ -178,6 +178,11 @@ const dict = {
   'input-images-staged': { zh: '已附加 {{count}} 张图片', en: { one: 'Attached {{count}} image', other: 'Attached {{count}} images' } },
   'input-images-staged-adapted': { zh: '已附加 {{count}} 张图片 · {{adapted}} 张已适配', en: { one: 'Attached {{count}} image · {{adapted}} adapted', other: 'Attached {{count}} images · {{adapted}} adapted' } },
   'send-failed': { zh: '发送失败 · {{err}}', en: 'Send failed · {{err}}' },
+  // ── agent-team: 用户到子代理消息（通道层的父中介信封，模型可见） ──────
+  'agent-message-envelope': {
+    zh: '请把下面这条用户消息原样转发给子代理「{{name}}」（目标标识 {{id}}）：使用 SendMessage 工具投递，不要改写内容，也不要代替它作答。转发后简短告知结果即可。\n\n{{text}}',
+    en: 'Please relay the following user message verbatim to subagent "{{name}}" (target id {{id}}): deliver it with the SendMessage tool, do not rewrite its content and do not answer on its behalf. Briefly report the outcome afterwards.\n\n{{text}}',
+  },
   // ── backends: capability-gated actions and commands ─────────────────
   'session-cleared': { zh: '会话已清屏', en: 'Session cleared' },
   'conversation-reset': { zh: '后端重置了对话：之前的上下文已清空', en: 'The backend reset the conversation: the earlier context is gone' },
