@@ -982,6 +982,12 @@ const GROUPS = {
 // 分代（含上一 epoch 迟到 end 不得错杀）、resume 日志 bootstrap（历史行
 // 不进转录）、会话绑定延迟愈合与 peer 会话不污染。
     ["verify-subagent-panel-sync", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-panel-sync.tsx']],
+// 主屏只读 Agent View / 子代理消息 composer / 代理↔代理消息流（design
+// agent-team-full §7 UI 条目）：三入口来源栈与 Esc 分层、父 rows/草稿往返
+// 不变、无 history 回退 tail+范围标注（不自称 history）、composer queue/steer
+// 与失败保草稿、无 name/重名/无能力降级、状态词表只认通道给的、未知关系
+// 不画箭头、28/40 列顶栏不溢出、Detail Messages 页与 Dashboard 摘要行。
+    ["verify-agent-view-ui", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-view-ui.tsx']],
 // 子进程 stderr 接管回归（issue #17）：inherit 的 MCP 子进程 stderr
 // 不再裸写终端破坏 alt-screen，输出去重聚合为受控通知。
     ["verify-child-stderr", ['node', '--import', 'tsx/esm', 'scripts/verify-child-stderr.tsx']],
