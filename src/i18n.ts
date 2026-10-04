@@ -2207,6 +2207,7 @@ const dict = {
   'kernel-probing': { zh: '检测中…', en: 'Checking…' },
   'kernel-already-current': { zh: '已经是当前内核', en: 'Already the current kernel' },
   'kernel-switch-unavailable': { zh: '当前环境不支持切换内核', en: 'Switching kernels is unavailable here' },
+  'kernel-switch-while-working': { zh: '回合运行中，无法切换内核', en: 'Cannot switch kernels while a turn is running' },
   'kernel-pinned-hint': {
     zh: '启动参数已指定内核：本次会按你的选择重启，下次直接启动仍按参数进入。',
     en: 'A startup flag pins the kernel: this restart follows your choice, a later direct launch follows the flag.',
@@ -2222,6 +2223,7 @@ const dict = {
   'channel-action-view': { zh: '≡ 查看映射', en: '≡ View mappings' },
   'channel-picker-hint': { zh: '↑↓ 移动 · Enter 切换/执行 · Esc 关闭', en: '↑↓ move · Enter switch/run · Esc close' },
   'channel-already-active': { zh: '已是当前渠道', en: 'Already the active channel' },
+  'channel-switch-while-working': { zh: '回合运行中，无法切换或改动渠道', en: 'Cannot switch or change channels while a turn is running' },
   'channel-conn-settings-mismatch': {
     zh: 'settings.json 的 ANTHROPIC_BASE_URL 与当前渠道 {{name}} 不一致；本会话按渠道配置连接（settings.json 不改，直接运行 claude 时仍按它）',
     en: 'The ANTHROPIC_BASE_URL in settings.json differs from the active channel {{name}}; this session connects as the channel says (settings.json is left as is for running claude directly)',

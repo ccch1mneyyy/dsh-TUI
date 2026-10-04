@@ -811,14 +811,10 @@ export function Chat({
     }).catch(() => undefined)
   }, [launchpadShown])
   /**
-   * 内核（backend）选择器的目录——/kernel、启动页「内核」入口与右下角
-   * 内核行共用同一份派生值：
-   *   - `current` 来自 bound session 的能力快照（channel.backendCapabilities
-   *     .backendId），批次A 起就是内核身份的唯一来源；
-   *   - DSH 的版本是 contract 的真实读数（与右下角铭牌同源，读不到就没有
-   *     副行）；
-   *   - Claude 的探测由组合根注入（Chat 不 import 任何具体后端），只在首次
-   *     需要时探一次，结果缓存到进程结束。
+   * 内核选择器的目录。/kernel、启动页「内核」入口与右下角内核行共用这一份：
+   * 当前内核取自会话能力快照的 backendId；DSH 版本取已安装 contract 的读数
+   * （读不到就不画副行）；Claude 的探测由组合根注入（Chat 不 import 具体
+   * 后端），首次需要时探一次，结果留到进程结束。
    */
   const kernelCurrentId = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendId ?? 'dsh'
   const [kernelProbe, setKernelProbe] = React.useState<ClaudeKernelStatus | undefined>(undefined)
@@ -826,8 +822,7 @@ export function Chat({
   const requestKernelProbe = React.useCallback((): void => {
     if (kernelProbeStartedRef.current || onProbeKernels === undefined) return
     kernelProbeStartedRef.current = true
-    // 组合根已经吞掉抛错；这里再兜一层，失败一律按「未安装」作答——
-    // 选择器只会把那一行画灰，绝不假装能切过去。
+    // 探测失败按「未安装」处理：那一行画灰，不给一个点了会失败的入口。
     void onProbeKernels().then(setKernelProbe).catch(() => { setKernelProbe({ installed: false }) })
   }, [onProbeKernels])
   const kernelOptions = React.useMemo(
@@ -838,27 +833,21 @@ export function Chat({
     }),
     [kernelCurrentId, kernelVersion, kernelProbe],
   )
-  // 落地页一起来就把探测挂上：右下角那几行该在用户看见它之前尽量落定，
-  // 而不是等他点开选择器才开始等。
+  // 启动页一出现就开始探测，右下角的内核行尽量在用户看到前就有结果。
   React.useEffect(() => {
     if (launchpadShown) requestKernelProbe()
   }, [launchpadShown, requestKernelProbe])
   /** 当前内核在目录里的行号（选择器打开时的落点；找不到就落第一行）。 */
   const kernelCurrentIndex = Math.max(0, kernelOptions.findIndex(option => option.current))
-  /**
-   * 开内核选择器（三条入口共用一条路：/kernel、启动页「内核」入口、右下角
-   * 内核区）。落点默认是当前内核那一行，调用方可以指定别的行。
-   */
+  /** 打开内核选择器，默认落在当前内核那一行。 */
   const openKernelPicker = React.useCallback((index?: number): void => {
     requestKernelProbe()
     dispatchOverlay({ type: 'open', overlay: { kind: 'kernel', index: index ?? kernelCurrentIndex } })
   }, [kernelCurrentIndex, requestKernelProbe])
   /**
-   * 内核选择器的确认路径（键盘 Enter 与鼠标点击同一条）：
-   *   - 不可选（未安装 / 未登录 / 探测中）→ 只提示原因，选择器留在屏上；
-   *   - 选的就是当前内核 → 提示一句并收起；
-   *   - 其余 → 交给组合根 onSwitchBackend（写记忆 → 通知 → 以新内核重启）。
-   * 正在跑的回合拒绝切换：切内核等于换进程，与 /restart 同一道闸。
+   * 内核选择器的确认（Enter 与鼠标点击共用）：不可选的行只提示原因，选择器
+   * 留在屏上；选当前内核就提示并收起；其余交给组合根 onSwitchBackend（记住
+   * 选择后以新内核重启）。切内核要换进程，回合运行中拒绝，与 /restart 一致。
    */
   const pickKernel = (index: number): void => {
     const option = kernelOptions[index]
@@ -877,17 +866,15 @@ export function Chat({
       return
     }
     if (channel.working) {
-      channel.notify(t('update-working'), { color: 'warning' })
+      channel.notify(t('kernel-switch-while-working'), { color: 'warning' })
       return
     }
     dispatchOverlay({ type: 'close' })
     onSwitchBackend(option.id)
   }
   /**
-   * 渠道档案（/channel）名册：listChannels 同步现读 channels.json（仅 channels
-   * 能力的后端有行；夹具容错同 listModes——缺委托读作空名册）。名册不冻进
-   * overlay：切换/导入后 tick 自增 → useMemo 重读，✓ 与行自己就刷新。
-   * 普通渲染零文件 IO（useMemo 只在 /channel 活动时重算）。
+   * /channel 的渠道名册（只有声明了 channels 能力的内核才有行）。名册不存进
+   * overlay，切换/导入后 tick 加一触发重读，✓ 与行随之刷新。
    */
   const [channelRosterTick, setChannelRosterTick] = React.useState(0)
   const channelSnapshot = React.useMemo(
@@ -902,17 +889,14 @@ export function Chat({
     { kind: 'manage' },
     { kind: 'view' },
   ]
-  /**
-   * 开渠道选择器（落点默认当前渠道行；没有渠道就落在导入行）。重读一次名册，
-   * 让「打开前文件被手改」也能看到最新状态。
-   */
+  /** 打开渠道选择器，落在当前渠道行（没有渠道就落在导入行）。打开前重读
+   *  一次名册，文件被手改过也能看到。 */
   const openChannelPicker = React.useCallback((): void => {
     setChannelRosterTick(tick => tick + 1)
     const fresh = typeof channel.listChannels === 'function' ? channel.listChannels() : { channels: [], activeId: undefined }
     dispatchOverlay({ type: 'open', overlay: { kind: 'channel', index: Math.max(0, fresh.channels.findIndex(option => option.id === fresh.activeId)) } })
   }, [channel])
-  /** 查看映射：当前渠道的 models+tiers 作为 /channel 本地转录块（只读面，
-   * 逐条编辑不在选择器里——提示行指路 channels.json）。 */
+  /** 「查看映射」：把当前渠道的 models 与 tiers 打印成 /channel 本地块。 */
   const channelMapLines = (snapshot: typeof channelSnapshot): string[] => {
     const active = snapshot.channels.find(option => option.id === snapshot.activeId)
     if (active === undefined) return [t('channel-map-none')]
@@ -925,59 +909,65 @@ export function Chat({
     return lines
   }
   /**
-   * 渠道选择器的确认路径（键盘 Enter 与鼠标点击同一条）：
-   *  - 渠道行 → setChannel（写 channels.json；动作内同步刷新 modelDisplay），
-   *    选择器留在屏上、✓ 随之移动——管理器姿态，还要继续导入/查看；
-   *  - 导入行 → importChannel（settings.json env → 渠道 tiers；重复导入刷新
-   *    同 id 渠道），结果 toast、新行即时出现；
-   *  - 查看行 → 收起选择器，映射明细打印为本地转录块。
+   * 激活渠道的连接（baseUrl / token / 渠道环境变量）变了：运行中的 CLI 子进程
+   * 换不了连接，只能以新会话重启。没有重启能力的宿主只提示下次会话生效。
+   */
+  const restartForChannelConnection = (name: string): void => {
+    if (onRestartFreshSession !== undefined) {
+      dispatchOverlay({ type: 'close' })
+      onRestartFreshSession(t('channel-switch-restart', { name }))
+    } else {
+      channel.notify(t('channel-switch-restart-unavailable', { name }), { color: 'warning' })
+    }
+  }
+  /**
+   * 渠道选择器的确认（Enter 与鼠标点击共用）：
+   *  - 渠道行：切换激活渠道。连接相同就地生效，选择器留在屏上；连接不同则
+   *    以新会话重启；
+   *  - 导入行：从 settings.json 导入（同名再导入会刷新那一条），若刷新的是
+   *    激活渠道且连接变了，同样重启；
+   *  - 新增/管理行：收起选择器，走问答向导；
+   *  - 查看行：收起选择器，打印映射。
+   * 重启会打断正在运行的回合，所以会改动连接的操作在回合运行中一律拒绝，
+   * 与 /kernel、/restart 一致。
    */
   const pickChannel = (index: number): void => {
     const row = channelRows[index]
     if (row === undefined) return
+    const before = channelSnapshot.channels.find(option => option.id === channelSnapshot.activeId)
     if (row.kind === 'channel') {
       if (row.active) { channel.notify(t('channel-already-active')); return }
+      const sameConnection = sameOptionConnection(before, row.option)
+      if (!sameConnection && channel.working) {
+        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
+        return
+      }
       if (typeof channel.setChannel === 'function' && channel.setChannel(row.option.id)) {
         setChannelRosterTick(tick => tick + 1)
-        // 三期：连接信息（baseUrl/token/渠道 env）相同 → 就地刷新（本会话
-        // 的 CLI 子进程连的就是这套，模型显示已换）；不同 → 子进程换不了
-        // 连接，走新会话重启漏斗（不留 resume 目标）。
-        const before = channelSnapshot.channels.find(option => option.id === channelSnapshot.activeId)
-        if (sameOptionConnection(before, row.option)) {
-          channel.notify(t('channel-switched', { name: row.option.name }), { color: 'success' })
-        } else if (onRestartFreshSession !== undefined) {
-          dispatchOverlay({ type: 'close' })
-          onRestartFreshSession(t('channel-switch-restart', { name: row.option.name }))
-        } else {
-          channel.notify(t('channel-switch-restart-unavailable', { name: row.option.name }), { color: 'warning' })
-        }
+        if (sameConnection) channel.notify(t('channel-switched', { name: row.option.name }), { color: 'success' })
+        else restartForChannelConnection(row.option.name)
       }
       return
     }
     if (row.kind === 'import') {
-      /* 三期连接语义（R3-2）：导入刷新的行若是当前 active 渠道，且其连接
-       * 变了（mapping-only 被补成连接、端点/token 轮换），运行中的子进程
-       * 仍持旧连接——与渠道行切换同一条 fresh-session 重启漏斗，不能只
-       * 刷新列表加个 toast 了事。非 active 行导入保持纯 toast。 */
-      const before = channelSnapshot.channels.find(option => option.id === channelSnapshot.activeId)
-      const imported = typeof channel.importChannel === 'function' ? channel.importChannel() : undefined
-      setChannelRosterTick(tick => tick + 1)
-      if (imported !== undefined && before !== undefined && before.id === imported.id
-        && !sameOptionConnection(before, imported)) {
-        dispatchOverlay({ type: 'close' })
-        channel.notify(t('channel-import-done', { name: imported.name }), { color: 'success' })
-        if (onRestartFreshSession !== undefined) {
-          onRestartFreshSession(t('channel-switch-restart', { name: imported.name }))
-        } else {
-          channel.notify(t('channel-switch-restart-unavailable', { name: imported.name }), { color: 'warning' })
-        }
+      if (channel.working) {
+        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
         return
       }
+      const imported = typeof channel.importChannel === 'function' ? channel.importChannel() : undefined
+      setChannelRosterTick(tick => tick + 1)
       channel.notify(imported === undefined ? t('channel-import-none') : t('channel-import-done', { name: imported.name }), { color: imported === undefined ? 'warning' : 'success' })
+      if (imported !== undefined && before !== undefined && before.id === imported.id
+        && !sameOptionConnection(before, imported)) {
+        restartForChannelConnection(imported.name)
+      }
       return
     }
     if (row.kind === 'add' || row.kind === 'manage') {
-      // 问句式向导（/provider 先例）：QuestionStore 面板驱动，选择器收起。
+      if (channel.working) {
+        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
+        return
+      }
       dispatchOverlay({ type: 'close' })
       void runChannelWizard({
         ask: (request, options) => questionStore.ask(request, options),
@@ -990,9 +980,12 @@ export function Chat({
         peekSettings: () => (typeof channel.peekChannelImport === 'function' ? channel.peekChannelImport() : undefined),
       }).then(outcome => {
         setChannelRosterTick(tick => tick + 1)
-        if (outcome.restart && onRestartFreshSession !== undefined) {
-          onRestartFreshSession(t('channel-switch-restart', { name: t('channel-wiz-active-channel') }))
-        }
+        if (!outcome.restart) return
+        const name = t('channel-wiz-active-channel')
+        // A turn can start while the wizard is up (a background task waking
+        // the model): never restart over it, the change applies next session.
+        if (channel.working) channel.notify(t('channel-switch-restart-unavailable', { name }), { color: 'warning' })
+        else restartForChannelConnection(name)
       }).catch(() => {
         // The wizard notifies on every handled failure; swallow the rest.
       })
