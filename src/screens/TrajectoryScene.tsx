@@ -361,6 +361,51 @@ export function TrajectoryScene({
     }
   })
 
+  // ── unsupported state (design §④ 轨迹裁决) ─────────────────────────────────
+  // The same three-state contract the side panel applies: a backend whose
+  // composition mounted no trajectory source (Claude today) gets an honest
+  // "not adapted here" screen — never the empty-session chrome that promises
+  // a wake band after the first turn. Esc/q (the useInput above) and the ✕
+  // button still leave; there is simply nothing to navigate. Tolerant read:
+  // partial fixtures render the scene without a report = legacy behavior.
+  if (channel.trajectorySource?.() === 'unsupported') {
+    const unsupportedLine =
+      channel.backendCapabilities?.backendId === 'claude'
+        ? t('trajectory-unsupported-claude')
+        : t('trajectory-unsupported')
+    return (
+      <Box ref={ref} flexDirection="column" width="100%" paddingX={1}>
+        <Box width="100%" height={1} flexShrink={0}>
+          <Box flexShrink={0} flexGrow={1} overflow="hidden">
+            <Text wrap="truncate">
+              <Text color="accent" bold>{`\u2726 ${t('traj-title')}`}</Text>
+              <Text color="subtle">{`  ${channel.sessionTitle ?? channel.cwd}`}</Text>
+            </Text>
+          </Box>
+          <Box
+            flexShrink={0}
+            width={2}
+            onClick={() => onClose()}
+            onMouseEnter={(): void => setCloseHovered(true)}
+            onMouseLeave={(): void => setCloseHovered(false)}
+          >
+            <Text color={closeHovered ? 'text' : 'subtle'}>{' ✕'}</Text>
+          </Box>
+        </Box>
+        <Box marginTop={2}>
+          <Text color="subtle" wrap="truncate">
+            {truncateWidth(unsupportedLine, bandWidth)}
+          </Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text dimColor italic wrap="truncate">
+            {truncateWidth(t('trajectory-unsupported-exit'), bandWidth)}
+          </Text>
+        </Box>
+      </Box>
+    )
+  }
+
   // ── header ───────────────────────────────────────────────────────────────
   //
   // Both chrome rows are composed as ONE pre-measured line each rather than as

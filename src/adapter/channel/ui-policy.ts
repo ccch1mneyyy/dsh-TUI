@@ -142,6 +142,9 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'backgroundCurrent': 'mutate',
   'replyToAgent': 'mutate',
   'traceEvents': 'read-only',
+  // Pure composition fact (which trajectory source is mounted); no service
+  // is acquired and no cache warmed by answering it.
+  'trajectorySource': 'read-only',
   'subscribe': 'subscribe'
 } satisfies Record<MethodKeys<ChannelUi>, HostEffectClass>)
 

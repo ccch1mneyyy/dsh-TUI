@@ -1,5 +1,5 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, TrajectorySource, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { AgentCapabilities } from './channel-capabilities.js'
@@ -812,6 +812,17 @@ export interface ChannelUi {
    * time; agent swaps (/resume /rewind /new) are reflected immediately.
    */
   traceEvents(): readonly RawTrajEvent[]
+  /**
+   * The trajectory source's own three-state report (see
+   * {@link TrajectorySource}): 'unsupported' when the composition mounted no
+   * trajectory source at all (the backend-neutral core's declaration —
+   * Claude today), 'empty'/'supported' when it did (the DSH extension's
+   * override reading its raw history). Every trajectory surface — /trace,
+   * Ctrl+T, the sidebar tab and the ⤢ outlet — reads THIS instead of guessing
+   * from the event count, so "not adapted yet" can never masquerade as "no
+   * turns yet".
+   */
+  trajectorySource(): TrajectorySource
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   setThinkingFold(mode: 'preview' | 'full'): void
   setJobGroupFold(mode: JobGroupFoldMode): void

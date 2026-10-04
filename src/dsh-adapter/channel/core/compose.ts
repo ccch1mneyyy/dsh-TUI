@@ -517,6 +517,14 @@ export function createCoreChannel(
       }
     },
     traceEvents: () => NO_TRACE,
+    // The trajectory capability declaration (design doc ④ 轨迹裁决): the
+    // backend-neutral core mounts NO trajectory source, so an unsupported
+    // backend is a structural fact read from the composition — never a
+    // backendId lookup. The DSH extension overrides this with its raw
+    // history ('empty' before the first event, 'supported' after), and the
+    // trajectory surfaces (/trace, Ctrl+T, the sidebar tab, ⤢) render the
+    // three states from THIS report.
+    trajectorySource: () => 'unsupported',
   }
 
   // Register the raw state before any specialist can synchronously publish a
