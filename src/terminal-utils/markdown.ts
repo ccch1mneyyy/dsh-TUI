@@ -42,6 +42,9 @@ const EOL = '\n'
 /** Left one-quarter block (U+258E), the blockquote gutter marker. */
 const QUOTE_BAR = '\u258e'
 
+/** Left one-eighth block (U+258F): quote levels past the second get the thinner bar. */
+const QUOTE_BAR_DEEP = '\u258f'
+
 /** The horizontal-rule divider: three light box-drawing dashes. */
 const HR_DIVIDER = '\u2500\u2500\u2500'
 
@@ -301,14 +304,42 @@ function renderNestedMathBlock(token: MathToken): string {
   return (rendered ?? token.raw.trim()) + EOL
 }
 
+/**
+ * The gutter for one blockquote level (spec section 3, Batch D): the
+ * first level carries the theme's muted color, the second dims the same
+ * bar, deeper levels switch to the thinner one-eighth bar - nesting
+ * reads as fading structure instead of N identical dim rails.
+ */
+function quoteGutter(depth: number): string {
+  if (depth === 0) return colorize(QUOTE_BAR, getActiveTheme().subtle, 'foreground')
+  if (depth === 1) return chalk.dim(QUOTE_BAR)
+  return chalk.dim(QUOTE_BAR_DEEP)
+}
+
 function renderBlockquote(token: Tokens.Blockquote, state: RenderState): string {
-  const inner = token.tokens.map(child => dispatch(child, fresh(state))).join('')
-  // Dim gutter bar per line; keep the text italic but at normal brightness —
-  // chalk.dim is nearly invisible on dark themes.
-  const gutter = chalk.dim(QUOTE_BAR)
-  return inner
-    .split(EOL)
-    .map(line => (stripAnsi(line).trim() ? `${gutter} ${chalk.italic(line)}` : line))
+  const depth = state.quoteDepth
+  // Children keep the quote context (a nested blockquote increments the
+  // depth) but shed list state, exactly like fresh().
+  const childState = { ...fresh(state), quoteDepth: depth + 1 }
+  const inner = token.tokens.map(child => dispatch(child, childState)).join('')
+  // Gutter bar per line; keep the text italic but at normal brightness —
+  // chalk.dim is nearly invisible on dark themes. Blank lines inside the
+  // quote keep a BARE gutter so the structure survives internal paragraph
+  // gaps (and an empty `>` quote still shows a rail); only the trailing
+  // split artifact (from inner's final newline) stays empty.
+  const gutter = quoteGutter(depth)
+  const lines = inner.split(EOL)
+  // A quote with no visible content at all (`>` on its own line) still
+  // shows one rail - the structure exists in the source, collapsing to
+  // nothing hid it (spec: 空引用结构).
+  if (lines.every(line => line === '')) return gutter + EOL
+  return lines
+    .map((line, index) => {
+      if (line === '' || stripAnsi(line).trim() === '') {
+        return index === lines.length - 1 ? line : gutter
+      }
+      return `${gutter} ${chalk.italic(line)}`
+    })
     .join(EOL)
 }
 

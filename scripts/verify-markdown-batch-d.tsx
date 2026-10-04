@@ -179,4 +179,34 @@ assert.equal(plain(cjkTask), '- [x] \u4e2d\u6587\u4efb\u52a1', 'CJK task text fo
 // Markers keep the permission tint (list structure reads as structure).
 assert.ok(applyMarkdown('- a' + '\n').includes('38;2'), 'bullet carries the theme tint')
 
+// -- 4. Blockquotes: per-level gutters, empty-line structure ----------
+
+// Bad baseline: every level used the same dim bar, blank lines inside a
+// quote dropped the rail entirely (the structure broke across paragraph
+// gaps), and a content-free `>` quote collapsed to nothing.
+const quotedPlain = applyMarkdown('> a' + '\n' + '> more' + '\n')
+assert.equal(plain(quotedPlain), '\u258e a' + '\n' + '\u258e more', 'level-1 quote keeps its rail per line')
+assert.ok(quotedPlain.includes('38;2'), 'level-1 rail carries the subtle color (was dim-only)')
+assert.ok(quotedPlain.includes(ITALIC), 'quoted text stays italic')
+
+const quotedGap = applyMarkdown('> a' + '\n' + '>' + '\n' + '> b' + '\n')
+assert.equal(plain(quotedGap), '\u258e a' + '\n' + '\u258e' + '\n' + '\u258e b',
+  'blank lines inside a quote keep a bare rail: ' + JSON.stringify(plain(quotedGap)))
+
+const bareQuote = applyMarkdown('>' + '\n')
+assert.equal(plain(bareQuote), '\u258e', 'a content-free quote still shows one rail row')
+
+const nestedQuote = applyMarkdown('> one' + '\n' + '> > two' + '\n' + '> > > three' + '\n')
+assert.equal(
+  plain(nestedQuote),
+  '\u258e one' + '\n' + '\u258e \u258e two' + '\n' + '\u258e \u258e \u258f three',
+  'nested quotes stack one rail per level: ' + JSON.stringify(plain(nestedQuote)),
+)
+const nestedLines = plain(nestedQuote).split('\n')
+assert.ok(nestedLines[1]!.includes('\u258e \u258e'), 'second level doubles the rail')
+assert.ok(nestedLines[2]!.includes('\u258f'), 'third level switches to the thinner one-eighth bar')
+// Level styling: first rail colorized, deeper rails dim.
+const secondLineAnsi = applyMarkdown('> one' + '\n' + '> > two' + '\n').split('\n')[1]!
+assert.ok(secondLineAnsi.includes(ESC + '[2m'), 'the nested rail is dim, not colorized')
+
 console.log('markdown batch D: heading layering + compressed whitespace passed')
