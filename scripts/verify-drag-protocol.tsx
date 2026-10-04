@@ -225,6 +225,11 @@ function mouse(button: number, action: 'press' | 'release', col: number, row: nu
     events.map((e) => `${e.type}@${e.col},${e.row}`).join(' '),
   )
   check('U3 跳过 onSelectionDrag', selectionDrags.length === 0)
+  handleMouseEvent(app, mouse(0x20, 'press', 4, 3))
+  check(
+    '已启动拖动返回按下位置仍派发 dragmove',
+    events.at(-1)?.type === 'dragmove' && events.at(-1)?.col === 4 && events.at(-1)?.row === 3,
+  )
 }
 
 {

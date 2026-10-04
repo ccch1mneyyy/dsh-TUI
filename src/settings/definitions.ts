@@ -650,8 +650,8 @@ export const SHORTCUT_FIELD_META: Record<ShortcutActionId, { label: string; zh: 
   sidePanel: {
     label: 'Side panel shortcut',
     zh: '侧栏快捷键',
-    hintEn: d => `Smart three-state sidebar toggle: closed → open+focus → focus chat → closed. Default: ${d}. tmux users should remap it (the prefix eats Ctrl+B).`,
-    hintZh: d => `侧栏智能三态：关闭 → 打开并聚焦 → 焦点回聊天 → 关闭。默认 ${d}。tmux 用户请改键（前缀会吞掉它）。`,
+    hintEn: d => `Toggle the sidebar open/closed while keeping focus in chat. Click the panel or use /panel focus to operate it. Default: ${d}. tmux users should remap it (the prefix eats Ctrl+B).`,
+    hintZh: d => `开关侧栏，键盘焦点保持在聊天。点击侧栏或用 /panel focus 操作面板。默认 ${d}。tmux 用户请改键（前缀会吞掉它）。`,
   },
   sidePanelZoom: {
     label: 'Side panel zoom shortcut',

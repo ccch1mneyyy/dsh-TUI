@@ -1,8 +1,9 @@
 /**
  * SidePanelLayout: owns the two-column row — chat surface left, divider,
  * side-panel surface right (design doc §4.1). It decides nothing about
- * state: useSidePanel hands it a resolved geometry and this component only
- * arranges boxes and re-provides contexts.
+ * layout state: useSidePanel hands it a resolved geometry, while this
+ * component arranges boxes, re-provides contexts and reports divider drags
+ * as desired chat widths. Hover and drag highlighting remain local.
  *
  * What each column subtree gets (the PageMargin trick, one level down):
  * - TerminalSizeContext narrowed to the column width, so every existing
@@ -45,14 +46,18 @@ import { useTerminalSize } from '../../ink/hooks/use-terminal-size.js'
 import { SurfaceEdgesContext, useSurfaceEdges } from '../SurfaceEdges.js'
 import type { SidePanelFocus } from './useSidePanel.js'
 import type { SidePanelSplit } from './dimensions.js'
+import type { DragEvent } from '../../ink/events/drag-event.js'
 
 export interface SidePanelLayoutProps {
   readonly geometry: SidePanelSplit | null
   readonly focus: SidePanelFocus
+  readonly panelId?: string
   /** Right-column content (PanelBar + PanelHost + hint). */
   readonly side: React.ReactNode
   readonly onActivateChat?: () => void
   readonly onActivatePanel?: () => void
+  /** Desired chat width in content columns, clamped by the controller. */
+  readonly onResize?: (chatColumns: number) => void
   readonly children: React.ReactNode
 }
 
@@ -66,19 +71,53 @@ function DividerColumn({
   focused,
   rows,
   junctionRows,
+  chatColumns,
+  onResize,
 }: {
   readonly focused: boolean
   readonly rows: number
   readonly junctionRows: readonly number[]
+  readonly chatColumns: number
+  readonly onResize?: (chatColumns: number) => void
 }): React.ReactNode {
+  const [hovered, setHovered] = React.useState(false)
+  const [dragging, setDragging] = React.useState(false)
+  const startWidth = React.useRef<number | null>(null)
+  const move = (event: DragEvent): void => {
+    event.stopImmediatePropagation()
+    if (startWidth.current !== null) {
+      onResize?.(startWidth.current + event.col - event.startCol)
+    }
+  }
   const junctions = new Set(junctionRows)
   const glyphs: string[] = []
   for (let y = 0; y < Math.max(1, rows); y += 1) {
     glyphs.push(junctions.has(y) ? '├' : '│')
   }
   return (
-    <Box width={1} flexShrink={0} overflow="hidden">
-      <Text color={focused ? 'accent' : 'inactive'}>{glyphs.join('\n')}</Text>
+    <Box
+      width={1}
+      flexShrink={0}
+      overflow="hidden"
+      noSelect
+      onMouseEnter={onResize === undefined ? undefined : () => setHovered(true)}
+      onMouseLeave={onResize === undefined ? undefined : () => setHovered(false)}
+      onDragStart={onResize === undefined ? undefined : (event) => {
+        startWidth.current = chatColumns
+        setDragging(true)
+        move(event)
+      }}
+      onDragMove={onResize === undefined ? undefined : move}
+      onDragEnd={onResize === undefined ? undefined : (event) => {
+        // dragend also signals focus loss / terminal resize. Keep the last
+        // applied width rather than treating cleanup coordinates as motion.
+        event.stopImmediatePropagation()
+        startWidth.current = null
+        setDragging(false)
+        setHovered(false)
+      }}
+    >
+      <Text color={focused || hovered || dragging ? 'accent' : 'inactive'} bold={hovered || dragging}>{glyphs.join('\n')}</Text>
     </Box>
   )
 }
@@ -86,9 +125,11 @@ function DividerColumn({
 export function SidePanelLayout({
   geometry,
   focus,
+  panelId,
   side,
   onActivateChat,
   onActivatePanel,
+  onResize,
   children,
 }: SidePanelLayoutProps): React.ReactNode {
   const outerEdges = useSurfaceEdges()
@@ -127,6 +168,7 @@ export function SidePanelLayout({
             flexShrink={0}
             overflow={split ? 'hidden' : undefined}
             onClick={split ? onActivateChat : undefined}
+            selectionPane="chat"
           >
             {children}
           </Box>
@@ -137,7 +179,13 @@ export function SidePanelLayout({
           {/* Junction contract: SidePanelColumn keeps its PanelBar on row 0,
               a rule on row 1, and the hint + its rule as the last two rows, so
               the seam tees at exactly 1 and rows-2. */}
-          <DividerColumn focused={focus === 'panel'} rows={rows} junctionRows={[1, Math.max(1, rows - 2)]} />
+          <DividerColumn
+            focused={focus === 'panel'}
+            rows={rows}
+            junctionRows={[1, Math.max(1, rows - 2)]}
+            chatColumns={geometry.chat}
+            onResize={onResize}
+          />
           <SurfaceEdgesContext.Provider value={panelEdges}>
             <TerminalSizeContext.Provider value={panelSize}>
               <Box
@@ -146,10 +194,7 @@ export function SidePanelLayout({
                 flexShrink={0}
                 overflow="hidden"
                 onClick={onActivatePanel}
-                /* The right column is fenced out of the fullscreen linear text
-                   selection: a drag across chat rows must not capture panel
-                   glyphs (design doc §4.6). Panels carry their own copy action. */
-                noSelect
+                selectionPane={'panel:' + (panelId ?? 'default')}
               >
                 {side}
               </Box>

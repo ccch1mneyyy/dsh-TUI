@@ -215,6 +215,7 @@ export type Operation =
   | CopyRegionOperation
   | SoftWrapRowOperation
   | ShiftOperation
+  | SelectionPaneOperation
 
 /**
  * Restyle the cells already in the region at this point of the paint
@@ -229,6 +230,7 @@ type ShadeOperation = {
 
 type WriteOperation = {
   type: 'write'
+  selectionPane?: string
   x: number
   y: number
   text: string
@@ -351,8 +353,15 @@ type NoSelectOperation = {
 /** Row `y` continues the row above, whose content ends at `contentEnd`. */
 type SoftWrapRowOperation = {
   type: 'softWrapRow'
+  selectionPane?: string
   y: number
   contentEnd: number
+}
+
+type SelectionPaneOperation = {
+  type: 'selectionPane'
+  id: string
+  region: Rectangle
 }
 
 /** A region that copies as `text` (see Screen.copyRegion); paints nothing. */
@@ -631,6 +640,9 @@ export default class Output {
   opaqueImageBacking: boolean
   private imageReady: ((placement: TerminalImagePlacement) => boolean) | undefined
 
+  /** Current pane inherited while walking the render tree. */
+  selectionPane: string | undefined
+
   private readonly operations: Operation[] = []
   private readonly imagePlacements: TerminalImagePlacement[] = []
   private readonly imageNodes = new Set<DOMElement>()
@@ -728,6 +740,7 @@ export default class Output {
     this.opaqueImageBacking = opaqueImageBacking
     this.imageReady = imageReady
     this.previousImages = previousImages
+    this.selectionPane = undefined
     this.operations.length = 0
     this.imagePlacements.length = 0
     this.imageNodes.clear()
@@ -793,7 +806,12 @@ export default class Output {
    */
   /** Mark row `y` as a wrap continuation (see Styles.softWrapContinuation). */
   softWrapRow(y: number, contentEnd: number): void {
-    this.operations.push({ type: 'softWrapRow', y, contentEnd })
+    this.operations.push({ type: 'softWrapRow', y, contentEnd, selectionPane: this.selectionPane })
+  }
+
+  /** Declare the selectable surface before painting or blitting its children. */
+  registerSelectionPane(id: string, region: Rectangle): void {
+    this.operations.push({ type: 'selectionPane', id, region })
   }
 
   noSelect(region: Rectangle): void {
@@ -1020,6 +1038,7 @@ export default class Output {
 
     this.operations.push({
       type: 'write',
+      selectionPane: this.selectionPane,
       x,
       y,
       text,
@@ -1190,13 +1209,29 @@ export default class Output {
           continue
         }
 
+        case 'selectionPane': {
+          const { id, region } = operation
+          screen.selectionPanes ??= new Map()
+          const x = Math.max(0, region.x)
+          const y = Math.max(0, region.y)
+          screen.selectionPanes.set(id, {
+            x, y,
+            width: Math.max(0, Math.min(screenWidth, region.x + region.width) - x),
+            height: Math.max(0, Math.min(screenHeight, region.y + region.height) - y),
+            softWrap: new Int32Array(screenHeight),
+          })
+          continue
+        }
+
         case 'softWrapRow': {
           // Paint order: the marker lands where the producer asked for it, and
           // the write case above resets it when a later operation repaints that
           // row. (This used to run in a pass after every write, which let a
           // marker outlive an overlay that overwrote the row.)
           if (operation.y > 0 && operation.y < screen.height) {
-            screen.softWrap[operation.y] = Math.max(1, operation.contentEnd)
+            const wraps = operation.selectionPane === undefined ? screen.softWrap
+              : screen.selectionPanes?.get(operation.selectionPane)?.softWrap
+            if (wraps) wraps[operation.y] = Math.max(1, operation.contentEnd)
           }
           continue
         }
@@ -1267,7 +1302,8 @@ export default class Output {
           x = writeX
           y += from
 
-          const swBits = screen.softWrap
+          const swBits = operation.selectionPane === undefined ? screen.softWrap
+            : screen.selectionPanes?.get(operation.selectionPane)?.softWrap
           let offsetY = 0
 
           for (const line of lines) {
@@ -1296,7 +1332,7 @@ export default class Output {
             // x+stringWidth(line) which treats tabs as width 0.
             if (softWrap) {
               const isSW = softWrap[swFrom + offsetY] === true
-              swBits[lineY] = isSW ? prevContentEnd : 0
+              if (swBits) swBits[lineY] = isSW ? prevContentEnd : 0
               prevContentEnd = contentEnd
             } else {
               // Paint order: a producer that doesn't track wrapping (fills,
@@ -1304,7 +1340,7 @@ export default class Output {
               // continuation marker an earlier softWrapRow set for this row
               // is stale — keep it and a copy would glue the overlay's text
               // onto the previous line.
-              swBits[lineY] = 0
+              if (swBits) swBits[lineY] = 0
             }
             offsetY++
           }

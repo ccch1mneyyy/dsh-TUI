@@ -201,21 +201,21 @@ function assertSplitFrame(name: string, frame: Frame, geo: { chat: number; panel
 // --- 1. 120 columns, focus=chat -----------------------------------------
 {
   const frame = await mountSplit(120, false)
-  assertSplitFrame('120/focus=chat', frame, resolveSplit(120, 0.68), 'Ctrl+B 聚焦侧栏', 'Esc 聊天')
+  assertSplitFrame('120/focus=chat', frame, resolveSplit(120, 0.68), '点击操作 · Ctrl+B 关闭', 'Esc 聊天')
   await frame.app.unmount()
 }
 
 // --- 2. 120 columns, focus=panel (hint swaps) ----------------------------
 {
   const frame = await mountSplit(120, true)
-  assertSplitFrame('120/focus=panel', frame, resolveSplit(120, 0.68), 'Esc 聊天', 'Ctrl+B 聚焦侧栏')
+  assertSplitFrame('120/focus=panel', frame, resolveSplit(120, 0.68), 'Esc 聊天', '点击操作 · Ctrl+B 关闭')
   await frame.app.unmount()
 }
 
 // --- 3. zoom at 120: chat=64 keeps every invariant -----------------------
 {
   const frame = await mountSplit(120, true, true)
-  assertSplitFrame('zoom(120)/chat=64', frame, resolveZoom(120), 'Esc 聊天', 'Ctrl+B 聚焦侧栏')
+  assertSplitFrame('zoom(120)/chat=64', frame, resolveZoom(120), 'Esc 聊天', '点击操作 · Ctrl+B 关闭')
   check('zoom(120)/chat=64: divider sits at column 64', cells(frame.lines()[5])[64] === '│', JSON.stringify(frame.lines()[5]))
   await frame.app.unmount()
 }
@@ -226,14 +226,16 @@ function assertSplitFrame(name: string, frame: Frame, geo: { chat: number; panel
   if (geo === null) throw new Error('93 columns must split')
   const frame = await mountSplit(93, true)
   const lines = frame.lines()
-  assertSplitFrame('93/focus=panel', frame, geo, 'Esc 聊天', 'Ctrl+B 聚焦侧栏')
+  assertSplitFrame('93/focus=panel', frame, geo, 'Esc 聊天', '点击操作 · Ctrl+B 关闭')
   check('93: carousel arrows and title occupy row 0 without overflow', lines[0]?.includes('◀') && lines[0]?.includes('▶') && !/\+\d+/.test(lines[0]!), JSON.stringify(lines[0]))
+  // No wrap: the bar occupies exactly row 0 (row 1 is the rule, not bar text).
+  check('93: PanelBar is exactly one row (row 1 is the rule, no › spillover)', !lines[1].includes('›') && !lines[1].includes('‹'), JSON.stringify(lines[1]))
   // Hint is exactly one row: rows-2 is the rule, and no hint text above it.
   check('93: hint is exactly one row (rows-2 is the rule)', !lines[ROWS - 2].includes('Esc') && lines[ROWS - 1].includes('Esc'), JSON.stringify(lines[ROWS - 2]))
   await frame.app.unmount()
   // Unfocused hint at the minimum width: full copy fits.
   const frame2 = await mountSplit(93, false)
-  check('93: unfocused hint copy fits one row', frame2.lines()[ROWS - 1].includes('Ctrl+B 聚焦侧栏'), JSON.stringify(frame2.lines()[ROWS - 1]))
+  check('93: unfocused hint copy fits one row', frame2.lines()[ROWS - 1].includes('点击操作 · Ctrl+B 关闭'), JSON.stringify(frame2.lines()[ROWS - 1]))
   await frame2.app.unmount()
 }
 
@@ -313,7 +315,7 @@ function assertSplitFrame(name: string, frame: Frame, geo: { chat: number; panel
   check('en: focused hint says Esc chat', frame.lines()[ROWS - 1].includes('Esc chat'), JSON.stringify(frame.lines()[ROWS - 1]))
   await frame.app.unmount()
   const frame2 = await mountSplit(120, false)
-  check('en: unfocused hint says Ctrl+B focus panel', frame2.lines()[ROWS - 1].includes('Ctrl+B focus panel'), JSON.stringify(frame2.lines()[ROWS - 1]))
+  check('en: unfocused hint says Click panel · Ctrl+B close', frame2.lines()[ROWS - 1].includes('Click panel · Ctrl+B close'), JSON.stringify(frame2.lines()[ROWS - 1]))
   await frame2.app.unmount()
   setLang('zh')
 }

@@ -205,7 +205,7 @@ try {
   const body = findText('chat-body')
   check('e focus: chat body located', body !== null, JSON.stringify(body))
   if (body !== null) click(body.col, body.row)
-  check('e focus: hint swaps back to the unfocused copy', await settled(() => has('Ctrl+B focus panel'), { timeoutMs: 4000 }))
+  check('e focus: hint swaps back to the unfocused copy', await settled(() => has('Click panel · Ctrl+B close'), { timeoutMs: 4000 }))
 } finally {
   await app.unmount()
 }

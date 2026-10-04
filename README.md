@@ -31,7 +31,7 @@
 - **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.
 - **LaTeX math** — `$…$` and `$$…$$` formulas as Unicode text, fractions and limits stacked in display blocks; `mathRendering: image` typesets block and one-row inline formulas as terminal images on graphics terminals.
 - **Timeline rail** — every turn clickable; timeline / scrollbar / hidden gutter.
-- **Side panel** — `Ctrl+B` splits the chat with a panel column once the terminal is wide enough; all eight built-in panels are enabled by default. Narrow terminals and inline mode keep full-screen panels.
+- **Side panel** — `Ctrl+B` toggles a panel column once the terminal is wide enough, keeping keyboard focus in chat; all eight built-in panels are enabled by default (`sidePanel.panels` to change). Click the panel or use `/panel focus` to operate it; `Esc` returns to chat. In fullscreen mode, drag the divider with the left mouse button to resize, keeping at least 64 chat columns and 28 panel columns. Text selection stays in the column where the drag started, with independent wrapping and scroll-follow. Dragging the divider leaves panel zoom, keeps keyboard focus, and reuses the ratio for the current run; narrow terminals and inline mode keep full-screen panels.
 - **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, session cost estimate (main + subagents), Git and session metadata.
   Context-bar fill follows backend occupancy; colors estimate content composition. Compaction clears obsolete estimates, and missing composition displays a single used block.
 - **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.

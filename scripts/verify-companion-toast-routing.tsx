@@ -139,9 +139,14 @@ const push = (item: { id: number; text: string; color?: string }): void => {
   bump()
 }
 
+const press = (c: number, r: number): void => { stdin.write('\x1b[<0;' + (c + 1) + ';' + (r + 1) + 'M') }
+const release = (c: number, r: number): void => { stdin.write('\x1b[<0;' + (c + 1) + ';' + (r + 1) + 'm') }
+
 try {
-  check('boot: split is up', await settled(() => termTest.viewportLines(term, ROWS).some(l => l.includes('Ctrl+B focus panel') || l.includes('z zoom')), { timeoutMs: 5000 }))
-  stdin.write('\x02') // Ctrl+B: open(已开) + focus chat → focus panel
+  check('boot: split is up', await settled(() => termTest.viewportLines(term, ROWS).some(l => l.includes('Ctrl+B close') || l.includes('z zoom')), { timeoutMs: 5000 }))
+  // Ctrl+B is a visibility toggle that keeps chat focus; click the panel column to focus it.
+  press(CHAT_COLUMN_END + 10, 5)
+  release(CHAT_COLUMN_END + 10, 5)
   check('focus: keyboard is in the panel', await settled(() => termTest.viewportLines(term, ROWS).some(l => l.includes('Esc chat')), { timeoutMs: 5000 }))
   stdin.write('2') // jump to the 2nd enabled panel = companion
   check('active: companion carousel title with navigation dots', await settled(() => panelBar().includes('Companion') && panelBar().includes('◀') && panelBar().includes('▶') && panelBar().includes('○'), { timeoutMs: 5000 }), panelBar().trim())

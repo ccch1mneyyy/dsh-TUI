@@ -42,7 +42,7 @@ import { applyPositionedHighlight, type MatchPosition, scanPositions } from './r
 import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './transcript-highlight.js';
-import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
+import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, reconcileSelectionPane, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
@@ -759,6 +759,11 @@ export default class Ink {
     // were replaced in place (streaming transcript overwrite), and the
     // selection is marked stale so commit-time copy refuses (see
     // refreshSelectionFingerprint below the overlay block).
+    const hadPaneSelection = hasSelection(this.selection);
+    reconcileSelectionPane(this.selection, frame.screen);
+    if (hadPaneSelection && !hasSelection(this.selection)) {
+      for (const cb of this.selectionListeners) callWithUpdateOverflowGuard('selection.notify', cb);
+    }
     let selectionCoordinated = false;
     this.maybeProbeKittyGraphics(frame.images ?? []);
 
@@ -782,6 +787,7 @@ export default class Ink {
       const resize = pickFollowForSelection(
         viewportResizes,
         this.selection.anchor.row,
+        this.selection.pane?.id,
       );
       // Terminal resize rebuilds the screen at new dimensions; the
       // selection's screen-buffer coords are stale against the previous
@@ -839,6 +845,7 @@ export default class Ink {
     const follow = pickFollowForSelection(
       consumeFollowScroll(),
       this.selection.anchor?.row ?? null,
+      this.selection.pane?.id,
     );
     // pickFollowForSelection already checked anchor-in-viewport (that IS
     // the "selection is on scrollbox content" guard — footer/prompt
