@@ -23,6 +23,7 @@ const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { Qu
     import('../src/ink/instances.js'),
     import('./lib/term-test.mjs'),
   ])
+const { activateModernEmojiWidths } = await import('./lib/modern-widths.mjs')
 import type { AgentEvent, AgentEventMeta } from '../src/agent/events.js'
 import type { AgentInput, AgentSession, SubmitPlacement } from '../src/agent/session.js'
 import type { WorkingActivityView } from '../src/adapter/ports/channel-view.js'
@@ -664,6 +665,9 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
     clearActivity: sessionId => activityStore.clear(sessionId),
   } as never)
   const term = new XTerm({ cols: 100, rows: 30, scrollback: 0, allowProposedApi: true })
+  // The spinner frames are emoji: measure them the way a real terminal does
+  // (lib/modern-widths.mjs), or in-place repaints of that row land a cell off.
+  activateModernEmojiWidths(term)
   class Out extends Writable { columns = 100; rows = 30; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
   class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
   const stdin = new In()
