@@ -216,8 +216,7 @@ function CornerChip({
 }
 
 /**
- * 右下角内核区（第八版，用户原话：「在这里显示可以选择的内核 并且有箭头或者
- * 高亮 表明目前记忆中启动的内核」）：第一行 TUI 版本**不动**，其后一行一个内核
+ * 右下角内核区（第八版）：列出可选内核并标出记住的那个。第一行 TUI 版本不动，其后一行一个内核
  * ——当前内核打 `▸ ` 前缀、保持主题蓝；其余行前缀两格空格、文字 dim（前缀等宽
  * 让名字对齐）。行文本 = `短品牌名 · 副标题`（名字取 kernelDisplayName：DSH /
  * Claude——全名 40 列会挤掉左下角的目录铭牌；副标题 = 版本 / 置灰原因，缺席就
@@ -230,11 +229,11 @@ function CornerChip({
  *     ```
  *
  * **整块是一个可点目标**（点开内核选择器）：点击 stopImmediatePropagation——
- * 这一屏有「点空白收回焦点」的兜底 handler，不拦住会既开选择器又清焦点；
+ * 这一屏有「点空白收回焦点」的 handler，不拦住会既开选择器又清焦点；
  * 悬停/焦点高亮照 CornerChip 那套（主题蓝 + 加粗，未激活时只有当前内核行是
  * 主题蓝、其余行 dim）。键盘路径 = 焦点环的 KERNEL_CORNER_FOCUS + Enter，与
  * 点击同一条回调。没接 onKernelPick 时整块不挂鼠标事件（挂得上 onClick 才给
- * hover 反馈，与 ActionChip/CornerChip 同一条口径），也不进焦点环。
+ * hover 反馈，与 ActionChip/CornerChip 一致），也不进焦点环。
  */
 function KernelCorner({
   rows,
@@ -257,7 +256,7 @@ function KernelCorner({
     // 外层整行右推（块贴右缘，与 TUI 版本那一行同一条右边界），内层左对齐：
     // 行内两格前缀（▸ + 空格 / 两个空格）于是成了**标记列**——几个内核的名字
     // 从同一列开始，箭头只多占最左边那两格。可点目标是内层这个真的画了字的
-    // 块（不是整行空白），与 CornerChip 的收缩形态同一条口径。
+    // 块（不是整行空白），与 CornerChip 的收缩形态一致。
     <Box flexShrink={0} flexDirection="row" justifyContent="flex-end">
       <Box
         flexDirection="column"
@@ -1031,9 +1030,8 @@ export function Launchpad({
           </Box>
         )}
       </Box>
-      {/* 双角铭牌（第八版：右下从「两行版本号」扩成「TUI 版本 + 内核区」——用户
-          原话「在这里显示可以选择的内核 并且有箭头或者高亮 表明目前记忆中启动的
-          内核」）：左下目录铭牌仍 1 行、与第一行**顶对齐**（同一块铭牌带，不散）；
+      {/* 双角铭牌（第八版：右下从「两行版本号」扩成「TUI 版本 + 内核区」）：
+          左下目录铭牌仍 1 行、与第一行**顶对齐**（同一块铭牌带，不散）；
           第一行 = dsh-tui，其后一行一个内核（当前那个打 ▸ 且主题蓝，其余 dim；
           整块可点开选择器）。kernels 缺省时右侧只有第一行（绝不编造内核号）。 */}
       {layout.showCorners && (

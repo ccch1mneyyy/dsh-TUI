@@ -15,7 +15,7 @@ import { usePageInset } from '../components/PageMargin.js'
 import { POINTER } from '../terminal-utils/figures.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { actionMatches, effectiveComboDisplay, primaryComboString } from '../utils/keymap.js'
-import { formatTokens, formatDuration } from '../terminal-utils/format.js'
+import { formatTokens } from '../terminal-utils/format.js'
 import { formatClock } from '../trajectory/format.js'
 import { homeDir } from '../utils/paths.js'
 import { execFileNoThrow } from '../utils/execFileNoThrow.js'
@@ -73,6 +73,7 @@ import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
+import { turnUsageParts } from '../components/TurnUsageRow.js'
 import { AgentTranscriptScene } from './AgentTranscriptScene.js'
 import { agentViewStore } from '../components/sidePanel/agentViewStore.js'
 import { agentComposeTargetOf, type AgentComposeTarget, type AgentMessageView, type AgentViewSource } from '../components/messages/agentTeam.js'
@@ -425,14 +426,14 @@ export function Chat({
    */
   onSwitchBackend?: (backend: 'dsh' | 'claude') => void
   /**
-   * 以新会话重启（组合根实现：退出进 backend-switch 漏斗的同款机器——不写
-   * resume 目标、新会话、内核不变）。/channel 三期在「激活渠道的连接信息
-   * 变了」时走这里：运行中的 CLI 子进程换不了 baseUrl/token，只能换会话。
+   * 以新会话重启（组合根实现：走切换内核的同一条退出路径，不写 resume 目标，
+   * 内核不变）。/channel 在激活渠道的连接变了时用它：运行中的 CLI 子进程
+   * 换不了 baseUrl/token，只能换会话。
    */
   onRestartFreshSession?: (notice: string) => void
   /**
-   * Claude 内核探测（组合根注入；Chat 不 import 任何具体后端）。首次
-   * 需要时调一次，结果缓存——探测失败按「未安装」答，宁可少一个入口。
+   * Claude 内核探测（组合根注入；Chat 不 import 任何具体后端）。首次需要时
+   * 调一次并缓存结果；探测失败按「未安装」处理。
    */
   onProbeKernels?: () => Promise<ClaudeKernelStatus>
   /** 启动参数（Config 行 / DSH_TUI_BACKEND）压过了记忆：选择器明说。 */
@@ -707,17 +708,15 @@ export function Chat({
    * on" has not been answered yet. Every later launch starts on the chat
    * screen, and the screen stays reachable.
    */
-  // #185 收尾：根边界恢复触发的重挂不是「启动」——启动页、首启引导与会话
-  // 管理屏都是启动入口，恢复的落点是对话页本身（一次性标记由 App 错误边界
-  // 的恢复路径写入，见 update-overflow-guard）。首渲染即消费；即便某次并发
-  // 渲染被丢弃也只是回到旧表现（多见一次启动入口），不会更糟。
+  // 根错误边界恢复后的重挂不是一次启动：启动页、首启引导与会话管理屏都
+  // 不再打开，直接回到对话页（一次性标记由错误边界的恢复路径写入，见
+  // update-overflow-guard）。首次渲染即消费；若这次渲染被丢弃，最坏只是
+  // 多显示一次启动入口。
   const recoveryRemountOnBoot = consumeBoundaryRecoveryRemount()
   // 第七版：启动页在开时**不再**预开会话浏览器。旧姿态是「先收落地页再开
   // 整屏」，浏览器必须提前藏在下面；现在整屏（会话/设置/任务面板）盖在
   // 落地页**之上**、Esc 退回落地页，按需打开即可——boot 时同时为真反而会
-  // 让浏览器盖住落地页（渲染顺序见各 early-return）。恢复重挂同样不开它
-  // （R4-R4）：recovery × openHome=true × launchpad=false 之前会把恢复落进
-  // 会话管理屏，偏离「恢复直接回对话」。
+  // 让浏览器盖住落地页（渲染顺序见各 early-return）。恢复重挂同样不开它。
   const [supervisorOpen, setSupervisorOpen] = React.useState(
     openHomeOnBoot === true && launchpadOnBoot !== true && !recoveryRemountOnBoot,
   )
@@ -811,14 +810,10 @@ export function Chat({
     }).catch(() => undefined)
   }, [launchpadShown])
   /**
-   * 内核（backend）选择器的目录——/kernel、启动页「内核」入口与右下角
-   * 内核行共用同一份派生值：
-   *   - `current` 来自 bound session 的能力快照（channel.backendCapabilities
-   *     .backendId），批次A 起就是内核身份的唯一来源；
-   *   - DSH 的版本是 contract 的真实读数（与右下角铭牌同源，读不到就没有
-   *     副行）；
-   *   - Claude 的探测由组合根注入（Chat 不 import 任何具体后端），只在首次
-   *     需要时探一次，结果缓存到进程结束。
+   * 内核选择器的目录。/kernel、启动页「内核」入口与右下角内核行共用这一份：
+   * 当前内核取自会话能力快照的 backendId；DSH 版本取已安装 contract 的读数
+   * （读不到就不画副行）；Claude 的探测由组合根注入（Chat 不 import 具体
+   * 后端），首次需要时探一次，结果留到进程结束。
    */
   const kernelCurrentId = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendId ?? 'dsh'
   const [kernelProbe, setKernelProbe] = React.useState<ClaudeKernelStatus | undefined>(undefined)
@@ -826,8 +821,7 @@ export function Chat({
   const requestKernelProbe = React.useCallback((): void => {
     if (kernelProbeStartedRef.current || onProbeKernels === undefined) return
     kernelProbeStartedRef.current = true
-    // 组合根已经吞掉抛错；这里再兜一层，失败一律按「未安装」作答——
-    // 选择器只会把那一行画灰，绝不假装能切过去。
+    // 探测失败按「未安装」处理：那一行画灰，不给一个点了会失败的入口。
     void onProbeKernels().then(setKernelProbe).catch(() => { setKernelProbe({ installed: false }) })
   }, [onProbeKernels])
   const kernelOptions = React.useMemo(
@@ -838,27 +832,21 @@ export function Chat({
     }),
     [kernelCurrentId, kernelVersion, kernelProbe],
   )
-  // 落地页一起来就把探测挂上：右下角那几行该在用户看见它之前尽量落定，
-  // 而不是等他点开选择器才开始等。
+  // 启动页一出现就开始探测，右下角的内核行尽量在用户看到前就有结果。
   React.useEffect(() => {
     if (launchpadShown) requestKernelProbe()
   }, [launchpadShown, requestKernelProbe])
   /** 当前内核在目录里的行号（选择器打开时的落点；找不到就落第一行）。 */
   const kernelCurrentIndex = Math.max(0, kernelOptions.findIndex(option => option.current))
-  /**
-   * 开内核选择器（三条入口共用一条路：/kernel、启动页「内核」入口、右下角
-   * 内核区）。落点默认是当前内核那一行，调用方可以指定别的行。
-   */
+  /** 打开内核选择器，默认落在当前内核那一行。 */
   const openKernelPicker = React.useCallback((index?: number): void => {
     requestKernelProbe()
     dispatchOverlay({ type: 'open', overlay: { kind: 'kernel', index: index ?? kernelCurrentIndex } })
   }, [kernelCurrentIndex, requestKernelProbe])
   /**
-   * 内核选择器的确认路径（键盘 Enter 与鼠标点击同一条）：
-   *   - 不可选（未安装 / 未登录 / 探测中）→ 只提示原因，选择器留在屏上；
-   *   - 选的就是当前内核 → 提示一句并收起；
-   *   - 其余 → 交给组合根 onSwitchBackend（写记忆 → 通知 → 以新内核重启）。
-   * 正在跑的回合拒绝切换：切内核等于换进程，与 /restart 同一道闸。
+   * 内核选择器的确认（Enter 与鼠标点击共用）：不可选的行只提示原因，选择器
+   * 留在屏上；选当前内核就提示并收起；其余交给组合根 onSwitchBackend（记住
+   * 选择后以新内核重启）。切内核要换进程，回合运行中拒绝，与 /restart 一致。
    */
   const pickKernel = (index: number): void => {
     const option = kernelOptions[index]
@@ -877,17 +865,15 @@ export function Chat({
       return
     }
     if (channel.working) {
-      channel.notify(t('update-working'), { color: 'warning' })
+      channel.notify(t('kernel-switch-while-working'), { color: 'warning' })
       return
     }
     dispatchOverlay({ type: 'close' })
     onSwitchBackend(option.id)
   }
   /**
-   * 渠道档案（/channel）名册：listChannels 同步现读 channels.json（仅 channels
-   * 能力的后端有行；夹具容错同 listModes——缺委托读作空名册）。名册不冻进
-   * overlay：切换/导入后 tick 自增 → useMemo 重读，✓ 与行自己就刷新。
-   * 普通渲染零文件 IO（useMemo 只在 /channel 活动时重算）。
+   * /channel 的渠道名册（只有声明了 channels 能力的内核才有行）。名册不存进
+   * overlay，切换/导入后 tick 加一触发重读，✓ 与行随之刷新。
    */
   const [channelRosterTick, setChannelRosterTick] = React.useState(0)
   const channelSnapshot = React.useMemo(
@@ -902,17 +888,14 @@ export function Chat({
     { kind: 'manage' },
     { kind: 'view' },
   ]
-  /**
-   * 开渠道选择器（落点默认当前渠道行；没有渠道就落在导入行）。重读一次名册，
-   * 让「打开前文件被手改」也能看到最新状态。
-   */
+  /** 打开渠道选择器，落在当前渠道行（没有渠道就落在导入行）。打开前重读
+   *  一次名册，文件被手改过也能看到。 */
   const openChannelPicker = React.useCallback((): void => {
     setChannelRosterTick(tick => tick + 1)
     const fresh = typeof channel.listChannels === 'function' ? channel.listChannels() : { channels: [], activeId: undefined }
     dispatchOverlay({ type: 'open', overlay: { kind: 'channel', index: Math.max(0, fresh.channels.findIndex(option => option.id === fresh.activeId)) } })
   }, [channel])
-  /** 查看映射：当前渠道的 models+tiers 作为 /channel 本地转录块（只读面，
-   * 逐条编辑不在选择器里——提示行指路 channels.json）。 */
+  /** 「查看映射」：把当前渠道的 models 与 tiers 打印成 /channel 本地块。 */
   const channelMapLines = (snapshot: typeof channelSnapshot): string[] => {
     const active = snapshot.channels.find(option => option.id === snapshot.activeId)
     if (active === undefined) return [t('channel-map-none')]
@@ -925,59 +908,65 @@ export function Chat({
     return lines
   }
   /**
-   * 渠道选择器的确认路径（键盘 Enter 与鼠标点击同一条）：
-   *  - 渠道行 → setChannel（写 channels.json；动作内同步刷新 modelDisplay），
-   *    选择器留在屏上、✓ 随之移动——管理器姿态，还要继续导入/查看；
-   *  - 导入行 → importChannel（settings.json env → 渠道 tiers；重复导入刷新
-   *    同 id 渠道），结果 toast、新行即时出现；
-   *  - 查看行 → 收起选择器，映射明细打印为本地转录块。
+   * 激活渠道的连接（baseUrl / token / 渠道环境变量）变了：运行中的 CLI 子进程
+   * 换不了连接，只能以新会话重启。没有重启能力的宿主只提示下次会话生效。
+   */
+  const restartForChannelConnection = (name: string): void => {
+    if (onRestartFreshSession !== undefined) {
+      dispatchOverlay({ type: 'close' })
+      onRestartFreshSession(t('channel-switch-restart', { name }))
+    } else {
+      channel.notify(t('channel-switch-restart-unavailable', { name }), { color: 'warning' })
+    }
+  }
+  /**
+   * 渠道选择器的确认（Enter 与鼠标点击共用）：
+   *  - 渠道行：切换激活渠道。连接相同就地生效，选择器留在屏上；连接不同则
+   *    以新会话重启；
+   *  - 导入行：从 settings.json 导入（同名再导入会刷新那一条），若刷新的是
+   *    激活渠道且连接变了，同样重启；
+   *  - 新增/管理行：收起选择器，走问答向导；
+   *  - 查看行：收起选择器，打印映射。
+   * 重启会打断正在运行的回合，所以会改动连接的操作在回合运行中一律拒绝，
+   * 与 /kernel、/restart 一致。
    */
   const pickChannel = (index: number): void => {
     const row = channelRows[index]
     if (row === undefined) return
+    const before = channelSnapshot.channels.find(option => option.id === channelSnapshot.activeId)
     if (row.kind === 'channel') {
       if (row.active) { channel.notify(t('channel-already-active')); return }
+      const sameConnection = sameOptionConnection(before, row.option)
+      if (!sameConnection && channel.working) {
+        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
+        return
+      }
       if (typeof channel.setChannel === 'function' && channel.setChannel(row.option.id)) {
         setChannelRosterTick(tick => tick + 1)
-        // 三期：连接信息（baseUrl/token/渠道 env）相同 → 就地刷新（本会话
-        // 的 CLI 子进程连的就是这套，模型显示已换）；不同 → 子进程换不了
-        // 连接，走新会话重启漏斗（不留 resume 目标）。
-        const before = channelSnapshot.channels.find(option => option.id === channelSnapshot.activeId)
-        if (sameOptionConnection(before, row.option)) {
-          channel.notify(t('channel-switched', { name: row.option.name }), { color: 'success' })
-        } else if (onRestartFreshSession !== undefined) {
-          dispatchOverlay({ type: 'close' })
-          onRestartFreshSession(t('channel-switch-restart', { name: row.option.name }))
-        } else {
-          channel.notify(t('channel-switch-restart-unavailable', { name: row.option.name }), { color: 'warning' })
-        }
+        if (sameConnection) channel.notify(t('channel-switched', { name: row.option.name }), { color: 'success' })
+        else restartForChannelConnection(row.option.name)
       }
       return
     }
     if (row.kind === 'import') {
-      /* 三期连接语义（R3-2）：导入刷新的行若是当前 active 渠道，且其连接
-       * 变了（mapping-only 被补成连接、端点/token 轮换），运行中的子进程
-       * 仍持旧连接——与渠道行切换同一条 fresh-session 重启漏斗，不能只
-       * 刷新列表加个 toast 了事。非 active 行导入保持纯 toast。 */
-      const before = channelSnapshot.channels.find(option => option.id === channelSnapshot.activeId)
-      const imported = typeof channel.importChannel === 'function' ? channel.importChannel() : undefined
-      setChannelRosterTick(tick => tick + 1)
-      if (imported !== undefined && before !== undefined && before.id === imported.id
-        && !sameOptionConnection(before, imported)) {
-        dispatchOverlay({ type: 'close' })
-        channel.notify(t('channel-import-done', { name: imported.name }), { color: 'success' })
-        if (onRestartFreshSession !== undefined) {
-          onRestartFreshSession(t('channel-switch-restart', { name: imported.name }))
-        } else {
-          channel.notify(t('channel-switch-restart-unavailable', { name: imported.name }), { color: 'warning' })
-        }
+      if (channel.working) {
+        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
         return
       }
+      const imported = typeof channel.importChannel === 'function' ? channel.importChannel() : undefined
+      setChannelRosterTick(tick => tick + 1)
       channel.notify(imported === undefined ? t('channel-import-none') : t('channel-import-done', { name: imported.name }), { color: imported === undefined ? 'warning' : 'success' })
+      if (imported !== undefined && before !== undefined && before.id === imported.id
+        && !sameOptionConnection(before, imported)) {
+        restartForChannelConnection(imported.name)
+      }
       return
     }
     if (row.kind === 'add' || row.kind === 'manage') {
-      // 问句式向导（/provider 先例）：QuestionStore 面板驱动，选择器收起。
+      if (channel.working) {
+        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
+        return
+      }
       dispatchOverlay({ type: 'close' })
       void runChannelWizard({
         ask: (request, options) => questionStore.ask(request, options),
@@ -990,9 +979,12 @@ export function Chat({
         peekSettings: () => (typeof channel.peekChannelImport === 'function' ? channel.peekChannelImport() : undefined),
       }).then(outcome => {
         setChannelRosterTick(tick => tick + 1)
-        if (outcome.restart && onRestartFreshSession !== undefined) {
-          onRestartFreshSession(t('channel-switch-restart', { name: t('channel-wiz-active-channel') }))
-        }
+        if (!outcome.restart) return
+        const name = t('channel-wiz-active-channel')
+        // A turn can start while the wizard is up (a background task waking
+        // the model): never restart over it, the change applies next session.
+        if (channel.working) channel.notify(t('channel-switch-restart-unavailable', { name }), { color: 'warning' })
+        else restartForChannelConnection(name)
       }).catch(() => {
         // The wizard notifies on every handled failure; swallow the rest.
       })
@@ -1253,14 +1245,20 @@ export function Chat({
   const [btwOverlayOpen, setBtwOverlayOpen] = React.useState(false)
   /** ⤢ fullscreen thread scene (openPanelFullscreen 'btw' route). */
   const [btwSceneOpen, setBtwSceneOpen] = React.useState(false)
-  const btwOverlayThread = React.useSyncExternalStore(btwThreads.subscribe, () => btwThreads.get(String(channel.agentId)))
+  // Only the fallback overlay reads the thread here. With the overlay closed
+  // the snapshot stays undefined, so an answer streaming into the sidebar
+  // panel does not re-render the whole Chat on every delta.
+  const btwOverlayThread = React.useSyncExternalStore(
+    btwThreads.subscribe,
+    () => (btwOverlayOpen ? btwThreads.get(String(channel.agentId)) : undefined),
+  )
   const closeBtwOverlay = () => {
     // Fallback parity with the pre-thread overlay: closing cancels the
     // in-flight ask (completed turns stay in the thread).
     btwThreads.abortActive(String(channel.agentId))
     setBtwOverlayOpen(false)
   }
-  /** 模态/整屏 surface 活跃时 /btw 的答案不抢开面板，只置 badge（§快路径）。 */
+  /** 有模态或整屏界面时，/btw 的回答不抢着打开面板，只标未读。 */
   const btwSurfaceFree = () =>
     approvalSnapshot === null && dialogSnapshot === null && questionSnapshot === null
     && overlay.kind === 'none' && !helpOpen && !starModal && !couponVisible
@@ -1475,17 +1473,15 @@ export function Chat({
   /** Detail view for a specific subagent (opened from dashboard). */
   const [subagentDetailId, setSubagentDetailId] = React.useState<string | null>(null)
   /**
-   * 主屏只读 Agent View（design agent-team-full §4）：Chat 自己的场景层——
-   * 父 Chat 树/Channel/PromptInput 保持挂载（draft 走 draftCache 往返），
-   * 场景只借走屏幕与键盘；Esc 按来源栈 pop（chat/dashboard/detail/card）。
-   * 不建第二个 Channel，不触碰 attach/resume/createChannel。
+   * 主屏只读 Agent View：Chat 自己的场景层。父 Chat、Channel 与 PromptInput
+   * 保持挂载（草稿经 draftCache 往返），场景只借用屏幕与键盘；Esc 回到打开它
+   * 的地方（对话 / 代理面板 / 详情 / 转录卡）。不建第二个 Channel。
    */
   const [agentView, setAgentView] = React.useState<{ agentId: string; source: AgentViewSource } | null>(null)
   const openAgentView = React.useCallback((agentId: string, source: AgentViewSource): void => {
     setAgentView({ agentId, source })
   }, [])
-  /** P3 工作台的 sibling/父切换：原地换被查看的代理，来源栈保持进入时
-   *  的样子（Esc 回原入口，不回上一个查看的代理）。 */
+  /** 工作台里切到同级或父代理：原地换被查看的代理，Esc 仍回最初的入口。 */
   const switchViewedAgent = React.useCallback((agentId: string): void => {
     setAgentView(prev => prev === null ? prev : { ...prev, agentId })
   }, [])
@@ -1581,11 +1577,10 @@ export function Chat({
    * straight back into the panel it is trying to leave.
    */
   const openScene = React.useCallback((options?: { readonly fullscreen?: boolean }) => {
-    // Three-state contract (design §④ 轨迹裁决): /trace, Ctrl+T, the sidebar
-    // tab and the ⤢ outlet all OPEN the trajectory — a backend whose
-    // composition mounted no trajectory source reports 'unsupported' and the
-    // scene/panel render that state honestly. No capability notice, no
-    // refusal: the entry points must never disagree about the capability.
+    // /trace, Ctrl+T, the sidebar tab and ⤢ all open the trajectory. A
+    // kernel without a trajectory source reports 'unsupported' and the
+    // scene/panel say so; no entry point refuses on its own, so they can
+    // never disagree about the capability.
     seenFailuresRef.current = trajectoryRef.current?.counts.errors ?? 0
     setTrajectorySeen(previous => {
       if (!previous) writeTrajectorySeen()
@@ -3050,12 +3045,11 @@ export function Chat({
         })
         return true
       case 'tokens': {
-        // Four separately-labelled facts, never two measures side by side
-        // (design §C): what THIS request uploaded (the provider's
-        // mutually-exclusive prompt buckets, stamped with when it was
-        // sampled), what the LAST TURN aggregated (per-turn ledger — never
-        // added into the session counters), what the session has accumulated
-        // (the token counters), and how full the window is (the channel's
+        // Four separately-labelled facts, never two measures side by side:
+        // what THIS request uploaded (the provider's mutually-exclusive prompt
+        // buckets, with when it was sampled), what the last turn used (its
+        // own ledger, never added into the session counters), what the
+        // session has accumulated, and how full the window is (the channel's
         // single occupancy reading — the same number the footer and the
         // context-low warning show).
         const usage = channel.lastUsage
@@ -3072,15 +3066,7 @@ export function Chat({
           })} · ${t('usage-sampled-at', { time: formatClock(usage.at) })}`)
         }
         const turn = channel.turnUsage
-        if (turn !== undefined) {
-          const turnParts = [`↑${formatTokens(turn.input)}`, `↓${formatTokens(turn.output)}`]
-          if (turn.cacheKnown && turn.cacheRead + turn.cacheWrite > 0) {
-            turnParts.push(t('usage-cache-segment', { parts: `${formatTokens(turn.cacheRead)}/${formatTokens(turn.cacheWrite)}` }))
-          }
-          if (turn.retries > 0) turnParts.push(t('usage-retry-segment', { n: turn.retries }))
-          turnParts.push(formatDuration(turn.durationMs))
-          lines.push(`${t('usage-turn-summary')} ${turnParts.join(' · ')}`)
-        }
+        if (turn !== undefined) lines.push(`${t('usage-turn-summary')} ${turnUsageParts(turn).join(' · ')}`)
         lines.push(t('tokens-session-breakdown', {
           input: formatTokens(channel.tokens.input),
           output: formatTokens(channel.tokens.output),
@@ -3233,18 +3219,10 @@ export function Chat({
           const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
           lines.push(`${t('cost-cache-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) })} · ${t('usage-sampled-at', { time: formatClock(usage.at) })}`)
         }
-        // Design §C: the per-turn ledger sits next to the session totals as
-        // its own labelled line — turn and session aggregates stay visually
-        // separate so neither reads as the other.
+        // The last turn gets its own labelled line so it never reads as part
+        // of the session totals.
         const turn = channel.turnUsage
-        if (turn !== undefined) {
-          const turnParts = [`↑${formatTokens(turn.input)}`, `↓${formatTokens(turn.output)}`, formatDuration(turn.durationMs)]
-          if (turn.cacheKnown && turn.cacheRead + turn.cacheWrite > 0) {
-            turnParts.push(t('usage-cache-segment', { parts: `${formatTokens(turn.cacheRead)}/${formatTokens(turn.cacheWrite)}` }))
-          }
-          if (turn.retries > 0) turnParts.push(t('usage-retry-segment', { n: turn.retries }))
-          lines.push(`${t('usage-turn-summary')} ${turnParts.join(' · ')}`)
-        }
+        if (turn !== undefined) lines.push(`${t('usage-turn-summary')} ${turnUsageParts(turn).join(' · ')}`)
         const occupancyLine = contextOccupancyLine(channel)
         if (occupancyLine !== undefined) lines.push(occupancyLine)
         if (channel.sessionTitle) lines.push(t('status-title', { title: channel.sessionTitle }))
@@ -3521,9 +3499,9 @@ export function Chat({
         return true
       case 'login': {
         setHelpOpen(false)
-        // A non-DSH session signs in its own backend (design §4.12): its
-        // credential status, then the host's OAuth sign-in preselected on
-        // the backend's provider, then a reconnect on the fresh credential.
+        // A non-DSH session signs in its own backend: its credential status,
+        // then the host's OAuth sign-in preselected on the backend's
+        // provider, then a reconnect on the fresh credential.
         const backendAuth = channel.backendAuth?.()
         if (backendAuth !== undefined) {
           const backend = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendLabel ?? ''
@@ -3676,10 +3654,11 @@ export function Chat({
         const backendModes = typeof channel.listModes === 'function'
           ? channel.listModes()
           : { modes: [], currentIndex: -1 }
+        const backendModeCurrent = backendModes.currentIndex >= 0 ? backendModes.modes[backendModes.currentIndex] : undefined
         if (backendModes.modes.length > 0 && parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/permission', [
-            t('permission-current', { name: modeDisplayName(channel.mode) }),
+            t('permission-mode-current', { name: backendModeCurrent?.name ?? modeDisplayName(channel.mode) }),
             t('permission-mode-switch-hint'),
           ])
           return true
@@ -3693,7 +3672,9 @@ export function Chat({
               kind: 'mode',
               index,
               modes: backendModes.modes.map(mode => ({ id: mode.id, name: mode.name, ...(mode.description === undefined ? {} : { description: mode.description }) })),
-              currentId: backendModes.modes[index]?.id,
+              // No ✓ when the live mode is not in the roster: the focus falls
+              // back to the first row, the checkmark must not follow it.
+              currentId: backendModeCurrent?.id,
             },
           })
           return true
@@ -3861,22 +3842,18 @@ export function Chat({
         return true
       }
       case 'channel': {
-        // 渠道档案选择器（/channel 仅 channels 能力的后端提供——BACKEND_CHANNEL_
-        // COMMAND 随能力快照出现，DSH 与其他后端既不列出也不拦这条线；能走到
-        // 这里说明命令在合并表里）。切换式语义与 /kernel 同款：再点一次收起。
+        // 渠道选择器。/channel 只在声明了 channels 能力的内核下进命令表，
+        // 能走到这里就说明可用。与 /kernel 一样，再执行一次就收起。
         setHelpOpen(false)
         if (overlay.kind === 'channel') dispatchOverlay({ type: 'close' })
         else openChannelPicker()
         return true
       }
       case 'kernel':
-        // 内核选择器（名册在 pickerPanels 的 kernel 分支渲染）。命令在**每个**
-        // 后端都可用——这也是从 Claude 切回 DSH 的唯一入口：非 DSH 会话根本
-        // 不出启动页（三个开机屏都是 DSH 的屏）。确认路径走组合根的
-        // onSwitchBackend（写 kernel.json → 通知 → 以新内核重启，新会话）。
+        // 内核选择器，每个内核下都可用（在对话页里切回 DSH 只有这一条路）。
+        // 确认后由组合根的 onSwitchBackend 记住选择并以新内核重启。与 /help、
+        // 参数行一致：选择器已开着就收起，没开才打开。
         setHelpOpen(false)
-        // 第八版切换式（与 /help、参数行同一套语义）：选择器已开着就收起，
-        // 没开才打开——再点一次同一个入口不会把人困在里面。
         if (overlay.kind === 'kernel') dispatchOverlay({ type: 'close' })
         else openKernelPicker()
         return true
@@ -3941,11 +3918,10 @@ export function Chat({
         return true
       }
       case 'btw': {
-        // `/btw`：单轮无工具侧问，线程是纯 UI 暂态（btwThreads，按
-        // session 隔离），不打断主回合、不写会话历史/转录。空参数只提
-        // 示用法。快路径（设计 §快路径）：面板启用时路由进线程并打开
-        // 聚焦；模态 surface 活跃时不抢开，落定只置未读 badge；面板未
-        // 启用时回退浮层——同一问答只落一个 surface。
+        // `/btw`：单轮无工具侧问，线程只在内存里（btwThreads，按会话
+        // 隔离），不打断主回合、不写会话历史。空参数只提示用法。启用了
+        // btw 面板就进面板线程（有模态界面时不抢开，只标未读）；没启用
+        // 就用浮层。同一个问答只出现在一处。
         setHelpOpen(false)
         const question = rawInput.trim()
         if (!question) {
@@ -6076,12 +6052,11 @@ export function Chat({
     return fullscreen ? screen : <AlternateScreen>{screen}</AlternateScreen>
   }
 
-  // Main-screen read-only Agent View (design agent-team-full §4): a scene
-  // layer over the mounted Chat — no second Channel and no Channel identity
-  // change (never attachToAgent/resumeTo/createChannel). Rendering INSTEAD of
-  // the conversation borrows the screen the same way the trajectory scene
-  // does; Chat stays mounted, so the parent's rows/draft/pending/usage live
-  // on and the round trip is invisible to them. Esc pops the source stack.
+  // Main-screen read-only Agent View: a scene over the mounted Chat, with no
+  // second Channel and no change of the bound session. It borrows the screen
+  // the way the trajectory scene does; Chat stays mounted, so the parent's
+  // rows, draft, pending queue and usage are untouched by the round trip.
+  // Esc returns to wherever the view was opened from.
   if (agentView !== null && launchpadGate()) {
     const viewSubagent = channel.subagents.find(s => s.agentId === agentView.agentId)
     if (!viewSubagent) {
@@ -6089,10 +6064,9 @@ export function Chat({
       setAgentView(null)
       return null
     }
-    // Optional chaining on the CONTROL too: headless stubs mount Chat without
-    // a subagentControl member at all — a bare read here crashed the render
-    // (verify-keymap's ctrl+a roundtrip) and took the whole key pipeline down.
+    // Headless stubs mount Chat without a subagentControl at all.
     const messageControl = channel.subagentControl?.message
+    const loadTranscript = channel.subagentControl?.history
     const viewMessages = messageControl === undefined ? [] : messageControl.messages().filter(m => m.from === agentView.agentId || m.to === agentView.agentId)
     const viewTarget = agentComposeTargetOf(agentView.agentId, new Map(channel.subagents.map(s => [s.agentId, s.description])))
     const viewScene = (
@@ -6100,14 +6074,12 @@ export function Chat({
         subagent={viewSubagent}
         source={agentView.source}
         onExit={() => exitAgentView(agentView.source)}
-        {...(channel.subagentControl.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
+        {...(loadTranscript === undefined ? {} : { loadTranscript })}
         messages={viewMessages}
         {...(messageControl === undefined ? {} : { compose: { control: messageControl, target: viewTarget } })}
         roster={channel.subagents}
-        // P3 workbench: switching a sibling/parent swaps the viewed agent
-        // IN PLACE — the source stack stays as entered, so Esc still returns
-        // to the original entry point (never to the previously viewed
-        // agent), and the Channel identity/parent queues are untouched.
+        // Switching to a sibling or the parent swaps the viewed agent in
+        // place; Esc still returns to the original entry point.
         onSwitchAgent={switchViewedAgent}
       />
     )
@@ -6181,11 +6153,8 @@ export function Chat({
   // Subagent dashboard: displays all active and completed subagents.
   // Like the browser and settings, it replaces the conversation entirely.
   if (subagentDashboardOpen && launchpadGate()) {
-    // P3 peer roster: deliberately NOT passed to the dashboard — no backend
-    // serves a cross-session roster today (the CLI ListAgents peer/teammate
-    // sections need a host control plane the SDK does not expose). When one
-    // grows a stable seam, hand the rows here; the dashboard partitions them
-    // from the children and keeps them non-sending.
+    // No kernel serves agents from other sessions yet, so the dashboard gets
+    // no `peers`; once one does, pass them here.
     const dashboard = (
       <SubagentDashboard
         subagents={[...channel.subagents]}
@@ -6397,8 +6366,7 @@ export function Chat({
         cwd={channel.displayCwd}
         branch={channel.gitBranch}
         tuiVersion={tuiVersion}
-        // 右下角的内核行（用户原话：「显示可以选择的内核 并且有箭头或者高亮
-        // 表明目前记忆中启动的内核」）：目录与选择器同源，点它开同一个选择器。
+        // 右下角的内核行：与选择器同一份目录，标出当前内核，点它打开选择器。
         kernels={kernelOptions}
         onKernelPick={() => openKernelPicker()}
         // 左下角工作目录铭牌（第七版）：点开/回车开既有 /workspace 菜单——
@@ -6785,8 +6753,7 @@ export function Chat({
             />
           </Box>
         ) : btwOverlayOpen && !sidePanel.enabledPanelIds.includes('btw') ? (
-          // Fallback surface（设计 §fallback）：仅当 btw 面板未启用/不存在/
-          // 配置禁用时显示；面板中途被启用则立即让位（同一问答不双份呈现）。
+          // 浮层只在 btw 面板未启用时显示；面板中途被启用就立即让位。
           <Box flexDirection="column" marginTop={1}>
             <BtwPanelFallback
               thread={btwOverlayThread}

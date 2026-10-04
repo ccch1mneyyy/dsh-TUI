@@ -322,8 +322,8 @@ try {
     )
     // The descriptor row is the session ledger's last row; arrival pins the
     // cursor to the tail, so 'a' drills straight into it.
-    check('scope/scene: drill hint appears once lanes exist', await settled(() => h.screen().includes('a drill into agent')))
-    check('scope/scene: source label names the mounted fold (header)', await settled(() => h.screen().includes('AgentEvent fold')))
+    check('scope/scene: drill hint appears once lanes exist', await settled(() => h.screen().includes(t('trajectory-drill-hint'))))
+    check('scope/scene: source label names the mounted fold (header)', await settled(() => h.screen().includes(t('trajectory-backend-agent-events'))))
     await writeKey(h.stdin, 'a')
     check('scope/scene: agent scope chip + lane rows render', await settled(() => h.screen().includes('\u25c6 agent') && h.screen().includes('childtool')))
     await writeKey(h.stdin, 'a')

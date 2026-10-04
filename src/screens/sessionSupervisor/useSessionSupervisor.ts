@@ -98,7 +98,7 @@ export interface SessionSupervisorInput {
 export function useSessionSupervisor(input: SessionSupervisorInput) {
   const { channel, home, onOpenSession, onNewSession, onStopSession, liveStateOf, columns, rows } = input
   /**
-   * The bound backend (Phase 4b): the screen lists ITS sessions. A DSH
+   * The bound backend: the screen lists ITS sessions. A DSH
    * channel (or a partial headless one without a snapshot) keeps today's
    * screen exactly; another backend has no workspace ledger (`/workspace` is
    * a DSH command), keeps its pins in its own file, and its rows are

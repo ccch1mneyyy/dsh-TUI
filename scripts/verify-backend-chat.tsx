@@ -23,6 +23,7 @@ const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { Qu
     import('../src/ink/instances.js'),
     import('./lib/term-test.mjs'),
   ])
+const { activateModernEmojiWidths } = await import('./lib/modern-widths.mjs')
 import type { AgentEvent, AgentEventMeta } from '../src/agent/events.js'
 import type { AgentInput, AgentSession, SubmitPlacement } from '../src/agent/session.js'
 import type { WorkingActivityView } from '../src/adapter/ports/channel-view.js'
@@ -129,6 +130,12 @@ try {
   await typeLine('/ne')
   check('the slash menu offers served commands', await settled(() => screen().includes(t('sugg-commands-title')) && screen().includes('Start a new conversation')), screen())
   await clearLine()
+  // The composition root serves /restart and /kernel by respawning the
+  // process (a Claude session included), so every backend lists them.
+  check('restart and kernel are offered on a non-DSH backend',
+    channel.commandCompletions('/rest').some(command => command.name === 'restart')
+      && channel.commandCompletions('/kern').some(command => command.name === 'kernel'),
+    JSON.stringify(channel.commandCompletions('/re').map(command => command.name)))
 
   await typeLine('/preset')
   stdin.write('\r')
@@ -448,7 +455,7 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
     for (const char of '/permission status') stdin.write(char)
     await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
     stdin.write('\r')
-    check('/permission status reports the current mode', await settled(() => screen().includes(t('permission-current', { name: '' }).trim()) && screen().includes('Plan')), screen())
+    check('/permission status reports the current mode', await settled(() => screen().includes(t('permission-mode-current', { name: '' }).trim()) && screen().includes('Plan')), screen())
     check('no permission line ever reached the model', submits.length === 0, JSON.stringify(submits.map(input => input.text)))
     await clearLineStdin(stdin)
     for (const char of '/permission bogus') stdin.write(char)
@@ -664,6 +671,9 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
     clearActivity: sessionId => activityStore.clear(sessionId),
   } as never)
   const term = new XTerm({ cols: 100, rows: 30, scrollback: 0, allowProposedApi: true })
+  // The spinner frames are emoji: measure them the way a real terminal does
+  // (lib/modern-widths.mjs), or in-place repaints of that row land a cell off.
+  activateModernEmojiWidths(term)
   class Out extends Writable { columns = 100; rows = 30; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
   class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
   const stdin = new In()

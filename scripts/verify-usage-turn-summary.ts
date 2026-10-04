@@ -208,6 +208,22 @@ const summaryRows = (rows: readonly ChatRow[]): ChatRow[] => rows.filter(row => 
   check('10. 重放同样导出账本行（resume 可重建）', replayRows.length === 1 && replayRows[0]?.turnUsage?.cacheRead === 8)
 }
 
+// ── 11. One formatter for the transcript row, /tokens and /status ────────
+{
+  const { setLang, t } = await import('../src/i18n.js')
+  const { turnUsageParts } = await import('../src/components/TurnUsageRow.js')
+  setLang('en')
+  const base = { input: 100, output: 50, cacheRead: 1000, cacheWrite: 200, cacheKnown: true, durationMs: 60000, retries: 0, outcome: 'completed' as const, model: 'model-x', noteModel: true }
+  const parts = turnUsageParts(base as never)
+  check('11a. 分段：↑ ↓ 带读/写标注的缓存 时长', parts[0] === '↑100' && parts[1] === '↓50'
+    && parts[2] === t('usage-cache-segment', { parts: `${t('usage-cache-read', { n: '1k' })}/${t('usage-cache-write', { n: '200' })}` })
+    && parts.length === 4)
+  check('11b. 只有转录行带模型名', turnUsageParts(base as never, { model: true }).includes('model-x') && !parts.includes('model-x'))
+  const partial = turnUsageParts({ ...base, cacheKnown: false, retries: 2, outcome: 'interrupted' } as never)
+  check('11c. 未上报缓存不显示缓存段；重试与中断标注都在', !partial.some(part => part.startsWith(t('usage-cache-segment', { parts: '' }).trim()))
+    && partial.includes(t('usage-retry-segment', { n: 2 })) && partial.at(-1) === t('usage-turn-outcome-interrupted'))
+}
+
 console.log(results.join('\n'))
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
 process.exitCode = failures === 0 ? 0 : 1

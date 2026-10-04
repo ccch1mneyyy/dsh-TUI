@@ -329,7 +329,7 @@ async function run() {
     stdin.write('\r') // empty draft + dock → send all
     await sleep(300)
     check('empty ⏎ sends the dock exactly once in FIFO', channel.cancelled.includes('deliverDocked') && JSON.stringify(channel.submitted) === '["停靠甲","停靠乙"]', JSON.stringify({ cancelled: channel.cancelled, submitted: channel.submitted }))
-    check('dock-sent notice shown', channel.notified.some(n => n.text.includes('停靠消息')), JSON.stringify(channel.notified))
+    check('dock-sent notice shown', channel.notified.some(n => n.text.includes('暂存消息')), JSON.stringify(channel.notified))
     instance.unmount()
   }
 

@@ -65,8 +65,10 @@ export function KernelPicker({ options, focusIndex, pinned, onPick }: {
           )
         })}
         {pinned === true && (
+          // A sentence, not a label: it wraps on a narrow terminal instead of
+          // losing its second half to truncation.
           <Box paddingLeft={2}>
-            <Text dimColor wrap="truncate">
+            <Text dimColor wrap="wrap">
               {t('kernel-pinned-hint')}
             </Text>
           </Box>

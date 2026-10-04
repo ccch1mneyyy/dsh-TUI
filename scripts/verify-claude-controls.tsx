@@ -538,7 +538,7 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
     for (const char of '/permission status') stdin.write(char)
     await sleep(100) // 固定窗:pacing typed characters land before Enter.
     stdin.write('\r')
-    check('render: /permission status reports the current native mode', await settled(() => screen().includes(t('permission-current', { name: '' }).trim()) && screen().includes(t('claude-mode-acceptEdits'))), screen())
+    check('render: /permission status reports the current native mode', await settled(() => screen().includes(t('permission-mode-current', { name: '' }).trim()) && screen().includes(t('claude-mode-acceptEdits'))), screen())
   } finally {
     app.unmount()
     terminal.dispose()

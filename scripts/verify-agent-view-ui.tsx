@@ -293,7 +293,7 @@ console.log('--- S3: bounded tail fallback ---')
       onExit: () => {},
     }),
     async frame => {
-      check('S3 无 history：范围标注出现', await settled(() => frame.screen().includes('200 lines retained')), frame.lines().slice(0, 4).join('|'))
+      check('S3 无 history：范围标注出现', await settled(() => frame.screen().includes(t('agent-view-retained-tail', { count: 200 }))), frame.lines().slice(0, 4).join('|'))
       check('S3 无 history：顶栏不自称 history（不出现假 Transcript 历史标注）', !frame.lines()[0]!.includes('history'), JSON.stringify(frame.lines().slice(0, 2)))
     },
   )
@@ -384,7 +384,7 @@ console.log('--- S4: esc layering + queue/steer ---')
       await settled(() => frame.screen().includes('draft stays'))
       frame.stdin.write('\r')
       check('S4 失败保留草稿', await settled(() => failLog.length === 1 && frame.screen().includes('draft stays')), 'log=' + JSON.stringify(failLog))
-      check('S4 失败 notice 稳定理由 + 草稿保留说明', frame.screen().includes('not resumable') && frame.screen().includes('draft retained'))
+      check('S4 失败 notice 稳定理由 + 草稿保留说明', frame.screen().includes(t('agent-message-target-not-resumable')) && frame.screen().includes(t('agent-message-draft-retained')))
     },
   )
   // no composer → Esc exits immediately
@@ -417,7 +417,7 @@ console.log('--- S5: capability degradation ---')
       compose: { control: makeControl(log), target: { agentId: 'agent-child-0001' } } as never,
     }),
     async frame => {
-      check('S5 无 name：不提供提交（提示 nameless）', await settled(() => frame.screen().includes('no addressable name')), frame.lines().slice(-4).join('|'))
+      check('S5 无 name：不提供提交（提示 nameless）', await settled(() => frame.screen().includes(t('agent-message-hint-nameless'))), frame.lines().slice(-4).join('|'))
       frame.stdin.write('x')
       await sleep(60) // 固定窗:pacing 输入到断言步间
       frame.stdin.write('\r')
@@ -464,9 +464,9 @@ console.log('--- S6: message leaf states ---')
       const screen = frame.screen()
       check('S6 delivered 词渲染', screen.includes('delivered'), screen)
       check('S6 unknown 词渲染', screen.includes('unknown'), screen)
-      check('S6 未知关系不画箭头', screen.includes('unknown relation') && !screen.includes('→ undefined'), screen)
-      check('S6 未知关系行没有 from→to 箭头', !(screen.split('\n').some(line => line.includes('unknown relation') && line.includes('→'))), screen)
-      check('S6 unknown 附不推断说明', screen.includes('no delivery fact'), screen)
+      check('S6 未知关系不画箭头', screen.includes(t('agent-message-unknown-target')) && !screen.includes('→ undefined'), screen)
+      check('S6 未知关系行没有 from→to 箭头', !(screen.split('\n').some(line => line.includes(t('agent-message-unknown-target')) && line.includes('→'))), screen)
+      check('S6 unknown 附不推断说明', screen.includes(t('agent-message-no-delivery-fact')), screen)
     },
   )
 }
@@ -517,7 +517,7 @@ console.log('--- S8: detail messages page + view action ---')
         frame.stdin.write('\x1b[C') // →（summary→output→tools→messages）
         await sleep(70) // 固定窗:pacing 逐键翻页步间
       }
-      check('S8 消息页渲染 from → to 与 unknown 诊断', frame.screen().includes('parent → child') && frame.screen().includes('unknown relation'), frame.lines().slice(4, 12).join('|'))
+      check('S8 消息页渲染 from → to 与 unknown 诊断', frame.screen().includes('parent → child') && frame.screen().includes(t('agent-message-unknown-target')), frame.lines().slice(4, 12).join('|'))
       check('S8 composer 挂载', frame.screen().includes('Send to research the spec'))
     },
   )
@@ -748,7 +748,7 @@ console.log('--- S10: SendMessage tool card shapes ---')
   await withTerminal(() => card(smTool({ resultText: 'ok' })), async frame => {
     await settled(() => frame.lines().some(l => l.includes('unknown')))
     check('S10 裸成功 = unknown（不猜 delivered）', frame.lines().some(l => l.includes('unknown')), frame.lines().slice(0, 8).join('|'))
-    check('S10 unknown 附不推断说明', frame.screen().includes('no delivery fact'))
+    check('S10 unknown 附不推断说明', frame.screen().includes(t('agent-message-no-delivery-fact')))
   })
   await withTerminal(() => card(smTool({ status: 'error', errorText: 'agent not found', resultText: '' })), async frame => {
     check('S10 失败态：refused + 原因可见', await settled(() => frame.lines().some(l => l.includes('refused')) && frame.screen().includes('agent not found')), frame.lines().slice(0, 8).join('|'))

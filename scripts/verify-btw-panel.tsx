@@ -366,7 +366,7 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>) {
   const screen = chat.lines().join('\n')
   check('C1b. 侧栏打开且 btw 为活动面板（胶囊标题）', screen.includes('侧问'), screen.split('\n').slice(0, 3).join(' | '))
   check('C1c. 问题路由进面板', after.includes('快路由的问题一'))
-  check('C1d. 浮层回退不出现（单一 surface）', !after.includes('未启用 btw 面板'))
+  check('C1d. 浮层回退不出现（单一 surface）', !after.includes('btw 面板未启用'))
   ask.finish('快路由的答案')
   await delay(500)
   const answered = chat.lines().join('\n')
@@ -382,14 +382,14 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>) {
   const ask = scriptedAsk()
   const chat = await mountChat(ask)
   const after = await chat.run('/btw 回退模式的问题')
-  check('C2a. 未启用面板时浮层回退出现', after.includes('未启用 btw 面板') && after.includes('回退模式的问题'))
+  check('C2a. 未启用面板时浮层回退出现', after.includes('btw 面板未启用') && after.includes('回退模式的问题'))
   check('C2b. 侧问仍然发起（一次）', ask.calls.length === 1)
   chat.stdin.write(ESC)
   await delay(500)
   const turn = btwThreads.get('probe-session')?.turns[0]
   check('C2c. Esc 关闭浮层即中止在途轮', turn?.phase === 'cancelled', 'phase=' + (turn?.phase ?? 'none'))
   const closed = plainText(chat.stdout.frames.slice(chat.stdout.frames.length - 20))
-  check('C2d. 浮层关闭后回到普通聊天', !closed.includes('未启用 btw 面板'))
+  check('C2d. 浮层关闭后回到普通聊天', !closed.includes('btw 面板未启用'))
   await chat.unmount()
 }
 

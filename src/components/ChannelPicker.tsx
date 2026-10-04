@@ -48,7 +48,7 @@ export function ChannelPicker({ rows, focusIndex, onPick }: {
         </Box>
         {!rows.some(row => row.kind === 'channel') && (
           <Box paddingLeft={2} marginBottom={1}>
-            <Text dimColor wrap="truncate">
+            <Text dimColor wrap="wrap">
               {t('channel-empty-hint')}
             </Text>
           </Box>

@@ -145,7 +145,7 @@ async function paint(tool: Record<string, unknown>, opts: { verbose?: boolean, s
     callView: { card: 'generic', title: 'Read /tmp/big.log' },
     resultFull: big,
   }, { verbose: true, rows: 520 })
-  check('6a. 窗口告知上屏', screen.includes('已显示前 400/500 行，源保留全文'))
+  check('6a. 窗口告知上屏', screen.includes('只显示前 400/500 行（全文仍保留）'))
   check('6b. 窗口内行可见', screen.includes('w-line-10'))
   check('6c. 窗口外行不上屏', !screen.includes('w-line-450'))
 }
@@ -156,8 +156,8 @@ async function paint(tool: Record<string, unknown>, opts: { verbose?: boolean, s
     name: 'read',
     resultText: 'preview-only',
   }, { verbose: true, sourceFolded: true })
-  check('7. 源折叠的展开卡披露「源数据已折叠」', screen.includes('源数据已折叠'))
-  check('7b. 源折叠披露优先于全文缺失披露', !screen.includes('结构化呈现'))
+  check('7. 源折叠的展开卡披露「原始数据已折叠」', screen.includes('原始数据已折叠'))
+  check('7b. 源折叠披露优先于全文缺失披露', !screen.includes('整理后的视图'))
 }
 {
   const screen = await paint({
@@ -165,7 +165,7 @@ async function paint(tool: Record<string, unknown>, opts: { verbose?: boolean, s
     callView: { card: 'diff', title: 'Edit /tmp/a.ts', diffs: [{ path: '/tmp/a.ts', oldText: null, newText: 'hello' }] },
     resultView: { card: 'diff', title: 'Edit /tmp/a.ts', diffs: [{ path: '/tmp/a.ts', oldText: null, newText: 'hello' }] },
   }, { verbose: true })
-  check('8. 仅结构化视图的展开卡如实标注', screen.includes('结构化呈现'))
+  check('8. 仅结构化视图的展开卡如实标注', screen.includes('整理后的视图'))
 }
 {
   const screen = await paint({
@@ -173,7 +173,7 @@ async function paint(tool: Record<string, unknown>, opts: { verbose?: boolean, s
     callView: { card: 'generic', title: 'Read /tmp/full.txt' },
     resultFull: 'the full text',
   }, { verbose: true })
-  check('9. 有全文的展开卡不加任何披露', !screen.includes('结构化呈现') && !screen.includes('源数据已折叠'))
+  check('9. 有全文的展开卡不加任何披露', !screen.includes('整理后的视图') && !screen.includes('原始数据已折叠'))
 }
 
 // ── 10. Long error body: preview folds, verbose shows everything ─────────
@@ -184,7 +184,7 @@ async function paint(tool: Record<string, unknown>, opts: { verbose?: boolean, s
   check('10b. 错误首行可见', collapsed.includes('err-line-1'))
   const expanded = await paint({ status: 'error', errorText }, { verbose: true })
   check('10c. 展开显示全部错误行', expanded.includes('err-line-6'))
-  check('10d. 展开无窗口告知（未超窗）', !expanded.includes('已显示前'))
+  check('10d. 展开无窗口告知（未超窗）', !expanded.includes('只显示前'))
 }
 
 console.log(results.join('\n'))

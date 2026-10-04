@@ -308,7 +308,7 @@ async function mountChat(flags: Flags, over: Record<string, unknown> = {}, chatP
     stdin.write(`\u001b[<0;${cell.col};${cell.row}M\u001b[<0;${cell.col};${cell.row}m`)
     await settle(() => stdout.frames.length > before, { timeoutMs: 400 })
   }
-  return { term, stdout, stdin, notifications, calls, screen, send, type, click, unmount: async () => { await instance.unmount() } }
+  return { term, stdout, stdin, channel, notifications, calls, screen, send, type, click, unmount: async () => { await instance.unmount() } }
 }
 
 const LAUNCHPAD_MARK = '说点什么，或输入 /' + ' 看命令…'
@@ -1071,6 +1071,61 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
     'before=' + JSON.stringify(beforeKeys) + '\n      down=' + JSON.stringify(afterDown)
       + '\n      enter=' + JSON.stringify(afterEnter) + '\n      notes=' + JSON.stringify(chat.notifications))
   await chat.send('\x1b')
+  await chat.unmount()
+}
+{
+  // 回合运行中（例如后台任务唤醒了模型）切内核会杀掉这个回合：只提示，不切换。
+  const switches: string[] = []
+  const chat = await mountChat({ launchpadOnBoot: true }, { working: true }, {
+    onSwitchBackend: (id: string) => { switches.push(id) },
+    onProbeKernels: async () => ({ installed: true, auth: 'ok' as const, version: '2.1.284' }),
+  })
+  await settled(() => chat.screen().includes('说点什么'))
+  await clickChip(chat, '内核')
+  await settled(() => chat.screen().includes('选择内核') && chat.screen().includes('claude-code v2.1.284'))
+  await chat.click('Claude Agent')
+  check('X9 回合运行中选 Claude：提示不能切换，不调用 onSwitchBackend',
+    await settled(() => chat.notifications.includes('回合运行中，无法切换内核')) && switches.length === 0,
+    JSON.stringify({ switches, notes: chat.notifications }))
+  await chat.send('\x1b')
+  await chat.unmount()
+}
+{
+  // /channel 打开后回合开始了（后台任务唤醒模型）：换到连接不同的渠道要以新
+  // 会话重启，会打断这个回合，所以只提示，不写渠道、不重启。
+  const sets: string[] = []
+  const restarts: string[] = []
+  const conn = (url: string) => ({ baseUrl: url, hasToken: true, envKeys: [], fingerprint: url })
+  const channels = [
+    { id: 'alpha', name: 'alpha', models: [], tiers: [], connection: conn('https://alpha.example') },
+    { id: 'beta', name: 'beta', models: [], tiers: [], connection: conn('https://beta.example') },
+  ]
+  const chat = await mountChat({}, {
+    commandList: [...LOCAL_COMMANDS, { name: 'channel', description: 'channel' }],
+    listChannels: () => ({ channels, activeId: 'alpha' }),
+    setChannel: (id: string) => { sets.push(id); return true },
+  }, { onRestartFreshSession: (notice: string) => { restarts.push(notice) } })
+  await chat.type('/channel')
+  await chat.send('\r')
+  check('X10 /channel 打开渠道选择器',
+    await settled(() => chat.screen().includes('渠道档案') && chat.screen().includes('beta')),
+    chat.screen().slice(-600))
+  ;(chat.channel as { working: boolean }).working = true
+  await chat.send('\x1b[B')
+  // 固定窗:墙钟 Chat 吞掉上一次 Enter 后 80ms 内的回车（防连按），等过这个窗口。
+  await new Promise(resolve => setTimeout(resolve, 120))
+  await chat.send('\r')
+  check('X10b 回合运行中切到连接不同的渠道：提示、不写渠道、不重启',
+    await settled(() => chat.notifications.includes('回合运行中，无法切换或改动渠道'))
+      && sets.length === 0 && restarts.length === 0,
+    JSON.stringify({ sets, restarts, notes: chat.notifications }))
+  ;(chat.channel as { working: boolean }).working = false
+  // 固定窗:墙钟 同上，越过回车防连按窗口。
+  await new Promise(resolve => setTimeout(resolve, 120))
+  await chat.send('\r')
+  check('X10c 空闲后同一操作：写渠道并以新会话重启',
+    await settled(() => sets.join() === 'beta' && restarts.length === 1),
+    JSON.stringify({ sets, restarts, notes: chat.notifications }))
   await chat.unmount()
 }
 

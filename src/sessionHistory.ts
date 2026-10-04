@@ -89,11 +89,11 @@ export function resumeTargetFromArgv(
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--') break
-    if (a === '--resume' || a === '-c' || a === '--continue' || a.startsWith('--resume=')) {
+    if (isResumeFlag(a)) {
       let sessionId = ''
       if (a.startsWith('--resume=')) {
         sessionId = a.slice('--resume='.length).trim()
-      } else if (a === '--resume' && argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) {
+      } else if (resumeTakesNextArg(argv, i)) {
         sessionId = argv[++i].trim()
       }
       if (!sessionId) sessionId = readFallback() ?? ''
@@ -103,13 +103,20 @@ export function resumeTargetFromArgv(
   return undefined
 }
 
+/** A resume flag of the app argv grammar shared by the two functions here. */
+function isResumeFlag(arg: string): boolean {
+  return arg === '--resume' || arg === '-c' || arg === '--continue' || arg.startsWith('--resume=')
+}
+
+/** `--resume <id>`: the bare flag consumes the next argument unless it is an option. */
+function resumeTakesNextArg(argv: readonly string[], index: number): boolean {
+  const next = argv[index + 1]
+  return argv[index] === '--resume' && next !== undefined && !next.startsWith('-')
+}
+
 /**
- * Session-id → last-used epoch ms map for MRU ordering.
- * @returns The parsed map; best effort, an unreadable file yields {}.
- */
-/**
- * Drop the resume flags {@link resumeTargetFromArgv} recognizes (same
- * grammar, one source — the two must never drift).
+ * Drop the resume flags {@link resumeTargetFromArgv} recognizes (the same
+ * grammar, through the same helpers).
  *
  * A kernel switch respawns the process onto the OTHER backend: this
  * kernel's session id means nothing there, and an inherited `--resume
@@ -128,9 +135,8 @@ export function stripResumeArgs(argv: readonly string[]): string[] {
       out.push(...argv.slice(i))
       break
     }
-    if (a === '--resume' || a === '-c' || a === '--continue' || a.startsWith('--resume=')) {
-      // A bare flag eats the id behind it (same rule as the parser above).
-      if (a === '--resume' && argv[i + 1] !== undefined && !argv[i + 1]!.startsWith('-')) i++
+    if (isResumeFlag(a)) {
+      if (resumeTakesNextArg(argv, i)) i++
       continue
     }
     out.push(a)
@@ -138,6 +144,10 @@ export function stripResumeArgs(argv: readonly string[]): string[] {
   return out
 }
 
+/**
+ * Session-id → last-used epoch ms map for MRU ordering.
+ * @returns The parsed map; best effort, an unreadable file yields {}.
+ */
 export function readLastUsed(): Readonly<Record<string, number>> {
   const stamp = lastUsedFileStamp()
   if (lastUsedCache !== undefined && lastUsedStamp === stamp) return lastUsedCache

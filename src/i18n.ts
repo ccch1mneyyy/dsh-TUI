@@ -178,19 +178,19 @@ const dict = {
   'input-images-staged': { zh: '已附加 {{count}} 张图片', en: { one: 'Attached {{count}} image', other: 'Attached {{count}} images' } },
   'input-images-staged-adapted': { zh: '已附加 {{count}} 张图片 · {{adapted}} 张已适配', en: { one: 'Attached {{count}} image · {{adapted}} adapted', other: 'Attached {{count}} images · {{adapted}} adapted' } },
   'send-failed': { zh: '发送失败 · {{err}}', en: 'Send failed · {{err}}' },
-  // ── agent-team: 用户到子代理消息（通道层的父中介信封，模型可见） ──────
+  // ── agent team: 用户发给子代理的消息，由父代理转发（模型可见） ──────
   'agent-message-envelope': {
     zh: '请把下面这条用户消息原样转发给子代理「{{name}}」（目标标识 {{id}}）：使用 SendMessage 工具投递，不要改写内容，也不要代替它作答。转发后简短告知结果即可。\n\n{{text}}',
     en: 'Please relay the following user message verbatim to subagent "{{name}}" (target id {{id}}): deliver it with the SendMessage tool, do not rewrite its content and do not answer on its behalf. Briefly report the outcome afterwards.\n\n{{text}}',
   },
   // ── backends: capability-gated actions and commands ─────────────────
   'session-cleared': { zh: '会话已清屏', en: 'Session cleared' },
-  'conversation-reset': { zh: '后端重置了对话：之前的上下文已清空', en: 'The backend reset the conversation: the earlier context is gone' },
-  'conversation-reset-clear': { zh: '对话已清空：后端从全新的上下文继续', en: 'Conversation cleared: the backend continues with a fresh context' },
-  'conversation-reset-plan': { zh: '退出计划模式时清空了上下文：后端带着计划从全新的上下文继续', en: 'Context cleared on leaving plan mode: the backend continues from a fresh context with the plan' },
-  'conversation-reset-fresh': { zh: '后端开始了一个新会话来执行计划', en: 'The backend started a fresh session to carry out the plan' },
-  'cost-source-backend': { zh: '后端上报的会话费用', en: 'session cost reported by the backend' },
-  'capability-unavailable-backend': { zh: '当前后端不支持：{{name}}', en: 'Not supported by this backend: {{name}}' },
+  'conversation-reset': { zh: '对话已重置，之前的上下文已清空', en: 'The conversation was reset; the earlier context is gone' },
+  'conversation-reset-clear': { zh: '对话已清空，接下来从新的上下文开始', en: 'Conversation cleared; continuing with a fresh context' },
+  'conversation-reset-plan': { zh: '退出计划模式时清空了上下文，接下来带着计划从新的上下文开始', en: 'Context cleared on leaving plan mode; continuing from a fresh context with the plan' },
+  'conversation-reset-fresh': { zh: '已开新会话来执行计划', en: 'Started a fresh session to carry out the plan' },
+  'cost-source-backend': { zh: '内核上报的会话费用', en: 'session cost reported by the kernel' },
+  'capability-unavailable-backend': { zh: '当前内核不支持：{{name}}', en: 'Not supported by this kernel: {{name}}' },
   'capability-failed': { zh: '{{name}} 失败 · {{err}}', en: '{{name}} failed · {{err}}' },
   // ── backends/claude (Claude Agent backend) ─────────────────────────
   'claude-permission-denied': { zh: '{{tool}} 被权限规则拒绝', en: '{{tool}} was denied by a permission rule' },
@@ -235,25 +235,25 @@ const dict = {
   'claude-auth-reconnected': { zh: '凭证已刷新并重新连接同一会话，请重发上一条消息', en: 'Credential renewed and the same session reconnected; send your last message again' },
   'claude-auth-refresh-failed': { zh: '刷新 Claude 凭证失败{{detail}}（可用 /login 重新登录）', en: 'Renewing the Claude credential failed{{detail}} (sign in again with /login)' },
   'claude-channel-token-missing': {
-    zh: '渠道 {{name}}（{{host}}）指向自定义端点但没有可用 token，已拒绝启动：不会对中转端点发匿名请求。请在 /channel → 管理渠道 里为它补上 token，或切换到其他渠道后重试。',
-    en: 'Channel {{name}} ({{host}}) points at a custom endpoint but has no usable token — the start was refused: no anonymous relay requests. Add a token under /channel → Manage channels, or switch to another channel, then retry.',
+    zh: '渠道 {{name}}（{{host}}）指向自定义端点，但没有可用的 token，已拒绝启动，以免向中转端点发送不带凭据的请求。请在 /channel → 管理渠道 里补上 token，或换一个渠道后重试。',
+    en: 'Channel {{name}} ({{host}}) points at a custom endpoint but has no usable token, so the session was not started (no unauthenticated requests to a relay). Add a token under /channel → Manage channels, or switch to another channel, then retry.',
   },
   'claude-channel-helper-conflict': {
-    zh: 'settings.json 配置了 apiKeyHelper，与激活渠道冲突：helper 生成的 x-api-key 会随渠道请求发往渠道端点。请从 settings.json 移除 apiKeyHelper，或用 /channel 停用该渠道后再启动。',
-    en: 'settings.json declares apiKeyHelper, which conflicts with the active channel: the x-api-key the helper produces would ride channel requests to the channel endpoint. Remove apiKeyHelper from settings.json, or deactivate the channel via /channel, then retry.',
+    zh: 'settings.json 配置了 apiKeyHelper，与当前渠道冲突：它生成的 x-api-key 会随请求发到渠道端点。请从 settings.json 删掉 apiKeyHelper，或在 /channel 里停用该渠道后再启动。',
+    en: 'settings.json sets apiKeyHelper, which conflicts with the active channel: the x-api-key it produces would be sent to the channel endpoint. Remove apiKeyHelper from settings.json, or deactivate the channel in /channel, then retry.',
   },
   'claude-auth-refresh-status': { zh: ' · HTTP {{status}}', en: ' · HTTP {{status}}' },
-  'claude-auth-reconnect-failed': { zh: '重新连接 Claude 会话失败（诊断包含失败类别和 HTTP 状态；可用 /login 重新登录）', en: 'Reconnecting the Claude session failed (the diagnostics carry the failure category and HTTP status; sign in again with /login)' },
+  'claude-auth-reconnect-failed': { zh: '重新连接 Claude 会话失败；可用 /login 重新登录', en: 'Reconnecting the Claude session failed; sign in again with /login' },
   'claude-auth-reconnect-deferred': { zh: '当前回合结束后再用新凭证重新连接', en: 'Reconnecting with the new credential once the current turn ends' },
-  'claude-auth-reconnect-forced': { zh: '等待当前回合结束超时，现在重新连接——这会中断正在运行的回合', en: 'The turn did not finish in time; reconnecting now — this interrupts the running turn' },
+  'claude-auth-reconnect-forced': { zh: '等待当前回合结束超时，现在重新连接，正在运行的回合会被中断', en: 'The turn did not finish in time; reconnecting now, which interrupts the running turn' },
   'claude-auth-inputs-dropped': { zh: '重新连接失败，{{n}} 条尚未开始的消息未能送达', en: 'Reconnecting failed; {{n}} message(s) that had not started were not delivered' },
   'claude-auth-route': { zh: '未使用订阅登录：{{route}}', en: 'Subscription sign-in not used: {{route}}' },
   'claude-route-custom-endpoint': { zh: '自定义端点 {{host}}（ANTHROPIC_BASE_URL）', en: 'custom endpoint {{host}} (ANTHROPIC_BASE_URL)' },
   'claude-route-custom-oauth': { zh: '自定义 OAuth 部署', en: 'custom OAuth deployment' },
   'claude-route-unix-socket': { zh: 'Unix 套接字（ANTHROPIC_UNIX_SOCKET）', en: 'Unix socket (ANTHROPIC_UNIX_SOCKET)' },
-  'claude-route-gateway': { zh: 'Cloud 网关路由', en: 'Cloud gateway route' },
+  'claude-route-gateway': { zh: '云网关', en: 'cloud gateway' },
   'claude-route-api-key-helper': { zh: '设置中的 apiKeyHelper', en: 'apiKeyHelper in settings' },
-  'claude-route-settings-unreadable': { zh: '无法读取 Claude 设置，无法确认路由', en: 'Claude settings could not be read, so the route is unknown' },
+  'claude-route-settings-unreadable': { zh: '无法读取 Claude 设置，无法确认连接方式', en: 'Claude settings could not be read, so the connection route is unknown' },
   'claude-auth-source': { zh: '凭证来源：{{source}}', en: 'Credential: {{source}}' },
   'claude-auth-missing-hint': { zh: '未找到 Claude 凭证：用 /login 登录 anthropic，或设置 ANTHROPIC_API_KEY、在终端运行 claude login', en: 'No Claude credential found: sign in to anthropic with /login, set ANTHROPIC_API_KEY, or run `claude login` in a terminal' },
   'claude-auth-cli': { zh: 'CLI 报告 · apiKeySource：{{source}} · tokenSource：{{token}}', en: 'CLI reports · apiKeySource: {{source}} · tokenSource: {{token}}' },
@@ -263,7 +263,7 @@ const dict = {
   'claude-auth-source-claude-login': { zh: '本机 claude login', en: 'Local `claude login`' },
   'claude-auth-account': { zh: '账户：{{account}}', en: 'Account: {{account}}' },
   'login-backend-heading': { zh: '{{backend}} 登录状态', en: '{{backend}} sign-in' },
-  'login-backend-no-oauth': { zh: '未挂载 dsh-auth 登录服务：只能使用后端自己的凭证（环境变量或它自己的登录）', en: 'No dsh-auth sign-in service is mounted: only the backend\'s own credentials apply (environment or its own login)' },
+  'login-backend-no-oauth': { zh: '未挂载 dsh-auth 登录服务：只能用内核自己的凭证（环境变量或它自己的登录）', en: 'No dsh-auth sign-in service is mounted: only the kernel\'s own credentials apply (environment or its own login)' },
   'login-backend-reconnected': { zh: '已用新凭证重新连接 {{backend}} 会话', en: 'The {{backend}} session reconnected with the new credential' },
   'login-backend-reconnect-failed': { zh: '用新凭证重新连接失败 · {{err}}', en: 'Reconnecting with the new credential failed · {{err}}' },
   'provider-oauth-unmounted': { zh: 'dsh-auth 未挂载 {{provider}} 登录（在 dsh-auth 配置的 providers 中加入它）', en: 'dsh-auth does not mount the {{provider}} sign-in (add it to the dsh-auth providers config)' },
@@ -286,13 +286,13 @@ const dict = {
   'claude-process-exited': { zh: 'Claude 进程已退出：{{reason}}', en: 'The Claude process exited: {{reason}}' },
   'claude-process-ended': { zh: '会话流已结束', en: 'the session stream ended' },
   'claude-cancel-forced': { zh: '中断 30 秒未得到确认，已强制结束本回合', en: 'The interrupt was not confirmed within 30s; the turn was force-closed' },
-  'claude-interrupt-failed': { zh: '打断请求失败：排队消息未被撤销，仍将作为下一回合执行；已撤销停靠，避免重复发送', en: 'The interrupt request failed: the queued messages were not withdrawn and will still run as the next turn; the dock was revoked to avoid sending them twice' },
-  'claude-interrupt-unconfirmed': { zh: '无法确认 CLI 已撤销排队消息：它们仍将作为下一回合执行，不再停靠', en: 'Could not confirm the CLI withdrew the queued messages: they will still run as the next turn and are no longer parked as a dock' },
+  'claude-interrupt-failed': { zh: '打断请求失败：排队消息没有撤回，仍会在下一回合发送；已取消暂存，避免重复发送', en: 'The interrupt request failed: the queued messages were not withdrawn and will still run next turn; they are no longer held, so nothing is sent twice' },
+  'claude-interrupt-unconfirmed': { zh: '无法确认排队消息已撤回：它们仍会在下一回合发送，不再暂存', en: 'Could not confirm the queued messages were withdrawn: they will still run next turn and are no longer held' },
   'claude-version-drift': { zh: 'Claude CLI {{version}} 未经本版 dsh-tui 验证（已验证：{{validated}}），继续运行', en: 'Claude CLI {{version}} is not validated with this dsh-tui (validated: {{validated}}); continuing' },
   'claude-sdk-drift': { zh: 'Claude Agent SDK {{version}} 与验证版本 {{validated}} 不一致，继续运行', en: 'Claude Agent SDK {{version}} differs from the validated {{validated}}; continuing' },
   'claude-sdk-missing': { zh: '未安装 Claude Agent SDK：在 dsh-tui 安装目录运行 pnpm add @anthropic-ai/claude-agent-sdk@{{version}}', en: 'The Claude Agent SDK is not installed: run pnpm add @anthropic-ai/claude-agent-sdk@{{version}} in the dsh-tui install directory' },
   'claude-resume-not-found': { zh: '本机 Claude 会话库中没有会话 {{id}}', en: 'No Claude session {{id}} in the local session store' },
-  'claude-open-fork-unsupported': { zh: 'Claude 后端经 /fork 生成分叉，不直接打开分叉目标', en: 'The Claude backend forks through /fork, not by opening a fork target' },
+  'claude-open-fork-unsupported': { zh: 'Claude 内核用 /fork 分叉，不能直接打开分叉目标', en: 'The Claude kernel forks through /fork, not by opening a fork target' },
   'claude-rewind-files-unavailable': { zh: '该会话没有可用的文件检查点', en: 'No file checkpoints are available for this session' },
   'claude-fork-empty': { zh: '会话还没有保存任何消息，无可分叉的内容', en: 'Nothing to fork yet — the session has no saved messages' },
   'claude-task-unnamed': { zh: '任务 {{id}}（标题未恢复）', en: 'Task {{id}} (subject not recovered)' },
@@ -388,7 +388,7 @@ const dict = {
   'claude-doctor-bundled': { zh: 'SDK 自带二进制', en: 'SDK bundled binary' },
   'claude-doctor-sdk': { zh: 'Claude Agent SDK {{version}}（已验证 {{validated}}）', en: 'Claude Agent SDK {{version}} (validated {{validated}})' },
   'claude-doctor-mode': { zh: '起始权限模式: {{mode}}（来源 {{source}}）', en: 'Start permission mode: {{mode}} (from {{source}})' },
-  'cmd-unavailable-backend': { zh: '/{{cmd}} 在 {{backend}} 后端下不可用', en: '/{{cmd}} is not available with the {{backend}} backend' },
+  'cmd-unavailable-backend': { zh: '/{{cmd}} 在 {{backend}} 内核下不可用', en: '/{{cmd}} is not available on the {{backend}} kernel' },
   'export-user-section': { zh: '## 用户', en: '## User' },
   'export-thinking-section': { zh: '## 思考', en: '## Thinking' },
   'export-assistant-section': { zh: '## 助手', en: '## Assistant' },
@@ -408,7 +408,7 @@ const dict = {
   'doctor-context-window': { zh: '上下文窗口: {{window}} tokens', en: 'Context window: {{window}} tokens' },
   'doctor-unknown': { zh: '未知', en: 'unknown' },
   'doctor-session': { zh: '会话: {{id}}', en: 'Session: {{id}}' },
-  'doctor-backend': { zh: '后端: {{label}} ({{id}})', en: 'Backend: {{label}} ({{id}})' },
+  'doctor-backend': { zh: '内核: {{label}} ({{id}})', en: 'Kernel: {{label}} ({{id}})' },
   'doctor-config': { zh: '配置: {{candidate}} {{state}}', en: 'Config: {{candidate}} {{state}}' },
   'doctor-config-missing': { zh: '（不存在）', en: '(missing)' },
   'doctor-storage': { zh: '会话存储: {{dir}} {{state}}', en: 'Session storage: {{dir}} {{state}}' },
@@ -428,7 +428,7 @@ const dict = {
   'subagent-status-unknown': { zh: '状态未知', en: 'status unknown' },
   'subagent-task-fallback': { zh: '{{kind}} 任务', en: '{{kind}} task' },
   'subagent-background': { zh: '后台', en: 'background' },
-  'subagent-interrupt-failed': { zh: '无法停止子代理 {{id}}（已结束或后端拒绝）', en: 'Could not stop subagent {{id}} (already finished or refused by the backend)' },
+  'subagent-interrupt-failed': { zh: '无法停止子代理 {{id}}（已结束或被拒绝）', en: 'Could not stop subagent {{id}} (already finished or refused)' },
   'agent-preset-switched': { zh: 'Agent preset 已切换：{{preset}}', en: 'Agent preset switched: {{preset}}' },
   'context-low-warning': { zh: '上下文即将耗尽（剩余 {{percent}}%）· 运行 /clear 或新建会话', en: 'Context low ({{percent}}% remaining) · Run /clear or start a new session' },
   'rewind-unavailable': { zh: '回退不可用——会话服务未加载', en: 'Rewind unavailable — session services not loaded' },
@@ -843,6 +843,7 @@ const dict = {
   'permission-roster-unavailable': { zh: '权限预设名册不可用', en: 'Permission preset roster unavailable' },
   'permission-picker-title': { zh: '权限预设', en: 'Permission preset' },
   'permission-mode-picker-title': { zh: '权限模式', en: 'Permission mode' },
+  'permission-mode-current': { zh: '当前权限模式  {{name}}', en: 'Current permission mode  {{name}}' },
   'permission-mode-switch-hint': { zh: '切换：/permission <模式>，或点击底栏模式段', en: 'Switch with /permission <mode>, or click the mode segment in the footer' },
   'permission-mode-unknown': { zh: '没有这个权限模式：{{id}}', en: 'No such permission mode: {{id}}' },
   'permission-preset-readonly': { zh: '只读', en: 'Read-only' },
@@ -900,8 +901,8 @@ const dict = {
   'btw-thread-clear': { zh: '已开始新话题：上下文与未读已清空', en: 'New topic started: context and unread cleared' },
   'btw-thread-context-recent': { zh: '后续答案参考最近 {{n}} 组问答', en: 'Answers use the last {{n}} Q/A pairs as context' },
   'btw-thread-context-omitted': { zh: '已省略更早 {{n}} 组问答', en: '{{n}} earlier Q/A pair(s) omitted' },
-  'btw-thread-followup': { zh: '输入追问…（Enter 发送 · Esc 收起 · Tab 切列表）', en: 'Type a follow-up… (Enter send · Esc park · Tab list)' },
-  'btw-thread-busy': { zh: '本轮还在回答，稍候再追问（不排队到主会话）', en: 'This turn is still answering; retry after it settles (no main-session queueing)' },
+  'btw-thread-followup': { zh: '输入追问…（Enter 发送 · Esc 回到对话 · Tab 切列表）', en: 'Type a follow-up… (Enter send · Esc back to chat · Tab list)' },
+  'btw-thread-busy': { zh: '上一个侧问还在回答，等它结束再追问', en: 'Still answering the last side question; ask again once it finishes' },
   'btw-thread-error': { zh: '本轮失败', en: 'This turn failed' },
   'btw-thread-cancelled': { zh: '已取消本轮侧问', en: 'Side question cancelled' },
   'btw-thread-unread': { zh: '有新回答', en: 'New answer' },
@@ -909,7 +910,7 @@ const dict = {
   'btw-thread-answer-attached': { zh: '答案已附加到下一次主聊天提交', en: 'Answer attached to your next main chat submission' },
   'btw-thread-answer-truncated': { zh: '答案过长，附加时已截断', en: 'Answer exceeded the attach limit and was truncated' },
   'btw-fullscreen-title': { zh: 'btw 侧问线程', en: 'btw side thread' },
-  'btw-panel-unavailable': { zh: '未启用 btw 面板：/settings 添加 dsh-tui.sidePanel.panels', en: 'btw panel not enabled: add it via /settings dsh-tui.sidePanel.panels' },
+  'btw-panel-unavailable': { zh: 'btw 面板未启用（/settings → dsh-tui.sidePanel.panels）', en: 'btw panel not enabled (/settings → dsh-tui.sidePanel.panels)' },
   'btw-output-unavailable': { zh: '没有收到回答', en: 'No answer received' },
   'btw-answering': { zh: '思考中…', en: 'Answering…' },
   'btw-hint-loading': { zh: 'Esc 取消', en: 'Esc cancel' },
@@ -1020,7 +1021,7 @@ const dict = {
   'effort-invalid': { zh: '未知推理等级 {{id}}（当前模型可选：{{ids}}）', en: 'Unknown reasoning effort {{id}} (this model offers: {{ids}})' },
   'effort-current': { zh: '当前推理强度 {{name}}', en: 'Current reasoning effort {{name}}' },
   'effort-usage': { zh: '用法：/effort（滑杆）| /effort <id> | /effort status', en: 'Usage: /effort (slider) | /effort <id> | /effort status' },
-  'effort-fallback-tier-note': { zh: '模型未声明档位，按 CLI 标准档兼容下发', en: 'Model declares no tiers; offering the CLI-standard levels' },
+  'effort-fallback-tier-note': { zh: '该模型没有声明推理档位，这里列出的是通用档位', en: 'This model declares no effort levels; these are the standard ones' },
 
   // ── channel.ts — Shift+Tab session modes ────────────────────────────
   'mode-switched': { zh: '模式 → {{name}}', en: 'Mode → {{name}}' },
@@ -1135,14 +1136,12 @@ const dict = {
   'input-image-format-unsupported': { zh: '剪贴板图片格式不受支持；请使用 PNG、JPEG、WebP 或 GIF', en: 'Clipboard image format is unsupported; use PNG, JPEG, WebP, or GIF' },
   'input-pending-steer-label': { zh: '插话 · 下一步送达', en: 'Steer · delivered next' },
   'input-pending-queue-label': { zh: '排队 · 回合结束后送达', en: 'Queued · delivered after the turn' },
-  'input-pending-actions-hint': { zh: '撤回 · Esc 打断后停靠排队', en: 'Retract · Esc interrupts and docks the queue' },
-  'input-pending-dock-label': { zh: '停靠 · 打断后保留，不自动发送', en: 'Docked · kept after the interrupt, not auto-sent' },
-  // Claude Code 2.1.284 parity: "Press up to select a queued message to
-  // edit, or Enter to send them now".
+  'input-pending-actions-hint': { zh: '撤回 · Esc 打断并暂存排队消息', en: 'Retract · Esc interrupts and holds the queue' },
+  'input-pending-dock-label': { zh: '已暂存 · 打断后保留，不会自动发送', en: 'Held · kept after the interrupt, not sent automatically' },
   'input-pending-dock-hint': { zh: '按 ↑ 编辑排队消息，⏎ 立即发送', en: 'Press ↑ to edit queued messages, ⏎ to send now' },
-  'input-dock-sent': { zh: '已发送 {{n}} 条停靠消息', en: 'Sent {{n}} docked message(s)' },
-  'input-dock-swapped': { zh: '已交换：草稿停靠，所点消息回到输入框（Ctrl+Z 可换回）', en: 'Swapped: draft docked, picked message back in the input (Ctrl+Z swaps back)' },
-  'input-dock-confirming': { zh: '{{n}} 条停靠还在等待打断确认，稍候再发送或编辑', en: '{{n}} docked message(s) still await the interrupt confirmation; send or edit again in a moment' },
+  'input-dock-sent': { zh: '已发送 {{n}} 条暂存消息', en: 'Sent {{n}} held message(s)' },
+  'input-dock-swapped': { zh: '已交换：草稿暂存，所点消息回到输入框（Ctrl+Z 换回）', en: 'Swapped: the draft is held and the picked message is back in the input (Ctrl+Z swaps back)' },
+  'input-dock-confirming': { zh: '{{n}} 条暂存消息还在等打断完成，稍后再发送或编辑', en: '{{n}} held message(s) are waiting for the interrupt to finish; send or edit again in a moment' },
   // U+30FB (not U+00B7): the separator participates in the folded-chip
   // width arithmetic; U+00B7 is EA-ambiguous and paints 2 cells on CJK
   // terminal fonts while the model measures 1 (see PromptInput foldBadge).
@@ -1198,17 +1197,15 @@ const dict = {
   // （foldTerminalCommand）、分屏 diff 隐藏行（SplitDiffView）。按字符折叠
   // 的行内标记见 long-line-folded。
   'lines-folded-expand': { zh: '… +{{n}} 行（{{key}} 展开）', en: '… +{{n}} lines ({{key}} to expand)' },
-  // 工具卡完整度（信息展示完整度设计 §B）：折叠量指示（行/字符单位词 +
-  // 组合句）、展开态的源截断/仅结构化披露、verbose 行窗口告知。
+  // 工具卡折叠量（行/字符）与展开态的「只是预览」说明。
   'tool-card-lines-unit': { zh: '{{n}} 行', en: '{{n}} lines' },
   'tool-card-chars-unit': { zh: '{{n}} 字符', en: '{{n}} chars' },
   'tool-card-lines-hidden': { zh: '… 已折叠 {{parts}}（{{key}} 展开）', en: '… folded {{parts}} ({{key}} to expand)' },
-  'tool-card-source-truncated': { zh: '源数据已折叠：以上为预览，全文保留在会话日志', en: 'Source folded: preview above — the session log retains the full text' },
-  'tool-card-full-unavailable': { zh: '以上为结构化呈现；源未保留可展开的原始全文', en: 'Structured view above; no expandable raw full text was retained' },
-  'tool-card-window-shown': { zh: '… 已显示前 {{shown}}/{{total}} 行，源保留全文', en: '… first {{shown}}/{{total}} lines shown; the source retains all' },
-  // 模型/用量表面（信息展示完整度设计 §C）：回合账本行的分段词、采样时点、
-  // 底栏 hover 的上一轮摘要标签。缓存分段只在 wire 真带缓存 token 时渲染
-  //（未上报 ≠ 0，不虚构零）。
+  'tool-card-source-truncated': { zh: '原始数据已折叠：以上是预览，全文保留在会话日志里', en: 'Source folded: the above is a preview; the session log keeps the full text' },
+  'tool-card-full-unavailable': { zh: '以上是整理后的视图，没有保留可展开的原始全文', en: 'Formatted view above; no raw full text was kept to expand' },
+  'tool-card-window-shown': { zh: '… 只显示前 {{shown}}/{{total}} 行（全文仍保留）', en: '… showing the first {{shown}}/{{total}} lines (the full text is kept)' },
+  // 单回合用量行（/tokens、/cost、底栏 hover）。缓存段只在后端上报了缓存
+  // token 时显示，未上报不当作 0。
   'usage-turn-summary': { zh: '本轮', en: 'turn' },
   'usage-cache-read': { zh: '读 {{n}}', en: 'read {{n}}' },
   'usage-cache-write': { zh: '写 {{n}}', en: 'write {{n}}' },
@@ -1216,7 +1213,7 @@ const dict = {
   'usage-retry-segment': { zh: '重试 {{n}} 次', en: '{{n}} retries' },
   'usage-turn-outcome-interrupted': { zh: '已中断', en: 'interrupted' },
   'usage-turn-outcome-error': { zh: '未完成', en: 'unfinished' },
-  'usage-sampled-at': { zh: '采样 {{time}}', en: 'sampled {{time}}' },
+  'usage-sampled-at': { zh: '截至 {{time}}', en: 'as of {{time}}' },
   'usage-last-turn': { zh: '上一轮', en: 'last turn' },
 
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
@@ -1317,8 +1314,8 @@ const dict = {
   'settings-saved': { zh: '已保存 {{ns}}', en: 'Saved {{ns}}' },
   'settings-save-failed': { zh: '保存 {{ns}} 失败——请重试', en: 'Saving {{ns}} failed — please retry' },
   'settings-secret-ref-reserved': { zh: '凭据 {{ref}} 由宿主保留，写入被拒绝：第三方设置区块不能覆盖宿主共享凭据', en: 'Credential {{ref}} is reserved by the host; write rejected: third-party settings sections cannot overwrite host-shared credentials' },
-  // sidePanel.panels 勾选列表（面板多选）：占位行 / 插件行 / 高级行 / 至少一个守卫。
-  'settings-panels-unclaimed': { zh: '尚无面板认领——保留此 id，插件注册后自动生效', en: 'No panel claims this id yet — kept for a plugin to register later' },
+  // /settings 里 sidePanel.panels 的勾选列表。
+  'settings-panels-unclaimed': { zh: '暂无面板使用此 id：先保留，等插件注册后生效', en: 'No panel uses this id yet; kept until a plugin registers it' },
   'settings-panels-plugin': { zh: '插件面板（{{plugin}}）', en: 'Plugin panel ({{plugin}})' },
   'settings-panels-advanced': { zh: '高级：编辑原始面板列表', en: 'Advanced: edit raw panel list' },
   'settings-panels-min-one': { zh: '至少保留一个启用的面板', en: 'Keep at least one panel enabled' },
@@ -1365,7 +1362,7 @@ const dict = {
   'status-detail-session-id': { zh: '会话日志目录与此 id 同名', en: 'the session log directory is named after this id' },
   'status-detail-mode': { zh: '点击或 /permission 切换权限模式', en: 'click or /permission to switch the permission mode' },
   'status-detail-model': { zh: '点击或 /model 切换模型', en: 'click or /model to switch the model' },
-  'status-detail-effort': { zh: '点击或 /effort 调整思考深度', en: 'click or /effort to adjust reasoning effort' },
+  'status-detail-effort': { zh: '点击或 /effort 调整推理强度', en: 'click or /effort to adjust reasoning effort' },
   'hint-ext-dialog-input': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
   'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },
@@ -1595,26 +1592,26 @@ const dict = {
   'subagent-hint-fold': { zh: 'Enter 思考折叠', en: 'Enter thinking' },
   'subagent-no-tools': { zh: '暂无工具调用', en: 'No tool calls' },
   'subagent-last-tool': { zh: '最近工具', en: 'last tool' },
-  'subagent-tools-kept': { zh: '已保留 {{kept}} 条记录（后端报告 {{reported}} 次工具调用，未伪造缺失记录）', en: '{{kept}} records kept (backend reported {{reported}} tool uses; missing records are not fabricated)' },
+  'subagent-tools-kept': { zh: '显示 {{kept}} 条记录（共 {{reported}} 次工具调用，其余未保留）', en: '{{kept}} records shown ({{reported}} tool uses in total; the rest were not kept)' },
   'subagent-tab-transcript': { zh: '转录', en: 'Transcript' },
-  'subagent-transcript-loading': { zh: '正在读取子转录…', en: 'Reading the subagent transcript…' },
-  'subagent-transcript-unavailable': { zh: '子转录暂时不可读', en: 'Subagent transcript unavailable' },
-  'subagent-transcript-empty': { zh: '子转录为空', en: 'The subagent transcript is empty' },
+  'subagent-transcript-loading': { zh: '正在读取子代理转录…', en: 'Reading the subagent transcript…' },
+  'subagent-transcript-unavailable': { zh: '子代理转录暂时读不到', en: 'Subagent transcript unavailable' },
+  'subagent-transcript-empty': { zh: '子代理转录为空', en: 'The subagent transcript is empty' },
   'subagent-transcript-history': { zh: '历史', en: 'history' },
   'subagent-transcript-live': { zh: '实时', en: 'live' },
   'subagent-transcript-readonly': { zh: '只读', en: 'read-only' },
   'subagent-transcript-load-older': { zh: '载入更早 {{count}} 条', en: 'Load {{count}} older' },
-  'subagent-thinking-count-only': { zh: '思考正文不可用 · 约 {{tokens}} tokens', en: 'Thinking body unavailable · ~{{tokens}} tokens' },
-  'subagent-thinking-unavailable': { zh: '思考正文不可用（仅签名，无计数）', en: 'Thinking body unavailable (signature only, no count)' },
+  'subagent-thinking-count-only': { zh: '思考内容不可见 · 约 {{tokens}} tokens', en: 'Thinking not shown · ~{{tokens}} tokens' },
+  'subagent-thinking-unavailable': { zh: '思考内容不可见', en: 'Thinking not shown' },
   'subagent-transcript-retained': { zh: '已保留 {{count}} 条', en: '{{count}} lines retained' },
   'subagent-transcript-parent': { zh: '父代理 {{id}}', en: 'parent {{id}}' },
-  'subagent-transcript-old-format': { zh: '旧格式（未记录父代理，按深度 {{depth}} 展示）', en: 'old format (no parent recorded; shown at depth {{depth}})' },
+  'subagent-transcript-old-format': { zh: '旧格式：没有记录父代理，按深度 {{depth}} 显示', en: 'old format: no parent recorded; shown at depth {{depth}}' },
   'subagent-hint-page': { zh: '切页', en: 'page' },
   'subagent-hint-scroll': { zh: '滚动', en: 'scroll' },
   'subagent-hint-back': { zh: '返回', en: 'back' },
   'subagent-empty-hint': { zh: '让主代理发起 Task 后，子代理会出现在这里', en: 'Subagents appear here once the main agent starts Task delegations' },
 
-  // ── agent team（design agent-team-full §8）：Agent View / composer / 消息流 ──
+  // ── agent team：子代理转录视图、发消息输入框、消息流 ──
   'agent-view-title': { zh: '子代理转录', en: 'Agent transcript' },
   'agent-view-readonly': { zh: '只读', en: 'read-only' },
   'agent-view-live': { zh: '实时', en: 'live' },
@@ -1625,13 +1622,13 @@ const dict = {
   'agent-view-source-dashboard': { zh: '来自代理面板', en: 'from agents panel' },
   'agent-view-source-detail': { zh: '来自详情', en: 'from detail' },
   'agent-view-source-card': { zh: '来自转录卡', en: 'from transcript card' },
-  'agent-view-no-transcript': { zh: '此代理暂无转录数据源', en: 'No transcript source for this agent' },
-  'agent-view-retained-tail': { zh: '无完整历史：显示有界输出尾窗（已保留 {{count}} 条）', en: 'No full history: bounded output tail shown ({{count}} lines retained)' },
-  // ── P3 完整工作台（右侧 metadata/工具/父关系面板 + sibling 切换）──
+  'agent-view-no-transcript': { zh: '此代理没有可查看的转录', en: 'No transcript for this agent' },
+  'agent-view-retained-tail': { zh: '没有完整历史，只显示最近 {{count}} 条输出', en: 'No full history; showing the last {{count}} output lines' },
+  // 转录视图右侧的工作台：信息、工具、父代理与同级切换
   'agent-view-panel-title': { zh: '工作台', en: 'workbench' },
   'agent-view-panel-metadata': { zh: '信息', en: 'metadata' },
   'agent-view-panel-tools': { zh: '工具', en: 'tools' },
-  'agent-view-parent-context': { zh: '父关系', en: 'context' },
+  'agent-view-parent-context': { zh: '父代理与同级', en: 'parent & siblings' },
   'agent-view-field-status': { zh: '状态', en: 'status' },
   'agent-view-field-mode': { zh: '模式', en: 'mode' },
   'agent-view-field-model': { zh: '模型', en: 'model' },
@@ -1641,31 +1638,31 @@ const dict = {
   'agent-view-field-session': { zh: '会话', en: 'session' },
   'agent-view-field-depth': { zh: '深度', en: 'depth' },
   'agent-view-tools-none': { zh: '无工具记录', en: 'no tool records' },
-  'agent-view-tools-reported': { zh: '后端报告 {{reported}} · 保留 {{kept}}', en: 'reported {{reported}} · kept {{kept}}' },
+  'agent-view-tools-reported': { zh: '共 {{reported}} 次 · 显示 {{kept}}', en: '{{reported}} in total · {{kept}} shown' },
   'agent-view-tools-more': { zh: '还有 {{count}} 条', en: '{{count}} more' },
   'agent-view-parent-main': { zh: '↑ 主循环', en: '↑ main loop' },
-  'agent-view-parent-unknown': { zh: '父关系未知（无父事实）', en: 'parent unknown (no fact)' },
+  'agent-view-parent-unknown': { zh: '父代理未知', en: 'parent unknown' },
   'agent-view-parent-agent': { zh: '父代理 {{id}}', en: 'parent {{id}}' },
-  'agent-view-parent-not-in-roster': { zh: '父代理 {{id}}（不在当前名册）', en: 'parent {{id}} (not in roster)' },
-  'agent-view-siblings-none': { zh: '无同父兄弟', en: 'no siblings' },
-  'agent-view-siblings-more': { zh: '还有 {{count}} 个兄弟', en: '{{count}} more siblings' },
-  'agent-view-select-sibling': { zh: 'Tab 工作台 · 切换兄弟', en: 'Tab workbench · switch siblings' },
+  'agent-view-parent-not-in-roster': { zh: '父代理 {{id}}（不在当前列表）', en: 'parent {{id}} (not in the list)' },
+  'agent-view-siblings-none': { zh: '没有同级代理', en: 'no siblings' },
+  'agent-view-siblings-more': { zh: '还有 {{count}} 个同级', en: '{{count}} more siblings' },
+  'agent-view-select-sibling': { zh: 'Tab 工作台 · 切换同级', en: 'Tab workbench · switch siblings' },
   'agent-view-select-sibling-focused': { zh: '↑↓ 选择 · ⏎ 切换 · Esc 退出面板', en: '↑↓ select · ⏎ switch · Esc leave panel' },
-  // ── P3 peer roster 分区（CLI ListAgents 的 child/teammate/peer 三分区；无上游名册能力时如实降级）──
-  'agents-peers-title': { zh: '跨会话 peers', en: 'cross-session peers' },
-  'agents-peers-unsupported': { zh: '当前后端未提供名册（依赖宿主控制面）', en: 'no roster served (needs a host control plane)' },
-  'agents-peers-unsupported-panel': { zh: '跨会话 peers：当前后端无名册', en: 'cross-session peers: no roster capability' },
-  'agents-peers-empty': { zh: '名册为空', en: 'roster empty' },
-  'agents-peers-note': { zh: '跨会话目标不可经现有通道寻址，无发送入口', en: 'cross-session targets are not addressable here; no send affordance' },
+  // 代理面板里「其他会话的代理」一栏
+  'agents-peers-title': { zh: '其他会话的代理', en: 'agents in other sessions' },
+  'agents-peers-unsupported': { zh: '当前内核不提供这份列表', en: 'not provided by this kernel' },
+  'agents-peers-unsupported-panel': { zh: '其他会话的代理：当前内核不提供', en: 'agents in other sessions: not provided by this kernel' },
+  'agents-peers-empty': { zh: '列表为空', en: 'none' },
+  'agents-peers-note': { zh: '无法从这里给其他会话的代理发消息', en: 'agents in other sessions cannot be messaged from here' },
   'subagent-count-nested': { zh: '嵌套', en: 'nested' },
-  'subagent-nested-mark': { zh: '嵌套子代理', en: 'nested spawn' },
+  'subagent-nested-mark': { zh: '嵌套子代理', en: 'nested subagent' },
   'agent-message-source-user': { zh: '用户', en: 'user' },
   'agent-message-source-parent': { zh: '父代理', en: 'parent' },
   'agent-message-source-child': { zh: '子代理', en: 'child' },
   'agent-message-from-to': { zh: '{{from}} → {{to}}', en: '{{from}} → {{to}}' },
-  'agent-message-unknown-target': { zh: '未知收发关系', en: 'unknown relation' },
-  'agent-message-no-delivery-fact': { zh: '无明确送达事实，不推断', en: 'no delivery fact; not inferred' },
-  'agent-message-delivery-issued': { zh: '已受理', en: 'issued' },
+  'agent-message-unknown-target': { zh: '收发方未知', en: 'unknown sender/recipient' },
+  'agent-message-no-delivery-fact': { zh: '送达状态未知', en: 'delivery status unknown' },
+  'agent-message-delivery-issued': { zh: '已发出', en: 'issued' },
   'agent-message-delivery-queued': { zh: '已入队', en: 'queued' },
   'agent-message-delivery-delivered': { zh: '已送达', en: 'delivered' },
   'agent-message-delivery-held': { zh: '暂扣', en: 'held' },
@@ -1676,24 +1673,24 @@ const dict = {
   'agent-message-via-dsh-direct-continuable': { zh: '直发子代理', en: 'direct to child' },
   'agent-message-via-dsh-agent-relay': { zh: '代理中继', en: 'agent relay' },
   'agent-message-compose-title': { zh: '发送给 {{name}}', en: 'Send to {{name}}' },
-  'agent-message-submitted': { zh: '最近提交', en: 'submitted' },
-  'agent-message-inbox-note': { zh: '已进入收件路径，不代表已读或已执行', en: 'in the inbox path — not read or executed' },
-  'agent-message-unavailable': { zh: '发送通道当前不可用', en: 'the send channel is unavailable' },
-  'agent-message-target-ambiguous': { zh: '同名代理，按稳定 id {{id}} 消歧', en: 'duplicate names; disambiguated by stable id {{id}}' },
-  'agent-message-target-nameless': { zh: '此代理没有可寻址名称，无法提交', en: 'this agent has no addressable name; cannot submit' },
-  'agent-message-target-not-resumable': { zh: '目标代理当前不可恢复（not-resumable）', en: 'target not resumable' },
+  'agent-message-submitted': { zh: '最近发送', en: 'submitted' },
+  'agent-message-inbox-note': { zh: '已送进对方收件箱，不代表已读或已执行', en: 'in the inbox; not necessarily read or acted on' },
+  'agent-message-unavailable': { zh: '当前无法发送', en: 'sending is unavailable right now' },
+  'agent-message-target-ambiguous': { zh: '有同名代理，按 id {{id}} 区分', en: 'duplicate names; told apart by id {{id}}' },
+  'agent-message-target-nameless': { zh: '此代理没有可用的名称，无法发送', en: 'this agent has no name to address; cannot send' },
+  'agent-message-target-not-resumable': { zh: '目标代理已无法恢复', en: 'target cannot be resumed' },
   'agent-message-parent-unavailable': { zh: '父代理不可用，未发送', en: 'parent unavailable; not sent' },
-  'agent-message-unauthorized': { zh: '当前父权不允许发送', en: 'not authorized to send' },
-  'agent-message-delivery-unavailable': { zh: '目标投递通道当前不可用', en: 'delivery unavailable' },
-  'send-message-card-resuming': { zh: '唤醒', en: 'resuming' },
+  'agent-message-unauthorized': { zh: '没有向该代理发消息的权限', en: 'not allowed to message this agent' },
+  'agent-message-delivery-unavailable': { zh: '当前无法投递给目标代理', en: 'delivery to the target is unavailable' },
+  'send-message-card-resuming': { zh: '唤醒中', en: 'resuming' },
   'send-message-card-resumed': { zh: '已唤醒 {{id}}', en: 'resumed {{id}}' },
   'send-message-card-summary-label': { zh: '摘要', en: 'summary' },
   'agent-message-dispatch-failed': { zh: '发送失败', en: 'dispatch failed' },
   'agent-message-parent-interrupted': { zh: '父回合被中断，未送达', en: 'parent turn interrupted; not delivered' },
   'agent-message-draft-retained': { zh: '草稿已保留', en: 'draft retained' },
-  'agent-message-hint-queue': { zh: 'Enter 提交（followup，不打断父回合）· Esc 让出键盘', en: 'Enter submit (followup; parent turn untouched) · Esc hand off keys' },
-  'agent-message-hint-queue-steer': { zh: 'Enter 入队 · Ctrl+Enter 转向（steer）· Esc 让出键盘', en: 'Enter queue · Ctrl+Enter steer · Esc hand off keys' },
-  'agent-message-hint-nameless': { zh: '无名称目标：仅查看，不可发送', en: 'nameless target: view only, no send' },
+  'agent-message-hint-queue': { zh: 'Enter 发送（排在父代理当前回合之后，不打断）· Esc 退出输入', en: 'Enter send (after the parent\'s current turn, no interrupt) · Esc leave input' },
+  'agent-message-hint-queue-steer': { zh: 'Enter 排队 · Ctrl+Enter 插话 · Esc 退出输入', en: 'Enter queue · Ctrl+Enter steer · Esc leave input' },
+  'agent-message-hint-nameless': { zh: '此代理没有名称：只能查看，不能发送', en: 'nameless agent: view only, cannot send' },
   'agent-messages-tab': { zh: '消息', en: 'Messages' },
 
   // ── background jobs (ctx.jobs): JobCard / JobsPanel / status chip ─────
@@ -1719,9 +1716,8 @@ const dict = {
   'jobs-panel-no-output-yet': { zh: '（暂无镜像输出——agent 读取后显示）', en: '(no mirrored output yet — appears when the agent reads it)' },
   'jobs-output-gap': { zh: '……较早的输出已丢弃……', en: '……earlier output discarded……' },
   'jobs-output-dropped': { zh: '部分输出未保留', en: 'some output not retained' },
-  // jobs 面板增量（信息展示完整度设计 §D）：焦点详情的最近进度（带观测时点
-  // 与生产者来源）、有界时间线（启动/进度/输出增量/缺口/收尾）、保留尾巴
-  // 如实标注。进度原文透传，绝不把任意字符串解析成百分比。
+  // jobs 详情：最近进度、时间线、只保留尾部输出的说明。进度文本原样显示，
+  // 不解析成百分比。
   'jobs-progress-latest': { zh: '进度', en: 'progress' },
   'jobs-progress-updated-at': { zh: '更新 {{time}}', en: 'updated {{time}}' },
   'jobs-progress-source': { zh: '来源 {{source}}', en: 'source {{source}}' },
@@ -1730,9 +1726,9 @@ const dict = {
   'jobs-timeline-progress': { zh: '进度', en: 'progress' },
   'jobs-timeline-output': { zh: '输出', en: 'output' },
   'jobs-timeline-gap': { zh: '缺口', en: 'gap' },
-  'jobs-timeline-settled': { zh: '收尾', en: 'settled' },
+  'jobs-timeline-settled': { zh: '结束', en: 'ended' },
   'jobs-timeline-gap-count': { zh: '输出缺口 {{n}} 处', en: '{{n}} output gaps' },
-  'jobs-timeline-events-unavailable': { zh: '时间线不可用（任务早于本进程的观测）', en: 'timeline unavailable (job predates this process)' },
+  'jobs-timeline-events-unavailable': { zh: '时间线不可用（任务在本次启动前就已开始）', en: 'timeline unavailable (the job started before this launch)' },
   'jobs-output-retained-tail': { zh: '仅保留最近 {{n}} 行', en: 'last {{n}} lines retained' },
   'jobs-output-spill': { zh: '完整输出落盘：{{path}}', en: 'full output retained at: {{path}}' },
   'jobs-toast-completed': { zh: '后台任务完成：{{label}}（{{id}} · 用时 {{duration}}）', en: 'Background job completed: {{label}} ({{id}} · {{duration}})' },
@@ -1977,32 +1973,28 @@ const dict = {
   'panel-desc-companion': { zh: '桌面宠物：状态、互动与通知气泡', en: 'Desktop pet: mood, interactions, notice bubbles' },
   'panel-trajectory-empty': { zh: '本次会话还没有轨迹：发出第一条消息后，这里会画出唤醒带与账本。', en: 'No trajectory yet — the wake band and ledger appear once this session has turns.' },
   'panel-trajectory-hint': { zh: '↑/↓ 选中 · Enter 展开 · Tab 热点 · ⤢ 全屏', en: '↑/↓ select · Enter expand · Tab hotspots · ⤢ fullscreen' },
-  // 轨迹三态（设计 agent-team-panels §④）：unsupported 是「当前后端尚未接入数据源」，
-  // 与 supported-empty（上面那条「发出第一条消息后…」）必须分态——不承诺下一回合有数据。
-  'trajectory-unsupported': { zh: '当前后端尚未接入轨迹数据源，本会话没有可展示的时序。', en: 'This backend does not feed trajectory data; there is no session timeline to show.' },
-  'trajectory-unsupported-claude': { zh: 'Claude 后端的轨迹映射尚未接入：唤醒带与账本不会在这里出现。', en: 'The Claude trajectory mapping is not wired up yet: the wake band and ledger will not appear here.' },
-  'trajectory-unsupported-fullscreen': { zh: '⤢ 全屏已禁用：该后端没有轨迹数据。', en: '⤢ fullscreen is disabled: this backend has no trajectory data.' },
+  // 内核不提供轨迹数据时的说明，与上面的「还没有轨迹」是两种状态：这里不承诺
+  // 下一回合会有数据。
+  'trajectory-unsupported': { zh: '当前内核不提供轨迹数据，本会话没有可显示的时间线。', en: 'This kernel provides no trajectory data; there is no session timeline to show.' },
+  'trajectory-unsupported-claude': { zh: 'Claude 内核暂不支持轨迹视图：这里不会出现唤醒带与账本。', en: 'The Claude kernel does not support the trajectory view yet: the wake band and ledger will not appear here.' },
+  'trajectory-unsupported-fullscreen': { zh: '当前内核没有轨迹数据，⤢ 全屏不可用。', en: 'This kernel has no trajectory data, so ⤢ fullscreen is unavailable.' },
   'trajectory-unsupported-exit': { zh: 'q / Esc 返回对话', en: 'q / Esc to return' },
-  // 轨迹行的「观察时钟」标注（设计 §④）：事件本身没有时间戳时，数据源用收到
-  // 时刻充当行时间，检查器必须把这一点说清——这是观察时间，不是事件时间。
-  'trajectory-time-observed': { zh: '时间为观察时钟', en: 'time from observed clock' },
-  // 审批/问卷等待段详情（设计 §④ 完整档）：等待中的 live 时长，与「检查内容
-  // 已不可读」的诚实降级——压缩掉的事件不假装还有正文。
+  // 事件本身没有时间戳时，行时间取收到事件的时刻，检查器要注明。
+  'trajectory-time-observed': { zh: '时间为收到事件的时刻', en: 'time is when the event was received' },
+  // 审批/问卷等待段的已等待时长；事件原文已被压缩时的说明。
   'trajectory-wait-elapsed': { zh: '已等待 {{duration}}', en: 'waiting {{duration}}' },
-  'trajectory-inspect-unavailable': { zh: '事件原文已不可读（可能已被压缩）', en: 'source event no longer readable (likely compacted)' },
-  // 跨 Agent 下钻（设计 §④ 完整档）：scope chip 与提示。chip 标当前过滤的是
-  // 哪个范围（当前 Agent / 父回合 / 全部后代），a 键循环，Esc 先弹回会话。
-  'trajectory-view-agent': { zh: 'Agent {{label}}', en: 'agent {{label}}' },
+  'trajectory-inspect-unavailable': { zh: '事件原文已读不到（可能已被压缩）', en: 'source event no longer readable (likely compacted)' },
+  // 按代理过滤轨迹：范围标签（当前代理 / 父回合 / 全部后代）与按键提示。
+  'trajectory-view-agent': { zh: '代理 {{label}}', en: 'agent {{label}}' },
   'trajectory-view-parent': { zh: '父回合 {{turn}}', en: 'parent turn {{turn}}' },
   'trajectory-view-descendants': { zh: '后代 {{label}}', en: 'descendants {{label}}' },
-  'trajectory-drill-hint': { zh: 'a 下钻该 Agent', en: 'a drill into agent' },
+  'trajectory-drill-hint': { zh: 'a 只看该代理', en: 'a focus this agent' },
   'trajectory-scope-hint-panel': { zh: 'a 切换范围', en: 'a cycle scope' },
   'trajectory-scope-hint': { zh: 'a 切换范围 · Esc 返回会话', en: 'a cycle scope · Esc back to session' },
-  // 轨迹源标签（设计 §④ i18n trajectory-backend-label）：全屏视图如实标注
-  // 正在读的是哪个数据源——DSH 会话日志还是中立 AgentEvent 折叠。
+  // 全屏轨迹标注数据来源：DSH 会话日志，或其他内核的会话事件。
   'trajectory-backend-label': { zh: '轨迹源：{{name}}', en: 'trajectory source: {{name}}' },
   'trajectory-backend-dsh': { zh: 'DSH 会话日志', en: 'DSH session log' },
-  'trajectory-backend-agent-events': { zh: 'AgentEvent 折叠', en: 'AgentEvent fold' },
+  'trajectory-backend-agent-events': { zh: '会话事件', en: 'session events' },
   'info-section-session': { zh: '会话', en: 'Session' },
   'info-section-model': { zh: '模型', en: 'Model' },
   'info-section-context': { zh: '上下文', en: 'Context' },
@@ -2179,7 +2171,7 @@ const dict = {
   },
   // Tips 前缀（第三版：● 彩色圆点 + Tips： 前缀，整行居中）。
   'launchpad-tip-prefix': { zh: 'Tips：', en: 'Tips: ' },
-  // 入口行（第七版四格 + 内核入口：Continue(条件) · 会话与工作区 · 设置 · 内核 · 条件位）。
+  // 入口行：Continue(条件) · 会话与工作区 · 设置 · 内核 · 条件位。
   // （launchpad-action-theme / -lang 三键早已删；第六版的 -sessions / -workspace
   // / -doctor / -setup / -setup-provider 五键随第七版合并/移除一并删除——
   // 历史会话与工作区合并成 -sessions-workspace，doctor 入口退役，首启由
@@ -2188,7 +2180,7 @@ const dict = {
   'launchpad-action-continue-titled': { zh: '继续「{{title}}」', en: 'Continue "{{title}}"' },
   'launchpad-action-sessions-workspace': { zh: '会话与工作区', en: 'Sessions & workspaces' },
   'launchpad-action-settings': { zh: '设置', en: 'Settings' },
-  // 内核入口（backendId 已知 → 带名；{{name}} 是品牌词不译：DSH / Claude）。
+  // 内核入口；{{name}} 是品牌名（DSH / Claude），不翻译。
   'launchpad-action-backend': { zh: '内核', en: 'Kernel' },
   'launchpad-action-backend-named': { zh: '内核 · {{name}}', en: 'Kernel · {{name}}' },
   'launchpad-action-help': { zh: '帮助', en: 'Help' },
@@ -2196,16 +2188,14 @@ const dict = {
   'launchpad-action-jobs': { zh: '后台任务', en: 'Background jobs' },
   'launchpad-action-update': { zh: '有新版本', en: 'Update available' },
   'launchpad-action-star': { zh: '投喂一颗 Star', en: 'Feed us a star' },
-  // 内核选择器（launchpad「内核」入口）：目录行标签、置灰原因、切换重启提示。
+  // 内核选择器：行标签、不可选原因、切换重启提示。
   'kernel-label-dsh': { zh: 'DeepSeek Harness', en: 'DeepSeek Harness' },
   'kernel-label-claude': { zh: 'Claude Agent', en: 'Claude Agent' },
   'kernel-unavailable-not-installed': { zh: '未安装', en: 'Not installed' },
   'kernel-unavailable-auth-missing': { zh: '未登录', en: 'Not signed in' },
   'kernel-switch-restarting': { zh: '正在以 {{name}} 内核重启…', en: 'Restarting on the {{name}} kernel…' },
-  // 内核切换过场（S05 MVE）：已 flush 的稳定进度行 + 结果事件区分。
-  // starting/stage-start 在 finishExit 交界与 replacement spawn 前落屏；
-  // failed/crashed 是旧父进程对替换进程结局的分类通报；安全模式提示
-  // 只挂在失败类事件后（launcher 的 safe 入口是修复路径，不是默认）。
+  // 切换内核时的过场行。failed/crashed 由旧进程报告新进程的结局；安全模式
+  // 提示只跟在失败之后。
   'kernel-handoff-starting': { zh: '正在切换到 {{name}}，启动新会话…', en: 'Switching to {{name}} and starting a new session…' },
   'kernel-handoff-session-kept': { zh: '当前会话仍保留，可随时切回', en: 'The current session is preserved; switch back anytime' },
   'kernel-handoff-stage-start': { zh: '正在启动 {{name}}…', en: 'Starting {{name}}…' },
@@ -2214,19 +2204,19 @@ const dict = {
   'kernel-handoff-failed-reason-spawn': { zh: '无法启动替换进程', en: 'could not spawn the replacement process' },
   'kernel-handoff-crashed': { zh: '新会话异常退出（代码 {{code}}）。', en: 'The new session exited abnormally (code {{code}}).' },
   'kernel-handoff-safe-hint': { zh: '可运行 dsh-tui safe 进入安全模式诊断。', en: 'Run dsh-tui safe for read-only diagnostics.' },
-  // 选择器本体（阶段B）：标题、探测中态、当前项重复选择、环境不支持。
   'kernel-picker-title': { zh: '选择内核', en: 'Choose kernel' },
   'kernel-probing': { zh: '检测中…', en: 'Checking…' },
   'kernel-already-current': { zh: '已经是当前内核', en: 'Already the current kernel' },
   'kernel-switch-unavailable': { zh: '当前环境不支持切换内核', en: 'Switching kernels is unavailable here' },
+  'kernel-switch-while-working': { zh: '回合运行中，无法切换内核', en: 'Cannot switch kernels while a turn is running' },
   'kernel-pinned-hint': {
     zh: '启动参数已指定内核：本次会按你的选择重启，下次直接启动仍按参数进入。',
     en: 'A startup flag pins the kernel: this restart follows your choice, a later direct launch follows the flag.',
   },
-  // 渠道档案（/channel，仅 Claude 后端）：选择器、动作行、切换/导入反馈、映射明细。
+  // 渠道档案（/channel，仅 Claude 内核）：选择器、动作行、切换/导入反馈、映射明细。
   'channel-picker-title': { zh: '渠道档案', en: 'Channel profiles' },
   'channel-empty-hint': {
-    zh: '还没有渠道：从 settings.json 导入一条，或直接编辑 channels.json（见「查看映射」里的路径）。',
+    zh: '还没有渠道：从 settings.json 导入一个，或直接编辑 channels.json（路径见「查看映射」）。',
     en: 'No channels yet: import one from settings.json, or edit channels.json directly (the path is in the mapping view).',
   },
   'channel-row-summary': { zh: '{{models}} 条精确映射 · {{tiers}} 条档位规则', en: '{{models}} exact mappings · {{tiers}} tier rules' },
@@ -2234,13 +2224,14 @@ const dict = {
   'channel-action-view': { zh: '≡ 查看映射', en: '≡ View mappings' },
   'channel-picker-hint': { zh: '↑↓ 移动 · Enter 切换/执行 · Esc 关闭', en: '↑↓ move · Enter switch/run · Esc close' },
   'channel-already-active': { zh: '已是当前渠道', en: 'Already the active channel' },
+  'channel-switch-while-working': { zh: '回合运行中，无法切换或改动渠道', en: 'Cannot switch or change channels while a turn is running' },
   'channel-conn-settings-mismatch': {
-    zh: 'settings.json 的 ANTHROPIC_BASE_URL 与激活渠道 {{name}} 不一致；本会话按渠道档案连接（settings.json 原样保留给裸 claude 用）',
-    en: 'settings.json ANTHROPIC_BASE_URL differs from the active channel {{name}}; this session connects per the channel profile (settings.json stays untouched for bare claude)',
+    zh: 'settings.json 的 ANTHROPIC_BASE_URL 与当前渠道 {{name}} 不一致；本会话按渠道配置连接（settings.json 不改，直接运行 claude 时仍按它）',
+    en: 'The ANTHROPIC_BASE_URL in settings.json differs from the active channel {{name}}; this session connects as the channel says (settings.json is left as is for running claude directly)',
   },
   'channel-conn-creds-superseded': {
-    zh: '本会话使用渠道凭据；settings.json 里的 {{keys}} 本次不生效（已被渠道 flag 层显式置空，settings.json 原样保留给裸 claude 用）',
-    en: 'This session runs on the channel credential; {{keys}} from settings.json are not in effect (explicitly blanked by the channel flag layer; settings.json stays untouched for bare claude)',
+    zh: '本会话使用渠道凭据，settings.json 里的 {{keys}} 本次不生效（settings.json 不改，直接运行 claude 时仍会用到）',
+    en: 'This session uses the channel credential; {{keys}} from settings.json do not apply (settings.json is left as is for running claude directly)',
   },
   'channel-switched': { zh: '已切换到 {{name}}，模型显示已刷新', en: 'Switched to {{name}}; the model display refreshed' },
   'channel-import-done': { zh: '已导入渠道 {{name}}（重复导入会刷新它）', en: 'Imported channel {{name}} (a re-import refreshes it)' },
@@ -2253,17 +2244,17 @@ const dict = {
   'channel-map-tiers-none': { zh: '档位规则（tiers）：无', en: 'Tier rules (tiers): none' },
   'channel-map-row': { zh: '{{from}} → {{to}}', en: '{{from}} → {{to}}' },
   'channel-map-file-hint': {
-    zh: '编辑 ~/.dsh-tui/backends/claude/channels.json 可增删映射；模型显示按真源优先级实时生效。',
-    en: 'Edit ~/.dsh-tui/backends/claude/channels.json to change mappings; the model display follows them live.',
+    zh: '编辑 ~/.dsh-tui/backends/claude/channels.json 可增删映射，改动会立即反映到模型显示。',
+    en: 'Edit ~/.dsh-tui/backends/claude/channels.json to change mappings; the model display follows the changes right away.',
   },
-  // 三期：渠道连接真源（baseUrl/token/渠道私有 env）——选择器行、切换重启、
-  // 问句式向导（providerWizard 先例）与 cc-switch 共存提示。
-  'channel-row-summary-conn': { zh: '{{url}} · token {{token}} · {{env}} 渠道 env · {{models}} 精确 · {{tiers}} 档位', en: '{{url}} · token {{token}} · {{env}} env keys · {{models}} exact · {{tiers}} tiers' },
+  // 渠道连接（baseUrl / token / 渠道自带的环境变量）：选择器行、切换重启与
+  // 新增/管理向导。
+  'channel-row-summary-conn': { zh: '{{url}} · token {{token}} · 环境变量 {{env}} · 精确 {{models}} · 档位 {{tiers}}', en: '{{url}} · token {{token}} · env {{env}} · exact {{models}} · tiers {{tiers}}' },
   'channel-row-no-url': { zh: '未设 baseUrl', en: 'no baseUrl' },
   'channel-action-add': { zh: '＊ 新增渠道（向导）', en: '＊ Add a channel (wizard)' },
   'channel-action-manage': { zh: '⚙ 管理渠道（编辑/删除）', en: '⚙ Manage channels (edit/delete)' },
   'channel-switch-restart': { zh: '已切换到 {{name}}：连接信息不同，正在以新会话重启……', en: 'Switched to {{name}}: the connection differs — restarting with a fresh session…' },
-  'channel-switch-restart-unavailable': { zh: '已切换到 {{name}}，但当前宿主不支持按新连接重启；下次会话起生效', en: 'Switched to {{name}}, but this host cannot restart for the new connection; it applies from the next session' },
+  'channel-switch-restart-unavailable': { zh: '已切换到 {{name}}，新连接从下次会话起生效', en: 'Switched to {{name}}; the new connection applies from the next session' },
   'channel-wiz-active-channel': { zh: '激活渠道', en: 'the active channel' },
   'channel-wiz-q-action': { zh: '要做什么？', en: 'What would you like to do?' },
   'channel-wiz-opt-add': { zh: '新增渠道', en: 'Add a channel' },
@@ -2282,10 +2273,10 @@ const dict = {
   'channel-wiz-q-baseurl': { zh: 'API base URL（留空跳过）', en: 'API base URL (leave blank to skip)' },
   'channel-wiz-q-baseurl-detail': { zh: '渠道的中转端点，如 https://open.bigmodel.cn/api/anthropic；settings.json 当前值：{{current}}', en: 'The relay endpoint, e.g. https://open.bigmodel.cn/api/anthropic; settings.json currently says: {{current}}' },
   'channel-wiz-q-token': { zh: '渠道 Token（留空跳过）', en: 'Channel token (leave blank to skip)' },
-  'channel-wiz-q-token-detail': { zh: '将写入 ~/.dsh/.credentials.yaml（0600），channels.json 只存引用，永不落明文', en: 'Stored in ~/.dsh/.credentials.yaml (0600); channels.json keeps only a reference, never the literal' },
+  'channel-wiz-q-token-detail': { zh: '存入 ~/.dsh/.credentials.yaml（权限 0600），channels.json 只存引用，不存明文', en: 'Stored in ~/.dsh/.credentials.yaml (mode 0600); channels.json keeps only a reference, never the token itself' },
   'channel-wiz-q-tiers': { zh: '模型映射来源？', en: 'Model mapping source?' },
-  'channel-wiz-opt-tiers-absorb': { zh: '从 settings.json 吸收档位规则', en: 'Absorb the tier rules from settings.json' },
-  'channel-wiz-opt-tiers-absorb-desc': { zh: '吸收 {{n}} 条 ANTHROPIC_*_MODEL 档位规则', en: 'Absorbs {{n}} ANTHROPIC_*_MODEL tier rules' },
+  'channel-wiz-opt-tiers-absorb': { zh: '从 settings.json 导入档位规则', en: 'Import the tier rules from settings.json' },
+  'channel-wiz-opt-tiers-absorb-desc': { zh: '导入 {{n}} 条 ANTHROPIC_*_MODEL 档位规则', en: 'Imports {{n}} ANTHROPIC_*_MODEL tier rules' },
   'channel-wiz-opt-tiers-skip': { zh: '跳过（以后可再导入或手编 channels.json）', en: 'Skip (import later or hand-edit channels.json)' },
   'channel-wiz-opt-tiers-skip-desc': { zh: '渠道先只有连接信息', en: 'The channel starts connection-only' },
   'channel-wiz-save-failed': { zh: '写入失败（详情见调试日志）', en: 'The write failed (see the debug log)' },
@@ -2305,7 +2296,7 @@ const dict = {
   'channel-wiz-opt-edit-delete-desc': { zh: '连同凭据库里的 token 一起删', en: 'Removes the stored token too' },
   'channel-wiz-opt-edit-done': { zh: '完成（不改动）', en: 'Done (change nothing)' },
   'channel-wiz-token-present': { zh: '已存 token（输入新值替换，- 清除）', en: 'token stored (type a new one to replace, - to clear)' },
-  'channel-wiz-token-absent': { zh: '未存 token（输入即存，- 无效）', en: 'no token stored (typing stores one)' },
+  'channel-wiz-token-absent': { zh: '未存 token（输入即保存）', en: 'no token stored (typing stores one)' },
   'channel-wiz-q-delete': { zh: '删除 {{name}}？', en: 'Delete {{name}}?' },
   'channel-wiz-opt-delete-yes': { zh: '删除', en: 'Delete' },
   'channel-wiz-opt-delete-no': { zh: '取消', en: 'Cancel' },
@@ -2316,9 +2307,9 @@ const dict = {
   'channel-wiz-summary-url-skip': { zh: 'baseUrl：不设置', en: 'baseUrl: not set' },
   'channel-wiz-summary-token-set': { zh: 'token：将写入凭据库（0600）', en: 'token: stored in the credential store (0600)' },
   'channel-wiz-summary-token-skip': { zh: 'token：不设置', en: 'token: not set' },
-  'channel-wiz-summary-tiers': { zh: '档位规则：吸收 {{n}} 条', en: 'tier rules: {{n}} absorbed' },
+  'channel-wiz-summary-tiers': { zh: '档位规则：导入 {{n}} 条', en: 'tier rules: {{n}} imported' },
   'channel-wiz-summary-tiers-none': { zh: '档位规则：无', en: 'tier rules: none' },
-  'channel-wiz-summary-store': { zh: 'channels.json 永不保存明文 token；连接在下一次 spawn 生效', en: 'channels.json never stores a literal token; the connection applies from the next spawn' },
+  'channel-wiz-summary-store': { zh: 'channels.json 不保存 token 明文；新连接在下次启动会话时生效', en: 'channels.json never stores the token itself; the connection applies when the next session starts' },
   // Continue 的失败/空态（Chat 的 /continue 分支）：绝不静默。
   'launchpad-continue-none': {
     zh: '没有可继续的会话，已打开历史会话列表',

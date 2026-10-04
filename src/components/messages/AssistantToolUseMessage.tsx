@@ -122,7 +122,7 @@ function jsonArgsLanguage(args: string): 'json' | undefined {
   return parseJsonArgs(args) === undefined ? undefined : 'json'
 }
 
-// --- SendMessage dedicated card (design agent-team-full §5.4 父工具卡) -------
+// --- SendMessage card (the parent relaying a message to a subagent) --------
 
 /** The CC relay tool as the card claims it. Task* delegations already have
  *  a first-class surface (the subagent card + waterfall), so the raw-JSON
@@ -166,7 +166,7 @@ function sendMessageCardOf(tool: ToolRow): SendMessageCard | undefined {
   }
 }
 
-/** The states a structured result may explicitly name (agent-team §5.2). */
+/** The delivery states a structured result may name explicitly. */
 const SEND_MESSAGE_EXPLICIT: Readonly<Record<string, AgentMessageState>> = Object.freeze({
   delivered: 'delivered',
   held: 'held',
@@ -864,8 +864,8 @@ export function AssistantToolUseMessage({
   // body never moves.
   const [hovered, setHovered] = React.useState(false)
   const hoverTint = interactive && hovered && !isSelected
-  // SendMessage 结果行：状态徽标只认结果里的事实（§5.2 镜像规则），
-  // resumedAgentId/pin 显示为「已唤醒 <短id>」；unknown 附不推断说明。
+  // SendMessage 结果行：状态只取结果里明确给出的值；resumedAgentId/pin
+  // 显示为「已唤醒 <短id>」；没有明确状态时注明送达状态未知。
   const sendMessageState = sendMessage === undefined ? undefined : sendMessageCardState(tool)
   const sendMessageResumed = sendMessage === undefined ? undefined : sendMessageResumedOf(tool)
 

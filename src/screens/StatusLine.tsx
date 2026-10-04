@@ -410,8 +410,8 @@ export function StatusLine({
   }
 
 const selectionBadge = formatSelectionBadge(channel.selection)
-  // The short id names the backend's own session (design §8.7): what
-  // `--resume` takes. A DSH session's id is its agent id; stub channels
+  // The short id names the backend's own session, the id `--resume`
+  // takes. A DSH session's id is its agent id; stub channels
   // without a session ref fall back to the agent id.
   const sessionShortId = channel.sessionRef?.sessionId ?? channel.agentId
   // Background-job chip (ctx.jobs; /jobs): live count of running/stopping
@@ -855,7 +855,7 @@ function buildHoverDetail(
     }
     case 'tokens': {
       const { input, output, cacheRead, cacheWrite } = channel.tokens
-      // Design §C: the hover answers "what moved" in one place — session
+      // The hover answers "what moved" in one place — session
       // totals with the cache split (uncached in/out stay separate from
       // cache movement; zeros render nothing rather than a fabricated 0),
       // the window the totals sit in, WHEN the last request was sampled,
@@ -951,7 +951,7 @@ function buildHoverDetail(
       )
     }
     case 'model': {
-      // Design §C: when a display name masks the raw id (modelDisplay maps a
+      // When a display name masks the raw id (modelDisplay maps a
       // friendly/alias name), the hover shows BOTH — the requested alias the
       // user picked and the raw id the route runs. Identical strings render
       // once; nothing is invented when no mapping is known.
