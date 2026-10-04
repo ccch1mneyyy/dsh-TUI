@@ -1,8 +1,8 @@
 /**
  * Reports every session gets: `/doctor` (the backend-neutral facts plus the
  * backend's own diagnostics lines) and `/export` (the projected transcript as
- * Markdown in the working directory). A composition with a richer source —
- * the DSH extension exports the durable session log — overrides them.
+ * Markdown in the working directory). A composition with a richer source
+ * overrides them; the DSH extension exports the durable session log.
  */
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -56,8 +56,8 @@ export function createCoreReports(deps: {
   }
 
   /**
-   * `/export`: the transcript as this channel projected it — user, thinking,
-   * assistant and tool rows — written next to the session's work. Returns
+   * `/export`: the transcript as this channel projected it (user, thinking,
+   * assistant and tool rows), written next to the session's work. Returns
    * the file path, or null when the binding moved on or the write failed.
    */
   const exportSession = (): string | null => {

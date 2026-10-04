@@ -141,7 +141,7 @@ export function createComposerImages(
     generation(): number
     /** The in-memory store of a session that takes images itself (a
      *  backend with the `images` capability); undefined = the DSH
-     *  attachments service, as before. */
+     *  attachments service. */
     localImages?(): LocalImageStore | undefined
   },
 ): ComposerImages {

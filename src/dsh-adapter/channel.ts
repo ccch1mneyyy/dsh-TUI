@@ -1,9 +1,9 @@
 /**
- * The channel composition root (docs/agent-backend-design.md §3.5): one
- * backend-neutral core for every `AgentSession` (`channel/core/compose.ts`),
- * plus the DSH extensions when the bound session is a DSH session
- * (`channel/extensions.ts`). Adding a backend needs no channel code: its
- * session's typed capabilities decide what the core serves.
+ * Channel composition root: one backend-neutral core for every
+ * `AgentSession` (`channel/core/compose.ts`), plus the DSH extensions when the
+ * bound session is a DSH session (`channel/extensions.ts`). A new backend
+ * needs no channel code; its session's typed capabilities decide what the
+ * core serves. See docs/agent-backend-design.md.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -38,13 +38,13 @@ export function createChannel(
   try {
     const session = isAgentSession(initial) ? initial : createDshSession(ctx, { agent: initial, handle: options.handle })
     const core = createCoreChannel(ctx, session, options, owner)
-    // DSH specialists attach only to a DSH session (design §3.5); any other
-    // backend is served by the core and its session's capabilities alone.
+    // DSH extensions attach only to a DSH session; other backends get the
+    // core and whatever their session capabilities offer.
     const native = session.capabilities.native.dsh
     if (native !== undefined) attachDshExtensions(core, ctx, native, options)
-    // A backend that folds its own working line (the Claude backend) serves
-    // it through the typed capability; the DSH projection path above is
-    // untouched. No capability, or no publish option → nothing attaches.
+    // A backend that builds its own working line (the Claude backend) exposes
+    // it as a capability. DSH keeps using its projection above. Without the
+    // capability or the publish option nothing is attached.
     if (session.capabilities.workingActivity !== undefined) attachSessionWorkingActivity(core, options)
     return core.start()
   } catch (error) {

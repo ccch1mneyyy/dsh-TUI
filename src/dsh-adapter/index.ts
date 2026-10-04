@@ -34,9 +34,9 @@ export const inject = ['agents']
 export interface Config {
   /** Existing session to attach; a fresh session is created when absent. */
   sessionId?: string
-  /** Agent backend the session runs on: `dsh` (default) — the DeepSeek
-   *  Harness agent; `claude` — EXPERIMENTAL Claude Agent backend driving the
-   *  local Claude CLI through the Claude Agent SDK (optional peer
+  /** Agent backend the session runs on: `dsh` (default), the DeepSeek
+   *  Harness agent; `claude`, the experimental Claude Agent backend driving
+   *  the local Claude CLI through the Claude Agent SDK (optional peer
    *  `@anthropic-ai/claude-agent-sdk`). `dsh-tui --backend claude` sets it
    *  through `DSH_TUI_BACKEND`. */
   backend?: 'dsh' | 'claude'

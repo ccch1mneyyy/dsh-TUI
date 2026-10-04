@@ -1,6 +1,6 @@
 /**
  * The DSH binding of the shared ask-user-question store
- * (`src/channel/questions.ts`) — the UI-side half of the DSH
+ * (`src/channel/questions.ts`): the UI-side half of the DSH
  * user-interaction seam (`ctx.userQuestions`). The harness's model-facing
  * `ask_user_question` tool calls `UserQuestionService.ask()`, which forwards
  * to the provider registered here; the store parks the request, surfaces one
@@ -41,9 +41,9 @@ export class QuestionStore extends SharedQuestionStore {
   /**
    * The DSH `host.presentation.ask` entry point, typed for the protocol (its
    * requests and answers are the store's shapes). The shadow-policy guard is
-   * asserted here directly — this module is the presentation capability's
-   * audited entry (`verify:adapter-shadow`) — and again, idempotently, by the
-   * shared store every asker goes through.
+   * asserted here directly, since this module is the presentation
+   * capability's audited entry (`verify:adapter-shadow`), and again,
+   * idempotently, by the shared store every asker goes through.
    */
   override ask(request: AskUserQuestionRequest, options?: { redact?: boolean }): Promise<AskUserQuestionAnswer> {
     assertCapabilityShadowPolicy('host.presentation.ask', this.runtime.mode, this.runtime.slices)

@@ -99,13 +99,12 @@ export function createModelActions(
   const standardEffortOptions = (): Array<{ id: string; name: string }> =>
     STANDARD_EFFORT_LADDER.map(id => ({ id, name: standardEffortLabel(id) }))
   /** Effort tiers for one route-metadata answer. A row that declares
-   * reasoning support WITHOUT a tier list — `reasoning: true`, or an object
-   * whose `efforts` is absent (pi-ai zai rows for glm-5.3*) — gets the
-   * STANDARD ladder: the kernel accepts the standard ids and validates at
-   * set time, so offering them is honest, while guessing nothing would hide
-   * tiers the route really runs. An EXPLICIT `efforts: []` says the route
-   * supports none and is respected verbatim, as is any declared list;
-   * `reasoning` absent/false offers nothing. */
+   * reasoning support without a tier list (`reasoning: true`, or an object
+   * whose `efforts` is absent, as pi-ai zai rows for glm-5.3* do) gets the
+   * standard ladder: the kernel accepts the standard ids and validates at
+   * set time, and offering nothing would hide tiers the route does run.
+   * An explicit `efforts: []` means the route supports none and is kept
+   * as is, like any declared list; `reasoning` absent/false offers nothing. */
   const tiersOf = (reasoning: boolean | { efforts?: ReadonlyArray<{ id: string; name: string; description?: string }>; defaultEffort?: string } | undefined): ReadonlyArray<{ id: string; name: string; description?: string }> => {
     if (reasoning === true) return standardEffortOptions()
     if (reasoning === undefined || reasoning === false) return []

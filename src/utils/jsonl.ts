@@ -1,8 +1,8 @@
 /**
  * Line-delimited JSON reading: a malformed line costs that line, never the
  * file. Legal JSON that is not a record (`null`, scalars, arrays) is skipped
- * silently — it is well-formed, just not a row — while text that fails to
- * parse is COUNTED, so a truncated or corrupted source can be reported.
+ * silently since it is well-formed, just not a row; text that fails to parse
+ * is counted, so a truncated or corrupted source can be reported.
  * Shared by the migration sources and the Claude backend's transcript reader.
  */
 

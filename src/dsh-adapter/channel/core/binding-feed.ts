@@ -1,20 +1,20 @@
 /**
- * The one transcript feed of a channel (docs/agent-backend-design.md §3.5
- * items 1–3): the shared projector, the session-batch router that is its only
- * writer, and the bind that follows the bound session — for any backend.
+ * A channel's transcript feed, for any backend: the shared projector, the
+ * session-batch router that is its only writer, and the bind that follows
+ * the bound session.
  *
  * `bind(seed?)` advances the binding generation, resets input convergence,
  * links the session's prompts to the stores Chat renders, and subscribes the
  * router to the captured session. By default it also paints the session's
  * durable history and seeds the session-level facts from the session's
  * capabilities. The history is the `seed` the caller read before the
- * adoption (design §4.11: a resume reads `history()` ahead of the
- * synchronous adopt), painted synchronously BEFORE the subscription — so no
- * live event can land ahead of it; without a seed it is read once,
+ * adoption (a resume reads `history()` ahead of the synchronous adopt). It
+ * is painted synchronously before the subscription, so no live event can
+ * land ahead of it. Without a seed the history is read once,
  * asynchronously, and dropped if live rows painted first. An extension that
- * owns those facts and replays its seed synchronously itself (the DSH
- * specialists) sets `ownsSessionFacts`, and adds its raw per-binding
- * listeners through `onBind`.
+ * owns those facts and replays its seed synchronously itself (DSH) sets
+ * `ownsSessionFacts`, and adds its raw per-binding listeners through
+ * `onBind`.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentEvent, AgentEventMeta, AgentEventOf } from '../../../agent/events.js'
@@ -97,17 +97,17 @@ export function createSessionBatchRouter(deps: {
     deps.state.emit()
   }
   /**
-   * The backend queue lost inputs. Both a claim and a discard retire the
-   * pending preview, but ONLY a discard retires an attached-context entry: a
-   * claim fires while the loop claims the batch, BEFORE the resident
-   * `agent/pre-step` listener can append the attachment — retiring there would
+   * The backend queue lost inputs. A claim and a discard both retire the
+   * pending preview, but only a discard retires an attached-context entry. A
+   * claim fires while the loop claims the batch, before the resident
+   * `agent/pre-step` listener appends the attachment, so retiring there would
    * delete the context before it is ever injected.
    */
   const applyPending = (event: AgentEventOf<'pending.changed'>): void => {
     for (const messageId of event.discarded ?? []) deps.retireAttachment?.(messageId)
-    // A discard also dissolves a DOCKED preview's backend copy — the dock
-    // (the channel-side park an interrupt created) owns the row now, so it
-    // stays until sent (`deliverDocked`) or retracted. A claim always
+    // A discard of a docked preview only drops the backend copy. The dock
+    // (where an interrupt parks inputs on the channel side) owns the row, so
+    // it stays until sent (`deliverDocked`) or retracted. A claim always
     // retires the row: a fallback backend that kept its queue ran it.
     const dockedDiscards = new Set(event.discarded ?? [])
     for (const messageId of [...event.claimed ?? [], ...event.discarded ?? []]) {
@@ -123,7 +123,7 @@ export function createSessionBatchRouter(deps: {
   let turnStarts = 0
 
   const route = (batch: readonly AgentEvent[], meta: AgentEventMeta, current: () => boolean): void => {
-    // The generation fence covers the WHOLE batch, whatever it carries: a
+    // The generation fence covers the whole batch, whatever it carries. A
     // callback retained past a rebind (an in-flight dispatch, a compaction
     // summary stream that outlived the binding it started under) must never
     // write the replacement session's transcript.
@@ -212,8 +212,8 @@ export function createSessionBinder(deps: {
 }) {
   const { owner, binding, state, inputConvergence } = deps
   /**
-   * The bound session's prompts ↔ the stores Chat renders (design §4.7). One
-   * link per binding: a replaced session (or a released channel) withdraws
+   * Links the bound session's prompts to the stores Chat renders. One link
+   * per binding: a replaced session (or a released channel) withdraws
    * everything it parked, so no panel outlives its session.
    */
   let interactionLink: ReturnType<typeof attachInteraction> | undefined
@@ -244,8 +244,8 @@ export function createSessionBinder(deps: {
         interactionLink = link
       }
       const facts = hooks.ownsSessionFacts === true ? undefined : deps.facts
-      // The history read ahead of the adoption paints first: every live
-      // event follows it (design §4.11).
+      // The history read ahead of the adoption paints first, so every live
+      // event lands after it.
       if (facts !== undefined && seed !== undefined) facts.replay(seed)
       if (facts === undefined && link === undefined) {
         register(session.subscribe((batch, meta) => deps.route(batch, meta, current)))
@@ -302,7 +302,7 @@ export function createBindingFeed(ctx: Context, deps: {
   })
 
   /** Forget every per-session projection ledger: the projector's and the
-   *  bound session translator's (the pre-split reducer reset both at once). */
+   *  bound session translator's, together. */
   const resetProjection = (): void => {
     projector.reset()
     deps.hooks().resetTranslation?.()
@@ -318,12 +318,12 @@ export function createBindingFeed(ctx: Context, deps: {
   }
 
   /**
-   * The fallback for a bind without a history read ahead of it (an embedder
+   * Fallback for a bind without a history read ahead of it (an embedder
    * handing `createChannel` a session whose history it never read): read it
-   * once, asynchronously, and paint it only while nothing live has painted
-   * — ordering it after live rows that already arrived would misplace both.
+   * once, asynchronously, and paint it only if nothing live has painted yet.
+   * Painting it after live rows that already arrived would misorder both.
    * Every core adoption (`/new`, `/resume`, a rewind's fork) and the plugin's
-   * startup session pass the history in instead (design §4.11).
+   * startup session pass the history in instead.
    */
   const replayHistory = (capture: BindingCapture, current: () => boolean): void => {
     void capture.session.history().then(events => {

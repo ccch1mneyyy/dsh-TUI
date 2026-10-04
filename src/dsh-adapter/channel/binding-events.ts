@@ -119,14 +119,14 @@ export function createBindingEvents(ctx: Context, deps: {
    * selection reset, the preferred effort and mode refresh, the model
    * selection waterfalls, and the raw durable-event subscribers. Registered
    * before the core's session subscription, so each raw event reaches the
-   * DSH specialists before the projector folds it (the pre-split order).
+   * DSH specialists before the projector folds it.
    */
   const hooks = {
     // This composition maintains mode/effort/command facts through its own
     // specialists, and replays its seed synchronously at adoption.
     ownsSessionFacts: true,
     onGeneration(): void {
-      // DSH specialists attach only to a DSH session (design §3.5).
+      // DSH specialists attach only to a DSH session.
       if (deps.binding.session.capabilities.native.dsh !== undefined) installSubagents()
     },
     onBind({ capture, current, register }: BindingScope): void {
@@ -181,7 +181,7 @@ export function createBindingEvents(ctx: Context, deps: {
       register(disposeRequest)
       // Raw durable events for the DSH specialists. Registered before the
       // session subscription, so each event reaches them before the
-      // projector folds it (the pre-split listener order).
+      // projector folds it.
       register(native.subscribeRaw(event => {
         if (!current()) return
         deps.messageObserver?.publish(native.agent.session, event)

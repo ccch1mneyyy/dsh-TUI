@@ -1,30 +1,30 @@
 /**
- * DSH child transcript source (design dsh-child-transcript): the second
+ * DSH child transcript source (docs/dsh-child-transcript.md): the DSH
  * implementation of the backend-neutral `SubagentControl.history` contract,
- * after Claude's on-disk child lane. Reads one direct child's own durable
- * session log through the PUBLIC persistence range API only —
- * `ctx.sessionPersistence.open(id, 'read')` + `SessionHandle.read(offset,
- * length)` — and translates the page through a throwaway DSH translator into
+ * next to Claude's on-disk child lane. Reads one direct child's own durable
+ * session log through the public persistence range API only
+ * (`ctx.sessionPersistence.open(id, 'read')` + `SessionHandle.read(offset,
+ * length)`) and translates the page through a throwaway DSH translator into
  * the shared leaf vocabulary. The deprecated Session snapshot-events API and
- * the raw session-log file readers are deliberately NOT used (design 路径裁定).
+ * the raw session-log file readers are not used.
  *
  * Read shape (every step bounded and fenced):
- *  1. ownership — the parent-owned `subagents.listChildren(parentId)` roster
+ *  1. ownership: the parent-owned `subagents.listChildren(parentId)` roster
  *     must name the child; a UI-supplied id is never opened on its own;
- *  2. durability — when the agents registry still holds the child's exact
+ *  2. durability: when the agents registry still holds the child's exact
  *     live Session, the public `ctx.sessions.flush(session)` barrier runs
- *     first (no whenIdle wait, no Agent create/resume); a flush failure only
- *     degrades to the provable persisted prefix + the live tail;
- *  3. windows — the child's OWN events are `[inheritedEventCount, total)`;
+ *     first (no whenIdle wait, no Agent create/resume); if the flush fails
+ *     the read falls back to whatever prefix is already persisted;
+ *  3. windows: the child's own events are `[inheritedEventCount, total)`;
  *     the fork-inherited prefix is never paged (a seeded header without its
  *     exact cut fails closed). `total` comes from `stat().eventCount` when
  *     the host states it, else from bounded single-event tail probes of the
  *     public range reader (never an unbounded whole-log read + slice);
- *  4. translation — a fresh translator instance per call; only the leaf
+ *  4. translation: a fresh translator instance per call; only the leaf
  *     kinds (`assistant.message` / `tool.call` / `tool.result`) survive,
  *     each stamped with the child lane's `parentCallId`, so the shared
  *     fold/page/merge pipeline consumes them exactly like Claude's;
- *  5. fences — the binding capture (session + generation) is re-checked after
+ *  5. fences: the binding capture (session + generation) is re-checked after
  *     every await; a parent that moved on discards the page. The handle is
  *     closed exactly once on every path.
  */
@@ -39,7 +39,7 @@ import type { SubagentsServiceView } from './subagent-projection.js'
 /**
  * One page window in source events. Claude pages by 400 SDK messages
  * (`SUBAGENT_TRANSCRIPT_PAGE`) and the shared "load older" chunk is
- * `TRANSCRIPT_OLDER_CHUNK = 400`, so DSH pages by 400 SessionEvents — the
+ * `TRANSCRIPT_OLDER_CHUNK = 400`, so DSH pages by 400 SessionEvents and the
  * neutral cursor stays one unit wide for both backends.
  */
 export const CHILD_TRANSCRIPT_PAGE_EVENTS = 400
@@ -49,7 +49,7 @@ const PROBE_SPAN_MAX = 2 ** 24
 /**
  * Tail-probe budget when `stat()` states no `eventCount` (the pinned JSONL
  * backend does not): exponential-then-binary single-event probes locate the
- * log end. Every probe reads EXACTLY one event; the count is hard-capped so a
+ * log end. Every probe reads exactly one event; the count is capped so a
  * pathological log degrades to "unavailable" instead of scanning. The worst
  * log under the span ceiling takes 24 exponential hits, one miss and 24
  * bisection steps.
@@ -105,7 +105,7 @@ export interface ChildTranscriptDeps {
   sessionsStore(): ChildSessionsStore | undefined
   /** Registry child lookup: the exact live Session when it is held. */
   lookupChild(id: string): { readonly session?: unknown } | undefined
-  /** A THROWAWAY translator per call: history must not touch the live
+  /** A throwaway translator per call: history must not touch the live
    *  translator's frame fence or open-call ledger (backend/session.ts's
    *  own `history()` rule). */
   createTranslator(): DshTranslator
@@ -120,8 +120,8 @@ const optionalCount = (value: unknown): number | undefined =>
 
 /**
  * Locate the log end with bounded single-event probes of the public range
- * reader (the design's "no unbounded whole-log read + slice" rule): an event
- * at `offset` proves the log is longer; exponential steps find an empty
+ * reader, never an unbounded whole-log read: an event at `offset` proves the
+ * log is longer; exponential steps find an empty
  * offset, binary search closes on the exact end. `known` must be an offset
  * whose event exists (the inherited cut boundary was just verified).
  */
@@ -165,7 +165,7 @@ async function probeLogEnd(
 }
 
 /**
- * Read one child transcript page (design 接入方案): the newest window, or the
+ * Read one child transcript page: the newest window, or the
  * `window`-addressed older slice, of the child's own durable events. Null =
  * the parent's catalog holds no such direct child; a rejection = the read
  * failed (the transcript view shows "unavailable", never a fabricated empty
@@ -194,12 +194,12 @@ export async function readChildTranscriptPage(
   guard()
   if (!Array.from(roster ?? []).some(entry => entry?.id === agentId)) return null
 
-  // 2. durability barrier for a still-live child (best effort; the provable
-  //    persisted prefix + the live tail stand when it fails).
+  // 2. durability barrier for a still-live child (best effort; when it fails
+  //    the read below sees whatever prefix is already persisted).
   try {
     const live = deps.lookupChild(agentId)?.session
     if (live !== undefined && live !== null) await deps.sessionsStore()?.flush(live as object)
-  } catch { /* an unflushed prefix is honest; the read below reports reality */ }
+  } catch { /* best effort: the read below returns what is on disk */ }
   guard()
 
   // 3. cheap length when the host states it; otherwise bounded tail probes.
@@ -219,15 +219,15 @@ export async function readChildTranscriptPage(
     if (statedParent !== undefined && statedParent !== null && String(statedParent) !== capture.sessionId) {
       throw new Error('dsh-tui: the stored child session belongs to another parent')
     }
-    // The fork-inherited prefix is part of the stored log but NOT the child's
+    // The fork-inherited prefix is part of the stored log but not the child's
     // own history: page from the exact cut only. A seeded header that does
-    // not state its cut fails closed — zero is never assumed.
+    // not state its cut fails closed; zero is never assumed.
     const cut = header.isSeeded === true
       ? optionalCount(handle.inheritedEventCount)
       : Math.max(0, optionalCount(handle.inheritedEventCount) ?? 0)
     if (cut === undefined) throw new Error('dsh-tui: the seeded child log does not state its inherited cut')
 
-    // The log's total length. `stat().eventCount` when the host states one —
+    // The log's total length: `stat().eventCount` when the host states one,
     // re-verified by a single one-event probe at that offset, because appends
     // since the stat must not hide the newest page (a grown log falls into
     // the bounded tail probe). Without a usable count the probe path verifies
@@ -316,9 +316,9 @@ function orphanResult(result: AgentEventOf<'tool.result'>, event: SessionEvent<'
 }
 
 /**
- * The durable message ids that really exist on the DSH wire — the
- * `user/message` payload id and the `assistant/message` API message id —
- * verbatim. Missing ids stay missing; nothing fabricates a UUID.
+ * The durable message ids that exist on the DSH wire (the `user/message`
+ * payload id and the `assistant/message` API message id), verbatim. Missing
+ * ids stay missing; nothing fabricates a UUID.
  */
 function durableMessageId(event: SessionEvent): string | undefined {
   const type = (event as { type?: unknown }).type

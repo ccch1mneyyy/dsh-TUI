@@ -947,9 +947,9 @@ function oauthStateDescription(status: OAuthProviderStatus): string {
 }
 
 /**
- * The sign-in flow of a backend session's `/login` (design §4.12, D-AUTH):
- * the `/provider` OAuth branch preselected on one provider — sign in, or
- * re-login / sign out when already signed in. Same panels, same plugin flow.
+ * The sign-in flow of a backend session's `/login`: the `/provider` OAuth
+ * branch preselected on one provider (sign in, or re-login / sign out when
+ * already signed in). Same panels, same plugin flow.
  */
 export function runOAuthLogin(
   deps: Pick<ProviderWizardDeps, 'ask' | 'notify' | 'pushLocal'>,

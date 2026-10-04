@@ -1,10 +1,10 @@
 /**
  * Image staging for a session that takes images without the DSH attachments
- * service (Phase 5b): a backend that declares the `images` capability (the
- * Claude backend sends images as base64 blocks of the message itself) gets
- * the composer's pasted images and `@`-mentioned image files staged HERE —
- * bytes held in memory, never written anywhere — under the limits the
- * backend declares, through the same limit model the DSH store uses
+ * service. A backend that declares the `images` capability (the Claude
+ * backend sends images as base64 blocks of the message itself) gets the
+ * composer's pasted images and `@`-mentioned image files staged here, with
+ * the bytes held in memory and never written anywhere. The backend's declared
+ * limits apply through the same limit model the DSH store uses
  * (`imageLimits`: media types, per-image and per-message bytes, image count,
  * per-side and total pixel caps) and the same ingress adaptation
  * (`adaptImageForAdmission`: an unaccepted format is converted, an oversize
@@ -16,9 +16,9 @@
  * addressed). The facade a transcript row shows reads the same bytes back.
  *
  * Bounded: at most {@link LOCAL_IMAGE_LIMIT} images and
- * {@link LOCAL_IMAGE_BYTES} bytes, the oldest dropped first — a facade whose
+ * {@link LOCAL_IMAGE_BYTES} bytes, the oldest dropped first. A facade whose
  * bytes were dropped reports itself unavailable (the row shows the
- * placeholder), it never holds bytes of its own.
+ * placeholder); it never holds bytes of its own.
  */
 import { createHash } from 'node:crypto'
 import type { TranscriptImage } from '../../../adapter/ports/channel-view.js'
@@ -105,12 +105,11 @@ export function createLocalImageStore(limits: () => ImageLimitsView): LocalImage
       let data = input.data
       let mediaType: MentionImageMediaType = input.mediaType
       // The content wins over the label: a paste or @-mention declares a
-      // media type from the filename, and a renamed file would otherwise
-      // travel (and be sent to the backend) under a type its bytes
-      // contradict. The sniff reads magic bytes only — no decode, no
-      // re-encode — so a mislabeled image keeps its bytes, animation
-      // included; unmeasurable content still takes the decode-or-refuse
-      // path below with the declared label.
+      // media type from the filename, and a renamed file would otherwise be
+      // sent to the backend under a type its bytes contradict. The sniff
+      // reads magic bytes only (no decode, no re-encode), so a mislabeled
+      // image keeps its bytes, animation included. Content it cannot identify
+      // takes the decode-or-refuse path below with the declared label.
       const sniffed = sniffImageMediaType(data)
       if (sniffed !== undefined && sniffed !== mediaType) mediaType = sniffed
       const dimensions = { maxImageDimension: caps.maxImageDimension, maxImagePixels: caps.maxImagePixels }
