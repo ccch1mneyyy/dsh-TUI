@@ -138,6 +138,7 @@ function scratchState(thinkingFold: ProjectionState['thinkingFold']): Projection
     mainCost: {},
     model: '',
     lastUsage: undefined,
+    turnUsage: undefined,
     lastUserText: '',
     responseChars: 0,
     tps: undefined,

@@ -1184,6 +1184,18 @@ const dict = {
   'tool-card-source-truncated': { zh: '源数据已折叠：以上为预览，全文保留在会话日志', en: 'Source folded: preview above — the session log retains the full text' },
   'tool-card-full-unavailable': { zh: '以上为结构化呈现；源未保留可展开的原始全文', en: 'Structured view above; no expandable raw full text was retained' },
   'tool-card-window-shown': { zh: '… 已显示前 {{shown}}/{{total}} 行，源保留全文', en: '… first {{shown}}/{{total}} lines shown; the source retains all' },
+  // 模型/用量表面（信息展示完整度设计 §C）：回合账本行的分段词、采样时点、
+  // 底栏 hover 的上一轮摘要标签。缓存分段只在 wire 真带缓存 token 时渲染
+  //（未上报 ≠ 0，不虚构零）。
+  'usage-turn-summary': { zh: '本轮', en: 'turn' },
+  'usage-cache-read': { zh: '读 {{n}}', en: 'read {{n}}' },
+  'usage-cache-write': { zh: '写 {{n}}', en: 'write {{n}}' },
+  'usage-cache-segment': { zh: '缓存 {{parts}}', en: 'cache {{parts}}' },
+  'usage-retry-segment': { zh: '重试 {{n}} 次', en: '{{n}} retries' },
+  'usage-turn-outcome-interrupted': { zh: '已中断', en: 'interrupted' },
+  'usage-turn-outcome-error': { zh: '未完成', en: 'unfinished' },
+  'usage-sampled-at': { zh: '采样 {{time}}', en: 'sampled {{time}}' },
+  'usage-last-turn': { zh: '上一轮', en: 'last turn' },
 
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },

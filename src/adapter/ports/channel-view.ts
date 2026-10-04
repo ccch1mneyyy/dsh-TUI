@@ -104,7 +104,7 @@ export interface WorkingActivityView {
  */
 export interface ChatRow {
   id: number
-  kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact' | 'subagent' | 'job'
+  kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact' | 'subagent' | 'job' | 'turn-summary'
   /** Extra label for non-human user rows (e.g. `steering`). */
   label?: string
   /** Actual execution location for `!command` rows. */
@@ -118,6 +118,8 @@ export interface ChatRow {
   thinkingOpen?: boolean
   /** Present on `tool` rows; the card model. */
   tool?: ToolRow
+  /** Present on `turn-summary` rows; the turn's usage ledger. */
+  turnUsage?: TurnUsageSummary
   /** Present on `subagent` rows; the subagent state snapshot. */
   subagent?: SubagentRow
   /** Present on `job` rows; the background-job state snapshot. */
@@ -453,6 +455,35 @@ export interface TokenBucket {
 export interface CostTokenBuckets {
   peak: TokenBucket
   idle: TokenBucket
+}
+
+/** One completed turn's usage ledger (info-display design §C). Per-turn
+ * aggregate of that turn's assistant-message usages — every message reports
+ * its OWN request, so the sum is the turn total and never mixes with the
+ * cumulative `tokens` (a turn-level report from the backend must not be
+ * added on top). Absent wire fields stay absent: `cacheKnown` distinguishes
+ * "the route reported zero cache" from "the route reports no cache at
+ * all", so the UI never fabricates a zero. */
+export interface TurnUsageSummary {
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  /** True when any cache field was present on the wire this turn. */
+  readonly cacheKnown: boolean
+  /** Attempts within the turn that failed and were superseded (API
+   * retries) — 0 means no retry segment renders at all. */
+  readonly retries: number
+  /** turn.start → turn.end wall-clock span (ms). */
+  readonly durationMs: number
+  /** Model id the turn's last request ran on, when the backend reported
+   * one; absent rather than guessed from the session model. */
+  readonly model?: string
+  /** Reasoning effort the turn's requests pinned, when known. */
+  readonly effort?: string
+  /** How the turn ended — an interrupted turn's ledger is partial truth
+   * and says so. */
+  readonly outcome: 'completed' | 'interrupted' | 'error'
 }
 
 /**

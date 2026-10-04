@@ -3,6 +3,7 @@ import { getLang, subscribeLang, t, type Lang } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow, JobGroupRow, JobRow } from '../dsh-adapter/channel.js'
+import type { TurnUsageSummary } from '../adapter/ports/channel-view.js'
 import type { JobGroupFoldMode } from '../tuiDisplayPrefs.js'
 import { normalizeIdePath } from '../dsh-adapter/ide-channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
@@ -17,6 +18,7 @@ import { isMinimalUiMode } from '../minimalUiMode.js'
 import { noteFrameCause, noteListGeometry } from '../ink/geometry-trace.js'
 import { getTerminalFlushTick } from '../ink/flush-tick.js'
 import { TurnInterruptedRow } from './TurnInterruptedRow.js'
+import { TurnUsageRow } from './TurnUsageRow.js'
 import { LogoV2 } from './LogoV2.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
@@ -302,6 +304,10 @@ function signatureParts(
     case 'compact':
       // Folded one-liner vs full summary text.
       signatureScratch.push(expanded, expandedRows.has(row.id))
+      break
+    case 'turn-summary':
+      // Immutable payload, single truncate-end line: the kind switch alone
+      // covers the height semantics (content never changes after creation).
       break
     case 'user':
       // T06: the selection indicator line above the bubble adds one rendered
@@ -1473,6 +1479,7 @@ export function MessageList({
               toolStartedAt={tool?.startedAt}
               toolDurationMs={tool?.durationMs}
               toolSourceFolded={row.folded === true}
+              turnUsage={row.turnUsage}
               subagent={subagent}
               job={job}
               jobGroup={jobGroup}
@@ -1565,6 +1572,9 @@ type MemoRowProps = {
   /** Row-level source fold (window cap dropped full payloads): the expanded
    *  card discloses preview-only instead of passing it off as full text. */
   toolSourceFolded: boolean
+  /** Turn-summary payload (kind === 'turn-summary'); set-once immutable
+   *  ref created at turn.end, so a plain ref compare is complete. */
+  turnUsage: TurnUsageSummary | undefined
   // SubagentRow, stable ref (subagent lifecycle events update the store, not
   // the row ref itself, so a plain ref compare stays correct).
   subagent: SubagentRow | undefined
@@ -1645,6 +1655,7 @@ function TranscriptRow({
   toolStartedAt,
   toolDurationMs,
   toolSourceFolded,
+  turnUsage,
   subagent,
   job,
   jobGroup,
@@ -1878,6 +1889,15 @@ function TranscriptRow({
       return (
         <Box marginTop={1} ref={ref}>
           <TurnInterruptedRow />
+        </Box>
+      )
+    case 'turn-summary':
+      // The turn's closing ledger (design §C): one dim line after whatever
+      // closed the turn — no top margin, it belongs to the block above.
+      if (turnUsage === undefined) return null
+      return (
+        <Box paddingLeft={2} ref={ref}>
+          <TurnUsageRow usage={turnUsage} />
         </Box>
       )
     case 'local':

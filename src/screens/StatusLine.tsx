@@ -6,6 +6,7 @@ import { t } from '../i18n.js'
 import { formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
 import { estimateSessionCostSnapshotCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
 import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../components/ActivityLine.js'
+import { formatClock } from '../trajectory/format.js'
 import { GoalStatusChip } from '../components/GoalTodoPanel.js'
 import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.js'
 
@@ -719,6 +720,8 @@ type UsageSnapshot = {
   input: number
   cacheRead: number
   cacheWrite: number
+  /** Sampling wall-clock (the producing message's event time). */
+  at: number
 }
 
 /**
@@ -851,11 +854,32 @@ function buildHoverDetail(
       )
     }
     case 'tokens': {
-      const { input, output } = channel.tokens
+      const { input, output, cacheRead, cacheWrite } = channel.tokens
+      // Design §C: the hover answers "what moved" in one place — session
+      // totals with the cache split (uncached in/out stay separate from
+      // cache movement; zeros render nothing rather than a fabricated 0),
+      // the window the totals sit in, WHEN the last request was sampled,
+      // and the last COMPLETED turn's mini summary (kept after the turn
+      // ends — per-turn and cumulative never blend into one number).
+      const last = channel.turnUsage
       return (
         <Text wrap="truncate">
-          {dim('in ')}{input.toLocaleString()} · {dim('out ')}{output.toLocaleString()} ·{' '}
-          {dim('total ')}{(input + output).toLocaleString()}
+          {dim('in ')}{formatTokens(input)} · {dim('out ')}{formatTokens(output)}
+          {cacheRead > 0 ? <>{' · '}{dim('cache read ')}{formatTokens(cacheRead)}</> : null}
+          {cacheWrite > 0 ? <>{' · '}{dim('cache write ')}{formatTokens(cacheWrite)}</> : null}
+          {' · '}{dim('total ')}{formatTokens(input + output + cacheRead + cacheWrite)}
+          {window !== undefined && window > 0 ? <>{' · '}{dim('ctx ')}{formatTokens(window)}</> : null}
+          {usage !== undefined
+            ? <>{' · '}{t('usage-sampled-at', { time: formatClock(usage.at) })}</>
+            : null}
+          {last !== undefined
+            ? <>{' · '}{t('usage-last-turn')} ↑{formatTokens(last.input)} ↓{formatTokens(last.output)}
+              {last.cacheKnown && last.cacheRead + last.cacheWrite > 0
+                ? <> {t('usage-cache-segment', { parts: `${formatTokens(last.cacheRead)}/${formatTokens(last.cacheWrite)}` })}</>
+                : null}
+              {last.retries > 0 ? <> · {t('usage-retry-segment', { n: last.retries })}</> : null}
+            </>
+            : null}
         </Text>
       )
     }
@@ -927,9 +951,18 @@ function buildHoverDetail(
       )
     }
     case 'model': {
+      // Design §C: when a display name masks the raw id (modelDisplay maps a
+      // friendly/alias name), the hover shows BOTH — the requested alias the
+      // user picked and the raw id the route runs. Identical strings render
+      // once; nothing is invented when no mapping is known.
+      const display = channel.modelDisplay
       return (
         <Text wrap="truncate">
-          {dim('model ')}{channel.modelDisplay ?? channel.model} · {dim('provider ')}{channel.provider}
+          {dim('model ')}{display ?? channel.model}
+          {display !== undefined && display !== channel.model
+            ? <>{' ('}{channel.model}{')'}</>
+            : null}
+          {' · '}{dim('provider ')}{channel.provider}
           {channel.contextWindow !== undefined
             ? <> · {dim('ctx ')}{formatTokens(channel.contextWindow)}</>
             : null}

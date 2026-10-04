@@ -581,6 +581,11 @@ const GROUPS = {
 // verbose 有界行窗口 + 如实告知、展开卡的源截断/仅结构化披露、错误长文
 // 走与输出同一套行预算。
     ["verify-tool-card-completeness", ['node', '--import', 'tsx/esm', 'scripts/verify-tool-card-completeness.tsx']],
+// 每回合用量账本回归（信息展示完整度设计 §C）：共享投影器把回合内各
+// assistant.message 的 per-request usage 求和成 turn-summary 行与底栏
+// 快照——result/turn 口径不双计、缓存缺席≠0、中断/通知/压缩/重放各形态、
+// 失败尝试（重试）只计一次。
+    ["verify-usage-turn-summary", ['node', '--import', 'tsx/esm', 'scripts/verify-usage-turn-summary.ts']],
 // 悬停浮层第二批回归：@ 文件补全面板长路径悬停弹全路径（完整可见的短路径
 // 不弹）、会话列表行标题截断悬停弹完整标题+绝对时间+cwd（未截断不重复
 // 标题）、状态栏 model/git 字段悬停明细（provider/ctx 窗口/完整分支）、
