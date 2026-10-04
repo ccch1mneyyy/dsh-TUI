@@ -744,6 +744,72 @@ try {
     bareChannel.releaseContributions()
   }
 }
+
+// ── a late interrupt receipt speaks only for its own request and session ──
+{
+  type Receipt = Awaited<ReturnType<AgentSession['cancel']>>
+  const receipts: ((receipt: Receipt) => void)[] = []
+  const withReceipts = (sessionId: string): FakeSession => {
+    const session = fakeSession(sessionId)
+    session.cancel = cause => {
+      session.cancels.push(cause)
+      return new Promise<Receipt>(resolve => { receipts.push(resolve) })
+    }
+    return session
+  }
+  const current = withReceipts('d0d0d0d0-d0d0-40d0-80d0-d0d0d0d0d0d0')
+  const next = withReceipts('d1d1d1d1-d1d1-41d1-81d1-d1d1d1d1d1d1')
+  const dock = createChannel(ctx, current, {
+    model: 'm', provider: '', cwd: workdir, activity: false,
+    openSession: () => Promise.resolve(next),
+  })
+  const queue = async (text: string): Promise<string> => {
+    const before = current.submits.length
+    dock.submit(text)
+    await settled(() => current.submits.length === before + 1)
+    return current.submits.at(-1)!.input.clientMessageId
+  }
+  const tick = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
+  try {
+    // Request A: Esc docks a queued message, and the aborted turn ends
+    // before A's receipt comes back.
+    current.emit([{ type: 'turn.start', turn: 1, origin: 'user', time: 1 }])
+    const a = await queue('queued in turn 1')
+    check('Esc with a queued message docks it and asks for a receipt', dock.interruptAndDock() === 1 && receipts.length === 1)
+    current.emit([{ type: 'turn.end', turn: 1, reason: { kind: 'aborted' }, time: 2 }])
+    // Request B on the next turn, A still unanswered.
+    current.emit([{ type: 'turn.start', turn: 2, origin: 'user', time: 3 }])
+    const b = await queue('queued in turn 2')
+    check('a dock on the next turn sends its own request', dock.interruptAndDock() === 1 && receipts.length === 2)
+    check('the newer request keeps holding the rows the older one has not vouched for', dock.removePending(a) === false && dock.pending.some(item => item.id === a && item.docked === true))
+    receipts[0]!({ stillQueued: [], outcome: 'confirmed' })
+    await tick()
+    await queue('queued while B is unanswered')
+    dock.interruptAndDock()
+    check('an older receipt does not release the newer request (later docks still join it)', receipts.length === 2)
+    check('the older confirmed receipt frees its own rows', dock.removePending(a) === true && dock.removePending(b) === false)
+    receipts[1]!({ stillQueued: [], outcome: 'confirmed' })
+    await tick()
+    current.emit([{ type: 'turn.end', turn: 2, reason: { kind: 'aborted' }, time: 4 }])
+    // Request C answers only after the channel moved to another session.
+    current.emit([{ type: 'turn.start', turn: 3, origin: 'user', time: 5 }])
+    await queue('queued in turn 3')
+    check('a third dock asks for its own receipt', dock.interruptAndDock() > 0 && receipts.length === 3)
+    current.emit([{ type: 'turn.end', turn: 3, reason: { kind: 'aborted' }, time: 6 }])
+    check('/new adopts while that receipt is out', await dock.newSession() === true && dock.sessionRef.sessionId === next.ref.sessionId)
+    const toastsBefore = dock.notifications.length
+    receipts[2]!({ stillQueued: [], outcome: 'failed' })
+    await tick()
+    check('a receipt of the session left behind raises nothing on the new one', dock.notifications.length === toastsBefore && !dock.notifications.some(item => item.text === t('claude-interrupt-failed')))
+    next.emit([{ type: 'turn.start', turn: 1, origin: 'user', time: 7 }])
+    const before = next.submits.length
+    dock.submit('queued on the new session')
+    await settled(() => next.submits.length === before + 1)
+    check('the new session docks with a request of its own', dock.interruptAndDock() === 1 && receipts.length === 4 && next.cancels.includes('interrupt'))
+  } finally {
+    dock.releaseContributions()
+  }
+}
 rmSync(workdir, { recursive: true, force: true })
 console.log(`\nverify-backend-channel OK (${passed} checks)`)
 process.exit(0)

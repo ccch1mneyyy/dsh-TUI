@@ -206,15 +206,24 @@ export function createInputActions(
       // R7: every row this request parks is provisional until its receipt
       // vouches for them — the batch that fired the request (the receipt's
       // own snapshot covers it) and every later joiner above alike.
-      const provisional: string[] = [...dockedNow]
+      // Rows an earlier request still holds stay held: that receipt can be
+      // outlived by this request (the aborted turn ended before it came
+      // back), and this one's later queue snapshot vouches for them too.
+      const provisional: string[] = [...input.provisionalDockIds ?? [], ...dockedNow]
       input.provisionalDockIds = provisional
       let settled = false
       const settle = (outcome: CancelOutcome, stillQueued: readonly string[]): void => {
         if (settled) return
         settled = true
-        input.interruptReceiptPending = false
-        if (input.uncoveredDockIds === uncovered) input.uncoveredDockIds = undefined
+        // A newer request owns the bookkeeping once it replaced ours.
+        if (input.uncoveredDockIds === uncovered) {
+          input.uncoveredDockIds = undefined
+          input.interruptReceiptPending = false
+        }
         if (input.provisionalDockIds === provisional) input.provisionalDockIds = undefined
+        // The channel moved to another session: its dock and its queue are
+        // not the ones this receipt speaks about.
+        if (getSession() !== session) return
         // Every docked row this receipt cannot confirm dropped: the ids the
         // backend says it kept, plus every row docked after the request
         // fired (outside its snapshot). Those copies are still live — their
@@ -225,6 +234,15 @@ export function createInputActions(
         // revocation could no longer reach.
         const revoke = new Set([...stillQueued, ...uncovered])
         if (outcome !== 'confirmed') for (const id of provisional) revoke.add(id)
+        // A newer request that carried our rows over holds them no longer
+        // than this answer needs.
+        const held = input.provisionalDockIds
+        if (outcome === 'confirmed' && held !== undefined && held !== provisional) {
+          for (const id of provisional) {
+            const index = held.indexOf(id)
+            if (index !== -1 && !revoke.has(id)) held.splice(index, 1)
+          }
+        }
         if (revoke.size > 0) {
           let undocked = false
           state.pending = state.pending.map(item => {
