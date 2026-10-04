@@ -396,6 +396,24 @@ export default class App extends PureComponent<Props, State> {
 	// Initialized to now so startup doesn't false-trigger.
 	lastStdinTime = Date.now();
 
+	// Cached TerminalSizeContext value, renewed only when the dimensions
+	// actually change. An inline object literal gets a fresh identity on
+	// every App render, re-rendering EVERY width-aware consumer
+	// (MarkdownTable, CodeBlockFrame, panel geometry...) on each streaming
+	// frame even though nothing moved - measured as 53 redundant code
+	// re-highlights per frame by verify-markdown-codebox-performance.
+	private terminalSizeValue: { columns: number; rows: number } | null = null
+	private terminalSizeFor(columns: number, rows: number): { columns: number; rows: number } {
+		if (
+			this.terminalSizeValue === null ||
+			this.terminalSizeValue.columns !== columns ||
+			this.terminalSizeValue.rows !== rows
+		) {
+			this.terminalSizeValue = { columns, rows }
+		}
+		return this.terminalSizeValue
+	}
+
 	// Raw stdout writer for control sequences that must bypass the frame
 	// pipeline (alt-screen enter/exit, mouse-tracking toggles, notifications).
 	// A class property (not a render-local closure) so the context value keeps
@@ -417,10 +435,7 @@ export default class App extends PureComponent<Props, State> {
 		return (
 			<TerminalWriteProvider value={this.writeRaw}>
 			<TerminalSizeContext.Provider
-				value={{
-					columns: this.props.terminalColumns,
-					rows: this.props.terminalRows,
-				}}
+				value={this.terminalSizeFor(this.props.terminalColumns, this.props.terminalRows)}
 			>
 				<AppContext.Provider
 					value={{
