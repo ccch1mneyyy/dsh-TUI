@@ -94,6 +94,14 @@ export interface SessionCatalog {
   delete?(sessionId: string, cwd?: string): Promise<void>
 }
 
+/** Backend-scoped launcher marker and session browser usage notes. */
+export interface BackendSessionPrefs {
+  lastSession(): string | undefined
+  setLastSession(sessionId: string): void
+  touch(sessionId: string): void
+  forget(sessionId: string): void
+}
+
 /** One agent backend. */
 export interface AgentBackend {
   /** `dsh` | `claude` | `acp:<agent>`. */
@@ -102,4 +110,8 @@ export interface AgentBackend {
   detect(host: BackendHost): Promise<BackendDetection>
   open(target: OpenTarget, host: BackendHost): Promise<AgentSession>
   readonly catalog?: SessionCatalog
+  readonly launch?: {
+    sessionPrefs(debug: (message: string) => void): BackendSessionPrefs
+    resumeCommand(sessionId: string): string
+  }
 }

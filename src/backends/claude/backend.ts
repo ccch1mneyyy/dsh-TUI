@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto'
 import type { AgentBackend, BackendDetection, BackendHost, OpenTarget } from '../../agent/backend.js'
 import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
-import { CLAUDE_BACKEND_ID, CLAUDE_BACKEND_LABEL, cliVersionDrift, sdkVersionDrift, VALIDATED_SDK_VERSION } from './contract.js'
+import { CLAUDE_BACKEND_ID, CLAUDE_BACKEND_LABEL, cliVersionDrift, sdkVersionDrift, VALIDATED_SDK_VERSION, claudeResumeCommand } from './contract.js'
 import { CLAUDE_OAUTH_PROVIDER, ClaudeChannelConflictError, channelMissingCredential, detectClaudeAuth, originHost, refreshFailureDebugDetail, refreshFailureStatus, resolveClaudeAuth, type ClaudeChannelConnectionInput, type ClaudeRouteSettings } from './auth.js'
 import { createClaudeCatalog } from './catalog.js'
 import { resolveStartPermissionMode, type StartPermissionMode } from './options.js'
@@ -159,6 +159,19 @@ export const claudeBackend: AgentBackend = {
       host.debug(`claude: detection failed (${errorText(error)})`)
       return { installed: true, auth }
     }
+  },
+
+  launch: {
+    sessionPrefs: debug => {
+      const prefs = fileClaudePrefs(undefined, debug)
+      return {
+        lastSession: () => prefs.read().lastSession,
+        setLastSession: sessionId => { prefs.write({ lastSession: sessionId }) },
+        touch: sessionId => { prefs.touch(sessionId) },
+        forget: sessionId => { prefs.forget(sessionId) },
+      }
+    },
+    resumeCommand: claudeResumeCommand,
   },
 
   catalog: createClaudeCatalog({

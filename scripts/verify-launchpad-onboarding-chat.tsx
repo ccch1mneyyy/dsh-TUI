@@ -1001,7 +1001,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
     {},
     {
       onSwitchBackend: (id: string) => { switches.push(id) },
-      onProbeKernels: async () => { probes += 1; return { installed: true, auth: 'ok' as const, version: '2.1.284' } },
+      onProbeKernels: async () => { probes += 1; return { claude: { installed: true, auth: 'ok' as const, version: '2.1.284' } } },
     },
   )
   check('X0 夹具挂起来了（启动页上屏）', await settled(() => chat.screen().includes('说点什么')), chat.screen().slice(0, 200))
@@ -1033,7 +1033,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   const chat = await mountChat({ launchpadOnBoot: true }, {}, {
     onSwitchBackend: (id: string) => { switches.push(id) },
     // 探测说「没装」：那一行必须画灰并写明原因。
-    onProbeKernels: async () => ({ installed: false }),
+    onProbeKernels: async () => ({ claude: { installed: false } }),
   })
   await settled(() => chat.screen().includes('说点什么'))
   await clickChip(chat, '内核')
@@ -1078,7 +1078,7 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   const switches: string[] = []
   const chat = await mountChat({ launchpadOnBoot: true }, { working: true }, {
     onSwitchBackend: (id: string) => { switches.push(id) },
-    onProbeKernels: async () => ({ installed: true, auth: 'ok' as const, version: '2.1.284' }),
+    onProbeKernels: async () => ({ claude: { installed: true, auth: 'ok' as const, version: '2.1.284' } }),
   })
   await settled(() => chat.screen().includes('说点什么'))
   await clickChip(chat, '内核')

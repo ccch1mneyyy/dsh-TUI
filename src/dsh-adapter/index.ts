@@ -9,6 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
+import { isKernelId, type KernelBackendId } from '../kernelPrefs.js'
 import { BTW_CONTEXT_BUDGET_DEFAULT, BTW_CONTEXT_TURNS_DEFAULT, DEFAULT_COMPANION_SKIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, normalizeBtwContextBudget, normalizeBtwContextTurns, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../components/splashFonts.js'
@@ -39,7 +40,7 @@ export interface Config {
    *  the local Claude CLI through the Claude Agent SDK (optional peer
    *  `@anthropic-ai/claude-agent-sdk`). `dsh-tui --backend claude` sets it
    *  through `DSH_TUI_BACKEND`. */
-  backend?: 'dsh' | 'claude'
+  backend?: KernelBackendId
   /** LLM provider route. The route resolves atomically (issue #67): when
    *  cordis.yml names BOTH `provider` and `model`, that pair wins; otherwise
    *  the `/model` choice persisted in `~/.dsh-tui/model.json` wins whole;
@@ -249,10 +250,10 @@ export interface Config {
 
 /** The backend a configured value names: case-insensitive, trimmed;
  *  empty or unknown → undefined (the DSH default). */
-export function normalizeBackendChoice(value: unknown): 'dsh' | 'claude' | undefined {
+export function normalizeBackendChoice(value: unknown): KernelBackendId | undefined {
   if (typeof value !== 'string') return undefined
   const id = value.trim().toLowerCase()
-  return id === 'dsh' || id === 'claude' ? id : undefined
+  return isKernelId(id) ? id : undefined
 }
 
 export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Config>(Schema.object({

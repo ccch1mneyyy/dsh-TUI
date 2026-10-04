@@ -1009,15 +1009,15 @@ base.close()
     dshOnly.length === 2 && dshOnly[0]?.id === 'dsh' && dshOnly[0]?.current === true && dshOnly[0]?.selectable === true && dshOnly[0]?.version === 'dsh-core v0.2.6'
       && dshOnly[1]?.id === 'claude' && dshOnly[1]?.current === false && dshOnly[1]?.selectable === false && dshOnly[1]?.reasonKey === 'kernel-probing',
     JSON.stringify(dshOnly))
-  const ok = buildKernelCatalog({ current: 'claude', dshVersion: '0.2.6', claude: { installed: true, auth: 'ok', version: '2.1.287' } })
+  const ok = buildKernelCatalog({ current: 'claude', dshVersion: '0.2.6', statuses: { claude: { installed: true, auth: 'ok', version: '2.1.287' } } })
   check('K2 目录：installed+auth=ok 的 claude 可选、版本显示串、current 标记在 claude',
     ok[0]?.current === false && ok[1]?.selectable === true && ok[1]?.current === true && ok[1]?.version === 'claude-code v2.1.287' && ok[1]?.reasonKey === undefined,
     JSON.stringify(ok))
   check('K3 目录：auth=missing 置灰(未登录)；auth=unknown 仍可选（分不清≠没有）；installed=false → 未安装',
-    buildKernelCatalog({ current: 'dsh', claude: { installed: true, auth: 'missing', version: '1.2.3' } })[1]?.selectable === false
-      && buildKernelCatalog({ current: 'dsh', claude: { installed: true, auth: 'missing' } })[1]?.reasonKey === 'kernel-unavailable-auth-missing'
-      && buildKernelCatalog({ current: 'dsh', claude: { installed: true, auth: 'unknown' } })[1]?.selectable === true
-      && buildKernelCatalog({ current: 'dsh', claude: { installed: false, version: '1.2.3' } })[1]?.reasonKey === 'kernel-unavailable-not-installed')
+    buildKernelCatalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing', version: '1.2.3' } } })[1]?.selectable === false
+      && buildKernelCatalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing' } } })[1]?.reasonKey === 'kernel-unavailable-auth-missing'
+      && buildKernelCatalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'unknown' } } })[1]?.selectable === true
+      && buildKernelCatalog({ current: 'dsh', statuses: { claude: { installed: false, version: '1.2.3' } } })[1]?.reasonKey === 'kernel-unavailable-not-installed')
   check('K4 显示名：dsh→DSH、claude→Claude（chip 插值与重启通知共用）',
     kernelDisplayName('dsh') === 'DSH' && kernelDisplayName('claude') === 'Claude')
   // 版本显示串：产品前缀表（dsh→dsh-core、claude→claude-code）；空/缺省 = undefined
@@ -1032,10 +1032,10 @@ base.close()
   const subtitleOf = (input: Parameters<typeof buildKernelCatalog>[0]) => buildKernelCatalog(input).map(option => kernelSubtitle(option, key => 'R:' + key))
   check('K4c kernelSubtitle：版本·原因 / 只有版本 / 只有原因 / 都没有=undefined',
     subtitleOf({ current: 'dsh', dshVersion: '0.2.6' })[1] === 'R:kernel-probing'
-      && subtitleOf({ current: 'dsh', dshVersion: '0.2.6', claude: { installed: false } })[1] === 'R:kernel-unavailable-not-installed'
+      && subtitleOf({ current: 'dsh', dshVersion: '0.2.6', statuses: { claude: { installed: false } } })[1] === 'R:kernel-unavailable-not-installed'
       && subtitleOf({ current: 'dsh', dshVersion: '0.2.6' })[0] === 'dsh-core v0.2.6'
       && subtitleOf({ current: 'dsh' })[0] === undefined
-      && subtitleOf({ current: 'dsh', claude: { installed: true, auth: 'missing', version: '1.2.3' } })[1] === 'claude-code v1.2.3 · R:kernel-unavailable-auth-missing',
+      && subtitleOf({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing', version: '1.2.3' } } })[1] === 'claude-code v1.2.3 · R:kernel-unavailable-auth-missing',
     JSON.stringify(subtitleOf({ current: 'dsh', dshVersion: '0.2.6' })))
 
   // kernel.json 记忆：原子写（tmp+rename，claude prefs.ts 同款）往返。
@@ -1853,14 +1853,14 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s2.close()
   {
     // 已探测「未安装」：置灰原因是未安装（与「检测中…」分得清）。
-    const s3 = await openLaunchpad([], { kernels: buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2', claude: { installed: false } }) })
+    const s3 = await openLaunchpad([], { kernels: buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2', statuses: { claude: { installed: false } } }) })
     check('S7 已探测未安装：claude 行显示「未安装」',
       await settled(() => s3.screen().includes(CLAUDE_LABEL + ' · 未安装')), s3.screen().slice(-160))
     s3.close()
   }
   {
     // 已探测可用：版本串是**产品前缀 + 版本号**，且这一行不变暗（可选）。
-    const s4 = await openLaunchpad([], { kernels: buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2', claude: { installed: true, auth: 'ok', version: '2.0.1' } }) })
+    const s4 = await openLaunchpad([], { kernels: buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2', statuses: { claude: { installed: true, auth: 'ok', version: '2.0.1' } } }) })
     check('S8 可选内核显示版本串：claude-code v2.0.1（不是裸版本号）',
       await settled(() => s4.screen().includes(CLAUDE_LABEL + ' · claude-code v2.0.1')), s4.screen().slice(-160))
     const lines4 = viewportLines(s4.term)

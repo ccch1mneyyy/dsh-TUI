@@ -8,8 +8,7 @@ import { gte, gt, lt, valid } from 'semver'
 import { shellQuote } from './utils/shellQuote.js'
 import { DATA_DIR } from './utils/paths.js'
 import { stripResumeArgs } from './sessionHistory.js'
-import { KERNEL_SWITCH_HANDOFF_ENV } from './kernelPrefs.js'
-import { kernelDisplayName } from './components/kernelCatalog.js'
+import { KERNEL_SWITCH_HANDOFF_ENV, isKernelId, kernelDisplayName, type KernelBackendId } from './kernelPrefs.js'
 import { classifyReplacementOutcome, formatHandoffNotice, handoffEventTag, writeHandoffStage } from './handoffEvents.js'
 import { HANDOFF_ACK_FD_ENV, HANDOFF_ATTEMPT_ENV, HANDOFF_SCREEN_ENV, parseHandoffAckLine } from './handoffAck.js'
 import { DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from './ink/termio/csi.js'
@@ -83,8 +82,8 @@ export function logRestartEvent(event: string, data?: Record<string, unknown>): 
  * kernel.json has the backend but not the session or when it was written.
  */
 export interface LastRunRecord {
-  /** The kernel THIS instance ran on (Config domain: 'dsh' | 'claude'). */
-  readonly backendId: 'dsh' | 'claude'
+  /** The kernel THIS instance ran on (Config domain: KernelBackendId). */
+  readonly backendId: KernelBackendId
   /** The resumable session id on that backend; '' = nothing resumable (the
    *  retry cold-starts the backend instead of resuming across domains). */
   readonly sessionId: string
@@ -153,7 +152,7 @@ export function readLastRunRecord(file: string = LAST_RUN_FILE): LastRunRecord |
     const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
     const record = parsed as Record<string, unknown>
-    if (record.backendId !== 'dsh' && record.backendId !== 'claude') return undefined
+    if (!isKernelId(record.backendId)) return undefined
     if (typeof record.sessionId !== 'string' || typeof record.cwd !== 'string' || typeof record.attemptId !== 'string') return undefined
     if (typeof record.updatedAt !== 'number' || !Number.isFinite(record.updatedAt)) return undefined
     return {
@@ -1858,7 +1857,7 @@ export async function updateTuiAndRestart(
   sessionId: string,
   profile: string,
   targetVersion?: string,
-  kernel?: 'dsh' | 'claude',
+  kernel?: KernelBackendId,
 ): Promise<TuiUpdateResult> {
   const outcome = await updateTui(profile, targetVersion)
   const { updatedFrom } = outcome
@@ -2036,7 +2035,7 @@ export interface TuiRestartOptions {
    * Config row that pins the other one), and no DSH_TUI_RESUME_SESSION: the
    * new kernel starts a new session.
    */
-  backend?: 'dsh' | 'claude'
+  backend?: KernelBackendId
   /**
    * 'alt' (fullscreen kernel switch only): this process keeps the alternate
    * screen open through the spawn, the replacement adopts it without a
@@ -2051,7 +2050,7 @@ export interface TuiRestartOptions {
    * session on the same kernel even when a Config row names the other one
    * (as it does after a kernel switch). Ignored when `backend` is set.
    */
-  kernel?: 'dsh' | 'claude'
+  kernel?: KernelBackendId
 }
 
 /**

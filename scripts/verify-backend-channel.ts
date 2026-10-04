@@ -134,7 +134,7 @@ const unavailableText = (name: string): string => t('capability-unavailable-back
 
 try {
   // ── capability snapshot and command surface ─────────────────────────
-  check('snapshot names the backend', channel.backendCapabilities.backendId === 'fake' && channel.backendCapabilities.backendLabel === 'Fake Agent')
+  check('snapshot names the backend and uses its model route', channel.backendCapabilities.backendId === 'fake' && channel.backendCapabilities.backendLabel === 'Fake Agent' && channel.backendCapabilities.modelRoutes === 'backend')
   check('sessionRef follows the bound session', channel.sessionRef.backendId === 'fake' && channel.sessionRef.sessionId === first.ref.sessionId)
   check('no backend cost reported yet', channel.costReport === undefined)
   check('no retraction without the capability', channel.backendCapabilities.retractPending === false)
@@ -575,7 +575,7 @@ try {
     // registry command).
     const today = annotateCommandCapabilities(LOCAL_COMMANDS, dsh.capabilities())
     check('the DSH command list is today\'s list', JSON.stringify(dsh.commandList) === JSON.stringify(today) && today.some(command => command.descriptionKey === 'cmd-desc-compact-unavailable'))
-    check('DSH snapshot is all-capable', dsh.backendCapabilities.backendId === 'dsh' && dsh.backendCapabilities.retractPending && dsh.backendCapabilities.rewind && dsh.backendCapabilities.models && dsh.backendCapabilities.resume)
+    check('DSH snapshot is all-capable and routes model selection through providers', dsh.backendCapabilities.backendId === 'dsh' && dsh.backendCapabilities.retractPending && dsh.backendCapabilities.rewind && dsh.backendCapabilities.models && dsh.backendCapabilities.resume && dsh.backendCapabilities.modelRoutes === 'providers')
     check('DSH sessionRef', dsh.sessionRef.backendId === 'dsh' && dsh.sessionRef.sessionId === 'dsh-1')
     check('DSH reports no backend cost', dsh.costReport === undefined)
   } finally {

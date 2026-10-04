@@ -190,6 +190,7 @@
     "verify-auto-recap": 9.7,
     "verify-backend-channel": 2.3,
     "verify-backend-chat": 12.4,
+    "verify-backend-startup": 0.4,
     "verify-balance": 15.3,
     "verify-btw-panel": 17.1,
     "verify-bundled-presets": 0.7,

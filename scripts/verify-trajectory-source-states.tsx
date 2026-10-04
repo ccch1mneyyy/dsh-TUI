@@ -12,7 +12,7 @@
  *    way an extension-less future composition would produce it);
  *  - panel: unsupported renders the honest not-adapted copy (no
  *    "appears once this session has turns" promise, no ⤢ hint line); the
- *    claude backend gets its specifically-worded line; supported-empty
+ *    unsupported data uses one backend-neutral line; supported-empty
  *    keeps the existing copy; supported renders the ledger;
  *  - scene: unsupported renders the honest copy and still exits (q);
  *    supported-empty keeps the golden chrome (no unsupported copy);
@@ -224,10 +224,10 @@ try {
     ;(h as unknown as { app: { unmount(): Promise<void> } }).app.unmount(); h.term.dispose()
   }
   {
-    panelSource = 'unsupported'; panelBackendId = 'claude'; panelProps.trajectory = undefined
+    panelSource = 'unsupported'; panelBackendId = 'other'; panelProps.trajectory = undefined
     const h = await mountPanel()
-    check('panel/unsupported-claude: claude-worded line renders', await settled(() => h.screen().includes(head(t('trajectory-unsupported-claude')))))
-    check('panel/unsupported-claude: still no first-message promise', !h.screen().includes(t('panel-trajectory-empty')))
+    check('panel/unsupported: unknown backend keeps generic copy', await settled(() => h.screen().includes(head(t('trajectory-unsupported')))))
+    check('panel/unsupported: still no first-message promise', !h.screen().includes(t('panel-trajectory-empty')))
     ;(h as unknown as { app: { unmount(): Promise<void> } }).app.unmount(); h.term.dispose()
   }
   {

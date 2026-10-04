@@ -14,6 +14,7 @@
 
 import React, { useCallback, useMemo, useRef, useState } from 'react'
 import { basename } from 'node:path'
+import { formatSessionRef } from '../../agent/refs.js'
 import { t } from '../../i18n.js'
 import { truncateWidth } from '../../sessions/format.js'
 import { normalizeWorkspaceCwd } from '../../sessions/view.js'
@@ -106,9 +107,9 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
    */
   // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts pass partial channels
   const backendId = channel.backendCapabilities?.backendId ?? 'dsh'
-  const dshBackend = backendId === 'dsh'
   // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts pass partial channels
   const workspaceLedger = channel.backendCapabilities?.commands.includes('workspace') ?? true
+  const dshBackend = backendId === 'dsh'
   const pinsDir = sessionPinsDir(backendId)
 
   const [entries, setEntries] = useState<readonly RailEntry[]>([])
@@ -154,10 +155,10 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     (sessionId: string): number | undefined => {
       // The ledger keys a non-DSH session by its backend-qualified reference
       // (`claude:<id>`); DSH ids stay bare.
-      const owner = occupancyRef.current.get(dshBackend ? sessionId : `${backendId}:${sessionId}`)
+      const owner = occupancyRef.current.get(formatSessionRef({ backendId, sessionId }))
       return owner === undefined || owner.pid === process.pid ? undefined : owner.pid
     },
-    [dshBackend, backendId],
+    [backendId],
   )
 
   /**

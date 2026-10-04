@@ -1975,7 +1975,6 @@ const dict = {
   // 内核不提供轨迹数据时的说明，与上面的「还没有轨迹」是两种状态：这里不承诺
   // 下一回合会有数据。
   'trajectory-unsupported': { zh: '当前内核不提供轨迹数据，本会话没有可显示的时间线。', en: 'This kernel provides no trajectory data; there is no session timeline to show.' },
-  'trajectory-unsupported-claude': { zh: 'Claude 内核暂不支持轨迹视图：这里不会出现唤醒带与账本。', en: 'The Claude kernel does not support the trajectory view yet: the wake band and ledger will not appear here.' },
   'trajectory-unsupported-fullscreen': { zh: '当前内核没有轨迹数据，⤢ 全屏不可用。', en: 'This kernel has no trajectory data, so ⤢ fullscreen is unavailable.' },
   'trajectory-unsupported-exit': { zh: 'q / Esc 返回对话', en: 'q / Esc to return' },
   // 事件本身没有时间戳时，行时间取收到事件的时刻，检查器要注明。

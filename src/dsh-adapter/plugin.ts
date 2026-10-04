@@ -11,12 +11,10 @@ import { Config, normalizeBackendChoice } from './index.js'
 import { configValues, createSettingsScope, resolveSettingsNamespace, type RuntimeConfig } from './compat/settings.js'
 import { createChannel } from './channel.js'
 import { createDshSession } from './backend/session.js'
-import type { BackendHost, OpenTarget, SessionCatalog } from '../agent/backend.js'
-import type { AgentEvent } from '../agent/events.js'
+import { BACKEND_LOADERS, openBackendStartup, probeKernels } from './backends.js'
 import { formatSessionRef } from '../agent/refs.js'
 import type { AgentSession } from '../agent/session.js'
 import { mountFailureText } from '../sessions/resumeFailure.js'
-import type { ChannelLaunchOptions } from './channel/state.js'
 import { createChannelSceneOutlet } from './channel-scene-outlet.js'
 import { mountChannelUi } from './channel-ui.js'
 import { bindChannelCommands } from './channel/commands.js'
@@ -48,8 +46,7 @@ import { initialPromptFromCmdlineArgs } from './startup-args.js'
 import { readHomePrefs } from '../homePrefs.js'
 import { handoffEventTag, formatHandoffNotice } from '../handoffEvents.js'
 import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit } from '../handoffAck.js'
-import { KERNEL_SWITCH_HANDOFF_ENV, readKernelPrefs, resolveRememberedBackend, writeKernelPrefs } from '../kernelPrefs.js'
-import { kernelDisplayName, type ClaudeKernelStatus } from '../components/kernelCatalog.js'
+import { KERNEL_IDS, KERNEL_SWITCH_HANDOFF_ENV, kernelDisplayName, readKernelPrefs, resolveRememberedBackend, writeKernelPrefs, type KernelBackendId } from '../kernelPrefs.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions } from '../update.js'
@@ -529,7 +526,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     memory: readKernelPrefs().backend,
   })
   if (rawBackend !== undefined && rawBackend.trim() !== '' && normalizeBackendChoice(rawBackend) === undefined) {
-    ctx.logger.warn(`dsh-tui: DSH_TUI_BACKEND="${rawBackend}" names no known backend (dsh, claude); starting on dsh`)
+    ctx.logger.warn(`dsh-tui: DSH_TUI_BACKEND="${rawBackend}" names no known backend (${KERNEL_IDS.join(', ')}); starting on dsh`)
   }
   /**
    * Whether a Config row or DSH_TUI_BACKEND overrides the selector's
@@ -538,29 +535,33 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    */
   const backendPinned = config.backend !== undefined
     || (rawBackend !== undefined && rawBackend.trim() !== '')
-  const claudeStart = backendChoice === 'claude'
-    ? await openClaudeStartup(ctx, sessionCwd, line => {
-      logForDebugging(`[claude-stderr] ${line}`)
-      stderrReporter.push(line)
-    }, config.sessionId, cmdlineArgs ?? process.argv.slice(2))
-    : undefined
-  // The Claude session (and its CLI child) belongs to this fiber until the
+  const backendStart = backendChoice === 'dsh' ? undefined
+    : await openBackendStartup(ctx, await BACKEND_LOADERS[backendChoice](), {
+      cwd: sessionCwd,
+      stderr: line => {
+        logForDebugging(`[${backendChoice}-stderr] ${line}`)
+        stderrReporter.push(line)
+      },
+      ...(config.sessionId === undefined ? {} : { configuredSessionId: config.sessionId }),
+      argv: cmdlineArgs ?? process.argv.slice(2),
+    })
+  // The backend session (and its child process) belongs to this fiber until the
   // channel adopts it: a boot that throws before then disposes the fiber's
   // effects, and this one stops the child instead of leaking it. Dispose is
   // idempotent, so the channel's own release later is unaffected.
-  if (claudeStart !== undefined) {
+  if (backendStart !== undefined) {
     ctx.effect(() => () => {
-      void claudeStart.session.dispose().catch((error: unknown) => {
-        logForDebugging(`dsh-tui: Claude session dispose failed (${error instanceof Error ? error.message : String(error)})`)
+      void backendStart.session.dispose().catch((error: unknown) => {
+        logForDebugging(`dsh-tui: backend session dispose failed (${error instanceof Error ? error.message : String(error)})`)
       })
-    }, 'dsh-tui Claude startup session')
+    }, 'dsh-tui backend startup session')
   }
   // A non-DSH session's permission prompts park in the shared store the
   // approval panel renders; its questions share the DSH questionnaire store.
   // Teardown withdraws whatever is still parked.
-  const backendPermissions = claudeStart === undefined ? undefined : new PermissionStore()
+  const backendPermissions = backendStart === undefined ? undefined : new PermissionStore()
   if (backendPermissions !== undefined) ctx.effect(() => () => backendPermissions.settleAll())
-  const { agent, handle, agentPreset, route: createdRoute } = claudeStart !== undefined
+  const { agent, handle, agentPreset, route: createdRoute } = backendStart !== undefined
     ? { agent: undefined, handle: undefined, agentPreset: undefined, route: undefined }
     : await resolveAgent(
       ctx,
@@ -637,7 +638,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // The channel holds a backend session; this DSH one owns the resolved
   // handle (disposed by the binding when a later adoption replaces it).
   let startupSession: AgentSession
-  if (claudeStart !== undefined) startupSession = claudeStart.session
+  if (backendStart !== undefined) startupSession = backendStart.session
   else if (agent !== undefined) startupSession = createDshSession(ctx, { agent, handle })
   else throw new Error('dsh-tui: no startup session was opened')
   const rawChannel = createChannel(ctx, startupSession, {
@@ -645,25 +646,24 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // (the Config owner's Loader id; custom ids are supported). Chat and the
     // channel's own settings reads look the section up by it.
     settingsNs: tuiSettingsNs,
-    // A Claude session reports its model with its first turn (`system/init`);
+    // The backend reports its model with its first turn (`system/init`);
     // until then the status line names the backend.
-    model: claudeStart !== undefined ? claudeStart.label : displayRoute.model,
-    ...(claudeStart === undefined || backendPermissions === undefined ? {} : {
-      backendLabel: claudeStart.label,
-      openSession: claudeStart.open,
+    model: backendStart !== undefined ? backendStart.label : displayRoute.model,
+    ...(backendStart === undefined || backendPermissions === undefined ? {} : {
+      backendLabel: backendStart.label,
+      openSession: backendStart.open,
       interaction: { permissions: backendPermissions, questions: questionStore },
       // The session browser, /resume, /fork and rewind.
-      sessionCatalog: claudeStart.catalog,
-      sessionPrefs: claudeStart.sessionPrefs,
-      initialHistory: claudeStart.initialHistory,
-      resumeCommand: claudeStart.resumeCommand,
+      sessionCatalog: backendStart.catalog,
+      sessionPrefs: backendStart.sessionPrefs,
+      initialHistory: backendStart.initialHistory,
+      resumeCommand: backendStart.resumeCommand,
     }),
     // The activity projection only pushes on change; read the current value as
     // soon as this session binds so a resumed or reattached session renders its
     // line immediately instead of waiting for the next event.
     seedActivity: session => activityStore.seed(session),
-    // A backend that folds its own working line (the Claude backend's
-    // `workingActivity` capability — see channel/session-activity.ts) lands
+    // A backend-provided working line lands
     // in the SAME store the projection feed fills, so the Chat/StatusLine
     // read side stays one seam for every backend.
     publishActivity: (sessionId, view) => activityStore.update(sessionId, view),
@@ -677,9 +677,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // from the current launch directory would split @ expansion / file
     // completion (state.cwd) from the agent's own workspace record. Fresh
     // sessions record sessionCwd at creation, so both agree there.
-    // A resumed Claude session runs where it was recorded.
-    cwd: claudeStart?.session.cwd ?? agent?.session.header.cwd ?? sessionCwd,
-    provider: claudeStart !== undefined ? claudeStart.backendId : displayRoute.provider,
+    // A resumed backend session runs where it was recorded.
+    cwd: backendStart?.session.cwd ?? agent?.session.header.cwd ?? sessionCwd,
+    provider: backendStart !== undefined ? backendStart.backendId : displayRoute.provider,
     // Raw cordis.yml route (undefined when unset): the channel's
     // new-session path re-resolves prefs against these, and resume passes
     // only explicit values so the target session's own record wins.
@@ -746,8 +746,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // An observational composition (replay/embedding) is not "the instance the
     // user ran last" — it must not overwrite the interactive record.
     if (adapterRuntime.mode === 'passive-shadow' || adapterRuntime.mode === 'replay-shadow') return
-    const resumable = claudeStart !== undefined
-      ? claudeStart.persisted(channel.agentId, channel.rows)
+    const resumable = backendStart !== undefined
+      ? backendStart.persisted(channel.agentId, channel.rows)
       : isExitResumable({
         pendingCount: channel.pending.length,
         liveAgent: ctx.agents.get(SessionId(channel.agentId)),
@@ -1552,7 +1552,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   bindApprovalStore(ctx, approvalStore)
   // A non-DSH backend answers its own permission prompts: the DSH answerer
   // is not registered for it.
-  if (ctx.get('approval') !== undefined && claudeStart === undefined) {
+  if (ctx.get('approval') !== undefined && backendStart === undefined) {
     ctx.on('approval/request', (req, next) =>
       approvalStore.park(req).catch(() => next()))
     // Badge-flip push (P-4): React does not know the session log appended —
@@ -1619,7 +1619,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // The launchpad kernel selector's switch target: set once a choice was
   // accepted; the exit funnel then respawns onto that kernel (a NEW session —
   // no resume markers at all).
-  let backendSwitchRequested: 'dsh' | 'claude' | undefined
+  let backendSwitchRequested: KernelBackendId | undefined
   // The profile this process was booted with (`dsh --profile <name>`); dsh
   // exposes it nowhere else, and /update must update the installation the
   // user is actually running, not a hard-coded one.
@@ -1629,11 +1629,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // not share a fate (issue #12). Teardown only unmounts the UI; user exit
   // runs the full leave sequence below (resume marker, terminal restore,
   // update handoff or resume hint).
-  /** The session a restart / update handoff reopens: a Claude session the
-   *  CLI never persisted cannot be resumed, so the replacement starts fresh. */
+  /** The session id for a restart or update handoff, or empty when the backend
+   * has not persisted it and the replacement must start fresh. */
   const handoffSessionId = (): string =>
-    claudeStart === undefined || claudeStart.persisted(channel.agentId, channel.rows) ? channel.agentId : ''
-  const handoffHint = claudeStart === undefined ? undefined : (sessionId: string): string => claudeStart.resumeCommand(sessionId)
+    backendStart === undefined || backendStart.persisted(channel.agentId, channel.rows) ? channel.agentId : ''
+  const handoffHint = backendStart === undefined ? undefined : (sessionId: string): string => backendStart.resumeCommand(sessionId)
   const funnel = createExitFunnel({
     onUserExit: error => {
       // Mirror the funnel's internal exited flag for the /update and
@@ -1663,8 +1663,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
             })) {
               writeResumeTarget(channel.agentId)
             }
-            // A Claude session's marker is its backend's own (never resume.txt).
-            if (claudeStart !== undefined && claudeStart.persisted(channel.agentId, channel.rows)) claudeStart.sessionPrefs.setLastSession(channel.agentId)
+            // Non-DSH sessions use their backend preference as the launcher marker.
+            if (backendStart !== undefined && backendStart.persisted(channel.agentId, channel.rows)) backendStart.sessionPrefs.setLastSession(channel.agentId)
             // So the launcher's retry reopens this session, not the boot-time one.
             refreshLastRunRecord()
           },
@@ -1683,10 +1683,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       }
       if (updateRequested) {
         try {
-          // A Claude session id is never a DSH resume target: DSH's
-          // `resume.txt` is left exactly as it is; the Claude marker moves.
-          if (claudeStart === undefined) writeResumeTarget(channel.agentId)
-          else if (claudeStart.persisted(channel.agentId, channel.rows)) claudeStart.sessionPrefs.setLastSession(channel.agentId)
+          // Non-DSH sessions keep their marker in backend prefs, not DSH's `resume.txt`.
+          if (backendStart === undefined) writeResumeTarget(channel.agentId)
+          else if (backendStart.persisted(channel.agentId, channel.rows)) backendStart.sessionPrefs.setLastSession(channel.agentId)
         } catch {
           // Resume persistence is best effort and must never block an update.
         }
@@ -1738,8 +1737,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         beginRestartAttempt(channel.agentId)
         logRestartEvent('funnel: /restart branch entered')
         try {
-          if (claudeStart === undefined) writeResumeTarget(channel.agentId)
-          else if (claudeStart.persisted(channel.agentId, channel.rows)) claudeStart.sessionPrefs.setLastSession(channel.agentId)
+          if (backendStart === undefined) writeResumeTarget(channel.agentId)
+          else if (backendStart.persisted(channel.agentId, channel.rows)) backendStart.sessionPrefs.setLastSession(channel.agentId)
           logRestartEvent('funnel: resume target written')
         } catch (error) {
           // Resume persistence is best effort and must never block a restart.
@@ -1764,17 +1763,16 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       // the active agent, so the captured reference can go stale (see
       // isExitResumable).
       let hint: string | undefined
-      if (claudeStart !== undefined) {
-        // A Claude session: its own marker (a bare `--backend claude
-        // --resume` reopens it) and its own command; DSH's `resume.txt` is
-        // left exactly as it is.
-        const resumable = claudeStart.persisted(channel.agentId, channel.rows)
+      if (backendStart !== undefined) {
+        // Each non-DSH backend provides its marker and resume command; DSH uses
+        // `resume.txt`.
+        const resumable = backendStart.persisted(channel.agentId, channel.rows)
         try {
-          if (resumable) claudeStart.sessionPrefs.setLastSession(channel.agentId)
+          if (resumable) backendStart.sessionPrefs.setLastSession(channel.agentId)
         } catch {
           // Resume persistence is best effort and must never block shutdown.
         }
-        hint = resumable ? `Resume with the command below:\n${claudeStart.resumeCommand(channel.agentId)}` : undefined
+        hint = resumable ? `Resume with the command below:\n${backendStart.resumeCommand(channel.agentId)}` : undefined
       } else {
         const resumable = isExitResumable({
           pendingCount: channel.pending.length,
@@ -1812,7 +1810,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    *  exits into the funnel's backend-switch branch: a fresh session on the
    *  new kernel; this kernel's sessions stay persisted (/resume finds them
    *  again after switching back). */
-  const switchBackend = (backend: 'dsh' | 'claude'): void => {
+  const switchBackend = (backend: KernelBackendId): void => {
     if (exited || restartRequested || backendSwitchRequested !== undefined) return
     backendSwitchRequested = backend
     writeKernelPrefs({ backend })
@@ -1831,38 +1829,6 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     logRestartEvent('command: channel connection switch accepted', { backend: backendChoice })
     notifyChannel(notice)
     handleExit()
-  }
-
-  /**
-   * Claude availability for the kernel selector (/kernel and the launchpad
-   * row), using the same detect() as boot. The SDK and the dsh-auth
-   * credential source are imported only when a probe runs, so a DSH boot
-   * does not load them.
-   *
-   * A failed probe reads as "not installed", which greys the row out.
-   */
-  const probeClaudeKernel = async (): Promise<ClaudeKernelStatus> => {
-    try {
-      const [{ claudeBackend }, { createOAuthCredentialSource }] = await Promise.all([
-        import('../backends/claude/index.js'),
-        import('./oauth-credential-source.js'),
-      ])
-      const detection = await claudeBackend.detect({
-        cwd: sessionCwd,
-        debug: message => logForDebugging(message),
-        warn: message => ctx.logger.warn(message),
-        stderr: () => undefined,
-        oauthCredential: perProvider(createOAuthCredentialSource),
-      })
-      return {
-        installed: detection.installed,
-        ...(detection.auth === undefined ? {} : { auth: detection.auth }),
-        ...(detection.version === undefined ? {} : { version: detection.version }),
-      }
-    } catch (error) {
-      logForDebugging('dsh-tui: kernel probe failed (' + (error instanceof Error ? error.message : String(error)) + ')')
-      return { installed: false }
-    }
   }
 
   // Process-level crash backstop (see installNestedUpdateOverflowProcessGuard):
@@ -1940,7 +1906,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    * plugin opened keeps warming underneath) — only a resume target skips it
    * and opens straight into its conversation.
    */
-  const dshBoot = claudeStart === undefined
+  const dshBoot = backendStart === undefined
   const noResume = isLandingLaunch({ launchSessionId, initialPrompt })
   const openHomeOnBoot = dshBoot && !homeSeen && noResume && requestedWorkspace === undefined
   /**
@@ -1999,7 +1965,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     onSwitchBackend: switchBackend,
     // /channel: restart with a new session after the connection changed.
     onRestartFreshSession: restartFreshSession,
-    onProbeKernels: probeClaudeKernel,
+    onProbeKernels: () => probeKernels(ctx, sessionCwd),
     kernelPinned: backendPinned,
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the
@@ -2360,121 +2326,6 @@ async function resolveAgent(
   return { agent: created.agent, handle: created, agentPreset: composed.agentPreset, route }
 }
 
-/** Memoize a per-provider factory: one instance per provider id. */
-function perProvider<T>(create: (provider: string) => T): (provider: string) => T {
-  const instances = new Map<string, T>()
-  return provider => {
-    let instance = instances.get(provider)
-    if (instance === undefined) {
-      instance = create(provider)
-      instances.set(provider, instance)
-    }
-    return instance
-  }
-}
-
-/**
- * Open the startup session on the Claude Agent backend: a fresh
- * one, or — `dsh-tui --backend claude --resume <id>` (`DSH_TUI_RESUME_SESSION`,
- * or the app argv; a bare `--resume` means the last Claude session this
- * install used, never DSH's `resume.txt`) — a persisted one. Loaded lazily: a
- * DSH-only install never imports the backend or its optional SDK.
- *
- * A launch-time resume is an explicit request, exactly like DSH's: a session
- * another TUI process drives (the mount ledger key `claude:<id>`), an unknown
- * id, or a transcript the CLI refuses fails the boot loudly — never a silent
- * fresh session. Its history is read here, before the channel exists, so the
- * first paint shows it ahead of any live event.
- */
-async function openClaudeStartup(
-  ctx: Context,
-  cwd: string,
-  stderr: (line: string) => void,
-  configuredSessionId: string | undefined,
-  argv: readonly string[],
-): Promise<{
-  readonly session: AgentSession
-  readonly label: string
-  readonly backendId: string
-  readonly initialHistory: readonly AgentEvent[]
-  readonly catalog: SessionCatalog | undefined
-  readonly sessionPrefs: NonNullable<ChannelLaunchOptions['sessionPrefs']>
-  /** Whether the CLI has persisted this session (`--resume` can reopen it). */
-  persisted(sessionId: string, rows: readonly { readonly kind: string }[]): boolean
-  resumeCommand(sessionId: string): string
-  open(target: Extract<OpenTarget, { readonly kind: 'create' | 'resume' }>): Promise<AgentSession>
-}> {
-  const [{ claudeBackend, fileClaudePrefs, claudeResumeCommand }, { createOAuthCredentialSource }] = await Promise.all([
-    import('../backends/claude/index.js'),
-    // Loaded with the backend only: a DSH session never reads dsh-auth here.
-    import('./oauth-credential-source.js'),
-  ])
-  const prefs = fileClaudePrefs(undefined, message => logForDebugging(message))
-  // The dsh-auth login the backend may run on: one source per provider,
-  // shared by every session this process opens.
-  const oauthCredential = perProvider(createOAuthCredentialSource)
-  const host = (sessionCwd: string): BackendHost => ({
-    cwd: sessionCwd,
-    debug: message => logForDebugging(message),
-    warn: message => ctx.logger.warn(message),
-    stderr,
-    oauthCredential,
-  })
-  const requested = (configuredSessionId ?? resumeTargetFromArgv(argv, () => prefs.read().lastSession))?.trim()
-  const resumeId = requested === undefined || requested === ''
-    ? undefined
-    : requested.startsWith(`${claudeBackend.id}:`) ? requested.slice(claudeBackend.id.length + 1) : requested
-  let session: AgentSession
-  let initialHistory: readonly AgentEvent[] = []
-  if (resumeId !== undefined) {
-    const key = formatSessionRef({ backendId: claudeBackend.id, sessionId: resumeId })
-    const reserved = await reserveMount(key)
-    if (!reserved.ok) {
-      throw new Error(`dsh-tui: cannot resume Claude session "${resumeId}": ${mountFailureText(reserved)} — ` +
-        'two processes driving one session would interleave its transcript. Close that terminal, or drop --resume to start a fresh session.')
-    }
-    try {
-      session = await claudeBackend.open({ kind: 'resume', sessionId: resumeId }, host(cwd))
-      try {
-        initialHistory = await session.history()
-      } catch (error) {
-        await session.dispose().catch(() => undefined)
-        throw error
-      }
-    } catch (error) {
-      reserved.reservation.abandon()
-      const reason = error instanceof Error ? error.message : String(error)
-      throw new Error(`dsh-tui: cannot resume Claude session "${resumeId}": ${reason} — no fresh session was started instead. ` +
-        'Drop --resume to start a fresh session.', { cause: error })
-    }
-    // The channel adopts it next; the heartbeat publishes its key from then on.
-    reserved.reservation.settle()
-    prefs.write({ lastSession: resumeId })
-    prefs.touch(resumeId)
-  } else {
-    session = await claudeBackend.open({ kind: 'create', cwd }, host(cwd))
-    // A fresh id cannot conflict: announcing it is all the ledger needs.
-    const { reservation } = await reserveNewSession(formatSessionRef(session.ref))
-    reservation.settle()
-  }
-  return {
-    session,
-    label: claudeBackend.descriptor.label,
-    backendId: claudeBackend.id,
-    initialHistory,
-    catalog: claudeBackend.catalog,
-    sessionPrefs: {
-      touch: sessionId => { prefs.touch(sessionId) },
-      setLastSession: sessionId => { prefs.write({ lastSession: sessionId }) },
-      forget: sessionId => { prefs.forget(sessionId) },
-    },
-    // The CLI writes the transcript with the first prompt it starts: a
-    // session with a user row (live or replayed) can be resumed.
-    persisted: (_sessionId, rows) => rows.some(row => row.kind === 'user'),
-    resumeCommand: claudeResumeCommand,
-    open: target => claudeBackend.open(target, host(target.kind === 'create' ? target.cwd : cwd)),
-  }
-}
 
 /**
  * Distinguish a user-driven exit from a cordis context teardown (issue #12).
@@ -2785,7 +2636,7 @@ function writeStream(stream: NodeJS.WriteStream, data: string): Promise<void> {
  */
 /**
  * The tail of a failed restart / update notice: how to resume the session —
- * or nothing, when there is none to resume (a Claude session the CLI never
+ * or nothing, when there is none to resume (a backend session the CLI never
  * persisted hands over an empty id: a hint without an id would mislead).
  */
 function preservedSessionTail(sessionId: string, hint: (sessionId: string) => string): string {

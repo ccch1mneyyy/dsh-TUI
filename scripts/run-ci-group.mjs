@@ -420,6 +420,7 @@ const GROUPS = {
 // 后再单独登记。
   ],
   'session-workspace': [
+    ["verify-backend-startup", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-startup.ts']],
 // 内核切换过场：结局分类（spawn 失败或启动期死亡＝failed，干净退出＝succeeded 不出声，
 // 之后非零退出＝crashed）、进度行写完才 spawn、双语文案与配色、plugin.ts/update.ts 接线。
     ["verify-handoff-transition", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-transition.ts']],

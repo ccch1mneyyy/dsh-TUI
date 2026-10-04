@@ -178,10 +178,10 @@ async function mountPicker(options: {
 }
 
 const PROBING = buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2' })
-const READY = buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2', claude: { installed: true, auth: 'ok', version: '2.1.0' } })
-const NOT_INSTALLED = buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2', claude: { installed: false } })
+const READY = buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2', statuses: { claude: { installed: true, auth: 'ok', version: '2.1.0' } } })
+const NOT_INSTALLED = buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.0-rc.2', statuses: { claude: { installed: false } } })
 /** 当前内核 = claude：勾要跟着挪到第二行（不是钉死在第一行）。 */
-const CLAUDE_CURRENT = buildKernelCatalog({ current: 'claude', dshVersion: '0.2.0-rc.2', claude: { installed: true, auth: 'ok', version: '2.1.0' } })
+const CLAUDE_CURRENT = buildKernelCatalog({ current: 'claude', dshVersion: '0.2.0-rc.2', statuses: { claude: { installed: true, auth: 'ok', version: '2.1.0' } } })
 
 const DSH_LABEL = t('kernel-label-dsh')
 const CLAUDE_LABEL = t('kernel-label-claude')

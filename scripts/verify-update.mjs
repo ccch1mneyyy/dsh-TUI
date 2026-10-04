@@ -27,6 +27,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rm
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import ts from 'typescript'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -57,6 +58,18 @@ const {
   getStandaloneBinaryPath,
   getStandaloneAssetName,
 } = await import('../lib/types/update.js')
+const { KERNEL_IDS } = await import('../lib/types/kernelPrefs.js')
+const launcherPath = fileURLToPath(new URL('../bin/dsh-tui.js', import.meta.url))
+const launcherAst = ts.createSourceFile(launcherPath, readFileSync(launcherPath, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
+const launcherKernelIds = launcherAst.statements.flatMap(statement =>
+  ts.isVariableStatement(statement) ? statement.declarationList.declarations : [],
+).find(declaration => ts.isIdentifier(declaration.name) && declaration.name.text === 'KERNEL_IDS')?.initializer
+check(
+  'launcher kernel ids stay aligned with the compiled registry',
+  launcherKernelIds !== undefined && ts.isArrayLiteralExpression(launcherKernelIds)
+    && launcherKernelIds.elements.every(ts.isStringLiteral)
+    && JSON.stringify(launcherKernelIds.elements.map(element => element.text)) === JSON.stringify(KERNEL_IDS),
+)
 const compiledModulePath = fileURLToPath(new URL('../lib/types/update.js', import.meta.url))
 const compiledShellQuotePath = fileURLToPath(new URL('../lib/types/utils/shellQuote.js', import.meta.url))
 const compiledPathsPath = fileURLToPath(new URL('../lib/types/utils/paths.js', import.meta.url))

@@ -50,6 +50,7 @@ export function channelCapabilities(input: {
   return Object.freeze({
     backendId: input.backendId,
     backendLabel: input.backendLabel,
+    modelRoutes: input.dsh ? 'providers' : 'backend',
     commands: Object.freeze([
       ...supportedLocalCommandNames({ dsh: input.dsh, has: capability => flags[capability] }),
       // The typed `modes` capability is its own permission roster: a

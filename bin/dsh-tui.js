@@ -62,6 +62,8 @@ const ownPackage = readJson(join(ownDir, 'package.json'))
 const ownVersion = ownPackage?.name === '@deepseek-harness-tui/dsh-tui' ? ownPackage.version : undefined
 const PACKAGE = '@deepseek-harness-tui/dsh-tui'
 const PROFILE = 'dsh-tui'
+// Kept local so the launcher also works without compiled modules.
+const KERNEL_IDS = ['dsh', 'claude']
 
 // 随包用户手册（guide/，见 scripts/build-guide.mjs）：交给 dsh 当内核
 // dsh-skill-filesystem 的随包技能根（rank 600 的 bundledSkillDir 默认取这个
@@ -648,8 +650,7 @@ const runDoctorChecks = () => {
   return { hardFailure, lines }
 }
 // ─── safe 会话支撑（清单解析与报告渲染，交互/非交互共用）──────────────────────
-// 保护包：组合层模板与 TUI 本体，不进入卸载候选。两维度分类是 PR② 卸载
-// 功能将复用的唯一分类规则，不得合并简化（spec §6.1）。
+// Packages that profile repair and rescue must never remove.
 const PROTECTED_PLUGINS = new Set(['@deepseek-ai/dsh-base', PACKAGE])
 // dir 参数供救援 profile 复用同一套解析规则（两处 manifest 契约不许分叉）。
 const readProfileInventory = (dir = profileDir) => {
@@ -740,7 +741,7 @@ const forwardExit = child => {
 // 统一表示子进程结局；不在此处做任何退出决定——退出权在调用者（首启结算
 // 或 safe 菜单）。Windows 经 cmd()/shell:true 启动（见 cmd 注释），壳层
 // 观察到的 signal 不保证等同内部 dsh 的中断语义：判定一律只看数值 code，
-// 不从数值反推信号（spec §5.1）。
+// Do not infer a signal from the numeric exit code.
 const startDshSession = (dshArgs, profile = PROFILE, env = process.env) =>
   new Promise(resolve => {
     const child = spawn(...cmd('dsh', ['--profile', profile, ...dshArgs]), {
@@ -772,13 +773,13 @@ const rescueEnv = () => {
 // TUI 把 {backendId,sessionId,cwd,attemptId} 写进 ~/.dsh-tui/last-run.json
 // （boot 写一次，退出时刷新，见 src/update.ts 的 writeLastRunRecord）。
 // 内核切换后本进程的 env 仍是原内核，安全模式重试若按 env 去读 resume.txt
-// 或 Claude 偏好，会回到原内核，甚至拿 DSH 的会话 id 去恢复 Claude；所以
+// 或其他后端偏好，会回到原内核，甚至拿 DSH 的会话 id 跨后端恢复；所以
 // 本次启动之后写下的记录优先。
 const readLastRunRecord = () => {
   try {
     const parsed = JSON.parse(readFileSync(join(homedir(), '.dsh-tui', 'last-run.json'), 'utf8'))
     if (parsed === null || typeof parsed !== 'object') return undefined
-    if (parsed.backendId !== 'dsh' && parsed.backendId !== 'claude') return undefined
+    if (!KERNEL_IDS.includes(parsed.backendId)) return undefined
     if (typeof parsed.sessionId !== 'string' || typeof parsed.cwd !== 'string' || typeof parsed.attemptId !== 'string') return undefined
     if (typeof parsed.updatedAt !== 'number' || !Number.isFinite(parsed.updatedAt)) return undefined
     return parsed
@@ -807,12 +808,10 @@ const noteLaunchChain = () => {
   launchChain = { startedAt: Date.now() }
 }
 
-// Claude 后端（`--backend claude`）的"上次会话"记在它自己的偏好文件里
-// （`~/.dsh-tui/backends/claude/prefs.json` 的 lastSession），DSH 的
-// resume.txt 从不保存 Claude 会话 id。
-const readClaudeLastSession = () => {
+// 非 DSH 内核的上次会话来自各自 backends/<id>/prefs.json 的 lastSession。
+const readBackendLastSession = backendId => {
   try {
-    const prefs = JSON.parse(readFileSync(join(homedir(), '.dsh-tui', 'backends', 'claude', 'prefs.json'), 'utf8'))
+    const prefs = JSON.parse(readFileSync(join(homedir(), '.dsh-tui', 'backends', backendId, 'prefs.json'), 'utf8'))
     return typeof prefs?.lastSession === 'string' ? prefs.lastSession.trim() : ''
   } catch {
     return ''
@@ -823,7 +822,7 @@ const readClaudeLastSession = () => {
 //      env 里的 --resume（内核切换是用户更新的选择）。
 //   2. 没有这样的记录（崩得太早，或旧版本不写）：env 里已有
 //      DSH_TUI_RESUME_SESSION 就照用；否则按 env 的后端读它的上次会话
-//      （resume.txt 或 Claude 偏好），读不到就冷启动。
+//      （resume.txt 或对应后端偏好文件），读不到就冷启动。
 const resumeEnvForRetry = () => {
   const chain = launchChain
   const record = readLastRunRecord()
@@ -832,8 +831,8 @@ const resumeEnvForRetry = () => {
   }
   if (process.env.DSH_TUI_RESUME_SESSION !== undefined) return process.env
   let target = ''
-  if (process.env.DSH_TUI_BACKEND === 'claude') {
-    target = readClaudeLastSession()
+  if (KERNEL_IDS.includes(process.env.DSH_TUI_BACKEND) && process.env.DSH_TUI_BACKEND !== 'dsh') {
+    target = readBackendLastSession(process.env.DSH_TUI_BACKEND)
   } else {
     try {
       target = readFileSync(join(homedir(), '.dsh-tui', 'resume.txt'), 'utf8').trim()
@@ -850,7 +849,7 @@ const isInteractive = () => Boolean(process.stdin.isTTY && process.stdout.isTTY)
 
 // 子进程异常退出后终端可能停在脏状态（alt-screen/鼠标/隐藏光标——清理
 // 责任在 TUI 的 ink 退出路径，不保证完成）。进入询问/菜单前做最小恢复，
-// 仅为让后续界面可读，不承诺完整复原（spec §6.2）。
+// Reset the screen and mouse modes before prompting after a child exit.
 const restoreTerminalMinimal = () => {
   process.stdout.write('\x1b[?1049l\x1b[?1000l\x1b[?1006l\x1b[?25h')
 }
@@ -864,7 +863,7 @@ const askSafeEntry = async pendingExitCode => {
   // 与 runSafeSession.askChoice 同款 close 竞速：接口 close（上方 SIGINT
   // 处理器主动 close，或 TTY 的 Ctrl+D/EOF）时 question 可能永不结算——
   // 裸 await 会让 fallback 询问挂死（PTY 实测 Ctrl+C 下顶层 await 以退出
-  // 码 13 异常中止）。close 一律按取消，对齐 spec §6.2：Ctrl+C/Ctrl+D/EOF
+  // 码 13 异常中止）。close 一律按取消：Ctrl+C/Ctrl+D/EOF
   // 等价拒绝（按原退出码收束）。
   let answer
   try {
@@ -968,7 +967,7 @@ const runSafeSession = async ({ pendingExitCode = 0, retryDsh, extraLines, rescu
       // cold start = 手动入口无已规范化 args，按空参数冷启动。
       const replay = typeof retryDsh === 'function'
       console.log(L.retry + (replay ? L.replaySource : L.coldStartSource))
-      // 两来源共用 profileReady 前置（spec §4：重试不得隐式自举）。
+      // Both retry paths require a ready profile; neither bootstraps it.
       if (!profileReady()) { console.error(msg('safeListUnreadable')(msg('safeGuideLabels').notReadyReason)); continue }
       state.handingOff = true // 主动交接：此刻起的中断不算用户取消
       const settled = settleRetry(replay ? await retryDsh() : await startDshSession([]))
@@ -1284,7 +1283,7 @@ const checkProfileAlignment = installedVersion => {
 // ─── 子命令：safe（安全模式入口，两种角色同一段代码）──────────────────────────
 // 零 lib 依赖、不委托、不自举（对齐 doctor 的依赖边界，而非 update 的
 // profile-lib 路径）：profile 损坏时它必须仍可达。控制面只读；重试与
-// 修复动作语义见 safe 会话实现（spec §4/§5）。
+// Recovery and retry behavior lives in runSafeSession.
 // `safe --rescue` 是同一个救援动作的显式入口（不是新动作）：交互终端里
 // 等价于菜单选项 5（门禁 → 创建/复用 → 干净启动），非交互终端里只做
 // 门禁 + 创建/复用并报告结论（没有终端可交接时不启动 TUI），以便脚本与
@@ -1463,12 +1462,12 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
       }
     }
     // `--backend <id>`: which agent backend the app opens its session with
-    // (the dsh-tui row reads DSH_TUI_BACKEND; absent → dsh).
+    // (the row reads DSH_TUI_BACKEND; absent falls back to kernel.json, then dsh).
     if (a === '--backend' || a.startsWith('--backend=')) {
       const backend = a.startsWith('--backend=') ? a.slice('--backend='.length).trim() : (argv[i + 1] ?? '').trim()
       if (a === '--backend' && argv[i + 1] !== undefined) i += 1
-      if (backend !== 'dsh' && backend !== 'claude') {
-        console.error(lang === 'zh' ? `未知的 --backend：${backend}（可选 dsh / claude）` : `Unknown --backend: ${backend} (expected dsh or claude)`)
+      if (!KERNEL_IDS.includes(backend)) {
+        console.error(lang === 'zh' ? `未知的 --backend：${backend}（可选 ${KERNEL_IDS.join(' / ')}）` : `Unknown --backend: ${backend} (expected ${KERNEL_IDS.join(' or ')})`)
         process.exit(2)
       }
       process.env.DSH_TUI_BACKEND = backend
@@ -1495,9 +1494,9 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
   }
 
   // 按出现顺序重放 --resume：裸 --resume 时 DSH 读 resume.txt（契约不变），
-  // Claude 后端读它自己的上次会话。
+  // 其他内核读各自的上次会话。
   for (const flag of resumeFlags) {
-    const sessionId = flag ?? (process.env.DSH_TUI_BACKEND === 'claude' ? readClaudeLastSession() : readLastResumeTarget())
+    const sessionId = flag ?? (KERNEL_IDS.includes(process.env.DSH_TUI_BACKEND) && process.env.DSH_TUI_BACKEND !== 'dsh' ? readBackendLastSession(process.env.DSH_TUI_BACKEND) : readLastResumeTarget())
     if (sessionId) setResumeEnv(sessionId)
   }
 

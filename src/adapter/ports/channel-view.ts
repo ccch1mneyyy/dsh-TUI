@@ -1107,6 +1107,7 @@ export interface ChannelCapabilities {
   readonly retractPending: boolean
   readonly permissions: boolean
   readonly models: boolean
+  readonly modelRoutes: 'backend' | 'providers'
   readonly effort: boolean
   readonly modes: boolean
   readonly compact: boolean

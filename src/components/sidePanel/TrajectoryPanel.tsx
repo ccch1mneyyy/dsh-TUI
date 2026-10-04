@@ -323,13 +323,8 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
   // behavior.
   const source = channel?.trajectorySource?.()
   if (source === 'unsupported') {
-    // Copy selection only (the STATE above is structural): the Claude
-    // backend gets its specifically-worded line, any other source-less
-    // backend the generic one.
-    const unsupportedLine =
-      channel?.backendCapabilities?.backendId === 'claude'
-        ? t('trajectory-unsupported-claude')
-        : t('trajectory-unsupported')
+    // Copy selection only: unsupported sources share the same explanation.
+    const unsupportedLine = t('trajectory-unsupported')
     return (
       <Box ref={ref} flexDirection="column" width="100%" paddingX={1}>
         <Box marginTop={1}>

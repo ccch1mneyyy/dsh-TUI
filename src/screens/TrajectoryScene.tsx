@@ -401,10 +401,7 @@ export function TrajectoryScene({
   // this branch today. Esc/q and ✕ still leave. A channel without the
   // report (partial fixtures) keeps the old behavior.
   if (channel.trajectorySource?.() === 'unsupported') {
-    const unsupportedLine =
-      channel.backendCapabilities?.backendId === 'claude'
-        ? t('trajectory-unsupported-claude')
-        : t('trajectory-unsupported')
+    const unsupportedLine = t('trajectory-unsupported')
     return (
       <Box ref={ref} flexDirection="column" width="100%" paddingX={1}>
         <Box width="100%" height={1} flexShrink={0}>

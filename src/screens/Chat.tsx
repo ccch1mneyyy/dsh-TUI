@@ -121,7 +121,8 @@ import { PermissionsPicker } from '../components/PermissionsPicker.js'
 import { ModePicker } from '../components/ModePicker.js'
 import { KernelPicker } from '../components/KernelPicker.js'
 import { ChannelPicker, type ChannelPickerRow } from '../components/ChannelPicker.js'
-import { buildKernelCatalog, type ClaudeKernelStatus } from '../components/kernelCatalog.js'
+import { buildKernelCatalog, type KernelStatus } from '../components/kernelCatalog.js'
+import { KERNEL_IDS, type KernelBackendId } from '../kernelPrefs.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { PlanPicker } from '../components/PlanPicker.js'
 import { LangPicker } from '../components/LangPicker.js'
@@ -424,7 +425,7 @@ export function Chat({
    * 新内核开新会话）。启动页「内核」入口与 /kernel 都落到这里；缺省 =
    * 当前宿主没有切换能力（选择器只提示，绝不假装）。
    */
-  onSwitchBackend?: (backend: 'dsh' | 'claude') => void
+  onSwitchBackend?: (backend: KernelBackendId) => void
   /**
    * 以新会话重启（组合根实现：走切换内核的同一条退出路径，不写 resume 目标，
    * 内核不变）。/channel 在激活渠道的连接变了时用它：运行中的 CLI 子进程
@@ -435,7 +436,7 @@ export function Chat({
    * Claude 内核探测（组合根注入；Chat 不 import 任何具体后端）。首次需要时
    * 调一次并缓存结果；探测失败按「未安装」处理。
    */
-  onProbeKernels?: () => Promise<ClaudeKernelStatus>
+  onProbeKernels?: () => Promise<Record<string, KernelStatus>>
   /** 启动参数（Config 行 / DSH_TUI_BACKEND）压过了记忆：选择器明说。 */
   kernelPinned?: boolean
   /**
@@ -816,19 +817,19 @@ export function Chat({
    * 后端），首次需要时探一次，结果留到进程结束。
    */
   const kernelCurrentId = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendId ?? 'dsh'
-  const [kernelProbe, setKernelProbe] = React.useState<ClaudeKernelStatus | undefined>(undefined)
+  const [kernelProbe, setKernelProbe] = React.useState<Record<string, KernelStatus> | undefined>(undefined)
   const kernelProbeStartedRef = React.useRef(false)
   const requestKernelProbe = React.useCallback((): void => {
     if (kernelProbeStartedRef.current || onProbeKernels === undefined) return
     kernelProbeStartedRef.current = true
     // 探测失败按「未安装」处理：那一行画灰，不给一个点了会失败的入口。
-    void onProbeKernels().then(setKernelProbe).catch(() => { setKernelProbe({ installed: false }) })
+    void onProbeKernels().then(setKernelProbe).catch(() => { setKernelProbe(Object.fromEntries(KERNEL_IDS.map(id => [id, { installed: false }]))) })
   }, [onProbeKernels])
   const kernelOptions = React.useMemo(
     () => buildKernelCatalog({
       current: kernelCurrentId,
       ...(kernelVersion === undefined ? {} : { dshVersion: kernelVersion }),
-      ...(kernelProbe === undefined ? {} : { claude: kernelProbe }),
+      ...(kernelProbe === undefined ? {} : { statuses: kernelProbe }),
     }),
     [kernelCurrentId, kernelVersion, kernelProbe],
   )
@@ -2912,9 +2913,8 @@ export function Chat({
           setHelpOpen(false)
           const spec = parts[0]!
           const slash = spec.indexOf('/')
-          // A non-DSH backend has one provider (itself): `/model haiku`.
-          const singleProvider = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendId !== undefined
-            && channel.backendCapabilities.backendId !== 'dsh'
+          // Backend model routes accept an unqualified model id.
+          const singleProvider = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.modelRoutes === 'backend'
           const provider = slash >= 0 ? spec.slice(0, slash) : singleProvider ? channel.provider : undefined
           const id = slash >= 0 ? spec.slice(slash + 1) : spec
           if (provider === undefined || id.length === 0 || provider.length === 0) {
@@ -6008,11 +6008,10 @@ export function Chat({
         liveStateOf={(sessionId) => {
           const row = agentRowOf(sessionId)
           if (row !== undefined) return { status: row.status, live: row.live, current: row.current, summary: row.summary }
-          // A non-DSH backend has no agent view: the session this terminal is
-          // in is its only live one (the DSH view lists its own as before).
+          // Without agent view, only this terminal's current session has live state.
           // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts render Chat with a partial channel
-          const backendId = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendId ?? 'dsh'
-          if (backendId === 'dsh' || sessionId !== channel.agentId) return undefined
+          const hasAgentView = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.commands.includes('agentview') ?? true
+          if (hasAgentView || sessionId !== channel.agentId) return undefined
           return { status: channel.working ? 'working' : 'idle', live: true, current: true, summary: '' }
         }}
       />

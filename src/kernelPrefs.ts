@@ -15,7 +15,22 @@ import { basename, dirname, join } from 'node:path'
 import { DATA_DIR } from './utils/paths.js'
 
 /** Kernels the TUI can run on (the Config.backend values). */
-export type KernelBackendId = 'dsh' | 'claude'
+export const KERNEL_IDS = ['dsh', 'claude'] as const
+export type KernelBackendId = typeof KERNEL_IDS[number]
+
+export function isKernelId(value: unknown): value is KernelBackendId {
+  return typeof value === 'string' && (KERNEL_IDS as readonly string[]).includes(value)
+}
+
+export const KERNEL_INFO: Record<KernelBackendId, { labelKey: string; product: string }> = {
+  dsh: { labelKey: 'kernel-label-dsh', product: 'dsh-core' },
+  claude: { labelKey: 'kernel-label-claude', product: 'claude-code' },
+}
+
+/** Brand names used by kernel chips and notices. */
+export function kernelDisplayName(id: string): string {
+  return id === 'dsh' ? 'DSH' : id === 'claude' ? 'Claude' : id
+}
 
 /** Stored shape. */
 export interface KernelPrefsData {
@@ -26,7 +41,7 @@ export interface KernelPrefsData {
 function parseKernelPrefs(parsed: unknown): KernelPrefsData {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
   const backend = (parsed as Record<string, unknown>).backend
-  return backend === 'dsh' || backend === 'claude' ? { backend } : {}
+  return isKernelId(backend) ? { backend } : {}
 }
 
 /** Read the preference; missing, broken or unreadable means none. Never throws. */
@@ -86,7 +101,7 @@ export function writeKernelPrefs(
 function normalizeBackend(value: string | undefined): KernelBackendId | undefined {
   if (typeof value !== 'string') return undefined
   const id = value.trim().toLowerCase()
-  return id === 'dsh' || id === 'claude' ? id : undefined
+  return isKernelId(id) ? id : undefined
 }
 
 /**
@@ -116,8 +131,8 @@ export function resolveRememberedBackend(input: {
   /** The kernel remembered in kernel.json. */
   readonly memory?: KernelBackendId | undefined
 }): KernelBackendId {
-  if (input.handoff === 'dsh' || input.handoff === 'claude') return input.handoff
-  if (input.configured === 'dsh' || input.configured === 'claude') return input.configured
+  if (isKernelId(input.handoff)) return input.handoff
+  if (isKernelId(input.configured)) return input.configured
   const env = normalizeBackend(input.envRaw)
   if (env !== undefined) return env
   if (input.envRaw !== undefined && input.envRaw.trim() !== '') return 'dsh'
