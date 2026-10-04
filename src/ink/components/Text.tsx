@@ -46,6 +46,13 @@ type BaseProps = {
    * If `truncate-*` is passed, Ink will truncate text instead, which will result in one line of text with the rest cut off.
    */
   readonly wrap?: Styles['textWrap'];
+  /**
+   * Typed paint metadata (Styles.decoration): header row, per-row
+   * prefix, and wrap-continuation hanging indent painted alongside this
+   * leaf's own text. Producers must memo the object — style diffing
+   * compares it by reference.
+   */
+  readonly decoration?: Styles['decoration'];
   readonly children?: ReactNode;
 };
 
@@ -68,19 +75,29 @@ const wrapStyles = new Map<NonNullable<Styles['textWrap']>, Styles>()
 
 /** A text leaf. Empty children produce no layout node. */
 function Text({ children, ref, wrap = 'wrap', color, backgroundColor,
-  bold, dim, italic, underline, strikethrough, inverse,
+  bold, dim, italic, underline, strikethrough, inverse, decoration,
 }: Props) {
   const textStyles = React.useMemo<TextStyles>(() => {
     const values = { color, backgroundColor, bold, dim, italic, underline, strikethrough, inverse }
     return Object.fromEntries(Object.entries(values).filter(([, value]) => Boolean(value)))
   }, [color, backgroundColor, bold, dim, italic, underline, strikethrough, inverse])
   if (children == null) return null
-  let style = wrapStyles.get(wrap)
-  if (!style) {
-    style = { flexDirection: 'row', flexGrow: 0, flexShrink: 1, textWrap: wrap }
-    wrapStyles.set(wrap, style)
+  if (decoration === undefined) {
+    let style = wrapStyles.get(wrap)
+    if (!style) {
+      style = { flexDirection: 'row', flexGrow: 0, flexShrink: 1, textWrap: wrap }
+      wrapStyles.set(wrap, style)
+    }
+    return <ink-text ref={ref} style={style} textStyles={textStyles}>{children}</ink-text>
   }
-  return <ink-text ref={ref} style={style} textStyles={textStyles}>{children}</ink-text>
+  // A decorated leaf cannot share the wrapStyles cache object; its own
+  // style is shallow-compared by the reconciler, so a stable decoration
+  // reference keeps re-renders clean.
+  const decoratedStyle = React.useMemo<Styles>(() => ({
+    flexDirection: 'row', flexGrow: 0, flexShrink: 1, textWrap: wrap, decoration,
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- wrap is captured on purpose: a wrap change must rebuild the style
+  }), [wrap, decoration])
+  return <ink-text ref={ref} style={decoratedStyle} textStyles={textStyles}>{children}</ink-text>
 }
 
 export default React.memo(Text)

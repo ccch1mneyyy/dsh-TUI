@@ -2,11 +2,13 @@ import type { FocusManager } from './focus.js'
 import { createLayoutNode } from './layout/engine.js'
 import type { LayoutNode } from './layout/node.js'
 import { LayoutDisplay, LayoutMeasureMode } from './layout/node.js'
+import { lineWidth } from './line-width-cache.js'
 import measureText from './measure-text.js'
 import { noteMeasureCompute } from './render-stats.js'
 import { addPendingClear, nodeCache, textPaintCache } from './node-cache.js'
 import squashTextNodes from './squash-text-nodes.js'
-import type { Styles, TextStyles } from './styles.js'
+import type { Styles, TextDecoration, TextStyles } from './styles.js'
+import { deriveHang } from './text-decoration.js'
 import { expandTabs } from './tabstops.js'
 import wrapText from './wrap-text.js'
 
@@ -437,6 +439,9 @@ type TextMeasureCache = {
   rawText: string
   text: string
   wrap: NonNullable<Styles['textWrap']>
+  /** Decoration identity participates in the key: producers memo the
+   * object, so a changed decoration rebuilds while a reused one hits. */
+  decoration: TextDecoration | undefined
   entries: Array<{
     width: number
     widthMode: LayoutMeasureMode
@@ -457,10 +462,22 @@ const measureTextNode = function (
     node.nodeName === '#text' ? node.nodeValue : squashTextNodes(node)
 
   const textWrap = node.style.textWrap ?? 'wrap'
+  const decoration = node.style.decoration
   let cache = textMeasureCache.get(node)
-  if (cache === undefined || cache.rawText !== rawText || cache.wrap !== textWrap) {
+  if (
+    cache === undefined ||
+    cache.rawText !== rawText ||
+    cache.wrap !== textWrap ||
+    cache.decoration !== decoration
+  ) {
     // Tabs use the same measurement expansion as the uncached path.
-    cache = { rawText, text: expandTabs(rawText), wrap: textWrap, entries: [] }
+    cache = {
+      rawText,
+      text: expandTabs(rawText),
+      wrap: textWrap,
+      decoration,
+      entries: [],
+    }
     textMeasureCache.set(node, cache)
   }
   for (const entry of cache.entries) {
@@ -469,10 +486,68 @@ const measureTextNode = function (
 
   // Check above before measureText walks every line, even on a wrap-cache hit.
   noteMeasureCompute()
-  const result = measureTextDimensions(cache.text, width, widthMode, textWrap)
+  const result =
+    decoration !== undefined
+      ? measureDecoratedText(cache.text, rawText, width, textWrap, decoration)
+      : measureTextDimensions(cache.text, width, widthMode, textWrap)
   if (cache.entries.length === TEXT_MEASURE_CACHE_SIZE) cache.entries.shift()
   cache.entries.push({ width, widthMode, result })
   return result
+}
+
+/**
+ * Decoration-aware measurement: per source line, the wrap budget shrinks
+ * by that line's decoration width (the code frame's rail for every row,
+ * the parsed leading structure for hang mode), the header adds one row
+ * above, and a prefix-mode prefix widens the reported intrinsic width.
+ * Row accounting mirrors measureText's per-line math (ceil of
+ * line-width over budget, empty line = one row) so the painted rows and
+ * the measured height agree.
+ *
+ * Budgets derive from the RAW lines (pre tab-expansion) — the paint
+ * path parses the same raw text, and expansion would change the column
+ * arithmetic the parser walks.
+ */
+function measureDecoratedText(
+  text: string,
+  rawText: string,
+  width: number,
+  textWrap: NonNullable<Styles['textWrap']>,
+  decoration: TextDecoration,
+): { width: number; height: number } {
+  const prefixWidth = decoration.prefix?.width ?? 0
+  const headerRows = decoration.header !== undefined ? 1 : 0
+  // An empty body under a header is header-only: the paint writes the
+  // header row and nothing else, so a placeholder empty row must not
+  // inflate the measured height. Without a header the node is as empty
+  // as the legacy path reports (height 0).
+  if (rawText === '') {
+    return { width: prefixWidth, height: headerRows }
+  }
+  const rawLines = rawText.split('\n')
+  const expandedLines = text.split('\n')
+  // Truncate modes never add rows; budgets still apply for the prefix's
+  // horizontal reservation.
+  const wraps = textWrap === 'wrap' || textWrap === 'wrap-trim'
+  // No-wrap probes (intrinsic, or a fractional shrunken probe like the
+  // legacy path guards): every line is one visual row.
+  const noWrap = !wraps || width <= 0 || !Number.isFinite(width) || (width > 0 && width < 1)
+  let height = 0
+  let widest = 0
+  for (let i = 0; i < rawLines.length; i++) {
+    const raw = rawLines[i]!
+    const decorated =
+      prefixWidth > 0
+        ? prefixWidth
+        : decoration.hang === true
+          ? (deriveHang(raw)?.width ?? 0)
+          : 0
+    const w = lineWidth(noWrap ? raw : expandedLines[i] ?? raw)
+    widest = Math.max(widest, w)
+    const budget = Math.max(1, width - decorated)
+    height += noWrap || w === 0 ? 1 : Math.ceil(w / budget)
+  }
+  return { width: widest + prefixWidth, height: height + headerRows }
 }
 
 function measureTextDimensions(
