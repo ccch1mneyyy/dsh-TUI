@@ -26,6 +26,7 @@
  * subscriptions.
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { t } from '../../i18n.js'
 import type { Agent, AgentHandle, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
@@ -259,6 +260,10 @@ export function attachDshExtensions(
   // per call over the same cached snapshot, so it follows session swaps and
   // appends with no extra bookkeeping.
   state.trajectorySource = () => (dshNative().rawHistory().length === 0 ? 'empty' : 'supported')
+  // The source label (design §④ i18n trajectory-backend-label): name what
+  // feeds the trajectory — the raw DSH session log, not the AgentEvent fold
+  // the core would otherwise mount.
+  state.trajectoryBackendLabel = () => t('trajectory-backend-dsh')
 
   // The DSH log restores folded rows; the projector prices by the DeepSeek
   // rate window and feeds the job registry. Installed before the seed replay.

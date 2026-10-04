@@ -1028,6 +1028,13 @@ const GROUPS = {
 // 事件走观察时钟并标注、durable seq 去重、乱序 close、增量=全量、组合三态
 // empty→supported、场景 40 列/侧栏 28 列渲染。
     ["verify-trajectory-agent-fold", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-agent-fold.tsx']],
+// 轨迹 XL 回归（设计 §④ 完整档）：审批/问卷等待段详情（asked 载荷带来源与
+// 可选项、答案靠 callId 配对 ask 工具结果懒读、等待中 live 时长、事件不可读
+// 的诚实降级）；跨 Agent 下钻（parentCallId 路由的 lane 日志、主 lane 逐字节
+// 不变、后代按 seq 归并、re-key 收养、增量=全量、场景与侧栏的 a 键/chip/
+// Esc 分层四范围循环）；长会话虚拟化（共享 ledgerWindow 夹取性质 + 千行会话
+// 只画一窗、G/g 跳转、时长预算）；源标签（header 标注 DSH 日志/AgentEvent 折叠）。
+    ["verify-trajectory-xl", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-xl.tsx']],
 // 信息栏回归：分组键值渲染（模型/思考深度/模式/权限/上下文/缓存/TPS/消耗/工作目录/
 // 会话标题与 ID）、无数据回落 ——、长值截断不溢出、窄列可读、visible=false 不订阅。
     ["verify-info-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-info-panel.tsx']],

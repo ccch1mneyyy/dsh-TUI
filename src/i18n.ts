@@ -1986,6 +1986,23 @@ const dict = {
   // 轨迹行的「观察时钟」标注（设计 §④）：事件本身没有时间戳时，数据源用收到
   // 时刻充当行时间，检查器必须把这一点说清——这是观察时间，不是事件时间。
   'trajectory-time-observed': { zh: '时间为观察时钟', en: 'time from observed clock' },
+  // 审批/问卷等待段详情（设计 §④ 完整档）：等待中的 live 时长，与「检查内容
+  // 已不可读」的诚实降级——压缩掉的事件不假装还有正文。
+  'trajectory-wait-elapsed': { zh: '已等待 {{duration}}', en: 'waiting {{duration}}' },
+  'trajectory-inspect-unavailable': { zh: '事件原文已不可读（可能已被压缩）', en: 'source event no longer readable (likely compacted)' },
+  // 跨 Agent 下钻（设计 §④ 完整档）：scope chip 与提示。chip 标当前过滤的是
+  // 哪个范围（当前 Agent / 父回合 / 全部后代），a 键循环，Esc 先弹回会话。
+  'trajectory-view-agent': { zh: 'Agent {{label}}', en: 'agent {{label}}' },
+  'trajectory-view-parent': { zh: '父回合 {{turn}}', en: 'parent turn {{turn}}' },
+  'trajectory-view-descendants': { zh: '后代 {{label}}', en: 'descendants {{label}}' },
+  'trajectory-drill-hint': { zh: 'a 下钻该 Agent', en: 'a drill into agent' },
+  'trajectory-scope-hint-panel': { zh: 'a 切换范围', en: 'a cycle scope' },
+  'trajectory-scope-hint': { zh: 'a 切换范围 · Esc 返回会话', en: 'a cycle scope · Esc back to session' },
+  // 轨迹源标签（设计 §④ i18n trajectory-backend-label）：全屏视图如实标注
+  // 正在读的是哪个数据源——DSH 会话日志还是中立 AgentEvent 折叠。
+  'trajectory-backend-label': { zh: '轨迹源：{{name}}', en: 'trajectory source: {{name}}' },
+  'trajectory-backend-dsh': { zh: 'DSH 会话日志', en: 'DSH session log' },
+  'trajectory-backend-agent-events': { zh: 'AgentEvent 折叠', en: 'AgentEvent fold' },
   'info-section-session': { zh: '会话', en: 'Session' },
   'info-section-model': { zh: '模型', en: 'Model' },
   'info-section-context': { zh: '上下文', en: 'Context' },

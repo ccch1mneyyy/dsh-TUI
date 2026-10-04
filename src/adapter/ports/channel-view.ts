@@ -1185,6 +1185,27 @@ export interface RawTrajEvent { readonly type: string; readonly seq: number; rea
 export type TrajectorySource = 'supported' | 'empty' | 'unsupported'
 
 /**
+ * One trajectory drilldown lane (design doc 「④ 轨迹裁决」完整档: 跨 Agent
+ * drilldown): a subagent whose child-lane events the mounted source folded
+ * into their own raw-event log. The scope filter (当前 Agent / 父回合 /
+ * 全部后代) refolds those logs on demand; a composition whose source
+ * attributes no lanes reports none and the filter is simply not offered.
+ */
+export interface TrajectoryLane {
+  /** The subagent's id — the lane log's lookup key. */
+  readonly agentId: string
+  /** The delegating tool call that anchors this lane (the lane router's key). */
+  readonly callId?: string
+  /** The subagent's description, when the start event carried one. */
+  readonly label?: string
+  readonly model?: string
+  /** The lane this agent was spawned from (undefined = the main session). */
+  readonly parentAgentId?: string
+  /** Spawn nesting: 1 = spawned by the main loop. */
+  readonly depth: number
+}
+
+/**
  * The ONE context-occupancy reading every occupancy surface shares: the
  * footer's `ctx` field and its hover detail, the segmented context bar, the
  * working-activity line's `⚠ ctx N%` prefix, `/tokens` + `/status`, and the

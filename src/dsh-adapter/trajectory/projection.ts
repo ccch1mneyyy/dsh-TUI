@@ -764,6 +764,7 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
         step: state.step,
         label: 'subagent',
         detail: [payload.label, payload.model].filter(Boolean).join(' · ') || undefined,
+        agentId: payload.agentId,
       })
       return
     }

@@ -66,11 +66,16 @@ export interface ToolViewPresenter {
   result(name: string, rawArgs: string, data: SessionEvent<'tool/result'>['data']): ToolResultView | undefined
 }
 /** Raw host implementation; the renderer receives ChannelUi instead. */
-export interface Channel extends Omit<ChannelUi, 'pluginScene' | 'traceEvents' | 'trajectorySource'> {
+export interface Channel extends Omit<ChannelUi, 'pluginScene' | 'traceEvents' | 'trajectorySource' | 'trajectoryLaneEvents'> {
  readonly pluginScene: TuiSceneDescriptor | undefined
  traceEvents(): readonly SessionEvent[]
  /** The mounted trajectory source's three-state report (see ChannelUi). */
  trajectorySource(): TrajectorySource
+ /** Lane drilldown reads (see ChannelUi); events carry the SessionEvent envelope. */
+ trajectoryLanes(): readonly import('../../adapter/ports/channel-view.js').TrajectoryLane[]
+ trajectoryLaneEvents(agentId: string, descendants?: boolean): readonly SessionEvent[]
+ /** Localized mounted-source label (see ChannelUi). */
+ trajectoryBackendLabel(): string
  releaseContributions(): void
 }
 type MutableChannelView = { -readonly [K in keyof ChannelUi]: ChannelUi[K] }
