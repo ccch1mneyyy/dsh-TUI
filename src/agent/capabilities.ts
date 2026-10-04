@@ -8,7 +8,7 @@
  * each backend augments its own marker from inside its directory, and only
  * that directory may read it (enforced by `verify:boundary`).
  */
-import type { WorkingActivityView } from '../adapter/ports/channel-view.js'
+import type { AgentMessageView, WorkingActivityView } from '../adapter/ports/channel-view.js'
 import type { AgentEvent, CommandInfo, PermissionRequestView } from './events.js'
 import type { AgentSessionRef } from './refs.js'
 
@@ -309,6 +309,14 @@ export interface SessionCapabilities {
      *  replay/translator → AgentEvent). Absent = the backend has no
      *  transcript data source; rejects when the read fails. */
     history?(agentId: string, window?: SubagentTranscriptWindow): Promise<SubagentTranscriptPage>
+    /**
+     * The session's own relay observations (design agent-team-full §5.4:
+     * Claude folds its SendMessage tool traffic into neutral views). The
+     * channel core composes the parent-mediated submit path around it;
+     * absent = this backend serves no message capability (the composer is
+     * not rendered).
+     */
+    message?: { messages(): readonly AgentMessageView[] }
   }
   /**
    * Background tasks: `stop` asks the backend to stop one; `readOutput`
