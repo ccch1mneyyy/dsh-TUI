@@ -1,4 +1,5 @@
 import type { DOMElement } from './dom.js'
+import type { TextDecoration } from './styles.js'
 import type { Rectangle } from './layout/geometry.js'
 
 /**
@@ -28,8 +29,20 @@ export type CachedLayout = {
 /** Layout bounds cached per rendered node, used for blitting and clearing. */
 export const nodeCache = new WeakMap<DOMElement, CachedLayout>()
 
+/** One run of rows sharing a noSelect width, in node-relative rows. */
+export type TextNoSelectRun = {
+  /** First decorated row (0 = the header row when one is painted). */
+  offset: number
+  height: number
+  /** Leading columns of each row in the run to exclude from selection. */
+  width: number
+}
+
 /** Current prepared text only: scrolling changes its position, not its lines.
- * Weak keys release unmounted nodes; mutations discard the previous version. */
+ * Weak keys release unmounted nodes; mutations discard the previous version.
+ * `decoration` participates in the hit check (producers memo the object);
+ * `noSelectRuns` are re-pushed every frame — the write happens on the hit
+ * path too, but the screen bitmap is reset per frame. */
 export const textPaintCache = new WeakMap<DOMElement, {
   maxWidth: number
   background: string | undefined
@@ -38,6 +51,8 @@ export const textPaintCache = new WeakMap<DOMElement, {
   text: string
   lines: readonly string[]
   softWrap: boolean[] | undefined
+  decoration: TextDecoration | undefined
+  noSelectRuns: readonly TextNoSelectRun[] | undefined
 }>()
 
 /** Rects of removed children that need clearing on next render */

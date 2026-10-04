@@ -444,6 +444,70 @@ export type Styles = {
    * images); selection-only, no effect on painting.
    */
   readonly softWrapContinuation?: number
+
+  /**
+   * Typed paint metadata for a text leaf (rendering-upgrade design §2,
+   * "typed decoration" batch): decoration that would otherwise cost
+   * structural Yoga nodes (a code frame's header row and per-row rail) or
+   * that a plain ANSI string cannot carry per visual row (a hanging indent
+   * on terminal-wrapped continuations) rides the text's own paint instead.
+   * Undefined on every other text — the legacy paint path is untouched.
+   *
+   * The decoration projects onto the same screen planes every consumer
+   * already reads: cells (the prefix/header glyphs are written as text),
+   * Screen.noSelect (decorated columns are marked non-selectable), and
+   * softWrap bookkeeping (prefixed rows keep the continuation encoding), so
+   * selection overlay/extract/wordBounds/fingerprint and scroll-off capture
+   * consume it without new channels.
+   */
+  readonly decoration?: TextDecoration
+}
+
+/**
+ * Paint-time decoration for one text leaf. See Styles.decoration.
+ */
+export type TextDecoration = {
+  /**
+   * One row painted above the first visual row (the code frame's top
+   * edge: corner, language label, divider). The whole row is excluded
+   * from selection — the hybrid frame's NoSelect header as typed
+   * metadata. ANSI-styled; its display width is measured at paint time.
+   */
+  readonly header?: string
+
+  /**
+   * Styled single-cell unit repeated after `header` until the header row
+   * reaches the text node's painted width (the wide code frame's divider
+   * run). The component cannot know the final column width — the hybrid
+   * header stretched to it via layout — so the paint pads to maxWidth.
+   */
+  readonly headerFill?: string
+
+  /**
+   * Styled prefix painted before EVERY visual row of the text (the code
+   * frame's rail plus its padding column). `width` is the prefix's
+   * display width in cells; the wrap budget shrinks by it so prefixed
+   * rows never overflow the column. `noSelect` leading columns are
+   * excluded from selection (the rail); the remaining prefix columns
+   * stay selectable (the padding space — spec §1.2's copy contract).
+   */
+  readonly prefix?: {
+    readonly text: string
+    readonly width: number
+    readonly noSelect?: number
+  }
+
+  /**
+   * Hang terminal-wrapped continuations of a source line under the line's
+   * own leading structure (design §2's "wrap continuation" consumer): quote
+   * rails repeat as painted glyphs, list markers / checkboxes / indents
+   * become spaces, and the continuation aligns with the line's content
+   * column. Hard rows are untouched — their structure is already in the
+   * text. A structured line's wrap budget shrinks by its hang width so
+   * prefixed continuations fit. The injected prefix columns are excluded
+   * from selection, keeping copied bytes identical to the unwrapped join.
+   */
+  readonly hang?: boolean
 }
 
 const applyPositionStyles = (node: LayoutNode, style: Styles): void => {

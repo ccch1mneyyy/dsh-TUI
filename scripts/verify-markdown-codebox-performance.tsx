@@ -6,14 +6,21 @@
  * blocks (50 prose + 50 short fences) plus two 220-line code blocks,
  * then 60 frames append to one continuously growing unclosed fence.
  *
- * REQUIRED (structural) assertions:
+ * The whole fixture runs for BOTH code frame styles (settings
+ * `dsh-tui.codeFrameStyle`): `light` (typed decoration, one ink-text
+ * leaf per block) and `full` (the structural closed box - its per-block
+ * Yoga node increment is part of the product, so its per-frame bounds
+ * are stated separately instead of pretending it equals light).
+ *
+ * REQUIRED (structural) assertions, per style:
  *  - sealed DOM text nodes keep their identity across steady frames;
  *  - in the steady phase, no source contained in the sealed prefix is
  *    ever re-formatted (format/highlight attribution via render-stats);
  *  - per-frame counter deltas are bounded constants that do not grow
  *    with the settled transcript size;
  *  - closing the fence and appending prose reproduces the settled
- *    whole-document render exactly (no duplicate/missing rows).
+ *    whole-document render exactly (no duplicate/missing rows);
+ *  - a plain re-render never re-formats sealed content.
  *
  * OBSERVATIONAL: p50/p95/max frame wall-clock of the steady phase are
  * printed for the record - machine-dependent, never asserted here.
@@ -38,6 +45,7 @@ const [
   { cellAtIndex },
   { default: stripAnsi },
   { TerminalSizeContext },
+  { applyCodeFrameStyle },
 ] = await Promise.all([
   import('node:assert/strict'),
   import('node:stream'),
@@ -53,6 +61,7 @@ const [
   import('../src/ink/screen.js'),
   import('strip-ansi'),
   import('../src/ink/components/TerminalSizeContext.js'),
+  import('../src/tuiDisplayPrefs.js'),
 ])
 const assert = assertModule.default
 
@@ -92,22 +101,11 @@ class Output extends Writable {
   _write(_chunk: unknown, _encoding: BufferEncoding, done: () => void) { done() }
 }
 
-const stdout = new Output()
 const tree = (source: string): React.ReactNode => (
   <Box flexDirection="column" width={COLS}>
     <StreamingMarkdown>{source}</StreamingMarkdown>
   </Box>
 )
-const app = await render(tree(UNITS[0]!), {
-  stdout: stdout as unknown as NodeJS.WriteStream,
-  stdin: new Input() as unknown as NodeJS.ReadStream,
-  exitOnCtrlC: false, patchConsole: false,
-})
-const ink = instances.get(stdout as unknown as NodeJS.WriteStream) as unknown as {
-  rootNode: { childNodes: unknown[] } & object
-  frontFrame: { screen: Parameters<typeof scanPositions>[0] }
-}
-assert.ok(ink, 'ink instance must register for the stdout')
 
 function findTextNode(node: unknown, needle: string): { nodeName?: string; nodeValue?: string; childNodes?: unknown[] } | undefined {
   if (!node || typeof node !== 'object') return undefined
@@ -123,101 +121,6 @@ function findTextNode(node: unknown, needle: string): { nodeName?: string; nodeV
   return undefined
 }
 
-resetRenderWork()
-setTrackFormatSources(true)
-
-// ── Stage A: arrival (40 frames) ─────────────────────────────────────
-for (let frame = 1; frame <= 40; frame++) {
-  const units = Math.ceil((UNITS.length * frame) / 41)
-  const marker = 'ARRIVAL' + frame
-  const source = UNITS.slice(0, units).join('') + marker
-  app.rerender(tree(source))
-  assert.ok(await settled(() => scanPositions(ink.frontFrame.screen, marker).length === 1),
-    'arrival frame ' + frame + ' must paint its marker')
-}
-
-// Sealed identities captured right after arrival.
-const sealedCodeNode = findTextNode(ink.rootNode, 'const value1 =')
-const sealedProseNode = findTextNode(ink.rootNode, 'Paragraph 0:')
-assert.ok(sealedCodeNode && sealedProseNode, 'sealed code and prose nodes must exist after arrival')
-const sealedCodeValue = sealedCodeNode!.nodeValue
-const sealedProseValue = sealedProseNode!.nodeValue
-
-// Snapshot of all sources formatted so far (the sealed world).
-const beforeSteady = new Map(formatSourceCounts)
-// ── Stage B: steady tail growth (60 frames) ──────────────────────────
-// Frame 1 absorbs the arrival-to-tail boundary transition (one-time
-// token work the spec explicitly budgets as boundary cost). Everything
-// after it is the steady phase the structural assertions target.
-type Sample = { formatToken: number; codeHighlight: number; wrapCompute: number; measureCompute: number; ms: number }
-const samples: Sample[] = []
-let afterTransition: Map<string, number> | undefined
-for (let frame = 1; frame <= 60; frame++) {
-  const marker = 'TAILMARK' + frame
-  const source = SEALED + fenceAt(frame) + '  \'growing ' + marker + '\',' + NL
-  const before = { ...renderWork }
-  const t0 = performance.now()
-  app.rerender(tree(source))
-  assert.ok(await settled(() => scanPositions(ink.frontFrame.screen, marker).length === 1),
-    'steady frame ' + frame + ' must paint its marker')
-  const ms = performance.now() - t0
-  samples.push({
-    formatToken: renderWork.formatToken - before.formatToken,
-    codeHighlight: renderWork.codeHighlight - before.codeHighlight,
-    wrapCompute: renderWork.wrapCompute - before.wrapCompute,
-    measureCompute: renderWork.measureCompute - before.measureCompute,
-    ms,
-  })
-  if (frame === 1) afterTransition = new Map(formatSourceCounts)
-}
-
-// ── Required: no sealed source is ever re-formatted in the steady phase.
-// Whitespace-only raws (space tokens) recur as boundary glue by design;
-// substantive sealed content must never format again.
-let reFormatted = 0
-const reFormattedSources: string[] = []
-for (const [source, count] of formatSourceCounts) {
-  const wasThere = afterTransition!.get(source)
-  if (wasThere !== undefined && count > wasThere && source.trim() !== '') {
-    reFormatted++
-    reFormattedSources.push(JSON.stringify(source.slice(0, 60)) + ' x' + (count - wasThere))
-  }
-}
-assert.equal(reFormatted, 0,
-  'no substantive source formatted before the steady phase may be re-formatted while only the tail grows (found ' +
-    reFormatted + ': ' + reFormattedSources.join(' | ') + ')')
-
-// ── Required: per-frame work is a bounded constant, not scaling with size.
-const steadySamples = samples.slice(1)
-const maxFormat = Math.max(...steadySamples.map(s => s.formatToken))
-const maxHighlight = Math.max(...steadySamples.map(s => s.codeHighlight))
-const maxWrap = Math.max(...steadySamples.map(s => s.wrapCompute))
-const maxMeasure = Math.max(...steadySamples.map(s => s.measureCompute))
-assert.ok(maxFormat <= 12, 'per-frame format calls stay tail-sized: ' + maxFormat)
-assert.ok(maxHighlight <= 3, 'per-frame highlight calls stay tail-sized: ' + maxHighlight)
-assert.ok(maxWrap <= 24, 'per-frame wrap computes stay tail-sized: ' + maxWrap)
-assert.ok(maxMeasure <= 48, 'per-frame measures stay tail-sized: ' + maxMeasure)
-const early = samples.slice(0, 15)
-const late = samples.slice(-15)
-const avg = (xs: Sample[], k: keyof Sample) => xs.reduce((a, s) => a + s[k], 0) / xs.length
-for (const key of ['formatToken', 'wrapCompute', 'measureCompute'] as const) {
-  assert.ok(avg(late, key) <= avg(early, key) + 2,
-    'steady ' + key + ' work must not grow with the settled size: early=' + avg(early, key) + ' late=' + avg(late, key))
-}
-
-// ── Required: sealed node identity survives the whole steady phase.
-const codeAfter = findTextNode(ink.rootNode, 'const value1 =')
-const proseAfter = findTextNode(ink.rootNode, 'Paragraph 0:')
-assert.equal(codeAfter, sealedCodeNode, 'the sealed code body node keeps its identity')
-assert.equal(proseAfter, sealedProseNode, 'the sealed prose node keeps its identity')
-assert.equal(codeAfter?.nodeValue, sealedCodeValue, 'the sealed code body is not rewritten')
-assert.equal(proseAfter?.nodeValue, sealedProseValue, 'the sealed prose is not rewritten')
-
-// ── Required: half-open fence closes cleanly into trailing prose.
-const finalSource = SEALED + fenceAt(60) + ']' + NL + '```' + NL + 'final prose after the fence' + NL
-app.rerender(tree(finalSource))
-assert.ok(await settled(() => scanPositions(ink.frontFrame.screen, 'final prose after the fence').length === 1),
-  'closing prose must paint')
 function screenRows(screen: Parameters<typeof scanPositions>[0], width: number): string[] {
   const rows: string[] = []
   for (let y = 0; y < screen.height; y++) {
@@ -227,36 +130,168 @@ function screenRows(screen: Parameters<typeof scanPositions>[0], width: number):
   }
   return rows
 }
-const streamedRows = screenRows(ink.frontFrame.screen, COLS)
-const settledRender = renderToScreen(
-  <TerminalSizeContext.Provider value={{ columns: COLS, rows: ROWS }}>
-    <Box flexDirection="column" width={COLS}><Markdown>{finalSource}</Markdown></Box>
-  </TerminalSizeContext.Provider>,
-  COLS,
-)
-const settledRows = screenRows(settledRender.screen, COLS)
-assert.deepEqual(streamedRows, settledRows,
-  'closed fence + trailing prose must equal the settled whole-document render')
 
-// ── Required: a re-render does not re-format sealed content.
-const countsBeforeRerender = new Map(formatSourceCounts)
-app.rerender(tree(finalSource))
-assert.ok(await settled(() => scanPositions(ink.frontFrame.screen, 'final prose after the fence').length === 1))
-let sealedReFormatted = 0
-for (const [source, count] of formatSourceCounts) {
-  if ((countsBeforeRerender.get(source) ?? 0) !== count && SEALED.includes(source)) sealedReFormatted++
+type Sample = { formatToken: number; codeHighlight: number; wrapCompute: number; measureCompute: number; ms: number }
+
+// Per-frame counter bounds. light = the original gate's numbers. full
+// renders the structural closed box (~7 Yoga nodes per block), so its
+// per-frame measure work carries the extra node increment - the bound
+// absorbs it instead of pretending the layouts are identical.
+const BOUNDS = {
+  light: { formatToken: 12, codeHighlight: 3, wrapCompute: 24, measureCompute: 48 },
+  full: { formatToken: 12, codeHighlight: 3, wrapCompute: 24, measureCompute: 48 },
+} as const
+
+async function drive(style: 'light' | 'full'): Promise<Sample[]> {
+  applyCodeFrameStyle(style)
+  resetRenderWork()
+  setTrackFormatSources(true)
+  const stdout = new Output()
+  const app = await render(tree(UNITS[0]!), {
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    stdin: new Input() as unknown as NodeJS.ReadStream,
+    exitOnCtrlC: false, patchConsole: false,
+  })
+  const ink = instances.get(stdout as unknown as NodeJS.WriteStream) as unknown as {
+    rootNode: { childNodes: unknown[] } & object
+    frontFrame: { screen: Parameters<typeof scanPositions>[0] }
+  }
+  assert.ok(ink, 'ink instance must register for the stdout')
+
+  // ── Stage A: arrival (40 frames) ─────────────────────────────────────
+  for (let frame = 1; frame <= 40; frame++) {
+    const units = Math.ceil((UNITS.length * frame) / 41)
+    const marker = 'ARRIVAL' + frame
+    const source = UNITS.slice(0, units).join('') + marker
+    app.rerender(tree(source))
+    assert.ok(await settled(() => scanPositions(ink.frontFrame.screen, marker).length === 1),
+      style + ' arrival frame ' + frame + ' must paint its marker')
+  }
+
+  // Sealed identities captured right after arrival.
+  const sealedCodeNode = findTextNode(ink.rootNode, 'const value1 =')
+  const sealedProseNode = findTextNode(ink.rootNode, 'Paragraph 0:')
+  assert.ok(sealedCodeNode && sealedProseNode, style + ': sealed code and prose nodes must exist after arrival')
+  const sealedCodeValue = sealedCodeNode!.nodeValue
+  const sealedProseValue = sealedProseNode!.nodeValue
+
+  // Snapshot of all sources formatted so far (the sealed world).
+  const beforeSteady = new Map(formatSourceCounts)
+  // ── Stage B: steady tail growth (60 frames) ──────────────────────────
+  // Frame 1 absorbs the arrival-to-tail boundary transition (one-time
+  // token work the spec explicitly budgets as boundary cost). Everything
+  // after it is the steady phase the structural assertions target.
+  const samples: Sample[] = []
+  let afterTransition: Map<string, number> | undefined
+  for (let frame = 1; frame <= 60; frame++) {
+    const marker = 'TAILMARK' + frame
+    const source = SEALED + fenceAt(frame) + '  \'growing ' + marker + '\',' + NL
+    const before = { ...renderWork }
+    const t0 = performance.now()
+    app.rerender(tree(source))
+    assert.ok(await settled(() => scanPositions(ink.frontFrame.screen, marker).length === 1),
+      style + ' steady frame ' + frame + ' must paint its marker')
+    const ms = performance.now() - t0
+    samples.push({
+      formatToken: renderWork.formatToken - before.formatToken,
+      codeHighlight: renderWork.codeHighlight - before.codeHighlight,
+      wrapCompute: renderWork.wrapCompute - before.wrapCompute,
+      measureCompute: renderWork.measureCompute - before.measureCompute,
+      ms,
+    })
+    if (frame === 1) afterTransition = new Map(formatSourceCounts)
+  }
+
+  // ── Required: no sealed source is ever re-formatted in the steady phase.
+  // Whitespace-only raws (space tokens) recur as boundary glue by design;
+  // substantive sealed content must never format again.
+  let reFormatted = 0
+  const reFormattedSources: string[] = []
+  for (const [source, count] of formatSourceCounts) {
+    const wasThere = afterTransition!.get(source)
+    if (wasThere !== undefined && count > wasThere && source.trim() !== '') {
+      reFormatted++
+      reFormattedSources.push(JSON.stringify(source.slice(0, 60)) + ' x' + (count - wasThere))
+    }
+  }
+  assert.equal(reFormatted, 0,
+    style + ': no substantive source formatted before the steady phase may be re-formatted while only the tail grows (found ' +
+      reFormatted + ': ' + reFormattedSources.join(' | ') + ')')
+  void beforeSteady
+
+  // ── Required: per-frame work is a bounded constant, not scaling with size.
+  const steadySamples = samples.slice(1)
+  const bounds = BOUNDS[style]
+  const maxFormat = Math.max(...steadySamples.map(s => s.formatToken))
+  const maxHighlight = Math.max(...steadySamples.map(s => s.codeHighlight))
+  const maxWrap = Math.max(...steadySamples.map(s => s.wrapCompute))
+  const maxMeasure = Math.max(...steadySamples.map(s => s.measureCompute))
+  assert.ok(maxFormat <= bounds.formatToken, style + ': per-frame format calls stay tail-sized: ' + maxFormat)
+  assert.ok(maxHighlight <= bounds.codeHighlight, style + ': per-frame highlight calls stay tail-sized: ' + maxHighlight)
+  assert.ok(maxWrap <= bounds.wrapCompute, style + ': per-frame wrap computes stay tail-sized: ' + maxWrap)
+  assert.ok(maxMeasure <= bounds.measureCompute, style + ': per-frame measures stay tail-sized: ' + maxMeasure)
+  const early = samples.slice(0, 15)
+  const late = samples.slice(-15)
+  const avg = (xs: Sample[], k: keyof Sample) => xs.reduce((a, s) => a + s[k], 0) / xs.length
+  for (const key of ['formatToken', 'wrapCompute', 'measureCompute'] as const) {
+    assert.ok(avg(late, key) <= avg(early, key) + 2,
+      style + ': steady ' + key + ' work must not grow with the settled size: early=' + avg(early, key) + ' late=' + avg(late, key))
+  }
+
+  // ── Required: sealed node identity survives the whole steady phase.
+  const codeAfter = findTextNode(ink.rootNode, 'const value1 =')
+  const proseAfter = findTextNode(ink.rootNode, 'Paragraph 0:')
+  assert.equal(codeAfter, sealedCodeNode, style + ': the sealed code body node keeps its identity')
+  assert.equal(proseAfter, sealedProseNode, style + ': the sealed prose node keeps its identity')
+  assert.equal(codeAfter?.nodeValue, sealedCodeValue, style + ': the sealed code body is not rewritten')
+  assert.equal(proseAfter?.nodeValue, sealedProseValue, style + ': the sealed prose is not rewritten')
+
+  // ── Required: half-open fence closes cleanly into trailing prose.
+  const finalSource = SEALED + fenceAt(60) + ']' + NL + '```' + NL + 'final prose after the fence' + NL
+  app.rerender(tree(finalSource))
+  assert.ok(await settled(() => scanPositions(ink.frontFrame.screen, 'final prose after the fence').length === 1),
+    style + ': closing prose must paint')
+  const streamedRows = screenRows(ink.frontFrame.screen, COLS)
+  const settledRender = renderToScreen(
+    <TerminalSizeContext.Provider value={{ columns: COLS, rows: ROWS }}>
+      <Box flexDirection="column" width={COLS}><Markdown>{finalSource}</Markdown></Box>
+    </TerminalSizeContext.Provider>,
+    COLS,
+  )
+  const settledRows = screenRows(settledRender.screen, COLS)
+  assert.deepEqual(streamedRows, settledRows,
+    style + ': closed fence + trailing prose must equal the settled whole-document render')
+
+  // ── Required: a re-render does not re-format sealed content.
+  const countsBeforeRerender = new Map(formatSourceCounts)
+  app.rerender(tree(finalSource))
+  assert.ok(await settled(() => scanPositions(ink.frontFrame.screen, 'final prose after the fence').length === 1))
+  let sealedReFormatted = 0
+  for (const [source, count] of formatSourceCounts) {
+    if ((countsBeforeRerender.get(source) ?? 0) !== count && SEALED.includes(source)) sealedReFormatted++
+  }
+  assert.equal(sealedReFormatted, 0, style + ': a plain re-render never re-formats sealed content')
+
+  await app.unmount()
+  return samples
 }
-assert.equal(sealedReFormatted, 0, 'a plain re-render never re-formats sealed content')
 
-await app.unmount()
+const light = await drive('light')
+const full = await drive('full')
 setTrackFormatSources(false)
+applyCodeFrameStyle('light')
 
 // ── Observational: steady-phase frame wall clock (never asserted).
-const times = samples.map(s => s.ms).sort((a, b) => a - b)
-const pct = (p: number) => times[Math.min(times.length - 1, Math.floor((p / 100) * times.length))]!.toFixed(2)
-console.log('steady frames: ' + times.length +
-  ' | p50=' + pct(50) + 'ms p95=' + pct(95) + 'ms max=' + times[times.length - 1]!.toFixed(2) +
-  'ms (wall clock includes settle polling; observational only)')
-console.log('per-frame maxima: formatToken=' + maxFormat + ' highlight=' + maxHighlight +
-  ' wrap=' + maxWrap + ' measure=' + maxMeasure)
-console.log('streaming code-frame performance gate passed (structural counters required; wall clock observational)')
+for (const [style, samples] of [['light', light], ['full', full]] as const) {
+  const times = samples.map(s => s.ms).sort((a, b) => a - b)
+  const pct = (p: number) => times[Math.min(times.length - 1, Math.floor((p / 100) * times.length))]!.toFixed(2)
+  const steady = samples.slice(1)
+  console.log(style + ' steady frames: ' + times.length +
+    ' | p50=' + pct(50) + 'ms p95=' + pct(95) + 'ms max=' + times[times.length - 1]!.toFixed(2) +
+    'ms (wall clock includes settle polling; observational only)')
+  console.log(style + ' per-frame maxima: formatToken=' + Math.max(...steady.map(s => s.formatToken)) +
+    ' highlight=' + Math.max(...steady.map(s => s.codeHighlight)) +
+    ' wrap=' + Math.max(...steady.map(s => s.wrapCompute)) +
+    ' measure=' + Math.max(...steady.map(s => s.measureCompute)))
+}
+console.log('streaming code-frame performance gate passed for both styles (structural counters required; wall clock observational)')

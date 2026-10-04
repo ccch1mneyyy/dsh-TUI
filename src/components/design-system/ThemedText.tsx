@@ -85,6 +85,9 @@ export type Props = {
    */
   readonly ref?: React.Ref<DOMElement>
 
+  /** Typed paint metadata; see ink Text's decoration prop. */
+  readonly decoration?: Styles['decoration']
+
   readonly children?: React.ReactNode
 }
 
@@ -104,6 +107,7 @@ export default function ThemedText({
   inverse = false,
   wrap = 'wrap',
   ref,
+  decoration,
   children,
 }: Props): React.ReactNode {
   const [themeName] = useTheme()
@@ -130,6 +134,7 @@ export default function ThemedText({
       strikethrough={strikethrough}
       inverse={inverse}
       wrap={wrap}
+      decoration={decoration}
     >
       {children}
     </Text>

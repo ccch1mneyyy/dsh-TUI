@@ -1,6 +1,7 @@
 import React from 'react'
 import { marked, type Token, type Tokens } from 'marked'
 import { Box, Text } from '../ui.js'
+import type { TextDecoration } from '../ink/styles.js'
 import { appendBlockText, configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { isMermaidLang } from '../terminal-utils/mermaid.js'
@@ -49,6 +50,17 @@ type Props = {
 // LRU 会保留大量接近最终形态的快照（1MB 消息 ≈ 500 条 × 1MB ≈
 // 500MB）。这里用字符预算限制保留量，超长内容干脆不缓存（重挂载时
 // 重跑 lexer，极少发生且远比常驻便宜）。
+/**
+ * Typed hang decoration for the ANSI text runs (rendering-upgrade design
+ * §2, the batch-D leftover fix): a terminal-wrapped continuation of a
+ * line hangs under that line's own leading structure - quote rails repeat
+ * as glyphs, list markers / checkboxes / indentation become spaces -
+ * instead of falling at column 0. Hard rows are untouched. One frozen
+ * identity: the style diff and the measure/paint caches key on it by
+ * reference, so every text run shares this exact object.
+ */
+const HANG_DECORATION: TextDecoration = { hang: true }
+
 const TOKEN_CACHE_CAPACITY = 200
 const TOKEN_CACHE_CHAR_BUDGET = 200_000
 const TOKEN_CACHE_MAX_SOURCE_LENGTH = 20_000
@@ -157,7 +169,7 @@ function renderTokensToNodes(
   const flushAnsiText = (): void => {
     if (!ansiText && textParts.length === 0) return
     if (textParts.length === 0) {
-      nodes.push(<Text key={nodes.length} dimColor={dimColor}>{ansiText.trim()}</Text>)
+      nodes.push(<Text key={nodes.length} dimColor={dimColor} decoration={HANG_DECORATION}>{ansiText.trim()}</Text>)
     } else {
       textParts.push(ansiText)
       let first = 0
@@ -171,7 +183,7 @@ function renderTokensToNodes(
       nodes.push(
         <Box key={nodes.length} flexDirection="column">
           {textParts.slice(first, last + 1).map((part, index) => (
-            <Text key={index} dimColor={dimColor}>{index + first < last ? part.slice(0, -1) : part}</Text>
+            <Text key={index} dimColor={dimColor} decoration={HANG_DECORATION}>{index + first < last ? part.slice(0, -1) : part}</Text>
           ))}
         </Box>,
       )

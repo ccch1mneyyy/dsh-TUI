@@ -6,7 +6,12 @@ import getMaxWidth from './get-max-width.js'
 import type { Rectangle } from './layout/geometry.js'
 import type { CachedLayout } from './node-cache.js'
 import { LayoutDisplay, LayoutEdge, type LayoutNode } from './layout/node.js'
-import { nodeCache, pendingClears, textPaintCache } from './node-cache.js'
+import {
+  nodeCache,
+  pendingClears,
+  textPaintCache,
+  type TextNoSelectRun,
+} from './node-cache.js'
 import type Output from './output.js'
 import renderBorder from './render-border.js'
 import { countPaintedFlankColumns, type Screen } from './screen.js'
@@ -14,10 +19,13 @@ import {
   type StyledSegment,
   squashTextNodesToSegments,
 } from './squash-text-nodes.js'
-import type { Color } from './styles.js'
+import type { Color, TextDecoration } from './styles.js'
+import { deriveHang, rebuildHangPrefix, wrapHangLine } from './text-decoration.js'
 import { isXtermJs } from './terminal.js'
 import { terminalImageSourceFromAttributes } from './terminal-image.js'
 import type { TerminalImagePlacement } from './terminal-image.js'
+import { lineWidth } from './line-width-cache.js'
+import { stringWidth } from './stringWidth.js'
 import { widestLine } from './widest-line.js'
 import wrapText from './wrap-text.js'
 
@@ -653,11 +661,22 @@ function applyStylesToWrappedText(
  * Truncate modes never add newlines (cli-truncate is whole-string) so
  * they fall through with softWrap undefined — no tracking, no behavior
  * change from the pre-softWrap path.
+ *
+ * Two typed-decoration shapes change per-line wrapping: `budgets`
+ * (prefix mode, the code frame rail) shrinks the wrap width per source
+ * line so prefixed rows never overflow; `hangWidths` (hang mode) keeps
+ * the legacy break points for the first row and only re-wraps
+ * continuation pieces that would overflow once the hang prefix is
+ * prepended (see wrapHangLine) - a just-fitting line never wraps.
+ * Undefined or all-zero entries keep the legacy single-width wrap
+ * byte-identical.
  */
 function wrapWithSoftWrap(
   plainText: string,
   maxWidth: number,
   textWrap: Parameters<typeof wrapText>[2],
+  budgets?: readonly number[],
+  hangWidths?: readonly number[],
 ): { wrapped: string; softWrap: boolean[] | undefined } {
   if (textWrap !== 'wrap' && textWrap !== 'wrap-trim') {
     return {
@@ -668,8 +687,19 @@ function wrapWithSoftWrap(
   const origLines = plainText.split('\n')
   const outLines: string[] = []
   const softWrap: boolean[] = []
-  for (const orig of origLines) {
-    const pieces = wrapText(orig, maxWidth, textWrap).split('\n')
+  for (let li = 0; li < origLines.length; li++) {
+    const orig = origLines[li]!
+    const hangWidth = hangWidths?.[li] ?? 0
+    const pieces =
+      hangWidth > 0
+        ? wrapHangLine(orig, maxWidth, hangWidth, (t, w) => wrapText(t, w, textWrap))
+        : wrapText(
+            orig,
+            budgets !== undefined && budgets.length > 0
+              ? Math.max(1, maxWidth - (budgets[li] ?? 0))
+              : maxWidth,
+            textWrap,
+          ).split('\n')
     for (let i = 0; i < pieces.length; i++) {
       outLines.push(pieces[i]!)
       softWrap.push(i > 0)
@@ -705,6 +735,223 @@ function applyPaddingToText(
   return text
 }
 
+/** Re-apply a prepared decoration's noSelect runs at a new position. */
+function pushNoSelectRuns(
+  output: Output,
+  x: number,
+  y: number,
+  runs: readonly TextNoSelectRun[] | undefined,
+): void {
+  if (runs === undefined) return
+  const bx = Math.floor(x)
+  const by = Math.floor(y)
+  for (const run of runs) {
+    if (run.width <= 0 || run.height <= 0) continue
+    output.noSelect({ x: bx, y: by + run.offset, width: run.width, height: run.height })
+  }
+}
+
+/**
+ * Paint one decorated text leaf (Styles.decoration, design §2 typed
+ * decoration). Mirrors the legacy ink-text paint — squash to segments,
+ * wrap (per-line budgets), re-apply styles — then injects the typed
+ * decoration per VISUAL row: the header row above, the prefix before
+ * every row, and hang prefixes on wrap continuations, all before ONE
+ * output.write so cells, softWrap bookkeeping and copy-region clearing
+ * see exactly the rows the screen ends up holding. Decorated columns are
+ * marked through output.noSelect like the structural components this
+ * replaces, so the selection consumers (overlay/extract/wordBounds/
+ * fingerprint) read the same planes as before.
+ */
+function paintDecoratedTextNode(
+  node: DOMElement,
+  x: number,
+  y: number,
+  output: Output,
+  maxWidth: number,
+  paddingLeft: number,
+  paddingTop: number,
+  decoration: TextDecoration,
+  inheritedBackgroundColor: Color | undefined,
+): void {
+  const segments = squashTextNodesToSegments(
+    node,
+    inheritedBackgroundColor
+      ? { backgroundColor: inheritedBackgroundColor }
+      : undefined,
+  )
+  const plainText = segments.map(s => s.text).join('')
+  const prefix = decoration.prefix
+  const prefixWidth = prefix?.width ?? 0
+  const textWrap = node.style.textWrap ?? 'wrap'
+  const wraps = textWrap === 'wrap' || textWrap === 'wrap-trim'
+
+  // The header row, padded to the painted node width when a fill unit is
+  // supplied (the wide code frame's divider run).
+  const headerRow =
+    decoration.header === undefined
+      ? undefined
+      : decoration.headerFill === undefined
+        ? decoration.header
+        : decoration.header +
+          decoration.headerFill.repeat(
+            Math.max(0, maxWidth - stringWidth(decoration.header)),
+          )
+
+  // Header-only decoration (an empty fenced block): one noSelect row.
+  if (plainText === '') {
+    if (headerRow === undefined) return
+    // The whole header row is decoration: the hybrid header box stretched
+    // to the node width and excluded that full row, fill or not.
+    const width = Math.max(stringWidth(headerRow), maxWidth)
+    const runs: TextNoSelectRun[] = width > 0 ? [{ offset: 0, height: 1, width }] : []
+    textPaintCache.set(node, {
+      maxWidth, background: inheritedBackgroundColor, paddingLeft, paddingTop,
+      text: headerRow, lines: [headerRow], softWrap: undefined, decoration,
+      noSelectRuns: runs.length > 0 ? runs : undefined,
+    })
+    output.write(Math.floor(x), Math.floor(y), headerRow, undefined, [headerRow])
+    pushNoSelectRuns(output, x, y, runs)
+    return
+  }
+
+  // Per source-line decoration widths from the RAW lines: the paint and
+  // the measurement derive hangs from the same pre-expansion text.
+  // Prefix mode narrows every row's budget (budgets); hang mode keeps
+  // the legacy first-row width and only re-wraps overflowing
+  // continuations (hangWidths).
+  const rawLines = plainText.split('\n')
+  let budgets: number[] | undefined
+  let hangWidths: number[] | undefined
+  if (prefixWidth > 0) {
+    budgets = new Array<number>(rawLines.length).fill(prefixWidth)
+  } else if (decoration.hang === true) {
+    hangWidths = new Array<number>(rawLines.length)
+    for (let i = 0; i < rawLines.length; i++) {
+      hangWidths[i] = deriveHang(rawLines[i]!)?.width ?? 0
+    }
+  }
+  const needsWrapping =
+    wraps &&
+    rawLines.some((raw, i) => {
+      if (hangWidths !== undefined) return lineWidth(raw) > maxWidth
+      const budget = maxWidth - (budgets?.[i] ?? 0)
+      return lineWidth(raw) > budget
+    })
+
+  let styled: string
+  let softWrap: boolean[] | undefined
+  if (needsWrapping) {
+    const w = wrapWithSoftWrap(plainText, maxWidth, textWrap, budgets, hangWidths)
+    softWrap = w.softWrap
+    if (segments.length === 1) {
+      const segment = segments[0]!
+      styled = w.wrapped
+        .split('\n')
+        .map(line => {
+          let styledLine = applyTextStyles(line, segment.styles)
+          if (segment.hyperlink) {
+            styledLine = wrapWithOsc8Link(styledLine, segment.hyperlink)
+          }
+          return styledLine
+        })
+        .join('\n')
+    } else {
+      const charToSegment = buildCharToSegmentMap(segments)
+      styled = applyStylesToWrappedText(
+        w.wrapped,
+        segments,
+        charToSegment,
+        plainText,
+        textWrap === 'wrap-trim',
+      )
+    }
+  } else {
+    styled = segments
+      .map(segment => {
+        let styledText = applyTextStyles(segment.text, segment.styles)
+        if (segment.hyperlink) {
+          styledText = wrapWithOsc8Link(styledText, segment.hyperlink)
+        }
+        return styledText
+      })
+      .join('')
+  }
+
+  styled = applyPaddingToText(node, styled, softWrap)
+
+  const rows = styled.split('\n')
+  const flags: boolean[] = softWrap ?? new Array<boolean>(rows.length).fill(false)
+  const noSelectRuns: TextNoSelectRun[] = []
+
+  let headerOffset = 0
+  if (headerRow !== undefined) {
+    rows.unshift(headerRow)
+    flags.unshift(false)
+    headerOffset = 1
+    // Whole-row exclusion, matching the hybrid header box (see above).
+    const headerWidth = Math.max(stringWidth(headerRow), maxWidth)
+    if (headerWidth > 0) {
+      noSelectRuns.push({ offset: 0, height: 1, width: headerWidth })
+    }
+  }
+
+  if (prefixWidth > 0 && prefix !== undefined) {
+    for (let r = headerOffset; r < rows.length; r++) {
+      rows[r] = prefix.text + rows[r]!
+    }
+    const ns = prefix.noSelect ?? 0
+    if (ns > 0) {
+      noSelectRuns.push({ offset: headerOffset, height: rows.length - headerOffset, width: ns })
+    }
+  } else if (decoration.hang === true) {
+    // Continuation rows inherit their source line's leading structure:
+    // rails repeat as glyphs, markers/checkboxes/indents become spaces.
+    // The injected columns are noSelect so copied bytes stay identical to
+    // the unwrapped join.
+    let lineStart = headerOffset
+    let lineHang: ReturnType<typeof deriveHang> = undefined
+    let runStart = -1
+    let runWidth = 0
+    const closeRun = (endRow: number): void => {
+      if (runStart >= 0 && endRow > runStart && runWidth > 0) {
+        noSelectRuns.push({ offset: runStart, height: endRow - runStart, width: runWidth })
+      }
+      runStart = -1
+      runWidth = 0
+    }
+    for (let r = headerOffset; r < rows.length; r++) {
+      if (flags[r] !== true) {
+        closeRun(r)
+        lineStart = r
+        lineHang = undefined
+        continue
+      }
+      if (lineHang === undefined) {
+        lineHang = deriveHang(rows[lineStart]!)
+      }
+      if (lineHang === undefined || lineHang.width <= 0) {
+        closeRun(r)
+        continue
+      }
+      rows[r] = rebuildHangPrefix(rows[lineStart]!, lineHang) + rows[r]!
+      if (runStart >= 0 && runWidth === lineHang.width) continue
+      closeRun(r)
+      runStart = r
+      runWidth = lineHang.width
+    }
+    closeRun(rows.length)
+  }
+
+  const text = rows.join('\n')
+  textPaintCache.set(node, {
+    maxWidth, background: inheritedBackgroundColor, paddingLeft, paddingTop,
+    text, lines: rows, softWrap: flags, decoration,
+    noSelectRuns: noSelectRuns.length > 0 ? noSelectRuns : undefined,
+  })
+  output.write(Math.floor(x), Math.floor(y), text, flags, rows)
+  pushNoSelectRuns(output, x, y, noSelectRuns)
+}
 /**
  * Render a laid-out node subtree into the output buffer.
  * After yoga lays out the tree, each node is painted to the output object,
@@ -965,15 +1212,30 @@ function renderNodeToOutput(
       const paddingNode = node.childNodes[0]?.yogaNode
       const paddingLeft = paddingNode?.getComputedLeft() ?? 0
       const paddingTop = paddingNode?.getComputedTop() ?? 0
+      const decoration = node.style.decoration
       const prepared = textPaintCache.get(node)
       if (
         prepared !== undefined &&
         prepared.maxWidth === maxWidth &&
         prepared.background === inheritedBackgroundColor &&
         prepared.paddingLeft === paddingLeft &&
-        prepared.paddingTop === paddingTop
+        prepared.paddingTop === paddingTop &&
+        prepared.decoration === decoration
       ) {
         output.write(x, y, prepared.text, prepared.softWrap, prepared.lines)
+        pushNoSelectRuns(output, x, y, prepared.noSelectRuns)
+      } else if (decoration !== undefined) {
+        paintDecoratedTextNode(
+          node,
+          x,
+          y,
+          output,
+          maxWidth,
+          paddingLeft,
+          paddingTop,
+          decoration,
+          inheritedBackgroundColor,
+        )
       } else {
         const segments = squashTextNodesToSegments(
           node,
@@ -1049,6 +1311,7 @@ function renderNodeToOutput(
           textPaintCache.set(node, {
             maxWidth, background: inheritedBackgroundColor, paddingLeft, paddingTop,
             text, lines, softWrap,
+            decoration: undefined, noSelectRuns: undefined,
           })
           output.write(x, y, text, softWrap, lines)
         }

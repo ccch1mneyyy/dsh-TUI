@@ -32,6 +32,18 @@ export const SETTING_DEFINITIONS = {
     hintDescriptions: { zh: '追问显式携带的最近完成问答组数，1-8（默认 4）。窗口外的旧组不进请求（线程与面板仍保留全文）。btw 面板需在 sidePanel.panels 里启用。立即生效。' },
     kind: 'number',
   },
+  'codeFrameStyle': {
+    label: 'Code frame',
+    descriptions: { zh: '代码框样式' },
+    group: 'rendering',
+    hint: 'How fenced code blocks in replies frame themselves. Light (default): an open rail — corner + language label on top, a left rail with one padding column per row, no right wall or bottom edge (costs no extra height). Full: closes the box with a right wall that stays continuous across wrapped rows and a bottom edge under the block. Very narrow terminals always keep the plain fence, whatever this says. Applies immediately.',
+    hintDescriptions: { zh: '回复里代码块的边框形式。轻框（默认）：开放式栏杆——顶部角标加语言标签，每行左侧竖杆加一格内边距，无右墙无底边（不多占高度）。全框：封闭盒子——右墙在折行处自然连续，底部收口。终端太窄时恒为纯 fence（不受此设置影响）。立即生效。' },
+    kind: 'select',
+    options: [
+      { value: 'light', label: 'Light rail', descriptions: { zh: '轻框（栏杆）' } },
+      { value: 'full', label: 'Full box', descriptions: { zh: '全框（封闭）' } },
+    ],
+  },
   'companion.skin': {
     label: 'Companion skin',
     descriptions: { zh: '宠物皮肤' },
