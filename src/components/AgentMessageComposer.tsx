@@ -85,14 +85,14 @@ type ComposerKey = {
 export type ComposerKeyHandler = (input: string, key: ComposerKey) => boolean
 
 /** Caret steps over whole code points, so an emoji is never split. */
-function previousCodePoint(text: string, caret: number): number {
+export function previousCodePoint(text: string, caret: number): number {
   if (caret <= 0) return 0
   const low = text.charCodeAt(caret - 1)
   const high = caret >= 2 ? text.charCodeAt(caret - 2) : 0
   return low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff ? caret - 2 : caret - 1
 }
 
-function nextCodePoint(text: string, caret: number): number {
+export function nextCodePoint(text: string, caret: number): number {
   if (caret >= text.length) return text.length
   return (text.codePointAt(caret) ?? 0) > 0xffff ? caret + 2 : caret + 1
 }

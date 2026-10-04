@@ -15,6 +15,7 @@ import React from 'react'
 import { Box, Text } from '../../../ui.js'
 import { t } from '../../../i18n.js'
 import type { SidePanelKeyFlags } from '../types.js'
+import { nextCodePoint, previousCodePoint } from '../../AgentMessageComposer.js'
 
 /** 编辑态（text 来自线程 store；caret 属于当前 surface）。 */
 export interface BtwComposerState {
@@ -46,21 +47,25 @@ type BtwKeyFlags = SidePanelKeyFlags & {
  */
 export function btwComposerKey(state: BtwComposerState, input: string, key: BtwKeyFlags): BtwComposerKeyResult | null {
   if (key.escape === true) return { exitFocus: true }
+  // The caret is per surface while the draft is shared through the store:
+  // an edit on the other surface can leave this caret past the end.
+  const caret = Math.min(state.caret, state.text.length)
   const plainReturn = (key.return_ === true || key.return === true || /^[\r\n]+$/u.test(input))
     && key.ctrl !== true && key.meta !== true && key.shift !== true
   if (plainReturn) return { submit: true }
   // Tab 离开编辑层去列表（与 TrajectoryPanel 同款双形态判定）。
   if (key.tab === true || input === '\t') return { exitFocus: true }
   if (key.backspace === true || key.delete === true) {
-    if (state.caret <= 0) return { state }
-    return { state: { text: state.text.slice(0, state.caret - 1) + state.text.slice(state.caret), caret: state.caret - 1 } }
+    if (caret <= 0) return { state: { ...state, caret } }
+    const at = previousCodePoint(state.text, caret)
+    return { state: { text: state.text.slice(0, at) + state.text.slice(caret), caret: at } }
   }
-  if (key.leftArrow === true) return { state: { ...state, caret: Math.max(0, state.caret - 1) } }
-  if (key.rightArrow === true) return { state: { ...state, caret: Math.min(state.text.length, state.caret + 1) } }
+  if (key.leftArrow === true) return { state: { ...state, caret: previousCodePoint(state.text, caret) } }
+  if (key.rightArrow === true) return { state: { ...state, caret: nextCodePoint(state.text, caret) } }
   if (key.home === true) return { state: { ...state, caret: 0 } }
   if (key.end === true) return { state: { ...state, caret: state.text.length } }
   if (input !== '' && key.ctrl !== true && key.meta !== true) {
-    return { state: { text: state.text.slice(0, state.caret) + input + state.text.slice(state.caret), caret: state.caret + input.length } }
+    return { state: { text: state.text.slice(0, caret) + input + state.text.slice(caret), caret: caret + input.length } }
   }
   return null
 }

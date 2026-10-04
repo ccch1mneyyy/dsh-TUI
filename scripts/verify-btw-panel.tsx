@@ -3,7 +3,9 @@
  *  - 面板级（XTerm + AlternateScreen + 真侧栏控制器）：空态、线程问答上屏
  *    （Markdown）、badge（不可见期间落定 → ●；进入面板即清）、composer 键
  *    语义（打字/Enter 提交/Esc 分层保草稿/Tab 切焦点）、n 新话题、s 发送到
- *    聊天（attach 合同 + 截断提示）、28/40 列窄幅不崩。
+ *    聊天（attach 合同 + 截断提示）、28/40 列窄幅不崩；连按键（两键之间
+ *    没有重渲染）不丢字、退格整删 emoji。
+ *  - 全屏场景（BtwThreadScene）：Esc 退出编辑后 Tab 回到 composer 继续打字。
  *  - Chat 级（真 Chat + fake channel）：/btw 快路由——面板启用时路由进侧栏
  *    且浮层反针不出现（单一 surface）；未启用时浮层回退，Esc 关闭即 abort。
  * 运行：node --import tsx/esm scripts/verify-btw-panel.tsx
@@ -19,7 +21,7 @@ const fixtureHome = mkdtempSync(join(tmpdir(), 'verify-btw-panel-'))
 process.env.HOME = fixtureHome
 process.env.USERPROFILE = fixtureHome
 
-const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }] = await Promise.all([
+const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }, { BtwThreadScene }] = await Promise.all([
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
@@ -32,6 +34,7 @@ const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn },
   import('../src/commands.js'),
   import('../src/screens/Chat.js'),
   import('../src/components/sidePanel/btw/threads.js'),
+  import('../src/components/sidePanel/btw/BtwThreadScene.js'),
 ])
 const { render, ThemeProvider, Box, Text, AlternateScreen, useInput, useTerminalSize } = ui
 const { applySidePanelOpen, applySidePanelRatio, applySidePanelPanels } = prefs
@@ -266,6 +269,35 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
   await delay(300)
   check('P6. n = 新话题（清线程 + 通知）', btwThreads.get('probe-session')?.turns.length === 0
     && channel.notices.some(text => text.includes('新话题')), channel.notices.join(' | '))
+  await frame.app.unmount()
+}
+
+// ── P9: 连按键不丢字（两键之间不等重渲染）+ 退格整删 emoji ─────────────
+{
+  const ask = scriptedAsk()
+  const channel = makePanelChannel(ask)
+  const frame = await mountPanel(100, 'btw', true, channel)
+  for (const ch of ['x', 'y', 'z']) {
+    frame.stdin.write(ch)
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  await delay(200)
+  check('P9a. 连按三键草稿顺序完整', btwThreads.get('probe-session')?.draft === 'xyz', JSON.stringify(btwThreads.get('probe-session')?.draft))
+  await keys(frame, ['\u{1F44D}', '\x7f'])
+  await delay(150)
+  check('P9b. 退格整删一个 emoji（不留半个代理对）', btwThreads.get('probe-session')?.draft === 'xyz', JSON.stringify(btwThreads.get('probe-session')?.draft))
+  await frame.app.unmount()
+}
+
+// ── F1: 全屏场景 Esc 退出编辑、Tab 回到 composer ─────────────────────────
+{
+  btwThreads.resetForTest()
+  const ask = scriptedAsk()
+  const channel = makePanelChannel(ask)
+  const frame = await mountTree(100, <BtwThreadScene channel={channel as never} onClose={() => {}} />)
+  await keys(frame, ['a', 'b', ESC, '\t', 'c'])
+  await delay(150)
+  check('F1. Esc 后 Tab 回到 composer 继续编辑', btwThreads.get('probe-session')?.draft === 'abc', JSON.stringify(btwThreads.get('probe-session')?.draft))
   await frame.app.unmount()
 }
 

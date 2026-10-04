@@ -39,7 +39,14 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
   const version = thread?.version ?? 0
   const busy = thread !== undefined && thread.activeTurnId !== null
   const [composerFocus, setComposerFocus] = React.useState(true)
-  const [caret, setCaret] = React.useState(0)
+  // The caret rides a ref too: two keys arriving before a re-render must
+  // see each other's caret (the draft itself is read from the store).
+  const caretRef = React.useRef(0)
+  const [caret, setCaretState] = React.useState(0)
+  const setCaret = React.useCallback((next: number) => {
+    caretRef.current = next
+    setCaretState(next)
+  }, [])
   const [notice, setNotice] = React.useState<{ readonly text: string; readonly failure: boolean } | null>(null)
 
   // badge（镜像 jobs：version/visible 驱动；可见即已读）。
@@ -90,7 +97,7 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
     btwThreads.setDraft(sessionId, '')
     setCaret(0)
     setNotice(null)
-  }, [channel, sessionId])
+  }, [channel, sessionId, setCaret])
 
   const newTopic = React.useCallback(() => {
     btwThreads.newTopic(sessionId)
@@ -102,7 +109,7 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
   const onKey = React.useCallback<PanelKeyHandler>((input, key) => {
     if (composerFocus) {
       const text = btwThreads.get(sessionId)?.draft ?? ''
-      const result = btwComposerKey({ text, caret }, input, key as Parameters<typeof btwComposerKey>[2])
+      const result = btwComposerKey({ text, caret: caretRef.current }, input, key as Parameters<typeof btwComposerKey>[2])
       if (result === null) return false
       if (result.exitFocus === true) { setComposerFocus(false); return true }
       if (result.submit === true) { submitDraft(); return true }
@@ -124,7 +131,7 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
     // 列表层不独占 Esc/←/→：返回 false 交宿主（Esc 回聊天、←/→ 切面板）。
     return false
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [composerFocus, caret, sessionId, submitDraft, newTopic, attachTurn])
+  }, [composerFocus, sessionId, submitDraft, newTopic, attachTurn, setCaret])
   usePanelInput(onKey, { active: focused && visible })
 
   // ── 头部：/btw + 首问标题（单行裁切）+ 新话题 + 上下文覆盖提示 ────────
