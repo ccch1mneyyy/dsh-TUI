@@ -447,6 +447,9 @@ const inflightImageDecodes = new Map<string, Promise<readonly TerminalImageSourc
  *  有界」都用它。 */
 let whaleGirlDecodeRequestCount = 0
 
+/** 测试重置时递增：重置前发起、重置后才完成的解码不得写进新缓存。 */
+let decodeGeneration = 0
+
 /** 解码一个动画并入库：成功进 LRU，失败进失败集（后续解析自动跳到兜底
  *  语义键）；同键并发请求共用在途 Promise，不重复解码。永不 reject、
  *  不触发任何 React 更新（消费方的时钟/事件驱动重渲染）。 */
@@ -454,14 +457,17 @@ function requestWhaleGirlAnimationFrames(kit: WhaleGirlImageKit, key: string): P
   const inflight = inflightImageDecodes.get(key)
   if (inflight !== undefined) return inflight
   whaleGirlDecodeRequestCount += 1
+  const generation = decodeGeneration
   const pending = decodeWhaleGirlAnimation(kit.dir, kit.byKey[key]!)
     .then(frames => {
+      if (generation !== decodeGeneration) return frames
       inflightImageDecodes.delete(key)
       if (frames === undefined) failedImageAnimations.add(key)
       else rememberDecodedAnimation(key, frames)
       return frames
     })
     .catch(() => {
+      if (generation !== decodeGeneration) return undefined
       inflightImageDecodes.delete(key)
       failedImageAnimations.add(key)
       return undefined
@@ -510,6 +516,7 @@ export function resetWhaleGirlImageCacheForTests(): void {
   failedImageAnimations.clear()
   decodedImageBytes = 0
   inflightImageDecodes.clear()
+  decodeGeneration += 1
   whaleGirlWindowCache.clear()
   whaleGirlDecodeRequestCount = 0
   publishDecodedImageCacheChange()
