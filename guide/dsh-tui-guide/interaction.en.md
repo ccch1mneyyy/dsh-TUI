@@ -16,7 +16,7 @@
 | `Ctrl+V` / `Alt+V` | Insert clipboard text or files; images are sent as durable attachments. Use `Alt+V` when the terminal intercepts `Ctrl+V` |
 | `Ctrl+G` | Edit the current input in an external editor (`$VISUAL` → `$EDITOR`); saving and quitting fills it back, `:cq`/non-zero exit keeps the draft; with neither variable set the TUI asks you to configure one (no `vi` fallback) |
 | `Ctrl+Shift+E` | Expand the fullscreen draft editor (or click the `⛶` affordance at the end of the input row): line numbers + current-line highlight + live line/char stats<br>`Enter` inserts a newline, `Ctrl+Enter` or the Send button sends, `Esc` or the Collapse button keeps the draft and returns<br>wheel-scrolls freely; click/drag/double-click selection work as in the inline prompt; remappable via `/settings` |
-| `Esc` | Ladder: close help → close the image preview → close the command menu → close the file menu (only the current `@` token)<br>→ **with a selection in the prompt input: only clear it (text untouched)** → with the docked-queue selector open: only leave the selector → interrupt the turn and dock the queued messages (no automatic re-send, see "Message delivery semantics") → clear non-empty input → double-tap on empty input = rewind<br>in fullscreen, an active mouse selection is cleared first (not copied) |
+| `Esc` | Ladder: close help → close the image preview → close the command menu → close the file menu (only the current `@` token)<br>→ **with a selection in the prompt input: only clear it (text untouched)** → with the held-queue selector open: only leave the selector → interrupt the turn and hold the queued messages (no automatic re-send, see "Message delivery semantics") → clear non-empty input → double-tap on empty input = rewind<br>in fullscreen, an active mouse selection is cleared first (not copied) |
 | `Ctrl+Z` | Undo the prompt draft's last word-level edit (text, caret and images together). Draft-only: a submit, a history recall (`Ctrl+R`/`↑`) or a session switch ends the history; it is NOT the message/conversation rewind behind `Esc Esc`. Remappable via `/settings` |
 | `Esc` / `Ctrl+C` / `Enter` while an image preview is open | Close the preview and restore the surface underneath; other keys are not passed through |
 | `Left` / `Right` in the image modal | Previous / next image, no wrapping; caret peeks keep arrows with the prompt |
@@ -288,24 +288,24 @@ While the model is working, three paths have different placement:
 
 - Undelivered messages appear above the editor.
 - `Alt/Option+Up` retrieves the latest one.
-- Pressing `Esc` while the model works interrupts the turn and docks the queued
+- Pressing `Esc` while the model works interrupts the turn and holds the queued
   messages above the input instead of re-sending them; the hint row reads
   `Press ↑ to edit queued messages, ⏎ to send now`. DSH and Claude behave the same.
-  - While docked and idle, `↑` on an empty input opens the queued-message
+  - With messages held and idle, `↑` on an empty input opens the queued-message
     selector: `↑`/`↓` move, `⏎` takes the selected message back into the input
-    for editing, `Esc` leaves the selector. You can also click a docked message
+    for editing, `Esc` leaves the selector. You can also click a held message
     (takes it back for editing; with a draft in the input the two swap, and
     `Ctrl+Z` swaps them back) or click the hint row (sends everything).
-  - `⏎` on an empty input sends the whole dock in order, exactly once; with a
-    draft in the input `⏎` sends only the draft and the dock stays parked, so
-    docked messages are never bundled with it.
-  - `Ctrl+Enter` (with a draft) interrupts the turn and sends the dock together
+  - `⏎` on an empty input sends all held messages in order, exactly once; with a
+    draft in the input `⏎` sends only the draft and the held messages stay, so
+    they are never bundled with it.
+  - `Ctrl+Enter` (with a draft) interrupts the turn and sends the held messages together
     with the draft right away.
   - When a turn ends normally, queued messages still flow into the next turn;
     `Ctrl+C` keeps the queue.
-  - Only messages the backend confirmed as withdrawn are docked. With an older
+  - Only messages the backend confirmed as withdrawn are held. With an older
     Claude CLI that cannot withdraw them, or when the withdrawal request fails,
-    the backend still runs them next turn; dsh-TUI un-docks them with a notice
+    the backend still runs them next turn; dsh-TUI stops holding them, says so,
     and never sends them twice.
 
 ## Session workflows

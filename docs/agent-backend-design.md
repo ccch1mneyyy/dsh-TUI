@@ -141,7 +141,7 @@ Record<keyof Options, …>`，SDK 增删选项时 `tsc` 会报错）。要点：
 - 放置映射：`steer` → `priority:'next'`（下一个工具轮次后并入当前回合；没有后续工具
   轮次时等同 followup），`followup` → 运行中用 `priority:'later'`、空闲时普通发送，
   `now` → `priority:'now'`。
-- 待发队列以 `command_lifecycle` 为准；中断回执 `still_queued` 用来校正停靠的队列。
+- 待发队列以 `command_lifecycle` 为准；中断回执 `still_queued` 用来校正暂存的队列。
 - thinking 可能只有 token 计数没有正文，界面支持"只有计数"的思考行。
 
 ### 审批、提问与对话框

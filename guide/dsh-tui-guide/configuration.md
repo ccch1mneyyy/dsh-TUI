@@ -69,6 +69,10 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 | `sidePanel.ratio` | `0.68`（数值，0.1–0.95） | 聊天列占内容宽度的比例；侧栏有焦点时 `+`/`-` 在当前会话内实时微调（不写回）。立即生效 |
 | `sidePanel.panels` | `todo,jobs,agents`（逗号分隔文本） | 启用的面板 id 与顺序（内置：`todo` `info` `trajectory` `jobs` `agents` `workspace` `companion`）；格式合法但暂无面板认领的 id 会留在标签栏等插件注册，格式非法的条目被拒绝。面板栏右端的 `⤢` 把当前面板放大成整屏（只对声明了整屏形态的面板出现）。立即生效 |
  | `companion.skin` | `deepy` | 宠物面板的皮肤：`deepy`（默认，deepy 小鲸鱼素材包）、`whaleGirl`（鲸娘表情包，22 个动画含互动反应）或 `whale`（与开屏同款分层像素鲸鱼）；面板需在 `sidePanel.panels` 加入 `companion` 启用。立即生效 |
+| `btw.contextTurns` | `4`（数值，1–8） | `/btw` 追问时带上的最近已完成问答组数；更早的组不进请求，线程和面板里仍保留。立即生效 |
+| `btw.contextBudget` | `24000`（数值，1000–200000） | `/btw` 追问携带的最近问答总字符数上限，超出时从最旧的一组开始丢。立即生效 |
+| `codeFrameStyle` | `light` | 回复里代码块的边框：`light` 只有顶部标签和左侧竖线，不多占行；`full` 是封闭的框。终端太窄时总是用纯文本 fence。立即生效 |
+| `turnUsageRow` | `false`（布尔） | 每回合末尾显示一行右对齐的用量（输入/输出、缓存、耗时、重试）；关闭时 `/tokens`、`/status` 和底栏悬停照样能看到这些数字 |
 | `modes` | 内置三档 | Shift+Tab 会话模式循环（plan/sandbox/approval 原子组合）；缺省为 默认 → 计划 → 完全访问 |
 | `activity` | `true` | 是否显示实时工作状态行 |
 | `activityFrames` | `moon8` | 工作状态动画预设；也可通过 `/activity` 修改。旧配置值 `claude` 读取时映射为 `moon8`，选择器不再显示该旧预设 |

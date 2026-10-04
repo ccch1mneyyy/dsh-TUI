@@ -68,7 +68,7 @@ never logged.
 
 Works the same as on DSH: streaming replies, thinking (a token count only when the
 model sends no thinking text), tool cards, `Ctrl+C` cancel, queued messages and
-the `Esc` dock, `/new`, `/status`, `/export`, `!cmd` / `!!cmd`, the IDE selection,
+holding the queue on `Esc`, `/new`, `/status`, `/export`, `!cmd` / `!!cmd`, the IDE selection,
 the git branch in the status line, `/clear` (clears the view only; Claude keeps
 its context).
 
@@ -90,7 +90,7 @@ Works, served by Claude:
 
 Not available (hidden from completion; typing one shows a notice and nothing is
 sent to the model): `/tree`, `/agentview`, `/bg`, `/home`, `/workspace`,
-`/preset`, `/provider`, `/logout`, `/balance`, `/config`, `/reload`, `/restart`,
+`/preset`, `/provider`, `/logout`, `/balance`, `/config`, `/reload`,
 `/setup`, `/init`, `/migrate`, `/skills`, `/plugins`, `/hooks`, `/add-dir`.
 Commands the DSH composition registers (such as `/goal` and `/plan`) do not appear
 either.
@@ -127,12 +127,13 @@ acceptEdits → plan (→ auto) and never reaches `bypassPermissions`; that one 
 only be picked explicitly in `/permission`.
 
 The `/permission` pick is remembered (`~/.dsh-tui/backends/claude/prefs.json`) and
-the next session starts in it. Start-mode precedence: the
-`DSH_TUI_CLAUDE_PERMISSION_MODE` environment variable > the remembered pick >
-Claude settings > `default`. A `defaultMode: bypassPermissions` in Claude settings
-is downgraded to `default` with a notice, so a cloned repository cannot silently
-switch off every check; starting in bypass from the remembered pick is announced
-in the transcript too.
+the next session starts in it, except `bypassPermissions`: it lasts for the current
+session only, a new session says once that it was not carried over, and you turn it
+on again with `/permission` when you want it. Start-mode precedence: the
+`DSH_TUI_CLAUDE_PERMISSION_MODE` environment variable (the only way to start in
+bypass) > the remembered pick > Claude settings > `default`. A
+`defaultMode: bypassPermissions` in Claude settings is downgraded to `default` with
+a notice, so a cloned repository cannot silently switch off every check.
 
 ## Sessions
 

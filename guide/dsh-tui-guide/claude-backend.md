@@ -55,7 +55,7 @@ dsh-TUI 可以把会话跑在 Claude Agent 后端上，而不是 DeepSeek Harnes
 ## 和 DSH 后端相比
 
 可用，行为与 DSH 一致：流式回复、思考（模型不给正文时只显示 token 数）、工具卡、
-`Ctrl+C` 中断、排队消息与 `Esc` 停靠、`/new`、`/status`、`/export`、`!cmd` / `!!cmd`、
+`Ctrl+C` 中断、排队消息与 `Esc` 暂存、`/new`、`/status`、`/export`、`!cmd` / `!!cmd`、
 IDE 选区、状态栏的 git 分支、`/clear`（只清屏，Claude 保留上下文）。
 
 可用，但由 Claude 提供：
@@ -76,7 +76,7 @@ IDE 选区、状态栏的 git 分支、`/clear`（只清屏，Claude 保留上�
 
 不可用（不出现在补全里，直接输入会提示不可用，不会发给模型）：`/tree`、`/agentview`、
 `/bg`、`/home`、`/workspace`、`/preset`、`/provider`、`/logout`、`/balance`、`/config`、
-`/reload`、`/restart`、`/setup`、`/init`、`/migrate`、`/skills`、`/plugins`、`/hooks`、
+`/reload`、`/setup`、`/init`、`/migrate`、`/skills`、`/plugins`、`/hooks`、
 `/add-dir`。DSH 组合注册的命令（如 `/goal`、`/plan`）也不会出现。
 
 启动时仍先到启动页；首启引导和工作区首页只在 DSH 下出现。带恢复目标的启动直接进入
@@ -103,10 +103,11 @@ IDE 选区、状态栏的 git 分支、`/clear`（只清屏，Claude 保留上�
 `bypassPermissions`，它只能在 `/permission` 里明确选择。
 
 `/permission` 的选择会记住（`~/.dsh-tui/backends/claude/prefs.json`），下一个会话按它
-启动。起始模式的优先级：环境变量 `DSH_TUI_CLAUDE_PERMISSION_MODE` > 记住的选择 >
+启动，`bypassPermissions` 除外：它只在当前会话有效，新会话不会沿用，启动时提示一次，
+需要时再用 `/permission` 打开。起始模式的优先级：环境变量
+`DSH_TUI_CLAUDE_PERMISSION_MODE`（唯一能直接以 bypass 启动的方式）> 记住的选择 >
 Claude 设置 > `default`。Claude 设置里的 `defaultMode: bypassPermissions` 会降为
-`default` 并提示，克隆来的仓库不能悄悄关掉所有确认；按记住的选择以 bypass 启动时，
-转录里也会提示一句。
+`default` 并提示，克隆来的仓库不能悄悄关掉所有确认。
 
 ## 会话
 
