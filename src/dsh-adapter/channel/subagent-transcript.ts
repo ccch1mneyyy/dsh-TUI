@@ -13,8 +13,8 @@
  *     must name the child; a UI-supplied id is never opened on its own;
  *  2. durability: when the agents registry still holds the child's exact
  *     live Session, the public `ctx.sessions.flush(session)` barrier runs
- *     first (no whenIdle wait, no Agent create/resume); if the flush fails
- *     the read falls back to whatever prefix is already persisted;
+ *     first (no whenIdle wait, no Agent create/resume); a failed or timed-out
+ *     flush falls back to whatever prefix is already persisted;
  *  3. windows: the child's own events are `[inheritedEventCount, total)`;
  *     the fork-inherited prefix is never paged (a seeded header without its
  *     exact cut fails closed). `total` comes from `stat().eventCount` when
@@ -198,7 +198,16 @@ export async function readChildTranscriptPage(
   //    the read below sees whatever prefix is already persisted).
   try {
     const live = deps.lookupChild(agentId)?.session
-    if (live !== undefined && live !== null) await deps.sessionsStore()?.flush(live as object)
+    const flush = live === undefined || live === null ? undefined : deps.sessionsStore()?.flush(live as object)
+    if (flush !== undefined) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const completed = await Promise.race([
+        flush.then(() => true, () => true),
+        new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), 2_000) }),
+      ])
+      if (!completed) process.stderr.write('dsh-tui: child transcript flush timed out after 2000ms\n')
+      if (timer !== undefined) clearTimeout(timer)
+    }
   } catch { /* best effort: the read below returns what is on disk */ }
   guard()
 

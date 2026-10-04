@@ -449,6 +449,15 @@ const rosterService = (ids: readonly string[]) => ({
   const degraded = await readChildTranscriptPage(flushFailDeps.deps, CHILD)
   check('G9 a failed flush keeps the provable persisted prefix', degraded !== null && degraded.uuids.join(',') === 'um-1,am-1')
 
+  const stalledDeps = makeDeps({
+    subagents: () => rosterService([CHILD]),
+    persistence: () => flushedMemory.source,
+    sessionsStore: () => ({ flush: () => new Promise<never>(() => undefined) }),
+    lookupChild: () => ({ session: liveSession }),
+  })
+  const afterStalledFlush = await readChildTranscriptPage(stalledDeps.deps, CHILD)
+  check('G10 a stalled flush times out and reads the persisted prefix', afterStalledFlush !== null && afterStalledFlush.uuids.join(',') === 'um-1,am-1')
+
   // an ended child (not in the registry) never flushes
   const endedFlushes: object[] = []
   const endedDeps = makeDeps({
@@ -458,9 +467,9 @@ const rosterService = (ids: readonly string[]) => ({
     lookupChild: () => undefined,
   })
   await readChildTranscriptPage(endedDeps.deps, CHILD)
-  check('G10 an ended child skips the flush barrier', endedFlushes.length === 0)
+  check('G11 an ended child skips the flush barrier', endedFlushes.length === 0)
 
-  check('G11 success paths also closed exactly once', flushedMemory.closeCount === flushedMemory.openCount && flushedMemory.openCount === 3, `open=${flushedMemory.openCount} close=${flushedMemory.closeCount}`)
+  check('G12 success paths also closed exactly once', flushedMemory.closeCount === flushedMemory.openCount && flushedMemory.openCount === 4, `open=${flushedMemory.openCount} close=${flushedMemory.closeCount}`)
 }
 
 // ── Section D: shared dedup / page prepend / live merge ────────────────────
