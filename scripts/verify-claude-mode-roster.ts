@@ -369,7 +369,7 @@ const fakeSettings = (defaultMode: unknown) => ({
     // StatusLine 的页脚/详情两处（行为级由 capability 断言覆盖，此处防
     // 未来重构悄悄拆线）。
     const { readFileSync: readSrc } = await import('node:fs')
-    const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url).pathname.replace(/^\//, ''), 'utf8')
+    const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url), 'utf8')
     const chatSrc = readRepo('../src/screens/Chat.tsx')
     const lineSrc = readRepo('../src/screens/StatusLine.tsx')
     check('model display: every Chat model prop prefers the display name', !chatSrc.includes('model={channel.model}') && (chatSrc.match(/model=\{channel\.modelDisplay \?\? channel\.model\}/g) ?? []).length === 4)

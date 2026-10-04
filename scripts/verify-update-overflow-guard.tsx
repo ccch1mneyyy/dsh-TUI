@@ -343,7 +343,7 @@ console.log('--- B: hotspots ---')
   // 接线 tripwire：三处关键落点各在源码里存在（行为级端到端由 C 组的
   // 边界恢复 + 用户真机覆盖；源码断言防未来重构悄悄拆线）。
   const { readFileSync: readSrc } = await import('node:fs')
-  const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url).pathname.replace(/^\//, ''), 'utf8')
+  const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url), 'utf8')
   const appSrc = readRepo('../src/ink/components/App.tsx')
   const chatSrc = readRepo('../src/screens/Chat.tsx')
   const skinsSrc = readRepo('../src/components/sidePanel/companion/skins.tsx')
