@@ -8,6 +8,8 @@ import { Divider } from './design-system/Divider.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { usePanelInput } from './sidePanel/usePanelInput.js'
 import type { SidePanelKeyFlags } from './sidePanel/types.js'
+import { AgentMessagesSummary } from './messages/AgentMessageFlow.js'
+import type { AgentMessageView } from './messages/agentTeam.js'
 
 export interface SubagentDashboardProps {
   subagents: readonly SubagentState[]
@@ -15,6 +17,11 @@ export interface SubagentDashboardProps {
    *  关侧栏——Esc 让给宿主（焦点回聊天，见 usePanelInput 契约）。 */
   onClose?: () => void
   onSelect?: (agentId: string) => void
+  /** 主屏只读 Agent View（design agent-team-full §4.1 Dashboard 入口）：
+   *  行点击/Enter 仍是 Detail；这是并立的专用动作（'v' 键或行内 ⤢）。 */
+  onOpenView?: (agentId: string) => void
+  /** 代理↔代理消息流（§5.4）：每行卡下渲染最后一条 from → to 摘要。 */
+  messages?: readonly AgentMessageView[]
   /** `panel` 挂在侧栏宿主里（去外层 padding、键盘走 usePanelInput 分发器）；
    *  default（缺省）与整屏形态逐字节一致。 */
   variant?: 'default' | 'panel'
@@ -59,6 +66,8 @@ export function SubagentDashboard({
   subagents,
   onClose,
   onSelect,
+  onOpenView,
+  messages,
   variant = 'default',
   focused = true,
   visible = true,
@@ -96,6 +105,14 @@ export function SubagentDashboard({
       if (selected) onSelect(selected.agentId)
       return
     }
+
+    // v = 主屏查看（专用动作，与 Enter=详情并立；design §4.1）。
+    if (input.toLowerCase() === 'v' && onOpenView) {
+      event.stopImmediatePropagation()
+      const selected = subagents[focusIndex]
+      if (selected) onOpenView(selected.agentId)
+      return
+    }
     
     // Consume all input while dashboard is open
     event.stopImmediatePropagation()
@@ -122,6 +139,12 @@ export function SubagentDashboard({
     if (isPanelPlainReturn(input, key)) {
       const selected = subagents[focusIndex]
       if (selected !== undefined) onSelect?.(selected.agentId)
+      return true
+    }
+
+    if (input.toLowerCase() === 'v' && onOpenView !== undefined) {
+      const selected = subagents[focusIndex]
+      if (selected !== undefined) onOpenView(selected.agentId)
       return true
     }
 
@@ -190,6 +213,17 @@ export function SubagentDashboard({
                     ? () => onSelect(subagent.agentId)
                     : undefined}
                 />
+                {messages !== undefined && messages.length > 0 && (
+                  <AgentMessagesSummary
+                    messages={messages.filter(message => message.from === subagent.agentId || message.to === subagent.agentId)}
+                    selfAgentId={subagent.agentId}
+                  />
+                )}
+                {onOpenView !== undefined && (
+                  <Box paddingLeft={1} onClick={() => onOpenView(subagent.agentId)}>
+                    <Text color="subtle">{`⤢ ${t('agent-view-open-action')}`}</Text>
+                  </Box>
+                )}
                 {index < subagents.length - 1 && (
                   <Text dimColor>{'─'.repeat(Math.max(20, Math.min(72, columns - 6)))}</Text>
                 )}

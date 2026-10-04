@@ -59,12 +59,15 @@ function clipLine(text: string, maxWidth: number): string {
  * working-activity preset (`/activity`), so the indicator follows the same
  * setting as the main spinner.
  */
-export function SubagentMessage({ subagent, marginTopOnTurn, activityFrames, onClick }: {
+export function SubagentMessage({ subagent, marginTopOnTurn, activityFrames, onClick, onOpenView }: {
   subagent: SubagentRow
   marginTopOnTurn: boolean
   activityFrames?: string
   isExpanded: boolean
   onClick?(event: ClickEvent): void
+  /** 主屏查看（design agent-team-full §4.1）：与卡片点击（→详情）并立的
+   *  明确动作；拦截冒泡，普通正文点击与 selection 语义不变。 */
+  onOpenView?(): void
 }): React.ReactNode {
   const settled = subagent.status === 'completed' || subagent.status === 'failed' || subagent.status === 'cancelled' || subagent.status === 'unknown'
   // 动画订阅仅限运行中的卡片：settled 后传 null 退出共享 clock（keepAlive
@@ -106,6 +109,23 @@ export function SubagentMessage({ subagent, marginTopOnTurn, activityFrames, onC
       <Text dimColor>·</Text><Text dimColor>{tokens(subagent)}</Text>
       <Text dimColor>·</Text><Text dimColor>{subagent.toolCalls.length} tools</Text>
       <Text dimColor>·</Text><Text color={info.color}>{info.label}</Text>
+      {onOpenView !== undefined && (
+        <Box
+          flexShrink={0}
+          marginLeft={1}
+          onClick={(event: ClickEvent) => {
+            // 拦截冒泡：这一格是「主屏查看」，不是卡片点击（→详情）。
+            event.stopImmediatePropagation()
+            onOpenView()
+          }}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+        >
+          {/* 字形位（与面板 ⤢ 全屏同一词汇）：卡片行是恒定高度的水流行，
+              长标签会把状态列顶折行；完整名称留给 Dashboard/Detail 入口。 */}
+          <Text color={hovered ? 'accent' : 'subtle'}>{'⤢'}</Text>
+        </Box>
+      )}
     </Box>
     {!settled && (lastRunning ?? previousDone) !== undefined && (
       <Text wrap="truncate">

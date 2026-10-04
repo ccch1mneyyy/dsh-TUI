@@ -72,6 +72,9 @@ import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
+import { AgentTranscriptScene } from './AgentTranscriptScene.js'
+import { agentViewStore } from '../components/sidePanel/agentViewStore.js'
+import { agentComposeFor, agentComposeTargetOf, agentTeamCapabilities, type AgentComposeCapability, type AgentComposeTarget, type AgentMessageView, type AgentViewSource } from '../components/messages/agentTeam.js'
 import type { PromptDraftCache } from '../components/promptDraftCache.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
 import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
@@ -1457,6 +1460,45 @@ export function Chat({
   /** Detail view for a specific subagent (opened from dashboard). */
   const [subagentDetailId, setSubagentDetailId] = React.useState<string | null>(null)
   /**
+   * 主屏只读 Agent View（design agent-team-full §4）：Chat 自己的场景层——
+   * 父 Chat 树/Channel/PromptInput 保持挂载（draft 走 draftCache 往返），
+   * 场景只借走屏幕与键盘；Esc 按来源栈 pop（chat/dashboard/detail/card）。
+   * 不建第二个 Channel，不触碰 attach/resume/createChannel。
+   */
+  const [agentView, setAgentView] = React.useState<{ agentId: string; source: AgentViewSource } | null>(null)
+  const openAgentView = React.useCallback((agentId: string, source: AgentViewSource): void => {
+    setAgentView({ agentId, source })
+  }, [])
+  /** 转录卡入口的稳定句柄：MessageList 的 memo 行按 props 身份比较，内联
+   *  箭头会让每个流式 tick 重渲染全部落定行（verify-tool-history-window）。 */
+  const openSubagentViewFromCard = React.useCallback((agentId: string, rowId: number): void => {
+    openAgentView(agentId, { kind: 'transcript-card', rowId })
+  }, [openAgentView])
+  // 侧栏 agents 面板 / 其 Detail 的主屏查看请求（面板没有 Chat 的场景 state）。
+  React.useEffect(() => agentViewStore.subscribe(() => {
+    const request = agentViewStore.get()
+    if (request === null) return
+    const source: AgentViewSource = request.source === 'agents-dashboard'
+      ? { kind: 'agents-dashboard', ...(request.panel ? { panel: true as const } : {}) }
+      : { kind: 'agent-detail', agentId: request.agentId, ...(request.panel ? { panel: true as const } : {}) }
+    setAgentView({ agentId: request.agentId, source })
+  }), [])
+  /** Esc 的返回路由：面板来源回面板（路由经模块记忆保真），整屏来源回整屏。 */
+  const exitAgentView = React.useCallback((source: AgentViewSource): void => {
+    setAgentView(null)
+    const sidePanel = sidePanelRef.current
+    const panelReturn = (sidePanel !== null && sidePanel.split && sidePanel.enabledPanelIds.includes('agents'))
+    if (source.kind === 'agents-dashboard') {
+      if (source.panel === true && panelReturn) sidePanel.openPanel('agents', { focus: true })
+      else setSubagentDashboardOpen(true)
+      return
+    }
+    if (source.kind === 'agent-detail') {
+      if (source.panel === true && panelReturn) sidePanel.openPanel('agents', { focus: true })
+      else setSubagentDetailId(source.agentId)
+    }
+  }, [])
+  /**
    * Hidden `/deepseek` easter egg: each invocation bumps this key so the
    * logo header remounts and replays the whale spout + text shimmer.
    */
@@ -1497,6 +1539,7 @@ export function Chat({
   // 覆盖屏全部收起时收回授权：下一次打开必须再经过落地页自己的交互。
   const launchpadCoverScreenUp = supervisorOpen || treeOpen || settingsOpen
     || jobsPanelOpen || subagentDashboardOpen || subagentDetailId !== null || sceneOpen
+    || agentView !== null
   React.useEffect(() => {
     if (!launchpadCoverScreenUp) launchpadCoverRef.current = false
   }, [launchpadCoverScreenUp])
@@ -4290,6 +4333,9 @@ export function Chat({
     if (settingsOpen) return
     // Subagent dashboard or detail scene: it owns the keyboard while open.
     if (subagentDashboardOpen || subagentDetailId !== null) return
+    // The main-screen Agent View owns the whole terminal while open (its
+    // composer, scrolling and Esc layering live in the scene).
+    if (agentView !== null) return
     // The `/jobs` panel replaces the conversation too, so it owns Esc (close)
     // and k (kill) while open. Unguarded, Esc meant to CLOSE the panel also
     // reached the chat:cancel branch below whenever a turn was in flight —
@@ -5790,6 +5836,7 @@ export function Chat({
   )
     const screenOpen = channel.pluginScene !== undefined || supervisorOpen || settingsOpen
     || subagentDetailId !== null || subagentDashboardOpen || sceneOpen
+    || agentView !== null
     || launchpadShown || onboardingOpen
   if (interruptPanel !== null && screenOpen) {
     const node = (
@@ -5976,6 +6023,36 @@ export function Chat({
     return fullscreen ? screen : <AlternateScreen>{screen}</AlternateScreen>
   }
 
+  // Main-screen read-only Agent View (design agent-team-full §4): a scene
+  // layer over the mounted Chat — no second Channel and no Channel identity
+  // change (never attachToAgent/resumeTo/createChannel). Rendering INSTEAD of
+  // the conversation borrows the screen the same way the trajectory scene
+  // does; Chat stays mounted, so the parent's rows/draft/pending/usage live
+  // on and the round trip is invisible to them. Esc pops the source stack.
+  if (agentView !== null && launchpadGate()) {
+    const viewSubagent = channel.subagents.find(s => s.agentId === agentView.agentId)
+    if (!viewSubagent) {
+      // The roster lost this child (session switch): pop the view, don't crash.
+      setAgentView(null)
+      return null
+    }
+    const agentTeamFace = agentTeamCapabilities(channel.subagentControl)
+    const viewMessages = agentTeamFace?.agentMessages !== undefined ? agentTeamFace.agentMessages(agentView.agentId) : []
+    const viewTarget = agentComposeTargetOf(agentView.agentId, new Map(channel.subagents.map(s => [s.agentId, s.description])))
+    const viewCapability = agentComposeFor(agentTeamFace, viewTarget)
+    const viewScene = (
+      <AgentTranscriptScene
+        subagent={viewSubagent}
+        source={agentView.source}
+        onExit={() => exitAgentView(agentView.source)}
+        {...(channel.subagentControl.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
+        messages={viewMessages}
+        {...(viewCapability === undefined ? {} : { compose: { capability: viewCapability, target: viewTarget } })}
+      />
+    )
+    return fullscreen ? viewScene : <AlternateScreen>{viewScene}</AlternateScreen>
+  }
+
   // Subagent detail scene: displays detailed view of a specific subagent.
   // Like the browser and settings, it replaces the conversation entirely.
   if (subagentDetailId !== null && launchpadGate()) {
@@ -5986,11 +6063,18 @@ export function Chat({
       openSubagentDashboard()
       return null
     }
+    const detailFace = agentTeamCapabilities(channel.subagentControl)
+    const detailMessages = detailFace?.agentMessages !== undefined ? detailFace.agentMessages(subagent.agentId) : []
+    const detailTarget = agentComposeTargetOf(subagent.agentId, new Map(channel.subagents.map(s => [s.agentId, s.description])))
+    const detailCapability = agentComposeFor(detailFace, detailTarget)
     const scene = (
       <SubagentDetailScene
         subagent={subagent}
         onInterrupt={(id) => channel.subagentControl.interrupt(id)}
         {...(channel.subagentControl.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
+        onOpenView={() => openAgentView(subagent.agentId, { kind: 'agent-detail', agentId: subagent.agentId })}
+        messages={detailMessages}
+        {...(detailCapability === undefined ? {} : { compose: { capability: detailCapability, target: detailTarget } })}
         onBack={() => {
           setSubagentDetailId(null)
           setSubagentDashboardOpen(true)
@@ -6024,6 +6108,7 @@ export function Chat({
   // Subagent dashboard: displays all active and completed subagents.
   // Like the browser and settings, it replaces the conversation entirely.
   if (subagentDashboardOpen && launchpadGate()) {
+    const dashboardFace = agentTeamCapabilities(channel.subagentControl)
     const dashboard = (
       <SubagentDashboard
         subagents={[...channel.subagents]}
@@ -6031,6 +6116,8 @@ export function Chat({
           setSubagentDashboardOpen(false)
           setSubagentDetailId(id)
         }}
+        onOpenView={(id) => openAgentView(id, { kind: 'agents-dashboard' })}
+        messages={dashboardFace?.agentMessages !== undefined ? dashboardFace.agentMessages() : undefined}
         onClose={() => setSubagentDashboardOpen(false)}
       />
     )
@@ -6418,6 +6505,7 @@ export function Chat({
           onUnseenCount={setUnseenCount}
           onTimeline={setTimeline}
           onOpenSubagent={setSubagentDetailId}
+          onOpenSubagentView={openSubagentViewFromCard}
           onOpenJobs={openJobsPanel}
           onOpenFile={openFileActions}
           sessionCwd={channel.cwd}

@@ -365,6 +365,7 @@ export function MessageList({
   failureHintRowId,
   failureHint,
   onOpenSubagent,
+  onOpenSubagentView,
   onOpenJobs,
   onWatchJobOutput,
   onOpenFile,
@@ -466,6 +467,8 @@ export function MessageList({
   failureHint?: string
   /** 打开子代理详情场景（transcript 内点击子代理卡）。 */
   onOpenSubagent?: (agentId: string) => void
+  /** 主屏只读 Agent View（design agent-team-full §4.1 转录卡入口）。 */
+  onOpenSubagentView?: (agentId: string, rowId: number) => void
   /** 打开 /jobs 后台任务面板（transcript 内点击任务卡）。 */
   onOpenJobs?: (focusId?: string) => void
   /** 点击工具卡内的文件路径（打开文件操作菜单）。 */
@@ -1474,6 +1477,7 @@ export function MessageList({
               onToggleStreamView={onToggleStreamView}
               streamViewToggled={streamViewToggledRows.has(row.id)}
               onOpenSubagent={onOpenSubagent}
+          onOpenSubagentView={onOpenSubagentView}
               onOpenJobs={onOpenJobs}
               onWatchJobOutput={onWatchJobOutput}
               onOpenFile={onOpenFile}
@@ -1569,6 +1573,7 @@ type MemoRowProps = {
   /** 是否反转该流式行的 thinkingFold 默认视图。 */
   streamViewToggled: boolean
   onOpenSubagent: ((agentId: string) => void) | undefined
+  onOpenSubagentView: ((agentId: string, rowId: number) => void) | undefined
   onOpenJobs: ((focusId?: string) => void) | undefined
   onWatchJobOutput: ((id: string) => () => void) | undefined
   onOpenFile: ((path: string) => void) | undefined
@@ -1642,6 +1647,7 @@ function TranscriptRow({
   onToggleStreamView,
   streamViewToggled,
   onOpenSubagent,
+  onOpenSubagentView,
   onOpenJobs,
   onWatchJobOutput,
   onOpenFile,
@@ -1917,6 +1923,7 @@ function TranscriptRow({
             activityFrames={activityFrames}
             isExpanded={isExpanded}
             onClick={openSubagent}
+            onOpenView={onOpenSubagentView === undefined ? undefined : () => onOpenSubagentView(subagent.agentId, rowId)}
           />
         </Box>
       )
