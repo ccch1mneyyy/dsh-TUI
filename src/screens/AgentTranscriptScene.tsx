@@ -104,6 +104,12 @@ export interface AgentTranscriptSceneProps {
  */
 export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript, messages = [], compose, roster, onSwitchAgent }: AgentTranscriptSceneProps): React.ReactNode {
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
+  const followRef = React.useRef(true)
+  React.useEffect(() => {
+    const handle = scrollRef.current
+    if (handle === null) return undefined
+    return handle.subscribe(() => { followRef.current = handle.isSticky() })
+  }, [])
   const { rows, columns } = useTerminalSize()
   const isRunning = subagent.status === 'running' || subagent.status === 'starting'
 
@@ -145,6 +151,7 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
   // the previously viewed agent lingers above the fold.
   React.useEffect(() => {
     setSiblingCursor(0)
+    followRef.current = true
     scrollRef.current?.scrollTo(0)
   }, [agentId])
 
@@ -228,11 +235,15 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
     event.stopImmediatePropagation()
   }, { isActive: true })
 
-  // tail -f while the child runs (the Detail transcript page's rhythm).
+  // Follow the tail while the child runs, until the user scrolls away from
+  // the bottom (wheel, arrows, page keys); back at the bottom it follows
+  // again. The subscription reads the sticky bit when the scroll settles,
+  // so the view's own scrollTo/scrollToBottom calls land correctly too.
   const tailLength = subagent.outputEvents.length
   React.useEffect(() => {
-    if (!isRunning) return
-    scrollRef.current?.scrollToBottom()
+    const handle = scrollRef.current
+    if (!isRunning || handle === null) return
+    if (followRef.current || handle.isSticky()) handle.scrollToBottom()
   }, [isRunning, tailLength])
 
   const headerWidth = Math.max(20, columns - 8)

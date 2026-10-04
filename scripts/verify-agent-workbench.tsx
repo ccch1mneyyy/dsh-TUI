@@ -24,6 +24,8 @@
  *   W6  转录分页：代理消息只落在它所属的那一页（载入更早不重复、newest
  *       页不收更早页的消息）；载入更早在途时切换代理，旧代理的更早页不会
  *       拼进新代理的转录；live 合并不改写历史叶子。
+ *   W7  运行中跟尾：新输出把视图钉到底部；用户上滚后新输出不再把视图
+ *       拽回底部，滚回底部后恢复跟随。
  *
  * 运行：node --import tsx/esm scripts/verify-agent-workbench.tsx
  */
@@ -493,6 +495,9 @@ console.log('--- W6: transcript paging ---')
     () => React.createElement(AgentTranscriptScene, sceneProps(rowA)),
     async frame => {
       await settled(() => frame.screen().includes('newest page tail'))
+      // useInput swaps in the new handler in a passive effect: a key sent in
+      // the same tick as the frame can still reach the previous render's.
+      await sleep(30) // 固定窗:pacing 等被动 effect 换上新的按键处理器
       frame.stdin.write('o')
       check('W6 场景载入更早页', await settled(() => frame.screen().includes('older page text')), frame.lines().slice(0, 12).join('|'))
       const count = (needle: string): number => frame.screen().split(needle).length - 1
@@ -504,6 +509,35 @@ console.log('--- W6: transcript paging ---')
       releaseOlder?.(historyPage([ev('assistant.message', { anchor: 'z1', time: NOW - 200_000, blocks: [{ type: 'text', text: 'alpha oldest leak' }] })], { hasOlder: false, skippedFromStart: 0 }))
       await sleep(100) // 固定窗:探针 负向断言：给迟到的更早页留出拼接的时间
       check('W6 切换代理后旧代理的更早页不拼进来', !frame.screen().includes('alpha oldest leak') && frame.screen().includes('beta newest body'), frame.lines().slice(0, 10).join('|'))
+    },
+  )
+}
+
+// ── W7: tail follow yields to the user's scroll ──────────────────────────
+console.log('--- W7: tail follow ---')
+{
+  const lines = (count: number): Array<Record<string, unknown>> =>
+    Array.from({ length: count }, (_, index) => ({ kind: 'text', text: 'tail line ' + String(index).padStart(3, '0'), at: NOW, settled: true }))
+  const running = (count: number): Record<string, unknown> => makeRow('agent-tail', { status: 'running', completedAt: undefined, outputEvents: lines(count) })
+  const props = (count: number): Record<string, unknown> => ({ subagent: running(count), source: { kind: 'agents-dashboard' }, onExit: () => {} })
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, props(60)),
+    async frame => {
+      check('W7 运行中钉在尾部', await settled(() => frame.screen().includes('tail line 059')), frame.lines().slice(-6).join('|'))
+      for (let index = 0; index < 4; index += 1) {
+        frame.stdin.write('\x1b[A')
+        await sleep(20) // 固定窗:pacing 逐键滚动
+      }
+      await settled(() => !frame.screen().includes('tail line 059'))
+      frame.rerender(React.createElement(AgentTranscriptScene, props(64)))
+      await sleep(150) // 固定窗:探针 负向断言：给错误的跟尾留出发生的时间
+      check('W7 上滚后新输出不把视图拽回底部', !frame.screen().includes('tail line 063'), frame.lines().slice(-6).join('|'))
+      frame.stdin.write('\x1b[6~')
+      await sleep(20) // 固定窗:pacing 滚回底部
+      frame.stdin.write('\x1b[6~')
+      await settled(() => frame.screen().includes('tail line 063'))
+      frame.rerender(React.createElement(AgentTranscriptScene, props(68)))
+      check('W7 滚回底部后恢复跟随', await settled(() => frame.screen().includes('tail line 067')), frame.lines().slice(-6).join('|'))
     },
   )
 }
