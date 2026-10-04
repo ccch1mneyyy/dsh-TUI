@@ -955,11 +955,10 @@ function buildHoverDetail(
       // friendly/alias name), the hover shows BOTH — the requested alias the
       // user picked and the raw id the route runs. Identical strings render
       // once; nothing is invented when no mapping is known.
-      const display = channel.modelDisplay
       return (
         <Text wrap="truncate">
-          {dim('model ')}{display ?? channel.model}
-          {display !== undefined && display !== channel.model
+          {dim('model ')}{channel.modelDisplay ?? channel.model}
+          {channel.modelDisplay !== undefined && channel.modelDisplay !== channel.model
             ? <>{' ('}{channel.model}{')'}</>
             : null}
           {' · '}{dim('provider ')}{channel.provider}
