@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Box, Text, useTerminalSize } from '../ui.js'
+import { Box, Text, useTerminalSize, useAnimationFrame } from '../ui.js'
 import type { SubagentState } from '../dsh-adapter/subagents.js'
 import { t } from '../i18n.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
@@ -20,6 +20,7 @@ export interface SubagentCardProps {
 export function SubagentCard({ subagent, focused, onClick, variant = 'default' }: SubagentCardProps): React.ReactNode {
   const panelMode = variant === 'panel'
   const running = subagent.status === 'running' || subagent.status === 'starting'
+  const [clockRef] = useAnimationFrame(running ? 1000 : null)
   // Unknown rows have no completion time, so they do not get a fabricated duration.
   const elapsed = running
     ? Date.now() - subagent.startedAt
@@ -51,7 +52,13 @@ export function SubagentCard({ subagent, focused, onClick, variant = 'default' }
   if (columns >= 44) metaParts.push(`${total || '—'} tok`)
   if (columns >= 34 && (!panelMode || toolsCount > 0)) metaParts.push(`${toolsCount} tools`)
   const meta = metaParts.join(' · ')
+  const panelMeta = [
+    subagent.model ?? subagent.provider,
+    subagent.effort,
+    shownDuration === undefined ? undefined : formatDuration(shownDuration),
+  ].filter(part => part !== undefined && part !== '').join(' · ')
   return <Box
+    ref={clockRef}
     flexDirection="column"
     paddingLeft={1}
     marginBottom={panelMode ? 0 : 1}
@@ -77,12 +84,13 @@ export function SubagentCard({ subagent, focused, onClick, variant = 'default' }
           <Text dimColor>{t('subagent-mode-one-shot')}</Text>
         </Box>
       )}
-      {meta !== '' && (
+      {!panelMode && meta !== '' && (
         <Box flexShrink={0} marginLeft={1}>
           <Text dimColor wrap="truncate-end">{meta}</Text>
         </Box>
       )}
     </Box>
-    {liveLine !== undefined && !panelMode && <Text dimColor wrap="truncate">{`  │ ${liveLine}`}</Text>}
+    {panelMode && panelMeta !== '' && <Box paddingLeft={3}><Text dimColor wrap="wrap">{panelMeta}</Text></Box>}
+    {liveLine !== undefined && <Text dimColor wrap="truncate">{`  │ ${liveLine}`}</Text>}
   </Box>
 }

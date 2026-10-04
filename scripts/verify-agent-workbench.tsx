@@ -465,6 +465,23 @@ console.log('--- W4: dashboard children/peers partition ---')
   )
 }
 
+// Narrow agent rows retain their catalog metadata and latest streamed output.
+{
+  const { SubagentCard } = await import('../src/components/SubagentCard.js')
+  const agent = makeRow('agent-meta', { description: 'Agent metadata', status: 'running', model: 'glm-5.3', effort: 'max', reportedDurationMs: 720000, output: ['old stream line', 'LATEST-PREVIEW'] })
+  for (const cols of [28, 34]) {
+    await withTerminal(
+      () => React.createElement(SubagentCard, { subagent: agent as never, variant: 'panel' }),
+      async frame => {
+        check('metadata ' + cols + ': model, effort and elapsed stay visible', await settled(() => frame.screen().includes('glm-5.3 · max · 12m0s')), frame.lines().slice(0, 4).join('|'))
+        check('metadata ' + cols + ': live preview remains one compact row', frame.screen().includes('LATEST-PREVIEW') && !frame.screen().includes('old stream line'))
+        check('metadata ' + cols + ': panel prefix and zero tools stay omitted', !frame.screen().includes(t('subagent-card-prefix')) && !frame.screen().includes('0 tools'))
+      },
+      cols,
+    )
+  }
+}
+
 // ── W6: transcript paging with the agent message feed ─────────────────────
 console.log('--- W6: transcript paging ---')
 {
