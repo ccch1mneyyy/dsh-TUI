@@ -143,10 +143,15 @@ try {
   for (const name of ['new', 'clear', 'status', 'cost', 'doctor', 'help', 'exit', 'theme', 'lang']) {
     check(`generic /${name} is offered`, offered.includes(name))
   }
-  for (const name of ['preset', 'tree', 'trace', 'rewind', 'fork', 'resume', 'model', 'effort', 'compact', 'balance', 'workspace', 'agents', 'jobs', 'mcp']) {
+  for (const name of ['preset', 'tree', 'rewind', 'fork', 'resume', 'model', 'effort', 'compact', 'balance', 'workspace', 'agents', 'jobs', 'mcp']) {
     check(`/${name} is hidden without its capability`, !offered.includes(name))
   }
   check('snapshot commands == offered list', JSON.stringify(channel.backendCapabilities.commands) === JSON.stringify(offered))
+  // 三态契约（设计 §④ 轨迹裁决）：/trace 的入口在每个后端一致（四入口同
+  // 口径）；不支持的后端由 channel.trajectorySource() 报告 unsupported——
+  // 能力判定读组合的结构声明，不是命令清单、更不是 backendId。
+  check('/trace is offered on every backend (three-state entry contract)', offered.includes('trace'))
+  check('the trajectory source reports unsupported structurally', channel.trajectorySource() === 'unsupported')
   // main's composition facts (`ChannelUi.capabilities()`) for a session no
   // extension describes: no compact capability → `/compact` has no route.
   check('composition facts without compact: /compact and /plan have no route', channel.capabilities().compact.route === 'none' && channel.capabilities().plan.route === 'none' && !channel.capabilities().skills)

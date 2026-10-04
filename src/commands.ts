@@ -172,6 +172,10 @@ const LOCAL_COMMAND_REQUIREMENTS: ReadonlyMap<string, LocalCommandRequirement> =
   ['model', 'models'], ['effort', 'effort'], ['agents', 'subagents'], ['jobs', 'tasks'], ['mcp', 'mcp'],
   ['context', 'context'], ['login', 'login'],
   ['recap', 'sideQuery'], ['btw', 'sideQuery'], ['rename', 'rename'], ['color', 'color'],
+  // 三态契约（设计 §④）：/trace 在每个后端都入口一致——不开设「隐藏入口 +
+  // 点了再弹失败通知」的分叉；不支持的后端打开的是诚实的 unsupported 态，
+  // 由 channel.trajectorySource() 报告说了算（不是命令清单说了算）。
+  ['trace', 'any'],
 ])
 
 /** The requirement of one built-in command name (unlisted → `dsh`). */

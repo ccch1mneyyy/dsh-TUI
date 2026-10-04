@@ -150,7 +150,11 @@ try {
   stdin.write('\x1b[Z')
   check('Shift+Tab without native modes explains itself', await settled(() => toasts().includes(t('capability-unavailable-backend', { name: 'mode' }))), toasts())
   stdin.write('\x14')
-  check('Ctrl+T without a trace explains itself and opens no scene', await settled(() => toasts().includes(t('capability-unavailable-backend', { name: 'trace' }))) && !screen().includes('trajectory'), toasts())
+  // 三态契约（设计 §④）：无轨迹源的后端上 Ctrl+T 照常打开轨迹场景，场景
+  // 渲染诚实的 unsupported 文案——不再弹能力缺失通知、不再拒绝入口。
+  check('Ctrl+T without a trace source opens the honest unsupported scene', await settled(() => screen().includes(t('trajectory-unsupported'))) && !toasts().includes(t('capability-unavailable-backend', { name: 'trace' })), screen())
+  stdin.write('q')
+  check('the unsupported scene returns to the conversation', await settled(() => !screen().includes(t('trajectory-unsupported'))))
   stdin.write('\x1b')
   // 固定窗:pacing the double-Esc detector needs two distinct key events.
   await sleep(80)

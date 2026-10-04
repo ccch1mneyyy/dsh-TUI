@@ -1518,13 +1518,11 @@ export function Chat({
    * straight back into the panel it is trying to leave.
    */
   const openScene = React.useCallback((options?: { readonly fullscreen?: boolean }) => {
-    // The trajectory reads the DSH session trace; a backend without it would
-    // open an empty scene (capability snapshots absent on test stubs = DSH).
-    const capabilities = channel.backendCapabilities as Channel['backendCapabilities'] | undefined
-    if (capabilities !== undefined && !capabilities.commands.includes('trace')) {
-      channel.notify(t('capability-unavailable-backend', { name: 'trace' }), { color: 'warning', timeoutMs: 4000 })
-      return
-    }
+    // Three-state contract (design §④ 轨迹裁决): /trace, Ctrl+T, the sidebar
+    // tab and the ⤢ outlet all OPEN the trajectory — a backend whose
+    // composition mounted no trajectory source reports 'unsupported' and the
+    // scene/panel render that state honestly. No capability notice, no
+    // refusal: the entry points must never disagree about the capability.
     seenFailuresRef.current = trajectoryRef.current?.counts.errors ?? 0
     setTrajectorySeen(previous => {
       if (!previous) writeTrajectorySeen()

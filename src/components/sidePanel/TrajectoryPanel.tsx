@@ -281,7 +281,41 @@ export function TrajectoryPanel({ width, height, focused, visible }: PanelProps)
   )
   usePanelInput(onKey, { active: focused && visible })
 
-  // ── empty state ───────────────────────────────────────────────────────────
+  // ── unsupported state (design §④ 轨迹裁决) ─────────────────────────────────
+  // The channel's trajectorySource() report decides, never the node count:
+  // a backend that mounted no source (Claude today) must not masquerade as
+  // "no turns yet". The copy names the backend's gap, promises no future
+  // data, and the ⤢ outlet is gone (SidePanelColumn hides it) — the
+  // fullscreen line below explains why instead of leaving a dead button.
+  // Tolerant read: headless fallback probes mount this panel with a partial
+  // channel, and absence of the report means "legacy channel" = old behavior.
+  const source = channel?.trajectorySource?.()
+  if (source === 'unsupported') {
+    // Copy selection only (the STATE above is structural): the Claude
+    // backend gets its specifically-worded line, any other source-less
+    // backend the generic one.
+    const unsupportedLine =
+      channel?.backendCapabilities?.backendId === 'claude'
+        ? t('trajectory-unsupported-claude')
+        : t('trajectory-unsupported')
+    return (
+      <Box ref={ref} flexDirection="column" width="100%" paddingX={1}>
+        <Box marginTop={1}>
+          <Text color="subtle" wrap="truncate">
+            {truncateWidth(unsupportedLine, contentWidth)}
+          </Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text dimColor italic wrap="truncate">
+            {truncateWidth(t('trajectory-unsupported-fullscreen'), contentWidth)}
+          </Text>
+        </Box>
+      </Box>
+    )
+  }
+
+  // ── empty state (supported + no events yet — the ONLY state allowed to
+  //    promise data once turns happen) ────────────────────────────────────────
   if (empty) {
     return (
       <Box ref={ref} flexDirection="column" width="100%" paddingX={1}>
