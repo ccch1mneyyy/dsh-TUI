@@ -2,9 +2,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, type LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandCompletionNode } from '../../commands.js'
-import { nearestLowerEffort, readEffortPref, resolveEffortDefault, writeEffortPref } from '../../effortPrefs.js'
+import { nearestLowerEffort, readEffortPref, resolveEffortDefault, writeEffortPref, STANDARD_EFFORT_LADDER } from '../../effortPrefs.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
-import { getLang, t, tOr, type Lang } from '../../i18n.js'
+import { getLang, t, tOr, type I18nKey, type Lang } from '../../i18n.js'
 import { migratePresetPref, writePresetPref } from '../../presetPrefs.js'
 import { presetDisplayId, resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from '../preset-resolution.js'
 import type { DshChannelBinding } from './binding.js'
@@ -36,7 +36,10 @@ export function createModelActions(
   const { owner, selection, notify } = deps
   const llmRuntime = ctx.get('llm') as
     | {
-      resolveModelInfo(provider: string, model: string): Promise<{ context?: { contextWindow: number }; reasoning?: { efforts: ReadonlyArray<{ id: string; name: string; description?: string }>; defaultEffort?: string } }>
+      // `reasoning` on the wire is `true` for rows that declare support
+      // without a tier list (pi-ai zai glm-5.3*); the object form may omit
+      // `efforts`. See tiersOf for how each shape resolves.
+      resolveModelInfo(provider: string, model: string): Promise<{ context?: { contextWindow: number }; reasoning?: boolean | { efforts?: ReadonlyArray<{ id: string; name: string; description?: string }>; defaultEffort?: string } }>
       listProviders(): readonly { id: string; name: string }[]
       listModels(provider: string): Promise<readonly LlmModelInfo[]>
     }
@@ -78,15 +81,46 @@ export function createModelActions(
       deps.checkContextWarning()
     }
   }
+  /** Localized label of a standard ladder tier (the claude-effort-* family
+   * is the repo's existing vocabulary for these five names). */
+  const STANDARD_EFFORT_LABEL_KEYS: Record<string, I18nKey> = {
+    low: 'claude-effort-low',
+    medium: 'claude-effort-medium',
+    high: 'claude-effort-high',
+    xhigh: 'claude-effort-xhigh',
+    max: 'claude-effort-max',
+  }
+  const standardEffortLabel = (id: string): string => {
+    const key = STANDARD_EFFORT_LABEL_KEYS[id]
+    return key === undefined ? id : tOr(key, id)
+  }
+  /** The standard ladder as picker options, resolved per call so a language
+   * switch relabels tiers with no cache to invalidate. */
+  const standardEffortOptions = (): Array<{ id: string; name: string }> =>
+    STANDARD_EFFORT_LADDER.map(id => ({ id, name: standardEffortLabel(id) }))
+  /** Effort tiers for one route-metadata answer. A row that declares
+   * reasoning support WITHOUT a tier list — `reasoning: true`, or an object
+   * whose `efforts` is absent (pi-ai zai rows for glm-5.3*) — gets the
+   * STANDARD ladder: the kernel accepts the standard ids and validates at
+   * set time, so offering them is honest, while guessing nothing would hide
+   * tiers the route really runs. An EXPLICIT `efforts: []` says the route
+   * supports none and is respected verbatim, as is any declared list;
+   * `reasoning` absent/false offers nothing. */
+  const tiersOf = (reasoning: boolean | { efforts?: ReadonlyArray<{ id: string; name: string; description?: string }>; defaultEffort?: string } | undefined): ReadonlyArray<{ id: string; name: string; description?: string }> => {
+    if (reasoning === true) return standardEffortOptions()
+    if (reasoning === undefined || reasoning === false) return []
+    if (reasoning.efforts !== undefined) return reasoning.efforts
+    return standardEffortOptions()
+  }
   const resolveEfforts = async (capture: EffortCapture): Promise<EffortResult | 'unavailable' | 'error' | 'stale'> => {
     if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return 'unavailable'
     try {
       const info = await llmRuntime.resolveModelInfo(capture.provider, capture.model)
       applyRouteMetadata(capture, info)
       if (!effortCurrent(capture)) return 'stale'
-      const efforts = info.reasoning?.efforts ?? []
+      const efforts = tiersOf(info.reasoning)
       state.effortLevels = efforts.map(level => level.id)
-      return { efforts, defaultEffort: info.reasoning?.defaultEffort }
+      return { efforts, defaultEffort: typeof info.reasoning === 'object' && info.reasoning !== null ? info.reasoning.defaultEffort : undefined }
     } catch (error) {
       if (!effortCurrent(capture)) return 'stale'
       notify(t('effort-read-failed', { error: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
@@ -164,7 +198,7 @@ export function createModelActions(
       if (generation !== effortLevelsGeneration) return
       applyRouteMetadata(capture, info)
       if (!effortCurrent(capture)) return
-      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
+      state.effortLevels = tiersOf(info.reasoning).map(level => level.id)
       state.emit()
     }).catch(() => undefined)
   }

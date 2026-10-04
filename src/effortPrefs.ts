@@ -50,8 +50,18 @@ export function resolveEffortDefault(
   return settingsDefault ?? configured ?? persisted
 }
 
-/** Standard effort-tier order, weakest to strongest. */
-const EFFORT_TIER_ORDER = ['off', 'low', 'medium', 'high', 'max'] as const
+/** Standard effort-tier order, weakest to strongest (`xhigh` sits between
+ * `high` and `max`, matching the ladder the kernels accept — see
+ * STANDARD_EFFORT_LADDER). */
+const EFFORT_TIER_ORDER = ['off', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+/** The standard reasoning-effort ladder, weakest to strongest. Served as the
+ * compatibility offer when a model catalog row declares reasoning support
+ * without listing its own tiers (pi-ai 0.87.x zai rows for glm-5.3* ship only
+ * `reasoning: true`): the kernel accepts the standard effort ids and is the
+ * set-time authority, so the ladder is an honest offer, not a guess. Mirrors
+ * the Claude backend's EFFORT_FALLBACK_TIERS (backends/claude/controls.ts). */
+export const STANDARD_EFFORT_LADDER: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
 /**
  * Resolve a preferred effort tier against a route's available tiers when the
