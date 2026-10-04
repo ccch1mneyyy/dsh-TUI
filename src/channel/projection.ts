@@ -1232,6 +1232,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'mode.changed':
       case 'commands.changed':
       case 'rate-limit':
+      // The agent↔agent relay observation (agent-team §5.4) is folded by the
+      // session that observes it (the Claude session's message capability);
+      // the transcript itself renders nothing for it here.
+      case 'agent.message':
         return
       default: {
         // Exhaustiveness: a new AgentEvent variant must be handled above.

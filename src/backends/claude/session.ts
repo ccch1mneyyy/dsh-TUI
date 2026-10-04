@@ -37,8 +37,9 @@
 import type { AccountInfo, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { randomUUID } from 'node:crypto'
 import type { AccountView, RewindOutcome, RewindPreview, SessionAuthView } from '../../agent/capabilities.js'
-import type { WorkingActivityView } from '../../adapter/ports/channel-view.js'
+import type { AgentMessageView, WorkingActivityView } from '../../adapter/ports/channel-view.js'
 import type { AgentEvent, AgentEventMeta } from '../../agent/events.js'
+import { foldAgentMessage } from '../../agent/messages.js'
 import type { AgentSessionRef } from '../../agent/refs.js'
 import type { AgentInput, AgentSession, AgentSessionStatus, CancelCause, SubmitPlacement } from '../../agent/session.js'
 import { t } from '../../i18n.js'
@@ -313,8 +314,21 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     }
   }
 
+  /**
+   * Observed agent↔agent relay facts (agent-team §5.4): the SendMessage tool
+   * traffic the translator observes, folded live at this funnel and from the
+   * replay seed at `history()` — one store, monotone by message id.
+   */
+  const agentMessages: AgentMessageView[] = []
+  const foldAgentMessages = (events: readonly AgentEvent[]): void => {
+    for (const event of events) {
+      if (event.type === 'agent.message') foldAgentMessage(agentMessages, event.message)
+    }
+  }
+
   const emit = (events: readonly AgentEvent[], wake: AgentEventMeta['wake'] = 'sync'): void => {
     if (events.length === 0) return
+    foldAgentMessages(events)
     const meta: AgentEventMeta = { replay: false, wake }
     if (listeners.size === 0) { backlog.push([events, meta]); publishActivity(); return }
     for (const listener of [...listeners]) {
@@ -1076,6 +1090,11 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       subagents: {
         interrupt: agentId => stopTask(agentId),
         ...subagentHistory(),
+        // agent-team §5.2/§5.4: the parent-mediated message support — the
+        // relay observations this session folds itself. The channel core
+        // composes the submit path (directed instruction + fixed followup)
+        // around this; the composer hides itself when the member is absent.
+        message: { messages: () => [...agentMessages] },
       },
       tasks: {
         stop: taskId => stopTask(taskId),
@@ -1153,6 +1172,10 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     history: () => {
       const events = replayHistory ?? []
       replayHistory = undefined
+      // The replay seed carries the SAME relay observations the live lane
+      // emits (replay runs the same translator); fold them once here so a
+      // resumed session's Messages page starts populated.
+      foldAgentMessages(events)
       return Promise.resolve(events)
     },
     subscribe(listener: Listener) {

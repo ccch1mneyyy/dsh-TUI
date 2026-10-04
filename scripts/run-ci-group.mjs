@@ -743,6 +743,14 @@ const GROUPS = {
 // 层级信号（缺席即推断 unknown，真实结束仍覆盖）、resume 回放子转录内容与终态推断，
 // 以及 /agents、仪表盘与详情场景的无头渲染。
     ["verify-claude-subagents", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-subagents.ts']],
+// agent-team 通道层回归（设计 agent-team-full §3/§5/§6/§7 通道条目）：统一
+// 代理消息领域模型（via/state 词汇、单调 fold、relay 源形状——普通 user 文本
+// 绝不猜成 relay）、DSH 子代理投影的 durable relay/直发 prompt 回执
+// （RemoteError 稳定映射、one-shot fail-closed、listChildren 只列 continuable）、
+// Claude SendMessage 观察（call=issued、裸成功=unknown、明确结构化字段才
+// delivered/held）、通道核的父中介提交（信封走常规 FIFO 固定 followup、
+// 无能力不渲染）。
+    ["verify-agent-team-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-team-channel.ts']],
 // Claude 后台任务（假 SDK + 录制 fixture）：后台 Bash 生命周期（任务卡、确认文本里的
 // 输出文件、状态栏 chip、一次落定提示）、前台 Bash 只有工具卡、tasks.snapshot 的
 // REPLACE 语义、kill → stopTask、用户中断不停任务；输出尾部只读 CLI 报告的路径并校验
