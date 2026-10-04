@@ -12,7 +12,8 @@ import { KERNEL_SWITCH_HANDOFF_ENV } from './kernelPrefs.js'
 import { kernelDisplayName } from './components/kernelCatalog.js'
 import { classifyReplacementOutcome, formatHandoffNotice, handoffEventTag, writeHandoffStage } from './handoffEvents.js'
 import { HANDOFF_ACK_FD_ENV, HANDOFF_ATTEMPT_ENV, HANDOFF_SCREEN_ENV, parseHandoffAckLine } from './handoffAck.js'
-import { EXIT_ALT_SCREEN } from './ink/termio/dec.js'
+import { DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from './ink/termio/csi.js'
+import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from './ink/termio/dec.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
 // the compiled copy at lib/types/utils/shellQuote.js.
@@ -202,19 +203,22 @@ export function writeHandoffNotice(text: string): void {
 }
 
 /**
- * Close the alt-screen bracket THIS process still holds (S05 完整版): a
- * replacement that died before its first flushed frame never took ownership,
- * so the supervisor restores the main buffer FIRST — the failure notice then
- * lands on the persistent main screen instead of vanishing with the alt
- * buffer. Synchronous fd-1 write with the stream fallback, same flush
- * discipline as writeHandoffNotice.
+ * Hand the terminal back after a kernel-switch replacement that cannot clean
+ * up after itself: one that died before its first frame (this process still
+ * holds the alternate screen) or one killed by a signal. Besides leaving the
+ * alternate screen it turns off the input modes the replacement may already
+ * have enabled; each reset is harmless if the mode was never on. Written
+ * synchronously to fd 1 so the failure notice that follows lands on the main
+ * screen.
  */
 export function restoreHandoffScreen(): void {
+  const reset = DISABLE_MOUSE_TRACKING + DISABLE_MODIFY_OTHER_KEYS + DISABLE_KITTY_KEYBOARD
+    + DISABLE_WIN32_INPUT_MODE + DFE + DBP + SHOW_CURSOR + EXIT_ALT_SCREEN + '\r\n'
   try {
-    writeFileSync(1, EXIT_ALT_SCREEN + '\r\n')
+    writeFileSync(1, reset)
   } catch {
     try {
-      process.stdout.write(EXIT_ALT_SCREEN + '\r\n')
+      process.stdout.write(reset)
     } catch {
       // Even a dead stdout must not block the exit path.
     }
@@ -2313,6 +2317,9 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
             }) + `${suffix}\n`,
           )
         } else if (outcome.kind === 'crashed') {
+          // A signal death after the first frame skipped the replacement's
+          // own exit cleanup, so the screen and input modes are still its.
+          if (handoff && signal !== null) restoreHandoffScreen()
           writeHandoffNotice(
             '\n' + formatHandoffNotice('crashed', {
               name: kernelDisplayName(options.backend),

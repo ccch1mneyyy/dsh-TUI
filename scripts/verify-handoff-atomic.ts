@@ -74,6 +74,13 @@ if (isReplacement) {
   } else if (scenario === 'die-pre-ready') {
     ack('adopted')
     setTimeout(() => process.exit(7), 150)
+  } else if (scenario === 'killed-after-ready') {
+    // Owns the screen after ready, then dies without running any cleanup.
+    ack('adopted')
+    process.stdout.write('CHILD-FIRST-FRAME\n', () => {
+      ack('ready')
+      setTimeout(() => process.kill(process.pid, 'SIGKILL'), 50)
+    })
   } else if (scenario === 'interrupt-pre-ready') {
     // Ctrl+C during boot: the terminal delivers SIGINT to the whole process
     // group, the old parent included. Signal only the parent here, then die
@@ -234,6 +241,8 @@ const stateTmp = mkdtempSync(join(tmpdir(), 'verify-handoff-atomic-'))
     const result = /E2E-RESULT (.*)/.exec(stderr)?.[1]
     check('e2e die-pre-ready: the parent restores the bracket exactly once (persistent main screen)',
       (text.match(/\u001b\[\?1049l/g) ?? []).length === 1, JSON.stringify(text.slice(0, 160)))
+    check('e2e die-pre-ready: mouse tracking and the cursor are reset with the screen',
+      text.includes('\u001b[?1000l') && text.includes('\u001b[?25h'))
     check('e2e die-pre-ready: restartTui resolves the child code (7) with the failed/boot-failure path',
       result !== undefined && JSON.parse(result).code === 7, stderr.slice(-200))
   }
@@ -246,6 +255,17 @@ const stateTmp = mkdtempSync(join(tmpdir(), 'verify-handoff-atomic-'))
       run.signal === null && (text.match(/\u001b\[\?1049l/g) ?? []).length === 1, 'signal=' + String(run.signal) + ' ' + JSON.stringify(text.slice(0, 160)))
     check('e2e interrupt-pre-ready: restartTui resolves the child code (130)',
       result !== undefined && JSON.parse(result).code === 130, stderr.slice(-200))
+  }
+  {
+    const run = runParent('killed-after-ready')
+    const text = run.stdout ?? ''
+    const stderr = run.stderr ?? ''
+    const result = /E2E-RESULT (.*)/.exec(stderr)?.[1]
+    check('e2e killed-after-ready: the old parent restores the screen the dead replacement left behind',
+      (text.match(/\u001b\[\?1049l/g) ?? []).length === 1 && text.indexOf('\u001b[?1049l') > text.indexOf('CHILD-FIRST-FRAME')
+      && text.includes('\u001b[?1000l'), JSON.stringify(text.slice(-200)))
+    check('e2e killed-after-ready: restartTui reports the signal death as a crash (exit 1)',
+      result !== undefined && JSON.parse(result).code === 1, stderr.slice(-200))
   }
   {
     const run = runParent('old-build')
