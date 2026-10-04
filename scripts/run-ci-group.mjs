@@ -1411,7 +1411,8 @@ if (process.env.GITHUB_STEP_SUMMARY) {
 if (recordTimings) {
   const next = JSON.parse(readFileSync(TIMINGS_FILE, 'utf8'))
   const entries = { ...(next[groupName] ?? {}) }
-  for (const r of results) if (!r.failed) entries[r.name] = Math.round(r.seconds * 10) / 10
+  // 不足 0.05s 的条目记 0.1：0 会被当成「无实测」按中位数估算。
+  for (const r of results) if (!r.failed) entries[r.name] = Math.max(0.1, Math.round(r.seconds * 10) / 10)
   // 只保留仍登记在组里的条目，按名字排序，diff 可读。
   const names = new Set(wholeGroup.map(([name]) => name))
   next[groupName] = Object.fromEntries(Object.keys(entries).filter(n => names.has(n)).sort().map(n => [n, entries[n]]))
