@@ -262,13 +262,15 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   let forceTimer: unknown
   /** The credential plan the live query runs on. */
   let authPlan: ClaudeAuthPlan = deps.auth?.plan ?? { source: 'claude-login', env: deps.env }
+  /** The CLI's config directory under the live plan's environment. */
+  const configDir = (): string => claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env)
   /** The model-routing env the CLI child actually applies for the live
    *  run: the settings `env` of its config dir with the live auth-plan env
    *  on top, in the CLI's own flag > settings > inherited order (the same
    *  merged truth the model list reads — modelEnv.ts). Read per run, so a
    *  reconnect's renewed plan is what the next child applies. */
   const childModelEnv = (): Record<string, string | undefined> => mergedModelEnv(
-    claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
+    configDir(),
     authPlan.env,
     new Set(Object.keys(authPlan.settings?.env ?? {})),
   )
@@ -314,17 +316,8 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   // parked permission/dialog prompt is the waiting phase; the fold dedupes,
   // so folding after every emit publishes only real changes.
   const activityPublisher = createClaudeActivityPublisher()
-  const activityListeners = new Set<(view: WorkingActivityView) => void>()
   const publishActivity = (): void => {
-    const view = activityPublisher.fold(translator.activityState(), asking || dialogsOpen)
-    if (view === undefined) return
-    for (const listener of [...activityListeners]) {
-      try {
-        listener(view)
-      } catch (error) {
-        deps.host.debug(`claude: activity listener failed (${errorText(error)})`)
-      }
-    }
+    activityPublisher.fold(translator.activityState(), asking || dialogsOpen)
   }
 
   /**
@@ -400,19 +393,16 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     deps.host.stderr?.(line)
   })
 
-  /** One live `query()`: its stdin, its controller and its generation. A
-   *  reconnect (credential renewal) replaces the run; the session, its id
-   *  and the translator state stay. */
+  /** One live `query()`: its stdin and its controller. A reconnect
+   *  (credential renewal) replaces the run; the session, its id and the
+   *  translator state stay. */
   interface Run {
-    readonly generation: number
     readonly inbox: ReturnType<typeof createInbox<SDKUserMessage>>
     readonly abortController: AbortController
     readonly query: ReturnType<ClaudeSessionDeps['sdk']['query']>
     consumer: Promise<void>
   }
-  let generation = 0
   const startRun = (resume: boolean): Run => {
-    generation += 1
     const inbox = createInbox<SDKUserMessage>()
     const abortController = new AbortController()
     const startModel = prefs.read().model ?? deps.model
@@ -455,7 +445,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         replayUserMessages: true,
       }),
     })
-    return { generation, inbox, abortController, query, consumer: Promise.resolve() }
+    return { inbox, abortController, query, consumer: Promise.resolve() }
   }
   let run = startRun(resumed)
 
@@ -851,7 +841,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     // TUI's own injections are NOT settings material and are excluded, so a
     // cc-switch-written settings.json is what "import from settings" sees.
     settingsEnv: () => importedModelEnv(
-      claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
+      configDir(),
       authPlan.env,
       injectedEnvKeys(),
     ),
@@ -863,7 +853,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     modelTruth: () => {
       const active = activeProfileOf(channels.read())
       return modelTruthFrom(
-        claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
+        configDir(),
         authPlan.env,
         readLocalModelNames(join(DATA_DIR, 'backends', 'claude')),
         active === undefined ? undefined : { models: active.models, tiers: active.tiers },
@@ -922,7 +912,6 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     return { lines }
   }
 
-  /** This session in the backend's reference vocabulary. */
   /** This session in the backend's reference vocabulary (its id follows a
    *  conversation reset). */
   const ownRef: AgentSessionRef = { backendId: CLAUDE_BACKEND_ID, get sessionId() { return currentSessionId } }
@@ -1139,7 +1128,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       transcript: createClaudeTranscriptHistory({
         sessionId: () => currentSessionId,
         cwd: deps.cwd,
-        configDir: () => claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
+        configDir,
         ...(compactedFrom === undefined ? {} : { compactedFrom }),
         debug: deps.host.debug,
       }),
@@ -1176,10 +1165,13 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       // a rebind shows the running line without waiting for a change.
       workingActivity: {
         subscribe(listener: (view: WorkingActivityView) => void) {
-          activityListeners.add(listener)
-          const last = activityPublisher.last()
-          if (last !== undefined) listener(last)
-          return () => { activityListeners.delete(listener) }
+          return activityPublisher.subscribe(view => {
+            try {
+              listener(view)
+            } catch (error) {
+              deps.host.debug(`claude: activity listener failed (${errorText(error)})`)
+            }
+          })
         },
       },
       diagnostics: {
