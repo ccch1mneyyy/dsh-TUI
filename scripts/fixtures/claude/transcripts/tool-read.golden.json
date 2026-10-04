@@ -55,6 +55,10 @@
       "kind": "assistant",
       "text": "The first line of README.md is:\n\n**# Fixture project**",
       "anchor": "msg_fixture_002"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

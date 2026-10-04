@@ -75,6 +75,10 @@
     {
       "kind": "assistant",
       "text": "The first line of README.md is:\n\n**# Fixture project**"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

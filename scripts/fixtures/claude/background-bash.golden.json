@@ -103,6 +103,10 @@
       "text": "started"
     },
     {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
       "kind": "notice",
       "text": "A background task finished; the model continues"
     },
@@ -114,6 +118,10 @@
     {
       "kind": "assistant",
       "text": "Background command completed successfully (exit code 0)."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

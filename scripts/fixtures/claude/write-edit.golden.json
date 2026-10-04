@@ -154,6 +154,10 @@
     {
       "kind": "assistant",
       "text": "Done."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

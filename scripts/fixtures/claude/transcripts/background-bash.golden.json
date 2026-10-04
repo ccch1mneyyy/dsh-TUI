@@ -65,6 +65,10 @@
       "anchor": "msg_fixture_002"
     },
     {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
       "kind": "notice",
       "text": "A background task finished; the model continues"
     },
@@ -78,6 +82,10 @@
       "kind": "assistant",
       "text": "Background command completed successfully (exit code 0).",
       "anchor": "msg_fixture_003"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

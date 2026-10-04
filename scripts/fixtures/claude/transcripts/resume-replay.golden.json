@@ -46,6 +46,10 @@
       "anchor": "msg_fixture_004"
     },
     {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
       "kind": "user",
       "text": "Which file did you read yourself first? Reply with just the file name.",
       "anchor": "00000000-0000-4000-8000-000000000140"
@@ -60,6 +64,10 @@
       "kind": "assistant",
       "text": "README.md",
       "anchor": "msg_fixture_005"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

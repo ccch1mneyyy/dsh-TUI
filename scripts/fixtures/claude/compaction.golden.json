@@ -132,6 +132,10 @@
       "text": "ok"
     },
     {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
       "kind": "notice",
       "text": "Session summary is ready"
     },

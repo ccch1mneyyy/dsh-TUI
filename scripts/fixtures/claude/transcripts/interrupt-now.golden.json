@@ -35,6 +35,10 @@
       "anchor": "msg_fixture_001"
     },
     {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
       "kind": "user",
       "text": "Stop. Reply with exactly: NOW-OK",
       "anchor": "00000000-0000-4000-8000-000000000020"
@@ -49,6 +53,10 @@
       "kind": "assistant",
       "text": "NOW-OK",
       "anchor": "msg_fixture_002"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

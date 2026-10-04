@@ -89,6 +89,10 @@
     {
       "kind": "assistant",
       "text": "The command waited 4 seconds and then printed \"slept\" to the output.\n\nNEXT-OK"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

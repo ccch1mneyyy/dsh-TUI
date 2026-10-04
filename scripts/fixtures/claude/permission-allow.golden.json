@@ -76,6 +76,10 @@
     {
       "kind": "assistant",
       "text": "written"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

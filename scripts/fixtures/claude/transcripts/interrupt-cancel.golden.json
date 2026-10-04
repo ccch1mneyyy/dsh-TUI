@@ -29,6 +29,10 @@
     {
       "kind": "interrupt",
       "text": "Interrupted · What should DeepSeek do instead?"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

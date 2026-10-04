@@ -61,6 +61,10 @@
       "kind": "assistant",
       "text": "The command waited 4 seconds and then printed \"slept\" to the output.\n\nNEXT-OK",
       "anchor": "msg_fixture_002"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

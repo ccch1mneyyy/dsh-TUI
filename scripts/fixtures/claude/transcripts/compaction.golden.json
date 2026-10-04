@@ -36,6 +36,10 @@
       "kind": "assistant",
       "text": "ok",
       "anchor": "msg_fixture_002"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

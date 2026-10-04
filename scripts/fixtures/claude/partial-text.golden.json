@@ -50,6 +50,10 @@
     {
       "kind": "assistant",
       "text": "Waves crash upon the shore with endless force.\nThe deep blue holds secrets in its vast expanse.\nSalt air whispers stories of ancient voyages.\nLife thrives in cu…"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
     }
   ],
   "state": {

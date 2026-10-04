@@ -32,18 +32,34 @@
     },
     {
       "id": 3,
+      "kind": "turn-summary",
+      "text": "",
+      "turnUsage": {
+        "input": 1200,
+        "output": 40,
+        "cacheRead": 800,
+        "cacheWrite": 64,
+        "cacheKnown": true,
+        "retries": 0,
+        "durationMs": 1060,
+        "effort": "medium",
+        "outcome": "completed"
+      }
+    },
+    {
+      "id": 4,
       "kind": "user",
       "text": "List the fixture directory, then read one file.",
       "seq": 12
     },
     {
-      "id": 4,
+      "id": 5,
       "kind": "reasoning",
       "text": "List the directory first.",
       "seq": 15
     },
     {
-      "id": 5,
+      "id": 6,
       "kind": "tool",
       "text": "",
       "seq": 16,
@@ -56,12 +72,12 @@
         "status": "ok",
         "startedAt": 1767571200002,
         "durationMs": 1,
-        "resultFull": "README.md\nsrc/\npackage.json",
-        "resultText": "README.md src/ package.json"
+        "resultText": "README.md src/ package.json",
+        "resultFull": "README.md\nsrc/\npackage.json"
       }
     },
     {
-      "id": 6,
+      "id": 7,
       "kind": "assistant",
       "text": "The directory holds README.md, src/ and package.json.",
       "streaming": false,
@@ -70,19 +86,35 @@
       "time": 1767576661470
     },
     {
-      "id": 7,
+      "id": 8,
+      "kind": "turn-summary",
+      "text": "",
+      "turnUsage": {
+        "input": 390,
+        "output": 55,
+        "cacheRead": 4100,
+        "cacheWrite": 0,
+        "cacheKnown": true,
+        "retries": 0,
+        "durationMs": 390,
+        "effort": "medium",
+        "outcome": "completed"
+      }
+    },
+    {
+      "id": 9,
       "kind": "user",
       "text": "Write a long essay about fixtures.",
       "seq": 26
     },
     {
-      "id": 8,
+      "id": 10,
       "kind": "reasoning",
       "text": "Plan the essay.",
       "seq": 29
     },
     {
-      "id": 9,
+      "id": 11,
       "kind": "assistant",
       "text": "Fixtures are",
       "streaming": false,
@@ -91,29 +123,45 @@
       "time": 1767618000100
     },
     {
-      "id": 10,
+      "id": 12,
       "kind": "interrupt",
       "text": "已打断 · 接下来想让 DeepSeek 做什么？"
     },
     {
-      "id": 11,
+      "id": 13,
+      "kind": "turn-summary",
+      "text": "",
+      "turnUsage": {
+        "input": 500,
+        "output": 8,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "cacheKnown": false,
+        "retries": 0,
+        "durationMs": 120,
+        "effort": "high",
+        "outcome": "interrupted"
+      }
+    },
+    {
+      "id": 14,
       "kind": "user",
       "text": "Try again.",
       "seq": 33
     },
     {
-      "id": 12,
+      "id": 15,
       "kind": "notice",
       "text": "turn error · upstream unavailable retry later"
     },
     {
-      "id": 13,
+      "id": 16,
       "kind": "user",
       "text": "Explain the frame protocol.",
       "seq": 39
     },
     {
-      "id": 17,
+      "id": 20,
       "kind": "reasoning",
       "text": "Frames carry revisions.",
       "streaming": false,
@@ -121,7 +169,7 @@
       "thinkingOpen": false
     },
     {
-      "id": 18,
+      "id": 21,
       "kind": "assistant",
       "text": "Each frame has a revision.",
       "streaming": false,
@@ -150,7 +198,8 @@
     "input": 500,
     "output": 8,
     "cacheRead": 0,
-    "cacheWrite": 0
+    "cacheWrite": 0,
+    "at": 1767618000100
   },
   "contextSegments": {
     "system": 16,
@@ -206,7 +255,7 @@
       }
     }
   },
-  "nextRowId": 19,
+  "nextRowId": 22,
   "inputConvergence": {
     "cancelInFlight": false
   },
@@ -243,18 +292,34 @@
     },
     {
       "id": 3,
+      "kind": "turn-summary",
+      "text": "",
+      "turnUsage": {
+        "input": 1200,
+        "output": 40,
+        "cacheRead": 800,
+        "cacheWrite": 64,
+        "cacheKnown": true,
+        "retries": 0,
+        "durationMs": 1060,
+        "effort": "medium",
+        "outcome": "completed"
+      }
+    },
+    {
+      "id": 4,
       "kind": "user",
       "text": "List the fixture directory, then read one file.",
       "seq": 12
     },
     {
-      "id": 4,
+      "id": 5,
       "kind": "reasoning",
       "text": "List the directory first.",
       "seq": 15
     },
     {
-      "id": 5,
+      "id": 6,
       "kind": "tool",
       "text": "",
       "seq": 16,
@@ -267,12 +332,12 @@
         "status": "ok",
         "startedAt": 1767571200002,
         "durationMs": 1,
-        "resultFull": "README.md\nsrc/\npackage.json",
-        "resultText": "README.md src/ package.json"
+        "resultText": "README.md src/ package.json",
+        "resultFull": "README.md\nsrc/\npackage.json"
       }
     },
     {
-      "id": 6,
+      "id": 7,
       "kind": "assistant",
       "text": "The directory holds README.md, src/ and package.json.",
       "streaming": false,
@@ -281,19 +346,35 @@
       "time": 1767576661470
     },
     {
-      "id": 7,
+      "id": 8,
+      "kind": "turn-summary",
+      "text": "",
+      "turnUsage": {
+        "input": 390,
+        "output": 55,
+        "cacheRead": 4100,
+        "cacheWrite": 0,
+        "cacheKnown": true,
+        "retries": 0,
+        "durationMs": 390,
+        "effort": "medium",
+        "outcome": "completed"
+      }
+    },
+    {
+      "id": 9,
       "kind": "user",
       "text": "Write a long essay about fixtures.",
       "seq": 26
     },
     {
-      "id": 8,
+      "id": 10,
       "kind": "reasoning",
       "text": "Plan the essay.",
       "seq": 29
     },
     {
-      "id": 9,
+      "id": 11,
       "kind": "assistant",
       "text": "Fixtures are",
       "streaming": false,
@@ -302,29 +383,45 @@
       "time": 1767618000100
     },
     {
-      "id": 10,
+      "id": 12,
       "kind": "interrupt",
       "text": "已打断 · 接下来想让 DeepSeek 做什么？"
     },
     {
-      "id": 11,
+      "id": 13,
+      "kind": "turn-summary",
+      "text": "",
+      "turnUsage": {
+        "input": 500,
+        "output": 8,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "cacheKnown": false,
+        "retries": 0,
+        "durationMs": 120,
+        "effort": "high",
+        "outcome": "interrupted"
+      }
+    },
+    {
+      "id": 14,
       "kind": "user",
       "text": "Try again.",
       "seq": 33
     },
     {
-      "id": 12,
+      "id": 15,
       "kind": "notice",
       "text": "turn error · upstream unavailable retry later"
     },
     {
-      "id": 13,
+      "id": 16,
       "kind": "user",
       "text": "Explain the frame protocol.",
       "seq": 39
     },
     {
-      "id": 17,
+      "id": 20,
       "kind": "reasoning",
       "text": "Frames carry revisions.",
       "streaming": false,
@@ -332,7 +429,7 @@
       "thinkingOpen": false
     },
     {
-      "id": 18,
+      "id": 21,
       "kind": "assistant",
       "text": "Each frame has a revision.",
       "streaming": false,
@@ -368,7 +465,7 @@
       "reason": "a failed turn raises a toast only live; replay keeps just the notice row"
     },
     {
-      "path": "rows[5].fresh",
+      "path": "rows[6].fresh",
       "reason": "smooth-reveal flag: live tool cards and live-settled assistant text are fresh, replay paints settled history"
     }
   ],
@@ -381,54 +478,54 @@
     "#5 request/header | rows=1 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
     "#6 assistant/message | rows=3 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
     "#7 step/end | rows=3 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#8 turn/end | rows=3 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#9 session/title | rows=3 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#10 session/color | rows=3 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#11 turn/start | rows=3 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#12 user/message | rows=4 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#13 step/start | rows=4 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#14 request/header | rows=4 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#15 assistant/message | rows=5 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#16 tool/call | rows=6 streaming=[] spin=tool-use working=1 tools=1 chars=0 goal=- todos=0 compaction=-",
-    "#17 tool/result | rows=6 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#18 step/end | rows=6 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#19 step/start | rows=6 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#20 request/header | rows=6 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#21 assistant/message | rows=7 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#22 step/end | rows=7 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#23 turn/end | rows=7 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#24 request/context | rows=7 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#25 turn/start | rows=7 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#26 user/message | rows=8 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#27 step/start | rows=8 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#28 request/header | rows=8 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#29 assistant/message | rows=10 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#30 step/end | rows=10 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#31 turn/end | rows=11 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#32 turn/start | rows=11 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#33 user/message | rows=12 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#34 step/start | rows=12 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#35 request/header | rows=12 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#36 assistant/attempt | rows=12 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#37 turn/end | rows=13 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#38 turn/start | rows=13 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#39 user/message | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#40 step/start | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "#41 request/header | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "frame r1 start attempt-a | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "frame r2 chunk attempt-a | rows=15 streaming=[14] spin=thinking working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "frame r3 chunk attempt-a | rows=16 streaming=[15] spin=responding working=1 tools=0 chars=28 goal=- todos=0 compaction=-",
-    "frame r4 end attempt-a | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "frame r5 start attempt-b | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "frame r6 chunk attempt-b | rows=15 streaming=[16] spin=responding working=1 tools=0 chars=33 goal=- todos=0 compaction=-",
-    "frame r7 end attempt-b | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "frame r8 start attempt-c | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "frame r9 chunk attempt-c | rows=15 streaming=[17] spin=thinking working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
-    "frame r10 chunk attempt-c | rows=16 streaming=[18] spin=responding working=1 tools=0 chars=14 goal=- todos=0 compaction=-",
-    "frame r10 chunk attempt-c | rows=16 streaming=[18] spin=responding working=1 tools=0 chars=14 goal=- todos=0 compaction=-",
-    "frame r11 chunk attempt-x | rows=16 streaming=[18] spin=responding working=1 tools=0 chars=14 goal=- todos=0 compaction=-",
-    "frame r12 chunk attempt-c | rows=16 streaming=[18] spin=responding working=1 tools=0 chars=26 goal=- todos=0 compaction=-",
-    "frame r13 chunk attempt-c | rows=16 streaming=[18] spin=responding working=1 tools=0 chars=26 goal=- todos=0 compaction=-",
-    "settleStreaming | rows=16 streaming=[] spin=responding working=1 tools=0 chars=26 goal=- todos=0 compaction=-"
+    "#8 turn/end | rows=4 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#9 session/title | rows=4 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#10 session/color | rows=4 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#11 turn/start | rows=4 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#12 user/message | rows=5 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#13 step/start | rows=5 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#14 request/header | rows=5 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#15 assistant/message | rows=6 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#16 tool/call | rows=7 streaming=[] spin=tool-use working=1 tools=1 chars=0 goal=- todos=0 compaction=-",
+    "#17 tool/result | rows=7 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#18 step/end | rows=7 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#19 step/start | rows=7 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#20 request/header | rows=7 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#21 assistant/message | rows=8 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#22 step/end | rows=8 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#23 turn/end | rows=9 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#24 request/context | rows=9 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#25 turn/start | rows=9 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#26 user/message | rows=10 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#27 step/start | rows=10 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#28 request/header | rows=10 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#29 assistant/message | rows=12 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#30 step/end | rows=12 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#31 turn/end | rows=14 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#32 turn/start | rows=14 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#33 user/message | rows=15 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#34 step/start | rows=15 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#35 request/header | rows=15 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#36 assistant/attempt | rows=15 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#37 turn/end | rows=16 streaming=[] spin=requesting working=0 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#38 turn/start | rows=16 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#39 user/message | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#40 step/start | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "#41 request/header | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "frame r1 start attempt-a | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "frame r2 chunk attempt-a | rows=18 streaming=[17] spin=thinking working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "frame r3 chunk attempt-a | rows=19 streaming=[18] spin=responding working=1 tools=0 chars=28 goal=- todos=0 compaction=-",
+    "frame r4 end attempt-a | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "frame r5 start attempt-b | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "frame r6 chunk attempt-b | rows=18 streaming=[19] spin=responding working=1 tools=0 chars=33 goal=- todos=0 compaction=-",
+    "frame r7 end attempt-b | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "frame r8 start attempt-c | rows=17 streaming=[] spin=requesting working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "frame r9 chunk attempt-c | rows=18 streaming=[20] spin=thinking working=1 tools=0 chars=0 goal=- todos=0 compaction=-",
+    "frame r10 chunk attempt-c | rows=19 streaming=[21] spin=responding working=1 tools=0 chars=14 goal=- todos=0 compaction=-",
+    "frame r10 chunk attempt-c | rows=19 streaming=[21] spin=responding working=1 tools=0 chars=14 goal=- todos=0 compaction=-",
+    "frame r11 chunk attempt-x | rows=19 streaming=[21] spin=responding working=1 tools=0 chars=14 goal=- todos=0 compaction=-",
+    "frame r12 chunk attempt-c | rows=19 streaming=[21] spin=responding working=1 tools=0 chars=26 goal=- todos=0 compaction=-",
+    "frame r13 chunk attempt-c | rows=19 streaming=[21] spin=responding working=1 tools=0 chars=26 goal=- todos=0 compaction=-",
+    "settleStreaming | rows=19 streaming=[] spin=responding working=1 tools=0 chars=26 goal=- todos=0 compaction=-"
   ]
 }
