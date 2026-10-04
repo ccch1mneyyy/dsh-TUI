@@ -104,6 +104,12 @@ const GROUPS = {
 // 纯 ANSI 回退、长行/CJK 折行续行保栏、高亮 throw 组件级降级、流式
 // 增长 fence 与整段渲染等价、resize 两档一致性。
     ['verify-markdown-render', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-render.tsx']],
+// Markdown 列表/引用/图片/标题一致性门（渲染升级 Batch D，设计文档 §3/§4）：
+// H1-H6 视觉分层与压缩空白节奏（标题下不再叠加双空行）、hr subtle 单行
+// 分隔线（无多余高度、不与后块粘连）、列表悬挂缩进/稳定嵌套阶梯/松散项
+// bullet 不丢、嵌套引用逐级 muted bar 且空行保持结构、图片 alt+OSC8 链接
+// （不自动下载）；每段都先在坏基线上证红再转绿。
+    ['verify-markdown-batch-d', ['node', '--import', 'tsx/esm', 'scripts/verify-markdown-batch-d.tsx']],
 // 流式代码框性能门（渲染升级 Batch B，设计文档 §2.5）：真实 StreamingMarkdown
 // 连续 100 帧（40 帧到达 + 60 帧尾部增长）驱动 100 个已封口块 + 2 个 220 行
 // 块 + 持续增长的未封口 fence。结构断言 required：封口节点身份不变、稳态帧

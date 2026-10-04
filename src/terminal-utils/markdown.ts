@@ -42,6 +42,12 @@ const EOL = '\n'
 /** Left one-quarter block (U+258E), the blockquote gutter marker. */
 const QUOTE_BAR = '\u258e'
 
+/** Left one-eighth block (U+258F): quote levels past the second get the thinner bar. */
+const QUOTE_BAR_DEEP = '\u258f'
+
+/** The horizontal-rule divider: three light box-drawing dashes. */
+const HR_DIVIDER = '\u2500\u2500\u2500'
+
 /** Tool-analysis tag blocks that carry no user-facing content; dropped before lexing. */
 const TOOL_ANALYSIS_TAG_BLOCKS =
   /<(commit_analysis|context|function_analysis|pr_analysis)>.*?<\/\1>\n?/gs
@@ -148,17 +154,22 @@ interface RenderState {
   /** Ordinal of the current ordered-list item, or null for unordered lists. */
   readonly ordinal: number | null
   /**
-   * Rendered task checkbox of the enclosing tight list item ('[x] ' with
-   * styling). marked lifts the checkbox to a sibling token ahead of the
-   * text there; renderListItem stashes it here so it lands between the
-   * bullet and the body (loose items keep it inline in their paragraph).
+   * Nesting depth of the enclosing blockquote; each level gets a more
+   * muted gutter bar (spec §3, Batch D).
    */
-  readonly taskMark?: string
+  readonly quoteDepth: number
+  /**
+   * Absolute column where the enclosing list item's body block starts
+   * (indent + marker + checkbox). Soft-break continuations and nested
+   * blocks align there, and a nested list's items inherit it as their
+   * indent so the ladder advances by one marker width per level.
+   */
+  readonly hang: number
 }
 
 /** A fresh context for block-level children: list state reset, no parent. */
 function fresh(state: RenderState): RenderState {
-  return { highlight: state.highlight, parent: null, listDepth: 0, ordinal: null }
+  return { highlight: state.highlight, parent: null, listDepth: 0, ordinal: null, quoteDepth: 0, hang: 0 }
 }
 
 /** Same context, different parent token. */
@@ -168,7 +179,7 @@ function withParent(state: RenderState, parent: Token | null): RenderState {
 
 /** Inline-styled children keep the outer parent but shed list context. */
 function inlineChildren(state: RenderState): RenderState {
-  return { ...state, listDepth: 0, ordinal: null }
+  return { ...state, listDepth: 0, ordinal: null, quoteDepth: 0, hang: 0 }
 }
 
 /**
@@ -187,7 +198,14 @@ export function formatToken(
   parent: Token | null = null,
   highlight: CliHighlight | null = null,
 ): string {
-  return dispatch(token, { highlight, parent, listDepth, ordinal: orderedListNumber })
+  return dispatch(token, {
+    highlight,
+    parent,
+    listDepth,
+    ordinal: orderedListNumber,
+    quoteDepth: 0,
+    hang: 0,
+  })
 }
 
 /**
@@ -206,11 +224,12 @@ export function applyMarkdown(
     parent: null,
     listDepth: 0,
     ordinal: null,
+    quoteDepth: 0,
+    hang: 0,
   }
   return marked
     .lexer(stripPromptXMLTags(content))
-    .map(token => dispatch(token, rootState))
-    .join('')
+    .reduce((out: string, token: Token) => appendBlockText(out, dispatch(token, rootState)), '')
     // trimEnd only: the input is already trimmed, so leading whitespace in
     // the output is renderer-intended (e.g. the code block's 2-space indent
     // on its first line). A full trim() would eat that first-line indent.
@@ -241,8 +260,8 @@ function dispatch(token: Token, state: RenderState): string {
   if (isToken(token, 'strong')) return renderStrong(token, state)
   if (isToken(token, 'del')) return renderDel(token, state)
   if (isToken(token, 'heading')) return renderHeading(token, state)
-  if (isToken(token, 'hr')) return '---'
-  if (isToken(token, 'image')) return token.href
+  if (isToken(token, 'hr')) return renderHr()
+  if (isToken(token, 'image')) return renderImage(token, state)
   if (isToken(token, 'link')) return renderLink(token, state)
   if (isToken(token, 'list')) return renderList(token, state)
   if (isToken(token, 'list_item')) return renderListItem(token, state)
@@ -285,14 +304,42 @@ function renderNestedMathBlock(token: MathToken): string {
   return (rendered ?? token.raw.trim()) + EOL
 }
 
+/**
+ * The gutter for one blockquote level (spec section 3, Batch D): the
+ * first level carries the theme's muted color, the second dims the same
+ * bar, deeper levels switch to the thinner one-eighth bar - nesting
+ * reads as fading structure instead of N identical dim rails.
+ */
+function quoteGutter(depth: number): string {
+  if (depth === 0) return colorize(QUOTE_BAR, getActiveTheme().subtle, 'foreground')
+  if (depth === 1) return chalk.dim(QUOTE_BAR)
+  return chalk.dim(QUOTE_BAR_DEEP)
+}
+
 function renderBlockquote(token: Tokens.Blockquote, state: RenderState): string {
-  const inner = token.tokens.map(child => dispatch(child, fresh(state))).join('')
-  // Dim gutter bar per line; keep the text italic but at normal brightness —
-  // chalk.dim is nearly invisible on dark themes.
-  const gutter = chalk.dim(QUOTE_BAR)
-  return inner
-    .split(EOL)
-    .map(line => (stripAnsi(line).trim() ? `${gutter} ${chalk.italic(line)}` : line))
+  const depth = state.quoteDepth
+  // Children keep the quote context (a nested blockquote increments the
+  // depth) but shed list state, exactly like fresh().
+  const childState = { ...fresh(state), quoteDepth: depth + 1 }
+  const inner = token.tokens.map(child => dispatch(child, childState)).join('')
+  // Gutter bar per line; keep the text italic but at normal brightness —
+  // chalk.dim is nearly invisible on dark themes. Blank lines inside the
+  // quote keep a BARE gutter so the structure survives internal paragraph
+  // gaps (and an empty `>` quote still shows a rail); only the trailing
+  // split artifact (from inner's final newline) stays empty.
+  const gutter = quoteGutter(depth)
+  const lines = inner.split(EOL)
+  // A quote with no visible content at all (`>` on its own line) still
+  // shows one rail - the structure exists in the source, collapsing to
+  // nothing hid it (spec: 空引用结构).
+  if (lines.every(line => line === '')) return gutter + EOL
+  return lines
+    .map((line, index) => {
+      if (line === '' || stripAnsi(line).trim() === '') {
+        return index === lines.length - 1 ? line : gutter
+      }
+      return `${gutter} ${chalk.italic(line)}`
+    })
     .join(EOL)
 }
 
@@ -386,18 +433,84 @@ function renderDel(token: Tokens.Del, state: RenderState): string {
   return chalk.strikethrough(inner)
 }
 
+/**
+ * Subtle single-row hr divider (spec section 3, Batch D). Three dashes
+ * in the theme's muted color replace the bare `---` literal.
+ *
+ * Deliberately NO trailing newline: the surrounding space tokens already
+ * provide the block separation, so the divider costs exactly one row -
+ * appending EOL here would add a blank row below every rule. Block
+ * joins cover the unterminated tail via appendBlockText.
+ */
+function renderHr(): string {
+  return colorize(HR_DIVIDER, getActiveTheme().subtle, 'foreground')
+}
+
+/**
+ * Append one block token's rendered text to the accumulated run. Every
+ * visible block renderer ends its output with a newline except the hr
+ * divider; when such an unterminated block is followed directly by
+ * content that does not open with its own line break (a rule
+ * immediately before a heading, or two adjacent rules), the row break
+ * is inserted here so the divider never merges into the next block's
+ * first row.
+ */
+export function appendBlockText(accumulated: string, block: string): string {
+  if (accumulated !== '' && !accumulated.endsWith(EOL) && block !== '' && !block.startsWith(EOL)) {
+    return accumulated + EOL + block
+  }
+  return accumulated + block
+}
+
 function renderHeading(token: Tokens.Heading, state: RenderState): string {
   const text = token.tokens.map(child => dispatch(child, fresh(state))).join('')
-  // Blue-primary progression: H1 gets the mist brand blue + underline, H2 the
-  // lighter border blue, deeper levels stay bold near-text (kimi-style).
+  // Blue-primary ladder (kimi-style): H1 gets the mist brand blue +
+  // underline, H2 the lighter border blue. The deeper levels previously
+  // all collapsed to plain bold (spec section 3: H3-H6 read as one
+  // level); they now step down through weight and muteness - H3 bold
+  // near-text, H4 bold+italic, H5 italic in the subtle color, H6 upright
+  // subtle - so six levels read as a monotone fade instead of two
+  // visible ones.
   const theme = getActiveTheme()
   const styled =
     token.depth === 1
       ? chalk.bold.underline(colorize(text, theme.accent, 'foreground'))
       : token.depth === 2
         ? chalk.bold(colorize(text, theme.permission, 'foreground'))
-        : chalk.bold(text)
-  return styled + EOL + EOL
+        : token.depth === 3
+          ? chalk.bold(text)
+          : token.depth === 4
+            ? chalk.bold.italic(text)
+            : token.depth === 5
+              ? chalk.italic(colorize(text, theme.subtle, 'foreground'))
+              : colorize(text, theme.subtle, 'foreground')
+  // Exactly one trailing newline: block separation comes from the
+  // source's own blank lines (the space token already emits the newline
+  // that ends the heading row). The old EOL + EOL stacked with that
+  // space token into TWO blank rows below every heading; tight
+  // h3-then-body sources also gained an invented blank row. Compressed
+  // rhythm, source-faithful air.
+  return styled + EOL
+}
+
+/**
+ * Image reference (spec section 3, Batch D): alt text plus an OSC 8 link
+ * to the source URL - the href is only a click target, nothing is
+ * fetched and remote resources never download automatically. Width-safe
+ * ASCII `[img]` marks the span; terminals without hyperlink support keep
+ * a readable plain form carrying both the alt and the URL.
+ */
+function renderImage(token: Tokens.Image, state: RenderState): string {
+  const alt = token.text.replace(/\s+/g, ' ').trim()
+  if (state.parent?.type === 'link') {
+    // Inside a link's OSC 8 wrap a nested sequence would override the real
+    // href; show the alt (or the URL) as plain text, like nested labels.
+    return alt || token.href
+  }
+  if (!supportsHyperlinks()) {
+    return alt ? `[img] ${alt} (${token.href})` : token.href
+  }
+  return createHyperlink(token.href, alt ? `[img] ${alt}` : '[img]')
 }
 
 function renderLink(token: Tokens.Link, state: RenderState): string {
@@ -430,22 +543,68 @@ function renderList(token: Tokens.List, state: RenderState): string {
 }
 
 function renderListItem(token: Tokens.ListItem, state: RenderState): string {
-  const indent = '  '.repeat(state.listDepth)
   // Tight task items carry their checkbox as a sibling token AHEAD of the
   // text token (loose items inline it inside the paragraph). Lift it out
-  // here and hand it to renderText: otherwise the checkbox would render on
-  // its own line before the bullet instead of between bullet and body.
+  // here so it lands between the marker and the body.
   const isTightTask = token.task === true && token.tokens[0]?.type === 'checkbox'
   const children = isTightTask ? token.tokens.slice(1) : token.tokens
+  const taskMark = isTightTask ? renderCheckbox(token.tokens[0] as Tokens.Checkbox) : ''
+  const indent = ' '.repeat(state.hang)
+  const marker =
+    state.ordinal === null ? '-' : `${formatListMarker(state.listDepth + 1, state.ordinal)}.`
+  // The body column: soft-break continuations, later paragraphs of loose
+  // items, and nested blocks align one marker width (plus checkbox) past
+  // this item's indent. A nested list dispatched with this hang lines its
+  // own items up under the body, so the ladder advances by exactly one
+  // marker width per level (the old per-level indent double-counted the
+  // enclosing item and accelerated 2/6/10 instead of 2/4/6).
+  const bodyHang = state.hang + marker.length + 1 + stripAnsi(taskMark).length
   const childState = withParent(
-    {
-      ...state,
-      listDepth: state.listDepth + 1,
-      taskMark: isTightTask ? renderCheckbox(token.tokens[0] as Tokens.Checkbox) : '',
-    },
+    { ...state, listDepth: state.listDepth + 1, hang: bodyHang },
     token,
   )
-  return children.map(child => indent + dispatch(child, childState)).join('')
+  // Two kinds of children with two indenters. Text/paragraph/blockquote
+  // children render RAW lines - the assembly below pads their
+  // continuations to the body column (hanging indent). A nested list
+  // already carries its absolute indent (its items inherit bodyHang), so
+  // its lines pass through untouched; padding them again is what made the
+  // old per-level indent accelerate.
+  const segments: Array<{ text: string; preindented: boolean }> = []
+  let raw = ''
+  for (const child of children) {
+    const part = dispatch(child, childState)
+    if (child.type === 'list') {
+      if (raw !== '') {
+        segments.push({ text: raw, preindented: false })
+        raw = ''
+      }
+      segments.push({ text: part, preindented: true })
+    } else {
+      // appendBlockText: a text token does not end its own row, and the
+      // next child must start on a fresh line (a plain join would glue
+      // blocks together, a join(EOL) would double blank rows).
+      raw = appendBlockText(raw, part)
+    }
+  }
+  if (raw !== '') segments.push({ text: raw, preindented: false })
+  const tinted = colorize(marker, getActiveTheme().permission, 'foreground')
+  const bodyIndent = ' '.repeat(bodyHang)
+  let out = `${indent}${tinted} ${taskMark}`
+  let firstLine = true
+  for (const segment of segments) {
+    const lines = segment.text.split(EOL)
+    for (const line of lines) {
+      if (firstLine) {
+        out += line
+        firstLine = false
+        continue
+      }
+      out += EOL + (line === '' || segment.preindented ? line : bodyIndent + line)
+    }
+  }
+  if (out === '') return ''
+  if (!out.endsWith(EOL)) out += EOL
+  return out
 }
 
 /**
@@ -465,26 +624,21 @@ function renderParagraph(token: Tokens.Paragraph, state: RenderState): string {
 }
 
 function renderText(token: Tokens.Text, state: RenderState): string {
-  const { parent, listDepth, ordinal } = state
-
-  if (parent?.type === 'link') {
+  if (state.parent?.type === 'link') {
     // Already inside a link: the link handler wraps everything in one OSC 8
     // sequence, and a nested one would override the real href. Stay plain.
     return token.text
   }
 
-  if (parent?.type === 'list_item') {
-    const bullet = ordinal === null ? '-' : `${formatListMarker(listDepth, ordinal)}.`
-    const body = token.tokens
-      ? token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
-      : linkifyText(token.text)
-    // Blue bullet marker: list structure gets a tint without loading the
-    // whole item (kimi-style `•` in the accent color). A tight task item
-    // slots its rendered checkbox between the bullet and the body.
-    const tinted = colorize(bullet, getActiveTheme().permission, 'foreground')
-    return `${tinted} ${state.taskMark ?? ''}${body}${EOL}`
+  // List markers, checkboxes and per-line indentation live in
+  // renderListItem's assembly: firing them here meant a loose item's
+  // paragraph (dispatched through renderParagraph's fresh state) rendered
+  // with NO marker at all, and inline styling recursing through
+  // em/strong kept the list_item parent, so `- **bold** tail` grew one
+  // bullet per nested text token.
+  if (token.tokens) {
+    return token.tokens.map(child => dispatch(child, withParent(state, token))).join('')
   }
-
   return linkifyText(token.text)
 }
 
