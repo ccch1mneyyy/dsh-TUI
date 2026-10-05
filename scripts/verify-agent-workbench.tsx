@@ -468,14 +468,17 @@ console.log('--- W4: dashboard children/peers partition ---')
 // Narrow agent rows retain their catalog metadata and latest streamed output.
 {
   const { SubagentCard } = await import('../src/components/SubagentCard.js')
-  const agent = makeRow('agent-meta', { description: 'Agent metadata', status: 'running', model: 'glm-5.3', effort: 'max', reportedDurationMs: 720000, output: ['old stream line', 'LATEST-PREVIEW'] })
+  const agent = makeRow('agent-meta', { description: 'Agent metadata', status: 'running', model: 'glm-5.3', effort: 'max', reportedDurationMs: 720000, output: ['old stream line', 'PREVIEW-PREV', 'LATEST-PREVIEW'] })
   for (const cols of [28, 34]) {
     await withTerminal(
       () => React.createElement(SubagentCard, { subagent: agent as never, variant: 'panel' }),
       async frame => {
         check('metadata ' + cols + ': model, effort and elapsed stay visible', await settled(() => frame.screen().includes('glm-5.3 · max · 12m0s')), frame.lines().slice(0, 4).join('|'))
-        check('metadata ' + cols + ': live preview remains one compact row', frame.screen().includes('LATEST-PREVIEW') && !frame.screen().includes('old stream line'))
+        check('metadata ' + cols + ': newest two preview rows remain below metadata', frame.screen().includes('PREVIEW-PREV') && frame.screen().includes('LATEST-PREVIEW') && !frame.screen().includes('old stream line'))
         check('metadata ' + cols + ': panel prefix and zero tools stay omitted', !frame.screen().includes(t('subagent-card-prefix')) && !frame.screen().includes('0 tools'))
+        const longOutput = 'BEGIN-MARK ' + Array.from({ length: 12 }, (_, index) => 'part-' + index).join(' ') + ' END-MARK'
+        frame.rerender(React.createElement(SubagentCard, { subagent: { ...agent, output: [longOutput] } as never, variant: 'panel' }))
+        check('metadata ' + cols + ': latest two visual rows keep the tail of one long line', await settled(() => frame.screen().includes('END-MARK')) && !frame.screen().includes('BEGIN-MARK') && frame.lines().filter(line => /part-|END-MARK/.test(line)).length === 2 && frame.screen().includes('glm-5.3 · max · 12m0s'), frame.lines().slice(0, 5).join('|'))
       },
       cols,
     )

@@ -101,7 +101,7 @@ function agent(id: string, description: string, status: string, extra: Partial<F
     ...extra,
   }
 }
-const A1 = agent('agent-run-1', 'AAA1', 'running', { output: ['older output', 'LIVE-PREVIEW-LINE'] })
+const A1 = agent('agent-run-1', 'AAA1', 'running', { output: ['older output', 'LIVE-PREVIEW-PREV', 'LIVE-PREVIEW-LINE'] })
 const A2 = agent('agent-done-2', 'AAA2', 'completed', { completedAt: NOW - 10_000 })
 const A3 = agent('agent-fail-3', 'AAA3', 'failed', { completedAt: NOW - 5_000, error: 'boom' })
 const A4 = agent('agent-done-4', 'AAA4', 'completed', { completedAt: NOW - 9_000 })
@@ -239,9 +239,9 @@ try {
   const firstAgentRow = findRow('AAA1')
   const secondAgentRow = findRow('AAA2')
   const betweenAgentRows = firstAgentRow >= 0 && secondAgentRow > firstAgentRow ? lines().slice(firstAgentRow + 1, secondAgentRow) : []
-  check('layout: compact metadata and only one view action separate adjacent agents', secondAgentRow === firstAgentRow + 4 && betweenAgentRows.some(line => line.includes('open in main view')) && !betweenAgentRows.some(line => /─{20,}/.test(line)), JSON.stringify(betweenAgentRows))
+  check('layout: compact metadata and only one view action separate adjacent agents', secondAgentRow === firstAgentRow + 5 && betweenAgentRows.some(line => line.includes('open in main view')) && !betweenAgentRows.some(line => /─{20,}/.test(line)), JSON.stringify(betweenAgentRows))
   check('layout: only the focused agent gets an open-view action', lines().filter(line => line.includes('open in main view')).length === 1)
-  check('layout: running agents retain their newest output preview', has('LIVE-PREVIEW-LINE') && !has('older output'))
+  check('layout: running agents retain their newest two output rows', has('LIVE-PREVIEW-PREV') && has('LIVE-PREVIEW-LINE') && !has('older output'))
   setSubagents([A1, A2, A3, A4, A5])
   check('layout: five agents fit in the panel host', await settled(() => has('AAA1') && has('AAA5')), lines().filter(line => /AAA[1-5]/.test(line)).join('|'))
   agentRows = lines().filter(line => /AAA[1-5]/.test(line))

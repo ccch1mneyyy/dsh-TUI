@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Box, Text, useTerminalSize, useAnimationFrame } from '../ui.js'
 import type { SubagentState } from '../dsh-adapter/subagents.js'
 import { t } from '../i18n.js'
+import { jobOutputRows } from './Chat/JobCard.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 
@@ -46,6 +47,9 @@ export function SubagentCard({ subagent, focused, onClick, variant = 'default' }
   const hoverTint = onClick !== undefined && hovered && !focused
   // Keep the description on one row; narrower panels progressively drop metadata.
   const { columns } = useTerminalSize()
+  const previewRows = panelMode && running
+    ? jobOutputRows(subagent.output.map(text => ({ text })), Math.max(1, columns - 5), 2)
+    : []
   const metaParts: string[] = []
   if (columns >= 56) metaParts.push(subagent.model ?? subagent.provider ?? 'default')
   if (shownDuration !== undefined) metaParts.push(formatDuration(shownDuration))
@@ -91,6 +95,8 @@ export function SubagentCard({ subagent, focused, onClick, variant = 'default' }
       )}
     </Box>
     {panelMode && panelMeta !== '' && <Box paddingLeft={3}><Text dimColor wrap="wrap">{panelMeta}</Text></Box>}
-    {liveLine !== undefined && <Text dimColor wrap="truncate">{`  │ ${liveLine}`}</Text>}
+    {panelMode
+      ? previewRows.map(row => <Text key={row.key} dimColor wrap="truncate">{`  ${row.text}`}</Text>)
+      : liveLine !== undefined && <Text dimColor wrap="truncate">{`  │ ${liveLine}`}</Text>}
   </Box>
 }
