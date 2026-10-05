@@ -1,6 +1,7 @@
 import React from 'react'
 import chalk from 'chalk'
 import { Box, NoSelect, Text, useTheme } from '../../ui.js'
+import { useAnimationFrame } from '../../ink/hooks/use-animation-frame.js'
 import { getTheme } from '../../theme.js'
 import { alive, mix } from '../../trajectory/motion.js'
 import { parseRGB } from '../Spinner/spinnerUtils.js'
@@ -65,7 +66,7 @@ export function miniWakeWidth(columns: number): number {
 export function MiniWake({
   band,
   hint,
-  tick,
+  animate,
   onOpen,
   hoverHint,
 }: {
@@ -76,7 +77,9 @@ export function MiniWake({
    * opened for the first time. Absent afterwards.
    */
   hint?: string
-  tick: number
+  /** Breathe the running cell. The strip owns this clock so its ticks
+   *  re-render the strip alone, not the screen around it (#1207). */
+  animate: boolean
   /**
    * Open the trajectory scene. The strip is the conversation's permanent
    * pointer at that second view, so pointing AT it and clicking is the
@@ -91,11 +94,12 @@ export function MiniWake({
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
   const [hovered, setHovered] = React.useState(false)
+  const [clockRef, time] = useAnimationFrame(animate ? 120 : null)
   if (band.buckets.length === 0) return null
 
   const logFloor = Math.log1p(Math.max(0, band.floor))
   const logSpan = Math.max(1e-6, Math.log1p(Math.max(1, band.peak)) - logFloor)
-  const breath = alive(tick)
+  const breath = alive(Math.floor(time / 120))
 
   let strip = ''
   for (const bucket of band.buckets) {
@@ -126,6 +130,7 @@ export function MiniWake({
   return (
     <NoSelect>
       <Box
+        ref={clockRef}
         flexShrink={0}
         flexDirection="row"
         gap={1}

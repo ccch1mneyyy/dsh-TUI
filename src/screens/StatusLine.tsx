@@ -217,8 +217,8 @@ export function StatusLine({
    *  Preferred over the channel's own copy when the composition provides it. */
   activity?: ActivityLineValue
   /**
-   * The session projected onto the status line's few columns, plus the
-   * animation tick and the self-retiring key hint.
+   * The session projected onto the status line's few columns, whether its
+   * running cell animates, and the self-retiring key hint.
    *
    * A strip that shows the session's shape keeps earning its space in a way a
    * static label cannot, and it carries the failure signal in position rather
@@ -228,7 +228,7 @@ export function StatusLine({
   wake?: {
     band: WaveBand
     hint?: string
-    tick: number
+    animate: boolean
     /** Click target for the strip: opens the trajectory scene. */
     onOpen?: () => void
     /** Chord revealed while the pointer rests on the strip. */
@@ -714,7 +714,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
             {showActivity ? trailer : null}
           </Box>
           {showTrajectory && wake !== undefined ? (
-            <MiniWake band={wake.band} hint={wake.hint} tick={wake.tick} onOpen={wake.onOpen} hoverHint={wake.hoverHint} />
+            <MiniWake band={wake.band} hint={wake.hint} animate={wake.animate} onOpen={wake.onOpen} hoverHint={wake.hoverHint} />
           ) : null}
         </Box> : null}
       </Box>
