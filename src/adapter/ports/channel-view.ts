@@ -1002,13 +1002,25 @@ export interface BackendChannelOption {
   readonly tiers: readonly { readonly tier: string; readonly to: string }[]
   /** The connection fields (never a token literal); absent on
    *  mapping-only channels. Equal fingerprints = the same connection, so
-   *  the picker can decide restart-vs-refresh without the secret. */
+   *  the backend host can decide restart-vs-refresh without the secret. */
   readonly connection?: {
     readonly baseUrl?: string
     readonly hasToken: boolean
     readonly envKeys: readonly string[]
     readonly fingerprint: string
   }
+}
+
+/** A relay profile write; omitted fields keep their stored values. */
+export interface BackendChannelInput {
+  readonly id: string
+  readonly name: string
+  readonly baseUrl?: string
+  /** Undefined = keep; '' removes the stored token and its ref. */
+  readonly token?: string
+  readonly env?: Readonly<Record<string, string>>
+  readonly models?: Readonly<Record<string, string>>
+  readonly tiers?: Readonly<Record<string, string>>
 }
 
 /** @internal */
@@ -1128,9 +1140,6 @@ export interface ChannelCapabilities {
    *  channels.json). False on every other backend, DSH included: the only
    *  flag a DSH session does not get by default. */
   readonly channels: boolean
-  /** `/mcp reconnect|toggle` control the backend's MCP servers (a DSH
-   *  session reports status only). */
-  readonly mcpControl: boolean
 }
 
 /**

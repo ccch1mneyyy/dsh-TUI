@@ -106,6 +106,9 @@ function fixture(jobs?: unknown, options: { throwOnEvent?: string; effectCleanup
   const unregister = registerTuiChannel(ctx, raw)
   const mount = mountChannelUi(ctx, raw, undefined, 'new')
   bindChannelCommands(raw, mount.channel)
+  assert.equal(mount.channel.backendChannels(), undefined, 'DSH has no native channel host')
+  assert.equal(mount.channel.backendModes(), undefined, 'DSH keeps its shared mode pipeline')
+  assert.equal(mount.channel.backendMcp(), undefined, 'DSH reports MCP status without server controls')
   mount.channel.setWhale(false)
   assert.equal(raw.whale, false)
   // The minimal-UI flag: `minimal` stays a live deprecated alias of
@@ -137,6 +140,42 @@ function fixture(jobs?: unknown, options: { throwOnEvent?: string; effectCleanup
   await assert.rejects(raw.switchWorkspace({ cwd: '/other', label: 'other' } as never), /lifetime/)
   unregister()
   raw.releaseContributions()
+}
+
+// Native subhosts keep passive reads available in shadow mode while their
+// writes and every retained callback stay behind the production UI lease.
+for (const mode of ['new', 'passive-shadow', 'replay-shadow'] as const) {
+  const { ctx, raw } = fixture()
+  const option = { id: 'native', name: 'Native', models: [], tiers: [] }
+  let writes = 0
+  raw.backendChannels = () => ({
+    snapshot: () => ({ channels: [option], activeId: option.id }),
+    peekImport: () => ({ tiers: { opus: 'mapped' } }),
+    activate: () => { writes += 1; return { ok: true, restart: false } },
+    importFromSettings: () => { writes += 1; return { option, restart: false } },
+    save: () => { writes += 1; return option }, remove: () => { writes += 1; return true },
+  })
+  raw.backendModes = () => ({ snapshot: () => ({ modes: [{ id: 'default', name: 'Default' }], currentIndex: 0 }), set: async () => { writes += 1; return true } })
+  raw.backendMcp = () => ({ reconnect: async () => { writes += 1; return true }, toggle: async () => { writes += 1; return true } })
+  const unregister = registerTuiChannel(ctx, raw)
+  const mount = mountChannelUi(ctx, raw, undefined, mode)
+  try {
+    const channels = mount.channel.backendChannels()!
+    const modes = mount.channel.backendModes()!
+    const mcp = mount.channel.backendMcp()!
+    assert.equal(channels.snapshot().activeId, 'native')
+    assert.equal(channels.peekImport()?.tiers.opus, 'mapped')
+    assert.equal(modes.snapshot().currentIndex, 0)
+    assert.ok(Object.isFrozen(channels.snapshot().channels[0]), 'native roster rows are detached immutable values')
+    const calls = [() => channels.activate('native'), () => channels.importFromSettings(), () => channels.save({ id: 'native', name: 'Native' }), () => channels.remove('native'), () => modes.set('default'), () => mcp.reconnect('server'), () => mcp.toggle('server', true)]
+    for (const call of calls) {
+      if (mode === 'new') await call()
+      else assert.throws(call, /shadow policy/)
+    }
+    assert.equal(writes, mode === 'new' ? calls.length : 0)
+    mount.dispose()
+    for (const call of [...calls, () => channels.snapshot(), () => channels.peekImport(), () => modes.snapshot()]) assert.throws(call, /lifetime/)
+  } finally { mount.dispose(); unregister(); raw.releaseContributions() }
 }
 
 // Real event-router/projector wiring resets the warning latch on compaction.

@@ -230,8 +230,8 @@ export interface SessionCapabilities {
     importFromSettings(): ChannelProfileView | undefined
     /** Upsert one profile with connection fields (the /channel wizard): a
      *  given token goes to the credential seam, the profile keeps only its
-     *  ref. Absent on backends without the management surface. */
-    save?(input: {
+     *  ref. */
+    save(input: {
       readonly id: string
       readonly name: string
       /** Undefined = keep the stored field; '' clears it. */
@@ -244,10 +244,10 @@ export interface SessionCapabilities {
       readonly tiers?: Readonly<Record<string, string>>
     }): ChannelProfileView
     /** Drop one profile (and its stored token); false for an unknown id. */
-    remove?(id: string): boolean
+    remove(id: string): boolean
     /** What the CLI settings env holds for an import (the wizard's offer): the
      *  base URL and the absorbable tier rules, without creating anything. */
-    peekSettingsImport?(): { readonly baseUrl?: string; readonly tiers: Readonly<Record<string, string>> } | undefined
+    peekSettingsImport(): { readonly baseUrl?: string; readonly tiers: Readonly<Record<string, string>> } | undefined
   }
   readonly compact?: { run(): Promise<void> }
   /**

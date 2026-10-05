@@ -1,5 +1,5 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, TurnUsageSummary, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, TrajectoryLane, TrajectorySource, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, TurnUsageSummary, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, TrajectoryLane, TrajectorySource, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption, BackendChannelInput } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { AgentCapabilities } from './channel-capabilities.js'
@@ -18,6 +18,18 @@ export interface BackendAuthHost {
   /** Restart the backend on the freshly stored credential. */
   reconnect(): Promise<void>
 }
+
+/** Relay profile management for the bound backend session. */
+export interface BackendChannelsHost {
+  snapshot(): { readonly channels: readonly BackendChannelOption[]; readonly activeId: string | undefined }
+  activate(id: string): { readonly ok: boolean; readonly restart: boolean }
+  importFromSettings(): { readonly option: BackendChannelOption; readonly restart: boolean } | undefined
+  save(input: BackendChannelInput): BackendChannelOption | undefined
+  remove(id: string): boolean
+  peekImport(): { readonly baseUrl?: string; readonly tiers: Readonly<Record<string, string>> } | undefined
+}
+export interface BackendModesHost { snapshot(): { modes: readonly BackendModeOption[]; currentIndex: number }; set(id: string): Promise<boolean> }
+export interface BackendMcpHost { reconnect(name: string): Promise<boolean>; toggle(name: string, enabled: boolean): Promise<boolean> }
 
 /**
  * The public channel surface a screen renders: the full transcript and live
@@ -548,67 +560,9 @@ export interface ChannelUi {
   readonly modeIndex: number
   /** Shift+Tab: advance to the next configured session mode. */
   cycleMode(): Promise<void>
-  /**
-   * The bound session's backend-native permission modes (its typed `modes`
-   * capability), with the index of the current one (-1 when the live mode is
-   * not in the list). Synchronous and silent: an absent capability answers
-   * an empty list, as `permissionPresets()` does for an unavailable roster,
-   * so the UI can probe without toasting.
-   */
-  listModes(): { modes: readonly BackendModeOption[]; currentIndex: number }
-  /**
-   * Switch the backend-native permission mode by id (validated against the
-   * live list, the same rule `setEffort` applies); false + a notify when
-   * the capability or the id is absent. DSH sessions never route here —
-   * their Shift+Tab cycle and `/permission` presets are session modes.
-   */
-  setMode(id: string): Promise<boolean>
-  /**
-   * The bound session's relay channel profiles (its typed `channels`
-   * capability), with the active id. Synchronous and silent: an absent
-   * capability answers the empty roster, and the /channel picker renders
-   * from it (its import row is the only entry when the file holds nothing).
-   */
-  listChannels(): { channels: readonly BackendChannelOption[]; activeId: string | undefined }
-  /**
-   * Switch the active channel profile by id (validated against the live
-   * roster). The model display re-resolves in the same call, so the footer
-   * and the /model labels repaint immediately. False + a notify when the
-   * capability or the id is absent.
-   */
-  setChannel(id: string): boolean
-  /**
-   * Import (or refresh) the channel profile implied by the CLI settings
-   * env: the ANTHROPIC_BASE_URL host names it, ANTHROPIC_*_MODEL become its
-   * tiers, the base URL becomes the profile's, and ANTHROPIC_AUTH_TOKEN
-   * moves into the credential store (the profile keeps only its ref).
-   * Undefined when the env holds nothing importable; the caller notifies
-   * either way.
-   */
-  importChannel(): BackendChannelOption | undefined
-  /**
-   * Upsert one channel profile with connection fields (the /channel
-   * wizard): a collected token goes to the credential seam,
-   * channels.json keeps only the ref. Undefined when the backend has no
-   * management surface; the caller notifies.
-   */
-  saveChannel(input: {
-    readonly id: string
-    readonly name: string
-    readonly baseUrl?: string
-    /** Undefined = keep; '' removes the stored token and its ref. */
-    readonly token?: string
-    readonly env?: Readonly<Record<string, string>>
-    readonly models?: Readonly<Record<string, string>>
-    readonly tiers?: Readonly<Record<string, string>>
-  }): BackendChannelOption | undefined
-  /** Drop one channel profile and its stored token; false when the
-   *  backend has no management surface or no such channel. */
-  removeChannel(id: string): boolean
-  /** What the CLI settings env holds for an import (the wizard's
-   *  absorb-tiers offer): the base URL and tier rules, read-only,
-   *  nothing created. Undefined when nothing is importable. */
-  peekChannelImport(): { readonly baseUrl?: string; readonly tiers: Readonly<Record<string, string>> } | undefined
+  backendChannels(): BackendChannelsHost | undefined
+  backendModes(): BackendModesHost | undefined
+  backendMcp(): BackendMcpHost | undefined
   /** Read the official permission preset roster and current identity. */
   permissionPresets(): PermissionPresetSnapshot
   /**
@@ -744,10 +698,6 @@ export interface ChannelUi {
   pushLocal(title: string, lines: readonly string[]): void
   /** MCP server/tool status for /mcp: one line per server, or setup guidance. */
   mcpStatus(): string[]
-  /** `/mcp reconnect <name>` / `/mcp toggle <name> on|off` where the backend
-   *  controls its servers (`capabilities.mcpControl`); reports the outcome
-   *  itself (a notice), resolving true when it was done. */
-  mcpControl(request: { readonly action: 'reconnect'; readonly name: string } | { readonly action: 'toggle'; readonly name: string; readonly enabled: boolean }): Promise<boolean>
   /** Write the conversation transcript to `dsh-tui-export-<ts>.md` in the
    *  session cwd; returns the written path, or null on failure. */
   exportSession(): string | null

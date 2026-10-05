@@ -17,7 +17,7 @@
  *     手写的 models）。
  *  4. 命令门控（/channel）：BACKEND_CHANNEL_COMMAND 随 channels 能力出现
  *     （claude 可见），DSH 快照永不列出（该 flag 刻意不走 dsh 短路）。
- *  5. 切换即刷新：channel.setChannel 在同一次调用里写存储，并经
+ *  5. 切换即刷新：backendChannels().activate 在同一次调用里写存储，并经
  *     session-controls 的 refreshModelDisplay 钩子重算 modelDisplay，页脚
  *     立即换名，不等下一次 model.changed。
  *  6. 渠道连接：channels.json 增加 baseUrl/tokenRef/env。token 只存进
@@ -25,8 +25,8 @@
  *     断言）。激活渠道的连接在 spawn 时注入（authPlan.env + SDK settings
  *     选项的 flag 层，因为 CLI 2.1.287 的 settings env 会覆盖进程 env）；
  *     导入时一并吸收 baseUrl/token；同连接切换就地刷新，异连接走新会话
- *     重启（sameOptionConnection）；问答式向导（src/channel/channel-wizard.ts，
- *     headless 驱动）走 saveChannel/removeChannel/peekChannelImport 三个动作。
+ *     重启（宿主指纹比较）；问答式向导（src/channel/channel-wizard.ts，
+ *     headless 驱动）走宿主 save/remove/peekImport 三个动作。
  *  7. 凭据隔离：带连接的渠道在 flag 层显式写出三个凭据键：API_KEY=''、
  *     OAUTH=''、AUTH_TOKEN=渠道 token 或 ''（空串用来覆盖 user settings 里
  *     cc-switch 写入的旧值），并清空路由变量，child env 同步清理冲突拼写；
@@ -54,7 +54,12 @@ import { ClaudeChannelConflictError, channelMissingCredential, resolveClaudeAuth
 import { writeFlagSettingsFile } from '../src/backends/claude/flag-settings.js'
 import { channelStartNotices } from '../src/backends/claude/backend.js'
 import { loadClaudeSdk } from '../src/backends/claude/sdk.js'
-import { runChannelWizard, sameOptionConnection } from '../src/channel/channel-wizard.js'
+import { runChannelWizard } from '../src/channel/channel-wizard.js'
+import { createClaudeControls } from '../src/backends/claude/controls.js'
+import { memoryClaudePrefs } from '../src/backends/claude/prefs.js'
+import type { SessionCapabilities } from '../src/agent/capabilities.js'
+import type { AgentSession } from '../src/agent/session.js'
+import type { BackendChannelOption } from '../src/adapter/ports/channel-view.js'
 import { importedModelEnv, mergedModelEnv, readModelEnvTruth } from '../src/backends/claude/modelEnv.js'
 import { openClaudeSession } from '../src/backends/claude/session.js'
 import { BACKEND_CHANNEL_COMMAND, LOCAL_COMMANDS } from '../src/commands.js'
@@ -240,7 +245,7 @@ const init = {
 
 // ---- 5. /channel gating ------------------------------------------------------
 {
-  const channelsCap = { list: () => [], activeId: () => undefined, setActive: () => undefined, importFromSettings: () => undefined }
+  const channelsCap = { list: () => [], activeId: () => undefined, setActive: () => undefined, importFromSettings: () => undefined, save: (input: { id: string; name: string }) => ({ ...input, models: [], tiers: [] }), remove: () => false, peekSettingsImport: () => undefined }
   const claudeSnapshot = channelCapabilities({ backendId: 'claude', backendLabel: 'Claude', capabilities: { native: {}, channels: channelsCap } as never, dsh: false })
   check('gate: a channels-capable backend lists /channel and flags channels', claudeSnapshot.commands.includes('channel') && claudeSnapshot.channels === true, claudeSnapshot.commands)
   check('gate: a backend without the capability never lists /channel', !channelCapabilities({ backendId: 'claude', backendLabel: 'Claude', capabilities: { native: {} } as never, dsh: false }).commands.includes('channel'))
@@ -276,13 +281,13 @@ const init = {
       check('bridge: modelDisplay lands after session.ready (phase-1 path intact)', channel.modelDisplay === 'glm-fix-5.3', channel.modelDisplay)
       check('bridge: the snapshot offers /channel on a real claude channel', channel.backendCapabilities.commands.includes('channel') && channel.backendCapabilities.channels === true, channel.backendCapabilities.commands)
       check('bridge: the merged command list rides BACKEND_CHANNEL_COMMAND', channel.commandList.some(command => command.name === 'channel' && command.descriptionKey === 'cmd-desc-channel'), channel.commandList.filter(command => command.name === 'channel'))
-      const roster = channel.listChannels()
+      const roster = channel.backendChannels()!.snapshot()
       check('bridge: listChannels bridges the capability rows and the active id', roster.channels.length === 2 && roster.activeId === 'zhipu' && roster.channels[0]?.models[0]?.to === 'glm-fix-5.3', roster)
-      check('bridge: setChannel switches and refreshes the display in the SAME call', channel.setChannel('other') === true && channel.modelDisplay === 'other-opus', channel.modelDisplay)
+      check('bridge: setChannel switches and refreshes the display in the SAME call', channel.backendChannels()!.activate('other').ok === true && channel.modelDisplay === 'other-opus', channel.modelDisplay)
       check('bridge: the store itself moved', store.read().active === 'other', store.read())
-      check('bridge: setChannel refuses an unknown id', channel.setChannel('nope') === false && channel.modelDisplay === 'other-opus')
-      const imported = channel.importChannel()
-      check('bridge: importChannel lands in the roster', imported !== undefined && imported.id === 'settings' && channel.listChannels().channels.some(option => option.id === 'settings'), imported)
+      check('bridge: setChannel refuses an unknown id', channel.backendChannels()!.activate('nope').ok === false && channel.modelDisplay === 'other-opus')
+      const imported = channel.backendChannels()!.importFromSettings()?.option
+      check('bridge: importChannel lands in the roster', imported !== undefined && imported.id === 'settings' && channel.backendChannels()!.snapshot().channels.some(option => option.id === 'settings'), imported)
     } finally {
       channel.releaseContributions()
       await session.dispose()
@@ -297,12 +302,12 @@ const init = {
 {
   const { readFileSync: readSrc } = await import('node:fs')
   const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url), 'utf8')
-  const chatSrc = readRepo('../src/screens/Chat.tsx')
+  const chatSrc = readRepo('../src/screens/Chat.tsx') + readRepo('../src/screens/chat/useBackendChannels.ts')
   check('tripwire: Chat hosts the channel overlay key branch', chatSrc.includes("overlay.kind === 'channel'"))
-  check('tripwire: Chat renders ChannelPicker inside pickerPanels', chatSrc.includes('<ChannelPicker') && chatSrc.includes("import { ChannelPicker, type ChannelPickerRow } from '../components/ChannelPicker.js'"))
-  check('tripwire: the confirm path drives setChannel/importChannel through the bridge', chatSrc.includes('channel.setChannel(row.option.id)') && chatSrc.includes('channel.importChannel()'))
-  const controlsSrc = readRepo('../src/dsh-adapter/channel/core/actions.ts')
-  check('tripwire: the switch action re-resolves the model display in the same call', controlsSrc.includes('deps.controls.refreshModelDisplay(deps.session())'))
+  check('tripwire: Chat renders ChannelPicker inside pickerPanels', chatSrc.includes('<ChannelPicker') && chatSrc.includes("import { ChannelPicker } from '../components/ChannelPicker.js'"))
+  check('tripwire: the confirm path drives activation/import through the host', chatSrc.includes('host.activate(row.option.id)') && chatSrc.includes('host.importFromSettings()'))
+  const controlsSrc = readRepo('../src/dsh-adapter/channel/core/compose.ts')
+  check('tripwire: the switch host re-resolves the model display in the same call', controlsSrc.includes('controls.refreshModelDisplay(fence.session)'))
 }
 
 // ---- 8. connection fields in the store -------------------------------------
@@ -882,148 +887,124 @@ const init = {
   }
 }
 
+// Wizard regressions use the production capability and subhost; only the
+// SDK transport and persistent stores are replaced.
+const wizardChannels: ReturnType<typeof createChannel>[] = []
+const channelsChannel = (channels: NonNullable<SessionCapabilities['channels']>) => {
+  const session: AgentSession = {
+    ref: { backendId: 'fake', sessionId: 'wizard-fixture' }, cwd: '/fixture/project', status: 'idle',
+    capabilities: { native: {}, channels }, history: async () => [],
+    subscribe: () => () => undefined, submit: async () => ({ accepted: true }),
+    cancel: async () => ({ stillQueued: [], outcome: 'confirmed' }), dispose: async () => undefined,
+  }
+  const ctx = { on: () => () => undefined, get: () => undefined, logger: { warn: () => undefined } } as never
+  const channel = createChannel(ctx, session, { model: 'm', provider: '', cwd: session.cwd, activity: false })
+  wizardChannels.push(channel)
+  return channel
+}
+const wizardHarness = (initial: Parameters<typeof memoryClaudeChannels>[0], initialTokens: Record<string, string> = {}, env: Record<string, string> = {}) => {
+  const store = memoryClaudeChannels(initial)
+  const tokens = memoryClaudeChannelTokens(initialTokens)
+  const channels = createClaudeControls({
+    query: () => ({} as never), emit: () => undefined, submitText: async () => undefined,
+    currentModel: () => 'm', currentMode: () => 'default', noteModel: () => [], noteMode: () => [],
+    prefs: memoryClaudePrefs(), channels: store, tokens, settingsEnv: () => env, debug: () => undefined,
+  }).capabilities.channels
+  let saved = 0
+  const channel = channelsChannel({ ...channels, save: input => { saved += 1; return channels.save(input) } })
+  const deps = (selected: Record<string, string[]>, custom: Record<string, string> = {}) => ({
+    ask: async (request: { questions: { id: string }[] }) => {
+      const id = request.questions[0]!.id
+      return { answers: [{ id, ...(selected[id] === undefined ? { custom: custom[id] ?? '' } : { selected: selected[id]! }) }] } as never
+    },
+    notify: () => undefined, pushLocal: () => undefined, host: channel.backendChannels()!,
+  })
+  return { store, tokens, channel, deps, savedCalls: () => saved }
+}
+
+try {
 // ---- 13. same connection vs restart ----------------------------------------
 {
   const conn = (fingerprint: string, baseUrl?: string) => ({ baseUrl, hasToken: true, envKeys: [] as string[], fingerprint })
   const row = (id: string, connection?: ReturnType<typeof conn>) => ({ id, name: id, models: [], tiers: [], ...(connection === undefined ? {} : { connection }) })
+  const restartBetween = (from: BackendChannelOption | undefined, to: BackendChannelOption): boolean => {
+    let list = from === undefined ? [] : [from]
+    const channel = channelsChannel({
+      list: () => list, activeId: () => from?.id, setActive: () => undefined,
+      importFromSettings: () => undefined, save: () => to, remove: () => false, peekSettingsImport: () => undefined,
+    })
+    const host = channel.backendChannels()!
+    list = [to]
+    return host.activate(to.id).restart
+  }
   check('restart: equal fingerprints are the same connection (no restart)',
-    sameOptionConnection(row('a', conn('fp1')), row('b', conn('fp1'))) === true)
+    restartBetween(row('a', conn('fp1')), row('b', conn('fp1'))) === false)
   check('restart: a token rotation changes the fingerprint (restart)',
-    sameOptionConnection(row('a', conn('fp1')), row('a', conn('fp2'))) === false)
+    restartBetween(row('a', conn('fp1')), row('a', conn('fp2'))) === true)
   check('restart: mapping-only channels are the same connection',
-    sameOptionConnection(row('a'), row('b')) === true)
+    restartBetween(row('a'), row('b')) === false)
   check('restart: no active channel to mapping-only channel keeps the process',
-    sameOptionConnection(undefined, row('mapping-only')) === true)
+    restartBetween(undefined, row('mapping-only')) === false)
   check('restart: no active channel to connected channel restarts',
-    sameOptionConnection(undefined, row('connected', conn('fp1'))) === false)
+    restartBetween(undefined, row('connected', conn('fp1'))) === true)
   check('restart: mapping-only vs connected differs (restart)',
-    sameOptionConnection(row('a'), row('b', conn('fp1'))) === false)
+    restartBetween(row('a'), row('b', conn('fp1'))) === true)
+}
+
+// Host activation refuses a connection change before persistence while a
+// turn runs; mapping-only changes still refresh in place.
+{
+  const h = wizardHarness({ active: 'map-a', channels: [
+    { id: 'map-a', name: 'Map A' }, { id: 'map-b', name: 'Map B' },
+    { id: 'connected', name: 'Connected', baseUrl: 'https://relay.example' },
+  ] })
+  h.channel.working = true
+  const host = h.channel.backendChannels()!
+  const mapping = host.activate('map-b')
+  check('host: mapping-only activation is allowed during a turn', mapping.ok && !mapping.restart && h.store.read().active === 'map-b')
+  const refused = host.activate('connected')
+  check('host: a running connection switch is refused BEFORE writing active id', !refused.ok && refused.restart && h.store.read().active === 'map-b' && h.channel.notifications.some(item => item.text === t('channel-switch-while-working')))
+  h.channel.working = false
+  check('host: the same connection switch restarts when idle', host.activate('connected').restart && h.store.read().active === 'connected')
+  const editing = h.channel.backendChannels()!
+  editing.save({ id: 'connected', name: 'Connected', token: 'rotated-token' })
+  check('host: save then same-id activation compares the pre-save fingerprint', editing.activate('connected').restart === true)
+  check('host: a new accessor takes a new connection snapshot', h.channel.backendChannels()!.activate('connected').restart === false)
+}
+{
+  const env = { ANTHROPIC_BASE_URL: 'https://relay.example', ANTHROPIC_AUTH_TOKEN: 'imported-token', ANTHROPIC_DEFAULT_OPUS_MODEL: 'imported-opus' }
+  const draft = importFromSettingsEnv(env)!
+  const active = wizardHarness({ active: draft.id, channels: [{ id: draft.id, name: draft.name, baseUrl: 'https://old.example' }] }, {}, env)
+  const host = active.channel.backendChannels()!
+  check('host: peekImport exposes settings without writing', host.peekImport()?.tiers.opus === 'imported-opus' && active.store.read().channels[0]?.baseUrl === 'https://old.example')
+  check('host: importing over the active connection reports restart', host.importFromSettings()?.restart === true)
+  check('host: re-importing the same connection needs no restart', active.channel.backendChannels()!.importFromSettings()?.restart === false)
+  const inactive = wizardHarness({ active: 'keep', channels: [{ id: 'keep', name: 'Keep', baseUrl: 'https://keep.example' }] }, {}, env)
+  check('host: importing an inactive channel never changes the active connection', inactive.channel.backendChannels()!.importFromSettings()?.restart === false && inactive.store.read().active === 'keep')
 }
 
 // ---- 14. the wizard, headless (scripted answers) ---------------------------
 {
-  const store = memoryClaudeChannels({ channels: [] })
-  const tokens = memoryClaudeChannelTokens()
-  const saveCalls: string[] = []
-  const deps = {
-    ask: async (request: { questions: { id: string }[] }, options?: { redact?: boolean }) => {
-      const id = request.questions[0]!.id
-      const answerFor: Record<string, { selected?: string[]; custom?: string }> = {
-        action: { selected: ['__add__'] },
-        name: { custom: 'ZhiPu' },
-        baseurl: { custom: 'https://open.bigmodel.cn/api/anthropic' },
-        token: { custom: 'wiz-secret' },
-        tiers: { selected: ['__skip__'] },
-        switch: { selected: ['__no__'] },
-      }
-      return { answers: [{ id, ...answerFor[id]! }] } as never
-    },
-    notify: () => undefined,
-    pushLocal: () => undefined,
-    roster: () => {
-      const rows = store.read().channels.map(channel => ({
-        id: channel.id, name: channel.name, models: [], tiers: [],
-        ...(channel.baseUrl === undefined && channel.tokenRef === undefined ? {} : {
-          connection: {
-            ...(channel.baseUrl === undefined ? {} : { baseUrl: channel.baseUrl }),
-            hasToken: channel.tokenRef !== undefined,
-            envKeys: Object.keys(channel.env ?? {}),
-            fingerprint: channel.baseUrl + ':' + String(channel.tokenRef),
-          },
-        }),
-      }))
-      return { channels: rows, activeId: store.read().active }
-    },
-    save: (input: { id: string; name: string; baseUrl?: string; token?: string }) => {
-      saveCalls.push(input.id)
-      const ref = channelTokenRef(input.id)
-      if (input.token !== undefined) tokens.write(ref, input.token)
-      store.save({
-        id: input.id, name: input.name,
-        ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }),
-        ...(input.token === undefined ? {} : { tokenRef: ref }),
-      })
-      return deps.roster().channels.find(row => row.id === input.id)
-    },
-    remove: (id: string) => { store.remove(id); return true },
-    activate: (id: string) => { store.setActive(id); return true },
-    peekSettings: () => ({ baseUrl: 'https://open.bigmodel.cn/api/anthropic', tiers: { opus: 'glm-5.3[1M]' } }),
-  }
-  // The wizard compares a selected option against its i18n label, so the
-  // scripted answers pick the real t(...) labels; free-text questions are
-  // answered from `custom`.
-  const { t } = await import('../src/i18n.js')
-  const pick: Record<string, string[]> = {
-    action: [t('channel-wiz-opt-add')],
-    tiers: [t('channel-wiz-opt-tiers-skip')],
-    switch: [t('channel-wiz-opt-switch-no')],
-  }
-  const custom: Record<string, string> = { name: 'ZhiPu', baseurl: 'https://open.bigmodel.cn/api/anthropic', token: 'wiz-secret' }
-  deps.ask = async (request: { questions: { id: string }[] }) => {
-    const id = request.questions[0]!.id
-    return { answers: [{ id, ...(pick[id] === undefined ? { custom: custom[id] ?? '' } : { selected: pick[id]! }) }] } as never
-  }
+  const h = wizardHarness({ channels: [] }, {}, {
+    ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.3[1M]',
+  })
+  const { store, tokens } = h
+  const deps = h.deps({
+    action: [t('channel-wiz-opt-add')], tiers: [t('channel-wiz-opt-tiers-skip')], switch: [t('channel-wiz-opt-switch-no')],
+  }, { name: 'ZhiPu', baseurl: 'https://open.bigmodel.cn/api/anthropic', token: 'wiz-secret' })
   const outcome = await runChannelWizard(deps as never)
   const landed = store.read().channels[0]
   check('wizard: the add flow saves the channel with its connection',
     outcome.kind === 'saved' && landed?.id === 'zhipu' && landed?.baseUrl === 'https://open.bigmodel.cn/api/anthropic' && landed?.tokenRef === 'CHANNEL_ZHIPU_TOKEN', { outcome, landed })
   check('wizard: the token reached the credential seam only', tokens.read('CHANNEL_ZHIPU_TOKEN') === 'wiz-secret' && !JSON.stringify(landed).includes('wiz-secret'))
   // Same connection switch → no restart; different → restart.
-  check('wizard: the comparator drives the restart flag', sameOptionConnection(deps.roster().channels[0], deps.roster().channels[0]) === true)
+  check('wizard: the host comparator drives the restart flag', deps.host.activate(landed!.id).restart === true && h.channel.backendChannels()!.activate(landed!.id).restart === false)
 }
 
 // ---- 14b. deleting or overwriting the active connection restarts -----------
 {
   const { t } = await import('../src/i18n.js')
-  /** In-memory wizard harness whose roster rows carry real-shaped
-   * fingerprints (endpoint + ref + stored token, like controls.ts's
-   * connectionFingerprint: a token rotation changes the fingerprint). */
-  const harness = (initial: { active?: string; channels: readonly { id: string; name: string; baseUrl?: string; tokenRef?: string }[] }) => {
-    const store = memoryClaudeChannels({ channels: [...initial.channels], ...(initial.active === undefined ? {} : { active: initial.active }) })
-    const tokens = memoryClaudeChannelTokens()
-    const rowOf = (channel: { id: string; name: string; baseUrl?: string; tokenRef?: string }) => ({
-      id: channel.id, name: channel.name, models: [], tiers: [],
-      ...(channel.baseUrl === undefined && channel.tokenRef === undefined ? {} : {
-        connection: {
-          ...(channel.baseUrl === undefined ? {} : { baseUrl: channel.baseUrl }),
-          hasToken: channel.tokenRef !== undefined && tokens.declared(channel.tokenRef),
-          envKeys: [] as string[],
-          fingerprint: [channel.baseUrl ?? '', channel.tokenRef ?? '', channel.tokenRef === undefined ? '' : tokens.read(channel.tokenRef) ?? ''].join('/'),
-        },
-      }),
-    })
-    const wire = (answer: (id: string) => { selected?: string[]; custom?: string }) => ({
-      ask: async (request: { questions: { id: string }[] }) => {
-        const id = request.questions[0]!.id
-        return { answers: [{ id, ...answer(id) }] } as never
-      },
-      notify: () => undefined,
-      pushLocal: () => undefined,
-      roster: () => ({ channels: store.read().channels.map(rowOf), activeId: store.read().active }),
-      // The capability's save semantics (controls.ts): undefined fields keep
-      // the current row's values; a token rotates the stored ref in place.
-      save: (input: { id: string; name: string; baseUrl?: string; token?: string }) => {
-        const current = store.read().channels.find(channel => channel.id === input.id)
-        let ref = current?.tokenRef
-        if (input.token !== undefined && input.token !== '') {
-          ref = ref ?? channelTokenRef(input.id)
-          tokens.write(ref, input.token)
-        }
-        store.save({
-          id: input.id, name: input.name,
-          ...(input.baseUrl === undefined ? { ...(current?.baseUrl === undefined ? {} : { baseUrl: current.baseUrl }) } : input.baseUrl === '' ? {} : { baseUrl: input.baseUrl }),
-          ...(ref === undefined ? {} : { tokenRef: ref }),
-        })
-        return wire(undefined as never).roster().channels.find(row => row.id === input.id)
-      },
-      remove: (id: string) => { const had = store.read().channels.some(channel => channel.id === id); store.remove(id); return had },
-      activate: (id: string) => { store.setActive(id); return true },
-      peekSettings: () => undefined,
-    })
-    const deps = (selected: Record<string, string[]>, custom: Record<string, string> = {}) =>
-      wire((id: string) => (selected[id] === undefined ? { custom: custom[id] ?? '' } : { selected: selected[id]! }))
-    return { store, tokens, deps }
-  }
+  const harness = wizardHarness
   // (a) deleting the active channel with a connection restarts: the
   //     running child still holds the erased endpoint/token.
   {
@@ -1096,46 +1077,28 @@ const init = {
   }
 }
 
+{
+  const h = wizardHarness({ active: 'conn', channels: [
+    { id: 'conn', name: 'Conn', baseUrl: 'https://relay.example', tokenRef: 'CHANNEL_CONN_TOKEN' },
+  ] }, { CHANNEL_CONN_TOKEN: 'old-token' })
+  const deps = h.deps({ action: [t('channel-wiz-opt-add')], switch: [t('channel-wiz-opt-switch-no')] }, { name: 'Conn', token: 'rotated-token' })
+  const ask = deps.ask
+  deps.ask = request => {
+    if (request.questions[0]!.id === 'switch') h.channel.working = true
+    return ask(request)
+  }
+  const outcome = await runChannelWizard(deps)
+  check('wizard: an active save during a turn still reports next-session restart', outcome.kind === 'saved' && outcome.restart && h.store.read().active === 'conn' && h.channel.notifications.some(item => item.text === t('channel-switch-while-working')))
+}
+
 // ---- 14c. an add colliding with another channel's id confirms --------------
 {
   const { t } = await import('../src/i18n.js')
   // Two different ASCII names that slug to one id.
   check('clash: two different names can still share an id', channelSlug('Open BigModel') === channelSlug('open.bigmodel') && channelSlug('open.bigmodel') === 'open-bigmodel')
-  const h = (initial: { active?: string; channels: { id: string; name: string; baseUrl?: string; tokenRef?: string }[] } = { active: 'open-bigmodel', channels: [
+  const h = (initial: Parameters<typeof memoryClaudeChannels>[0] = { active: 'open-bigmodel', channels: [
     { id: 'open-bigmodel', name: 'Open BigModel', baseUrl: 'https://open.bigmodel.cn/api/anthropic', tokenRef: 'CHANNEL_OPEN_BIGMODEL_TOKEN' },
-  ] }, initialTokens: Record<string, string> = { CHANNEL_OPEN_BIGMODEL_TOKEN: 'zhipu-secret' }) => {
-    const store = memoryClaudeChannels(initial)
-    const tokens = memoryClaudeChannelTokens(initialTokens)
-    let saved = 0
-    const deps = (selected: Record<string, string[]>, custom: Record<string, string> = {}) => ({
-      ask: async (request: { questions: { id: string }[] }) => {
-        const id = request.questions[0]!.id
-        return { answers: [{ id, ...(selected[id] === undefined ? { custom: custom[id] ?? '' } : { selected: selected[id]! }) }] } as never
-      },
-      notify: () => undefined,
-      pushLocal: () => undefined,
-      roster: () => ({
-        channels: store.read().channels.map(channel => ({
-          id: channel.id, name: channel.name, models: [], tiers: [],
-          ...(channel.baseUrl === undefined ? {} : {
-            connection: { baseUrl: channel.baseUrl, hasToken: channel.tokenRef !== undefined, envKeys: [] as string[], fingerprint: [channel.baseUrl ?? '', channel.tokenRef ?? '', channel.tokenRef === undefined ? '' : tokens.read(channel.tokenRef) ?? ''].join('/') },
-          }),
-        })),
-        activeId: store.read().active,
-      }),
-      save: (input: { id: string; name: string; baseUrl?: string; token?: string }) => {
-        saved += 1
-        const ref = store.read().channels.find(row => row.id === input.id)?.tokenRef ?? channelTokenRef(input.id)
-        tokens.write(ref, input.token ?? 'kept')
-        store.save({ id: input.id, name: input.name, ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }), tokenRef: ref })
-        return deps({} as never).roster().channels.find(row => row.id === input.id)
-      },
-      remove: (id: string) => { store.remove(id); return true },
-      activate: (id: string) => { store.setActive(id); return true },
-      peekSettings: () => undefined,
-    })
-    return { store, tokens, deps, savedCalls: () => saved }
-  }
+  ] }, initialTokens: Record<string, string> = { CHANNEL_OPEN_BIGMODEL_TOKEN: 'zhipu-secret' }) => wizardHarness(initial, initialTokens)
   // (a) declining the overwrite writes nothing.
   {
     const c = h()
@@ -1210,19 +1173,24 @@ const init = {
 {
   const { readFileSync: readSrc } = await import('node:fs')
   const readRepo = (rel: string): string => readSrc(new URL(rel, import.meta.url), 'utf8')
-  const chatSrc = readRepo('../src/screens/Chat.tsx')
+  const chatSrc = readRepo('../src/screens/Chat.tsx') + readRepo('../src/screens/chat/useBackendChannels.ts')
+  check('tripwire: a working wizard restart is reported as next-session activation', chatSrc.includes("if (channel.working) channel.notify(t('channel-switch-restart-unavailable'"))
   check('tripwire: Chat runs the wizard from the add/manage rows', chatSrc.includes('runChannelWizard({') && chatSrc.includes("{ kind: 'add' }") && chatSrc.includes("{ kind: 'manage' }"))
-  check('tripwire: Chat routes a connection change through the fresh-session funnel', chatSrc.includes('onRestartFreshSession(t(\'channel-switch-restart\'') && chatSrc.includes('sameOptionConnection(before, row.option)'))
+  check('tripwire: Chat routes a connection change through the fresh-session funnel', chatSrc.includes('onRestartFreshSession(t(\'channel-switch-restart\'') && chatSrc.includes('if (result.restart) restart(row.option.name)'))
   check('tripwire: Chat routes an import that changes the ACTIVE connection through the funnel (R3-2)',
-    chatSrc.includes('before.id === imported.id') && chatSrc.includes('sameOptionConnection(before, imported)'))
+    chatSrc.includes('host.importFromSettings()') && chatSrc.includes('if (imported?.restart) restart(imported.option.name)'))
   const pluginSrc = readRepo('../src/dsh-adapter/plugin.ts')
   check('tripwire: the composition root wires the funnel reusing the backend-switch branch',
     pluginSrc.includes('onRestartFreshSession: restartFreshSession') && pluginSrc.includes('backendSwitchRequested = backendChoice'))
   const authSrc = readRepo('../src/backends/claude/auth.ts')
   check('tripwire: the auth plan pins the channel connection in the flag layer', authSrc.includes('settings: { env: pinned }'))
-  const actionsSrc = readRepo('../src/dsh-adapter/channel/core/actions.ts')
-  check('tripwire: the channel actions delegate saveChannel/removeChannel/peekChannelImport',
-    actionsSrc.includes('saveChannel: input =>') && actionsSrc.includes('removeChannel: id =>') && actionsSrc.includes('peekChannelImport: () =>'))
+  const actionsSrc = readRepo('../src/dsh-adapter/channel/core/compose.ts')
+  check('tripwire: the channel host delegates save/remove/peekImport',
+    actionsSrc.includes('save: input =>') && actionsSrc.includes('remove: id =>') && actionsSrc.includes('peekImport: () =>'))
+}
+
+} finally {
+  for (const channel of wizardChannels) channel.releaseContributions()
 }
 
 // ---- 16. fail-closed refusals through the real backend.open ----------------

@@ -1,4 +1,4 @@
-import type { BackendChannelOption } from '../adapter/ports/channel-view.js'
+import type { BackendChannelsHost } from '../adapter/ports/channel-ui.js'
 import { t } from '../i18n.js'
 import { channelProfileSlug } from './channel-slug.js'
 import { isQuestionInterruption, type QuestionAnswer, type QuestionItem, type QuestionRequest } from './questions.js'
@@ -21,24 +21,7 @@ export interface ChannelWizardDeps {
     options?: { color?: 'error' | 'warning' | 'success'; timeoutMs?: number },
   ) => void
   readonly pushLocal: (title: string, lines: readonly string[]) => void
-  /** Live roster (the picker's own listChannels snapshot). */
-  readonly roster: () => { channels: readonly BackendChannelOption[]; activeId: string | undefined }
-  /** Upsert with connection fields; undefined = the backend has no surface. */
-  readonly save: (input: {
-    readonly id: string
-    readonly name: string
-    readonly baseUrl?: string
-    readonly token?: string
-    readonly env?: Readonly<Record<string, string>>
-    readonly models?: Readonly<Record<string, string>>
-    readonly tiers?: Readonly<Record<string, string>>
-  }) => BackendChannelOption | undefined
-  /** Drop one channel (+ its stored token); false when absent. */
-  readonly remove: (id: string) => boolean
-  /** Switch activation (persist + same-call model display refresh). */
-  readonly activate: (id: string) => boolean
-  /** What settings.json holds for an import (absorb offer), read-only. */
-  readonly peekSettings: () => { readonly baseUrl?: string; readonly tiers: Readonly<Record<string, string>> } | undefined
+  readonly host: BackendChannelsHost
 }
 
 /** What the wizard did (the caller refreshes the roster). `restart` says
@@ -86,19 +69,6 @@ function textQuestion(id: string, question: string, detail?: string): QuestionIt
   }
 }
 
-/** Whether switching `from`→`to` keeps the same connection (no restart):
- * both mapping-only, or connection fingerprints equal. The picker's switch
- * rows use it too for the restart-vs-refresh decision. */
-export function sameOptionConnection(
-  from: BackendChannelOption | undefined,
-  to: BackendChannelOption | undefined,
-): boolean {
-  if (from?.connection === undefined && to?.connection === undefined) return true
-  if (from === undefined || to === undefined) return false
-  if (from.connection === undefined || to.connection === undefined) return false
-  return from.connection.fingerprint === to.connection.fingerprint
-}
-
 /** Run the /channel management wizard (the picker's add/manage rows). */
 export async function runChannelWizard(deps: ChannelWizardDeps): Promise<ChannelWizardOutcome> {
   const { ask, notify } = deps
@@ -127,7 +97,6 @@ export async function runChannelWizard(deps: ChannelWizardDeps): Promise<Channel
  * Esc anywhere cancels with nothing written. */
 async function runAddFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutcome> {
   const { ask, notify, pushLocal } = deps
-  // ── 1. name (validated, retry ≤3) ────────────────────────────────
   let name = ''
   for (let attempt = 0; attempt < MAX_RETRY && name === ''; attempt += 1) {
     const nameAnswer = await ask({ questions: [textQuestion('name', t('channel-wiz-q-name'), t('channel-wiz-q-name-detail'))] })
@@ -137,13 +106,12 @@ async function runAddFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutcome
   if (name === '') return { kind: 'cancelled', restart: false }
   // Re-adding a channel under its own name is the edit path (the
   // name-detail says so): it keeps that row's id, whatever rule made it.
-  const sameName = deps.roster().channels.find(option => option.name === name)
+  const sameName = deps.host.snapshot().channels.find(option => option.name === name)
   const id = sameName?.id ?? channelProfileSlug(name)
-  // ── 1b. id-clash guard: two different names can still slug to one id
   // ("Open BigModel" / "open.bigmodel"); landing on the other row would
   // overwrite its connection and stored token, so that needs an explicit
   // confirmation, and declining writes nothing.
-  const clash = deps.roster().channels.find(option => option.id === id && option.name !== name)
+  const clash = deps.host.snapshot().channels.find(option => option.id === id && option.name !== name)
   if (clash !== undefined) {
     const clashAnswer = await ask({
       questions: [optionQuestion('clash', t('channel-wiz-q-clash', { name: clash.name, id }), [
@@ -156,19 +124,16 @@ async function runAddFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutcome
       return { kind: 'cancelled', restart: false }
     }
   }
-  // ── 2. base URL (blank = skip) ──────────────────────────────────
-  const settings = deps.peekSettings()
+  const settings = deps.host.peekImport()
   const urlAnswer = await ask({
     questions: [textQuestion('baseurl', t('channel-wiz-q-baseurl'), t('channel-wiz-q-baseurl-detail', { current: settings?.baseUrl ?? '' }))],
   })
   const baseUrl = answerText(urlAnswer, 'baseurl')
-  // ── 3. token (redact, blank = skip) ─────────────────────────────
   const tokenAnswer = await ask(
     { questions: [textQuestion('token', t('channel-wiz-q-token'), t('channel-wiz-q-token-detail'))] },
     { redact: true },
   )
   const token = answerText(tokenAnswer, 'token')
-  // ── 4. tier source (absorb from settings env / skip) ────────────
   let tiers: Readonly<Record<string, string>> | undefined
   const absorbable = settings !== undefined && Object.keys(settings.tiers).length > 0
   if (absorbable) {
@@ -180,10 +145,9 @@ async function runAddFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutcome
     })
     if (answerSelected(tierAnswer, 'tiers')[0] === t('channel-wiz-opt-tiers-absorb')) tiers = settings.tiers
   }
-  // ── 5. confirm + save ───────────────────────────────────────────
   pushLocal('/channel', buildSummary(name, baseUrl !== '', token !== '', tiers))
-  const before = deps.roster()
-  const saved = deps.save({
+  const before = deps.host.snapshot()
+  const saved = deps.host.save({
     id, name,
     ...(baseUrl === '' ? {} : { baseUrl }),
     ...(token === '' ? {} : { token }),
@@ -194,30 +158,26 @@ async function runAddFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutcome
     return { kind: 'failed', restart: false }
   }
   notify(t('channel-wiz-saved', { name }), { color: 'success' })
-  // ── 6. switch now? ──────────────────────────────────────────────
-  const activeBefore = before.channels.find(option => option.id === before.activeId)
-  // The save may have overwritten the active row itself (same name → same
-  // id, or an explicit clash confirmation): its connection then changed on
-  // disk even when the user declines the switch, and the running child
-  // still holds the old one, so the restart is needed either way.
-  const overwroteActive = activeBefore !== undefined && activeBefore.id === id
-  const activeConnectionChanged = overwroteActive && !sameOptionConnection(activeBefore, saved)
   const switchAnswer = await ask({
     questions: [optionQuestion('switch', t('channel-wiz-q-switch', { name }), [
       { label: t('channel-wiz-opt-switch-yes') },
       { label: t('channel-wiz-opt-switch-no') },
     ], { hideCustomInput: true })],
   })
-  if (answerSelected(switchAnswer, 'switch')[0] !== t('channel-wiz-opt-switch-yes')) return { kind: 'saved', restart: activeConnectionChanged }
-  deps.activate(id)
-  return { kind: 'switched', restart: !sameOptionConnection(activeBefore, saved) }
+  // Saving under the active id changes its connection even if the user
+  // declines a switch. The host compares against its pre-save fingerprint.
+  if (answerSelected(switchAnswer, 'switch')[0] !== t('channel-wiz-opt-switch-yes')) {
+    return { kind: 'saved', restart: before.activeId === saved.id && deps.host.activate(saved.id).restart }
+  }
+  const { ok, restart } = deps.host.activate(id)
+  return { kind: ok ? 'switched' : 'failed', restart }
 }
 
 /** The manage flow: pick a channel, then one targeted edit (applied
  * immediately, like providerWizard's edit menu) or delete. */
 async function runManageFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutcome> {
   const { ask, notify } = deps
-  const roster = deps.roster()
+  const roster = deps.host.snapshot()
   if (roster.channels.length === 0) {
     notify(t('channel-wiz-empty'), { color: 'warning' })
     return { kind: 'cancelled', restart: false }
@@ -251,26 +211,22 @@ async function runManageFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutc
       ], { hideCustomInput: true })],
     })
     if (answerSelected(confirmAnswer, 'confirm')[0] !== t('channel-wiz-opt-delete-yes')) return { kind: 'cancelled', restart: false }
-    if (!deps.remove(target.id)) {
+    if (!deps.host.remove(target.id)) {
       notify(t('channel-wiz-save-failed'), { color: 'error', timeoutMs: 8000 })
       return { kind: 'failed', restart: false }
     }
     notify(t('channel-wiz-deleted', { name: target.name }), { color: 'success' })
-    // Deleting the active channel with a connection does not reach the
-    // running child: erasing the token and the profile row leaves the live
-    // process on the deleted connection, so treat it as a connection change
-    // and route through the fresh-session funnel. A mapping-only row never
-    // shaped the spawn, so deleting it changes nothing the child sees.
+    // remove returns only success, so deletion keeps the pre-remove connection test here.
     return { kind: 'deleted', restart: isActive && target.connection !== undefined }
   }
   if (pick === t('channel-wiz-opt-edit-baseurl')) {
     const answer = await ask({ questions: [textQuestion('value', t('channel-wiz-q-baseurl'), t('channel-wiz-q-edit-value-hint'))] })
     const value = answerText(answer, 'value')
     if (value === '') return { kind: 'cancelled', restart: false }
-    const saved = deps.save({ id: target.id, name: target.name, ...(value === CLEAR ? { baseUrl: '' } : { baseUrl: value }) })
+    const saved = deps.host.save({ id: target.id, name: target.name, ...(value === CLEAR ? { baseUrl: '' } : { baseUrl: value }) })
     if (saved === undefined) return { kind: 'failed', restart: false }
     notify(t('channel-wiz-saved', { name: target.name }), { color: 'success' })
-    return { kind: 'saved', restart: isActive && !sameOptionConnection(target, saved) }
+    return { kind: 'saved', restart: isActive && deps.host.activate(saved.id).restart }
   }
   if (pick === t('channel-wiz-opt-edit-token')) {
     const answer = await ask(
@@ -279,18 +235,18 @@ async function runManageFlow(deps: ChannelWizardDeps): Promise<ChannelWizardOutc
     )
     const value = answerText(answer, 'value')
     if (value === '') return { kind: 'cancelled', restart: false }
-    const saved = deps.save({ id: target.id, name: target.name, ...(value === CLEAR ? { token: '' } : { token: value }) })
+    const saved = deps.host.save({ id: target.id, name: target.name, ...(value === CLEAR ? { token: '' } : { token: value }) })
     if (saved === undefined) return { kind: 'failed', restart: false }
     notify(t('channel-wiz-saved', { name: target.name }), { color: 'success' })
-    return { kind: 'saved', restart: isActive && !sameOptionConnection(target, saved) }
+    return { kind: 'saved', restart: isActive && deps.host.activate(saved.id).restart }
   }
   if (pick === t('channel-wiz-opt-edit-tiers')) {
-    const settings = deps.peekSettings()
+    const settings = deps.host.peekImport()
     if (settings === undefined || Object.keys(settings.tiers).length === 0) {
       notify(t('channel-import-none'), { color: 'warning' })
       return { kind: 'cancelled', restart: false }
     }
-    const saved = deps.save({ id: target.id, name: target.name, tiers: settings.tiers })
+    const saved = deps.host.save({ id: target.id, name: target.name, tiers: settings.tiers })
     if (saved === undefined) return { kind: 'failed', restart: false }
     notify(t('channel-wiz-saved', { name: target.name }), { color: 'success' })
     return { kind: 'saved', restart: false }

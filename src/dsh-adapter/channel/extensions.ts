@@ -82,17 +82,6 @@ import { createWorkspaceActions } from './workspace-actions.js'
 type CoreServedAction =
   | 'commandCompletions' | 'runLocalCommand' | 'loadOlder' | 'newSession' | 'clear'
   | 'setActivityFrames' | 'pushLocal' | 'listFileCandidates' | 'listFiles'
-  // Capability-backed only: a DSH session offers no MCP control (its `/mcp`
-  // is the status report, `capabilities.mcpControl` false).
-  | 'mcpControl'
-  // Capability-backed only: a DSH session declares no native `modes`
-  // capability, so listModes returns an empty roster and setMode reports
-  // unavailable. The DSH /permission pipeline never routes through them.
-  | 'listModes' | 'setMode'
-  // Capability-backed only: the `channels` capability is the Claude
-  // backend's own profile store. A DSH session returns an empty roster and
-  // reports unavailable, and /channel never appears there.
-  | 'listChannels' | 'setChannel' | 'importChannel' | 'saveChannel' | 'removeChannel' | 'peekChannelImport'
 
 /**
  * Read the persistence backend's full session list (empty without one). The

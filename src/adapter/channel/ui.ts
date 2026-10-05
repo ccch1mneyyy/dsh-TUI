@@ -138,6 +138,17 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
         return release
       }
       if (observation) return lease.own(result)
+      if (key === 'backendChannels' && result !== undefined) {
+        return methods(result as NonNullable<ReturnType<ChannelUi['backendChannels']>>, {
+          snapshot: 'read-only', peekImport: 'read-only', activate: 'mutate', importFromSettings: 'mutate', save: 'mutate', remove: 'mutate',
+        })
+      }
+      if (key === 'backendModes' && result !== undefined) {
+        return methods(result as NonNullable<ReturnType<ChannelUi['backendModes']>>, { snapshot: 'read-only', set: 'mutate' })
+      }
+      if (key === 'backendMcp' && result !== undefined) {
+        return methods(result as NonNullable<ReturnType<ChannelUi['backendMcp']>>, { reconnect: 'mutate', toggle: 'mutate' })
+      }
       if (key === 'settingsHost' && result !== undefined) {
         return methods(result as NonNullable<ReturnType<ChannelUi['settingsHost']>>, {
           listNamespaces: 'read-only', credentialConfigured: 'read-only', write: 'mutate', writeCredential: 'mutate',

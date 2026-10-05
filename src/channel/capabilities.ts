@@ -55,7 +55,7 @@ export function channelCapabilities(input: {
       ...supportedLocalCommandNames({ dsh: input.dsh, has: capability => flags[capability] }),
       // The typed `modes` capability is its own permission roster: a
       // non-DSH session that declares it serves /permission through the
-      // channel's listModes/setMode actions. DSH keeps its registry-row
+      // channel's backendModes host. DSH keeps its registry-row
       // command (dsh sessions take the every-builtin branch above).
       ...(input.dsh || caps.modes === undefined ? [] : ['permission']),
       // The typed `channels` capability rides the same way: /channel is
@@ -65,7 +65,5 @@ export function channelCapabilities(input: {
     ]),
     retractPending: caps.pendingRetraction !== undefined,
     ...flags,
-    // Not a command requirement: `/mcp` itself stays on every backend.
-    mcpControl: !input.dsh && caps.mcp?.reconnect !== undefined && caps.mcp.toggle !== undefined,
   })
 }

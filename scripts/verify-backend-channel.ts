@@ -594,12 +594,13 @@ try {
       servers: [] as Row[],
       auto: false,
       autoControls: false,
+      statusReads: 0,
       controls: [] as string[],
       answer(index: number, names: string[]): void { calls[index]?.(rows(names)) },
       releaseControls(): void { for (const done of controlPending.splice(0)) done() },
     }
     const mcp = {
-      status: () => new Promise<readonly Row[]>(resolve => { if (state.auto) resolve([...state.servers]); else calls.push(resolve) }),
+      status: () => { state.statusReads += 1; return new Promise<readonly Row[]>(resolve => { if (state.auto) resolve([...state.servers]); else calls.push(resolve) }) },
       reconnect: (name: string) => { state.controls.push(`reconnect:${name}`); return state.autoControls ? Promise.resolve() : new Promise<void>(done => { controlPending.push(done) }) },
       toggle: (name: string, enabled: boolean) => { state.controls.push(`toggle:${name}:${enabled}`); return state.autoControls ? Promise.resolve() : new Promise<void>(done => { controlPending.push(done) }) },
     }
@@ -630,10 +631,16 @@ try {
   const serversOf = (): string[] => mcpChannel.commandCompletions('/mcp reconnect ').map(item => item.name.replace(/^mcp reconnect /u, ''))
   const toastsOf = (): string[] => mcpChannel.notifications.map(item => item.text)
   try {
+    const oldMcpHost = mcpChannel.backendMcp()!
     check('a fresh /mcp answers the loading line', mcpChannel.mcpStatus().join('\n') === t('backend-mcp-loading'))
     mcpChannel.mcpStatus() // a second ask of the same binding, kept pending for the generation case
     check('/new switches to the second session', await mcpChannel.newSession() === true)
     await settled(() => serversOf().includes('beta-server'))
+    A.state.autoControls = true
+    const statusReads = B.state.statusReads
+    const notices = toastsOf().length
+    check('a stale MCP host refuses before calling its old capability', await oldMcpHost.reconnect('alpha-stale-before-call') === false && A.state.controls.length === 0 && B.state.controls.length === 0)
+    check('a stale MCP host writes no replacement report or toast', B.state.statusReads === statusReads && toastsOf().length === notices)
     // The answer A owed its own /mcp lands now, one session too late.
     A.state.answer(1, ['alpha-stale-server'])
     await tick()
@@ -656,7 +663,7 @@ try {
     check('/new switches to the third session', await mcpChannel.newSession() === true)
     await settled(() => serversOf().includes('gamma-server'))
 
-    const toggling = mcpChannel.mcpControl({ action: 'toggle', name: 'gamma-server', enabled: false })
+    const toggling = mcpChannel.backendMcp()!.toggle('gamma-server', false)
     check('resume lands back on A again', (await mcpChannel.resumeTo(sessionA.ref.sessionId)).ok === true)
     await settled(() => serversOf().includes('alpha-fresh'))
     C.state.releaseControls()
@@ -664,7 +671,7 @@ try {
     await tick()
     check('a control completing after a switch does not toast for the new session', !toastsOf().includes(t('mcp-disabled', { name: 'gamma-server' })), toastsOf().join(' | '))
     A.state.autoControls = true
-    check('a control of the CURRENT session still reports', await mcpChannel.mcpControl({ action: 'reconnect', name: 'alpha-fresh' }) === true && toastsOf().includes(t('mcp-reconnected', { name: 'alpha-fresh' })), toastsOf().join(' | '))
+    check('a control of the CURRENT session still reports', await mcpChannel.backendMcp()!.reconnect('alpha-fresh') === true && toastsOf().includes(t('mcp-reconnected', { name: 'alpha-fresh' })), toastsOf().join(' | '))
   } finally {
     mcpChannel.releaseContributions()
   }
@@ -694,33 +701,42 @@ try {
 }
 // ── backend-native permission modes (capabilities.modes) ────────────
 // /permission over the typed `modes` capability: the channel exposes the
-// roster (listModes) and the switch (setMode), the command surface offers
+// roster and switch through backendModes,  the command surface offers
 // /permission exactly when the session declares modes, and Tab completion
 // lists the mode ids with the current one tagged. A backend without modes
 // gets no command and no completion, and the passive roster read stays
-// silent (an empty list is the answer).
+// silent (no host is the answer).
 {
   const sets: string[] = []
   let current = 'acceptEdits'
+  let refuseMode = false
   const modeful = fakeSession('f1f1f1f1-f1f1-41f1-81f1-f1f1f1f1f1f1', {
     modes: {
       list: () => [{ id: 'default', label: 'Default' }, { id: 'acceptEdits', label: 'Accept edits' }, { id: 'plan', label: 'Plan' }],
       current: () => current,
-      set: id => { sets.push(id); current = id; return Promise.resolve() },
+      set: id => { if (refuseMode) return Promise.reject(new Error('mode fixture failed')); sets.push(id); current = id; return Promise.resolve() },
     },
   })
-  const modeChannel = createChannel(ctx, modeful, { model: 'm', provider: '', cwd: workdir, activity: false, backendLabel: 'Fake Agent' })
+  const modeChannel = createChannel(ctx, modeful, { model: 'm', provider: '', cwd: workdir, activity: false, backendLabel: 'Fake Agent', openSession: async () => fakeSession('f3f3f3f3-f3f3-43f3-83f3-f3f3f3f3f3f3') })
   try {
-    const roster = modeChannel.listModes()
-    check('listModes maps the capability list with the current index', JSON.stringify(roster) === JSON.stringify({ modes: [{ id: 'default', name: 'Default' }, { id: 'acceptEdits', name: 'Accept edits' }, { id: 'plan', name: 'Plan' }], currentIndex: 1 }), JSON.stringify(roster))
+    const oldModesHost = modeChannel.backendModes()!
+    const roster = oldModesHost.snapshot()
+    check('mode host snapshot maps the capability list with the current index', JSON.stringify(roster) === JSON.stringify({ modes: [{ id: 'default', name: 'Default' }, { id: 'acceptEdits', name: 'Accept edits' }, { id: 'plan', name: 'Plan' }], currentIndex: 1 }), JSON.stringify(roster))
     const offered = modeChannel.commandList.map(command => command.name)
     check('a modes-capable backend offers /permission', offered.includes('permission') && modeChannel.commandList.find(command => command.name === 'permission')?.descriptionKey === 'cmd-desc-permission', offered.join(','))
     check('snapshot commands == offered list (the modes injection keeps the invariant)', JSON.stringify(modeChannel.backendCapabilities.commands) === JSON.stringify(offered))
-    check('setMode delegates to the typed capability', await modeChannel.setMode('plan') === true && JSON.stringify(sets) === JSON.stringify(['plan']))
-    check('setMode refuses an id the backend does not offer', await modeChannel.setMode('bogus') === false && modeChannel.notifications.some(item => item.text === unavailableText('mode')) && JSON.stringify(sets) === JSON.stringify(['plan']))
+    check('mode host set delegates to the typed capability', await modeChannel.backendModes()!.set('plan') === true && JSON.stringify(sets) === JSON.stringify(['plan']))
+    check('mode host set refuses an id the backend does not offer', await modeChannel.backendModes()!.set('bogus') === false && modeChannel.notifications.some(item => item.text === unavailableText('mode')) && JSON.stringify(sets) === JSON.stringify(['plan']))
     const children = modeChannel.commandCompletions('/permission ')
     check('Tab completes /permission with the mode ids', JSON.stringify(children.map(item => item.name)) === JSON.stringify(['permission default', 'permission acceptEdits', 'permission plan']) && children.find(item => item.name === 'permission plan')?.tag === 'current', JSON.stringify(children))
-    check('the completion follows a switch (current trails the live mode)', await modeChannel.setMode('default') === true && modeChannel.commandCompletions('/permission ').find(item => item.name === 'permission default')?.tag === 'current')
+    check('the completion follows a switch (current trails the live mode)', await modeChannel.backendModes()!.set('default') === true && modeChannel.commandCompletions('/permission ').find(item => item.name === 'permission default')?.tag === 'current')
+    refuseMode = true
+    check('a rejecting mode host resolves false and reports', await modeChannel.backendModes()!.set('plan') === false && modeChannel.notifications.some(item => item.text.includes('mode fixture failed')))
+    refuseMode = false
+    const setCount = sets.length
+    check('a mode host is replaced by /new', await modeChannel.newSession() && modeChannel.backendModes() === undefined)
+    const notices = modeChannel.notifications.length
+    check('a stale modes host refuses without writing or toasting for its replacement', await oldModesHost.set('plan') === false && sets.length === setCount && modeChannel.notifications.length === notices)
   } finally {
     modeChannel.releaseContributions()
   }
@@ -729,13 +745,45 @@ try {
   const bareChannel = createChannel(ctx, modeless, { model: 'm', provider: '', cwd: workdir, activity: false, backendLabel: 'Fake Agent' })
   try {
     const before = bareChannel.notifications.length
-    const roster = bareChannel.listModes()
-    check('a backend without modes answers an empty roster, silently', roster.modes.length === 0 && roster.currentIndex === -1 && bareChannel.notifications.length === before, JSON.stringify(roster))
+    const host = bareChannel.backendModes()
+    check('a backend without modes returns no host, silently', host === undefined && bareChannel.notifications.length === before)
+    check('the other native hosts are absent too', bareChannel.backendChannels() === undefined && bareChannel.backendMcp() === undefined)
+    check('the old native actions are not installed', ['listModes', 'setMode', 'listChannels', 'setChannel', 'importChannel', 'saveChannel', 'removeChannel', 'peekChannelImport', 'mcpControl'].every(name => !(name in bareChannel)))
     check('a backend without modes keeps /permission out of the list', !bareChannel.commandList.some(command => command.name === 'permission') && !bareChannel.backendCapabilities.commands.includes('permission'))
     check('… and out of the completion', bareChannel.commandCompletions('/per').length === 0 && bareChannel.commandCompletions('/permission ').length === 0)
   } finally {
     bareChannel.releaseContributions()
   }
+}
+
+// A retained native channels host has the same binding scope as modes and
+// MCP: a later /new cannot lend the old host its current report or writes.
+{
+  const probe = (id: string) => {
+    const option = { id, name: id, models: [], tiers: [] }
+    const writes: string[] = []
+    const channels: NonNullable<SessionCapabilities['channels']> = {
+      list: () => [option], activeId: () => id,
+      setActive: () => { writes.push('activate') },
+      importFromSettings: () => { writes.push('import'); return option },
+      save: () => { writes.push('save'); return option },
+      remove: () => { writes.push('remove'); return true }, peekSettingsImport: () => undefined,
+    }
+    return { writes, channels }
+  }
+  const A = probe('channel-a')
+  const B = probe('channel-b')
+  const raw = createChannel(ctx, fakeSession('a4a4a4a4-a4a4-44a4-84a4-a4a4a4a4a4a4', { channels: A.channels }), {
+    model: 'm', provider: '', cwd: workdir, activity: false,
+    openSession: async () => fakeSession('b4b4b4b4-b4b4-44b4-84b4-b4b4b4b4b4b4', { channels: B.channels }),
+  })
+  try {
+    const old = raw.backendChannels()!
+    check('a channels accessor follows /new to the replacement capability', await raw.newSession() && raw.backendChannels()!.snapshot().activeId === 'channel-b')
+    const notices = raw.notifications.length
+    check('a stale channels host refuses all writes before either capability runs', !old.activate('channel-a').ok && old.save({ id: 'channel-a', name: 'A' }) === undefined && !old.remove('channel-a') && old.importFromSettings() === undefined && A.writes.length === 0 && B.writes.length === 0)
+    check('a stale channels host raises no replacement toast', raw.notifications.length === notices)
+  } finally { raw.releaseContributions() }
 }
 
 // ── a late interrupt receipt speaks only for its own request and session ──

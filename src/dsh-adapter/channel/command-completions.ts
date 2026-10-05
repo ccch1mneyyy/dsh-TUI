@@ -95,14 +95,15 @@ export function createCommandCompletions(deps: {
         // No preset roster (a non-DSH backend): the typed `modes` capability
         // is the roster. DSH sessions declare no such capability, so this
         // arm answers an empty list there and the roster above stands.
-        const modes = state.listModes()
+        const modes = state.backendModes()?.snapshot()
+        if (modes === undefined) return []
         const currentId = modes.modes[modes.currentIndex]?.id
         return modes.modes.filter(mode => isCommandCompletionToken(mode.id)).map(mode => ({
           name: mode.id, description: mode.name,
           ...(mode.id === currentId ? { tag: 'current' } : {}),
         }))
       }
-      if (path[0] === 'mcp' && state.backendCapabilities?.mcpControl === true) {
+      if (path[0] === 'mcp' && state.backendMcp() !== undefined) {
         const servers = (deps.mcpServers?.() ?? []).filter(isCommandCompletionToken)
         if (path.length === 1) return [
           { name: 'reconnect', description: 'Reconnect an MCP server', descriptionKey: 'sugg-mcp-reconnect-desc' },

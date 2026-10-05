@@ -41,8 +41,21 @@ import {
   TUI_CHANNEL_FEATURES,
 } from '../src/adapter/spec/index.js'
 
+import { CHANNEL_UI_EFFECTS } from '../src/adapter/channel/ui-policy.js'
+
 const ROOT = resolve(import.meta.dirname, '..')
 let checks = 0
+
+for (const name of ['backendChannels', 'backendModes', 'backendMcp'] as const) {
+  assert.equal(CHANNEL_UI_EFFECTS[name], 'read-only', 'a subhost accessor is a passive read')
+  checks += 1
+}
+for (const name of ['listChannels', 'setChannel', 'importChannel', 'saveChannel', 'removeChannel', 'peekChannelImport', 'listModes', 'setMode', 'mcpControl']) {
+  assert.equal(name in CHANNEL_UI_EFFECTS, false, 'flat native actions must leave the effect table')
+  checks += 1
+}
+assert.equal(CHANNEL_UI_EFFECTS.cycleMode, 'mutate', 'the shared mode cycle stays on ChannelUi')
+checks += 1
 
 // ── official tui-profile fixture ──────────────────────────────────────────
 const officialFixturePath = join(ROOT, 'tui-profile', 'conformance', 'fixtures', 'valid-tui-channel.json')

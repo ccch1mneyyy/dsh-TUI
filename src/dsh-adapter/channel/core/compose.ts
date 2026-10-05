@@ -29,6 +29,7 @@ import { createActivityProjection } from '../../../channel/activity.js'
 import { channelCapabilities } from '../../../channel/capabilities.js'
 import { anchoredRow, prependHistoryRows, projectHistorySlice, restoreFoldedRows } from '../../../channel/history-restore.js'
 import { t } from '../../../i18n.js'
+import { logForDebugging } from '../../../utils/debug.js'
 import { DEFAULT_SESSION_MODES } from '../../../sessionModes.js'
 import { resolveContextOccupancy } from '../../context-occupancy.js'
 import { IdeChannel, ideLockDir, type SelectionSnapshot } from '../../ide-channel.js'
@@ -164,6 +165,20 @@ export function createCoreChannel(
     notify(t('capability-unavailable-backend', { name }), { color: 'warning', timeoutMs: 4000 })
   }
   const unavailableLines = (name: string): string[] => [t('capability-unavailable-backend', { name })]
+  const guarded = async <T>(name: string, fallback: T, run: () => Promise<T>, current = () => owner.current()): Promise<T> => {
+    try {
+      return await run()
+    } catch (error) {
+      if (current()) notify(t('capability-failed', { name, err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+      return fallback
+    }
+  }
+  // A backend host belongs to one session and binding generation. Its
+  // controls, reports and notices must not reach a replacement session.
+  const mcpFence = () => {
+    const capture = binding.capture()
+    return { session: capture.session, current: () => binding.isCurrent(capture) }
+  }
   /**
    * Subagents and background jobs of a session no extension projects: fed by
    * the shared projector in stream order. Output tails are read through the
@@ -412,6 +427,95 @@ export function createCoreChannel(
         oauth: (ctx.get('dshAuth') as { api?: OAuthSetupHost } | undefined)?.api,
         status: async () => [...(await auth.status()).lines],
         reconnect: () => auth.reconnect(),
+      }
+    },
+    backendChannels: () => {
+      const fence = mcpFence()
+      const channels = fence.session.capabilities.channels
+      if (channels === undefined) return undefined
+      const activeId = channels.activeId()
+      // Keep the connection before this host's writes: save may replace the
+      // active row under the same id before activate decides whether to restart.
+      const fingerprint = channels.list().find(option => option.id === activeId)?.connection?.fingerprint
+      const restartFor = (option: import('../../../adapter/ports/channel-view.js').BackendChannelOption): boolean =>
+        fingerprint !== option.connection?.fingerprint
+      const write = <T>(fallback: T, run: () => T): T => {
+        if (!fence.current()) return fallback
+        try {
+          return run()
+        } catch (error) {
+          if (fence.current()) notify(t('capability-failed', { name: 'channel', err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+          return fallback
+        }
+      }
+      return {
+        snapshot: () => ({ channels: channels.list(), activeId: channels.activeId() }),
+        activate: id => {
+          if (!fence.current()) return { ok: false, restart: false }
+          const option = channels.list().find(option => option.id === id)
+          if (option === undefined) { unavailable('channel'); return { ok: false, restart: false } }
+          const restart = restartFor(option)
+          if (restart && state.working) {
+            notify(t('channel-switch-while-working'), { color: 'warning' })
+            return { ok: false, restart }
+          }
+          channels.setActive(id)
+          try {
+            controls.refreshModelDisplay(fence.session)
+            state.emit()
+          } catch (error) {
+            logForDebugging(`channel: model display refresh failed (${error instanceof Error ? error.message : String(error)})`)
+          }
+          return { ok: true, restart }
+        },
+        importFromSettings: () => write(undefined, () => {
+          const option = channels.importFromSettings()
+          return option === undefined ? undefined : { option, restart: option.id === activeId && restartFor(option) }
+        }),
+        save: input => write(undefined, () => channels.save(input)),
+        remove: id => write(false, () => channels.remove(id)),
+        peekImport: () => {
+          try { return channels.peekSettingsImport() } catch { return undefined }
+        },
+      }
+    },
+    backendModes: () => {
+      const fence = mcpFence()
+      const modes = fence.session.capabilities.modes
+      if (modes === undefined) return undefined
+      return {
+        snapshot: () => {
+          const list = modes.list()
+          return {
+            modes: list.map(mode => ({ id: mode.id, name: mode.label, ...(mode.description === undefined ? {} : { description: mode.description }) })),
+            currentIndex: list.findIndex(mode => mode.id === modes.current()),
+          }
+        },
+        set: id => guarded('mode', false, async () => {
+          if (!fence.current()) return false
+          if (!modes.list().some(mode => mode.id === id)) { unavailable('mode'); return false }
+          await modes.set(id)
+          return true
+        }, fence.current),
+      }
+    },
+    backendMcp: () => {
+      const fence = mcpFence()
+      const mcp = fence.session.capabilities.mcp
+      if (mcp?.reconnect === undefined || mcp.toggle === undefined) return undefined
+      const run = (name: string, key: 'mcp-reconnected' | 'mcp-enabled' | 'mcp-disabled', action: () => Promise<void>): Promise<boolean> =>
+        guarded('mcp', false, async () => {
+          if (!fence.current()) return false
+          await action()
+          if (fence.current()) {
+            notify(t(key, { name }), { color: 'success' })
+            controls.mcpReport(fence.session, fence.current)
+          }
+          return true
+        }, fence.current)
+      return {
+        reconnect: name => run(name, 'mcp-reconnected', () => mcp.reconnect!(name)),
+        toggle: (name, enabled) => run(name, enabled ? 'mcp-enabled' : 'mcp-disabled', () => mcp.toggle!(name, enabled)),
       }
     },
     ...actionMethods,
@@ -769,6 +873,11 @@ export function createCoreChannel(
         exportSession: reports.exportSession,
         newSession: () => sessionSwitch.newSession(),
         // `/agents` from the event-driven roster (the DSH extension serves its own).
+        mcpStatus: () => {
+          if (binding.session.capabilities.mcp === undefined) return unavailableLines('mcp')
+          const fence = mcpFence()
+          return controls.mcpReport(fence.session, fence.current) ?? [t('backend-mcp-loading')]
+        },
         listSubagents: () => Promise.resolve(binding.session.capabilities.subagents === undefined ? unavailableLines('agents') : activity.listLines()),
         resolveWorkspace: workspaces.resolveWorkspace,
         switchWorkspace: workspaces.switchWorkspace,
@@ -784,7 +893,7 @@ export function createCoreChannel(
           notify,
           unavailable,
           unavailableLines,
-          controls,
+          guarded,
         }),
         core,
         extension: extension.delegates,

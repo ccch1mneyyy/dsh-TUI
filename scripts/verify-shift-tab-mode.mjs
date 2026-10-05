@@ -175,7 +175,7 @@ const delegates = createCapabilityDelegates({
   notify: () => undefined,
   unavailable: () => undefined,
   unavailableLines: () => [],
-  controls: { mcpReport: () => undefined },
+  guarded: async (_name, _fallback, run) => run(),
 })
 check('cycle surface: the roster still lists bypassPermissions (picker-only)', modeCaps.list().some(mode => mode.id === 'bypassPermissions'), modeCaps.list().map(mode => mode.id).join())
 check('cycle surface: modes.cycle() omits bypassPermissions', !modeCaps.cycle().some(mode => mode.id === 'bypassPermissions'), modeCaps.cycle().map(mode => mode.id).join())

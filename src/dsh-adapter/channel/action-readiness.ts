@@ -27,14 +27,6 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'setEffort'
   | 'setDefaultEffort'
   | 'cycleMode'
-  | 'listModes'
-  | 'setMode'
-  | 'listChannels'
-  | 'setChannel'
-  | 'importChannel'
-  | 'saveChannel'
-  | 'removeChannel'
-  | 'peekChannelImport'
   | 'runPermissionPreset'
   | 'clear'
   | 'setActivityFrames'
@@ -76,7 +68,6 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'runExternalCommandOutcome'
   | 'pushLocal'
   | 'mcpStatus'
-  | 'mcpControl'
   | 'exportSession'
   | 'initWorkspace'
   | 'doctorInfo'
@@ -119,14 +110,6 @@ export function createChannelActionMethods(
     setEffort: id => getReadyActions().setEffort(id),
     setDefaultEffort: id => getReadyActions().setDefaultEffort(id),
     cycleMode: () => getReadyActions().cycleMode(),
-    listModes: () => getReadyActions().listModes(),
-    setMode: id => getReadyActions().setMode(id),
-    listChannels: () => getReadyActions().listChannels(),
-    setChannel: id => getReadyActions().setChannel(id),
-    importChannel: () => getReadyActions().importChannel(),
-    saveChannel: input => getReadyActions().saveChannel(input),
-    removeChannel: id => getReadyActions().removeChannel(id),
-    peekChannelImport: () => getReadyActions().peekChannelImport(),
     runPermissionPreset: name => getReadyActions().runPermissionPreset(name),
     clear: () => getReadyActions().clear(),
     setActivityFrames: name => getReadyActions().setActivityFrames(name),
@@ -168,7 +151,6 @@ export function createChannelActionMethods(
     runExternalCommandOutcome: (name, rawInput, images) => getReadyActions().runExternalCommandOutcome(name, rawInput, images),
     pushLocal: (title, lines) => getReadyActions().pushLocal(title, lines),
     mcpStatus: () => getReadyActions().mcpStatus(),
-    mcpControl: request => getReadyActions().mcpControl(request),
     exportSession: () => getReadyActions().exportSession(),
     initWorkspace: () => getReadyActions().initWorkspace(),
     doctorInfo: () => getReadyActions().doctorInfo(),
@@ -241,19 +223,6 @@ export function createUnavailableActionDelegates(
     // boot (not a user action), and a toast per launch would be noise.
     setDefaultEffort: () => undefined,
     cycleMode: () => refuseAsync('mode', undefined),
-    // Silent: the empty roster is the answer (the picker decides from it);
-    // only the explicit switch toasts its refusal.
-    listModes: () => ({ modes: [], currentIndex: -1 }),
-    setMode: () => refuseAsync('mode', false),
-    // Silent like listModes: the empty roster is the /channel picker's
-    // answer; the switch and the import are user actions and toast.
-    listChannels: () => ({ channels: [], activeId: undefined }),
-    setChannel: () => refuse('channel', false),
-    importChannel: () => refuse('channel', undefined),
-    saveChannel: () => refuse('channel', undefined),
-    removeChannel: () => refuse('channel', false),
-    // Silent like listChannels: nothing-to-absorb is the answer.
-    peekChannelImport: () => undefined,
     clear: () => { unavailable('clear') },
     setActivityFrames: () => refuse('activity', false),
     listPresets: () => refuseAsync('preset', []),
@@ -307,7 +276,6 @@ export function createUnavailableActionDelegates(
     pushLocal: () => { unavailable('pushLocal') },
     // The report lines are the explicit answer for these three reports.
     mcpStatus: () => unavailableLines('mcp'),
-    mcpControl: () => refuseAsync('mcp', false),
     exportSession: () => refuse('export', null),
     initWorkspace: () => refuse('init', null),
     doctorInfo: () => unavailableLines('doctor'),

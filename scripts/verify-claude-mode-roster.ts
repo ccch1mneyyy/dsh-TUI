@@ -194,7 +194,7 @@ const fakeSettings = (defaultMode: unknown) => ({
   const ctx = { on: () => () => undefined, get: () => undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never
   const channel = createChannel(ctx, session, { model: 'Claude Agent', provider: 'claude', cwd: '/fixture/project', activity: false, backendLabel: 'Claude Agent' })
   try {
-    const roster = channel.listModes()
+    const roster = channel.backendModes()!.snapshot()
     check('channel: the picker roster carries bypassPermissions', roster.modes.some(mode => mode.id === 'bypassPermissions'), roster.modes.map(mode => mode.id))
     check('channel: the current mode is pointed at', roster.currentIndex === roster.modes.findIndex(mode => mode.id === 'default'), roster.currentIndex)
     check('channel: name is the label, description is the copy', roster.modes.every(mode => mode.description !== undefined && mode.description !== '' && mode.description !== mode.name), roster.modes)
