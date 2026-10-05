@@ -469,8 +469,9 @@ export function createCoreChannel(
           return { ok: true, restart }
         },
         importFromSettings: () => write(undefined, () => {
+          const importingActiveId = channels.activeId()
           const option = channels.importFromSettings()
-          return option === undefined ? undefined : { option, restart: option.id === activeId && restartFor(option) }
+          return option === undefined ? undefined : { option, restart: option.id === importingActiveId && restartFor(option) }
         }),
         save: input => write(undefined, () => channels.save(input)),
         remove: id => write(false, () => channels.remove(id)),

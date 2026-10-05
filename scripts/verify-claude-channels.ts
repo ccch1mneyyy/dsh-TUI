@@ -979,6 +979,13 @@ try {
   check('host: peekImport exposes settings without writing', host.peekImport()?.tiers.opus === 'imported-opus' && active.store.read().channels[0]?.baseUrl === 'https://old.example')
   check('host: importing over the active connection reports restart', host.importFromSettings()?.restart === true)
   check('host: re-importing the same connection needs no restart', active.channel.backendChannels()!.importFromSettings()?.restart === false)
+  const switchedEnv = { ANTHROPIC_BASE_URL: 'https://new.example' }
+  const importing = importFromSettingsEnv(switchedEnv)!
+  const switched = wizardHarness({ active: 'map-a', channels: [{ id: 'map-a', name: 'Map A' }, { id: importing.id, name: importing.name }] }, {}, switchedEnv)
+  const retained = switched.channel.backendChannels()!
+  const activation = retained.activate(importing.id)
+  check('host: retained mapping-only activation changes the current profile without a restart', activation.ok && !activation.restart && switched.store.read().active === importing.id)
+  check('host: retained import compares the current active id with its original connection', retained.importFromSettings()?.restart === true && switched.store.read().active === importing.id)
   const inactive = wizardHarness({ active: 'keep', channels: [{ id: 'keep', name: 'Keep', baseUrl: 'https://keep.example' }] }, {}, env)
   check('host: importing an inactive channel never changes the active connection', inactive.channel.backendChannels()!.importFromSettings()?.restart === false && inactive.store.read().active === 'keep')
 }
