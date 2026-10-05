@@ -29,7 +29,7 @@ import {
 } from '../modelGroups.js'
 import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
-import { sessionCwdMatches, type BackendModeOption, type ChatRow, type ComposerImageRef, type EffortOption, type ExternalCommandOutcome, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
+import { sessionCwdMatches, type ChatRow, type ComposerImageRef, type EffortOption, type ExternalCommandOutcome, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
 import type { QuestionStore } from '../channel/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
@@ -48,7 +48,9 @@ import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import { runOAuthLogin, runProviderWizard } from '../dsh-adapter/providerWizard.js'
-import { runChannelWizard, sameOptionConnection } from '../channel/channel-wizard.js'
+import { useKernelPicker } from './chat/useKernelPicker.js'
+import { useBackendChannels } from './chat/useBackendChannels.js'
+import { backendModeStatus as modeStatus, backendPermissionCommand, parseMcpCommand } from './chat/backendCommands.js'
 import { PermissionStore, type PermissionPanelSource } from '../channel/permissions.js'
 import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPanel.js'
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
@@ -120,9 +122,9 @@ import { PresetPicker } from '../components/PresetPicker.js'
 import { PermissionsPicker } from '../components/PermissionsPicker.js'
 import { ModePicker } from '../components/ModePicker.js'
 import { KernelPicker } from '../components/KernelPicker.js'
-import { ChannelPicker, type ChannelPickerRow } from '../components/ChannelPicker.js'
-import { buildKernelCatalog, type KernelStatus } from '../components/kernelCatalog.js'
-import { KERNEL_IDS, type KernelBackendId } from '../kernelPrefs.js'
+import { ChannelPicker } from '../components/ChannelPicker.js'
+import type { KernelStatus } from '../components/kernelCatalog.js'
+import type { KernelBackendId } from '../kernelPrefs.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { PlanPicker } from '../components/PlanPicker.js'
 import { LangPicker } from '../components/LangPicker.js'
@@ -810,190 +812,13 @@ export function Chat({
       setLaunchpadUpdateAvailable(update !== undefined)
     }).catch(() => undefined)
   }, [launchpadShown])
-  /**
-   * 内核选择器的目录。/kernel、启动页「内核」入口与右下角内核行共用这一份：
-   * 当前内核取自会话能力快照的 backendId；DSH 版本取已安装 contract 的读数
-   * （读不到就不画副行）；Claude 的探测由组合根注入（Chat 不 import 具体
-   * 后端），首次需要时探一次，结果留到进程结束。
-   */
-  const kernelCurrentId = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendId ?? 'dsh'
-  const [kernelProbe, setKernelProbe] = React.useState<Record<string, KernelStatus> | undefined>(undefined)
-  const kernelProbeStartedRef = React.useRef(false)
-  const requestKernelProbe = React.useCallback((): void => {
-    if (kernelProbeStartedRef.current || onProbeKernels === undefined) return
-    kernelProbeStartedRef.current = true
-    // 探测失败按「未安装」处理：那一行画灰，不给一个点了会失败的入口。
-    void onProbeKernels().then(setKernelProbe).catch(() => { setKernelProbe(Object.fromEntries(KERNEL_IDS.map(id => [id, { installed: false }]))) })
-  }, [onProbeKernels])
-  const kernelOptions = React.useMemo(
-    () => buildKernelCatalog({
-      current: kernelCurrentId,
-      ...(kernelVersion === undefined ? {} : { dshVersion: kernelVersion }),
-      ...(kernelProbe === undefined ? {} : { statuses: kernelProbe }),
-    }),
-    [kernelCurrentId, kernelVersion, kernelProbe],
-  )
-  // 启动页一出现就开始探测，右下角的内核行尽量在用户看到前就有结果。
-  React.useEffect(() => {
-    if (launchpadShown) requestKernelProbe()
-  }, [launchpadShown, requestKernelProbe])
-  /** 当前内核在目录里的行号（选择器打开时的落点；找不到就落第一行）。 */
-  const kernelCurrentIndex = Math.max(0, kernelOptions.findIndex(option => option.current))
-  /** 打开内核选择器，默认落在当前内核那一行。 */
-  const openKernelPicker = React.useCallback((index?: number): void => {
-    requestKernelProbe()
-    dispatchOverlay({ type: 'open', overlay: { kind: 'kernel', index: index ?? kernelCurrentIndex } })
-  }, [kernelCurrentIndex, requestKernelProbe])
-  /**
-   * 内核选择器的确认（Enter 与鼠标点击共用）：不可选的行只提示原因，选择器
-   * 留在屏上；选当前内核就提示并收起；其余交给组合根 onSwitchBackend（记住
-   * 选择后以新内核重启）。切内核要换进程，回合运行中拒绝，与 /restart 一致。
-   */
-  const pickKernel = (index: number): void => {
-    const option = kernelOptions[index]
-    if (option === undefined) return
-    if (!option.selectable) {
-      channel.notify(option.reasonKey === undefined ? t('kernel-switch-unavailable') : t(option.reasonKey), { color: 'warning' })
-      return
-    }
-    if (option.current) {
-      dispatchOverlay({ type: 'close' })
-      channel.notify(t('kernel-already-current'))
-      return
-    }
-    if (onSwitchBackend === undefined) {
-      channel.notify(t('kernel-switch-unavailable'), { color: 'warning' })
-      return
-    }
-    if (channel.working) {
-      channel.notify(t('kernel-switch-while-working'), { color: 'warning' })
-      return
-    }
-    dispatchOverlay({ type: 'close' })
-    onSwitchBackend(option.id)
-  }
-  /**
-   * /channel 的渠道名册（只有声明了 channels 能力的内核才有行）。名册不存进
-   * overlay，切换/导入后 tick 加一触发重读，✓ 与行随之刷新。
-   */
-  const [channelRosterTick, setChannelRosterTick] = React.useState(0)
-  const channelSnapshot = React.useMemo(
-    () => (typeof channel.listChannels === 'function' ? channel.listChannels() : { channels: [], activeId: undefined }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- roster refreshes on open/switch/import (channelRosterTick), not on every keystroke
-    [channel, channelRosterTick],
-  )
-  const channelRows: readonly ChannelPickerRow[] = [
-    ...(channelSnapshot.channels.map((option): ChannelPickerRow => ({ kind: 'channel', option, active: option.id === channelSnapshot.activeId }))),
-    { kind: 'import' },
-    { kind: 'add' },
-    { kind: 'manage' },
-    { kind: 'view' },
-  ]
-  /** 打开渠道选择器，落在当前渠道行（没有渠道就落在导入行）。打开前重读
-   *  一次名册，文件被手改过也能看到。 */
-  const openChannelPicker = React.useCallback((): void => {
-    setChannelRosterTick(tick => tick + 1)
-    const fresh = typeof channel.listChannels === 'function' ? channel.listChannels() : { channels: [], activeId: undefined }
-    dispatchOverlay({ type: 'open', overlay: { kind: 'channel', index: Math.max(0, fresh.channels.findIndex(option => option.id === fresh.activeId)) } })
-  }, [channel])
-  /** 「查看映射」：把当前渠道的 models 与 tiers 打印成 /channel 本地块。 */
-  const channelMapLines = (snapshot: typeof channelSnapshot): string[] => {
-    const active = snapshot.channels.find(option => option.id === snapshot.activeId)
-    if (active === undefined) return [t('channel-map-none')]
-    const lines = [t('channel-map-heading', { name: active.name })]
-    lines.push(active.models.length > 0 ? t('channel-map-models-heading') : t('channel-map-models-none'))
-    for (const entry of active.models) lines.push(t('channel-map-row', { from: entry.from, to: entry.to }))
-    lines.push(active.tiers.length > 0 ? t('channel-map-tiers-heading') : t('channel-map-tiers-none'))
-    for (const rule of active.tiers) lines.push(t('channel-map-row', { from: rule.tier, to: rule.to }))
-    lines.push(t('channel-map-file-hint'))
-    return lines
-  }
-  /**
-   * 激活渠道的连接（baseUrl / token / 渠道环境变量）变了：运行中的 CLI 子进程
-   * 换不了连接，只能以新会话重启。没有重启能力的宿主只提示下次会话生效。
-   */
-  const restartForChannelConnection = (name: string): void => {
-    if (onRestartFreshSession !== undefined) {
-      dispatchOverlay({ type: 'close' })
-      onRestartFreshSession(t('channel-switch-restart', { name }))
-    } else {
-      channel.notify(t('channel-switch-restart-unavailable', { name }), { color: 'warning' })
-    }
-  }
-  /**
-   * 渠道选择器的确认（Enter 与鼠标点击共用）：
-   *  - 渠道行：切换激活渠道。连接相同就地生效，选择器留在屏上；连接不同则
-   *    以新会话重启；
-   *  - 导入行：从 settings.json 导入（同名再导入会刷新那一条），若刷新的是
-   *    激活渠道且连接变了，同样重启；
-   *  - 新增/管理行：收起选择器，走问答向导；
-   *  - 查看行：收起选择器，打印映射。
-   * 重启会打断正在运行的回合，所以会改动连接的操作在回合运行中一律拒绝，
-   * 与 /kernel、/restart 一致。
-   */
-  const pickChannel = (index: number): void => {
-    const row = channelRows[index]
-    if (row === undefined) return
-    const before = channelSnapshot.channels.find(option => option.id === channelSnapshot.activeId)
-    if (row.kind === 'channel') {
-      if (row.active) { channel.notify(t('channel-already-active')); return }
-      const sameConnection = sameOptionConnection(before, row.option)
-      if (!sameConnection && channel.working) {
-        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
-        return
-      }
-      if (typeof channel.setChannel === 'function' && channel.setChannel(row.option.id)) {
-        setChannelRosterTick(tick => tick + 1)
-        if (sameConnection) channel.notify(t('channel-switched', { name: row.option.name }), { color: 'success' })
-        else restartForChannelConnection(row.option.name)
-      }
-      return
-    }
-    if (row.kind === 'import') {
-      if (channel.working) {
-        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
-        return
-      }
-      const imported = typeof channel.importChannel === 'function' ? channel.importChannel() : undefined
-      setChannelRosterTick(tick => tick + 1)
-      channel.notify(imported === undefined ? t('channel-import-none') : t('channel-import-done', { name: imported.name }), { color: imported === undefined ? 'warning' : 'success' })
-      if (imported !== undefined && before !== undefined && before.id === imported.id
-        && !sameOptionConnection(before, imported)) {
-        restartForChannelConnection(imported.name)
-      }
-      return
-    }
-    if (row.kind === 'add' || row.kind === 'manage') {
-      if (channel.working) {
-        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
-        return
-      }
-      dispatchOverlay({ type: 'close' })
-      void runChannelWizard({
-        ask: (request, options) => questionStore.ask(request, options),
-        notify: (text, options) => channel.notify(text, options),
-        pushLocal: (title, lines) => channel.pushLocal(title, lines),
-        roster: () => (typeof channel.listChannels === 'function' ? channel.listChannels() : { channels: [], activeId: undefined }),
-        save: input => (typeof channel.saveChannel === 'function' ? channel.saveChannel(input) : undefined),
-        remove: id => (typeof channel.removeChannel === 'function' ? channel.removeChannel(id) : false),
-        activate: id => (typeof channel.setChannel === 'function' ? channel.setChannel(id) : false),
-        peekSettings: () => (typeof channel.peekChannelImport === 'function' ? channel.peekChannelImport() : undefined),
-      }).then(outcome => {
-        setChannelRosterTick(tick => tick + 1)
-        if (!outcome.restart) return
-        const name = t('channel-wiz-active-channel')
-        // A turn can start while the wizard is up (a background task waking
-        // the model): never restart over it, the change applies next session.
-        if (channel.working) channel.notify(t('channel-switch-restart-unavailable', { name }), { color: 'warning' })
-        else restartForChannelConnection(name)
-      }).catch(() => {
-        // The wizard notifies on every handled failure; swallow the rest.
-      })
-      return
-    }
-    dispatchOverlay({ type: 'close' })
-    channel.pushLocal('/channel', channelMapLines(channelSnapshot))
-  }
+  const { currentId: kernelCurrentId, options: kernelOptions, open: openKernelPicker, pick: pickKernel } = useKernelPicker({
+    channel, kernelVersion, launchpadShown, onProbeKernels, onSwitchBackend, dispatchOverlay,
+  })
+  const host = channel.backendChannels?.()
+  const { rows: channelRows, open: openChannelPicker, pick: pickChannel, setMode: runBackendModeCommand, login: runBackendLogin } = useBackendChannels({
+    channel, host, questionStore, dispatchOverlay, onRestartFreshSession, runOAuthLogin,
+  })
   /**
    * 落地页条件位③（投喂一颗 Star）：与开屏求 star 弹窗**同一口径**——
    * `usageStats`（~/.dsh-tui/usage.json）里有未报过的已达档里程碑
@@ -2378,18 +2203,6 @@ export function Chat({
   }
 
 
-  /** Apply one backend-native permission mode switch (the /permission
-   *  pipeline over the typed `modes` capability): narrated like the DSH
-   *  preset switch; the backend's own mode.changed event then moves the
-   *  footer indicator (session-controls applyMode). */
-  const runBackendModeCommand = (id: string, name: string): Promise<boolean> => {
-    const originAgentBinding = channel.agentBindingGeneration
-    return channel.setMode(id).then(ok => {
-      if (channel.agentBindingGeneration !== originAgentBinding) return false
-      if (ok) channel.notify(t('mode-switched', { name }), { color: 'success' })
-      return ok
-    })
-  }
   /** Hot-swap the UI language (`/lang <id>` and the LangPicker both land
    *  here): persist to ~/.dsh-tui/lang.json and mirror into the dsh-tui
    *  settings namespace when it is served (best effort). */
@@ -3499,40 +3312,7 @@ export function Chat({
         return true
       case 'login': {
         setHelpOpen(false)
-        // A non-DSH session signs in its own backend: its credential status,
-        // then the host's OAuth sign-in preselected on the backend's
-        // provider, then a reconnect on the fresh credential.
-        const backendAuth = channel.backendAuth?.()
-        if (backendAuth !== undefined) {
-          const backend = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.backendLabel ?? ''
-          void backendAuth.status()
-            .catch((error: unknown) => [t('capability-failed', { name: 'login', err: error instanceof Error ? error.message : String(error) })])
-            .then(async lines => {
-              channel.pushLocal('/login', [
-                t('login-backend-heading', { backend }),
-                ...lines,
-                ...(backendAuth.oauth === undefined ? [t('login-backend-no-oauth')] : []),
-              ])
-              if (backendAuth.oauth === undefined || backendAuth.provider === undefined) return
-              const outcome = await runOAuthLogin({
-                ask: (request, options) => questionStore.ask(request, options),
-                notify: (text, options) => channel.notify(text, options),
-                pushLocal: (title, rows) => channel.pushLocal(title, rows),
-              }, backendAuth.oauth, backendAuth.provider)
-              if (outcome !== 'added' && outcome !== 'signed-out') return
-              try {
-                await backendAuth.reconnect()
-                channel.notify(t('login-backend-reconnected', { backend }), { color: 'success' })
-              } catch (error) {
-                channel.notify(t('login-backend-reconnect-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
-              }
-            })
-            .catch(() => {
-              // The wizard notifies its own failures; this only keeps an
-              // unexpected reject from becoming an unhandled rejection.
-            })
-          return true
-        }
+        if (runBackendLogin()) return true
         void channel.describeCredential('DEEPSEEK_API_KEY')
           .catch(() => undefined)
           .then(async status => {
@@ -3642,54 +3422,17 @@ export function Chat({
           setHelpOpen(false)
           return runPermissionCommand(rawInput, images)
         }
-        // Backend-native permission modes (the typed `modes` capability):
-        // the same command surface over the backend's own roster — bare
-        // opens the mode picker, `/permission <id>` sets directly, `status`
-        // reports the live mode. A DSH session declares no such capability
-        // (listModes answers empty), so every branch below is unreachable
-        // there and the preset pipeline above stands unchanged.
-        // Stub tolerance (partial channel literals in verify/repro
-        // harnesses predate the action): a missing delegate reads as the
-        // silent empty roster, exactly what a DSH session answers anyway.
-        const backendModes = typeof channel.listModes === 'function'
-          ? channel.listModes()
-          : { modes: [], currentIndex: -1 }
-        const backendModeCurrent = backendModes.currentIndex >= 0 ? backendModes.modes[backendModes.currentIndex] : undefined
-        if (backendModes.modes.length > 0 && parts[0] === 'status') {
-          setHelpOpen(false)
-          channel.pushLocal('/permission', [
-            t('permission-mode-current', { name: backendModeCurrent?.name ?? modeDisplayName(channel.mode) }),
-            t('permission-mode-switch-hint'),
-          ])
+        const native = backendPermissionCommand(channel.backendModes?.()?.snapshot(), rawInput, modeDisplayName(channel.mode))
+        if (native === undefined) return false
+        if (native.kind === 'unknown') {
+          channel.notify(t('permission-mode-unknown', { id: native.id }), { color: 'error' })
           return true
         }
-        if (backendModes.modes.length > 0 && parts.length === 0) {
-          setHelpOpen(false)
-          const index = backendModes.currentIndex >= 0 ? backendModes.currentIndex : 0
-          dispatchOverlay({
-            type: 'open',
-            overlay: {
-              kind: 'mode',
-              index,
-              modes: backendModes.modes.map(mode => ({ id: mode.id, name: mode.name, ...(mode.description === undefined ? {} : { description: mode.description }) })),
-              // No ✓ when the live mode is not in the roster: the focus falls
-              // back to the first row, the checkmark must not follow it.
-              currentId: backendModeCurrent?.id,
-            },
-          })
-          return true
-        }
-        if (backendModes.modes.length > 0) {
-          const target = backendModes.modes.find(mode => mode.id === parts[0])
-          if (target === undefined) {
-            channel.notify(t('permission-mode-unknown', { id: parts[0]! }), { color: 'error' })
-            return true
-          }
-          setHelpOpen(false)
-          void runBackendModeCommand(target.id, target.name)
-          return true
-        }
-        return false
+        setHelpOpen(false)
+        if (native.kind === 'status') channel.pushLocal('/permission', native.lines)
+        else if (native.kind === 'picker') dispatchOverlay({ type: 'open', overlay: native.overlay })
+        else void runBackendModeCommand(native.mode.id, native.mode.name)
+        return true
       }
       case 'plan': {
         // Registered by dsh-plan-mode: bare `/plan` opens an on/off picker
@@ -3732,22 +3475,12 @@ export function Chat({
         return true
       case 'mcp': {
         setHelpOpen(false)
-        // `/mcp reconnect <name>` and `/mcp toggle <name> on|off` where the
-        // backend controls its MCP servers; anything else (and every DSH
-        // session) shows the status report as before.
-        const control = (channel.backendCapabilities as Channel['backendCapabilities'] | undefined)?.mcpControl === true
-        const args = rawInput.trim()
-        const sub = /^(reconnect|toggle)(?:\s+([\s\S]*))?$/u.exec(args)
-        if (control && sub !== null) {
-          const rest = (sub[2] ?? '').trim()
-          if (sub[1] === 'reconnect') {
-            if (rest === '') channel.notify(t('mcp-control-usage'), { color: 'warning' })
-            else void channel.mcpControl({ action: 'reconnect', name: rest })
-            return true
-          }
-          const toggle = /^([\s\S]+?)\s+(on|off)$/u.exec(rest)
-          if (toggle === null) channel.notify(t('mcp-control-usage'), { color: 'warning' })
-          else void channel.mcpControl({ action: 'toggle', name: toggle[1]!.trim(), enabled: toggle[2] === 'on' })
+        const control = channel.backendMcp?.()
+        const request = parseMcpCommand(rawInput)
+        if (control !== undefined && request.kind !== 'status') {
+          if (request.kind === 'usage') channel.notify(t('mcp-control-usage'), { color: 'warning' })
+          else if (request.kind === 'reconnect') void control.reconnect(request.name)
+          else void control.toggle(request.name, request.enabled)
           return true
         }
         channel.pushLocal('/mcp', channel.mcpStatus())
@@ -5419,22 +5152,7 @@ export function Chat({
    * (above the input cluster) and the launchpad itself (above its input
    * card, see the launchpad branch). Defined once so the two never drift.
    */
-  /**
-   * 底栏右侧的权限模式段（只有声明了原生 modes 的后端才有名册；DSH 会话
-   * listModes() 答空名册 → 不传 prop，底栏渲染与以前逐字节相同）。名字与
-   * id 来自同一个名册，点击 = 既有 /permission 命令（同一批选择器）。
-   */
-  const backendModeSnapshot = typeof channel.listModes === 'function' ? channel.listModes() : undefined
-  const backendModeCurrent = backendModeSnapshot === undefined || backendModeSnapshot.currentIndex < 0
-    ? undefined
-    : backendModeSnapshot.modes[backendModeSnapshot.currentIndex]
-  const backendModeStatus = backendModeCurrent === undefined
-    ? undefined
-    : {
-        id: backendModeCurrent.id,
-        name: backendModeCurrent.name,
-        onOpen: () => { void runCommand('permission', '') },
-      }
+  const backendModeStatus = modeStatus(channel.backendModes?.()?.snapshot(), () => { void runCommand('permission', '') })
   /**
    * 底栏模型段/思考档位段的点击（与模式段同一契约）：后端声明了模型目录或
    * effort 能力（backendCapabilities 位）才挂，点击 = 既有 /model · /effort

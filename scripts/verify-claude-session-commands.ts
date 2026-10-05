@@ -167,7 +167,7 @@ function answer(query: { emit(message: unknown): void }, text: string): void {
   const channel = createChannel(ctx, session, { model: 'Claude Agent', provider: 'claude', cwd: '/fixture/project', activity: false, backendLabel: 'Claude Agent' })
   try {
     await persist()
-    check('the commands are offered for Claude', ['btw', 'recap', 'rename', 'color', 'mcp'].every(name => channel.backendCapabilities.commands.includes(name)) && channel.backendCapabilities.sideQuery && channel.backendCapabilities.mcpControl)
+    check('the commands are offered for Claude', ['btw', 'recap', 'rename', 'color', 'mcp'].every(name => channel.backendCapabilities.commands.includes(name)) && channel.backendCapabilities.sideQuery && channel.backendMcp() !== undefined)
     check('the open-time recap stays off for Claude (it would spend on every open)', channel.autoRecapOnOpen === false)
     const streamed: string[] = []
     const btw = channel.sideQuestion('what changed?', { onText: delta => { streamed.push(delta) } })
@@ -263,8 +263,8 @@ function answer(query: { emit(message: unknown): void }, text: string): void {
     check('/mcp completes its subcommands', JSON.stringify(names('/mcp ')) === JSON.stringify(['reconnect', 'toggle']), names('/mcp '))
     check('… server names from the last status report (names a command line can carry)', JSON.stringify(names('/mcp reconnect ')) === JSON.stringify(['github', 'linear']) && JSON.stringify(names('/mcp toggle li')) === JSON.stringify(['linear']), names('/mcp reconnect '))
     check('… and on / off after a server', JSON.stringify(names('/mcp toggle github ')) === JSON.stringify(['on', 'off']), names('/mcp toggle github '))
-    check('/mcp reconnect calls the capability and says so', await channel.mcpControl({ action: 'reconnect', name: 'linear' }) && fake.queries[0]!.calls.some(call => call.method === 'reconnectMcpServer' && call.args[0] === 'linear') && channel.notifications.some(item => item.text === t('mcp-reconnected', { name: 'linear' })))
-    check('/mcp toggle off calls the capability with false', await channel.mcpControl({ action: 'toggle', name: 'github', enabled: false }) && fake.queries[0]!.calls.some(call => call.method === 'toggleMcpServer' && call.args[0] === 'github' && call.args[1] === false) && channel.notifications.some(item => item.text === t('mcp-disabled', { name: 'github' })))
+    check('/mcp reconnect calls the capability and says so', await channel.backendMcp()!.reconnect('linear') && fake.queries[0]!.calls.some(call => call.method === 'reconnectMcpServer' && call.args[0] === 'linear') && channel.notifications.some(item => item.text === t('mcp-reconnected', { name: 'linear' })))
+    check('/mcp toggle off calls the capability with false', await channel.backendMcp()!.toggle('github', false) && fake.queries[0]!.calls.some(call => call.method === 'toggleMcpServer' && call.args[0] === 'github' && call.args[1] === false) && channel.notifications.some(item => item.text === t('mcp-disabled', { name: 'github' })))
   } finally {
     channel.releaseContributions()
     await session.dispose()
@@ -274,7 +274,7 @@ function answer(query: { emit(message: unknown): void }, text: string): void {
 // ── DSH keeps its command set and its plain /mcp ───────────────────────
 {
   const dsh = channelCapabilities({ backendId: 'dsh', backendLabel: 'DSH', capabilities: { native: {} }, dsh: true })
-  check('DSH: the snapshot offers recap/btw/rename/color as before, no MCP control', ['btw', 'recap', 'rename', 'color', 'mcp'].every(name => dsh.commands.includes(name)) && dsh.mcpControl === false)
+  check('DSH: the snapshot offers recap/btw/rename/color as before, no MCP control', ['btw', 'recap', 'rename', 'color', 'mcp'].every(name => dsh.commands.includes(name)) && !('mcpControl' in dsh))
 }
 
 console.log(`\nverify-claude-session-commands OK (${passed} checks)`)

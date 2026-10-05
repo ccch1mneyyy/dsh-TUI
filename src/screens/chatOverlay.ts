@@ -80,7 +80,7 @@ export type ChatOverlay =
   /** `/panel` 无参的选择器：列出「已启用 ∩ 已注册」的面板（含插件）。 */
   | { kind: 'panel'; index: number }
   /** `/channel` 渠道档案选择器（仅 channels 能力的后端，即 Claude）：只带
-   *  焦点下标——名册是 Chat 的派生值（listChannels 每渲染现读 channels.json），
+   *  焦点下标——名册由后端渠道宿主派生，
    *  切换/导入后选择器自己就刷新成新状态，不需要把名册冻进 overlay。 */
   | { kind: 'channel'; index: number }
   | { kind: 'history'; query: string; cursor: number; focus: number }

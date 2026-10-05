@@ -688,7 +688,7 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
     await settled(() => channel.working)
     const occurrences = (needle: string): number => screen().split(needle).length - 1
     check('nothing published: the classic random-verb spinner keeps the slot',
-      occurrences('⏵') === 0 && screen().includes('…'),
+      await settled(() => occurrences('⏵') === 0 && screen().includes('…')),
       screen())
     pushActivity({ phase: 'thinking', line: '⏵Fixing the login bug', live: false, toolCount: 0, phrase: '⏵Fixing the login bug', phaseStartedAt: Date.now(), turnStartedAt: Date.now(), updatedAt: Date.now(), lang: 'en' })
     check('the published ⏵ line takes the spinner slot', await settled(() => occurrences('Fixing the login bug') === 1), screen())
@@ -714,6 +714,115 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
     channel.releaseContributions()
     term.dispose()
   }
+}
+// An open channel picker must follow a capability roster replaced by /new.
+{
+  const catalog = (id: string): NonNullable<AgentSession['capabilities']['channels']> => {
+    const option = { id, name: id, models: [], tiers: [] }
+    return { list: () => [option], activeId: () => id, setActive: () => {}, importFromSettings: () => undefined, save: () => option, remove: () => false, peekSettingsImport: () => undefined }
+  }
+  const initial = freshSession({ channels: catalog('old-roster') })
+  const replacement = { ...freshSession({ channels: catalog('new-roster') }), ref: { backendId: 'fake', sessionId: 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1' } }
+  const channel = createChannel(ctx, initial, { model: 'fake-model', provider: '', cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent', openSession: () => Promise.resolve(replacement) })
+  const term = new XTerm({ cols: 100, rows: 30, scrollback: 0, allowProposedApi: true })
+  class Out extends Writable { columns = 100; rows = 30; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
+  class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
+  const stdin = new In()
+  const screen = (): string => viewportLines(term, 30).join('\n')
+  const instance = await ui.render(
+    React.createElement(Chat, { channel: channel as never, questionStore: new QuestionStore(), approvalStore: new ApprovalStore(), onExit: () => undefined, fullscreen: false, trajectorySeen: true }),
+    { stdout: new Out() as never, stdin: stdin as never, stderr: new Out() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  try {
+    check('channel roster fixture paints', await settled(() => screen().includes('fake-model')), screen())
+    for (const char of '/channel') stdin.write(char)
+    check('channel draft paints', await settled(() => screen().includes('/channel')), screen())
+    stdin.write('\r')
+    check('channel picker shows the original session roster', await settled(() => screen().includes('old-roster')), screen())
+    check('channel roster fixture really rebinds through /new', await channel.newSession())
+    check('an open channel picker replaces its cached roster on session rebind',
+      await settled(() => screen().includes('new-roster') && !screen().includes('old-roster')), screen())
+  } finally {
+    instance.unmount()
+    channel.releaseContributions()
+    term.dispose()
+  }
+}
+
+// /login follows the backend's auth host, not the DSH credential report.
+for (const route of ['missing', 'ready', 'failed'] as const) {
+  const calls: string[] = []
+  const inputs: AgentInput[] = []
+  const session = freshSession({ auth: {
+    oauthProvider: 'anthropic',
+    status: () => Promise.resolve({ lines: ['Backend credential source'] }),
+    reconnect: () => {
+      calls.push('reconnect')
+      return route === 'failed' ? Promise.reject(new Error('reconnect refused')) : Promise.resolve()
+    },
+  } })
+  session.submit = input => { inputs.push(input); return Promise.resolve({ accepted: true }) }
+  const oauth = {
+    providers: () => Promise.resolve([{ provider: 'anthropic', label: 'Anthropic', oauthLabel: 'Subscription', loginLabel: undefined, signedIn: false, expiresAt: undefined, expired: false }]),
+    login: (provider?: string) => { calls.push('login:' + provider); return Promise.resolve({ provider: 'anthropic', oauthLabel: 'Subscription', expiresAt: undefined }) },
+    logout: () => Promise.resolve(false),
+  }
+  const authCtx = { on: () => () => undefined, get: (name: string) => name === 'dshAuth' && route !== 'missing' ? { api: oauth } : undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never
+  const channel = createChannel(authCtx, session, { model: 'fake-model', provider: '', cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent' })
+  const term = new XTerm({ cols: 100, rows: 30, scrollback: 0, allowProposedApi: true })
+  class Out extends Writable { columns = 100; rows = 30; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
+  class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
+  const stdin = new In()
+  const screen = (): string => viewportLines(term, 30).join('\n')
+  const instance = await ui.render(
+    React.createElement(Chat, { channel: channel as never, questionStore: new QuestionStore(), approvalStore: new ApprovalStore(), onExit: () => undefined, fullscreen: false, trajectorySeen: true }),
+    { stdout: new Out() as never, stdin: stdin as never, stderr: new Out() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  try {
+    check(route + ': login fixture paints', await settled(() => screen().includes('fake-model')), screen())
+    for (const char of '/login') stdin.write(char)
+    check(route + ': login draft paints', await settled(() => screen().includes('/login')), screen())
+    stdin.write('\r')
+    check(route + ': login shows the backend credential status', await settled(() => screen().includes('Backend credential source')), screen())
+    if (route === 'missing') {
+      check('without OAuth the login host reports that limitation and never reconnects',
+        screen().replace(/\s+/gu, ' ').includes(t('login-backend-no-oauth').replace(/\s+/gu, ' ')) && calls.length === 0, screen())
+    } else {
+      const expected = route === 'ready' ? t('login-backend-reconnected', { backend: 'Fake Agent' }) : t('login-backend-reconnect-failed', { err: 'reconnect refused' })
+      check(route + ': login uses the backend provider and narrates the reconnect outcome',
+        await settled(() => calls.join() === 'login:anthropic,reconnect' && channel.notifications.some(item => item.text === expected)), calls.join())
+    }
+    check(route + ': backend login never prints DSH API key status or reaches the model',
+      !screen().includes(t('login-api-key', { status: '' }).trim()) && inputs.length === 0, screen())
+  } finally {
+    instance.unmount()
+    channel.releaseContributions()
+    term.dispose()
+  }
+}
+
+// Backend command helpers preserve names and distinguish unknown live modes.
+{
+  const { backendPermissionCommand, backendModeStatus, parseMcpCommand } = await import('../src/screens/chat/backendCommands.js')
+  check('MCP parser keeps a multi-word server name',
+    JSON.stringify(parseMcpCommand(' reconnect claude.ai Gmail ')) === JSON.stringify({ kind: 'reconnect', name: 'claude.ai Gmail' }))
+  check('MCP parser takes only the final on/off token',
+    JSON.stringify(parseMcpCommand('toggle server on off')) === JSON.stringify({ kind: 'toggle', name: 'server on', enabled: false }))
+  check('MCP parser rejects missing names and invalid states',
+    parseMcpCommand('reconnect').kind === 'usage' && parseMcpCommand('toggle github maybe').kind === 'usage')
+  check('MCP parser leaves unrelated arguments on the status route',
+    parseMcpCommand('status').kind === 'status' && parseMcpCommand('reconnect-other').kind === 'status')
+  const snapshot = { modes: [{ id: 'default', name: 'Default' }], currentIndex: -1 }
+  const picker = backendPermissionCommand(snapshot, '', 'Unknown live mode')
+  check('unknown live mode focuses the first row without adding a current mark',
+    picker?.kind === 'picker' && picker.overlay.index === 0 && picker.overlay.currentId === undefined
+      && backendModeStatus(snapshot, () => {}) === undefined)
+  const status = backendPermissionCommand(snapshot, 'status', 'Unknown live mode')
+  check('native mode status uses the live fallback rather than the focused row',
+    status?.kind === 'status' && status.lines[0] === t('permission-mode-current', { name: 'Unknown live mode' }))
+  check('absent modes keep the permission fallthrough route',
+    backendPermissionCommand(undefined, 'default', '') === undefined
+      && backendPermissionCommand({ modes: [], currentIndex: -1 }, '', '') === undefined)
 }
 console.log(`\nverify-backend-chat OK (${passed} checks)`)
 process.exit(0)

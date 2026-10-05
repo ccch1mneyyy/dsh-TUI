@@ -1079,8 +1079,21 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   ]
   const chat = await mountChat({}, {
     commandList: [...LOCAL_COMMANDS, { name: 'channel', description: 'channel' }],
-    listChannels: () => ({ channels, activeId: 'alpha' }),
-    setChannel: (id: string) => { sets.push(id); return true },
+    backendChannels: () => ({
+      snapshot: () => ({ channels, activeId: 'alpha' }),
+      activate: (id: string) => {
+        if (chat.channel.working) {
+          chat.channel.notify('回合运行中，无法切换或改动渠道')
+          return { ok: false, restart: true }
+        }
+        sets.push(id)
+        return { ok: true, restart: true }
+      },
+      importFromSettings: () => undefined,
+      save: () => undefined,
+      remove: () => false,
+      peekImport: () => undefined,
+    }),
   }, { onRestartFreshSession: (notice: string) => { restarts.push(notice) } })
   await chat.type('/channel')
   await chat.send('\r')
