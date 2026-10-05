@@ -25,6 +25,7 @@ import type { TuiWorkspaceEntry, TuiWorkspaceTarget } from '../../workspaces.js'
 import type { ChannelUi as Channel } from '../../adapter/channel/ui-policy.js'
 import type { ResumeResult } from '../../adapter/ports/channel-view.js'
 import { resumeFailureText } from '../../sessions/resumeFailure.js'
+import { useChannelReady } from '../../hooks/useChannelReady.js'
 import { RAIL_CHROME_ROWS, WORKSPACE_ROW_LINES, RAIL_MIN_TOTAL_COLUMNS, RAIL_WIDTH_MIN, RAIL_WIDTH_MAX, SESSION_ROW_LINES, SESSION_PANE_CHROME_ROWS, noticeLines, menuActionsFor, SupervisorLiveState, RailEntry, UNREGISTERED_RAIL_ID, message, samePath, sessionMatchesQuery } from './model.js'
 
 /**
@@ -74,6 +75,17 @@ function snapshotSlot(channel: Channel): ListingSnapshotSlot {
   return slot
 }
 
+/**
+ * Re-read the channel's persistent listing cache into its slot, when the
+ * channel offers one; a throwing provider leaves the slot unknown.
+ * @param channel - The screen's channel.
+ * @param slot - That channel's snapshot slot.
+ */
+function rescopeSnapshot(channel: Channel, slot: ListingSnapshotSlot): void {
+  if (typeof channel.cachedSessions !== 'function') return
+  try { slot.rows = channel.cachedSessions() } catch { slot.rows = undefined }
+}
+
 /** Everything the screen owns that the model needs to read. */
 export interface SessionSupervisorInput {
   readonly channel: Channel
@@ -112,15 +124,24 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   const dshBackend = backendId === 'dsh'
   const pinsDir = sessionPinsDir(backendId)
 
+  /**
+   * Whether the channel can list at all. The `dst` fast start mounts Chat
+   * against a boot channel (`ready === false`) and later swaps the live one in
+   * underneath the SAME object, so `[channel]` never changes across the swap:
+   * without this edge a screen opened during boot keeps the boot channel's
+   * empty answer forever. Hosts that predate the flag count as ready.
+   */
+  const ready = useChannelReady(channel)
+  /** True while this mount has only ever seen the boot channel. */
+  const openedDuringBootRef = useRef(!ready)
+
   const [entries, setEntries] = useState<readonly RailEntry[]>([])
   // Lazy so a non-empty snapshot from this channel's previous mount paints as
   // the first frame, including after restart; undefined alone means unknown.
   const [sessions, setSessions] = useState<readonly SessionSummary[]>(() => {
     const slot = snapshotSlot(channel)
     // Recheck the provider's scope on every mount (including service replacement).
-    if (typeof channel.cachedSessions === 'function') {
-      try { slot.rows = channel.cachedSessions() } catch { slot.rows = undefined }
-    }
+    rescopeSnapshot(channel, slot)
     return slot.rows ?? []
   })
   const [loading, setLoading] = useState(() => {
@@ -340,6 +361,10 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
    * this screen cannot work without, so it must survive a missing ledger.
    */
   const reload = useCallback(async (): Promise<void> => {
+    // Boot phase: there is no store behind the channel yet, and an empty
+    // answer here would read as "no history" (and become the snapshot). The
+    // screen stays on its loading state; the ready edge below lists.
+    if (channel.ready === false) return
     // Claim this reload's generation before the first await: everything below
     // only publishes while it is still the newest request, so a slower earlier
     // one that lands later cannot repaint the screen (or the snapshot) with
@@ -400,8 +425,20 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   }, [channel, workspaceLedger])
 
   React.useEffect(() => {
+    if (!ready) return
+    if (openedDuringBootRef.current) {
+      openedDuringBootRef.current = false
+      // The mount-time cache read answered from the boot channel; the live
+      // one can paint its on-disk snapshot before the listing lands.
+      const slot = snapshotSlot(channel)
+      rescopeSnapshot(channel, slot)
+      if (slot.rows !== undefined) {
+        setSessions(slot.rows)
+        setLoading(false)
+      }
+    }
     void reload()
-  }, [reload])
+  }, [channel, reload, ready])
 
   React.useEffect(() => () => {
     snapshotSlot(channel).requestGeneration++

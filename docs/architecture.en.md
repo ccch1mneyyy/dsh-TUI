@@ -17,6 +17,20 @@ Cordis profile
   -> ANSI terminal
 ```
 
+Every launch renders through one root (`src/preboot/host.tsx`: ThemeProvider →
+[AlternateScreen →] PageMargin → Chat), and the channel Chat holds is a
+`createDeferredChannel` wrapper whose identity never changes. The `dst` fast
+start adds one stage ahead of this chain: the launcher starts the dsh process
+with `--import src/preboot/entry.ts`, the preload mounts the real Chat against
+`bootChannel.ts` (a `ChannelUi` with `ready === false`) and publishes the
+`BootSlot` on `globalThis`; when `plugin.ts` reaches its render step it calls
+`slot.ready(live)` — the live channel slides in under the same object, the host
+props swap, Chat never re-mounts. There is no second screen for the boot phase:
+"cannot send yet" is a channel state (`ready`) the composer and status line
+render. The preload imports no `@deepseek-ai/*` module directly; when the
+renderer options (fullscreen / terminalImages) disagree it `dispose()`s and the
+tree mounts fresh.
+
 ## Module ownership
 
 | Module | Owns |

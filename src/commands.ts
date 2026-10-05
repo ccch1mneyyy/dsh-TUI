@@ -237,6 +237,49 @@ export function isHiddenCommandName(input: string): boolean {
 }
 
 /**
+ * Commands that may run during the `dst` boot phase (`channel.ready ===
+ * false`, before dsh has composed a session): each acts only on this
+ * process's own UI state and has a visible effect without a session.
+ *
+ * - `exit` / `quit` / `q`: leave (the boot shell owns the exit funnel).
+ * - `help`, `tips`: open local overlays over the static command catalog.
+ * - `theme`: hot-swap and persist the theme (theme.json is authoritative on
+ *   both paths).
+ * - `vim`: toggle the composer's own edit mode.
+ * - `resume` / `home` / `agentview`: open the session screen, which waits on
+ *   the ready edge before listing and refuses to open a session until then.
+ * - `deepseek` (hidden): replay the logo animation.
+ *
+ * Everything else is refused like a plain prompt: it needs the session, the
+ * model route, a DSH service, or writes a transcript row through
+ * `pushLocal` (a no-op on the boot channel, so the command would vanish).
+ * That is also why `/theme status` is excluded. `/lang` is refused too: on
+ * the live path it also mirrors the choice into the settings user layer,
+ * which the boot channel cannot write, so the plugin would put a
+ * settings.yaml `lang` back at the handoff.
+ */
+export const BOOT_SAFE_COMMAND_NAMES: ReadonlySet<string> = new Set([
+  'exit', 'quit', 'q',
+  'help', 'tips',
+  'theme', 'vim',
+  'resume', 'home', 'agentview',
+  'deepseek',
+])
+
+/**
+ * Whether a parsed command line may run before the live channel arrives.
+ * @param name - Command name (no slash).
+ * @param rawInput - Verbatim text after the name.
+ * @returns True when {@link BOOT_SAFE_COMMAND_NAMES} lets it through.
+ */
+export function isBootSafeCommand(name: string, rawInput = ''): boolean {
+  if (!BOOT_SAFE_COMMAND_NAMES.has(name)) return false
+  // The `status` form prints through the transcript, which does not exist yet.
+  if (name === 'theme' && rawInput.trim().split(/\s+/)[0] === 'status') return false
+  return true
+}
+
+/**
  * Resolve a command's description in the active UI language. The en text in
  * `LOCAL_COMMANDS` (and the registry's own text for external commands) is
  * the fallback; zh translations live in the i18n dict under

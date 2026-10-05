@@ -37,17 +37,18 @@ import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateMode
 import type { ModelRoute } from '../modelRoute.js'
 import { migratePresetPref, readPresetPref } from '../presetPrefs.js'
 import { readEffortPref } from '../effortPrefs.js'
+import { createTuiSettingsSchema } from './tuiSettingsSchema.js'
 import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { registerBundledPresets } from './bundled-presets.js'
 import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './compat/index.js'
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
 import { initialPromptFromCmdlineArgs } from './startup-args.js'
-import { readHomePrefs } from '../homePrefs.js'
+import { decideLaunchpadOnBoot, decideOnboardingOnBoot, decideOpenHomeOnBoot, isLandingLaunch, readHomePrefs } from '../homePrefs.js'
+import { writeRendererDecision } from '../rendererPrefs.js'
 import { handoffEventTag, formatHandoffNotice } from '../handoffEvents.js'
 import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit } from '../handoffAck.js'
 import { KERNEL_IDS, KERNEL_SWITCH_HANDOFF_ENV, kernelDisplayName, readKernelPrefs, resolveRememberedBackend, writeKernelPrefs, type KernelBackendId } from '../kernelPrefs.js'
-import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
@@ -62,7 +63,8 @@ import {
 } from '../utils/keymap.js'
 import { attachHerdrIntegration } from '../herdr.js'
 import { logMouseDebug } from '../utils/debug.js'
-import { Chat } from '../screens/Chat.js'
+import { disposePendingPreboot, takePrebootSlot } from '../preboot/handle.js'
+import { mountChatHost, type BootSlot, type ChatHostProps } from '../preboot/host.js'
 import { openInjectChannel, type InjectController } from './inject-channel.js'
 import { startSessionMountHeartbeat } from './session-mount-heartbeat.js'
 import { reserveMount, reserveNewSession } from '../sessionMounts.js'
@@ -78,8 +80,7 @@ import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import { compositionRoot, withHostRootCapability } from './host-access.js'
-import { render, ThemeProvider, AlternateScreen } from '../ui.js'
-import { PageMargin } from '../components/PageMargin.js'
+import type { Instance } from '../ui.js'
 import { normalizeSplashFont } from '../components/splashFonts.js'
 import { normalizeBrandSetting, resolveBrand, setActiveBrand } from '../branding.js'
 import { SETTING_GROUPS, SHORTCUT_FIELD_META, settingField } from '../settings/definitions.js'
@@ -118,27 +119,8 @@ let lastBootedTerminalImages: boolean | undefined
 // module so argv probes can load it without the whole plugin graph.
 export { initialPromptFromCmdlineArgs }
 
-/**
- * Extract the startup prompt from raw app argv, excluding session selectors
- * and Web startup flag values. `--trusted-host` consumes multiple authorities
- * up to the next flag; none of them are prompt text (issue #882). An app-level
- * `--` ends flag parsing; all following tokens are literal prompt text.
- */
-/**
- * 落地页 / 首启引导该不该在这次启动出现。
- *
- * 只看「用户有没有说要回到哪儿」：`--resume` 目标与首句都算他知道自己要去哪。
- * **工作区目标不算**——`dst` 默认把 cwd 当工作区目标喂进来，算进去就等于在本机
- * 最主流的启动方式下把这两个屏永久关掉（实测事故，见调用点的口径注释）。
- *
- * @param input.launchSessionId - 本次要恢复的会话（--resume / DSH_TUI_RESUME_SESSION）。
- * @param input.initialPrompt - 命令行里带的首句提示词（无则空串）。
- * @returns true 表示这次是「普通启动」。
- */
-export function isLandingLaunch(input: { launchSessionId?: string; initialPrompt: string }): boolean {
-  return input.launchSessionId === undefined && input.initialPrompt === ''
-}
-
+// Lives beside the other boot-landing rules so the `dst` preload can share it.
+export { isLandingLaunch }
 
 /**
  * How this process should treat the TUI frontend, given the terminal it runs on.
@@ -168,6 +150,14 @@ export function resolveTuiHostMode(
 
   return explicitTuiLaunch ? 'invalid-explicit-launch' : 'headless-host'
 }
+
+/**
+ * The boot slot (`dst` fast start) taken by the running `apply`, until the
+ * render step brings it live or discards it. Module-level so
+ * `handleStartupError` can restore the terminal when startup dies between
+ * the two points.
+ */
+let pendingPreboot: BootSlot | undefined
 
 export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx): Promise<void> {
   const config = configValues<Config>(runtimeConfig)
@@ -244,6 +234,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     )
     return
   }
+
+  // Fast launcher (`dst`): the `--import` preload mounted the root tree
+  // against a boot channel (src/preboot/) before dsh started loading and
+  // published its slot. Take it now so a failure anywhere below can still
+  // tear that renderer down (see handleStartupError) — and bring it live at
+  // the render step, where the live channel slides in under the running Chat.
+  pendingPreboot = takePrebootSlot()
 
   // Validate settings before creating an agent or taking over the terminal.
   const tuiSettingsNs = resolveSettingsNamespace(configOwner, Config) as SettingsNamespace
@@ -863,136 +860,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // Loader targets the Config owner's fiber, not the injected child fiber.
     const scope = createSettingsScope<SettingsValue>(configOwner, settingsCtx.settings,
       tuiSettingsNs,
-      Schema.object({
-        diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
-        thinkingFold: Schema.union(['preview', 'full']).default('preview'),
-        jobGroupFold: Schema.union(['auto', 'always', 'never']).default('auto'),
-        toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
-        scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
-        // Preset names AND custom `NxM` specs (the settings field's parse
-        // gate keeps junk out of the user layer; the transform normalizes
-        // whatever survives — cordis.yml junk included).
-        pageMargin: Schema.transform(
-          Schema.string().default('normal'),
-          value => normalizePageMargin(value),
-        ),
-        // No default on purpose (same rule as `fullscreen` below): a schema
-        // default here would come back from scope.get()/watch() and shadow
-        // an explicit cordis.yml `foldTerminalCommand: true` while the
-        // settings user layer is unset — applyDisplay's
-        // `?? config.foldTerminalCommand ?? false` already supplies the
-        // default and keeps cordis.yml decisive.
-        foldTerminalCommand: Schema.boolean(),
-        // Same no-default rule as foldTerminalCommand: applyDisplay resolves
-        // `?? config.turnUsageRow ?? false` so cordis.yml stays decisive.
-        turnUsageRow: Schema.boolean(),
-        promptSessionLabel: Schema.boolean().default(false),
-        // No schema default (same rule as foldTerminalCommand): applyDisplay
-        // resolves `?? config.expandEditor ?? true` so cordis.yml stays
-        // decisive while the user layer is unset.
-        expandEditor: Schema.boolean(),
-        // Same no-default rule: applyDisplay resolves `?? config.smoothStreaming ?? true`.
-        smoothStreaming: Schema.boolean(),
-        // Same no-default rule: applyDisplay resolves `?? config.mermaidDiagrams ?? true`.
-        mermaidDiagrams: Schema.boolean(),
-        // Code-frame shape; unset keeps the light rail frame.
-        codeFrameStyle: Schema.union(['light', 'full']),
-        // Same no-default rule: resolveMathRendering falls back to cordis.yml.
-        mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),
-        // Display-formula image size; unset keeps the base (text) scale.
-        mathImageScale: Schema.union(['auto', 'large', 'xlarge']),
-        // Formula-image backing; unset keeps the transparent default.
-        mathImageBacking: Schema.union(['transparent', 'terminal']),
-        // Transcript-image backing (photos); unset keeps the transparent default.
-        imageBacking: Schema.union(['transparent', 'terminal']),
-        // Pre-`mathRendering` user layers; `false` still resolves to `source`.
-        latexMath: Schema.boolean(),
-        // No default on purpose: unset keeps the boot chain decisive
-        // (applyEffortDefault hands `undefined` to channel.setDefaultEffort,
-        // which resolves cordis.yml `effort` → effort.json → adapter default).
-        effortDefault: Schema.string(),
-        statusBar: Schema.object({
-          compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
-          model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
-          thinking: Schema.boolean().default(DEFAULT_STATUS_BAR.thinking),
-          cwd: Schema.boolean().default(DEFAULT_STATUS_BAR.cwd),
-          contextUsage: Schema.boolean().default(DEFAULT_STATUS_BAR.contextUsage),
-          cache: Schema.boolean().default(DEFAULT_STATUS_BAR.cache),
-          tokens: Schema.boolean().default(DEFAULT_STATUS_BAR.tokens),
-          cost: Schema.boolean().default(DEFAULT_STATUS_BAR.cost),
-          tps: Schema.boolean().default(DEFAULT_STATUS_BAR.tps),
-          gitBranch: Schema.boolean().default(DEFAULT_STATUS_BAR.gitBranch),
-          sessionTitle: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionTitle),
-          sessionId: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionId),
-          goal: Schema.boolean().default(DEFAULT_STATUS_BAR.goal),
-          mode: Schema.boolean().default(DEFAULT_STATUS_BAR.mode),
-          contextBar: Schema.boolean().default(DEFAULT_STATUS_BAR.contextBar),
-          activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
-          trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
-          shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
-        }).default({ ...DEFAULT_STATUS_BAR }),
-        // Side-panel preferences. No schema defaults on purpose (same rule as
-        // foldTerminalCommand/expandEditor above): a default here would come
-        // back from scope.get()/watch() and shadow an explicit cordis.yml
-        // `sidePanel` block while the user layer is unset. applyDisplay
-        // resolves `?? config.sidePanel?.x` and the apply* stores normalize
-        // undefined to the documented defaults (true / false / 0.68 / the
-        // built-in panel trio).
-        sidePanel: Schema.object({
-          splitEnabled: Schema.boolean(),
-          open: Schema.boolean(),
-          ratio: Schema.number(),
-          panels: Schema.string(),
-        }),
-        companion: Schema.object({
-          skin: Schema.string(),
-        }),
-        // btw thread-context budgets (settings `btw.*`): no schema defaults
-        // (same rule as sidePanel above) — the apply* stores normalize an
-        // unset value to 4 turns / 24k chars.
-        btw: Schema.object({
-          contextTurns: Schema.number(),
-          contextBudget: Schema.number(),
-        }),
-        // Header pixel whale art; on unless settings.yaml says otherwise.
-        whale: Schema.boolean().default(true),
-        // Idle whale behaviors after the intro settles; on by default —
-        // the idle-wakeup gate stays: an explicit `false` keeps the settled
-        // header timer-free.
-        whaleIdle: Schema.boolean().default(true),
-        // Maid portrait instead of the pixel whale in the header splash;
-        // off by default — the portrait is static (no idle animation).
-        whaleGirl: Schema.boolean().default(false),
-        // No schema default (same rule as foldTerminalCommand below): a
-        // default here would come back from scope.get()/watch() and shadow an
-        // explicit cordis.yml `splashFont` while the user layer is unset.
-        // applySplashFont resolves `?? config.splashFont` and normalizes it
-        // (undefined → daily), so cordis.yml stays decisive and junk lands on
-        // daily.
-        splashFont: Schema.string(),
-        // 品牌外观：与 splashFont 同规则——用户层不设默认，cordis.yml 保持
-        // 决定权；applyBrand 归一化（undefined → auto）。
-        brand: Schema.string(),
-        // Minimal UI (极简界面, settings key `minimal` — never renamed): strips
-        // the header splash, emoji glyphs, and decorative colors; code highlight
-        // and tool colors stay. Unrelated to the kernel agent preset `minimal`.
-        minimal: Schema.boolean().default(false),
-        // No default on purpose: an unset `lang` keeps the field showing
-        // the effective language (see the section's format below) and lets
-        // cordis.yml / lang.json keep their precedence.
-        lang: Schema.union(['zh', 'en']),
-        // Same no-default rule: unset keeps cordis.yml's `fullscreen`
-        // decisive; set overrides it from the next boot on.
-        fullscreen: Schema.boolean(),
-        // Unset inherits cordis.yml; a saved choice takes effect after restart.
-        terminalImages: Schema.boolean(),
-        // Built-in action-shortcut overrides, one optional combo string per
-        // action (see the keymap utility). Unset keeps the default binding
-        // and the section's format() shows the effective combos.
-        shortcuts: Schema.object(
-          Object.fromEntries(SHORTCUT_ACTIONS.map(action => [action.id, Schema.string().required(false)])),
-        ).required(false),
-      }),
+      createTuiSettingsSchema(),
       () => {
         const current = configValues<Config>(runtimeConfig)
         return { ...current, lang: isLang(current.lang) ? current.lang : undefined }
@@ -1650,7 +1518,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // UI; user exit runs the full leave sequence: unmount() restores the
   // terminal (cursor, raw mode, mouse tracking) and the explicit newlines
   // keep the shell prompt from overlapping the TUI's last line.
-  let instance: Awaited<ReturnType<typeof render>> | undefined
+  let instance: Instance | undefined
   let exited = false
   let updateRequested = false
   let updateTargetVersion: string | undefined
@@ -1920,26 +1788,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // root tree resolves after settingsReady below.
   await settingsReady
   /**
-   * One-shot workspace-home landing.
-   *
-   * Only an ORDINARY launch is eligible: an explicit resume (`--resume` /
-   * `-c` / the launcher's remembered target), an explicit workspace target, and
-   * a first prompt all mean the user already said where they want to be, and
-   * covering that with a browser would be the TUI second-guessing them. The
-   * `seen` marker is written when the screen is dismissed (see `closeHome`),
-   * so a process that dies before the first frame does not consume it.
-   */
-  const homeSeen = readHomePrefs().seen === true
-  /**
-   * 「普通启动」在这里有两档口径，差在**工作区目标算不算**：
-   *
-   *   - 落地页与首启引导只认「没说要回到哪儿」：没有 resume 目标、没有首句。
-   *   - home（会话与工作区）还多认一条「没说在哪儿干活」——那一屏问的就是这个。
-   *
-   * 工作区目标**不能**进前者的判定：`dst` 那类 launcher 默认把 cwd 当工作区
-   * 目标喂进来（D:/node/dst.cmd 里 set DSH_TUI_WORKSPACE_TARGET=%CD%），一旦
-   * 算进去，落地页在本机最主流的启动方式下**永远不出**——用户实测「既没看到
-   * ob 也没看到 lp」的根因就是这一条。
+   * One-shot workspace-home landing (the rule: decideOpenHomeOnBoot, shared
+   * with the `dst` preload so the boot phase already paints the same page).
+   * The `seen` marker is written when the screen is dismissed (see
+   * `closeHome`), so a process that dies before the first frame does not
+   * consume it.
    *
    * Two of the three boot screens are DSH screens: the workspace home lists
    * DSH sessions and workspaces, and the first-run guide configures a DeepSeek
@@ -1949,29 +1802,26 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    * and opens straight into its conversation.
    */
   const dshBoot = backendStart === undefined
-  const noResume = isLandingLaunch({ launchSessionId, initialPrompt })
-  const openHomeOnBoot = dshBoot && !homeSeen && noResume && requestedWorkspace === undefined
+  const openHomeOnBoot = dshBoot && decideOpenHomeOnBoot({
+    homeSeen: readHomePrefs().seen === true,
+    launchSessionId,
+    requestedWorkspace,
+    initialPrompt,
+  })
   /**
-   * The launchpad is NOT one-shot the way the workspace home is: every
-   * ordinary launch starts on it, because it is where the first sentence gets
-   * typed rather than a tutorial that retires itself — on every backend: a
-   * remembered claude kernel lands here exactly like a dsh one (the `dshBoot`
-   * gate below is deliberately absent). `DSH_TUI_NO_LAUNCHPAD=1` is the
-   * escape hatch (an automation that wants the old blank conversation and no
-   * dialog in front of it).
+   * The launchpad and the first-run guide (the rules: decideLaunchpadOnBoot /
+   * decideOnboardingOnBoot, shared with the `dst` preload like the home
+   * decision above). Unlike the home, they ignore the workspace target: see
+   * isLandingLaunch for why. The launchpad shows on every backend (the
+   * `dshBoot` gate is deliberately absent); the guide is DSH-only.
    */
-  const launchpadOnBoot = noResume && process.env.DSH_TUI_NO_LAUNCHPAD !== '1'
-  /**
-   * The first-run guide. Gated on its own preference (not on `homeSeen`): the
-   * two answer different questions, and an install that already knows its
-   * workspace may still never have configured a key.
-   */
-  const onboardingOnBoot = dshBoot && noResume && shouldOfferOnboarding()
+  const landingLaunch = { launchSessionId, initialPrompt }
+  const launchpadOnBoot = decideLaunchpadOnBoot(landingLaunch)
+  const onboardingOnBoot = dshBoot && decideOnboardingOnBoot(landingLaunch)
   // 品牌镜像初值（branding.ts）：首帧渲染前铺好，避免 Claude 后端先画一屏
   // 蓝再变橙。Chat 里的 effect 会在品牌解析变化时跟进更新这个镜像。
   setActiveBrand(resolveBrand(config.brand, backendChoice))
-  const chat = React.createElement(Chat, {
-    channel,
+  const hostProps: ChatHostProps = {
     renderScene: createChannelSceneOutlet(() => rawChannel.pluginScene),
     questionStore,
     approvalStore: panelApprovals,
@@ -1991,10 +1841,6 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     activityStore,
     extensionShortcuts: getHostShortcuts(ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined),
     themeHost,
-    // Full-screen surfaces inside Chat — the trajectory scene and the session
-    // browser — enter the alt screen themselves in inline mode; in fullscreen
-    // the tree is already wrapped below, so they must not nest.
-    fullscreen: bootedFullscreen,
     onExit: () => handleExit(),
     // `/restart`: respawn this process and resume the session, no update.
     onRestart: () => {
@@ -2060,12 +1906,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         handleExit()
       })
     },
-  })
-  // Freeze the fullscreen decision only NOW, right before the tree mounts:
-  // Chat above was created after the same settingsReady await, so the root
-  // wrap and the `fullscreen` prop share one value; a mid-session /settings
-  // edit from here on is persisted for the next boot (the watch notifies),
-  // never applied live (swapping layouts requires re-mounting the tree).
+  }
+  // Freeze the fullscreen decision only NOW, right before the tree mounts
+  // (or the boot slot goes live): the host props above were created after the
+  // same settingsReady await, so the root wrap and the `fullscreen` prop
+  // share one value; a mid-session /settings edit from here on is persisted
+  // for the next boot (the watch notifies), never applied live (swapping
+  // layouts requires re-mounting the tree).
   // Host recompose hardening: never regress a fullscreen session to inline
   // on a re-mount whose settings application arrived late (see the module
   // latch note). A fresh process still resolves from config + settings
@@ -2074,29 +1921,66 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     bootedFullscreen = true
   }
   rendererSettingsFrozen = true
-  // fullscreen: wrap the tree in <AlternateScreen> (DEC 1049 + SGR mouse
-  // tracking), which turns on in-app text selection (copy-on-select via
-  // useCopyOnSelect), wheel scroll, and click/hover hit-testing. Inline
-  // mode leaves the mouse to the terminal emulator's native selection.
-  // PageMargin keeps the whole UI inset from the terminal edges (some
-  // terminals — bare WSL/tmux/SSH — have no own padding, so text touches
-  // the screen border). It must sit INSIDE AlternateScreen: the alt-screen
-  // box sizes itself to the real terminal rows, while PageMargin reports
-  // content-box dimensions to everything below it.
-  const marginChildren = bootedFullscreen
-    ? React.createElement(AlternateScreen, null, React.createElement(PageMargin, null, chat))
-    : React.createElement(PageMargin, null, chat)
-  const tree = React.createElement(ThemeProvider, {
-    themeHost,
-    children: marginChildren,
-  })
+  // Every launch renders through the same root (src/preboot/host.tsx):
+  // ThemeProvider → [AlternateScreen →] PageMargin → Chat. fullscreen wraps
+  // the tree in <AlternateScreen> (DEC 1049 + SGR mouse tracking: in-app
+  // text selection, wheel scroll, click/hover hit-testing); inline mode
+  // leaves the mouse to the terminal emulator. PageMargin keeps the UI inset
+  // from the terminal edges on terminals without their own padding.
+  //
+  // The `dst` fast start mounted that root already, against a boot channel,
+  // before dsh ran. If its renderer decisions match the ones this boot
+  // resolved, the live channel and host props slide in underneath the
+  // running tree — no re-mount, the draft typed so far stays in the
+  // composer. Otherwise (the options are fixed per Ink instance and per root
+  // wrap) the boot slot is torn down and a fresh slot mounts already live,
+  // carrying the draft over: one visible flash, never a wrong layout.
+  let slot: BootSlot
   // Kernel-switch replacement: send the ready ACK once the first frame after
   // adoption is flushed. Does nothing on an ordinary boot.
   armFirstFrameAck(process.stdout)
-  instance = await render(tree, { exitOnCtrlC: false, terminalImages: bootedTerminalImages })
+  const preboot = pendingPreboot
+  pendingPreboot = undefined
+  if (
+    preboot !== undefined
+    && preboot.phase === 'booting'
+    && preboot.fullscreen === bootedFullscreen
+    && preboot.terminalImages === bootedTerminalImages
+  ) {
+    preboot.ready({ channel, props: hostProps })
+    slot = preboot
+    logForDebugging(`[preboot] boot slot went live (mounted ${Math.round(performance.now() - preboot.mountedAt)}ms ago)`)
+  } else {
+    let initialDraft: ChatHostProps['initialDraft']
+    if (preboot !== undefined) {
+      const draft = preboot.draft()
+      if (draft !== '') initialDraft = { value: draft, cursor: draft.length }
+      const disposeStart = performance.now()
+      preboot.dispose()
+      logForDebugging(`[preboot] renderer mismatch (fullscreen ${preboot.fullscreen}→${bootedFullscreen}, images ${preboot.terminalImages}→${bootedTerminalImages}, phase ${preboot.phase}); disposed in ${Math.round(performance.now() - disposeStart)}ms, mounting fresh`)
+    }
+    slot = await mountChatHost({
+      fullscreen: bootedFullscreen,
+      terminalImages: bootedTerminalImages,
+      initial: { channel, props: initialDraft === undefined ? hostProps : { ...hostProps, initialDraft } },
+    })
+  }
+  instance = slot.instance
   const isRecompose = lastBootedFullscreen !== undefined
   lastBootedFullscreen = bootedFullscreen
   lastBootedTerminalImages = bootedTerminalImages
+  // Record what this profile resolves when settings.yaml is silent (the
+  // cordis.yml layer, which the `dst` preload cannot read), so the next
+  // preload mounts the boot slot with the renderer this branch will pick and
+  // the slot goes live in place instead of re-mounting. The settings user
+  // layer is left out on purpose: the preload reads it itself and it wins
+  // there as it does here. A recompose's values are latched, not resolved.
+  if (!isRecompose) {
+    writeRendererDecision(profile, {
+      fullscreen: config.fullscreen === true,
+      terminalImages: config.terminalImages ?? true,
+    })
+  }
   logMouseDebug('apply mount', { bootedFullscreen, isRecompose })
   // /restart handoff diagnosis: the replacement got all the way to a mounted
   // UI, so any later death is post-boot (and its stderr keeps flowing to the
@@ -2525,7 +2409,7 @@ type InkShutdownState = {
  */
 export async function finishExit(
   ctx: Context,
-  instance: Awaited<ReturnType<typeof render>> | undefined,
+  instance: Instance | undefined,
   fullscreen: boolean,
   notice: string | undefined,
   stderrNotice: string | undefined,
@@ -2754,6 +2638,11 @@ function runUpdate(
 
 /** Deferred runtime failures must restore the terminal and fail the process. */
 export function handleStartupError(ctx: Context, error: unknown): void {
+  // A boot slot that never went live still owns the alt-screen and
+  // intercepts stderr; restore the terminal first or the message vanishes.
+  pendingPreboot?.dispose()
+  pendingPreboot = undefined
+  disposePendingPreboot()
   const message = error instanceof Error ? error.message : String(error)
   void finishExit(ctx, undefined, lastBootedFullscreen ?? true, undefined,
     `dsh-tui startup failed: ${message}`, () => disposeRootAndExit(ctx, 1))

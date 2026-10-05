@@ -27,6 +27,7 @@ import { normalizeWorkspaceCwd } from '../../sessions/view.js'
 import type { ForeignImportOutcome, ForeignSessionRow, ForeignSource } from '../../adapter/ports/channel-session.js'
 import type { ResumeResult } from '../../adapter/ports/channel-view.js'
 import { resumeFailureText } from '../../sessions/resumeFailure.js'
+import { useChannelReady } from '../../hooks/useChannelReady.js'
 import type { ChannelUi as Channel } from '../../adapter/channel/ui-policy.js'
 import { message, samePath, type RailEntry } from './model.js'
 
@@ -190,10 +191,22 @@ export function useForeignSessions(input: ForeignSessionsInput) {
     generation.current++
   }, [])
 
+  /**
+   * The boot channel answers "no sources"; the live one arrives under the
+   * same channel object (`dst` fast start), so the probe re-runs on the ready
+   * edge or a screen opened during boot never gets its source tabs.
+   */
+  const ready = useChannelReady(channel)
+
   // The one read an open pays for: which sources have any conversation.
   React.useEffect(() => {
-    if (!supported) return
-    void channel.listForeignSources()
+    if (!supported || !ready) return
+    // Called inside the chain, not before it: behind the deferred wrapper the
+    // member is always a function, so a live channel that predates the facade
+    // only shows up as a throw here — which must read as "no sources", not
+    // escape the effect.
+    void Promise.resolve()
+      .then(() => channel.listForeignSources())
       .then((found) => {
         if (mounted.current) setSources(found)
       })
@@ -201,7 +214,7 @@ export function useForeignSessions(input: ForeignSessionsInput) {
         // No tabs is the honest answer to a failed probe; the DSH half is
         // unaffected.
       })
-  }, [channel, supported])
+  }, [channel, supported, ready])
 
   const list = useCallback(async (id: string): Promise<void> => {
     if (!supported) return

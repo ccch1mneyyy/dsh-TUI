@@ -564,13 +564,18 @@ const selectionBadge = formatSelectionBadge(channel.selection)
       : []),
   ]
 
+  const bootSlow = useBootSlow(channel.ready === false)
   const hint = selectionActive
     ? t('statusline-hint-select')
-    : channel.working
-      ? t('statusline-hint-working')
-      : statusBar.shortcutHint && !helpOpen
-        ? t('statusline-hint-shortcuts')
-        : ''
+    : channel.ready === false
+      // Boot phase (`dst` fast start): the row that idles as the shortcut
+      // hint says dsh is still starting, and how long once it drags.
+      ? bootSlow === null ? t('preboot-status') : t('preboot-status-slow', { seconds: String(bootSlow) })
+      : channel.working
+        ? t('statusline-hint-working')
+        : statusBar.shortcutHint && !helpOpen
+          ? t('statusline-hint-shortcuts')
+          : ''
   const activity = projectedActivity
   const showActivity =
     statusBar.activity &&
@@ -728,6 +733,33 @@ type UsageSnapshot = {
   cacheWrite: number
   /** Sampling wall-clock (the producing message's event time). */
   at: number
+}
+
+/** Seconds a boot has dragged on past this bound; the hint then shows the count. */
+const BOOT_SLOW_AFTER_MS = 8000
+
+/**
+ * While `booting`, the whole seconds elapsed once the boot has taken longer
+ * than {@link BOOT_SLOW_AFTER_MS}; null before that and when not booting.
+ * Ticks once a second only in the slow window, so a normal boot never runs
+ * a timer here.
+ */
+function useBootSlow(booting: boolean): number | null {
+  const startedAt = React.useRef(Date.now())
+  const [seconds, setSeconds] = React.useState<number | null>(null)
+  React.useEffect(() => {
+    if (!booting) {
+      setSeconds(null)
+      return
+    }
+    const tick = (): void => {
+      const elapsed = Date.now() - startedAt.current
+      setSeconds(elapsed >= BOOT_SLOW_AFTER_MS ? Math.floor(elapsed / 1000) : null)
+    }
+    const timer = setInterval(tick, 1000)
+    return () => clearInterval(timer)
+  }, [booting])
+  return seconds
 }
 
 /**

@@ -122,6 +122,17 @@ draft、只跑一次 CI 就关，`pr-gate` 与 `issue-link` 都按机器人放�
 - `src/terminal-utils/`：终端格式化与呈现辅助。
 - `src/*Prefs.ts`、`src/customTheme.ts`、`src/sessionHistory.ts`：持久化的
   用户偏好与 `~/.dsh-tui` 下的本地会话元数据。
+- `src/preboot/`：启动壳，两条启动线共用。`host.tsx` 是唯一的根树
+  （ThemeProvider → [AlternateScreen →] PageMargin → Chat）与 `BootSlot`
+  store：`mountChatHost()` 挂树，`slot.ready(live)` 把真实 channel 与宿主 props
+  换进去，Chat 不重挂。`bootChannel.ts` 是 `ready === false` 的 `ChannelUi`
+  实现，按端口清单穷尽映射（端口新增成员在此编译失败，直到给出启动态答案）。
+  `entry.ts` 是启动器传给 dsh 进程的 `--import` 预载，`mount.ts` 读 settings 层
+  并以启动态挂树，`handle.ts` 是 `globalThis` 上的 `Symbol.for` 槽位协议。不得
+  直接 import `@deepseek-ai/*`——它存在的意义就是抢在那张模块图之前。
+- `bin/dst.js`：设置 `DSH_TUI_PREBOOT=1` 后进入 `bin/dsh-tui.js`；启动器据此把
+  dsh 改为 `node --import <预载> <dsh bin.js> --profile …` 启动，任何一环解析
+  失败都回退普通路径。
 - `.agents/skills/*/SKILL.md`：仅供仓库维护者使用的项目技能，由 DSH 文件系统
   provider 发现，不随 npm 包分发。
 - `cordis.patch.yml`：profile 安装时使用的包级 bundle 覆盖层。行的顺序、行 ID、
@@ -483,6 +494,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 | --- | --- |
 | /settings 可改的设置（新增/改说明） | 只在 `src/settings/definitions.ts` 写一次（中英标题与说明、类型、选项；按 key 排序），Config Schema 在 `src/dsh-adapter/index.ts`，运行时 format/parse 留在 `src/dsh-adapter/plugin.ts` 的字段里。`pnpm compile` 生成随 npm 包发布的 `lib/settings.json`，官网设置参考由它生成；`verify:settings` 检查定义完整。官网参考上线前，`docs/user-guide{,.en}.md` 的设置表仍需同步一行 |
 | 其他插件配置或环境行为 | `src/dsh-adapter/index.ts`、运行时消费、`cordis.patch.yml`、`cordis.yml`（注释只写示例值与必要语义）、`README.md`、`README_ZH.md` |
+| 启动器或 `dst` 快速启动 | `bin/dsh-tui.js`、`bin/dst.js`、`src/preboot/`、`plugin.ts` 的接管点、`scripts/verify-launcher.mjs`、`scripts/verify-preboot.tsx`、双 README 与 getting-started |
 | Slash 命令或快捷键 | `src/commands.ts`、`src/screens/Chat.tsx`、帮助/输入组件、双 README、相关技能映射/测试 |
 | 主题契约、插件接缝或持久化主题行为 | `src/theme.ts`、`src/themeCatalog.ts`、`src/dsh-adapter/themes.ts`、所有色板、主题 provider/picker、自定义主题解析器、主题验证、双 README、插件文档 |
 | 会话/channel 行为 | 后端中立的放 `src/dsh-adapter/channel/core/`，DSH 专属的放 `channel/extensions.ts` 及其 specialist、受影响的 UI 投影、编译产物、聚焦 channel/回放回归（含 `verify-backend-channel`、`verify-channel-rollback`） |

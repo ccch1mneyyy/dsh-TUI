@@ -40,7 +40,7 @@
   },
   "bin": {
     "dsh-tui": "./bin/dsh-tui.js",
-    "dst": "./bin/dsh-tui.js"
+    "dst": "./bin/dst.js"
   },
   "main": "lib/types/index.js",
   "types": "lib/types/index.d.ts",
@@ -161,6 +161,7 @@
     "verify:clipboard-image": "node --import tsx/esm scripts/verify-clipboard-image.ts",
     "verify:history-search": "node --import tsx/esm scripts/verify-history-search.mjs",
     "verify:initial-prompt": "node scripts/verify-initial-prompt.mjs && node scripts/verify-startup-argv.mjs",
+    "verify:preboot": "node --import tsx/esm scripts/verify-preboot.tsx",
     "verify:plugin-ledger": "node --import tsx/esm scripts/verify-plugin-ledger.ts",
     "verify:plugin-commands": "node --import tsx/esm scripts/verify-plugin-commands.ts",
     "verify:plugin-negotiation": "node --import tsx/esm scripts/verify-plugin-negotiation.ts",

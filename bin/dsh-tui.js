@@ -737,18 +737,77 @@ const forwardExit = child => {
   })
 }
 
+// ─── 快速启动（dst / DSH_TUI_PREBOOT=1）──────────────────────────────────────
+// 让 dsh 进程带着本包的预载模块启动：`node --import <lib/types/preboot/entry.js>
+// <dsh bin.js> --profile …`。预载先画出开屏与输入框（几百毫秒内），dsh 再在
+// 同一进程里组合 profile、加载插件树；插件挂载时接管同一个渲染器实例并带走
+// 已输入的草稿。任何一环解析不到（dsh 不是 JS 入口、profile 副本缺 lib、
+// 非交互终端）都回退到普通 `dsh --profile` 路径——快速启动只能是加速，不能
+// 成为启动失败的原因。
+const PREBOOT_ENV = 'DSH_TUI_PREBOOT'
+// 只看 env 标记：终端是否交互由预载模块自己判定（非 TTY 时它什么都不做，
+// dsh 照常启动），启动器不重复这层判断，测试也能在管道里覆盖到这条路径。
+const prebootRequested = () => process.env[PREBOOT_ENV] === '1'
+/**
+ * Locate the dsh CLI's JavaScript entry the way `#!/usr/bin/env node` would
+ * run it. POSIX: the `dsh` on PATH is a symlink to `lib/bin.js` — realpath
+ * it. Windows: npm publishes a `dsh.cmd` shim; the package sits beside it
+ * under node_modules. A non-JS resolution (wrapper script, stub) yields
+ * undefined so the caller keeps the plain path.
+ * @returns absolute path of the dsh JS entry, or undefined.
+ */
+const resolveDshEntry = () => {
+  const dirs = (process.env.PATH ?? '').split(isWin ? ';' : ':').filter(Boolean)
+  for (const dir of dirs) {
+    try {
+      if (isWin) {
+        const shim = join(dir, 'dsh.cmd')
+        if (!existsSync(shim)) continue
+        const entry = join(dir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+        return existsSync(entry) ? entry : undefined
+      }
+      const candidate = join(dir, 'dsh')
+      if (!existsSync(candidate)) continue
+      const real = realpathSync(candidate)
+      return /\.(?:m|c)?js$/u.test(real) ? real : undefined
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
+}
+/**
+ * The fast-launch pair, or undefined when the plain path must be used.
+ * @returns `{ preload, dshEntry }` — preload as a file URL (safe for
+ *   `--import` on every platform), dshEntry as a path.
+ */
+const resolvePrebootLaunch = () => {
+  if (!prebootRequested()) return undefined
+  const preload = join(ownDir, 'lib', 'types', 'preboot', 'entry.js')
+  if (!existsSync(preload)) return undefined
+  const dshEntry = resolveDshEntry()
+  if (dshEntry === undefined) return undefined
+  return { preload: pathToFileURL(preload).href, dshEntry }
+}
+
 // ─── dsh 会话结果模型（fallback 与 safe 重试共用）─────────────────────────────
 // 统一表示子进程结局；不在此处做任何退出决定——退出权在调用者（首启结算
 // 或 safe 菜单）。Windows 经 cmd()/shell:true 启动（见 cmd 注释），壳层
 // 观察到的 signal 不保证等同内部 dsh 的中断语义：判定一律只看数值 code，
 // Do not infer a signal from the numeric exit code.
-const startDshSession = (dshArgs, profile = PROFILE, env = process.env) =>
+const startDshSession = (dshArgs, profile = PROFILE, env = process.env, { preboot = false } = {}) =>
   new Promise(resolve => {
-    const child = spawn(...cmd('dsh', ['--profile', profile, ...dshArgs]), {
-      stdio: 'inherit',
-      env: withGuideSkillDir(env),
-      ...shellOpt,
-    })
+    const fast = preboot ? resolvePrebootLaunch() : undefined
+    const child = fast === undefined
+      ? spawn(...cmd('dsh', ['--profile', profile, ...dshArgs]), {
+          stdio: 'inherit',
+          env: withGuideSkillDir(env),
+          ...shellOpt,
+        })
+      : spawn(process.execPath, ['--import', fast.preload, fast.dshEntry, '--profile', profile, ...dshArgs], {
+          stdio: 'inherit',
+          env: withGuideSkillDir(env),
+        })
     child.on('error', err => resolve({ kind: 'error', error: err }))
     child.on('exit', (code, signal) => {
       if (signal) resolve({ kind: 'signal', signal })
@@ -1510,5 +1569,9 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
   const firstArgs = [...hostArgs, ...(args.length > 0 ? ['--', ...args] : [])]
   // 必须在首次 spawn 之前：本次启动的 TUI 写的记录都晚于这个时刻。
   noteLaunchChain()
-  settleFirstResult(await startDshSession(firstArgs), firstArgs)
+  // One-shot host switches (--version, --dump-config*) print and exit; under
+  // the preload their output would be wiped by the alt-screen exit, so they
+  // always take the plain path.
+  const oneShot = hostArgs.some(a => dshSwitches.has(a))
+  settleFirstResult(await startDshSession(firstArgs, PROFILE, process.env, { preboot: prebootRequested() && !oneShot }), firstArgs)
 }

@@ -97,7 +97,7 @@ npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui
 
 # 启动（首次运行自动初始化 profile，需要 pnpm）
 dsh-tui
-# dst 是短别名，启动同一个 TUI
+# dst 是快速启动入口：几百毫秒内画出开屏与输入框，dsh 加载期间即可输入
 dst
 ```
 
@@ -111,7 +111,7 @@ TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 
 
 | 命令 | 作用 |
 | --- | --- |
-| `dsh-tui` / `dst` | 启动 TUI；短别名是同一个程序 |
+| `dsh-tui` / `dst` | 启动 TUI；`dst` 是快速启动入口：先画出输入框、dsh 加载期间即可输入（见[快速启动](#快速启动dst)） |
 | `dsh-tui --resume [id]` · `dsh-tui update` · `dsh-tui doctor` | 恢复会话 · 更新 profile 并对齐启动器 · 环境体检 |
 | `dsh-tui safe` | 只读诊断、插件清单与修复指引；`safe --rescue` 创建干净的救援 profile |
 | `dsh-tui version` · `dsh-tui help` | 启动器与 profile 版本、用法；没装 dsh 时这两条也能用 |
@@ -125,6 +125,44 @@ TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 
 `dsh-tui --patch ./overlay.yml -- --resume=sid-1` 会应用补丁，
 并将 `--resume=sid-1` 作为提示词发送，而不恢复该会话。
 安全模式：[安装与快速开始](docs/getting-started.md)。
+
+
+### 快速启动（`dst`）
+
+普通 `dsh-tui` 启动要等 dsh 组合完 profile、加载完整棵插件树才有画面（WSL2
+热启动约两秒）。`dst` 接受相同的参数与子命令，但让 dsh 带着一个预载模块启动：
+预载在约一秒内把真正的聊天界面挂起来，只是背后接的是一个还没有会话的"启动态
+channel"——头部、输入框、状态栏都是平时那一套，输入框立即可打字。此时还不能
+发送：状态栏写着 dsh 正在启动，按 Enter 只弹一条提示。dsh 起来后，真实会话从
+同一个界面底下滑入：不重挂、不闪屏，草稿留在输入框里，肉眼可见的变化只有启动
+提示消失、"已加载上下文"一行出现。
+
+- 会话到达前只有纯本地的 slash 命令能执行：`/exit`（`/quit`、`/q`）、`/help`、
+  `/tips`、`/theme`（`/theme status` 除外）、`/vim` 和会话页（`/resume`、`/home`、
+  `/agentview`，dsh 起来后自动补全内容）。其余命令与普通消息一样被拒绝，文字留在输入框里。
+- 长命令也能开启：`DSH_TUI_PREBOOT=1 dsh-tui`；`DSH_TUI_PREBOOT=0 dst` 退回普通路径。
+- dsh 求值模块图的那段时间进程是忙的，这个窗口里输入的按键回显可能停顿最多
+  约一秒然后一次补上，不会丢键。
+- 启动态从 DSH 实际存放设置的位置读取 `fullscreen`、`terminalImages`、页边距、
+  开屏与语言设置。DSH 0.1.7+ 上是 `dsh-tui` 行的 config，由已安装 DSH 自己的
+  profile 代码组合（bundle patch、profile 的 `cordis.patch.yml`、
+  `$DSH_HOME/cordis.patch.yml` 与 `--patch` 覆盖层，即 `dsh --dump-config` 的输出）；
+  尚未被导入的 `settings.yaml` 优先于它。更早的 DSH 版本把设置放在 `settings.yaml`，
+  改为读取该文件；此时若 profile 的 `cordis.yml` 覆盖了 `fullscreen` 或
+  `terminalImages`，启动态沿用上次启动记下的值（`~/.dsh-tui/renderer.json`，按
+  profile 区分），因此改动 `cordis.yml` 后最多重挂一次（草稿会带过去）而不是原地更新。
+- 快速启动会为 dsh 进程开启 Node 编译缓存（`~/.dsh-tui/compile-cache`，约 13 MB），
+  之后的启动首帧与就绪都更快；升级后自动重建。已设置的 `NODE_COMPILE_CACHE` 沿用其目录；
+  `NODE_DISABLE_COMPILE_CACHE=1` 可关闭。
+- 首次启动时开屏直接落在工作区主页，与真实会话落地的页面一致。
+- 若 dsh 始终没有把开屏交给 dsh-tui（例如 profile 没有 dsh-tui 行，或其配置校验
+  失败），`dst` 在 60 秒后恢复终端、打印 dsh 写到 stderr 的内容并以非零码退出；
+  `DSH_TUI_PREBOOT_TIMEOUT_MS` 可调整时限（`0` 关闭）。开屏已经被接管、却一直没
+  进入会话就绪（例如恢复超大历史会话卡住）时另有一道 180 秒的保护，
+  `DSH_TUI_PREBOOT_HANDOFF_TIMEOUT_MS` 可调整（`0` 关闭）。会话就绪前主动退出
+  （`/exit`、双击 Ctrl+C）仍以 0 退出。
+- `PATH` 上的 `dsh` 不是 JavaScript 入口、或 profile 副本没有编译产物时，自动
+  回退到普通的 `dsh --profile dsh-tui` 启动。
 
 ### 迁移其他编程代理的对话（`dsh-tui migrate`）
 

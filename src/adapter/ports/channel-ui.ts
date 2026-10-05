@@ -35,6 +35,15 @@ export interface BackendMcpHost { reconnect(name: string): Promise<boolean>; tog
 export interface ChannelUi {
   /** Monotonic version — bump on every mutation so screens can re-render. */
   readonly version: number
+  /**
+   * Whether a live session stands behind this channel. `false` only during
+   * the fast launcher's boot phase (`src/preboot/`): the screen is mounted
+   * and accepts typing, but nothing can be sent yet — the composer refuses
+   * Enter with a notice and the status line says dsh is still starting. A
+   * real channel is always `true`; the deferred wrapper flips it when the
+   * live channel arrives (`createDeferredChannel`).
+   */
+  readonly ready: boolean
   readonly rows: readonly ChatRow[]
   /** Live editor selection from the IDE channel (undefined = no IDE / no
    *  selection / link dropped). Protocol-2 pushes carry the editor buffer's

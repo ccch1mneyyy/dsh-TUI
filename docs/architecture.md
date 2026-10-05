@@ -17,6 +17,17 @@ Cordis profile
   -> ANSI terminal
 ```
 
+所有启动都经同一个根（`src/preboot/host.tsx`：ThemeProvider →
+[AlternateScreen →] PageMargin → Chat），Chat 拿到的 channel 是一个
+`createDeferredChannel` 包装，对象身份终生不变。`dst` 快速启动在这条链之前
+多一段：启动器让 dsh 进程带 `--import src/preboot/entry.ts` 启动，预载以
+`bootChannel.ts`（`ready === false` 的 `ChannelUi`）挂起真正的 Chat 并在
+`globalThis` 上发布 `BootSlot`；`plugin.ts` 到渲染步骤时调用 `slot.ready(live)`，
+真实 channel 从同一个对象底下滑入、宿主 props 换掉，Chat 不重挂。启动态没有
+第二张界面，"不能发送"由 `channel.ready` 表达（输入框拒绝 Enter、状态栏显示
+启动提示）。预载不直接 import 任何 `@deepseek-ai/*`；渲染器选项（fullscreen /
+terminalImages）不一致时 `dispose()` 后重挂，草稿经 `initialDraft` 带过去。
+
 ## 模块边界
 
 | 模块 | 所有权 |

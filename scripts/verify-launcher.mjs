@@ -22,7 +22,7 @@
  * 运行：pnpm build && node scripts/verify-launcher.mjs
  */
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -36,8 +36,8 @@ const PACKAGE = '@deepseek-harness-tui/dsh-tui'
 const PKG_DIR = join('profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
 
 let failures = 0
-function check(name, ok) {
-  console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}`)
+function check(name, ok, detail = '') {
+  console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${ok || detail === '' ? '' : `  (${detail})`}`)
   if (!ok) failures++
 }
 
@@ -339,6 +339,74 @@ r = runBin([], { DSH_TUI_LANG: 'en' }, { delegating: true })
 check('shim: no bin fails loud with the reinstall hint', r.status === 1 && r.stderr.includes(`Reinstall the global launcher`))
 check('shim: reinstall hint names the npm command', r.stderr.includes(`npm install -g --legacy-peer-deps ${PACKAGE}`))
 
+
+// --- 4.5 快速启动（dst / DSH_TUI_PREBOOT=1）：dsh 以 `node --import <预载> <dsh
+// bin.js> --profile …` 启动；dsh 解析不到 JS 入口（sh stub）时回退普通路径 --------
+setProfileVersion(ownVersion)
+resetStubLog()
+r = runBin(['foo'], { DSH_TUI_PREBOOT: '1' })
+check('preboot: sh stub → plain `dsh --profile` fallback', stubCalls().at(-1) === '<--profile><dsh-tui><--><foo>' && r.status === 0)
+if (!isWin) {
+  // JS stub：`dsh` 符号链接到一个记录 execArgv+argv 的 node 脚本（realpath 以
+  // .js 结尾即视为可直接由 node 运行的入口）。预载在管道里因非 TTY 静默跳过，
+  // dsh 照常「启动」——断言的是启动器拼出的命令形状。
+  const jsStubDir = join(tmp, 'js-stub-bin')
+  mkdirSync(jsStubDir, { recursive: true })
+  writeFileSync(join(jsStubDir, 'dsh-real.js'), [
+    '#!/usr/bin/env node',
+    "const fs = require('node:fs')",
+    'const a = process.argv.slice(2)',
+    "if (a[0] === '--version') { console.log('0.0.0-stub'); process.exit(0) }",
+    "fs.appendFileSync(process.env.DSH_STUB_LOG, [...process.execArgv, ...a].map(v => '<' + v + '>').join('') + '\\n')",
+    '',
+  ].join('\n'))
+  chmodSync(join(jsStubDir, 'dsh-real.js'), 0o755)
+  symlinkSync(join(jsStubDir, 'dsh-real.js'), join(jsStubDir, 'dsh'))
+  writeFileSync(join(jsStubDir, 'pnpm'), '#!/bin/sh\nexit 0\n')
+  chmodSync(join(jsStubDir, 'pnpm'), 0o755)
+  // The stub's `#!/usr/bin/env node` must resolve even when node lives under
+  // nvm/fnm/Homebrew/a CI toolcache: add only node's own dir after the stub dir.
+  const jsPath = [jsStubDir, dirname(process.execPath), '/usr/bin', '/bin'].join(sep)
+  resetStubLog()
+  r = runBin(['bar'], { PATH: jsPath, DSH_TUI_PREBOOT: '1' })
+  const fastCall = stubCalls().at(-1) ?? ''
+  check('preboot: dsh JS entry runs with the preload', fastCall.startsWith('<--import><file://') && fastCall.includes('lib/types/preboot/entry.js>') && fastCall.endsWith('<--profile><dsh-tui><--><bar>'), fastCall)
+  check('preboot: exits 0', r.status === 0)
+  resetStubLog()
+  r = runBin(['bar'], { PATH: jsPath })
+  check('preboot: opt-in only — no preload without the marker', stubCalls().at(-1) === '<--profile><dsh-tui><--><bar>', stubCalls().at(-1))
+  // bin/dst.js 就是「带标记的 dsh-tui.js」：同一套参数，多一个 env 标记。
+  resetStubLog()
+  r = spawnSync(process.execPath, [join(root, 'bin', 'dst.js'), 'baz'], {
+    env: { PATH: jsPath, HOME: tmp, DSH_HOME: home, DSH_STUB_LOG: stubLog, DSH_STUB_PKG_VERSION: ownVersion, NODE_OPTIONS: '--no-deprecation', DSH_TUI_NO_DELEGATE: '1' },
+    encoding: 'utf8',
+  })
+  check('dst: sets the marker and takes the fast path', (stubCalls().at(-1) ?? '').startsWith('<--import>') && (stubCalls().at(-1) ?? '').endsWith('<--profile><dsh-tui><--><baz>') && r.status === 0, stubCalls().at(-1))
+  resetStubLog()
+  r = spawnSync(process.execPath, [join(root, 'bin', 'dst.js'), 'baz'], {
+    env: { PATH: jsPath, HOME: tmp, DSH_HOME: home, DSH_STUB_LOG: stubLog, DSH_STUB_PKG_VERSION: ownVersion, NODE_OPTIONS: '--no-deprecation', DSH_TUI_NO_DELEGATE: '1', DSH_TUI_PREBOOT: '0' },
+    encoding: 'utf8',
+  })
+  check('dst: DSH_TUI_PREBOOT=0 opts out', stubCalls().at(-1) === '<--profile><dsh-tui><--><baz>', stubCalls().at(-1))
+  // One-shot DSH host switches print and exit: they must not run under the
+  // preload, whose alt-screen exit (?1049l) would wipe their output. A leading
+  // `--version` is the launcher's own subcommand, so it only reaches dsh behind
+  // another host flag; cover both the bare and the prefixed form.
+  const hostSwitches = ['--dump-config', '--dump-default-config', '--dump-config-schema', '-V', '--version']
+  const switchCases = [
+    ...hostSwitches.filter(sw => sw !== '--version').map(sw => [sw]),
+    ...hostSwitches.map(sw => ['--patch', 'p.yml', sw]),
+  ]
+  for (const argv of switchCases) {
+    resetStubLog()
+    r = spawnSync(process.execPath, [join(root, 'bin', 'dst.js'), ...argv], {
+      env: { PATH: jsPath, HOME: tmp, DSH_HOME: home, DSH_STUB_LOG: stubLog, DSH_STUB_PKG_VERSION: ownVersion, NODE_OPTIONS: '--no-deprecation', DSH_TUI_NO_DELEGATE: '1' },
+      encoding: 'utf8',
+    })
+    const want = ['--profile', 'dsh-tui', ...argv].map(v => `<${v}>`).join('')
+    check(`dst ${argv.join(' ')}: plain dsh, no preload`, stubCalls().at(-1) === want && r.status === 0, stubCalls().at(-1))
+  }
+}
 
 // --- 5. 消息双语：缺 dsh 时的报错（契约同 TUI：DSH_TUI_LANG 指定才生效，否则默认中文）
 const envNoDsh = { PATH: noDshPath }

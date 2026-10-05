@@ -51,6 +51,12 @@
  * deterministic id — a second Enter opens the existing copy; a conversation
  * whose directory is gone reports it and opens nothing.
  *
+ * The `dst` fast start is pinned too: a screen opened while the channel is
+ * still the boot channel (`ready === false`) sits on the loading placeholder
+ * — never the empty state — and fills in place once the live channel slides
+ * in underneath the same object, painting the live cache first when it has
+ * one. No reopen is needed; the channel identity never changes.
+ *
  * Renders the real `SessionSupervisor` into an in-memory terminal with a stub
  * channel, then drives it with real stdin bytes (SGR mouse reports).
  *
@@ -78,12 +84,16 @@ const [
   // The REAL persistent listing cache, so one case can put actual bytes under
   // this run's fake home and prove the screen paints them.
   { beginListingSnapshot, readListingSnapshot },
+  { createBootChannel },
+  { createDeferredChannel },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/SessionSupervisor.js'),
   import('../src/components/sessions/SourceTabs.js'),
   import('../src/screens/sessionSupervisor/useForeignSessions.js'),
   import('../src/dsh-adapter/sessions/snapshot.js'),
+  import('../src/preboot/bootChannel.js'),
+  import('../src/adapter/channel/deferred.js'),
 ])
 
 let failures = 0
@@ -1086,6 +1096,75 @@ console.log('progress: a partial enumeration paints before the listing resolves'
   )
   gate.resolve()
   await settled(() => target.landed >= 2, { timeoutMs: 4_000 })
+  app.close()
+}
+
+// ── the dst fast start: opened before the live channel exists ─────────────
+//
+// The REAL boot channel behind the REAL deferred wrapper, as `src/preboot/`
+// composes them: the screen holds one object for life, and `resolve()` swaps
+// the live stub in underneath it. The live stub is an ordinary case channel.
+
+/** A screen over a deferred boot channel; `goLive` swaps `live` in. */
+async function openDuringBoot(live: StubChannel): Promise<{ app: SupervisorScreen; goLive: () => void }> {
+  const boot = createBootChannel({ model: 'boot', effort: undefined, cwd: alphaDir, gitBranch: undefined, settings: {} })
+  const deferredChannel = createDeferredChannel(boot)
+  const app = await mountSupervisor({ ...live, channel: deferredChannel.channel as never })
+  return { app, goLive: () => deferredChannel.resolve(live.channel as never) }
+}
+
+console.log('opened during the dst boot phase:')
+{
+  const live = makeChannel({ registry, cwd: alphaDir })
+  const { app, goLive } = await openDuringBoot(live)
+  check(
+    'boot-phase open shows the loading placeholder',
+    await settled(() => app.lines().join('\n').includes(LOADING_PLACEHOLDER)),
+    app.lines().join('\n'),
+  )
+  await sleep(150) // 固定窗:pacing 等一次可能的重绘，无正向锚点
+  check(
+    'boot-phase open never shows the empty state',
+    !app.saw(EMPTY_STATE) && app.lines().join('\n').includes(LOADING_PLACEHOLDER),
+    app.lines().join('\n'),
+  )
+  check('boot-phase open never lists against the live stub early', live.landed === 0)
+  goLive()
+  check(
+    'going live fills the already-open screen without a reopen',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('free session') && !shown.includes(LOADING_PLACEHOLDER)
+    }),
+    app.lines().join('\n'),
+  )
+  check('going live runs exactly one live listing', live.landed === 1, `landed=${live.landed}`)
+  app.close()
+}
+{
+  // The live channel has an on-disk cache: the ready edge paints it at once,
+  // before the (held) live listing lands, then the listing corrects it.
+  const live = makeChannel({ registry, cwd: alphaDir, cache: cacheCell(renamedSessions) })
+  const gate = deferred()
+  live.plan = { defer: gate.promise }
+  const { app, goLive } = await openDuringBoot(live)
+  await settled(() => app.lines().join('\n').includes(LOADING_PLACEHOLDER))
+  goLive()
+  check(
+    'going live paints the live cache while its listing is in flight',
+    await settled(() => app.lines().join('\n').includes('renamed on disk')),
+    app.lines().join('\n'),
+  )
+  check('the cache paint happened before the listing landed', live.landed === 0, `landed=${live.landed}`)
+  gate.resolve()
+  check(
+    'the landing live listing corrects the cached rows',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('free session') && !shown.includes('renamed on disk')
+    }),
+    app.lines().join('\n'),
+  )
   app.close()
 }
 

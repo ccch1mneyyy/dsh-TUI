@@ -5,7 +5,9 @@ import type { SpinnerMode } from './Spinner/spinnerMode.js'
 import { SpinnerAnimationRow } from './Spinner/SpinnerAnimationRow.js'
 import { SPINNER_VERBS } from '../terminal-utils/spinnerVerbs.js'
 import { tOr } from '../i18n.js'
-import { sample } from 'lodash-es'
+// Per-function file, like ink/: the `lodash-es` barrel is 640 modules and
+// ~115ms of the `dst` boot screen's import graph.
+import sample from 'lodash-es/sample.js'
 
 /**
  * The working spinner block shown between the transcript and the prompt

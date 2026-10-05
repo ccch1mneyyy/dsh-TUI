@@ -16,8 +16,10 @@ import { Config } from '../src/dsh-adapter/index.ts'
 import { configValues, createSettingsScope, editableConfig, resolveSettingsNamespace } from '../src/dsh-adapter/compat/settings.ts'
 import { createSettingsHosts } from '../src/dsh-adapter/channel/settings-host.ts'
 import { SettingsForm } from '../src/dsh-adapter/settingsEditor.ts'
+import { createTuiSettingsSchema } from '../src/dsh-adapter/tuiSettingsSchema.ts'
 import TuiSettingsSectionsRuntime, { getHostSettingsSections, getLocalSettingsSectionsHost } from '../src/dsh-adapter/settings-sections.ts'
-import { DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, isPageMarginMode, normalizePageMargin, normalizeSidePanelPanels, parsePageMarginSpec } from '../src/tuiDisplayPrefs.ts'
+import { BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, isPageMarginMode, normalizePageMargin, normalizeSidePanelPanels, parsePageMarginSpec } from '../src/tuiDisplayPrefs.ts'
+import { normalizeBrandSetting } from '../src/branding.ts'
 import { SPLASH_FONTS, SPLASH_FONT_OPTIONS, normalizeSplashFont } from '../src/components/splashFonts.ts'
 import { getLang, isLang } from '../src/i18n.ts'
 import { SHORTCUT_ACTIONS, setKeymapOverrides, resetKeymapOverrides, effectiveComboString, parseComboDraft, draftComboConflicts } from '../src/utils/keymap.ts'
@@ -219,7 +221,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
       await ctx.plugin(async runtimeCtx => {
         await bindSettings({
           ctx: runtimeCtx, configOwner: ctx, runtimeConfig, config: configValues(runtimeConfig), Schema, SHORTCUT_ACTIONS,
-          DEFAULT_STATUS_BAR, normalizePageMargin, isLang, Config, configValues, resolveSettingsNamespace, setKeymapOverrides,
+          DEFAULT_STATUS_BAR, normalizePageMargin, isLang, Config, configValues, createTuiSettingsSchema, resolveSettingsNamespace, setKeymapOverrides,
           // Capture the legacy scope's own schema: the production wiring hands
           // it a second hand-written statusBar list that has to stay in step
           // with Config (the `local` registry path reads values through it).
@@ -243,6 +245,8 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
       // Side-panel fields (sidePanel.panels) validate their draft against the
       // production id grammar, so the eval scope mirrors those helpers too.
       DEFAULT_SIDE_PANEL_IDS, SIDE_PANEL_ID_PATTERN, normalizeSidePanelPanels,
+      // The brand and btw fields format/parse through these.
+      normalizeBrandSetting, BTW_CONTEXT_TURNS_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_BUDGET_MAX,
       bootedFullscreen: true, terminalImagesDisabledByEnv: false,
       readEffortPref: () => undefined, // Do not read the developer's persisted preferences.
     })
@@ -409,4 +413,19 @@ for (const api of ['legacy', 'forms']) {
   await host.write('llm-pi-ai', ops, 7)
   assert.deepEqual(mutations, [['llm-pi-ai', ops, 7]], 'writes retain revision fencing and path operations')
 }
+// The schema lives in tuiSettingsSchema.ts (shared with the `dst` preload)
+// while the fields live in plugin.ts: a field whose key the schema lacks is
+// dropped from the resolved settings without any type error.
+{
+  const pluginText = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
+  const fieldKeys = new Set([...pluginText.matchAll(/settingField\('([^'.]+)/g)].map(match => match[1]))
+  const schemaKeys = new Set(Object.keys(createTuiSettingsSchema().dict ?? {}))
+  // Not in the plugin's settings schema before it moved out of plugin.ts
+  // either: listed so this check catches only new gaps.
+  const knownOutside = new Set(['recapOnOpen'])
+  const missing = [...fieldKeys].filter(key => !schemaKeys.has(key) && !knownOutside.has(key))
+  assert.ok(fieldKeys.size > 0, 'settings fields found in plugin.ts')
+  assert.deepEqual(missing, [], `every settings field has a key in createTuiSettingsSchema (missing: ${missing.join(', ')})`)
+}
+
 console.log(`PASS: settings scopes, config snapshots and provider reads (${modernSchema ? 'production sections, exact Loader IDs, volatile updates, shortcut resets and disposal' : 'legacy schema'})`)
