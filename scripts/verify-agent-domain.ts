@@ -69,7 +69,9 @@ const translators = ['dsh-adapter/backend/translate.ts']
 const backendsDir = join(SRC, 'backends')
 if (existsSync(backendsDir)) {
   for (const entry of readdirSync(backendsDir)) {
-    if (existsSync(join(backendsDir, entry, 'translate.ts'))) translators.push(`backends/${entry}/translate.ts`)
+    if (existsSync(join(backendsDir, entry, 'translate.ts'))) {
+      translators.push(entry === 'claude' ? 'backends/claude/translate/events.ts' : `backends/${entry}/translate.ts`)
+    }
   }
 }
 for (const path of translators) {
