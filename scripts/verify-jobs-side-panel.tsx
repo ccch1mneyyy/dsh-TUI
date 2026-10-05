@@ -158,10 +158,10 @@ const findCell = (needle: string): { col: number; row: number } | null => {
   }
   return null
 }
-const focusedLine = (): string => lines().find(l => l.includes('❯')) ?? ''
+const focusedLine = (): string => lines().find(line => /❯[●✓×·]/u.test(line)) ?? ''
 const focusedLabelLine = (): string => {
-  const index = lines().findIndex(line => line.includes('❯'))
-  return index < 0 ? '' : lines()[index + 1] ?? ''
+  const index = lines().findIndex(line => /❯[●✓×·]/u.test(line))
+  return index < 0 ? '' : lines().slice(index, index + 2).join(' | ')
 }
 
 try {
@@ -186,7 +186,7 @@ try {
   await settled(() => state().includes('active=jobs') && lines().some(l => l.includes('LLL1')), { timeout: 4000 })
   const roster = lines()
   check('open: jobs roster renders in the split panel',
-    roster.some(l => l.includes('LLL1')) && roster.some(l => l.includes('LLL2')) && roster.filter(line => line.includes('job-')).length === 3,
+    ['LLL1', 'LLL2', 'LLL3', 'LLL4'].every(label => roster.some(line => line.includes(label))),
     roster.filter(line => /LLL|job-|runni|comple|step/.test(line)).join('|'))
   check('open: focus starts at the roster head', focusedLabelLine().includes('LLL1'), focusedLine().trim() + ' | ' + focusedLabelLine().trim())
   check('open: summary line counts running', roster.some(l => l.includes('2 running')), roster.find(l => l.includes('running')) ?? '')
@@ -252,18 +252,18 @@ try {
 
   setJobs([{ ...J1, command: 'cd D:/project\nWrite-Output CMD-TAIL', outputLines: Array.from({ length: 5 }, (_, index) => ({ text: 'RAW-OUT-' + index })) }])
   openJobs?.()
-  check('details: command folds and output keeps a three-line preview', await settled(() => lines().some(line => line.includes('RAW-OUT-4')) && lines().some(line => line.includes('e to expand'))) && !lines().some(line => line.includes('CMD-TAIL') || line.includes('RAW-OUT-0')))
+  check('details: command folds while panel output remains full', await settled(() => lines().some(line => line.includes('RAW-OUT-4')) && lines().some(line => line.includes('RAW-OUT-0'))) && !lines().some(line => line.includes('CMD-TAIL')))
   stdin.write('e')
-  check('details: e expands the focused command and output', await settled(() => lines().some(line => line.includes('CMD-TAIL')) && lines().some(line => line.includes('RAW-OUT-0'))))
+  check('details: e expands only the focused command', await settled(() => lines().some(line => line.includes('CMD-TAIL')) && lines().some(line => line.includes('RAW-OUT-0'))))
   stdin.write('e')
-  check('details: e folds the command and output again', await settled(() => !lines().some(line => line.includes('CMD-TAIL') || line.includes('RAW-OUT-0'))))
+  check('details: e folds the command while output stays full', await settled(() => !lines().some(line => line.includes('CMD-TAIL'))))
   const commandCell = findCell('cd D:/project')
   check('details: command click target is visible', commandCell !== null)
   if (commandCell !== null) {
     stdin.write('\x1b[<0;' + (commandCell.col + 1) + ';' + (commandCell.row + 1) + 'M')
     await sleep(30) // 固定窗:pacing 鼠标 press 和 release 分两次事件
     stdin.write('\x1b[<0;' + (commandCell.col + 1) + ';' + (commandCell.row + 1) + 'm')
-    check('details: clicking command expands full output too', await settled(() => lines().some(line => line.includes('CMD-TAIL')) && lines().some(line => line.includes('RAW-OUT-0'))))
+    check('details: clicking command expands the script beside full output', await settled(() => lines().some(line => line.includes('CMD-TAIL')) && lines().some(line => line.includes('RAW-OUT-0'))))
   }
 } finally {
   await app.unmount()

@@ -2,18 +2,16 @@ import React from 'react'
 import { Box, Text, useAnimationFrame, useTerminalSize } from '../../ui.js'
 import { formatJobDuration, type BackgroundJobStatus } from '../../dsh-adapter/jobs.js'
 import type { JobRow } from '../../dsh-adapter/channel.js'
-import type { BackgroundJobOutputChannel, BackgroundJobOutputLine } from '../../adapter/ports/channel-view.js'
+import type { BackgroundJobOutputLine } from '../../adapter/ports/channel-view.js'
 import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
 import wrapText from '../../ink/wrap-text.js'
-import { primaryComboString } from '../../utils/keymap.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import { ProgressBar } from '../design-system/ProgressBar.js'
 
 /** The waterfall window mirrors the subagent card: a constant-height region. */
-const WATERFALL_ROWS = 3
-/** Card left padding + the `│ ` gutter prefix. */
-const WATERFALL_GUTTER = 4
+const WATERFALL_ROWS = 2
+const COMMAND_MARK = process.platform === 'win32' ? '>' : '❯'
 
 /** Static status marker — deliberately NOT the animated activity-indicator
  *  preset: a background job is parked work, and reusing the main spinner
@@ -63,7 +61,6 @@ export function JobProgress({ progress }: { progress: string }): React.ReactNode
 interface WaterfallRow {
   key: string
   text: string
-  channel?: BackgroundJobOutputChannel
   gap?: true
 }
 
@@ -90,165 +87,78 @@ export function jobOutputRows(
       rows.unshift({
         key: `${index}-${row}`,
         text: wrapped[row] ?? '',
-        ...(entry.channel === undefined ? {} : { channel: entry.channel }),
       })
     }
     if (entry.gapBefore === true && rows.length < budget) rows.unshift({ key: `gap-${index}`, text: '', gap: true })
   }
   return rows
 }
-
-/** Command rows share wrapping and fold counts between the card and panel. */
-export function jobCommandRows(text: string, width: number, expanded: boolean, key: string): string[] {
-  const lines = wrapText(text, Math.max(1, width - 3), 'wrap').split('\n')
-  const shown = (expanded ? lines : lines.slice(0, 1)).map((line, index) => index === 0 ? line : `⎿ ${line}`)
-  if (lines.length > 1) shown.push('⎿ ' + (expanded ? t('jobs-details-collapse', { key }) : t('lines-folded-expand', { n: lines.length - 1, key })))
-  return shown
+/** Command content shares normalization and wrapping with the full jobs panel. */
+export function jobCommandRows(text: string, width: number, expanded: boolean): string[] {
+  const command = text.trim()
+  const script = command.replace(/^(?:pwsh|powershell)(?:\.exe)?\s+(?:(?:-(?:NoProfile|NoLogo|NonInteractive)|-ExecutionPolicy\s+\S+)\s+)*-Command\s+/i, '')
+  const body = (script === command ? script : script.replace(/^(['"])([\s\S]*)\1$/, '$2')).replace(/\r\n?/g, '\n').trim()
+  const source = body.split('\n').filter((line, index, lines) => line.trim() !== '' || index === 0 || lines[index - 1]?.trim() !== '').join('\n')
+  const shown = expanded ? source : source.split('\n')[0]!
+  const rows = wrapText(COMMAND_MARK + ' ' + shown, Math.max(1, width), 'wrap').split('\n')
+  return expanded ? rows : rows.slice(0, 1)
 }
 
-/**
- * Transcript job card with a folded command and a three-row live output tail.
- * Commands and retained output expand together through the transcript toggle.
- * The group rail counts the rendered rows, including fold controls.
- */
-export function JobCard({ job, marginTopOnTurn, onClick, rail, onWatchOutput, expanded = false, onToggle }: {
+/** The renderer draws the continuous section edge across all content rows. */
+export function JobSection({ rows, color, onToggle, children }: {
+  rows: readonly string[]
+  color: 'accent' | 'success'
+  onToggle?: () => void
+  children?: React.ReactNode
+}): React.ReactNode {
+  if (rows.length === 0 && children === undefined) return null
+  return <Box flexDirection="column" borderStyle="single" borderTop={false} borderBottom={false} borderRight={false} borderLeft
+    borderColor={color} paddingLeft={1}
+    onClick={onToggle === undefined ? undefined : event => { event.stopImmediatePropagation(); onToggle() }}>
+    {children === undefined ? rows.map((line, index) => <Text key={index} dimColor wrap="truncate-end">{line === '' ? ' ' : line}</Text>) : children}
+  </Box>
+}
+/** Transcript job card: command folding is independent of the fixed output tail. */
+export function JobCard({ job, marginTopOnTurn, onClick, onWatchOutput, expanded = false, onToggle }: {
   job: JobRow
   marginTopOnTurn: boolean
   onClick?(): void
   expanded?: boolean
   onToggle?: () => void
-  /** Job GROUP member: shared chain rail, optionally rounded at either end. */
-  rail?: { open?: boolean; close?: boolean } | undefined
-  /** A backend whose output is read on demand keeps a mounted (on-screen)
-   *  live card's tail fresh while it is watched; returns the unwatch. */
   onWatchOutput?: (id: string) => () => void
 }): React.ReactNode {
   const settled = job.status === 'completed' || job.status === 'failed' || job.status === 'killed'
-  // Only a live card needs a fresh tail (a settled one folds its waterfall).
   React.useEffect(() => (settled || onWatchOutput === undefined ? undefined : onWatchOutput(job.id)), [settled, onWatchOutput, job.id])
-  // 动画订阅仅限存活卡片：settled 后退订共享 clock（同 SubagentMessage 的
-  // 约定）。1s tick 只驱动运行时长跳动——状态标是静态的（见 statusInfo）。
   const [viewportRef] = useAnimationFrame(settled ? null : 1000)
   const { columns } = useTerminalSize()
   const info = statusInfo(job.status)
   const [hovered, setHovered] = React.useState(false)
-  const clickable = onClick !== undefined
-  const grouped = rail !== undefined
-  const cardColumns = columns ?? 80
-  // A grouped card spends two columns on the rail — the glyph column plus its
-  // 1-cell gutter. Every width below is measured against that, or the rows
-  // would wrap a second time inside ink and the card would grow past the
-  // height the rail was painted for.
-  const rowWidth = Math.max(20, cardColumns - WATERFALL_GUTTER - (grouped ? 2 : 0))
-  // Collapsed live cards keep the newest visual rows; expansion shows the retained tail.
-  const outputRows = jobOutputRows(job.outputLines, rowWidth, Number.POSITIVE_INFINITY)
-  const activity = expanded ? outputRows : settled ? [] : outputRows.slice(-WATERFALL_ROWS)
-  const hiddenOutput = outputRows.length - activity.length
-  const toggleKey = primaryComboString('transcript')
-  const outputHint = outputRows.length === 0 ? undefined : expanded
-    ? t('jobs-details-collapse', { key: toggleKey })
-    : hiddenOutput > 0 ? t('lines-folded-expand', { n: hiddenOutput, key: toggleKey }) : undefined
-  // A settled job's terminal detail ('exit code: 0') rides the header; a
-  // failed/killed one also keeps it as the explanatory tail line.
+  const contentWidth = Math.max(1, columns - 2)
+  const commandRows = jobCommandRows(job.label, contentWidth, expanded)
+  const output = jobOutputRows(job.outputLines, Math.max(1, contentWidth - 1), WATERFALL_ROWS)
+  const outputRows = output.map((entry, index) => (index === 0 ? '≡ ' : '') + (entry.gap === true ? t('jobs-output-gap') : entry.text))
   const headerDetail = job.detail !== undefined && job.detail !== '' ? job.detail : undefined
   const headerName = `${t('jobs-card-prefix')}${job.id}`
   const duration = formatJobDuration(job)
-  // Only a LIVE job carries a progress chip; a settled one has dropped it, so
-  // reserving width for it unconditionally would clip the label for nothing.
   const liveProgress = settled || job.progress === undefined || job.progress === '' ? undefined : job.progress
-
-  const railBody = settled && job.status !== 'completed' && headerDetail !== undefined
-  const labelWidth = Math.max(8, rowWidth - 2)
-  const labelLines = jobCommandRows(job.label, labelWidth, expanded, toggleKey)
-  const contentLines = 1 + labelLines.length + activity.length + (outputHint === undefined ? 0 : 1) + (railBody ? 1 : 0)
-  const railGlyphs: string[] = []
-  if (grouped) {
-    for (let index = 0; index < contentLines; index++) {
-      const opens = index === 0 && rail?.open === true
-      const closes = index === contentLines - 1 && rail?.close === true
-      railGlyphs.push(opens ? '╭' : closes ? '╰' : '│')
-    }
-  }
-
-  // The header opens the panel; body controls fold details without opening it.
-  const body = (
-    <>
-    {/* Keep status and timing beside the id; the command gets its own row below. */}
-    <Box flexDirection="row" gap={1} height={1} overflow="hidden">
-      {/* The fixed status columns stay on one header row. */}
+  return <Box flexDirection="column" marginTop={marginTopOnTurn ? 1 : 0} ref={viewportRef}
+    onClick={onToggle === undefined ? undefined : event => { event.stopImmediatePropagation(); onToggle() }}
+    onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+    <Box flexDirection="row" gap={1} height={1} overflow="hidden"
+      onClick={onClick === undefined ? undefined : event => { event.stopImmediatePropagation(); onClick() }}>
       <Box flexShrink={0}>
-        <Text color={hovered && clickable ? 'accent' : info.color}>{info.glyph}</Text>
+        <Text color={hovered ? 'accent' : info.color}>{info.glyph}</Text>
       </Box>
       <Box flexShrink={0}>
-        <Text bold color={hovered && clickable ? 'accent' : undefined}>
-          {headerName}
-        </Text>
+        <Text bold color={hovered ? 'accent' : undefined}>{headerName}</Text>
       </Box>
       <Box flexShrink={0}><Text dimColor>{job.kind}</Text></Box>
-
-      {liveProgress !== undefined && (
-        <Box width={12} flexShrink={0}>
-          <JobProgress progress={liveProgress} />
-        </Box>
-      )}
+      {liveProgress !== undefined && <Box width={12} flexShrink={0}><JobProgress progress={liveProgress} /></Box>}
       <Box flexShrink={0}><Text dimColor>{duration}</Text></Box>
       {headerDetail !== undefined && <Box flexShrink={0}><Text dimColor wrap="truncate-end">{headerDetail}</Text></Box>}
       <Box flexShrink={0}><Text color={info.color}>{info.label}</Text></Box>
     </Box>
-    <Box width={rowWidth} flexShrink={0} flexDirection="column" paddingLeft={2}
-      onClick={onToggle === undefined ? undefined : event => { event.stopImmediatePropagation(); onToggle() }}>
-      {labelLines.map((line, index) => <Text key={index} wrap="truncate-end">{line}</Text>)}
-    </Box>
-    <Box flexDirection="column" onClick={onToggle === undefined ? undefined : event => { event.stopImmediatePropagation(); onToggle() }}>
-      {activity.map(entry => (
-        // key 不含 time（同 SubagentMessage 的约定）：内容更新走 in-place
-        // diff，避免每个 tick 都 unmount+mount。瀑布只在有镜像输出时出现
-        // （后台任务静默是常态——无输出时卡片就是头行，不摆空 gutter）。
-        // Rows are pre-wrapped to the row width, so truncate is a belt-and-braces
-        // guard against a re-wrap (which would break the constant height).
-        entry.gap === true ? (
-          <Text key={entry.key} dimColor italic wrap="truncate">
-            {`  · ${t('jobs-output-gap')}`}
-          </Text>
-        ) : (
-          <Text
-            key={entry.key}
-            color={entry.channel === 'stderr' ? 'error' : undefined}
-            dimColor={entry.channel !== 'stderr'}
-            wrap="truncate"
-          >
-            {`  │ ${entry.text}`}
-          </Text>
-        )
-      ))}
-      {outputHint !== undefined && <Text dimColor wrap="truncate-end">{'  ⎿ ' + outputHint}</Text>}
-    </Box>
-    {railBody && (
-      <Text dimColor>{`  └ ${headerDetail}`}</Text>
-    )}
-    </>
-  )
-
-  return <Box
-    flexDirection="column"
-    marginTop={marginTopOnTurn ? 1 : 0}
-    ref={viewportRef}
-    onClick={onClick}
-    onMouseEnter={clickable ? () => setHovered(true) : undefined}
-    onMouseLeave={clickable ? () => setHovered(false) : undefined}
-  >
-    {grouped ? (
-      // The rail is a column of glyphs painted per line — one `│` per card
-      // line, `╭`/`╰` on the ends a group asked for — with the body hanging
-      // one gutter cell to its right (same 2-cell offset as before).
-      <Box flexDirection="row">
-        <Box width={1} flexShrink={0}>
-          <Text color="inactive">{railGlyphs.join('\n')}</Text>
-        </Box>
-        <Box flexDirection="column" flexGrow={1} paddingLeft={1}>
-          {body}
-        </Box>
-      </Box>
-    ) : body}
+    <JobSection rows={commandRows} color="accent" />
+    <JobSection rows={outputRows} color="success" />
   </Box>
 }

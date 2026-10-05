@@ -1,7 +1,7 @@
 import React from 'react'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize, useAnimationFrame } from '../ui.js'
 import { formatJobDuration, JOBS_MAX_OUTPUT_LINES, type BackgroundJobState, type BackgroundJobStatus, type JobTimelineEvent } from '../dsh-adapter/jobs.js'
-import { JobProgress, jobCommandRows, jobOutputRows } from './Chat/JobCard.js'
+import { JobProgress, JobSection, jobCommandRows } from './Chat/JobCard.js'
 import { Markdown } from './Markdown.js'
 import type { Theme } from '../theme.js'
 import { t } from '../i18n.js'
@@ -146,11 +146,9 @@ function JobRowLine({ job, focused, armed, columns, onFocus, expanded, onToggle,
   const duration = formatJobDuration(job)
   const live = !isTerminalStatus(job.status)
   const progress = live && job.progress !== undefined && job.progress !== '' ? job.progress : undefined
-  const labelRows = jobCommandRows(job.label, width - 2, expanded, 'e')
+  const labelRows = jobCommandRows(job.label, width - 2, expanded)
   const command = job.command !== undefined && job.command !== '' ? job.command : job.label
-  const commandRows = focused ? jobCommandRows(command, width - 6, expanded, 'e') : []
-  const outputRows = focused ? jobOutputRows(job.outputLines, Math.max(1, width - 6), Number.POSITIVE_INFINITY) : []
-  const preview = outputRows.slice(-3)
+  const commandRows = focused ? jobCommandRows(command, width - 2, expanded) : []
   return (
     <Box flexDirection="column" onClick={onFocus}>
       {/* Fixed columns leave the label the remaining header width. */}
@@ -165,11 +163,9 @@ function JobRowLine({ job, focused, armed, columns, onFocus, expanded, onToggle,
           <Text bold={focused} color={focused ? 'accent' : undefined} wrap="truncate-end">{job.id}</Text>
         </Box>
         {/* Full-screen keeps the command in its flexible header column. */}
-        {columns.labelWrap ? (
-          <Box flexGrow={1} flexShrink={1}>
-            <Text bold={focused} wrap="truncate-end">{job.label}</Text>
-          </Box>
-        ) : <Box flexGrow={1} />}
+        <Box flexGrow={1} flexShrink={1}>
+          <Text bold={focused} wrap={columns.labelWrap && expanded ? 'wrap' : 'truncate-end'}>{job.label}</Text>
+        </Box>
         {columns.showProgress && (
           <Box width={11} flexShrink={0} justifyContent="flex-end">
             {progress !== undefined ? <JobProgress progress={progress} /> : <Text> </Text>}
@@ -192,22 +188,12 @@ function JobRowLine({ job, focused, armed, columns, onFocus, expanded, onToggle,
           </>
         )}
       </Box>
-      {(!columns.labelWrap || (focused && command !== job.label)) && (
-        <Box paddingLeft={2} flexDirection="column" onClick={event => { event.stopImmediatePropagation(); onToggle() }}>
-          {labelRows.map((line, index) => <Text key={index} bold={focused} wrap="truncate-end">{line}</Text>)}
-        </Box>
+      {(!columns.labelWrap || focused) && (
+        <JobSection rows={focused ? commandRows : labelRows} color="accent" onToggle={onToggle} />
       )}
       {focused && (
         // The detail block starts below the focused job row.
         <Box flexDirection="column" paddingLeft={4}>
-          {(columns.labelWrap || command !== job.label) && (
-            <Box flexDirection="column" onClick={event => { event.stopImmediatePropagation(); onToggle() }}>
-              <Text dimColor>{t('jobs-panel-command')}</Text>
-              <Box paddingLeft={2} flexDirection="column">
-                {commandRows.map((line, index) => <Text key={index} dimColor wrap="truncate-end">{line}</Text>)}
-              </Box>
-            </Box>
-          )}
           <Box flexDirection="row" gap={1}>
             <Box width={7} flexShrink={0}><Text dimColor>{t('jobs-panel-started')}</Text></Box>
             <Text dimColor>
@@ -253,8 +239,11 @@ function JobRowLine({ job, focused, armed, columns, onFocus, expanded, onToggle,
             </Box>
           )}
           {(job.outputLines?.length ?? 0) > 0 ? (
-            <Box flexDirection="column" marginTop={1} onClick={event => { event.stopImmediatePropagation(); onToggle() }}>
-              {expanded ? renderOutputRuns(job).map((run, runIndex) => (
+            <JobSection rows={[]} color="success">
+              <Box flexDirection="row">
+              <Box width={2} flexShrink={0}><Text dimColor>≡ </Text></Box>
+              <Box flexDirection="column" flexGrow={1}>
+              {renderOutputRuns(job).map((run, runIndex) => (
                 <Box
                   key={`${job.id}-run-${runIndex}`}
                   flexDirection="column"
@@ -270,21 +259,16 @@ function JobRowLine({ job, focused, armed, columns, onFocus, expanded, onToggle,
                     <Markdown cacheTokens>{run.text}</Markdown>
                   )}
                   {run.kind === 'stderr' && (
-                    <Text color="error">{`│ ${run.text}`}</Text>
+                    <Text dimColor>{run.text}</Text>
                   )}
                   {run.kind === 'log' && (
-                    <Text dimColor italic>{`│ ${run.text}`}</Text>
+                    <Text dimColor italic>{run.text}</Text>
                   )}
                 </Box>
-              )) : preview.map(entry => (
-                <Text key={entry.key} color={entry.channel === 'stderr' ? 'error' : undefined} dimColor={entry.channel !== 'stderr'} wrap="truncate-end">
-                  {entry.gap === true ? t('jobs-output-gap') : '│ ' + entry.text}
-                </Text>
               ))}
-              {expanded
-                ? <Text dimColor wrap="truncate-end">{'⎿ ' + t('jobs-details-collapse', { key: 'e' })}</Text>
-                : outputRows.length > 3 && <Text dimColor wrap="truncate-end">{'⎿ ' + t('lines-folded-expand', { n: outputRows.length - 3, key: 'e' })}</Text>}
-            </Box>
+              </Box>
+              </Box>
+            </JobSection>
           ) : (
             <Text dimColor>{t('jobs-panel-no-output-yet')}</Text>
           )}

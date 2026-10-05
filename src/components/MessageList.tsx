@@ -269,22 +269,15 @@ function signatureParts(
       )
       break
     case 'job': {
-      // Card height inputs: the group decoration reshapes the row wholesale
-      // (the head adds the summary line, a folded run collapses into it, the
-      // rail shifts the body two columns right), the waterfall grows and
-      // shrinks with mirrored output, and settling drops the progress chip
-      // and the waterfall while it may add the detail tail. Missing any of
-      // them leaves an offscreen card's cached height stale → blank band /
-      // unreachable scroll bottom (the subagent card's lesson).
+      // Command expansion and group folding change the row height; output
+      // stays within a fixed two-row tail, independent of command expansion.
       const group = row.jobGroup
       signatureScratch.push(
         expanded,
         expandedRows.has(row.id),
         row.job?.status ?? '',
-        // The label drives the card's height: it wraps inside its column and
-        // the rail is painted per line, so a label that lands later (the
-        // kernel fills it in after launch) must invalidate the cached height.
-        row.job?.label?.length ?? 0,
+        // Script text, including blank-line changes, determines expanded height.
+        row.job?.label ?? '',
         row.job?.outputLines.length ?? 0,
         row.job?.detail?.length ?? 0,
         row.job?.progress?.length ?? 0,
@@ -292,13 +285,10 @@ function signatureParts(
         // text those tail lines carry decides how many rows actually paint.
         row.job === undefined
           ? ''
-          : (expanded || expandedRows.has(row.id) ? row.job.outputLines : row.job.outputLines.slice(-4)).map(line => line.text.length).join(','),
-        // Grouped members all render with the same 2-cell rail, so the only
-        // shape inputs are "is it a member", "is it the head" and "is the run
-        // folded" (a folded head paints the summary alone).
+          : row.job.outputLines.slice(-2).map(line => `${line.text.length}:${line.gapBefore === true}`).join(','),
+        // The group head adds a summary; folded groups hide their card bodies.
         group !== undefined,
         group?.head === true,
-        group?.last === true,
         group?.folded === true,
       )
       break
@@ -2001,10 +1991,6 @@ function TranscriptRow({
               expanded={isExpanded || expanded}
               onToggle={toggleJobGroup}
               marginTopOnTurn={groupHead ? false : marginTopOnTurn}
-              // The bracket hugs the CARDS: the summary line above stays
-              // outside it, and the head/last member round the two ends in
-              // place (no extra cap row) — see JobCard's `rail` prop.
-              rail={jobGroup === undefined ? undefined : { open: jobGroup.head, close: jobGroup.last }}
               // Clicking a card opens the panel focused on THAT job, not the roster head.
               onClick={onOpenJobs === undefined ? undefined : () => onOpenJobs(job.id)}
               onWatchOutput={onWatchJobOutput}

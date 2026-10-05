@@ -626,8 +626,8 @@ await withTerminal(
     await sleep(150)
     const text = screen()
     check(
-      'C1 无输出时卡片仅头行（无空瀑布 gutter）',
-      text.includes('gh run watch 42') && !text.includes('│'),
+      'C1 无输出时仅保留任务头和命令行',
+      text.includes('gh run watch 42') && text.split('\n').filter(line => line.trim() !== '').length === 2,
       text.split('\n').slice(0, 3).join('|'),
     )
   },
@@ -642,7 +642,7 @@ await withTerminal(
     // 迁移需把全部条件合进一个 settled 谓词并在其中捕获快照，非平凡改写。
     await sleep(150)
     const text = screen()
-    check('C2 落定卡折叠（无瀑布行）', !text.includes('│ build step 1 ok'))
+    check('C2 落定卡仍保留尾两行输出', text.includes('build step 1 ok') && text.includes('build step 2 ok'))
     check('C2 落定卡头含 exit detail', text.includes('exit code: 0'))
   },
 )
@@ -664,7 +664,7 @@ await withTerminal(
     check('C3 面板含操作提示', text.includes('press k twice'), text.split('\n').at(-3) ?? '')
     // 聚焦第一行（默认）→ 详情块展开：完整任务名 + 开始时间 + 输出尾巴。
     check('C3 聚焦行详情含完整任务名与开始时间', text.includes('gh run watch 42') && text.includes('started'), text.split('\n').slice(0, 8).join('|'))
-    check('C3 聚焦行详情含完整命令', text.includes('command') && text.includes('gh pr checks --watch 42'), text.split('\n').slice(0, 8).join('|'))
+    check('C3 聚焦行详情含完整命令', text.split('\n').some(line => line.includes('│ ') && line.includes('gh pr checks --watch 42')), text.split('\n').slice(0, 8).join('|'))
     check('C3 聚焦行详情含镜像输出尾巴', text.includes('build step 1 ok') && text.includes('build step 2 ok'))
     // 非聚焦行不展开详情（bash-2 无输出 → 其无输出提示也不应出现）。
     check('C3 非聚焦行无详情块', !text.includes('no mirrored output yet'))
@@ -727,18 +727,36 @@ console.log('--- G16: panel commands wrap below the job header ---')
       }),
       async (screen, _rerender, stdin) => {
         await sleep(150) // 固定窗:探针 G16 面板行布局落定
-        check('G16 ' + cols + ' columns: command folds by default', !screen().includes(tail) && screen().includes('lines (e'), screen().split('\n').slice(0, 7).join('|'))
+        check('G16 ' + cols + ' columns: command folds by default', !screen().includes(tail) && screen().includes('Write-Output'), screen().split('\n').slice(0, 7).join('|'))
         stdin.write('e')
         await settled(() => screen().includes(tail))
         const lines = screen().split('\n')
         const header = lines.findIndex(line => line.includes('pwsh-1'))
-        const command = lines.findIndex(line => line.includes('pwsh -Command'))
+        const command = lines.findIndex(line => line.includes('Write-Output'))
         check('G16 ' + cols + ' columns: command tail remains visible', screen().includes(tail), lines.slice(0, 8).join('|'))
-        check('G16 ' + cols + ' columns: command starts below its id row', command > header && lines[command]?.startsWith('   pwsh -Command'), JSON.stringify(lines.slice(header, command + 2)))
+        check('G16 ' + cols + ' columns: command starts below its id row', command > header && lines[command]?.trimStart().startsWith('│ ') && !screen().includes('⎿'), JSON.stringify(lines.slice(header, command + 2)))
       },
       cols,
     )
   }
+}
+
+console.log('--- G17: the job panel keeps all twenty-five script rows ---')
+{
+  const command = 'pwsh -Command "' + Array.from({ length: 25 }, (_, index) => 'PANEL-SCRIPT-' + String(index + 1).padStart(2, '0')).join('\n') + '"'
+  await withTerminal(
+    () => React.createElement(JobsPanel, { jobs: [{ ...runningJob, label: 'long script', command, outputLines: [] }], variant: 'panel', onKill: () => {} }),
+    async (screen, _rerender, stdin) => {
+      check('G17 panel: script begins folded at its first statement', await settled(() => screen().includes('PANEL-SCRIPT-01')) && !screen().includes('PANEL-SCRIPT-02'))
+      stdin.write('e')
+      await settle(() => screen().includes('PANEL-SCRIPT-02'))
+      for (let row = 0; row < 16; row++) {
+        stdin.write('\x1b[B')
+        await sleep(30) // 固定窗:pacing 逐次滚动，按键和渲染不合并
+      }
+      check('G17 panel: expanded script remains complete after scrolling', await settled(() => screen().includes('PANEL-SCRIPT-25')) && !screen().includes('open jobs for all'), screen().split('\n').slice(-14).join('|'))
+    },
+  )
 }
 
 // ---------------------------------------------------------------------------
