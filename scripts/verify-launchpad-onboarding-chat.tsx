@@ -1273,6 +1273,39 @@ const AC4_CUT_PRESET = 'Standard (Git Bash'
   await chat.unmount()
 }
 
+{
+  // R4 · 复核场景（CodeRabbit 2026-10-05，`Chat.tsx` 落地页分支的 `<TooltipLayer />`）：
+  // 悬停被截断的 preset 段把卡片画出来之后，**指针不动**、用键盘把焦点移到权限段并按
+  // Enter 打开选择器——落地页仍然挂载（选择器是盖在它之上的浮层），所以"切屏时 ParamChip
+  // 卸载"的假设不成立：不给单例层 invalidationKey，旧卡片会继续画在选择器上方。
+  // 判据 = 选择器打开后屏上不再有完整 preset 名（卡片被撤）。
+  const chat = await mountChat({ launchpadOnBoot: true }, {
+    agentPreset: 'standard',
+    listPresets: async () => [
+      { id: 'standard', name: AC4_FULL_PRESET, isDefault: true },
+      { id: 'ptc', name: 'PTC', isDefault: false },
+    ],
+  } as never)
+  const cutOnScreen = await settled(() => {
+    const line = viewportLines(chat.term).find(l => l.includes(AC4_CUT_PRESET))
+    return line !== undefined && line.includes('…')
+  })
+  const cell = findParamCell(chat.term, AC4_CUT_PRESET)
+  if (cell === null) throw new Error('truncated preset segment not on screen')
+  chat.stdin.write(`\u001b[<35;${cell.col};${cell.row}M`)
+  const cardShown = await settled(() => chat.screen().includes(AC4_FULL_PRESET))
+  // 指针留在原地：Tab 把焦点从被悬停的 preset 段（-4）推到权限段（-5），Enter 开 /permission。
+  await chat.send('\t')
+  await chat.send('\r')
+  const pickerOpen = await settled(() => chat.screen().includes('权限预设'))
+  const cardStillThere = chat.screen().includes(AC4_FULL_PRESET)
+  check('R4 真 Chat 树：选择器打开时撤掉仍悬停的卡片（落地页分支的 invalidationKey = overlay.kind）',
+    cutOnScreen && cardShown && pickerOpen && !cardStillThere,
+    `cut=${cutOnScreen} card=${cardShown} picker=${pickerOpen} cardStill=${cardStillThere} `
+      + `:: ${chat.screen().slice(0, 260)}`)
+  await chat.unmount()
+}
+
 if (failures === 0) console.log(`\nverify-launchpad-onboarding-chat: ${checks} checks, all passed`)
 else console.error(`\nverify-launchpad-onboarding-chat: ${failures} of ${checks} checks FAILED`)
 process.exit(failures === 0 ? 0 : 1)

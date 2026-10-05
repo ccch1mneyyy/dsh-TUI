@@ -6216,13 +6216,14 @@ export function Chat({
     // 落地页这一屏的完整树（AC-4）：Tooltip 单例层挂在**最外层最后**——与下面
     // 聊天主树末尾那处（SidePanelLayout 里）是同一个组件、同一条"单例层挂树尾"
     // 姿态；参数行被截断的段（ParamChip 写的锚点）hover 600ms 后由它画完整名。
-    // 本屏没有滚动、也没有面板几何过渡，不需要 invalidationKey /
-    // subscribeInvalidation；切屏时 ParamChip 卸载，useTooltip 的清理 effect
-    // 撤掉挂着的那张卡片，不会把浮层留给下一屏。
+    // 本屏没有滚动、也没有面板几何过渡 ⇒ 不需要 subscribeInvalidation；但**必须**给
+    // invalidationKey：选择器是**盖在落地页之上**的浮层，落地页不卸载、指针也不一定
+    // 离开被悬停的那一段，没有这个键时旧卡片会继续画在选择器上方（复核场景回归见
+    // `verify-launchpad-onboarding-chat` 的 R4）。
     const node = (
       <>
         {launchpad}
-        <TooltipLayer />
+        <TooltipLayer invalidationKey={overlay.kind} />
       </>
     )
     return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
