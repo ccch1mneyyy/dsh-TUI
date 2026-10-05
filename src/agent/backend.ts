@@ -20,6 +20,30 @@ export interface BackendDetection {
   readonly hint?: string
 }
 
+/**
+ * One-click install surface for an optional backend's SDK peer (the Claude
+ * backend's wizard is the first consumer). These types live here so the UI
+ * layer can read them without importing a backend package; the install
+ * implementation itself stays inside the backend.
+ */
+export type SdkInstallTarget =
+  | { readonly kind: 'profile'; readonly dir: string }
+  | { readonly kind: 'standalone' }
+  | { readonly kind: 'no-profile' }
+
+/** How `pnpm add` ended; `tail` carries the captured output's last lines. */
+export type SdkInstallResult =
+  | { readonly kind: 'ok' }
+  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'pnpm-missing' }
+  | { readonly kind: 'failed'; readonly exitCode: number; readonly tail: readonly string[] }
+
+/** A running install: `result` settles once, `cancel` kills the child. */
+export interface SdkInstaller {
+  readonly result: Promise<SdkInstallResult>
+  readonly cancel: () => void
+}
+
 /** Which session to open. */
 export type OpenTarget =
   | { readonly kind: 'create'; readonly cwd: string }

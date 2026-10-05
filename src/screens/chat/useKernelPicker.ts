@@ -5,12 +5,15 @@ import { t } from '../../i18n.js'
 import { KERNEL_IDS, type KernelBackendId } from '../../kernelPrefs.js'
 import type { ChatOverlayAction } from '../chatOverlay.js'
 
-export function useKernelPicker({ channel, kernelVersion, launchpadShown, onProbeKernels, onSwitchBackend, dispatchOverlay }: {
+export function useKernelPicker({ channel, kernelVersion, launchpadShown, onProbeKernels, onSwitchBackend, canInstallSdk, dispatchOverlay }: {
   channel: ChannelUi
   kernelVersion: string | undefined
   launchpadShown: boolean
   onProbeKernels: (() => Promise<Record<string, KernelStatus>>) | undefined
   onSwitchBackend: ((id: KernelBackendId) => void) | undefined
+  /** The host wires the SDK install wizard (resolve target / start pnpm).
+   *  Absent = no install path: the dim row keeps its dead-end reason. */
+  canInstallSdk: boolean
   dispatchOverlay: React.Dispatch<ChatOverlayAction>
 }) {
   const currentId = channel.backendCapabilities?.backendId ?? 'dsh'
@@ -23,11 +26,19 @@ export function useKernelPicker({ channel, kernelVersion, launchpadShown, onProb
       setProbe(Object.fromEntries(KERNEL_IDS.map(id => [id, { installed: false }])))
     })
   }, [onProbeKernels])
+  /** Force a fresh probe (the once-guard stays for the automatic paths): the
+   *  SDK install wizard calls this after a successful install so the dim
+   *  row lights up without a process restart. */
+  const reprobe = React.useCallback((): void => {
+    probeStarted.current = false
+    requestProbe()
+  }, [requestProbe])
   const options = React.useMemo(() => buildKernelCatalog({
     current: currentId,
     ...(kernelVersion === undefined ? {} : { dshVersion: kernelVersion }),
     ...(probe === undefined ? {} : { statuses: probe }),
-  }), [currentId, kernelVersion, probe])
+    canInstallSdk,
+  }), [currentId, kernelVersion, probe, canInstallSdk])
   React.useEffect(() => {
     if (launchpadShown) requestProbe()
   }, [launchpadShown, requestProbe])
@@ -40,6 +51,12 @@ export function useKernelPicker({ channel, kernelVersion, launchpadShown, onProb
     const option = options[index]
     if (option === undefined) return
     if (!option.selectable) {
+      if (option.installable === true) {
+        // The installable row opens the wizard instead of a dead-end toast;
+        // the wizard owns its own keys (Enter/Esc) from here on.
+        dispatchOverlay({ type: 'open', overlay: { kind: 'sdk-install' } })
+        return
+      }
       channel.notify(option.reasonKey === undefined ? t('kernel-switch-unavailable') : t(option.reasonKey), { color: 'warning' })
       return
     }
@@ -59,5 +76,5 @@ export function useKernelPicker({ channel, kernelVersion, launchpadShown, onProb
     dispatchOverlay({ type: 'close' })
     onSwitchBackend(option.id)
   }
-  return { currentId, options, open, pick }
+  return { currentId, options, open, pick, reprobe }
 }

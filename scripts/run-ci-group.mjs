@@ -70,6 +70,9 @@ const GROUPS = {
 // 内核选择器组件：标题、行标签与副标题（版本、不可选原因）、当前项勾选、
 // 不可选行变暗但焦点指针仍显示、pinned 提示行、鼠标点行、未接 onPick 时无 hover。
     ['verify-kernel-picker', ['node', '--import', 'tsx/esm', 'scripts/verify-kernel-picker.tsx']],
+// SDK 安装向导（内核选择器「未安装」行进入）：各步骤态的正文与提示行、
+// 手动兜底命令、窄终端截断、en 态文案。
+    ['verify-sdk-install-wizard', ['node', '--import', 'tsx/esm', 'scripts/verify-sdk-install-wizard.tsx']],
 // 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
 // （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
     ["repro-askpanel", ['node', '--import', 'tsx/esm', 'scripts/repro-askpanel.tsx']],

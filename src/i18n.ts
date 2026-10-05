@@ -2210,10 +2210,44 @@ const dict = {
   'kernel-already-current': { zh: '已经是当前内核', en: 'Already the current kernel' },
   'kernel-switch-unavailable': { zh: '当前环境不支持切换内核', en: 'Switching kernels is unavailable here' },
   'kernel-switch-while-working': { zh: '回合运行中，无法切换内核', en: 'Cannot switch kernels while a turn is running' },
+  'kernel-memory-fallback': {
+    zh: '上次选择的 {{name}} 内核启动失败，已先以 DSH 内核启动：{{reason}}',
+    en: 'The remembered {{name}} kernel failed to start; booted on DSH instead: {{reason}}',
+  },
   'kernel-pinned-hint': {
     zh: '启动参数已指定内核：本次会按你的选择重启，下次直接启动仍按参数进入。',
     en: 'A startup flag pins the kernel: this restart follows your choice, a later direct launch follows the flag.',
   },
+  // SDK 安装向导（内核选择器「未安装」行 Enter 进入）：确认、安装中、结果
+  // 与手动兜底。{{dir}} 是 profile 目录，{{specifier}} 是锁定版本的完整包名。
+  'kernel-not-installed-installable': { zh: '未安装 · 按 Enter 安装', en: 'Not installed · Enter to install' },
+  'sdk-install-title': { zh: '安装 Claude 内核', en: 'Install the Claude kernel' },
+  'sdk-install-confirm-what': { zh: '将安装 Claude Agent SDK {{version}}（内置 Claude Code CLI）', en: 'This installs Claude Agent SDK {{version}} (bundles the Claude Code CLI)' },
+  'sdk-install-confirm-where': { zh: '安装位置：{{dir}}', en: 'Install location: {{dir}}' },
+  'sdk-install-confirm-note': {
+    zh: '只装进 dsh-tui 自己的目录：版本经过验证、不随全局变化；PATH 上已有的 Claude Code 会优先使用，不受影响。需要网络与 pnpm。',
+    en: 'Installs only into the dsh-tui directory: the version is validated and never follows your global one; a Claude Code already on PATH is used first and is not touched. Needs network and pnpm.',
+  },
+  'sdk-install-confirm-hint': { zh: '**Enter** 安装 · Esc 返回', en: '**Enter** install · Esc back' },
+  'sdk-install-checking': { zh: '正在检查 pnpm…', en: 'Checking pnpm…' },
+  'sdk-install-running': { zh: '正在安装，可能需要一分钟…', en: 'Installing… this can take a minute' },
+  'sdk-install-running-sub': { zh: 'Esc 取消', en: 'Esc to cancel' },
+  'sdk-install-done': { zh: 'SDK 安装完成，Claude 内核已可用。', en: 'SDK installed — the Claude kernel is ready.' },
+  'sdk-install-done-hint': { zh: '**Enter** 返回内核选择 · Esc 关闭', en: '**Enter** back to the kernel picker · Esc close' },
+  'sdk-install-failed': { zh: '安装失败（pnpm 退出码 {{code}}）。可手动安装：', en: 'Install failed (pnpm exit code {{code}}). Manual install:' },
+  'sdk-install-manual': { zh: '{{command}}', en: '{{command}}' },
+  'sdk-install-failed-hint': { zh: 'r 重试 · Esc 返回', en: 'r retry · Esc back' },
+  'sdk-install-pnpm-missing': { zh: '未检测到 pnpm。先运行 npm install -g pnpm 再回来重试，或手动安装：', en: 'pnpm was not found. Run npm install -g pnpm first and retry, or install manually:' },
+  'sdk-install-cancelled': { zh: '已取消安装。', en: 'Install cancelled.' },
+  'sdk-install-no-target-standalone': {
+    zh: '当前是独立构建，没有可安装的 profile 目录；一键安装暂不支持。',
+    en: 'This is a standalone build — there is no profile directory to install into; one-click install is unavailable here.',
+  },
+  'sdk-install-no-target-no-profile': {
+    zh: '本次启动未关联 dsh profile（源码运行或 --config 启动），没有可安装的目录；请用 dsh --profile 启动后重试。',
+    en: 'This launch has no dsh profile (source checkout or --config start), so there is no install directory; launch via dsh --profile and retry.',
+  },
+  'sdk-install-exit-hint': { zh: 'Esc 返回', en: 'Esc back' },
   // 渠道档案（/channel，仅 Claude 内核）：选择器、动作行、切换/导入反馈、映射明细。
   'channel-picker-title': { zh: '渠道档案', en: 'Channel profiles' },
   'channel-empty-hint': {

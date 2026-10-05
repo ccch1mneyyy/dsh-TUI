@@ -11,7 +11,7 @@ import { Config, normalizeBackendChoice } from './index.js'
 import { configValues, createSettingsScope, resolveSettingsNamespace, type RuntimeConfig } from './compat/settings.js'
 import { createChannel } from './channel.js'
 import { createDshSession } from './backend/session.js'
-import { BACKEND_LOADERS, openBackendStartup, probeKernels } from './backends.js'
+import { BACKEND_LOADERS, openBackendStartup, probeKernels, sdkInstall } from './backends.js'
 import { formatSessionRef } from '../agent/refs.js'
 import type { AgentSession } from '../agent/session.js'
 import { mountFailureText } from '../sessions/resumeFailure.js'
@@ -536,16 +536,32 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    */
   const backendPinned = config.backend !== undefined
     || (rawBackend !== undefined && rawBackend.trim() !== '')
-  const backendStart = backendChoice === 'dsh' ? undefined
-    : await openBackendStartup(ctx, await BACKEND_LOADERS[backendChoice](), {
-      cwd: sessionCwd,
-      stderr: line => {
-        logForDebugging(`[${backendChoice}-stderr] ${line}`)
-        stderrReporter.push(line)
-      },
-      ...(config.sessionId === undefined ? {} : { configuredSessionId: config.sessionId }),
-      argv: cmdlineArgs ?? process.argv.slice(2),
-    })
+  // A remembered kernel whose backend cannot open (its SDK uninstalled, its
+  // session store unreadable, …) must not kill the boot: without an explicit
+  // flag or resume target the TUI falls back to DSH and says so — the wizard
+  // in /kernel is then one Enter away from installing what is missing.
+  // Explicit choices (flag/Config/handoff) and explicit resume targets keep
+  // the hard failure: silently swapping what the user named would be worse.
+  let backendStart: Awaited<ReturnType<typeof openBackendStartup>> | undefined
+  let backendFallbackNotice: string | undefined
+  if (backendChoice !== 'dsh') {
+    try {
+      backendStart = await openBackendStartup(ctx, await BACKEND_LOADERS[backendChoice](), {
+        cwd: sessionCwd,
+        stderr: line => {
+          logForDebugging(`[${backendChoice}-stderr] ${line}`)
+          stderrReporter.push(line)
+        },
+        ...(config.sessionId === undefined ? {} : { configuredSessionId: config.sessionId }),
+        argv: cmdlineArgs ?? process.argv.slice(2),
+      })
+    } catch (error) {
+      if (backendPinned || handoffBackend !== undefined || launchSessionId !== undefined) throw error
+      const reason = error instanceof Error ? error.message : String(error)
+      logForDebugging(`dsh-tui: remembered backend "${backendChoice}" failed to open (${reason}); falling back to dsh`)
+      backendFallbackNotice = t('kernel-memory-fallback', { name: kernelDisplayName(backendChoice), reason })
+    }
+  }
   // The backend session (and its child process) belongs to this fiber until the
   // channel adopts it: a boot that throws before then disposes the fiber's
   // effects, and this one stops the child instead of leaking it. Dispose is
@@ -773,6 +789,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     if (shadow) return () => undefined
     return channel.notify(text, options)
   }
+  // The remembered-kernel fallback notice (set during backend startup above)
+  // lands once the channel can actually show it.
+  if (backendFallbackNotice !== undefined) notifyChannel(backendFallbackNotice, { color: 'warning' })
   const submitChannel: typeof channel.submit = text => {
     if (!shadow) channel.submit(text)
   }
@@ -1992,6 +2011,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // /channel: restart with a new session after the connection changed.
     onRestartFreshSession: restartFreshSession,
     onProbeKernels: () => probeKernels(ctx, sessionCwd),
+    // The kernel picker's SDK install wizard (the dim Claude row, Enter).
+    onResolveSdkInstallTarget: sdkInstall.resolveTarget,
+    onStartSdkInstall: sdkInstall.start,
+    onCheckPnpm: sdkInstall.checkPnpm,
+    sdkInstallPinned: sdkInstall.pinned,
     kernelPinned: backendPinned,
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the

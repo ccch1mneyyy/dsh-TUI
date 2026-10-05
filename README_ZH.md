@@ -159,6 +159,10 @@ cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
 dsh-tui --backend claude     # 或在 /kernel 里选 Claude，选择会被记住
 ```
 
+最省事的装法：在内核选择器（启动页「内核」或 `/kernel`）里对未安装的 Claude 行按
+Enter，按引导一键安装——dsh-TUI 自己定位 profile 目录并装锁定版本的 SDK，上面的
+命令是它的手动等价形式。
+
 - **登录**：依次使用 `/channel` 渠道档案、dsh-auth 的 `anthropic` 订阅登录（`/login`）、
   `ANTHROPIC_API_KEY` 或云厂商环境变量、本机已有的 `claude login`。`PATH` 上有
   `claude` 就用它，否则用 SDK 自带的二进制。

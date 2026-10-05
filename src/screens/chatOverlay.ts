@@ -75,6 +75,10 @@ export type ChatOverlay =
    *  Chat 的派生值（buildKernelCatalog 的输出，含异步探测结果），每次渲染
    *  现算，所以探测落地后选择器自己就刷新了，不需要把名册冻进 overlay。 */
   | { kind: 'kernel'; index: number }
+  /** SDK 安装向导（内核选择器的「未安装」行 Enter 进入）。与 kernel 同为
+   *  「盖在落地页之上」的姿态；向导的步骤态（确认/安装中/结果）是异步进程
+   *  状态，按本文件头注释第 3 条的分工留在 Chat.tsx，不冻进 overlay。 */
+  | { kind: 'sdk-install' }
   | { kind: 'plan'; index: number }
   | { kind: 'lang'; index: number }
   /** `/panel` 无参的选择器：列出「已启用 ∩ 已注册」的面板（含插件）。 */

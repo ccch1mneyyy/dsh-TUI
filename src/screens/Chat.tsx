@@ -123,6 +123,8 @@ import { PresetPicker } from '../components/PresetPicker.js'
 import { PermissionsPicker } from '../components/PermissionsPicker.js'
 import { ModePicker } from '../components/ModePicker.js'
 import { KernelPicker } from '../components/KernelPicker.js'
+import { SdkInstallWizard, type SdkInstallPhase } from '../components/SdkInstallWizard.js'
+import type { SdkInstaller, SdkInstallTarget } from '../agent/backend.js'
 import { ChannelPicker } from '../components/ChannelPicker.js'
 import type { KernelStatus } from '../components/kernelCatalog.js'
 import type { KernelBackendId } from '../kernelPrefs.js'
@@ -241,6 +243,9 @@ const LAUNCHPAD_OVERLAY_KINDS: ReadonlySet<string> = new Set([
   // 内核选择器（/kernel 与启动页「内核」入口）：同一姿态盖在落地页之上，
   // 点选即切换内核并重启（组合根的 onSwitchBackend）。
   'kernel',
+  // SDK 安装向导（内核选择器「未安装」行 Enter 进入）：同一姿态，Esc 层级
+  // 一样——向导收回，露出落地页。
+  'sdk-install',
 ])
 
 function cleanCommandError(error: unknown): string {
@@ -380,6 +385,10 @@ export function Chat({
   onSwitchBackend,
   onRestartFreshSession,
   onProbeKernels,
+  onResolveSdkInstallTarget,
+  onStartSdkInstall,
+  onCheckPnpm,
+  sdkInstallPinned,
   kernelPinned,
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
@@ -440,6 +449,17 @@ export function Chat({
    * 调一次并缓存结果；探测失败按「未安装」处理。
    */
   onProbeKernels?: () => Promise<Record<string, KernelStatus>>
+  /**
+   * SDK 安装向导（组合根注入，同上不 import 具体后端）。resolveTarget 同步
+   * 快（argv + 文件系统判定）；start 在 profile 目录跑 `pnpm add`，返回可
+   * 取消的句柄；checkPnpm 是确认后的预检。与 {@link sdkInstallPinned} 齐
+   * 备时向导可用，缺一则「未安装」行保持死路提示。
+   */
+  onResolveSdkInstallTarget?: () => SdkInstallTarget
+  onStartSdkInstall?: (dir: string) => SdkInstaller
+  onCheckPnpm?: () => Promise<boolean>
+  /** 向导显示与手动兜底命令用的安装目标（`@anthropic-ai/claude-agent-sdk@<pin>`）。 */
+  sdkInstallPinned?: { readonly specifier: string; readonly version: string }
   /** 启动参数（Config 行 / DSH_TUI_BACKEND）压过了记忆：选择器明说。 */
   kernelPinned?: boolean
   /**
@@ -813,9 +833,70 @@ export function Chat({
       setLaunchpadUpdateAvailable(update !== undefined)
     }).catch(() => undefined)
   }, [launchpadShown])
-  const { currentId: kernelCurrentId, options: kernelOptions, open: openKernelPicker, pick: pickKernel } = useKernelPicker({
-    channel, kernelVersion, launchpadShown, onProbeKernels, onSwitchBackend, dispatchOverlay,
+  const canInstallSdk = onResolveSdkInstallTarget !== undefined && onStartSdkInstall !== undefined
+    && onCheckPnpm !== undefined && sdkInstallPinned !== undefined
+  const { currentId: kernelCurrentId, options: kernelOptions, open: openKernelPicker, pick: pickKernel, reprobe: reprobeKernels } = useKernelPicker({
+    channel, kernelVersion, launchpadShown, onProbeKernels, onSwitchBackend, canInstallSdk, dispatchOverlay,
   })
+  /**
+   * SDK 安装向导的步骤态（异步进程状态，按 chatOverlay 的分工留在 Chat，
+   * 不进 overlay union）。生命周期约定：向导打开时从 idle 初始化，安装
+   * （checking/running）期间面板保持打开——所有异步落地都发生在面板还在
+   * 的窗口内；关闭路径（Esc/Enter 离开）一律重置回 idle，下一次打开重新
+   * 解析安装目标。
+   */
+  const [sdkPhase, setSdkPhase] = React.useState<SdkInstallPhase>({ kind: 'idle' })
+  const sdkInstallerRef = React.useRef<SdkInstaller | undefined>(undefined)
+  // 打开即解析安装目标（同步、只读 argv + 文件系统）：profile → 确认面板；
+  // standalone / 无 profile → 直接给手动指引面板。
+  React.useEffect(() => {
+    if (overlay.kind !== 'sdk-install' || sdkPhase.kind !== 'idle' || onResolveSdkInstallTarget === undefined) return
+    const target = onResolveSdkInstallTarget()
+    if (target.kind === 'profile' && sdkInstallPinned !== undefined) {
+      setSdkPhase({ kind: 'confirm', dir: target.dir, version: sdkInstallPinned.version, specifier: sdkInstallPinned.specifier })
+    } else {
+      setSdkPhase({ kind: 'no-target', reason: target.kind === 'standalone' ? 'standalone' : 'no-profile' })
+    }
+  }, [overlay.kind, sdkPhase.kind, onResolveSdkInstallTarget, sdkInstallPinned])
+  const closeSdkInstallToKernelPicker = (): void => {
+    setSdkPhase({ kind: 'idle' })
+    dispatchOverlay({ type: 'close' })
+    openKernelPicker()
+  }
+  const closeSdkInstall = (): void => {
+    setSdkPhase({ kind: 'idle' })
+    dispatchOverlay({ type: 'close' })
+  }
+  const runSdkInstall = (dir: string): void => {
+    if (onStartSdkInstall === undefined || sdkInstallPinned === undefined) return
+    const installer = onStartSdkInstall(dir)
+    sdkInstallerRef.current = installer
+    setSdkPhase({ kind: 'running' })
+    void installer.result.then(result => {
+      if (result.kind === 'ok') {
+        // 装好了：重探内核（灰行变亮，无需重启进程），停在完成面板。
+        reprobeKernels()
+        setSdkPhase({ kind: 'done' })
+      } else if (result.kind === 'failed') {
+        setSdkPhase({ kind: 'failed', exitCode: result.exitCode, tail: result.tail, dir, version: sdkInstallPinned.version, specifier: sdkInstallPinned.specifier })
+      } else if (result.kind === 'pnpm-missing') {
+        setSdkPhase({ kind: 'pnpm-missing', dir, version: sdkInstallPinned.version, specifier: sdkInstallPinned.specifier })
+      } else {
+        setSdkPhase({ kind: 'cancelled' })
+      }
+    })
+  }
+  const confirmSdkInstall = (dir: string): void => {
+    if (onCheckPnpm === undefined) return
+    setSdkPhase({ kind: 'checking' })
+    void onCheckPnpm().then(ok => {
+      if (!ok && sdkInstallPinned !== undefined) {
+        setSdkPhase({ kind: 'pnpm-missing', dir, version: sdkInstallPinned.version, specifier: sdkInstallPinned.specifier })
+        return
+      }
+      runSdkInstall(dir)
+    })
+  }
   const host = channel.backendChannels?.()
   const { rows: channelRows, open: openChannelPicker, pick: pickChannel, setMode: runBackendModeCommand, login: runBackendLogin } = useBackendChannels({
     channel, host, questionStore, dispatchOverlay, onRestartFreshSession, runOAuthLogin,
@@ -4677,6 +4758,28 @@ export function Chat({
       }
       return
     }
+    if (overlay.kind === 'sdk-install') {
+      // 向导按键按步骤态分派；checking/running 期间除 Esc（取消安装）外
+      // 全部吞掉——异步落地只发生在面板还在的窗口内（见 sdkPhase 注释）。
+      if (sdkPhase.kind === 'confirm') {
+        if (plainReturn) confirmSdkInstall(sdkPhase.dir)
+        else if (key.escape) closeSdkInstallToKernelPicker()
+      } else if (sdkPhase.kind === 'checking') {
+        // 亚秒级预检，无键可按。
+      } else if (sdkPhase.kind === 'running') {
+        if (key.escape) sdkInstallerRef.current?.cancel()
+      } else if (sdkPhase.kind === 'done') {
+        if (plainReturn) closeSdkInstallToKernelPicker()
+        else if (key.escape) closeSdkInstall()
+      } else if (sdkPhase.kind === 'failed') {
+        if (input === 'r' && !key.ctrl && !key.meta) confirmSdkInstall(sdkPhase.dir)
+        else if (key.escape) closeSdkInstallToKernelPicker()
+      } else {
+        // pnpm-missing / cancelled / no-target：Esc 回内核选择器。
+        if (key.escape) closeSdkInstallToKernelPicker()
+      }
+      return
+    }
     if (overlay.kind === 'channel') {
       // 名册不冻在 overlay 里（channelRows 是渲染期派生值）：切换/导入后
       // 选择器自己就刷新成新状态，不需要重开。
@@ -5464,6 +5567,11 @@ export function Chat({
                   pickKernel(index)
                 }}
               />
+            </Box>
+          )}
+          {overlay.kind === 'sdk-install' && sdkPhase.kind !== 'idle' && (
+            <Box flexDirection="column" marginTop={1}>
+              <SdkInstallWizard phase={sdkPhase} />
             </Box>
           )}
           {overlay.kind === 'channel' && (

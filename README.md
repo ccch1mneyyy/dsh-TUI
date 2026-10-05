@@ -183,6 +183,11 @@ cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
 dsh-tui --backend claude     # or pick Claude in /kernel; that choice is remembered
 ```
 
+The easiest install: open the kernel picker (the launchpad "Kernel" entry or
+`/kernel`) and press Enter on the dim Claude row — the wizard locates the
+profile directory and installs the pinned SDK for you; the command above is
+its manual equivalent.
+
 - **Sign-in**: a `/channel` relay profile, your dsh-auth `anthropic` sign-in
   (`/login`), `ANTHROPIC_API_KEY` or cloud-provider variables, or an existing
   `claude login`, in that order. A `claude` on `PATH` is used when present,

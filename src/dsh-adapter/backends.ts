@@ -1,6 +1,6 @@
 /** Non-DSH backend loading, detection and startup session ownership. */
 import type { Context } from '@deepseek-ai/cordis'
-import type { AgentBackend, BackendHost, OAuthCredentialSource, OpenTarget } from '../agent/backend.js'
+import type { AgentBackend, BackendHost, OAuthCredentialSource, OpenTarget, SdkInstallTarget, SdkInstaller } from '../agent/backend.js'
 import type { AgentEvent } from '../agent/events.js'
 import type { AgentSession } from '../agent/session.js'
 import { formatSessionRef } from '../agent/refs.js'
@@ -10,10 +10,24 @@ import { reserveMount, reserveNewSession } from '../sessionMounts.js'
 import { resumeTargetFromArgv } from '../sessionHistory.js'
 import { mountFailureText } from '../sessions/resumeFailure.js'
 import { logForDebugging } from '../utils/debug.js'
+// Static on purpose: the install module imports no vendor package (node
+// built-ins + update.ts, which this adapter loads anyway), so a DSH-only
+// boot pays nothing for having the wizard's surface at hand.
+import { checkPnpmAvailable, CLAUDE_SDK_SPECIFIER, resolveSdkInstallTarget, startClaudeSdkInstall } from '../backends/claude/install.js'
+import { VALIDATED_SDK_VERSION } from '../backends/claude/contract.js'
 
 export const BACKEND_LOADERS = {
   claude: () => import('../backends/claude/index.js').then(m => m.claudeBackend),
 } satisfies Record<Exclude<KernelBackendId, 'dsh'>, () => Promise<AgentBackend>>
+
+/** The kernel picker's one-click SDK install surface (Chat consumes it as
+ *  props; the types are the neutral ones from agent/backend.js). */
+export const sdkInstall = {
+  resolveTarget: (): SdkInstallTarget => resolveSdkInstallTarget(),
+  start: (dir: string): SdkInstaller => startClaudeSdkInstall(dir),
+  checkPnpm: (): Promise<boolean> => checkPnpmAvailable(),
+  pinned: { specifier: CLAUDE_SDK_SPECIFIER, version: VALIDATED_SDK_VERSION } as const,
+}
 
 const credentialSources = new Map<string, OAuthCredentialSource>()
 
