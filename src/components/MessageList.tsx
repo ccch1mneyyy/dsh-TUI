@@ -1988,7 +1988,7 @@ function TranscriptRow({
           {groupHead && jobGroup.folded ? null : (
             <JobCard
               job={job}
-              expanded={isExpanded || expanded}
+              expanded={isExpanded !== expanded}
               onToggle={toggleJobGroup}
               marginTopOnTurn={groupHead ? false : marginTopOnTurn}
               // Clicking a card opens the panel focused on THAT job, not the roster head.
