@@ -9,14 +9,8 @@ import type { ProviderSetupHost, OAuthProviderStatus, OAuthSetupHost, SettingsHo
 
 /** One backend session's sign-in surface (`ChannelUi.backendAuth`). */
 export interface BackendAuthHost {
-  /** The host OAuth provider id the backend signs in with (`anthropic`). */
-  readonly provider: string | undefined
-  /** The host's OAuth sign-in surface (dsh-auth), when mounted. */
-  readonly oauth: OAuthSetupHost | undefined
-  /** Localized status lines (credential source, account; never tokens). */
-  status(): Promise<readonly string[]>
-  /** Restart the backend on the freshly stored credential. */
-  reconnect(): Promise<void>
+  /** Report status, present OAuth, then reconnect after sign-in or sign-out. */
+  login(present: (oauth: OAuthSetupHost, provider: string) => Promise<'added' | 'updated' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'>): Promise<void>
 }
 
 /** Relay profile management for the bound backend session. */

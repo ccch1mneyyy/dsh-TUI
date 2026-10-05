@@ -155,6 +155,7 @@ for (const mode of ['new', 'passive-shadow', 'replay-shadow'] as const) {
     importFromSettings: () => { writes += 1; return { option, restart: false } },
     save: () => { writes += 1; return option }, remove: () => { writes += 1; return true },
   })
+  raw.backendAuth = () => ({ login: async present => { writes += 1; await present(raw.providerSetup()!.oauth!, 'anthropic') } })
   raw.backendModes = () => ({ snapshot: () => ({ modes: [{ id: 'default', name: 'Default' }], currentIndex: 0 }), set: async () => { writes += 1; return true } })
   raw.backendMcp = () => ({ reconnect: async () => { writes += 1; return true }, toggle: async () => { writes += 1; return true } })
   const unregister = registerTuiChannel(ctx, raw)
@@ -163,11 +164,13 @@ for (const mode of ['new', 'passive-shadow', 'replay-shadow'] as const) {
     const channels = mount.channel.backendChannels()!
     const modes = mount.channel.backendModes()!
     const mcp = mount.channel.backendMcp()!
+    const auth = mount.channel.backendAuth()!
+    let logout!: () => Promise<boolean>
     assert.equal(channels.snapshot().activeId, 'native')
     assert.equal(channels.peekImport()?.tiers.opus, 'mapped')
     assert.equal(modes.snapshot().currentIndex, 0)
     assert.ok(Object.isFrozen(channels.snapshot().channels[0]), 'native roster rows are detached immutable values')
-    const calls = [() => channels.activate('native'), () => channels.importFromSettings(), () => channels.save({ id: 'native', name: 'Native' }), () => channels.remove('native'), () => modes.set('default'), () => mcp.reconnect('server'), () => mcp.toggle('server', true)]
+    const calls = [() => channels.activate('native'), () => channels.importFromSettings(), () => channels.save({ id: 'native', name: 'Native' }), () => channels.remove('native'), () => modes.set('default'), () => mcp.reconnect('server'), () => mcp.toggle('server', true), () => auth.login(async oauth => { logout = () => oauth.logout('anthropic'); return 'cancelled' })]
     for (const call of calls) {
       if (mode === 'new') await call()
       else assert.throws(call, /shadow policy/)
@@ -175,6 +178,7 @@ for (const mode of ['new', 'passive-shadow', 'replay-shadow'] as const) {
     assert.equal(writes, mode === 'new' ? calls.length : 0)
     mount.dispose()
     for (const call of [...calls, () => channels.snapshot(), () => channels.peekImport(), () => modes.snapshot()]) assert.throws(call, /lifetime/)
+    if (mode === 'new') assert.throws(logout, /lifetime/)
   } finally { mount.dispose(); unregister(); raw.releaseContributions() }
 }
 

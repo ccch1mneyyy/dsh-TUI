@@ -143,6 +143,10 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
           snapshot: 'read-only', peekImport: 'read-only', activate: 'mutate', importFromSettings: 'mutate', save: 'mutate', remove: 'mutate',
         })
       }
+      if (key === 'backendAuth' && result !== undefined) {
+        const host = result as NonNullable<ReturnType<ChannelUi['backendAuth']>>
+        return methods<typeof host>({ login: present => host.login((oauth, provider) => settle(present(query(oauth), provider))) }, { login: 'mutate' })
+      }
       if (key === 'backendModes' && result !== undefined) {
         return methods(result as NonNullable<ReturnType<ChannelUi['backendModes']>>, { snapshot: 'read-only', set: 'mutate' })
       }

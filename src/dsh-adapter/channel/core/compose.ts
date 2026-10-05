@@ -420,14 +420,22 @@ export function createCoreChannel(
     backendAuth: () => {
       const auth = binding.session.capabilities.auth
       if (auth === undefined) return undefined
-      return {
-        provider: auth.oauthProvider,
-        // The host's OAuth sign-in (dsh-auth), the same surface `/provider`
-        // offers; absent when the plugin is not mounted.
-        oauth: (ctx.get('dshAuth') as { api?: OAuthSetupHost } | undefined)?.api,
-        status: async () => [...(await auth.status()).lines],
-        reconnect: () => auth.reconnect(),
-      }
+      const oauth = (ctx.get('dshAuth') as { api?: OAuthSetupHost } | undefined)?.api
+      const backend = state.backendCapabilities.backendLabel
+      return { login: async present => {
+        const lines = await auth.status().then(report => report.lines)
+          .catch((error: unknown) => [t('capability-failed', { name: 'login', err: error instanceof Error ? error.message : String(error) })])
+        channelCommands(state).pushLocal('/login', [t('login-backend-heading', { backend }), ...lines, ...(oauth === undefined ? [t('login-backend-no-oauth')] : [])])
+        if (oauth === undefined || auth.oauthProvider === undefined) return
+        const outcome = await present(oauth, auth.oauthProvider)
+        if (outcome !== 'added' && outcome !== 'signed-out') return
+        try {
+          await auth.reconnect()
+          notify(t('login-backend-reconnected', { backend }), { color: 'success' })
+        } catch (error) {
+          notify(t('login-backend-reconnect-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+        }
+      } }
     },
     backendChannels: () => {
       const fence = mcpFence()

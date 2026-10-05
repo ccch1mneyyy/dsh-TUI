@@ -753,18 +753,20 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
 for (const route of ['missing', 'ready', 'failed'] as const) {
   const calls: string[] = []
   const inputs: AgentInput[] = []
+  let finishOAuth!: () => void
+  let finishReconnect!: () => void
   const session = freshSession({ auth: {
     oauthProvider: 'anthropic',
     status: () => Promise.resolve({ lines: ['Backend credential source'] }),
     reconnect: () => {
       calls.push('reconnect')
-      return route === 'failed' ? Promise.reject(new Error('reconnect refused')) : Promise.resolve()
+      return new Promise<void>((resolve, reject) => { finishReconnect = () => route === 'failed' ? reject(new Error('reconnect refused')) : resolve() })
     },
   } })
   session.submit = input => { inputs.push(input); return Promise.resolve({ accepted: true }) }
   const oauth = {
     providers: () => Promise.resolve([{ provider: 'anthropic', label: 'Anthropic', oauthLabel: 'Subscription', loginLabel: undefined, signedIn: false, expiresAt: undefined, expired: false }]),
-    login: (provider?: string) => { calls.push('login:' + provider); return Promise.resolve({ provider: 'anthropic', oauthLabel: 'Subscription', expiresAt: undefined }) },
+    login: (provider?: string) => { calls.push('login:' + provider); return new Promise(resolve => { finishOAuth = () => resolve({ provider: 'anthropic', oauthLabel: 'Subscription', expiresAt: undefined }) }) },
     logout: () => Promise.resolve(false),
   }
   const authCtx = { on: () => () => undefined, get: (name: string) => name === 'dshAuth' && route !== 'missing' ? { api: oauth } : undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never
@@ -789,6 +791,10 @@ for (const route of ['missing', 'ready', 'failed'] as const) {
         screen().replace(/\s+/gu, ' ').includes(t('login-backend-no-oauth').replace(/\s+/gu, ' ')) && calls.length === 0, screen())
     } else {
       const expected = route === 'ready' ? t('login-backend-reconnected', { backend: 'Fake Agent' }) : t('login-backend-reconnect-failed', { err: 'reconnect refused' })
+      check(route + ': reconnect waits for OAuth completion', await settled(() => calls.join() === 'login:anthropic'), calls.join())
+      finishOAuth()
+      check(route + ': outcome notice waits for reconnect completion', await settled(() => calls.join() === 'login:anthropic,reconnect') && !channel.notifications.some(item => item.text === expected), calls.join())
+      finishReconnect()
       check(route + ': login uses the backend provider and narrates the reconnect outcome',
         await settled(() => calls.join() === 'login:anthropic,reconnect' && channel.notifications.some(item => item.text === expected)), calls.join())
     }

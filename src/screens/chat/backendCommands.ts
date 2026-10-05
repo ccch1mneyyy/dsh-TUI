@@ -57,7 +57,3 @@ export function backendModeStatus(snapshot: ReturnType<BackendModesHost['snapsho
   const current = snapshot?.modes[snapshot.currentIndex]
   return current === undefined ? undefined : { id: current.id, name: current.name, onOpen }
 }
-
-export function backendLoginLines(backend: string, oauthMissing: boolean, lines: readonly string[]): readonly string[] {
-  return [t('login-backend-heading', { backend }), ...lines, ...(oauthMissing ? [t('login-backend-no-oauth')] : [])]
-}

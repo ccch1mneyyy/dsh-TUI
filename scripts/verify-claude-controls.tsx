@@ -418,8 +418,8 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
     check('channel: /context is the backend\'s report', await settled(() => channel.loadedContext?.sections[0]?.name === 'Core instructions') && channel.loadedContext?.files[0]?.displayPath === './CLAUDE.md' && channel.loadedContext.tools.some(tool => tool.name === 'docs › search'))
     check('channel: /mcp reads the report', await settled(() => channel.mcpStatus()[0] === t('backend-mcp-heading', { n: 2 })) && channel.mcpStatus().some(line => line.includes('needs-auth')))
     const auth = channel.backendAuth()
-    check('channel: /login gets the backend sign-in host (dsh-auth surface, anthropic)', auth?.provider === 'anthropic' && auth.oauth !== undefined)
-    check('channel: its status names the source', (await auth!.status()).some(line => line === t('claude-auth-source', { source: t('claude-auth-source-claude-login') })))
+    await auth!.login(async (oauth, provider) => { check('channel: /login gets the backend sign-in host (dsh-auth surface, anthropic)', provider === 'anthropic' && oauth !== undefined); return 'cancelled' })
+    check('channel: its status names the source', channel.rows.some(row => row.text === t('claude-auth-source', { source: t('claude-auth-source-claude-login') })))
 
     // ── headless render ──────────────────────────────────────────────
     const COLS = 110

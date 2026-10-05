@@ -5,7 +5,7 @@ import type { QuestionStore } from '../../channel/questions.js'
 import type { ChannelPickerRow } from '../../components/ChannelPicker.js'
 import { t } from '../../i18n.js'
 import type { ChatOverlayAction } from '../chatOverlay.js'
-import { backendLoginLines, channelMapLines } from './backendCommands.js'
+import { channelMapLines } from './backendCommands.js'
 
 export function useBackendChannels({ channel, host, questionStore, dispatchOverlay, onRestartFreshSession, runOAuthLogin }: {
   channel: ChannelUi
@@ -100,25 +100,11 @@ export function useBackendChannels({ channel, host, questionStore, dispatchOverl
   const login = (): boolean => {
     const auth = channel.backendAuth?.()
     if (auth === undefined) return false
-    const backend = channel.backendCapabilities?.backendLabel ?? ''
-    void auth.status()
-      .catch((error: unknown) => [t('capability-failed', { name: 'login', err: error instanceof Error ? error.message : String(error) })])
-      .then(async lines => {
-        channel.pushLocal('/login', backendLoginLines(backend, auth.oauth === undefined, lines))
-        if (auth.oauth === undefined || auth.provider === undefined) return
-        const outcome = await runOAuthLogin({
-          ask: (request, options) => questionStore.ask(request, options),
-          notify: (text, options) => channel.notify(text, options),
-          pushLocal: (title, rows) => channel.pushLocal(title, rows),
-        }, auth.oauth, auth.provider)
-        if (outcome !== 'added' && outcome !== 'signed-out') return
-        try {
-          await auth.reconnect()
-          channel.notify(t('login-backend-reconnected', { backend }), { color: 'success' })
-        } catch (error) {
-          channel.notify(t('login-backend-reconnect-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
-        }
-      }).catch(() => {})
+    void auth.login((oauth, provider) => runOAuthLogin({
+      ask: (request, options) => questionStore.ask(request, options),
+      notify: (text, options) => channel.notify(text, options),
+      pushLocal: (title, lines) => channel.pushLocal(title, lines),
+    }, oauth, provider)).catch(() => {})
     return true
   }
   return { rows, open, pick, setMode, login }
