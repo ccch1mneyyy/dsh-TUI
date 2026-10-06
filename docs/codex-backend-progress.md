@@ -242,3 +242,22 @@ goldens 变化：两张卡片标题从错误的引号剥离改为正确脚本（
   `verify-tool-live-output` 68、`verify-diff-patch` 49（render-scroll）、`verify-goal-budget` 39
   （channel-ui）。未做真实终端手动演练（无交互 TTY）；inline/fullscreen 与 80/40 列由无头
   Chat 场景覆盖。
+
+  Chat 场景覆盖。
+
+## 方案评审（交接前，HEAD `93457fb7` 之后）
+
+监督方按"原生体验第一、复用、低维护"复审了技术方案，修订已就地写进 `codex-backend-design.md`
+（标注 **评审修订**），未改代码。会影响后续实现的决定：
+
+| # | 决策 | 理由 |
+| --- | --- | --- |
+| DR-1 | **N8 取代 R-D1**：用量改走独立的只记账事件 `usage`（N8a），并让投影器把 `context.usage` 当作后端占用读数、优先于计费样本（N8b）。C2 第一项把 `assistant.message.usageOnly` 迁过去 | 领域事件是所有后端共用的契约；"一条不是消息的消息"迫使每个 `assistant.message` 消费者特判。三个翻译器都不发 `context.usage`，N8b 对 DSH/Claude 零影响 |
+| DR-2 | N9：可选 `init` 能力；`/init` 不做后端命令 | 本地 `/init` 名字优先，后端命令永远到不了；Claude 也能借此恢复 `/init` |
+| DR-3 | Shift+Tab 只切换 Plan（`cycle() = [当前权限档, 'plan']`），权限档走 `/permission` | 官方 `cycle_collaboration_mode` 语义；权限档与协作模式是两个正交维度 |
+| DR-4 | 上下文占用按官方公式：`last.totalTokens`，百分比扣 12000 基线 | 与官方 TUI 同时显示同一数字（`codex-rs/tui/src/token_usage.rs`） |
+| DR-5 | 默认设置优先级：dsh-tui prefs > 用户 `config.toml` > 内置默认（权限档 `auto`） | 不覆盖用户配置 |
+| DR-6 | hub 路由兜底：未知 thread 经 `thread/read` 查父链归到根会话，查询期间缓冲（含服务端请求） | 不依赖 `subAgentActivity` 先到；多层子代理 |
+| DR-7 | 事件流不变量检查器跑全部后端 fixture | 抓"幽灵回合"一类顺序缺陷 |
+| DR-8 | rewind 坚持 `thread/fork{lastTurnId}` | `beforeTurnId` 只在实验类型里（0.144.0/0.160.1 稳定类型都没有） |
+| DR-9 | 渠道 URL 校验；评估 `thread/start.config` 承载 provider | `-c` 参数在进程列表可见 |

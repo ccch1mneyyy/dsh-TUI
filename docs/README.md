@@ -34,6 +34,8 @@ The root README lists what ships; the details live here. Chinese files have no s
 | 会话挂载运行时 / Session mount runtime | [session-mount-runtime.md](session-mount-runtime.md) | [session-mount-runtime.en.md](session-mount-runtime.en.md) | 多 TUI 占用规则与本机账本。 |
 | 多后端架构 / Agent backends | [agent-backend-design.md](agent-backend-design.md) | — | 后端中立层、Claude 后端实现与接入新后端。 |
 | Codex 后端方案 / Codex backend design | [codex-backend-design.md](codex-backend-design.md) | — | Codex（app-server）原生后端的技术方案与分期实施手册。 |
+| Codex 后端交接 / Codex backend handoff | [codex-backend-handoff.md](codex-backend-handoff.md) | — | 当前进度、剩余工作、新机器准备与实测配置（接手者先读）。 |
+| Codex 后端施工日志 / Codex backend progress | [codex-backend-progress.md](codex-backend-progress.md) | — | 逐期记录：实测结论、决策、门禁结果与偏离。 |
 | 子代理转录页数据源 / DSH child transcript | [dsh-child-transcript.md](dsh-child-transcript.md) | — | DSH 子会话转录的读取契约与新后端接入清单。 |
 
 ## 插件 / Plugins
