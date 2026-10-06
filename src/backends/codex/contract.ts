@@ -27,8 +27,14 @@ export function codexResumeCommand(threadId: string): string {
 /** The `codex-cli` versions the backend is validated against. */
 export const VALIDATED_CODEX_VERSIONS: readonly string[] = ['0.160.1']
 
-/** The oldest `codex-cli` the backend starts on (C0 V16). */
-export const MIN_CODEX_VERSION = '0.160.0'
+/**
+ * The oldest `codex-cli` the backend starts on (C0 V16): 0.144.0's generated
+ * protocol carries every method, notification, server request and item type
+ * this backend uses, and its handshake / thread start / model list were
+ * observed working. Anything below the validated line still runs with a
+ * drift notice.
+ */
+export const MIN_CODEX_VERSION = '0.144.0'
 
 /** The `codex-cli` version `protocol/generated/` was generated from. */
 export const PROTOCOL_VERSION = '0.160.1'

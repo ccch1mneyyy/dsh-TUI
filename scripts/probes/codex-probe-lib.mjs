@@ -28,7 +28,22 @@ export { liveCodexHome, pinCheapOrExit, LIVE_MODELS, LIVE_EFFORT } from '../lib/
 export const CODEX = process.env.CODEX_EXECUTABLE || 'codex'
 const RECORD_DIR = process.env.CODEX_PROBE_RECORD_DIR || join(tmpdir(), 'codex-probe-recordings')
 
-const scrub = (text, home, cwd) => text.replaceAll(home, '/TMP/home').replaceAll(cwd, '/TMP/cwd').replace(/sk-[A-Za-z0-9_-]{8,}/gu, 'sk-***')
+/** Values a recording must never hold: the relay URL / host and the key. */
+const RELAY_SECRETS = (() => {
+  const values = [process.env.CODEX_TEST_BASE_URL, process.env.CODEX_TEST_API_KEY].filter(value => typeof value === 'string' && value !== '')
+  try {
+    values.push(new URL(process.env.CODEX_TEST_BASE_URL).host)
+  } catch {
+    // No (or no parsable) base URL: nothing more to hide.
+  }
+  return values
+})()
+
+const scrub = (text, home, cwd) => {
+  let out = text.replaceAll(home, '/TMP/home').replaceAll(cwd, '/TMP/cwd').replace(/sk-[A-Za-z0-9_-]{8,}/gu, 'sk-***')
+  for (const secret of RELAY_SECRETS) out = out.split(secret).join(secret.includes('://') ? 'https://relay.invalid/v1' : 'relay.invalid')
+  return out
+}
 
 /**
  * Start `codex app-server` on a probe home. `args` are extra app-server

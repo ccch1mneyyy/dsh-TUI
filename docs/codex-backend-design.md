@@ -237,11 +237,13 @@ export function spawnTransport(options: TransportOptions): Transport
 - 写入走队列，尊重 `write()` 返回值与 `drain`。
 - stderr 逐行交 `host.stderr`（宿主折叠为提示，绝不进终端）；已知噪声（bubblewrap 缺失、
   PATH aliases 警告）由 `diagnostics` 归纳为 `/doctor` 行，不弹提示。
-- `close()`：先 `stdin.end()`，2 s 未退出 `SIGTERM`，再 2 s `SIGKILL`。**C0 必须验证**
-  app-server 在 stdin EOF 时自行退出；若否，直接 `SIGTERM`。
-- 环境：从 `process.env` 复制，删除父级 Codex 会话导出的变量（**C0 必须验证**清单，至少检查
-  `CODEX_SANDBOX`、`CODEX_SANDBOX_NETWORK_DISABLED`、`CODEX_THREAD_ID` 一类在 Codex 终端里运行
-  dsh-tui 时会继承的变量），保留 `CODEX_HOME`；渠道与凭据注入见 §5.10/§5.11。
+- `close()`：先 `stdin.end()`，2 s 未退出 `SIGTERM`，再 2 s `SIGKILL`。**C0 已验证**（V1）：
+  stdin EOF 后约 70 ms 以 code 0 自行退出。
+- 环境：从 `process.env` 复制，删除父级 Codex 会话导出的变量，保留 `CODEX_HOME`；渠道与凭据注入见
+  §5.10/§5.11。**C0 已验证**（V2）清单：`CODEX_THREAD_ID`、`CODEX_SESSION_ID`、`CODEX_VERSION`、
+  `CODEX_CI`、`CODEX_SANDBOX`、`CODEX_SANDBOX_NETWORK_DISABLED`、`CODEX_PERMISSION_PROFILE`、
+  `CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS`、`CODEX_INTERNAL_ORIGINATOR_OVERRIDE`、
+  `CODEX_MANAGED_BY_*`、`CODEX_MANAGED_PACKAGE_ROOT` 与前缀 `CODEX_NETWORK_PROXY_`。
 
 ### 5.2 `rpc/client.ts`
 
@@ -314,8 +316,8 @@ export function acquireCodexHub(host: BackendHost, settings: HubSettings): Codex
   `codex.exe`，用与 Claude `process.ts` 相同的可执行性检查）→ 都没有则未安装。
 - 版本：`codex --version` → `codex-cli X.Y.Z`；不在 `VALIDATED_CODEX_VERSIONS` 范围内 →
   `drift`（只提示不阻断）。范围策略：同一 minor 线上 ≥ 验证版本视为兼容（0.160.x），跨 minor
-  提示 drift；最低支持版本 `MIN_CODEX_VERSION`（C0 定，至少要有 `thread/turns/list`、
-  `thread/revert`、`collaborationMode`；低于它 `installed:false` 并给升级提示）。
+  提示 drift；最低支持版本 `MIN_CODEX_VERSION`（**C0 已验证**，V16：`0.144.0`——其生成协议覆盖
+  本后端用到的全部名字，`thread/revert` 本后端不用；低于它 `installed:false` 并给升级提示）。
 - `detect()` 返回 `BackendDetection`：
   - `installed` / `version` / `drift` / `hint`（未安装时：`npm i -g @openai/codex` 或
     `brew install codex`）。
@@ -350,9 +352,9 @@ export const codexBackend: AgentBackend = {
 4. 用响应里的设置快照建 `CodexSession`（§5.6），`hub.attach(threadId, session.sink)`。
 5. `session.ready` 事件由会话在 `subscribe` 之前排队：`session.ready{sessionId, cwd, model, provider, title, permissionMode, effort, contextWindow?, backendVersion}`。
 
-**C0 必须验证**：`thread/start` 不传 `serviceName`/`threadSource` 时 thread 的 `source` 是
-`vscode`（F18）。确认 `codex resume` 选择器是否列出 `source:"vscode"` 的 thread；若不列，
-找出能让它列出的参数（`sessionStartSource`/`threadSource`/clientInfo.name），写进 open。
+**C0 已验证**（V3）：`thread/start` 带不带 `serviceName` 都是 `source:"vscode"`；官方
+`codex resume` 选择器默认 `sourceKinds:[cli, vscode]`，并按用户的默认 provider 与 cwd 过滤，所以
+dsh-tui 建的 thread 会被列出（provider 不同时需在选择器里切"全部 provider"）。open 不需要额外参数。
 
 ### 5.6 `session/session.ts` 与 `state.ts`：`CodexSession`
 
@@ -410,10 +412,10 @@ interface CodexSessionState {
 - `user`：客户端队列保留（回合结束后继续发）→ 回执 `{stillQueued: 队列 id, outcome:'confirmed'}`。
 - `interrupt`：清空客户端队列，被丢弃的作为 dock（channel 处理）→ 回执
   `{stillQueued: [], outcome:'confirmed'}`（队列在本进程，确定）。
-  例外：已经 `turn/steer` 发出、但中断前还没被采纳（没出现对应 `userMessage`）的输入，Codex
-  在中断后是否保留它未经验证（V6）。只要存在这样的输入，回执改为
-  `{stillQueued: 这些 id, outcome:'unknown'}`——channel 的保守路径（不把它们当作已撤回）。
-  V6 证实"中断即丢弃"后，改为 `confirmed` 且不含这些 id。
+  **C0 已验证**（V6）：已经 `turn/steer` 发出、但中断前还没被采纳（没出现对应 `userMessage`）的
+  输入被 Codex 丢弃（不进历史、中断后不自动开回合）。所以回执始终 `confirmed`、不含这些 id；
+  `user` 取消时会话把它们按原顺序重新排进客户端 followup 队列（"排队的输入下回合照跑"），
+  `stillQueued` 同时列出它们。
 - `switch`/`dispose`：中断并撤回挂起请求，不再发队列。
 - 中断后的 `turn/completed{interrupted}`：所有 `openItems` 以 interrupted 收尾（§7.4）。
 
@@ -423,10 +425,10 @@ interface CodexSessionState {
 
 | 服务端请求 | 视图 | 选项（`PermissionOptionView`） |
 | --- | --- | --- |
-| `item/commandExecution/requestApproval` | `permission.request{requestId:'codex:'+id, toolName:'shell', callId:itemId, command:<解包命令>, reason, displayName:t('tool-name-bash'), feedback:true, defaultToNo:false}` | `allow-once`(accept) · 若有 `proposedExecpolicyAmendment`：`allow-always` id=`execpolicy` label=`t('codex-approve-prefix',{prefix})`(acceptWithExecpolicyAmendment) · `allow-always` id=`session` label=`t('codex-approve-session-command')`(acceptForSession) · 若有 `proposedNetworkPolicyAmendments`：每条一个 `allow-always` id=`net:<i>`(applyNetworkPolicyAmendment) · `reject`(decline / 带理由时 cancel，D10) |
+| `item/commandExecution/requestApproval` | `permission.request{requestId:'codex:'+id, toolName:'shell', callId:itemId, command:<解包命令>, reason, displayName:t('tool-name-bash'), feedback:true, defaultToNo:false}` | **按服务端的 `availableDecisions` 生成**（C0 已验证：服务端常不提供 decline/acceptForSession；缺省集同官方 TUI：accept、有 amendment 时 execpolicy、cancel）：`accept`→`allow-once` · `acceptWithExecpolicyAmendment`→`allow-always` id=`execpolicy` label=`t('codex-approve-prefix',{prefix})`（prefix 含换行则不提供，同官方）· `acceptForSession`→`allow-always` id=`session` label=`t('codex-approve-session-command')` · `applyNetworkPolicyAmendment`→每条一个 `allow-always` id=`net:<i>` · `decline`/`cancel`→一个 `reject`（无理由：有 decline 用 decline，否则 cancel；带理由：cancel + followup，D10） |
 | `item/fileChange/requestApproval` | `permission.request{toolName:'apply_patch', callId:itemId, reason, blockedPath:grantRoot?, displayName:t('tool-name-edit'), feedback:true}` | `allow-once`(accept) · `allow-always` id=`session` label=`t('codex-approve-session-files')`(acceptForSession) · `reject` |
 | `item/permissions/requestApproval` | `permission.request{toolName:'permissions', description:<RequestPermissionProfile 摘要>, reason}` | `allow-once` → `{permissions:<请求的全部>, scope:'turn'}` · `allow-always` id=`session` → `scope:'session'` · `reject` → `{permissions:{}, scope:'turn'}` |
-| `item/tool/requestUserInput` | `question.request{requestId, callId:itemId, questions: 每个 question 一项：header、question、options(label/description)、`hideCustomInput: !isOther`、`secret: isSecret`（N3）}` | 应答 `{answers:{<qid>:{answers:[选中 label…, 自定义文本?]}}}`；取消 → 以空 answers 应答？**C0 必须验证**取消语义（候选：`respondError` 或 `{answers:{}}`）；`autoResolutionMs` 非空时到点自动以首选项应答并 notice |
+| `item/tool/requestUserInput` | `question.request{requestId, callId:itemId, questions: 每个 question 一项：header、question、options(label/description)、`hideCustomInput: !isOther`、`secret: isSecret`（N3）}` | 应答 `{answers:{<qid>:{answers:[选中 label…, 自定义文本?]}}}`；取消（**C0 已验证**，V7：错误应答与 `{answers:{}}` 等价，官方 TUI 的 Esc 是中断回合）→ 应答 `{answers:{}}` 并 `turn/interrupt`；`autoResolutionMs` 非空时到点自动以首选项应答并 notice |
 | `mcpServer/elicitation/request` | 经中立的 `src/channel/elicitation.ts`（N2，从 Claude 迁来）转 `question.request` | 应答 `{action:'accept'\|'decline'\|'cancel', content, _meta:null}`；URL 模式 → 链接问题（与 Claude 一致） |
 | `account/chatgptAuthTokens/refresh` | 不进界面，hub 的 auth 处理（§5.10） | — |
 | `applyPatchApproval` / `execCommandApproval`（v1 遗留） | 不应出现（v2 客户端）；出现则 `respondError(-32601)` 并调试日志 | — |
@@ -451,7 +453,8 @@ interface CodexSessionState {
     不需要新的中立事件。实现前读核心对 `session.reset` 的处理与挂载账本，确认 ref 变化后账本键
     （`codex:<id>`）与"上次会话"标记随之更新（Claude 的 conversation reset 已走过这条路）。
 - 服务端请求 id 只在一条连接内唯一，hub 重启后会重复：视图 `requestId` 一律为
-  `codex:<hub 代数>:<id>`，应答前校验代数，旧代数的应答丢弃。
+  `codex:<hub 代数>:<id>`，应答前校验代数，旧代数的应答丢弃。**C0 已验证**（V5）：对运行中的
+  thread 再次 `thread/resume` 会以**同一 id** 重发挂起的请求——同代数同 id 视为重投，不弹第二个面板。
   - 留在 Plan / 自定义文本：自定义文本作为 followup（仍在 plan 模式）。
   - 该合成问题**不进历史**（与官方一致）；恢复会话不再弹。
 
@@ -459,9 +462,9 @@ interface CodexSessionState {
 
 | 能力 | 实现 |
 | --- | --- |
-| `models` | `list()`：`model/list{includeHidden:false}` 缓存（hub 级，`model/verification`/`account/updated` 时失效）→ `ModelOption{id, label:displayName, description}`；`current()`：设置快照；`set(ref)`：存 prefs，下一次 `turn/start` 携带 `model`；若空闲则立即 `thread/settings/update`（实验；不支持则仅下回合生效）；发 `model.changed{source:'user'}` |
+| `models` | `list()`：`model/list{includeHidden:false}` 缓存（hub 级，`model/verification`/`account/updated` 时失效）→ `ModelOption{id, label:displayName, description}`；`current()`：设置快照；`set(ref)`：存 prefs，下一次 `turn/start` 携带 `model`；若空闲则立即 `thread/settings/update`（**C0 已验证**，V11：空闲 thread 上改 model/effort/approval/sandbox 生效且持久化，发 `thread/settings/updated`）；发 `model.changed{source:'user'}` |
 | `effort` | `levels()`：当前模型的 `supportedReasoningEfforts`（id=`reasoningEffort`，label 本地化 `effort-<id>`，未知 id 用原文）；`set` 同上经 `turn/start.effort`；`null` = 用模型默认 |
-| `modes` | 列表（顺序即 Shift+Tab 循环）：`plan`（Plan 模式）、`read-only`（`approvalPolicy:'on-request'`, `sandbox:'read-only'`）、`auto`（`on-request` + `workspace-write`，**默认基础模式**）、`full-access`（`never` + `danger-full-access`）。`cycle()` 排除 `full-access`（只能显式选择，同 Claude bypass）。**C0 必须验证**官方 `/permissions` 预设的准确组合与名称（`codex-rs/tui` 的 approval presets），按官方对齐 label 与 description。`set(id)`：plan ↔ 其他是 `collaborationMode`；其余是 approval/sandbox；都经下一次 `turn/start` 覆盖 + prefs 持久化；发 `mode.changed` |
+| `modes` | 列表（顺序即 Shift+Tab 循环）：`plan`（Plan 模式）、`read-only`（`approvalPolicy:'on-request'`, `sandbox:'read-only'`）、`auto`（`on-request` + `workspace-write`，**默认基础模式**）、`full-access`（`never` + `danger-full-access`）。`cycle()` 排除 `full-access`（只能显式选择，同 Claude bypass）。**C0 已验证**（V8，`utils/approval-presets`）：官方三档 `read-only`「Read Only」、`auto`「Default」、`full-access`「Full Access」与上面的组合一致（profile 名 `:read-only`/`:workspace`/`:danger-full-access`），label/description 按官方对齐。`set(id)`：plan ↔ 其他是 `collaborationMode`；其余是 approval/sandbox；空闲时 `thread/settings/update`（V11 已验证），否则经下一次 `turn/start` 覆盖；prefs 持久化；发 `mode.changed` |
 | `compact` | `thread/compact/start`；进度来自 contextCompaction item |
 | `context` | `usage('summary')`：最近一次 `thread/tokenUsage/updated` 的 `last.inputTokens`（+`last.outputTokens`）对 `modelContextWindow`；`full` 同 summary（Codex 不提供分类明细，categories 为空） |
 | `account` | `account/read` → `{provider: 'openai'\|'relay:<id>'\|providerId, subscription: planType, tokenSource: 'dsh-auth'\|'codex-login'\|'api-key'\|'channel'}`（不含邮箱） |
@@ -512,10 +515,15 @@ interface CodexSessionState {
   未设置或为官方主机（`api.openai.com` / `chatgpt.com`，https）；
 - 没有激活渠道；`OPENAI_BASE_URL` 环境变量未设置或为官方主机。
 
-任一条件不满足或 `config/read` 失败 → 不注入（fail closed），环境原样透传。**C0 必须验证**
-`config/read` 返回中这些键的确切路径（`config.model_provider`、`config.model_providers`、
-`config.chatgpt_base_url`…），以及 chatgptAuthTokens 对自定义 provider 是否本来就被忽略
-（若 app-server 已只在 OpenAI provider 上使用外部令牌，路由判定仍保留作为纵深防御）。
+任一条件不满足或 `config/read` 失败 → 不注入（fail closed），环境原样透传。**C0 已验证**（V9）：
+键路径为 `config.model_provider`、`config.model_providers.<id>.{base_url,env_key,wire_api,requires_openai_auth}`、
+`config.openai_base_url`、`config.chatgpt_base_url`；自定义 provider 下外部令牌登录被接受但不生效
+（无账户、无刷新请求）——路由判定仍保留作为纵深防御。
+
+**C0 已验证**（V17）：`account/login/start{chatgptAuthTokens}` 不同步校验（约 30 ms 返回），但随即
+用令牌做工作区路由发现；令牌无效时服务端立即发 `account/chatgptAuthTokens/refresh{reason:'unauthorized'}`
+并发 `account/login/completed{success:false, error}`，不写 `auth.json`。以 `login/completed{success:false}`
+判定失败并降级（只停止注入，不调 `account/logout`——那会动用户自己的登录）。
 
 **`auth` 能力**：`oauthProvider:'openai-codex'`；`status()` 行：凭据来源（渠道名 / dsh-auth
 ChatGPT 订阅 + planType / Codex 自己的登录 / API key / 未登录）、provider 主机名；
@@ -545,10 +553,8 @@ Codex 渠道 = 一个 OpenAI 兼容的 Responses API 端点（中转站）。存
 - 令牌存 DSH 凭据库（`src/backends/shared/channel-tokens.ts`，D15），文件只存 `tokenRef`。
 - 启动覆盖：`-c model_provider="dshtui-<id>"`、`-c model_providers.dshtui-<id>.name="<name>"`、
   `.base_url="<baseUrl>"`、`.env_key="DSH_TUI_CODEX_CHANNEL_TOKEN"`、`.wire_api="<wireApi>"`；
-  令牌只放进子进程环境变量 `DSH_TUI_CODEX_CHANNEL_TOKEN`。**C0 必须验证** `-c` 对
-  `model_providers.<新 id>` 表的整表注入可用（实测 config.toml 方式已通，`-c` 方式待验证；不行
-  则退路：为该 hub 生成临时 `CODEX_HOME` 覆盖层是不可接受的（破坏会话互通），只能要求用户在
-  config.toml 自行配置 provider，渠道界面降级为"只读显示 config 里的 provider"）。
+  令牌只放进子进程环境变量 `DSH_TUI_CODEX_CHANNEL_TOKEN`。**C0 已验证**（V10）：`-c` 对
+  `model_providers.<新 id>` 表的整表注入可用（`config/read` 可见，真实回合经该 provider 跑通）。
 - `ChannelProfileView`：`models` 显示 exact 映射，`tiers` 为空；`connection{baseUrl, hasToken, envKeys, fingerprint}`。
 - `importFromSettings()`：从 `config/read` 的 `model_providers` 里找出当前 `model_provider`
   的 `base_url`/`env_key`，令牌从对应环境变量读（存在才导入）。`peekSettingsImport()` 同源。
@@ -557,14 +563,14 @@ Codex 渠道 = 一个 OpenAI 兼容的 Responses API 端点（中转站）。存
 ### 5.12 历史、目录与生命周期（`session/history.ts`、`catalog.ts`）
 
 **`history()`**（回放种子，在 `subscribe` 前由 channel 调用并同步画出）：
-1. `thread/resume{excludeTurns:true}` 已在 open 时完成；其响应带 `initialTurnsPage`/
-   `turnsBackwardsCursor`（F19）。**C0 必须验证** `initialTurnsPage` 的 `itemsView` 是否 full；
-   若不是，丢弃它，改为 `thread/turns/list{sortDirection:'desc', limit:20, itemsView:'full'}`。
+1. `thread/resume{excludeTurns:true, initialTurnsPage:{limit:20, sortDirection:'desc', itemsView:'full'}}`
+   已在 open 时完成；其响应带 `initialTurnsPage`/`turnsBackwardsCursor`（F19）。**C0 已验证**（V4）：
+   `initialTurnsPage` 接受 `itemsView`，缺省 `summary` 会省略工具 item，带 `'full'` 返回全量——一次请求即可。
 2. 取最近一页（默认 20 个回合）→ 反转为旧→新 → `translate/replay.ts` → `AgentEvent[]`。
 3. 记下 backwards cursor 供"加载更早消息"。
 4. 正在进行的回合（resume 时 thread `status.active`）：回放到最后，然后 live 接续；进行中的
-   item 没有 completed 也照常显示（live 的 `item/*` 会补齐）。**C0 必须验证** resume 一个进行中
-   thread 时挂起的审批是否会重发服务端请求。
+   item 没有 completed 也照常显示（live 的 `item/*` 会补齐）。**C0 已验证**（V5）：rejoin 运行中的
+   thread 会以同一 id 重发挂起的服务端请求（§5.8 去重）。
 
 **`transcript` 能力**（"加载更早消息"，契约是同步有界）：
 - 调用方（已核对）：`core/compose.ts` 的 `transcriptLoadOlder()` 同步调用
@@ -606,8 +612,11 @@ Codex 渠道 = 一个 OpenAI 兼容的 Responses API 端点（中转站）。存
 - `/clear`：只清视图（核心已实现）。
 
 **挂载账本**：`codex:<threadId>`（核心按 `formatSessionRef` 自动处理）。同一 thread 被官方
-`codex` 同时打开时，Codex 自己的 `thread-writer-locks` 负责（**C0 必须验证**冲突时的报错形状，
-映射为本地化错误）。
+`codex` 同时打开时，Codex 自己的 `thread-writer-locks` 负责。**C0 已验证**（V15）：另一进程已加载该
+thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an active writer`，映射为
+本地化错误。
+
+**C0 观察**：`thread/fork` 有 `beforeTurnId`（排除该回合及之后），rewind 可直接用它而不必先找"上一个回合"。
 
 ### 5.13 子代理（`session/subagents.ts`）
 
@@ -637,7 +646,9 @@ Codex 渠道 = 一个 OpenAI 兼容的 Responses API 端点（中转站）。存
   `command/exec/outputDelta`/`process/outputDelta` 若带对应 processId → `task.output`；
   `process/exited` → `task.end`。`tasks.stop(id)` → terminate；`readOutput` 用会话内缓存的尾部
   （最后 64 KiB）。
-- **C0 必须验证**：后台终端在 0.160.1 的触发方式与通知（若默认不产生后台终端，本节降为 C4 可选）。
+- **C0 已验证**（V14，源码）：后台终端 = unified exec 中超过 yield 仍存活的进程（由模型决定，上限 64），
+  跨回合存活直到退出或 terminate/clean；回合结束后**没有**生命周期通知，只能轮询
+  `thread/backgroundTerminals/list`。本节降为 C4 可选（不声明 `tasks`，除非 C4 评估轮询方案）。
 
 ### 5.15 目标（`session/goals.ts`）
 
@@ -662,8 +673,8 @@ Codex 渠道 = 一个 OpenAI 兼容的 Responses API 端点（中转站）。存
 - 与本地命令重名时本地优先（核心已如此）。
 - `/btw`（`sideQuery`）：`thread/fork{threadId, ephemeral:true}` → `turn/start{input, approvalPolicy:'never', sandboxPolicy: read-only, developerInstructions 附加"只回答，不使用工具"}` →
   收集 agentMessage delta 为 `onText` → 完成后 `thread/unsubscribe`；`signal` 中断 →
-  `turn/interrupt`。**C0 必须验证** ephemeral fork 不出现在 `thread/list`、不落盘；不满足则
-  `/btw` 不声明。`/recap` 同路径（固定提示词）。
+  `turn/interrupt`。**C0 已验证**（V12）：ephemeral fork（`path:null`）带原上下文可跑回合，不出现在
+  `thread/list`、不写 rollout 文件。`/recap` 同路径（固定提示词）。
 - hooks：`hook/started`/`hook/completed` → info notice（`key: hook:<run.id>`，完成时替换为
   "hook <eventName> 完成/失败（耗时）"）；`hookPrompt` item → `user.message{source:'injected', label:'hook'}`。
 
@@ -676,8 +687,9 @@ Codex 渠道 = 一个 OpenAI 兼容的 Responses API 端点（中转站）。存
   文件会被删除，data URL 随 thread 持久化，回放可还原。
 - 回放：`userMessage.content` 里的 `image{url:data:…}` → ImageRef facade（惰性解码，同 Claude
   `images.ts` 的 facade 模式）；`localImage{path}` → 路径 facade（文件不存在时显示占位）。
-- `imageView` item → 工具结果带路径图片；`imageGeneration` item → 助手图片（**C0 必须验证**
-  `ImageGenerationItem` 字段：保存路径或 base64）。
+- `imageView` item → 工具结果带路径图片；`imageGeneration` item → 助手图片（**C0 已验证**，V13
+  类型：`status`、`revisedPrompt`、`result`（图片数据）、`savedPath?`、`failure`；有 `savedPath` 用路径
+  facade，否则用 `result`）。
 
 ### 5.18 偏好（`prefs.ts`）
 
@@ -775,7 +787,7 @@ Codex 渠道 = 一个 OpenAI 兼容的 Responses API 端点（中转站）。存
 | `dynamicToolCall` | 同 mcp（`namespace.tool`） | `contentItems` → content |
 | `webSearch` | `tool.call{name:'web_search', presentation:{card:'generic', title: query, displayKey:'tool-name-web_search'}}` | `tool.result{text: action 摘要}` |
 | `imageView` | `tool.call{name:'view_image', presentation:{card:'generic', title: displayPath(path)}}` | `tool.result{images:[路径 facade]}` |
-| `imageGeneration` | `tool.call{name:'image_generation'}` | `tool.result{images:[…]}`（字段 C0 验证） |
+| `imageGeneration` | `tool.call{name:'image_generation'}` | `tool.result{images:[savedPath 优先，否则 result]}`（字段 C0 已验证，V13） |
 | `sleep` | `tool.call{name:'sleep', generic}` | `tool.result` |
 | `collabAgentToolCall` | `tool.call{presentation:{card:'subagent'}}`（抑制卡片） | `tool.result`（抑制） |
 | `subAgentActivity` | §5.13 | — |
@@ -860,7 +872,7 @@ Codex 渠道 = 一个 OpenAI 兼容的 Responses API 端点（中转站）。存
 ### 8.2 文件改动（`fileChange`）
 
 - 一个 item 一张 diff 卡，含全部 `changes`：`add` → `{oldText:null, newText:diff}`（F14 原文）；
-  `delete` → `{oldText: diff, newText:''}`（**C0 验证** delete 的 diff 是否为原文）；`update` →
+  `delete` → `{oldText: diff, newText:''}`（**C0 已验证**，V13：delete 的 diff 是被删文件原文）；`update` →
   N5 `{patch: diff, change:'update', movePath}`。
 - 标题：单文件 `编辑 <path>`/`新建 <path>`/`删除 <path>`；多文件 `编辑 N 个文件`，每个文件小标题带
   `(+a -b)`（与官方 "Edited 2 files (+6 -1)" 对等）。路径相对会话 cwd（复用 `displayPath`）。
@@ -929,9 +941,9 @@ Codex 渠道 = 一个 OpenAI 兼容的 Responses API 端点（中转站）。存
 - **未知 item/通知/服务端请求**：§5.2/§7.4 处理；`/doctor` 显示本会话忽略的未知类型计数。
 - **版本**：低于 `MIN_CODEX_VERSION` → `installed:false` + 升级提示；高于验证线 → drift 提示，照常运行。
 - **并发**：两个 dsh-tui 驱动同一 thread 由挂载账本阻止；官方 `codex` 同时打开同一 thread 时以
-  Codex 的写锁为准（错误映射 C0 验证）。
+  Codex 的写锁为准（错误映射 C0 已验证，V15：`-32600 … already has an active writer`）。
 - **cwd**：thread 的 `cwd` 来自 Codex；resume 时与当前目录不同 → 沿用 thread 的 cwd 并 notice
-  （与官方一致；**C0 验证** `thread/resume{cwd}` 覆盖行为后决定是否提供"在当前目录继续"）。
+  （与官方一致；**C0 已验证**：`thread/resume{cwd}` 覆盖生效，C3 可提供"在当前目录继续"）。
 - **Windows**：`codex.cmd` 经 `cmd.exe /d /s /c` 启动（复用 Claude `process.ts` 的解析逻辑，若该
   逻辑在 Claude 目录内，按 N1 移到 shared）；路径大小写不敏感比较；不处理 Windows 沙箱安装。
 - **渲染安静**：任何诊断只走 `logForDebugging`/`DSH_TUI_DEBUG`，绝不写 stdout。
@@ -1082,6 +1094,9 @@ CI 渲染回归全绿；手动（有终端时）inline/fullscreen/窄宽各走�
 ## 12. C0 必须验证清单与风险
 
 ### 12.1 验证清单（每项：探针 → 结论 → 若不成立的退路）
+
+**C0 已验证**：全部 17 项的结论、证据与处理见 [codex-backend-progress.md](codex-backend-progress.md)
+的 C0 条目（探针 `scripts/probes/codex-c0-verify.mjs`）；对应段落已就地修订并标注。
 
 | # | 待验证 | 退路 |
 | --- | --- | --- |
