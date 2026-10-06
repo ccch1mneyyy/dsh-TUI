@@ -117,7 +117,7 @@ const stripAnsi = text => text
   .replace(/\r/g, '')
 
 /** 轮换池的期望顺序（"按天轮换"的取模顺序；顺序变了就是用户可见的变化）。 */
-const IDS = ['bold', 'square', 'bevel', 'wide', 'dot', 'stencil', 'classic', 'slab']
+const IDS = ['bold', 'square', 'bevel', 'wide', 'dot', 'stencil', 'classic', 'slab', 'shadow']
 const ACCENT = { r: 63, g: 108, b: 196 }
 const PALE = { r: 211, g: 225, b: 254 }
 
@@ -158,7 +158,7 @@ async function renderHeader({ columns = 120, fontId, ready }) {
 }
 
 // ── ① 取值解析 ────────────────────────────────────────────────────────────
-check('轮换池就是端口声明的 8 款，顺序稳定', () => {
+check('轮换池就是端口声明的 9 款，顺序稳定', () => {
   assert.deepEqual(fonts.SPLASH_FONTS.map(font => font.id), IDS)
   assert.equal(new Set(IDS).size, IDS.length)
 })
