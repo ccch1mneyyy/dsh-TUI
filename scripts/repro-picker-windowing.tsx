@@ -418,9 +418,24 @@ const typeKeys = async (s: string, stepMs = 40) => {
     lines.some(line => /^\s*[❯↑↓]?\s*pink-day\s+██/u.test(line)) && nameRow !== -1)
   // 内置项的描述打印的是它占据的 base 角色（BUILT_IN_BASE），不是主题名：
   // pink-night 是 dark 角色、pink-day 是 light 角色（六轮审查 P3）。
-  check('/theme 内置项描述打印 base 角色而非主题名',
-    lines.some(l => l.includes('内置 · dark 基底')) && !lines.some(l => /pink-[a-z]+ 基底/u.test(l)),
-    lines.filter(l => l.includes('基底')).map(l => l.trim()).join(' | ').slice(0, 120) || '未找到描述行')
+  // 读「标签行的下一行」逐项配对——只断言「存在某行写着 dark 基底」会被经典
+  // dark 那一行满足，樱族哪一套映射错了都照样绿；逐项配对才钉得住映射本身
+  //（十二轮审查：原写法会假通过）。
+  const baseDescOf = (name: string): string | undefined => {
+    const row = lines.findIndex(l => new RegExp(`^\\s*[❯↑↓]?\\s*${name}\\s+██`, 'u').test(l))
+    return row === -1 ? undefined : lines[row + 1]
+  }
+  const PINK_BASES: ReadonlyArray<readonly [string, string]> = [
+    ['pink-night', 'dark'],
+    ['pink-ansi', 'dark-ansi'],
+    ['pink-day', 'light'],
+  ]
+  // 樱族三套都在这扇窗里（nltheme 排在它们之后紧随），任一没入窗同样判失败。
+  check('/theme 樱族每套的描述行打印自己借用的 base 角色',
+    PINK_BASES.every(([name, base]) => (baseDescOf(name) ?? '').includes(`内置 · ${base} 基底`))
+      && !lines.some(l => /pink-[a-z]+ 基底/u.test(l)),
+    PINK_BASES.map(([name, base]) =>
+      `${name}→${(baseDescOf(name) ?? '未在窗内').trim().slice(0, 14)}（期望 ${base}）`).join(' | ').slice(0, 160))
   dump('theme newline displayName')
   stdin.write('\x1b')
   await sleep(400) // 固定窗:pacing 浮层关闭过渡，无文本可观测
