@@ -29,7 +29,6 @@ import {
   wrapDecoratedLine,
   type HangInfo,
 } from './text-decoration.js'
-import { stringWidth } from './stringWidth.js'
 import { isXtermJs } from './terminal.js'
 import { terminalImageSourceFromAttributes } from './terminal-image.js'
 import type { TerminalImagePlacement } from './terminal-image.js'
@@ -831,7 +830,7 @@ function paintDecoratedTextNode(
   const needsWrapping = wraps && rawLines.some(raw => lineWidth(raw) > budget)
 
   let styled: string
-  let softWrap: boolean[] | undefined
+  let softWrap: SoftWrapFlag[] | undefined
   if (needsWrapping) {
     const wrap = (t: string, w: number): string => wrapText(t, w, textWrap)
     const w = wrapWithSoftWrap(plainText, maxWidth, textWrap, line =>
@@ -857,6 +856,7 @@ function paintDecoratedTextNode(
         charToSegment,
         plainText,
         textWrap === 'wrap-trim',
+        w.softWrap,
       )
     }
   } else {
@@ -875,7 +875,7 @@ function paintDecoratedTextNode(
   styled = applyPaddingToText(node, styled, softWrap)
 
   const rows = styled.split('\n')
-  const flags: boolean[] = softWrap ?? new Array<boolean>(rows.length).fill(false)
+  const flags: SoftWrapFlag[] = softWrap ?? new Array<SoftWrapFlag>(rows.length).fill(false)
   const noSelectRuns: TextNoSelectRun[] = []
   // Rows applyPaddingToText put above the content.
   const paddingRows = rows.length - contentRows
@@ -919,7 +919,7 @@ function paintDecoratedTextNode(
       runWidth = 0
     }
     for (let r = headerOffset; r < rows.length; r++) {
-      if (flags[r] !== true) {
+      if (!flags[r]) {
         closeRun(r)
         lineStart = r
         lineHang = undefined

@@ -65,9 +65,9 @@ function select(screen: Screen, fromCol: number, fromRow: number, toCol: number,
   assert.equal(select(screen, 8, 0, 2, 1), 'PR.', 'starting in padding copies only the next row')
 }
 
-// Multi-segment text: styles stay on their own characters past the gap.
-{
-  const { screen } = renderToScreen(<Text>aaa the <Text bold>PR.</Text> x</Text>, 7)
+// Multi-segment text, including typed decoration: styles stay aligned past the gap.
+for (const decoration of [undefined, { hang: true }]) {
+  const { screen } = renderToScreen(<Text decoration={decoration}>aaa the <Text bold>PR.</Text> x</Text>, 7)
   assert.deepEqual(rows(screen, 7), ['aaa the', 'PR. x'])
   const style = (x: number, y: number) => cellAt(screen, x, y)!.styleId
   assert.equal(style(0, 1), style(2, 1), 'the whole bold segment shares one style')
