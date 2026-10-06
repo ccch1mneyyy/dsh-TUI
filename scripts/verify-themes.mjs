@@ -46,6 +46,7 @@ const {
   getAutoThemeBase,
   isLightThemeActive,
   cursorGlyphColor,
+  AUTO_THEME_NAME,
   THEME_NAMES,
 } = await import('../src/theme.js')
 // The chrome keys (context-bar fills, ignition pair, caret) are consumed by two
@@ -621,7 +622,7 @@ check('warnings: each failure mode warns once with a distinct message', () => {
 })
 
 // --- built-in roles --------------------------------------------------------
-// 内置名 → 它扮演的 base 角色（选择器描述行直接渲染这个值）。樱族三套与品牌双
+// 内置名 → 它扮演的 base 角色（选择器描述行直接渲染这个值）。樱族三套与两组品牌
 // 主题都借用经典角色，映射错了就是用户可见的错误描述；这里在数据层逐个钉住，
 // 界面层的逐行断言在 scripts/repro-picker-windowing.tsx（那边还会受窗口影响）。
 const { listThemeCatalog } = await import('../src/themeCatalog.js')
@@ -642,8 +643,59 @@ check('catalog: every built-in reports the base role it borrows', () => {
       'pink-day': 'light',
       'claude-dark': 'dark',
       'claude-paper': 'light',
+      'codex-lavender': 'dark',
+      'codex-paper': 'light',
     },
   )
+})
+
+// --- brand theme placement -------------------------------------------------
+// 品牌把解析档换成品牌双主题（ThemeProvider 的 renderedTheme）——同一个落位判据
+// 被「启动时读到的持久化偏好」和「运行中切档」共用。判据必须是色板明暗而不是主题
+// 名字面量：只认 `'light'` 时，持久化选了 `pink-day`（浅底）的用户在品牌后端下会
+// 看到深色版。每个带主题的品牌档都把全部内置名逐个钉住，将来加内置主题却忘了给它
+// 定档就会红。
+const { BRAND_THEMES, brandThemeFor } = await import('../src/branding.js')
+const brandPairOf = {
+  light: 'light',
+  'pink-day': 'light',
+  'claude-paper': 'light',
+  'codex-paper': 'light',
+  dark: 'dark',
+  'dark-ansi': 'dark',
+  'pink-night': 'dark',
+  'pink-ansi': 'dark',
+  'claude-dark': 'dark',
+  'codex-lavender': 'dark',
+}
+for (const brand of ['claude', 'codex']) {
+  check(`brand: ${brand} places a theme by its resolved palette, not its name`, () => {
+    assert.deepEqual(
+      Object.fromEntries(THEME_NAMES.map(name => [name, brandThemeFor(brand, name)])),
+      Object.fromEntries(THEME_NAMES.map(name => [name, BRAND_THEMES[brand][brandPairOf[name]]])),
+    )
+  })
+}
+
+check('brand: deepseek has no brand theme pair to place', () => {
+  assert.equal(brandThemeFor('deepseek', 'dark'), undefined)
+  assert.equal(brandThemeFor('deepseek', 'pink-day'), undefined)
+})
+
+check('brand: a brand pair follows the base auto currently resolves to', () => {
+  const previous = getAutoThemeBase()
+  try {
+    setAutoThemeBase('light')
+    for (const brand of ['claude', 'codex']) {
+      assert.equal(brandThemeFor(brand, AUTO_THEME_NAME), BRAND_THEMES[brand].light)
+    }
+    setAutoThemeBase('dark')
+    for (const brand of ['claude', 'codex']) {
+      assert.equal(brandThemeFor(brand, AUTO_THEME_NAME), BRAND_THEMES[brand].dark)
+    }
+  } finally {
+    setAutoThemeBase(previous)
+  }
 })
 
 console.warn = originalWarn
