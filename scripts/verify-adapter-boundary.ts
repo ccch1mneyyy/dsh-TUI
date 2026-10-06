@@ -24,9 +24,14 @@
  *                                  fails, and so does a listed one that no
  *                                  longer exists, so the list only shrinks
  *   src/backends/<x>/**            no src/backends/<y>/** (each backend is an
- *                                  island: shared code belongs in src/agent/
- *                                  or src/channel/)
+ *                                  island); src/backends/shared/** is the
+ *                                  one exception every backend may import
+ *   src/backends/shared/**         backend-neutral helpers (D15 of
+ *                                  docs/codex-backend-design.md): no scoped
+ *                                  (vendor) package, no concrete backend
+ *                                  directory, no src/dsh-adapter/**
  *   native.dsh    only inside src/dsh-adapter/**
+ *   native.codex  only inside src/backends/codex/**
  *
  * Plain fs + regex scan, no TypeScript program: it runs inside `verify:build`
  * on every build and must not depend on the compiled tree. Only real module
@@ -71,18 +76,23 @@ const LAYER_RULES: readonly { readonly dir: string; readonly forbidden: readonly
 ]
 
 const UI_DIRS = ['screens/', 'components/', 'hooks/', 'ink/']
+/** Backend-neutral helpers every backend may import (D15). */
+const SHARED_BACKEND_DIR = 'backends/shared/'
+/** Any scoped package: vendor SDKs and host frameworks alike. */
+const SCOPED_PACKAGE = /^@[^/]+\//u
 // channel/input-delivery.ts stays outside core because it builds DSH user
 // messages and ids for every backend through createUserMessage.
 const CORE_DIR = 'dsh-adapter/channel/core/'
 
 const NATIVE_RULES: readonly { readonly key: string; readonly allowedIn: string }[] = [
   { key: 'dsh', allowedIn: 'dsh-adapter/' },
+  { key: 'codex', allowedIn: 'backends/codex/' },
 ]
 
 const NATIVE_PATTERNS = [
-  /\bnative\s*\??\.\s*(dsh|claude|acp)\b/gu,
-  /\bnative\s*(?:\?\.)?\s*\[\s*['"](dsh|claude|acp)['"]\s*\]/gu,
-  /\{[^{}]*?\b(dsh|claude|acp)\b[^{}]*\}\s*=\s*[\w$.?!]*\bnative\b/gu,
+  /\bnative\s*\??\.\s*(dsh|claude|codex|acp)\b/gu,
+  /\bnative\s*(?:\?\.)?\s*\[\s*['"](dsh|claude|codex|acp)['"]\s*\]/gu,
+  /\{[^{}]*?\b(dsh|claude|codex|acp)\b[^{}]*\}\s*=\s*[\w$.?!]*\bnative\b/gu,
 ]
 
 interface ImportRef {
@@ -212,15 +222,21 @@ for (const file of files) {
         violations.push(`${where} imports ${rule.label} ('${ref.specifier}'); allowed only in ${rule.allowedIn.map(dir => `src/${dir}`).join(', ')}`)
       }
     }
+    if (under(path, SHARED_BACKEND_DIR) && SCOPED_PACKAGE.test(ref.specifier)) {
+      violations.push(`${where} imports '${ref.specifier}'; src/${SHARED_BACKEND_DIR} must stay backend-neutral (no scoped vendor package)`)
+    }
     const target = resolveInternal(file, ref.specifier)
     if (target === undefined) continue
+    if (under(path, SHARED_BACKEND_DIR) && (under(target, 'dsh-adapter/') || (under(target, 'backends/') && !under(target, SHARED_BACKEND_DIR)))) {
+      violations.push(`${where} imports src/${target}; src/${SHARED_BACKEND_DIR} must not depend on a concrete backend`)
+    }
     for (const layer of LAYER_RULES) {
       if (!under(path, layer.dir)) continue
       const hit = layer.forbidden.find(dir => under(target, dir))
       if (hit && layer.allow?.includes(`${path} -> ${target.replace(/\.js$/u, '.ts')}`) === true) continue
       if (hit) violations.push(`${where} imports src/${target}; src/${layer.dir} must not depend on src/${hit}`)
     }
-    if (under(path, 'backends/') && under(target, 'backends/')) {
+    if (under(path, 'backends/') && under(target, 'backends/') && !under(target, SHARED_BACKEND_DIR)) {
       const own = path.split('/')[1]
       const other = target.split('/')[1]
       if (own !== other) violations.push(`${where} imports src/${target}; src/backends/${own}/ must not depend on another backend (src/backends/${other}/)`)

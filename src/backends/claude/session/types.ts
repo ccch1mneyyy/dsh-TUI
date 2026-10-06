@@ -5,7 +5,7 @@ import type { StartPermissionMode } from '../options.js'
 import type { ClaudeExecutable } from '../process.js'
 import type { ClaudePrefs } from '../prefs.js'
 import type { ClaudeChannels } from '../channels.js'
-import type { ClaudeChannelTokens } from '../channelTokens.js'
+import type { ClaudeChannelTokens } from '../../shared/channel-tokens.js'
 import type { ClaudeReplay } from '../replay.js'
 import type { ClaudeSdkModule, ClaudeSessionStoreSdk } from '../sdk.js'
 import type { FlagSettingsFile } from '../flag-settings.js'
@@ -49,7 +49,7 @@ export interface ClaudeSessionDeps {
   readonly prefs?: ClaudePrefs
   /** The relay channel profiles (channels.json; the file store if absent). */
   readonly channels?: ClaudeChannels
-  /** The channel-token credential seam (channelTokens.ts; the file store
+  /** The channel-token credential seam (shared/channel-tokens.ts; the file store
    *  under the DSH home if absent). Token material only ever moves between
    *  this seam and the spawn pipeline's env. */
   readonly channelTokens?: ClaudeChannelTokens

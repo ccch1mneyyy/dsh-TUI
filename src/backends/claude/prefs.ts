@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from '../../utils/paths.js'
-import { writeFileAtomic } from './atomic-file.js'
+import { writeFileAtomic } from '../shared/atomic-file.js'
 
 /** The permission modes the persisted choice may hold (the SDK's whole
  *  vocabulary). A stored `bypassPermissions` is never started in; the next

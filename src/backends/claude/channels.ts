@@ -48,7 +48,7 @@ import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { channelProfileSlug } from '../../channel/channel-slug.js'
 import { DATA_DIR } from '../../utils/paths.js'
-import { writeFileAtomic } from './atomic-file.js'
+import { writeFileAtomic } from '../shared/atomic-file.js'
 
 /** One relay channel. */
 export interface ClaudeChannelProfile {

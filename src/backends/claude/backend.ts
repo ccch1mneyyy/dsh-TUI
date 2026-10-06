@@ -21,7 +21,7 @@ import { resolveStartPermissionMode, type StartPermissionMode } from './options.
 import { fileClaudePrefs, type ClaudePrefs } from './prefs.js'
 import { buildClaudeEnv, readClaudeVersion, resolveClaudeExecutable } from './process.js'
 import { activeProfileOf, fileClaudeChannels, hasChannelConnection, type ClaudeChannelProfile, type ClaudeChannels } from './channels.js'
-import { fileClaudeChannelTokens, type ClaudeChannelTokens } from './channelTokens.js'
+import { fileClaudeChannelTokens, type ClaudeChannelTokens } from '../shared/channel-tokens.js'
 import { replayClaudeTranscript, type ClaudeReplay, type ClaudeSubagentTranscript } from './replay.js'
 import { installedSdkVersion, loadClaudeSdk, type ClaudeSessionStoreSdk } from './sdk.js'
 import { openClaudeSession } from './session.js'

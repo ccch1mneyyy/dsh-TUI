@@ -15,7 +15,7 @@ import type { AccountView, ChannelProfileView, ContextUsageView, EffortOption, M
 import type { AgentEvent, CommandInfo } from '../../agent/events.js'
 import { t } from '../../i18n.js'
 import { createHash } from 'node:crypto'
-import { channelTokenRef, type ClaudeChannelTokens } from './channelTokens.js'
+import { channelTokenRef, type ClaudeChannelTokens } from '../shared/channel-tokens.js'
 import { importFromSettingsEnv, importTokenFromSettingsEnv, hasChannelConnection, type ClaudeChannelProfile, type ClaudeChannels } from './channels.js'
 import type { ClaudePrefs } from './prefs.js'
 

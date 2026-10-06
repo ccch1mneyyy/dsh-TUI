@@ -833,6 +833,12 @@ const GROUPS = {
 // Claude 图片输入（假 Query）：核心内存暂存（不经 DSH attachments，有限额与淘汰）、
 // 文本后发 base64 块、类型/大小/数量限额、回放成惰性 facade；无该能力的会话不变。
     ["verify-claude-images", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-images.ts']],
+// Codex 录制 fixture 的脱敏检查：凭据形状（sk-/Bearer/JWT）、白名单外的 URL 主机
+// （中转站主机名必须已换成 relay.invalid）、临时目录与 home 路径、机器标识。
+    ["verify-codex-fixtures", ['node', 'scripts/lib/codex-fixture-sanitize.mjs', '--check']],
+// 假 Codex app-server 自测（不起进程、不走网络）：脚本化应答/错误/延后应答、服务端
+// 请求等待客户端作答、崩溃、录制回放的 id 映射与 thread 改写、两路回放交错各自保序。
+    ["verify-codex-fake-app-server", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-fake-app-server.ts']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、

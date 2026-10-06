@@ -1,11 +1,12 @@
 /**
- * The credential seam of the Claude channel profiles: channel
+ * The credential seam of a backend's channel profiles (shared by every
+ * backend, docs/codex-backend-design.md D15): channel
  * tokens live in the DSH credential store — the same `~/.dsh/.credentials.yaml`
  * (0600) the /provider wizard writes through the dsh credentials service
  * (providerWizard.ts's deriveKeyRef convention) — and channels.json holds
  * only the derived `tokenRef`, never a literal token.
  *
- * This module is a direct, host-side file view of that store (the Claude
+ * This module is a direct, host-side file view of that store (a non-DSH
  * backend has no cordis context to resolve `ctx.get('credentials')` from).
  * The store is edited through a YAML document parser (`yaml`): the top-level
  * `refs` mapping is found in block or flow style, quoted keys included;
@@ -19,9 +20,12 @@
  * the way deriveKeyRef derives `<ROUTE>_API_KEY`, so a re-import (or a hand
  * edit of the name's slug) refreshes the same credential row.
  *
- * Token material never reaches a log, notice or event (auth.ts's module
- * contract): this module only ever moves it between the file and the spawn
- * pipeline.
+ * Token material never reaches a log, notice or event (each backend's
+ * credential contract): this module only ever moves it between the file and
+ * the spawn pipeline.
+ *
+ * Backend-neutral: no vendor package and no backend directory is imported
+ * here (`verify:boundary`).
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -37,7 +41,7 @@ export function channelTokenRef(id: string): string {
 }
 
 /** Read/write/erase access (injectable: tests use an in-memory store). */
-export interface ClaudeChannelTokens {
+export interface ChannelTokenStore {
   /** The stored token, or undefined when the ref holds nothing. */
   read(ref: string): string | undefined
   /** Store `value` under `ref` (best-effort: a failure reports to the
@@ -53,7 +57,7 @@ const FILE = '.credentials.yaml'
 
 /** The file-backed token store under `home` (default the DSH home that owns
  * `~/.dsh/.credentials.yaml`). */
-export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (message: string) => void = () => undefined): ClaudeChannelTokens {
+export function fileChannelTokens(home: string = dshHomeDir(), debug: (message: string) => void = () => undefined): ChannelTokenStore {
   const path = join(home, FILE)
 
   /** Parse the store into a YAML document; undefined for a file that
@@ -65,12 +69,12 @@ export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (mes
       text = readFileSync(path, 'utf8')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return parseDocument('')
-      debug('claude: channel token store unreadable (' + (error instanceof Error ? error.message : String(error)) + '); refusing to touch it')
+      debug('dsh-tui: channel token store unreadable (' + (error instanceof Error ? error.message : String(error)) + '); refusing to touch it')
       return undefined
     }
     const doc = parseDocument(text)
     if (doc.errors.length > 0) {
-      debug('claude: channel token store is not valid YAML (' + doc.errors.length + ' parse errors); refusing to touch it')
+      debug('dsh-tui: channel token store is not valid YAML (' + doc.errors.length + ' parse errors); refusing to touch it')
       return undefined
     }
     return doc
@@ -91,7 +95,7 @@ export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (mes
     try {
       writeFileAtomic(home, FILE, next)
     } catch (error) {
-      debug('claude: channel token write failed (' + (error instanceof Error ? error.message : String(error)) + ')')
+      debug('dsh-tui: channel token write failed (' + (error instanceof Error ? error.message : String(error)) + ')')
     }
   }
   return {
@@ -110,7 +114,7 @@ export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (mes
       if (doc === undefined) return
       const refs = refsOf(doc)
       if (refs === null) {
-        debug('claude: channel token store refs is not a mapping; refusing to write')
+        debug('dsh-tui: channel token store refs is not a mapping; refusing to write')
         return
       }
       if (refs === undefined) doc.set('refs', { [ref]: value })
@@ -119,7 +123,7 @@ export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (mes
       const next = doc.toString({ lineWidth: 0 })
       // Nothing is committed unless it parses back clean.
       if (parseDocument(next).errors.length > 0) {
-        debug('claude: channel token write self-check failed; refusing to commit')
+        debug('dsh-tui: channel token write self-check failed; refusing to commit')
         return
       }
       if (next !== '') commit(next)
@@ -143,7 +147,7 @@ export function fileClaudeChannelTokens(home: string = dshHomeDir(), debug: (mes
 }
 
 /** An in-memory store (tests, embedders). */
-export function memoryClaudeChannelTokens(initial: Record<string, string> = {}): ClaudeChannelTokens & { readonly data: Readonly<Record<string, string>> } {
+export function memoryChannelTokens(initial: Record<string, string> = {}): ChannelTokenStore & { readonly data: Readonly<Record<string, string>> } {
   let data: Record<string, string> = { ...initial }
   return {
     get data() { return data },
@@ -153,3 +157,10 @@ export function memoryClaudeChannelTokens(initial: Record<string, string> = {}):
     declared: ref => Object.hasOwn(data, ref),
   }
 }
+
+/** @deprecated The pre-D15 name (kept for one phase): {@link ChannelTokenStore}. */
+export type ClaudeChannelTokens = ChannelTokenStore
+/** @deprecated The pre-D15 name (kept for one phase): {@link fileChannelTokens}. */
+export const fileClaudeChannelTokens = fileChannelTokens
+/** @deprecated The pre-D15 name (kept for one phase): {@link memoryChannelTokens}. */
+export const memoryClaudeChannelTokens = memoryChannelTokens

@@ -50,7 +50,7 @@ import { createClaudePermissionBridge, WITHDRAWN_MESSAGE } from '../permissions.
 import { createStderrSink } from '../process.js'
 import { memoryClaudePrefs } from '../prefs.js'
 import { fileClaudeChannels } from '../channels.js'
-import { fileClaudeChannelTokens } from '../channelTokens.js'
+import { fileClaudeChannelTokens } from '../../shared/channel-tokens.js'
 import { createClaudeTranscriptHistory } from '../older-history.js'
 import { join } from 'node:path'
 import { DATA_DIR } from '../../../utils/paths.js'

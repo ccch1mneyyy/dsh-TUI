@@ -1,6 +1,6 @@
 /**
- * Atomic replace of the small files this backend keeps (prefs, channel
- * profiles, the channel-token store): a same-directory temporary renamed
+ * Atomic replace of the small files a backend keeps (prefs, channel
+ * profiles, the channel-token store; shared by every backend, D15): a same-directory temporary renamed
  * over the target. A reader — or another terminal's read-modify-write — sees
  * the old document or the new one, never a truncated one, and a failed write
  * leaves the old document in place. The temporary is created owner-only:
