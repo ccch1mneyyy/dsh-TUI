@@ -18,6 +18,7 @@ import { VALIDATED_SDK_VERSION } from '../backends/claude/contract.js'
 
 export const BACKEND_LOADERS = {
   claude: () => import('../backends/claude/index.js').then(m => m.claudeBackend),
+  codex: () => import('../backends/codex/index.js').then(m => m.codexBackend),
 } satisfies Record<Exclude<KernelBackendId, 'dsh'>, () => Promise<AgentBackend>>
 
 /** The kernel picker's one-click SDK install surface (Chat consumes it as

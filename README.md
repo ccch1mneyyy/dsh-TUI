@@ -202,6 +202,20 @@ its manual equivalent.
 
 Details and known limitations: [Claude backend](docs/claude-backend.en.md).
 
+### Experimental: Codex backend (in development)
+
+`dsh-tui --backend codex` (or the Codex row of `/kernel`) runs the session on
+your own `codex` CLI (≥ 0.144; validated 0.160.x) through `codex app-server`,
+with your `~/.codex` config, login, instructions and MCP servers; threads stay
+shared with the official `codex` (`codex resume <id>` opens them too).
+`CODEX_EXECUTABLE` picks a specific binary. Sessions start in the official
+"Default" permission preset (on-request approvals, workspace-write sandbox).
+This first stage covers streaming replies and reasoning, command / file /
+MCP / web-search cards, approvals and questions, steer / queue / interrupt
+and `--resume`; model and mode switching, `/login`, relay channels, the
+session browser and the rest follow (see
+[the design](docs/codex-backend-design.md)).
+
 ## Keybindings & Mouse
 
 `Enter` send · `Tab` complete · `Ctrl+Enter` interrupt and send · `Alt+Up` recall the last message · `Esc` dismiss, double-`Esc` rewinds · `Ctrl+B` side panel · `Ctrl+O` details · `Ctrl+R` history (`↑`/`↓` and `Ctrl+R` are scoped to the current project) · `Ctrl+V` paste · `Ctrl+Shift+E` fullscreen draft editor · `?` shortcuts · `←` background the session.

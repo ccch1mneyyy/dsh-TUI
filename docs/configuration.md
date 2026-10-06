@@ -81,7 +81,7 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 | `terminalImages` | `true` | 允许在支持的终端预览图片；`false` 保留文字信息，跳过图片探测与预览解码。修改后重启生效 |
 | `preset` | 名册默认 `standard` | 新会话 Agent preset；显式配置优先于持久化偏好 |
 | `sessionId` | 未设置 | 要恢复的会话 ID，通常由 Windows `--resume` 启动器注入 |
-| `backend` | 未设置（`/kernel` 记住的选择，否则 `dsh`） | 会话后端：`dsh` 或实验性的 `claude`（不区分大小写，未知值按 `dsh`）。profile 行读取 `DSH_TUI_BACKEND`，`dsh-tui --backend claude` 会设置它。见 [Claude 后端](claude-backend.md) |
+| `backend` | 未设置（`/kernel` 记住的选择，否则 `dsh`） | 会话后端：`dsh`，或实验性的 `claude` / `codex`（不区分大小写，未知值按 `dsh`）。profile 行读取 `DSH_TUI_BACKEND`，`dsh-tui --backend <id>` 会设置它。见 [Claude 后端](claude-backend.md)、[Codex 后端方案](codex-backend-design.md) |
 
 ### 优先级与强制关闭
 

@@ -174,6 +174,16 @@ Enter，按引导一键安装——dsh-TUI 自己定位 profile 目录并装锁�
 
 详细说明与已知限制：[Claude 后端](docs/claude-backend.md)。
 
+### 实验性：Codex 后端（开发中）
+
+`dsh-tui --backend codex`（或 `/kernel` 里的 Codex 行）把会话跑在你自己安装的
+`codex` CLI 上（≥ 0.144，已验证 0.160.x），经 `codex app-server` 驱动，沿用你的
+`~/.codex` 配置、登录、指令文件与 MCP 服务器；会话与官方 `codex` 互通（`codex resume <id>`
+也能打开）。`CODEX_EXECUTABLE` 可指定二进制。会话默认用官方的"默认"权限预设
+（按需审批、工作区可写沙箱）。第一阶段已支持流式回复与思考、命令/文件/MCP/联网搜索
+工具卡、审批与问卷、插话/排队/打断、`--resume`；切换模型与模式、`/login`、中转渠道、
+会话浏览器等后续补齐（见[方案](docs/codex-backend-design.md)）。
+
 ## 快捷键与鼠标
 
 `Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 打断并发送 · `Alt+Up` 取回上一条 · `Esc` 逐层关闭，空输入双击回溯 · `Ctrl+B` 侧栏 · `Ctrl+O` 详情 · `Ctrl+R` 搜历史（`↑`/`↓` 与 `Ctrl+R` 按当前项目隔离） · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 快捷键 · `←` 转后台。

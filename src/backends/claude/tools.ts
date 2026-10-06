@@ -9,7 +9,7 @@
  * results are undeclared in the SDK types. A shape this
  * module does not recognise degrades to the plain text card.
  */
-import { isAbsolute, relative } from 'node:path'
+import { displayPath } from '../shared/display-path.js'
 import type { ToolFileDiff } from '../../adapter/ports/channel-view.js'
 import type { ToolCallPresentation, ToolPresentationMeta, ToolResultPresentation } from '../../agent/presentation.js'
 import { num, rec, str, type Rec } from './narrow.js'
@@ -71,12 +71,7 @@ export function claudeToolRole(name: string): ClaudeToolRole {
   }
 }
 
-/** A path for a title: relative to the session cwd when inside it. */
-export function displayPath(path: string, cwd: string): string {
-  if (!isAbsolute(path) || cwd === '') return path
-  const rel = relative(cwd, path)
-  return rel === '' || rel.startsWith('..') || isAbsolute(rel) ? path : rel
-}
+export { displayPath }
 
 /** `mcp__<server>__<tool>` → `server › tool`. */
 function mcpTitle(name: string): string | undefined {

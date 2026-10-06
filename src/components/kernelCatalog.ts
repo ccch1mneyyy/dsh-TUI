@@ -22,6 +22,8 @@ export interface KernelOption {
   readonly current: boolean
   readonly selectable: boolean
   readonly reasonKey?: KernelUnavailableReason
+  /** A selectable row's caveat (signed out, but `/login` works in-session). */
+  readonly noteKey?: 'kernel-login-in-session'
   readonly version?: string
   /** Not installed, but the host can install it (Enter opens the wizard). */
   readonly installable?: boolean
@@ -31,6 +33,8 @@ export interface KernelStatus {
   readonly installed: boolean
   readonly auth?: 'ok' | 'missing' | 'unknown'
   readonly version?: string
+  /** A missing credential can be supplied after start (BackendDetection). */
+  readonly loginInSession?: true
 }
 
 /** DSH is always available. Optional kernels stay disabled until detection completes. */
@@ -39,16 +43,18 @@ export function buildKernelCatalog(input: {
   readonly dshVersion?: string
   readonly statuses?: Readonly<Record<string, KernelStatus>>
   /** The host provides an install path (the wizard callbacks): a dim
-   *  not-installed row then says "press Enter to install" instead of a
-   *  dead-end reason. */
+   *  not-installed row of a kernel the wizard can install
+   *  (`KERNEL_INFO[id].installable`) then says "press Enter to install"
+   *  instead of a dead-end reason. */
   readonly canInstallSdk?: boolean
 }): readonly KernelOption[] {
   return KERNEL_IDS.map(id => {
     const status = input.statuses?.[id]
-    const selectable = id === 'dsh' || (status !== undefined && status.installed && status.auth !== 'missing')
+    const signInLater = status?.auth === 'missing' && status.loginInSession === true
+    const selectable = id === 'dsh' || (status !== undefined && status.installed && (status.auth !== 'missing' || signInLater))
     // `!selectable` already implies `id !== 'dsh'` (the DSH row is always
     // selectable), so an unselectable, undetected row is an install miss.
-    const installable = !selectable && status !== undefined && !status.installed && input.canInstallSdk === true
+    const installable = !selectable && status !== undefined && !status.installed && input.canInstallSdk === true && KERNEL_INFO[id].installable
     const reasonKey: KernelUnavailableReason = status === undefined
       ? 'kernel-probing'
       : installable
@@ -63,6 +69,7 @@ export function buildKernelCatalog(input: {
       current: input.current === id,
       selectable,
       ...(selectable ? {} : { reasonKey }),
+      ...(selectable && signInLater ? { noteKey: 'kernel-login-in-session' as const } : {}),
       ...(installable ? { installable } : {}),
       ...(version === undefined ? {} : { version }),
     }
@@ -72,10 +79,11 @@ export function buildKernelCatalog(input: {
 /** Join the available version and unavailability reason without an empty subtitle. */
 export function kernelSubtitle(
   option: KernelOption,
-  reason: (key: KernelUnavailableReason) => string,
+  reason: (key: KernelUnavailableReason | 'kernel-login-in-session') => string,
 ): string | undefined {
   const parts: string[] = []
   if (option.version !== undefined && option.version !== '') parts.push(option.version)
   if (option.reasonKey !== undefined) parts.push(reason(option.reasonKey))
+  if (option.noteKey !== undefined) parts.push(reason(option.noteKey))
   return parts.length === 0 ? undefined : parts.join(' \u00b7 ')
 }

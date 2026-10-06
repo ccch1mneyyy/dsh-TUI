@@ -7,7 +7,7 @@
  *  2. Exhaustiveness is present in source: the shared projector folds
  *     `AgentEvent` in a `switch (event.type)` whose default is a `never`
  *     check, and every translator (`src/dsh-adapter/backend/translate.ts`,
- *     `src/backends/<id>/translate.ts`) carries an exhaustive
+ *     `src/backends/<id>/translate/events.ts` or `translate.ts`) carries an exhaustive
  *     `switch (type)` over `AgentEventType` with a `never` default, so a new
  *     event variant fails `tsc` in each place until it is decided.
  *  3. The DSH translator only emits the event types it declares
@@ -69,10 +69,12 @@ const translators = ['dsh-adapter/backend/translate.ts']
 const backendsDir = join(SRC, 'backends')
 if (existsSync(backendsDir)) {
   for (const entry of readdirSync(backendsDir)) {
-    if (existsSync(join(backendsDir, entry, 'translate.ts'))) {
-      translators.push(entry === 'claude' ? 'backends/claude/translate/events.ts' : `backends/${entry}/translate.ts`)
-    }
+    // A backend's decision table: translate/events.ts (claude, codex), else
+    // its single-file translate.ts.
+    if (existsSync(join(backendsDir, entry, 'translate', 'events.ts'))) translators.push(`backends/${entry}/translate/events.ts`)
+    else if (existsSync(join(backendsDir, entry, 'translate.ts'))) translators.push(`backends/${entry}/translate.ts`)
   }
+  check('every backend with a translator is checked (claude, codex)', ['claude', 'codex'].every(id => translators.includes(`backends/${id}/translate/events.ts`)))
 }
 for (const path of translators) {
   const source = read(path)

@@ -39,8 +39,9 @@ export interface Config {
   /** Agent backend the session runs on: `dsh` (default), the DeepSeek
    *  Harness agent; `claude`, the experimental Claude Agent backend driving
    *  the local Claude CLI through the Claude Agent SDK (optional peer
-   *  `@anthropic-ai/claude-agent-sdk`). `dsh-tui --backend claude` sets it
-   *  through `DSH_TUI_BACKEND`. */
+   *  `@anthropic-ai/claude-agent-sdk`); `codex`, the experimental Codex
+   *  backend driving the user's own `codex` CLI over `codex app-server`.
+   *  `dsh-tui --backend <id>` sets it through `DSH_TUI_BACKEND`. */
   backend?: KernelBackendId
   /** LLM provider route. The route resolves atomically (issue #67): when
    *  cordis.yml names BOTH `provider` and `model`, that pair wins; otherwise

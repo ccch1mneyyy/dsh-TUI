@@ -15,21 +15,27 @@ import { basename, dirname, join } from 'node:path'
 import { DATA_DIR } from './utils/paths.js'
 
 /** Kernels the TUI can run on (the Config.backend values). */
-export const KERNEL_IDS = ['dsh', 'claude'] as const
+export const KERNEL_IDS = ['dsh', 'claude', 'codex'] as const
 export type KernelBackendId = typeof KERNEL_IDS[number]
 
 export function isKernelId(value: unknown): value is KernelBackendId {
   return typeof value === 'string' && (KERNEL_IDS as readonly string[]).includes(value)
 }
 
-export const KERNEL_INFO: Record<KernelBackendId, { labelKey: string; product: string }> = {
-  dsh: { labelKey: 'kernel-label-dsh', product: 'dsh-core' },
-  claude: { labelKey: 'kernel-label-claude', product: 'claude-code' },
+/**
+ * Per-kernel facts: the picker label, the product a version belongs to, and
+ * whether the host can install a missing kernel itself (the Claude SDK
+ * wizard); the others only say how (their detection hint).
+ */
+export const KERNEL_INFO: Record<KernelBackendId, { labelKey: string; product: string; installable: boolean }> = {
+  dsh: { labelKey: 'kernel-label-dsh', product: 'dsh-core', installable: false },
+  claude: { labelKey: 'kernel-label-claude', product: 'claude-code', installable: true },
+  codex: { labelKey: 'kernel-label-codex', product: 'codex-cli', installable: false },
 }
 
 /** Brand names used by kernel chips and notices. */
 export function kernelDisplayName(id: string): string {
-  return id === 'dsh' ? 'DSH' : id === 'claude' ? 'Claude' : id
+  return id === 'dsh' ? 'DSH' : id === 'claude' ? 'Claude' : id === 'codex' ? 'Codex' : id
 }
 
 /** Stored shape. */

@@ -2724,7 +2724,7 @@ function runUpdate(
   profile: string | undefined,
   sessionId: string,
   targetVersion: string | undefined,
-  kernel: 'dsh' | 'claude',
+  kernel: KernelBackendId,
   hint: (sessionId: string) => string = id => resumeCommand(profile, id),
 ): void {
   disposeRootAndThen(ctx, () => {

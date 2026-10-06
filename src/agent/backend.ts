@@ -18,6 +18,12 @@ export interface BackendDetection {
   readonly drift?: string
   /** How to install or sign in when unavailable. */
   readonly hint?: string
+  /**
+   * A missing credential can be supplied after the session opened (the
+   * backend's own `/login`): the kernel picker keeps the row selectable and
+   * says to sign in after start, instead of dimming it.
+   */
+  readonly loginInSession?: true
 }
 
 /**

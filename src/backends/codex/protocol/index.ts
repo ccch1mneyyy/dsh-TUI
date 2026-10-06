@@ -93,6 +93,8 @@ export const NOTIFY = {
   turnCompleted: 'turn/completed',
   turnDiffUpdated: 'turn/diff/updated',
   turnPlanUpdated: 'turn/plan/updated',
+  hookStarted: 'hook/started',
+  hookCompleted: 'hook/completed',
   itemStarted: 'item/started',
   itemCompleted: 'item/completed',
   agentMessageDelta: 'item/agentMessage/delta',
