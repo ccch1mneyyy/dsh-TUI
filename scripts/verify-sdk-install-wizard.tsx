@@ -6,7 +6,10 @@
  *      （LoadingState 动画）、done、failed（退出码 + 手动命令 + pnpm 输出尾部）、
  *      pnpm-missing、cancelled、no-target 两种理由；
  *   3. 手动兜底命令（cd <dir> && pnpm add <specifier>）在 failed 与
- *      pnpm-missing 两态都出现——它是不管哪一步失败的最终出路；
+ *      pnpm-missing 两态都出现——它是不管哪一步失败的最终出路；pin 了 store
+ *      时两态的命令都带 `--store-dir`，与向导真正执行的那条一致；
+ *   3b. store-mismatch 单独成态：点明 ERR_PNPM_UNEXPECTED_STORE 与要对齐的
+ *      store，并同样给出带 flag 的兜底命令；
  *   4. 窄终端（34 列）任何一行都不超宽（长 tail 行靠 truncate-end 截断）；
  *   5. en 态标题与提示行跟着换。
  *
@@ -63,6 +66,7 @@ class FakeStdin extends PassThrough {
 }
 
 const DIR = 'C:\\Users\\test\\.dsh\\profiles\\dsh-tui'
+const STORE = 'C:\\Users\\test\\.dsh\\profiles\\.pnpm-store'
 const SPECIFIER = '@anthropic-ai/claude-agent-sdk@0.3.287'
 const VERSION = '0.3.287'
 const TAIL = ['Progress: resolved 9, reused 77', 'ERR_PNPM_LINKING_FAILED cannot overwrite directory']
@@ -141,7 +145,25 @@ async function run(): Promise<void> {
     check('5b 手动命令（与 failed 同款）', screen.replaceAll(/\s+/gu, '').includes(`pnpmadd${SPECIFIER}`))
     await app.unmount()
   }
-  // 6. cancelled / no-target 两种理由。
+  // 6. store 相关两态：pin 了 store 时兜底命令带上 `--store-dir`（命令约 150
+  //    列，必折行，同样压空白后比对）；store 漂移单独出态，正文点明要按哪个
+  //    store 对齐，兜底命令走同一条带 flag 的命令。
+  {
+    const { app, lines } = await mountWizard({ kind: 'failed', exitCode: 1, tail: TAIL, dir: DIR, version: VERSION, specifier: SPECIFIER, storeDir: STORE })
+    const flat = (s: string): string => s.replaceAll(/\s+/gu, '')
+    check('6a 兜底命令带 --store-dir', flat(lines().join('\n')).includes(flat(`pnpm add ${SPECIFIER} --store-dir ${STORE}`)))
+    await app.unmount()
+  }
+  {
+    const { app, lines } = await mountWizard({ kind: 'store-mismatch', storeDir: STORE, dir: DIR, version: VERSION, specifier: SPECIFIER })
+    const flat = (s: string): string => s.replaceAll(/\s+/gu, '')
+    const screen = lines().join('\n')
+    check('6c store 漂移正文', screen.includes('ERR_PNPM_UNEXPECTED_STORE') && screen.includes(flat(STORE).slice(0, 12)))
+    check('6d store 漂移兜底命令同款', flat(screen).includes(flat(`pnpm add ${SPECIFIER} --store-dir ${STORE}`)))
+    check('6e store 漂移可重试', screen.includes('r 重试'))
+    await app.unmount()
+  }
+  // 7. cancelled / no-target 两种理由。
   {
     const { app, lines } = await mountWizard({ kind: 'cancelled' })
     check('6a 已取消', lines().join('\n').includes(t('sdk-install-cancelled')))
@@ -152,23 +174,23 @@ async function run(): Promise<void> {
     check(`6b no-target(${reason}) 理由文案`, lines().join('\n').includes(t(`sdk-install-no-target-${reason}`).slice(0, 8)))
     await app.unmount()
   }
-  // 7. 窄终端（34 列）：长 tail 行 truncate-end 截断，任何一行不超宽。
+  // 8. 窄终端（34 列）：长 tail 行 truncate-end 截断，任何一行不超宽。
   {
     const { app, lines, term } = await mountWizard(
       { kind: 'failed', exitCode: 1, tail: ['x'.repeat(120)], dir: DIR, version: VERSION, specifier: SPECIFIER },
       34, 24,
     )
-    check('7 窄终端不超宽', lines().every(line => line.length <= term.cols), JSON.stringify(lines()))
+    check('8 窄终端不超宽', lines().every(line => line.length <= term.cols), JSON.stringify(lines()))
     await app.unmount()
   }
-  // 8. en：标题与提示行跟着换。
+  // 9. en：标题与提示行跟着换。
   {
     setLang('en')
     try {
       const { app, lines } = await mountWizard({ kind: 'confirm', dir: DIR, version: VERSION, specifier: SPECIFIER })
       const screen = lines().join('\n')
-      check('8a en 标题', screen.includes('Install the Claude kernel'))
-      check('8b en 位置行', screen.includes(`Install location: ${DIR}`))
+      check('9a en 标题', screen.includes('Install the Claude kernel'))
+      check('9b en 位置行', screen.includes(`Install location: ${DIR}`))
       await app.unmount()
     } finally {
       setLang('zh')

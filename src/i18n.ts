@@ -2235,6 +2235,7 @@ const dict = {
   'sdk-install-done': { zh: 'SDK 安装完成，Claude 内核已可用。', en: 'SDK installed — the Claude kernel is ready.' },
   'sdk-install-done-hint': { zh: '**Enter** 返回内核选择 · Esc 关闭', en: '**Enter** back to the kernel picker · Esc close' },
   'sdk-install-failed': { zh: '安装失败（pnpm 退出码 {{code}}）。可手动安装：', en: 'Install failed (pnpm exit code {{code}}). Manual install:' },
+  'sdk-install-store-mismatch': { zh: '安装失败：这个 profile 的依赖来自另一个 pnpm store，pnpm 不会换 store 重新链接（ERR_PNPM_UNEXPECTED_STORE）。重装一次即可对齐到 {{store}}：', en: 'Install failed: this profile\'s dependencies come from a different pnpm store and pnpm will not relink them (ERR_PNPM_UNEXPECTED_STORE). Reinstalling lines it up with {{store}}:' },
   'sdk-install-manual': { zh: '{{command}}', en: '{{command}}' },
   'sdk-install-failed-hint': { zh: 'r 重试 · Esc 返回', en: 'r retry · Esc back' },
   'sdk-install-pnpm-missing': { zh: '未检测到 pnpm。先运行 npm install -g pnpm 再回来重试，或手动安装：', en: 'pnpm was not found. Run npm install -g pnpm first and retry, or install manually:' },

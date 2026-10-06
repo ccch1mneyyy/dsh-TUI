@@ -11,7 +11,7 @@ import { Config, normalizeBackendChoice } from './index.js'
 import { configValues, createSettingsScope, resolveSettingsNamespace, type RuntimeConfig } from './compat/settings.js'
 import { createChannel } from './channel.js'
 import { createDshSession } from './backend/session.js'
-import { BACKEND_LOADERS, openBackendStartup, probeKernels, sdkInstall } from './backends.js'
+import { BACKEND_LOADERS, openBackendStartup, probeKernels, sdkInstall, sdkInstallStoreDir } from './backends.js'
 import { formatSessionRef } from '../agent/refs.js'
 import type { AgentSession } from '../agent/session.js'
 import { mountFailureText } from '../sessions/resumeFailure.js'
@@ -2012,10 +2012,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     onRestartFreshSession: restartFreshSession,
     onProbeKernels: () => probeKernels(ctx, sessionCwd),
     // The kernel picker's SDK install wizard (the dim Claude row, Enter).
+    // The pinned store is resolved from the launch's own profile target, so the
+    // manual fallback command names the same store the install will use.
     onResolveSdkInstallTarget: sdkInstall.resolveTarget,
     onStartSdkInstall: sdkInstall.start,
     onCheckPnpm: sdkInstall.checkPnpm,
-    sdkInstallPinned: sdkInstall.pinned,
+    sdkInstallPinned: { ...sdkInstall.pinned, ...sdkInstallStoreDir(sdkInstall.resolveTarget()) },
     kernelPinned: backendPinned,
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the

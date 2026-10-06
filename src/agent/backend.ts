@@ -31,17 +31,24 @@ export type SdkInstallTarget =
   | { readonly kind: 'standalone' }
   | { readonly kind: 'no-profile' }
 
-/** How `pnpm add` ended; `tail` carries the captured output's last lines. */
+/** How `pnpm add` ended; `tail` carries the captured output's last lines, and
+ *  `store-mismatch` names the store the profile is pinned to so the caller can
+ *  spell out the one-off recovery command (pnpm's own `ERR_PNPM_UNEXPECTED_STORE`). */
 export type SdkInstallResult =
   | { readonly kind: 'ok' }
   | { readonly kind: 'cancelled' }
   | { readonly kind: 'pnpm-missing' }
+  | { readonly kind: 'store-mismatch'; readonly storeDir: string }
   | { readonly kind: 'failed'; readonly exitCode: number; readonly tail: readonly string[] }
 
-/** A running install: `result` settles once, `cancel` kills the child. */
+/** A running install: `result` settles once, `cancel` kills the child.
+ *  `storeDir` is the content-addressable store the install was pinned to, so
+ *  the surface that renders the manual fallback command can spell out the same
+ *  store instead of leaving the copy to resolve one by environment. */
 export interface SdkInstaller {
   readonly result: Promise<SdkInstallResult>
   readonly cancel: () => void
+  readonly storeDir: string
 }
 
 /** Which session to open. */

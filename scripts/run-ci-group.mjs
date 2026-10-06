@@ -774,6 +774,10 @@ const GROUPS = {
 // Claude SDK 启动警告过滤：子进程里 import 编译产物，放行的警告保持 node 原样输出，
 // 被过滤的不出现（需先构建 lib/）。
     ["verify-claude-sdk-warnings", ['node', 'scripts/verify-claude-sdk-warnings.mjs']],
+// Claude SDK 安装器（向导背后真正跑的那条命令）：store 解析用 .modules.yaml
+// 的记录或 profile 同级的共享 store、`pnpm add` 原样带上 `--store-dir`、
+// 结束态映射（ok / failed / store-mismatch / pnpm-missing）。pnpm 走 PATH 桩。
+    ['verify-claude-sdk-install', ['node', '--import', 'tsx/esm', 'scripts/verify-claude-sdk-install.ts']],
 // Claude「加载更早消息」：按会话 id 定位原生 JSONL（坏行容忍、超限拒读）、多次压缩的
 // 转录按 parentUuid 链分段回溯、分片不重叠、用尽后幂等；channel 前插更早的行并恢复折叠行。
     ["verify-claude-load-older", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-load-older.ts']],

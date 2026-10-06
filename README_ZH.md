@@ -163,6 +163,11 @@ dsh-tui --backend claude     # 或在 /kernel 里选 Claude，选择会被记住
 Enter，按引导一键安装——dsh-TUI 自己定位 profile 目录并装锁定版本的 SDK，上面的
 命令是它的手动等价形式。
 
+若 pnpm 报 `ERR_PNPM_UNEXPECTED_STORE`（提示现有 `node_modules` 链接自另一个
+store），说明这个目录之前是用别的 store 装的——pnpm 不会跨 store 重新链接。
+在 profile 目录里跑一次 `pnpm install` 对齐即可；向导的兜底命令会带上
+`--store-dir` 指定 store，避免再按环境解析出第二个。
+
 - **登录**：依次使用 `/channel` 渠道档案、dsh-auth 的 `anthropic` 订阅登录（`/login`）、
   `ANTHROPIC_API_KEY` 或云厂商环境变量、本机已有的 `claude login`。`PATH` 上有
   `claude` 就用它，否则用 SDK 自带的二进制。

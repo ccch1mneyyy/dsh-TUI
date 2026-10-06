@@ -458,8 +458,10 @@ export function Chat({
   onResolveSdkInstallTarget?: () => SdkInstallTarget
   onStartSdkInstall?: (dir: string) => SdkInstaller
   onCheckPnpm?: () => Promise<boolean>
-  /** 向导显示与手动兜底命令用的安装目标（`@anthropic-ai/claude-agent-sdk@<pin>`）。 */
-  sdkInstallPinned?: { readonly specifier: string; readonly version: string }
+  /** 向导显示与手动兜底命令用的安装目标（`@anthropic-ai/claude-agent-sdk@<pin>`）。
+   *  storeDir 是安装时钉住的 store：带上它，用户照着兜底命令手敲的那条才是
+   *  向导真正跑的那条，不会按环境另解析出一个 store 来。 */
+  sdkInstallPinned?: { readonly specifier: string; readonly version: string; readonly storeDir?: string }
   /** 启动参数（Config 行 / DSH_TUI_BACKEND）压过了记忆：选择器明说。 */
   kernelPinned?: boolean
   /**
@@ -853,7 +855,7 @@ export function Chat({
     if (overlay.kind !== 'sdk-install' || sdkPhase.kind !== 'idle' || onResolveSdkInstallTarget === undefined) return
     const target = onResolveSdkInstallTarget()
     if (target.kind === 'profile' && sdkInstallPinned !== undefined) {
-      setSdkPhase({ kind: 'confirm', dir: target.dir, version: sdkInstallPinned.version, specifier: sdkInstallPinned.specifier })
+      setSdkPhase({ kind: 'confirm', dir: target.dir, version: sdkInstallPinned.version, specifier: sdkInstallPinned.specifier, storeDir: sdkInstallPinned.storeDir })
     } else {
       setSdkPhase({ kind: 'no-target', reason: target.kind === 'standalone' ? 'standalone' : 'no-profile' })
     }
@@ -878,9 +880,13 @@ export function Chat({
         reprobeKernels()
         setSdkPhase({ kind: 'done' })
       } else if (result.kind === 'failed') {
-        setSdkPhase({ kind: 'failed', exitCode: result.exitCode, tail: result.tail, dir, version: sdkInstallPinned.version, specifier: sdkInstallPinned.specifier })
+        setSdkPhase({ kind: 'failed', exitCode: result.exitCode, tail: result.tail, dir, version: sdkInstallPinned.version, specifier: sdkInstallPinned.specifier, storeDir: sdkInstallPinned.storeDir })
+      } else if (result.kind === 'store-mismatch') {
+        // store 漂移单独说：pnpm 的原文只有「store 对不上」，得告诉用户按哪个
+        // store 对齐。用安装器实际用的那个，而不是再解析一次。
+        setSdkPhase({ kind: 'store-mismatch', storeDir: result.storeDir, dir, version: sdkInstallPinned.version, specifier: sdkInstallPinned.specifier })
       } else if (result.kind === 'pnpm-missing') {
-        setSdkPhase({ kind: 'pnpm-missing', dir, version: sdkInstallPinned.version, specifier: sdkInstallPinned.specifier })
+        setSdkPhase({ kind: 'pnpm-missing', dir, version: sdkInstallPinned.version, specifier: sdkInstallPinned.specifier, storeDir: installer.storeDir })
       } else {
         setSdkPhase({ kind: 'cancelled' })
       }
@@ -4771,7 +4777,8 @@ export function Chat({
       } else if (sdkPhase.kind === 'done') {
         if (plainReturn) closeSdkInstallToKernelPicker()
         else if (key.escape) closeSdkInstall()
-      } else if (sdkPhase.kind === 'failed') {
+      } else if (sdkPhase.kind === 'failed' || sdkPhase.kind === 'store-mismatch') {
+        // 两种失败都留着 r 重试：store 漂移常常是重装一次就好了。
         if (input === 'r' && !key.ctrl && !key.meta) confirmSdkInstall(sdkPhase.dir)
         else if (key.escape) closeSdkInstallToKernelPicker()
       } else {

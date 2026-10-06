@@ -13,7 +13,7 @@ import { logForDebugging } from '../utils/debug.js'
 // Static on purpose: the install module imports no vendor package (node
 // built-ins + update.ts, which this adapter loads anyway), so a DSH-only
 // boot pays nothing for having the wizard's surface at hand.
-import { checkPnpmAvailable, CLAUDE_SDK_SPECIFIER, resolveSdkInstallTarget, startClaudeSdkInstall } from '../backends/claude/install.js'
+import { checkPnpmAvailable, CLAUDE_SDK_SPECIFIER, resolveSdkInstallTarget, resolveSdkStoreDir, startClaudeSdkInstall } from '../backends/claude/install.js'
 import { VALIDATED_SDK_VERSION } from '../backends/claude/contract.js'
 
 export const BACKEND_LOADERS = {
@@ -28,6 +28,12 @@ export const sdkInstall = {
   checkPnpm: (): Promise<boolean> => checkPnpmAvailable(),
   pinned: { specifier: CLAUDE_SDK_SPECIFIER, version: VALIDATED_SDK_VERSION } as const,
 }
+
+/** The store an install into `target` will use, for the wizard's manual
+ *  fallback command. Empty for the non-profile targets: they never install,
+ *  they only show instructions, and there is no profile store to name. */
+export const sdkInstallStoreDir = (target: SdkInstallTarget): { readonly storeDir?: string } =>
+  target.kind === 'profile' ? { storeDir: resolveSdkStoreDir(target.dir) } : {}
 
 const credentialSources = new Map<string, OAuthCredentialSource>()
 
