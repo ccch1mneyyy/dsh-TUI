@@ -1,53 +1,17 @@
-import type { ProviderModelCapabilities, ProviderModelEditor } from '../adapter/ports/channel-settings.js'
+import type { ProviderModelEditor } from '../adapter/ports/channel-settings.js'
 import type { LlmDiscoveredModel } from '../adapter/ports/channel-view.js'
 import { t } from '../i18n.js'
 import { installedMeetsVersion } from './contract.js'
+import { MODEL_CAPABILITY_FIELDS, formatModelReasoning, parseModelReasoning } from '../adapter/ports/model-capabilities.js'
 
-export const PROVIDER_REASONING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
-export const MODEL_CAPABILITY_FIELDS = ['contextWindow', 'maxTokens', 'reasoningEfforts', 'input'] as const
+// The pure parsing/formatting surface lives in ports (UI layers may import
+// values from there, not from here); re-exported so the wizard's existing
+// imports keep working.
+export { MODEL_CAPABILITY_FIELDS, PROVIDER_REASONING_LEVELS, formatModelReasoning, parseModelCapacity, parseModelReasoning } from '../adapter/ports/model-capabilities.js'
 export const CATALOG_MODEL_OVERRIDES_AVAILABLE = installedMeetsVersion(
   '@deepseek-ai/dsh-llm-pi-ai',
   '0.2.0-rc.2',
 )
-
-/** Empty restores inheritance; K/M are decimal token-count suffixes. */
-export function parseModelCapacity(text: string): number | undefined {
-  const value = text.trim()
-  if (value === '') return undefined
-  const match = /^(\d+(?:\.\d+)?)\s*([km])?$/i.exec(value)
-  const count = match === null ? NaN : Number(match[1]) * (match[2]?.toLowerCase() === 'm' ? 1_000_000 : match[2] ? 1000 : 1)
-  if (!Number.isSafeInteger(count) || count <= 0) throw new Error(t('provider-model-capacity-invalid'))
-  return count
-}
-
-/** Editable level list, including explicit wire aliases and off-by-omission. */
-export function formatModelReasoning(value: ProviderModelCapabilities['reasoningEfforts']): string {
-  if (value === undefined) return ''
-  if (value === false) return 'none'
-  return Object.entries(value).map(([level, wire]) =>
-    wire === null || (wire === level && level !== 'off') ? level : `${level}=${wire}`,
-  ).join(', ')
-}
-
-/** Decode offered levels, not the current conversation's selected effort. */
-export function parseModelReasoning(text: string): ProviderModelCapabilities['reasoningEfforts'] {
-  const value = text.trim()
-  if (value === '') return undefined
-  if (value.toLowerCase() === 'none' || value.toLowerCase() === 'false') return false
-  const entries = value.split(',').map(part => {
-    const [rawLevel, ...rest] = part.trim().split('=')
-    const level = rawLevel.toLowerCase()
-    const wire = rest.length === 0 ? (level === 'off' ? null : level) : rest.join('=').trim()
-    return [level, wire] as const
-  })
-  if (entries.some(([level, wire]) => !PROVIDER_REASONING_LEVELS.some(id => id === level)
-      || (wire !== null && wire.length === 0))
-    || new Set(entries.map(([level]) => level)).size !== entries.length
-    || !entries.some(([level]) => level !== 'off')) {
-    throw new Error(t('provider-model-reasoning-invalid'))
-  }
-  return Object.fromEntries(entries)
-}
 
 function capabilitiesOf(entry: Record<string, unknown>): ProviderModelCapabilities {
   const reasoning = entry['reasoningEfforts']
