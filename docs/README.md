@@ -33,6 +33,7 @@ The root README lists what ships; the details live here. Chinese files have no s
 | 架构与限制 / Architecture & limitations | [architecture.md](architecture.md) | [architecture.en.md](architecture.en.md) | 运行链路、性能、安全边界与已知限制。 |
 | 会话挂载运行时 / Session mount runtime | [session-mount-runtime.md](session-mount-runtime.md) | [session-mount-runtime.en.md](session-mount-runtime.en.md) | 多 TUI 占用规则与本机账本。 |
 | 多后端架构 / Agent backends | [agent-backend-design.md](agent-backend-design.md) | — | 后端中立层、Claude 后端实现与接入新后端。 |
+| Codex 后端方案 / Codex backend design | [codex-backend-design.md](codex-backend-design.md) | — | Codex（app-server）原生后端的技术方案与分期实施手册。 |
 | 子代理转录页数据源 / DSH child transcript | [dsh-child-transcript.md](dsh-child-transcript.md) | — | DSH 子会话转录的读取契约与新后端接入清单。 |
 
 ## 插件 / Plugins
