@@ -156,3 +156,66 @@
 - C0 补录（§10.2：错误/重试、MCP、web search、图片、elicitation、goal、review、后台终端）未做：它们服务
   C2–C4 的翻译测试，C1 的对应映射用合成通知覆盖。建议各期按需录制（预算内），还是现在一次补齐？
 - `MIN_CODEX_VERSION = 0.144.0`（C0-D3）比方案退路宽；如要保守可改回 0.160.0。
+
+## Neutral layer N2–N6
+
+分支 `feat/codex-neutral`（基于 483a550b），实现 [codex-backend-design.md](codex-backend-design.md)
+§6 的 N2–N6：后端中立、DSH 与 Claude 行为不变（下列门禁证明）。每项一个提交，便于并入
+`feat/codex-native`。Codex 后端本身、`src/backends/shared/`（N1）与内核注册（N7）不在此分支。
+
+### 交付形状（给 Codex 后端的接法）
+
+| # | 提交 | 形状与用法 |
+| --- | --- | --- |
+| N2 | `7c5f70ec` | `src/channel/elicitation.ts`（输入为 MCP 形状 `ElicitationRequestView {serverName, displayName?, title?, message?, requestedSchema?, url?}`，无厂商类型）：`createElicitationForm(req)` → `{questions, answer(answers)}`，`answer` 返回 `accept{content}` / `decline` / `reask{questions}`（只重问无效字段，标签在首问时固定）；`createElicitationUrlAsk(req)` → `{questions, accepted(answers)}`，无 URL 时为 `undefined`；`elicitationNotices.{urlOpen,urlComplete,urlMissing,unsupported}`；底层 `formFields`/`parseFieldText`/`fieldQuestion`/`fieldValue`/`serverHeader`。Claude 的 `dialogs.ts` 只保留挂起/撤回接线。i18n 键 `claude-elicit-*` 改名为中立的 `elicit-*`（文案不变；`verify-claude-dialogs` 只跟随键名）。Codex：`mcpServer/elicitation/request` 经此转 `question.request`，按 `accept/decline/cancel` 应答。 |
+| N3 | `7496e290` | `QuestionItemView.secret?: true`：交互桥带入 store；问卷面板输入行按码点画 `•`（选项行打字、括号粘贴、CJK、光标编辑），提交原文；答卷记录对 `secret` 问题显示 `••••`（选项与文本都掩）。记录从问卷型 `tool.call` 参数里的问题对象读 `secret: true`；Codex 若为 `requestUserInput`（不入历史，F23）合成记录，参数问题对象带 `secret: true`，且事件里最好不放明文答案（投影会掩码，但 `/trace` 能看到原始事件）。 |
+| N4 | `459aaa82` | 新事件 `{type:'tool.output'; callId; text; time; parentCallId?}`（追加片段）。投影器在运行中的工具行上维护 `liveOutput`（最后 200 行 / 16 KiB，按 UTF-16 码元计）与 `liveOutputDropped`（从头部丢掉的整行数）；`tool.result` 到达即删除这两个键（从未输出的卡片形状不变，DSH 黄金基线不动）；未知/已落定/被窗口折叠/子代理 lane/问卷型调用一律忽略。运行中的卡片在 Running 行下渲染最新 5 行（全屏 8 行，展开时为整条保留尾部），dim，有更早的行时首行 `… N 行省略`；ANSI/OSC 剥离、`\r` 进度取最后状态、制表符转空格、按显示单元截断成一行。实时行不受 3 行折叠与平滑揭示影响。DSH/Claude 翻译器声明“可选未用”（`verify:agent-domain` 断言）；轨迹折叠直接消费不出行。后端应以 `wake:'frame'` 发出、每个 call ≤10 Hz。 |
+| N5 | `55b0c119` | `ToolFileDiff` = `{path, oldText, newText}` \| `{path, patch, change?, movePath?}`。patch 分支（`src/components/diffPatch.ts`）用 `JsDiff.parsePatch`（缺文件头时补 `--- a/<path>`/`+++ b/<path>`）；hunk 计数与头不符时 jsdiff 会抛错，退回宽松逐行解析；`add`/`delete` 的原文内容（无 `@@`）当作整段新增/删除；完全读不出的保留原样行。unified 卡：单文件首行 `(+N -M)` 统计行，多文件为可点击路径行（移动 `a → b`、新文件/已删除标签）加统计；每行带真实行号（删除行用旧号，其余用新号），hunk 间 `⋯`。双栏视图逐栏显示各自行号。Codex：`update` → `{path, patch, change:'update', movePath?}`。 |
+| N6 | `e4a95ae3` | `ChannelGoal.budget?: {tokensUsed, tokenBudget: number\|null, timeUsedSeconds}`：目标面板、页脚芯片（`12.3k/50k`）与状态行目标段显示 `已用 12.3k / 50k tokens · 4m`（en `Used 12.3k / 50k tokens · 4m`）替代轮次。新能力 `goals?: {set(objective, {tokenBudget?}), pause(), resume(), clear()}`；声明它的会话获得随行命令 `/goal`（`BACKEND_GOAL_COMMAND`，同 `/permission`、`/channel`）与核心宿主 `backendGoals()`；语法见 `src/channel/goal-command.ts`（`/goal`、`/goal <目标>`、`--budget 50k`/`--tokens=1.5m`、`edit`、整句 `pause`/`resume`/`clear`）。DSH 的 `/goal` 仍是 `dsh-command-goal` 注册表行（先判定，路由不变）。 |
+
+### 偏离 §6 形状之处（均为超集或细化）
+
+- N2：除纯函数外还导出表单/URL 流程对象（`createElicitationForm`、`createElicitationUrlAsk`），
+  让两个后端的挂起逻辑只剩接线；i18n 键改名为中立前缀。
+- N4：16 KiB 以 UTF-16 码元计（不是 UTF-8 字节）；展开（Ctrl+O/点击）时显示整条保留尾部；任何
+  有输出的运行中卡片都显示实时行（双栏 diff 除外），不限终端卡；`MessageList` 增加 `fullscreen`
+  属性并把实时行数计入行高签名（尾部填满窗口后签名饱和，不再触发重测）。
+- N5：单文件 patch 也显示 `(+N -M)`（独立统计行，路径已在卡片标题里）；增加宽松解析与原文
+  add/delete 的兜底。
+- N6：`ChannelCapabilities` 新增 `goals` 标志、`ChannelUi` 新增 `backendGoals()` 宿主（与
+  `backendModes`/`backendMcp` 同型）；语法增加 `--budget`/`--tokens` 与 `edit`。**唯一的用户可见
+  变化**：Claude 会话输入 `/goal` 现在提示“在 Claude 内核下不可用”且不发给 CLI（原先作为文本
+  透传）；`docs/claude-backend{,.en}.md` 已同步。§5.15 写的“需 N5 的预算字段 / goals 能力（N5）”
+  实为 N6。
+
+### 渲染与性能
+
+- `scripts/perf-tool-live-output.tsx`（不进 CI）：全屏 100×40，200 行历史 + 50 张已落定工具卡，
+  一张运行中终端卡以 10 Hz 收 60 片输出。帧耗时 p50 0.91→1.00 ms（对照组为只走 1 s 耗时 tick），
+  每帧 yoga 测量调用 +11%；每片帧耗时前 10 片 ≈4.7 ms、后 10 片 ≈3.5–5.6 ms（噪声内持平，不随
+  累计输出增长）。只有运行中那张卡的 memo 属性变化，其余行不重渲。尾部追加 20k 次共 ≈107 ms
+  （≈5 µs/次）。
+- N5 旧分支：在 N4 提交与 N5 提交上各截取 72 帧（40/80/120 列 × unified/split/auto × 折叠/展开，
+  含多文件、CJK、超长行），逐字节相同。
+
+### 门禁（HEAD `e4a95ae3`）
+
+- `pnpm build`：编译 + `verify:build` 89/89；`pnpm verify:package`（2952 文件、30 个入口目标）与
+  `pnpm smoke` 通过。
+- `scripts/run-ci-group.mjs` 全部组（本地 `--jobs 4`，并行红的条目由运行器串行复跑）：
+  render-scroll 81/81、input-terminal 31/31、session-workspace 57/57、channel-ui 149/149、
+  flaky-observation 2/2。首轮未设 `DSH_TUI_LANG=zh`（CI 测试 job 会设）时，
+  `verify-splash-eggs`、`verify-activity-store` 因一次性 HOME 回落英文而失败，带 CI 环境重跑通过；
+  `verify-guide` 抓到 `guide/` 副本未同步（已 `node scripts/build-guide.mjs` 并入 N6）。
+  串行复跑转绿的 CPU 争用条目：`verify-unseen-report-once`（基线 483a550b 同样在 8 路并发下 8/8
+  失败、串行 5/5 通过）、`verify-smooth-reveal`、`repro-idle-oscillation`、
+  `verify-scroll-jumps-narrow`、`verify-todo-side-panel`、`verify-docked-queue`、
+  `verify-jobs-side-panel`、`verify-trajectory-source-states`；已知时序 flake
+  `verify-compaction-progress` scene6 单独重跑通过。
+- `verify:projection-golden`（5 个黄金基线、83 行，fixture 未改动）、`verify-dsh-translate`
+  （168 live / 162 replay）、`verify:agent-domain`（18）、`verify:claude-contract`（16）、
+  全部 22 个 `verify-claude-*`（假 SDK）通过。
+- 新增聚焦回归：`verify-elicitation` 41、`verify-question-secret` 19（channel-ui）、
+  `verify-tool-live-output` 68、`verify-diff-patch` 49（render-scroll）、`verify-goal-budget` 39
+  （channel-ui）。未做真实终端手动演练（无交互 TTY）；inline/fullscreen 与 80/40 列由无头
+  Chat 场景覆盖。
