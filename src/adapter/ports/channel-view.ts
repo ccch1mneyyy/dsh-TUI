@@ -215,13 +215,27 @@ export interface ToolViewMeta {
   readonly category?: 'mutate' | 'exec' | 'other'
 }
 
-/** One file change in a tool presentation (dsh-tools FileDiff). */
-export interface ToolFileDiff {
-  readonly path: string
-  /** Prior content, or null for a new file / no before-image. */
-  readonly oldText: string | null
-  readonly newText: string
-}
+/**
+ * One file change in a tool presentation: the before/after texts
+ * (dsh-tools FileDiff; the diff is computed for display), or — for a
+ * backend that only has the patch — one file's unified diff hunks, whose
+ * real line numbers the card shows (`@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n`;
+ * file headers optional). `change` marks an added / deleted file;
+ * `movePath` the destination of a moved one.
+ */
+export type ToolFileDiff =
+  | {
+      readonly path: string
+      /** Prior content, or null for a new file / no before-image. */
+      readonly oldText: string | null
+      readonly newText: string
+    }
+  | {
+      readonly path: string
+      readonly patch: string
+      readonly change?: 'add' | 'delete' | 'update'
+      readonly movePath?: string
+    }
 
 /** Completed-call render intent (structural subset of dsh-tools
  *  ToolResultView). `web` results and unknown shapes fall back to raw text. */

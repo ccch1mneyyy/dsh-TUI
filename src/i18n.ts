@@ -1256,6 +1256,8 @@ const dict = {
   'tool-exit-code': { zh: '退出码 {{code}}', en: 'Exit code {{code}}' },
   'tool-killed-signal': { zh: '被信号 {{name}} 终止', en: 'Killed by signal {{name}}' },
   'tool-running-elapsed': { zh: '运行中…（{{duration}}）', en: 'Running… ({{duration}})' },
+  'diff-patch-added': { zh: '新文件', en: 'new file' },
+  'diff-patch-deleted': { zh: '已删除', en: 'deleted' },
   'tool-live-omitted': { zh: '… 已省略 {{count}} 行', en: { one: '… {{count}} line omitted', other: '… {{count}} lines omitted' } },
   // 搜索结果截断行（search 卡 paths 形态）：
   'search-results-total': { zh: '…（共 {{n}} 条）', en: '… ({{n}} total)' },

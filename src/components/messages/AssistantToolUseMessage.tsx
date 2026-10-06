@@ -21,6 +21,7 @@ import { primaryComboString } from '../../utils/keymap.js'
 import { agentMessageStateColor, agentMessageStateText } from './TranscriptLeaves.js'
 import type { AgentMessageState } from './agentTeam.js'
 import { liveOutputMaxLines, liveOutputView } from './liveOutputLines.js'
+import { isPatchDiff, parseFilePatch, patchHeader, type ToolPatchDiff } from '../diffPatch.js'
 
 type Props = {
   tool: ToolRow
@@ -238,6 +239,11 @@ type BodyLine = {
   /** The row's collapse hint: dim at rest, steps to text while hovered so the
    *  toggle reads before the click (the compaction row's pattern). */
   readonly revealOnHover?: boolean
+  /** `path` rows: the file a click opens when the text is not the path
+   *  itself (a moved file's `old → new`). */
+  readonly target?: string
+  /** `path` rows: dim text after the path (a patch file's `(+N -M)`). */
+  readonly suffix?: string
 }
 
 /** The collapsed text body keeps three lines. */
@@ -290,13 +296,46 @@ function sideLines(text: string): string[] {
   return lines
 }
 
+/** A patch file → its header and numbered hunk rows: each line carries
+ *  its real line number (old for a removed line, new otherwise) in a gutter
+ *  as wide as the file's largest number; `⋯` separates hunks. A patch with
+ *  no readable hunk shows its own lines, coloured by their marker. */
+function patchLines(diff: ToolPatchDiff, multiFile: boolean): BodyLine[] {
+  const parsed = parseFilePatch(diff)
+  const header = patchHeader(diff, parsed, multiFile)
+  const out: BodyLine[] = [header.kind === 'path'
+    ? { text: header.path, tone: 'path', target: header.target, suffix: header.suffix }
+    : dim(header.text)]
+  if (parsed.raw !== undefined) {
+    for (const line of parsed.raw) out.push(line.startsWith('+') ? add(line) : line.startsWith('-') ? del(line) : plain(line))
+    return out
+  }
+  const width = String(parsed.maxLineNo).length
+  parsed.hunks.forEach((hunk, index) => {
+    if (index > 0) out.push(dim('⋯'))
+    for (const line of hunk.lines) {
+      const no = String((line.kind === 'del' ? line.oldNo : line.newNo) ?? '').padStart(width)
+      if (line.kind === 'del') out.push(del(`${no} - ${line.text}`))
+      else if (line.kind === 'add') out.push(add(`${no} + ${line.text}`))
+      else out.push(plain(`${no}   ${line.text}`))
+    }
+  })
+  return out
+}
+
 /** Diff hunks → add/del rows. The header already carries the path for the
  *  common single-hunk case; with several hunks a path row separates files
- *  and `⋯` separates scattered hunks of one file (upstream DiffBlock). */
+ *  and `⋯` separates scattered hunks of one file (upstream DiffBlock). A
+ *  patch file (`ToolFileDiff.patch`) renders through {@link patchLines}. */
 function diffLines(diffs: readonly ToolFileDiff[]): BodyLine[] {
   const out: BodyLine[] = []
   let prevPath: string | undefined
   for (const diff of diffs) {
+    if (isPatchDiff(diff)) {
+      out.push(...patchLines(diff, diffs.length > 1))
+      prevPath = diff.path
+      continue
+    }
     if (diffs.length > 1) {
       if (diff.path !== prevPath) out.push({ text: diff.path, tone: 'path' })
       else out.push(dim('⋯'))
@@ -975,10 +1014,11 @@ export function AssistantToolUseMessage({
                       // Stop propagation so the row's fold toggle does not
                       // fire when clicking the path.
                       event.stopImmediatePropagation()
-                      onOpenFile(line.text)
+                      onOpenFile(line.target ?? line.text)
                     }}
                   >
                     <Text color="ide" underline>{line.text}</Text>
+                    {line.suffix !== undefined && <Text dimColor>{line.suffix}</Text>}
                   </Box>
                 ) : (
                   <Text
@@ -1003,6 +1043,7 @@ export function AssistantToolUseMessage({
                     ) : (
                       line.text === '' ? ' ' : line.text
                     )}
+                    {line.suffix !== undefined && <Text dimColor>{line.suffix}</Text>}
                   </Text>
                 )}
               </Box>

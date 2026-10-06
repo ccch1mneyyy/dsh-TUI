@@ -86,6 +86,11 @@ const GROUPS = {
 // dim、全屏 8 行、省略头、ANSI/回车进度/制表符清洗、按显示宽度截断 CJK 与超长行），
 // 以及真实 Chat 的 inline/fullscreen × 80/40 列端到端（卡片随尾部增高、不压下一行）。
     ["verify-tool-live-output", ['node', '--import', 'tsx/esm', 'scripts/verify-tool-live-output.tsx']],
+// 带真实行号的 unified patch（ToolFileDiff.patch）：Codex 无文件头 hunk 与带头形状一致、
+// 多 hunk / 新增 / 删除 / 原文 add/delete / 计数不符（宽松回退）/ 不可读（原样行）、
+// 单文件统计行与多文件路径行（移动、新文件/已删除）；unified 卡（80/40 列、CJK、超长行、
+// 8 行折叠）与双栏（强制 split@80、auto@120）的逐栏行号；旧 old/new 分支不变。
+    ["verify-diff-patch", ['node', '--import', 'tsx/esm', 'scripts/verify-diff-patch.tsx']],
     ["repro-diff-split", ['node', '--import', 'tsx/esm', 'scripts/repro-diff-split.tsx']],
 // 代码块 tab 缩进背景回归（issue #606）：tab 展开须继承单元格样式，否则
 // 无背景的空格被 diff 跳过，在 tmux/Windows Terminal 深色底下显示为黑块。

@@ -17,6 +17,7 @@ import { useTheme } from './design-system/ThemeProvider.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
 import { revealLinesOf } from './smoothReveal.js'
 import { primaryComboString } from '../utils/keymap.js'
+import { isPatchDiff, parseFilePatch, patchHeader, patchHeaderText, type ParsedPatch, type PatchLine } from './diffPatch.js'
 
 /**
  * Side-by-side (two-pane) diff view for Edit/Write tool cards.
@@ -28,9 +29,12 @@ import { primaryComboString } from '../utils/keymap.js'
  * highlights. Unequal replacement blocks pair through a case-insensitive
  * LCS so an inserted line above an edited one cannot misalign the pair.
  *
- * ToolFileDiff carries no file offsets, so the view shows a status gutter
- * (- / + / space) instead of line numbers — a made-up number is worse than
- * none (issue #250, P2-3).
+ * An old/new ToolFileDiff carries no file offsets, so the view shows a
+ * status gutter (- / + / space) instead of line numbers — a made-up number
+ * is worse than none (issue #250, P2-3). A patch ToolFileDiff (unified
+ * hunks, `diffPatch.ts`) does carry them: each pane numbers its lines with
+ * the real old / new line numbers, hunks are separated by `⋯`, and the
+ * file's header row carries its `(+N -M)` stat.
  *
  * Code is syntax-highlighted with cli-highlight over the WHOLE hunk text
  * (never per line — multi-line comments and strings need the lexer state),
@@ -62,6 +66,9 @@ interface DiffRow {
   readonly newIndex?: number
   readonly oldWords?: readonly Segment[]
   readonly newWords?: readonly Segment[]
+  /** Real file line numbers (patch diffs only; absent = status gutter). */
+  readonly oldNo?: number
+  readonly newNo?: number
 }
 
 /** Replace tabs so width math and alignment hold (pi convention). */
@@ -236,6 +243,75 @@ function alignFileDiff(fileIndex: number, oldText: string | null, newText: strin
   return rows
 }
 
+/** A patch file's hunks aligned into rows (the same pairing rules as
+ *  {@link alignFileDiff}, applied per removed+added block of each hunk),
+ *  plus the old / new side texts the rows index (syntax highlighting reads
+ *  them like a whole file's texts). A patch with no readable hunk aligns
+ *  its raw lines by their marker, unnumbered. */
+function alignPatchFile(fileIndex: number, parsed: ParsedPatch): { rows: (DiffRow | { readonly separator: string })[]; oldSide: string[]; newSide: string[] } {
+  const rows: (DiffRow | { readonly separator: string })[] = []
+  const oldSide: string[] = []
+  const newSide: string[] = []
+  const hunks: readonly (readonly PatchLine[])[] = parsed.raw === undefined
+    ? parsed.hunks.map(hunk => hunk.lines)
+    : [parsed.raw.map((line): PatchLine => line.startsWith('-') ? { kind: 'del', text: line.slice(1) } : line.startsWith('+') ? { kind: 'add', text: line.slice(1) } : { kind: 'context', text: line })]
+  hunks.forEach((lines, hunkIndex) => {
+    if (hunkIndex > 0) rows.push({ separator: '⋯' })
+    let at = 0
+    while (at < lines.length) {
+      const line = lines[at]!
+      if (line.kind === 'context') {
+        const text = expandTabs(line.text)
+        rows.push({
+          kind: 'context',
+          fileIndex,
+          oldIndex: oldSide.push(text) - 1,
+          newIndex: newSide.push(text) - 1,
+          oldWords: plainSegments(text),
+          newWords: plainSegments(text),
+          ...(line.oldNo === undefined ? {} : { oldNo: line.oldNo }),
+          ...(line.newNo === undefined ? {} : { newNo: line.newNo }),
+        })
+        at += 1
+        continue
+      }
+      const removed: PatchLine[] = []
+      while (at < lines.length && lines[at]!.kind === 'del') removed.push(lines[at++]!)
+      const added: PatchLine[] = []
+      while (at < lines.length && lines[at]!.kind === 'add') added.push(lines[at++]!)
+      const oldTexts = removed.map(item => expandTabs(item.text))
+      const newTexts = added.map(item => expandTabs(item.text))
+      const pairs: [number, number][] = oldTexts.length === newTexts.length
+        ? oldTexts.map((_, index) => [index, index] as [number, number])
+        : lcsPairs(oldTexts, newTexts)
+      const events: { kind: 'del' | 'add' | 'change'; o?: number; a?: number }[] = []
+      let oi = 0
+      let ai = 0
+      for (const [o, a] of pairs) {
+        while (oi < o) events.push({ kind: 'del', o: oi++ })
+        while (ai < a) events.push({ kind: 'add', a: ai++ })
+        events.push({ kind: 'change', o: oi++, a: ai++ })
+      }
+      while (oi < oldTexts.length) events.push({ kind: 'del', o: oi++ })
+      while (ai < newTexts.length) events.push({ kind: 'add', a: ai++ })
+      for (const event of events) {
+        const oldNo = event.o === undefined ? undefined : removed[event.o]!.oldNo
+        const newNo = event.a === undefined ? undefined : added[event.a]!.newNo
+        const numbers = { ...(oldNo === undefined ? {} : { oldNo }), ...(newNo === undefined ? {} : { newNo }) }
+        if (event.kind === 'change') {
+          const segments = wordSegments(oldTexts[event.o!]!, newTexts[event.a!]!)
+          rows.push({ kind: 'change', fileIndex, oldIndex: oldSide.push(oldTexts[event.o!]!) - 1, newIndex: newSide.push(newTexts[event.a!]!) - 1, oldWords: segments.old, newWords: segments.new, ...numbers })
+        } else if (event.kind === 'del') {
+          rows.push({ kind: 'del', fileIndex, oldIndex: oldSide.push(oldTexts[event.o!]!) - 1, oldWords: plainSegments(oldTexts[event.o!]!), ...numbers })
+        } else {
+          rows.push({ kind: 'add', fileIndex, newIndex: newSide.push(newTexts[event.a!]!) - 1, newWords: plainSegments(newTexts[event.a!]!), ...numbers })
+        }
+      }
+    }
+  })
+  return { rows, oldSide, newSide }
+}
+
 // --- rendering --------------------------------------------------------------
 
 function PaneLine({
@@ -245,6 +321,8 @@ function PaneLine({
   tone,
   toolBackground,
   padLeft = false,
+  lineNo,
+  lineNoWidth = 0,
 }: {
   readonly side: { readonly segments: readonly Segment[] } | undefined
   readonly kind: DiffRow['kind']
@@ -252,6 +330,10 @@ function PaneLine({
   readonly tone: 'old' | 'new'
   readonly toolBackground: ToolBackground
   readonly padLeft?: boolean
+  /** The real line number (patch diffs); shown when `lineNoWidth` > 0. */
+  readonly lineNo?: number
+  /** Gutter width of the file's line numbers; 0 = status gutter only. */
+  readonly lineNoWidth?: number
 }): React.ReactNode {
   const ordinaryBackground = toolBackground === 'subtle'
     ? 'toolCardBackgroundDim'
@@ -270,7 +352,8 @@ function PaneLine({
   // Status gutter instead of line numbers: ToolFileDiff has no file
   // offsets, and an invented number misleads (issue #250, P2-3).
   const marker = kind === 'context' ? ' ' : tone === 'old' ? '−' : '+'
-  const prefix = padLeft ? ` ${marker}` : marker
+  const numbered = lineNoWidth > 0 ? `${(lineNo === undefined || side === undefined ? '' : String(lineNo)).padStart(lineNoWidth)} ${marker}` : marker
+  const prefix = padLeft ? ` ${numbered}` : numbered
   return (
     <Box width={width} flexShrink={0} backgroundColor={backgroundColor}>
       <Text dimColor backgroundColor={backgroundColor}>{`${prefix} `}</Text>
@@ -339,8 +422,23 @@ export function SplitDiffView({
   // Alignment is text-only and capped BEFORE styling: the highlighter and
   // word-diff work lands only on the visible slice (issue #250, P2-8).
   const rows: (DiffRow | { readonly separator: string })[] = []
+  /** Patch files: their side texts (syntax lookup) and number gutter width. */
+  const patchFiles = new Map<number, { readonly old: string; readonly next: string; readonly lineNoWidth: number }>()
   let prevPath: string | undefined
   diffs.forEach((diff, fileIndex) => {
+    if (isPatchDiff(diff)) {
+      const parsed = parseFilePatch(diff)
+      rows.push({ separator: patchHeaderText(patchHeader(diff, parsed, diffs.length > 1)) })
+      const aligned = alignPatchFile(fileIndex, parsed)
+      rows.push(...aligned.rows)
+      patchFiles.set(fileIndex, {
+        old: aligned.oldSide.join('\n'),
+        next: aligned.newSide.join('\n'),
+        lineNoWidth: parsed.raw === undefined ? String(parsed.maxLineNo).length : 0,
+      })
+      prevPath = diff.path
+      return
+    }
     if (diffs.length > 1) {
       if (diff.path !== prevPath) rows.push({ separator: diff.path })
       else rows.push({ separator: '⋯' })
@@ -364,8 +462,17 @@ export function SplitDiffView({
 
   // Whole-hunk highlight per file (multi-line lexer state preserved);
   // only the visible rows merge syntax runs with word flags below.
-  const fileSyntax = diffs.map(diff => {
-    const language = extname(diff.path).replace(/^\./, '') || undefined
+  const fileSyntax = diffs.map((diff, fileIndex) => {
+    const language = extname(isPatchDiff(diff) ? diff.movePath ?? diff.path : diff.path).replace(/^\./, '') || undefined
+    const patch = patchFiles.get(fileIndex)
+    if (patch !== undefined) {
+      // Side texts are already tab-expanded (alignPatchFile).
+      return {
+        old: highlightLines(patch.old, language, hl, syntaxTheme, themeSig),
+        next: highlightLines(patch.next, language, hl, syntaxTheme, themeSig),
+      }
+    }
+    if (isPatchDiff(diff)) return { old: undefined, next: undefined }
     return {
       old: highlightLines(expandTabs(diff.oldText ?? ''), language, hl, syntaxTheme, themeSig),
       next: highlightLines(expandTabs(diff.newText), language, hl, syntaxTheme, themeSig),
@@ -393,13 +500,14 @@ export function SplitDiffView({
         const newSide = row.newWords === undefined
           ? undefined
           : { segments: newRuns !== undefined ? mergeRuns(newRuns, row.newWords) : row.newWords }
+        const lineNoWidth = patchFiles.get(row.fileIndex)?.lineNoWidth ?? 0
         return (
           <Box key={index} flexDirection="row">
-            <PaneLine side={oldSide} kind={row.kind === 'add' ? 'context' : row.kind} tone="old" width={paneWidth} toolBackground={toolBackground} />
+            <PaneLine side={oldSide} kind={row.kind === 'add' ? 'context' : row.kind} tone="old" width={paneWidth} toolBackground={toolBackground} lineNo={row.oldNo} lineNoWidth={lineNoWidth} />
             <Box width={1} flexShrink={0}>
               <Text dimColor>│</Text>
             </Box>
-            <PaneLine side={newSide} kind={row.kind === 'del' ? 'context' : row.kind} tone="new" width={paneWidth} toolBackground={toolBackground} padLeft />
+            <PaneLine side={newSide} kind={row.kind === 'del' ? 'context' : row.kind} tone="new" width={paneWidth} toolBackground={toolBackground} padLeft lineNo={row.newNo} lineNoWidth={lineNoWidth} />
           </Box>
         )
       })}
