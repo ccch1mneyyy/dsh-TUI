@@ -11,13 +11,21 @@ dsh-TUI 可以把会话跑在 Claude Agent 后端上，而不是 DeepSeek Harnes
 
 需要：
 
-- Claude Agent SDK。它是可选依赖，默认不装。在 dsh-tui 的 profile 目录（默认
+- Claude Agent SDK。它是可选依赖，默认不装。最省事的装法：打开内核选择器（启动页
+  「内核」或 `/kernel`），对未安装的 Claude 行按 Enter，按引导一键安装——dsh-TUI
+  自己定位 profile 目录，用 pnpm 装锁定版本的 SDK，装完该行即变亮可选（独立构建
+  与无 profile 的启动给手动指引）。手动等价形式，在 dsh-tui 的 profile 目录（默认
   `~/.dsh/profiles/dsh-tui`，设置了 `DSH_HOME` 时是 `$DSH_HOME/profiles/dsh-tui`）
   执行一次：
 
   ```sh
   cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
   ```
+
+  若 pnpm 报 `ERR_PNPM_UNEXPECTED_STORE`（提示现有 `node_modules` 链接自另一个
+  store），说明这个目录之前是用别的 store 装的——pnpm 不会跨 store 重新链接。
+  在 profile 目录里跑一次 `pnpm install` 对齐即可；向导的兜底命令会带上
+  `--store-dir` 指定 store，避免再按环境解析出第二个。
 
 - 一份 Claude 凭据，见下面的「登录」。
 - `claude` 命令不是必需的：`PATH` 上有能运行的 `claude` 就用它（与你平时用的 CLI 同版本、

@@ -14,12 +14,23 @@ implementation is described in [Agent backends](agent-backend-design.md)
 You need:
 
 - The Claude Agent SDK. It is an optional dependency and is not installed by
-  default. Run this once in the dsh-tui profile directory (`~/.dsh/profiles/dsh-tui`,
-  or `$DSH_HOME/profiles/dsh-tui` when `DSH_HOME` is set):
+  default. The easiest install: open the kernel picker (the launchpad "Kernel"
+  entry or `/kernel`) and press Enter on the dim Claude row — the wizard
+  locates the profile directory and installs the pinned SDK via pnpm; the row
+  lights up when it finishes (standalone builds and profile-less launches get
+  manual instructions). The manual equivalent, run once in the dsh-tui profile
+  directory (`~/.dsh/profiles/dsh-tui`, or `$DSH_HOME/profiles/dsh-tui` when
+  `DSH_HOME` is set):
 
   ```sh
   cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
   ```
+
+  If pnpm reports `ERR_PNPM_UNEXPECTED_STORE` (the existing `node_modules` is
+  linked from a different store), that directory was installed from another
+  store and pnpm will not relink across stores. Run `pnpm install` once in the
+  profile directory to line it up; the wizard's fallback command names the
+  store with `--store-dir` so a second one is never resolved by environment.
 
 - A Claude credential; see "Signing in" below.
 - The `claude` command is optional: a working `claude` on `PATH` is used (same
