@@ -26,6 +26,12 @@ You need:
   cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
   ```
 
+  If pnpm reports `ERR_PNPM_UNEXPECTED_STORE` (the existing `node_modules` is
+  linked from a different store), that directory was installed from another
+  store and pnpm will not relink across stores. Run `pnpm install` once in the
+  profile directory to line it up; the wizard's fallback command names the
+  store with `--store-dir` so a second one is never resolved by environment.
+
 - A Claude credential; see "Signing in" below.
 - The `claude` command is optional: a working `claude` on `PATH` is used (same
   version and session store as the CLI you already use), otherwise the SDK's

@@ -188,6 +188,12 @@ The easiest install: open the kernel picker (the launchpad "Kernel" entry or
 profile directory and installs the pinned SDK for you; the command above is
 its manual equivalent.
 
+If pnpm reports `ERR_PNPM_UNEXPECTED_STORE` (the existing `node_modules` is
+linked from a different store), that directory was installed from another store
+and pnpm will not relink across stores. Run `pnpm install` once in the profile
+directory to line it up; the wizard's fallback command names the store with
+`--store-dir` so a second one is never resolved by environment.
+
 - **Sign-in**: a `/channel` relay profile, your dsh-auth `anthropic` sign-in
   (`/login`), `ANTHROPIC_API_KEY` or cloud-provider variables, or an existing
   `claude login`, in that order. A `claude` on `PATH` is used when present,
