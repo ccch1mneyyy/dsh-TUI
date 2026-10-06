@@ -277,6 +277,17 @@ export type AgentEvent =
   | { readonly type: 'tool.result'; readonly seq: number; readonly turn: number; readonly step: number; readonly callId: string; readonly isError: boolean; readonly time: number; readonly content: readonly ContentBlockView[]; readonly text: string; readonly errorText?: string; readonly images?: readonly ImageRef[]; readonly structured?: unknown; readonly meta?: unknown; readonly presentation?: ToolResultPresentation; readonly parentCallId?: string }
   /** A running tool reported progress. */
   | { readonly type: 'tool.progress'; readonly callId: string; readonly elapsedMs: number; readonly parentCallId?: string }
+  /**
+   * Live output of a running tool: one appended chunk of what it printed so
+   * far (a command's stdout/stderr as it arrives; raw, ANSI and carriage
+   * returns included). Display-only and transient: the projector keeps a
+   * bounded tail on the running card and drops it when `tool.result`
+   * settles the call (the result carries the output of record), so it is
+   * never part of durable history. A chunk for a call the projector does
+   * not know (never opened, already settled) is ignored. A backend sends it
+   * frame-coalesced (`wake: 'frame'`) and at a bounded rate.
+   */
+  | { readonly type: 'tool.output'; readonly callId: string; readonly text: string; readonly time: number; readonly parentCallId?: string }
   // ── human in the loop ───────────────────────────────────────────────
   /** A permission prompt is waiting for the user. */
   | { readonly type: 'permission.request'; readonly request: PermissionRequestView }

@@ -37,7 +37,8 @@ SDK；agent 读取 ports 类型并使用中立 helper。目录与 import 规则�
 
 - `events.ts`：`AgentEvent` 联合类型，live 流与历史回放共用同一套词汇。覆盖会话
   （ready/title/color/reset/status）、回合与步、用户消息、待发队列、助手流
-  （attempt/delta/message）、工具（call/result/progress）、审批与提问、子代理与后台
+  （attempt/delta/message）、工具（call/result/progress，以及运行中的实时输出 output：
+  投影器在运行中的卡片上保留有界尾部，结果到达即清除）、审批与提问、子代理与后台
   任务、压缩、上下文、模型/effort/模式变化、命令列表、DSH 专有事实（goal、preset、
   system prompt、request header）、提示与限流，以及给插件渲染器的 `custom`。后端
   不支持的东西就不发事件，不发假事件。

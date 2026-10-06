@@ -22,6 +22,7 @@
  * | `assistant.message` | `assistant/message` | message-level usage (the authoritative token count) attaches to the first row exactly once. |
  * | `tool.call`/`tool.result` | `tool/call`/`tool/result` | paired by `callId`; args/result stay references (the inspector re-reads lazily). |
  * | `tool.progress` | — | consumed; a running row's spinner is already live, an elapsed echo would add a row per poll. |
+ * | `tool.output` | — | consumed; live output is display-only, the settled result carries the record. |
  * | `permission.request`/`settled` | `approval/asked`/`approval/decided` | paired by `requestId`; the asked payload also records the wait-detail fields (source identity, offered options). |
  * | `question.request`/`settled` | `approval/asked`/`approval/decided` | the questionnaire as an approval-shaped bracket; the asked payload carries a bounded question snapshot. |
  * | `compaction.start`/`end` | `compaction/start`/`compaction/end` | `removed` derived from pre/post tokens when both are known. |
@@ -422,9 +423,11 @@ export function createAgentTrajectorySource(options?: { readonly clock?: () => n
         })
         return
       }
-      case 'tool.progress': {
+      case 'tool.progress':
+      case 'tool.output': {
         // Consumed, no row: a running row is already live in the ledger
-        // and the wave band; an elapsed echo would add one row per poll.
+        // and the wave band; an elapsed echo would add one row per poll,
+        // and live output is display-only (the result carries the record).
         return
       }
       case 'permission.request': {

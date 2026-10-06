@@ -63,7 +63,7 @@ function capLine(text: string): string {
 }
 
 /** The child-lane event kinds (they carry the delegating call's id). */
-export type LaneEvent = AgentEventOf<'assistant.attempt.start' | 'assistant.delta' | 'assistant.message' | 'tool.call' | 'tool.result' | 'tool.progress'>
+export type LaneEvent = AgentEventOf<'assistant.attempt.start' | 'assistant.delta' | 'assistant.message' | 'tool.call' | 'tool.result' | 'tool.progress' | 'tool.output'>
 
 /** The subagent lane an event belongs to (`parentCallId`), if it is a child-lane event. */
 export function laneOf(event: AgentEvent): string | undefined {
@@ -74,6 +74,7 @@ export function laneOf(event: AgentEvent): string | undefined {
     case 'tool.call':
     case 'tool.result':
     case 'tool.progress':
+    case 'tool.output':
       return event.parentCallId
     default:
       return undefined
@@ -537,6 +538,10 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
       }
       case 'tool.progress':
         // Elapsed time only: the card already ticks its own duration.
+        return
+      case 'tool.output':
+        // A child's live tool output: the subagent card lists its calls,
+        // not their output (the result preview lands with tool.result).
         return
       default: {
         const unknown: never = event

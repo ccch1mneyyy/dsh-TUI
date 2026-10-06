@@ -187,6 +187,15 @@ export interface ToolRow {
   startedAt: number
   /** Settled wall-clock duration, written by tool/result. */
   durationMs?: number
+  /**
+   * Live output of the running call (`tool.output`): the bounded tail the
+   * projector keeps (at most 200 lines / 16 KiB), raw — ANSI and carriage
+   * returns included; the card sanitizes the few lines it shows. Absent
+   * when the call printed nothing live; removed when the result settles.
+   */
+  liveOutput?: string
+  /** Whole lines dropped from the head of `liveOutput` to keep it bounded. */
+  liveOutputDropped?: number
 }
 
 /** Pending-call render intent (structural subset of dsh-tools ToolCallView). */

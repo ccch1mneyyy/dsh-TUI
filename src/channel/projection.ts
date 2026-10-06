@@ -22,6 +22,7 @@ import { logForDebugging } from '../utils/debug.js'
 import { laneOf } from './activity.js'
 import { buildQuestionRecord, parseQuestionRecordAnswers, parseQuestionRecordQuestions } from './question-record.js'
 import { cleanRenderText, NOTICE_CELLS } from './sanitize.js'
+import { appendLiveOutput, type LiveOutputTail } from './live-output.js'
 import { replaySelectionAttachment } from './selection-record.js'
 import { ARGS_PREVIEW_LIMIT, LOCAL_OUTPUT_LIMIT, preview, RESULT_PREVIEW_LIMIT } from './transcript.js'
 import { addUsageToBucket, emptyCostBuckets, estimateTokens, usageOutputTokens, type PricingWindow } from './usage.js'
@@ -146,6 +147,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
   let lastNotedTurnModel: string | undefined
   /** Tool cards by callId, so the result can settle the running card. */
   const toolCards = new Map<string, ChatRow>()
+  /** The live-output tail of each running card that printed (`tool.output`),
+   *  by callId: at most one per running card, dropped with its result. */
+  const liveTails = new Map<string, LiveOutputTail>()
   /**
    * Question-presented calls by callId, holding their raw arguments. The ask
    * renders as the interactive panel rather than a tool card, so its result
@@ -867,6 +871,12 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       return
     }
     if (card === undefined || card.tool === undefined) return
+    // The result carries the output of record: the live tail goes (deleted,
+    // not set undefined, so a card that never printed keeps its shape).
+    if (liveTails.delete(callId)) {
+      delete card.tool.liveOutput
+      delete card.tool.liveOutputDropped
+    }
     const images = event.images ?? NO_IMAGES
     card.images = images.length === 0 ? undefined : images
     card.tool.durationMs = Math.max(0, Date.now() - card.tool.startedAt)
@@ -900,6 +910,24 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     toolCards.delete(callId)
     touchRow(card)
     updateSpinnerMode()
+  }
+
+  /**
+   * One live-output chunk of a running card: appended to its bounded tail
+   * (`./live-output.ts`) and published on the row. Only that row changes
+   * (the read view marks it dirty), so only the running card re-renders. A
+   * chunk for a call with no running card here (unknown, settled, folded
+   * by the window cap, or a suppressed question/todo/subagent call) is
+   * ignored.
+   */
+  const applyToolOutput = (event: AgentEventOf<'tool.output'>): void => {
+    const card = toolCards.get(event.callId)
+    if (card?.tool === undefined || card.tool.status !== 'running' || card.folded === true || event.text === '') return
+    const tail = appendLiveOutput(liveTails.get(event.callId), event.text)
+    liveTails.set(event.callId, tail)
+    card.tool.liveOutput = tail.text
+    if (tail.dropped > 0) card.tool.liveOutputDropped = tail.dropped
+    touchRow(card)
   }
 
   /** A task feed derived from one tool result reaches the job registry only
@@ -1114,6 +1142,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         return
       case 'tool.result':
         applyToolResult(event)
+        return
+      case 'tool.output':
+        applyToolOutput(event)
         return
       case 'task.output':
         // A `job_output`-style read doubles as the job card's output feed:
@@ -1402,6 +1433,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     sealedReasoning.length = 0
     lastReasoningRow = undefined
     toolCards.clear()
+    liveTails.clear()
     askCalls.clear()
     todoCalls.clear()
     settledCardCallId = undefined

@@ -59,6 +59,9 @@ export function claudeEmits(type: AgentEventType): boolean {
     // compaction summary progress, task output reads).
     case 'assistant.attempt.end':
     case 'task.output':
+    // Optional, unused: the SDK reports no incremental tool output (only
+    // `tool_progress` elapsed time).
+    case 'tool.output':
     case 'compaction.progress':
     case 'context.usage':
     case 'effort.changed':

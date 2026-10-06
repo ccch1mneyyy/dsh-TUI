@@ -157,6 +157,7 @@ export function ToolLeafRow({
   onPreviewImage,
   suppressImageGraphics,
   sourceFolded,
+  fullscreen,
 }: {
   tool: ToolRow
   marginTopOnTurn: boolean
@@ -177,6 +178,8 @@ export function ToolLeafRow({
   suppressImageGraphics?: boolean
   /** The transcript window folded this row's source (previews only). */
   sourceFolded?: boolean
+  /** Fullscreen layout (more live output lines on a running card). */
+  fullscreen?: boolean
 }): React.ReactNode {
   return (
     <>
@@ -196,6 +199,7 @@ export function ToolLeafRow({
         onClick={onClick}
         onOpenFile={onOpenFile}
         sourceFolded={sourceFolded}
+        fullscreen={fullscreen}
       />
       {images !== undefined && <TranscriptImages images={images} indent={4} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
     </>

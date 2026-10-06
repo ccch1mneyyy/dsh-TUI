@@ -1256,6 +1256,7 @@ const dict = {
   'tool-exit-code': { zh: '退出码 {{code}}', en: 'Exit code {{code}}' },
   'tool-killed-signal': { zh: '被信号 {{name}} 终止', en: 'Killed by signal {{name}}' },
   'tool-running-elapsed': { zh: '运行中…（{{duration}}）', en: 'Running… ({{duration}})' },
+  'tool-live-omitted': { zh: '… 已省略 {{count}} 行', en: { one: '… {{count}} line omitted', other: '… {{count}} lines omitted' } },
   // 搜索结果截断行（search 卡 paths 形态）：
   'search-results-total': { zh: '…（共 {{n}} 条）', en: '… ({{n}} total)' },
   // 按行折叠的溢出提示：卡片正文行预算（capLines）、终端卡多行命令折叠
