@@ -150,18 +150,18 @@ const answer = (...items: { selected?: string[]; custom?: string }[]) => ({ answ
   const pending = elicit({ serverName: 'acme', message: 'Tell us about you', mode: 'form', requestedSchema: schema }, { signal: new AbortController().signal, requestId: 'r1' })
   await tick()
   const ask = lastAsk()!
-  check('one question per field, then send / decline', ask.questions.length === 7 && ask.questions.at(-1)!.options.map(option => option.label).join() === `${t('claude-elicit-send')},${t('claude-elicit-decline')}`)
+  check('one question per field, then send / decline', ask.questions.length === 7 && ask.questions.at(-1)!.options.map(option => option.label).join() === `${t('elicit-send')},${t('elicit-decline')}`)
   check('the first question carries the request message', (ask.questions[0]!.detail ?? '').includes('Tell us about you') && ask.questions[0]!.header === 'acme')
-  check('choices are options only (no free text); a boolean preselects its default', ask.questions[2]!.hideCustomInput === true && JSON.stringify(ask.questions[3]!.defaultSelected) === JSON.stringify([t('claude-elicit-yes')]))
+  check('choices are options only (no free text); a boolean preselects its default', ask.questions[2]!.hideCustomInput === true && JSON.stringify(ask.questions[3]!.defaultSelected) === JSON.stringify([t('elicit-yes')]))
   check('a multi-select array is checkboxes', ask.questions[4]!.multiSelect === true)
-  check('an optional field can be skipped; a number shows its range', ask.questions[5]!.options.some(option => option.label === t('claude-elicit-skip')) && (ask.questions[1]!.detail ?? '').includes('150'))
+  check('an optional field can be skipped; a number shows its range', ask.questions[5]!.options.some(option => option.label === t('elicit-skip')) && (ask.questions[1]!.detail ?? '').includes('150'))
   check('the session needs the user while it is open', session.status === 'requires-action')
   session.capabilities.questions!.respond(ask.requestId, answer(
-    { custom: 'A' }, { custom: '200' }, { selected: ['Red'] }, { selected: [t('claude-elicit-no')] }, { selected: ['x'] }, { selected: [t('claude-elicit-skip')] }, { selected: [t('claude-elicit-send')] },
+    { custom: 'A' }, { custom: '200' }, { selected: ['Red'] }, { selected: [t('elicit-no')] }, { selected: ['x'] }, { selected: [t('elicit-skip')] }, { selected: [t('elicit-send')] },
   ))
   await tick()
   const again = lastAsk()!
-  check('invalid answers are asked again, only those fields, saying why', again.requestId !== ask.requestId && again.questions.length === 2 && (again.questions[0]!.detail ?? '').includes(t('claude-elicit-invalid-min-length', { n: 2 })) && (again.questions[1]!.detail ?? '').includes(t('claude-elicit-invalid-max', { max: 150 })), again.questions.map(question => question.detail))
+  check('invalid answers are asked again, only those fields, saying why', again.requestId !== ask.requestId && again.questions.length === 2 && (again.questions[0]!.detail ?? '').includes(t('elicit-invalid-min-length', { n: 2 })) && (again.questions[1]!.detail ?? '').includes(t('elicit-invalid-max', { max: 150 })), again.questions.map(question => question.detail))
   check('… the first ask was withdrawn', events.some(event => event.type === 'question.settled' && event.requestId === ask.requestId))
   session.capabilities.questions!.respond(again.requestId, answer({ custom: 'Ann' }, { custom: '30' }))
   const result = await pending
@@ -171,7 +171,7 @@ const answer = (...items: { selected?: string[]; custom?: string }[]) => ({ answ
   // Decline, dismiss, abort.
   const declined = elicit({ serverName: 'acme', message: 'Again?', requestedSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } }, { signal: new AbortController().signal, requestId: 'r2' })
   await tick()
-  session.capabilities.questions!.respond(lastAsk()!.requestId, answer({ selected: [t('claude-elicit-yes')] }, { selected: [t('claude-elicit-decline')] }))
+  session.capabilities.questions!.respond(lastAsk()!.requestId, answer({ selected: [t('elicit-yes')] }, { selected: [t('elicit-decline')] }))
   check('decline → {action:"decline"}', JSON.stringify(await declined) === '{"action":"decline"}')
   const dismissed = elicit({ serverName: 'acme', message: 'Dismiss me', requestedSchema: { type: 'object', properties: {} } }, { signal: new AbortController().signal, requestId: 'r3' })
   await tick()
@@ -196,11 +196,11 @@ const answer = (...items: { selected?: string[]; custom?: string }[]) => ({ answ
   const notice = events.find((event): event is Extract<AgentEvent, { type: 'notice' }> => event.type === 'notice' && event.text.includes(url))
   check('URL mode: a notice row names the server and the URL', notice !== undefined && notice.level === 'info' && notice.text.includes('github'))
   check('URL mode: the question carries the link and accept / decline', lastAsk()!.questions[0]!.link === url && lastAsk()!.questions[0]!.options.length === 2)
-  session.capabilities.questions!.respond(lastAsk()!.requestId, answer({ selected: [t('claude-elicit-url-accept')] }))
+  session.capabilities.questions!.respond(lastAsk()!.requestId, answer({ selected: [t('elicit-url-accept')] }))
   check('URL mode: accept → {action:"accept"}', JSON.stringify(await accepted) === '{"action":"accept"}')
   const declined = elicit({ serverName: 'github', message: 'Again', mode: 'url', url, elicitationId: 'e2' }, { signal: new AbortController().signal, requestId: 'u2' })
   await tick()
-  session.capabilities.questions!.respond(lastAsk()!.requestId, answer({ selected: [t('claude-elicit-decline')] }))
+  session.capabilities.questions!.respond(lastAsk()!.requestId, answer({ selected: [t('elicit-decline')] }))
   check('URL mode: decline → {action:"decline"}', JSON.stringify(await declined) === '{"action":"decline"}')
   const completed = elicit({ serverName: 'github', message: 'Wait for me', mode: 'url', url, elicitationId: 'e3' }, { signal: new AbortController().signal, requestId: 'u3' })
   await tick()
@@ -210,7 +210,7 @@ const answer = (...items: { selected?: string[]; custom?: string }[]) => ({ answ
   const noUrl = await elicit({ serverName: 'github', message: 'No link', mode: 'url' }, { signal: new AbortController().signal, requestId: 'u4' })
   check('URL mode without a URL is declined', JSON.stringify(noUrl) === '{"action":"decline"}')
   const unsupported = await elicit({ serverName: 'odd', message: 'Huh', mode: 'hologram' }, { signal: new AbortController().signal, requestId: 'u5' })
-  check('a mode this client cannot render is declined, with a notice', JSON.stringify(unsupported) === '{"action":"decline"}' && events.some(event => event.type === 'notice' && event.level === 'warning' && event.text === t('claude-elicit-unsupported', { server: 'odd', mode: 'hologram' })))
+  check('a mode this client cannot render is declined, with a notice', JSON.stringify(unsupported) === '{"action":"decline"}' && events.some(event => event.type === 'notice' && event.level === 'warning' && event.text === t('elicit-unsupported', { server: 'odd', mode: 'hologram' })))
   // Labels are fixed when the flow parks: a language switch while the
   // panel is open does not turn the answer into a mismatch.
   const switched = elicit({ serverName: 'acme', message: 'Lang', requestedSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } }, { signal: new AbortController().signal, requestId: 'u6' })
@@ -294,13 +294,13 @@ const answer = (...items: { selected?: string[]; custom?: string }[]) => ({ answ
     const url = 'https://auth.example.com/ok'
     const pending = elicit({ serverName: 'github', message: 'Connect GitHub', mode: 'url', url, elicitationId: 'x1' }, { signal: new AbortController().signal, requestId: 'c1' })
     check('the URL question parks in the shared store with its link', await settled(() => questions.getSnapshot()?.question.link === url))
-    questions.answerCurrent({ selected: [t('claude-elicit-url-accept')] })
+    questions.answerCurrent({ selected: [t('elicit-url-accept')] })
     check('the store answer reaches the SDK', JSON.stringify(await pending) === '{"action":"accept"}')
     const form = elicit({ serverName: 'acme', message: 'Pick', requestedSchema: { type: 'object', properties: { n: { type: 'number', minimum: 1 } }, required: ['n'] } }, { signal: new AbortController().signal, requestId: 'c2' })
     await settled(() => questions.getSnapshot()?.question.question === 'n')
     questions.answerCurrent({ selected: [], custom: '0' })
-    questions.answerCurrent({ selected: [t('claude-elicit-send')] })
-    check('an invalid store answer is asked again in the store', await settled(() => (questions.getSnapshot()?.question.detail ?? '').includes(t('claude-elicit-invalid-min', { min: 1 }))))
+    questions.answerCurrent({ selected: [t('elicit-send')] })
+    check('an invalid store answer is asked again in the store', await settled(() => (questions.getSnapshot()?.question.detail ?? '').includes(t('elicit-invalid-min', { min: 1 }))))
     questions.answerCurrent({ selected: [], custom: '2.5' })
     check('… and the valid one is sent', JSON.stringify(await form) === '{"action":"accept","content":{"n":2.5}}')
   } finally {
@@ -333,7 +333,7 @@ const answer = (...items: { selected?: string[]; custom?: string }[]) => ({ answ
   const stdout = new Out()
   const url = 'https://auth.example.com/panel'
   const instance = await render(React.createElement(AskUserQuestionPanel, {
-    question: { id: '0', question: 'Authorize', header: 'github', detail: t('claude-elicit-url-detail'), link: url, options: [{ label: t('claude-elicit-url-accept') }, { label: t('claude-elicit-decline') }], hideCustomInput: true },
+    question: { id: '0', question: 'Authorize', header: 'github', detail: t('elicit-url-detail'), link: url, options: [{ label: t('elicit-url-accept') }, { label: t('elicit-decline') }], hideCustomInput: true },
     position: 1, total: 1, answered: 0, canGoBack: false, canGoForward: false,
     onAnswer: () => undefined, onCancel: () => undefined,
   } as never), { stdout: stdout as never, stdin: new In() as never, stderr: new Out() as never, exitOnCtrlC: false, patchConsole: false })
