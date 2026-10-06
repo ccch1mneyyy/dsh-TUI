@@ -94,13 +94,15 @@ function commandChoices(params: Rec): Choice[] {
   const choices: Choice[] = []
   let network = 0
   let rejectAdded = false
+  const declineOffered = offered.includes('decline')
   for (const raw of offered) {
     if (raw === 'accept') {
-      choices.push({ option: { id: 'accept', kind: 'allow-once' }, decision: 'accept' })
+      choices.push({ option: { id: 'accept', kind: 'allow-once', label: t('codex-approve-accept') }, decision: 'accept' })
     } else if (raw === 'acceptForSession') {
       choices.push({ option: { id: 'session', kind: 'allow-always', label: t('codex-approve-session-command') }, decision: 'acceptForSession' })
     } else if (raw === 'decline' || raw === 'cancel') {
-      if (!rejectAdded) choices.push({ option: { id: 'reject', kind: 'reject' }, decision: raw })
+      // A plain rejection declines when the server allows it, else cancels.
+      if (!rejectAdded) choices.push({ option: { id: 'reject', kind: 'reject', label: t(declineOffered ? 'codex-approve-decline' : 'codex-approve-cancel') }, decision: declineOffered ? 'decline' : 'cancel' })
       rejectAdded = true
     } else {
       const value = rec(raw)
@@ -116,7 +118,7 @@ function commandChoices(params: Rec): Choice[] {
       }
     }
   }
-  if (!rejectAdded) choices.push({ option: { id: 'reject', kind: 'reject' }, decision: 'cancel' })
+  if (!rejectAdded) choices.push({ option: { id: 'reject', kind: 'reject', label: t('codex-approve-cancel') }, decision: 'cancel' })
   return choices
 }
 
@@ -192,9 +194,9 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
         const reason = str(params.reason)
         const root = str(params.grantRoot)
         const choices: Choice[] = [
-          { option: { id: 'accept', kind: 'allow-once' }, decision: 'accept' },
+          { option: { id: 'accept', kind: 'allow-once', label: t('codex-approve-accept') }, decision: 'accept' },
           { option: { id: 'session', kind: 'allow-always', label: t('codex-approve-session-files') }, decision: 'acceptForSession' },
-          { option: { id: 'reject', kind: 'reject' }, decision: 'decline' },
+          { option: { id: 'reject', kind: 'reject', label: t('codex-approve-decline-files') }, decision: 'decline' },
         ]
         const view: PermissionRequestView = {
           requestId: request.key,
@@ -217,9 +219,9 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
         }
         const reason = str(params.reason)
         const choices: Choice[] = [
-          { option: { id: 'turn', kind: 'allow-once' }, decision: { permissions: granted, scope: 'turn' } },
+          { option: { id: 'turn', kind: 'allow-once', label: t('codex-approve-grant-turn') }, decision: { permissions: granted, scope: 'turn' } },
           { option: { id: 'session', kind: 'allow-always', label: t('codex-approve-session-permissions') }, decision: { permissions: granted, scope: 'session' } },
-          { option: { id: 'reject', kind: 'reject' }, decision: { permissions: {}, scope: 'turn' } },
+          { option: { id: 'reject', kind: 'reject', label: t('codex-approve-deny-permissions') }, decision: { permissions: {}, scope: 'turn' } },
         ]
         const view: PermissionRequestView = {
           requestId: request.key,

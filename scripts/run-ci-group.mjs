@@ -839,6 +839,32 @@ const GROUPS = {
 // 假 Codex app-server 自测（不起进程、不走网络）：脚本化应答/错误/延后应答、服务端
 // 请求等待客户端作答、崩溃、录制回放的 id 映射与 thread 改写、两路回放交错各自保序。
     ["verify-codex-fake-app-server", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-fake-app-server.ts']],
+// Codex JSON-RPC：请求/应答配对、超时（注入时钟）、服务端请求挂起/应答/未知方法、
+// close 拒绝挂起、行分帧与超长行；真子进程传输的 EOF 退出与超时终止。
+    ["verify-codex-rpc", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-rpc.ts']],
+// CodexHub（假 app-server）：握手参数与 optOut、按 thread 路由（子 thread 归父）、
+// 按连接代数的服务端请求与重投、引用计数与空闲关闭、崩溃重启与 connectionRestored、
+// 重启预算耗尽即永久失败、指纹多实例。
+    ["verify-codex-hub", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-hub.ts']],
+// Codex 翻译器：每个 wire fixture 的每个 thread → 事件 → 共享投影器，与 goldens
+// 逐字段比较；§7.3 attempt 算法边界、§7.4 item 表、§7.5 通知表与 §8 卡片形状。
+    ["verify-codex-translate", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-translate.ts']],
+// Codex live≡replay（§10.4）：同一 thread 的 live 通知与录制历史投影逐行一致，
+// 只允许登记的差异（中断卡、用量行、live 通知行），且断言差异确实出现。
+    ["verify-codex-live-replay", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-live-replay.ts']],
+// Codex 输入（假 app-server）：四种 placement、客户端队列 FIFO、steer 降级、now、
+// clientId 认领、turn/start 失败回滚、取消回执（V6）、强制收敛、断线与恢复、resume 续号。
+    ["verify-codex-input", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-input.ts']],
+// Codex 审批与问卷（假 app-server）：按 availableDecisions 生成选项与官方文案、
+// 每种决策映射、拒绝+理由（cancel+followup）、外部结算、重投只显示一次、
+// 问卷与取消（V7）、dispose 撤回、录制的 s1b 审批端到端。
+    ["verify-codex-approvals", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-approvals.ts']],
+// 真实 Chat 挂在 Codex 会话（假 app-server）上：审批面板文案、命令卡输出、
+// 流式回复、diff 卡、问卷、Esc 中断；80/40 列 × inline/fullscreen。
+    ["verify-codex-chat", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-chat.tsx']],
+// 内核目录（N7）：三内核、未探测/未安装/未登录置灰、loginInSession 仍可选并提示、
+// 只有可一键安装的内核给安装向导、版本产品前缀、--backend 接受 codex。
+    ["verify-kernel-catalog", ['node', '--import', 'tsx/esm', 'scripts/verify-kernel-catalog.ts']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、

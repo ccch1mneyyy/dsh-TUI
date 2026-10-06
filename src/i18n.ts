@@ -389,6 +389,12 @@ const dict = {
   'claude-doctor-mode': { zh: '起始权限模式: {{mode}}（来源 {{source}}）', en: 'Start permission mode: {{mode}} (from {{source}})' },
   // Codex backend (src/backends/codex/): approval wording follows the official
   // client (docs/codex-backend-design.md §8.4); notices name what to do next.
+  'codex-approve-accept': { zh: '是，执行', en: 'Yes, proceed' },
+  'codex-approve-decline': { zh: '否，跳过它继续', en: 'No, continue without running it' },
+  'codex-approve-cancel': { zh: '否，并告诉 Codex 怎么做', en: 'No, and tell Codex what to do differently' },
+  'codex-approve-decline-files': { zh: '否，不应用这些改动，继续', en: 'No, continue without these changes' },
+  'codex-approve-grant-turn': { zh: '是，本回合授予这些权限', en: 'Yes, grant these permissions for this turn' },
+  'codex-approve-deny-permissions': { zh: '否，不授予权限继续', en: 'No, continue without permissions' },
   'codex-approve-prefix': { zh: '是，以后以 `{{prefix}}` 开头的命令不再询问', en: 'Yes, and don\'t ask again for commands that start with `{{prefix}}`' },
   'codex-approve-session-command': { zh: '是，本会话内此命令不再询问', en: 'Yes, and don\'t ask again for this command in this session' },
   'codex-approve-session-files': { zh: '是，本会话内这些文件不再询问', en: 'Yes, and don\'t ask again for these files' },

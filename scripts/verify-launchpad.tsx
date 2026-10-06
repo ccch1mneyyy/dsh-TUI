@@ -1095,9 +1095,10 @@ base.close()
   // 目录：DSH 恒在恒可选（默认内核）；claude 依探测结果定可选性。版本一律是
   // **显示串**（产品前缀 + 版本号），不再是裸版本号。
   const dshOnly = buildKernelCatalog({ current: 'dsh', dshVersion: '0.2.6' })
-  check('K1 目录：DSH 恒可选并带版本显示串；claude 未探测=置灰为「检测中…」（不是未安装）',
-    dshOnly.length === 2 && dshOnly[0]?.id === 'dsh' && dshOnly[0]?.current === true && dshOnly[0]?.selectable === true && dshOnly[0]?.version === 'dsh-core v0.2.6'
-      && dshOnly[1]?.id === 'claude' && dshOnly[1]?.current === false && dshOnly[1]?.selectable === false && dshOnly[1]?.reasonKey === 'kernel-probing',
+  check('K1 目录：DSH 恒可选并带版本显示串；claude / codex 未探测=置灰为「检测中…」（不是未安装）',
+    dshOnly.length === 3 && dshOnly[0]?.id === 'dsh' && dshOnly[0]?.current === true && dshOnly[0]?.selectable === true && dshOnly[0]?.version === 'dsh-core v0.2.6'
+      && dshOnly[1]?.id === 'claude' && dshOnly[1]?.current === false && dshOnly[1]?.selectable === false && dshOnly[1]?.reasonKey === 'kernel-probing'
+      && dshOnly[2]?.id === 'codex' && dshOnly[2]?.selectable === false && dshOnly[2]?.reasonKey === 'kernel-probing',
     JSON.stringify(dshOnly))
   const ok = buildKernelCatalog({ current: 'claude', dshVersion: '0.2.6', statuses: { claude: { installed: true, auth: 'ok', version: '2.1.287' } } })
   check('K2 目录：installed+auth=ok 的 claude 可选、版本显示串、current 标记在 claude',
