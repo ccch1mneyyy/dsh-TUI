@@ -620,6 +620,32 @@ check('warnings: each failure mode warns once with a distinct message', () => {
   assert.match(joined, /invalid color value for "accent"/)
 })
 
+// --- built-in roles --------------------------------------------------------
+// 内置名 → 它扮演的 base 角色（选择器描述行直接渲染这个值）。樱族三套与品牌双
+// 主题都借用经典角色，映射错了就是用户可见的错误描述；这里在数据层逐个钉住，
+// 界面层的逐行断言在 scripts/repro-picker-windowing.tsx（那边还会受窗口影响）。
+const { listThemeCatalog } = await import('../src/themeCatalog.js')
+check('catalog: every built-in reports the base role it borrows', () => {
+  const builtInBases = new Map(
+    listThemeCatalog()
+      .filter(entry => entry.source === 'builtin')
+      .map(entry => [entry.name, entry.base]),
+  )
+  assert.deepEqual(
+    Object.fromEntries(THEME_NAMES.map(name => [name, builtInBases.get(name)])),
+    {
+      dark: 'dark',
+      'dark-ansi': 'dark-ansi',
+      light: 'light',
+      'pink-night': 'dark',
+      'pink-ansi': 'dark-ansi',
+      'pink-day': 'light',
+      'claude-dark': 'dark',
+      'claude-paper': 'light',
+    },
+  )
+})
+
 console.warn = originalWarn
 
 // --- summary ---------------------------------------------------------------
