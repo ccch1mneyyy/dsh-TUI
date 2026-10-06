@@ -6,7 +6,7 @@
  * user-language error message rules ports out. Validation errors raise in
  * the user's language since the editor surfaces them verbatim.
  */
-import { t } from '../../i18n.js'
+import { t } from '../i18n.js'
 import type { ProviderModelCapabilities } from '../adapter/ports/channel-settings.js'
 
 export const PROVIDER_REASONING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
