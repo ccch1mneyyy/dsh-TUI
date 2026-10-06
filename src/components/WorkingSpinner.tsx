@@ -3,16 +3,30 @@ import { useTerminalSize } from '../ink/hooks/use-terminal-size.js'
 import { Box } from '../ui.js'
 import type { SpinnerMode } from './Spinner/spinnerMode.js'
 import { SpinnerAnimationRow } from './Spinner/SpinnerAnimationRow.js'
-import { SPINNER_VERBS } from '../terminal-utils/spinnerVerbs.js'
 import { tOr } from '../i18n.js'
 import { sample } from 'lodash-es'
+
+/**
+ * Which verbs fit which spinner phase: the working line's copy follows the
+ * turn's stage (waiting → thinking → tools → responding) instead of one
+ * random word for the whole turn — a phase change re-picks from its pool.
+ * Words are the existing SPINNER_VERBS (i18n coverage), just bucketed.
+ */
+const VERBS_BY_MODE: Record<SpinnerMode, readonly string[]> = {
+  requesting: ['Connecting', 'Preparing', 'Considering'],
+  thinking: ['Thinking', 'Reasoning', 'Considering', 'Planning'],
+  responding: ['Working', 'Responding', 'Building', 'Summarizing', 'Resolving', 'Testing'],
+  'tool-use': ['Analyzing', 'Reading', 'Searching', 'Reviewing', 'Checking', 'Exploring'],
+  'tool-input': ['Working', 'Responding'],
+}
 
 /**
  * The working spinner block shown between the transcript and the prompt
  * input while a turn is in flight. The channel feeds the mode, token count,
  * and thinking status while this component owns the compact presentation.
  *
- * Random verb is picked once per turn (per mount of the spinner).
+ * A random verb is picked per phase (per mode change), so the copy tracks
+ * what the turn is actually doing.
  */
 export function WorkingSpinner({
   mode,
@@ -40,8 +54,12 @@ export function WorkingSpinner({
 }): React.ReactNode {
   const { columns } = useTerminalSize()
 
-  // Pick a random verb once per spinner mount (per turn).
-  const [randomVerb] = useState(() => sample(SPINNER_VERBS) ?? 'Working')
+  // Pick a random verb from the current phase's pool; a phase change
+  // re-picks (the copy mirrors the turn's stage).
+  const [randomVerb, setRandomVerb] = useState(() => sample(VERBS_BY_MODE[mode]) ?? 'Working')
+  useEffect(() => {
+    setRandomVerb(sample(VERBS_BY_MODE[mode]) ?? 'Working')
+  }, [mode])
   const message = `${tOr(`spinner-verb-${randomVerb.toLowerCase()}`, randomVerb)}…`
 
   return (

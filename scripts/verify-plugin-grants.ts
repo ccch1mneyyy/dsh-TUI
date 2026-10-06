@@ -382,6 +382,58 @@ check1('decision permission map is immutable',
     JSON.stringify(afterUnload?.contracts.map(contract => contract.kind)))
 }
 
+// ── B2. an answer that arrives after its authority ended is discarded ────
+// Decision dispatch awaits handlers, so a grant can be revoked (or the
+// activation unloaded) while a handler is still pending. The snapshot taken
+// at loop start cannot authorize that late answer: otherwise a component
+// whose interception grant was just withdrawn could still veto the next user
+// submit with a decision it computed while authorized.
+{
+  mkdirSync(DATA_DIR, { recursive: true })
+  const grantsFile = join(DATA_DIR, EXTENSION_GRANTS_FILE)
+  writeFileSync(grantsFile, JSON.stringify({
+    grants: { 'com.example.late': [scoped('session.input.intercept', 'tui/input', 'act-late')] },
+  }))
+  const lateCtx = new Context()
+  const lateWarnings: string[] = []
+  lateCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
+    lateWarnings.push([format, ...params].map(String).join(' '))
+  }
+  const lateHostFiber = lateCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply }) as unknown as { await(): Promise<unknown> }
+  await lateHostFiber.await()
+  const lateHost = lateCtx.get('tuiPluginHost')
+  await awaitInitialKernelReadiness(lateHost, 'late decision fixture')
+  markDecisionDispatchTopology(lateCtx)
+  const lateAdmitted = await mountAdmitted(lateCtx, 'cordis-export-name', testManifest({
+    id: 'com.example.late',
+    requires: [DECISION_COORDINATE],
+    permissions: [{ name: 'session.input.intercept', scope: 'tui/input' }],
+  }), 'test:cordis-export-name/dsh-plugin.json', { activationId: 'act-late' })
+  let releasePending = (): void => {}
+  const pendingAnswer = new Promise<void>(resolve => { releasePending = resolve })
+  const lateRelease = lateHost?.subscribeDecision(
+    lateAdmitted.context,
+    'tui/input',
+    async () => { await pendingAnswer; return { cancel: true, reason: '迟到拦截' } },
+  )
+  const { dispatchTuiDecision: dispatchLate } = await import('../src/dsh-adapter/extension-events.js')
+  const passThroughLate = (result: unknown): unknown => result
+  const inFlight = dispatchLate(lateCtx, 'tui/input', { text: '拦截', sessionId: 'sess-late' }, passThroughLate)
+  await sleep(20)
+  // Revoke while the handler is parked on the awaited promise.
+  writeFileSync(grantsFile, JSON.stringify({ grants: { 'com.example.late': [] } }))
+  await sleep(250)
+  releasePending()
+  check1('a decision answered after grant revocation is discarded',
+    (await inFlight) === undefined)
+  check1('the discarded late decision is reported with its component',
+    lateWarnings.some(line => line.includes('answered after its grant or activation was released')
+      && line.includes('com.example.late')))
+  check1('the revoked late handler was actually released', lateRelease?.() === false)
+  await Promise.resolve(lateAdmitted.fiber.dispose())
+  unmarkDecisionDispatchTopology(lateCtx)
+}
+
 // ── C. plugin-host row ────────────────────────────────────────────────────
 {
   const hostCtx = new Context()

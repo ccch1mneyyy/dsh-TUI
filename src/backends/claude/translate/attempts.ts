@@ -166,8 +166,15 @@ export function createAttemptTranslator(context: {
       }
       case 'message_delta': {
         const open = context.attempt
+        // `message_start` 的 usage 是占位零值；本请求的真实计数（含 input
+        // 与 cache split——上下文读数与 cache N 都靠它们）只在 message_delta
+        // 与 result 上到达，这里全量覆盖。
+        const deltaUsage = usageOf(event.usage)
         const output = num(rec(event.usage)?.output_tokens)
-        if (open !== undefined && output !== undefined) open.outputTokens = output
+        if (open !== undefined) {
+          if (deltaUsage !== undefined) open.usage = deltaUsage
+          if (output !== undefined) open.outputTokens = output
+        }
         return out
       }
       case 'message_stop':
@@ -181,6 +188,11 @@ export function createAttemptTranslator(context: {
   /** `result`: the authoritative turn close. */
   const translateResult = (message: Rec): AgentEvent[] => {
     const out: AgentEvent[] = []
+    // `result.usage` 是本轮的权威计数（assistant 消息体上的 usage 是占位
+    // 零值，真值只随流式 message_delta 与 result 到达）——settle 前并进还
+    // 开着的 attempt，无细流的 CLI 也能让 lastUsage / cache 读数落位。
+    const authoritative = usageOf(message.usage)
+    if (authoritative !== undefined && context.attempt !== undefined) context.attempt.usage = authoritative
     settleAttempt(out)
     closeStep(out)
     const subtype = str(message.subtype)

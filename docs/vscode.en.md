@@ -280,6 +280,7 @@ The TUI's `Ctrl+G` uses `$VISUAL`/`$EDITOR`. To edit in VS Code, export
 | Mouse wheel / drag selection | Handled by the integrated terminal; "copy on release" surfaces as OS-level copy behavior |
 | Extended keyboard protocol | modifyOtherKeys / win32-input-mode behavior is decided by xterm.js and may differ from kitty / WezTerm |
 | OSC 52 clipboard | First use triggers VS Code's own permission prompt |
+| Image protocol | Portraits/images can stay **permanently blank**: dsh-tui prefers the Kitty graphics protocol over Sixel, while VS Code's `@xterm/addon-image` answers the Kitty query with an `OK` that was never verified against an actual draw, so the image is erased and never redrawn. Fix: turn on `terminal.integrated.enableImages` (off by default) in VS Code settings and **reload the window** (the image addon only loads on the WebGL renderer, so it does nothing when `terminal.integrated.gpuAcceleration` is `off` or the legacy `canvas`); if needed, set `DSH_TUI_IMAGE_PROTOCOL=sixel` (needs dsh-tui ≥ 0.10.0) — the companion extension `dsh-tui-vscode` ≥ 0.7.5 injects that variable automatically, so no manual setup is required |
 
 For the full protocol behavior of a standalone terminal (e.g. complex mouse
 semantics), use an external terminal window (Windows Terminal / kitty /
