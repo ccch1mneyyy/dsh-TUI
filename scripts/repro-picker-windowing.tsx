@@ -381,6 +381,14 @@ const typeKeys = async (s: string, stepMs = 40) => {
   await typeKeys('/theme')
   await sleep(200) // 固定窗:pacing 等浮层 key-ready，无文本可观测
   stdin.write('\r')
+  // nltheme 排在内置主题之后；内置加长（claude 族）后它不一定在首屏窗口。
+  // 步进焦点直到该行入窗——断言的是「换行压平渲染」而非「首屏可见性」，
+  // 不依赖内置主题的数量。
+  for (let step = 0; step < 24; step++) {
+    if (await settled(() => screenLines().some(l => l.includes('Foo Bar NL')))) break
+    stdin.write('\x1b[B')
+    await sleep(25) // 固定窗:pacing 逐键步进
+  }
   // 断言在 settle 捕获的同一快照 lines 上求值，无重读分叉。
   let lines: string[] = []
   await settle(() => {
