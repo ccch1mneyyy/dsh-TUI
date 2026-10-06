@@ -455,4 +455,3 @@ export async function closeAllCodexHubs(): Promise<void> {
 
 /** Parse a JSON-RPC answer's error message for a user (no params). */
 export const rpcErrorText = (error: unknown): string => error instanceof CodexRpcError ? error.message : errorText(error)
-
