@@ -22,12 +22,13 @@ process.env.FORCE_COLOR = '3'
 // module import resolves the startup lang (env > persisted > locale).
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { AssistantToolUseMessage }, { getCliHighlightPromise }, { parseAnsiRuns, chalkFromToken, highlightLines }, { sleep, settled, findText }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { AssistantToolUseMessage }, { ToolLeafRow }, { getCliHighlightPromise }, { parseAnsiRuns, chalkFromToken, highlightLines }, { sleep, settled, findText }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/components/messages/AssistantToolUseMessage.js'),
+  import('../src/components/messages/TranscriptLeaves.js'),
   import('../src/terminal-utils/cliHighlight.js'),
   import('../src/components/SplitDiffView.js'),
   import('./lib/term-test.mjs'),
@@ -69,7 +70,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     _write(chunk, _e, cb) { term.write(String(chunk), cb) }
   }
   const app = await render(
-    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose: false, diffLayout, toolBackground, diffStyle }),
+    React.createElement(ToolLeafRow, { tool, marginTopOnTurn: false, verbose: false, diffLayout, toolBackground, diffStyle }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
   )
   // 固定窗:pacing cli-highlight 首次使用才懒加载，其后的补色重绘没有
