@@ -116,7 +116,7 @@
         "status": "ok",
         "call": {
           "card": "terminal",
-          "title": "pwd && rg --files -g '\"'!*'\"' -g '\"'!**/.git/**'\"' || true",
+          "title": "pwd && rg --files -g '!*' -g '!**/.git/**' || true",
           "displayKey": "tool-name-bash"
         },
         "result": {

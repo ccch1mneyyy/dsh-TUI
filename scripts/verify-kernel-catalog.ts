@@ -39,6 +39,10 @@ const missing = buildKernelCatalog({ current: 'dsh', canInstallSdk: true, status
 check('not installed: Claude offers the install wizard, Codex only says not installed', missing[1]!.installable === true && missing[1]!.reasonKey === 'kernel-not-installed-installable'
   && missing[2]!.installable === undefined && missing[2]!.reasonKey === 'kernel-unavailable-not-installed' && !missing[2]!.selectable)
 
+// Too old: installed but unsupported — its own reason, and the upgrade hint
+// survives to the picker (review fix: it used to read "Not installed").
+const tooOld = buildKernelCatalog({ current: 'dsh', canInstallSdk: true, statuses: { codex: { installed: false, version: '0.100.0', hint: 'upgrade codex' } } })
+check('too old: dim, "too old" reason and the upgrade hint carried', !tooOld[2]!.selectable && tooOld[2]!.reasonKey === 'kernel-unavailable-too-old' && tooOld[2]!.hint === 'upgrade codex', tooOld[2])
 const signedOut = buildKernelCatalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing' }, codex: { installed: true, auth: 'missing', loginInSession: true } } })
 check('signed out: a row without in-session login stays dim', !signedOut[1]!.selectable && signedOut[1]!.reasonKey === 'kernel-unavailable-auth-missing')
 check('signed out + loginInSession: selectable with a "sign in after start" note', signedOut[2]!.selectable && signedOut[2]!.reasonKey === undefined && signedOut[2]!.noteKey === 'kernel-login-in-session'

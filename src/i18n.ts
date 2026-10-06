@@ -396,6 +396,11 @@ const dict = {
   'codex-approve-decline-files': { zh: '否，不应用这些改动，继续', en: 'No, continue without these changes' },
   'codex-approve-grant-turn': { zh: '是，本回合授予这些权限', en: 'Yes, grant these permissions for this turn' },
   'codex-approve-deny-permissions': { zh: '否，不授予权限继续', en: 'No, continue without permissions' },
+  'codex-approve-stdin-name': { zh: '终端输入', en: 'Terminal input' },
+  'codex-approve-stdin': { zh: '向运行中的终端写入输入', en: 'writes input to a running terminal' },
+  'codex-approve-network-context': { zh: '访问网络主机 {{host}}（{{protocol}}）', en: 'network access to {{host}} ({{protocol}})' },
+  'codex-approve-extra-permissions': { zh: '额外权限：{{what}}', en: 'extra permissions: {{what}}' },
+  'codex-approve-cwd': { zh: '在 {{cwd}} 中运行', en: 'runs in {{cwd}}' },
   'codex-approve-prefix': { zh: '是，以后以 `{{prefix}}` 开头的命令不再询问', en: 'Yes, and don\'t ask again for commands that start with `{{prefix}}`' },
   'codex-approve-session-command': { zh: '是，本会话内此命令不再询问', en: 'Yes, and don\'t ask again for this command in this session' },
   'codex-approve-session-files': { zh: '是，本会话内这些文件不再询问', en: 'Yes, and don\'t ask again for these files' },
@@ -2315,6 +2320,7 @@ const dict = {
   'kernel-login-in-session': { zh: '未登录 · 启动后用 /login 登录', en: 'Not signed in · sign in with /login after start' },
   'kernel-unavailable-not-installed': { zh: '未安装', en: 'Not installed' },
   'kernel-unavailable-auth-missing': { zh: '未登录', en: 'Not signed in' },
+  'kernel-unavailable-too-old': { zh: '版本过旧 · 需升级', en: 'Too old · upgrade needed' },
   'kernel-switch-restarting': { zh: '正在以 {{name}} 内核重启…', en: 'Restarting on the {{name}} kernel…' },
   // 切换内核时的过场行。failed/crashed 由旧进程报告新进程的结局；安全模式
   // 提示只跟在失败之后。

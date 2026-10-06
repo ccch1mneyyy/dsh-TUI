@@ -29,7 +29,7 @@ import { arr, errorText, rec, str, type Rec } from '../narrow.js'
 import { SERVER_REQUEST } from '../protocol/index.js'
 import { RPC_ERROR } from '../rpc/client.js'
 import type { HubServerRequest } from '../rpc/hub.js'
-import { unwrapCommand } from '../translate/commands.js'
+import { unwrapShell } from '../translate/commands.js'
 
 type Kind = 'command' | 'file' | 'permissions' | 'question'
 
@@ -54,6 +54,9 @@ interface Parked {
 
 export interface ApprovalBridgeDeps {
   readonly cwd: string
+  /** The session's own thread: a request from another thread (a subagent
+   *  routed here) is shown with that thread as its agent. */
+  readonly threadId?: string
   emit(events: readonly AgentEvent[]): void
   debug(message: string): void
   /** Run a rejection's reason as the next turn. */
@@ -63,9 +66,12 @@ export interface ApprovalBridgeDeps {
 }
 
 /** The command an approval names, unwrapped for display. */
+/** The command an approval names: the lossless unwrap of a shell wrapper,
+ *  else the command exactly as it will run (never Codex's parsed reading of
+ *  it — a prompt must not show a different command than the one approved). */
 const commandOf = (params: Rec): string | undefined => {
   const command = str(params.command)
-  return command === undefined ? undefined : unwrapCommand(command, params.commandActions)
+  return command === undefined ? undefined : unwrapShell(command) ?? command
 }
 
 /** An execpolicy prefix as the official client renders it (`bash -lc`
@@ -143,8 +149,29 @@ function permissionsSummary(permissions: Rec | undefined, cwd: string): string {
   return parts.join('; ')
 }
 
+/** What else a command approval asks for: input to a running terminal, a
+ *  network host, extra permissions, another working directory. */
+function commandDescription(params: Rec, cwd: string): string {
+  const parts: string[] = []
+  if (str(params.kind) === 'writeStdin') parts.push(t('codex-approve-stdin'))
+  const network = rec(params.networkApprovalContext)
+  const host = str(network?.host)
+  if (host !== undefined && host !== '') parts.push(t('codex-approve-network-context', { host, protocol: str(network?.protocol) ?? '' }))
+  const extra = permissionsSummary(rec(params.additionalPermissions), cwd)
+  if (extra !== '') parts.push(t('codex-approve-extra-permissions', { what: extra }))
+  const where = str(params.cwd)
+  if (where !== undefined && where !== '' && where !== cwd) parts.push(t('codex-approve-cwd', { cwd: displayPath(where, cwd) }))
+  return parts.join(' · ')
+}
+
 export function createApprovalBridge(deps: ApprovalBridgeDeps) {
   const parked = new Map<string, Parked>()
+
+  /** A request from a routed subagent thread names that thread. */
+  const agentOf = (params: Rec): { agentId?: string } => {
+    const thread = str(params.threadId)
+    return thread !== undefined && deps.threadId !== undefined && thread !== deps.threadId ? { agentId: thread } : {}
+  }
 
   const settle = (entry: Parked, outcome: PermissionOutcome): void => {
     if (parked.get(entry.key) !== entry) return
@@ -177,13 +204,17 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
         const choices = commandChoices(params)
         const command = commandOf(params)
         const reason = str(params.reason)
+        const stdin = str(params.kind) === 'writeStdin'
+        const description = commandDescription(params, deps.cwd)
         const view: PermissionRequestView = {
           requestId: request.key,
           toolName: 'shell',
           ...(itemId === undefined ? {} : { callId: itemId }),
-          displayName: t('tool-name-bash'),
+          displayName: stdin ? t('codex-approve-stdin-name') : t('tool-name-bash'),
           ...(command === undefined ? {} : { command, input: { command } }),
+          ...(description === '' ? {} : { description }),
           ...(reason === undefined || reason === '' ? {} : { reason }),
+          ...agentOf(params),
           feedback: true,
           options: choices.map(choice => choice.option),
         }
@@ -205,6 +236,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           displayName: t('tool-name-edit'),
           ...(reason === undefined || reason === '' ? {} : { reason }),
           ...(root === undefined || root === '' ? {} : { blockedPath: displayPath(root, deps.cwd) }),
+          ...agentOf(params),
           feedback: true,
           options: choices.map(choice => choice.option),
         }
@@ -230,6 +262,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           displayName: t('codex-permissions-name'),
           description: permissionsSummary(requested, deps.cwd),
           ...(reason === undefined || reason === '' ? {} : { reason }),
+          ...agentOf(params),
           options: choices.map(choice => choice.option),
         }
         park({ key: request.key, request, kind: 'permissions', ...(itemId === undefined ? {} : { itemId }), view, choices }, { type: 'permission.request', request: view })
@@ -261,7 +294,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           request.respond({ answers: {} })
           return
         }
-        const view = { requestId: request.key, ...(itemId === undefined ? {} : { callId: itemId }), questions }
+        const view = { requestId: request.key, ...(itemId === undefined ? {} : { callId: itemId }), ...agentOf(params), questions }
         park({ key: request.key, request, kind: 'question', ...(itemId === undefined ? {} : { itemId }), questionIds: ids }, { type: 'question.request', request: view })
         return
       }
@@ -283,7 +316,8 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
     const reject = pick(choice => choice.option.kind === 'reject')
     const answer = (choice: Choice | undefined, outcome: PermissionOutcome): void => {
       if (choice === undefined) return
-      entry.answered = outcome
+      // The outcome is what was sent: a fallback to the reject choice is a rejection.
+      entry.answered = choice.option.kind === 'reject' ? 'rejected' : outcome
       const result = entry.kind === 'permissions' ? choice.decision : { decision: choice.decision }
       entry.request.respond(result)
     }

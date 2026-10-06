@@ -9,6 +9,8 @@ export type KernelUnavailableReason =
   /** The installable variant of not-installed: the row stays dim but Enter
    *  opens the SDK install wizard instead of a dead-end toast. */
   | 'kernel-not-installed-installable'
+  /** Installed, but older than the backend supports (its hint says how to upgrade). */
+  | 'kernel-unavailable-too-old'
 
 /** Product-qualified version; unknown kernels keep the raw version. */
 export function kernelVersionLabel(id: string, version?: string): string | undefined {
@@ -24,6 +26,8 @@ export interface KernelOption {
   readonly reasonKey?: KernelUnavailableReason
   /** A selectable row's caveat (signed out, but `/login` works in-session). */
   readonly noteKey?: 'kernel-login-in-session'
+  /** An unavailable row's own guidance from detection (install / upgrade). */
+  readonly hint?: string
   readonly version?: string
   /** Not installed, but the host can install it (Enter opens the wizard). */
   readonly installable?: boolean
@@ -35,6 +39,8 @@ export interface KernelStatus {
   readonly version?: string
   /** A missing credential can be supplied after start (BackendDetection). */
   readonly loginInSession?: true
+  /** Detection's install / upgrade / sign-in guidance. */
+  readonly hint?: string
 }
 
 /** DSH is always available. Optional kernels stay disabled until detection completes. */
@@ -61,7 +67,10 @@ export function buildKernelCatalog(input: {
         ? 'kernel-not-installed-installable'
         : status.installed && status.auth === 'missing'
           ? 'kernel-unavailable-auth-missing'
-          : 'kernel-unavailable-not-installed'
+          // Not installed but a version was read: the binary is too old.
+          : !status.installed && status.version !== undefined
+            ? 'kernel-unavailable-too-old'
+            : 'kernel-unavailable-not-installed'
     const version = kernelVersionLabel(id, id === 'dsh' ? input.dshVersion : status?.version)
     return {
       id,
@@ -69,6 +78,7 @@ export function buildKernelCatalog(input: {
       current: input.current === id,
       selectable,
       ...(selectable ? {} : { reasonKey }),
+      ...(selectable || status?.hint === undefined || status.hint === '' ? {} : { hint: status.hint }),
       ...(selectable && signInLater ? { noteKey: 'kernel-login-in-session' as const } : {}),
       ...(installable ? { installable } : {}),
       ...(version === undefined ? {} : { version }),

@@ -114,6 +114,35 @@ const of = <T extends AgentEvent['type']>(events: readonly AgentEvent[], type: T
   h.clock.advance(15_000)
   await tick()
   check('forced settle: the turn closes interrupted with a notice, the queue moves on', of(h.events(), 'turn.end').at(-1)?.reason.kind === 'interrupted' && of(h.events(), 'notice').some(event => event.text === t('codex-cancel-forced')) && h.sent('turn/start').at(-1)?.clientUserMessageId === 'q4')
+  // The server's late traffic for the force-settled turn opens no phantom turn.
+  const startsBefore = of(h.events(), 'turn.start').length
+  const endsBefore = of(h.events(), 'turn.end').length
+  await h.notify('item/started', { turnId: 'turn-4', item: { type: 'agentMessage', id: 'late-1', text: '' } })
+  await h.notify('item/agentMessage/delta', { turnId: 'turn-4', itemId: 'late-1', delta: 'late words' })
+  await h.notify('item/completed', { turnId: 'turn-4', item: { type: 'agentMessage', id: 'late-1', text: 'late words' } })
+  await h.notify('turn/completed', { turn: { id: 'turn-4', items: [], status: 'interrupted', error: null } })
+  await tick()
+  check('forced settle: a late item / delta / completion of the settled turn is dropped (no phantom turn)', of(h.events(), 'turn.start').length === startsBefore && of(h.events(), 'turn.end').length === endsBefore
+    && !h.events().some(event => event.type === 'assistant.delta' || (event.type === 'assistant.message' && JSON.stringify(event).includes('late words'))), h.events().slice(-6))
+  await h.session.dispose()
+}
+
+// ── `now` beats a pending steer (review fix) ────────────────────────────
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'go'), 'followup')
+  await h.startTurn('turn-1', 'c1', 'go')
+  await h.session.submit(input('s1', 'unclaimed steer'), 'steer')
+  await h.session.submit(input('n1', 'right now'), 'now')
+  await tick()
+  check('now + pending steer: the running turn is interrupted', h.sent('turn/interrupt').at(-1)?.turnId === 'turn-1')
+  await h.completeTurn('turn-1', 'interrupted')
+  await tick()
+  check('now + pending steer: `now` starts first, the dropped steer after it', h.sent('turn/start').at(-1)?.clientUserMessageId === 'n1', h.sent('turn/start').map(start => start.clientUserMessageId))
+  await h.startTurn('turn-2', 'n1', 'right now')
+  await h.completeTurn('turn-2')
+  await tick()
+  check('now + pending steer: the steer runs next', h.sent('turn/start').at(-1)?.clientUserMessageId === 's1', h.sent('turn/start').map(start => start.clientUserMessageId))
   await h.session.dispose()
 }
 

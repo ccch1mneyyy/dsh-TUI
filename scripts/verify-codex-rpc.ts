@@ -195,4 +195,25 @@ process.stdin.on('end', () => { setTimeout(() => process.exit(0), 10) })
   check('transport: a missing executable reports through onExit with the error', missingExit?.error !== undefined && /ENOENT/u.test(missingExit.error.message), missingExit)
 }
 
+// ── npm shims: spawn the native binary, not codex.cmd (review fix) ──────
+{
+  const { resolveNpmShim } = await import('../src/backends/codex/rpc/binary.js')
+  const { unwrapShell } = await import('../src/backends/codex/translate/commands.js')
+  const NPM = 'C:\\Users\\u\\AppData\\Roaming\\npm'
+  const CMD = '@ECHO off\r\nSET dp0=%~dp0\r\n"%_prog%"  "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n'
+  const tree = (files: readonly string[]) => ({ platform: 'win32', arch: 'x64', exists: (path: string) => files.includes(path), read: (path: string) => (path.endsWith('.cmd') ? CMD : undefined) })
+  const hoisted = `${NPM}\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe`
+  const nested = `${NPM}\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe`
+  check('npm shim (win32): the hoisted platform package\'s codex.exe', resolveNpmShim(`${NPM}\\codex.cmd`, tree([hoisted])) === hoisted)
+  check('npm shim (win32): the nested platform package\'s codex.exe', resolveNpmShim(`${NPM}\\codex.cmd`, tree([nested])) === nested)
+  check('npm shim: no binary on disk → undefined (the shim itself is spawned)', resolveNpmShim(`${NPM}\\codex.cmd`, tree([])) === undefined)
+  check('npm shim: not a codex shim → undefined', resolveNpmShim(`${NPM}\\other.cmd`, { ...tree([hoisted]), read: () => '@node other.js %*' }) === undefined)
+  check('npm shim: an unsupported platform → undefined', resolveNpmShim('/usr/bin/codex', { platform: 'aix', arch: 'ppc64', exists: () => true, read: () => CMD }) === undefined)
+  // Lossless unwrap (review nits): plain `bash -lc`, -NoLogo, quoted pwsh paths.
+  check('unwrap: plain bash -lc, a quoted script', unwrapShell("bash -lc 'ls -la'") === 'ls -la')
+  check('unwrap: pwsh -NoLogo -Command', unwrapShell('pwsh -NoLogo -NoProfile -Command "Get-ChildItem"') === 'Get-ChildItem')
+  check('unwrap: a quoted pwsh path', unwrapShell('"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "Get-Date"') === 'Get-Date')
+  check('unwrap: concatenated quoting is not unwrapped (lossless or nothing)', unwrapShell(`/bin/bash -lc 'a "'b'" c'`) === undefined)
+}
+
 console.log(`\nverify-codex-rpc OK (${passed} checks)`)

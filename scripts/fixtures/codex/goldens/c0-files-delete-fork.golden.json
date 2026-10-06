@@ -68,7 +68,7 @@
         "status": "ok",
         "call": {
           "card": "terminal",
-          "title": "env | grep -E \"''^CODEX\" | cut -d= -f1 | sort",
+          "title": "env | grep -E \"^CODEX\" | cut -d= -f1 | sort",
           "displayKey": "tool-name-bash"
         },
         "result": {

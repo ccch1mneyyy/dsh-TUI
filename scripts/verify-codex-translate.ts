@@ -247,4 +247,28 @@ check('commands: one parsed action stands in for an unknown wrapper', unwrapComm
 check('commands: an unwrapped command passes through', unwrapCommand('ls') === 'ls')
 check('hunks: two hunks join their context', hunkTexts('@@ -1 +1 @@\n-a\n+b\n@@ -9 +9 @@\n c\n').newText === 'b\nc\n')
 
+// ── a usage report is invisible (review fix) ────────────────────────────
+{
+  const { createProjectorHarness } = await import('./lib/projector-harness.js')
+  const { createAgentTrajectorySource } = await import('../src/dsh-adapter/trajectory/agent-source.js')
+  const harness = createProjectorHarness({ model: '', activity: true, now: () => 1000 })
+  const trace = createAgentTrajectorySource({ clock: () => 1000 })
+  const feed = (events: readonly AgentEvent[]): void => { harness.apply(events); for (const event of events) trace.observe(event, false) }
+  feed([
+    { type: 'turn.start', turn: 1, origin: 'user', time: 1 },
+    { type: 'assistant.message', seq: 1, anchor: 'a1', turn: 1, step: 1, attemptId: 'turn-1#1', time: 2, blocks: [{ type: 'text', text: 'hello' }], canonical: true },
+  ])
+  const rows = JSON.stringify(harness.state.rows)
+  const traced = trace.events().length
+  const input = harness.state.tokens.input
+  feed([{ type: 'assistant.message', seq: 2, anchor: '', turn: 1, step: 1, attemptId: 'turn-1#1#usage', time: 99, blocks: [], usage: { input: 10, output: 5 }, canonical: false, usageOnly: true }])
+  check('usage-only: no row changes (no new row, no rewritten time or images, so no /export or copy line)', JSON.stringify(harness.state.rows) === rows, harness.state.rows)
+  check('usage-only: no trace entry', trace.events().length === traced, trace.events().slice(traced))
+  check('usage-only: the usage is booked once', harness.state.tokens.input === input + 10)
+  feed([{ type: 'assistant.message', seq: 2, anchor: '', turn: 1, step: 1, attemptId: 'turn-1#1#usage', time: 99, blocks: [], usage: { input: 10, output: 5 }, canonical: false, usageOnly: true }])
+  check('usage-only: a redelivered report (same seq) is not booked twice', harness.state.tokens.input === input + 10)
+  feed([{ type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 100 }])
+  check('usage-only: the turn ends with one assistant row', harness.state.rows.filter(row => row.kind === 'assistant').length === 1)
+}
+
 console.log(`\nverify-codex-translate OK (${passed} checks)`)

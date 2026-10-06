@@ -6,15 +6,19 @@
  *
  *   node scripts/lib/codex-fixture-sanitize.mjs --check [dir]      # CI: fail on any finding
  *   node scripts/lib/codex-fixture-sanitize.mjs --write <in> <out> # scrub one recording
+ *   node scripts/lib/codex-fixture-sanitize.mjs --rescrub [dir]    # re-apply the scrub in place
  *
  * Scrub (`--write`): every URL host outside {@link ALLOWED_HOSTS} becomes
  * `relay.invalid` (the relay's own host never needs to be named on the
  * command line); temporary directories become `/TMP/home` / `/TMP/cwd` /
- * `/TMP/...`; the machine-identifying remote-control fields are zeroed.
+ * `/TMP/...`; the machine-identifying remote-control fields are zeroed; the
+ * `config/read` layer versions (`sha256:…` of a layer's contents — the
+ * session-flags layer holds the relay URL) become `sha256:scrubbed`.
  *
- * Check (`--check`): a credential shape (`sk-…`, a Bearer header, a JWT), a
- * URL host outside the allowlist, a temporary or home directory path, or an
- * unscrubbed installation id fails. A fixture is never "fixed" by the check:
+ * Check (`--check`): a credential shape (`sk-…`, a Bearer header, a JWT), the
+ * live key itself when `CODEX_TEST_API_KEY` is set, a URL host outside the
+ * allowlist, a temporary or home directory path, an unscrubbed installation
+ * id or layer hash fails. A fixture is never "fixed" by the check:
  * re-record or re-scrub it.
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -45,6 +49,9 @@ export function sanitizeFixture(text) {
     .replace(/\/tmp\/codex-[A-Za-z-]*cwd-[A-Za-z0-9]+/gu, '/TMP/cwd')
     .replace(/(?<![A-Za-z])\/tmp\/[A-Za-z0-9._-]+/gu, '/TMP/dir')
     .replace(/"installationId":"[^"]*"/gu, `"installationId":"${ZERO_UUID}"`)
+    // config/read layer versions hash a layer's contents (the session-flags
+    // layer held the relay URL): never committed.
+    .replace(/"version":"sha256:[0-9a-f]{16,}"/gu, '"version":"sha256:scrubbed"')
     .replace(/"serverName":"[^"]*"/gu, '"serverName":"ser000000000000"')
 }
 
@@ -71,6 +78,10 @@ export function checkFixture(text, file = 'fixture') {
     for (const [label, pattern] of [...SECRET_PATTERNS, ...PATH_PATTERNS]) {
       if (pattern.test(line)) findings.push(`${where}: ${label}`)
     }
+    // The live key itself, when this shell has it (never echoed).
+    const key = process.env.CODEX_TEST_API_KEY
+    if (key !== undefined && key.length >= 8 && line.includes(key)) findings.push(`${where}: the live API key`)
+    if (/"version":"sha256:[0-9a-f]{16,}"/u.test(line)) findings.push(`${where}: an unscrubbed config layer hash`)
     for (const match of line.matchAll(URL_HOST)) {
       // The host itself is never echoed: it may be the private relay.
       if (!ALLOWED_HOSTS.has(match[1].toLowerCase())) findings.push(`${where}: a URL host outside the allowlist`)
@@ -110,6 +121,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     }
     writeFileSync(b, scrubbed)
     console.log(`scrubbed ${a} -> ${b}`)
+  } else if (mode === '--rescrub') {
+    // Re-apply the scrub to committed fixtures in place (idempotent).
+    const dir = resolve(a ?? join(import.meta.dirname, '..', 'fixtures', 'codex', 'wire'))
+    for (const name of readdirSync(dir).filter(file => file.endsWith('.jsonl'))) {
+      const path = join(dir, name)
+      const before = readFileSync(path, 'utf8')
+      const after = sanitizeFixture(before)
+      if (after !== before) {
+        writeFileSync(path, after)
+        console.log(`rescrubbed ${name}`)
+      }
+    }
   } else if (mode === '--check') {
     const dir = resolve(a ?? join(import.meta.dirname, '..', 'fixtures', 'codex'))
     const { files, findings } = checkFixtureDir(dir)

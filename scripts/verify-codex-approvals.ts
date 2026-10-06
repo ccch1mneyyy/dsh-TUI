@@ -205,6 +205,55 @@ const respond = h.session.capabilities.permissions!.respond
   const legacy = await h.fake.request('execCommandApproval', { conversationId: THREAD, callId: 'x', command: ['ls'] })
   check('a legacy v1 approval is refused with -32601', (legacy.error as Rec | undefined)?.code === -32601)
 }
+// ── review fixes: what the prompt names (lossless), what else it asks ──
+{
+  // A wrapper the old unwrap missed, with Codex's parse naming only a part:
+  // the prompt shows the whole script, never the parsed fragment.
+  const answer = h.fake.request('item/commandExecution/requestApproval', { ...COMMAND, itemId: 'exec-brew', command: "/opt/homebrew/bin/bash -lc 'cd src && cat a.ts | head -5'", commandActions: [{ type: 'read', command: 'cat a.ts', name: 'a.ts', path: 'src/a.ts' }] })
+  await tick()
+  check('approval: a non-/bin bash -lc wrapper unwraps losslessly (not the parsed fragment)', lastRequest(h.events()).command === 'cd src && cat a.ts | head -5', lastRequest(h.events()).command)
+  respond(lastRequest(h.events()).requestId, { kind: 'reject' })
+  await answer
+}
+{
+  // Concatenated quoting has no lossless one-word unwrap: the raw command.
+  const raw = `/bin/bash -lc 'env | grep -E "''^CODEX" | sort'`
+  const answer = h.fake.request('item/commandExecution/requestApproval', { ...COMMAND, itemId: 'exec-concat', command: raw, commandActions: [{ type: 'unknown', command: 'env | grep -E "^CODEX" | sort' }] })
+  await tick()
+  check('approval: no lossless unwrap → the raw command, not commandActions', lastRequest(h.events()).command === raw, lastRequest(h.events()).command)
+  respond(lastRequest(h.events()).requestId, { kind: 'reject' })
+  await answer
+}
+{
+  const answer = h.fake.request('item/commandExecution/requestApproval', {
+    ...COMMAND, itemId: 'exec-extra', kind: 'writeStdin', cwd: '/TMP/cwd/pkg',
+    networkApprovalContext: { host: 'registry.npmjs.org', protocol: 'https' },
+    additionalPermissions: { network: { enabled: true }, fileSystem: { write: ['/TMP/cwd/out'] } },
+  })
+  await tick()
+  const view = lastRequest(h.events())
+  const description = (view as { description?: string }).description ?? ''
+  check('approval: writeStdin, network context, extra permissions and another cwd are shown',
+    view.displayName === t('codex-approve-stdin-name') && description.includes(t('codex-approve-stdin'))
+    && description.includes('registry.npmjs.org') && description.includes(t('codex-perm-network')) && description.includes('out') && description.includes('pkg'), view)
+  respond(view.requestId, { kind: 'allow-always', optionId: 'missing-option' })
+  await answer
+  await h.notify('serverRequest/resolved', { requestId: Number(view.requestId.split(':').at(-1)) })
+  check('approval: a fallback to the reject choice is recorded as rejected, not allow-*', of(h.events(), 'permission.settled').at(-1)?.outcome === 'rejected', of(h.events(), 'permission.settled').at(-1))
+}
+{
+  // A subagent's thread (named by a collab call) is routed to this session:
+  // its prompt reaches the user and names the agent.
+  const c = await openHarness()
+  await c.notify('item/started', { threadId: THREAD, turnId: 'turn-c', item: { type: 'collabAgentToolCall', id: 'collab-1', tool: 'spawnAgent', status: 'inProgress', senderThreadId: THREAD, receiverThreadIds: ['child-thread-1'], prompt: 'look around', agentsStates: {} } })
+  const answer = c.fake.request('item/commandExecution/requestApproval', { ...COMMAND, itemId: 'exec-child', threadId: 'child-thread-1' })
+  await tick()
+  const view = of(c.events(), 'permission.request').at(-1)?.request
+  check('approval: a routed child thread\'s prompt reaches the user with agentId', view?.callId === 'exec-child' && (view as { agentId?: string }).agentId === 'child-thread-1', view)
+  c.session.capabilities.permissions!.respond(view!.requestId, { kind: 'reject' })
+  check('approval: the child prompt is answered (not refused)', ((await answer).result as Rec | undefined)?.decision !== undefined)
+  await c.session.dispose()
+}
 {
   const answer = h.fake.request('item/commandExecution/requestApproval', { ...COMMAND, itemId: 'exec-dispose' })
   const question = h.fake.request('item/tool/requestUserInput', { threadId: THREAD, turnId: 'turn-z', itemId: 'q-dispose', isBlocking: true, autoResolutionMs: null, questions: [{ id: 'q', header: '', question: 'Still there?', isOther: true, isSecret: false, options: [] }] })

@@ -266,7 +266,11 @@ export type AgentEvent =
    * record of the attempt (provisional content they omit is removed);
    * `turn`/`step` are absent only on legacy history that predates them.
    */
-  | { readonly type: 'assistant.message'; readonly seq: number; readonly anchor: string; readonly turn?: number; readonly step?: number; readonly attemptId: string; readonly time: number; readonly model?: string; readonly blocks: readonly AssistantBlock[]; readonly images?: readonly ImageRef[]; readonly usage?: UsageDelta; readonly interrupted?: true; readonly canonical: boolean; readonly parentCallId?: string }
+  | { readonly type: 'assistant.message'; readonly seq: number; readonly anchor: string; readonly turn?: number; readonly step?: number; readonly attemptId: string; readonly time: number; readonly model?: string; readonly blocks: readonly AssistantBlock[]; readonly images?: readonly ImageRef[]; readonly usage?: UsageDelta; readonly interrupted?: true; readonly canonical: boolean; readonly parentCallId?: string
+      /** A usage report, not a message: the token counts of a model call
+       *  whose reply already settled (Codex reports them afterwards). Books
+       *  usage only — no row, no trace entry, no transcript text. */
+      readonly usageOnly?: true }
   // ── tools ───────────────────────────────────────────────────────────
   /** A tool call was issued. */
   | { readonly type: 'tool.call'; readonly seq: number; readonly anchor?: string; readonly turn: number; readonly step: number; readonly callId: string; readonly name: string; readonly argsJson: string; readonly parentCallId?: string; readonly agentId?: string; readonly presentation?: ToolCallPresentation; readonly time: number }

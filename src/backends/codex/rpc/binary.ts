@@ -13,7 +13,7 @@
  *   certificates, `OPENAI_*`) pass through untouched.
  */
 import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { parseCodexVersion } from '../contract.js'
 
 /** Where the executable came from (`/doctor`). */
@@ -74,6 +74,69 @@ export function readCodexVersion(executable: string, env: NodeJS.ProcessEnv = pr
   })
 }
 
+/** The npm launcher's platform packages and target triples (its
+ *  `bin/codex.js` maps the same way). */
+const NPM_TARGETS: Readonly<Record<string, { readonly triple: string; readonly pkg: string }>> = {
+  'linux-x64': { triple: 'x86_64-unknown-linux-musl', pkg: 'codex-linux-x64' },
+  'linux-arm64': { triple: 'aarch64-unknown-linux-musl', pkg: 'codex-linux-arm64' },
+  'darwin-x64': { triple: 'x86_64-apple-darwin', pkg: 'codex-darwin-x64' },
+  'darwin-arm64': { triple: 'aarch64-apple-darwin', pkg: 'codex-darwin-arm64' },
+  'win32-x64': { triple: 'x86_64-pc-windows-msvc', pkg: 'codex-win32-x64' },
+  'win32-arm64': { triple: 'aarch64-pc-windows-msvc', pkg: 'codex-win32-arm64' },
+}
+
+/**
+ * The native binary behind an npm `codex` shim (`codex.cmd`, `codex.ps1`,
+ * the extensionless script), or undefined. A shim runs `node …/@openai/codex/
+ * bin/codex.js`, which only locates `vendor/<triple>/bin/codex[.exe]` of the
+ * platform package and spawns it; spawning that binary directly avoids
+ * `cmd.exe` re-parsing the `-c key="value"` arguments. Pure over its I/O
+ * seams (unit-tested with a fake tree).
+ */
+export function resolveNpmShim(shim: string, io: {
+  readonly platform: string
+  readonly arch: string
+  readonly exists: (path: string) => boolean
+  readonly read: (path: string) => string | undefined
+}): string | undefined {
+  const target = NPM_TARGETS[`${io.platform}-${io.arch}`]
+  if (target === undefined) return undefined
+  const text = io.read(shim)
+  if (text === undefined || !/@openai[\\/]codex[\\/]bin[\\/]codex\.js/iu.test(text)) return undefined
+  const sep = io.platform === 'win32' ? '\\' : '/'
+  const join = (...parts: string[]): string => parts.join(sep)
+  const shimDir = shim.slice(0, Math.max(shim.lastIndexOf('/'), shim.lastIndexOf('\\')))
+  // An absolute launcher path in the shim wins; else npm's own layout
+  // (`<shim dir>/node_modules/@openai/codex`).
+  const absolute = /([A-Za-z]:\\[^"'\r\n]*?|\/[^"'\s]*?)[\\/]bin[\\/]codex\.js/u.exec(text.replace(/%~?dp0%?[\\/]?|\$\{?basedir\}?[\\/]?/gu, ''))?.[1]
+  const roots = [
+    ...(absolute !== undefined && /@openai[\\/]codex$/iu.test(absolute) && io.exists(absolute) ? [absolute] : []),
+    join(shimDir, 'node_modules', '@openai', 'codex'),
+  ]
+  const binary = io.platform === 'win32' ? 'codex.exe' : 'codex'
+  for (const root of roots) {
+    const scope = root.slice(0, Math.max(root.lastIndexOf('/'), root.lastIndexOf('\\')))
+    for (const vendor of [join(root, 'node_modules', '@openai', target.pkg, 'vendor'), join(scope, target.pkg, 'vendor'), join(root, 'vendor')]) {
+      const candidate = join(vendor, target.triple, 'bin', binary)
+      if (io.exists(candidate)) return candidate
+    }
+  }
+  return undefined
+}
+
+/** The binary to spawn for a resolved path: an npm shim's native binary
+ *  when one is found, else the path itself. */
+export function spawnablePath(path: string): string {
+  if (process.platform !== 'win32' && !/\.(?:cmd|bat|ps1)$/iu.test(path)) return path
+  const native = resolveNpmShim(path, {
+    platform: process.platform,
+    arch: process.arch,
+    exists: existsSync,
+    read: file => { try { return readFileSync(file, 'utf8').slice(0, 64 * 1024) } catch { return undefined } },
+  })
+  return native ?? path
+}
+
 /** Every existing `codex` on PATH, in the platform tool's order. */
 function whichAll(name: string): Promise<string[]> {
   const win = process.platform === 'win32'
@@ -93,7 +156,8 @@ function whichAll(name: string): Promise<string[]> {
 export async function resolveCodexExecutable(env: NodeJS.ProcessEnv = process.env): Promise<(CodexExecutable & { readonly version: string | undefined }) | undefined> {
   const configured = env.CODEX_EXECUTABLE
   if (configured !== undefined && configured !== '') {
-    return { path: configured, source: 'env', version: await readCodexVersion(configured, env) }
+    const path = spawnablePath(configured)
+    return { path, source: 'env', version: await readCodexVersion(path, env) }
   }
   // A candidate that cannot report its version cannot be spawned either
   // (a dead npm shim, an extensionless script on Windows).
@@ -101,7 +165,8 @@ export async function resolveCodexExecutable(env: NodeJS.ProcessEnv = process.en
   const ordered = process.platform === 'win32'
     ? [...candidates.filter(path => /\.(?:exe|cmd)$/iu.test(path)), ...candidates.filter(path => !/\.(?:exe|cmd)$/iu.test(path))]
     : candidates
-  for (const candidate of ordered) {
+  for (const listed of ordered) {
+    const candidate = spawnablePath(listed)
     const version = await readCodexVersion(candidate, env)
     if (version !== undefined) return { path: candidate, source: 'path', version }
   }

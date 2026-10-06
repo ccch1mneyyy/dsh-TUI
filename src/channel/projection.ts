@@ -513,7 +513,64 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     updateSpinnerMode()
   }
 
+  /**
+   * Book one model call's usage: session totals, the cost buckets, the
+   * context sample and the open turn's ledger. Shared by settled messages
+   * and the usage-only reports a backend sends after a reply settled.
+   */
+  const bookUsage = (usage: NonNullable<AgentEventOf<'assistant.message'>['usage']>, event: Pick<AgentEventOf<'assistant.message'>, 'time' | 'model'>): void => {
+    state.tokens.input += usage.input ?? 0
+    state.tokens.output += usage.output ?? 0
+    // Cache split totals feed the session cost estimate (hit-priced input
+    // vs. uncached input) — the durable replay may lack them.
+    state.tokens.cacheRead += usage.cacheRead ?? 0
+    state.tokens.cacheWrite += usage.cacheWrite ?? 0
+    // Rate-window bucketing by the request's own time (the durable replay
+    // replays historical events, so a resumed session prices each request
+    // at the rate window it actually ran in — the session cost estimate
+    // never prices the whole session at the current window).
+    const peak = (deps.pricingWindow?.(event.time) ?? 'idle') === 'peak'
+    addUsageToBucket(peak ? state.tokens.peak : state.tokens.idle, usage)
+    // 主会话费用分桶：计数方式与 tokens 相同，但按事件发生时的模型
+    // 归属。replay 用 request.header 还原历史请求模型，旧日志回退
+    // channel 模型；换模型不会把历史 token 重估到新模型。
+    if ((usage.input ?? 0) !== 0 || (usage.output ?? 0) !== 0 || (usage.cacheRead ?? 0) !== 0 || (usage.cacheWrite ?? 0) !== 0) {
+      const model = eventModel ?? state.model
+      const cost = state.mainCost[model] ?? emptyCostBuckets()
+      addUsageToBucket(peak ? cost.peak : cost.idle, usage)
+      state.mainCost[model] = cost
+    }
+    // The most recent request's usage describes the current context:
+    // input (uncached) + cache hits all occupy the window. Cache hits
+    // also drive the status-line `cache N` readout.
+    state.lastUsage = {
+      input: usage.input ?? 0,
+      output: usage.output ?? 0,
+      cacheRead: usage.cacheRead ?? 0,
+      cacheWrite: usage.cacheWrite ?? 0,
+      at: event.time,
+    }
+    // Turn ledger: each message reports its own request's increment, so
+    // the sum is the turn total. Cache fields absent on the wire stay
+    // absent (cacheKnown distinguishes zero from unreported).
+    turnLedger.input += usage.input ?? 0
+    turnLedger.output += usage.output ?? 0
+    turnLedger.cacheRead += usage.cacheRead ?? 0
+    turnLedger.cacheWrite += usage.cacheWrite ?? 0
+    if (usage.cacheRead !== undefined || usage.cacheWrite !== undefined) turnLedger.cacheKnown = true
+    turnLedger.usageSeen = true
+    if (event.model !== undefined && event.model !== '') turnLedger.model = event.model
+  }
+
   const applyAssistantMessage = (event: AgentEventOf<'assistant.message'>): void => {
+    // A usage report (no content: a backend whose token counts arrive after
+    // the reply settled) books its usage and touches no row.
+    if (event.usageOnly === true) {
+      if (handledAssistantMessages.has(event.seq)) return
+      handledAssistantMessages.add(event.seq)
+      if (event.usage !== undefined) bookUsage(event.usage, event)
+      return
+    }
     if (handledAssistantMessages.has(event.seq)) return
     handledAssistantMessages.add(event.seq)
     // A canonical settlement embeds its complete attempt; older settlements
@@ -610,49 +667,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     if (activeAttempt !== undefined && activeAttempt.turn === event.turn && activeAttempt.step === event.step) activeAttempt = undefined
     updateSpinnerMode()
     const usage = event.usage
-    if (usage !== undefined) {
-      state.tokens.input += usage.input ?? 0
-      state.tokens.output += usage.output ?? 0
-      // Cache split totals feed the session cost estimate (hit-priced input
-      // vs. uncached input) — the durable replay may lack them.
-      state.tokens.cacheRead += usage.cacheRead ?? 0
-      state.tokens.cacheWrite += usage.cacheWrite ?? 0
-      // Rate-window bucketing by the request's own time (the durable replay
-      // replays historical events, so a resumed session prices each request
-      // at the rate window it actually ran in — the session cost estimate
-      // never prices the whole session at the current window).
-      const peak = (deps.pricingWindow?.(event.time) ?? 'idle') === 'peak'
-      addUsageToBucket(peak ? state.tokens.peak : state.tokens.idle, usage)
-      // 主会话费用分桶：计数方式与 tokens 相同，但按事件发生时的模型
-      // 归属。replay 用 request.header 还原历史请求模型，旧日志回退
-      // channel 模型；换模型不会把历史 token 重估到新模型。
-      if ((usage.input ?? 0) !== 0 || (usage.output ?? 0) !== 0 || (usage.cacheRead ?? 0) !== 0 || (usage.cacheWrite ?? 0) !== 0) {
-        const model = eventModel ?? state.model
-        const cost = state.mainCost[model] ?? emptyCostBuckets()
-        addUsageToBucket(peak ? cost.peak : cost.idle, usage)
-        state.mainCost[model] = cost
-      }
-      // The most recent request's usage describes the current context:
-      // input (uncached) + cache hits all occupy the window. Cache hits
-      // also drive the status-line `cache N` readout.
-      state.lastUsage = {
-        input: usage.input ?? 0,
-        output: usage.output ?? 0,
-        cacheRead: usage.cacheRead ?? 0,
-        cacheWrite: usage.cacheWrite ?? 0,
-        at: event.time,
-      }
-      // Turn ledger: each message reports its own request's increment, so
-      // the sum is the turn total. Cache fields absent on the wire stay
-      // absent (cacheKnown distinguishes zero from unreported).
-      turnLedger.input += usage.input ?? 0
-      turnLedger.output += usage.output ?? 0
-      turnLedger.cacheRead += usage.cacheRead ?? 0
-      turnLedger.cacheWrite += usage.cacheWrite ?? 0
-      if (usage.cacheRead !== undefined || usage.cacheWrite !== undefined) turnLedger.cacheKnown = true
-      turnLedger.usageSeen = true
-      if (event.model !== undefined && event.model !== '') turnLedger.model = event.model
-    }
+    if (usage !== undefined) bookUsage(usage, event)
     const tpsMessageStep = tpsStep
     if (
       tpsTurn === event.turn &&

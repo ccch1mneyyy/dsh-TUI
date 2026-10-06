@@ -162,4 +162,22 @@ export const text = value => [{ type: 'text', text: value, text_elements: [] }]
 export const brief = (value, limit = 600) =>
   String(JSON.stringify(value, (key, item) => (typeof item === 'string' && item.length > 80 ? item.slice(0, 80) + '…' : item))).slice(0, limit)
 
+/**
+ * Console-safe text: the relay base URL, its host and the key replaced by
+ * `<relay>` (a recording's errors and summaries can echo them).
+ */
+export function safe(value) {
+  const secrets = [process.env.CODEX_TEST_BASE_URL, process.env.CODEX_TEST_API_KEY]
+    .filter(item => typeof item === 'string' && item !== '')
+  try {
+    const host = new URL(process.env.CODEX_TEST_BASE_URL).host
+    if (host !== '') secrets.push(host)
+  } catch {
+    // An unparsable base URL still has its full value in the list.
+  }
+  let out = typeof value === 'string' ? value : brief(value, 2000)
+  for (const secret of secrets) out = out.split(secret).join('<relay>')
+  return out
+}
+
 export const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms) })

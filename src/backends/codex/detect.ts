@@ -37,7 +37,7 @@ export function detectCodexAuth(env: NodeJS.ProcessEnv = process.env): 'ok' | 'm
   // A provider of its own (a relay, a local model) needs no OpenAI login.
   const provider = /^\s*model_provider\s*=\s*["']([^"']+)["']/mu.exec(config)?.[1]
   if (provider !== undefined && provider !== 'openai') return 'ok'
-  if (/^\s*cli_auth_credentials_store\s*=\s*["']keyring["']/mu.test(config)) return 'unknown'
+  if (/^\s*cli_auth_credentials_store\s*=\s*["'](?:keyring|auto)["']/mu.test(config)) return 'unknown'
   return 'missing'
 }
 

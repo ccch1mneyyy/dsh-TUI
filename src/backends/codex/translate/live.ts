@@ -52,8 +52,14 @@ function todoStatus(status: string | undefined): TodoPanelItem['status'] {
 export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapshot): LiveTranslator {
   /** The window last announced (a change re-announces). */
   let contextWindow: number | undefined
-  /** The turn the last `turn/completed` closed. */
-  let lastClosedTurnId: string | undefined
+  /** Turns closed here (by `turn/completed` or a forced settle): their late
+   *  item, delta and usage traffic changes nothing (bounded, newest kept). */
+  const closedTurns = new Set<string>()
+  const markClosed = (id: string | undefined): void => {
+    if (id === undefined || id === '') return
+    closedTurns.add(id)
+    if (closedTurns.size > 64) closedTurns.delete(closedTurns.values().next().value!)
+  }
 
   const deltaTo = (out: AgentEvent[], kind: 'text' | 'reasoning', textDelta: string, index: number): void => {
     if (textDelta === '' || !ctx.turnOpen) return
@@ -66,6 +72,10 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
   const notification = (method: string, params: Rec): AgentEvent[] => {
     const out: AgentEvent[] = []
     const now = ctx.now()
+    // A late notification of a turn already closed (an item that completes
+    // after a forced settle) must not reopen it as a phantom turn.
+    const turnOf = str(params.turnId) ?? (method === NOTIFY.turnStarted ? str(rec(params.turn)?.id) : undefined)
+    if (turnOf !== undefined && closedTurns.has(turnOf)) return out
     switch (method) {
       case NOTIFY.turnStarted: {
         const id = str(rec(params.turn)?.id)
@@ -76,10 +86,10 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
         const turn = rec(params.turn) ?? {}
         const id = str(turn.id)
         // A repeated completion of a turn already closed changes nothing.
-        if (id !== undefined && id === lastClosedTurnId) return out
+        if (id !== undefined && closedTurns.has(id)) return out
         if (id !== undefined && !ctx.turnOpen) ctx.turnId = id
         closeTurn(ctx, out, turnEndReason(turn), now)
-        lastClosedTurnId = id ?? ctx.turnId
+        markClosed(id ?? ctx.turnId)
         return out
       }
       case NOTIFY.itemStarted:
@@ -261,8 +271,8 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
       const out: AgentEvent[] = []
       if (!ctx.turnOpen && ctx.attempt === undefined && ctx.openTools.size === 0) return out
       closeTurn(ctx, out, reason, ctx.now())
-      // A late `turn/completed` of the force-closed turn changes nothing.
-      if (ctx.turnId !== '') lastClosedTurnId = ctx.turnId
+      // The force-closed turn's late traffic changes nothing.
+      markClosed(ctx.turnId)
       return out
     },
     ctx,

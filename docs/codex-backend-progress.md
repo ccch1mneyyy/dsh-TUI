@@ -23,6 +23,7 @@
 | C0-D3 | `MIN_CODEX_VERSION = 0.144.0`（而非退路 0.160.0） | V16：0.144.0 的生成协议包含本后端用到的全部方法/通知/服务端请求/item 类型，握手、`thread/start`、`model/list` 实测可用；验证线以外的版本照常 drift 提示 |
 | C0-D4 | 命令审批的选项按服务端给的 `availableDecisions` 生成（缺省时按官方 TUI 的默认集：accept、execpolicy、cancel） | 实测与官方 TUI 源码（`approval_overlay.rs` `exec_options`）：服务端常常不提供 `decline`/`acceptForSession`；按方案固定四项会给出服务端拒收的决定 |
 | C0-D5 | 中断时丢弃未被采纳的 steer：`cancel('interrupt')` 回执 `confirmed`；`cancel('user')` 由会话把这些 steer 重新排进客户端 followup 队列 | V6：`turn/interrupt` 清空回合的待采纳输入（`clear_pending`），历史里也没有；`user` 取消的语义是"排队的输入下回合照跑" |
+| R-D1 | 中立事件 `assistant.message` 新增可选 `usageOnly?: true`：投影器只记账（tokens、费用分桶、`lastUsage`、回合账本，按 seq 去重），不建行、不改既有行；`/trace` 源跳过 | 评审 #2：Codex 在回复落定后才报用量，原先用空 `blocks` 的非 canonical 消息承载，会改写上一行的时间/图片并在 `/trace` 留空消息。按"空且非 canonical"启发式判断会误伤 DSH 旧式空消息，故用显式标志（§6 形状的增量改动，DSH 不产生该标志，行为不变） |
 
 ## 分期日志
 
@@ -156,6 +157,28 @@
 - C0 补录（§10.2：错误/重试、MCP、web search、图片、elicitation、goal、review、后台终端）未做：它们服务
   C2–C4 的翻译测试，C1 的对应映射用合成通知覆盖。建议各期按需录制（预算内），还是现在一次补齐？
 - `MIN_CODEX_VERSION = 0.144.0`（C0-D3）比方案退路宽；如要保守可改回 0.160.0。
+
+## 评审修复（C0+C1，618abd1f 的评审）
+
+已修（各带回归，抽查 #1/#2 在修复前的源码上确实失败）：#1 强制收敛后迟到的 item/delta/完成被丢弃
+（`closedTurns`，`verify-codex-input`）；#2 用量报告不可见（R-D1，`verify-codex-translate`）；#3 `now` 先于
+被中断丢弃的 steer（`verify-codex-input`）；#4 子 thread（`subAgentActivity.agentThreadId`、collab
+`receiverThreadIds`）路由到父会话，审批带 `agentId`（`verify-codex-approvals`）；#5 审批命令只做无损
+解包，否则显示原始命令（不再用 commandActions 片段）；#6 `writeStdin`、`networkApprovalContext`、
+`additionalPermissions`、非会话 cwd 写进审批描述；#8 Windows npm shim 解析到原生 `codex.exe`
+（`resolveNpmShim`，`verify-codex-rpc`）；#9 版本过旧单独的原因并带升级提示（`verify-kernel-catalog`）；
+#10 录制脚本的控制台输出与未捕获错误经 `safe()` 脱敏。小项：fixture 检查器识别实时 key 字面值并清洗
+`config/read` 层哈希（已重洗 `c0-files-delete-fork`）；`cli_auth_credentials_store = "auto"` 无
+auth.json 判 `unknown`；重连 `thread/resume` 带与 open 相同的模式/模型覆盖；拒绝回退记为 `rejected`；
+`turn/interrupt` 失败清 `cancelCause`；`bash -lc`、`-NoLogo`、带引号的 pwsh 路径可解包。
+goldens 变化：两张卡片标题从错误的引号剥离改为正确脚本（`c0-files-delete-fork`、`s4-plan-question`）。
+
+未修（留给后续）：#7 渠道 base URL 校验（拒绝含 userinfo、查询串、疑似 key 的路径段；凭据只经
+`env_key`/`env_http_headers`；文档注明主机名在进程列表可见）——随 C2 的 `channels.ts` 一起做；共享 hub
+的 debug/stderr/bubblewrap 只通知首个打开者（应扇出到所有会话）；`closeAllCodexHubs` 未接入退出漏斗。
+
+门禁：`pnpm build` 除 `verify:transcript-images`、`verify:image-preview` 外全过——二者断言英文文案，
+本机 `~/.dsh-tui/lang.json` 被设为 zh（非本分支所为），用干净 HOME 单跑均通过。
 
 ## Neutral layer N2–N6
 

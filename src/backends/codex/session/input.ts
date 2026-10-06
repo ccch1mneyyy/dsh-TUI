@@ -33,6 +33,9 @@ interface Entry {
   readonly text: string
   readonly input: readonly UserInput[]
   readonly placement: PendingItem['placement']
+  /** Sent with `now`: it runs before anything else waiting, steers the
+   *  interrupt dropped included. */
+  readonly urgent?: true
 }
 
 export interface InputQueueDeps {
@@ -201,8 +204,11 @@ export function createInputQueue(deps: InputQueueDeps) {
       } else if (cause === 'interrupt' || cause === 'switch' || cause === 'dispose') {
         events.push(pendingEvent({ discarded: leftover.map(entry => entry.id) }))
       } else {
-        // Dropped by the interrupt (V6) but still wanted: run them next.
-        queue = [...leftover.map(entry => ({ ...entry, placement: 'followup' as const })), ...queue]
+        // Dropped by the interrupt (V6) but still wanted: run them next,
+        // after an input sent with `now` (the reason for the interrupt).
+        const urgent = queue.filter(entry => entry.urgent === true)
+        const rest = queue.filter(entry => entry.urgent !== true)
+        queue = [...urgent, ...leftover.map(entry => ({ ...entry, placement: 'followup' as const })), ...rest]
       }
     }
     if (events.length > 0) deps.emit(events)
@@ -229,7 +235,7 @@ export function createInputQueue(deps: InputQueueDeps) {
         case 'steer':
           return steer(entry)
         case 'now':
-          queue.unshift(entry)
+          queue.unshift({ ...entry, urgent: true })
           void interrupt()
           return { accepted: true }
         default:
@@ -249,7 +255,11 @@ export function createInputQueue(deps: InputQueueDeps) {
       if (busy) {
         cancelCause = cause
         const ok = await interrupt()
-        if (!ok) return { stillQueued: cause === 'user' ? covered : [...steered.keys()], outcome: 'failed' }
+        if (!ok) {
+          // The turn goes on: its end must not be read as this cancel's.
+          cancelCause = undefined
+          return { stillQueued: cause === 'user' ? covered : [...steered.keys()], outcome: 'failed' }
+        }
       }
       return cause === 'user'
         ? { stillQueued: [...steered.keys(), ...queue.map(entry => entry.id)], outcome: 'confirmed' }

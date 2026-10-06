@@ -14,9 +14,12 @@
 //   CODEX_EXECUTABLE=<codex> node scripts/probes/codex-record.mjs <scenario…>
 // Scenarios and their live turns: s1 (2), s1b (1), s2 (3), s3 (2 + compact),
 // s4 (1), s5 (1).
-import { connect, liveCodexHome, pinCheapOrExit, summarize, text } from './codex-probe-lib.mjs'
+import { connect, liveCodexHome, pinCheapOrExit, safe, summarize, text } from './codex-probe-lib.mjs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+
+/** Console output, scrubbed of the relay URL, host and key. */
+const say = (...values) => console.log(...values.map(value => safe(value)))
 
 const { model, effort } = pinCheapOrExit('codex-record', join(homedir(), '.dsh-tui'))
 
@@ -42,7 +45,7 @@ const scenarios = {
       const t2 = (await api.call('thread/start', { cwd: live.cwd, approvalPolicy: 'on-request', sandbox: 'read-only' })).result.thread.id
       await api.call('turn/start', { threadId: t2, clientUserMessageId: 'c2', input: text('Create a file named b.txt containing the single word hi, using your file editing tool. Do nothing else.') })
       await api.until(e => e.method === 'turn/completed' && e.params.threadId === t2)
-      console.log(summarize(api.events), '\ndecisions', decisions)
+      say(summarize(api.events), '\ndecisions', decisions)
       await api.call('thread/read', { threadId: t2, includeTurns: true })
       await api.call('thread/read', { threadId: t1, includeTurns: true })
     } finally { await api.close(); live.cleanup() }
@@ -54,8 +57,8 @@ const scenarios = {
     try {
       const t1 = (await api.call('thread/start', { cwd: live.cwd, approvalPolicy: 'untrusted', sandbox: 'danger-full-access' })).result.thread.id
       await api.call('turn/start', { threadId: t1, clientUserMessageId: 'c1', input: text('Run exactly this shell command and nothing else: echo probe > a.txt') })
-      console.log((await api.until(e => e.method === 'turn/completed', 150000)) ? 'completed' : 'TIMEOUT')
-      console.log(summarize(api.events))
+      say((await api.until(e => e.method === 'turn/completed', 150000)) ? 'completed' : 'TIMEOUT')
+      say(summarize(api.events))
       await api.call('thread/read', { threadId: t1, includeTurns: true })
     } finally { await api.close(); live.cleanup() }
   },
@@ -76,7 +79,7 @@ const scenarios = {
       await api.until(e => e.method === 'turn/completed' && e.params.turn.id === b.result.turn.id, 30000)
       const c = await api.call('turn/start', { threadId: tid, clientUserMessageId: 'c1', input: text('First use your plan tool to record a 2-step plan. Then create c.txt with three lines: one, two, three. Then edit c.txt changing the line two to TWO. Mark plan steps complete as you go. Keep replies minimal.') })
       await api.until(e => e.method === 'turn/completed' && e.params.turn.id === c.result.turn.id, 150000)
-      console.log(summarize(api.events))
+      say(summarize(api.events))
       await api.call('thread/read', { threadId: tid, includeTurns: true })
     } finally { await api.close(); live.cleanup() }
   },
@@ -110,7 +113,7 @@ const scenarios = {
       await api.call('thread/archive', { threadId: fork.result?.thread?.id })
       await api.call('thread/list', { limit: 10, cwd: live.cwd })
       await api.call('thread/loaded/list', {})
-      console.log(summarize(api.events))
+      say(summarize(api.events))
       await api.close()
     } finally { live.cleanup() }
   },
@@ -135,7 +138,7 @@ const scenarios = {
         input: text('I want a tiny hello-world script in this folder. Before planning, ask me exactly one multiple-choice question (Python or Bash?) using your question tool, then give a very short plan.'),
       })
       await api.until(e => e.method === 'turn/completed' && e.params.turn?.id === r.result?.turn?.id, 150000)
-      console.log(summarize(api.events))
+      say(summarize(api.events))
       await api.call('thread/read', { threadId: tid, includeTurns: true })
       await api.call('thread/resume', { threadId: tid, excludeTurns: true })
     } finally { await api.close(); live.cleanup() }
@@ -149,7 +152,7 @@ const scenarios = {
       const tid = (await api.call('thread/start', { cwd: live.cwd, approvalPolicy: 'never', sandbox: 'danger-full-access' })).result.thread.id
       const r = await api.call('turn/start', { threadId: tid, clientUserMessageId: 's1', input: text('Spawn exactly one sub-agent whose only task is to reply with the word child-ok. Wait for it, then reply done. Keep everything minimal.') })
       await api.until(e => e.method === 'turn/completed' && e.params.threadId === tid && e.params.turn.id === r.result.turn.id, 180000)
-      console.log(summarize(api.events))
+      say(summarize(api.events))
       await api.call('thread/read', { threadId: tid, includeTurns: true })
       for (const child of new Set(api.events.map(e => e.params?.threadId).filter(id => typeof id === 'string' && id !== tid))) {
         await api.call('thread/read', { threadId: child, includeTurns: true })
@@ -166,5 +169,11 @@ if (requested.length === 0 || requested.some(name => !(name in scenarios))) {
 }
 for (const name of requested) {
   console.log(`=== ${name}`)
-  await scenarios[name]()
+  try {
+    await scenarios[name]()
+  } catch (error) {
+    // A failed call can quote the provider URL: scrub before printing.
+    console.error(safe(String(error instanceof Error ? error.stack ?? error.message : error)))
+    process.exitCode = 1
+  }
 }

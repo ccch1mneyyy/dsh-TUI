@@ -24,11 +24,11 @@ import type { AgentSessionRef } from '../../../agent/refs.js'
 import type { AgentInput, AgentSession, AgentSessionStatus, CancelCause, SubmitPlacement } from '../../../agent/session.js'
 import { t } from '../../../i18n.js'
 import { CODEX_BACKEND_ID, codexVersionDrift, VALIDATED_CODEX_VERSIONS } from '../contract.js'
-import { CODEX_MODE_PARAMS, DEFAULT_CODEX_MODE, modeIdOf, type CodexModeId } from '../modes.js'
+import { CODEX_MODE_PARAMS, DEFAULT_CODEX_MODE, isCodexModeId, modeIdOf, type CodexModeId } from '../modes.js'
 import { arr, errorText, num, rec, str, text, type Rec } from '../narrow.js'
 import { CLIENT, NOTIFY } from '../protocol/index.js'
 import { REAL_CLOCK, rpcCode, RPC_ERROR } from '../rpc/client.js'
-import type { HubServerRequest, ThreadSink } from '../rpc/hub.js'
+import { threadOf, type HubServerRequest, type ThreadSink } from '../rpc/hub.js'
 import { createItemContext } from '../translate/items.js'
 import { createLiveTranslator, wakeOf, type SettingsSnapshot } from '../translate/live.js'
 import { warningNotice } from '../translate/notices.js'
@@ -128,6 +128,12 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
 
   const ctx = createItemContext({ cwd: opened.cwd, debug, model: opened.model, ...(deps.now === undefined ? {} : { now: deps.now }) })
   const settings: SettingsSnapshot = { model: opened.model, effort: opened.effort, modeId: opened.modeId }
+  /** What a resubscribe sends: the same overrides the open sent, as they
+   *  stand now (the mode and model the session runs). */
+  const resumeOverrides = (): Rec => ({
+    ...(isCodexModeId(settings.modeId) ? CODEX_MODE_PARAMS[settings.modeId] : modeParams),
+    ...(settings.model === '' ? {} : { model: settings.model }),
+  })
   // The replay fixes the numbering before any live event (resume only).
   let replayHistory: readonly AgentEvent[] | undefined = deps.target.kind === 'resume' ? replayResumePage(response, ctx).events : []
   const live = createLiveTranslator(ctx, settings)
@@ -182,15 +188,36 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
 
   const approvals = createApprovalBridge({
     cwd: opened.cwd,
+    threadId,
     emit: events => emit(events, 'sync', true),
     debug,
     enqueueFollowup: (id, followup) => input.enqueueFollowup(id, followup),
     interruptTurn: () => { void input.interrupt() },
   })
 
+  /** Subagent threads routed to this session (their approvals show here). */
+  const childRoutes = new Map<string, () => void>()
+  const routeChild = (child: string | undefined): void => {
+    if (child === undefined || child === '' || child === threadId || childRoutes.has(child)) return
+    childRoutes.set(child, hub.route(child, threadId))
+  }
+  /** A subagent spawn names its thread: route it here before it asks anything. */
+  const routeChildrenOf = (item: Rec | undefined): void => {
+    if (item?.type === 'subAgentActivity') routeChild(str(item.agentThreadId))
+    if (item?.type === 'collabAgentToolCall') for (const child of arr(item.receiverThreadIds)) routeChild(str(child))
+  }
+
   sink = {
     notification(method: string, params: Rec): void {
       if (disposing) return
+      if (method === NOTIFY.itemStarted || method === NOTIFY.itemCompleted) routeChildrenOf(rec(params.item))
+      const from = threadOf(params)
+      if (from !== undefined && from !== threadId) {
+        // A routed subagent thread: only its prompts are this session's
+        // until the subagent lanes exist (C4).
+        if (method === NOTIFY.serverRequestResolved) approvals.resolved(params.requestId)
+        return
+      }
       const before: AgentEvent[] = []
       switch (method) {
         case NOTIFY.turnStarted: {
@@ -251,7 +278,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
     },
     connectionRestored(): void {
       if (disposing) return
-      void hub.call(CLIENT.threadResume, { threadId, excludeTurns: true }).then(() => {
+      void hub.call(CLIENT.threadResume, { threadId, excludeTurns: true, ...resumeOverrides() }).then(() => {
         connected = true
         emit([{ type: 'notice', level: 'info', key: 'codex-connection', text: t('codex-reconnected') }])
         input.connectionRestored()
@@ -376,6 +403,8 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
         if (busy) await input.interrupt().catch(() => false)
         input.close()
         offGlobal()
+        for (const unroute of childRoutes.values()) unroute()
+        childRoutes.clear()
         try {
           await hub.call(CLIENT.threadUnsubscribe, { threadId }, { timeoutMs: 5000 })
         } catch (error) {

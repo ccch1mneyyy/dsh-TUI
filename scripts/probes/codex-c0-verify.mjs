@@ -19,22 +19,9 @@
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { brief, connect, liveCodexHome, pinCheapOrExit, sleep, summarize, text } from './codex-probe-lib.mjs'
+import { connect, liveCodexHome, pinCheapOrExit, safe, sleep, summarize, text } from './codex-probe-lib.mjs'
 
 const { model } = pinCheapOrExit('codex-c0-verify', join(homedir(), '.dsh-tui'))
-const SECRETS = [process.env.CODEX_TEST_BASE_URL, process.env.CODEX_TEST_API_KEY]
-  .filter(value => typeof value === 'string' && value !== '')
-try {
-  const host = new URL(process.env.CODEX_TEST_BASE_URL).host
-  if (host !== '') SECRETS.push(host)
-} catch {
-  // An unparsable base URL still has its full value in SECRETS.
-}
-const safe = value => {
-  let out = typeof value === 'string' ? value : brief(value, 2000)
-  for (const secret of SECRETS) out = out.split(secret).join('<relay>')
-  return out
-}
 const log = (label, value) => console.log(`[${label}] ${safe(value)}`)
 
 /** Every rollout file under a CODEX_HOME's sessions dir. */

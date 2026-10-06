@@ -219,9 +219,9 @@ export function reportUsage(ctx: ItemContext, out: AgentEvent[], usage: UsageDel
   }
   if (!ctx.turnOpen) return
   const step = Math.max(1, ctx.step)
-  // No blocks and not canonical: the projector books the usage (tokens,
-  // the turn's summary, the context sample) and leaves every row as it is.
-  out.push({ type: 'assistant.message', seq: ctx.nextSeq(), anchor: '', turn: ctx.turn, step, attemptId: `${ctx.turnId}#${step}#usage`, time, blocks: [], usage, canonical: false })
+  // A usage report: the projector books it (tokens, the turn's summary,
+  // the context sample) and touches no row; the trace skips it.
+  out.push({ type: 'assistant.message', seq: ctx.nextSeq(), anchor: '', turn: ctx.turn, step, attemptId: `${ctx.turnId}#${step}#usage`, time, blocks: [], usage, canonical: false, usageOnly: true })
 }
 
 /** The user-facing text and the model-facing blocks of a user message. */

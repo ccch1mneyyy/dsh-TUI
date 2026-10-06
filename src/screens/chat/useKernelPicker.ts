@@ -57,7 +57,8 @@ export function useKernelPicker({ channel, kernelVersion, launchpadShown, onProb
         dispatchOverlay({ type: 'open', overlay: { kind: 'sdk-install' } })
         return
       }
-      channel.notify(option.reasonKey === undefined ? t('kernel-switch-unavailable') : t(option.reasonKey), { color: 'warning' })
+      // Detection's own guidance (how to install or upgrade) beats the bare reason.
+      channel.notify(option.hint ?? (option.reasonKey === undefined ? t('kernel-switch-unavailable') : t(option.reasonKey)), { color: 'warning' })
       return
     }
     if (option.current) {
