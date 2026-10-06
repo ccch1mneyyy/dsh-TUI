@@ -10,6 +10,7 @@
  *      的动图明确拒绝、B11 限内动图原字节直通、B12/B13 解码失败（含截断
  *      GIF）拒绝、B14 提示数字取附件库回报、B15 allowlist 复查、B16 字节
  *      上限、B17 会话代际守卫；
+ *   C. host/profile 分离：入站适配复用宿主 sharp，不加载 profile 的第二份；
  *   E. sharp 缺失（子进程 + loader 钩子让 optional 依赖不可解析）：可放行时
  *      降级交给附件库，已知超限/格式不可转换时粘贴即报错。
  *
@@ -26,6 +27,74 @@ let failures = 0
 function check(name: string, ok: boolean, extra = ''): void {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failures++
+}
+
+/** Real temporary host/profile trees, with observable wrappers around one
+ * native decoder. This catches duplicate module loading on every platform. */
+if (process.env.DSH_VERIFY_IMAGE_SPLIT_SHARP === '1') {
+  const assert = (await import('node:assert/strict')).default
+  const { createRequire } = await import('node:module')
+  const { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } = await import('node:fs')
+  const { basename, dirname, join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const { pathToFileURL } = await import('node:url')
+  const realSharpUrl = pathToFileURL(createRequire(import.meta.url).resolve('sharp')).href
+  const realSharp = (await import(realSharpUrl)).default as SharpLike
+  const png = await pngBytes(realSharp, 12, 8)
+  const scratch = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-image-ingress-')))
+  const host = join(scratch, 'host')
+  const profile = join(scratch, 'profile')
+  const tracking = { hostLoads: 0, profileLoads: 0, hostCalls: 0 }
+  Reflect.set(globalThis, '__dshSharpFixture', tracking)
+  try {
+    const write = (path: string, text: string): void => {
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, text)
+    }
+    write(join(profile, 'package.json'), '{"type":"module"}')
+    for (const [tree, kind] of [[host, 'host'], [profile, 'profile']] as const) {
+      write(join(tree, 'node_modules/sharp/package.json'), '{"type":"module","main":"index.js"}')
+      write(join(tree, 'node_modules/sharp/index.js'), `
+        import sharp from ${JSON.stringify(realSharpUrl)}
+        const tracking = globalThis.__dshSharpFixture
+        tracking.${kind}Loads++
+        export default function factory(...args) {
+          ${kind === 'host' ? 'tracking.hostCalls++' : ''}
+          return sharp(...args)
+        }
+      `)
+    }
+    const hostSession = join(host, 'node_modules/@deepseek-ai/dsh-session')
+    write(join(hostSession, 'package.json'), '{"name":"@deepseek-ai/dsh-session"}')
+    mkdirSync(join(profile, 'node_modules/@deepseek-ai'), { recursive: true })
+    symlinkSync(hostSession, join(profile, 'node_modules/@deepseek-ai/dsh-session'), 'junction')
+    for (const file of ['dsh-adapter/sharp.ts', 'utils/imageResize.ts']) {
+      const target = join(profile, 'src', file)
+      mkdirSync(dirname(target), { recursive: true })
+      copyFileSync(new URL(`../src/${file}`, import.meta.url), target)
+    }
+    const { loadSharp, sharpCandidatePaths } = await import(pathToFileURL(join(profile, 'src/dsh-adapter/sharp.ts')).href)
+    assert.deepEqual(sharpCandidatePaths(), [host, profile].map(tree => join(tree, 'node_modules/sharp/index.js')))
+    const shared = await loadSharp()
+    assert.equal(typeof shared, 'function')
+    const { adaptImageForAdmission } = await import(pathToFileURL(join(profile, 'src/utils/imageResize.ts')).href)
+    const outcomes = await Promise.all([
+      adaptImageForAdmission(png, 'image/png', { maxImageDimension: 6, maxImagePixels: 24 }, ['image/png']),
+      adaptImageForAdmission(png, 'image/png', { maxImageDimension: 12, maxImagePixels: 96 }, ['image/jpeg']),
+    ])
+    assert.ok(outcomes.every(outcome => outcome.kind === 'adapted'))
+    assert.equal(tracking.hostLoads, 1, 'the host sharp module loads once')
+    assert.equal(tracking.profileLoads, 0, 'image adaptation must not load the profile sharp copy')
+    assert.equal(tracking.hostCalls, 2, 'both adaptation paths use the host factory')
+    assert.equal(await loadSharp(), shared, 'adaptation shares the memoized module')
+    console.log('split-tree image ingress regression passed')
+  } finally {
+    Reflect.deleteProperty(globalThis, '__dshSharpFixture')
+    assert.equal(dirname(scratch), realpathSync(tmpdir()))
+    assert.ok(basename(scratch).startsWith('dsh-image-ingress-'))
+    rmSync(scratch, { recursive: true, force: true })
+  }
+  process.exit(0)
 }
 
 /** E 段子进程模式：先注册钩子再加载被测模块，让 `import('sharp')` 像最小安装
@@ -364,6 +433,20 @@ if (!NO_SHARP) {
       .then(() => 'staged', (error: Error) => error.message)
     check('B17. session-change guard still refuses stale staging',
       refused.includes('session changed'), String(refused).slice(0, 60))
+  }
+
+  // ── C. host/profile sharp routes must stay split without loading both ──
+  {
+    const { spawnSync } = await import('node:child_process')
+    const child = spawnSync(
+      process.execPath,
+      ['--import', 'tsx/esm', 'scripts/verify-image-downsample.tsx'],
+      { encoding: 'utf8', timeout: 20_000, env: { ...process.env, DSH_VERIFY_IMAGE_SPLIT_SHARP: '1' } },
+    )
+    const output = `${child.stdout ?? ''}${child.stderr ?? ''}`.trim()
+    check('C1. image adaptation shares host sharp without loading the profile copy',
+      child.status === 0, child.error?.message ?? (child.status === 0 ? '' : `exit=${child.status}`))
+    if (output !== '') console.log(output.split('\n').map(line => `    ${line}`).join('\n'))
   }
 
   // ── E1. sharp 缺失场景放进子进程（钩子只在子进程注册）──────────────────

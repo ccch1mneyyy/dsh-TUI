@@ -578,6 +578,11 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   // The start mode is the session's first mode (the CLI confirms it with its
   // first `init`); the status line shows it from the start.
   emit([{ type: 'mode.changed', modeId: translator.mode ?? deps.start.mode }], 'none')
+  // The remembered effort level, same way: the CLI reports none back, so the
+  // status line's effort readout would stay empty until the first /effort
+  // switch without this seed.
+  const seedEffort = prefs.read().effort ?? deps.effort
+  if (seedEffort !== undefined) emit([{ type: 'effort.changed', effort: seedEffort }], 'none')
   // The session's `/color` accent (kept TUI-side per session id).
   const startColor = prefs.color(currentSessionId)
   if (startColor !== '') emit([{ type: 'session.color', color: startColor }])

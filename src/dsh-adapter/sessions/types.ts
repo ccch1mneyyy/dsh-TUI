@@ -15,6 +15,8 @@ export interface SessionDigest {
    * true also keeps inconclusive reads visible and out of empty cleanup. */
   readonly hasPrompt: boolean
   readonly model: string | undefined
+  /** Latest route found, or a complete scan proved there was no request. */
+  readonly modelComplete?: boolean
   readonly label: string | undefined
   /** The whole log was covered, or the winning title was observed in the
    * trailing window; no unseen middle event can supersede it. */

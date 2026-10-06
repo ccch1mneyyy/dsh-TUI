@@ -218,6 +218,15 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ci-build-${{ github.run_id }}
+      - name: Smoke the restored build (artifact digest canary)
+        # download-artifact 的 digest-mismatch 只报 error 不挡步骤：残缺的
+        # lib 流进测试后报出费解的 ReferenceError（三次 CI 假失败均为此
+        # 根因）。把恢复出的 js 逐个语法检查一遍（node --check 不执行）——
+        # 截断文件必炸，fail-fast 让 rerun --failed 重新下载即恢复。
+        run: |
+          n=0
+          while IFS= read -r -d '' f; do node --check --input-type=module < "$f"; n=$((n+1)); done < <(find lib vendor -name '*.js' -print0 2>/dev/null)
+          echo "artifact canary: $n js files parsed"
 
       # 回归脚本直接 import lib/types，绕过包入口的 force-production-react；
       # 与产品和 run-ci-group 一致跑生产版 React（#805）。只加在脚本步骤上：
@@ -374,6 +383,15 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ci-build-${{ github.run_id }}
+      - name: Smoke the restored build (artifact digest canary)
+        # download-artifact 的 digest-mismatch 只报 error 不挡步骤：残缺的
+        # lib 流进测试后报出费解的 ReferenceError（三次 CI 假失败均为此
+        # 根因）。把恢复出的 js 逐个语法检查一遍（node --check 不执行）——
+        # 截断文件必炸，fail-fast 让 rerun --failed 重新下载即恢复。
+        run: |
+          n=0
+          while IFS= read -r -d '' f; do node --check --input-type=module < "$f"; n=$((n+1)); done < <(find lib vendor -name '*.js' -print0 2>/dev/null)
+          echo "artifact canary: $n js files parsed"
       # 组内失败聚合（#466 收尾）：单条失败不再遮蔽同组后续测试——全部
       # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
@@ -417,6 +435,15 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ci-build-${{ github.run_id }}
+      - name: Smoke the restored build (artifact digest canary)
+        # download-artifact 的 digest-mismatch 只报 error 不挡步骤：残缺的
+        # lib 流进测试后报出费解的 ReferenceError（三次 CI 假失败均为此
+        # 根因）。把恢复出的 js 逐个语法检查一遍（node --check 不执行）——
+        # 截断文件必炸，fail-fast 让 rerun --failed 重新下载即恢复。
+        run: |
+          n=0
+          while IFS= read -r -d '' f; do node --check --input-type=module < "$f"; n=$((n+1)); done < <(find lib vendor -name '*.js' -print0 2>/dev/null)
+          echo "artifact canary: $n js files parsed"
       # 组内失败聚合（#466 收尾）：单条失败不再遮蔽同组后续测试——全部
       # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
@@ -468,6 +495,15 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ci-build-${{ github.run_id }}
+      - name: Smoke the restored build (artifact digest canary)
+        # download-artifact 的 digest-mismatch 只报 error 不挡步骤：残缺的
+        # lib 流进测试后报出费解的 ReferenceError（三次 CI 假失败均为此
+        # 根因）。把恢复出的 js 逐个语法检查一遍（node --check 不执行）——
+        # 截断文件必炸，fail-fast 让 rerun --failed 重新下载即恢复。
+        run: |
+          n=0
+          while IFS= read -r -d '' f; do node --check --input-type=module < "$f"; n=$((n+1)); done < <(find lib vendor -name '*.js' -print0 2>/dev/null)
+          echo "artifact canary: $n js files parsed"
       # 组内失败聚合（#466 收尾）：单条失败不再遮蔽同组后续测试——全部
       # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
@@ -519,6 +555,15 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ci-build-${{ github.run_id }}
+      - name: Smoke the restored build (artifact digest canary)
+        # download-artifact 的 digest-mismatch 只报 error 不挡步骤：残缺的
+        # lib 流进测试后报出费解的 ReferenceError（三次 CI 假失败均为此
+        # 根因）。把恢复出的 js 逐个语法检查一遍（node --check 不执行）——
+        # 截断文件必炸，fail-fast 让 rerun --failed 重新下载即恢复。
+        run: |
+          n=0
+          while IFS= read -r -d '' f; do node --check --input-type=module < "$f"; n=$((n+1)); done < <(find lib vendor -name '*.js' -print0 2>/dev/null)
+          echo "artifact canary: $n js files parsed"
       # 组内失败聚合（#466 收尾）：单条失败不再遮蔽同组后续测试——全部
       # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
@@ -568,6 +613,15 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: ci-build-${{ github.run_id }}
+      - name: Smoke the restored build (artifact digest canary)
+        # download-artifact 的 digest-mismatch 只报 error 不挡步骤：残缺的
+        # lib 流进测试后报出费解的 ReferenceError（三次 CI 假失败均为此
+        # 根因）。把恢复出的 js 逐个语法检查一遍（node --check 不执行）——
+        # 截断文件必炸，fail-fast 让 rerun --failed 重新下载即恢复。
+        run: |
+          n=0
+          while IFS= read -r -d '' f; do node --check --input-type=module < "$f"; n=$((n+1)); done < <(find lib vendor -name '*.js' -print0 2>/dev/null)
+          echo "artifact canary: $n js files parsed"
 
       # 组内失败聚合（#466 收尾）：单条失败不再遮蔽同组后续测试——全部
       # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
