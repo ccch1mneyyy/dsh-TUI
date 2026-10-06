@@ -131,11 +131,28 @@
    provider 接缝），其后全部走后端自己的代码。
 10. 目录（catalog）是 C3：C1 下 `--resume <id>` 可用，会话浏览器列表暂无 Codex 会话。
 
-**门禁**（见下方门禁记录）
+**门禁**（最终代码 `f747a827`）
+
+- `pnpm install --frozen-lockfile`；`pnpm build`：compile + `verify:build` 90/90（含 `verify:codex-contract`
+  15、`verify:boundary`、`verify:agent-domain`、`verify:claude-contract`、`verify:i18n` 2009 条）；
+  `pnpm verify:package`（3015 文件）；`pnpm smoke`。
+- `run-ci-group.mjs`（`DSH_TUI_LANG=zh`、`--jobs 4`，无一条靠串行重跑放行）：render-scroll 79/79、
+  input-terminal 31/31、session-workspace 57/57、channel-ui 156/156（含 `verify-projection-golden`、
+  `verify-dsh-translate`、全部 `verify-claude-*` 与新的 `verify-codex-*`）、flaky-observation 2/2。
+- 新回归：`verify-codex-rpc` 30、`-hub` 37、`-translate` 117、`-live-replay` 23、`-input` 37、
+  `-approvals` 45、`-chat` 52（80/40 列 × inline/fullscreen）、`-fake-app-server` 22、
+  `verify-kernel-catalog` 10、`codex-fixture-sanitize --check` 21 个文件。
+- 实测：`verify-codex-live` 12/12（3 回合）。
+- 时序 flake（单独重跑通过，均与本分支改动无关的 DSH 面）：同机另一工作树在跑 CI 组时（负载 24/16 核），
+  `verify:build` 里先后出现 `verify:adapter-descriptor`（C0）、`verify:btw`、`verify:rewind-edit`
+  的单次失败，各自单独重跑 3/3 或 2/2 通过；`verify-compaction-progress` scene1（已知 flake）单独重跑
+  1/3 通过、在最终一轮组跑中通过；`verify-session-browser`（已知）单独重跑通过。第一轮组跑未设
+  `DSH_TUI_LANG=zh` 时 `verify-splash-eggs` 因语言失败，固定语言后通过。
 
 **留给监督者**
 
 - 共享投影器的中断行写死"接下来想让 DeepSeek 做什么？/ What should DeepSeek do instead?"（`interrupted-ask-next`），
   Claude 与 Codex 后端都显示 DeepSeek——是否改成按后端名插值（中立层改动，不在本期范围）。
-- `verify:build` 在另一个工作树同时跑 CI 组时（负载 24/16 核）出现过两个不同的时序失败
-  （`verify:btw`、`verify:rewind-edit`、C0 时 `verify:adapter-descriptor`），单独重跑均 3/3 通过。
+- C0 补录（§10.2：错误/重试、MCP、web search、图片、elicitation、goal、review、后台终端）未做：它们服务
+  C2–C4 的翻译测试，C1 的对应映射用合成通知覆盖。建议各期按需录制（预算内），还是现在一次补齐？
+- `MIN_CODEX_VERSION = 0.144.0`（C0-D3）比方案退路宽；如要保守可改回 0.160.0。
