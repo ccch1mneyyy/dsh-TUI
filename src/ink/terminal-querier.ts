@@ -108,7 +108,7 @@ export function kittyKeyboard(): TerminalQuery<KittyResponse> {
 }
 
 /**
- * Query direct-data and zlib support for the Kitty graphics protocol with one
+ * Query direct-data support for the Kitty graphics protocol with one
  * transparent 1×1 RGBA pixel. The terminal echoes the image id in its reply.
  */
 export function kittyGraphics(
@@ -116,9 +116,9 @@ export function kittyGraphics(
 ): TerminalQuery<KittyGraphicsResponse> {
   const id = Number.isSafeInteger(imageId) && imageId > 0 ? imageId : 31
   return {
-    // One transparent RGBA pixel compressed with RFC 1950 zlib. Probe the
-    // same direct-data + compression path used by real renderer uploads.
-    request: `\u001b_Gi=${id},s=1,v=1,a=q,t=d,f=32,o=z;eAFjYGBgAAAABAAB\u001b\\`,
+    // Probe without zlib: some terminals accept this tiny compressed pixel
+    // but crash when decompressing a larger, valid renderer upload.
+    request: `\u001b_Gi=${id},s=1,v=1,a=q,t=d,f=32;AAAAAA==\u001b\\`,
     match: (r): r is KittyGraphicsResponse =>
       r.type === 'kittyGraphics' && r.imageId === id,
     responseType: 'kittyGraphics',

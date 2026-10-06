@@ -205,6 +205,23 @@ const placement = {
   rows: 3,
   source,
 }
+const rawManager = new KittyGraphicsManager({ firstImageId: 601, compress: false })
+const rawPlacement = rawManager.reconcile([placement])
+assert.doesNotMatch(rawPlacement, /o=z/u, 'raw uploads must bypass the terminal zlib decoder')
+assert.deepEqual(rgbaFromTransmission(rawPlacement).data, Buffer.from(source.data))
+assert.equal(rawManager.reconcile([placement]), '', 'raw uploads retain the stable-frame cache')
+rawManager.setCompression(true)
+const compressedVariant = rawManager.reconcile([placement])
+assert.match(compressedVariant, /i=602,o=z/u, 'changing encoding must select a new prepared variant')
+rawManager.setCompression(false)
+const restoredRaw = rawManager.reconcile([placement])
+assert.match(restoredRaw, /a=p,i=601,/u, 'restoring raw mode must reuse the safe cached variant')
+assert.doesNotMatch(restoredRaw, /\x1b_Ga=t,/u)
+rawManager.invalidateAll()
+const rawAfterClear = rawManager.reconcile([placement])
+assert.doesNotMatch(rawAfterClear, /o=z/u, 'screen clears must never restore compressed uploads in raw mode')
+assert.deepEqual(rgbaFromTransmission(rawAfterClear).data, Buffer.from(source.data))
+
 const first = manager.reconcile([placement])
 assert.match(first, /a=t,t=d,f=32/u)
 assert.match(first, /a=p,i=101,p=1,c=6,r=3,z=-2147483648,C=1/u)
@@ -519,7 +536,7 @@ assert.equal(
 const query = kittyGraphics(31)
 assert.equal(
   query.request,
-  '\x1b_Gi=31,s=1,v=1,a=q,t=d,f=32,o=z;eAFjYGBgAAAABAAB\x1b\\',
+  '\x1b_Gi=31,s=1,v=1,a=q,t=d,f=32;AAAAAA==\x1b\\',
 )
 const [parsed] = parseMultipleKeypresses(
   INITIAL_STATE,
@@ -763,6 +780,72 @@ const imageTree = (
     </Box>
   </AlternateScreen>
 )
+
+// Ghostty's streaming zlib decoder can crash on a valid portrait upload.
+// Identify the terminal before enabling images, including over SSH where
+// TERM_PROGRAM is absent; local markers cover terminals that ignore XTVERSION.
+const compressionEnv = {
+  TERM: process.env.TERM,
+  TERM_PROGRAM: process.env.TERM_PROGRAM,
+  DSH_TUI_IMAGE_PROTOCOL: process.env.DSH_TUI_IMAGE_PROTOCOL,
+}
+try {
+  delete process.env.DSH_TUI_IMAGE_PROTOCOL
+  for (const scenario of [
+    { name: 'SSH Ghostty', identity: 'ghostty(1.3.1)', compressed: false },
+    { name: 'Ghostty with inherited Kitty marker', identity: 'ghostty 1.3.1-arch2', program: 'kitty', compressed: false },
+    { name: 'local Ghostty without XTVERSION', program: 'ghostty', compressed: false },
+    { name: 'Ghostty TERM without XTVERSION', term: 'xterm-ghostty', compressed: false },
+    { name: 'Kitty with inherited Ghostty marker', identity: 'kitty(0.43.0)', program: 'ghostty', compressed: true },
+    { name: 'unidentified Kitty-compatible terminal', compressed: true },
+  ]) {
+    process.env.TERM = scenario.term ?? 'xterm-256color'
+    if (scenario.program === undefined) delete process.env.TERM_PROGRAM
+    else process.env.TERM_PROGRAM = scenario.program
+    const terminalStdout = new FakeStdout()
+    const terminalStdin = new FakeStdin()
+    const terminalInstance = await render(imageTree(false), {
+      stdin: terminalStdin,
+      stdout: terminalStdout,
+      stderr: new FakeStderr(),
+      exitOnCtrlC: false,
+      patchConsole: false,
+    })
+    try {
+      assert.ok(await settled(() =>
+        terminalStdout.output.includes(query.request) &&
+        terminalStdout.output.includes(cellSizeQuery.request) &&
+        terminalStdout.output.includes(windowSizeQuery.request) &&
+        terminalStdout.output.includes('\x1b[>0q'),
+      ), `${scenario.name}: capability and identity queries must precede uploads`)
+      assert.doesNotMatch(terminalStdout.output, /\x1b_Ga=t,/u)
+      // App also asks for XTVERSION; answer both independent query batches.
+      const identityReply = scenario.identity === undefined
+        ? '' : `\x1bP>|${scenario.identity}\x1b\\`.repeat(2)
+      terminalStdin.write(
+        '\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t\x1b[4;160;400t' +
+          identityReply + '\x1b[?61;4c'.repeat(3),
+      )
+      assert.ok(await settled(() => terminalStdout.output.includes('a=p,i=')),
+        `${scenario.name}: the portrait must still be displayed`)
+      const upload = terminalStdout.output.slice(terminalStdout.output.indexOf('\x1b_Ga=t,'))
+      const decoded = rgbaFromTransmission(upload)
+      assert.equal(decoded.chunks[0]![1]!.includes('o=z'), scenario.compressed,
+        `${scenario.name}: uploads must use the terminal's safe encoding`)
+      assert.deepEqual(decoded.data, Buffer.from(source.data),
+        `${scenario.name}: encoding must preserve every RGBA pixel`)
+      assert.ok(decoded.chunks.every(chunk => chunk[2]!.length <= 4096))
+    } finally {
+      terminalStdout.isTTY = false
+      terminalInstance.unmount()
+    }
+  }
+} finally {
+  for (const [key, value] of Object.entries(compressionEnv)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+}
 
 for (const entrypoint of ['render', 'createRoot'] as const) {
   for (const forcedByEnv of [false, true]) {

@@ -47,7 +47,7 @@ import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProb
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
-import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels } from './terminal-querier.js';
+import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels, xtversion } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
 import { TerminalImagesContext } from './hooks/use-terminal-images.js';
 import { DEFAULT_TERMINAL_CELL_SIZE, resolveTerminalCellSize, type TerminalImagePlacement } from './terminal-image.js';
@@ -1825,9 +1825,10 @@ export default class Ink {
       querier.send(kittyGraphics(queryId)),
       querier.send(terminalCellSizePixels()),
       querier.send(terminalWindowSizePixels()),
+      querier.send(xtversion()),
       querier.flush({ attributes: true }),
     ])
-      .then(async ([reply, cellPixels, windowPixels, attributes]) => {
+      .then(async ([reply, cellPixels, windowPixels, identity, attributes]) => {
         if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) {
           return;
         }
@@ -1840,6 +1841,11 @@ export default class Ink {
           if (mode?.status === 3) return;
           this.sixelGraphicsManager.setDisplayMode(mode?.status === 1);
         }
+        // Ghostty 1.3.1 can segfault while inflating a valid RGBA upload.
+        // Resolve identity in this batch (also over SSH) before images go live.
+        const terminalName = identity?.name || process.env.TERM_PROGRAM ||
+          (process.env.TERM === 'xterm-ghostty' ? 'ghostty' : '');
+        this.kittyGraphicsManager.setCompression(!/^ghostty\b/iu.test(terminalName));
         this.kittyGraphicsSupported = protocol === 'kitty';
         this.sixelGraphicsSupported = protocol === 'sixel';
         this.notifyTerminalImagesChange();

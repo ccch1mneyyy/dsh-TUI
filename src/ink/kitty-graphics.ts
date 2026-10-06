@@ -43,6 +43,7 @@ type PreparedKittyRgba = {
   readonly data: Uint8Array
   readonly width: number
   readonly height: number
+  readonly compressed: boolean
 }
 
 type ImageState = {
@@ -90,6 +91,8 @@ export interface KittyGraphicsManagerOptions {
   readonly cellSize?: TerminalCellSize
   /** Clock for the re-upload failure window; protocol tests pin it. */
   readonly now?: () => number
+  /** Disable zlib for terminals with an unsafe graphics decompressor. */
+  readonly compress?: boolean
 }
 
 /**
@@ -116,6 +119,7 @@ export class KittyGraphicsManager {
   private cellSize: TerminalCellSize
   private pass = 0
   private readonly now: () => number
+  private compress: boolean
 
   constructor(options: KittyGraphicsManagerOptions = {}) {
     this.nextImageId = normalizeFirstId(
@@ -125,6 +129,12 @@ export class KittyGraphicsManager {
       options.cellSize ?? DEFAULT_TERMINAL_CELL_SIZE,
     )
     this.now = options.now ?? Date.now
+    this.compress = options.compress ?? true
+  }
+
+  /** Choose the upload encoding before enabling terminal images. */
+  setCompression(enabled: boolean): void {
+    this.compress = enabled
   }
 
   /** Update the physical cell ratio used by future image variants. */
@@ -364,6 +374,7 @@ export class KittyGraphicsManager {
       this.cellSize.width,
       this.cellSize.height,
       placement.presentation,
+      this.compress,
     ].join(':')
     const existing = this.images.get(key)
     if (existing !== undefined) return existing
@@ -377,7 +388,7 @@ export class KittyGraphicsManager {
     )
     const image: ImageState = {
       imageId: this.allocateImageId(),
-      payload: prepareKittyRgba(fitted),
+      payload: prepareKittyRgba(fitted, this.compress),
       retainedBytes: fitted.width * fitted.height * 4,
       cellSize: this.cellSize,
       uploaded: false,
@@ -453,19 +464,21 @@ function visiblePlacement(
   }
 }
 
-/** Zlib-compressed direct RGBA split into protocol-compliant base64 chunks. */
+/** Direct RGBA split into base64 chunks, optionally compressed with zlib. */
 export function transmitKittyRgba(
   imageId: number,
   source: TerminalImageSource,
+  compress = true,
 ): string {
-  return transmitPreparedKittyRgba(imageId, prepareKittyRgba(source))
+  return transmitPreparedKittyRgba(imageId, prepareKittyRgba(source, compress))
 }
 
-function prepareKittyRgba(source: TerminalImageSource): PreparedKittyRgba {
+function prepareKittyRgba(source: TerminalImageSource, compress: boolean): PreparedKittyRgba {
   return {
-    data: deflateSync(source.data, { level: 1 }),
+    data: compress ? deflateSync(source.data, { level: 1 }) : source.data,
     width: source.width,
     height: source.height,
+    compressed: compress,
   }
 }
 
@@ -488,7 +501,7 @@ function transmitPreparedKittyRgba(
       const more = index + 1 < chunks.length ? 1 : 0
       const control =
         index === 0
-          ? `a=t,t=d,f=32,s=${payload.width},v=${payload.height},i=${imageId},o=z,q=2,m=${more}`
+          ? `a=t,t=d,f=32,s=${payload.width},v=${payload.height},i=${imageId}${payload.compressed ? ',o=z' : ''},q=2,m=${more}`
           : `m=${more},q=2`
       return kittyCommand(control, chunk)
     })
