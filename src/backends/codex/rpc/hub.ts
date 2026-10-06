@@ -173,6 +173,7 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
   const handleRequest = (connection: RpcClient, gen: number, id: RequestId, method: string, params: Rec): undefined => {
     const redelivered = pendingServer.has(id)
     let answered = false
+    const live = (): boolean => client === connection && generation === gen && state !== 'closed'
     const request: HubServerRequest = {
       key: `codex:${gen}:${String(id)}`,
       id,
@@ -181,18 +182,18 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
       params,
       redelivered,
       respond(result: unknown): void {
-        if (answered || !this.live()) return
+        if (answered || !live()) return
         answered = true
         pendingServer.delete(id)
         connection.respond(id, result)
       },
       respondError(code: number, message: string): void {
-        if (answered || !this.live()) return
+        if (answered || !live()) return
         answered = true
         pendingServer.delete(id)
         connection.respondError(id, code, message)
       },
-      live: () => client === connection && generation === gen && state !== 'closed',
+      live,
     }
     if (!redelivered) pendingServer.set(id, request)
     const threadId = threadOf(params)

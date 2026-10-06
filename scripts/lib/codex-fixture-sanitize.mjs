@@ -48,12 +48,20 @@ export function sanitizeFixture(text) {
     .replace(/"serverName":"[^"]*"/gu, '"serverName":"ser000000000000"')
 }
 
-/** Findings of one fixture's text (`file:line: what`). */
+/** Findings of one fixture's text (`file:line: what`). A `.jsonl` file must
+ *  parse line by line, a `.json` file (a golden) as a whole. */
 export function checkFixture(text, file = 'fixture') {
   const findings = []
+  if (file.endsWith('.json')) {
+    try {
+      JSON.parse(text)
+    } catch {
+      findings.push(`${file}: not JSON`)
+    }
+  }
   text.split('\n').forEach((line, index) => {
     const where = `${file}:${index + 1}`
-    if (line.trim() !== '') {
+    if (!file.endsWith('.json') && line.trim() !== '') {
       try {
         JSON.parse(line)
       } catch {

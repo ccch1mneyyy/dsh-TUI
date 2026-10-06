@@ -25,7 +25,7 @@ import { t } from '../../../i18n.js'
 import { errorText, rec, str, type Rec } from '../narrow.js'
 import { CLIENT } from '../protocol/index.js'
 import type { UserInput } from '../protocol/index.js'
-import { rpcCode, RPC_ERROR, type RpcClock } from '../rpc/client.js'
+import type { RpcClock } from '../rpc/client.js'
 
 /** One submitted input this session still tracks. */
 interface Entry {
@@ -146,7 +146,7 @@ export function createInputQueue(deps: InputQueueDeps) {
     } catch (error) {
       steered.delete(entry.id)
       deps.debug(`codex: turn/steer refused (${errorText(error)}); queued as a follow-up`)
-      if (rpcCode(error) === RPC_ERROR.internal && deps.closed()) throw error
+      if (deps.closed()) throw error
       queue.push(entry)
       if (!steerFallbackSaid) {
         steerFallbackSaid = true

@@ -84,7 +84,7 @@ A complete common override looks like this:
 | `terminalImages` | `true` | Allow previews in supported terminals; `false` keeps text metadata and skips image probing and preview decoding. Restart to apply changes |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
-| `backend` | unset (the backend `/kernel` remembers, else `dsh`) | Session backend: `dsh` or the experimental `claude` (case-insensitive; an unknown value means `dsh`). The profile row reads `DSH_TUI_BACKEND`, which `dsh-tui --backend claude` sets. See [Claude backend](claude-backend.en.md) |
+| `backend` | unset (the backend `/kernel` remembers, else `dsh`) | Session backend: `dsh`, or the experimental `claude` / `codex` (case-insensitive; an unknown value means `dsh`). The profile row reads `DSH_TUI_BACKEND`, which `dsh-tui --backend <id>` sets. See [Claude backend](claude-backend.en.md) |
 
 ### Precedence and force-off
 

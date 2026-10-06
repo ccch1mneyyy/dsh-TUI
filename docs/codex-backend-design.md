@@ -778,7 +778,7 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 
 | item `type` | started | completed |
 | --- | --- | --- |
-| `userMessage` | `turn.start`（若回合未开，`origin:'user'`）+ 认领 pending + `user.message{id, anchor:id, seq, turn, source:'user', text, blocks, images}`（文本 = 所有 text 输入以换行连接；`mention` → `@<path>`；`skill` → `$<name>`；图片 → ImageRef） | — |
+| `userMessage` | `turn.start`（若回合未开，`origin:'user'`）+ 认领 pending + `user.message{id: clientId ?? item id, anchor: item id, seq, turn, source:'user', text, blocks, images}`（**C1 实施修订**：文本 = 第一个 text 输入即用户键入的内容，其余 text 只进 `blocks`——channel 展开的 `@` 文件与选区不进气泡；无 text 时用 `mention` → `@<path>`、`skill` → `$<name>`；`<bash-stdout>` 包裹 → `source:'command-output'`；图片 → ImageRef（C3）） | — |
 | `hookPrompt` | `user.message{source:'injected', label:'hook', text: fragments 拼接}` | — |
 | `agentMessage` / `reasoning` / `plan` | §7.3 | §7.3；`plan` 完成且处于 plan 模式 → 计划评审（§5.8） |
 | `commandExecution` | `tool.call{callId:id, name: source==='userShell' ? 'user_shell' : 'shell', argsJson: JSON.stringify({command, cwd}), presentation: presentation.ts}`；登记 open item | `tool.result{callId, isError: status!=='completed' \|\| (exitCode??0)!==0, text: aggregatedOutput ?? '', errorText: declined ? t('codex-declined') : undefined, presentation}`；`durationMs` 由投影器从时间差算或用 item 值 |
@@ -804,7 +804,7 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 
 | 通知 | 事件 |
 | --- | --- |
-| `turn/started` | `turn.start{origin: turnKind==='user'?'user':'system'}`（`userShell`/compact/review 回合为 `system`）；`session.status{running}` |
+| `turn/started` | 记下回合 id。**C1 实施修订**：`turn.start` 在回合的第一个 item 到达时发出（空回合在 `turn/completed` 时开合），origin 由第一个 item 推断（用户消息/`userShell` → user，其余 system）——live 与回放同一规则；运行态由 `thread/status/changed` 给出 |
 | `turn/completed` | §7.3-6；`turn.end{reason}`：`completed` → completed；`interrupted` → interrupted；`failed` → `{kind:'error', message: error.message, category: codexErrorInfo 的 kebab 名}`；附 `usage`（本回合 `last` 累加） |
 | `item/started` / `item/completed` | §7.4 |
 | `item/agentMessage/delta`、`item/plan/delta`、`item/reasoning/*` | §7.3 |
@@ -814,7 +814,7 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 | `item/mcpToolCall/progress` | `tool.progress{callId, elapsedMs}` + 工作行文本 |
 | `turn/plan/updated` | `todo.write{items: plan.map(s=>({content:s.step, status: pending/in_progress/completed}))}`（官方默认不开此工具，F26） |
 | `turn/diff/updated` | 不发事件；会话保存最近 diff 供 `/diff` |
-| `thread/tokenUsage/updated` | `context.usage{used: last.inputTokens + last.outputTokens, max: modelContextWindow}`；窗口变化时 `context.capacity` |
+| `thread/tokenUsage/updated` | 窗口变化时 `context.capacity`；**C1 实施修订**：共享投影器只从 `assistant.message.usage` 记账（`context.usage` 被忽略），所以 `last` 并入打开中的回复的结算消息，没有打开的回复时发一条无块、非 canonical 的"仅用量" `assistant.message`（当前 step，不改任何行）；输入拆成未缓存 / `cachedInputTokens` / `cacheWriteInputTokens`。历史不含用量：回合汇总行是 live 独有（§10.4 登记差异） |
 | `account/rateLimits/updated` | `rate-limit{windows:[primary, secondary].filter(Boolean).map(w=>({name: windowName(w.windowDurationMins), utilization: w.usedPercent/100, resetsAt: w.resetsAt*1000}))}`；`rateLimitReachedType` 非空 → warning notice |
 | `thread/status/changed` | `session.status`（§5.6） |
 | `thread/name/updated` | `session.title{title: threadName, source}` |
@@ -998,7 +998,8 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 对每个 wire fixture：(a) live 路径翻译全部通知得到投影行；(b) 用录制末尾的 `thread/read`
 结果走 replay 路径得到投影行；(c) 比较时忽略 `id`/时间，**允许的差异只有**：中断时 live 多出的
 "已中断"工具卡（F11）、问卷答复记录（F23 不入历史）、`tool.output` 实时尾部（结果出来后应
-已清除，所以终态应一致）。任何其他差异即失败。
+已清除，所以终态应一致）、回合汇总行与 token 计数（**C1 实施修订**：历史不含用量）、live 通知
+产生的提示行（重试、警告、状态）。任何其他差异即失败；登记的差异必须在 fixture 里真的出现。
 
 ### 10.5 必跑的既有门禁（每期）
 

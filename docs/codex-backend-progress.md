@@ -91,3 +91,51 @@
   `c0-approval-redeliver-interrupt`（审批、rejoin 重发、steer 后中断）。
 
 **遗留到 C1**：rpc/client、hub、binary/detect、backend、session、translator、presentation、N7。
+
+### C1 — 核心会话
+
+**提交**
+
+- `acfc2327` 运行时：`rpc/{client,hub,binary}.ts`、`detect.ts`、`backend.ts`、`modes.ts`、`prefs.ts`、
+  `session/{session,state,input,approvals,history}.ts`、`translate/{items,live,replay,presentation,commands,notices,usage,events}.ts`；
+  N7（`KERNEL_IDS`/`KERNEL_INFO`（含 `installable`）/`kernelDisplayName`、`BACKEND_LOADERS.codex`、
+  `BackendDetection.loginInSession` 与目录的 `noteKey`、`plugin.ts` 的 `KernelBackendId`、Config 注释、
+  launcher 的 `--backend` 与帮助）；`displayPath` 移到 `src/backends/shared/`；i18n 全部 `codex-*` 键（zh/en）；
+  README 双语一节、`docs/configuration*` 的 `backend` 行。
+- `a091db6a` `verify-codex-{rpc,hub,translate,live-replay,input}` + goldens；修复：被中断的回复保留已流出的正文。
+- `dc90d603` `verify-codex-{approvals,chat}`、`verify-kernel-catalog`；审批选项全部带官方文案；
+  `verify-launchpad` K1 改为三内核。全部登记 `channel-ui` 组。
+- `d1f8a23e` `scripts/verify-codex-live.ts`（不进 CI）。
+
+**实测**：3 个回合（文本、命令审批、文件改动），`verify-codex-live` 12/12 通过。C0+C1 合计 6 个回合。
+
+**偏离方案之处（均已在代码注释写明）**
+
+1. 用户行正文 = 第一个 text 输入（用户键入的内容），其余 text（`@` 展开、选区）只进 `blocks`；方案 §7.4
+   写的是全部 text 以换行连接——那样回放会把文件内容显示成气泡。用户行 `id` = `clientId`（无则 item id），
+   `anchor` = item id，live 与回放一致。
+2. 回合在第一个 item 到达时打开（空回合在 `turn/completed` 时开合），不在 `turn/started` 时：live 与回放
+   同一规则、origin 由第一个 item 推断（§7.5 原写 `turn/started` → `turn.start`）。
+3. 用量：共享投影器只从 `assistant.message.usage` 记账（`context.usage` 被忽略），而 Codex 的
+   `thread/tokenUsage/updated` 在回复结算之后才到。做法：有打开的回复就并入它的结算；否则发一条
+   无块、非 canonical 的"仅用量" `assistant.message`（当前 step），不改任何行。历史不含用量，
+   所以回合汇总行是 live 独有（live≡replay 登记差异）。
+4. 审批选项按 `availableDecisions`（C0-D4），所有选项带官方文案（含"是，执行"与两种"否"）；
+   文件改动的无理由拒绝 = `decline`（D10），文案"否，不应用这些改动，继续"（官方只有 cancel）。
+5. MCP elicitation 在 N2（C2）之前以 `cancel` 应答并提示；`collabAgentToolCall` 在 C4 之前是普通卡片，
+   `subAgentActivity` 走 `custom`（插件渲染接缝，默认不显示）；图片在 C3 之前拒收（明确报错）。
+6. 中断无应答的强制收敛窗口 15 s（方案 `now` 写 ≤10 s，Claude 为 30 s）。
+7. `thread/start` 没有 effort 参数：记住的 effort 经 `config.model_reasoning_effort` 传入。
+8. C1 的检测不设 `loginInSession`（`/login` 在 C2）；中立层的字段与目录规则已就位并有回归。
+9. 实测脚本自己用 backend 同样的设置加中转 `-c` 参数建 hub（`codexBackend.open` 在 C2 渠道之前没有
+   provider 接缝），其后全部走后端自己的代码。
+10. 目录（catalog）是 C3：C1 下 `--resume <id>` 可用，会话浏览器列表暂无 Codex 会话。
+
+**门禁**（见下方门禁记录）
+
+**留给监督者**
+
+- 共享投影器的中断行写死"接下来想让 DeepSeek 做什么？/ What should DeepSeek do instead?"（`interrupted-ask-next`），
+  Claude 与 Codex 后端都显示 DeepSeek——是否改成按后端名插值（中立层改动，不在本期范围）。
+- `verify:build` 在另一个工作树同时跑 CI 组时（负载 24/16 核）出现过两个不同的时序失败
+  （`verify:btw`、`verify:rewind-edit`、C0 时 `verify:adapter-descriptor`），单独重跑均 3/3 通过。

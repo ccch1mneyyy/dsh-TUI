@@ -263,7 +263,6 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
   }
   detach?.()
   detach = hub.attach(threadId, sink)
-  for (const deliver of held.splice(0)) deliver()
 
   // Thread-less traffic this session reads: rate limits, configuration
   // warnings that are not sandbox noise.
@@ -309,6 +308,9 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
   emit([{ type: 'mode.changed', modeId: opened.modeId }], 'none')
   if (opened.effort !== null) emit([{ type: 'effort.changed', effort: opened.effort }], 'none')
   if (opened.running) emit([{ type: 'session.status', status: 'running' }], 'none')
+  // Traffic that arrived while the resume was in flight follows the start-up
+  // facts (nothing can arrive in between: no await since the attach).
+  for (const deliver of held.splice(0)) deliver()
 
   const session: AgentSession = {
     ref,
