@@ -103,6 +103,7 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'backendChannels': 'read-only',
   'backendModes': 'read-only',
   'backendMcp': 'read-only',
+  'backendGoals': 'read-only',
   'settingsHost': 'read-only',
   'settingsSections': 'read-only',
   'subscribeSettingsSections': 'subscribe',

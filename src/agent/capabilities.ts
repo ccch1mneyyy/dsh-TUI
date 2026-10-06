@@ -351,6 +351,19 @@ export interface SessionCapabilities {
   /** Backend-specific `/doctor` lines (version drift, executable, …), already
    *  localized by the backend. */
   readonly diagnostics?: { lines(): readonly string[] }
+  /**
+   * The session's goal (`/goal` on a non-DSH session; DSH keeps its own
+   * command registry row): set or replace the objective, optionally under a
+   * token budget; pause, resume, or clear it. The backend reports the
+   * resulting goal as `goal.change` events (with `budget` when it measures
+   * one); these calls only ask for the change.
+   */
+  readonly goals?: {
+    set(objective: string, options?: { readonly tokenBudget?: number }): Promise<void>
+    pause(): Promise<void>
+    resume(): Promise<void>
+    clear(): Promise<void>
+  }
   /** DSH specialists not yet covered by a typed capability. */
   readonly native: { readonly dsh?: DshNative }
 }

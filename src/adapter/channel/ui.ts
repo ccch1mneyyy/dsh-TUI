@@ -153,6 +153,9 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
       if (key === 'backendMcp' && result !== undefined) {
         return methods(result as NonNullable<ReturnType<ChannelUi['backendMcp']>>, { reconnect: 'mutate', toggle: 'mutate' })
       }
+      if (key === 'backendGoals' && result !== undefined) {
+        return methods(result as NonNullable<ReturnType<ChannelUi['backendGoals']>>, { set: 'mutate', pause: 'mutate', resume: 'mutate', clear: 'mutate' })
+      }
       if (key === 'settingsHost' && result !== undefined) {
         return methods(result as NonNullable<ReturnType<ChannelUi['settingsHost']>>, {
           listNamespaces: 'read-only', credentialConfigured: 'read-only', write: 'mutate', writeCredential: 'mutate',

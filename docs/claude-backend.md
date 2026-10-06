@@ -80,7 +80,7 @@ IDE 选区、状态栏的 git 分支、`/clear`（只清屏，Claude 保留上�
 不可用（不出现在补全里，直接输入会提示不可用，不会发给模型）：`/tree`、`/agentview`、
 `/bg`、`/home`、`/workspace`、`/preset`、`/provider`、`/logout`、`/balance`、`/config`、
 `/reload`、`/setup`、`/init`、`/migrate`、`/skills`、`/plugins`、`/hooks`、
-`/add-dir`。DSH 组合注册的命令（如 `/goal`、`/plan`）也不会出现。
+`/add-dir`、`/goal`（Claude 没有目标能力）。DSH 组合注册的其他命令（如 `/plan`）也不会出现。
 
 启动时仍先到启动页；首启引导和工作区首页只在 DSH 下出现。带恢复目标的启动直接进入
 会话。

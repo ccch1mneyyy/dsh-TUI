@@ -527,6 +527,26 @@ export function createCoreChannel(
         toggle: (name, enabled) => run(name, enabled ? 'mcp-enabled' : 'mcp-disabled', () => mcp.toggle!(name, enabled)),
       }
     },
+    backendGoals: () => {
+      const fence = mcpFence()
+      const goals = fence.session.capabilities.goals
+      if (goals === undefined) return undefined
+      // The capability only asks for the change: the goal itself arrives as
+      // `goal.change` (projected like every other session fact).
+      const run = (key: 'goal-backend-set' | 'goal-backend-paused' | 'goal-backend-resumed' | 'goal-backend-cleared', action: () => Promise<void>): Promise<boolean> =>
+        guarded('goal', false, async () => {
+          if (!fence.current()) return false
+          await action()
+          if (fence.current()) notify(t(key), { color: 'success' })
+          return true
+        }, fence.current)
+      return {
+        set: (objective, options) => run('goal-backend-set', () => goals.set(objective, options?.tokenBudget === undefined ? undefined : { tokenBudget: options.tokenBudget })),
+        pause: () => run('goal-backend-paused', () => goals.pause()),
+        resume: () => run('goal-backend-resumed', () => goals.resume()),
+        clear: () => run('goal-backend-cleared', () => goals.clear()),
+      }
+    },
     ...actionMethods,
     subagentControl: {
       interrupt: agentId => {

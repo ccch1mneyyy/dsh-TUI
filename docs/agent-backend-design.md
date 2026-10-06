@@ -51,7 +51,7 @@ SDK；agent 读取 ports 类型并使用中立 helper。目录与 import 规则�
 - `capabilities.ts`：`SessionCapabilities`，每项都是可选的类型化对象（permissions、
   questions、models、effort、modes、compact、rewind、fork、subagents、tasks、
   transcript、mcp、sideQuery、rename、color、images、commands、context、account、
-  auth、channels…）。缺席即不支持：Channel 对应的动作明确报 "当前后端不支持"，
+  auth、channels、goals…）。缺席即不支持：Channel 对应的动作明确报 "当前后端不支持"，
   不做静默 no-op。
 - `native.dsh`：只供 DSH specialist 使用的逃生舱，暴露 DSH 的 `agent`/`ctx`；
   只能在 `src/dsh-adapter/` 内读（`verify:boundary` 检查）。

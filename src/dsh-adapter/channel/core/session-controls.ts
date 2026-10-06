@@ -9,7 +9,7 @@
 import type { LocalCommand } from '../../../adapter/ports/channel-catalog.js'
 import type { AgentEvent } from '../../../agent/events.js'
 import type { AgentSession } from '../../../agent/session.js'
-import { BACKEND_CHANNEL_COMMAND, BACKEND_PERMISSION_COMMAND, LOCAL_COMMANDS } from '../../../commands.js'
+import { BACKEND_CHANNEL_COMMAND, BACKEND_GOAL_COMMAND, BACKEND_PERMISSION_COMMAND, LOCAL_COMMANDS } from '../../../commands.js'
 import { t } from '../../../i18n.js'
 import { logForDebugging } from '../../../utils/debug.js'
 import type { ChannelState } from '../types.js'
@@ -20,13 +20,15 @@ import type { ChannelState } from '../types.js'
  *  snapshot appended it for the session's typed `modes` capability (see
  *  channel/capabilities.ts), and then rides as BACKEND_PERMISSION_COMMAND.
  *  `channel` follows the same ride-along for the typed `channels`
- *  capability (BACKEND_CHANNEL_COMMAND). */
+ *  capability (BACKEND_CHANNEL_COMMAND), `goal` for `goals`
+ *  (BACKEND_GOAL_COMMAND). */
 export function localCommandsFor(names: readonly string[]): readonly LocalCommand[] {
   if (names.length === LOCAL_COMMANDS.length && LOCAL_COMMANDS.every((command, index) => command.name === names[index])) return LOCAL_COMMANDS
   const served = LOCAL_COMMANDS.filter(command => names.includes(command.name))
   const appended = [
     ...(names.includes('permission') ? [BACKEND_PERMISSION_COMMAND] : []),
     ...(names.includes('channel') ? [BACKEND_CHANNEL_COMMAND] : []),
+    ...(names.includes('goal') ? [BACKEND_GOAL_COMMAND] : []),
   ]
   return appended.length === 0 ? served : [...served, ...appended]
 }
@@ -50,9 +52,11 @@ export function createSessionControls(deps: {
   const refreshCommandList = (): void => {
     const state = deps.state()
     // Local names win, served here or not: a typed `/init` is the local
-    // command (or its explicit unavailability), never the backend's.
-    const local = new Set(LOCAL_COMMANDS.map(command => command.name))
+    // command (or its explicit unavailability), never the backend's. A
+    // served `/goal` (the typed capability) wins over a same-named backend
+    // command the same way.
     const served = localCommandsFor(state.backendCapabilities.commands)
+    const local = new Set([...LOCAL_COMMANDS.map(command => command.name), ...(served.includes(BACKEND_GOAL_COMMAND) ? [BACKEND_GOAL_COMMAND.name] : [])])
     state.commandList = backendCommands.length === 0
       ? served
       : [...served, ...backendCommands.filter(command => !local.has(command.name))]

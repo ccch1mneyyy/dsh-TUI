@@ -731,6 +731,11 @@ const GROUPS = {
 // 非负、代理对与 ANSI 转义的处理都在这里钉死。
     ["verify-cjk-token-estimate", ['node', '--import', 'tsx/esm', 'scripts/verify-cjk-token-estimate.ts']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
+// 目标预算与后端中立的 /goal（goals 能力）：语法（--budget 50k、控制词、无效预算）、
+// 「已用 12.3k / 50k tokens · 4m」中英文读数、能力快照（有能力才提供 /goal，无能力即
+// 不可用，DSH 保留注册表行）、投影保留 budget；真实 Chat 走核心通道端到端（调用能力、
+// 状态、无效行留在输入框、失败上报、面板显示预算）与页脚芯片。
+    ["verify-goal-budget", ['node', '--import', 'tsx/esm', 'scripts/verify-goal-budget.tsx']],
 // 投影基线：scripts/fixtures/dsh/ 的合成日志与流帧经 DSH 翻译器 + 共享投影器，
 // replay 与 live 两路都与 *.golden.json 逐字段比较；两路的差异必须登记原因。
     ["verify-projection-golden", ['node', '--import', 'tsx/esm', 'scripts/verify-projection-golden.ts']],

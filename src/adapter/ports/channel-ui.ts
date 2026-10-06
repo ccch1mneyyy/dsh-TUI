@@ -24,6 +24,16 @@ export interface BackendChannelsHost {
 }
 export interface BackendModesHost { snapshot(): { modes: readonly BackendModeOption[]; currentIndex: number }; set(id: string): Promise<boolean> }
 export interface BackendMcpHost { reconnect(name: string): Promise<boolean>; toggle(name: string, enabled: boolean): Promise<boolean> }
+/** The bound session's typed `goals` capability (`/goal` on a non-DSH
+ *  session): each call resolves true once the backend took the change
+ *  (the goal itself arrives as `goal.change`), false after a reported
+ *  failure. */
+export interface BackendGoalsHost {
+  set(objective: string, options?: { readonly tokenBudget?: number }): Promise<boolean>
+  pause(): Promise<boolean>
+  resume(): Promise<boolean>
+  clear(): Promise<boolean>
+}
 
 /**
  * The public channel surface a screen renders: the full transcript and live
@@ -563,6 +573,9 @@ export interface ChannelUi {
   backendChannels(): BackendChannelsHost | undefined
   backendModes(): BackendModesHost | undefined
   backendMcp(): BackendMcpHost | undefined
+  /** `/goal` on a session with the typed `goals` capability; undefined
+   *  otherwise (DSH's /goal is its command registry row). */
+  backendGoals(): BackendGoalsHost | undefined
   /** Read the official permission preset roster and current identity. */
   permissionPresets(): PermissionPresetSnapshot
   /**

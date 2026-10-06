@@ -586,6 +586,13 @@ export interface ChannelGoal {
   roundsStarted: number
   /** Present exactly while `phase` is `blocked`. */
   blockedReason?: { code: string; message: string }
+  /**
+   * A backend that budgets its goals by tokens and time (Codex) reports
+   * the spend here; the goal panel and status line then show it instead of
+   * the round count. DSH goals carry no budget (rounds stay the readout).
+   * `tokenBudget: null` = no cap.
+   */
+  budget?: { tokensUsed: number; tokenBudget: number | null; timeUsedSeconds: number }
 }
 
 /** One entry of the latest todo-list snapshot (mirrors dsh-tool-todo's
@@ -1163,6 +1170,10 @@ export interface ChannelCapabilities {
    *  channels.json). False on every other backend, DSH included: the only
    *  flag a DSH session does not get by default. */
   readonly channels: boolean
+  /** `/goal` is served: DSH through its command registry row, another
+   *  backend through its typed `goals` capability. False = `/goal` is
+   *  refused as unavailable on this backend. */
+  readonly goals: boolean
 }
 
 /**

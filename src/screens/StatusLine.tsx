@@ -9,6 +9,7 @@ import { getActiveBrand } from '../branding.js'
 import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../components/ActivityLine.js'
 import { formatClock } from '../trajectory/format.js'
 import { GoalStatusChip } from '../components/GoalTodoPanel.js'
+import { formatGoalBudget } from '../channel/goal-command.js'
 import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.js'
 
 /** Stable fallback for stubbed channels: verify/repro harnesses render the
@@ -946,9 +947,16 @@ function buildHoverDetail(
     case 'goal': {
       const goal = channel.goal
       if (goal === undefined) return null
-      return (
+      // A budgeted goal (a backend that measures tokens/time) reads its
+      // spend instead of the rounds.
+      return goal.budget === undefined ? (
         <Text wrap="truncate">
           {dim('goal ')}{goal.phase} · {dim('r')}{goal.roundsStarted}/{goal.maxGoalRounds} ·{' '}
+          {goal.objective}
+        </Text>
+      ) : (
+        <Text wrap="truncate">
+          {dim('goal ')}{goal.phase} · {formatGoalBudget(goal.budget)} ·{' '}
           {goal.objective}
         </Text>
       )
