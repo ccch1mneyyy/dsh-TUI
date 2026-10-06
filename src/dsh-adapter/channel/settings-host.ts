@@ -235,6 +235,13 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
             const models = modelEntries?.flatMap(
               entry => typeof entry.id === 'string' ? [entry.id] : [],
             )
+            const overrides = stored.modelOverrides
+            const modelOverrides = typeof overrides === 'object' && overrides !== null && !Array.isArray(overrides)
+              ? Object.fromEntries(Object.entries(overrides).filter(
+                (entry): entry is [string, Record<string, unknown>] =>
+                  typeof entry[1] === 'object' && entry[1] !== null && !Array.isArray(entry[1]),
+              ))
+              : undefined
             return [{
               route,
               ref,
@@ -247,6 +254,7 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
               ...(modelEntries !== undefined && modelEntries.length > 0
                 ? { modelEntries }
                 : {}),
+              ...(modelOverrides !== undefined ? { modelOverrides } : {}),
             }]
           })
         },

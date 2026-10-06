@@ -1,4 +1,4 @@
-import type { ProviderSetupHost, CatalogProviderCandidate, ConfiguredProvider, ProfilePathOp, OAuthSetupHost, OAuthProviderStatus, OAuthLoginResult } from '../adapter/ports/channel-settings.js'
+import type { ProviderSetupHost, CatalogProviderCandidate, ConfiguredProvider, ProfilePathOp, OAuthSetupHost, OAuthProviderStatus, OAuthLoginResult, ProviderModelEditor } from '../adapter/ports/channel-settings.js'
 export type { ProviderSetupHost, CatalogProviderCandidate, ConfiguredProvider, ProfilePathOp, OAuthSetupHost, OAuthProviderStatus, OAuthLoginResult } from '../adapter/ports/channel-settings.js'
 /**
  * `/provider` wizard — interactively adds, edits, or deletes an LLM
@@ -27,7 +27,12 @@ import {
   type AskUserQuestionItem,
   type AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
-import type { LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
+import type { LlmDiscoveredModel } from '../adapter/ports/channel-view.js'
+import {
+  CATALOG_MODEL_OVERRIDES_AVAILABLE,
+  createProviderModelEditor,
+  MODEL_CAPABILITY_FIELDS,
+} from './provider-model-capabilities.js'
 
 /** Route id rule shared with the dsh configuration surface (web Models page). */
 export const PROVIDER_ROUTE_ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
@@ -88,6 +93,7 @@ function answerSelected(answer: AskUserQuestionAnswer, id: string): readonly str
 type WizardQuestionItem = AskUserQuestionItem & {
   hideCustomInput?: boolean
   defaultSelected?: readonly string[]
+  modelEditor?: ProviderModelEditor
 }
 
 function optionQuestion(
@@ -99,6 +105,7 @@ function optionQuestion(
     multiSelect?: boolean
     hideCustomInput?: boolean
     defaultSelected?: readonly string[]
+    modelEditor?: ProviderModelEditor
   },
 ): AskUserQuestionItem {
   const item: WizardQuestionItem = {
@@ -110,16 +117,23 @@ function optionQuestion(
     ...(extra?.multiSelect ? { multiSelect: true } : {}),
     ...(extra?.hideCustomInput ? { hideCustomInput: true } : {}),
     ...(extra?.defaultSelected !== undefined ? { defaultSelected: extra.defaultSelected } : {}),
+    ...(extra?.modelEditor !== undefined ? { modelEditor: extra.modelEditor } : {}),
   }
   return item
 }
 
-function textQuestion(id: string, question: string, detail?: string): AskUserQuestionItem {
+function textQuestion(
+  id: string,
+  question: string,
+  detail?: string,
+  modelEditor?: ProviderModelEditor,
+): AskUserQuestionItem {
   return {
     id,
     question,
     header: '/provider',
     ...(detail !== undefined ? { detail } : {}),
+    ...(modelEditor !== undefined ? { modelEditor } : {}),
   }
 }
 
@@ -281,9 +295,12 @@ async function runAddFlow(
 
   // ── 6. model selection ─────────────────────────────────────────────
   let models: string[] = []
-  let discoveredById = new Map<string, LlmDiscoveredModel>()
+  const discoveredById = new Map(discovered.map(model => [model.id, model] as const))
+  const capabilities = createProviderModelEditor(
+    id => discoveredModelEntry(id, isCatalog, discovery, discoveredById),
+    discoveredById,
+  )
   if (discovered.length > 0) {
-    discoveredById = new Map(discovered.map(model => [model.id, model] as const))
     const modelsAnswer = await ask({
       questions: [optionQuestion('models', t('provider-q-models'),
         discovered.map(model => ({
@@ -295,6 +312,7 @@ async function runAddFlow(
         })),
         {
           multiSelect: true,
+          modelEditor: capabilities.editor,
           ...(isCatalog && discovery.reason === 'no-base-url'
             ? { detail: t('provider-catalog-snapshot-note', { n: discovered.length }) }
             : {}),
@@ -309,7 +327,7 @@ async function runAddFlow(
     notify(t('provider-discovery-failed'), { color: 'warning' })
     for (let attempt = 0; attempt < MAX_RETRY && models.length === 0; attempt += 1) {
       const fallbackAnswer = await ask({
-        questions: [textQuestion('models-fallback', t('provider-q-models-fallback'))],
+        questions: [textQuestion('models-fallback', t('provider-q-models-fallback'), undefined, capabilities.editor)],
       })
       models = mergeModelIds([], answerText(fallbackAnswer, 'models-fallback'))
       if (models.length === 0) notify(t('provider-models-required'), { color: 'warning' })
@@ -323,12 +341,22 @@ async function runAddFlow(
     return 'cancelled'
   }
 
+  const wholeCatalogCapabilityEdits = [...capabilities.entries.keys()]
+    .filter(id => models.includes(id) || (isCatalog && models.length === 0 && discovery.catalogIds.has(id)))
+  if (isCatalog && models.length === 0 && wholeCatalogCapabilityEdits.length > 0
+    && !CATALOG_MODEL_OVERRIDES_AVAILABLE) {
+    notify(t('provider-model-override-unavailable'), { color: 'warning' })
+    return 'failed'
+  }
+
   // ── 7. confirm ─────────────────────────────────────────────────────
   const summaryLines = buildSummaryLines({
     route, action: 'added', ref, shadowed, baseURL, api, models, isCatalog, keyLine,
+    capabilityModels: wholeCatalogCapabilityEdits,
   })
   const previewLines = buildSummaryLines({
     route, action: 'preview', ref, shadowed, baseURL, api, models, isCatalog, keyLine,
+    capabilityModels: wholeCatalogCapabilityEdits,
   })
   const detail = host.routeExists(route)
     ? `${previewLines.join('\n')}\n${t('provider-route-exists-warning')}`
@@ -364,6 +392,7 @@ async function runAddFlow(
     discoveredById,
     catalogIds: discovery.catalogIds,
     catalogDiscovery: discovery.catalog,
+    capabilityEntries: capabilities.entries,
   })
   try {
     await host.writeProfile(route, profile)
@@ -641,10 +670,10 @@ async function editWireProtocol(
 /**
  * Re-discover the endpoint's models and pick the enabled set (the current
  * ones pre-checked), then patch just the profile's `models`. Kept models
- * reuse their stored entries, so per-model fields the wizard does not
- * model (`input`, `compat`, …) survive the re-selection. On discovery
- * failure a manual id question is the fallback; an empty result is a no-op
- * for whole-catalog routes and rejected for custom routes.
+ * reuse their stored entries unless explicitly edited with Tab. Other
+ * per-model fields survive. Stored models stay editable during discovery
+ * outages; a route with no rows falls back to manual ids. An empty enabled
+ * set serves the whole catalog, or is rejected for custom routes.
  */
 async function editModelList(
   deps: ProviderWizardDeps,
@@ -675,12 +704,20 @@ async function editModelList(
   const discovered = discovery.rows
   notifyDiscoveryStatus(notify, discovery)
 
+  const discoveredById = new Map(discovered.map(model => [model.id, model] as const))
+  const storedById = new Map((provider.modelEntries ?? [])
+    .flatMap(entry => typeof entry['id'] === 'string' ? [[entry['id'], entry] as const] : []))
+  const entryFor = (id: string): Record<string, unknown> => storedById.get(id) ?? {
+    ...discoveredModelEntry(id, isCatalog, discovery, discoveredById),
+    ...provider.modelOverrides?.[id],
+    id,
+  }
+  const capabilities = createProviderModelEditor(entryFor, discoveredById)
   let models: string[]
-  let discoveredById = new Map<string, LlmDiscoveredModel>()
-  if (discovered.length === 0) {
+  if (discovered.length === 0 && previous.length === 0) {
     notify(t('provider-discovery-failed'), { color: 'warning' })
     const fallbackAnswer = await ask({
-      questions: [textQuestion('models-fallback', t('provider-q-models-fallback'))],
+      questions: [textQuestion('models-fallback', t('provider-q-models-fallback'), undefined, capabilities.editor)],
     })
     models = mergeModelIds([], answerText(fallbackAnswer, 'models-fallback'))
     if (models.length === 0) {
@@ -688,7 +725,7 @@ async function editModelList(
       return 'cancelled'
     }
   } else {
-    discoveredById = new Map(discovered.map(model => [model.id, model] as const))
+    if (discovered.length === 0) notify(t('provider-models-stored-only'), { color: 'warning' })
     // Existing models neither the catalog nor the endpoint advertises
     // (renamed, beta pulled, transient discovery gap) must still appear in
     // the panel, pre-checked and marked: options built from `discovered`
@@ -714,6 +751,7 @@ async function editModelList(
         {
           multiSelect: true,
           defaultSelected: previous,
+          modelEditor: capabilities.editor,
           ...(isCatalog && discovery.reason === 'no-base-url'
             ? { detail: t('provider-catalog-snapshot-note', { n: discovered.length }) }
             : {}),
@@ -731,39 +769,41 @@ async function editModelList(
     notify(t('provider-models-required'), { color: 'error' })
     return 'cancelled'
   }
-  if (sameModels(models, previous)) {
+  const editedEntries = new Map([...capabilities.entries].filter(([id]) =>
+    models.includes(id) || (isCatalog && models.length === 0 && discovery.catalogIds.has(id)),
+  ))
+  if (isCatalog && models.length === 0 && editedEntries.size > 0
+    && !CATALOG_MODEL_OVERRIDES_AVAILABLE) {
+    notify(t('provider-model-override-unavailable'), { color: 'warning' })
+    return 'failed'
+  }
+  if (sameModels(models, previous) && editedEntries.size === 0) {
     notify(t('provider-edit-no-changes'))
     return 'cancelled'
   }
-  // The new `models` value: a kept id re-enters its stored entry verbatim;
-  // a newly enabled one is built from the discovery row. An id the installed
-  // catalog covers stays plain `{id}` (the catalog carries the capabilities
-  // and would be overridden by entry fields); an endpoint-only id takes the
-  // capacities the live listing disclosed, falling back to the route
-  // defaults upstream when the endpoint said nothing.
-  const storedById = new Map((provider.modelEntries ?? [])
-    .flatMap(entry => typeof entry['id'] === 'string' ? [[entry['id'], entry] as const] : []))
-  const modelsValue = models.map(id => {
-    const stored = storedById.get(id)
-    if (stored !== undefined) return stored
-    const discovered = discoveredById.get(id)
-    return {
-      id,
-      ...((isCatalog && (
-        discovery.catalog !== 'fetched' || discovery.catalogIds.has(id)
-      )) || discovered === undefined ? {} : {
-        ...(discovered.contextWindow !== undefined
-          ? { contextWindow: discovered.contextWindow }
-          : {}),
-        ...(discovered.maxTokens !== undefined
-          ? { maxTokens: discovered.maxTokens }
-          : {}),
-      }),
+  const ops: ProfilePathOp[] = []
+  if (isCatalog && models.length === 0) {
+    if (previous.length > 0) ops.push({ op: 'set', path: ['models'], value: [] })
+    // Keep the whole catalog served: editing one row must not turn it into
+    // a one-model catalog. Only explicit field changes become overrides.
+    for (const [id, entry] of editedEntries) {
+      const original = entryFor(id)
+      for (const field of MODEL_CAPABILITY_FIELDS) {
+        if (JSON.stringify(entry[field]) === JSON.stringify(original[field])) continue
+        const path = ['modelOverrides', id, field]
+        ops.push(entry[field] === undefined ? { op: 'unset', path }
+          : { op: 'set', path, value: entry[field] })
+      }
     }
-  })
-  await host.mutateProfile(provider.route, [
-    { op: 'set', path: ['models'], value: modelsValue },
-  ])
+  } else {
+    ops.push({ op: 'set', path: ['models'], value: models.map(id => editedEntries.get(id) ?? entryFor(id)) })
+    // Upstream forbids modelOverrides beside an explicit models list. Carry
+    // their fields into the entries before removing this alternate shape.
+    if (provider.modelOverrides !== undefined && Object.keys(provider.modelOverrides).length > 0) {
+      ops.push({ op: 'unset', path: ['modelOverrides'] })
+    }
+  }
+  await host.mutateProfile(provider.route, ops)
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
     action: 'updated-models',
@@ -780,6 +820,7 @@ async function editModelList(
       added: models.filter(id => !previous.includes(id)),
       removed: previous.filter(id => !models.includes(id)),
     },
+    capabilityModels: [...editedEntries.keys()],
   }))
   notify(t('provider-edit-success', { route: provider.route }), { color: 'success' })
   return 'updated'
@@ -1241,6 +1282,7 @@ function buildSummaryLines(input: {
   keyLine?: string
   /** Model-list delta against the previously enabled set (model-list edits). */
   delta?: { added: readonly string[]; removed: readonly string[] }
+  capabilityModels?: readonly string[]
 }): string[] {
   const lines = [input.action === 'preview'
     ? t('provider-line-route', { route: input.route })
@@ -1263,6 +1305,9 @@ function buildSummaryLines(input: {
       : endpoint)
   }
   lines.push(modelsSummaryLine(input.models, input.delta))
+  if (input.capabilityModels !== undefined && input.capabilityModels.length > 0) {
+    lines.push(t('provider-line-model-capabilities', { models: input.capabilityModels.join(', ') }))
+  }
   return lines
 }
 
@@ -1291,6 +1336,20 @@ function capsOf(model: LlmDiscoveredModel | undefined): Record<string, number> {
   }
 }
 
+/** Catalog-covered ids inherit capabilities; endpoint-only ids adopt disclosed capacities. */
+function discoveredModelEntry(
+  id: string,
+  isCatalog: boolean,
+  discovery: Pick<RouteDiscovery, 'catalog' | 'catalogIds'>,
+  discoveredById: ReadonlyMap<string, LlmDiscoveredModel>,
+): Record<string, unknown> {
+  return {
+    id,
+    ...((isCatalog && (discovery.catalog !== 'fetched' || discovery.catalogIds.has(id)))
+      ? {} : capsOf(discoveredById.get(id))),
+  }
+}
+
 function buildProfile(input: {
   isCatalog: boolean
   ref: string
@@ -1300,6 +1359,7 @@ function buildProfile(input: {
   discoveredById: ReadonlyMap<string, LlmDiscoveredModel>
   catalogIds: ReadonlySet<string>
   catalogDiscovery: RouteDiscoveryCatalog
+  capabilityEntries: ReadonlyMap<string, Record<string, unknown>>
 }): Record<string, unknown> {
   const profile: Record<string, unknown> = {}
   // Preserve the profile's credential shape: an empty ref (no apiKeyEnv)
@@ -1312,17 +1372,22 @@ function buildProfile(input: {
     // (the catalog carries versioned capabilities); an endpoint-only id
     // carries what the live listing disclosed.
     if (input.models.length > 0) {
-      profile['models'] = input.models.map(id => ({
+      profile['models'] = input.models.map(id => input.capabilityEntries.get(id) ?? ({
         id,
         ...((input.catalogDiscovery !== 'fetched' || input.catalogIds.has(id))
           ? {}
           : capsOf(input.discoveredById.get(id))),
       }))
+    } else {
+      const overrides = [...input.capabilityEntries]
+        .filter(([id]) => input.catalogIds.has(id))
+        .map(([id, entry]) => [id, Object.fromEntries(Object.entries(entry).filter(([field]) => field !== 'id'))])
+      if (overrides.length > 0) profile['modelOverrides'] = Object.fromEntries(overrides)
     }
     return profile
   }
   profile['api'] = input.api
-  profile['models'] = input.models.map(id => ({
+  profile['models'] = input.models.map(id => input.capabilityEntries.get(id) ?? ({
     id,
     ...capsOf(input.discoveredById.get(id)),
   }))
