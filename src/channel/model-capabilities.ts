@@ -1,13 +1,13 @@
 /**
- * Provider model-capability parsing/formatting: the pure port surface the
- * TUI's model editor consumes. Lives in ports/ (not dsh-adapter/) because UI
- * layers may only import TYPES from src/dsh-adapter/ — these helpers are
- * values. Validation errors are raised in the user's language (t()) since
- * the editor surfaces them verbatim; the first i18n use in ports/, kept
- * because error copy is part of this port's contract.
+ * Provider model-capability parsing/formatting: the neutral surface the
+ * TUI's model editor consumes — next to channel/sanitize for the same
+ * reason: UI layers may only import TYPES from src/dsh-adapter/, and ports/
+ * admits no imports from outside itself (verify:adapter-ports), so a
+ * user-language error message rules ports out. Validation errors raise in
+ * the user's language since the editor surfaces them verbatim.
  */
 import { t } from '../../i18n.js'
-import type { ProviderModelCapabilities } from './channel-settings.js'
+import type { ProviderModelCapabilities } from '../adapter/ports/channel-settings.js'
 
 export const PROVIDER_REASONING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 export const MODEL_CAPABILITY_FIELDS = ['contextWindow', 'maxTokens', 'reasoningEfforts', 'input'] as const

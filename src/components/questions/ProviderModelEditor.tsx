@@ -1,6 +1,6 @@
 import React from 'react'
 import type { ProviderModelEditor as ModelEditor } from '../../adapter/ports/channel-settings.js'
-import { formatModelReasoning, parseModelCapacity, parseModelReasoning } from '../../adapter/ports/model-capabilities.js'
+import { formatModelReasoning, parseModelCapacity, parseModelReasoning } from '../../channel/model-capabilities.js'
 import { capCells, cleanRenderText, flattenPasteInline } from '../../channel/sanitize.js'
 import { t } from '../../i18n.js'
 import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'

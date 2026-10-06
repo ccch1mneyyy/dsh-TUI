@@ -2,12 +2,12 @@ import type { ProviderModelCapabilities, ProviderModelEditor } from '../adapter/
 import type { LlmDiscoveredModel } from '../adapter/ports/channel-view.js'
 import { t } from '../i18n.js'
 import { installedMeetsVersion } from './contract.js'
-import { MODEL_CAPABILITY_FIELDS, formatModelReasoning, parseModelReasoning } from '../adapter/ports/model-capabilities.js'
+import { MODEL_CAPABILITY_FIELDS, formatModelReasoning, parseModelReasoning } from '../channel/model-capabilities.js'
 
 // The pure parsing/formatting surface lives in ports (UI layers may import
 // values from there, not from here); re-exported so the wizard's existing
 // imports keep working.
-export { MODEL_CAPABILITY_FIELDS, PROVIDER_REASONING_LEVELS, formatModelReasoning, parseModelCapacity, parseModelReasoning } from '../adapter/ports/model-capabilities.js'
+export { MODEL_CAPABILITY_FIELDS, PROVIDER_REASONING_LEVELS, formatModelReasoning, parseModelCapacity, parseModelReasoning } from '../channel/model-capabilities.js'
 export const CATALOG_MODEL_OVERRIDES_AVAILABLE = installedMeetsVersion(
   '@deepseek-ai/dsh-llm-pi-ai',
   '0.2.0-rc.2',
