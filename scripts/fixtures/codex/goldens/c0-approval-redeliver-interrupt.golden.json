@@ -1,0 +1,66 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "session.status",
+    "assistant.message",
+    "tool.call",
+    "session.status",
+    "context.capacity",
+    "assistant.message",
+    "session.status",
+    "tool.result",
+    "step.end",
+    "turn.end"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Run exactly this shell command and nothing else: sleep 8 && echo slept"
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "shell",
+        "status": "error",
+        "call": {
+          "card": "terminal",
+          "title": "sleep 8 && echo slept",
+          "displayKey": "tool-name-bash"
+        },
+        "result": null,
+        "errorText": "Interrupted"
+      }
+    },
+    {
+      "kind": "interrupt",
+      "text": "Interrupted · What should DeepSeek do instead?"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "contextWindow": 258400,
+    "tokens": {
+      "input": 3,
+      "output": 81,
+      "cacheRead": 0,
+      "cacheWrite": 8693
+    },
+    "lastUsage": {
+      "input": 3,
+      "output": 81,
+      "cacheRead": 0,
+      "cacheWrite": 8693
+    },
+    "todos": [],
+    "notices": []
+  }
+}

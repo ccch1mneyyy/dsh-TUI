@@ -36,6 +36,9 @@ export interface OpenAttempt {
   text: string
   /** Reasoning streamed so far (a new summary part starts a paragraph). */
   streamedReasoning: string
+  /** Text streamed so far: what an interrupted reply settles with when its
+   *  item never completed. */
+  streamedText: string
   /** Items whose raw reasoning stream is shown (no summary was streamed). */
   readonly rawReasoning: Set<string>
   /** Items whose summary streamed (their raw text stream stays hidden). */
@@ -152,7 +155,7 @@ export function ensureAttempt(ctx: ItemContext, out: AgentEvent[]): OpenAttempt 
   out.push({ type: 'step.start', turn: ctx.turn, step: ctx.step })
   const id = `${ctx.turnId === '' ? `turn-${ctx.turn}` : ctx.turnId}#${ctx.step}`
   out.push({ type: 'assistant.attempt.start', attemptId: id, turn: ctx.turn, step: ctx.step, ...(ctx.model === '' ? {} : { model: ctx.model }) })
-  ctx.attempt = { id, step: ctx.step, reasoning: '', text: '', streamedReasoning: '', rawReasoning: new Set(), summarized: new Set(), usage: undefined }
+  ctx.attempt = { id, step: ctx.step, reasoning: '', text: '', streamedReasoning: '', streamedText: '', rawReasoning: new Set(), summarized: new Set(), usage: undefined }
   return ctx.attempt
 }
 
@@ -161,9 +164,13 @@ export function settleAttempt(ctx: ItemContext, out: AgentEvent[], time: number,
   const open = ctx.attempt
   if (open === undefined) return
   ctx.attempt = undefined
+  // A completed item's text is the record; a reply cut short keeps what
+  // streamed (an interrupted item never completes, F11).
+  const reasoning = open.reasoning !== '' ? open.reasoning : open.streamedReasoning
+  const replyText = open.text !== '' ? open.text : open.streamedText
   const blocks: ContentBlockView[] = []
-  if (open.reasoning !== '') blocks.push({ type: 'reasoning', text: open.reasoning })
-  if (open.text !== '') blocks.push({ type: 'text', text: open.text })
+  if (reasoning !== '') blocks.push({ type: 'reasoning', text: reasoning })
+  if (replyText !== '') blocks.push({ type: 'text', text: replyText })
   out.push({
     type: 'assistant.message',
     seq: ctx.nextSeq(),

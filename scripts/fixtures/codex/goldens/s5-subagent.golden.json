@@ -1,0 +1,71 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "custom",
+    "context.capacity",
+    "custom",
+    "assistant.message",
+    "tool.call",
+    "tool.result",
+    "assistant.message",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "assistant.message",
+    "assistant.message",
+    "session.status",
+    "step.end",
+    "turn.end"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Spawn exactly one sub-agent whose only task is to reply with the word child-ok. Wait for it, then reply done. Keep everything minimal."
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "collab_agent",
+        "status": "ok",
+        "call": {
+          "card": "generic",
+          "title": "wait",
+          "displayKey": null
+        },
+        "result": null
+      }
+    },
+    {
+      "kind": "assistant",
+      "text": "done"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "contextWindow": 258400,
+    "tokens": {
+      "input": 46,
+      "output": 88,
+      "cacheRead": 17492,
+      "cacheWrite": 8833
+    },
+    "lastUsage": {
+      "input": 40,
+      "output": 5,
+      "cacheRead": 8787,
+      "cacheWrite": 46
+    },
+    "todos": [],
+    "notices": []
+  }
+}

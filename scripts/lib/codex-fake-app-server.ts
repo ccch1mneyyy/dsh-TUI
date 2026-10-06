@@ -210,6 +210,8 @@ export function createFakeAppServer(options: { readonly initialize?: Rec | false
   const transportFactory = (transportOptions: TransportOptions): Transport => {
     spawns.push(transportOptions)
     closed = false
+    // A new child numbers its server requests from 0 again.
+    nextServerId = 0
     const generation = spawns.length
     const state = { options: transportOptions, generation, alive: true }
     current = state

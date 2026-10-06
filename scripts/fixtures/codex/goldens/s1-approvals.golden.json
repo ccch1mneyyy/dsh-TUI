@@ -1,0 +1,26 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Run exactly this shell command and nothing else: echo probe > a.txt"
+    }
+  ],
+  "state": {
+    "working": true,
+    "contextWindow": null,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "lastUsage": null,
+    "todos": [],
+    "notices": []
+  }
+}

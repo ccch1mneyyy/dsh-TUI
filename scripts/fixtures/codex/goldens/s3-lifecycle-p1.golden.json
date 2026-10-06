@@ -1,0 +1,96 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "assistant.message",
+    "context.capacity",
+    "assistant.message",
+    "session.status",
+    "step.end",
+    "turn.end",
+    "session.status",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "assistant.message",
+    "assistant.message",
+    "session.status",
+    "step.end",
+    "turn.end",
+    "session.status",
+    "turn.start",
+    "step.start",
+    "tool.call",
+    "tool.result",
+    "session.status",
+    "step.end",
+    "turn.end"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Reply with exactly: alpha"
+    },
+    {
+      "kind": "assistant",
+      "text": "alpha"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
+      "kind": "user",
+      "text": "Reply with exactly: beta"
+    },
+    {
+      "kind": "assistant",
+      "text": "beta"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "user_shell",
+        "status": "ok",
+        "call": {
+          "card": "terminal",
+          "title": "!echo shell-ok",
+          "displayKey": "tool-name-bash"
+        },
+        "result": {
+          "card": "terminal"
+        },
+        "resultText": "shell-ok"
+      }
+    }
+  ],
+  "state": {
+    "working": false,
+    "contextWindow": 258400,
+    "tokens": {
+      "input": 6,
+      "output": 10,
+      "cacheRead": 8682,
+      "cacheWrite": 8698
+    },
+    "lastUsage": {
+      "input": 3,
+      "output": 5,
+      "cacheRead": 8682,
+      "cacheWrite": 16
+    },
+    "todos": [],
+    "notices": []
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "events": [
+    "session.status",
+    "session.status",
+    "turn.start",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "context.capacity",
+    "assistant.message",
+    "session.status",
+    "step.end",
+    "turn.end"
+  ],
+  "rows": [
+    {
+      "kind": "assistant",
+      "text": "child-ok"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "contextWindow": 258400,
+    "tokens": {
+      "input": 48,
+      "output": 6,
+      "cacheRead": 0,
+      "cacheWrite": 8662
+    },
+    "lastUsage": {
+      "input": 48,
+      "output": 6,
+      "cacheRead": 0,
+      "cacheWrite": 8662
+    },
+    "todos": [],
+    "notices": []
+  }
+}

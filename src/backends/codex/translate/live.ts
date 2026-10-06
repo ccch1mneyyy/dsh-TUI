@@ -59,6 +59,7 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
     if (textDelta === '' || !ctx.turnOpen) return
     const attempt = ensureAttempt(ctx, out)
     if (kind === 'reasoning') attempt.streamedReasoning += textDelta
+    else attempt.streamedText += textDelta
     out.push({ type: 'assistant.delta', attemptId: attempt.id, index, time: ctx.now(), delta: { kind, text: textDelta } })
   }
 

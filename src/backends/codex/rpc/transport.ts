@@ -54,7 +54,7 @@ export type TransportFactory = (options: TransportOptions) => Transport
 export const CLOSE_GRACE_MS = 2000
 
 /** A line splitter with the size bound (shared with the fake transport). */
-export function createLineSplitter(onLine: (line: string) => void, onOversize: (bytes: number) => void): { push(chunk: string): void; end(): void } {
+export function createLineSplitter(onLine: (line: string) => void, onOversize: (bytes: number) => void, maxLine: number = MAX_LINE_BYTES): { push(chunk: string): void; end(): void } {
   let partial = ''
   let skipping = false
   return {
@@ -75,7 +75,7 @@ export function createLineSplitter(onLine: (line: string) => void, onOversize: (
       }
       if (skipping) return
       partial += chunk.slice(start)
-      if (partial.length > MAX_LINE_BYTES) {
+      if (partial.length > maxLine) {
         onOversize(partial.length)
         partial = ''
         skipping = true
