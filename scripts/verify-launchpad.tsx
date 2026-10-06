@@ -38,6 +38,10 @@
  *      同屏且权限段一字不少、窄屏回落今天的尾部省段、焦点环只收画出来的段。
  *   S. 屏幕级 AC-4：被截断段的 tooltip——真 SGR motion 悬停 600ms 出完整名、
  *      离开即撤且高亮复原、点击/键盘仍开对应选择器、未截断段绝不弹卡片。
+ *   PK. 屏幕级：命令补全面板的**卡片几何**——面板锚在 cardWidth 宽的成组块里，
+ *      交给 SuggestionCard 的 columns 必须是 cardWidth（不是整屏 columns）：上下
+ *      边框闭合（`╮`/`╯`）、卡片行数 = 边框 2 + 命令数（长描述行不多出幽灵空行）、
+ *      过长描述在卡片内截断成 `…` 而不是被右 `│` 覆盖。宽/窄终端各钉一遍。
  *
  * Run: node --import tsx/esm scripts/verify-launchpad.tsx
  */
@@ -2158,6 +2162,65 @@ for (const cols of [120, 100, 72, 60, 48]) {
     JSON.stringify(ev.slice(-2)))
   s.close()
 }
+
+// ── K9. 面板卡片几何（浮层宽度契约）────────────────────────────────────────
+// 面板经 OverlayAbove（`left:0/right:0`）锚在**成组块**里，成组块宽 =
+// `cardWidth = max(24, min(columns - 4, 72))`，而卡片根节点 `width:'100%'` 填满
+// 它。所以交给 SuggestionCard 的 columns 必须是 cardWidth，不是整屏 columns——
+// 传整屏时（0.13.0 起的缺陷）卡片按整屏算边框与行宽，屏幕上是：
+//   ① 上下边框比卡片宽，被 `truncate-end` 截成 `…`（右上 `╮` / 右下 `╯` 消失）；
+//   ② 行内容比内容盒宽 2 列 → flex 收缩，长描述行的 `…` 落进右 `│` 那一格被
+//      覆盖（描述看起来被硬切），同一条边还被亚 1 列宽的 `│` 测量多顶出**一条
+//      幽灵空行**（`measure-text` 的 `ceil(1 / 0.973) = 2`）。
+// 夹具刻意用长描述（真源 `cmd-desc-setup`）撑出②，两类宽度各钉一遍。
+const PALETTE_COMMANDS: readonly { name: string; description: string; commandLine: string }[] = [
+  { name: 'status', description: t('cmd-desc-status' as never), commandLine: '/status ' },
+  // `settings` 是名字最长的一条（8 列）：它把名字列撑到 13，与真实 `/s` 列表同形。
+  // 少了它，宽终端下最长的一行正好卡在内容盒宽度上，幽灵空行就漏测了。
+  { name: 'settings', description: t('cmd-desc-settings' as never), commandLine: '/settings ' },
+  { name: 'setup', description: t('cmd-desc-setup' as never), commandLine: '/setup ' },
+  { name: 'skills', description: t('cmd-desc-skills' as never), commandLine: '/skills ' },
+]
+
+async function checkPaletteCardGeometry(columns: number, label: string): Promise<void> {
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { columns, commands: PALETTE_COMMANDS })
+  await s.send('/')
+  await settled(() => rowOf(s.term, '╭─ 命令') >= 0)
+  const cardWidth = Math.max(24, Math.min(columns - 4, 72))
+  const lines = viewportLines(s.term)
+  const topRow = rowOf(s.term, '╭─ 命令')
+  // 从顶边框往下收集到第一条 `╰`（面板底边框；再往下才是输入框自己的边框）。
+  const card: string[] = []
+  for (let i = topRow; i >= 0 && i < lines.length; i++) {
+    card.push(lines[i]!)
+    if (lines[i]!.includes('╰')) break
+  }
+  const top = (card[0] ?? '').trimEnd()
+  const bottom = (card[card.length - 1] ?? '').trimEnd()
+  const longRow = (card.find(line => line.includes('setup')) ?? '').trimEnd()
+  // 面板左右缘 = 成组块左右缘，行首那段缩进不算卡片宽度。
+  const boxTop = lines.slice(topRow + card.length).find(line => line.includes('╭')) ?? ''
+  check(`PK1@${columns} ${label}：面板顶边框闭合（右上是 ╮，不是被截出来的 …），宽度 = cardWidth`,
+    top.endsWith('╮') && stringWidth(top) - leftGap(top) === cardWidth,
+    `top=${JSON.stringify(top)} w=${stringWidth(top) - leftGap(top)} cardWidth=${cardWidth}`)
+  check(`PK2@${columns} ${label}：面板底边框闭合（右下是 ╯），宽度 = cardWidth`,
+    bottom.endsWith('╯') && stringWidth(bottom) - leftGap(bottom) === cardWidth,
+    `bottom=${JSON.stringify(bottom)} w=${stringWidth(bottom) - leftGap(bottom)} cardWidth=${cardWidth}`)
+  check(`PK3@${columns} ${label}：卡片行数 = 边框 2 + 命令 ${PALETTE_COMMANDS.length}（长描述行不再多出一条幽灵空行）`,
+    card.length === PALETTE_COMMANDS.length + 2 && card.every(line => line.trim() !== ''),
+    `lines=${card.length} card=${JSON.stringify(card)}`)
+  check(`PK4@${columns} ${label}：过长描述在卡片内截断并带 …（不是被右 │ 覆盖吃掉）`,
+    /…\s*│$/u.test(longRow) && stringWidth(longRow) - leftGap(longRow) === cardWidth,
+    `row=${JSON.stringify(longRow)} w=${stringWidth(longRow) - leftGap(longRow)}`)
+  check(`PK5@${columns} ${label}：面板与输入框同左缘（同一成组块，浮层不漂）`,
+    leftGap(boxTop) === leftGap(top) && stringWidth(boxTop) - leftGap(boxTop) === cardWidth,
+    `box=${JSON.stringify(boxTop)} boxLeft=${leftGap(boxTop)} panelLeft=${leftGap(top)}`)
+  s.close()
+}
+
+await checkPaletteCardGeometry(COLS, '宽终端（cardWidth 触顶 72）')
+await checkPaletteCardGeometry(60, '窄终端（cardWidth = columns - 4）')
 
 // ── L. Tips 点击与键盘轮换 ──
 {

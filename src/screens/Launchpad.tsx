@@ -1017,14 +1017,22 @@ export function Launchpad({
           )}
           {/* 命令补全面板（第六版 BUG 1）：聊天页同一个 CommandSuggestions 组件、
               同一个锚点姿态（输入框卡片顶边向上展开）。面板里的点击同样拦住
-              冒泡（点命令行 = 选中执行，不是“点空白”）。 */}
+              冒泡（点命令行 = 选中执行，不是“点空白”）。
+              宽度必须按**卡片**给（cardWidth），不是整屏 columns：本浮层是
+              `left:0/right:0` 绝对定位，它的包含块就是这个成组块（cardWidth 宽），
+              卡片根节点再 `width:'100%'` 填满它。传 columns 会让 SuggestionCard
+              按整屏算边框与行宽——边框长出卡片被 `truncate-end` 截成 `…`（右上
+              `╮`/右下 `╯` 消失），行内容比内容盒宽 2 列（flex 收缩后长描述行的
+              `…` 落在右 `│` 那一格被覆盖，同一条边还因亚 1 列宽的测量多出**一条
+              幽灵空行**）。聊天页的补全菜单不受此约束：那边卡片所在容器本身就是
+              columns 宽。 */}
           {overlayPanel === undefined && paletteOpen && paletteSelected !== undefined && (
             <OverlayAbove maxHeight={Math.max(rows - 8, 1)} transparent>
               <Box onClick={(event: ClickEvent) => { event.stopImmediatePropagation() }}>
                 <CommandSuggestions
                   commands={paletteCommands}
                   selectedIndex={paletteSelectedIndex}
-                  columns={columns}
+                  columns={cardWidth}
                   query={query}
                   onPick={(index) => {
                     const command = paletteCommands[index]
