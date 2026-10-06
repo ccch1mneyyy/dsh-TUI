@@ -104,6 +104,7 @@
   "files": [
     "bin",
     "lib",
+    "!lib/types/backends/codex/protocol/generated",
     "assets",
     "cordis.patch.yml",
     "cordis.yml",
@@ -228,6 +229,7 @@
     "verify:projection-golden": "node --import tsx/esm scripts/verify-projection-golden.ts",
     "verify:dsh-translate": "node --import tsx/esm scripts/verify-dsh-translate.ts",
     "verify:agent-domain": "node --import tsx/esm scripts/verify-agent-domain.ts",
+    "verify:codex-contract": "node --import tsx/esm scripts/verify-codex-contract.ts",
     "verify:claude-contract": "node --import tsx/esm scripts/verify-claude-contract.ts",
     "verify:claude-live": "DSH_TUI_CLAUDE_LIVE=1 node --import tsx/esm scripts/verify-claude-live.ts",
     "verify:claude-headless": "DSH_TUI_CLAUDE_LIVE=1 node --import tsx/esm scripts/verify-claude-headless.tsx",
