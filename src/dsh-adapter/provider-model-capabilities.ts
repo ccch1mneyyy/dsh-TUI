@@ -1,4 +1,4 @@
-import type { ProviderModelEditor } from '../adapter/ports/channel-settings.js'
+import type { ProviderModelCapabilities, ProviderModelEditor } from '../adapter/ports/channel-settings.js'
 import type { LlmDiscoveredModel } from '../adapter/ports/channel-view.js'
 import { t } from '../i18n.js'
 import { installedMeetsVersion } from './contract.js'
