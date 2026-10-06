@@ -4215,7 +4215,7 @@ export function Chat({
   const openGoalDetails = () => {
     if (channel.goal === undefined || overlay.kind !== 'none' || helpOpen
       || approvalSnapshot !== null || dialogSnapshot !== null || questionSnapshot !== null
-      || btw !== null || (recap !== null && (!recap.auto || recap.expanded))
+      || btwOverlayOpen || btwSceneOpen || (recap !== null && (!recap.auto || recap.expanded))
       || starModal !== null || couponVisible || promptEditorOpen) return
     dispatchOverlay({ type: 'open', overlay: {
       kind: 'goal-details', sessionId: channel.agentId, goalId: channel.goal.id,
