@@ -1141,6 +1141,10 @@ const GROUPS = {
 // 提问面板 hideCustomInput 行为回归：纯选择题隐藏输入行且 Tab/打字
 // 不劫持焦点，纯文本题忽略 hide 标记，多选题默认行为不回退。
     ["verify-askpanel-hide-custom-input", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-hide-custom-input.tsx']],
+// 保密问题（QuestionItemView.secret）：面板输入行按码点画 •（选项行打字、括号粘贴、
+// CJK、光标编辑），提交的仍是原文；普通题照常显示；交互桥带上 secret；答卷记录
+// 掩为 ••••（投影器端到端），向导 redact 不变。
+    ["verify-question-secret", ['node', '--import', 'tsx/esm', 'scripts/verify-question-secret.tsx']],
 // 问卷面板粘贴回归：bracketed paste 压平插入（纯换行块不得提交、ANSI/
 // OSC 剥净）、Ctrl+V/Alt+V 异步剪贴板插入到实时光标（读期间打字真竞态
 // 臂、busy 去重）、选项行粘贴追加+附加标签、plan-review 粘贴绝不快选/

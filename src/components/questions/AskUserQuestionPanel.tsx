@@ -53,6 +53,8 @@ function isPlainArrow(key: { ctrl?: boolean; meta?: boolean; super?: boolean; sh
 const CHECKED = '◉'
 const UNCHECKED = '○'
 const PENCIL = '✎'
+/** One masked code point of a secret answer (`question.secret`). */
+const SECRET_MASK = '•'
 
 /**
  * Paste cap for one answer field, in code points. Typing is naturally
@@ -86,6 +88,9 @@ export type AskUserQuestionPanelProps = {
      *  (plain otherwise; a scheme that is not http(s)/file/mailto shows
      *  nothing — the notice row still names it). */
     readonly link?: string
+    /** A secret answer (a token, a password): the input row shows one `•`
+     *  per typed code point; the submitted answer is the real text. */
+    readonly secret?: boolean
     /** Local /provider draft editor. Ordinary model-facing asks carry none. */
     readonly modelEditor?: ModelEditor
     /** Presentation intent tag (rc.6): 'plan-review' switches to the
@@ -645,8 +650,11 @@ export function AskUserQuestionPanel({
 
   // The caret counts code points (see the module header), so the caret
   // char and the visual split index into the point array — never raw
-  // UTF-16 offsets, which could land inside a surrogate pair.
-  const textPoints = [...customText]
+  // UTF-16 offsets, which could land inside a surrogate pair. A secret
+  // question paints one mask per code point instead: the same caret math,
+  // nothing of the typed text on screen.
+  const typedPoints = [...customText]
+  const textPoints = question.secret === true ? typedPoints.map(() => SECRET_MASK) : typedPoints
   const cursorChar = customCursor < textPoints.length ? textPoints[customCursor] : ' '
   /** Mouse: click the input row to focus it (same as Tab). */
   const focusInputRow = (): void => {

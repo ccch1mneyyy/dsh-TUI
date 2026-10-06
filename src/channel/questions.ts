@@ -53,6 +53,9 @@ export interface QuestionItem {
   /** A URL the question is about: shown under it as a link (OSC 8 where
    *  the terminal supports hyperlinks). */
   readonly link?: string
+  /** A secret answer: the free-text row is masked with `•` while typed
+   *  (the answer itself is submitted unchanged). */
+  readonly secret?: boolean
 }
 
 /** One ask: a batch of questions plus its cancellation lifetime. */

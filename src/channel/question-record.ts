@@ -21,6 +21,8 @@ import { t } from '../i18n.js'
  */
 export interface QuestionRecordQuestion {
   readonly question: string
+  /** A secret question (`QuestionItemView.secret`): its answer is masked. */
+  readonly secret?: boolean
 }
 
 /**
@@ -40,6 +42,9 @@ export interface QuestionRecord {
   /** One `· question → answer` line per answered question. */
   readonly lines: readonly string[]
 }
+
+/** The record of a secret question's answer (`QuestionRecordQuestion.secret`). */
+export const SECRET_ANSWER = '••••'
 
 /** Truncate a long answer line for the transcript summary. */
 function clip(text: string, max = 140): string {
@@ -77,15 +82,19 @@ export function buildQuestionRecord(
     const prompt = typeof question.question === 'string' ? question.question : ''
     const selected = Array.isArray(answer.selected) ? answer.selected : []
     if (prompt === '' && selected.length === 0 && (answer.custom ?? '') === '') return []
+    // A secret question's answer never reaches the transcript (nor an
+    // `/export` dump), whatever it was: an option label or typed text.
     const text = options?.redact === true
       ? '••••••'
-      : (() => {
-          const labels = selected.join('、')
-          const custom = answer.custom ?? ''
-          return custom !== ''
-            ? labels === '' ? custom : `${labels}：${custom}`
-            : labels
-        })()
+      : question.secret === true
+        ? SECRET_ANSWER
+        : (() => {
+            const labels = selected.join('、')
+            const custom = answer.custom ?? ''
+            return custom !== ''
+              ? labels === '' ? custom : `${labels}：${custom}`
+              : labels
+          })()
     return `· ${prompt} → ${clip(text)}`
   })
   return {

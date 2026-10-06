@@ -155,6 +155,13 @@ export interface QuestionItemView {
   readonly defaultSelected?: readonly string[]
   /** A URL the question is about (rendered as a link where supported). */
   readonly link?: string
+  /**
+   * The answer is a secret (a token, a password): the panel masks the
+   * free-text row with `•` while typing and the answered record shows
+   * `••••` instead of the answer. The answer itself reaches the backend
+   * unchanged. Absent = an ordinary question.
+   */
+  readonly secret?: true
 }
 
 /** One parked structured ask. */
