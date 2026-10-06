@@ -252,6 +252,7 @@ TUI 的 `Ctrl+G` 走 `$VISUAL`/`$EDITOR`。想让它在 VS Code 里编辑，
 | 鼠标滚轮/拖选 | 由集成终端处理；“松开即复制”表现为 OS 级复制行为 |
 | 扩展键盘协议 | modifyOtherKeys / win32-input-mode 由 xterm.js 决定，可能与 kitty / WezTerm 不完全一致 |
 | OSC 52 剪贴板 | 首次使用弹出权限提示（VS Code 自身的安全设计） |
+| 图像协议 | 立绘/图片可能**永久空白**：dsh-tui 让 Kitty 图形协议优先于 Sixel，而 VS Code 的 `@xterm/addon-image` 对 Kitty 查询回一个从未经真实绘制验证的 `OK`，图片被擦掉后不再重绘。解决：在 VS Code 设置里打开 `terminal.integrated.enableImages`（默认关闭）并**重载窗口**（图像 addon 只挂在 WebGL 渲染器上，`terminal.integrated.gpuAcceleration` 为 `off` 或旧 `canvas` 时开了也不生效）；必要时设 `DSH_TUI_IMAGE_PROTOCOL=sixel`（需 dsh-tui ≥ 0.10.0）——用 companion 扩展 `dsh-tui-vscode` ≥ 0.7.5 时该变量自动注入，无需手动设置 |
 
 需要完全对齐独立终端行为时，请使用独立终端窗口
 （Windows Terminal / kitty / WezTerm / iTerm2 / tmux）。
