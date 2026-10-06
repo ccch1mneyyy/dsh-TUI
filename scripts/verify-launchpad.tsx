@@ -41,7 +41,9 @@
  *   PK. 屏幕级：命令补全面板的**卡片几何**——面板锚在 cardWidth 宽的成组块里，
  *      交给 SuggestionCard 的 columns 必须是 cardWidth（不是整屏 columns）：上下
  *      边框闭合（`╮`/`╯`）、卡片行数 = 边框 2 + 命令数（长描述行不多出幽灵空行）、
- *      过长描述在卡片内截断成 `…` 而不是被右 `│` 覆盖。宽/窄终端各钉一遍。
+ *      过长描述在卡片内截断成 `…` 而不是被右 `│` 覆盖。行内容（含宿主 `input.hint`
+ *      型的超长 `[…]` tag）一律在 `usable` 内收口、与右 `│` 至少留 1 列白；装不下的
+ *      tag 显式截断成 `…`。宽/窄终端各钉一遍。
  *
  * Run: node --import tsx/esm scripts/verify-launchpad.tsx
  */
@@ -205,12 +207,8 @@ interface OpenOptions {
   overlayPanel?: boolean
   /** 高探针面板：探针行加六行空白，覆盖部分大字。 */
   overlayPanelTall?: boolean
-  /** 提供时才显示命令补全面板。 */
-  commands?: readonly { name: string; description: string; commandLine?: string }[]
-  /** 提供时才显示命令补全面板。 */
-  commands?: readonly { name: string; description: string; commandLine?: string }[]
-  /** 提供时才显示命令补全面板。 */
-  commands?: readonly { name: string; description: string; commandLine?: string }[]
+  /** 提供时才显示命令补全面板（`tag` = 宿主命令的 `input.hint`，行内以 `[…]` 呈现）。 */
+  commands?: readonly { name: string; description: string; tag?: string; commandLine?: string }[]
   /** 模拟键盘交给覆盖层处理。 */
   inputPaused?: boolean
   /** Tips 轮换间隔。 */
@@ -2173,13 +2171,17 @@ for (const cols of [120, 100, 72, 60, 48]) {
 //      覆盖（描述看起来被硬切），同一条边还被亚 1 列宽的 `│` 测量多顶出**一条
 //      幽灵空行**（`measure-text` 的 `ceil(1 / 0.973) = 2`）。
 // 夹具刻意用长描述（真源 `cmd-desc-setup`）撑出②，两类宽度各钉一遍。
-const PALETTE_COMMANDS: readonly { name: string; description: string; commandLine: string }[] = [
+// 再加一条**宿主 hint 型**的 `goal`：宿主的 `input.hint` 会进 `tag`（见
+// `skill-catalog.ts`：`tag: input?.hint`），`/goal` 的真 hint 自带方括号
+// （`[<objective>|clear|edit <objective>|pause|resume]`，52 列），比整行预算还长
+// ——预算被 tag 吃光时若还白送一个 `…`，行就比内容盒宽 1 列，同样顶出幽灵空行。
+// `background` 用 10 列名把名字列撑到 15，与真实 `/` 全量列表同形（少一个都不复现）。
+const PALETTE_COMMANDS: readonly { name: string; description: string; tag?: string; commandLine: string }[] = [
   { name: 'status', description: t('cmd-desc-status' as never), commandLine: '/status ' },
-  // `settings` 是名字最长的一条（8 列）：它把名字列撑到 13，与真实 `/s` 列表同形。
-  // 少了它，宽终端下最长的一行正好卡在内容盒宽度上，幽灵空行就漏测了。
-  { name: 'settings', description: t('cmd-desc-settings' as never), commandLine: '/settings ' },
   { name: 'setup', description: t('cmd-desc-setup' as never), commandLine: '/setup ' },
   { name: 'skills', description: t('cmd-desc-skills' as never), commandLine: '/skills ' },
+  { name: 'background', description: 'Background this session and open agent view', tag: 'alias of /bg', commandLine: '/background ' },
+  { name: 'goal', description: t('cmd-desc-goal' as never), tag: '[<objective>|clear|edit <objective>|pause|resume]', commandLine: '/goal ' },
 ]
 
 async function checkPaletteCardGeometry(columns: number, label: string): Promise<void> {
@@ -2199,15 +2201,19 @@ async function checkPaletteCardGeometry(columns: number, label: string): Promise
   const top = (card[0] ?? '').trimEnd()
   const bottom = (card[card.length - 1] ?? '').trimEnd()
   const longRow = (card.find(line => line.includes('setup')) ?? '').trimEnd()
+  const tagRow = (card.find(line => line.includes('goal')) ?? '').trimEnd()
   // 面板左右缘 = 成组块左右缘，行首那段缩进不算卡片宽度。
   const boxTop = lines.slice(topRow + card.length).find(line => line.includes('╭')) ?? ''
+  // 命令行不许贴到右 │：行内容 ≤ usable = cardWidth − 4，内容盒还留 2 列内边距，
+  // 所以每一行与右 │ 之间至少 1 个空格。贴边 = 行内容越界（flex 收缩 → 幽灵空行）。
+  const crowded = card.slice(1, -1).filter(line => line.trimEnd() !== '' && !/\s│$/u.test(line))
   check(`PK1@${columns} ${label}：面板顶边框闭合（右上是 ╮，不是被截出来的 …），宽度 = cardWidth`,
     top.endsWith('╮') && stringWidth(top) - leftGap(top) === cardWidth,
     `top=${JSON.stringify(top)} w=${stringWidth(top) - leftGap(top)} cardWidth=${cardWidth}`)
   check(`PK2@${columns} ${label}：面板底边框闭合（右下是 ╯），宽度 = cardWidth`,
     bottom.endsWith('╯') && stringWidth(bottom) - leftGap(bottom) === cardWidth,
     `bottom=${JSON.stringify(bottom)} w=${stringWidth(bottom) - leftGap(bottom)} cardWidth=${cardWidth}`)
-  check(`PK3@${columns} ${label}：卡片行数 = 边框 2 + 命令 ${PALETTE_COMMANDS.length}（长描述行不再多出一条幽灵空行）`,
+  check(`PK3@${columns} ${label}：卡片行数 = 边框 2 + 命令 ${PALETTE_COMMANDS.length}（长描述行 / 超长 tag 行都不再多出一条幽灵空行）`,
     card.length === PALETTE_COMMANDS.length + 2 && card.every(line => line.trim() !== ''),
     `lines=${card.length} card=${JSON.stringify(card)}`)
   check(`PK4@${columns} ${label}：过长描述在卡片内截断并带 …（不是被右 │ 覆盖吃掉）`,
@@ -2216,6 +2222,12 @@ async function checkPaletteCardGeometry(columns: number, label: string): Promise
   check(`PK5@${columns} ${label}：面板与输入框同左缘（同一成组块，浮层不漂）`,
     leftGap(boxTop) === leftGap(top) && stringWidth(boxTop) - leftGap(boxTop) === cardWidth,
     `box=${JSON.stringify(boxTop)} boxLeft=${leftGap(boxTop)} panelLeft=${leftGap(top)}`)
+  check(`PK6@${columns} ${label}：每一行都在 usable 内收口（与右 │ 之间留白 ≥1 列；宿主 hint 型 tag 也一样）`,
+    crowded.length === 0 && /\s│$/u.test(tagRow),
+    `crowded=${JSON.stringify(crowded)} tagRow=${JSON.stringify(tagRow)}`)
+  check(`PK7@${columns} ${label}：过长的宿主 tag 显式截断带 …（不是整段消失）`,
+    tagRow.includes('…'),
+    `tagRow=${JSON.stringify(tagRow)}`)
   s.close()
 }
 
