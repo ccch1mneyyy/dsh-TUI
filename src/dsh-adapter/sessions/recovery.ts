@@ -1,6 +1,6 @@
-/** Best-effort, process-local deep title recovery outside the listing path. */
+/** Best-effort, process-local title and model recovery outside the listing path. */
 import { fileFacts } from './frames.js'
-import { recoverSessionTitle } from './digest.js'
+import { recoverSessionMetadata } from './digest.js'
 import { indexFileStamp, readIndex, writeIndex, type DerivedEntry } from './store.js'
 
 interface RecoveryWork {
@@ -48,28 +48,34 @@ function kick(): void {
 
 async function recover(work: RecoveryWork): Promise<void> {
   try {
-    const recovered = await recoverSessionTitle(work.path, work.bytes)
+    const before = readIndex().get(work.id)?.derived
+    if (before?.revision !== work.revision) return
+    const { title: recovered, model: route } = await recoverSessionMetadata(work.path, work.bytes, {
+      title: !before.titleComplete,
+      model: before.modelComplete !== true,
+    })
     const facts = fileFacts(work.path)
     if (facts?.stamp !== work.stamp) return
-    if (!recovered.complete) {
-      deferRetry(work)
-      return
-    }
+    const incomplete = recovered?.complete === false || route?.complete === false
+    if (incomplete) deferRetry(work)
     const stamp = indexFileStamp()
     const index = readIndex()
     const entry = index.get(work.id)
-    if (entry?.derived?.revision !== work.revision || entry.derived.titleComplete) return
+    if (entry?.derived?.revision !== work.revision) return
     const derived: DerivedEntry = {
       ...entry.derived,
-      title: recovered.title?.text ?? '',
-      titleSource: recovered.title?.source ?? 'fallback',
-      titleComplete: true,
-      hasPrompt: recovered.hasPrompt ?? entry.derived.hasPrompt,
+      ...(recovered?.complete === true && !entry.derived.titleComplete ? {
+        title: recovered.title?.text ?? '',
+        titleSource: recovered.title?.source ?? 'fallback',
+        titleComplete: true,
+        hasPrompt: recovered.hasPrompt ?? entry.derived.hasPrompt,
+      } : {}),
+      ...(route?.complete === true ? { model: route.model, modelComplete: true } : {}),
     }
     index.set(work.id, { ...entry, derived })
     if (indexFileStamp() !== stamp) return
     writeIndex(index)
-    retries.delete(work.id)
+    if (!incomplete) retries.delete(work.id)
     for (const listener of work.listeners) {
       try { listener(derived) } catch { /* UI observers cannot fail recovery. */ }
     }
@@ -81,7 +87,7 @@ async function recover(work: RecoveryWork): Promise<void> {
 }
 
 /** Deduplicate recovery per session/revision and retry damaged logs with backoff. */
-export function scheduleTitleRecovery(work: Omit<RecoveryWork, 'listeners'>, onComplete?: (derived: DerivedEntry) => void): void {
+export function scheduleMetadataRecovery(work: Omit<RecoveryWork, 'listeners'>, onComplete?: (derived: DerivedEntry) => void): void {
   const retry = retries.get(work.id)
   if (retry?.revision !== work.revision) retries.delete(work.id)
   else if (Date.now() < retry.retryAfter) return
@@ -97,7 +103,7 @@ export function scheduleTitleRecovery(work: Omit<RecoveryWork, 'listeners'>, onC
 }
 
 /** A queued or backed-off revision needs no path lookup on another open. */
-export function titleRecoveryNeedsWork(id: string, revision: string, onComplete?: (derived: DerivedEntry) => void): boolean {
+export function metadataRecoveryNeedsWork(id: string, revision: string, onComplete?: (derived: DerivedEntry) => void): boolean {
   const existing = [pending.get(id), running?.id === id ? running : undefined]
     .find(item => item?.revision === revision)
   if (existing?.revision === revision) {

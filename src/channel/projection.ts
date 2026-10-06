@@ -1183,6 +1183,12 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'model.changed':
         if (event.model !== '') state.model = event.model
         return
+      case 'effort.changed':
+        // Backend-set effort (`/effort` on the Claude backend; DSH arrives
+        // per request via `request.header` instead). `null` = cleared back
+        // to the backend default.
+        state.reasoningEffort = event.effort ?? undefined
+        return
       case 'system.prompt':
         // The latest system prompt holds the active instructions (an empty
         // render clears them); the context bar's system segment tracks it.

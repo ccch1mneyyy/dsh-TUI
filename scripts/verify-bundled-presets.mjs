@@ -1,6 +1,6 @@
 /** Registry bridge regression, including relocated assets through the real Loader/Registry/Include. Run after build. */
 import assert from 'node:assert/strict'
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
@@ -82,7 +82,16 @@ assert.deepEqual(delayedDisposals.sort(), ['cordis', 'liangshen', 'minimal', 'pt
 // Relocate the unchanged production modules so asset paths contain URL-sensitive
 // characters on every OS (and a drive letter on Windows). Keep this under the
 // checkout so their normal package imports still resolve; no user profile is used.
-const relocatedRoot = mkdtempSync(join(fileURLToPath(new URL('..', import.meta.url)), '.preset-path # % 中文-'))
+// Sweep leftovers from earlier runs first: on Windows the imported module file
+// can still be locked when the final rmSync runs (or the process was killed),
+// and each run otherwise strands another `.preset-path # % 中文-*` here.
+const checkoutRoot = fileURLToPath(new URL('..', import.meta.url))
+for (const stale of readdirSync(checkoutRoot)) {
+  if (stale.startsWith('.preset-path # % 中文-')) {
+    try { rmSync(join(checkoutRoot, stale), { recursive: true, force: true }) } catch { /* still locked; next run retries */ }
+  }
+}
+const relocatedRoot = mkdtempSync(join(checkoutRoot, '.preset-path # % 中文-'))
 const runtime = new Context()
 let mounted = 0
 try {

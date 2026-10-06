@@ -27,6 +27,7 @@ import {
   DECISION_EVENT_PERMISSIONS,
   decisionHandlersOf,
   decisionRegistryOf,
+  isDecisionHandlerLive,
 } from './decision-guard.js'
 
 /** Toast-bound plugin text (veto reasons) is render-path data: sanitized
@@ -96,7 +97,10 @@ async function runBounded(task: () => unknown, timeoutMs: number): Promise<Bound
  *   logged and skipped like any other invalid shape;
  * - "no opinion" (undefined/null/false) and invalid shapes are logged and
  *   the chain CONTINUES;
- * - the first listener whose NORMALIZED decision is non-undefined wins.
+ * - the first listener whose NORMALIZED decision is non-undefined wins;
+ * - a decision that arrives after the handler was released (grant revoked,
+ *   activation unloaded) is DISCARDED and the chain continues, because a
+ *   handler is awaited: authority can end while its answer is still pending.
  *
  * Handlers come from the host-mediated DecisionEvents registry.  Raw Cordis
  * `ctx.on` listeners are intentionally absent from this path.
@@ -120,17 +124,12 @@ export async function dispatchTuiDecision<T>(
   }
   const started = Date.now()
   for (const handler of listeners) {
-    const permission = DECISION_EVENT_PERMISSIONS[name]
-    const principal = { componentId: handler.componentId, activationId: handler.activationId }
-    if (permission !== undefined
-      // Re-check the handler's declared scope at the concrete payload scope.
-      // GrantStore applies parent-scope grants and narrow deny precedence, so
-      // an event-wide grant cannot bypass a revoked session.
-      && !decisionRegistryOf(ctx).grants.allows(
-        principal,
-        permission,
-        scope ?? handler.scope,
-      )) {
+    // The handler's declared scope and its live grant, checked at the concrete
+    // payload scope. GrantStore applies parent-scope grants and narrow deny
+    // precedence, so an event-wide grant cannot bypass a revoked session; the
+    // same check re-runs after the await below.
+    const effectiveScope = scope ?? handler.scope
+    if (!isDecisionHandlerLive(ctx, handler, effectiveScope)) {
       log(`dsh-tui: ${name} handler from Component "${handler.componentId}" skipped after grant revocation`)
       continue
     }
@@ -163,7 +162,18 @@ export async function dispatchTuiDecision<T>(
       log(`dsh-tui: ${name} listener returned a value that threw during validation; ignored: %o`, error)
       continue
     }
-    if (decision !== undefined) return decision
+    if (decision !== undefined) {
+      // The handler was awaited, so re-check liveness before accepting its
+      // answer: a grant revoked or an activation unloaded during the await
+      // releases the registration, and an answer from a released handler must
+      // not win the chain. Continuing (rather than returning undefined) keeps
+      // the released handler "as if unregistered".
+      if (!isDecisionHandlerLive(ctx, handler, effectiveScope)) {
+        log(`dsh-tui: ${name} handler from Component "${handler.componentId}" answered after its grant or activation was released; decision discarded`)
+        continue
+      }
+      return decision
+    }
   }
   return undefined
 }

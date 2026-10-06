@@ -345,6 +345,56 @@ export function registerDecisionHandler(
   return release
 }
 
+/** Liveness re-check for a handler snapshot taken before an `await`.
+ *
+ * Decision dispatch awaits plugin handlers, and both grant revocation and
+ * deactivation release their registration while that await is pending. A
+ * snapshot captured at loop start therefore cannot authorize a *late* return
+ * value: a revoked or unloaded component must not be able to veto or rewrite a
+ * user flow with an answer that arrives after its authority ended.
+ *
+ * Liveness is the conjunction of two facts, both cheap and both read live:
+ *
+ * - a row for this activation/event/order is still installed (deactivation and
+ *   grant revocation both release the registration, so a released row is gone);
+ * - the grant still allows this principal at the effective scope (covers a
+ *   store change whose change-watcher has not run yet, or a store with no
+ *   watcher at all).
+ *
+ * The installed check compares the row's own identity rather than the map's
+ * internal key: the registry is host-owned storage, and whether a handler is
+ * still live must not depend on how a row happens to be keyed inside it. In
+ * production `registerDecisionHandler` is the only writer and keys rows by
+ * `activation\0event\0order`; keeping the check identity-based leaves that as
+ * an implementation detail instead of a behavioural requirement.
+ */
+export function isDecisionHandlerLive(
+  ctx: Context,
+  handler: RegisteredDecisionHandler,
+  payloadScope?: string,
+): boolean {
+  const registry = registryFor(ctx)
+  const rows = registry.handlers.get(handler.event)
+  if (rows === undefined) return false
+  let installed = false
+  for (const row of rows.values()) {
+    if (row.activationId === handler.activationId
+      && row.event === handler.event
+      && row.order === handler.order) {
+      installed = true
+      break
+    }
+  }
+  if (!installed) return false
+  const permission = eventPermission(handler.event)
+  if (permission === undefined) return true
+  return registry.grants.allows(
+    { componentId: handler.componentId, activationId: handler.activationId },
+    permission,
+    payloadScope ?? handler.scope,
+  )
+}
+
 /** Locale-independent comparator for the declared decision order policy.
  * `localeCompare()` can vary with host ICU settings, which would make the
  * winner depend on the machine running the same admitted component set. */
