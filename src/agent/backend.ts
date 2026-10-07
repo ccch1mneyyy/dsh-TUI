@@ -76,14 +76,24 @@ export interface OAuthCredentialSource {
    * credential rotated meanwhile (a fresh `/login`, another process's
    * refresh) is returned as is, never force-refreshed.
    */
-  fresh(options?: { readonly rejected?: string }): Promise<OAuthAccess | undefined>
+  fresh(options?: { readonly rejected?: string; readonly signal?: AbortSignal }): Promise<OAuthAccess | undefined>
   /** Whether a credential is stored, without touching the network. */
   stored(): Promise<boolean>
+}
+
+/** Host-owned credential refs; token material never enters events or logs. */
+export interface BackendTokenStore {
+  read(ref: string): string | undefined
+  write(ref: string, value: string): void
+  erase(ref: string): void
+  declared(ref: string): boolean
 }
 
 /** Host services a backend may use while detecting or opening. */
 export interface BackendHost {
   readonly cwd: string
+  /** Stored channel tokens, when the host provides its credential service. */
+  readonly tokenStore?: BackendTokenStore
   /** Opt-in diagnostics; never stdout while the TUI renders. */
   debug(message: string): void
   /** User-visible warning (localized by the caller). */
@@ -119,6 +129,8 @@ export interface SessionCatalog {
   preview?(sessionId: string, options?: { readonly cwd?: string; readonly limit?: number }): Promise<readonly PreviewEntry[]>
   rename?(sessionId: string, title: string, cwd?: string): Promise<void>
   delete?(sessionId: string, cwd?: string): Promise<void>
+  /** Omitted means deletion; archive keeps the backend's durable transcript. */
+  readonly deleteAction?: 'archive'
 }
 
 /** Backend-scoped launcher marker and session browser usage notes. */

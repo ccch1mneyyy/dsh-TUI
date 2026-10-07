@@ -1466,6 +1466,7 @@ export function MessageList({
               rowId={row.id}
               kind={row.kind}
               text={displayText}
+              interruptBackend={row.interruptBackend}
               images={row.images}
               textFull={row.kind === 'reasoning' ? row.text : undefined}
               executionTarget={row.executionTarget}
@@ -1543,6 +1544,7 @@ type MemoRowProps = {
   rowId: number
   kind: ChatRow['kind']
   text: string
+  interruptBackend?: string
   images: readonly TranscriptImage[] | undefined
   /** Reasoning rows: the FULL un-revealed text — the live three-line preview
    *  ticker follows the newest arrived content (never the reveal), while the
@@ -1652,6 +1654,7 @@ function TranscriptRow({
   rowId,
   kind,
   text,
+  interruptBackend,
   images,
   textFull,
   executionTarget,
@@ -1930,7 +1933,7 @@ function TranscriptRow({
     case 'interrupt':
       return (
         <Box marginTop={1} ref={ref}>
-          <TurnInterruptedRow />
+          <TurnInterruptedRow backendLabel={interruptBackend} />
         </Box>
       )
     case 'turn-summary':

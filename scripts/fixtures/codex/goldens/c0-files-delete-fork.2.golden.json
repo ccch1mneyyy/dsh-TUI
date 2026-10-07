@@ -8,8 +8,10 @@
     "delta:text",
     "delta:text",
     "assistant.message",
+    "assistant.attempt.end",
     "context.capacity",
-    "assistant.message",
+    "usage",
+    "context.usage",
     "session.status",
     "step.end",
     "turn.end"
@@ -44,6 +46,11 @@
       "cacheWrite": 191
     },
     "todos": [],
-    "notices": []
+    "notices": [],
+    "contextMeasure": {
+      "type": "context.usage",
+      "used": 0,
+      "max": 246400
+    }
   }
 }

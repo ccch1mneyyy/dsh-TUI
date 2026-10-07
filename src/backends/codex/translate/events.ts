@@ -8,6 +8,17 @@ import type { AgentEventType } from '../../../agent/events.js'
  */
 export function codexEmits(type: AgentEventType): boolean {
   switch (type) {
+    case 'subagent.start':
+    case 'subagent.progress':
+    case 'subagent.end':
+    case 'task.start':
+    case 'task.output':
+    case 'task.end':
+    case 'tasks.snapshot':
+    case 'goal.change':
+    case 'commands.changed':
+    case 'session.color':
+    case 'session.reset':
     case 'session.ready':
     case 'session.title':
     case 'session.status':
@@ -20,6 +31,9 @@ export function codexEmits(type: AgentEventType): boolean {
     case 'assistant.attempt.start':
     case 'assistant.delta':
     case 'assistant.message':
+    case 'assistant.attempt.end':
+    case 'usage':
+    case 'context.usage':
     case 'tool.call':
     case 'tool.result':
     case 'tool.progress':
@@ -41,30 +55,14 @@ export function codexEmits(type: AgentEventType): boolean {
     case 'question.request':
     case 'question.settled':
       return true
-    // Not yet (later phases of docs/codex-backend-design.md §11) or not a
-    // Codex concept: subagents and background tasks (C4), session colour and
-    // in-place reset (C3/C2), goals (C4, N6), DSH presets / prompts /
-    // request headers, compaction summary progress, context categories,
-    // agent-message relays, abandoned attempts.
-    case 'session.color':
-    case 'session.reset':
-    case 'subagent.start':
-    case 'subagent.progress':
-    case 'subagent.end':
-    case 'task.start':
+    // No native source: task metadata patches, compaction summary progress,
+    // DSH presets/prompts/request headers, or direct agent-message receipts.
     case 'task.update':
-    case 'task.output':
-    case 'task.end':
-    case 'tasks.snapshot':
     case 'compaction.progress':
-    case 'context.usage':
-    case 'commands.changed':
-    case 'goal.change':
     case 'preset.selected':
     case 'system.prompt':
     case 'request.header':
     case 'agent.message':
-    case 'assistant.attempt.end':
       return false
     default: {
       const unhandled: never = type

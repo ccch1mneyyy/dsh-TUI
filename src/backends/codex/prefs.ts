@@ -14,17 +14,21 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from '../../utils/paths.js'
 import { writeFileAtomic } from '../shared/atomic-file.js'
-import { isCodexModeId, type CodexModeId } from './modes.js'
+import { CODEX_MODE_PARAMS, DEFAULT_CODEX_MODE, isCodexModeId, type CodexModeId } from './modes.js'
+import { rec, type Rec } from './narrow.js'
 
 export interface CodexPrefsData {
   readonly model?: string
   readonly effort?: string
   readonly mode?: CodexModeId
+  /** Collaboration mode is independent of the permission preset. */
+  readonly plan?: boolean
   /** The thread a bare `dsh-tui --backend codex --resume` opens (the
    *  launcher reads this field directly). */
   readonly lastSession?: string
   /** This install's last use of each thread (epoch ms; the newest kept). */
   readonly lastUsed?: Readonly<Record<string, number>>
+  readonly colors?: Readonly<Record<string, string>>
 }
 
 /** A patch: a value sets the field, `null` clears it. */
@@ -32,7 +36,9 @@ export interface CodexPrefsPatch {
   readonly model?: string | null
   readonly effort?: string | null
   readonly mode?: CodexModeId | null
+  readonly plan?: boolean | null
   readonly lastSession?: string | null
+  readonly colors?: Readonly<Record<string, string>>
 }
 
 export interface CodexPrefs {
@@ -49,6 +55,7 @@ function parse(parsed: unknown): CodexPrefsData {
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
   const record = parsed as Record<string, unknown>
   const lastUsed: Record<string, number> = {}
+  const colors = Object.fromEntries(Object.entries(rec(record.colors) ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === 'string').slice(-LAST_USED_LIMIT))
   if (record.lastUsed !== null && typeof record.lastUsed === 'object' && !Array.isArray(record.lastUsed)) {
     for (const [id, value] of Object.entries(record.lastUsed as Record<string, unknown>)) {
       if (typeof value === 'number' && Number.isFinite(value)) lastUsed[id] = value
@@ -58,19 +65,22 @@ function parse(parsed: unknown): CodexPrefsData {
     ...(typeof record.model === 'string' && record.model !== '' ? { model: record.model } : {}),
     ...(typeof record.effort === 'string' && record.effort !== '' ? { effort: record.effort } : {}),
     ...(isCodexModeId(record.mode) ? { mode: record.mode } : {}),
+    ...(typeof record.plan === 'boolean' ? { plan: record.plan } : {}),
     ...(typeof record.lastSession === 'string' && record.lastSession !== '' ? { lastSession: record.lastSession } : {}),
     ...(Object.keys(lastUsed).length === 0 ? {} : { lastUsed }),
+    ...(Object.keys(colors).length === 0 ? {} : { colors }),
   }
 }
 
 function patched(current: CodexPrefsData, patch: CodexPrefsPatch): CodexPrefsData {
   const next: Record<string, unknown> = { ...current }
-  for (const key of ['model', 'effort', 'mode', 'lastSession'] as const) {
+  for (const key of ['model', 'effort', 'mode', 'plan', 'lastSession'] as const) {
     const value = patch[key]
     if (value === undefined) continue
     if (value === null) delete next[key]
     else next[key] = value
   }
+  if (patch.colors !== undefined) next.colors = Object.fromEntries(Object.entries(patch.colors).slice(-LAST_USED_LIMIT))
   return next as CodexPrefsData
 }
 
@@ -86,6 +96,24 @@ function forgotten(current: CodexPrefsData, threadId: string): CodexPrefsData {
   if (Object.keys(lastUsed).length === 0) delete next.lastUsed
   if (current.lastSession === threadId) delete next.lastSession
   return next as CodexPrefsData
+}
+
+/** Per-field start overrides: explicit prefs > config/read > defaults.
+ * An unreadable config is not evidence that a user has no configuration. */
+export function resolveCodexStartOptions(prefs: CodexPrefsData, config?: Rec): Rec {
+  const mode = prefs.mode === undefined ? undefined : CODEX_MODE_PARAMS[prefs.mode]
+  const defaults = CODEX_MODE_PARAMS[DEFAULT_CODEX_MODE]
+  return {
+    ...(mode !== undefined ? { approvalPolicy: mode.approvalPolicy } : config !== undefined && config.approval_policy == null ? { approvalPolicy: defaults.approvalPolicy } : {}),
+    ...(mode !== undefined ? { sandbox: mode.sandbox } : config !== undefined && config.sandbox_mode == null ? { sandbox: defaults.sandbox } : {}),
+    ...(prefs.model === undefined ? {} : { model: prefs.model }),
+    ...(prefs.effort === undefined ? {} : { config: { model_reasoning_effort: prefs.effort } }),
+  }
+}
+
+/** Unwrap config/read without accepting a malformed answer as defaults. */
+export function codexConfigOf(answer: unknown): Rec | undefined {
+  return rec(rec(answer)?.config)
 }
 
 /** The file-backed prefs under `<dir>` (default `~/.dsh-tui/backends/codex`). */

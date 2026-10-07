@@ -63,6 +63,7 @@ export function claudeEmits(type: AgentEventType): boolean {
     // `tool_progress` elapsed time).
     case 'tool.output':
     case 'compaction.progress':
+    case 'usage':
     case 'context.usage':
     case 'effort.changed':
     case 'goal.change':

@@ -23,15 +23,16 @@
 import { randomUUID } from 'node:crypto'
 import type { PermissionDecision, QuestionAnswers } from '../../../agent/capabilities.js'
 import type { AgentEvent, PermissionOptionView, PermissionOutcome, PermissionRequestView, QuestionItemView } from '../../../agent/events.js'
+import { createElicitationForm, createElicitationUrlAsk, elicitationNotices } from '../../../channel/elicitation.js'
 import { t } from '../../../i18n.js'
 import { displayPath } from '../../shared/display-path.js'
-import { arr, errorText, rec, str, type Rec } from '../narrow.js'
+import { arr, errorText, num, rec, str, type Rec } from '../narrow.js'
 import { SERVER_REQUEST } from '../protocol/index.js'
-import { RPC_ERROR } from '../rpc/client.js'
+import { REAL_CLOCK, RPC_ERROR, type RpcClock } from '../rpc/client.js'
 import type { HubServerRequest } from '../rpc/hub.js'
 import { unwrapShell } from '../translate/commands.js'
 
-type Kind = 'command' | 'file' | 'permissions' | 'question'
+type Kind = 'command' | 'file' | 'permissions' | 'question' | 'elicitation'
 
 /** One offered permission choice and the decision it sends. */
 interface Choice {
@@ -50,6 +51,9 @@ interface Parked {
   readonly questionIds?: readonly string[]
   /** The outcome the user picked (set once answered). */
   answered?: PermissionOutcome
+  askId?: string
+  answerQuestion?: (answers: QuestionAnswers) => void
+  cancelTimer?: () => void
 }
 
 export interface ApprovalBridgeDeps {
@@ -63,9 +67,9 @@ export interface ApprovalBridgeDeps {
   enqueueFollowup(id: string, text: string): void
   /** Interrupt the running turn (a cancelled question). */
   interruptTurn(): void
+  readonly clock?: RpcClock
 }
 
-/** The command an approval names, unwrapped for display. */
 /** The command an approval names: the lossless unwrap of a shell wrapper,
  *  else the command exactly as it will run (never Codex's parsed reading of
  *  it — a prompt must not show a different command than the one approved). */
@@ -176,8 +180,9 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
   const settle = (entry: Parked, outcome: PermissionOutcome): void => {
     if (parked.get(entry.key) !== entry) return
     parked.delete(entry.key)
-    deps.emit([entry.kind === 'question'
-      ? { type: 'question.settled', requestId: entry.key }
+    entry.cancelTimer?.()
+    deps.emit([entry.kind === 'question' || entry.kind === 'elicitation'
+      ? { type: 'question.settled', requestId: entry.askId ?? entry.key }
       : { type: 'permission.settled', requestId: entry.key, outcome }])
   }
 
@@ -284,6 +289,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           })
           return [{
             question: textValue,
+            ...(question.isSecret === true ? { secret: true as const } : {}),
             ...(header === undefined || header === '' ? {} : { header }),
             options,
             // No free-text row unless the question allows "other" (or has no options).
@@ -295,15 +301,60 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           return
         }
         const view = { requestId: request.key, ...(itemId === undefined ? {} : { callId: itemId }), ...agentOf(params), questions }
-        park({ key: request.key, request, kind: 'question', ...(itemId === undefined ? {} : { itemId }), questionIds: ids }, { type: 'question.request', request: view })
+        const entry: Parked = { key: request.key, request, kind: 'question', ...(itemId === undefined ? {} : { itemId }), questionIds: ids }
+        park(entry, { type: 'question.request', request: view })
+        const autoMs = num(params.autoResolutionMs)
+        if (autoMs !== undefined && autoMs >= 0) {
+          const clock = deps.clock ?? REAL_CLOCK
+          const timer = clock.setTimeout(() => {
+            respondQuestion(entry.key, { answers: questions.map(question => ({ selected: question.options[0] === undefined ? [] : [question.options[0].label] })) })
+            deps.emit([{ type: 'notice', level: 'info', key: `codex-auto-answer:${entry.key}`, text: t('codex-question-auto-answered') }])
+          }, autoMs)
+          entry.cancelTimer = () => clock.clearTimeout(timer)
+        }
         return
       }
-      case SERVER_REQUEST.elicitation:
-        // MCP forms arrive with the shared elicitation mapping (N2, C2):
-        // until then the server hears a cancel, and the user a notice.
-        request.respond({ action: 'cancel', content: null, _meta: null })
-        deps.emit([{ type: 'notice', level: 'warning', key: 'codex-elicitation', text: t('codex-elicitation-unsupported', { server: str(params.serverName) ?? '' }) }])
+      case SERVER_REQUEST.elicitation: {
+        const serverName = str(params.serverName) ?? ''
+        const mode = str(params.mode) ?? 'form'
+        const source = { serverName, title: str(params.title), message: str(params.message), requestedSchema: params.requestedSchema, url: str(params.url) }
+        const entry: Parked = { key: request.key, request, kind: 'elicitation', askId: request.key }
+        const finish = (action: 'accept' | 'decline', content: unknown = null): void => {
+          entry.answered = action === 'accept' ? 'allow-once' : 'rejected'
+          request.respond({ action, content, _meta: null })
+        }
+        const show = (questions: readonly QuestionItemView[]): void => {
+          deps.emit([{ type: 'question.request', request: { requestId: entry.askId!, ...agentOf(params), questions } }])
+        }
+        if (mode === 'url') {
+          const ask = createElicitationUrlAsk(source)
+          if (ask === undefined) {
+            request.respond({ action: 'decline', content: null, _meta: null })
+            deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${request.key}`, text: elicitationNotices.urlMissing(serverName) }])
+            return
+          }
+          entry.answerQuestion = answers => finish(ask.accepted(answers) ? 'accept' : 'decline')
+          parked.set(entry.key, entry)
+          deps.emit([{ type: 'notice', level: 'info', key: `elicit-url:${request.key}`, text: elicitationNotices.urlOpen(serverName, source.url!) }])
+          show(ask.questions)
+        } else if (mode === 'form' || mode === 'openai/form' || mode === 'openaiForm') {
+          const form = createElicitationForm(source)
+          let round = 0
+          entry.answerQuestion = answers => {
+            const step = form.answer(answers)
+            if (step.kind !== 'reask') { finish(step.kind, step.kind === 'accept' ? step.content : null); return }
+            deps.emit([{ type: 'question.settled', requestId: entry.askId! }])
+            entry.askId = `${request.key}~${++round}`
+            show(step.questions)
+          }
+          parked.set(entry.key, entry)
+          show(form.questions)
+        } else {
+          request.respond({ action: 'decline', content: null, _meta: null })
+          deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${request.key}`, text: elicitationNotices.unsupported(serverName, mode) }])
+        }
         return
+      }
       default:
         refuse(request, 'not a prompt this backend presents')
     }
@@ -357,8 +408,11 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
   }
 
   const respondQuestion = (requestId: string, answers: QuestionAnswers): void => {
-    const entry = parked.get(requestId)
-    if (entry === undefined || entry.kind !== 'question' || entry.answered !== undefined) return
+    const entry = parked.get(requestId) ?? [...parked.values()].find(value => value.askId === requestId)
+    if (entry === undefined || entry.answered !== undefined) return
+    if (entry.kind === 'elicitation') { entry.answerQuestion?.(answers); return }
+    if (entry.kind !== 'question') return
+    entry.cancelTimer?.()
     const map: Record<string, { answers: string[] }> = {}
     entry.questionIds?.forEach((id, index) => {
       const answer = answers.answers[index]
@@ -371,8 +425,15 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
   }
 
   const cancelQuestion = (requestId: string): void => {
-    const entry = parked.get(requestId)
-    if (entry === undefined || entry.kind !== 'question' || entry.answered !== undefined) return
+    const entry = parked.get(requestId) ?? [...parked.values()].find(value => value.askId === requestId)
+    if (entry === undefined || entry.answered !== undefined) return
+    if (entry.kind === 'elicitation') {
+      entry.answered = 'cancelled'
+      entry.request.respond({ action: 'cancel', content: null, _meta: null })
+      return
+    }
+    if (entry.kind !== 'question') return
+    entry.cancelTimer?.()
     entry.answered = 'cancelled'
     entry.request.respond({ answers: {} })
     deps.interruptTurn()
@@ -384,6 +445,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
       if (entry.answered === undefined) {
         try {
           if (entry.kind === 'question') entry.request.respond({ answers: {} })
+          else if (entry.kind === 'elicitation') entry.request.respond({ action: 'cancel', content: null, _meta: null })
           else if (entry.kind === 'permissions') entry.request.respond({ permissions: {}, scope: 'turn' })
           else entry.request.respond({ decision: 'cancel' })
         } catch (error) {
@@ -403,13 +465,13 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
     /** `serverRequest/resolved`: the server is done with a request. */
     resolved(requestId: unknown): void {
       for (const entry of [...parked.values()]) {
-        if (entry.request.id === requestId && entry.request.live()) settle(entry, entry.answered ?? 'cancelled')
+        if (entry.request.id === requestId) settle(entry, entry.answered ?? 'cancelled')
       }
     },
     /** An item finished: an answered prompt about it is over. */
     itemCompleted(itemId: string): void {
       for (const entry of [...parked.values()]) {
-        if (entry.itemId === itemId && entry.answered !== undefined) settle(entry, entry.answered)
+        if (entry.itemId === itemId) settle(entry, entry.answered ?? 'cancelled')
       }
     },
     /** A turn ended: no prompt of it can still be answered. */

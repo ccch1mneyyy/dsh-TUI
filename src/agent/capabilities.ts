@@ -250,6 +250,8 @@ export interface SessionCapabilities {
     peekSettingsImport(): { readonly baseUrl?: string; readonly tiers: Readonly<Record<string, string>> } | undefined
   }
   readonly compact?: { run(): Promise<void> }
+  /** Run the backend's own project-instructions initialization. */
+  readonly init?: { run(): Promise<void> }
   /**
    * Rewind to a user message (`anchor` = its `user.message.anchor`):
    * `preview` reports what restoring the files would change (throws when
@@ -275,6 +277,8 @@ export interface SessionCapabilities {
     history?(agentId: string, window?: SubagentTranscriptWindow): Promise<SubagentTranscriptPage>
     /** How subagent messages reach this session. */
     messaging?: 'parent-mediated'
+    /** Native model tool used by the parent to relay messages. */
+    readonly messagingTool?: string
   }
   /**
    * Background tasks: `stop` asks the backend to stop one; `readOutput`
@@ -337,6 +341,9 @@ export interface SessionCapabilities {
   readonly auth?: {
     readonly oauthProvider?: string
     status(): Promise<SessionAuthView>
+    /** A backend-owned login flow; the optional callback offers host OAuth
+     * sign-in and reports whether a credential was saved. */
+    login?(loginOAuth?: () => Promise<boolean>): Promise<void>
     reconnect(): Promise<void>
   }
   /**
@@ -387,6 +394,8 @@ export interface SubagentTranscriptPage {
   /** Messages the disk transcript holds before this page's first message
    *  (the next older window asks for skipFromStart - count). */
   readonly skippedFromStart: number
+  /** Opaque cursor when the native source has no absolute record count. */
+  readonly sourceCursor?: string
 }
 
 /** An older slice request: `count` messages ending just before
@@ -394,4 +403,5 @@ export interface SubagentTranscriptPage {
 export interface SubagentTranscriptWindow {
   readonly count: number
   readonly skipFromStart: number
+  readonly sourceCursor?: string
 }

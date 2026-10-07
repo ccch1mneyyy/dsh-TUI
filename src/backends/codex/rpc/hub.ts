@@ -9,8 +9,8 @@
  * - Routing: a notification or server request carrying a thread id goes to
  *   the sink attached for that thread (or for the thread it was routed to,
  *   a subagent's parent); one without a thread id goes to the global
- *   listeners. Nothing unrouted is answered on a session's behalf except
- *   with an error, so the server never waits forever.
+ *   listeners. Unknown children wait, including approvals, while thread/read
+ *   resolves their parent chain. True orphans receive an error.
  * - Server requests are identified per connection generation: their ids
  *   restart with every child (`codex:<generation>:<id>`). A request whose
  *   id is still pending arrives again when a running thread is rejoined
@@ -25,6 +25,7 @@
  *   environment) form a fingerprint; equal fingerprints share a hub.
  */
 import { createHash } from 'node:crypto'
+import { t } from '../../../i18n.js'
 import { CLIENT, NOTIFY, OPT_OUT_NOTIFICATIONS, SERVER_REQUEST } from '../protocol/index.js'
 import type { InitializeParams } from '../protocol/index.js'
 import { errorText, rec, str, type Rec } from '../narrow.js'
@@ -57,6 +58,12 @@ export interface HubServerRequest {
   live(): boolean
 }
 
+/** A bounded hub diagnostic, broadcast and replayed to every attached sink. */
+export interface HubDiagnostic {
+  readonly kind: 'debug' | 'stderr'
+  readonly message: string
+}
+
 /** What a session attaches for its thread. */
 export interface ThreadSink {
   notification(method: string, params: Rec): void
@@ -65,6 +72,8 @@ export interface ThreadSink {
   connectionLost(error: Error, permanent: boolean): void
   /** A restarted child finished its handshake: resubscribe. */
   connectionRestored(): void
+  /** Startup diagnostics are replayed on attach; subsequent ones fan out. */
+  diagnostic?(entry: HubDiagnostic): void
 }
 
 export interface HubSettings {
@@ -72,6 +81,9 @@ export interface HubSettings {
   readonly args: readonly string[]
   readonly env: Readonly<Record<string, string>>
   readonly cwd: string
+  /** Credential mode and channel-private env participate in hub identity. */
+  readonly credentialMode?: 'codex' | 'external' | 'channel' | 'native-fallback'
+  readonly injectedEnvKeys?: readonly string[]
 }
 
 export interface CodexHubDeps {
@@ -99,6 +111,10 @@ export interface CodexHub {
   readonly generation: number
   readonly state: HubState
   readonly fingerprint: string
+  /** Last 200 diagnostics, including stderr emitted before a session attached. */
+  readonly diagnostics: readonly HubDiagnostic[]
+  /** One-time startup finding survives diagnostic-history eviction. */
+  readonly bubblewrapMissing: boolean
   /** A request on the live connection (waits for its handshake). */
   call<R = unknown>(method: string, params?: unknown, options?: CallOptions): Promise<R>
   attach(threadId: string, sink: ThreadSink): () => void
@@ -115,6 +131,12 @@ export interface CodexHub {
 const DEFAULT_IDLE_MS = 30_000
 const DEFAULT_RESTART_DELAYS_MS: readonly number[] = [500, 2000, 5000]
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 20_000
+const ROUTE_BUFFER_LIMIT = 1000
+const DIAGNOSTIC_LIMIT = 200
+
+type BufferedMessage =
+  | { readonly kind: 'notification'; readonly method: string; readonly params: Rec }
+  | { readonly kind: 'request'; readonly request: HubServerRequest }
 
 /** Environment keys that change what a child does (the fingerprint input). */
 const RELEVANT_ENV = /^(?:CODEX_|OPENAI_|DSH_TUI_CODEX_)/u
@@ -122,8 +144,9 @@ const RELEVANT_ENV = /^(?:CODEX_|OPENAI_|DSH_TUI_CODEX_)/u
 /** A stable digest of what makes two hubs interchangeable (values hashed,
  *  never kept). */
 export function hubFingerprint(settings: HubSettings): string {
-  const env = Object.entries(settings.env).filter(([key]) => RELEVANT_ENV.test(key)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-  return createHash('sha256').update(JSON.stringify({ executable: settings.executable, args: settings.args, env })).digest('hex').slice(0, 16)
+  const injected = new Set(settings.injectedEnvKeys ?? [])
+  const env = Object.entries(settings.env).filter(([key]) => RELEVANT_ENV.test(key) || injected.has(key)).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  return createHash('sha256').update(JSON.stringify({ executable: settings.executable, args: settings.args, env, credentialMode: settings.credentialMode })).digest('hex').slice(0, 16)
 }
 
 /** The thread a message concerns, when it names one. */
@@ -133,13 +156,18 @@ export function threadOf(params: Rec): string | undefined {
 
 /** Create a hub (no registry: tests and the registry below). */
 export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): CodexHub {
-  const debug = deps.debug ?? (() => undefined)
+  const logDebug = deps.debug ?? (() => undefined)
   const clock = deps.clock ?? REAL_CLOCK
   const factory = deps.transportFactory ?? spawnTransport
   const delays = deps.restartDelaysMs ?? DEFAULT_RESTART_DELAYS_MS
   const fingerprint = hubFingerprint(settings)
   const sinks = new Map<string, ThreadSink>()
   const routes = new Map<string, string>()
+  const parents = new Map<string, string | undefined>()
+  const parentReads = new Map<string, Promise<string | undefined>>()
+  const buffered = new Map<string, { readonly generation: number; readonly messages: BufferedMessage[] }>()
+  const diagnostics: HubDiagnostic[] = []
+  let bubblewrapMissing = false
   const globals = new Set<(method: string, params: Rec) => void>()
   const globalRequests = new Map<string, (request: HubServerRequest) => void>()
   let state: HubState = 'starting'
@@ -156,9 +184,28 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
   /** Server requests of the live generation not answered yet. */
   const pendingServer = new Map<RequestId, HubServerRequest>()
 
+  const report = (entry: HubDiagnostic): void => {
+    if (entry.kind === 'stderr' && /bubblewrap/iu.test(entry.message)) bubblewrapMissing = true
+    diagnostics.push(entry)
+    if (diagnostics.length > DIAGNOSTIC_LIMIT) diagnostics.shift()
+    for (const sink of new Set(sinks.values())) {
+      try { sink.diagnostic?.(entry) } catch { logDebug('codex hub: diagnostic callback threw') }
+    }
+  }
+  const debug = (message: string): void => {
+    logDebug(message)
+    report({ kind: 'debug', message })
+  }
+
   const sinkOf = (threadId: string | undefined): ThreadSink | undefined => {
-    if (threadId === undefined) return undefined
-    return sinks.get(threadId) ?? (routes.has(threadId) ? sinks.get(routes.get(threadId)!) : undefined)
+    const seen = new Set<string>()
+    while (threadId !== undefined && !seen.has(threadId)) {
+      const sink = sinks.get(threadId)
+      if (sink !== undefined) return sink
+      seen.add(threadId)
+      threadId = routes.get(threadId) ?? parents.get(threadId)
+    }
+    return undefined
   }
   const eachSink = (visit: (sink: ThreadSink) => void): void => {
     for (const sink of [...new Set(sinks.values())]) {
@@ -170,10 +217,106 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
     }
   }
 
+  const deliver = (sink: ThreadSink, message: BufferedMessage): void => {
+    try {
+      if (message.kind === 'notification') sink.notification(message.method, message.params)
+      else if (message.request.live()) sink.serverRequest(message.request)
+    } catch (error) {
+      debug(`codex hub: sink callback threw (${errorText(error)})`)
+      if (message.kind === 'request') message.request.respondError(RPC_ERROR.internal, 'dsh-tui failed to handle the request')
+    }
+  }
+
+  const flush = (threadId: string, sink: ThreadSink): void => {
+    const queue = buffered.get(threadId)
+    if (queue === undefined) return
+    // Keep the queue registered during callbacks: reentrant arrivals append
+    // after what was already waiting instead of overtaking it.
+    while (queue.messages.length > 0) deliver(sink, queue.messages.shift()!)
+    if (buffered.get(threadId) === queue) buffered.delete(threadId)
+  }
+
+  const flushKnownRoutes = (): void => {
+    for (const threadId of buffered.keys()) {
+      const sink = sinkOf(threadId)
+      if (sink !== undefined) flush(threadId, sink)
+    }
+  }
+
+  const readParent = (threadId: string, gen: number): Promise<string | undefined> => {
+    const existing = parentReads.get(threadId)
+    if (existing !== undefined) return existing
+    const reading = ready.then(async () => {
+      if (generation !== gen || state === 'closed') return undefined
+      const answer = rec(await client?.call(CLIENT.threadRead, { threadId, includeTurns: false }, { timeoutMs: 5000 }))
+      const parent = str(rec(answer?.thread)?.parentThreadId)
+      if (generation === gen) parents.set(threadId, parent)
+      return parent
+    }).catch(() => {
+      if (generation === gen && state !== 'closed') {
+        parents.set(threadId, undefined)
+        debug(`codex hub: could not read the parent of thread ${threadId}`)
+      }
+      return undefined
+    })
+    parentReads.set(threadId, reading)
+    void reading.then(() => { if (parentReads.get(threadId) === reading) parentReads.delete(threadId) })
+    return reading
+  }
+
+  const resolveSink = async (threadId: string, gen: number): Promise<ThreadSink | undefined> => {
+    const seen = new Set<string>()
+    let current: string | undefined = threadId
+    while (current !== undefined && generation === gen && state !== 'closed') {
+      const sink = sinkOf(current)
+      if (sink !== undefined) return sink
+      if (seen.has(current)) return undefined
+      seen.add(current)
+      current = routes.get(current) ?? (parents.has(current) ? parents.get(current) : await readParent(current, gen))
+    }
+    return undefined
+  }
+
+  const routeMessage = (threadId: string, message: BufferedMessage): void => {
+    let queue = buffered.get(threadId)
+    if (queue === undefined) {
+      const sink = sinkOf(threadId)
+      if (sink !== undefined) { deliver(sink, message); return }
+      queue = { generation, messages: [] }
+      buffered.set(threadId, queue)
+      const waiting = queue
+      void resolveSink(threadId, generation).then(sink => {
+        if (buffered.get(threadId) !== waiting || waiting.generation !== generation || state === 'closed') return
+        if (sink !== undefined) { flush(threadId, sink); return }
+        buffered.delete(threadId)
+        let warned = false
+        for (const held of waiting.messages) {
+          if (held.kind === 'notification') {
+            debug(`codex hub: dropped ${held.method} for unattached thread ${threadId}`)
+          } else if (held.request.live()) {
+            held.request.respondError(RPC_ERROR.internal, 'dsh-tui could not route the subagent request')
+            warned = true
+          }
+        }
+        if (warned) handleNotification(NOTIFY.warning, { message: t('codex-orphan-request'), threadId: null })
+      })
+    }
+    queue.messages.push(message)
+    if (queue.messages.length > ROUTE_BUFFER_LIMIT) {
+      // Approvals must survive the lookup. Only notifications may be shed;
+      // an all-request queue remains until the bounded parent lookup ends.
+      const oldest = queue.messages.findIndex(entry => entry.kind === 'notification')
+      if (oldest !== -1) {
+        queue.messages.splice(oldest, 1)
+        debug(`codex hub: route buffer overflow for thread ${threadId}; dropped oldest notification`)
+      }
+    }
+  }
+
   const handleRequest = (connection: RpcClient, gen: number, id: RequestId, method: string, params: Rec): undefined => {
     const redelivered = pendingServer.has(id)
     let answered = false
-    const live = (): boolean => client === connection && generation === gen && state !== 'closed'
+    const live = (): boolean => client === connection && generation === gen && state !== 'closed' && pendingServer.has(id)
     const request: HubServerRequest = {
       key: `codex:${gen}:${String(id)}`,
       id,
@@ -197,14 +340,8 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
     }
     if (!redelivered) pendingServer.set(id, request)
     const threadId = threadOf(params)
-    const sink = sinkOf(threadId)
-    if (sink !== undefined) {
-      try {
-        sink.serverRequest(request)
-      } catch (error) {
-        debug(`codex hub: ${method} sink threw (${errorText(error)})`)
-        request.respondError(RPC_ERROR.internal, 'dsh-tui failed to handle the request')
-      }
+    if (threadId !== undefined && method !== SERVER_REQUEST.currentTime) {
+      routeMessage(threadId, { kind: 'request', request })
       return undefined
     }
     const global = globalRequests.get(method)
@@ -228,16 +365,7 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
     }
     const threadId = threadOf(params)
     if (threadId !== undefined) {
-      const sink = sinkOf(threadId)
-      if (sink === undefined) {
-        debug(`codex hub: dropped ${method} for unattached thread ${threadId}`)
-        return
-      }
-      try {
-        sink.notification(method, params)
-      } catch (error) {
-        debug(`codex hub: ${method} sink threw (${errorText(error)})`)
-      }
+      routeMessage(threadId, { kind: 'notification', method, params })
       return
     }
     for (const listener of [...globals]) {
@@ -253,6 +381,8 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
   const connect = (): Promise<InitializeInfo> => {
     const gen = ++generation
     pendingServer.clear()
+    buffered.clear()
+    parentReads.clear()
     let connection!: RpcClient
     const child = factory({
       executable: settings.executable,
@@ -261,7 +391,8 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
       cwd: settings.cwd,
       onLine: line => { if (client === connection) connection.receive(line) },
       onStderr: line => {
-        debug(`[codex-stderr] ${line}`)
+        logDebug(`[codex-stderr] ${line}`)
+        report({ kind: 'stderr', message: line })
         deps.stderr?.(line)
       },
       onExit: exit => onExit(connection, exit),
@@ -334,6 +465,8 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
       : new CodexRpcError(`codex app-server exited (${exit.signal ?? `code ${String(exit.code)}`})`, RPC_ERROR.internal)
     connection.close(reason)
     pendingServer.clear()
+    buffered.clear()
+    parentReads.clear()
     if (state === 'closed') return
     debug(`codex hub: ${reason.message}`)
     const wasReady = state === 'ready'
@@ -367,6 +500,8 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
     get generation() { return generation },
     get state() { return state },
     fingerprint,
+    get diagnostics() { return diagnostics.slice() },
+    get bubblewrapMissing() { return bubblewrapMissing },
 
     async call<R = unknown>(method: string, params?: unknown, options?: CallOptions): Promise<R> {
       if (state === 'closed') throw new CodexRpcError('the Codex connection is closed', RPC_ERROR.internal)
@@ -378,14 +513,20 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
 
     attach(threadId, sink) {
       sinks.set(threadId, sink)
+      for (const entry of diagnostics.slice()) {
+        try { sink.diagnostic?.(entry) } catch { logDebug('codex hub: diagnostic callback threw') }
+      }
+      flushKnownRoutes()
       return () => {
-        if (sinks.get(threadId) === sink) sinks.delete(threadId)
+        if (sinks.get(threadId) !== sink) return
+        sinks.delete(threadId)
         for (const [from, to] of [...routes]) if (to === threadId) routes.delete(from)
       }
     },
 
     route(threadId, toThreadId) {
       routes.set(threadId, toThreadId)
+      flushKnownRoutes()
       return () => { if (routes.get(threadId) === toThreadId) routes.delete(threadId) }
     },
 
@@ -424,6 +565,8 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
       closing = (async () => {
         connection?.close(new CodexRpcError('the Codex connection is closed', RPC_ERROR.internal))
         pendingServer.clear()
+        buffered.clear()
+        parentReads.clear()
         await child?.close()
       })()
       registry.delete(fingerprint)

@@ -9,9 +9,7 @@
  * localized tool name comes from `displayKey`, so a language switch repaints.
  *
  * Diffs: an added file's `diff` is its content, a deleted one's is the old
- * content (C0 V13), an update is an unheaded unified hunk. Until the shared
- * patch view exists (N5, C2) an update renders as old/new text rebuilt from
- * its hunks (line numbers restart at 1 for each file).
+ * content (C0 V13); updates keep their unified hunks and real line numbers.
  */
 import type { ContentBlockView } from '../../../agent/events.js'
 import type { ToolFileDiff } from '../../../adapter/ports/channel-view.js'
@@ -118,7 +116,7 @@ function diffsOf(item: Rec): ToolFileDiff[] {
         return [{ path, oldText: diff, newText: '' }]
       default: {
         const moved = str(kind?.move_path)
-        return [{ path: moved ?? path, ...hunkTexts(diff) }]
+        return [{ path, patch: diff, change: 'update', ...(moved === undefined ? {} : { movePath: moved }) }]
       }
     }
   })
@@ -192,7 +190,7 @@ export function toolCallOf(item: Rec, cwd: string): CodexToolCall | undefined {
       return { name: 'sleep', argsJson: JSON.stringify({ durationMs: ms ?? null }), presentation: { card: 'generic', title: ms === undefined ? '' : `${Math.round(ms / 1000)}s` } }
     }
     case 'collabAgentToolCall':
-      return { name: 'collab_agent', argsJson: JSON.stringify({ tool: str(item.tool) ?? '', prompt: str(item.prompt) ?? null }), presentation: { card: 'generic', title: str(item.tool) ?? '' } }
+      return { name: 'collab_agent', argsJson: JSON.stringify({ tool: str(item.tool) ?? '', prompt: str(item.prompt) ?? null }), presentation: { card: 'subagent' } }
     default:
       return undefined
   }

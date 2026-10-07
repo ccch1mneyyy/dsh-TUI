@@ -13,8 +13,8 @@
  */
 import assert from 'node:assert/strict'
 import type { RpcClock } from '../src/backends/codex/rpc/client.js'
-import { acquireCodexHub, closeAllCodexHubs, createCodexHub, hubFingerprint, type HubServerRequest, type HubSettings, type ThreadSink } from '../src/backends/codex/rpc/hub.js'
-import { createFakeAppServer, FakeRpcError } from './lib/codex-fake-app-server.js'
+import { acquireCodexHub, closeAllCodexHubs, createCodexHub, hubFingerprint, type HubDiagnostic, type HubServerRequest, type HubSettings, type ThreadSink } from '../src/backends/codex/rpc/hub.js'
+import { createFakeAppServer, FakeRpcError, NO_REPLY } from './lib/codex-fake-app-server.js'
 
 type Rec = Record<string, unknown>
 let passed = 0
@@ -45,14 +45,16 @@ function recorder() {
   const notes: string[] = []
   const requests: HubServerRequest[] = []
   const lost: { message: string; permanent: boolean }[] = []
+  const diagnostics: HubDiagnostic[] = []
   let restored = 0
   const sink: ThreadSink = {
     notification: (method, params) => { notes.push(`${method}:${String(params.threadId ?? (params.thread as Rec | undefined)?.id ?? '')}`) },
     serverRequest: request => { requests.push(request) },
     connectionLost: (error, permanent) => { lost.push({ message: error.message, permanent }) },
     connectionRestored: () => { restored += 1 },
+    diagnostic: entry => { diagnostics.push(entry) },
   }
-  return { sink, notes, requests, lost, get restored() { return restored } }
+  return { sink, notes, requests, lost, diagnostics, get restored() { return restored } }
 }
 
 const SETTINGS: HubSettings = { executable: '/opt/codex', args: ['app-server'], env: { PATH: '/bin', CODEX_HOME: '/h' }, cwd: '/tmp' }
@@ -60,6 +62,7 @@ const SETTINGS: HubSettings = { executable: '/opt/codex', args: ['app-server'], 
 // ── handshake, routing, server requests ─────────────────────────────────
 {
   const fake = createFakeAppServer()
+  fake.on('thread/read', () => ({ thread: { parentThreadId: null } }))
   const clock = manualClock()
   const debug: string[] = []
   const hub = createCodexHub(SETTINGS, { transportFactory: fake.transportFactory, clock, debug: line => debug.push(line), clientVersion: '9.9.9' })
@@ -110,6 +113,7 @@ const SETTINGS: HubSettings = { executable: '/opt/codex', args: ['app-server'], 
   check('server request: a re-sent pending id arrives flagged redelivered', parent.requests[1]?.redelivered === true && parent.requests[1]?.key === 'codex:1:0')
   request.respond({ decision: 'accept' })
   request.respond({ decision: 'decline' })
+  parent.requests[1]!.respond({ decision: 'decline' })
   const answer = await approval
   check('server request: the first answer wins, a second is ignored', (answer.result as Rec).decision === 'accept' && [...fake.responses.values()].length === 1)
   fake.notify('serverRequest/resolved', { threadId: 'T1', requestId: 0 })
@@ -210,6 +214,114 @@ const SETTINGS: HubSettings = { executable: '/opt/codex', args: ['app-server'], 
   await hub.close()
 }
 
+// ── hub diagnostics fan out, including startup replay ──────────────────
+{
+  const fake = createFakeAppServer()
+  const hub = createCodexHub(SETTINGS, { transportFactory: fake.transportFactory })
+  fake.stderr('bubblewrap is missing')
+  await hub.ready
+  const first = recorder()
+  const second = recorder()
+  hub.attach('FIRST', first.sink)
+  const detach = hub.attach('SECOND', second.sink)
+  check('diagnostics: startup stderr replays to every attach', first.diagnostics[0]?.message === 'bubblewrap is missing' && second.diagnostics[0]?.message === 'bubblewrap is missing')
+  fake.raw('not-json')
+  fake.stderr('later stderr')
+  check('diagnostics: debug and stderr broadcast to all attached sessions', first.diagnostics.some(entry => entry.kind === 'debug' && entry.message.includes('not JSON')) && JSON.stringify(first.diagnostics) === JSON.stringify(second.diagnostics))
+  detach()
+  const detachedCount = second.diagnostics.length
+  fake.stderr('after detach')
+  check('diagnostics: detach stops future broadcasts', second.diagnostics.length === detachedCount && first.diagnostics.at(-1)?.message === 'after detach')
+  for (let i = 0; i < 205; i += 1) fake.stderr('bounded-' + i)
+  check('diagnostics: hub history is bounded at 200 entries', hub.diagnostics.length === 200 && hub.diagnostics[0]?.message === 'bounded-5')
+  const third = recorder()
+  hub.attach('THIRD', { ...third.sink, diagnostic: () => { throw new Error('listener failed') } })
+  fake.stderr('survives listener failure')
+  check('diagnostics: one failing sink does not prevent another', first.diagnostics.at(-1)?.message === 'survives listener failure')
+  await hub.close()
+}
+
+// ── unknown subagent traffic resolves a cached multilevel parent chain ──
+{
+  const fake = createFakeAppServer()
+  fake.on('thread/read', params => params.threadId === 'CHILD' ? NO_REPLY : { thread: { parentThreadId: 'ROOT' } })
+  const hub = createCodexHub(SETTINGS, { transportFactory: fake.transportFactory })
+  await hub.ready
+  const root = recorder()
+  const order: string[] = []
+  hub.attach('ROOT', {
+    ...root.sink,
+    notification: (method, params) => { order.push('note:' + String(params.ordinal)); root.sink.notification(method, params) },
+    serverRequest: request => { order.push('approval'); root.sink.serverRequest(request) },
+  })
+  fake.notify('item/started', { threadId: 'CHILD', ordinal: 1 })
+  const answer = fake.request('item/commandExecution/requestApproval', { threadId: 'CHILD', itemId: 'exec' })
+  fake.notify('item/completed', { threadId: 'CHILD', ordinal: 2 })
+  const read = await fake.waitForRequest('thread/read')
+  check('fallback: lookup excludes turns and deduplicates concurrent child traffic', read.params.includeTurns === false && fake.requests.filter(entry => entry.method === 'thread/read').length === 1)
+  check('fallback: notifications and approval stay buffered during lookup', root.notes.length === 0 && root.requests.length === 0 && fake.responses.size === 0)
+  fake.reply(read.id, { thread: { parentThreadId: 'MIDDLE' } })
+  await tick()
+  check('fallback: child-first traffic reaches its attached root in arrival order', order.join(',') === 'note:1,approval,note:2')
+  check('fallback: a two-level parent chain is resolved without activity notifications', fake.requests.filter(entry => entry.method === 'thread/read').map(entry => entry.params.threadId).join(',') === 'CHILD,MIDDLE')
+  root.requests[0]!.respond({ decision: 'accept' })
+  check('fallback: buffered approval is answered by the root session', (await answer).result !== undefined)
+  fake.notify('item/completed', { threadId: 'CHILD', ordinal: 3 })
+  check('fallback: later child traffic reuses cached parents', order.at(-1) === 'note:3' && fake.requests.filter(entry => entry.method === 'thread/read').length === 2)
+  await hub.close()
+}
+
+// ── explicit routes can win a lookup; overflow sheds only notifications ─
+{
+  const fake = createFakeAppServer()
+  fake.on('thread/read', () => NO_REPLY)
+  const hub = createCodexHub(SETTINGS, { transportFactory: fake.transportFactory })
+  await hub.ready
+  const root = recorder()
+  const order: (number | string)[] = []
+  hub.attach('ROOT', {
+    ...root.sink,
+    notification: (_method, params) => { order.push(Number(params.ordinal)) },
+    serverRequest: request => { order.push('approval'); root.sink.serverRequest(request) },
+  })
+  fake.notify('item/started', { threadId: 'CHILD', ordinal: 0 })
+  const answer = fake.request('item/commandExecution/requestApproval', { threadId: 'CHILD', itemId: 'exec' })
+  for (let ordinal = 1; ordinal <= 1001; ordinal += 1) fake.notify('item/completed', { threadId: 'CHILD', ordinal })
+  const read = await fake.waitForRequest('thread/read')
+  check('buffer: overflow never rejects a pending approval', fake.responses.size === 0 && hub.diagnostics.some(entry => entry.message.includes('buffer overflow')))
+  hub.route('CHILD', 'ROOT')
+  check('buffer: explicit parent registration flushes without waiting for read', order.length === 1000 && order[0] === 'approval' && order[1] === 3 && order.at(-1) === 1001)
+  root.requests[0]!.respond({ decision: 'accept' })
+  await answer
+  fake.reply(read.id, { thread: { parentThreadId: null } })
+  await tick()
+  check('buffer: a late lookup does not replay already-flushed traffic', order.length === 1000)
+  await hub.close()
+}
+
+// ── true orphans, cyclic ancestry, and lookup timeout ───────────────────
+{
+  const fake = createFakeAppServer()
+  const clock = manualClock()
+  fake.on('thread/read', params => params.threadId === 'SLOW' ? NO_REPLY : { thread: { parentThreadId: params.threadId === 'A' ? 'B' : 'A' } })
+  const hub = createCodexHub(SETTINGS, { transportFactory: fake.transportFactory, clock })
+  await hub.ready
+  const warnings: string[] = []
+  hub.onGlobal((method, params) => { if (method === 'warning') warnings.push(String(params.message)) })
+  const orphan = await fake.request('item/commandExecution/requestApproval', { threadId: 'A', itemId: 'orphan' })
+  check('fallback: cyclic ancestry terminates with -32603 and a warning', orphan.error?.code === -32603 && warnings.length === 1)
+  const slow = fake.request('item/fileChange/requestApproval', { threadId: 'SLOW', itemId: 'slow' })
+  await tick()
+  const responses = fake.responses.size
+  clock.advance(4999)
+  await tick()
+  check('fallback: unknown approvals are not immediately refused', fake.responses.size === responses)
+  clock.advance(1)
+  await tick()
+  check('fallback: a hung parent read settles within its bounded budget', (await slow).error?.code === -32603 && warnings.length === 2)
+  await hub.close()
+}
+
 // ── fingerprint registry ────────────────────────────────────────────────
 {
   const fake = createFakeAppServer()
@@ -219,6 +331,7 @@ const SETTINGS: HubSettings = { executable: '/opt/codex', args: ['app-server'], 
   const c = acquireCodexHub({ ...SETTINGS, env: { ...SETTINGS.env, CODEX_HOME: '/elsewhere' } }, deps)
   check('fingerprint: an irrelevant env change shares the hub', a === b)
   check('fingerprint: a Codex-relevant env change gets its own hub', a !== c && hubFingerprint(SETTINGS) !== hubFingerprint({ ...SETTINGS, args: ['app-server', '-c', 'x=1'] }))
+  check('fingerprint: credential modes and injected private env do not collide', hubFingerprint(SETTINGS) !== hubFingerprint({ ...SETTINGS, credentialMode: 'external' }) && hubFingerprint({ ...SETTINGS, injectedEnvKeys: ['CUSTOM_HEADER'], env: { CUSTOM_HEADER: 'a' } }) !== hubFingerprint({ ...SETTINGS, injectedEnvKeys: ['CUSTOM_HEADER'], env: { CUSTOM_HEADER: 'b' } }))
   await a.close()
   const d = acquireCodexHub(SETTINGS, deps)
   check('fingerprint: a closed hub is replaced', d !== a && d.state !== 'closed')

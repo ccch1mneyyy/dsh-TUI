@@ -16,7 +16,7 @@
 import type { ChannelUi } from '../adapter/ports/channel-ui.js'
 import type { ChatRow, SelectionAttachment, TodoPanelItem, ToolCallView, TurnUsageSummary } from '../adapter/ports/channel-view.js'
 import { markChannelReadDirty } from '../adapter/channel/read-view.js'
-import type { AgentEvent, AgentEventMeta, AgentEventOf, ContentBlockView, GoalSnapshot, ImageRef } from '../agent/events.js'
+import type { AgentEvent, AgentEventMeta, AgentEventOf, ContentBlockView, GoalSnapshot, ImageRef, UsageDelta } from '../agent/events.js'
 import { t } from '../i18n.js'
 import { logForDebugging } from '../utils/debug.js'
 import { laneOf } from './activity.js'
@@ -52,6 +52,8 @@ export interface ProjectionRenderer {
 /** Everything the projector needs from its channel. */
 export interface ChannelProjectionDeps {
   rowIds: { value: number }
+  /** Display name of the bound backend; absent keeps the legacy DSH wording. */
+  backendLabel?: () => string | undefined
   resetContextWarning(): void
   checkContextWarning(): void
   notify: ChannelUi['notify']
@@ -175,6 +177,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
    * row for the same durable sequence number.
    */
   const handledAssistantMessages = new Set<number>()
+  const handledUsage = new Set<number>()
   const handledAssistantChunks = new Set<number>()
   /** One agent runs one request at a time. Durable step boundaries also let
    *  a freshly attached projector accept deltas whose attempt start it missed. */
@@ -185,6 +188,8 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
    *  不会把换模型前的用量重估到新模型；旧日志没有 header 时回退
    *  事件发生时的 state.model。 */
   let eventModel: string | undefined
+  /** Backend occupancy is independent of the last request's billed usage. */
+  let contextUsage: AgentEventOf<'context.usage'> | undefined
   const assistantRowsByStep = new Map<string, ChatRow>()
   /**
    * Assistant rows by the seq they carry: a reconnect can replay a delta or
@@ -516,9 +521,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
   /**
    * Book one model call's usage: session totals, the cost buckets, the
    * context sample and the open turn's ledger. Shared by settled messages
-   * and the usage-only reports a backend sends after a reply settled.
+   * and the separate usage reports a backend sends after a reply settled.
    */
-  const bookUsage = (usage: NonNullable<AgentEventOf<'assistant.message'>['usage']>, event: Pick<AgentEventOf<'assistant.message'>, 'time' | 'model'>): void => {
+  const bookUsage = (usage: UsageDelta, event: Pick<AgentEventOf<'usage'>, 'time' | 'model'>): void => {
     state.tokens.input += usage.input ?? 0
     state.tokens.output += usage.output ?? 0
     // Cache split totals feed the session cost estimate (hit-priced input
@@ -535,7 +540,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     // 归属。replay 用 request.header 还原历史请求模型，旧日志回退
     // channel 模型；换模型不会把历史 token 重估到新模型。
     if ((usage.input ?? 0) !== 0 || (usage.output ?? 0) !== 0 || (usage.cacheRead ?? 0) !== 0 || (usage.cacheWrite ?? 0) !== 0) {
-      const model = eventModel ?? state.model
+      const model = eventModel ?? event.model ?? state.model
       const cost = state.mainCost[model] ?? emptyCostBuckets()
       addUsageToBucket(peak ? cost.peak : cost.idle, usage)
       state.mainCost[model] = cost
@@ -563,14 +568,6 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
   }
 
   const applyAssistantMessage = (event: AgentEventOf<'assistant.message'>): void => {
-    // A usage report (no content: a backend whose token counts arrive after
-    // the reply settled) books its usage and touches no row.
-    if (event.usageOnly === true) {
-      if (handledAssistantMessages.has(event.seq)) return
-      handledAssistantMessages.add(event.seq)
-      if (event.usage !== undefined) bookUsage(event.usage, event)
-      return
-    }
     if (handledAssistantMessages.has(event.seq)) return
     handledAssistantMessages.add(event.seq)
     // A canonical settlement embeds its complete attempt; older settlements
@@ -1025,10 +1022,14 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       // A user cancel closes the turn as `aborted`; `interrupted` only
       // appears for crash-orphaned turns. Both user-interruption paths
       // render as a distinct dim row.
+      const backend = deps.backendLabel?.()
       appendRow({
         id: deps.rowIds.value,
         kind: 'interrupt',
-        text: t('interrupted-by-user') + t('interrupted-ask-next'),
+        ...(backend ? { interruptBackend: backend } : {}),
+        text: t('interrupted-by-user') + (backend
+          ? t('interrupted-ask-backend', { name: backend })
+          : t('interrupted-ask-next')),
       })
       deps.rowIds.value += 1
       emitTurnSummary()
@@ -1152,6 +1153,11 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'assistant.message':
         applyAssistantMessage(event)
         return
+      case 'usage':
+        if (handledUsage.has(event.seq)) return
+        handledUsage.add(event.seq)
+        bookUsage(event.usage, event)
+        return
       case 'tool.call':
         applyToolCall(event)
         return
@@ -1215,6 +1221,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         applyTurnEnd(event)
         // A foreground subagent cannot outlive its turn (./activity.ts).
         deps.activity?.apply(event, replaying)
+        return
+      case 'context.usage':
+        contextUsage = event
+        if (!replaying) deps.checkContextWarning()
         return
       case 'context.capacity':
         // Backend-advertised context capacity; drives the context-low warning.
@@ -1394,7 +1404,6 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'permission.settled':
       case 'question.request':
       case 'question.settled':
-      case 'context.usage':
       case 'effort.changed':
       case 'mode.changed':
       case 'commands.changed':
@@ -1422,6 +1431,8 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       return
     }
     handledAssistantMessages.clear()
+    handledUsage.clear()
+    contextUsage = undefined
     handledAssistantChunks.clear()
     openStep = undefined
     activeAttempt = undefined
@@ -1453,6 +1464,8 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     todoCalls.clear()
     settledCardCallId = undefined
     handledAssistantMessages.clear()
+    handledUsage.clear()
+    contextUsage = undefined
     handledAssistantChunks.clear()
     openStep = undefined
     activeAttempt = undefined
@@ -1467,7 +1480,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     tpsTurnDecodeTokens = 0
     tpsTurnSampled = false
   }
-  return { apply, reset, settleStreaming, updateSpinnerMode }
+  return { apply, reset, settleStreaming, updateSpinnerMode, contextUsage: () => contextUsage }
 }
 
 export type ChannelProjection = ReturnType<typeof createChannelProjection>

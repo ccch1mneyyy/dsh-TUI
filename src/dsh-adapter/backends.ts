@@ -15,10 +15,21 @@ import { logForDebugging } from '../utils/debug.js'
 // boot pays nothing for having the wizard's surface at hand.
 import { checkPnpmAvailable, CLAUDE_SDK_SPECIFIER, resolveSdkInstallTarget, startClaudeSdkInstall } from '../backends/claude/install.js'
 import { VALIDATED_SDK_VERSION } from '../backends/claude/contract.js'
+import { fileChannelTokens } from '../backends/shared/channel-tokens.js'
+
+let closeCodexHubs: (() => Promise<void>) | undefined
+
+/** Close an already-loaded backend's pooled processes without loading it on DSH. */
+export async function closeBackendResources(): Promise<void> {
+  await closeCodexHubs?.()
+}
 
 export const BACKEND_LOADERS = {
   claude: () => import('../backends/claude/index.js').then(m => m.claudeBackend),
-  codex: () => import('../backends/codex/index.js').then(m => m.codexBackend),
+  codex: () => import('../backends/codex/index.js').then(m => {
+    closeCodexHubs = m.closeAllCodexHubs
+    return m.codexBackend
+  }),
 } satisfies Record<Exclude<KernelBackendId, 'dsh'>, () => Promise<AgentBackend>>
 
 /** The kernel picker's one-click SDK install surface (Chat consumes it as
@@ -40,6 +51,7 @@ export async function createBackendHost(ctx: Context, cwd: string, stderr: (line
     debug: message => logForDebugging(message),
     warn: message => ctx.logger.warn(message),
     stderr,
+    tokenStore: fileChannelTokens(undefined, message => logForDebugging(message)),
     oauthCredential: provider => {
       let source = credentialSources.get(provider)
       if (source === undefined) {

@@ -170,7 +170,7 @@ export const BACKEND_GOAL_COMMAND: LocalCommand = {
  */
 export type LocalCommandRequirement =
   | 'any' | 'dsh' | 'models' | 'effort' | 'compact' | 'rewind' | 'fork' | 'resume'
-  | 'subagents' | 'tasks' | 'mcp' | 'context' | 'login' | 'sideQuery' | 'rename' | 'color'
+  | 'subagents' | 'tasks' | 'mcp' | 'context' | 'login' | 'sideQuery' | 'rename' | 'color' | 'init'
 
 const LOCAL_COMMAND_REQUIREMENTS: ReadonlyMap<string, LocalCommandRequirement> = new Map<string, LocalCommandRequirement>([
   ['new', 'any'], ['clear', 'any'], ['status', 'any'], ['cost', 'any'], ['tokens', 'any'],
@@ -184,7 +184,7 @@ const LOCAL_COMMAND_REQUIREMENTS: ReadonlyMap<string, LocalCommandRequirement> =
   ['kernel', 'any'], ['restart', 'any'],
   ['compact', 'compact'], ['resume', 'resume'], ['rewind', 'rewind'], ['fork', 'fork'],
   ['model', 'models'], ['effort', 'effort'], ['agents', 'subagents'], ['jobs', 'tasks'], ['mcp', 'mcp'],
-  ['context', 'context'], ['login', 'login'],
+  ['context', 'context'], ['login', 'login'], ['logout', 'login'], ['init', 'init'],
   ['recap', 'sideQuery'], ['btw', 'sideQuery'], ['rename', 'rename'], ['color', 'color'],
   // /trace opens on every backend; one without trajectory data shows the
   // unsupported state (channel.trajectorySource() decides, not this table).

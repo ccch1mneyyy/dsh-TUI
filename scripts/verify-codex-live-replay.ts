@@ -22,6 +22,7 @@
 import assert from 'node:assert/strict'
 import { readdirSync } from 'node:fs'
 import { setLang, t } from '../src/i18n.js'
+import { assertAgentEventInvariants } from './lib/agent-event-invariants.js'
 import { liveRun, loadWire, notificationsOf, recordedTurns, replayRun, turnThreads, WIRE_DIR, type TranslateRun } from './lib/codex-translate-harness.js'
 
 setLang('en')
@@ -83,13 +84,21 @@ for (const name of fixtures) {
       console.log(`SKIP ${name} ${thread.slice(-6)} (no recorded history of this thread)`)
       continue
     }
-    const live = comparable(liveRun(notificationsOf(wire, thread)), 'live')
-    const replayed = comparable(replayRun(turns), 'replay')
+    const liveSource = liveRun(notificationsOf(wire, thread))
+    const replaySource = replayRun(turns)
+    const allowOpenLastTurn = name === 's1-approvals' && thread === turnThreads(wire)[0]
+    assertAgentEventInvariants(liveSource.events, { allowOpenLastTurn })
+    assertAgentEventInvariants(replaySource.events, { allowOpenLastTurn })
+    const live = comparable(liveSource, 'live')
+    const replayed = comparable(replaySource, 'replay')
     const label = `${name} ${thread.slice(-6)}`
     const diff = live.rows.flatMap((row, index) => row === replayed.rows[index] ? [] : [{ index, live: row, replay: replayed.rows[index] ?? null }])
     check(`${label}: live and replay transcripts agree (${live.rows.length} rows)`, live.rows.length === replayed.rows.length && diff.length === 0,
       { liveRows: live.rows.length, replayRows: replayed.rows.length, first: diff[0] ?? replayed.rows[live.rows.length] })
     check(`${label}: replay produced no exempt rows of its own`, replayed.exempt.interrupted === 0 && replayed.exempt.notices === 0 && replayed.exempt.summaries === 0, replayed.exempt)
+    check(`${label}: replay never manufactures billing or occupancy measurements`, replaySource.events.every(event => event.type !== 'usage' && event.type !== 'context.usage'))
+    const attempts = (run: TranslateRun): number => run.events.filter(event => event.type === 'assistant.attempt.end').length
+    check(`${label}: live and replay explicitly close the same attempts`, attempts(liveSource) === attempts(replaySource), { live: attempts(liveSource), replay: attempts(replaySource) })
     interruptedSeen += live.exempt.interrupted
     compared += 1
   }

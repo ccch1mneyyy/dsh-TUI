@@ -13,6 +13,9 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { BackendDetection, BackendHost } from '../../agent/backend.js'
 import { t } from '../../i18n.js'
+import { CODEX_OAUTH_PROVIDER } from './auth/external-tokens.js'
+import { activeProfileOf, codexChannelLaunch, fileCodexChannels, hasChannelConnection, type CodexChannelProfile } from './channels.js'
+import type { ChannelTokenStore } from '../shared/channel-tokens.js'
 import { codexVersionDrift, codexVersionSupported, MIN_CODEX_VERSION } from './contract.js'
 import { errorText } from './narrow.js'
 import { resolveCodexExecutable } from './rpc/binary.js'
@@ -24,7 +27,10 @@ export function codexHomeDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /** Whether a credential is visible without a network call. */
-export function detectCodexAuth(env: NodeJS.ProcessEnv = process.env): 'ok' | 'missing' | 'unknown' {
+export function detectCodexAuth(env: NodeJS.ProcessEnv = process.env, options: { readonly channel?: CodexChannelProfile; readonly tokens?: ChannelTokenStore } = {}): 'ok' | 'missing' | 'unknown' {
+  if (hasChannelConnection(options.channel)) {
+    try { codexChannelLaunch(options.channel, options.tokens); return 'ok' } catch { return 'missing' }
+  }
   if ((env.OPENAI_API_KEY ?? '') !== '' || (env.CODEX_API_KEY ?? '') !== '') return 'ok'
   const home = codexHomeDir(env)
   if (existsSync(join(home, 'auth.json'))) return 'ok'
@@ -41,7 +47,7 @@ export function detectCodexAuth(env: NodeJS.ProcessEnv = process.env): 'ok' | 'm
   return 'missing'
 }
 
-export async function detectCodex(host: BackendHost, env: NodeJS.ProcessEnv = process.env): Promise<BackendDetection> {
+export async function detectCodex(host: BackendHost & { readonly tokenStore?: ChannelTokenStore }, env: NodeJS.ProcessEnv = process.env): Promise<BackendDetection> {
   try {
     const executable = await resolveCodexExecutable(env)
     if (executable === undefined) return { installed: false, hint: t('codex-not-installed') }
@@ -49,10 +55,16 @@ export async function detectCodex(host: BackendHost, env: NodeJS.ProcessEnv = pr
     if (!codexVersionSupported(version)) {
       return { installed: false, ...(version === undefined ? {} : { version }), hint: t('codex-too-old', { version: version ?? '', min: MIN_CODEX_VERSION }) }
     }
-    const auth = detectCodexAuth(env)
+    const channel = activeProfileOf(fileCodexChannels(undefined, host.debug).read())
+    let auth = detectCodexAuth(env, { channel, tokens: host.tokenStore })
+    if (!hasChannelConnection(channel)) {
+      try { if (await host.oauthCredential?.(CODEX_OAUTH_PROVIDER)?.stored() === true) auth = 'ok' }
+      catch { host.debug('codex: stored OAuth detection failed') }
+    }
     const drift = codexVersionDrift(version)
     return {
       installed: true,
+      loginInSession: true,
       auth,
       ...(version === undefined ? {} : { version }),
       ...(drift === undefined ? {} : { drift }),

@@ -25,6 +25,11 @@ export interface SettingsSnapshot {
   model: string
   effort: string | null
   modeId: string
+  /** Permission policy and collaboration mode remain orthogonal. */
+  permissionMode?: string
+  approvalPolicy?: unknown
+  sandboxPolicy?: unknown
+  collaborationMode?: Rec
 }
 
 export interface LiveTranslator {
@@ -124,6 +129,15 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
         deltaTo(out, 'reasoning', str(params.delta) ?? '', 0)
         return out
       }
+      case NOTIFY.commandOutputDelta:
+      case NOTIFY.terminalInteraction: {
+        const callId = str(params.itemId)
+        if (callId !== undefined && ctx.openTools.has(callId)) {
+          const value = method === NOTIFY.commandOutputDelta ? str(params.delta) : str(params.stdin)
+          if (value !== undefined && value !== '') out.push({ type: 'tool.output', callId, text: method === NOTIFY.terminalInteraction ? `⏎ ${value}` : value, time: now })
+        }
+        return out
+      }
       case NOTIFY.mcpToolCallProgress: {
         const callId = str(params.itemId)
         const open = callId === undefined ? undefined : ctx.openTools.get(callId)
@@ -146,6 +160,8 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
           out.push({ type: 'context.capacity', contextWindow: window })
         }
         if (last !== undefined) reportUsage(ctx, out, last, now)
+        const total = num(rec(rec(params.tokenUsage)?.last)?.totalTokens)
+        if (total !== undefined) out.push({ type: 'context.usage', used: Math.max(0, total - 12_000), ...(contextWindow === undefined ? {} : { max: Math.max(0, contextWindow - 12_000) }) })
         return out
       }
       case NOTIFY.threadStatusChanged: {
@@ -185,7 +201,12 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
           settings.effort = effort
           out.push({ type: 'effort.changed', effort })
         }
-        const modeId = modeIdOf(next.approvalPolicy, next.sandboxPolicy)
+        if (next.approvalPolicy !== undefined) settings.approvalPolicy = next.approvalPolicy
+        if (next.sandboxPolicy !== undefined) settings.sandboxPolicy = next.sandboxPolicy
+        const permissionMode = modeIdOf(settings.approvalPolicy, settings.sandboxPolicy)
+        settings.permissionMode = permissionMode
+        if (rec(next.collaborationMode) !== undefined) settings.collaborationMode = rec(next.collaborationMode)
+        const modeId = settings.collaborationMode?.mode === 'plan' ? 'plan' : permissionMode
         if (modeId !== settings.modeId) {
           settings.modeId = modeId
           out.push({ type: 'mode.changed', modeId })

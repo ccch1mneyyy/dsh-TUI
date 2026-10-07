@@ -106,6 +106,8 @@ export interface ChatRow {
   kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact' | 'subagent' | 'job' | 'turn-summary'
   /** Extra label for non-human user rows (e.g. `steering`). */
   label?: string
+  /** Interrupt rows: backend name, kept separate from localized transcript text. */
+  interruptBackend?: string
   /** Actual execution location for `!command` rows. */
   executionTarget?: string
   text: string
@@ -1150,9 +1152,13 @@ export interface ChannelCapabilities {
   readonly effort: boolean
   readonly modes: boolean
   readonly compact: boolean
+  /** `/init` initializes project instructions (DSH: its existing template). */
+  readonly init: boolean
   readonly rewind: boolean
   readonly fork: boolean
   readonly resume: boolean
+  /** Catalog removal keeps the transcript when explicitly marked as archive. */
+  readonly deleteAction?: 'archive'
   readonly subagents: boolean
   readonly tasks: boolean
   readonly mcp: boolean
@@ -1261,10 +1267,9 @@ export interface ContextOccupancy {
   /** Window to divide by; `undefined` when no route advertised a capacity. */
   readonly contextWindow: number | undefined
   /**
-   * Which source answered: `projection` is DSH's own `contextPressure`
-   * projection (the number the Web UI shows); `sample` is this TUI's fallback,
-   * the last settled request's billed usage, used only when the composition
-   * mounts no token meter.
+   * Which source answered: DSH's `contextPressure` projection, the backend's
+   * measured occupancy, or the last settled request's billed usage when
+   * neither occupancy source has a reading.
    */
-  readonly source: 'projection' | 'sample'
+  readonly source: 'projection' | 'backend' | 'sample'
 }

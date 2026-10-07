@@ -3348,6 +3348,8 @@ export function Chat({
         return true
       }
       case 'init': {
+        const backend = channel.backendInit?.()
+        if (backend !== undefined) { void backend.run(); return true }
         const result = channel.initWorkspace()
         if (result === null) channel.notify(t('agentsmd-create-failed'), { color: 'error' })
         else if (result === 'exists') channel.notify(t('agentsmd-exists'))
@@ -3450,9 +3452,12 @@ export function Chat({
           })
         return true
       }
-      case 'logout':
-        channel.notify(t('login-logout-hint'))
+      case 'logout': {
+        const auth = channel.backendAuth()
+        if (auth?.logout === undefined) channel.notify(t('login-logout-hint'))
+        else void auth.logout()
         return true
+      }
       case 'permission': {
         // The command itself is registered by the permission-presets row
         // (dsh-base): bare `/permission` opens the preset picker and Enter

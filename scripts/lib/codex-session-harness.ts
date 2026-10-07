@@ -67,7 +67,7 @@ export interface SessionHarness {
   readonly debug: string[]
 }
 
-export async function openHarness(options: { readonly prefs?: CodexPrefsData; readonly resume?: Rec; readonly autoTurns?: boolean; readonly forceSettleMs?: number } = {}): Promise<SessionHarness> {
+export async function openHarness(options: { readonly prefs?: CodexPrefsData; readonly resume?: Rec; readonly autoTurns?: boolean; readonly forceSettleMs?: number; readonly configureFake?: (fake: FakeAppServer) => void } = {}): Promise<SessionHarness> {
   const fake = createFakeAppServer()
   let turnCounter = 0
   const clock = manualClock()
@@ -86,12 +86,14 @@ export async function openHarness(options: { readonly prefs?: CodexPrefsData; re
     fake.reply(request.id, { turn: { id, items: [], status: 'inProgress', itemsView: 'notLoaded' } })
     return NO_REPLY
   })
+  options.configureFake?.(fake)
   const session = await openCodexSession({
     hub,
     release: hub.retain(),
     target: options.resume === undefined ? { kind: 'create', cwd: CWD } : { kind: 'resume', sessionId: THREAD },
     cwd: CWD,
     prefs: memoryCodexPrefs(options.prefs ?? {}),
+    config: {},
     executable: { path: '/fake/codex', source: 'env', version: '0.160.1' },
     host: { debug: line => debug.push(line) },
     clock,

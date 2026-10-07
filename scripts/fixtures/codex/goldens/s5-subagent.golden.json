@@ -5,19 +5,25 @@
     "user.message",
     "step.start",
     "assistant.attempt.start",
-    "custom",
-    "context.capacity",
-    "custom",
     "assistant.message",
+    "assistant.attempt.end",
+    "subagent.start",
+    "context.capacity",
+    "usage",
+    "context.usage",
+    "subagent.end",
     "tool.call",
     "tool.result",
-    "assistant.message",
+    "usage",
+    "context.usage",
     "step.end",
     "step.start",
     "assistant.attempt.start",
     "delta:text",
     "assistant.message",
-    "assistant.message",
+    "assistant.attempt.end",
+    "usage",
+    "context.usage",
     "session.status",
     "step.end",
     "turn.end"
@@ -28,18 +34,8 @@
       "text": "Spawn exactly one sub-agent whose only task is to reply with the word child-ok. Wait for it, then reply done. Keep everything minimal."
     },
     {
-      "kind": "tool",
-      "text": "",
-      "tool": {
-        "name": "collab_agent",
-        "status": "ok",
-        "call": {
-          "card": "generic",
-          "title": "wait",
-          "displayKey": null
-        },
-        "result": null
-      }
+      "kind": "subagent",
+      "text": "child"
     },
     {
       "kind": "assistant",
@@ -66,6 +62,11 @@
       "cacheWrite": 46
     },
     "todos": [],
-    "notices": []
+    "notices": [],
+    "contextMeasure": {
+      "type": "context.usage",
+      "used": 0,
+      "max": 246400
+    }
   }
 }

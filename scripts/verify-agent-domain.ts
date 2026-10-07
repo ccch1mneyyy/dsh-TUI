@@ -110,7 +110,7 @@ check('DSH fixtures emit only declared event types', undeclared.length === 0, un
 // projector folds it, but neither the DSH nor the Claude translator emits
 // it (their output arrives with the settled result), so DSH/Claude
 // transcripts cannot change through it.
-for (const type of ['tool.output'] as const) {
+for (const type of ['tool.output', 'usage', 'context.usage'] as const) {
   check(`${type}: optional and unused by the DSH translator`, !dshEmits(type) && !emitted.has(type))
   check(`${type}: optional and unused by the Claude translator`, !claudeEmits(type))
 }

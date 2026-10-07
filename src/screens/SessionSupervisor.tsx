@@ -103,6 +103,7 @@ export function SessionSupervisor({
 
   const {
     dshBackend,
+    archiveSessions,
     sessionRename,
     setSessionRename,
     confirmDelete,
@@ -516,7 +517,7 @@ export function SessionSupervisor({
   const tabMenuWidth = Math.max(12, ...tabLayout.hidden.map(hidden => stringWidth(hidden.label) + 6))
   const withTabHint = (text: string): string => (tabs.length < 2 ? text : `${text} · ${t('supervisor-hint-tabs')}`)
 
-  const listHint = dshBackend ? t('supervisor-hint-list') : t('supervisor-hint-list-backend')
+  const listHint = dshBackend ? t('supervisor-hint-list') : t(archiveSessions ? 'supervisor-hint-list-archive' : 'supervisor-hint-list-backend')
   const railHint = rename !== undefined
     ? t('home-hint-rename')
     : confirmRemove !== undefined
@@ -805,7 +806,7 @@ export function SessionSupervisor({
       {confirmDelete !== undefined && (
         <Box flexShrink={0} paddingX={1}>
           <Text color="error">
-            {truncateWidth(` ${t('supervisor-delete-confirm', { name: listedSessions.find(candidate => candidate.id === confirmDelete)?.title.text ?? confirmDelete })}`, columns - 3)}
+            {truncateWidth(` ${t(archiveSessions ? 'supervisor-archive-confirm' : 'supervisor-delete-confirm', { name: listedSessions.find(candidate => candidate.id === confirmDelete)?.title.text ?? confirmDelete })}`, columns - 3)}
           </Text>
         </Box>
       )}

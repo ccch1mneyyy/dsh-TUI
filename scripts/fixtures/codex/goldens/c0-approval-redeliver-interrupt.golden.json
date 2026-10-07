@@ -7,10 +7,12 @@
     "assistant.attempt.start",
     "session.status",
     "assistant.message",
+    "assistant.attempt.end",
     "tool.call",
     "session.status",
     "context.capacity",
-    "assistant.message",
+    "usage",
+    "context.usage",
     "session.status",
     "tool.result",
     "step.end",
@@ -61,6 +63,11 @@
       "cacheWrite": 8693
     },
     "todos": [],
-    "notices": []
+    "notices": [],
+    "contextMeasure": {
+      "type": "context.usage",
+      "used": 0,
+      "max": 246400
+    }
   }
 }

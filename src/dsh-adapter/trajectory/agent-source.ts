@@ -372,8 +372,6 @@ export function createAgentTrajectorySource(options?: { readonly clock?: () => n
         return
       }
       case 'assistant.message': {
-        // A usage report is not a message: nothing to show on the ledger.
-        if (event.usageOnly === true) return
         if (duplicate(fold, 'assistant.message', event.seq)) return
         const mine = fold.attempt?.attemptId === event.attemptId ? fold.attempt : undefined
         if (mine !== undefined) fold.attempt = undefined

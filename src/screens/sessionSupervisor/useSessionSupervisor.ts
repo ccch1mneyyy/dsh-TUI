@@ -110,6 +110,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts pass partial channels
   const workspaceLedger = channel.backendCapabilities?.commands.includes('workspace') ?? true
   const dshBackend = backendId === 'dsh'
+  const archiveSessions = channel.backendCapabilities?.deleteAction === 'archive'
   const pinsDir = sessionPinsDir(backendId)
 
   const [entries, setEntries] = useState<readonly RailEntry[]>([])
@@ -604,7 +605,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
    */
   const deleteSession = useCallback((session: SessionSummary): void => {
     if (liveStateOf(session.id)?.current === true) {
-      report(t('supervisor-delete-current'), 'error')
+      report(t(archiveSessions ? 'supervisor-archive-current' : 'supervisor-delete-current'), 'error')
       return
     }
     const holder = holderOf(session.id)
@@ -615,14 +616,14 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     void channel.deleteSession(session.id)
       .then((ok) => {
         if (!ok) {
-          report(t('supervisor-delete-failed', { name: session.title.text }), 'error')
+          report(t(archiveSessions ? 'supervisor-archive-failed' : 'supervisor-delete-failed', { name: session.title.text }), 'error')
           return undefined
         }
-        report(t('supervisor-deleted', { name: session.title.text }), 'info')
+        report(t(archiveSessions ? 'supervisor-archived' : 'supervisor-deleted', { name: session.title.text }), 'info')
         return reload()
       })
-      .catch(error => report(t('session-delete-failed', { err: message(error) }), 'error'))
-  }, [channel, holderOf, liveStateOf, reload, report])
+      .catch(error => report(t(archiveSessions ? 'session-archive-failed' : 'session-delete-failed', { err: message(error) }), 'error'))
+  }, [archiveSessions, channel, holderOf, liveStateOf, reload, report])
 
   const selectEntry = useCallback((entry: RailEntry): void => {
     setSelectedPath(entry.from === 'registry' ? entry.path : undefined)
@@ -770,6 +771,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
 
   return {
     dshBackend,
+    archiveSessions,
     sessionRename,
     setSessionRename,
     confirmDelete,

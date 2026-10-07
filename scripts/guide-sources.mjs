@@ -41,6 +41,7 @@ export const GUIDE_DOCS = [
   'interaction',
   'configuration',
   'claude-backend',
+  'codex-backend',
   'themes',
   'migrate',
   'vscode',

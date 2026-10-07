@@ -27,6 +27,7 @@ import { arr, rec, str, type Rec } from '../narrow.js'
 import { failureHint } from './notices.js'
 import { TOOL_ITEM_TYPES, toolCallOf, toolResultOf, type ResultWords } from './presentation.js'
 import { addUsage } from './usage.js'
+import { itemImages, transcriptImages, dataUrlImageFacade } from '../session/images.js'
 
 /** The attempt (one model reply) being assembled. */
 export interface OpenAttempt {
@@ -43,8 +44,6 @@ export interface OpenAttempt {
   readonly rawReasoning: Set<string>
   /** Items whose summary streamed (their raw text stream stays hidden). */
   readonly summarized: Set<string>
-  /** Usage reported while the attempt was open (attached at settle). */
-  usage: UsageDelta | undefined
 }
 
 /** A tool item that started and has not completed. */
@@ -155,7 +154,7 @@ export function ensureAttempt(ctx: ItemContext, out: AgentEvent[]): OpenAttempt 
   out.push({ type: 'step.start', turn: ctx.turn, step: ctx.step })
   const id = `${ctx.turnId === '' ? `turn-${ctx.turn}` : ctx.turnId}#${ctx.step}`
   out.push({ type: 'assistant.attempt.start', attemptId: id, turn: ctx.turn, step: ctx.step, ...(ctx.model === '' ? {} : { model: ctx.model }) })
-  ctx.attempt = { id, step: ctx.step, reasoning: '', text: '', streamedReasoning: '', streamedText: '', rawReasoning: new Set(), summarized: new Set(), usage: undefined }
+  ctx.attempt = { id, step: ctx.step, reasoning: '', text: '', streamedReasoning: '', streamedText: '', rawReasoning: new Set(), summarized: new Set() }
   return ctx.attempt
 }
 
@@ -181,10 +180,10 @@ export function settleAttempt(ctx: ItemContext, out: AgentEvent[], time: number,
     time,
     ...(ctx.model === '' ? {} : { model: ctx.model }),
     blocks,
-    ...(open.usage === undefined ? {} : { usage: open.usage }),
     ...(interrupted ? { interrupted: true as const } : {}),
     canonical: true,
   })
+  out.push({ type: 'assistant.attempt.end', attemptId: open.id, outcome: 'committed' })
 }
 
 /**
@@ -209,19 +208,11 @@ export function closeTurn(ctx: ItemContext, out: AgentEvent[], reason: TurnEndRe
   if (hint !== undefined) out.push(hint)
 }
 
-/** Usage of one model call: attached to the open reply when there is one,
- *  else reported for the current step on a usage-only message. */
+/** Meter one model call without manufacturing or changing a message. */
 export function reportUsage(ctx: ItemContext, out: AgentEvent[], usage: UsageDelta, time: number): void {
-  ctx.turnUsage = addUsage(ctx.turnUsage, usage)
-  if (ctx.attempt !== undefined) {
-    ctx.attempt.usage = addUsage(ctx.attempt.usage, usage)
-    return
-  }
   if (!ctx.turnOpen) return
-  const step = Math.max(1, ctx.step)
-  // A usage report: the projector books it (tokens, the turn's summary,
-  // the context sample) and touches no row; the trace skips it.
-  out.push({ type: 'assistant.message', seq: ctx.nextSeq(), anchor: '', turn: ctx.turn, step, attemptId: `${ctx.turnId}#${step}#usage`, time, blocks: [], usage, canonical: false, usageOnly: true })
+  ctx.turnUsage = addUsage(ctx.turnUsage, usage)
+  out.push({ type: 'usage', seq: ctx.nextSeq(), turn: ctx.turn, step: Math.max(1, ctx.step), usage, time, ...(ctx.model === '' ? {} : { model: ctx.model }) })
 }
 
 /** The user-facing text and the model-facing blocks of a user message. */
@@ -286,6 +277,7 @@ export function itemEvents(item: Rec, phase: 'started' | 'completed', ctx: ItemC
     case 'userMessage': {
       if (phase !== 'started') return out
       const { text, blocks } = userContent(item.content)
+      const images = transcriptImages(item.content, id, ctx.cwd)
       const clientId = str(item.clientId)
       rememberAnchor(ctx, id)
       const output = BASH_OUTPUT.exec(text)
@@ -299,6 +291,7 @@ export function itemEvents(item: Rec, phase: 'started' | 'completed', ctx: ItemC
         source: output === null ? 'user' : 'command-output',
         text: output === null ? text : output[1]!.trim(),
         blocks,
+        ...(images.length === 0 ? {} : { images }),
       })
       return out
     }
@@ -337,6 +330,30 @@ export function itemEvents(item: Rec, phase: 'started' | 'completed', ctx: ItemC
       }
       return out
     }
+    case 'subAgentActivity': {
+      if (phase !== 'started') return out
+      settleAttempt(ctx, out, time)
+      const agentId = str(item.agentThreadId)
+      if (agentId === undefined) return out
+      const path = (str(item.agentPath) ?? '').split('/').filter(Boolean)
+      switch (str(item.kind)) {
+        case 'started':
+          out.push({ type: 'subagent.start', agentId, parentCallId: id, description: path.at(-1) ?? agentId, background: false, depth: Math.max(1, path.length - 1), time })
+          break
+        case 'interacted':
+          out.push({ type: 'subagent.progress', agentId })
+          break
+        case 'interrupted':
+          out.push({ type: 'subagent.end', agentId, status: 'cancelled', time })
+          break
+        case 'completed':
+          out.push({ type: 'subagent.end', agentId, status: 'completed', time })
+          break
+        default:
+          break
+      }
+      return out
+    }
     case 'enteredReviewMode': {
       if (phase !== 'started') return out
       settleAttempt(ctx, out, time)
@@ -371,6 +388,16 @@ export function itemEvents(item: Rec, phase: 'started' | 'completed', ctx: ItemC
     if (!ctx.openTools.has(id)) startCall()
     ctx.openTools.delete(id)
     const result = toolResultOf(item, ctx.cwd, ctx.words)
+    const images = itemImages(item, id, ctx.cwd)
+    if (type === 'mcpToolCall') arr(rec(item.result)?.content).forEach((raw, index) => {
+      const block = rec(raw)
+      if (block?.type !== 'image') return
+      const data = str(block.data)
+      const mime = str(block.mimeType)
+      if (data === undefined || mime === undefined) return
+      const image = dataUrlImageFacade(`${id}#${index}`, `data:${mime};base64,${data}`)
+      if (image !== undefined) images.push(image)
+    })
     out.push({
       type: 'tool.result',
       seq: ctx.nextSeq(),
@@ -381,7 +408,7 @@ export function itemEvents(item: Rec, phase: 'started' | 'completed', ctx: ItemC
       time,
       content: result.content,
       text: result.text,
-      ...(result.errorText === undefined ? {} : { errorText: result.errorText }),
+      ...(images.length === 0 ? {} : { images }),      ...(result.errorText === undefined ? {} : { errorText: result.errorText }),
       ...(result.structured === undefined ? {} : { structured: result.structured }),
       ...(result.presentation === undefined ? {} : { presentation: result.presentation }),
     })

@@ -1,5 +1,8 @@
 /** Dependencies and start-up facts of one Codex session (a thread). */
 import type { OpenTarget } from '../../../agent/backend.js'
+import type { CodexAuthRuntime } from '../auth/external-tokens.js'
+import type { CodexChannelsRuntime } from '../channels.js'
+import type { Rec } from '../narrow.js'
 import type { CodexModeId } from '../modes.js'
 import type { CodexPrefs } from '../prefs.js'
 import type { RpcClock } from '../rpc/client.js'
@@ -15,6 +18,9 @@ export interface CodexSessionDeps {
   /** Where a created thread runs (a resumed one keeps its own). */
   readonly cwd: string
   readonly prefs: CodexPrefs
+  readonly config?: Rec
+  readonly auth?: CodexAuthRuntime
+  readonly channels?: CodexChannelsRuntime
   readonly executable: CodexExecutable & { readonly version?: string }
   readonly host: {
     debug(message: string): void
@@ -37,7 +43,11 @@ export interface OpenedThread {
   readonly model: string
   readonly provider: string
   readonly effort: string | null
-  readonly modeId: CodexModeId | 'custom'
+  readonly modeId: CodexModeId | 'custom' | 'plan'
+  readonly permissionMode: CodexModeId | 'custom'
+  readonly approvalPolicy?: unknown
+  readonly sandboxPolicy?: unknown
+  readonly collaborationMode?: Rec
   readonly title?: string
   /** `active` when a resumed thread is mid-turn. */
   readonly running: boolean

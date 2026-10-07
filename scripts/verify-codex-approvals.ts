@@ -200,8 +200,13 @@ const respond = h.session.capabilities.permissions!.respond
   check('… and answered once', [...h.fake.responses.entries()].filter(([key]) => key === id).length === 1)
 }
 {
-  const elicit = await h.fake.request('mcpServer/elicitation/request', { threadId: THREAD, turnId: null, serverName: 'docs', mode: 'form', message: 'login', requestedSchema: {} })
-  check('MCP elicitation (C2): cancelled with a notice, never a hang', (elicit.result as Rec).action === 'cancel' && of(h.events(), 'notice').some(event => event.key === 'codex-elicitation'))
+  const eliciting = h.fake.request('mcpServer/elicitation/request', { threadId: THREAD, turnId: null, serverName: 'docs', mode: 'form', message: 'login', requestedSchema: {} })
+  await tick()
+  const elicitQuestion = lastQuestion(h.events())
+  check('MCP elicitation: the shared consent form is displayed', elicitQuestion.questions.length === 1 && elicitQuestion.questions[0]!.header === 'docs')
+  h.session.capabilities.questions!.cancel(elicitQuestion.requestId)
+  const elicit = await eliciting
+  check('MCP elicitation: cancel responds without hanging the server', (elicit.result as Rec).action === 'cancel')
   const legacy = await h.fake.request('execCommandApproval', { conversationId: THREAD, callId: 'x', command: ['ls'] })
   check('a legacy v1 approval is refused with -32601', (legacy.error as Rec | undefined)?.code === -32601)
 }

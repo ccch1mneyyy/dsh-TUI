@@ -4,7 +4,8 @@
  *
  * - Executable: `CODEX_EXECUTABLE` (taken as given, so a typo fails loudly)
  *   → the first `codex` on PATH whose `--version` answers → not installed.
- *   On Windows the npm shims (`codex.cmd`) run through `cmd.exe`.
+ *   On Windows npm shims resolve to the native codex.exe so cmd.exe never
+ *   reparses app-server arguments.
  * - Environment: `process.env` minus what a parent Codex session exports
  *   to its shells (C0 V2: dsh-tui may itself run inside one, and the child
  *   must not believe it is that thread's tool process) and minus the npm
@@ -14,6 +15,7 @@
  */
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
+import { posix, win32 } from 'node:path'
 import { parseCodexVersion } from '../contract.js'
 
 /** Where the executable came from (`/doctor`). */
@@ -88,7 +90,8 @@ const NPM_TARGETS: Readonly<Record<string, { readonly triple: string; readonly p
 /**
  * The native binary behind an npm `codex` shim (`codex.cmd`, `codex.ps1`,
  * the extensionless script), or undefined. A shim runs `node …/@openai/codex/
- * bin/codex.js`, which only locates `vendor/<triple>/bin/codex[.exe]` of the
+ * bin/codex.js`, which locates `vendor/<triple>/bin/codex[.exe]` (older
+ * packages use `codex/` instead of `bin/`) of the
  * platform package and spawns it; spawning that binary directly avoids
  * `cmd.exe` re-parsing the `-c key="value"` arguments. Pure over its I/O
  * seams (unit-tested with a fake tree).
@@ -103,22 +106,22 @@ export function resolveNpmShim(shim: string, io: {
   if (target === undefined) return undefined
   const text = io.read(shim)
   if (text === undefined || !/@openai[\\/]codex[\\/]bin[\\/]codex\.js/iu.test(text)) return undefined
-  const sep = io.platform === 'win32' ? '\\' : '/'
-  const join = (...parts: string[]): string => parts.join(sep)
-  const shimDir = shim.slice(0, Math.max(shim.lastIndexOf('/'), shim.lastIndexOf('\\')))
-  // An absolute launcher path in the shim wins; else npm's own layout
-  // (`<shim dir>/node_modules/@openai/codex`).
-  const absolute = /([A-Za-z]:\\[^"'\r\n]*?|\/[^"'\s]*?)[\\/]bin[\\/]codex\.js/u.exec(text.replace(/%~?dp0%?[\\/]?|\$\{?basedir\}?[\\/]?/gu, ''))?.[1]
+  const paths = io.platform === 'win32' ? win32 : posix
+  const shimDir = paths.dirname(shim)
+  const match = /["']([^"'\r\n]*@openai[\\/]codex[\\/]bin[\\/]codex\.js)["']|(\S*@openai[\\/]codex[\\/]bin[\\/]codex\.js)/iu.exec(text)
+  const launcher = (match?.[1] ?? match?.[2])?.replace(/%~?dp0%?|\$\{?basedir\}?|\$PSScriptRoot/giu, shimDir)
   const roots = [
-    ...(absolute !== undefined && /@openai[\\/]codex$/iu.test(absolute) && io.exists(absolute) ? [absolute] : []),
-    join(shimDir, 'node_modules', '@openai', 'codex'),
+    ...(launcher === undefined ? [] : [paths.dirname(paths.dirname(paths.resolve(shimDir, launcher)))]),
+    paths.join(shimDir, 'node_modules', '@openai', 'codex'),
   ]
   const binary = io.platform === 'win32' ? 'codex.exe' : 'codex'
   for (const root of roots) {
-    const scope = root.slice(0, Math.max(root.lastIndexOf('/'), root.lastIndexOf('\\')))
-    for (const vendor of [join(root, 'node_modules', '@openai', target.pkg, 'vendor'), join(scope, target.pkg, 'vendor'), join(root, 'vendor')]) {
-      const candidate = join(vendor, target.triple, 'bin', binary)
-      if (io.exists(candidate)) return candidate
+    const scope = paths.dirname(root)
+    for (const vendor of [paths.join(root, 'node_modules', '@openai', target.pkg, 'vendor'), paths.join(scope, target.pkg, 'vendor'), paths.join(root, 'vendor')]) {
+      for (const subdir of ['bin', 'codex']) {
+        const candidate = paths.join(vendor, target.triple, subdir, binary)
+        if (io.exists(candidate)) return candidate
+      }
     }
   }
   return undefined

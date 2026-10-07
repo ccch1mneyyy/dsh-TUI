@@ -1,5 +1,5 @@
 /**
- * 品牌档案：开屏与主题按「当前后端」二选一展示。
+ * 品牌档案：开屏与主题按当前后端展示；Codex 仅换标题，不换主题/宠物。
  *
  * 默认 `deepseek`（雾蓝 + `DEEPSEEK`/`HARNESS` + 鲸鱼/鲸鱼娘）；当会话绑在
  * Claude 后端（`backendCapabilities.backendId === 'claude'`，见
@@ -17,8 +17,8 @@
  * 的 reactive 清单里），未来进程内热切也不用改这里。
  */
 
-/** 品牌档：deepseek（默认）或 claude（Claude 后端）。 */
-export type Brand = 'deepseek' | 'claude'
+/** Codex only swaps the title; theme and mascot retain the default branches. */
+export type Brand = 'deepseek' | 'claude' | 'codex'
 
 // 设置值类型住在端口的显示偏好词汇表里（ports 目录不许 import 到目录外），
 // 这里转出去：设置链（Config / channel / /settings 面板）只认这一个入口。
@@ -38,12 +38,12 @@ export function normalizeBrandSetting(value: unknown): BrandSetting {
 }
 
 /**
- * 后端 id → 品牌档：`claude`（Claude Agent 后端）→ claude；`dsh`、未知与
+ * 后端 id → 品牌档：`claude` → claude；`codex` → 仅标题；`dsh`、未知与
  * `acp:*` 外部代理一律回落默认品牌（未来某代理想要自己的品牌再单加）。
- * @param backendId - `channel.backendCapabilities.backendId`（`'dsh' | 'claude' | 'acp:*'`）。
+ * @param backendId - `channel.backendCapabilities.backendId`。
  */
 export function brandOfBackend(backendId: string | undefined): Brand {
-  return backendId === 'claude' ? 'claude' : 'deepseek'
+  return backendId === 'claude' ? 'claude' : backendId === 'codex' ? 'codex' : 'deepseek'
 }
 
 /**
@@ -69,6 +69,7 @@ export interface BrandSplashWords {
 export const BRAND_SPLASH_WORDS: Readonly<Record<Brand, BrandSplashWords>> = Object.freeze({
   deepseek: Object.freeze({ top: 'DEEPSEEK', bottom: 'HARNESS', plain: 'DeepSeek Harness' }),
   claude: Object.freeze({ top: 'CLAUDE', bottom: 'CODE', plain: 'Claude Code' }),
+  codex: Object.freeze({ top: 'CODEX', bottom: 'HARNESS', plain: 'Codex' }),
 })
 
 /** claude 品牌按终端深浅落的两套内置主题（theme.ts 注册：墨黑 / 暖纸张，
@@ -82,6 +83,7 @@ export const CLAUDE_BRAND_THEMES: Readonly<{ dark: 'claude-dark'; light: 'claude
  *  `\n` 分隔，渲染层按行拆开居中。 */
 export const BRAND_TAGLINE: Readonly<Record<Brand, { readonly zh: string; readonly en: string }>> = Object.freeze({
   deepseek: Object.freeze({ zh: '', en: '' }),
+  codex: Object.freeze({ zh: '', en: '' }),
   claude: Object.freeze({ zh: '创造精彩，守护关键。', en: "Create what's exciting.\nMaintain what's essential." }),
 })
 

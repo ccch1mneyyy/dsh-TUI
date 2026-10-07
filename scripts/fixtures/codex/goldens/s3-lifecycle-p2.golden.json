@@ -2,14 +2,18 @@
   "events": [
     "session.status",
     "context.capacity",
+    "context.usage",
     "session.title",
     "session.status",
     "session.status",
     "turn.start",
     "compaction.start",
-    "assistant.message",
-    "assistant.message",
-    "assistant.message",
+    "usage",
+    "context.usage",
+    "usage",
+    "context.usage",
+    "usage",
+    "context.usage",
     "compaction.end",
     "notice",
     "session.status",
@@ -43,6 +47,11 @@
     "todos": [],
     "notices": [
       "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted."
-    ]
+    ],
+    "contextMeasure": {
+      "type": "context.usage",
+      "used": 0,
+      "max": 246400
+    }
   }
 }

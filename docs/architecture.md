@@ -8,7 +8,7 @@
 Cordis profile
   -> src/index.ts（插件契约与 Schema）
   -> src/dsh-adapter/plugin.ts（服务、Agent、React 生命周期）
-  -> AgentSession（DSH Agent，或实验性的 Claude Agent 后端）
+  -> AgentSession（DSH Agent、Claude Agent SDK 或 Codex app-server 后端）
   -> src/dsh-adapter/channel.ts（核心 + DSH 扩展；AgentEvent -> 共享投影器 -> Channel）
   -> src/screens/Chat.tsx（键盘与模式编排）
   -> src/components/*（视图）
@@ -29,7 +29,7 @@ Cordis profile
 | `src/dsh-adapter/channel/core/` | 后端中立核心：任何 `AgentSession` 都走它（见下表） |
 | `src/dsh-adapter/channel/extensions.ts` | DSH 扩展：只接线、不改 DSH specialist 内部 |
 | `src/agent/`、`src/channel/` | 后端中立的会话领域（`AgentEvent`、`AgentSession`、能力）与共享投影器、中立 store |
-| `src/dsh-adapter/backend/`、`src/backends/claude/` | 各后端的翻译器与会话实现；多后端结构见[多后端架构](agent-backend-design.md) |
+| `src/dsh-adapter/backend/`、`src/backends/claude/`、`src/backends/codex/` | DSH、Claude 与 Codex 的翻译器/会话/能力；Codex 驱动用户的 app-server，不捆绑 SDK；见[多后端架构](agent-backend-design.md) |
 | `src/workspaces.ts` | 本地路径 fallback 与通用工作区 provider registry；不得包含任何 provider 的协议、文案或依赖 |
 | `src/screens/Chat.tsx` | modal 优先级、全局按键、滚动/搜索/选择状态、slash command 分发 |
 | `src/components/` | 用户界面和 design-system；不直接拥有 Agent 或 session 真相 |
@@ -83,8 +83,11 @@ service、registry 或 channel seam 接入。
 
 ## Session 是真源
 
-Channel 不把 React 本地数组当作对话真相。Claude 会话以 Claude CLI 自己的转录为准
-（经 SDK 读取），下面以 DSH 为例。DSH `session/event` 日志负责：
+Channel 不把 React 本地数组当作对话真相。Claude 会话以 CLI 自己的转录为准（经 SDK
+读取）；Codex 以官方 `$CODEX_HOME` 的 thread/turn 存储为准，经 app-server 分页读取
+完整 item，live 与回放共用映射。TUI 只存偏好与渠道元数据，不另写转录或官方配置。
+Codex 的独立 `usage` 事件只记账，`context.usage` 保留官方 12k 基线占用语义，不生成
+空助手行；历史没有的计费用量不编造。下面以 DSH 为例。DSH `session/event` 日志负责：
 
 - 初始历史回放与增量流式事件；
 - assistant/reasoning/tool 行的关联与 sequence anchor；
@@ -176,8 +179,9 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 | `~/.dsh-tui/themes/` | 用户自定义主题 JSON；运行时插件主题不写入此目录 |
 | `~/.dsh-tui/working-activity.json` | 工作状态动画选择 |
 | `~/.dsh-tui/agent-preset.json` | 新会话默认 Agent preset |
-| `~/.dsh-tui/kernel.json` | `/kernel` 记住的后端（`dsh` / `claude`） |
+| `~/.dsh-tui/kernel.json` | `/kernel` 记住的后端（`dsh` / `claude` / `codex`） |
 | `~/.dsh-tui/backends/claude/` | Claude 后端的偏好（`prefs.json`）、置顶与渠道档案（`channels.json`）；Claude 会话本身在 `~/.claude/projects/` |
+| `~/.dsh-tui/backends/codex/` | Codex 偏好与渠道档案（只含 tokenRef，key 在 DSH 凭据库）；原生 thread、登录与配置仍由 `$CODEX_HOME` / Codex 管理 |
 
 `DSH_TUI_SESSION_ROOT` 在两种组合中都改写 JSONL 根目录。profile 默认使用
 `$DSH_HOME/sessions`（通常为 `~/.dsh/sessions/`）；直接运行根目录的
@@ -253,7 +257,8 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 
 ## 已知限制
 
-- 实验性 Claude 后端的限制单独列在[多后端架构](agent-backend-design.md#已知限制)。
+- 实验性 Claude 后端的限制单独列在[多后端架构](agent-backend-design.md#已知限制)；
+  Codex 的操作、非目标与真实验证边界见[Codex 用户说明](codex-backend.md)。
 - 注入到 system prompt 的插件上下文不会在 UI 中单独列出，而是计入 system/context
   分段。
 - `/model` 通过 session fork 切换，不是原位修改；旧会话会留在 `/resume`。
@@ -294,5 +299,7 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 | stderr 调试 | `DSH_TUI_DEBUG=1 dsh --profile dsh-tui` |
 | 原始 ANSI 帧 | `DSH_TUI_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
 | 主题回归 | `node --import tsx/esm scripts/verify-themes.mjs` |
+| 三后端对照 | DSH：`verify:projection-golden` / `verify-dsh-translate`；Claude：`verify:claude-contract` / 对应假 SDK 脚本；Codex：`verify:codex-contract` / 对应假 app-server 脚本；共享领域与事件不变量另外验证 |
+| Codex 真实验证 | 0.160.1 隔离 home 九项离线无模型回合检查通过；带凭据验证只按 `codex-cheap-only.mjs` 守卫执行。真实登录/模型调用与 inline/fullscreen、窄终端体验本轮未跑，不能以离线/mock 通过代替 |
 
 `DSH_TUI_RENDER_LOG` 和会话导出可能包含敏感内容，分享前必须脱敏。

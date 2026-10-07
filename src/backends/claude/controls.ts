@@ -47,7 +47,7 @@ export interface ClaudeControlsDeps {
   query(): Pick<Query, 'setModel' | 'setPermissionMode' | 'applyFlagSettings' | 'supportedModels' | 'supportedCommands' | 'mcpServerStatus' | 'reconnectMcpServer' | 'toggleMcpServer' | 'getContextUsage' | 'accountInfo'>
   /** Deliver events (model/mode/effort changes). */
   emit(events: readonly AgentEvent[]): void
-  /** Push one user input (the `/compact` command text). */
+  /** Push one user input (native `/compact` or `/init` command text). */
   submitText(text: string): Promise<void>
   /** The model the session runs (translator's view). */
   currentModel(): string
@@ -367,6 +367,7 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
         }
       },
     },
+    init: { run: (): Promise<void> => deps.submitText('/init') },
     compact: {
       // The CLI's own `/compact`: the translator turns its
       // `compacting` status and `compact_boundary` into the compaction rows.

@@ -309,7 +309,7 @@ export function LogoV2({
   // 节日彩蛋：本地日期整天恒定，每次 mount 只判一次（照 pickSplashFont 的写法）。
   // 只换下排词——上排钉在品牌词上（deepseek 的 `DEEPSEEK` / claude 的 `CLAUDE`）。
   const [dailyEgg] = React.useState<SplashEgg | null>(() => (egg === undefined ? pickSplashEgg() : egg))
-  const titleFont = dailyEgg === null ? brandFont : withTagline(font, words.top, dailyEgg.bottom, { wide: brand === 'claude' })
+  const titleFont = dailyEgg === null ? brandFont : withTagline(font, brand === 'codex' ? font.tagline.top : words.top, dailyEgg.bottom, { wide: brand === 'claude' })
 
   // 窄终端阶梯：鲸鱼 + 大字 → 纯大字 → 纯鲸鱼 → 一行纯文字（阈值随字体字身宽度变）。
   const splash = resolveSplashLayout(columns, { whale, font: titleFont })
@@ -504,7 +504,9 @@ export function LogoV2({
   // 两行标题各自用字体声明的字距；下排再按 `bottomIndent` 居中——
   // 两者一起保证画出来的列数相等（见 splashFonts 的 tagline 契约）。
   // 节日彩蛋换的就是这里的两排词（`titleFont` 已按当天词对重解字距）。
-  const { top, bottom, topKerning, bottomKerning, bottomIndent } = titleFont.tagline
+  const { top: fontTop, bottom, topKerning, bottomKerning, bottomIndent } = titleFont.tagline
+  // Codex changes only the title ink, not the font metrics or layout ladder.
+  const top = brand === 'codex' ? words.top : fontTop
   // 大字配色按字体/品牌解析（运行时 `palette`（扩展缝）最优先）：
   // - deepseek：主题 accent → activity → PALE 的蓝白阶（品牌化之前的行为）；
   // - claude：cc-bridge 校过的深橙 → 浅橙，两行同一对端点——第二行终点不再

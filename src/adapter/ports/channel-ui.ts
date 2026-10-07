@@ -11,6 +11,8 @@ import type { ProviderSetupHost, OAuthProviderStatus, OAuthSetupHost, SettingsHo
 export interface BackendAuthHost {
   /** Report status, present OAuth, then reconnect after sign-in or sign-out. */
   login(present: (oauth: OAuthSetupHost, provider: string) => Promise<'added' | 'updated' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'>): Promise<void>
+  /** Remove only this backend's host OAuth credential, never its native login. */
+  logout?(): Promise<boolean>
 }
 
 /** Relay profile management for the bound backend session. */
@@ -573,6 +575,8 @@ export interface ChannelUi {
   backendChannels(): BackendChannelsHost | undefined
   backendModes(): BackendModesHost | undefined
   backendMcp(): BackendMcpHost | undefined
+  /** Backend-owned `/init`; DSH keeps its synchronous initWorkspace path. */
+  backendInit(): { run(): Promise<boolean> } | undefined
   /** `/goal` on a session with the typed `goals` capability; undefined
    *  otherwise (DSH's /goal is its command registry row). */
   backendGoals(): BackendGoalsHost | undefined

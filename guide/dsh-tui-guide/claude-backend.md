@@ -77,9 +77,11 @@ IDE 选区、状态栏的 git 分支、`/clear`（只清屏，Claude 保留上�
 | Claude 自己的斜杠命令 | 出现在补全里，原样发给 Claude；与 dsh-TUI 内置命令同名的，以内置命令为准 |
 | `/channel` | 仅 Claude：中转渠道的模型名与连接，见[渠道档案](interaction.md#渠道档案channel仅-claude) |
 
+`/init` 委托 Claude 原生初始化命令。`/logout` 只清理 dsh-auth 保存的 Anthropic 登录，不调用 Claude 原生登出；已有进程缓存的托管令牌在正常重启后停止使用。
+
 不可用（不出现在补全里，直接输入会提示不可用，不会发给模型）：`/tree`、`/agentview`、
-`/bg`、`/home`、`/workspace`、`/preset`、`/provider`、`/logout`、`/balance`、`/config`、
-`/reload`、`/setup`、`/init`、`/migrate`、`/skills`、`/plugins`、`/hooks`、
+`/bg`、`/home`、`/workspace`、`/preset`、`/provider`、`/balance`、`/config`、
+`/reload`、`/setup`、`/migrate`、`/skills`、`/plugins`、`/hooks`、
 `/add-dir`、`/goal`（Claude 没有目标能力）。DSH 组合注册的其他命令（如 `/plan`）也不会出现。
 
 启动时仍先到启动页；首启引导和工作区首页只在 DSH 下出现。带恢复目标的启动直接进入

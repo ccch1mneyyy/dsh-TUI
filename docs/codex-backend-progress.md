@@ -261,3 +261,95 @@ goldens 变化：两张卡片标题从错误的引号剥离改为正确脚本（
 | DR-7 | 事件流不变量检查器跑全部后端 fixture | 抓"幽灵回合"一类顺序缺陷 |
 | DR-8 | rewind 坚持 `thread/fork{lastTurnId}` | `beforeTurnId` 只在实验类型里（0.144.0/0.160.1 稳定类型都没有） |
 | DR-9 | 渠道 URL 校验；评估 `thread/start.config` 承载 provider | `-c` 参数在进程列表可见 |
+
+## 本机续作 C2-C4（2026-10-07）
+
+基线 `02141231`，独立工作树 `D:/code/projects/.worktrees/dsh-tui-codex-native`，分支仍为
+`feat/codex-native`。本轮未 commit、push 或开 PR；共享主仓 main 和原有私有技能文件未修改。
+维护者明确要求扩大并行与 xhigh 后，5 个独立工作树子代理分域实施和审查，没有子代理再派代理。
+
+### 功能实现
+
+- C2：N8 独立 usage 事件替代 usageOnly，复用记账和 seq 去重，不建行、不改行、不进入 trace/导出；
+  占用优先级为 DSH projection > backend context.usage > billing sample。N9 init 接 Codex 官方
+  提示词和 Claude 原生 /init，DSH 模板仍由扩展拥有。全部 fixture 事件流不变量已接入 CI。
+- hub 诊断广播、晚 attach 快照和 bubblewrap 汇总；退出漏斗关闭已加载 pool，DSH-only 不因此加载
+  Codex。未知 child 经 thread/read 父链路由，审批随通知缓冲。Windows npm shim 直达真实 exe。
+- 100ms 命令输出合帧、真实 patch 行号、secret/自动问卷、共用 MCP form/URL elicitation、计划评审
+  三分支。修复表单重问后 serverRequest/resolved 不结算面板，以及普通模型/effort 改动误重写
+  collaboration instructions、pending 重复覆盖、旧 server 拒收 Plan 字段污染下一回合。
+- models/effort、正交 Plan/权限、compact/context/account/MCP、review/diff/plan/usage/skills、
+  /init 全接通。Shift+Tab 只开关 Plan，full-access 只经显式选择。12k context 公式采用原生 last。
+- auth：第一方路由、JWT 声明、CAS/8s AbortSignal、三种 /login、URL 保存/启动双校验、令牌独立
+  存储。外部 AuthBridge 已加载后失败不假称 native 恢复；启动已观测失败才切不同指纹的干净 hub。
+  /logout 只清 dsh-auth 存储，不调用原生 account/logout，已缓存托管令牌正常重启后停止使用。
+- C3：原生目录最多 500 项、跨 provider/项目、摘要预览、改名/归档文案；初始 full20 回合、同步
+  older/record 与一页预取。summary 不抹完整工具内容，history 有界；fork/rewind 仅用稳定
+  lastTurnId，原始首回合建空 thread，文件回退明确拒绝，未就绪前页不误判首回合。颜色最多200项。
+- 图片：20MiB/张、20张/条、50MiB/条、2048边/2048²，发送 data URL，live/replay 同源惰性 facade；
+  缺文件占位，MCP、view/generation 图片也接入。传输96Mi码元容纳合法base64消息，完整行超限也拦。
+- 独立审查 R1 已修：临时断线保留原工具卡、attempt 和正文，不虚构执行失败；恢复按 item 阶段补缺，
+  已显示行和用量不重复。full20 页沿原生 cursor 回补到已知边界，最多50页/1000回合；active先恢复
+  输入turn再放队列。超预算/cursor循环明确警告只读，不假报成功。48项有坏基线反证。
+- C4：子代理 lane、父链验权、按需历史/opaque sourceCursor、interrupt、父模型send_input转达；
+  请求 model/prompt/nickname 同卡更新，不宣称实际执行模型。父子同callId输出按lane分开并100ms合帧。
+- 后台终端仅inventory非空时2s轮询，UTF-8尾部64KiB、100ms输出合帧；原生terminate确认才停止，
+  自然消失注明退出状态未知，不编造exitCode。目标预算/状态、hook通知/hookPrompt、活动自述、
+  30s等待/120s提示、btw/recap只读ephemeral已接。独立审查 R2 owner dispose/reset旁问泄漏、
+  迟到fork/start清理，以及MCP/webSearch被误报模型stalled均修复并有75项回归。
+- 主题仅CODEX/Codex标题；原配色、宠物、字体尺寸与布局不变。中断文案按后端和当前语言呈现，
+  DSH行结构/文案逐字节不变。双语用户说明、README、架构/贡献说明和20篇guide已同步。
+
+### 验证账本
+
+- 冻结源码 `DSH_TUI_VERIFY_JOBS=4 pnpm build`：编译和90/90构建门禁通过；boundary、i18n、
+  manifest/协议、DSH/Claude契约、固定窗和全部渲染门禁通过。
+- 最终 `run-ci-group channel-ui --jobs 4`：177/177全通过，包含全部DSH/Claude/Codex回归。
+  初轮175项里whale-girl首帧观察并行红、串行绿；最终冻结轮不靠复跑放行。
+- input-terminal 31/31；render-scroll 初轮80/81，K3通用too-old判定误伤Claude，限制为Codex后
+  verify-launchpad 314/314 单独通过，其余80项已通过。
+- session-workspace 53/57；4项在shared main既有源码/产物与隔离HOME下复现完全相同失败：
+  handoff-atomic Windows/POSIX信号假设；update-extract python3 exit9009；update-checksum Linux
+  tar夹具与Windows zip/exe资产错配；standalone-cache-guard POSIX chmod/stat假设。3 owner源、
+  2产物hash相同，4 probes相对基线无diff，未扩scope修改更新器。
+- Codex聚焦：rpc47、hub55、translate157、live/replay43、input41、approvals52、chat52、auth92、
+  live-guard17（不收费）、controls97、plans25、advanced30、catalog/history27、lifecycle47、
+  images21、subagents23、child-output9、side-query75、reconnect48、chat-controls108。
+- 事件不变量86条流/2272事件及变异反证通过；DSH5份黄金基线/83行未改。
+- verify:package 3080文件/30入口目标；pnpm smoke、20篇guide同步验证通过。本地tarball仅在.local，
+  未发布。正式profile组合dump-config通过，使用独立DSH_HOME和工作树Junction，不迁用户主profile。
+- 官方Windows Codex0.160.1包经官方SHA256校验，verify-codex-offline 9项通过：隔离HOME握手、
+  创建、目录、原始context0、权限/Plan、改名、ephemeralfork、full页恢复。无turn/start、不收费。
+  本轮真实模型回合0，真实ChatGPT/设备码/API-key和物理终端仍未测。
+- 独立perf-tool-live-output：200对话行+50工具卡，全屏100x40/10Hz/60片。无输出p50/p95
+  0.37/0.55ms；实时0.38/0.74ms、max1.86ms；前10片均值1.67ms/后10片1.14ms，成本不随累计
+  输出上升。此为本机无头renderer探针，不替代真实终端基准。
+
+### 偏离和未测边界
+
+- provider保留已证实-c；thread/start.config可临时覆写，但跨进程provider定义恢复/官方互通无凭据
+  实测证明，未贸然换路径。argv主机名可见的限制已写文档。
+- 临时connectionLost不虚构interrupted比原设计更保真，旧input回归改为真实full-items恢复快照。
+  sourceCursor是必要的小中立增量，不伪造Codex总记录数，旧数字页后端缺省不变。
+- 本机CODEX_TEST_BASE_URL/CODEX_TEST_API_KEY未设置，没有可交互TTY。真实OAuth originator、device
+  flow、API-key持久化、带凭据文本/视觉/子代理/终端/goal/旁问回合未执行。正式live走backend.open，
+  缺凭据明确skipped，不当作live通过；成本/隔离入口17项守卫通过。
+- tarball独立profile安装因registry TLS/metadata fetch反覆失败取消，不绕过TLS、不改全局环境。
+  离线独立profile解析使用已有本机依赖；用户正在运行的TUI未终止、重启或换轨。
+  真实入口无TTY探针只完成配置解析，交互启动未验证；本轮启动的诊断进程已停止，不算TTY通过。
+- 施工期间profile帮助命令意外初始化空codex-native-check；核空依赖/绝对路径/无链接后已删除，
+  没有读取或改动个人凭据。构建在Windows Node24.13遗留的本轮preset探针目录已按绝对路径清理。
+
+## dst 验收部署与授权上传（2026-10-07）
+
+维护者后续授权构建、让 dst 直接使用并上传分支，验证后再合并。
+
+- pnpm build 编译和90项构建门禁再次通过。dst profile 包 Junction 改指 Codex 工作树，
+  sync-profile --check 对比5501文件零差异；dst --backend codex --dump-config 通过。
+- 本机委托启动器增加本地已校验0.160.1 binary回落，显式CODEX_EXECUTABLE优先；默认内核记忆改为
+  codex。启动器、原链接目标和原内核记忆备份仅在.local，不进入Git。
+- 当前TUI不重启、不终止。新终端运行dst即可验收，或显式dst --backend codex。
+- 上传仅推feat/codex-native，不推main、不发npm、不打tag、不开PR、不合并。
+- 核心完成不代表全部原生字段消费。尚缺serviceTier/输入模态、终端PID/CPU/RSS/cwd详情、MCP详细
+  清单/认证、instructionSources、独立推理tokens/支出状态、命名权限档、归档浏览/取消归档。
+  真实凭据和交互TTY仍需维护者验收。

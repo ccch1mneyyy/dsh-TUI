@@ -107,6 +107,7 @@ export function dshEmits(type: AgentEventType): boolean {
     case 'task.update':
     case 'task.end':
     case 'tasks.snapshot':
+    case 'usage':
     case 'context.usage':
     case 'model.changed':
     case 'effort.changed':

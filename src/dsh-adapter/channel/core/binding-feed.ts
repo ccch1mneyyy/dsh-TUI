@@ -290,7 +290,10 @@ export function createBindingFeed(ctx: Context, deps: {
   const { owner, binding, state, inputConvergence, controls } = deps
   // The projector reads its deps per use, so an extension can install its
   // job feed and pricing policy before any event is projected.
-  const projectorDeps: ChannelProjectionDeps = { ...deps.projection, inputConvergence }
+  const projectorDeps: ChannelProjectionDeps = {
+    ...deps.projection, inputConvergence,
+    backendLabel: () => state.backendCapabilities.backendId === 'dsh' ? undefined : state.backendCapabilities.backendLabel,
+  }
   const projector = createChannelProjection(state, projectorDeps)
   const router = createSessionBatchRouter({
     state,

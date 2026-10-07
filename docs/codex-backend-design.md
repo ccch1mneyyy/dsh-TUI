@@ -6,7 +6,7 @@
 负责落地的实现者（人或 AI）：读完本文、[多后端架构](agent-backend-design.md)、`AGENTS.md`
 与 `docs/contributing.md`，不需要其他上下文就能按 §11 的分期逐步实现。
 
-> **实施状态**：C0、C1 与中立层 N1–N7 已完成，C2–C4 未开始。当前进度、实测结论与偏离记录见
+> **实施状态**：C0–C4 与中立层 N1–N9 的功能实现已完成，真实凭据回合与交互终端仍需有条件实测。当前进度、实测结论与偏离记录见
 > [施工日志](codex-backend-progress.md)，接手步骤见[交接文档](codex-backend-handoff.md)。
 > 三者的权威顺序：施工日志（实测）＞ 本文（设计）＞ 交接文档（操作指引）。
 > 标注 **C0 已验证** 的段落已按实测就地修订；**C1 实施修订**/**评审修订**标注实现阶段确认的规则。
@@ -993,11 +993,12 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 
 ### 9.2 连接丢失与恢复
 
-1. hub 检测到子进程退出 → 每个会话收到 `connectionLost`：结算所有 open items（interrupted）、
-   撤回挂起请求（面板收起）、`session.status{idle}`、warning notice「Codex 进程退出，正在重连…」。
-2. hub 重启成功 → `connectionRestored`：会话 `thread/resume{excludeTurns:true}` →
-   `thread/turns/list` 取最近一页与本地已知最后 turn 对比，补齐缺失回合（追加事件，不重放已有）
-   → notice「已重新连接」。客户端 followup 队列保留并继续发送。
+1. hub 检测到临时断线 → 撤回挂起请求、取消旁问并提示重连；保留原生回合的工具卡、attempt 与已显示正文。
+   断连不是原生执行失败，不合成 interrupted 结果；永久连接失败才结算未完成项。
+2. 重启成功 → `thread/resume` 携带 full-items 初始页，沿原生 cursor 回补到已知回合边界（最多 50 页 /
+   1000 回合）。按 item id 只补缺失的 started/completed 阶段，原工具卡与 partial 回复原位完成，已完成
+   用户行、工具与计费不重复。仍 active 时先恢复 input 的活动 turn，再放开 followup；读取预算超出或
+   cursor 循环则明确警告并保持只读，绝不假报恢复成功。
 3. 重启 3 次失败 → error notice「Codex 进程无法启动：<stderr 末行>」，会话保持只读（submit 拒绝）。
 
 ### 9.3 其他边界
@@ -1077,13 +1078,12 @@ contributing 的规则单独重跑并在进度日志说明。
 
 ### 10.6 真实 Codex（不进 CI）
 
-- `scripts/verify-codex-live.ts`（`DSH_TUI_CODEX_LIVE=1`）：临时 `CODEX_HOME`，中转 provider 经 `-c`
-  注入（不写文件），**绝不碰用户的 `~/.codex`**；凭据来自 `CODEX_TEST_BASE_URL`/`CODEX_TEST_API_KEY`
-  环境变量（由维护者在执行机器上提供，**不入库、不打印、不写任何文件**）。
-- `scripts/lib/codex-cheap-only.mjs` 守卫：模型只允许 `gpt-5.6-terra`（备选 `gpt-6-sol`），
-  effort 只允许 `low`；环境/参数指向其他模型时拒绝运行（D16）。
-- 每次运行 ≤10 个回合；每个会话 `finally` 中 dispose，临时目录删除。
-- `scripts/probes/codex-*.mjs`：调研探针搬入（同一守卫），用于版本升级时复核 §2 的事实。
+- `scripts/verify-codex-live.ts`（`DSH_TUI_CODEX_LIVE=1`）走正式 `codexBackend.open`。所有运行期 import
+  前隔离 HOME / USERPROFILE / CODEX_HOME；只有外部 spawn 边界追加成本守卫的中转 `-c` 参数，stdin
+  请求先经 `assertCheapRequest`，最多 3 个回合。凭据仅来自 `CODEX_TEST_BASE_URL` /
+  `CODEX_TEST_API_KEY`，不写文件、不打印。未 opt-in 或凭据缺席明确 skipped，不算实测通过。
+- `scripts/verify-codex-live-guard.ts` 是不收费的守卫门禁；`verify-codex-offline.ts` 只验证真实
+  app-server 离线控制面，不发 `turn/start`，不取代真实登录与模型回合。
 
 ### 10.7 性能预算
 
@@ -1127,7 +1127,7 @@ contributing 的规则单独重跑并在进度日志说明。
 验收：§10.3 的 rpc/hub/translate/live-replay/input/approvals/chat（不含实时输出与 patch 行号）
 通过；live 冒烟 ≤3 回合（文本、命令审批、文件改动）；DSH/Claude 门禁全绿。
 
-### C2 显示对等与控制面（**下一期**，按此顺序）
+### C2 显示对等与控制面（**实现完成**，验收边界见施工日志）
 
 中立层 N2–N6 已实现并合入（施工日志 "Neutral layer N2–N6"），本期只做 Codex 侧接线与下列新增。
 
@@ -1151,7 +1151,7 @@ contributing 的规则单独重跑并在进度日志说明。
 验收：对应脚本与事件流不变量通过；live ≤10 回合（含补录；Plan 问答+计划评审、`/review`、模型/effort
 切换、中转渠道）；CI 渲染回归全绿；手动（有终端时）inline/fullscreen/窄宽各走一遍命令卡与 diff 卡。
 
-### C3 会话生命周期
+### C3 会话生命周期（**实现完成**）
 
 范围：catalog + 会话浏览器 Codex 标签（`SourceTabs` 已有 Codex 文案，接上 catalog）、`--resume` 与
 上次会话标记、挂载账本、fork、rewind（fork+采用）、加载更早（预取）、rename、color、图片输入与回放、
@@ -1160,7 +1160,7 @@ contributing 的规则单独重跑并在进度日志说明。
 验收：`verify-codex-lifecycle`、`verify-codex-images`、hub 崩溃恢复用例通过；live ≤6 回合
 （resume 后继续、fork、rewind、图片）；与官方 `codex resume` 互通手动核对一次。
 
-### C4 进阶与收尾
+### C4 进阶与收尾（**实现完成**）
 
 范围：子代理（lane + history）、后台终端（若 C0 证实可触发）、目标（N6）、hooks、`/btw`
 `/recap`、notices 审计（每种 notice 有 key 与双语文案）、可选品牌；文档：`docs/codex-backend.md`

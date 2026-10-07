@@ -23,17 +23,21 @@
     "delta:text",
     "delta:text",
     "assistant.message",
+    "assistant.attempt.end",
     "session.status",
     "session.status",
     "context.capacity",
-    "assistant.message",
+    "usage",
+    "context.usage",
     "step.end",
     "step.start",
     "assistant.attempt.start",
     "assistant.message",
+    "assistant.attempt.end",
     "tool.call",
     "tool.result",
-    "assistant.message",
+    "usage",
+    "context.usage",
     "step.end",
     "step.start",
     "assistant.attempt.start",
@@ -94,7 +98,9 @@
     "delta:text",
     "delta:text",
     "assistant.message",
-    "assistant.message",
+    "assistant.attempt.end",
+    "usage",
+    "context.usage",
     "session.status",
     "step.end",
     "turn.end"
@@ -150,6 +156,11 @@
       "cacheWrite": 139
     },
     "todos": [],
-    "notices": []
+    "notices": [],
+    "contextMeasure": {
+      "type": "context.usage",
+      "used": 0,
+      "max": 246400
+    }
   }
 }

@@ -25,6 +25,8 @@ process.env.USERPROFILE = sandboxHome
 process.env.HOME = sandboxHome
 delete process.env.DSH_TUI_THEME
 process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_LANG = 'zh'
+delete process.env.DSH_TUI_BRAND
 
 const [
   React,
@@ -69,6 +71,10 @@ const check = (name: string, ok: boolean, detail = ''): void => {
 
 // ── ① 信号解析 ────────────────────────────────────────────────────────────
 check('backendId：claude → claude', brandOfBackend('claude') === 'claude')
+check('Codex auto only changes the title identity', brandOfBackend('codex') === 'codex' && resolveBrand('auto', 'codex') === 'codex')
+check('Codex does not add an explicit brand setting', normalizeBrandSetting('codex') === 'auto' && !BRAND_SETTING_VALUES.includes('codex' as never))
+check('Explicit existing brands still override Codex', resolveBrand('deepseek', 'codex') === 'deepseek' && resolveBrand('claude', 'codex') === 'claude')
+check('Codex title words, without a new font', BRAND_SPLASH_WORDS.codex.top === 'CODEX' && BRAND_SPLASH_WORDS.codex.bottom === 'HARNESS' && BRAND_SPLASH_WORDS.codex.plain === 'Codex' && SPLASH_FONTS.every(font => font.glyphs.X.length === 5 && font.glyphs.X.every(row => row.length === font.glyphWidth)))
 check('backendId：dsh/空/acp:* → deepseek', ['dsh', undefined, '', 'acp:gemini', 'claude-code'].every(id => brandOfBackend(id) === 'deepseek'), 'claude-code 是 product 名，不是 backendId')
 check('resolveBrand：auto 跟后端', resolveBrand('auto', 'claude') === 'claude' && resolveBrand('auto', 'dsh') === 'deepseek' && resolveBrand(undefined, 'claude') === 'claude')
 check('resolveBrand：显式锁定压过后端', resolveBrand('deepseek', 'claude') === 'deepseek' && resolveBrand('claude', 'dsh') === 'claude')
@@ -160,6 +166,8 @@ const mountProvider = async (props: Record<string, unknown>): Promise<string> =>
 }
 setActiveBrand('deepseek')
 check('deepseek 品牌：默认档是 dark', await mountProvider({}) === 'dark')
+setActiveBrand('codex')
+check('Codex keeps the existing default dark theme', await mountProvider({}) === 'dark')
 setActiveBrand('claude')
 check('claude 品牌：默认档按终端深浅落 claude-dark', await mountProvider({}) === 'claude-dark')
 check('显式 prop 选择优先于品牌默认档', await mountProvider({ theme: 'light' }) === 'light')
@@ -179,6 +187,8 @@ check('品牌档不落盘：未显式选择时后端品牌即时生效', await m
   check('deepseek 品牌照常尊重持久化偏好（theme.json=dark → dark）', await mountProvider({}) === 'dark')
   writeFileSync(join(sandboxHome, '.dsh-tui', 'theme.json'), JSON.stringify({ theme: 'light' }))
   check('deepseek 品牌照常尊重持久化偏好（theme.json=light → light）', await mountProvider({}) === 'light')
+  setActiveBrand('codex')
+  check('Codex keeps the saved light theme, not a brand palette', await mountProvider({}) === 'light')
   // /theme 会话内手选的锁定语义由 brandThemeLockRef 承担（需要调 setTheme，
   // 读屏脚本够不到；typecheck + ThemeProvider 内注释钉住语义）。
   writeFileSync(join(sandboxHome, '.dsh-tui', 'theme.json'), JSON.stringify({ theme: 'auto' }))
@@ -344,6 +354,29 @@ const screenHasBlock = (rows: string[], expected: readonly string[]): boolean =>
     spriteCells > 50 && Math.abs((spriteFirst + spriteLast) / 2 - mid) <= 2,
     `中心 ${(spriteFirst + spriteLast) / 2} vs ${mid}（${spriteCells} 格）`,
   )
+}
+
+// ── Codex title-only: same font metrics, art, colours and layout ───────────
+{
+  const font = splashFontById('bold')
+  const ink = { r: 232, g: 145, b: 63 }
+  const codexTop = renderBigText(font, 'CODEX', 0, ink, ink, ink, 60, font.tagline.topKerning).map(row => strip(row).trimEnd())
+  const pinnedTip = { id: 'brand-parity', group: 'display', zh: '固定提示', en: 'Pinned tip' } as const
+  for (const props of [{}, { whaleGirl: true }, { companionSkin: 'deepy' }, { companionSkin: 'whaleGirl' }] as const) {
+    const before = rowsOf(view(<LogoV2 {...baseProps} {...props} tip={pinnedTip} brand="deepseek" />))
+    const after = rowsOf(view(<LogoV2 {...baseProps} {...props} tip={pinnedTip} brand="codex" />))
+    const start = before.rows.findIndex((_, y) => expectedTitleRows('DEEPSEEK', 'HARNESS').every((line, dy) => textAt(before.rows[y + dy] ?? '') === line))
+    const changed = after.rows.some((_, y) => codexTop.every((line, dy) => textAt(after.rows[y + dy] ?? '') === line))
+    const sameOutsideTitle = start >= 0 && before.rows.length === after.rows.length && before.rows.every((_, y) =>
+      Array.from({ length: WIDTH }, (_, x) => x).every(x => (y >= start && y < start + 5 && x >= TEXT_LEFT)
+        || JSON.stringify(cellAt(before.screen, x, y)) === JSON.stringify(cellAt(after.screen, x, y))))
+    check('Codex only paints CODEX: ' + JSON.stringify(props), changed && sameOutsideTitle, 'Every non-title cell, including mascot colours, must match')
+  }
+  const narrow = 20
+  const { screen, height } = renderToScreen(
+    <TerminalSizeContext.Provider value={{ columns: narrow, rows: 40 }}><LogoV2 {...baseProps} brand="codex" /></TerminalSizeContext.Provider>, narrow)
+  const text = Array.from({ length: height }, (_, y) => Array.from({ length: narrow }, (_, x) => cellChar(screen, x, y)).join('')).join('\n')
+  check('Codex narrow title is Codex, not DeepSeek', text.includes('Codex') && !text.includes('DeepSeek Harness'))
 }
 
 // ── ⑤ bevel 静态灰阶拆除 ──────────────────────────────────────────────────

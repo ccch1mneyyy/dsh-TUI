@@ -130,7 +130,7 @@ export function createCoreSessionActions(deps: {
       try {
         await remove(sessionId, rowOf(sessionId)?.cwd)
       } catch (error) {
-        failed('session-delete-failed', error)
+        failed(deps.catalog?.deleteAction === 'archive' ? 'session-archive-failed' : 'session-delete-failed', error)
         return false
       }
       deps.prefs?.forget(sessionId)

@@ -656,7 +656,7 @@ export function SubagentDetailScene({
                       <Box onClick={loadOlderTranscript} marginTop={1}>
                         <Text color="accent">{transcript.loadingOlder
                           ? `⏳ ${t('subagent-transcript-loading')}`
-                          : `▸ ${t('subagent-transcript-load-older', { count: Math.min(TRANSCRIPT_OLDER_CHUNK, transcript.skippedFromStart) })}`}</Text>
+                          : `▸ ${t('subagent-transcript-load-older', { count: transcript.sourceCursor === undefined ? Math.min(TRANSCRIPT_OLDER_CHUNK, transcript.skippedFromStart) : TRANSCRIPT_OLDER_CHUNK })}`}</Text>
                       </Box>
                     )}
                     {merged.map((row, index) => {
@@ -794,7 +794,7 @@ export function SubagentDetailScene({
           {`←/→ ${t('subagent-hint-page')} · ↑/↓ ${t('subagent-hint-scroll')}`
             + ((activePage === 'output' && hasThinking) || (activePage === 'transcript' && hasTranscriptThinking) ? ` · ${t('subagent-hint-fold')}` : '')
             + (activePage === 'transcript' && transcript.status === 'ready' && transcript.hasOlder
-              ? ` · o ${t('subagent-transcript-load-older', { count: Math.min(TRANSCRIPT_OLDER_CHUNK, transcript.skippedFromStart) })}`
+              ? ` · o ${t('subagent-transcript-load-older', { count: transcript.sourceCursor === undefined ? Math.min(TRANSCRIPT_OLDER_CHUNK, transcript.skippedFromStart) : TRANSCRIPT_OLDER_CHUNK })}`
               : '')}
         </Text>
         {isRunning && onInterrupt && (

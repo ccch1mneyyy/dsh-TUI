@@ -93,10 +93,12 @@ Works, served by Claude:
 | Claude's own slash commands | Listed in completion and sent to Claude as typed; where a name matches a dsh-TUI built-in, the built-in wins |
 | `/channel` | Claude only: model names and connection of a relay channel, see [Channel profiles](interaction.en.md#channel-profiles-channel-claude-only) |
 
+`/init` delegates to Claude's native initialization command. `/logout` only removes the Anthropic login stored by dsh-auth; it does not invoke native Claude logout. A running child may retain the managed token until a normal restart.
+
 Not available (hidden from completion; typing one shows a notice and nothing is
 sent to the model): `/tree`, `/agentview`, `/bg`, `/home`, `/workspace`,
-`/preset`, `/provider`, `/logout`, `/balance`, `/config`, `/reload`,
-`/setup`, `/init`, `/migrate`, `/skills`, `/plugins`, `/hooks`, `/add-dir`,
+`/preset`, `/provider`, `/balance`, `/config`, `/reload`,
+`/setup`, `/migrate`, `/skills`, `/plugins`, `/hooks`, `/add-dir`,
 `/goal` (Claude has no goal capability). Other commands the DSH composition
 registers (such as `/plan`) do not appear either.
 

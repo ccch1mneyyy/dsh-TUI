@@ -1,99 +1,126 @@
 /**
- * Codex backend against a real `codex app-server` (docs/codex-backend-design.md
- * §10.6) — the C1 live smoke: a text turn, a command approval, a file change,
- * through the backend's own executable resolution, hub, session, translator
- * and approval bridge. Spends real tokens, so it is not in CI and runs only
- * with DSH_TUI_CODEX_LIVE=1.
+ * Real Codex smoke through production codexBackend.open (C2 §10.6).
+ * DSH_TUI_CODEX_LIVE=1 explicitly opts into three paid turns. Missing
+ * CODEX_TEST_BASE_URL/CODEX_TEST_API_KEY is a skip, never a passing live run.
  *
- * Cost and credential rules (scripts/lib/codex-cheap-only.mjs): a throwaway
- * CODEX_HOME pinned to gpt-5.6-terra at effort low (never ~/.codex), the
- * relay provider passed as `-c` arguments from CODEX_TEST_BASE_URL /
- * CODEX_TEST_API_KEY (sourced in the same shell, never printed or written),
- * every model-bearing request checked before it is sent. Three turns.
+ * HOME/USERPROFILE and CODEX_HOME are isolated before runtime imports.
+ * Temporary prefs/config pin terra (fallback sol) + low. The external-process
+ * boundary adds the existing guard's relay argv, never persisting URL/key.
+ * Every JSON-RPC request is checked at the real child's stdin boundary.
  *
- * The relay provider is the one thing `codexBackend.open` cannot take until
- * channels exist (C2), so the hub is built here with the same settings the
- * backend builds plus those arguments; everything after it is the backend's
- * own code.
- *
- * Run (one shell):
- *   set -a; . <relay env file>; set +a
- *   DSH_TUI_CODEX_LIVE=1 CODEX_EXECUTABLE=<codex 0.160.x> node --import tsx/esm scripts/verify-codex-live.ts
+ * Run: DSH_TUI_CODEX_LIVE=1 CODEX_EXECUTABLE=<codex 0.160.x>
+ *      node --import tsx/esm scripts/verify-codex-live.ts
  */
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import childProcess, { type ChildProcess } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import type { AgentEvent } from '../src/agent/events.js'
+import type { AgentSession } from '../src/agent/session.js'
+import type { CodexRuntime } from '../src/backends/codex/backend.js'
 
 if (process.env.DSH_TUI_CODEX_LIVE !== '1') {
   console.log('verify-codex-live: skipped (set DSH_TUI_CODEX_LIVE=1 to spend real tokens)')
   process.exit(0)
 }
+if (!process.env.CODEX_TEST_BASE_URL || !process.env.CODEX_TEST_API_KEY) {
+  console.log('verify-codex-live: skipped (CODEX_TEST_BASE_URL / CODEX_TEST_API_KEY are not set)')
+  process.exit(0)
+}
+const { assertCheap, assertCheapRequest, liveCodexHome, pinCheapOrExit } = await import('./lib/codex-cheap-only.mjs')
+try { assertCheap('verify-codex-live', { model: process.env.CODEX_TEST_MODEL, effort: process.env.CODEX_TEST_EFFORT }) }
+catch { console.error('verify-codex-live: refusing non-cheap model/effort; use gpt-5.6-terra (fallback gpt-6-sol) + low'); process.exit(2) }
+
+const isolatedHome = mkdtempSync(join(tmpdir(), 'codex-live-tui-home-'))
+const savedEnv = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, CODEX_HOME: process.env.CODEX_HOME }
+process.env.HOME = isolatedHome
+process.env.USERPROFILE = isolatedHome
 process.env.DSH_TUI_LANG = 'en'
-const { assertCheapRequest, liveCodexHome, pinCheapOrExit } = await import('./lib/codex-cheap-only.mjs')
-const { model } = pinCheapOrExit('verify-codex-live', join(homedir(), '.dsh-tui'))
+const { model } = pinCheapOrExit('verify-codex-live', join(isolatedHome, '.dsh-tui'))
 const live = liveCodexHome({ model })
-// The backend reads CODEX_HOME from the environment, as for a user.
 process.env.CODEX_HOME = live.home
+// Only these ambient credentials are removed; all unrelated child env survives.
 delete process.env.OPENAI_API_KEY
 delete process.env.CODEX_API_KEY
 
-const { codexBackend } = await import('../src/backends/codex/index.js')
-const { memoryCodexPrefs } = await import('../src/backends/codex/prefs.js')
-const { buildCodexEnv, resolveCodexExecutable } = await import('../src/backends/codex/rpc/binary.js')
-const { acquireCodexHub, closeAllCodexHubs } = await import('../src/backends/codex/rpc/hub.js')
-const { openCodexSession } = await import('../src/backends/codex/session/session.js')
-const { createProjectorHarness } = await import('./lib/projector-harness.js')
-import type { AgentEvent } from '../src/agent/events.js'
-import type { CodexHub } from '../src/backends/codex/rpc/hub.js'
+const runtimeRoot = process.env.CODEX_TEST_SOURCE_ROOT ?? fileURLToPath(new URL('../', import.meta.url))
+const fromSource = (path: string) => import(pathToFileURL(resolve(runtimeRoot, 'src', path)).href)
+const SECRETS = [process.env.CODEX_TEST_BASE_URL, process.env.CODEX_TEST_API_KEY].filter((value): value is string => typeof value === 'string' && value !== '')
+const safe = (text: string): string => SECRETS.reduce((out, secret) => out.split(secret).join('<relay>'), text)
+const debug: string[] = []
+let turnsUsed = 0
+let guardedServers = 0
+let guardFailure: Error | undefined
+const originalSpawn = childProcess.spawn
+// Test-only instrumentation of the external process boundary, not a second
+// backend assembly. syncBuiltinESMExports keeps transport's named import live.
+childProcess.spawn = ((...args: Parameters<typeof originalSpawn>) => {
+  if (guardFailure !== undefined) throw guardFailure
+  const server = Array.isArray(args[1]) && args[1].includes('app-server')
+  const launchArgs = server ? [args[0], [...args[1] as readonly string[], ...live.appServerArgs], args[2]] : args
+  const child = Reflect.apply(originalSpawn, childProcess, launchArgs) as ChildProcess
+  if (!server) return child
+  const stdin = child.stdin
+  if (stdin === null) throw new Error('verify-codex-live: app-server has no stdio input')
+  guardedServers += 1
+  const originalWrite = stdin.write
+  stdin.write = ((chunk: unknown, ...rest: unknown[]): boolean => {
+    try {
+      const line = typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : undefined
+      if (line === undefined) throw new Error('verify-codex-live: unexpected RPC write type')
+      const request = JSON.parse(line) as Record<string, unknown>
+      if (typeof request.method === 'string') {
+        const params = typeof request.params === 'object' && request.params !== null ? request.params as Record<string, unknown> : {}
+        assertCheapRequest('verify-codex-live', request.method, params)
+        if (request.method === 'turn/start') {
+          if (turnsUsed >= 3) throw new Error('verify-codex-live: three-turn budget exhausted')
+          turnsUsed += 1
+        }
+      }
+    } catch (error) {
+      guardFailure = new Error(safe(error instanceof Error ? error.message : String(error)))
+      child.kill()
+      throw guardFailure
+    }
+    return Reflect.apply(originalWrite, stdin, [chunk, ...rest]) as boolean
+  }) as typeof stdin.write
+  return child
+}) as typeof originalSpawn
+syncBuiltinESMExports()
 
+let session: AgentSession | undefined
+let runtime: CodexRuntime | undefined
+let closeAll: (() => Promise<void>) | undefined
 let passed = 0
 const check = (label: string, ok: boolean, detail?: unknown): void => {
   assert.ok(ok, detail === undefined ? label : `${label}: ${JSON.stringify(detail).slice(0, 600)}`)
   passed += 1
   console.log(`PASS ${label}`)
 }
-const SECRETS = [process.env.CODEX_TEST_BASE_URL, process.env.CODEX_TEST_API_KEY].filter((value): value is string => typeof value === 'string' && value !== '')
-const safe = (text: string): string => SECRETS.reduce((out, secret) => out.split(secret).join('<relay>'), text)
-const debug: string[] = []
-const host = { cwd: live.cwd, debug: (line: string) => debug.push(safe(line)), warn: () => undefined }
-
-let turnsUsed = 0
-let session: Awaited<ReturnType<typeof openCodexSession>> | undefined
 try {
+  // No backend module may cache personal DATA_DIR before isolation above.
+  const { DATA_DIR } = await fromSource('utils/paths.js') as typeof import('../src/utils/paths.js')
+  assert.equal(DATA_DIR, join(isolatedHome, '.dsh-tui'))
+  const { codexBackend, prepareCodexRuntime } = await fromSource('backends/codex/backend.js') as typeof import('../src/backends/codex/backend.js')
+  const { fileCodexPrefs } = await fromSource('backends/codex/prefs.js') as typeof import('../src/backends/codex/prefs.js')
+  const { resolveCodexExecutable } = await fromSource('backends/codex/rpc/binary.js') as typeof import('../src/backends/codex/rpc/binary.js')
+  const { closeAllCodexHubs } = await fromSource('backends/codex/rpc/hub.js') as typeof import('../src/backends/codex/rpc/hub.js')
+  closeAll = closeAllCodexHubs
+  const { createProjectorHarness } = await import('./lib/projector-harness.js')
+  fileCodexPrefs().write({ model, effort: 'low', mode: 'auto' })
+  const host = { cwd: live.cwd, debug: (line: string) => debug.push(safe(line)), warn: () => undefined, stderr: (line: string) => debug.push('[stderr] ' + safe(line)) }
   const detection = await codexBackend.detect(host)
   check('detect: installed, a version, credentials judged without a network call', detection.installed && typeof detection.version === 'string', detection)
   const executable = await resolveCodexExecutable()
   check('the executable honours CODEX_EXECUTABLE', executable?.source === 'env', executable)
-  const hub = acquireCodexHub({ executable: executable!.path, args: ['app-server', ...live.appServerArgs], env: buildCodexEnv(), cwd: live.cwd }, {
-    debug: line => debug.push(safe(line)),
-    stderr: line => debug.push(`[stderr] ${safe(line)}`),
-    clientVersion: 'live-test',
-  })
-  await hub.ready
-  check('handshake: the server answers with the throwaway home', hub.info?.codexHome === live.home)
-  // Every request is checked against the cost rule before it is sent.
-  const guarded = new Proxy(hub, {
-    get(target, prop, receiver) {
-      if (prop === 'call') {
-        return (method: string, params?: unknown, options?: unknown) => {
-          assertCheapRequest('verify-codex-live', method, (params ?? {}) as Record<string, unknown>)
-          if (method === 'turn/start') turnsUsed += 1
-          return target.call(method, params, options as never)
-        }
-      }
-      return Reflect.get(target, prop, receiver) as unknown
-    },
-  }) as CodexHub
-  session = await openCodexSession({
-    hub: guarded,
-    release: hub.retain(),
-    target: { kind: 'create', cwd: live.cwd },
-    cwd: live.cwd,
-    prefs: memoryCodexPrefs(),
-    executable: executable!,
-    host: { debug: line => debug.push(safe(line)) },
-  })
+  session = await codexBackend.open({ kind: 'create', cwd: live.cwd }, host)
+  // Borrow the already-open production runtime only for smoke control calls.
+  runtime = await prepareCodexRuntime({ kind: 'create', cwd: live.cwd }, host)
+  check('handshake: formal backend uses isolated home and one guarded process', runtime.hub.info?.codexHome === live.home && guardedServers === 1)
+  check('provider: formal runtime sees the guarded external relay override', runtime.config?.model_provider === 'relay' && !runtime.auth.route.firstParty)
   const events: AgentEvent[] = []
   const projector = createProjectorHarness({ model: '' })
   session.subscribe(batch => {
@@ -123,7 +150,7 @@ try {
   check('turn 1: completed, usage booked, context window known', events.find(event => event.type === 'turn.end')?.type === 'turn.end' && projector.state.tokens.output > 0 && (projector.state.contextWindow ?? 0) > 0)
 
   // 2. a command approval (every command asks under `untrusted`)
-  await guarded.call('thread/settings/update', { threadId: session.ref.sessionId, approvalPolicy: 'untrusted' })
+  await runtime.hub.call('thread/settings/update', { threadId: session.ref.sessionId, approvalPolicy: 'untrusted' })
   await session.submit({ text: 'Run exactly this shell command and nothing else: echo live > a.txt', clientMessageId: 'live-2' }, 'followup')
   await waitTurn(2)
   const asked = events.filter(event => event.type === 'permission.request')
@@ -147,7 +174,15 @@ try {
   process.exitCode = 1
 } finally {
   await session?.dispose().catch(() => undefined)
-  await closeAllCodexHubs()
+  runtime?.release()
+  await closeAll?.()
+  childProcess.spawn = originalSpawn
+  syncBuiltinESMExports()
   live.cleanup()
+  rmSync(isolatedHome, { recursive: true, force: true })
+  for (const [key, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
 }
 console.log(`\nverify-codex-live ${process.exitCode === 1 ? 'FAILED' : 'OK'} (${passed} checks, ${turnsUsed} turns)`)

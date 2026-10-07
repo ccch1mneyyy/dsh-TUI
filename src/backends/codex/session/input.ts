@@ -24,6 +24,7 @@ import type { AgentInput, CancelCause, CancelReceipt, SubmitPlacement } from '..
 import { t } from '../../../i18n.js'
 import { errorText, rec, str, type Rec } from '../narrow.js'
 import { CLIENT } from '../protocol/index.js'
+import { codexImageInputs } from './images.js'
 import type { UserInput } from '../protocol/index.js'
 import type { RpcClock } from '../rpc/client.js'
 
@@ -45,6 +46,8 @@ export interface InputQueueDeps {
   debug(message: string): void
   /** Per-turn overrides (`turn/start` settings; C2 fills them). */
   overrides(): Rec
+  /** Retire a rejected experimental setting; never retry the user's input. */
+  startFailed?(error: unknown, overrides: Rec): void
   closed(): boolean
   /** The open turn could not be settled by the server: close it here. */
   forceClose(): void
@@ -100,18 +103,20 @@ export function createInputQueue(deps: InputQueueDeps) {
     started.set(entry.id, entry)
     let resolveStart!: (id: string | undefined) => void
     starting = new Promise(resolve => { resolveStart = resolve })
+    const overrides = deps.overrides()
     try {
       const answer = rec(await deps.call(CLIENT.turnStart, {
         threadId: deps.threadId,
         clientUserMessageId: entry.id,
         input: entry.input,
-        ...deps.overrides(),
+        ...overrides,
       }))
       const turnId = str(rec(answer?.turn)?.id)
       if (turnId !== undefined && activeTurnId === undefined) activeTurnId = turnId
       resolveStart(turnId ?? activeTurnId)
       return { accepted: true }
     } catch (error) {
+      deps.startFailed?.(error, overrides)
       started.delete(entry.id)
       resolveStart(undefined)
       const reason = t('codex-turn-start-failed', { err: errorText(error) })
@@ -220,12 +225,12 @@ export function createInputQueue(deps: InputQueueDeps) {
     /** Whether a turn runs or is being started. */
     busy(): boolean { return activeTurnId !== undefined || starting !== undefined },
 
-    async submit(input: AgentInput, placement: SubmitPlacement): Promise<{ readonly accepted: boolean; readonly reason?: string }> {
+    async submit(input: AgentInput, placement: SubmitPlacement, wireInput?: readonly UserInput[]): Promise<{ readonly accepted: boolean; readonly reason?: string }> {
       if (deps.closed()) throw new Error(t('codex-session-closed'))
-      if ((input.images ?? []).length > 0 || (input.blocks ?? []).some(block => block.type === 'image')) {
-        throw new Error(t('codex-images-unsupported'))
-      }
-      const entry: Entry = { id: input.clientMessageId, text: input.text, input: userInputOf(input), placement: placement === 'steer' ? 'steer' : 'followup' }
+      if ((input.images ?? []).length === 0 && (input.blocks ?? []).some(block => block.type === 'image')) throw new Error(t('codex-image-unreadable', { name: input.clientMessageId }))
+      const pictureInputs = await codexImageInputs(input.images ?? [])
+      if (deps.closed()) throw new Error(t('codex-session-closed'))
+      const entry: Entry = { id: input.clientMessageId, text: input.text, input: [...(wireInput ?? userInputOf(input)), ...pictureInputs], placement: placement === 'steer' ? 'steer' : 'followup' }
       if (offline) {
         queue.push(entry)
         return { accepted: true }

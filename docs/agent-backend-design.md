@@ -1,11 +1,12 @@
 # 多后端架构
 
-[文档索引](README.md) · [架构与限制](architecture.md) · [Claude 后端用户说明](claude-backend.md)
+[文档索引](README.md) · [架构与限制](architecture.md) · [Claude 后端用户说明](claude-backend.md) · [Codex 后端用户说明](codex-backend.md)
 
-dsh-TUI 的会话可以跑在两个后端上：DeepSeek Harness（默认，下称 DSH）和实验性的
-Claude Agent 后端（经 Claude Agent SDK 驱动本机 `claude` CLI）。两者共用同一套
-Channel、投影器与界面；后端差异只体现在翻译器和会话能力上。本文说明现在的结构、
-各层规则、Claude 后端的实现要点、已知限制，以及接入新后端要做什么。
+dsh-TUI 的会话可以跑在三个后端上：DeepSeek Harness（默认，下称 DSH）、实验性的
+Claude Agent 后端（经 Agent SDK 驱动本机 `claude` CLI）与 Codex 原生后端
+（驱动用户安装的 `codex app-server`）。三者共用同一套 Channel、投影器与界面；
+后端差异只体现在翻译器和会话能力上。本文说明分层、身份映射、后端实现与回归边界。
+Codex 的具体实施/实测状态以[施工日志](codex-backend-progress.md)为准。
 
 ## 分层
 
@@ -19,15 +20,15 @@ src/dsh-adapter/channel.ts                      Channel 入口
         │ AgentSession · AgentEvent · SessionCapabilities
 src/agent/                                      Agent Domain：纯类型 + 小工具函数，无 I/O
         │
-  ┌─────┴─────────────────────┐
-src/dsh-adapter/backend/      src/backends/claude/
-DSH 翻译器与会话               Claude 翻译器、会话、目录、凭据
-  │                             │
-@deepseek-ai/*（Cordis 服务）  @anthropic-ai/claude-agent-sdk
+  ┌─────┴─────────────────────┬─────────────────────────────┐
+src/dsh-adapter/backend/      src/backends/claude/            src/backends/codex/
+DSH 翻译器与会话               Claude 翻译器、会话、目录、凭据   Codex hub、协议、翻译器、能力
+  │                             │                              │
+@deepseek-ai/*（Cordis 服务）  @anthropic-ai/claude-agent-sdk    codex app-server（stdio JSON-RPC）
 ```
 
 依赖方向：界面 → ports；channel → agent + ports + 宿主服务；后端 → agent + 各自厂商
-SDK；agent 读取 ports 类型并使用中立 helper。目录与 import 规则由 `verify:boundary` 强制，规则表见
+SDK/原生进程；agent 读取 ports 类型并使用中立 helper。目录与 import 规则由 `verify:boundary` 强制，规则表见
 [ADAPTER.md](../ADAPTER.md)。
 
 一个进程只跑一个后端，在启动时决定（`dsh-tui --backend`、配置行 `backend`、
@@ -39,7 +40,7 @@ SDK；agent 读取 ports 类型并使用中立 helper。目录与 import 规则�
   （ready/title/color/reset/status）、回合与步、用户消息、待发队列、助手流
   （attempt/delta/message）、工具（call/result/progress，以及运行中的实时输出 output：
   投影器在运行中的卡片上保留有界尾部，结果到达即清除）、审批与提问、子代理与后台
-  任务、压缩、上下文、模型/effort/模式变化、命令列表、DSH 专有事实（goal、preset、
+  任务、压缩、上下文、只记账的 `usage`、模型/effort/模式变化、命令列表、目标与 DSH 专有事实（preset、
   system prompt、request header）、提示与限流，以及给插件渲染器的 `custom`。后端
   不支持的东西就不发事件，不发假事件。
 - `session.ts`：`AgentSession` 句柄：`history()`（回放种子）、`subscribe()`、
@@ -51,7 +52,7 @@ SDK；agent 读取 ports 类型并使用中立 helper。目录与 import 规则�
 - `capabilities.ts`：`SessionCapabilities`，每项都是可选的类型化对象（permissions、
   questions、models、effort、modes、compact、rewind、fork、subagents、tasks、
   transcript、mcp、sideQuery、rename、color、images、commands、context、account、
-  auth、channels、goals…）。缺席即不支持：Channel 对应的动作明确报 "当前后端不支持"，
+  auth、channels、goals、init…）。缺席即不支持：Channel 对应的动作明确报 "当前后端不支持"，
   不做静默 no-op。
 - `native.dsh`：只供 DSH specialist 使用的逃生舱，暴露 DSH 的 `agent`/`ctx`；
   只能在 `src/dsh-adapter/` 内读（`verify:boundary` 检查）。
@@ -59,17 +60,17 @@ SDK；agent 读取 ports 类型并使用中立 helper。目录与 import 规则�
   `{backendId, sessionId}`、工具卡形态的中立描述（界面按 `presentation` 选卡片，
   不按工具名）。
 
-身份字段在两个后端上的含义：
+身份字段在三个后端上的含义：
 
-| 字段 | DSH | Claude |
-| --- | --- | --- |
-| `seq` | 会话日志的 seq（持久） | 翻译器单调计数；回放与续接后的 live 从同一处继续编号 |
-| `anchor` | `String(seq)` | 消息 `uuid`（fork、rewind、文件检查点都用它） |
-| `turn` / `step` | 原生 | 每次开回合 +1 / 回合内每个 `message_start` +1 |
-| `attemptId` | 流帧的 `attemptId` | `message.id` |
-| `callId` | `tool/call.callId` | `tool_use.id` |
-| `parentCallId` | 无（子代理另有事件） | `parent_tool_use_id` |
-| `agentId` | 子 Agent 的会话 id | `task_id` |
+| 字段 | DSH | Claude | Codex |
+| --- | --- | --- | --- |
+| `seq` | 会话日志的 seq（持久） | 翻译器单调计数；回放与 live 连续 | 翻译器单调计数；分页回放与续接沿用同一编号，非官方持久 seq |
+| `anchor` | `String(seq)` | 消息 `uuid`（fork、rewind、文件检查点） | 用户消息 item id；映射到 turn id 用于 fork/对话回退 |
+| `turn` / `step` | 原生 | 每次开回合 +1 / 每个 `message_start` +1 | 官方 turn id 映射为本地回合序号 / 回合内助手 attempt 序号 |
+| `attemptId` | 流帧的 `attemptId` | `message.id` | `<turnId>#<step>`，思考与回答共享 attempt |
+| `callId` | `tool/call.callId` | `tool_use.id` | 工具 item id |
+| `parentCallId` | 无（子代理另有事件） | `parent_tool_use_id` | 启动子 thread 的 subAgentActivity/collab item id |
+| `agentId` | 子 Agent 的会话 id | `task_id` | 子 thread id（与任务 processId 不同） |
 
 ## Channel：核心加 DSH 扩展
 
@@ -96,13 +97,14 @@ SDK；agent 读取 ports 类型并使用中立 helper。目录与 import 规则�
 | --- | --- | --- |
 | DSH 会话 | DSH 会话事件日志 | `~/.dsh-tui` 下既有的偏好与元数据 |
 | Claude 会话 | CLI 写的 `~/.claude/projects/<cwd>/<id>.jsonl`，经 SDK 的读写 API 访问 | `~/.dsh-tui/backends/claude/`：`prefs.json`（`/model`、`/effort`、`/permission` 选择、上次会话、最近使用、`/color`）、置顶、`channels.json`；不写转录，不写 Claude 的设置文件 |
-| 回放 | DSH：全量日志；Claude：`getSessionMessages`（压缩后的链路），"加载更早消息"另读原生 JSONL | 无 |
+| Codex 会话 | 官方 `$CODEX_HOME` 的 thread/rollout 存储，经 app-server 的 thread/turn API 访问 | `~/.dsh-tui/backends/codex/` 下偏好、渠道元数据；不写官方 config，不另存转录；渠道 key 由 DSH 凭据库管理 |
+| 回放 | DSH：全量日志；Claude：`getSessionMessages` 与原生 JSONL；Codex：`itemsView: full` 的分页回合 | 无 |
 | 权限状态 | 后端（DSH：permission presets；Claude：CLI 的会话与设置规则） | 无 |
 | 用量/费用 | 后端上报优先（Claude 的 `total_cost_usd`），DSH 为本地估算 | 无 |
 | 后端选择 | `--backend` / 配置行 / `/kernel` 记忆 | `~/.dsh-tui/kernel.json` |
 
 用户消息不在提交时乐观插入，等后端确认（DSH：日志事件；Claude：
-`command_lifecycle` 的 `started`）后才落行。
+`command_lifecycle` 的 `started`；Codex：`userMessage` item）后才落行。
 
 ## Claude 后端（`src/backends/claude/`）
 
@@ -204,6 +206,34 @@ SDK `settings` 选项把路由钉回 `https://api.anthropic.com`。CLI 拒绝令
 - 托管（policy）设置在会话运行中改了路由时，要到下一次启动 CLI 才重新判定。
 - 绕过 dsh-auth 文件锁写凭据的进程仍可能与令牌刷新交错。
 
+## Codex 后端（`src/backends/codex/`）
+
+- **传输与契约**：调用用户安装的 `codex app-server`，stdio JSON-RPC；不依赖 Codex SDK
+  npm 包。协议类型从 codex-cli 0.160.1 生成并入库，最低 0.144.0；`contract.ts` 与
+  `verify:codex-contract` 守住摘要/方法名/版本策略，生成类型不扩大运行时信任边界。
+- **进程与环境**：`rpc/hub.ts` 按运行设置/路由指纹复用子进程和连接，多 thread 路由；
+  退出漏斗关闭全部 hub。保留用户 `CODEX_HOME`、证书与原生 provider 环境，只清除父级
+  Codex 会话专用变量；Windows 解析真 `codex.exe`。不写官方 `config.toml`。
+- **凭据与渠道**：激活连接 > 第一方路由允许的 dsh-auth `openai-codex` 外部托管令牌 >
+  Codex 自己的登录/API key。配置不可读时禁止托管注入；令牌不进 argv/事件/日志，失败
+  不调用 `account/logout`；核心 `/logout` 仅委托宿主 OAuth 服务清对应存储，已载入的
+  托管令牌需正常重启后停止使用，不重连或注销原生登录。渠道是 Responses API，
+  URL 保存/启动都校验；非敏感 provider 走 `-c`，主机名在本机进程列表可见。
+- **显示与控制**：live/回放共用 item 翻译，`tool.output` 有界输出；`usage` 只记账，
+  `context.usage` 按官方 12k 基线给占用，`/context` 保留原始读数。模型、effort、Plan
+  与权限经类型化能力接线；Shift+Tab 只开关 Plan，Full Access 不在循环中。
+- **生命周期**：thread/turn API 是真源；恢复请求要 full items，历史分页用同一映射。
+  fork/对话回退保留原 thread；文件回退不支持，删除语义是归档。图片与子代理详情
+  通过能力 facade 接入，不把子 thread 正文混进父转录。
+- **进阶与边界**：子代理正文进独立 lane，消息经父模型 `send_input` 转达（回执不是
+  已读）；后台终端通过约 2 秒 inventory 轮询和本会话 64 KiB 输出尾部呈现，消失但
+  无退出码时注明 exit unknown。goals 预算来自服务端；sideQuery 用只读临时 fork；
+  hooks 生命周期通知与 hookPrompt 注入消息复用既有视图。缺实验方法时按实际能力
+  降级，不因协议有名字假称可用。用户操作见[Codex 用户说明](codex-backend.md)。
+- **验证范围**：真实 0.160.1 app-server 的九项无凭据离线检查通过，没有模型回合/
+  费用；真实订阅登录、带凭据模型调用、真实 TTY 本轮未运行。假进程/fixture 与
+  无头界面回归不能替代它们。门禁与偏离见[施工日志](codex-backend-progress.md)。
+
 ## DSH 后端
 
 `src/dsh-adapter/backend/translate.ts` 把 DSH 会话事件与流帧翻成 `AgentEvent`，
@@ -234,4 +264,6 @@ SDK `settings` 选项把路由钉回 `https://api.anthropic.com`。CLI 拒绝令
 | DSH 等价性 | `verify:projection-golden`、`verify-dsh-translate` |
 | Channel | `verify-backend-channel`、`verify-backend-chat`、`verify-channel-composition`、`verify-channel-rollback`、`verify-permission-store`、`verify-approval-panel-options` |
 | Claude 后端 | `verify:claude-contract`（在 `build` 里）与 `scripts/verify-claude-*`（假 SDK，在 CI 组里） |
-| 真实 CLI | `verify:claude-live`、`verify:claude-headless`、`scripts/probes/*`：消耗真实用量，不进 CI；`scripts/lib/claude-haiku-only.mjs` 把它们钉在 haiku，环境或持久化选择指向其他模型时拒绝运行 |
+| Codex 后端 | `verify:codex-contract` 与对应 `scripts/verify-codex-*`（假 app-server）；脱敏 fixture、live/replay 与事件流不变量检查覆盖协议/映射，不代替真实账号或 TTY |
+| 中立增量 | `verify-usage-event`、`verify-init-capability`、`verify-agent-event-invariants`；`verify-backend-logout` 验证仅清 OAuth 存储，`verify-session-archive` 对照归档/普通删除文案；保留 DSH 黄金投影与 Claude 回归 |
+| 真实 CLI | `verify:claude-live`/`verify:claude-headless` 与 `verify-codex-live`、`scripts/probes/*`：消耗真实用量，不进 CI；只走对应 `claude-haiku-only.mjs` / `codex-cheap-only.mjs` 守卫，并单独记录真实凭据、平台、TTY 未验证项 |

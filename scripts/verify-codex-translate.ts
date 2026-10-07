@@ -19,7 +19,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from 'node:path'
 import type { AgentEvent } from '../src/agent/events.js'
 import { codexEmits } from '../src/backends/codex/translate/events.js'
-import { hunkTexts } from '../src/backends/codex/translate/presentation.js'
+import { toolCallOf } from '../src/backends/codex/translate/presentation.js'
+import { isPatchDiff, parseFilePatch } from '../src/components/diffPatch.js'
+import { assertAgentEventInvariants } from './lib/agent-event-invariants.js'
 import { unwrapCommand } from '../src/backends/codex/translate/commands.js'
 import { setLang, t } from '../src/i18n.js'
 import { golden, liveRun, loadWire, notificationsOf, turnThreads, WIRE_DIR } from './lib/codex-translate-harness.js'
@@ -48,7 +50,9 @@ for (const name of fixtures) {
     const run = liveRun(notificationsOf(wire, thread))
     runs.set(key, run)
     const path = join(GOLDENS, `${key}.golden.json`)
-    const actual = JSON.stringify(golden(run), null, 2) + '\n'
+    assertAgentEventInvariants(run.events, { allowOpenLastTurn: key === 's1-approvals' })
+    const snapshot = golden(run) as { readonly state: Readonly<Record<string, unknown>> }
+    const actual = JSON.stringify({ ...snapshot, state: { ...snapshot.state, contextMeasure: run.harness.projector.contextUsage() ?? null } }, null, 2) + '\n'
     if (UPDATE) {
       writeFileSync(path, actual)
       console.log(`updated ${key}.golden.json`)
@@ -72,6 +76,9 @@ for (const [key, run] of runs) {
   check(`${key}: attempt.start precedes its deltas`, orphan === undefined, orphan)
   const seqs = run.events.flatMap(event => 'seq' in event && typeof event.seq === 'number' ? [event.seq] : [])
   check(`${key}: seq strictly increases`, seqs.every((seq, index) => index === 0 || seq > seqs[index - 1]!))
+  const ends = of(run.events, 'assistant.attempt.end')
+  check(`${key}: every canonical message explicitly closes its attempt`, of(run.events, 'assistant.message').filter(event => event.canonical).every(event => ends.some(end => end.attemptId === event.attemptId && end.outcome === 'committed')))
+  check(`${key}: metering never masquerades as an assistant message`, of(run.events, 'assistant.message').every(event => !('usageOnly' in event) && event.usage === undefined))
 }
 check('s1-approvals: the stuck turn (F29) stays open', runs.get('s1-approvals')!.harness.state.working && of(runs.get('s1-approvals')!.events, 'turn.end').length === 0)
 for (const key of ['s1-approvals.2', 's1b-command-approval', 's2-steer-interrupt-diff', 's3-lifecycle-p1', 's4-plan-question', 'c0-files-delete-fork']) {
@@ -102,10 +109,16 @@ for (const key of ['s1-approvals.2', 's1b-command-approval', 's2-steer-interrupt
   check('user shell turn: a `!` terminal card in a user turn (F17)', shellRow?.tool?.callView !== undefined && 'title' in shellRow.tool.callView && shellRow.tool.callView.title === '!echo shell-ok' && of(shell.events, 'turn.start').at(-1)?.origin === 'user', shellRow?.tool?.callView)
   const deleted = runs.get('c0-files-delete-fork')!.events.filter((event): event is Extract<AgentEvent, { type: 'tool.call' }> => event.type === 'tool.call' && event.name === 'apply_patch')
   const deleteDiff = deleted[1]?.presentation
-  check('deleted file: the diff card shows the old content (C0 V13)', deleteDiff !== undefined && 'diffs' in deleteDiff && deleteDiff.diffs[0]?.oldText === 'x\n' && deleteDiff.diffs[0]?.newText === '', deleteDiff)
+  const deletedFile = deleteDiff !== undefined && 'diffs' in deleteDiff ? deleteDiff.diffs[0] : undefined
+  check('deleted file: the diff card shows the old content (C0 V13)', deletedFile !== undefined && !isPatchDiff(deletedFile) && deletedFile.oldText === 'x\n' && deletedFile.newText === '', deleteDiff)
   const child = runs.get('s5-subagent.2')!
-  check('a subagent thread translates on its own (lane routing is C4)', child.harness.state.rows.some(row => row.kind === 'assistant' && row.text === 'child-ok'))
-  check('subAgentActivity reaches the plugin renderer seam, not a card', of(runs.get('s5-subagent')!.events, 'custom').some(event => event.nativeType === 'codex/subAgentActivity'))
+  check('a recorded subagent thread translates its own assistant reply', child.harness.state.rows.some(row => row.kind === 'assistant' && row.text === 'child-ok'))
+  const parent = runs.get('s5-subagent')!
+  const spawn = of(parent.events, 'subagent.start')[0]
+  check('C4: subAgentActivity starts a native child lane exactly once', of(parent.events, 'subagent.start').length === 1 && spawn?.agentId === '01a11029-5db2-7551-a8a1-c1995638f4f1' && spawn.parentCallId === 'call_LjyoraP6uvTMaRClrFlZc6yv' && spawn.description === 'child' && spawn.depth === 1)
+  check('C4: completed child activity closes the same child once', of(parent.events, 'subagent.end').length === 1 && of(parent.events, 'subagent.end')[0]?.agentId === spawn?.agentId && of(parent.events, 'subagent.end')[0]?.status === 'completed')
+  check('C4: child lifecycle no longer falls through the custom seam', !of(parent.events, 'custom').some(event => event.nativeType === 'codex/subAgentActivity'))
+  check('C4: the collaboration tool uses a native subagent presentation', of(parent.events, 'tool.call').some(event => event.name === 'collab_agent' && event.presentation?.card === 'subagent'))
 }
 
 // ── synthetic sequences ─────────────────────────────────────────────────
@@ -116,7 +129,9 @@ const turnCompleted = (id: string, status = 'completed', error: unknown = null):
 const started = (item: Record<string, unknown>): N => ({ method: 'item/started', params: { threadId: T, turnId: 't1', item } })
 const completed = (item: Record<string, unknown>): N => ({ method: 'item/completed', params: { threadId: T, turnId: 't1', item } })
 const user = (id: string, text: string, clientId: string | null = null): Record<string, unknown> => ({ type: 'userMessage', id, clientId, content: [{ type: 'text', text, text_elements: [] }] })
-const delta = (method: string, itemId: string, value: string, extra: Record<string, unknown> = {}): N => ({ method, params: { threadId: T, turnId: 't1', itemId, delta: value, ...extra } })
+function delta(method: string, itemId: string, value: string, extra: Record<string, unknown> = {}): N {
+  return { method, params: { threadId: T, turnId: 't1', itemId, delta: value, ...extra } }
+}
 
 {
   // Reasoning-only attempt, then a tool, then a commentary + tool, then the answer.
@@ -157,7 +172,10 @@ const delta = (method: string, itemId: string, value: string, extra: Record<stri
   const read = run.harness.state.rows.find(row => row.tool?.name === 'shell' && row.tool.resultView?.card === 'read')
   check('§8.1 D12: a read-only command settles as a read card of the file', read !== undefined && read.tool!.resultView?.card === 'read' && 'path' in read.tool!.resultView! && read.tool!.resultView.path === '/TMP/cwd/a.ts', read?.tool)
   check('§7.5: token usage is booked (uncached / cached split) and the window announced', run.harness.state.tokens.input === 40 && run.harness.state.tokens.cacheRead === 60 && run.harness.state.tokens.output === 20 && run.harness.state.contextWindow === 1000, run.harness.state.tokens)
-  check('§7.5: usage-only messages add no rows', run.harness.state.rows.filter(row => row.kind === 'assistant').length === 2)
+  check('§7.5 N8: one independent usage report adds no message rows', of(run.events, 'usage').length === 1 && of(run.events, 'assistant.message').length === 3 && run.harness.state.rows.filter(row => row.kind === 'assistant').length === 2)
+  assertAgentEventInvariants(run.events)
+  check('§7.3: each synthetic attempt settles explicitly', of(run.events, 'assistant.attempt.start').length === 3 && of(run.events, 'assistant.attempt.end').length === 3)
+  check('§7.5: context measurement clamps below the 12k baseline', run.harness.projector.contextUsage()?.used === 0 && run.harness.projector.contextUsage()?.max === 0)
   check('§7.5: turn/plan/updated → the todo panel', JSON.stringify(run.harness.state.todos) === JSON.stringify([{ content: 'one', status: 'completed' }, { content: 'two', status: 'in_progress' }]))
   check('§7.2: the user row is the client id, anchored on the item', of(run.events, 'user.message')[0]?.id === 'c1' && of(run.events, 'user.message')[0]?.anchor === 'u1' && run.ctx.anchorTurns.get('u1') === 't1')
   check('§7.4: the turn end carries the turn usage', of(run.events, 'turn.end')[0]?.usage?.output === 20)
@@ -182,6 +200,8 @@ const delta = (method: string, itemId: string, value: string, extra: Record<stri
   check('§9.1: a failed turn ends as an error with the kebab category', failed?.reason.kind === 'error' && failed.reason.category === 'unauthorized' && failed.reason.message === 'Unauthorized', failed?.reason)
   check('§9.1: an auth failure adds the sign-in hint', of(run.events, 'notice').some(event => event.key === 'codex-hint:auth'))
   check('a turn without items still opens and closes', of(run.events, 'turn.start').length === 2)
+  assertAgentEventInvariants(run.events)
+  check('interrupted reply explicitly closes its attempt once', of(run.events, 'assistant.attempt.end').length === 1 && of(run.events, 'assistant.attempt.end')[0]?.attemptId === message?.attemptId)
 }
 
 {
@@ -208,6 +228,7 @@ const delta = (method: string, itemId: string, value: string, extra: Record<stri
   check('§7.5: a warning is a keyed notice', of(run.events, 'notice').some(event => event.text === 'Heads up' && event.key !== undefined))
   check('§7.5: a name update → session.title', of(run.events, 'session.title')[0]?.title === 'Named')
   check('§7.4: an unknown item type → custom (renderer seam), once', of(run.events, 'custom').length === 1 && of(run.events, 'custom')[0]!.nativeType === 'codex/futureThing')
+  assertAgentEventInvariants(run.events)
 }
 
 {
@@ -235,9 +256,30 @@ const delta = (method: string, itemId: string, value: string, extra: Record<stri
   const web = run.harness.state.rows.find(row => row.tool?.name === 'web_search')
   check('§7.4: web search is a generic card named WebSearch titled by the query', web?.tool?.callView?.displayKey === 'tool-name-web_search' && web.tool.callView !== undefined && 'title' in web.tool.callView && web.tool.callView.title === 'codex app-server')
   const patch = of(run.events, 'tool.call').find(event => event.callId === 'p1')?.presentation
-  check('§8.2 (C1 fallback): an update hunk renders as old/new text', patch !== undefined && 'diffs' in patch && patch.diffs[0]?.oldText === 'one\ntwo\nthree\n' && patch.diffs[0]?.newText === 'one\nTWO\nthree\n', patch)
+  const diff = patch !== undefined && 'diffs' in patch ? patch.diffs[0] : undefined
+  check('§8.2 N5: update keeps the real unified patch, not reconstructed file text', diff !== undefined && isPatchDiff(diff) && diff.patch === '@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n' && diff.change === 'update' && !('oldText' in diff), diff)
+  if (diff !== undefined && isPatchDiff(diff)) {
+    const parsed = parseFilePatch(diff)
+    check('§8.2 N5: production diff parser preserves source line numbers', JSON.stringify(parsed.hunks[0]?.lines.map(line => [line.kind, line.oldNo ?? null, line.newNo ?? null])) === JSON.stringify([['context', 1, 1], ['del', 2, null], ['add', null, 2], ['context', 3, 3]]), parsed)
+  }
+  assertAgentEventInvariants(run.events)
   const failed = run.harness.state.rows.find(row => row.tool?.name === 'shell')
   check('§8.1: a failing command is an error card with its output and exit code', failed?.tool?.status === 'error' && failed.tool.errorText === 'boom\nexit 1', failed?.tool)
+}
+
+
+{
+  const run = liveRun([
+    turnStarted('t1'), started(user('u1', 'measure')),
+    started({ type: 'agentMessage', id: 'm1', text: '', phase: 'final_answer' }),
+    completed({ type: 'agentMessage', id: 'm1', text: 'measured', phase: 'final_answer' }),
+    { method: 'thread/tokenUsage/updated', params: { threadId: T, turnId: 't1', tokenUsage: { total: { totalTokens: 900_000 }, last: { totalTokens: 24_000, inputTokens: 21_000, cachedInputTokens: 5_000, outputTokens: 3_000 }, modelContextWindow: 100_000 } } },
+    turnCompleted('t1'),
+  ])
+  assertAgentEventInvariants(run.events)
+  check('N8: context occupancy uses raw last.totalTokens minus the official baseline, never cumulative total', run.harness.projector.contextUsage()?.used === 12_000 && run.harness.projector.contextUsage()?.max === 88_000, run.harness.projector.contextUsage())
+  check('N8: settled reply and independent usage remain separate records', of(run.events, 'assistant.message').length === 1 && of(run.events, 'usage')[0]?.usage.input === 16_000 && of(run.events, 'usage')[0]?.usage.output === 3_000)
+  check('N8: a late-in-step report closes no additional attempt', of(run.events, 'assistant.attempt.start').length === 1 && of(run.events, 'assistant.attempt.end').length === 1)
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────
@@ -245,7 +287,16 @@ check('commands: bash -lc single quotes unwrap with escaped quotes', unwrapComma
 check('commands: zsh -lc and /usr/bin unwrap', unwrapCommand("/usr/bin/zsh -lc 'pwd'") === 'pwd')
 check('commands: one parsed action stands in for an unknown wrapper', unwrapCommand('cmd.exe /c dir', [{ type: 'unknown', command: 'dir' }]) === 'dir')
 check('commands: an unwrapped command passes through', unwrapCommand('ls') === 'ls')
-check('hunks: two hunks join their context', hunkTexts('@@ -1 +1 @@\n-a\n+b\n@@ -9 +9 @@\n c\n').newText === 'b\nc\n')
+{
+  const patch = '@@ -1 +1 @@\n-a\n+b\n@@ -9 +9 @@\n c\n'
+  const call = toolCallOf({ type: 'fileChange', id: 'multi-hunk', changes: [{ path: '/TMP/cwd/old.txt', kind: { type: 'update', move_path: '/TMP/cwd/new.txt' }, diff: patch }] }, '/TMP/cwd')
+  const diff = call?.presentation !== undefined && 'diffs' in call.presentation ? call.presentation.diffs[0] : undefined
+  check('N5: multi-hunk patch and move destination remain lossless', diff !== undefined && isPatchDiff(diff) && diff.patch === patch && diff.movePath === '/TMP/cwd/new.txt', diff)
+  if (diff !== undefined && isPatchDiff(diff)) {
+    const parsed = parseFilePatch(diff)
+    check('N5: separated hunks keep their original line offsets', parsed.hunks.length === 2 && parsed.hunks[1]?.oldStart === 9 && parsed.hunks[1]?.newStart === 9 && parsed.maxLineNo === 9, parsed)
+  }
+}
 
 // ── a usage report is invisible (review fix) ────────────────────────────
 {
@@ -261,14 +312,14 @@ check('hunks: two hunks join their context', hunkTexts('@@ -1 +1 @@\n-a\n+b\n@@ 
   const rows = JSON.stringify(harness.state.rows)
   const traced = trace.events().length
   const input = harness.state.tokens.input
-  feed([{ type: 'assistant.message', seq: 2, anchor: '', turn: 1, step: 1, attemptId: 'turn-1#1#usage', time: 99, blocks: [], usage: { input: 10, output: 5 }, canonical: false, usageOnly: true }])
-  check('usage-only: no row changes (no new row, no rewritten time or images, so no /export or copy line)', JSON.stringify(harness.state.rows) === rows, harness.state.rows)
-  check('usage-only: no trace entry', trace.events().length === traced, trace.events().slice(traced))
-  check('usage-only: the usage is booked once', harness.state.tokens.input === input + 10)
-  feed([{ type: 'assistant.message', seq: 2, anchor: '', turn: 1, step: 1, attemptId: 'turn-1#1#usage', time: 99, blocks: [], usage: { input: 10, output: 5 }, canonical: false, usageOnly: true }])
-  check('usage-only: a redelivered report (same seq) is not booked twice', harness.state.tokens.input === input + 10)
+  feed([{ type: 'usage', seq: 2, turn: 1, step: 1, time: 99, usage: { input: 10, output: 5 } }])
+  check('N8 independent usage: no row changes (no new row, no rewritten time or images, so no /export or copy line)', JSON.stringify(harness.state.rows) === rows, harness.state.rows)
+  check('N8 independent usage: no trace entry', trace.events().length === traced, trace.events().slice(traced))
+  check('N8 independent usage: the usage is booked once', harness.state.tokens.input === input + 10)
+  feed([{ type: 'usage', seq: 2, turn: 1, step: 1, time: 99, usage: { input: 10, output: 5 } }])
+  check('N8 independent usage: a redelivered report (same seq) is not booked twice', harness.state.tokens.input === input + 10)
   feed([{ type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 100 }])
-  check('usage-only: the turn ends with one assistant row', harness.state.rows.filter(row => row.kind === 'assistant').length === 1)
+  check('N8 independent usage: the turn ends with one assistant row', harness.state.rows.filter(row => row.kind === 'assistant').length === 1)
 }
 
 console.log(`\nverify-codex-translate OK (${passed} checks)`)

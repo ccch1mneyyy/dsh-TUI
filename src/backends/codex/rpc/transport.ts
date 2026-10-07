@@ -17,8 +17,8 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 
-/** One stdout line longer than this is dropped (64 MiB). */
-export const MAX_LINE_BYTES = 64 * 1024 * 1024
+/** 96 Mi code units: covers the declared 50 MiB image payload after base64. */
+export const MAX_LINE_BYTES = 96 * 1024 * 1024
 
 /** How the child ended (`error` = it never started, e.g. ENOENT). */
 export interface TransportExit {
@@ -71,7 +71,8 @@ export function createLineSplitter(onLine: (line: string) => void, onOversize: (
         const line = partial + piece
         partial = ''
         const trimmed = line.endsWith('\r') ? line.slice(0, -1) : line
-        if (trimmed !== '') onLine(trimmed)
+        if (line.length > maxLine) onOversize(line.length)
+        else if (trimmed !== '') onLine(trimmed)
       }
       if (skipping) return
       partial += chunk.slice(start)

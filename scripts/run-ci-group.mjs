@@ -881,6 +881,24 @@ const GROUPS = {
 // 真实 Chat 挂在 Codex 会话（假 app-server）上：审批面板文案、命令卡输出、
 // 流式回复、diff 卡、问卷、Esc 中断；80/40 列 × inline/fullscreen。
     ["verify-codex-chat", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-chat.tsx']],
+    ["verify-usage-event", ['node', '--import', 'tsx/esm', 'scripts/verify-usage-event.ts']],
+    ["verify-init-capability", ['node', '--import', 'tsx/esm', 'scripts/verify-init-capability.ts']],
+    ["verify-agent-event-invariants", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-event-invariants.ts']],
+    ["verify-codex-auth", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-auth.ts']],
+    ["verify-codex-live-guard", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-live-guard.ts']],
+    ["verify-codex-controls", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-controls.ts']],
+    ["verify-codex-plans", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-plans.ts']],
+    ["verify-codex-advanced", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-advanced.ts']],
+    ["verify-codex-catalog-history", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-catalog-history.ts']],
+    ["verify-codex-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-lifecycle.ts']],
+    ["verify-codex-side-query", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-side-query.ts']],
+    ["verify-codex-reconnect", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-reconnect.ts']],
+    ["verify-codex-images", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-images.ts']],
+    ["verify-codex-subagents", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-subagents.ts']],
+    ["verify-codex-child-output", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-child-output.ts']],
+    ["verify-backend-logout", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-logout.ts']],
+    ["verify-codex-chat-controls", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-chat-controls.tsx']],
+    ["verify-session-archive", ['node', '--import', 'tsx/esm', 'scripts/verify-session-archive.tsx']],
 // 内核目录（N7）：三内核、未探测/未安装/未登录置灰、loginInSession 仍可选并提示、
 // 只有可一键安装的内核给安装向导、版本产品前缀、--backend 接受 codex。
     ["verify-kernel-catalog", ['node', '--import', 'tsx/esm', 'scripts/verify-kernel-catalog.ts']],

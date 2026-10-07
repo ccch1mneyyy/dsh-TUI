@@ -140,7 +140,7 @@ boundaries and helpers over introducing parallel abstractions.
   - Backend translators turn session events into `AgentEvent`s; the one
     shared projector, `src/channel/projection.ts`, turns those into
     transcript rows. Adding a backend needs no channel code.
-- `src/agent/`, `src/channel/`, `src/backends/claude/`, `src/dsh-adapter/backend/`:
+- `src/agent/`, `src/channel/`, `src/backends/claude/`, `src/backends/codex/`, `src/dsh-adapter/backend/`:
   the backend-neutral session domain and shared projector, plus each backend's
   translator and session. The structure, the rules and the steps to add a
   backend are in [Agent backends](agent-backend-design.md) (Chinese).
@@ -407,7 +407,9 @@ change, also run the closest focused script:
 | --- | --- |
 | General headless screen composition | `pnpm smoke` |
 | Shared projector, DSH translator | `pnpm verify:projection-golden`, `node --import tsx/esm scripts/verify-dsh-translate.ts`, `pnpm verify:agent-domain` |
-| Claude backend | The matching `scripts/verify-claude-*` (fake SDK, no cost) and `pnpm verify:backend-channel`; `verify:claude-live`/`verify:claude-headless` drive the real CLI, so run them by hand only when you mean to spend (pinned to haiku) |
+| Claude backend | The matching `scripts/verify-claude-*` (fake SDK, no cost) and `node --import tsx/esm scripts/verify-backend-channel.ts`; `verify:claude-live`/`verify:claude-headless` drive the real CLI, so run them by hand only when you mean to spend (pinned to haiku) |
+| Archive semantics and backend OAuth logout | `node --import tsx/esm scripts/verify-session-archive.tsx` (real headless browser, fake catalog), `node --import tsx/esm scripts/verify-backend-logout.ts` (real channel/UI facade, fake OAuth host); no native-login/real-credential mutation, preserving DSH/Claude default deletion |
+| Native Codex backend | `pnpm verify:codex-contract`, matching fake-app-server/fixture `scripts/verify-codex-*`, `node --import tsx/esm scripts/verify-backend-channel.ts`; neutral-layer changes also need DSH goldens, Claude comparisons and `verify-agent-event-invariants.ts`. Real `verify-codex-live.ts` / probes must use `codex-cheap-only.mjs`; explicitly list unavailable real ChatGPT login/TTY checks |
 | Channel submit/steer/pending behavior | `node scripts/verify-submit.mjs` |
 | Rewind/edit/resend and historical inbox cancellation | `pnpm verify:rewind-edit` |
 | Prompt queue behavior | `node scripts/verify-queue.mjs` |
@@ -650,10 +652,11 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 | Session/channel behavior | Backend-neutral: `src/dsh-adapter/channel/core/`; DSH-only: `channel/extensions.ts` and its specialists; affected UI projections, compiled output, focused channel/replay regression (incl. `verify-backend-channel`, `verify-channel-rollback`) |
 | Renderer/layout behavior | `src/ink/` or Yoga source, compiled output, CI regressions, focused scroll/resize/PTY probe |
 | Skill discovery or presentation | DSH adapter, slash-command merge, `/skills`, and focused regressions; maintainer-only skills live in `.agents/skills/` and must stay out of npm |
-| User-facing documented behavior | Chinese and English READMEs, plus config comments/help text where applicable |
+| User-facing documented behavior | Both READMEs, applicable config/help text and bilingual `docs/` pages; a new bundled guide also needs `scripts/guide-sources.mjs` and `guide/dsh-tui-guide/SKILL.md` routing, then `node scripts/build-guide.mjs` / `node scripts/verify-guide.mjs` (do not edit copies by hand) |
 | Contribution intake or PR gate | `.mergify.yml`, `docs/contributing.md`, `docs/contributing.en.md`, `.github/workflows/pr-gate.yml`, `.github/scripts/pr-intake/`, `.github/APPROVED_CONTRIBUTORS` |
 | Package version or dependency | `package.json`, `pnpm-lock.yaml`, generated/published artifacts as applicable; do not churn the legacy npm lock incidentally |
 | Claude Agent SDK version | The exact version in both the optional peer and dev entries of `package.json`, `pnpm-lock.yaml`, `src/backends/claude/contract.ts` (`VALIDATED_SDK_VERSION`/`VALIDATED_CLI_VERSIONS`), the install command in `docs/claude-backend{,.en}.md`; `verify:claude-contract` checks they agree |
+| Codex protocol/validated version | Regenerate through `scripts/codex-protocol-sync.mjs`, update `src/backends/codex/contract.ts`, method tables/fixtures/redaction/live-replay regressions and bilingual Codex guides; do not add a Codex SDK npm dependency or claim the minimum validates every experimental API |
 | Upstream validated-line bump | `src/dsh-adapter/contract.ts`, `src/dsh-adapter/oauth/`, both peer and dev ranges in `package.json`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
 
 ## Git And Release Safety

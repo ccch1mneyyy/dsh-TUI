@@ -11,6 +11,7 @@ src/dsh-adapter/channel.ts  Channel 入口：后端中立核心（channel/core/�
 src/agent/          后端中立的会话领域：AgentEvent、AgentSession、类型化能力（无 I/O、无厂商依赖）
 src/channel/        共享投影器（AgentEvent → 视图状态）与审批/问卷等中立 store
 src/backends/claude/  实验性 Claude Agent SDK 后端；多后端结构见 docs/agent-backend-design.md
+src/backends/codex/  Codex app-server 原生后端：协议、hub、翻译器与能力；不捆绑 Codex npm 依赖
 src/dsh-adapter/oauth/    内置订阅 OAuth：provider 路由、/auth、凭据存储与问卷桥接
 src/screens/        Chat.tsx 交互协调器与状态栏呈现
 src/components/     功能组件；design-system/ 是主题感知原语

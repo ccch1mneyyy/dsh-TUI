@@ -68,7 +68,7 @@ export function buildKernelCatalog(input: {
         : status.installed && status.auth === 'missing'
           ? 'kernel-unavailable-auth-missing'
           // Not installed but a version was read: the binary is too old.
-          : !status.installed && status.version !== undefined
+          : id === 'codex' && !status.installed && status.version !== undefined
             ? 'kernel-unavailable-too-old'
             : 'kernel-unavailable-not-installed'
     const version = kernelVersionLabel(id, id === 'dsh' ? input.dshVersion : status?.version)

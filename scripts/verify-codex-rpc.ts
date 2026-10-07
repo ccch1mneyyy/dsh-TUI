@@ -17,9 +17,9 @@
  * Run: node --import tsx/esm scripts/verify-codex-rpc.ts
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { copyFileSync, linkSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import { CodexRpcError, createRpcClient, RPC_ERROR, type RpcClock } from '../src/backends/codex/rpc/client.js'
 import { createLineSplitter, spawnTransport, type TransportExit } from '../src/backends/codex/rpc/transport.js'
 
@@ -144,6 +144,8 @@ function manualClock(): RpcClock & { advance(ms: number): void } {
   check('CRLF and empty lines; a line split across chunks joins', lines[0] === '{"a":1}' && lines[1] === '{"b":2}')
   check('an oversize line is dropped (reported once) and the next line survives', oversize.length === 1 && lines[2] === '{"c":3}' && !lines.some(line => line.includes('xxx')))
   check('the last unterminated line flushes at end', lines[3] === '{"d":4}' && lines.length === 4)
+  splitter.push('x'.repeat(40) + '\n{"e":5}\n')
+  check('oversize completed line is refused even within one chunk', oversize.length === 2 && lines.at(-1) === '{"e":5}' && !lines.some(line => line.includes('xxx')))
 }
 
 // ── transport ───────────────────────────────────────────────────────────
@@ -209,11 +211,51 @@ process.stdin.on('end', () => { setTimeout(() => process.exit(0), 10) })
   check('npm shim: no binary on disk → undefined (the shim itself is spawned)', resolveNpmShim(`${NPM}\\codex.cmd`, tree([])) === undefined)
   check('npm shim: not a codex shim → undefined', resolveNpmShim(`${NPM}\\other.cmd`, { ...tree([hoisted]), read: () => '@node other.js %*' }) === undefined)
   check('npm shim: an unsupported platform → undefined', resolveNpmShim('/usr/bin/codex', { platform: 'aix', arch: 'ppc64', exists: () => true, read: () => CMD }) === undefined)
+  const nativeLayout = win32.join(NPM, 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'codex', 'codex.exe')
+  check('npm shim: official codex/codex.exe layout is resolved', resolveNpmShim(win32.join(NPM, 'codex.cmd'), tree([nativeLayout])) === nativeLayout)
+  const globalRoot = win32.join('C:', 'Program Files', 'nodejs', 'node_modules', '@openai', 'codex')
+  const absoluteBinary = win32.join(globalRoot, 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'codex', 'codex.exe')
+  const absoluteIo = { ...tree([absoluteBinary]), read: () => '@node "' + globalRoot + '\\bin\\codex.js" %*' }
+  check('npm shim: quoted absolute launcher path containing spaces', resolveNpmShim(win32.join(NPM, 'codex.cmd'), absoluteIo) === absoluteBinary)
+  check('npm shim: absolute forward-slash launcher path', resolveNpmShim(win32.join(NPM, 'codex.cmd'), { ...absoluteIo, read: () => '@node "' + globalRoot.replaceAll('\\', '/') + '/bin/codex.js" %*' }) === absoluteBinary)
+  const relativeRoot = win32.join('C:', 'pnpm', 'store', 'node_modules', '@openai', 'codex')
+  const relativeBinary = win32.join(relativeRoot, 'vendor', 'x86_64-pc-windows-msvc', 'codex', 'codex.exe')
+  check('npm shim: relative launcher path normalizes dot-dot segments', resolveNpmShim(win32.join('C:', 'pnpm', 'bin', 'codex.cmd'), { ...tree([relativeBinary]), read: () => '@node "%~dp0\\..\\store\\node_modules\\@openai\\codex\\bin\\codex.js" %*' }) === relativeBinary)
+  check('npm shim: PowerShell basedir launcher is resolved', resolveNpmShim(win32.join(NPM, 'codex.ps1'), { ...tree([nativeLayout]), read: () => '& node "$basedir/node_modules/@openai/codex/bin/codex.js" $args' }) === nativeLayout)
+  const armBinary = win32.join(NPM, 'node_modules', '@openai', 'codex-win32-arm64', 'vendor', 'aarch64-pc-windows-msvc', 'codex', 'codex.exe')
+  check('npm shim: Windows arm64 selects its own native platform package', resolveNpmShim(win32.join(NPM, 'codex.cmd'), { ...tree([armBinary]), arch: 'arm64' }) === armBinary)
   // Lossless unwrap (review nits): plain `bash -lc`, -NoLogo, quoted pwsh paths.
   check('unwrap: plain bash -lc, a quoted script', unwrapShell("bash -lc 'ls -la'") === 'ls -la')
   check('unwrap: pwsh -NoLogo -Command', unwrapShell('pwsh -NoLogo -NoProfile -Command "Get-ChildItem"') === 'Get-ChildItem')
   check('unwrap: a quoted pwsh path', unwrapShell('"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "Get-Date"') === 'Get-Date')
   check('unwrap: concatenated quoting is not unwrapped (lossless or nothing)', unwrapShell(`/bin/bash -lc 'a "'b'" c'`) === undefined)
+}
+
+// ── native Windows spawn keeps -c quoting byte-for-byte ────────────────
+if (process.platform === 'win32') {
+  const { spawnablePath } = await import('../src/backends/codex/rpc/binary.js')
+  const dir = mkdtempSync(join(tmpdir(), 'codex-native-'))
+  let transport: ReturnType<typeof spawnTransport> | undefined
+  try {
+    const npm = join(dir, 'npm fixture')
+    const nativeDir = join(npm, 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'codex')
+    mkdirSync(nativeDir, { recursive: true })
+    const executable = join(nativeDir, 'codex.exe')
+    try { linkSync(process.execPath, executable) } catch { copyFileSync(process.execPath, executable) }
+    const shim = join(npm, 'codex.cmd')
+    writeFileSync(shim, '@node "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*')
+    const script = join(dir, 'argv.mjs')
+    writeFileSync(script, "console.log(JSON.stringify(process.argv.slice(2))); process.stdin.resume()")
+    const args = ['app-server', '-c', 'model_provider="dshtui quoted"', '-c', 'model_providers.test.base_url="https://relay.invalid/v1"', 'literal & | < > % ^ !']
+    const lines: string[] = []
+    transport = spawnTransport({ executable: spawnablePath(shim), args: [script, ...args], env: {}, cwd: dir, onLine: line => lines.push(line), onStderr: () => undefined, onExit: () => undefined })
+    for (let i = 0; i < 100 && lines.length === 0; i += 1) await tick(20)
+    check('native Windows: npm shim resolves to an exe and -c arguments remain exact', spawnablePath(shim) === executable && lines[0] === JSON.stringify(args), lines)
+  } finally {
+    await transport?.close()
+    // This absolute temporary directory belongs to this test invocation.
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 console.log(`\nverify-codex-rpc OK (${passed} checks)`)
