@@ -2838,8 +2838,8 @@ export function Chat({
         setHelpOpen(true)
         return true
       case 'model': {
-        // `/model <provider/model>` switches directly (same live-fork path
-        // as the picker's Enter), bare `/model` opens the picker.
+        // `/model <provider/model>` switches directly (same in-session route
+        // switch as the picker's Enter), bare `/model` opens the picker.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts.length > 0) {
           setHelpOpen(false)
@@ -4595,8 +4595,8 @@ export function Chat({
     }
     if (overlay.kind === 'model') {
       // Two-level picker: group rows at the top (Enter drills in), one
-      // provider's models below (Enter switches, the same live-fork path as
-      // the flat picker always had). Esc/⌫ climbs one level and only closes
+      // provider's models below (Enter switches, the same in-session route switch
+      // as the flat picker). Esc/⌫ climbs one level and only closes
       // at the top; a single-group catalog never shows the group level, so
       // Esc there closes directly.
       const rowCount = activeModelGroup === undefined ? modelGroups.length : groupModels.length

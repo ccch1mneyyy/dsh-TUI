@@ -546,9 +546,8 @@ export interface ChannelUi {
   /** Provider-owned workspace subcommands. */
   workspaceCommands(): readonly Pick<TuiWorkspaceCommand, 'name' | 'aliases' | 'description'>[]
   runWorkspaceCommand(name: string, input: string): Promise<TuiWorkspaceCommandResult | undefined>
-  /** Switch the live model (`/model` picker): forks the conversation at its
-   *  current end and continues it with a new agent routed to `provider`/`model`.
-   *  The history replays unchanged; only the request route changes. */
+  /** Switch the live model (`/model` picker): selects the next request's route
+   *  on the same session; its ID, history, and agent are unchanged. */
   switchModel(provider: string, model: string): Promise<boolean>
   /** The live route's effort levels + adapter default for the `/effort`
    *  slider; empty `efforts` after notifying when unsupported/unavailable.
