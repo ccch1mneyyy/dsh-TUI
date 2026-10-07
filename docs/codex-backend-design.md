@@ -822,8 +822,10 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
    attempt（只有思考没有正文）→ 结算它（reasoning-only 消息）。
 6. `turn/completed`：结算打开的 attempt（`interrupted` 回合标 `interrupted:true` 与
    `attempt.end{aborted}`），`step.end`，`turn.end`。
-7. `phase:'commentary'` 与 `final_answer` 同样渲染为助手正文（官方 TUI 亦然）；commentary 的
-   文本供工作行"叙述"使用（同 Claude 的 `narrated`）。
+7. `phase:'commentary'` 与 `final_answer` 同样渲染为助手正文（官方 TUI 亦然）；工作行**不**保留
+   commentary 文本——正文已在转录里，再叙述一次就是同屏重复（用户验证轮 1 报告的重复缺陷）。
+   Claude 的 `narrated` 之所以能上工作行，是因为它的 `⏵` 行会被 `stripNarration` 从转录剥掉，
+   单一显示面；codex 的 commentary 是线程历史的一部分，归属转录。
 
 ### 7.4 item 映射表
 

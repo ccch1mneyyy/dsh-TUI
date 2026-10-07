@@ -14,7 +14,6 @@ export function createCodexActivity(deps: { readonly clock: RpcClock; now(): num
   let blocked = false
   let waiting: unknown
   let stalled: unknown
-  let narrated = ''
   let closed = false
   const set = (phase: WorkingActivityView['phase'], line: string): void => {
     if (closed || (view.phase === phase && view.line === line && view.lang === getLang())) return
@@ -42,7 +41,6 @@ export function createCodexActivity(deps: { readonly clock: RpcClock; now(): num
       if (method === NOTIFY.turnStarted) {
         active = true
         blocked = false
-        narrated = ''
         view = { ...view, toolCount: 0, turnStartedAt: now }
         set('waiting', t('codex-working-thinking'))
       } else if (method === NOTIFY.turnCompleted) {
@@ -64,21 +62,26 @@ export function createCodexActivity(deps: { readonly clock: RpcClock; now(): num
           case 'webSearch': set('tool', str(item?.query) ?? ''); break
           case 'agentMessage':
           case 'reasoning':
-          case 'plan': set('thinking', narrated || t('codex-working-thinking')); break
+          case 'plan': set('thinking', t('codex-working-thinking')); break
         }
       } else if (method === NOTIFY.itemCompleted) {
         const item = rec(params.item)
+        // A completed commentary settles into the transcript as an assistant
+        // message (translate §7.3): the working line must NOT keep narrating
+        // its text — the same sentence would show twice at once, once under
+        // the ⏵ spinner and once as the reply's first message. Claude's
+        // narrated line differs there: it is a `⏵` line STRIPPED from the
+        // transcript, so its working line never duplicates anything.
         if (str(item?.type) === 'agentMessage' && str(item?.phase) === 'commentary') {
-          narrated = str(item?.text)?.trim() ?? ''
-          set('thinking', narrated || t('codex-working-thinking'))
+          set('thinking', t('codex-working-thinking'))
         } else if (['commandExecution', 'fileChange', 'mcpToolCall', 'collabAgentToolCall', 'webSearch'].includes(str(item?.type) ?? '')) {
           view = { ...view, toolCount: view.toolCount + 1 }
-          set('thinking', narrated || t('codex-working-thinking'))
+          set('thinking', t('codex-working-thinking'))
         }
       }
       wait()
     },
-    reset(): void { active = false; blocked = false; narrated = ''; clearWait(); set('idle', '') },
+    reset(): void { active = false; blocked = false; clearWait(); set('idle', '') },
     close(): void { active = false; clearWait(); set('idle', ''); closed = true; listeners.clear() },
   }
 }

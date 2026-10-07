@@ -353,3 +353,16 @@ goldens 变化：两张卡片标题从错误的引号剥离改为正确脚本（
 - 核心完成不代表全部原生字段消费。尚缺serviceTier/输入模态、终端PID/CPU/RSS/cwd详情、MCP详细
   清单/认证、instructionSources、独立推理tokens/支出状态、命名权限档、归档浏览/取消归档。
   真实凭据和交互TTY仍需维护者验收。
+
+## 验收轮 1 修复：自述与正文同屏重复（2026-10-07）
+
+用户实测报告：Codex 内核下，⏵ 模型自述与 codex 输出的第一句话内容相同且同时显示。
+
+- 根因：session/activity.ts 把已完成 commentary 的文本存为 narrated，供工作行在
+  thinking/tool 间隙反复显示；而同一条 commentary 又按 §7.3 结算为转录里的助手消息——
+  同一文本两个显示面。设计原文"同 Claude 的 narrated"忽略了 Claude 的 ⏵ 行会被
+  stripNarration 从转录剥掉（单一显示面），codex commentary 是线程历史、归属转录。
+- 修复：删除 narrated 状态；commentary 完成后工作行回落到普通思考文案；转录侧不变
+  （commentary/final_answer 仍渲染为助手正文，官方 TUI 亦然）。
+- 回归：verify-codex-side-query 的活动行场景改为锁定"settle 后的 commentary 绝不出现在
+  工作行"；设计文档 §7.3 第 7 条同步修订。

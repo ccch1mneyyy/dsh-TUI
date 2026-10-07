@@ -152,7 +152,7 @@ await scenario('side query server error, interrupted cancel, closed and timeout 
   } finally { await hub.close() }
 })
 
-await scenario('activity narrates native milestones and coalesces commentary', async () => {
+await scenario('activity narrates native milestones and never re-narrates settled commentary', async () => {
   const clock = manualClock()
   let now = 0
   const emitted: { type: string; key?: string }[] = []
@@ -163,7 +163,12 @@ await scenario('activity narrates native milestones and coalesces commentary', a
   activity.notification('item/started', { item: { type: 'agentMessage' } })
   for (const delta of ['one', 'two', 'three']) activity.notification('item/agentMessage/delta', { delta })
   activity.notification('item/completed', { item: { type: 'agentMessage', phase: 'commentary', text: 'Checking the files.' } })
-  check('commentary updates one working line, not once per token', views.filter(view => view.line === 'Checking the files.').length, 1)
+  // The commentary settles into the transcript as an assistant message
+  // (verify-codex-translate locks that side); the working line must not keep
+  // narrating it — that showed the same sentence twice at once, under the
+  // spinner AND as the reply's first message.
+  check('settled commentary never appears as a working line', views.filter(view => view.line === 'Checking the files.').length, 0)
+  check('working line stays on the thinking copy after commentary settles', views.at(-1)?.line, t('codex-working-thinking'))
   activity.notification('item/started', { item: { type: 'commandExecution', command: 'pwsh -NoLogo -c ls', commandActions: [] } })
   check('command milestone is narrated', views.at(-1)?.line.includes('ls') && views.at(-1)?.phase === 'tool')
   activity.notification('item/completed', { item: { type: 'commandExecution' } })
