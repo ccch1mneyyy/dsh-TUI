@@ -552,7 +552,18 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 **Row 1 — context segment bar** (`/settings → statusBar.contextBar`, default on)
 
 - Colored by content type (system / prompt / assistant / thinking / tools).
-- Segment token counts are a **local estimate** (CJK/full-width ≈1.4 chars/token, ASCII ≈4, other scripts ≈2): they describe what the bar is made of and **never** feed the occupancy total — that comes from the ctx reading below.
+- Colored by content type (system / prompt / assistant / thinking / tools). **The used span's length is
+  exactly the reading** (the 13k of `13k/64k`): the five segments only split that span by composition, so
+  an over- or under-estimate can no longer draw the bar short or long.
+- The composition comes from two layers: the harness's `contextBreakdown` projection (system prompt / the
+  request envelope's tool schemas / every other visible node, injected context included) plus this app's
+  local estimate, which alone splits the meter's message side into prompt / assistant / thinking / tool
+  results (ASCII ≈4 chars/token, CJK ≈1.4, other scripts ≈2). A meter that predates the projection leaves
+  the local estimate as the only source.
+- The hover legend reports those same shares, attributed to the occupancy, so **the five segments plus
+  free add up to the window** (`1.2k`-style abbreviations cost at most half a unit each) instead of
+  reporting a second, smaller total. The estimates themselves **never** feed the occupancy total — that
+  comes from the ctx reading below.
 - The only text on the bar is the right-edge reading `13k/64k 19.5%` (narrow screens show only `19.5%`).
 - The reading colors by usage: <80% gray-blue, **≥80% amber, ≥95% red**.
 - Hover the whole bar for the legend: color block + name + token count (narrow screens shorten the names).

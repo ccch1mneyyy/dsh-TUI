@@ -32,7 +32,7 @@ import { t } from '../../../i18n.js'
 import { WORKING_GATE_NOTICES } from '../../../commands.js'
 import { logForDebugging } from '../../../utils/debug.js'
 import { DEFAULT_SESSION_MODES } from '../../../sessionModes.js'
-import { resolveContextOccupancy } from '../../context-occupancy.js'
+import { resolveContextBreakdown, resolveContextOccupancy } from '../../context-occupancy.js'
 import { IdeChannel, ideLockDir, type SelectionSnapshot } from '../../ide-channel.js'
 import { createChannelActionMethods, createChannelActionReadiness, type ChannelActionDelegates } from '../action-readiness.js'
 import { createAttachedContextRegistry } from '../attached-context.js'
@@ -407,6 +407,15 @@ export function createCoreChannel(
         state.contextWindow,
         feed.projector.contextUsage(),
       )
+    },
+    /**
+     * The composition half of the same meter unit, derived on read for the same
+     * reason (and refreshed by the same change feed). `undefined` on a harness
+     * whose meter publishes no `contextBreakdown`: the bar then weights its
+     * fills with this channel's own per-content-type estimates alone.
+     */
+    get contextBreakdown() {
+      return resolveContextBreakdown(contextPressure?.readBreakdown?.(state.sessionId))
     },
     commandList: localCommandsFor(initialCapabilities.commands),
     backendCapabilities: initialCapabilities,

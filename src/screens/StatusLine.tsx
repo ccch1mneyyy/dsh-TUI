@@ -39,6 +39,8 @@ import { homeDir } from '../utils/paths.js'
 import {
   USED_SEGMENTS,
   channelContextOccupancy,
+  attributeBarTokens,
+  barSegments,
   contextBarBreakdown,
   contextBarSegmentColors,
   renderMiniContextBar,
@@ -661,6 +663,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
         {barVisible ? (
           <ContextBarView
             segments={channel.contextSegments}
+            breakdown={channel.contextBreakdown}
             usedTokens={contextUsed ?? 0}
             contextWindow={contextWindow ?? 0}
             width={barWidth}
@@ -780,9 +783,11 @@ function buildHoverDetail(
   if (hover === 'bar') {
     if (window === undefined || window <= 0 || contextUsed === undefined) return null
     // The bar's text-free design pays off here: this line is its legend, so
-    // every entry leads with a chip of the very color it names.
+    // every entry leads with a chip of the very color it names, and the numbers
+    // are the shares the fills above were drawn from — attributed to the
+    // occupancy, so five entries plus `free` make up the window.
     const { entries, separator } = contextBarBreakdown(
-      channel.contextSegments,
+      attributeBarTokens(barSegments(channel.contextSegments, channel.contextBreakdown), contextUsed),
       contextUsed,
       window,
       columns,
@@ -809,8 +814,14 @@ function buildHoverDetail(
       // The hover payoff for the ctx ask: percent + counts + free, then the
       // segment breakdown as the truncate-able tail (no bar — the row's
       // in-place morph and the segment bar above already carry the gauge).
+      // The same attributed shares the bar's fills were drawn from, so these
+      // five add up to `contextUsed` and the free count next to them.
+      const sizes = attributeBarTokens(
+        barSegments(channel.contextSegments, channel.contextBreakdown),
+        contextUsed,
+      )
       const segments = USED_SEGMENTS.map(
-        segment => `${segment.labels[1] ?? segment.key} ${formatTokens(channel.contextSegments[segment.key])}`,
+        segment => `${segment.labels[1] ?? segment.key} ${formatTokens(sizes[segment.key])}`,
       ).join(' · ')
       return (
         <Text wrap="truncate">

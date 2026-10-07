@@ -7,6 +7,7 @@ import {
   FREE_SEGMENT_TEXT,
   USED_SEGMENTS,
   usedSegmentColor,
+  barSegments,
   contextBarColumns,
   contextBarReadout,
   contextBarSegmentColors,
@@ -15,6 +16,7 @@ import {
   rightAlignBarText,
   type ContextSegments,
 } from '../screens/StatusMetrics.js'
+import type { ContextBreakdown } from '../adapter/ports/channel-view.js'
 
 /**
  * The hoverable JSX twin of `renderContextBar`: the same segmented context
@@ -37,6 +39,7 @@ import {
  */
 export function ContextBarView({
   segments,
+  breakdown,
   usedTokens,
   contextWindow,
   width,
@@ -45,6 +48,9 @@ export function ContextBarView({
 }: {
   /** Local token estimates per content type, dividing the filled portion only. */
   segments: ContextSegments
+  /** The meter's composition, when the harness publishes one; the estimates
+   *  above then only split its message side. */
+  breakdown?: ContextBreakdown | undefined
   /** Measured occupancy, driving both fill length and readout. */
   usedTokens: number
   /** The context window size in tokens. */
@@ -64,7 +70,15 @@ export function ContextBarView({
   if (width <= 0 || contextWindow <= 0) return null
 
   const segmentColors = contextBarSegmentColors(getTheme(themeName))
-  const columns = contextBarColumns(segments, usedTokens, contextWindow, width)
+  // The composition re-weights the fills only: the occupancy still fixes the
+  // span, so the fills can never add up to a longer or shorter bar than the
+  // readout right of them quotes.
+  const columns = contextBarColumns(
+    barSegments(segments, breakdown),
+    usedTokens,
+    contextWindow,
+    width,
+  )
   // The readout is the bar's only text, and its one pressure signal: amber
   // from 80% occupancy, red from 95% (the footer's shared thresholds). The
   // theme key wins over the free-text color, which stays for comfortable
