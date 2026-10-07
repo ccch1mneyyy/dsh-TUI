@@ -828,7 +828,7 @@ Additional forms:
 - `/model` opens a two-level picker:
   - A pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups.
   - `Enter` drills into a group's models, and a single provider with no recents skips straight to the list.
-  - Switching = fork continuation, history preserved.
+  - Switching keeps the current session and history; the new model is used for the next request.
 - `/theme <name>` and `/theme status` are described in the theme guide.
 - `/permission` reads the DSH `permissionPresets` registry, preserving registry order for
   the picker, completion and the `Shift+Tab` cycle. Third-party presets need no TUI
