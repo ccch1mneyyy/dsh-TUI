@@ -347,8 +347,9 @@ export type AgentEvent =
   | { readonly type: 'compaction.start'; readonly trigger: 'manual' | 'auto'; readonly cancellable: boolean; readonly time: number }
   /** The compaction model call produced `outputChars` more characters. */
   | { readonly type: 'compaction.progress'; readonly outputChars: number }
-  /** A compaction closed (committed or abandoned). */
-  | { readonly type: 'compaction.end'; readonly ok: boolean; readonly summary?: string; readonly preTokens?: number; readonly postTokens?: number; readonly error?: string; readonly time: number }
+  /** A compaction closed (committed or abandoned). `contextReplaced` confirms
+   *  replacement, unlike a host's outcome-less compaction bracket. */
+  | { readonly type: 'compaction.end'; readonly ok: boolean; readonly contextReplaced?: boolean; readonly summary?: string; readonly preTokens?: number; readonly postTokens?: number; readonly error?: string; readonly time: number }
   /** The model's context window is known. */
   | { readonly type: 'context.capacity'; readonly contextWindow: number }
   /** Backend-measured context usage. */

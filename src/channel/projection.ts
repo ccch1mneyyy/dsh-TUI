@@ -1396,6 +1396,18 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       }
       case 'compaction.end':
         state.compaction = undefined
+        // A confirmed replacement without a checkpoint (Codex) invalidates
+        // the old composition. Hosts that only bracket the attempt omit this
+        // signal; their recorded checkpoint owns the reset.
+        if (event.ok && event.contextReplaced === true) {
+          state.contextSegments = {
+            system: state.contextSegments.system,
+            prompt: estimateTokens(event.summary ?? ''),
+            assistant: 0,
+            thinking: 0,
+            tools: 0,
+          }
+        }
         // A backend that measured the compacted window (Claude
         // `compact_boundary.post_tokens`) re-seeds the occupancy sample with
         // it: a compaction turn makes no request, so without this the

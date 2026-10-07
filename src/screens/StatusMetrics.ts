@@ -14,6 +14,7 @@ import type { ContextOccupancy } from '../adapter/ports/channel-view.js'
 import { resolveContextOccupancy } from '../dsh-adapter/context-occupancy.js'
 import { getActiveBrand } from '../branding.js'
 import { getActiveThemeName, isLightThemeActive } from '../theme.js'
+import { t } from '../i18n.js'
 
 /**
  * The occupancy reading a screen renders.
@@ -121,7 +122,13 @@ export function contextBarSegmentColors(theme?: Theme): readonly Color[] {
   return USED_SEGMENTS.map(segment => (theme?.[segment.themeKey] ?? segment.fallback) as Color)
 }
 
-/** Used tokens per context content type (system, prompt, assistant, thinking, tools). */
+/** A single used block when the backend reports occupancy without composition. */
+export function contextBarUsedColor(colors?: readonly Color[]): Color {
+  const segment = USED_SEGMENTS[2]
+  return usedSegmentColor({ key: segment.key, color: colors?.[2] ?? segment.fallback })
+}
+
+/** Local token estimates per context content type (system, prompt, assistant, thinking, tools). */
 export type ContextSegments = Record<(typeof USED_SEGMENTS)[number]['key'], number>
 
 /** Free-segment colors: light grey fill, dark grey readout. Exported so the
@@ -258,15 +265,15 @@ export type ContextBarBreakdown = {
 
 /**
  * The context bar's hover breakdown — the legend the bar no longer carries
- * itself. One entry per segment the bar actually paints (a zero-token content
- * type gets no columns, so it gets no entry either), in bar order, free last.
+ * itself. Local content estimates come first, measured free space last. When
+ * composition is unavailable, one measured used entry replaces the estimates.
  *
  * `columns` picks the label form: readable names with a ` · ` separator while
  * the line fits, then the short forms, then a bare space separator (the color
  * chip already separates the entries). The caller renders each entry as
  * `chip + space + label`, which is what the fit test measures.
  *
- * @param segments - Used tokens per content type.
+ * @param segments - Local token estimates per content type.
  * @param usedTokens - Total used tokens; the remainder is the free entry.
  * @param contextWindow - The context window size in tokens.
  * @param columns - Terminal width; the footer's own padding is subtracted here.
@@ -286,7 +293,7 @@ export function contextBarBreakdown(
   const raw: { key: string; tokens: number; color: Color; labels: readonly string[] }[] = []
   for (const [index, segment] of USED_SEGMENTS.entries()) {
     const tokens = segments[segment.key]
-    if (tokens > 0) {
+    if (tokens > 0 && usedTokens > 0) {
       raw.push({
         key: segment.key,
         tokens,
@@ -298,6 +305,14 @@ export function contextBarBreakdown(
         labels: segment.labels,
       })
     }
+  }
+  if (raw.length === 0 && usedTokens > 0) {
+    raw.push({
+      key: 'used',
+      tokens: usedTokens,
+      color: contextBarUsedColor(colors?.used),
+      labels: [t('context-bar-used')],
+    })
   }
   if (freeTokens > 0) {
     raw.push({
@@ -369,8 +384,7 @@ function allocateProportionally(values: readonly number[], columns: number): num
   return allocatedColumns
 }
 
-/** Give every visible used segment at least one column before sharing the
- *  rest. Exported for ContextBarView (hoverable JSX twin of the bar). */
+/** Share a fixed used-column budget, keeping small segments visible when it fits. */
 export function allocateBarColumns(values: readonly number[], width: number): number[] {
   const visibleUsedSegments = USED_SEGMENTS
     .map((_, index) => index)
@@ -391,14 +405,34 @@ export function allocateBarColumns(values: readonly number[], width: number): nu
   )
 }
 
+/** Occupancy fixes the used/free boundary; estimates only divide the used part. */
+export function contextBarColumns(
+  segments: ContextSegments,
+  usedTokens: number,
+  contextWindow: number,
+  width: number,
+): { used: number[]; unclassified: number; free: number } {
+  const columns = Math.max(0, Math.floor(width))
+  const ratio = contextWindow > 0
+    ? Math.min(1, Math.max(0, usedTokens / contextWindow))
+    : 0
+  const usedWidth = Math.round(columns * ratio)
+  const used = allocateBarColumns(USED_SEGMENTS.map(segment => segments[segment.key]), usedWidth)
+  return {
+    used,
+    unclassified: usedWidth - used.reduce((sum, value) => sum + value, 0),
+    free: columns - usedWidth,
+  }
+}
+
 /**
  * The segmented context bar: used segments by content type, then the
  * remainder as a light free segment whose right edge carries the usage
  * readout (`13k/64k 19.5%`). No other text — the bar is read by color, and
  * the pointer supplies the names and numbers (contextBarBreakdown). The
  * readout tints amber / red as the context fills (contextPressureStep).
- * @param segments - Used tokens per content type.
- * @param usedTokens - Total used tokens, driving the usage readout.
+ * @param segments - Local token estimates per content type.
+ * @param usedTokens - Measured occupancy, driving both fill length and readout.
  * @param contextWindow - The context window size in tokens.
  * @param width - Total bar width in terminal columns.
  * @param colors - The free segment's fill/text override; absent fields keep
@@ -414,13 +448,12 @@ export function renderContextBar(
   colors?: { freeFill: string; freeText: string },
 ): string {
   if (width <= 0 || contextWindow <= 0) return ''
-  const freeTokens = Math.max(0, contextWindow - usedTokens)
-  const values = [...USED_SEGMENTS.map(segment => segments[segment.key]), freeTokens]
-  const columns = allocateBarColumns(values, width)
+  const columns = contextBarColumns(segments, usedTokens, contextWindow, width)
   const used = USED_SEGMENTS.map((segment, index) =>
-    renderUsedSegment(usedSegmentColor({ key: segment.key, color: segment.fallback }), columns[index] ?? 0),
+    renderUsedSegment(usedSegmentColor({ key: segment.key, color: segment.fallback }), columns.used[index] ?? 0),
   ).join('')
-  const freeWidth = columns[USED_SEGMENTS.length] ?? 0
+  const unclassified = renderUsedSegment(contextBarUsedColor(), columns.unclassified)
+  const freeWidth = columns.free
   const pct = (usedTokens / contextWindow) * 100
   const step = contextPressureStep(pct)
   // Same two-path convention as the free-segment colors: callers pass the
@@ -428,7 +461,7 @@ export function renderContextBar(
   const style = step === undefined
     ? (text: string) => foreground(colors?.freeText ?? FREE_SEGMENT_TEXT, text)
     : (text: string) => pressureColor(pct, text)
-  return `${used}${renderFreeSegment(
+  return `${used}${unclassified}${renderFreeSegment(
     contextBarReadout(usedTokens, contextWindow),
     freeWidth,
     colors?.freeFill ?? FREE_SEGMENT_FILL,

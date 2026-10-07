@@ -944,6 +944,7 @@ const dict = {
   // 占用只有一个真源（官方 contextPressure 投影，见 dsh-adapter/context-occupancy.ts）：
   // 与 /tokens、状态栏 ctx 字段、告警共用同一读数。
   'context-occupancy': { zh: '上下文占用 {{percent}}%（{{used}}/{{window}}）', en: 'Context occupancy {{percent}}% ({{used}}/{{window}})' },
+  'context-bar-used': { zh: '已用', en: 'used' },
   'status-title': { zh: '标题   {{title}}', en: 'Title   {{title}}' },
   'cost-cache-hit-rate': { zh: '本次请求缓存命中率 {{rate}}% · 缓存 {{read}} 读 / {{write}} 写', en: 'Cache hit rate of this request: {{rate}}% · cache {{read}} read / {{write}} write' },
   // /cost 末尾口径：有金额 → 本地估算（官方单价 × 用量）、非平台账单；

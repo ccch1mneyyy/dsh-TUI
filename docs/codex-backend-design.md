@@ -849,7 +849,7 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 | `sleep` | `tool.call{name:'sleep', generic}` | `tool.result` |
 | `collabAgentToolCall` | `tool.call{presentation:{card:'subagent'}}`（抑制卡片） | `tool.result`（抑制） |
 | `subAgentActivity` | §5.13 | — |
-| `contextCompaction` | `compaction.start{trigger: 本地发起 compact ? 'manual' : 'auto', cancellable:false}` | `compaction.end{ok:true}` |
+| `contextCompaction` | `compaction.start{trigger: 本地发起 compact ? 'manual' : 'auto', cancellable:false}` | `compaction.end{ok:true, contextReplaced:true}`（清理旧上下文分类估算；占用仍等后端的新读数） |
 | `enteredReviewMode` | `notice{level:'info', text:t('codex-review-start',{review}), key:'review:'+id}` | — |
 | `exitedReviewMode` | — | `assistant.message`（review 文本作为 markdown 正文，独立 attempt） |
 | 其他未知 `type` | 调试日志 + `custom{nativeType:'codex/'+type, data:item}`（插件渲染器可接；默认不显示） | 同 |
@@ -887,7 +887,7 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 | `mcpServer/startupStatus/updated` | 刷新 MCP 状态缓存；失败状态 → warning notice（`key: mcp:<name>`） |
 | `skills/changed` | 重新 `skills/list` → `commands.changed` |
 | `account/updated`、`account/login/completed` | 刷新 auth 状态；登录失败 → error notice |
-| `thread/compacted`（旧） | 若本回合已有 `contextCompaction` item 则忽略，否则 `compaction.end{ok:true}` |
+| `thread/compacted`（旧） | 若本回合已有 `contextCompaction` item 则忽略，否则 `compaction.end{ok:true, contextReplaced:true}` |
 | `thread/closed`、`thread/archived`、`thread/deleted` | 当前 thread 被别处关闭/归档 → warning notice（会话保持，可继续） |
 | `model/verification`、`modelProvider/authRecovery*`、`turn/moderationMetadata`、`model/safetyBuffering/updated` | 调试日志（C4 评估是否需要提示） |
 | 其余（realtime、fs、process、windows*、remoteControl、fuzzy、plugin/app、externalAgentConfig、command/exec/*） | 忽略（已在 optOut 的不会到达） |

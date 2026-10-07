@@ -24,7 +24,7 @@ import { isPatchDiff, parseFilePatch } from '../src/components/diffPatch.js'
 import { assertAgentEventInvariants } from './lib/agent-event-invariants.js'
 import { unwrapCommand } from '../src/backends/codex/translate/commands.js'
 import { setLang, t } from '../src/i18n.js'
-import { golden, liveRun, loadWire, notificationsOf, turnThreads, WIRE_DIR } from './lib/codex-translate-harness.js'
+import { golden, liveRun, loadWire, notificationsOf, replayRun, turnThreads, WIRE_DIR } from './lib/codex-translate-harness.js'
 
 setLang('en')
 const GOLDENS = join(import.meta.dirname, 'fixtures', 'codex', 'goldens')
@@ -131,6 +131,57 @@ const completed = (item: Record<string, unknown>): N => ({ method: 'item/complet
 const user = (id: string, text: string, clientId: string | null = null): Record<string, unknown> => ({ type: 'userMessage', id, clientId, content: [{ type: 'text', text, text_elements: [] }] })
 function delta(method: string, itemId: string, value: string, extra: Record<string, unknown> = {}): N {
   return { method, params: { threadId: T, turnId: 't1', itemId, delta: value, ...extra } }
+}
+
+{
+  const before: N[] = [
+    turnStarted('t1'), started(user('u1', 'earlier prompt')),
+    started({ type: 'reasoning', id: 'r1', summary: [] }),
+    completed({ type: 'reasoning', id: 'r1', summary: ['earlier reasoning'] }),
+    started({ type: 'agentMessage', id: 'a1', text: '' }),
+    completed({ type: 'agentMessage', id: 'a1', text: 'earlier answer' }),
+    { method: 'thread/tokenUsage/updated', params: { threadId: T, turnId: 't1', tokenUsage: { last: { totalTokens: 37_000, inputTokens: 34_000, outputTokens: 3_000 }, modelContextWindow: 112_000 } } },
+    turnCompleted('t1'),
+  ]
+  const previous = liveRun(before)
+  check('compaction: fixture has prompt, assistant and reasoning estimates',
+    previous.harness.state.contextSegments.prompt > 0
+    && previous.harness.state.contextSegments.assistant > 0
+    && previous.harness.state.contextSegments.thinking > 0)
+  const compacted = liveRun([
+    ...before, turnStarted('compact'),
+    { method: 'item/started', params: { threadId: T, turnId: 'compact', item: { type: 'contextCompaction', id: 'c1' } } },
+    { method: 'item/completed', params: { threadId: T, turnId: 'compact', item: { type: 'contextCompaction', id: 'c1' } } },
+    turnCompleted('compact'),
+  ])
+  assertAgentEventInvariants(compacted.events)
+  check('compaction: completion explicitly confirms context replacement',
+    of(compacted.events, 'compaction.end')[0]?.contextReplaced === true)
+  check('compaction: old transcript estimates are cleared',
+    Object.values(compacted.harness.state.contextSegments).every(tokens => tokens === 0))
+  check('compaction: transcript and cumulative billing remain intact',
+    compacted.harness.state.rows.length === previous.harness.state.rows.length
+    && JSON.stringify(compacted.harness.state.tokens) === JSON.stringify(previous.harness.state.tokens))
+  check('compaction: occupancy stays backend-owned until a new measurement',
+    compacted.harness.projector.contextUsage()?.used === 25_000
+    && compacted.harness.projector.contextUsage()?.max === 100_000)
+  const legacy = liveRun([...before, { method: 'thread/compacted', params: { threadId: T } }])
+  check('compaction: legacy notification also invalidates old estimates',
+    Object.values(legacy.harness.state.contextSegments).every(tokens => tokens === 0))
+  const replayed = replayRun([
+    { id: 't1', status: 'completed', items: [user('u1', 'earlier prompt'), { type: 'agentMessage', id: 'a1', text: 'earlier answer' }] },
+    { id: 'compact', status: 'completed', items: [{ type: 'contextCompaction', id: 'c1' }] },
+  ])
+  check('compaction: replay never restores pre-compaction estimates',
+    Object.values(replayed.harness.state.contextSegments).every(tokens => tokens === 0)
+    && replayed.harness.state.rows.some(row => row.kind === 'assistant'))
+  const estimates = JSON.stringify(previous.harness.state.contextSegments)
+  previous.harness.apply([{ type: 'compaction.end', ok: false, contextReplaced: true, time: 1 }])
+  check('compaction: failure preserves the active composition',
+    JSON.stringify(previous.harness.state.contextSegments) === estimates)
+  previous.harness.apply([{ type: 'compaction.end', ok: true, time: 2 }])
+  check('compaction: an outcome-less host bracket leaves checkpoint composition alone',
+    JSON.stringify(previous.harness.state.contextSegments) === estimates)
 }
 
 {

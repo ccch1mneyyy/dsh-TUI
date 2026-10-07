@@ -10,14 +10,17 @@
  * 它最右侧带背景色的格就是 bar 的右缘；其下一行的最右非空格是状态行的
  * 右缘。两者都必须落在内容区右缘（第 `columns - 2` 格，0 起）。
  * 宽度扫描与终端宽度无关地断言等号——这正是 #922 报告里失配的形状。
+ * 占用回归：inline/fullscreen 与窄宽终端下逐格测量填充，文本估算偏大、
+ * 偏小或缺失均不得改变已用/空余边界；ANSI 与 JSX 两条路径必须一致。
  *
  * Run: node --import tsx/esm scripts/verify-context-bar-alignment.tsx
  */
 process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_LANG = 'en'
 
 import type { Terminal } from '@xterm/headless'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, ThemeProvider }, { StatusLine }, { settled }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, ThemeProvider, AlternateScreen }, { StatusLine }, { settled }, metrics] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -25,6 +28,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, ThemePro
     import('../src/ui.js'),
     import('../src/screens/StatusLine.js'),
     import('./lib/term-test.mjs'),
+    import('../src/screens/StatusMetrics.js'),
   ])
 const instances = (await import('../src/ink/instances.js')).default
 
@@ -83,10 +87,15 @@ function makeHarness(cols: number, rows: number) {
   return { term, stdout, stdin: new FakeStdin() }
 }
 
-async function mountAt(cols: number, rows: number) {
+async function mountAt(cols: number, rows: number, channel = makeChannel(), fullscreen = false) {
   const harness = makeHarness(cols, rows)
+  const footer = React.createElement(StatusLine, { channel: channel as never })
   const instance = await render(
-    React.createElement(StatusLine, { channel: makeChannel() as never }),
+    React.createElement(
+      ThemeProvider,
+      { theme: 'dark' },
+      fullscreen ? React.createElement(AlternateScreen, null, footer) : footer,
+    ),
     {
       stdout: harness.stdout as never,
       stdin: harness.stdin as never,
@@ -184,6 +193,83 @@ for (const cols of WIDTHS) {
 const DARK_FREE_FILL = (0x2e << 16) | (0x34 << 8) | 0x40
 const LIGHT_FREE_FILL = (0xe8 << 16) | (0xe8 << 8) | 0xe8
 const hex = (value: number): string => `#${value.toString(16).padStart(6, '0')}`
+
+/** Occupied cells exclude the footer's known free-segment fill. */
+function barGeometry(term: Terminal, y: number): { painted: number; used: number } {
+  let painted = 0
+  let used = 0
+  for (let x = 0; x < term.cols; x++) {
+    const cell = cellAt(term, y, x)
+    if (cell === undefined || cell.isBgDefault()) continue
+    painted++
+    if (cell.getBgColor() !== DARK_FREE_FILL) used++
+  }
+  return { painted, used }
+}
+
+const ESTIMATES = { system: 15_000, prompt: 15_000, assistant: 15_000, thinking: 15_000, tools: 15_000 }
+const EMPTY_ESTIMATES = { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }
+const OCCUPANCY_CASES = [
+  { name: 'overestimate', used: 25_000, segments: ESTIMATES },
+  { name: 'underestimate', used: 25_000, segments: { system: 1, prompt: 1, assistant: 1, thinking: 1, tools: 1 } },
+  { name: 'unclassified', used: 25_000, segments: EMPTY_ESTIMATES },
+  { name: 'zero', used: 0, segments: ESTIMATES },
+  { name: 'tiny', used: 1, segments: ESTIMATES },
+  { name: 'full', used: 100_000, segments: ESTIMATES },
+  { name: 'overflow', used: 125_000, segments: ESTIMATES },
+]
+for (const fullscreen of [false, true]) {
+  for (const cols of [16, 40, 120]) {
+    for (const sample of OCCUPANCY_CASES) {
+      const channel = {
+        ...makeChannel(),
+        contextOccupancy: { source: 'backend', usedTokens: sample.used, contextWindow: 100_000 },
+        contextSegments: sample.segments,
+      }
+      const { harness, instance } = await mountAt(cols, 30, channel, fullscreen)
+      const label = `${fullscreen ? 'fullscreen' : 'inline'}@${cols} ${sample.name}`
+      try {
+        await settled(() => findBarRow(harness.term) >= 0)
+        const y = findBarRow(harness.term)
+        const geometry = barGeometry(harness.term, y)
+        const width = cols - 2
+        const exactUsed = Math.min(1, sample.used / 100_000) * width
+        check(label + ' 填充比例跟随后端占用，误差不超过半格',
+          geometry.painted === width && Math.abs(geometry.used - exactUsed) <= 0.5,
+          `used=${geometry.used}/${geometry.painted} expected=${exactUsed}/${width}`)
+        if (sample.used === 25_000) {
+          check(label + ' 读数仍为 25.0%',
+            harness.term.buffer.active.getLine(y)?.translateToString(true).includes('25.0%') === true)
+        }
+        const ansiTerm = new XTerm({ cols: width, rows: 2, allowProposedApi: true })
+        try {
+          await new Promise<void>(resolve => ansiTerm.write(
+            metrics.renderContextBar(sample.segments, sample.used, 100_000, width, {
+              freeFill: '#2E3440', freeText: '#8D95A6',
+            }),
+            resolve,
+          ))
+          const ansi = barGeometry(ansiTerm, 0)
+          check(label + ' ANSI 与 JSX 的填充宽度相同',
+            ansi.painted === geometry.painted && ansi.used === geometry.used)
+        } finally {
+          ansiTerm.dispose()
+        }
+      } finally {
+        instance.unmount()
+        instances.delete(process.stdout)
+        harness.term.dispose()
+      }
+    }
+  }
+}
+const unclassified = metrics.contextBarBreakdown(EMPTY_ESTIMATES, 25_000, 100_000, 120)
+check('无分类的悬停明细给实测已用量，不虚构内容类别',
+  unclassified.entries.map(entry => entry.key).join(',') === 'used,free'
+  && unclassified.entries[0]?.label === 'used 25k')
+const zero = metrics.contextBarBreakdown(ESTIMATES, 0, 100_000, 120)
+check('零占用的悬停明细不显示旧分类估算',
+  zero.entries.length === 1 && zero.entries[0]?.key === 'free')
 
 /** 该主题下 bar 行的背景填充色**段**，按列顺序、相邻同色合并。 */
 async function barFills(theme: string): Promise<number[]> {

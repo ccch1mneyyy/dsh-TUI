@@ -270,7 +270,7 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
         out.push({ type: 'notice', level: 'info', key: 'strict-review', text: t('codex-strict-review') })
         return out
       case NOTIFY.threadCompacted:
-        if (!ctx.compactionSeen) out.push({ type: 'compaction.end', ok: true, time: now })
+        if (!ctx.compactionSeen) out.push({ type: 'compaction.end', ok: true, contextReplaced: true, time: now })
         return out
       case NOTIFY.threadClosed:
       case NOTIFY.threadArchived:

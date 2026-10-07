@@ -343,7 +343,7 @@ export function itemEvents(item: Rec, phase: 'started' | 'completed', ctx: ItemC
         ctx.compactionSeen = true
         out.push({ type: 'compaction.start', trigger: ctx.compactRequested ? 'manual' : 'auto', cancellable: false, time })
       } else {
-        out.push({ type: 'compaction.end', ok: true, time })
+        out.push({ type: 'compaction.end', ok: true, contextReplaced: true, time })
       }
       return out
     }
