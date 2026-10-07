@@ -41,7 +41,9 @@ export function createModelSwitchAction(
       if (current()) deps.notify(t('model-switch-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
       return false
     }
-    if (!current() || state.working) return false
+    if (!current()) return false
+    // A turn may have started during the model lookup; refuse it like the entry gate.
+    if (state.working) { deps.notify(t(WORKING_GATE_NOTICES.model), { color: 'warning' }); return false }
     // Assembly captures this complete route for both persona variables and the
     // request waterfall. The loop persists its actual header on the next request.
     // In-flight compaction keeps running: it summarizes on the logged route.
