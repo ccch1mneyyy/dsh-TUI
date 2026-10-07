@@ -7,9 +7,10 @@ import { t } from '../i18n.js'
 import wrapText from '../ink/wrap-text.js'
 
 /** Full goal text in the existing prompt-anchored modal layer. */
-export function GoalDetailsPanel({ goal, onClose }: {
+export function GoalDetailsPanel({ goal, onClose, inputEnabled = true }: {
   goal: ChannelGoal
   onClose: () => void
+  inputEnabled?: boolean
 }): React.ReactNode {
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { columns } = useTerminalSize()
@@ -29,7 +30,8 @@ export function GoalDetailsPanel({ goal, onClose }: {
     } else if (key.home) scrollRef.current?.scrollTo(0)
     else if (key.end) scrollRef.current?.scrollToBottom()
     event.stopImmediatePropagation()
-  })
+  }, { isActive: inputEnabled })
+  if (!inputEnabled) return null
   return (
     <Box flexDirection="column" backgroundColor="toolCardBackground">
       <Pane color="permission">
