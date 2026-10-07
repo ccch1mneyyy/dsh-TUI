@@ -1785,7 +1785,8 @@ console.log('source tabs: strip, switching and import')
   check('the list shows the selected directory only', shown().includes('fix the parser') && !shown().includes('ghost chat'), shown())
   check('the selected Claude Code directory uses the same full-path bar', app.lines()[2]?.includes(alphaDir) ?? false, app.lines()[2])
   const parserLine = app.lines().findIndex(line => line.includes('fix the parser'))
-  check('foreign session facts do not repeat the directory', parserLine >= 0 && !app.lines()[parserLine + 1]?.includes(alphaDir), app.lines()[parserLine + 1])
+  const parserFacts = app.lines()[parserLine + 1]
+  check('foreign session facts do not repeat the directory', parserLine >= 0 && parserFacts !== undefined && !parserFacts.includes(alphaDir), parserFacts)
   check('there is no new-session card', !shown().includes('+ New session'), shown())
 
   const cursorOn = (title: string): boolean => app.lines().some(line => line.includes(title) && line.includes('❯'))
@@ -1830,7 +1831,8 @@ console.log('source tabs: strip, switching and import')
     await settled(() => shown().includes('Codex · sessions in Alpha')),
     shown(),
   )
-  check('Codex shows the same selected directory once above the panes', app.lines()[2]?.includes(alphaDir) ?? false, app.lines()[2])
+  const codexPathCount = app.lines().join('\n').split(alphaDir).length - 1
+  check('Codex shows the same selected directory once above the panes', (app.lines()[2]?.includes(alphaDir) ?? false) && codexPathCount === 1, app.lines().join('\n'))
   check('switching source clears the query', shown().includes('codex refactor'), shown())
   app.write('\u001b[Z')
   check(
