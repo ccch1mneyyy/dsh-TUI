@@ -79,6 +79,7 @@ const [
   // The REAL persistent listing cache, so one case can put actual bytes under
   // this run's fake home and prove the screen paints them.
   { beginListingSnapshot, readListingSnapshot },
+  { getTooltipSnapshot },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/SessionSupervisor.js'),
@@ -86,6 +87,7 @@ const [
   import('../src/screens/sessionSupervisor/useForeignSessions.js'),
   import('../src/sessions/format.js'),
   import('../src/dsh-adapter/sessions/snapshot.js'),
+  import('../src/components/Tooltip.js'),
 ])
 
 let failures = 0
@@ -1420,6 +1422,27 @@ console.log('long rail: the focused workspace is really on screen')
     focused >= 0 && lines[focused + 1] !== undefined && lines[focused + 1]!.includes('many'),
     `next line: ${JSON.stringify(lines[focused + 1] ?? null)}`,
   )
+  app.close()
+}
+
+console.log('a clipped path tooltip closes when the selection moves')
+{
+  // Longer than four wrapped rows at COLS, so the path bar clips and arms its tooltip.
+  const longPath = (name: string): string => join(sandbox, `${name}-${'x'.repeat(600)}`)
+  const longRegistry = [
+    { id: 'w-long-a', path: longPath('long-a'), title: 'LongA', present: true, sessionCount: 0 },
+    { id: 'w-long-b', path: longPath('long-b'), title: 'LongB', present: true, sessionCount: 0 },
+  ]
+  const app = await openSupervisor({ registry: longRegistry, cwd: longRegistry[0]!.path, sessions: [] })
+  await settled(() => app.lines().join('\n').includes('LongB'))
+  const bar = app.lines().findIndex(line => line.includes('long-a-x'))
+  app.write(`\u001b[<35;5;${bar + 1}M`)
+  check('hovering the clipped path shows the full path',
+    await settled(() => getTooltipSnapshot()?.content === longRegistry[0]!.path), `bar row ${bar}`)
+  app.write('\u001b[B')
+  check('moving the selection closes the stale path tooltip',
+    await settled(() => app.lines().join('\n').includes('long-b-x') && getTooltipSnapshot() === null),
+    JSON.stringify(getTooltipSnapshot()?.content.slice(0, 40) ?? null))
   app.close()
 }
 

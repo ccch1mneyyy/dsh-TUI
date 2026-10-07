@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { basename } from 'node:path'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { t } from '../i18n.js'
@@ -18,7 +18,7 @@ import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { isPlainReturn, isMod } from '../utils/modifiers.js'
 import { truncateWidth, wrapPathWidth } from '../sessions/format.js'
-import { useTooltip } from '../components/Tooltip.js'
+import { clearTooltip, useTooltip } from '../components/Tooltip.js'
 import { normalizeWorkspaceCwd } from '../sessions/view.js'
 import { readSessionPins, setSessionPinned } from '../sessionPins.js'
 import { readSessionOwners, type SessionMountOwner } from '../sessionMounts.js'
@@ -545,6 +545,8 @@ export function SessionSupervisor({
   const pathLines = wrappedPath.slice(0, maxPathRows)
   if (pathClipped) pathLines[pathLines.length - 1] = truncateWidth(`${pathLines[pathLines.length - 1]}…`, pathWidth)
   const pathTooltip = useTooltip(() => pathClipped ? selectedPath ?? '' : '')
+  // A keyboard selection change leaves the pointer still, so close the previous path's tooltip.
+  useEffect(() => { clearTooltip() }, [selectedPath])
   const pathRows = pathLines.length
   const visibleRailCapacity = Math.max(1, railEntryCapacity - Math.ceil(pathRows / WORKSPACE_ROW_LINES))
   const railWindowTopIndex = railWindowTop(railFocus, railEntries.length, visibleRailCapacity)
