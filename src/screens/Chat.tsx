@@ -5375,6 +5375,7 @@ export function Chat({
         <GoalDetailsPanel
           key={`${channel.agentId}:${channel.goal.id}`}
           goal={channel.goal}
+          inputEnabled={approvalSnapshot === null && questionSnapshot === null && dialogSnapshot === null}
           onClose={() => dispatchOverlay({ type: 'close-if', kind: 'goal-details' })}
         />
       )}

@@ -147,6 +147,38 @@ for (const lang of ['en', 'zh']) for (const mode of ['fullscreen', 'inline', 'sp
   await app.unmount(); io.term.dispose()
 }
 applySidePanelOpen(false)
+// Keep the panel mounted while a higher-priority prompt takes ownership. Send
+// its first key during the commit, before passive overlay-retirement effects.
+{
+  setLang('en')
+  const { GoalDetailsPanel } = await import('../src/components/GoalDetailsPanel.js')
+  const { useInput } = await import('../src/ui.js')
+  const io = makeTerm()
+  const received = []
+  let closed = 0
+  function Recipient() { useInput(input => received.push(input)); return null }
+  function App({ inputEnabled }) {
+    React.useLayoutEffect(() => {
+      if (!inputEnabled) io.stdin.write('x')
+    }, [inputEnabled])
+    return React.createElement(React.Fragment, null,
+      React.createElement(GoalDetailsPanel, {
+        goal: makeChannel().goal, inputEnabled, onClose: () => closed++,
+      }), React.createElement(Recipient))
+  }
+  const app = await render(React.createElement(App, { inputEnabled: true }),
+    { stdout: io.stdout, stderr: io.stderr, stdin: io.stdin, exitOnCtrlC: false, patchConsole: false })
+  await settle(() => io.screen().includes(t('goal-details-title')))
+  io.stdin.write('a')
+  await settle(() => io.stdin.readableLength === 0)
+  check('active details capture input before the next recipient', received.length === 0)
+  app.rerender(React.createElement(App, { inputEnabled: false }))
+  check('suspended details pass the first commit-time key onward', await settled(() => received.join('') === 'x'))
+  check('suspended details hide before retirement', await settled(() => !io.screen().includes(t('goal-details-title'))))
+  io.stdin.write('\x1b')
+  check('suspended details do not dismiss themselves on Esc', closed === 0)
+  await app.unmount(); io.term.dispose()
+}
 // Hover is registered on the goal text only; fitting goals stay tooltip-silent.
 {
   setLang('en')
