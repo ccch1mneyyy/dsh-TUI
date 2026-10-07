@@ -88,6 +88,7 @@ const CTRL_ENTER = '\x1b[13;5u'
 /** ≥ FOLD_MIN_LINES (6): a bracketed paste of this folds into one chip. */
 const BIG_PASTE = Array.from({ length: 12 }, (_, i) => `fold-line-${String(i).padStart(2, '0')}`).join('\n')
 const STAGED_IMAGE_TOKEN = '[Image #1]'
+const DASHBOARD_HINT_COLLISION = '提示：Ctrl+A 子代理面板：Enter 查看详情 · Esc 关闭'
 
 /**
  * Renderer errors (`logError` -> `process.stderr` with a `[dsh-tui]` prefix)
@@ -215,7 +216,8 @@ function makeChannel() {
   const channel = {
     whaleIdle: false,
     version: 0,
-    rows: [{ id: 1, kind: 'user' as const, text: 'hi' }],
+    // Keep the CI hint collision visible on every run, independent of tip rotation.
+    rows: [{ id: 1, kind: 'user' as const, text: 'hi · ' + DASHBOARD_HINT_COLLISION }],
     status: 'idle' as const,
     sessionTitle: 'probe',
     agentId: 'probe',
@@ -453,7 +455,7 @@ function screenHas(app: Harness, text: string): boolean {
 }
 
 function dashboardVisible(app: Harness): boolean {
-  return screen(app).some(line => line.includes('子代理面板'))
+  return screen(app).some(line => /^\s*─+\s*子代理面板\s*─+\s*$/u.test(line))
 }
 
 /**
@@ -479,7 +481,8 @@ async function waitForMainView(
 /** Ctrl+A -> dashboard -> Esc -> main view (composer remounted). */
 async function roundTripDashboard(scenario: string, app: Harness): Promise<void> {
   app.stdin.write(CTRL_A)
-  await waitFor(scenario, 'subagent dashboard to open', () => dashboardVisible(app), 8000)
+  await waitFor(scenario, 'subagent dashboard to park the composer',
+    () => dashboardVisible(app) && !composerMounted(app), 8000)
   app.stdin.write(ESC)
   // A key landing in the gap between a screen becoming visible and its input
   // listener registering is not observable. Re-send the close key ONLY when
@@ -580,6 +583,9 @@ async function scenarioEditState(): Promise<string> {
   let summary = ''
   try {
     await waitFor(scenario, 'composer to mount', () => inputBlock(app) !== null, 8000)
+    await waitFor(scenario, 'dashboard hint collision to render',
+      () => screenHas(app, DASHBOARD_HINT_COLLISION), 8000)
+    assertTrue(scenario, 'main-view hint is not a dashboard title', !dashboardVisible(app))
 
     // Vim on with an EMPTY composer: modes are user choices, not content, so
     // the snapshot must carry them even with nothing typed (the PR's write
@@ -664,7 +670,8 @@ async function scenarioEditState(): Promise<string> {
     // Expanded mode renders the editor instead of the inline composer box, so
     // the round trip waits on the editor marker (inputBlock stays null).
     app.stdin.write(CTRL_A)
-    await waitFor(scenario, 'dashboard over the editor', () => dashboardVisible(app), 8000)
+    await waitFor(scenario, 'dashboard over the editor',
+      () => dashboardVisible(app) && !screenHas(app, '草稿编辑'), 8000)
     app.stdin.write(ESC)
     await waitFor(
       scenario,
@@ -725,8 +732,8 @@ async function scenarioEditState(): Promise<string> {
       stageIdQueued !== stageIdD && app.channel.hasStagedImage(stageIdQueued),
     )
     app.stdin.write(CTRL_A)
-    await waitFor(scenario, 'dashboard to park the composer', () => dashboardVisible(app), 8000)
-    assertTrue(scenario, 'composer unmounted behind the dashboard', !composerMounted(app))
+    await waitFor(scenario, 'dashboard to park the composer',
+      () => dashboardVisible(app) && !composerMounted(app), 8000)
     // Attribution lock (CodeRabbit): while parked, the capability is still
     // held and nothing has released it yet — so the release observed after
     // unmount() can only come from Chat's own teardown effect.

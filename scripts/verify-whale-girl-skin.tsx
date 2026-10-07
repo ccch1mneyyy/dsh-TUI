@@ -262,18 +262,30 @@ async function scene(
   cols: number,
   rows: number,
   wrapRuntime?: (children: React.ReactNode) => React.ReactNode,
+  onPaint?: (lines: string[]) => void,
 ): Promise<Scene> {
   applySidePanelPanels('todo,jobs,agents,companion')
   applySidePanelOpen(true)
   const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
+  const lines = (): string[] => {
+    const buf = term.buffer.active
+    const out: string[] = []
+    for (let y = 0; y < rows; y += 1) out.push((buf.getLine(y)?.translateToString(false) ?? '').padEnd(cols, ' '))
+    return out
+  }
   class FakeStdout extends Writable {
     columns = cols
     rows = rows
     isTTY = true
     term: import('@xterm/headless').Terminal
     constructor(t: import('@xterm/headless').Terminal) { super(); this.term = t }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    _write(chunk: any, _e: BufferEncoding, cb: () => void) { this.term.write(String(chunk), cb) }
+    _write(chunk: unknown, _e: BufferEncoding, cb: () => void) {
+      this.term.write(String(chunk), () => {
+        // Observe this parsed write before Writable admits the next frame.
+        onPaint?.(lines())
+        cb()
+      })
+    }
   }
   class FakeStderr extends Writable { isTTY = true; _write(_c: unknown, _e: Buffer.Encoding, cb: () => void) { cb() } }
   const stdin = new FakeStdin()
@@ -330,12 +342,6 @@ async function scene(
       patchConsole: false,
     },
   )
-  const lines = (): string[] => {
-    const buf = term.buffer.active
-    const out: string[] = []
-    for (let y = 0; y < rows; y += 1) out.push((buf.getLine(y)?.translateToString(false) ?? '').padEnd(cols, ' '))
-    return out
-  }
   return { app, term, stdin, get controller() { return controller }, lines }
 }
 
@@ -766,17 +772,23 @@ try {
   // --- 冷启动：全新会话未解码 → 字母格兜底仍工作（一次性契约）---------------
   resetWhaleGirlImageCacheForTests()
   let m: Scene | undefined
+  let sawLetterBootstrap = false
   try {
-    m = await scene(140, 30, withKitty)
+    m = await scene(140, 30, withKitty, lines => {
+      if (artRows(lines).length > 0) sawLetterBootstrap = true
+    })
     m.controller?.openPanel('companion', { focus: true })
-    // 首帧必须在解码完成前以字母格起画（冷启动兜底还在）；解码完成后
-    // raster 取而代之。首画窗口不可事后锚定，10ms 抢窗采样。
-    const sawLetterBootstrap = await settled(() => artRows(m!.lines()).length > 0, { timeoutMs: 4000, stepMs: 10 })
+    // CI 的字母格曾只存在 11ms；逐次解析后记录，轮询只等这个持久信号。
+    const bootstrapPainted = await settled(() => sawLetterBootstrap, { timeoutMs: 4000 })
     check('cold: fresh session bootstraps on the letter grid (one-time fallback intact)',
-      sawLetterBootstrap, 'firstPaint=' + (sawLetterBootstrap ? 'letters' : 'missed'))
-    await settled(() => artRows(m!.lines()).length === 0, { timeoutMs: 8000 })
+      bootstrapPainted, 'firstPaint=' + (bootstrapPainted ? 'letters' : 'missed'))
+    const rasterPainted = await settled(
+      () => whaleGirlDecodedAnimationKeys().length > 0
+        && artRows(m!.lines()).length === 0 && nowPlaying(m!.lines()) === '鲸娘',
+      { timeoutMs: 8000 },
+    )
     check('cold: raster takes over once the first animation decodes',
-      artRows(m.lines()).length === 0 && nowPlaying(m.lines()) === '鲸娘',
+      rasterPainted,
       'artRows=' + artRows(m.lines()).length + ' now=' + nowPlaying(m.lines()))
   } finally {
     if (m !== undefined) {
