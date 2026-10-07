@@ -20,7 +20,7 @@
 | `Ctrl+Z` | Undo the prompt draft's last word-level edit (text, caret and images together). Draft-only: a submit, a history recall (`Ctrl+R`/`↑`) or a session switch ends the history; it is NOT the message/conversation rewind behind `Esc Esc`. Remappable via `/settings` |
 | `Esc` / `Ctrl+C` / `Enter` while an image preview is open | Close the preview and restore the surface underneath; other keys are not passed through |
 | `Left` / `Right` in the image modal | Previous / next image, no wrapping; caret peeks keep arrows with the prompt |
-| `←` (empty input) | Background this session and open the session-management screen (same as `/bg`) |
+| `←` (empty input) | Open the session manager (same as `/bg`); DSH backgrounds the current session first, while Claude/Codex keep it attached |
 | `Ctrl+C` | Interrupt while working; press again while the interrupt is still settling to force-exit<br>clear non-empty idle input; **while idle with a selection in the prompt input, copy it to the clipboard (selection kept for editing)**; press twice on empty input to exit |
 | `Ctrl+D` | Same ladder as `Ctrl+C`: interrupt while working (press again to force-exit if the interrupt stalls); press twice while idle to exit |
 | `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output; also the escape hatch for the **long-line fold** (a single line over 1000 chars is clipped to 1000 with a `… N chars folded` marker — see the user guide §5). Clicking the folded row (or the tool card face) toggles it too |
@@ -420,9 +420,10 @@ On Windows, `dsh-tui.cmd --resume` uses the session ID last written to `~/.dsh-t
 
 ### Background sessions
 
-`/bg` (alias `/background`) moves the current session to the background and keeps it
+On DSH, `/bg` (alias `/background`) moves the current session to the background and keeps it
 running, switches the terminal to a fresh session, and opens the session-management screen;
-`←` on an empty prompt does the same.
+`←` on an empty prompt does the same. On Claude/Codex, both entries open the session manager
+without backgrounding the attached session.
 
 - While a background session waits on you, the prompt footer shows `← N agents`.
 - A background session awaiting approval shows as **needs input**, and the approval panel labels which session it comes from.
@@ -752,7 +753,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
 **Sessions**
 
 - `/new`, `/resume`, `/home`, `/agentview` — all three open the same session-management screen.
-- `/bg` — alias `/background`, backgrounds the session and opens that screen.
+- `/bg` — alias `/background`, opens the session manager; DSH backgrounds the session first, while Claude/Codex keep it attached.
 - `/rename`.
 - `/recap` — session recap: apply the suggested title in one key; `/settings` can enable an
   auto-summary on session open, on by default — a divider + `Recap:` line appears at the

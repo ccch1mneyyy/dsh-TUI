@@ -252,14 +252,14 @@ dsh-tui
   面板没吃下的键不会再落到聊天，但 `Ctrl+C`/`Ctrl+D`/`Ctrl+L` 等 Ctrl 组合照旧作用于聊天。
 - **鼠标**：点聊天栏把焦点给聊天，点右栏把焦点给面板；点标签栏上的标签直接切到那个面板（悬停会高亮），
   点右端的 `⤢` 把当前面板放大成整屏；右栏不参与拖拽选字。
-- **面板**：`todo`（Goals/Todos，分栏时从输入框上方迁到这里）、`jobs`（后台任务，点转录里的任务卡
+- **面板**：全部 8 个内置面板默认启用，可在 `sidePanel.panels` 调整。`todo`（Goals/Todos，分栏时从输入框上方迁到这里）、`jobs`（后台任务，点转录里的任务卡
   会直接定位到该任务）、`agents`（子代理 Dashboard 与详情：Enter 进详情、Esc 逐级返回）、`companion`
-   （宠物，默认不启用——在 `sidePanel.panels` 加入 `companion` 开启：跟随会话状态换心情动画，点击
+   （宠物：跟随会话状态换心情动画，点击
    比爱心、Enter 戳一戳；皮肤 `dsh-tui.companion.skin` 可选 deepy（默认，非官方粉丝作品 deepy
    小鲸鱼）或 whale）、`info`（信息栏：模型 / 思考深度 / 工作模式 / 权限 / 上下文占用 / 缓存命中 /
   Token / TPS / 消耗 / 工作目录 / 会话标题与 ID）、`trajectory`（会话轨迹：唤醒带 + 账本 + 检视器，
   ↑/↓ 选择、Enter 展开、Tab 切热点视图；←/→ 恒归侧栏切面板，Tab 才是切视图）、`workspace`
-  （工作目录/工作区总览，Enter 打开整屏工作区主页）。
+  （工作目录/工作区总览，Enter 打开整屏工作区主页）、`btw`（追问线程，可从 `/btw` 进入）。
 - **宠物（companion）细节**：宠物锚在面板**底部**，上方是状态区（心情 · 子代理/会话计数 · 当前动作）。
   互动：点它左半/右半会被戳（poke-left/right）、短窗口连点三次是挠痒（tickle）、**按住拖动它就跟着
   指针在整个面板里走（松手弹回底部）**、鼠标悬停它会看向指针；Enter 也算戳一戳。后台任务完成、已打断
@@ -278,7 +278,7 @@ dsh-tui
 | `/panel toggle` | 真开 / 真关（关闭时焦点回聊天） |
 | `/panel focus` | 打开并聚焦右栏 |
 | `/panel zoom` | 打开并缩放当前面板 |
-| `/panel <id>` | 打开指定面板：`todo` / `info` / `trajectory` / `jobs` / `agents` / `workspace` / `companion`（补全列出已启用的 id） |
+| `/panel <id>` | 打开指定面板：`todo` / `info` / `trajectory` / `jobs` / `agents` / `workspace` / `btw` / `companion`（补全列出已启用的 id） |
 
 - 原本只能整屏的视图现在也能进侧栏：分屏开着且对应面板已启用时，`Ctrl+T` / `/trace` 打开轨迹面板、
   `/home` 打开工作区面板；面板栏右端的 `⤢` 再把它们放回整屏（`⤢` 是鼠标入口，键盘等价物就是各自的
