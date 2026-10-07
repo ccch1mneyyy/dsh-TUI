@@ -52,7 +52,11 @@
     "step.end",
     "turn.end",
     "session.status",
+    "usage",
+    "context.usage",
     "session.status",
+    "usage",
+    "context.usage",
     "model.changed",
     "effort.changed",
     "mode.changed"
@@ -128,10 +132,10 @@
     "working": false,
     "contextWindow": 258400,
     "tokens": {
-      "input": 12,
-      "output": 202,
-      "cacheRead": 26688,
-      "cacheWrite": 9077
+      "input": 18,
+      "output": 212,
+      "cacheRead": 44702,
+      "cacheWrite": 9217
     },
     "lastUsage": {
       "input": 3,

@@ -78,9 +78,14 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
     const out: AgentEvent[] = []
     const now = ctx.now()
     // A late notification of a turn already closed (an item that completes
-    // after a forced settle) must not reopen it as a phantom turn.
+    // after a forced settle) must not reopen it as a phantom turn. Metering
+    // is the one exemption: a usage update is not turn content, and Codex
+    // reports a turn's final model call after `turn/completed` — dropping it
+    // would lose the session token totals, the tps readout and the context
+    // occupancy. A late arrival still books its totals and refreshes the
+    // context reading without reopening anything.
     const turnOf = str(params.turnId) ?? (method === NOTIFY.turnStarted ? str(rec(params.turn)?.id) : undefined)
-    if (turnOf !== undefined && closedTurns.has(turnOf)) return out
+    if (turnOf !== undefined && closedTurns.has(turnOf) && method !== NOTIFY.threadTokenUsageUpdated) return out
     switch (method) {
       case NOTIFY.turnStarted: {
         const id = str(rec(params.turn)?.id)

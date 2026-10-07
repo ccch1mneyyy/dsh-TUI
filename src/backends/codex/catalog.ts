@@ -80,7 +80,7 @@ export function createCodexCatalog(deps: CodexCatalogDeps): SessionCatalog {
         const seen = new Set<string>()
         // The row budget also bounds the number of empty/malformed pages.
         for (let page = 0; page < Math.ceil(LIST_LIMIT / LIST_PAGE) && scanned < LIST_LIMIT; page += 1) {
-          const answer = rec(await hub.call(CLIENT.threadList, { limit: Math.min(LIST_PAGE, LIST_LIMIT - scanned), sortKey: 'recency', sortDirection: 'desc', archived: false, modelProviders: [], ...(cwd === undefined ? {} : { cwd }), ...(cursor === undefined ? {} : { cursor }) }))
+          const answer = rec(await hub.call(CLIENT.threadList, { limit: Math.min(LIST_PAGE, LIST_LIMIT - scanned), sortKey: 'recency_at', sortDirection: 'desc', archived: false, modelProviders: [], ...(cwd === undefined ? {} : { cwd }), ...(cursor === undefined ? {} : { cursor }) }))
           const data = arr(answer?.data)
           scanned += data.length
           for (const raw of data.slice(0, LIST_LIMIT - rows.size)) {

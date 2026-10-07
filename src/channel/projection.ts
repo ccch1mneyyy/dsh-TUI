@@ -25,7 +25,7 @@ import { cleanRenderText, NOTICE_CELLS } from './sanitize.js'
 import { appendLiveOutput, type LiveOutputTail } from './live-output.js'
 import { replaySelectionAttachment } from './selection-record.js'
 import { ARGS_PREVIEW_LIMIT, LOCAL_OUTPUT_LIMIT, preview, RESULT_PREVIEW_LIMIT } from './transcript.js'
-import { addUsageToBucket, emptyCostBuckets, estimateTokens, usageOutputTokens, type PricingWindow } from './usage.js'
+import { addUsageToBucket, emptyCostBuckets, estimateTokens, estimateTokensFraction, usageOutputTokens, type PricingWindow } from './usage.js'
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 
@@ -121,7 +121,18 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       turn: number
       step: number
       firstTokenTime: number | undefined
-      outputChars: number
+      outputEstimate: number
+    }
+    | undefined
+  /** The step the settle folded LAST (its token contribution, real or
+   *  estimated): a late real usage report naming the same (turn, step) swaps
+   *  the estimate in place (Codex meters after the reply settles). */
+  let tpsLastStep:
+    | {
+      turn: number
+      step: number
+      tokens: number
+      estimated: boolean
     }
     | undefined
   /** Per-turn usage ledger: reset at turn.start, summed from each assistant
@@ -236,7 +247,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     if (activeAttempt !== undefined && activeAttempt.turn === turn && activeAttempt.step === step) activeAttempt = undefined
     if (tpsStep !== undefined && tpsStep.turn === turn && tpsStep.step === step) {
       tpsStep.firstTokenTime = undefined
-      tpsStep.outputChars = 0
+      tpsStep.outputEstimate = 0
     }
     updateSpinnerMode()
   }
@@ -450,14 +461,16 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         return false
     }
   }
-  /** Character payload of one token-bearing delta for the live fallback. */
-  const tokenDeltaChars = (delta: Delta): number => {
+  /** Fractional token estimate of one token-bearing delta for the live fold
+   *  (script-weighted, see estimateTokensFraction): the old raw char count fed
+   *  a chars/4 conversion that under-counted CJK output ~3x. */
+  const tokenDeltaEstimate = (delta: Delta): number => {
     switch (delta.kind) {
       case 'text':
       case 'reasoning':
-        return delta.text.length
+        return estimateTokensFraction(delta.text)
       case 'tool-args':
-        return (delta.name?.length ?? 0) + delta.partialJson.length
+        return (delta.name === undefined ? 0 : estimateTokensFraction(delta.name)) + estimateTokensFraction(delta.partialJson)
       default:
         return 0
     }
@@ -507,11 +520,11 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       isTokenDelta(delta)
     ) {
       tps.firstTokenTime ??= time
-      tps.outputChars += tokenDeltaChars(delta)
+      tps.outputEstimate += tokenDeltaEstimate(delta)
       const elapsedMs = Math.max(0, time - tps.firstTokenTime)
       if (elapsedMs > 500) {
         const decodeMs = tpsTurnDecodeMs + elapsedMs
-        const outputTokens = tpsTurnDecodeTokens + Math.ceil(tps.outputChars / 4)
+        const outputTokens = tpsTurnDecodeTokens + Math.ceil(tps.outputEstimate)
         state.tps = outputTokens / (decodeMs / 1000)
       }
     }
@@ -673,9 +686,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       tpsMessageStep.step === event.step &&
       tpsMessageStep.firstTokenTime !== undefined
     ) {
-      const outputTokens = usageOutputTokens(usage)
-        ?? (tpsMessageStep.outputChars > 0
-          ? Math.ceil(tpsMessageStep.outputChars / 4)
+      const reported = usageOutputTokens(usage)
+      const outputTokens = reported
+        ?? (tpsMessageStep.outputEstimate > 0
+          ? Math.ceil(tpsMessageStep.outputEstimate)
           : undefined)
       if (outputTokens !== undefined) {
         tpsTurnDecodeMs += Math.max(0, event.time - tpsMessageStep.firstTokenTime)
@@ -684,6 +698,11 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         if (tpsTurnDecodeMs > 0) {
           state.tps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
         }
+      }
+      // Remember the step's contribution so a late real usage report for the
+      // same (turn, step) can swap the estimate (see the usage case below).
+      if (outputTokens !== undefined && tpsTurn === event.turn) {
+        tpsLastStep = { turn: event.turn, step: event.step, tokens: outputTokens, estimated: reported === undefined }
       }
     }
     if (
@@ -1088,7 +1107,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
             turn: event.turn,
             step: event.step,
             firstTokenTime: undefined,
-            outputChars: 0,
+            outputEstimate: 0,
           }
         }
         return
@@ -1157,6 +1176,25 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         if (handledUsage.has(event.seq)) return
         handledUsage.add(event.seq)
         bookUsage(event.usage, event)
+        // A late real report (Codex meters after the reply settles) names the
+        // step it describes: replace that step's estimate in the turn fold so
+        // the live tps and the turn-end sample read real tokens, not a guess.
+        if (
+          tpsTurn === event.turn &&
+          tpsLastStep !== undefined &&
+          tpsLastStep.turn === event.turn &&
+          tpsLastStep.step === event.step &&
+          tpsLastStep.estimated
+        ) {
+          const real = usageOutputTokens(event.usage)
+          if (real !== undefined) {
+            tpsTurnDecodeTokens += real - tpsLastStep.tokens
+            tpsLastStep = { ...tpsLastStep, tokens: real, estimated: false }
+            if (tpsTurnDecodeMs > 0 && tpsTurnSampled) {
+              state.tps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
+            }
+          }
+        }
         return
       case 'tool.call':
         applyToolCall(event)
@@ -1216,6 +1254,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         tpsTurnDecodeTokens = 0
         tpsTurnSampled = false
         tpsStep = undefined
+        tpsLastStep = undefined
         return
       case 'turn.end':
         applyTurnEnd(event)
@@ -1476,6 +1515,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     lastNotedTurnModel = undefined
     tpsTurn = undefined
     tpsStep = undefined
+    tpsLastStep = undefined
     tpsTurnDecodeMs = 0
     tpsTurnDecodeTokens = 0
     tpsTurnSampled = false

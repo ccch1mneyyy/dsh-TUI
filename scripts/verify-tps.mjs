@@ -3,7 +3,8 @@
  *
  * - a two-step turn excludes a 51s tool gap and folds TPS as Σtokens / ΣdecodeMs
  * - reasoning and tool-call deltas both establish the first-token boundary
- * - live chars/4 estimates use every token delta, then provider usage settles it
+ * - live script-weighted estimates (ASCII = chars/4, CJK ~1.4 chars/token) use
+ *   every token delta, then provider usage settles it
  * - a retry-like delay stays inside the same step's decode span
  * - missing provider usage falls back to the streamed character estimate
  * - empty deltas do not start decode; a name-only tool delta does
@@ -207,6 +208,25 @@ emit('assistant/message', B + 406_000, message(5, 1, 100))
 emit('turn/end', B + 406_100, completed(5))
 check('empty deltas ignored; name-only tool delta starts decode', near(channel.tps, 50), String(channel.tps))
 check('fifth turn adds exactly one sample', channel.tpsSamples.length === 5, String(channel.tpsSamples.length))
+
+// Turn 6: CJK live estimate is script-weighted (~1.4 chars/token), not the
+// old chars/4 - 279 dense chars estimate 200 tokens, not 70.
+emit('turn/start', B + 500_000, { turn: 6 })
+emit('step/start', B + 500_100, { turn: 6, step: 1 })
+emit('assistant/chunk', B + 501_000, {
+  turn: 6,
+  step: 1,
+  chunk: { type: 'text-delta', index: 0, text: '中'.repeat(278) },
+})
+emit('assistant/chunk', B + 502_000, {
+  turn: 6,
+  step: 1,
+  chunk: { type: 'text-delta', index: 0, text: '！' },
+})
+check('CJK live estimate is script-weighted, not chars/4', near(channel.tps, 200), String(channel.tps))
+emit('assistant/message', B + 503_000, message(6, 1, 300))
+emit('turn/end', B + 503_100, completed(6))
+check('sixth turn settles on provider usage', channel.tpsSamples.length === 6 && near(channel.tpsSamples[5]?.tps, 150), JSON.stringify(channel.tpsSamples))
 
 // Rebuild from durable history. prepareReplayEvents intentionally drops
 // settled chunks, so TPS remains a live-only metric after resume.

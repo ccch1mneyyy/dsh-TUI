@@ -210,8 +210,17 @@ export function closeTurn(ctx: ItemContext, out: AgentEvent[], reason: TurnEndRe
 
 /** Meter one model call without manufacturing or changing a message. */
 export function reportUsage(ctx: ItemContext, out: AgentEvent[], usage: UsageDelta, time: number): void {
-  if (!ctx.turnOpen) return
-  ctx.turnUsage = addUsage(ctx.turnUsage, usage)
+  // The usage event is always emitted: metering arriving after the turn
+  // closed still books the session totals and refreshes the context reading.
+  // The turn ledger `turn.end` embeds is topped up only while the turn is
+  // open — a late report must not leak into the next turn's end usage.
+  // The one exception is a stream that has opened no turn yet: the usage
+  // notification then is the context snapshot a resume announces (its
+  // occupancy already travels as context.capacity / context.usage), not a
+  // model call of this stream, and a usage event must cite a turn that this
+  // stream really opened.
+  if (ctx.turn === 0) return
+  if (ctx.turnOpen) ctx.turnUsage = addUsage(ctx.turnUsage, usage)
   out.push({ type: 'usage', seq: ctx.nextSeq(), turn: ctx.turn, step: Math.max(1, ctx.step), usage, time, ...(ctx.model === '' ? {} : { model: ctx.model }) })
 }
 

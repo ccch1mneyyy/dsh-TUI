@@ -193,6 +193,22 @@ await scenario('context raw last.totalTokens/account/MCP/rename/init', async () 
   } finally { await f.close() }
 })
 
+await scenario('late token usage after turn/completed still meters', async () => {
+  const f = await fixture()
+  try {
+    await f.submit('meter me')
+    await f.complete('turn-1')
+    const snapshot = (type: AgentEvent['type']): number => f.events.filter(event => event.type === type).length
+    const before = { turnStart: snapshot('turn.start'), turnEnd: snapshot('turn.end'), assistant: snapshot('assistant.message') }
+    // The report of the turn’s final model call arrives after the turn closed.
+    await f.notify(NOTIFY.threadTokenUsageUpdated, { turnId: 'turn-1', tokenUsage: { total: { totalTokens: 60_000 }, last: { totalTokens: 21_000, inputTokens: 20_000, cachedInputTokens: 1_000, outputTokens: 1_000 }, modelContextWindow: 40_000 } })
+    const usage = f.events.find(event => event.type === 'usage')
+    check('late metering: the usage event survives the closed-turn gate', usage !== undefined && usage.usage.input === 19_000 && usage.usage.output === 1_000)
+    check('late metering: the context reading refreshes', f.events.some(event => event.type === 'context.usage' && event.used === 9_000 && event.max === 28_000))
+    check('late metering: no turn reopen and no assistant rows follow the late report', [snapshot('turn.start'), snapshot('turn.end'), snapshot('assistant.message')], [before.turnStart, before.turnEnd, before.assistant])
+  } finally { await f.close() }
+})
+
 await scenario('review wire targets and lifecycle', async () => {
   let reviewTurn = 0
   const f = await fixture({ configure: fake => fake.on(CLIENT.reviewStart, () => ({ turn: { id: 'review-' + ++reviewTurn, status: 'inProgress', items: [] } })) })

@@ -624,6 +624,13 @@ const GROUPS = {
 // 工具卡完整度：非零退出码/信号行不被行预算折掉、折叠提示带被折字符数、verbose
 // 行窗口有界并注明、展开卡的截断说明、错误长文与输出共用行预算。
     ["verify-tool-card-completeness", ['node', '--import', 'tsx/esm', 'scripts/verify-tool-card-completeness.tsx']],
+// 解码吞吐（真 channel + 会话事件）：多步回合剔除工具间隙、字符估算按脚本
+// 类加权（CJK ~1.4 字符/token）、真实 usage 结算覆盖估算、回放不复活 tps。
+    ["verify-tps", ['node', 'scripts/verify-tps.mjs']],
+// 迟到 usage 回填（投影层直测）：codex 在回复结算后才计量——真实 output
+// tokens 原地替换该步的字符估算（live 读数与回合末采样都读真值）；同步
+// 第二次不再叠加、异步他步不污染。
+    ["verify-tps-backfill", ['node', '--import', 'tsx/esm', 'scripts/verify-tps-backfill.ts']],
 // 每回合用量：共享投影器把回合内各请求的 usage 求和成 turn-summary 行与底栏快照；
 // result 与 turn 不重复计、缓存缺失不当 0、中断/通知/压缩/回放、重试只计一次。
     ["verify-usage-turn-summary", ['node', '--import', 'tsx/esm', 'scripts/verify-usage-turn-summary.ts']],

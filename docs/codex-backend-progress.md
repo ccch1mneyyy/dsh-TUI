@@ -354,6 +354,35 @@ goldens 变化：两张卡片标题从错误的引号剥离改为正确脚本（
   清单/认证、instructionSources、独立推理tokens/支出状态、命名权限档、归档浏览/取消归档。
   真实凭据和交互TTY仍需维护者验收。
 
+## 验收轮 4：TPS 与上下文计量修复（2026-10-07）
+
+用户报告：cc 与 codex 的 tps 读数不准、codex 上下文也有问题。三处根因 + 一处协议错参：
+
+1. **流式 tps 估算按脚本加权**（projection/usage）：原 live 读数用「字符数÷4」折算
+   token，中文输出低报约 3 倍（一个汉字 ≈0.7–1 token，不是 0.25）。新增
+   estimateTokensFraction（ASCII=1/4、CJK≈1/1.4、其他 1/2，逐 delta 累加、读取时
+   一次取整——逐 delta 取整会把 2–3 字符的流块膨胀成每块 1 token）。ASCII 行为
+   逐字节不变（修复过程中发现的 17→18 金差异正是快路径残留 ceil 的逐位进位，
+   已修，金 diff 归零）；verify-tps 补 CJK 用例（279 个全角字符估 200 token）。
+2. **迟到真实用量回填 tps**（projection）：codex 在回复结算之后才发
+   thread/tokenUsage/updated（官方源码链证实 TokenCount 严格先于 TurnComplete、
+   但后于消息结算），settle 只能先用估算、真实 output tokens 到达后从不回填。
+   现在记录 tpsLastStep（该步的 token 贡献与是否估算），usage 事件点名同
+   (turn, step) 时原地换真值并重算 live 读数与回合末采样；第二次不叠加、异步
+   他步不污染。新回归 verify-tps-backfill（9 项）。
+3. **回合关闭后的计量不再丢弃**（子代理实施）：live.ts 的 closedTurn 门豁免
+   threadTokenUsageUpdated；reportUsage 恒发 usage 事件（ctx.turn===0 的 resume
+   前快照除外——引用未开过的 turn 违反共享事件不变量；占位读数经
+   context.capacity/usage 无差别恢复），ctx.turnUsage 仅轮内累加。**金文件实证**
+   （c0-files-delete-fork，+8/−4）：录制的真实 wire 里确有 2 条 turn/completed
+   之后的 tokenUsage 被旧代码整条吞掉——会话总量修正 input 12→18、output
+   202→212、cacheRead 26688→44702、cacheWrite 9077→9217，上下文读数同步复活。
+4. **目录协议错参**：thread/list 的 sortKey 发 'recency'，0.160.1 枚举是
+   'recency_at'——真实 app-server 直接 serde 报错「读取会话失败」。已修。
+   官方上下文公式经源码核对（rust-v0.160.1 protocol.rs/tui）：12k 基线同时从
+   计数与窗口扣除、喂 last.totalTokens，与我们的实现一致，无需改。
+   verify-tps / verify-tps-backfill 登记进 channel-ui 组。
+
 ## 验收轮 3：codex 专属立绘（恶魔精灵）接入（2026-10-07）
 
 用户提供两张 1254² 透明底像素立绘：常态 = 淡紫恶魔精灵头像，点击后 =

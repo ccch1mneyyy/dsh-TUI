@@ -282,6 +282,26 @@ function delta(method: string, itemId: string, value: string, extra: Record<stri
   check('N8: a late-in-step report closes no additional attempt', of(run.events, 'assistant.attempt.start').length === 1 && of(run.events, 'assistant.attempt.end').length === 1)
 }
 
+{
+  // Late metering: Codex reports a turn’s final model call after
+  // `turn/completed`, the notification still carrying that turn id.
+  const run = liveRun([
+    turnStarted('t1'), started(user('u1', 'late metering')),
+    started({ type: 'agentMessage', id: 'm1', text: '', phase: 'final_answer' }),
+    completed({ type: 'agentMessage', id: 'm1', text: 'done', phase: 'final_answer' }),
+    turnCompleted('t1'),
+    { method: 'thread/tokenUsage/updated', params: { threadId: T, turnId: 't1', tokenUsage: { total: { totalTokens: 40_000 }, last: { totalTokens: 20_000, inputTokens: 18_000, cachedInputTokens: 2_000, cacheWriteInputTokens: 0, outputTokens: 2_000 }, modelContextWindow: 50_000 } } },
+    turnStarted('t2'), started(user('u2', 'next')), turnCompleted('t2'),
+  ])
+  assertAgentEventInvariants(run.events)
+  const usage = of(run.events, 'usage')
+  check('late usage: the report after turn/completed still yields exactly one usage event with the uncached/cached split', usage.length === 1 && usage[0]?.usage.input === 16_000 && usage[0]?.usage.cacheRead === 2_000 && usage[0]?.usage.output === 2_000, usage)
+  check('late usage: the totals are booked and the context reading refreshes', run.harness.state.tokens.input === 16_000 && run.harness.state.tokens.output === 2_000 && run.harness.projector.contextUsage()?.used === 8_000 && run.harness.projector.contextUsage()?.max === 38_000, { tokens: run.harness.state.tokens, context: run.harness.projector.contextUsage() })
+  check('late usage: nothing else is emitted (no turn reopen, no assistant rows)', run.events.map(event => event.type).join(',') === 'turn.start,user.message,step.start,assistant.attempt.start,assistant.message,assistant.attempt.end,step.end,turn.end,context.capacity,usage,context.usage,turn.start,turn.end', run.events.map(event => event.type))
+  check('late usage: no phantom usage on the closed turn end, none leaked into the next turn end', of(run.events, 'turn.end').every(end => end.usage === undefined))
+  check('late usage: still exactly one assistant row', run.harness.state.rows.filter(row => row.kind === 'assistant').length === 1)
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────
 check('commands: bash -lc single quotes unwrap with escaped quotes', unwrapCommand(`/bin/bash -lc 'echo '"'"'hi'"'"''`) === "echo 'hi'")
 check('commands: zsh -lc and /usr/bin unwrap', unwrapCommand("/usr/bin/zsh -lc 'pwd'") === 'pwd')
