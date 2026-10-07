@@ -2987,8 +2987,8 @@ export function Chat({
         setHelpOpen(true)
         return true
       case 'model': {
-        // `/model <provider/model>` switches directly (same live-fork path
-        // as the picker's Enter), bare `/model` opens the picker.
+        // `/model <provider/model>` switches directly (same in-session route
+        // switch as the picker's Enter), bare `/model` opens the picker.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (parts.length > 0) {
           setHelpOpen(false)

@@ -327,8 +327,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-model',
     group: 'commands',
-    zh: '/model 换模型会 fork 续聊，历史不丢',
-    en: '/model forks to continue: history is preserved',
+    zh: '/model 同会话换模型，历史不丢',
+    en: '/model switches in place: session and history are preserved',
   },
   {
     id: 'cmd-effort',
