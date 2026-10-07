@@ -953,11 +953,19 @@ export function Chat({
   const backgroundAgentsNeedingInput = agentViewRows.filter(
     row => row.status === 'needs-input' && !row.current,
   ).length
-  /** Background the attached session and open the supervisor
-   *  (`/bg`, `/background`, and ← on an empty prompt all land here). The
-   *  backgrounded session becomes the screen's return target (final Esc
-   *  attaches back to it). */
+  /** Open the supervisor from `/bg`, `/background`, or an empty-prompt ←.
+   *  DSH backgrounds the attached session first and uses it as the Esc
+   *  return target; other backends keep the current session attached. */
   const backgroundToAgentView = React.useCallback((): void => {
+    // The non-DSH backends have a session catalog, but no live background
+    // handoff. Open the shared session manager without pretending to park the
+    // current turn. DSH keeps its existing handoff and Esc return target.
+    const backendId = channel.backendCapabilities?.backendId
+    if (backendId !== undefined && backendId !== 'dsh') {
+      agentViewOpenSessionRef.current = channel.agentId
+      setSupervisorOpen(true)
+      return
+    }
     void channel.backgroundCurrent().then((result) => {
       if (result.ok) {
         setAgentViewReturnId(result.backgroundedSessionId)
@@ -3029,9 +3037,8 @@ export function Chat({
       }
       case 'bg':
       case 'background': {
-        // `/background`: the attached session moves to the background
-        // (it keeps running in this process), the terminal lands on a fresh
-        // session, and the supervisor opens on top.
+        // DSH parks the attached session before opening the supervisor;
+        // other backends open it over their still-attached session.
         setHelpOpen(false)
         backgroundToAgentView()
         return true

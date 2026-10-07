@@ -57,8 +57,8 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'btw', description: 'Ask a quick side question without interrupting the conversation' },
   { name: 'trace', description: 'Show the session event trace timeline' },
   { name: 'agentview', description: 'Open the agent view (all sessions)' },
-  { name: 'bg', description: 'Background this session and open agent view' },
-  { name: 'background', description: 'Background this session and open agent view', tag: 'alias of /bg' },
+  { name: 'bg', description: 'Open the session manager (DSH backgrounds this session first)' },
+  { name: 'background', description: 'Open the session manager (DSH backgrounds this session first)', tag: 'alias of /bg' },
   // Session / environment
   { name: 'context', description: 'Show loaded context details' },
   { name: 'status', description: 'Show session status' },
@@ -182,7 +182,8 @@ const LOCAL_COMMAND_REQUIREMENTS: ReadonlyMap<string, LocalCommandRequirement> =
   // backend offers them. /kernel is also the only way back to DSH from
   // inside a non-DSH conversation (the launchpad's kernel entry is the other).
   ['kernel', 'any'], ['restart', 'any'],
-  ['compact', 'compact'], ['resume', 'resume'], ['rewind', 'rewind'], ['fork', 'fork'],
+  ['compact', 'compact'], ['resume', 'resume'], ['home', 'resume'], ['agentview', 'resume'],
+  ['bg', 'resume'], ['background', 'resume'], ['rewind', 'rewind'], ['fork', 'fork'],
   ['model', 'models'], ['effort', 'effort'], ['agents', 'subagents'], ['jobs', 'tasks'], ['mcp', 'mcp'],
   ['context', 'context'], ['login', 'login'], ['logout', 'login'], ['init', 'init'],
   ['recap', 'sideQuery'], ['btw', 'sideQuery'], ['rename', 'rename'], ['color', 'color'],

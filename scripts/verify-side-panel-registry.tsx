@@ -58,6 +58,7 @@ const EXPECTED: readonly { id: string; icon: string; fullscreen: boolean }[] = [
   { id: 'info', icon: 'ⓘ', fullscreen: false },
   { id: 'trajectory', icon: '∿', fullscreen: true },
   { id: 'jobs', icon: '▸', fullscreen: true },
+  { id: 'btw', icon: '?', fullscreen: true },
   { id: 'agents', icon: '◆', fullscreen: true },
   { id: 'workspace', icon: '⌗', fullscreen: true },
   { id: 'companion', icon: '♥', fullscreen: false },
@@ -65,6 +66,10 @@ const EXPECTED: readonly { id: string; icon: string; fullscreen: boolean }[] = [
 // Importing the column module runs registerBuiltinPanels(); give it a tick.
 await new Promise(resolve => setTimeout(resolve, 0))
 const registry = panelStore.list()
+const defaultIds = prefs.DEFAULT_SIDE_PANEL_IDS.split(',')
+check('r defaults: every built-in panel is selected once',
+  defaultIds.length === EXPECTED.length && EXPECTED.every(expected => defaultIds.filter(id => id === expected.id).length === 1),
+  defaultIds.join(','))
 for (const expected of EXPECTED) {
   const entry = registry.find(candidate => candidate.definition.id === expected.id)
   check('r registry: ' + expected.id + ' is registered', entry !== undefined)
@@ -73,6 +78,7 @@ for (const expected of EXPECTED) {
   check('r registry: ' + expected.id + ' has a single-cell icon', stringWidth(icon) === 1 && icon === expected.icon, icon)
   const fullscreen = entry.definition.capabilities?.fullscreen === true
   check('r registry: ' + expected.id + ' fullscreen=' + expected.fullscreen, fullscreen === expected.fullscreen)
+  check('r registry: ' + expected.id + ' is marked enabled by default', entry.definition.defaultEnabled === true)
 }
 
 // ── c. mount through the real host ──────────────────────────────────────────

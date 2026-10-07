@@ -276,16 +276,16 @@ one-column seam between the two surfaces.
   clicking a tab on the bar switches to that panel (hover highlights it), and the `⤢` on its right
   edge blows the active panel up to the full screen. The panel column is excluded from
   drag-selection.
-- **Panels**: `todo` (Goals/Todos — with a split it moves here from above the input), `jobs`
+- **Panels**: all eight built-in panels are enabled by default and can be changed in `sidePanel.panels`. `todo` (Goals/Todos — with a split it moves here from above the input), `jobs`
   (background jobs; clicking a job card in the transcript focuses that job here), `agents`
   (subagent dashboard and detail: Enter opens the detail, Esc steps back), `companion`
-  (the pet — off by default; add `companion` to `sidePanel.panels` to enable: its mood follows
+  (the pet — its mood follows
   the session, click for a heart, Enter to poke; the `dsh-tui.companion.skin` setting offers
   deepy (default, the fan-made deepy whale kit) or whale), `info` (model, effort, mode,
   permissions, context usage, cache hit, tokens, TPS, spend, working dir, session title and id),
   `trajectory` (the session's wake band + ledger + inspector: ↑/↓ select, Enter expands, Tab
   switches to the hotspot view — ←/→ always stay the host's panel-cycling keys), `workspace`
-  (working-directory overview; Enter opens the full workspace home).
+  (working-directory overview; Enter opens the full workspace home), `btw` (follow-up threads, also opened by `/btw`).
 - **Pet (companion) details**: the pet sits at the BOTTOM of the panel with a status area above
   it (mood · subagent/session counts · current animation). Interactions: clicking its left/right
   half pokes it (poke-left/right), three rapid clicks tickle it, **holding and dragging walks it
@@ -309,7 +309,7 @@ one-column seam between the two surfaces.
 | `/panel toggle` | Really open / really close (closing returns focus to the chat) |
 | `/panel focus` | Open and focus the panel |
 | `/panel zoom` | Open and zoom the active panel |
-| `/panel <id>` | Open a panel by id: `todo` / `info` / `trajectory` / `jobs` / `agents` / `workspace` / `companion` (completion lists the enabled ids) |
+| `/panel <id>` | Open a panel by id: `todo` / `info` / `trajectory` / `jobs` / `agents` / `workspace` / `btw` / `companion` (completion lists the enabled ids) |
 
 - Views that used to be full-screen-only now also live in the sidebar: with the split up and the
   matching panel enabled, `Ctrl+T` / `/trace` open the trajectory panel and `/home` opens the

@@ -219,8 +219,8 @@ export interface Config {
     /** Chat column as a fraction of the content width, clamped to 0.1–0.95
      *  (default 0.68); +/- while the panel is focused nudges it live. */
     ratio?: number
-    /** Enabled panel ids, comma-separated, in PanelBar order (default
-     *  `todo,jobs,agents`; add `companion` to enable the pet panel). A
+    /** Enabled panel ids, comma-separated, in PanelBar order (default:
+     *  all eight built-in panels). A
      *  malformed id is dropped, an unknown one survives for a plugin. */
     panels?: string
   }

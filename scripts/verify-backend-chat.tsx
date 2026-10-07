@@ -277,7 +277,7 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
     readonly provider: string
     readonly openSession?: (target: { kind: string; sessionId?: string; cwd?: string }) => Promise<AgentSession>
     readonly sessionCatalog?: { list(): Promise<readonly unknown[]> }
-  }): Promise<{ text(): string; write(data: string): void; toasts(): string[]; unmount(): void }> => {
+  }): Promise<{ text(): string; write(data: string): void; toasts(): string[]; commands(): readonly string[]; unmount(): void }> => {
     const term = new XTerm({ cols: SPLIT_COLS, rows: SPLIT_ROWS, scrollback: 0, allowProposedApi: true })
     class Out extends Writable { columns = SPLIT_COLS; rows = SPLIT_ROWS; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
     class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
@@ -295,6 +295,7 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
       text: () => viewportLines(term, SPLIT_ROWS).join('\n'),
       write: (data: string) => { stdin.write(data) },
       toasts: () => channel.notifications.map(item => item.text),
+      commands: () => channel.backendCapabilities.commands,
       unmount: () => { instance.unmount(); channel.releaseContributions(); term.dispose() },
     }
   }
@@ -320,6 +321,26 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
     })
     try {
       await sleep(300) // 固定窗:pacing the key handlers attach after the first frame.
+      check('a backend with a session catalog offers every session-manager command',
+        ['resume', 'home', 'agentview', 'bg', 'background'].every(name => claude.commands().includes(name)),
+        claude.commands().join(','))
+      claude.write('\u001b[D')
+      check('empty ← on a non-DSH backend opens the session manager',
+        await settled(() => claude.text().includes('claude history session'), { timeoutMs: 6_000 }), claude.text())
+      check('opening the session manager does not attempt an unsupported background handoff',
+        !claude.toasts().some(message => message.includes('bg') || message.includes('unavailable')),
+        claude.toasts().join(' | '))
+      claude.write('\u001b')
+      check('Esc returns to the same backend conversation',
+        await settled(() => !claude.text().includes('claude history session')), claude.text())
+      for (const char of '/bg') claude.write(char)
+      await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
+      claude.write('\r')
+      check('/bg opens the same manager on a backend without background handoff',
+        await settled(() => claude.text().includes('claude history session'), { timeoutMs: 6_000 }), claude.text())
+      claude.write('\u001b')
+      check('Esc after /bg keeps the same backend conversation attached',
+        await settled(() => !claude.text().includes('claude history session')), claude.text())
       for (const char of '/resume') claude.write(char)
       await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
       claude.write('\r')

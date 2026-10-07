@@ -92,6 +92,17 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
   try {
     // 固定窗:pacing initial raw-mode handlers and first-frame subscriptions.
     await sleep(300)
+    const sessionId = channel.agentId
+    const sessionManagerVisible = (): boolean =>
+      view().includes('▣ ' + t('supervisor-title')) || view().includes('Sessions in')
+    stdin.write('\x1b[D')
+    check(tag + ': empty ← opens the session manager without changing the Codex session',
+      await settled(sessionManagerVisible) && channel.agentId === sessionId,
+      view())
+    stdin.write('\x1b')
+    check(tag + ': Esc returns to the Codex conversation',
+      await settled(() => !sessionManagerVisible()) && channel.agentId === sessionId,
+      view())
     const turn = await start('stream output')
     await h.notify('item/started', { turnId: turn, item: command('live') })
     await h.notify('item/commandExecution/outputDelta', { turnId: turn, itemId: 'live', delta: Array.from({ length: 12 }, (_, i) => 'live-tail-' + (i + 1)).join('\n') + '\n' })

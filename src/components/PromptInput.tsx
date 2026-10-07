@@ -596,8 +596,8 @@ export interface PromptInputProps {
   /** Double-tap Esc with an empty input: open the rewind picker. */
   onRewindRequest?(): void
   /**
-   * ← on an EMPTY prompt backgrounds this session and
-   * opens the agent view (with text, ← moves the caret as usual).
+   * ← on an EMPTY prompt opens the session manager. DSH backgrounds the
+   * session first; other backends keep it attached. With text, ← moves the caret.
    */
   onBackgroundRequest?(): void
   /**
@@ -3042,8 +3042,8 @@ export function PromptInput({
       return
     }
     if (key.leftArrow) {
-      // ← on an EMPTY prompt backgrounds this session
-      // and opens the agent view; with text it moves the caret as usual.
+      // ← on an EMPTY prompt opens the session manager; the caller decides
+      // whether the backend can background the session first.
       // (The command/file overlays both imply non-empty text, so no extra
       // gate beyond the help menu is needed.)
       if (value.length === 0 && !helpOpen) {

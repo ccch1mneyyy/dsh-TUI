@@ -357,7 +357,7 @@ export const applyImageBacking = imageBackingStore.apply
 /** Panel id grammar (plugins register under a `plugin:sub` namespace). */
 export const SIDE_PANEL_ID_PATTERN = /^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)*$/
 
-export const DEFAULT_SIDE_PANEL_IDS = 'todo,jobs,agents'
+export const DEFAULT_SIDE_PANEL_IDS = 'todo,jobs,agents,info,trajectory,workspace,btw,companion'
 
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback
