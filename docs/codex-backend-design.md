@@ -57,7 +57,8 @@
 ### 1.2 非目标（本期不做）
 
 - 不把 Codex 的 Rust 核心嵌入 Node 进程（见 D1）。
-- 不接共享 app-server daemon（`codex app-server daemon` / `remote-control`）；留作后续可选项。
+- 不管理共享 app-server daemon 的启动、停止或远程控制；原生恢复的空闲写锁冲突可经
+  官方 `app-server proxy` 重连本地既有 thread。
 - 不实现 realtime 语音、Codex Cloud、插件市场管理、Windows 沙箱安装向导、
   userVerification、attestation。
 - 不替用户修改 `~/.codex/config.toml`（Codex 自己因用户决定而写的规则除外，见 D6）。
@@ -121,8 +122,8 @@ fixture 名指 `scripts/fixtures/codex/wire/` 下的录制（C0 已脱敏入库�
 
 | # | 决策 | 理由 / 否决的方案 |
 | --- | --- | --- |
-| D1 | 传输用 app-server v2（stdio, JSON 行） | 否决 `@openai/codex-sdk`（exec 包装，无审批/steer/原地中断）、`codex mcp-server`（工具化接口，丢失 item 粒度）、napi 嵌入 Rust 核心（6 平台构建、跟踪不稳定内部 API、与用户安装版本脱节） |
-| D2 | 进程模型：每个 TUI 进程一个 `CodexHub`（一条连接，多 thread）；引用计数，最后一个使用者释放后 30 s 空闲关闭；崩溃自动重启并 `thread/resume` 仍在用的 thread | Codex 自己就是一 server 多 thread；会话切换/目录/子代理零启动开销 |
+| D1 | 传输用 app-server v2：独立进程走 stdio JSON 行；本地 daemon 的官方 proxy 走 stdio 承载的 WebSocket 帧，用通用 `ws` 编解码 | 否决 `@openai/codex-sdk`（exec 包装，无审批/steer/原地中断）、`codex mcp-server`（工具化接口，丢失 item 粒度）、napi 嵌入 Rust 核心（6 平台构建、跟踪不稳定内部 API、与用户安装版本脱节） |
+| D2 | 每组可互换的启动设置一个 `CodexHub`（一条连接，多 thread）；引用计数，最后一个使用者释放后 30 s 空闲关闭；崩溃自动重启并 `thread/resume` 仍在用的 thread；原生恢复的空闲写锁冲突可重连既有本地 daemon | 设置指纹隔离凭据与 provider；关闭 proxy 只断开本客户端，不停止 daemon |
 | D3 | 协议类型入库：`src/backends/codex/protocol/generated/`（`generate-ts --experimental` 原样输出）+ 手写 `protocol/index.ts` 只 re-export 用到的类型；`contract.ts` 记 `VALIDATED_CODEX_VERSIONS` 与生成目录哈希 | 零运行时依赖；升级 = 跑同步脚本 + 看 diff。**不加 `@openai/codex` devDependency**（平台二进制巨大）；同步脚本接收 `--bin <codex>` |
 | D4 | `initialize.capabilities.experimentalApi = true`；用到的实验面：`turn/start.collaborationMode`、`collaborationMode/list`、`thread/settings/update`（V11）、`thread/backgroundTerminals/*`。每个实验调用都有退路：`-32601`/`-32602` → 关闭对应能力并提示一次 | Plan 模式是核心体验，只能走实验字段 |
 | D5 | 身份：`sessionId = threadId`；挂载账本 `codex:<threadId>`；恢复命令 `dsh-tui --backend codex --resume <id>`（也提示 `codex resume <id>`） | 与 Claude 一致 |
@@ -656,7 +657,11 @@ Codex 渠道 = 一个 OpenAI 兼容的 Responses API 端点（中转站）。存
 **挂载账本**：`codex:<threadId>`（核心按 `formatSessionRef` 自动处理）。同一 thread 被官方
 `codex` 同时打开时，Codex 自己的 `thread-writer-locks` 负责。**C0 已验证**（V15）：另一进程已加载该
 thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an active writer`，映射为
-本地化错误。
+本地化错误。官方前端退出后 daemon 仍可能保留写入者；原生凭据遇到此冲突时，先经
+`app-server proxy` 的 WebSocket 握手连接本地服务，再用 `thread/loaded/list` 与
+`thread/read` 确认目标已加载且为 `idle`，随后沿用共享投影器的完整分页恢复路径。
+活跃回合、托管凭据与显式渠道不走该分支；代理不可用则保留原错误。代理连接从不
+安装托管令牌，也不启动、停止 daemon。真实验证脚本为 `verify-codex-daemon-offline.ts`。
 
 **C0 观察（评审更正）**：`thread/fork.beforeTurnId`（排除该回合及之后）只存在于**实验**类型
 （`generate-ts --experimental`），0.144.0 与 0.160.1 的稳定类型都只有 `lastTurnId`。rewind 坚持用

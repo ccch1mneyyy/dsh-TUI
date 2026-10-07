@@ -57,9 +57,20 @@ codex resume <thread-id>           # return to the official frontend; release it
 Failed resume reports an error; it does not silently create a new conversation. Resume
 uses the thread’s recorded working directory by default. The official selector may filter
 by directory and default provider; select all directories/providers or use the id directly.
-Two Codex writers cannot open the same thread concurrently. An “active writer” error means
-you should normally exit that thread in the other terminal, not delete locks or kill
-someone else’s process.
+Two Codex writers cannot open the same thread concurrently. After an official frontend
+exits, its background app-server may retain the writer lock. When resuming with native
+credentials, dsh-TUI tries the official `app-server proxy` to rejoin that server's already
+loaded **idle** thread, using the background server's configuration and login while
+restoring the original history and working directory. Exiting dsh-TUI disconnects its
+proxy; the background server keeps running.
+
+Running turns, pending approvals, managed subscription tokens and explicit `/channel`
+connections retain the occupancy protection. The latter two use private app-server
+processes and never inject credentials into the shared background server. If the server
+is not running, its proxy is unavailable or it does not hold the target thread, resume
+keeps the original error without starting a daemon or creating a replacement conversation.
+If an “active writer” error remains, finish the operation in the frontend holding that
+thread; do not delete locks or terminate someone else's process.
 
 ## Login and credentials
 

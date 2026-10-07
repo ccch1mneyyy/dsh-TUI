@@ -879,6 +879,7 @@ const GROUPS = {
 // Codex JSON-RPC：请求/应答配对、超时（注入时钟）、服务端请求挂起/应答/未知方法、
 // close 拒绝挂起、行分帧与超长行；真子进程传输的 EOF 退出与超时终止。
     ["verify-codex-rpc", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-rpc.ts']],
+    ["verify-codex-proxy-transport", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-proxy-transport.ts']],
 // CodexHub（假 app-server）：握手参数与 optOut、按 thread 路由（子 thread 归父）、
 // 按连接代数的服务端请求与重投、引用计数与空闲关闭、崩溃重启与 connectionRestored、
 // 重启预算耗尽即永久失败、指纹多实例。
@@ -906,6 +907,7 @@ const GROUPS = {
     ["verify-init-capability", ['node', '--import', 'tsx/esm', 'scripts/verify-init-capability.ts']],
     ["verify-agent-event-invariants", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-event-invariants.ts']],
     ["verify-codex-auth", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-auth.ts']],
+    ["verify-codex-daemon-resume", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-daemon-resume.ts']],
     ["verify-codex-live-guard", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-live-guard.ts']],
     ["verify-codex-controls", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-controls.ts']],
     ["verify-codex-plans", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-plans.ts']],

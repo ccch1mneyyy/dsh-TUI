@@ -435,6 +435,7 @@
     "type-fest": "^5.8.0",
     "usehooks-ts": "^3.1.0",
     "wrap-ansi": "^10.0.1",
+    "ws": "^8.21.3",
     "yaml": "^2.9.0"
   },
   "optionalDependencies": {
@@ -529,6 +530,7 @@
     "@types/react": "^19.0.0",
     "@types/react-reconciler": "^0.33.0",
     "@types/semver": "^7.0.0",
+    "@types/ws": "^8.18.2",
     "@xterm/headless": "^6.0.0",
     "tar": "^7.5.22",
     "tsx": "^4.0.0",

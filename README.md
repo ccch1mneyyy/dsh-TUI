@@ -217,6 +217,9 @@ Protocol baseline **0.160.1**, minimum **0.144.0**; other versions may show
 drift. `CODEX_EXECUTABLE` selects a binary; `/kernel` remembers the backend.
 `codex resume <id>` can open the same thread after the other writer exits.
 This is not `migrate codex`, which imports history into DSH.
+With native credentials, a writer conflict for an idle thread retained by the
+official background server triggers a reconnection to that server. Managed
+subscription credentials and `/channel` connections use private app-server processes.
 
 Streaming/tool cards, approvals, questions, steer/queue/interrupt, model and
 effort controls, Plan, `/review`, `/diff`, `/usage`, `/init`, skills and MCP
@@ -235,8 +238,8 @@ Native browsing/archive, fork/conversation rewind, paged history, images,
 subagents, polled background terminals, goals and `/btw`/`/recap` use the
 existing surfaces. `/logout` removes only the matching dsh-auth credential;
 already-loaded managed tokens require a normal restart, not native logout.
-The real 0.160.1 app-server passed nine credential-free offline checks, with
-no model turn or charge; real subscription login, credentialed model calls
+The real 0.160.1 app-server passed nine credential-free offline checks and eight
+daemon-resume checks, with no model turn or charge; real subscription login, credentialed model calls
 and real-TTY interaction were not run. Only Codex identification/title
 changes automatically, not palette or companion.
 Using ChatGPT subscription tokens in third-party clients is subject to

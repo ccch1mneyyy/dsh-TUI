@@ -8,6 +8,9 @@
  *   reported once through `onStderr`) instead of growing without bound.
  * - stderr never reaches the terminal: each line goes to `onStderr` (the
  *   host's debug log and deduplicated notices).
+ * - `app-server proxy` carries the local daemon's WebSocket stream over
+ *   stdio. Its HTTP upgrade and bounded frames use the same child pipes;
+ *   closing this child disconnects our client and leaves the daemon running.
  * - `close()` ends stdin (the app-server exits on EOF, C0 V1), then escalates
  *   to SIGTERM and SIGKILL if the child lingers; it resolves once the child
  *   is gone. Safe to call twice.
@@ -16,6 +19,8 @@
  * in-process fake (scripts/lib/codex-fake-app-server.ts).
  */
 import { spawn, type ChildProcess } from 'node:child_process'
+import { Duplex, Readable, Writable } from 'node:stream'
+import WebSocket from 'ws'
 
 /** 96 Mi code units: covers the declared 50 MiB image payload after base64. */
 export const MAX_LINE_BYTES = 96 * 1024 * 1024
@@ -40,7 +45,7 @@ export interface TransportOptions {
 }
 
 export interface Transport {
-  /** Send one JSON-RPC message (a newline is appended). */
+  /** Send one JSON-RPC message in the transport's framing. */
   write(line: string): void
   /** End the child (stdin EOF, then signals); resolves once it exited. */
   close(): Promise<void>
@@ -107,11 +112,15 @@ export function spawnTransport(options: TransportOptions): Transport {
   let child: ChildProcess
   let exited = false
   let closing: Promise<void> | undefined
+  let websocket: WebSocket | undefined
+  const queue: string[] = []
   let exitResolve: (() => void) | undefined
   const exitPromise = new Promise<void>(resolve => { exitResolve = resolve })
   const reportExit = (info: TransportExit): void => {
     if (exited) return
     exited = true
+    queue.length = 0
+    websocket?.terminate()
     exitResolve?.()
     options.onExit(info)
   }
@@ -126,10 +135,6 @@ export function spawnTransport(options: TransportOptions): Transport {
     queueMicrotask(() => reportExit({ code: null, signal: null, error: error instanceof Error ? error : new Error(String(error)) }))
     return { write: () => undefined, close: () => Promise.resolve(), pid: undefined }
   }
-  const stdout = createLineSplitter(options.onLine, bytes => options.onStderr(`dsh-tui: dropped an app-server line of ${bytes} bytes`))
-  child.stdout?.setEncoding('utf8')
-  child.stdout?.on('data', (chunk: string) => stdout.push(chunk))
-  child.stdout?.on('end', () => stdout.end())
   const stderr = createLineSplitter(line => options.onStderr(line), () => undefined)
   child.stderr?.setEncoding('utf8')
   child.stderr?.on('data', (chunk: string) => stderr.push(chunk))
@@ -139,32 +144,65 @@ export function spawnTransport(options: TransportOptions): Transport {
   child.on('error', error => reportExit({ code: null, signal: null, error }))
   child.on('exit', (code, signal) => reportExit({ code, signal }))
 
-  const queue: string[] = []
   let draining = false
   const flush = (): void => {
-    draining = false
+    if (exited || closing !== undefined || draining) return
+    if (websocket !== undefined) {
+      if (websocket.readyState !== WebSocket.OPEN || queue.length === 0) return
+      draining = true
+      websocket.send(queue.shift()!, error => {
+        draining = false
+        if (error) child.stdin?.end()
+        else flush()
+      })
+      return
+    }
     while (queue.length > 0 && !draining) {
       const line = queue.shift()!
       if (child.stdin?.write(line) === false) draining = true
     }
   }
-  child.stdin?.on('drain', flush)
+  if (options.args[0] === 'app-server' && options.args[1] === 'proxy' && child.stdout !== null && child.stdin !== null) {
+    const pipes = Duplex.fromWeb({ readable: Readable.toWeb(child.stdout), writable: Writable.toWeb(child.stdin) })
+    // The URL supplies HTTP headers only: createConnection connects the
+    // official proxy's pipes, never a TCP endpoint.
+    websocket = new WebSocket('ws://localhost/', {
+      createConnection: () => pipes,
+      perMessageDeflate: false,
+      maxPayload: MAX_LINE_BYTES,
+    })
+    websocket.on('open', flush)
+    websocket.on('message', data => {
+      const bytes = Buffer.isBuffer(data) ? data : Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data)
+      options.onLine(bytes.toString('utf8'))
+    })
+    websocket.on('error', () => {
+      if (!exited && closing === undefined) options.onStderr('dsh-tui: Codex daemon proxy connection failed')
+      child.stdin?.end()
+    })
+    websocket.on('close', () => { child.stdin?.end() })
+  } else {
+    const stdout = createLineSplitter(options.onLine, bytes => options.onStderr(`dsh-tui: dropped an app-server line of ${bytes} bytes`))
+    child.stdout?.setEncoding('utf8')
+    child.stdout?.on('data', (chunk: string) => stdout.push(chunk))
+    child.stdout?.on('end', () => stdout.end())
+    child.stdin?.on('drain', () => { draining = false; flush() })
+  }
 
   return {
     get pid() { return child.pid },
     write(line: string): void {
       if (exited || closing !== undefined || child.stdin === null || child.stdin.destroyed) return
-      const framed = `${line}\n`
-      if (draining) {
-        queue.push(framed)
-        return
-      }
-      if (!child.stdin.write(framed)) draining = true
+      queue.push(websocket === undefined ? `${line}\n` : line)
+      flush()
     },
     close(): Promise<void> {
       if (closing !== undefined) return closing
       closing = (async () => {
         if (exited) return
+        queue.length = 0
+        if (websocket?.readyState === WebSocket.OPEN) websocket.close()
+        else websocket?.terminate()
         try { child.stdin?.end() } catch { /* already closed */ }
         const waited = (ms: number): Promise<boolean> => Promise.race([
           exitPromise.then(() => true),

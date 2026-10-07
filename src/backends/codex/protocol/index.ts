@@ -62,6 +62,7 @@ export const CLIENT = {
   threadFork: 'thread/fork',
   threadUnsubscribe: 'thread/unsubscribe',
   threadList: 'thread/list',
+  threadLoadedList: 'thread/loaded/list',
   threadRead: 'thread/read',
   threadTurnsList: 'thread/turns/list',
   threadNameSet: 'thread/name/set',

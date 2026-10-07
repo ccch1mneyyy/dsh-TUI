@@ -22,10 +22,10 @@ import { createCodexCatalog } from './catalog.js'
 import { detectCodex } from './detect.js'
 import { errorText, rec, str, type Rec } from './narrow.js'
 import { CLIENT } from './protocol/index.js'
-import { fileCodexPrefs } from './prefs.js'
+import { fileCodexPrefs, type CodexPrefs } from './prefs.js'
 import { buildCodexEnv, resolveCodexExecutable, type CodexExecutable } from './rpc/binary.js'
 import { acquireCodexHub, type CodexHub, type CodexHubDeps, type HubSettings } from './rpc/hub.js'
-import type { RpcClock } from './rpc/client.js'
+import { rpcCode, RPC_ERROR, type RpcClock } from './rpc/client.js'
 import { openCodexSession } from './session/session.js'
 
 /** Child stderr that is known start-up noise, reported by `/doctor` only. */
@@ -44,6 +44,8 @@ export interface CodexRuntime {
   readonly auth: CodexAuthRuntime
   readonly channels: CodexChannelsRuntime
   readonly startNotices?: readonly string[]
+  /** Rejoin an idle native thread retained by the local daemon, if available. */
+  readonly rejoinNativeDaemon?: () => Promise<CodexRuntime | undefined>
 }
 export interface CodexRuntimeOptions {
   readonly executable?: CodexExecutable & { readonly version?: string }
@@ -128,7 +130,38 @@ export async function prepareCodexRuntime(target: OpenTarget, host: CodexBackend
       auth = acquireCodexAuth({ hub, cwd, config, env, credential, externalAllowed: route.firstParty, skipStoredCredential: true, debug: host.debug })
       await auth.start()
     }
-    return { hub, release, cwd, executable, config, auth, channels, ...(startNotices === undefined ? {} : { startNotices }) }
+    const rejoinNativeDaemon = target.kind !== 'resume' ? undefined : async (): Promise<CodexRuntime | undefined> => {
+      // Managed credentials and channel overrides belong to our private
+      // child. Never install them in the user's shared background server.
+      if (launch.provider !== undefined || auth.source === 'dsh-auth' || auth.managedFailed || settings.credentialMode === 'native-fallback') return undefined
+      const daemon = acquireCodexHub({ ...settings, args: ['app-server', 'proxy'], credentialMode: 'codex' }, { ...deps, handshakeTimeoutMs: 5000 })
+      const releaseDaemon = daemon.retain()
+      let handedOff = false
+      try {
+        await daemon.ready
+        const loaded = rec(await daemon.call(CLIENT.threadLoadedList, {}, { timeoutMs: 5000 }))
+        if (!Array.isArray(loaded?.data) || !loaded.data.includes(target.sessionId)) return undefined
+        const thread = rec(rec(await daemon.call(CLIENT.threadRead, { threadId: target.sessionId, includeTurns: false }, { timeoutMs: 5000 }))?.thread)
+        if (str(rec(thread?.status)?.type) !== 'idle') return undefined
+        const daemonCwd = target.cwd ?? str(thread?.cwd)
+        if (daemonCwd === undefined || daemonCwd === '') return undefined
+        const daemonConfig = rec(rec(await daemon.call(CLIENT.configRead, { includeLayers: false, cwd: daemonCwd }, { timeoutMs: 5000 }))?.config)
+        const daemonAuth = acquireCodexAuth({ hub: daemon, cwd: daemonCwd, config: daemonConfig, env, externalAllowed: false, debug: host.debug })
+        await daemonAuth.start()
+        channels.refreshConfig(daemonConfig)
+        handedOff = true
+        return { hub: daemon, release: releaseDaemon, cwd: daemonCwd, executable, config: daemonConfig, auth: daemonAuth, channels }
+      } catch {
+        host.debug('codex: native daemon could not rejoin the retained thread')
+        return undefined
+      } finally {
+        if (!handedOff) {
+          releaseDaemon()
+          if (daemon.state === 'failed') await daemon.close()
+        }
+      }
+    }
+    return { hub, release, cwd, executable, config, auth, channels, ...(startNotices === undefined ? {} : { startNotices }), ...(rejoinNativeDaemon === undefined ? {} : { rejoinNativeDaemon }) }
   } catch (error) {
     release()
     host.debug(`codex: app-server start failed (${errorText(error)})`)
@@ -138,6 +171,26 @@ export async function prepareCodexRuntime(target: OpenTarget, host: CodexBackend
 
 let catalogHost: CodexBackendHost | undefined
 const catalogPrefs = fileCodexPrefs()
+
+/** Open a native thread, rejoining its idle daemon writer on conflict. */
+export async function openCodexBackendSession(target: OpenTarget, host: CodexBackendHost, options: CodexRuntimeOptions & { readonly prefs?: CodexPrefs } = {}): Promise<AgentSession> {
+  catalogHost = host
+  const runtime = await prepareCodexRuntime(target, host, options)
+  const open = (active: CodexRuntime): Promise<AgentSession> => openCodexSession({
+    ...active, target,
+    prefs: options.prefs ?? fileCodexPrefs(undefined, host.debug),
+    host: { debug: host.debug },
+    doctor: { get bubblewrapMissing() { return active.hub.bubblewrapMissing } },
+  })
+  try { return await open(runtime) }
+  catch (error) {
+    const cause = error instanceof Error ? error.cause : undefined
+    if (rpcCode(cause) !== RPC_ERROR.invalidRequest || !/already has an active writer/iu.test(errorText(cause))) throw error
+    const daemon = await runtime.rejoinNativeDaemon?.()
+    if (daemon === undefined) throw error
+    return open(daemon)
+  }
+}
 
 export const codexBackend: AgentBackend = {
   id: CODEX_BACKEND_ID,
@@ -167,15 +220,5 @@ export const codexBackend: AgentBackend = {
     resumeCommand: codexResumeCommand,
   },
 
-  async open(target: OpenTarget, host: BackendHost): Promise<AgentSession> {
-    catalogHost = host
-    const runtime = await prepareCodexRuntime(target, host)
-    const params = {
-      ...runtime, target,
-      prefs: fileCodexPrefs(undefined, host.debug),
-      host: { debug: host.debug },
-      doctor: { get bubblewrapMissing() { return runtime.hub.bubblewrapMissing } },
-    }
-    return openCodexSession(params)
-  },
+  open: openCodexBackendSession,
 }
