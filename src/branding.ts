@@ -5,8 +5,9 @@
  * Claude 后端（`backendCapabilities.backendId === 'claude'`，见
  * `backends/claude/`）时切到 `claude`（橙色 + `CLAUDE`/`CODE` + Claude 娘，
  * 立绘见 `assets/claude-girl/`）；Codex 后端切到 `codex`（薰衣草紫 +
- * `CODEX`/`HARNESS` + 标语 "Build anything with Codex"，吉祥物仍走默认
- * 鲸鱼分支）。启动页与对话页的主题跟着换：ThemeProvider 在品牌未被显式
+ * `CODEX`/`HARNESS` + 标语 "Build anything with Codex"，立绘槽固定淡紫恶
+ * 魔精灵 `assets/codex-girl/`——点击切红色按钮变体几秒，图像协议不可用时
+ * 回落字符画）。启动页与对话页的主题跟着换：ThemeProvider 在品牌未被显式
  * 锁定时把默认档替换成该品牌的主题对（显式 `DSH_TUI_THEME` / 会话内
  * `/theme` 手选永远优先）。
  *

@@ -354,6 +354,24 @@ goldens 变化：两张卡片标题从错误的引号剥离改为正确脚本（
   清单/认证、instructionSources、独立推理tokens/支出状态、命名权限档、归档浏览/取消归档。
   真实凭据和交互TTY仍需维护者验收。
 
+## 验收轮 3：codex 专属立绘（恶魔精灵）接入（2026-10-07）
+
+用户提供两张 1254² 透明底像素立绘：常态 = 淡紫恶魔精灵头像，点击后 =
+按下红色按钮的紫月龙裔少女。Lanczos3 重采样至 628² 入库
+`assets/codex-girl/codex-girl{,-happy}.png`（各 ~470-490KB；1254² 无整数
+像素网格，非最近邻放大）。
+
+- `maidPortrait.tsx` 新增 `CODEX_GIRL_ASSETS` 与 `portraitAssetsOf(brand)`
+  （品牌 → 资产集的唯一映射）；解码链路复用 loadMaidPortraits（裁透明边 +
+  双变体同画布居中，几何对齐防换图残影）。
+- LogoV2：codex 档立绘槽固定恶魔精灵（`portraitMode = whaleGirl || 品牌档`），
+  点击走既有 reactMaid（happy 变体 3s 自动回落，首任务后定格）；deepy/鲸娘
+  皮肤与 SplashMascot 收窄为 deepseek 品牌专属（codex 不消费）。无头/协议
+  不可用回落 WhaleGirlArt 字符画。
+- verify-splash-brand：parity 收窄到文字列（codex 有权换立绘槽）；新增「皮肤
+  不泄漏进 codex」与「codex 立绘真实解码（双变体同几何）」检查；品牌→资产
+  映射锁定。maid/mascot/eggs/layout/font-setting 回归全绿。
+
 ## 验收轮 2：品牌标题同字距与分形态对齐（2026-10-07）
 
 用户定调：CODEX/HARNESS 与 CLAUDE/CODE 两行**间隙一致**；启动页（居中形态）

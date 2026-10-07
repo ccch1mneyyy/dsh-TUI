@@ -41,7 +41,10 @@ dsh-tui --backend codex
   default) the whole look goes lavender: the CODEX title, the "Build anything with Codex"
   tagline and the `codex-lavender`/`codex-paper` theme pair (monochrome base with lavender
   accents, following your terminal's lightness). A manual `/theme` pick or a pinned
-  `dsh-tui.brand` value is never overridden; the companion stays on the default whale.
+  `dsh-tui.brand` value is never overridden. The portrait slot shows the lavender demon
+  sprite (`assets/codex-girl/`, rendered as a real image via Kitty/Sixel; a click swaps in
+  the red-button variant for a few seconds, with a character-art fallback when the terminal
+  cannot show images).
 
 Resume a thread created by the official client or dsh-TUI:
 

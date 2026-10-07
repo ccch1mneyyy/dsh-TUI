@@ -21,7 +21,7 @@ import { BRAND, EMBER, EMBER_BRIGHT, EMBER_FLASH, EMBER_LIGHT, EMBER_PALE, EMBER
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
 import { WhaleGirlArt } from './WhaleGirl.js'
 import { ClaudeGirlArt } from './ClaudeGirl.js'
-import { CLAUDE_GIRL_ASSETS, MAID_ASSETS, MAID_BOX_CENTER, MaidPortrait, useMaidPortraits } from './maidPortrait.js'
+import { MAID_BOX_CENTER, MaidPortrait, portraitAssetsOf, useMaidPortraits } from './maidPortrait.js'
 import { SplashMascot, useSplashMascotSkin } from './sidePanel/companion/SplashMascot.js'
 import { OPENING_SEQUENCES, pickOpeningSequence, WHALE_FRAME_INDEX, type OpeningStep, type WhaleIntroId } from './whaleFrames.js'
 import { RESTING_POSE, type WhaleLayerPose } from './whaleLayers.js'
@@ -334,15 +334,16 @@ export function LogoV2({
   // 女仆娘档优先走**真图**（Kitty/Sixel 终端图像协议，见 `maidPortrait.tsx`）；
   // 协议不可用（内联模式、终端不支持）或资产解码失败时，回落到字符画版
   // 女仆娘（`WhaleGirl.tsx` 半块精灵——作者占位，之后会换更好看的）。
-  // claude 品牌档（`branding.ts`）的立绘槽固定 Claude 娘（同一套盒几何：
-  // 真图 = `assets/claude-girl/`，回落 = `ClaudeGirl.tsx`），不看 whaleGirl
-  // 设置——像素鲸鱼与鲸鱼娘是 DeepSeek 品牌的资产。
+  // 品牌档（`branding.ts`）的立绘槽固定各自的娘（同一套盒几何）：claude =
+  // Claude 娘（真图 `assets/claude-girl/`，回落 `ClaudeGirl.tsx`）；codex =
+  // 淡紫恶魔精灵（真图 `assets/codex-girl/`，回落 `WhaleGirl.tsx`）——都不看
+  // whaleGirl 设置。像素鲸鱼、鲸鱼娘与 deepy/鲸娘皮肤是 DeepSeek 品牌的资产。
   // 两种形态都是静态立绘：闲置动画与点击爱心仍是鲸鱼专属。
   // `maidImageActive` 只在「真图画出来了」时为真。
   const claudeArt = brand === 'claude'
-  const portraitMode = whaleGirl || claudeArt
+  const portraitMode = whaleGirl || brand !== 'deepseek'
   const imagesAvailable = useTerminalImages(portraitMode)
-  const portraits = useMaidPortraits(portraitMode && imagesAvailable, claudeArt ? CLAUDE_GIRL_ASSETS : MAID_ASSETS)
+  const portraits = useMaidPortraits(portraitMode && imagesAvailable, portraitAssetsOf(brand))
   const maidSource = portraits?.normal
   const maidImageActive = portraitMode && imagesAvailable && maidSource !== undefined
   // 点一下她 → 换成「高兴鲸娘」几秒（自动回安静版；第一个任务后定格、
@@ -629,7 +630,7 @@ export function LogoV2({
             <Box width={WHALE_BOX_WIDTH} flexDirection="column" alignItems="center">
             {/* claude 品牌档的立绘槽钉死 Claude 娘——吉祥物（deepy/鲸娘皮肤）
                 是 DeepSeek 品牌的资产，不跟 claude 档混用。 */}
-            {!claudeArt && mascotSkin !== undefined ? (
+            {brand === 'deepseek' && mascotSkin !== undefined ? (
               <SplashMascot skin={mascotSkin} active={!whaleFrozen && whaleIdle} />
             ) : portraitMode ? (
               // 槽位**与文字列严格等高**（textColumnRows）：真图与字符画女仆

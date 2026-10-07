@@ -35,7 +35,8 @@ dsh-tui --backend codex
 - 后端标识/标题显示 Codex。品牌档 `auto`（默认）时整套换薰衣草紫：CODEX 大标题、
   "Build anything with Codex" 标语与 `codex-lavender`/`codex-paper` 双主题（黑白基底 +
   紫色点缀，随终端深浅自动落位）；`/theme` 手选或 `dsh-tui.brand` 固定档不被覆盖。
-  宠物仍走默认鲸鱼分支。
+  立绘槽固定淡紫恶魔精灵（`assets/codex-girl/`，Kitty/Sixel 真图渲染；点击切换
+  「按下红色按钮」变体几秒后自动回落；协议不可用时回落字符画）。
 
 恢复官方或 dsh-TUI 建立的 thread：
 

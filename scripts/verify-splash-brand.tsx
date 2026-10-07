@@ -421,26 +421,50 @@ const screenHasBlock = (rows: string[], expected: readonly string[]): boolean =>
     return found
   }
   const pinnedTip = { id: 'brand-parity', group: 'display', zh: '固定提示', en: 'Pinned tip' } as const
-  for (const props of [{}, { whaleGirl: true }, { companionSkin: 'deepy' }, { companionSkin: 'whaleGirl' }] as const) {
+  for (const props of [{}, { whaleGirl: true }] as const) {
     const before = rowsOf(view(<LogoV2 {...baseProps} {...props} tip={pinnedTip} brand="deepseek" />))
     const after = rowsOf(view(<LogoV2 {...baseProps} {...props} tip={pinnedTip} brand="codex" />))
     const changed = after.rows.some((_, y) => codexTitle.every((line, dy) => textAt(after.rows[y + dy] ?? '') === line))
-    // 标题两块大字与标语行之外：字符与样式逐格一致——立绘（含配色）、
-    // 信息行、布局全部不变；codex 只重画标题词（薰衣草紫墨）与品牌标语。
+    // codex 品牌有权换立绘槽（恶魔精灵，无头回落 WhaleGirlArt）——parity 收窄
+    // 到**文字列**（x ≥ TEXT_LEFT）：标题两块大字与标语行之外，信息行与布局
+    // 逐格一致；codex 只重画标题词（薰衣草紫墨）、品牌标语与立绘槽。
     const skip = new Set<number>([...blockRowsOf(before.rows, expectedTitleRows('DEEPSEEK', 'HARNESS')), ...blockRowsOf(after.rows, codexTitle)])
     before.rows.forEach((row, y) => {
       if (row.includes('探索未至之境') || row.includes('用 Codex 构建一切') || (after.rows[y] ?? '').includes('用 Codex 构建一切')) skip.add(y)
     })
-    const sameOutsideTitle = before.rows.length === after.rows.length && before.rows.every((_, y) =>
+    const sameTextColumn = before.rows.length === after.rows.length && before.rows.every((_, y) =>
       skip.has(y)
-      || Array.from({ length: WIDTH }, (_, x) => x).every(x => JSON.stringify(cellAt(before.screen, x, y)) === JSON.stringify(cellAt(after.screen, x, y))))
-    check('Codex repaints title+slogan only: ' + JSON.stringify(props), changed && sameOutsideTitle, 'Non-title cells (mascot art/colours, info lines, layout) must match')
+      || Array.from({ length: WIDTH - TEXT_LEFT }, (_, i) => i + TEXT_LEFT).every(x => JSON.stringify(cellAt(before.screen, x, y)) === JSON.stringify(cellAt(after.screen, x, y))))
+    check('Codex repaints title+slogan (and its own art slot): ' + JSON.stringify(props), changed && sameTextColumn, 'Text-column cells (info lines, layout) must match')
+  }
+  // deepy/鲸娘皮肤是 DeepSeek 品牌资产：codex 档不消费——设了皮肤，屏幕与
+  // 不设完全一致（皮肤不泄漏进 codex 立绘槽）。
+  for (const skin of ['deepy', 'whaleGirl'] as const) {
+    const plain = rowsOf(view(<LogoV2 {...baseProps} tip={pinnedTip} brand="codex" />))
+    const skinned = rowsOf(view(<LogoV2 {...baseProps} tip={pinnedTip} brand="codex" companionSkin={skin} />))
+    const identical = plain.rows.length === skinned.rows.length && plain.rows.every((_, y) =>
+      Array.from({ length: WIDTH }, (_, x) => x).every(x => JSON.stringify(cellAt(plain.screen, x, y)) === JSON.stringify(cellAt(skinned.screen, x, y))))
+    check('Codex ignores DeepSeek companion skins: ' + skin, identical)
   }
   const narrow = 20
   const { screen, height } = renderToScreen(
     <TerminalSizeContext.Provider value={{ columns: narrow, rows: 40 }}><LogoV2 {...baseProps} brand="codex" /></TerminalSizeContext.Provider>, narrow)
   const text = Array.from({ length: height }, (_, y) => Array.from({ length: narrow }, (_, x) => cellChar(screen, x, y)).join('')).join('\n')
   check('Codex narrow title is Codex, not DeepSeek', text.includes('Codex') && !text.includes('DeepSeek Harness'))
+}
+
+// ── ④b codex 立绘资产（恶魔精灵，用户素材）──────────────────────────────
+{
+  const { portraitAssetsOf, CODEX_GIRL_ASSETS, loadMaidPortraits } = await import('../src/components/maidPortrait.js')
+  check('品牌 → 立绘资产映射（deepseek/claude/codex 各一套）',
+    portraitAssetsOf('deepseek').dir === 'whale-girl' && portraitAssetsOf('claude').dir === 'claude-girl' && portraitAssetsOf('codex') === CODEX_GIRL_ASSETS)
+  const portraits = await loadMaidPortraits(CODEX_GIRL_ASSETS)
+  check('codex 立绘真实解码链路（两张变体、同一画布几何）',
+    portraits !== undefined
+    && portraits.normal.width === portraits.happy.width
+    && portraits.normal.height === portraits.happy.height
+    && portraits.normal.width > 0 && portraits.normal.height > 0,
+    portraits === undefined ? 'load failed' : `${portraits.normal.width}x${portraits.normal.height}`)
 }
 
 // ── ⑤ bevel 静态灰阶拆除 ──────────────────────────────────────────────────
