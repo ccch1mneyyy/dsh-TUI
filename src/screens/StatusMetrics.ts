@@ -78,14 +78,36 @@ const CLAUDE_SEGMENT_COLORS_PAPER: Readonly<Record<string, Color>> = Object.free
   tools: '#B85738',
 })
 
+/**
+ * codex 品牌（Codex 后端）的分段色——薰衣草紫明度阶梯，随品牌双主题分深浅
+ * 两表（与 `codex-lavender`/`codex-paper` 的面板/强调色对应）。结构（key/
+ * labels）不换，只换填充色：取色统一走 `usedSegmentColor`。
+ */
+const CODEX_SEGMENT_COLORS_DARK: Readonly<Record<string, Color>> = Object.freeze({
+  system: '#17171B',
+  prompt: '#282543',
+  assistant: '#5A5090',
+  thinking: '#A69BE8',
+  tools: '#C5BFEE',
+})
+const CODEX_SEGMENT_COLORS_PAPER: Readonly<Record<string, Color>> = Object.freeze({
+  system: '#ECE9FB',
+  prompt: '#D8D2F5',
+  assistant: '#B4A9E8',
+  thinking: '#8A7ED9',
+  tools: '#6B5CC8',
+})
+
 /** 渲染期取一个已用分段的填充色（品牌档渲染时读取，见 `branding.ts`）：品牌在
  *  档时品牌表优先——那是「切后端整屏换色」的语义，与当前主题声明了什么无关；
  *  其余情形原样返回入参（主题声明的键或固定 ramp）。 */
 export function usedSegmentColor(segment: { key: string; color: Color }): Color {
-  if (getActiveBrand() !== 'claude') return segment.color
-  const table = isLightThemeActive(getActiveThemeName())
-    ? CLAUDE_SEGMENT_COLORS_PAPER
-    : CLAUDE_SEGMENT_COLORS_DARK
+  const brand = getActiveBrand()
+  if (brand !== 'claude' && brand !== 'codex') return segment.color
+  const light = isLightThemeActive(getActiveThemeName())
+  const table = brand === 'claude'
+    ? (light ? CLAUDE_SEGMENT_COLORS_PAPER : CLAUDE_SEGMENT_COLORS_DARK)
+    : (light ? CODEX_SEGMENT_COLORS_PAPER : CODEX_SEGMENT_COLORS_DARK)
   return table[segment.key] ?? segment.color
 }
 

@@ -1073,8 +1073,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       if (shadow) return
       channel.setSplashFont(normalizeSplashFont(value.splashFont ?? config.splashFont))
     }
-    /** 品牌外观（`dsh-tui.brand`）：`auto` 跟随后端（Claude 后端整套换橙），
-     *  其余固定一档；设置用户层优先于 cordis.yml，非法值回落 `auto`。 */
+    /** 品牌外观（`dsh-tui.brand`）：`auto` 跟随后端（Claude 后端整套换橙、
+     *  Codex 后端整套换薰衣草紫），其余固定一档；设置用户层优先于
+     *  cordis.yml，非法值回落 `auto`。 */
     const applyBrand = (value: Pick<SettingsValue, 'brand'>): void => {
       if (shadow) return
       channel.setBrand(normalizeBrandSetting(value.brand ?? config.brand))

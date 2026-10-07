@@ -354,6 +354,23 @@ goldens 变化：两张卡片标题从错误的引号剥离改为正确脚本（
   清单/认证、instructionSources、独立推理tokens/支出状态、命名权限档、归档浏览/取消归档。
   真实凭据和交互TTY仍需维护者验收。
 
+## 验收轮 1 补充：Codex Lavender 品牌主题与标语（2026-10-07）
+
+用户定稿：slogan = "Build anything with Codex"（中文「用 Codex 构建一切」），
+主题方向 = 黑白基底 + 薰衣草紫点缀（#A69BE8 主 / #C5BFEE 亮 / #7569C7 深）。
+
+- 新增 `codex-lavender`（深）/ `codex-paper`（浅）双主题：正文黑白灰、彩色只留
+  品牌/信息/语义槽位，紫底选中块 #282543，上色原则与 claude 双主题逐键对齐；
+  进 THEME_NAMES、customTheme 基底表与宿主 TuiThemeBase。
+- codex 升级为完整品牌档：BRAND_TAGLINE 标语、`dsh-tui.brand` 增加 `codex`
+  显式档（薰衣草紫）；ThemeProvider 品牌默认档泛化为 BRAND_THEMES 查表——
+  codex 后端自动落薰衣草紫（/theme 手选与显式 env 仍优先，持久化偏好不锁）。
+- 开屏：CODEX/HARNESS 改走 withTagline 宽解字距（与 CLAUDE 同管线，彩蛋日
+  上排钉 CODEX）；大字用薰衣草紫三档色阶（shimmer LAVENDER 系），标语行
+  换品牌 slogan；吉祥物不变。StatusMetrics 分段色加薰衣草紫明度阶梯两表。
+- 回归：verify-splash-brand 重写 codex 段（信号/双主题锚点色/ThemeProvider
+  默认档/读屏词表/标语/「仅重画标题+标语、其余逐格一致」parity 契约）。
+
 ## 验收轮 1 修复：自述与正文同屏重复（2026-10-07）
 
 用户实测报告：Codex 内核下，⏵ 模型自述与 codex 输出的第一句话内容相同且同时显示。

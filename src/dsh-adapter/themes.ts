@@ -35,7 +35,7 @@ import {
 } from '../theme.js'
 
 /** The built-in palette a runtime theme overlays. */
-export type TuiThemeBase = 'light' | 'dark' | 'dark-ansi' | 'claude-dark' | 'claude-paper'
+export type TuiThemeBase = 'light' | 'dark' | 'dark-ansi' | 'claude-dark' | 'claude-paper' | 'codex-lavender' | 'codex-paper'
 
 /** Plugin-facing runtime theme declaration. */
 export interface TuiThemeDescriptor {

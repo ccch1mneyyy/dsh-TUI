@@ -17,7 +17,7 @@ import { pickSplashEgg, splashStarLine, type SplashEgg } from './splashEggs.js'
 import { isHistoricMilestone, markStarAsked, pendingStarMilestone, recordLaunch, STAR_MILESTONES, usageSnapshot } from '../usageStats.js'
 import { effectiveComboDisplay } from '../utils/keymap.js'
 import { stringWidth } from '../ink/stringWidth.js'
-import { BRAND, EMBER, EMBER_BRIGHT, EMBER_FLASH, EMBER_LIGHT, EMBER_PALE, EMBER_PAPER, EMBER_PAPER_FLASH, FLASH, ICE, PALE, sweep } from './shimmer.js'
+import { BRAND, EMBER, EMBER_BRIGHT, EMBER_FLASH, EMBER_LIGHT, EMBER_PALE, EMBER_PAPER, EMBER_PAPER_FLASH, FLASH, ICE, LAVENDER, LAVENDER_BRIGHT, LAVENDER_FLASH, LAVENDER_LIGHT, LAVENDER_PALE, LAVENDER_PAPER, LAVENDER_PAPER_FLASH, LAVENDER_SOFT, PALE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
 import { WhaleGirlArt } from './WhaleGirl.js'
 import { ClaudeGirlArt } from './ClaudeGirl.js'
@@ -300,16 +300,18 @@ export function LogoV2({
   const [dailyFont] = React.useState<SplashFont>(() => pickSplashFont())
   const font = fontId === undefined ? dailyFont : splashFontById(fontId)
 
-  // 品牌词（`branding.ts`）：claude 内核换 `CLAUDE`/`CODE`——字身不变、字距
-  // 取最宽可行解（两词字数差大，紧解上排字距只有 1、整体局促），窄终端阶梯
-  // 阈值跟着当天真实标题宽度走，与彩蛋共用 `withTagline`。
+  // 品牌词（`branding.ts`）：claude 内核换 `CLAUDE`/`CODE`、codex 内核换
+  // `CODEX`/`HARNESS`——字身不变、字距取最宽可行解（两词字数差大，紧解上排
+  // 字距只有 1、整体局促），窄终端阶梯阈值跟着当天真实标题宽度走，与彩蛋
+  // 共用 `withTagline`。
   const words = BRAND_SPLASH_WORDS[brand]
-  const brandFont = brand === 'claude' ? withTagline(font, words.top, words.bottom, { wide: true }) : font
+  const brandFont = brand !== 'deepseek' ? withTagline(font, words.top, words.bottom, { wide: true }) : font
 
   // 节日彩蛋：本地日期整天恒定，每次 mount 只判一次（照 pickSplashFont 的写法）。
-  // 只换下排词——上排钉在品牌词上（deepseek 的 `DEEPSEEK` / claude 的 `CLAUDE`）。
+  // 只换下排词——上排钉在品牌词上（deepseek 的 `DEEPSEEK` / claude 的 `CLAUDE`
+  // / codex 的 `CODEX`）。
   const [dailyEgg] = React.useState<SplashEgg | null>(() => (egg === undefined ? pickSplashEgg() : egg))
-  const titleFont = dailyEgg === null ? brandFont : withTagline(font, brand === 'codex' ? font.tagline.top : words.top, dailyEgg.bottom, { wide: brand === 'claude' })
+  const titleFont = dailyEgg === null ? brandFont : withTagline(font, brand === 'deepseek' ? font.tagline.top : words.top, dailyEgg.bottom, { wide: brand !== 'deepseek' })
 
   // 窄终端阶梯：鲸鱼 + 大字 → 纯大字 → 纯鲸鱼 → 一行纯文字（阈值随字体字身宽度变）。
   const splash = resolveSplashLayout(columns, { whale, font: titleFont })
@@ -427,7 +429,7 @@ export function LogoV2({
   // 品牌欢迎语（claude 档专用文案；deepseek 沿用 i18n 的 `logo-tagline`）。
   // 英文是两行（\n 分隔）——渲染与居中都按行处理，见下方 welcomeWidth/渲染。
   const brandTagline = BRAND_TAGLINE[brand]
-  const tagline = brand === 'claude'
+  const tagline = brand !== 'deepseek'
     ? (getLang() === 'zh' ? brandTagline.zh : brandTagline.en)
     : tr('logo-tagline')
   /** 欢迎语逐行拆开（单行文案就是一元素）。 */
@@ -505,8 +507,8 @@ export function LogoV2({
   // 两者一起保证画出来的列数相等（见 splashFonts 的 tagline 契约）。
   // 节日彩蛋换的就是这里的两排词（`titleFont` 已按当天词对重解字距）。
   const { top: fontTop, bottom, topKerning, bottomKerning, bottomIndent } = titleFont.tagline
-  // Codex changes only the title ink, not the font metrics or layout ladder.
-  const top = brand === 'codex' ? words.top : fontTop
+  // 品牌词对经 withTagline 重解后 fontTop 即品牌上排词（含彩蛋日的钉顶）。
+  const top = fontTop
   // 大字配色按字体/品牌解析（运行时 `palette`（扩展缝）最优先）：
   // - deepseek：主题 accent → activity → PALE 的蓝白阶（品牌化之前的行为）；
   // - claude：cc-bridge 校过的深橙 → 浅橙，两行同一对端点——第二行终点不再
@@ -517,8 +519,20 @@ export function LogoV2({
   // claude 双主题的大字端点：深底 #D77757 → 淡橙；浅底（claude-paper）反向
   // ——正色压深 #C96442、高光也变深（浅底上"亮"是加深）。bevel 的金属明暗
   // 两档同样以当档基色派生。
-  const claudePaper = brand === 'claude' && isLightThemeActive(themeName)
-  const brandBase = brand === 'claude' ? (claudePaper ? EMBER : EMBER_LIGHT) : wordmarkRGB
+  const brandPaper = brand !== 'deepseek' && isLightThemeActive(themeName)
+  // 品牌大字色阶（跨两行三档，从左上到右下走完）：claude 陶土橙、codex 薰衣草
+  // 紫；深底从亮档起步奔最亮收，浅底反向从深化档起步（浅底上"亮"是加深）。
+  // deepseek 不在表内——沿用主题 wordmark/tagline/PALE 的蓝白阶。
+  const brandLadder = brand === 'claude'
+    ? (brandPaper
+        ? { base: EMBER, start: EMBER, mid: EMBER_LIGHT, end: EMBER_BRIGHT, flash: EMBER_PAPER_FLASH }
+        : { base: EMBER_LIGHT, start: EMBER_LIGHT, mid: EMBER_BRIGHT, end: EMBER_PALE, flash: EMBER_FLASH })
+    : brand === 'codex'
+      ? (brandPaper
+          ? { base: LAVENDER_PAPER, start: LAVENDER_PAPER, mid: LAVENDER_LIGHT, end: LAVENDER, flash: LAVENDER_PAPER_FLASH }
+          : { base: LAVENDER_BRIGHT, start: LAVENDER_BRIGHT, mid: LAVENDER_SOFT, end: LAVENDER_PALE, flash: LAVENDER_FLASH })
+      : undefined
+  const brandBase = brandLadder?.base ?? wordmarkRGB
   const bevelShade = titleFont.id === 'bevel'
     ? {
         from: interpolateColor(brandBase, { r: 255, g: 255, b: 255 }, 0.45),
@@ -526,23 +540,27 @@ export function LogoV2({
       }
     : undefined
   // 扫光高光同族：橙字上扫过蓝光会很脏；claude 深底暖阳高光、浅底深化高光。
-  const flash = brand === 'claude' ? (claudePaper ? EMBER_PAPER_FLASH : EMBER_FLASH) : FLASH
+  const flash = brandLadder?.flash ?? FLASH
   // claude 渐变是**跨两行的三档色阶**（行一 起→中、行二 中→收），整幅从左
   // 上到右下走完色阶。起点两轮提亮（用户反馈"还是暗"）：深底直接从亮档
   // #E68A69 起步 → #EFA97E → 奶油橙 #FBD6B0（官方正色 #D77757 明度中等、
   // 压深底发闷，只留给浅底当起点）；浅底 #D77757 → #E68A69 → #EFA97E。
   const titleFrom = titleFont.palette?.from
     ?? bevelShade?.from
-    ?? (brand === 'claude' ? (claudePaper ? EMBER : EMBER_LIGHT) : wordmarkRGB)
+    ?? brandLadder?.start
+    ?? wordmarkRGB
   const titleTopTo = titleFont.palette?.to
     ?? bevelShade?.to
-    ?? (brand === 'claude' ? (claudePaper ? EMBER_LIGHT : EMBER_BRIGHT) : taglineRGB)
+    ?? brandLadder?.mid
+    ?? taglineRGB
   const titleBottomFrom = titleFont.palette?.from
     ?? bevelShade?.from
-    ?? (brand === 'claude' ? (claudePaper ? EMBER_LIGHT : EMBER_BRIGHT) : taglineRGB)
+    ?? brandLadder?.mid
+    ?? taglineRGB
   const titleBottomTo = titleFont.palette?.to
     ?? bevelShade?.to
-    ?? (brand === 'claude' ? (claudePaper ? EMBER_BRIGHT : EMBER_PALE) : PALE)
+    ?? brandLadder?.end
+    ?? PALE
   const bigDeepSeek = renderBigText(titleFont, top, t, titleFrom, titleTopTo, flash, 60, topKerning)
   const bigHarness = renderBigText(titleFont, bottom, t, titleBottomFrom, titleBottomTo, flash, 60, bottomKerning, bottomIndent)
   // 立绘槽位的**唯一真源**：文字列的实际行数。full = 词标 1 + 两排大字 +

@@ -37,8 +37,11 @@ dsh-tui --backend codex
 - Your `$CODEX_HOME` (default `~/.codex`) and official configuration still apply. dsh-TUI
   **does not write `~/.codex/config.toml`**. Its model, effort and permission choices live
   in `~/.dsh-tui/backends/codex/prefs.json` and apply through per-thread requests.
-- Backend identification/title displays Codex; it does not automatically change the
-  palette, companion or your theme selection.
+- Backend identification/title displays Codex. With the brand setting on `auto` (the
+  default) the whole look goes lavender: the CODEX title, the "Build anything with Codex"
+  tagline and the `codex-lavender`/`codex-paper` theme pair (monochrome base with lavender
+  accents, following your terminal's lightness). A manual `/theme` pick or a pinned
+  `dsh-tui.brand` value is never overridden; the companion stays on the default whale.
 
 Resume a thread created by the official client or dsh-TUI:
 

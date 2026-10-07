@@ -32,7 +32,10 @@ dsh-tui --backend codex
 - 仍使用你的 `$CODEX_HOME`（默认 `~/.codex`）和官方配置。dsh-TUI **不写
   `~/.codex/config.toml`**；自己的模型、effort、权限等选择保存在
   `~/.dsh-tui/backends/codex/prefs.json`，按 thread 请求应用。
-- 后端标识/标题显示 Codex；不会自动更换配色、宠物或你的主题选择。
+- 后端标识/标题显示 Codex。品牌档 `auto`（默认）时整套换薰衣草紫：CODEX 大标题、
+  "Build anything with Codex" 标语与 `codex-lavender`/`codex-paper` 双主题（黑白基底 +
+  紫色点缀，随终端深浅自动落位）；`/theme` 手选或 `dsh-tui.brand` 固定档不被覆盖。
+  宠物仍走默认鲸鱼分支。
 
 恢复官方或 dsh-TUI 建立的 thread：
 

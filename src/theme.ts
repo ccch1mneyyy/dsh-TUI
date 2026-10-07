@@ -211,7 +211,7 @@ export function isThemeColorKey(value: unknown): value is ThemeColorKey {
 }
 
 /** The built-in theme names, in display order. */
-export const THEME_NAMES = ['dark', 'dark-ansi', 'light', 'claude-dark', 'claude-paper'] as const
+export const THEME_NAMES = ['dark', 'dark-ansi', 'light', 'claude-dark', 'claude-paper', 'codex-lavender', 'codex-paper'] as const
 
 /**
  * Whether a name is a built-in palette (THEME_NAMES membership, never the base
@@ -652,6 +652,189 @@ const claudePaperTheme: Theme = {
 }
 
 /**
+ * Codex 品牌双主题之 `codex-lavender`（branding.ts）：黑白基底 + 薰衣草紫
+ * （#A69BE8 主 / #C5BFEE 亮 / #7569C7 深，用户定稿「Codex Lavender」方案）。
+ * 上色原则同 claude 档：**正文类文字一律黑白灰**（text/inactive/subtle、
+ * 语法注释与运算符），彩色只留给「特殊文字」——品牌紫（焦点/活动/徽标）、
+ * 信息蓝、成功绿、警示金、错误赤；紫只做点睛（90% 黑白灰 / 8% 紫 / 2%
+ * 功能色）。面板走墨黑阶（#17171B/#202028/#2A2A34），选中块用紫底 #282543。
+ */
+const codexLavenderTheme: Theme = {
+  ...darkTheme,
+  // ── 品牌 / 焦点（薰衣草紫 #A69BE8 主、#C5BFEE 亮）──
+  accent: rgb('#A69BE8'),
+  accentShimmer: rgb('#C5BFEE'),
+  activity: rgb('#A69BE8'),
+  activityShimmer: rgb('#C5BFEE'),
+  suggestion: rgb('#C5BFEE'),
+  remember: rgb('#C5BFEE'),
+  professionalBlue: rgb('#A69BE8'), // 语义是"品牌色"，名字是历史
+  permission: rgb('#C5BFEE'),
+  permissionShimmer: rgb('#E0DCF6'),
+  ide: rgb('#7569C7'),
+  background: rgb('#A69BE8'), // badge fill
+  mascotBody: rgb('#A69BE8'),
+  // ── 输入框：深紫边框（#7569C7 = 激活态档）+ 透明背景 ──
+  promptBorder: rgb('#7569C7'),
+  promptBorderShimmer: rgb('#A69BE8'),
+  inputBackground: '',
+  bashBorder: rgb('#D8AE62'),
+  planMode: rgb('#8F9BFF'), // 计划模式走信息蓝——与品牌紫可区分
+  // ── 语义状态 ──
+  success: rgb('#7FB38A'),
+  error: rgb('#D9727C'),
+  warning: rgb('#D8AE62'),
+  warningShimmer: rgb('#E4BB72'),
+  merged: rgb('#8F9BFF'), // 自动接受走信息蓝：紫是品牌，别当信号色
+  autoAccept: rgb('#8F9BFF'),
+  // ── 面板 / 衬底（墨黑阶 + 紫底选中块）──
+  toolCardBackground: rgb('#202028'),
+  toolCardBackgroundDim: rgb('#17171B'),
+  messageActionsBackground: rgb('#2A2A34'),
+  selectionBg: rgb('#282543'),
+  bashMessageBackgroundColor: rgb('#202028'),
+  memoryBackgroundColor: rgb('#17171B'),
+  rate_limit_empty: rgb('#2A2A34'),
+  rate_limit_fill: rgb('#A69BE8'),
+  userMessageBackgroundHover: rgb('#282543'),
+  // ── 文字三档：黑白灰原则 ──
+  text: rgb('#F4F4F7'),
+  inverseText: rgb('#17171B'),
+  inactive: rgb('#B8B8C4'),
+  inactiveShimmer: rgb('#D5D5DE'),
+  subtle: rgb('#7D7D8A'),
+  userPromptLabel: rgb('#A69BE8'),
+  fastMode: rgb('#A69BE8'),
+  fastModeShimmer: rgb('#C5BFEE'),
+  chromeYellow: rgb('#D8AE62'),
+  // ── 工具点 / 工具名 ──
+  toolDotExec: rgb('#7FB38A'),
+  toolDotRead: rgb('#9CC9D8'),
+  toolDotWrite: rgb('#A69BE8'),
+  toolDotWeb: rgb('#8F9BFF'),
+  toolDotTask: rgb('#D9727C'),
+  toolNameMutate: rgb('#D8AE62'),
+  toolNameExec: rgb('#8F9BFF'),
+  // ── 语法：注释/运算符黑白灰，结构词才彩色 ──
+  syntaxKeyword: rgb('#8F9BFF'),
+  syntaxString: rgb('#7FB38A'),
+  syntaxComment: rgb('#7D7D8A'),
+  syntaxNumber: rgb('#D8AE62'),
+  syntaxFunction: rgb('#C5BFEE'),
+  syntaxType: rgb('#A69BE8'),
+  syntaxVariable: rgb('#F4F4F7'),
+  syntaxOperator: rgb('#B8B8C4'),
+  syntaxPunctuation: rgb('#7D7D8A'),
+  syntaxConstant: rgb('#D9727C'),
+  // ── diff ──
+  diffAdded: rgb('#212821'),
+  diffAddedDimmed: rgb('#232B24'),
+  diffRemoved: rgb('#2A2023'),
+  diffRemovedDimmed: rgb('#261F22'),
+  diffAddedWord: rgb('#7FB38A'),
+  diffRemovedWord: rgb('#D9727C'),
+  // ── 子代理行 ──
+  subagentBullet: rgb('#D9727C'),
+  subagentDescription: rgb('#F4F4F7'),
+  subagentModel: rgb('#B8B8C4'),
+  subagentElapsed: rgb('#B8B8C4'),
+  subagentToolName: rgb('#A69BE8'),
+  subagentStatusRunning: rgb('#A69BE8'),
+  subagentStatusCompleted: rgb('#7FB38A'),
+  subagentStatusFailed: rgb('#D9727C'),
+}
+
+/**
+ * Codex 品牌双主题之 `codex-paper`：浅色版——深化薰衣草紫 #8A7ED9 承担
+ * 品牌槽（同一紫放浅底会发淡），面板纯白、文字墨黑；与 `codex-lavender`
+ * 逐键对应（同一套强调色语义，切明暗不丢品牌识别），上色原则同款。
+ */
+const codexPaperTheme: Theme = {
+  ...lightTheme,
+  // ── 品牌 / 焦点（深化薰衣草紫 #8A7ED9 / #6B5CC8）──
+  accent: rgb('#8A7ED9'),
+  accentShimmer: rgb('#6B5CC8'),
+  activity: rgb('#8A7ED9'),
+  activityShimmer: rgb('#6B5CC8'),
+  suggestion: rgb('#8A7ED9'),
+  remember: rgb('#6B5CC8'),
+  professionalBlue: rgb('#8A7ED9'),
+  permission: rgb('#8A7ED9'),
+  permissionShimmer: rgb('#6B5CC8'),
+  ide: rgb('#6B5CC8'),
+  background: rgb('#8A7ED9'), // badge fill
+  mascotBody: rgb('#8A7ED9'),
+  // ── 输入框：深化紫边框（浅底可读档）+ 透明背景 ──
+  promptBorder: rgb('#8A7ED9'),
+  promptBorderShimmer: rgb('#6B5CC8'),
+  inputBackground: '',
+  bashBorder: rgb('#AF7B2E'),
+  planMode: rgb('#6F7EEB'),
+  // ── 语义状态（浅底深化档）──
+  success: rgb('#5F8B69'),
+  error: rgb('#C45A66'),
+  warning: rgb('#AF7B2E'),
+  warningShimmer: rgb('#96661F'),
+  merged: rgb('#6F7EEB'),
+  autoAccept: rgb('#6F7EEB'),
+  // ── 面板 / 衬底（纸张阶 + 紫底选中块）──
+  toolCardBackground: rgb('#FFFFFF'),
+  toolCardBackgroundDim: rgb('#F2F2F7'),
+  messageActionsBackground: rgb('#ECECF3'),
+  selectionBg: rgb('#ECE9FB'),
+  bashMessageBackgroundColor: rgb('#F2F2F7'),
+  memoryBackgroundColor: rgb('#F2F2F7'),
+  rate_limit_empty: rgb('#ECECF3'),
+  rate_limit_fill: rgb('#8A7ED9'),
+  userMessageBackgroundHover: rgb('#ECE9FB'),
+  // ── 文字三档：墨黑阶 ──
+  text: rgb('#17171C'),
+  inverseText: rgb('#FFFFFF'),
+  inactive: rgb('#5F5F6C'),
+  inactiveShimmer: rgb('#4E4E58'),
+  subtle: rgb('#8D8D98'),
+  userPromptLabel: rgb('#8A7ED9'),
+  fastMode: rgb('#8A7ED9'),
+  fastModeShimmer: rgb('#6B5CC8'),
+  chromeYellow: rgb('#AF7B2E'),
+  // ── 工具点 / 工具名 ──
+  toolDotExec: rgb('#5F8B69'),
+  toolDotRead: rgb('#6F7EEB'),
+  toolDotWrite: rgb('#8A7ED9'),
+  toolDotWeb: rgb('#6B5CC8'),
+  toolDotTask: rgb('#C45A66'),
+  toolNameMutate: rgb('#AF7B2E'),
+  toolNameExec: rgb('#6F7EEB'),
+  // ── 语法：注释/运算符灰阶，结构词彩色 ──
+  syntaxKeyword: rgb('#6F7EEB'),
+  syntaxString: rgb('#5F8B69'),
+  syntaxComment: rgb('#8D8D98'),
+  syntaxNumber: rgb('#AF7B2E'),
+  syntaxFunction: rgb('#8A7ED9'),
+  syntaxType: rgb('#6B5CC8'),
+  syntaxVariable: rgb('#17171C'),
+  syntaxOperator: rgb('#5F5F6C'),
+  syntaxPunctuation: rgb('#8D8D98'),
+  syntaxConstant: rgb('#C45A66'),
+  // ── diff ──
+  diffAdded: rgb('#DFEBDD'),
+  diffAddedDimmed: rgb('#E9F1E7'),
+  diffRemoved: rgb('#F2DEDE'),
+  diffRemovedDimmed: rgb('#F8EAEA'),
+  diffAddedWord: rgb('#5F8B69'),
+  diffRemovedWord: rgb('#C45A66'),
+  // ── 子代理行 ──
+  subagentBullet: rgb('#C45A66'),
+  subagentDescription: rgb('#17171C'),
+  subagentModel: rgb('#5F5F6C'),
+  subagentElapsed: rgb('#5F5F6C'),
+  subagentToolName: rgb('#8A7ED9'),
+  subagentStatusRunning: rgb('#8A7ED9'),
+  subagentStatusCompleted: rgb('#5F8B69'),
+  subagentStatusFailed: rgb('#C45A66'),
+}
+
+/**
  * Dark ANSI theme using only the 16 standard ANSI colors, for terminals
  * without true color support.
  *
@@ -817,6 +1000,10 @@ export function getTheme(themeName: ThemeName): Theme {
       return claudeDarkTheme
     case 'claude-paper':
       return claudePaperTheme
+    case 'codex-lavender':
+      return codexLavenderTheme
+    case 'codex-paper':
+      return codexPaperTheme
     case AUTO_THEME_NAME:
       return autoBase === 'light' ? lightTheme : darkTheme
     default: {
@@ -864,8 +1051,8 @@ export function isLightThemeActive(themeName: ThemeName): boolean {
   // Built-ins answer by palette identity, never by luminance. An ANSI palette
   // has no parseable ink at all, and a future truecolor tweak must not silently
   // flip a whole family's contrast direction.
-  if (theme === lightTheme || theme === claudePaperTheme) return true
-  if (theme === darkTheme || theme === darkAnsiTheme || theme === claudeDarkTheme) return false
+  if (theme === lightTheme || theme === claudePaperTheme || theme === codexPaperTheme) return true
+  if (theme === darkTheme || theme === darkAnsiTheme || theme === claudeDarkTheme || theme === codexLavenderTheme) return false
   // 自定义或运行时主题：按文本墨色亮度判定——浅底配深墨（ink）、深底配亮墨。
   // 调色板的 background 字段是徽标填充色而非终端背景，不能作判据。墨色走
   // `parseFixedColor`：校验器放行的写法（hex、带空白的 `rgb()`）都判得出来，只认紧凑

@@ -10,7 +10,7 @@ import {
   AUTO_THEME_NAME,
   THEME_NAMES,
 } from '../../theme.js'
-import { CLAUDE_BRAND_THEMES, getActiveBrand, subscribeActiveBrand } from '../../branding.js'
+import { BRAND_THEMES, getActiveBrand, subscribeActiveBrand } from '../../branding.js'
 import instances from '../../ink/instances.js'
 import { resolveCustomTheme } from '../../customTheme.js'
 import type { TuiThemeHost } from '../../dsh-adapter/themes.js'
@@ -307,11 +307,13 @@ export function ThemeProvider({
       : isThemeAvailable(active)
         ? active
         : AUTO_THEME_NAME
-    if (brand !== 'claude' || brandThemeLockRef.current) return resolved
-    // 双主题按解析档深浅落位：浅色终端（或历史 light 偏好）→ claude-paper，
-    // 深色 → claude-dark——两套共用同一强调色，切明暗不丢品牌识别。
+    const brandThemes = BRAND_THEMES[brand]
+    if (brandThemes === undefined || brandThemeLockRef.current) return resolved
+    // 品牌双主题按解析档深浅落位：浅色终端（或历史 light 偏好）→ 浅色版，
+    // 深色 → 深色版——同一套品牌强调色，切明暗不丢品牌识别（claude 陶土橙、
+    // codex 薰衣草紫）。
     const lightness = resolved === 'light' || (resolved === AUTO_THEME_NAME && autoBase === 'light') ? 'light' : 'dark'
-    return CLAUDE_BRAND_THEMES[lightness]
+    return brandThemes[lightness]
   })()
   // 模块级镜像必须**在渲染期**写入（不是 effect）：markdown 把主题色烤进
   // ANSI 字符串（链接 accent、行内代码 permission…），而它正是被这次 context
