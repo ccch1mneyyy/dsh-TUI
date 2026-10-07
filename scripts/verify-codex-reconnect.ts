@@ -13,7 +13,7 @@ process.env.HOME = home
 process.env.USERPROFILE = home
 process.env.DSH_TUI_LANG = 'en'
 const root = process.env.CODEX_TEST_SOURCE_ROOT ?? resolve('.')
-const [{ createCodexHub }, { openCodexSession }, { createFakeAppServer, NO_REPLY }, { memoryCodexPrefs }, { manualClock, threadAnswer, THREAD, CWD }, { createChannel }, { settled }, { agentEventInvariantViolations }, { setLang }] = await Promise.all([
+const [{ createCodexHub }, { openCodexSession }, { createFakeAppServer, FakeRpcError, NO_REPLY }, { memoryCodexPrefs }, { manualClock, threadAnswer, THREAD, CWD }, { createChannel }, { settled }, { agentEventInvariantViolations }, { setLang }] = await Promise.all([
   import(pathToFileURL(resolve(root, 'src/backends/codex/rpc/hub.ts')).href),
   import(pathToFileURL(resolve(root, 'src/backends/codex/session/session.ts')).href),
   import('./lib/codex-fake-app-server.js'), import('../src/backends/codex/prefs.js'), import('./lib/codex-session-harness.js'),
@@ -26,7 +26,7 @@ let passed = 0
 const check = (name: string, ok: unknown, detail = ''): void => { assert.ok(ok, detail === '' ? name : name + '\n' + detail); passed += 1; console.log('PASS ' + name) }
 const user = { type: 'userMessage', id: 'user-item', clientId: 'client', content: [{ type: 'text', text: 'work', text_elements: [] }] }
 const command = (id: string, status: string, output: string | null = null): Rec => ({ type: 'commandExecution', id, command: 'echo ' + id, cwd: '/TMP/cwd', source: 'agent', status, commandActions: [{ type: 'unknown', command: 'echo ' + id }], aggregatedOutput: output, exitCode: output === null ? null : 0 })
-async function fixture() {
+async function fixture(auth?: unknown) {
   const fake = createFakeAppServer()
   const clock = manualClock()
   const hub = createCodexHub({ executable: '/fake/codex', args: ['app-server'], env: {}, cwd: CWD }, { transportFactory: fake.transportFactory, clock })
@@ -41,7 +41,7 @@ async function fixture() {
   fake.on('mcpServerStatus/list', () => ({ data: [], nextCursor: null }))
   let turns = 0
   fake.on('turn/start', () => ({ turn: { id: 'turn-' + ++turns, status: 'inProgress', items: [] } }))
-  const session = await openCodexSession({ hub, release: hub.retain(), target: { kind: 'create', cwd: CWD }, cwd: CWD, config: {}, prefs: memoryCodexPrefs({}), executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug: () => undefined }, clock }) as import('../src/agent/session.js').AgentSession
+  const session = await openCodexSession({ hub, release: hub.retain(), target: { kind: 'create', cwd: CWD }, cwd: CWD, config: {}, prefs: memoryCodexPrefs({}), executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug: () => undefined }, clock, ...(auth === undefined ? {} : { auth: auth as never }) }) as import('../src/agent/session.js').AgentSession
   const events: Event[] = []
   session.subscribe(batch => events.push(...batch))
   const ctx = { on: () => () => undefined, get: () => undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never
@@ -188,3 +188,26 @@ for (const loop of [false, true]) {
   } finally { await f.close() }
 }
 console.log('\nverify-codex-reconnect OK (' + passed + ' checks)')
+
+// A REJECTED thread/resume must land the session in an honest dead state
+// (GPT final-review finding): the parked input queue is discarded with a
+// pending event, the status returns to idle, and a later submit fails fast
+// instead of parking forever behind an offline flag nothing clears. The
+// restart also re-runs generation-scoped auth injection (start() call count).
+{
+  let authStarts = 0
+  const auth = { start: async () => { authStarts += 1 }, subscribe: () => () => undefined, account: async () => ({}) }
+  const f = await fixture(auth)
+  try {
+    await f.start()
+    f.fake.on('thread/resume', () => { throw new FakeRpcError(-32600, 'thread already has an active writer') })
+    await f.crash()
+    check('rejected resume emits the connection-failed error', await settled(() => f.events.some(event => event.type === 'notice' && event.key === 'codex-connection' && event.level === 'error')))
+    check('rejected resume returns the session to idle', f.events.some(event => event.type === 'session.status' && event.status === 'idle'))
+    check('rejected resume never reports success', !f.events.some(event => event.type === 'notice' && event.key === 'codex-connection' && event.level === 'info'))
+    let failed = false
+    await f.session.submit({ text: 'again', clientMessageId: 'client-2' }, 'turn').then(() => undefined, () => { failed = true })
+    check('a later submit fails fast instead of parking (permanentlyLost gate)', failed)
+    check('the restart re-ran generation-scoped auth injection', authStarts >= 1, String(authStarts))
+  } finally { await f.close() }
+}

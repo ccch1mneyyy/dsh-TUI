@@ -57,6 +57,10 @@ function todoStatus(status: string | undefined): TodoPanelItem['status'] {
 export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapshot): LiveTranslator {
   /** The window last announced (a change re-announces). */
   let contextWindow: number | undefined
+  /** Native turn id → our turn number (bounded): a straggler usage update
+   *  naming an already-closed turn is attributed to THAT turn, never folded
+   *  into whatever turn is live when it finally arrives. */
+  const turnNumbers = new Map<string, number>()
   /** Turns closed here (by `turn/completed` or a forced settle): their late
    *  item, delta and usage traffic changes nothing (bounded, newest kept). */
   const closedTurns = new Set<string>()
@@ -99,6 +103,10 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
         if (id !== undefined && closedTurns.has(id)) return out
         if (id !== undefined && !ctx.turnOpen) ctx.turnId = id
         closeTurn(ctx, out, turnEndReason(turn), now)
+        if (id !== undefined) {
+          turnNumbers.set(id, ctx.turn)
+          if (turnNumbers.size > 64) turnNumbers.delete(turnNumbers.keys().next().value!)
+        }
         markClosed(id ?? ctx.turnId)
         return out
       }
@@ -108,7 +116,15 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
         if (item === undefined) return out
         const turnId = str(params.turnId)
         if (turnId !== undefined && !ctx.turnOpen) ctx.turnId = turnId
-        return itemEvents(item, method === NOTIFY.itemStarted ? 'started' : 'completed', ctx, now)
+        const events = itemEvents(item, method === NOTIFY.itemStarted ? 'started' : 'completed', ctx, now)
+        // itemEvents may have opened the turn and fixed its number: record the
+        // native-id → turn mapping AFTER it ran (a premature record would store
+        // the previous turn's number).
+        if (turnId !== undefined) {
+          turnNumbers.set(turnId, ctx.turn)
+          if (turnNumbers.size > 64) turnNumbers.delete(turnNumbers.keys().next().value!)
+        }
+        return events
       }
       case NOTIFY.agentMessageDelta:
       case NOTIFY.planDelta:
@@ -164,7 +180,11 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
           contextWindow = window
           out.push({ type: 'context.capacity', contextWindow: window })
         }
-        if (last !== undefined) reportUsage(ctx, out, last, now)
+        if (last !== undefined) {
+          const nativeTurn = str(params.turnId)
+          const attributed = nativeTurn === undefined || nativeTurn === ctx.turnId ? ctx.turn : turnNumbers.get(nativeTurn)
+          reportUsage(ctx, out, last, now, attributed === undefined || attributed === ctx.turn ? undefined : { turn: attributed, stale: true })
+        }
         const total = num(rec(rec(params.tokenUsage)?.last)?.totalTokens)
         if (total !== undefined) out.push({ type: 'context.usage', used: Math.max(0, total - 12_000), ...(contextWindow === undefined ? {} : { max: Math.max(0, contextWindow - 12_000) }) })
         return out

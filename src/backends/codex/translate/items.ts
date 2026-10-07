@@ -208,8 +208,12 @@ export function closeTurn(ctx: ItemContext, out: AgentEvent[], reason: TurnEndRe
   if (hint !== undefined) out.push(hint)
 }
 
-/** Meter one model call without manufacturing or changing a message. */
-export function reportUsage(ctx: ItemContext, out: AgentEvent[], usage: UsageDelta, time: number): void {
+/** Meter one model call without manufacturing or changing a message.
+ *
+ * `attribution` names the turn the WIRE notification carried: a straggler
+ * usage for an already-closed turn (arriving after a newer turn opened) is
+ * booked under ITS turn and never folded into the live turn's ledger. */
+export function reportUsage(ctx: ItemContext, out: AgentEvent[], usage: UsageDelta, time: number, attribution?: { turn: number; stale: boolean }): void {
   // The usage event is always emitted: metering arriving after the turn
   // closed still books the session totals and refreshes the context reading.
   // The turn ledger `turn.end` embeds is topped up only while the turn is
@@ -220,8 +224,10 @@ export function reportUsage(ctx: ItemContext, out: AgentEvent[], usage: UsageDel
   // model call of this stream, and a usage event must cite a turn that this
   // stream really opened.
   if (ctx.turn === 0) return
-  if (ctx.turnOpen) ctx.turnUsage = addUsage(ctx.turnUsage, usage)
-  out.push({ type: 'usage', seq: ctx.nextSeq(), turn: ctx.turn, step: Math.max(1, ctx.step), usage, time, ...(ctx.model === '' ? {} : { model: ctx.model }) })
+  const turn = attribution?.turn ?? ctx.turn
+  const stale = attribution?.stale === true || turn !== ctx.turn
+  if (!stale && ctx.turnOpen) ctx.turnUsage = addUsage(ctx.turnUsage, usage)
+  out.push({ type: 'usage', seq: ctx.nextSeq(), turn, step: stale ? 1 : Math.max(1, ctx.step), usage, time, ...(ctx.model === '' ? {} : { model: ctx.model }) })
 }
 
 /** The user-facing text and the model-facing blocks of a user message. */

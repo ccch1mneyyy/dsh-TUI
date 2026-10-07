@@ -17,7 +17,7 @@ const PALE = { r: 211, g: 225, b: 254 }
 /** SGR only — the block font paints with truecolor foreground sequences. */
 const SGR = /\x1b\[[0-9;]*m/g
 /** 开屏实际用到的字母（deepseek 词 + claude 品牌词，见 `branding.ts`）；每款字体都必须有。 */
-const LETTERS = [...new Set([...'DEEPSEEK', ...'HARNESS', ...'CLAUDE', ...'CODE'])]
+const LETTERS = [...new Set([...'DEEPSEEK', ...'HARNESS', ...'CLAUDE', ...'CODE', ...'CODEX'])]
 
 let failed = 0
 const check = (name: string, ok: boolean, detail = ''): void => {
@@ -30,11 +30,11 @@ const columns = (row: string): number => [...row.replace(SGR, '')].length
 // ── ①②③ 逐款字体 × 两副词（默认 DEEPSEEK/HARNESS + claude 品牌 CLAUDE/CODE）──
 // claude 词走 `withTagline`（LogoV2 的品牌分支同一条路），契约逐款钉死。
 for (const font of SPLASH_FONTS) {
-  const wordPairs: readonly [string, typeof font][] = [
-    [font.id, font],
-    [`${font.id} claude`, withTagline(font, 'CLAUDE', 'CODE', { wide: true })],
+  const wordPairs: readonly [string, typeof font, 'equal' | 'uniform'][] = [
+    [font.id, font, 'equal'],
+    [`${font.id} codex`, withTagline(font, 'CODEX', 'HARNESS', { uniform: true }), 'uniform'],
   ]
-  for (const [label, wordFont] of wordPairs) {
+  for (const [label, wordFont, mode] of wordPairs) {
     const { top, bottom, topKerning, bottomKerning, bottomIndent } = wordFont.tagline
     const topRows = renderBigText(wordFont, top, 0, ACCENT, ACCENT, PALE, 60, topKerning)
     const bottomRows = renderBigText(wordFont, bottom, 0, ACCENT, PALE, PALE, 60, bottomKerning, bottomIndent)
@@ -44,21 +44,38 @@ for (const font of SPLASH_FONTS) {
     const inkBottom = bigTextWidth(wordFont, bottom, bottomKerning)
 
     check(`[${label}] 两行都是 5 行`, topRows.length === 5 && bottomRows.length === 5)
-    check(
-      `[${label}] 两行画出来的列数相等`,
-      topWidth === bottomWidth && topRows.every((row, i) => columns(row) === columns(bottomRows[i] ?? '')),
-      `${topWidth} vs ${bottomWidth}`,
-    )
-    check(
-      `[${label}] 下排居中（左右留白差 ≤ 1 列）`,
-      Math.abs(inkTop - inkBottom - 2 * bottomIndent) <= 1,
-      `ink ${inkTop}/${inkBottom} indent ${bottomIndent}`,
-    )
+    if (mode === 'equal') {
+      check(
+        `[${label}] 两行画出来的列数相等`,
+        topWidth === bottomWidth && topRows.every((row, i) => columns(row) === columns(bottomRows[i] ?? '')),
+        `${topWidth} vs ${bottomWidth}`,
+      )
+      check(
+        `[${label}] 下排居中（左右留白差 ≤ 1 列）`,
+        Math.abs(inkTop - inkBottom - 2 * bottomIndent) <= 1,
+        `ink ${inkTop}/${inkBottom} indent ${bottomIndent}`,
+      )
+    } else {
+      // uniform 档（品牌两行同字距）：字距一致、不垫缩进、宽度天然不同。
+      check(`[${label}] 两行同字距且不垫缩进`, topKerning === bottomKerning && bottomIndent === 0, `tk ${topKerning} bk ${bottomKerning} indent ${bottomIndent}`)
+    }
     check(
       `[${label}] bigTextWidth 等于实际画出的列数`,
       bigTextWidth(wordFont, top, topKerning) === topWidth - topKerning &&
         bigTextWidth(wordFont, bottom, bottomKerning) === bottomWidth - bottomIndent - bottomKerning,
     )
+    if (mode === 'uniform') {
+      // 窄终端阶梯按**两行中较宽者**判定：上排放得下、下排放不下的宽度
+      // 必须降级，不能让宽的那行被截字形（GPT 终审 finding）。
+      const widest = Math.max(inkTop, inkBottom) + Math.max(topKerning, bottomKerning)
+      const narrowTop = inkTop + topKerning
+      if (widest > narrowTop) {
+        const between = resolveSplashLayout(narrowTop + COLUMN_GAP, { whale: true, font: wordFont })
+        check(`[${label}] 上排放下而下排放不下时降级（不截宽行)`, between.showBigTitle === false, JSON.stringify(between))
+      }
+      const fits = resolveSplashLayout(widest, { whale: false, font: wordFont })
+      check(`[${label}] 宽行放得下时才画大字`, fits.showBigTitle === true, JSON.stringify(fits))
+    }
   }
   check(
     `[${font.id}] 字形与 fallback 都是 glyphWidth 宽`,

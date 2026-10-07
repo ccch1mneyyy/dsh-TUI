@@ -445,6 +445,7 @@ const dict = {
   'codex-hint-sandbox': { zh: '沙箱出错：Linux 上请安装 bubblewrap（例如 apt install bubblewrap）', en: 'Sandbox error: on Linux install bubblewrap (e.g. apt install bubblewrap)' },
   'codex-connection-lost': { zh: 'Codex 进程退出，正在重连…', en: 'The Codex process exited; reconnecting…' },
   'codex-connection-failed': { zh: 'Codex 进程无法启动：{{err}}', en: 'The Codex process cannot start: {{err}}' },
+  'codex-connection-dead': { zh: '连接已断开且无法恢复，请重新打开会话', en: 'The connection is gone for good; please reopen the session' },
   'codex-reconnected': { zh: '已重新连接 Codex', en: 'Reconnected to Codex' },
   'codex-not-installed': { zh: '未找到 codex：npm i -g @openai/codex 或 brew install codex，或设置 CODEX_EXECUTABLE', en: 'codex was not found: npm i -g @openai/codex or brew install codex, or set CODEX_EXECUTABLE' },
   'codex-too-old': { zh: 'codex {{version}} 太旧（至少 {{min}}）：请升级', en: 'codex {{version}} is too old (needs {{min}}): please upgrade' },

@@ -124,15 +124,23 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       outputEstimate: number
     }
     | undefined
-  /** The step the settle folded LAST (its token contribution, real or
-   *  estimated): a late real usage report naming the same (turn, step) swaps
-   *  the estimate in place (Codex meters after the reply settles). */
-  let tpsLastStep:
+  /** The open turn's per-step token contributions (real or estimated): a
+   *  late real usage report naming the same (turn, step) swaps the estimate
+   *  in place (Codex meters after the reply settles). */
+  let tpsTurnSteps:
     | {
-      turn: number
       step: number
       tokens: number
       estimated: boolean
+    }[]
+  /** The LAST ended turn's fold, kept so a straggler usage arriving after
+   *  turn.end still corrects the tps readout and the pushed sample. */
+  let tpsClosedTurn:
+    | {
+      turn: number
+      decodeMs: number
+      steps: { step: number; tokens: number; estimated: boolean }[]
+      endAt: number
     }
     | undefined
   /** Per-turn usage ledger: reset at turn.start, summed from each assistant
@@ -702,7 +710,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       // Remember the step's contribution so a late real usage report for the
       // same (turn, step) can swap the estimate (see the usage case below).
       if (outputTokens !== undefined && tpsTurn === event.turn) {
-        tpsLastStep = { turn: event.turn, step: event.step, tokens: outputTokens, estimated: reported === undefined }
+        tpsTurnSteps = [...tpsTurnSteps.filter(step => step.step !== event.step), { step: event.step, tokens: outputTokens, estimated: reported === undefined }]
       }
     }
     if (
@@ -988,8 +996,13 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         // decode sample exists for this turn.
         state.tps = tpsBeforeTurn
       }
+      // Keep the ended turn's fold ONE turn longer: a straggler usage report
+      // (Codex may deliver the final metering after turn/completed) still
+      // corrects the tps readout and the just-pushed sample through it.
+      tpsClosedTurn = tpsTurnSteps.length > 0 ? { turn: event.turn, decodeMs: tpsTurnDecodeMs, steps: tpsTurnSteps, endAt: event.time } : undefined
       tpsTurn = undefined
       tpsStep = undefined
+      tpsTurnSteps = []
       tpsTurnDecodeMs = 0
       tpsTurnDecodeTokens = 0
       tpsTurnSampled = false
@@ -1179,20 +1192,28 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         // A late real report (Codex meters after the reply settles) names the
         // step it describes: replace that step's estimate in the turn fold so
         // the live tps and the turn-end sample read real tokens, not a guess.
-        if (
-          tpsTurn === event.turn &&
-          tpsLastStep !== undefined &&
-          tpsLastStep.turn === event.turn &&
-          tpsLastStep.step === event.step &&
-          tpsLastStep.estimated
-        ) {
-          const real = usageOutputTokens(event.usage)
-          if (real !== undefined) {
-            tpsTurnDecodeTokens += real - tpsLastStep.tokens
-            tpsLastStep = { ...tpsLastStep, tokens: real, estimated: false }
-            if (tpsTurnDecodeMs > 0 && tpsTurnSampled) {
-              state.tps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
-            }
+        // The same swap also serves the LAST ended turn (a straggler after
+        // turn.end corrects the readout and the pushed sample in place).
+        const real = usageOutputTokens(event.usage)
+        const swap = (steps: { step: number; tokens: number; estimated: boolean }[], decodeMs: number): number | undefined => {
+          const target = steps.find(step => step.step === event.step && step.estimated)
+          if (target === undefined || real === undefined) return undefined
+          target.tokens = real
+          target.estimated = false
+          return steps.reduce((sum, step) => sum + step.tokens, 0)
+        }
+        if (real !== undefined && tpsTurn === event.turn) {
+          const total = swap(tpsTurnSteps, tpsTurnDecodeMs)
+          if (total !== undefined) {
+            tpsTurnDecodeTokens = total
+            if (tpsTurnDecodeMs > 0 && tpsTurnSampled) state.tps = total / (tpsTurnDecodeMs / 1000)
+          }
+        } else if (real !== undefined && tpsClosedTurn?.turn === event.turn) {
+          const total = swap(tpsClosedTurn.steps, tpsClosedTurn.decodeMs)
+          if (total !== undefined && tpsClosedTurn.decodeMs > 0) {
+            state.tps = total / (tpsClosedTurn.decodeMs / 1000)
+            const sample = state.tpsSamples.at(-1)
+            if (sample !== undefined && sample.at === tpsClosedTurn.endAt) sample.tps = state.tps
           }
         }
         return
@@ -1254,7 +1275,8 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         tpsTurnDecodeTokens = 0
         tpsTurnSampled = false
         tpsStep = undefined
-        tpsLastStep = undefined
+        tpsTurnSteps = []
+        tpsClosedTurn = undefined
         return
       case 'turn.end':
         applyTurnEnd(event)
@@ -1515,7 +1537,8 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     lastNotedTurnModel = undefined
     tpsTurn = undefined
     tpsStep = undefined
-    tpsLastStep = undefined
+    tpsTurnSteps = []
+    tpsClosedTurn = undefined
     tpsTurnDecodeMs = 0
     tpsTurnDecodeTokens = 0
     tpsTurnSampled = false

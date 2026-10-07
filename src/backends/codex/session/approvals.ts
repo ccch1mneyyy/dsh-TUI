@@ -44,6 +44,10 @@ interface Parked {
   readonly key: string
   readonly request: HubServerRequest
   readonly kind: Kind
+  /** The thread the request came from (absent = this session's own thread).
+   *  A subagent's background request parked here must SURVIVE this thread's
+   *  turn completion — the server still awaits its answer. */
+  readonly threadId?: string
   readonly itemId?: string
   readonly view?: PermissionRequestView
   readonly choices?: readonly Choice[]
@@ -204,6 +208,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
     }
     const params = request.params
     const itemId = str(params.itemId)
+    const threadId = str(params.threadId)
     switch (request.method) {
       case SERVER_REQUEST.commandApproval: {
         const choices = commandChoices(params)
@@ -223,7 +228,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           feedback: true,
           options: choices.map(choice => choice.option),
         }
-        park({ key: request.key, request, kind: 'command', ...(itemId === undefined ? {} : { itemId }), view, choices }, { type: 'permission.request', request: view })
+        park({ key: request.key, request, kind: 'command', ...(threadId === undefined ? {} : { threadId }), ...(itemId === undefined ? {} : { itemId }), view, choices }, { type: 'permission.request', request: view })
         return
       }
       case SERVER_REQUEST.fileChangeApproval: {
@@ -245,7 +250,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           feedback: true,
           options: choices.map(choice => choice.option),
         }
-        park({ key: request.key, request, kind: 'file', ...(itemId === undefined ? {} : { itemId }), view, choices }, { type: 'permission.request', request: view })
+        park({ key: request.key, request, kind: 'file', ...(threadId === undefined ? {} : { threadId }), ...(itemId === undefined ? {} : { itemId }), view, choices }, { type: 'permission.request', request: view })
         return
       }
       case SERVER_REQUEST.permissionsApproval: {
@@ -270,7 +275,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           ...agentOf(params),
           options: choices.map(choice => choice.option),
         }
-        park({ key: request.key, request, kind: 'permissions', ...(itemId === undefined ? {} : { itemId }), view, choices }, { type: 'permission.request', request: view })
+        park({ key: request.key, request, kind: 'permissions', ...(threadId === undefined ? {} : { threadId }), ...(itemId === undefined ? {} : { itemId }), view, choices }, { type: 'permission.request', request: view })
         return
       }
       case SERVER_REQUEST.userInput: {
@@ -301,7 +306,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           return
         }
         const view = { requestId: request.key, ...(itemId === undefined ? {} : { callId: itemId }), ...agentOf(params), questions }
-        const entry: Parked = { key: request.key, request, kind: 'question', ...(itemId === undefined ? {} : { itemId }), questionIds: ids }
+        const entry: Parked = { key: request.key, request, kind: 'question', ...(threadId === undefined ? {} : { threadId }), ...(itemId === undefined ? {} : { itemId }), questionIds: ids }
         park(entry, { type: 'question.request', request: view })
         const autoMs = num(params.autoResolutionMs)
         if (autoMs !== undefined && autoMs >= 0) {
@@ -474,9 +479,14 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
         if (entry.itemId === itemId) settle(entry, entry.answered ?? 'cancelled')
       }
     },
-    /** A turn ended: no prompt of it can still be answered. */
+    /** A turn ended: no prompt OF THIS THREAD can still be answered. A
+     *  subagent's background request parked here outlives it (the server still
+     *  awaits that answer; it settles via resolved/itemCompleted/dispose). */
     turnEnded(): void {
-      for (const entry of [...parked.values()]) settle(entry, entry.answered ?? 'cancelled')
+      for (const entry of [...parked.values()]) {
+        if (entry.threadId !== undefined && entry.threadId !== deps.threadId) continue
+        settle(entry, entry.answered ?? 'cancelled')
+      }
     },
     pendingViews(): readonly PermissionRequestView[] {
       return [...parked.values()].flatMap(entry => entry.view === undefined || entry.answered !== undefined ? [] : [entry.view])

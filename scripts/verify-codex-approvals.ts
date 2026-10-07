@@ -260,6 +260,21 @@ const respond = h.session.capabilities.permissions!.respond
   await c.session.dispose()
 }
 {
+  // A routed child thread's parked approval must SURVIVE the parent thread's
+  // turn completion (GPT final-review finding): the server still awaits that
+  // answer; only resolved / itemCompleted / dispose may settle it.
+  const c = await openHarness()
+  await c.notify('item/started', { threadId: THREAD, turnId: 'turn-c2', item: { type: 'collabAgentToolCall', id: 'collab-2', tool: 'spawnAgent', status: 'inProgress', senderThreadId: THREAD, receiverThreadIds: ['child-thread-2'], prompt: 'background work', agentsStates: {} } })
+  const answer = c.fake.request('item/commandExecution/requestApproval', { ...COMMAND, itemId: 'exec-child2', threadId: 'child-thread-2' })
+  await tick()
+  check('child approval parked before the parent turn ends', c.session.capabilities.permissions!.pending().length === 1)
+  await c.notify('turn/completed', { turn: { id: 'turn-c2', status: 'completed', items: [] } })
+  check('parent turn completion does not settle the child approval', c.session.capabilities.permissions!.pending().length === 1 && of(c.events(), 'permission.settled').length === 0)
+  c.session.capabilities.permissions!.respond(of(c.events(), 'permission.request').at(-1)!.request.requestId, { kind: 'allow-once' })
+  check('the child approval is still answerable afterwards', ((await answer).result as Rec | undefined)?.decision !== undefined)
+  await c.session.dispose()
+}
+{
   const answer = h.fake.request('item/commandExecution/requestApproval', { ...COMMAND, itemId: 'exec-dispose' })
   const question = h.fake.request('item/tool/requestUserInput', { threadId: THREAD, turnId: 'turn-z', itemId: 'q-dispose', isBlocking: true, autoResolutionMs: null, questions: [{ id: 'q', header: '', question: 'Still there?', isOther: true, isSecret: false, options: [] }] })
   await tick()

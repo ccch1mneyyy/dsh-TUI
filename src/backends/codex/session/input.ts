@@ -84,6 +84,8 @@ export function createInputQueue(deps: InputQueueDeps) {
   let steerFallbackSaid = false
   /** The connection is down: nothing is sent until it is back. */
   let offline = false
+  /** The connection is gone FOR GOOD: submits fail fast instead of parking. */
+  let dead = false
 
   const snapshot = (): PendingItem[] => [
     ...[...steered.values()].map(entry => ({ id: entry.id, text: entry.text, placement: 'steer' as const })),
@@ -227,6 +229,7 @@ export function createInputQueue(deps: InputQueueDeps) {
 
     async submit(input: AgentInput, placement: SubmitPlacement, wireInput?: readonly UserInput[]): Promise<{ readonly accepted: boolean; readonly reason?: string }> {
       if (deps.closed()) throw new Error(t('codex-session-closed'))
+      if (dead) throw new Error(t('codex-connection-dead'))
       if ((input.images ?? []).length === 0 && (input.blocks ?? []).some(block => block.type === 'image')) throw new Error(t('codex-image-unreadable', { name: input.clientMessageId }))
       const pictureInputs = await codexImageInputs(input.images ?? [])
       if (deps.closed()) throw new Error(t('codex-session-closed'))
@@ -308,7 +311,18 @@ export function createInputQueue(deps: InputQueueDeps) {
     },
     connectionRestored(): void {
       offline = false
+      dead = false
       drain()
+    },
+    /** The connection is gone for good: the parked queue is discarded (their
+     *  pending rows say so) and later submits fail fast instead of parking
+     *  forever behind an offline flag nothing will ever clear. */
+    permanentLoss(): readonly AgentEvent[] {
+      offline = false
+      dead = true
+      const dropped = queue.map(entry => entry.id)
+      queue = []
+      return dropped.length === 0 ? [] : [pendingEvent({ discarded: dropped })]
     },
 
     /** Dispose: forget everything, stop the timer. */

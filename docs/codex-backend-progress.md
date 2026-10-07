@@ -352,6 +352,34 @@ goldens 变化：两张卡片标题从错误的引号剥离改为正确脚本（
   清单/认证、instructionSources、独立推理tokens/支出状态、命名权限档、归档浏览/取消归档。
   真实凭据和交互TTY仍需维护者验收。
 
+## 终审（GPT-6 三路评审）与合并前修复（2026-10-07）
+
+分支 rebase 到 main（d70824eb，主题化改造冲突逐块合并：isLightThemeActive 身份判定
+并入 codex 双主题、StatusMetrics 品牌表保留 + main 新注释；再基静默丢失检测器扫出
+events.ts 丢 `tool.output` case 与账本重排，逐字恢复）。GPT-6 Astra 三路评审
+（后端核心 / 中立层+品牌 / 测试打包卫生），实测复现后修复：
+
+- **R-A1** resume 拒绝卡死：catch 只发通知，rejoining=true 永不清、输入队列永停。
+  修：按 reconnect-incomplete 语义诚实收敛（permanentlyLost、清挂起、forceClose、
+  idle）；input 新增 permanentLoss（丢弃队列 + dead 标记，后续 submit 快速失败），
+  permanent connectionLost 同样接线；i18n 新增 codex-connection-dead。
+- **R-A2** 重启后代际凭据丢失：connectionRestored 不重注入托管 ChatGPT 令牌（探针：
+  login 只在 generation 1）。修：恢复时并行 auth.start()（代际感知自动重注），
+  输入队列重开前 await，提交不可能先于凭据到达新子进程。
+- **R-A3** 父回合完成误清子代理审批：turnEnded 无差别 settle 全部 parked（含后台
+  子线程请求，服务端还在等）。修：parked 记录来源 threadId，turnEnded 只清本线程；
+  子请求由 resolved/itemCompleted/dispose 收口。
+- **R-B1** 窄终端阶梯只按上排宽度判定：uniform 后 CODEX(40) 窄于 HARNESS(56)，
+  42-58 列区间会截下排字形。修：titleWidth 取两行较宽者（deepseek 等宽契约不变）。
+- **R-B2** 迟到 usage 跨回合错归属 + turn 后无法修正：live 维护 native turnId→回
+  合号映射（事后记录，64 条上限），迟到报告按其回合记账（不折进活回合 ledger）；
+  投影层 tpsLastStep 升级为逐步记录数组并在 turn.end 后保留一轮——turn 结束后到达
+  的真实用量原地修正读数与已推采样。
+- 回归：verify-codex-reconnect +拒绝场景/快败提交/auth 重注入计数、
+  verify-codex-approvals +子审批存活、verify-splash-layout codex uniform 对与
+  「上排放下而下排放不下时降级」阶梯断言、verify-tps-backfill +turn 后修正三例。
+- 卫生：删除 .preset-path 探针残留目录。C 路评审（注册/打包/文档/i18n/残留）零阻塞。
+
 ## 验收轮 4：TPS 与上下文计量修复（2026-10-07）
 
 用户报告：cc 与 codex 的 tps 读数不准、codex 上下文也有问题。三处根因 + 一处协议错参：

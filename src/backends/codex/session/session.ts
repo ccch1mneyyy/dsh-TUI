@@ -458,9 +458,11 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       planReview.withdraw()
       output.flush()
       emit([
-        // A transport outage is not a durable failure of the native turn.
+        // A transport outage is not a durable failure of the native turn. A
+        // PERMANENT one also fails the parked inputs honestly — nothing will
+        // ever drain that queue, so parking forever would lie to the user.
         ...(permanent ? live.forceClose({ kind: 'error', message: errorText(error) }) : []),
-        ...input.connectionLost(),
+        ...(permanent ? input.permanentLoss() : input.connectionLost()),
         { type: 'notice', level: permanent ? 'error' : 'warning', key: 'codex-connection', text: permanent ? t('codex-connection-failed', { err: errorText(error) }) : t('codex-connection-lost') },
         { type: 'session.status', status: !permanent && ctx.turnOpen ? 'running' : 'idle' },
       ])
@@ -469,6 +471,15 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       if (disposing) return
       const reconnectingId = threadId
       const reconnectGeneration = hub.generation
+      // A restarted child is a clean process: generation-scoped managed
+      // credentials (the ChatGPT token login) live only in the child they
+      // were injected into. start() is generation-aware and re-runs the
+      // injection for the new generation; it races the resume harmlessly and
+      // is awaited before the input queue reopens, so a submit can never
+      // reach the new child before its credentials exist. (GPT 终审 finding.)
+      const authReady = deps.auth?.start().then(() => undefined, (error: unknown) => {
+        debug(`codex: auth re-injection after restart failed (${errorText(error)})`)
+      })
       const knownTurns = new Set(seenTurns.keys())
       void hub.call(CLIENT.threadResume, { threadId, excludeTurns: true, initialTurnsPage: INITIAL_TURNS_PAGE, ...resumeOverrides() }).then(async answer => {
         const current = (): boolean => !disposing && threadId === reconnectingId && hub.generation === reconnectGeneration
@@ -536,11 +547,23 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
         for (const deliver of reconnectHeld.splice(0)) deliver()
         await tasks.refresh()
         if (!current() || !connected) return
+        if (authReady !== undefined) await authReady
+        if (!current()) return
         input.connectionRestored()
       }).catch((error: unknown) => {
         if (disposing || threadId !== reconnectingId || hub.generation !== reconnectGeneration) return
         debug(`codex: resubscribe after restart failed (${errorText(error)})`)
-        emit([{ type: 'notice', level: 'error', key: 'codex-connection', text: t('codex-connection-failed', { err: errorText(error) }) }])
+        // thread/resume 拒绝（如该线程已被另一进程持有）不能只发一条通知就
+        // 把会话留在 rejoining=true、输入离线的僵尸态——新提交会永远停在客户
+        // 端队列里。按 reconnect-incomplete 的既有语义诚实收敛：线程状态作废、
+        // 清空挂起的服务端请求、回到只读 idle（GPT 终审 finding，session.ts）。
+        permanentlyLost = true
+        rejoining = false
+        reconnectHeld.length = 0
+        emit([...live.forceClose({ kind: 'error', message: errorText(error) }),
+          ...input.permanentLoss(),
+          { type: 'notice', level: 'error', key: 'codex-connection', text: t('codex-connection-failed', { err: errorText(error) }) },
+          { type: 'session.status', status: 'idle' }])
       })
     },
   }

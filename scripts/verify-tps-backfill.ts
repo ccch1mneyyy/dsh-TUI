@@ -71,6 +71,30 @@ check('later usage for a real-token step does not re-apply', near(harness.state.
 events({ type: 'step.end', turn: 2, step: 1 }, { type: 'turn.end', turn: 2, reason: { kind: 'completed' }, time: B + 12_200 })
 check('second turn samples at the settled rate', harness.state.tpsSamples.length === 2 && near(harness.state.tpsSamples[1]?.tps, 120), JSON.stringify(harness.state.tpsSamples))
 
+// ── Turn 3: the straggler arrives AFTER turn.end — the readout and the
+// pushed sample are still corrected in place (Codex can meter past
+// turn/completed; the closed turn's fold is kept one turn longer). ──────
+events(
+  { type: 'turn.start', turn: 3, origin: 'user', time: B + 20_000 },
+  { type: 'step.start', turn: 3, step: 1 },
+  { type: 'assistant.attempt.start', attemptId: 'a3', turn: 3, step: 1 },
+)
+events(delta('a3', B + 21_000, '中文回复'))
+events(settle('a3', 3, 1, B + 22_000))
+events({ type: 'step.end', turn: 3, step: 1 }, { type: 'turn.end', turn: 3, reason: { kind: 'completed' }, time: B + 22_100 })
+const sampleAtEnd = harness.state.tpsSamples.at(-1)
+check('turn-3 sample exists before the straggler', sampleAtEnd !== undefined && sampleAtEnd.tps > 0, JSON.stringify(harness.state.tpsSamples.at(-1)))
+events({ type: 'usage', seq: nextSeq(), turn: 3, step: 1, time: B + 22_400, usage: { input: 1_000, output: 400 } })
+check('post-end usage corrects the readout (400 tok / 1s decode)', near(harness.state.tps, 400), String(harness.state.tps))
+check('post-end usage patches the pushed sample in place', harness.state.tpsSamples.at(-1) === sampleAtEnd && near(sampleAtEnd?.tps, 400), JSON.stringify(harness.state.tpsSamples.at(-1)))
+events(
+  { type: 'turn.start', turn: 4, origin: 'user', time: B + 30_000 },
+  { type: 'step.start', turn: 4, step: 1 },
+  { type: 'turn.end', turn: 4, reason: { kind: 'completed' }, time: B + 30_100 },
+)
+events({ type: 'usage', seq: nextSeq(), turn: 3, step: 1, time: B + 30_200, usage: { input: 1_000, output: 9_999 } })
+check('a straggler older than the last ended turn no longer patches', near(harness.state.tps, 400), String(harness.state.tps))
+
 if (failed > 0) {
   console.error(`verify-tps-backfill: ${failed} check(s) failed`)
   process.exit(1)
