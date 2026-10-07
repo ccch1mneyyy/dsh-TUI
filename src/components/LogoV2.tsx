@@ -10,7 +10,7 @@ import { getTheme, isLightThemeActive } from '../theme.js'
 import { BRAND_SPLASH_WORDS, BRAND_TAGLINE, type Brand } from '../branding.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import { interpolateColor, parseRGB } from './Spinner/spinnerUtils.js'
-import { renderBigText } from './bigfont.js'
+import { paintedWidth, renderBigText } from './bigfont.js'
 import { COLUMN_GAP, WHALE_BOX_WIDTH, resolveSplashLayout } from './splashLayout.js'
 import { withTagline, pickSplashFont, splashFontById, type SplashFont } from './splashFonts.js'
 import { pickSplashEgg, splashStarLine, type SplashEgg } from './splashEggs.js'
@@ -301,17 +301,18 @@ export function LogoV2({
   const font = fontId === undefined ? dailyFont : splashFontById(fontId)
 
   // 品牌词（`branding.ts`）：claude 内核换 `CLAUDE`/`CODE`、codex 内核换
-  // `CODEX`/`HARNESS`——字身不变、字距取最宽可行解（两词字数差大，紧解上排
-  // 字距只有 1、整体局促），窄终端阶梯阈值跟着当天真实标题宽度走，与彩蛋
-  // 共用 `withTagline`。
+  // `CODEX`/`HARNESS`——字身不变、**两行同字距**（用户点名「间隙一致」：
+  // 等宽契约靠两行字距互补，字数差大的词对间隙观感差很多），块宽以默认
+  // 词对紧解为预算。窄终端阶梯阈值跟着当天真实标题宽度走，与彩蛋共用
+  // `withTagline`。
   const words = BRAND_SPLASH_WORDS[brand]
-  const brandFont = brand !== 'deepseek' ? withTagline(font, words.top, words.bottom, { wide: true }) : font
+  const brandFont = brand !== 'deepseek' ? withTagline(font, words.top, words.bottom, { uniform: true }) : font
 
   // 节日彩蛋：本地日期整天恒定，每次 mount 只判一次（照 pickSplashFont 的写法）。
   // 只换下排词——上排钉在品牌词上（deepseek 的 `DEEPSEEK` / claude 的 `CLAUDE`
   // / codex 的 `CODEX`）。
   const [dailyEgg] = React.useState<SplashEgg | null>(() => (egg === undefined ? pickSplashEgg() : egg))
-  const titleFont = dailyEgg === null ? brandFont : withTagline(font, brand === 'deepseek' ? font.tagline.top : words.top, dailyEgg.bottom, { wide: brand !== 'deepseek' })
+  const titleFont = dailyEgg === null ? brandFont : withTagline(font, brand === 'deepseek' ? font.tagline.top : words.top, dailyEgg.bottom, brand === 'deepseek' ? undefined : { uniform: true })
 
   // 窄终端阶梯：鲸鱼 + 大字 → 纯大字 → 纯鲸鱼 → 一行纯文字（阈值随字体字身宽度变）。
   const splash = resolveSplashLayout(columns, { whale, font: titleFont })
@@ -561,8 +562,19 @@ export function LogoV2({
     ?? bevelShade?.to
     ?? brandLadder?.end
     ?? PALE
-  const bigDeepSeek = renderBigText(titleFont, top, t, titleFrom, titleTopTo, flash, 60, topKerning)
-  const bigHarness = renderBigText(titleFont, bottom, t, titleBottomFrom, titleBottomTo, flash, 60, bottomKerning, bottomIndent)
+  // 品牌档两行同字距后宽度不同，对齐按形态处理（用户定调）：居中形态
+  // （落地页/启动页）窄行补半差，两行各自居中成金字塔；钉左形态（对话页
+  // 标题）两行左缘对齐。deepseek 档维持求解器的 bottomIndent（等宽契约）。
+  const uniformBrand = brand !== 'deepseek'
+  const centeredTitle = uniformBrand && align === 'center'
+  const topInk = paintedWidth(titleFont, top, topKerning)
+  const bottomInk = paintedWidth(titleFont, bottom, bottomKerning)
+  const topIndent = centeredTitle ? Math.max(0, Math.round((bottomInk - topInk) / 2)) : 0
+  const bottomShift = centeredTitle
+    ? Math.max(0, Math.round((topInk - bottomInk) / 2))
+    : (uniformBrand ? 0 : bottomIndent)
+  const bigDeepSeek = renderBigText(titleFont, top, t, titleFrom, titleTopTo, flash, 60, topKerning, topIndent)
+  const bigHarness = renderBigText(titleFont, bottom, t, titleBottomFrom, titleBottomTo, flash, 60, bottomKerning, bottomShift)
   // 立绘槽位的**唯一真源**：文字列的实际行数。full = 词标 1 + 两排大字 +
   // 两排之间空 1 行 + 模型/目录/提示 3 行；minimal = 只有两排大字 + 空行
   //（信息行整块不画，见 chrome prop）。槽位与它等高，图片既不压过文字列

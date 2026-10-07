@@ -35,7 +35,7 @@ const [
   { getTheme, isThemeAvailable, isLightThemeActive, THEME_NAMES },
   { render, ThemeProvider, useTheme },
   { LogoV2 },
-  { renderBigText },
+  { paintedWidth, renderBigText },
   { splashFontById, withTagline, SPLASH_FONTS },
   { CLAUDE_GIRL_ROWS },
   { renderToScreen },
@@ -247,14 +247,18 @@ const view = (child: React.ReactElement): React.ReactElement => (
 const textAt = (line: string): string => line.padEnd(TEXT_LEFT).slice(TEXT_LEFT).trimEnd()
 
 const expectedTitleRows = (top: string, bottom: string): string[] => {
-  // 品牌词（CLAUDE 族）走 wide 解——与 LogoV2 的 claude 分支同参；deepseek
-  // 词对用字体表默认的 tight 解。
-  const font = withTagline(splashFontById('bold'), top, bottom, { wide: top === 'CLAUDE' || top === 'CODEX' })
+  // 品牌词（CLAUDE/CODEX 族）走 uniform 解（两行同字距）——与 LogoV2 的品牌
+  // 分支同参；这些读屏用例都是钉左形态（无 align prop），两行左缘对齐、
+  // 缩进为 0。deepseek 词对用字体表默认的 tight 解。
+  const brandTitle = top === 'CLAUDE' || top === 'CODEX'
+  const font = brandTitle
+    ? withTagline(splashFontById('bold'), top, bottom, { uniform: true })
+    : withTagline(splashFontById('bold'), top, bottom)
   const ink = { r: 232, g: 145, b: 63 }
   return [
-    ...renderBigText(font, top, 0, ink, ink, ink, 60, font.tagline.topKerning),
+    ...renderBigText(font, top, 0, ink, ink, ink, 60, font.tagline.topKerning, 0),
     '',
-    ...renderBigText(font, bottom, 0, ink, ink, ink, 60, font.tagline.bottomKerning, font.tagline.bottomIndent),
+    ...renderBigText(font, bottom, 0, ink, ink, ink, 60, font.tagline.bottomKerning, brandTitle ? 0 : font.tagline.bottomIndent),
   ].map(row => strip(row).trimEnd())
 }
 const screenHasBlock = (rows: string[], expected: readonly string[]): boolean =>
@@ -365,12 +369,16 @@ const screenHasBlock = (rows: string[], expected: readonly string[]): boolean =>
   }
   const blockCenter = (block: { first: number; last: number }): number => (block.first + block.last) / 2
   const [claudeBlock, codeBlock] = blocks
-  const wideFont = withTagline(splashFontById('bold'), 'CLAUDE', 'CODE', { wide: true })
+  // 品牌同字距档：居中形态窄行（CODE）补半差居中在宽行之下——CODE 左缘 =
+  // CLAUDE 左缘 + (CLAUDEInk − CODEInk) / 2；两行的中轴仍都在终端中央。
+  const brandFont = withTagline(splashFontById('bold'), 'CLAUDE', 'CODE', { uniform: true })
+  const centeredIndent = Math.round((paintedWidth(brandFont, 'CLAUDE', brandFont.tagline.topKerning)
+    - paintedWidth(brandFont, 'CODE', brandFont.tagline.bottomKerning)) / 2)
   check(
-    '启动页形态：两行大字各自左缘严格对齐，且 CODE 左缘 = CLAUDE + bottomIndent（居中于其下）',
+    '启动页形态：CODE 左缘 = CLAUDE + 半差（同字距居中于其下）',
     blocks.length === 2 && claudeBlock.rows.length === 5 && codeBlock.rows.length === 5
-    && codeBlock.first - claudeBlock.first === wideFont.tagline.bottomIndent,
-    `左缘 ${blocks.map(block => block.first).join('/')} indent ${wideFont.tagline.bottomIndent}（CLAUDE ${claudeBlock?.rows.length ?? '-'} 行 / CODE ${codeBlock?.rows.length ?? '-'} 行）`,
+    && codeBlock.first - claudeBlock.first === centeredIndent,
+    `左缘 ${blocks.map(block => block.first).join('/')} indent ${centeredIndent}（CLAUDE ${claudeBlock?.rows.length ?? '-'} 行 / CODE ${codeBlock?.rows.length ?? '-'} 行）`,
   )
   check(
     '启动页形态：CLAUDE 块与 CODE 块的中轴都在终端中央（±1.5 列）',

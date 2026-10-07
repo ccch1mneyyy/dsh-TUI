@@ -354,6 +354,22 @@ goldens 变化：两张卡片标题从错误的引号剥离改为正确脚本（
   清单/认证、instructionSources、独立推理tokens/支出状态、命名权限档、归档浏览/取消归档。
   真实凭据和交互TTY仍需维护者验收。
 
+## 验收轮 2：品牌标题同字距与分形态对齐（2026-10-07）
+
+用户定调：CODEX/HARNESS 与 CLAUDE/CODE 两行**间隙一致**；启动页（居中形态）
+两行各自居中，聊天页标题（钉左形态）两行左缘对齐。
+
+- `withTagline` 新增 `uniform` 档：两行共用一个字距（在默认词对紧解宽度预算内
+  取最大），不再拉伸等宽——等宽契约靠两行字距互补，字数差大的词对（CODE 4 字
+  vs CLAUDE 6 字）间隙观感差很多，CODEX/HARNESS 甚至无等宽可行解（error 4 列）。
+  bold 字体下：CLAUDE/CODE 同字距 3（54/36 列），CODEX/HARNESS 同字距 2（40/56 列）。
+- LogoV2 品牌档改走 uniform；对齐按形态：`align=center`（落地页/启动页）窄行补
+  半差居中成金字塔，钉左形态（对话页标题）两行缩进归零左缘对齐。deepseek 档
+  维持等宽契约与求解器 bottomIndent 不变；彩蛋日品牌上排钉品牌词同样走 uniform。
+- verify-splash-brand 同步：expectedTitleRows 品牌对走 uniform+钉左缩进；启动页
+  hero 对齐断言改为「CODE 左缘 = CLAUDE + 半差」；eggs/layout/launchpad/mascot/
+  font-setting 全绿（tight/wide 契约未动）。
+
 ## 验收轮 1 补充：Codex Lavender 品牌主题与标语（2026-10-07）
 
 用户定稿：slogan = "Build anything with Codex"（中文「用 Codex 构建一切」），
