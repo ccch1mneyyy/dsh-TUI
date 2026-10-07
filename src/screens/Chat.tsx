@@ -5927,9 +5927,16 @@ export function Chat({
         }}
       />
     )
+    // Tooltip 单例层挂在最外层末尾：被截断的工作区路径条 hover 后由它画完整路径。
+    const supervisorScene = (
+      <>
+        {supervisorNode}
+        <TooltipLayer />
+      </>
+    )
     // Inline hosts enter the alternate screen for the duration; full-screen
     // hosts are already in it and must not nest a second one.
-    return fullscreen ? supervisorNode : <AlternateScreen>{supervisorNode}</AlternateScreen>
+    return fullscreen ? supervisorScene : <AlternateScreen>{supervisorScene}</AlternateScreen>
   }
 
   // The session tree follows the browser's rule exactly: it REPLACES the
