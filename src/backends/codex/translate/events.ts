@@ -37,6 +37,8 @@ export function codexEmits(type: AgentEventType): boolean {
     case 'tool.call':
     case 'tool.result':
     case 'tool.progress':
+    // Running command output (N4, wired in C2).
+    case 'tool.output':
     case 'compaction.start':
     case 'compaction.end':
     case 'context.capacity':

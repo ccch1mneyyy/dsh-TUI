@@ -243,8 +243,6 @@ goldens 变化：两张卡片标题从错误的引号剥离改为正确脚本（
   （channel-ui）。未做真实终端手动演练（无交互 TTY）；inline/fullscreen 与 80/40 列由无头
   Chat 场景覆盖。
 
-  Chat 场景覆盖。
-
 ## 方案评审（交接前，HEAD `93457fb7` 之后）
 
 监督方按"原生体验第一、复用、低维护"复审了技术方案，修订已就地写进 `codex-backend-design.md`
