@@ -141,6 +141,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       decodeMs: number
       steps: { step: number; tokens: number; estimated: boolean }[]
       endAt: number
+      sample: { tps: number; at: number } | undefined
     }
     | undefined
   /** Per-turn usage ledger: reset at turn.start, summed from each assistant
@@ -687,31 +688,33 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     const usage = event.usage
     if (usage !== undefined) bookUsage(usage, event)
     const tpsMessageStep = tpsStep
+    // Same-timestamp delivery has no measurable decode span; its tokens
+    // must not inflate the rate of another step in this turn.
     if (
       tpsTurn === event.turn &&
       tpsMessageStep !== undefined &&
       tpsMessageStep.turn === event.turn &&
       tpsMessageStep.step === event.step &&
-      tpsMessageStep.firstTokenTime !== undefined
+      tpsMessageStep.firstTokenTime !== undefined &&
+      event.time > tpsMessageStep.firstTokenTime
     ) {
       const reported = usageOutputTokens(usage)
       const outputTokens = reported
         ?? (tpsMessageStep.outputEstimate > 0
           ? Math.ceil(tpsMessageStep.outputEstimate)
           : undefined)
+      const decodeMs = Math.max(0, event.time - tpsMessageStep.firstTokenTime)
+      tpsTurnDecodeMs += decodeMs
       if (outputTokens !== undefined) {
-        tpsTurnDecodeMs += Math.max(0, event.time - tpsMessageStep.firstTokenTime)
         tpsTurnDecodeTokens += outputTokens
         tpsTurnSampled = true
         if (tpsTurnDecodeMs > 0) {
           state.tps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
         }
       }
-      // Remember the step's contribution so a late real usage report for the
-      // same (turn, step) can swap the estimate (see the usage case below).
-      if (outputTokens !== undefined && tpsTurn === event.turn) {
-        tpsTurnSteps = [...tpsTurnSteps.filter(step => step.step !== event.step), { step: event.step, tokens: outputTokens, estimated: reported === undefined }]
-      }
+      // A backend can signal hidden generation without any content delta.
+      // Keep its timed span for later usage, without sampling a zero rate.
+      tpsTurnSteps = [...tpsTurnSteps.filter(step => step.step !== event.step), { step: event.step, tokens: outputTokens ?? 0, estimated: reported === undefined }]
     }
     if (
       tpsMessageStep !== undefined &&
@@ -986,10 +989,12 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     state.working = false
     state.activeToolCount = 0
     if (tpsTurn !== undefined && tpsTurn === event.turn) {
+      let sample: { tps: number; at: number } | undefined
       if (tpsTurnSampled && tpsTurnDecodeMs > 0) {
         const turnTps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
         state.tps = turnTps
-        state.tpsSamples.push({ tps: turnTps, at: event.time })
+        sample = { tps: turnTps, at: event.time }
+        state.tpsSamples.push(sample)
         if (state.tpsSamples.length > 500) state.tpsSamples.shift()
       } else {
         // Do not leave a chars/4 live estimate behind when no completed
@@ -999,7 +1004,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       // Keep the ended turn's fold ONE turn longer: a straggler usage report
       // (Codex may deliver the final metering after turn/completed) still
       // corrects the tps readout and the just-pushed sample through it.
-      tpsClosedTurn = tpsTurnSteps.length > 0 ? { turn: event.turn, decodeMs: tpsTurnDecodeMs, steps: tpsTurnSteps, endAt: event.time } : undefined
+      tpsClosedTurn = tpsTurnSteps.length > 0 ? { turn: event.turn, decodeMs: tpsTurnDecodeMs, steps: tpsTurnSteps, endAt: event.time, sample } : undefined
       tpsTurn = undefined
       tpsStep = undefined
       tpsTurnSteps = []
@@ -1147,6 +1152,11 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
           turnFailedAttempts.add(superseded)
         }
         activeAttempt = { attemptId: event.attemptId, turn: event.turn, step: event.step }
+        // A backend's output-start signal includes generation hidden from
+        // text deltas. Replay has no reliable per-item decode timing.
+        if (!replaying && event.firstTokenTime !== undefined && tpsStep?.turn === event.turn && tpsStep.step === event.step) {
+          tpsStep.firstTokenTime ??= event.firstTokenTime
+        }
         return
       case 'assistant.attempt.end':
         // A positioned end is a durable record of a failed attempt: drop that
@@ -1206,14 +1216,20 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
           const total = swap(tpsTurnSteps, tpsTurnDecodeMs)
           if (total !== undefined) {
             tpsTurnDecodeTokens = total
-            if (tpsTurnDecodeMs > 0 && tpsTurnSampled) state.tps = total / (tpsTurnDecodeMs / 1000)
+            tpsTurnSampled = true
+            if (tpsTurnDecodeMs > 0) state.tps = total / (tpsTurnDecodeMs / 1000)
           }
         } else if (real !== undefined && tpsClosedTurn?.turn === event.turn) {
           const total = swap(tpsClosedTurn.steps, tpsClosedTurn.decodeMs)
           if (total !== undefined && tpsClosedTurn.decodeMs > 0) {
             state.tps = total / (tpsClosedTurn.decodeMs / 1000)
-            const sample = state.tpsSamples.at(-1)
-            if (sample !== undefined && sample.at === tpsClosedTurn.endAt) sample.tps = state.tps
+            if (tpsClosedTurn.sample === undefined) {
+              tpsClosedTurn.sample = { tps: state.tps, at: tpsClosedTurn.endAt }
+              state.tpsSamples.push(tpsClosedTurn.sample)
+              if (state.tpsSamples.length > 500) state.tpsSamples.shift()
+            } else {
+              tpsClosedTurn.sample.tps = state.tps
+            }
           }
         }
         return

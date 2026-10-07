@@ -886,6 +886,9 @@ const GROUPS = {
 // Codex 翻译器：每个 wire fixture 的每个 thread → 事件 → 共享投影器，与 goldens
 // 逐字段比较；§7.3 attempt 算法边界、§7.4 item 表、§7.5 通知表与 §8 卡片形状。
     ["verify-codex-translate", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-translate.ts']],
+// Codex TPS：隐藏推理从 output item 开始计时，无 delta/延迟用量仍可结算，
+// 多步回合剔除工具间隙，首 token 等待与历史回放不进入生成速率。
+    ["verify-codex-tps", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-tps.ts']],
 // Codex live≡replay（§10.4）：同一 thread 的 live 通知与录制历史投影逐行一致，
 // 只允许登记的差异（中断卡、用量行、live 通知行），且断言差异确实出现。
     ["verify-codex-live-replay", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-live-replay.ts']],

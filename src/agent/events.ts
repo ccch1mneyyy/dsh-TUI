@@ -238,8 +238,11 @@ export type AgentEvent =
    */
   | { readonly type: 'pending.changed'; readonly items: readonly PendingItem[]; readonly claimed?: readonly string[]; readonly discarded?: readonly string[] }
   // ── assistant stream ────────────────────────────────────────────────
-  /** A streamed attempt opened at (turn, step); a still-open earlier attempt is superseded. */
-  | { readonly type: 'assistant.attempt.start'; readonly attemptId: string; readonly turn: number; readonly step: number; readonly model?: string; readonly parentCallId?: string }
+  /** A streamed attempt opened at (turn, step); a still-open earlier attempt
+   *  is superseded. `firstTokenTime`, when known, timestamps the backend's
+   *  first output signal (including hidden reasoning), not request submission.
+   *  Without it, throughput starts at the first content delta. */
+  | { readonly type: 'assistant.attempt.start'; readonly attemptId: string; readonly turn: number; readonly step: number; readonly model?: string; readonly parentCallId?: string; readonly firstTokenTime?: number }
   /**
    * One stream delta. Live deltas route by `attemptId` (a delta of an attempt
    * the projector never saw open adopts the open step: the reattach case);

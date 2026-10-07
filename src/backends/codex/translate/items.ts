@@ -146,14 +146,14 @@ export function ensureStep(ctx: ItemContext, out: AgentEvent[]): void {
 }
 
 /** The open attempt, or a new one in a new step. */
-export function ensureAttempt(ctx: ItemContext, out: AgentEvent[]): OpenAttempt {
+export function ensureAttempt(ctx: ItemContext, out: AgentEvent[], firstTokenTime?: number): OpenAttempt {
   if (ctx.attempt !== undefined) return ctx.attempt
   closeStep(ctx, out)
   ctx.step += 1
   ctx.stepOpen = true
   out.push({ type: 'step.start', turn: ctx.turn, step: ctx.step })
   const id = `${ctx.turnId === '' ? `turn-${ctx.turn}` : ctx.turnId}#${ctx.step}`
-  out.push({ type: 'assistant.attempt.start', attemptId: id, turn: ctx.turn, step: ctx.step, ...(ctx.model === '' ? {} : { model: ctx.model }) })
+  out.push({ type: 'assistant.attempt.start', attemptId: id, turn: ctx.turn, step: ctx.step, ...(ctx.model === '' ? {} : { model: ctx.model }), ...(firstTokenTime === undefined ? {} : { firstTokenTime }) })
   ctx.attempt = { id, step: ctx.step, reasoning: '', text: '', streamedReasoning: '', streamedText: '', rawReasoning: new Set(), summarized: new Set() }
   return ctx.attempt
 }
@@ -317,7 +317,9 @@ export function itemEvents(item: Rec, phase: 'started' | 'completed', ctx: ItemC
       return out
     }
     case 'reasoning': {
-      const attempt = ensureAttempt(ctx, out)
+      // The output item starts before its visible summary. Its generation
+      // time belongs to outputTokens, which includes the hidden reasoning.
+      const attempt = ensureAttempt(ctx, out, phase === 'started' ? time : undefined)
       if (phase === 'completed') {
         const summary = arr(item.summary).filter((part): part is string => typeof part === 'string')
         const content = arr(item.content).filter((part): part is string => typeof part === 'string')
@@ -328,7 +330,7 @@ export function itemEvents(item: Rec, phase: 'started' | 'completed', ctx: ItemC
     }
     case 'agentMessage':
     case 'plan': {
-      const attempt = ensureAttempt(ctx, out)
+      const attempt = ensureAttempt(ctx, out, phase === 'started' ? time : undefined)
       if (phase === 'completed') {
         attempt.text = str(item.text) ?? ''
         settleAttempt(ctx, out, time)

@@ -195,6 +195,9 @@ thread；这不是把历史导入 DSH 的 `migrate codex`。
 ChatGPT OAuth、设备码或 API key（后者写入 Codex 自己的凭据存储）。`/channel` 连接
 优先，托管订阅令牌只在第一方路由注入；不写 `~/.codex/config.toml`，不退出原生登录。
 
+TPS 计入隐藏推理的生成时间，剔除工具执行时间；实时文本估算在 Codex 报告实际
+输出 token 用量后校正。
+
 原生浏览/归档、fork/对话回退、分页历史、图片、子代理、轮询后台终端、目标与
 `/btw`/`/recap` 接入现有界面。`/logout` 仅清对应 dsh-auth 凭据；已载入的托管令牌
 需要正常重启，不注销原生登录。真实 0.160.1 app-server 九项无凭据离线检查通过，

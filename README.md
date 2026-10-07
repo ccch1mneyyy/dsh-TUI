@@ -228,6 +228,9 @@ credential store). Relay `/channel` connections take precedence; managed
 subscription tokens are only injected on first-party routes. dsh-TUI does
 not write `~/.codex/config.toml` or log out your native Codex account.
 
+TPS includes hidden reasoning time and excludes tool execution time. Live
+text estimates are corrected when Codex reports output token usage.
+
 Native browsing/archive, fork/conversation rewind, paged history, images,
 subagents, polled background terminals, goals and `/btw`/`/recap` use the
 existing surfaces. `/logout` removes only the matching dsh-auth credential;
