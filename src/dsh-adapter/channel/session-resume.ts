@@ -20,6 +20,7 @@ import {
 import { ensureLegacySessionEventTypes } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute } from '../presets.js'
+import { createFreshAgent } from '../fresh-agent.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { createDshSession, dshHandleOf } from '../backend/session.js'
 import { resetSessionProjection } from './session-reset.js'
@@ -466,7 +467,7 @@ export function createSessionResumeActions(
         // has been told about yet, and the publisher would not name it until
         // its next beat.
         async reserve() { reservation = await reserveCreatedSession(sessionId) },
-        open: async cwd => createDshSession(ctx, await agents.create({
+        open: async cwd => createDshSession(ctx, await createFreshAgent(ctx, agents, {
           sessionId,
           meta: { cwd, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
           agentOptions: route,

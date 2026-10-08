@@ -6369,6 +6369,7 @@ export function Chat({
         focus={sidePanel.focus}
         onActivateChat={sidePanel.focusChat}
         onActivatePanel={sidePanel.focusPanel}
+        onResize={sidePanel.resize}
         side={
           <SidePanelColumn
             width={sidePanel.panelColumns}

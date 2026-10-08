@@ -80,6 +80,7 @@ function Harness({ columns = COLS }: { readonly columns?: number } = {}): React.
       focus={sp.focus}
       onActivateChat={sp.focusChat}
       onActivatePanel={sp.focusPanel}
+      onResize={sp.resize}
       side={
         <SidePanelColumn
           width={sp.panelColumns}

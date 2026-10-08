@@ -41,6 +41,7 @@ import type { ModelRoute } from '../modelRoute.js'
 import { migratePresetPref, readPresetPref } from '../presetPrefs.js'
 import { readEffortPref } from '../effortPrefs.js'
 import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
+import { createFreshAgent, isUnstoredFreshSession } from './fresh-agent.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { registerBundledPresets } from './bundled-presets.js'
 import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './compat/index.js'
@@ -1731,8 +1732,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // update handoff or resume hint).
   /** The session id for a restart or update handoff, or empty when the backend
    * has not persisted it and the replacement must start fresh. */
-  const handoffSessionId = (): string =>
-    backendStart === undefined || backendStart.persisted(channel.agentId, channel.rows) ? channel.agentId : ''
+  const handoffSessionId = (): string => {
+    if (backendStart !== undefined) return backendStart.persisted(channel.agentId, channel.rows) ? channel.agentId : ''
+    return isUnstoredFreshSession(ctx.agents.get(SessionId(channel.agentId))?.session) ? '' : channel.agentId
+  }
   const handoffHint = backendStart === undefined ? undefined : (sessionId: string): string => backendStart.resumeCommand(sessionId)
   const funnel = createExitFunnel({
     onUserExit: error => {
@@ -1784,8 +1787,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       if (updateRequested) {
         try {
           // Non-DSH sessions keep their marker in backend prefs, not DSH's `resume.txt`.
-          if (backendStart === undefined) writeResumeTarget(channel.agentId)
-          else if (backendStart.persisted(channel.agentId, channel.rows)) backendStart.sessionPrefs.setLastSession(channel.agentId)
+          if (backendStart === undefined) {
+            const sessionId = handoffSessionId()
+            if (sessionId === '') clearResumeTarget()
+            else writeResumeTarget(sessionId)
+          } else if (backendStart.persisted(channel.agentId, channel.rows)) backendStart.sessionPrefs.setLastSession(channel.agentId)
         } catch {
           // Resume persistence is best effort and must never block an update.
         }
@@ -1837,15 +1843,18 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         return
       }
       // `/restart`: same handoff as the update path, no installation step.
-      // The resume target is written unconditionally — the user asked to
-      // restart THIS session, blank or not (mirrors the update contract).
+      // A fresh initialization-only session has no log to reopen. Restart
+      // it fresh; saved sessions keep their identity across the handoff.
       if (restartRequested) {
         beginRestartAttempt(channel.agentId)
         logRestartEvent('funnel: /restart branch entered')
         try {
-          if (backendStart === undefined) writeResumeTarget(channel.agentId)
-          else if (backendStart.persisted(channel.agentId, channel.rows)) backendStart.sessionPrefs.setLastSession(channel.agentId)
-          logRestartEvent('funnel: resume target written')
+          if (backendStart === undefined) {
+            const sessionId = handoffSessionId()
+            if (sessionId === '') clearResumeTarget()
+            else writeResumeTarget(sessionId)
+          } else if (backendStart.persisted(channel.agentId, channel.rows)) backendStart.sessionPrefs.setLastSession(channel.agentId)
+          logRestartEvent('funnel: resume target updated')
         } catch (error) {
           // Resume persistence is best effort and must never block a restart.
           logRestartEvent('funnel: resume target write failed', {
@@ -2418,7 +2427,7 @@ async function resolveAgent(
   const bootReservation = bootReserved.ok ? bootReserved.reservation : undefined
   let created: Awaited<ReturnType<typeof ctx.agents.create>>
   try {
-    created = await ctx.agents.create({
+    created = await createFreshAgent(ctx, ctx.agents, {
       sessionId,
       meta: {
         ...meta,
@@ -2563,6 +2572,7 @@ export function isExitResumable(deps: {
 }): boolean {
   const agent = deps.liveAgent ?? deps.startupAgent
   if (agent === undefined) return false
+  if (isUnstoredFreshSession(agent.session)) return false
   return (
     deps.pendingCount > 0 ||
     snapshotLiveSessionEvents(agent.session).some(

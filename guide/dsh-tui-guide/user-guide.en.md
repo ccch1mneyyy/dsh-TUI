@@ -274,8 +274,11 @@ one-column seam between the two surfaces.
   reach the chat, while `Ctrl+C`/`Ctrl+D`/`Ctrl+L` and the other Ctrl combos still do.
 - **Mouse**: click the chat column to focus the chat, click the panel column to focus the panel;
   clicking a tab on the bar switches to that panel (hover highlights it), and the `⤢` on its right
-  edge blows the active panel up to the full screen. The panel column is excluded from
-  drag-selection.
+  edge blows the active panel up to the full screen. Hovering over the seam highlights it; hold
+  the left mouse button and drag it left to widen the panel or right to narrow it. Chat keeps
+  at least 64 columns and the panel at least 28. Dragging exits zoom, preserves keyboard focus,
+  and keeps the width for the current session. Text drags starting in chat select only chat;
+  drags starting inside the panel can select panel text.
 - **Panels**: all eight built-in panels are enabled by default and can be changed in `sidePanel.panels`. `todo` (Goals/Todos — with a split it moves here from above the input), `jobs`
   (background jobs; clicking a job card in the transcript focuses that job here), `agents`
   (subagent dashboard and detail: Enter opens the detail, Esc steps back), `companion`

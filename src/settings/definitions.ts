@@ -274,8 +274,8 @@ export const SETTING_DEFINITIONS = {
     label: 'Chat column width',
     descriptions: { zh: '聊天列占比' },
     group: 'side-panel',
-    hint: 'Chat column as a fraction of the content width: 0.1-0.95, default 0.68. Type a decimal such as `0.6`; while the panel has focus the +/- shortcuts nudge it live for the current session. Applies immediately.',
-    hintDescriptions: { zh: '聊天列占内容宽度的比例：0.1-0.95，默认 0.68。输入小数如 `0.6`；面板获得焦点时可用 +/- 在会话内实时微调。立即生效。' },
+    hint: 'Chat column as a fraction of the content width: 0.1-0.95, default 0.68. Type a decimal such as `0.6`; drag the divider or use +/- while the panel has focus to resize for the current session. Applies immediately.',
+    hintDescriptions: { zh: '聊天列占内容宽度的比例：0.1-0.95，默认 0.68。输入小数如 `0.6`；拖拽分隔线，或在面板获得焦点时用 +/-，可在当前会话内实时调宽。立即生效。' },
     kind: 'number',
   },
   'sidePanel.splitEnabled': {

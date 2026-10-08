@@ -2014,9 +2014,8 @@ export function detachHandoffStdin(
  * reported synchronously (a raw inherit write can vanish mid-handoff). A
  * late exit is quiet — by then the user owned a working TUI session.
  *
- * @param sessionId - Session to resume in the replacement process (ignored
- *   when `options.backend` switches kernels — the new backend starts a
- *   fresh session).
+ * @param sessionId - Session to resume in the replacement process; empty
+ *   starts fresh. Ignored when `options.backend` switches kernels.
  * @param options - `kind: 'update'` drops the /restart boot-diagnosis
  *   marker and tags restart.log events for the update flow; `env` adds
  *   marker variables for the replacement (e.g. DSH_TUI_UPDATED_FROM);
@@ -2086,6 +2085,9 @@ export function restartChildEnv(
     ...(kind === 'restart' ? { [RESTART_CHILD_ENV]: '1' } : {}),
     ...options.env,
   }
+  // The Config schema preserves '', so an absent session must be represented
+  // by removing the marker, including one inherited from the previous launch.
+  if (sessionId === '') delete childEnv.DSH_TUI_RESUME_SESSION
   // A stale handoff override never leaks into a plain replacement: the var is
   // one-shot (consumed at this process's own boot), and a child that is NOT
   // switching kernels keeps this process's kernel by config/env/memory as
@@ -2121,12 +2123,11 @@ export function restartChildEnv(
 export async function restartTui(sessionId: string, options: TuiRestartOptions = {}): Promise<number> {
   const kind = options.kind ?? 'restart'
   const tag = options.backend !== undefined ? 'backend-switch' : kind === 'update' ? 'update-restart' : 'restart'
-  // A kernel switch must not hand the replacement THIS kernel's resume
-  // flags: an inherited `--resume <id>` in argv would send the new kernel
-  // looking for a session that belongs to the kernel it just left — the
-  // same reason DSH_TUI_RESUME_SESSION is deleted below.
+  // A fresh replacement must not inherit resume flags from the original
+  // launch: after /new they name the previous session, and after a kernel
+  // switch they name a session of the previous backend.
   const appArgs = process.argv.slice(1)
-  const argv = [...process.execArgv, ...(options.backend === undefined ? appArgs : stripResumeArgs(appArgs))]
+  const argv = [...process.execArgv, ...(options.backend === undefined && sessionId !== '' ? appArgs : stripResumeArgs(appArgs))]
   logRestartEvent(`${tag}: spawning replacement`, {
     node: process.execPath,
     argv,
