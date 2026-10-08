@@ -284,6 +284,9 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       if (change === undefined || change.kind !== 'goal/change') return NO_EVENTS
       return [goalChange(change)]
     }
+    if ((data.source as { kind: string }).kind === 'model-selection') {
+      return [{ type: 'notice', level: 'info', text: textOf(data.content) }]
+    }
     // Injected context (plugin/skill source) is model-facing only; it has no
     // transcript-facing text.
     if (data.source.kind !== 'user') return [{ type: 'user.message', ...base, source: 'injected', text: '' }]
