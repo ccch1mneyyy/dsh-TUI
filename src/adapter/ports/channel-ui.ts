@@ -203,6 +203,8 @@ export interface ChannelUi {
   readonly activityFrames: string | undefined
   /** Edit/Write diff presentation preference (`auto`/`split`/`unified`). */
   readonly diffLayout: 'auto' | 'split' | 'unified'
+  /** Edit/Write diff look (`default` −/+ rows / `bars` ▌ bars). */
+  readonly diffStyle: 'default' | 'bars'
   /** Thinking-block display (`preview` = 2-3 line live stream + fold per
    *  step; `full` = expanded until turn end). */
   readonly thinkingFold: 'preview' | 'full'
@@ -824,6 +826,7 @@ export interface ChannelUi {
    */
   trajectoryBackendLabel(): string
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
+  setDiffStyle(style: 'default' | 'bars'): void
   setThinkingFold(mode: 'preview' | 'full'): void
   setJobGroupFold(mode: JobGroupFoldMode): void
   setToolBackground(background: ToolBackground): void
