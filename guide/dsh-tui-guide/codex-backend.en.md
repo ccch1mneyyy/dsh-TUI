@@ -156,9 +156,11 @@ changes during a turn apply to the next one, not to reasoning already in progres
 
 - **`Shift+Tab` only toggles Plan**, returning to the previous permission preset when leaving
   it. It does not cycle into Full Access.
-- `/plan` enters Plan; `/plan <task>` enters it and submits the task. Choosing an explicit
-  permission preset returns to Default collaboration. Plan does not mean all tools are
-  forbidden: the actual security boundary remains Codex’s permission policy.
+- `/plan` enters Plan; `/plan <task>` enters it and submits the task; `/plan off` returns to
+  the permission preset that was active before Plan. The `on`/`off` rows in the completion
+  menu are dsh-TUI’s own state words, not task text. Choosing an explicit permission preset
+  returns to Default collaboration. Plan does not mean all tools are forbidden: the actual
+  security boundary remains Codex’s permission policy.
 - Defaults resolve per field: an explicit dsh-TUI choice > your Codex configuration >
   `auto` when unset. An unreadable configuration is not overwritten with `auto`.
 - Completed plans offer implementation, implementation with cleared context, or staying

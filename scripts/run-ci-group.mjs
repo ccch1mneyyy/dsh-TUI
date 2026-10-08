@@ -769,6 +769,9 @@ const GROUPS = {
 // 真实 Chat 挂在非 DSH channel 上：斜杠菜单/Tab 只列后端支持的命令，键入不可用命令
 // 给提示，不发给模型（运行中也不 steer）。
     ["verify-backend-chat", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-chat.tsx']],
+// /plan 参数在屏内的归一化（#1371）：补全目录自己的 `on` 令牌必须以裸命令离开屏幕，
+// `off` 与 `/plan <message>` 原样透传，裸 `/plan` 仍开 on/off 选择器。
+    ["verify-plan-argument-normalization", ['node', '--import', 'tsx/esm', 'scripts/verify-plan-argument-normalization.tsx']],
 // 只有 token 数没有正文的思考行：流式「思考中 · ~N tokens」、落定「已思考 · ~N tokens」，
 // 正文到达后显示正文；中英双语。
     ["verify-thinking-tokens", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-tokens.tsx']],

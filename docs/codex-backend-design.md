@@ -716,7 +716,7 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 | --- | --- |
 | `/review [base <branch> \| commit <sha> \| <自定义说明>]` | `review/start{threadId, target, delivery:'inline'}`；无参数 = `uncommittedChanges` |
 | `/diff` | 显示最近的 `turn/diff/updated` 聚合 diff（作为本地 diff 卡/`local-output` 行）；没有则 `gitDiffToRemote`（若可用）或提示 |
-| `/plan [prompt]` | 切到 Plan 模式（同 `modes.set('plan')`）；带 prompt 时随即以 Plan 模式发出（官方 `/plan` 语义） |
+| `/plan [on\|off\|prompt]` | 切到 Plan 模式（同 `modes.set('plan')`）；`on` 是 TUI 补全目录自己的状态词、归一为裸开关，`off` 退回进入 Plan 前的权限档；带 prompt 时随即以 Plan 模式发出（官方 `/plan` 语义） |
 | `/usage` | 以 `local-output` 行列出 `account/rateLimits/read` 的各窗口（已用 %、重置时间）与 credits |
 | `/<skill-name> [args]` | `turn/start{input:[{type:'skill', name, path}, {type:'text', text: args}]}`（skill 的 path 来自 `skills/list`） |
 

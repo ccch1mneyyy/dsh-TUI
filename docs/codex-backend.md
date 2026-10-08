@@ -130,8 +130,10 @@ Chat Completions 端点当作 Responses 使用。通过 `/channel` 选择/新建
 | Plan（`plan`） | 规划协作模式；保留已有权限档，不以 Plan 替代沙箱 |
 
 - **`Shift+Tab` 只开/关 Plan**，退出回到进入前的权限档，不循环到 Full Access。
-- `/plan` 切到 Plan；`/plan <任务>` 切换后立刻提交任务。选择一个具体权限档会回到
-  Default 协作模式。Plan 不等于“所有工具都被禁止”，安全边界仍由 Codex 权限决定。
+- `/plan` 切到 Plan；`/plan <任务>` 切换后立刻提交任务；`/plan off` 退回进入 Plan 前的
+  权限档。补全菜单里的 `on`/`off` 是 dsh-TUI 自己的状态词，不是任务文本。选择一个具体
+  权限档会回到 Default 协作模式。Plan 不等于“所有工具都被禁止”，安全边界仍由 Codex
+  权限决定。
 - 默认来源按字段为：dsh-TUI 中明确选过的值 > 用户 Codex 配置 > 未设置时的
   `auto`。读取配置失败时不拿 `auto` 覆盖未知配置。
 - 计划完成后会出现实施确认：实施、清上下文后实施、留在规划/反馈继续。清上下文

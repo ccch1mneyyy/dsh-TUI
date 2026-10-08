@@ -3543,15 +3543,21 @@ export function Chat({
       }
       case 'plan': {
         // Registered by dsh-plan-mode: bare `/plan` opens an on/off picker
-        // marked with the current state instead of toggling blindly; Enter
-        // dispatches `/plan` or `/plan off`. Arguments pass through verbatim
-        // (`/plan off`). Availability comes from the shared capability facts
-        // (the same read Shift+Tab uses), not from a second command-list
-        // scan; with no registry command the line falls through to the model,
-        // exactly as before.
+        // marked with the current state instead of toggling blindly; the
+        // picker's own rows dispatch the bare command and ` off`, never the
+        // catalog token. The catalog's `on` child (the only producer of that
+        // literal argument) is normalized back to the bare command:
+        // upstream's grammar is `/plan [off|message]`, so a verbatim `on`
+        // would enter plan mode AND steer the word "on" into the next step as
+        // a user message. Every other argument — `/plan off` and
+        // `/plan <message>` — passes through verbatim. Availability comes from
+        // the shared capability facts (the same read Shift+Tab uses), not from
+        // a second command-list scan; with no registry command the line falls
+        // through to the model, exactly as before.
         const plan = channel.capabilities().plan
         const mounted = plan.route !== 'none'
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
+        const argument = parts.length === 1 && parts[0] === 'on' ? '' : rawInput
         if (mounted && parts.length === 0) {
           setHelpOpen(false)
           dispatchOverlay({
@@ -3562,7 +3568,7 @@ export function Chat({
         }
         if (mounted) {
           setHelpOpen(false)
-          return runExternalCommand('plan', rawInput, images)
+          return runExternalCommand('plan', argument, images)
         }
         return false
       }

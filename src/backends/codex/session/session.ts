@@ -263,6 +263,13 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
     hub, ctx, cwd: opened.cwd, threadId: () => threadId, busy: () => input.busy(), emit,
     lastDiff: () => lastDiff, planSupported: () => controls.planSupported,
     setPlan: () => controls.capabilities.modes!.set('plan'),
+    exitPlan: async () => {
+      // The same target the plan-review exits use: the permission preset that
+      // was active before Plan. Skip the write when Plan is already off —
+      // there is nothing to restore and `set` still issues a settings update.
+      if (controls.capabilities.modes!.current() !== 'plan') return
+      await controls.capabilities.modes!.set(settings.permissionMode ?? DEFAULT_CODEX_MODE)
+    },
     submit: (next, placement, wire) => input.submit(next, placement, wire),
     noteTurnStarted: id => input.onTurnStarted(id),
   })

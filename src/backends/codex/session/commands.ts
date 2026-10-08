@@ -29,6 +29,9 @@ interface CommandDeps {
   lastDiff(): string | undefined
   planSupported(): boolean
   setPlan(): Promise<void>
+  /** Leave Plan for the permission preset that was active before it (the
+   *  catalog's `off` token). */
+  exitPlan(): Promise<void>
   submit(input: AgentInput, placement: SubmitPlacement, wireInput?: readonly UserInput[]): Promise<{ readonly accepted: boolean; readonly reason?: string }>
   noteTurnStarted(id: string): void
 }
@@ -90,9 +93,23 @@ export function createCodexCommands(deps: CommandDeps) {
           if (id !== undefined) deps.noteTurnStarted(id)
           return { accepted: true }
         }
-        case 'plan':
+        case 'plan': {
+          // The TUI catalog names the two states `on`/`off` (the `/plan`
+          // completion children — the on/off picker is registry-only and
+          // dispatches the bare command and ` off` itself), while this grammar
+          // is `/plan [prompt]`: every non-empty argument becomes the turn's
+          // prompt. Map both catalog tokens back to their switches so neither
+          // word leaks into the conversation as a prompt; every other argument
+          // stays the prompt.
+          const arg = args.trim()
+          if (arg === 'off') {
+            await deps.exitPlan()
+            return { accepted: true }
+          }
           await deps.setPlan()
-          return args.trim() === '' ? { accepted: true } : deps.submit({ ...input, text: args, blocks: [{ type: 'text', text: args }, ...(input.blocks?.slice(1) ?? [])] }, placement)
+          const prompt = arg === 'on' ? '' : args
+          return prompt.trim() === '' ? { accepted: true } : deps.submit({ ...input, text: prompt, blocks: [{ type: 'text', text: prompt }, ...(input.blocks?.slice(1) ?? [])] }, placement)
+        }
         case 'diff': {
           let diff = deps.lastDiff()
           if (diff === undefined || diff === '') {
