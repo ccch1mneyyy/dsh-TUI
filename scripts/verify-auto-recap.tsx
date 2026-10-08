@@ -40,6 +40,9 @@ const [
 
 const COLS = 100
 const ROWS = 30
+// Keep the recap tip visible: its “建议标题” text is not a panel marker.
+const RECAP_TIP = '提示：/recap 总结近期活动并建议标题，a 键应用'
+const RECAP_TITLE_ROW = '建议标题: AUTO_RECAP_TITLE'
 const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
 
 class FakeStdout extends Writable {
@@ -82,7 +85,7 @@ function makeChannel() {
     version: 0,
     rows: [
       { id: 1, kind: 'user', text: '检查这个问题' },
-      { id: 2, kind: 'assistant', text: '已经检查。', streaming: false },
+      { id: 2, kind: 'assistant', text: `已经检查。\n${RECAP_TIP}`, streaming: false },
     ],
     status: 'idle',
     sessionTitle: '我的会话',
@@ -210,7 +213,7 @@ const clickCell = (col: number, row: number) => {
 await settle(() => screenHas(term, 'AUTO_RECAP_SUMMARY'))
 check('挂载后灰行显示自动总结', screenHas(term, 'AUTO_RECAP_SUMMARY'))
 check('自动触发恰好一次 recapRecent', channel.recapCallCount === 1, String(channel.recapCallCount))
-check('手动面板未打开（无建议标题）', !screenHas(term, '建议标题'))
+check('回顾提示可见，完整面板尚未打开', await settled(() => screenHas(term, RECAP_TIP) && !screenHas(term, RECAP_TITLE_ROW)))
 check('回顾行带「回顾：」前缀', screenHas(term, '回顾：'))
 {
   const line = findText(term, 'AUTO_RECAP_SUMMARY')
@@ -231,8 +234,7 @@ check('hover 显示关闭 chip', screenHas(term, '×'))
 // ── 3. 点击灰行：展开完整 RecapPanel ───────────────────────────────────
 const expandPos = findText(term, 'AUTO_RECAP_SUMMARY')
 if (expandPos !== null) clickCell(expandPos.col + 1, expandPos.row + 1)
-await settle(() => screenHas(term, '建议标题'))
-check('点击展开完整面板', screenHas(term, 'AUTO_RECAP_TITLE') && screenHas(term, '应用'))
+check('点击展开完整面板', await settled(() => screenHas(term, RECAP_TITLE_ROW) && screenHas(term, '[应用]')))
 check('展开面板带标题栏', screenHas(term, '会话回顾'))
 
 // ── 4. a 键应用建议标题（走 renameSession）────────────────────────────
@@ -243,8 +245,7 @@ check('会话标题已更新', channel.sessionTitle === 'AUTO_RECAP_TITLE', chan
 
 // ── 5. Esc 收起：回到灰行 ──────────────────────────────────────────────
 stdin.write('\x1b')
-await settle(() => !screenHas(term, '建议标题'))
-check('Esc 收起回灰行', screenHas(term, 'AUTO_RECAP_SUMMARY'))
+check('Esc 收起回灰行', await settled(() => !screenHas(term, RECAP_TITLE_ROW) && screenHas(term, 'AUTO_RECAP_SUMMARY') && screenHas(term, RECAP_TIP)))
 
 // ── 6. 点击 × 关闭：灰行消失直到下次会话切换 ───────────────────────────
 // Esc 收起后 AutoRecapRow 重新挂载、hover 态复位；鼠标还停在原地，
