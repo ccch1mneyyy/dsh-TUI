@@ -539,7 +539,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
     在原正文后面，绝不覆盖。
   - 补发已有 tag 的 Release note：Actions → Publish → Run workflow → 填 tag，
     只处理正文，不发布 npm、不构建整合包。
-  - 手写摘要中来自外部贡献者的条目在末尾标 `（#PR号 by @用户名）`，
-    维护者自己的条目不标；裸写 `#123` 与 `@user`，GitHub 渲染成链接。
+  - 手写摘要中每条都在末尾标 `（#PR号 by @用户名）`，维护者与外部
+    贡献者一视同仁；裸写 `#123` 与 `@user`，GitHub 渲染成链接。
 - 移交代码改动前检查 `git diff --check`、源码 diff、生成 diff 与 `git status`，
   并如实报告跑了哪些验证、哪些平台/凭证相关的检查没跑。

@@ -718,8 +718,8 @@ guide owns detailed contracts such as the toolchain and verification matrix.
   - To backfill notes for an existing tag, run Actions → Publish → Run
     workflow with that tag. It only touches the notes; it skips npm publish
     and bundle builds.
-  - In the hand-written summary, entries from external contributors end with
-    `(#PR by @user)`; the maintainer's own entries are unmarked.
+  - In the hand-written summary, every entry ends with `(#PR by @user)` —
+    maintainers and external contributors alike.
   - Write bare `#123` and `@user` — GitHub renders them as links.
 - Before handing off a code change, inspect `git diff --check`, the source diff,
   the generated diff, and `git status`. Report exactly which verification ran
