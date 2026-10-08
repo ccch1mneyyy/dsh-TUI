@@ -248,6 +248,7 @@
     "verify:inject-channel": "node --import tsx/esm scripts/verify-inject-channel.mjs",
     "verify:session-mounts": "node --import tsx/esm scripts/verify-session-mounts.mjs",
     "verify:handoff-stdin": "node --import tsx/esm scripts/verify-handoff-stdin.ts",
+    "verify:rawmode-self-heal": "node --import tsx/esm scripts/verify-rawmode-self-heal.ts",
     "verify:session-supervisor": "node --import tsx/esm scripts/verify-session-supervisor.tsx",
     "verify:composer-draft-handoff": "node --import tsx/esm scripts/verify-composer-draft-handoff.tsx",
     "verify:background-extraction": "node --import tsx/esm scripts/verify-background-extraction.ts",

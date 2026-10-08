@@ -1439,6 +1439,12 @@ export default class Ink {
     // keyboard here would undo enterAlternateScreen's disable and nano would
     // start seeing CSI-u sequences again.
     if (this.isPaused) return;
+    // Raw mode belongs to the same set of modes an external owner can leave
+    // behind: whoever owned the tty across the gap restores ITS saved termios
+    // (a handoff supervisor's atexit write-back, a shell after kill -STOP, an
+    // external editor), and the line discipline then echoes keystrokes and
+    // mouse reports until Enter. reassertRawMode() is a no-op when raw is on.
+    this.app?.reassertRawMode();
     // Extended keys — re-assert if enabled (App.tsx enables these on
     // allowlisted terminals at raw-mode entry; a terminal reset clears them).
     // Pop-before-push keeps Kitty stack depth at 1 instead of accumulating
