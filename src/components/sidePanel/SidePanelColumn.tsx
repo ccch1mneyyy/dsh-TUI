@@ -1,7 +1,7 @@
 /**
  * SidePanelColumn: PanelBar, the active panel surface and a one-row key hint.
  * The hint follows focus, and the rules brighten with the divider as one surface.
- * Tabs follow the enabled registration order and carry each panel's badge.
+ * Tabs follow the enabled registration order and carry each panel's icon and badge.
  */
 import React from 'react'
 import { Box, Text, useTerminalSize } from '../../ui.js'
@@ -73,6 +73,7 @@ export function SidePanelColumn({ width, controller, channel, activity, attentio
     return {
       id,
       title: def.titleKey !== undefined ? t(def.titleKey) : def.title ?? fallbackTitle(id),
+      icon: def.icon,
       badge: entry.badge,
     }
   })

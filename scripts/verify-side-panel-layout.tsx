@@ -7,7 +7,7 @@
  * verify-divider-width's lesson) and locks the visual contract:
  *  - divider column sits exactly at the chat width; rows 1 and rows-2
  *    draw '├' (teeing into the panel rules), every other row '│';
- *  - PanelBar keeps its title centered, spaces carousel dots and arrows on one row;
+ *  - PanelBar keeps its title centered, spaces panel icons and arrows on one row;
  *  - the chat-side bordered input never crosses the divider;
  *  93-column split keeps the bar and hint on one row;
  *  - geometry=null renders children byte-identically to no layout;
@@ -174,7 +174,7 @@ function assertSplitFrame(name: string, frame: Frame, geo: { chat: number; panel
     check(name + ': divider row ' + y + ' is ' + expected, got === expected, 'got ' + JSON.stringify(got) + ' line=' + JSON.stringify(lines[y]))
   }
   check(name + ': row 0 carries the active title', lines[0].includes('待办'), JSON.stringify(lines[0]))
-  check(name + ': row 0 shows carousel dots', lines[0].includes('○') || lines[0].includes('●'), JSON.stringify(lines[0]))
+  check(name + ': row 0 shows the inactive panel icons', lines[0].includes('▸') && lines[0].includes('◆'), JSON.stringify(lines[0]))
   // Rules frame the host: row 1 and rows-2 are horizontal rules on the panel side.
   const ruleAfter = cells(lines[1]).slice(chatCol + 1).join('').trim()
   check(name + ': row 1 rule right of the divider', ruleAfter.length > 0 && ruleAfter.startsWith('─'), ruleAfter.slice(0, 8))
@@ -242,13 +242,13 @@ function assertSplitFrame(name: string, frame: Frame, geo: { chat: number; panel
   const { PanelBar } = await import('../src/components/sidePanel/PanelBar.js')
   const { stringWidth } = await import('../src/ink/stringWidth.js')
   const tabs = [
-    { id: 'p0', title: 'P0', badge: { level: 'info' as const, unread: 3 } },
-    { id: 'p1', title: 'P1' },
-    { id: 'p2', title: 'P2', badge: { level: 'warning' as const, unread: 4 } },
-    { id: 'p3', title: 'P3 long title' },
-    { id: 'p4', title: 'P4' },
-    { id: 'p5', title: 'P5', badge: { level: 'error' as const, unread: 2 } },
-    { id: 'p6', title: 'P6' },
+    { id: 'p0', title: 'P0', icon: '≡', badge: { level: 'info' as const, unread: 3 } },
+    { id: 'p1', title: 'Notes' },
+    { id: 'p2', title: 'P2', icon: 'ⓘ', badge: { level: 'warning' as const, unread: 4 } },
+    { id: 'p3', title: 'P3 long title', icon: '▸' },
+    { id: 'p4', title: 'P4', icon: '∿' },
+    { id: 'p5', title: 'P5', icon: '◆', badge: { level: 'error' as const, unread: 2 } },
+    { id: 'p6', title: 'P6', icon: '♥' },
   ]
   const frame = await mountTree(28, <PanelBar tabs={tabs} activeId="p3" width={28} focused canExpand />)
   const row = frame.lines()[0] ?? ''
@@ -257,13 +257,13 @@ function assertSplitFrame(name: string, frame: Frame, geo: { chat: number; panel
   check('carousel(28/7): active title truncates to the middle budget', row.includes(shownTitle), JSON.stringify(row))
   check('carousel(28/7): active title center stays within one cell', titlePos !== null && Math.abs(titlePos.col + stringWidth(shownTitle) / 2 - 13) <= 1, JSON.stringify(titlePos))
   check('carousel(28/7): both edge arrows and fullscreen affordance fit', row.includes('◀') && row.includes('▶') && row.includes('⤢'), JSON.stringify(row))
-  check('carousel(28/7): all six dot hit slots stay visible', (row.match(/[○●]/g) ?? []).length === 6, JSON.stringify(row))
-  check('carousel(28/7): unread counts follow their filled dots', row.includes('●3') && row.includes('●4') && row.includes('●2'), JSON.stringify(row))
+  check('carousel(28/7): all six icons, including the title fallback, stay visible', (row.match(/[≡Nⓘ∿◆♥]/g) ?? []).length === 6, JSON.stringify(row))
+  check('carousel(28/7): unread counts follow their panel icons', row.includes('≡3') && row.includes('ⓘ4') && row.includes('◆2'), JSON.stringify(row))
   await frame.app.unmount()
 
   const single = await mountTree(28, <PanelBar tabs={[{ id: 'solo', title: 'Solo' }]} activeId="solo" width={28} focused canExpand />)
   const singleTitle = termTest.findText(single.term, 'Solo')
-  check('carousel(single): title remains centered without arrows or dots', singleTitle !== null && Math.abs(singleTitle.col + 2 - 13) <= 1 && !single.lines()[0]!.includes('◀') && !single.lines()[0]!.includes('▶') && !/[○●]/.test(single.lines()[0]!), JSON.stringify(single.lines()[0]))
+  check('carousel(single): title remains centered without arrows', singleTitle !== null && Math.abs(singleTitle.col + 2 - 13) <= 1 && !single.lines()[0]!.includes('◀') && !single.lines()[0]!.includes('▶'), JSON.stringify(single.lines()[0]))
   check('carousel(single): fullscreen affordance remains available', single.lines()[0]!.includes('⤢'))
   await single.app.unmount()
   applySidePanelPanels('todo,jobs,agents')

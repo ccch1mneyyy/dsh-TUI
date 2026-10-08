@@ -405,10 +405,10 @@ try {
     source = 'unsupported'
     {
       const { h, app } = await mountColumn()
-      check('tab: the inactive trajectory title is represented by a dot', await settled(() => barRow(h).includes('○') && barRow(h).includes('◀') && barRow(h).includes('▶')), barRow(h).trim())
-      const tab = findText(h, '○')
+      check('tab: the inactive trajectory panel shows its icon', await settled(() => barRow(h).includes('∿') && barRow(h).includes('◀') && barRow(h).includes('▶')), barRow(h).trim())
+      const tab = findText(h, '∿')
       if (tab !== null) click(h, tab.col + 1, tab.row)
-      check('tab: clicking the trajectory dot centers its title', await settled(() => barRow(h).includes('Trajectory') && !barRow(h).includes('Todo')), barRow(h).trim())
+      check('tab: clicking the trajectory icon centers its title', await settled(() => barRow(h).includes('Trajectory') && !barRow(h).includes('Todo')), barRow(h).trim())
       check('tab: honest generic unsupported copy remains in the panel', await settled(() => h.screen().includes(head(t('trajectory-unsupported')))))
       check('outlet/unsupported: ⤢ stays hidden while carousel navigation remains', !barRow(h).includes('⤢') && barRow(h).includes('Trajectory') && barRow(h).includes('◀') && barRow(h).includes('▶'), barRow(h).trim())
       await app.unmount(); h.term.dispose()
@@ -419,9 +419,9 @@ try {
       // 固定窗:pacing 两次用例在完全相同的坐标点击 ∿——必须跨过 ink 的
       // 500ms 双击窗，否则第二次点击被当作 double-click 吞掉（面板不切换）。
       await sleep(600)
-      const tab = findText(h, '○')
+      const tab = findText(h, '∿')
       if (tab !== null) click(h, tab.col + 1, tab.row)
-      check('outlet/supported: trajectory dot centers the title', await settled(() => barRow(h).includes('Trajectory') && !barRow(h).includes('Todo')), barRow(h).trim())
+      check('outlet/supported: trajectory icon centers the title', await settled(() => barRow(h).includes('Trajectory') && !barRow(h).includes('Todo')), barRow(h).trim())
       check('outlet/supported: ⤢ stays beside the carousel', await settled(() => barRow(h).includes('⤢') && barRow(h).includes('◀') && barRow(h).includes('▶')), barRow(h).trim())
       await app.unmount(); h.term.dispose()
     }

@@ -47,7 +47,7 @@ export interface PanelDefinition {
   /** 内置 Panel 走 i18n key；插件给字面量 title。 */
   readonly titleKey?: I18nKey
   readonly title?: string
-  /** PanelBar 胶囊里的单格图标（显示宽度必须为 1；缺省用首字母）。 */
+  /** PanelBar 标签栏的单格图标（显示宽度必须为 1；缺省用标题首字符）。 */
   readonly icon?: string
   readonly order?: number
   /** 低于此宽度时 PanelBar 照显、Host 提示「宽度不足」。 */
