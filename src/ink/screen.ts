@@ -572,6 +572,9 @@ function packWord1(
 // Not used for comparison — BigInt element reads cause heap allocation.
 const EMPTY_CELL_VALUE = 0n
 
+/** A pane's screen rectangle and its own row-wrap provenance. */
+export type SelectionPane = Rectangle & { softWrap: Int32Array }
+
 /**
  * Screen uses a packed Int32Array instead of Cell objects to eliminate GC
  * pressure. For a 200x120 screen, this avoids allocating 24,000 objects.
@@ -643,6 +646,8 @@ export type Screen = Size & {
    * blitRegion/shiftRows.
    */
   softWrap: Int32Array
+  /** Explicit selectable panes; absent on legacy hand-built screens. */
+  selectionPanes?: Map<string, SelectionPane>
 }
 
 function isEmptyCellByIndex(screen: Screen, index: number): boolean {
@@ -743,6 +748,7 @@ export function createScreen(
     copyRegion: new Int32Array(size),
     copyTexts: new Map(),
     softWrap: new Int32Array(height),
+    selectionPanes: new Map(),
   }
 }
 
@@ -795,6 +801,8 @@ export function resetScreen(
   screen.copyTexts ??= new Map()
   screen.copyTexts.clear()
   screen.softWrap.fill(0, 0, height)
+  screen.selectionPanes ??= new Map()
+  screen.selectionPanes.clear()
 
   // Update dimensions
   screen.width = width
@@ -1345,6 +1353,27 @@ export function blitRegion(
   // Partial-width blits still carry the row's wrap provenance since the
   // blitted content (a cached ink-text node) is what set the bit.
   dst.softWrap.set(src.softWrap.subarray(regionY, maxY), regionY)
+  // Cached descendants and whole-subtree blits carry pane metadata too.
+  // A partial-width blit must never overwrite the neighbouring pane's wraps.
+  for (const [id, pane] of src.selectionPanes ?? []) {
+    if (regionX >= pane.x + pane.width || maxX <= pane.x ||
+        regionY >= pane.y + pane.height || maxY <= pane.y) continue
+    dst.selectionPanes ??= new Map()
+    let target = dst.selectionPanes.get(id)
+    if (target === undefined) {
+      // A cached child cannot resurrect a removed/replaced pane. Only a
+      // whole-surface ancestor blit can restore its declaration.
+      if (regionX > pane.x || maxX < pane.x + pane.width ||
+          regionY > pane.y || maxY < pane.y + pane.height) continue
+      target = { x: pane.x, y: pane.y, width: pane.width, height: pane.height,
+        softWrap: new Int32Array(dst.height) }
+      dst.selectionPanes.set(id, target)
+    }
+    if (target.x !== pane.x || target.width !== pane.width) continue
+    const from = Math.max(regionY, pane.y, target.y)
+    const to = Math.min(maxY, pane.y + pane.height, target.y + target.height)
+    if (from < to) target.softWrap.set(pane.softWrap.subarray(from, to), from)
+  }
 
   // Fast path: contiguous memory when copying full-width rows at same stride
   if (regionX === 0 && maxX === src.width && src.width === dst.width) {
@@ -1596,6 +1625,20 @@ export function shiftRows(
 ): void {
   if (n === 0 || top < 0 || bottom >= screen.height || top > bottom) return
   const w = screen.width
+  const sliceStart = Math.max(0, Math.floor(columnX ?? 0))
+  const sliceEnd = Math.min(w, sliceStart + Math.floor(columnWidth ?? w))
+  for (const pane of screen.selectionPanes?.values() ?? []) {
+    if (sliceStart > pane.x || sliceEnd < pane.x + pane.width) continue
+    const sw = pane.softWrap
+    if (Math.abs(n) > bottom - top) sw.fill(0, top, bottom + 1)
+    else if (n > 0) {
+      sw.copyWithin(top, top + n, bottom + 1)
+      sw.fill(0, bottom - n + 1, bottom + 1)
+    } else {
+      sw.copyWithin(top - n, top, bottom + n + 1)
+      sw.fill(0, top, top - n)
+    }
+  }
   if (columnX !== undefined || columnWidth !== undefined) {
     const x1 = Math.max(0, Math.floor(columnX ?? 0))
     const x2 = Math.min(w, x1 + Math.floor(columnWidth ?? w))

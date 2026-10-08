@@ -159,9 +159,11 @@ function ChatFake({ width }: { width: number }): React.ReactNode {
 }
 
 /** 面板级夹具：真 useSidePanel 控制器 + 键盘转发（镜像 Chat 的让位线）。 */
+let exposedSp: ReturnType<typeof useSidePanel> | undefined
 function PanelFixture({ channel, focusPanel }: { channel: ReturnType<typeof makePanelChannel>; focusPanel: boolean }): React.ReactNode {
   const size = useTerminalSize()
   const sp = useSidePanel({ columns: size.columns, fullscreen: true, editorOpen: false })
+  exposedSp = sp
   React.useEffect(() => {
     if (focusPanel) sp.focusPanel()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -267,7 +269,9 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
   const badged = frame.lines().join('\n')
   check('P3b. 不可见期间落定 → 未读徽章 ●', badged.includes('●'))
   // 聚焦右栏 + ']' 切到 btw → visible → markSeen 清徽章
-  await keys(frame, [String.fromCharCode(2), ']'])
+  exposedSp?.focusPanel()
+  await delay(200)
+  await keys(frame, [']'])
   await delay(500)
   const opened = frame.lines().join('\n')
   check('P3c. 进入面板看到最新线程后清徽章', !opened.includes('●') && opened.includes('badge answer'),
@@ -298,10 +302,11 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
   await keys(frame, [ESC])
   await delay(300)
   const afterSecondEsc = frame.lines().join('\n')
-  check('P5b. 第二层 Esc 交宿主回聊天（提示行换焦点文案）', afterSecondEsc.includes('Ctrl+B 聚焦侧栏'))
+  check('P5b. 第二层 Esc 交宿主回聊天（提示行换焦点文案）', afterSecondEsc.includes('Ctrl+B 关闭'))
   check('P5c. 草稿仍在（store 持久）', btwThreads.get('probe-session')?.draft === '草稿保留')
   // 列表模式动作：先回右栏（Ctrl+B），再 n 新话题 / s 发送到聊天
-  await keys(frame, [String.fromCharCode(2)])
+  exposedSp?.focusPanel()
+  await delay(200)
   const r2 = btwThreads.submit('probe-session', 'attach me', ask.ask)
   await delay(200)
   ask.finish('attach answer body')

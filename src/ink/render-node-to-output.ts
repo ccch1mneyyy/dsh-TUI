@@ -349,6 +349,7 @@ export function getScrollDrainNode(): DOMElement | null {
  * selection so the highlight stays anchored to the text.
  */
 export type FollowScroll = {
+  selectionPane?: string
   delta: number
   viewportTop: number
   viewportBottom: number
@@ -947,21 +948,43 @@ function paintDecoratedTextNode(
  *   previous frame's screen for blitting, whether to skip the node's own
  *   blit, and the inherited background color.
  */
-function renderNodeToOutput(
+type RenderOptions = {
+  offsetX?: number
+  offsetY?: number
+  prevScreen: Screen | undefined
+  // Force this node to descend instead of blitting its own rect, while
+  // still passing prevScreen to children. Used for non-opaque absolute
+  // overlays over a dirty clipped region: the overlay's full rect has
+  // transparent gaps (stale underlying content in prevScreen), but its
+  // opaque descendants' narrower rects are safe to blit.
+  skipSelfBlit?: boolean
+  inheritedBackgroundColor?: Color
+}
+
+function renderNodeToOutput(node: DOMElement, output: Output, options: RenderOptions): void {
+  const previousPane = output.selectionPane
+  const id = node.style.selectionPane
+  const yoga = node.yogaNode
+  if (id !== undefined && yoga && yoga.getDisplay() !== LayoutDisplay.None) {
+    output.selectionPane = id
+    output.registerSelectionPane(id, {
+      x: Math.floor((options.offsetX ?? 0) + yoga.getComputedLeft()),
+      y: Math.floor((options.offsetY ?? 0) + yoga.getComputedTop()),
+      width: Math.floor(yoga.getComputedWidth()),
+      height: Math.floor(yoga.getComputedHeight()),
+    })
+  }
+  try {
+    renderNodeToOutputImpl(node, output, options)
+  } finally {
+    output.selectionPane = previousPane
+  }
+}
+
+function renderNodeToOutputImpl(
   node: DOMElement,
   output: Output,
-  options: {
-    offsetX?: number
-    offsetY?: number
-    prevScreen: Screen | undefined
-    // Force this node to descend instead of blitting its own rect, while
-    // still passing prevScreen to children. Used for non-opaque absolute
-    // overlays over a dirty clipped region: the overlay's full rect has
-    // transparent gaps (stale underlying content in prevScreen), but its
-    // opaque descendants' narrower rects are safe to blit.
-    skipSelfBlit?: boolean
-    inheritedBackgroundColor?: Color
-  },
+  options: RenderOptions,
 ): void {
   const {
     offsetX = 0,
@@ -1505,6 +1528,7 @@ function renderNodeToOutput(
             viewportBottom,
           )
           viewportResizes.push({
+            selectionPane: output.selectionPane,
             delta: 0,
             viewportTop: prevViewportTop,
             viewportBottom: prevViewportBottom,
@@ -1604,6 +1628,7 @@ function renderNodeToOutput(
         if (followDelta > 0) {
           const vpTop = node.scrollViewportTop ?? 0
           followScrolls.push({
+            selectionPane: output.selectionPane,
             delta: followDelta,
             viewportTop: vpTop,
             viewportBottom: vpTop + innerHeight - 1,
@@ -1729,6 +1754,7 @@ function renderNodeToOutput(
         if (wheelDelta !== 0) {
           const wheelVpTop = node.scrollViewportTop ?? 0
           followScrolls.push({
+            selectionPane: output.selectionPane,
             delta: wheelDelta,
             viewportTop: wheelVpTop,
             viewportBottom: wheelVpTop + innerHeight - 1,

@@ -455,6 +455,9 @@ export type Styles = {
    * truncate mode decorated text is not truncated.
    */
   readonly decoration?: TextDecoration
+
+  /** Stable selectable pane identity; descendants inherit its copy/scroll scope. */
+  readonly selectionPane?: string
 }
 
 /**

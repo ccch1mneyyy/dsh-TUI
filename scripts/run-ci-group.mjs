@@ -299,7 +299,7 @@ const GROUPS = {
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
 // 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
     ["verify-keys", ['node', '--import', 'tsx/esm', 'scripts/verify-keys.tsx']],
-// 侧栏 Phase 1 控制器键盘契约（真 stdin 注入）：ctrl+b 三态循环、面板聚焦
+// 侧栏 Phase 1 控制器键盘契约（真 stdin 注入）：ctrl+b 开关并保留聊天焦点、面板聚焦
 // 时 ←/→ 与 [ ] 循环、数字直达、z 缩放、+/- 调宽（面板+4/chat+4）、plain
 // 键吞掉、ctrl 组合放行、alt+z 全局缩放、窄终端/编辑器打开时无效；含
 // 已知缺陷 tripwire（真 Esc 带 meta 被放行，见脚本头注）。
@@ -990,6 +990,9 @@ const GROUPS = {
 // 侧栏鼠标契约：PanelBar 标签可点（切换活动面板）且 hover 高亮、⤢ 只对声明
 // capabilities.fullscreen 的面板出现并把**活动** id 交给宿主、点聊天列交还焦点。
     ["verify-side-panel-mouse", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-mouse.tsx']],
+// 分隔线调宽：真实鼠标输入、页边距补偿、两端钳制、缩放退出、键盘调宽兼容、
+// 焦点丢失/终端 resize 收尾、窄屏收起与草稿子树保持。
+    ["verify-side-panel-resize", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-resize.tsx']],
 // 轨迹侧栏迁移回归：TrajectoryPanel 经真实投影渲染唤醒带/账本/检视器——
 // 空态、↑/↓ 经分发器移动选中、Tab/→ 切视图、Enter 展开再收起、Esc 恒不消费、
 // SGR 真鼠标点行聚焦、visible=false 零写流（visible=true 对照有写）、28/40 列不溢出。
@@ -1030,6 +1033,8 @@ const GROUPS = {
     ["verify-side-panel-scroll-paint", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-scroll-paint.tsx']],
 // 侧栏选择围栏（方向感知）：面板内起拖可选可复制面板文字（逐行列钳制不跨
 // 聊天列）；聊天起拖维持 §4.6 不捕面板字符。真 SGR press/motion/release 驱动。
+    ["verify-selection-pane-scroll", ['node', '--import', 'tsx/esm', 'scripts/verify-selection-pane-scroll.tsx']],
+    ["verify-selection-regions", ['node', '--import', 'tsx/esm', 'scripts/verify-selection-regions.ts']],
     ["verify-side-panel-selection", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-selection.tsx']],
 // 连续任务卡成组（JobGroupRow/JobGroupHeader）：组头汇总、组内取消空行与
 // 链式连接线、落定整组折叠、点击/悬停/Ctrl+O 展开、失败数留在折叠行、

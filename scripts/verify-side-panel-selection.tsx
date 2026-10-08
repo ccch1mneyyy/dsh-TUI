@@ -1,31 +1,8 @@
 /**
- * Side-panel selection regression (user report 2026-10-02: "侧边栏里的文字
- * 没法复制"). The side-panel column carries noSelect (design §4.6: a
- * chat-origin drag must never capture panel glyphs), which used to be a
- * direction-blind per-cell exclusion — a drag that STARTED inside the panel
- * highlighted nothing and copied nothing, so panel text was entirely
- * uncopyable.
- *
- * The fix is a direction-aware fence on the selection state
- * (SelectionState.includeNoSelectCells, seeded by startSelection from the
- * anchor cell's noSelect bit): gestures anchored on a noSelect cell select
- * that region's own text; gestures anchored anywhere else keep the
- * exclusion verbatim. The divider seam is noSelect too (chrome, not text).
- *
- * Locked behavior, all driven by REAL SGR mouse sequences into a headless
- * xterm (press/motion/release bytes, motion = button 0 + 0x20 drag bit):
- *  a. boot: split renders divider + roster + chat anchors;
- *  b. §4.6 (MUST keep): chat-origin drag sweeping into the panel copies
- *     chat text and NO panel glyphs (no "AAA", no │/├);
- *  c. panel-origin horizontal drag copies the covered card word;
- *  d. panel-origin vertical drag copies both covered cards and no chat
- *     anchors;
- *  e. panel double-click selects the word under the cursor;
- *  f. panel-origin selection actually HIGHLIGHTS panel cells (selection
- *     background on a covered cell), while a chat-origin selection leaves
- *     panel cells untouched.
- *
- * Run: node --import tsx/esm scripts/verify-side-panel-selection.tsx
+ * Real SGR selection regression: both panes support linear text selection,
+ * bounded by the pane where mouse-down occurred. Covers copy, highlight,
+ * multi-click, diagonal motion and crossing the divider in both directions.
+ * Run with node --import tsx/esm.
  */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'en'
@@ -101,11 +78,15 @@ const channel = {
 // --- harness ----------------------------------------------------------------
 let exposedChatColumns = 0
 let openAgents: (() => void) | undefined
+let togglePanel: (() => void) | undefined
+let switchPanel: (() => void) | undefined
 
 function Harness(): React.ReactNode {
   const sp = useSidePanel({ columns: COLS, fullscreen: true, editorOpen: false })
   exposedChatColumns = sp.split ? sp.chatColumns : COLS
   openAgents = () => sp.openPanel('agents', { focus: true })
+  togglePanel = sp.toggleOpen
+  switchPanel = () => sp.openPanel('todo')
   const [, bump] = React.useState(0)
   // The fixture has no selection subscriber (Chat owns that in production),
   // so the selection overlay only lands in a frame when something re-renders:
@@ -118,6 +99,7 @@ function Harness(): React.ReactNode {
       <SidePanelLayout
         geometry={sp.geometry}
         focus={sp.focus}
+        panelId={sp.activePanelId}
         onActivateChat={sp.focusChat}
         onActivatePanel={sp.focusPanel}
         side={
@@ -278,6 +260,31 @@ try {
     }
   }
 
+  // Diagonal and cross-pane drags retain the original pane in both directions.
+  {
+    const a = findText('AAA2')
+    const b = findText('AAA3')
+    if (a && b) {
+      await writeStep(press(a.col + 1, a.row))
+      await writeStep(motion(b.col, b.row))
+      await writeStep(release(b.col, b.row))
+      await poke()
+      check('diagonal: later row with a smaller column remains selected', selectedText().includes('AA2'))
+      await writeStep(press(a.col, a.row))
+      await writeStep(motion(2, b.row))
+      await writeStep(release(2, b.row))
+      await poke()
+      check('cross-pane: panel-origin selection remains nonempty', selectedText().includes('AAA2'))
+      check('cross-pane: panel-origin selection excludes chat on intermediate rows', !/R\d\d/.test(selectedText()))
+      check('cross-pane: chat cell stays unhighlighted', !cellHighlighted(2, a.row + 1))
+      await writeStep(press(4, a.row))
+      await writeStep(motion(b.col, b.row))
+      await writeStep(release(b.col, b.row))
+      await poke()
+      check('cross-pane: chat-origin selection excludes panel on every row', !selectedText().includes('AAA'))
+    }
+  }
+
   // --- e. panel double-click word select (non-interactive row: the summary) -
   {
     const cell = findText('completed')
@@ -293,6 +300,28 @@ try {
       const text = selectedText()
       check('word select: double-click on the panel selects the word', text === 'completed', JSON.stringify(text))
     }
+  }
+  switchPanel?.()
+  check('panel switch clears old panel selection', await settled(() => inkInstance?.selection.anchor === null && inkInstance.frontFrame.screen.selectionPanes?.has('panel:todo') === true))
+  openAgents?.()
+  await settled(() => has('AAA1') && inkInstance?.frontFrame.screen.selectionPanes?.has('panel:agents') === true)
+  {
+    const cell = findText('AAA2')
+    if (cell) {
+      await writeStep(press(cell.col, cell.row))
+      await writeStep(motion(cell.col + 3, cell.row))
+      await writeStep(release(cell.col + 3, cell.row))
+      await poke()
+      check('panel selection exists before close', selectedText().includes('AAA2'), JSON.stringify(selectedText()))
+      togglePanel?.()
+      check('panel close clears old panel selection', await settled(() => inkInstance?.selection.anchor === null))
+      togglePanel?.()
+      await settled(() => has('AAA1') && inkInstance?.frontFrame.screen.selectionPanes?.has('panel:agents') === true)
+    }
+  }
+  if (process.env.DSH_SELECTION_SCREEN_PATH) {
+    const { writeFileSync } = await import('node:fs')
+    writeFileSync(process.env.DSH_SELECTION_SCREEN_PATH, lines().map(line => line.trimEnd()).join('\n') + '\n')
   }
 } finally {
   if (failed > 0) {
