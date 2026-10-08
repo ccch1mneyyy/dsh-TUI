@@ -53,6 +53,30 @@ account has write access or appears in `.github/APPROVED_CONTRIBUTORS`.
 - A human cannot bypass this with a private approval, an issue link, or a pasted
   maintainer comment.
 
+### Contribution Discipline
+
+Applies to every contributor and coding agent — a baseline of self-discipline
+before submission, complementary to the gates and CI:
+
+- **Value over volume**: contribution is measured by substance, not by commit
+  count, PR count, or lines of code. No split-up filler submissions; keep
+  changes minimal and code lean — do not bloat it with redundant wrappers or
+  duplicate implementations.
+- **Humans gate AI-written code**: AI-assisted development is allowed, but
+  nothing flows into `main` automatically — every change requires human
+  review and a human merge decision (the required approving review exists for
+  this). Bot reviews such as CodeRabbit are a second pair of eyes, not a
+  replacement.
+- **Prefer stronger models for AI-assisted work**: vibe coding is allowed, but
+  pick the strongest model available: weaker outputs are more prone to bloat,
+  hallucinated APIs, and hidden regressions — rework costs more than the
+  model difference.
+- **Verify locally before opening a PR**: actually run the builds and focused
+  regressions for the changed area (see "Verification"), and walk
+  terminal-visible changes through the affected flows in a real terminal.
+  State plainly what was not run in the PR's Verification section — never
+  dress "should pass" as "verified".
+
 ### When the gates take effect
 
 The feature proposal flow applies only to pull requests opened on or after
