@@ -202,6 +202,51 @@ preset registry: `@deepseek-ai/dsh-agent-preset-registry` on 0.1.7, or
 - The pin is the only candidate; a miss warns and skips registration, exposing
   the full tool catalog on the first round.
 
+### Windows bash tool (winbash)
+
+`presets/winbash/custom-bash.mjs` is a bundled Windows `bash` tool plugin. Mounted at
+the host layer it serves **every Agent preset** (unrelated to Liangshen mode; it is not a
+`/preset` entry). Its behavior mirrors the official `dsh-tool-bash` — the official bash
+executor `dsh-bash-local` is POSIX-only and does not support Windows, hence this plugin.
+
+- Every call runs `bash -c <command>` in a fresh shell; state never persists across calls.
+  `description` is required (labels the call in the UI).
+- `run_in_background: true` admits the command as a background job and returns the job id
+  at once; collect with `job_output`, stop with `job_kill`. No timeout applies in the
+  background.
+- A foreground command that outlives its timeout keeps running as its background job and
+  hands the id back (`promoteOnTimeout`; can be disabled).
+- Non-zero exits are reported as `[exit code: N]` markers, not tool errors.
+- Compositions without a job registry degrade to foreground-only (timeout kills) and do
+  not expose `run_in_background`.
+- Git Bash discovery follows the Liangshen chain (see above); set
+  `DSH_TUI_WINBASH_BASH_PATH` (legacy name `DSH_TUI_LIANGSHEN_BASH_PATH` still works)
+  to pin `bash.exe`.
+
+Mounting: copy `presets/winbash/custom-bash.mjs` into the profile root and append to the
+plugin list of `cordis.patch.yml`:
+
+```yaml
+- id: windows-bash
+  name: './custom-bash.mjs'
+  disabled: !!js process.platform !== 'win32'
+```
+
+Configuration (the mount row's `config`):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `timeoutMs` | `120000` | Default foreground timeout (ms) |
+| `maxTimeoutMs` | `600000` | Per-call timeout cap (also the tool-level hard cap with jobs) |
+| `maxOutputBytes` | `64000` | Per-stream in-memory output cap |
+| `enableRunInBackground` | `true` | Expose the background flag (needs a job registry) |
+| `promoteOnTimeout` | `true` | Promote a timed-out foreground call instead of killing it |
+| `bashPath` | — | Pin `bash.exe` explicitly (same as the env variable) |
+
+> The Liangshen preset's built-in `custom-bash` registers the same `bash` tool name:
+> mount at most one of them per profile. When running the Liangshen preset, set this
+> row's `disabled` to `true` (the Liangshen copy is foreground-only).
+
 ### Custom presets
 
 On 0.1.7, declare `@deepseek-ai/dsh-agent-preset` through a profile/bundle with
