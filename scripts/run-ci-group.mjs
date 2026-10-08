@@ -730,6 +730,9 @@ const GROUPS = {
     ["verify-command-hold", ['node', '--import', 'tsx/esm', 'scripts/verify-command-hold.ts']],
     ['verify-shell-compat', ['node', 'scripts/verify-shell-compat.mjs']],
     ['verify-agent-lifecycle-compat', ['node', 'scripts/verify-agent-lifecycle-compat.mjs']],
+// 真 Agent/Session/JSONL：启动与连续 /new 不落盘权限初始化，首个输入完整
+// 保存初始权限；异步写入交接、失败重试、退出与并发工厂保持连续事件日志。
+    ['verify-empty-session-persistence', ['node', '--import', 'tsx/esm', 'scripts/verify-empty-session-persistence.ts']],
     ['verify-bundled-presets', ['node', 'scripts/verify-bundled-presets.mjs']],
     ['verify-preset-startup', ['node', 'scripts/verify-preset-startup.mjs']],
 // winbash 插件（presets/winbash.mjs——平铺单文件：presets/ 子目录被 packaged-preset
