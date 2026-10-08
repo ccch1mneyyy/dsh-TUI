@@ -719,9 +719,10 @@ const GROUPS = {
     ['verify-agent-lifecycle-compat', ['node', 'scripts/verify-agent-lifecycle-compat.mjs']],
     ['verify-bundled-presets', ['node', 'scripts/verify-bundled-presets.mjs']],
     ['verify-preset-startup', ['node', 'scripts/verify-preset-startup.mjs']],
-// winbash 插件（presets/winbash/custom-bash.mjs）：注册形状（有/无 job registry 两态）、
-// 前台执行、后台准入、取消杀进程、超时转后台、参数校验与卡片呈现；mock registry +
-// 真子进程、零依赖免编译（Linux 上 bash 解析为系统 bash 同样可跑）。
+// winbash 插件（presets/winbash.mjs——平铺单文件：presets/ 子目录被 packaged-preset
+// 发现逻辑强制要求 marker，非 preset 资产必须平铺）：注册形状（有/无 job registry
+// 两态）、前台执行、后台准入、取消杀进程、超时转后台、参数校验与卡片呈现；mock
+// registry + 真子进程、零依赖免编译（Linux 上 bash 解析为系统 bash 同样可跑）。
     ['verify-winbash', ['node', 'scripts/verify-winbash.mjs']],
 // 随包用户手册（guide/）：副本与 docs/ 逐字节一致 + SKILL.md 能被内核加载 +
 // 发布面与启动器真的把它带上。npm 包原本不含任何用户文档，用户机器上的 AI

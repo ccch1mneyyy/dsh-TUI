@@ -180,7 +180,7 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 
 ### Windows bash 工具（winbash）
 
-`presets/winbash/custom-bash.mjs` 是随包分发的 Windows `bash` 工具插件，挂载在 host 层后
+`presets/winbash.mjs` 是随包分发的 Windows `bash` 工具插件，挂载在 host 层后
 **对任意 Agent preset 生效**（与梁神模式无关、不进 `/preset` 名单）。行为对齐官方
 `dsh-tool-bash`——官方 bash 执行器 `dsh-bash-local` 为 POSIX-only，Windows 不适用，故有此件。
 
@@ -193,7 +193,7 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 - Git Bash 探测链与梁神模式相同（见上节）；环境变量 `DSH_TUI_WINBASH_BASH_PATH`
   （兼容旧名 `DSH_TUI_LIANGSHEN_BASH_PATH`）可显式指定 `bash.exe`。
 
-挂载：把 `presets/winbash/custom-bash.mjs` 复制到 profile 根目录，在 `cordis.patch.yml`
+挂载：把 `presets/winbash.mjs` 复制到 profile 根目录，在 `cordis.patch.yml`
 的插件列表追加：
 
 ```yaml

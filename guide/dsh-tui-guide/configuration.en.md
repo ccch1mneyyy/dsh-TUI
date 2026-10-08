@@ -204,7 +204,7 @@ preset registry: `@deepseek-ai/dsh-agent-preset-registry` on 0.1.7, or
 
 ### Windows bash tool (winbash)
 
-`presets/winbash/custom-bash.mjs` is a bundled Windows `bash` tool plugin. Mounted at
+`presets/winbash.mjs` is a bundled Windows `bash` tool plugin. Mounted at
 the host layer it serves **every Agent preset** (unrelated to Liangshen mode; it is not a
 `/preset` entry). Its behavior mirrors the official `dsh-tool-bash` — the official bash
 executor `dsh-bash-local` is POSIX-only and does not support Windows, hence this plugin.
@@ -223,7 +223,7 @@ executor `dsh-bash-local` is POSIX-only and does not support Windows, hence this
   `DSH_TUI_WINBASH_BASH_PATH` (legacy name `DSH_TUI_LIANGSHEN_BASH_PATH` still works)
   to pin `bash.exe`.
 
-Mounting: copy `presets/winbash/custom-bash.mjs` into the profile root and append to the
+Mounting: copy `presets/winbash.mjs` into the profile root and append to the
 plugin list of `cordis.patch.yml`:
 
 ```yaml

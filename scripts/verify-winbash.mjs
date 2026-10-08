@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const preset = await import(new URL('../presets/winbash/custom-bash.mjs', import.meta.url).href)
+const preset = await import(new URL('../presets/winbash.mjs', import.meta.url).href)
 
 let passed = 0
 function ok(name, fn) {
