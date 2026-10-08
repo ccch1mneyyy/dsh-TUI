@@ -225,6 +225,12 @@ function mouse(button: number, action: 'press' | 'release', col: number, row: nu
     events.map((e) => `${e.type}@${e.col},${e.row}`).join(' '),
   )
   check('U3 跳过 onSelectionDrag', selectionDrags.length === 0)
+  handleMouseEvent(app, mouse(0x20, 'press', 4, 3))
+  check('U3 已开始的拖拽回到按下格仍派发 dragmove',
+    events.length === 4 && events[3]!.type === 'dragmove' && events[3]!.col === 4 && events[3]!.row === 3)
+  app.finishDragSession()
+  check('U3 回到按下格后中断在最新坐标收尾',
+    events.at(-1)?.type === 'dragend' && events.at(-1)?.col === 4 && events.at(-1)?.row === 3)
 }
 
 {

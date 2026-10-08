@@ -1003,6 +1003,9 @@ const GROUPS = {
 // 侧栏鼠标契约：PanelBar 标签可点（切换活动面板）且 hover 高亮、⤢ 只对声明
 // capabilities.fullscreen 的面板出现并把**活动** id 交给宿主、点聊天列交还焦点。
     ["verify-side-panel-mouse", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-mouse.tsx']],
+// 侧栏分隔线拖拽：真实 SGR 捕获、逐列宽度/最小宽度、zoom/焦点、松手/失焦/
+// resize/收起/编辑器/换屏中断，以及带页边距的 Chat 接线与草稿保留、inline 回退。
+    ["verify-side-panel-resize", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-resize.tsx']],
 // 轨迹侧栏迁移回归：TrajectoryPanel 经真实投影渲染唤醒带/账本/检视器——
 // 空态、↑/↓ 经分发器移动选中、Tab/→ 切视图、Enter 展开再收起、Esc 恒不消费、
 // SGR 真鼠标点行聚焦、visible=false 零写流（visible=true 对照有写）、28/40 列不溢出。

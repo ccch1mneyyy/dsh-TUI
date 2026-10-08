@@ -1170,12 +1170,12 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			const session = app.dragSession;
 			if (session) {
 				// Anchor-cell exemption (parity with selection.ts): motion
-				// landing on the press cell is hand jitter, not a drag —
+				// at the press cell before the drag starts is hand jitter —
 				// keep the session dormant so release resolves to the plain
 				// click path (and the input's double-click detector sees
 				// the press). Without it, trackpads/1002 terminals turn a
 				// wobbly click into a 1-cell drag selection.
-				if (col === session.startCol && row === session.startRow) {
+				if (!session.started && col === session.startCol && row === session.startRow) {
 					return;
 				}
 				session.lastCol = col;

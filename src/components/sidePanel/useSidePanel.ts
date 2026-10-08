@@ -39,6 +39,7 @@ import {
   canSplit,
   nudgeRatio,
   resolveSidePanelGeometry,
+  resolveSplit,
   RESIZE_STEP_COLUMNS,
   type SidePanelSplit,
 } from './dimensions.js'
@@ -84,6 +85,8 @@ export interface SidePanelController {
   toggleOpen: () => void
   toggleZoom: () => void
   nudge: (deltaColumns: number) => void
+  /** Set the visible chat width in cells, leaving zoom and preserving focus. */
+  resize: (chatColumns: number) => void
   openPanel: (id: string, opts?: { readonly focus?: boolean }) => void
   /** /panel command dispatcher; false = unknown argument. */
   command: (raw: string) => boolean
@@ -170,6 +173,15 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
   const nudge = React.useCallback((deltaColumns: number) => {
     applySidePanelRatio(nudgeRatio(columns, getSidePanelRatio(), deltaColumns))
   }, [columns])
+
+  const resize = React.useCallback((chatWidth: number) => {
+    if (!split) return
+    // Encode the middle of a cell so resolveSplit's floor cannot lose a
+    // column to floating-point rounding, including at either minimum.
+    const next = resolveSplit(columns, (chatWidth + 0.5) / columns)
+    applySidePanelRatio((next.chat + 0.5) / columns)
+    setZoom(false)
+  }, [columns, split])
 
   const openPanel = React.useCallback((id: string, opts?: { readonly focus?: boolean }) => {
     if (!parseSidePanelIds(getSidePanelPanels()).includes(id)) return
@@ -344,6 +356,7 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
     toggleOpen,
     toggleZoom,
     nudge,
+    resize,
     openPanel,
     command,
     handleKey,
