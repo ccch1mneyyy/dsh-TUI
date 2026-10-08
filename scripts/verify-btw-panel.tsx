@@ -1,7 +1,7 @@
 /**
  * btw 面板/快路径/回退/badge 回归（渲染层）：
  *  - 面板级（XTerm + AlternateScreen + 真侧栏控制器）：空态、线程问答上屏
- *    （Markdown）、badge（不可见期间落定 → ●；进入面板即清）、composer 键
+ *    （Markdown）、badge（不可见期间落定 → ?1；进入面板即清）、composer 键
  *    语义（打字/Enter 提交/Esc 分层保草稿/Tab 切焦点）、n 新话题、s 发送到
  *    聊天（attach 合同 + 截断提示）、28/40 列窄幅不崩；流式期间 badge 不变
  *    就不通知侧栏；失败的一轮保留已流出的部分答复；连按键（两键之间
@@ -254,24 +254,24 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
   await frame.app.unmount()
 }
 
-// ── P3: badge（不可见期间落定 → ●；进入面板清）─────────────────────────
+// ── P3: badge（不可见期间落定 → ?1；进入面板清）────────────────────────
 {
   const ask = scriptedAsk()
   const channel = makePanelChannel(ask)
   const frame = await mountPanel(100, 'todo,btw', false, channel)
-  check('P3a. todo 为活动面板时无徽章', !frame.lines().join('\n').includes('●'))
+  check('P3a. todo 为活动面板时无徽章', !frame.lines()[0].includes('?1') && panelStore.get('btw')?.badge === null)
   btwThreads.submit('probe-session', 'badge question', ask.ask)
   await delay(250)
   ask.finish('badge answer')
   await delay(500)
-  const badged = frame.lines().join('\n')
-  check('P3b. 不可见期间落定 → 未读徽章 ●', badged.includes('●'))
+  const badged = frame.lines()[0]
+  check('P3b. 不可见期间落定 → 未读徽章 ?1', badged.includes('?1') && panelStore.get('btw')?.badge?.unread === 1, badged.trim())
   // 聚焦右栏 + ']' 切到 btw → visible → markSeen 清徽章
   await keys(frame, [String.fromCharCode(2), ']'])
   await delay(500)
   const opened = frame.lines().join('\n')
-  check('P3c. 进入面板看到最新线程后清徽章', !opened.includes('●') && opened.includes('badge answer'),
-    opened.split('\n').filter(l => l.includes('●') || l.includes('badge')).join(' | '))
+  check('P3c. 进入面板看到最新线程后清徽章', !opened.includes('?1') && panelStore.get('btw')?.badge === null && opened.includes('badge answer'),
+    opened.split('\n').filter(l => l.includes('?1') || l.includes('badge')).join(' | '))
   await frame.app.unmount()
 }
 
