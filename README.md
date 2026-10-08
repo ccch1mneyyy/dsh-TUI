@@ -299,6 +299,8 @@ Full commands: [Interaction and commands](docs/interaction.en.md).
 
 Agent presets, themes, MCP servers, environment variables: [Configuration](docs/configuration.en.md) · [Themes](docs/themes.en.md).
 
+DSH profiles inherit official reporting defaults: DeepSeek API requests carry plugin package identities and incremental Session logs, while OpenTelemetry uploads a Session-log prefix only after explicit feedback. User overrides remain supported; see [reporting settings](docs/configuration.en.md#official-request-metadata-and-feedback-reporting).
+
 ## How It Works
 
 ```text

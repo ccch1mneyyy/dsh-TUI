@@ -38,8 +38,9 @@
 - **disabled overrides**:23 行。其中 22 行恒定禁用；`command-goal` 在新 registry
   或旧 shipped standard preset 自带该命令时禁用。0.1.7 的 host PTC/workflow
   服务由 base 提供，模型可见的工具仍由 preset 控制；与 web-app 的差异见快照。
-- **config overrides**:8 行(原有 6 行加 session-telemetry-otel /
-  plugin-package-inventory-deepseek),后两行保持 TUI 的隐私默认
+- **config overrides**:6 行。`session-telemetry-otel`、
+  `plugin-package-inventory-deepseek` 与 `session-log-deepseek` 继承官方组合，
+  上报默认值、导出配置与版本差异由上游拥有；用户补丁与环境变量仍可显式覆盖。
 - **inserts**:19 行(dsh-tui、working-activity、内置 OAuth 入口 dsh-tui-auth、DeepSeek 账号回调的 dsh-tui-webserver、六个插件互通行,以及
   dsh-tui-storage、dsh-tui-storage-json、dsh-tui-storage-domain、
   dsh-tui-workspace、dsh-tui-code-runtime、dsh-tui-subagent-model-selection-settings、
