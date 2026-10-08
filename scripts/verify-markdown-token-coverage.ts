@@ -55,6 +55,7 @@ const CORPUS = [
   '$inline math$ and text\n',
   '$$\nblock math\n$$\n',
   '- [x] \u4e2d\u6587\u4efb\u52a1\n',
+  '- **\u8bc1\u636e\u4e0e\u5f71\u54cd\uff1a**\u6e90\u7801\u4e2d\u56de\u843d\n',
 ]
 
 function collectTokenTypes(tokens: Token[], into: Set<string>): void {
@@ -124,6 +125,37 @@ assert.ok(struckPlain.includes('~100 approx'), 'single tilde stays literal')
 assert.ok(struck.includes('\u001b[9m'), 'strikethrough SGR applied under FORCE_COLOR=3')
 const strikeInside = applyMarkdown('~~**bold gone**~~\n')
 assert.ok(stripAnsi(strikeInside).includes('bold gone'), 'strong inside del renders')
+
+// -- 2c. CJK-adjacent strong closure -------------------------------------
+//
+// `**\u6807\u7b7e\uff1a**\u4e2d\u6587`: the closer sits after a punctuation mark
+// and directly before CJK text, so CommonMark's right-flanking rule
+// leaves it open and strict renderers (GitHub included) echo the
+// asterisks. The cjkStrong tokenizer (src/terminal-utils/cjk-emphasis.ts)
+// closes exactly this shape and nothing else.
+const cjkStrongCases: Array<[string, boolean]> = [
+  ['**\u8bc1\u636e\u4e0e\u5f71\u54cd\uff1a**\u6e90\u7801\u4e2d\u56de\u843d', true],
+  ['**\u8bc1\u636e:**\u6e90\u7801\u4e2d', true],
+  ['**\u5c0f\u6807\u9898\u3002**\u4e2d\u6587\u5185\u5bb9', true],
+  ['\u4ed6\u8bf4**\u91cd\u8981\uff1a**\u662f\u7684', true],
+  ['**a\uff1a**\u4e2d **b\uff1a**\u4e2d', true],
+  ['**\uc694\uc57d:**\ud55c\uad6d\ub9d0', true],
+  ['**\u307e\u3068\u3081:**\u3072\u3089\u304c\u306a', true],
+  ['**\u8bc1\u636e\uff1a** \u6e90\u7801', true],
+  ['\u4e2d\u6587**\u7c97\u4f53**\u4e2d\u6587', true],
+  ['`**x:**y` span', false],
+  ['```\n**x:**y\n```\n', false],
+  [BS + '**x:**y', false],
+  ['**note:**see', false],
+]
+for (const [source, renders] of cjkStrongCases) {
+  const out = applyMarkdown(source)
+  const plain = stripAnsi(out)
+  assert.equal(plain.includes('**'), !renders,
+    'CJK strong asterisk state for ' + JSON.stringify(source) + ': ' + JSON.stringify(plain))
+  assert.equal(out.includes('\u001b[1m'), renders,
+    'CJK strong bold SGR state for ' + JSON.stringify(source) + ': ' + JSON.stringify(out))
+}
 
 // -- 3. Deliberate invisibility -----------------------------------------
 
