@@ -28,7 +28,7 @@
  * `DSH_TUI_LANG` 显式指定时从其值，否则默认中文（同 src/i18n.ts 的缺省）。
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
+import { accessSync, constants, existsSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -115,8 +115,120 @@ const isWin = process.platform === 'win32'
 const shellOpt = isWin ? { shell: true } : {}
 // DEP0190（issue #148）：shell:true + 非空参数数组触发语法级弃用告警——
 // 转义后拼进命令字符串（空参数数组不触发），非 Windows 保持数组直传。
+// Command paths can contain spaces/metacharacters (#1388). Escape them using
+// cross-spawn@7's cmdEscapeCommand protocol (MIT; see src/utils/shellQuote.ts).
 const cmd = (command, args) =>
-  isWin ? [`${command} ${shellQuote(args).join(' ')}`, []] : [command, args]
+  isWin ? [`${command.replace(/([()\][%!^"`<>&|;, *?])/g, '^$1')} ${shellQuote(args).join(' ')}`, []] : [command, args]
+
+// ─── dsh 可执行文件解析（issue #1388）────────────────────────────────────────
+// The Windows desktop shim can mask the Node CLI while reporting the same
+// version. Prefer an explicit pin; otherwise skip a recognised Electron shim
+// and report the substitution. The runtime independently checks raw-mode stdin.
+
+/** Whether a path is a file this process may execute (a PATH hit has to be). */
+const isExecutableFile = path => {
+  try {
+    if (!statSync(path).isFile()) return false
+    if (!isWin) accessSync(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+// cmd.exe searches cwd before PATH and uses PATHEXT for npm's .cmd shims.
+const pathCandidates = (command, env = process.env) => {
+  const extensions = isWin
+    ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').map(ext => ext.trim()).filter(ext => ext !== '')
+    : ['']
+  const found = []
+  const entries = String(env.PATH ?? env.Path ?? env.path ?? '').split(isWin ? ';' : ':')
+  if (isWin && env.NoDefaultCurrentDirectoryInExePath === undefined) entries.unshift(process.cwd())
+  for (const entry of entries) {
+    const dir = isWin ? entry.trim().replace(/^"(.*)"$/u, '$1') : entry
+    if (isWin && dir === '') continue
+    for (const ext of extensions) {
+      const candidate = resolve(dir || '.', command + ext)
+      if (!found.includes(candidate) && isExecutableFile(candidate)) found.push(candidate)
+    }
+  }
+  return found
+}
+
+// Inspect only small scripts; both Electron mode and the DSH desktop host must
+// be present in active lines. A comment or a wrapper clearing the flag is safe.
+const isDesktopHostShim = path => {
+  if (/\.(exe|com)$/iu.test(path)) return false
+  try {
+    const file = statSync(path)
+    if (!file.isFile() || file.size === 0 || file.size > 65536) return false
+    const text = readFileSync(path, 'utf8')
+    const active = text.split(/\r?\n/u).filter(line => !/^\s*(?:@?rem(?:\s|$)|::|#)/iu.test(line)).join('\n')
+    return !text.includes('\u0000') && /ELECTRON_RUN_AS_NODE\s*=\s*1/iu.test(active) && /dsh-desktop-host/iu.test(active)
+  } catch {
+    return false
+  }
+}
+
+// Resolve once so version probes, installs and session launch use the same CLI.
+const resolveDshTarget = () => {
+  const rawPin = typeof process.env.DSH_TUI_DSH_BIN === 'string' ? process.env.DSH_TUI_DSH_BIN.trim() : ''
+  const viaNode = command => /\.(c|m)?js$/iu.test(command)
+  if (rawPin !== '') {
+    const explicitPath = rawPin.includes('/') || rawPin.includes('\\')
+    const pinned = explicitPath ? resolve(rawPin) : rawPin
+    return {
+      command: pinned,
+      viaNode: viaNode(pinned),
+      pinned,
+      missing: explicitPath && !viaNode(pinned) && !isExecutableFile(pinned),
+      skippedShim: undefined,
+      shimOnly: undefined,
+    }
+  }
+  const candidates = pathCandidates('dsh')
+  const first = candidates[0]
+  if (first !== undefined && isDesktopHostShim(first)) {
+    const alternative = candidates.slice(1).find(candidate => !isDesktopHostShim(candidate))
+    if (alternative !== undefined) {
+      return { command: alternative, viaNode: viaNode(alternative), pinned: undefined, missing: false, skippedShim: first, shimOnly: undefined }
+    }
+    return { command: first, viaNode: false, pinned: undefined, missing: false, skippedShim: undefined, shimOnly: first }
+  }
+  return {
+    command: first ?? 'dsh',
+    viaNode: first !== undefined && viaNode(first),
+    pinned: undefined,
+    missing: false,
+    skippedShim: undefined,
+    shimOnly: undefined,
+  }
+}
+let cachedDshTarget
+const dshTarget = () => (cachedDshTarget ??= resolveDshTarget())
+
+// JavaScript pins run directly through Node, without a second shell parser.
+const dshInvocation = (args, options) => {
+  const target = dshTarget()
+  return target.viaNode
+    ? [process.execPath, [target.command, ...args], options]
+    : [...cmd(target.command, args), { ...options, ...shellOpt }]
+}
+
+// Announce a substitution once, before the session starts.
+let shimFallbackAnnounced = false
+const announceShimFallback = () => {
+  const { skippedShim, command } = dshTarget()
+  if (shimFallbackAnnounced || skippedShim === undefined) return
+  shimFallbackAnnounced = true
+  console.error(msg('dshShimSkipped')(skippedShim, command))
+}
+
+/** The user-facing "dsh is unusable" message, naming a pin when one is set. */
+const dshUnavailableMessage = () => {
+  const { pinned } = dshTarget()
+  return pinned === undefined ? msg('noDsh') : msg('dshPinFailed')(pinned)
+}
 
 // 内联 semver（解析 + 严格大于）：启动器可能在依赖不完整的环境里被执行
 // （迁移、半损坏安装、测试沙箱），零外部依赖是自保底线。覆盖 semver 的
@@ -161,6 +273,29 @@ const MSG = {
   noPnpm: {
     en: '[dsh-tui] The first-time setup needs pnpm (dsh plugin delegates installs to it):\n  npm install -g pnpm   (or via corepack: corepack enable pnpm)',
     zh: '[dsh-tui] 首次安装需要 pnpm（dsh plugin 会把安装转发给它）：\n  npm install -g pnpm   （或启用 corepack：corepack enable pnpm）',
+  },
+  dshPinFailed: {
+    en: pin =>
+      `[dsh-tui] DSH_TUI_DSH_BIN is set to:\n  ${pin}\n` +
+      `  but the dsh CLI cannot be started from it. Point it at the Node CLI (the npm\n` +
+      `  package entry …/@deepseek-ai/dsh/lib/bin.js, or the shim next to it), or\n` +
+      `  unset the variable and let PATH decide.`,
+    zh: pin =>
+      `[dsh-tui] DSH_TUI_DSH_BIN 指向：\n  ${pin}\n` +
+      `  但无法从它启动 dsh CLI。请指向 Node 版 CLI（npm 包入口\n` +
+      `  …/@deepseek-ai/dsh/lib/bin.js，或它旁边的 shim），或取消该变量改用 PATH。`,
+  },
+  dshShimSkipped: {
+    en: (shim, used) =>
+      `[dsh-tui] PATH resolves the first \`dsh\` to the DSH desktop (Electron) host shim:\n  ${shim}\n` +
+      `  Its Electron host cannot provide a raw-mode stdin, so the TUI would crash on\n` +
+      `  startup. Using the Node CLI found next on PATH instead:\n  ${used}\n` +
+      `  Set DSH_TUI_DSH_BIN to pin a specific dsh CLI.`,
+    zh: (shim, used) =>
+      `[dsh-tui] PATH 上首命中的 \`dsh\` 是 DSH 桌面端（Electron）宿主 shim：\n  ${shim}\n` +
+      `  它的 Electron 宿主给不了 raw mode 的 stdin，TUI 启动即崩。已改用 PATH 上\n` +
+      `  下一个 Node 版 CLI：\n  ${used}\n` +
+      `  可用 DSH_TUI_DSH_BIN 显式钉定要用的 dsh。`,
   },
   bootstrapStart: {
     en: `[dsh-tui] First run — initializing the ${PROFILE} profile (${PACKAGE}@${installVersion})…`,
@@ -428,6 +563,14 @@ const MSG = {
       keySetStore: 'set (DSH credential store)',
       keyMissing: 'not set — neither DEEPSEEK_API_KEY nor a DSH credential-store ref',
       missing: 'missing',
+      pinned: 'pinned by DSH_TUI_DSH_BIN',
+      pinMissing: pin => `DSH_TUI_DSH_BIN does not point to a runnable dsh CLI:  ${pin}`,
+      hostShimSkipped: (shim, used) =>
+        `PATH's first \`dsh\` is the DSH desktop (Electron) host shim (${shim}) — its Electron host cannot carry a raw-mode stdin, so the launcher uses ${used}; set DSH_TUI_DSH_BIN to pin a specific dsh CLI`,
+      hostShimPinned: shim =>
+        `DSH_TUI_DSH_BIN pins the DSH desktop (Electron) host shim (${shim}) — its Electron host cannot carry a raw-mode stdin, so the TUI will crash on startup`,
+      hostShimOnly: shim =>
+        `the only \`dsh\` on PATH is the DSH desktop (Electron) host shim (${shim}) — its Electron host cannot carry a raw-mode stdin, so the TUI cannot start; install the Node CLI (npm install -g @deepseek-ai/dsh) or set DSH_TUI_DSH_BIN`,
     },
     zh: {
       dshMissing: '未找到——请先安装：  npm install -g @deepseek-ai/dsh',
@@ -441,6 +584,14 @@ const MSG = {
       keySetStore: '已设置（DSH 凭据库）',
       keyMissing: '未设置——环境变量与 DSH 凭据库中都没有 DEEPSEEK_API_KEY',
       missing: '缺失',
+      pinned: '由 DSH_TUI_DSH_BIN 钉定',
+      pinMissing: pin => `DSH_TUI_DSH_BIN 未指向可运行的 dsh CLI：  ${pin}`,
+      hostShimSkipped: (shim, used) =>
+        `PATH 上首命中的 \`dsh\` 是 DSH 桌面端（Electron）宿主 shim（${shim}）——它的 Electron 宿主给不了 raw mode 的 stdin，启动器已改用 ${used}；可用 DSH_TUI_DSH_BIN 显式钉定要用的 dsh`,
+      hostShimPinned: shim =>
+        `DSH_TUI_DSH_BIN 钉定的是 DSH 桌面端（Electron）宿主 shim（${shim}）——它的 Electron 宿主给不了 raw mode 的 stdin，TUI 启动即崩`,
+      hostShimOnly: shim =>
+        `PATH 上唯一的 \`dsh\` 是 DSH 桌面端（Electron）宿主 shim（${shim}）——它的 Electron 宿主给不了 raw mode 的 stdin，TUI 无法启动；请安装 Node 版 CLI（npm install -g @deepseek-ai/dsh）或设置 DSH_TUI_DSH_BIN`,
     },
   },
   updateUnavailable: {
@@ -593,10 +744,8 @@ const credentialRefDeclared = (home, name) => {
 }
 
 // ─── doctor 检查逻辑（doctor 子命令与 safe 会话共用）──────────────────────────
-// 输出与退出语义与单命令时代逐字一致：版本探针白名单回显、密钥只报
-// truthiness（env 或凭据库 ref 任一命中即视为已设置）、仅 dsh 缺失为硬
-// 失败。safe 复用同一函数——两个入口的 diagnostics 不许分叉（对齐 doctor
-// 与 TUI 内 /doctor 的既有契约）。
+// doctor/safe share CLI resolution and diagnostics. Only an unusable dsh is a
+// hard failure; versions are allowlisted and credentials are reported by state.
 const runDoctorChecks = () => {
   const L = msg('doctorLabels')
   const lines = []
@@ -604,8 +753,8 @@ const runDoctorChecks = () => {
   const report = (ok, label, detail) => lines.push(`${ok ? '✓' : '✗'} ${label}: ${detail}`)
   lines.push(`dsh-tui doctor · ${PACKAGE} ${ownVersion ?? 'unknown'}`)
   report(true, 'node', `${process.version} · ${process.platform} ${process.arch}`)
-  const probeVersion = command => {
-    const probe = spawnSync(...cmd(command, ['--version']), { stdio: 'pipe', encoding: 'utf8', ...shellOpt })
+  const probeVersion = invocation => {
+    const probe = spawnSync(...invocation)
     if (probe.error || probe.status !== 0) return undefined
     // 白名单校验：只回显版本号形状的首行。诊断输出的红线是绝不泄露密钥，
     // 而 PATH 上的 wrapper 理论上可以把任意环境变量 echo 进 --version——
@@ -613,14 +762,29 @@ const runDoctorChecks = () => {
     const line = String(probe.stdout ?? '').trim().split('\n')[0] ?? ''
     return /^v?\d[\w.+-]*$/.test(line) ? line : '(version unreadable)'
   }
-  const dshVersion = probeVersion('dsh')
-  if (dshVersion === undefined) {
+  const target = dshTarget()
+  const dshVersion = target.missing ? undefined : probeVersion(dshInvocation(['--version'], { stdio: 'pipe', encoding: 'utf8' }))
+  if (target.missing) {
     hardFailure = true
-    report(false, 'dsh', L.dshMissing)
+    report(false, 'dsh', L.pinMissing(target.pinned))
+  } else if (dshVersion === undefined) {
+    hardFailure = true
+    report(false, 'dsh', target.pinned === undefined ? L.dshMissing : L.pinMissing(target.pinned))
   } else {
-    report(true, 'dsh', dshVersion)
+    const detail = `${dshVersion}  (${target.command}${target.pinned === undefined ? '' : `, ${L.pinned}`})`
+    if (target.shimOnly !== undefined || (target.pinned !== undefined && isDesktopHostShim(target.pinned))) {
+      // A known incompatible host is a failure, including an explicit pin.
+      hardFailure = true
+      report(false, 'dsh', detail)
+      lines.push(`      ${target.pinned === undefined ? L.hostShimOnly(target.shimOnly) : L.hostShimPinned(target.pinned)}`)
+    } else {
+      report(true, 'dsh', detail)
+      if (target.skippedShim !== undefined) {
+        lines.push(`      ${L.hostShimSkipped(target.skippedShim, target.command)}`)
+      }
+    }
   }
-  const pnpmVersion = probeVersion('pnpm')
+  const pnpmVersion = probeVersion([...cmd('pnpm', ['--version']), { stdio: 'pipe', encoding: 'utf8', ...shellOpt }])
   report(pnpmVersion !== undefined, 'pnpm', pnpmVersion ?? L.pnpmMissing)
   const profileVersion = readJson(installedPkgPath)?.version
   if (profileVersion === undefined) {
@@ -753,11 +917,13 @@ const forwardExit = child => {
 // Do not infer a signal from the numeric exit code.
 const startDshSession = (dshArgs, profile = PROFILE, env = process.env) =>
   new Promise(resolve => {
-    const child = spawn(...cmd('dsh', ['--profile', profile, ...dshArgs]), {
+    // 会话真正开始前说明「PATH 首命中的 dsh 被换掉了」——崩在最前端的正是
+    // 这一步，用户得知道用的是哪个宿主。
+    announceShimFallback()
+    const child = spawn(...dshInvocation(['--profile', profile, ...dshArgs], {
       stdio: 'inherit',
       env: withGuideSkillDir(env),
-      ...shellOpt,
-    })
+    }))
     child.on('error', err => resolve({ kind: 'error', error: err }))
     child.on('exit', (code, signal) => {
       if (signal) resolve({ kind: 'signal', signal })
@@ -1158,12 +1324,12 @@ const createRescueProfile = () => {
     }
     console.log(msg('safeRescueCleanup')(rescueProfileDir))
   }
-  const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })
+  const probe = spawnSync(...dshInvocation(['--version'], { stdio: 'pipe' }))
   if (probe.error || probe.status !== 0) return { kind: 'failed', lines: [msg('safeRescueFailed')('dsh missing')] }
   console.log(msg('safeRescueCreating'))
   const runAdd = extraArgs => spawnSync(
-    ...cmd('dsh', ['plugin', '--profile', RESCUE_PROFILE, 'add', ...extraArgs, `${PACKAGE}@${installVersion}`]),
-    { stdio: ['inherit', 'pipe', 'pipe'], env: rescueEnv(), ...shellOpt },
+    ...dshInvocation(['plugin', '--profile', RESCUE_PROFILE, 'add', ...extraArgs, `${PACKAGE}@${installVersion}`],
+      { stdio: ['inherit', 'pipe', 'pipe'], env: rescueEnv() }),
   )
   let add = runAdd([])
   if (add.status !== 0) {
@@ -1228,9 +1394,9 @@ const profileReady = () => {
   }
 }
 const bootstrapProfile = () => {
-  const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })
+  const probe = spawnSync(...dshInvocation(['--version'], { stdio: 'pipe' }))
   if (probe.error || probe.status !== 0) {
-    console.error(msg('noDsh'))
+    console.error(dshUnavailableMessage())
     process.exit(1)
   }
   const pnpmProbe = spawnSync(...cmd('pnpm', ['--version']), { stdio: 'pipe', ...shellOpt })
@@ -1240,8 +1406,8 @@ const bootstrapProfile = () => {
   }
   console.log(msg('bootstrapStart'))
   const runAdd = (extraArgs, capture) => spawnSync(
-    ...cmd('dsh', ['plugin', '--profile', PROFILE, 'add', ...extraArgs, `${PACKAGE}@${installVersion}`]),
-    { stdio: capture ? ['inherit', 'pipe', 'pipe'] : 'inherit', ...shellOpt },
+    ...dshInvocation(['plugin', '--profile', PROFILE, 'add', ...extraArgs, `${PACKAGE}@${installVersion}`],
+      { stdio: capture ? ['inherit', 'pipe', 'pipe'] : 'inherit' }),
   )
   let add = runAdd([], true)
   if (add.status !== 0) {
@@ -1354,9 +1520,9 @@ if (subcommand === 'safe') {
 if (subcommand === 'update') {
   if (!profileReady()) bootstrapProfile()
   {
-    const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })
+    const probe = spawnSync(...dshInvocation(['--version'], { stdio: 'pipe' }))
     if (probe.error || probe.status !== 0) {
-      console.error(msg('noDsh'))
+      console.error(dshUnavailableMessage())
       process.exit(1)
     }
   }
@@ -1420,9 +1586,9 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
   // ─── profile 副本（或源码运行）：完整启动逻辑 ─────────────────────────────
   // dsh CLI 预检（缺失时给安装指引，先于一切 profile 逻辑）。
   {
-    const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })
+    const probe = spawnSync(...dshInvocation(['--version'], { stdio: 'pipe' }))
     if (probe.error || probe.status !== 0) {
-      console.error(msg('noDsh'))
+      console.error(dshUnavailableMessage())
       process.exit(1)
     }
   }

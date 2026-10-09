@@ -304,6 +304,8 @@ Full commands: [Interaction and commands](docs/interaction.en.md).
 
 Agent presets, themes, MCP servers, environment variables: [Configuration](docs/configuration.en.md) · [Themes](docs/themes.en.md).
 
+With the DSH desktop app installed, PATH's first `dsh` may be its Electron host shim; the launcher starts the Node CLI behind it instead, and `DSH_TUI_DSH_BIN` pins one explicitly — see [Troubleshooting](docs/getting-started.en.md#troubleshooting).
+
 ## How It Works
 
 ```text

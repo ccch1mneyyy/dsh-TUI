@@ -265,6 +265,7 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 | `DEEPSEEK_API_KEY` | DeepSeek 凭证；运行模型的必需项 |
 | `DEEPSEEK_BASE_URL` | 覆盖 DeepSeek 兼容 API 端点 |
 | `DSH_HOME` | harness 家目录（profile、会话、凭据、附件）；未设置时用上游默认 `~/.dsh` |
+| `DSH_TUI_DSH_BIN` | 钉定启动器要调用的 `dsh` CLI（绝对路径；`.js` 入口用本进程的 node 执行，可直接指向 npm 包的 `lib/bin.js`）。装了 DSH 桌面端时，PATH 上首命中的 `dsh` 可能是桌面端宿主 shim——它的 Electron 宿主给不了 raw mode 的 stdin，TUI 启动即崩；启动器会自动跳过它改用其后的 Node CLI，这里可显式钉定（Windows `dsh-tui.cmd` 也识别同一变量）。`dsh-tui doctor` 打印实际解析到的可执行文件 |
 | `DSH_TUI_PERSONA` | 覆盖组合注入的 Agent persona |
 | `DSH_TUI_PRESET` | 覆盖新会话默认 Agent preset |
 | `DSH_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`）、静态主题或已注册的插件主题，优先于持久化选择 |

@@ -139,7 +139,7 @@ dsh-tui.cmd --resume
 | 命令 | 作用 |
 | --- | --- |
 | `dsh-tui update` | 更新 profile 到最新版本并对齐启动器（与 TUI 内 `/update` 同一安装逻辑，不进入 TUI） |
-| `dsh-tui doctor` | 环境检查：dsh/pnpm、profile 安装与版本对齐、API key 是否设置（只报状态不读值）、配置文件存在性；与 TUI 内 `/doctor` 会话诊断互补 |
+| `dsh-tui doctor` | 环境检查：dsh/pnpm、`dsh` 实际解析到的可执行文件、profile 安装与版本对齐、API key 是否设置（只报状态不读值）、配置文件存在性；与 TUI 内 `/doctor` 会话诊断互补 |
 | `dsh-tui safe` | 安全模式：只读诊断、插件清单与修复指引（`safe --rescue` 还会创建/校验干净的救援 profile） |
 | `dsh-tui version` | 显示启动器与 profile 版本（`--version`/`-v` 等价） |
 | `dsh-tui help` | 显示用法（`--help`/`-h` 等价） |
@@ -356,19 +356,40 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
 
 ### `dsh-tui requires an interactive terminal`
 
-stdout 不是 TTY。请直接在终端中启动，不要把主进程输出管道到文件或其他命令。
+stdout 必须是 TTY，stdin 也必须是支持 raw mode 的 TTY。请直接在终端中启动，
+不要重定向输入或把主进程输出管道到文件或其他命令。
 
 如果 dsh-tui 只是装在某个 profile 里、而实际由 Web / Tauri / GUI 等非终端
-宿主启动 DSH，dsh-tui 会检测到 stdout 不是 TTY 且并非由 `dsh-tui` launcher
+宿主启动 DSH，dsh-tui 会检测到输入/输出缺少终端能力且并非由 `dsh-tui` launcher
 启动，自动跳过 TUI 前端（不报错、不影响宿主启动）。
 
-只有显式执行 `dsh-tui`（含 standalone 便携版）却没有 TTY 时，才会报上面的
+只有显式执行 `dsh-tui`（含 standalone 便携版）却缺少这些终端能力时，才会报上面的
 错误。
 
 ### 找不到 `dsh` 或 `pnpm`
 
 确认全局 npm bin 目录在 `PATH` 中，并重新打开终端。`install.sh` 会在安装前
 检查这两个命令。
+
+### 同时装了 DSH 桌面端，启动即崩 `Raw mode is not supported`
+
+Windows 桌面端（Electron，issue #1388 实测版本 0.2.0-rc.2）会在 PATH 上装一个 `dsh` 宿主 shim（典型位置
+`%USERPROFILE%\.local\bin\dsh.cmd`），它打开 `ELECTRON_RUN_AS_NODE` 后把命令交给
+`dsh-desktop-host/lib/cli.js`。那个 Electron 宿主给不了支持 raw mode 的 stdin，
+TUI 一进 Ink 就崩、界面都画不出来；而它和 Node 版 CLI 的 `dsh --version` 输出
+逐字相同，安装侧看不出问题。
+
+- 启动器会自动跳过首命中的桌面端宿主 shim，改用 PATH 上其后的 Node 版 CLI，
+  并在启动前说明使用的路径——**不需要改 PATH 顺序**。只跳过能识别的
+  Electron 桌面端脚本，普通 CLI 包装脚本保持原有解析顺序。
+- `dsh-tui doctor` 打印 `dsh` 实际解析到的可执行文件；PATH 上只有桌面端宿主
+  shim 时直接报 `✗` 并给出处置：装 Node 版 CLI
+  （`npm install -g @deepseek-ai/dsh`），或用 `DSH_TUI_DSH_BIN` 显式钉定。
+- `DSH_TUI_DSH_BIN` 收绝对路径；指向 npm 包的入口
+  `…/@deepseek-ai/dsh/lib/bin.js` 也可以，启动器会用本进程的 node 执行它。
+- 没有可用替代 CLI 时，运行时会在创建 Agent 和绘制界面前检查 stdin 的
+  raw mode 能力，显式启动给出清晰错误。此修复绕开已知宿主限制；
+  Electron 的 stdin 能力仍需桌面端上游修复。
 
 ### 启动后立刻退回 shell，几乎没有报错（pnpm 9）
 

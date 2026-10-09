@@ -134,7 +134,7 @@ the same commands:
 | Command | Purpose |
 | --- | --- |
 | `dsh-tui update` | Update the profile to the latest release and align the launcher (same install logic as the in-TUI `/update`, without restarting into the TUI) |
-| `dsh-tui doctor` | Environment checks: dsh/pnpm, profile install and version alignment, whether the API key is set (state only, never the value), config file presence; complements the in-TUI `/doctor` session diagnostics |
+| `dsh-tui doctor` | Environment checks: dsh/pnpm, the executable `dsh` actually resolves to, profile install and version alignment, whether the API key is set (state only, never the value), config file presence; complements the in-TUI `/doctor` session diagnostics |
 | `dsh-tui safe` | Safe mode: read-only diagnostics, inventory, repair guidance (`safe --rescue` also creates/verifies the clean rescue profile) |
 | `dsh-tui version` | Show the launcher and profile versions (`--version`/`-v` are equivalent) |
 | `dsh-tui help` | Show usage (`--help`/`-h` are equivalent) |
@@ -351,22 +351,49 @@ the Harness root. To test only this repository's current source, prefer
 
 ### `dsh-tui requires an interactive terminal`
 
-stdout is not a TTY. Start the process directly in a terminal rather than
-redirecting its main output to another command or file.
+stdout must be a TTY, and stdin must be a TTY supporting raw mode. Start the
+process directly in a terminal without redirecting input or piping its main
+output to another command or file.
 
-dsh-tui detects two things: stdout is not a TTY, and the process was not
+dsh-tui detects two things: input/output lacks terminal capabilities, and the process was not
 started by the `dsh-tui` launcher. When both hold, it silently skips the TUI
 frontend (no error, the host keeps booting). That is the case when dsh-tui is
 only installed in a profile and a non-terminal host (Web / Tauri / GUI, stdout
 piped or null) starts the DSH composition.
 
 The error above only appears when `dsh-tui` (or the standalone portable build)
-was explicitly launched without a TTY.
+was explicitly launched without these terminal capabilities.
 
 ### `dsh` or `pnpm` cannot be found
 
 Make sure the global npm bin directory is on `PATH`, then open a new terminal.
 `install.sh` checks both commands before installation.
+
+### The DSH desktop app is installed and startup crashes with `Raw mode is not supported`
+
+The Windows desktop (Electron) app (version 0.2.0-rc.2 measured in issue #1388)
+installs a `dsh` host shim on PATH (typically
+`%USERPROFILE%\.local\bin\dsh.cmd`) that sets `ELECTRON_RUN_AS_NODE` and hands the
+command to `dsh-desktop-host/lib/cli.js`. That Electron host cannot provide a
+raw-mode stdin, so the TUI crashes as soon as Ink mounts and nothing is ever
+drawn — and its `dsh --version` output is byte-identical to the Node CLI's, so
+the installation side looks healthy.
+
+- The launcher skips a first-hit desktop host shim and uses the Node CLI behind
+  it on PATH, reporting the selected paths before start — **no PATH reordering needed**.
+  Only recognised Electron desktop scripts are skipped; ordinary CLI wrappers
+  retain their resolution order.
+- `dsh-tui doctor` prints the executable `dsh` actually resolves to; when the
+  host shim is the only `dsh` on PATH it reports `✗` with the fix: install the
+  Node CLI (`npm install -g @deepseek-ai/dsh`), or pin one with
+  `DSH_TUI_DSH_BIN`.
+- `DSH_TUI_DSH_BIN` takes an absolute path; the npm package entry
+  `…/@deepseek-ai/dsh/lib/bin.js` works too — the launcher runs it with this
+  process's node.
+- Without a usable alternative CLI, the runtime checks stdin's raw-mode
+  capability before creating an Agent or drawing the UI and gives an explicit
+  launch a clear error. This fix works around the known host limitation;
+  restoring Electron's stdin capability remains an upstream desktop fix.
 
 ### The TUI exits right back to the shell with almost no error (pnpm 9)
 

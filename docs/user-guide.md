@@ -642,6 +642,7 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
   `DSH_TUI_ACCESSIBILITY`（无障碍：关动画/图形预览）
 - `DSH_TUI_RESUME_SESSION`、`DSH_TUI_WORKSPACE_TARGET`、`DSH_TUI_SESSION_ROOT`、`DSH_TUI_DEBUG`、
   `DSH_TUI_RENDER_LOG`（帧取证）
+- `DSH_TUI_DSH_BIN`（钉定启动器要调用的 `dsh` CLI；同时装了 DSH 桌面端时才需要）
 - `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`VISUAL`/`EDITOR`（`Ctrl+G` 外部编辑器）、
   `DSH_PERMISSION_MODE`
 

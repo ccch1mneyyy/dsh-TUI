@@ -1,8 +1,8 @@
 /**
- * Non-TTY host gating regression (Web / Tauri coexistence).
+ * Terminal capability gating regression (Web / Tauri coexistence, issue #1388).
  *
  * dsh-tui installed in a profile must not fail the whole DSH composition when
- * the host is not a terminal (stdout piped or null): the plugin skips itself
+ * the host lacks terminal output or raw-mode input: the plugin skips itself
  * unless the process was explicitly launched through the dsh-tui launcher
  * (DSH_TUI_LAUNCHER_VERSION / standalone runtime), which keeps failing loudly.
  *
@@ -10,8 +10,19 @@
  */
 
 import { Context } from '@deepseek-ai/cordis'
-import { apply, resolveTuiHostMode } from '../src/dsh-adapter/plugin.js'
+import { mkdirSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { Config } from '../src/dsh-adapter/index.js'
+
+// Isolate preferences before importing the plugin, including on a bad baseline
+// that wrongly proceeds past the terminal gate into agent setup.
+const hostModeHome = mkdtempSync(join(tmpdir(), 'verify-tui-host-'))
+process.env.HOME = hostModeHome
+process.env.USERPROFILE = hostModeHome
+process.env.DSH_HOME = join(hostModeHome, '.dsh')
+mkdirSync(process.env.DSH_HOME, { recursive: true })
+const { apply, resolveTuiHostMode } = await import('../src/dsh-adapter/plugin.js')
 
 let failures = 0
 let checks = 0
@@ -26,37 +37,63 @@ const check = (name: string, ok: boolean, detail = ''): void => {
 const cases: {
   name: string
   stdoutTty: boolean
+  stdinRawCapable: boolean
   env: Record<string, string>
-  expected: ReturnType<typeof resolveTuiHostMode>
+  expected: 'interactive' | 'invalid-explicit-launch' | 'headless-host'
 }[] = [
   {
     name: 'tty + no launcher marker → interactive',
     stdoutTty: true,
+    stdinRawCapable: true,
     env: {},
     expected: 'interactive',
   },
   {
     name: 'tty + launcher marker → interactive',
     stdoutTty: true,
+    stdinRawCapable: true,
     env: { DSH_TUI_LAUNCHER_VERSION: '9.9.9' },
     expected: 'interactive',
   },
   {
     name: 'no tty + launcher marker → invalid-explicit-launch',
     stdoutTty: false,
+    stdinRawCapable: false,
     env: { DSH_TUI_LAUNCHER_VERSION: '9.9.9' },
     expected: 'invalid-explicit-launch',
   },
   {
     name: 'no tty + no marker → headless-host',
     stdoutTty: false,
+    stdinRawCapable: false,
     env: {},
     expected: 'headless-host',
+  },
+  {
+    name: 'stdout tty + no raw stdin + launcher marker → invalid-explicit-launch',
+    stdoutTty: true,
+    stdinRawCapable: false,
+    env: { DSH_TUI_LAUNCHER_VERSION: '9.9.9' },
+    expected: 'invalid-explicit-launch',
+  },
+  {
+    name: 'stdout tty + no raw stdin + no marker → headless-host',
+    stdoutTty: true,
+    stdinRawCapable: false,
+    env: {},
+    expected: 'headless-host',
+  },
+  {
+    name: 'no stdout tty + raw stdin + launcher marker → invalid-explicit-launch',
+    stdoutTty: false,
+    stdinRawCapable: true,
+    env: { DSH_TUI_LAUNCHER_VERSION: '9.9.9' },
+    expected: 'invalid-explicit-launch',
   },
 ]
 
 for (const c of cases) {
-  const actual = resolveTuiHostMode(c.stdoutTty, c.env)
+  const actual = resolveTuiHostMode(c.stdoutTty, c.env, c.stdinRawCapable)
   check(`${c.name} (got ${actual})`, actual === c.expected)
 }
 
@@ -86,6 +123,8 @@ Object.defineProperty(process.stdout, 'isTTY', { value: false, configurable: tru
 
 const prevLauncherVersion = process.env.DSH_TUI_LAUNCHER_VERSION
 delete process.env.DSH_TUI_LAUNCHER_VERSION
+
+const stdinDescriptors = new Map(['isTTY', 'setRawMode'].map(key => [key, Object.getOwnPropertyDescriptor(process.stdin, key)]))
 
 const infoLogs: string[] = []
 const ctx = new Context()
@@ -121,6 +160,37 @@ try {
     message.includes('interactive terminal'),
     message,
   )
+
+  Object.defineProperty(process.stdout, 'isTTY', { value: true, configurable: true })
+  // Electron-as-node can keep stdout as a TTY while stdin has no raw-mode API.
+  // Also cover a stream claiming isTTY without implementing setRawMode.
+  for (const stdinTty of [undefined, true]) {
+    Object.defineProperty(process.stdin, 'isTTY', { value: stdinTty, configurable: true })
+    Object.defineProperty(process.stdin, 'setRawMode', { value: undefined, configurable: true })
+    delete process.env.DSH_TUI_LAUNCHER_VERSION
+    infoLogs.length = 0
+    let skipped = false
+    try {
+      await apply(ctx, {} as unknown as Config)
+      skipped = infoLogs.some(line => line.includes('skipping the TUI frontend'))
+    } catch {
+      // A late settings/render failure means the early host gate was bypassed.
+    }
+    check(`no raw stdin (isTTY=${stdinTty}): foreign host skips before setup`, skipped)
+
+    process.env.DSH_TUI_LAUNCHER_VERSION = '9.9.9'
+    message = ''
+    try {
+      await apply(ctx, {} as unknown as Config)
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    check(
+      `no raw stdin (isTTY=${stdinTty}): explicit launch explains the CLI workaround`,
+      message.includes('stdin') && message.includes('raw mode') && message.includes('DSH_TUI_DSH_BIN'),
+      message,
+    )
+  }
 } finally {
   logger.info = origInfo
   if (prevLauncherVersion === undefined) {
@@ -132,6 +202,10 @@ try {
     Object.defineProperty(process.stdout, 'isTTY', stdoutIsTTYDescriptor as PropertyDescriptor)
   } else {
     Reflect.deleteProperty(process.stdout, 'isTTY')
+  }
+  for (const [key, descriptor] of stdinDescriptors) {
+    if (descriptor) Object.defineProperty(process.stdin, key, descriptor)
+    else Reflect.deleteProperty(process.stdin, key)
   }
 }
 

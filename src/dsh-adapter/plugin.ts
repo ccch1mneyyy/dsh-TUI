@@ -147,11 +147,11 @@ export function isLandingLaunch(input: { launchSessionId?: string; initialPrompt
 /**
  * How this process should treat the TUI frontend, given the terminal it runs on.
  *
- * Three startup identities exist:
+ * Two startup identities exist:
  *  1. `dsh-tui` / standalone — the user explicitly asked for the terminal UI;
  *  2. Web / Tauri / other GUI hosts — the profile merely has dsh-tui installed
- *     and the current process is NOT a dsh-tui frontend. stdout is a pipe or
- *     null there, and mounting a TUI would fail the whole composition.
+ *     and the current process is NOT a dsh-tui frontend. Its streams may lack
+ *     terminal input/output capabilities; mounting a TUI would fail the host.
  *
  * The official launcher (and the standalone runtime) mark explicit launches,
  * so an explicit `dsh-tui` run without a TTY keeps failing loudly, while
@@ -162,8 +162,10 @@ export type TuiHostMode = 'interactive' | 'invalid-explicit-launch' | 'headless-
 export function resolveTuiHostMode(
   stdoutIsTTY = process.stdout.isTTY === true,
   env: NodeJS.ProcessEnv = process.env,
+  stdinIsRawCapable = process.stdin.isTTY === true && typeof process.stdin.setRawMode === 'function',
 ): TuiHostMode {
-  if (stdoutIsTTY) {
+  // Electron-as-node can expose a TTY stdout without a raw-mode stdin (#1388).
+  if (stdoutIsTTY && stdinIsRawCapable) {
     return 'interactive'
   }
 
@@ -233,18 +235,22 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const hostMode = resolveTuiHostMode()
   if (hostMode === 'invalid-explicit-launch') {
     if (process.env.DSH_TUI_RESTART_CHILD === '1') {
-      logRestartEvent('boot: TTY gate failed - stdout is not a TTY')
+      logRestartEvent('boot: TTY gate failed - terminal output or raw-mode input unavailable')
     }
-    throw new Error('dsh-tui requires an interactive terminal (stdout must be a TTY).')
+    throw new Error(
+      'dsh-tui requires an interactive terminal (stdout must be a TTY; stdin must be a TTY supporting raw mode). ' +
+      'On Windows, a DSH desktop Electron shim can lack raw-mode stdin. Use the Node CLI (@deepseek-ai/dsh); ' +
+      'set DSH_TUI_DSH_BIN to its path when using the dsh-tui launcher.',
+    )
   }
   if (hostMode === 'headless-host') {
     // Web / Tauri / GUI hosts load the plugin from the profile without being
-    // a dsh-tui frontend (stdout is a pipe or null). Mounting a TUI there
+    // a dsh-tui frontend (terminal output or raw-mode input unavailable). Mounting a TUI there
     // would fail the whole composition, so skip quietly and let the host
     // boot. The launcher marker above keeps explicit `dsh-tui` launches
     // failing loudly instead of silently producing no UI.
     ctx.logger.info(
-      'dsh-tui: non-interactive host detected (stdout is not a TTY); skipping the TUI frontend',
+      'dsh-tui: non-interactive host detected (terminal output or raw-mode input unavailable); skipping the TUI frontend',
     )
     return
   }

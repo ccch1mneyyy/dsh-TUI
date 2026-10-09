@@ -265,6 +265,8 @@ OpenAI 条款约束。完整操作与当前边界：[Codex 后端](docs/codex-ba
 
 Agent 预设、主题、MCP 服务器、环境变量：[配置参考](docs/configuration.md) · [主题系统](docs/themes.md)。
 
+同时装了 DSH 桌面端时，PATH 上首命中的 `dsh` 可能是桌面端宿主 shim：启动器会自动改用其后的 Node 版 CLI，也可用 `DSH_TUI_DSH_BIN` 显式钉定，详见[常见问题](docs/getting-started.md#常见问题)。
+
 ## 工作原理
 
 ```text

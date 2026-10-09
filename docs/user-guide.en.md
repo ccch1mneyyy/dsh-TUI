@@ -691,6 +691,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
   `DSH_TUI_ACCESSIBILITY` (accessibility: no animation/graphics preview)
 - `DSH_TUI_RESUME_SESSION`, `DSH_TUI_WORKSPACE_TARGET`, `DSH_TUI_SESSION_ROOT`, `DSH_TUI_DEBUG`,
   `DSH_TUI_RENDER_LOG` (frame capture)
+- `DSH_TUI_DSH_BIN` (pin the `dsh` CLI the launcher runs; only needed alongside the DSH desktop app)
 - `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `VISUAL`/`EDITOR` (`Ctrl+G` external editor),
   `DSH_PERMISSION_MODE`
 

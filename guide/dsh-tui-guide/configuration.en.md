@@ -299,6 +299,7 @@ for the complete field reference.
 | `DEEPSEEK_API_KEY` | Required DeepSeek credential |
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
 | `DSH_HOME` | Harness home (profiles, sessions, credentials, attachments); falls back to the upstream default `~/.dsh` |
+| `DSH_TUI_DSH_BIN` | Pin the `dsh` CLI the launcher runs (an absolute path; a `.js` entry runs through this process's node, so the npm package's `lib/bin.js` works directly). With the DSH desktop app installed, PATH's first `dsh` may be its host shim — whose Electron host cannot provide a raw-mode stdin, so the TUI crashes on startup; the launcher skips it for the Node CLI behind it, and this variable pins one explicitly (the Windows `dsh-tui.cmd` wrapper honours the same variable). `dsh-tui doctor` prints the executable actually resolved |
 | `DSH_TUI_PERSONA` | Override the Agent persona injected by the composition |
 | `DSH_TUI_PRESET` | Override the default Agent preset for new sessions |
 | `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`), static theme, or registered plugin theme ahead of persisted selection |

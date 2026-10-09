@@ -15,9 +15,8 @@
  *     #183）拒绝启动并给出对齐命令——dsh CLI 会从启动器拷贝读 bundle
  *     patch 套到 profile 旧包上，启动必然 opaque 崩溃
  *   - profile 子进程非零退出时保留退出码与直跑诊断命令
- *   - 面向用户的消息双语：DSH_TUI_LANG=zh 输出中文，否则默认英文
- *   - shellQuote 单元（win32 的 shell:true 路径 CI 跑不到 Windows，只能靠
- *     单测覆盖转义规则本身）
+ *   - 面向用户的消息双语：DSH_TUI_LANG=en 输出英文，缺省中文
+ *   - CLI 钉定、桌面端 shim 选择、doctor 诊断与 Windows cmd.exe 路径转义
  *
  * 运行：pnpm build && node scripts/verify-launcher.mjs
  */
@@ -79,6 +78,35 @@ const stubPath = [stubDir, ...(isWin ? [dirname(process.execPath), ...winBasics]
 // 无 dsh 环境：绝不能含 node 目录——本机 node 与 dsh 同目录（D:\\node）时会把真 dsh 带进来。
 // bin 自身经绝对路径 spawn，不需要 PATH 里的 node；仅需 cmd.exe（System32）。
 const noDshPath = (isWin ? winBasics : ['/usr/bin', '/bin']).join(sep)
+// 第 4.5 节（issue #1388）用：PATH 上排在 stub 之前的 DSH 桌面端宿主 shim。
+const shimDir = join(tmp, 'shim-bin')
+const shimEntry = join(shimDir, isWin ? 'dsh.cmd' : 'dsh')
+const platformTail = isWin ? [dirname(process.execPath), ...winBasics] : ['/usr/bin', '/bin']
+mkdirSync(shimDir, { recursive: true })
+// 形状照抄现场：桌面端 shim 打开 ELECTRON_RUN_AS_NODE，把命令交给
+// dsh-desktop-host/lib/cli.js；`--version` 照常报版本（两个宿主逐字相同，这正是
+// 问题所在），被当成宿主启动时在 ${DSH_STUB_LOG}.shim 留记录。
+writeFileSync(
+  shimEntry,
+  isWin
+    ? `@echo off\r\nset "ELECTRON_RUN_AS_NODE=1"\r\nset "DSH_TEST_HOST=dsh-desktop-host\\lib\\cli.js"\r\necho %*>>"%DSH_STUB_LOG%.shim"\r\necho 9.9.9-desktop-host\r\n@exit /b 0\r\n`
+    : `#!/bin/sh\nELECTRON_RUN_AS_NODE=1\nDSH_TEST_HOST=dsh-desktop-host/lib/cli.js\nprintf '%s\\n' "$*" >> "\${DSH_STUB_LOG}.shim"\nprintf '%s\\n' "9.9.9-desktop-host"\nexit 0\n`,
+  'ascii',
+)
+chmodSync(shimEntry, 0o755)
+const shimFirstPath = [shimDir, stubDir, ...platformTail].join(sep)
+const shimOnlyPath = [shimDir, ...platformTail].join(sep)
+// 宿主 shim 被当成会话宿主启动过没有：探针（--version）可以有，`--profile` 不行。
+function shimCalls() {
+  try {
+    return readFileSync(`${stubLog}.shim`, 'utf8').trim().split('\n').filter(Boolean)
+  } catch {
+    return []
+  }
+}
+// Windows 的 PATH 解析按 PATHEXT（大写 `.CMD`）拼候选名，而文件系统大小写不敏感
+// ——解析结果与磁盘上的实际大小写可以不同。比较路径时折叠大小写。
+const hasPath = (text, path) => text.toLowerCase().includes(path.toLowerCase())
 
 function setProfileVersion(version) {
   const dir = join(home, PKG_DIR)
@@ -91,6 +119,9 @@ function resetStubLog() {
   writeFileSync(stubLog, '')
   rmSync(`${stubLog}.count`, { force: true })
   rmSync(`${stubLog}.env`, { force: true })
+  // 4.5 节的旁路日志（宿主 shim 与 .js 钉定各一份），同样按用例清零。
+  rmSync(`${stubLog}.shim`, { force: true })
+  rmSync(`${stubLog}.js`, { force: true })
 }
 function stubCalls() {
   return readFileSync(stubLog, 'utf8').trim().split('\n').filter(Boolean)
@@ -105,11 +136,12 @@ function stubEnvs() {
   }
 }
 
-function runBin(args, extraEnv = {}, { delegating = false } = {}) {
+function runBin(args, extraEnv = {}, { delegating = false, cwd } = {}) {
   return spawnSync(process.execPath, [bin, ...args], {
     env: {
       PATH: stubPath,
       HOME: tmp,
+      USERPROFILE: tmp,
       DSH_HOME: home,
       DSH_STUB_LOG: stubLog,
       // stub 安装创建的判定文件版本默认与启动器对齐——否则自举后的版本
@@ -124,6 +156,7 @@ function runBin(args, extraEnv = {}, { delegating = false } = {}) {
       ...extraEnv,
     },
     encoding: 'utf8',
+    cwd,
   })
 }
 
@@ -339,6 +372,154 @@ r = runBin([], { DSH_TUI_LANG: 'en' }, { delegating: true })
 check('shim: no bin fails loud with the reinstall hint', r.status === 1 && r.stderr.includes(`Reinstall the global launcher`))
 check('shim: reinstall hint names the npm command', r.stderr.includes(`npm install -g --legacy-peer-deps ${PACKAGE}`))
 
+
+// --- 4.5 dsh 解析（issue #1388）---------------------------------------------
+// 装了 DSH 桌面端时，PATH 上首命中的 `dsh` 可能是 Electron 宿主 shim（本节的
+// shimDir 就是它的沙箱替身）：它把命令交给 ELECTRON_RUN_AS_NODE 下的
+// dsh-desktop-host，而那个宿主的 stdin 进不了 raw mode——TUI 一画就崩，且两个
+// 宿主 `dsh --version` 逐字相同，安装侧看不出问题。这里覆盖三条：
+//   - 首命中是宿主 shim 时改用它之后的 Node CLI，并在启动前打印说明；
+//   - 普通 Node shim（上面的 stub）绝不被改道——第 2 节的静默断言即反证；
+//   - DSH_TUI_DSH_BIN 能钉定（绝对路径与 .js 入口两种形态），钉死了就照用、
+//     不可用则 fail loud 且不冒充「未安装 dsh」。
+setProfileVersion(ownVersion)
+const stubEntry = join(stubDir, isWin ? 'dsh.cmd' : 'dsh')
+{
+  resetStubLog()
+  r = runBin([], { PATH: shimFirstPath, DSH_TUI_LANG: 'en' })
+  check('host shim: still launches through the Node CLI behind it', r.status === 0 && stubCalls().at(-1) === '<--profile><dsh-tui>')
+  check('host shim: the shim itself never hosts the session', shimCalls().every(c => !c.includes('--profile')))
+  check(
+    'host shim: the reroute is announced with both paths',
+    r.stderr.includes('DSH desktop (Electron) host shim') && hasPath(r.stderr, shimEntry) && hasPath(r.stderr, stubEntry),
+  )
+  r = runBin([], { PATH: shimFirstPath })
+  check('host shim: Chinese notice', r.stderr.includes('宿主 shim') && r.stderr.includes('DSH_TUI_DSH_BIN'))
+  check('host shim: the notice is printed exactly once', r.stderr.split('宿主 shim').length === 2)
+
+  // 钉定：PATH 上只有宿主 shim，能启动的唯一解释就是钉定的那个 dsh。
+  resetStubLog()
+  r = runBin([], { PATH: shimOnlyPath, DSH_TUI_DSH_BIN: stubEntry })
+  check('pin: the pinned CLI runs when PATH only offers the host shim', r.status === 0 && stubCalls().at(-1) === '<--profile><dsh-tui>')
+  check('pin: no reroute notice when the pin decides', r.stderr.trim() === '')
+
+  // .js 入口（npm 包的真实入口 lib/bin.js 形态）经本进程的 node 执行。
+  const jsCli = join(tmp, 'pin-cli.js')
+  writeFileSync(
+    jsCli,
+    "const fs = require('node:fs')\nfs.appendFileSync(process.env.DSH_STUB_LOG + '.js', process.argv.slice(2).map(v => '<' + v + '>').join('') + '\\n')\n",
+  )
+  const jsCalls = () => {
+    try {
+      return readFileSync(`${stubLog}.js`, 'utf8').trim().split('\n').filter(Boolean)
+    } catch {
+      return []
+    }
+  }
+  resetStubLog()
+  r = runBin([], { PATH: shimOnlyPath, DSH_TUI_DSH_BIN: jsCli })
+  check('pin: a .js entry runs through node', r.status === 0 && jsCalls().at(-1) === '<--profile><dsh-tui>')
+
+  // 钉定的路径不存在：必须点名 DSH_TUI_DSH_BIN 并停在预检，不冒充「没装 dsh」。
+  const missingPin = join(tmp, 'no-such-dir', 'dsh')
+  resetStubLog()
+  r = runBin([], { DSH_TUI_DSH_BIN: missingPin, DSH_TUI_LANG: 'en' })
+  check('pin: an unusable pin fails loud before any launch', r.status === 1 && launchCalls().length === 0)
+  check(
+    'pin: names DSH_TUI_DSH_BIN instead of claiming dsh is missing',
+    r.stderr.includes('DSH_TUI_DSH_BIN') && r.stderr.includes(missingPin) && !r.stderr.includes('dsh CLI not found'),
+  )
+
+  // doctor 的解析事实（issue #1388 的期望之一）：装了两个宿主时，不打出解析结果
+  // 就区分不出来——这里是唯一会说出「用的是哪个可执行文件」的地方。
+  r = runBin(['doctor'], { PATH: shimFirstPath, DSH_TUI_LANG: 'en' })
+  check('doctor: reports the resolved dsh executable', r.status === 0 && hasPath(r.stdout, `(${stubEntry})`))
+  check(
+    'doctor: flags the host shim it routed around',
+    r.stdout.includes('DSH desktop (Electron) host shim') && hasPath(r.stdout, shimEntry),
+  )
+  r = runBin(['doctor'], { PATH: shimOnlyPath, DSH_TUI_LANG: 'en' })
+  check(
+    'doctor: a lone host shim is a hard failure naming the fix',
+    r.status === 1 && r.stdout.includes('✗ dsh') && r.stdout.includes('only `dsh` on PATH'),
+  )
+  r = runBin(['doctor'], { PATH: shimFirstPath, DSH_TUI_DSH_BIN: stubEntry, DSH_TUI_LANG: 'en' })
+  check(
+    'doctor: a pinned CLI is reported as pinned, with no reroute note',
+    r.status === 0 && r.stdout.includes('pinned by DSH_TUI_DSH_BIN') && !r.stdout.includes('host shim'),
+  )
+  r = runBin(['doctor'], { DSH_TUI_DSH_BIN: missingPin, DSH_TUI_LANG: 'en' })
+  check('doctor: an unusable pin is a hard failure', r.status === 1 && r.stdout.includes('DSH_TUI_DSH_BIN'))
+
+  r = runBin(['doctor'], { DSH_TUI_DSH_BIN: shimEntry, DSH_TUI_LANG: 'en' })
+  check('doctor: a pinned Electron host shim is a hard failure', r.status === 1 && r.stdout.includes('✗ dsh'))
+
+  // Exercise the real Windows command parser, including paths and argv with spaces.
+  const spacedDir = join(tmp, 'Node CLI (local)')
+  mkdirSync(spacedDir, { recursive: true })
+  const spacedShim = join(spacedDir, isWin ? 'dsh.cmd' : 'dsh')
+  writeFileSync(spacedShim, readFileSync(stubEntry))
+  chmodSync(spacedShim, 0o755)
+  resetStubLog()
+  r = runBin(['a b'], { DSH_TUI_DSH_BIN: spacedShim })
+  check('pin: a shim path with spaces preserves argv', r.status === 0 && stubCalls().at(-1) === '<--profile><dsh-tui><--><a b>')
+  const spacedJs = join(spacedDir, 'dsh.js')
+  writeFileSync(spacedJs, readFileSync(jsCli))
+  resetStubLog()
+  r = runBin(['a b'], { DSH_TUI_DSH_BIN: spacedJs })
+  check('pin: a JS entry path with spaces preserves argv', r.status === 0 && jsCalls().at(-1) === '<--profile><dsh-tui><--><a b>')
+
+  const metaDir = join(tmp, 'Node&CLI')
+  mkdirSync(metaDir, { recursive: true })
+  const metaShim = join(metaDir, isWin ? 'dsh.cmd' : 'dsh')
+  writeFileSync(metaShim, readFileSync(stubEntry))
+  chmodSync(metaShim, 0o755)
+  resetStubLog()
+  r = runBin([], { DSH_TUI_DSH_BIN: metaShim })
+  check('pin: shell metacharacters in a CLI path stay literal', r.status === 0 && stubCalls().at(-1) === '<--profile><dsh-tui>')
+
+  // Wrapper scripts clearing Electron mode or mentioning it only in comments
+  // must retain their position on PATH.
+  const ordinaryDir = join(tmp, 'ordinary-wrapper')
+  mkdirSync(ordinaryDir, { recursive: true })
+  const ordinaryShim = join(ordinaryDir, isWin ? 'dsh.cmd' : 'dsh')
+  const ordinary = readFileSync(stubEntry, 'utf8')
+  const comment = isWin ? 'rem ELECTRON_RUN_AS_NODE=1 dsh-desktop-host\r\n' : '# ELECTRON_RUN_AS_NODE=1 dsh-desktop-host\n'
+  writeFileSync(ordinaryShim, ordinary.replace('\n', '\n' + comment))
+  chmodSync(ordinaryShim, 0o755)
+  resetStubLog()
+  const ordinaryPath = [ordinaryDir, shimDir, ...platformTail].join(sep)
+  r = runBin([], { PATH: ordinaryPath })
+  check('shim detection: a comment does not trigger substitution', r.status === 0 && r.stderr.trim() === '' && launchCalls().length === 1)
+  const clearing = isWin ? 'set "ELECTRON_RUN_AS_NODE="\r\nset "DSH_TEST_HOST=dsh-desktop-host"\r\n' : 'ELECTRON_RUN_AS_NODE=\nDSH_TEST_HOST=dsh-desktop-host\n'
+  writeFileSync(ordinaryShim, ordinary.replace('\n', '\n' + clearing))
+  resetStubLog()
+  r = runBin([], { PATH: ordinaryPath })
+  check('shim detection: clearing Electron mode does not trigger substitution', r.status === 0 && r.stderr.trim() === '' && launchCalls().length === 1)
+
+  resetStubLog()
+  r = runBin(['doctor'], { PATH: shimOnlyPath }, { cwd: ordinaryDir })
+  check(
+    'resolution: Windows cwd / POSIX PATH ordering is preserved',
+    isWin ? r.status === 0 && hasPath(r.stdout, ordinaryShim) : r.status === 1 && r.stdout.includes('✗ dsh'),
+  )
+
+  if (isWin) {
+    // The repository's .cmd front door uses the same launcher and pin semantics.
+    resetStubLog()
+    // Invoke the batch directly through cmd.exe (node cannot execute a batch).
+    const wrapperLine = `"${join(root, 'dsh-tui.cmd')}" "a b"`
+    r = spawnSync('cmd.exe', ['/d', '/s', '/c', `"${wrapperLine}"`], {
+      windowsVerbatimArguments: true,
+      env: {
+        PATH: stubPath, HOME: tmp, USERPROFILE: tmp, DSH_HOME: home,
+        DSH_STUB_LOG: stubLog, DSH_TUI_NO_DELEGATE: '1', DSH_TUI_DSH_BIN: spacedJs,
+      },
+      encoding: 'utf8',
+    })
+    check('Windows wrapper: forwards a JS pin and spaced argv', r.status === 0 && jsCalls().at(-1) === '<--profile><dsh-tui><--><a b>')
+  }
+}
 
 // --- 5. 消息双语：缺 dsh 时的报错（契约同 TUI：DSH_TUI_LANG 指定才生效，否则默认中文）
 const envNoDsh = { PATH: noDshPath }

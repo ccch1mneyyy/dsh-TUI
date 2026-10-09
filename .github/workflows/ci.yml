@@ -718,6 +718,11 @@ jobs:
       - name: Safe-mode launcher gate (cross-platform)
         run: node scripts/verify-safe-mode.mjs
 
+      # CLI pins can resolve to Windows paths with spaces/metacharacters;
+      # exercise the real cmd.exe parser as well as the POSIX launch path.
+      - name: CLI resolution launcher gate (cross-platform)
+        run: node scripts/verify-launcher.mjs
+
       # 整合包产物编码契约防复发：Windows 上跑全量（含 PS 5.1 解码 + cmd 冒烟），macOS 只跑跨平台组（Windows 专属组显式 SKIP）。
       - name: Installer bundle encoding contract (cross-platform)
         run: node scripts/verify-installer-bundle.mjs
