@@ -9,6 +9,7 @@
  */
 import { t } from '../i18n.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import { getGraphemeSegmenter } from '../utils/intl.js'
 import type { SessionKind, TitleSource } from '../dsh-adapter/sessions/index.js'
 import type { Theme } from '../theme.js'
 
@@ -213,6 +214,26 @@ export function wrapWidth(text: string, width: number): string[] {
     }
     lines.push(line)
   }
+  return lines
+}
+
+/** Wrap a directory without dropping its spaces or splitting Unicode graphemes. */
+export function wrapPathWidth(path: string, width: number): string[] {
+  if (width <= 0 || path === '') return []
+  const lines: string[] = []
+  let line = ''
+  let used = 0
+  for (const { segment } of getGraphemeSegmenter().segment(path)) {
+    const cells = stringWidth(segment)
+    if (used + cells > width && line !== '') {
+      lines.push(line)
+      line = ''
+      used = 0
+    }
+    line += segment
+    used += cells
+  }
+  if (line !== '') lines.push(line)
   return lines
 }
 

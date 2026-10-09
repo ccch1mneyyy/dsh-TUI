@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { basename } from 'node:path'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { t } from '../i18n.js'
@@ -17,7 +17,8 @@ import type { PermissionPanelDecision, PermissionPanelOutcome, PermissionPanelSn
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { isPlainReturn, isMod } from '../utils/modifiers.js'
-import { truncateWidth } from '../sessions/format.js'
+import { truncateWidth, wrapPathWidth } from '../sessions/format.js'
+import { clearTooltip, useTooltip } from '../components/Tooltip.js'
 import { normalizeWorkspaceCwd } from '../sessions/view.js'
 import { readSessionPins, setSessionPinned } from '../sessionPins.js'
 import { readSessionOwners, type SessionMountOwner } from '../sessionMounts.js'
@@ -528,20 +529,32 @@ export function SessionSupervisor({
           ? withTabHint(t('home-hint-list'))
           : withTabHint(listHint)
 
-  const railWindowTopIndex = railWindowTop(railFocus, railEntries.length, railEntryCapacity)
-  const visibleRailRows = railEntries.slice(railWindowTopIndex, railWindowTopIndex + railEntryCapacity)
   /** Content-local anchor for a keyboard-opened menu (screen coords minus inset). */
   const keyboardMenuAnchor = { col: inset.x + 2, row: inset.y + 3 }
   const filtered = query.trim().length > 0
 
-  // Scroll window over the session rows, keeping the focused row visible
-  // without re-shuffling the list under a stationary cursor.
-  //
-  // The new-session card is a permanent row above this window, so the window is
-  // one card shorter and the cursor is expressed in the FULL list's space (card =
-  // 0): without that offset the window kept its old height and the cursor could
-  // land on a row that never made it on screen — a `❯` on an invisible row.
-  const capacity = Math.max(1, Math.floor(sessionListHeight / SESSION_ROW_LINES))
+  // Keep the selected directory in one place for DSH and external sources.
+  // Wrap instead of animating a marquee; unusually long paths remain in the tooltip.
+  const selectedPath = tab === DSH_TAB
+    ? selected?.path === UNREGISTERED_RAIL_ID ? undefined : selected?.path
+    : foreign.selected?.path || undefined
+  const pathWidth = Math.max(1, columns - 2)
+  const wrappedPath = selectedPath === undefined ? [] : wrapPathWidth(selectedPath, pathWidth)
+  const maxPathRows = Math.max(1, Math.min(4, Math.floor(rows / 4)))
+  const pathClipped = wrappedPath.length > maxPathRows
+  const pathLines = wrappedPath.slice(0, maxPathRows)
+  if (pathClipped) pathLines[pathLines.length - 1] = truncateWidth(`${pathLines[pathLines.length - 1]}…`, pathWidth)
+  const pathTooltip = useTooltip(() => pathClipped ? selectedPath ?? '' : '')
+  // A keyboard selection change leaves the pointer still, so close the previous path's tooltip.
+  useEffect(() => { clearTooltip() }, [selectedPath])
+  const pathRows = pathLines.length
+  const visibleRailCapacity = Math.max(1, railEntryCapacity - Math.ceil(pathRows / WORKSPACE_ROW_LINES))
+  const railWindowTopIndex = railWindowTop(railFocus, railEntries.length, visibleRailCapacity)
+  const visibleRailRows = railEntries.slice(railWindowTopIndex, railWindowTopIndex + visibleRailCapacity)
+
+  // The new-session card is row 0; reserve its space and the path bar before
+  // deriving the visible session window, so the focused row never gets clipped.
+  const capacity = Math.max(1, Math.floor((sessionListHeight - pathRows) / SESSION_ROW_LINES))
   const sessionCapacity = Math.max(1, capacity - 1)
   let sessionTop = Math.min(
     Math.max(0, sessionIndex - 1 - sessionCapacity + 1),
@@ -582,6 +595,11 @@ export function SessionSupervisor({
         )}
       </Box>
       <Divider bleed />
+      {pathRows > 0 && (
+        <Box flexDirection="column" flexShrink={0} paddingX={1} {...pathTooltip}>
+          {pathLines.map((line, index) => <Text key={index} dimColor>{line}</Text>)}
+        </Box>
+      )}
       {tab !== DSH_TAB && (
         <ForeignSessionPanes
           model={foreign}
@@ -592,9 +610,9 @@ export function SessionSupervisor({
           notice={notice}
           railVisible={railVisible}
           railWidth={railWidth}
-          railEntryCapacity={railEntryCapacity}
+          railEntryCapacity={visibleRailCapacity}
           sessionWidth={sessionWidth}
-          rows={rows}
+          rows={rows - pathRows}
           isTerminalFocused={isTerminalFocused}
         />
       )}
@@ -680,7 +698,9 @@ export function SessionSupervisor({
               <Text color="remember" bold>{truncateWidth(` ${t('home-sessions-title', { name: selected?.title ?? t('supervisor-title') })}`, Math.max(4, sessionWidth - 3))}</Text>
               <Text dimColor>
                 {`  ${truncateWidth(
-                  t('supervisor-counts', { working: workingCount, live: liveCount, total: visibleSessions.length }) + (refreshing ? ` · ${t('home-sessions-refreshing')}` : ''),
+                  (railVisible
+                    ? t('supervisor-counts', { working: workingCount, live: liveCount, total: visibleSessions.length })
+                    : String(visibleSessions.length)) + (refreshing ? ` · ${t('home-sessions-refreshing')}` : ''),
                   Math.max(4, sessionWidth - 3),
                 )}`}
               </Text>

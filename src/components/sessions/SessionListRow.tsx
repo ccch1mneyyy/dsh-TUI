@@ -45,9 +45,9 @@ const LIVE_STATUS_COLOR: Readonly<Record<AgentViewStatus, 'warning' | 'suggestio
  * One session in the browser's list: a title line and a metadata line.
  *
  * Two lines rather than one because the two carry different jobs. The title
- * answers "is this the conversation I mean"; the metadata answers "which of
- * the three that look alike is it" — when it was, on what branch, how big,
- * under which model. Folding both onto one line makes the title compete with
+ * answers "is this the conversation I mean"; the metadata gives its age and
+ * branch. Size and model are available in the title tooltip rather than taking
+ * space in every row. Folding both lines into one makes the title compete with
  * facts nobody reads first, and on a narrow terminal the title is what loses.
  *
  * Widths are resolved here rather than delegated to flexbox: the row must
@@ -140,14 +140,14 @@ export function SessionListRow({
     if (shownTitle !== titleText) parts.push(titleText)
     parts.push(formatAbsolute(session.updatedAt))
     if (session.cwd !== '') parts.push(session.cwd)
+    const size = formatBytes(session.bytes)
+    if (size !== undefined) parts.push(size)
+    if (session.model !== undefined) parts.push(session.model)
     return parts.join('\n')
   })
 
   const facts: string[] = [formatWhen(session.updatedAt, now)]
   if (session.branch !== undefined) facts.push(session.branch)
-  const size = formatBytes(session.bytes)
-  if (size !== undefined) facts.push(size)
-  if (session.model !== undefined) facts.push(session.model)
   if (session.childCount > 0 && depth === 0) {
     facts.push(t('session-children', { n: session.childCount }))
   }

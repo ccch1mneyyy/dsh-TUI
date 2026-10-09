@@ -2,12 +2,12 @@ import React, { useState } from 'react'
 import { Box, Text } from '../../ui.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 import { useTooltip } from '../Tooltip.js'
-import { formatAbsolute, formatProject, formatWhen, truncateWidth } from '../../sessions/format.js'
+import { formatAbsolute, formatWhen, truncateWidth } from '../../sessions/format.js'
 import type { ForeignSessionRow as ForeignSessionSummary } from '../../adapter/ports/channel-session.js'
 
 /**
- * One conversation of another agent in a source tab: its title, and a facts
- * line with when it last moved and where it ran.
+ * One conversation of another agent in a source tab: its title and age.
+ * The directory is shown once for the selected group above both panes.
  *
  * It looks like a DSH session row on purpose — the same two lines, the same
  * `❯`, green selection and blue hover (see SessionListRow) — so the tabs read
@@ -18,16 +18,11 @@ import type { ForeignSessionRow as ForeignSessionSummary } from '../../adapter/p
  * opens the copy an earlier selection made), so "imported or not" is a detail
  * of the selection, not a fact the user has to read before choosing; showing it
  * would also invite a sync the feature does not do.
- *
- * The working directory rides on the facts line here, unlike the DSH row: the
- * rail groups by directory, but a search spans every group of the source and
- * "which project was this" is the question a foreign title answers worst.
  */
 export function ForeignSessionRow({
   session,
   width,
   focused,
-  home,
   now,
   onClick,
 }: {
@@ -35,8 +30,6 @@ export function ForeignSessionRow({
   /** Columns available to the row. */
   width: number
   focused: boolean
-  /** Home directory, for collapsing the path to `~`. */
-  home: string
   /** Epoch ms used for every relative time in this render pass. */
   now: number
   /** Mouse click: import and open (same path as Enter). */
@@ -53,7 +46,7 @@ export function ForeignSessionRow({
     if (session.cwd !== '') parts.push(session.cwd)
     return parts.join('\n')
   })
-  const facts = [formatWhen(session.updatedAt, now), formatProject(session.cwd, home)]
+  const when = formatWhen(session.updatedAt, now)
   return (
     <Box
       flexDirection="column"
@@ -72,7 +65,7 @@ export function ForeignSessionRow({
         </Box>
       </Box>
       <Text color={focused ? 'success' : undefined} dimColor={!focused}>
-        {`  ${truncateWidth(facts.join(' · '), body)}`}
+        {`  ${truncateWidth(when, body)}`}
       </Text>
     </Box>
   )
