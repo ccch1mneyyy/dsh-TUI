@@ -5,7 +5,8 @@
  *    字形（缺了就画成 fallback 空心方块），行宽等于该款 `glyphWidth`；
  * ② 每个 (字体, 词对) 下两行画出来的列数相等、下排墨迹居中（左右留白差 ≤ 1 列）、
  *    `bigTextWidth` 与画面一致；解还得是**字距和最小**的那一个（画面最紧），只有
- *    带字距的解不存在时才允许零字距（8 列 `wide` × 9 字 `HAPPINESS` 就是这一档）；
+ *    带字距的解不存在时才允许零字距（8 列 `wide` × 9 字 `HAPPINESS` 就是这一档）。
+ *    例外：声明了 `uniformKerning` 的字体（shadow）不进求解器——钉两行同字距；
  * ③ 日期表：三个彩蛋日命中（词对正确）、前后一天不命中、同一天内跨时刻恒定；
  * ④ 求 star 标语：强制命中时那一行含成对的 OSC 8 序列且 URL 正确、缩进按该行
  *    **实际显示宽度**重算（挂真实 LogoV2 读屏，不是重算公式自证）、终端不支持
@@ -17,7 +18,7 @@ process.env.FORCE_HYPERLINK = '1'
 
 const [
   React,
-  { renderBigText, bigTextWidth },
+  { renderBigText, bigTextWidth, paintedWidth },
   { SPLASH_FONTS, splashFontById, withTagline },
   { pickSplashEgg, splashStarLine, SPLASH_STAR_URL },
   { OSC8_START, OSC8_END },
@@ -112,6 +113,21 @@ for (const font of SPLASH_FONTS) {
     const bottomWidth = columns(bottomRows[0] ?? '')
     const inkTop = bigTextWidth(title, top, topKerning)
     const inkBottom = bigTextWidth(title, bottom, bottomKerning)
+
+    // 固定字距档（shadow）：等宽契约在 10 列字身上解不出紧字距（最紧 5/7），
+    // 这款两行同字距、渲染层半差居中——等宽/最紧解断言不适用，钉固定值。
+    if (font.uniformKerning !== undefined) {
+      check(
+        `[${font.id}] ${top}/${bottom} 固定字距档：两行同字距、不垫缩进`,
+        topKerning === font.uniformKerning && bottomKerning === font.uniformKerning && bottomIndent === 0,
+        `tk=${topKerning} bk=${bottomKerning} indent=${bottomIndent}`,
+      )
+      check(
+        `[${font.id}] ${top}/${bottom} bigTextWidth 与画面一致`,
+        inkTop === topWidth - topKerning && inkBottom === bottomWidth - bottomIndent - bottomKerning,
+      )
+      continue
+    }
 
     check(
       `[${font.id}] ${top}/${bottom} 两行画出来列数相等`,
@@ -333,6 +349,66 @@ const centeredPad = (visible: number): number => Math.max(0, Math.round(WHALE_CE
     expected.every((want, offset) => textAt(rows[index + offset] ?? '') === want),
   )
   check('挂真实 LogoV2：彩蛋日画的是 DEEPSEEK / MERRY 两行（含中间空行）', at >= 0, at >= 0 ? `第 ${at} 行` : expected[0] ?? '')
+}
+
+{
+  // shadow 固定字距（用户反馈「字与字间隔太宽」）：真机读屏钉死——两行同
+  // 字距后不再等宽，下排按半差居中成金字塔（与品牌 uniform 档同一路径）。
+  // 「字距」按相邻字形之间的**最近**空白量（行内 min）：字形内部空腔（P
+  // 的右下、E 的中段）不算——那本来就是字母形状，不是间距。
+  const shadow = splashFontById('shadow')
+  const { topKerning, bottomKerning } = shadow.tagline
+  const topInk = paintedWidth(shadow, shadow.tagline.top, topKerning)
+  const bottomInk = paintedWidth(shadow, shadow.tagline.bottom, bottomKerning)
+  const expected = [
+    ...renderBigText(shadow, shadow.tagline.top, 0, ACCENT, ACCENT, PALE, 60, topKerning, Math.max(0, Math.round((bottomInk - topInk) / 2))),
+    '',
+    ...renderBigText(shadow, shadow.tagline.bottom, 0, ACCENT, PALE, PALE, 60, bottomKerning, Math.max(0, Math.round((topInk - bottomInk) / 2))),
+  ].map(row => strip(row).trimEnd())
+  // shadow 的块（88 列）比基准款宽，默认 120 列挂载屏装不下会截行——加宽挂载。
+  const WIDE = TEXT_LEFT + 8 * (shadow.glyphWidth + topKerning) + 2
+  const wideView = (child: React.ReactElement): React.ReactElement => (
+    <TerminalSizeContext.Provider value={{ columns: WIDE, rows: 40 }}>{child}</TerminalSizeContext.Provider>
+  )
+  const wideMount = (element: React.ReactElement): { rows: string[] } => {
+    const { screen, height } = renderToScreen(element, WIDE)
+    return {
+      rows: Array.from({ length: height }, (_, row) =>
+        Array.from({ length: WIDE }, (_, column) => cellAt(screen, column, row)?.char ?? '').join('').trimEnd(),
+      ),
+    }
+  }
+  const { rows } = wideMount(wideView(<LogoV2 {...baseProps} fontId="shadow" egg={null} starChance={0} />))
+  const at = rows.findIndex((_, index) =>
+    expected.every((want, offset) => textAt(rows[index + offset] ?? '') === want),
+  )
+  check('挂真实 LogoV2：shadow 固定字距 + 下排半差居中（金字塔）', at >= 0, at >= 0 ? `第 ${at} 行` : expected[0] ?? '')
+  const boundaryGap = (glyphA: readonly string[], glyphB: readonly string[], kerning: number): number => {
+    let min = Infinity
+    for (let row = 0; row < glyphA.length; row++) {
+      const a = [...(glyphA[row] ?? '')]
+      const b = [...(glyphB[row] ?? '')]
+      let lastA = -1
+      for (let i = a.length - 1; i >= 0; i--)
+        if (a[i] !== '·') {
+          lastA = i
+          break
+        }
+      let firstB = -1
+      for (let i = 0; i < b.length; i++)
+        if (b[i] !== '·') {
+          firstB = i
+          break
+        }
+      if (lastA < 0 || firstB < 0) continue
+      min = Math.min(min, a.length - 1 - lastA + kerning + firstB)
+    }
+    return min
+  }
+  const letters = [...shadow.tagline.top]
+  const widestPair = Math.max(...letters.slice(0, -1).map((ch, index) =>
+    boundaryGap(shadow.glyphs[ch] ?? shadow.fallback, shadow.glyphs[letters[index + 1] ?? ''] ?? shadow.fallback, topKerning)))
+  check('shadow 相邻字形最近空白 ≤ 5 列（修前 ≥ 7 列）', widestPair <= 5, `最宽一对 ${widestPair} 列`)
 }
 
 {

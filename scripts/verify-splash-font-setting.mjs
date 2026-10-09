@@ -16,6 +16,8 @@
  */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'en'
+// 本脚本的被测对象就是 daily 轮换路径——CI 全局钉的字体缝在这里解除。
+delete process.env.DSH_TUI_SPLASH_FONT
 
 const [
   { strict: assert },
@@ -298,6 +300,24 @@ check('daily 走的是当天轮换那一款', () => {
   const after = fonts.pickSplashFont()
   const shown = shown => showsFace(shown, faceRows(before)) || (after.id !== before.id && showsFace(shown, faceRows(after)))
   assert.ok(shown(dailyMount.plain), `当天应画 ${before.id}`)
+})
+
+// ⑥ CI 确定性缝（`DSH_TUI_SPLASH_FONT`，ci.yml 全 workflow 设它）：无参调用
+//    钉住指定款；显式传日期（轮换契约自身的回归）与非法值不吃钉子。
+check('CI 字体缝：钉无参轮换、显式日期与非法值照旧', () => {
+  const probe = new Date(2026, 5, 15)
+  const rotated = fonts.pickSplashFont(probe).id
+  const previous = process.env.DSH_TUI_SPLASH_FONT
+  try {
+    process.env.DSH_TUI_SPLASH_FONT = 'classic'
+    assert.equal(fonts.pickSplashFont().id, 'classic', '无参调用应被钉住')
+    assert.equal(fonts.pickSplashFont(probe).id, rotated, '显式日期不吃钉子')
+    process.env.DSH_TUI_SPLASH_FONT = 'nope'
+    assert.equal(fonts.pickSplashFont(probe).id, rotated, '非法值回落轮换')
+  } finally {
+    if (previous === undefined) delete process.env.DSH_TUI_SPLASH_FONT
+    else process.env.DSH_TUI_SPLASH_FONT = previous
+  }
 })
 
 console.log(`\nAll ${checks} splash-font-setting checks passed (${IDS.length} faces).`)

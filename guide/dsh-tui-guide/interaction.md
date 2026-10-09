@@ -840,6 +840,11 @@ dsh-TUI 不预装通用技能；技能内容与发现规则由 DSH 及当前组�
   - registry 服务缺失时 TUI 使用三项 legacy 兼容名册。
   - 服务已挂载但损坏、为空或不一致时标记 unavailable 并 fail closed。
   - 退出计划模式先恢复进入前的 sandbox/approval，再还原进入前所在的权限预设（registry 仍提供时）。
+  - DSH 的 `/permission` 选择以同样方式存进 `~/.dsh-tui/permission.json`：任何一次持久的预设切换
+    （选择器、手敲命令、Shift+Tab 静态模式、官方命令自行完成的切换）都会更新它；从未自定义过
+    权限面的会话按记住的预设启动，走同一条官方切换路径。计划模式的临时切换不记入（进入计划保持
+    计划前的记忆、退出还原后再次记入）；显式的 `DSH_PERMISSION_MODE` 部署固定优先于该文件；
+    名册已不提供的身份会被跳过。
   - 非 DSH 后端（如 Claude）声明原生权限模式时，`/permission` 列的是该后端的模式：
     `default`（逐个询问）、`acceptEdits`（自动接受编辑）、`plan`（只读规划）、
     `bypassPermissions`（跳过全部权限确认），模型支持时还有 `auto`，每行带一句解释。

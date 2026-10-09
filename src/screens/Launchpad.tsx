@@ -10,7 +10,8 @@ import { type LaunchpadAction } from '../components/launchpadActions.js'
 import { kernelSubtitle, type KernelOption } from '../components/kernelCatalog.js'
 import { fitParamParts, PARAM_SEPARATOR } from '../components/launchpadParams.js'
 import { useTooltip } from '../components/Tooltip.js'
-import { pickSplashFont, splashFontById, type SplashFont } from '../components/splashFonts.js'
+import { resolveSplashTitleFont, pickSplashFont, splashFontById, type SplashFont } from '../components/splashFonts.js'
+import { pickSplashEgg, type SplashEgg } from '../components/splashEggs.js'
 import { t } from '../i18n.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
 import { stringWidth } from '../ink/stringWidth.js'
@@ -405,6 +406,7 @@ export function Launchpad({
   whaleGirl,
   brand,
   fontId,
+  egg,
   starred,
   onStarClick,
   firstRun,
@@ -450,6 +452,8 @@ export function Launchpad({
   /** 品牌档（当前后端 → `resolveBrand`；见 `branding.ts`）。 */
   brand?: Brand
   fontId?: string | undefined
+  /** 测试缝：固定节日词对；null 关闭换词，undefined 按本地日期选择。 */
+  egg?: SplashEgg | null
   starred: boolean
   onStarClick?: () => void
   /** 引导还没跑过：Tips 换成首启那一句（动作表本身已由 resolveLaunchpadActions 状态驱动）。 */
@@ -685,11 +689,16 @@ export function Launchpad({
   const kernelCornerFocusable = kernelRows.length > 0 && onKernelPick !== undefined
   const cardWidth = Math.max(24, Math.min(columns - 4, 72))
 
+  // 当天字体与节日只在 mount 时选一次，并交给 Logo，避免预算与渲染各自读日期。
+  const [dailyFont] = React.useState<SplashFont>(() => pickSplashFont())
+  const [dailyEgg] = React.useState<SplashEgg | null>(() => egg === undefined ? pickSplashEgg() : egg)
+  const font = fontId === undefined ? dailyFont : splashFontById(fontId)
+  const titleFont = resolveSplashTitleFont(font, brand, dailyEgg)
   const layout: LaunchpadLayout = resolveLaunchpadLayout(columns, rows, {
     params: hasParams,
     whale,
     whaleGirl,
-    font: launchpadFont(fontId),
+    font: titleFont,
   })
   // Tips 自动轮换（第七版，用户要「呼吸感」）：约 10s 一换，与点击/焦点+Enter
   // 的手动切换**并存**——手动切换改 tipIndex，本 effect 以 tipIndex 为依赖，
@@ -918,7 +927,8 @@ export function Launchpad({
       <Box flexDirection="column" flexGrow={1} alignItems="center" justifyContent="center">
         {layout.showHero && (
           <LogoV2
-                      fontId={fontId}
+                      fontId={font.id}
+                      egg={dailyEgg}
                       whale={layout.showWhale && whale}
                       whaleIdle={whaleIdle}
                       whaleGirl={layout.showWhale && whaleGirl}
@@ -1206,17 +1216,6 @@ export function nextBoundary(text: string, at: number): number {
   const rest = Array.from(text.slice(at))
   const first = rest[0] ?? ''
   return at + first.length
-}
-
-/**
- * 当天那款字体：设置项 pin 住就用它，否则按日期轮换。
- * 与 `LogoV2` 同源——两边必须解出同一款，否则宽轴阈值会互相矛盾。
- *
- * @param fontId - 设置项 `dsh-tui.splashFont` 的值。
- * @returns 那款字体。
- */
-function launchpadFont(fontId: string | undefined): SplashFont {
-  return fontId === undefined ? pickSplashFont() : splashFontById(fontId)
 }
 
 /** 最小模式这一屏整体不存在（与 `LogoHeader` 同规则）：直接进会话。 */

@@ -781,6 +781,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // Edit/Write diff presentation (schema default 'auto'); the /settings
     // screen edits this key live through the dsh-tui namespace.
     diffLayout: config.diffLayout,
+    // Upstream auto-retry seeding (cordis.yml upstreamRetry, default on):
+    // only an explicit opt-out disables it.
+    upstreamRetry: config.upstreamRetry,
     thinkingFold: config.thinkingFold,
     jobGroupFold: config.jobGroupFold,
     toolBackground: config.toolBackground,
