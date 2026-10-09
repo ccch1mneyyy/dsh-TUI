@@ -3,6 +3,7 @@
  * ① 字形——每款 5 行、每个字形与 fallback 行的宽度都等于 glyphWidth、覆盖
  *    `DEEPSEEK`/`HARNESS` 用到的全部字母（缺一个就会在开屏上出现空心方块）；
  * ② 两行标题——画出来的列数必须相等，且下排靠 `bottomIndent` 居中（左右留白差 ≤ 1 列）；
+ *    例外：声明了 `uniformKerning` 的字体（shadow）两行同字距、不垫缩进（渲染层半差居中）；
  * ③ `bigTextWidth` 必须等于实际画出的列数（去掉末尾字距留白）——布局判定与画面同源；
  * ④ 窄终端阶梯按「鲸鱼+大字 → 纯大字 → 纯鲸鱼 → 一行纯文字」降级，档位无空档；
  * ⑤ 按天轮换——同一天内恒定、连续 N 天覆盖全部字体、未知 id 退回基准款。
@@ -31,7 +32,8 @@ const columns = (row: string): number => [...row.replace(SGR, '')].length
 // claude 词走 `withTagline`（LogoV2 的品牌分支同一条路），契约逐款钉死。
 for (const font of SPLASH_FONTS) {
   const wordPairs: readonly [string, typeof font, 'equal' | 'uniform'][] = [
-    [font.id, font, 'equal'],
+    // 固定字距档（shadow）默认词对也按 uniform 断言：两行同字距、indent 0。
+    [font.id, font, font.uniformKerning === undefined ? 'equal' : 'uniform'],
     [`${font.id} codex`, withTagline(font, 'CODEX', 'HARNESS', { uniform: true }), 'uniform'],
   ]
   for (const [label, wordFont, mode] of wordPairs) {
@@ -102,6 +104,16 @@ check('字体数量 >= 2（轮换才有意义）', SPLASH_FONTS.length >= 2, `${
 // 字距和最接近紧/宽两极的中点——紧解挤、最宽解空旷（用户两轮反馈的结论）。
 // 下排字距天然大于上排是等宽契约的数学必然（字数差靠 bk−tk 补）。
 for (const font of SPLASH_FONTS) {
+  if (font.uniformKerning !== undefined) {
+    // 固定字距档不进求解器：CLAUDE/CODE 也同字距（穷举复算不适用）。
+    const fixed = withTagline(font, 'CLAUDE', 'CODE', { wide: true })
+    check(
+      `[${font.id}] CLAUDE/CODE 固定字距（不进求解器）`,
+      fixed.tagline.topKerning === font.uniformKerning && fixed.tagline.bottomKerning === font.uniformKerning && fixed.tagline.bottomIndent === 0,
+      `tk=${fixed.tagline.topKerning} bk=${fixed.tagline.bottomKerning}`,
+    )
+    continue
+  }
   const wide = withTagline(font, 'CLAUDE', 'CODE', { wide: true })
   const { topKerning, bottomKerning, bottomIndent } = wide.tagline
   const feasible: number[] = []

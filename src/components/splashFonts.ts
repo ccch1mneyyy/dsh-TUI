@@ -9,6 +9,9 @@
  * 契约（`scripts/verify-splash-layout.ts` / `verify-splash-eggs.tsx` 逐款钉死）：
  * - 每款 5 行；每个字形、每个 fallback 行的显示宽度都等于 `glyphWidth`；
  * - 两行标题画出来的列数必须**相等**（靠 tagline 的字距 + `bottomIndent` 撑）；
+ *   例外：声明了 `uniformKerning` 的字体（shadow）放弃等宽契约——两行同字距，
+ *   下排由渲染层按半差居中（等宽契约在 10 列字身上最紧只能解出 5/7 字距，
+ *   字间空 7-9 列，用户反馈「间隔太宽」）；
  * - 缺字走 `fallback` 而不是抛错，且不改变字身宽度。
  *
  * 选择：设置项 `dsh-tui.splashFont` 取 `daily`（默认，按本地日期轮换）或某款 id；
@@ -45,6 +48,14 @@ export interface SplashFont {
   readonly glyphWidth: number
   readonly glyphs: GlyphTable
   readonly fallback: GlyphRows
+  /**
+   * 可选：这款字体的词对一律两行同用这个字距（`shadow` 用）。等宽 + 居中
+   * 契约在整数字距下解 8 字 vs 7 字的词对时有 `8·bk = g + 9·tk` 的硬关系
+   * （g 是字身宽度）——10 列字身最紧只能解出 5/7，字间空得能走人。声明后
+   * `withTagline` 不再进求解器：两行同字距、`bottomIndent` 恒 0，下排由
+   * 渲染层按半差居中（LogoV2 的金字塔路径，同品牌 uniform 档）。
+   */
+  readonly uniformKerning?: number
   /** 两行标题各自的画法与字距。 */
   readonly tagline: {
     readonly top: string
@@ -337,6 +348,8 @@ interface FaceData {
   readonly en: string
   readonly glyphs: GlyphTable
   readonly fallback: GlyphRows
+  /** 固定字距档（见 `SplashFont.uniformKerning`）；不声明走等宽契约求解器。 */
+  readonly uniformKerning?: number
 }
 
 const font = (id: SplashFontId, face: FaceData): SplashFont => {
@@ -348,7 +361,10 @@ const font = (id: SplashFontId, face: FaceData): SplashFont => {
     glyphWidth,
     glyphs: face.glyphs,
     fallback: face.fallback,
-    tagline: { top: TOP_WORD, bottom: BOTTOM_WORD, ...solveTagline(glyphWidth, TOP_WORD, BOTTOM_WORD) },
+    uniformKerning: face.uniformKerning,
+    tagline: face.uniformKerning === undefined
+      ? { top: TOP_WORD, bottom: BOTTOM_WORD, ...solveTagline(glyphWidth, TOP_WORD, BOTTOM_WORD) }
+      : { top: TOP_WORD, bottom: BOTTOM_WORD, topKerning: face.uniformKerning, bottomKerning: face.uniformKerning, bottomIndent: 0 },
   }
 }
 
@@ -370,6 +386,12 @@ export function withTagline(
   bottom: string,
   options?: { readonly wide?: boolean; readonly uniform?: boolean },
 ): SplashFont {
+  // 固定字距档（shadow）：换词不进求解器——任何词对（默认/彩蛋/品牌）都两行
+  // 同字距，对齐交给渲染层。options 在这一档没有意义：预算与中间档都是为
+  // 「等宽解太散但还想舒展」的字体设计的，这款要的恰恰是收紧。
+  if (font.uniformKerning !== undefined) {
+    return { ...font, tagline: { top, bottom, topKerning: font.uniformKerning, bottomKerning: font.uniformKerning, bottomIndent: 0 } }
+  }
   if (options?.uniform === true) {
     // 同字距档（品牌词用，用户点名「两行间隙一致」）：两行共用一个字距，
     // 不再拉伸等宽。块宽以基准词对（字体表 DEEPSEEK/HARNESS 紧解的宽行）
@@ -402,7 +424,10 @@ const SPLASH_FONT_TABLE: Record<SplashFontId, SplashFont> = {
   stencil: font('stencil', { zh: '镂空模板', en: 'Stencil', glyphs: applyTable(BOLD_GLYPHS, STENCIL), fallback: applyRows(BOLD_FALLBACK, STENCIL) }),
   classic: font('classic', { zh: '细笔（经典）', en: 'Thin (classic)', glyphs: CLASSIC_GLYPHS, fallback: CLASSIC_FALLBACK }),
   slab: font('slab', { zh: '方板（实心横笔）', en: 'Slab (solid bars)', glyphs: SLAB_GLYPHS, fallback: SLAB_FALLBACK }),
-  shadow: font('shadow', { zh: '立体弧角（ANSI Shadow）', en: 'Shadow (ANSI)', glyphs: SHADOW_GLYPHS, fallback: SHADOW_FALLBACK }),
+  // shadow 声明固定字距 1：等宽契约在 10 列字身上最紧解出 5/7（mod-8 算术，
+  // 见 uniformKerning 注释），叠上字形自带的左右留白，字间空 7-9 列——用户
+  // 反馈「间隔太宽」。两行同 1 列字距后空隙 2-4 列，下排渲染层半差居中。
+  shadow: font('shadow', { zh: '立体弧角（ANSI Shadow）', en: 'Shadow (ANSI)', glyphs: SHADOW_GLYPHS, fallback: SHADOW_FALLBACK, uniformKerning: 1 }),
 }
 
 /** 轮换池（渲染侧只读这一份；表的书写顺序即轮换顺序）。 */

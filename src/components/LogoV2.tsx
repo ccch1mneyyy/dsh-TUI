@@ -506,7 +506,8 @@ export function LogoV2({
       : 2
 
   // 两行标题各自用字体声明的字距；下排再按 `bottomIndent` 居中——
-  // 两者一起保证画出来的列数相等（见 splashFonts 的 tagline 契约）。
+  // 两者一起保证画出来的列数相等（见 splashFonts 的 tagline 契约；声明了
+  // 固定字距的 shadow 例外：两行同字距、不再等宽，见下方金字塔路径）。
   // 节日彩蛋换的就是这里的两排词（`titleFont` 已按当天词对重解字距）。
   const { top: fontTop, bottom, topKerning, bottomKerning, bottomIndent } = titleFont.tagline
   // 品牌词对经 withTagline 重解后 fontTop 即品牌上排词（含彩蛋日的钉顶）。
@@ -565,9 +566,12 @@ export function LogoV2({
     ?? PALE
   // 品牌档两行同字距后宽度不同，对齐按形态处理（用户定调）：居中形态
   // （落地页/启动页）窄行补半差，两行各自居中成金字塔；钉左形态（对话页
-  // 标题）两行左缘对齐。deepseek 档维持求解器的 bottomIndent（等宽契约）。
+  // 标题）两行左缘对齐。deepseek 档维持求解器的 bottomIndent（等宽契约），
+  // 例外是声明了固定字距的字体（shadow——等宽契约在 10 列字身上最紧只能
+  // 解出 5/7 字距，字间空得能走人）：它两行同字距，两种形态都按半差居中。
   const uniformBrand = brand !== 'deepseek'
-  const centeredTitle = uniformBrand && align === 'center'
+  const fixedKerning = !uniformBrand && titleFont.uniformKerning !== undefined
+  const centeredTitle = (uniformBrand && align === 'center') || fixedKerning
   const topInk = paintedWidth(titleFont, top, topKerning)
   const bottomInk = paintedWidth(titleFont, bottom, bottomKerning)
   const topIndent = centeredTitle ? Math.max(0, Math.round((bottomInk - topInk) / 2)) : 0
