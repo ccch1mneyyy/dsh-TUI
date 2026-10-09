@@ -1,13 +1,12 @@
 /**
- * Headless regression for the two-level `/model` picker derivation
+ * Headless regression for the tabbed `/model` picker derivation
  * (src/modelGroups.ts + src/modelRecents.ts): provider grouping
  * (first-appearance order, display labels with route-key fallback,
  * per-group counts), the pinned "recently used" pseudo-group (catalog
- * intersection, cap, vanishing entries), the landing rule (recents row,
- * current provider's group, single-provider fast path without recents), and
+ * intersection, cap, vanishing entries), the landing rule (recents tab,
+ * current provider/model without recents), and
  * the recents file (move-to-front dedupe, cap, round-trip, corrupt reset).
- * The overlay reducer and level navigation themselves are covered by
- * verify-chat-overlay.ts; this pins the pure derivation both feed on.
+ * Keyboard, mouse and draft behavior are covered by verify-model-picker-ui.tsx.
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-model-picker-groups.mjs`
@@ -58,10 +57,10 @@ const model = (provider, id) => ({ provider, id, name: id })
   check('1 grouping: empty catalog yields no groups', eq(deriveModelGroups([], infos), []))
 }
 
-// 2. landing: single-provider fast path.
+// 2. landing: provider/model when no recents tab is supplied.
 {
   const models = [model('deepseek-official', 'a'), model('deepseek-official', 'b')]
-  check('2 single: drills into the only group',
+  check('2 single: opens the only provider tab',
     eq(modelPickerLanding(models, 'deepseek-official', 'b'), { group: 'deepseek-official', index: 1 }))
   check('2 single: current model on another route lands on the first row',
     eq(modelPickerLanding(models, 'openai-codex', 'x'), { group: 'deepseek-official', index: 0 }))
@@ -69,7 +68,7 @@ const model = (provider, id) => ({ provider, id, name: id })
     eq(modelPickerLanding(models, undefined, undefined), { group: 'deepseek-official', index: 0 }))
 }
 
-// 3. landing: multi-provider top level.
+// 3. landing: multi-provider catalog without a recents tab.
 {
   const models = [
     model('deepseek-official', 'a'),
@@ -77,12 +76,12 @@ const model = (provider, id) => ({ provider, id, name: id })
     model('openai-codex', 'gpt-5.6-luna'),
     model('xai', 'grok-code'),
   ]
-  check('3 multi: lands at the top focused on the current provider group',
-    eq(modelPickerLanding(models, 'openai-codex', 'gpt-5.6-luna'), { group: undefined, index: 1 }))
-  check('3 multi: unknown current provider lands on the first group',
-    eq(modelPickerLanding(models, 'anthropic', 'claude'), { group: undefined, index: 0 }))
-  check('3 multi: no current provider lands on the first group',
-    eq(modelPickerLanding(models, undefined, undefined), { group: undefined, index: 0 }))
+  check('3 multi: opens the current provider with its current model focused',
+    eq(modelPickerLanding(models, 'openai-codex', 'gpt-5.6-luna'), { group: 'openai-codex', index: 1 }))
+  check('3 multi: unknown current provider lands on the first provider',
+    eq(modelPickerLanding(models, 'anthropic', 'claude'), { group: 'deepseek-official', index: 0 }))
+  check('3 multi: no current provider lands on the first provider',
+    eq(modelPickerLanding(models, undefined, undefined), { group: 'deepseek-official', index: 0 }))
 }
 
 // 4. landing: empty catalog.
@@ -90,8 +89,8 @@ const model = (provider, id) => ({ provider, id, name: id })
   check('4 empty: top level, index 0', eq(modelPickerLanding([], 'deepseek-official', 'a'), { group: undefined, index: 0 }))
 }
 
-// 5. recents pseudo-group: pinned first, counts only catalogued refs, absent
-//    when the intersection is empty (e.g. an OAuth provider signed out).
+// 5. recents tab: always first, counts only catalogued refs, including an
+//    empty intersection (e.g. an OAuth provider signed out).
 {
   const models = [
     model('deepseek-official', 'a'),
@@ -109,28 +108,29 @@ const model = (provider, id) => ({ provider, id, name: id })
     JSON.stringify(groups[0]))
   check('5 recents: provider groups follow unchanged',
     eq(groups.slice(1).map(g => g.provider), ['deepseek-official', 'openai-codex']))
-  check('5 recents: empty intersection pins nothing',
-    deriveModelGroups(models, [], [{ provider: 'gone', id: 'x' }]).every(g => g.provider !== RECENTS_GROUP_PROVIDER))
+  check('5 recents: empty intersection keeps an empty first tab',
+    eq(deriveModelGroups(models, [], [{ provider: 'gone', id: 'x' }])[0],
+      { provider: RECENTS_GROUP_PROVIDER, label: RECENTS_LABEL_PLACEHOLDER, count: 0 }))
   check('5 recents: recentCatalogModels keeps recency order, drops vanished, caps at 10',
     eq(recentCatalogModels(recents, models).map(m => `${m.provider}/${m.id}`), ['openai-codex/gpt-5.6-luna', 'deepseek-official/a']))
 }
 
-// 6. landing with recents: the pinned row is the destination; the
-//    single-provider fast path survives only without recents.
+// 6. landing with recents: always the first model of the first tab, also
+//    for a single provider or an empty recent list.
 {
   const models = [model('deepseek-official', 'a'), model('openai-codex', 'gpt-5.6-sol')]
   const recents = [{ provider: 'openai-codex', id: 'gpt-5.6-sol' }]
-  check('6 landing: recents pin focuses the recents row',
-    eq(modelPickerLanding(models, 'deepseek-official', 'a', recents), { group: undefined, index: 0 }))
+  check('6 landing: recents tab focuses its first model',
+    eq(modelPickerLanding(models, 'deepseek-official', 'a', recents), { group: RECENTS_GROUP_PROVIDER, index: 0 }))
   const single = [model('deepseek-official', 'a'), model('deepseek-official', 'b')]
-  check('6 landing: single provider without recents keeps the fast path',
-    eq(modelPickerLanding(single, 'deepseek-official', 'b', []), { group: 'deepseek-official', index: 1 }))
-  check('6 landing: single provider with only the seeded current model keeps the fast path',
-    eq(modelPickerLanding(single, 'deepseek-official', 'b', [{ provider: 'deepseek-official', id: 'b' }]), { group: 'deepseek-official', index: 1 }))
-  check('6 landing: single provider with a second used model shows the top level',
-    eq(modelPickerLanding(single, 'deepseek-official', 'b', [{ provider: 'deepseek-official', id: 'b' }, { provider: 'deepseek-official', id: 'a' }]), { group: undefined, index: 0 }))
-  check('6 landing: single provider fast path focuses the current model',
-    eq(modelPickerLanding(single, 'deepseek-official', 'a', [{ provider: 'deepseek-official', id: 'b' }]), { group: 'deepseek-official', index: 0 }))
+  check('6 landing: an empty recents tab is still the initial tab',
+    eq(modelPickerLanding(single, 'deepseek-official', 'b', []), { group: RECENTS_GROUP_PROVIDER, index: 0 }))
+  check('6 landing: single provider with only the seeded current model starts on recents',
+    eq(modelPickerLanding(single, 'deepseek-official', 'b', [{ provider: 'deepseek-official', id: 'b' }]), { group: RECENTS_GROUP_PROVIDER, index: 0 }))
+  check('6 landing: single provider with a second used model starts on recents',
+    eq(modelPickerLanding(single, 'deepseek-official', 'b', [{ provider: 'deepseek-official', id: 'b' }, { provider: 'deepseek-official', id: 'a' }]), { group: RECENTS_GROUP_PROVIDER, index: 0 }))
+  check('6 landing: recent order wins over the current model',
+    eq(modelPickerLanding(single, 'deepseek-official', 'a', [{ provider: 'deepseek-official', id: 'b' }]), { group: RECENTS_GROUP_PROVIDER, index: 0 }))
 }
 
 // 7. persistence: move-to-front dedupe, 10-entry cap, round-trip, corrupt reset.

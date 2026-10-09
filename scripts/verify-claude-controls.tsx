@@ -245,6 +245,12 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
   await caps.effort!.set('max')
   check('effort: seeded and settable', caps.effort!.current() === 'max' && prefs.data.effort === 'max' && effortEvents().at(-1) === 'max')
 
+  const preview = caps.effort!.forModel!({ model: 'default' })
+  check('effort preview uses the candidate model, not the live Opus levels', preview.levels.map(level => level.id).join() === 'low,medium,high')
+  check('effort preview respects unsupported and unknown models', caps.effort!.forModel!({ model: 'haiku' }).levels.length === 0 && caps.effort!.forModel!({ model: 'unknown' }).levels.length === 0)
+  check('effort preview marks the candidate compatibility ladder', caps.effort!.forModel!({ model: 'haiku-pro' }).levelsFallback === true)
+  check('effort preview keeps the live model and preference', caps.models!.current().model === 'claude-opus-x' && caps.effort!.current() === 'max' && prefs.data.effort === 'max')
+
   // max is not a level of the plain model (low..high): cleared everywhere,
   // the UI never claims a level the picker does not offer.
   await caps.models!.set({ model: 'default' })

@@ -145,6 +145,18 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
 
   const currentRow = (): ModelInfo | undefined => rowOf(models, deps.currentModel())
 
+  const effortsFor = (row: ModelInfo | undefined): { levels: readonly EffortOption[]; levelsFallback?: true } => {
+    if (row === undefined || row.supportsEffort === false) return { levels: [] }
+    // Known rows without a tier list use the CLI-standard compatibility
+    // ladder; unknown rows offer nothing. Preview and live controls agree.
+    const declared = row.supportedEffortLevels as readonly string[] | undefined
+    const fallback = declared === undefined || declared.length === 0
+    return {
+      levels: (fallback ? EFFORT_FALLBACK_TIERS : declared).map(level => ({ id: level, label: effortLabel(level) })),
+      ...(fallback ? { levelsFallback: true as const } : {}),
+    }
+  }
+
   /** Check the remembered effort against what a model declares. It is
    *  cleared only on an explicit refusal: `supportsEffort === false`, or a
    *  declared level list without the tier. A row that declares neither
@@ -229,28 +241,12 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
     },
     effort: {
       get levelsFallback(): true | undefined {
-        const row = currentRow()
-        if (row === undefined) return undefined
-        const declared = row.supportedEffortLevels as readonly string[] | undefined
-        if (row.supportsEffort === false || (declared !== undefined && declared.length > 0)) return undefined
-        return true
+        return effortsFor(currentRow()).levelsFallback
       },
       levels(): readonly EffortOption[] {
-        const row = currentRow()
-        // An unknown model (no catalog row at all — the cold start before the
-        // handshake seeds one) offers nothing: nothing is guessed for a model
-        // the catalog does not know (the lifecycle contract).
-        if (row === undefined) return []
-        if (row.supportsEffort === false) return []
-        // A known row that declares no list of its own (relay custom rows,
-        // the offline Haiku shape, old CLIs) falls back to the CLI's standard
-        // tiers — the CLI accepts any effortLevel flag, so the standard
-        // ladder is the honest compatibility offer, marked above for the
-        // picker to say so.
-        const declared = row.supportedEffortLevels as readonly string[] | undefined
-        const tiers = declared !== undefined && declared.length > 0 ? declared : EFFORT_FALLBACK_TIERS
-        return tiers.map(level => ({ id: level, label: effortLabel(level) }))
+        return effortsFor(currentRow()).levels
       },
+      forModel: (ref: ModelRef) => effortsFor(rowOf(models, ref.model)),
       current: (): string | undefined => effort,
       async set(id: string | null): Promise<void> {
         // `null` resets to the model's default level (applyFlagSettings

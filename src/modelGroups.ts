@@ -1,7 +1,6 @@
 /**
- * Pure derivation for the two-level `/model` picker: providers as top-level
- * groups, their models one level down, with a pinned "recently used"
- * pseudo-group first. Kept free of React/channel/i18n state so
+ * Pure derivation for the `/model` provider tabs, with a pinned
+ * "recently used" pseudo-provider first. Kept free of React/channel/i18n state so
  * `scripts/verify-model-picker-groups.mjs` can drive it headless; the
  * recents row's localized label is resolved at render time (its `label`
  * field is the {@link RECENTS_LABEL_PLACEHOLDER} sentinel).
@@ -27,7 +26,7 @@ export interface ModelRef {
   readonly id: string
 }
 
-/** One top-level row: a provider route with its picker-facing identity. */
+/** One provider tab with its picker-facing identity. */
 export interface ModelGroupRow {
   /** Harness route key (also the grouping key over `LlmModelInfo.provider`). */
   readonly provider: string
@@ -39,7 +38,7 @@ export interface ModelGroupRow {
 
 /**
  * The recent refs that the current catalog still lists, most-recent-first —
- * the second level of the recents group. Refs whose model vanished from the
+ * the model list of the recents tab. Refs whose model vanished from the
  * catalog (provider removed, or an OAuth provider signed out and
  * credential-gated away) drop out here, so the group never offers a row the
  * picker could not switch to.
@@ -62,8 +61,8 @@ export function recentCatalogModels(
 /**
  * Group a flat model catalog into provider rows, first-appearance order
  * (the registry's own listing order), labels resolved through
- * `providerInfos` with a route-key fallback. Recent refs (when supplied and
- * still catalogued) pin one extra pseudo-group at the top.
+ * `providerInfos` with a route-key fallback. Supplying recent refs pins an
+ * extra pseudo-group at the top, including an empty tab.
  */
 export function deriveModelGroups(
   models: readonly LlmModelInfo[],
@@ -86,35 +85,23 @@ export function deriveModelGroups(
   }))
   if (recents !== undefined) {
     const recentCount = recentCatalogModels(recents, models).length
-    if (recentCount > 0) {
-      groups.unshift({ provider: RECENTS_GROUP_PROVIDER, label: RECENTS_LABEL_PLACEHOLDER, count: recentCount })
-    }
+    groups.unshift({ provider: RECENTS_GROUP_PROVIDER, label: RECENTS_LABEL_PLACEHOLDER, count: recentCount })
   }
   return groups
 }
 
-/** Where `/model` should open (or re-land after the fresh catalog arrives). */
+/** Where `/model` should open. */
 export interface ModelPickerLanding {
-  /**
-   * The group to open *inside* — set only by the single-provider fast path,
-   * where a one-row top level would be pure friction (and there are no
-   * recents to pin). Multi-provider catalogs — and any catalog with recents
-   * — land at the top level (`undefined`).
-   */
+  /** Active provider tab; undefined only for an empty catalog without recents. */
   readonly group: string | undefined
-  /** Focus index within the landed level's rows. */
+  /** Focus index within that tab's model list. */
   readonly index: number
 }
 
 /**
- * Compute the picker's landing: with a meaningful recents list pinned, focus
- * the recents row itself (its first entry is the most recently used model —
- * the likeliest destination); without recents, focus the current provider's
- * group. The single-provider fast path applies while recents carry no
- * navigation value — an empty list, or a lone entry that can only be the
- * current model (the picker seeds it): drilling straight into the only
- * provider's list beats a top level whose recents row duplicates it. Two or
- * more recents (or any multi-provider catalog) land at the top level.
+ * Open on the first recent model when the recents tab is present. Otherwise
+ * open the current provider and focus its current model, falling back to the
+ * first provider/model when the current route is absent.
  */
 export function modelPickerLanding(
   models: readonly LlmModelInfo[],
@@ -122,20 +109,13 @@ export function modelPickerLanding(
   currentModel: string | undefined,
   recents?: readonly ModelRef[],
 ): ModelPickerLanding {
+  if (recents !== undefined) return { group: RECENTS_GROUP_PROVIDER, index: 0 }
   const providers: string[] = []
   for (const model of models) {
     if (!providers.includes(model.provider)) providers.push(model.provider)
   }
   if (providers.length === 0) return { group: undefined, index: 0 }
-  const recentCount = recents === undefined ? 0 : recentCatalogModels(recents, models).length
-  if (providers.length === 1 && recentCount <= 1) {
-    const only = providers[0]!
-    const index = models.findIndex(
-      model => model.provider === currentProvider && model.id === currentModel,
-    )
-    return { group: only, index: index >= 0 ? index : 0 }
-  }
-  if (recentCount > 0) return { group: undefined, index: 0 }
-  const groupIndex = providers.indexOf(currentProvider ?? '')
-  return { group: undefined, index: groupIndex >= 0 ? groupIndex : 0 }
+  const group = providers.includes(currentProvider ?? '') ? currentProvider! : providers[0]!
+  const index = models.filter(model => model.provider === group).findIndex(model => model.id === currentModel && model.provider === currentProvider)
+  return { group, index: Math.max(0, index) }
 }

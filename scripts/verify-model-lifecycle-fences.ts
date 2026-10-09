@@ -41,10 +41,12 @@ const binding = {
   isCurrent: (capture: { agent: unknown; generation: number }) => ownerActive && capture.agent === agent && capture.generation === bindingGeneration,
 }
 const selection: { current?: unknown; assembled?: unknown } = {}
+const notices: string[] = []
 const state = {
   provider: 'p', model: 'old', reasoningEffort: undefined as string | undefined,
   effortLevels: undefined as string[] | undefined, agentPreset: undefined as string | undefined,
-  working: false, emit: () => undefined, notify: () => undefined,
+  contextWindow: undefined as number | undefined,
+  working: false, emit: () => undefined, notify: (text: string) => { notices.push(text) },
 }
 /** Route-metadata answer shape as the widened llm runtime sees it: a
  * catalog row may declare `reasoning: true` with no tier list at all. */
@@ -70,6 +72,7 @@ const ctx = {
 const actions = createModelActions(ctx as never, state as never, {
   owner: { current: () => ownerActive }, binding: binding as never, selection: selection as never,
   initialEffort: 'high', agent: () => agent as never, notify: state.notify as never,
+  checkContextWarning: () => undefined,
 })
 
 // Old preferred-effort metadata resolves after a new route has won. The old
@@ -225,6 +228,34 @@ assert.equal(workspaceState.cwd, '/B', 'rejected workspace creation cannot publi
   routeLoads.get('p/ladder-none')!.resolve({})
   await tick()
   assert.deepEqual(state.effortLevels, [], 'no reasoning declaration offers no tiers')
+}
+
+// Candidate reads are quiet and do not supersede an in-flight live preference.
+{
+  ownerActive = true
+  state.model = 'preview-live'
+  state.contextWindow = 64000
+  state.effortLevels = ['low']
+  const livePreference = actions.applyPreferredEffort()
+  const before = { effort: state.reasoningEffort, selection: selection.current, notices: notices.length }
+  const preview = actions.listEfforts({ provider: 'q', model: 'preview-candidate' })
+  await tick()
+  routeLoads.get('q/preview-candidate')!.resolve({ context: { contextWindow: 999999 }, reasoning: { efforts: [{ id: 'max', name: 'Max' }], defaultEffort: 'max' } })
+  assert.deepEqual(await preview, { efforts: [{ id: 'max', name: 'Max' }], defaultEffort: 'max' })
+  assert.equal(state.contextWindow, 64000, 'candidate capacity never overwrites the live route')
+  assert.deepEqual(state.effortLevels, ['low'], 'candidate tiers never overwrite live completions')
+  assert.equal(state.reasoningEffort, before.effort)
+  assert.equal(selection.current, before.selection)
+  assert.equal(notices.length, before.notices, 'browsing a single-tier model emits no warning')
+  routeLoads.get('p/preview-live')!.resolve({ reasoning: { efforts: [{ id: 'xhigh', name: 'Extra high' }] } })
+  await livePreference
+  assert.deepEqual(selection.current, { provider: 'p', model: 'preview-live', reasoningEffort: 'xhigh' }, 'preview does not invalidate the live effort operation')
+
+  const stale = actions.listEfforts({ provider: 'q', model: 'preview-stale' })
+  await tick()
+  bindingGeneration += 1
+  routeLoads.get('q/preview-stale')!.resolve({ reasoning: true })
+  assert.deepEqual(await stale, { efforts: [], defaultEffort: undefined }, 'preview cannot cross a binding replacement')
 }
 
 console.log('verify-model-lifecycle-fences: OK')

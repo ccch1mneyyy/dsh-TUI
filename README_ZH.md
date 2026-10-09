@@ -252,6 +252,8 @@ OpenAI 条款约束。完整操作与当前边界：[Codex 后端](docs/codex-ba
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
 
+`/model` 顶部为提供商标签，**最近使用**排在第一位。`Tab` / `Shift+Tab` 切换下一个 / 上一个提供商，`↑/↓` 选择模型，`←/→` 调整该模型的推理等级；`Enter` 一并应用，`Esc` 取消。鼠标可点击标签、模型、档位及底部选择/取消提示，滚轮切换模型。
+
 在 `/provider` 模型列表聚焦一项并按 `Tab`，可编辑上下文窗口、最大输出 token、推理档位和图片输入能力。
 
 会话管理界面默认聚焦当前工作区最近使用的会话；没有历史时聚焦“新建会话”卡片，按 `←` 可移到工作区栏。界面会立即显示上次成功读取的列表，同时核对持久化存储的变化。需要深度扫描日志的标题会先显示回退名称，恢复完成后在原行更新。

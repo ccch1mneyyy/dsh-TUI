@@ -121,7 +121,9 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
         }
         if (key === 'listEfforts') {
           check('read-only')
-          return Promise.resolve({ efforts: (channel.effortLevels ?? []).map(id => ({ id, name: id })), defaultEffort: undefined })
+          const route = args[0] as { provider: string; model: string } | undefined
+          const live = route === undefined || (route.provider === channel.provider && route.model === channel.model)
+          return Promise.resolve({ efforts: (live ? channel.effortLevels ?? [] : []).map(id => ({ id, name: id })), defaultEffort: undefined })
         }
       }
       // A renderer observes the already-owned Channel emitter, never mounts

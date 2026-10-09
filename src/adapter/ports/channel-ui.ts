@@ -554,8 +554,10 @@ export interface ChannelUi {
    *  slider; empty `efforts` after notifying when unsupported/unavailable.
    *  `levelsFallback` is true when the ladder is the CLI-standard
    *  compatibility offer (the model row declares no tiers of its own) —
-   *  the slider marks it as such instead of implying the model's list. */
-  listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined; levelsFallback?: true }>
+   *  the slider marks it as such instead of implying the model's list.
+   *  With a route, previews that model for `/model` without changing live
+   *  state or emitting unsupported/single-tier notifications. */
+  listEfforts(route?: { provider: string; model: string }): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined; levelsFallback?: true }>
   /** Set one effort level by id (validated against the adapter list);
    *  false + a notify when the id is not offered. Persists like the old
    *  Shift+Tab cycle (~/.dsh-tui/effort.json). */

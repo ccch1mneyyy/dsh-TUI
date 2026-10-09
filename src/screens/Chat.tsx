@@ -22,12 +22,6 @@ import { homeDir } from '../utils/paths.js'
 import { execFileNoThrow } from '../utils/execFileNoThrow.js'
 import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-view.js'
 import { cleanRenderText, cleanScalarText } from '../dsh-adapter/sanitize.js'
-import {
-  deriveModelGroups,
-  modelPickerLanding,
-  recentCatalogModels,
-  RECENTS_GROUP_PROVIDER,
-} from '../modelGroups.js'
 import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
 import { WORKING_GATE_NOTICES } from '../commands.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
@@ -51,6 +45,7 @@ import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import { runOAuthLogin, runProviderWizard } from '../dsh-adapter/providerWizard.js'
 import { useKernelPicker } from './chat/useKernelPicker.js'
+import { useModelPicker } from './chat/useModelPicker.js'
 import { useBackendChannels } from './chat/useBackendChannels.js'
 import { backendModeStatus as modeStatus, backendPermissionCommand, parseMcpCommand } from './chat/backendCommands.js'
 import { PermissionStore, type PermissionPanelSource } from '../channel/permissions.js'
@@ -171,8 +166,6 @@ import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/tr
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
 import { readTrajectorySeen, writeTrajectorySeen } from '../trajectoryPrefs.js'
 import type { RawTrajEvent as SessionEvent } from '../adapter/ports/channel-view.js'
-import { LoadingState } from '../components/design-system/LoadingState.js'
-import { Pane } from '../components/design-system/Pane.js'
 import { loadHistory, type HistoryEntry } from '../history.js'
 import { formatLoadedContextReport } from '../utils/loaded-context.js'
 import {
@@ -686,35 +679,14 @@ export function Chat({
     }
   }, [overlay])
   const [models, setModels] = React.useState<readonly LlmModelInfo[]>([])
-  /** Provider display identities for the /model group level; refreshed alongside `models`. */
+  const [modelsLoading, setModelsLoading] = React.useState(false)
+  const modelCatalogGeneration = React.useRef(0)
+  /** Provider display identities for the /model tabs; refreshed alongside `models`. */
   const [providerInfos, setProviderInfos] = React.useState<readonly LlmProviderInfo[]>([])
   /** /model 最近使用分组：成功切换即记录（去重置顶，上限 10），重启保留。 */
   // Recents are per backend: a Claude session's picks never evict the DSH list.
   const recentsBackend = channel.backendCapabilities?.backendId
   const [modelRecents, setModelRecents] = React.useState<readonly ModelRecentsRef[]>(() => readModelRecents(undefined, recentsBackend))
-  /** Two-level /model: the drilled-in provider route; undefined = group level.
-   *  Reset on open; stale ids resolve back to the group level via `activeModelGroup`. */
-  const [modelGroup, setModelGroup] = React.useState<string | undefined>(undefined)
-  /** True while the picker sits in the single-provider fast path (drilled in
-   *  at open, the group level never shown): Esc closes directly and no back
-   *  hint renders — a pinned recents pseudo-group must not fake a two-level
-   *  walk the user never saw (issue #527 regression: repro-picker-windowing). */
-  const [modelPickerDirect, setModelPickerDirect] = React.useState(false)
-  /** Group rows over the current catalog, first-appearance (registry) order,
-   *  with the pinned recents pseudo-group first when any entry is catalogued. */
-  const modelGroups = React.useMemo(
-    () => deriveModelGroups(models, providerInfos, modelRecents),
-    [models, providerInfos, modelRecents],
-  )
-  /** The drilled-in group, but only while it still exists in the catalog. */
-  const activeModelGroup = modelGroup !== undefined && modelGroups.some(group => group.provider === modelGroup)
-    ? modelGroup
-    : undefined
-  const groupModels = React.useMemo(() => {
-    if (activeModelGroup === undefined) return []
-    if (activeModelGroup === RECENTS_GROUP_PROVIDER) return recentCatalogModels(modelRecents, models)
-    return models.filter(model => model.provider === activeModelGroup)
-  }, [models, modelRecents, activeModelGroup])
   /** Switch + record: every successful switch feeds the /model recents group
    *  (picker Enter/click, `/model provider/id`, the wizard's live switch,
    *  and /reload's applied model all ride this one path). */
@@ -727,6 +699,18 @@ export function Chat({
       return ok
     })
   }
+  const modelPicker = useModelPicker({
+    channel, models, providers: providerInfos, recents: modelRecents, open: overlay.kind === 'model',
+    onCancel: () => dispatchOverlay({ type: 'close-if', kind: 'model' }),
+    onPick: (model, effort) => {
+      dispatchOverlay({ type: 'close-if', kind: 'model' })
+      void switchModelRecorded(model.provider, model.id, model.name).then(ok => {
+        // Validate/apply on the adopted route; a refused switch leaves both
+        // the live effort and its persisted preference untouched.
+        if (ok && effort !== undefined) return channel.setEffort(effort)
+      })
+    },
+  })
   /** `/skills` 技能目录（issue #204）：null = 注册表快照在途。 */
   const [skillsList, setSkillsList] = React.useState<readonly SkillInfo[] | null>(null)
   /**
@@ -2887,24 +2871,24 @@ export function Chat({
           recentsNow = recordModelUse({ provider: channel.provider, id: channel.model }, undefined, recentsBackend)
           setModelRecents(recentsNow)
         }
-        // Two-level landing: recents (when catalogued) focus their pinned
-        // row; else multi-provider catalogs focus the current provider's
-        // group row; a single-provider catalog without a meaningful recents
-        // list drills straight into its model list (pre-grouping UX).
-        {
-          const landing = modelPickerLanding(models, channel.provider, channel.model, recentsNow)
-          setModelGroup(landing.group)
-          setModelPickerDirect(landing.group !== undefined)
-          dispatchOverlay({ type: 'open', overlay: { kind: 'model', index: landing.index } })
-        }
+        modelPicker.reset()
+        dispatchOverlay({ type: 'open', overlay: { kind: 'model' } })
+        setModelsLoading(true)
+        const generation = ++modelCatalogGeneration.current
         void channel.listModels().then((list) => {
+          if (generation !== modelCatalogGeneration.current) return
           setModels(list)
-          const landing = modelPickerLanding(list, channel.provider, channel.model, recentsNow)
-          setModelGroup(landing.group)
-          setModelPickerDirect(landing.group !== undefined)
-          dispatchOverlay({ type: 'set-index', kind: 'model', index: landing.index })
+          setModelsLoading(false)
+        }).catch(() => {
+          if (generation !== modelCatalogGeneration.current) return
+          setModelsLoading(false)
+          channel.notify(t('model-load-failed'), { color: 'error' })
         })
-        void channel.listProviders().then(setProviderInfos).catch(() => setProviderInfos([]))
+        void channel.listProviders().then(list => {
+          if (generation === modelCatalogGeneration.current) setProviderInfos(list)
+        }).catch(() => {
+          if (generation === modelCatalogGeneration.current) setProviderInfos([])
+        })
         return true
       }
       case 'skills': {
@@ -4375,6 +4359,16 @@ export function Chat({
       }
       return
     }
+    if (overlay.kind === 'model') {
+      // The model picker owns both navigation axes, including when a side
+      // panel or transcript selection held focus before it opened.
+      const now = Date.now()
+      const confirm = isPlainReturnInput(input, key) && now - lastModalEnterAtRef.current >= 80
+      if (confirm) lastModalEnterAtRef.current = now
+      modelPicker.handleKey(input, key, confirm)
+      event.stopImmediatePropagation()
+      return
+    }
     // 侧栏键盘分发（v2.1 优先级）：上面的审批 / 问卷 / 对话框守卫仍然
     // 最先，其次是侧栏全局快捷键（Ctrl+B / Alt+Z，两种焦点都生效），
     // 然后焦点在右栏时一切按键归侧栏——活动面板的业务键优先，宿主
@@ -4597,59 +4591,6 @@ export function Chat({
         runWorkspaceMenuOption(option)
       } else if (key.escape) {
         dispatchOverlay({ type: 'close' })
-      }
-      return
-    }
-    if (overlay.kind === 'model') {
-      // Two-level picker: group rows at the top (Enter drills in), one
-      // provider's models below (Enter switches, the same live-fork path as
-      // the flat picker always had). Esc/⌫ climbs one level and only closes
-      // at the top; a single-group catalog never shows the group level, so
-      // Esc there closes directly.
-      const rowCount = activeModelGroup === undefined ? modelGroups.length : groupModels.length
-      if (key.upArrow || key.downArrow) {
-        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: rowCount })
-      } else if (plainReturn) {
-        if (activeModelGroup === undefined) {
-          const group = modelGroups[overlay.index]
-          if (!group) {
-            dispatchOverlay({ type: 'close' })
-            return
-          }
-          setModelGroup(group.provider)
-          // The recents group opens on its most-recent entry; a provider
-          // group on its current model when it owns one, else its first row.
-          if (group.provider === RECENTS_GROUP_PROVIDER) {
-            dispatchOverlay({ type: 'set-index', kind: 'model', index: 0 })
-            return
-          }
-          const landing = modelPickerLanding(
-            models.filter(model => model.provider === group.provider),
-            channel.provider,
-            channel.model,
-          )
-          dispatchOverlay({ type: 'set-index', kind: 'model', index: landing.index })
-          return
-        }
-        const model = groupModels[overlay.index]
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
-        if (model) {
-          // Enter switches the live model right away: the conversation is
-          // forked at its end and continued with an agent routed to the new
-          // model (history replays unchanged) — and feeds the recents group.
-          dispatchOverlay({ type: 'close' })
-          void switchModelRecorded(model.provider, model.id, model.name)
-        } else {
-          dispatchOverlay({ type: 'close' })
-        }
-      } else if (key.escape || key.backspace) {
-        if (activeModelGroup !== undefined && modelGroups.length > 1 && !modelPickerDirect) {
-          setModelGroup(undefined)
-          const groupIndex = Math.max(0, modelGroups.findIndex(group => group.provider === activeModelGroup))
-          dispatchOverlay({ type: 'set-index', kind: 'model', index: groupIndex })
-        } else {
-          dispatchOverlay({ type: 'close' })
-        }
       }
       return
     }
@@ -5444,49 +5385,25 @@ export function Chat({
           )}
           {overlay.kind === 'model' && (
             <Box flexDirection="column" marginTop={1}>
-              {models.length === 0 ? (
-                <ModelPickerLoading />
-              ) : activeModelGroup === undefined ? (
-                <ModelPicker
-                  groups={modelGroups}
-                  focusIndex={overlay.index}
-                  currentProvider={channel.provider}
-                  onPick={(index) => {
-                    // 点击分组行 = 进入该组（与 Enter 同一条路径）
-                    const group = modelGroups[index]
-                    if (!group) return
-                    setModelGroup(group.provider)
-                    if (group.provider === RECENTS_GROUP_PROVIDER) {
-                      dispatchOverlay({ type: 'set-index', kind: 'model', index: 0 })
-                      return
-                    }
-                    const landing = modelPickerLanding(
-                      models.filter(model => model.provider === group.provider),
-                      channel.provider,
-                      channel.model,
-                    )
-                    dispatchOverlay({ type: 'set-index', kind: 'model', index: landing.index })
-                  }}
-                />
-              ) : (
-                <ModelPicker
-                  models={groupModels}
-                  groupLabel={activeModelGroup === RECENTS_GROUP_PROVIDER
-                    ? t('picker-group-recent')
-                    : modelGroups.find(group => group.provider === activeModelGroup)?.label}
-                  showBack={modelGroups.length > 1 && !modelPickerDirect}
-                  showProviderPrefix={activeModelGroup === RECENTS_GROUP_PROVIDER}
-                  focusIndex={overlay.index}
-                  currentModel={`${channel.provider}/${channel.model}`}
-                  onPick={(index) => {
-                    // 点击行 = 应用该行模型（与 Enter 同一条路径）
-                    const model = groupModels[index]
-                    if (!model) return
-                    dispatchOverlay({ type: 'close' })
-                    void switchModelRecorded(model.provider, model.id, model.name)
-                  }}
-                />
-              )}
+              <ModelPicker
+                groups={modelPicker.groups}
+                provider={modelPicker.provider}
+                models={modelPicker.models}
+                focusIndex={modelPicker.index}
+                currentModel={`${channel.provider}/${channel.model}`}
+                loading={modelsLoading}
+                efforts={modelPicker.efforts}
+                effortId={modelPicker.effortId}
+                effortsLoading={modelPicker.effortsLoading}
+                effortError={modelPicker.effortError}
+                levelsFallback={modelPicker.levelsFallback}
+                onProvider={modelPicker.focusProvider}
+                onFocus={modelPicker.focusModel}
+                onEffort={modelPicker.pickEffort}
+                onMove={modelPicker.moveModel}
+                onConfirm={modelPicker.confirm}
+                onCancel={modelPicker.cancel}
+              />
             </Box>
           )}
           {overlay.kind === 'migrate' && (
@@ -6886,24 +6803,6 @@ function NewMessagesPill({
         </Text>
       </Box>
     </NoSelect>
-  )
-}
-
-/** /model while the provider catalog is still loading. */
-function ModelPickerLoading(): React.ReactNode {
-  return (
-    <Pane color="permission">
-      <Box flexDirection="column" gap={1}>
-        <Text bold color="permission">
-          {t('picker-title-model')}
-        </Text>
-        <LoadingState
-          message={t('model-loading')}
-          bold
-          subtitle={t('model-loading-subtitle')}
-        />
-      </Box>
-    </Pane>
   )
 }
 

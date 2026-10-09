@@ -126,7 +126,7 @@ export function createCodexControls(deps: ControlsDeps) {
     }
   }
 
-  const effortLevels = (): EffortOption[] => arr(currentRow()?.supportedReasoningEfforts).flatMap(raw => {
+  const effortLevels = (row: Rec | undefined): EffortOption[] => arr(row?.supportedReasoningEfforts).flatMap(raw => {
     const id = str(rec(raw)?.reasoningEffort)
     if (id === undefined) return []
     const labels: Record<string, string> = { none: t('codex-effort-none'), minimal: t('codex-effort-minimal'), low: t('codex-effort-low'), medium: t('codex-effort-medium'), high: t('codex-effort-high'), xhigh: t('codex-effort-xhigh'), ultra: t('codex-effort-ultra') }
@@ -155,11 +155,16 @@ export function createCodexControls(deps: ControlsDeps) {
       },
     },
     effort: {
-      levels: effortLevels,
+      levels: () => effortLevels(currentRow()),
+      forModel: ref => {
+        const model = deps.actualModel?.(ref.model) ?? ref.model
+        const row = rows.find(row => row.model === model || row.id === model)
+        return { levels: effortLevels(row), defaultEffort: str(row?.defaultReasoningEffort) }
+      },
       current: () => settings.effort ?? undefined,
       async set(id) {
         if (rows.length === 0) await models()
-        if (id !== null && !effortLevels().some(option => option.id === id)) throw new Error(t('effort-invalid', { id, ids: effortLevels().map(option => option.id).join(', ') }))
+        if (id !== null && !effortLevels(currentRow()).some(option => option.id === id)) throw new Error(t('effort-invalid', { id, ids: effortLevels(currentRow()).map(option => option.id).join(', ') }))
         const applied = id ?? str(currentRow()?.defaultReasoningEffort) ?? null
         await update({ effort: applied })
         settings.effort = applied

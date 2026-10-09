@@ -494,6 +494,10 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 
 ### Model and preset
 
+`/model` shows provider tabs, the model list, and the highlighted model's reasoning effort on one page, with **Recently used** first.
+`Tab` selects the next provider and `Shift+Tab` the previous one, wrapping at either end; `↑/↓` select a model and `←/→` adjust its effort.
+`Enter` applies the model and effort; `Esc` cancels the draft. Click tabs, models, and effort levels, then click **select** to apply or **cancel** to exit; the wheel moves through the model list.
+
 `/model` switches through a session fork at the end of current history, because DSH has no in-place model-switch API. The old session remains in `/resume`.
 
 - A session nobody has typed into records no branch: switching models there yields an independent session with no `parentSession` (inheriting the same session-scaffolding prefix), so the first real prompt you send still triggers automatic session-title generation. A session that already holds a conversation keeps its lineage as before.

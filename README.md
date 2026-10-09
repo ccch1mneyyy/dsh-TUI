@@ -293,6 +293,8 @@ Full reference: [Interaction and commands](docs/interaction.en.md).
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` open the same session manager: workspace rail, live state, filter, ★ pins. Also `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`.
 
+`/model` opens provider tabs with **Recently used** first. `Tab` / `Shift+Tab` select the next / previous provider, `↑/↓` select a model, and `←/→` adjust its reasoning effort. `Enter` applies both; `Esc` cancels. Mouse users can click tabs, models, effort levels, and the select/cancel hints; the wheel moves through models.
+
 In `/provider`'s model list, focus a model and press `Tab` to edit its context window, max output tokens, reasoning efforts, and image input capability.
 
 The session manager focuses the most recently used session in the current workspace; if there is no history, it focuses the new-session card. Press `←` to move to the workspace rail. It paints the last successful list immediately while it checks the persistence store for changes. Titles that require a deeper log scan appear first with a fallback name and update in place when recovery finishes.

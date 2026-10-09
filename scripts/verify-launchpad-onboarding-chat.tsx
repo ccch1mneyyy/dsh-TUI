@@ -334,13 +334,9 @@ const LAUNCHPAD_MARK = '说点什么，或输入 /' + ' 看命令…'
 const WIZARD_MARK = '第 1 / 4 步'
 /** 帮助盖屏的标记：HelpMenu 快捷键列头与命令区标题。 */
 const HELP_MARK = '? 查看本帮助'
-/**
- * 模型选择器「展开」的双标记：套件前面的用例（D2/Q1）切过模型 →
- * modelRecents 落盘 → 之后 /model 首屏可能是「最近使用」分组视图而非
- * 模型列表（Q1 同款口径）。
- */
+/** 最近使用标签标记 /model 浮层；模型名也会出现在启动页参数行。 */
 const modelOpen = (screen: string): boolean =>
-  screen.includes('deepseek-reasoner') || screen.includes('最近使用')
+  screen.includes('最近使用')
 const HELP_COMMANDS_MARK = '命令：'
 /**
  * 参数行（值 + 双空格·双空格 分隔）里某段的终端坐标：浮层（选择器/滑杆）
@@ -507,7 +503,11 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.send('\r')
   check('D1 模型段点开 /model 选择器：盖在落地页之上（两屏同帧可见、键盘可达）',
     await settled(() => chat.screen().includes('说点什么')
-      && chat.screen().includes('deepseek-reasoner')), chat.screen().slice(0, 300))
+      && modelOpen(chat.screen())), chat.screen().slice(0, 300))
+  await chat.send('\t') // 最近使用 → DeepSeek 提供商，浏览完整模型列表。
+  check('D1b Tab 切到提供商模型列表，启动页仍保持可见',
+    await settled(() => chat.screen().includes('deepseek-reasoner')
+      && chat.screen().includes('说点什么')))
   // ↑/↓ 走到另一个模型，Enter 切换：值就地更新、仍停在落地页。
   await chat.send('\u001b[B')
   await chat.send('\r')
@@ -819,7 +819,9 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.send('\r')
   check('P2a 切换参数段前模型选择器确实展开',
     await settled(() => modelOpen(chat.screen())), chat.screen().slice(0, 240))
-  await chat.click('High') // 参数行的思考深度段
+  const effortCell = findParamCell(chat.term, 'High')
+  if (effortCell === null) throw new Error('effort param segment not on screen')
+  await chat.send(`\u001b[<0;${effortCell.col};${effortCell.row}M\u001b[<0;${effortCell.col};${effortCell.row}m`)
   check('P2 开着模型选择器时点思考深度段：切成 effort 滑杆（且只有一个选择器在屏）',
     await settled(() => !modelOpen(chat.screen())
       && chat.screen().includes('Max') && chat.screen().includes('说点什么')),
@@ -974,11 +976,9 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await chat.type('/model')
   await settled(() => chat.screen().includes('model'))
   await chat.send('\r') // 面板选中 /model → runCommand（不是 submit）
-  // 命令已执行，输入框恢复占位文案。选择器首屏可能是分组
-  // 视图（本套件前面的用例写过「最近使用」名册）也可能是模型列表，两个标记
-  // 任一在屏即算选择器真的盖了上来。
+  // 命令已执行，输入框恢复占位文案，最近使用标签标记选择器已展开。
   check('Q1 面板执行 /model：选择器盖在落地页之上（无 submit）',
-    await settled(() => (chat.screen().includes('deepseek-reasoner') || chat.screen().includes('最近使用'))
+    await settled(() => modelOpen(chat.screen())
       && chat.screen().includes(LAUNCHPAD_MARK) && !chat.screen().includes('⌘'))
       && !chat.calls.some(c => c.startsWith('submit:')),
     chat.screen().slice(0, 240))

@@ -83,6 +83,11 @@ await scenario('models pagination/cache/mapping + effort defaults', async () => 
     const settings: SettingsSnapshot = { model: 'gpt-5.6-terra', effort: 'high', modeId: 'auto', permissionMode: 'auto' }
     const controls = createCodexControls({ hub: f.hub, prefs: f.prefs, ctx: createItemContext({ cwd: CWD, model: settings.model, debug: () => {} }), settings, cwd: CWD, threadId: () => THREAD, busy: () => false, emit: () => {}, submitText: async () => {}, debug: () => {}, mappedModels: () => [{ id: 'alias', label: 'mapped limited' }], actualModel: id => id === 'alias' ? 'limited' : id })
     check('mapped alias added without extra request', (await controls.capabilities.models!.list()).some(row => row.id === 'alias'))
+    const preview = controls.capabilities.effort!.forModel!({ model: 'alias' })
+    check('effort preview follows candidate mapping', preview.levels.map(level => level.id), ['medium'])
+    check('effort preview carries candidate default', preview.defaultEffort, 'medium')
+    check('unknown candidate never borrows the live model tiers', controls.capabilities.effort!.forModel!({ model: 'unknown' }).levels, [])
+    check('preview leaves model, effort and settings RPC untouched', [settings.model, settings.effort, f.sent(CLIENT.threadSettingsUpdate).length], ['gpt-5.6-terra', 'high', 0])
     f.prefs.write({ effort: 'high' })
     await controls.capabilities.models!.set({ model: 'alias' })
     check('mapping wire actual slug', f.last(CLIENT.threadSettingsUpdate).model, 'limited')

@@ -56,7 +56,7 @@ export type ChatOverlay =
       busy: boolean
       input: WorkspaceFlowInput | null
     }
-  | { kind: 'model'; index: number }
+  | { kind: 'model' }
   | { kind: 'skills'; index: number }
   | { kind: 'migrate'; index: number }
   | { kind: 'migrate-confirm' }
@@ -157,10 +157,10 @@ export type ChatOverlayAction =
    */
   | { type: 'move'; delta: 1 | -1; count: number }
   /** Set the focused row to an absolute index — an async loader landing
-   *  with the authoritative focus (model list / preset roster), or a mouse
+   *  with the authoritative focus (preset roster), or a mouse
    *  click on a row of a panel that stays open (effort slider, workspace
    *  flow). Ignored unless that panel is still up. */
-  | { type: 'set-index'; kind: 'model' | 'preset' | 'effort' | 'permission' | 'mode' | 'kernel' | 'workspace-flow' | 'rewind' | 'file-actions' | 'panel' | 'channel'; index: number }
+  | { type: 'set-index'; kind: 'preset' | 'effort' | 'permission' | 'mode' | 'kernel' | 'workspace-flow' | 'rewind' | 'file-actions' | 'panel' | 'channel'; index: number }
   /** Edit the history-search draft (query text, caret, focused match). */
   | { type: 'history-edit'; query?: string; cursor?: number; focus?: number }
   /** Workspace flow: an action is running (keys except Esc are swallowed). */
@@ -226,7 +226,6 @@ export function chatOverlayReducer(state: ChatOverlay, action: ChatOverlayAction
         state.kind === 'workspace-picker'
         || state.kind === 'workspace-menu'
         || state.kind === 'workspace-flow'
-        || state.kind === 'model'
         || state.kind === 'skills'
         || state.kind === 'migrate'
         || state.kind === 'activity'

@@ -210,7 +210,22 @@ export function createModelActions(
     notify(t('effort-switched', { name: effort.name }))
     state.emit()
   }
-  const listEfforts = async (): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined }> => {
+  const listEfforts = async (route?: { provider: string; model: string }): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined; levelsFallback?: true }> => {
+    if (route !== undefined) {
+      const binding = deps.binding.capture()
+      if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return { efforts: [], defaultEffort: undefined }
+      // Preview is independent of the live effort operation: browsing the
+      // picker must neither invalidate a pending preference nor publish the
+      // candidate's context window/tiers into the current session.
+      const info = await llmRuntime.resolveModelInfo(route.provider, route.model)
+      if (!owner.current() || !deps.binding.isCurrent(binding)) return { efforts: [], defaultEffort: undefined }
+      return {
+        efforts: tiersOf(info.reasoning),
+        defaultEffort: typeof info.reasoning === 'object' && info.reasoning !== null ? info.reasoning.defaultEffort : undefined,
+        ...(info.reasoning === true || (typeof info.reasoning === 'object' && info.reasoning !== null && info.reasoning.efforts === undefined)
+          ? { levelsFallback: true as const } : {}),
+      }
+    }
     const capture = captureEffort()
     const resolved = await resolveEfforts(capture)
     if (resolved === 'stale') return { efforts: [], defaultEffort: undefined }

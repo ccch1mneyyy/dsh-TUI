@@ -1137,11 +1137,12 @@ const GROUPS = {
     ["verify-balance", ['node', '--import', 'tsx/esm', 'scripts/verify-balance.tsx']],
 // 本会话费用估算回归（#1089）：主会话按模型分桶 + 子代理按各自 (provider, model)、峰值/空闲、缓存分项合并计价，非官方/未收录只报 token 并标注未计价。
     ["verify-session-cost", ['node', '--import', 'tsx/esm', 'scripts/verify-session-cost.tsx']],
-// /model 二级选择器派生回归：provider 分组（首现排序、显示名回退、
-// 计数）与落焦规则（多 provider 聚焦当前组、单 provider 直达模型层、
-// 缺席当前 provider 落首行）。键盘与 overlay 归约由 verify-chat-overlay
-// 覆盖，这里钉住两层共用的纯派生。
+// /model 标签选择器派生回归：provider 分组（首现排序、显示名回退、
+// 计数）、最近使用目录交集/持久化与初始提供商/模型焦点。
     ["verify-model-picker-groups", ['node', 'scripts/verify-model-picker-groups.mjs']],
+// /model 同页交互：最近使用置顶、Tab/Shift+Tab、模型/推理草稿、取消、
+// 同批键序、鼠标/滚轮与 inline/fullscreen 窄终端窗口化。
+    ['verify-model-picker-ui', ['node', '--import', 'tsx/esm', 'scripts/verify-model-picker-ui.tsx']],
 // 全屏出厂默认迁移回归（0.9.x schema + cordis.patch.yml false→true 翻转）：
 // 翻转前钉在 settings 用户层的显式 false 首启被 unset 一次（marker 仅在
 // 写入成功后落盘，失败下次自愈重试），此后再写的 false 是用户主动选择

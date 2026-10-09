@@ -106,7 +106,7 @@ export function createChannelActionMethods(
     workspaceCommands: () => getReadyActions().workspaceCommands(),
     runWorkspaceCommand: (name, input) => getReadyActions().runWorkspaceCommand(name, input),
     switchModel: (provider, model) => getReadyActions().switchModel(provider, model),
-    listEfforts: () => getReadyActions().listEfforts(),
+    listEfforts: route => getReadyActions().listEfforts(route),
     setEffort: id => getReadyActions().setEffort(id),
     setDefaultEffort: id => getReadyActions().setDefaultEffort(id),
     cycleMode: () => getReadyActions().cycleMode(),

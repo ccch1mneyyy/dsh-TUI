@@ -25,7 +25,7 @@ import type { ChannelState } from '../types.js'
 export function createCapabilityDelegates(deps: {
   owner: Pick<ChannelOwner, 'current'>
   session(): AgentSession
-  state: () => Pick<ChannelState, 'provider' | 'backendCapabilities'>
+  state: () => Pick<ChannelState, 'provider' | 'model' | 'backendCapabilities'>
   notify: ChannelState['notify']
   unavailable(name: string): void
   unavailableLines(name: string): string[]
@@ -55,8 +55,7 @@ export function createCapabilityDelegates(deps: {
     listModels: () => guarded('model', [], async () => {
       const models = caps().models
       if (models === undefined) { unavailable('model'); return [] }
-      // One provider: the backend itself (the picker drills straight into
-      // its models; `/model <id>` needs no provider segment).
+      // One provider: the backend itself; `/model <id>` needs no provider segment.
       const provider = deps.state().provider
       return (await models.list()).map(model => ({ provider: model.provider ?? provider, id: model.id, name: model.label, ...(model.description === undefined ? {} : { description: model.description }) }))
     }),
@@ -69,8 +68,18 @@ export function createCapabilityDelegates(deps: {
       if (outcome.kind === 'refused') notify(outcome.reason, { color: 'warning' })
       return outcome.kind === 'switched'
     }),
-    listEfforts: () => {
+    listEfforts: route => {
       const effort = caps().effort
+      if (route !== undefined) {
+        const state = deps.state()
+        const preview = effort?.forModel?.(route)
+        const live = route.provider === state.provider && route.model === state.model
+        return Promise.resolve({
+          efforts: (preview?.levels ?? (live ? effort?.levels() : undefined) ?? []).map(level => ({ id: level.id, name: level.label })),
+          defaultEffort: preview?.defaultEffort ?? (live ? effort?.current() : undefined),
+          ...((preview?.levelsFallback ?? (live ? effort?.levelsFallback : undefined)) === true ? { levelsFallback: true as const } : {}),
+        })
+      }
       if (effort === undefined) { unavailable('effort'); return Promise.resolve({ efforts: [], defaultEffort: undefined }) }
       const levels = effort.levels()
       // The slider relies on this call to explain why it cannot open (Chat

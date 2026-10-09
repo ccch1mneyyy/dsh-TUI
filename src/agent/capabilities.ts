@@ -194,6 +194,12 @@ export interface SessionCapabilities {
      *  is no list). */
     readonly levelsFallback?: true
     levels(): readonly EffortOption[]
+    /** Preview a catalog model without switching the session or its effort. */
+    forModel?(ref: ModelRef): {
+      readonly levels: readonly EffortOption[]
+      readonly defaultEffort?: string
+      readonly levelsFallback?: true
+    }
     current(): string | undefined
     set(id: string | null): Promise<void>
   }

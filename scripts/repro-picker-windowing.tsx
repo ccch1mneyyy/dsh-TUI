@@ -344,6 +344,8 @@ const typeKeys = async (s: string, stepMs = 40) => {
   check('/model 打开缓冲区零增长', term.buffer.active.length === bufBefore,
     `${bufBefore} → ${term.buffer.active.length}`)
   dump('model focus 0')
+  stdin.write('\t') // 最近使用 → 提供商，浏览完整模型列表。
+  await settle(() => screenLines().some(line => line.includes('Model 01')))
   for (let i = 0; i < 20; i++) { stdin.write('\x1b[B'); await sleep(25) } // 固定窗:pacing 逐键步进
   check('/model ↓×20 焦点 20 在屏', await settled(() => focusLineVisible('Model 20')))
   dump('model focus 20')
