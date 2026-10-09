@@ -498,11 +498,26 @@ const DAY_MS = 86_400_000
 
 /**
  * 按**本地日期**轮换：同一天内恒定、隔天换一款，且与启动时刻无关（可复现）。
+ *
+ * CI 确定性缝：**无参**调用（生产与挂件夹具的「按天轮换」路径）先看
+ * `DSH_TUI_SPLASH_FONT`——合法 id 就钉住那一款。CI 全 workflow 设 `bold`
+ * （`.github/workflows/ci.yml`）：挂真 Chat/LogoV2 的回归不再随日期变头部
+ * 几何——宽体字身轮到那天鲸鱼被阶梯撤掉、文字列位移，断言失配，每 9 天
+ * 红一次的 flake 最难查。**显式传日期的调用不受影响**（轮换契约自身的
+ * 回归照按注入日期算）；要测 daily 路径的脚本自己删掉这个 env
+ * （`verify-splash-font-setting.mjs`）。
  * @param date - 注入的当前时间（测试缝；生产用 `new Date()`）。
- * @returns 当天的字体。
+ * @returns 当天的字体（或 `DSH_TUI_SPLASH_FONT` 钉住的那款）。
  */
-export function pickSplashFont(date: Date = new Date()): SplashFont {
-  const day = Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / DAY_MS)
+export function pickSplashFont(date?: Date): SplashFont {
+  if (date === undefined) {
+    const pinned = process.env.DSH_TUI_SPLASH_FONT
+    if (pinned !== undefined && SPLASH_FONTS.some(font => font.id === pinned)) {
+      return splashFontById(pinned)
+    }
+  }
+  const now = date ?? new Date()
+  const day = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / DAY_MS)
   const index = ((day % SPLASH_FONTS.length) + SPLASH_FONTS.length) % SPLASH_FONTS.length
   return SPLASH_FONTS[index] as SplashFont
 }
