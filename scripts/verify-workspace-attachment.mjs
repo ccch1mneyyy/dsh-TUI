@@ -121,7 +121,6 @@ try {
 const plugin = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
 const channel = [
   'channel.ts',
-  'channel/model-switch.ts',
   'channel/session-resume.ts',
   'channel/session-rewind.ts',
   'channel/session-fork.ts',
@@ -173,8 +172,8 @@ assert.match(
 )
 assert.equal(
   [...channel.matchAll(/await attachSessionToWorkspace\(ctx, (?:state\.cwd|targetCwd|deps\.cwd\(\)|handle\.agent\.session\.header\.cwd \?\? state\.cwd|sourceCwd), (?:SessionId\(sessionId\)|childId|sessionId)\)/g)].length,
-  8,
-  'rewind, /resume, /new, model-switch, tree rewindToNode, /fork, and agent-view background paths all attach ownership across extracted actions',
+  7,
+  'rewind, /resume, /new, tree rewindToNode, /fork, and agent-view background paths all attach ownership across extracted actions',
 )
 for (const id of ['storage', 'storage-json', 'storage-domain', 'workspace']) {
   assert.match(patch, new RegExp(`- id: dsh-tui-${id}\\n`), `profile patch mounts scoped dsh-tui-${id}`)

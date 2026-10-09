@@ -915,7 +915,6 @@ await sleep(800)
     ['session-resume.ts', 'resetAndBind('],
     ['session-adoption.ts', 'deps.bindAgent()'],
     ['session-live-adoption.ts', 'deps.bindAgent()'],
-    ['model-switch.ts', 'deps.bindAgent()'],
     ['background-action.ts', 'deps.bindAgent()'],
   ]
   const misplaced = tails.filter(([file, marker]) => {

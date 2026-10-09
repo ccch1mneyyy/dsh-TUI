@@ -492,9 +492,7 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 
 ### Model and preset
 
-`/model` switches through a session fork at the end of current history, because DSH has no in-place model-switch API. The old session remains in `/resume`.
-
-- A session nobody has typed into records no branch: switching models there yields an independent session with no `parentSession` (inheriting the same session-scaffolding prefix), so the first real prompt you send still triggers automatic session-title generation. A session that already holds a conversation keeps its lineage as before.
+`/model` selects the next request’s route within the same DSH session, preserving its ID, history, and title. Switching is refused during a running turn. The next request records the actual route and a model-change notice. A choice with no subsequent request is saved only as a global default; session resume still resolves its last recorded request route.
 
 - `/preset` switches in place only for a blank session. In a started session, the choice becomes the default for the next `/new` or launch.
 
@@ -830,7 +828,7 @@ Additional forms:
 - `/model` opens a two-level picker:
   - A pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups.
   - `Enter` drills into a group's models, and a single provider with no recents skips straight to the list.
-  - Switching = fork continuation, history preserved.
+  - Switching keeps the current session and history; the new model is used for the next request.
 - `/theme <name>` and `/theme status` are described in the theme guide.
 - `/permission` reads the DSH `permissionPresets` registry, preserving registry order for
   the picker, completion and the `Shift+Tab` cycle. Third-party presets need no TUI

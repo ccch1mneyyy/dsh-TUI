@@ -599,8 +599,9 @@ guide owns detailed contracts such as the toolchain and verification matrix.
   frame-coalesced emitter so `version` advances and subscribers are notified.
 - Keep long-session memory bounded. Do not remove transcript folding, replay
   coalescing, virtualization, or cache limits without a measured replacement.
-- Agent changes such as resume, rewind, model switch, and preset switch must
-  reset all session-scoped projections together. Audit rows, goals, todos,
+- Agent replacements such as resume and rewind must reset all session-scoped
+  projections together. Model-route changes preserve the agent/session and do
+  not reset history, pending messages, or loaded context. Audit rows, goals, todos,
   titles, pending messages, metrics, and loaded context for stale state.
 - Resolve agent/model/tool/preset capabilities through the mounted DSH
   services and registries. Do not guess external API shapes; inspect the
