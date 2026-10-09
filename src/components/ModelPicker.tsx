@@ -39,94 +39,132 @@ export function ModelPicker({
   const { columns } = useTerminalSize()
   const width = Math.max(1, columns - 4) // Pane's horizontal padding.
   const availableRows = useOverlayListRows(0)
-  const compact = availableRows < 14
-  const showNavigationHints = availableRows >= 11
+  const shortcuts = [
+    { text: t('hint-model-provider'), onPick: undefined },
+    { text: t('hint-model-navigation'), onPick: undefined },
+    { text: t('hint-model-select'), onPick: onConfirm },
+    { text: t('hint-model-cancel'), onPick: onCancel },
+  ]
+  const shortcutRows: (typeof shortcuts)[] = []
+  let usedWidth = 0
+  for (const shortcut of shortcuts) {
+    const cellWidth = stringWidth(shortcut.text.replaceAll('**', ''))
+    if (shortcutRows.length === 0 || usedWidth + 3 + cellWidth > width) {
+      shortcutRows.push([shortcut])
+      usedWidth = cellWidth
+    } else {
+      shortcutRows.at(-1)!.push(shortcut)
+      usedWidth += 3 + cellWidth
+    }
+  }
+  const compact = availableRows < 13 + shortcutRows.length
+  const showHeaderHints = availableRows >= 9 + shortcutRows.length
   const description = efforts.find(effort => effort.id === effortId)?.description
     ?? (levelsFallback ? t('effort-fallback-tier-note') : undefined)
   const showDescription = !compact && description !== undefined
-  // Pane 2 + title 1 + tabs 1 + effort 1 + hints 3 + wrapper margin 1;
-  // the roomy layout adds two gaps and an optional effort description.
-  // Tight anchors omit the two navigation hints so models, effort and the
-  // confirmation row survive the overlay's top clipping.
-  const listRows = useOverlayListRows(9 - (showNavigationHints ? 0 : 2)
-    + (compact ? 0 : 2) + (showDescription ? 1 : 0))
+  // Pane 2 + title 1 + tabs 1 + effort 2 + wrapper margin 1, plus the
+  // width-aware header. Roomy panes add three gaps and an optional description.
+  // Very short anchors collapse effort to one row and keep actions at the
+  // bottom so top clipping cannot hide the focused model or mouse buttons.
+  const listRows = useOverlayListRows(showHeaderHints
+    ? 7 + shortcutRows.length + (compact ? 0 : 3) + (showDescription ? 1 : 0)
+    : 7)
   const { start, end } = listWindow(models.map(model => model.description ? 2 : 1), focusIndex, listRows)
+  const shortcutBar = (
+    <Box flexDirection="column">
+      {(showHeaderHints ? shortcutRows : [shortcuts.slice(2)]).map((row, rowIndex) => (
+        <Box key={rowIndex} height={1} flexShrink={0} overflow="hidden" gap={1}>
+          {row.map((shortcut, index) => (
+            <React.Fragment key={shortcut.text}>
+              {index > 0 ? <Text dimColor>·</Text> : null}
+              <Box flexShrink={0} maxWidth={width} onClick={shortcut.onPick ? event => {
+                event.stopImmediatePropagation()
+                shortcut.onPick!()
+              } : undefined}>
+                <Text dimColor wrap="truncate"><HintLine text={shortcut.text} /></Text>
+              </Box>
+            </React.Fragment>
+          ))}
+        </Box>
+      ))}
+    </Box>
+  )
   return (
-    <Pane color="permission">
-      <Text color="remember" bold wrap="truncate">{t('picker-title-model')}</Text>
-      <Box marginBottom={compact ? 0 : 1}>
-        <PickerTabs
-          labels={groups.map(group => group.provider === RECENTS_GROUP_PROVIDER ? t('picker-group-recent') : group.label)}
-          focusIndex={groups.findIndex(group => group.provider === provider)}
-          width={width}
-          onPick={index => onProvider(groups[index]!.provider)}
-        />
-      </Box>
-      <Box flexDirection="column" onWheel={event => {
-        event.stopImmediatePropagation()
-        if (event.deltaY !== 0) onMove(event.deltaY < 0 ? -1 : 1)
-      }}>
-        {models.length === 0 ? (
-          <Text dimColor wrap="truncate">{t(loading ? 'model-loading' : provider === RECENTS_GROUP_PROVIDER ? 'picker-recents-empty' : 'picker-models-empty')}</Text>
-        ) : models.slice(start, end).map((model, index) => {
-          const absoluteIndex = start + index
-          return (
-            <ListItem
-              key={`${model.provider}/${model.id}`}
-              isFocused={absoluteIndex === focusIndex}
-              isSelected={`${model.provider}/${model.id}` === currentModel}
-              description={model.description}
-              showScrollUp={absoluteIndex === start && start > 0}
-              showScrollDown={absoluteIndex === end - 1 && end < models.length}
-              onClick={event => { event.stopImmediatePropagation(); onFocus(absoluteIndex) }}
-            >
-              {provider === RECENTS_GROUP_PROVIDER ? `${model.provider} / ${model.name}` : model.name}
-            </ListItem>
-          )
-        })}
-      </Box>
-      <Box marginTop={compact ? 0 : 1} height={1} flexShrink={0} overflow="hidden">
-        <Text dimColor>{t('picker-title-effort')}{'  '}</Text>
-        {effortsLoading || effortError || efforts.length === 0 ? (
-          <Text dimColor wrap="truncate">
-            {models.length === 0 ? '—' : t(effortsLoading ? 'picker-effort-loading' : effortError ? 'picker-effort-error' : 'picker-effort-unavailable')}
-          </Text>
-        ) : (
-          <>
-            {effortId === undefined ? <Text dimColor>{t('picker-effort-default')}{'  '}</Text> : null}
-            <PickerTabs
-              labels={efforts.map(effort => effort.name)}
-              focusIndex={efforts.findIndex(effort => effort.id === effortId)}
-              width={Math.max(1, width - stringWidth(t('picker-title-effort')) - 2
-                - (effortId === undefined ? stringWidth(t('picker-effort-default')) + 2 : 0))}
-              onPick={onEffort}
-            />
-          </>
-        )}
-      </Box>
-      {showDescription ? <Text dimColor wrap="truncate">{description!.replace(/[\r\n]+/g, ' ')}</Text> : null}
-      {showNavigationHints ? <>
-        <Text dimColor wrap="truncate"><HintLine text={t('hint-model-provider')} /></Text>
-        <Text dimColor wrap="truncate"><HintLine text={t('hint-model-arrows')} /></Text>
-      </> : null}
-      <Box height={1} flexShrink={0} gap={1}>
-        <Box onClick={event => { event.stopImmediatePropagation(); onConfirm() }}>
-          <Text dimColor><HintLine text={t('hint-model-select')} /></Text>
+    <Box flexDirection="column" backgroundColor="toolCardBackground" opaque>
+      <Pane color="permission">
+        <Text color="remember" bold wrap="truncate">{t('picker-title-model')}</Text>
+        {showHeaderHints ? shortcutBar : null}
+        <Box marginTop={compact ? 0 : 1} marginBottom={compact ? 0 : 1}>
+          <PickerTabs
+            labels={groups.map(group => group.provider === RECENTS_GROUP_PROVIDER ? t('picker-group-recent') : group.label)}
+            focusIndex={groups.findIndex(group => group.provider === provider)}
+            width={width}
+            onPick={index => onProvider(groups[index]!.provider)}
+          />
         </Box>
-        <Text dimColor>·</Text>
-        <Box onClick={event => { event.stopImmediatePropagation(); onCancel() }}>
-          <Text dimColor><HintLine text={t('hint-model-cancel')} /></Text>
+        <Box flexDirection="column" onWheel={event => {
+          event.stopImmediatePropagation()
+          if (event.deltaY !== 0) onMove(event.deltaY < 0 ? -1 : 1)
+        }}>
+          {models.length === 0 ? (
+            <Text dimColor wrap="truncate">{t(loading ? 'model-loading' : provider === RECENTS_GROUP_PROVIDER ? 'picker-recents-empty' : 'picker-models-empty')}</Text>
+          ) : models.slice(start, end).map((model, index) => {
+            const absoluteIndex = start + index
+            return (
+              <ListItem
+                key={`${model.provider}/${model.id}`}
+                isFocused={absoluteIndex === focusIndex}
+                isSelected={`${model.provider}/${model.id}` === currentModel}
+                description={model.description}
+                showScrollUp={absoluteIndex === start && start > 0}
+                showScrollDown={absoluteIndex === end - 1 && end < models.length}
+                onClick={event => { event.stopImmediatePropagation(); onFocus(absoluteIndex) }}
+              >
+                {provider === RECENTS_GROUP_PROVIDER ? `${model.provider} / ${model.name}` : model.name}
+              </ListItem>
+            )
+          })}
         </Box>
-      </Box>
-    </Pane>
+        <Box marginTop={compact ? 0 : 1} flexDirection={showHeaderHints ? 'column' : 'row'}>
+          <Box height={1} flexShrink={0} overflow="hidden">
+            <Text color="remember" bold>{t('picker-title-effort')}{showHeaderHints ? '' : '  '}</Text>
+            {showHeaderHints && !effortsLoading && !effortError && efforts.length > 1 ? (
+              <Text dimColor>{'  '}<HintLine text={t('hint-model-effort')} /></Text>
+            ) : null}
+          </Box>
+          <Box height={1} flexShrink={0} overflow="hidden">
+            {effortsLoading || effortError || efforts.length === 0 ? (
+              <Text dimColor wrap="truncate">
+                {models.length === 0 ? '—' : t(effortsLoading ? 'picker-effort-loading' : effortError ? 'picker-effort-error' : 'picker-effort-unavailable')}
+              </Text>
+            ) : (
+              <>
+                {effortId === undefined ? <Text color="text">{t('picker-effort-default')}{'  '}</Text> : null}
+                <PickerTabs
+                  labels={efforts.map(effort => effort.name)}
+                  focusIndex={efforts.findIndex(effort => effort.id === effortId)}
+                  width={Math.max(1, width - (showHeaderHints ? 0 : stringWidth(t('picker-title-effort')) + 2)
+                    - (effortId === undefined ? stringWidth(t('picker-effort-default')) + 2 : 0))}
+                  muted={false}
+                  onPick={onEffort}
+                />
+              </>
+            )}
+          </Box>
+        </Box>
+        {showDescription ? <Text dimColor wrap="truncate">{description!.replace(/[\r\n]+/g, ' ')}</Text> : null}
+        {!showHeaderHints ? shortcutBar : null}
+      </Pane>
+    </Box>
   )
 }
 
 /** Keep the active cell visible when a provider or effort strip exceeds its width. */
-function PickerTabs({ labels, focusIndex, width, onPick }: {
+function PickerTabs({ labels, focusIndex, width, muted = true, onPick }: {
   labels: readonly string[]
   focusIndex: number
   width: number
+  muted?: boolean
   onPick(index: number): void
 }): React.ReactNode {
   const singleLines = labels.map(label => label.replace(/[\r\n]+/g, ' '))
@@ -143,7 +181,7 @@ function PickerTabs({ labels, focusIndex, width, onPick }: {
       {start > 0 ? <Box onClick={event => { event.stopImmediatePropagation(); onPick(start - 1) }}><Text dimColor>‹</Text></Box> : null}
       {cells.slice(start, end).map((label, index) => (
         <Box key={start + index} flexShrink={0} onClick={event => { event.stopImmediatePropagation(); onPick(start + index) }}>
-          <Text color={start + index === focusIndex ? 'remember' : undefined} inverse={start + index === focusIndex} bold={start + index === focusIndex} dimColor={start + index !== focusIndex}>
+          <Text color={start + index === focusIndex ? 'remember' : muted ? undefined : 'text'} inverse={start + index === focusIndex} bold={start + index === focusIndex} dimColor={muted && start + index !== focusIndex}>
             {` ${label} `}
           </Text>
         </Box>

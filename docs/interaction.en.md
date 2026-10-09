@@ -495,8 +495,8 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 
 `/model` shows provider tabs, the model list, and the highlighted model's reasoning effort on one page, with **Recently used** first.
 `Tab` selects the next provider and `Shift+Tab` the previous one, wrapping at either end; `↑/↓` select a model and `←/→` adjust its effort.
-`Enter` applies the model and effort; `Esc` cancels the draft. Click tabs, models, and effort levels, then click **select** to apply or **cancel** to exit; the wheel moves through the model list.
-When space above the input is tight, provider and arrow-key hints are omitted to keep the focused model, effort, and confirmation row visible.
+`Enter` applies the model and effort; `Esc` cancels the draft. Shortcuts sit below the title, and a separate effort heading and level strip sit below the models, with the `←/→` hint beside the effort heading. Selectable levels use the body text color and the current level is highlighted. DSH, Claude, and Codex all use an opaque themed panel background.
+Click tabs, models, and effort levels, then click **select** or **cancel** below the title; the wheel moves through the model list. When space above the input is tight, navigation hints are omitted, effort collapses to one row, and Select / Cancel stay at the bottom to keep the focused model and actions visible.
 
 `/model` switches through a session fork at the end of current history, because DSH has no in-place model-switch API. The old session remains in `/resume`.
 

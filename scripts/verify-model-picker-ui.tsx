@@ -2,7 +2,9 @@
  * /model through the real Chat/channel/rendering path, with a fake LLM catalog:
  * recents-first tabs, forward/backward wrapping, independent model/effort drafts,
  * same-batch navigation/confirmation, cancellation, mouse picks and wheel,
- * focus windowing and resize in inline/fullscreen at 100 and 36 columns.
+ * focus windowing and resize in inline/fullscreen at 100 and 36 columns;
+ * header shortcuts, readable effort colors and an opaque panel surface.
+ * Claude/Codex capability fixtures check the same surface in both modes.
  * No credentials or model calls. Run after pnpm build:
  * node --import tsx/esm scripts/verify-model-picker-ui.tsx
  */
@@ -10,6 +12,9 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.TERM_PROGRAM = 'WezTerm'
+
+import type { AgentEvent } from '../src/agent/events.js'
+import type { AgentSession } from '../src/agent/session.js'
 
 const { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } = await import('node:fs')
 const { tmpdir } = await import('node:os')
@@ -23,12 +28,13 @@ mkdirSync(prefsDir, { recursive: true })
 const [
   { default: assert }, { PassThrough, Writable }, { default: React }, { Terminal },
   { render, AlternateScreen }, { Chat }, { QuestionStore }, { createChannel },
-  { stringWidth }, { disposeChannelOwner }, { settled, sleep, viewportLines },
+  { stringWidth }, { disposeChannelOwner }, { settled, sleep, viewportLines }, { activateModernEmojiWidths },
 ] = await Promise.all([
   import('node:assert/strict'), import('node:stream'), import('react'), import('@xterm/headless'),
   import('../src/ui.js'), import('../src/screens/Chat.js'), import('../src/channel/questions.js'),
   import('../src/dsh-adapter/channel.js'), import('../src/ink/stringWidth.js'),
   import('../src/dsh-adapter/channel/owner.js'), import('./lib/term-test.mjs'),
+  import('./lib/modern-widths.mjs'),
 ])
 
 const MODELS = [
@@ -54,11 +60,9 @@ const modelInfo = (provider: string, model: string) => ({
   }),
 })
 
-async function scenario(fullscreen: boolean, columns: number): Promise<void> {
-  const label = `${fullscreen ? 'fullscreen' : 'inline'} ${columns} columns`
-  writeFileSync(join(prefsDir, 'model-recents.json'), JSON.stringify({ models: [{ provider: 'alpha', id: 'a1' }, { provider: 'beta', id: 'b0' }] }))
-  writeFileSync(join(prefsDir, 'effort.json'), JSON.stringify({ effort: 'medium' }))
+function terminalHarness(columns: number) {
   const term = new Terminal({ cols: columns, rows: 30, scrollback: 2000, allowProposedApi: true })
+  activateModernEmojiWidths(term)
   class Output extends Writable {
     columns = columns
     rows = 30
@@ -74,6 +78,31 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
   const stdout = new Output()
   const stdin = new Input()
   const stderr = new Writable({ write(_chunk, _encoding, done) { done() } })
+  return { term, stdout, stdin, stderr }
+}
+
+function opaquePanel(term: InstanceType<typeof Terminal>): boolean {
+  const lines = viewportLines(term)
+  const title = lines.findIndex(line => line.trim() === '模型')
+  const levels = lines.findIndex(line => line.includes('LOW'))
+  if (title < 2 || levels <= title) return false
+  const divider = lines[title - 1]!
+  const left = divider.indexOf('─')
+  if (left < 0) return false
+  for (let row = title - 2; row <= levels; row++) {
+    const line = term.buffer.active.getLine(term.buffer.active.baseY + row)!
+    for (let col = left; col < stringWidth(divider); col++) {
+      if (line.getCell(col)?.isBgDefault() !== false) return false
+    }
+  }
+  return true
+}
+
+async function scenario(fullscreen: boolean, columns: number): Promise<void> {
+  const label = `${fullscreen ? 'fullscreen' : 'inline'} ${columns} columns`
+  writeFileSync(join(prefsDir, 'model-recents.json'), JSON.stringify({ models: [{ provider: 'alpha', id: 'a1' }, { provider: 'beta', id: 'b0' }] }))
+  writeFileSync(join(prefsDir, 'effort.json'), JSON.stringify({ effort: 'medium' }))
+  const { term, stdout, stdin, stderr } = terminalHarness(columns)
   const events = Array.from({ length: 20 }, (_, index) => ({
     seq: index, time: Date.now(), type: 'user/message',
     data: { source: { kind: 'user' }, content: [{ type: 'text', text: `Fixture history ${index}` }] },
@@ -116,6 +145,10 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     return point !== undefined && Boolean(term.buffer.active.getLine(term.buffer.active.baseY + point.row)?.getCell(point.col)?.isInverse())
   }
   const focused = (text: string) => viewportLines(term).some(line => line.includes('❯') && line.includes(text))
+  const cell = (text: string) => {
+    const point = hit(text)
+    return point === undefined ? undefined : term.buffer.active.getLine(term.buffer.active.baseY + point.row)?.getCell(point.col)
+  }
   const check = async (name: string, condition: () => boolean) => {
     const ok = await settled(condition)
     if (!ok) console.error(viewportLines(term).join('\n'))
@@ -137,6 +170,21 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     await open()
     assert.ok(hit('Alpha') && hit('最近使用'))
     await check('all effort levels remain visible when the strip fits', () => hit('LOW') !== undefined && hit('MEDIUM') !== undefined && hit('HIGH') !== undefined)
+    await check('shortcuts sit above provider tabs and models', () => {
+      const tabs = hit('最近使用')?.row ?? -1
+      return ['Tab', 'Shift+Tab', '↑/↓', 'Enter', 'Esc'].every(text => {
+        const row = hit(text)?.row ?? -1
+        return row >= 0 && row < tabs
+      }) && tabs < (hit('alpha / Alpha 00')?.row ?? -1)
+    })
+    await check('effort has its own heading and full-width strip', () => {
+      const heading = hit('推理强度')?.row ?? -1
+      return heading > (hit('beta / Beta 00')?.row ?? -1)
+        && hit('←/→')?.row === heading && hit('LOW')?.row === heading + 1
+    })
+    assert.notEqual(cell('LOW')?.getFgColor(), cell('Tab')?.getFgColor(), `${label}: selectable effort must be brighter than hints`)
+    assert.notEqual(cell('推理强度')?.getFgColor(), cell('Tab')?.getFgColor(), `${label}: effort heading must stand out from hints`)
+    await check('every panel cell, including gaps and padding, has an opaque background', () => opaquePanel(term))
     await check('mixed-provider recents', () => hit('beta / Beta 00') !== undefined)
     const beforePreference = readFileSync(join(prefsDir, 'effort.json'), 'utf8')
     stdin.write('\t\x1b[B')
@@ -216,8 +264,61 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
   }
 }
 
+async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean, columns: number): Promise<void> {
+  const label = `${backendId} ${fullscreen ? 'fullscreen' : 'inline'} ${columns} columns`
+  const { term, stdout, stdin, stderr } = terminalHarness(columns)
+  const events: AgentEvent[] = Array.from({ length: 20 }, (_, seq) => ({
+    type: 'user.message', seq, anchor: `history-${seq}`, id: `message-${seq}`, time: Date.now(),
+    source: 'user', text: `Backend history ${seq}`, blocks: [{ type: 'text', text: `Backend history ${seq}` }],
+  }))
+  const levels = ['low', 'medium', 'high'].map(id => ({ id, label: id.toUpperCase() }))
+  const session: AgentSession = {
+    ref: { backendId, sessionId: 'surface-fixture' }, cwd: '/tmp', status: 'idle',
+    capabilities: {
+      native: {},
+      models: {
+        list: async () => [{ id: 'm0', label: 'Model 00' }, { id: 'm1', label: 'Model 01' }],
+        current: () => ({ model: 'm0' }), set: async () => ({ kind: 'switched' }),
+      },
+      effort: {
+        levels: () => levels, forModel: () => ({ levels, defaultEffort: 'medium' }),
+        current: () => 'medium', set: async () => {},
+      },
+    },
+    history: async () => events, subscribe: () => () => {}, submit: async () => ({ accepted: true }),
+    cancel: async () => ({ stillQueued: [], outcome: 'confirmed' }), dispose: async () => {},
+  }
+  const ctx = { on: () => () => {}, get: () => undefined, logger: { warn() {} } }
+  const channel = createChannel(ctx as never, session, {
+    provider: backendId, model: 'm0', backendLabel: backendId, cwd: '/tmp', activity: false, whaleIdle: false, effort: 'medium',
+  })
+  writeFileSync(join(prefsDir, 'model-recents.json'), JSON.stringify({ models: [{ provider: backendId, id: 'm0' }] }))
+  const screen = <Chat channel={channel as never} questionStore={new QuestionStore()} fullscreen={fullscreen} onExit={() => {}} />
+  const app = await render(fullscreen ? <AlternateScreen>{screen}</AlternateScreen> : screen, { stdin, stdout, stderr, exitOnCtrlC: false, patchConsole: false })
+  const text = () => viewportLines(term).join('\n')
+  try {
+    assert.ok(await settled(() => text().includes('Backend history 19')), `${label}: boot`)
+    stdin.write('/model')
+    assert.ok(await settled(() => text().includes('/model')), `${label}: composer`)
+    stdin.write('\r')
+    assert.ok(await settled(() => text().includes('最近使用') && opaquePanel(term)), `${label}: opaque recent tab`)
+    stdin.write('\t')
+    assert.ok(await settled(() => text().includes('Model 01') && opaquePanel(term)), `${label}: opaque backend tab`)
+    stdin.write('\x1b')
+    assert.ok(await settled(() => !text().includes('最近使用') && text().includes('Backend history 19')), `${label}: cancel restores transcript`)
+    console.log(`PASS /model opaque ${label}`)
+  } finally {
+    app.unmount()
+    disposeChannelOwner(channel)
+    term.dispose()
+  }
+}
+
 try {
   for (const fullscreen of [false, true]) for (const columns of [100, 36]) await scenario(fullscreen, columns)
+  for (const backend of ['claude', 'codex'] as const) {
+    for (const fullscreen of [false, true]) for (const columns of [100, 36]) await backendSurface(backend, fullscreen, columns)
+  }
 } finally {
   rmSync(testHome, { recursive: true, force: true })
 }

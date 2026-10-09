@@ -295,6 +295,7 @@ Full reference: [Interaction and commands](docs/interaction.en.md).
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` open the same session manager: workspace rail, live state, filter, ★ pins. Also `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`.
 
 `/model` opens provider tabs with **Recently used** first. `Tab` / `Shift+Tab` select the next / previous provider, `↑/↓` select a model, and `←/→` adjust its reasoning effort. `Enter` applies both; `Esc` cancels. Mouse users can click tabs, models, effort levels, and the select/cancel hints; the wheel moves through models.
+Shortcuts sit below the title and effort levels have their own section; DSH, Claude, and Codex all use an opaque themed panel background.
 
 In `/provider`'s model list, focus a model and press `Tab` to edit its context window, max output tokens, reasoning efforts, and image input capability.
 
