@@ -4,7 +4,8 @@
  * same-batch navigation/confirmation, cancellation, mouse picks and wheel,
  * focus windowing and resize in inline/fullscreen at 100 and 36 columns;
  * header shortcuts, readable effort colors and an opaque panel surface.
- * Claude/Codex capability fixtures check the same surface in both modes.
+ * Claude/Codex use a flat catalog, focus the current model after loading,
+ * omit provider/recents tabs and leave existing recents untouched.
  * No credentials or model calls. Run after pnpm build:
  * node --import tsx/esm scripts/verify-model-picker-ui.tsx
  */
@@ -285,17 +286,18 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
   }))
   const levels = ['low', 'medium', 'high'].map(id => ({ id, label: id.toUpperCase() }))
   const picks: string[] = []
+  const effortPicks: (string | null)[] = []
   const session: AgentSession = {
     ref: { backendId, sessionId: 'surface-fixture' }, cwd: '/tmp', status: 'idle',
     capabilities: {
       native: {},
       models: {
-        list: async () => [{ id: 'm0', label: 'Model 00' }, { id: 'm1', label: 'Model 01' }],
+        list: async () => [{ id: 'm1', label: 'Model 01' }, { id: 'm0', label: 'Model 00' }],
         current: () => ({ model: 'm0' }), set: async ref => { picks.push(ref.model); return { kind: 'switched' } },
       },
       effort: {
         levels: () => levels, forModel: () => ({ levels, defaultEffort: 'medium' }),
-        current: () => 'medium', set: async () => {},
+        current: () => 'medium', set: async id => { effortPicks.push(id) },
       },
     },
     history: async () => events, subscribe: () => () => {}, submit: async () => ({ accepted: true }),
@@ -308,31 +310,64 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
   const recentFile = join(prefsDir, modelRecentsFile(backendId))
   mkdirSync(dirname(recentFile), { recursive: true })
   writeFileSync(recentFile, JSON.stringify({ models: [{ provider: backendId, id: 'm1' }, { provider: backendId, id: 'm0' }] }))
+  const previousRecents = readFileSync(recentFile, 'utf8')
   const screen = <Chat channel={channel as never} questionStore={new QuestionStore()} fullscreen={fullscreen} onExit={() => {}} />
   const app = await render(fullscreen ? <AlternateScreen>{screen}</AlternateScreen> : screen, { stdin, stdout, stderr, exitOnCtrlC: false, patchConsole: false })
   const text = () => viewportLines(term).join('\n')
+  const focused = (name: string) => viewportLines(term).some(line => line.includes('❯') && line.includes(name))
   try {
     assert.ok(await settled(() => text().includes('Backend history 19')), `${label}: boot`)
     stdin.write('/model')
     assert.ok(await settled(() => text().includes('/model')), `${label}: composer`)
     stdin.write('\r')
-    assert.ok(await settled(() => text().includes('最近使用') && opaquePanel(term)), `${label}: opaque recent tab`)
-    assert.deepEqual(JSON.parse(readFileSync(recentFile, 'utf8')).models, [
-      { provider: backendId, id: 'm0' }, { provider: backendId, id: 'm1' },
-    ], `${label}: current model becomes the first recent`)
+    assert.ok(await settled(() => text().includes('Model 01') && focused('Model 00') && opaquePanel(term)), `${label}: flat opaque catalog focuses the current model after loading`)
+    assert.equal(text().includes('最近使用'), false, `${label}: no recents tab`)
+    assert.equal(text().includes('Shift+Tab 提供商'), false, `${label}: no provider navigation hint`)
+    const lines = viewportLines(term)
+    const titleRow = lines.findIndex(line => line.trim() === '模型')
+    const firstModelRow = lines.findIndex(line => line.includes('Model 01'))
+    assert.deepEqual(lines.slice(titleRow + 1, firstModelRow).map(line => line.trim()).filter(Boolean),
+      ['↑/↓ 模型 · Enter 选择 · Esc 取消'], `${label}: header contains only model/action shortcuts`)
+    assert.equal(readFileSync(recentFile, 'utf8'), previousRecents, `${label}: opening does not update recents`)
+    stdin.write('\t\x1b[Z')
+    await sleep(90) // 固定窗:探针 Tab/Shift+Tab must not move flat-catalog focus or cycle the session mode.
+    assert.ok(focused('Model 00') && opaquePanel(term), `${label}: Tab/Shift+Tab keep the current model focused`)
     await sleep(90) // 固定窗:墙钟 Chat's 80ms modal-Enter debounce.
     stdin.write('\r')
-    assert.ok(await settled(() => !text().includes('最近使用') && picks.length === 1), `${label}: Enter confirms the current model`)
+    assert.ok(await settled(() => !text().includes('推理强度') && picks.length === 1), `${label}: Enter confirms the current model`)
     assert.deepEqual(picks, ['m0'])
     stdin.write('/model')
     assert.ok(await settled(() => text().includes('/model')), `${label}: reopen composer`)
     stdin.write('\r')
-    assert.ok(await settled(() => text().includes('最近使用') && opaquePanel(term)), `${label}: reopen recent tab`)
-    stdin.write('\t')
-    assert.ok(await settled(() => text().includes('Model 01') && opaquePanel(term)), `${label}: opaque backend tab`)
+    assert.ok(await settled(() => focused('Model 00') && opaquePanel(term)), `${label}: reopen flat catalog`)
+    stdin.write('\x1b[A')
+    assert.ok(await settled(() => focused('Model 01') && opaquePanel(term)), `${label}: Up selects another model`)
     stdin.write('\x1b')
-    assert.ok(await settled(() => !text().includes('最近使用') && text().includes('Backend history 19')), `${label}: cancel restores transcript`)
-    console.log(`PASS /model opaque ${label}`)
+    assert.ok(await settled(() => !text().includes('推理强度') && text().includes('Backend history 19')), `${label}: cancel restores transcript`)
+    assert.deepEqual(picks, ['m0'], `${label}: cancellation discards the model draft`)
+    if (fullscreen) {
+      stdin.write('/model')
+      assert.ok(await settled(() => text().includes('/model')), `${label}: mouse composer`)
+      stdin.write('\r')
+      assert.ok(await settled(() => focused('Model 00') && opaquePanel(term)), `${label}: mouse catalog`)
+      const click = async (needle: string) => {
+        const lines = viewportLines(term)
+        const row = lines.findIndex(line => line.includes(needle))
+        assert.ok(row >= 0, `${label}: mouse target ${needle}`)
+        const col = stringWidth(lines[row]!.slice(0, lines[row]!.indexOf(needle)))
+        stdin.write(`\x1b[<0;${col + 1};${row + 1}M\x1b[<0;${col + 1};${row + 1}m`)
+      }
+      await click('Model 01')
+      assert.ok(await settled(() => focused('Model 01') && opaquePanel(term)), `${label}: mouse selects a model`)
+      await click('HIGH')
+      await click('选择')
+      assert.ok(await settled(() => !text().includes('推理强度') && picks.length === 2 && effortPicks.at(-1) === 'high'), `${label}: mouse applies model and reasoning`)
+      assert.deepEqual(picks, ['m0', 'm1'])
+    } else {
+      assert.ok(effortPicks.every(id => id === 'medium'), `${label}: no reasoning changes while browsing`)
+    }
+    assert.equal(readFileSync(recentFile, 'utf8'), previousRecents, `${label}: confirmation and cancellation do not update recents`)
+    console.log(`PASS /model flat opaque ${label}`)
   } finally {
     app.unmount()
     disposeChannelOwner(channel)

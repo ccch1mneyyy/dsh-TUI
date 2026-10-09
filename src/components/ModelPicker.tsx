@@ -12,7 +12,7 @@ import { HintLine } from './design-system/HintLine.js'
 import { listWindow } from './listWindow.js'
 import { useOverlayListRows } from './OverlayAbove.js'
 
-/** Provider tabs, a windowed model list, and the focused model's effort draft. */
+/** Optional provider tabs, a windowed model list, and the focused model's effort draft. */
 export function ModelPicker({
   groups, provider, models, focusIndex, currentModel, loading,
   efforts, effortId, effortsLoading, effortError, levelsFallback,
@@ -39,8 +39,9 @@ export function ModelPicker({
   const { columns } = useTerminalSize()
   const width = Math.max(1, columns - 4) // Pane's horizontal padding.
   const availableRows = useOverlayListRows(0)
+  const showProviders = groups.length > 0
   const shortcuts = [
-    { text: t('hint-model-provider'), onPick: undefined },
+    ...(showProviders ? [{ text: t('hint-model-provider'), onPick: undefined }] : []),
     { text: t('hint-model-navigation'), onPick: undefined },
     { text: t('hint-model-select'), onPick: onConfirm },
     { text: t('hint-model-cancel'), onPick: onCancel },
@@ -57,22 +58,24 @@ export function ModelPicker({
       usedWidth += 3 + cellWidth
     }
   }
-  const compact = availableRows < 13 + shortcutRows.length
-  const showHeaderHints = availableRows >= 9 + shortcutRows.length
+  const frameRows = showProviders ? 7 : 6
+  const gaps = showProviders ? 3 : 2
+  const compact = availableRows < frameRows + shortcutRows.length + gaps + 3
+  const showHeaderHints = availableRows >= frameRows + shortcutRows.length + 2
   const description = efforts.find(effort => effort.id === effortId)?.description
     ?? (levelsFallback ? t('effort-fallback-tier-note') : undefined)
   const showDescription = !compact && description !== undefined
-  // Pane 2 + title 1 + tabs 1 + effort 2 + wrapper margin 1, plus the
-  // width-aware header. Roomy panes add three gaps and an optional description.
+  // Pane 2 + title 1 + optional tabs 1 + effort 2 + wrapper margin 1,
+  // plus the width-aware header, section gaps and optional description.
   // Very short anchors collapse effort to one row and keep actions at the
   // bottom so top clipping cannot hide the focused model or mouse buttons.
   const listRows = useOverlayListRows(showHeaderHints
-    ? 7 + shortcutRows.length + (compact ? 0 : 3) + (showDescription ? 1 : 0)
-    : 7)
+    ? frameRows + shortcutRows.length + (compact ? 0 : gaps) + (showDescription ? 1 : 0)
+    : frameRows)
   const { start, end } = listWindow(models.map(model => model.description ? 2 : 1), focusIndex, listRows)
   const shortcutBar = (
     <Box flexDirection="column">
-      {(showHeaderHints ? shortcutRows : [shortcuts.slice(2)]).map((row, rowIndex) => (
+      {(showHeaderHints ? shortcutRows : [shortcuts.slice(-2)]).map((row, rowIndex) => (
         <Box key={rowIndex} height={1} flexShrink={0} overflow="hidden" gap={1}>
           {row.map((shortcut, index) => (
             <React.Fragment key={shortcut.text}>
@@ -94,15 +97,15 @@ export function ModelPicker({
       <Pane color="permission">
         <Text color="remember" bold wrap="truncate">{t('picker-title-model')}</Text>
         {showHeaderHints ? shortcutBar : null}
-        <Box marginTop={compact ? 0 : 1} marginBottom={compact ? 0 : 1}>
+        {showProviders ? <Box marginTop={compact ? 0 : 1} marginBottom={compact ? 0 : 1}>
           <PickerTabs
             labels={groups.map(group => group.provider === RECENTS_GROUP_PROVIDER ? t('picker-group-recent') : group.label)}
             focusIndex={groups.findIndex(group => group.provider === provider)}
             width={width}
             onPick={index => onProvider(groups[index]!.provider)}
           />
-        </Box>
-        <Box flexDirection="column" onWheel={event => {
+        </Box> : null}
+        <Box flexDirection="column" marginTop={!showProviders && !compact ? 1 : 0} onWheel={event => {
           event.stopImmediatePropagation()
           if (event.deltaY !== 0) onMove(event.deltaY < 0 ? -1 : 1)
         }}>

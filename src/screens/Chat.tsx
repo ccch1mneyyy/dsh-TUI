@@ -685,9 +685,9 @@ export function Chat({
   /** Provider display identities for the /model tabs; refreshed alongside `models`. */
   const [providerInfos, setProviderInfos] = React.useState<readonly LlmProviderInfo[]>([])
   /** /model 最近使用分组：成功切换即记录（去重置顶，上限 10），重启保留。 */
-  // Recents are per backend: a Claude session's picks never evict the DSH list.
+  const modelProviderTabs = channel.backendCapabilities?.modelRoutes !== 'backend'
   const recentsBackend = channel.backendCapabilities?.backendId
-  const [modelRecents, setModelRecents] = React.useState<readonly ModelRecentsRef[]>(() => readModelRecents(undefined, recentsBackend))
+  const [modelRecents, setModelRecents] = React.useState<readonly ModelRecentsRef[]>(() => modelProviderTabs ? readModelRecents(undefined, recentsBackend) : [])
   /** Switch + record: every successful switch feeds the /model recents group
    *  (picker Enter/click, `/model provider/id`, the wizard's live switch,
    *  and /reload's applied model all ride this one path). */
@@ -696,12 +696,12 @@ export function Chat({
     return channel.switchModel(provider, id).then((ok) => {
       if (!ok) return ok
       if (name !== undefined) channel.notify(t('model-switched', { name }))
-      setModelRecents(recordModelUse({ provider, id }, undefined, recentsBackend))
+      if (modelProviderTabs) setModelRecents(recordModelUse({ provider, id }, undefined, recentsBackend))
       return ok
     })
   }
   const modelPicker = useModelPicker({
-    channel, models, providers: providerInfos, recents: modelRecents, open: overlay.kind === 'model',
+    channel, models, providers: providerInfos, recents: modelProviderTabs ? modelRecents : undefined, open: overlay.kind === 'model',
     onCancel: () => dispatchOverlay({ type: 'close-if', kind: 'model' }),
     onPick: (model, effort) => {
       dispatchOverlay({ type: 'close-if', kind: 'model' })
@@ -2863,7 +2863,7 @@ export function Chat({
         // restoring a session whose model already exists later in recents.
         // Refresh the catalog without overriding navigation made meanwhile.
         const latestRecent = modelRecents[0]
-        if (channel.provider !== '' && channel.model !== ''
+        if (modelProviderTabs && channel.provider !== '' && channel.model !== ''
           && (latestRecent?.provider !== channel.provider || latestRecent?.id !== channel.model)) {
           setModelRecents(recordModelUse({ provider: channel.provider, id: channel.model }, undefined, recentsBackend))
         }
@@ -2880,7 +2880,7 @@ export function Chat({
           setModelsLoading(false)
           channel.notify(t('model-load-failed'), { color: 'error' })
         })
-        void channel.listProviders().then(list => {
+        if (modelProviderTabs) void channel.listProviders().then(list => {
           if (generation === modelCatalogGeneration.current) setProviderInfos(list)
         }).catch(() => {
           if (generation === modelCatalogGeneration.current) setProviderInfos([])

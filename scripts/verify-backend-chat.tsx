@@ -588,11 +588,10 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
       stdin.write(seq('M'))
       await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
       stdin.write(seq('m'))
-      check('clicking the model segment opens /model on the recent tab',
-        await settled(() => screen().includes(t('picker-group-recent')) && screen().includes('Enter select')), screen())
-      stdin.write('\t')
-      check('Tab reaches the backend model catalog',
-        await settled(() => screen().includes('Sonnet') && screen().includes('Opus') && screen().includes('Fake Agent')), screen())
+      check('clicking the model segment opens the backend catalog directly',
+        await settled(() => screen().includes('Sonnet') && screen().includes('Opus') && screen().includes('Enter select')), screen())
+      check('backend catalogs omit provider and recents tabs',
+        !screen().includes(t('picker-group-recent')) && !screen().includes('Shift+Tab providers'), screen())
       stdin.write('\x1b')
       await sleep(120) // 固定窗:pacing the picker closes before the next click.
     }

@@ -14,13 +14,15 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
   channel: ChannelUi
   models: readonly LlmModelInfo[]
   providers: readonly LlmProviderInfo[]
-  recents: readonly ModelRef[]
+  /** Omitted for a backend-owned flat catalog without provider tabs. */
+  recents?: readonly ModelRef[]
   open: boolean
   onPick(model: LlmModelInfo, effort: string | undefined): void
   onCancel(): void
 }) {
-  const groups = React.useMemo(() => deriveModelGroups(models, providers, recents), [models, providers, recents])
-  const [cursor, setCursor] = React.useState<Cursor>({ provider: RECENTS_GROUP_PROVIDER, index: 0 })
+  const providerTabs = recents !== undefined
+  const groups = React.useMemo(() => providerTabs ? deriveModelGroups(models, providers, recents) : [], [models, providers, recents, providerTabs])
+  const [cursor, setCursor] = React.useState<Cursor>({ provider: providerTabs ? RECENTS_GROUP_PROVIDER : channel.provider, index: providerTabs ? 0 : -1 })
   const cursorRef = React.useRef(cursor)
   const activeRef = React.useRef(open)
   const tabFocus = React.useRef(new Map<string, number>())
@@ -28,16 +30,22 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
   const draftsRef = React.useRef(drafts)
   const [catalogs, setCatalogs] = React.useState(new Map<string, EffortCatalog | 'error'>())
 
-  const modelsFor = (provider: string): readonly LlmModelInfo[] => provider === RECENTS_GROUP_PROVIDER
+  const modelsFor = (provider: string): readonly LlmModelInfo[] => recents === undefined ? models : provider === RECENTS_GROUP_PROVIDER
     ? recentCatalogModels(recents, models)
     : models.filter(model => model.provider === provider)
   const normalize = (value: Cursor): Cursor => {
-    const provider = groups.some(group => group.provider === value.provider) ? value.provider : RECENTS_GROUP_PROVIDER
-    return { provider, index: Math.max(0, Math.min(value.index, modelsFor(provider).length - 1)) }
+    const provider = !providerTabs ? channel.provider : groups.some(group => group.provider === value.provider) ? value.provider : RECENTS_GROUP_PROVIDER
+    const list = modelsFor(provider)
+    // A flat catalog's initial focus follows the live model when its async
+    // list arrives. Explicit navigation replaces the -1 sentinel.
+    const index = !providerTabs && value.index < 0
+      ? list.findIndex(model => model.provider === channel.provider && model.id === channel.model)
+      : value.index
+    return { provider, index: Math.max(0, Math.min(index, list.length - 1)) }
   }
-  const provider = groups.some(group => group.provider === cursor.provider) ? cursor.provider : RECENTS_GROUP_PROVIDER
+  const selected = normalize(cursor)
+  const provider = selected.provider
   const listed = React.useMemo(() => modelsFor(provider), [provider, models, recents])
-  const selected = { provider, index: Math.max(0, Math.min(cursor.index, listed.length - 1)) }
   const focused = listed[selected.index]
   const focusedKey = focused === undefined ? undefined : modelKey(focused)
   const catalog = focusedKey === undefined ? undefined : catalogs.get(focusedKey)
@@ -58,7 +66,10 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
     const landing = modelPickerLanding(models, channel.provider, channel.model, recents)
     activeRef.current = true
     tabFocus.current.clear()
-    focus({ provider: landing.group ?? RECENTS_GROUP_PROVIDER, index: landing.index })
+    const initial = providerTabs ? { provider: landing.group ?? RECENTS_GROUP_PROVIDER, index: landing.index }
+      : { provider: channel.provider, index: -1 }
+    cursorRef.current = initial
+    setCursor(initial)
     draftsRef.current = new Map()
     setDrafts(draftsRef.current)
     setCatalogs(new Map())
@@ -122,6 +133,7 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
   const handleKey = (input: string, key: Key, plainReturn: boolean): void => {
     if (!activeRef.current) return
     if (key.tab) {
+      if (!providerTabs || groups.length === 0) return
       const index = groups.findIndex(group => group.provider === normalize(cursorRef.current).provider)
       focusProvider(groups[wrapIndex(index, key.shift ? -1 : 1, groups.length)]!.provider)
     } else if (key.upArrow || key.downArrow) {

@@ -493,9 +493,9 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 
 ### Model and preset
 
-`/model` shows provider tabs, the model list, and the highlighted model's reasoning effort on one page, with **Recently used** first.
-Opening records the current model as the latest use and moves it to the front without duplicates; when it is still available in the catalog, it is the first and initially focused model.
-`Tab` selects the next provider and `Shift+Tab` the previous one, wrapping at either end; `↑/↓` select a model and `←/→` adjust its effort.
+`/model` shows the model list and the highlighted model's reasoning effort on one page. DSH also has provider tabs, with **Recently used** first; opening records the current model as the latest use and moves it to the front without duplicates, initially focusing it when it is still in the catalog.
+Codex and Claude show their complete model catalogs directly, without provider or recents tabs; the current model is initially focused when the catalog loads.
+In DSH, `Tab` selects the next provider and `Shift+Tab` the previous one, wrapping at either end; all backends use `↑/↓` to select a model and `←/→` to adjust its effort.
 `Enter` applies the model and effort; `Esc` cancels the draft. Shortcuts sit below the title, and a separate effort heading and level strip sit below the models, with the `←/→` hint beside the effort heading. Selectable levels use the body text color and the current level is highlighted. DSH, Claude, and Codex all use an opaque themed panel background.
 Click tabs, models, and effort levels, then click **select** or **cancel** below the title; the wheel moves through the model list. When space above the input is tight, navigation hints are omitted, effort collapses to one row, and Select / Cancel stay at the bottom to keep the focused model and actions visible.
 

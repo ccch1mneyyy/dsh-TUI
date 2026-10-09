@@ -477,7 +477,7 @@ Full-screen view of the whole session timeline (doesn't pollute scrollback); key
 - `/model`: selector. **Switching = fork the session** (history kept, only routing changes, the old session stays in `/resume`);
   persisted to `~/.dsh-tui/model.json` and reused by the next launch (a `provider`/`model`
   pair in cordis.yml/profile is only the first-run deployment default).
-- Provider tabs start with **Recently used**; `Tab` / `Shift+Tab` select the next / previous provider, `↑/↓` select a model, `←/→` adjust its effort, `Enter` applies both, and `Esc` cancels the draft. Click tabs, models, effort levels, or the select/cancel hints; the wheel moves model focus.
+- DSH provider tabs start with **Recently used**, and `Tab` / `Shift+Tab` switch providers; Codex and Claude show their catalogs directly without these tabs. All backends use `↑/↓` to select a model, `←/→` to adjust its effort, `Enter` to apply both, and `Esc` to cancel the draft. Click the available tabs, models, effort levels, or select/cancel hints; the wheel moves model focus.
 - Switching is rejected mid-turn.
 - `/preset` options: `standard` (default full features), `ptc`, `minimal` (the kernel's Minimal preset: one persistent-shell tool only, no compaction, no plan mode — and therefore no compaction and no tool-result pruning, so a long session can hit the context limit and `/compact` plus questions are unavailable; Help and `/` completion mark the command, and entering the preset says so once),
   `cordis`, `liangshen` (Liangshen mode).
