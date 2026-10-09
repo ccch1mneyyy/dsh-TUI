@@ -382,11 +382,12 @@ check('the filter box is live', /Type to search sessions/.test(flat(s)))
 check('the new-session card is the list\'s first row', /New session/.test(flat(s)))
 
 // ── entering a session needs the session pane ──────────────────────────────
-// The keyboard opens on the RAIL, and the list's row 0 is the new-session
-// card. Entering a conversation is therefore: → into the pane, ↓ past the
-// card, Enter. Each step must not reach the mount path on its own.
+// The keyboard opens on the latest session. Move to the rail explicitly to
+// verify that its Enter still opens a workspace menu instead of a session.
 {
   const before = channel.calls.resume.length
+  stdin.write('\u001b[D')
+  await settle(() => /❯\s+▣ tmp\b/u.test(railRows()))
   stdin.write('\r')
   await sleep(200) // 固定窗:pacing Enter 处理步间，无可观测锚点
   check('Enter on the rail does not mount anything', channel.calls.resume.length === before,

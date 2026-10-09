@@ -213,29 +213,13 @@ for (const [tag, scrollFirst] of [['S2 resume(at-bottom)', false], ['S3 resume(s
     for (let i = 0; i < 12; i++) { stdin.write('\x1b[<64;50;20M'); await sleep(16) } // 固定窗:pacing 滚轮事件步间
     check(`${tag}: 前置——上滚后视口离开底部`, await settled(() => !screenLines().join('\n').includes('问题 15')))
   }
-  // /resume → 三合一会话界面 → 进右栏选会话 → Enter 恢复
-  //
-  // `/resume`, `/agentview` and `/home` are ONE screen now (a workspace rail
-  // plus the sessions of the selected workspace), and it opens with the
-  // keyboard on the RAIL: Enter there opens a workspace action menu, not a
-  // session. Entering a session is therefore two deliberate steps — `→` moves
-  // the cursor into the session pane (landing on the session this terminal is
-  // attached to), then Enter mounts it.
-  //
-  // The two fixed windows wait for key readiness that is not observable on
-  // screen: the completion overlay has to take the Enter that runs the command,
-  // and the screen has to have finished its own listing before it accepts the
-  // pane switch. Settling on "历史会话 visible" would fire `→` into a screen
-  // that has not mounted its key handler yet.
+  // /resume 默认聚焦当前工作区最近使用的会话，Enter 直接恢复。
   stdin.write('/resume')
   await sleep(300) // 固定窗:pacing 等补全浮层收键就绪，无可观测锚点
   stdin.write('\r')
-  await sleep(500) // 固定窗:pacing 等会话界面收键就绪，无可观测锚点
   check(`${tag}: 会话界面打开`, await settled(() => screenLines().some(l => l.includes('历史会话'))), '')
-  stdin.write('\x1b[C') // → 把光标移进右栏（落在"新建会话"卡片上）
-  await sleep(200) // 固定窗:pacing 切栏后等焦点重绘，无可观测锚点
-  stdin.write('\x1b[B') // ↓ 越过第 0 行的「＋ 新建会话」卡片，站到第一条会话
-  await sleep(120) // 固定窗:pacing 焦点行步间
+  check(`${tag}: 默认聚焦该工作区上个会话`,
+    await settled(() => screenLines().some(l => l.includes('历史会话 3') && /❯ [★☆]/u.test(l))))
   stdin.write('\r') // Enter → resumeTo → onClose
   // 等两个条件同时成立，而不是等一个固定窗口：恢复后的转录要先把 90 轮
   // 行高量完（未量完时末尾标记可能在视口下方），并且落点要真的在底部。

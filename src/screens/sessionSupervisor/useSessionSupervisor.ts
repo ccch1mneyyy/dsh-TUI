@@ -265,6 +265,14 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined)
   /** True once the user picked a rail row by hand; see the selection effect. */
   const [selectionManual, setSelectionManual] = useState(false)
+  const recentSessionId = useMemo(() => {
+    let recent: SessionSummary | undefined
+    for (const session of listedSessions) {
+      if (samePath(session.cwd, channel.cwd)
+        && (recent === undefined || session.updatedAt > recent.updatedAt)) recent = session
+    }
+    return recent?.id
+  }, [listedSessions, channel.cwd])
   /**
    * The session column's cursor, as ONE fact.
    *
@@ -286,13 +294,24 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
    * {@link focusIndex} is derived from it for the render, for movement and for
    * Enter alike.
    */
-  const [focusSessionId, setFocusSessionId] = useState<string | undefined>(undefined)
+  const [focusSessionId, setFocusSessionIdState] = useState<string | undefined>(recentSessionId)
+  const initialFocusPending = useRef(true)
+  const setFocusSessionId = useCallback((id: string | undefined): void => {
+    initialFocusPending.current = false
+    setFocusSessionIdState(id)
+  }, [])
+  // Correct the default as the first listing arrives, until navigation owns it.
+  React.useEffect(() => {
+    if (!initialFocusPending.current) return
+    setFocusSessionIdState(recentSessionId)
+    if (!refreshing) initialFocusPending.current = false
+  }, [recentSessionId, refreshing])
   /**
    * Which column owns the keyboard, and therefore which column draws the `❯`
    * cursor. Exactly one at a time: two cursors mean "where does Enter go?" has
    * no answer, and ←/→ is how this screen answers it.
    */
-  const [activePane, setActivePane] = useState<'rail' | 'list'>('rail')
+  const [activePane, setActivePane] = useState<'rail' | 'list'>('list')
   const [pins, setPins] = useState<ReadonlySet<string>>(() => readSessionPins(pinsDir))
   /** A stored session being renamed / confirmed for deletion (non-DSH rows). */
   const [sessionRename, setSessionRename] = useState<{ id: string; draft: string } | undefined>(undefined)
@@ -535,10 +554,11 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     setActivePane('list')
     const current = visibleSessions.find(session => liveStateOf(session.id)?.current === true)
     setFocusSessionId(current?.id)
-  }, [liveStateOf, visibleSessions])
+  }, [liveStateOf, visibleSessions, setFocusSessionId])
 
   /** Enter the workspace column. */
   const activateRail = useCallback((): void => {
+    initialFocusPending.current = false
     setActivePane('rail')
   }, [])
 
@@ -626,11 +646,12 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   }, [archiveSessions, channel, holderOf, liveStateOf, reload, report])
 
   const selectEntry = useCallback((entry: RailEntry): void => {
+    setActivePane('rail')
     setSelectedPath(entry.from === 'registry' ? entry.path : undefined)
     setSelectedUnregisteredId(entry.from === 'unregistered' ? entry.id : undefined)
     setSelectionManual(true)
     setFocusSessionId(undefined)
-  }, [])
+  }, [setFocusSessionId])
 
   /**
    * Mount a session, refusing one another terminal holds.
@@ -764,7 +785,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     // put `❯` on the first session while the user had selected the card.
     const landed = sessionAt(next)
     setFocusSessionId(landed?.id)
-  }, [visibleSessions, sessionAt, sessionIndex])
+  }, [visibleSessions, sessionAt, sessionIndex, setFocusSessionId])
 
   /** The session under the cursor, or undefined while the card (row 0) holds it. */
   const focusedSession = sessionAt(sessionIndex)

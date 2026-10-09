@@ -566,6 +566,76 @@ const renamedSessions = [
   sessions[2],
 ]
 
+console.log('default focus: the latest conversation in this workspace')
+for (const config of [
+  { registry, cwd: alphaDir },
+  { registry, cwd: alphaDir, cols: 70 },
+  { registry: [], cwd: alphaDir },
+]) {
+  const app = await openSupervisor({
+    ...config,
+    sessions: [
+      ...sessions,
+      session({ id: 'other-newest', cwd: betaDir, updatedAt: now }),
+      session({ id: 'empty-newest', hasPrompt: false, updatedAt: now + 1 }),
+      session({ id: 'child-newest', kind: { kind: 'subagent', parent: 'free-one', depth: 1 }, updatedAt: now + 2 }),
+    ],
+  })
+  check('opening focuses the latest eligible session, ahead of the older live row',
+    await settled(() => app.lines().some(line => line.includes('free session') && /❯ [★☆]/u.test(line))),
+    app.lines().join('\n'))
+  app.write('\r')
+  check('Enter directly opens that workspace\'s previous session',
+    await settled(() => app.calls.includes('resumeTo:free-one')), app.calls.join(', '))
+  app.close()
+}
+
+console.log('initial focus follows the listing until the user moves it')
+for (const move of [false, true]) {
+  const target = makeChannel({ registry, cwd: alphaDir, cache: cacheCell(sessions) })
+  const gate = deferred()
+  target.plan = {
+    defer: gate.promise,
+    sessions: [...sessions, session({ id: 'fresh-newest', title: { text: 'fresh session', source: 'prompt' }, updatedAt: now })],
+  }
+  const app = await mountSupervisor(target)
+  const cursorOn = (title: string): boolean => app.lines().some(line => line.includes(title) && /❯ [★☆]/u.test(line))
+  await settled(() => cursorOn('free session'))
+  if (move) {
+    app.write('\u001b[A')
+    await settled(() => cursorOn('live session'))
+  }
+  gate.resolve()
+  const expectedTitle = move ? 'live session' : 'fresh session'
+  check(move ? 'a late listing preserves the user\'s cursor' : 'a fresh listing corrects the untouched default',
+    await settled(() => app.lines().join('\n').includes('fresh session') && cursorOn(expectedTitle)),
+    app.lines().join('\n'))
+  app.write('\r')
+  check('Enter follows the visible cursor after the listing arrives',
+    await settled(() => app.calls.includes(`resumeTo:${move ? 'live-one' : 'fresh-newest'}`)), app.calls.join(', '))
+  app.close()
+}
+{
+  const app = await openSupervisor({ registry, cwd: alphaDir, sessions: [] })
+  check('a workspace without history focuses the new-session card',
+    await settled(() => app.lines().some(line => /❯ \+ New session/u.test(line))), app.lines().join('\n'))
+  app.close()
+}
+{
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const app = await mountSupervisor(target)
+  const railFocused = (): boolean => app.lines().some(line => /❯\s+▣ Alpha\b/u.test(line))
+  await settled(() => app.lines().join('\n').includes('Sessions in Alpha'))
+  app.write('\u001b[D')
+  await settled(railFocused)
+  gate.resolve()
+  check('a cold listing does not take focus back from the workspace rail',
+    await settled(() => app.lines().join('\n').includes('free session') && railFocused()), app.lines().join('\n'))
+  app.close()
+}
+
 console.log('snapshot-then-refresh:')
 {
   // Cold start on a fresh channel: no snapshot exists yet, so the screen keeps
@@ -1186,10 +1256,6 @@ check(
   'the rail opens on the terminal own workspace, not the first ledger entry',
   text().includes('Sessions in Alpha') && !text().includes('Sessions in Beta'),
 )
-// The cursor and the selection are ONE position on this screen. The regression
-// is the untouched first frame: the cursor started at index 0 while the
-// selection landed on Alpha, so Beta and Alpha both looked selected.
-//
 // Both rows are located by the rail's own `▣`/`▢` marker — matching the bare
 // title would hit the sessions pane, whose path line also contains "alpha" —
 // and "the cursor is here" is read as the ❯ in the rail's own prefix. The rail
@@ -1198,8 +1264,9 @@ check(
 const railCursor = (marker: string, title: string): boolean =>
   viewportLines(terminal).some(raw => new RegExp(`^\\s*❯\\s+${marker} ${title}\\b`, 'u').test(raw))
 check(
-  'the cursor opens on the selected workspace, not on row 0',
-  railCursor('▣', 'Alpha') && !railCursor('▢', 'Beta'),
+  'the cursor opens in the session column, leaving both workspace rows quiet',
+  !railCursor('▣', 'Alpha') && !railCursor('▢', 'Beta')
+    && line(rowOf('free session')).includes('❯'),
   `alpha marked: ${railCursor('▣', 'Alpha')}, beta marked: ${railCursor('▢', 'Beta')}`,
 )
 check('the live-state counts render', /\d+ working · \d+ live · \d+ total/u.test(text()))
@@ -1215,9 +1282,10 @@ check('a free session carries no occupancy badge', rowOf('free session') >= 0 &&
 // both directions without trying to locate the session cursor inside a line the
 // two panes share (the session half starts after the rail's column).
 console.log('←/→ picks the column, and only that column shows ❯:')
+stdin.write('\u001b[D')
 check(
-  'the rail starts with the cursor on its selected workspace',
-  railCursor('▣', 'Alpha') && !railCursor('▢', 'Beta'),
+  '← moves the cursor to the selected workspace, not row 0',
+  await settled(() => railCursor('▣', 'Alpha') && !railCursor('▢', 'Beta')),
   `alpha=${railCursor('▣', 'Alpha')} beta=${railCursor('▢', 'Beta')}`,
 )
 stdin.write('\u001b[C')
@@ -1402,6 +1470,8 @@ console.log('long rail: the focused workspace is really on screen')
   // a list that cannot fit — the exact shape the old row-count window clipped.
   const app = await openSupervisor({ registry: many, cwd: many[many.length - 1]!.path, sessions: [] })
   await settled(() => app.lines().join('\n').includes(`Workspace${RAIL_ENTRIES}`))
+  app.write('\u001b[D')
+  await settled(() => app.lines().some(line => /❯\s+▣\s+Workspace\d+/u.test(line)))
   const lines = app.lines()
   const focused = lines.findIndex(raw => /❯\s+▣\s+Workspace\d+/u.test(raw))
   check(
@@ -1504,6 +1574,8 @@ console.log('removing a registration keeps its history visibly distinct (#1040)'
   const shown = () => app.lines().join('\n')
   check('registered directory starts without a history label',
     await settled(() => shown().includes('Workspaces (1)') && !shown().includes('History only'), { timeoutMs: 6_000 }), shown())
+  app.write('\u001b[D')
+  await settled(() => app.lines().some(line => /❯\s+▣ Alpha\b/u.test(line)))
   app.write('\r')
   await settled(() => shown().includes('Remove from list'))
   app.write('\u001b[B\u001b[B\u001b[B\r')
@@ -1523,6 +1595,8 @@ console.log('history-only rows offer no registration-only actions (#1041)')
   const app = await openSupervisor({ registry: [], cwd: alphaDir })
   const shown = () => app.lines().join('\n')
   await settled(() => shown().includes('History only · alpha'))
+  app.write('\u001b[D')
+  await settled(() => app.lines().some(line => /❯\s+▣ alpha\b/u.test(line)))
   app.write('\r')
   check('keyboard menu omits rename and remove on a history row',
     await settled(() => shown().includes('New session here')

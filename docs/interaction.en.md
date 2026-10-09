@@ -331,6 +331,7 @@ The four commands and the `⌸` entry at the head of the prompt row all open the
 
 - The workspace rail (the durable registry) on the left.
 - The sessions of the selected workspace on the right, every row carrying that session's live state.
+- Focus starts on the most recently used session in the current workspace, ready for `Enter`; with no history, it starts on the new-session card.
 
 They used to be three implementations that grew apart — a session browser, an agent view,
 a workspace home — each listing the same session with its own selection model and its own
