@@ -43,8 +43,11 @@ To pick the backend, use any of:
   `/kernel` inside a session, which open the kernel picker. Picking the other
   kernel remembers the choice (`~/.dsh-tui/kernel.json`) and restarts dsh-TUI
   into a new session on it; the old session stays in `/resume`. A running turn
-  blocks the switch. Without the SDK or a credential the picker marks Claude as
-  *Not installed* or *Not signed in*.
+  blocks the switch. Without the SDK the picker marks Claude as *Not installed*;
+  an undetected credential does **not** block the pick — a key may perfectly well
+  live where detection cannot see it (the Claude settings' `env`, an
+  `apiKeyHelper`, a relay channel). The CLI applies its own configuration after
+  start, and `/login` remains available in-session for a subscription login.
 - `dsh-tui --backend claude` (this launch only).
 - `backend: claude` in the dsh-tui config row.
 

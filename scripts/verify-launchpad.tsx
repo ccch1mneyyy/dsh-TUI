@@ -1123,9 +1123,9 @@ base.close()
     rowOf(ok, 'dsh')?.current === false && rowOf(ok, 'claude')?.selectable === true && rowOf(ok, 'claude')?.current === true
       && rowOf(ok, 'claude')?.version === 'claude-code v2.1.287' && rowOf(ok, 'claude')?.reasonKey === undefined,
     JSON.stringify(ok))
-  check('K3 目录：auth=missing 置灰(未登录)；auth=unknown 仍可选（分不清≠没有）；installed=false → 未安装',
-    rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing', version: '1.2.3' } } }), 'claude')?.selectable === false
-      && rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing' } } }), 'claude')?.reasonKey === 'kernel-unavailable-auth-missing'
+  check('K3 目录：auth=missing/unknown 均可选（凭据可能在检测看不到的地方）；installed=false → 未安装',
+    rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing', version: '1.2.3' } } }), 'claude')?.selectable === true
+      && rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing' } } }), 'claude')?.reasonKey === undefined
       && rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'unknown' } } }), 'claude')?.selectable === true
       && rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: false, version: '1.2.3' } } }), 'claude')?.reasonKey === 'kernel-unavailable-not-installed')
   // 短品牌名不再是宿主里的 id→名字表：它来自 manifest，经宿主投影（P0 D2）。
@@ -1152,7 +1152,7 @@ base.close()
       && subtitleOf({ current: 'dsh', dshVersion: '0.2.6', statuses: { claude: { installed: false } } }, 'claude') === 'R:kernel-unavailable-not-installed'
       && subtitleOf({ current: 'dsh', dshVersion: '0.2.6' }, 'dsh') === 'dsh-core v0.2.6'
       && subtitleOf({ current: 'dsh' }, 'dsh') === undefined
-      && subtitleOf({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing', version: '1.2.3' } } }, 'claude') === 'claude-code v1.2.3 · R:kernel-unavailable-auth-missing',
+      && subtitleOf({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing', version: '1.2.3' } } }, 'claude') === 'claude-code v1.2.3',
     JSON.stringify(catalog({ current: 'dsh', dshVersion: '0.2.6' }).map(option => [option.id, kernelSubtitle(option, key => 'R:' + key)])))
 
   // kernel.json 记忆：原子写（tmp+rename，claude prefs.ts 同款）往返。

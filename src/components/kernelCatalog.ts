@@ -6,7 +6,6 @@ import type { KernelBackendId } from '../kernelPrefs.js'
 
 export type KernelUnavailableReason =
   | 'kernel-unavailable-not-installed'
-  | 'kernel-unavailable-auth-missing'
   | 'kernel-probing'
   /** The installable variant of not-installed: the row stays dim but Enter
    *  opens the SDK install wizard instead of a dead-end toast. */
@@ -107,8 +106,13 @@ export function buildKernelCatalog(input: {
 }): readonly KernelOption[] {
   return input.entries.map(entry => {
     const status = input.statuses?.[entry.id]
-    const signInLater = status?.auth === 'missing' && status.loginInSession === true
-    const selectable = entry.alwaysAvailable || (status !== undefined && status.installed && (status.auth !== 'missing' || signInLater))
+    // Installation is the only gate. A missing credential does NOT dim the
+    // row: credentials legitimately live where detection cannot look (the
+    // Claude settings' `env`, `apiKeyHelper`, a relay channel's token), so
+    // an auth miss is not proof the kernel is unusable — the CLI applies its
+    // own settings, and an in-session `/login` remains available.
+    const selectable = entry.alwaysAvailable || (status !== undefined && status.installed)
+    const signInLater = selectable && status?.auth === 'missing' && status.loginInSession === true
     // `!selectable` already implies `!entry.alwaysAvailable` (that row is always
     // selectable), so an unselectable, undetected row is an install miss.
     const installable = !selectable && status !== undefined && !status.installed && input.canInstallSdk === true && entry.installable
@@ -116,13 +120,11 @@ export function buildKernelCatalog(input: {
       ? 'kernel-probing'
       : installable
         ? 'kernel-not-installed-installable'
-        : status.installed && status.auth === 'missing'
-          ? 'kernel-unavailable-auth-missing'
-          // Not installed, and detection itself flagged the install as stale
-          // (a version it found is below the backend's floor).
-          : status.stale === true
-            ? 'kernel-unavailable-too-old'
-            : 'kernel-unavailable-not-installed'
+        // Not installed, and detection itself flagged the install as stale
+        // (a version it found is below the backend's floor).
+        : status.stale === true
+          ? 'kernel-unavailable-too-old'
+          : 'kernel-unavailable-not-installed'
     const version = kernelVersionLabel(entry.product, entry.alwaysAvailable ? input.dshVersion : status?.version)
     return {
       id: entry.id,

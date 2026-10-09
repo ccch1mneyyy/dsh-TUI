@@ -2433,7 +2433,6 @@ const dict = {
   'kernel-label-codex': { zh: 'Codex', en: 'Codex' },
   'kernel-login-in-session': { zh: '未登录 · 启动后用 /login 登录', en: 'Not signed in · sign in with /login after start' },
   'kernel-unavailable-not-installed': { zh: '未安装', en: 'Not installed' },
-  'kernel-unavailable-auth-missing': { zh: '未登录', en: 'Not signed in' },
   'kernel-unavailable-too-old': { zh: '版本过旧 · 需升级', en: 'Too old · upgrade needed' },
   'kernel-switch-restarting': { zh: '正在以 {{name}} 内核重启…', en: 'Restarting on the {{name}} kernel…' },
   // 切换内核时的过场行。failed/crashed 由旧进程报告新进程的结局；安全模式
