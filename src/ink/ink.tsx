@@ -1512,10 +1512,11 @@ export default class Ink {
 
   /**
    * Release React effects while leaving terminal mode cleanup to finishExit.
-   * Suppress raw writes and later unmount() calls so AlternateScreen cleanup
-   * cannot close the handoff buffer or clobber a resume hint. The old process
-   * may wait on an updater or replacement, so its UI timers must stop before
-   * the Channel lifetime ends.
+   * Suppress Ink.writeRaw and later unmount() calls so AlternateScreen cleanup
+   * cannot close the handoff buffer or clobber a resume hint. App's direct
+   * SHOW_CURSOR write still runs during React cleanup. The old process may
+   * wait on an updater or replacement, so its UI timers must stop before the
+   * Channel lifetime ends.
    */
   detachForShutdown(): void | Promise<void> {
     if (this.isUnmounted) return this.shutdownCleanup;
@@ -1587,15 +1588,12 @@ export default class Ink {
       this.rootNode.yogaNode?.free();
       this.rootNode.yogaNode = undefined;
     };
-    // @ts-ignore -- runtime/type-definition mismatch: updateContainerSync exists in react-reconciler but not in @types/react-reconciler
     reconciler.updateContainerSync(null, this.container, null, noop);
-    // @ts-ignore -- runtime/type-definition mismatch: flushSyncWork exists in react-reconciler but not in @types/react-reconciler
     const insideCommit = reconciler.flushSyncWork();
     if (insideCommit) {
       // A render-error exit can arrive inside React's commit. Flush/free only
       // after that commit has yielded; React forbids passive flushes within it.
       this.shutdownCleanup = new Promise<void>(resolve => setImmediate(resolve)).then(() => {
-        // @ts-ignore -- runtime/type-definition mismatch: flushSyncWork exists in react-reconciler but not in @types/react-reconciler
         reconciler.flushSyncWork();
         cleanup();
       });
