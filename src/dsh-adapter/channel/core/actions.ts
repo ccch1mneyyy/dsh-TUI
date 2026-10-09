@@ -59,6 +59,10 @@ export function createCapabilityDelegates(deps: {
       const provider = deps.state().provider
       return (await models.list()).map(model => ({ provider: model.provider ?? provider, id: model.id, name: model.label, ...(model.description === undefined ? {} : { description: model.description }) }))
     }),
+    listProviders: () => {
+      const state = deps.state()
+      return Promise.resolve(caps().models === undefined ? [] : [{ id: state.provider, name: state.backendCapabilities.backendLabel }])
+    },
     switchModel: (provider, model) => guarded('model', false, async () => {
       const models = caps().models
       if (models === undefined) { unavailable('model'); return false }

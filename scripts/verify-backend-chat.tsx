@@ -588,14 +588,15 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
       stdin.write(seq('M'))
       await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
       stdin.write(seq('m'))
-      // A single-provider catalog opens the picker's DIRECT list (no group
-      // pane, no title row) — the catalog rows + the confirm hint are the
-      // open-picker markers.
-      check('clicking the model segment opens the /model picker with the catalog', await settled(() => screen().includes('Sonnet') && screen().includes('Opus') && screen().includes('Enter to confirm')), screen())
+      check('clicking the model segment opens /model on the recent tab',
+        await settled(() => screen().includes(t('picker-group-recent')) && screen().includes('Enter select')), screen())
+      stdin.write('\t')
+      check('Tab reaches the backend model catalog',
+        await settled(() => screen().includes('Sonnet') && screen().includes('Opus') && screen().includes('Fake Agent')), screen())
       stdin.write('\x1b')
       await sleep(120) // 固定窗:pacing the picker closes before the next click.
     }
-    check('Esc closed the model picker', await settled(() => !screen().includes('Sonnet')), screen())
+    check('Esc closed the model picker', await settled(() => !screen().includes(t('picker-group-recent')) && !screen().includes('Sonnet')), screen())
     const effortHit = footerHit('medium')
     check('the think-level segment is locatable', effortHit !== null)
     if (effortHit !== null) {

@@ -38,13 +38,18 @@ export function ModelPicker({
 }): React.ReactNode {
   const { columns } = useTerminalSize()
   const width = Math.max(1, columns - 4) // Pane's horizontal padding.
-  const compact = useOverlayListRows(0) < 14
+  const availableRows = useOverlayListRows(0)
+  const compact = availableRows < 14
+  const showNavigationHints = availableRows >= 11
   const description = efforts.find(effort => effort.id === effortId)?.description
     ?? (levelsFallback ? t('effort-fallback-tier-note') : undefined)
   const showDescription = !compact && description !== undefined
   // Pane 2 + title 1 + tabs 1 + effort 1 + hints 3 + wrapper margin 1;
   // the roomy layout adds two gaps and an optional effort description.
-  const listRows = useOverlayListRows(9 + (compact ? 0 : 2) + (showDescription ? 1 : 0))
+  // Tight anchors omit the two navigation hints so models, effort and the
+  // confirmation row survive the overlay's top clipping.
+  const listRows = useOverlayListRows(9 - (showNavigationHints ? 0 : 2)
+    + (compact ? 0 : 2) + (showDescription ? 1 : 0))
   const { start, end } = listWindow(models.map(model => model.description ? 2 : 1), focusIndex, listRows)
   return (
     <Pane color="permission">
@@ -100,8 +105,10 @@ export function ModelPicker({
         )}
       </Box>
       {showDescription ? <Text dimColor wrap="truncate">{description!.replace(/[\r\n]+/g, ' ')}</Text> : null}
-      <Text dimColor wrap="truncate"><HintLine text={t('hint-model-provider')} /></Text>
-      <Text dimColor wrap="truncate"><HintLine text={t('hint-model-arrows')} /></Text>
+      {showNavigationHints ? <>
+        <Text dimColor wrap="truncate"><HintLine text={t('hint-model-provider')} /></Text>
+        <Text dimColor wrap="truncate"><HintLine text={t('hint-model-arrows')} /></Text>
+      </> : null}
       <Box height={1} flexShrink={0} gap={1}>
         <Box onClick={event => { event.stopImmediatePropagation(); onConfirm() }}>
           <Text dimColor><HintLine text={t('hint-model-select')} /></Text>

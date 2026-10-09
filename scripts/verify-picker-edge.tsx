@@ -74,10 +74,17 @@ async function mountAt(cols: number) {
     unref(): this { return this }
   }
   const noop = () => {}
+  const pickerProps = {
+    groups: [{ provider: 'p', label: 'Provider', count: models.length }],
+    provider: 'p', models, loading: false,
+    efforts: [{ id: 'medium', name: 'Medium' }], effortId: 'medium',
+    effortsLoading: false, effortError: false, levelsFallback: false,
+    onProvider: noop, onFocus: noop, onEffort: noop, onMove: noop, onConfirm: noop, onCancel: noop,
+  }
   const frame = async (focusIndex: number) => {
     instance.rerender(
       React.createElement(ModelPicker, {
-        models, focusIndex, currentModel: 'p/m12', onHover: noop,
+        ...pickerProps, focusIndex, currentModel: `p/m${focusIndex}`,
       }) as never,
     )
     // 固定窗:探针 断言的是不变量（零折行、无幻影空行）；翻页前后屏幕形态
@@ -98,21 +105,20 @@ async function mountAt(cols: number) {
       if (text.includes('❯')) focusVisible = true
       if (text.includes('✓')) tickVisible = true
     }
-    // The picker is bare-mounted: blank rows above/below the pane are layout
-    // padding. The invariant is INSIDE the pane — between the title row and
-    // the footer row there must be no blank (phantom) rows beyond the title margin, and both title
-    // and footer must be on screen at all.
+    // Header/effort gaps are intentional; phantom blank rows must never
+    // appear BETWEEN model rows, and the title/footer must remain visible.
     const titleAt = texts.findIndex(text => text.includes('模型'))
     const footerAt = texts.findIndex(text => text.includes('Enter'))
     let innerBlanks = -1
-    if (titleAt >= 0 && footerAt > titleAt) {
-      innerBlanks = texts.slice(titleAt, footerAt).filter(text => text === '').length
+    const modelRows = texts.flatMap((text, index) => text.includes('xxx') ? [index] : [])
+    if (modelRows.length > 0) {
+      innerBlanks = texts.slice(modelRows[0], modelRows.at(-1)! + 1).filter(text => text.trim() === '').length
     }
     return { wrapped, innerBlanks, focusVisible, tickVisible, titleAt, footerAt }
   }
   const instance = await render(
     React.createElement(ModelPicker, {
-      models, focusIndex: 12, currentModel: 'p/m12', onHover: noop,
+      ...pickerProps, focusIndex: 12, currentModel: 'p/m12',
     }) as never,
     {
       stdout: new FakeStdout() as never,
@@ -136,14 +142,14 @@ for (const cols of [58, 61]) {
   try {
     const before = await m.frame(12)
     check(`${cols} cols: zero wrapped rows at rest`, before.wrapped === 0, `${before.wrapped} wrapped`)
-    check(`${cols} cols: no phantom blank rows inside the pane`, before.innerBlanks <= 1, `${before.innerBlanks} blank`)
+    check(`${cols} cols: no phantom blank rows between models`, before.innerBlanks === 0, `${before.innerBlanks} blank`)
     check(`${cols} cols: title and footer on screen`, before.titleAt >= 0 && before.footerAt > before.titleAt)
     check(`${cols} cols: focus indicator visible`, before.focusVisible)
     check(`${cols} cols: selection tick visible`, before.tickVisible)
     const after = await m.frame(20)
     check(`${cols} cols: page turn keeps zero wrapped rows`, after.wrapped === 0, `${after.wrapped} wrapped`)
     check(`${cols} cols: page turn keeps pane and focus`,
-      after.innerBlanks <= 1 && after.titleAt >= 0 && after.focusVisible)
+      after.innerBlanks === 0 && after.titleAt >= 0 && after.focusVisible)
     check(`${cols} cols: page turn keeps selection tick`, after.tickVisible)
   } finally {
     m.instance.unmount()
