@@ -183,6 +183,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     version: 0,
     rows: [],
     status: 'idle',
+    splashFont: 'bold',
     sessionTitle: 'trajectory probe',
     agentId: 'probe',
     model: 'deepseek-v4-flash',
