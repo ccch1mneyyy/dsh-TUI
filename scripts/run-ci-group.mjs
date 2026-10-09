@@ -977,7 +977,7 @@ const GROUPS = {
     ["verify-backend-logout", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-logout.ts']],
     ["verify-codex-chat-controls", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-chat-controls.tsx']],
     ["verify-session-archive", ['node', '--import', 'tsx/esm', 'scripts/verify-session-archive.tsx']],
-// 内核目录（N7）：三内核、未探测/未安装/未登录置灰、loginInSession 仍可选并提示、
+// 内核目录（N7）：三内核、未探测/未安装置灰（登录态不再置灰）、loginInSession 可选并提示、
 // 只有可一键安装的内核给安装向导、版本产品前缀、--backend 接受 codex。
     ["verify-kernel-catalog", ['node', '--import', 'tsx/esm', 'scripts/verify-kernel-catalog.ts']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace

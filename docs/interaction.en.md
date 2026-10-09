@@ -130,7 +130,7 @@ results back to the chat screen and add no new behavior.
   `▸ DSH · dsh-core v<kernel>` / `Claude · claude-code v<CLI>` (then `Codex · codex-cli v<CLI>`, and any
   installed plugin backend after it). The name is the backend manifest's short label; `▸` marks the
   current kernel and the other rows stay dim; an unavailable kernel adds the reason after its version (such as *Not installed*
-  or *Not signed in*), a row whose version cannot be read shows just the name, and *Checking…* shows
+  or *Too old · upgrade needed*), a row whose version cannot be read shows just the name, and *Checking…* shows
   while the probe runs. The whole block is clickable and opens the same kernel picker (keyboard path =
   focus ring + `Enter`). Rows are right-aligned, the cwd plate is top-aligned to the first row, and
   narrow terminals truncate per the existing truncate-middle contract.
