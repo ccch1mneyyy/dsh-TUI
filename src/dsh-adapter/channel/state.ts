@@ -58,6 +58,11 @@ export interface ChannelLaunchOptions {
    *  `'dsh-tui'` (direct `createChannel` embedders and fixtures). */
   settingsNs?: string
   diffLayout?: 'auto' | 'split' | 'unified'
+  /** Seed the upstream auto-retry policy (upstream-retry.ts) on the
+   *  llm-pi-ai route the bound session actually uses, when that route
+   *  declares no retryPolicy. Absent means enabled (the Config schema's
+   *  default); false opts out without touching settings. */
+  upstreamRetry?: boolean
   thinkingFold?: 'preview' | 'full'
   jobGroupFold?: JobGroupFoldMode
   toolBackground?: ToolBackground

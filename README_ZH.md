@@ -201,6 +201,8 @@ thread；这不是把历史导入 DSH 的 `migrate codex`。
 权限档；Full Access 必须明确选择。已有 Codex 设置不会被默认值覆盖。`/login` 提供
 ChatGPT OAuth、设备码或 API key（后者写入 Codex 自己的凭据存储）。`/channel` 连接
 优先，托管订阅令牌只在第一方路由注入；不写 `~/.codex/config.toml`，不退出原生登录。
+自己 config.toml 里 provider 声明的 `env_key`（如 `DEEPSEEK_API_KEY`）若未在 shell
+导出、但 DSH 凭据库存有该 ref，会自动注入子进程——key 存进凭据库即可，无需每次导出。
 
 TPS 计入隐藏推理的生成时间，剔除工具执行时间；实时文本估算在 Codex 报告实际
 输出 token 用量后校正。
@@ -335,6 +337,10 @@ pnpm smoke
 > **Windows 安全警告：** Windows profile 默认 `danger-full-access`、approval 默认 `never`，工具访问不受限制。在敏感凭证或不可信仓库旁启动前，先检查并收紧 profile。
 
 不自带沙箱：用当前 DSH profile 的文件、Shell、sandbox 与 approval 策略。权限预设来自 DSH `permissionPresets` registry。
+
+**权限记忆**（三个内核都有）：Claude 与 Codex 后端把 `/permission` 选择存在 `~/.dsh-tui/backends/<id>/prefs.json`；DSH 的选择存在 `~/.dsh-tui/permission.json`。任何一次持久的预设切换（选择器、手敲 `/permission`、Shift+Tab 静态模式、官方命令自行完成的切换）都会更新记忆；从未自定义过权限面的会话将以上次的选择启动——同样走官方切换路径。计划模式的临时切换不记入；显式的 `DSH_PERMISSION_MODE` 部署固定优先于该文件；名册已不提供的身份会被跳过。
+
+**上游断链自动重试**（DSH）：会话每次绑定（启动、`/model` 切换、resume）时，只为**当前实际使用的渠道**播种一份重试策略——最多重试 5 次、失败码覆盖传输类中断（含 `STREAM_CLOSED`，即上游流被掐断）——写入官方 `llm-pi-ai` settings 分节（内核 `llm-retry` 插件执行的就是这份策略）。只补未声明 `retryPolicy` 的渠道、从不写闲置渠道；已显式声明的不会被覆盖；cordis.yml 里 `upstreamRetry: false` 可整体关闭。
 
 详见[权限边界](docs/architecture.md#权限与安全边界)。
 

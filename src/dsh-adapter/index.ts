@@ -261,6 +261,14 @@ export interface Config {
    *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
    *  default/plan/full cycle (see sessionModes.ts). */
   modes?: SessionModeSpec[]
+  /** Upstream auto-retry for DSH sessions (default on): seed a retry
+   *  policy (5 attempts, transport-drop-aware failure codes) on the
+   *  llm-pi-ai provider route the bound session actually uses whenever
+   *  it declares no retryPolicy, through the llm-pi-ai settings section
+   *  — the policy the kernel's llm-retry plugin executes. Dormant
+   *  channels are never written; routes with an explicit retryPolicy are
+   *  never overwritten; setting this to false opts out entirely. */
+  upstreamRetry?: boolean
 }
 
 /** The backend a configured value names: case-insensitive, trimmed, and
@@ -419,6 +427,9 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
       permission: Schema.string().required(false),
     }),
   ).required(false),
+  // Upstream auto-retry seeding (see upstream-retry.ts): on by default so
+  // an upstream link drop retries like any other transient failure.
+  upstreamRetry: Schema.boolean().default(true),
 }), EDITABLE_CONFIG_KEYS as readonly (keyof Config)[])
 
 /**

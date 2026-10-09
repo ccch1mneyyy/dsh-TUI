@@ -3,11 +3,13 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { assertShadowPolicy } from '../../adapter/kernel/runtime.js'
 import { t } from '../../i18n.js'
+import { readPermissionPref, writePermissionPref } from '../../permissionPrefs.js'
 import { modeDisplayName, type SessionModeSpec } from '../../sessionModes.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import type { DshChannelBinding } from './binding.js'
 import { createModeActions, reportModeSwitchFailure } from './mode-actions.js'
 import { createPermissionIdentity, foldPermissionPreset, type PermissionIdentity } from './mode-permission.js'
+import { PERMISSION_PRESET_CUSTOM } from './permissions.js'
 import type { PermissionModeRoster } from './mode-roster.js'
 import type { ChannelState } from './types.js'
 
@@ -111,6 +113,7 @@ export function createPermissionModeActions(
   cycleMode(): Promise<void>
   applyMode(spec: SessionModeSpec, capture?: ModeCapture): Promise<void>
   onSessionEvent(session: unknown, event: unknown): void
+  applyRememberedPermission(): Promise<void>
   runPermissionPreset(name: string): Promise<boolean>
   permission: PermissionIdentity
 } {
@@ -132,6 +135,25 @@ export function createPermissionModeActions(
   })
   // An in-turn /plan off commits at pre-step, after the command has returned.
   const explicitPlanExits = new WeakSet<object>()
+
+  /** True while this composition is walking a session INTO plan mode — from
+   *  the pre-plan identity capture until the plan atoms have been applied.
+   *  The canonical preset the plan entry switches to is a transient working
+   *  state (restored on exit), so the preference must not learn it. */
+  let planEntryInFlight = false
+  /** Sessions the remembered permission was already seeded into (or decided
+   *  against): one attempt per session object, rebinds stay quiet. */
+  const permissionPrefSeeded = new WeakSet<object>()
+
+  /** Remember one durable permission identity for the next session (see
+   *  permissionPrefs.ts). Undefined and custom identities carry no preset
+   *  to remember; a failed write is a debug line, never user-facing. */
+  const persistPermissionPref = (value: string | undefined): void => {
+    if (value === undefined || value === PERMISSION_PRESET_CUSTOM) return
+    if (!writePermissionPref(value)) {
+      ctx.logger.debug(`dsh-tui: permission preference write failed for "${value}"`)
+    }
+  }
 
   /** Re-derive the roster and the current mode. The roster rebuild rides on
    *  every refresh: a registry mount/unmount and a re-bind both land here. */
@@ -176,6 +198,12 @@ export function createPermissionModeActions(
     // canonicalization can append replacement events.
     if (planChange && spec.plan === true && !planActive) {
       permission.rememberPrePlanIdentity(session)
+      // The canonicalization below reseats the durable identity on the
+      // plan atoms (read-only/ask) until the exit restores it. Keep the
+      // preference on the identity the user actually sat on, and let the
+      // event observer below ignore the replacement while it is in flight.
+      persistPermissionPref(foldPermissionPreset(snapshotLiveSessionEvents(session)))
+      planEntryInFlight = true
     }
     if (planChange && spec.plan === false) {
       // An explicit switch away from plan owns its target mode; the
@@ -183,13 +211,22 @@ export function createPermissionModeActions(
       explicitPlanExits.add(session)
       permission.forgetPrePlanIdentity(session)
     }
-    if (spec.permission !== undefined) {
-      if (!(await permission.applyPermissionIdentity(spec.permission))) return
-    } else if (!(await permission.canonicalizeForMode(spec, session))) {
-      return
+    try {
+      if (spec.permission !== undefined) {
+        if (!(await permission.applyPermissionIdentity(spec.permission))) return
+        persistPermissionPref(spec.permission)
+      } else if (!(await permission.canonicalizeForMode(spec, session))) {
+        return
+      } else if (spec.plan !== true) {
+        // A static mode the user cycled to owns its canonical preset
+        // identity (the plan spec's canonical form is transient instead).
+        persistPermissionPref(permission.canonicalPermissionForMode(spec, session))
+      }
+      if (!owner.current() || !binding.isCurrent(capture) || session !== agent.session) return
+      await base.applyMode(spec, capture)
+    } finally {
+      planEntryInFlight = false
     }
-    if (!owner.current() || !binding.isCurrent(capture) || session !== agent.session) return
-    await base.applyMode(spec, capture)
     if (!owner.current() || !binding.isCurrent(capture)) return
     const before = state.modeIndex
     refreshMode()
@@ -215,7 +252,19 @@ export function createPermissionModeActions(
     const sessionEvent = event as SessionEvent
     base.onSessionEvent(subject, sessionEvent)
     const type = (sessionEvent as { type: string }).type
-    if (type === 'permission/preset') refreshMode()
+    if (type === 'permission/preset') {
+      refreshMode()
+      // Every durable identity change on the bound session teaches the
+      // preference — including switches the official /permission command
+      // performed on its own (typed input, other UIs over the same
+      // registry) — except the two plan-transition shapes: the canonical
+      // preset a plan entry reseats to (in flight below) and any identity
+      // switched to while plan is active (the exit restore re-seats the
+      // pre-plan one, and that restore event lands here again).
+      if (!planEntryInFlight && !foldPlanActive(snapshotLiveSessionEvents(subject))) {
+        persistPermissionPref(foldPermissionPreset(snapshotLiveSessionEvents(subject)))
+      }
+    }
     if (type !== 'plan/mode' || (sessionEvent.data as unknown as { active?: boolean }).active !== false) return
     const remembered = permission.prePlanPermissionIdentity(subject)
     const explicit = explicitPlanExits.delete(subject)
@@ -238,11 +287,58 @@ export function createPermissionModeActions(
     })
   }
 
+  /** Seed a session that never customized its permission planes with the
+   *  persisted preference (permissionPrefs.ts): the last preset the user
+   *  switched to, applied through the same official /permission path every
+   *  manual switch takes. Idempotent by construction — once any
+   *  permission/sandbox/approval event exists in the log, the session owns
+   *  its planes and is left alone. Never rejects.
+   *
+   *  Yields to a DSH_PERMISSION_MODE deployment pin (the composition's
+   *  sandbox-policy/approval defaults came from it) and to shadow
+   *  runtimes, which must not write durable session policy. */
+  const applyRememberedPermission = async (): Promise<void> => {
+    try {
+      if (deps.runtime.mode === 'passive-shadow' || deps.runtime.mode === 'replay-shadow') return
+      const pinned = process.env.DSH_PERMISSION_MODE
+      if (pinned !== undefined && pinned !== '') return
+      const pref = readPermissionPref()
+      if (pref === undefined) return
+      const agent = binding.agent
+      const session = agent.session
+      if (permissionPrefSeeded.has(session)) return
+      // A session that already holds any permission-plane event chose its
+      // own state (or was resumed with one); only untouched planes seed.
+      for (const event of snapshotLiveSessionEvents(session)) {
+        const known = (event as { type: string }).type
+        if (known === 'permission/preset' || known === 'sandbox/mode' || known === 'approval/policy') return
+      }
+      // Fail closed against the mounted roster: an identity this
+      // deployment does not offer must not be driven through /permission
+      // (it would surface as a boot-time switch failure).
+      const snapshot = roster.readSnapshot(agent)
+      if (snapshot === undefined || !snapshot.options.some(option => option.value === pref)) {
+        permissionPrefSeeded.add(session)
+        ctx.logger.debug(`dsh-tui: remembered permission preset "${pref}" is not on the mounted roster; skipped`)
+        return
+      }
+      permissionPrefSeeded.add(session)
+      const ok = await permission.applyPermissionIdentity(pref)
+      if (ok && owner.current() && session === binding.agent.session) {
+        refreshMode()
+        state.emit()
+      }
+    } catch (error) {
+      ctx.logger.warn(`dsh-tui: remembered permission could not be applied: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   return {
     refreshMode,
     cycleMode,
     applyMode,
     onSessionEvent,
+    applyRememberedPermission,
     runPermissionPreset: name => permission.runPermissionPreset(name),
     permission,
   }

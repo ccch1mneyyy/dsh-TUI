@@ -234,7 +234,10 @@ settings are respected, not overwritten with defaults. `/login` offers
 ChatGPT OAuth, a device code or an API key (the last writes to Codex’s own
 credential store). Relay `/channel` connections take precedence; managed
 subscription tokens are only injected on first-party routes. dsh-TUI does
-not write `~/.codex/config.toml` or log out your native Codex account.
+not write `~/.codex/config.toml` or log out your native Codex account. A
+provider `env_key` from your own config (e.g. `DEEPSEEK_API_KEY`) that the
+shell did not export is injected from the DSH credential store when the ref
+is stored there — keep the key in the store, no per-shell export needed.
 
 TPS includes hidden reasoning time and excludes tool execution time. Live
 text estimates are corrected when Codex reports output token usage.
@@ -386,6 +389,10 @@ Everything, bilingual: [docs/README.md](docs/README.md).
 > **Windows security warning:** the Windows profile defaults to `danger-full-access` with approval set to `never`, so tools have unrestricted access. Inspect and tighten the profile before starting next to sensitive credentials or in an untrusted repository.
 
 No sandbox of its own: dsh-TUI uses the active DSH profile's filesystem, shell, sandbox and approval policies. Permission presets come from the DSH `permissionPresets` registry.
+
+**Permission persistence** (all three backends): the Claude and Codex backends keep their `/permission` picks in `~/.dsh-tui/backends/<id>/prefs.json`; the DSH pick is kept at `~/.dsh-tui/permission.json`. Every durable preset switch teaches it (picker, typed `/permission`, Shift+Tab static modes, or a switch the official command performed on its own), and a session that never customized its permission planes starts on the remembered preset — applied through the same official switch path. Plan-mode transients are excluded, an explicit `DSH_PERMISSION_MODE` deployment pin outranks the file, and an identity the mounted roster no longer offers is skipped.
+
+**Upstream auto-retry** (DSH): whenever a session binds (boot, `/model` switch, resume), the TUI seeds a retry policy — 5 attempts, transport-drop-aware failure codes including `STREAM_CLOSED` (a dropped upstream stream) — on **the provider route that session actually uses**, through the official `llm-pi-ai` settings section (the policy the kernel's `llm-retry` plugin executes). Only routes without an explicit `retryPolicy` are seeded — dormant channels are never written — and `upstreamRetry: false` in cordis.yml opts out.
 
 Details: [Permissions and security boundary](docs/architecture.en.md#permissions-and-security-boundary).
 
