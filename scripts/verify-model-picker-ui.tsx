@@ -1,6 +1,6 @@
 /**
  * /model through the real Chat/channel/rendering path, with a fake LLM catalog:
- * recents-first tabs, forward/backward wrapping, independent model/effort drafts,
+ * recents-first tabs, current-model promotion, forward/backward wrapping, independent model/effort drafts,
  * same-batch navigation/confirmation, cancellation, mouse picks and wheel,
  * focus windowing and resize in inline/fullscreen at 100 and 36 columns;
  * header shortcuts, readable effort colors and an opaque panel surface.
@@ -18,7 +18,7 @@ import type { AgentSession } from '../src/agent/session.js'
 
 const { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } = await import('node:fs')
 const { tmpdir } = await import('node:os')
-const { join } = await import('node:path')
+const { join, dirname } = await import('node:path')
 const testHome = mkdtempSync(join(tmpdir(), 'dsh-model-picker-'))
 process.env.HOME = testHome
 process.env.USERPROFILE = testHome
@@ -28,13 +28,14 @@ mkdirSync(prefsDir, { recursive: true })
 const [
   { default: assert }, { PassThrough, Writable }, { default: React }, { Terminal },
   { render, AlternateScreen }, { Chat }, { QuestionStore }, { createChannel },
-  { stringWidth }, { disposeChannelOwner }, { settled, sleep, viewportLines }, { activateModernEmojiWidths },
+  { stringWidth }, { disposeChannelOwner }, { settled, sleep, viewportLines }, { activateModernEmojiWidths }, { modelRecentsFile },
 ] = await Promise.all([
   import('node:assert/strict'), import('node:stream'), import('react'), import('@xterm/headless'),
   import('../src/ui.js'), import('../src/screens/Chat.js'), import('../src/channel/questions.js'),
   import('../src/dsh-adapter/channel.js'), import('../src/ink/stringWidth.js'),
   import('../src/dsh-adapter/channel/owner.js'), import('./lib/term-test.mjs'),
   import('./lib/modern-widths.mjs'),
+  import('../src/modelRecents.js'),
 ])
 
 const MODELS = [
@@ -100,7 +101,7 @@ function opaquePanel(term: InstanceType<typeof Terminal>): boolean {
 
 async function scenario(fullscreen: boolean, columns: number): Promise<void> {
   const label = `${fullscreen ? 'fullscreen' : 'inline'} ${columns} columns`
-  writeFileSync(join(prefsDir, 'model-recents.json'), JSON.stringify({ models: [{ provider: 'alpha', id: 'a1' }, { provider: 'beta', id: 'b0' }] }))
+  writeFileSync(join(prefsDir, 'model-recents.json'), JSON.stringify({ models: [{ provider: 'alpha', id: 'a1' }, { provider: 'alpha', id: 'a0' }, { provider: 'beta', id: 'b0' }] }))
   writeFileSync(join(prefsDir, 'effort.json'), JSON.stringify({ effort: 'medium' }))
   const { term, stdout, stdin, stderr } = terminalHarness(columns)
   const events = Array.from({ length: 20 }, (_, index) => ({
@@ -186,6 +187,17 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     assert.notEqual(cell('推理强度')?.getFgColor(), cell('Tab')?.getFgColor(), `${label}: effort heading must stand out from hints`)
     await check('every panel cell, including gaps and padding, has an opaque background', () => opaquePanel(term))
     await check('mixed-provider recents', () => hit('beta / Beta 00') !== undefined)
+    assert.deepEqual(JSON.parse(readFileSync(join(prefsDir, 'model-recents.json'), 'utf8')).models, [
+      { provider: 'alpha', id: 'a0' }, { provider: 'alpha', id: 'a1' }, { provider: 'beta', id: 'b0' },
+    ], `${label}: opening promotes the already-listed current model without duplicates`)
+    await sleep(90) // 固定窗:墙钟 Chat's 80ms modal-Enter debounce.
+    stdin.write('\r')
+    await check('Enter without navigation keeps the current model and effort', () => channel.model === 'a0' && channel.reasoningEffort === 'medium' && hit('最近使用') === undefined)
+    assert.deepEqual(switches, ['alpha/a0'])
+    assert.deepEqual(effortPicks, ['medium'])
+    switches.length = 0
+    effortPicks.length = 0
+    await open()
     const beforePreference = readFileSync(join(prefsDir, 'effort.json'), 'utf8')
     stdin.write('\t\x1b[B')
     await check('Tab and Down in one batch select a provider model', () => inverse('Alpha') && focused('Alpha 01') && inverse('MEDIUM'))
@@ -272,13 +284,14 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
     source: 'user', text: `Backend history ${seq}`, blocks: [{ type: 'text', text: `Backend history ${seq}` }],
   }))
   const levels = ['low', 'medium', 'high'].map(id => ({ id, label: id.toUpperCase() }))
+  const picks: string[] = []
   const session: AgentSession = {
     ref: { backendId, sessionId: 'surface-fixture' }, cwd: '/tmp', status: 'idle',
     capabilities: {
       native: {},
       models: {
         list: async () => [{ id: 'm0', label: 'Model 00' }, { id: 'm1', label: 'Model 01' }],
-        current: () => ({ model: 'm0' }), set: async () => ({ kind: 'switched' }),
+        current: () => ({ model: 'm0' }), set: async ref => { picks.push(ref.model); return { kind: 'switched' } },
       },
       effort: {
         levels: () => levels, forModel: () => ({ levels, defaultEffort: 'medium' }),
@@ -292,7 +305,9 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
   const channel = createChannel(ctx as never, session, {
     provider: backendId, model: 'm0', backendLabel: backendId, cwd: '/tmp', activity: false, whaleIdle: false, effort: 'medium',
   })
-  writeFileSync(join(prefsDir, 'model-recents.json'), JSON.stringify({ models: [{ provider: backendId, id: 'm0' }] }))
+  const recentFile = join(prefsDir, modelRecentsFile(backendId))
+  mkdirSync(dirname(recentFile), { recursive: true })
+  writeFileSync(recentFile, JSON.stringify({ models: [{ provider: backendId, id: 'm1' }, { provider: backendId, id: 'm0' }] }))
   const screen = <Chat channel={channel as never} questionStore={new QuestionStore()} fullscreen={fullscreen} onExit={() => {}} />
   const app = await render(fullscreen ? <AlternateScreen>{screen}</AlternateScreen> : screen, { stdin, stdout, stderr, exitOnCtrlC: false, patchConsole: false })
   const text = () => viewportLines(term).join('\n')
@@ -302,6 +317,17 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
     assert.ok(await settled(() => text().includes('/model')), `${label}: composer`)
     stdin.write('\r')
     assert.ok(await settled(() => text().includes('最近使用') && opaquePanel(term)), `${label}: opaque recent tab`)
+    assert.deepEqual(JSON.parse(readFileSync(recentFile, 'utf8')).models, [
+      { provider: backendId, id: 'm0' }, { provider: backendId, id: 'm1' },
+    ], `${label}: current model becomes the first recent`)
+    await sleep(90) // 固定窗:墙钟 Chat's 80ms modal-Enter debounce.
+    stdin.write('\r')
+    assert.ok(await settled(() => !text().includes('最近使用') && picks.length === 1), `${label}: Enter confirms the current model`)
+    assert.deepEqual(picks, ['m0'])
+    stdin.write('/model')
+    assert.ok(await settled(() => text().includes('/model')), `${label}: reopen composer`)
+    stdin.write('\r')
+    assert.ok(await settled(() => text().includes('最近使用') && opaquePanel(term)), `${label}: reopen recent tab`)
     stdin.write('\t')
     assert.ok(await settled(() => text().includes('Model 01') && opaquePanel(term)), `${label}: opaque backend tab`)
     stdin.write('\x1b')

@@ -2859,18 +2859,13 @@ export function Chat({
           return true
         }
         setHelpOpen(false)
-        // Opens over the cached catalog (empty cache shows the loading
-        // pane); the fresh list lands with the authoritative focus, and the
-        // kind-guarded set-index cannot re-focus a picker the user left.
-        // Seed-on-open: the model in use IS a use — recording it here means
-        // the recents group exists before the first post-update switch, and
-        // switching A→B keeps A in the list (the file records what was
-        // used, not only switches made after the file appeared).
-        let recentsNow = modelRecents
+        // Opening counts the live route as the latest use, including when
+        // restoring a session whose model already exists later in recents.
+        // Refresh the catalog without overriding navigation made meanwhile.
+        const latestRecent = modelRecents[0]
         if (channel.provider !== '' && channel.model !== ''
-          && !recentsNow.some(ref => ref.provider === channel.provider && ref.id === channel.model)) {
-          recentsNow = recordModelUse({ provider: channel.provider, id: channel.model }, undefined, recentsBackend)
-          setModelRecents(recentsNow)
+          && (latestRecent?.provider !== channel.provider || latestRecent?.id !== channel.model)) {
+          setModelRecents(recordModelUse({ provider: channel.provider, id: channel.model }, undefined, recentsBackend))
         }
         modelPicker.reset()
         dispatchOverlay({ type: 'open', overlay: { kind: 'model' } })
