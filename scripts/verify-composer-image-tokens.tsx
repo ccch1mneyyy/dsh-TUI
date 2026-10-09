@@ -11,7 +11,7 @@
  * Vim deletions and undo preserve attachment bindings through submission;
  * clearing, session replacement, undo eviction and unmount release them.
  *
- * Colour is on (FORCE_COLOR=3): the chip colour and the inverse caret are
+ * Colour is on (FORCE_COLOR=3): the chip colour and its inverse focus are
  * chalk-level styling that verify-image-preview's colourless run strips.
  *
  * Run: node --import tsx/esm scripts/verify-composer-image-tokens.tsx
@@ -213,6 +213,7 @@ const DELETE = '\x1b[3~'
 const CTRL_W = '\x17'
 const cellAt = (col: number, row: number) => terminal.buffer.active.getLine(row)?.getCell(col)
 const inverseAt = (col: number, row: number): boolean => (cellAt(col, row)?.isInverse() ?? 0) !== 0
+const caretAt = (col: number, row: number): boolean => terminal.buffer.active.cursorX === col && terminal.buffer.active.cursorY === row
 const tokensOnScreen = (): string[] => [...text().matchAll(/\[Image #\d+\]/gu)].map(m => m[0])
 const wholeInverse = (pos: { col: number; row: number }, token: string): boolean =>
   Array.from({ length: token.length }, (_, i) => inverseAt(pos.col + i, pos.row)).every(Boolean)
@@ -259,13 +260,13 @@ check('chip: a staged token renders in the accent colour, not the text colour',
 stdin.write(LEFT)
 stdin.write(LEFT)
 check('caret: at the token end the token is plain and the next cell is the caret',
-  await settled(() => noneInverse(p1, t1) && inverseAt(p1.col + t1.length, p1.row)), text())
+  await settled(() => noneInverse(p1, t1) && caretAt(p1.col + t1.length, p1.row)), text())
 stdin.write(LEFT)
 check('caret: ← from the token end jumps to its start and inverts the whole token',
   await settled(() => wholeInverse(p1, t1)), text())
 stdin.write(RIGHT)
 check('caret: → from the token start jumps to its end',
-  await settled(() => noneInverse(p1, t1) && inverseAt(p1.col + t1.length, p1.row)), text())
+  await settled(() => noneInverse(p1, t1) && caretAt(p1.col + t1.length, p1.row)), text())
 stdin.write(BACKSPACE)
 check('delete: Backspace at the token end removes the whole token',
   await settled(() => !text().includes(t1) && noTokenFragment() && draftIs(/❯ a +b/u)), text())
@@ -320,7 +321,7 @@ const title5 = t5.slice(1, -1)
 stdin.write(RIGHT)
 await sleep(200)
 check('peek: the caret just after the token shows no preview (token not selected)',
-  !previewOpen() && noneInverse(p5, t5) && inverseAt(p5.col + t5.length, p5.row), text())
+  !previewOpen() && noneInverse(p5, t5) && caretAt(p5.col + t5.length, p5.row), text())
 // Leaving reset the dismissal: ← back to the start shows it again.
 stdin.write(LEFT)
 check('peek: ← back to the token start selects it and shows its preview again',
@@ -333,7 +334,7 @@ check('peek: typing before the token keeps the caret on it and the preview open'
 const p5x = find(t5)!
 stdin.write(LEFT)
 check('peek: ← off the token closes the preview (arrows keep moving the caret)',
-  await settled(() => !previewOpen() && inverseAt(p5x.col - 1, p5x.row)), text())
+  await settled(() => !previewOpen() && caretAt(p5x.col - 1, p5x.row)), text())
 stdin.write(RIGHT)
 check('peek: → back onto the token reopens it',
   await settled(() => previewOpen() && wholeInverse(p5x, t5)), text())
@@ -356,7 +357,7 @@ await settled(() => find('[Image #9]') !== null)
 stdin.write(LEFT)
 const raw = find('[Image #9]')!
 check('raw: a token without a capability is ordinary text (caret steps inside it)',
-  await settled(() => inverseAt(raw.col + '[Image #9]'.length - 1, raw.row) && !inverseAt(raw.col, raw.row)),
+  await settled(() => caretAt(raw.col + '[Image #9]'.length - 1, raw.row) && !inverseAt(raw.col, raw.row)),
   text())
 const rawTextReference = find('plain ')
 check('raw: a token without a capability takes the text colour',

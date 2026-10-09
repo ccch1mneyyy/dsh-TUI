@@ -12,7 +12,7 @@ import { EffortInputBorder, type InputBorderLabel } from './EffortInputBorder.js
 import { EffortTierBadge } from './EffortTierBadge.js'
 import { cursorGlyphColor, getTheme } from '../theme.js'
 import { sessionColorHex } from '../terminal-utils/sessionColors.js'
-import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
+import { useDeclaredCursor, useNativeCursor } from '../ink/hooks/use-declared-cursor.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import type { Color } from '../ink/styles.js'
 import type { DragEvent } from '../ink/events/drag-event.js'
@@ -663,11 +663,11 @@ export interface PromptInputProps {
 /**
  * dsh-TUI prompt input: rounded border box (top+bottom borders
  * only), `❯ ` prompt char (dimmed while a turn is working), the text with a
- * block cursor at the cursor position, and above it the slash-command /
+ * native cursor at the editing position, and above it the slash-command /
  * file-completion suggestion card (SuggestionCard: rounded panel with the
  * selected row behind a `❯` pointer in the theme's `suggestion` color).
  *
- * Empty input: a solid block caret on a blank cell and nothing else — no
+ * Empty input: a caret on a reserved blank cell and nothing else — no
  * placeholder text, so the terminal-painted IME preedit (pinyin) at the
  * parked cursor can never be overlaid on anything.
  *
@@ -714,19 +714,11 @@ export function PromptInput({
   now = Date.now,
 }: PromptInputProps) {
   const [themeName] = useTheme()
+  const nativeCursor = useNativeCursor()
   /**
-   * Caret fill. The face is self-drawn (the native cursor is hidden), and it
-   * used to be `inverse` only — i.e. always the ink color, which a theme whose
-   * input surface is already ink-adjacent cannot make readable. `cursor` names
-   * the block fill, and the glyph on it is whichever ink contrasts with that
-   * fill (cursorGlyphColor) — `inverseText` alone cannot serve a light caret;
-   * empty keeps the inverse-video caret for palettes that predate the key.
-   *
-   * A palette a legacy runtime resolver returns can be missing the key
-   * altogether (normalizeThemePalette hands such a palette back untouched), so
-   * the undefined case normalizes here — ONE place, both consumers below read
-   * `''` and take the inverse path. Without it the caret renders with no
-   * background at all (the native cursor is hidden: the caret disappears).
+   * Painted caret fill for static snapshots and atomic image-token focus.
+   * Ordinary TTY editing uses the terminal's own cursor. A legacy palette
+   * may omit `cursor`; normalize that case to the inverse-video fallback.
    */
   const cursorTheme = getTheme(themeName)
   const cursorColor = cursorTheme.cursor ?? ''
@@ -3687,18 +3679,10 @@ export function PromptInput({
 
   /**
    * Highlight runs for one rendered row, shared by the inline prompt and the
-   * expanded editor: the selection's intersection (if any) and the caret
-   * cluster on the caret's row. Without a palette `cursor` both are inverse
-   * runs and overlapping intervals merge, so a caret inside the selection
-   * stays one continuous highlight. The caret row inverts the WHOLE cluster at
-   * the caret column (solid block) — [col, next boundary) covers a surrogate
-   * pair or ZWJ emoji as one glyph; at the text end it shows a blank inverse
-   * cell like the empty-input caret (appended after everything, so a selection
-   * ending there cannot swallow it).
-   *
-   * A palette that sets `cursor` splits the caret off the selection: the
-   * caret is then its own kind (painted with `caretCell`) instead of merging
-   * into the selection's inverse run.
+   * expanded editor: selection and image-token focus stay painted. A native
+   * caret leaves ordinary glyphs unchanged; snapshots paint the whole caret
+   * grapheme using the theme fill or inverse video. The trailing blank is
+   * retained in both modes so the terminal has a cell for an end-of-line caret.
    */
   const rowHighlightPieces = (
     text: string,
@@ -3730,8 +3714,9 @@ export function PromptInput({
       const clusterEnd = tokenAtCaret !== undefined
         ? Math.min(tokenAtCaret.end - rowStart, text.length)
         : nextGraphemeBoundary(graphemeBoundaries(text), col)
-      if (clusterEnd > col) fill(col, clusterEnd, caretKind)
-      else endBlankCaret = col === text.length
+      if (clusterEnd > col) {
+        if (!nativeCursor || tokenAtCaret !== undefined) fill(col, clusterEnd, caretKind)
+      } else endBlankCaret = col === text.length
     }
     const pieces: Array<{ text: string; inverse: boolean; chip: boolean; caret: boolean }> = []
     let pos = 0
@@ -3748,7 +3733,7 @@ export function PromptInput({
       pos = end
     }
     if (endBlankCaret) {
-      pieces.push({ text: ' ', inverse: caretKind === INVERSE, chip: false, caret: caretKind === CARET })
+      pieces.push({ text: ' ', inverse: !nativeCursor && caretKind === INVERSE, chip: false, caret: !nativeCursor && caretKind === CARET })
     }
     return pieces
   }
@@ -3927,19 +3912,15 @@ export function PromptInput({
     // (padding + gutter included), so those columns ride along and the
     // clamp grows with them.
     //
-    // The declared column is relative to the VALUE BOX, and `caretVisualCol`
-    // is already measured in that box's cell space: the text box IS the text
-    // run, so nothing that renders before it — the session entry, the `❯ `
-    // glyph, the fold prefix — shifts a cell inside it. Adding any of those
-    // back double-counts them and parks the hardware cursor to the RIGHT of
-    // the inverted caret cell (a 2-column miss shows up as a displaced IME
-    // preedit target). Only the expanded editor declares against a wider box
-    // (gutter + padding), so only that branch adds columns.
+    // Session entry and `❯ ` sit outside the value box. The inline fold
+    // prefix is inside its first row; the expanded editor instead includes
+    // a gutter and padding. Add only the columns inside the declared node.
     column: Math.min(
-      caretVisualCol + (expanded ? editorGutterCols + 1 : 0),
+      caretVisualCol + (expanded ? editorGutterCols + 1 : caretVisualLine === 0 ? prefixCols : 0),
       expanded ? editorGutterCols + 1 + inputWidth : inputWidth,
     ),
-    active: !suspended && !selectionActive && cursorParking,
+    active: cursorParking && !suspended && !selectionActive && caretVisualLine >= windowStart && caretVisualLine < windowStart + visibleLines.length,
+    visible: nativeCursor,
   })
 
   /**
@@ -4243,8 +4224,8 @@ export function PromptInput({
   // ── 全屏草稿编辑节点 ────────────────────────────────────────────────
   // 每次渲染构造新鲜闭包（value/caret/handlers），经 module store 发布给
   // Chat 根部末尾的 PromptEditorLayer（树序最后 → 盖住全部后绘兄弟）。
-  // useInsertionEffect 发布：sink 的同步重渲染发生在 layout 阶段之前，
-  // useDeclaredCursor（layout effect）读到的新 ref 已指向编辑区 Box。
+  // useInsertionEffect 发布：sink 经 store 独立提交，useDeclaredCursor
+  // 在 layout effect 与 ref 挂载时声明，编辑区稍后挂载也能接管光标。
   // 点击/拖拽坐标以内容区为原点（localCol 去掉行号槽宽度）。
   const editorNode = editorVisible ? (
     <Box
@@ -4609,11 +4590,11 @@ export function PromptInput({
             onDragEnd={handleDragEnd}
           >
             {value.length === 0 ? (
-              // Solid block caret on a BLANK cell: the terminal paints the
+              // Reserve a BLANK caret cell: the terminal paints the
               // IME preedit (pinyin) at the physical cursor, which is parked
               // right here, so nothing else may occupy this cell.
               <>
-                {caretCell('empty', ' ')}
+                {nativeCursor ? <Text>{' '}</Text> : caretCell('empty', ' ')}
                 {/* 三幕点焰第二幕：空输入行居中短暂浮现档名大写（纯文
                     本流自带偏移空格——不引入嵌套 Box，行数恒定；有文字
                     时不显示）。3 = 行内 `❯ `（2 列）+ 空输入块光标（1

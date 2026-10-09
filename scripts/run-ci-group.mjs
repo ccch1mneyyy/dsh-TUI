@@ -296,6 +296,9 @@ const GROUPS = {
     ["verify-btw-thread", ['node', '--import', 'tsx/esm', 'scripts/verify-btw-thread.mjs']],
   ],
   'input-terminal': [
+// 原生光标：inline/fullscreen × 宽/窄终端、无同步输出的重绘顺序、
+// 纯光标移动不隐藏、列表焦点与可见性切换、resize、外部交接与退出恢复。
+    ['verify-native-cursor', ['node', '--import', 'tsx/esm', 'scripts/verify-native-cursor.tsx']],
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
 // 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
     ["verify-keys", ['node', '--import', 'tsx/esm', 'scripts/verify-keys.tsx']],

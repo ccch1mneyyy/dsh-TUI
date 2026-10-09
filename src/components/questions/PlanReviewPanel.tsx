@@ -31,7 +31,7 @@
 import React from 'react'
 import { t } from '../../i18n.js'
 import { Box, Text, useInput, ScrollBox, useTerminalSize, type ScrollBoxHandle } from '../../ui.js'
-import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
+import { useDeclaredCursor, useNativeCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
 import { Markdown } from '../Markdown.js'
 import { POINTER } from '../../terminal-utils/figures.js'
@@ -138,7 +138,8 @@ export function PlanReviewPanel({
   // on the caret Text itself (all visual variants): its nodeCache rect IS
   // the caret cell, so (0, 0) stays exact under wrapping without a
   // layout-affecting wrapper Box.
-  const caretRef = useDeclaredCursor({ line: 0, column: 0, active: true })
+  const nativeCursor = useNativeCursor()
+  const caretRef = useDeclaredCursor({ line: 0, column: 0, active: true, visible: nativeCursor && inputFocused })
 
   const moveFocus = (delta: 1 | -1): void => {
     setFocusIndex(index => (index + delta + rowCount) % rowCount)
@@ -472,7 +473,7 @@ export function PlanReviewPanel({
               <>
                 <Text wrap="wrap">{feedbackPoints.slice(0, cursor).join('')}</Text>
                 {inputFocused
-                  ? <Text ref={caretRef} inverse>{cursorChar}</Text>
+                  ? <Text ref={caretRef} inverse={!nativeCursor}>{cursorChar}</Text>
                   : <Text ref={caretRef}>▏</Text>}
                 <Text wrap="wrap">{feedbackPoints.slice(inputFocused ? cursor + 1 : cursor).join('')}</Text>
               </>

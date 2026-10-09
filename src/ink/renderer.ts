@@ -241,11 +241,11 @@ export default function createRenderer(
         // screen), cursor.y = screen.height would trigger log-update's
         // cursor-restore LF at the last row, scrolling one row off the top
         // of the alt buffer and desyncing the diff's cursor model. The
-        // cursor is hidden so its position only matters for diff coords.
+        // This is the diff anchor; ink.tsx separately parks the native caret.
         y: options.altScreen
           ? Math.max(0, Math.min(screen.height, terminalRows) - 1)
           : screen.height,
-        // Hide cursor when there's dynamic output to render (only in TTY mode)
+        // Logical anchor visibility; ink.tsx manages the physical caret.
         visible: !isTTY || screen.height === 0,
       },
     }

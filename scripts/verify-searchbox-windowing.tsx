@@ -15,7 +15,7 @@
  *   3. 超长查询仍严格单行：不产生折行续行（守住窗口化语义，防修复把横向
  *      滚动改成折行/撑破布局）
  *   4. 六套内置主题 + 两个带 `cursor` 的合成主题 × 有框/无框 × 行中/行尾/宽字符/
- *      左右占位光标：主题填充与字形对比度、空填充的反显回退、闪烁不改文本、
+ *      左右占位光标的静态回退：主题填充与字形对比度、空填充的反显回退、闪烁不改文本、
  *      失焦无光标。
  *
  * 运行：node --import tsx/esm scripts/verify-searchbox-windowing.tsx
@@ -51,6 +51,7 @@ const [
   import('../src/components/SearchBox.js'),
   import('../src/theme.js'),
 ])
+const { NativeCursorContext } = await import('../src/ink/components/CursorDeclarationContext.js')
 
 /** 帧间 pacing：让一次 stdin 写入完整走完「解析→渲染→xterm 呈现」再发下一键。 */
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -215,6 +216,7 @@ for (const themeName of caretThemes) {
       const harness = makeHarness(50, 8)
       const tree = (caretBlink: boolean, isFocused = true) => (
         <ThemeProvider theme={themeName}>
+          <NativeCursorContext.Provider value={false}>
           <SearchBox
             query={scenario.query}
             placeholder="Hint"
@@ -227,6 +229,7 @@ for (const themeName of caretThemes) {
             isFocused={isFocused}
             isTerminalFocused={false}
           />
+          </NativeCursorContext.Provider>
         </ThemeProvider>
       )
       const instance = await render(tree(true), {

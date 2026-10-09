@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import { Box, Text, useInput, useTerminalSize, useNativeCursor } from '../ui.js'
 import { SearchBox } from '../components/SearchBox.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { CommandSuggestions } from '../components/CommandSuggestions.js'
@@ -385,10 +385,8 @@ function KernelCorner({
  * 发送。本地只读一点：行首是不是 `/`，用来把输入框左边的提示符从 `❯` 换成
  * `⌘`。
  *
- * 光标闪烁：只在输入框有焦点（`focusIndex < 0`）且终端持有焦点时跑，
- * 约 550ms 一个相位；**相位只切换样式**（inverse ↔ inverse+dim，见
- * `SearchBox` 的 `caretBlink` 契约），不增删任何字符——无头回归读的是
- * 视口纯文本，闪烁对它不可见，断言不随相位抖动。
+ * TTY 输入使用终端原生光标，闪烁与动画继承终端配置。无原生光标的
+ * 呈现环境保留约 550ms 的样式闪烁；相位不增删字符、不挪动文本。
  *
  * 居中与降级：宽度走 `resolveSplashLayout` 那一套（与开屏同源，阈值不会漂），
  * 高度走 `resolveLaunchpadLayout`（整块撤：Tips → 键帽行 → 立绘 → 只留输入框）。
@@ -622,11 +620,10 @@ export function Launchpad({
 
   // 光标闪烁相位（第四版修订：**自动呼吸**，不要求终端 focus 事件）。开关只看
   // 「输入框是这一屏的焦点目标」（focusIndex < 0）——`isTerminalFocused` 依赖
-  // DECSET 1004 focus 事件，Windows Terminal 下要点击窗口才发，拿它当开关就
-  // 出现"必须手动点一下才开始闪"（用户实测）。它其余的语义（SearchBox 的
-  // 失焦降级等）保留，只是不再控制闪烁。样式切换、字符不动（模块头注释里
-  // 的契约）。定时器 unref——探针宿主不因闪烁挂着事件循环。
-  const inputActive = inputFocused
+  // The native caret owns blinking in TTYs; only the painted fallback needs
+  // a timer. Do not gate it on terminal focus events, which can arrive late.
+  const nativeCursor = useNativeCursor()
+  const inputActive = inputFocused && !nativeCursor
   const [caretPhase, setCaretPhase] = React.useState(true)
   React.useEffect(() => {
     if (!inputActive) {

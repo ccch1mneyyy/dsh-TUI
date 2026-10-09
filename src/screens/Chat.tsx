@@ -10,10 +10,11 @@ import { envThemeOverride } from '../components/design-system/ThemeProvider.js'
 import { resolveBrand, setActiveBrand } from '../branding.js'
 import { hasPath } from '../dsh-adapter/settingsEditor.js'
 import { planReload, type ReloadKind } from '../reload.js'
-import { AlternateScreen, Box, Image, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
+import { AlternateScreen, Box, Image, Text, InputCaret, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { usePageInset } from '../components/PageMargin.js'
 import { POINTER } from '../terminal-utils/figures.js'
+import { previousCodePoint } from '../components/AgentMessageComposer.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { actionMatches, effectiveComboDisplay, primaryComboString } from '../utils/keymap.js'
 import { formatTokens } from '../terminal-utils/format.js'
@@ -6607,10 +6608,9 @@ export function Chat({
           key="prompt-input"
           channel={channel}
           suspended={promptReplacementOpen}
-          // 侧栏持有键盘焦点时主输入框让出原生终端光标（IME 预编辑/读屏的
-          // 锚点）：否则输入法的临时拼音会浮在主聊天框，打出汉字才回到面板
-          // 输入框。聚焦面板自己的输入组件（btw composer 等）接管声明。
-          cursorParking={sidePanel.focus !== 'panel'}
+          // 选择器、搜索框或侧栏持有键盘焦点时，让对应输入框接管原生
+          // 光标与 IME 锚点，避免主输入框在后续提交中抢回声明。
+          cursorParking={overlay.kind === 'none' && sidePanel.focus !== 'panel'}
           // 宠物面板是活动面板时，通知由它的头顶气泡「说出来」，输入框上方
           // 不再重复弹同一条（error 色除外——可能要行动的信号永远走 toast）。
           // 渲染期判定（split + activePanelId），与气泡同一次提交切换，不会
@@ -6821,7 +6821,8 @@ function NewMessagesPill({
   count: number
   current: number
 }): React.ReactNode {
-  const cursorChar = cursorOffset < query.length ? query[cursorOffset] : ' '
+  const caretOffset = cursorOffset < query.length ? previousCodePoint(query, cursorOffset + 1) : query.length
+  const cursorChar = [...query.slice(caretOffset)][0] ?? ' '
   return (
     // noSelect: the bar's own text must not match the search query (the
     // screen-space highlight would self-match).
@@ -6836,9 +6837,9 @@ function NewMessagesPill({
       width="100%"
     >
       <Text>/</Text>
-      <Text>{query.slice(0, cursorOffset)}</Text>
-      <Text inverse>{cursorChar}</Text>
-      {cursorOffset < query.length && <Text>{query.slice(cursorOffset + 1)}</Text>}
+      <Text>{query.slice(0, caretOffset)}</Text>
+      <InputCaret>{cursorChar}</InputCaret>
+      {caretOffset < query.length && <Text>{query.slice(caretOffset + cursorChar.length)}</Text>}
       <Box flexGrow={1} />
       {query && count === 0 ? (
         <Text color="error">{t('search-no-matches')} </Text>

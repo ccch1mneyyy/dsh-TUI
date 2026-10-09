@@ -14,9 +14,9 @@ import type { Theme } from '../theme.js'
  * Box 末尾）订阅并渲染；节点是 PromptInput 每次渲染的新鲜闭包，
  * 命中/拖拽/按钮 handler 无需任何额外的状态同步管道。
  *
- * 节点写入用 useInsertionEffect：sink 的同步重渲染发生在 layout
- * 阶段之前，PromptInput 的 useDeclaredCursor（layout effect）读到
- * 的 ref 已经指向编辑区的 Box，首帧光标声明即正确。
+ * 节点写入用 useInsertionEffect；sink 经 store 独立提交。光标在
+ * PromptInput 的 layout effect 与编辑区 ref 挂载时声明，编辑层
+ * 稍后挂载也能在首帧接管光标。
  */
 
 type EditorNode = React.ReactNode | null

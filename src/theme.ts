@@ -94,7 +94,7 @@ export type Theme = {
   // Themed chrome that used to be hardcoded: the context bar's per-content-type
   // segment fills (system → tools, in bar order), the thinking-effort ignition
   // pair (top-tier sweep / `❯` prefix / tier badge), and the prompt caret.
-  // `cursor` empty keeps the inverse-video caret.
+  // `cursor` styles painted carets and atomic image-token focus.
   contextBarSystem: string
   contextBarPrompt: string
   contextBarAssistant: string
@@ -105,8 +105,8 @@ export type Theme = {
   /** Where the ignition wave fades out (its resting end), i.e. the band colour. */
   ignitionDim: string
   /**
-   * Prompt-input caret fill. Empty (every built-in) keeps the inverse-video
-   * caret; a declared fill gets the palette ink that contrasts with it.
+   * Painted caret / image-token focus fill. Empty uses inverse video;
+   * ordinary TTY carets inherit the terminal's cursor settings instead.
    */
   cursor: string
   // TUI V2 colors

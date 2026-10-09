@@ -12,6 +12,8 @@ export type CursorDeclaration = {
   readonly relativeY: number
   /** The ink-box DOMElement whose yoga layout provides the absolute origin */
   readonly node: DOMElement
+  /** Show the native caret; omitted for accessibility-only focus anchors. */
+  readonly visible?: boolean
 }
 
 /**
@@ -37,3 +39,6 @@ const CursorDeclarationContext = createContext<CursorDeclarationSetter>(
 )
 
 export default CursorDeclarationContext
+
+/** Whether the mounted renderer can display a native terminal caret. */
+export const NativeCursorContext = createContext(false)

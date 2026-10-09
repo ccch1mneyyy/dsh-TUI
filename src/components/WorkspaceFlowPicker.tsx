@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Text } from '../ui.js'
+import { Box, Text, InputCaret } from '../ui.js'
 import { t } from '../i18n.js'
 import type { TuiWorkspaceChoice } from '../workspaces.js'
 import { Pane } from './design-system/Pane.js'
@@ -30,6 +30,7 @@ export function WorkspaceFlowPicker({
 }): React.ReactNode {
   const start = Math.max(0, Math.min(focusIndex - Math.floor(WINDOW / 2), choices.length - WINDOW))
   const visible = choices.slice(start, start + WINDOW)
+  const caretChar = input === null ? ' ' : [...input.value.slice(input.cursor)][0] ?? ' '
   return (
     <Pane color="permission">
       <Box flexDirection="column">
@@ -43,6 +44,7 @@ export function WorkspaceFlowPicker({
             isSelected={false}
             description={choice.description}
             disabled={busy}
+            declareCursor={input === null}
             showScrollUp={index === 0 && start > 0}
             showScrollDown={index === visible.length - 1 && start + visible.length < choices.length}
             onClick={
@@ -59,14 +61,14 @@ export function WorkspaceFlowPicker({
             <Text color="remember">❯ </Text>
             {input.value.length === 0 ? (
               <>
-                <Text inverse> </Text>
+                <InputCaret>{' '}</InputCaret>
                 <Text dimColor>{input.placeholder ?? ''}</Text>
               </>
             ) : (
               <>
                 <Text>{input.value.slice(0, input.cursor)}</Text>
-                <Text inverse>{input.value[input.cursor] ?? ' '}</Text>
-                <Text>{input.value.slice(input.cursor + 1)}</Text>
+                <InputCaret>{caretChar}</InputCaret>
+                <Text>{input.value.slice(input.cursor + caretChar.length)}</Text>
               </>
             )}
           </Box>

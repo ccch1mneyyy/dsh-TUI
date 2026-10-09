@@ -1,10 +1,9 @@
 import React from 'react'
 import type { ProviderModelEditor as ModelEditor } from '../../adapter/ports/channel-settings.js'
 import { formatModelReasoning, parseModelCapacity, parseModelReasoning } from '../../channel/model-capabilities.js'
-import { capCells, cleanRenderText, flattenPasteInline } from '../../channel/sanitize.js'
+import { cleanRenderText, flattenPasteInline } from '../../channel/sanitize.js'
 import { t } from '../../i18n.js'
-import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
-import { stringWidth } from '../../ink/stringWidth.js'
+import { SearchBox } from '../SearchBox.js'
 import { Box, Text, useInput, useTerminalSize } from '../../ui.js'
 import { readClipboard, type ClipboardRead } from '../../utils/clipboard.js'
 import { actionMatches } from '../../utils/keymap.js'
@@ -59,7 +58,6 @@ export function ProviderModelEditor({ model, editor, onClose, onAbort, readClipb
   const field = FIELDS[focus]
   const textFocused = field !== 'input' && field !== 'save'
     && (field !== 'reasoningEfforts' || editor.reasoningEditable)
-  const caretRef = useDeclaredCursor({ line: 0, column: 0, active: textFocused })
   const { start, end } = listWindow([1, 1, 1, 1, 1], focus, Math.max(2, rows - 16))
 
   const placeFocus = (next: number): void => {
@@ -220,21 +218,21 @@ export function ProviderModelEditor({ model, editor, onClose, onAbort, readClipb
   const renderValue = (name: TextField, focused: boolean, availableWidth: number): React.ReactNode => {
     const points = [...values[name]]
     const at = cursors[name]
-    // Keep the caret in the horizontal viewport without slicing UTF-16 or
-    // assuming one code point equals one terminal cell.
-    let first = 0
-    while (first < at && stringWidth(points.slice(first, at).join('')) >= availableWidth) first += 1
-    const prefix = points.slice(first, at).join('')
-    const caret = points[at] ?? ' '
-    const suffix = capCells(points.slice(at + 1).join(''), Math.max(0, availableWidth - stringWidth(prefix) - stringWidth(caret)))
     const fallback = name === 'reasoningEfforts' ? t('provider-model-inherit')
       : initial.defaults[name] === undefined ? t('provider-model-inherit')
         : t('provider-model-default-capacity', { n: initial.defaults[name]! })
     if (!focused) return <Text dimColor={points.length === 0} wrap="truncate">{points.length === 0 ? fallback : values[name]}</Text>
-    return <Text>
-      {prefix}<Text ref={caretRef} inverse>{caret}</Text>{suffix}
-      {points.length === 0 ? <Text dimColor>{capCells(fallback, Math.max(0, availableWidth - 1))}</Text> : null}
-    </Text>
+    return <SearchBox
+      query={values[name]}
+      cursorOffset={points.slice(0, at).join('').length}
+      placeholder={` ${fallback}`}
+      placeholderAlign="left"
+      prefix=""
+      width={availableWidth}
+      borderless
+      isFocused
+      isTerminalFocused
+    />
   }
 
   return <Box flexDirection="column" marginTop={1} paddingX={2} width="100%">

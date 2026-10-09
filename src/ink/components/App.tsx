@@ -61,6 +61,7 @@ import {
 import AppContext from "./AppContext.js";
 import { ClockProvider } from "./ClockContext.js";
 import CursorDeclarationContext, {
+	NativeCursorContext,
 	type CursorDeclarationSetter,
 } from "./CursorDeclarationContext.js";
 import ErrorOverview from "./ErrorOverview.js";
@@ -453,15 +454,19 @@ export default class App extends PureComponent<Props, State> {
 					>
 						<TerminalFocusProvider>
 							<ClockProvider>
-								<CursorDeclarationContext.Provider
-									value={this.props.onCursorDeclaration ?? (() => {})}
+								<NativeCursorContext.Provider
+									value={Boolean(this.props.stdout.isTTY && this.props.onCursorDeclaration)}
 								>
-									{this.state.error ? (
-										<ErrorOverview error={this.state.error} />
-									) : (
-										this.props.children
-									)}
-								</CursorDeclarationContext.Provider>
+									<CursorDeclarationContext.Provider
+										value={this.props.onCursorDeclaration ?? (() => {})}
+									>
+										{this.state.error ? (
+											<ErrorOverview error={this.state.error} />
+										) : (
+											this.props.children
+										)}
+									</CursorDeclarationContext.Provider>
+								</NativeCursorContext.Provider>
 							</ClockProvider>
 						</TerminalFocusProvider>
 					</StdinContext.Provider>

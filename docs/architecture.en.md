@@ -167,6 +167,14 @@ protocol paths.
 Changes involving input, scrolling, mouse, cursor, resize, or cleanup must
 be checked in both modes, especially on narrow terminals and Windows ConPTY.
 
+Text inputs declare a position and visibility through `useDeclaredCursor`.
+The renderer hides the native cursor before repainting, then positions and
+shows it at the end of the frame. Cursor-only moves keep it visible so the
+terminal's animation and trail can continue. Shape, color, and blinking follow
+terminal settings. List items declare accessibility anchors that stay hidden
+in ordinary mode. Static rendering retains theme-painted carets; selection
+and image-token highlights remain painted by the TUI.
+
 ## Persistence locations
 
 | Path | Contents |

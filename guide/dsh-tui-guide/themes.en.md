@@ -131,13 +131,14 @@ A few keys carry behavior worth knowing:
   channels (`#rgb`, `#rrggbb`, `#rrggbbaa` with the alpha ignored, or `rgb(r,g,b)`); `ansi:*` /
   `ansi256(n)` — or a missing key — falls back **per key** to the built-in pair selected by the
   palette's lightness, so the other key is unaffected.
-- `cursor`: the caret fill in the main prompt, launchpad input and picker search boxes.
+- `cursor`: the painted caret fill in the main prompt, launchpad input and picker search boxes
+  during static rendering without a native cursor, plus image-token focus in the main prompt.
+  Ordinary TTY text editing uses the native cursor; shape, color, blinking and animation follow terminal settings.
   The glyph on it is whichever of `text` / `inverseText`
   contrasts better with that fill (a 16-color `ansi:*` fill, or a palette whose `text`/`inverseText`
   has no parseable channels, cannot be measured and keeps `inverseText`), so a light caret can still
-  carry dark ink. The built-ins leave it empty — empty
-  keeps the inverse-video caret for backwards compatibility; declare it only when the caret must
-  stop following the body text color.
+  carry dark ink. The built-ins leave it empty, giving the painted fallback an inverse-video block.
+  A custom fill affects these painted highlights only.
 - Transcript link text follows `accent`; an empty or unparseable accent keeps the old fixed blue.
 
 ## npm plugin themes

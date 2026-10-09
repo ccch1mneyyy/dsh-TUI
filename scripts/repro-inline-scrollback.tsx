@@ -247,7 +247,7 @@ await sleep(800) // 固定窗:pacing 等收尾帧铺完，无单一可轮询锚�
 clearInterval(ticker)
 await sleep(300) // 固定窗:pacing 停掉 ticker 后的静默步间
 
-// 闲置后在真实 PromptInput 输入短标记：caret 的反色格和 xterm 硬件
+// 闲置后在真实 PromptInput 输入短标记：标记末尾和 xterm 原生光标
 // cursor 必须重合。此时整帧远高于小视口，覆盖 native cursor 的长帧坐标路径。
 stdin.write(INPUT_MARKER)
 await sleep(500) // 固定窗:pacing 等输入后整帧重绘，字节取证无单一锚点
@@ -341,13 +341,16 @@ if (inputRow >= 0) {
   const inputLine = buf.getLine(inputRow)
   if (inputLine) {
     for (let x = 0; x < inputLine.length; x++) {
-      if (inputLine.getCell(x)?.isInverse()) { caretX = x; break }
+      if ([...INPUT_MARKER].every((ch, offset) => inputLine.getCell(x + offset)?.getChars() === ch)) {
+        caretX = x + INPUT_MARKER.length
+        break
+      }
     }
   }
 }
 const hardwareCursor = { x: buf.cursorX, y: buf.baseY + buf.cursorY }
 check(
-  '长帧 idle 输入：硬件 cursor 与反色 caret 重合',
+  '长帧 idle 输入：原生 cursor 精确落在输入标记末尾',
   caretX >= 0 && hardwareCursor.x === caretX && hardwareCursor.y === inputRow,
   `caret=${caretX},${inputRow} cursor=${hardwareCursor.x},${hardwareCursor.y} baseY=${buf.baseY}`,
 )

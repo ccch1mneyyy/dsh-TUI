@@ -211,7 +211,6 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
         busy={busy}
         notice={notice === undefined || notice === null ? undefined : notice}
         onActivate={activateComposer}
-        width={width}
       />
     </Box>
   )

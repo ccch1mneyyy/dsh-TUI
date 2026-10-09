@@ -77,11 +77,10 @@ The startup **launchpad** and the **first-run wizard** each own the keyboard; bo
 results back to the chat screen and add no new behavior.
 
 - **Launchpad**: printable input goes into the input box (the prefix turns from `❯` to `⌘` when the line
-  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; the caret is an **inverse block
-  sitting on the current character** (inverse on that one character; an inverse blank cell at end of
-  line — a theme that declares the `cursor` key paints a solid fill with a contrasting glyph instead,
-  see [Themes](themes.en.md)), blinking is a pure style toggle (inverse ↔ regular, ~550ms per phase)
-  and never occupies an extra cell or eats a character; `Alt+R` continues the most recent session
+  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; the **native terminal cursor**
+  inherits your terminal's shape, color, blinking, and enabled animation or trail effects.
+  Cursor movement never adds a cell or eats a character. Static rendering retains the
+  [theme-painted fallback](themes.en.md); `Alt+R` continues the most recent session
   (= the first entry row slot, bound only on this screen, no-op when there is nothing to continue,
   remappable in `/settings`);
   a leading `/` opens the

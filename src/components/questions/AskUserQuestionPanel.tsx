@@ -30,7 +30,7 @@
 import React from 'react'
 import { t } from '../../i18n.js'
 import { Box, Text, useInput, useTerminalSize } from '../../ui.js'
-import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
+import { useDeclaredCursor, useNativeCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../terminal-utils/figures.js'
 import type { QuestionDraft, QuestionSelection } from '../../channel/questions.js'
@@ -293,7 +293,12 @@ export function AskUserQuestionPanel({
   // three visual variants): its nodeCache rect IS the caret cell, so (0, 0)
   // stays exact under CJK widths and line wrapping without any
   // layout-affecting wrapper Box.
-  const caretRef = useDeclaredCursor({ line: 0, column: 0, active: !hideCustomInput && !collapsed && editingModel === null })
+  const nativeCursor = useNativeCursor()
+  const caretRef = useDeclaredCursor({
+    line: 0, column: 0,
+    active: !hideCustomInput && !collapsed && editingModel === null,
+    visible: nativeCursor && inputFocused,
+  })
 
   const moveFocus = (delta: 1 | -1): void => {
     if (rowCount <= 1) return
@@ -724,11 +729,10 @@ export function AskUserQuestionPanel({
         ) : (
           <>
             <Text wrap="wrap">{textPoints.slice(0, customCursor).join('')}</Text>
-            {/* Focused keeps the inverse block caret (same contract as the
-                composer's value box): the preedit then renders inverted,
-                which reads as "the block is filling with text". */}
+            {/* Leave the native caret's glyph plain so the terminal can
+                animate it and paint IME preedit with the input's style. */}
             {inputFocused
-              ? <Text ref={caretRef} inverse>{cursorChar}</Text>
+              ? <Text ref={caretRef} inverse={!nativeCursor}>{cursorChar}</Text>
               : <Text ref={caretRef}>▏</Text>}
             <Text wrap="wrap">{textPoints.slice(inputFocused ? customCursor + 1 : customCursor).join('')}</Text>
           </>

@@ -1,7 +1,7 @@
 import React, { type PropsWithChildren, useContext, useInsertionEffect } from 'react'
 import instances from '../instances.js'
 import { logMouseDebug } from '../../utils/debug.js'
-import { DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN } from '../termio/dec.js'
+import { DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, HIDE_CURSOR } from '../termio/dec.js'
 import { TerminalWriteContext } from '../useTerminalNotification.js'
 import { handoffAckArmed, noteScreenAdopted, ownsAltScreenExit } from '../../handoffAck.js'
 import Box from './Box.js'
@@ -30,7 +30,7 @@ export function AlternateScreen({ children, mouseTracking = true }: Props) {
     // Custom streams are supported only when a single renderer can be identified.
     const renderer = instances.get(process.stdout) ?? (instances.size === 1 ? instances.values().next().value : undefined)
     logMouseDebug('alt-screen enter', { mouseTracking, inkFound: !!renderer, adopting })
-    write((adopting ? '' : ENTER_ALT_SCREEN) + '\x1b[2J\x1b[H' + (mouseTracking ? ENABLE_MOUSE_TRACKING : ''))
+    write(HIDE_CURSOR + (adopting ? '' : ENTER_ALT_SCREEN) + '\x1b[2J\x1b[H' + (mouseTracking ? ENABLE_MOUSE_TRACKING : ''))
     renderer?.setAltScreenActive(true, mouseTracking)
     if (adopting) noteScreenAdopted()
     return () => {
