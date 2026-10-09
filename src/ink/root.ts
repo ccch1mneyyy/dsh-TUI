@@ -66,7 +66,10 @@ export type Instance = {
   /**
    * Detach the Ink runtime for process-level shutdown: latches isUnmounted
    * (gating every mouse/alt-screen re-assert), cancels pending renders,
-   * releases TTY handlers and stdin raw mode, and disposes the querier.
+   * releases TTY handlers and stdin raw mode, disposes the querier, and
+   * unmounts React without closing the alternate screen. Await the result
+   * before releasing UI capabilities; exits during a React commit defer
+   * effect cleanup until that commit yields.
    * Exposed on the handle so shutdown code can latch the runtime even when
    * the global instances map lookup misses (stdout identity drift, issue
    * #522) — without it, the cleanup-vs-self-heal window re-enables mouse

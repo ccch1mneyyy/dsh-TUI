@@ -342,6 +342,8 @@ const GROUPS = {
     ["verify-exit-resume-marker", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-resume-marker.tsx']],
 // 退出阶段 stderr/console 恢复回归（issue #42）：shutdown 解绑恢复物理流并注销监听器。
     ["verify-shutdown-stderr", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-stderr.tsx']],
+// 迁移提示的退出生命周期：真实 Chat + UI lease，覆盖待触发/扫描在途/消失定时器与双渲染模式。
+    ["verify-migrate-hint-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-migrate-hint-lifecycle.tsx']],
 // 退出收尾运行时未命中回退：找不到 Ink runtime 时必须走完整 unmount 恢复终端。
     ["verify-shutdown-fallback", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-fallback.tsx']],
 // 退出鼠标残留回归（issue #522）：detach 闩锁后自愈探针不再重写

@@ -2600,7 +2600,7 @@ export function isExitResumable(deps: {
 }
 
 type InkShutdownState = {
-  detachForShutdown?: () => void
+  detachForShutdown?: () => void | Promise<void>
   /**
    * Full stdin detach for the /update child handoff (issues #284/#307):
    * removes the readable/data listeners and pauses the pump so the
@@ -2664,7 +2664,7 @@ export async function finishExit(
     const cursor = fullscreen ? '' : cursorMoveToFrameEnd(runtime)
 
     try {
-      runtime?.detachForShutdown?.()
+      await runtime?.detachForShutdown?.()
       // The /update continuation spawns children that inherit this stdin;
       // strip the readable pump so the parent cannot swallow their input
       // (issues #284/#307). Harmless on plain exits — the process exits

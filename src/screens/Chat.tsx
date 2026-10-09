@@ -2083,7 +2083,11 @@ export function Chat({
   // off the render path; failures read as "no data" and stay silent.
   const migrateHintShownRef = React.useRef(false)
   React.useEffect(() => {
+    // A replaced Channel must not retain the old hint's Enter shortcut.
+    setMigrateHintAgent(null)
     if (migrateHintShownRef.current) return
+    let disposed = false
+    let hintTimer: ReturnType<typeof setTimeout> | undefined
     const timer = setTimeout(() => {
       migrateHintShownRef.current = true
       void (async () => {
@@ -2093,6 +2097,7 @@ export function Chat({
             adapter => MIGRATE_SCAN_SPECS[adapter.id],
           )))
         })
+        if (disposed) return
         const top = recentAgentsFrom(newest, Date.now())[0]
         if (top !== undefined) {
           channel.notify(t('migrate-hint-notify', { agent: top.label }), { timeoutMs: 10000 })
@@ -2100,11 +2105,15 @@ export function Chat({
           // overlay) jumps into the picker with this source pre-checked;
           // the global key layer below consumes it, anything else disarms.
           setMigrateHintAgent(top.agentId)
-          setTimeout(() => setMigrateHintAgent(current => current === top.agentId ? null : current), 10_000)
+          hintTimer = setTimeout(() => setMigrateHintAgent(current => current === top.agentId ? null : current), 10_000)
         }
       })()
     }, 12_000)
-    return () => clearTimeout(timer)
+    return () => {
+      disposed = true
+      clearTimeout(timer)
+      if (hintTimer !== undefined) clearTimeout(hintTimer)
+    }
   }, [channel])
 
   useCopyOnSelect(
