@@ -11,6 +11,7 @@
  */
 import { bigTextWidth, renderBigText } from '../src/components/bigfont.js'
 import { COLUMN_GAP, WHALE_BOX_WIDTH, resolveSplashLayout } from '../src/components/splashLayout.js'
+import { resolveLaunchpadLayout } from '../src/components/launchpadLayout.js'
 import { SPLASH_FONTS, pickSplashFont, splashFontById, withTagline } from '../src/components/splashFonts.js'
 
 const ACCENT = { r: 63, g: 108, b: 196 }
@@ -74,6 +75,8 @@ for (const font of SPLASH_FONTS) {
       if (widest > narrowTop) {
         const between = resolveSplashLayout(narrowTop + COLUMN_GAP, { whale: true, font: wordFont })
         check(`[${label}] 上排放下而下排放不下时降级（不截宽行)`, between.showBigTitle === false, JSON.stringify(between))
+        const launchpad = resolveLaunchpadLayout(narrowTop + COLUMN_GAP, 60, { whale: true, font: wordFont })
+        check(`[${label}] 启动页按较宽行预算标题高度`, launchpad.showBigTitle === false, JSON.stringify(launchpad))
       }
       const fits = resolveSplashLayout(widest, { whale: false, font: wordFont })
       check(`[${label}] 宽行放得下时才画大字`, fits.showBigTitle === true, JSON.stringify(fits))

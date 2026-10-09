@@ -144,8 +144,11 @@ export function resolveLaunchpadLayout(
 ): LaunchpadLayout {
   const { font } = options
   // 与 resolveSplashLayout 同一套阈值：末尾那一格字距也算进去，否则恰好卡阈值
-  // 时 Ink 会把最后一个字形换成省略号。
-  const titleWidth = bigTextWidth(font, font.tagline.top, font.tagline.topKerning) + font.tagline.topKerning
+  // 时 Ink 会把最后一个字形换成省略号。品牌与节日词对按两行中较宽者判断。
+  const titleWidth = Math.max(
+    bigTextWidth(font, font.tagline.top, font.tagline.topKerning) + font.tagline.topKerning,
+    bigTextWidth(font, font.tagline.bottom, font.tagline.bottomKerning) + font.tagline.bottomKerning,
+  )
   const showBigTitle = columns >= titleWidth
   const artBox = WHALE_BOX_WIDTH
   const wantsArt = options.whale || options.whaleGirl === true

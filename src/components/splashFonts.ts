@@ -23,7 +23,9 @@
  * `C L U O`（`branding.ts` 的按内核换品牌）。
  */
 import type { SplashFontId, SplashFontSetting } from '../adapter/ports/channel-display.js'
+import { BRAND_SPLASH_WORDS, type Brand } from '../branding.js'
 import { bigTextWidth, paintedWidth } from './bigfont.js'
+import type { SplashEgg } from './splashEggs.js'
 
 // 取值类型住在端口的显示偏好词汇表里（ports 目录不许 import 到目录外），这里
 // 转出去：设置链（Config / channel / /settings 面板）只认这一个入口。
@@ -405,6 +407,22 @@ export function withTagline(
     return { ...font, tagline: { top, bottom, topKerning: kerning, bottomKerning: kerning, bottomIndent: 0 } }
   }
   return { ...font, tagline: { top, bottom, ...solveTagline(font.glyphWidth, top, bottom, options?.wide === true ? 'wide' : 'tight') } }
+}
+
+/** 品牌与节日换词后的实际标题，供布局预算与 Logo 渲染共同使用。 */
+export function resolveSplashTitleFont(
+  font: SplashFont,
+  brand: Brand = 'deepseek',
+  egg: SplashEgg | null = null,
+): SplashFont {
+  if (brand === 'deepseek' && egg === null) return font
+  const words = BRAND_SPLASH_WORDS[brand]
+  return withTagline(
+    font,
+    brand === 'deepseek' ? font.tagline.top : words.top,
+    egg?.bottom ?? words.bottom,
+    brand === 'deepseek' ? undefined : { uniform: true },
+  )
 }
 
 /** 半立体的配色不再静态写死：LogoV2 按主题 accent 派生亮/暗两档（金属受光），

@@ -378,7 +378,7 @@ const centeredPad = (visible: number): number => Math.max(0, Math.round(WHALE_CE
       ),
     }
   }
-  const { rows } = wideMount(wideView(<LogoV2 {...baseProps} fontId="shadow" starChance={0} />))
+  const { rows } = wideMount(wideView(<LogoV2 {...baseProps} fontId="shadow" egg={null} starChance={0} />))
   const at = rows.findIndex((_, index) =>
     expected.every((want, offset) => textAt(rows[index + offset] ?? '') === want),
   )

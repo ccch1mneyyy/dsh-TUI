@@ -53,6 +53,8 @@ import { settle, settled, sleep, viewportLines } from './lib/term-test.mjs'
 import { stringWidth } from '../src/ink/stringWidth.js'
 // 只借类型（import type 被 tsx 整体擦除，不影响上面 fake-home 的加载顺序）。
 import type { KernelOption } from '../src/components/kernelCatalog.js'
+import type { Brand } from '../src/branding.js'
+import type { SplashEgg } from '../src/components/splashEggs.js'
 
 const { Terminal: XTerm } = xterm
 const [
@@ -193,6 +195,10 @@ interface OpenOptions {
   query?: string
   firstRun?: boolean
   whale?: boolean
+  fontId?: string
+  brand?: Brand
+  egg?: SplashEgg | null
+  fullscreen?: boolean
   /** 参数行四段；false = 全不传（卡片矮一行的档）、对象 = 自定义四段。默认带全。 */
   params?: boolean | ParamFixture
   /** 双角铭牌三段；false = 全不传。默认带全。 */
@@ -256,7 +262,9 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         whaleIdle={false}
         whaleGirl={false}
         starred={false}
-        fontId="bold"
+        fontId={options.fontId ?? 'bold'}
+        brand={options.brand}
+        egg={options.egg ?? null}
         firstRun={options.firstRun ?? false}
         actions={options.actions ?? DEFAULT_ACTIONS}
         overlayPanel={options.overlayPanel === true ? <Text>PICKER-PROBE 选择器探针</Text>
@@ -324,9 +332,11 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
 
   const app = await render(
     <ThemeProvider theme="dark">
-      <AlternateScreen>
-        <Harness />
-      </AlternateScreen>
+      {options.fullscreen === false ? <Harness /> : (
+        <AlternateScreen>
+          <Harness />
+        </AlternateScreen>
+      )}
     </ThemeProvider>,
     {
       stdin: input as never,
@@ -597,6 +607,26 @@ check('A6c 输入卡片只有一层圆角边框（╭ ╰ 各恰好一个，不�
 }
 check('A7 输入框前缀是 ❯（行首不是 /）', await settled(() => base.screen().includes('❯')))
 base.close()
+
+// Shadow 品牌词比默认词对窄：预算必须跟着实际大字走，否则少算十行、吞掉输入。
+for (const brand of ['claude', 'codex'] as const) {
+  for (const fullscreen of [true, false]) {
+    const query = 'SHADOW-INPUT-PROBE'
+    const probe = await openLaunchpad([], {
+      columns: 80, rows: 24, query, fontId: 'shadow', brand, fullscreen,
+    })
+    check(`A Shadow ${brand} 80×24 ${fullscreen ? 'fullscreen' : 'inline'} 输入卡片与底角完整`,
+      await settled(() => {
+        const lines = viewportLines(probe.term)
+        const row = lines.findIndex(line => line.includes(query))
+        const corners = lines.slice(-3).join('\n')
+        return row > 0 && (lines[row] ?? '').includes('│')
+          && (lines[row - 1] ?? '').includes('╭') && (lines[row + 1] ?? '').includes('╰')
+          && corners.includes(CWD + ':' + BRANCH) && corners.includes('dsh-tui v' + VERSION)
+      }), `input row=${rowOf(probe.term, query)}`)
+    probe.close()
+  }
+}
 // 无参数档：三段全拿不到时整条不画（卡片矮一行），框还在、输入还在。
 {
   const ev: Ev[] = []

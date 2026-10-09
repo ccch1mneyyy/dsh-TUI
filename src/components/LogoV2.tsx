@@ -12,7 +12,7 @@ import { useTheme } from './design-system/ThemeProvider.js'
 import { interpolateColor, parseRGB } from './Spinner/spinnerUtils.js'
 import { paintedWidth, renderBigText } from './bigfont.js'
 import { COLUMN_GAP, WHALE_BOX_WIDTH, resolveSplashLayout } from './splashLayout.js'
-import { withTagline, pickSplashFont, splashFontById, type SplashFont } from './splashFonts.js'
+import { resolveSplashTitleFont, pickSplashFont, splashFontById, type SplashFont } from './splashFonts.js'
 import { pickSplashEgg, splashStarLine, type SplashEgg } from './splashEggs.js'
 import { isHistoricMilestone, markStarAsked, pendingStarMilestone, recordLaunch, STAR_MILESTONES, usageSnapshot } from '../usageStats.js'
 import { effectiveComboDisplay } from '../utils/keymap.js'
@@ -306,13 +306,12 @@ export function LogoV2({
   // 词对紧解为预算。窄终端阶梯阈值跟着当天真实标题宽度走，与彩蛋共用
   // `withTagline`。
   const words = BRAND_SPLASH_WORDS[brand]
-  const brandFont = brand !== 'deepseek' ? withTagline(font, words.top, words.bottom, { uniform: true }) : font
 
   // 节日彩蛋：本地日期整天恒定，每次 mount 只判一次（照 pickSplashFont 的写法）。
   // 只换下排词——上排钉在品牌词上（deepseek 的 `DEEPSEEK` / claude 的 `CLAUDE`
   // / codex 的 `CODEX`）。
   const [dailyEgg] = React.useState<SplashEgg | null>(() => (egg === undefined ? pickSplashEgg() : egg))
-  const titleFont = dailyEgg === null ? brandFont : withTagline(font, brand === 'deepseek' ? font.tagline.top : words.top, dailyEgg.bottom, brand === 'deepseek' ? undefined : { uniform: true })
+  const titleFont = resolveSplashTitleFont(font, brand, dailyEgg)
 
   // 窄终端阶梯：鲸鱼 + 大字 → 纯大字 → 纯鲸鱼 → 一行纯文字（阈值随字体字身宽度变）。
   const splash = resolveSplashLayout(columns, { whale, font: titleFont })
