@@ -3986,10 +3986,11 @@ export function Chat({
   const pageInsetX = usePageInset().x
   // 侧栏控制器：几何（chatColumns/panelColumns）、焦点与键盘分发都在
   // 这个 hook 里（设计文档 §16.5——Chat 只多一次调用、一处键盘让位、
-  // 一条 runCommand case）。编辑器展开时几何强制 collapsed。
+  // 一条 runCommand case）。启动页没有侧栏，命令走整屏回退；编辑器
+  // 展开时几何同样强制 collapsed。
   const sidePanel = useSidePanel({
     columns: terminalColumns,
-    fullscreen,
+    fullscreen: fullscreen && !launchpadShown,
     editorOpen: promptEditorOpen,
   })
   /**

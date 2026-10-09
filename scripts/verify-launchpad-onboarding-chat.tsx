@@ -20,6 +20,8 @@
  *      preset 段 → 卡片显示完整名 → 指针移开卡片消失。这一组钉的是 `Chat.tsx`
  *      落地页分支末尾那一行 `<TooltipLayer />`——删掉它 R1 必红（F-01 的守卫；
  *      verify-launchpad 的 S 组是孤立夹具自挂层，删 Chat 那一行那边照绿）。
+ *   S. 启动自动展开侧栏：启动页 /resume、/home、/jobs 打开整屏，Esc 保留
+ *      草稿；选中会话后恢复侧栏路由与输入（fullscreen / inline / 窄屏）。
  *
  *
  * Run: node --import tsx/esm scripts/verify-launchpad-onboarding-chat.tsx
@@ -39,7 +41,7 @@ import { stringWidth } from '../src/ink/stringWidth.js'
 const { Terminal: XTerm } = xterm
 
 const [
-  { render, Box, ThemeProvider },
+  { render, Box, ThemeProvider, AlternateScreen },
   { Chat },
   { LOCAL_COMMANDS, completeCommands },
   { QuestionStore },
@@ -49,6 +51,7 @@ const [
   { noteBoundaryRecoveryRemount },
   { kernelEntriesOf },
   { listBackends },
+  { applySidePanelOpen, applySidePanelPanels, getSidePanelOpen, getSidePanelPanels },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
@@ -60,6 +63,7 @@ const [
   import('../src/ink/update-overflow-guard.js'),
   import('../src/components/kernelCatalog.js'),
   import('../src/dsh-adapter/backend-registry.js'),
+  import('../src/tuiDisplayPrefs.js'),
 ])
 
 /** 内核目录：与真机组合根同源（`kernelEntriesOf(listBackends())`）——选择器那一屏
@@ -268,17 +272,19 @@ interface Flags {
   launchpadOnBoot?: boolean
   onboardingOnBoot?: boolean
   openHomeOnBoot?: boolean
+  columns?: number
 }
 
 async function mountChat(flags: Flags, over: Record<string, unknown> = {}, chatProps: Record<string, unknown> = {}) {
-  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const columns = flags.columns ?? COLS
+  const term = new XTerm({ cols: columns, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const stdout = new FakeStdout(term)
   const stdin = new FakeStdin()
   const { channel, notifications, calls } = makeChannel(over)
-  const instance = await render(
+  const node = (
     <ThemeProvider theme="dark">
       {/* 与真机同构：根是整屏尺寸（Chat 的每个整屏 early-return 都按整屏排版）。 */}
-      <Box width={COLS} height={ROWS} flexDirection="column">
+      <Box width={columns} height={ROWS} flexDirection="column">
         <Chat
           channel={channel as never}
           questionStore={new QuestionStore()}
@@ -294,7 +300,10 @@ async function mountChat(flags: Flags, over: Record<string, unknown> = {}, chatP
           {...chatProps}
         />
       </Box>
-    </ThemeProvider>,
+    </ThemeProvider>
+  )
+  const instance = await render(
+    chatProps.fullscreen === true ? <AlternateScreen mouseTracking>{node}</AlternateScreen> : node,
     { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
   )
   /** 当前屏幕（xterm 视口）。用视口而不是 painted 流的最后一帧：ink 会分块写，
@@ -1317,6 +1326,82 @@ const AC4_CUT_PRESET = 'Standard (Git Bash'
     `cut=${cutOnScreen} card=${cardShown} picker=${pickerOpen} cardStill=${cardStillThere} `
       + `:: ${chat.screen().slice(0, 260)}`)
   await chat.unmount()
+}
+
+// ── S. 启动自动展开侧栏时，落地页仍走整屏命令路由 ──
+{
+  const previousOpen = getSidePanelOpen()
+  const previousPanels = getSidePanelPanels()
+  const job = {
+    id: 'boot-job', kind: 'bash', label: 'boot-sidebar-job', status: 'running',
+    startedAt: Date.now(), outputLines: [],
+  }
+  try {
+    applySidePanelOpen(true)
+    applySidePanelPanels('workspace,jobs')
+    for (const [mode, fullscreen, columns] of [
+      ['fullscreen', true, 120], ['inline', false, 120], ['narrow', true, 80],
+    ] as const) {
+      for (const command of ['resume', 'home', 'jobs']) {
+        const chat = await mountChat({ launchpadOnBoot: true, columns }, { backgroundJobs: [job] }, { fullscreen })
+        try {
+          await settle(() => chat.screen().includes('说点什么'))
+          await chat.type('/' + command)
+          await chat.send('\r')
+          const marker = command === 'jobs' ? job.label : '新建会话'
+          const opened = await settled(() => chat.screen().includes(marker) && !chat.screen().includes('⌘'))
+          check(`S1[${mode} /${command}] 自动展开侧栏时，启动页命令打开可见整屏`,
+            opened && !chat.calls.some(call => call.startsWith('submit:')), chat.screen())
+          if (opened) {
+            await chat.send('\x1b')
+            check(`S2[${mode} /${command}] Esc 返回启动页，保留命令草稿与侧栏设置`,
+              await settled(() => chat.screen().includes('⌘') && chat.screen().includes('/' + command)
+                && !chat.screen().includes(marker)) && getSidePanelOpen(), chat.screen())
+          }
+        } finally {
+          await chat.unmount()
+        }
+      }
+    }
+
+    const summary = {
+      id: 'boot-resume', kind: { kind: 'root' }, title: { text: 'boot-resume-session', source: 'renamed' },
+      cwd: 'C:/code/demo-project', createdAt: 1, updatedAt: 9, bytes: 10, hasPrompt: true,
+    }
+    const calls: string[] = []
+    const chat = await mountChat({ launchpadOnBoot: true }, {
+      cachedSessions: () => [summary], listSessions: async () => [summary],
+      listWorkspaceRegistry: async () => [], backgroundJobs: [job],
+      resumeTo: async (id: string) => { calls.push(id); return { ok: true } },
+    }, { fullscreen: true })
+    try {
+      await settle(() => chat.screen().includes('说点什么'))
+      await chat.type('/resume')
+      await chat.send('\r')
+      const opened = await settled(() => chat.screen().includes(summary.title.text) && !chat.screen().includes('⌘'))
+      check('S3 启动页 /resume 展示可选择的历史会话', opened, chat.screen())
+      if (opened) {
+        await chat.click(summary.title.text)
+        check('S4 选择会话后进入聊天，侧栏仍按启动设置展开',
+          await settled(() => calls.includes(summary.id) && (findCell(chat.term, '当前工作区')?.col ?? 0) > 64),
+          chat.screen())
+        await chat.type('/jobs')
+        await chat.send('\r')
+        check('S5 聊天页 /jobs 恢复侧栏路由',
+          await settled(() => (findCell(chat.term, job.label)?.col ?? 0) > 64), chat.screen())
+        await chat.send('\x1b')
+        await chat.type('after-resume')
+        await chat.send('\r')
+        check('S6 侧栏 Esc 交还输入焦点，恢复后的会话可以继续发送',
+          await settled(() => chat.calls.includes('submit:after-resume')) && getSidePanelOpen(), JSON.stringify(chat.calls))
+      }
+    } finally {
+      await chat.unmount()
+    }
+  } finally {
+    applySidePanelOpen(previousOpen)
+    applySidePanelPanels(previousPanels)
+  }
 }
 
 if (failures === 0) console.log(`\nverify-launchpad-onboarding-chat: ${checks} checks, all passed`)
