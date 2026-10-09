@@ -86,7 +86,8 @@ results back to the chat screen and add no new behavior.
   remappable in `/settings`);
   a leading `/` opens the
   **command palette** (the same data source and component as the chat composer: `↑`/`↓` move the selection,
-  `Enter`/`Tab`/click **run** the selected command, `Esc` dismisses only the palette and keeps the draft);
+  `Tab` **completes** the selected command in the input box with the caret at the end,
+  `Enter`/click **run** it and clear the input, `Esc` dismisses only the palette and keeps the draft);
   with the palette dismissed, `Enter` **sends** the line straight away (a leading `/` line — including
   plugin/registry commands — goes through the chat page's merged command table and never reaches the model);
   `↑`/`↓`/`Tab` walk the focus ring (input box → the four param segments under the box → the quick

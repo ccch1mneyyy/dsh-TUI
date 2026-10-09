@@ -3,6 +3,7 @@ import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { SearchBox } from '../components/SearchBox.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { CommandSuggestions } from '../components/CommandSuggestions.js'
+import type { CommandCompletion } from '../commands.js'
 import { LogoV2 } from '../components/LogoV2.js'
 import type { Brand } from '../branding.js'
 import { resolveLaunchpadLayout, type LaunchpadLayout } from '../components/launchpadLayout.js'
@@ -379,7 +380,7 @@ function KernelCorner({
  * **输入框在这一屏是唯一有状态的部件**：用户敲进去的东西必须原样带进聊天页，
  * 否则"第一屏输入的字"就被这一屏吞了。第六版起行首 `/` 会弹出**命令补全面板**
  * （`commands`/`onCommandPick` 两缝，数据与组件都与聊天页 composer 同源），
- * 面板选中直接执行命令；面板没收掉时整行仍原样交给 `onSubmit`，由 `Chat`
+ * Tab 补全到输入框，Enter/点击执行并清空输入；面板收起时整行原样交给 `onSubmit`，由 `Chat`
  * 走它既有的命令表判定（合并命令表，含 registry 命令）再决定 runCommand 或
  * 发送。本地只读一点：行首是不是 `/`，用来把输入框左边的提示符从 `❯` 换成
  * `⌘`。
@@ -503,10 +504,10 @@ export function Launchpad({
    * 补全**同一个来源、同一个组件**（CommandSuggestions），本屏不另造一套。
    * 不传（或空数组）= 不画面板（孤立回归夹具的默认形态）。
    */
-  commands?: readonly (import('../commands.js').LocalCommand & { descriptionKey?: string; commandLine?: string })[] | undefined
+  commands?: readonly CommandCompletion[] | undefined
   /**
-   * 补全面板选中一条（Enter/Tab/点击）时交给 Chat 的**完整命令行**
-   * （如 /setup 加尾随空格）。Chat 走 runCommand 执行——与聊天页选中命令
+   * 补全面板选中一条（Enter/点击）时交给 Chat 的**完整命令行**
+   * （如 /setup）。Chat 走 runCommand 执行——与聊天页选中命令
    * 同一条路径，绝不是 submit。
    */
   onCommandPick?: ((commandLine: string) => void) | undefined
@@ -558,7 +559,7 @@ export function Launchpad({
 
   // ── 命令补全面板（第六版 BUG 1）──────────────────────────────────────────
   // 与聊天页 composer 同一套契约：行首 / + 有候选 → 面板上屏；↑/↓ 移选中、
-  // Enter/Tab/点击执行选中命令、Esc 只收面板（不清草稿——用户可能只是想
+  // Tab 补全到输入框，Enter/点击执行并清空输入、Esc 只收面板（用户可能只是想
   // 看一眼）。`dismissedFor` 记住"这条 query 被收过"：Esc 之后继续打字
   // （query 变了）面板自然回来，与 PromptInput 的补全行为同源。
   const [paletteIndex, setPaletteIndex] = React.useState(0)
@@ -570,7 +571,8 @@ export function Launchpad({
   const paletteSelectedIndex = Math.min(paletteIndex, Math.max(0, paletteCommands.length - 1))
   const paletteSelected = paletteCommands[paletteSelectedIndex]
   const pickCommand = (commandLine: string): void => {
-    setPaletteDismissedFor(query)
+    setPaletteDismissedFor('')
+    setPaletteIndex(0)
     if (onCommandPick !== undefined) onCommandPick(commandLine)
   }
 
@@ -792,7 +794,7 @@ export function Launchpad({
       }
     }
     // 命令补全面板（第六版 BUG 1）：面板开着时 ↑/↓/Enter/Tab/Esc 全归面板——
-    // 与聊天页 composer 的补全菜单同一套键位。Enter/Tab/点击 = 执行选中命令
+    // 与聊天页 composer 的补全菜单同一套键位。Tab 补全；Enter/点击执行选中命令
     // （onCommandPick → Chat 的 runCommand，绝不 submit）；Esc 只收面板，
     // 草稿一字不动（用户可能只是想看一眼有什么命令）。
     if (paletteOpen && paletteSelected !== undefined) {
@@ -802,8 +804,17 @@ export function Launchpad({
         event.stopImmediatePropagation()
         return
       }
-      if (key.tab || isPlainReturn(key)) {
-        pickCommand(paletteSelected.commandLine ?? '/' + paletteSelected.name + ' ')
+      if (key.tab) {
+        if (!key.shift) {
+          const replacement = paletteSelected.replacement
+          setPaletteIndex(0)
+          onQueryChange(replacement, replacement.length)
+        }
+        event.stopImmediatePropagation()
+        return
+      }
+      if (isPlainReturn(key)) {
+        pickCommand(paletteSelected.commandLine)
         event.stopImmediatePropagation()
         return
       }
@@ -1040,7 +1051,7 @@ export function Launchpad({
                   onPick={(index) => {
                     const command = paletteCommands[index]
                     if (command !== undefined) {
-                      pickCommand(command.commandLine ?? '/' + command.name + ' ')
+                      pickCommand(command.commandLine)
                     }
                   }}
                 />

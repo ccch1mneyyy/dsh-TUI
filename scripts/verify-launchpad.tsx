@@ -55,6 +55,7 @@ import { stringWidth } from '../src/ink/stringWidth.js'
 import type { KernelOption } from '../src/components/kernelCatalog.js'
 import type { Brand } from '../src/branding.js'
 import type { SplashEgg } from '../src/components/splashEggs.js'
+import type { CommandCompletion } from '../src/commands.js'
 
 const { Terminal: XTerm } = xterm
 const [
@@ -216,11 +217,7 @@ interface OpenOptions {
   /** 高探针面板：探针行加六行空白，覆盖部分大字。 */
   overlayPanelTall?: boolean
   /** 提供时才显示命令补全面板。 */
-  commands?: readonly { name: string; description: string; commandLine?: string }[]
-  /** 提供时才显示命令补全面板。 */
-  commands?: readonly { name: string; description: string; commandLine?: string }[]
-  /** 提供时才显示命令补全面板。 */
-  commands?: readonly { name: string; description: string; commandLine?: string }[]
+  commands?: readonly CommandCompletion[]
   /** 模拟键盘交给覆盖层处理。 */
   inputPaused?: boolean
   /** Tips 轮换间隔。 */
@@ -2149,8 +2146,8 @@ for (const cols of [120, 100, 72, 60, 48]) {
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, {
     commands: [
-      { name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup ' },
-      { name: 'help', description: 'Show shortcuts', commandLine: '/help ' },
+      { name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup', replacement: '/setup ' },
+      { name: 'help', description: 'Show shortcuts', commandLine: '/help', replacement: '/help ' },
     ],
   })
   await s.send('/')
@@ -2160,33 +2157,43 @@ for (const cols of [120, 100, 72, 60, 48]) {
   // 面板选中（Enter）= 执行命令（onCommandPick），不是 submit。
   await s.send('\r')
   check('K2 面板开着时 Enter 执行选中命令（onCommandPick，绝不 submit）',
-    last(ev, 'command')?.value === '/setup ' && last(ev, 'submit') === undefined,
+    last(ev, 'command')?.value === '/setup' && last(ev, 'submit') === undefined,
     JSON.stringify(ev.slice(-2)))
   s.close()
 }
 {
-  // ↓ 移选中、Enter 执行第二条；Tab 与 Enter 同路径。
+  // ↓ 移选中、Enter 执行第二条；Tab 只补全。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, {
     commands: [
-      { name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup ' },
-      { name: 'help', description: 'Show shortcuts', commandLine: '/help ' },
+      { name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup', replacement: '/setup ' },
+      { name: 'help', description: 'Show shortcuts', commandLine: '/help', replacement: '/help ' },
     ],
   })
   await s.send('/')
   await s.send('\u001b[B')
   await s.send('\r')
-  check('K3 ↓ 移到第二条、Enter 执行那一条', last(ev, 'command')?.value === '/help ',
+  check('K3 ↓ 移到第二条、Enter 执行那一条', last(ev, 'command')?.value === '/help',
     JSON.stringify(last(ev, 'command')))
   s.close()
   const ev2: Ev[] = []
   const s2 = await openLaunchpad(ev2, {
-    commands: [{ name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup ' }],
+    commands: [{ name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup', replacement: '/setup ' }],
   })
   await s2.send('/')
+  await s2.send('\u001b[Z')
+  check('K4a 补全面板开着时 Shift+Tab 不执行命令、不改变输入或焦点',
+    last(ev2, 'command') === undefined && last(ev2, 'query')?.value === '/'
+      && last(ev2, 'focus')?.value === -1,
+    JSON.stringify(ev2))
   await s2.send('\t')
-  check('K4 Tab 也是执行选中命令（与聊天页补全菜单同键位）',
-    last(ev2, 'command')?.value === '/setup ' && last(ev2, 'submit') === undefined,
+  check('K4 Tab 只补全选中命令，保留尾随空格并把光标移到末尾',
+    last(ev2, 'command') === undefined && last(ev2, 'submit') === undefined
+      && last(ev2, 'query')?.value === '/setup ' && last(ev2, 'query')?.cursor === '/setup '.length,
+    JSON.stringify(ev2.slice(-2)))
+  await s2.send('x')
+  check('K4b Tab 补全后继续输入接在命令末尾',
+    last(ev2, 'query')?.value === '/setup x' && last(ev2, 'command') === undefined,
     JSON.stringify(ev2.slice(-2)))
   s2.close()
 }
@@ -2194,7 +2201,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   // Esc 只收面板（草稿不动）；收掉后 Enter 才走 onSubmit 原文。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, {
-    commands: [{ name: 'help', description: 'Show shortcuts', commandLine: '/help ' }],
+    commands: [{ name: 'help', description: 'Show shortcuts', commandLine: '/help', replacement: '/help ' }],
   })
   await s.send('/he')
   await settled(() => s.screen().includes('help'))
@@ -2212,7 +2219,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   // 普通文本走 submit，不触发 onCommandPick。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, {
-    commands: [{ name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup ' }],
+    commands: [{ name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup', replacement: '/setup ' }],
   })
   await s.send('h')
   await s.send('i')
@@ -2226,12 +2233,12 @@ for (const cols of [120, 100, 72, 60, 48]) {
   // 鼠标：点面板里的命令行 = 选中执行（与 Enter 同路径）。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, {
-    commands: [{ name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup ' }],
+    commands: [{ name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup', replacement: '/setup ' }],
   })
   await s.send('/')
   await s.click('setup')
   check('K8 点击面板命令行执行该命令（不是点空白）',
-    last(ev, 'command')?.value === '/setup ' && last(ev, 'blank') === undefined,
+    last(ev, 'command')?.value === '/setup' && last(ev, 'blank') === undefined,
     JSON.stringify(ev.slice(-2)))
   s.close()
 }

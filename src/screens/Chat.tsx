@@ -1506,7 +1506,7 @@ export function Chat({
   }, [launchpadCoverScreenUp])
   /**
    * 从落地页出发的交互要开整屏前先授权（配合 `launchpadGate`）：调用点只在
-   * 落地页自己的回调里（onAction / onCommandPick / onEscape 的会话浏览路）。
+   * 落地页自己的回调里（onAction / onSubmit / onCommandPick / onEscape）。
    * 异步误置真的整屏状态没有这道授权 → 闸门挡下，落地页留在最上层。
    */
   const authorizeLaunchpadCover = (): void => { launchpadCoverRef.current = true }
@@ -2442,7 +2442,7 @@ export function Chat({
   }
 
   /**
-   * Close the launchpad and hand the draft to the chat screen.
+   * Submit launchpad input or a selected command through the chat routes.
    *
    * THREE cases, and they are genuinely different:
    *
@@ -2453,6 +2453,8 @@ export function Chat({
    *     decides whether the line is a command — isLocalCommandName alone missed
    *     registry-only names (e.g. /plan, /goal), which then fell through to
    *     channel.submit and went to the model as a user message.
+   *     Picker and full-screen commands keep the launchpad mounted underneath;
+   *     the consumed command is cleared before either surface opens.
    *   - ordinary text  → SENT DIRECTLY (fifth revision, user-reported bug:
    *     "按了回车就直接进入流式输出"). The line rides the composer's own
    *     submit path (`channel.submit`, which queues through the DSH inbox
@@ -2463,9 +2465,8 @@ export function Chat({
    * History is appended for the two non-empty cases (matching what PromptInput
    * does on submit) so the launchpad's first line is reachable with ↑ later.
    */
-  const closeLaunchpad = React.useCallback((submit: string): void => {
+  const submitLaunchpad = (submit: string): void => {
     const text = submit.trim()
-    setLaunchpadOpen(false)
     // 首启时 openHomeOnBoot 与落地页同时为真：会话浏览器已经开着、只是被落地页盖住。
     // 提交首句后必须把它收掉，否则用户落到浏览器而不是"草稿就在眼前的对话"，
     // 与本函数 doc 承诺的落点直接矛盾。
@@ -2473,7 +2474,10 @@ export function Chat({
     setLaunchpadFocus(-1)
     setLaunchpadDraft('')
     setLaunchpadCaret(0)
-    if (text === '') return
+    if (text === '') {
+      setLaunchpadOpen(false)
+      return
+    }
     void appendHistory(text)
     const parsed = text.startsWith('/') ? parseCommandName(text) : undefined
     // 第八版：/help 在落地页上也是盖屏浮层（补全面板被 Esc 收掉后直接
@@ -2491,14 +2495,20 @@ export function Chat({
       || isHiddenCommandName(parsed.name)
       || channel.commandList.some(entry => entry.name === parsed.name)
     )) {
+      if (launchpadScreenCommands.has(parsed.name)) {
+        authorizeLaunchpadCover()
+      } else if (!overlayCommandNames.has(parsed.name)) {
+        setLaunchpadOpen(false)
+      }
       void runCommand(parsed.name, parsed.rawInput)
       return
     }
     // 直接发送：与 composer 回车同一条提交路径。发出去之后输入框是空的
     // （内容已作为首轮发出，绝不"既发了又留在框里"），也没有交接提示——
     // 没有草稿要交，一句"已放进输入框"的 toast 反而是假的。
+    setLaunchpadOpen(false)
     channel.submit(text)
-  }, [channel, launchpadOpen])
+  }
 
   /**
    * The screen's command dispatcher. Every entry point reaches this one
@@ -4239,7 +4249,7 @@ export function Chat({
     // The launchpad owns the whole terminal while it is up — including the
     // plain letters that would otherwise reach the composer, which is exactly
     // the point: it IS the composer on this screen, and its draft is submitted
-    // directly (see closeLaunchpad). ONE exception (fifth revision): a picker
+    // directly (see submitLaunchpad). ONE exception (fifth revision): a picker
     // opened from the param row renders ABOVE the launchpad and therefore owns
     // the keyboard — fall through to the overlay branches below (Esc closes the
     // picker back onto the launchpad). The launchpad's own useInput is paused
@@ -5892,7 +5902,7 @@ export function Chat({
           // 第七版：明确选中一个会话 = 有意导航（与 Esc「退出」相对）——浏览页
           // 与盖在它底下的落地页**一起收**，人落在那个会话的聊天页。只收浏览页
           // 会露出启动页，正是用户实测的「选完会话还是回到启动页」。落地页的
-          // 草稿/焦点也按 closeLaunchpad 同一口径清掉（进入的是别的会话，旧草稿
+          // 草稿/焦点也按 submitLaunchpad 同一口径清掉（进入的是别的会话，旧草稿
           // 不该跟过去）。
           setLaunchpadOpen(false)
           setLaunchpadFocus(-1)
@@ -6199,7 +6209,7 @@ export function Chat({
           setLaunchpadDraft(text)
           setLaunchpadCaret(cursor)
         }}
-        onSubmit={closeLaunchpad}
+        onSubmit={submitLaunchpad}
         onFocusChange={setLaunchpadFocus}
         onAction={(action) => {
           // 第八版（用户实测：「刚点帮助，不知道为什么直接进入聊天页面了」）：
@@ -6259,24 +6269,7 @@ export function Chat({
             ? undefined
             : channel.commandCompletions(launchpadDraft)
         }
-        onCommandPick={(commandLine) => {
-          // 补全面板选中（Enter/Tab/点击）：走 runCommand，与快捷入口同一条
-          // 白名单口径——覆盖层与整屏命令（第七版 launchpadScreenCommands）
-          // 不收落地页（盖在它之上），其余收掉再执行。/help 与快捷入口同一条
-          // 拦截：盖屏浮层，不进对话页（第八版）。
-          const parsed = parseCommandName(commandLine)
-          if (parsed === undefined) return
-          if (parsed.name === 'help') {
-            dispatchOverlay({ type: 'open', overlay: { kind: 'help' } })
-            return
-          }
-          if (launchpadScreenCommands.has(parsed.name)) {
-            authorizeLaunchpadCover()
-          } else if (!overlayCommandNames.has(parsed.name)) {
-            setLaunchpadOpen(false)
-          }
-          void runCommand(parsed.name, parsed.rawInput)
-        }}
+        onCommandPick={submitLaunchpad}
         cwd={channel.displayCwd}
         branch={channel.gitBranch}
         tuiVersion={tuiVersion}
