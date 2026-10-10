@@ -65,13 +65,13 @@ A complete common override looks like this:
 | `effortDefault` | unset | Default reasoning effort for new sessions (the `/settings` user layer; an explicit value outranks the persisted `/effort` choice); `auto` defers to the persisted choice and `effort`; editable through `/settings` |
 | `whale` / `whaleIdle` | `true` / `true` | Header whale and welcome-page idle animation |
 | `splashFont` | `daily` | Big-text face on the header splash: `daily` rotates by local date (the default), any other value is a face id (`bold` / `square` / `bevel` / `wide` / `dot` / `stencil` / `classic` / `slab`) pinning that one; an unknown value falls back to `daily`. Also editable through `/settings` |
-| `whaleGirl` | `false` | Swap the header's pixel whale for the maid: real raster FIRST (Kitty/Sixel); falls back to the character-art maid without them |
+| `whaleGirl` | `false` | Maid-portrait toggle: While Companion skin is deepy or whaleGirl, the splash art is that mascot and the Maid-portrait toggle has no effect; set Companion skin to whale to use the maid portrait. "Companion skin" is `companion.skin`; when the toggle does apply, the portrait renders the real raster through the terminal image protocols (Kitty/Sixel) and falls back to the character-art maid without them. See the precedence table below |
 | `minimal` | `false` | Minimal UI (极简界面): reduce header decoration and colors. **A display switch only** — a different thing from the kernel's `minimal` agent preset under `preset` below (that one decides which tools the model can use) |
 | `sidePanel.splitEnabled` | `true` (boolean) | Master switch of the split layout: on, `Ctrl+B` and `/panel` open the side column next to the chat; off, neither splits and `/jobs` & co. keep their full-screen panels. Applies immediately |
 | `sidePanel.open` | `false` (boolean) | Whether a session opens with the sidebar already expanded; off by default, so the upgrade leaves the layout as it was. An in-session `Ctrl+B` / `/panel toggle` is not written back here. Applies immediately |
 | `sidePanel.ratio` | `0.68` (number, 0.1–0.95) | Chat column as a fraction of the content width; while the panel has focus, `+`/`-` nudge it live for the current session (not written back). Applies immediately |
 | `sidePanel.panels` | `todo,jobs,agents,info,trajectory,workspace,btw,companion` (comma-separated text) | All eight built-in panels are enabled by default; this controls their ids and order. A well-formed id no panel claims yet stays in the tab bar for a plugin to register later; a malformed entry is refused. The `⤢` on the right edge of the bar blows the active panel up to full screen (drawn only for panels that declare a fullscreen form). Applies immediately |
- | `companion.skin` | `deepy` | Skin of the companion-panel pet: `deepy` (default, the deepy whale kit), `whaleGirl` (the whale-girl sticker pack, 22 animations incl. interaction reactions) or `whale` (the splash's layered pixel whale); the panel is enabled by default and can be changed in `sidePanel.panels`. Applies immediately |
+| `companion.skin` | `deepy` | Skin of the companion-panel pet: `deepy` (default, the deepy whale kit), `whaleGirl` (the whale-girl sticker pack, 22 animations incl. interaction reactions) or `whale` (the splash's layered pixel whale); the panel is enabled by default and can be changed in `sidePanel.panels`. **It also picks the splash (header) art slot**: while Companion skin is deepy or whaleGirl, that mascot takes the slot (neither the pixel whale nor the maid portrait is drawn) and the Maid-portrait toggle (`whaleGirl`) has no effect; set Companion skin to whale to get the original path back (the pixel whale, or the maid portrait once the toggle is on). Applies immediately; see the precedence table below |
 | `btw.contextTurns` | `4` (number, 1–8) | Completed Q/A pairs a `/btw` follow-up carries; older pairs stay in the thread and panel but are not sent. Applies immediately |
 | `btw.contextBudget` | `24000` (number, 1000–200000) | Character budget for the recent Q/A pairs a `/btw` follow-up carries; the oldest pairs drop first. Applies immediately |
 | `codeFrameStyle` | `light` | Frame of fenced code blocks in replies: `light` is a top label plus a left rail and costs no extra rows; `full` closes the box. Very narrow terminals always use a plain fence. Applies immediately |
@@ -86,6 +86,16 @@ A complete common override looks like this:
 | `preset` | roster default `standard` | Agent preset for new sessions; precedence: `DSH_TUI_PRESET` (this run) > the persisted `/preset` choice > this field (deployment default) > the roster default |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
 | `backend` | unset (the backend `/kernel` remembers, else `dsh`) | Session backend: the built-in `dsh`, or an installed backend (the experimental `claude` / `codex`, plus plugin backends; case-insensitive). **An unknown or uninstalled value starts on `dsh` with a warning**, never a crash. The profile row reads `DSH_TUI_BACKEND`, which `dsh-tui --backend <id>` sets. See [Claude backend](claude-backend.en.md) |
+
+`companion.skin` and the Maid-portrait toggle (`whaleGirl`) share the splash (header) art slot with this precedence:
+
+| `companion.skin` | Splash (header) art slot | Maid-portrait toggle |
+| --- | --- | --- |
+| `deepy` (default) | the Deepy mascot (letter-grid animation only — no raster) | **No effect** |
+| `whaleGirl` | Whale-girl mascot (real image through the image protocol; letter-grid fallback without it) | **No effect** |
+| `whale` | Original path: the pixel whale; the maid portrait once the Maid-portrait toggle is on (real image preferred, character-art fallback) | **Applies** |
+
+Caveat: with brand set to claude the splash art slot is always the Claude girl; this table does not apply.
 
 ### Precedence and force-off
 

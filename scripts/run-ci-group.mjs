@@ -152,6 +152,8 @@ const GROUPS = {
 // 焦点序跳过标题直达字段），page 组与无 mode 的旧默认仍走子页；空的
 // inline 组不渲染孤儿标题。
     ["verify-settings-root-inline", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-root-inline.tsx']],
+// 跨文件文案契约回归：女仆娘立绘与宠物皮肤的抢占口径在 configuration / user-guide / README 与随包手册副本里必须同一句（缺句/旧串回流/副本漂移都逐条点名）：
+    ["verify-maid-portrait-precedence", ['node', '--import', 'tsx/esm', 'scripts/verify-maid-portrait-precedence.ts']],
     ["repro-inline-scrollback", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-scrollback.tsx']],
     ["repro-inline-thirdparty", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-thirdparty.tsx']],
 // 安全回归：OSC 出口控制字符剥离 + 超链接 scheme 门禁（安全审查

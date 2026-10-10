@@ -4,6 +4,12 @@
  *   from a definition (settingField(key)), and every definition is used;
  * - the editable Config keys derived from the definitions are Config fields
  *   and still include every key of the hand-written list they replaced;
+ * - every setting that decides the header splash art opens its hint with the
+ *   frozen short core (`companion.skin` owns the slot, `whaleGirl` only takes
+ *   effect under it, `whale` paints the header art), so the precedence is
+ *   readable from the row itself and can never drift back to the wording the
+ *   pre-change hints used — a substring check was satisfied by that wording
+ *   and by a semantically inverted sentence (independent review A-F2);
  * - scripts/gen-settings-json.mjs validates the definitions (both
  *   languages, option labels, sorted keys) against the compiled lib.
  * Run: node --import tsx/esm scripts/verify-settings-definitions.ts
@@ -73,6 +79,57 @@ assert.deepEqual(
   [],
   'every built-in setting names a group',
 )
+
+// The splash-art precedence is a contract between three settings: the companion
+// skin picks the slot, the maid portrait only takes effect while the skin is
+// `whale`, and the header-art row states who decides that slot. Whoever reads a
+// /settings row must find that rule in that row's own hint, so each hint opens
+// with the frozen short core from TASK.md («冻结表述 B v3» for the first two,
+// «冻结表述 D» for `whale`) — verbatim, prefix-anchored. Substring presence is
+// not a contract: the pre-change wording and a semantically inverted
+// `Set it to deepy …` both satisfied it (independent review A-F2). Only the
+// detail sentence after the core stays free to be compressed again for the hint
+// budget; no sentence length is frozen here (L-025).
+type HintKey = 'companion.skin' | 'whaleGirl' | 'whale'
+
+const SHORT_CORES: Record<HintKey, Record<'en' | 'zh', string>> = {
+  'companion.skin': {
+    en: 'Also picks the splash art. Set it to whale to keep the maid portrait.',
+    zh: '同时决定开屏艺术槽。设为 whale 才保留女仆娘立绘。',
+  },
+  whaleGirl: {
+    en: 'Set Companion skin to whale, not deepy/whaleGirl.',
+    zh: '宠物皮肤要设为 whale，不要 deepy/whaleGirl',
+  },
+  whale: {
+    en: 'Header art: the companion mascot, the pixel whale, or the maid portrait (Companion skin decides).',
+    zh: '标题图形：宠物皮肤决定吉祥物，或像素鲸鱼／女仆娘立绘。',
+  },
+}
+
+// Values the detail sentence after the core must still spell out. A value must
+// appear as a whole token: a bare `whale` must not be satisfied by the
+// `whaleGirl` token sitting next to it. Split instead of building a regex, so a
+// value can never be read as a pattern.
+const NAMED_VALUES: Record<HintKey, readonly string[]> = {
+  'companion.skin': ['whale', 'whaleGirl'],
+  whaleGirl: ['whale', 'deepy'],
+  whale: [],
+}
+
+for (const key of Object.keys(SHORT_CORES) as HintKey[]) {
+  for (const lang of ['en', 'zh'] as const) {
+    const definition = SETTING_DEFINITIONS[key]
+    const hint = (lang === 'zh' ? definition.hintDescriptions?.zh : definition.hint) ?? ''
+    const label = lang === 'zh' ? `${key} hintDescriptions.zh` : `${key} hint`
+    assert.notEqual(hint, '', `${label} is present`)
+    assert.ok(hint.startsWith(SHORT_CORES[key][lang]),
+      `${label} opens with the frozen short core ${JSON.stringify(SHORT_CORES[key][lang])}: ${JSON.stringify(hint)}`)
+    for (const value of NAMED_VALUES[key]) {
+      assert.ok(hint.split(/[^A-Za-z0-9_]+/).includes(value), `${label} names the value ${value}: ${JSON.stringify(hint)}`)
+    }
+  }
+}
 
 const generated = spawnSync(process.execPath, [`${root}scripts/gen-settings-json.mjs`, '--check'], { encoding: 'utf8' })
 assert.equal(generated.status, 0, `settings.json generation fails:\n${generated.stderr}`)

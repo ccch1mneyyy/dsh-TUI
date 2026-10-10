@@ -305,6 +305,7 @@ one-column seam between the two surfaces.
   drags, plus its own hearts and thumbs-up) or `whale` (the splash's pixel whale). **On terminals
   with an image protocol (kitty/sixel) whaleGirl renders at native 240px with all 267 frames**
   (transparent float, decoded on demand); without one it falls back to the character-art form.
+  The skin also decides who owns the **splash (header) art slot**: **While Companion skin is deepy or whaleGirl, the splash art is that mascot and the Maid-portrait toggle has no effect; set Companion skin to whale to use the maid portrait.** See the three-row precedence table under the `companion.skin` / `whaleGirl` rows in `docs/configuration.en.md`.
 
 | Subcommand | Effect |
 |---|---|
@@ -531,7 +532,7 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 
 - **Intro animation** (~3.4 s, three picked each launch, `/deepseek` egg re-rolls): classic / heart / sleep.
 - **Welcome idle animation** (`whaleIdle`, default on): fin, blink, tail wag, sleeps with Z after 10 s idle; **click to show a heart and wake it**.
-- **Maid portrait** (`whaleGirl`, default off): swaps the header's pixel whale for the author-drawn maid — FIRST as a **real raster** through the terminal image protocols (Kitty/Sixel); terminals without graphics support fall back to the character-art maid. **Click her** and she turns into the "happy" portrait for a few seconds, then eases back on her own; the first agent task freezes her (no more reactions).
+- **Maid portrait** (`whaleGirl`, default off): with Companion skin set to `whale`, the header art slot shows the maid portrait — a **real raster** through the terminal image protocols (Kitty/Sixel) when available, falling back to the character-art maid otherwise. **Click her** and she turns into the "happy" portrait for a few seconds, then eases back on her own; the first agent task freezes her (no more reactions). **While Companion skin is deepy or whaleGirl, the splash art is that mascot and the Maid-portrait toggle has no effect; set Companion skin to whale to use the maid portrait.** See the three-row precedence table under the `companion.skin` / `whaleGirl` rows in `docs/configuration.en.md`.
 - After the first agent task, it freezes to a static frame (`/new` re-enters the welcome period).
 - Text column right of the whale: `✦ dsh-TUI v版本号` →
   `DEEPSEEK / HARNESS` big text (bold glyphs, both rows the same width, one blank row between) →
@@ -608,7 +609,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | whale | pixel whale header (default on); three intro animations picked per launch (classic/heart/sleep), `/deepseek` egg re-rolls |
 | whaleIdle | whale welcome idle animation (default on): fin/tail/blink, sleeps with Z after 10 s idle; click for a heart. Freezes after the first task |
 | splashFont | big-text face on the header splash: Daily rotation (default, changes with the local date) / bold / square / bevel / wide / dot matrix / stencil / thin (classic) / slab. Picking a face pins it; picking Daily rotation restores the rotation. Applies immediately |
-| whaleGirl | maid portrait (default off): swaps the header's pixel whale for the author-drawn maid as a **real raster** (Kitty/Sixel); falls back to the pixel whale without graphics support |
+| whaleGirl | maid portrait (default off): **While Companion skin is deepy or whaleGirl, the splash art is that mascot and the Maid-portrait toggle has no effect; set Companion skin to whale to use the maid portrait.** With Companion skin set to `whale` it shows the maid portrait as a **real raster** (Kitty/Sixel), falling back to the character-art maid without graphics support. See the three-row precedence table in `docs/configuration.en.md` |
 | diffLayout | Edit/Write diff layout: auto (two columns ≥110 cols) / split / unified |
 | thinkingFold | thinking block: preview (2-3 line preview + folded when settled) / full (expanded to end of turn) |
 | btw.contextBudget | Total character budget of recent Q/A pairs carried into a `/btw` follow-up (default 24000, range 1000-200000); oldest whole pairs are dropped first. Applies immediately |

@@ -284,6 +284,8 @@ OpenAI 条款约束。完整操作与当前边界：[Codex 后端](docs/codex-ba
 
 Agent 预设、主题、MCP 服务器、环境变量：[配置参考](docs/configuration.md) · [主题系统](docs/themes.md)。
 
+宠物皮肤为 deepy 或 whaleGirl 时，开屏（标题）艺术槽由该吉祥物占据，「女仆娘立绘」开关不生效；把宠物皮肤设为 whale 才会用女仆娘立绘。详见[配置参考](docs/configuration.md)。
+
 ## 工作原理
 
 ```text

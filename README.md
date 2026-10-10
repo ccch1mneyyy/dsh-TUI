@@ -330,6 +330,8 @@ Full commands: [Interaction and commands](docs/interaction.en.md).
 
 Agent presets, themes, MCP servers, environment variables: [Configuration](docs/configuration.en.md) · [Themes](docs/themes.en.md).
 
+While Companion skin is deepy or whaleGirl, the splash art is that mascot and the Maid-portrait toggle has no effect; set Companion skin to whale to use the maid portrait. See [Configuration](docs/configuration.en.md).
+
 ## How It Works
 
 ```text
