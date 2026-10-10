@@ -180,9 +180,9 @@ try {
       delete process.env.CODEX_SQLITE_HOME
       process.env.CLAUDE_CONFIG_DIR = join('relative', 'claude')
       check('claude: a relative CLAUDE_CONFIG_DIR declines the snapshot', keyOf(claudeBackend), undefined)
-      process.env.CLAUDE_CONFIG_DIR = 'C:\\Stores\\Claude'
+      process.env.CLAUDE_CONFIG_DIR = join(home, 'Stores', 'Claude')
       const exactCase = keyOf(claudeBackend)
-      process.env.CLAUDE_CONFIG_DIR = 'c:\\stores\\claude'
+      process.env.CLAUDE_CONFIG_DIR = join(home, 'stores', 'claude')
       check('claude: the key keeps the exact path case', keyOf(claudeBackend) !== exactCase, true)
       check('dsh: a relative provider root declines the snapshot', readProviderSnapshot({ name: 'session-persistence-jsonl', config: { root: join('relative', 'root') } }), undefined)
     } finally {
