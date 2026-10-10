@@ -198,6 +198,9 @@ importers:
       yaml:
         specifier: ^2.9.0
         version: 2.9.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: 0.3.287

@@ -2,8 +2,12 @@
  * Lineage decision consulted by `/model` only.
  *
  * `/rewind` and the `/tree` branch also re-create the live session as a child,
- * but they always record `parentSession` and do not call this helper. A blank
- * log cannot reach them (`boundary < 0`). This module is not their gate.
+ * but they decide the lineage themselves and do not call this helper. Their
+ * seeded branch records `parentSession` (`session-rewind.ts:144`,
+ * `session-tree-actions.ts:166`); a cut that holds no conversation takes the
+ * unseeded `createFreshAgent` branch and records none, so that child stands as
+ * its own root on the same reasoning the paragraph below gives. This module is
+ * not their gate.
  *
  * The decision is load-bearing beyond grouping. Upstream's automatic session
  * title only ever runs on a session WITHOUT a parent: `dsh-session-title`

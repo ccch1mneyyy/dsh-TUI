@@ -359,6 +359,15 @@ const GROUPS = {
 // 字节、不得拉回 raw mode——在途回复与鼠标事件由清理后的 re-drain
 // 吞掉，不再落入 shell。
     ["verify-exit-mouse-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-residue.tsx']],
+// 正常退出分支的清理接线回归（ADR-0012 决策 3/5 · AC-5/AC-6）：未发言
+// 会话的 sweep 必须在回合结束后折进 finishExit 的通知（await 的 sweep
+// 永远到不了那里），崩溃 / `/update` / 内核切换 / `/restart` / 启动失败
+// 分支一律不 sweep；恶意依赖只损失回合不损失关机（终端恢复序列与进程
+// 交接原位、fail-soft）；③ 层吃本进程真实视图（绑定会话、注册表活
+// agent、清单血缘），有人类消息无 turn/start 的会话存活，非本进程产出
+// 的清单整份放过而不猜血缘。清退分支是 apply() 内的闭包，其接线按源码
+// 断言（与 verify-shutdown-fallback 同形），被调用的 helper 直接驱动。
+    ["verify-session-cleanup-exit", ['node', '--import', 'tsx/esm', 'scripts/verify-session-cleanup-exit.tsx']],
 // 组件级拖拽协议回归：无修饰左键 press 捕获 drag target，首动 dragstart、
 // 连续 dragmove、release/focus-out/reset 收尾 dragend；未移动仍走 click，
 // 无 handler 与修饰键区域保留基线文本选择；真实 SGR 管线 + 最小滑块消费者。
@@ -635,9 +644,39 @@ const GROUPS = {
     ["verify-session-artifact-cache", ['node', 'scripts/verify-session-artifact-cache.mjs']],
 // 跨进程首屏快照：不等慢枚举、来源隔离、失败保留、空库清空与迟到守卫。
     ["verify-session-list-snapshot", ['node', 'scripts/verify-session-list-snapshot.mjs']],
+// 会话清单投影镜像回归（issue #1342 的可见性面）：TUI 必须注册与 web 宿主
+// **同名同版本**的 sessionListMetadata 投影——定义（键/stateVersion/字段
+// 类型/init）逐项对字面量钉死（宿主侧改动要让本脚本红、而不是静默重开
+// issue），legacy 拼写 schema/viewSchema/view 必须缺席；fold 矩阵含两条
+// 只看值看不到的性质（无变化事件返回同一引用、blank 不回落）；
+// 跨运行时读取按对方等价形状解析并驱动真实 registry 的 restore；同键双
+// 注册的版本判定（首个定义生效、行仍写入）；服务缺失/无 register/版本
+// 冲突必须降级不崩；宿主包可定位时跑真实实现的漂移探针，定位不到则响亮
+// SKIP（含搜索路径与原因），绝不静默通过。
+    ["verify-session-list-metadata", ['node', '--import', 'tsx/esm', 'scripts/verify-session-list-metadata.ts']],
 // 空会话须完整读取后才能判定：截断/损坏、帧数上限、纯图片输入与旧缓存
 // 不得隐藏真实历史或进入清理名单；真实 JSONL 重开验证落盘后的可见性。
     ['verify-session-emptiness', ['node', '--import', 'tsx/esm', 'scripts/verify-session-emptiness.ts']],
+// 未发言会话清理回归（ADR-0012 / 三层判据）：真实临时 sessions 根 + 真 TUI
+// 会话索引，走的是出货实现（store.readIndex、sessionLog 的有界读与删除原语、
+// sessionHistory 的每会话记录）而不是替身——启动壳（含本次运行之前就存在的
+// 「历史」条目）被回收，人类 user/message 无 turn/start 必须保留（宿主自身
+// blank 规则会删的反例），turn/start 与受委托运行及其后代保留，本进程仍持有
+// 的会话（绑定 / 活后台）保留，缺失/悬空/损坏/预算截断的日志只跳过不删并
+// 报出是哪层放过的；对抗用例「索引说 hasPrompt:false 而日志有人类消息」；
+// 恒删/恒留/抽掉日志规则的负控（正例不能被常量满足）；候选上限与每日志事件
+// 预算、依赖抛错不中止本轮（fail-soft）；分区恰好覆盖索引一次（不静默丢），
+// 真 sweep 只删收集到的 id、索引不动、last-used/agent-view/resume 记录被遗忘。
+    ["verify-unspoken-session-sweep", ['node', '--import', 'tsx/esm', 'scripts/verify-unspoken-session-sweep.tsx']],
+// 会话写租约回归（CR-2 / T-FIX-18）：真实 JSONL 持久化后端在临时 sessions 根上为
+// 夹具会话持有独占写租约（Windows 命名内核信号量 / POSIX flock），验证退出清扫
+// 「探不到就不删」——① 被别的写者持有的空壳保留、记为 write-leased（与挂载账本的
+// held-elsewhere 可区分）、日志仍在盘上；② 同一形态但无人持有照旧删除；③ 探针不可用
+// （平台不支持 / 非争用失败）保留；④ 恒返回 free 的探针必须让 ① 变红（锁着的会话
+// 被删）——「完全不看租约」正是修复前那个世界。另覆盖探针失败分类（无服务 / 无方法 /
+// 释放失败 ⇒ unknown）、预扫描的预算与顺序、索引不可读则一无所证，以及退出接线的锚：
+// 先取证 → 再本轮 → 最后组通知。
+    ["verify-session-write-lease", ['node', '--import', 'tsx/esm', 'scripts/verify-session-write-lease.ts']],
 // /resume 会话浏览器按键流回归：子运行折叠/展开、空会话不列出、搜索、
 // Esc 先清查询再退出、rename 后光标按 id 跟随目标（不是按行号）、
 // confirm-delete 只认无修饰 Enter、Esc 取消。真实 Chat 渲染驱动。

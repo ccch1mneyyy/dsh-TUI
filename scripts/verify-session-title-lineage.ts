@@ -77,10 +77,23 @@ const ev = (seq: number, type: string, data: Record<string, unknown> = {}): AnyE
 // ==== 2. 真链路：switchModel 建子会话时写的 meta.parentSession ===============
 const stubAgentCtx = { on: () => () => {} }
 function makeAgent(id: string, sessionId: string, sessionEvents: readonly unknown[]) {
+  // The live Session contract includes the durable `append` the cut-policy
+  // replay uses (`/model` no longer only reads the cut — it writes the facts a
+  // conversation-less cut carries into the unseeded child, T-FIX-17). The
+  // double records them in its own log, and `seq` stays the exclusive offset.
+  const events = [...sessionEvents]
   return {
     id,
     status: 'idle',
-    session: { id: sessionId, seq: sessionEvents.length, events: sessionEvents, header: {} },
+    session: {
+      id: sessionId,
+      get seq() { return events.length },
+      events,
+      header: {},
+      append(type: string, data: Record<string, unknown>): void {
+        events.push({ seq: events.length, time: 1_700_000_000_000 + events.length, type, data })
+      },
+    },
     ctx: stubAgentCtx,
     followup() {},
     steer() {},
@@ -130,12 +143,28 @@ const blankSource = [
   check('blank: switch succeeds and creates exactly one child', switched === true && adopted, `creates=${creates.length}`)
   const meta = (creates[0]?.['meta'] ?? {}) as Record<string, unknown>
   check('blank: the child records no parentSession', meta['parentSession'] === undefined, JSON.stringify(meta))
-  check('blank: the child still inherits the seed', ((creates[0]?.['seed'] ?? []) as unknown[]).length === blankSource.length)
-  // The inherited cut survives the missing lineage: whatever shape the runtime
-  // line encodes it in, a seeded root still marks its prefix as inherited.
+  // T-FIX-10/11/12 changed this semantics ON PURPOSE (declared in PR #1407's
+  // "Change outline"): a source that never held a conversation no longer seeds
+  // its `/model` child at all, so there is no inherited cut left to mark. The
+  // child is created as an ordinary fresh session (`createFreshAgent`: no
+  // `seed`, no `seedLength`/`isSeeded`, no `parentSession`) because the host
+  // materialises the seed prefix BEFORE `session/created` (agent-loop
+  // `appendUnstoredSuffix` → `writer.append` → `persistBatch(…,
+  // isMaterialized: false)` → `materialize()`), which would publish a seeded
+  // child of an empty source as a permission-initialization shell — exactly the
+  // blank sidebar row this change exists to remove. The two checks below are
+  // the previous pair ("still inherits the seed" / "is a seeded root") restated
+  // for that semantics; the `prompted` case keeps the opposite direction.
+  // Evidence: POST-ARCHIVE-ADDENDUM.md §11 (PR #1407 CI forensics) and
+  // T-FIX-10-SUMMARY.md「为什么必须换 createFreshAgent 而不只是 seed: []」.
   check(
-    'blank: the child is a seeded root (the inherited cut is still marked)',
-    meta['isSeeded'] === true || meta['seedLength'] === blankSource.length,
+    'blank: the child starts unseeded (an empty cut copies nothing)',
+    ((creates[0]?.['seed'] ?? []) as unknown[]).length === 0,
+    JSON.stringify(creates[0]?.['seed'] ?? null),
+  )
+  check(
+    'blank: the child is a fresh root (no inherited cut is marked)',
+    meta['isSeeded'] === undefined && meta['seedLength'] === undefined,
     JSON.stringify(meta),
   )
 }
@@ -154,6 +183,15 @@ const blankSource = [
   check(
     'prompted: the child still records the source as its parent',
     String(meta['parentSession']) === 'source-session',
+    JSON.stringify(meta),
+  )
+  // The opposite direction of the `blank` pair above, and the reason the fix is
+  // a verdict instead of "never seed": a source that holds a conversation still
+  // copies its whole prefix and still marks that cut as inherited.
+  const seed = (creates[0]?.['seed'] ?? []) as unknown[]
+  check(
+    'prompted: the child still inherits the whole source prefix',
+    seed.length > 0 && (meta['isSeeded'] === true || meta['seedLength'] === seed.length),
     JSON.stringify(meta),
   )
 }

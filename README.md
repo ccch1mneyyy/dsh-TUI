@@ -316,7 +316,7 @@ Shortcuts sit below the title and effort levels have their own section; DSH, Cla
 In `/provider`'s model list, focus a model and press `Tab` to edit its context window, max output tokens, reasoning efforts, and image input capability.
 
 The session manager focuses the most recently used session in the current workspace; if there is no history, it focuses the new-session card. Press `←` to move to the workspace rail. It paints the last successful list immediately while it checks the persistence store for changes. This first-paint snapshot survives restarts on DSH, Claude and Codex and is isolated by backend and storage directory. On a cold Codex scan, pages appear as they arrive. Titles that require a deeper DSH log scan appear first with a fallback name and update in place when recovery finishes.
-With DSH's current JSONL backend, startup and `/new` keep initial permission events in memory until further session activity or an explicit durability flush saves the complete log. Restarting an unstored empty session starts fresh.
+With DSH's current JSONL backend, startup and `/new` keep initial permission events in memory until further session activity saves the complete log; an explicit durability flush still runs, but it saves nothing for a session that holds only that initialization. Restarting an unstored empty session starts fresh. A normal exit removes sessions no human ever spoke in.
 Removing a workspace registration keeps its sessions accessible under a "History only" directory in the rail.
 History-only directories offer edit and new-session actions; rename and remove are available for registered workspaces.
 

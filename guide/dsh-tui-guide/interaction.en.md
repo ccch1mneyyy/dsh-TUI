@@ -405,6 +405,15 @@ those sessions as usual — "no registration" is not "no history".
 
 - The group lives only inside this screen and is never written back to the registry.
 
+On a normal exit (`/exit`, `/quit`, `/q`, a double `Ctrl+C` while idle, `Ctrl+D`), the TUI
+removes sessions **no human has ever spoken in** — leftovers from earlier runs included —
+and, when anything was cleaned, reports the count in its exit notice.
+
+- Only that path sweeps: hand-offs (`/update`, kernel switch, `/restart`), crashes and
+  signal-driven exits leave sessions alone.
+- A session with any human message (even if its turn never started) and any sub-agent are
+  **never removed**.
+
 **Behaviour changes versus the old screens** (deliberately removed, and no longer covered by regressions):
 
 - Session-level right-click menu (rename/delete one session).

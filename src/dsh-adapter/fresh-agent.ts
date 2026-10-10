@@ -59,7 +59,77 @@ function captureWriter(source: JsonlPersistence, id: string, receive: (writer: S
   }
 }
 
-const INITIAL_POLICY_EVENTS = new Set(['permission/preset', 'sandbox/mode', 'approval/policy', 'plan/mode'])
+/**
+ * The session-policy vocabulary the deferral holds back: the facts a fresh
+ * session may already carry without being published. Exported as the ONE
+ * definition of that set — the four seeded channel actions replay exactly
+ * these into an unseeded child, and appending any other type would start the
+ * deferral and publish the very shell the unseeded branch exists to avoid
+ * (`latestPolicyFacts`, `unspoken-sessions.ts`).
+ *
+ * This set is the policy ATOMS only. The policy plane a switch leaves behind
+ * is wider — see {@link isPolicyPlaneActivity}.
+ */
+export const INITIAL_POLICY_EVENTS: ReadonlySet<string> = new Set(['permission/preset', 'sandbox/mode', 'approval/policy', 'plan/mode'])
+
+/** The command envelope a session-policy switch runs through. */
+const POLICY_ACTIVITY_EVENTS: ReadonlySet<string> = new Set(['command/run', 'command/done'])
+
+/**
+ * Whether a message's `source` marks it as typed by the person at the
+ * keyboard — `digest.ts:66-70`, verbatim: plugin injections, instruction
+ * snapshots, skill catalogues and sub-agent reports all arrive as user-role
+ * messages too, and counting them would spare every shell there is.
+ *
+ * Defined HERE because the deferral needs it too and `unspoken-sessions.ts`
+ * already imports this module (the reverse import would be a cycle); the cut
+ * verdict and the exit sweep import it back, so "a person spoke here" keeps one
+ * definition across the deferral, the verdict and the sweep.
+ */
+export function isHumanSource(source: unknown): boolean {
+  if (source === undefined || source === null) return true
+  if (typeof source !== 'object') return false
+  return (source as Record<string, unknown>)['kind'] === 'user'
+}
+
+/**
+ * Whether one event is policy-plane bookkeeping the deferral holds back rather
+ * than something a person can see: the initialization atoms, the command
+ * ENVELOPE a policy switch runs through, and the inbox splice that carries only
+ * its notice.
+ *
+ * Why the envelope counts: switching the permission preset (Shift+Tab,
+ * `/permission`, or the official switch the TUI drives) executes the registry
+ * command the host exposes for it (`mode-permission.ts`'s
+ * `executeRegistryCommand('permission', …)`), and the command service logs
+ * `command/run` + `command/done` around it. Those types are outside
+ * {@link INITIAL_POLICY_EVENTS}, so the deferral used to start on the first of
+ * them and publish a permission-only shell — measured on a real tree
+ * (2026-10-10): an idle fresh session that only switched preset stored an
+ * 11-event log, which is the 「未命名」 row this change exists to remove.
+ *
+ * Both safe directions are kept: a splice that carries a HUMAN message is
+ * conversation and publishes (the live prompt delivers the typed message
+ * through exactly that event), and an unreadable splice payload publishes too —
+ * "the log does not say" must never become "the log says no" (the same widening
+ * `conversationEvidence` applies on the sweep side).
+ *
+ * @param event - One session event, in arrival order.
+ * @returns True when the deferral must keep waiting for conversation.
+ */
+export function isPolicyPlaneActivity(event: SessionEvent): boolean {
+  if (INITIAL_POLICY_EVENTS.has(event.type) || POLICY_ACTIVITY_EVENTS.has(event.type)) return true
+  if (event.type !== 'agent/inbox/spliced') return false
+  const inserted = (event.data as { readonly inserted?: unknown } | undefined)?.inserted
+  if (!Array.isArray(inserted)) return false
+  for (const message of inserted) {
+    if (message === null || typeof message !== 'object') continue
+    const entry = message as Record<string, unknown>
+    if (entry['role'] === 'user' && isHumanSource(entry['source'])) return false
+  }
+  return true
+}
+
 const unstoredSessions = new WeakSet<Session>()
 
 /** Initialization-only fresh session with no persistence requested yet. */
@@ -114,7 +184,15 @@ function deferInitialPolicy(ctx: Context, session: FilteredSession, writer: Sess
   })().finally(() => { draining = undefined })
 
   const guardedFlush = async (): Promise<void> => {
-    start()
+    // Counterpart of guardedClose: a flush does not publish a session either
+    // while it only holds initialization. Host consumers checkpoint a session
+    // without any real work — the projection cache flushes from its
+    // `session/created` hook and from its own event throttle — and an
+    // unconditional drain here re-materialized exactly the permission-only
+    // shell the deferral exists to keep out of JSONL. The listener still
+    // participates, so `ctx.sessions.flush()` keeps reporting a durability
+    // listener; it just has nothing to record before the first real event.
+    if (!started) return
     await drain()
     await flush.call(writer)
   }
@@ -140,7 +218,7 @@ function deferInitialPolicy(ctx: Context, session: FilteredSession, writer: Sess
     }
   }, 'dsh-tui fresh session policy')
   stopEvents = ctx.on('session/event', (subject, event) => {
-    if (subject !== session || (!started && INITIAL_POLICY_EVENTS.has(event.type))) return
+    if (subject !== session || (!started && isPolicyPlaneActivity(event))) return
     start()
     if (failed || draining !== undefined) return
     void drain().catch((error: unknown) => {

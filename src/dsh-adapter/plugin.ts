@@ -67,8 +67,11 @@ import { attachHerdrIntegration } from '../herdr.js'
 import { logMouseDebug } from '../utils/debug.js'
 import { Chat } from '../screens/Chat.js'
 import { openInjectChannel, type InjectController } from './inject-channel.js'
-import { startSessionMountHeartbeat } from './session-mount-heartbeat.js'
-import { reserveMount, reserveNewSession } from '../sessionMounts.js'
+import { startSessionMountHeartbeat, mountedSessionIds } from './session-mount-heartbeat.js'
+import { attachSessionListMetadata } from './session-list-metadata.js'
+import { delegatedSessionIds, provenWriteLeaseFree, sweepUnspokenSessions, type UnspokenSessionLineage, type UnspokenSweepDeps, type UnspokenSweepResult } from './unspoken-sessions.js'
+import { createWriteLeaseProbe } from './compat/writeLease.js'
+import { reserveMount, reserveNewSession, ownerIsSelf, readSessionOwners } from '../sessionMounts.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { createActivityStore } from './activity-store.js'
@@ -250,6 +253,21 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
 
   // Validate settings before creating an agent or taking over the terminal.
   const tuiSettingsNs = resolveSettingsNamespace(configOwner, Config) as SettingsNamespace
+
+  // Write side of the mirrored session-list projection (ADR-0011): registers
+  // `sessionListMetadata` on the host's registry so `dsh web` can tell a
+  // session nobody ever spoke in from one with a conversation.
+  //
+  // It is attached HERE — before `resolveAgent` below creates or resumes the
+  // boot session — and that position is the whole point: the host writes its
+  // checkpoint rows at the session's `create`, so a definition attached later
+  // leaves the boot session's own creation record without a row. `dsh web`
+  // then falls back to `metadata?.blank ?? false` and lists it as an untitled
+  // shell until its next checkpoint (issue #1342, back through another door).
+  // Deferred through `inject` (the registry belongs to a sibling plugin) and a
+  // no-op on a host line without the seam — a hidden row must stay exactly what
+  // it is today.
+  attachSessionListMetadata(ctx)
 
   // Modern hosts own a declarative registry; old hosts discover directories.
   // A modern bundle failure must not silently fall back to obsolete files.
@@ -1955,14 +1973,55 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       }
       // Same resumability as the markers above.
       refreshLastRunRecord()
-      void finishExit(
-        ctx,
-        instance,
-        bootedFullscreen,
-        hint,
-        undefined,
-        () => disposeRootAndExit(ctx, 0),
-      )
+      // ADR-0012 decision 3: this branch — and only this branch — sweeps the
+      // shells nobody ever spoke in. The round has to finish before the call,
+      // because finishExit writes its notice right after the terminal cleanup
+      // (D6); it is synchronous and fail-soft, so it cannot hold the exit up.
+      // Its one asynchronous input — the host's own write lease, which is what
+      // a `dsh web` session is held by and what the mount ledger cannot see
+      // (CR-2) — is proved here, BEFORE the round, so the round and the notice
+      // below still read one finished answer.
+      void (async () => {
+        // Fail-closed: a pre-pass that cannot run proves nothing, and nothing
+        // proven is nothing deleted. Every probe failure inside it already
+        // leaves its own session unproven; this guards the pre-pass itself.
+        let writeLeaseFree: (sessionId: string) => boolean = () => false
+        try {
+          writeLeaseFree = await provenWriteLeaseFree(createWriteLeaseProbe(() => ctx.get('sessionPersistence')))
+        } catch {
+          // The initial predicate stands.
+        }
+        const swept = sweepUnspokenOnExit({
+          currentSessionId: () => channel.agentId,
+          liveSessionIds: () => liveExitSessionIds(ctx, channel.agentId),
+          listedSessions: () => readExitListing(channel),
+          writeLeaseFree,
+        })
+        if (swept !== undefined) {
+          try {
+            ctx.logger.debug(`dsh-tui: clean exit swept ${swept.deleted.length} unspoken session(s), spared ${swept.skipped.length}`)
+          } catch {
+            // Diagnostics belong to the opt-in channel; a sink that throws is
+            // not a reason to skip the terminal restore that follows.
+          }
+        } else {
+          // F-13: "no round" has four different causes and used to be silent, so
+          // a silently disabled layer ③ could never be told from an empty index.
+          try {
+            ctx.logger.debug(`dsh-tui: clean exit swept nothing (${exitListingGap(channel)}); the session index is spared`)
+          } catch {
+            // Same contract as the line above.
+          }
+        }
+        void finishExit(
+          ctx,
+          instance,
+          bootedFullscreen,
+          composeExitNotice(hint, swept?.deleted.length ?? 0),
+          undefined,
+          () => disposeRootAndExit(ctx, 0),
+        )
+      })()
     },
   })
   const handleExit = funnel.handleExit
@@ -2653,6 +2712,223 @@ type InkShutdownState = {
   drainStdin?: () => void
   frontFrame?: { cursor?: { x: number; y: number } }
   displayCursor?: { x: number; y: number } | null
+}
+
+/** One listed session, as much of it as the sweep's lineage layer reads. */
+export interface ListedSessionKind {
+  readonly id: string
+  readonly kind: { readonly kind: string, readonly parent?: string | undefined }
+}
+
+/** What the clean-exit sweep needs from the process around it. */
+export interface ExitSweepInput {
+  /** The session behind the channel right now; never a candidate. */
+  readonly currentSessionId: () => string | undefined
+  /** Live agents this process still holds. */
+  readonly liveSessionIds: () => ReadonlySet<string>
+  /**
+   * This install's synchronous session listing (`ChannelUi.cachedSessions`),
+   * or undefined when it has never listed. See {@link readExitListing}.
+   */
+  readonly listedSessions: () => readonly UnspokenSessionLineage[] | undefined
+  /**
+   * The write-lease proof the round's last gate reads, gathered by the caller
+   * through {@link provenWriteLeaseFree} (the probe is asynchronous and the
+   * round is not). Absent leaves the host's lease unconsulted, which is the
+   * behaviour every caller but this branch wants.
+   */
+  readonly writeLeaseFree?: (sessionId: string) => boolean
+  /**
+   * The round to run. Injected only by the exit regression (fault injection
+   * and deps capture); production always uses the shipping sweep.
+   */
+  readonly sweep?: (deps: UnspokenSweepDeps) => UnspokenSweepResult
+}
+
+/**
+ * The clean-exit sweep (ADR-0012 decision 3): the shells nobody ever spoke in
+ * are removed on the normal-exit branch, and nowhere else.
+ *
+ * Layer ③ is bound to this process — the session behind the channel, every
+ * agent the registry still lists ({@link liveExitSessionIds}), the delegated
+ * lineage of the install's last listing ({@link readExitListing}) and one
+ * candidate's own header, which the sweep reads itself — plus the sessions a
+ * LIVE peer holds ({@link foreignHeldSessionIds}) and the sessions whose
+ * exclusive write lease nothing else holds ({@link ExitSweepInput.writeLeaseFree},
+ * gathered through `provenWriteLeaseFree`). The ledger half is there because
+ * the delete entry points refuse a session another terminal drives and an exit
+ * sweep that skipped that check could remove one out from under it (REVIEW
+ * F-04); the lease half is there because the ledger only knows TUI mounts and
+ * a `dsh web` session is held by a writer that never writes it (REVIEW CR-2).
+ *
+ * Every source is a thunk and the whole round is wrapped, because this runs
+ * inside the exit funnel *before* `finishExit`: a hostile dependency may cost
+ * the round, never the shutdown. The round is synchronous and bounded on
+ * purpose — the notice it feeds is written immediately after the terminal
+ * cleanup, so a round that awaited its own inputs could not reach it
+ * (DESIGN D6/D7). The one asynchronous input, the host write lease, is
+ * therefore gathered by the caller before this call rather than awaited
+ * inside it.
+ *
+ * @param input - The process facts, the listing, and the round's own seam.
+ * @returns The round's result, or undefined when nothing could be proven.
+ */
+export function sweepUnspokenOnExit(input: ExitSweepInput): UnspokenSweepResult | undefined {
+  try {
+    const listed = input.listedSessions()
+    // No listing has ever completed ⇒ layer ③ cannot tell a delegated run
+    // from a conversation, and guessing would widen the delete set. The index
+    // is spared instead (ADR-0012: an unknown stays).
+    if (listed === undefined) return undefined
+    const delegated = delegatedSessionIds(listed)
+    const sweep = input.sweep ?? sweepUnspokenSessions
+    return sweep({
+      currentSessionId: input.currentSessionId,
+      liveSessionIds: input.liveSessionIds,
+      isSubagentOrDescendant: id => delegated.has(id),
+      occupiedElsewhere: foreignHeldSessionIds,
+      writeLeaseFree: input.writeLeaseFree,
+    })
+  } catch {
+    // Fail-soft: an exit must never be held up by its own cleanup (D7).
+    return undefined
+  }
+}
+
+/**
+ * Sessions a LIVE process other than this one holds, from the mount ledger.
+ *
+ * The ledger is the mount protocol's own answer to "who is driving this log"
+ * (`sessionMounts.ts:1-30`), and the interactive delete paths already refuse a
+ * foreign occupant (`useSessionSupervisor.ts:610-616`). The read is synchronous
+ * and drops dead pids, so an exit that consults it neither waits nor honours a
+ * crashed terminal's claim.
+ *
+ * This process's own record is excluded: `liveExitSessionIds` and
+ * `currentSessionId` already cover what THIS process holds, and the ledger's
+ * self-record exists for peers, not for us. A ledger this read cannot parse
+ * reports no holders (the ledger's display read is deliberately lenient); the
+ * sweep then behaves exactly as it did before this source existed.
+ *
+ * @returns Session ids held by other live processes.
+ */
+function foreignHeldSessionIds(): ReadonlySet<string> {
+  const ids = new Set<string>()
+  for (const [sessionId, owner] of readSessionOwners()) {
+    if (!ownerIsSelf(owner)) ids.add(sessionId)
+  }
+  return ids
+}
+
+/**
+ * Layer ③'s live set: the bound session plus every agent the registry still
+ * lists ({@link mountedSessionIds}, which already drops sub-agent runs — those
+ * are layer ③'s other half, through {@link delegatedSessionIds}).
+ *
+ * The registry read is duck-typed and yields nothing when the composition
+ * serves no `agents` service; the bound id is then the only entry, and the
+ * round spares less than it could. That limitation is recorded in the task's
+ * SUMMARY rather than papered over with a guess.
+ *
+ * @param ctx - Plugin context, for the agent registry.
+ * @param currentSessionId - The session behind the channel.
+ * @returns Session ids that must never be swept.
+ */
+export function liveExitSessionIds(ctx: Context, currentSessionId: string | undefined): ReadonlySet<string> {
+  const ids = new Set<string>()
+  if (currentSessionId !== undefined) ids.add(currentSessionId)
+  for (const id of mountedSessionIds(ctx)) ids.add(id)
+  return ids
+}
+
+/**
+ * The sweep's lineage input, from the channel's own synchronous listing cache.
+ *
+ * Never a fresh scan: the exit path must not wait on the store, so this reads
+ * what the picker or agent view already computed (`cachedSessions` — its
+ * in-memory last listing, else a previous run's snapshot). A host without that
+ * method, a throwing read, and "never listed" all report unknown, and the
+ * sweep then spares the index instead of classifying from nothing.
+ *
+ * @param channel - The mounted channel, for its listing cache.
+ * @returns One lineage row per listed session, or undefined when unknown.
+ */
+export function readExitListing(
+  channel: { cachedSessions?(): readonly ListedSessionKind[] | undefined },
+): readonly UnspokenSessionLineage[] | undefined {
+  try {
+    const rows = channel.cachedSessions?.()
+    return rows?.map(row => ({
+      id: row.id,
+      // The listed kinds are a closed sum this structural view cannot see the
+      // members of (`sessions/header.ts` classify is the authority). Anything
+      // that is neither a root conversation nor a fork therefore counts as
+      // delegated: over-marking only ever SPARES a session, while guessing the
+      // other way would widen the delete surface (ADR-0012: when in doubt,
+      // keep it).
+      delegated: row.kind.kind !== 'root' && row.kind.kind !== 'fork',
+      parent: row.kind.kind === 'root' ? undefined : row.kind.parent,
+    }))
+  } catch {
+    return undefined
+  }
+}
+
+/** The ways the clean-exit sweep can end up with no listing to judge lineage by. */
+export type ExitListingGap =
+  /** The mounted channel exposes no listing cache at all (an older host line). */
+  | 'no source'
+  /** The cache answered, but nothing usable: never listed, or a rejected snapshot. */
+  | 'no listing'
+  /** The cache threw while being read. */
+  | 'read failed'
+  /** The listing was readable after all — the round must have failed elsewhere. */
+  | 'listed'
+
+/**
+ * Name the reason the clean-exit sweep had no listing (REVIEW F-13).
+ *
+ * `readExitListing` folds three different worlds into one `undefined` — a host
+ * line whose channel exposes no cache, a cache that has never produced a
+ * listing, and a listing (or stored snapshot) that no longer decodes — and the
+ * sweep treats all three as "unknown ⇒ spare the index", which is right. The
+ * exit used to say nothing at all in that case, so "layer ③ ran and found
+ * nothing" and "layer ③ silently never ran" read identically in the debug
+ * channel. This names the world.
+ *
+ * Called only when the round produced no result, so its one extra read of the
+ * cache (a synchronous in-memory or snapshot read, the same one the round
+ * already paid for) costs nothing on a normal exit. `sessions/snapshot.ts`
+ * discards a whole snapshot when one row carries an unknown kind, which is why
+ * "no listing" names both possibilities rather than inventing the distinction.
+ *
+ * @param channel - The mounted channel, for its listing cache.
+ * @returns One short reason, stable enough to grep for in a debug log.
+ */
+export function exitListingGap(
+  channel: { cachedSessions?(): readonly ListedSessionKind[] | undefined },
+): ExitListingGap {
+  if (typeof channel.cachedSessions !== 'function') return 'no source'
+  try {
+    return channel.cachedSessions() === undefined ? 'no listing' : 'listed'
+  } catch {
+    return 'read failed'
+  }
+}
+
+/**
+ * The clean exit's notice: the resume hint the user already gets, plus the
+ * sweep's one line — and only when the round removed something, so a quiet
+ * exit reads byte-for-byte as it did before (ADR-0012 decision 4).
+ *
+ * @param hint - The existing resume hint, when the session is resumable.
+ * @param cleaned - Sessions the sweep deleted.
+ * @returns The notice for `finishExit`, or undefined when there is none.
+ */
+export function composeExitNotice(hint: string | undefined, cleaned: number): string | undefined {
+  if (cleaned <= 0) return hint
+  const line = t('exit-cleaned-unspoken-sessions', { count: cleaned })
+  return hint === undefined ? line : `${hint}\n${line}`
 }
 
 /**

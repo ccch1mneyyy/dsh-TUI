@@ -61,6 +61,25 @@ export interface ActivityView {
   readonly lang: 'zh' | 'en'
 }
 
+/**
+ * One projection unit as the host registry accepts it.
+ *
+ * The state and event types belong to whichever module owns the projection's
+ * semantics; this seam only names what `register` hands over, so a module that
+ * reads projections never has to learn a writer's shape. `apply` must return
+ * the SAME reference when an event changes nothing — the host compares by value
+ * to decide whether a unit has to be re-published.
+ */
+export interface ProjectionRegistrationLike {
+  readonly key: string
+  readonly stateVersion: number
+  readonly stateSchema: { parse(value: unknown): unknown }
+  init(...args: readonly unknown[]): unknown
+  // `never` parameters: a concrete definition accepts its own state and event
+  // types, which are narrower than anything this seam could name.
+  apply(state: never, event: never): unknown
+}
+
 /** The slice of the host projection registry this module uses. */
 export interface ProjectionRegistryLike {
   onChanged(listener: (
@@ -70,6 +89,12 @@ export interface ProjectionRegistryLike {
     seq: number,
   ) => void): () => void
   snapshot(session: unknown, keys?: readonly string[]): { readonly values: Record<string, unknown> }
+  /**
+   * Register one projection unit for this composition's lifetime, returning the
+   * early release. Optional on purpose: the registration seam is a host-line
+   * capability, and a host line without it must degrade instead of failing here.
+   */
+  register?(definition: ProjectionRegistrationLike): () => void
 }
 
 /**

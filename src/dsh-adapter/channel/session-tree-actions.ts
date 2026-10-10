@@ -8,7 +8,9 @@ import { createDshSession, dshHandleOf } from '../backend/session.js'
 import { appendInterruptedTurnEnd, liveSessionCreateOptions, liveSessionOffset, snapshotLiveSessionEvents } from '../compat/index.js'
 import { readPersistedSession, type SessionReader } from '../compat/persistence.js'
 import { closeLiveForkTurn } from '../compat/liveSession.js'
+import { createFreshAgent, isUnstoredFreshSession } from '../fresh-agent.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from '../presets.js'
+import { holdsNoConversation, latestPolicyFacts, replayPolicyFacts } from '../unspoken-sessions.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { reserveNewSession } from '../../sessionMounts.js'
 import { forkTarget, rewindTarget, turnUserText } from '../sessionTree.js'
@@ -101,7 +103,35 @@ export function createTreeRewindAction(
       deps.notify(t('rewind-settling'), { color: 'error' })
       return null
     }
-    const seed = sourceEvents.filter(event => event.seq <= target.boundary)
+    // The cut is what the child inherits, so the cut is what the verdict asks
+    // about — never the session it was cut from. A tree rewind can stop before
+    // every real event: the first message's boundary is the seq before its
+    // turn/start, and that turn opens behind the initialization
+    // `session/created` wrote (seq 0-2), so the prefix on offer holds the
+    // initialization alone while the source is a whole conversation. A seed
+    // would copy that prefix, and the host stores every seed at publication
+    // (agent-loop `appendUnstoredSuffix`), so the child's log would exist
+    // before its first real event — the permission-only shell the fresh-session
+    // deferral keeps out of JSONL. The evidence is the slice the seed IS, in
+    // memory, never a second read of the log. The never-used verdict answers
+    // first, and it only speaks for the LIVE source (the deferral is this
+    // process's own bookkeeping, and a persisted foreign source is not in it),
+    // so a foreign source is judged by its cut alone.
+    // The cut: the prefix the child would inherit — the whole source log for a
+    // live entry session, a boundary prefix for a tree node. It is read for
+    // both halves of the verdict below: which conversation it holds, and which
+    // POLICY FACTS it carries (the unseeded branch copies neither, and a child
+    // that loses the second falls back to the deployment defaults, which may be
+    // WIDER than the session it came from, CR-1).
+    const cut = sourceEvents.filter(event => event.seq <= target.boundary)
+    // The never-used shortcut answers first, and only for the LIVE source (the
+    // deferral is this process's own bookkeeping, and a persisted foreign
+    // source is not in it); the cut criterion behind it has one source:
+    // unspoken-sessions.ts.
+    const neverUsed = forkFromLive && isUnstoredFreshSession(entrySession)
+    const seed = neverUsed || holdsNoConversation(cut) ? [] : cut
+    const cutHoldsNoConversation = seed.length === 0
+    const policyFacts = cutHoldsNoConversation ? latestPolicyFacts(cut) : []
     const inheritedCount = seed.length
     const closeAfterCreate = target.closeTurn !== undefined && entrySession.header?.version >= 3
     if (target.closeTurn !== undefined && !closeAfterCreate) {
@@ -112,27 +142,47 @@ export function createTreeRewindAction(
     const { reservation } = await reserveNewSession(String(childId))
     let candidate: AgentSession
     try {
-      candidate = await deps.binding.prepare(adoption, async () => createDshSession(ctx, await agents.create(liveSessionCreateOptions({
-        sessionId: childId,
-        seed,
-        runtimeSession: entrySession,
-        inheritedCount,
-        cwd: sourceCwd,
-        parentSession: SessionId(sessionId),
-        agentPreset: composed.agentPreset,
-        agentOptions: { provider: state.provider, model: state.model },
-        setup: closeAfterCreate || mode === 'rewind' ? async (agentCtx, agent) => {
-          // V3 requires seed.length === inheritedEventCount. The constructor
-          // inserts the inherited marker, then these closers belong to the
-          // child and persist before publication, without falsifying the cut.
-          if (closeAfterCreate) closeLiveForkTurn(agent.session, target.closeTurn!)
-          // Re-editing starts with no historical pending work. Cancel through
-          // the child's Inbox so a later resume cannot resurrect the queue.
-          // A plain fork deliberately keeps its separate semantics.
-          if (mode === 'rewind') agent.inbox.clear()
-          return composed.setup?.(agentCtx, agent)
-        } : composed.setup,
-      }))))
+      const create = (): Promise<AgentHandle> => cutHoldsNoConversation
+        // No seed and no parent: a cut that holds no conversation has no
+        // history to inherit and nothing for lineage to describe, so the child
+        // is an ordinary fresh session and stands as its own root
+        // (session-lineage.ts).
+        ? createFreshAgent(ctx, agents, {
+          sessionId: childId,
+          meta: { cwd: sourceCwd, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
+          agentOptions: { provider: state.provider, model: state.model },
+          setup: composed.setup,
+        })
+        : agents.create(liveSessionCreateOptions({
+          sessionId: childId,
+          seed,
+          runtimeSession: entrySession,
+          inheritedCount,
+          cwd: sourceCwd,
+          parentSession: SessionId(sessionId),
+          agentPreset: composed.agentPreset,
+          agentOptions: { provider: state.provider, model: state.model },
+          setup: closeAfterCreate || mode === 'rewind' ? async (agentCtx, agent) => {
+            // V3 requires seed.length === inheritedEventCount. The constructor
+            // inserts the inherited marker, then these closers belong to the
+            // child and persist before publication, without falsifying the cut.
+            if (closeAfterCreate) closeLiveForkTurn(agent.session, target.closeTurn!)
+            // Re-editing starts with no historical pending work. Cancel through
+            // the child's Inbox so a later resume cannot resurrect the queue.
+            // A plain fork deliberately keeps its separate semantics.
+            if (mode === 'rewind') agent.inbox.clear()
+            return composed.setup?.(agentCtx, agent)
+          } : composed.setup,
+        }))
+      candidate = await deps.binding.prepare(adoption, async () => {
+        const handle = await create()
+        // AFTER the factory returns, never inside its `setup`: an append there
+        // would leave `seq !== 0` and the deferral would return in silence
+        // (KNOWN-ISSUES B-14 ①). Before the first real event, so the replay can
+        // never overtake work the person actually did in the child.
+        if (cutHoldsNoConversation) replayPolicyFacts(handle.agent.session, policyFacts)
+        return createDshSession(ctx, handle)
+      })
     } catch {
       reservation.abandon()
       deps.notify(t('rewind-create-failed'), { color: 'error' })
