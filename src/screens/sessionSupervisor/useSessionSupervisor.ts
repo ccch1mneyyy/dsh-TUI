@@ -316,8 +316,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   React.useEffect(() => {
     if (!initialFocusPending.current) return
     setFocusSessionIdState(recentSessionId)
-    if (!refreshing) initialFocusPending.current = false
-  }, [recentSessionId, refreshing])
+  }, [recentSessionId])
   /**
    * Which column owns the keyboard, and therefore which column draws the `❯`
    * cursor. Exactly one at a time: two cursors mean "where does Enter go?" has

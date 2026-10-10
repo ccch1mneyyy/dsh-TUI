@@ -363,7 +363,7 @@ brings it back.
 | `Tab` / `Shift+Tab` | Next / previous source tab (when other agents have sessions) |
 | `Esc` | Dismiss a notice → clear the filter → leave the screen |
 
-Each workspace starts on its most recent visible session, or the new-session card if it has no matches. Changing columns or moving the mouse into the list preserves the current selection. Changing workspace chooses that workspace's newest session; returning chooses the newest again, without remembering past selections per workspace. A workspace still being loaded updates this default as rows arrive until you select a list row.
+Each workspace starts on its most recent visible session, or the new-session card if it has no matches. Changing columns or moving the mouse into the list preserves the current selection. Changing workspace chooses that workspace's newest session; returning chooses the newest again, without remembering past selections per workspace. Until you choose a list row, partial results, complete reads, and later refreshes keep following the newest visible session. After you select a session or the new-session card, refreshes preserve that choice.
 
 The native cursor follows the last-used region, as in the model picker: workspace navigation parks it on the workspace row, session navigation on the session row or new-session card, and typing or clicking the filter on its text caret. Row carets hide after 0.5 seconds at rest; the search caret stays visible. Animation and trail effects come from your terminal settings. Narrow layouts keep the caret on a visible target when the workspace rail is hidden. Arrow and Enter actions keep the same meaning while filtering.
 

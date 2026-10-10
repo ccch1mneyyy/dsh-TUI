@@ -696,6 +696,52 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve }
 }
 
+console.log('an idle empty workspace follows refreshed defaults until the user selects a row')
+{
+  const target = makeChannel({ registry, cwd: alphaDir, sessions: workspaceRows.filter(row => (row as { cwd: string }).cwd === alphaDir) })
+  const app = await mountSupervisor(target)
+  const focused = (title: string): boolean => app.lines().some(line => line.includes(title) && line.includes('❯'))
+  const later = session({ id: 'b-later', cwd: betaDir, title: { text: 'b later', source: 'prompt' }, updatedAt: now + 1_000 })
+  const newest = session({ id: 'b-newest', cwd: betaDir, title: { text: 'b newest', source: 'prompt' }, updatedAt: now + 2_000 })
+  try {
+    await settled(() => target.landed === 1 && focused('a latest'))
+    app.write('\u001b[D')
+    await settled(() => app.lines().some(line => /❯\s+▣ Alpha/u.test(line)))
+    app.write('\u001b[A')
+    await settled(() => app.lines().some(line => line.includes('Sessions in Beta')))
+    app.write('\u001b[C')
+    await settled(() => focused('+ New session'))
+
+    target.plan = { sessions: workspaceRows }
+    app.write('\u000c')
+    await settled(() => target.landed === 2 && app.lines().some(line => line.includes('b latest')))
+    check('an idle empty workspace picks the newest session after Ctrl+L', await settled(() => focused('b latest')), app.lines().join('\n'))
+    target.plan = { sessions: [...workspaceRows, later] }
+    app.write('\u000c')
+    await settled(() => target.landed === 3 && app.lines().some(line => line.includes('b later')))
+    check('refresh continues following the default without an explicit row choice', await settled(() => focused('b later')))
+    app.write('\r')
+    check('Enter opens the refreshed default instead of creating a session', await settled(() => app.calls.includes('resumeTo:b-later')))
+
+    app.write('\u001b[B')
+    await settled(() => focused('b latest'))
+    target.plan = { sessions: [...workspaceRows, later, newest] }
+    app.write('\u000c')
+    await settled(() => target.landed === 4 && app.lines().some(line => line.includes('b newest')))
+    check('refresh preserves an explicitly selected session', await settled(() => focused('b latest')))
+
+    for (let step = 0; step < workspaceRows.length && !focused('+ New session'); step++) {
+      const before = app.lines().findIndex(line => line.includes('❯'))
+      app.write('\u001b[A')
+      await settled(() => app.lines().findIndex(line => line.includes('❯')) !== before)
+    }
+    target.plan = { sessions: [...workspaceRows, later, newest, session({ id: 'b-extra', cwd: betaDir, title: { text: 'b extra', source: 'prompt' }, updatedAt: now + 3_000 })] }
+    app.write('\u000c')
+    await settled(() => target.landed === 5 && app.lines().some(line => line.includes('b extra')))
+    check('refresh preserves an explicitly selected new-session card', await settled(() => focused('+ New session')))
+  } finally { app.close() }
+}
+
 console.log('a cold workspace chooses its latest session when the listing arrives')
 {
   const target = makeChannel({ registry, cwd: alphaDir, cache: cacheCell(workspaceRows.filter(row => (row as { cwd: string }).cwd === alphaDir)) })
