@@ -462,6 +462,11 @@ function putRaw(s: Screen, col: number, row: number, charId: number, width: numb
   const screen = makeScreen(4, 10)
   const pool = new StylePool()
   const sel = makeSel()
+  // Text and fallback glyphs are selectable; empty padding is not. Put
+  // glyphs under the painted image too so its exemption is non-vacuous.
+  for (const [col, row, glyph] of [[0, 0, 'A'], [1, 1, 'B'], [2, 1, 'X'], [5, 2, 'Y'], [6, 2, 'C'], [7, 3, 'D'], [8, 3, 'E']] as const) {
+    putText(screen, col, row, glyph)
+  }
   startSelection(sel, 0, 0)
   updateSelection(sel, 9, 3)
   const image = { node: {} as never, x: 2, y: 1, columns: 4, rows: 2, source: { data: new Uint8Array(4), width: 1, height: 1 } }

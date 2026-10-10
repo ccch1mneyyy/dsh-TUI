@@ -42,7 +42,7 @@ import { applyPositionedHighlight, type MatchPosition, scanPositions } from './r
 import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './transcript-highlight.js';
-import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
+import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, getSelectionCursor, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js';
@@ -1107,11 +1107,19 @@ export default class Ink {
     // Main-screen coordinates include scrollback and the trailing cursor
     // row. Do not expose a caret that is clipped or scrolled out of view.
     const viewportTop = this.altScreenActive ? 0 : Math.max(0, frame.cursor.y - terminalRows + 1);
-    const target = declaredTarget !== null && decl !== null && rect !== undefined &&
+    // A fullscreen text drag temporarily owns the native cursor. Leave the
+    // editor declaration intact so release, cancellation and recovery return
+    // to its latest caret without requiring another React commit.
+    const selectionFocus = this.altScreenActive && this.selection.isDragging ? getSelectionCursor(frame.screen, this.selection) : null;
+    const selectionTarget = selectionFocus !== null ? {
+      x: Math.min(Math.max(selectionFocus.col, 0), terminalWidth - 1),
+      y: Math.min(Math.max(selectionFocus.row, 0), terminalRows - 1)
+    } : null;
+    const target = selectionTarget ?? (declaredTarget !== null && decl !== null && rect !== undefined &&
       decl.relativeX >= 0 && decl.relativeX < rect.width && decl.relativeY >= 0 && decl.relativeY < rect.height &&
       declaredTarget.x >= 0 && declaredTarget.x < terminalWidth &&
       declaredTarget.y >= viewportTop && declaredTarget.y < viewportTop + terminalRows
-      ? declaredTarget : null;
+      ? declaredTarget : null);
     const parked = this.displayCursor;
     // Diagnostics: the resolved park target per frame (DSH_TUI_DEBUG only).
     // ConPTY's readback drops trailing cursor moves, so pty probes can't
@@ -1187,7 +1195,7 @@ export default class Ink {
       }
     }
     if (this.options.stdout.isTTY) {
-      const visible = isEnvTruthy(process.env.DSH_TUI_ACCESSIBILITY) || target !== null && decl?.visible === true;
+      const visible = isEnvTruthy(process.env.DSH_TUI_ACCESSIBILITY) || target !== null && (selectionTarget !== null || decl?.visible === true);
       // Hide before repainting or handing focus to a non-editable anchor.
       // Pure caret moves stay visible so terminal cursor animations can run
       // continuously, including on terminals without synchronized output.
@@ -2136,9 +2144,9 @@ export default class Ink {
     return text;
   }
 
-  /** Clear the current text selection without copying. */
+  /** Cancel an active drag or clear the current text selection without copying. */
   clearTextSelection(): void {
-    if (!hasSelection(this.selection)) return;
+    if (!hasSelection(this.selection) && !this.selection.isDragging) return;
     clearSelection(this.selection);
     this.notifySelectionChange();
   }

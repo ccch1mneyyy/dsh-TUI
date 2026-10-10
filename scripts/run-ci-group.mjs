@@ -360,6 +360,9 @@ const GROUPS = {
 // 连续 dragmove、release/focus-out/reset 收尾 dragend；未移动仍走 click，
 // 无 handler 与修饰键区域保留基线文本选择；真实 SGR 管线 + 最小滑块消费者。
     ["verify-drag-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-drag-protocol.tsx']],
+// 全屏拖选自动复制后保留选区，重复 release 不重复复制；选区高亮跳过
+// 行尾填充/空白行，并保留代码缩进、软换行分隔空格和 Unicode 字符。
+    ['verify-copy-on-select', ['node', 'scripts/verify-copy-on-select.mjs']],
 // hover 事件性能与健壮性回归：同批 motion 保留兴趣边界（tooltip dwell
 // 不提前）、无兴趣矩形快路径跳过全树 hit-test，且渲染提交/帧边界/
 // 多 root 失效；拖拽 motion 逐事件到达。

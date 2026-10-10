@@ -2075,7 +2075,7 @@ export function Chat({
   // Mouse text selection auto-copy: active only in
   // fullscreen (<AlternateScreen> supplies mouse tracking); a no-op
   // subscription in inline mode, where selection belongs to the terminal.
-  // The copy clears the highlight and posts a transient notification.
+  // The copy retains the highlight and posts a transient notification.
   // Smart migration hint (product ask): ~12s after mount, one background
   // pass over the foreign-agent stores; when a source was active inside the
   // 20-minute window, surface the user's own wording once per session. The
@@ -2123,8 +2123,11 @@ export function Chat({
     // letting the highlight vanish silently.
     () => channel.notify(t('copy-refused-stale'), { timeoutMs: 2500 }),
   )
-  const { clearSelection: clearMouseSelection, hasSelection: hasMouseSelection } =
-    useSelection()
+  const {
+    clearSelection: clearMouseSelection,
+    hasSelection: hasMouseSelection,
+    getState: getMouseSelectionState,
+  } = useSelection()
   React.useEffect(() => {
     if (!channel.working || !terminalFocused) return
     const interval = setInterval(() => {
@@ -4415,11 +4418,10 @@ export function Chat({
       event.stopImmediatePropagation()
       return
     }
-    // Esc clears a settled mouse selection before the ordinary chat meanings
-    // below, but never before a top-level modal. Otherwise a preview opened
-    // over selected transcript text needed two Esc presses to close.
-    // hasSelection() is an imperative read — no subscription needed.
-    if (key.escape && hasMouseSelection()) {
+    // With no overlay open, Esc cancels an active mouse drag or retained
+    // selection before ordinary chat meanings. Open overlays own Esc.
+    // Selection queries are imperative reads — no subscription needed.
+    if (overlay.kind === 'none' && key.escape && (hasMouseSelection() || getMouseSelectionState()?.isDragging)) {
       clearMouseSelection()
       event.stopImmediatePropagation()
       return

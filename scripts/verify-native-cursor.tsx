@@ -1,6 +1,6 @@
 /**
  * Native caret regression: inline/fullscreen, narrow widths, repaint ordering,
- * uninterrupted cursor-only motion, editor handoff/clearing, focus, resize,
+ * uninterrupted cursor-only motion, selection drags, editor handoff/clearing, focus, resize,
  * resume and cleanup, empty plugin inputs and clipped btw drafts.
  * Uses the real renderer and xterm/headless; no model or credentials required.
  * Run: node --import tsx/esm scripts/verify-native-cursor.tsx
@@ -191,6 +191,130 @@ for (const fullscreen of [false, true]) {
       assert.deepEqual(h.cursor(), h.find('a中🙂b'))
       assert.ok(!h.frames.join('').match(/\x1b\[\d* q|\x1b\](?:12|112);/u), 'the terminal owns cursor shape, blink and color')
       console.log(`PASS native cursor: ${fullscreen ? 'fullscreen' : 'inline'} ${width} cols`)
+    } finally {
+      await h.close(app)
+    }
+  }
+}
+
+// Screen-coordinate selections temporarily own the native cursor without
+// replacing the editor's declaration. Drive the real SGR mouse pipeline.
+function SelectionFixture({ clear, input = true, typed = '' }: {
+  clear: () => void
+  input?: boolean
+  typed?: string
+}): ReactNode {
+  useInput((_input, key, event) => {
+    if (key.escape) {
+      clear()
+      event.stopImmediatePropagation()
+    }
+  })
+  return <Box flexDirection="column">
+    <Text>DRAG a中b</Text>
+    <Text>second row</Text>
+    <Text> </Text>
+    <Box><Text>EDITOR {typed}</Text><InputCaret active={input}>e</InputCaret><Text>dit</Text></Box>
+  </Box>
+}
+
+for (const fullscreen of [false, true]) {
+  for (const width of [80, 24]) {
+    const h = makeHarness(width, 12)
+    const clear = () => instances.get(h.stdout)?.clearTextSelection()
+    const wrap = (node: ReactNode) => fullscreen ? <AlternateScreen>{node}</AlternateScreen> : node
+    const app = await render(wrap(<SelectionFixture clear={clear} />), {
+      stdout: h.stdout, stdin: h.stdin, stderr: h.stderr,
+      exitOnCtrlC: false, patchConsole: false, terminalImages: false,
+    })
+    const ink = instances.get(h.stdout)!
+    const write = async (data: string) => {
+      const before = h.frames.length
+      h.stdin.write(data)
+      await new Promise<void>(resolve => setImmediate(resolve))
+      ink.onRender()
+      await h.flush()
+      return h.frames.slice(before).join('')
+    }
+    const paint = async (input: boolean, typed = '') => {
+      app.rerender(wrap(<SelectionFixture clear={clear} input={input} typed={typed} />))
+      ink.onRender()
+      await h.flush()
+    }
+    try {
+      ink.onRender()
+      await h.flush()
+      const editor = h.cursor()
+      assert.equal(h.visible(), true, 'the editor initially owns the native cursor')
+      await write('\x1b[<0;2;1M')
+      assert.deepEqual(h.cursor(), editor, 'a bare press does not steal the editor caret')
+      if (!fullscreen) {
+        await write('\x1b[<32;9;1M\x1b[<0;9;1m')
+        assert.equal(ink.hasTextSelection(), false, 'inline selection remains terminal-owned')
+        assert.deepEqual(h.cursor(), editor, 'inline mouse reports do not move the editor caret')
+        console.log(`PASS native cursor selection: inline ${width} cols`)
+        continue
+      }
+      for (const [col, edge] of [[8, 8], [6, 6], [7, 6], [2, 2], [18, 8]]) {
+        await write(`\x1b[<32;${col + 1};1M`)
+        assert.equal(ink.selection.isDragging, true)
+        assert.deepEqual(h.cursor(), { x: edge, y: 0 }, 'cursor follows the selected text edge, excluding padding and wide-char tails')
+        assert.equal(h.visible(), true, 'selection drags display the native cursor')
+      }
+      const motion = await write('\x1b[<32;17;1M')
+      assert.deepEqual(h.cursor(), { x: 8, y: 0 }, 'moving through trailing padding keeps the cursor at the text edge')
+      assert.equal(motion, '', 'padding motion with an unchanged selection edge performs no terminal writes')
+      await write('\x1b[<32;5;3M')
+      assert.deepEqual(h.cursor(), { x: 9, y: 1 }, 'a blank-row focus leaves the cursor on the last selected text row')
+      await paint(true, 'new ')
+      assert.deepEqual(h.cursor(), { x: 9, y: 1 }, 'an editor commit cannot reclaim the cursor mid-drag')
+      await write('\x1b[<0;5;3m')
+      assert.equal(ink.hasTextSelection(), true, 'release retains the selected text')
+      assert.deepEqual(h.cursor(), { x: editor.x + 4, y: editor.y }, 'release restores the latest editor declaration')
+      assert.equal(h.visible(), true)
+
+      await write('\x1b[<0;10;2M\x1b[<32;4;2M')
+      assert.deepEqual(h.cursor(), { x: 3, y: 1 })
+      await write('\x1b[<32;19;1M')
+      assert.deepEqual(h.cursor(), { x: 0, y: 1 }, 'reverse dragging into an unselected padding row stays at the first selected text edge')
+      await write('\x1b[<32;4;1M')
+      assert.deepEqual(h.cursor(), { x: 3, y: 0 }, 'reverse dragging into text follows the beginning of the selection')
+      await write('\x1b')
+      assert.ok(await settled(() => !ink.hasTextSelection()), 'Escape cancels the drag')
+      await h.flush()
+      assert.deepEqual(h.cursor(), { x: editor.x + 4, y: editor.y }, 'Escape restores the editor caret')
+
+      await write('\x1b[<0;1;3M\x1b[<32;5;3M')
+      assert.deepEqual(h.cursor(), { x: editor.x + 4, y: editor.y }, 'a wholly blank selection does not claim the cursor')
+      await write('\x1b[<0;5;3m')
+
+      await paint(false)
+      assert.equal(h.visible(), false, 'without an editor the resting cursor stays hidden')
+      await write('\x1b[<0;1;1M\x1b[<32;4;1M')
+      assert.deepEqual(h.cursor(), { x: 3, y: 0 })
+      assert.equal(h.visible(), true, 'dragging displays a cursor without an editor declaration')
+      await write('\x1b[<35;4;1M')
+      assert.equal(ink.selection.isDragging, false, 'no-button motion recovers a missing release')
+      assert.equal(h.visible(), false, 'recovery releases cursor ownership')
+
+      await write('\x1b[<0;10;2M\x1b[<32;4;2M')
+      assert.equal(h.visible(), true)
+      await write('\x1b[O')
+      assert.equal(ink.selection.isDragging, false, 'focus-out ends the drag')
+      assert.equal(h.visible(), false, 'focus-out releases cursor ownership')
+      await write('\x1b[I')
+
+      await write('\x1b[<0;1;1M\x1b[<32;4;1M')
+      h.term.resize(18, 8)
+      h.stdout.columns = 18
+      h.stdout.rows = 8
+      h.stdout.emit('resize')
+      ink.onRender()
+      await h.flush()
+      assert.equal(ink.selection.isDragging, false, 'resize settles the pointer gesture')
+      assert.equal(h.visible(), false, 'resize leaves no selection cursor behind')
+      assert.ok(!h.frames.join('').match(/\x1b\[\d* q|\x1b\](?:12|112);/u), 'selection does not change terminal cursor styling')
+      console.log(`PASS native cursor selection: fullscreen ${width} cols`)
     } finally {
       await h.close(app)
     }

@@ -164,7 +164,7 @@ Unrecognized keys are ignored, `Esc` does nothing, clear with `Ctrl+C`/`dd`.
 
 | Action | Effect |
 |---|---|
-| left-drag | select text, **copy on release** (OSC 52 + system clipboard tools as fallback), auto-clear the selection |
+| left-drag | select text, **copy on release** (OSC 52 + system clipboard tools as fallback), keep the selection after copying; a new selection replaces it |
 | double-click / triple-click | select word / line, copy immediately |
 | wheel | scroll the message list (±3 rows/notch); **with a text selection, pan the selection with the content** |
 | in the input box | drag / Shift+click / double-click build a selection; `Backspace`/`Delete` delete it, typing replaces, `←/→` collapse, `Esc` clears only the selection, `Ctrl+C` copies it |
