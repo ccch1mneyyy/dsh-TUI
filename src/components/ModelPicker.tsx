@@ -65,14 +65,16 @@ export function ModelPicker({
   const description = efforts.find(effort => effort.id === effortId)?.description
     ?? (levelsFallback ? t('effort-fallback-tier-note') : undefined)
   const showDescription = !compact && description !== undefined
+  const showEfforts = availableRows >= 3
   // Pane 2 + title 1 + optional tabs 1 + effort 2 + wrapper margin 1,
   // plus the width-aware header, section gaps and optional description.
-  // Very short anchors collapse effort to one row and keep actions at the
-  // bottom so top clipping cannot hide the focused model or mouse buttons.
-  const listRows = useOverlayListRows(showHeaderHints
+  // Short anchors show just the focused name before effort and actions.
+  // At two rows, omit effort too; only decorative headers may be clipped.
+  const listRows = Math.max(1, availableRows - (showHeaderHints
     ? frameRows + shortcutRows.length + (compact ? 0 : gaps) + (showDescription ? 1 : 0)
-    : frameRows)
-  const { start, end } = listWindow(models.map(model => model.description ? 2 : 1), focusIndex, listRows)
+    : frameRows - (showEfforts ? 0 : 1)))
+  const showModelDescriptions = listRows >= 2
+  const { start, end } = listWindow(models.map(model => showModelDescriptions && model.description ? 2 : 1), focusIndex, listRows)
   const shortcutBar = (
     <Box flexDirection="column">
       {(showHeaderHints ? shortcutRows : [shortcuts.slice(-2)]).map((row, rowIndex) => (
@@ -118,7 +120,7 @@ export function ModelPicker({
                 key={`${model.provider}/${model.id}`}
                 isFocused={absoluteIndex === focusIndex}
                 isSelected={`${model.provider}/${model.id}` === currentModel}
-                description={model.description}
+                description={showModelDescriptions ? model.description : undefined}
                 showScrollUp={absoluteIndex === start && start > 0}
                 showScrollDown={absoluteIndex === end - 1 && end < models.length}
                 onClick={event => { event.stopImmediatePropagation(); onFocus(absoluteIndex) }}
@@ -128,7 +130,7 @@ export function ModelPicker({
             )
           })}
         </Box>
-        <Box marginTop={compact ? 0 : 1} flexDirection={showHeaderHints ? 'column' : 'row'}>
+        {showEfforts ? <Box marginTop={compact ? 0 : 1} flexDirection={showHeaderHints ? 'column' : 'row'}>
           <Box height={1} flexShrink={0} overflow="hidden">
             <Text color="remember" bold>{t('picker-title-effort')}{showHeaderHints ? '' : '  '}</Text>
             {showHeaderHints && !effortsLoading && !effortError && efforts.length > 1 ? (
@@ -154,7 +156,7 @@ export function ModelPicker({
               </>
             )}
           </Box>
-        </Box>
+        </Box> : null}
         {showDescription ? <Text dimColor wrap="truncate">{description!.replace(/[\r\n]+/g, ' ')}</Text> : null}
         {!showHeaderHints ? shortcutBar : null}
       </Pane>

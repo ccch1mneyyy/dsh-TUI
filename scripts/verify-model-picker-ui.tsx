@@ -6,6 +6,8 @@
  * header shortcuts, readable effort colors and an opaque panel surface.
  * Claude/Codex use a flat catalog, focus the current model after loading,
  * omit provider/recents tabs and leave existing recents untouched.
+ * Short 2/3/4-row overlays keep the focused model and confirmation visible,
+ * with and without descriptions, at the first/middle/last model.
  * No credentials or model calls. Run after pnpm build:
  * node --import tsx/esm scripts/verify-model-picker-ui.tsx
  */
@@ -378,6 +380,103 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
   }
 }
 
+async function shortTerminal(backendId: 'dsh' | 'claude' | 'codex', fullscreen: boolean, described: boolean, columns: number): Promise<void> {
+  const label = `${backendId} ${fullscreen ? 'fullscreen' : 'inline'} ${described ? 'described' : 'plain'} short terminal ${columns} columns`
+  const models = Array.from({ length: 3 }, (_, index) => ({
+    provider: backendId === 'dsh' ? 'alpha' : backendId, id: `a${index}`, name: `Short model ${index}`,
+    ...(described ? { description: `Short description ${index}` } : {}),
+  }))
+  const events: AgentEvent[] = Array.from({ length: 20 }, (_, seq) => ({
+    type: 'user.message', seq, anchor: `short-${seq}`, id: `short-${seq}`, time: Date.now(),
+    source: 'user', text: `Short history ${seq}`, blocks: [{ type: 'text', text: `Short history ${seq}` }],
+  }))
+  const options = levels(['low', 'medium', 'high'])
+  const ctx = {
+    on: () => () => {}, logger: { warn() {} },
+    get: (name: string) => name === 'llm' ? {
+      listProviders: () => [PROVIDERS[0]!], listModels: async () => models,
+      resolveModelInfo: async () => ({ reasoning: { efforts: options, defaultEffort: 'medium' } }),
+    } : undefined,
+  }
+  const session: AgentSession = {
+    ref: { backendId, sessionId: 'short-fixture' }, cwd: '/tmp', status: 'idle',
+    capabilities: {
+      native: {},
+      models: {
+        list: async () => models.map(model => ({ ...model, label: model.name })),
+        current: () => ({ model: 'a0' }), set: async () => ({ kind: 'switched' }),
+      },
+      effort: {
+        levels: () => options.map(option => ({ id: option.id, label: option.name })),
+        current: () => 'medium', set: async () => {},
+      },
+    },
+    history: async () => events, subscribe: () => () => {}, submit: async () => ({ accepted: true }),
+    cancel: async () => ({ stillQueued: [], outcome: 'confirmed' }), dispose: async () => {},
+  }
+  const agent = {
+    id: 'short-fixture', status: 'idle', ctx,
+    session: { id: 'short-session', seq: events.length, header: {}, events: events.map(event => ({
+      seq: event.seq, time: event.time, type: 'user/message',
+      data: { source: { kind: 'user' }, content: [{ type: 'text', text: `Short history ${event.seq}` }] },
+    })) }, inbox: { remove: () => true },
+  }
+  writeFileSync(join(prefsDir, 'model-recents.json'), JSON.stringify({ models: models.map(({ provider, id }) => ({ provider, id })) }))
+  const channel = createChannel(ctx as never, backendId === 'dsh' ? agent as never : session, {
+    provider: models[0]!.provider, model: 'a0', cwd: '/tmp', effort: 'medium', activity: false, whaleIdle: false,
+  })
+  const picks: string[] = []
+  channel.switchModel = async (_provider, model) => { picks.push(model); return true }
+  const { term, stdout, stdin, stderr } = terminalHarness(columns)
+  const screen = <Chat channel={channel as never} questionStore={new QuestionStore()} fullscreen={fullscreen} onExit={() => {}} />
+  const app = await render(fullscreen ? <AlternateScreen>{screen}</AlternateScreen> : screen, { stdin, stdout, stderr, exitOnCtrlC: false, patchConsole: false })
+  const text = () => viewportLines(term).join('\n')
+  const check = async (name: string, condition: () => boolean) => {
+    const ok = await settled(condition)
+    if (!ok) console.error(text())
+    assert.ok(ok, `${label}: ${name}`)
+  }
+  try {
+    await check('boot', () => text().includes('Short history 19'))
+    stdin.write('/model')
+    await check('composer', () => text().includes('/model'))
+    stdin.write('\r')
+    await check('catalog ready', () => text().includes('Short model 2') && text().includes('MEDIUM'))
+    for (const rows of [11, 12, 10]) {
+      stdout.rows = rows
+      term.resize(columns, rows)
+      stdout.emit('resize')
+      for (let index = 0; index < models.length; index++) {
+        await check(`${rows - 8}-row overlay, focused model ${index} and actions`, () => {
+          const lines = viewportLines(term)
+          return lines.some(line => line.includes('❯') && line.includes(models[index]!.name))
+            && text().includes('Enter 选择') && text().includes('Esc 取消')
+            && models.filter(model => text().includes(model.name)).length === 1
+            && !text().includes('Short description')
+            && (rows > 10 ? text().includes('推理强度') : !text().includes('推理强度'))
+        })
+        if (index < models.length - 1 || rows !== 10) stdin.write('\x1b[B')
+      }
+    }
+    if (fullscreen) {
+      const lines = viewportLines(term)
+      const row = lines.findIndex(line => line.includes('选择'))
+      const col = stringWidth(lines[row]!.slice(0, lines[row]!.indexOf('选择')))
+      stdin.write(`\x1b[<0;${col + 1};${row + 1}M\x1b[<0;${col + 1};${row + 1}m`)
+    } else {
+      await sleep(90) // 固定窗:墙钟 Chat's 80ms modal-Enter debounce.
+      stdin.write('\r')
+    }
+    await check('visible confirmation applies the last focused model', () => picks.length === 1 && !text().includes('Enter 选择'))
+    assert.deepEqual(picks, ['a2'])
+    console.log(`PASS /model ${label}`)
+  } finally {
+    app.unmount()
+    disposeChannelOwner(channel)
+    term.dispose()
+  }
+}
+
 /** Actual DSH route adoption and preference application, plus modal/global key priority. */
 async function reviewRegression(fullscreen: boolean): Promise<void> {
   const label = fullscreen ? 'fullscreen sidebar' : 'inline preference'
@@ -490,6 +589,11 @@ async function reviewRegression(fullscreen: boolean): Promise<void> {
 }
 
 try {
+  for (const backend of ['dsh', 'claude', 'codex'] as const) {
+    for (const fullscreen of [false, true]) for (const described of [true, false]) {
+      for (const columns of [100, 36]) await shortTerminal(backend, fullscreen, described, columns)
+    }
+  }
   for (const fullscreen of [false, true]) for (const columns of [100, 36]) await scenario(fullscreen, columns)
   for (const backend of ['claude', 'codex'] as const) {
     for (const fullscreen of [false, true]) for (const columns of [100, 36]) await backendSurface(backend, fullscreen, columns)
