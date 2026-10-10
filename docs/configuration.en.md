@@ -26,6 +26,47 @@ only for a genuinely new service.
 > When a row is overridden, its `config` block is replaced as a whole. It is
 > not deep-merged, so repeat every key that must remain active.
 
+## Official request metadata and feedback reporting
+
+The TUI bundle inherits reporting configuration from the installed official DSH
+composition; it does not add services absent from that composition. The current
+validated line has these defaults, with profile, home and CLI patches still able
+to override them:
+
+| Setting | Official default | Data and trigger |
+| --- | --- | --- |
+| `plugin-package-inventory-deepseek.enabled` | `true` | `dsh_plugin_packages` on official DeepSeek API requests, containing active plugin package names and versions so TUI usage can be identified |
+| `session-log-deepseek.enabled` | `true` | `dsh_session_log` on official DeepSeek API requests, incrementally carrying canonical Session events including conversation content; controlled independently of package inventory |
+| `session-telemetry-otel.mode` | `FEEDBACK_ONLY` | New explicit feedback authorizes OTel upload of the Session-log prefix through that feedback, including context; ordinary chat does not trigger this channel |
+
+The first two fields are request metadata outside model input and add no model
+input tokens. They accompany the corresponding DeepSeek requests and do not
+measure all TUI usage through the Claude/Codex backends.
+
+Feedback telemetry supports the upstream environment variables:
+
+- `DSH_TELEMETRY_MODE=DISABLED` stops OTel Session-log upload; the default
+  `FEEDBACK_ONLY` authorizes upload only after feedback.
+- Any non-empty `DSH_TELEMETRY_DISABLED` value, including `0` or `false`, disables
+  the `session-telemetry-otel` row at startup. Remove the variable to restore it;
+  it does not control the two API request metadata fields above.
+- `DSH_TELEMETRY_OTLP_URL` overrides the OTel collector address. When unset, the
+  installed official version supplies the endpoint and exporter parameters.
+
+To stop API request metadata, disable either field in the user profile patch:
+
+```yaml
+- id: plugin-package-inventory-deepseek
+  config:
+    enabled: false
+- id: session-log-deepseek
+  config:
+    enabled: false
+```
+
+Restart the TUI after changing its bundle or launch environment. Restoring bundle
+defaults does not remove existing user patches.
+
 ## TUI configuration
 
 On DSH 0.1.7, `/settings` writes plugin Config fields to the active profile's

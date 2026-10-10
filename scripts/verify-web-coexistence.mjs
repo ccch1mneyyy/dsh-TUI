@@ -119,6 +119,42 @@ for (const baseline of baselines) {
   )
 
   const officialRows = insertedRows([...basePatches, ...webPatches])
+
+  // The installed dev tree has no dsh-base dependency. Use representative
+  // rows there; the source lane exercises its actual official base rows.
+  const reportingRows = [
+    { id: 'plugin-package-inventory-deepseek', name: '@deepseek-ai/dsh-plugin-package-inventory-deepseek' },
+    {
+      id: 'session-telemetry-otel',
+      name: '@deepseek-ai/dsh-session-telemetry-otel',
+      config: {
+        mode: 'FEEDBACK_ONLY',
+        exporter: { url: 'https://collector.example.test/v1/logs' },
+      },
+    },
+    { id: 'session-log-deepseek', name: '@deepseek-ai/dsh-session-log-deepseek' },
+  ].map(row => officialRows.find(official => official.id === row.id) ?? row)
+  const reportingComposition = applyEntryPatches(reportingRows, tuiPatches, () => {})
+  for (const row of reportingRows) {
+    assert.deepEqual(reportingComposition.find(entry => entry.id === row.id), row,
+      `${baseline.label}: TUI must inherit the complete official ${row.id} row`)
+  }
+  const reportingOptOuts = [
+    { id: 'plugin-package-inventory-deepseek', config: { enabled: false } },
+    { id: 'session-telemetry-otel', config: { mode: 'DISABLED' } },
+    { id: 'session-log-deepseek', config: { enabled: false } },
+  ]
+  const optedOut = applyEntryPatches(reportingComposition, reportingOptOuts, () => {})
+  for (const row of reportingOptOuts) {
+    assert.deepEqual(optedOut.find(entry => entry.id === row.id)?.config, row.config,
+      `${baseline.label}: explicit user opt-out must still control ${row.id}`)
+  }
+  const disabledTelemetry = applyEntryPatches(reportingComposition, [
+    { id: 'session-telemetry-otel', disabled: true },
+  ], () => {})
+  assert.equal(disabledTelemetry.find(row => row.id === 'session-telemetry-otel')?.disabled, true,
+    `${baseline.label}: the launcher telemetry disable patch must still win`)
+
   const composed = applyEntryPatches([], [...basePatches, ...webPatches, ...tuiPatches], () => {})
   const counts = new Map()
   for (const row of composed) {

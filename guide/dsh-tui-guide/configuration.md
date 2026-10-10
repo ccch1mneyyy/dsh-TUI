@@ -25,6 +25,42 @@ Profile 启动按顺序叠加：
 > 覆盖某一行时，`config` 是整块替换，不是逐字段深合并。需要继续生效的字段必须
 > 在用户补丁中全部重写。
 
+## 官方请求元数据与反馈上报
+
+TUI bundle 继承已安装 DSH 官方组合的上报配置；上游未提供的服务不会由 TUI
+补装。当前验证线的默认行为如下，profile、home 和命令行补丁仍可覆盖：
+
+| 配置 | 官方默认 | 发送内容与触发条件 |
+| --- | --- | --- |
+| `plugin-package-inventory-deepseek.enabled` | `true` | DeepSeek 官方 API 请求中的 `dsh_plugin_packages`，包含活跃插件包的名称与版本，可用于识别 TUI 使用量 |
+| `session-log-deepseek.enabled` | `true` | DeepSeek 官方 API 请求中的 `dsh_session_log`，增量携带规范会话事件，包括会话内容；与插件包清单分别控制 |
+| `session-telemetry-otel.mode` | `FEEDBACK_ONLY` | 新的显式反馈授权通过 OTel 上传截至反馈的会话日志前缀，包含上下文；普通聊天不触发该通道 |
+
+前两项是模型输入之外的请求元数据，不增加模型输入 token。它们只随对应的
+DeepSeek 请求发送，不能据此统计 Claude/Codex 后端的全部 TUI 使用。
+
+反馈遥测支持上游环境变量：
+
+- `DSH_TELEMETRY_MODE=DISABLED`：停止 OTel 会话日志上传；默认的 `FEEDBACK_ONLY`
+  仍只在反馈后授权上传。
+- `DSH_TELEMETRY_DISABLED`：任何非空值（包括 `0`、`false`）都会在启动时禁用
+  `session-telemetry-otel` 行。恢复时删除变量；它不控制上述两项 API 请求元数据。
+- `DSH_TELEMETRY_OTLP_URL`：覆盖 OTel collector 地址；未设置时使用已安装官方
+  版本的端点和导出参数。
+
+若需停止 API 请求元数据，可在用户 profile 补丁中分别关闭：
+
+```yaml
+- id: plugin-package-inventory-deepseek
+  config:
+    enabled: false
+- id: session-log-deepseek
+  config:
+    enabled: false
+```
+
+修改 bundle 或启动环境后重启 TUI，既有用户补丁不会被恢复默认的操作删除。
+
 ## TUI 配置
 
 DSH 0.1.7 的 `/settings` 写入当前 profile 的 `cordis.patch.yml`，字段属于插件

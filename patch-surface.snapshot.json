@@ -25,8 +25,6 @@
     "system-prompt",
     "llm-deepseek",
     "agent-loop",
-    "session-telemetry-otel",
-    "plugin-package-inventory-deepseek",
     "sandbox-policy",
     "approval",
     "session-persistence-jsonl"

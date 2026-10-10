@@ -284,6 +284,8 @@ OpenAI 条款约束。完整操作与当前边界：[Codex 后端](docs/codex-ba
 
 Agent 预设、主题、MCP 服务器、环境变量：[配置参考](docs/configuration.md) · [主题系统](docs/themes.md)。
 
+DSH profile 继承官方上报默认：DeepSeek API 请求携带插件包身份和增量会话日志，OpenTelemetry 只在显式反馈后上传截至反馈的会话日志。用户仍可覆盖，详见[上报设置](docs/configuration.md#官方请求元数据与反馈上报)。
+
 ## 工作原理
 
 ```text
