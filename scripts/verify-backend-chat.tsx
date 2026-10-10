@@ -97,6 +97,9 @@ class FakeStdin extends PassThrough {
 const stdin = new FakeStdin()
 const stdout = new FakeStdout()
 const screen = (): string => viewportLines(term, ROWS).join('\n')
+// Startup tips can also contain "Trajectory"; only its header marks the scene.
+const trajectoryOpen = (): boolean => viewportLines(term, ROWS)
+  .some(line => line.trimStart().startsWith(`✦ ${t('traj-title')}`))
 const instance = await ui.render(
   React.createElement(Chat, {
     channel: channel as never,
@@ -163,9 +166,9 @@ try {
   // 三态契约（设计 §④）：核心已挂中立 AgentEvent 折叠源——Ctrl+T 打开
   // 的轨迹场景渲染折叠账本（上面发出的 turn 已成行），不弹能力缺失通
   // 知、不拒绝入口；unsupported 只属于未挂数据源的组合。
-  check('Ctrl+T over the folded core renders the trajectory ledger', await settled(() => screen().includes(t('traj-title')) && screen().includes('1 turns')) && !screen().includes(t('trajectory-unsupported')) && !toasts().includes(t('capability-unavailable-backend', { name: 'trace' })), screen())
+  check('Ctrl+T over the folded core renders the trajectory ledger', await settled(() => trajectoryOpen() && screen().includes('1 turns')) && !screen().includes(t('trajectory-unsupported')) && !toasts().includes(t('capability-unavailable-backend', { name: 'trace' })), screen())
   stdin.write('q')
-  check('the trajectory scene returns to the conversation', await settled(() => !screen().includes(t('traj-title'))))
+  check('the trajectory scene returns to the conversation', await settled(() => !trajectoryOpen() && screen().includes('fake-model')))
   stdin.write('\x1b')
   // 固定窗:pacing the double-Esc detector needs two distinct key events.
   await sleep(80)

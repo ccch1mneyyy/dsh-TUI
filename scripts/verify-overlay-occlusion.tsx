@@ -27,6 +27,7 @@ import chalk from 'chalk'
 import React from 'react'
 import { PassThrough, Writable } from 'node:stream'
 import { OverlayAbove } from '../src/components/OverlayAbove.js'
+import { ModelPicker } from '../src/components/ModelPicker.js'
 import { AlternateScreen, Box, Image, render, Text } from '../src/ui.js'
 import {
   kittyGraphics,
@@ -96,6 +97,7 @@ const options = (stdout: FakeStdout, stdin: FakeStdin) => ({
 })
 
 const TRUECOLOR_BACKGROUND = /\x1b\[48;2;\d+;\d+;\d+m/u
+let sharedCoverColor: number | undefined
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -261,6 +263,7 @@ function rowText(term: InstanceType<typeof XTerm>, y: number): string {
     cellsHaveBackground(term, 0, 0, 4, 2),
     'B: every overlay cell intersecting the image must carry the cover background',
   )
+  sharedCoverColor = term.buffer.active.getLine(0)?.getCell(0)?.getBgColor()
 
   // C: 图像在旁（矩形不相交）→ 仍然透明
   const beforeBeside = stdout.output.length
@@ -400,6 +403,84 @@ function rowText(term: InstanceType<typeof XTerm>, y: number): string {
   )
   stdout.isTTY = false
   instance.unmount()
+}
+
+// Launchpad uses a transparent OverlayAbove. Every backend's model picker
+// must still cover negative-z artwork using the shared overlay's cover color.
+for (const backend of ['dsh', 'claude', 'codex'] as const) {
+  for (const arrival of ['ready', 'late'] as const) {
+    const term = new XTerm({ cols: 40, rows: 30, scrollback: 0, allowProposedApi: true })
+    const stdout = new FakeStdout()
+    stdout.rows = 30
+    stdout.term = term
+    const stdin = new FakeStdin()
+    const noop = () => {}
+    const tree = (open: boolean, image = true) => (
+      <AlternateScreen>
+        <Box width={40} height={30} flexDirection="column">
+          <Image source={image ? source : undefined} width={40} height={15} alt="portrait" transparent />
+          <Box height={8} />
+          <Box height={2}>
+            {open ? <OverlayAbove maxHeight={22} transparent>
+              <Box marginTop={1}>
+                <ModelPicker
+                  groups={backend === 'dsh' ? [{ provider: 'p', label: 'Provider', count: 30 }] : []}
+                  provider="p"
+                  models={Array.from({ length: 30 }, (_, index) => ({ provider: 'p', id: `model${index}`, name: `${backend} model ${index}` }))}
+                  focusIndex={15} currentModel="p/model15" loading={false}
+                  efforts={[{ id: 'high', name: 'HIGH' }]} effortId="high"
+                  effortsLoading={false} effortError={false} levelsFallback={false}
+                  onProvider={noop} onFocus={noop} onEffort={noop} onMove={noop}
+                  onConfirm={noop} onCancel={noop}
+                />
+              </Box>
+            </OverlayAbove> : null}
+          </Box>
+        </Box>
+      </AlternateScreen>
+    )
+    const label = `${backend}, portrait ${arrival}`
+    const panel = () => {
+      const rows = Array.from({ length: 30 }, (_, row) => rowText(term, row))
+      const divider = rows.findIndex(row => row.includes('─'))
+      const levels = rows.findIndex(row => row.includes('HIGH'))
+      return divider > 0 && levels >= divider
+        ? { top: divider - 1, height: levels - divider + 2 } : undefined
+    }
+    const instance = await render(tree(arrival === 'late', arrival === 'ready'), options(stdout, stdin))
+    try {
+      if (arrival === 'late') {
+        assert.ok(await settled(() => panel() !== undefined), `${label}: picker opens before graphics are ready`)
+        const rect = panel()!
+        assert.ok(cellsBackgroundDefault(term, 0, rect.top, 40, rect.height), `${label}: no permanent panel color`)
+        instance.rerender(tree(true))
+      }
+      assert.ok(await settled(() => stdout.output.includes(query.request)), `${label}: image capability query`)
+      stdin.write('\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t\x1b[4;600;400t\x1b[?61;4c\x1b[?61;4c\x1b[?61;4c')
+      assert.ok(await settled(() => stdout.output.includes('a=p,i=')), `${label}: portrait placement ready`)
+      const beforeCover = stdout.output.length
+      if (arrival === 'ready') instance.rerender(tree(true))
+      assert.ok(await settled(() => {
+        const rect = panel()
+        return rect !== undefined && rect.top < 15 && cellsHaveBackground(term, 0, rect.top, 40, rect.height)
+      }), `${label}: the entire picker masks the overlapping portrait`)
+      const rect = panel()!
+      for (let row = rect.top; row < rect.top + rect.height; row++) {
+        for (let col = 0; col < 40; col++) {
+          assert.equal(term.buffer.active.getLine(row)?.getCell(col)?.getBgColor(), sharedCoverColor,
+            `${label}: same cover color as the shared overlay`)
+        }
+      }
+      assert.doesNotMatch(stdout.output.slice(beforeCover), /\x1b_Ga=[dpt],/u, `${label}: covering does not churn graphics`)
+      instance.rerender(tree(false))
+      assert.ok(await settled(() => cellsBackgroundDefault(term, 0, rect.top, 40, rect.height)), `${label}: closing restores the original background`)
+      console.log(`PASS: model picker image occlusion ${label}`)
+    } finally {
+      stdout.isTTY = false
+      instance.unmount()
+      term.dispose()
+    }
+  }
 }
 
 for (const [key, value] of Object.entries(previousEnv)) {
