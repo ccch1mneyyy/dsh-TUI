@@ -1,7 +1,7 @@
 /**
  * /model through the real Chat/channel/rendering path, with a fake LLM catalog:
  * recents-first tabs, current-model promotion, forward/backward wrapping, independent model/effort drafts,
- * same-batch navigation/confirmation, cancellation, mouse picks and wheel,
+ * same-batch navigation/confirmation, cancellation, single-click effort confirmation and wheel,
  * focus windowing and resize in inline/fullscreen at 100 and 36 columns;
  * header shortcuts, readable effort colors and the original terminal background.
  * Claude/Codex use a flat catalog, focus the current model after loading,
@@ -329,10 +329,19 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     if (fullscreen) {
       await click('Beta 01')
       await check('mouse focuses a model', () => focused('Beta 01') && inverse('OFF'))
+      assert.deepEqual(switches, ['alpha/a1'], 'clicking a model only updates its draft')
       await click('MAX')
-      await check('mouse selects effort draft', () => inverse('MAX'))
-      await click('选择')
-      await check('mouse applies model and effort', () => channel.model === 'b1' && channel.reasoningEffort === 'max' && hit('最近使用') === undefined)
+      await check('one effort click applies the focused model and effort and closes the picker', () => channel.model === 'b1' && channel.reasoningEffort === 'max' && hit('最近使用') === undefined)
+      assert.deepEqual(switches, ['alpha/a1', 'beta/b1'])
+      assert.deepEqual(effortPicks, ['high', 'max'])
+      assert.equal(JSON.parse(readFileSync(join(prefsDir, 'effort.json'), 'utf8')).effort, 'max')
+      await open('Beta 01', 'MAX')
+      await click('beta / Beta 01')
+      await check('clicking the current model keeps the picker open', () => focused('Beta 01') && inverse('MAX'))
+      await click('MAX')
+      await check('clicking the selected effort also confirms and closes', () => hit('最近使用') === undefined && switches.length === 3 && effortPicks.length === 3)
+      assert.deepEqual(switches, ['alpha/a1', 'beta/b1', 'beta/b1'])
+      assert.deepEqual(effortPicks, ['high', 'max', 'max'])
       stdin.write('/model')
       await check('mouse follow-up command', () => hit('/model') !== undefined)
       stdin.write('\r')
@@ -441,9 +450,9 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
       await click('Model 01')
       assert.ok(await settled(() => focused('Model 01') && panelUsesDefaultBackground(term)), `${label}: mouse selects a model`)
       await click('HIGH')
-      await click('选择')
-      assert.ok(await settled(() => !text().includes('推理强度') && picks.length === 2 && effortPicks.at(-1) === 'high'), `${label}: mouse applies model and reasoning`)
+      assert.ok(await settled(() => !text().includes('推理强度') && picks.length === 2 && effortPicks.at(-1) === 'high'), `${label}: one effort click applies model and reasoning and closes the picker`)
       assert.deepEqual(picks, ['m0', 'm1'])
+      assert.deepEqual(effortPicks, ['high'])
     } else {
       assert.deepEqual(effortPicks, [], `${label}: no reasoning changes without an explicit draft`)
     }

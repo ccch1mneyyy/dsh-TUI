@@ -184,6 +184,7 @@ export function ModelPicker({
                   muted={false}
                   cursor={caretZone === 'effort'}
                   onPick={onEffort}
+                  onConfirm={onConfirm}
                 />
               </>
             )}
@@ -197,7 +198,7 @@ export function ModelPicker({
 }
 
 /** Keep the active cell visible when a provider or effort strip exceeds its width. */
-function PickerTabs({ labels, focusIndex, width, muted = true, cursor = false, onPick }: {
+function PickerTabs({ labels, focusIndex, width, muted = true, cursor = false, onPick, onConfirm }: {
   labels: readonly string[]
   focusIndex: number
   width: number
@@ -205,6 +206,8 @@ function PickerTabs({ labels, focusIndex, width, muted = true, cursor = false, o
   /** This strip owns the native caret — its region was the last one used. */
   cursor?: boolean
   onPick(index: number): void
+  /** Confirm a clicked label; overflow arrows only navigate. */
+  onConfirm?(): void
 }): React.ReactNode {
   const singleLines = labels.map(label => label.replace(/[\r\n]+/g, ' '))
   const allFit = singleLines.reduce((sum, label) => sum + stringWidth(label) + 2, 0)
@@ -225,7 +228,10 @@ function PickerTabs({ labels, focusIndex, width, muted = true, cursor = false, o
           isFocused={start + index === focusIndex}
           muted={muted}
           cursor={cursor}
-          onPick={() => onPick(start + index)}
+          onPick={() => {
+            onPick(start + index)
+            onConfirm?.()
+          }}
         />
       ))}
       {end < cells.length ? <Box onClick={event => { event.stopImmediatePropagation(); onPick(end) }}><Text dimColor>›</Text></Box> : null}
