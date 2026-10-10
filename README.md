@@ -294,7 +294,7 @@ Full reference: [Interaction and commands](docs/interaction.en.md).
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` open the same session manager: workspace rail, live state, filter, ★ pins. Also `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`.
 
-`/model` shows models and reasoning effort on one page. DSH has provider tabs with **Recently used** first, moving the current model to the top; `Tab` / `Shift+Tab` select the next / previous provider. Codex and Claude open their model catalogs directly, without provider or recents tabs. `↑/↓` select a model, `←/→` adjust its effort, `Enter` applies both, and `Esc` cancels. Mouse users can click the available tabs, models, effort levels, and select/cancel hints; the wheel moves through models.
+`/model` shows models and reasoning effort on one page. DSH has provider tabs with **Recently used** first, moving the current model to the top; `Tab` / `Shift+Tab` select the next / previous provider. Codex and Claude open their model catalogs directly, without provider or recents tabs. `↑/↓` select a model, `←/→` adjust its effort, `Enter` applies the model and any explicit effort draft, and `Esc` cancels. Changing only the model preserves the backend's preference handling. Mouse users can click the available tabs, models, effort levels, and select/cancel hints; the wheel moves through models.
 Shortcuts sit below the title and effort levels have their own section; DSH, Claude, and Codex all use an opaque themed panel background.
 
 In `/provider`'s model list, focus a model and press `Tab` to edit its context window, max output tokens, reasoning efforts, and image input capability.

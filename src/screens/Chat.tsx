@@ -4356,6 +4356,9 @@ export function Chat({
       return
     }
     if (overlay.kind === 'model') {
+      if (actionMatches('sidePanel', input, key) || actionMatches('sidePanelZoom', input, key)) {
+        if (sidePanel.handleKey(input, key, event)) return
+      }
       // The model picker owns both navigation axes, including when a side
       // panel or transcript selection held focus before it opened.
       const now = Date.now()

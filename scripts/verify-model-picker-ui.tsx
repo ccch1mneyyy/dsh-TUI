@@ -123,6 +123,7 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
   const effortPicks: string[] = []
   channel.switchModel = async (provider, model) => {
     switches.push(`${provider}/${model}`)
+    if (channel.provider === provider && channel.model === model) return true
     channel.provider = provider
     channel.model = model
     channel.reasoningEffort = undefined
@@ -195,7 +196,7 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     stdin.write('\r')
     await check('Enter without navigation keeps the current model and effort', () => channel.model === 'a0' && channel.reasoningEffort === 'medium' && hit('最近使用') === undefined)
     assert.deepEqual(switches, ['alpha/a0'])
-    assert.deepEqual(effortPicks, ['medium'])
+    assert.deepEqual(effortPicks, [], 'confirming without an effort draft must not persist a derived default')
     switches.length = 0
     effortPicks.length = 0
     await open()
@@ -230,6 +231,7 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     await check('Right and Enter apply the new model and effort', () => channel.model === 'a1' && channel.reasoningEffort === 'high' && hit('最近使用') === undefined)
     assert.deepEqual(switches, ['alpha/a1'])
     assert.deepEqual(effortPicks, ['high'])
+    assert.equal(JSON.parse(readFileSync(join(prefsDir, 'effort.json'), 'utf8')).effort, 'high', 'an explicit effort draft is persisted')
 
     await open('Alpha 01', 'HIGH')
     stdin.write('\t')
@@ -336,6 +338,7 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
     stdin.write('\r')
     assert.ok(await settled(() => !text().includes('推理强度') && picks.length === 1), `${label}: Enter confirms the current model`)
     assert.deepEqual(picks, ['m0'])
+    assert.deepEqual(effortPicks, [], `${label}: a derived default is not an explicit effort choice`)
     stdin.write('/model')
     assert.ok(await settled(() => text().includes('/model')), `${label}: reopen composer`)
     stdin.write('\r')
@@ -364,7 +367,7 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
       assert.ok(await settled(() => !text().includes('推理强度') && picks.length === 2 && effortPicks.at(-1) === 'high'), `${label}: mouse applies model and reasoning`)
       assert.deepEqual(picks, ['m0', 'm1'])
     } else {
-      assert.ok(effortPicks.every(id => id === 'medium'), `${label}: no reasoning changes while browsing`)
+      assert.deepEqual(effortPicks, [], `${label}: no reasoning changes without an explicit draft`)
     }
     assert.equal(readFileSync(recentFile, 'utf8'), previousRecents, `${label}: confirmation and cancellation do not update recents`)
     console.log(`PASS /model flat opaque ${label}`)
@@ -375,11 +378,123 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
   }
 }
 
+/** Actual DSH route adoption and preference application, plus modal/global key priority. */
+async function reviewRegression(fullscreen: boolean): Promise<void> {
+  const label = fullscreen ? 'fullscreen sidebar' : 'inline preference'
+  const prefs = await import('../src/tuiDisplayPrefs.js')
+  const previousPanel = { split: prefs.getSidePanelSplitEnabled(), open: prefs.getSidePanelOpen(), panels: prefs.getSidePanelPanels() }
+  prefs.applySidePanelSplitEnabled(fullscreen)
+  prefs.applySidePanelOpen(false)
+  prefs.applySidePanelPanels('info')
+  const preferenceFile = join(prefsDir, 'effort.json')
+  writeFileSync(preferenceFile, '{"effort":"high"}')
+  const beforePreference = readFileSync(preferenceFile, 'utf8')
+  writeFileSync(join(prefsDir, 'model-recents.json'), JSON.stringify({ models: [{ provider: 'alpha', id: 'a0' }] }))
+  const { term, stdout, stdin, stderr } = terminalHarness(fullscreen ? 150 : 100)
+  const events = Array.from({ length: 20 }, (_, seq) => ({
+    seq, time: Date.now(), type: 'user/message',
+    data: { source: { kind: 'user' }, content: [{ type: 'text', text: `Review history ${seq}` }] },
+  }))
+  const makeAgent = (id: string, seed: readonly unknown[]) => ({
+    id, status: 'idle', ctx: { on: () => () => {} },
+    session: { id: `session-${id}`, seq: seed.length, events: seed, header: {} },
+    inbox: { remove: () => true }, followup() {}, steer() {},
+  })
+  let agentCount = 0
+  const ctx = {
+    on: () => () => {}, logger: { warn() {} },
+    get: (name: string) => name === 'llm' ? {
+      listProviders: () => [PROVIDERS[0]!],
+      listModels: async () => MODELS.slice(0, 2),
+      resolveModelInfo: async (provider: string, model: string) => modelInfo(provider, model),
+    } : name === 'agents' ? {
+      create: async (options: { seed: readonly unknown[] }) => ({ agent: makeAgent(`fork-${++agentCount}`, options.seed), dispose: async () => {} }),
+    } : undefined,
+  }
+  const channel = createChannel(ctx as never, makeAgent('initial', events) as never, { provider: 'alpha', model: 'a0', cwd: '/tmp', effort: 'high', activity: false, whaleIdle: false })
+  const effortPicks: string[] = []
+  const setEffort = channel.setEffort
+  channel.setEffort = id => { effortPicks.push(id); return setEffort(id) }
+  const screen = <Chat channel={channel as never} questionStore={new QuestionStore()} fullscreen={fullscreen} onExit={() => {}} />
+  const app = await render(fullscreen ? <AlternateScreen>{screen}</AlternateScreen> : screen, { stdin, stdout, stderr, exitOnCtrlC: false, patchConsole: false })
+  const lines = () => viewportLines(term)
+  const text = () => lines().join('\n')
+  const focused = (name: string) => lines().some(line => line.includes('❯') && line.includes(name))
+  const inverse = (needle: string) => {
+    const view = lines()
+    const row = view.findIndex(line => line.includes(needle))
+    if (row < 0) return false
+    const col = stringWidth(view[row]!.slice(0, view[row]!.indexOf(needle)))
+    return Boolean(term.buffer.active.getLine(term.buffer.active.baseY + row)?.getCell(col)?.isInverse())
+  }
+  const check = async (name: string, condition: () => boolean) => {
+    const ok = await settled(condition)
+    if (!ok) console.error(text(), channel.notifications)
+    assert.ok(ok, `${label}: ${name}`)
+  }
+  const pickerWidth = () => {
+    const view = lines()
+    const hint = view.findIndex(line => line.includes('↑/↓ 模型'))
+    return view[hint - 2]?.match(/─+/u)?.[0].length ?? 0
+  }
+  try {
+    await check('boot', () => text().includes('Review history 19'))
+    stdin.write('/model')
+    await check('composer', () => text().includes('/model'))
+    stdin.write('\r')
+    await check('picker', () => focused('Alpha 00') && text().includes('最近使用'))
+    if (fullscreen) {
+      const wide = pickerWidth()
+      stdin.write('\x02')
+      await check('Ctrl+B opens the sidebar without dismissing the picker', () => prefs.getSidePanelOpen() && focused('Alpha 00') && pickerWidth() < wide)
+      stdin.write('\x02')
+      await check('Ctrl+B closes the sidebar while the picker stays open', () => !prefs.getSidePanelOpen() && focused('Alpha 00') && pickerWidth() === wide)
+      stdin.write('\x02')
+      await check('Ctrl+B reopens and focuses the sidebar', () => prefs.getSidePanelOpen() && pickerWidth() < wide)
+      const splitWidth = pickerWidth()
+      stdin.write('\x1bz')
+      await check('Alt+Z zooms the sidebar while the picker stays open', () => pickerWidth() > 0 && pickerWidth() < splitWidth && text().includes('最近使用'))
+      stdin.write('\x1bz')
+      await check('Alt+Z restores the split', () => pickerWidth() === splitWidth)
+      stdin.write('\t\x1b[B')
+      await check('Tab/Down belong to the picker while the sidebar owns focus', () => focused('Alpha 01'))
+      stdin.write('\x1b[C')
+      await check('Right changes the effort draft instead of the active panel', () => inverse('HIGH') && focused('Alpha 01'))
+      stdin.write('\x1b')
+      await check('Esc closes the picker before the sidebar', () => !text().includes('最近使用') && prefs.getSidePanelOpen())
+      assert.deepEqual(effortPicks, [])
+      stdin.write('\x02')
+      await check('Ctrl+B closes the focused sidebar', () => !prefs.getSidePanelOpen())
+      stdin.write('/model')
+      await check('reopen composer', () => text().includes('/model'))
+      stdin.write('\r')
+      await check('reopened picker', () => focused('Alpha 00'))
+    }
+    stdin.write('\t\x1b[B')
+    await check('target with a medium default', () => focused('Alpha 01') && text().includes('MEDIUM'))
+    await sleep(90) // 固定窗:墙钟 Chat's 80ms modal-Enter debounce.
+    stdin.write('\r')
+    await check('the saved high preference is applied by actual route binding', () => channel.model === 'a1' && channel.reasoningEffort === 'high' && !text().includes('最近使用'))
+    assert.deepEqual(effortPicks, [], 'model-only confirmation must not call setEffort')
+    assert.equal(readFileSync(preferenceFile, 'utf8'), beforePreference, 'model-only confirmation preserves effort.json byte-for-byte')
+    assert.equal(channel.notifications.some(note => note.text.includes('推理强度 →')), false, 'no effort-switched notification without a draft')
+    console.log(`PASS /model review regressions ${label}`)
+  } finally {
+    app.unmount()
+    disposeChannelOwner(channel)
+    term.dispose()
+    prefs.applySidePanelSplitEnabled(previousPanel.split)
+    prefs.applySidePanelOpen(previousPanel.open)
+    prefs.applySidePanelPanels(previousPanel.panels)
+  }
+}
+
 try {
   for (const fullscreen of [false, true]) for (const columns of [100, 36]) await scenario(fullscreen, columns)
   for (const backend of ['claude', 'codex'] as const) {
     for (const fullscreen of [false, true]) for (const columns of [100, 36]) await backendSurface(backend, fullscreen, columns)
   }
+  for (const fullscreen of [false, true]) await reviewRegression(fullscreen)
 } finally {
   rmSync(testHome, { recursive: true, force: true })
 }

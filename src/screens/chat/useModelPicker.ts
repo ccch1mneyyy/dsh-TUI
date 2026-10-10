@@ -124,7 +124,8 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
     const model = modelsFor(current.provider)[current.index]
     if (model === undefined) return
     activeRef.current = false
-    onPick(model, effortFor(model, catalogs.get(modelKey(model))))
+    // Derived defaults are preview text; only an explicit draft is a choice.
+    onPick(model, draftsRef.current.get(modelKey(model)))
   }
   const cancel = (): void => {
     activeRef.current = false

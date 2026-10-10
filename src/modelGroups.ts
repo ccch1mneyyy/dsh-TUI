@@ -1,9 +1,8 @@
 /**
  * Pure derivation for the `/model` provider tabs, with a pinned
  * "recently used" pseudo-provider first. Kept free of React/channel/i18n state so
- * `scripts/verify-model-picker-groups.mjs` can drive it headless; the
- * recents row's localized label is resolved at render time (its `label`
- * field is the {@link RECENTS_LABEL_PLACEHOLDER} sentinel).
+ * `scripts/verify-model-picker-groups.mjs` can drive it headless. Renderers
+ * derive the localized recents label from its provider key.
  *
  * @module dsh-tui/modelGroups
  */
@@ -17,7 +16,7 @@ import type { LlmModelInfo, LlmProviderInfo } from './adapter/ports/channel-view
  */
 export const RECENTS_GROUP_PROVIDER = '__recents__'
 
-/** The recents row's raw label; renderers replace it with the localized one. */
+/** Placeholder for pure group data; the UI labels recents by provider key. */
 export const RECENTS_LABEL_PLACEHOLDER = '__recent__'
 
 /** One recent-model reference (same shape as modelRecents' persisted ref). */
