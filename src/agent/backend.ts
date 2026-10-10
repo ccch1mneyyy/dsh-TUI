@@ -157,11 +157,16 @@ export interface SessionListScope {
 /**
  * A backend's offline session catalog: no session needs to be open. Rows
  * are the browser's own `SessionSummary` shape with `backendId` set. The
- * backend's own store stays authoritative; the TUI indexes nothing beyond
- * what the catalog itself caches.
+ * backend's own store stays authoritative; completed listings may be retained
+ * solely for the browser's first paint while the catalog refreshes.
  */
 export interface SessionCatalog {
-  list(scope?: SessionListScope): Promise<readonly SessionSummary[]>
+  /** Partial callbacks contain cumulative rows for this scope; only resolution
+   *  of the promise represents a complete, successful listing. */
+  list(scope?: SessionListScope, onPartial?: (rows: readonly SessionSummary[]) => void): Promise<readonly SessionSummary[]>
+  /** Stable backend/store identity for a first-paint snapshot, never transcript
+   *  authority. Undefined declines disk caching (for example a relative root). */
+  snapshotKey?(): string | undefined
   /** One session's row, or undefined when the backend has no such session. */
   info?(sessionId: string, cwd?: string): Promise<SessionSummary | undefined>
   /** The trailing exchanges of a session (browser preview), newest last. */

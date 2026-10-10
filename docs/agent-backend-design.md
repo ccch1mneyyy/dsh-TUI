@@ -171,6 +171,9 @@ Record<keyof Options, …>`，SDK 增删选项时 `tsc` 会报错）。要点：
 - 目录（`catalog.ts`）：`listSessions` 带 `includeProgrammatic: true`。SDK 创建的会话
   在 CLI 自己的 `/resume` 选择器里是隐藏的，所以 dsh-tui 建的会话要用
   `claude --resume <id>` 打开。
+  后端通过 `SessionCatalog.snapshotKey()` 声明存储作用域，共享 channel 在完整读取
+  后记录首屏快照，每次打开仍刷新官方目录。`list()` 的可选回调可提前展示分页，
+  部分或失败的读取不写完整快照；DSH 使用同一快照实现，保留 JSONL provider 的作用域键。
 - 恢复：先读历史（`getSessionMessages` 加子代理转录）并在订阅前同步画出，再接 live；
   续接后的翻译器沿用回放的编号。上下文窗口无法从转录恢复，等首个 `result` 补上。
 - 加载更早消息（`older-history.ts`、`transcript-file.ts`）：从原生 JSONL 沿压缩边界

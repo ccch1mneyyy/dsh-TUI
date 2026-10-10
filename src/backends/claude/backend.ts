@@ -11,6 +11,7 @@
  * the CLI refuses fails loudly; nothing falls back to a fresh session.
  */
 import { randomUUID } from 'node:crypto'
+import { isAbsolute, normalize } from 'node:path'
 import type { AgentBackend, BackendDetection, BackendHost, OpenTarget } from '../../agent/backend.js'
 import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
@@ -25,6 +26,7 @@ import { fileClaudeChannelTokens, type ClaudeChannelTokens } from '../shared/cha
 import { replayClaudeTranscript, type ClaudeReplay, type ClaudeSubagentTranscript } from './replay.js'
 import { installedSdkVersion, loadClaudeSdk, type ClaudeSessionStoreSdk } from './sdk.js'
 import { openClaudeSession } from './session.js'
+import { claudeConfigDir } from './transcript-file.js'
 import { errorText } from './narrow.js'
 
 /** The user-facing refresh failure: a fixed sentence, the HTTP status at most. */
@@ -178,6 +180,10 @@ export const claudeBackend: AgentBackend = {
     loadSdk: loadClaudeSdk,
     cwd: () => process.cwd(),
     lastUsed: () => catalogPrefs.read().lastUsed ?? {},
+    snapshotKey: () => {
+      const home = claudeConfigDir(process.env)
+      return isAbsolute(home) ? JSON.stringify(['claude', normalize(home)]) : undefined
+    },
   }),
 
   /** Create a session in `target.cwd` (an explicit session id, so the TUI

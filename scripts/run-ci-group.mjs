@@ -950,6 +950,7 @@ const GROUPS = {
     ["verify-codex-plans", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-plans.ts']],
     ["verify-codex-advanced", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-advanced.ts']],
     ["verify-codex-catalog-history", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-catalog-history.ts']],
+    ["verify-backend-list-snapshot", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-list-snapshot.ts']],
     ["verify-codex-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-lifecycle.ts']],
     ["verify-codex-side-query", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-side-query.ts']],
     ["verify-codex-reconnect", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-reconnect.ts']],

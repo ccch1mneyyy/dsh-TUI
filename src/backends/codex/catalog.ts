@@ -14,6 +14,7 @@ export interface CodexCatalogDeps {
   acquire(cwd?: string): Promise<{ readonly hub: Pick<CodexHub, 'call'>; readonly release: () => void }>
   cwd(): string
   lastUsed?(): Readonly<Record<string, number>>
+  snapshotKey?(): string | undefined
 }
 const LIST_LIMIT = 500
 const LIST_PAGE = 200
@@ -71,22 +72,27 @@ export function createCodexCatalog(deps: CodexCatalogDeps): SessionCatalog {
   }
   return {
     deleteAction: 'archive',
-    list(scope: SessionListScope = {}) {
+    ...(deps.snapshotKey === undefined ? {} : { snapshotKey: deps.snapshotKey }),
+    list(scope: SessionListScope = {}, onPartial?: (rows: readonly SessionSummary[]) => void) {
       const cwd = scope.allProjects === true ? undefined : scope.cwd ?? deps.cwd()
       return borrow(cwd, async hub => {
         const rows = new Map<string, SessionSummary>()
         let cursor: string | undefined
         let scanned = 0
         const seen = new Set<string>()
+        // Read file-backed preferences once, rather than synchronously reading
+        // and parsing them for every thread in every page.
+        const used = deps.lastUsed?.()
         // The row budget also bounds the number of empty/malformed pages.
         for (let page = 0; page < Math.ceil(LIST_LIMIT / LIST_PAGE) && scanned < LIST_LIMIT; page += 1) {
           const answer = rec(await hub.call(CLIENT.threadList, { limit: Math.min(LIST_PAGE, LIST_LIMIT - scanned), sortKey: 'recency_at', sortDirection: 'desc', archived: false, modelProviders: [], ...(cwd === undefined ? {} : { cwd }), ...(cursor === undefined ? {} : { cursor }) }))
           const data = arr(answer?.data)
           scanned += data.length
           for (const raw of data.slice(0, LIST_LIMIT - rows.size)) {
-            const row = codexSessionSummary(raw, deps.lastUsed?.())
+            const row = codexSessionSummary(raw, used)
             if (row !== undefined && row.kind.kind !== 'subagent') rows.set(row.id, row)
           }
+          onPartial?.([...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt))
           cursor = text(answer?.nextCursor)
           if (cursor === undefined || seen.has(cursor)) break
           seen.add(cursor)

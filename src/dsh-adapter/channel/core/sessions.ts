@@ -17,6 +17,7 @@ import type { AgentSession } from '../../../agent/session.js'
 import { t, type I18nKey } from '../../../i18n.js'
 import { WORKING_GATE_NOTICES } from '../../../commands.js'
 import { occupancyOf, readSessionOwners } from '../../../sessionMounts.js'
+import { beginListingSnapshot, readListingSnapshot } from '../../../sessions/listSnapshot.js'
 import type { ChannelActionDelegates } from '../action-readiness.js'
 import type { ChannelOwner } from '../owner.js'
 import type { ChannelLaunchOptions } from '../state.js'
@@ -50,14 +51,34 @@ export function createCoreSessionActions(deps: {
   const caps = (): AgentSession['capabilities'] => deps.session().capabilities
   /** The last successful listing (the browser's first paint; may be stale). */
   let cached: readonly SessionSummary[] | undefined
-  const rowOf = (sessionId: string): SessionSummary | undefined => cached?.find(row => row.id === sessionId)
+  let cachedSource: string | SessionCatalog | undefined
+  let listingGeneration = 0
+  const cachedSessions = (): readonly SessionSummary[] | undefined => {
+    const catalog = deps.catalog
+    if (catalog === undefined) return undefined
+    const key = catalog.snapshotKey?.()
+    if (cachedSource === (key ?? catalog)) return cached
+    return key === undefined ? undefined : readListingSnapshot(key)
+  }
+  const remember = (rows: readonly SessionSummary[]): void => {
+    cached = rows
+    cachedSource = deps.catalog?.snapshotKey?.() ?? deps.catalog
+  }
+  const saveMutation = (rows: readonly SessionSummary[] | undefined): void => {
+    ++listingGeneration
+    if (rows === undefined) return
+    remember(rows)
+    const key = deps.catalog?.snapshotKey?.()
+    if (key !== undefined) beginListingSnapshot(key)(rows)
+  }
+  const rowOf = (sessionId: string): SessionSummary | undefined => cachedSessions()?.find(row => row.id === sessionId)
   const isBound = (sessionId: string): boolean => deps.session().ref.sessionId === sessionId
   const failed = (key: I18nKey, error: unknown): void => {
     if (deps.owner.current()) notify(t(key, { err: errorText(error) }), { color: 'error', timeoutMs: 8000 })
   }
 
   const delegates: Partial<ChannelActionDelegates> = {
-    cachedSessions: () => cached,
+    cachedSessions,
 
     /**
      * The bound backend's sessions: the working directory's first (painted
@@ -68,17 +89,34 @@ export function createCoreSessionActions(deps: {
     async listSessions(_onEnriched, onPartial) {
       const catalog = deps.catalog
       if (catalog === undefined) { unavailable('resume'); return [] }
-      const local = await catalog.list({ cwd: deps.state().cwd })
-      onPartial?.(local)
+      const generation = ++listingGeneration
+      const session = deps.session()
+      const key = catalog.snapshotKey?.()
+      const current = (): boolean => deps.owner.current() && generation === listingGeneration && deps.session() === session && catalog.snapshotKey?.() === key
+      const save = key === undefined ? undefined : beginListingSnapshot(key)
+      const publish = (rows: readonly SessionSummary[]): void => { if (current()) onPartial?.(rows) }
+      const local = await catalog.list({ cwd: deps.state().cwd }, publish)
+      if (!current()) return []
+      publish(local)
       let all: readonly SessionSummary[]
+      let complete = true
       try {
-        all = await catalog.list({ allProjects: true })
+        all = await catalog.list({ allProjects: true }, rows => {
+          const ids = new Set(rows.map(row => row.id))
+          publish([...rows, ...local.filter(row => !ids.has(row.id))].sort((a, b) => b.updatedAt - a.updatedAt))
+        })
       } catch {
         all = local
+        complete = false
       }
+      if (!current()) return []
       const ids = new Set(all.map(row => row.id))
       const merged = [...all, ...local.filter(row => !ids.has(row.id))].sort((a, b) => b.updatedAt - a.updatedAt)
-      cached = merged
+      // Failed global reads and partial pages never replace a durable snapshot.
+      if (complete) {
+        remember(merged)
+        save?.(merged)
+      }
       return merged
     },
 
@@ -104,7 +142,7 @@ export function createCoreSessionActions(deps: {
         failed('rename-failed', error)
         return false
       }
-      cached = cached?.map(row => row.id === sessionId ? { ...row, title: { text: next, source: 'renamed' } } : row)
+      saveMutation(cachedSessions()?.map(row => row.id === sessionId ? { ...row, title: { text: next, source: 'renamed' } } : row))
       if (isBound(sessionId) && deps.owner.current()) {
         const state = deps.state()
         state.sessionTitle = next
@@ -135,7 +173,7 @@ export function createCoreSessionActions(deps: {
         return false
       }
       deps.prefs?.forget(sessionId)
-      cached = cached?.filter(row => row.id !== sessionId)
+      saveMutation(cachedSessions()?.filter(row => row.id !== sessionId))
       return true
     },
 

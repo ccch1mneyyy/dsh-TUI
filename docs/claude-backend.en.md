@@ -157,6 +157,9 @@ a notice, so a cloned repository cannot silently switch off every check.
   conversation continues), `Ctrl+R` renames, `Ctrl+D` deletes; the open session and
   one another dsh-TUI terminal is using cannot be deleted. Pins are kept per
   backend.
+  Reopening or restarting first paints the last complete list while the SDK refreshes it.
+  First-paint snapshots are isolated by Claude configuration directory; failed reads
+  preserve the last complete snapshot.
 - From a shell: `dsh-tui --backend claude --resume <id>`; without an id it resumes
   the last Claude session this install used. dsh-TUI prints that command on exit.
   A session another dsh-TUI terminal has open is refused, and a `--resume` that

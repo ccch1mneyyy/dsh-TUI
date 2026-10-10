@@ -9,6 +9,7 @@
  * choices (start mode, model, effort) travel per thread as request
  * parameters; nothing is written into Codex's configuration.
  */
+import { isAbsolute, normalize } from 'node:path'
 import type { AgentBackend, BackendHost, OpenTarget } from '../../agent/backend.js'
 import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
@@ -19,7 +20,7 @@ import { codexAuthRoute } from './auth/route.js'
 import { createCodexChannelsRuntime, fileCodexChannels, type CodexChannels, type CodexChannelsRuntime } from './channels.js'
 import type { ChannelTokenStore } from '../shared/channel-tokens.js'
 import { createCodexCatalog } from './catalog.js'
-import { detectCodex } from './detect.js'
+import { codexHomeDir, detectCodex } from './detect.js'
 import { errorText, rec, str, type Rec } from './narrow.js'
 import { CLIENT } from './protocol/index.js'
 import { fileCodexPrefs, type CodexPrefs } from './prefs.js'
@@ -236,6 +237,12 @@ export const codexBackend: AgentBackend = {
     },
     cwd: () => catalogHost?.cwd ?? process.cwd(),
     lastUsed: () => catalogPrefs.read().lastUsed ?? {},
+    snapshotKey: () => {
+      const home = codexHomeDir()
+      const sqlite = process.env.CODEX_SQLITE_HOME
+      if (!isAbsolute(home) || (sqlite !== undefined && sqlite !== '' && !isAbsolute(sqlite))) return undefined
+      return JSON.stringify(['codex', normalize(home), sqlite ? normalize(sqlite) : null])
+    },
   }),
 
   launch: {

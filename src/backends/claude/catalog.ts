@@ -33,6 +33,7 @@ export interface ClaudeCatalogDeps {
   cwd(): string
   /** This install's last-used notes (epoch ms by session id). */
   lastUsed?(): Readonly<Record<string, number>>
+  snapshotKey?(): string | undefined
 }
 
 /** Preview depth when the caller names none. */
@@ -78,6 +79,7 @@ export function createClaudeCatalog(deps: ClaudeCatalogDeps): SessionCatalog {
   const lastUsed = (): Readonly<Record<string, number>> => deps.lastUsed?.() ?? {}
   const dirOption = (cwd: string | undefined): { dir: string } | undefined => cwd === undefined || cwd === '' ? undefined : { dir: cwd }
   return {
+    ...(deps.snapshotKey === undefined ? {} : { snapshotKey: deps.snapshotKey }),
     async list(scope: SessionListScope = {}): Promise<readonly SessionSummary[]> {
       const sdk = await deps.loadSdk()
       const infos = scope.allProjects === true

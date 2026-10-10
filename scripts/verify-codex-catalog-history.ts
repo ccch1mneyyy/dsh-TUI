@@ -36,8 +36,12 @@ const row = (id: string, extra: Record<string, unknown> = {}) => ({ id, cwd: SET
   const hub = createCodexHub(SETTINGS, { transportFactory: fake.transportFactory })
   await hub.ready
   let releases = 0
-  const catalog = createCodexCatalog({ acquire: async () => ({ hub, release: () => { releases += 1 } }), cwd: () => SETTINGS.cwd })
-  const rows = await catalog.list()
+  let preferenceReads = 0
+  const catalog = createCodexCatalog({ acquire: async () => ({ hub, release: () => { releases += 1 } }), cwd: () => SETTINGS.cwd, lastUsed: () => { preferenceReads += 1; return {} } })
+  const batches: string[][] = []
+  const rows = await catalog.list({}, rows => { batches.push(rows.map(row => row.id)) })
+  check('catalog list: preferences are read once across all pages', preferenceReads === 1)
+  check('catalog list: the first page publishes before the full result', JSON.stringify(batches) === JSON.stringify([['A'], ['B', 'A']]))
   check('catalog list: native paging/scoped cwd/all provider filter excludes children', rows.map(row => row.id).join(',') === 'B,A' && fake.requests.filter(request => request.method === 'thread/list').length === 2 && fake.requests.find(request => request.method === 'thread/list')?.params.cwd === SETTINGS.cwd && JSON.stringify(fake.requests.find(request => request.method === 'thread/list')?.params.modelProviders) === '[]')
   await catalog.list({ allProjects: true })
   check('catalog list: all-projects omits cwd, archived threads stay excluded', fake.requests.filter(request => request.method === 'thread/list').at(-1)?.params.cwd === undefined && fake.requests.filter(request => request.method === 'thread/list').at(-1)?.params.archived === false)
@@ -52,6 +56,22 @@ const row = (id: string, extra: Record<string, unknown> = {}) => ({ id, cwd: SET
   try { await catalog.delete!('worker') } catch (error) { failed = error instanceof Error && !error.message.includes('active internal worker') }
   check('catalog: active worker archive refusal is localized', failed)
   check('catalog: every success/failure releases its borrowed runtime', releases === 8)
+  await hub.close()
+}
+{
+  const fake = createFakeAppServer()
+  fake.on('thread/list', params => params.cursor === 'slow-page' ? NO_REPLY : { data: [row('first')], nextCursor: 'slow-page' })
+  const hub = createCodexHub(SETTINGS, { transportFactory: fake.transportFactory })
+  await hub.ready
+  const batches: string[][] = []
+  let done = false
+  const catalog = createCodexCatalog({ acquire: async () => ({ hub, release: () => {} }), cwd: () => SETTINGS.cwd })
+  const listing = catalog.list({}, rows => { batches.push(rows.map(row => row.id)) }).then(rows => { done = true; return rows })
+  const first = await fake.waitForRequest('thread/list')
+  const request = await fake.waitForRequest('thread/list', { after: fake.requests.indexOf(first) + 1 })
+  check('catalog cold load: useful first-page rows are available while the next page is pending', !done && JSON.stringify(batches) === JSON.stringify([['first']]))
+  fake.reply(request.id, { data: [row('second')], nextCursor: null })
+  check('catalog cold load: completion retains both pages', (await listing).map(row => row.id).sort().join(',') === 'first,second')
   await hub.close()
 }
 {
