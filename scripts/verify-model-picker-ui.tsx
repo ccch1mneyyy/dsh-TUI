@@ -70,11 +70,25 @@ const modelInfo = (provider: string, model: string) => ({
 function terminalHarness(columns: number) {
   const term = new Terminal({ cols: columns, rows: 30, scrollback: 2000, allowProposedApi: true })
   activateModernEmojiWidths(term)
+  // DECSET/DECRST 25: the picker parks the terminal's native caret, so its
+  // visibility is part of the contract (cursor animation/trails need it shown).
+  let cursorShown = true
+  for (const [final, next] of [['h', true], ['l', false]] as const) {
+    term.parser.registerCsiHandler({ prefix: '?', final }, params => {
+      if (params.includes(25)) cursorShown = next
+      return false
+    })
+  }
+  const chunks: string[] = []
   class Output extends Writable {
     columns = columns
     rows = 30
     isTTY = true
-    _write(chunk: unknown, _encoding: BufferEncoding, done: () => void) { term.write(String(chunk), done) }
+    _write(chunk: unknown, _encoding: BufferEncoding, done: () => void) {
+      const data = String(chunk)
+      chunks.push(data)
+      term.write(data, done)
+    }
   }
   class Input extends PassThrough {
     isTTY = true
@@ -85,7 +99,22 @@ function terminalHarness(columns: number) {
   const stdout = new Output()
   const stdin = new Input()
   const stderr = new Writable({ write(_chunk, _encoding, done) { done() } })
-  return { term, stdout, stdin, stderr }
+  return { term, stdout, stdin, stderr, chunks, cursorShown: () => cursorShown }
+}
+
+/** Viewport-relative physical cursor position (matches `viewportLines` rows). */
+function caretPosition(term: InstanceType<typeof Terminal>): { x: number; y: number } {
+  return { x: term.buffer.active.cursorX, y: term.buffer.active.cursorY }
+}
+
+/** The caret sits on the ❯ pointer of the row that shows `model`. */
+function caretOnPointer(term: InstanceType<typeof Terminal>, model: string): boolean {
+  const lines = viewportLines(term)
+  const row = lines.findIndex(line => line.includes('❯') && line.includes(model))
+  if (row < 0) return false
+  const pointer = lines[row]!.indexOf('❯')
+  const caret = caretPosition(term)
+  return caret.y === row && caret.x === stringWidth(lines[row]!.slice(0, pointer))
 }
 
 function panelUsesDefaultBackground(term: InstanceType<typeof Terminal>): boolean {
@@ -113,7 +142,7 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
   const label = `${fullscreen ? 'fullscreen' : 'inline'} ${columns} columns`
   writeFileSync(join(prefsDir, 'model-recents.json'), JSON.stringify({ models: [{ provider: 'alpha', id: 'a1' }, { provider: 'alpha', id: 'a0' }, { provider: 'beta', id: 'b0' }] }))
   writeFileSync(join(prefsDir, 'effort.json'), JSON.stringify({ effort: 'medium' }))
-  const { term, stdout, stdin, stderr } = terminalHarness(columns)
+  const { term, stdout, stdin, stderr, chunks, cursorShown } = terminalHarness(columns)
   const events = Array.from({ length: 20 }, (_, index) => ({
     seq: index, time: Date.now(), type: 'user/message',
     data: { source: { kind: 'user' }, content: [{ type: 'text', text: `Fixture history ${index}` }] },
@@ -161,6 +190,12 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     const point = hit(text)
     return point === undefined ? undefined : term.buffer.active.getLine(term.buffer.active.baseY + point.row)?.getCell(point.col)
   }
+  // Tabs render as ` label `, so the caret cell is one column before the label.
+  const caretOnTab = (text: string) => {
+    const point = hit(text)
+    const caret = caretPosition(term)
+    return point !== undefined && caret.y === point.row && caret.x === point.col - 1
+  }
   const check = async (name: string, condition: () => boolean) => {
     const ok = await settled(condition)
     if (!ok) console.error(viewportLines(term).join('\n'))
@@ -201,6 +236,32 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     assert.deepEqual(JSON.parse(readFileSync(join(prefsDir, 'model-recents.json'), 'utf8')).models, [
       { provider: 'alpha', id: 'a0' }, { provider: 'alpha', id: 'a1' }, { provider: 'beta', id: 'b0' },
     ], `${label}: opening promotes the already-listed current model without duplicates`)
+
+    // The native caret follows the region the user last touched: provider tab,
+    // model row, effort level. Each step pins the exact cell, so a caret that
+    // stays behind on the previous region (or vanishes) fails. A structural
+    // marker is parked steady: DECSCUSR 6 while the picker owns the caret, the
+    // terminal's own style back the moment it hands focus to the composer.
+    await check('the caret rests on the focused model row', () => cursorShown() && caretOnPointer(term, 'Alpha 00'))
+    assert.ok(chunks.join('').includes('\x1b[6 q'), `${label}: a parked caret is steady, not blinking`)
+    stdin.write('\t')
+    await check('Tab parks the caret on the provider tab', () => caretOnTab('Alpha') && inverse('Alpha'))
+    stdin.write('\t')
+    await check('the caret glides between provider tabs', () => caretOnTab('Beta') && focused('Beta 00'))
+    stdin.write('\x1b[B')
+    await check('model navigation moves the caret onto the ❯ pointer', () => caretOnPointer(term, 'Beta 01'))
+    stdin.write('\x1b[C')
+    await check('an effort change parks the caret on the effort tab', () => caretOnTab('MAX') && inverse('MAX'))
+    stdin.write('\x1b[D')
+    await check('the caret glides between effort levels', () => caretOnTab('OFF') && inverse('OFF'))
+    stdin.write('\x1b[B')
+    await check('returning to the list restores the caret to the model row', () => caretOnPointer(term, 'Beta 00'))
+    const handback = chunks.length
+    stdin.write('\x1b')
+    await check('Esc closes and leaves the composer caret visible', () => hit('最近使用') === undefined && cursorShown())
+    assert.ok(chunks.slice(handback).join('').includes('\x1b[0 q'), `${label}: closing hands the terminal caret style back`)
+    await open()
+
     await sleep(90) // 固定窗:墙钟 Chat's 80ms modal-Enter debounce.
     stdin.write('\r')
     await check('Enter without navigation keeps the current model and effort', () => channel.model === 'a0' && channel.reasoningEffort === 'medium' && hit('最近使用') === undefined)
@@ -220,6 +281,17 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     await check('two-level model adjusts right', () => inverse('MAX'))
     stdin.write('\x1b[Z')
     await check('Shift+Tab preserves model and effort draft', () => inverse('Alpha') && focused('Alpha 01') && inverse('HIGH'))
+    // A clamped ←/→ changes neither the model nor the effort, so the
+    // provider→effort hand-off is a cursor-only move: the frame must not
+    // hide/show the caret or repaint the strip, letting a terminal without
+    // synchronized output run its own cursor animation uninterrupted.
+    const handoff = chunks.length
+    stdin.write('\x1b[C')
+    await check('a clamped effort hand-off parks the caret on the level', () => caretOnTab('HIGH') && inverse('HIGH'))
+    const handoffFrame = chunks.slice(handoff).join('')
+    assert.ok(handoffFrame.length > 0, `${label}: a caret-only hand-off emits the cursor move`)
+    assert.ok(!handoffFrame.includes('\x1b[?25l') && !handoffFrame.includes('\x1b[?25h'),
+      `${label}: a caret-only hand-off must not reset caret visibility`)
     assert.deepEqual(switches, [], 'browsing must not switch the live model')
     assert.deepEqual(effortPicks, [], 'browsing must not set the live effort')
     stdin.write('\x1b')
@@ -331,7 +403,7 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
     stdin.write('/model')
     assert.ok(await settled(() => text().includes('/model')), `${label}: composer`)
     stdin.write('\r')
-    assert.ok(await settled(() => text().includes('Model 01') && focused('Model 00') && panelUsesDefaultBackground(term)), `${label}: flat catalog on the terminal background focuses the current model after loading`)
+    assert.ok(await settled(() => text().includes('Model 01') && focused('Model 00') && caretOnPointer(term, 'Model 00') && panelUsesDefaultBackground(term)), `${label}: flat catalog on the terminal background focuses the current model after loading`)
     assert.equal(text().includes('最近使用'), false, `${label}: no recents tab`)
     assert.equal(text().includes('Shift+Tab 提供商'), false, `${label}: no provider navigation hint`)
     const lines = viewportLines(term)
@@ -353,7 +425,7 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
     stdin.write('\r')
     assert.ok(await settled(() => focused('Model 00') && panelUsesDefaultBackground(term)), `${label}: reopen flat catalog`)
     stdin.write('\x1b[A')
-    assert.ok(await settled(() => focused('Model 01') && panelUsesDefaultBackground(term)), `${label}: Up selects another model`)
+    assert.ok(await settled(() => focused('Model 01') && caretOnPointer(term, 'Model 01') && panelUsesDefaultBackground(term)), `${label}: Up selects another model and keeps the caret on its pointer`)
     stdin.write('\x1b')
     assert.ok(await settled(() => !text().includes('推理强度') && text().includes('Backend history 19')), `${label}: cancel restores transcript`)
     assert.deepEqual(picks, ['m0'], `${label}: cancellation discards the model draft`)

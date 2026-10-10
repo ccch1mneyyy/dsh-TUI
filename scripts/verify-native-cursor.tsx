@@ -35,6 +35,10 @@ const [
 
 const HIDE = '\x1b[?25l'
 const SHOW = '\x1b[?25h'
+// DECSCUSR: a steady structural marker (parked list row / picker tab) and the
+// terminal's own style it must be handed back.
+const STEADY_STYLE = '\x1b[6 q'
+const DEFAULT_STYLE = '\x1b[0 q'
 const TEXT = 'a中🙂b '
 
 function makeHarness(cols: number, rows: number) {
@@ -87,6 +91,7 @@ function makeHarness(cols: number, rows: number) {
     const cleanup = readFileSync(cleanupPath, 'utf8')
     await writeParsed(term, cleanup)
     assert.equal(visible, true, 'shutdown restores cursor visibility')
+    assert.ok(cleanup.includes(DEFAULT_STYLE), 'shutdown restores the terminal cursor style')
     assert.equal(term.buffer.active.type, 'normal', 'shutdown restores the main screen')
     assert.equal(stdin.isRaw, false, 'shutdown restores stdin')
     closeSync(cleanupFd)
@@ -617,6 +622,49 @@ for (const fullscreen of [false, true]) {
   } finally {
     await h.close(app)
     delete process.env.DSH_TUI_ACCESSIBILITY
+  }
+}
+
+// A steady declaration (a structural focus marker: list row, picker tab) pins
+// the terminal's caret to a non-blinking style while it is parked; a text
+// input's declaration must never touch the terminal's own caret style.
+{
+  const SteadyFixture = ({ target }: { target: 'row' | 'input' | 'none' }): ReactNode => {
+    const native = useNativeCursor()
+    const rowRef = useDeclaredCursor({ line: 0, column: 0, active: target === 'row', visible: native, steady: true })
+    const inputRef = useDeclaredCursor({ line: 0, column: 0, active: target === 'input', visible: native })
+    return <Box flexDirection="column">
+      <Box ref={rowRef}><Text>❯ row</Text></Box>
+      <Box ref={inputRef} marginTop={1}><Text>input</Text></Box>
+    </Box>
+  }
+  const h = makeHarness(24, 8)
+  const app = await render(<SteadyFixture target="row" />, {
+    stdout: h.stdout, stdin: h.stdin, stderr: h.stderr,
+    exitOnCtrlC: false, patchConsole: false, terminalImages: false,
+  })
+  const ink = instances.get(h.stdout)!
+  const paint = async (target: 'row' | 'input' | 'none') => {
+    const before = h.frames.length
+    app.rerender(<SteadyFixture target={target} />)
+    ink.onRender()
+    await h.flush()
+    return h.frames.slice(before).join('')
+  }
+  try {
+    ink.onRender()
+    await h.flush()
+    assert.ok(h.frames.join('').includes(STEADY_STYLE), 'a steady declaration pins the non-blinking caret')
+    assert.equal(h.visible(), true)
+    assert.equal(h.cursor().y, h.find('row')?.y)
+    assert.ok((await paint('input')).includes(DEFAULT_STYLE), 'a text input hands the terminal its caret style back')
+    assert.equal(h.visible(), true)
+    assert.ok((await paint('row')).includes(STEADY_STYLE), 'returning to a structural marker pins it again')
+    assert.equal((await paint('row')), '', 'a parked steady caret stays a zero-write frame')
+    assert.ok((await paint('none')).includes(DEFAULT_STYLE), 'clearing the park restores the terminal caret style')
+    assert.equal((await paint('none')), '', 'a cleared park stays a zero-write frame')
+  } finally {
+    await h.close(app)
   }
 }
 

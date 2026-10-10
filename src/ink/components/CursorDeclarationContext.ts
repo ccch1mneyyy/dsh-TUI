@@ -14,6 +14,12 @@ export type CursorDeclaration = {
   readonly node: DOMElement
   /** Show the native caret; omitted for accessibility-only focus anchors. */
   readonly visible?: boolean
+  /**
+   * Park a non-blinking marker instead of the terminal's own caret: a
+   * structural focus position (list row, picker tab) is not a text insertion
+   * point, so DECSCUSR pins it to a steady bar for as long as it is parked.
+   */
+  readonly steady?: boolean
 }
 
 /**

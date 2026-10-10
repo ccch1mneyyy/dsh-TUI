@@ -25,6 +25,8 @@ import type { DOMElement } from '../dom.js'
  *   position relative to the node, `active` controls whether the declaration
  *   is set or cleared. `visible` opts a text input into the native caret;
  *   focus anchors remain hidden unless accessibility mode is enabled.
+ *   `steady` parks a non-blinking marker for structural focus (list rows,
+ *   picker tabs) instead of the terminal's own caret behaviour.
  * @returns a ref callback to attach to the Box that contains the input.
  */
 export function useDeclaredCursor(options: {
@@ -32,8 +34,9 @@ export function useDeclaredCursor(options: {
   column: number
   active: boolean
   visible?: boolean
+  steady?: boolean
 }): RefCallback<DOMElement> {
-  const { line, column, active, visible = false } = options
+  const { line, column, active, visible = false, steady = false } = options
   const setCursorDeclaration = useContext(CursorDeclarationContext)
   const nodeRef = useRef<DOMElement | null>(null)
 
@@ -43,7 +46,7 @@ export function useDeclaredCursor(options: {
     // A store-driven editor layer can attach after the caller's layout
     // effect, so claim its cursor as soon as the node is attached.
     if (active) {
-      setCursorDeclaration({ relativeX: column, relativeY: line, node, visible })
+      setCursorDeclaration({ relativeX: column, relativeY: line, node, visible, steady })
     }
     // React 19 binds this cleanup to the attached node. A withdrawn editor
     // must not erase the inline node that has already taken over this ref.
@@ -51,7 +54,7 @@ export function useDeclaredCursor(options: {
       setCursorDeclaration(null, node)
       if (nodeRef.current === node) nodeRef.current = null
     }
-  }, [active, column, line, setCursorDeclaration, visible])
+  }, [active, column, line, setCursorDeclaration, steady, visible])
 
   // When active, set unconditionally. When inactive, clear conditionally
   // (only if the currently-declared node is ours). The node-identity check
@@ -69,7 +72,7 @@ export function useDeclaredCursor(options: {
   useLayoutEffect(() => {
     const node = nodeRef.current
     if (active && node) {
-      setCursorDeclaration({ relativeX: column, relativeY: line, node, visible })
+      setCursorDeclaration({ relativeX: column, relativeY: line, node, visible, steady })
     } else {
       setCursorDeclaration(null, node)
     }

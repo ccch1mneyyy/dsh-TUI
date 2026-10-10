@@ -5418,6 +5418,7 @@ export function Chat({
                 effortsLoading={modelPicker.effortsLoading}
                 effortError={modelPicker.effortError}
                 levelsFallback={modelPicker.levelsFallback}
+                cursorZone={modelPicker.cursorZone}
                 onProvider={modelPicker.focusProvider}
                 onFocus={modelPicker.focusModel}
                 onEffort={modelPicker.pickEffort}

@@ -9,6 +9,14 @@ type EffortCatalog = Awaited<ReturnType<ChannelUi['listEfforts']>>
 type Cursor = { provider: string; index: number }
 const modelKey = (model: LlmModelInfo): string => `${model.provider}/${model.id}`
 
+/**
+ * Which picker region owns the terminal caret. The picker declares the
+ * native cursor at whichever region the user touched last, so terminals
+ * with cursor animation or trails glide between providers, models and
+ * effort levels (see `ModelPicker`). `model` is the resting zone.
+ */
+export type ModelCursorZone = 'provider' | 'model' | 'effort'
+
 /** Provider/model navigation and per-model effort drafts for the single-page picker. */
 export function useModelPicker({ channel, models, providers, recents, open, onPick, onCancel }: {
   channel: ChannelUi
@@ -29,6 +37,7 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
   const [drafts, setDrafts] = React.useState(new Map<string, string>())
   const draftsRef = React.useRef(drafts)
   const [catalogs, setCatalogs] = React.useState(new Map<string, EffortCatalog | 'error'>())
+  const [cursorZone, setCursorZone] = React.useState<ModelCursorZone>('model')
 
   const modelsFor = (provider: string): readonly LlmModelInfo[] => recents === undefined ? models : provider === RECENTS_GROUP_PROVIDER
     ? recentCatalogModels(recents, models)
@@ -70,6 +79,8 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
       : { provider: channel.provider, index: -1 }
     cursorRef.current = initial
     setCursor(initial)
+    // Opening is model navigation: the caret starts on the focused model row.
+    setCursorZone('model')
     draftsRef.current = new Map()
     setDrafts(draftsRef.current)
     setCatalogs(new Map())
@@ -93,6 +104,11 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
       ? channel.reasoningEffort ?? result.defaultEffort : result.defaultEffort)
     return result.efforts.some(effort => effort.id === value) ? value : undefined
   }
+  // Every action names the region it drives, so the caret declaration (and the
+  // terminal animation it feeds) follows the last-touched region instead of
+  // snapping back to the model list. The zone is set in the same commit as the
+  // focus change — a provider switch swaps the whole list, and the caret must
+  // land on the new provider strip, not on a row that just appeared.
   const focusProvider = (provider: string): void => {
     if (!groups.some(group => group.provider === provider)) return
     const current = normalize(cursorRef.current)
@@ -101,11 +117,14 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
     const initial = provider === RECENTS_GROUP_PROVIDER ? 0
       : Math.max(0, list.findIndex(model => model.provider === channel.provider && model.id === channel.model))
     focus({ provider, index: tabFocus.current.get(provider) ?? initial })
+    setCursorZone('provider')
   }
   const moveModel = (delta: 1 | -1): void => {
     const current = normalize(cursorRef.current)
     const count = modelsFor(current.provider).length
-    if (count > 0) focus({ ...current, index: wrapIndex(current.index, delta, count) })
+    if (count === 0) return
+    focus({ ...current, index: wrapIndex(current.index, delta, count) })
+    setCursorZone('model')
   }
   const pickEffort = (index: number): void => {
     const current = normalize(cursorRef.current)
@@ -117,6 +136,11 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
     if (option === undefined) return
     draftsRef.current = new Map(draftsRef.current).set(modelKey(model), option.id)
     setDrafts(draftsRef.current)
+    setCursorZone('effort')
+  }
+  const focusModel = (index: number): void => {
+    focus({ ...normalize(cursorRef.current), index })
+    setCursorZone('model')
   }
   const confirm = (): void => {
     if (!activeRef.current) return
@@ -160,8 +184,8 @@ export function useModelPicker({ channel, models, providers, recents, open, onPi
     effortsLoading: focused !== undefined && catalog === undefined,
     effortError: catalog === 'error',
     levelsFallback: catalog !== undefined && catalog !== 'error' && catalog.levelsFallback === true,
-    reset, focusProvider,
-    focusModel: (index: number) => focus({ ...normalize(cursorRef.current), index }),
+    cursorZone,
+    reset, focusProvider, focusModel,
     moveModel, pickEffort, confirm, cancel, handleKey,
   }
 }

@@ -4,6 +4,8 @@ import { Box, Text, useTerminalSize } from '../ui.js'
 import type { EffortOption, LlmModelInfo } from '../adapter/ports/channel-view.js'
 import type { ModelGroupRow } from '../modelGroups.js'
 import { RECENTS_GROUP_PROVIDER } from '../modelGroups.js'
+import type { ModelCursorZone } from '../screens/chat/useModelPicker.js'
+import { useDeclaredCursor, useNativeCursor } from '../ink/hooks/use-declared-cursor.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { Pane } from './design-system/Pane.js'
@@ -12,10 +14,19 @@ import { HintLine } from './design-system/HintLine.js'
 import { listWindow } from './listWindow.js'
 import { useOverlayListRows } from './OverlayAbove.js'
 
-/** Optional provider tabs, a windowed model list, and the focused model's effort draft. */
+/**
+ * Optional provider tabs, a windowed model list, and the focused model's effort draft.
+ *
+ * The native caret is parked on the region the user last touched
+ * (`cursorZone`): the provider strip, the focused model row, or the effort
+ * strip. Terminals with cursor animation or trail effects then glide the
+ * caret from one region to the next. Static rendering keeps the painted
+ * highlights (inverse tabs, ❯ pointer) as the fallback.
+ */
 export function ModelPicker({
   groups, provider, models, focusIndex, currentModel, loading,
   efforts, effortId, effortsLoading, effortError, levelsFallback,
+  cursorZone = 'model',
   onProvider, onFocus, onEffort, onMove, onConfirm, onCancel,
 }: {
   groups: readonly ModelGroupRow[]
@@ -29,6 +40,8 @@ export function ModelPicker({
   effortsLoading: boolean
   effortError: boolean
   levelsFallback: boolean
+  /** Region that owns the native caret; falls back to the model list when absent. */
+  cursorZone?: ModelCursorZone
   onProvider(provider: string): void
   onFocus(index: number): void
   onEffort(index: number): void
@@ -75,6 +88,15 @@ export function ModelPicker({
     : frameRows - (showEfforts ? 0 : 1)))
   const showModelDescriptions = listRows >= 2
   const { start, end } = listWindow(models.map(model => showModelDescriptions && model.description ? 2 : 1), focusIndex, listRows)
+  const providerFocus = groups.findIndex(group => group.provider === provider)
+  const effortFocus = efforts.findIndex(effort => effort.id === effortId)
+  const showEffortTabs = showEfforts && !effortsLoading && !effortError && efforts.length > 0
+  // The caret follows the last-touched region, but only while that region is
+  // rendered with a focused cell; otherwise it rests on the model list so it
+  // can never be parked nowhere (which reads as a vanished caret).
+  const caretZone: ModelCursorZone = cursorZone === 'provider' && showProviders && providerFocus >= 0 ? 'provider'
+    : cursorZone === 'effort' && showEffortTabs && effortFocus >= 0 ? 'effort'
+      : 'model'
   const shortcutBar = (
     <Box flexDirection="column">
       {(showHeaderHints ? shortcutRows : [shortcuts.slice(-2)]).map((row, rowIndex) => (
@@ -102,8 +124,9 @@ export function ModelPicker({
         {showProviders ? <Box marginTop={compact ? 0 : 1} marginBottom={compact ? 0 : 1}>
           <PickerTabs
             labels={groups.map(group => group.provider === RECENTS_GROUP_PROVIDER ? t('picker-group-recent') : group.label)}
-            focusIndex={groups.findIndex(group => group.provider === provider)}
+            focusIndex={providerFocus}
             width={width}
+            cursor={caretZone === 'provider'}
             onPick={index => onProvider(groups[index]!.provider)}
           />
         </Box> : null}
@@ -123,6 +146,8 @@ export function ModelPicker({
                 description={showModelDescriptions ? model.description : undefined}
                 showScrollUp={absoluteIndex === start && start > 0}
                 showScrollDown={absoluteIndex === end - 1 && end < models.length}
+                declareCursor={caretZone === 'model'}
+                nativeCursor
                 onClick={event => { event.stopImmediatePropagation(); onFocus(absoluteIndex) }}
               >
                 {provider === RECENTS_GROUP_PROVIDER ? `${model.provider} / ${model.name}` : model.name}
@@ -147,10 +172,11 @@ export function ModelPicker({
                 {effortId === undefined ? <Text color="text">{t('picker-effort-default')}{'  '}</Text> : null}
                 <PickerTabs
                   labels={efforts.map(effort => effort.name)}
-                  focusIndex={efforts.findIndex(effort => effort.id === effortId)}
+                  focusIndex={effortFocus}
                   width={Math.max(1, width - (showHeaderHints ? 0 : stringWidth(t('picker-title-effort')) + 2)
                     - (effortId === undefined ? stringWidth(t('picker-effort-default')) + 2 : 0))}
                   muted={false}
+                  cursor={caretZone === 'effort'}
                   onPick={onEffort}
                 />
               </>
@@ -165,11 +191,13 @@ export function ModelPicker({
 }
 
 /** Keep the active cell visible when a provider or effort strip exceeds its width. */
-function PickerTabs({ labels, focusIndex, width, muted = true, onPick }: {
+function PickerTabs({ labels, focusIndex, width, muted = true, cursor = false, onPick }: {
   labels: readonly string[]
   focusIndex: number
   width: number
   muted?: boolean
+  /** This strip owns the native caret — its region was the last one used. */
+  cursor?: boolean
   onPick(index: number): void
 }): React.ReactNode {
   const singleLines = labels.map(label => label.replace(/[\r\n]+/g, ' '))
@@ -185,13 +213,47 @@ function PickerTabs({ labels, focusIndex, width, muted = true, onPick }: {
     <Box height={1} flexShrink={0} overflow="hidden" gap={1}>
       {start > 0 ? <Box onClick={event => { event.stopImmediatePropagation(); onPick(start - 1) }}><Text dimColor>‹</Text></Box> : null}
       {cells.slice(start, end).map((label, index) => (
-        <Box key={start + index} flexShrink={0} onClick={event => { event.stopImmediatePropagation(); onPick(start + index) }}>
-          <Text color={start + index === focusIndex ? 'remember' : muted ? undefined : 'text'} inverse={start + index === focusIndex} bold={start + index === focusIndex} dimColor={muted && start + index !== focusIndex}>
-            {` ${label} `}
-          </Text>
-        </Box>
+        <PickerTab
+          key={start + index}
+          label={label}
+          isFocused={start + index === focusIndex}
+          muted={muted}
+          cursor={cursor}
+          onPick={() => onPick(start + index)}
+        />
       ))}
       {end < cells.length ? <Box onClick={event => { event.stopImmediatePropagation(); onPick(end) }}><Text dimColor>›</Text></Box> : null}
+    </Box>
+  )
+}
+
+/**
+ * One tab cell. The focused tab declares the native caret when its strip owns
+ * it (terminals animate the caret between providers/levels); a strip is
+ * structural focus, so the parked caret is steady rather than blinking. The
+ * inverse block stays painted either way so static rendering keeps a focus
+ * mark.
+ */
+function PickerTab({ label, isFocused, muted, cursor, onPick }: {
+  label: string
+  isFocused: boolean
+  muted: boolean
+  cursor: boolean
+  onPick(): void
+}): React.ReactNode {
+  const nativeCursor = useNativeCursor()
+  const cursorRef = useDeclaredCursor({
+    line: 0,
+    column: 0,
+    active: isFocused && cursor,
+    visible: nativeCursor,
+    steady: true,
+  })
+  return (
+    <Box ref={cursorRef} flexShrink={0} onClick={event => { event.stopImmediatePropagation(); onPick() }}>
+      <Text color={isFocused ? 'remember' : muted ? undefined : 'text'} inverse={isFocused} bold={isFocused} dimColor={muted && !isFocused}>
+        {` ${label} `}
+      </Text>
     </Box>
   )
 }

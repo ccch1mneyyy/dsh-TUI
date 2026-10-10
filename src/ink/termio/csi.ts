@@ -146,6 +146,22 @@ export const CURSOR_STYLES: Array<{ style: CursorStyle; blinking: boolean }> = [
 // Cursor movement generators
 
 /**
+ * Set cursor style (DECSCUSR, `CSI Ps SP q`).
+ *
+ * Ps couples shape and blink: 0 = terminal default, 1/3/5 = blinking
+ * block/underline/bar, 2/4/6 = the same shapes steady (see `CURSOR_STYLES`).
+ * A steady style is the only portable way to stop the terminal's own caret
+ * from blinking, so a panel that parks a structural focus marker uses it and
+ * restores 0 when focus returns to a text input.
+ *
+ * @param ps - DECSCUSR parameter.
+ * @returns the CSI sequence.
+ */
+export function cursorStyle(ps: number): string {
+  return `${CSI_PREFIX}${ps} q`
+}
+
+/**
  * Move cursor up n lines (CSI n A).
  * @param n - number of lines to move; defaults to 1.
  * @returns the CSI sequence, or an empty string when n is 0.

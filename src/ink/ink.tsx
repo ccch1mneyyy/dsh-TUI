@@ -44,7 +44,7 @@ import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt
 import { applySearchHighlight } from './transcript-highlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, getSelectionCursor, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
-import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
+import { CURSOR_HOME, cursorMove, cursorPosition, cursorStyle, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
 import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels, xtversion } from './terminal-querier.js';
@@ -69,6 +69,19 @@ const ERASE_THEN_HOME_PATCH = Object.freeze({
   content: ERASE_SCREEN + CURSOR_HOME
 });
 const TERMINAL_REPLY_QUARANTINE_MS = 120;
+// DECSCUSR carries shape and blink together, so the only way to keep a parked
+// structural focus marker (list row, picker tab) from blinking at rest is a
+// steady style; 6 (steady bar) keeps the glyph under the caret readable.
+// Restoring 0 hands the terminal back its own configured caret.
+const DEFAULT_CURSOR_STYLE = cursorStyle(0);
+const STEADY_CURSOR_PATCH = Object.freeze({
+  type: 'stdout' as const,
+  content: cursorStyle(6)
+});
+const DEFAULT_CURSOR_PATCH = Object.freeze({
+  type: 'stdout' as const,
+  content: DEFAULT_CURSOR_STYLE
+});
 
 // Cached per-Ink-instance, invalidated on resize. frame.cursor.y for
 // alt-screen is always terminalRows - 1 (renderer.ts).
@@ -247,8 +260,13 @@ export default class Ink {
     y: number;
   } | null = null;
   // null after a screen switch or external handoff: reassert visibility on
-  // the next frame. Cursor shape, color and blink remain terminal-owned.
+  // the next frame. Cursor shape, color and blink remain terminal-owned —
+  // except for a declaration that asks for a steady marker (`steady`), which
+  // pins DECSCUSR 6 until the caret moves back to a text input or clears.
   private nativeCursorVisible: boolean | null = null;
+  // Whether the terminal is currently pinned to the steady style: null =
+  // unknown (reassert on the next frame), false = terminal default.
+  private nativeCursorSteady: boolean | null = null;
   private handleStdinError(error: NodeJS.ErrnoException): void {
     if (this.isUnmounted && error.code === 'EIO') {
       return;
@@ -403,6 +421,12 @@ export default class Ink {
     // composer keeps drawing frames while the line discipline echoes every
     // keystroke and delivers nothing until Enter.
     this.app?.reassertRawMode();
+
+    // The shell / an external process owned the tty while we were stopped and
+    // may have cleared the DECSCUSR style we pinned; give the terminal its own
+    // caret back and let the next frame re-assert a parked steady marker.
+    if (this.nativeCursorSteady === true) this.options.stdout.write(DEFAULT_CURSOR_STYLE);
+    this.nativeCursorSteady = null;
 
     // Alt screen: after SIGCONT, content is stale (shell may have written
     // to main screen, switching focus away) and the DEC private modes the app
@@ -567,10 +591,15 @@ export default class Ink {
     // reset attributes
     '\x1b[?25h' +
     // show cursor
+    DEFAULT_CURSOR_STYLE +
+    // hand back the terminal's own caret style (DECSCUSR 0)
     '\x1b[2J' +
     // clear screen
     '\x1b[H' // cursor home
     );
+    // The child owns the tty now; the next frame after exitAlternateScreen
+    // re-asserts a steady marker if one is still parked.
+    this.nativeCursorSteady = false;
   }
 
   /**
@@ -1130,7 +1159,13 @@ export default class Ink {
     // Preserve the empty-diff zero-write fast path: skip all cursor writes
     // when nothing rendered AND the park target is unchanged.
     const targetMoved = target !== null && (parked === null || parked.x !== target.x || parked.y !== target.y);
-    if (hasDiff || targetMoved || target === null && parked !== null) {
+    // A steady declaration (structural focus: list row, picker tab) pins the
+    // terminal caret to a non-blinking style while it is parked; text-input
+    // declarations leave the terminal's own blink alone. null = the physical
+    // style is unknown, so only a steady target needs (re)asserting.
+    const steadyCaret = this.options.stdout.isTTY && target !== null && selectionTarget === null && decl !== null && decl.steady === true;
+    const steadyChanged = this.nativeCursorSteady === null ? steadyCaret : steadyCaret !== this.nativeCursorSteady;
+    if (hasDiff || targetMoved || steadyChanged || target === null && parked !== null) {
       // Main-screen preamble: log-update's relative moves assume the
       // physical cursor is at prevFrame.cursor. If last frame parked it
       // elsewhere, move back before the diff runs. Alt-screen's CSI H
@@ -1192,6 +1227,13 @@ export default class Ink {
           }
         }
         this.displayCursor = null;
+      }
+      // Cursor style travels with the park: set steady for a structural focus
+      // marker, restore the terminal default the moment focus moves to a
+      // text input (or the declaration clears). Only the transitions write.
+      if (steadyChanged) {
+        optimized.push(steadyCaret ? STEADY_CURSOR_PATCH : DEFAULT_CURSOR_PATCH);
+        this.nativeCursorSteady = steadyCaret;
       }
     }
     if (this.options.stdout.isTTY) {
@@ -2811,6 +2853,9 @@ export default class Ink {
       writeSync(stdoutFd, DBP);
       // Show cursor
       writeSync(stdoutFd, SHOW_CURSOR);
+      // Hand the terminal's own caret style back (DECSCUSR 0) — a steady
+      // structural marker must not outlive the app.
+      writeSync(stdoutFd, DEFAULT_CURSOR_STYLE);
       // Clear iTerm2 progress bar
       writeSync(stdoutFd, CLEAR_ITERM2_PROGRESS);
       // Clear tab status (OSC 21337) so a stale dot doesn't linger

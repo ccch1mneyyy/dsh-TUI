@@ -172,8 +172,13 @@ The renderer hides the native cursor before repainting, then positions and
 shows it at the end of the frame. Cursor-only moves keep it visible so the
 terminal's animation and trail can continue. Shape, color, and blinking follow
 terminal settings. List items declare accessibility anchors that stay hidden
-in ordinary mode. Static rendering retains theme-painted carets; selection
-and image-token highlights remain painted by the TUI.
+in ordinary mode by default; the model picker declares a **visible** cursor on
+the region used last (provider tab / model row / effort level) so terminal
+animation moves between them. Such a structural declaration also asks for a
+steady style: DECSCUSR 6 (a non-blinking bar) while it is parked, and DECSCUSR
+0 when it clears or focus returns to a text input, handing the terminal's own
+caret style back. Static rendering retains theme-painted carets; selection and
+image-token highlights remain painted by the TUI.
 
 ## Persistence locations
 
