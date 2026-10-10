@@ -83,18 +83,19 @@ export function createClaudeCatalog(deps: ClaudeCatalogDeps): SessionCatalog {
     ...(deps.snapshotKey === undefined ? {} : { snapshotKey: deps.snapshotKey }),
     async list(scope: SessionListScope = {}, onPartial?: (rows: readonly SessionSummary[]) => void): Promise<readonly SessionSummary[]> {
       const sdk = await deps.loadSdk()
-      const options = { includeProgrammatic: true, ...(scope.allProjects === true ? {} : { dir: scope.cwd ?? deps.cwd(), includeWorktrees: false }) }
+      const options = { includeProgrammatic: true, ...(scope.allProjects === true ? {} : { dir: scope.cwd ?? deps.cwd() }) }
       const used = lastUsed()
       const summaries = (infos: readonly SDKSessionInfo[]): SessionSummary[] =>
         infos.map(info => claudeSessionSummary(info, used)).sort((a, b) => b.updatedAt - a.updatedAt)
       if (onPartial !== undefined) {
         // A bounded SDK read extracts metadata only for the newest sessions.
-        // Keep the complete read below: offset paging would repeatedly scan
-        // earlier pages, and a short first page is already a complete listing.
-        const first = await sdk.listSessions({ ...options, limit: FIRST_PAGE })
+        // Scoped reads still need the complete project's worktrees, even when
+        // the current directory's first page is short or empty. Offset paging
+        // would repeatedly scan earlier pages, so read the full scope once.
+        const first = await sdk.listSessions({ ...options, limit: FIRST_PAGE, ...(scope.allProjects === true ? {} : { includeWorktrees: false }) })
         const rows = summaries(first)
         onPartial(rows)
-        if (first.length < FIRST_PAGE) return rows
+        if (scope.allProjects === true && first.length < FIRST_PAGE) return rows
       }
       return summaries(await sdk.listSessions(options))
     },

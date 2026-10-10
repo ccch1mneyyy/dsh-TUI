@@ -81,8 +81,8 @@ const info = (over: Record<string, unknown>) => ({ sessionId: 's', summary: 'a s
     listSessions: (options?: Record<string, unknown>) => {
       calls.push({ method: 'listSessions', args: [options] })
       return Promise.resolve(options?.dir === undefined
-        ? [info({ sessionId: 'a', customTitle: 'Custom or AI title' }), info({ sessionId: 'b', firstPrompt: 'first prompt', lastModified: NOW - 10 }), info({ sessionId: 'elsewhere', cwd: '/other/dir', summary: 'other' })]
-        : [info({ sessionId: 'a', customTitle: 'Custom or AI title' }), info({ sessionId: 'b', firstPrompt: 'first prompt', lastModified: NOW - 10 })])
+        ? [info({ sessionId: 'a', customTitle: 'Custom or AI title' }), info({ sessionId: 'b', firstPrompt: 'first prompt', lastModified: NOW - 10 }), info({ sessionId: 'sibling', cwd: '/sibling-worktree', summary: 'worktree' }), info({ sessionId: 'elsewhere', cwd: '/other/dir', summary: 'other' })]
+        : [info({ sessionId: 'a', customTitle: 'Custom or AI title' }), info({ sessionId: 'b', firstPrompt: 'first prompt', lastModified: NOW - 10 }), ...(options?.includeWorktrees === false ? [] : [info({ sessionId: 'sibling', cwd: '/sibling-worktree', summary: 'worktree' })])])
     },
     getSessionInfo: (id: string, options?: Record<string, unknown>) => {
       calls.push({ method: 'getSessionInfo', args: [id, options] })
@@ -103,7 +103,7 @@ const info = (over: Record<string, unknown>) => ({ sessionId: 's', summary: 'a s
   const catalog = createClaudeCatalog({ loadSdk: () => Promise.resolve(store as never), cwd: () => workdir, lastUsed: () => ({ a: NOW }) })
   const local = await catalog.list({ cwd: workdir })
   const listCall = calls.find(call => call.method === 'listSessions')!.args[0] as Record<string, unknown>
-  check('the project listing asks for only this workspace, programmatic sessions included (P4-1)', listCall.dir === workdir && listCall.includeProgrammatic === true && listCall.includeWorktrees === false)
+  check('the complete scoped listing preserves SDK worktree coverage, programmatic sessions included (P4-1)', listCall.dir === workdir && listCall.includeProgrammatic === true && listCall.includeWorktrees === undefined && local.some(row => row.id === 'sibling'))
   check('rows are the browser\'s shape, tagged with the backend', local.every(row => row.backendId === 'claude' && row.kind.kind === 'root' && row.hasPrompt && row.childCount === 0))
   const a = local.find(row => row.id === 'a')!
   const b = local.find(row => row.id === 'b')!
@@ -127,8 +127,41 @@ const info = (over: Record<string, unknown>) => ({ sessionId: 's', summary: 'a s
   const before = calls.length
   const partials: (readonly SessionSummary[])[] = []
   const small = await catalog.list({}, rows => { partials.push(rows) })
-  const smallOptions = calls.at(-1)!.args[0] as Record<string, unknown>
-  check('a short workspace first page is complete without a second SDK scan', small.length === 2 && partials.length === 1 && calls.length === before + 1 && smallOptions.limit === 32 && smallOptions.dir === workdir && smallOptions.includeWorktrees === false)
+  const smallOptions = calls[before]!.args[0] as Record<string, unknown>
+  const completeOptions = calls.at(-1)!.args[0] as Record<string, unknown>
+  check('a short first page stays in the current directory while the complete result includes siblings', partials[0]?.length === 2 && partials[0].every(row => row.cwd === workdir) && small.some(row => row.id === 'sibling') && calls.length === before + 2 && smallOptions.limit === 32 && smallOptions.dir === workdir && smallOptions.includeWorktrees === false && completeOptions.limit === undefined && completeOptions.includeWorktrees === undefined)
+  const beforeAll = calls.length
+  const smallAll = await catalog.list({ allProjects: true }, () => {})
+  check('a short all-projects page is already complete without a second SDK scan', smallAll.length === 4 && calls.length === beforeAll + 1)
+
+  const sibling = info({ sessionId: 'sibling', cwd: '/sibling-worktree', summary: 'worktree' })
+  const emptyCatalog = createClaudeCatalog({
+    cwd: () => workdir,
+    loadSdk: async () => ({ ...store, listSessions: async (options: Record<string, unknown>) => options.includeWorktrees === false ? [] : [sibling] }) as never,
+  })
+  const emptyPartials: (readonly SessionSummary[])[] = []
+  const siblingsOnly = await emptyCatalog.list({ cwd: workdir }, rows => { emptyPartials.push(rows) })
+  check('an empty current-directory page still loads sessions from sibling worktrees', emptyPartials[0]?.length === 0 && siblingsOnly[0]?.id === 'sibling')
+
+  const fallbackCatalog = createClaudeCatalog({
+    cwd: () => workdir,
+    loadSdk: async () => ({ ...store, listSessions: (options: Record<string, unknown>) => {
+      if (options.dir === undefined) return Promise.reject(new Error('all-projects unavailable'))
+      return store.listSessions(options)
+    } }) as never,
+  })
+  const fallbackSession: AgentSession = {
+    ref: { backendId: 'claude', sessionId: 'worktree-fallback' }, cwd: workdir, status: 'idle', capabilities: { native: {} },
+    history: async () => [], subscribe: () => () => {}, submit: async () => ({ accepted: true }),
+    cancel: async () => ({ stillQueued: [] }), dispose: async () => {},
+  }
+  const fallbackChannel = createChannel({ on: () => () => {}, get: () => undefined, logger: { warn() {}, info() {}, debug() {} } } as never, fallbackSession, { cwd: workdir, model: 'Claude Agent', provider: 'claude', sessionCatalog: fallbackCatalog })
+  try {
+    const batches: (readonly SessionSummary[])[] = []
+    const fallback = await fallbackChannel.listSessions(undefined, rows => { batches.push(rows) })
+    check('a failed all-projects refresh retains the complete scoped worktree listing', batches[0]?.length === 2 && batches[0].every(row => row.cwd === workdir) && fallback.some(row => row.id === 'sibling') && fallback.length === 3)
+    check('the failed all-projects fallback never becomes a complete snapshot', fallbackChannel.cachedSessions() === undefined)
+  } finally { fallbackChannel.releaseContributions() }
 
   let finish!: (rows: ReturnType<typeof info>[]) => void
   let started!: () => void
