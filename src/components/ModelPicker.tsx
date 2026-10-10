@@ -236,7 +236,7 @@ function PickerTabs({ labels, focusIndex, width, muted = true, cursor = false, o
 /**
  * One tab cell. The focused tab declares the native caret when its strip owns
  * it (terminals animate the caret between providers/levels); a strip is
- * structural focus, so it requests a steady caret where restoration is safe. The
+ * structural focus, so its native caret hides after 500 ms at rest. The
  * inverse block stays painted either way so static rendering keeps a focus
  * mark.
  */
@@ -253,7 +253,7 @@ function PickerTab({ label, isFocused, muted, cursor, onPick }: {
     column: 0,
     active: isFocused && cursor,
     visible: nativeCursor,
-    steady: true,
+    hideOnIdle: true,
   })
   return (
     <Box ref={cursorRef} flexShrink={0} onClick={event => { event.stopImmediatePropagation(); onPick() }}>

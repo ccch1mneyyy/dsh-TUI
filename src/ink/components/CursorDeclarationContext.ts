@@ -15,11 +15,10 @@ export type CursorDeclaration = {
   /** Show the native caret; omitted for accessibility-only focus anchors. */
   readonly visible?: boolean
   /**
-   * Request a non-blinking marker instead of the terminal's own caret: a
-   * structural focus position (list row, picker tab) is not a text insertion
-   * point. The renderer only pins it where the configured style is restorable.
+   * Show the native cursor when this focus anchor moves, then hide it after
+   * 500 ms at rest. Text inputs omit this so their caret remains visible.
    */
-  readonly steady?: boolean
+  readonly hideOnIdle?: boolean
 }
 
 /**

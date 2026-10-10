@@ -69,19 +69,10 @@ const ERASE_THEN_HOME_PATCH = Object.freeze({
   content: ERASE_SCREEN + CURSOR_HOME
 });
 const TERMINAL_REPLY_QUARANTINE_MS = 120;
-// DECSCUSR carries shape and blink together, so the only way to keep a parked
-// structural focus marker (list row, picker tab) from blinking at rest is a
-// steady style; 6 (steady bar) keeps the glyph under the caret readable.
-// Only terminals known to restore their configured caret with 0 opt in.
+const CURSOR_IDLE_HIDE_MS = 500;
+// Only external-editor handoffs reset styles, and only where 0 restores the
+// terminal's configuration. Normal caret movement never changes its style.
 const DEFAULT_CURSOR_STYLE = cursorStyle(0);
-const STEADY_CURSOR_PATCH = Object.freeze({
-  type: 'stdout' as const,
-  content: cursorStyle(6)
-});
-const DEFAULT_CURSOR_PATCH = Object.freeze({
-  type: 'stdout' as const,
-  content: DEFAULT_CURSOR_STYLE
-});
 
 // Cached per-Ink-instance, invalidated on resize. frame.cursor.y for
 // alt-screen is always terminalRows - 1 (renderer.ts).
@@ -260,14 +251,13 @@ export default class Ink {
     y: number;
   } | null = null;
   // null after a screen switch or external handoff: reassert visibility on
-  // the next frame. Cursor shape, color and blink remain terminal-owned —
-  // except for a declaration that asks for a steady marker (`steady`), which
-  // pins DECSCUSR 6 where the configured style can safely be restored.
+  // the next frame. Cursor shape, color and blink remain terminal-owned.
   private nativeCursorVisible: boolean | null = null;
-  // Whether the terminal is currently pinned to the steady style: null =
-  // unknown (reassert on the next frame), false = terminal default.
-  private nativeCursorSteady: boolean | null = null;
+  private cursorIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  private cursorIdleNode: dom.DOMElement | null = null;
+  private cursorIdleHidden = false;
   private readonly cursorStyleReset = supportsCursorStyleReset() ? DEFAULT_CURSOR_STYLE : '';
+  private cursorStyleHandedOff = false;
   private handleStdinError(error: NodeJS.ErrnoException): void {
     if (this.isUnmounted && error.code === 'EIO') {
       return;
@@ -423,11 +413,7 @@ export default class Ink {
     // keystroke and delivers nothing until Enter.
     this.app?.reassertRawMode();
 
-    // The shell / an external process owned the tty while we were stopped and
-    // may have cleared the DECSCUSR style we pinned; give the terminal its own
-    // caret back and let the next frame re-assert a parked steady marker.
-    if (this.nativeCursorSteady === true) this.options.stdout.write(this.cursorStyleReset);
-    this.nativeCursorSteady = null;
+    this.resetCursorIdle();
 
     // Alt screen: after SIGCONT, content is stale (shell may have written
     // to main screen, switching focus away) and the DEC private modes the app
@@ -598,9 +584,7 @@ export default class Ink {
     // clear screen
     '\x1b[H' // cursor home
     );
-    // The child owns the tty now; the next frame after exitAlternateScreen
-    // re-asserts a steady marker if one is still parked.
-    this.nativeCursorSteady = false;
+    this.cursorStyleHandedOff = this.cursorStyleReset !== '';
   }
 
   /**
@@ -618,10 +602,9 @@ export default class Ink {
   exitAlternateScreen(): void {
     // The child owned the tty and may have driven DECSCUSR itself, so the
     // style we handed it is no longer guaranteed: re-assert the terminal's
-    // default before the repaint. A steady marker that is still parked gets
-    // re-pinned by the next frame's park block.
+    // default before the repaint where this safely restores its configuration.
     if (this.cursorStyleReset !== '') this.options.stdout.write(this.cursorStyleReset);
-    this.nativeCursorSteady = false;
+    this.cursorStyleHandedOff = false;
     if (this.altScreenActive) {
       // Fullscreen: re-enter alt FIRST — terminal editors (vim, nano, less)
       // write smcup/rmcup, so the editor's rmcup on exit dropped us to the
@@ -1166,13 +1149,24 @@ export default class Ink {
     // Preserve the empty-diff zero-write fast path: skip all cursor writes
     // when nothing rendered AND the park target is unchanged.
     const targetMoved = target !== null && (parked === null || parked.x !== target.x || parked.y !== target.y);
-    // A steady declaration (structural focus: list row, picker tab) pins the
-    // terminal caret to a non-blinking style while it is parked; text-input
-    // declarations leave the terminal's own blink alone. null = the physical
-    // style is unknown, so only a steady target needs (re)asserting.
-    const steadyCaret = this.cursorStyleReset !== '' && this.options.stdout.isTTY && target !== null && selectionTarget === null && decl !== null && decl.steady === true;
-    const steadyChanged = this.nativeCursorSteady === null ? steadyCaret : steadyCaret !== this.nativeCursorSteady;
-    if (hasDiff || targetMoved || steadyChanged || target === null && parked !== null) {
+    const accessibility = isEnvTruthy(process.env.DSH_TUI_ACCESSIBILITY);
+    const idleCaret = this.options.stdout.isTTY && !accessibility && target !== null && selectionTarget === null && decl?.visible === true && decl.hideOnIdle === true;
+    if (idleCaret && decl !== null) {
+      if (targetMoved || this.cursorIdleNode !== decl.node) {
+        this.resetCursorIdle();
+        this.cursorIdleNode = decl.node;
+        this.cursorIdleTimer = setTimeout(() => {
+          this.cursorIdleTimer = null;
+          if (this.isUnmounted || this.isPaused) return;
+          this.cursorIdleHidden = true;
+          this.renderNow();
+        }, CURSOR_IDLE_HIDE_MS);
+        this.cursorIdleTimer.unref?.();
+      }
+    } else {
+      this.resetCursorIdle();
+    }
+    if (hasDiff || targetMoved || target === null && parked !== null) {
       // Main-screen preamble: log-update's relative moves assume the
       // physical cursor is at prevFrame.cursor. If last frame parked it
       // elsewhere, move back before the diff runs. Alt-screen's CSI H
@@ -1235,16 +1229,9 @@ export default class Ink {
         }
         this.displayCursor = null;
       }
-      // Cursor style travels with the park: set steady for a structural focus
-      // marker, restore the terminal default the moment focus moves to a
-      // text input (or the declaration clears). Only the transitions write.
-      if (steadyChanged) {
-        optimized.push(steadyCaret ? STEADY_CURSOR_PATCH : DEFAULT_CURSOR_PATCH);
-        this.nativeCursorSteady = steadyCaret;
-      }
     }
     if (this.options.stdout.isTTY) {
-      const visible = isEnvTruthy(process.env.DSH_TUI_ACCESSIBILITY) || target !== null && (selectionTarget !== null || decl?.visible === true);
+      const visible = accessibility || target !== null && (selectionTarget !== null || decl?.visible === true && (!idleCaret || !this.cursorIdleHidden));
       // Hide before repainting or handing focus to a non-editable anchor.
       // Pure caret moves stay visible so terminal cursor animations can run
       // continuously, including on terminals without synchronized output.
@@ -1318,12 +1305,19 @@ export default class Ink {
       flickers
     });
   }
+  private resetCursorIdle(): void {
+    if (this.cursorIdleTimer !== null) clearTimeout(this.cursorIdleTimer);
+    this.cursorIdleTimer = null;
+    this.cursorIdleNode = null;
+    this.cursorIdleHidden = false;
+  }
   pause(): void {
     // Flush pending React updates and render before pausing.
     // @ts-ignore -- runtime/type-definition mismatch: flushSyncFromReconciler exists in react-reconciler 0.31 but not in @types/react-reconciler
     reconciler.flushSyncFromReconciler();
     this.renderNow();
     this.isPaused = true;
+    this.resetCursorIdle();
     this.notifyTerminalImagesChange();
   }
   resume(): void {
@@ -1579,6 +1573,7 @@ export default class Ink {
     if (this.isUnmounted) return this.shutdownCleanup;
     this.isDetachedForShutdown = true;
     this.isUnmounted = true;
+    this.resetCursorIdle();
     this.terminalImageListeners.clear();
     // Cancel any pending throttled render so it doesn't fire between
     // cleanupTerminalModes() and process.exit() and write to main screen.
@@ -2798,6 +2793,7 @@ export default class Ink {
     } catch (renderError) {
       logError(renderError instanceof Error ? renderError : new Error(String(renderError)));
     }
+    this.resetCursorIdle();
     this.unsubscribeExit();
     if (typeof this.restoreConsole === 'function') {
       this.restoreConsole();
@@ -2860,9 +2856,8 @@ export default class Ink {
       writeSync(stdoutFd, DBP);
       // Show cursor
       writeSync(stdoutFd, SHOW_CURSOR);
-      // Hand the terminal's own caret style back (DECSCUSR 0) — a steady
-      // structural marker must not outlive the app.
-      if (this.nativeCursorSteady !== null && this.cursorStyleReset !== '') writeSync(stdoutFd, this.cursorStyleReset);
+      // Restore a child editor's style if shutdown interrupted its handoff.
+      if (this.cursorStyleHandedOff) writeSync(stdoutFd, this.cursorStyleReset);
       // Clear iTerm2 progress bar
       writeSync(stdoutFd, CLEAR_ITERM2_PROGRESS);
       // Clear tab status (OSC 21337) so a stale dot doesn't linger

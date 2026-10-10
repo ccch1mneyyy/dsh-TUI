@@ -240,12 +240,11 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     // The native caret follows the region the user last touched: provider tab,
     // model row, effort level. Each step pins the exact cell, so a caret that
     // stays behind on the previous region (or vanishes) fails. A structural
-    // marker is parked steady: DECSCUSR 6 while the picker owns the caret, the
-    // terminal's own style back the moment it hands focus to the composer.
+    // marker inherits terminal styling and hides 500 ms after its last move.
     await check('the caret rests on the focused model row', () => cursorShown() && caretOnPointer(term, 'Alpha 00'))
-    assert.ok(chunks.join('').includes('\x1b[6 q'), `${label}: a parked caret is steady, not blinking`)
+    await check('the stationary model caret hides after its idle window', () => !cursorShown())
     stdin.write('\t')
-    await check('Tab parks the caret on the provider tab', () => caretOnTab('Alpha') && inverse('Alpha'))
+    await check('Tab shows the caret again on the provider tab', () => cursorShown() && caretOnTab('Alpha') && inverse('Alpha'))
     stdin.write('\t')
     await check('the caret glides between provider tabs', () => caretOnTab('Beta') && focused('Beta 00'))
     stdin.write('\x1b[B')
@@ -259,7 +258,7 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     const handback = chunks.length
     stdin.write('\x1b')
     await check('Esc closes and leaves the composer caret visible', () => hit('最近使用') === undefined && cursorShown())
-    assert.ok(chunks.slice(handback).join('').includes('\x1b[0 q'), `${label}: closing hands the terminal caret style back`)
+    assert.ok(!/\x1b\[\d* q/u.test(chunks.slice(handback).join('')), `${label}: closing leaves the terminal cursor style intact`)
     await open()
 
     await sleep(90) // 固定窗:墙钟 Chat's 80ms modal-Enter debounce.

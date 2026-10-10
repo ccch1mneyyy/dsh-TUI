@@ -172,16 +172,17 @@ The renderer hides the native cursor before repainting, then positions and
 shows it at the end of the frame. Cursor-only moves keep it visible so the
 terminal's animation and trail can continue. Shape, color, and blinking follow
 terminal settings. List items declare accessibility anchors that stay hidden
-in ordinary mode by default; the model picker declares a **visible** cursor on
+in ordinary mode by default; the model picker declares a cursor on
 the region used last (provider tab / model row / effort level) so terminal
 animation moves between them. Tabs clipped by the overlay hand the caret back
-to the visible model row. Terminals known to restore configured styles
-(WezTerm, kitty, Ghostty, and hosts explicitly reporting xterm.js 6+ engine
-versions) use DECSCUSR 6 (a non-blinking bar) while parked and DECSCUSR 0 when
-cleared or returned to an input. XTerm, unknown terminals, and tmux/zellij
-retain their existing style: some terminals interpret 0 as a blinking block.
-Shutdown only resets styles the renderer took over; an external editor's
-return reasserts configured styles only where restoration is safe.
+to the visible model row. A `hideOnIdle` declaration shows the native cursor
+when its target changes, then hides it 500 ms after the latest movement;
+ordinary repaints do not extend the deadline. The timer belongs to the
+renderer instance and is cancelled on input handback, pause, declaration
+clearing, and shutdown. Shape and blinking remain terminal-owned, while
+accessibility mode keeps focus anchors visible. External editor handoffs
+still reset styles only where configured styles can safely be restored;
+picker movement and closing emit no DECSCUSR sequences.
 Static rendering retains theme-painted carets; selection and
 image-token highlights remain painted by the TUI.
 

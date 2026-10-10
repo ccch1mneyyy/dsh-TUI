@@ -34,9 +34,8 @@ export type ListItemProps = {
   /**
    * Show the terminal's native caret on the focused row (terminals with
    * cursor animation or trail effects then glide between rows) instead of
-   * leaving an invisible accessibility anchor. Request a steady marker where
-   * the renderer can safely restore the terminal's configured style:
-   * a row is structural focus, not a text insertion point. Opt-in: a plain
+   * leaving an invisible accessibility anchor. Retain the terminal's cursor
+   * style and hide it after 500 ms at rest. Opt-in: a plain
    * list keeps the painted ❯ pointer as its only focus mark.
    * @default false
    */
@@ -71,9 +70,8 @@ export function ListItem({
   // Park the terminal cursor on the pointer indicator so screen readers /
   // magnifiers track the focused item. (0,0) is the top-left of this Box,
   // where the pointer renders. `nativeCursor` makes the park a visible caret
-  // (cursor animation/trails) and — since a list row is not a text insertion
-  // point — requests a non-blinking style where it can be safely restored;
-  // otherwise the terminal keeps its style. Without `nativeCursor` the
+  // (cursor animation/trails) that hides after 500 ms at rest. Its shape and
+  // blinking stay terminal-owned. Without `nativeCursor` the
   // declaration stays a hidden anchor.
   const native = useNativeCursor()
   const cursorRef = useDeclaredCursor({
@@ -81,7 +79,7 @@ export function ListItem({
     column: 0,
     active: isFocused && !disabled && declareCursor !== false,
     visible: nativeCursor && native,
-    steady: nativeCursor,
+    hideOnIdle: nativeCursor,
   })
   // Hover highlight only when the row is actually clickable — the extra
   // background is the mouse affordance (there is no cursor-shape feedback
