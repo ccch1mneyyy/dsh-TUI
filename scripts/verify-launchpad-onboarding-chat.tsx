@@ -1623,6 +1623,93 @@ const AC4_CUT_PRESET = 'Standard (Git Bash'
         await settled(() => chat.screen().includes('图片数量超过当前配置的单条消息上限')) && fixture.inputs.length === 2, chat.screen())
     } finally { await chat.unmount() }
   }
+
+  {
+    let releaseStage!: () => void
+    const stageWait = new Promise<void>(resolve => { releaseStage = resolve })
+    let stages = 0
+    const fixture = imageHarness(() => ++stages === 2 ? stageWait : Promise.resolve())
+    const chat = await mountChat({ launchpadOnBoot: true }, fixture.patch)
+    try {
+      await chat.type('/help ')
+      await chat.send(pastePath)
+      await settle(() => chat.screen().includes('[Image #1]'))
+      await chat.send(pastePath)
+      await settle(() => fixture.inputs.length === 2)
+      await chat.send('\r')
+      await settle(() => chat.screen().includes('/help 不接受图片；草稿已保留'))
+      releaseStage()
+      check('Z18 命令拒绝不取消同一草稿正在暂存的图片',
+        await settled(() => chat.screen().includes('/help [Image #1] [Image #2]'))
+          && fixture.staged.size === 2 && fixture.discarded.length === 0 && fixture.submissions.length === 0,
+        chat.screen())
+    } finally { releaseStage(); await chat.unmount() }
+  }
+  // 命令拒绝图片时，草稿仍可编辑并作为普通消息重新发送。
+  for (const name of ['help', 'plaincmd', 'deepseek']) {
+    const fixture = imageHarness()
+    const commandCalls: string[] = []
+    const chat = await mountChat({ launchpadOnBoot: true }, {
+      ...fixture.patch,
+      commandList: [...LOCAL_COMMANDS, { name: 'plaincmd', description: 'Fixture command without images', external: true }],
+      async runExternalCommandOutcome(command: string) {
+        commandCalls.push(command)
+        return { kind: 'success', text: '', consumeDraft: true }
+      },
+    })
+    try {
+      await chat.type(`/${name} `)
+      await chat.send(pastePath)
+      await settle(() => chat.screen().includes('[Image #1]'))
+      await chat.send('\r')
+      const refused = await settled(() => chat.screen().includes(`/${name} 不接受图片；草稿已保留`))
+      check(`Z15[${name}] 不接受图片的命令显示提示，并保留草稿和附件`,
+        refused && chat.screen().includes(`/${name} [Image #1]`)
+          && fixture.staged.size === 1 && fixture.discarded.length === 0
+          && fixture.submissions.length === 0 && commandCalls.length === 0
+          && !chat.screen().includes(HELP_MARK), chat.screen())
+      if (refused) {
+        await chat.send('\x1b[H')
+        for (let i = 0; i < name.length + 2; i++) await chat.send('\x1b[3~')
+        await chat.send('\r')
+        check(`Z16[${name}] 删除命令前缀后仍能提交原图片`,
+          await settled(() => fixture.submissions.length === 1)
+            && fixture.submissions[0]!.text === '[Image #1]'
+            && fixture.submissions[0]!.images[0]?.stageId === 'launchpad-stage-1',
+          JSON.stringify(fixture.submissions))
+      }
+    } finally { await chat.unmount() }
+  }
+  for (const route of ['external', 'skill', 'unknown']) {
+    const fixture = imageHarness()
+    const commandCalls: { name: string; input: string; images: readonly ComposerImageRef[] }[] = []
+    const descriptor = route === 'external'
+      ? { name: 'vision', description: 'Fixture image command', external: true, acceptsImages: true }
+      : { name: 'vision', description: 'Fixture model skill', skill: true }
+    const chat = await mountChat({ launchpadOnBoot: true }, {
+      ...fixture.patch,
+      commandList: route === 'unknown' ? LOCAL_COMMANDS : [...LOCAL_COMMANDS, descriptor],
+      async runExternalCommandOutcome(name: string, input: string, images: readonly ComposerImageRef[]) {
+        commandCalls.push({ name, input, images })
+        return { kind: 'success', text: '', consumeDraft: true }
+      },
+    })
+    try {
+      await chat.type('/vision ')
+      await chat.send(pastePath)
+      await settle(() => chat.screen().includes('[Image #1]'))
+      await chat.send('\r')
+      const delivered = route === 'external'
+        ? await settled(() => commandCalls.length === 1)
+          && commandCalls[0]!.name === 'vision' && commandCalls[0]!.input.trim() === '[Image #1]'
+          && commandCalls[0]!.images[0]?.stageId === 'launchpad-stage-1' && fixture.submissions.length === 0
+        : await settled(() => fixture.submissions.length === 1)
+          && fixture.submissions[0]!.text === '/vision [Image #1]'
+          && fixture.submissions[0]!.images[0]?.stageId === 'launchpad-stage-1' && commandCalls.length === 0
+      check(`Z17[${route}] 支持图片的命令及模型路由携带原附件发送`, delivered,
+        JSON.stringify({ commandCalls, submissions: fixture.submissions }))
+    } finally { await chat.unmount() }
+  }
   if (process.platform === 'linux') {
     const stubDir = mkdtempSync(join(fakeHome, 'launchpad-clipboard-'))
     const offerPath = join(stubDir, 'offer.json')

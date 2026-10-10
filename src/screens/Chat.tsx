@@ -2476,7 +2476,8 @@ export function Chat({
    * THREE cases, and they are genuinely different:
    *
    *   - a slash command → `runCommand`, the same dispatch a typed command
-   *     takes in the composer. The line is NOT submitted to the model.
+   *     takes in the composer. Completion-only filesystem skills keep
+   *     the composer's model route.
    *     Recognition is the composer's OWN rule (第六版 BUG 1 修复): the merged
    *     command list (locals + plugin/registry commands via channel.commandList)
    *     decides whether the line is a command — isLocalCommandName alone missed
@@ -2494,9 +2495,19 @@ export function Chat({
    * History is appended for the two non-empty cases (matching what PromptInput
    * does on submit) so the launchpad's first line is reachable with ↑ later.
    */
-  const submitLaunchpad = (submit: string): void => {
+  const submitLaunchpad = (submit: string): string | void => {
     const text = submit.trim()
     const images = composerImageRefsForText(text, launchpadImagesRef.current)
+    const parsed = text.startsWith('/') ? parseCommandName(text) : undefined
+    const command = parsed === undefined ? undefined : channel.commandList.find(entry => entry.name === parsed.name)
+    const knownCommand = parsed !== undefined && (
+      isLocalCommandName(parsed.name) || isHiddenCommandName(parsed.name) || command !== undefined
+    )
+    const modelRoutedSkill = command?.skill === true && command.external !== true
+    // Match the composer's image admission before consuming the draft.
+    if (knownCommand && images.length > 0 && !modelRoutedSkill && command?.acceptsImages !== true) {
+      return t('command-images-unsupported', { name: parsed.name })
+    }
     const submitted = new Set(images.map(image => image.stageId))
     for (const stageId of launchpadImagesRef.current.values()) {
       if (!submitted.has(stageId)) channel.discardStagedImage(stageId)
@@ -2514,7 +2525,6 @@ export function Chat({
       return
     }
     void appendHistory(text)
-    const parsed = text.startsWith('/') ? parseCommandName(text) : undefined
     // 第八版：/help 在落地页上也是盖屏浮层（补全面板被 Esc 收掉后直接
     // Enter 的那条路）——不收落地页、不进对话页。聊天页里 /help 的行为
     // 不变（那边不走这个回调）。
@@ -2524,12 +2534,8 @@ export function Chat({
     }
     // 与 composer 的 tryRunCommand 同一条判定：合并命令表（LOCAL_COMMANDS +
     // channel.commandList 的插件/registry 命令）里有名字才是命令；hidden
-    // 命令照旧认。判定之外的 / 开头行才走 submit（与聊天页 Enter 行为一致）。
-    if (parsed !== undefined && (
-      isLocalCommandName(parsed.name)
-      || isHiddenCommandName(parsed.name)
-      || channel.commandList.some(entry => entry.name === parsed.name)
-    )) {
+    // 命令照旧认。模型路由技能与判定之外的 / 开头行走 submit，与聊天页一致。
+    if (parsed !== undefined && knownCommand && !modelRoutedSkill) {
       if (launchpadScreenCommands.has(parsed.name)) {
         authorizeLaunchpadCover()
       } else if (!overlayCommandNames.has(parsed.name)) {

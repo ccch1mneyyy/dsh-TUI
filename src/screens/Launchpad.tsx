@@ -511,10 +511,10 @@ export function Launchpad({
   commands?: readonly CommandCompletion[] | undefined
   /**
    * 补全面板选中一条（Enter/点击）时交给 Chat 的**完整命令行**
-   * （如 /setup）。Chat 走 runCommand 执行——与聊天页选中命令
-   * 同一条路径，绝不是 submit。
+   * （如 /setup）。普通命令经 runCommand 执行，模型路由技能作为消息
+   * 提交；拒绝时返回提示并保留草稿。
    */
-  onCommandPick?: ((commandLine: string) => void) | undefined
+  onCommandPick?: ((commandLine: string) => string | void) | undefined
   /**
    * 剪贴板读取缝（测试打桩用；生产走 `utils/clipboard` 的 `readClipboard`，
    * Chat 不传这一项）。签名与 `readClipboard` 一致。
@@ -546,8 +546,8 @@ export function Launchpad({
   onAction: (action: LaunchpadAction) => void
   /** 输入框内容变化（含光标位置）。 */
   onQueryChange: (text: string, cursor: number) => void
-  /** 提交：整行原文交给 Chat，由它走命令表/模型两条既有的路。 */
-  onSubmit: (text: string) => void
+  /** 提交：交给 Chat 分派；拒绝时返回提示并保留草稿。 */
+  onSubmit: (text: string) => string | void
   /** 空输入时按 Esc / `Ctrl+C`：`sessions` 去看会话，`exit` 走双击退出漏斗。 */
   onEscape: (intent: 'sessions' | 'exit') => void
   /** 点空白处：把焦点收回输入框（不是提交、不是关闭）。 */
@@ -577,10 +577,11 @@ export function Launchpad({
   const paletteSelectedIndex = Math.min(paletteIndex, Math.max(0, paletteCommands.length - 1))
   const paletteSelected = paletteCommands[paletteSelectedIndex]
   const pickCommand = (commandLine: string): void => {
-    pasteRevisionRef.current += 1
     setPaletteDismissedFor('')
     setPaletteIndex(0)
-    if (onCommandPick !== undefined) onCommandPick(commandLine)
+    const notice = onCommandPick?.(commandLine)
+    if (typeof notice === 'string') showPasteNotice(notice)
+    else pasteRevisionRef.current += 1
   }
 
   // ── Tips 轮换（第六版设计 2）─────────────────────────────────────────────
@@ -969,8 +970,9 @@ export function Launchpad({
       } else {
         const focused = focusIndex >= 0 ? actions[focusIndex] : undefined
         if (focused === undefined) {
-          pasteRevisionRef.current += 1
-          onSubmit(query)
+          const notice = onSubmit(query)
+          if (typeof notice === 'string') showPasteNotice(notice)
+          else pasteRevisionRef.current += 1
         } else onAction(focused)
       }
       event.stopImmediatePropagation()
