@@ -1710,6 +1710,82 @@ const AC4_CUT_PRESET = 'Standard (Git Bash'
         JSON.stringify({ commandCalls, submissions: fixture.submissions }))
     } finally { await chat.unmount() }
   }
+
+  for (const fullscreen of [false, true]) {
+    for (const columns of [120, 48]) {
+      const fixture = imageHarness()
+      const chat = await mountChat({ launchpadOnBoot: true, columns }, fixture.patch, { fullscreen })
+      const mode = `${fullscreen ? 'fullscreen' : 'inline'} ${columns}`
+      const prefix = '中😀 ' + (columns === 48 ? '字 '.repeat(18) : '')
+      const token = '[Image #1]'
+      // Match actual cells: xterm's default emoji width differs from stringWidth.
+      const findToken = (): { col: number; row: number } | null => {
+        const buffer = chat.term.buffer.active
+        for (let row = 0; row < chat.term.rows; row++) {
+          const line = buffer.getLine(buffer.baseY + row)
+          for (let col = 0; col <= chat.term.cols - token.length; col++) {
+            if (Array.from(token).every((char, i) => line?.getCell(col + i)?.getChars() === char)) {
+              return { col: col + 1, row: row + 1 }
+            }
+          }
+        }
+        return null
+      }
+      const cellAt = (pos: { col: number; row: number }, offset = 0) =>
+        chat.term.buffer.active.getLine(chat.term.buffer.active.baseY + pos.row - 1)?.getCell(pos.col - 1 + offset)
+      const caretAt = (pos: { col: number; row: number }, offset = 0) =>
+        chat.term.buffer.active.cursorX === pos.col - 1 + offset && chat.term.buffer.active.cursorY === pos.row - 1
+      const wholeInverse = (pos: { col: number; row: number }) =>
+        Array.from({ length: token.length }, (_, i) => (cellAt(pos, i)?.isInverse() ?? 0) !== 0).every(Boolean)
+      const paste = async () => {
+        await chat.send(pastePath)
+        if (!await settled(() => chat.screen().includes(token))) throw new Error('atomic image fixture did not stage')
+      }
+      try {
+        await chat.type(prefix)
+        await paste()
+        await chat.type('尾')
+        const pos = findToken()!
+        check(`Z19[${mode}] 图片 token 使用聊天页相同的 chip 颜色`,
+          cellAt(pos)?.getFgColor() !== cellAt(pos, -1)?.getFgColor() && !cellAt(pos)?.isFgDefault(), chat.screen())
+        await chat.send('\x1b[D')
+        await chat.send('\x1b[D')
+        check(`Z20[${mode}] 光标到图片末端时保持 token 完整`,
+          await settled(() => caretAt(findToken()!, token.length)), chat.screen())
+        await chat.send('\x1b[D')
+        check(`Z21[${mode}] ← 一次跨过图片，整段高亮`,
+          await settled(() => {
+            const current = findToken()
+            return current !== null && caretAt(current) && wholeInverse(current)
+          }), chat.screen())
+        await chat.send('\x1b[C')
+        check(`Z22[${mode}] → 一次跨到图片末端`,
+          await settled(() => caretAt(findToken()!, token.length)), chat.screen())
+        await chat.send('\x7f')
+        check(`Z23[${mode}] Backspace 删除整张图片并释放附件`,
+          await settled(() => !chat.screen().includes('Image #') && fixture.staged.size === 0 && fixture.discarded.length === 1), chat.screen())
+        await paste()
+        await chat.send('\x1b[D')
+        await chat.send('\x1b[D')
+        await chat.send('\x1b[3~')
+        check(`Z24[${mode}] Delete 删除整张图片并释放附件`,
+          await settled(() => !chat.screen().includes('Image #') && fixture.staged.size === 0 && fixture.discarded.length === 2), chat.screen())
+        await paste()
+        await chat.send('\x17')
+        check(`Z25[${mode}] Ctrl+W 不拆开图片 token`,
+          await settled(() => !chat.screen().includes('Image #') && fixture.staged.size === 0 && fixture.discarded.length === 3), chat.screen())
+        await chat.type('[Image #9]')
+        await chat.send('\x7f')
+        check(`Z26[${mode}] 没有附件绑定的字面 token 仍逐字编辑`,
+          await settled(() => chat.screen().includes('[Image #9') && !chat.screen().includes('[Image #9]')), chat.screen())
+        await chat.send('\r')
+        check(`Z27[${mode}] 普通文字保留，删除的图片不会随消息提交`,
+          await settled(() => fixture.submissions.length === 1)
+            && fixture.submissions[0]!.text.startsWith(prefix) && fixture.submissions[0]!.text.endsWith('尾')
+            && fixture.submissions[0]!.images.length === 0, JSON.stringify(fixture.submissions))
+      } finally { await chat.unmount() }
+    }
+  }
   if (process.platform === 'linux') {
     const stubDir = mkdtempSync(join(fakeHome, 'launchpad-clipboard-'))
     const offerPath = join(stubDir, 'offer.json')

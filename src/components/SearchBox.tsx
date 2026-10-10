@@ -9,6 +9,7 @@ import measureElement from '../ink/measure-element.js'
 import { useDeclaredCursor, useNativeCursor } from '../ink/hooks/use-declared-cursor.js'
 import { useTerminalSize } from '../ink/hooks/use-terminal-size.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import { snapOffImageToken, type ImageTokenSpan } from './composerImageTokens.js'
 
 /**
  * Window a single-line query around the caret so the visible slice fits
@@ -24,7 +25,8 @@ function windowQuery(
   query: string,
   offset: number,
   avail: number,
-): { before: string; at: string; after: string; caretColumn: number } {
+  imageSpans: readonly ImageTokenSpan[],
+): { before: string; at: string; after: string; caretColumn: number; start: number; caret: number } {
   const budget = Math.max(avail, 1)
   let caret = Math.max(0, Math.min(offset, query.length))
   if (
@@ -37,8 +39,10 @@ function windowQuery(
   ) {
     caret-- // mid-surrogate: snap to the emoji's start
   }
+  caret = snapOffImageToken(imageSpans, caret, 'nearest')
   const beforeChars = [...query.slice(0, caret)]
-  const at = caret < query.length ? [...query.slice(caret)][0]! : ' '
+  const tokenAtCaret = imageSpans.find(span => span.start === caret)
+  const at = tokenAtCaret !== undefined ? tokenAtCaret.token : caret < query.length ? [...query.slice(caret)][0]! : ' '
   const atWidth = Math.max(1, stringWidth(at))
   let caretColumn = 0
   for (const ch of beforeChars) caretColumn += stringWidth(ch)
@@ -47,6 +51,10 @@ function windowQuery(
     caretColumn -= stringWidth(beforeChars[start]!)
     start++
   }
+  const before = beforeChars.slice(start).join('')
+  const rawStart = caret - before.length
+  const windowStart = snapOffImageToken(imageSpans, rawStart, 'end')
+  caretColumn -= stringWidth(query.slice(rawStart, windowStart))
   let rest = budget - caretColumn - atWidth
   let after = ''
   for (const ch of [...query.slice(caret + at.length)]) {
@@ -55,7 +63,8 @@ function windowQuery(
     after += ch
     rest -= w
   }
-  return { before: beforeChars.slice(start).join(''), at, after, caretColumn }
+  const end = snapOffImageToken(imageSpans, caret + at.length + after.length, 'start')
+  return { before: query.slice(windowStart, caret), at, after: query.slice(caret + at.length, end), caretColumn, start: windowStart, caret }
 }
 
 /**
@@ -79,6 +88,7 @@ export function SearchBox({
   borderless = false,
   caretBlink = true,
   placeholderAlign = 'right',
+  imageSpans = [],
 }: {
   query: string
   placeholder?: string
@@ -88,6 +98,8 @@ export function SearchBox({
   width?: number | string
   cursorOffset?: number
   borderless?: boolean
+  /** Capability-backed image chips, sharing the chat composer's atomic geometry. */
+  imageSpans?: readonly ImageTokenSpan[]
   /**
    * 空输入 + 焦点态那一行里占位文案的对齐（2026-10 落地页第四版新增）：
    * `right`（缺省，历史行为）贴框右缘；`left` 紧跟前缀。
@@ -105,7 +117,7 @@ export function SearchBox({
   const cursorTheme = getTheme(themeName)
   const cursorColor = cursorTheme.cursor ?? ''
   const cursorGlyph = cursorGlyphColor(cursorTheme)
-  const caretCell = (text: string): React.ReactNode => nativeCursor || !caretBlink
+  const caretCell = (text: string, image = false): React.ReactNode => !image && (nativeCursor || !caretBlink)
     ? <Text>{text}</Text>
     : cursorColor === ''
       ? <Text inverse>{text}</Text>
@@ -129,7 +141,20 @@ export function SearchBox({
 
   const prefixText = prefix === '' ? '' : `${prefix} `
   const prefixWidth = stringWidth(prefixText)
-  const win = windowQuery(query, offset, contentWidth - prefixWidth)
+  const win = windowQuery(query, offset, contentWidth - prefixWidth, imageSpans)
+  const renderQueryPart = (text: string, start: number): React.ReactNode => {
+    if (imageSpans.length === 0) return <Text>{text}</Text>
+    const pieces: React.ReactNode[] = []
+    let pos = start
+    for (const span of imageSpans) {
+      if (span.start < start || span.end > start + text.length) continue
+      if (pos < span.start) pieces.push(<Text key={`text-${pos}`}>{query.slice(pos, span.start)}</Text>)
+      pieces.push(<Text key={`image-${span.start}`} color="suggestion">{span.token}</Text>)
+      pos = span.end
+    }
+    if (pos < start + text.length) pieces.push(<Text key={`text-${pos}`}>{query.slice(pos, start + text.length)}</Text>)
+    return pieces.length === 0 ? <Text>{text}</Text> : <>{pieces}</>
+  }
 
   // Park the native terminal cursor at the caret so IME preedit (pinyin)
   // renders inline at the input instead of the screen's bottom row (same
@@ -184,14 +209,14 @@ export function SearchBox({
       // the caret glyph's style as its blink phase advances.
       content = (
         <>
-          <Text>{win.before}</Text>
-          {caretCell(win.at)}
-          {win.after !== '' && <Text>{win.after}</Text>}
+          {renderQueryPart(win.before, win.start)}
+          {caretCell(win.at, imageSpans.some(span => span.start === win.caret))}
+          {win.after !== '' && renderQueryPart(win.after, win.caret + win.at.length)}
         </>
       )
     }
   } else {
-    content = query ? <Text>{query}</Text> : <Text>{placeholder}</Text>
+    content = query ? renderQueryPart(query, 0) : <Text>{placeholder}</Text>
   }
 
   return (

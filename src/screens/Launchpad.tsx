@@ -18,12 +18,13 @@ import { pickSplashEgg, type SplashEgg } from '../components/splashEggs.js'
 import { t } from '../i18n.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
 import { stringWidth } from '../ink/stringWidth.js'
-import { isPlainReturn } from '../utils/modifiers.js'
+import { isMod, isPlainReturn } from '../utils/modifiers.js'
 import { actionMatches } from '../utils/keymap.js'
 import { formatClipboardInsert, readClipboard, type ClipboardRead } from '../utils/clipboard.js'
 import { imagePathMediaType, parsePastedImagePath, readBoundedRegularFile, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
 import type { ChannelUi } from '../adapter/channel/ui-policy.js'
 import { resolveBindingGeneration } from '../components/promptDraftCache.js'
+import { imageTokenSpans, snapOffImageToken, expandImageTokenRange } from '../components/composerImageTokens.js'
 import {
   collapseToSingleLine,
   insertSingleLineAt,
@@ -559,7 +560,9 @@ export function Launchpad({
   // 光标偏移只在"输入框有焦点"时才有意义；未给（或焦点在快捷入口行）时
   // 一律按行尾算——这与 `SearchBox` 自己的 `cursorOffset ?? query.length`
   // 同一条约定，两处必须一致，否则退格会从"看不见的位置"删字。
-  const caret = focusIndex === -1 ? (cursorOffset ?? query.length) : query.length
+  const boundImageSpans = (text: string) => imageTokenSpans(text).filter(span => imageComposer?.bindings.has(span.token) === true)
+  const imageSpans = boundImageSpans(query)
+  const caret = snapOffImageToken(imageSpans, focusIndex === -1 ? (cursorOffset ?? query.length) : query.length, 'nearest')
   /** 焦点是否在输入框上（-1）；参数段（≤-2）与动作入口（≥0）都不算。 */
   const inputFocused = focusIndex === -1
 
@@ -600,6 +603,18 @@ export function Launchpad({
   queryRef.current = query
   const caretRef = React.useRef(caret)
   caretRef.current = caret
+  const changeQuery = (text: string, offset: number): void => {
+    const nextCaret = snapOffImageToken(boundImageSpans(text), offset,
+      offset < caretRef.current ? 'start' : offset > caretRef.current ? 'end' : 'nearest')
+    queryRef.current = text
+    caretRef.current = nextCaret
+    onQueryChange(text, nextCaret)
+  }
+  const deleteRange = (start: number, end: number): void => {
+    const text = queryRef.current
+    const range = expandImageTokenRange(boundImageSpans(text), start, end)
+    changeQuery(text.slice(0, range.start) + text.slice(range.end), range.start)
+  }
   const clipboardBusyRef = React.useRef(false)
   const pasteRevisionRef = React.useRef(0)
   const mountedRef = React.useRef(true)
@@ -645,9 +660,7 @@ export function Launchpad({
     if (clean === '') return
     // 异步落点守则：读回那一刻的 query/caret 才算数（refs 每次渲染刷新）。
     const next = insertSingleLineAt(queryRef.current, caretRef.current, clean)
-    queryRef.current = next.text
-    caretRef.current = next.caret
-    onQueryChange(next.text, next.caret)
+    changeQuery(next.text, next.caret)
     onFocusChange(-1)
   }
   const pasteImagePaths = (paths: readonly string[], lease: ReturnType<typeof capturePasteLease>, bitmap = false): Promise<void> => {
@@ -823,6 +836,8 @@ export function Launchpad({
     // 选择器盖在这一屏之上时键盘整块让位（Chat 的 overlay 分支处理；Esc 关
     // 选择器回到这里）。没有这道闸，选择器分支没消费的键会漏进草稿。
     if (inputPaused) return
+    const query = queryRef.current
+    const caret = caretRef.current
     const composing = key.ctrl || key.meta || key.super
     // 终端原生粘贴（bracketed paste：Ctrl+Shift+V / 右键 / Shift+Insert）：
     // ink 把载荷标成 isPasted 交给 useInput；标记字节（\x1b[200~ / 201~）在
@@ -915,7 +930,7 @@ export function Launchpad({
         if (!key.shift) {
           const replacement = paletteSelected.replacement
           setPaletteIndex(0)
-          onQueryChange(replacement, replacement.length)
+          changeQuery(replacement, replacement.length)
         }
         event.stopImmediatePropagation()
         return
@@ -935,14 +950,14 @@ export function Launchpad({
       pasteRevisionRef.current += 1
       // 空输入时 Esc 去看会话（首屏最常见的下一步）；已经有字就只清空它,
       // 免得辛苦打的半句话被一次性丢掉。
-      if (query !== '') onQueryChange('', 0)
+      if (query !== '') changeQuery('', 0)
       else onEscape('sessions')
       event.stopImmediatePropagation()
       return
     }
     if (key.ctrl && (input === 'c' || input === 'd')) {
       pasteRevisionRef.current += 1
-      if (query !== '') onQueryChange('', 0)
+      if (query !== '') changeQuery('', 0)
       else onEscape('exit')
       event.stopImmediatePropagation()
       return
@@ -1013,7 +1028,7 @@ export function Launchpad({
         : key.end ? query.length
           : key.leftArrow ? Math.max(0, prevBoundary(query, at))
             : Math.min(query.length, nextBoundary(query, at))
-      onQueryChange(query, next)
+      changeQuery(query, next)
       event.stopImmediatePropagation()
       return
     }
@@ -1022,12 +1037,20 @@ export function Launchpad({
       const at = caret
       if (key.backspace) {
         if (at === 0) return
-        const cut = prevBoundary(query, at)
-        onQueryChange(query.slice(0, cut) + query.slice(at), cut)
+        deleteRange(prevBoundary(query, at), at)
       } else {
         if (at >= query.length) return
-        onQueryChange(query.slice(0, at) + query.slice(nextBoundary(query, at)), at)
+        deleteRange(at, nextBoundary(query, at))
       }
+      event.stopImmediatePropagation()
+      return
+    }
+    if (isMod(key) && input === 'w') {
+      if (!inputFocused) return
+      let start = caret
+      while (start > 0 && /\s/u.test(query[start - 1]!)) start--
+      while (start > 0 && !/\s/u.test(query[start - 1]!)) start--
+      deleteRange(start, caret)
       event.stopImmediatePropagation()
       return
     }
@@ -1036,7 +1059,7 @@ export function Launchpad({
     const typed = input.replace(/[\r\n]+/gu, '')
     if (typed === '') return
     const at = caret
-    onQueryChange(query.slice(0, at) + typed + query.slice(at), at + typed.length)
+    changeQuery(query.slice(0, at) + typed + query.slice(at), at + typed.length)
     onFocusChange(-1)
     event.stopImmediatePropagation()
   })
@@ -1094,6 +1117,7 @@ export function Launchpad({
               prefix={query.startsWith('/') ? '⌘' : '❯'}
               width={cardWidth - 4}
               cursorOffset={caret}
+              imageSpans={imageSpans}
               caretBlink={inputFocused ? caretPhase : true}
             />
           </Box>

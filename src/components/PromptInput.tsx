@@ -6,6 +6,7 @@ import { unlink } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
+import { COMPOSER_IMAGE_TOKEN, imageTokenSpans, imageTokenAround, snapOffImageToken, expandImageTokenRange, type ImageTokenSpan } from './composerImageTokens.js'
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
 import { EffortInputBorder, type InputBorderLabel } from './EffortInputBorder.js'
 import { EffortTierBadge } from './EffortTierBadge.js'
@@ -224,60 +225,10 @@ const FOLD_MIN_CHARS = 600
 const isBigInput = (text: string): boolean =>
   text.split('\n').length >= FOLD_MIN_LINES || text.length >= FOLD_MIN_CHARS
 
-
-const COMPOSER_IMAGE_TOKEN = /\[Image #\d+\]/gu
-
 /** Format label for one image media type, matching the image preview card's
  *  title (`JPEG`, `PNG`, `WEBP`, `GIF`). */
 const mediaTypeLabel = (mediaType: string): string =>
   mediaType.replace(/^image\//u, '').replace(/\+xml$/u, '').toUpperCase()
-
-/** One `[Image #N]` occurrence: [start, end) offsets into the draft. */
-interface ImageTokenSpan {
-  readonly start: number
-  readonly end: number
-  readonly token: string
-}
-
-/** Every `[Image #N]` in `text`, in order. */
-function imageTokenSpans(text: string): ImageTokenSpan[] {
-  const spans: ImageTokenSpan[] = []
-  for (const match of text.matchAll(COMPOSER_IMAGE_TOKEN)) {
-    const start = match.index ?? 0
-    spans.push({ start, end: start + match[0].length, token: match[0] })
-  }
-  return spans
-}
-
-/** The span whose interior (exclusive of both edges) contains `offset`. */
-function imageTokenAround(spans: readonly ImageTokenSpan[], offset: number): ImageTokenSpan | undefined {
-  return spans.find(span => span.start < offset && offset < span.end)
-}
-
-/**
- * A caret never rests inside a staged token: an offset in a span's interior
- * moves to the edge `prefer` names — `'start'` (the token becomes the caret
- * cluster), `'end'`, or whichever is nearer.
- */
-function snapOffImageToken(
-  spans: readonly ImageTokenSpan[],
-  offset: number,
-  prefer: 'start' | 'end' | 'nearest',
-): number {
-  const span = imageTokenAround(spans, offset)
-  if (span === undefined) return offset
-  if (prefer === 'start') return span.start
-  if (prefer === 'end') return span.end
-  return offset - span.start < span.end - offset ? span.start : span.end
-}
-
-/** Expand a deletion or selection to include every staged token it touches. */
-function expandImageTokenRange(spans: readonly ImageTokenSpan[], start: number, end: number) {
-  return {
-    start: snapOffImageToken(spans, start, 'start'),
-    end: snapOffImageToken(spans, end, 'end'),
-  }
-}
 
 /** Capabilities referenced by `text`, in first occurrence order. A raw token
  * restored from disk/history has no sidecar entry and therefore stays inert. */
