@@ -431,6 +431,7 @@ export function attachDshExtensions(
   const sessionMetadataActions = createSessionMetadataActions(ctx, {
     owner,
     binding,
+    cwd: () => state.cwd,
     provider: () => state.provider,
     model: () => state.model,
     emit: () => state.emit(),

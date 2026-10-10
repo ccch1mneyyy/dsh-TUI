@@ -38,6 +38,7 @@ export interface ClaudeCatalogDeps {
 
 /** Preview depth when the caller names none. */
 const PREVIEW_LIMIT = 6
+const FIRST_PAGE = 32
 
 /** One SDK record as a browser row. */
 export function claudeSessionSummary(info: SDKSessionInfo, lastUsed: Readonly<Record<string, number>> = {}): SessionSummary {
@@ -80,13 +81,22 @@ export function createClaudeCatalog(deps: ClaudeCatalogDeps): SessionCatalog {
   const dirOption = (cwd: string | undefined): { dir: string } | undefined => cwd === undefined || cwd === '' ? undefined : { dir: cwd }
   return {
     ...(deps.snapshotKey === undefined ? {} : { snapshotKey: deps.snapshotKey }),
-    async list(scope: SessionListScope = {}): Promise<readonly SessionSummary[]> {
+    async list(scope: SessionListScope = {}, onPartial?: (rows: readonly SessionSummary[]) => void): Promise<readonly SessionSummary[]> {
       const sdk = await deps.loadSdk()
-      const infos = scope.allProjects === true
-        ? await sdk.listSessions({ includeProgrammatic: true })
-        : await sdk.listSessions({ dir: scope.cwd ?? deps.cwd(), includeProgrammatic: true })
+      const options = { includeProgrammatic: true, ...(scope.allProjects === true ? {} : { dir: scope.cwd ?? deps.cwd(), includeWorktrees: false }) }
       const used = lastUsed()
-      return infos.map(info => claudeSessionSummary(info, used)).sort((a, b) => b.updatedAt - a.updatedAt)
+      const summaries = (infos: readonly SDKSessionInfo[]): SessionSummary[] =>
+        infos.map(info => claudeSessionSummary(info, used)).sort((a, b) => b.updatedAt - a.updatedAt)
+      if (onPartial !== undefined) {
+        // A bounded SDK read extracts metadata only for the newest sessions.
+        // Keep the complete read below: offset paging would repeatedly scan
+        // earlier pages, and a short first page is already a complete listing.
+        const first = await sdk.listSessions({ ...options, limit: FIRST_PAGE })
+        const rows = summaries(first)
+        onPartial(rows)
+        if (first.length < FIRST_PAGE) return rows
+      }
+      return summaries(await sdk.listSessions(options))
     },
     async info(sessionId: string, cwd?: string): Promise<SessionSummary | undefined> {
       const sdk = await deps.loadSdk()

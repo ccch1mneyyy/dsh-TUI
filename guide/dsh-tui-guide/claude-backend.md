@@ -124,7 +124,8 @@ Claude 设置 > `default`。Claude 设置里的 `defaultMode: bypassPermissions`
   `claude --resume <id>` 打开）。`Enter` 恢复（先回放历史再继续），`Ctrl+R` 重命名，
   `Ctrl+D` 删除；当前会话和另一个 dsh-TUI 终端正在用的会话不能删。置顶按后端分开保存。
   再次打开或重启后先显示上次完整列表，同时仍从 SDK 刷新。首屏快照按 Claude 配置
-  目录隔离；读取失败时保留上次完整快照。
+  目录隔离；没有快照时先显示当前工作目录最近的最多 32 条，再补齐该工作区及其他
+  工作区的列表。同一仓库的其他 Git worktree 不混入首批结果。读取失败时保留上次完整快照。
 - 从 shell 恢复：`dsh-tui --backend claude --resume <id>`；不带 id 时恢复本机最近一次
   用过的 Claude 会话。退出时 dsh-TUI 会打印这条命令。另一个 dsh-TUI 终端已打开的会话会
   被拒绝；`--resume` 打不开时直接报错，不会改开新会话。状态栏的短会话 id 就是

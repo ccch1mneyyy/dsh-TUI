@@ -230,8 +230,11 @@ past tokens/cost. Fresh usage notifications update the readings.
   threads cannot be archived. The catalog lists up to 500 recent ordinary threads, excluding
   ephemeral forks and child threads from the main list.
   Reopening or restarting first paints the last complete list while the native catalog
-  refreshes; a cold scan shows pages as they arrive. First-paint snapshots are isolated
-  by Codex storage directory; failed or incomplete reads never replace a complete snapshot.
+  refreshes; a cold scan shows pages as they arrive. Without a snapshot, the native state
+  database supplies up to 32 recent threads from the current workspace first, then the
+  rollout scan repairs titles and fills in that workspace followed by other workspaces;
+  an unavailable database falls back to scanning. First-paint snapshots are isolated by
+  Codex storage directory; failed or incomplete reads never replace a complete snapshot.
 - `/rename` changes the official thread title; `/color` stores a session accent, not a global theme.
 - `/fork` creates a resumable copy without switching. Double `Esc` or `/rewind` conversation
   rewind creates a copy before the selected question, returns the question to the composer

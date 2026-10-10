@@ -131,6 +131,34 @@ try {
   check('the finished listing carries every row', coldRows.length, 40)
   check('and only then reaches disk', diskRows([], coldConfig).length, 40)
 
+  // The current workspace can have fewer than one batch, and older sessions
+  // than every other project. Publish it before locating any foreign log.
+  const priorityConfig = { root: join(root, 'workspace-priority') }
+  const localHeaders = [header('workspace-old', 1), { ...header('workspace-new', 2), cwd: '/proj/' }]
+  const foreignHeaders = Array.from({ length: 40 }, (_, index) => ({ ...header(`foreign-${index}`, 100 + index), cwd: '/proj/other' }))
+  foreignHeaders[0] = { ...foreignHeaders[0], origin: 'subagent', parentSession: 'workspace-old' }
+  const located = []
+  const batches = []
+  let foreignSawLocal = false
+  const prioritized = await listSummaries({
+    ...source([...foreignHeaders, ...localHeaders], priorityConfig),
+    locate(meta) {
+      located.push(meta.id)
+      if (meta.id.startsWith('foreign-') && located.length === 3) foreignSawLocal = batches[0]?.length === 2
+      return undefined
+    },
+  }, undefined, undefined, rows => {
+    batches.push(rows)
+    check('workspace partials never become a complete disk snapshot', diskRows([], priorityConfig), undefined)
+  }, '/proj')
+  check('current workspace logs resolve ahead of newer foreign logs', located.slice(0, 2), ['workspace-new', 'workspace-old'])
+  check('a workspace smaller than 32 paints before any foreign log is resolved', foreignSawLocal, true)
+  check('the first batch contains only the normalized current workspace', batches[0].map(row => row.id), ['workspace-new', 'workspace-old'])
+  check('workspace-first rows still count children from every project', batches[0].find(row => row.id === 'workspace-old').childCount, 1)
+  check('the complete result still includes every workspace in activity order', prioritized.length, 42)
+  check('final ordering is not changed by workspace processing priority', prioritized[0].id, 'foreign-39')
+  check('only the complete multi-workspace listing becomes the snapshot', diskRows([], priorityConfig).length, 42)
+
   // ── 8. The real Channel forwards the cache without a backend call ───────────
   let backendCalls = 0
   const live = { name: provider.name, config: { root: provider.config.root }, list: async () => { backendCalls += 1; return [header('live', 5)] } }
@@ -143,7 +171,7 @@ try {
   const metadata = createSessionMetadataActions({ get: name => name === 'sessionPersistence' ? currentProvider : undefined }, {
     owner,
     binding: { capture: () => ({ agent, generation: 1 }), isCurrent: () => owner.current() },
-    provider: () => 'deepseek', model: () => 'model', emit: () => undefined,
+    provider: () => 'deepseek', model: () => 'model', cwd: () => '/proj', emit: () => undefined,
     sessionTitle: () => '', setSessionTitle: () => undefined, setSessionColor: () => undefined,
     forgetAgentView: () => undefined, setPersistedSessions: rows => pushed.push(rows),
     skillRegistryFor: () => undefined, skillViewOptions: () => ({ scope: agent, cwd: '/proj' }),
@@ -161,6 +189,10 @@ try {
   let forwardedPartial
   await actions.listSessions(undefined, batch => { forwardedPartial = batch })
   check('partial rows traverse the real readiness delegate', forwardedPartial.length, 32)
+  live.list = async () => [...foreignHeaders, ...localHeaders]
+  let firstWorkspace
+  await actions.listSessions(undefined, batch => { firstWorkspace ??= batch })
+  check('the real metadata action forwards its current workspace to the listing', firstWorkspace.map(row => row.id), ['workspace-new', 'workspace-old'])
   live.list = liveList
   await actions.listSessions()
 

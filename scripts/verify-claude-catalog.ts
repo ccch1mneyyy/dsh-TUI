@@ -103,7 +103,7 @@ const info = (over: Record<string, unknown>) => ({ sessionId: 's', summary: 'a s
   const catalog = createClaudeCatalog({ loadSdk: () => Promise.resolve(store as never), cwd: () => workdir, lastUsed: () => ({ a: NOW }) })
   const local = await catalog.list({ cwd: workdir })
   const listCall = calls.find(call => call.method === 'listSessions')!.args[0] as Record<string, unknown>
-  check('the project listing asks the SDK for that directory, programmatic sessions included (P4-1)', listCall.dir === workdir && listCall.includeProgrammatic === true)
+  check('the project listing asks for only this workspace, programmatic sessions included (P4-1)', listCall.dir === workdir && listCall.includeProgrammatic === true && listCall.includeWorktrees === false)
   check('rows are the browser\'s shape, tagged with the backend', local.every(row => row.backendId === 'claude' && row.kind.kind === 'root' && row.hasPrompt && row.childCount === 0))
   const a = local.find(row => row.id === 'a')!
   const b = local.find(row => row.id === 'b')!
@@ -114,7 +114,7 @@ const info = (over: Record<string, unknown>) => ({ sessionId: 's', summary: 'a s
   check('bytes and branch come from the record', a.bytes === 1234 && a.branch === 'main' && a.cwd === workdir)
   const all = await catalog.list({ allProjects: true })
   const allCall = calls.filter(call => call.method === 'listSessions').at(-1)!.args[0] as Record<string, unknown>
-  check('the all-projects listing passes no directory', allCall.dir === undefined && allCall.includeProgrammatic === true && all.some(row => row.id === 'elsewhere' && row.cwd === '/other/dir'))
+  check('the all-projects listing includes other workspaces without a directory restriction', allCall.dir === undefined && allCall.includeWorktrees === undefined && allCall.includeProgrammatic === true && all.some(row => row.id === 'elsewhere' && row.cwd === '/other/dir'))
   check('no title and no prompt falls back to the directory name', claudeSessionSummary(info({ sessionId: 'x', summary: '' }) as never).title.source === 'fallback')
   const moved = await catalog.info!('moved', workdir)
   check('info looks in the directory first, then every project', moved?.cwd === '/moved/dir' && calls.filter(call => call.method === 'getSessionInfo').length === 2)
@@ -123,6 +123,40 @@ const info = (over: Record<string, unknown>) => ({ sessionId: 's', summary: 'a s
   await catalog.rename!('a', 'New title', workdir)
   await catalog.delete!('b', workdir)
   check('rename and delete pass the session\'s directory', JSON.stringify(calls.find(call => call.method === 'renameSession')!.args) === JSON.stringify(['a', 'New title', { dir: workdir }]) && JSON.stringify(calls.find(call => call.method === 'deleteSession')!.args) === JSON.stringify(['b', { dir: workdir }]))
+
+  const before = calls.length
+  const partials: (readonly SessionSummary[])[] = []
+  const small = await catalog.list({}, rows => { partials.push(rows) })
+  const smallOptions = calls.at(-1)!.args[0] as Record<string, unknown>
+  check('a short workspace first page is complete without a second SDK scan', small.length === 2 && partials.length === 1 && calls.length === before + 1 && smallOptions.limit === 32 && smallOptions.dir === workdir && smallOptions.includeWorktrees === false)
+
+  let finish!: (rows: ReturnType<typeof info>[]) => void
+  let started!: () => void
+  const pending = new Promise<ReturnType<typeof info>[]>(resolve => { finish = resolve })
+  const scanning = new Promise<void>(resolve => { started = resolve })
+  const page = Array.from({ length: 32 }, (_, index) => info({ sessionId: `page-${index}`, lastModified: NOW - index }))
+  const pageCalls: Record<string, unknown>[] = []
+  let preferenceReads = 0
+  const paged = createClaudeCatalog({
+    loadSdk: async () => ({ ...store, listSessions: (options: Record<string, unknown>) => {
+      pageCalls.push(options)
+      if (options.limit === 32) return Promise.resolve(page)
+      started()
+      return pending
+    } }) as never,
+    cwd: () => workdir,
+    lastUsed: () => { preferenceReads += 1; return { 'page-31': NOW + 1 } },
+  })
+  let first: readonly SessionSummary[] | undefined
+  let completed = false
+  const listing = paged.list({ allProjects: true }, rows => { first = rows }).then(rows => { completed = true; return rows })
+  await scanning
+  check('cold listing publishes bounded, MRU-sorted rows while the full scan is pending', !completed && first?.length === 32 && first[0]?.id === 'page-31')
+  check('both scans preserve all-projects scope and programmatic sessions', pageCalls.length === 2 && pageCalls.every(options => options.dir === undefined && options.includeProgrammatic === true) && pageCalls[1]?.limit === undefined)
+  finish([...page.slice(1).map(row => ({ ...row, customTitle: 'Updated title' })), ...Array.from({ length: 20 }, (_, index) => info({ sessionId: `older-${index}` }))])
+  const complete = await listing
+  check('the full listing retains older sessions and replaces deleted rows and stale titles', complete.length === 51 && !complete.some(row => row.id === 'page-0') && complete.find(row => row.id === 'page-1')?.title.text === 'Updated title' && complete.some(row => row.id === 'older-19'))
+  check('preferences are read once across the first page and full listing', preferenceReads === 1)
 }
 
 // ── resume: transcript → replay → `resume` ────────────────────────────

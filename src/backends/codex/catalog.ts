@@ -18,6 +18,7 @@ export interface CodexCatalogDeps {
 }
 const LIST_LIMIT = 500
 const LIST_PAGE = 200
+const FIRST_PAGE = 32
 const PREVIEW_LIMIT = 6
 
 /** Metadata only. Absence of preview text is not proof of an empty thread. */
@@ -83,9 +84,21 @@ export function createCodexCatalog(deps: CodexCatalogDeps): SessionCatalog {
         // Read file-backed preferences once, rather than synchronously reading
         // and parsing them for every thread in every page.
         const used = deps.lastUsed?.()
+        const params = { sortKey: 'recency_at', sortDirection: 'desc', archived: false, modelProviders: [], ...(cwd === undefined ? {} : { cwd }) }
+        if (onPartial !== undefined) {
+          // The native state DB can paint rows before the default rollout scan
+          // repairs metadata. Its rows never enter the final listing or cache.
+          let first: Rec | undefined
+          try {
+            first = rec(await hub.call(CLIENT.threadList, { ...params, limit: FIRST_PAGE, useStateDbOnly: true }, { timeoutMs: 1000 }))
+          } catch { /* Older servers or unavailable DBs use the regular listing. */ }
+          const initial = arr(first?.data).map(raw => codexSessionSummary(raw, used))
+            .filter((row): row is SessionSummary => row !== undefined && row.kind.kind !== 'subagent')
+          if (initial.length > 0) onPartial(initial.sort((a, b) => b.updatedAt - a.updatedAt))
+        }
         // The row budget also bounds the number of empty/malformed pages.
         for (let page = 0; page < Math.ceil(LIST_LIMIT / LIST_PAGE) && scanned < LIST_LIMIT; page += 1) {
-          const answer = rec(await hub.call(CLIENT.threadList, { limit: Math.min(LIST_PAGE, LIST_LIMIT - scanned), sortKey: 'recency_at', sortDirection: 'desc', archived: false, modelProviders: [], ...(cwd === undefined ? {} : { cwd }), ...(cursor === undefined ? {} : { cursor }) }))
+          const answer = rec(await hub.call(CLIENT.threadList, { ...params, limit: Math.min(LIST_PAGE, LIST_LIMIT - scanned), ...(cursor === undefined ? {} : { cursor }) }))
           const data = arr(answer?.data)
           scanned += data.length
           for (const raw of data.slice(0, LIST_LIMIT - rows.size)) {

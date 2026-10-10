@@ -88,6 +88,31 @@ try {
     check(backendId + ': an empty completed listing is cached distinctly from unknown', restarted.cachedSessions(), [])
   }
 
+  for (const backendId of ['claude', 'codex']) {
+    const local = row('current-workspace', backendId)
+    const foreign = { ...row('newer-elsewhere', backendId), cwd: join(home, 'elsewhere'), updatedAt: 999 }
+    const global = gate<readonly SessionSummary[]>()
+    const began = gate<void>()
+    const scopes: string[] = []
+    const scoped = channel(backendId, {
+      list: async (scope, onPartial) => {
+        scopes.push(scope?.allProjects ? 'all' : scope?.cwd ?? '')
+        if (scope?.allProjects) { onPartial?.([foreign]); began.resolve(); return global.promise }
+        onPartial?.([local])
+        return [local]
+      },
+    })
+    const partials: string[][] = []
+    const listing = scoped.listSessions(undefined, rows => { partials.push(ids(rows)!) })
+    await began.promise
+    check(backendId + ': the current workspace is queried before all projects', scopes, [home, 'all'])
+    check(backendId + ': the first rows are local even when another workspace is newer', partials[0], ['current-workspace'])
+    check(backendId + ': global partial pages keep the already-loaded workspace', partials.at(-1), ['newer-elsewhere', 'current-workspace'])
+    check(backendId + ': workspace progress is not a complete snapshot', scoped.cachedSessions(), undefined)
+    global.resolve([foreign, local])
+    check(backendId + ': completion includes both workspaces', ids(await listing), ['newer-elsewhere', 'current-workspace'])
+  }
+
   // A slow page is useful immediately, but cannot masquerade as a complete
   // listing or overwrite the last successful snapshot.
   const key = JSON.stringify(['codex', home, 'paging'])
