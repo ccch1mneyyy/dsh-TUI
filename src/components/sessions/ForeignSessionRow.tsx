@@ -4,6 +4,7 @@ import type { ClickEvent } from '../../ink/events/click-event.js'
 import { useTooltip } from '../Tooltip.js'
 import { formatAbsolute, formatProject, formatWhen, truncateWidth } from '../../sessions/format.js'
 import type { ForeignSessionRow as ForeignSessionSummary } from '../../adapter/ports/channel-session.js'
+import { useDeclaredCursor, useNativeCursor } from '../../ink/hooks/use-declared-cursor.js'
 
 /**
  * One conversation of another agent in a source tab: its title, and a facts
@@ -27,6 +28,7 @@ export function ForeignSessionRow({
   session,
   width,
   focused,
+  declareCursor = false,
   home,
   now,
   onClick,
@@ -35,6 +37,8 @@ export function ForeignSessionRow({
   /** Columns available to the row. */
   width: number
   focused: boolean
+  /** Park the native caret on this row while the list owns it. */
+  declareCursor?: boolean
   /** Home directory, for collapsing the path to `~`. */
   home: string
   /** Epoch ms used for every relative time in this render pass. */
@@ -43,6 +47,8 @@ export function ForeignSessionRow({
   onClick?(event: ClickEvent): void
 }): React.ReactNode {
   const [hovered, setHovered] = useState(false)
+  const nativeCursor = useNativeCursor()
+  const cursorRef = useDeclaredCursor({ line: 0, column: 0, active: focused && declareCursor, visible: nativeCursor, hideOnIdle: true })
   // Two cells for the focus marker.
   const body = Math.max(8, width - 2)
   const shownTitle = truncateWidth(session.title, Math.max(4, body - 2))
@@ -65,7 +71,7 @@ export function ForeignSessionRow({
       // the green foreground below, as on the DSH row.
       backgroundColor={hovered && !focused ? 'userMessageBackgroundHover' : undefined}
     >
-      <Box>
+      <Box ref={cursorRef}>
         <Text color={focused ? 'success' : 'subtle'}>{focused ? '❯ ' : '  '}</Text>
         <Box {...titleTooltip}>
           <Text color={focused ? 'success' : undefined} bold={focused}>{shownTitle}</Text>

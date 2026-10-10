@@ -287,6 +287,10 @@ interface StubChannelConfig {
   readonly openResult?: { ok: true } | { ok: false; reason: 'failed'; error: string } | { ok: false; reason: 'cancelled' }
   /** Terminal width for this screen; {@link COLS} by default. */
   readonly cols?: number
+  /** Exercise the normal screen buffer as well as fullscreen. */
+  readonly inline?: boolean
+  /** Native backends derive workspace groups without the DSH ledger. */
+  readonly backendId?: 'claude' | 'codex'
   /**
    * The persistent cache this channel reads.
    *
@@ -365,6 +369,9 @@ function makeChannel(config: StubChannelConfig): StubChannel {
     cwd: config.cwd,
     working: false,
     agentId: 'live-one',
+    ...(config.backendId === undefined ? {} : {
+      backendCapabilities: { backendId: config.backendId, backendLabel: config.backendId, commands: [] },
+    }),
     ...(config.registryAbsent === true ? {} : {
       listWorkspaceRegistry: async () => {
         if (config.registryRejects === true) throw new Error('workspace service unavailable')
@@ -457,6 +464,12 @@ function foreignFacade(config: ForeignStubConfig, calls: string[]): Record<strin
 interface SupervisorScreen {
   write: (data: string) => void
   lines: () => string[]
+  /** Physical terminal caret, independent of the painted focus marker. */
+  cursor: () => { col: number; row: number; visible: boolean }
+  /** Read a display cell without treating CJK text offsets as columns. */
+  cell: (col: number, row: number) => string
+  /** Real mouse motion, acknowledged by the row's hover background. */
+  hover: (needle: string) => Promise<boolean>
   /** One real SGR click on the first occurrence of `needle`. */
   click: (needle: string) => Promise<void>
   /** One real SGR right click on the first occurrence of `needle`. */
@@ -483,9 +496,17 @@ async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
   const screen = new XTerm({ cols: target.config.cols ?? COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const out = new FakeStdout(screen)
   const input = new FakeStdin()
+  let cursorVisible = true
+  for (const [final, visible] of [['h', true], ['l', false]] as const) {
+    screen.parser.registerCsiHandler({ prefix: '?', final }, params => {
+      if (params.includes(25)) cursorVisible = visible
+      return false
+    })
+  }
+  const ScreenMode = target.config.inline ? React.Fragment : AlternateScreen
   const app = await render(
     <ThemeProvider theme="dark">
-      <AlternateScreen>
+      <ScreenMode>
         <SessionSupervisor
           channel={target.channel}
           home={sandbox}
@@ -503,7 +524,7 @@ async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
           onApprove={() => {}}
           liveStateOf={(id) => liveState[id as keyof typeof liveState]}
         />
-      </AlternateScreen>
+      </ScreenMode>
     </ThemeProvider>,
     {
       stdin: input as never,
@@ -516,6 +537,17 @@ async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
   return {
     write: (data: string) => { input.write(data) },
     lines: () => viewportLines(screen),
+    cursor: () => ({ col: screen.buffer.active.cursorX, row: screen.buffer.active.cursorY, visible: cursorVisible }),
+    cell: (col, row) => screen.buffer.active.getLine(screen.buffer.active.baseY + row)?.getCell(col)?.getChars() ?? '',
+    hover: async (needle) => {
+      await settled(() => findText(screen, needle) !== null)
+      const found = findText(screen, needle)
+      if (found === null) throw new Error(`text not found: ${needle}`)
+      const background = () => screen.buffer.active.getLine(screen.buffer.active.baseY + found.row)?.getCell(found.col)?.getBgColor()
+      const before = background()
+      input.write(`\u001b[<35;${found.col + 1};${found.row + 1}M`)
+      return settled(() => background() !== before)
+    },
     click: async (needle: string) => {
       await settled(() => findText(screen, needle) !== null)
       const found = findText(screen, needle)
@@ -541,6 +573,112 @@ async function openSupervisor(config: StubChannelConfig): Promise<SupervisorScre
   return mountSupervisor(makeChannel(config))
 }
 
+console.log('native caret follows workspace, session and live filter focus')
+for (const inline of [false, true]) {
+  for (const cols of [120, 36]) {
+    const app = await openSupervisor({ registry: registry.map(entry => ({ ...entry, title: `${entry.title} 工作区` })), cwd: alphaDir, cols, inline })
+    const markerAt = (title: string): boolean => {
+      const cursor = app.cursor()
+      const line = app.lines()[cursor.row] ?? ''
+      return cursor.visible && line.includes(title) && app.cell(cursor.col, cursor.row) === '❯'
+    }
+    const searchAt = (query: string, cells: number): boolean => {
+      const cursor = app.cursor()
+      const line = app.lines()[cursor.row] ?? ''
+      const prefix = line.indexOf(`/ ${query}`)
+      return cursor.visible && prefix >= 0 && app.cell(cursor.col - 2 - cells, cursor.row) === '/'
+    }
+    const label = `${inline ? 'inline' : 'fullscreen'} ${cols} cols`
+    try {
+      check(`${label}: opening parks the native caret on the focused session`, await settled(() => markerAt('free session')))
+      if (cols === 120) {
+        app.write('\u001b[D')
+        check(`${label}: left hands the caret to the selected workspace`, await settled(() => markerAt('Alpha')))
+        app.write('free')
+        check(`${label}: typing from the rail hands the caret to the live filter`, await settled(() => searchAt('free', 4)))
+        app.write('\u001b[D')
+        check(`${label}: navigating away from the filter restores the rail caret`, await settled(() => markerAt('Alpha')))
+        app.write('\u001b')
+        await settled(() => app.lines().some(line => line.includes('live session')))
+      } else {
+        app.write('\u001b[D')
+        check(`${label}: a hidden rail falls back to the visible filter caret`, await settled(() => searchAt('', 0)))
+      }
+      app.write('\u001b[C')
+      await settled(() => markerAt('free session'))
+      for (let step = 0; step < sessions.length && !markerAt('+ New session'); step++) {
+        const previous = app.cursor().row
+        app.write('\u001b[A')
+        await settled(() => app.cursor().row !== previous)
+      }
+      check(`${label}: the new-session card owns the same list caret`, await settled(() => markerAt('+ New session')))
+      app.write('\u001b[B')
+      check(`${label}: down moves the native caret to a session row`, await settled(() => markerAt('free session') || markerAt('live session')))
+      app.write('中')
+      check(`${label}: the search caret counts CJK display cells`, await settled(() => searchAt('中', 2)))
+      app.write('\u007f')
+      await settled(() => app.lines().some(line => line.includes('live session')))
+      app.write('\u001b[C')
+      check(`${label}: list navigation returns the native caret from search`, await settled(() => markerAt('live session')))
+      if (!inline) {
+        // SGR mouse hit-testing is enabled in fullscreen; inline uses keys.
+        await app.click('Type to search sessions')
+        check(`${label}: clicking the filter claims its native caret`, await settled(() => searchAt('', 0)))
+      }
+    } finally { app.close() }
+  }
+}
+
+console.log('pane changes preserve selection; workspace changes choose their newest session')
+const workspaceRows = [
+  session({ id: 'a-latest', title: { text: 'a latest', source: 'prompt' }, updatedAt: now - 1_000 }),
+  session({ id: 'a-older', title: { text: 'a older', source: 'prompt' }, updatedAt: now - 2_000 }),
+  session({ id: 'b-latest', cwd: betaDir, title: { text: 'b latest', source: 'prompt' }, updatedAt: now - 500 }),
+  session({ id: 'b-older', cwd: betaDir, title: { text: 'b older', source: 'prompt' }, updatedAt: now - 3_000 }),
+]
+for (const backendId of [undefined, 'claude', 'codex'] as const) {
+  const label = backendId ?? 'dsh'
+  const app = await openSupervisor({ registry, cwd: alphaDir, sessions: workspaceRows, backendId })
+  const focused = (title: string): boolean => app.lines().some(line => line.includes(title) && line.includes('❯'))
+  const railFocused = (): boolean => app.lines().some(line => /❯\s+[▣▢]/u.test(line))
+  try {
+    check(`${label}: opening selects the latest session`, await settled(() => focused('a latest')))
+    check(`${label}: mouse motion reaches another session row`, await app.hover('a older'))
+    check(`${label}: mouse motion leaves the initial latest selection intact`, focused('a latest'))
+    app.write('\u001b[B')
+    await settled(() => focused('a older'))
+    app.write('\u001b[D')
+    await settled(railFocused)
+    app.write('\u001b[C')
+    check(`${label}: left/right returns to the selected session`, await settled(() => focused('a older')))
+    if (backendId === undefined) {
+      await app.click('▣ Alpha')
+      app.write('\u001b[C')
+      check('reselecting the same workspace retains its session selection', await settled(() => focused('a older')))
+    }
+    app.write('\u001b[D')
+    await settled(railFocused)
+    app.write(backendId === undefined ? '\u001b[A' : '\u001b[B')
+    await settled(() => app.lines().some(line => line.includes('b latest')))
+    app.write('\u001b[C')
+    check(`${label}: another workspace defaults to its latest session`, await settled(() => focused('b latest')))
+    app.write('\u001b[B')
+    await settled(() => focused('b older'))
+    app.write('\u001b[D')
+    await settled(railFocused)
+    app.write(backendId === undefined ? '\u001b[B' : '\u001b[A')
+    await settled(() => app.lines().some(line => line.includes('a latest')))
+    app.write('\u001b[C')
+    check(`${label}: returning to a workspace resets to latest instead of remembering its old selection`, await settled(() => focused('a latest')))
+    app.write('\u001b[A')
+    await settled(() => focused('+ New session'))
+    app.write('\u001b[D')
+    await settled(railFocused)
+    app.write('\u001b[C')
+    check(`${label}: an explicitly selected new-session card also survives a pane round trip`, await settled(() => focused('+ New session')))
+  } finally { app.close() }
+}
+
 // ── snapshot-then-refresh (issue #987) ─────────────────────────────────────
 //
 // What a mount paints BEFORE the fresh listing lands. The snapshot lives on
@@ -556,6 +694,74 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void
   const promise = new Promise<void>(done => { resolve = done })
   return { promise, resolve }
+}
+
+console.log('an idle empty workspace follows refreshed defaults until the user selects a row')
+{
+  const target = makeChannel({ registry, cwd: alphaDir, sessions: workspaceRows.filter(row => (row as { cwd: string }).cwd === alphaDir) })
+  const app = await mountSupervisor(target)
+  const focused = (title: string): boolean => app.lines().some(line => line.includes(title) && line.includes('❯'))
+  const later = session({ id: 'b-later', cwd: betaDir, title: { text: 'b later', source: 'prompt' }, updatedAt: now + 1_000 })
+  const newest = session({ id: 'b-newest', cwd: betaDir, title: { text: 'b newest', source: 'prompt' }, updatedAt: now + 2_000 })
+  try {
+    await settled(() => target.landed === 1 && focused('a latest'))
+    app.write('\u001b[D')
+    await settled(() => app.lines().some(line => /❯\s+▣ Alpha/u.test(line)))
+    app.write('\u001b[A')
+    await settled(() => app.lines().some(line => line.includes('Sessions in Beta')))
+    app.write('\u001b[C')
+    await settled(() => focused('+ New session'))
+
+    target.plan = { sessions: workspaceRows }
+    app.write('\u000c')
+    await settled(() => target.landed === 2 && app.lines().some(line => line.includes('b latest')))
+    check('an idle empty workspace picks the newest session after Ctrl+L', await settled(() => focused('b latest')), app.lines().join('\n'))
+    target.plan = { sessions: [...workspaceRows, later] }
+    app.write('\u000c')
+    await settled(() => target.landed === 3 && app.lines().some(line => line.includes('b later')))
+    check('refresh continues following the default without an explicit row choice', await settled(() => focused('b later')))
+    app.write('\r')
+    check('Enter opens the refreshed default instead of creating a session', await settled(() => app.calls.includes('resumeTo:b-later')))
+
+    app.write('\u001b[B')
+    await settled(() => focused('b latest'))
+    target.plan = { sessions: [...workspaceRows, later, newest] }
+    app.write('\u000c')
+    await settled(() => target.landed === 4 && app.lines().some(line => line.includes('b newest')))
+    check('refresh preserves an explicitly selected session', await settled(() => focused('b latest')))
+
+    for (let step = 0; step < workspaceRows.length && !focused('+ New session'); step++) {
+      const before = app.lines().findIndex(line => line.includes('❯'))
+      app.write('\u001b[A')
+      await settled(() => app.lines().findIndex(line => line.includes('❯')) !== before)
+    }
+    target.plan = { sessions: [...workspaceRows, later, newest, session({ id: 'b-extra', cwd: betaDir, title: { text: 'b extra', source: 'prompt' }, updatedAt: now + 3_000 })] }
+    app.write('\u000c')
+    await settled(() => target.landed === 5 && app.lines().some(line => line.includes('b extra')))
+    check('refresh preserves an explicitly selected new-session card', await settled(() => focused('+ New session')))
+  } finally { app.close() }
+}
+
+console.log('a cold workspace chooses its latest session when the listing arrives')
+{
+  const target = makeChannel({ registry, cwd: alphaDir, cache: cacheCell(workspaceRows.filter(row => (row as { cwd: string }).cwd === alphaDir)) })
+  const gate = deferred()
+  target.plan = { defer: gate.promise, sessions: workspaceRows }
+  const app = await mountSupervisor(target)
+  const focused = (title: string): boolean => app.lines().some(line => line.includes(title) && line.includes('❯'))
+  try {
+    await settled(() => focused('a latest'))
+    app.write('\u001b[D')
+    await settled(() => app.lines().some(line => /❯\s+▣ Alpha/u.test(line)))
+    app.write('\u001b[A')
+    await settled(() => app.lines().some(line => line.includes('Sessions in Beta')))
+    app.write('\u001b[C')
+    await settled(() => focused('+ New session'))
+    gate.resolve()
+    check('a switched workspace picks its latest session after the cold listing completes', await settled(() => focused('b latest')))
+    app.write('\r')
+    check('Enter resumes that newest session rather than starting a new one', await settled(() => app.calls.includes('resumeTo:b-latest')))
+  } finally { gate.resolve(); app.close() }
 }
 
 /** The same listing with one title renamed on disk (same id): a carried-over
@@ -1331,10 +1537,12 @@ console.log('the new-session card is a row in the cursor model:')
 stdin.write('\u001b[C')
 await settled(() => true)
 check(
-  '→ lands on the first session, not on the card',
-  await settled(() => sessionRowFocus('live session') && !cardFocus()),
-  `card=${cardFocus()} session=${sessionRowFocus('live session')}`,
+  '→ restores the selected latest session, not the card',
+  await settled(() => sessionRowFocus('free session') && !cardFocus()),
+  `card=${cardFocus()} session=${sessionRowFocus('free session')}`,
 )
+stdin.write('\u001b[A')
+await settled(() => sessionRowFocus('live session'))
 stdin.write('\u001b[A')
 check(
   '↑ puts the cursor on the card, and the first session stops being selected',
@@ -1491,15 +1699,15 @@ console.log('Enter acts on the row the filter left under the cursor')
 {
   const app = await openSupervisor({ registry, cwd: alphaDir })
   await settled(() => app.lines().join('\n').includes('Sessions in Alpha'))
-  // → into the session column, where the cursor lands on the ATTACHED session
-  // (the second row), not on the first.
+  // Explicitly select the older attached row before filtering it away.
   app.write('\u001b[C')
-  await settled(() => true)
   const cursorOn = (title: string): boolean => app.lines().some(line =>
     line.includes(title) && line.includes('❯'))
+  await settled(() => cursorOn('free session'))
+  app.write('\u001b[A')
   await settled(() => cursorOn('live session'))
   check(
-    'the cursor starts on the attached session',
+    'explicit navigation selects the older attached session',
     cursorOn('live session') && !cursorOn('free session'),
     app.lines().join('\n'),
   )
@@ -1657,8 +1865,6 @@ console.log('a refused open shows its REASON on this screen (#939)')
     })
     await settled(() => app.lines().join('\n').includes('free session'), { timeoutMs: 6_000 })
     app.write('\x1b[C') // → the list pane
-    await sleep(50) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
-    app.write('\x1b[B') // past the new-session card onto the first session
     await sleep(50) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
     app.write('\r')
     const joined = (): string => app.lines().map(line => line.trim()).join(' ')
@@ -1842,8 +2048,18 @@ console.log('source tabs: strip, switching and import')
   check('there is no new-session card', !shown().includes('+ New session'), shown())
 
   const cursorOn = (title: string): boolean => app.lines().some(line => line.includes(title) && line.includes('❯'))
+  const nativeCursorOn = (title: string): boolean => {
+    const cursor = app.cursor()
+    const line = app.lines()[cursor.row] ?? ''
+    return cursor.visible && line.includes(title) && app.cell(cursor.col, cursor.row) === '❯'
+  }
   app.write('\u001b[C')
   check('→ lands the cursor on the first row (no card at 0)', await settled(() => cursorOn('fix the parser')), shown())
+  check('the foreign session row owns the native caret', await settled(() => nativeCursorOn('fix the parser')))
+  app.write('\u001b[D')
+  check('the foreign workspace takes the native caret', await settled(() => nativeCursorOn('Alpha')))
+  app.write('\u001b[C')
+  await settled(() => nativeCursorOn('fix the parser'))
   for (const character of 'docs') {
     app.write(character)
     await sleep(60) // 固定窗:pacing 逐字投喂：整串一次写入时首字符会被当作导航键吞掉
@@ -1854,6 +2070,12 @@ console.log('source tabs: strip, switching and import')
     shown(),
   )
   check('the filtered cursor stands on a real row', await settled(() => cursorOn('write the docs')), shown())
+  check('typing in a foreign source hands the native caret to its filter', await settled(() => {
+    const cursor = app.cursor()
+    const line = app.lines()[cursor.row] ?? ''
+    const prefix = line.indexOf('/ docs')
+    return cursor.visible && prefix >= 0 && app.cell(cursor.col - 6, cursor.row) === '/'
+  }))
   await sleep(120) // 固定窗:pacing Enter 处理步间，无可观测锚点
   app.write('\r')
   check(

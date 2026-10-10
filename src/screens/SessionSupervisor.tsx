@@ -15,6 +15,7 @@ import { SpinnerGlyph } from '../components/Spinner/SpinnerGlyph.js'
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
 import type { PermissionPanelDecision, PermissionPanelOutcome, PermissionPanelSnapshot } from '../channel/permissions.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
+import { useDeclaredCursor, useNativeCursor } from '../ink/hooks/use-declared-cursor.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { isPlainReturn, isMod } from '../utils/modifiers.js'
 import { truncateWidth } from '../sessions/format.js'
@@ -176,6 +177,25 @@ export function SessionSupervisor({
   const [tab, setTab] = useState<string>(DSH_TAB)
   /** The `+N` dropdown of folded tabs, anchored where it was clicked. */
   const [tabMenu, setTabMenu] = useState<{ col: number; row: number; item: number } | undefined>(undefined)
+  // Like ModelPicker, the native caret follows the region last touched.
+  // The live filter keeps the rail/list's existing navigation and Enter target.
+  const [filterFocused, setFilterFocused] = useState(false)
+  const cursorActive = approval === null && menu === undefined && tabMenu === undefined
+    && rename === undefined && confirmRemove === undefined && sessionRename === undefined && confirmDelete === undefined
+  const searchCursor = filterFocused || (!railVisible && activePane === 'rail')
+  const nativeCursor = useNativeCursor()
+  const newSessionCursorRef = useDeclaredCursor({
+    line: 0, column: 0, active: tab === DSH_TAB && cursorActive && !searchCursor && cardFocused,
+    visible: nativeCursor, hideOnIdle: true,
+  })
+  const focusRail = (): void => {
+    setFilterFocused(false)
+    activateRail()
+  }
+  const focusList = (): void => {
+    setFilterFocused(false)
+    activateList()
+  }
   const tabMenuRef = useRef(tabMenu)
   tabMenuRef.current = tabMenu
   /** The session-rename draft as the keyboard sees it (see the input handler). */
@@ -214,6 +234,7 @@ export function SessionSupervisor({
     closeMenu()
     closeTabMenu()
     setQuery('')
+    setFilterFocused(false)
     setNotice(undefined)
     setTab(id)
   }, [closeMenu, closeTabMenu, setQuery, setNotice])
@@ -337,6 +358,7 @@ export function SessionSupervisor({
         return
       }
       if (queryRef.current.length > 0) {
+        setFilterFocused(true)
         setQuery('')
         return
       }
@@ -349,6 +371,9 @@ export function SessionSupervisor({
       // the route was given up to the tabs.
       cycleTab(key.shift ? -1 : 1)
       return
+    }
+    if (key.leftArrow || key.rightArrow || key.upArrow || key.downArrow || key.wheelUp || key.wheelDown || key.pageUp || key.pageDown) {
+      setFilterFocused(false)
     }
     if (tab !== DSH_TAB) {
       foreignKey(input, key)
@@ -379,12 +404,10 @@ export function SessionSupervisor({
       else moveRail(key.pageDown ? 1 : -1)
       return
     }
-    // The filter is a LIVE query, not a mode you enter: this screen has no
-    // second cursor for a text seat, and the rail/list already own the arrows
-    // (a seat would have to relearn them). So printable input goes straight to
-    // the query — without this branch the box rendered, focused, and could never
-    // be typed into.
+    // Typing moves the native caret into the live filter; arrows and Enter
+    // still belong to the rail/list, so filtering adds no separate input mode.
     if (key.backspace || key.delete) {
+      setFilterFocused(true)
       setQuery(text => text.slice(0, -1))
       return
     }
@@ -448,7 +471,10 @@ export function SessionSupervisor({
     // unknown key cannot type an invisible glyph into the query.
     if (!isMod(key) && !key.meta && !key.super && input && !key.return) {
       const typed = input.replace(/\p{Cc}/gu, '')
-      if (typed.length > 0) setQuery(text => text + typed)
+      if (typed.length > 0) {
+        setFilterFocused(true)
+        setQuery(text => text + typed)
+      }
     }
   })
 
@@ -482,6 +508,7 @@ export function SessionSupervisor({
       return
     }
     if (key.backspace || key.delete) {
+      setFilterFocused(true)
       setQuery(text => text.slice(0, -1))
       return
     }
@@ -498,7 +525,10 @@ export function SessionSupervisor({
     }
     if (!key.meta && !key.super && input && !key.return) {
       const typed = input.replace(/\p{Cc}/gu, '')
-      if (typed.length > 0) setQuery(text => text + typed)
+      if (typed.length > 0) {
+        setFilterFocused(true)
+        setQuery(text => text + typed)
+      }
     }
   }
 
@@ -596,6 +626,9 @@ export function SessionSupervisor({
           sessionWidth={sessionWidth}
           rows={rows}
           isTerminalFocused={isTerminalFocused}
+          filterFocused={filterFocused}
+          cursorActive={cursorActive}
+          onFilterFocus={setFilterFocused}
         />
       )}
       {tab === DSH_TAB && (
@@ -603,9 +636,10 @@ export function SessionSupervisor({
         {railVisible && (
           <ink-box
             style={{ flexDirection: 'column', width: railWidth, height: '100%', flexShrink: 0, overflow: 'hidden' }}
-            onClick={activateRail}
-            onMouseEnter={activateRail}
+            onClick={focusRail}
+            onMouseEnter={focusRail}
             onWheel={(event: WheelEvent): void => {
+              setFilterFocused(false)
               moveRail(event.deltaY >= 0 ? 1 : -1)
             }}
           >
@@ -635,9 +669,11 @@ export function SessionSupervisor({
                   present={entry.present}
                   selected={selected !== undefined && selected.id === entry.id}
                   focused={activePane === 'rail' && railFocus === absolute}
+                  declareCursor={cursorActive && !searchCursor}
                   width={railWidth}
                   onSelect={(event): void => {
                     event.stopImmediatePropagation()
+                    setFilterFocused(false)
                     railRef.current = absolute
                     setRailFocus(absolute)
                     selectEntry(entry)
@@ -672,8 +708,8 @@ export function SessionSupervisor({
           height="100%"
           flexShrink={0}
           overflow="hidden"
-          onClick={activateList}
-          onMouseEnter={activateList}
+          onClick={focusList}
+          onMouseEnter={focusList}
         >
           <Box height={1} flexShrink={0} overflow="hidden">
             <Box flexShrink={1} overflow="hidden">
@@ -686,14 +722,19 @@ export function SessionSupervisor({
               </Text>
             </Box>
           </Box>
-          <Box height={1} flexShrink={0} paddingX={1}>
-            {/* Always live: the keyboard feeds this query on every printable
-                key (see useInput), so a box that is "unfocused" while the
-                cursor rests on the first rail entry would be a lie — and it is
-                exactly where the cursor starts. */}
+          <Box height={1} flexShrink={0} paddingX={1} onClick={event => {
+            event.stopImmediatePropagation()
+            activateList()
+            setFilterFocused(true)
+          }} onMouseEnter={event => {
+            event.stopImmediatePropagation()
+            if (activePane !== 'list') activateList()
+            setFilterFocused(true)
+          }}>
             <SearchBox
               query={query}
-              isFocused={activePane === 'list'}
+              isFocused={activePane === 'list' || searchCursor}
+              declareCursor={cursorActive && searchCursor}
               isTerminalFocused={isTerminalFocused}
               placeholder={truncateWidth(t('supervisor-filter-placeholder'), Math.max(8, sessionWidth - 6))}
               prefix="/"
@@ -712,6 +753,7 @@ export function SessionSupervisor({
           <Box
             flexDirection="column"
             flexShrink={0}
+            onMouseEnter={() => setFilterFocused(false)}
             onClick={(event: ClickEvent): void => {
               event.stopImmediatePropagation()
               if (selected !== undefined) newSessionIn(selected)
@@ -719,7 +761,7 @@ export function SessionSupervisor({
           >
             {/* Row 0 of the session list, so it carries the cursor like any
                 other card — and only while the cursor is actually on it. */}
-            <Box height={1} flexShrink={0} overflow="hidden">
+            <Box ref={newSessionCursorRef} height={1} flexShrink={0} overflow="hidden">
               <Text color={cardFocused ? 'success' : 'subtle'}>{cardFocused ? '❯ ' : '  '}</Text>
               <Text color={cardFocused ? 'success' : undefined} bold={cardFocused}>{t('supervisor-new-session')}</Text>
             </Box>
@@ -729,7 +771,9 @@ export function SessionSupervisor({
           </Box>
           <ink-box
             style={{ flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' }}
+            onMouseEnter={() => setFilterFocused(false)}
             onWheel={(event: WheelEvent): void => {
+              setFilterFocused(false)
               moveSession(event.deltaY >= 0 ? 1 : -1)
             }}
           >
@@ -749,6 +793,7 @@ export function SessionSupervisor({
                   width={sessionWidth}
                   depth={0}
                   focused={activePane === 'list' && sessionTop + index + 1 === sessionIndex}
+                  declareCursor={cursorActive && !searchCursor}
                   pinned={pins.has(session.id)}
                   now={now}
                   liveStatus={state?.live === true ? state.status : undefined}
@@ -761,6 +806,7 @@ export function SessionSupervisor({
                     openSession(session)
                   }}
                   onTogglePin={(): void => {
+                    setFilterFocused(false)
                     setFocusSessionId(session.id)
                     persistPin(session.id, !pins.has(session.id))
                   }}

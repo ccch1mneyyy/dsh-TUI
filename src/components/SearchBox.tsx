@@ -87,6 +87,7 @@ export function SearchBox({
   cursorOffset,
   borderless = false,
   caretBlink = true,
+  declareCursor = true,
   placeholderAlign = 'right',
   imageSpans = [],
 }: {
@@ -111,6 +112,8 @@ export function SearchBox({
    * TTY 光标的闪烁与动画由终端配置控制。
    */
   caretBlink?: boolean
+  /** Keep the live field styled while another region owns the native caret. */
+  declareCursor?: boolean
 }): React.ReactNode {
   const [themeName] = useTheme()
   const nativeCursor = useNativeCursor()
@@ -173,7 +176,7 @@ export function SearchBox({
   const declarationRef = useDeclaredCursor({
     line: borderless ? 0 : 1,
     column: caretColumn,
-    active: showCaret,
+    active: showCaret && declareCursor,
     visible: nativeCursor,
   })
   const boxNodeRef = useRef<DOMElement | null>(null)

@@ -265,14 +265,26 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined)
   /** True once the user picked a rail row by hand; see the selection effect. */
   const [selectionManual, setSelectionManual] = useState(false)
-  const recentSessionId = useMemo(() => {
+  /** The rail row whose sessions the pane is showing (or the fallback group). */
+  const selected = useMemo(() => {
+    const registered = railEntries.find(entry =>
+      entry.from === 'registry' && selectedPath !== undefined && samePath(entry.path, selectedPath))
+    if (registered !== undefined) return registered
+    if (selectedUnregisteredId !== undefined) return railEntries.find(entry => entry.id === selectedUnregisteredId)
+    return railEntries.find(entry => samePath(entry.path, channel.cwd)) ?? railEntries[0]
+  }, [railEntries, selectedPath, selectedUnregisteredId, channel.cwd])
+
+  // Recency chooses the default even when an older live row sorts above it.
+  const mostRecentIn = useCallback((path: string): string | undefined => {
+    const needle = query.trim().toLowerCase()
     let recent: SessionSummary | undefined
-    for (const session of listedSessions) {
-      if (samePath(session.cwd, channel.cwd)
+    for (const session of groupedEntries.get(path) ?? []) {
+      if (sessionMatchesQuery(session, needle)
         && (recent === undefined || session.updatedAt > recent.updatedAt)) recent = session
     }
     return recent?.id
-  }, [listedSessions, channel.cwd])
+  }, [groupedEntries, query])
+  const recentSessionId = useMemo(() => selected === undefined ? undefined : mostRecentIn(selected.path), [selected?.path, mostRecentIn])
   /**
    * The session column's cursor, as ONE fact.
    *
@@ -300,12 +312,11 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     initialFocusPending.current = false
     setFocusSessionIdState(id)
   }, [])
-  // Correct the default as the first listing arrives, until navigation owns it.
+  // Keep the workspace's default current until the user chooses a list row.
   React.useEffect(() => {
     if (!initialFocusPending.current) return
     setFocusSessionIdState(recentSessionId)
-    if (!refreshing) initialFocusPending.current = false
-  }, [recentSessionId, refreshing])
+  }, [recentSessionId])
   /**
    * Which column owns the keyboard, and therefore which column draws the `❯`
    * cursor. Exactly one at a time: two cursors mean "where does Enter go?" has
@@ -485,15 +496,6 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     setRailFocus(current => Math.min(current, Math.max(0, railEntries.length - 1)))
   }, [railEntries.length])
 
-  /** The rail row whose sessions the pane is showing (or the fallback group). */
-  const selected = useMemo(() => {
-    const registered = railEntries.find(entry =>
-      entry.from === 'registry' && selectedPath !== undefined && samePath(entry.path, selectedPath))
-    if (registered !== undefined) return registered
-    if (selectedUnregisteredId !== undefined) return railEntries.find(entry => entry.id === selectedUnregisteredId)
-    return railEntries[0]
-  }, [railEntries, selectedPath, selectedUnregisteredId])
-
   /**
    * Sessions whose recorded cwd is the selected workspace, minus the search
    * filter. Live sessions in this workspace sort above stopped ones, then by
@@ -543,22 +545,13 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     [visibleSessions],
   )
 
-  /**
-   * Enter the session column: land the cursor on the session this terminal is
-   * attached to (that is the one the user most likely means), else on the top
-   * row — which is the new-session card when the list sorted its live rows
-   * lower. A cursor that stayed put while the list scrolled elsewhere would act
-   * on a row the user never looked at.
-   */
+  /** Enter the session column without changing its selected row. */
   const activateList = useCallback((): void => {
     setActivePane('list')
-    const current = visibleSessions.find(session => liveStateOf(session.id)?.current === true)
-    setFocusSessionId(current?.id)
-  }, [liveStateOf, visibleSessions, setFocusSessionId])
+  }, [])
 
   /** Enter the workspace column. */
   const activateRail = useCallback((): void => {
-    initialFocusPending.current = false
     setActivePane('rail')
   }, [])
 
@@ -650,8 +643,13 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     setSelectedPath(entry.from === 'registry' ? entry.path : undefined)
     setSelectedUnregisteredId(entry.from === 'unregistered' ? entry.id : undefined)
     setSelectionManual(true)
-    setFocusSessionId(undefined)
-  }, [setFocusSessionId])
+    if (selected === undefined || !samePath(selected.path, entry.path)) {
+      // One selection belongs to the current workspace, without a per-workspace
+      // memory. A cold group's default follows incoming rows until list movement.
+      initialFocusPending.current = true
+      setFocusSessionIdState(mostRecentIn(entry.path))
+    }
+  }, [selected, mostRecentIn])
 
   /**
    * Mount a session, refusing one another terminal holds.
