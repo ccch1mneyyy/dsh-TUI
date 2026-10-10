@@ -1,4 +1,6 @@
 import React from 'react'
+import { unlink } from 'node:fs/promises'
+import { basename, resolve } from 'node:path'
 import { Box, Text, useInput, useTerminalSize, useNativeCursor } from '../ui.js'
 import { SearchBox } from '../components/SearchBox.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
@@ -19,6 +21,9 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { isPlainReturn } from '../utils/modifiers.js'
 import { actionMatches } from '../utils/keymap.js'
 import { formatClipboardInsert, readClipboard, type ClipboardRead } from '../utils/clipboard.js'
+import { imagePathMediaType, parsePastedImagePath, readBoundedRegularFile, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
+import type { ChannelUi } from '../adapter/channel/ui-policy.js'
+import { resolveBindingGeneration } from '../components/promptDraftCache.js'
 import {
   collapseToSingleLine,
   insertSingleLineAt,
@@ -420,6 +425,7 @@ export function Launchpad({
   commands,
   onCommandPick,
   clipboardReader = readClipboard,
+  imageComposer,
   /** Tips 自动轮换间隔（第七版；测试缝：无头回归注入短间隔确定性驱动相位）。 */
   tipRotateMs = TIP_ROTATE_MS,
   /** 左下角工作目录铭牌被点击/回车时交给 Chat（开既有的 /workspace 工作区菜单）。 */
@@ -514,6 +520,8 @@ export function Launchpad({
    * Chat 不传这一项）。签名与 `readClipboard` 一致。
    */
   clipboardReader?: () => Promise<ClipboardRead>
+  /** Chat owns the bindings so attachments survive a full-screen round trip. */
+  imageComposer?: { channel: ChannelUi; bindings: Map<string, string> }
   /** Tips 自动轮换间隔（第七版；测试缝，生产用默认 10s）。 */
   tipRotateMs?: number
   /** 左下角工作目录铭牌被点击/焦点环 Enter 时交给 Chat（开 /workspace 菜单）。 */
@@ -569,6 +577,7 @@ export function Launchpad({
   const paletteSelectedIndex = Math.min(paletteIndex, Math.max(0, paletteCommands.length - 1))
   const paletteSelected = paletteCommands[paletteSelectedIndex]
   const pickCommand = (commandLine: string): void => {
+    pasteRevisionRef.current += 1
     setPaletteDismissedFor('')
     setPaletteIndex(0)
     if (onCommandPick !== undefined) onCommandPick(commandLine)
@@ -591,6 +600,27 @@ export function Launchpad({
   const caretRef = React.useRef(caret)
   caretRef.current = caret
   const clipboardBusyRef = React.useRef(false)
+  const pasteRevisionRef = React.useRef(0)
+  const mountedRef = React.useRef(true)
+  const imageChainRef = React.useRef<Promise<void>>(Promise.resolve())
+  React.useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+  const capturePasteLease = () => {
+    const revision = pasteRevisionRef.current
+    const channel = imageComposer?.channel
+    const agentId = channel?.agentId
+    const generation = channel === undefined ? 0 : resolveBindingGeneration(channel)
+    const imageGeneration = channel?.stagedImageGeneration?.() ?? 0
+    return {
+      imageGeneration,
+      isCurrent: () => mountedRef.current && revision === pasteRevisionRef.current
+        && (channel === undefined || (channel.agentId === agentId
+          && resolveBindingGeneration(channel) === generation
+          && (channel.stagedImageGeneration?.() ?? 0) === imageGeneration)),
+    }
+  }
   /** 粘贴提示：落地页没有 toast 基础设施，借 Tips 行显示 4 秒（失败不能静默）。 */
   const [pasteNotice, setPasteNotice] = React.useState<string | undefined>(undefined)
   const noticeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -614,8 +644,64 @@ export function Launchpad({
     if (clean === '') return
     // 异步落点守则：读回那一刻的 query/caret 才算数（refs 每次渲染刷新）。
     const next = insertSingleLineAt(queryRef.current, caretRef.current, clean)
+    queryRef.current = next.text
+    caretRef.current = next.caret
     onQueryChange(next.text, next.caret)
     onFocusChange(-1)
+  }
+  const pasteImagePaths = (paths: readonly string[], lease: ReturnType<typeof capturePasteLease>, bitmap = false): Promise<void> => {
+    const work = async (): Promise<void> => {
+      if (!lease.isCurrent()) return
+      if (imageComposer === undefined) {
+        showPasteNotice(t('input-image-paste-failed', { err: 'image attachments are unavailable in this profile' }))
+        return
+      }
+      const { channel, bindings } = imageComposer
+      const limits = channel.stagedImageLimits?.()
+      const { parts, staged, failure, failureCode } = await stageClipboardFilePaths(
+        paths,
+        async path => {
+          if (!lease.isCurrent()) throw new Error('the draft changed while the image was being staged')
+          if (limits === undefined) throw new Error('image attachments are unavailable in this profile')
+          const data = await readBoundedRegularFile(path, limits.maxImageBytes)
+          if (!lease.isCurrent()) throw new Error('the draft changed while the image was being staged')
+          return channel.stageComposerImage({
+            data,
+            mediaType: imagePathMediaType(path) ?? 'image/png',
+            name: basename(path),
+            path: resolve(path),
+          }, lease.imageGeneration)
+        },
+        path => formatClipboardInsert({ kind: 'files', paths: [path] }),
+        Math.max(0, (limits?.maxImagesPerMessage ?? 0) - bindings.size),
+      )
+      if (!lease.isCurrent() || staged.some(handle => channel.hasStagedImage(handle.stageId) !== true)) {
+        for (const handle of staged) channel.discardStagedImage(handle.stageId)
+        return
+      }
+      let number = 1
+      const reserved = new Set(queryRef.current.match(/\[Image #\d+\]/gu) ?? [])
+      const text = parts.map(part => {
+        if (part.kind === 'text') return part.value
+        while (reserved.has(`[Image #${number}]`)) number += 1
+        const token = `[Image #${number++}]`
+        bindings.set(token, part.value.stageId)
+        return token
+      }).join(' ')
+      // A failed bitmap export is temporary and must never become a path reference.
+      if (!bitmap || staged.length > 0) insertSingleLine(`${text} `)
+      if (failure !== '') {
+        showPasteNotice(t('input-image-paste-failed', { err: failureCode === 'image-limit' ? t('input-image-paste-limit') : failure }))
+      } else if (staged.length > 0) {
+        const adapted = staged.filter(handle => handle.adjustment !== undefined).length
+        showPasteNotice(adapted > 0
+          ? t('input-images-staged-adapted', { count: staged.length, adapted })
+          : t('input-images-staged', { count: staged.length }))
+      }
+    }
+    const queued = imageChainRef.current.then(work, work)
+    imageChainRef.current = queued.catch(() => undefined)
+    return queued
   }
 
   // 光标闪烁相位（第四版修订：**自动呼吸**，不要求终端 focus 事件）。开关只看
@@ -727,7 +813,7 @@ export function Launchpad({
    *
    * 编辑能力刻意只做单行编辑器该有的那几样：退格 / Delete / 左右移动 /
    * Home / End / 粘贴。首屏不是编辑器，用户在上面打的第一句通常就一两个
-   * 词；多行、图片、`@` 补全都属于聊天页，敲 Enter 就过去了。
+   * 词；多行与 `@` 补全属于聊天页，图片经同一 channel 暂存。
    *
    * `↑/↓` 与 `Tab` 在键帽行上移动焦点；焦点在 `-1` 时这两组键无操作
    * （首屏没有可滚的东西）。
@@ -741,7 +827,14 @@ export function Launchpad({
     // ink 把载荷标成 isPasted 交给 useInput；标记字节（\x1b[200~ / 201~）在
     // 解析层已被剥掉，这里的 input 就是纯载荷。换行折叠成单行（见上）。
     if (event?.isPasted === true && input.length > 0) {
-      insertSingleLine(stripBracketedPasteMarkers(input))
+      const text = stripBracketedPasteMarkers(input)
+      const path = parsePastedImagePath(text)
+      if (path !== null && imageComposer !== undefined) {
+        const lease = capturePasteLease()
+        void pasteImagePaths([path], lease).catch(error => {
+          if (lease.isCurrent()) showPasteNotice(t('input-image-paste-failed', { err: String(error) }))
+        })
+      } else insertSingleLine(text)
       event.stopImmediatePropagation()
       return
     }
@@ -750,27 +843,43 @@ export function Launchpad({
     // 曾经的 bug：组合键兜底把 Ctrl+V 一口吞掉，粘贴永远是死的。
     if (matchesPasteShortcut(input, key)) {
       if (!clipboardBusyRef.current) {
+        const lease = capturePasteLease()
         clipboardBusyRef.current = true
         void clipboardReader()
-          .then(content => {
-            if (content === null) {
-              showPasteNotice(t('input-clipboard-empty' as never))
-              return
+          .then(async content => {
+            const temporaryPath = content?.kind === 'image' ? content.path : undefined
+            try {
+              if (!lease.isCurrent()) return
+              if (content === null) {
+                showPasteNotice(t('input-clipboard-empty' as never))
+                return
+              }
+              if (content.kind === 'unavailable') {
+                showPasteNotice(t(content.wsl === true ? 'input-clipboard-unavailable-wsl' as never : 'input-clipboard-unavailable' as never))
+                return
+              }
+              if (content.kind === 'image') {
+                if (imagePathMediaType(content.path) === undefined) {
+                  showPasteNotice(t('input-image-format-unsupported'))
+                  return
+                }
+                await pasteImagePaths([content.path], lease, true)
+                return
+              }
+              if (content.kind === 'files' && imageComposer !== undefined) {
+                await pasteImagePaths(content.paths, lease)
+                return
+              }
+              const text = formatClipboardInsert(content)
+              const path = parsePastedImagePath(text)
+              if (path !== null && imageComposer !== undefined) await pasteImagePaths([path], lease)
+              else insertSingleLine(text)
+            } finally {
+              if (temporaryPath !== undefined) await unlink(temporaryPath).catch(() => undefined)
             }
-            if (content.kind === 'unavailable') {
-              showPasteNotice(t(content.wsl === true ? 'input-clipboard-unavailable-wsl' as never : 'input-clipboard-unavailable' as never))
-              return
-            }
-            if (content.kind === 'image') {
-              // 单行编辑器不能暂存图片（staged image 是聊天页的能力）；
-              // 插入临时文件路径只会留一条谁也读不懂的路径——提示而不是插入。
-              showPasteNotice(t('input-clipboard-unavailable' as never))
-              return
-            }
-            insertSingleLine(formatClipboardInsert(content))
           })
           .catch(() => {
-            showPasteNotice(t('input-clipboard-read-failed' as never))
+            if (lease.isCurrent()) showPasteNotice(t('input-clipboard-read-failed' as never))
           })
           .finally(() => {
             clipboardBusyRef.current = false
@@ -822,6 +931,7 @@ export function Launchpad({
       }
     }
     if (key.escape) {
+      pasteRevisionRef.current += 1
       // 空输入时 Esc 去看会话（首屏最常见的下一步）；已经有字就只清空它,
       // 免得辛苦打的半句话被一次性丢掉。
       if (query !== '') onQueryChange('', 0)
@@ -830,6 +940,7 @@ export function Launchpad({
       return
     }
     if (key.ctrl && (input === 'c' || input === 'd')) {
+      pasteRevisionRef.current += 1
       if (query !== '') onQueryChange('', 0)
       else onEscape('exit')
       event.stopImmediatePropagation()
@@ -857,8 +968,10 @@ export function Launchpad({
         onParamPick(activated)
       } else {
         const focused = focusIndex >= 0 ? actions[focusIndex] : undefined
-        if (focused === undefined) onSubmit(query)
-        else onAction(focused)
+        if (focused === undefined) {
+          pasteRevisionRef.current += 1
+          onSubmit(query)
+        } else onAction(focused)
       }
       event.stopImmediatePropagation()
       return

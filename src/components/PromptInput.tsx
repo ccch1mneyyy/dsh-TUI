@@ -2,8 +2,7 @@ import React from 'react'
 // 粘贴/清洗语义已抽到 utils/inputPaste.ts（方案 B：PromptInput 与 Launchpad 共享；
 // 行为逐字节不变，只是搬了家）。
 import { sanitizeEditableText, sanitizePastedText } from '../utils/inputPaste.js'
-import { constants as fsConstants } from 'node:fs'
-import { open, unlink } from 'node:fs/promises'
+import { unlink } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
@@ -25,7 +24,7 @@ import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 import { draftWordRangeAt, isDraftWordBoundary } from '../utils/draftWordBoundary.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
-import { imagePathMediaType, parsePastedImagePath, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
+import { imagePathMediaType, parsePastedImagePath, readBoundedRegularFile, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import { setPromptEditorNode, EditorButton } from './PromptEditor.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
@@ -296,32 +295,6 @@ export function composerImageRefsForText(
     if (stageId !== undefined) refs.push({ token, stageId })
   }
   return refs
-}
-
-/** Read one regular file through one descriptor, bounded to `maxBytes + 1`.
- * The extra byte detects a file that grows after fstat; a short read detects
- * shrinkage. This avoids stat(path) → readFile(path)'s path-swap TOCTOU and
- * never allocates from an untrusted size before the profile limit is checked. */
-async function readBoundedRegularFile(path: string, maxBytes: number): Promise<Uint8Array> {
-  // O_NONBLOCK keeps a pasted FIFO/device path from parking the UI before
-  // fstat can reject it; regular-file reads are unchanged.
-  const file = await open(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK)
-  try {
-    const info = await file.stat()
-    if (!info.isFile()) throw new Error(`${basename(path)} is not a regular file`)
-    if (info.size > maxBytes) throw new Error(`image exceeds this profile's per-image size limit`)
-    const data = Buffer.allocUnsafe(info.size + 1)
-    let offset = 0
-    while (offset < data.byteLength) {
-      const { bytesRead } = await file.read(data, offset, data.byteLength - offset, offset)
-      if (bytesRead === 0) break
-      offset += bytesRead
-    }
-    if (offset !== info.size) throw new Error(`${basename(path)} changed while it was being read`)
-    return data.subarray(0, offset)
-  } finally {
-    await file.close()
-  }
 }
 
 /** Index of the word boundary at or before `cursor` (readline alt+b). */

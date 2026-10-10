@@ -8,13 +8,13 @@
  *    谁都不许再硬编码 `ctrl+v` 字符串。
  *
  * 明确**不**统一的语义（边界见 Launchpad/PromptInput 各自注释）：
- * - 多行/附件/图片暂存/历史/chip 折叠是聊天页编辑器的能力，落地页是单行
+ * - 多行/历史/chip 折叠是聊天页编辑器的能力，落地页是单行
  *   首屏输入——多行内容在落地页折叠成一行（{@link collapseToSingleLine}），
  *   PromptInput 保留换行；
  * - 异步落点守则**同一条**（读回时必须用当下最新的文本/光标，闭包旧值一律
  *   不许用），实现各自落地：PromptInput 用 revision lease（与会话代次、图片
  *   租约耦合，搬动会改变聊天页行为），Launchpad 用每次渲染刷新的 current-ref
- *   （受控组件，props 即最新值）。
+ *   （受控组件，props 即最新值）与粘贴租约。
  */
 
 import stripAnsi from 'strip-ansi'

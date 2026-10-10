@@ -73,12 +73,12 @@ import type { TimelineSnapshot } from '../ink/timeline-rail.js'
 import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
-import { PromptInput, type PromptController } from '../components/PromptInput.js'
+import { PromptInput, composerImageRefsForText, type PromptController } from '../components/PromptInput.js'
 import { turnUsageParts } from '../components/TurnUsageRow.js'
 import { AgentTranscriptScene } from './AgentTranscriptScene.js'
 import { agentViewStore } from '../components/sidePanel/agentViewStore.js'
 import { agentComposeTargetOf, type AgentComposeTarget, type AgentMessageView, type AgentViewSource } from '../components/messages/agentTeam.js'
-import type { PromptDraftCache } from '../components/promptDraftCache.js'
+import { resolveBindingGeneration, type PromptDraftCache } from '../components/promptDraftCache.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
 import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
@@ -758,6 +758,27 @@ export function Chat({
   const [launchpadDraft, setLaunchpadDraft] = React.useState('')
   const [launchpadCaret, setLaunchpadCaret] = React.useState(0)
   const [launchpadFocus, setLaunchpadFocus] = React.useState(-1)
+  const launchpadImagesRef = React.useRef(new Map<string, string>())
+  const changeLaunchpadDraft = (text: string, cursor: number): void => {
+    const live = new Set(composerImageRefsForText(text, launchpadImagesRef.current).map(image => image.token))
+    for (const [token, stageId] of launchpadImagesRef.current) {
+      if (live.has(token)) continue
+      launchpadImagesRef.current.delete(token)
+      channel.discardStagedImage(stageId)
+    }
+    setLaunchpadDraft(text)
+    setLaunchpadCaret(cursor)
+  }
+  const launchpadBindingGeneration = resolveBindingGeneration(channel)
+  React.useEffect(() => {
+    setLaunchpadDraft('')
+    setLaunchpadCaret(0)
+    const bindings = launchpadImagesRef.current
+    return () => {
+      for (const stageId of bindings.values()) channel.discardStagedImage(stageId)
+      bindings.clear()
+    }
+  }, [channel, channel.agentId, launchpadBindingGeneration])
   /**
    * 「整屏盖启动页」的显式授权（第七版防御位，用户实测回归：启动页一闪而过
    * 被顶掉）。整屏分支排在落地页**之前**，任何一处状态在开机后被异步置真
@@ -2475,6 +2496,12 @@ export function Chat({
    */
   const submitLaunchpad = (submit: string): void => {
     const text = submit.trim()
+    const images = composerImageRefsForText(text, launchpadImagesRef.current)
+    const submitted = new Set(images.map(image => image.stageId))
+    for (const stageId of launchpadImagesRef.current.values()) {
+      if (!submitted.has(stageId)) channel.discardStagedImage(stageId)
+    }
+    launchpadImagesRef.current.clear()
     // 首启时 openHomeOnBoot 与落地页同时为真：会话浏览器已经开着、只是被落地页盖住。
     // 提交首句后必须把它收掉，否则用户落到浏览器而不是"草稿就在眼前的对话"，
     // 与本函数 doc 承诺的落点直接矛盾。
@@ -2508,14 +2535,14 @@ export function Chat({
       } else if (!overlayCommandNames.has(parsed.name)) {
         setLaunchpadOpen(false)
       }
-      void runCommand(parsed.name, parsed.rawInput)
+      void runCommand(parsed.name, parsed.rawInput, images)
       return
     }
     // 直接发送：与 composer 回车同一条提交路径。发出去之后输入框是空的
     // （内容已作为首轮发出，绝不"既发了又留在框里"），也没有交接提示——
     // 没有草稿要交，一句"已放进输入框"的 toast 反而是假的。
     setLaunchpadOpen(false)
-    channel.submit(text)
+    channel.submit(text, images)
   }
 
   /**
@@ -5338,8 +5365,7 @@ export function Chat({
                   // 鼠标等价），浮层收起、人还在启动页（第八版：不许进对话页）。
                   dispatchOverlay({ type: 'close' })
                   const filled = '/' + name + ' '
-                  setLaunchpadDraft(filled)
-                  setLaunchpadCaret(filled.length)
+                  changeLaunchpadDraft(filled, filled.length)
                   setLaunchpadFocus(-1)
                 }}
               />
@@ -5841,8 +5867,7 @@ export function Chat({
           // 不该跟过去）。
           setLaunchpadOpen(false)
           setLaunchpadFocus(-1)
-          setLaunchpadDraft('')
-          setLaunchpadCaret(0)
+          changeLaunchpadDraft('', 0)
           repaintTranscript()
           return result
         }}
@@ -5855,8 +5880,7 @@ export function Chat({
             // 同 onOpenSession：新建/切工作区会话也是有意导航，落地页一并收。
             setLaunchpadOpen(false)
             setLaunchpadFocus(-1)
-            setLaunchpadDraft('')
-            setLaunchpadCaret(0)
+            changeLaunchpadDraft('', 0)
             repaintTranscript()
           }
           return ok
@@ -6105,6 +6129,7 @@ export function Chat({
     const launchpad = (
       <Launchpad
         query={launchpadDraft}
+        imageComposer={{ channel, bindings: launchpadImagesRef.current }}
         cursorOffset={launchpadCaret}
         focusIndex={launchpadFocus}
         isTerminalFocused={terminalFocused}
@@ -6140,10 +6165,7 @@ export function Chat({
           }
           void runCommand(segment, '')
         }}
-        onQueryChange={(text, cursor) => {
-          setLaunchpadDraft(text)
-          setLaunchpadCaret(cursor)
-        }}
+        onQueryChange={changeLaunchpadDraft}
         onSubmit={submitLaunchpad}
         onFocusChange={setLaunchpadFocus}
         onAction={(action) => {
