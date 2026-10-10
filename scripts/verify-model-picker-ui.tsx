@@ -3,7 +3,7 @@
  * recents-first tabs, current-model promotion, forward/backward wrapping, independent model/effort drafts,
  * same-batch navigation/confirmation, cancellation, mouse picks and wheel,
  * focus windowing and resize in inline/fullscreen at 100 and 36 columns;
- * header shortcuts, readable effort colors and an opaque panel surface.
+ * header shortcuts, readable effort colors and the original terminal background.
  * Claude/Codex use a flat catalog, focus the current model after loading,
  * omit provider/recents tabs and leave existing recents untouched.
  * Short 2/3/4-row overlays keep the focused model and confirmation visible,
@@ -88,7 +88,7 @@ function terminalHarness(columns: number) {
   return { term, stdout, stdin, stderr }
 }
 
-function opaquePanel(term: InstanceType<typeof Terminal>): boolean {
+function panelUsesDefaultBackground(term: InstanceType<typeof Terminal>): boolean {
   const lines = viewportLines(term)
   const title = lines.findIndex(line => line.trim() === '模型')
   const levels = lines.findIndex(line => line.includes('LOW'))
@@ -99,7 +99,11 @@ function opaquePanel(term: InstanceType<typeof Terminal>): boolean {
   for (let row = title - 2; row <= levels; row++) {
     const line = term.buffer.active.getLine(term.buffer.active.baseY + row)!
     for (let col = left; col < stringWidth(divider); col++) {
-      if (line.getCell(col)?.isBgDefault() !== false) return false
+      const cell = line.getCell(col)
+      if (cell?.isBgDefault() !== true) return false
+      // The original overlay masks transcript text with blank cells,
+      // including the top gap and left padding, without adding a color.
+      if ((row === title - 2 || (row !== title - 1 && col < left + 2)) && cell.getChars().trim() !== '') return false
     }
   }
   return true
@@ -192,7 +196,7 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     })
     assert.notEqual(cell('LOW')?.getFgColor(), cell('Tab')?.getFgColor(), `${label}: selectable effort must be brighter than hints`)
     assert.notEqual(cell('推理强度')?.getFgColor(), cell('Tab')?.getFgColor(), `${label}: effort heading must stand out from hints`)
-    await check('every panel cell, including gaps and padding, has an opaque background', () => opaquePanel(term))
+    await check('the panel uses the terminal background and masks text behind its gap and padding', () => panelUsesDefaultBackground(term))
     await check('mixed-provider recents', () => hit('beta / Beta 00') !== undefined)
     assert.deepEqual(JSON.parse(readFileSync(join(prefsDir, 'model-recents.json'), 'utf8')).models, [
       { provider: 'alpha', id: 'a0' }, { provider: 'alpha', id: 'a1' }, { provider: 'beta', id: 'b0' },
@@ -327,7 +331,7 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
     stdin.write('/model')
     assert.ok(await settled(() => text().includes('/model')), `${label}: composer`)
     stdin.write('\r')
-    assert.ok(await settled(() => text().includes('Model 01') && focused('Model 00') && opaquePanel(term)), `${label}: flat opaque catalog focuses the current model after loading`)
+    assert.ok(await settled(() => text().includes('Model 01') && focused('Model 00') && panelUsesDefaultBackground(term)), `${label}: flat catalog on the terminal background focuses the current model after loading`)
     assert.equal(text().includes('最近使用'), false, `${label}: no recents tab`)
     assert.equal(text().includes('Shift+Tab 提供商'), false, `${label}: no provider navigation hint`)
     const lines = viewportLines(term)
@@ -338,7 +342,7 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
     assert.equal(readFileSync(recentFile, 'utf8'), previousRecents, `${label}: opening does not update recents`)
     stdin.write('\t\x1b[Z')
     await sleep(90) // 固定窗:探针 Tab/Shift+Tab must not move flat-catalog focus or cycle the session mode.
-    assert.ok(focused('Model 00') && opaquePanel(term), `${label}: Tab/Shift+Tab keep the current model focused`)
+    assert.ok(focused('Model 00') && panelUsesDefaultBackground(term), `${label}: Tab/Shift+Tab keep the current model focused`)
     await sleep(90) // 固定窗:墙钟 Chat's 80ms modal-Enter debounce.
     stdin.write('\r')
     assert.ok(await settled(() => !text().includes('推理强度') && picks.length === 1), `${label}: Enter confirms the current model`)
@@ -347,9 +351,9 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
     stdin.write('/model')
     assert.ok(await settled(() => text().includes('/model')), `${label}: reopen composer`)
     stdin.write('\r')
-    assert.ok(await settled(() => focused('Model 00') && opaquePanel(term)), `${label}: reopen flat catalog`)
+    assert.ok(await settled(() => focused('Model 00') && panelUsesDefaultBackground(term)), `${label}: reopen flat catalog`)
     stdin.write('\x1b[A')
-    assert.ok(await settled(() => focused('Model 01') && opaquePanel(term)), `${label}: Up selects another model`)
+    assert.ok(await settled(() => focused('Model 01') && panelUsesDefaultBackground(term)), `${label}: Up selects another model`)
     stdin.write('\x1b')
     assert.ok(await settled(() => !text().includes('推理强度') && text().includes('Backend history 19')), `${label}: cancel restores transcript`)
     assert.deepEqual(picks, ['m0'], `${label}: cancellation discards the model draft`)
@@ -357,7 +361,7 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
       stdin.write('/model')
       assert.ok(await settled(() => text().includes('/model')), `${label}: mouse composer`)
       stdin.write('\r')
-      assert.ok(await settled(() => focused('Model 00') && opaquePanel(term)), `${label}: mouse catalog`)
+      assert.ok(await settled(() => focused('Model 00') && panelUsesDefaultBackground(term)), `${label}: mouse catalog`)
       const click = async (needle: string) => {
         const lines = viewportLines(term)
         const row = lines.findIndex(line => line.includes(needle))
@@ -366,7 +370,7 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
         stdin.write(`\x1b[<0;${col + 1};${row + 1}M\x1b[<0;${col + 1};${row + 1}m`)
       }
       await click('Model 01')
-      assert.ok(await settled(() => focused('Model 01') && opaquePanel(term)), `${label}: mouse selects a model`)
+      assert.ok(await settled(() => focused('Model 01') && panelUsesDefaultBackground(term)), `${label}: mouse selects a model`)
       await click('HIGH')
       await click('选择')
       assert.ok(await settled(() => !text().includes('推理强度') && picks.length === 2 && effortPicks.at(-1) === 'high'), `${label}: mouse applies model and reasoning`)
@@ -375,7 +379,7 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
       assert.deepEqual(effortPicks, [], `${label}: no reasoning changes without an explicit draft`)
     }
     assert.equal(readFileSync(recentFile, 'utf8'), previousRecents, `${label}: confirmation and cancellation do not update recents`)
-    console.log(`PASS /model flat opaque ${label}`)
+    console.log(`PASS /model flat panel ${label}`)
   } finally {
     app.unmount()
     disposeChannelOwner(channel)

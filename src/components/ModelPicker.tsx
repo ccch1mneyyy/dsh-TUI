@@ -95,7 +95,7 @@ export function ModelPicker({
     </Box>
   )
   return (
-    <Box flexDirection="column" backgroundColor="toolCardBackground" opaque>
+    <Box flexDirection="column">
       <Pane color="permission">
         <Text color="remember" bold wrap="truncate">{t('picker-title-model')}</Text>
         {showHeaderHints ? shortcutBar : null}
