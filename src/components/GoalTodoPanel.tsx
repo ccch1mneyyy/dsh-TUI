@@ -6,6 +6,9 @@ import type { ChannelGoal, TodoPanelItem } from '../dsh-adapter/channel.js'
 import { t } from '../i18n.js'
 import { primaryComboString } from '../utils/keymap.js'
 import { formatGoalBudget, formatGoalBudgetCompact } from '../channel/goal-command.js'
+import { useTooltip } from './Tooltip.js'
+import type { DOMElement } from '../ink/dom.js'
+import { stringWidth } from '../ink/stringWidth.js'
 
 /** Maximum todo rows shown before the overflow line. */
 const MAX_TODOS = 8
@@ -133,6 +136,7 @@ export function GoalTodoPanel({
   visible = true,
   maxTodos,
   wrapWidth,
+  onOpenGoal,
 }: {
   channel: Channel
   /** Fold the whole todo section to its summary header line. */
@@ -151,8 +155,18 @@ export function GoalTodoPanel({
    *  加省略号；maxTodos 预算按「行」折算，放不下仍走「…N more」。缺省
    *  （default 形态）不折行，保持单行 truncate 的 chat 页现状。 */
   wrapWidth?: number
+  /** Open the current goal's wrapped, scrollable details. */
+  onOpenGoal?: () => void
 }): React.ReactNode {
   const goal = channel.goal
+  const objectiveRef = React.useRef<DOMElement | null>(null)
+  const goalTooltip = useTooltip(() => {
+    const width = objectiveRef.current?.yogaNode?.getComputedWidth() ?? 0
+    if (goal === undefined || width <= 0) return ''
+    return stringWidth(goal.objective) > width || goal.objective.includes('\n')
+      ? `${t('goal-details-open', { key: primaryComboString('goalDetails') })}\n${goal.objective}`
+      : ''
+  })
   const allTodos = channel.todos ?? []
   const doneCount = allTodos.filter(todo => todo.status === 'completed').length
   // Completed rows are useful progress while a turn is running, but become
@@ -247,7 +261,7 @@ export function GoalTodoPanel({
               truncate）。 */}
           <Box flexDirection="row" width="100%" height={1}>
             <Text color="suggestion">🎯 </Text>
-            <Box flexGrow={1} flexShrink={1}>
+            <Box ref={objectiveRef} flexGrow={1} flexShrink={1} onClick={onOpenGoal} {...goalTooltip}>
               <Text bold wrap="truncate">
                 {goal.objective}
               </Text>

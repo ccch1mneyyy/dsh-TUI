@@ -87,6 +87,7 @@ import { jobsFocusStore } from '../components/sidePanel/jobsFocusStore.js'
 import { SidePanelLayout } from '../components/sidePanel/SidePanelLayout.js'
 import { SidePanelColumn } from '../components/sidePanel/SidePanelColumn.js'
 import { PanelPicker, usePanelPickerRows } from '../components/sidePanel/PanelPicker.js'
+import { GoalDetailsPanel } from '../components/GoalDetailsPanel.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { CompactionStatusRow } from '../components/CompactionStatusRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
@@ -650,6 +651,12 @@ export function Chat({
    * list while the fresh one loads, exactly as the boolean era did.
    */
   const [overlay, dispatchOverlay] = React.useReducer(chatOverlayReducer, NO_OVERLAY)
+  React.useEffect(() => {
+    if (overlay.kind === 'goal-details'
+      && (overlay.sessionId !== channel.agentId || overlay.goalId !== channel.goal?.id)) {
+      dispatchOverlay({ type: 'close-if', kind: 'goal-details' })
+    }
+  }, [overlay, channel.agentId, channel.goal?.id])
   // `/migrate` picker rows (null = collecting in the background; the picker
   // shows its empty state until the sub-second scan lands).
   const [migrateRows, setMigrateRows] = React.useState<MigratePickerRow[] | null>(null)
@@ -4258,6 +4265,22 @@ export function Chat({
     if (coupon !== null) bonusNotices?.dismiss(coupon.orderId)
   }, [bonusNotices, coupon])
 
+  React.useEffect(() => {
+    if (approvalSnapshot !== null || dialogSnapshot !== null || questionSnapshot !== null) {
+      dispatchOverlay({ type: 'close-if', kind: 'goal-details' })
+    }
+  }, [approvalSnapshot, dialogSnapshot, questionSnapshot])
+
+  const openGoalDetails = () => {
+    if (channel.goal === undefined || overlay.kind !== 'none' || helpOpen
+      || approvalSnapshot !== null || dialogSnapshot !== null || questionSnapshot !== null
+      || btwOverlayOpen || btwSceneOpen || (recap !== null && (!recap.auto || recap.expanded))
+      || starModal !== null || couponVisible || promptEditorOpen) return
+    dispatchOverlay({ type: 'open', overlay: {
+      kind: 'goal-details', sessionId: channel.agentId, goalId: channel.goal.id,
+    } })
+  }
+
   useInput((input, key, event) => {
     // 开屏"求 star"弹窗开着时键盘全归它（↑/↓/Enter/Esc 由它自己的
     // useInput 处理），滚轮也不许滚动它身后的转录——和下面的整屏界面
@@ -4288,6 +4311,7 @@ export function Chat({
     // via inputPaused for exactly this window, so keys the picker does not
     // consume cannot leak into the draft.
     if (launchpadShown && !launchpadOverlayUp) return
+    if (overlay.kind === 'goal-details') return
     // The session tree owns the whole terminal while it is up: plain letters
     // drive its search, clicks and Enter drive its action menu.
     if (treeOpen) return
@@ -5048,6 +5072,11 @@ export function Chat({
       }
       return
     }
+    if (actionMatches('goalDetails', input, key) && channel.goal !== undefined) {
+      openGoalDetails()
+      event.stopImmediatePropagation()
+      return
+    }
     if (actionMatches('trajectory', input, key)) {
       // The trajectory scene key (default Ctrl+T) opens it at any point in
       // the session.
@@ -5359,6 +5388,15 @@ export function Chat({
 
   const pickerPanels = (
     <>
+      {overlay.kind === 'goal-details' && channel.goal !== undefined
+        && overlay.sessionId === channel.agentId && overlay.goalId === channel.goal.id && (
+        <GoalDetailsPanel
+          key={`${channel.agentId}:${channel.goal.id}`}
+          goal={channel.goal}
+          inputEnabled={approvalSnapshot === null && questionSnapshot === null && dialogSnapshot === null}
+          onClose={() => dispatchOverlay({ type: 'close-if', kind: 'goal-details' })}
+        />
+      )}
           {overlay.kind === 'help' && (
             <Box flexDirection="column" marginBottom={1}>
               <HelpMenu
@@ -6339,6 +6377,7 @@ export function Chat({
             }}
             trajectory={trajectory}
             onExpand={openPanelFullscreen}
+            onOpenGoal={openGoalDetails}
           />
         }
       >
@@ -6539,6 +6578,7 @@ export function Chat({
             channel={channel}
             collapsed={todoCollapsed}
             onToggle={() => setTodoCollapsed(previous => !previous)}
+            onOpenGoal={openGoalDetails}
           />
         )}
         {recap !== null && recap.auto && !recap.expanded && (

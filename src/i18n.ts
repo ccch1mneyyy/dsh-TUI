@@ -1453,6 +1453,10 @@ const dict = {
   'help-cycle-mode': { zh: 'shift+tab 切换模式', en: 'shift+tab to cycle mode' },
   'help-open-editor': { zh: '{{key}} 打开编辑器', en: '{{key}} to open editor' },
   'help-fold-todos': { zh: '{{key}} 折叠待办', en: '{{key}} to fold todos' },
+  'goal-details-title': { zh: '目标全文', en: 'Goal details' },
+  'goal-details-hint': { zh: '↑/↓ 滚动 · PgUp/PgDn 翻页 · Home/End 首尾 · Esc 关闭', en: '↑/↓ scroll · PgUp/PgDn page · Home/End first/last · Esc close' },
+  'goal-details-open': { zh: '点击或 {{key}} 查看全文', en: 'Click or {{key}} for full text' },
+  'help-goal-details': { zh: '{{key}} 查看目标全文', en: '{{key}} to view full goal text' },
   'goal-todo-fold-hint': { zh: '{{key}} 折叠', en: '{{key}} to fold' },
   // ── goal budget and the backend-neutral /goal (src/channel/goal-command.ts)
   'goal-budget-used': { zh: '已用 {{used}} / {{budget}} tokens · {{time}}', en: 'Used {{used}} / {{budget}} tokens · {{time}}' },
