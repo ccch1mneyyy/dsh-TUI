@@ -629,8 +629,9 @@ export type Screen = Size & {
    * content ends at absolute column N (exclusive — cells [0..N) are the
    * fragment, past N is unwritten padding). 0 means row r is NOT a
    * continuation (hard newline or first row). Selection copy checks
-   * softWrap[r]>0 to join row r onto row r-1 without a newline, and
-   * reads softWrap[r+1] to know row r's content end when row r+1
+   * softWrap[r]!==0 to join row r onto row r-1 without a newline. A negative
+   * marker also restores one omitted separator space. Copy reads the absolute
+   * value of softWrap[r+1] to know row r's content end when row r+1
    * continues from it. The content-end column is needed because an
    * unwritten cell and a written-unstyled-space are indistinguishable in
    * the packed typed array (both all-zero) — without it we'd either drop

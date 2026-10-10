@@ -5,7 +5,7 @@ import type { JobRow } from '../../dsh-adapter/channel.js'
 import type { BackgroundJobOutputLine } from '../../adapter/ports/channel-view.js'
 import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
-import wrapText from '../../ink/wrap-text.js'
+import { wrapTextLines } from '../../ink/wrap-text.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import { ProgressBar } from '../design-system/ProgressBar.js'
 
@@ -82,7 +82,7 @@ export function jobOutputRows(
   const textWidth = Math.max(1, width - 1)
   for (let index = entries.length - 1; index >= 0 && rows.length < budget; index--) {
     const entry = entries[index]!
-    const wrapped = wrapText(entry.text, textWidth, 'wrap').split('\n')
+    const wrapped = wrapTextLines(entry.text, textWidth).map(line => line.text)
     for (let row = wrapped.length - 1; row >= 0 && rows.length < budget; row--) {
       rows.unshift({
         key: `${index}-${row}`,
@@ -100,7 +100,7 @@ export function jobCommandRows(text: string, width: number, expanded: boolean): 
   const body = (script === command ? script : script.replace(/^(['"])([\s\S]*)\1$/, '$2')).replace(/\r\n?/g, '\n').trim()
   const source = body.split('\n').filter((line, index, lines) => line.trim() !== '' || index === 0 || lines[index - 1]?.trim() !== '').join('\n')
   const shown = expanded ? source : source.split('\n')[0]!
-  const rows = wrapText(COMMAND_MARK + ' ' + shown, Math.max(1, width), 'wrap').split('\n')
+  const rows = wrapTextLines(COMMAND_MARK + ' ' + shown, Math.max(1, width)).map(line => line.text)
   return expanded ? rows : rows.slice(0, 1)
 }
 
