@@ -664,12 +664,14 @@ for (const identity of [
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
   }
-  const IdleFixture = ({ target, column = 0, marker = 'before' }: { target: 'row' | 'input' | 'none'; column?: number; marker?: string }): ReactNode => {
+  const IdleFixture = ({ target, column = 0, marker = 'before' }: { target: 'row' | 'tab' | 'input' | 'none'; column?: number; marker?: string }): ReactNode => {
     const native = useNativeCursor()
     const rowRef = useDeclaredCursor({ line: 0, column, active: target === 'row', visible: native, hideOnIdle: true })
+    const tabRef = useDeclaredCursor({ line: 0, column: 0, active: target === 'tab', visible: native, hideOnIdle: true })
     const inputRef = useDeclaredCursor({ line: 0, column: 0, active: target === 'input', visible: native })
     return <Box flexDirection="column">
       <Box ref={rowRef}><Text>❯ row {marker}</Text></Box>
+      <Box ref={tabRef}><Text>tab</Text></Box>
       <Box ref={inputRef} marginTop={1}><Text>input</Text></Box>
     </Box>
   }
@@ -684,7 +686,7 @@ for (const identity of [
     mock.timers.tick(ms)
     await h.flush()
   }
-  const paint = async (target: 'row' | 'input' | 'none', column = 0, marker = 'before') => {
+  const paint = async (target: 'row' | 'tab' | 'input' | 'none', column = 0, marker = 'before') => {
     const before = h.frames.length
     app.rerender(wrap(<IdleFixture target={target} column={column} marker={marker} />))
     ink.onRender()
@@ -710,6 +712,9 @@ for (const identity of [
     await tick(250)
     const motion = await paint('row', 3)
     assert.ok(!motion.includes(HIDE) && !motion.includes(SHOW), 'continuous cursor-only movement keeps visibility uninterrupted')
+    const handoff = await paint('tab')
+    assert.deepEqual(h.cursor(), h.find('tab'), 'the new region owns the native caret')
+    assert.ok(!handoff.includes(HIDE) && !handoff.includes(SHOW), 'a region handoff inside the idle window keeps visibility uninterrupted')
     await tick(250)
     assert.equal(h.visible(), true, 'the previous move cannot hide the newer cursor')
     await tick(249)

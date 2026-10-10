@@ -280,17 +280,15 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     await check('two-level model adjusts right', () => inverse('MAX'))
     stdin.write('\x1b[Z')
     await check('Shift+Tab preserves model and effort draft', () => inverse('Alpha') && focused('Alpha 01') && inverse('HIGH'))
-    // A clamped ←/→ changes neither the model nor the effort, so the
-    // provider→effort hand-off is a cursor-only move: the frame must not
-    // hide/show the caret or repaint the strip, letting a terminal without
-    // synchronized output run its own cursor animation uninterrupted.
+    // A clamped ←/→ still transfers the caret from provider to effort.
+    // Real-time waits may include an idle hide or reappearance; only check
+    // the landing here. The controlled-clock native regression protects
+    // uninterrupted visibility during continuous movement.
     const handoff = chunks.length
     stdin.write('\x1b[C')
     await check('a clamped effort hand-off parks the caret on the level', () => caretOnTab('HIGH') && inverse('HIGH'))
     const handoffFrame = chunks.slice(handoff).join('')
     assert.ok(handoffFrame.length > 0, `${label}: a caret-only hand-off emits the cursor move`)
-    assert.ok(!handoffFrame.includes('\x1b[?25l') && !handoffFrame.includes('\x1b[?25h'),
-      `${label}: a caret-only hand-off must not reset caret visibility`)
     assert.deepEqual(switches, [], 'browsing must not switch the live model')
     assert.deepEqual(effortPicks, [], 'browsing must not set the live effort')
     stdin.write('\x1b')
