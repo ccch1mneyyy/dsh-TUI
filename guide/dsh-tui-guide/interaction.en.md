@@ -352,7 +352,7 @@ brings it back.
 
 | Key | Action |
 | --- | --- |
-| `←` `→` | Choose the column that owns the keyboard (rail / sessions); exactly one `❯` is on screen |
+| `←` `→` | Choose the column that owns the keyboard (rail / sessions), preserving the selected session in the same workspace; exactly one `❯` is on screen |
 | `↑` `↓` / `PgUp` `PgDn` / wheel | Move in the rail; move in the session list (row 0 is the new-session card) |
 | Type | Filter the selected workspace's sessions live (title, directory, branch, model) |
 | `Enter` | Sessions: enter the row under the cursor (row 0 = start a session in this workspace). Rail: open that workspace's action menu |
@@ -362,6 +362,8 @@ brings it back.
 | `Ctrl+L` | Re-read the workspace registry and the session listing |
 | `Tab` / `Shift+Tab` | Next / previous source tab (when other agents have sessions) |
 | `Esc` | Dismiss a notice → clear the filter → leave the screen |
+
+Each workspace starts on its most recent visible session, or the new-session card if it has no matches. Changing columns or moving the mouse into the list preserves the current selection. Changing workspace chooses that workspace's newest session; returning chooses the newest again, without remembering past selections per workspace. A workspace still being loaded updates this default as rows arrive until you select a list row.
 
 The native cursor follows the last-used region, as in the model picker: workspace navigation parks it on the workspace row, session navigation on the session row or new-session card, and typing or clicking the filter on its text caret. Row carets hide after 0.5 seconds at rest; the search caret stays visible. Animation and trail effects come from your terminal settings. Narrow layouts keep the caret on a visible target when the workspace rail is hidden. Arrow and Enter actions keep the same meaning while filtering.
 
