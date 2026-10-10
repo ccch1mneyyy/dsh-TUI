@@ -89,10 +89,10 @@ export function createClaudeCatalog(deps: ClaudeCatalogDeps): SessionCatalog {
         infos.map(info => claudeSessionSummary(info, used)).sort((a, b) => b.updatedAt - a.updatedAt)
       if (onPartial !== undefined) {
         // A bounded SDK read extracts metadata only for the newest sessions.
-        // An unlimited read confirms completeness for every scope: a short
-        // limited page does not promise exhaustion, and scoped progress also
-        // excludes sibling worktrees. Avoid repeatedly scanning offset pages.
-        const first = await sdk.listSessions({ ...options, limit: FIRST_PAGE, ...(scope.allProjects === true ? {} : { includeWorktrees: false }) })
+        // Both reads keep the SDK's project scope, including git worktrees.
+        // An unlimited read confirms completeness: a short limited page does
+        // not promise exhaustion. Avoid repeatedly scanning offset pages.
+        const first = await sdk.listSessions({ ...options, limit: FIRST_PAGE })
         const rows = summaries(first)
         onPartial(rows)
       }

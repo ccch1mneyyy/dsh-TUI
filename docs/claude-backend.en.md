@@ -159,10 +159,10 @@ a notice, so a cloned repository cannot silently switch off every check.
   backend.
   Reopening or restarting first paints the last complete list while the SDK refreshes it.
   First-paint snapshots are isolated by Claude configuration directory. Without a snapshot,
-  up to 32 recent sessions from the current directory appear first, then the rest of that
-  workspace and other workspaces. Other Git worktrees in the same repository stay out of
-  the first batch but remain in the complete project listing, including the fallback when
-  the all-projects read fails. Failed reads preserve the last complete snapshot.
+  up to 32 recent sessions from the SDK's default project scope appear first, including
+  the current directory and Git worktrees in the same repository, then the complete
+  project and other projects. A failed all-projects read retains the project's worktree
+  sessions. Failed reads preserve the last complete snapshot.
 - From a shell: `dsh-tui --backend claude --resume <id>`; without an id it resumes
   the last Claude session this install used. dsh-TUI prints that command on exit.
   A session another dsh-TUI terminal has open is refused, and a `--resume` that
