@@ -287,6 +287,8 @@ interface StubChannelConfig {
   readonly openResult?: { ok: true } | { ok: false; reason: 'failed'; error: string } | { ok: false; reason: 'cancelled' }
   /** Terminal width for this screen; {@link COLS} by default. */
   readonly cols?: number
+  /** Exercise the normal screen buffer as well as fullscreen. */
+  readonly inline?: boolean
   /**
    * The persistent cache this channel reads.
    *
@@ -457,6 +459,10 @@ function foreignFacade(config: ForeignStubConfig, calls: string[]): Record<strin
 interface SupervisorScreen {
   write: (data: string) => void
   lines: () => string[]
+  /** Physical terminal caret, independent of the painted focus marker. */
+  cursor: () => { col: number; row: number; visible: boolean }
+  /** Read a display cell without treating CJK text offsets as columns. */
+  cell: (col: number, row: number) => string
   /** One real SGR click on the first occurrence of `needle`. */
   click: (needle: string) => Promise<void>
   /** One real SGR right click on the first occurrence of `needle`. */
@@ -483,9 +489,17 @@ async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
   const screen = new XTerm({ cols: target.config.cols ?? COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const out = new FakeStdout(screen)
   const input = new FakeStdin()
+  let cursorVisible = true
+  for (const [final, visible] of [['h', true], ['l', false]] as const) {
+    screen.parser.registerCsiHandler({ prefix: '?', final }, params => {
+      if (params.includes(25)) cursorVisible = visible
+      return false
+    })
+  }
+  const ScreenMode = target.config.inline ? React.Fragment : AlternateScreen
   const app = await render(
     <ThemeProvider theme="dark">
-      <AlternateScreen>
+      <ScreenMode>
         <SessionSupervisor
           channel={target.channel}
           home={sandbox}
@@ -503,7 +517,7 @@ async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
           onApprove={() => {}}
           liveStateOf={(id) => liveState[id as keyof typeof liveState]}
         />
-      </AlternateScreen>
+      </ScreenMode>
     </ThemeProvider>,
     {
       stdin: input as never,
@@ -516,6 +530,8 @@ async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
   return {
     write: (data: string) => { input.write(data) },
     lines: () => viewportLines(screen),
+    cursor: () => ({ col: screen.buffer.active.cursorX, row: screen.buffer.active.cursorY, visible: cursorVisible }),
+    cell: (col, row) => screen.buffer.active.getLine(screen.buffer.active.baseY + row)?.getCell(col)?.getChars() ?? '',
     click: async (needle: string) => {
       await settled(() => findText(screen, needle) !== null)
       const found = findText(screen, needle)
@@ -539,6 +555,62 @@ async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
 /** A screen over a channel of its own, for the cases that mount once. */
 async function openSupervisor(config: StubChannelConfig): Promise<SupervisorScreen> {
   return mountSupervisor(makeChannel(config))
+}
+
+console.log('native caret follows workspace, session and live filter focus')
+for (const inline of [false, true]) {
+  for (const cols of [120, 36]) {
+    const app = await openSupervisor({ registry: registry.map(entry => ({ ...entry, title: `${entry.title} 工作区` })), cwd: alphaDir, cols, inline })
+    const markerAt = (title: string): boolean => {
+      const cursor = app.cursor()
+      const line = app.lines()[cursor.row] ?? ''
+      return cursor.visible && line.includes(title) && app.cell(cursor.col, cursor.row) === '❯'
+    }
+    const searchAt = (query: string, cells: number): boolean => {
+      const cursor = app.cursor()
+      const line = app.lines()[cursor.row] ?? ''
+      const prefix = line.indexOf(`/ ${query}`)
+      return cursor.visible && prefix >= 0 && app.cell(cursor.col - 2 - cells, cursor.row) === '/'
+    }
+    const label = `${inline ? 'inline' : 'fullscreen'} ${cols} cols`
+    try {
+      check(`${label}: opening parks the native caret on the focused session`, await settled(() => markerAt('free session')))
+      if (cols === 120) {
+        app.write('\u001b[D')
+        check(`${label}: left hands the caret to the selected workspace`, await settled(() => markerAt('Alpha')))
+        app.write('free')
+        check(`${label}: typing from the rail hands the caret to the live filter`, await settled(() => searchAt('free', 4)))
+        app.write('\u001b[D')
+        check(`${label}: navigating away from the filter restores the rail caret`, await settled(() => markerAt('Alpha')))
+        app.write('\u001b')
+        await settled(() => app.lines().some(line => line.includes('live session')))
+      } else {
+        app.write('\u001b[D')
+        check(`${label}: a hidden rail falls back to the visible filter caret`, await settled(() => searchAt('', 0)))
+      }
+      app.write('\u001b[C')
+      await settled(() => markerAt('live session'))
+      for (let step = 0; step < sessions.length && !markerAt('+ New session'); step++) {
+        const previous = app.cursor().row
+        app.write('\u001b[A')
+        await settled(() => app.cursor().row !== previous)
+      }
+      check(`${label}: the new-session card owns the same list caret`, await settled(() => markerAt('+ New session')))
+      app.write('\u001b[B')
+      check(`${label}: down moves the native caret to a session row`, await settled(() => markerAt('free session') || markerAt('live session')))
+      app.write('中')
+      check(`${label}: the search caret counts CJK display cells`, await settled(() => searchAt('中', 2)))
+      app.write('\u007f')
+      await settled(() => app.lines().some(line => line.includes('live session')))
+      app.write('\u001b[C')
+      check(`${label}: list navigation returns the native caret from search`, await settled(() => markerAt('live session')))
+      if (!inline) {
+        // SGR mouse hit-testing is enabled in fullscreen; inline uses keys.
+        await app.click('Type to search sessions')
+        check(`${label}: clicking the filter claims its native caret`, await settled(() => searchAt('', 0)))
+      }
+    } finally { app.close() }
+  }
 }
 
 // ── snapshot-then-refresh (issue #987) ─────────────────────────────────────
@@ -1842,8 +1914,18 @@ console.log('source tabs: strip, switching and import')
   check('there is no new-session card', !shown().includes('+ New session'), shown())
 
   const cursorOn = (title: string): boolean => app.lines().some(line => line.includes(title) && line.includes('❯'))
+  const nativeCursorOn = (title: string): boolean => {
+    const cursor = app.cursor()
+    const line = app.lines()[cursor.row] ?? ''
+    return cursor.visible && line.includes(title) && app.cell(cursor.col, cursor.row) === '❯'
+  }
   app.write('\u001b[C')
   check('→ lands the cursor on the first row (no card at 0)', await settled(() => cursorOn('fix the parser')), shown())
+  check('the foreign session row owns the native caret', await settled(() => nativeCursorOn('fix the parser')))
+  app.write('\u001b[D')
+  check('the foreign workspace takes the native caret', await settled(() => nativeCursorOn('Alpha')))
+  app.write('\u001b[C')
+  await settled(() => nativeCursorOn('fix the parser'))
   for (const character of 'docs') {
     app.write(character)
     await sleep(60) // 固定窗:pacing 逐字投喂：整串一次写入时首字符会被当作导航键吞掉
@@ -1854,6 +1936,12 @@ console.log('source tabs: strip, switching and import')
     shown(),
   )
   check('the filtered cursor stands on a real row', await settled(() => cursorOn('write the docs')), shown())
+  check('typing in a foreign source hands the native caret to its filter', await settled(() => {
+    const cursor = app.cursor()
+    const line = app.lines()[cursor.row] ?? ''
+    const prefix = line.indexOf('/ docs')
+    return cursor.visible && prefix >= 0 && app.cell(cursor.col - 6, cursor.row) === '/'
+  }))
   await sleep(120) // 固定窗:pacing Enter 处理步间，无可观测锚点
   app.write('\r')
   check(

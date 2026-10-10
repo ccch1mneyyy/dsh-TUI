@@ -363,6 +363,8 @@ brings it back.
 | `Tab` / `Shift+Tab` | Next / previous source tab (when other agents have sessions) |
 | `Esc` | Dismiss a notice → clear the filter → leave the screen |
 
+The native cursor follows the last-used region, as in the model picker: workspace navigation parks it on the workspace row, session navigation on the session row or new-session card, and typing or clicking the filter on its text caret. Row carets hide after 0.5 seconds at rest; the search caret stays visible. Animation and trail effects come from your terminal settings. Narrow layouts keep the caret on a visible target when the workspace rail is hidden. Arrow and Enter actions keep the same meaning while filtering.
+
 The right side of the title row is the **source strip**: `DSH │ Claude Code  Codex …`.
 
 - A tab appears only for another coding agent on this machine (Claude Code, Codex, Grok Build, zcode) that has conversations, in a fixed order; with none, there is no strip. Opening the screen only checks whether each source has any conversation; a source's list is read when its tab is opened.
