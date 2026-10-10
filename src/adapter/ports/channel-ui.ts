@@ -1,5 +1,5 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, TurnUsageSummary, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, TrajectoryLane, TrajectorySource, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption, BackendChannelInput } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, TurnUsageSummary, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, TrajectoryLane, TrajectorySource, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ContextBreakdown, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption, BackendChannelInput } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode, BrandSetting } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { AgentCapabilities } from './channel-capabilities.js'
@@ -195,6 +195,17 @@ export interface ChannelUi {
    * `keyof ChannelUi`, and an optional member would widen that union.
    */
   readonly contextOccupancy: ContextOccupancy | undefined
+  /**
+   * What the occupancy total is made of, from the same meter unit's
+   * `contextBreakdown` projection (system prompt / request-envelope tool schemas
+   * / everything else). The segmented bar joins it with {@link contextSegments}
+   * to weight its five fills; `undefined` when the mounted meter does not publish
+   * a composition, in which case the bar uses those estimates alone.
+   *
+   * Never a total: only {@link contextOccupancy} numerator answers how full the
+   * window is (see the type's own doc).
+   */
+  readonly contextBreakdown: ContextBreakdown | undefined
   /** Output tokens per second of the current/last turn's response, when known. */
   readonly tps: number | undefined
   /** Per-turn tps samples (sparkline history), oldest first. */
@@ -380,7 +391,14 @@ export interface ChannelUi {
     question: string,
     options?: { signal?: AbortSignal; onText?: (delta: string) => void },
   ): Promise<{ answer: string | null; error?: string }>
-  /** Estimated context segments by content type (pi-nano-context style bar). */
+  /**
+   * This app's estimate of the context by content type — the weights behind the
+   * segmented bar's five fills (see {@link contextBreakdown} for the meter's own
+   * composition, which takes precedence where it exists). Never a total: the
+   * bar's length and readout come from {@link contextOccupancy}, and
+   * `barSegments` only uses these numbers to weight that authoritative span
+   * (its message side, or the whole composition when no meter value exists).
+   */
   readonly contextSegments: {
     system: number
     prompt: number

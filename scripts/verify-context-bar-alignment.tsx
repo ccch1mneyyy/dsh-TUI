@@ -379,5 +379,103 @@ const PROBE_FILLS = [0x101010, 0x202020, 0x303030, 0x404040, 0x505050]
     PROBE_FILLS.every((fill, index) => restoredFills[index] === fill), fmtFills(restoredFills))
   dispose()
 }
+// ── meter 构成：五段权重改读 contextBreakdown ──────────────────────────────
+// 五段权重原本只来自本地文本估算，看不见请求信封——报障会话里 ~19k 的 tool
+// schema 完全不在构成里，注入上下文又只按固定密度折算（CJK 文本低估约 3 倍）。
+// meter 的 `contextBreakdown` 拆出 system / 最新信封的 tool schema / 其余可见
+// 节点；join 规则：system ← meter、tools ← meter 的 schema + 本地 tool 结果
+// 估算、message 三档按本地估算比例分摊 meter 的 message 总量。
+// 条长仍由权威占用定（`contextBarColumns`），构成只分这五段之间的宽度。
+{
+  const estimates = { system: 60_000, prompt: 40_000, assistant: 50_000, thinking: 40_000, tools: 30_000 }
+  const meter = { systemTokens: 1_400, toolsTokens: 19_000, messageTokens: 200_000 }
+  const withoutMeter = metrics.barSegments(estimates, undefined)
+  const withMeter = metrics.barSegments(estimates, meter)
+  check(
+    'meter 构成：system 权重改用 meter 值、tools 收下 schema',
+    withoutMeter.system === 60_000 && withMeter.system === 1_400 && withMeter.tools > 19_000,
+    `without=${JSON.stringify(withoutMeter)} with=${JSON.stringify(withMeter)}`,
+  )
+  check(
+    'meter 构成：message 侧按估算比例分摊（三档比例不变）',
+    Math.abs(withMeter.prompt / withMeter.thinking - withoutMeter.prompt / withoutMeter.thinking) < 1e-6,
+    JSON.stringify(withMeter),
+  )
+  check(
+    'meter 构成：没有 meter 时权重就是本地估算（旧行为不变）',
+    withoutMeter.system === estimates.system && withoutMeter.tools === estimates.tools,
+    JSON.stringify(withoutMeter),
+  )
+
+  // 明细可加总（issue #1350 期望②）：图例的数字是归因到占用的份额，五段 + free
+  // 必须拼成窗口，否则把图例相加会得到第二套总量（原报告：906k ≠ 307k）。
+  const used = 500_000
+  const window = 1_000_000
+  const attributed = metrics.attributeBarTokens(withMeter, used)
+  check(
+    'meter 构成：归因后五段整数和恰等于占用',
+    Object.values(attributed).reduce((sum, value) => sum + value, 0) === used,
+    JSON.stringify(attributed),
+  )
+  const parseLabel = (label: string): number => {
+    const match = /(\d+(?:\.\d+)?)([kM]?)$/.exec(label)
+    const value = Number(match?.[1] ?? 0)
+    if (match?.[2] === 'k') return value * 1_000
+    if (match?.[2] === 'M') return value * 1_000_000
+    return value
+  }
+  const legend = metrics.contextBarBreakdown(attributed, used, window, 200, {})
+  const legendSum = legend.entries.reduce((sum, entry) => sum + parseLabel(entry.label), 0)
+  check(
+    'meter 构成：图例显示值之和落在窗口 1% 内（五段 + free 拼成窗口）',
+    Math.abs(legendSum - window) <= window / 100,
+    `sum=${legendSum} labels=${legend.entries.map(e => e.label).join(legend.separator)}`,
+  )
+
+  // 端到端：meter 说 tools 占大头、message 侧为空时，条上只剩 system 与 tools 两段，
+  // 且 tools 必须比「无 meter」时的第五段更宽 —— 占用不变，变的只是段间权重。
+  // 段宽按「相邻同色合并」量出（终端缓冲里没有段名），深浅判定空余段。
+  const spanRuns = async (breakdown?: typeof meter): Promise<number[]> => {
+    const channel = {
+      ...makeChannel(),
+      contextOccupancy: { source: 'projection', usedTokens: 500_000, contextWindow: 1_000_000 },
+      contextSegments: estimates,
+      ...(breakdown === undefined ? {} : { contextBreakdown: breakdown }),
+    }
+    const { harness, instance } = await mountAt(120, 30, channel)
+    try {
+      await settled(() => findBarRow(harness.term) >= 0)
+      const y = findBarRow(harness.term)
+      const runs: number[] = []
+      let last = -1
+      for (let x = 0; x < harness.term.cols; x++) {
+        const cell = cellAt(harness.term, y, x)
+        if (cell === undefined || cell.isBgDefault()) continue
+        const fill = cell.getBgColor()
+        if (fill === DARK_FREE_FILL) break
+        if (fill === last) runs[runs.length - 1] = (runs[runs.length - 1] ?? 0) + 1
+        else {
+          runs.push(1)
+          last = fill
+        }
+      }
+      return runs
+    } finally {
+      instance.unmount()
+      instances.delete(process.stdout)
+      harness.term.dispose()
+    }
+  }
+  const plainRuns = await spanRuns()
+  const meteredRuns = await spanRuns({ systemTokens: 1_000, toolsTokens: 500_000, messageTokens: 0 })
+  check(
+    'meter 构成：条上 tools 段随 meter 变宽、system 段变窄（占用不变）',
+    meteredRuns.length === 2
+    && (meteredRuns[1] ?? 0) > (plainRuns[4] ?? 0)
+    && (meteredRuns[0] ?? 0) < (plainRuns[0] ?? 0),
+    `plain=${JSON.stringify(plainRuns)} metered=${JSON.stringify(meteredRuns)}`,
+  )
+}
+
 console.log(failed === 0 ? '\nAll context bar alignment checks passed.' : `\n${failed} check(s) failed.`)
 process.exit(failed === 0 ? 0 : 1)

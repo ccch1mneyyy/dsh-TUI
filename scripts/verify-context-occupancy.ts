@@ -14,11 +14,11 @@
  * Run: node --import tsx/esm scripts/verify-context-occupancy.ts
  */
 import assert from 'node:assert/strict'
-import { ContextOccupancyStore, CONTEXT_PRESSURE_PROJECTION_KEY, attachContextPressureProjection, resolveContextOccupancy } from '../src/dsh-adapter/context-occupancy.js'
+import { ContextOccupancyStore, CONTEXT_BREAKDOWN_PROJECTION_KEY, CONTEXT_PRESSURE_PROJECTION_KEY, attachContextPressureProjection, resolveContextBreakdown, resolveContextOccupancy } from '../src/dsh-adapter/context-occupancy.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { estimateTokens } from '../src/dsh-adapter/channel/usage.js'
 import { contextPressurePct } from '../src/components/ActivityLine.js'
-import { channelContextOccupancy } from '../src/screens/StatusMetrics.js'
+import { attributeBarTokens, barSegments, channelContextOccupancy, contextBarColumns, USED_SEGMENTS } from '../src/screens/StatusMetrics.js'
 
 // ── 解析口径（官方 precedence，逐个分支）────────────────────────────────
 assert.deepEqual(
@@ -100,17 +100,55 @@ function makeRegistry() {
   assert.equal(store.read('s1'), view, '绑定读到的就是投影值')
   let wakeups = 0
   const off = store.subscribe(() => { wakeups += 1 })
-  store.update('s2', { pressureTokens: 1 })
+  store.update('s2', CONTEXT_PRESSURE_PROJECTION_KEY, { pressureTokens: 1 })
   assert.equal(wakeups, 0, '其它 session 的值不进入当前读数')
-  store.update('s1', view)
+  store.update('s1', CONTEXT_PRESSURE_PROJECTION_KEY, view)
   assert.equal(wakeups, 0, '同一个 wire 引用不产生变更')
   const smaller = { pressureTokens: 70_000, projectedTokens: 20_000, contextWindow: 100_000 }
-  store.update('s1', smaller)
+  store.update('s1', CONTEXT_PRESSURE_PROJECTION_KEY, smaller)
   assert.equal(store.read('s1'), smaller)
   assert.equal(wakeups, 1, '当前 session 的新值通知订阅者')
   off()
-  store.update('s1', { pressureTokens: 5 })
+  store.update('s1', CONTEXT_PRESSURE_PROJECTION_KEY, { pressureTokens: 5 })
   assert.equal(wakeups, 1, '退订后不再通知')
+}
+
+// 构成（contextBreakdown）：同一个 unit 的另一个 key，与占用各存一份、各自
+// 变更测试；缺席（老 meter）与半填值都不得影响占用那条路径。
+{
+  const registry = makeRegistry()
+  const store = new ContextOccupancyStore()
+  store.attachRegistry(registry)
+  const pressure = { pressureTokens: 300_000, projectedTokens: 307_000, contextWindow: 1_000_000 }
+  registry.publish({ id: 's1' }, CONTEXT_PRESSURE_PROJECTION_KEY, pressure)
+  store.seed({ id: 's1' })
+  assert.equal(store.readBreakdown('s1'), undefined, '老 meter 不发布构成 → 读不到，占用照旧')
+  assert.equal(store.read('s1'), pressure)
+
+  const breakdown = { systemTokens: 1_400, toolsTokens: 19_000, messageTokens: 200_000 }
+  let wakeups = 0
+  const off = store.subscribe(() => { wakeups += 1 })
+  store.update('s1', CONTEXT_BREAKDOWN_PROJECTION_KEY, breakdown)
+  assert.equal(store.readBreakdown('s1'), breakdown, '构成按自己的 key 存')
+  assert.equal(store.read('s1'), pressure, '构成变更不动占用')
+  assert.equal(wakeups, 1, '构成变更也要通知（条的构成跟着变）')
+  store.update('s1', CONTEXT_BREAKDOWN_PROJECTION_KEY, breakdown)
+  assert.equal(wakeups, 1, '同一个 wire 引用不产生变更')
+  store.update('s2', CONTEXT_BREAKDOWN_PROJECTION_KEY, breakdown)
+  assert.equal(wakeups, 1, '其它 session 的构成不进当前读数')
+  off()
+
+  // 半填值：已知字段保留，缺失字段归一成 0（不能整条丢弃）。
+  assert.deepEqual(
+    resolveContextBreakdown({ toolsTokens: 19_000 }),
+    { systemTokens: 0, toolsTokens: 19_000, messageTokens: 0 },
+  )
+  assert.equal(resolveContextBreakdown(undefined), undefined)
+
+  // 重新绑定别的 session：两张表都按当前 id 剪枝。
+  store.seed({ id: 's2' })
+  assert.equal(store.readBreakdown('s1'), undefined, '换绑后旧 session 的构成被剪掉')
+  assert.equal(store.read('s1'), undefined, '换绑后旧 session 的占用同样被剪掉')
 }
 
 // inject 接缝：只认本 key，清理挂在注入 fiber 上，服务缺席不抛。
@@ -250,6 +288,83 @@ const isLowContext = (item: { text: string }): boolean => /Context low|上下文
   assert.equal(channel.lastUsage, undefined, '检查点不再伪造 lastUsage')
   assert.equal(channel.tokens.input, 647_808, '检查点不再改写累计 tokens 计数器')
   assert.equal(channel.contextSegments.assistant, 0, '分段条的分段清零保留')
+  channel.releaseContributions()
+}
+
+// ── channel 层：构成（contextBreakdown）与占用同源、同一接缝 ─────────────
+// 条的两个输入都要从 channel 拿：占用（权威总量）与构成（按什么切开它）。
+// 这一段走的是生产接线——投影 → store → channel 访问器 → 份额，而不是把
+// 一个字面量塞进 partial channel（那是 verify-context-bar-alignment 的活）。
+{
+  const { registry, store } = makeWiredStore()
+  registry.publish({ id: 's1' }, CONTEXT_PRESSURE_PROJECTION_KEY, {
+    pressureTokens: 306_000, projectedTokens: 306_827, contextWindow: 1_000_000,
+  })
+  const { ctx, agent, listeners } = makeFixture()
+  const channel = createChannel(ctx as never, agent as never, {
+    model: 'model', provider: 'provider', cwd: '/tmp', activity: false,
+    contextPressure: store,
+    seedContextOccupancy: session => store.seed(session),
+  })
+  assert.equal(channel.contextBreakdown, undefined, '老 meter 不发布构成 → channel 读出 undefined（回退本地估算）')
+
+  const emit = (event: unknown): void => {
+    const handler = listeners.get('session/event')
+    assert.ok(handler !== undefined, 'channel 订阅了 session/event')
+    ;(handler as unknown as (session: unknown, event: unknown) => void)(agent.session, event)
+  }
+  // 分段由真实投影器产出（本地估算那一层仍然是它在管）。
+  emit({ type: 'system/message', seq: 1, time: 1, data: { message: { role: 'system', content: [{ type: 'text', text: 'S'.repeat(4_000) }] } } })
+  emit({ type: 'user/message', seq: 2, time: 2, data: { id: 'm1', source: { kind: 'user' }, content: [{ type: 'text', text: 'U'.repeat(400) }] } })
+  assert.equal(channel.contextSegments.system, 1_000, 'system 段来自投影器')
+  assert.equal(channel.contextSegments.prompt, 100, 'prompt 段来自投影器')
+
+  const before = channel.version
+  registry.publish({ id: 's1' }, CONTEXT_BREAKDOWN_PROJECTION_KEY, {
+    systemTokens: 1_341, toolsTokens: 18_976, messageTokens: 180_000,
+  })
+  assert.ok(channel.version > before, '构成变更同样 bump channel version（条跟着重绘）')
+  assert.deepEqual(channel.contextBreakdown, {
+    systemTokens: 1_341, toolsTokens: 18_976, messageTokens: 180_000,
+  }, 'channel 访问器把主机值归一成端口形状')
+
+  // 半填值不得整条丢弃：缺失字段归一成 0。
+  registry.publish({ id: 's1' }, CONTEXT_BREAKDOWN_PROJECTION_KEY, { toolsTokens: 500 })
+  assert.deepEqual(channel.contextBreakdown, { systemTokens: 0, toolsTokens: 500, messageTokens: 0 })
+
+  registry.publish({ id: 's1' }, CONTEXT_BREAKDOWN_PROJECTION_KEY, {
+    systemTokens: 1_341, toolsTokens: 18_976, messageTokens: 180_000,
+  })
+  const occupancy = channelContextOccupancy(channel)
+  const used = occupancy?.usedTokens ?? 0
+  const window = occupancy?.contextWindow ?? 0
+  assert.equal(used, 306_827, '占用仍来自 contextPressure（构成从不参与总量）')
+  const segments = barSegments(channel.contextSegments, channel.contextBreakdown)
+  assert.equal(segments.tools, 18_976, '工具 schema 落在 tools 段（本地估算看不到的那块）')
+  assert.equal(segments.system, 1_341, 'system 段取 meter 值')
+  // 构成只分「已用段」内部的宽度：条长仍是占用的份额，构成从不参与总长。
+  const width = 100
+  const columns = contextBarColumns(segments, used, window, width)
+  assert.equal(
+    columns.used.reduce((total, value) => total + value, 0),
+    Math.round(width * (used / window)),
+    '条长 == 占用份额（构成不改变总长度）',
+  )
+  // 归因（issue #1350 期望②）：悬停明细里五段的整数和必须恰等于占用，否则用户
+  // 把图例数字相加会得到第二套总量（原报告：906k ≠ 307k）。
+  const attributed = attributeBarTokens(segments, used)
+  assert.equal(
+    USED_SEGMENTS.reduce((total, segment) => total + attributed[segment.key], 0),
+    used,
+    '归因：五段整数和恰等于占用（明细可加总）',
+  )
+  // 全零构成（压缩检查点 / 回放前那种只知总量的帧）不编造均分：条上是一整块
+  // `unclassified`，图例就该报实测 `used` 一项。
+  assert.deepEqual(
+    attributeBarTokens({ system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, used),
+    { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
+    '归因：构成未知时归因结果全零（图例回落到实测 used 一项）',
+  )
   channel.releaseContributions()
 }
 
