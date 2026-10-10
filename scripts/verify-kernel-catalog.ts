@@ -123,8 +123,8 @@ const versionOnly = buildKernelCatalog({ current: 'dsh', entries, canInstallSdk:
 check('a version without `stale` is not "too old"', rowOf(versionOnly, 'codex')?.reasonKey === 'kernel-unavailable-not-installed', rowOf(versionOnly, 'codex'))
 
 const signedOut = buildKernelCatalog({ current: 'dsh', entries, statuses: { claude: { installed: true, auth: 'missing' }, codex: { installed: true, auth: 'missing', loginInSession: true } } })
-check('signed out: a row without in-session login stays dim',
-  rowOf(signedOut, 'claude')?.selectable === false && rowOf(signedOut, 'claude')?.reasonKey === 'kernel-unavailable-auth-missing')
+check('signed out: still selectable with no dim reason (credentials may live where detection cannot see)',
+  rowOf(signedOut, 'claude')?.selectable === true && rowOf(signedOut, 'claude')?.reasonKey === undefined && rowOf(signedOut, 'claude')?.noteKey === undefined)
 check('signed out + loginInSession: selectable with a "sign in after start" note',
   rowOf(signedOut, 'codex')?.selectable === true && rowOf(signedOut, 'codex')?.reasonKey === undefined && rowOf(signedOut, 'codex')?.noteKey === 'kernel-login-in-session'
     && kernelSubtitle(rowOf(signedOut, 'codex')!, key => t(key)) === t('kernel-login-in-session'))
