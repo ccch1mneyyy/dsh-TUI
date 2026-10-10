@@ -15,6 +15,8 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.TERM_PROGRAM = 'WezTerm'
+process.env.SSH_CONNECTION = 'headless-model-picker' // Pure OSC 52, without touching the system clipboard.
+delete process.env.TMUX
 
 import type { AgentEvent } from '../src/agent/events.js'
 import type { AgentSession } from '../src/agent/session.js'
@@ -40,6 +42,7 @@ const [
   import('./lib/modern-widths.mjs'),
   import('../src/modelRecents.js'),
 ])
+const { default: instances } = await import('../src/ink/instances.js')
 
 const MODELS = [
   ...Array.from({ length: 30 }, (_, index) => ({
@@ -511,10 +514,11 @@ async function reviewRegression(fullscreen: boolean): Promise<void> {
     } : undefined,
   }
   const channel = createChannel(ctx as never, makeAgent('initial', events) as never, { provider: 'alpha', model: 'a0', cwd: '/tmp', effort: 'high', activity: false, whaleIdle: false })
+  const questionStore = new QuestionStore()
   const effortPicks: string[] = []
   const setEffort = channel.setEffort
   channel.setEffort = id => { effortPicks.push(id); return setEffort(id) }
-  const screen = <Chat channel={channel as never} questionStore={new QuestionStore()} fullscreen={fullscreen} onExit={() => {}} />
+  const screen = <Chat channel={channel as never} questionStore={questionStore} fullscreen={fullscreen} onExit={() => {}} />
   const app = await render(fullscreen ? <AlternateScreen>{screen}</AlternateScreen> : screen, { stdin, stdout, stderr, exitOnCtrlC: false, patchConsole: false })
   const lines = () => viewportLines(term)
   const text = () => lines().join('\n')
@@ -536,13 +540,35 @@ async function reviewRegression(fullscreen: boolean): Promise<void> {
     const hint = view.findIndex(line => line.includes('↑/↓ 模型'))
     return view[hint - 2]?.match(/─+/u)?.[0].length ?? 0
   }
+  const previousInk = instances.get(process.stdout)
+  const ink = instances.get(stdout as unknown as NodeJS.WriteStream)!
+  if (fullscreen) {
+    // Selection hooks resolve process.stdout; use the real harness instance.
+    instances.set(process.stdout, ink)
+    app.rerender(<AlternateScreen><Chat channel={channel as never} questionStore={questionStore} fullscreen onExit={() => {}} /></AlternateScreen>)
+  }
   try {
     await check('boot', () => text().includes('Review history 19'))
+    if (fullscreen) {
+      const row = lines().findIndex(line => line.includes('Review history 19'))
+      const col = stringWidth(lines()[row]!.slice(0, lines()[row]!.indexOf('Review history 19')))
+      stdin.write(`\x1b[<0;${col + 1};${row + 1}M\x1b[<32;${col + 7};${row + 1}M\x1b[<0;${col + 7};${row + 1}m`)
+      await check('automatic copy retains the transcript selection', () => ink.hasTextSelection() && !ink.selection.isDragging)
+    }
     stdin.write('/model')
     await check('composer', () => text().includes('/model'))
     stdin.write('\r')
     await check('picker', () => focused('Alpha 00') && text().includes('最近使用'))
     if (fullscreen) {
+      assert.ok(ink.hasTextSelection(), 'the model picker opens over a retained selection')
+      stdin.write('\x1b')
+      await check('first Esc closes the picker and retains the selection', () => !text().includes('最近使用') && ink.hasTextSelection())
+      stdin.write('\x1b')
+      await check('next Esc clears the selection', () => !ink.hasTextSelection())
+      stdin.write('/model')
+      await check('reopen after clearing the selection', () => text().includes('/model'))
+      stdin.write('\r')
+      await check('picker reopened', () => focused('Alpha 00') && text().includes('最近使用'))
       const wide = pickerWidth()
       stdin.write('\x02')
       await check('Ctrl+B opens the sidebar without dismissing the picker', () => prefs.getSidePanelOpen() && focused('Alpha 00') && pickerWidth() < wide)
@@ -582,6 +608,10 @@ async function reviewRegression(fullscreen: boolean): Promise<void> {
     app.unmount()
     disposeChannelOwner(channel)
     term.dispose()
+    if (fullscreen) {
+      if (previousInk) instances.set(process.stdout, previousInk)
+      else instances.delete(process.stdout)
+    }
     prefs.applySidePanelSplitEnabled(previousPanel.split)
     prefs.applySidePanelOpen(previousPanel.open)
     prefs.applySidePanelPanels(previousPanel.panels)

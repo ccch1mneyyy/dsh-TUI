@@ -82,7 +82,7 @@ function check(name: string, ok: boolean, detail = ''): void {
 {
   const chatSource = readFileSync(new URL('../src/screens/Chat.tsx', import.meta.url), 'utf8')
   const previewModalGuard = chatSource.indexOf("if (overlay.kind === 'image-preview') {")
-  const mouseSelectionEsc = chatSource.indexOf('if (key.escape && hasMouseSelection())')
+  const mouseSelectionEsc = chatSource.indexOf('clearMouseSelection()')
   check('chat: preview modal consumes Esc before transcript mouse selection',
     previewModalGuard !== -1 && mouseSelectionEsc > previewModalGuard,
     `preview=${previewModalGuard}, selection=${mouseSelectionEsc}`)
