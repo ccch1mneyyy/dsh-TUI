@@ -87,14 +87,20 @@ export function ModelPicker({
     ? frameRows + shortcutRows.length + (compact ? 0 : gaps) + (showDescription ? 1 : 0)
     : frameRows - (showEfforts ? 0 : 1)))
   const showModelDescriptions = listRows >= 2
-  const { start, end } = listWindow(models.map(model => showModelDescriptions && model.description ? 2 : 1), focusIndex, listRows)
+  const modelHeights = models.map(model => showModelDescriptions && model.description ? 2 : 1)
+  const { start, end } = listWindow(modelHeights, focusIndex, listRows)
   const providerFocus = groups.findIndex(group => group.provider === provider)
   const effortFocus = efforts.findIndex(effort => effort.id === effortId)
   const showEffortTabs = showEfforts && !effortsLoading && !effortError && efforts.length > 0
+  // Without header hints the overlay clips from the top. A mounted provider
+  // strip is visible only if the models, effort row and footer leave it space.
+  const rowsBelowProviders = Math.max(1, modelHeights.slice(start, end).reduce((sum, rows) => sum + rows, 0))
+    + (showEfforts ? 1 : 0) + 1
+  const providerVisible = showHeaderHints || availableRows > rowsBelowProviders
   // The caret follows the last-touched region, but only while that region is
   // rendered with a focused cell; otherwise it rests on the model list so it
   // can never be parked nowhere (which reads as a vanished caret).
-  const caretZone: ModelCursorZone = cursorZone === 'provider' && showProviders && providerFocus >= 0 ? 'provider'
+  const caretZone: ModelCursorZone = cursorZone === 'provider' && showProviders && providerVisible && providerFocus >= 0 ? 'provider'
     : cursorZone === 'effort' && showEffortTabs && effortFocus >= 0 ? 'effort'
       : 'model'
   const shortcutBar = (
@@ -230,7 +236,7 @@ function PickerTabs({ labels, focusIndex, width, muted = true, cursor = false, o
 /**
  * One tab cell. The focused tab declares the native caret when its strip owns
  * it (terminals animate the caret between providers/levels); a strip is
- * structural focus, so the parked caret is steady rather than blinking. The
+ * structural focus, so it requests a steady caret where restoration is safe. The
  * inverse block stays painted either way so static rendering keeps a focus
  * mark.
  */

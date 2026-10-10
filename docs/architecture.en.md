@@ -174,10 +174,15 @@ terminal's animation and trail can continue. Shape, color, and blinking follow
 terminal settings. List items declare accessibility anchors that stay hidden
 in ordinary mode by default; the model picker declares a **visible** cursor on
 the region used last (provider tab / model row / effort level) so terminal
-animation moves between them. Such a structural declaration also asks for a
-steady style: DECSCUSR 6 (a non-blinking bar) while it is parked, and DECSCUSR
-0 when it clears or focus returns to a text input, handing the terminal's own
-caret style back. Static rendering retains theme-painted carets; selection and
+animation moves between them. Tabs clipped by the overlay hand the caret back
+to the visible model row. Terminals known to restore configured styles
+(WezTerm, kitty, Ghostty, and hosts explicitly reporting xterm.js 6+ engine
+versions) use DECSCUSR 6 (a non-blinking bar) while parked and DECSCUSR 0 when
+cleared or returned to an input. XTerm, unknown terminals, and tmux/zellij
+retain their existing style: some terminals interpret 0 as a blinking block.
+Shutdown only resets styles the renderer took over; an external editor's
+return reasserts configured styles only where restoration is safe.
+Static rendering retains theme-painted carets; selection and
 image-token highlights remain painted by the TUI.
 
 ## Persistence locations

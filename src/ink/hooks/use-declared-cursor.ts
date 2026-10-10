@@ -25,8 +25,8 @@ import type { DOMElement } from '../dom.js'
  *   position relative to the node, `active` controls whether the declaration
  *   is set or cleared. `visible` opts a text input into the native caret;
  *   focus anchors remain hidden unless accessibility mode is enabled.
- *   `steady` parks a non-blinking marker for structural focus (list rows,
- *   picker tabs) instead of the terminal's own caret behaviour.
+ *   `steady` requests a non-blinking marker for structural focus (list rows,
+ *   picker tabs) where the terminal's configured style can be restored.
  * @returns a ref callback to attach to the Box that contains the input.
  */
 export function useDeclaredCursor(options: {

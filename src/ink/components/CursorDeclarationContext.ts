@@ -15,9 +15,9 @@ export type CursorDeclaration = {
   /** Show the native caret; omitted for accessibility-only focus anchors. */
   readonly visible?: boolean
   /**
-   * Park a non-blinking marker instead of the terminal's own caret: a
+   * Request a non-blinking marker instead of the terminal's own caret: a
    * structural focus position (list row, picker tab) is not a text insertion
-   * point, so DECSCUSR pins it to a steady bar for as long as it is parked.
+   * point. The renderer only pins it where the configured style is restorable.
    */
   readonly steady?: boolean
 }

@@ -104,6 +104,24 @@ export function isZellij(): boolean {
 }
 
 /**
+ * Whether DECSCUSR 0 restores the configured shape and blinking. XTerm and
+ * older xterm.js instead select a blinking block, so keep their style intact.
+ * Multiplexers interpret this sequence themselves; outer-terminal identity
+ * is insufficient to opt them in.
+ */
+export function supportsCursorStyleReset(): boolean {
+  if (process.env.TMUX || isZellij()) return false
+  const program = process.env.TERM_PROGRAM
+  const term = process.env.TERM
+  if (program === 'WezTerm' || program === 'ghostty') return true
+  if (term === 'xterm-kitty' || term === 'xterm-ghostty' || process.env.KITTY_WINDOW_ID) return true
+  // Some embedded hosts advertise the xterm.js engine version as vscode's
+  // version. Native VS Code's 1.x version does not identify the engine.
+  const version = coerce(process.env.TERM_PROGRAM_VERSION)
+  return program === 'vscode' && version !== null && version.major >= 6
+}
+
+/**
  * Checks if the terminal supports DEC mode 2026 (synchronized output).
  * When supported, BSU/ESU sequences prevent visible flicker during redraws.
  * @returns true when the terminal supports DEC 2026.

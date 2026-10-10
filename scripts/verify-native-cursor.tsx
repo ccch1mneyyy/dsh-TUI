@@ -11,8 +11,10 @@ import type { PromptController } from '../src/components/PromptInput.js'
 
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'en'
+process.env.TERM_PROGRAM = 'WezTerm'
 delete process.env.DSH_TUI_ACCESSIBILITY
 delete process.env.TMUX
+delete process.env.ZELLIJ
 
 const [
   { default: assert }, React, { Terminal: XTerm }, { PassThrough, Writable },
@@ -45,7 +47,7 @@ function makeHarness(cols: number, rows: number) {
   const dir = mkdtempSync(join(tmpdir(), 'verify-native-cursor-'))
   const cleanupPath = join(dir, 'cleanup.ansi')
   const cleanupFd = openSync(cleanupPath, 'w+')
-  const term = new XTerm({ cols, rows, scrollback: 100, allowProposedApi: true })
+  const term = new XTerm({ cols, rows, scrollback: 100, allowProposedApi: true, cursorStyle: 'underline', cursorBlink: false })
   const frames: string[] = []
   let visible = true
   for (const [final, next] of [['h', true], ['l', false]] as const) {
@@ -79,6 +81,11 @@ function makeHarness(cols: number, rows: number) {
   const stderr = new Writable({ write(_chunk, _encoding, done) { done() } }) as NodeJS.WriteStream
   const flush = () => new Promise<void>(resolve => { stdout.write('', () => resolve()) })
   const cursor = () => ({ x: term.buffer.active.cursorX, y: term.buffer.active.cursorY })
+  const cursorStyle = () => {
+    // xterm.js keeps application overrides separate from configured options.
+    const modes = (term as unknown as { _core: { coreService: { decPrivateModes: { cursorStyle?: string; cursorBlink?: boolean } } } })._core.coreService.decPrivateModes
+    return { shape: modes.cursorStyle ?? term.options.cursorStyle, blinking: modes.cursorBlink ?? term.options.cursorBlink }
+  }
   const find = (needle: string) => {
     const lines = viewportLines(term)
     const y = lines.findIndex(line => line.includes(needle))
@@ -91,7 +98,9 @@ function makeHarness(cols: number, rows: number) {
     const cleanup = readFileSync(cleanupPath, 'utf8')
     await writeParsed(term, cleanup)
     assert.equal(visible, true, 'shutdown restores cursor visibility')
-    assert.ok(cleanup.includes(DEFAULT_STYLE), 'shutdown restores the terminal cursor style')
+    const styled = frames.some(frame => /\x1b\[\d* q/u.test(frame))
+    assert.equal(cleanup.includes(DEFAULT_STYLE), styled, 'shutdown resets cursor style only after an owned override or handoff')
+    assert.deepEqual(cursorStyle(), { shape: 'underline', blinking: false }, 'shutdown preserves configured cursor shape and blink')
     assert.equal(term.buffer.active.type, 'normal', 'shutdown restores the main screen')
     assert.equal(stdin.isRaw, false, 'shutdown restores stdin')
     closeSync(cleanupFd)
@@ -101,7 +110,7 @@ function makeHarness(cols: number, rows: number) {
     stderr.destroy()
     rmSync(dir, { recursive: true, force: true })
   }
-  return { term, stdout, stdin, stderr, frames, flush, cursor, find, at, close, visible: () => visible }
+  return { term, stdout, stdin, stderr, frames, flush, cursor, cursorStyle, find, at, close, visible: () => visible }
 }
 
 function Fixture({
@@ -628,7 +637,25 @@ for (const fullscreen of [false, true]) {
 // A steady declaration (a structural focus marker: list row, picker tab) pins
 // the terminal's caret to a non-blinking style while it is parked; a text
 // input's declaration must never touch the terminal's own caret style.
-{
+for (const identity of [
+  { env: { TERM_PROGRAM: 'WezTerm' }, reset: true },
+  { env: { TERM_PROGRAM: 'ghostty' }, reset: true },
+  { env: { TERM: 'xterm-kitty' }, reset: true },
+  { env: { TERM_PROGRAM: 'vscode', TERM_PROGRAM_VERSION: '6.0.0' }, reset: true },
+  { env: { TERM: 'xterm-256color' }, reset: false },
+  { env: { TERM_PROGRAM: 'vscode', TERM_PROGRAM_VERSION: '5.5.0' }, reset: false },
+  { env: { TERM_PROGRAM: 'WezTerm', TMUX: 'fixture' }, reset: false },
+  { env: { TERM_PROGRAM: 'WezTerm', ZELLIJ: 'fixture' }, reset: false },
+]) {
+  const environment: Record<string, string | undefined> = {
+    TERM_PROGRAM: undefined, TERM_PROGRAM_VERSION: undefined, TERM: undefined,
+    KITTY_WINDOW_ID: undefined, TMUX: undefined, ZELLIJ: undefined, ...identity.env,
+  }
+  const previous = Object.fromEntries(Object.keys(environment).map(key => [key, process.env[key]]))
+  for (const [key, value] of Object.entries(environment)) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
   const SteadyFixture = ({ target }: { target: 'row' | 'input' | 'none' }): ReactNode => {
     const native = useNativeCursor()
     const rowRef = useDeclaredCursor({ line: 0, column: 0, active: target === 'row', visible: native, steady: true })
@@ -654,15 +681,51 @@ for (const fullscreen of [false, true]) {
   try {
     ink.onRender()
     await h.flush()
-    assert.ok(h.frames.join('').includes(STEADY_STYLE), 'a steady declaration pins the non-blinking caret')
+    assert.equal(h.frames.join('').includes(STEADY_STYLE), identity.reset, 'a steady style requires a safe way to restore user settings')
+    assert.deepEqual(h.cursorStyle(), { shape: identity.reset ? 'bar' : 'underline', blinking: false })
     assert.equal(h.visible(), true)
     assert.equal(h.cursor().y, h.find('row')?.y)
-    assert.ok((await paint('input')).includes(DEFAULT_STYLE), 'a text input hands the terminal its caret style back')
+    assert.equal((await paint('input')).includes(DEFAULT_STYLE), identity.reset, 'only an owned steady style is reset for the input')
+    assert.deepEqual(h.cursorStyle(), { shape: 'underline', blinking: false }, 'the input recovers configured shape and blink')
     assert.equal(h.visible(), true)
-    assert.ok((await paint('row')).includes(STEADY_STYLE), 'returning to a structural marker pins it again')
+    assert.equal((await paint('row')).includes(STEADY_STYLE), identity.reset, 'returning to a structural marker only pins a restorable style')
     assert.equal((await paint('row')), '', 'a parked steady caret stays a zero-write frame')
-    assert.ok((await paint('none')).includes(DEFAULT_STYLE), 'clearing the park restores the terminal caret style')
+    assert.equal((await paint('none')).includes(DEFAULT_STYLE), identity.reset, 'clearing the park only resets an owned style')
     assert.equal((await paint('none')), '', 'a cleared park stays a zero-write frame')
+  } finally {
+    await h.close(app)
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
+
+// An external editor owns the tty between enterAlternateScreen and
+// exitAlternateScreen and may drive DECSCUSR itself, so the return must
+// re-assert the terminal's own caret style before repainting (a text input's
+// non-steady declaration writes nothing on its own).
+for (const fullscreen of [false, true]) {
+  const h = makeHarness(24, 8)
+  const tree = <Fixture />
+  const app = await render(fullscreen ? <AlternateScreen>{tree}</AlternateScreen> : tree, {
+    stdout: h.stdout, stdin: h.stdin, stderr: h.stderr,
+    exitOnCtrlC: false, patchConsole: false, terminalImages: false,
+  })
+  const ink = instances.get(h.stdout)!
+  try {
+    ink.onRender()
+    await h.flush()
+    ink.enterAlternateScreen()
+    await h.flush()
+    assert.ok(h.frames.join('').includes(DEFAULT_STYLE), 'the handoff hands the terminal its caret style back')
+    await writeParsed(h.term, STEADY_STYLE)
+    assert.deepEqual(h.cursorStyle(), { shape: 'bar', blinking: false }, 'the child changes the cursor style')
+    const before = h.frames.length
+    ink.exitAlternateScreen()
+    await h.flush()
+    assert.ok(h.frames.slice(before).join('').includes(DEFAULT_STYLE), 'the return from the child re-asserts the terminal caret style')
+    assert.deepEqual(h.cursorStyle(), { shape: 'underline', blinking: false }, 'returning from the child recovers configured shape and blink')
   } finally {
     await h.close(app)
   }

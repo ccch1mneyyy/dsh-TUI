@@ -362,7 +362,7 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
 
 async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean, columns: number): Promise<void> {
   const label = `${backendId} ${fullscreen ? 'fullscreen' : 'inline'} ${columns} columns`
-  const { term, stdout, stdin, stderr } = terminalHarness(columns)
+  const { term, stdout, stdin, stderr, cursorShown } = terminalHarness(columns)
   const events: AgentEvent[] = Array.from({ length: 20 }, (_, seq) => ({
     type: 'user.message', seq, anchor: `history-${seq}`, id: `message-${seq}`, time: Date.now(),
     source: 'user', text: `Backend history ${seq}`, blocks: [{ type: 'text', text: `Backend history ${seq}` }],
@@ -403,7 +403,7 @@ async function backendSurface(backendId: 'claude' | 'codex', fullscreen: boolean
     stdin.write('/model')
     assert.ok(await settled(() => text().includes('/model')), `${label}: composer`)
     stdin.write('\r')
-    assert.ok(await settled(() => text().includes('Model 01') && focused('Model 00') && caretOnPointer(term, 'Model 00') && panelUsesDefaultBackground(term)), `${label}: flat catalog on the terminal background focuses the current model after loading`)
+    assert.ok(await settled(() => text().includes('Model 01') && focused('Model 00') && cursorShown() && caretOnPointer(term, 'Model 00') && panelUsesDefaultBackground(term)), `${label}: flat catalog on the terminal background focuses the current model after loading`)
     assert.equal(text().includes('最近使用'), false, `${label}: no recents tab`)
     assert.equal(text().includes('Shift+Tab 提供商'), false, `${label}: no provider navigation hint`)
     const lines = viewportLines(term)
@@ -506,7 +506,7 @@ async function shortTerminal(backendId: 'dsh' | 'claude' | 'codex', fullscreen: 
   })
   const picks: string[] = []
   channel.switchModel = async (_provider, model) => { picks.push(model); return true }
-  const { term, stdout, stdin, stderr } = terminalHarness(columns)
+  const { term, stdout, stdin, stderr, cursorShown } = terminalHarness(columns)
   const screen = <Chat channel={channel as never} questionStore={new QuestionStore()} fullscreen={fullscreen} onExit={() => {}} />
   const app = await render(fullscreen ? <AlternateScreen>{screen}</AlternateScreen> : screen, { stdin, stdout, stderr, exitOnCtrlC: false, patchConsole: false })
   const text = () => viewportLines(term).join('\n')
@@ -534,6 +534,30 @@ async function shortTerminal(backendId: 'dsh' | 'claude' | 'codex', fullscreen: 
             && !text().includes('Short description')
             && (rows > 10 ? text().includes('推理强度') : !text().includes('推理强度'))
         })
+        await check('the short overlay keeps the caret on the focused model', () => cursorShown() && caretOnPointer(term, models[index]!.name))
+        if (backendId === 'dsh' && rows === 11 && index === 0) {
+          stdin.write('\t')
+          await check('a clipped provider tab hands its caret to the visible model', () =>
+            !text().includes('alpha / Short model') && cursorShown() && caretOnPointer(term, models[0]!.name))
+          stdout.rows = 12
+          term.resize(columns, 12)
+          stdout.emit('resize')
+          await check('a newly visible provider strip reclaims its caret after resize', () => {
+            const lines = viewportLines(term)
+            const row = lines.findIndex(line => line.includes(' Alpha '))
+            const col = row < 0 ? -1 : stringWidth(lines[row]!.slice(0, lines[row]!.indexOf('Alpha'))) - 1
+            const caret = caretPosition(term)
+            return row >= 0 && cursorShown() && caret.y === row && caret.x === col
+          })
+          stdout.rows = rows
+          term.resize(columns, rows)
+          stdout.emit('resize')
+          await check('clipping the provider strip again returns the caret to the model', () =>
+            !text().includes('Alpha') && cursorShown() && caretOnPointer(term, models[0]!.name))
+          stdin.write('\x1b[Z')
+          await check('reverse provider navigation also keeps the visible model caret', () =>
+            text().includes('alpha / Short model') && cursorShown() && caretOnPointer(term, models[0]!.name))
+        }
         if (index < models.length - 1 || rows !== 10) stdin.write('\x1b[B')
       }
     }

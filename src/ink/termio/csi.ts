@@ -148,11 +148,12 @@ export const CURSOR_STYLES: Array<{ style: CursorStyle; blinking: boolean }> = [
 /**
  * Set cursor style (DECSCUSR, `CSI Ps SP q`).
  *
- * Ps couples shape and blink: 0 = terminal default, 1/3/5 = blinking
+ * Ps couples shape and blink: 0 = blinking block in XTerm (some terminals
+ * restore user settings instead), 1/3/5 = blinking
  * block/underline/bar, 2/4/6 = the same shapes steady (see `CURSOR_STYLES`).
  * A steady style is the only portable way to stop the terminal's own caret
  * from blinking, so a panel that parks a structural focus marker uses it and
- * restores 0 when focus returns to a text input.
+ * restores 0 only on terminals known to interpret it as their user settings.
  *
  * @param ps - DECSCUSR parameter.
  * @returns the CSI sequence.

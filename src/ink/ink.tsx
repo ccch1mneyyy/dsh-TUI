@@ -43,7 +43,7 @@ import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './transcript-highlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, getSelectionCursor, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
-import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
+import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsCursorStyleReset, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, cursorStyle, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
@@ -72,7 +72,7 @@ const TERMINAL_REPLY_QUARANTINE_MS = 120;
 // DECSCUSR carries shape and blink together, so the only way to keep a parked
 // structural focus marker (list row, picker tab) from blinking at rest is a
 // steady style; 6 (steady bar) keeps the glyph under the caret readable.
-// Restoring 0 hands the terminal back its own configured caret.
+// Only terminals known to restore their configured caret with 0 opt in.
 const DEFAULT_CURSOR_STYLE = cursorStyle(0);
 const STEADY_CURSOR_PATCH = Object.freeze({
   type: 'stdout' as const,
@@ -262,11 +262,12 @@ export default class Ink {
   // null after a screen switch or external handoff: reassert visibility on
   // the next frame. Cursor shape, color and blink remain terminal-owned —
   // except for a declaration that asks for a steady marker (`steady`), which
-  // pins DECSCUSR 6 until the caret moves back to a text input or clears.
+  // pins DECSCUSR 6 where the configured style can safely be restored.
   private nativeCursorVisible: boolean | null = null;
   // Whether the terminal is currently pinned to the steady style: null =
   // unknown (reassert on the next frame), false = terminal default.
   private nativeCursorSteady: boolean | null = null;
+  private readonly cursorStyleReset = supportsCursorStyleReset() ? DEFAULT_CURSOR_STYLE : '';
   private handleStdinError(error: NodeJS.ErrnoException): void {
     if (this.isUnmounted && error.code === 'EIO') {
       return;
@@ -425,7 +426,7 @@ export default class Ink {
     // The shell / an external process owned the tty while we were stopped and
     // may have cleared the DECSCUSR style we pinned; give the terminal its own
     // caret back and let the next frame re-assert a parked steady marker.
-    if (this.nativeCursorSteady === true) this.options.stdout.write(DEFAULT_CURSOR_STYLE);
+    if (this.nativeCursorSteady === true) this.options.stdout.write(this.cursorStyleReset);
     this.nativeCursorSteady = null;
 
     // Alt screen: after SIGCONT, content is stale (shell may have written
@@ -591,7 +592,7 @@ export default class Ink {
     // reset attributes
     '\x1b[?25h' +
     // show cursor
-    DEFAULT_CURSOR_STYLE +
+    this.cursorStyleReset +
     // hand back the terminal's own caret style (DECSCUSR 0)
     '\x1b[2J' +
     // clear screen
@@ -615,6 +616,12 @@ export default class Ink {
    * returns, fullscreen scroll is dead.
    */
   exitAlternateScreen(): void {
+    // The child owned the tty and may have driven DECSCUSR itself, so the
+    // style we handed it is no longer guaranteed: re-assert the terminal's
+    // default before the repaint. A steady marker that is still parked gets
+    // re-pinned by the next frame's park block.
+    if (this.cursorStyleReset !== '') this.options.stdout.write(this.cursorStyleReset);
+    this.nativeCursorSteady = false;
     if (this.altScreenActive) {
       // Fullscreen: re-enter alt FIRST — terminal editors (vim, nano, less)
       // write smcup/rmcup, so the editor's rmcup on exit dropped us to the
@@ -1163,7 +1170,7 @@ export default class Ink {
     // terminal caret to a non-blinking style while it is parked; text-input
     // declarations leave the terminal's own blink alone. null = the physical
     // style is unknown, so only a steady target needs (re)asserting.
-    const steadyCaret = this.options.stdout.isTTY && target !== null && selectionTarget === null && decl !== null && decl.steady === true;
+    const steadyCaret = this.cursorStyleReset !== '' && this.options.stdout.isTTY && target !== null && selectionTarget === null && decl !== null && decl.steady === true;
     const steadyChanged = this.nativeCursorSteady === null ? steadyCaret : steadyCaret !== this.nativeCursorSteady;
     if (hasDiff || targetMoved || steadyChanged || target === null && parked !== null) {
       // Main-screen preamble: log-update's relative moves assume the
@@ -2855,7 +2862,7 @@ export default class Ink {
       writeSync(stdoutFd, SHOW_CURSOR);
       // Hand the terminal's own caret style back (DECSCUSR 0) — a steady
       // structural marker must not outlive the app.
-      writeSync(stdoutFd, DEFAULT_CURSOR_STYLE);
+      if (this.nativeCursorSteady !== null && this.cursorStyleReset !== '') writeSync(stdoutFd, this.cursorStyleReset);
       // Clear iTerm2 progress bar
       writeSync(stdoutFd, CLEAR_ITERM2_PROGRESS);
       // Clear tab status (OSC 21337) so a stale dot doesn't linger
