@@ -214,6 +214,13 @@ check('品牌档不落盘：未显式选择时后端品牌即时生效', await m
   mkdirSync(join(sandboxHome, '.dsh-tui'), { recursive: true })
   writeFileSync(join(sandboxHome, '.dsh-tui', 'theme.json'), JSON.stringify({ theme: 'light' }))
   check('启动持久化偏好不锁品牌但定深浅：theme.json=light + claude 品牌 → claude-paper', await mountProvider({}) === 'claude-paper')
+  // 落位判据是**解析后色板**的明暗，不是主题名的字面量：浅底内置名不止 `light`
+  // 一个（`pink-day` 也是），只认 `'light'` 会让粉白天被换成深色档。数据层的
+  // 同名钉子在 scripts/verify-themes.mjs（全内置名逐个配对）。
+  writeFileSync(join(sandboxHome, '.dsh-tui', 'theme.json'), JSON.stringify({ theme: 'pink-day' }))
+  check('浅底内置名不止 light：theme.json=pink-day + claude 品牌 → claude-paper', await mountProvider({}) === 'claude-paper')
+  writeFileSync(join(sandboxHome, '.dsh-tui', 'theme.json'), JSON.stringify({ theme: 'pink-night' }))
+  check('深底内置名照旧：theme.json=pink-night + claude 品牌 → claude-dark', await mountProvider({}) === 'claude-dark')
   writeFileSync(join(sandboxHome, '.dsh-tui', 'theme.json'), JSON.stringify({ theme: 'dark' }))
   setActiveBrand('deepseek')
   check('deepseek 品牌照常尊重持久化偏好（theme.json=dark → dark）', await mountProvider({}) === 'dark')

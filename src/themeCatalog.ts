@@ -56,10 +56,30 @@ function entry(
   })
 }
 
+/**
+ * The role each built-in plays as a `base`. The mist and sakura rows play one
+ * of the three classic roles (their own names are not bases); the brand pairs
+ * play the dark/light role of their brand family — the brand adaptation of
+ * `dark`/`light` (their own names are bases too, see THEME_BASE_NAMES).
+ * Total over THEME_NAMES, so a new built-in must decide a role to compile.
+ */
+const BUILT_IN_BASE: Readonly<Record<(typeof THEME_NAMES)[number], ThemeBase>> = {
+  dark: 'dark',
+  'dark-ansi': 'dark-ansi',
+  light: 'light',
+  'pink-night': 'dark',
+  'pink-ansi': 'dark-ansi',
+  'pink-day': 'light',
+  'claude-dark': 'dark',
+  'claude-paper': 'light',
+  'codex-lavender': 'dark',
+  'codex-paper': 'light',
+}
+
 function builtInEntries(): ThemeCatalogEntry[] {
   return [
     entry(AUTO_THEME_NAME, AUTO_THEME_NAME, 'auto', getTheme(AUTO_THEME_NAME)),
-    ...THEME_NAMES.map(name => entry(name, name, 'builtin', getTheme(name), name)),
+    ...THEME_NAMES.map(name => entry(name, name, 'builtin', getTheme(name), BUILT_IN_BASE[name])),
   ]
 }
 
@@ -161,7 +181,7 @@ export function resolveThemeEntry(name: string, host?: TuiThemeHost): ThemeCatal
   if (typeof name !== 'string') return undefined
   if (name === AUTO_THEME_NAME) return entry(name, name, 'auto', getTheme(AUTO_THEME_NAME))
   const builtIn = THEME_NAMES.find(candidate => candidate === name)
-  if (builtIn !== undefined) return entry(builtIn, builtIn, 'builtin', getTheme(builtIn), builtIn)
+  if (builtIn !== undefined) return entry(builtIn, builtIn, 'builtin', getTheme(builtIn), BUILT_IN_BASE[builtIn])
 
   const spec = findStaticSpec(name)
   if (spec !== undefined) return entry(spec.name, spec.displayName, 'static', buildTheme(spec), spec.base, spec.file)

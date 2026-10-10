@@ -303,7 +303,7 @@ for the complete field reference.
 | `DSH_HOME` | Harness home (profiles, sessions, credentials, attachments); falls back to the upstream default `~/.dsh` |
 | `DSH_TUI_PERSONA` | Override the Agent persona injected by the composition |
 | `DSH_TUI_PRESET` | Override the default Agent preset for new sessions |
-| `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`), static theme, or registered plugin theme ahead of persisted selection |
+| `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`/`pink-day`/`pink-night`/`pink-ansi`), static theme, or registered plugin theme ahead of persisted selection |
 | `DSH_TUI_DISABLE_MOUSE` | Temporarily disable mouse handling in fullscreen mode |
 | `DSH_TUI_DISABLE_TERMINAL_IMAGES` | Set to `1` to force Kitty/Sixel probing, preview reads/decoding, and terminal image rendering off, overriding config and /settings; text metadata remains visible |
 | `DSH_TUI_IMAGE_PROTOCOL` | `auto` (default), `kitty`, `sixel`, or `none`; override protocol selection without bypassing the preview preference, disable switch, non-fullscreen, accessibility or multiplexer guards |

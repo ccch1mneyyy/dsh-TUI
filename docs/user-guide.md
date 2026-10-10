@@ -627,7 +627,7 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
 | 模型 | `/model` | 选择器；**切换 = fork 会话续聊**（历史保留、仅换路由）；持久化 `~/.dsh-tui/model.json`，重启与 `/new` 沿用——它**优先于** cordis.yml/profile 里写的 `provider`/`model`（后者只是首次启动的部署默认值）。从没选过的话，用配置值，再没有才用 Harness 默认（当前为 `deepseek-flash`） |
 | 推理强度 | `/effort` | 滑杆（←/→ 实时）或 `/effort <id>`；`/effort status` 看当前；持久化 `~/.dsh-tui/effort.json` 并被下一次启动沿用（优先于 cordis.yml 的 `effort`），新会话默认档在 /settings → 默认推理强度 |
 | Agent 预设 | `/preset` | `standard` / `ptc`（旧 0.1.1 名 `code`）/ `minimal` / `cordis` / **梁神模式 `liangshen`**；**已开始会话不可切换** |
-| 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
+| 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi` / `pink-day` / `pink-night` / `pink-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
 | 自定义主题 | 手动 | `~/.dsh-tui/themes/<名>.json`，`{base, colors}` 格式，选中即热切换；命名为 `auto` 会被内置遮蔽 |
 | 语言 | `/lang` | `en` / `zh` 热切换；优先级 `DSH_TUI_LANG` > profile 配置（旧版 settings.yaml 用户层 > cordis.yml）> 持久化 |
 | 状态行动画 | `/activity` | 选择器或 `/activity frames <名>`；默认 `moon8`，`random` 随机 |

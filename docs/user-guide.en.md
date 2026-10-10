@@ -678,7 +678,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 | Model | `/model` | selector; **switching = fork the session** (history kept, routing only); persisted to `~/.dsh-tui/model.json` and reused on restart and `/new` — it OUTRANKS a `provider`/`model` pair written in cordis.yml/profile (that pair is only the first-run deployment default). Never chosen → the configured pair, else the harness default (currently `deepseek-flash`) |
 | Reasoning effort | `/effort` | slider (`←/→` live) or `/effort <id>`; `/effort status` for current; new-session default in /settings → default reasoning effort |
 | Agent preset | `/preset` | `standard` / `ptc` (old 0.1.1 name `code`) / `minimal` / `cordis` / **Liangshen mode `liangshen`**; **can't switch an already-started session** |
-| Theme | `/theme` | `auto` (OSC 11 follows terminal background) / `light` / `dark` / `dark-ansi`; `/theme <名>` direct; `/theme status` for the result |
+| Theme | `/theme` | `auto` (OSC 11 follows terminal background) / `light` / `dark` / `dark-ansi` / `pink-day` / `pink-night` / `pink-ansi`; `/theme <名>` direct; `/theme status` for the result |
 | Custom theme | manual | `~/.dsh-tui/themes/<名>.json`, `{base, colors}` format, hot-swap on select; naming it `auto` gets shadowed by the built-in |
 | Language | `/lang` | `en` / `zh` hot switch; priority `DSH_TUI_LANG` > profile config (legacy: settings.yaml user layer > cordis.yml) > persisted |
 | Status animation | `/activity` | selector or `/activity frames <名>`; default `moon8`, `random` randomizes |
