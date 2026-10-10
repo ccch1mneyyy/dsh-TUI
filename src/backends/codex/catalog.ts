@@ -78,6 +78,7 @@ export function createCodexCatalog(deps: CodexCatalogDeps): SessionCatalog {
       const cwd = scope.allProjects === true ? undefined : scope.cwd ?? deps.cwd()
       return borrow(cwd, async hub => {
         const rows = new Map<string, SessionSummary>()
+        const initial = new Map<string, SessionSummary>()
         let cursor: string | undefined
         let scanned = 0
         const seen = new Set<string>()
@@ -92,9 +93,11 @@ export function createCodexCatalog(deps: CodexCatalogDeps): SessionCatalog {
           try {
             first = rec(await hub.call(CLIENT.threadList, { ...params, limit: FIRST_PAGE, useStateDbOnly: true }, { timeoutMs: 1000 }))
           } catch { /* Older servers or unavailable DBs use the regular listing. */ }
-          const initial = arr(first?.data).map(raw => codexSessionSummary(raw, used))
-            .filter((row): row is SessionSummary => row !== undefined && row.kind.kind !== 'subagent')
-          if (initial.length > 0) onPartial(initial.sort((a, b) => b.updatedAt - a.updatedAt))
+          for (const raw of arr(first?.data)) {
+            const row = codexSessionSummary(raw, used)
+            if (row !== undefined && row.kind.kind !== 'subagent') initial.set(row.id, row)
+          }
+          if (initial.size > 0) onPartial([...initial.values()].sort((a, b) => b.updatedAt - a.updatedAt))
         }
         // The row budget also bounds the number of empty/malformed pages.
         for (let page = 0; page < Math.ceil(LIST_LIMIT / LIST_PAGE) && scanned < LIST_LIMIT; page += 1) {
@@ -105,7 +108,9 @@ export function createCodexCatalog(deps: CodexCatalogDeps): SessionCatalog {
             const row = codexSessionSummary(raw, used)
             if (row !== undefined && row.kind.kind !== 'subagent') rows.set(row.id, row)
           }
-          onPartial?.([...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt))
+          // Progress is cumulative; repaired rows supersede the DB metadata,
+          // and only the resolved result may drop unconfirmed initial IDs.
+          onPartial?.([...new Map([...initial, ...rows]).values()].sort((a, b) => b.updatedAt - a.updatedAt))
           cursor = text(answer?.nextCursor)
           if (cursor === undefined || seen.has(cursor)) break
           seen.add(cursor)

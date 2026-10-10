@@ -132,7 +132,7 @@ const info = (over: Record<string, unknown>) => ({ sessionId: 's', summary: 'a s
   check('a short first page stays in the current directory while the complete result includes siblings', partials[0]?.length === 2 && partials[0].every(row => row.cwd === workdir) && small.some(row => row.id === 'sibling') && calls.length === before + 2 && smallOptions.limit === 32 && smallOptions.dir === workdir && smallOptions.includeWorktrees === false && completeOptions.limit === undefined && completeOptions.includeWorktrees === undefined)
   const beforeAll = calls.length
   const smallAll = await catalog.list({ allProjects: true }, () => {})
-  check('a short all-projects page is already complete without a second SDK scan', smallAll.length === 4 && calls.length === beforeAll + 1)
+  check('a short all-projects page is followed by an unlimited SDK read', smallAll.length === 4 && calls.length === beforeAll + 2 && (calls.at(-1)!.args[0] as Record<string, unknown>).limit === undefined)
 
   const sibling = info({ sessionId: 'sibling', cwd: '/sibling-worktree', summary: 'worktree' })
   const emptyCatalog = createClaudeCatalog({
@@ -162,6 +162,36 @@ const info = (over: Record<string, unknown>) => ({ sessionId: 's', summary: 'a s
     check('a failed all-projects refresh retains the complete scoped worktree listing', batches[0]?.length === 2 && batches[0].every(row => row.cwd === workdir) && fallback.some(row => row.id === 'sibling') && fallback.length === 3)
     check('the failed all-projects fallback never becomes a complete snapshot', fallbackChannel.cachedSessions() === undefined)
   } finally { fallbackChannel.releaseContributions() }
+
+  const { readListingSnapshot } = await import('../src/sessions/listSnapshot.js')
+  const canonicalKey = JSON.stringify(['claude', home, 'limited-global'])
+  const early = info({ sessionId: 'early-global' })
+  const omitted = info({ sessionId: 'omitted-by-limited-read', cwd: '/other-project' })
+  let finishGlobal!: (rows: ReturnType<typeof info>[]) => void
+  let fullStarted = false
+  const fullGlobal = new Promise<ReturnType<typeof info>[]>(resolve => { finishGlobal = resolve })
+  const canonicalCatalog = createClaudeCatalog({
+    cwd: () => workdir,
+    snapshotKey: () => canonicalKey,
+    loadSdk: async () => ({ ...store, listSessions: (options: Record<string, unknown>) => {
+      if (options.dir !== undefined) return Promise.resolve([])
+      if (options.limit === 32) return Promise.resolve([early])
+      fullStarted = true
+      return fullGlobal
+    } }) as never,
+  })
+  const canonicalChannel = createChannel({ on: () => () => {}, get: () => undefined, logger: { warn() {}, info() {}, debug() {} } } as never, { ...fallbackSession, ref: { backendId: 'claude', sessionId: 'canonical-global' } }, { cwd: workdir, model: 'Claude Agent', provider: 'claude', sessionCatalog: canonicalCatalog })
+  try {
+    const batches: (readonly SessionSummary[])[] = []
+    let completed = false
+    const listing = canonicalChannel.listSessions(undefined, rows => { batches.push(rows) }).then(rows => { completed = true; return rows })
+    await settled(() => fullStarted || completed)
+    check('a short global page is progress while the unlimited SDK read is pending', fullStarted && !completed && batches.at(-1)?.[0]?.id === 'early-global')
+    check('a short limited global page cannot become a memory or disk snapshot', canonicalChannel.cachedSessions() === undefined && readListingSnapshot(canonicalKey) === undefined)
+    finishGlobal([early, omitted])
+    const complete = await listing
+    check('only the unlimited result populates complete snapshots, including omitted global sessions', complete.length === 2 && complete.some(row => row.id === omitted.sessionId) && canonicalChannel.cachedSessions()?.length === 2 && readListingSnapshot(canonicalKey)?.some(row => row.id === omitted.sessionId))
+  } finally { canonicalChannel.releaseContributions() }
 
   let finish!: (rows: ReturnType<typeof info>[]) => void
   let started!: () => void

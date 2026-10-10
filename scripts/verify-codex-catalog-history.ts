@@ -69,17 +69,23 @@ const row = (id: string, extra: Record<string, unknown> = {}) => ({ id, cwd: SET
   const hub = createCodexHub(SETTINGS, { transportFactory: fake.transportFactory })
   await hub.ready
   const batches: string[][] = []
+  const titles: (string | undefined)[] = []
   let done = false
   const catalog = createCodexCatalog({ acquire: async () => ({ hub, release: () => {} }), cwd: () => SETTINGS.cwd })
-  const listing = catalog.list({}, rows => { batches.push(rows.map(row => row.id)) }).then(rows => { done = true; return rows })
+  const listing = catalog.list({}, rows => {
+    batches.push(rows.map(row => row.id))
+    titles.push(rows.find(row => row.id === 'first')?.title.text)
+  }).then(rows => { done = true; return rows })
   const first = await fake.waitForRequest('thread/list')
   const regular = await fake.waitForRequest('thread/list', { after: fake.requests.indexOf(first) + 1 })
   check('catalog cold load: bounded DB rows arrive while the rollout repair scan is pending', !done && first.params.useStateDbOnly === true && first.params.limit === 32 && JSON.stringify(batches) === JSON.stringify([['first', 'stale']]))
   fake.reply(regular.id, { data: [row('first', { name: 'Repaired title' })], nextCursor: 'slow-page' })
   const request = await fake.waitForRequest('thread/list', { after: fake.requests.indexOf(regular) + 1 })
-  check('catalog cold load: regular pages replace stale DB rows while the next page is pending', !done && JSON.stringify(batches) === JSON.stringify([['first', 'stale'], ['first']]) && regular.params.useStateDbOnly === undefined && regular.params.cursor === undefined)
+  check('catalog cold load: progress keeps all announced DB rows while the next page is pending', !done && JSON.stringify(batches) === JSON.stringify([['first', 'stale'], ['first', 'stale']]) && regular.params.useStateDbOnly === undefined && regular.params.cursor === undefined)
+  check('catalog cold load: repair updates metadata without withdrawing other announced rows', titles[0] === 'Old title' && titles[1] === 'Repaired title')
   fake.reply(request.id, { data: [row('second')], nextCursor: null })
   const complete = await listing
+  check('catalog cold load: every progress batch retains initial IDs through the last page', batches.every(batch => batch.includes('first') && batch.includes('stale')) && batches.at(-1)?.includes('second') === true)
   check('catalog cold load: completion retains both repaired pages and drops DB-only rows', complete.map(row => row.id).sort().join(',') === 'first,second' && complete.find(row => row.id === 'first')?.title.text === 'Repaired title')
   await hub.close()
 }
