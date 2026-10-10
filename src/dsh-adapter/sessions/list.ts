@@ -31,6 +31,7 @@ import { findSessionLogFile, resolveLocatedPath } from '../compat/sessionLog.js'
 import { indexFileStamp, readIndex, writeIndex, type DerivedEntry, type SessionIndex } from './store.js'
 import type { SessionSummary } from './types.js'
 import { readLastUsed } from '../../sessionHistory.js'
+import { normalizeWorkspaceCwd } from '../../sessions/view.js'
 
 /** A late overlapping listing must not write an older index over a newer one. */
 const listingVersions = new WeakMap<object | symbol, number>()
@@ -151,6 +152,8 @@ function locate(source: SessionSource, raw: unknown, sessionId: string): string 
  *
  * @param source - The persistence service.
  * @param signal - Optional cancellation for the backend's own listing work.
+ * @param priorityCwd - Resolve this workspace before others for partial results;
+ *   the final listing still includes every workspace, sorted by activity.
  * @returns One summary per stored session, most recently active first. No
  *   filtering of any kind is applied — sub-agent runs and sessions with no
  *   conversation are present and labelled as such.
@@ -160,6 +163,7 @@ export async function listSummaries(
   signal?: AbortSignal,
   onEnriched?: (summary: SessionSummary) => void,
   onPartial?: (summaries: readonly SessionSummary[]) => void,
+  priorityCwd?: string,
 ): Promise<readonly SessionSummary[]> {
   const identity = source.identity ?? source
   const version = (listingVersions.get(identity) ?? 0) + 1
@@ -184,10 +188,12 @@ export async function listSummaries(
   const index = readIndex()
   const next: SessionIndex = new Map()
   const lastUsed = readLastUsed()
-  // Recent conversations lead cold partial batches; backend directory order
-  // must not keep the useful rows behind thousands of old delegated runs.
+  // Resolve the current workspace first, even when other projects are newer.
+  // Activity determines processing order within each group, and final order.
+  const cwd = priorityCwd ? normalizeWorkspaceCwd(priorityCwd) : undefined
+  const workspace = new Set(cwd === undefined ? [] : listed.filter(entry => normalizeWorkspaceCwd(entry.header.cwd ?? '') === cwd))
   const activity = (entry: Listed): number => Math.max(index.get(entry.header.id)?.derived?.modifiedAt ?? 0, lastUsed[entry.header.id] ?? 0, entry.header.createdAt ?? 0)
-  listed.sort((a, b) => activity(b) - activity(a))
+  listed.sort((a, b) => Number(workspace.has(b)) - Number(workspace.has(a)) || activity(b) - activity(a))
   let changed = false
   const records: Array<{
     header: RawSessionHeader
@@ -355,7 +361,8 @@ export async function listSummaries(
     recordsById.set(header.id, record)
     // Yield even for a cold index: scanning many individually bounded logs
     // must not freeze the renderer. Partial rows are never saved as a snapshot.
-    if (records.length % 32 === 0) {
+    // A small workspace must paint before we touch another project's logs.
+    if (records.length % 32 === 0 || (records.length === workspace.size && records.length < listed.length)) {
       if (listingVersions.get(identity) === version) onPartial?.(records.map(summaryOf).sort(compareSummaries))
       await new Promise<void>(resolve => setImmediate(resolve))
       signal?.throwIfAborted()

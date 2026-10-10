@@ -18,6 +18,7 @@ export interface CodexCatalogDeps {
 }
 const LIST_LIMIT = 500
 const LIST_PAGE = 200
+const FIRST_PAGE = 32
 const PREVIEW_LIMIT = 6
 
 /** Metadata only. Absence of preview text is not proof of an empty thread. */
@@ -77,22 +78,39 @@ export function createCodexCatalog(deps: CodexCatalogDeps): SessionCatalog {
       const cwd = scope.allProjects === true ? undefined : scope.cwd ?? deps.cwd()
       return borrow(cwd, async hub => {
         const rows = new Map<string, SessionSummary>()
+        const initial = new Map<string, SessionSummary>()
         let cursor: string | undefined
         let scanned = 0
         const seen = new Set<string>()
         // Read file-backed preferences once, rather than synchronously reading
         // and parsing them for every thread in every page.
         const used = deps.lastUsed?.()
+        const params = { sortKey: 'recency_at', sortDirection: 'desc', archived: false, modelProviders: [], ...(cwd === undefined ? {} : { cwd }) }
+        if (onPartial !== undefined) {
+          // The native state DB can paint rows before the default rollout scan
+          // repairs metadata. Its rows never enter the final listing or cache.
+          let first: Rec | undefined
+          try {
+            first = rec(await hub.call(CLIENT.threadList, { ...params, limit: FIRST_PAGE, useStateDbOnly: true }, { timeoutMs: 1000 }))
+          } catch { /* Older servers or unavailable DBs use the regular listing. */ }
+          for (const raw of arr(first?.data)) {
+            const row = codexSessionSummary(raw, used)
+            if (row !== undefined && row.kind.kind !== 'subagent') initial.set(row.id, row)
+          }
+          if (initial.size > 0) onPartial([...initial.values()].sort((a, b) => b.updatedAt - a.updatedAt))
+        }
         // The row budget also bounds the number of empty/malformed pages.
         for (let page = 0; page < Math.ceil(LIST_LIMIT / LIST_PAGE) && scanned < LIST_LIMIT; page += 1) {
-          const answer = rec(await hub.call(CLIENT.threadList, { limit: Math.min(LIST_PAGE, LIST_LIMIT - scanned), sortKey: 'recency_at', sortDirection: 'desc', archived: false, modelProviders: [], ...(cwd === undefined ? {} : { cwd }), ...(cursor === undefined ? {} : { cursor }) }))
+          const answer = rec(await hub.call(CLIENT.threadList, { ...params, limit: Math.min(LIST_PAGE, LIST_LIMIT - scanned), ...(cursor === undefined ? {} : { cursor }) }))
           const data = arr(answer?.data)
           scanned += data.length
           for (const raw of data.slice(0, LIST_LIMIT - rows.size)) {
             const row = codexSessionSummary(raw, used)
             if (row !== undefined && row.kind.kind !== 'subagent') rows.set(row.id, row)
           }
-          onPartial?.([...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt))
+          // Progress is cumulative; repaired rows supersede the DB metadata,
+          // and only the resolved result may drop unconfirmed initial IDs.
+          onPartial?.([...new Map([...initial, ...rows]).values()].sort((a, b) => b.updatedAt - a.updatedAt))
           cursor = text(answer?.nextCursor)
           if (cursor === undefined || seen.has(cursor)) break
           seen.add(cursor)

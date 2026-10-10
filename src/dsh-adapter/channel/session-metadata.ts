@@ -34,6 +34,8 @@ export function createSessionMetadataActions(ctx: Context, deps: {
   binding: Binding
   provider(): string
   model(): string
+  /** The browser's current workspace, prioritized during a cold listing. */
+  cwd?(): string
   emit(): void
   sessionTitle(): string
   setSessionTitle(title: string): void
@@ -79,7 +81,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
       onEnriched?.(enriched)
     }, rows => {
       if (current(capture) && generation === listingGeneration) onPartial?.(rows)
-    })
+    }, deps.cwd?.())
     if (!current(capture) || generation !== listingGeneration) return []
     remember(source, summaries)
     deps.setPersistedSessions(summaries)

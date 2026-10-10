@@ -9,6 +9,7 @@ import { createCodexTranscriptHistory } from '../src/backends/codex/session/hist
 import { createCodexHub, type HubSettings } from '../src/backends/codex/rpc/hub.js'
 import { createItemContext } from '../src/backends/codex/translate/items.js'
 import { createFakeAppServer, FakeRpcError, NO_REPLY } from './lib/codex-fake-app-server.js'
+import { manualClock } from './lib/codex-session-harness.js'
 
 let passed = 0
 const check = (label: string, ok: boolean): void => { assert.ok(ok, label); passed += 1; console.log('PASS ' + label) }
@@ -28,7 +29,9 @@ const row = (id: string, extra: Record<string, unknown> = {}) => ({ id, cwd: SET
 }
 {
   const fake = createFakeAppServer()
-  fake.on('thread/list', params => params.cursor === 'next' ? { data: [row('B', { updatedAt: 30 })], nextCursor: null } : { data: [row('A'), row('child', { parentThreadId: 'A' })], nextCursor: 'next' })
+  fake.on('thread/list', params => params.useStateDbOnly === true
+    ? { data: [row('A')], nextCursor: null }
+    : params.cursor === 'next' ? { data: [row('B', { updatedAt: 30 })], nextCursor: null } : { data: [row('A'), row('child', { parentThreadId: 'A' })], nextCursor: 'next' })
   fake.on('thread/read', params => { if (params.threadId === 'absent') throw new FakeRpcError(-32600, 'thread not found'); return { thread: row(String(params.threadId)) } })
   fake.on('thread/turns/list', () => ({ data: [turn('newer'), turn('older')], nextCursor: null }))
   fake.on('thread/name/set', () => ({}))
@@ -41,8 +44,8 @@ const row = (id: string, extra: Record<string, unknown> = {}) => ({ id, cwd: SET
   const batches: string[][] = []
   const rows = await catalog.list({}, rows => { batches.push(rows.map(row => row.id)) })
   check('catalog list: preferences are read once across all pages', preferenceReads === 1)
-  check('catalog list: the first page publishes before the full result', JSON.stringify(batches) === JSON.stringify([['A'], ['B', 'A']]))
-  check('catalog list: native paging/scoped cwd/all provider filter excludes children', rows.map(row => row.id).join(',') === 'B,A' && fake.requests.filter(request => request.method === 'thread/list').length === 2 && fake.requests.find(request => request.method === 'thread/list')?.params.cwd === SETTINGS.cwd && JSON.stringify(fake.requests.find(request => request.method === 'thread/list')?.params.modelProviders) === '[]')
+  check('catalog list: the state DB and regular pages publish before the full result', JSON.stringify(batches) === JSON.stringify([['A'], ['A'], ['B', 'A']]))
+  check('catalog list: native paging/scoped cwd/all provider filter excludes children', rows.map(row => row.id).join(',') === 'B,A' && fake.requests.filter(request => request.method === 'thread/list').length === 3 && fake.requests.find(request => request.method === 'thread/list')?.params.cwd === SETTINGS.cwd && JSON.stringify(fake.requests.find(request => request.method === 'thread/list')?.params.modelProviders) === '[]')
   await catalog.list({ allProjects: true })
   check('catalog list: all-projects omits cwd, archived threads stay excluded', fake.requests.filter(request => request.method === 'thread/list').at(-1)?.params.cwd === undefined && fake.requests.filter(request => request.method === 'thread/list').at(-1)?.params.archived === false)
   check('catalog info: uses thread/read metadata without full turns', (await catalog.info!('A'))?.id === 'A' && fake.requests.find(request => request.method === 'thread/read')?.params.includeTurns === false)
@@ -60,18 +63,53 @@ const row = (id: string, extra: Record<string, unknown> = {}) => ({ id, cwd: SET
 }
 {
   const fake = createFakeAppServer()
-  fake.on('thread/list', params => params.cursor === 'slow-page' ? NO_REPLY : { data: [row('first')], nextCursor: 'slow-page' })
+  fake.on('thread/list', params => params.useStateDbOnly === true
+    ? { data: [row('first', { name: 'Old title' }), row('stale'), row('child', { parentThreadId: 'first' }), row('ephemeral', { ephemeral: true })], nextCursor: null }
+    : NO_REPLY)
   const hub = createCodexHub(SETTINGS, { transportFactory: fake.transportFactory })
   await hub.ready
   const batches: string[][] = []
+  const titles: (string | undefined)[] = []
   let done = false
   const catalog = createCodexCatalog({ acquire: async () => ({ hub, release: () => {} }), cwd: () => SETTINGS.cwd })
-  const listing = catalog.list({}, rows => { batches.push(rows.map(row => row.id)) }).then(rows => { done = true; return rows })
+  const listing = catalog.list({}, rows => {
+    batches.push(rows.map(row => row.id))
+    titles.push(rows.find(row => row.id === 'first')?.title.text)
+  }).then(rows => { done = true; return rows })
   const first = await fake.waitForRequest('thread/list')
-  const request = await fake.waitForRequest('thread/list', { after: fake.requests.indexOf(first) + 1 })
-  check('catalog cold load: useful first-page rows are available while the next page is pending', !done && JSON.stringify(batches) === JSON.stringify([['first']]))
+  const regular = await fake.waitForRequest('thread/list', { after: fake.requests.indexOf(first) + 1 })
+  check('catalog cold load: bounded DB rows arrive while the rollout repair scan is pending', !done && first.params.useStateDbOnly === true && first.params.limit === 32 && JSON.stringify(batches) === JSON.stringify([['first', 'stale']]))
+  fake.reply(regular.id, { data: [row('first', { name: 'Repaired title' })], nextCursor: 'slow-page' })
+  const request = await fake.waitForRequest('thread/list', { after: fake.requests.indexOf(regular) + 1 })
+  check('catalog cold load: progress keeps all announced DB rows while the next page is pending', !done && JSON.stringify(batches) === JSON.stringify([['first', 'stale'], ['first', 'stale']]) && regular.params.useStateDbOnly === undefined && regular.params.cursor === undefined)
+  check('catalog cold load: repair updates metadata without withdrawing other announced rows', titles[0] === 'Old title' && titles[1] === 'Repaired title')
   fake.reply(request.id, { data: [row('second')], nextCursor: null })
-  check('catalog cold load: completion retains both pages', (await listing).map(row => row.id).sort().join(',') === 'first,second')
+  const complete = await listing
+  check('catalog cold load: every progress batch retains initial IDs through the last page', batches.every(batch => batch.includes('first') && batch.includes('stale')) && batches.at(-1)?.includes('second') === true)
+  check('catalog cold load: completion retains both repaired pages and drops DB-only rows', complete.map(row => row.id).sort().join(',') === 'first,second' && complete.find(row => row.id === 'first')?.title.text === 'Repaired title')
+  await hub.close()
+}
+for (const unavailable of ['empty', 'unsupported', 'timeout']) {
+  const fake = createFakeAppServer()
+  fake.on('thread/list', params => {
+    if (params.useStateDbOnly !== true) return { data: [row('repaired')], nextCursor: null }
+    if (unavailable === 'unsupported') throw new FakeRpcError(-32602, 'unknown field useStateDbOnly')
+    if (unavailable === 'timeout') return NO_REPLY
+    return { data: [], nextCursor: null }
+  })
+  const clock = manualClock()
+  const hub = createCodexHub(SETTINGS, { transportFactory: fake.transportFactory, clock })
+  await hub.ready
+  let released = false
+  const catalog = createCodexCatalog({ acquire: async () => ({ hub, release: () => { released = true } }), cwd: () => SETTINGS.cwd })
+  const batches: string[][] = []
+  const listing = catalog.list({ allProjects: true }, rows => { batches.push(rows.map(row => row.id)) })
+  if (unavailable === 'timeout') {
+    await fake.waitForRequest('thread/list')
+    clock.advance(1000)
+  }
+  const complete = await listing
+  check(`catalog cold load: ${unavailable} DB falls back to repaired all-projects rows`, complete[0]?.id === 'repaired' && JSON.stringify(batches) === JSON.stringify([['repaired']]) && fake.requests.filter(request => request.method === 'thread/list').every(request => request.params.cwd === undefined) && released)
   await hub.close()
 }
 {

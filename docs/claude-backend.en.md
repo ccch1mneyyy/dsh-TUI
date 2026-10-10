@@ -158,8 +158,11 @@ a notice, so a cloned repository cannot silently switch off every check.
   one another dsh-TUI terminal is using cannot be deleted. Pins are kept per
   backend.
   Reopening or restarting first paints the last complete list while the SDK refreshes it.
-  First-paint snapshots are isolated by Claude configuration directory; failed reads
-  preserve the last complete snapshot.
+  First-paint snapshots are isolated by Claude configuration directory. Without a snapshot,
+  up to 32 recent sessions from the SDK's default project scope appear first, including
+  the current directory and Git worktrees in the same repository, then the complete
+  project and other projects. A failed all-projects read retains the project's worktree
+  sessions. Failed reads preserve the last complete snapshot.
 - From a shell: `dsh-tui --backend claude --resume <id>`; without an id it resumes
   the last Claude session this install used. dsh-TUI prints that command on exit.
   A session another dsh-TUI terminal has open is refused, and a `--resume` that
