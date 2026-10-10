@@ -12,9 +12,8 @@ import { configValues, createSettingsScope, resolveSettingsNamespace, type Runti
 import { createChannel } from './channel.js'
 import { createDshSession } from './backend/session.js'
 import { kernelEntriesOf } from '../components/kernelCatalog.js'
-import { openBackendStartup, probeKernels, sdkInstallSurface } from './backends.js'
+import { openBackendStartup, probeKernels, installSurfaceFor } from './backends.js'
 import { backendLabel, isBackendIdSyntax, isRegisteredBackend, listBackends, loadBackend, parseBackendChoice, unloadBackends } from './backend-registry.js'
-import type { SdkInstaller, SdkInstallTarget } from '../agent/backend.js'
 import { formatSessionRef } from '../agent/refs.js'
 import type { AgentSession } from '../agent/session.js'
 import { mountFailureText } from '../sessions/resumeFailure.js'
@@ -2097,9 +2096,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // registry (P0). dsh first, then the manifest order — picker order.
     kernelEntries: kernelEntriesOf(listBackends()),
     onProbeKernels: () => probeKernels(ctx, sessionCwd),
-    // The kernel picker's SDK install wizard (the dim Claude row, Enter): the
-    // spec comes from the entry that declares it, the actions from this host.
-    ...sdkInstallProps(),
+    // The kernel picker's SDK install wizard (a dim row's Enter): the surface of
+    // whichever row the user picked, looked up by id — the manifest says what to
+    // install and with which executor, this host holds the actions.
+    onResolveSdkInstall: installSurfaceFor,
     kernelPinned: backendPinned,
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the
@@ -2600,7 +2600,7 @@ export function isExitResumable(deps: {
 }
 
 type InkShutdownState = {
-  detachForShutdown?: () => void
+  detachForShutdown?: () => void | Promise<void>
   /**
    * Full stdin detach for the /update child handoff (issues #284/#307):
    * removes the readable/data listeners and pauses the pump so the
@@ -2664,7 +2664,7 @@ export async function finishExit(
     const cursor = fullscreen ? '' : cursorMoveToFrameEnd(runtime)
 
     try {
-      runtime?.detachForShutdown?.()
+      await runtime?.detachForShutdown?.()
       // The /update continuation spawns children that inherit this stdin;
       // strip the readable pump so the parent cannot swallow their input
       // (issues #284/#307). Harmless on plain exits — the process exits
@@ -2859,27 +2859,6 @@ export function handleStartupError(ctx: Context, error: unknown): void {
  */
 function disposeRootAndExit(ctx: Context, code: number): void {
   disposeRootAndThen(ctx, () => process.exit(code), code)
-}
-
-/** Chat's SDK install wizard props (the dim row's Enter path): the spec comes
- *  from the registry entry that declares `sdkInstall`, the actions from this
- *  host. Empty when nothing declares it — `canInstallSdk` wants all four, so the
- *  dim row keeps its dead-end reason instead of opening a wizard with no
- *  target. */
-function sdkInstallProps(): {
-  readonly onResolveSdkInstallTarget?: () => SdkInstallTarget
-  readonly onStartSdkInstall?: (dir: string) => SdkInstaller
-  readonly onCheckPnpm?: () => Promise<boolean>
-  readonly sdkInstallPinned?: { readonly specifier: string; readonly version: string }
-} {
-  const surface = sdkInstallSurface()
-  if (surface === undefined) return {}
-  return {
-    onResolveSdkInstallTarget: surface.resolveTarget,
-    onStartSdkInstall: surface.start,
-    onCheckPnpm: surface.checkPnpm,
-    sdkInstallPinned: { specifier: surface.specifier, version: surface.version },
-  }
 }
 
 /**

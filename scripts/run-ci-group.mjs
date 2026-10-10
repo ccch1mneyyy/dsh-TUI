@@ -73,6 +73,9 @@ const GROUPS = {
 // SDK 安装向导（内核选择器「未安装」行进入）：各步骤态的正文与提示行、
 // 手动兜底命令、窄终端截断、en 态文案。
     ['verify-sdk-install-wizard', ['node', '--import', 'tsx/esm', 'scripts/verify-sdk-install-wizard.tsx']],
+// 真实 Chat 安装链：两个可安装后端、鼠标关闭、预检/安装取消与迟到结果隔离；
+// inline/fullscreen × 常规/窄终端，安装动作全为夹具。
+    ['verify-sdk-install-chat', ['node', '--import', 'tsx/esm', 'scripts/verify-sdk-install-chat.tsx']],
 // 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
 // （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
     ["repro-askpanel", ['node', '--import', 'tsx/esm', 'scripts/repro-askpanel.tsx']],
@@ -342,6 +345,8 @@ const GROUPS = {
     ["verify-exit-resume-marker", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-resume-marker.tsx']],
 // 退出阶段 stderr/console 恢复回归（issue #42）：shutdown 解绑恢复物理流并注销监听器。
     ["verify-shutdown-stderr", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-stderr.tsx']],
+// 迁移提示的退出生命周期：真实 Chat + UI lease，覆盖待触发/扫描在途/消失定时器与双渲染模式。
+    ["verify-migrate-hint-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-migrate-hint-lifecycle.tsx']],
 // 退出收尾运行时未命中回退：找不到 Ink runtime 时必须走完整 unmount 恢复终端。
     ["verify-shutdown-fallback", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-fallback.tsx']],
 // 退出鼠标残留回归（issue #522）：detach 闩锁后自愈探针不再重写
@@ -442,8 +447,10 @@ const GROUPS = {
   ],
   'session-workspace': [
     ["verify-backend-startup", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-startup.ts']],
-// 后端注册表回归（P0 Stage A）：注册闸门（重复 id / 保留 id / 非 inTree 用宿主
-// 词表 / native 越权 / installable 与 sdkInstall 漂移）、五条来源的两段式解析
+// 后端注册表回归（P0 Stage A + B-1）：注册闸门（重复 id / 保留 id / 非 inTree 用宿主
+// 词表 / native 越权 / 安装配方缺字段）、**安装面按声明不按 id**（非 inTree 条目声明
+// 宿主执行器即可装、装的是它自己的 specifier；codex 式"没有安装面"是缺省配方；
+// 宿主不认识的执行器＝不抛错、不可装、无向导）、五条来源的两段式解析
 // （语法合法但未装的 id → dsh + 告警，绝不打死 boot）、D4 的池记账（未加载即
 // 不 import、不关池；已加载的按序关、幂等、单条失败不阻断也不抛）、生成索引的
 // 发现/行序/失败即红，以及**坏基线必须红**——把边界门禁连同 src 副本搬进临时

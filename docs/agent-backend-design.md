@@ -246,18 +246,20 @@ SDK `settings` 选项把路由钉回 `https://api.anthropic.com`。CLI 拒绝令
 
 1. 新建 `src/backends/<id>/`，厂商包只在这里 import；同时写 `manifest.ts`——后端的
    静态声明（id / label / shortLabel / product / `backendExport` / 可选的
-   `vendorPackages`、`nativeKey`、`unloadExport`、`sdkInstall`）。构建期索引
+   `vendorPackages`、`nativeKey`、`unloadExport`、`install`）。构建期索引
    （`scripts/gen-backend-index.mjs`，挂在 `compile` 上）会把它纳入注册表，门禁的
    厂商包与 `native.<id>` 规则也由它派生：**不要手改** `kernelPrefs.ts` 与
    `backends.ts`（目录与身份回归都按 ID 取项，新增目录不必同步它们）；声明了非空
    `vendorPackages` 或 `nativeKey` 时，`verify-adapter-boundary.ts` 的 `EXPECTED_*`
    快照要与 `ADAPTER.md` 一并更新（派生结果逐字比对，门禁报错会写明——不声明这
-   两项的后端无需改动）；`installable` / `sdkInstall` 是**排他特权**：本仓库只实现了
-   Claude 那一个安装向导（`sdkInstallSurface()`），别的 id 声明它会被 `registerBackend`
-   当场拒绝（Stage B 给每个后端配上宿主侧安装器后才放开）；把 `pnpm compile` 重新生成的
+   两项的后端无需改动）；`install` 是**声明式配方**（`{ executor, specifier, version }`，
+   宿主侧执行器表在 `src/dsh-adapter/install/`，首版只有 `pnpm-profile-add`）：注册表查表
+   派生"这个条目可不可装"，选择器那行"未安装·按 Enter 安装"由此而来，装的是**你声明的**
+   specifier；没有包可装的后端（驱动系统 CLI 的那类）就不声明，那是一条一等公民的
+   降级路径（落检测自己的 hint，不长假按钮）；把 `pnpm compile` 重新生成的
    `src/dsh-adapter/backends.generated.ts` 一起提交（它是入库的生成产物，过期会被
    `verify-backend-registry` 判红）。字段语义与四条边界（id 语法、
-   `nativeKey` 缺省的含义、`unloadExport` 只管进程级资源池、`installable` 的排他性）见
+   `nativeKey` 缺省的含义、`unloadExport` 只管进程级资源池、`install` 的执行器查表）见
    [ADAPTER.md](../ADAPTER.md) 的「后端 manifest」一节。
 2. 实现 `AgentBackend`（检测、`open`、可选的离线会话目录）与 `AgentSession`。
 3. 写翻译器：把后端消息翻成 `AgentEvent`，live 与回放用同一套映射；不认识的消息

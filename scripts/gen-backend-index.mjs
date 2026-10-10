@@ -130,12 +130,15 @@ const readManifest = async (name) => {
   if (manifest.vendorPackages !== undefined && !(Array.isArray(manifest.vendorPackages) && manifest.vendorPackages.every(isNonEmptyString))) {
     fail(`src/backends/${name}/${MANIFEST_FILE}: vendorPackages must be a list of package prefixes`)
   }
-  // D5-1: the flag and the data must not drift apart.
-  if ((manifest.installable === true) !== (manifest.sdkInstall !== undefined)) {
-    fail(`src/backends/${name}/${MANIFEST_FILE}: installable must match whether sdkInstall is declared`)
-  }
-  if (manifest.sdkInstall !== undefined && !(isPlainObject(manifest.sdkInstall) && isNonEmptyString(manifest.sdkInstall.specifier) && isNonEmptyString(manifest.sdkInstall.version))) {
-    fail(`src/backends/${name}/${MANIFEST_FILE}: sdkInstall needs string specifier and version`)
+  // Shape only (B-1): whether the host implements the named executor is a runtime
+  // fact, decided by the registry's table lookup, so this generator must not have
+  // an opinion about the value — only about the fields being there at all.
+  if (manifest.install !== undefined
+    && !(isPlainObject(manifest.install)
+      && isNonEmptyString(manifest.install.executor)
+      && isNonEmptyString(manifest.install.specifier)
+      && isNonEmptyString(manifest.install.version))) {
+    fail(`src/backends/${name}/${MANIFEST_FILE}: install needs a non-empty executor, specifier and version`)
   }
   return manifest
 }

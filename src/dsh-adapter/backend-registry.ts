@@ -29,6 +29,7 @@ import { cleanRenderText } from '../channel/sanitize.js'
 import { BUILTIN_BACKEND_IDS, type KernelBackendId } from '../kernelPrefs.js'
 import { logForDebugging } from '../utils/debug.js'
 import { GENERATED_BACKENDS } from './backends.generated.js'
+import { installExecutor } from './install/executors.js'
 
 export { isBackendIdSyntax }
 
@@ -45,40 +46,48 @@ const DSH_MANIFEST: BackendManifest = {
   product: 'dsh-core',
   inTree: true,
   alwaysAvailable: true,
-  installable: false,
 }
 
 /**
- * The one backend whose SDK install this host actually implements:
- * `sdkInstallSurface()` (`backends.ts`) statically wires Claude's installer and
- * nothing else, and the `sdk-install` overlay carries no backend id at all — it
- * could not install anything else even if it wanted to.
+ * What replaced Stage A's `HOST_INSTALLABLE_BACKEND_ID = 'claude'`: a manifest
+ * now *names an executor* (`BackendManifest.install.executor`) and the registry
+ * looks the name up in the host's table (`src/dsh-adapter/install/`). An entry is
+ * installable exactly when that lookup finds something, so the row that opens a
+ * wizard is the row whose own recipe names an executor this host runs — not the
+ * row that happens to wear the privileged id.
  *
- * That makes `installable` / `sdkInstall` an **exclusive** privilege rather than
- * free-form manifest data, in the same family as `nativeKey` (refused outright off
- * the tree). Stage A opens the backend set to plugins and to a fourth in-tree
- * backend; without the gate below, any of them could turn its own dim row into a
- * one-Enter path into *Claude's* wizard — a row wearing one name while installing
- * another program. Stage B gives each backend its own host-side installer and this
- * check becomes "does this id have an install surface", which is why it is stated
- * as a single id rather than a flag.
+ * A table rather than a static import of one backend's installer, because the
+ * discovery this has to survive is the post-mount one: Stage C reads a bundle's
+ * contribution after the plugin is mounted (§4.4), and a link-time constant could
+ * not be consulted then.
  *
- * Kept local on purpose: the registry must not import a concrete backend (they
- * enter only through the lazy `load()`), and the value is self-checking anyway —
- * the real Claude manifest declares exactly this privilege at module load, so a
- * wrong constant makes this module fail to import.
+ * An unknown executor is **not** a registration error (§6 item 12): the entry
+ * registers with no install surface, and its "not installed" row degrades to
+ * detection's own hint instead of growing a button that cannot work. The recipe
+ * is therefore validated for *shape* here, never for whether this host likes its
+ * value. The strings a plugin declares are also the wizard's render path and (on
+ * Windows) a `pnpm add` argument, so admitting a third-party recipe is Stage C/D
+ * work — until then a plugin may name only a value of this closed table.
  */
-const HOST_INSTALLABLE_BACKEND_ID = 'claude'
+const installableOf = (manifest: BackendManifest): boolean =>
+  manifest.install !== undefined && installExecutor(manifest.install.executor) !== undefined
 
 /**
  * One registered backend: the manifest, its id as a validated {@link KernelBackendId}
- * (the cast below is reached only after the syntax gate), and the lazy loader.
- * Everything downstream — picker rows, session refs, `~/.dsh-tui/backends/<id>/`
- * paths — takes the id from here instead of re-validating it.
+ * (the cast below is reached only after the syntax gate), the lazy loader, and the
+ * one fact the registry derives from the manifest.
+ *
+ * `installable` is derived, not declared: the old `installable` field was a
+ * boolean that the registration gate forced to equal "declares install data", so
+ * it carried no information of its own — and the half that *is* a runtime
+ * question (`does this host run that executor?`) could not be written in a
+ * manifest at all. Picker rows read it from here, and `installSurfaceFor(id)`
+ * answers the same question with the actions attached.
  */
 export interface RegisteredBackend {
   readonly id: KernelBackendId
   readonly manifest: BackendManifest
+  readonly installable: boolean
   readonly load?: () => Promise<Record<string, unknown>>
 }
 
@@ -128,12 +137,11 @@ export function registerBackend(entry: BackendEntry): void {
   if (manifest.alwaysAvailable === true && entry.load !== undefined) {
     throw new Error(`${where} is always-available and must not have a loader (it is not an AgentBackend)`)
   }
-  if ((manifest.installable === true) !== (manifest.sdkInstall !== undefined)) {
-    throw new Error(`${where} must declare installable exactly when it declares sdkInstall`)
-  }
-  if (manifest.id !== HOST_INSTALLABLE_BACKEND_ID
-    && (manifest.installable === true || manifest.sdkInstall !== undefined)) {
-    throw new Error(`${where} declares installable/sdkInstall, but this host ships exactly one install wizard (${HOST_INSTALLABLE_BACKEND_ID}); a backend brings its own in Stage B`)
+  // Shape only: what the recipe names is the host's business, and a value it does
+  // not implement means "no install surface", never a refused registration.
+  const install = manifest.install
+  if (install !== undefined && ![install.executor, install.specifier, install.version].every(field => typeof field === 'string' && field !== '')) {
+    throw new Error(`${where} declares an install recipe without a non-empty executor, specifier and version`)
   }
   // Plugin-declared names are external input: flatten control/escape sequences
   // and cap the width here, once, so the picker, the launchpad plate and the
@@ -148,6 +156,7 @@ export function registerBackend(entry: BackendEntry): void {
       label: manifest.label.kind === 'literal' ? { kind: 'literal', text: cleanRenderText(manifest.label.text, LABEL_MAX_CELLS) } : manifest.label,
       shortLabel: cleanRenderText(manifest.shortLabel, LABEL_MAX_CELLS),
     },
+    installable: installableOf(manifest),
     ...(entry.load === undefined ? {} : { load: entry.load }),
   }
   entries.set(manifest.id, registered)

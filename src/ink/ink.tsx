@@ -130,6 +130,8 @@ export default class Ink {
   };
   // Ignore last render after unmounting a tree to prevent empty output before exit
   private isUnmounted = false;
+  private isDetachedForShutdown = false;
+  private shutdownCleanup: Promise<void> | undefined;
   private isPaused = false;
   private readonly container: FiberRoot;
   private rootNode: dom.DOMElement;
@@ -1517,17 +1519,16 @@ export default class Ink {
   };
 
   /**
-   * Mark this instance as unmounted so future unmount() calls early-return.
-   * Called by gracefulShutdown's cleanupTerminalModes() after it has sent
-   * EXIT_ALT_SCREEN but before the remaining terminal-reset sequences.
-   * Without this, signal-exit's deferred ink.unmount() (triggered by
-   * process.exit()) runs the full unmount path: onRender() + writeSync
-   * cleanup block + updateContainerSync → AlternateScreen unmount cleanup.
-   * The result is 2-3 redundant EXIT_ALT_SCREEN sequences landing on the
-   * main screen AFTER printResumeHint(), which tmux (at least) interprets
-   * as restoring the saved cursor position — clobbering the resume hint.
+   * Release React effects while leaving terminal mode cleanup to finishExit.
+   * Suppress Ink.writeRaw and later unmount() calls so AlternateScreen cleanup
+   * cannot close the handoff buffer or clobber a resume hint. App's direct
+   * SHOW_CURSOR write still runs during React cleanup. The old process may
+   * wait on an updater or replacement, so its UI timers must stop before the
+   * Channel lifetime ends.
    */
-  detachForShutdown(): void {
+  detachForShutdown(): void | Promise<void> {
+    if (this.isUnmounted) return this.shutdownCleanup;
+    this.isDetachedForShutdown = true;
     this.isUnmounted = true;
     this.terminalImageListeners.clear();
     // Cancel any pending throttled render so it doesn't fire between
@@ -1570,9 +1571,7 @@ export default class Ink {
       this.restoreConsole();
     }
     this.restoreStderr?.();
-    // Restore stdin from raw mode. unmount() used to do this via React
-    // unmount (App.componentWillUnmount → handleSetRawMode(false)) but we're
-    // short-circuiting that path. Must use this.options.stdin — NOT
+    // Restore stdin before React cleanup. Must use this.options.stdin — NOT
     // process.stdin — because getStdinOverride() may have opened /dev/tty
     // when stdin is piped.
     const stdin = this.options.stdin as NodeJS.ReadStream & {
@@ -1589,16 +1588,35 @@ export default class Ink {
         // is no longer possible.
       }
     }
+    // Cancelling renderer work alone leaves component timers and async
+    // continuations alive throughout a backend-switch handoff. finishExit
+    // awaits this cleanup before it can revoke Channel handles.
+    const cleanup = () => {
+      reconciler.flushPassiveEffects();
+      this.rootNode.yogaNode?.free();
+      this.rootNode.yogaNode = undefined;
+    };
+    reconciler.updateContainerSync(null, this.container, null, noop);
+    const insideCommit = reconciler.flushSyncWork();
+    if (insideCommit) {
+      // A render-error exit can arrive inside React's commit. Flush/free only
+      // after that commit has yielded; React forbids passive flushes within it.
+      this.shutdownCleanup = new Promise<void>(resolve => setImmediate(resolve)).then(() => {
+        reconciler.flushSyncWork();
+        cleanup();
+      });
+      return this.shutdownCleanup;
+    }
+    cleanup();
   }
 
   /**
    * Fully detach stdin before handing the terminal to a child process that
-   * inherits it (the /update restart). `detachForShutdown()` restores
-   * cooked mode but leaves the App's 'readable' pump attached — ordinary
-   * exits don't care because the process dies right after, but a parent
-   * that lingers waiting on the child keeps a libuv read pending on the
-   * console and races the child for every keypress: the restarted TUI
-   * sees dropped or entirely swallowed input (issues #284/#307). Remove
+   * inherits it (the /update restart). After `detachForShutdown()` releases
+   * the renderer's stdin ownership, remove any remaining readers and pause
+   * the stream. A parent that lingers waiting on the child must not keep a
+   * libuv read pending on the console and race it for every keypress: the
+   * restarted TUI sees dropped or entirely swallowed input (issues #284/#307). Remove
    * the listeners and pause the pump so the child is the sole reader.
    */
   detachStdinForHandoff(): void {
@@ -2675,6 +2693,7 @@ export default class Ink {
   // cascades through useContext → <AlternateScreen>'s useLayoutEffect dep
   // array → spurious exit+re-enter of the alt screen on every SIGWINCH.
   private writeRaw(data: string): void {
+    if (this.isDetachedForShutdown) return;
     if (data.includes('\x1b[?1049')) {
       logMouseDebug('stdout:1049', { len: data.length, head: data.slice(0, 60) });
     }

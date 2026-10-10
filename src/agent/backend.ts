@@ -61,24 +61,32 @@ export interface SdkInstaller {
 }
 
 /**
- * The **data** half of an install surface: what to install, at which pin. A
- * backend's manifest declares it (`BackendManifest.sdkInstall`, P0 D5-1) so the
- * picker's wizard reads the target from the registry entry instead of a host
- * constant. The implementation half stays with the host, which ships exactly
- * one wizard today (Claude's — the manifest describes, it does not act).
+ * The **data** half of an install surface: which of the host's install executors
+ * to run, and what to hand it. A backend's manifest declares it
+ * (`BackendManifest.install`) so the picker's wizard reads the target from the
+ * registry entry instead of a host constant — the manifest describes, it does
+ * not act.
+ *
+ * `executor` names a value of the host's table (`src/dsh-adapter/install/`), not
+ * a backend: a recipe naming an executor this host does not implement is read as
+ * "no install surface" (§6 item 12), which is what lets the set of values widen
+ * without changing this shape.
  */
-export interface SdkInstallSpec {
+export interface BackendInstallRecipe {
+  /** The host-side executor to run (`pnpm-profile-add`). */
+  readonly executor: string
   /** `@scope/name@<version>`, as handed to `pnpm add`. */
   readonly specifier: string
   /** The validated version, shown in the confirm panel. */
   readonly version: string
 }
 
-/** The host's install wizard: the spec above plus the actions it needs. */
-export interface SdkInstallSurface extends SdkInstallSpec {
+/** The host's install wizard: the recipe above with its executor bound — the
+ *  actions this surface carries are the ones its recipe's executor value means. */
+export interface SdkInstallSurface extends BackendInstallRecipe {
   readonly resolveTarget: () => SdkInstallTarget
   readonly start: (dir: string) => SdkInstaller
-  readonly checkPnpm: () => Promise<boolean>
+  readonly preflight: () => Promise<boolean>
 }
 
 /** Which session to open. */

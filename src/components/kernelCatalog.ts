@@ -36,7 +36,12 @@ export interface KernelEntry {
  */
 export interface KernelEntrySource {
   readonly id: KernelBackendId
-  readonly manifest: Pick<BackendManifest, 'label' | 'shortLabel' | 'alwaysAvailable' | 'product' | 'installable'>
+  readonly manifest: Pick<BackendManifest, 'label' | 'shortLabel' | 'alwaysAvailable' | 'product'>
+  /** The host can actually install this entry — its manifest declares an install
+   *  recipe *and* this host implements that recipe's executor. Derived by the
+   *  registry (`RegisteredBackend.installable`), never declared by a manifest:
+   *  "which executor values exist" is the host's fact, not the backend's. */
+  readonly installable: boolean
 }
 
 /**
@@ -51,7 +56,7 @@ export function kernelEntriesOf(backends: readonly KernelEntrySource[]): readonl
     shortLabel: entry.manifest.shortLabel,
     alwaysAvailable: entry.manifest.alwaysAvailable === true,
     ...(entry.manifest.product === undefined ? {} : { product: entry.manifest.product }),
-    installable: entry.manifest.installable === true,
+    installable: entry.installable,
   }))
 }
 

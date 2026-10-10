@@ -58,8 +58,8 @@ class FakeStderr extends Writable {
 class FakeStdin extends PassThrough {
   isTTY = true
   setRawMode(): this { return this }
-  override ref(): this { return this }
-  override unref(): this { return this }
+  ref(): this { return this }
+  unref(): this { return this }
 }
 
 const DIR = 'C:\\Users\\test\\.dsh\\profiles\\dsh-tui'
@@ -95,7 +95,7 @@ async function run(): Promise<void> {
     check('1a 标题', screen.includes(t('sdk-install-title')))
     check('1b 版本行', screen.includes(VERSION))
     check('1c 位置行', screen.includes(DIR))
-    check('1d 说明（不随全局变化）', screen.includes('不随全局变化'))
+    check('1d 说明（profile 目录与前置工具）', screen.includes('profile') && screen.includes('pnpm'))
     check('1e 提示行 Enter 安装', screen.includes('Enter') && screen.includes('安装'))
     await app.unmount()
   }
@@ -167,13 +167,32 @@ async function run(): Promise<void> {
     try {
       const { app, lines } = await mountWizard({ kind: 'confirm', dir: DIR, version: VERSION, specifier: SPECIFIER })
       const screen = lines().join('\n')
-      check('8a en 标题', screen.includes('Install the Claude kernel'))
+      check('8a en 标题', screen.includes('Install kernel dependencies'))
       check('8b en 位置行', screen.includes(`Install location: ${DIR}`))
       await app.unmount()
     } finally {
       setLang('zh')
     }
   }
+  // A non-Claude recipe must show its actual package in both languages, and
+  // neither confirmation nor completion may claim a different backend is ready.
+  for (const lang of ['zh', 'en'] as const) {
+    setLang(lang)
+    const specifier = '@verify/other-sdk@9.9.9'
+    for (const phase of [
+      { kind: 'confirm', dir: DIR, version: '9.9.9', specifier },
+      { kind: 'failed', exitCode: 1, tail: TAIL, dir: DIR, version: '9.9.9', specifier },
+      { kind: 'done' },
+    ] satisfies SdkInstallPhase[]) {
+      const { app, lines } = await mountWizard(phase)
+      const screen = lines().join('\n')
+      const flat = screen.replaceAll(/\s+/gu, '')
+      check(`9 ${lang} ${phase.kind}: no hardcoded backend`, !screen.includes('Claude'), screen)
+      if (phase.kind !== 'done') check(`9 ${lang} ${phase.kind}: actual specifier`, flat.includes(specifier), screen)
+      await app.unmount()
+    }
+  }
+  setLang('zh')
 }
 
 await run()

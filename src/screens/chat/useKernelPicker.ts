@@ -60,8 +60,10 @@ export function useKernelPicker({ channel, kernelVersion, kernelEntries, launchp
     if (!option.selectable) {
       if (option.installable === true) {
         // The installable row opens the wizard instead of a dead-end toast;
-        // the wizard owns its own keys (Enter/Esc) from here on.
-        dispatchOverlay({ type: 'open', overlay: { kind: 'sdk-install' } })
+        // the wizard owns its own keys (Enter/Esc) from here on. It carries the
+        // row's id: the surface the wizard acts on is looked up per backend at
+        // open time, not assumed (Stage B / §6 item 12).
+        dispatchOverlay({ type: 'open', overlay: { kind: 'sdk-install', backendId: option.id } })
         return
       }
       // Detection's own guidance (how to install or upgrade) beats the bare reason.

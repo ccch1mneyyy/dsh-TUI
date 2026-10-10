@@ -2477,18 +2477,18 @@ const dict = {
   // SDK 安装向导（内核选择器「未安装」行 Enter 进入）：确认、安装中、结果
   // 与手动兜底。{{dir}} 是 profile 目录，{{specifier}} 是锁定版本的完整包名。
   'kernel-not-installed-installable': { zh: '未安装 · 按 Enter 安装', en: 'Not installed · Enter to install' },
-  'sdk-install-title': { zh: '安装 Claude 内核', en: 'Install the Claude kernel' },
-  'sdk-install-confirm-what': { zh: '将安装 Claude Agent SDK {{version}}（内置 Claude Code CLI）', en: 'This installs Claude Agent SDK {{version}} (bundles the Claude Code CLI)' },
+  'sdk-install-title': { zh: '安装内核依赖', en: 'Install kernel dependencies' },
+  'sdk-install-confirm-what': { zh: '将安装 {{specifier}}（验证版本：{{version}}）', en: 'This installs {{specifier}} (validated version: {{version}})' },
   'sdk-install-confirm-where': { zh: '安装位置：{{dir}}', en: 'Install location: {{dir}}' },
   'sdk-install-confirm-note': {
-    zh: '只装进 dsh-tui 自己的目录：版本经过验证、不随全局变化；PATH 上已有的 Claude Code 会优先使用，不受影响。需要网络与 pnpm。',
-    en: 'Installs only into the dsh-tui directory: the version is validated and never follows your global one; a Claude Code already on PATH is used first and is not touched. Needs network and pnpm.',
+    zh: '只安装到当前 profile 目录。需要网络与 pnpm。',
+    en: 'Installs only into the current profile directory. Needs network and pnpm.',
   },
   'sdk-install-confirm-hint': { zh: '**Enter** 安装 · Esc 返回', en: '**Enter** install · Esc back' },
   'sdk-install-checking': { zh: '正在检查 pnpm…', en: 'Checking pnpm…' },
   'sdk-install-running': { zh: '正在安装，可能需要一分钟…', en: 'Installing… this can take a minute' },
   'sdk-install-running-sub': { zh: 'Esc 取消', en: 'Esc to cancel' },
-  'sdk-install-done': { zh: 'SDK 安装完成，Claude 内核已可用。', en: 'SDK installed — the Claude kernel is ready.' },
+  'sdk-install-done': { zh: '依赖安装完成，返回内核选择查看可用状态。', en: 'Dependencies installed. Return to the kernel picker to check availability.' },
   'sdk-install-rebuilt': { zh: '检测到 pnpm store 漂移，已自动重建依赖后装好。', en: 'pnpm store drift detected — dependencies were rebuilt automatically.' },
   'sdk-install-done-hint': { zh: '**Enter** 返回内核选择 · Esc 关闭', en: '**Enter** back to the kernel picker · Esc close' },
   'sdk-install-failed': { zh: '安装失败（pnpm 退出码 {{code}}）。可手动安装：', en: 'Install failed (pnpm exit code {{code}}). Manual install:' },

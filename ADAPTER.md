@@ -36,13 +36,17 @@
 - **`unloadExport`**:只用于**模块级/进程级资源池**(如 codex 的 app-server hub,
   按设置指纹池化、跨会话复用);会话级资源仍归 `fiber` 的 `session.dispose()`。
   注册表只记"真的加载过"的条目——没加载过的后端不会被 import,也不会被关池。
-- **`installable` / `sdkInstall`**:**排他特权**,不是自由数据。本宿主只实现了**一个**
-  安装向导——`src/dsh-adapter/backends.ts` 的 `sdkInstallSurface()` 静态接的就是 Claude 的
-  安装器,而选择器那层的 `sdk-install` 浮层里连后端 id 都没有,它装不了别的东西。Stage A 把
-  后端集合开给了插件与第四个 in-tree 后端;少了这条闸门,任何一个都能把自己的 dim 行变成
-  "按 Enter 装东西"的入口,而装下去的是 Claude 的 SDK——一行写着甲的名字,装下去的却是
-  乙的程序。注册表因此在准入处直接拒绝(`registerBackend`):非该 id 的后端声明这两项即抛错。
-  Stage B 给每个后端配上宿主侧安装器后,这条自然演化为"这个 id 有没有安装面"。
+- **`install`**:**声明式配方**,不是排他特权(Stage B / B-1)。字段是
+  `{ executor, specifier, version }`:清单说**装什么、哪个版本**,以及**交给宿主的哪个
+  执行器**去装;动作在宿主侧的表里(`src/dsh-adapter/install/`,当前唯一取值
+  `pnpm-profile-add`)。注册表在准入处**查表**派生 `RegisteredBackend.installable`
+  ——"这个条目有没有安装面"因此是声明与宿主能力的合取,不再是谁的 id。声明了宿主不认识的
+  执行器**不抛错**:按"没有安装面"处理(那张 dim 行退回落检测自己的 hint,不长出一个按不动
+  的按钮)。`install` 缺省也是一等公民:codex 依赖用户自己的 `codex` 二进制,没有包可装 ——
+  它要的是"缺什么、怎么补"的呈现,不是一个装不了任何东西的按钮。
+  选择器的 `sdk-install` 浮层带**后端 id**,安装面在打开时按 id 现查——装的是用户点的那一行
+  (Stage A 的做法相反:浮层不带 id、`backends.ts` 静态 import 那一个安装器,于是任何别的
+  后端都只能装成 Claude 的 SDK)。
 
 新增一个后端 = 新建 `src/backends/<id>/`(`manifest.ts` + 实现),再把
 `pnpm compile` 重新生成的 `src/dsh-adapter/backends.generated.ts` 一并提交;
@@ -50,8 +54,8 @@
 不必同步它们)。唯一的例外是**边界快照**:声明了非空 `vendorPackages` 或
 `nativeKey` 的后端,派生规则会与 `scripts/verify-adapter-boundary.ts` 的
 `EXPECTED_*` 逐字比对,必须把快照与本文档一并更新(不声明这两项的后端无需改动)。
-而 `installable` / `sdkInstall` 不必费心:不是宿主能装的那个 id,声明它会被注册闸门当场
-拒绝(见上)。
+声明 `install` 时只需保证 `executor` 拼的就是宿主那个取值:`verify-backend-registry`
+会断言"声明了配方 ⟺ 这个条目可装",拼错等于悄悄丢掉自己的向导。
 那份索引**入库**是有意的:CI 的测试组与
 `gates` 复用构建产物、不跑 `compile`,gitignore 的文件在那边不存在,
 而注册表要从 `src/` import 它(`verify-backend-registry` 会断言它与磁盘上的

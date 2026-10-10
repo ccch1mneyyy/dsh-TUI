@@ -14,7 +14,7 @@ import { isBackendIdSyntax } from '../src/agent/backend-manifest.js'
 import { BUILTIN_BACKEND_IDS, parseBackendId, resolveRememberedBackend, resolveResumeTarget } from '../src/kernelPrefs.js'
 import { normalizeBackendChoice } from '../src/dsh-adapter/index.js'
 import { isRegisteredBackend, listBackends, parseBackendChoice } from '../src/dsh-adapter/backend-registry.js'
-import { sdkInstallSurface } from '../src/dsh-adapter/backends.js'
+import { installSurfaceFor } from '../src/dsh-adapter/backends.js'
 
 setLang('en')
 let passed = 0
@@ -42,21 +42,24 @@ check('codex: label, product, short name and pool hook come from its manifest',
   codexLabel?.kind === 'key' && codexLabel.key === 'kernel-label-codex'
     && t('kernel-label-codex') === 'Codex' && codex?.manifest.product === 'codex-cli'
     && codex?.manifest.shortLabel === 'Codex' && codex?.manifest.unloadExport === 'closeAllCodexHubs')
-// Whole-table, not name-by-name: `registerBackend` already refuses an install
-// surface on any other backend, and this is the other half of the same fact — the
-// registry can say "not you", it cannot say which id the host's one wizard belongs
-// to. Stated as a set so a fourth backend arriving with the privilege reds here
-// rather than slipping past a check that only ever asked about dsh and codex
-// (review, scope note).
-const installableIds = backends.filter(entry => entry.manifest.installable === true).map(entry => entry.id)
-const sdkInstallIds = backends.filter(entry => entry.manifest.sdkInstall !== undefined).map(entry => entry.id)
-check('only the Claude SDK is host-installable, and only it declares the install data',
-  installableIds.join(',') === 'claude' && sdkInstallIds.join(',') === 'claude'
-    && claude?.manifest.sdkInstall?.specifier.startsWith('@anthropic-ai/claude-agent-sdk@') === true)
-const onlyInstallable = backends.find(entry => entry.manifest.sdkInstall !== undefined)
-check('the host wizard reads the backend the admission gate allows (one id, spelled once each)',
-  onlyInstallable !== undefined && sdkInstallSurface()?.specifier === onlyInstallable.manifest.sdkInstall?.specifier
-    && sdkInstallSurface()?.version === onlyInstallable.manifest.sdkInstall?.version)
+// Whole-table, not name-by-name (review, scope note; B-1 restated it): the fact
+// "this host can install me" is now derived — a declared recipe whose executor the
+// host implements — so it is stated as a set. A fourth backend arriving installable
+// reds here rather than slipping past a check that only ever asked about dsh and
+// codex, and a recipe whose executor name drifts from the host's table reds here too
+// (the entry would quietly stop being installable).
+const installableIds = backends.filter(entry => entry.installable).map(entry => entry.id)
+const recipeIds = backends.filter(entry => entry.manifest.install !== undefined).map(entry => entry.id)
+check('only the Claude SDK is host-installable, and only it declares an install recipe',
+  installableIds.join(',') === 'claude' && recipeIds.join(',') === 'claude'
+    && claude?.manifest.install?.specifier.startsWith('@anthropic-ai/claude-agent-sdk@') === true)
+const onlyInstallable = backends.find(entry => entry.installable)
+check('the host wizard answers with the entry that declared it, executor and pin included',
+  onlyInstallable !== undefined && installSurfaceFor('claude')?.specifier === onlyInstallable.manifest.install?.specifier
+    && installSurfaceFor('claude')?.version === onlyInstallable.manifest.install?.version
+    && installSurfaceFor('claude')?.executor === onlyInstallable.manifest.install?.executor
+    // codex declares nothing: "no install surface" is an answer, not an error.
+    && installSurfaceFor('codex') === undefined)
 
 // ── The two-stage parse: syntax, then membership (D1) ────────────────────────
 check('syntax gate passes a plugin-shaped id, the registry gate does not',

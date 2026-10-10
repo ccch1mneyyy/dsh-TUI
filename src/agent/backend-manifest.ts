@@ -12,7 +12,7 @@
  * host registry, the boundary gate and the UI all need these shapes, and none
  * of them may import a concrete backend.
  */
-import type { SdkInstallSpec } from './backend.js'
+import type { BackendInstallRecipe } from './backend.js'
 
 /**
  * How a backend is named in the kernel picker (`backend-registry` D2).
@@ -61,9 +61,6 @@ export interface BackendManifest {
    * "never loaded" also means "never imported" and "never closed" (D4).
    */
   readonly unloadExport?: string
-  /** The host can install this backend's SDK (its wizard); `sdkInstall` carries
-   *  the data half. `verify-backend-registry` pins `installable === (sdkInstall !== undefined)`. */
-  readonly installable?: boolean
   /** Gate derivation only (backend scope, `verify-adapter-boundary`): vendor
    *  package prefixes this backend may import (claude: `@anthropic-ai/`). */
   readonly vendorPackages?: readonly string[]
@@ -72,8 +69,19 @@ export interface BackendManifest {
    *  absent (its channel is not declared today, and deriving one would widen
    *  the boundary gate). */
   readonly nativeKey?: string
-  /** What the host's install wizard installs, at the validated pin (D5-1). */
-  readonly sdkInstall?: SdkInstallSpec
+  /**
+   * What the host's install wizard would install, and with which of the host's
+   * executors (§6 item 12). Declaring it is how a backend says "there is
+   * something to install for me": no backend id is privileged any longer, and
+   * codex's "there is nothing to install, the user's own binary is the
+   * dependency" is the absent case — still a first-class row (a hint, no fake
+   * button).
+   *
+   * Whether the named `executor` is one *this* host implements is a runtime
+   * question the registry answers by table lookup; an unknown value means "no
+   * install surface", never a failed registration.
+   */
+  readonly install?: BackendInstallRecipe
 }
 
 /**

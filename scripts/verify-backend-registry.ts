@@ -5,8 +5,10 @@
  *
  *  1. **Registration is loud** and reserved for what the manifest can honestly
  *     say: duplicate ids, built-in ids claimed by a plugin, host label keys used
- *     off-tree, a native channel outside the tree, `installable` drifting from
- *     `sdkInstall`.
+ *     off-tree, a native channel outside the tree, an install recipe missing its
+ *     fields. What it may *not* decide is whether the host likes the recipe's
+ *     executor value — that is a runtime table lookup (B-1, §6 item 12), pinned
+ *     in §2b below.
  *  2. **Boot parsing keeps today's semantics** (D1): a syntactically valid but
  *     uninstalled id behaves like an unknown value on all five sources — dsh plus
  *     a warning, never a crash — while "registered but cannot open" still fails
@@ -40,7 +42,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const { isBackendIdSyntax } = await import('../src/agent/backend-manifest.js')
 const { backendLabel, getBackend, isRegisteredBackend, listBackends, loadBackend, parseBackendChoice, registerBackend, unloadBackends } =
   await import('../src/dsh-adapter/backend-registry.js')
-const { probeKernels } = await import('../src/dsh-adapter/backends.js')
+const { probeKernels, installSurfaceFor } = await import('../src/dsh-adapter/backends.js')
+const { PNPM_PROFILE_ADD } = await import('../src/dsh-adapter/install/executors.js')
 const { normalizeBackendChoice } = await import('../src/dsh-adapter/index.js')
 const { readKernelPrefs, resolveRememberedBackend, writeKernelPrefs, parseBackendId, BUILTIN_BACKEND_IDS } = await import('../src/kernelPrefs.js')
 const { readLastRunRecord, writeLastRunRecord } = await import('../src/update.js')
@@ -92,16 +95,20 @@ for (const name of manifestFiles) {
   // carry is exactly the typo the generator cannot see and `loadBackend` would only
   // hit at the worst moment.
   const implementation = (await import(pathToFileURL(join(ROOT, 'src', 'backends', name, 'index.ts')).href)) as Record<string, unknown>
-  check(`src/backends/${name}: id matches the directory, exports resolve, installable matches sdkInstall`,
+  check(`src/backends/${name}: id matches the directory, exports resolve, the recipe is one this host runs`,
     manifest.id === name && manifest.inTree === true
       && typeof implementation[manifest.backendExport ?? 'backend'] === 'object'
       && (manifest.unloadExport === undefined || typeof implementation[manifest.unloadExport] === 'function')
-      && (manifest.installable === true) === (manifest.sdkInstall !== undefined))
+      // B-1 restates D5-1's invariant on the *derived* fact: declaring a recipe is
+      // exactly what makes an entry installable here. A typo in an in-tree
+      // executor name would otherwise cost that backend its wizard silently —
+      // nothing at runtime could report it.
+      && getBackend(name)?.installable === (manifest.install !== undefined))
 }
 check('claude declares no native channel; codex declares exactly its own (P0 §6)',
   getBackend('claude')?.manifest.nativeKey === undefined && getBackend('codex')?.manifest.nativeKey === 'codex')
 check('the install wizard target comes from the manifest that declares it',
-  getBackend('claude')?.manifest.sdkInstall?.version === (await import('../src/backends/claude/contract.js')).VALIDATED_SDK_VERSION)
+  getBackend('claude')?.manifest.install?.version === (await import('../src/backends/claude/contract.js')).VALIDATED_SDK_VERSION)
 
 // ── 2. Registration guards ─────────────────────────────────────────────────────
 const fakeManifest = (overrides: Partial<BackendManifest> = {}): BackendManifest =>
@@ -118,20 +125,41 @@ check('a plugin may not be always-available, nor declare a native channel',
     && throws(() => registerBackend({ manifest: fakeManifest({ nativeKey: 'acme' }) })))
 check('an always-available entry may not have a loader',
   throws(() => registerBackend({ manifest: fakeManifest({ id: 'dshx', inTree: true, alwaysAvailable: true }), load: async () => ({ backend: neverBackend }) })))
-check('installable and sdkInstall must agree',
-  throws(() => registerBackend({ manifest: fakeManifest({ installable: true }) }))
-    && throws(() => registerBackend({ manifest: fakeManifest({ sdkInstall: { specifier: '@acme/x@1', version: '1' } }) })))
-// Stage A ships exactly one install wizard — Claude's; `sdkInstallSurface()`
-// statically wires that one installer and the sdk-install overlay carries no
-// backend id at all. So declaring the data is an *exclusive* privilege, not
-// free-form manifest data: without this gate a fourth backend could turn its own
-// dim row into a one-Enter path into Claude's wizard (review, scope note). The
-// rule is id-based, and the real Claude manifest declares that very privilege at
-// module load, so a wrong constant makes the registry itself fail to import.
-check('only the host-installable backend may declare an install surface',
-  throws(() => registerBackend({
-    manifest: fakeManifest({ id: 'acme-install', inTree: true, installable: true, sdkInstall: { specifier: '@acme/x@1', version: '1' } }),
-  })))
+check('an install recipe is refused without a non-empty executor, specifier and version',
+  throws(() => registerBackend({ manifest: fakeManifest({ id: 'acme-noexec', install: { executor: '', specifier: '@acme/x@1', version: '1' } }) }))
+    && throws(() => registerBackend({ manifest: fakeManifest({ id: 'acme-nospec', install: { executor: 'pnpm-profile-add', specifier: '', version: '1' } }) }))
+    && throws(() => registerBackend({ manifest: fakeManifest({ id: 'acme-nover', install: { executor: 'pnpm-profile-add', specifier: '@acme/x@1', version: '' } }) })))
+// ── 2b. The install surface is a declaration, not an id (B-1, §6 item 12) ───────
+// §2.5's acceptance is "flip claude / codex to `inTree: false` and everything but
+// the label check (D2) stays green" — which could not hold while the privilege was
+// spelled as one id (`HOST_INSTALLABLE_BACKEND_ID`): the id decided, not the
+// declaration, so a plugin-shaped fourth backend could never have a wizard of its
+// own. The probes below are that acceptance in executable form — a non-inTree entry
+// declaring Claude's recipe gets *its own* wizard, while codex's "there is nothing
+// to install, the user's own binary is the dependency" is an ordinary absent recipe.
+check('a non-inTree entry may declare the host\'s executor, and the wizard it opens is its own (not Claude\'s)',
+  (() => {
+    registerBackend({
+      manifest: fakeManifest({ id: 'acme-install', install: { executor: PNPM_PROFILE_ADD, specifier: '@acme/agent-sdk@2.0.0', version: '2.0.0' } }),
+    })
+    const surface = installSurfaceFor('acme-install')
+    return getBackend('acme-install')?.installable === true
+      && surface?.executor === PNPM_PROFILE_ADD && surface.specifier === '@acme/agent-sdk@2.0.0' && surface.version === '2.0.0'
+  })())
+check('codex-style "no install surface" stays a first-class registered row: absent recipe, not installable, no surface',
+  getBackend('codex')?.manifest.install === undefined && getBackend('codex')?.installable === false
+    && installSurfaceFor('codex') === undefined)
+check('an executor this host does not implement registers as "no install surface" — no throw, no wizard, recipe kept',
+  (() => {
+    registerBackend({
+      manifest: fakeManifest({ id: 'acme-exotic', install: { executor: 'cargo-install', specifier: 'acme-sdk@1', version: '1' } }),
+    })
+    return getBackend('acme-exotic')?.manifest.install?.executor === 'cargo-install'
+      && getBackend('acme-exotic')?.installable === false
+      && installSurfaceFor('acme-exotic') === undefined
+  })())
+check('an id nobody registered has no install surface either (membership, then declaration)',
+  installSurfaceFor('never-registered') === undefined)
 check('ids must match the syntax gate',
   ['has:colon', '..', 'a/b', 'Acme', '', 'x'.repeat(33)].every(id => !isBackendIdSyntax(id))
     && throws(() => registerBackend({ manifest: fakeManifest({ id: 'has:colon' }) })))

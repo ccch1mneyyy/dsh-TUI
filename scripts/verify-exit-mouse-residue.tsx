@@ -92,6 +92,7 @@ await sleep(50) // 固定窗:pacing 挂载首帧收尾，无可轮询锚点
 // ── 模拟退出漏斗 finishExit（src/dsh-adapter/plugin.ts）：先 detach（置
 // isUnmounted），cleanup 序列随后写出——与真实退出同序。detach 置位后，
 // 窗口期一切终端写入都不应再发生。
+const querier: TerminalQuerier | undefined = ink.app?.querier
 ink.detachForShutdown()
 stdout.write('\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l')
 await flush()
@@ -125,8 +126,7 @@ check('退出后 reassertTerminalModes 零字节写出（kitty keyboard 不重�
 // detach 链（ink → App.detachForShutdown）已 dispose querier；绕过 probe
 // 直接打 querier，模拟退出窗口期任何残余调用方。
 const cut3 = bytes.length
-const querier: TerminalQuerier | undefined = ink.app?.querier
-check('querier 存在且已被 detach 链持有', querier !== undefined)
+check('保留的 querier 存在（detach 已卸载 App）', querier !== undefined)
 if (querier) {
   void querier.send(decrqm(1049))
   void querier.flush()

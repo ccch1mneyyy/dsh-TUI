@@ -13,7 +13,11 @@
  * remembers the hook of an entry it actually loaded (P0 D4).
  *
  * `vendorPackages: []` states the fact explicitly: this backend drives the
- * user's own `codex` binary and imports no vendor package.
+ * user's own `codex` binary and imports no vendor package. `install` is absent
+ * for the same reason, and that absence is a first-class answer rather than a
+ * gap (§6 item 12): there is no package for the host to add — what the row owes
+ * a user is detection's own "how to get it" hint, never an install button that
+ * could not do anything.
  */
 import type { BackendManifest } from '../../agent/backend-manifest.js'
 
@@ -25,7 +29,6 @@ export const manifest: BackendManifest = {
   inTree: true,
   backendExport: 'codexBackend',
   unloadExport: 'closeAllCodexHubs',
-  installable: false,
   vendorPackages: [],
   nativeKey: 'codex',
 }

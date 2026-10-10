@@ -1,18 +1,23 @@
 /**
- * One-shot installer for the optional `@anthropic-ai/claude-agent-sdk` peer.
+ * `pnpm-profile-add` — the host's one install executor (Stage B / B-1).
  *
- * Runs `pnpm add <sdk>@<pin>` in the DSH profile root — the install dir whose
- * `node_modules` the backend's dynamic import resolves through. Everything the
- * child prints is piped and captured, never inherited: an inherit-stdio child
- * may only run after the Ink frame is unmounted (the update.ts contract); a
- * captured one may run under the live TUI, which is what the kernel-picker
- * install wizard needs. Only the tail of the captured output is surfaced, on
- * failure.
+ * One install means: run `pnpm add <specifier>` in the DSH profile root, the
+ * install dir whose `node_modules` a backend's dynamic import resolves through.
+ * The *what* — which package, at which pin — is the backend's own business and
+ * lives in its manifest (`BackendManifest.install`); this file is the
+ * parameterized *how*. It used to sit in `src/backends/claude/install.ts`, where
+ * the only Claude-specific part was the specifier it passed.
  *
- * The pinned SDK version is old enough that pnpm's minimumReleaseAge gate
- * never blocks it; if the pin ever moves to a version published within the
- * gate's window, the install needs a `minimumReleaseAgeExclude` entry
- * (generalize `ensureProfileReleaseAgeExclude` in update.ts then).
+ * Everything the child prints is piped and captured, never inherited: an
+ * inherit-stdio child may only run after the Ink frame is unmounted (the
+ * update.ts contract); a captured one may run under the live TUI, which is what
+ * the kernel-picker install wizard needs. Only the tail of the captured output
+ * is surfaced, on failure.
+ *
+ * A pin old enough is never blocked by pnpm's minimumReleaseAge gate; if a
+ * backend's pin ever moves to a version published within the gate's window, that
+ * install needs a `minimumReleaseAgeExclude` entry (generalize
+ * `ensureProfileReleaseAgeExclude` in update.ts then).
  */
 import { spawn } from 'node:child_process'
 import { rmSync } from 'node:fs'
@@ -22,15 +27,13 @@ import stripAnsi from 'strip-ansi'
 import type { SdkInstallResult, SdkInstallTarget, SdkInstaller } from '../../agent/backend.js'
 import { ensureWorkspaceAllowBuilds, ensureWorkspaceStoreDir, isStandaloneRuntime, profileWorkspaceYamlPath, resolveDshProfileName } from '../../update.js'
 import { shellQuote } from '../../utils/shellQuote.js'
-import { CLAUDE_SDK_SPECIFIER } from './contract.js'
-
-export type { SdkInstallTarget, SdkInstallResult, SdkInstaller } from '../../agent/backend.js'
+import type { InstallExecutor } from './executors.js'
 
 /** Resolve the install target for the CURRENT launch (never throws). The
  *  non-profile kinds carry the reason for the wizard's manual-instructions
  *  panel: standalone builds swap a whole binary (update.ts owns that path),
  *  and source checkouts / `--config` launches have no profile to add into. */
-export function resolveSdkInstallTarget(argv: readonly string[] = process.argv): SdkInstallTarget {
+function resolveTarget(argv: readonly string[] = process.argv): SdkInstallTarget {
   if (isStandaloneRuntime()) return { kind: 'standalone' }
   const profile = resolveDshProfileName(argv)
   return profile === undefined ? { kind: 'no-profile' } : { kind: 'profile', dir: dirname(profileWorkspaceYamlPath(profile)) }
@@ -78,7 +81,7 @@ function runPnpm(args: readonly string[], cwd: string): { readonly promise: Prom
 }
 
 /** Whether `pnpm` runs at all (the wizard's preflight). */
-export async function checkPnpmAvailable(): Promise<boolean> {
+async function preflight(): Promise<boolean> {
   const { promise } = runPnpm(['--version'], homedir())
   const run = await promise
   return run.code === 0 && run.spawnError === undefined
@@ -94,8 +97,8 @@ function isStoreMismatch(run: CapturedRun): boolean {
     && run.lines.some(line => UNEXPECTED_STORE.test(line))
 }
 
-/** Install the pinned SDK into the profile root. Resolve target failures are
- *  the caller\u0027s business (the wizard shows manual instructions for them).
+/** Install one specifier into the profile root. Resolve-target failures are
+ *  the caller's business (the wizard shows manual instructions for them).
  *
  *  Store drift heals itself: the workspace file is pinned to a stable
  *  \u0060storeDir\u0060 first (see \u0060ensureWorkspaceStoreDir\u0060), and when pnpm still
@@ -105,7 +108,7 @@ function isStoreMismatch(run: CapturedRun): boolean {
  *  all inside this one result. A live TUI may be running from that
  *  node_modules: open inodes keep it alive on Linux/macOS, and the window
  *  matches what a manual rebuild already does today. */
-export function startClaudeSdkInstall(dir: string): SdkInstaller {
+function start(specifier: string, dir: string): SdkInstaller {
   let cancelled = false
   let active: Readonly<{ cancel: () => void }> | undefined
   const run = (args: readonly string[]): Promise<CapturedRun> => {
@@ -122,7 +125,7 @@ export function startClaudeSdkInstall(dir: string): SdkInstaller {
     const yamlPath = join(dir, 'pnpm-workspace.yaml')
     ensureWorkspaceStoreDir(yamlPath)
     ensureWorkspaceAllowBuilds(yamlPath)
-    const first = await run(['add', CLAUDE_SDK_SPECIFIER])
+    const first = await run(['add', specifier])
     if (cancelled) return { kind: 'cancelled' }
     if (first.code === 0) return { kind: 'ok' }
     if (first.spawnError === 'ENOENT') return { kind: 'pnpm-missing' }
@@ -139,7 +142,7 @@ export function startClaudeSdkInstall(dir: string): SdkInstaller {
     if (rebuild.code !== 0) {
       return { kind: 'failed', exitCode: rebuild.code ?? 1, tail: rebuild.lines.slice(-10) }
     }
-    const retry = await run(['add', CLAUDE_SDK_SPECIFIER])
+    const retry = await run(['add', specifier])
     if (cancelled) return { kind: 'cancelled' }
     if (retry.code === 0) return { kind: 'ok', rebuiltStore: true }
     if (retry.spawnError === 'ENOENT') return { kind: 'pnpm-missing' }
@@ -147,3 +150,5 @@ export function startClaudeSdkInstall(dir: string): SdkInstaller {
   })()
   return { result, cancel: () => { cancelled = true; active?.cancel() } }
 }
+
+export const pnpmProfileAdd: InstallExecutor = { resolveTarget, preflight, start }

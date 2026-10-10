@@ -857,5 +857,85 @@ for (const route of ['missing', 'ready', 'failed'] as const) {
     backendPermissionCommand(undefined, 'default', '') === undefined
       && backendPermissionCommand({ modes: [], currentIndex: -1 }, '', '') === undefined)
 }
+// ── B-1: the row you press Enter on decides which install surface runs ────────
+// Stage A resolved ONE host-global surface at composition time — Claude's wizard,
+// behind an `sdk-install` overlay that carried no backend id at all — so a second
+// installable backend could only ever have installed Claude's SDK. The surface is
+// now looked up per backend id, at the moment the row is picked (Stage B /
+// §6 item 12). These two rows are that fact end to end: one with a recipe opens the
+// wizard of *its own* recipe (a version and a directory nobody else declares), and
+// one without a recipe keeps its dead-end reason and opens nothing — the two fixture
+// shapes §5 asks for, at the Chat level rather than in the registry gate.
+{
+  const INSTALL_DIR = 'C:\\Users\\verify\\.dsh\\profiles\\acme'
+  const INSTALL_VERSION = '9.9.9'
+  const asked: string[] = []
+  const session: AgentSession = {
+    ...freshSession({}),
+    ref: { backendId: 'claude', sessionId: 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1' },
+  }
+  const channel = createChannel(ctx, session, { model: 'fake-model', provider: '', cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent' })
+  const term = new XTerm({ cols: 100, rows: 30, scrollback: 0, allowProposedApi: true })
+  class Out extends Writable { columns = 100; rows = 30; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
+  class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
+  const stdin = new In()
+  const screen = (): string => viewportLines(term, 30).join('\n')
+  const instance = await ui.render(
+    React.createElement(Chat, {
+      channel: channel as never,
+      questionStore: new QuestionStore(),
+      approvalStore: new ApprovalStore(),
+      onExit: () => undefined,
+      fullscreen: false,
+      trajectorySeen: true,
+      // The registry projection the composition root hands in, plus the two facts
+      // the picker needs: nobody is installed, and exactly one backend has an
+      // install surface this host can run (claude's manifest recipe).
+      kernelEntries: kernelEntriesOf(listBackends()),
+      onProbeKernels: () => Promise.resolve({ claude: { installed: false }, codex: { installed: false } }),
+      onResolveSdkInstall: (id) => {
+        asked.push(id)
+        return id === 'claude'
+          ? {
+              executor: 'pnpm-profile-add',
+              specifier: `@acme/verify-sdk@${INSTALL_VERSION}`,
+              version: INSTALL_VERSION,
+              resolveTarget: () => ({ kind: 'profile', dir: INSTALL_DIR }),
+              start: () => ({ result: Promise.resolve({ kind: 'cancelled' as const }), cancel: () => undefined }),
+              preflight: () => Promise.resolve(true),
+            }
+          : undefined
+      },
+    }),
+    { stdout: new Out() as never, stdin: stdin as never, stderr: new Out() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  try {
+    await sleep(300) // 固定窗:pacing the key handlers attach after the first frame.
+    for (const char of '/kernel') stdin.write(char)
+    await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
+    stdin.write('\r')
+    check('B-1: the picker marks the not-installed row of the one installable backend',
+      await settled(() => screen().includes(t('kernel-not-installed-installable'))), screen())
+    // A row whose manifest declares no recipe: Enter is the dead end it always was,
+    // and the host is never even asked (nothing to look up).
+    stdin.write('\x1b[B')
+    await sleep(150) // 固定窗:pacing 模态 Enter 有 80ms 防抖，焦点移动要走完一个渲染帧。
+    stdin.write('\r')
+    check('B-1: a row with no recipe opens no wizard at all — it keeps its dead-end reason',
+      await settled(() => channel.notifications.some(item => item.text === t('kernel-unavailable-not-installed'))
+        && !screen().includes(t('sdk-install-title'))) && asked.length === 0,
+      `${asked.join()} | ${channel.notifications.map(item => item.text).join(' | ')} | ${screen()}`)
+    stdin.write('\x1b[A')
+    await sleep(150) // 固定窗:pacing 同上（回到 Claude 行）。
+    stdin.write('\r')
+    check('B-1: the wizard is built from THAT row\'s recipe — its version and its target, not a host constant',
+      await settled(() => screen().includes(t('sdk-install-title')) && screen().includes(INSTALL_VERSION) && screen().includes(INSTALL_DIR)
+        && !screen().includes('0.3.287')) && asked.join() === 'claude', `${asked.join()} | ${screen()}`)
+  } finally {
+    instance.unmount()
+    channel.releaseContributions()
+    term.dispose()
+  }
+}
 console.log(`\nverify-backend-chat OK (${passed} checks)`)
 process.exit(0)

@@ -10,29 +10,34 @@ import { reserveMount, reserveNewSession } from '../sessionMounts.js'
 import { resumeTargetFromArgv } from '../sessionHistory.js'
 import { mountFailureText } from '../sessions/resumeFailure.js'
 import { logForDebugging } from '../utils/debug.js'
-// Static on purpose: the install module imports no vendor package (node
-// built-ins + update.ts, which this adapter loads anyway), so a DSH-only
-// boot pays nothing for having the wizard's surface at hand.
-import { checkPnpmAvailable, resolveSdkInstallTarget, startClaudeSdkInstall } from '../backends/claude/install.js'
-import { CLAUDE_BACKEND_ID } from '../backends/claude/contract.js'
+import { installExecutor } from './install/executors.js'
 import { fileChannelTokens } from '../backends/shared/channel-tokens.js'
 
 /**
- * The host's one-click SDK install wizard, paired with the manifest data of the
- * entry that declares it (`BackendManifest.sdkInstall`): the manifest says what
- * and which version, the host holds the actions. P0 ships exactly one wizard
- * (Claude's); a second backend with its own is Stage B work — until then this
- * returns undefined when nothing declares the data, and the picker's dim row
- * keeps its dead-end reason.
+ * The install surface of one registered backend (Stage B / B-1): the manifest's
+ * recipe with the actions of the executor that recipe names. Undefined when the
+ * entry declares no recipe, is not registered, or names an executor this host
+ * does not implement — all three are "no install surface", which the picker
+ * renders as the dim row's dead-end reason.
+ *
+ * The manifest says **what** (specifier + pin) and **which executor**; nothing
+ * here imports a backend, and nothing is resolved before the user picks a row:
+ * the entry behind that row is the one whose recipe gets run (§6 item 12).
+ *
+ * The id is a plain `string` on purpose, exactly like `getBackend`: membership is
+ * half of what this answers, so asking about an id that was never registered is a
+ * question with an answer, not a type error.
  */
-export function sdkInstallSurface(): SdkInstallSurface | undefined {
-  const spec = getBackend(CLAUDE_BACKEND_ID)?.manifest.sdkInstall
-  if (spec === undefined) return undefined
+export function installSurfaceFor(id: string): SdkInstallSurface | undefined {
+  const recipe = getBackend(id)?.manifest.install
+  if (recipe === undefined) return undefined
+  const executor = installExecutor(recipe.executor)
+  if (executor === undefined) return undefined
   return {
-    ...spec,
-    resolveTarget: (): SdkInstallTarget => resolveSdkInstallTarget(),
-    start: (dir: string): SdkInstaller => startClaudeSdkInstall(dir),
-    checkPnpm: (): Promise<boolean> => checkPnpmAvailable(),
+    ...recipe,
+    resolveTarget: (): SdkInstallTarget => executor.resolveTarget(),
+    start: (dir: string): SdkInstaller => executor.start(recipe.specifier, dir),
+    preflight: (): Promise<boolean> => executor.preflight(),
   }
 }
 
