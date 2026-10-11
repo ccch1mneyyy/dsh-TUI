@@ -950,6 +950,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // (swapping layouts requires re-mounting the whole tree).
   let bootedFullscreen = config.fullscreen === true
   let bootedTerminalImages = lastBootedTerminalImages ?? config.terminalImages ?? true
+  // The launchpad boot decision (settings `launchpad`): same
+  // restart-to-apply pattern as fullscreen — resolved before the tree mounts
+  // from the settings user layer over cordis.yml; a mid-session edit is for
+  // the next boot, the running session keeps what it booted with.
+  let bootedLaunchpad = config.launchpad !== false
   let rendererSettingsFrozen = false
   const terminalImagesDisabledByEnv = isEnvTruthy(process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES)
   // The settings service may come up AFTER this plugin's apply: the cordis
@@ -1091,6 +1096,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         // Same no-default rule: unset keeps cordis.yml's `fullscreen`
         // decisive; set overrides it from the next boot on.
         fullscreen: Schema.boolean(),
+        // Same no-default rule as fullscreen: the launchpad boot gate reads
+        // `value.launchpad ?? config.launchpad ?? true`, so cordis.yml stays
+        // decisive while the user layer is unset.
+        launchpad: Schema.boolean(),
         // Unset inherits cordis.yml; a saved choice takes effect after restart.
         terminalImages: Schema.boolean(),
         // Built-in action-shortcut overrides, one optional combo string per
@@ -1119,6 +1128,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       brand?: string
       minimal?: boolean
       fullscreen?: boolean
+      launchpad?: boolean
       terminalImages?: boolean
       thinkingFold?: 'preview' | 'full'
       jobGroupFold?: 'auto' | 'always' | 'never'
@@ -1198,6 +1208,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       if (rendererSettingsFrozen) return
       if (typeof value.fullscreen === 'boolean') {
         bootedFullscreen = value.fullscreen
+      }
+      if (typeof value.launchpad === 'boolean') {
+        bootedLaunchpad = value.launchpad
       }
       bootedTerminalImages = lastBootedTerminalImages ?? value.terminalImages ?? config.terminalImages ?? true
     }
@@ -1319,6 +1332,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     const { fullscreen: staleFullscreen, ...migratedSettings } = bootSettings
     apply(fullscreenMigration === 'unset' ? migratedSettings : bootSettings)
     let lastTerminalImages = bootSettings.terminalImages ?? config.terminalImages ?? true
+    let lastLaunchpad = bootSettings.launchpad ?? config.launchpad ?? true
     settingsCtx.effect(() => scope.watch(next => {
       apply(next)
       if (typeof next.fullscreen === 'boolean' && next.fullscreen !== bootedFullscreen) {
@@ -1329,6 +1343,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         channel.notify(t('settings-terminal-images-restart'), { color: 'warning' })
       }
       lastTerminalImages = terminalImages
+      const launchpad = next.launchpad ?? config.launchpad ?? true
+      if (launchpad !== lastLaunchpad && launchpad !== bootedLaunchpad) {
+        notifyChannel(t('settings-launchpad-restart'), { color: 'warning' })
+      }
+      lastLaunchpad = launchpad
     }))
     resolveSettingsReady?.()
   })
@@ -1654,6 +1673,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
             const budget = Number(draft)
             if (!Number.isInteger(budget) || budget < BTW_CONTEXT_BUDGET_MIN || budget > BTW_CONTEXT_BUDGET_MAX) return undefined
             return { kind: 'set', value: budget }
+          },
+        },
+        {
+          ...settingField('launchpad'),
+          format(value: unknown): string {
+            // Unset in settings.yaml: the effective default is on — same
+            // rule as expandEditor's field.
+            return String(typeof value === 'boolean' ? value : config.launchpad !== false)
           },
         },
         {
@@ -2079,11 +2106,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    * ordinary launch starts on it, because it is where the first sentence gets
    * typed rather than a tutorial that retires itself — on every backend: a
    * remembered claude kernel lands here exactly like a dsh one (the `dshBoot`
-   * gate below is deliberately absent). `DSH_TUI_NO_LAUNCHPAD=1` is the
-   * escape hatch (an automation that wants the old blank conversation and no
-   * dialog in front of it).
+   * gate below is deliberately absent). The /settings `launchpad` toggle
+   * (settings user layer over cordis.yml, resolved into `bootedLaunchpad`
+   * above) is the persistent off switch — off boots straight into the chat
+   * page. `DSH_TUI_NO_LAUNCHPAD=1` remains the env escape hatch (an
+   * automation that wants the old blank conversation and no dialog in front
+   * of it).
    */
-  const launchpadOnBoot = noResume && process.env.DSH_TUI_NO_LAUNCHPAD !== '1'
+  const launchpadOnBoot = noResume && bootedLaunchpad && process.env.DSH_TUI_NO_LAUNCHPAD !== '1'
   /**
    * The first-run guide. Gated on its own preference (not on `homeSeen`): the
    * two answer different questions, and an install that already knows its

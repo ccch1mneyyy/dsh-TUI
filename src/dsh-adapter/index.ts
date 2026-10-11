@@ -118,6 +118,12 @@ export interface Config {
    *  /settings choices override this value after restart. The environment
    *  override DSH_TUI_DISABLE_TERMINAL_IMAGES can always force previews off. */
   terminalImages?: boolean
+  /** Launchpad landing page (settings `dsh-tui.launchpad`): an ordinary
+   *  launch (no --resume, no first prompt) starts on the launchpad — the
+   *  page where the first sentence gets typed. On by default; `false` boots
+   *  straight into the chat page. Saved /settings choices override this
+   *  value after restart; DSH_TUI_NO_LAUNCHPAD=1 skips it regardless. */
+  launchpad?: boolean
   /** UI language: `en` / `zh`. When absent, the `DSH_TUI_LANG` env var wins,
    *  then the `/lang` choice persisted in `~/.dsh-tui/lang.json`, then `zh`. */
   lang?: string
@@ -326,6 +332,10 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   contextBar: Schema.boolean().default(true),
   fullscreen: Schema.boolean().default(true),
   terminalImages: Schema.boolean().default(true),
+  // No `.default()` on purpose (same rule as recapOnOpen): an unset key must
+  // stay distinguishable from an explicit `false`, and the boot reads
+  // undefined as on (`config.launchpad !== false`).
+  launchpad: Schema.boolean(),
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
