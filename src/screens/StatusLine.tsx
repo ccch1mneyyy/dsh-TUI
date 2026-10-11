@@ -437,7 +437,16 @@ const selectionBadge = formatSelectionBadge(channel.selection)
           </Text>
         ),
       }
+  // The placeholder's backend is still opening: say so up front, so the
+  // frame drawn before DSH's synchronous load is not a silent one.
+  const startingPart: FieldPart | undefined = channel.ready === false && channel.startupFailure === undefined
+    ? {
+        key: 'starting',
+        node: <Text color="warning">{t('status-starting', { backend: channel.backendCapabilities?.backendLabel ?? 'DSH' })}</Text>,
+      }
+    : undefined
   const leftFields: FieldPart[] = [
+    ...(startingPart !== undefined ? [startingPart] : []),
     ...(statusBar.model
       ? [{ key: 'model', id: 'model' as const, ...(modelPicker === undefined ? {} : { onClick: modelPicker.onOpen }), node: <Text color="inactiveShimmer">{channel.modelDisplay ?? channel.model}</Text> }]
       : []),

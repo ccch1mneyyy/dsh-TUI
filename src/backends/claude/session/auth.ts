@@ -2,7 +2,7 @@
 import type { AccountInfo, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountView, SessionAuthView } from '../../../agent/capabilities.js'
 import type { AgentEvent, AgentEventMeta } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { claudeText } from '../text.js'
 import { detectClaudeAuth, refreshFailureDebugDetail, type ClaudeAuthPlan } from '../auth.js'
 import { accountView } from '../controls.js'
 import type { ClaudeTranslator } from '../translate.js'
@@ -61,11 +61,11 @@ export function createSessionAuth(context: {
       new Promise<false>((resolve, reject) => { idleWaiters.push({ resolve: () => resolve(false), reject }) }),
       new Promise<true>(resolve => { timer = clock.setTimeout(() => resolve(true), RECONNECT_DEFER_MS) }),
     ]).finally(() => clock.clearTimeout(timer))
-    if (timedOut && !context.disposing) emit([{ type: 'notice', level: 'warning', text: t('claude-auth-reconnect-forced') }])
+    if (timedOut && !context.disposing) emit([{ type: 'notice', level: 'warning', text: claudeText('claude-auth-reconnect-forced') }])
   }
 
   const reconnect = (renewal: { readonly rejected?: string }, options: { readonly waitIdle?: boolean } = {}): Promise<void> => {
-    if (context.disposing) return Promise.reject(new Error(t('claude-session-closed')))
+    if (context.disposing) return Promise.reject(new Error(claudeText('claude-session-closed')))
     reconnecting ??= (async (): Promise<void> => {
       const deferred = options.waitIdle === true
       let stopped = deferred ? undefined : stopForReconnect()
@@ -100,7 +100,7 @@ export function createSessionAuth(context: {
         // Nothing can deliver them now: retire their previews, say so.
         const dropped = translator.dropInputs(unstarted)
         pushed.clear()
-        if (dropped.length > 0) emit([...dropped, { type: 'notice', level: 'warning', text: t('claude-auth-inputs-dropped', { n: unstarted.length }) }])
+        if (dropped.length > 0) emit([...dropped, { type: 'notice', level: 'warning', text: claudeText('claude-auth-inputs-dropped', { n: unstarted.length }) }])
         onExit(error)
         throw error
       }
@@ -125,7 +125,7 @@ export function createSessionAuth(context: {
           lost.push(uuid)
         }
       }
-      if (lost.length > 0) emit([...translator.dropInputs(lost), { type: 'notice', level: 'warning', text: t('claude-auth-inputs-dropped', { n: lost.length }) }])
+      if (lost.length > 0) emit([...translator.dropInputs(lost), { type: 'notice', level: 'warning', text: claudeText('claude-auth-inputs-dropped', { n: lost.length }) }])
       next.consumer = consume(next)
       if (renewError !== undefined) throw renewError
     })().finally(() => { reconnecting = undefined })
@@ -142,7 +142,7 @@ export function createSessionAuth(context: {
    *  material (auth.ts contract) — the error's own text is never logged. */
   const renewalFailed = (error: unknown): string => {
     deps.host.debug(`claude: reconnect failed (${refreshFailureDebugDetail(error)})`)
-    return deps.auth?.failureNotice?.(error) ?? t('claude-auth-reconnect-failed')
+    return deps.auth?.failureNotice?.(error) ?? claudeText('claude-auth-reconnect-failed')
   }
 
   /** The CLI refused the credential: renew and resume once, then send the
@@ -150,12 +150,12 @@ export function createSessionAuth(context: {
   const onAuthFailure = (): void => {
     if (context.disposing) return
     if (authAttempts >= 1) {
-      emit([{ type: 'notice', level: 'error', text: t('claude-auth-failed-login') }])
+      emit([{ type: 'notice', level: 'error', text: claudeText('claude-auth-failed-login') }])
       return
     }
     authAttempts += 1
     reconnect({ rejected: injectedToken() }).then(() => {
-      emit([{ type: 'notice', level: 'warning', text: t('claude-auth-reconnected') }])
+      emit([{ type: 'notice', level: 'warning', text: claudeText('claude-auth-reconnected') }])
     }, (error: unknown) => {
       emit([{ type: 'notice', level: 'error', text: error instanceof RenewalFailed ? error.message : renewalFailed(error) }])
     })
@@ -163,13 +163,13 @@ export function createSessionAuth(context: {
 
   /** `/login` lines: where the credential comes from, never the token. */
   const authStatus = async (): Promise<SessionAuthView> => {
-    const lines = [t('claude-auth-source', { source: authSourceLabel(context.authPlan) })]
+    const lines = [claudeText('claude-auth-source', { source: authSourceLabel(context.authPlan) })]
     const route = routeLabel(context.authPlan)
-    if (route !== undefined) lines.push(t('claude-auth-route', { route }))
+    if (route !== undefined) lines.push(claudeText('claude-auth-route', { route }))
     if (context.authPlan.source === 'claude-login' && await detectClaudeAuth(process.env, undefined) === 'missing' && context.account?.subscriptionType === undefined) {
-      lines.push(t('claude-auth-missing-hint'))
+      lines.push(claudeText('claude-auth-missing-hint'))
     }
-    lines.push(t('claude-auth-cli', { source: context.apiKeySource ?? t('doctor-unknown'), token: context.account?.tokenSource ?? t('doctor-unknown') }))
+    lines.push(claudeText('claude-auth-cli', { source: context.apiKeySource ?? claudeText('doctor-unknown'), token: context.account?.tokenSource ?? claudeText('doctor-unknown') }))
     if (context.account !== undefined) lines.push(...accountLines(accountView(context.account, context.apiKeySource)))
     return { lines }
   }
@@ -188,7 +188,7 @@ export function createSessionAuth(context: {
 export function authSourceLabel(plan: ClaudeAuthPlan): string {
   switch (plan.source) {
     case 'dsh-auth':
-      return plan.expiresAt === undefined ? t('claude-auth-source-dsh-auth') : t('claude-auth-source-dsh-auth-expires', { time: new Date(plan.expiresAt).toISOString() })
+      return plan.expiresAt === undefined ? claudeText('claude-auth-source-dsh-auth') : claudeText('claude-auth-source-dsh-auth-expires', { time: new Date(plan.expiresAt).toISOString() })
     case 'api-key':
       return 'ANTHROPIC_API_KEY'
     case 'auth-token':
@@ -196,9 +196,9 @@ export function authSourceLabel(plan: ClaudeAuthPlan): string {
     case 'oauth-env':
       return 'CLAUDE_CODE_OAUTH_TOKEN'
     case 'cloud':
-      return t('claude-auth-source-cloud', { provider: plan.cloud ?? '' })
+      return claudeText('claude-auth-source-cloud', { provider: plan.cloud ?? '' })
     case 'claude-login':
-      return t('claude-auth-source-claude-login')
+      return claudeText('claude-auth-source-claude-login')
     default: {
       const unknown: never = plan.source
       return unknown
@@ -216,17 +216,17 @@ function routeLabel(plan: ClaudeAuthPlan): string | undefined {
     case 'cloud':
       return undefined
     case 'custom-endpoint':
-      return t('claude-route-custom-endpoint', { host: route.host })
+      return claudeText('claude-route-custom-endpoint', { host: route.host })
     case 'custom-oauth':
-      return t('claude-route-custom-oauth')
+      return claudeText('claude-route-custom-oauth')
     case 'unix-socket':
-      return t('claude-route-unix-socket')
+      return claudeText('claude-route-unix-socket')
     case 'gateway':
-      return t('claude-route-gateway')
+      return claudeText('claude-route-gateway')
     case 'api-key-helper':
-      return t('claude-route-api-key-helper')
+      return claudeText('claude-route-api-key-helper')
     case 'settings-unreadable':
-      return t('claude-route-settings-unreadable')
+      return claudeText('claude-route-settings-unreadable')
     default: {
       const unknown: never = route
       return unknown
@@ -237,5 +237,5 @@ function routeLabel(plan: ClaudeAuthPlan): string | undefined {
 /** Account lines (never the email). */
 export function accountLines(view: AccountView): string[] {
   const parts = [view.organization, view.subscription, view.provider].filter((part): part is string => part !== undefined && part !== '')
-  return parts.length === 0 ? [] : [t('claude-auth-account', { account: parts.join(' · ') })]
+  return parts.length === 0 ? [] : [claudeText('claude-auth-account', { account: parts.join(' · ') })]
 }

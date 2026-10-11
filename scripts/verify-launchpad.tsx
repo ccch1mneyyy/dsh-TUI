@@ -1157,9 +1157,10 @@ for (const brand of ['claude', 'codex'] as const) {
     rowOf(ok, 'dsh')?.current === false && rowOf(ok, 'claude')?.selectable === true && rowOf(ok, 'claude')?.current === true
       && rowOf(ok, 'claude')?.version === 'claude-code v2.1.287' && rowOf(ok, 'claude')?.reasonKey === undefined,
     JSON.stringify(ok))
-  check('K3 目录：auth=missing 置灰(未登录)；auth=unknown 仍可选（分不清≠没有）；installed=false → 未安装',
-    rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing', version: '1.2.3' } } }), 'claude')?.selectable === false
-      && rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing' } } }), 'claude')?.reasonKey === 'kernel-unavailable-auth-missing'
+  check('K3 目录：auth=missing/unknown 均可选（凭据可能在检测看不到的地方）；loginInSession 行带登录注记；installed=false → 未安装',
+    rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing', version: '1.2.3' } } }), 'claude')?.selectable === true
+      && rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing' } } }), 'claude')?.reasonKey === undefined
+      && rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing', loginInSession: true } } }), 'claude')?.noteKey === 'kernel-login-in-session'
       && rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: true, auth: 'unknown' } } }), 'claude')?.selectable === true
       && rowOf(catalog({ current: 'dsh', statuses: { claude: { installed: false, version: '1.2.3' } } }), 'claude')?.reasonKey === 'kernel-unavailable-not-installed')
   // 短品牌名不再是宿主里的 id→名字表：它来自 manifest，经宿主投影（P0 D2）。
@@ -1186,7 +1187,8 @@ for (const brand of ['claude', 'codex'] as const) {
       && subtitleOf({ current: 'dsh', dshVersion: '0.2.6', statuses: { claude: { installed: false } } }, 'claude') === 'R:kernel-unavailable-not-installed'
       && subtitleOf({ current: 'dsh', dshVersion: '0.2.6' }, 'dsh') === 'dsh-core v0.2.6'
       && subtitleOf({ current: 'dsh' }, 'dsh') === undefined
-      && subtitleOf({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing', version: '1.2.3' } } }, 'claude') === 'claude-code v1.2.3 · R:kernel-unavailable-auth-missing',
+      && subtitleOf({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing', version: '1.2.3' } } }, 'claude') === 'claude-code v1.2.3'
+      && subtitleOf({ current: 'dsh', statuses: { claude: { installed: true, auth: 'missing', version: '1.2.3', loginInSession: true } } }, 'claude') === 'claude-code v1.2.3 · R:kernel-login-in-session',
     JSON.stringify(catalog({ current: 'dsh', dshVersion: '0.2.6' }).map(option => [option.id, kernelSubtitle(option, key => 'R:' + key)])))
 
   // kernel.json 记忆：原子写（tmp+rename，claude prefs.ts 同款）往返。
@@ -1318,8 +1320,10 @@ for (const brand of ['claude', 'codex'] as const) {
   // 组合根写入接线：启动与退出路径都要更新最后运行记录。
   const funnelSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
   const refreshCalls = funnelSource.split('refreshLastRunRecord()').length - 1
-  check('LR4 plugin.ts 写记录接线齐：boot 落盘 + 崩溃/更新//restart/干净退出四个漏斗分支刷新（内核切换分支不写——替换进程自己写）',
-    funnelSource.includes('const refreshLastRunRecord = (): void =>') && refreshCalls === 5,
+  // 第 6 处：进程内 DSH 内核在 attachDsh 拿到 DSH 会话后再写一次；
+  // 第 7 处：它启动失败后 /new 经 DSH 创建路径（openDshSession）打开会话时同样写一次。
+  check('LR4 plugin.ts 写记录接线齐：boot 落盘 + 崩溃/更新//restart/干净退出四个漏斗分支刷新（内核切换分支不写——替换进程自己写）+ 进程内 DSH 接管后一次 + 失败后 /new 一次',
+    funnelSource.includes('const refreshLastRunRecord = (): void =>') && refreshCalls === 7,
     'refresh calls=' + refreshCalls)
 
   // 启动页的 boot 门（用户实测：kernel.json 记住 claude 后全新启动直接进聊天页、
@@ -2504,12 +2508,11 @@ for (const cols of [120, 100, 72, 60, 48]) {
     `tui=${tuiRow} plate=${JSON.stringify(plateRows)} ${JSON.stringify(lines[tuiRow + 1]?.trimEnd())}`)
   const dshFg = fgKeyOf(firstGlyph(dshRow))
   const claudeFg = fgKeyOf(firstGlyph(claudeRow))
-  check('S2 当前内核行正常亮度（与 dim 行不同色），其余行两个空格前缀且与 TUI 版本行同色（dim）',
+  check('S2 当前内核行正常亮度（与 dim 行不同色），其余行与 TUI 版本行同色（dim）且右端贴齐',
     dshFg !== claudeFg && claudeFg === fgKeyOf(tuiCell) && claudeFg !== 'default'
       && !lines[claudeRow]!.includes(MARK)
-      // 前缀等宽：两个名字的起始列相同（▸ + 空格 vs 两个空格）。
-      && stringWidth(lines[dshRow]!.slice(0, lines[dshRow]!.indexOf(DSH_LABEL)))
-        === stringWidth(lines[claudeRow]!.slice(0, lines[claudeRow]!.indexOf(CLAUDE_LABEL))),
+      // 右缘对齐：每行右端都贴 TUI 版本行那条右边界（左端随内容长短参差）。
+      && Math.abs(rightGap(lines[dshRow]!, COLS) - rightGap(lines[claudeRow]!, COLS)) <= 1,
     `dsh=${dshFg} claude=${claudeFg} tui=${fgKeyOf(tuiCell)} claude=${JSON.stringify(lines[claudeRow]?.trimEnd())}`)
   check('S2b 底栏画短品牌名（DSH / Claude），全名一个都不画（全名只进选择器）',
     lines[dshRow]!.includes(MARK + DSH_LABEL + ' \u00b7 ') && lines[claudeRow]!.trim().startsWith(CLAUDE_LABEL + ' \u00b7 ')
@@ -2518,6 +2521,35 @@ for (const cols of [120, 100, 72, 60, 48]) {
   check('S3 探测未回来：claude 行显示「检测中…」——置灰但**不是**「未安装」',
     claudeRow >= 0 && lines[claudeRow]!.includes('检测中…') && !lines[claudeRow]!.includes('未安装'),
     JSON.stringify(lines[claudeRow]?.trimEnd()))
+  // 未登录行的铭牌形态：**登录状态不进铭牌**（要切内核时在选择器里看），铭牌只有
+  // 名字与版号；各行右端都贴 TUI 版本行那条右边界——参差全留在左边。
+  {
+    const signedOut = catalog({
+      current: 'dsh', dshVersion: '0.2.0-rc.2',
+      statuses: {
+        claude: { installed: true, auth: 'missing', version: '2.1.295', loginInSession: true },
+        codex: { installed: true, auth: 'ok', version: '0.160.1' },
+      },
+    })
+    const s3 = await openLaunchpad([], { kernels: signedOut })
+    await settled(() => s3.screen().includes('claude-code v2.1.295'))
+    const lines3 = viewportLines(s3.term)
+    const tuiRow3 = lines3.findIndex(l => l.includes(`dsh-tui v${VERSION}`))
+    const outRow = lines3.findIndex(l => l.includes('claude-code v2.1.295'))
+    const okRow = lines3.findIndex(l => l.includes('codex-cli v0.160.1'))
+    check('S3b 未登录不进铭牌：行只有名字与版号（状态留给选择器）',
+      outRow >= 0 && tuiRow3 >= 0 && outRow === tuiRow3 + 2
+        && !lines3[outRow]!.includes('未登录')
+        && lines3[outRow]!.includes('Claude · claude-code v2.1.295')
+        && (lines3[okRow] ?? '').trim().startsWith('Codex · '),
+      JSON.stringify({ out: lines3[outRow]?.trimEnd(), ok: lines3[okRow]?.trimEnd() }))
+    check('S3c 各行右端贴齐同一条右边界（TUI 行与全部内核行，差 ≤1 列）',
+      [tuiRow3 + 1, outRow, okRow].every(row => row >= 0)
+        && [tuiRow3 + 1, outRow, okRow].every(row =>
+          Math.abs(rightGap(lines3[row]!, COLS) - rightGap(lines3[tuiRow3]!, COLS)) <= 1),
+      [tuiRow3, tuiRow3 + 1, outRow, okRow].map(row => JSON.stringify(lines3[row]?.trimEnd())).join(' | '))
+    s3.close()
+  }
   // 鼠标路径：整块是一个可点目标（点开选择器 = Chat 的 onKernelPick），点击
   // 拦住冒泡，不能同时算「点空白」（那会既开选择器又清焦点）。
   const beforeClick = ev.length

@@ -2736,8 +2736,15 @@ export default class Ink {
   // change on every render() call (initial mount + each resize), which
   // cascades through useContext → <AlternateScreen>'s useLayoutEffect dep
   // array → spurious exit+re-enter of the alt screen on every SIGWINCH.
+  //
+  // After detachForShutdown the exit funnel owns the terminal restore: a late
+  // commit (e.g. <AlternateScreen>'s cleanup) must not write control sequences.
   private writeRaw(data: string): void {
-    if (this.isDetachedForShutdown) return;
+    if (this.isDetachedForShutdown) {
+      // Length only: a dropped write may carry clipboard (OSC 52) content.
+      logMouseDebug('stdout: raw write after shutdown detach dropped', { len: data.length });
+      return;
+    }
     if (data.includes('\x1b[?1049')) {
       logMouseDebug('stdout:1049', { len: data.length, head: data.slice(0, 60) });
     }

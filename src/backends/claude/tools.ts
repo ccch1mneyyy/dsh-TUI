@@ -10,7 +10,7 @@
  * module does not recognise degrades to the plain text card.
  */
 import { displayPath } from '../shared/display-path.js'
-import type { ToolFileDiff } from '../../adapter/ports/channel-view.js'
+import type { ToolFileDiff } from '../../agent/index.js'
 import type { ToolCallPresentation, ToolPresentationMeta, ToolResultPresentation } from '../../agent/presentation.js'
 import { num, rec, str, type Rec } from './narrow.js'
 

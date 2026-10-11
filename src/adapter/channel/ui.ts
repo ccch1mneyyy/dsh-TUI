@@ -19,12 +19,15 @@ function throwCleanupFailures(failures: unknown[], message: string): void {
   if (failures.length > 1) throw new AggregateError(failures, message)
 }
 
+/** What every read of an ended Channel UI lifetime throws. */
+export const CHANNEL_UI_LIFETIME_ENDED = 'dsh-tui: Channel UI lifetime has ended'
+
 export function createChannelUiLease(isCurrent: () => boolean): ChannelUiLease & { dispose(): void } {
   let active = true
   const disposers = new Set<() => void>()
   return {
     assertActive() {
-      if (!active || !isCurrent()) throw new Error('dsh-tui: Channel UI lifetime has ended')
+      if (!active || !isCurrent()) throw new Error(CHANNEL_UI_LIFETIME_ENDED)
     },
     own(dispose) {
       let released = false

@@ -20,6 +20,8 @@ export function mountChannelUi(
   channel: ChannelState,
   pluginHost: unknown,
   mode: AdapterMode,
+  /** Look the plugin host up per probe (late row); absent = `pluginHost`. */
+  resolvePluginHost?: () => unknown,
 ): { channel: ChannelUi; dispose(): void } {
   // A registration, rather than Channel object equality, is the authority for
   // this mount. Re-registering the same Channel revokes retained UI handles.
@@ -66,7 +68,7 @@ export function mountChannelUi(
     const now = Date.now()
     if (facadeProbe !== undefined && now - facadeProbeAt < FACADE_PROBE_MS) return facadeProbe
     facadeProbeAt = now
-    facadeProbe = getHostFacade(pluginHost as never)
+    facadeProbe = getHostFacade((resolvePluginHost === undefined ? pluginHost : resolvePluginHost()) as never)
     if (facadeProbe?.channel !== undefined) facadeProbeLocked = true
     return facadeProbe
   }

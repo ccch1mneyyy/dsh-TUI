@@ -44,7 +44,8 @@ dsh-tui
    the marker — when `Enter` lands on a **shortcut card** (on a command card `Enter` tries the command).
    Re-run it any time with `/setup`.
 2. **Launchpad** (the first screen of an **ordinary launch** — no `--resume`, no workspace target,
-   no prompt; `DSH_TUI_NO_LAUNCHPAD=1` skips it entirely): the pixel-whale header (`✦ dsh-TUI`
+   no prompt; turn it off in `/settings` (`launchpad`, on by default, restart to apply), or
+   `DSH_TUI_NO_LAUNCHPAD=1` skips it entirely): the pixel-whale header (`✦ dsh-TUI`
    version, `DEEPSEEK / HARNESS` big text, current model and effort, working directory, and a
    **startup hint**; the header here is **frozen from the first frame** — the intro animation is
    left to the transcript header once you are in the chat), a **real input box** underneath
@@ -601,6 +602,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 |---|---|
 | lang | UI language zh/en (locked when DSH_TUI_LANG is pinned) |
 | fullscreen | fullscreen mode (default on); takes effect after `/restart` |
+| launchpad | launchpad landing page (default on): an ordinary launch starts on the launchpad where the first sentence gets typed; off boots straight into the chat page (launches with a `--resume` target are unaffected — they open their conversation directly either way). Takes effect after `/restart` |
 | minimal | Minimal UI (default off): hide the header splash, emoji glyphs and decorative colors, and trim the footer to model + cwd; code highlight and tool colors stay. **An interface switch** with no effect on model capability — do not confuse it with the kernel Minimal agent preset in `/preset` |
 | terminalImages | terminal image preview (default on, needs terminal support); takes effect after `/restart`. Off shows text only and skips preview decode, sending images to the model is unaffected |
 | imageBacking | image backing (default `transparent`, same **Rendering** topic as the row above): what sits behind chat photos and illustrations. Transparent paints only the pixels of the image itself — the terminal background or wallpaper shows at anti-aliased edges and transparent corners; Terminal colour composites onto the terminal background for smooth soft edges. Applies immediately |

@@ -81,9 +81,20 @@ export function createCoreSessionActions(deps: {
     owner: deps.owner,
     capture: () => {
       const session = deps.session()
-      const cwd = deps.state().cwd
+      const state = deps.state()
+      const cwd = state.cwd
+      const starting = state.ready === false && session.ref.sessionId === ''
+      const bindingGeneration = state.agentBindingGeneration
       const key = deps.catalog?.snapshotKey?.()
-      return () => deps.owner.current() && deps.session() === session && deps.state().cwd === cwd && deps.catalog?.snapshotKey?.() === key
+      return () => {
+        const state = deps.state()
+        const bound = deps.session()
+        // A same-workspace startup adoption keeps the pending catalog valid;
+        // subsequent switches still revoke it, even when their cwd is equal.
+        const adopted = starting && state.ready && state.agentBindingGeneration === bindingGeneration + 1
+          && bound.ref.backendId === session.ref.backendId
+        return deps.owner.current() && (bound === session || adopted) && state.cwd === cwd && deps.catalog?.snapshotKey?.() === key
+      }
     },
     // Read this workspace before the global catalog. Only the complete
     // global result may replace the durable snapshot.

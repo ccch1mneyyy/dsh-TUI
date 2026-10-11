@@ -45,6 +45,11 @@ export const manifest: BackendManifest = {
  * binary is the dependency"). Declaring it is how a backend says "there is nothing
  * for the host to add"; the picker then shows a hint instead of a button (§6 item
  * 12), and `installable` is false.
+ *
+ * It keeps `unloadExport` on purpose: codex's real combination is "no install recipe
+ * **and** a process-level pool" (its manifest names `closeAllCodexHubs`), so the
+ * fixture has to carry both or that combination is never exercised — and "nothing to
+ * install" must not be read as "nothing to close".
  */
 export const manifestWithoutInstall: BackendManifest = {
   id: 'probe-backend-bare',
@@ -52,6 +57,7 @@ export const manifestWithoutInstall: BackendManifest = {
   shortLabel: 'Probe bare',
   inTree: false,
   backendExport: 'probeBackend',
+  unloadExport: 'closeProbePool',
   capabilities: [...PROBE_DECLARED_CAPABILITIES],
   grants: [],
 }

@@ -12,7 +12,7 @@
 import { isAbsolute, normalize } from 'node:path'
 import type { AgentBackend, BackendHost, OpenTarget } from '../../agent/backend.js'
 import type { AgentSession } from '../../agent/session.js'
-import { t } from '../../i18n.js'
+import { getLang, t } from '../../i18n.js'
 import { installedTuiVersion } from '../../update.js'
 import { CODEX_BACKEND_ID, CODEX_BACKEND_LABEL, codexResumeCommand, codexVersionSupported, MIN_CODEX_VERSION } from './contract.js'
 import { acquireCodexAuth, CODEX_OAUTH_PROVIDER, type CodexAuthRuntime } from './auth/external-tokens.js'
@@ -250,7 +250,7 @@ export const codexBackend: AgentBackend = {
 
   catalog: createCodexCatalog({
     acquire: async cwd => {
-      const host = catalogHost ?? { cwd: process.cwd(), debug: () => undefined, warn: () => undefined }
+      const host = catalogHost ?? { cwd: process.cwd(), debug: () => undefined, warn: () => undefined, locale: getLang }
       catalogHost = host
       const source = catalogSource()
       const known = catalogRuntime
@@ -269,8 +269,11 @@ export const codexBackend: AgentBackend = {
   }),
 
   launch: {
-    sessionPrefs: debug => {
-      const prefs = fileCodexPrefs(undefined, debug)
+    // `host` replaces the old `debug` parameter (B-3 widened
+    // `AgentBackend.launch.sessionPrefs`); codex's store still resolves its
+    // own directory here and moves onto `host.dataDir` in B-5.
+    sessionPrefs: host => {
+      const prefs = fileCodexPrefs(undefined, host.debug)
       return {
         lastSession: () => prefs.read().lastSession,
         setLastSession: threadId => { prefs.write({ lastSession: threadId }) },

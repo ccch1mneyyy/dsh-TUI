@@ -46,7 +46,8 @@ import type { AgentEvent } from '../src/agent/events.js'
 import { claudeConfigDirOf, claudeGlobalConfigPaths, detectClaudeAuth, fileGlobalConfigReader, isAuthFailure, refreshFailureStatus, resolveClaudeAuth } from '../src/backends/claude/auth.js'
 import { openClaudeSession } from '../src/backends/claude/session.js'
 import { createOAuthCredentialSource } from '../src/dsh-adapter/oauth-credential-source.js'
-import { setLang, t } from '../src/i18n.js'
+import { getLang, setLang, t } from '../src/i18n.js'
+import { claudeText } from '../src/backends/claude/text.js'
 import { claudeDeps, fakeClaudeSdk, manualClock, tick } from './lib/claude-fake-sdk.js'
 
 setLang('en')
@@ -311,7 +312,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   const renewalsAsked: (string | undefined)[] = []
   const plan = { source: 'dsh-auth' as const, expiresAt: 1, env: { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } } }
   const session = await openClaudeSession(claudeDeps(fake.sdk, {
-    host: { debug: message => { debug.push(message) } },
+    host: { locale: getLang, debug: message => { debug.push(message) } },
     auth: {
       plan,
       renew: renewal => {
@@ -339,18 +340,18 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   check('… closes the old CLI and resumes the SAME session', first.closed && fake.queries.length === 2 && fake.queries[1]!.options.resume === '00000000-0000-4000-8000-0000000000ab' && fake.queries[1]!.options.sessionId === undefined)
   check('… on the renewed credential', fake.queries[1]!.options.env?.CLAUDE_CODE_OAUTH_TOKEN === `${TOKEN}-1`)
   check('… still pinned', fake.queries[1]!.flagSettings?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com')
-  check('… and says it reconnected', events.some(event => event.type === 'notice' && event.text === t('claude-auth-reconnected')))
+  check('… and says it reconnected', events.some(event => event.type === 'notice' && event.text === claudeText('claude-auth-reconnected')))
   check('the session is still the same live session', session.status !== 'disposed' && session.ref.sessionId === '00000000-0000-4000-8000-0000000000ab')
   const turnsBefore = events.filter(event => event.type === 'turn.start').length
   await failTurn(fake.queries[1]!)
   check('translator state survives the reconnect (turn numbering continues)', events.filter((event): event is Extract<AgentEvent, { type: 'turn.start' }> => event.type === 'turn.start').at(-1)?.turn === turnsBefore + 1)
   check('a second failure does not loop: no third CLI, no second renewal', fake.queries.length === 2 && renewals === 1)
-  check('… it sends the user to /login', events.some(event => event.type === 'notice' && event.level === 'error' && event.text === t('claude-auth-failed-login')))
+  check('… it sends the user to /login', events.some(event => event.type === 'notice' && event.level === 'error' && event.text === claudeText('claude-auth-failed-login')))
   await session.capabilities.auth!.reconnect()
   check('/login\'s reconnect renews and resumes again', renewals === 2 && fake.queries.length === 3 && fake.queries[2]!.options.resume === '00000000-0000-4000-8000-0000000000ab')
   check('… without forcing a refresh of what dsh-auth stored', renewalsAsked[1] === undefined)
   const status = await session.capabilities.auth!.status()
-  check('the /login status names the source', status.lines.some(line => line === t('claude-auth-source', { source: t('claude-auth-source-dsh-auth-expires', { time: new Date(1).toISOString() }) })), status.lines)
+  check('the /login status names the source', status.lines.some(line => line === claudeText('claude-auth-source', { source: claudeText('claude-auth-source-dsh-auth-expires', { time: new Date(1).toISOString() }) })), status.lines)
   const diagnostics = session.capabilities.diagnostics!.lines()
   await session.dispose()
   const everything = JSON.stringify([events, debug, status, diagnostics])
@@ -445,7 +446,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   // meanwhile waits and goes to the reconnected CLI.
   const login = session.capabilities.auth!.reconnect()
   await settle()
-  check('/login during a running turn defers the reconnect, with a notice', fake.queries.length === 1 && notices().includes(t('claude-auth-reconnect-deferred')) && !first.closed)
+  check('/login during a running turn defers the reconnect, with a notice', fake.queries.length === 1 && notices().includes(claudeText('claude-auth-reconnect-deferred')) && !first.closed)
   // While the reconnect is deferred the serving CLI keeps taking input (a
   // steer must not wait behind a turn's end).
   const sent = await within(session.submit({ text: 'sent while waiting', clientMessageId: 'u-2' }, 'followup'))
@@ -483,10 +484,10 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   check('an auth failure starts a renewal', renewals === 3 && renewGate !== undefined)
   third.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate. API Error: 401' })
   await settle()
-  check('… a late failing result of the old CLI is ignored while renewing', !notices().includes(t('claude-auth-failed-login')))
+  check('… a late failing result of the old CLI is ignored while renewing', !notices().includes(claudeText('claude-auth-failed-login')))
   renewGate!()
   await settle()
-  check('… and the reconnect completes once', fake.queries.length === 4 && notices().filter(text => text === t('claude-auth-reconnected')).length === 2)
+  check('… and the reconnect completes once', fake.queries.length === 4 && notices().filter(text => text === claudeText('claude-auth-reconnected')).length === 2)
   check('… every auth-failure reconnect is pinned as well', pinnedAt(2) && pinnedAt(3))
   await session.dispose()
 }
@@ -504,7 +505,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
     auth: {
       plan,
       renew: () => renewalError === undefined ? Promise.resolve(plan) : Promise.reject(renewalError),
-      failureNotice: () => t('claude-auth-refresh-failed', { detail: t('claude-auth-refresh-status', { status: '400' }) }),
+      failureNotice: () => claudeText('claude-auth-refresh-failed', { detail: claudeText('claude-auth-refresh-status', { status: '400' }) }),
     },
   }))
   const events: AgentEvent[] = []
@@ -514,7 +515,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   fake.queries[0]!.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' })
   for (let i = 0; i < 10; i += 1) await tick()
   const text = JSON.stringify(events)
-  check('a failed renewal notice carries the HTTP status, never the error body', events.some(event => event.type === 'notice' && event.text === t('claude-auth-refresh-failed', { detail: t('claude-auth-refresh-status', { status: '400' }) })) && !text.includes('refresh-token-body'))
+  check('a failed renewal notice carries the HTTP status, never the error body', events.some(event => event.type === 'notice' && event.text === claudeText('claude-auth-refresh-failed', { detail: claudeText('claude-auth-refresh-status', { status: '400' }) })) && !text.includes('refresh-token-body'))
   await session.dispose()
   // A reconnect whose new CLI cannot start: what never started is retired.
   const dropping = await openClaudeSession(claudeDeps(fake.sdk, { auth: { plan, renew: () => Promise.resolve(plan) } }))
@@ -527,7 +528,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   fail = true
   query.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' })
   for (let i = 0; i < 10; i += 1) await tick()
-  check('inputs a failed reconnect cannot deliver are retired with a notice', dropped.some(event => event.type === 'pending.changed' && (event.discarded ?? []).includes('u-9')) && dropped.some(event => event.type === 'notice' && event.text === t('claude-auth-inputs-dropped', { n: 1 })))
+  check('inputs a failed reconnect cannot deliver are retired with a notice', dropped.some(event => event.type === 'pending.changed' && (event.discarded ?? []).includes('u-9')) && dropped.some(event => event.type === 'notice' && event.text === claudeText('claude-auth-inputs-dropped', { n: 1 })))
   await dropping.dispose()
 }
 
@@ -563,8 +564,8 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   await settle()
   const second = fake.queries[1]!
   check('every input the old CLI had not started is re-pushed, in order', JSON.stringify(second.inputs.map(input => input.uuid)) === JSON.stringify(['u-2', 'u-3']), second.inputs.map(input => input.uuid))
-  check('… no user row or second failure from the stopped CLI', !events.some(event => event.type === 'user.message' && event.id === 'u-2') && !events.some(event => event.type === 'notice' && event.text === t('claude-auth-failed-login')))
-  check('… and the session never read the stop as a process exit', session.status !== 'disposed' && !events.some(event => event.type === 'notice' && event.text.includes(t('claude-process-ended'))))
+  check('… no user row or second failure from the stopped CLI', !events.some(event => event.type === 'user.message' && event.id === 'u-2') && !events.some(event => event.type === 'notice' && event.text === claudeText('claude-auth-failed-login')))
+  check('… and the session never read the stop as a process exit', session.status !== 'disposed' && !events.some(event => event.type === 'notice' && event.text.includes(claudeText('claude-process-ended'))))
   await session.dispose()
   check('every query this session opened is closed', fake.queries.every(query => query.closed))
 }
@@ -619,7 +620,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   const reconnected = await within(login)
   await settle()
   check('… at most 120 s, then reconnects anyway', reconnected !== 'timed out' && fake.queries.length === 2 && first.closed)
-  check('… saying it interrupts the turn', events.some(event => event.type === 'notice' && event.text === t('claude-auth-reconnect-forced')) && events.some(event => event.type === 'turn.end' && event.reason.kind === 'aborted'))
+  check('… saying it interrupts the turn', events.some(event => event.type === 'notice' && event.text === claudeText('claude-auth-reconnect-forced')) && events.some(event => event.type === 'turn.end' && event.reason.kind === 'aborted'))
   await session.dispose()
 }
 
@@ -632,7 +633,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   // A realistic refresh rejection: the HTTP body echoes request material.
   const renewal = Object.assign(new Error(`401 Unauthorized: {"error":"invalid_grant","client_secret":"${SECRET}"}`), { status: 401 })
   const session = await openClaudeSession(claudeDeps(fake.sdk, {
-    host: { debug: message => { debug.push(message) } },
+    host: { locale: getLang, debug: message => { debug.push(message) } },
     auth: { plan, renew: () => Promise.reject(renewal) },
   }))
   const events: AgentEvent[] = []
@@ -649,7 +650,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   // so instead of quoting the error's own text.
   const debug2: string[] = []
   const session2 = await openClaudeSession(claudeDeps(fake.sdk, {
-    host: { debug: message => { debug2.push(message) } },
+    host: { locale: getLang, debug: message => { debug2.push(message) } },
     auth: { plan, renew: () => Promise.reject(new Error('socket hang up')) },
   }))
   session2.subscribe(() => undefined)
@@ -662,9 +663,9 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   // `/login`'s reconnect rejects to the caller, which shows the message in a
   // toast: it must be the sanitized sentence, never the refresh error body.
   const debug3: string[] = []
-  const refusedNotice = t('claude-auth-refresh-failed', { detail: t('claude-auth-refresh-status', { status: '401' }) })
+  const refusedNotice = claudeText('claude-auth-refresh-failed', { detail: claudeText('claude-auth-refresh-status', { status: '401' }) })
   const session3 = await openClaudeSession(claudeDeps(fake.sdk, {
-    host: { debug: message => { debug3.push(message) } },
+    host: { locale: getLang, debug: message => { debug3.push(message) } },
     auth: { plan, renew: () => Promise.reject(renewal), failureNotice: () => refusedNotice },
   }))
   session3.subscribe(() => undefined)

@@ -17,15 +17,17 @@
 
 # dsh-TUI
 
-> An interactive terminal UI plugin for DeepSeek Harness. It ships a
-> pixel-whale header, live work status, streaming thinking, double-Esc time
-> rewind, a context progress bar, and a TPS gauge. It mounts as a pure plugin,
-> with no core changes. Install to enable; uninstall leaves no patches behind.
+> An interactive terminal UI for DeepSeek Harness. It ships a pixel-whale
+> header, live work status, streaming thinking, double-Esc time rewind, a
+> context progress bar, and a TPS gauge. Zero core changes: it consumes only
+> DSH's public exports, and is moving from a mounted plugin to an app with its
+> own entry and composition root, where DSH loads in process as the first-party
+> backend. Install to enable; uninstall leaves no patches behind.
 
 ## Highlights
 
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
-- **Launchpad and first-run guide** — every launch lands on a landing page with a **real input box** (big text + whale + quick actions, dropping whole blocks on short/narrow terminals); command completion matches chat: `Tab` fills the input, `Enter` runs the command and clears it. The first run walks a four-step wizard (API key / language+theme / model+workspace / shortcuts), re-runnable with `/setup`.
+- **Launchpad and first-run guide** — every ordinary launch lands on a landing page with a **real input box** (big text + whale + quick actions, dropping whole blocks on short/narrow terminals; on by default — /settings `launchpad` off boots straight into chat); command completion matches chat: `Tab` fills the input, `Enter` runs the command and clears it. The first run walks a four-step wizard (API key / language+theme / model+workspace / shortcuts), re-runnable with `/setup`.
 - **Terminal-native UI** — streaming Markdown, tool cards, `/` and `@` completion, `#L12-14` ranges, history search, zh/en UI.
 - **Native cursor** — focused text inputs inherit your terminal's cursor shape, color, blinking, and enabled animation or trail effects in both inline and fullscreen modes. The `/model` picker shows the same cursor during movement between provider tabs, model rows, and effort levels, then hides it after **0.5 seconds at rest**; clipped regions fall back to the model row. The session manager also moves this cursor between the workspace rail, session rows, and search box; typing claims the search caret, and navigation returns it to the focused row. Configure animation and trail effects in your terminal.
 - **Images** — Kitty/Sixel thumbnails, centered preview with zoom and pan, paste-time fitting, text fallback.
@@ -103,6 +105,10 @@ On DSH 0.1.7, `/settings` uses the TUI's actual Loader entry ID, including custo
 IDs. It requires matching profile dependencies with `@deepseek-ai/schemastery`
 3.18.3 or newer; an incompatible schema stops TUI startup with repair guidance
 instead of showing an uneditable settings page. Older hosts keep their legacy settings scope.
+
+The `dsh-tui` section of `/settings` is saved in `~/.dsh-tui/settings.json`, shared by
+every kernel; the first launch imports it once from the profile's `cordis.patch.yml` (and an older host's `~/.dsh/settings.yaml`)
+(see [configuration](docs/configuration.en.md#tui-configuration)).
 
 ```sh
 # Install the CLI and this plugin globally (ships the dsh-tui command)
@@ -215,6 +221,11 @@ including clicking outside it on the launchpad, cancels a pending installation.
 - **Not available**: DSH-only commands such as `/tree`, `/preset`,
   `/provider`, `/workspace`, `/agentview` and `/bg`. One process runs one
   backend; `/kernel` switches by restarting into a new session.
+- **Startup**: the screen appears before the session opens, with only a light
+  profile composed (this package plus the profile's third-party plugins); see
+  [Claude backend](docs/claude-backend.en.md#known-limitations). The DSH kernel
+  starts from the same entry and loads DSH in the same process behind its first
+  screen; `DSH_TUI_HOST_ENTRY=0` restores the old launch path for every kernel.
 
 Details and known limitations: [Claude backend](docs/claude-backend.en.md).
 

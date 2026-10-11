@@ -54,6 +54,7 @@ const [
   { setLang, t },
   { findText, settled, sleep },
   fakes,
+  { claudeText },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -67,6 +68,7 @@ const [
   import('../src/i18n.js'),
   import('./lib/term-test.mjs'),
   import('./lib/claude-fake-sdk.js'),
+  import('../src/backends/claude/text.js'),
 ])
 import type { AgentEvent } from '../src/agent/events.js'
 
@@ -408,11 +410,11 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
     check('channel: backend commands merge after the local ones, local names win, terminal-only dropped', await settled(() => channel.commandList.some(command => command.name === 'review' && command.origin === 'backend'))
       && channel.commandList.filter(command => command.name === 'compact').length === 1 && channel.commandList.find(command => command.name === 'compact')?.origin === undefined
       && !channel.commandList.some(command => command.name === 'doctor' && command.origin === 'backend'), channel.commandList.map(command => `${command.name}:${command.origin ?? 'local'}`))
-    check('channel: the base mode is unmarked', channel.mode.label === t('claude-mode-default') && channel.modeIndex === 0)
+    check('channel: the base mode is unmarked', channel.mode.label === claudeText('claude-mode-default') && channel.modeIndex === 0)
     await channel.cycleMode()
-    check('channel: Shift+Tab cycles to acceptEdits with its native label', await settled(() => channel.mode.label === t('claude-mode-acceptEdits')) && channel.modeIndex === 1 && channel.mode.sandbox === undefined && channel.mode.approval === undefined)
+    check('channel: Shift+Tab cycles to acceptEdits with its native label', await settled(() => channel.mode.label === claudeText('claude-mode-acceptEdits')) && channel.modeIndex === 1 && channel.mode.sandbox === undefined && channel.mode.approval === undefined)
     await channel.cycleMode()
-    check('channel: plan mode is marked as plan', await settled(() => channel.mode.plan === true && channel.mode.label === t('claude-mode-plan')))
+    check('channel: plan mode is marked as plan', await settled(() => channel.mode.plan === true && channel.mode.label === claudeText('claude-mode-plan')))
     const models = await channel.listModels()
     check('channel: /model lists one provider (the backend)', models.length === 3 && models.every(model => model.provider === 'claude'))
     check('channel: switching by bare id works', await channel.switchModel('claude', 'opus') === true)
@@ -425,7 +427,7 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
     check('channel: /mcp reads the report', await settled(() => channel.mcpStatus()[0] === t('backend-mcp-heading', { n: 2 })) && channel.mcpStatus().some(line => line.includes('needs-auth')))
     const auth = channel.backendAuth()
     await auth!.login(async (oauth, provider) => { check('channel: /login gets the backend sign-in host (dsh-auth surface, anthropic)', provider === 'anthropic' && oauth !== undefined); return 'cancelled' })
-    check('channel: its status names the source', channel.rows.some(row => row.text === t('claude-auth-source', { source: t('claude-auth-source-claude-login') })))
+    check('channel: its status names the source', channel.rows.some(row => row.text === claudeText('claude-auth-source', { source: claudeText('claude-auth-source-claude-login') })))
 
     // ── headless render ──────────────────────────────────────────────
     const COLS = 110
@@ -453,7 +455,7 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
       stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false,
     })
     try {
-      check('render: the status line shows the native mode label under the DEFAULT status bar config', await settled(() => screen().includes(t('claude-mode-plan'))), screen())
+      check('render: the status line shows the native mode label under the DEFAULT status bar config', await settled(() => screen().includes(claudeText('claude-mode-plan'))), screen())
       // 固定窗:pacing the prompt attaches its key handler after the first frame.
       await sleep(200)
       for (const char of '/context') stdin.write(char)
@@ -522,29 +524,29 @@ const init = { type: 'system', subtype: 'init', session_id: 's', cwd: '/fixture/
     // The base mode is shown too (backend modes are always visible in the
     // footer — a DSH base mode stays unmarked/hidden by its own rule).
     const callsBefore = permissionModeCalls.length
-    check('render: the footer shows the base native mode', await settled(() => footer().includes(t('claude-mode-default'))), footer())
-    const hit = findText(terminal, t('claude-mode-default'))
+    check('render: the footer shows the base native mode', await settled(() => footer().includes(claudeText('claude-mode-default'))), footer())
+    const hit = findText(terminal, claudeText('claude-mode-default'))
     check('render: the footer mode segment is locatable', hit !== null)
     if (hit !== null) {
       const seq = (final: string): string => '\x1b[<0;' + (hit.col + 1) + ';' + (hit.row + 1) + final
       stdin.write(seq('M'))
       await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
       stdin.write(seq('m'))
-      check('render: clicking the mode segment opens the /permission picker', await settled(() => screen().includes(t('permission-mode-picker-title')) && screen().includes(t('claude-mode-acceptEdits'))), screen())
+      check('render: clicking the mode segment opens the /permission picker', await settled(() => screen().includes(t('permission-mode-picker-title')) && screen().includes(claudeText('claude-mode-acceptEdits'))), screen())
       // 人话解释：每行的第二行必须是「这个模式会做什么」，而不是把名字再打
       // 一遍（旧实现 description = name）。bypass 行同样带着它的解释。
-      check('render: picker rows explain themselves instead of repeating the name', await settled(() => screen().includes(t('claude-mode-desc-acceptEdits')) && screen().includes(t('claude-mode-desc-bypassPermissions'))), screen())
+      check('render: picker rows explain themselves instead of repeating the name', await settled(() => screen().includes(claudeText('claude-mode-desc-acceptEdits')) && screen().includes(claudeText('claude-mode-desc-bypassPermissions'))), screen())
       stdin.write('\x1b[B')
       await sleep(80) // 固定窗:pacing the arrow move lands before Enter.
       stdin.write('\r')
       check('render: picker Enter drives setPermissionMode once', await settled(() => permissionModeCalls.length - callsBefore === 1 && permissionModeCalls[permissionModeCalls.length - 1] === 'acceptEdits'), permissionModeCalls.join(','))
-      check('render: the footer follows the native mode.changed', await settled(() => footer().includes(t('claude-mode-acceptEdits'))), footer())
+      check('render: the footer follows the native mode.changed', await settled(() => footer().includes(claudeText('claude-mode-acceptEdits'))), footer())
     }
     await sleep(200) // 固定窗:pacing the prompt attaches its key handler after the picker closed.
     for (const char of '/permission status') stdin.write(char)
     await sleep(100) // 固定窗:pacing typed characters land before Enter.
     stdin.write('\r')
-    check('render: /permission status reports the current native mode', await settled(() => screen().includes(t('permission-mode-current', { name: '' }).trim()) && screen().includes(t('claude-mode-acceptEdits'))), screen())
+    check('render: /permission status reports the current native mode', await settled(() => screen().includes(t('permission-mode-current', { name: '' }).trim()) && screen().includes(claudeText('claude-mode-acceptEdits'))), screen())
   } finally {
     app.unmount()
     terminal.dispose()

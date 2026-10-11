@@ -81,14 +81,16 @@ export function createModelActions(
       deps.checkContextWarning()
     }
   }
-  /** Localized label of a standard ladder tier (the claude-effort-* family
-   * is the repo's existing vocabulary for these five names). */
+  /** Localized label of a standard ladder tier. The five names are the
+   *  host's own vocabulary (`effort-tier-*`): they label a *route* that
+   *  declares reasoning support without a tier list, whichever backend serves
+   *  it. A backend that shows its own ladder carries its own copy (B-3). */
   const STANDARD_EFFORT_LABEL_KEYS: Record<string, I18nKey> = {
-    low: 'claude-effort-low',
-    medium: 'claude-effort-medium',
-    high: 'claude-effort-high',
-    xhigh: 'claude-effort-xhigh',
-    max: 'claude-effort-max',
+    low: 'effort-tier-low',
+    medium: 'effort-tier-medium',
+    high: 'effort-tier-high',
+    xhigh: 'effort-tier-xhigh',
+    max: 'effort-tier-max',
   }
   const standardEffortLabel = (id: string): string => {
     const key = STANDARD_EFFORT_LABEL_KEYS[id]

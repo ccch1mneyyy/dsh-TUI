@@ -23,7 +23,7 @@
 import { randomUUID } from 'node:crypto'
 import type { PermissionDecision, QuestionAnswers } from '../../../agent/capabilities.js'
 import type { AgentEvent, PermissionOptionView, PermissionOutcome, PermissionRequestView, QuestionItemView } from '../../../agent/events.js'
-import { createElicitationForm, createElicitationUrlAsk, elicitationNotices } from '../../../channel/elicitation.js'
+import { createElicitationForm, createElicitationUrlAsk, elicitationNotices, type ElicitationText } from '../../shared/elicitation.js'
 import { t } from '../../../i18n.js'
 import { displayPath } from '../../shared/display-path.js'
 import { arr, errorText, num, rec, str, type Rec } from '../narrow.js'
@@ -31,6 +31,60 @@ import { SERVER_REQUEST } from '../protocol/index.js'
 import { REAL_CLOCK, RPC_ERROR, type RpcClock } from '../rpc/client.js'
 import type { HubServerRequest } from '../rpc/hub.js'
 import { unwrapShell } from '../translate/commands.js'
+
+/**
+ * The elicitation copy out of the host dictionary, one snapshot per flow.
+ *
+ * Codex still reads the host dictionary in B-3 (its own text module arrives
+ * with the B-5 migration); the shared flow itself is locale-free, so the
+ * caller supplies the copy. \`t()\` without parameters returns the raw
+ * template, which is exactly what the flow needs: \`{{name}}\` substitution
+ * is one rule on both sides (\`backends/shared/localized-text.ts\`).
+ */
+const elicitationText = (): ElicitationText => ({
+  skip: t('elicit-skip'),
+  skipDesc: t('elicit-skip-desc'),
+  yes: t('elicit-yes'),
+  no: t('elicit-no'),
+  send: t('elicit-send'),
+  sendDesc: t('elicit-send-desc'),
+  decline: t('elicit-decline'),
+  declineDesc: t('elicit-decline-desc'),
+  confirm: t('elicit-confirm'),
+  optional: t('elicit-optional'),
+  invalid: t('elicit-invalid'),
+  invalidChoice: t('elicit-invalid-choice'),
+  invalidRequired: t('elicit-invalid-required'),
+  invalidNumber: t('elicit-invalid-number'),
+  invalidInteger: t('elicit-invalid-integer'),
+  invalidMin: t('elicit-invalid-min'),
+  invalidMax: t('elicit-invalid-max'),
+  invalidMinLength: t('elicit-invalid-min-length'),
+  invalidMaxLength: t('elicit-invalid-max-length'),
+  invalidMinItems: t('elicit-invalid-min-items'),
+  invalidMaxItems: t('elicit-invalid-max-items'),
+  invalidJson: t('elicit-invalid-json'),
+  invalidEmail: t('elicit-invalid-email'),
+  invalidUri: t('elicit-invalid-uri'),
+  invalidDate: t('elicit-invalid-date'),
+  invalidDateTime: t('elicit-invalid-date-time'),
+  invalidPattern: t('elicit-invalid-pattern'),
+  kindInteger: t('elicit-kind-integer'),
+  kindNumber: t('elicit-kind-number'),
+  hintRange: t('elicit-hint-range'),
+  hintMin: t('elicit-hint-min'),
+  hintMax: t('elicit-hint-max'),
+  hintJson: t('elicit-hint-json'),
+  hintFormat: t('elicit-hint-format'),
+  urlAccept: t('elicit-url-accept'),
+  urlAcceptDesc: t('elicit-url-accept-desc'),
+  urlQuestion: t('elicit-url-question'),
+  urlDetail: t('elicit-url-detail'),
+  urlNotice: t('elicit-url-notice'),
+  urlComplete: t('elicit-url-complete'),
+  urlMissing: t('elicit-url-missing'),
+  unsupported: t('elicit-unsupported'),
+})
 
 type Kind = 'command' | 'file' | 'permissions' | 'question' | 'elicitation'
 
@@ -332,18 +386,18 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           deps.emit([{ type: 'question.request', request: { requestId: entry.askId!, ...agentOf(params), questions } }])
         }
         if (mode === 'url') {
-          const ask = createElicitationUrlAsk(source)
+          const ask = createElicitationUrlAsk(source, elicitationText())
           if (ask === undefined) {
             request.respond({ action: 'decline', content: null, _meta: null })
-            deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${request.key}`, text: elicitationNotices.urlMissing(serverName) }])
+            deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${request.key}`, text: elicitationNotices(elicitationText()).urlMissing(serverName) }])
             return
           }
           entry.answerQuestion = answers => finish(ask.accepted(answers) ? 'accept' : 'decline')
           parked.set(entry.key, entry)
-          deps.emit([{ type: 'notice', level: 'info', key: `elicit-url:${request.key}`, text: elicitationNotices.urlOpen(serverName, source.url!) }])
+          deps.emit([{ type: 'notice', level: 'info', key: `elicit-url:${request.key}`, text: elicitationNotices(elicitationText()).urlOpen(serverName, source.url!) }])
           show(ask.questions)
         } else if (mode === 'form' || mode === 'openai/form' || mode === 'openaiForm') {
-          const form = createElicitationForm(source)
+          const form = createElicitationForm(source, elicitationText())
           let round = 0
           entry.answerQuestion = answers => {
             const step = form.answer(answers)
@@ -356,7 +410,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           show(form.questions)
         } else {
           request.respond({ action: 'decline', content: null, _meta: null })
-          deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${request.key}`, text: elicitationNotices.unsupported(serverName, mode) }])
+          deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${request.key}`, text: elicitationNotices(elicitationText()).unsupported(serverName, mode) }])
         }
         return
       }

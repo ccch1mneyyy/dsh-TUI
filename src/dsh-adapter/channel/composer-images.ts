@@ -1,4 +1,4 @@
-import type { Context } from '@deepseek-ai/cordis'
+import type { ServiceLookup } from './channel-host.js'
 import { randomUUID } from 'node:crypto'
 import { rememberImagePath, transcriptImageFromAttachment } from '../transcript-images.js'
 import { probeImageSize, adaptImageForAdmission, withinDimensionLimits } from '../../utils/imageResize.js'
@@ -135,7 +135,7 @@ const positiveOr = (value: unknown, fallback: number): number =>
  * bindings minted by the public scene `stageImage()` API.
  */
 export function createComposerImages(
-  ctx: Context,
+  ctx: ServiceLookup,
   owner: ChannelOwner,
   deps: {
     generation(): number

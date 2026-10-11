@@ -17,7 +17,7 @@
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
-import { t } from '../../i18n.js'
+import { claudeText } from './text.js'
 
 /** The tail read per call (the card shows 3 lines, the panel 30). */
 export const TASK_OUTPUT_TAIL_BYTES = 64 * 1024
@@ -54,15 +54,15 @@ const inside = (root: string, path: string): boolean => {
  */
 export function resolveTaskOutputPath(reported: string, taskId: string, roots: readonly string[]): string {
   if (!isAbsolute(reported) || basename(reported) !== `${taskId}.output` || /[\0]/u.test(reported)) {
-    throw new Error(t('claude-task-output-refused', { id: taskId }))
+    throw new Error(claudeText('claude-task-output-refused', { id: taskId }))
   }
   let real: string
   try {
     real = realpathSync(reported)
   } catch {
-    throw new Error(t('claude-task-output-missing', { id: taskId }))
+    throw new Error(claudeText('claude-task-output-missing', { id: taskId }))
   }
-  if (!roots.some(root => inside(root, real))) throw new Error(t('claude-task-output-refused', { id: taskId }))
+  if (!roots.some(root => inside(root, real))) throw new Error(claudeText('claude-task-output-refused', { id: taskId }))
   return real
 }
 
@@ -77,7 +77,7 @@ export function readTaskOutputTail(reported: string, taskId: string, roots: read
   const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (process.platform === 'win32' ? 0 : constants.O_NONBLOCK ?? 0))
   try {
     const stat = fstatSync(fd)
-    if (!stat.isFile()) throw new Error(t('claude-task-output-refused', { id: taskId }))
+    if (!stat.isFile()) throw new Error(claudeText('claude-task-output-refused', { id: taskId }))
     const length = Math.min(stat.size, TASK_OUTPUT_TAIL_BYTES)
     const start = stat.size - length
     const buffer = Buffer.alloc(length)

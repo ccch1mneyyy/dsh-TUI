@@ -35,7 +35,7 @@ const seed = (cwd: string, at: number): string => {
   writeFileSync(join(folder, `rollout-${timestamp.slice(0, 19).replaceAll(':', '-')}-${id}.jsonl`), rows.map(row => JSON.stringify({ timestamp, ...row })).join('\n') + '\n', { mode: 0o600 })
   return id
 }
-const host = { cwd: sandbox.cwd, debug: () => undefined, warn: () => undefined }
+const host = { cwd: sandbox.cwd, debug: () => undefined, warn: () => undefined, locale: () => 'en' as const }
 let started = 0
 let acquired = 0
 let rpc: { db: boolean; limit: unknown; ms: number }[] = []

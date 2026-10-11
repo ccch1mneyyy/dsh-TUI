@@ -830,6 +830,10 @@ export function Settings({
     const shell = form?.shell()
     const badges: { text: string; color: keyof Theme }[] = []
     if (view === undefined) badges.push({ text: t('settings-section-unavailable'), color: 'warning' })
+    // A fault in the document itself: the broken-file badge names the backup
+    // the first save made, so the original settings stay findable.
+    if (view?.warning?.id === 'unreadable') badges.push({ text: t('settings-badge-unreadable'), color: 'warning' })
+    if (view?.warning?.id === 'recovered') badges.push({ text: t('settings-badge-recovered', { backup: view.warning.backup }), color: 'warning' })
     if (view?.applies === 'restart') badges.push({ text: t('settings-badge-restart'), color: 'warning' })
     if (shell?.dirty === true) badges.push({ text: t('settings-badge-dirty'), color: 'suggestion' })
     if (shell?.saving === true) badges.push({ text: t('settings-badge-saving'), color: 'inactive' })

@@ -343,10 +343,14 @@ claim。
 传递方式不在协议内。
 
 - Source：`protocols/tui-contributions.js`
-- Fixtures：`conformance/fixtures/valid-backend-contribution.json`、
-  `invalid-backend-unknown-field.json`、`invalid-backend-bad-id.json`、
-  `invalid-backend-key-label.json`、`invalid-backend-capability-shape.json`
-- Test："Backend contribution shape, capability/grants declaration and resume
+- Fixtures：`conformance/fixtures/valid-backend-contribution.json`（SDK peer 形态：安装配方 + 池钩子）、
+  `valid-backend-contribution-cli.json`（系统 CLI 形态：无安装配方 + 池钩子）、
+  `invalid-backend-unknown-field.json`（即 `nativeKey` 那条反例）、`invalid-backend-bad-id.json`、
+  `invalid-backend-key-label.json`、`invalid-backend-capability-shape.json`、
+  `invalid-backend-install-incomplete.json`、`invalid-backend-confirmation-policy.json`、
+  `invalid-backend-grants-shape.json`
+- Test："Backend contribution shape in both backend shapes (SDK peer with an install recipe,
+  system CLI with a pool hook), capability/grants declaration, the refusals, and resume
   binding semantics"（automated）
 
 ### TUI-TRUST-001 Trust disclosure

@@ -62,12 +62,16 @@
       "source": "protocols/tui-contributions.js",
       "fixtures": [
         "valid-backend-contribution.json",
+        "valid-backend-contribution-cli.json",
         "invalid-backend-unknown-field.json",
         "invalid-backend-bad-id.json",
         "invalid-backend-key-label.json",
-        "invalid-backend-capability-shape.json"
+        "invalid-backend-capability-shape.json",
+        "invalid-backend-install-incomplete.json",
+        "invalid-backend-confirmation-policy.json",
+        "invalid-backend-grants-shape.json"
       ],
-      "test": "Backend contribution shape, capability/grants declaration and resume binding semantics",
+      "test": "Backend contribution shape in both backend shapes (SDK peer with an install recipe, system CLI with a pool hook), capability/grants declaration, the refusals, and resume binding semantics",
       "evidence": "automated"
     },
     {

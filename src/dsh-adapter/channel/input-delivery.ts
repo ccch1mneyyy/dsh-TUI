@@ -1,9 +1,7 @@
-import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { logForDebugging } from '../../utils/debug.js'
-import { dispatchTuiDecision } from '../extension-events.js'
 import {
   firstStaleComposerToken,
   formatMissingReference,
@@ -15,6 +13,7 @@ import { appendAttachedContextBlocks } from './attached-context.js'
 import { normalizeInputDecision } from './decisions.js'
 import { attachIdeSelection } from './ide-selection.js'
 import { mentionAttachments, mentionFs } from './mentions.js'
+import type { ChannelHost } from './channel-host.js'
 import type { LocalImageStore } from './core/local-images.js'
 import type { ChannelOwner } from './owner.js'
 import type { AttachedContext, ChannelSelection, SelectionAttachment } from '../../adapter/ports/channel-view.js'
@@ -53,7 +52,7 @@ export interface UserTextOrigin {
 
 /** Input FIFO, staged attachments and decision notice timers share one lifetime. */
 export function createInputDelivery(
- ctx: Context, owner: ChannelOwner, binding: { readonly session: AgentSession },
+ ctx: ChannelHost, owner: ChannelOwner, binding: { readonly session: AgentSession },
  state: () => Pick<ChannelState, 'cwd' | 'agentId' | 'agentBindingGeneration'>,
  notify: ChannelState['notify'],
  trackPending: (message: { id: string; text: string; images?: readonly ComposerImageRef[] }, placement: PendingMessage['placement']) => void,
@@ -127,7 +126,7 @@ export function createInputDelivery(
    * and a released owner returns the decision untouched. One `owner.own`
    * lifetime covers both the subscription and the whole registry (D5).
    */
-  const disposePreStep = ctx.on('agent/pre-step', async (_payload, next) => {
+  const disposePreStep = ctx.onAgentPreStep?.(async (_payload, next) => {
     const decision = await next()
     if (decision.kind === 'reject') return decision
     if (!owner.current()) return decision
@@ -136,7 +135,7 @@ export function createInputDelivery(
     return { ...decision, messages: [...decision.messages, ...attached] }
   })
   owner.own(() => {
-    disposePreStep()
+    disposePreStep?.()
     attachedByMessageId.clear()
   })
 
@@ -343,7 +342,7 @@ export function createInputDelivery(
     // A follower can wait behind an older slow decision while /new replaces
     // the session. Do not even expose that stale text to plugins.
     if (dropIfStale()) return
-    const decision = await withDecisionPending('tui/input', dispatchTuiDecision(ctx, 'tui/input', {
+    const decision = await withDecisionPending('tui/input', ctx.dispatchDecision('tui/input', {
       text,
       delivery: placement === 'steer' ? 'steer' : 'followup',
       sessionId: origin.agentId,

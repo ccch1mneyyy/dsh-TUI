@@ -318,7 +318,8 @@ const cleanManifest = {
   const pkgDir = join(profHome, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
   mkdirSync(pkgDir, { recursive: true })
   writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: PACKAGE, version: ownVersion }))
-  const runFb = (env = {}) => run([], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: profHome, DSH_TUI_NO_DELEGATE: '1', ...env })
+  // The stub dsh is no host the entry could load: keep DSH on `dsh --profile`.
+  const runFb = (env = {}) => run([], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: profHome, DSH_TUI_NO_DELEGATE: '1', DSH_TUI_HOST_ENTRY: '0', ...env })
   {
     const r = runFb()
     // 判「有没有 safe 提示」必须断真正的提示串：沙箱临时目录叫 verify-safe-*，

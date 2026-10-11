@@ -429,7 +429,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [channel, workspaceLedger])
+  }, [channel, workspaceLedger, channel.cwd, channel.ready])
 
   React.useEffect(() => {
     void reload()

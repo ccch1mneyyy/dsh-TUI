@@ -27,8 +27,15 @@ Profile 启动按顺序叠加：
 
 ## TUI 配置
 
-DSH 0.1.7 的 `/settings` 写入当前 profile 的 `cordis.patch.yml`，字段属于插件
-Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成新版设置入口。
+`/settings` 的 `dsh-tui` 分区存放在 TUI 自己的 `~/.dsh-tui/settings.json`，所有内核
+（DSH、Claude、Codex）共用这一份。第一次启动时，若该文件不存在，会从当前 profile 的
+`cordis.patch.yml` 里 `dsh-tui` 行的 `config` 一次性导入可编辑字段（只读，不改 profile；
+`!!js` 表达式不导入），之后不再重复导入。旧版 host 存在 `~/.dsh/settings.yaml` 里的
+`dsh-tui` 分区同时导入：尚未被 DSH 迁走的文件优先于补丁行；DSH 已迁入补丁、改名为
+`settings.yaml.imported` 的，补丁行优先。导入后 profile 补丁里残留的这些字段只在 DSH
+内核下作为静态部署层生效（用户层未设置时兜底），建议从补丁里删掉，避免两个内核看到
+不同的默认值。其他插件的分区仍由 DSH 的设置服务读写（写入当前 profile 的
+`cordis.patch.yml`；旧版是 `~/.dsh/settings.yaml`）。
 语言、布局等偏好实时更新；全屏和图片预览需 `/restart`。
 
 下面是完整的常用覆盖示例：
@@ -82,7 +89,7 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 | `terminalImages` | `true` | 允许在支持的终端预览图片；`false` 保留文字信息，跳过图片探测与预览解码。修改后重启生效 |
 | `preset` | 名册默认 `standard` | 新会话 Agent preset；优先级：`DSH_TUI_PRESET`（本次运行）> `/preset` 持久化选择 > 本字段（部署默认值）> 名册默认 |
 | `sessionId` | 未设置 | 要恢复的会话 ID，通常由 Windows `--resume` 启动器注入 |
-| `backend` | 未设置（`/kernel` 记住的选择，否则 `dsh`） | 会话后端：内置 `dsh`，或已装的后端（实验性的 `claude` / `codex`，以及插件后端；不区分大小写）。**未安装或未知的取值一律按 `dsh` 启动并告警**，不会崩。profile 行读取 `DSH_TUI_BACKEND`，`dsh-tui --backend <id>` 会设置它。见 [Claude 后端](claude-backend.md) |
+| `backend` | 未设置（`/kernel` 记住的选择，否则 `dsh`） | 会话后端：内置 `dsh`，或已装的后端（实验性的 `claude` / `codex`，以及插件后端；不区分大小写）。**未安装或未知的取值一律按 `dsh` 启动并告警**，不会崩。profile 行读取 `DSH_TUI_BACKEND`，`dsh-tui --backend <id>` 会设置它。profile 自己的补丁里若把它写成 `!!js` 表达式（只转发 `DSH_TUI_BACKEND` 的写法除外，例如随包行的 `process.env.DSH_TUI_BACKEND \|\| undefined`），本次启动改走 `dsh --profile`（只有 profile 的 Loader 能求值），`/kernel` 切换除外。见 [Claude 后端](claude-backend.md) |
 
 ### 优先级与强制关闭
 
@@ -276,6 +283,7 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 | `DSH_TUI_RESUME_BACKEND` | `DSH_TUI_RESUME_SESSION` 的来源后端，只在启动器**派生**恢复目标时（裸 `--resume` 读该后端的上次会话、安全模式重试按最后运行记录）设置；boot 若落在别的后端（未装的 id 回落 `dsh`、没给 `DSH_TUI_BACKEND` 时跟随记住的内核），该目标一律**明确报错并非零退出**——不跨后端恢复、不静默冷启动、不新建会话（安全模式重试是唯一例外，降级为告警 + 冷启动）。用户显式给出的 id 不带此标记、原样透传 |
 | `DSH_TUI_RESUME_RETRY` | 一次性标记：本次启动是安全模式的「重试正常启动」。重试的目标派生自最后运行记录，记录里的内核可能已经不在注册表里，所以带此标记的那次启动在恢复目标被撤销时降级为告警 + 冷启动，而不是报错退出。boot 读到即从 `process.env` 删除 |
 | `DSH_TUI_BACKEND` | 会话后端（内置 `dsh` / `claude` / `codex`，或已装的插件后端），通常由 `dsh-tui --backend` 设置；未安装或写错的 id 按 `dsh` 启动并告警（若同时带了 `--resume` 请求则改为报错退出，见上） |
+| `DSH_TUI_HOST_ENTRY` | 设为 `0` 时两个内核都经 `dsh --profile` 启动（默认两个内核都从本包入口启动）。入口用不了已安装的 dsh（`PATH` 上的 `dsh` 不是 `@deepseek-ai/dsh`、启动脚本跟不进去、所需模块或导出缺失）时，DSH 启动自动回退到 `dsh --profile`，并在终端与界面里说明原因 |
 | `DSH_TUI_CLAUDE_PERMISSION_MODE` | Claude 后端的起始权限模式（`default`/`acceptEdits`/`plan`/`dontAsk`/`bypassPermissions`），优先于 `/permission` 记住的选择 |
 | `DSH_TUI_WORKSPACE_TARGET` | 启动时解析的工作区路径或 URI，通常由 `dsh-tui <目标>` 设置 |
 | `DSH_TUI_SESSION_ROOT` | 覆盖 JSONL 会话根目录；profile 默认 `$DSH_HOME/sessions`，裸 `cordis.yml` 默认 `~/.dsh-tui/sessions` |

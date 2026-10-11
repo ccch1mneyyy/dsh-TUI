@@ -5,6 +5,13 @@
 口径见 [`governance/rules.md`](governance/rules.md)），因此没有单独的审批或晋级流程，
 登记的是 profile 的变化而不是 dsh-TUI 产品的全部变更。
 
+## 2026-10-11（Backend 贡献族：两种后端形态、反例与公开面承诺清单）
+
+### Added
+
+- **Backend 贡献族的 conformance 覆盖两种后端形态**：新增 `valid-backend-contribution-cli.json`（驱动系统 CLI 的后端——**没有**安装配方、仍有 `unloadExport` 池钩子），与既有的 SDK peer 正例成对；新增三条反例（安装配方残缺、宿主未实现的 `confirmation` 策略、`grants` 形状）。既有的 `invalid-backend-unknown-field.json` 同时就是"凭空补 `nativeKey` 必须红"那条反例，现已在用例名与文档里点名。`TUI-BACKEND-001` 的 fixture 清单与 `docs/plugin-admission-and-development.md` 同步。
+- **公开面承诺清单**：新增 [`notes/0009`](notes/0009-backend-contribution.md) 的「Public surface（α）」一节——承诺（导出面**只增不删，自 B-2 / PR #1449（2026-10-10 合入）起算**、能力词表真源、grants fail-closed、执行器表"加取值不算 breaking"……）、明确不承诺（registry/loader/picker、`native.*` 与 DSH specialist、`catalog` 方法签名、`lastSession` 接口、transcript 真源、`confirmation` 取值集合、文案字面量）与"破坏性变更怎么被发现"，并列出已知缺口。**正式冻结仍在 Stage C 发布第一版 apiVersion 时**（roadmap §6 第 5 条）。
+
 ## 2026-08-25（私有命名空间统一与插件文档合并）
 
 ### Changed

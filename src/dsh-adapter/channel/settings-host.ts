@@ -1,13 +1,14 @@
-import type { Context } from '@deepseek-ai/cordis'
+import type { ServiceLookup } from './channel-host.js'
 import type { LlmConfigurableProvider, LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
 import { t } from '../../i18n.js'
 import type { ChannelState } from '../channel/types.js'
 import { isReservedCredentialRef } from '../credentialRefGuard.js'
 import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupHost } from '../providerWizard.js'
 import type { SettingsHost } from '../settingsEditor.js'
+import type { SettingsNamespaceWarning } from '../../adapter/ports/channel-settings.js'
 import { settingsValue } from '../compat/settings.js'
 
-export function createSettingsHosts(ctx: Context, assertActive: () => void = () => undefined): Pick<ChannelState, 'settingsHost' | 'providerSetup' | 'oauthProviderStatuses' | 'backendAuth'> {
+export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void = () => undefined): Pick<ChannelState, 'settingsHost' | 'providerSetup' | 'oauthProviderStatuses' | 'backendAuth'> {
   let settingsHostResolved = false
   let settingsHostCache: SettingsHost | undefined
   return {
@@ -27,6 +28,7 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
             applies: 'live' | 'restart'
             value: unknown
             user?: unknown
+            warning?: SettingsNamespaceWarning
           }[]
           mutate(
             ns: string,
@@ -55,6 +57,7 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
             applies: descriptor.applies,
             value: descriptor.value,
             user: descriptor.user,
+            warning: descriptor.warning,
           }))
         },
         write(ns, ops, expectedRevision) {

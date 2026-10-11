@@ -240,6 +240,11 @@ export default class App extends PureComponent<Props, State> {
 	// Count how many components enabled raw mode to avoid disabling
 	// raw mode until all components don't need it anymore
 	rawModeEnabledCount = 0;
+	// Latched by detachForShutdown: the exit funnel has written its cleanup,
+	// so a late React commit (a useInput mounting while the funnel settles)
+	// must not re-enter raw mode and re-enable bracketed paste and focus
+	// reporting on the shell's terminal.
+	shutdownDetached = false;
 	internal_eventEmitter = new EventEmitter();
 	keyParseState: KeyParseState = {
 		...INITIAL_STATE,
@@ -420,6 +425,8 @@ export default class App extends PureComponent<Props, State> {
 	// <AlternateScreen>'s insertion effect every frame, flapping the alt
 	// screen on/off.
 	writeRaw = (data: string): void => {
+		// Same latch as Ink.writeRaw: the exit funnel owns the terminal now.
+		if (this.shutdownDetached) return;
 		if (data.includes("\x1b[?1049")) {
 			logMouseDebug("stdout:1049", { len: data.length, head: data.slice(0, 60) });
 		}
@@ -511,6 +518,7 @@ export default class App extends PureComponent<Props, State> {
 		if (this.isRawModeSupported()) {
 			while (this.rawModeEnabledCount > 0) this.handleSetRawMode(false);
 		}
+		this.shutdownDetached = true;
 	}
 	override componentDidCatch(error: Error, errorInfo: { componentStack?: string }) {
 		// A #185 that reaches the root boundary escaped every enqueue-site
@@ -594,6 +602,8 @@ export default class App extends PureComponent<Props, State> {
 		// the half of a CJK char still buffered from the last chunk (#1227).
 		if (stdin.readableEncoding !== "utf8") stdin.setEncoding("utf8");
 		if (isEnabled) {
+			// The borrower's later disable finds the count at 0 and returns.
+			if (this.shutdownDetached) return;
 			// Ensure raw mode is enabled only once
 			if (this.rawModeEnabledCount === 0) {
 				// Stop early input capture right before we add our own readable handler.

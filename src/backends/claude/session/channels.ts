@@ -1,9 +1,7 @@
 /** Assemble the session's model, mode and relay-channel controls. */
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
 import type { AgentEvent } from '../../../agent/events.js'
 import type { AgentSession } from '../../../agent/session.js'
-import { DATA_DIR } from '../../../utils/paths.js'
 import type { ClaudeAuthPlan } from '../auth.js'
 import { activeProfileOf, type ClaudeChannels } from '../channels.js'
 import type { ClaudeChannelTokens } from '../../shared/channel-tokens.js'
@@ -62,10 +60,14 @@ export function createSessionControls(context: {
     // must not hide the model that actually serves the request.
     modelTruth: () => {
       const active = activeProfileOf(channels.read())
+      // `model-names.json` is this backend's own cache, under the directory
+      // the host handed over: a host that hands over none has none to read
+      // (D2 — never a path this backend picked for itself).
+      const dataDir = deps.host.dataDir
       return modelTruthFrom(
         configDir(),
         context.authPlan.env,
-        readLocalModelNames(join(DATA_DIR, 'backends', 'claude')),
+        dataDir === undefined ? {} : readLocalModelNames(dataDir),
         active === undefined ? undefined : { models: active.models, tiers: active.tiers },
         injectedEnvKeys(),
       )

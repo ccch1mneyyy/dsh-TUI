@@ -1,4 +1,4 @@
-import { coerce } from 'semver'
+import coerce from 'semver/functions/coerce.js'
 import type { Writable } from 'stream'
 import { appendFileSync } from 'node:fs'
 import { env } from '../utils/env.js'

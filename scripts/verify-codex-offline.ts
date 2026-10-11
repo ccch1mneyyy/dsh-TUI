@@ -28,7 +28,7 @@ let release: (() => void) | undefined
 let catalogSession: Awaited<ReturnType<typeof openCodexBackendSession>> | undefined
 let alternate: ReturnType<typeof liveCodexHome> | undefined
 try {
-  const runtime = await prepareCodexRuntime({ kind: 'create', cwd: sandbox.cwd }, { cwd: sandbox.cwd, debug: () => undefined, warn: () => undefined })
+  const runtime = await prepareCodexRuntime({ kind: 'create', cwd: sandbox.cwd }, { cwd: sandbox.cwd, debug: () => undefined, warn: () => undefined, locale: () => 'en' })
   release = runtime.release
   check('real pinned executable version', runtime.executable.version === '0.160.1')
   check('handshake isolates the Codex home', runtime.hub.info?.codexHome === sandbox.home)
@@ -50,7 +50,7 @@ try {
   await session.capabilities.rename!.rename('offline smoke')
   const read = rec(await runtime.hub.call(CLIENT.threadRead, { threadId: id, includeTurns: false }))
   check('real native rename persists', str(rec(read?.thread)?.name) === 'offline smoke')
-  const host = { cwd: sandbox.cwd, debug: () => undefined, warn: () => undefined }
+  const host = { cwd: sandbox.cwd, debug: () => undefined, warn: () => undefined, locale: () => 'en' as const }
   catalogSession = await openCodexBackendSession({ kind: 'create', cwd: sandbox.cwd }, host)
   const methods: string[] = []
   const listedCall = runtime.hub.call.bind(runtime.hub)

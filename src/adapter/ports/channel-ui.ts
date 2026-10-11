@@ -47,6 +47,16 @@ export interface BackendGoalsHost {
 export interface ChannelUi {
   /** Monotonic version — bump on every mutation so screens can re-render. */
   readonly version: number
+  /**
+   * Whether a live session stands behind this channel. `false` only while
+   * the startup session is still opening or after that open failed: typing
+   * is accepted, but the composer refuses to send and only the purely local
+   * commands run (`isBootSafeCommand`).
+   */
+  readonly ready: boolean
+  /** Why the startup session failed to open, while it stays unopened (the
+   *  placeholder is still bound); cleared once a session is adopted. */
+  readonly startupFailure: string | undefined
   readonly rows: readonly ChatRow[]
   /** Live editor selection from the IDE channel (undefined = no IDE / no
    *  selection / link dropped). Protocol-2 pushes carry the editor buffer's

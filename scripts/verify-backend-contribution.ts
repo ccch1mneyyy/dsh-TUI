@@ -202,12 +202,21 @@ check('dogfood: flipping `inTree` on a built-in reds on its host label key, and 
   await unloadBackends()
   check('probe: a second unload pass closes nothing (idempotent)', probePoolState().closes === 1)
 
+  // codex's real combination: **no install recipe *and* a process-level pool**. Loading the bare
+  // entry books its pool (its module is already evaluated, so `opens` stays where it was) and
+  // unloading it closes that pool — "nothing to install" must not read as "nothing to close".
+  await loadBackend('probe-backend-bare' as never)
+  await unloadBackends()
+  check('probe: an entry with no install surface still books its pool and closes it on unload',
+    probePoolState().opens === 1 && probePoolState().closes === 2, probePoolState())
+
   const entry = listBackends().find(candidate => candidate.id === PROBE_BACKEND_ID)
   check('probe: the declared recipe makes the entry installable, and it is the entry\'s own recipe',
     entry?.installable === true && installSurfaceFor(PROBE_BACKEND_ID)?.specifier === PROBE_INSTALL_SPECIFIER)
   const bare = listBackends().find(candidate => candidate.id === 'probe-backend-bare')
-  check('probe: a manifest with no recipe is not installable and carries no surface (codex\'s shape)',
-    bare?.installable === false && installSurfaceFor('probe-backend-bare') === undefined)
+  check('probe: a manifest with no recipe is not installable and carries no surface, yet keeps its pool hook (codex\'s shape)',
+    bare?.installable === false && installSurfaceFor('probe-backend-bare') === undefined
+      && bare?.manifest.unloadExport === 'closeProbePool')
   check('bad baseline goes red — the installable predicate is the declaration, not the id',
     bare?.manifest.install === undefined && installSurfaceFor(PROBE_BACKEND_ID)?.specifier !== bare?.manifest.install)
 

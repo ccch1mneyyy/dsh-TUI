@@ -44,6 +44,7 @@ const [
   { setLang, t },
   { settled },
   fakes,
+  { claudeText },
 ] = await Promise.all([
   import('../src/backends/claude/session.js'),
   import('../src/backends/claude/prefs.js'),
@@ -54,6 +55,7 @@ const [
   import('../src/i18n.js'),
   import('./lib/term-test.mjs'),
   import('./lib/claude-fake-sdk.js'),
+  import('../src/backends/claude/text.js'),
 ])
 type AgentEvent = import('../src/agent/events.js').AgentEvent
 type QuestionRequest = Extract<AgentEvent, { type: 'question.request' }>['request']
@@ -236,13 +238,13 @@ const answer = (...items: { selected?: string[]; custom?: string }[]) => ({ answ
   const retried = dialog({ dialogKind: 'refusal_fallback_prompt', payload }, { signal: new AbortController().signal, requestId: 'd1' })
   await tick()
   const ask = lastAsk()!
-  check('the dialog asks retry on the fallback model / cancel', ask.questions[0]!.options.map(option => option.label).join() === `${t('claude-refusal-retry', { model: 'claude-opus-4-8' })},${t('claude-refusal-cancel')}` && ask.questions[0]!.question === t('claude-refusal-question', { model: 'claude-fable-5-1' }))
+  check('the dialog asks retry on the fallback model / cancel', ask.questions[0]!.options.map(option => option.label).join() === `${claudeText('claude-refusal-retry', { model: 'claude-opus-4-8' })},${claudeText('claude-refusal-cancel')}` && ask.questions[0]!.question === claudeText('claude-refusal-question', { model: 'claude-fable-5-1' }))
   check('… with the guidance and the category', (ask.questions[0]!.detail ?? '').includes('This request was declined.') && (ask.questions[0]!.detail ?? '').includes('cyber'))
-  session.capabilities.questions!.respond(ask.requestId, answer({ selected: [t('claude-refusal-retry', { model: 'claude-opus-4-8' })] }))
+  session.capabilities.questions!.respond(ask.requestId, answer({ selected: [claudeText('claude-refusal-retry', { model: 'claude-opus-4-8' })] }))
   check('retry → {behavior:"completed", result:"retry_fallback"}', JSON.stringify(await retried) === '{"behavior":"completed","result":"retry_fallback"}')
   const cancelled = dialog({ dialogKind: 'refusal_fallback_prompt', payload }, { signal: new AbortController().signal, requestId: 'd2' })
   await tick()
-  session.capabilities.questions!.respond(lastAsk()!.requestId, answer({ selected: [t('claude-refusal-cancel')] }))
+  session.capabilities.questions!.respond(lastAsk()!.requestId, answer({ selected: [claudeText('claude-refusal-cancel')] }))
   check('cancel → {behavior:"completed", result:"cancelled"}', JSON.stringify(await cancelled) === '{"behavior":"completed","result":"cancelled"}')
   const dismissed = dialog({ dialogKind: 'refusal_fallback_prompt', payload }, { signal: new AbortController().signal, requestId: 'd3' })
   await tick()

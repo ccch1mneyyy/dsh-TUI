@@ -130,10 +130,12 @@ results back to the chat screen and add no new behavior.
   `▸ DSH · dsh-core v<kernel>` / `Claude · claude-code v<CLI>` (then `Codex · codex-cli v<CLI>`, and any
   installed plugin backend after it). The name is the backend manifest's short label; `▸` marks the
   current kernel and the other rows stay dim; an unavailable kernel adds the reason after its version (such as *Not installed*
-  or *Not signed in*), a row whose version cannot be read shows just the name, and *Checking…* shows
-  while the probe runs. The whole block is clickable and opens the same kernel picker (keyboard path =
-  focus ring + `Enter`). Rows are right-aligned, the cwd plate is top-aligned to the first row, and
-  narrow terminals truncate per the existing truncate-middle contract.
+  or *Too old · upgrade needed*), a row whose version cannot be read shows just the name, and *Checking…* shows
+  while the probe runs. Sign-in state never enters the plate — check it in the picker when switching (a signed-out
+  row is selectable, its subtitle says *Not signed in*). The whole block is clickable
+  and opens the same kernel picker (keyboard path =
+  focus ring + `Enter`). Every row ends flush at the same right edge, the cwd plate is top-aligned to the
+  first row, and narrow terminals truncate per the existing truncate-middle contract.
 - **Wizard**: `←`/`→` change step (except the effort slider in step 3 and a drilled-in model list, where the
   horizontal keys belong to the child control), `Tab` switches between the language/theme and
   model/effort/workspace panes, `↑`/`↓` move the selection; `Enter` runs the step (step 1 = re-check

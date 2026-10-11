@@ -33,14 +33,40 @@
  *                                  (reported as one warning); an unlisted one
  *                                  fails, and so does a listed one that no
  *                                  longer exists, so the list only shrinks
- *   src/backends/<x>/**            no src/backends/<y>/** (each backend is an
- *                                  island); src/backends/shared/** is the
- *                                  one exception every backend may import
+ *   src/backends/<x>/**            an island: its own directory, src/agent/**
+ *                                  (the domain it implements) and
+ *                                  src/backends/shared/** (the neutral seam)
+ *                                  only, plus node builtins and the vendor
+ *                                  packages its manifest declares. Host
+ *                                  internals — src/i18n.ts, src/utils/**,
+ *                                  src/channel/**, src/dsh-adapter/** — are
+ *                                  off limits, `import type` included (the
+ *                                  public surface is self-contained, types
+ *                                  too). Another backend's directory is out
+ *                                  too
  *   src/backends/shared/**         backend-neutral helpers (D15 of
  *                                  docs/codex-backend-design.md): no scoped
  *                                  (vendor) package, no concrete backend
  *                                  directory, no src/dsh-adapter/**
-
+ *   native.dsh    only inside src/dsh-adapter/**
+ *   native.codex  only inside src/backends/codex/**
+ *
+ * The standalone entry's host loading (ADAPTER.md, host contract):
+ *
+ *   '@deepseek-ai/…' as any string literal (a specifier handed to a
+ *                  `createRequire` / `import()` built at run time, not only a
+ *                  static import) only inside src/dsh-adapter/**
+ *   the host-only modules (src/dsh-adapter/host-contract.ts HOST_MODULES
+ *                  other than cordis, and the host package itself) are never
+ *                  value-imported anywhere: they load from the installed dsh
+ *                  by realpath, in src/dsh-adapter/host-dsh.ts alone, which
+ *                  names them only through host-contract.ts; their string
+ *                  literals live in host-contract.ts (contract.ts may read the
+ *                  host's package.json for its version)
+ *   src/dsh-adapter/host-dsh.ts    every @deepseek-ai/* import type-only
+ *   src/dsh-adapter/host-contract.ts imported only by host-dsh.ts and
+ *                  contract.ts
+ *
  * Plain fs + regex scan, no TypeScript program: it runs inside `verify:build`
  * on every build and must not depend on the compiled tree. Only real module
  * specifiers count (static import/export … from, bare side-effect imports,
@@ -116,11 +142,37 @@ const LAYER_RULES: readonly { readonly dir: string; readonly forbidden: readonly
 const UI_DIRS = ['screens/', 'components/', 'hooks/', 'ink/']
 /** Backend-neutral helpers every backend may import (D15). */
 const SHARED_BACKEND_DIR = 'backends/shared/'
+/** The only host directories a concrete backend may import from (B-3): the
+ *  domain it implements, plus the neutral seam above. Everything else in
+ *  `src/` is host-internal. */
+const BACKEND_ALLOWED_DIRS: readonly string[] = ['agent/', SHARED_BACKEND_DIR]
 /** Any scoped package: vendor SDKs and host frameworks alike. */
 const SCOPED_PACKAGE = /^@[^/]+\//u
 // channel/input-delivery.ts stays outside core because it builds DSH user
 // messages and ids for every backend through createUserMessage.
 const CORE_DIR = 'dsh-adapter/channel/core/'
+
+const HOST_DSH = 'dsh-adapter/host-dsh.ts'
+const HOST_CONTRACT = 'dsh-adapter/host-contract.ts'
+const HOST_CONTRACT_IMPORTERS = [HOST_DSH, 'dsh-adapter/contract.ts']
+/** Host-only literals contract.ts may carry (a manifest read, not a module load). */
+const HOST_LITERAL_EXCEPTIONS = new Set(['dsh-adapter/contract.ts @deepseek-ai/dsh/package.json'])
+const STRING_LITERAL = /(['"`])(@deepseek-ai\/[^'"`\s]*)\1/gu
+
+/** The host-only specifiers, read from the contract's source text (the gate must not import src/). */
+function readHostOnlySpecifiers(): Set<string> {
+  const source = readFileSync(join(SRC, HOST_CONTRACT), 'utf8')
+  const host = /export const HOST_PACKAGE = '([^']+)'/u.exec(source)?.[1]
+  const modules = /export const HOST_MODULES = \[([\s\S]*?)\] as const/u.exec(source)?.[1]
+  if (host === undefined || modules === undefined) throw new Error(`src/${HOST_CONTRACT}: HOST_PACKAGE / HOST_MODULES not found`)
+  const specifiers = new Set([host])
+  for (const match of modules.matchAll(/specifier: '([^']+)'/gu)) if (match[1] !== '@deepseek-ai/cordis') specifiers.add(match[1])
+  if (specifiers.size < 2) throw new Error(`src/${HOST_CONTRACT}: HOST_MODULES lists no specifier`)
+  return specifiers
+}
+const HOST_ONLY = readHostOnlySpecifiers()
+const HOST_PACKAGE_NAME = [...HOST_ONLY][0]
+const isHostOnly = (specifier: string): boolean => HOST_ONLY.has(specifier) || specifier.startsWith(`${HOST_PACKAGE_NAME}/`)
 
 /** Read every backend manifest, fail loud when one cannot be read (a manifest
  *  that silently disappears would silently *relax* the gate), and check that it
@@ -284,17 +336,31 @@ function resolveInternal(file: string, specifier: string): string | undefined {
   return target.startsWith('..') ? undefined : target
 }
 
-function readAllowlist(): AllowlistEntry[] {
+/**
+ * The two recorded debts, each an explicit list of file pairs (ADAPTER.md's
+ * "only shrinks" convention):
+ *
+ *  - \`entries\`: UI value imports from \`src/dsh-adapter/\` that predate the
+ *    layer rules;
+ *  - \`backendEntries\`: imports a concrete backend still makes into host
+ *    internals (B-3 introduced the island rule; claude is clean, codex
+ *    follows in B-5). Every pair is listed by hand, so the list cannot grow
+ *    by accident.
+ */
+function readAllowlist(): { readonly ui: readonly AllowlistEntry[]; readonly backend: readonly AllowlistEntry[] } {
   const label = relative(process.cwd(), ALLOWLIST_FILE)
   const raw: unknown = JSON.parse(readFileSync(ALLOWLIST_FILE, 'utf8'))
-  const entries = raw && typeof raw === 'object' && 'entries' in raw ? raw.entries : undefined
-  if (!Array.isArray(entries)) throw new Error(`${label}: expected { "entries": [...] }`)
-  return entries.map((entry: unknown, index) => {
-    if (!entry || typeof entry !== 'object' || !('from' in entry) || !('to' in entry) || typeof entry.from !== 'string' || typeof entry.to !== 'string') {
-      throw new Error(`${label}: entry ${index} needs string "from" and "to"`)
-    }
-    return { from: entry.from, to: entry.to }
-  })
+  const list = (name: 'entries' | 'backendEntries'): AllowlistEntry[] => {
+    const entries = raw && typeof raw === 'object' && name in raw ? (raw as Record<string, unknown>)[name] : undefined
+    if (!Array.isArray(entries)) throw new Error(`${label}: expected { "${name}": [...] }`)
+    return entries.map((entry: unknown, index) => {
+      if (!entry || typeof entry !== 'object' || !('from' in entry) || !('to' in entry) || typeof entry.from !== 'string' || typeof entry.to !== 'string') {
+        throw new Error(`${label}: ${name}[${index}] needs string "from" and "to"`)
+      }
+      return { from: entry.from, to: entry.to }
+    })
+  }
+  return { ui: list('entries'), backend: list('backendEntries') }
 }
 
 // The manifest-derived rules (P0 §6). Read before the scan: a manifest that
@@ -313,9 +379,12 @@ const NATIVE_PATTERNS = [
 
 const allowlist = readAllowlist()
 const allowKey = (from: string, to: string): string => `${from} -> ${to}`
-const allowed = new Set(allowlist.map(entry => allowKey(entry.from, entry.to)))
+const allowed = new Set(allowlist.ui.map(entry => allowKey(entry.from, entry.to)))
+const backendAllowed = new Set(allowlist.backend.map(entry => allowKey(entry.from, entry.to)))
 const usedAllowances = new Set<string>()
+const usedBackendAllowances = new Set<string>()
 const allowlistedHits: string[] = []
+const backendAllowlistedHits: string[] = []
 
 const violations: string[] = []
 const files: string[] = []
@@ -331,8 +400,10 @@ for (const file of files) {
   for (const ref of refs) {
     const where = `${path}:${ref.line}`
     if (under(path, CORE_DIR)) {
-      if (ref.specifier.startsWith('@deepseek-ai/') && ref.specifier !== '@deepseek-ai/cordis') {
-        violations.push(`${where} imports '${ref.specifier}'; channel core may import only @deepseek-ai/cordis`)
+      // The core is built against ChannelHost, so a process-owning host can
+      // compose it without a Cordis root.
+      if (ref.specifier.startsWith('@deepseek-ai/')) {
+        violations.push(`${where} imports '${ref.specifier}'; channel core must not import @deepseek-ai/* (take host services through ChannelHost)`)
       }
       if (ref.specifier === '../extensions.js' || ref.specifier.startsWith('../../backend/')) {
         violations.push(`${where} imports '${ref.specifier}'; channel core must not depend on DSH extensions or backend code`)
@@ -347,7 +418,20 @@ for (const file of files) {
       violations.push(`${where} imports '${ref.specifier}'; src/${SHARED_BACKEND_DIR} must stay backend-neutral (no scoped vendor package)`)
     }
     const target = resolveInternal(file, ref.specifier)
-    if (target === undefined) continue
+    if (target === undefined) {
+      // undefined means a bare specifier (node builtins, manifest-declared
+      // vendor packages — not this gate's business) or a relative import that
+      // escapes src/ entirely. The island whitelist is exhaustive, so the
+      // latter is a violation by definition; without this check the continue
+      // below would skip the island rule and let a backend import e.g.
+      // ../../../scripts/… pass unscanned.
+      if ((ref.specifier.startsWith('./') || ref.specifier.startsWith('../'))
+        && under(path, 'backends/') && !under(path, SHARED_BACKEND_DIR)) {
+        const own = path.split('/')[1]
+        violations.push(`${where} imports '${ref.specifier}' (outside src/); src/backends/${own}/ may import only its own directory, src/agent/ and src/backends/shared/ (the backend is an island)`)
+      }
+      continue
+    }
     if (under(path, SHARED_BACKEND_DIR) && (under(target, 'dsh-adapter/') || (under(target, 'backends/') && !under(target, SHARED_BACKEND_DIR)))) {
       violations.push(`${where} imports src/${target}; src/${SHARED_BACKEND_DIR} must not depend on a concrete backend`)
     }
@@ -362,6 +446,26 @@ for (const file of files) {
       const other = target.split('/')[1]
       if (own !== other) violations.push(`${where} imports src/${target}; src/backends/${own}/ must not depend on another backend (src/backends/${other}/)`)
     }
+    // A concrete backend is an island (B-3): it implements the Agent Domain
+    // against the host, so it may read its own directory, `src/agent/` (the
+    // contract it implements) and `src/backends/shared/` (the backend-neutral
+    // seam) — nothing else. The host dictionary, `src/utils/`, `src/channel/`
+    // and `src/dsh-adapter/` are host-internal; a backend that reads them is not
+    // a plugin. Type-only imports count too: the point is that the public surface
+    // is self-contained, types included. Targets under `src/backends/` are left
+    // to the island rule above (own directory allowed, cross-backend already
+    // reported), so one violation is never named twice.
+    if (under(path, 'backends/') && !under(path, SHARED_BACKEND_DIR) && !under(target, 'backends/')
+      && !BACKEND_ALLOWED_DIRS.some(dir => under(target, dir))) {
+      const key = allowKey(path, target)
+      if (backendAllowed.has(key)) {
+        usedBackendAllowances.add(key)
+        backendAllowlistedHits.push(`${where} -> src/${target}`)
+      } else {
+        const own = path.split('/')[1]
+        violations.push(`${where} imports src/${target}; src/backends/${own}/ may import only its own directory, src/agent/ and src/backends/shared/ (the backend is an island)`)
+      }
+    }
     if (!UI_DIRS.some(dir => under(path, dir))) continue
     if (under(target, 'backends/')) {
       violations.push(`${where} imports src/${target}; UI layers must not depend on src/backends/`)
@@ -373,6 +477,33 @@ for (const file of files) {
       } else {
         violations.push(`${where} imports values from src/${target}; UI layers may only take types from src/dsh-adapter/ (use \`import type\`, or move the value to a neutral module)`)
       }
+    }
+  }
+
+  // The standalone entry's host loading (see the header).
+  for (const ref of refs) {
+    const where = `${path}:${ref.line}`
+    if (isHostOnly(ref.specifier) && !ref.typeOnly && !HOST_LITERAL_EXCEPTIONS.has(`${path} ${ref.specifier}`)) {
+      violations.push(`${where} value-imports '${ref.specifier}'; host-only modules load from the installed dsh by realpath (src/${HOST_DSH}), never from this package`)
+    }
+    if (path === HOST_DSH && ref.specifier.startsWith('@deepseek-ai/') && !ref.typeOnly) {
+      violations.push(`${where} imports values from '${ref.specifier}'; src/${HOST_DSH} takes only types from @deepseek-ai/* (modules come from the host by realpath)`)
+    }
+    const target = resolveInternal(file, ref.specifier)?.replace(/\.js$/u, '.ts')
+    if (target === HOST_CONTRACT && !HOST_CONTRACT_IMPORTERS.includes(path)) {
+      violations.push(`${where} imports src/${HOST_CONTRACT}; only ${HOST_CONTRACT_IMPORTERS.map(item => `src/${item}`).join(' and ')} read the host contract`)
+    }
+  }
+  // A type-only import's specifier is a type, not a load: the rules above own it.
+  const typeSpecifiers = new Set(refs.filter(ref => ref.typeOnly).map(ref => `${ref.line} ${ref.specifier}`))
+  for (const match of code.matchAll(STRING_LITERAL)) {
+    const where = `${path}:${lineAt(code, match.index)}`
+    const literal = match[2]
+    if (under(path, 'dsh-adapter/') && typeSpecifiers.has(`${lineAt(code, match.index)} ${literal}`)) continue
+    if (!under(path, 'dsh-adapter/')) {
+      violations.push(`${where} names '${literal}'; @deepseek-ai/* specifiers (also ones resolved or imported at run time) belong in src/dsh-adapter/`)
+    } else if (isHostOnly(literal) && path !== HOST_CONTRACT && !HOST_LITERAL_EXCEPTIONS.has(`${path} ${literal}`)) {
+      violations.push(`${where} names the host-only '${literal}'; only src/${HOST_CONTRACT} lists host modules (src/${HOST_DSH} loads them from it)`)
     }
   }
 
@@ -390,10 +521,15 @@ for (const file of files) {
   }
 }
 
-for (const entry of allowlist) {
-  const key = allowKey(entry.from, entry.to)
-  if (!usedAllowances.has(key)) {
-    violations.push(`allowlist entry "${key}" no longer matches a value import; delete it from scripts/adapter-boundary.allowlist.json`)
+for (const [list, used, name] of [
+  [allowlist.ui, usedAllowances, 'entries'],
+  [allowlist.backend, usedBackendAllowances, 'backendEntries'],
+] as const) {
+  for (const entry of list) {
+    const key = allowKey(entry.from, entry.to)
+    if (!used.has(key)) {
+      violations.push(`allowlist ${name} entry "${key}" no longer matches an import; delete it from scripts/adapter-boundary.allowlist.json (the lists only shrink)`)
+    }
   }
 }
 
@@ -404,7 +540,11 @@ if (violations.length > 0) {
 }
 
 if (allowlistedHits.length > 0) {
-  console.warn(`adapter boundary warning: ${allowlistedHits.length} allowlisted UI value imports from src/dsh-adapter/ (${allowlist.length} file pairs in scripts/adapter-boundary.allowlist.json) await cleanup${VERBOSE ? ':' : '; --verbose lists them'}`)
+  console.warn(`adapter boundary warning: ${allowlistedHits.length} allowlisted UI value imports from src/dsh-adapter/ (${allowlist.ui.length} file pairs in scripts/adapter-boundary.allowlist.json) await cleanup${VERBOSE ? ':' : '; --verbose lists them'}`)
   if (VERBOSE) for (const hit of allowlistedHits) console.warn(`  - ${hit}`)
+}
+if (backendAllowlistedHits.length > 0) {
+  console.warn(`adapter boundary warning: ${backendAllowlistedHits.length} allowlisted host-internal imports in src/backends/codex/ (${allowlist.backend.length} file pairs) await the B-5 migration${VERBOSE ? ':' : '; --verbose lists them'}`)
+  if (VERBOSE) for (const hit of backendAllowlistedHits) console.warn(`  - ${hit}`)
 }
 console.log(`adapter boundary OK (${files.length} source files, ${importCount} import specifiers scanned)`)

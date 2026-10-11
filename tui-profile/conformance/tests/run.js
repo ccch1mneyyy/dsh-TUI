@@ -155,11 +155,21 @@ for (const [name, relative, schema, semanticCheck, expected] of [
   assert.equal(duplicateRefused, true, 'duplicate Backend coordinate is refused')
 }
 for (const [name, relative, expected] of [
-  ['valid Backend contribution', 'conformance/fixtures/valid-backend-contribution.json', true],
-  ['Backend unknown field rejected', 'conformance/fixtures/invalid-backend-unknown-field.json', false],
+  ['valid Backend contribution (SDK peer shape: install recipe + pool hook)', 'conformance/fixtures/valid-backend-contribution.json', true],
+  // The second shape, on purpose: a backend that drives a system CLI declares **no** install
+  // recipe ("the user's own binary is the dependency") while still owning a process-level pool.
+  // "Nothing for the host to add" is a first-class declaration, not a missing field.
+  ['valid Backend contribution (system CLI shape: no install recipe, pool hook)', 'conformance/fixtures/valid-backend-contribution-cli.json', true],
+  // This is the nativeKey refusal the roadmap names (§4.7 / §6 item 7): the fixture's shape is
+  // "unknown field", and the refusal it produces names `nativeKey` verbatim
+  // (`Backend content contains unknown field "nativeKey"`) — see notes 0009.
+  ['Backend native channel rejected (unknown field)', 'conformance/fixtures/invalid-backend-unknown-field.json', false],
   ['Backend bad id rejected', 'conformance/fixtures/invalid-backend-bad-id.json', false],
   ['Backend host label key rejected', 'conformance/fixtures/invalid-backend-key-label.json', false],
   ['Backend capability shape rejected', 'conformance/fixtures/invalid-backend-capability-shape.json', false],
+  ['Backend install recipe incomplete rejected', 'conformance/fixtures/invalid-backend-install-incomplete.json', false],
+  ['Backend confirmation policy rejected', 'conformance/fixtures/invalid-backend-confirmation-policy.json', false],
+  ['Backend grants shape rejected', 'conformance/fixtures/invalid-backend-grants-shape.json', false],
 ]) {
   const result = validate(name, undefined, undefined, () => parseAndValidateManifest(relative))
   assert.equal(result.pass, expected, `${name}: ${result.error ?? `expected pass=${expected}`}`)
