@@ -886,6 +886,9 @@ const GROUPS = {
 // 刷新（文件锁内落盘）、认证失败刷新后同会话 resume 一次、再失败引导 /login；事件、
 // 提示和日志里都不出现令牌。
     ["verify-claude-auth", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-auth.ts']],
+// Claude 内核检测：未装凭证也返回 loginInSession（选择器不拦切换，行带「启动后用
+// /login 登录」注记）；环境变量凭据照常判 ok，检测本身不变。
+    ["verify-claude-detect", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-detect.ts']],
 // Claude 控制面（假 Query）：model/effort/mode/compact/commands/mcp/context/account 的委托
 // 与持久化、channel 侧模式标签与命令合并、/mcp、/context、订阅用量、/login 及其无头渲染；
 // effort 在 open/resume、init 帧与 message_start 变化时都按后端声明的档位收敛。

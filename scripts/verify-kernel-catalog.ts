@@ -128,6 +128,10 @@ check('signed out: still selectable with no dim reason (credentials may live whe
 check('signed out + loginInSession: selectable with a "sign in after start" note',
   rowOf(signedOut, 'codex')?.selectable === true && rowOf(signedOut, 'codex')?.reasonKey === undefined && rowOf(signedOut, 'codex')?.noteKey === 'kernel-login-in-session'
     && kernelSubtitle(rowOf(signedOut, 'codex')!, key => t(key)) === t('kernel-login-in-session'))
+const claudeSignInLater = buildKernelCatalog({ current: 'dsh', entries, statuses: { claude: { installed: true, auth: 'missing', loginInSession: true } } })
+check('claude detect emits loginInSession: the note appears on its row too',
+  rowOf(claudeSignInLater, 'claude')?.selectable === true && rowOf(claudeSignInLater, 'claude')?.noteKey === 'kernel-login-in-session'
+    && kernelSubtitle(rowOf(claudeSignInLater, 'claude')!, key => t(key)) === t('kernel-login-in-session'))
 
 const unknownAuth = buildKernelCatalog({ current: 'dsh', entries, statuses: { codex: { installed: true, auth: 'unknown', version: '0.170.0' } } })
 check('auth unknown (a keychain): selectable, no note', rowOf(unknownAuth, 'codex')?.selectable === true && rowOf(unknownAuth, 'codex')?.noteKey === undefined)

@@ -46,8 +46,10 @@ To pick the backend, use any of:
   blocks the switch. Without the SDK the picker marks Claude as *Not installed*;
   an undetected credential does **not** block the pick — a key may perfectly well
   live where detection cannot see it (the Claude settings' `env`, an
-  `apiKeyHelper`, a relay channel). The CLI applies its own configuration after
-  start, and `/login` remains available in-session for a subscription login.
+  `apiKeyHelper`, a relay channel). The row stays selectable, only annotated
+  *Not signed in · sign in with /login after start*. The CLI applies its own
+  configuration after start; `/login` covers a subscription sign-in in-session,
+  `/channel` the relay route.
 - `dsh-tui --backend claude` (this launch only).
 - `backend: claude` in the dsh-tui config row.
 

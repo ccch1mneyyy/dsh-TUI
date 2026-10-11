@@ -156,10 +156,13 @@ export const claudeBackend: AgentBackend = {
       const executable = await resolveClaudeExecutable()
       const version = executable.path === undefined ? undefined : await readClaudeVersion(executable.path)
       const drift = cliVersionDrift(version) ?? sdkVersionDrift(installedSdkVersion())
-      return { installed: true, auth, ...(version === undefined ? {} : { version }), ...(drift === undefined ? {} : { drift }), ...(auth === 'missing' ? { hint: t('claude-auth-missing-hint') } : {}) }
+      // The picker never blocks on a missing credential (the probe cannot see
+      // a settings-file env, an apiKeyHelper or a relay token), and `/login`
+      // plus `/channel` work in-session: offer the sign-in-after-start note.
+      return { installed: true, auth, loginInSession: true, ...(version === undefined ? {} : { version }), ...(drift === undefined ? {} : { drift }), ...(auth === 'missing' ? { hint: t('claude-auth-missing-hint') } : {}) }
     } catch (error) {
       host.debug(`claude: detection failed (${errorText(error)})`)
-      return { installed: true, auth }
+      return { installed: true, auth, loginInSession: true }
     }
   },
 
