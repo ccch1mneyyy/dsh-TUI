@@ -13,7 +13,6 @@
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DATA_DIR } from '../../utils/paths.js'
 import { writeFileAtomic } from '../shared/atomic-file.js'
 
 /** The permission modes the persisted choice may hold (the SDK's whole
@@ -142,8 +141,10 @@ function forgotten(current: ClaudePrefsData, sessionId: string): ClaudePrefsData
   return next as ClaudePrefsData
 }
 
-/** The file-backed prefs under `<dir>` (default `~/.dsh-tui/backends/claude`). */
-export function fileClaudePrefs(dir: string = join(DATA_DIR, 'backends', 'claude'), debug: (message: string) => void = () => undefined): ClaudePrefs {
+/** The file-backed prefs under `<dir>` (the host's `dataDir` for this
+ *  backend). The directory is required: a backend never picks a location of
+ *  its own under the host's data directory (D2, B-3). */
+export function fileClaudePrefs(dir: string, debug: (message: string) => void = () => undefined): ClaudePrefs {
   const path = join(dir, FILE)
   const read = (): ClaudePrefsData => {
     try {

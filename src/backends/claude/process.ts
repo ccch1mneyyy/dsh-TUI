@@ -22,7 +22,6 @@
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, isAbsolute, normalize, sep } from 'node:path'
-import { installedTuiVersion } from '../../update.js'
 
 /** Where the executable came from (`/doctor`). */
 export type ClaudeExecutableSource = 'env' | 'path' | 'bundled'
@@ -112,15 +111,23 @@ export async function resolveClaudeExecutable(env: NodeJS.ProcessEnv = process.e
   return { path: undefined, source: 'bundled' }
 }
 
-/** The child environment. */
-export function buildClaudeEnv(base: NodeJS.ProcessEnv = process.env): Record<string, string> {
+/**
+ * The child environment.
+ *
+ * `appVersion` is the running TUI's version as the host reports it
+ * (`BackendHost.appVersion`) — the backend does not read the host's own
+ * `package.json` (B-3). Absent (a host that cannot tell, an uninstalled
+ * checkout) keeps the long-standing `dev` tag.
+ */
+export function buildClaudeEnv(options: { readonly appVersion?: string; readonly base?: NodeJS.ProcessEnv } = {}): Record<string, string> {
+  const base = options.base ?? process.env
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(base)) {
     if (value === undefined) continue
     if ((SCRUBBED_EXACT as readonly string[]).includes(key) || key.startsWith(SCRUBBED_PREFIX)) continue
     env[key] = value
   }
-  env.CLAUDE_AGENT_SDK_CLIENT_APP = `dsh-tui/${installedTuiVersion() ?? 'dev'}`
+  env.CLAUDE_AGENT_SDK_CLIENT_APP = `dsh-tui/${options.appVersion ?? 'dev'}`
   // `system/session_state_changed` is the authoritative idle signal; the CLI
   // only emits it when asked.
   env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1'
@@ -128,10 +135,10 @@ export function buildClaudeEnv(base: NodeJS.ProcessEnv = process.env): Record<st
 }
 
 /** Run `<executable> --version` and pull out the version (best-effort). */
-export function readClaudeVersion(executable: string): Promise<string | undefined> {
+export function readClaudeVersion(executable: string, appVersion?: string): Promise<string | undefined> {
   return new Promise(resolve => {
     try {
-      execFile(executable, ['--version'], { timeout: 10000, windowsHide: true, env: buildClaudeEnv() }, (error, stdout) => {
+      execFile(executable, ['--version'], { timeout: 10000, windowsHide: true, env: buildClaudeEnv({ appVersion }) }, (error, stdout) => {
         if (error !== null) { resolve(undefined); return }
         resolve(/\d+\.\d+\.\d+(?:[-+][\w.]+)?/u.exec(String(stdout))?.[0])
       })

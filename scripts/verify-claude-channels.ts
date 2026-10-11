@@ -1243,7 +1243,7 @@ try {
     "fs.mkdirSync(dataDir, { recursive: true })",
     "const open = async claudeBackend => {",
     "  try {",
-    "    const session = await claudeBackend.open({ kind: 'create', cwd: home }, { cwd: home, debug: () => undefined, warn: () => undefined })",
+    "    const session = await claudeBackend.open({ kind: 'create', cwd: home }, { cwd: home, dataDir, debug: () => undefined, warn: () => undefined })",
     "    await session.dispose()",
     "    return 'opened'",
     "  } catch (error) { return 'rejected: ' + (error instanceof Error ? error.message : String(error)) }",

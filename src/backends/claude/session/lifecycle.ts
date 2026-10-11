@@ -49,11 +49,9 @@ import { createClaudeActivityPublisher } from '../activity.js'
 import { createClaudePermissionBridge, WITHDRAWN_MESSAGE } from '../permissions.js'
 import { createStderrSink } from '../process.js'
 import { memoryClaudePrefs } from '../prefs.js'
-import { fileClaudeChannels } from '../channels.js'
+import { fileClaudeChannels, memoryClaudeChannels } from '../channels.js'
 import { fileClaudeChannelTokens } from '../../shared/channel-tokens.js'
 import { createClaudeTranscriptHistory } from '../older-history.js'
-import { join } from 'node:path'
-import { DATA_DIR } from '../../../utils/paths.js'
 import { envSlotsServeModel, mergedModelEnv } from '../modelEnv.js'
 import { claudeConfigDir } from '../transcript-file.js'
 import { CLAUDE_IMAGE_LIMITS, claudeImageBlocks } from '../images.js'
@@ -99,9 +97,13 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   const clock = deps.clock ?? REAL_CLOCK
   const forceSettleMs = deps.forceSettleMs ?? 30_000
   const prefs = deps.prefs ?? memoryClaudePrefs()
-  // The relay channel profiles: the file store under ~/.dsh-tui by default,
-  // injectable like prefs (tests run an in-memory store).
-  const channels = deps.channels ?? fileClaudeChannels(join(DATA_DIR, 'backends', 'claude'), message => deps.host.debug(message))
+  // The relay channel profiles: the file store under the host's data dir for
+  // this backend, injectable like prefs (tests run an in-memory store). A host
+  // that hands over no directory keeps nothing here — memory, never a path
+  // this backend picked for itself (D2).
+  const channels = deps.channels ?? (deps.host.dataDir === undefined
+    ? memoryClaudeChannels({ channels: [] })
+    : fileClaudeChannels(deps.host.dataDir, message => deps.host.debug(message)))
   // The channel-token seam: ~/.dsh/.credentials.yaml by default (the
   // /provider precedent), injectable for tests.
   const channelTokens = deps.channelTokens ?? fileClaudeChannelTokens(undefined, message => deps.host.debug(message))

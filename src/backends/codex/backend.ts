@@ -12,7 +12,7 @@
 import { isAbsolute, normalize } from 'node:path'
 import type { AgentBackend, BackendHost, OpenTarget } from '../../agent/backend.js'
 import type { AgentSession } from '../../agent/session.js'
-import { t } from '../../i18n.js'
+import { getLang, t } from '../../i18n.js'
 import { installedTuiVersion } from '../../update.js'
 import { CODEX_BACKEND_ID, CODEX_BACKEND_LABEL, codexResumeCommand, codexVersionSupported, MIN_CODEX_VERSION } from './contract.js'
 import { acquireCodexAuth, CODEX_OAUTH_PROVIDER, type CodexAuthRuntime } from './auth/external-tokens.js'
@@ -232,7 +232,13 @@ export const codexBackend: AgentBackend = {
 
   catalog: createCodexCatalog({
     acquire: cwd => {
-      const host = catalogHost ?? { cwd: process.cwd(), debug: () => undefined, warn: () => undefined }
+      // The fallback host covers the unreachable case where the catalog is
+      // used before any detect ran (the boot probe detects every registered
+      // backend first). `locale` answers the live language rather than an
+      // invented default; `dataDir` stays absent on purpose, so a codex store
+      // built from it would keep nothing rather than guess a path (B-3's
+      // `BackendHost`; codex's own stores move over in B-5).
+      const host = catalogHost ?? { cwd: process.cwd(), debug: () => undefined, warn: () => undefined, locale: getLang }
       return prepareCodexRuntime({ kind: 'create', cwd: cwd ?? host.cwd }, host)
     },
     cwd: () => catalogHost?.cwd ?? process.cwd(),
@@ -246,8 +252,11 @@ export const codexBackend: AgentBackend = {
   }),
 
   launch: {
-    sessionPrefs: debug => {
-      const prefs = fileCodexPrefs(undefined, debug)
+    // `host` replaces the old `debug` parameter (B-3 widened
+    // `AgentBackend.launch.sessionPrefs`); codex's store still resolves its
+    // own directory here and moves onto `host.dataDir` in B-5.
+    sessionPrefs: host => {
+      const prefs = fileCodexPrefs(undefined, host.debug)
       return {
         lastSession: () => prefs.read().lastSession,
         setLastSession: threadId => { prefs.write({ lastSession: threadId }) },

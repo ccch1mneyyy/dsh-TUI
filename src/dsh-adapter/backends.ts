@@ -1,5 +1,6 @@
 /** Non-DSH backend loading, detection and startup session ownership. */
 import type { Context } from '@deepseek-ai/cordis'
+import { join } from 'node:path'
 import type { AgentBackend, BackendHost, OAuthCredentialSource, OpenTarget, SdkInstallSurface, SdkInstallTarget, SdkInstaller } from '../agent/backend.js'
 import type { AgentEvent } from '../agent/events.js'
 import type { AgentSession } from '../agent/session.js'
@@ -9,7 +10,10 @@ import type { KernelStatus } from '../components/kernelCatalog.js'
 import { reserveMount, reserveNewSession } from '../sessionMounts.js'
 import { resumeTargetFromArgv } from '../sessionHistory.js'
 import { mountFailureText } from '../sessions/resumeFailure.js'
+import { getLang } from '../i18n.js'
+import { installedTuiVersion } from '../update.js'
 import { logForDebugging } from '../utils/debug.js'
+import { DATA_DIR } from '../utils/paths.js'
 import { installExecutor } from './install/executors.js'
 import { fileChannelTokens } from '../backends/shared/channel-tokens.js'
 
@@ -43,11 +47,24 @@ export function installSurfaceFor(id: string): SdkInstallSurface | undefined {
 
 const credentialSources = new Map<string, OAuthCredentialSource>()
 
-/** All probes and sessions share one credential source per provider. */
-export async function createBackendHost(ctx: Context, cwd: string, stderr: (line: string) => void): Promise<BackendHost> {
+/**
+ * The host services of one backend. Built per backend (not once for all of
+ * them) because `dataDir` is backend-scoped: `<DATA_DIR>/backends/<id>` is the
+ * only place a backend has any business writing, and the id is what names it.
+ *
+ * `locale` is a live read, not a snapshot: `/lang` switches the whole UI at
+ * runtime, and a backend's own text follows it string by string (B-3). The
+ * language union is restated by `getLang()`'s own return type, so a new
+ * shipped language fails to compile here until the domain contract knows it.
+ */
+export async function createBackendHost(ctx: Context, backendId: string, cwd: string, stderr: (line: string) => void): Promise<BackendHost> {
   const { createOAuthCredentialSource } = await import('./oauth-credential-source.js')
+  const appVersion = installedTuiVersion()
   return {
     cwd,
+    dataDir: join(DATA_DIR, 'backends', backendId),
+    locale: () => getLang(),
+    ...(appVersion === undefined ? {} : { appVersion }),
     debug: message => logForDebugging(message),
     warn: message => ctx.logger.warn(message),
     stderr,
@@ -72,8 +89,8 @@ export async function openBackendStartup(ctx: Context, backend: AgentBackend, in
 }) {
   const launch = backend.launch
   if (launch === undefined) throw new Error(`dsh-tui: backend "${backend.id}" does not support startup`)
-  const host = await createBackendHost(ctx, input.cwd, input.stderr)
-  const prefs = launch.sessionPrefs(host.debug)
+  const host = await createBackendHost(ctx, backend.id, input.cwd, input.stderr)
+  const prefs = launch.sessionPrefs(host)
   const requested = (input.configuredSessionId ?? resumeTargetFromArgv(input.argv, () => prefs.lastSession()))?.trim()
   const resumeId = requested === undefined || requested === ''
     ? undefined
@@ -134,10 +151,12 @@ export async function openBackendStartup(ctx: Context, backend: AgentBackend, in
  * their row unavailable instead of failing the probe.
  */
 export async function probeKernels(ctx: Context, cwd: string): Promise<Record<string, KernelStatus>> {
-  const host = await createBackendHost(ctx, cwd, () => undefined)
   const statuses: Record<string, KernelStatus> = {}
   for (const entry of listBackends()) {
     if (entry.load === undefined) continue
+    // One host per entry: `dataDir` is backend-scoped, and a probe must not
+    // hand a backend a directory that is not its own.
+    const host = await createBackendHost(ctx, entry.id, cwd, () => undefined)
     try {
       statuses[entry.id] = await (await loadBackend(entry.id)).detect(host)
     } catch (error) {

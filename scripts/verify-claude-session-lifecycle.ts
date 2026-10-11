@@ -422,9 +422,13 @@ const collect = (session: AgentSession) => {
     CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SESSION_ATTENDED: '1', CLAUDE_PID: '42', AI_AGENT: 'claude-code',
     TRACEPARENT: '00-abc-def-01', CLAUDE_CODE_EXECPATH: '/parent/claude', CLAUDE_EFFORT: 'high', CLAUDE_CODE_INVOKED_SKILLS: 'x',
   }
-  const env = buildClaudeEnv({ PATH: '/usr/bin', ...parent, ANTHROPIC_API_KEY: 'kept' })
+  const env = buildClaudeEnv({ appVersion: '9.9.9', base: { PATH: '/usr/bin', ...parent, ANTHROPIC_API_KEY: 'kept' } })
   check('env: parent Claude Code session variables are scrubbed', Object.keys(parent).every(key => env[key] === undefined), Object.keys(parent).filter(key => env[key] !== undefined))
-  check('env: client app + session state events, credentials untouched', env.CLAUDE_AGENT_SDK_CLIENT_APP?.startsWith('dsh-tui/') === true && env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS === '1' && env.ANTHROPIC_API_KEY === 'kept' && env.PATH === '/usr/bin')
+  check('env: client app + session state events, credentials untouched', env.CLAUDE_AGENT_SDK_CLIENT_APP === 'dsh-tui/9.9.9' && env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS === '1' && env.ANTHROPIC_API_KEY === 'kept' && env.PATH === '/usr/bin')
+  // The version tag comes from the host (`BackendHost.appVersion`), never from
+  // this backend reading the TUI's package.json; a host that cannot tell
+  // keeps the long-standing `dev` tag (B-3).
+  check('env: no host version keeps the dev tag', buildClaudeEnv({ base: {} }).CLAUDE_AGENT_SDK_CLIENT_APP === 'dsh-tui/dev')
   const options = buildQueryOptions({
     cwd: '/fixture/project', sessionId: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
     stderr: () => undefined, abortController: new AbortController(), replayUserMessages: true,

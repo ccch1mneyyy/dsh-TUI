@@ -58,10 +58,18 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { OAuthCredentialSource } from '../../agent/backend.js'
 import { t } from '../../i18n.js'
-import { homeDir } from '../../utils/paths.js'
+
+/**
+ * The user's home directory, self-contained on purpose: `homeDir()` in
+ * `src/utils/paths.ts` answers the same way, but a backend does not reach
+ * into the host's utils (B-3) and this needs exactly `os.homedir()` plus the
+ * stripped-environment fallbacks.
+ */
+const homeDir = (): string => homedir() || process.env.USERPROFILE || process.env.HOME || ''
 
 /** The dsh-auth provider id whose login this backend uses. */
 export const CLAUDE_OAUTH_PROVIDER = 'anthropic'

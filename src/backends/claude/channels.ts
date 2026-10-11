@@ -47,7 +47,6 @@
 import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { channelProfileSlug } from '../shared/channel-slug.js'
-import { DATA_DIR } from '../../utils/paths.js'
 import { writeFileAtomic } from '../shared/atomic-file.js'
 
 /** One relay channel. */
@@ -160,8 +159,10 @@ function removed(current: ClaudeChannelsData, id: string): ClaudeChannelsData {
   return { channels, ...(active === undefined ? {} : { active }) }
 }
 
-/** The file-backed profiles under `<dir>` (default `~/.dsh-tui/backends/claude`). */
-export function fileClaudeChannels(dir: string = join(DATA_DIR, 'backends', 'claude'), debug: (message: string) => void = () => undefined): ClaudeChannels {
+/** The file-backed profiles under `<dir>` (the host's `dataDir` for this
+ *  backend). The directory is required: a backend never picks a location of
+ *  its own under the host's data directory (D2, B-3). */
+export function fileClaudeChannels(dir: string, debug: (message: string) => void = () => undefined): ClaudeChannels {
   const path = join(dir, FILE)
   /** The document, and whether a file is there that could not be read or
    *  parsed (it reads as no channels). */

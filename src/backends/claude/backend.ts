@@ -19,9 +19,9 @@ import { CLAUDE_BACKEND_ID, CLAUDE_BACKEND_LABEL, cliVersionDrift, sdkVersionDri
 import { CLAUDE_OAUTH_PROVIDER, ClaudeChannelConflictError, channelMissingCredential, detectClaudeAuth, originHost, refreshFailureDebugDetail, refreshFailureStatus, resolveClaudeAuth, type ClaudeChannelConnectionInput, type ClaudeRouteSettings } from './auth.js'
 import { createClaudeCatalog } from './catalog.js'
 import { resolveStartPermissionMode, type StartPermissionMode } from './options.js'
-import { fileClaudePrefs, type ClaudePrefs } from './prefs.js'
+import { fileClaudePrefs, memoryClaudePrefs, type ClaudePrefs } from './prefs.js'
 import { buildClaudeEnv, readClaudeVersion, resolveClaudeExecutable } from './process.js'
-import { activeProfileOf, fileClaudeChannels, hasChannelConnection, type ClaudeChannelProfile, type ClaudeChannels } from './channels.js'
+import { activeProfileOf, fileClaudeChannels, hasChannelConnection, memoryClaudeChannels, type ClaudeChannelProfile, type ClaudeChannels } from './channels.js'
 import { fileClaudeChannelTokens, type ClaudeChannelTokens } from '../shared/channel-tokens.js'
 import { replayClaudeTranscript, type ClaudeReplay, type ClaudeSubagentTranscript } from './replay.js'
 import { installedSdkVersion, loadClaudeSdk, type ClaudeSessionStoreSdk } from './sdk.js'
@@ -131,8 +131,30 @@ export async function loadClaudeTranscript(
   return { cwd, replay }
 }
 
-/** The catalog of the local session store (the SDK loads on first use). */
-const catalogPrefs = fileClaudePrefs()
+/**
+ * The catalog of the local session store (the SDK loads on first use).
+ *
+ * The catalog is a static property of the backend (no session is open when
+ * the browser calls it), so it cannot be handed a host the way `open()` is;
+ * it reads the one `detect()`/`open()` captured, exactly like codex's
+ * catalog host. Both run before anything can list sessions (the boot probe
+ * detects every registered backend), and when neither has run there is no
+ * directory to take: `lastUsed` reads as empty and `snapshotKey` declines
+ * disk caching, rather than this backend guessing a path (D2).
+ */
+let catalogHost: BackendHost | undefined
+
+/** The prefs store of the captured host, or undefined when no host has been
+ *  seen yet (see {@link catalogHost}). */
+const catalogPrefs = (): ClaudePrefs | undefined => {
+  const dir = catalogHost?.dataDir
+  const host = catalogHost
+  return dir === undefined || host === undefined ? undefined : fileClaudePrefs(dir, message => host.debug(message))
+}
+
+/** Remember the host of the most recent detect / open: the catalog's only way
+ *  to reach this backend's own directory without a host parameter. */
+const rememberHost = (host: BackendHost): void => { catalogHost = host }
 
 export const claudeBackend: AgentBackend = {
   id: CLAUDE_BACKEND_ID,
@@ -140,6 +162,7 @@ export const claudeBackend: AgentBackend = {
 
   /** What is installed and whether it is the validated pair. Never throws. */
   async detect(host: BackendHost): Promise<BackendDetection> {
+    rememberHost(host)
     try {
       await loadClaudeSdk()
     } catch (error) {
@@ -154,7 +177,7 @@ export const claudeBackend: AgentBackend = {
     }
     try {
       const executable = await resolveClaudeExecutable()
-      const version = executable.path === undefined ? undefined : await readClaudeVersion(executable.path)
+      const version = executable.path === undefined ? undefined : await readClaudeVersion(executable.path, host.appVersion)
       const drift = cliVersionDrift(version) ?? sdkVersionDrift(installedSdkVersion())
       return { installed: true, auth, ...(version === undefined ? {} : { version }), ...(drift === undefined ? {} : { drift }), ...(auth === 'missing' ? { hint: t('claude-auth-missing-hint') } : {}) }
     } catch (error) {
@@ -164,8 +187,12 @@ export const claudeBackend: AgentBackend = {
   },
 
   launch: {
-    sessionPrefs: debug => {
-      const prefs = fileClaudePrefs(undefined, debug)
+    sessionPrefs: host => {
+      // The launcher asks before a session exists, so this store is built from
+      // the host it is handed. A host that hands over no directory keeps
+      // nothing: there is simply no remembered session to resume (D-3's
+      // feature-detect, never a path this backend guessed — D2).
+      const prefs = host.dataDir === undefined ? memoryClaudePrefs() : fileClaudePrefs(host.dataDir, host.debug)
       return {
         lastSession: () => prefs.read().lastSession,
         setLastSession: sessionId => { prefs.write({ lastSession: sessionId }) },
@@ -179,7 +206,7 @@ export const claudeBackend: AgentBackend = {
   catalog: createClaudeCatalog({
     loadSdk: loadClaudeSdk,
     cwd: () => process.cwd(),
-    lastUsed: () => catalogPrefs.read().lastUsed ?? {},
+    lastUsed: () => catalogPrefs()?.read().lastUsed ?? {},
     snapshotKey: () => {
       const home = claudeConfigDir(process.env)
       return isAbsolute(home) ? JSON.stringify(['claude', normalize(home)]) : undefined
@@ -189,6 +216,7 @@ export const claudeBackend: AgentBackend = {
   /** Create a session in `target.cwd` (an explicit session id, so the TUI
    *  knows it before the CLI's first `init`), or resume a persisted one. */
   async open(target: OpenTarget, host: BackendHost): Promise<AgentSession> {
+    rememberHost(host)
     let sdk: Awaited<ReturnType<typeof loadClaudeSdk>>
     try {
       sdk = await loadClaudeSdk()
@@ -202,8 +230,12 @@ export const claudeBackend: AgentBackend = {
     const cwd = resumed?.cwd ?? (target.kind === 'create' ? target.cwd : host.cwd)
     // The backend-scoped prefs: the remembered model / effort / permission
     // picks. One store for the whole open — the start resolution reads the
-    // mode here, the session's controls keep writing all three later.
-    const prefs = fileClaudePrefs(undefined, message => host.debug(message))
+    // mode here, the session's controls keep writing all three later. A host
+    // that hands over no directory keeps them in memory for this process
+    // (D-3's feature-detect): nothing is written to a path of our choosing.
+    const prefs: ClaudePrefs = host.dataDir === undefined
+      ? memoryClaudePrefs()
+      : fileClaudePrefs(host.dataDir, message => host.debug(message))
     const [executable, start] = await Promise.all([
       resolveClaudeExecutable(),
       resolveStartPermissionMode(sdk, cwd, process.env, prefs.read().permissionMode),
@@ -212,7 +244,7 @@ export const claudeBackend: AgentBackend = {
     // The credential: a dsh-auth login wins (refreshed now if
     // it is about to expire), else the environment, else the local login.
     const credentials = host.oauthCredential?.(CLAUDE_OAUTH_PROVIDER)
-    const baseEnv = buildClaudeEnv()
+    const baseEnv = buildClaudeEnv({ appVersion: host.appVersion })
     // The route decides whether the subscription token may be injected at
     // all (auth.ts): the CLI applies the settings' `env`, so a base URL set
     // in ~/.claude/settings.json counts like one in the environment.
@@ -221,7 +253,9 @@ export const claudeBackend: AgentBackend = {
     // The channel store and the token store are read fresh for every plan
     // (the open and each reconnect): a /channel switch while the session
     // lives is picked up by its next spawn.
-    const channels: ClaudeChannels = fileClaudeChannels(undefined, message => host.debug(message))
+    const channels: ClaudeChannels = host.dataDir === undefined
+      ? memoryClaudeChannels({ channels: [] })
+      : fileClaudeChannels(host.dataDir, message => host.debug(message))
     const tokens: ClaudeChannelTokens = fileClaudeChannelTokens(undefined, message => host.debug(message))
     // A custom endpoint the profile gives no credential (no token, a
     // dangling ref, no credential key in its env) never spawns; the refusal
@@ -289,7 +323,7 @@ export const claudeBackend: AgentBackend = {
         // stored credential as is.
         renew: renewal => {
           const channel = channelConnection()
-          return resolveClaudeAuth(buildClaudeEnv(), credentials, {
+          return resolveClaudeAuth(buildClaudeEnv({ appVersion: host.appVersion }), credentials, {
             settings,
             ...(renewal.rejected === undefined ? {} : { rejected: renewal.rejected }),
             ...(channel === undefined ? {} : { channel }),

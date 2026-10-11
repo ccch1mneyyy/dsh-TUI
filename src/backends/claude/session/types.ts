@@ -1,5 +1,6 @@
 /** Dependencies and live query handles for a Claude session. */
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { BackendLocale } from '../../../agent/backend.js'
 import type { ClaudeAuthPlan } from '../auth.js'
 import type { StartPermissionMode } from '../options.js'
 import type { ClaudeExecutable } from '../process.js'
@@ -60,6 +61,12 @@ export interface ClaudeSessionDeps {
     debug(message: string): void
     /** One child stderr line (deduplicated into notices by the host). */
     stderr?(line: string): void
+    /** This backend's own data directory (`BackendHost.dataDir`). Absent = a
+     *  host that keeps nothing for this backend: the prefs and channel stores
+     *  stay in memory rather than a path this backend guessed (D2, B-3). */
+    readonly dataDir?: string
+    /** The language the TUI is showing, read live (B-3). */
+    locale?(): BackendLocale
   }
   /** The installed SDK version (diagnostics). */
   readonly sdkVersion?: string
