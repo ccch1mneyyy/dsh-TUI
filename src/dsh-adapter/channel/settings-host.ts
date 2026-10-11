@@ -1,4 +1,4 @@
-import type { Context } from '@deepseek-ai/cordis'
+import type { ServiceLookup } from './channel-host.js'
 import type { LlmConfigurableProvider, LlmDiscoveredModel } from '@deepseek-ai/dsh-llm'
 import { t } from '../../i18n.js'
 import type { ChannelState } from '../channel/types.js'
@@ -7,7 +7,7 @@ import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupH
 import type { SettingsHost } from '../settingsEditor.js'
 import { settingsValue } from '../compat/settings.js'
 
-export function createSettingsHosts(ctx: Context, assertActive: () => void = () => undefined): Pick<ChannelState, 'settingsHost' | 'providerSetup' | 'oauthProviderStatuses' | 'backendAuth'> {
+export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void = () => undefined): Pick<ChannelState, 'settingsHost' | 'providerSetup' | 'oauthProviderStatuses' | 'backendAuth'> {
   let settingsHostResolved = false
   let settingsHostCache: SettingsHost | undefined
   return {

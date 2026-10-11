@@ -302,9 +302,10 @@ const stateTmp = mkdtempSync(join(tmpdir(), 'verify-handoff-atomic-'))
   check('update.ts: close-without-ready restores the bracket', /if \(handoff && ackReadyAt === undefined\) restoreHandoffScreen\(\)/.test(update))
   check('update.ts: first-frame fact feeds the classification', /firstFrameAcked: ackReadyAt !== undefined/.test(update))
   check('plugin.ts: /restart and /update pass the current kernel to the replacement',
-    /runRestart\(ctx, profile, handoffSessionId\(\), handoffHint, \{ kernel: backendChoice \}\)/.test(plugin)
-    && /runUpdate\(ctx, profile, handoffSessionId\(\), updateTargetVersion, backendChoice, handoffHint\)/.test(plugin)
-    && /updateTuiAndRestart\(sessionId, profile, targetVersion, kernel\)/.test(plugin))
+    // (the trailing argument is the standalone entry's exit seam / supervision hooks)
+    /runRestart\(ctx, profile, handoffSessionId\(\), handoffHint, \{ kernel: backendChoice \}(, exitSeam)?\)/.test(plugin)
+    && /runUpdate\(ctx, profile, handoffSessionId\(\), updateTargetVersion, backendChoice, handoffHint(, exitSeam)?\)/.test(plugin)
+    && /updateTuiAndRestart\(sessionId, profile, targetVersion, kernel(, superviseReplacement\(exitSeam, \{\}\))?\)/.test(plugin))
 }
 
 if (!isReplacement && !process.argv.includes('--e2e-parent')) {

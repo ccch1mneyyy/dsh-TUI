@@ -30,7 +30,7 @@ process.env.USERPROFILE = isolatedHome
 mkdirSync(joinPath(isolatedHome, '.dsh-tui'), { recursive: true })
 
 const [
-  { swallowNestedUpdateOverflow, isNestedUpdateOverflow, callWithUpdateOverflowGuard, resetUpdateOverflowGuardForTest, installNestedUpdateOverflowProcessGuard, registerOverflowQuench, fatalReasonForExit, shouldRecoverBoundaryOverflow, noteBoundaryRecoveryRemount, consumeBoundaryRecoveryRemount },
+  { swallowNestedUpdateOverflow, isNestedUpdateOverflow, callWithUpdateOverflowGuard, resetUpdateOverflowGuardForTest, installNestedUpdateOverflowProcessGuard, addProcessErrorAbsorber, registerOverflowQuench, fatalReasonForExit, shouldRecoverBoundaryOverflow, noteBoundaryRecoveryRemount, consumeBoundaryRecoveryRemount },
   { createClock },
   { Context },
   { createChannel },
@@ -105,6 +105,28 @@ installNestedUpdateOverflowProcessGuard() // 幂等，不重复装
 let processSurvived = true
 try { process.emit('uncaughtException', prodErr) } catch { processSurvived = false }
 check('A4 进程兜底吸收 #185（进程存活）', processSurvived)
+
+// A4b 调用方登记的吸收器：命中的错误被吸收（进程存活）；没命中的照旧重抛；
+// 注销后不再吸收（/restart、内核切换的监督进程只吸收 channel 生命周期结束）。
+{
+  const lateRead = new Error('dsh-tui: Channel UI lifetime has ended')
+  const absorbed: unknown[] = []
+  const unregister = addProcessErrorAbsorber(error => {
+    if (error !== lateRead) return false
+    absorbed.push(error)
+    return true
+  })
+  let survived = true
+  try { process.emit('uncaughtException', lateRead) } catch { survived = false }
+  check('A4b 吸收器命中的错误被吸收（进程存活）', survived && absorbed.length === 1)
+  let rethrown = false
+  try { process.emit('uncaughtException', new Error('something else')) } catch { rethrown = true }
+  check('A4b 未命中的错误照旧重抛', rethrown)
+  unregister()
+  let afterUnregister = false
+  try { process.emit('uncaughtException', lateRead) } catch { afterUnregister = true }
+  check('A4b 注销后不再吸收', afterUnregister && absorbed.length === 1)
+}
 
 // A5 熔断：同源 5 次触发 → 调用已注册 quench（5s）；未注册 quench 的源
 // 只升级日志不熔断（channel 数据通道不可停）。

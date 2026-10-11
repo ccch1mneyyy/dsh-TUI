@@ -28,10 +28,21 @@ only for a genuinely new service.
 
 ## TUI configuration
 
-On DSH 0.1.7, `/settings` writes plugin Config fields to the active profile's
-`cordis.patch.yml`. Older hosts still use `~/.dsh/settings.yaml`; that file is
-not the new settings entry point. Language and layout preferences update live;
-fullscreen and image previews require `/restart`.
+The `dsh-tui` section of `/settings` lives in the TUI's own
+`~/.dsh-tui/settings.json`, shared by every kernel (DSH, Claude, Codex). When that file
+does not exist yet, the first launch imports the editable fields of the `dsh-tui`
+row's `config` from the active profile's `cordis.patch.yml` once (read only; the
+profile is not changed and `!!js` expressions are not imported), and never again.
+The `dsh-tui` section an older host kept in `~/.dsh/settings.yaml` is imported too:
+a file DSH has not moved yet wins over the patch row; one DSH already moved into the
+patch (renamed `settings.yaml.imported`) sits beneath it.
+After the import, those fields left in the profile patch only act as a static
+deployment layer under the DSH kernel (a fallback while the user layer is unset);
+remove them from the patch so both kernels see the same defaults. Other plugins'
+sections still go through DSH's settings service (written to the active profile's
+`cordis.patch.yml`; older hosts use `~/.dsh/settings.yaml`).
+Language and layout preferences update live; fullscreen and image previews
+require `/restart`.
 
 A complete common override looks like this:
 
@@ -85,7 +96,7 @@ A complete common override looks like this:
 | `terminalImages` | `true` | Allow previews in supported terminals; `false` keeps text metadata and skips image probing and preview decoding. Restart to apply changes |
 | `preset` | roster default `standard` | Agent preset for new sessions; precedence: `DSH_TUI_PRESET` (this run) > the persisted `/preset` choice > this field (deployment default) > the roster default |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
-| `backend` | unset (the backend `/kernel` remembers, else `dsh`) | Session backend: the built-in `dsh`, or an installed backend (the experimental `claude` / `codex`, plus plugin backends; case-insensitive). **An unknown or uninstalled value starts on `dsh` with a warning**, never a crash. The profile row reads `DSH_TUI_BACKEND`, which `dsh-tui --backend <id>` sets. See [Claude backend](claude-backend.en.md) |
+| `backend` | unset (the backend `/kernel` remembers, else `dsh`) | Session backend: the built-in `dsh`, or an installed backend (the experimental `claude` / `codex`, plus plugin backends; case-insensitive). **An unknown or uninstalled value starts on `dsh` with a warning**, never a crash. The profile row reads `DSH_TUI_BACKEND`, which `dsh-tui --backend <id>` sets. When the profile's own patch writes it as a `!!js` expression (other than one that only forwards `DSH_TUI_BACKEND`, such as the bundled row's `process.env.DSH_TUI_BACKEND \|\| undefined`), the launch goes through `dsh --profile` (only the profile's Loader evaluates it), except for a `/kernel` switch. See [Claude backend](claude-backend.en.md) |
 
 ### Precedence and force-off
 
@@ -311,6 +322,7 @@ for the complete field reference.
 | `DSH_TUI_RESUME_BACKEND` | The backend `DSH_TUI_RESUME_SESSION` was read from; set only when the launcher **derived** the target (a bare `--resume` reading that backend's last session, or the safe-mode retry following the last-run record). When the boot lands on another backend — an uninstalled id falling back to `dsh`, or the remembered kernel when `DSH_TUI_BACKEND` is absent — that target **refuses with a non-zero exit**: never carried across, never a silent cold start, never a new session (the safe-mode retry is the one exception, degrading to a warning plus a cold start). An id the user passed explicitly carries no mark and is handed over as it is |
 | `DSH_TUI_RESUME_RETRY` | One-shot marker: this boot is safe mode's "retry normal startup". A retry derives its target from the last-run record, whose backend may no longer be registered, so a launch carrying this marker degrades a revoked resume target to a warning plus a cold start instead of failing. The boot deletes it from `process.env` as soon as it reads it |
 | `DSH_TUI_BACKEND` | Session backend (built-in `dsh` / `claude` / `codex`, or an installed plugin backend), normally set by `dsh-tui --backend`; an uninstalled or misspelled id starts on `dsh` with a warning (with a resume request in play it refuses instead, see above) |
+| `DSH_TUI_HOST_ENTRY` | Set to `0` to start both kernels through `dsh --profile` (by default both start from the package's own entry). When the entry cannot use the installed dsh (the `dsh` on `PATH` is not `@deepseek-ai/dsh`, its launcher script cannot be followed, or a module or export it needs is missing), a DSH launch falls back to `dsh --profile` by itself and says why in the terminal and on screen |
 | `DSH_TUI_CLAUDE_PERMISSION_MODE` | Start permission mode of the Claude backend (`default`/`acceptEdits`/`plan`/`dontAsk`/`bypassPermissions`); wins over the mode `/permission` remembered |
 | `DSH_TUI_WORKSPACE_TARGET` | Workspace path or URI resolved at startup, normally set by `dsh-tui <target>` |
 | `DSH_TUI_SESSION_ROOT` | Override the JSONL session root; profile default `$DSH_HOME/sessions`, bare `cordis.yml` default `~/.dsh-tui/sessions` |

@@ -968,7 +968,8 @@ for (const method of ['writeProfile', 'mutateProfile', 'removeProfile'] as const
   const onError = (error: unknown) => { errors.push(error) }
   process.on('unhandledRejection', onError)
   const { createDshSession } = await import('../src/dsh-adapter/backend/session.js')
-  const delivery = createInputDelivery(ctx, owner, { agent: agent as never, session: createDshSession(ctx, { agent: agent as never, handle: undefined }) }, () => raw, mount.channel.notify, () => undefined, () => undefined)
+  const { cordisChannelHost } = await import('../src/dsh-adapter/channel/cordis-host.js')
+  const delivery = createInputDelivery(cordisChannelHost(ctx), owner, { agent: agent as never, session: createDshSession(ctx, { agent: agent as never, handle: undefined }) }, () => raw, mount.channel.notify, () => undefined, () => undefined)
   const parked = delivery.withDecisionPending('tui/input', new Promise(resolve => { finish = resolve }))
   await tick()
   owner.dispose(); mount.dispose(); unregister(); raw.releaseContributions()

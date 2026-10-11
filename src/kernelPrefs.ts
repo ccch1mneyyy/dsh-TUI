@@ -128,6 +128,24 @@ export function writeKernelPrefs(
 export const KERNEL_SWITCH_HANDOFF_ENV = 'DSH_TUI_BACKEND_HANDOFF'
 
 /**
+ * The package's own entry, which hosts every kernel by default (routing in
+ * hostEntryRoute.ts). Kept here so src/update.ts does not pull that module in.
+ * `DSH_TUI_HOST_ENTRY=0` keeps every kernel on `dsh --profile`.
+ */
+const HOST_ENTRY_ENV = 'DSH_TUI_HOST_ENTRY'
+/** The entry's path, set by the launcher: every replacement
+ *  relaunches through it (src/update.ts restartArgv). */
+export const HOST_ENTRY_PATH_ENV = 'DSH_TUI_HOST_ENTRY_PATH'
+
+export function hostEntryDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[HOST_ENTRY_ENV] === '0'
+}
+
+/** Why the entry could not use the installed dsh; set by the entry, read and
+ *  cleared once by the runtime (plugin.ts), also in a delegated `dsh --profile`. */
+export const HOST_NOTICE_ENV = 'DSH_TUI_HOST_NOTICE'
+
+/**
  * The kernel boot runs on (plugin.ts backendChoice): a valid switch handoff
  * first, then the Config row, then DSH_TUI_BACKEND, then the remembered
  * choice, else dsh. An invalid DSH_TUI_BACKEND still means dsh, which is what

@@ -296,8 +296,11 @@ check('and opens a backend in exactly one place, inside the "not dsh" branch (D1
   check('a misspelled unloadExport fails the load instead of silently never closing', true)
 
   const disposal = readFileSync(join(ROOT, 'src', 'dsh-adapter', 'plugin.ts'), 'utf8')
+  // The entry's own dispose waits for a composition still running into the root
+  // (`disposeRootSettled`, root-dispose.ts); the fiber tree still goes first and
+  // the pools after it either way.
   check('one exit funnel, fiber first: dispose the tree, then close the pools (D4-P2/P3)',
-    disposal.includes('withHostRootCapability(() => ctx.root.fiber.dispose()).finally(() => unloadBackends())'))
+    /disposeRootSettled\(ctx, \(\) => withHostRootCapability\(\(\) => ctx\.root\.fiber\.dispose\(\)\)\)\.finally\(\(\) => unloadBackends\(\)\)/.test(disposal))
 }
 
 // ── 7. The generated index: discovery, order, and fail-loud generation ─────────

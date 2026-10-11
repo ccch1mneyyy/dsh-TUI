@@ -96,8 +96,9 @@ async function listSessionsSnapshot(ctx: Context): Promise<readonly SessionSumma
 
 /**
  * Attach the DSH specialists to a core whose bound session is a DSH session.
- * Called inside `createChannel`'s construction transaction: a throw here is
- * rolled back by the caller through the core's owner.
+ * Called inside `createChannel`'s construction transaction, or inside the
+ * adoption that binds a placeholder's DSH session (`core.extendOnAdopt`); a
+ * throw fails either. The binding already holds the DSH session.
  */
 export function attachDshExtensions(
   core: CoreChannel,
@@ -251,7 +252,7 @@ export function attachDshExtensions(
     configurable: true,
     enumerable: true,
     get(): boolean {
-      const settings = ctx.get('settings') as
+      const settings = (options.settingsService ?? ctx.get('settings')) as
         | { describe(options?: { redactSecrets?: boolean }): readonly { ns: string; value: unknown }[] }
         | undefined
       if (settings === undefined) return false
