@@ -408,6 +408,41 @@ export const subscribeSidePanelPanels = sidePanelPanelsStore.subscribe
 export const getSidePanelPanels = sidePanelPanelsStore.get
 export const applySidePanelPanels = sidePanelPanelsStore.apply
 
+/** Last document/config snapshot `applySidePanelPanelsPreserving` applied
+ * (normalized). An incoming snapshot that differs while omitting an id the
+ * previous snapshot included reads as a deliberate user untick. */
+let lastPanelsSnapshot: string | undefined
+
+/**
+ * Apply an explicit `sidePanel.panels` snapshot without dropping panels
+ * registered by plugins after that snapshot was written (#1454): a replayed
+ * settings document (or a config value predating the plugin) keeps
+ * live-registered plugin panels enabled, and an undefined value keeps the
+ * store's current list (module init already seeded the defaults) instead of
+ * resetting to defaults. An id the previous applied snapshot included but
+ * the new one omits is treated as a user untick and left out.
+ *
+ * @param value - the settings/config value for `sidePanel.panels`.
+ * @param pluginPanelIds - live registry of plugin-owned panel ids.
+ */
+export function applySidePanelPanelsPreserving(
+  value: unknown,
+  pluginPanelIds: () => readonly string[],
+): void {
+  if (typeof value !== 'string') return
+  const snapshot = normalizeSidePanelPanels(value)
+  const snapshotIds = parseSidePanelIds(snapshot)
+  const unticked = lastPanelsSnapshot !== undefined && lastPanelsSnapshot !== snapshot
+    ? parseSidePanelIds(lastPanelsSnapshot).filter(id => !snapshotIds.includes(id))
+    : []
+  const merged = [...snapshotIds]
+  for (const id of pluginPanelIds()) {
+    if (!merged.includes(id) && !unticked.includes(id)) merged.push(id)
+  }
+  lastPanelsSnapshot = snapshot
+  applySidePanelPanels(merged.join(','))
+}
+
 /**
  * btw 线程上下文设置（设置 `dsh-tui.btw.*`）：追问携带的最近完成轮数
  * 与总字符预算。clamp 规则与线程 store 的防御性钳制（sidePanel/btw/

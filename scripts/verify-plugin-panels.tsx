@@ -209,6 +209,39 @@ check('dispose removes store entry', panelStore.get(idA) === undefined)
 check('dispose cleans enabled CSV', !parseSidePanelIds(getSidePanelPanels()).includes(idA))
 check('dispose records ledger release', ledgerRecords().some(r => r.resource?.id === idA && r.result === 'applied' && r.operation === 'release'))
 
+// ── #1454: snapshot applies must not drop plugin-registered panels ────────
+// The dsh-tui settings watch replays `sidePanel.panels` snapshots; a
+// snapshot written before a plugin registered must keep that plugin's panel
+// enabled, an undefined snapshot keeps the store as-is, and an id dropped
+// between two applied snapshots reads as a user untick and stays dropped.
+{
+  const { applySidePanelPanelsPreserving } = prefs
+  applySidePanelPanels('todo')
+  let disposeKeep: (() => void) | undefined
+  root.inject(['tuiPanels'], ctx => {
+    disposeKeep = (ctx.get('tuiPanels') as PanelsService).register({
+      apiVersion: 1, id: 'keep', title: 'Keep', icon: '◆', component: () => null,
+    })
+  })
+  await new Promise(resolve => setImmediate(resolve))
+  const keepId = panelStore.list().find(e => e.definition.id.endsWith(':keep'))?.definition.id ?? ''
+  check('1454 panel registered + CSV gains id', keepId !== '' && parseSidePanelIds(getSidePanelPanels()).includes(keepId))
+  // stale document (predates the plugin) replays: id survives
+  applySidePanelPanelsPreserving('todo', () => [keepId])
+  check('1454 stale snapshot keeps plugin id', parseSidePanelIds(getSidePanelPanels()).includes(keepId))
+  // identical replay (unrelated settings edit): id still survives
+  applySidePanelPanelsPreserving('todo', () => [keepId])
+  check('1454 identical replay keeps plugin id', parseSidePanelIds(getSidePanelPanels()).includes(keepId))
+  // undefined snapshot (user layer + config both unset): store untouched
+  applySidePanelPanelsPreserving(undefined, () => [keepId])
+  check('1454 undefined snapshot keeps store', parseSidePanelIds(getSidePanelPanels()).includes(keepId))
+  // user unticks: snapshot changes from one that included the id to one without
+  applySidePanelPanelsPreserving(`todo,${keepId}`, () => [keepId])
+  applySidePanelPanelsPreserving('todo', () => [keepId])
+  check('1454 user untick drops plugin id', !parseSidePanelIds(getSidePanelPanels()).includes(keepId))
+  disposeKeep?.()
+}
+
 // ── render smoke: crash isolation + disabled card ───────────────────────
 // fresh panel that throws on every render (boundary catches → error card)
 const smokeComponent = (): null => { throw new Error('plugin boom') }

@@ -650,4 +650,12 @@ export function getHostPanelRuntime(runtime: TuiPanelRuntime | undefined): TuiPa
   }
 }
 
+/** Live registry of plugin-owned panel ids, for snapshot applies that must
+ * not drop panels registered after the snapshot was written (#1454). */
+export function pluginPanelIds(): readonly string[] {
+  return panelStore.list()
+    .filter(entry => entry.definition.source === 'plugin')
+    .map(entry => entry.definition.id)
+}
+
 export default TuiPanelRuntime
