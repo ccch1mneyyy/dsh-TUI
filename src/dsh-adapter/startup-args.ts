@@ -27,3 +27,9 @@ export function initialPromptFromCmdlineArgs(args: readonly string[] | undefined
   }
   return promptArgs.join(' ').trim()
 }
+
+/** `ctx.cmdlineArgs`: the app argv the host snapshotted, if it provides one. */
+export function cmdlineArgsOf(ctx: object): readonly string[] | undefined {
+  const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
+  return cmdline?.get?.() ?? cmdline?.args
+}

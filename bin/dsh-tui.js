@@ -28,7 +28,7 @@
  * `DSH_TUI_LANG` 显式指定时从其值，否则默认中文（同 src/i18n.ts 的缺省）。
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -117,6 +117,26 @@ const shellOpt = isWin ? { shell: true } : {}
 // 转义后拼进命令字符串（空参数数组不触发），非 Windows 保持数组直传。
 const cmd = (command, args) =>
   isWin ? [`${command} ${shellQuote(args).join(' ')}`, []] : [command, args]
+
+// dsh CLI 预检（`dsh --version`），异步起、不占关键路径：本包入口不需要 dsh CLI，
+// 只有 `dsh --profile` 出口（`requireDsh()`）与入口失败后的提示判定才消费结果。
+// **不能** unref：`requireDsh()` await 它时若这是唯一活跃句柄，Node 会把顶层 await
+// 判成永不结算、以 exit 13 终止启动器。
+let dshProbe
+const probeDsh = () => {
+  dshProbe ??= new Promise(resolve => {
+    const child = spawn(...cmd('dsh', ['--version']), { stdio: 'ignore', ...shellOpt })
+    child.on('error', () => resolve(false))
+    child.on('exit', code => resolve(code === 0))
+  })
+  return dshProbe
+}
+
+const requireDsh = async () => {
+  if (await probeDsh()) return
+  console.error(msg('noDsh'))
+  process.exit(1)
+}
 
 // 内联 semver（解析 + 严格大于）：启动器可能在依赖不完整的环境里被执行
 // （迁移、半损坏安装、测试沙箱），零外部依赖是自保底线。覆盖 semver 的
@@ -787,6 +807,34 @@ const startDshSession = (dshArgs, profile = PROFILE, env = process.env) =>
     })
   })
 
+// entry 子进程的 Node 编译缓存：纯 env 注入，替身进程继承。用户显式设过
+// `NODE_COMPILE_CACHE`（含空串）不覆盖。
+// 路径沿用 `join(homedir(), '.dsh-tui', …)` 写法，**不要**抽成共用的模块级常量：
+// verify-safe-mode.mjs 把 readLastRunRecord 至「TTY 判定」注释之间的源码切进只注入
+// 少数全局的 vm 沙箱，区间内引用的外部常量会是 `undefined`，套件静默转红。
+// （别把那两处切片标记原文抄进注释：会让脚本的 indexOf 提前命中。）
+const withCompileCache = env => {
+  if (env.NODE_COMPILE_CACHE !== undefined) return env
+  const cacheDir = join(homedir(), '.dsh-tui', 'compile-cache')
+  try {
+    mkdirSync(cacheDir, { recursive: true, mode: 0o700 })
+  } catch {
+    return env
+  }
+  return { ...env, NODE_COMPILE_CACHE: cacheDir }
+}
+
+// 本包自己的入口：`node <入口> <应用参数>`。结果模型与 startDshSession 相同。
+const startEntrySession = (entry, appArgs, env = process.env) =>
+  new Promise(resolve => {
+    const child = spawn(process.execPath, [entry, ...appArgs], { stdio: 'inherit', env: withCompileCache(env) })
+    child.on('error', err => resolve({ kind: 'error', error: err }))
+    child.on('exit', (code, signal) => {
+      if (signal) resolve({ kind: 'signal', signal })
+      else resolve({ kind: 'exit', code: code ?? 0 })
+    })
+  })
+
 // 救援子进程的环境：显式构造，而不是把宿主 process.env 原样交给它。救援的
 // 语义是「干净冷启动」，而启动器自己写进 process.env 的会话控制变量会把刚
 // 崩掉的主 profile 的会话 id / 工作区目标带进救援——救援 profile 里并不存在
@@ -1449,14 +1497,8 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
   forwardExit(child)
 } else {
   // ─── profile 副本（或源码运行）：完整启动逻辑 ─────────────────────────────
-  // dsh CLI 预检（缺失时给安装指引，先于一切 profile 逻辑）。
-  {
-    const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })
-    if (probe.error || probe.status !== 0) {
-      console.error(msg('noDsh'))
-      process.exit(1)
-    }
-  }
+  // dsh CLI 预检：异步起，结果在要起 dsh 的出口才消费（见 probeDsh）。
+  void probeDsh()
 
   let installedVersion
   try {
@@ -1611,7 +1653,28 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
   // DSH consumes its own --; only the app tail belongs behind it. Preserve
   // the app-level separator too, and replay this same argv on a safe retry.
   const firstArgs = [...hostArgs, ...(args.length > 0 ? ['--', ...args] : [])]
+
+  // 内核分流（docs/standalone-host-design.md）：默认所有内核都走本包入口，由入口
+  // 判定内核（src/hostEntryRoute.ts）。DSH_TUI_HOST_ENTRY=0 让所有内核回到
+  // `dsh --profile`；dsh 自己的 hostArgs（--version、--dump-config* 等）始终交给 dsh。
+  const hostEntry = join(ownDir, 'lib', 'types', 'dsh-adapter', 'host-entry.js')
+  const hostEntryEnabled = process.env.DSH_TUI_HOST_ENTRY !== '0' && existsSync(hostEntry)
   // 必须在首次 spawn 之前：本次启动的 TUI 写的记录都晚于这个时刻。
   noteLaunchChain()
-  settleFirstResult(await startDshSession(firstArgs), firstArgs)
+  if (hostEntryEnabled && hostArgs.length === 0) {
+    // 替身进程经它重起（src/update.ts restartArgv）。只在入口路线设置：带 hostArgs
+    // （如 --patch）的 `dsh --profile` 启动重起时须原样重放整条 dsh argv。
+    process.env.DSH_TUI_HOST_ENTRY_PATH = hostEntry
+    process.env.DSH_TUI_PROFILE ??= PROFILE
+    // The in-process DSH kernel reads the bundled guide skills like `dsh` does.
+    const result = await startEntrySession(hostEntry, args, withGuideSkillDir(process.env))
+    // 没有 dsh CLI：安全模式与排查提示都指向不存在的 `dsh --profile`（DSH 内核下
+    // 入口已打印 noDsh），原样退出。
+    if (result.kind === 'exit' && result.code !== 0 && !(await probeDsh())) process.exit(result.code)
+    settleFirstResult(result, firstArgs)
+  } else {
+    // `dsh --profile` 出口：hostArgs，或入口被关闭的非默认路径。
+    await requireDsh()
+    settleFirstResult(await startDshSession(firstArgs), firstArgs)
+  }
 }

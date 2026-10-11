@@ -17,13 +17,18 @@
  *    synchronous cleanup (EXIT_ALT_SCREEN → DISABLE_MOUSE_TRACKING →
  *    SHOW_CURSOR) to the stdout stream's own fd, with the last frame (when
  *    present) preceding EXIT_ALT_SCREEN.
+ * 4. A useInput mounting after detachForShutdown does not re-enter raw mode
+ *    (no bracketed-paste / focus-reporting enable after the exit cleanup).
+ * 6. An <AlternateScreen> removed after detachForShutdown (a late render
+ *    throwing into the root error boundary) writes no EXIT_ALT_SCREEN: the
+ *    DSH → Claude kernel switch keeps the alt screen for the replacement.
  */
 import React from 'react'
 import { closeSync, openSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
-import { render, AlternateScreen, Text } from '../src/ui.js'
+import { render, AlternateScreen, Text, useInput } from '../src/ui.js'
 import instances from '../src/ink/instances.js'
 import {
   DISABLE_MOUSE_TRACKING,
@@ -203,12 +208,93 @@ const sleep = (ms: number): Promise<void> =>
 }
 
 // ---------------------------------------------------------------------------
-// 4. serializeDiff keeps the empty-diff contract after the extraction.
+// 4. A useInput that mounts after detachForShutdown must not re-enter raw
+// mode: the funnel's DBP/DFE are already written. The detach runs inside the
+// commit that mounts `Late` (an earlier sibling's layout effect), so Late's
+// own layout effects really run after it.
+// ---------------------------------------------------------------------------
+{
+  const stdout = fakeTTY()
+  const stdin = new FakeStdin()
+  let instance: Awaited<ReturnType<typeof render>> | undefined
+  let mountLate: (() => void) | undefined
+  let lateMounted = false
+  const Detach = () => {
+    React.useLayoutEffect(() => { void instance?.detachForShutdown() }, [])
+    return null
+  }
+  const Late = () => {
+    useInput(() => undefined)
+    React.useLayoutEffect(() => { lateMounted = true }, [])
+    return React.createElement(Text, null, 'late input')
+  }
+  const Root = () => {
+    const [late, setLate] = React.useState(false)
+    mountLate = () => setLate(true)
+    return late
+      ? React.createElement(React.Fragment, null, React.createElement(Detach), React.createElement(Late))
+      : React.createElement(Text, null, 'root')
+  }
+  instance = await render(React.createElement(Root), {
+    stdout,
+    stdin: stdin as unknown as NodeJS.ReadStream,
+    exitOnCtrlC: false,
+    patchConsole: true,
+  })
+  drain(stdout)
+  mountLate?.()
+  await sleep(50) // 固定窗:pacing 让该提交与 detach 的延后清理跑完
+  const late = drain(stdout)
+  check('late useInput mounted in the detaching commit', lateMounted)
+  check('late useInput after detach writes no bracketed-paste enable', !late.includes('\x1b[?2004h'))
+  check('late useInput after detach writes no focus-reporting enable', !late.includes('\x1b[?1004h'))
+  check('late useInput after detach leaves stdin cooked', !stdin.isRaw)
+  instance.unmount()
+}
+
+// ---------------------------------------------------------------------------
+// 5. serializeDiff keeps the empty-diff contract after the extraction.
 // ---------------------------------------------------------------------------
 {
   const sink = new PassThrough() as unknown as NodeJS.WriteStream
   const empty = serializeDiff({ stdout: sink, stderr: sink }, [])
   check('serializeDiff of an empty diff is empty', empty === '')
+}
+
+// ---------------------------------------------------------------------------
+// 6. An <AlternateScreen> deleted after detachForShutdown must not write
+// EXIT_ALT_SCREEN: on a DSH → Claude switch the replacement draws on that alt
+// screen. The control group (no detach) proves the case does delete it.
+// ---------------------------------------------------------------------------
+for (const detach of [false, true]) {
+  const stdout = fakeTTY()
+  const stdin = new FakeStdin()
+  let explode: (() => void) | undefined
+  let altRemoved = false
+  const Reader = () => {
+    React.useLayoutEffect(() => () => { altRemoved = true }, [])
+    const [ended, setEnded] = React.useState(false)
+    explode = () => setEnded(true)
+    if (ended) throw new Error('dsh-tui: Channel UI lifetime has ended')
+    return React.createElement(Text, null, 'chat')
+  }
+  const instance = await render(React.createElement(AlternateScreen, null, React.createElement(Reader)), {
+    stdout,
+    stdin: stdin as unknown as NodeJS.ReadStream,
+    exitOnCtrlC: false,
+    patchConsole: true,
+  })
+  await sleep(20) // 固定窗:pacing 让挂载的插入 effect 写出进入序列
+  check('alt screen entered', drain(stdout).includes(ENTER_ALT_SCREEN))
+  if (detach) instance.detachForShutdown()
+  explode?.()
+  await sleep(50) // 固定窗:pacing 让迟到的提交与其删除 effect 跑完
+  const late = drain(stdout)
+  // With detach the alt screen goes in detach's own unmount, after the guard is set.
+  check(`alt screen removed (${detach ? 'detached' : 'control'})`, altRemoved)
+  if (detach) check('late boundary swap after detach writes no EXIT_ALT_SCREEN', !late.includes(EXIT_ALT_SCREEN))
+  else check('control: the same swap without detach leaves the alt screen', late.includes(EXIT_ALT_SCREEN))
+  instance.unmount()
 }
 
 console.log(results.join('\n'))

@@ -128,7 +128,11 @@ const plainText = (frames: readonly string[]) => frames.join('')
  * Mutable settings and subscriptions let picker changes redraw the screen.
  */
 function makeChannel(over: Record<string, unknown> = {}) {
+  // Texts for the assertions; the channel itself carries the contract's
+  // items, which expire (the landing page shows the newest in its Tips row).
   const notifications: string[] = []
+  const notificationItems: Array<{ id: number; text: string; timeoutMs: number }> = []
+  let notificationId = 0
   const calls: string[] = []
   const listeners: Array<() => void> = []
   const channel: Record<string, unknown> = {
@@ -157,7 +161,7 @@ function makeChannel(over: Record<string, unknown> = {}) {
     turnStart: 0,
     lastUserText: '',
     pending: [],
-    notifications,
+    notifications: notificationItems,
     // plan / permission 由 dsh-base 注册为 external 命令（选择器打开的前提）。
     commandList: [...LOCAL_COMMANDS, { name: 'plan', external: true }, { name: 'permission', external: true }],
     // 能力事实（端口新增：AgentCapabilities）：桩 channel 必须实现，否则
@@ -192,7 +196,20 @@ function makeChannel(over: Record<string, unknown> = {}) {
     steer() {},
     cancel() {},
     clear() {},
-    notify(text: string) { notifications.push(text) },
+    notify(text: string, options?: { timeoutMs?: number }) {
+      notifications.push(text)
+      const item = { id: notificationId++, text, timeoutMs: options?.timeoutMs ?? 4000 }
+      notificationItems.push(item)
+      bump()
+      if (item.timeoutMs > 0) {
+        setTimeout(() => {
+          const index = notificationItems.indexOf(item)
+          if (index !== -1) notificationItems.splice(index, 1)
+          bump()
+        }, item.timeoutMs).unref()
+      }
+      return () => undefined
+    },
     listModels: () => Promise.resolve([
       { provider: 'deepseek', id: 'deepseek-chat', name: 'deepseek-chat' },
       { provider: 'deepseek', id: 'deepseek-reasoner', name: 'deepseek-reasoner' },
@@ -620,8 +637,11 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   await settled(() => chat.screen().includes(WIZARD_MARK))
   await chat.send('\u001b')
   await settled(() => chat.screen().includes('说点什么'))
-  check('E5 跳过之后落地页仍带首启 Tips 文案（没记账，下次还会问）',
-    chat.screen().includes('第一次用 dsh-TUI'), chat.screen().slice(0, 200))
+  // 落地页没有 toast 区：跳过提示先借 Tips 行显示（4s），过期后首启文案回来。
+  check('E5 跳过提示显示在落地页 Tips 行',
+    await settled(() => chat.screen().includes('已跳过首次引导')), chat.screen().slice(0, 200))
+  check('E5 提示过期后落地页仍带首启 Tips 文案（没记账，下次还会问）',
+    await settled(() => chat.screen().includes('第一次用 dsh-TUI'), { timeoutMs: 8000 }), chat.screen().slice(0, 200))
   await chat.unmount()
 }
 
@@ -1261,9 +1281,17 @@ const heroIdentical = (before: readonly string[], after: readonly string[]): boo
   // 桩口径与真机 claude 会话一致：backendCapabilities.backendId = 'claude'
   // （Chat 的 kernelCurrentId 只认这一处——右下角内核区的 ▸ 与入口名都跟着它）。
   const claudeCaps = { backendId: 'claude', backendLabel: 'Claude', commands: [] }
-  const chat = await mountChat({ launchpadOnBoot: true }, { backendCapabilities: claudeCaps })
+  // 真机 claude 会话的 listPresets 是拒绝桩（action-readiness 的
+  // 「当前内核不支持：preset」提示）：记下调用，Y1b 断言启动页不去碰它。
+  const presetReads: string[] = []
+  const chat = await mountChat({ launchpadOnBoot: true }, {
+    backendCapabilities: claudeCaps,
+    listPresets: async () => { presetReads.push('listPresets'); return [] },
+  })
   check('Y1 claude 内核全新启动先落启动页（Launchpad 盖在最上层）',
     await settled(() => chat.screen().includes('说点什么')), chat.screen().slice(0, 200))
+  check('Y1b 内核不提供 /preset 时启动页不预读 preset 名册（否则每次启动都弹不支持）',
+    presetReads.length === 0, JSON.stringify(presetReads))
   check('Y2 内核角标把 claude 记为当前内核（▸ 在 Claude 行，不在 DSH 行）',
     await settled(() => /▸\s*Claude/.test(chat.screen()) && !/▸\s*DSH/.test(chat.screen())),
     chat.screen().slice(-320))

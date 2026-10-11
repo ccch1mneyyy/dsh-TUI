@@ -21,7 +21,7 @@ const extensions = read('channel/extensions.ts')
 const root = compositionSource()
 
 // The entry: core + DSH extensions, attached by capability only.
-assert.match(entry, /createCoreChannel\(ctx, session, options, owner\)/u, 'the entry builds the core')
+assert.match(entry, /createCoreChannel\(cordisChannelHost\(ctx, [^)]*\), session, options, owner\)/u, 'the entry builds the core against the Cordis host')
 assert.match(entry, /attachDshExtensions\(core, ctx, native, options\)/u, 'DSH specialists attach to the core')
 assert.match(entry, /session\.capabilities\.native\.dsh/u, 'the DSH extension is chosen by capability')
 assert.match(entry, /return core\.start\(\)/u, 'the core starts the composed channel')

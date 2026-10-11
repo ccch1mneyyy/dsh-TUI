@@ -51,9 +51,9 @@ const { Context } = cordis
 const { Terminal: XTerm } = XTermMod
 const { render, ThemeProvider, AlternateScreen, Box, Text } = ui
 const { settled, sleep } = termTest
-const { applySidePanelPanels, getSidePanelPanels, parseSidePanelIds } = prefs
+const { applySidePanelPanels, DEFAULT_SIDE_PANEL_IDS, getSidePanelPanels, parseSidePanelIds } = prefs
 const { setLang } = i18nMod
-const { TuiPanelRuntime, getHostPanelRuntime } = adapterMod
+const { applyConfiguredSidePanelPanels, applySidePanelPanelsFromSettings, TuiPanelRuntime, getHostPanelRuntime } = adapterMod
 const { panelStore } = storeMod
 const { panelBridgeRequests } = bridgeMod
 void panelAdapterMod
@@ -121,6 +121,42 @@ check('enabled CSV gains plugin id', parseSidePanelIds(getSidePanelPanels()).inc
 check('own list() summary', panelsA.list().some(p => p.id === entryA!.definition.id)
   && !panelsA.list().some(p => (p as { title?: string }).title === undefined))
 check('ledger bind applied', ledgerRecords().some(r => r.resource?.kind === 'panel' && r.resource?.id === entryA!.definition.id && r.result === 'applied'))
+
+// ── 配置应用不挤掉已注册的面板（profile 路径的时序）────────────────────
+// profile 路径上第三方插件行可能先于 dsh-tui 行 apply，此时面板已注册。
+applyConfiguredSidePanelPanels(DEFAULT_SIDE_PANEL_IDS)
+check('configured CSV keeps a registered panel id', parseSidePanelIds(getSidePanelPanels()).includes(entryA!.definition.id))
+check('configured CSV still enables its own ids', parseSidePanelIds(getSidePanelPanels()).includes('todo'))
+// 变异对照：不并注册集合的调用会把它挤出去。
+applySidePanelPanels(DEFAULT_SIDE_PANEL_IDS)
+check('mutation control: plain CSV application drops it', !parseSidePanelIds(getSidePanelPanels()).includes(entryA!.definition.id))
+applyConfiguredSidePanelPanels(DEFAULT_SIDE_PANEL_IDS)
+check('re-applying the configured CSV restores it', parseSidePanelIds(getSidePanelPanels()).includes(entryA!.definition.id))
+
+// ── /settings 的显式移除必须活得过下一次配置应用 ─────────────────────────
+// /settings 勾选只写文档与 store、不经过 disablePanelIdInStore；每次配置应用回落的
+// CSV 里没有后来注册的面板，没有「显式移除」记录它会被并回来。顺序即真实时序。
+applyConfiguredSidePanelPanels(DEFAULT_SIDE_PANEL_IDS)
+const disposeRemoved = panelsA.register({ apiVersion: 1, id: 'removable', title: 'Removable', component: () => null })
+const removedId = panelStore.list().find(e => e.definition.id.endsWith(':removable'))?.definition.id ?? ''
+check('removal fixture registered', removedId !== '' && parseSidePanelIds(getSidePanelPanels()).includes(removedId))
+// 用户勾掉它：设置编辑走 applySidePanelPanelsFromSettings（先结算移除，再并集）。
+const withoutRemoved = parseSidePanelIds(getSidePanelPanels()).filter(id => id !== removedId).join(',')
+applySidePanelPanelsFromSettings(withoutRemoved)
+check('an explicitly removed registered panel is NOT revived by the configured CSV',
+  !parseSidePanelIds(getSidePanelPanels()).includes(removedId))
+check('the same application still enables the configured ids', parseSidePanelIds(getSidePanelPanels()).includes('todo'))
+// 启动期的 boot settings 应用。
+applyConfiguredSidePanelPanels(DEFAULT_SIDE_PANEL_IDS)
+check('a panel registered at startup still enters the enabled list (P1-3 B item)',
+  parseSidePanelIds(getSidePanelPanels()).includes(entryA!.definition.id))
+check('the explicitly removed one stays removed through the boot apply',
+  !parseSidePanelIds(getSidePanelPanels()).includes(removedId))
+applyConfiguredSidePanelPanels(DEFAULT_SIDE_PANEL_IDS)
+check('the boot apply leaves a startup panel unrecorded as removed (P1-3 B item)',
+  parseSidePanelIds(getSidePanelPanels()).includes(entryA!.definition.id))
+disposeRemoved?.()
+check('plugin unregister removes it from the enabled CSV', !parseSidePanelIds(getSidePanelPanels()).includes(removedId))
 
 // descriptor validation
 check('apiVersion gate', panelsA.register({ apiVersion: 2 as never, id: 'v2', title: 'x', component: () => null }) === undefined)

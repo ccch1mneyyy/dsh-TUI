@@ -9,6 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { AgentSession } from '../agent/session.js'
 import { createDshSession, isAgentSession } from './backend/session.js'
+import { cordisChannelHost } from './channel/cordis-host.js'
 import { createCoreChannel } from './channel/core/compose.js'
 import { attachDshExtensions } from './channel/extensions.js'
 import { attachSessionWorkingActivity } from './channel/session-activity.js'
@@ -37,15 +38,27 @@ export function createChannel(
   const owner = createChannelOwner()
   try {
     const session = isAgentSession(initial) ? initial : createDshSession(ctx, { agent: initial, handle: options.handle })
-    const core = createCoreChannel(ctx, session, options, owner)
+    const core = createCoreChannel(cordisChannelHost(ctx, options.settingsService === undefined ? {} : { settings: options.settingsService }), session, options, owner)
     // DSH extensions attach only to a DSH session; other backends get the
     // core and whatever their session capabilities offer.
     const native = session.capabilities.native.dsh
-    if (native !== undefined) attachDshExtensions(core, ctx, native, options)
+    if (native !== undefined) {
+      attachDshExtensions(core, ctx, native, options)
+    } else if (options.startup !== undefined) {
+      // A placeholder learns its backend at the first adoption; a DSH
+      // session adopted then gets the same extensions.
+      core.extendOnAdopt(adopted => {
+        const dsh = adopted.capabilities.native.dsh
+        if (dsh !== undefined) attachDshExtensions(core, ctx, dsh, options)
+      })
+    }
     // A backend that builds its own working line (the Claude backend) exposes
     // it as a capability. DSH keeps using its projection above. Without the
     // capability or the publish option nothing is attached.
-    if (session.capabilities.workingActivity !== undefined) attachSessionWorkingActivity(core, options)
+    // A placeholder serves nothing yet, so its real session's capability
+    // decides per bind (a DSH session adopted later replaces these hooks:
+    // `extend` merges `bind` whole).
+    if (session.capabilities.workingActivity !== undefined || options.startup !== undefined) attachSessionWorkingActivity(core, options)
     return core.start()
   } catch (error) {
     // Setup is one transaction from the first acquired resource. Preserve the

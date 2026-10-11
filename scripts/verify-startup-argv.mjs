@@ -96,9 +96,9 @@ if (probeMode) {
   provideCmdline(ctx, { args: program.args, exit: code => process.exit(code) })
   if (process.env.DSH_TUI_ARGV_SHAPE === 'args') ctx.cmdlineArgs = { args: program.args }
 
-  const { initialPromptFromCmdlineArgs } = await import('../lib/types/dsh-adapter/startup-args.js')
+  const { cmdlineArgsOf, initialPromptFromCmdlineArgs } = await import('../lib/types/dsh-adapter/startup-args.js')
   const { resumeTargetFromArgv, stripResumeArgs } = await import('../lib/types/sessionHistory.js')
-  const { KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, parseBackendId, readKernelPrefs, resolveRememberedBackend, resolveResumeTarget } = await import('../lib/types/kernelPrefs.js')
+  const { DSH_BACKEND_ID, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, parseBackendId, readKernelPrefs, resolveRememberedBackend, resolveResumeTarget } = await import('../lib/types/kernelPrefs.js')
   const { backendLabel, isBackendIdSyntax, isRegisteredBackend, listBackends, parseBackendChoice } = await import('../lib/types/dsh-adapter/backend-registry.js')
   const { setLang, t } = await import('../lib/types/i18n.js')
   // Deterministic refusal text: the boot itself sets the language from config,
@@ -107,10 +107,16 @@ if (probeMode) {
   const { startup, backendInput, resolution, target, submit } = JSON.parse(readFileSync(process.env.DSH_TUI_ARGV_STARTUP, 'utf8'))
   const submitted = []
   const scope = {
-    ctx, process, initialPromptFromCmdlineArgs, resumeTargetFromArgv, stripResumeArgs,
+    ctx, process, cmdlineArgsOf, initialPromptFromCmdlineArgs, resumeTargetFromArgv, stripResumeArgs,
+    // A replacement process skips the prompt (src/update.ts restartChildEnv).
+    LAUNCH_PROMPT_SENT_ENV: 'DSH_TUI_LAUNCH_PROMPT_SENT',
     KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, parseBackendId, readKernelPrefs,
     resolveRememberedBackend, resolveResumeTarget, backendLabel, isBackendIdSyntax,
     isRegisteredBackend, listBackends, parseBackendChoice, t,
+    DSH_BACKEND_ID,
+    // These cases pin the `dsh --profile` path, so `apply` gets no entry kernel route.
+    dshInEntry: false,
+    runtimeOptions: {},
     config: {
       backend: process.env.DSH_TUI_BACKEND,
       sessionId: process.env.DSH_TUI_RESUME_SESSION,
@@ -120,7 +126,8 @@ if (probeMode) {
     sessionCwd: process.cwd(),
     shadow: false,
     backendStart: undefined,
-    channel: { submit: text => submitted.push(text) },
+    // The profile path opens the session before the mount: ready at once.
+    channel: { ready: true, submit: text => submitted.push(text) },
   }
   const context = createContext(scope)
   let refusal
@@ -200,11 +207,12 @@ async function compiledStartup() {
       declarations.set(declaration.name.getText(source), statement)
     }
   }
+  // In `apply` order: `entryKernel` (the route an entry hands in) is replayed
+  // because `backendChoice` reads it first; the pinned scope leaves it unset.
   const names = [
-    'cmdline', 'cmdlineArgs', 'requestedWorkspace', 'launchSessionId', 'submitChannel', 'initialPrompt',
-    'rawBackend', 'rawBackendGiven', 'handoffBackendRaw', 'handoffBackend', 'rememberedBackend', 'backendChoice',
-    'resumeBackendRaw', 'resumeRetry', 'resumeTarget', 'effectiveSessionId', 'configuredSessionId',
-    ...['configuredBackend', 'startupArgv'].filter(name => declarations.has(name)),
+    'cmdlineArgs', 'requestedWorkspace', 'launchSessionId', 'submitChannel', 'initialPrompt',
+    'rawBackend', 'handoffBackendRaw', 'handoffBackend', 'rememberedBackend', 'configuredBackend', 'entryKernel', 'backendChoice',
+    'rawBackendGiven', 'resumeBackendRaw', 'resumeRetry', 'resumeTarget', 'effectiveSessionId', 'configuredSessionId', 'startupArgv',
   ]
   // The two refusal branches (a revoked target, and a resume request aimed at a
   // backend this host does not have) run for real: they are top-level statements
@@ -212,7 +220,7 @@ async function compiledStartup() {
   // the declarations in source order — and a throw ends the process the way the
   // boot's startup funnel does.
   const refusals = apply.body.statements.filter(node => ts.isIfStatement(node)
-    && /resumeTarget|rawBackendGiven/u.test(node.getText(source)))
+    && /resumeTarget|rawBackendGiven/u.test(node.expression.getText(source)))
   assert.ok(refusals.length >= 2, 'compiled resume refusal branches exist')
   const startup = [
     ...names.map(name => {
@@ -224,16 +232,30 @@ async function compiledStartup() {
   const submit = apply.body.statements.find(node => ts.isIfStatement(node) && node.expression.getText(source) === 'initialPrompt')
   assert.ok(submit, 'compiled initial prompt submission branch exists')
   let target
+  /**
+   * Only top-level `resolveAgent` calls in `apply`: the DSH-in-entry path
+   * (`attachDsh`) has its own nested resume target that must not be taken.
+   */
+  const isNestedFunction = node => ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node)
+    || ts.isArrowFunction(node) || ts.isMethodDeclaration(node)
   let backendInput
+  /** Block-local declarations, for an input passed by name. */
+  const locals = new Map()
   const visit = node => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      locals.set(node.name.text, node.initializer.getText(source))
+    }
     if (ts.isCallExpression(node) && node.expression.getText(source) === 'openBackendStartup') {
-      backendInput = node.arguments[2].getText(source)
+      const input = node.arguments[2]
+      backendInput = ts.isIdentifier(input) ? locals.get(input.text) : input.getText(source)
     }
     if (ts.isCallExpression(node) && node.expression.getText(source) === 'resolveAgent') {
       assert.ok(ts.isIdentifier(node.arguments[1]), 'DSH startup consumes a named resume target')
       target = node.arguments[1].text
     }
-    ts.forEachChild(node, visit)
+    ts.forEachChild(node, child => {
+      if (!isNestedFunction(child)) visit(child)
+    })
   }
   visit(apply.body)
   assert.ok(target && declarations.has(target), 'compiled resume target passed to resolveAgent exists')
@@ -293,6 +315,8 @@ try {
     ...(isWin ? { SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec, PATHEXT: process.env.PATHEXT } : {}),
     HOME: temp, USERPROFILE: temp, DSH_HOME: dshHome,
     DSH_TUI_ARGV_PROBE: '1', DSH_TUI_ARGV_STARTUP: startupFile, NODE_OPTIONS: '--no-deprecation',
+    // A Claude launch would go to the entry; routing is off to keep these on `dsh --profile`.
+    DSH_TUI_HOST_ENTRY: '0',
   }
   const cases = [
     ...[

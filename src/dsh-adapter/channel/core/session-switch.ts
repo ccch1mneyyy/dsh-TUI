@@ -20,7 +20,6 @@
  * (`claude:<id>`) for the whole attempt, like a DSH disk resume: a session
  * another TUI process drives is refused.
  */
-import type { Context } from '@deepseek-ai/cordis'
 import type { AgentEvent } from '../../../agent/events.js'
 import { formatSessionRef } from '../../../agent/refs.js'
 import type { AgentSession } from '../../../agent/session.js'
@@ -28,7 +27,8 @@ import { t } from '../../../i18n.js'
 import { WORKING_GATE_NOTICES } from '../../../commands.js'
 import { mountFailureText } from '../../../sessions/resumeFailure.js'
 import { releaseMount, reserveMount, reserveNewSession, type MountReservation } from '../../../sessionMounts.js'
-import { dispatchTuiDecision, dispatchTuiNotification, normalizeCancelDecision } from '../../extension-events.js'
+import { normalizeCancelDecision } from '../../extension-events.js'
+import type { ChannelHost } from '../channel-host.js'
 import type { ChannelCapabilities } from '../../../adapter/ports/channel-view.js'
 import type { ChannelBinding } from '../binding.js'
 import type { ChannelOwner } from '../owner.js'
@@ -104,7 +104,7 @@ export interface ResumeSessionOpener {
   plan(target: { readonly sessionId: string }): ResumeSessionPlan
 }
 
-export function createSessionSwitch(ctx: Context, deps: {
+export function createSessionSwitch(ctx: Pick<ChannelHost, 'logger' | 'dispatchDecision' | 'dispatchNotification'>, deps: {
   owner: Pick<ChannelOwner, 'current'>
   binding: Pick<ChannelBinding, 'session' | 'capture' | 'isCurrent' | 'prepare' | 'abandon' | 'adopt'>
   state: () => Pick<ChannelState, 'agentId' | 'cwd' | 'displayCwd' | 'working' | 'pending'>
@@ -141,7 +141,7 @@ export function createSessionSwitch(ctx: Context, deps: {
     // switch roll over a newer session the user switched to mid-await.
     const origin = deps.conversationKey(binding.session)
     const state = deps.state()
-    const decision = await deps.withDecisionPending('tui/session-switch', dispatchTuiDecision(ctx, 'tui/session-switch', {
+    const decision = await deps.withDecisionPending('tui/session-switch', ctx.dispatchDecision('tui/session-switch', {
       kind,
       ...(targetSessionId === undefined ? {} : { targetSessionId }),
       sessionId: state.agentId,
@@ -165,7 +165,7 @@ export function createSessionSwitch(ctx: Context, deps: {
    *  the switch itself already succeeded. */
   const notifySessionSwitched = (kind: SessionSwitchedKind, sessionId: string, previousSessionId: string): void => {
     try {
-      void dispatchTuiNotification(ctx, 'tui/session-switched', { kind, sessionId, previousSessionId, cwd: deps.state().cwd }).catch((error: unknown) => {
+      void ctx.dispatchNotification('tui/session-switched', { kind, sessionId, previousSessionId, cwd: deps.state().cwd }).catch((error: unknown) => {
         ctx.logger.warn('dsh-tui: tui/session-switched listener failed: %o', error)
       })
     } catch (error) {
@@ -412,12 +412,15 @@ export function createBackendOpener(deps: {
   state: ChannelState
   rowIds: { value: number }
   resetProjection(): void
-  /** Forget the replaced session's subagents and background jobs. */
-  resetActivity?(): void
+  /** Forget the replaced session's subagents and background jobs, and
+   *  rebuild the subagent control for the candidate (its capabilities). */
+  resetActivity?(candidate: AgentSession): void
   snapshotOf(session: AgentSession): ChannelCapabilities
   /** Forget the replaced session's backend commands and reports. */
   resetControls(): void
   bind(seed: readonly AgentEvent[]): void
+  /** Runs before the bind (core/compose.ts `attachOnAdopt`). */
+  attach?(candidate: AgentSession): void
   /** The bound session (its backend-qualified reference is the ledger key). */
   bound(): AgentSession
   mounts: SessionMountLedger
@@ -438,11 +441,15 @@ export function createBackendOpener(deps: {
     }
   }
   const adoptWith = (candidate: AgentSession, history: readonly AgentEvent[]): string => {
-    resetSessionProjection(state, deps.rowIds, deps.resetProjection, () => { deps.resetActivity?.() }, () => undefined)
+    resetSessionProjection(state, deps.rowIds, deps.resetProjection, () => { deps.resetActivity?.(candidate) }, () => undefined)
     state.agentId = candidate.ref.sessionId
     state.sessionId = candidate.ref.sessionId
     state.backendCapabilities = deps.snapshotOf(candidate)
+    // A placeholder whose startup open failed is retried by `/new`.
+    state.ready = true
+    state.startupFailure = undefined
     deps.resetControls()
+    deps.attach?.(candidate)
     deps.bind(history)
     deps.touch?.(candidate.ref.sessionId)
     state.emit()

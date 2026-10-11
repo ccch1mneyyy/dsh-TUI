@@ -17,9 +17,10 @@ export function createWorkspaceActions(
     notify: ChannelState['notify']
   },
 ) {
-  const { service, notify } = deps
-  const listWorkspaces = () => service.list(state.cwd)
-  const resolveWorkspace = (uri: string) => service.resolve(uri, state.cwd)
+  // `deps.service` is read per call (late row).
+  const { notify } = deps
+  const listWorkspaces = () => deps.service.list(state.cwd)
+  const resolveWorkspace = (uri: string) => deps.service.resolve(uri, state.cwd)
   /**
    * The workspace home screen's sidebar: the durable ledger's own listing.
    *
@@ -29,12 +30,12 @@ export function createWorkspaceActions(
    * directly and only adds what the ledger does not know: whether the
    * directory still exists.
    */
-  const listWorkspaceRegistry = (): Promise<readonly TuiWorkspaceEntry[]> => service.listRegistry()
+  const listWorkspaceRegistry = (): Promise<readonly TuiWorkspaceEntry[]> => deps.service.listRegistry()
   /** Forget a registration. Sessions are untouched; removing the live workspace is refused. */
   const removeWorkspace = async (path: string): Promise<boolean> => {
     deps.owner.assertActive()
     try {
-      const removed = await service.remove(path)
+      const removed = await deps.service.remove(path)
       if (!removed) {
         notify(t('workspace-remove-unknown', { target: path }), { color: 'warning', timeoutMs: 8000 })
         return false
@@ -50,7 +51,7 @@ export function createWorkspaceActions(
   const renameWorkspaceAt = async (path: string, title: string): Promise<boolean> => {
     deps.owner.assertActive()
     try {
-      const renamed = await service.rename(path, title)
+      const renamed = await deps.service.rename(path, title)
       notify(t('workspace-renamed', { title: renamed.label }))
       return true
     } catch (error) {
@@ -83,7 +84,7 @@ export function createWorkspaceActions(
   const renameWorkspace = async (title: string): Promise<boolean> => {
     deps.owner.assertActive()
     try {
-      const renamed = await service.rename(state.cwd, title)
+      const renamed = await deps.service.rename(state.cwd, title)
       state.displayCwd = renamed.description ?? renamed.uri
       notify(t('workspace-renamed', { title: renamed.label }))
       state.emit()
@@ -93,5 +94,5 @@ export function createWorkspaceActions(
       return false
     }
   }
-  return { listWorkspaces, listWorkspaceRegistry, removeWorkspace, renameWorkspaceAt, resolveWorkspace, switchWorkspace, renameWorkspace, workspaceCommands: () => service.commands(), runWorkspaceCommand: (name: string, input: string) => service.runCommand(name, input, state.cwd) }
+  return { listWorkspaces, listWorkspaceRegistry, removeWorkspace, renameWorkspaceAt, resolveWorkspace, switchWorkspace, renameWorkspace, workspaceCommands: () => deps.service.commands(), runWorkspaceCommand: (name: string, input: string) => deps.service.runCommand(name, input, state.cwd) }
 }

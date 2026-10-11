@@ -246,12 +246,26 @@ export function fatalReasonForExit(error: unknown, origin: ProcessGuardOrigin): 
  * a host owns process error policy.
  */
 let processGuardInstalled = false
+const processErrorAbsorbers = new Set<(error: unknown) => boolean>()
+/** Absorb one more error class at the process level (the absorber logs what
+ *  it takes); returns the unregister handle. */
+export function addProcessErrorAbsorber(absorb: (error: unknown) => boolean): () => void {
+  processErrorAbsorbers.add(absorb)
+  return () => { processErrorAbsorbers.delete(absorb) }
+}
+const absorbedByCaller = (error: unknown): boolean => [...processErrorAbsorbers].some(absorb => absorb(error))
+/** Whether the guard's process listeners are installed; the standalone entry
+ *  drops DSH's fail-loud handlers only then (src/dsh-adapter/process-exit.ts). */
+export function processGuardActive(): boolean {
+  return processGuardInstalled
+}
 export function installNestedUpdateOverflowProcessGuard(): void {
   if (processGuardInstalled) return
   if (process.env.DSH_TUI_NO_185_PROCESS_GUARD === '1') return
   processGuardInstalled = true
   process.on('uncaughtException', error => {
     if (swallowNestedUpdateOverflow(error, 'process.uncaught')) return
+    if (absorbedByCaller(error)) return
     if (fatalSink?.(error, 'uncaughtException') === true) return
     // Unknown errors keep Node's default semantics: rethrowing from a
     // listener crashes the process with the original error.
@@ -259,6 +273,7 @@ export function installNestedUpdateOverflowProcessGuard(): void {
   })
   process.on('unhandledRejection', error => {
     if (swallowNestedUpdateOverflow(error, 'process.rejection')) return
+    if (absorbedByCaller(error)) return
     if (fatalSink?.(error, 'unhandledRejection') === true) return
     throw error as Error
   })

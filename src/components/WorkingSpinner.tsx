@@ -4,7 +4,7 @@ import { Box } from '../ui.js'
 import type { SpinnerMode } from './Spinner/spinnerMode.js'
 import { SpinnerAnimationRow } from './Spinner/SpinnerAnimationRow.js'
 import { tOr } from '../i18n.js'
-import { sample } from 'lodash-es'
+import sample from 'lodash-es/sample.js'
 
 /**
  * Which verbs fit which spinner phase: the working line's copy follows the

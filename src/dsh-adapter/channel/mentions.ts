@@ -1,8 +1,8 @@
-import type { Context } from '@deepseek-ai/cordis'
 import { extname, isAbsolute, join } from 'node:path'
 import { extractMentions } from '../../utils/mentions.js'
 import { basename } from './paths.js'
 import { COMPOSER_IMAGE_TOKEN } from './composer-images.js'
+import type { ServiceLookup } from './channel-host.js'
 import type { MentionAttachments, MentionExpansion, MentionFs, MentionImageBlock, MentionImageMediaType, ResolvedMention } from './types.js'
 
 /** One attached file's contribution is capped so an absent-minded `@` of a
@@ -18,11 +18,11 @@ export const MENTION_MAX_DIR_ENTRIES = 200
 
 /** The leaf's fs service in the shape mention expansion needs; undefined
  *  when the plugin is not mounted (mentions then stay literal text). */
-export function mentionFs(ctx: Context): MentionFs | undefined {
+export function mentionFs(ctx: ServiceLookup): MentionFs | undefined {
   return ctx.get('fs') as MentionFs | undefined
 }
 
-export function mentionAttachments(ctx: Context): MentionAttachments | undefined {
+export function mentionAttachments(ctx: ServiceLookup): MentionAttachments | undefined {
   return ctx.get('attachments') as MentionAttachments | undefined
 }
 

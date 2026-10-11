@@ -136,7 +136,9 @@ function visit(node) {
   if (ts.isVariableStatement(node)) {
     for (const declaration of node.declarationList.declarations) {
       const name = declaration.name.getText(source)
-      if (name === 'shortcutFieldMeta' || name === 'shortcutFields') sectionDeclarations.set(name, node.getText(source))
+      // The section object is a named declaration (the in-process DSH kernel
+      // re-registers it when the composition's sections service appears).
+      if (name === 'shortcutFieldMeta' || name === 'shortcutFields' || name === 'tuiSection') sectionDeclarations.set(name, node.getText(source))
     }
   }
   if (ts.isCallExpression(node) && node.expression.getText(source) === 'settingsSections.register') {
@@ -153,10 +155,11 @@ visit(source)
 assert.ok(settingsBody && ts.isBlock(settingsBody))
 assert.ok(namespaceDeclaration)
 assert.ok(sectionRegistration)
-assert.equal(sectionDeclarations.size, 2)
+assert.equal(sectionDeclarations.size, 3)
 const registrationJs = ts.transpileModule(`${namespaceDeclaration}
   ${sectionDeclarations.get('shortcutFieldMeta')}
   ${sectionDeclarations.get('shortcutFields')}
+  ${sectionDeclarations.get('tuiSection')}
   return ${sectionRegistration}`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText

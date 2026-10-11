@@ -115,6 +115,28 @@ sourcePaths['@deepseek-ai/dsh-session-persistence-jsonl'] = [
   if (newest !== undefined) sourcePaths['@deepseek-ai/dsh-session-format'] = [newest.declaration]
 }
 
+// The entry's host types describe the host-contract line; an older line never
+// runs the entry (its probe fails), so there they pin to installed declarations.
+{
+  const contract = readFileSync(join(tuiRoot, 'src/dsh-adapter/host-contract.ts'), 'utf8')
+  const hostLine = /export const HOST_REPLICA_VERSION = '([^']+)'/.exec(contract)?.[1]
+  const typeBlock = /export const HOST_TYPE_PACKAGES = \[([\s\S]*?)\] as const/.exec(contract)?.[1]
+  if (hostLine === undefined || typeBlock === undefined) {
+    console.error('host-contract.ts: HOST_REPLICA_VERSION or HOST_TYPE_PACKAGES not found')
+    process.exit(1)
+  }
+  if (rcompare(EXPECTED_UPSTREAM_VERSION, hostLine) > 0) {
+    for (const [, name] of typeBlock.matchAll(/'(@deepseek-ai\/dsh-[^']+)'/g)) {
+      const declaration = join(tuiRoot, 'node_modules', name, 'lib/types/index.d.ts')
+      if (!existsSync(declaration)) {
+        console.error(`host type package not installed: ${name}`)
+        process.exit(1)
+      }
+      sourcePaths[name] = [declaration]
+    }
+  }
+}
+
 // HMR is an indirect settings dependency, not a TUI-owned implementation.
 // Compile it with upstream's strict options: our renderer's noImplicitAny=false
 // changes its evolving empty arrays into never[]. Keep the declarations

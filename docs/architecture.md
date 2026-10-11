@@ -2,6 +2,8 @@
 
 [文档索引](README.md) · [English](architecture.en.md)
 
+本文描述**当前实现**的形态：dsh-TUI 作为 DSH profile 里的插件挂载运行（下面的链路以此为准）。向「本包自持入口与组装根、DSH 在进程内作为首方后端加载」的演进见 [独立宿主设计](standalone-host-design.md)。
+
 ## 运行链路
 
 ```text

@@ -1,12 +1,13 @@
 # AGENTS.md
 
-dsh-TUI 是 DeepSeek Harness 的终端界面插件：零核心改动、纯插件挂载的交互式 TUI（`@deepseek-harness-tui/dsh-tui`）。Agent、会话、模型、工具、持久化与策略域由 DeepSeek Harness 拥有，本包只消费它们。改动前先读 [docs/contributing.md](docs/contributing.md)（本仓库共享开发契约的权威文本）与 [ADAPTER.md](ADAPTER.md)（上游边界与契约）；整体结构见 [docs/architecture.md](docs/architecture.md)。
+dsh-TUI 是 DeepSeek Harness 的终端界面应用（`@deepseek-harness-tui/dsh-tui`），零核心改动、只消费 DSH 的公开导出。DSH 是首要适配目标与首方后端；本包正从「DSH 的插件」演进为「拥有自身入口与组装根的终端应用」，届时 DSH 与 claude / codex 一样作为后端按需在进程内加载。Agent、会话、模型、工具、持久化与策略域仍然由 DeepSeek Harness 拥有，本包只消费它们。改动前先读 [docs/contributing.md](docs/contributing.md)（本仓库共享开发契约的权威文本）与 [ADAPTER.md](ADAPTER.md)（上游边界与契约）；整体结构见 [docs/architecture.md](docs/architecture.md)；独立宿主的方案与非目标见 [docs/standalone-host-design.md](docs/standalone-host-design.md)。
 
 ## 仓库布局
 
 ```
 src/index.ts        公共 Cordis 插件入口、配置 Schema、对运行时实现的惰性移交
 src/dsh-adapter/plugin.ts  运行时实现：TTY 校验、服务注册、Agent 创建/恢复、React 树挂载与收尾
+src/dsh-adapter/host-entry.ts  本包入口：非 DSH 内核不组合完整 DSH profile（改组合轻量 profile：本包的行 + profile 声明的第三方插件）、在裸 Cordis 根上挂运行时；路由判定在 src/hostEntryRoute.ts（docs/standalone-host-design.md）
 src/dsh-adapter/channel.ts  Channel 入口：后端中立核心（channel/core/）+ 仅 DSH 会话挂载的扩展（channel/extensions.ts）
 src/agent/          后端中立的会话领域：AgentEvent、AgentSession、类型化能力（无 I/O、无厂商依赖）
 src/channel/        共享投影器（AgentEvent → 视图状态）与审批/问卷等中立 store
@@ -22,7 +23,7 @@ src/ink/            Ink 系渲染器与终端实现——敏感基础设施，�
 src/native-ts/      渲染器使用的 Yoga 布局引擎
 src/terminal-utils/ 终端格式化与呈现辅助
 src/dsh-adapter/    唯一允许 import 官方 @deepseek-ai/* 的位置；themes.ts 提供 tuiThemes 插件接缝
-src/*Prefs.ts 等    ~/.dsh-tui 下的持久化用户偏好与会话元数据
+src/*Prefs.ts 等    ~/.dsh-tui 下的持久化用户偏好与会话元数据；src/tuiSettingsFile.ts 是 /settings 的 dsh-tui 分区（settings.json）
 .agents/skills/     仅供仓库维护者使用的项目技能，不随 npm 包分发
 presets/            随包分发的 preset（liangshen）
 bin/dsh-tui.js      dsh-tui 直达命令入口
@@ -57,6 +58,7 @@ pnpm smoke                      # 通用无头屏幕组装冒烟
 
 - 厂商包按目录隔离：`@deepseek-ai/*` 只在 `src/dsh-adapter/`，`@anthropic-ai/*` 只在 `src/backends/claude/`；后端中立层 `src/agent/`、`src/channel/` 不 import 厂商包、`src/dsh-adapter/` 与 `src/backends/`；UI 层不 import `src/backends/`，从 `src/dsh-adapter/` 只取类型（存量值 import 的 allowlist 只减不增）。完整规则表见 [ADAPTER.md](ADAPTER.md)；`pnpm run verify:boundary` 扫描全部源码，越界即失败。
 - 校验版本线、peer 范围与 blessed 包清单在 `src/dsh-adapter/contract.ts`；本地检测到 drift 打警告，CI 上 `verify:contract` 直接失败。
+- 本包入口按宿主 realpath 加载已装 `dsh` 的模块：清单、复刻面与偏差的唯一来源是 `src/dsh-adapter/host-contract.ts`，加载只在 `host-dsh.ts`（对 `@deepseek-ai/*` 只 `import type`）；`verify:contract` 跑假宿主回退，有已装宿主时再跑能力探测与复刻指纹（`host-replica.snapshot.json`）；宿主 CLI 不是依赖，版本线移动时在装有该版本 `dsh` 的机器上复核。见 [ADAPTER.md](ADAPTER.md)「独立入口的宿主契约」。
 - 运行时或发布类型引用的 `@deepseek-ai/*` 框架包必须同时是 peer 与 dev 依赖（`verify:manifest-deps` 门禁）；仅测试/脚本使用的框架包只进 dev 依赖。
 - `cordis.patch.yml` 对官方行的干预已快照到 `patch-surface.snapshot.json`，改动需保持同步（`verify:patch-surface` 门禁）。
 

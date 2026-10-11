@@ -16,6 +16,26 @@ import type { ChannelState } from './types.js'
 /** The DSH backend's user-facing name (capability snapshot default). */
 export const DSH_BACKEND_LABEL = 'DSH'
 
+/** The settled startup open (`ChannelLaunchOptions.startup`). */
+export interface ChannelStartup {
+  readonly session: AgentSession
+  readonly history: readonly AgentEvent[]
+  readonly route?: { readonly provider: string; readonly model: string }
+  readonly agentPreset?: string
+}
+
+/**
+ * A startup open that failed for a reason `/new` cannot fix (the in-process
+ * DSH kernel's composition failed: there is no DSH to open a session on).
+ * Its `hint` replaces the failure row's `/new` hint (`startup-open-failed-hint`).
+ */
+export class StartupOpenError extends Error {
+  constructor(message: string, readonly hint: string, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = 'StartupOpenError'
+  }
+}
+
 /** Launch configuration belongs to channel construction, not the composition root. */
 export interface ChannelLaunchOptions {
   model: string
@@ -126,6 +146,14 @@ export interface ChannelLaunchOptions {
   /** The startup session's durable history, read before construction so
    *  the first bind paints it ahead of any live event. */
   initialHistory?: readonly AgentEvent[]
+  /** The `/settings` service (../tui-settings.ts); absent → the host's `settings`. */
+  settingsService?: unknown
+  /**
+   * The startup session still opening: the channel starts on a placeholder
+   * (`ready` false) and `start()` adopts the real one once this settles; a
+   * rejection stays on the placeholder and `/new` retries. `route`/`agentPreset` override the construction options.
+   */
+  startup?: Promise<ChannelStartup>
   /** How a user re-enters a session of this backend from a shell (the
    *  `/fork` notice); absent → the in-TUI `/resume` hint. */
   resumeCommand?: (sessionId: string) => string
@@ -152,7 +180,7 @@ export function createInitialChannelView(
   options: ChannelLaunchOptions,
   input: { agentId: string; sessionId: string; mode: ChannelState['mode']; cwdDescription: string },
 ): Pick<ChannelState,
-  'effortLevels' | 'version' | 'rows' | 'status' | 'sessionTitle' | 'sessionColor' |
+  'effortLevels' | 'version' | 'ready' | 'startupFailure' | 'rows' | 'status' | 'sessionTitle' | 'sessionColor' |
   'agentId' | 'sessionId' | 'agentBindingGeneration' | 'model' | 'modelDisplay' | 'provider' | 'tokens' | 'cwd' |
   'displayCwd' | 'gitBranch' | 'working' | 'compaction' | 'cancelPending' | 'spinnerMode' |
   'responseChars' | 'activeToolCount' | 'turnStart' | 'lastUserText' |
@@ -167,7 +195,7 @@ export function createInitialChannelView(
   'lastUsage' | 'turnUsage' | 'tps' | 'tpsSamples' | 'contextSegments' | 'mainCost' | 'subagentCost' | 'subagents' | 'backgroundJobs' | 'selection'
 > {
   return {
-    effortLevels: undefined, version: 0, rows: [], selection: undefined, status: 'starting', sessionTitle: '', sessionColor: '',
+    effortLevels: undefined, version: 0, ready: options.startup === undefined, startupFailure: undefined, rows: [], selection: undefined, status: 'starting', sessionTitle: '', sessionColor: '',
     agentId: input.agentId, sessionId: input.sessionId, agentBindingGeneration: 0, model: options.model, modelDisplay: undefined, provider: options.provider,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
     cwd: options.cwd, displayCwd: input.cwdDescription, gitBranch: undefined, working: false,

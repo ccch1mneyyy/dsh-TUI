@@ -215,7 +215,12 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
       // Defer until after the apply() body has mounted storage/observer
       // siblings, so the live refresh observes the complete production
       // topology.
-      setTimeout(() => this.startKernelRuntime(), 0)
+      // An effect of this row's fiber: unloading the row first cancels a start
+      // that has not happened (nothing mounted, nothing to report).
+      ctx.effect(() => {
+        const timer = setTimeout(() => this.startKernelRuntime(), 0)
+        return () => clearTimeout(timer)
+      })
     }
     bindHostGrantStore(concreteService(this), rawGrants)
     // The host row may be mounted without the extensions row or a channel;
@@ -231,8 +236,8 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
   }
 
   /** @internal Start the Kernel after the whole plugin-host row (including
-   * sibling storage/observer services) is mounted. Called from `apply()`; not
-   * part of the public plugin surface. */
+   * sibling storage/observer services) is mounted. Triggered only by the
+   * constructor's deferred effect. */
   startKernelRuntime(): void {
     const state = hostStateFor(this)
     const kernelRuntime = state.kernelRuntime
@@ -980,8 +985,4 @@ export function apply(ctx: Context): void {
   // messages.observe (C-042): the grant-gated observation broker the
   // channel publishes mapped session events into.
   ctx.plugin(TuiMessageObserverRuntime)
-  // All sibling services are mounted now; start the kernel live refresh /
-  // driver mount so probes observe the complete production topology.
-  const host = ctx.get('tuiPluginHost') as unknown as TuiPluginHostRuntime | undefined
-  host?.startKernelRuntime()
 }

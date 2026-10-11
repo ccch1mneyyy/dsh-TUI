@@ -2,6 +2,8 @@
 
 [Documentation index](README.md) · [简体中文](architecture.md)
 
+This document describes the **current** implementation: dsh-TUI runs as a plugin mounted in a DSH profile (the path below reflects that). For the move to an app that owns its entry and composition root, with DSH loaded in process as the first-party backend, see [Standalone host design](standalone-host-design.md).
+
 ## Runtime path
 
 ```text

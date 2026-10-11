@@ -17,10 +17,12 @@
 
 # dsh-TUI
 
-> An interactive terminal UI plugin for DeepSeek Harness. It ships a
-> pixel-whale header, live work status, streaming thinking, double-Esc time
-> rewind, a context progress bar, and a TPS gauge. It mounts as a pure plugin,
-> with no core changes. Install to enable; uninstall leaves no patches behind.
+> An interactive terminal UI for DeepSeek Harness. It ships a pixel-whale
+> header, live work status, streaming thinking, double-Esc time rewind, a
+> context progress bar, and a TPS gauge. Zero core changes: it consumes only
+> DSH's public exports, and is moving from a mounted plugin to an app with its
+> own entry and composition root, where DSH loads in process as the first-party
+> backend. Install to enable; uninstall leaves no patches behind.
 
 ## Highlights
 
@@ -103,6 +105,10 @@ On DSH 0.1.7, `/settings` uses the TUI's actual Loader entry ID, including custo
 IDs. It requires matching profile dependencies with `@deepseek-ai/schemastery`
 3.18.3 or newer; an incompatible schema stops TUI startup with repair guidance
 instead of showing an uneditable settings page. Older hosts keep their legacy settings scope.
+
+The `dsh-tui` section of `/settings` is saved in `~/.dsh-tui/settings.json`, shared by
+both kernels; the first launch imports it once from the profile's `cordis.patch.yml`
+(see [configuration](docs/configuration.en.md#tui-configuration)).
 
 ```sh
 # Install the CLI and this plugin globally (ships the dsh-tui command)
@@ -215,6 +221,11 @@ including clicking outside it on the launchpad, cancels a pending installation.
 - **Not available**: DSH-only commands such as `/tree`, `/preset`,
   `/provider`, `/workspace`, `/agentview` and `/bg`. One process runs one
   backend; `/kernel` switches by restarting into a new session.
+- **Startup**: the screen appears before the session opens, with only a light
+  profile composed (this package plus the profile's third-party plugins); see
+  [Claude backend](docs/claude-backend.en.md#known-limitations). The DSH kernel
+  starts from the same entry and loads DSH in the same process behind its first
+  screen; `DSH_TUI_HOST_ENTRY=0` restores the old launch path for every kernel.
 
 Details and known limitations: [Claude backend](docs/claude-backend.en.md).
 

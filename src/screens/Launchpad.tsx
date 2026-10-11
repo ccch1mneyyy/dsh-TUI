@@ -429,6 +429,7 @@ export function Launchpad({
   imageComposer,
   /** Tips 自动轮换间隔（第七版；测试缝：无头回归注入短间隔确定性驱动相位）。 */
   tipRotateMs = TIP_ROTATE_MS,
+  notice,
   /** 左下角工作目录铭牌被点击/回车时交给 Chat（开既有的 /workspace 工作区菜单）。 */
   onOpenWorkspace,
   /** 右下角内核区的目录行（第八版：一行一个内核，当前那个打 ▸）。 */
@@ -525,6 +526,8 @@ export function Launchpad({
   imageComposer?: { channel: ChannelUi; bindings: Map<string, string> }
   /** Tips 自动轮换间隔（第七版；测试缝，生产用默认 10s）。 */
   tipRotateMs?: number
+  /** Chat 的最近一条 channel 通知：落地页没有 toast 区，借 Tips 行显示（粘贴提示优先）；过期由 channel 负责。 */
+  notice?: { readonly text: string; readonly color?: 'error' | 'warning' | 'success' } | undefined
   /** 左下角工作目录铭牌被点击/焦点环 Enter 时交给 Chat（开 /workspace 菜单）。 */
   onOpenWorkspace?: (() => void) | undefined
   /**
@@ -653,6 +656,10 @@ export function Launchpad({
   React.useEffect(() => () => {
     if (noticeTimerRef.current !== null) clearTimeout(noticeTimerRef.current)
   }, [])
+  /** Tips 行此刻被哪条提示占用（粘贴提示优先于 channel 通知）。 */
+  const rowNotice = pasteNotice !== undefined
+    ? { text: pasteNotice, color: 'warning' as const }
+    : notice
   /** 单行插入（粘贴）：换行折叠成空格、`\r` 去掉——落地页是单行编辑器，
    *  多行内容不许拼出换行（Enter 才是提交）。落在当下光标处。 */
   const insertSingleLine = (text: string): void => {
@@ -804,7 +811,7 @@ export function Launchpad({
   // 重臂即计时重置（刚点完不会立刻被自动轮换跳走）。只在 Tips 行真的在画、
   // 且不是首启句/粘贴提示时跑；本组件被整屏盖住时随之卸载，定时器自然停。
   // 切换只改那一行文本（TIP_KEYS 查表），行高与居中位置不变——无布局抖动。
-  const tipsAutoRotatable = layout.showTip && pasteNotice === undefined && !firstRun
+  const tipsAutoRotatable = layout.showTip && rowNotice === undefined && !firstRun
   React.useEffect(() => {
     if (!tipsAutoRotatable) return
     const timer = setInterval(() => { setTipIndex(index => (index + 1) % TIP_KEYS.length) }, tipRotateMs)
@@ -1003,7 +1010,7 @@ export function Launchpad({
       // 入口 + Tips 行（第六版设计 2，环的最后一格——它在版面上就在入口行下方）。
       // 窄终端里 `fitChips`/参数行的宽度裁剪会丢掉放不下的那几个，按
       // 整张表绕圈会让焦点指着一个看不见的目标、Enter 触发一个看不见的动作。
-      const tipsFocusable = layout.showTip && pasteNotice === undefined && !firstRun
+      const tipsFocusable = layout.showTip && rowNotice === undefined && !firstRun
       // 左下角铭牌（第七版）：画得出来且接了 onOpenWorkspace 才进环。
       const cornerFocusable = layout.showCorners && cornerLeft !== '' && onOpenWorkspace !== undefined
       // 环的顺序 = 版面顺序（↓ 一路向下）：…→ Tips → 左下目录铭牌 → 右下内核区。
@@ -1235,7 +1242,7 @@ export function Launchpad({
             而行数不变（阶梯预算不动）。 */}
         {/* 入口行与 Tips 之间的呼吸留白（第六版）：默认 2 行，矮屏先撤它再撤
             Tips 行本身（launchpadLayout 的 tipGapRows）——刻意呼吸，不是遗漏。 */}
-        {(layout.showTip || pasteNotice !== undefined) && (
+        {(layout.showTip || rowNotice !== undefined) && (
           <Box
             flexShrink={0}
             alignSelf="center"
@@ -1243,11 +1250,11 @@ export function Launchpad({
             // 第六版设计 2：点击 Tips 行切到下一条（循环）。首启句与粘贴提示
             // 不参与轮换（首启优先级最高；提示是临时占用）。点击拦住冒泡——
             // 点 Tips 不是“点空白”。
-            {...(pasteNotice === undefined && !firstRun
+            {...(rowNotice === undefined && !firstRun
               ? { onClick: (event: ClickEvent) => { event.stopImmediatePropagation(); rotateTip() } }
               : {})}
           >
-            {pasteNotice === undefined ? (
+            {rowNotice === undefined ? (
               <>
                 <Text color="warning">● {t('launchpad-tip-prefix')}</Text>
                 <Text
@@ -1259,7 +1266,7 @@ export function Launchpad({
                 </Text>
               </>
             ) : (
-              <Text color="warning">● {pasteNotice}</Text>
+              <Text color={rowNotice.color ?? 'warning'}>● {rowNotice.text}</Text>
             )}
           </Box>
         )}

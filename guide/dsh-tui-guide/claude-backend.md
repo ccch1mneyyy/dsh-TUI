@@ -160,6 +160,14 @@ Claude 设置 > `default`。Claude 设置里的 `defaultMode: bypassPermissions`
 ## 已知限制
 
 - 一个 dsh-TUI 进程只用一个后端，切换要经 `/kernel` 重启。
+- Claude 内核下 `dsh-tui` 从本包自己的入口启动，只组合轻量 profile（本包与 profile
+  声明的第三方插件，不含 DSH 的 agent 核心）：界面先出现，
+  会话打开后才能发送：在此之前按 Enter 草稿留在原处并提示还在启动，命令行带的首句在
+  会话打开后发出；打开失败会说明原因（落地页自动收起），`/new` 重试。第三方
+  DSH/Cordis 插件（主题、面板、决策拦截）照常加载，在界面出现后加入；依赖 DSH 自身
+  服务（agent、工具、LLM 层）的插件在这个内核下不会激活。`DSH_TUI_HOST_ENTRY=0` 回到经
+  `dsh --profile dsh-tui` 启动。（DSH 内核默认也从本包入口启动，但会在同一进程里组合
+  完整的 DSH profile。）
 - 侧栏的工作区面板在 Claude 会话下提示不支持，轨迹面板为空。
 - 不支持 `/add-dir`；拒答对话框只有「重试」和「取消」；需要浏览器操作的 MCP 请求不会
   自动打开浏览器。

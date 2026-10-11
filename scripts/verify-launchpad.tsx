@@ -1318,8 +1318,10 @@ for (const brand of ['claude', 'codex'] as const) {
   // 组合根写入接线：启动与退出路径都要更新最后运行记录。
   const funnelSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
   const refreshCalls = funnelSource.split('refreshLastRunRecord()').length - 1
-  check('LR4 plugin.ts 写记录接线齐：boot 落盘 + 崩溃/更新//restart/干净退出四个漏斗分支刷新（内核切换分支不写——替换进程自己写）',
-    funnelSource.includes('const refreshLastRunRecord = (): void =>') && refreshCalls === 5,
+  // 第 6 处：进程内 DSH 内核在 attachDsh 拿到 DSH 会话后再写一次；
+  // 第 7 处：它启动失败后 /new 经 DSH 创建路径（openDshSession）打开会话时同样写一次。
+  check('LR4 plugin.ts 写记录接线齐：boot 落盘 + 崩溃/更新//restart/干净退出四个漏斗分支刷新（内核切换分支不写——替换进程自己写）+ 进程内 DSH 接管后一次 + 失败后 /new 一次',
+    funnelSource.includes('const refreshLastRunRecord = (): void =>') && refreshCalls === 7,
     'refresh calls=' + refreshCalls)
 
   // 启动页的 boot 门（用户实测：kernel.json 记住 claude 后全新启动直接进聊天页、

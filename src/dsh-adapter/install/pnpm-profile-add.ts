@@ -32,10 +32,12 @@ import type { InstallExecutor } from './executors.js'
 /** Resolve the install target for the CURRENT launch (never throws). The
  *  non-profile kinds carry the reason for the wizard's manual-instructions
  *  panel: standalone builds swap a whole binary (update.ts owns that path),
- *  and source checkouts / `--config` launches have no profile to add into. */
-function resolveTarget(argv: readonly string[] = process.argv): SdkInstallTarget {
+ *  and source checkouts / `--config` launches have no profile to add into.
+ *  The launcher's host entry runs the TUI without `dsh --profile` in argv;
+ *  it names the profile in `DSH_TUI_PROFILE` instead (src/hostEntryRoute.ts). */
+function resolveTarget(argv: readonly string[] = process.argv, env: NodeJS.ProcessEnv = process.env): SdkInstallTarget {
   if (isStandaloneRuntime()) return { kind: 'standalone' }
-  const profile = resolveDshProfileName(argv)
+  const profile = resolveDshProfileName(argv) ?? (env.DSH_TUI_PROFILE?.trim() || undefined)
   return profile === undefined ? { kind: 'no-profile' } : { kind: 'profile', dir: dirname(profileWorkspaceYamlPath(profile)) }
 }
 

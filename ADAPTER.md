@@ -17,6 +17,8 @@
 | UI 层(`screens/`、`components/`、`hooks/`、`ink/`) | 不 import `src/backends/`;从 `src/dsh-adapter/` 只取类型,运行期经 facade(`src/dsh-adapter/types.ts` 的类型 re-export、`channel.ts`/`plugin.ts` 提供的服务)接触上游。存量值 import 登记在 `scripts/adapter-boundary.allowlist.json`,只减不增 |
 | `native.dsh` | 只允许 `src/dsh-adapter/` 内访问 |
 | `native.codex` | 只允许 `src/backends/codex/` 内访问 |
+| `'@deepseek-ai/…'` 字符串字面量 | 只在 `src/dsh-adapter/` 内出现(运行期拼出来交给 `createRequire` / `import()` 的说明符也算) |
+| 宿主专属模块(`host-contract.ts` 的 `HOST_MODULES`,cordis 除外,含 `@deepseek-ai/dsh` 本身) | 任何地方不得值 import;只由 `src/dsh-adapter/host-dsh.ts` 按宿主 realpath 动态加载,说明符只写在 `host-contract.ts`;`host-dsh.ts` 对 `@deepseek-ai/*` 只能 `import type`;`host-contract.ts` 只给 `host-dsh.ts` 与 `contract.ts` import |
 
 ### 后端 manifest
 
@@ -94,6 +96,30 @@ manifest 一致,过期即红)。
 - 白名单包:blessed list(harness 包按完整版本号校验,框架包 cordis/schemastery 按 major 校验)
 - 启动时:检测到 drift 打 warning;CI 上 `pnpm run verify:contract` 直接失败
 
+## 独立入口的宿主契约
+
+本包入口(`src/dsh-adapter/host-entry.ts`)在进程内加载 PATH 上 `dsh` 的安装
+(docs/standalone-host-design.md),契约单一来源是
+`src/dsh-adapter/host-contract.ts`:
+
+- **依赖**:`host-dsh.ts` 取类型的 `dsh-app-boot`、`dsh-cmdline`、`dsh-home-paths`、
+  `dsh-http-proxy`、`dsh-launch-environment`(`HOST_TYPE_PACKAGES`)是 optional peer + dev、
+  进 blessed 清单。宿主 CLI `@deepseek-ai/dsh` **不是**依赖(它的依赖树是整个 CLI):
+  `host-dsh.ts` 本地声明入口读取的 `profile-boot` 三个导出。运行期**不**从本包解析
+  它们:入口按宿主 realpath 加载宿主自己的副本(profile 由宿主 dsh 安装、cordis 必须单实例),
+  所以它们也在运行期可缺的集合里(缺席不算 drift)。新包范围只写已核对的 `0.2.0-rc.2`
+  (`dsh-home-paths` 沿用家族宽范围)。`cordis-plugin-loader` 只当 `unknown` 用,不声明 peer。
+- **能力探测**:`HOST_MODULES` 列出 8 个宿主模块与入口读取的每个导出。`loadHostDsh` 逐项检查,
+  缺模块 / 缺导出即抛出点名原因,入口回退(DSH 内核交给 `dsh --profile`,Claude 内核无宿主解析)
+  并把原因写 stderr 与界面通知。`host-dsh.ts` 用 `Pick<typeof 宿主模块, 契约导出名>` 取类型
+  (`profile-boot` 除外,本地声明),契约写了 pinned 宿主不存在的导出时编译失败。
+- **复刻面**:`HOST_REPLICAS` 列出入口复刻的上游符号,`host-replica.snapshot.json` 记录在
+  `HOST_REPLICA_VERSION` 上声明各符号的 lib 文件的整文件 sha256(信号偏粗:该文件任何改动都要求复核);
+  刻意的偏差逐条记在 `HOST_DEVIATIONS`(同文件),审查复刻改动时以它为准。
+- **门禁**:`verify:contract` 额外跑 `scripts/verify-host-contract.ts`(覆盖面见其头注释):假宿主回退
+  在 CI 上总跑;生产探测与复刻指纹只在有已装宿主(PATH 上的 `dsh` 或 `DSH_TUI_CONTRACT_DSH`)时跑。
+  移动版本线时在装有该版本 `dsh` 的机器上复核、把变化搬进 `host-dsh.ts`,再用 `--snapshot` 重写快照。
+
 ## Patch Surface
 
 `cordis.patch.yml` 里对官方行的干预已快照到 `patch-surface.snapshot.json`:
@@ -128,6 +154,8 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 - dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.2.0-rc.2`,
   CI `alpha-compat` lane 还对同版上游 tag 的固定 SHA 做源码类型与 patch 合成校验。
   旧 SQLite 迁移工具的依赖闭包单独锁在 `vendor/sqlite-island`。
+- 主验证线移动时 `verify:contract` 会要求复核独立入口的复刻面(见「独立入口的宿主契约」),
+  `HOST_REPLICA_VERSION` 与主验证线一起改。
 - `contract.ts` 是唯一真源:主验证线原地替换、不累积;`package.json` 的
   peer/dev 范围、CI 钉住的上游 SHA、校验脚本里的版本常量都只是它的镜像,
   必须同一次改齐(位置见 [docs/contributing.md](docs/contributing.md) 跨文件清单)。

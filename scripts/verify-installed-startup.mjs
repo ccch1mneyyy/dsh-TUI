@@ -8,6 +8,7 @@
  * private temporary log; successful probes remove their temporary state.
  */
 import assert from 'node:assert/strict'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
@@ -64,9 +65,21 @@ const root = mkdtempSync(join(tmpdir(), 'dsh-tui-startup-'))
 const targetHome = join(root, '.dsh')
 const targetProfile = join(targetHome, 'profiles', 'dsh-tui')
 mkdirSync(targetProfile, { recursive: true, mode: 0o700 })
-for (const name of ['package.json', 'cordis.yml', 'cordis.patch.yml']) {
-  if (existsSync(join(profile, name))) cpSync(join(profile, name), join(targetProfile, name))
+if (existsSync(join(profile, 'cordis.yml'))) cpSync(join(profile, 'cordis.yml'), join(targetProfile, 'cordis.yml'))
+// dsh-purge (when the profile bundles it) rewrites the GLOBAL dsh bin.js on
+// start and breaks every dsh launch; the copy leaves it out, bundle and
+// patch rows alike.
+if (existsSync(join(profile, 'cordis.patch.yml'))) {
+  const rows = parseYaml(readFileSync(join(profile, 'cordis.patch.yml'), 'utf8'), { customTags: [{ tag: 'tag:yaml.org,2002:js', resolve: source => ({ js: source }) }] }) ?? []
+  const kept = Array.isArray(rows) ? rows.filter(row => !String(row?.id ?? '').startsWith('dsh-purge')) : rows
+  writeFileSync(join(targetProfile, 'cordis.patch.yml'), stringifyYaml(kept, { customTags: [{ tag: 'tag:yaml.org,2002:js', identify: value => typeof value?.js === 'string', stringify: ({ value }) => value.js }] }))
 }
+const manifest = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
+delete manifest.dependencies?.['dsh-purge']
+if (Array.isArray(manifest.dsh?.profile?.bundles)) {
+  manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(name => name !== 'dsh-purge')
+}
+writeFileSync(join(targetProfile, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
 // Junctions need no elevation on Windows; directory symlinks do.
 const linkKind = isWin ? 'junction' : 'dir'
 symlinkSync(join(profile, 'node_modules'), join(targetProfile, 'node_modules'), linkKind)

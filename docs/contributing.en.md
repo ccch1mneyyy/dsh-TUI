@@ -271,6 +271,11 @@ seam.
     verify:manifest-deps gate enforces it).
   - Framework packages used only by tests/scripts (e.g. dsh-settings, dsh-tools,
     dsh-session-persistence-*) stay dev-only — do NOT declare peers for them.
+  - The host packages the standalone entry takes types from (`HOST_TYPE_PACKAGES` in
+    `src/dsh-adapter/host-contract.ts`) are optional peer + dev too, for types only; the
+    host CLI `@deepseek-ai/dsh` is no dependency. At
+    run time `host-dsh.ts` loads the installed host's copies by realpath, never this
+    package's (ADAPTER.md "独立入口的宿主契约").
   - Non-host packages such as `dsh-working-activity` stay runtime dependencies.
   - Historical exception, now resolved: `dsh-working-activity@0.2.4` and earlier
     pulled a real copy of `@deepseek-ai/schemastery` (plus cosmokit) into the
@@ -454,6 +459,7 @@ change, also run the closest focused script:
 | Standalone Markdown nodes (tables, mermaid diagrams) and streaming block spacing | `pnpm verify:table-layout`, `pnpm verify:mermaid-diagram`, `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
 | Cross-process session mount ledger (failure behavior, strict reads, lock recovery, reservations) | `pnpm verify:session-mounts` |
 | Unsent-draft handoff across screens (snapshot, cursor, image bindings, ownership) | `pnpm verify:composer-draft-handoff`; end-to-end screen switching also `node scripts/verify-session-browser.mjs` |
+| Launcher `bin/dsh-tui.js` (argv parsing and delegation/bootstrap, safe mode, the `/update` launcher migration, the entry child's env) | `node scripts/verify-launcher.mjs` + `node scripts/verify-safe-mode.mjs` + `node scripts/verify-update.mjs` + `node scripts/verify-update-recovery.mjs` |
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the
@@ -682,7 +688,7 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 | Adding or changing a backend | A new `src/backends/<id>/` (`manifest.ts` + implementation), plus the regenerated `src/dsh-adapter/backends.generated.ts` that `pnpm compile` writes (a checked-in generated file; `verify-backend-registry` fails when it is stale): the build-time index comes from `scripts/gen-backend-index.mjs` — do **not** hand-edit `src/kernelPrefs.ts` or `src/dsh-adapter/backends.ts` (the directory and identity assertions look entries up by id, so a new directory needs no regression sync). The boundary gate derives its vendor-package and `native.<id>` rules from the manifest but compares them verbatim against the `EXPECTED_*` snapshot in `scripts/verify-adapter-boundary.ts`: a backend declaring a non-empty `vendorPackages` or a `nativeKey` must update that snapshot together with `ADAPTER.md` (the gate's failure says so), while declaring neither needs no change. `install` is a declarative recipe instead (`{ executor, specifier, version }`), with the host-side executor table in `src/dsh-adapter/install/` (one value today, `pnpm-profile-add`): the registry derives "can this entry be installed" by looking the name up, the wizard installs the specifier *you* declared, and naming an executor this host does not implement simply means "no install surface" (never a throw). A backend with nothing to add — the ones driving a system CLI — declares nothing. Names come from the manifest (a plugin uses `kind:'literal'`, never the i18n catalog); module-level/process-wide pools declare `unloadExport`, session-scoped resources stay with `session.dispose()`; the `id`, `label` and `install` boundaries are in the "backend manifest" section of `ADAPTER.md`. Register a new backend's focused regressions in `scripts/run-ci-group.mjs`; the registry gate is `scripts/verify-backend-registry.ts`; user-visible values (`--backend`, the config row) go into both READMEs and `docs/configuration{,.en}.md` |
 | Claude Agent SDK version | The exact version in both the optional peer and dev entries of `package.json`, `pnpm-lock.yaml`, `src/backends/claude/contract.ts` (`VALIDATED_SDK_VERSION`/`VALIDATED_CLI_VERSIONS`), the install command in `docs/claude-backend{,.en}.md`; `verify:claude-contract` checks they agree |
 | Codex protocol/validated version | Regenerate through `scripts/codex-protocol-sync.mjs`, update `src/backends/codex/contract.ts`, method tables/fixtures/redaction/live-replay regressions and bilingual Codex guides; do not add a Codex SDK npm dependency or claim the minimum validates every experimental API |
-| Upstream validated-line bump | `src/dsh-adapter/contract.ts`, `src/dsh-adapter/oauth/`, both peer and dev ranges in `package.json`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
+| Upstream validated-line bump | `src/dsh-adapter/contract.ts`, `src/dsh-adapter/host-contract.ts` (`HOST_REPLICA_VERSION`; after reviewing the replicas, `scripts/verify-host-contract.ts --snapshot` rewrites `host-replica.snapshot.json`), `src/dsh-adapter/oauth/`, both peer and dev ranges in `package.json`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
 
 ## Git And Release Safety
 

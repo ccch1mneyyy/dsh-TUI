@@ -18,8 +18,8 @@
 
 # dsh-TUI
 
-> 面向 DeepSeek Harness 的交互式终端界面插件：像素鲸鱼顶栏、实时工作状态、流式思考展示、双击 Esc 时间回溯、上下文进度条与 TPS 仪表。
-> 零核心改动，纯插件挂载。安装即启用，卸载不留核心补丁。
+> 面向 DeepSeek Harness 的交互式终端界面：像素鲸鱼顶栏、实时工作状态、流式思考展示、双击 Esc 时间回溯、上下文进度条与 TPS 仪表。
+> 零核心改动，只消费 DSH 的公开导出；正从「挂载型插件」演进为拥有自身入口与组装根的终端应用，届时 DSH 作为首方后端在进程内加载。安装即启用，卸载不留核心补丁。
 
 ## 功能亮点
 
@@ -92,6 +92,9 @@ DSH 0.1.7 的 `/settings` 使用 TUI 实际的 Loader 行 ID，也支持自定�
 profile 依赖须配套，包含 `@deepseek-ai/schemastery` 3.18.3 或更新版本；
 Schema 不兼容时，TUI 在启动阶段报错并提示修复安装，不再显示不可编辑的设置页。
 旧 host 继续使用原有设置 scope。
+
+`/settings` 的 `dsh-tui` 分区保存在 `~/.dsh-tui/settings.json`，两个内核共用；第一次启动时
+从 profile 的 `cordis.patch.yml` 一次性导入（见[配置参考](docs/configuration.md#tui-配置)）。
 
 ```sh
 # 安装（全局，自带 dsh-tui 命令）
@@ -182,6 +185,9 @@ Enter，按引导一键安装——dsh-TUI 自己定位 profile 目录并装锁�
   双击 `Esc` 回退、子代理、后台任务、图片、`/btw`，以及 Claude 上报的美元费用。
 - **不可用**：DSH 专属命令，如 `/tree`、`/preset`、`/provider`、`/workspace`、
   `/agentview`、`/bg`。一个进程只跑一个后端，`/kernel` 切换时会重启并开新会话。
+- **启动**：界面先于会话出现，只组合轻量 profile（本包与 profile 声明的第三方插件），
+  见 [Claude 后端](docs/claude-backend.md#已知限制)。DSH 内核从同一入口启动，界面先出现，
+  DSH 在同一进程里加载；`DSH_TUI_HOST_ENTRY=0` 让所有内核恢复原来的启动方式。
 
 详细说明与已知限制：[Claude 后端](docs/claude-backend.md)。
 

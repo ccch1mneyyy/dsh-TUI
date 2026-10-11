@@ -25,6 +25,12 @@ const rules = [
   ['compiler-generated component input', /(?:from\s*|import\s*\()['"]react\/compiler-runtime['"]|react\.early_return_sentinel|react\.memo_cache_sentinel/],
   ['retired helper namespace', /(?:src\/|\.\.\/|types\/)cc\/|cc\.d\.ts/],
   ['product comparison wording', /Claude Code[- ](?:style|风格)|mirroring Claude Code|ported CC|\bCC[- ](?:style|parity)|Claude-Code-identical/],
+  // The barrel import drags all 640 lodash-es modules into the first frame;
+  // per-path specifiers don't match since the quote must follow the name.
+  ['lodash-es barrel import', /(?:from\s*|import\s*\(\s*|require\s*\(\s*|import\s+)['"]lodash-es['"]/],
+  // Same for `semver` (root: 46 modules, per-function path: about a dozen).
+  // Only `src/` ships, so maintainer scripts keep the root import.
+  ['semver barrel import', /(?:from\s*|import\s*\(\s*|require\s*\(\s*|import\s+)['"]semver['"]/, ['docs/', 'scripts/']],
 ]
 const files = ['src', 'scripts', 'docs'].flatMap(name => collect(resolve(root, name)))
   .filter(path => /\.(?:[cm]?[jt]sx?|md)$/.test(path) && path !== ownPath)

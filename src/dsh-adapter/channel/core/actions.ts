@@ -147,7 +147,7 @@ export function createCapabilityDelegates(deps: {
   }
 }
 
-/** Merge the layers and install them once. */
+/** Merge the layers and install them (`replace`: the adoption-window reinstall, core/compose.ts). */
 export function installChannelActions(
   readiness: ReturnType<typeof createChannelActionReadiness>,
   layers: {
@@ -157,8 +157,9 @@ export function installChannelActions(
     core: Partial<ChannelActionDelegates>
     extension: Partial<ChannelActionDelegates> | undefined
   },
+  replace = false,
 ): void {
-  readiness.install({
+  readiness[replace ? 'reinstall' : 'install']({
     ...createUnavailableActionDelegates(layers.unavailable, layers.unavailableLines),
     ...layers.capability,
     ...layers.core,

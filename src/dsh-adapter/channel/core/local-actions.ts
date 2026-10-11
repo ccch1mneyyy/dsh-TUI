@@ -5,7 +5,7 @@
  * restore only works when the backend can slice its own durable history;
  * otherwise nothing is ever folded and the action restores 0 rows.
  */
-import type { Context } from '@deepseek-ai/cordis'
+import type { ServiceLookup } from '../channel-host.js'
 import { randomUUID } from 'node:crypto'
 import { markChannelReadDirty } from '../../../adapter/channel/read-view.js'
 import { writeActivityFrames } from '../../../activityPrefs.js'
@@ -37,7 +37,7 @@ export function setActivityFrames(
   return true
 }
 
-export function createCoreLocalActions(ctx: Context, deps: {
+export function createCoreLocalActions(ctx: ServiceLookup, deps: {
   owner: Pick<ChannelOwner, 'current'>
   binding: Pick<ChannelBinding, 'capture' | 'isCurrent'>
   state: ChannelState

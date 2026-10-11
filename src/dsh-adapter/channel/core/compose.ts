@@ -19,17 +19,18 @@
  * core alone: every action is backed by a capability, the core, or explicitly
  * unavailable.
  */
-import type { Context } from '@deepseek-ai/cordis'
 import { markChannelReadDirty } from '../../../adapter/channel/read-view.js'
 import type { AgentCapabilities } from '../../../adapter/ports/channel-capabilities.js'
 import type { AgentIdentity, AgentMessageSubmitInput, AgentMessageSubmitResult } from '../../../adapter/ports/channel-view.js'
 import type { OAuthSetupHost } from '../../../adapter/ports/channel-settings.js'
+import type { AgentEvent } from '../../../agent/events.js'
 import type { AgentSession } from '../../../agent/session.js'
 import { createActivityProjection } from '../../../channel/activity.js'
 import { channelCapabilities } from '../../../channel/capabilities.js'
 import { anchoredRow, prependHistoryRows, projectHistorySlice, restoreFoldedRows } from '../../../channel/history-restore.js'
 import { t } from '../../../i18n.js'
 import { WORKING_GATE_NOTICES } from '../../../commands.js'
+import { markBoot } from '../../../utils/bootTrace.js'
 import { logForDebugging } from '../../../utils/debug.js'
 import { DEFAULT_SESSION_MODES } from '../../../sessionModes.js'
 import { resolveContextOccupancy } from '../../context-occupancy.js'
@@ -49,7 +50,7 @@ import { registerChannelOwner, type ChannelOwner } from '../owner.js'
 import { unavailablePermissionPresetSnapshot } from '../permissions.js'
 import { createPreferences } from '../preferences.js'
 import { createSettingsHosts } from '../settings-host.js'
-import { createInitialChannelView, type ChannelLaunchOptions } from '../state.js'
+import { StartupOpenError, createInitialChannelView, type ChannelLaunchOptions, type ChannelStartup } from '../state.js'
 import type { ChannelState, SubagentTranscriptView } from '../types.js'
 import { createCapabilityDelegates, installChannelActions } from './actions.js'
 import { createBindingFeed, type BindingFeedHooks } from './binding-feed.js'
@@ -61,6 +62,7 @@ import { createCoreReports } from './reports.js'
 import { createSessionControls, localCommandsFor } from './session-controls.js'
 import { createCoreSessionActions } from './sessions.js'
 import { createWorkspaceActions } from '../workspace-actions.js'
+import type { ChannelHost } from '../channel-host.js'
 import { createBackendOpener, createSessionSwitch, SESSION_MOUNT_LEDGER, type NewSessionOpener, type ResumeSessionOpener } from './session-switch.js'
 import { createAgentTrajectorySource } from '../../trajectory/agent-source.js'
 
@@ -129,7 +131,7 @@ export interface ChannelExtension {
 export type CoreChannel = ReturnType<typeof createCoreChannel>
 
 export function createCoreChannel(
-  ctx: Context,
+  ctx: ChannelHost,
   initialSession: AgentSession,
   options: ChannelLaunchOptions,
   owner: ChannelOwner,
@@ -145,6 +147,9 @@ export function createCoreChannel(
 
   let extension: ChannelExtension = {}
   let started = false
+  /** One hook may extend the core during the first adoption; extend throws otherwise. */
+  let adoptHook: ((session: AgentSession) => void) | undefined
+  let adoptWindow = false
 
   const emitter = createChannelEmitter(() => state, () => extension.flushDeferred?.() ?? false, {
     // Folding drops a row's full text on the promise that `loadOlder`
@@ -320,7 +325,6 @@ export function createCoreChannel(
    * matched by its call id, not by this.
    */
   let agentMessageIntents = 0
-  const messaging = binding.session.capabilities.subagents?.messaging
 
   const actionReadiness = createChannelActionReadiness()
   const getReadyActions = (): ChannelActionDelegates => {
@@ -362,6 +366,66 @@ export function createCoreChannel(
   // and never holding a non-DSH session's id): `read` is a cached lookup, so
   // the accessor on the state below stays cheap.
   const contextPressure = options.contextPressure
+
+  /**
+   * The subagent control for `session`: interrupt always; the transcript read
+   * and messaging only while the session serves them. Rebuilt per adoption.
+   */
+  const subagentControlFor = (session: AgentSession): ChannelState['subagentControl'] => {
+    const messaging = session.capabilities.subagents?.messaging
+    return {
+      interrupt: agentId => {
+        const control = binding.session.capabilities.subagents
+        if (control === undefined) { unavailable('agents'); return false }
+        const subagent = activity.subagent(agentId)
+        if (subagent === undefined || (subagent.status !== 'running' && subagent.status !== 'starting')) return false
+        void control.interrupt(subagent.agentId).then(stopped => {
+          if (!stopped && owner.current()) notify(t('subagent-interrupt-failed', { id: subagent.agentId.slice(0, 8) }), { color: 'warning', timeoutMs: 6000 })
+        }, (error: unknown) => {
+          if (owner.current()) notify(t('capability-failed', { name: 'agents', err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+        })
+        return true
+      },
+      // The child transcript source exists only while the bound session's
+      // `subagents.history` capability does (Claude's store read; the DSH
+      // extension replaces this whole control with one backed by its own
+      // child transcript reader). The detail scene renders a Transcript page
+      // only when this method exists. A failed read resolves null, so the
+      // scene shows "unavailable" rather than an empty transcript.
+      ...(session.capabilities.subagents?.history === undefined ? {} : {
+        history: (agentId: string, window?: import('../../../agent/capabilities.js').SubagentTranscriptWindow): Promise<SubagentTranscriptView | null> => {
+          const history = binding.session.capabilities.subagents?.history
+          if (history === undefined) return Promise.resolve(null)
+          return history(agentId, window).catch(() => null)
+        },
+      }),
+      /** Parent-mediated messaging uses the session's submit pipeline. */
+      ...(messaging === undefined ? {} : {
+        message: {
+          via: messaging,
+          steer: false as const,
+          listTargets: (): Promise<readonly AgentIdentity[]> => Promise.resolve(state.subagents.map(sub => ({
+            agentId: sub.agentId,
+            ...(sub.sessionId === undefined ? {} : { sessionId: sub.sessionId }),
+            label: sub.description,
+            ...(sub.mode === undefined ? {} : { mode: sub.mode }),
+            status: sub.status,
+          }))),
+          submit: (input: AgentMessageSubmitInput): Promise<AgentMessageSubmitResult> => {
+            const text = input.text.trim()
+            if (text === '') return Promise.resolve({ ok: false, reason: 'failed', message: 'empty text' })
+            const name = input.targetName !== undefined && input.targetName.trim() !== '' ? input.targetName.trim() : input.targetId
+            const tool = binding.session.capabilities.subagents?.messagingTool
+            const envelope = tool === undefined ? t('agent-message-envelope', { name, id: input.targetId, text }) : t('agent-message-native-envelope', { tool, name, id: input.targetId, text })
+            const intentId = `agent-message-${(agentMessageIntents += 1)}`
+            dispatchUserText(envelope, 'followup', [], undefined)
+            return Promise.resolve({ ok: true, intentId, state: 'issued' })
+          },
+          messages: () => activity.agentMessages(),
+        },
+      }),
+    }
+  }
 
   const state: ChannelState = {
     ...createInputActions(() => state, () => binding.session, owner, inputConvergence,
@@ -584,58 +648,7 @@ export function createCoreChannel(
       }
     },
     ...actionMethods,
-    subagentControl: {
-      interrupt: agentId => {
-        const control = binding.session.capabilities.subagents
-        if (control === undefined) { unavailable('agents'); return false }
-        const subagent = activity.subagent(agentId)
-        if (subagent === undefined || (subagent.status !== 'running' && subagent.status !== 'starting')) return false
-        void control.interrupt(subagent.agentId).then(stopped => {
-          if (!stopped && owner.current()) notify(t('subagent-interrupt-failed', { id: subagent.agentId.slice(0, 8) }), { color: 'warning', timeoutMs: 6000 })
-        }, (error: unknown) => {
-          if (owner.current()) notify(t('capability-failed', { name: 'agents', err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
-        })
-        return true
-      },
-      // The child transcript source exists only while the bound session's
-      // `subagents.history` capability does (Claude's store read; the DSH
-      // extension replaces this whole control with one backed by its own
-      // child transcript reader). The detail scene renders a Transcript page
-      // only when this method exists. A failed read resolves null, so the
-      // scene shows "unavailable" rather than an empty transcript.
-      ...(binding.session.capabilities.subagents?.history === undefined ? {} : {
-        history: (agentId: string, window?: import('../../../agent/capabilities.js').SubagentTranscriptWindow): Promise<SubagentTranscriptView | null> => {
-          const history = binding.session.capabilities.subagents?.history
-          if (history === undefined) return Promise.resolve(null)
-          return history(agentId, window).catch(() => null)
-        },
-      }),
-      /** Parent-mediated messaging uses the session's submit pipeline. */
-      ...(messaging === undefined ? {} : {
-        message: {
-          via: messaging,
-          steer: false as const,
-          listTargets: (): Promise<readonly AgentIdentity[]> => Promise.resolve(state.subagents.map(sub => ({
-            agentId: sub.agentId,
-            ...(sub.sessionId === undefined ? {} : { sessionId: sub.sessionId }),
-            label: sub.description,
-            ...(sub.mode === undefined ? {} : { mode: sub.mode }),
-            status: sub.status,
-          }))),
-          submit: (input: AgentMessageSubmitInput): Promise<AgentMessageSubmitResult> => {
-            const text = input.text.trim()
-            if (text === '') return Promise.resolve({ ok: false, reason: 'failed', message: 'empty text' })
-            const name = input.targetName !== undefined && input.targetName.trim() !== '' ? input.targetName.trim() : input.targetId
-            const tool = binding.session.capabilities.subagents?.messagingTool
-            const envelope = tool === undefined ? t('agent-message-envelope', { name, id: input.targetId, text }) : t('agent-message-native-envelope', { tool, name, id: input.targetId, text })
-            const intentId = `agent-message-${(agentMessageIntents += 1)}`
-            dispatchUserText(envelope, 'followup', [], undefined)
-            return Promise.resolve({ ok: true, intentId, state: 'issued' })
-          },
-          messages: () => activity.agentMessages(),
-        },
-      }),
-    },
+    subagentControl: subagentControlFor(initialSession),
     jobControl: {
       kill: id => {
         const tasks = binding.session.capabilities.tasks
@@ -741,7 +754,8 @@ export function createCoreChannel(
       activity: { apply: (event, replaying) => { if (activityOwned()) activity.apply(event, replaying) } },
       trajectory: { observe: (event, replaying) => { if (trajectoryOwned()) agentTrajectory.observe(event, replaying) } },
       checkContextWarning, notify: (...args) => notify(...args),
-      renderer: host.rendererRuntime,
+      // Read per event (late row).
+      get renderer() { return host.rendererRuntime },
       selectionAttached: messageId => selectionAttachments.take(messageId),
     },
     resetTrajectory: () => { if (trajectoryOwned()) agentTrajectory.reset() },
@@ -825,10 +839,14 @@ export function createCoreChannel(
     state,
     rowIds,
     resetProjection: feed.resetProjection,
-    resetActivity: () => { activity.reset() },
+    resetActivity: candidate => {
+      activity.reset()
+      if (activityOwned()) state.subagentControl = subagentControlFor(candidate)
+    },
     snapshotOf,
     resetControls: controls.reset,
     bind: seed => feed.bind(seed),
+    attach: candidate => { attachOnAdopt(candidate) },
     bound: () => binding.session,
     mounts: SESSION_MOUNT_LEDGER,
     ...(options.sessionPrefs === undefined ? {} : { touch: (sessionId: string) => options.sessionPrefs?.touch(sessionId) }),
@@ -855,7 +873,7 @@ export function createCoreChannel(
     binding,
     state,
     rowIds,
-    workspace: host.workspaceService,
+    get workspace() { return host.workspaceService },
     resetProjection: feed.resetProjection,
     notify,
     unavailable,
@@ -876,15 +894,143 @@ export function createCoreChannel(
     },
   })
   const reports = createCoreReports({ owner, binding, state: () => state })
+  /**
+   * Adopt the startup session once its open settles (`options.startup`). No
+   * switch: no veto, no switched notice, and the rows stay. A failed open
+   * leaves the placeholder bound and `ready` false, with a notice row
+   * pointing at `/new` (or a `StartupOpenError`'s own hint).
+   */
+  const adoptStartup = (startup: NonNullable<ChannelLaunchOptions['startup']>): void => {
+    const adoption = binding.capture()
+    let history: readonly AgentEvent[] = []
+    let route: ChannelStartup['route']
+    let agentPreset: string | undefined
+    const backend = state.backendCapabilities.backendLabel
+    void binding.prepare(adoption, async () => {
+      const opened = await startup
+      history = opened.history
+      route = opened.route
+      agentPreset = opened.agentPreset
+      return opened.session
+    }).then(candidate => {
+      const previousCwd = state.cwd
+      binding.adopt(candidate, adoption, (_previous, disposePrevious) => {
+        feed.resetProjection()
+        if (activityOwned()) {
+          activity.reset()
+          state.subagentControl = subagentControlFor(candidate)
+        }
+        state.agentId = candidate.ref.sessionId
+        state.sessionId = candidate.ref.sessionId
+        // A resumed session runs where it was recorded, known only now.
+        state.cwd = candidate.cwd
+        state.displayCwd = host.workspaceService.describe(candidate.cwd).description ?? candidate.cwd
+        state.backendCapabilities = snapshotOf(candidate)
+        // Route and preset the opener resolved only now; written before the
+        // extensions attach, so theirs win.
+        if (route !== undefined) {
+          state.provider = route.provider
+          state.model = route.model
+        }
+        if (agentPreset !== undefined) state.agentPreset = agentPreset
+        controls.reset()
+        attachOnAdopt(candidate)
+        state.ready = true
+        state.startupFailure = undefined
+        feed.bind(history)
+        disposePrevious('dispose')
+        state.emit()
+      })
+      if (state.cwd !== previousCwd) resetIdeSelection()
+      refreshGitBranch()
+      markBoot('startup-adopted')
+    }, (error: unknown) => {
+      // Released, or a `/new` / `/resume` replaced the placeholder first.
+      if (!owner.current() || binding.session !== adoption.session) return
+      logForDebugging(`channel: startup session failed to open (${error instanceof Error ? error.message : String(error)})`)
+      // A notice is one line: the reason's first line, and the way out on a
+      // row of its own so a long reason cannot crowd it out.
+      const reason = (error instanceof Error ? error.message : String(error)).split('\n')[0]
+      state.startupFailure = reason
+      state.rows.push({ id: rowIds.value++, kind: 'notice', text: t('startup-open-failed', { backend, err: reason }) })
+      state.rows.push({ id: rowIds.value++, kind: 'notice', text: error instanceof StartupOpenError ? error.hint : t('startup-open-failed-hint') })
+      state.emit()
+    })
+  }
   /** A fresh session in another directory (the session browser's new-session
    *  card, `/workspace`'s handoff): the core `/new` with a target. */
   const workspaces = createWorkspaceActions(state, {
     owner,
-    service: host.workspaceService,
+    get service() { return host.workspaceService },
     newSession: target => sessionSwitch.newSession(target),
     refreshGitBranch: () => refreshGitBranch(),
     notify,
   })
+  /** The actions the core serves itself (read at install time: the
+   *  completion catalog is the extension's). */
+  const coreDelegates = (): Partial<ChannelActionDelegates> => ({
+    commandCompletions: files.commandCompletions(extension.completions ?? NO_COMPLETION_CATALOG),
+    runLocalCommand: local.runLocalCommand,
+    loadOlder: local.loadOlder,
+    clear: () => {
+      local.clear()
+      clearedGeneration = state.agentBindingGeneration
+    },
+    setActivityFrames: local.setActivityFrames,
+    pushLocal: local.pushLocal,
+    listFileCandidates: files.listFileCandidates,
+    listFiles: files.listFiles,
+    doctorInfo: reports.doctorInfo,
+    exportSession: reports.exportSession,
+    newSession: () => sessionSwitch.newSession(),
+    // `/agents` from the event-driven roster (the DSH extension serves its own).
+    mcpStatus: () => {
+      if (binding.session.capabilities.mcp === undefined) return unavailableLines('mcp')
+      const fence = mcpFence()
+      return controls.mcpReport(fence.session, fence.current) ?? [t('backend-mcp-loading')]
+    },
+    listSubagents: () => Promise.resolve(binding.session.capabilities.subagents === undefined ? unavailableLines('agents') : activity.listLines()),
+    resolveWorkspace: workspaces.resolveWorkspace,
+    switchWorkspace: workspaces.switchWorkspace,
+    ...sessionActions.delegates,
+  })
+  const installActions = (replace: boolean): void => {
+    installChannelActions(actionReadiness, {
+      unavailable,
+      unavailableLines,
+      capability: createCapabilityDelegates({
+        owner,
+        session: () => binding.session,
+        state: () => state,
+        notify,
+        unavailable,
+        unavailableLines,
+        guarded,
+      }),
+      core: coreDelegates(),
+      extension: extension.delegates,
+    }, replace)
+  }
+  /** Runs `adoptHook` after the core wrote the session's state, before the
+   *  bind; a throw fails the adoption transaction. */
+  const attachOnAdopt = (candidate: AgentSession): void => {
+    const hook = adoptHook
+    if (hook === undefined) return
+    adoptHook = undefined
+    const before = extension
+    adoptWindow = true
+    try {
+      hook(candidate)
+    } finally {
+      adoptWindow = false
+    }
+    if (extension === before) return
+    installActions(true)
+    if (extension.start !== before.start) {
+      extension.start?.before?.()
+      extension.start?.after?.()
+    }
+  }
   const refreshGitBranch = createGitBranchRefresher(ctx, {
     owner,
     state,
@@ -910,82 +1056,46 @@ export function createCoreChannel(
     reports,
     resetIdeSelection,
     refreshGitBranch,
-    /** Merge an extension's contributions (before `start`). */
+    /** Merge an extension's contributions (before `start`, or in the adoption window). */
     extend(next: ChannelExtension): void {
-      if (started) throw new Error('dsh-tui: Channel extensions must attach before the channel starts')
+      if (started && !adoptWindow) throw new Error('dsh-tui: Channel extensions must attach before the channel starts')
       extension = {
         ...extension,
         ...next,
         delegates: { ...extension.delegates, ...next.delegates },
       }
     },
+    /** Register (before `start`) the adoption-window hook (see `adoptHook`). */
+    extendOnAdopt(hook: (session: AgentSession) => void): void {
+      if (started) throw new Error('dsh-tui: Channel adoption extensions must register before the channel starts')
+      if (adoptHook !== undefined) throw new Error('dsh-tui: Channel adoption extension already registered')
+      adoptHook = hook
+    },
     /** Install the actions, start the runtime, bind the session. */
     start(): ChannelState {
       if (started) throw new Error('dsh-tui: Channel already started')
       started = true
-      const core: Partial<ChannelActionDelegates> = {
-        commandCompletions: files.commandCompletions(extension.completions ?? NO_COMPLETION_CATALOG),
-        runLocalCommand: local.runLocalCommand,
-        loadOlder: local.loadOlder,
-        clear: () => {
-          local.clear()
-          clearedGeneration = state.agentBindingGeneration
-        },
-        setActivityFrames: local.setActivityFrames,
-        pushLocal: local.pushLocal,
-        listFileCandidates: files.listFileCandidates,
-        listFiles: files.listFiles,
-        doctorInfo: reports.doctorInfo,
-        exportSession: reports.exportSession,
-        newSession: () => sessionSwitch.newSession(),
-        // `/agents` from the event-driven roster (the DSH extension serves its own).
-        mcpStatus: () => {
-          if (binding.session.capabilities.mcp === undefined) return unavailableLines('mcp')
-          const fence = mcpFence()
-          return controls.mcpReport(fence.session, fence.current) ?? [t('backend-mcp-loading')]
-        },
-        listSubagents: () => Promise.resolve(binding.session.capabilities.subagents === undefined ? unavailableLines('agents') : activity.listLines()),
-        resolveWorkspace: workspaces.resolveWorkspace,
-        switchWorkspace: workspaces.switchWorkspace,
-        ...sessionActions.delegates,
-      }
-      installChannelActions(actionReadiness, {
-        unavailable,
-        unavailableLines,
-        capability: createCapabilityDelegates({
-          owner,
-          session: () => binding.session,
-          state: () => state,
-          notify,
-          unavailable,
-          unavailableLines,
-          guarded,
-        }),
-        core,
-        extension: extension.delegates,
-      })
+      installActions(false)
       // Everything below can synchronously invoke external callbacks. It runs
       // only after the owner is registered and the complete delegate surface
       // is installed; the outer construction transaction rolls every step back.
       extension.start?.before?.()
-      startHostSubscriptions(host, owner, state)
+      startHostSubscriptions(host, owner, state, ctx)
       extension.start?.after?.()
       // The startup session's history, read ahead of construction, paints
       // before any live event (an extension owning the facts replays its own).
       feed.bind(extension.bind?.ownsSessionFacts === true ? undefined : options.initialHistory)
-      // Cordis owns the Channel lifetime. Rebinding handles the common case;
+      // The host owns the Channel lifetime. Rebinding handles the common case;
       // this effect closes the final timer and releases the DecisionEvents
-      // dispatch-topology marker when the Channel's context unloads.
-      const effect = (ctx as Context & {
-        effect?: (setup: () => () => void, label?: string) => void
-      }).effect
-      effect?.call(ctx, () => () => {
+      // dispatch-topology marker when the host unloads the Channel.
+      ctx.effect?.(() => () => {
         // The context owns the complete Channel lifetime. Keep emitter and
         // IDE-link teardown in the same finally funnel.
         state.releaseContributions()
       }, 'dsh-tui channel lifecycle')
       refreshGitBranch()
       if (extension.bind?.ownsSessionFacts !== true) state.emit()
+      if (options.startup !== undefined) adoptStartup(options.startup)
       return state
     },
   }

@@ -256,6 +256,26 @@ export function isHiddenCommandName(input: string): boolean {
 }
 
 /**
+ * Commands that may run while the channel is not ready (`ChannelUi.ready`
+ * false): the purely local ones. Everything else is refused before dispatch.
+ */
+const BOOT_SAFE_COMMAND_NAMES: ReadonlySet<string> = new Set([
+  'exit', 'quit', 'q',
+  'help', 'tips',
+  'theme', 'lang', 'vim',
+  'kernel',
+  'deepseek',
+  // Opening a session by hand: the retry after a failed startup open. Run
+  // while the open is still going, the binding drops the startup candidate.
+  'new', 'resume',
+])
+
+/** Whether a command name (no slash) may run before the channel is ready. */
+export function isBootSafeCommand(name: string): boolean {
+  return BOOT_SAFE_COMMAND_NAMES.has(name)
+}
+
+/**
  * Resolve a command's description in the active UI language. The en text in
  * `LOCAL_COMMANDS` (and the registry's own text for external commands) is
  * the fallback; zh translations live in the i18n dict under

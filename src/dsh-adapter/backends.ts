@@ -63,8 +63,13 @@ export async function createBackendHost(ctx: Context, cwd: string, stderr: (line
   }
 }
 
-/** Resume failures abort boot; history is read before the channel's first paint. */
-export async function openBackendStartup(ctx: Context, backend: AgentBackend, input: {
+/**
+ * What the channel needs about the startup backend before its session exists,
+ * plus `start()`, which opens it (mount claim, open, history); the screen
+ * mounts in between.
+ * A resume failure rejects `start()`; no fresh session is started instead.
+ */
+export async function prepareBackendStartup(ctx: Context, backend: AgentBackend, input: {
   readonly cwd: string
   readonly stderr: (line: string) => void
   readonly configuredSessionId?: string
@@ -78,15 +83,21 @@ export async function openBackendStartup(ctx: Context, backend: AgentBackend, in
   const resumeId = requested === undefined || requested === ''
     ? undefined
     : requested.startsWith(`${backend.id}:`) ? requested.slice(backend.id.length + 1) : requested
-  let session: AgentSession
-  let initialHistory: readonly AgentEvent[] = []
-  if (resumeId !== undefined) {
+  const start = async (): Promise<{ session: AgentSession; initialHistory: readonly AgentEvent[] }> => {
+    if (resumeId === undefined) {
+      const session = await backend.open({ kind: 'create', cwd: input.cwd }, host)
+      const { reservation } = await reserveNewSession(formatSessionRef(session.ref))
+      reservation.settle()
+      return { session, initialHistory: [] }
+    }
     const key = formatSessionRef({ backendId: backend.id, sessionId: resumeId })
     const reserved = await reserveMount(key)
     if (!reserved.ok) {
       throw new Error(`dsh-tui: cannot resume ${backend.descriptor.label} session "${resumeId}": ${mountFailureText(reserved)} — ` +
         'two processes driving one session would interleave its transcript. Close that terminal, or drop --resume to start a fresh session.')
     }
+    let session: AgentSession
+    let initialHistory: readonly AgentEvent[]
     try {
       session = await backend.open({ kind: 'resume', sessionId: resumeId }, host)
       try {
@@ -104,26 +115,28 @@ export async function openBackendStartup(ctx: Context, backend: AgentBackend, in
     reserved.reservation.settle()
     prefs.setLastSession(resumeId)
     prefs.touch(resumeId)
-  } else {
-    session = await backend.open({ kind: 'create', cwd: input.cwd }, host)
-    const { reservation } = await reserveNewSession(formatSessionRef(session.ref))
-    reservation.settle()
+    return { session, initialHistory }
   }
   return {
-    session,
     // Boot and landing-page state use the target this backend actually opened.
     resumedSessionId: resumeId,
     label: backend.descriptor.label,
     backendId: backend.id,
-    initialHistory,
     catalog: backend.catalog,
     sessionPrefs: prefs,
+    start,
     // A submitted user row means the backend has persisted a resumable transcript.
     persisted: (_sessionId: string, rows: readonly { readonly kind: string }[]) => rows.some(row => row.kind === 'user'),
     resumeCommand: (sessionId: string) => launch.resumeCommand(sessionId),
     open: (target: Extract<OpenTarget, { readonly kind: 'create' | 'resume' }>) =>
       backend.open(target, target.kind === 'create' ? { ...host, cwd: target.cwd } : host),
   }
+}
+
+/** Resume failures abort boot; history is read before the channel's first paint. */
+export async function openBackendStartup(ctx: Context, backend: AgentBackend, input: Parameters<typeof prepareBackendStartup>[2]) {
+  const prepared = await prepareBackendStartup(ctx, backend, input)
+  return { ...prepared, ...await prepared.start() }
 }
 
 /**

@@ -533,6 +533,38 @@ await effectFiber.dispose()
 check('overwritten fiber.effect cannot retain a contribution', !status.getSnapshot().some(entry => entry.key === 'effect-overwrite'))
 
 await root.fiber.dispose()
+
+// The package's own entry defers the root-capability guard while it mounts
+// and arms it for the profile's composition: the first TUI row (a plugin
+// activation reaching host code) installs it, as on the profile path.
+{
+  const { armRootCapabilityGuard, compositionRoot, deferRootCapabilityGuard } = await import('../src/dsh-adapter/host-access.js')
+  const entryRoot = new Context()
+  const release = deferRootCapabilityGuard(entryRoot)
+  compositionRoot(entryRoot)
+  const tryRoot = (ctx: Context): string => {
+    try {
+      ;(ctx.root.plugin({ name: 'smuggled', apply() {} }) as unknown as { dispose(): unknown }).dispose()
+      return 'allowed'
+    } catch (error) {
+      return error instanceof Error && error.message.includes('unavailable from a plugin activation') ? 'denied' : String(error)
+    }
+  }
+  const results: Record<string, string> = {}
+  await entryRoot.plugin({ name: 'mount-time', apply(ctx: Context) { compositionRoot(ctx); results.mount = tryRoot(ctx) } })
+  armRootCapabilityGuard(entryRoot)
+  await entryRoot.plugin({ name: 'dsh-row', apply(ctx: Context) { results.dsh = tryRoot(ctx) } })
+  check('deferred guard: unarmed host-code activations do not install it', results.mount === 'allowed', JSON.stringify(results))
+  check('armed guard: a row before the first TUI row keeps root capabilities', results.dsh === 'allowed', JSON.stringify(results))
+  results.host = tryRoot(entryRoot)
+  check('armed guard: host code on the root does not install it', results.host === 'allowed', JSON.stringify(results))
+  await entryRoot.plugin({ name: 'tui-row', apply(ctx: Context) { compositionRoot(ctx) } })
+  await entryRoot.plugin({ name: 'third-party', apply(ctx: Context) { results.third = tryRoot(ctx) } })
+  check('armed guard: the first TUI row installs it for every later row', results.third === 'denied', JSON.stringify(results))
+  release()
+  check('host code still uses the root after the guard is installed', tryRoot(entryRoot) === 'allowed')
+  await entryRoot.fiber.dispose()
+}
 if (failures > 0) {
   console.error(`plugin lifecycle battery FAILED (${failures}/${checks})`)
   process.exit(1)

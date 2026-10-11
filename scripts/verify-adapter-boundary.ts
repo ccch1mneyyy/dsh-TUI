@@ -40,7 +40,25 @@
  *                                  docs/codex-backend-design.md): no scoped
  *                                  (vendor) package, no concrete backend
  *                                  directory, no src/dsh-adapter/**
-
+ *   native.dsh    only inside src/dsh-adapter/**
+ *   native.codex  only inside src/backends/codex/**
+ *
+ * The standalone entry's host loading (ADAPTER.md, host contract):
+ *
+ *   '@deepseek-ai/…' as any string literal (a specifier handed to a
+ *                  `createRequire` / `import()` built at run time, not only a
+ *                  static import) only inside src/dsh-adapter/**
+ *   the host-only modules (src/dsh-adapter/host-contract.ts HOST_MODULES
+ *                  other than cordis, and the host package itself) are never
+ *                  value-imported anywhere: they load from the installed dsh
+ *                  by realpath, in src/dsh-adapter/host-dsh.ts alone, which
+ *                  names them only through host-contract.ts; their string
+ *                  literals live in host-contract.ts (contract.ts may read the
+ *                  host's package.json for its version)
+ *   src/dsh-adapter/host-dsh.ts    every @deepseek-ai/* import type-only
+ *   src/dsh-adapter/host-contract.ts imported only by host-dsh.ts and
+ *                  contract.ts
+ *
  * Plain fs + regex scan, no TypeScript program: it runs inside `verify:build`
  * on every build and must not depend on the compiled tree. Only real module
  * specifiers count (static import/export … from, bare side-effect imports,
@@ -121,6 +139,28 @@ const SCOPED_PACKAGE = /^@[^/]+\//u
 // channel/input-delivery.ts stays outside core because it builds DSH user
 // messages and ids for every backend through createUserMessage.
 const CORE_DIR = 'dsh-adapter/channel/core/'
+
+const HOST_DSH = 'dsh-adapter/host-dsh.ts'
+const HOST_CONTRACT = 'dsh-adapter/host-contract.ts'
+const HOST_CONTRACT_IMPORTERS = [HOST_DSH, 'dsh-adapter/contract.ts']
+/** Host-only literals contract.ts may carry (a manifest read, not a module load). */
+const HOST_LITERAL_EXCEPTIONS = new Set(['dsh-adapter/contract.ts @deepseek-ai/dsh/package.json'])
+const STRING_LITERAL = /(['"`])(@deepseek-ai\/[^'"`\s]*)\1/gu
+
+/** The host-only specifiers, read from the contract's source text (the gate must not import src/). */
+function readHostOnlySpecifiers(): Set<string> {
+  const source = readFileSync(join(SRC, HOST_CONTRACT), 'utf8')
+  const host = /export const HOST_PACKAGE = '([^']+)'/u.exec(source)?.[1]
+  const modules = /export const HOST_MODULES = \[([\s\S]*?)\] as const/u.exec(source)?.[1]
+  if (host === undefined || modules === undefined) throw new Error(`src/${HOST_CONTRACT}: HOST_PACKAGE / HOST_MODULES not found`)
+  const specifiers = new Set([host])
+  for (const match of modules.matchAll(/specifier: '([^']+)'/gu)) if (match[1] !== '@deepseek-ai/cordis') specifiers.add(match[1])
+  if (specifiers.size < 2) throw new Error(`src/${HOST_CONTRACT}: HOST_MODULES lists no specifier`)
+  return specifiers
+}
+const HOST_ONLY = readHostOnlySpecifiers()
+const HOST_PACKAGE_NAME = [...HOST_ONLY][0]
+const isHostOnly = (specifier: string): boolean => HOST_ONLY.has(specifier) || specifier.startsWith(`${HOST_PACKAGE_NAME}/`)
 
 /** Read every backend manifest, fail loud when one cannot be read (a manifest
  *  that silently disappears would silently *relax* the gate), and check that it
@@ -331,8 +371,10 @@ for (const file of files) {
   for (const ref of refs) {
     const where = `${path}:${ref.line}`
     if (under(path, CORE_DIR)) {
-      if (ref.specifier.startsWith('@deepseek-ai/') && ref.specifier !== '@deepseek-ai/cordis') {
-        violations.push(`${where} imports '${ref.specifier}'; channel core may import only @deepseek-ai/cordis`)
+      // The core is built against ChannelHost, so a process-owning host can
+      // compose it without a Cordis root.
+      if (ref.specifier.startsWith('@deepseek-ai/')) {
+        violations.push(`${where} imports '${ref.specifier}'; channel core must not import @deepseek-ai/* (take host services through ChannelHost)`)
       }
       if (ref.specifier === '../extensions.js' || ref.specifier.startsWith('../../backend/')) {
         violations.push(`${where} imports '${ref.specifier}'; channel core must not depend on DSH extensions or backend code`)
@@ -373,6 +415,33 @@ for (const file of files) {
       } else {
         violations.push(`${where} imports values from src/${target}; UI layers may only take types from src/dsh-adapter/ (use \`import type\`, or move the value to a neutral module)`)
       }
+    }
+  }
+
+  // The standalone entry's host loading (see the header).
+  for (const ref of refs) {
+    const where = `${path}:${ref.line}`
+    if (isHostOnly(ref.specifier) && !ref.typeOnly && !HOST_LITERAL_EXCEPTIONS.has(`${path} ${ref.specifier}`)) {
+      violations.push(`${where} value-imports '${ref.specifier}'; host-only modules load from the installed dsh by realpath (src/${HOST_DSH}), never from this package`)
+    }
+    if (path === HOST_DSH && ref.specifier.startsWith('@deepseek-ai/') && !ref.typeOnly) {
+      violations.push(`${where} imports values from '${ref.specifier}'; src/${HOST_DSH} takes only types from @deepseek-ai/* (modules come from the host by realpath)`)
+    }
+    const target = resolveInternal(file, ref.specifier)?.replace(/\.js$/u, '.ts')
+    if (target === HOST_CONTRACT && !HOST_CONTRACT_IMPORTERS.includes(path)) {
+      violations.push(`${where} imports src/${HOST_CONTRACT}; only ${HOST_CONTRACT_IMPORTERS.map(item => `src/${item}`).join(' and ')} read the host contract`)
+    }
+  }
+  // A type-only import's specifier is a type, not a load: the rules above own it.
+  const typeSpecifiers = new Set(refs.filter(ref => ref.typeOnly).map(ref => `${ref.line} ${ref.specifier}`))
+  for (const match of code.matchAll(STRING_LITERAL)) {
+    const where = `${path}:${lineAt(code, match.index)}`
+    const literal = match[2]
+    if (under(path, 'dsh-adapter/') && typeSpecifiers.has(`${lineAt(code, match.index)} ${literal}`)) continue
+    if (!under(path, 'dsh-adapter/')) {
+      violations.push(`${where} names '${literal}'; @deepseek-ai/* specifiers (also ones resolved or imported at run time) belong in src/dsh-adapter/`)
+    } else if (isHostOnly(literal) && path !== HOST_CONTRACT && !HOST_LITERAL_EXCEPTIONS.has(`${path} ${literal}`)) {
+      violations.push(`${where} names the host-only '${literal}'; only src/${HOST_CONTRACT} lists host modules (src/${HOST_DSH} loads them from it)`)
     }
   }
 
