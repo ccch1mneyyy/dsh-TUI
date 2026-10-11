@@ -9,8 +9,9 @@ import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from '../recap.js'
 import { listSummaries, locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
 import { openStepToolCallIds, runSideQuestion, splitUnresolvedToolCalls, wrapSideQuestion } from '../sideQuestion.js'
-import { readListingSnapshot } from '../sessions/snapshot.js'
+import { beginListingSnapshot, readListingSnapshot } from '../sessions/snapshot.js'
 import type { ChannelOwner } from './owner.js'
+import { createSessionListing } from './session-listing.js'
 import type { CredentialStatus, SideQuestionLlm } from './types.js'
 import { isUserInvocable } from '@deepseek-ai/dsh-skill'
 
@@ -30,7 +31,7 @@ type Binding = Pick<DshChannelBinding, 'agent' | 'capture' | 'isCurrent'>
 
 /** Session-scoped metadata, persistence queries, and tool-less LLM reads. */
 export function createSessionMetadataActions(ctx: Context, deps: {
-  owner: Pick<ChannelOwner, 'current' | 'signal'>
+  owner: Pick<ChannelOwner, 'current' | 'signal' | 'own'>
   binding: Binding
   provider(): string
   model(): string
@@ -50,7 +51,6 @@ export function createSessionMetadataActions(ctx: Context, deps: {
   const withOwnerSignal = (signal?: AbortSignal): AbortSignal =>
     signal === undefined ? deps.owner.signal : AbortSignal.any([signal, deps.owner.signal])
 
-  let listingGeneration = 0
   let lastListing: { source: SessionSource | symbol; rows: readonly SessionSummary[] } | undefined
   const remember = (source: SessionSource, rows: readonly SessionSummary[]): void => {
     lastListing = { source: source.identity ?? source, rows }
@@ -64,28 +64,52 @@ export function createSessionMetadataActions(ctx: Context, deps: {
       ? lastListing.rows
       : readListingSnapshot(source)
   }
-  const listSessions = async (onEnriched?: (summary: SessionSummary) => void, onPartial?: (rows: readonly SessionSummary[]) => void): Promise<readonly SessionSummary[]> => {
-    const generation = ++listingGeneration
-    const capture = deps.binding.capture()
-    const source = persistence()
-    if (!source) {
-      if (current(capture)) deps.setPersistedSessions([])
-      return []
-    }
-    let summaries: readonly SessionSummary[] = []
-    summaries = await listSummaries(source, deps.owner.signal, enriched => {
-      if (!current(capture) || generation !== listingGeneration) return
-      summaries = summaries.map(row => row.id === enriched.id ? enriched : row)
+  const listing = createSessionListing({
+    owner: deps.owner,
+    capture: () => {
+      const capture = deps.binding.capture()
+      const source = persistence()
+      const identity = source?.identity
+      const cwd = deps.cwd?.()
+      return () => {
+        const liveSource = persistence()
+        // Legacy hosts may return a new service wrapper on every lookup;
+        // only the provider's explicit identity is stable across proxies.
+        return current(capture) && (liveSource !== undefined) === (source !== undefined)
+          && liveSource?.identity === identity && deps.cwd?.() === cwd
+      }
+    },
+    async read(listingCurrent, onEnriched, onPartial) {
+      const source = persistence()
+      if (!source) {
+        if (listingCurrent()) deps.setPersistedSessions([])
+        return []
+      }
+      let summaries: readonly SessionSummary[] = []
+      summaries = await listSummaries(source, deps.owner.signal, enriched => {
+        if (!listingCurrent()) return
+        summaries = summaries.map(row => row.id === enriched.id ? enriched : row)
+        remember(source, summaries)
+        deps.setPersistedSessions(summaries)
+        onEnriched(enriched)
+      }, rows => {
+        if (listingCurrent()) onPartial(rows)
+      }, deps.cwd?.())
+      if (!listingCurrent()) return []
       remember(source, summaries)
       deps.setPersistedSessions(summaries)
-      onEnriched?.(enriched)
-    }, rows => {
-      if (current(capture) && generation === listingGeneration) onPartial?.(rows)
-    }, deps.cwd?.())
-    if (!current(capture) || generation !== listingGeneration) return []
-    remember(source, summaries)
-    deps.setPersistedSessions(summaries)
-    return summaries
+      return summaries
+    },
+  })
+  const saveMutation = (rows: readonly SessionSummary[] | undefined): void => {
+    listing.invalidate()
+    const source = persistence()
+    if (source === undefined) return
+    // Revoke a pending scan's disk write even before any complete cache exists.
+    const save = beginListingSnapshot(source)
+    if (rows === undefined) return
+    remember(source, rows)
+    save(rows)
   }
 
   const preview = async (sessionId: string) => {
@@ -221,6 +245,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     // Live rename: the same strict-reader-required payload the offline append
     // writes — a `{ title }`-only event made the log unopenable (issue #1006).
     capture.agent.session.append('session/title', userTitleData(title))
+    saveMutation(cachedSessions()?.map(row => row.id === capture.agent.session.id ? { ...row, title: { text: title, source: 'renamed' } } : row))
     deps.setSessionTitle(title)
     deps.emit()
   }
@@ -236,6 +261,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     const capture = deps.binding.capture()
     if (sessionId === capture.agent.session.id || !current(capture)) return false
     if (deleteSessionLog(sessionId) !== 'deleted' || !current(capture)) return false
+    saveMutation(cachedSessions()?.filter(row => row.id !== sessionId))
     forgetSession(sessionId)
     deps.forgetAgentView(sessionId)
     if (readResumeTarget() === sessionId) clearResumeTarget()
@@ -246,12 +272,13 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     if (!current(capture)) return false
     if (sessionId === capture.agent.session.id) { renameSession(title); return true }
     if (appendSessionTitle(sessionId, title) !== 'appended' || !current(capture)) return false
+    saveMutation(cachedSessions()?.map(row => row.id === sessionId ? { ...row, title: { text: title, source: 'renamed' } } : row))
     touchSession(sessionId)
     return true
   }
 
   return {
-    cachedSessions, listSessions, previewSession: preview, listSkills, describeCredential,
+    cachedSessions, listSessions: listing.listSessions, previewSession: preview, listSkills, describeCredential,
     sideQuestion, recapRecent, setResumeTarget: writeResumeTarget,
     renameSession, setSessionColor, deleteSession, renameSessionTo,
   }

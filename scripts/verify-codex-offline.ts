@@ -14,7 +14,8 @@ for (const key of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL', 'CHATGP
 const { liveCodexHome, assertCheapRequest } = await import('./lib/codex-cheap-only.mjs')
 const sandbox = liveCodexHome({ provider: false })
 process.env.CODEX_HOME = sandbox.home
-const { prepareCodexRuntime } = await import('../src/backends/codex/backend.js')
+process.env.CODEX_SQLITE_HOME = sandbox.home
+const { prepareCodexRuntime, codexBackend, openCodexBackendSession } = await import('../src/backends/codex/backend.js')
 const { openCodexSession } = await import('../src/backends/codex/session/session.js')
 const { closeAllCodexHubs } = await import('../src/backends/codex/rpc/hub.js')
 const { memoryCodexPrefs } = await import('../src/backends/codex/prefs.js')
@@ -24,6 +25,8 @@ let checks = 0
 const check = (label: string, ok: unknown): void => { assert.ok(ok, label); checks += 1; console.log('PASS ' + label) }
 let session: Awaited<ReturnType<typeof openCodexSession>> | undefined
 let release: (() => void) | undefined
+let catalogSession: Awaited<ReturnType<typeof openCodexBackendSession>> | undefined
+let alternate: ReturnType<typeof liveCodexHome> | undefined
 try {
   const runtime = await prepareCodexRuntime({ kind: 'create', cwd: sandbox.cwd }, { cwd: sandbox.cwd, debug: () => undefined, warn: () => undefined })
   release = runtime.release
@@ -47,6 +50,29 @@ try {
   await session.capabilities.rename!.rename('offline smoke')
   const read = rec(await runtime.hub.call(CLIENT.threadRead, { threadId: id, includeTurns: false }))
   check('real native rename persists', str(rec(read?.thread)?.name) === 'offline smoke')
+  const host = { cwd: sandbox.cwd, debug: () => undefined, warn: () => undefined }
+  catalogSession = await openCodexBackendSession({ kind: 'create', cwd: sandbox.cwd }, host)
+  const methods: string[] = []
+  const listedCall = runtime.hub.call.bind(runtime.hub)
+  runtime.hub.call = async (method, params, options) => {
+    methods.push(method)
+    return listedCall(method, params, options)
+  }
+  const catalog = codexBackend.catalog!
+  await catalog.list({ cwd: sandbox.cwd }, () => {})
+  assert.ok(methods.length > 0 && methods.every(method => method === CLIENT.threadList), JSON.stringify({ label: 'catalog hub reuse', methods }))
+  check('real catalog reuses the active session hub without config/auth preparation', true)
+  methods.length = 0
+  await catalog.list({ allProjects: true }, () => {})
+  check('real global catalog borrows the same hub without restarting auth', methods.length > 0 && methods.every(method => method === CLIENT.threadList))
+  alternate = liveCodexHome({ provider: false })
+  process.env.CODEX_HOME = alternate.home
+  process.env.CODEX_SQLITE_HOME = alternate.home
+  check('changing the native home cannot reuse another store catalog', (await catalog.list({ allProjects: true }, () => {})).length === 0)
+  process.env.CODEX_HOME = sandbox.home
+  process.env.CODEX_SQLITE_HOME = sandbox.home
+  await catalogSession.dispose()
+  catalogSession = undefined
   const fork = rec(await runtime.hub.call(CLIENT.threadFork, { threadId: id, ephemeral: true, excludeTurns: true }))
   const forkId = str(rec(fork?.thread)?.id)
   check('real ephemeral fork is not durable', forkId !== undefined && rec(fork?.thread)?.ephemeral === true && rec(fork?.thread)?.path === null)
@@ -60,8 +86,10 @@ try {
   console.log(`verify-codex-offline OK (${checks} checks; no model turns)`)
 } finally {
   await session?.dispose()
+  await catalogSession?.dispose()
   release?.()
   await closeAllCodexHubs()
+  alternate?.cleanup()
   sandbox.cleanup()
   rmSync(isolated, { recursive: true, force: true })
 }

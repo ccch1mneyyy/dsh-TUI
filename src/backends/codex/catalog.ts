@@ -5,7 +5,7 @@ import type { SessionCatalog, SessionListScope } from '../../agent/backend.js'
 import type { PreviewEntry, SessionSummary } from '../../adapter/ports/channel-session.js'
 import { t } from '../../i18n.js'
 import { CODEX_BACKEND_ID } from './contract.js'
-import { arr, num, rec, str, text, type Rec } from './narrow.js'
+import { arr, num, rec, str, text } from './narrow.js'
 import { CLIENT } from './protocol/index.js'
 import { rpcCode, RPC_ERROR } from './rpc/client.js'
 import type { CodexHub } from './rpc/hub.js'
@@ -86,36 +86,54 @@ export function createCodexCatalog(deps: CodexCatalogDeps): SessionCatalog {
         // and parsing them for every thread in every page.
         const used = deps.lastUsed?.()
         const params = { sortKey: 'recency_at', sortDirection: 'desc', archived: false, modelProviders: [], ...(cwd === undefined ? {} : { cwd }) }
-        if (onPartial !== undefined) {
-          // The native state DB can paint rows before the default rollout scan
-          // repairs metadata. Its rows never enter the final listing or cache.
-          let first: Rec | undefined
-          try {
-            first = rec(await hub.call(CLIENT.threadList, { ...params, limit: FIRST_PAGE, useStateDbOnly: true }, { timeoutMs: 1000 }))
-          } catch { /* Older servers or unavailable DBs use the regular listing. */ }
-          for (const raw of arr(first?.data)) {
-            const row = codexSessionSummary(raw, used)
-            if (row !== undefined && row.kind.kind !== 'subagent') initial.set(row.id, row)
-          }
-          if (initial.size > 0) onPartial([...initial.values()].sort((a, b) => b.updatedAt - a.updatedAt))
-        }
-        // The row budget also bounds the number of empty/malformed pages.
-        for (let page = 0; page < Math.ceil(LIST_LIMIT / LIST_PAGE) && scanned < LIST_LIMIT; page += 1) {
-          const answer = rec(await hub.call(CLIENT.threadList, { ...params, limit: Math.min(LIST_PAGE, LIST_LIMIT - scanned), ...(cursor === undefined ? {} : { cursor }) }))
-          const data = arr(answer?.data)
-          scanned += data.length
-          for (const raw of data.slice(0, LIST_LIMIT - rows.size)) {
-            const row = codexSessionSummary(raw, used)
-            if (row !== undefined && row.kind.kind !== 'subagent') rows.set(row.id, row)
-          }
-          // Progress is cumulative; repaired rows supersede the DB metadata,
-          // and only the resolved result may drop unconfirmed initial IDs.
+        const publish = (): void => {
           onPartial?.([...new Map([...initial, ...rows]).values()].sort((a, b) => b.updatedAt - a.updatedAt))
-          cursor = text(answer?.nextCursor)
-          if (cursor === undefined || seen.has(cursor)) break
-          seen.add(cursor)
         }
-        return [...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, LIST_LIMIT)
+        const initialAbort = new AbortController()
+        let finished = false
+        let firstPage: Promise<void> | undefined
+        if (onPartial !== undefined) {
+          // The DB shortcut must not delay discovery of new rollout files.
+          // Repaired rows win even if the DB response arrives later.
+          firstPage = hub.call(CLIENT.threadList, { ...params, limit: FIRST_PAGE, useStateDbOnly: true }, { timeoutMs: 1000, signal: initialAbort.signal }).then(answer => {
+            if (finished) return
+            for (const raw of arr(rec(answer)?.data)) {
+              const row = codexSessionSummary(raw, used)
+              if (row !== undefined && row.kind.kind !== 'subagent') initial.set(row.id, row)
+            }
+            if (initial.size > 0) publish()
+          }, () => { /* Older servers or unavailable DBs use the regular listing. */ })
+          // Attach a rejection handler now; publication errors are rethrown
+          // by the final await after the other pending RPC has settled.
+          void firstPage.catch(() => {})
+        }
+        try {
+          // Servers may cap pages below our requested size. Bound empty pages
+          // separately, rather than stopping after three capped pages.
+          for (let page = 0; page < Math.ceil(LIST_LIMIT / FIRST_PAGE) && scanned < LIST_LIMIT; page += 1) {
+            const limit = page === 0 && onPartial !== undefined ? FIRST_PAGE : LIST_PAGE
+            const answer = rec(await hub.call(CLIENT.threadList, { ...params, limit: Math.min(limit, LIST_LIMIT - scanned), ...(cursor === undefined ? {} : { cursor }) }))
+            const data = arr(answer?.data)
+            scanned += data.length
+            for (const raw of data.slice(0, LIST_LIMIT - rows.size)) {
+              const row = codexSessionSummary(raw, used)
+              if (row !== undefined && row.kind.kind !== 'subagent') rows.set(row.id, row)
+            }
+            // Progress is cumulative; repaired rows supersede the DB metadata,
+            // and only the resolved result may drop unconfirmed initial IDs.
+            publish()
+            cursor = text(answer?.nextCursor)
+            if (cursor === undefined || seen.has(cursor)) break
+            seen.add(cursor)
+          }
+          return [...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, LIST_LIMIT)
+        } finally {
+          finished = true
+          initialAbort.abort()
+          // Keep the runtime borrowed until the speculative DB request has
+          // settled; it can never publish after completion or failure.
+          await firstPage
+        }
       })
     },
     info(sessionId, cwd) {

@@ -1301,6 +1301,45 @@ const partialSessions = [
 ]
 
 console.log('progress: a partial enumeration paints before the listing resolves')
+for (const backendId of [undefined, 'claude', 'codex'] as const) {
+  for (const inline of [false, true]) {
+    const label = `${backendId ?? 'dsh'} ${inline ? 'inline' : 'fullscreen'}`
+    const cached = session({ id: 'cached-latest', title: { text: 'cached latest', source: 'prompt' }, updatedAt: now - 100 })
+    const older = session({ id: 'cached-older', title: { text: 'cached older', source: 'prompt' }, updatedAt: now - 200 })
+    const foreign = session({ id: 'cached-foreign', cwd: betaDir, title: { text: 'cached foreign', source: 'prompt' }, updatedAt: now - 300 })
+    const native = session({ id: 'native-new', title: { text: 'native newest', source: 'prompt' }, updatedAt: now + 1_000 })
+    const later = session({ id: 'native-later', title: { text: 'native later', source: 'prompt' }, updatedAt: now + 2_000 })
+    const renamed = { ...cached, title: { text: 'fresh title', source: 'auto' } }
+    const target = makeChannel({ registry, cwd: alphaDir, backendId, inline, cols: inline ? 64 : COLS, cache: cacheCell([cached, older, foreign]) })
+    const gate = deferred()
+    target.plan = { defer: gate.promise, sessions: [later, native, renamed, foreign] }
+    const app = await mountSupervisor(target)
+    const focused = (title: string): boolean => app.lines().some(line => line.includes('❯') && line.includes(title))
+    try {
+      check(`${label}: cached default paints while the background read is pending`, await settled(() => focused('cached latest')))
+      target.onPartial?.([native, renamed])
+      check(`${label}: fresh cwd rows and titles appear before the global read finishes`, await settled(() => {
+        const shown = app.lines().join('\n')
+        return focused('native newest') && shown.includes('fresh title') && shown.includes('cached older') && !shown.includes('cached latest')
+      }), app.lines().join('\n'))
+      app.write('\u001b[B')
+      await settled(() => focused('fresh title'))
+      target.onPartial?.([later, native, renamed])
+      check(`${label}: arriving newer rows preserve a manual selection`, await settled(() => focused('fresh title') && app.lines().join('\n').includes('native later')))
+      app.write('\r')
+      check(`${label}: Enter opens the selected id after background reordering`, await settled(() => app.calls.includes('resumeTo:cached-latest')))
+      app.write('\u001b[D')
+      await settled(() => app.lines().some(line => line.includes('❯') && line.includes(backendId === undefined ? 'Alpha' : 'alpha')))
+      app.write(backendId === undefined ? '\u001b[A' : '\u001b[B')
+      check(`${label}: another workspace keeps its cached rows during cwd refresh`, await settled(() => app.lines().join('\n').includes('cached foreign')), app.lines().join('\n'))
+      check(`${label}: progress has not resolved the full listing`, target.landed === 0)
+      gate.resolve()
+      await settled(() => target.landed === 1)
+      app.write(backendId === undefined ? '\u001b[B' : '\u001b[A')
+      check(`${label}: completion removes stale cached rows`, await settled(() => app.lines().join('\n').includes('native later') && !app.lines().join('\n').includes('cached older')))
+    } finally { gate.resolve(); app.close() }
+  }
+}
 {
   const target = makeChannel({ registry, cwd: alphaDir })
   const gate = deferred()

@@ -923,6 +923,8 @@ export function createCoreChannel(
     start(): ChannelState {
       if (started) throw new Error('dsh-tui: Channel already started')
       started = true
+      let listingStarted = false
+      const listSessions = extension.delegates?.listSessions ?? sessionActions.delegates.listSessions!
       const core: Partial<ChannelActionDelegates> = {
         commandCompletions: files.commandCompletions(extension.completions ?? NO_COMPLETION_CATALOG),
         runLocalCommand: local.runLocalCommand,
@@ -962,7 +964,13 @@ export function createCoreChannel(
           guarded,
         }),
         core,
-        extension: extension.delegates,
+        extension: {
+          ...extension.delegates,
+          listSessions: (onEnriched, onPartial) => {
+            listingStarted = true
+            return listSessions(onEnriched, onPartial)
+          },
+        },
       })
       // Everything below can synchronously invoke external callbacks. It runs
       // only after the owner is registered and the complete delegate surface
@@ -973,6 +981,16 @@ export function createCoreChannel(
       // The startup session's history, read ahead of construction, paints
       // before any live event (an extension owning the facts replays its own).
       feed.bind(extension.bind?.ownsSessionFacts === true ? undefined : options.initialHistory)
+      if (options.sessionCatalog !== undefined || extension.delegates?.listSessions !== undefined) {
+        const preload = setImmediate(() => {
+          releasePreload()
+          if (listingStarted || !owner.current()) return
+          void state.listSessions().catch(error => {
+            logForDebugging(`session list preload failed: ${error instanceof Error ? error.message : String(error)}`)
+          })
+        })
+        const releasePreload = owner.own(() => clearImmediate(preload))
+      }
       // Cordis owns the Channel lifetime. Rebinding handles the common case;
       // this effect closes the final timer and releases the DecisionEvents
       // dispatch-topology marker when the Channel's context unloads.

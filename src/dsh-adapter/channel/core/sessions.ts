@@ -20,6 +20,7 @@ import { occupancyOf, readSessionOwners } from '../../../sessionMounts.js'
 import { beginListingSnapshot, readListingSnapshot } from '../../../sessions/listSnapshot.js'
 import type { ChannelActionDelegates } from '../action-readiness.js'
 import type { ChannelOwner } from '../owner.js'
+import { createSessionListing } from '../session-listing.js'
 import type { ChannelLaunchOptions } from '../state.js'
 import type { SessionSummary, TuiRewindMode } from '../../../adapter/ports/channel-session.js'
 import type { ChannelState, ChatRow, ResumeResult } from '../types.js'
@@ -34,7 +35,7 @@ function filesSummary(preview: { readonly filesChanged: readonly string[]; reado
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
 
 export function createCoreSessionActions(deps: {
-  owner: Pick<ChannelOwner, 'current'>
+  owner: Pick<ChannelOwner, 'current' | 'own'>
   session(): AgentSession
   state: () => ChannelState
   notify: ChannelState['notify']
@@ -52,7 +53,6 @@ export function createCoreSessionActions(deps: {
   /** The last successful listing (the browser's first paint; may be stale). */
   let cached: readonly SessionSummary[] | undefined
   let cachedSource: string | SessionCatalog | undefined
-  let listingGeneration = 0
   const cachedSessions = (): readonly SessionSummary[] | undefined => {
     const catalog = deps.catalog
     if (catalog === undefined) return undefined
@@ -65,7 +65,7 @@ export function createCoreSessionActions(deps: {
     cachedSource = deps.catalog?.snapshotKey?.() ?? deps.catalog
   }
   const saveMutation = (rows: readonly SessionSummary[] | undefined): void => {
-    ++listingGeneration
+    listing.invalidate()
     if (rows === undefined) return
     remember(rows)
     const key = deps.catalog?.snapshotKey?.()
@@ -77,22 +77,20 @@ export function createCoreSessionActions(deps: {
     if (deps.owner.current()) notify(t(key, { err: errorText(error) }), { color: 'error', timeoutMs: 8000 })
   }
 
-  const delegates: Partial<ChannelActionDelegates> = {
-    cachedSessions,
-
-    /**
-     * The bound backend's sessions: the working directory's first (painted
-     * at once through `onPartial`), then every project the backend knows,
-     * which the browser's rail groups by directory. A failing all-projects
-     * read keeps the directory's rows.
-     */
-    async listSessions(_onEnriched, onPartial) {
+  const listing = createSessionListing({
+    owner: deps.owner,
+    capture: () => {
+      const session = deps.session()
+      const cwd = deps.state().cwd
+      const key = deps.catalog?.snapshotKey?.()
+      return () => deps.owner.current() && deps.session() === session && deps.state().cwd === cwd && deps.catalog?.snapshotKey?.() === key
+    },
+    // Read this workspace before the global catalog. Only the complete
+    // global result may replace the durable snapshot.
+    async read(current, _onEnriched, onPartial) {
       const catalog = deps.catalog
       if (catalog === undefined) { unavailable('resume'); return [] }
-      const generation = ++listingGeneration
-      const session = deps.session()
       const key = catalog.snapshotKey?.()
-      const current = (): boolean => deps.owner.current() && generation === listingGeneration && deps.session() === session && catalog.snapshotKey?.() === key
       const save = key === undefined ? undefined : beginListingSnapshot(key)
       const publish = (rows: readonly SessionSummary[]): void => { if (current()) onPartial?.(rows) }
       const local = await catalog.list({ cwd: deps.state().cwd }, publish)
@@ -119,6 +117,11 @@ export function createCoreSessionActions(deps: {
       }
       return merged
     },
+  })
+
+  const delegates: Partial<ChannelActionDelegates> = {
+    cachedSessions,
+    listSessions: listing.listSessions,
 
     async previewSession(sessionId) {
       const preview = deps.catalog?.preview

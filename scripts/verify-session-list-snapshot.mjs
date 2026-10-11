@@ -193,6 +193,16 @@ try {
   let firstWorkspace
   await actions.listSessions(undefined, batch => { firstWorkspace ??= batch })
   check('the real metadata action forwards its current workspace to the listing', firstWorkspace.map(row => row.id), ['workspace-new', 'workspace-old'])
+  let completeShared
+  let sharedReads = 0
+  const sharedHeaders = new Promise(resolve => { completeShared = resolve })
+  live.list = async () => { sharedReads++; return sharedHeaders }
+  const background = actions.listSessions()
+  await new Promise(resolve => setImmediate(resolve))
+  const foreground = actions.listSessions()
+  check('DSH background and browser reads share one enumeration', sharedReads, 1)
+  completeShared([...foreignHeaders, ...localHeaders])
+  check('DSH background and browser receive the same complete listing', await foreground, await background)
   live.list = liveList
   await actions.listSessions()
 

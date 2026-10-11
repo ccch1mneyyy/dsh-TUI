@@ -4,6 +4,7 @@
 import './lib/default-lang-zh.mjs'
 import assert from 'node:assert/strict'
 import type { AgentEvent } from '../src/agent/events.js'
+import type { SessionSummary } from '../src/adapter/ports/channel-session.js'
 import { codexSessionSummary, createCodexCatalog } from '../src/backends/codex/catalog.js'
 import { createCodexTranscriptHistory } from '../src/backends/codex/session/history.js'
 import { createCodexHub, type HubSettings } from '../src/backends/codex/rpc/hub.js'
@@ -78,11 +79,13 @@ const row = (id: string, extra: Record<string, unknown> = {}) => ({ id, cwd: SET
   }).then(rows => { done = true; return rows })
   const first = await fake.waitForRequest('thread/list')
   const regular = await fake.waitForRequest('thread/list', { after: fake.requests.indexOf(first) + 1 })
+  await tick()
   check('catalog cold load: bounded DB rows arrive while the rollout repair scan is pending', !done && first.params.useStateDbOnly === true && first.params.limit === 32 && JSON.stringify(batches) === JSON.stringify([['first', 'stale']]))
   fake.reply(regular.id, { data: [row('first', { name: 'Repaired title' })], nextCursor: 'slow-page' })
   const request = await fake.waitForRequest('thread/list', { after: fake.requests.indexOf(regular) + 1 })
   check('catalog cold load: progress keeps all announced DB rows while the next page is pending', !done && JSON.stringify(batches) === JSON.stringify([['first', 'stale'], ['first', 'stale']]) && regular.params.useStateDbOnly === undefined && regular.params.cursor === undefined)
   check('catalog cold load: repair updates metadata without withdrawing other announced rows', titles[0] === 'Old title' && titles[1] === 'Repaired title')
+  check('catalog cold load: repaired first page is bounded to 32 rows', regular.params.limit === 32)
   fake.reply(request.id, { data: [row('second')], nextCursor: null })
   const complete = await listing
   check('catalog cold load: every progress batch retains initial IDs through the last page', batches.every(batch => batch.includes('first') && batch.includes('stale')) && batches.at(-1)?.includes('second') === true)
@@ -105,11 +108,51 @@ for (const unavailable of ['empty', 'unsupported', 'timeout']) {
   const batches: string[][] = []
   const listing = catalog.list({ allProjects: true }, rows => { batches.push(rows.map(row => row.id)) })
   if (unavailable === 'timeout') {
-    await fake.waitForRequest('thread/list')
-    clock.advance(1000)
+    const first = await fake.waitForRequest('thread/list')
+    const regular = await fake.waitForRequest('thread/list', { after: fake.requests.indexOf(first) + 1 })
+    check('catalog cold load: a pending DB shortcut does not delay the regular request', regular.params.useStateDbOnly === undefined && regular.params.limit === 32)
   }
   const complete = await listing
   check(`catalog cold load: ${unavailable} DB falls back to repaired all-projects rows`, complete[0]?.id === 'repaired' && JSON.stringify(batches) === JSON.stringify([['repaired']]) && fake.requests.filter(request => request.method === 'thread/list').every(request => request.params.cwd === undefined) && released)
+  await hub.close()
+}
+{
+  const fake = createFakeAppServer()
+  fake.on('thread/list', () => NO_REPLY)
+  const hub = createCodexHub(SETTINGS, { transportFactory: fake.transportFactory })
+  await hub.ready
+  const batches: (readonly SessionSummary[])[] = []
+  let released = false
+  const catalog = createCodexCatalog({ acquire: async () => ({ hub, release: () => { released = true } }), cwd: () => SETTINGS.cwd })
+  const listing = catalog.list({}, rows => { batches.push(rows) })
+  const db = await fake.waitForRequest('thread/list')
+  const regular = await fake.waitForRequest('thread/list', { after: fake.requests.indexOf(db) + 1 })
+  fake.reply(regular.id, { data: [row('new', { name: 'Fresh title' })], nextCursor: 'tail' })
+  const tail = await fake.waitForRequest('thread/list', { after: fake.requests.indexOf(regular) + 1 })
+  check('catalog latency: repaired rows publish while the DB request is still pending', batches.at(-1)?.[0]?.title.text === 'Fresh title')
+  fake.reply(db.id, { data: [row('new', { name: 'Stale title' }), row('db-only')], nextCursor: null })
+  await tick()
+  check('catalog latency: a late DB page cannot roll back repaired metadata', batches.at(-1)?.find(row => row?.id === 'new')?.title.text === 'Fresh title')
+  check('catalog latency: late DB progress preserves repaired and DB-only IDs until completion', batches.at(-1)?.length === 2)
+  fake.reply(tail.id, { data: [row('tail')], nextCursor: null })
+  check('catalog latency: only repaired pages survive completion', (await listing).map(row => row.id).sort().join(',') === 'new,tail' && released)
+  await hub.close()
+}
+{
+  const fake = createFakeAppServer()
+  fake.on('thread/list', params => {
+    if (params.useStateDbOnly === true) return { data: [], nextCursor: null }
+    const offset = Number(params.cursor ?? 0)
+    const count = Math.min(100, Number(params.limit), 500 - offset)
+    return { data: Array.from({ length: count }, (_, index) => row('capped-' + (offset + index))), nextCursor: offset + count < 500 ? String(offset + count) : null }
+  })
+  const hub = createCodexHub(SETTINGS, { transportFactory: fake.transportFactory })
+  await hub.ready
+  const catalog = createCodexCatalog({ acquire: async () => ({ hub, release: () => {} }), cwd: () => SETTINGS.cwd })
+  const rows = await catalog.list({}, () => {})
+  const requests = fake.requests.filter(request => request.method === 'thread/list' && request.params.useStateDbOnly !== true)
+  check('catalog paging: server-capped pages still fill the 500-row budget', rows.length === 500 && rows.some(row => row.id === 'capped-499'))
+  check('catalog paging: only the first regular page is small', requests[0]?.params.limit === 32 && requests[1]?.params.limit === 200 && requests.at(-1)?.params.limit === 68)
   await hub.close()
 }
 {

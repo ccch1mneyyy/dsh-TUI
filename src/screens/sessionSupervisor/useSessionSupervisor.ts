@@ -33,9 +33,9 @@ import { RAIL_CHROME_ROWS, WORKSPACE_ROW_LINES, RAIL_MIN_TOTAL_COLUMNS, RAIL_WID
  *
  * A snapshot, not a source of truth: it only decides what the screen paints
  * before the fresh listing lands; the listing every open re-runs stays the
- * truth and corrects every stale title, order and deletion on arrival, so the
- * stale window is one listing's duration and a failed listing never writes
- * here — the screen keeps the previous list beside its error notice.
+ * truth: progress corrects titles and order, completion also removes deleted
+ * rows. A failed listing never writes here — the screen keeps the displayed
+ * rows beside its error notice.
  *
  * Keyed by the CHANNEL rather than by the process, because the rows belong to
  * one channel's persistence source and a process can host more than one: a
@@ -392,10 +392,11 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
             slot.rows = slot.rows?.map(row => row.id === enriched.id ? enriched : row)
             setSessions(current => current.map(row => row.id === enriched.id ? enriched : row))
           }, partial => {
-            // Keep a complete cached list over a partial cold scan. With no
-            // snapshot, show useful rows now rather than waiting for every log.
-            if (slot.requestGeneration !== generation || slot.rows !== undefined) return
-            setSessions(partial)
+            // Fresh workspace rows supersede cached metadata immediately;
+            // retain other cached workspaces until the full listing arrives.
+            if (slot.requestGeneration !== generation) return
+            setSessions(current => [...new Map([...current, ...partial].map(row => [row.id, row])).values()]
+              .sort((left, right) => right.updatedAt - left.updatedAt))
             setLoading(false)
           })
           // Recorded only after success: a failed listing keeps the previous
