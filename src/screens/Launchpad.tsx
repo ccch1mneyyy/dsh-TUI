@@ -322,14 +322,14 @@ function KernelCorner({
   const interactive = onActivate !== undefined
   const active = interactive && (hovered || focused)
   return (
-    // 外层整行右推（块贴右缘，与 TUI 版本那一行同一条右边界），内层左对齐：
-    // 行内两格前缀（▸ + 空格 / 两个空格）于是成了**标记列**——几个内核的名字
-    // 从同一列开始，箭头只多占最左边那两格。可点目标是内层这个真的画了字的
-    // 块（不是整行空白），与 CornerChip 的收缩形态一致。
+    // 外层整行右推（块贴右缘，与 TUI 版本那一行同一条右边界），内层各行**右对齐**：
+    // 每行右端都贴这条边界（名字/版号长短不同，参差全留给左边），`▸` 前缀随行
+    // 浮动、只标当前内核。可点目标是内层这个真的画了字的块（不是整行空白），
+    // 与 CornerChip 的收缩形态一致。
     <Box flexShrink={0} flexDirection="row" justifyContent="flex-end">
       <Box
         flexDirection="column"
-        alignItems="flex-start"
+        alignItems="flex-end"
         {...(interactive
           ? {
               onMouseEnter: () => { setHovered(true); onHover() },
@@ -773,14 +773,17 @@ export function Launchpad({
   const cornerLeft = [cwd, branch].filter(part => part !== undefined && part !== '').join(':')
   // 右下角铭牌带（第八版）：第一行 TUI 版本，其后一行一个内核。
   // 行文本 = `名字 · 副标题`——副标题（版本 / 置灰原因）与选择器同源
-  // （kernelSubtitle），读不到就只画名字，绝不编造。
+  // （kernelSubtitle），读不到就只画名字，绝不编造。**登录状态不进铭牌**：
+  // 铭牌只报「有哪些内核、各自什么版本」，未登录在选择器里看（切换时才需要，
+  // noteKey 在那边走副标题），右下角保持只有名字与版号的干净两列。
   const tuiPart = tuiVersion === undefined || tuiVersion === '' ? undefined : `dsh-tui v${tuiVersion}`
   // 名字用**短品牌名**（option.shortLabel，来自 manifest：DSH / Claude，与启动页
   // 「内核 · DSH」那个 chip 同源）：这一格与左下角的 `工作目录:分支` 共用底边，
   // 全名（DeepSeek Harness · … = 40 列）在窄终端里会把左边的目录铭牌挤掉。
   // 选择器那一屏有地方，仍用全名（label）。
   const kernelRows = (kernels ?? []).map(option => {
-    const subtitle = kernelSubtitle(option, key => t(key))
+    const { noteKey: _loginNote, ...rest } = option
+    const subtitle = kernelSubtitle(rest, key => t(key))
     const name = option.shortLabel
     return { id: option.id, current: option.current, label: subtitle === undefined ? name : name + ' \u00b7 ' + subtitle }
   })
