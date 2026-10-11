@@ -27,6 +27,7 @@
 import { loadSharp } from '../dsh-adapter/sharp.js'
 import { probeImageSize, sniffImageMediaType } from '../backends/shared/image-size.js'
 import type { ImageSizeProbe } from '../backends/shared/image-size.js'
+import { bmpToPng, looksLikeBitmap } from './bmp.js'
 
 export { probeImageSize, sniffImageMediaType }
 export type { ImageSizeProbe }
@@ -145,6 +146,12 @@ type SharpFactory = (input: Uint8Array, options?: { animated?: boolean }) => Sha
  * short-circuits the common case — bytes it proves to be inside the caps in an
  * accepted format are returned untouched, with no encoder loaded.
  *
+ * A bitmap paste is converted before any of that: BMP is a format the byte
+ * probe cannot measure and libvips cannot decode at all, so a WeChat or X11
+ * clipboard copy used to be refused as "unsupported image format" however
+ * valid it was. {@link bmpToPng} is dependency-free, so the conversion also
+ * covers deployments without sharp.
+ *
  * Aspect ratio is preserved by {@link downscaleTarget}. An animated source is
  * REFUSED whenever this gate would have to touch its bytes: re-encoding a
  * multi-page image here cannot promise frames, delays and loop survive, and
@@ -158,18 +165,43 @@ export async function adaptImageForAdmission(
   limits: ResizeLimits,
   acceptedMediaTypes: readonly string[],
 ): Promise<AdaptOutcome> {
-  const probe = probeImageSize(bytes)
+  let sourceBytes = bytes
+  let sourceType = sourceMediaType
+  let converted = false
+  if (looksLikeBitmap(sourceBytes)) {
+    const png = await bmpToPng(Buffer.from(sourceBytes))
+    if (png !== null) {
+      sourceBytes = png
+      sourceType = 'image/png'
+      converted = true
+    }
+  }
+  const probe = probeImageSize(sourceBytes)
   // Share the host-first decoder with previews; a bare import here can load
   // a second libvips and write native warnings straight into the live TUI.
   const sharp = await loadSharp() as SharpFactory | undefined
   if (sharp === undefined) {
+    // The bitmap conversion needed no libvips, and neither does an in-cap
+    // result: only a resize would, and there is none to do.
+    if (converted && probe !== null && withinDimensionLimits(probe, limits)
+      && acceptedMediaTypes.includes(sourceType)) {
+      return {
+        kind: 'adapted',
+        data: sourceBytes,
+        mediaType: sourceType,
+        width: probe.width,
+        height: probe.height,
+        resized: false,
+        flattened: false,
+      }
+    }
     return { kind: 'unavailable', reason: 'sharp-missing', detail: 'sharp is not installed in this environment' }
   }
   try {
     // One header read drives every decision below: dimensions for a format
     // the byte probe cannot measure (the #432 gap), alpha support, and the
     // frame count that decides whether this gate may touch the bytes at all.
-    const image = sharp(bytes)
+    const image = sharp(sourceBytes)
     const meta = await image.metadata()
     const measured = probe ?? (meta.width !== undefined && meta.height !== undefined
       ? { width: meta.width, height: meta.height }
@@ -179,7 +211,21 @@ export async function adaptImageForAdmission(
     }
     const hasAlpha = meta.hasAlpha === true
     const resized = !withinDimensionLimits(measured, limits)
-    if (!resized && acceptedMediaTypes.includes(sourceMediaType)) return { kind: 'unchanged' }
+    if (!resized && acceptedMediaTypes.includes(sourceType)) {
+      // 'unchanged' promises the store the source bytes; a converted bitmap is
+      // different bytes and has to travel as an adaptation.
+      return converted
+        ? {
+            kind: 'adapted',
+            data: sourceBytes,
+            mediaType: sourceType,
+            width: measured.width,
+            height: measured.height,
+            resized: false,
+            flattened: false,
+          }
+        : { kind: 'unchanged' }
+    }
     if ((meta.pages ?? 1) > 1) {
       return {
         kind: 'unavailable',
@@ -187,7 +233,7 @@ export async function adaptImageForAdmission(
         detail: `${meta.pages} frames`,
       }
     }
-    const mediaType = chooseTargetMediaType({ hasAlpha, sourceMediaType, acceptedMediaTypes })
+    const mediaType = chooseTargetMediaType({ hasAlpha, sourceMediaType: sourceType, acceptedMediaTypes })
     const target = downscaleTarget(measured, limits)
     const flattened = hasAlpha && mediaType === 'image/jpeg'
     let pipeline: SharpPipeline = image

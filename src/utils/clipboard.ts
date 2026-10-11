@@ -167,9 +167,17 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/gif': '.gif',
   'image/webp': '.webp',
   'image/bmp': '.bmp',
+  'image/x-bmp': '.bmp',
+  'image/x-ms-bmp': '.bmp',
+  'image/vnd.microsoft.bitmap': '.bmp',
   'image/tiff': '.tiff',
   'image/svg+xml': '.svg',
 }
+
+/** Every MIME spelling a bitmap copy arrives under — Windows, WSLg and X11
+ *  owners disagree on it, and all of them go to the dependency-free
+ *  converter, so the paste does not depend on which spelling won. */
+const BMP_MEDIA_TYPES = /^image\/(?:x-ms-|x-|vnd\.microsoft\.)?bmp$/iu
 
 // Per-process private directory for exported clipboard images, created
 // lazily on the first image paste. mkdtemp guarantees a fresh,
@@ -297,9 +305,10 @@ async function captureLinuxImage(
       : ['-selection', 'clipboard', '-o', '-t', mime]
   const result = await spawnForBuffer(tool, args)
   if (result.code !== 0 || result.stdout.length === 0) return null
-  // A Windows bitmap copy (WSLg) arrives as image/bmp, which the attachment
-  // profile rejects: convert to PNG, keeping the BMP bytes when it cannot be.
-  const png = /^image\/(?:x-ms-)?bmp$/iu.test(mime) ? await bmpToPng(result.stdout) : null
+  // A bitmap copy (a Windows/WSLg owner, or an X11 one) arrives under one of
+  // the bitmap spellings, none of which the attachment profile accepts:
+  // convert to PNG, keeping the bitmap bytes when the conversion cannot.
+  const png = BMP_MEDIA_TYPES.test(mime) ? await bmpToPng(result.stdout) : null
   return writeImageExport(png === null ? mime : 'image/png', png ?? result.stdout)
 }
 

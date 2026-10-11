@@ -1,8 +1,9 @@
 import type { ServiceLookup } from './channel-host.js'
 import { randomUUID } from 'node:crypto'
 import { rememberImagePath, transcriptImageFromAttachment } from '../transcript-images.js'
-import { probeImageSize, adaptImageForAdmission, withinDimensionLimits } from '../../utils/imageResize.js'
+import { probeImageSize, sniffImageMediaType, adaptImageForAdmission, withinDimensionLimits } from '../../utils/imageResize.js'
 import type { AdaptOutcome, ImageSizeProbe, ResizeLimits } from '../../utils/imageResize.js'
+import { logForDebugging } from '../../utils/debug.js'
 import { mentionAttachments } from './mentions.js'
 import type { LocalImageStore } from './core/local-images.js'
 import type { ChannelOwner } from './owner.js'
@@ -120,7 +121,7 @@ function admissionFailure(
     case 'animated-unsupported':
       return `resizing or converting this animated image cannot keep its frames (${outcome.detail})`
     default:
-      return `image could not be decoded to resize or convert it (${outcome.detail})`
+      return `the pasted image data could not be decoded (${outcome.detail})`
   }
 }
 
@@ -248,6 +249,15 @@ export function createComposerImages(
     const pixelCap = attachments.imageLimits.maxImagePixels
     let mediaType = input.mediaType
     let data = input.data
+    // The content wins over the declared label — the same rule the local
+    // image store applies (channel/core/local-images.ts): a paste declares
+    // its media type from the filename, and a renamed or mis-exported file
+    // (a wechat download, a re-saved screenshot) would otherwise be judged
+    // and stored under a type its bytes contradict. The sniff reads magic
+    // bytes only; content it cannot identify keeps the declared label and
+    // takes the decode-or-refuse path below.
+    const sniffed = sniffImageMediaType(data)
+    if (sniffed !== undefined && sniffed !== mediaType) mediaType = sniffed
     let adapted: Extract<AdaptOutcome, { kind: 'adapted' }> | undefined
     if (typeof dimensionCap === 'number' && typeof pixelCap === 'number'
       && Number.isFinite(dimensionCap) && Number.isFinite(pixelCap)) {
@@ -281,7 +291,21 @@ export function createComposerImages(
           // (measured oversize, unaccepted format, decode failure, animation
           // that cannot survive) is a refusal we can state now.
           const degraded = outcome.reason === 'sharp-missing' && sourceAccepted && !knownOversize
-          if (!degraded) throw new Error(admissionFailure(outcome, { probe, mediaType, limits: dimensionLimits }))
+          if (!degraded) {
+            // The refused bytes are the only forensic handle on a "could not
+            // be decoded" paste — the temp export is unlinked right after —
+            // so an opted-in run records what the gate actually saw.
+            logForDebugging('image ingress refused', {
+              reason: outcome.reason,
+              detail: outcome.detail,
+              declared: input.mediaType,
+              sniffed,
+              bytes: data.byteLength,
+              prefix: Buffer.from(data.subarray(0, 16)).toString('hex'),
+              ...(input.name === undefined ? {} : { name: input.name }),
+            })
+            throw new Error(admissionFailure(outcome, { probe, mediaType, limits: dimensionLimits }))
+          }
         }
       }
     }
