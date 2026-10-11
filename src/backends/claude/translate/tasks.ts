@@ -1,6 +1,6 @@
 /** Track Task* result state and TodoWrite snapshots for the todo panel. */
 import type { AgentEvent, AgentEventOf } from '../../../agent/events.js'
-import type { TodoPanelItem } from '../../../adapter/ports/channel-view.js'
+import type { TodoPanelItem } from '../../../agent/index.js'
 import { t } from '../../../i18n.js'
 import { arr, rec, str } from '../narrow.js'
 import { claudeToolRole } from '../tools.js'

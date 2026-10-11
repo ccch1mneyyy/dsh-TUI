@@ -10,6 +10,7 @@
  * @module @deepseek-harness-tui/dsh-tui/migrate/parse/jsonl
  */
 
-// The reader is shared with the Claude backend's transcript reader
-// (src/utils/jsonl.ts); re-exported here for the migration sources.
-export { isRecord, parseJsonl, type JsonlRows, type JsonRecord } from '../../../utils/jsonl.js'
+// The reader is shared with the Claude backend's transcript reader and lives
+// in the backend-neutral seam (`src/backends/shared/jsonl.ts`, D15) so a
+// backend never reads `src/utils/`; re-exported here for the migration sources.
+export { isRecord, parseJsonl, type JsonlRows, type JsonRecord } from '../../../backends/shared/jsonl.js'

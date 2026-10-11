@@ -152,7 +152,14 @@ const init = {
   check('slug: lowercases and collapses non-alphanumerics', channelSlug('Open.BigModel~CN') === 'open-bigmodel-cn', channelSlug('Open.BigModel~CN'))
   check('slug: a name without ASCII alphanumerics gets a stable hashed id', /^channel-[0-9a-f]{8}$/u.test(channelSlug('智谱')) && channelSlug('智谱') === channelSlug(' 智谱 '), channelSlug('智谱'))
   check('slug: two such names get different ids (and token refs)', channelSlug('智谱') !== channelSlug('硅基流动') && channelTokenRef(channelSlug('智谱')) !== channelTokenRef(channelSlug('硅基流动')), [channelSlug('智谱'), channelSlug('硅基流动')])
-  check('slug: the wizard and the backend share one rule', channelSlug === channelProfileSlug)
+  // The wizard's copy (src/channel/channel-slug.ts) and the backends' copy
+  // (src/backends/shared/channel-slug.ts) are separate functions on purpose:
+  // a backend must not import src/channel/ (B-3). The id is a persistent join
+  // key — the profile file's row and the token ref derived from it — so the
+  // two copies are pinned by behaviour over a name vector, not by identity.
+  check('slug: the wizard and the backend share one rule', [
+    'Open.BigModel~CN', 'open-bigmodel-cn', '智谱', ' 智谱 ', '硅基流动', 'a/b.c', '--', '', 'A B',
+  ].every(name => channelSlug(name) === channelProfileSlug(name)), channelSlug('智谱'))
   const env = {
     ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',
     ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: 'GLM',

@@ -68,7 +68,9 @@ if (process.env.DSH_VERIFY_IMAGE_SPLIT_SHARP === '1') {
     write(join(hostSession, 'package.json'), '{"name":"@deepseek-ai/dsh-session"}')
     mkdirSync(join(profile, 'node_modules/@deepseek-ai'), { recursive: true })
     symlinkSync(hostSession, join(profile, 'node_modules/@deepseek-ai/dsh-session'), 'junction')
-    for (const file of ['dsh-adapter/sharp.ts', 'utils/imageResize.ts']) {
+    // `utils/imageResize.ts` re-exports the pure probe from the neutral seam
+    // (`backends/shared/image-size.ts`), so the profile tree carries both.
+    for (const file of ['dsh-adapter/sharp.ts', 'utils/imageResize.ts', 'backends/shared/image-size.ts']) {
       const target = join(profile, 'src', file)
       mkdirSync(dirname(target), { recursive: true })
       copyFileSync(new URL(`../src/${file}`, import.meta.url), target)

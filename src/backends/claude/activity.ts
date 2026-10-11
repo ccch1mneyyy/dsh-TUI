@@ -27,7 +27,7 @@
  *
  * @module dsh-tui/backends/claude/activity
  */
-import type { WorkingActivityView } from '../../adapter/ports/channel-view.js'
+import type { WorkingActivityView } from '../../agent/index.js'
 import { getLang, t } from '../../i18n.js'
 import type { Rec } from './narrow.js'
 import type { ClaudeActivityState } from './translate.js'

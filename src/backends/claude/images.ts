@@ -16,11 +16,11 @@
  * until asked: its size is probed from a short decoded prefix on first
  * access, its bytes decoded on `read()` — no pixels in the projection.
  */
-import type { TranscriptImage } from '../../adapter/ports/channel-view.js'
+import type { TranscriptImage } from '../../agent/index.js'
 import type { ImageLimitsView } from '../../agent/capabilities.js'
 import type { ImageRef } from '../../agent/events.js'
 import { t } from '../../i18n.js'
-import { probeImageSize } from '../../utils/imageResize.js'
+import { probeImageSize } from '../shared/image-size.js'
 import { rec } from './narrow.js'
 
 /** What a Claude message may carry (see the module comment). */

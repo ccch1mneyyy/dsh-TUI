@@ -14,7 +14,7 @@ import { statSync } from 'node:fs'
 import type { SessionCapabilities } from '../../agent/capabilities.js'
 import type { AgentEvent } from '../../agent/events.js'
 import { t } from '../../i18n.js'
-import type { JsonRecord } from '../../utils/jsonl.js'
+import type { JsonRecord } from '../shared/jsonl.js'
 import { replayClaudeTranscript } from './replay.js'
 import { cursorBefore, headBoundary, locateClaudeTranscript, olderSlice, readTranscriptEntries, type OlderCursor } from './transcript-file.js'
 

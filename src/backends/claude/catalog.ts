@@ -21,7 +21,7 @@
 import { basename } from 'node:path'
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk'
 import type { SessionCatalog, SessionListScope } from '../../agent/backend.js'
-import type { PreviewEntry, SessionSummary } from '../../adapter/ports/channel-session.js'
+import type { PreviewEntry, SessionSummary } from '../../agent/index.js'
 import { CLAUDE_BACKEND_ID } from './contract.js'
 import { previewEntries } from './replay.js'
 import type { ClaudeSessionStoreSdk } from './sdk.js'

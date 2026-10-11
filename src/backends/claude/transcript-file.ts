@@ -11,7 +11,7 @@
  *
  * Reading: the whole file, at most {@link MAX_TRANSCRIPT_BYTES} (larger is
  * refused, not truncated: a partial tree could misplace history), parsed
- * line by line — a malformed line costs that line (`src/utils/jsonl.ts`).
+ * line by line — a malformed line costs that line (`src/backends/shared/jsonl.ts`).
  *
  * The chain: every entry names its `parentUuid`. A compaction writes a
  * `system/compact_boundary` entry with `parentUuid: null` (the resumed chain
@@ -28,7 +28,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { t } from '../../i18n.js'
-import { parseJsonl, type JsonRecord } from '../../utils/jsonl.js'
+import { parseJsonl, type JsonRecord } from '../shared/jsonl.js'
 import { str } from './narrow.js'
 
 /** The largest transcript file read (larger is refused). */

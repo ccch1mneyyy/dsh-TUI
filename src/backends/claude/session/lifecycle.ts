@@ -35,7 +35,7 @@
  */
 import type { AccountInfo, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountView } from '../../../agent/capabilities.js'
-import type { WorkingActivityView } from '../../../adapter/ports/channel-view.js'
+import type { WorkingActivityView } from '../../../agent/index.js'
 import type { AgentEvent, AgentEventMeta } from '../../../agent/events.js'
 import type { AgentSessionRef } from '../../../agent/refs.js'
 import type { AgentInput, AgentSession, AgentSessionStatus, CancelCause, SubmitPlacement } from '../../../agent/session.js'
