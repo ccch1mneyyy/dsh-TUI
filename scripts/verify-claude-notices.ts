@@ -31,8 +31,12 @@ import type { AgentEvent } from '../src/agent/events.js'
 import { createClaudeTranslator } from '../src/backends/claude/translate.js'
 import { createChannelProjection } from '../src/channel/projection.js'
 import { createInitialChannelView } from '../src/dsh-adapter/channel/state.js'
-import { i18nDict, setLang, t } from '../src/i18n.js'
+import { getLang, setLang, t } from '../src/i18n.js'
+import { claudeText, claudeTexts, installClaudeLocale } from '../src/backends/claude/text.js'
 
+// No session here (the translator is driven directly), so the backend's copy
+// takes its language straight from the host, exactly as `open()` wires it.
+installClaudeLocale(getLang)
 setLang('en')
 let passed = 0
 const check = (label: string, ok: boolean, detail?: unknown): void => {
@@ -57,21 +61,21 @@ const only = (events: readonly AgentEvent[]): Notice | undefined => notices(even
 
 {
   const retry = only(run('api_retry'))
-  check('api_retry → a passing toast keyed api-retry, with the attempt and the HTTP status', retry?.level === 'notice' && retry.key === 'api-retry' && retry.text === t('claude-api-retry', { attempt: '2', max: '10', detail: t('claude-api-retry-status', { status: 529 }) }), retry)
+  check('api_retry → a passing toast keyed api-retry, with the attempt and the HTTP status', retry?.level === 'notice' && retry.key === 'api-retry' && retry.text === claudeText('claude-api-retry', { attempt: '2', max: '10', detail: claudeText('claude-api-retry-status', { status: 529 }) }), retry)
   const bare = only(run('api_retry_no_status'))
-  check('api_retry without a response status → the same key, no status', bare?.key === 'api-retry' && bare.text === t('claude-api-retry', { attempt: '3', max: '10', detail: '' }), bare)
+  check('api_retry without a response status → the same key, no status', bare?.key === 'api-retry' && bare.text === claudeText('claude-api-retry', { attempt: '3', max: '10', detail: '' }), bare)
 }
 {
   const events = run('model_refusal_fallback')
   const changed = events.find(event => event.type === 'model.changed')
   const notice = only(events)
   check('model_refusal_fallback (session) → the model switches (source fallback)', changed?.type === 'model.changed' && changed.model === 'claude-opus-4-8' && changed.source === 'fallback')
-  check('… and a warning keyed model-fallback naming both models and the category', notice?.level === 'warning' && notice.key === 'model-fallback' && notice.text === t('claude-model-fallback', { model: 'claude-opus-4-8', original: 'claude-fable-5-1', category: t('claude-refusal-category-suffix', { category: 'cyber' }) }), notice)
+  check('… and a warning keyed model-fallback naming both models and the category', notice?.level === 'warning' && notice.key === 'model-fallback' && notice.text === claudeText('claude-model-fallback', { model: 'claude-opus-4-8', original: 'claude-fable-5-1', category: claudeText('claude-refusal-category-suffix', { category: 'cyber' }) }), notice)
   check('… later frames of that model do not repeat the change', !translator.translate({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm-after', model: 'claude-opus-4-8', usage: {} } } }).some(event => event.type === 'model.changed'))
   const local = run('model_refusal_fallback_local')
-  check('model_refusal_fallback (local scope) → a row only; the session model is unchanged', !local.some(event => event.type === 'model.changed') && only(local)?.level === 'info' && only(local)?.text === t('claude-model-fallback-local', { model: 'claude-opus-4-8', original: 'claude-fable-5-1' }))
+  check('model_refusal_fallback (local scope) → a row only; the session model is unchanged', !local.some(event => event.type === 'model.changed') && only(local)?.level === 'info' && only(local)?.text === claudeText('claude-model-fallback-local', { model: 'claude-opus-4-8', original: 'claude-fable-5-1' }))
   const refused = only(run('model_refusal_no_fallback'))
-  check('model_refusal_no_fallback → a warning keyed model-refusal', refused?.level === 'warning' && refused.key === 'model-refusal' && refused.text === t('claude-model-refused', { model: 'claude-fable-5-1', category: t('claude-refusal-category-suffix', { category: 'bio' }) }), refused)
+  check('model_refusal_no_fallback → a warning keyed model-refusal', refused?.level === 'warning' && refused.key === 'model-refusal' && refused.text === claudeText('claude-model-refused', { model: 'claude-fable-5-1', category: claudeText('claude-refusal-category-suffix', { category: 'bio' }) }), refused)
 }
 {
   const level = (kind: string): string | undefined => only(run(kind))?.level
@@ -93,22 +97,22 @@ const only = (events: readonly AgentEvent[]): Notice | undefined => notices(even
   check('rate_limit allowed → the usage windows only, no notice', notices(allowed).length === 0 && allowed.some(event => event.type === 'rate-limit'))
   const warning = run('rate_limit_allowed_warning')
   const warned = only(warning)
-  check('rate_limit allowed_warning → one warning keyed rate-limit (window, percent, when it resets)', warned?.level === 'warning' && warned.key === 'rate-limit' && warned.text === t('claude-rate-limit-warning', { window: t('status-rate-limit-five-hour'), percent: 91, resets: t('claude-rate-limit-resets', { time: t('claude-rate-limit-in', { duration: '2h 5m' }) }) }), warned)
+  check('rate_limit allowed_warning → one warning keyed rate-limit (window, percent, when it resets)', warned?.level === 'warning' && warned.key === 'rate-limit' && warned.text === claudeText('claude-rate-limit-warning', { window: t('status-rate-limit-five-hour'), percent: 91, resets: claudeText('claude-rate-limit-resets', { time: claudeText('claude-rate-limit-in', { duration: '2h 5m' }) }) }), warned)
   const again = run('rate_limit_allowed_warning_again')
   check('… the same state again stays quiet (the windows still update)', notices(again).length === 0 && again.some(event => event.type === 'rate-limit'))
   const rejected = only(run('rate_limit_rejected'))
-  check('rate_limit rejected → an error keyed rate-limit', rejected?.level === 'error' && rejected.key === 'rate-limit' && rejected.text === t('claude-rate-limit-rejected', { window: t('status-rate-limit-seven-day'), resets: t('claude-rate-limit-resets', { time: t('claude-rate-limit-in', { duration: '3d 1h' }) }) }), rejected)
+  check('rate_limit rejected → an error keyed rate-limit', rejected?.level === 'error' && rejected.key === 'rate-limit' && rejected.text === claudeText('claude-rate-limit-rejected', { window: t('status-rate-limit-seven-day'), resets: claudeText('claude-rate-limit-resets', { time: claudeText('claude-rate-limit-in', { duration: '3d 1h' }) }) }), rejected)
 }
 {
   const denied = only(run('permission_denied'))
-  check('permission_denied → a warning on its call, keyed by it', denied?.level === 'warning' && denied.callId === 'toolu_fixture_denied' && denied.key === 'permission-denied:toolu_fixture_denied' && denied.text === t('claude-permission-denied-reason', { tool: 'Bash', reason: 'Bash(rm:*) is denied by a rule' }))
+  check('permission_denied → a warning on its call, keyed by it', denied?.level === 'warning' && denied.callId === 'toolu_fixture_denied' && denied.key === 'permission-denied:toolu_fixture_denied' && denied.text === claudeText('claude-permission-denied-reason', { tool: 'Bash', reason: 'Bash(rm:*) is denied by a rule' }))
   const auth = only(run('auth_status_error'))
-  check('auth_status with an error → an error keyed auth-status', auth?.level === 'error' && auth.key === 'auth-status' && auth.text === t('claude-auth-status-error', { error: 'OAuth refresh failed (401)' }))
+  check('auth_status with an error → an error keyed auth-status', auth?.level === 'error' && auth.key === 'auth-status' && auth.text === claudeText('claude-auth-status-error', { error: 'OAuth refresh failed (401)' }))
   check('auth_status progress → nothing', run('auth_status_progress').length === 0)
   const memory = only(run('memory_recall'))
-  check('memory_recall → a row with the count', memory?.level === 'info' && memory.key === 'memory-recall' && memory.text === t('claude-memory-recalled', { count: 2 }))
+  check('memory_recall → a row with the count', memory?.level === 'info' && memory.key === 'memory-recall' && memory.text === claudeText('claude-memory-recalled', { count: 2 }))
   const synthesized = only(run('memory_recall_synthesize'))
-  check('memory_recall (synthesize) → a row saying it was distilled', synthesized?.level === 'info' && synthesized.text === t('claude-memory-synthesized'))
+  check('memory_recall (synthesize) → a row saying it was distilled', synthesized?.level === 'info' && synthesized.text === claudeText('claude-memory-synthesized'))
   const reset = run('conversation_reset')
   const resetEvent = reset.at(-1)
   check('conversation_reset → session.reset with its trigger (whatever was open closes first, no notice)',
@@ -158,7 +162,7 @@ const only = (events: readonly AgentEvent[]): Notice | undefined => notices(even
 // ── every notice key used here exists in both languages ─────────────────
 {
   const keys = ['claude-api-retry', 'claude-api-retry-status', 'claude-model-fallback', 'claude-model-fallback-local', 'claude-model-refused', 'claude-refusal-category-suffix', 'claude-rate-limit-warning', 'claude-rate-limit-rejected', 'claude-rate-limit-resets', 'claude-rate-limit-in', 'claude-permission-denied-reason', 'claude-auth-status-error', 'claude-memory-recalled', 'claude-memory-synthesized'] as const
-  const dict = i18nDict as Record<string, { zh?: unknown; en?: unknown }>
+  const dict = claudeTexts as Record<string, { zh?: unknown; en?: unknown }>
   check('zh and en texts exist for every notice key', keys.every(key => dict[key]?.zh !== undefined && dict[key]?.en !== undefined), keys.filter(key => dict[key]?.zh === undefined || dict[key]?.en === undefined))
 }
 

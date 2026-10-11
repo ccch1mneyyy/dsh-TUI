@@ -8,6 +8,7 @@
  * Import from TypeScript scripts run with `node --import tsx/esm`.
  */
 import { readFileSync, statSync } from 'node:fs'
+import { getLang } from '../../src/i18n.js'
 import type { ClaudeClock, ClaudeSessionDeps } from '../../src/backends/claude/session.js'
 
 export type FakeQueryOptions = Record<string, unknown> & { readonly canUseTool?: unknown; readonly env?: Record<string, string> }
@@ -142,7 +143,12 @@ export function claudeDeps(sdk: ClaudeSessionDeps['sdk'], extra: Partial<ClaudeS
     start: { mode: 'default', source: 'default' },
     executable: { path: '/fixture/bin/claude', source: 'env' },
     env: { PATH: '/usr/bin' },
-    host: { debug: () => undefined },
+    // The fixture host answers like the real one (B-3): the language the
+    // process pinned, so the backend's own copy and the host dictionary the
+    // assertions compare against agree. No `dataDir`: a fixture that wants the
+    // file-backed stores passes one (the backend keeps prefs in memory
+    // otherwise, which is what these runs want anyway).
+    host: { debug: () => undefined, locale: getLang },
     clock: manualClock().clock,
     ...extra,
   }

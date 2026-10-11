@@ -154,7 +154,7 @@ Record<keyof Options, …>`，SDK 增删选项时 `tsc` 会报错）。要点：
 - `AskUserQuestion` 走问卷面板；`ExitPlanMode` 走计划评审面板。
 - SDK 的 abort signal、会话 dispose 与切换都会撤回挂起的请求，不会让面板卡住。
 - MCP elicitation：表单每个字段一题并按字段约束校验；URL 模式给出链接提示。表单与 URL
-  问题的规则在后端中立的 `src/channel/elicitation.ts`，后端只负责挂起与应答。
+  问题的规则在后端中立的 `src/backends/shared/elicitation.ts`，后端只负责挂起与应答（文案由各后端自带）。
 - 拒答回退：只声明 `refusal_fallback_prompt` 一种对话框（重试回退模型或取消）。
 
 ### 子代理与后台任务
@@ -208,6 +208,16 @@ SDK `settings` 选项把路由钉回 `https://api.anthropic.com`。CLI 拒绝令
   elicitation 的 URL 自动打开浏览器、SDK 预热（`prewarm()`）。
 - 托管（policy）设置在会话运行中改了路由时，要到下一次启动 CLI 才重新判定。
 - 绕过 dsh-auth 文件锁写凭据的进程仍可能与令牌刷新交错。
+
+### 文案与公开面（B-3 起）
+
+用户可见的每一条字符串都在 `text.ts`（`claude-*` 与它自带的 `elicit-*`，双语，
+`claudeText()` 按 `host.locale()` 实时取语言）：后端不再 import 宿主字典，也就不再有
+"这个键还属于 claude 家族"的假从属关系。它只从 `src/agent/`、`src/backends/shared/`、
+自己的目录、node 内建与 manifest 声明的厂商包取值——`verify-adapter-boundary.ts` 把这条
+钉成"后端是孤岛"，`claude` 侧已清零。自己的 prefs / channels / 模型名缓存落在
+`host.dataDir`（`~/.dsh-tui/backends/claude`），跑着的 TUI 版本由 `host.appVersion` 提供，
+`launch.sessionPrefs(host)` 也从同一个 host 取目录。
 
 ## Codex 后端（`src/backends/codex/`）
 
@@ -264,7 +274,12 @@ bundle 的真实准入接线（清单 → registry → picker）留到 C 段（W
    `inTree`、`alwaysAvailable`、`nativeKey`、`vendorPackages`、`backendExport` 与
    `label.kind === 'key'` 是私有项，`backendContributionOf()` 是唯一投影方向，门禁断言
    投影不泄漏私有键且结果过 validator。
-2. 厂商包只在这里 import。构建期索引（`scripts/gen-backend-index.mjs`，挂在 `compile` 上）
+2. **后端是孤岛**：只从自己目录、`src/agent/`（你实现的领域，含它为公开面再导出的视图类型）与
+   `src/backends/shared/`（中立接缝：原子写、JSONL、图片探测、elicit 表单机、`LocalizedText`）
+   取值，外加 node 内建与自己在 manifest 里声明的厂商包。宿主内部一律不可读——宿主字典
+   （`src/i18n.ts`）、`src/utils/`、`src/channel/`、`src/dsh-adapter/`——`import type` 也算；
+   `verify-adapter-boundary.ts` 钉住这条（存量违例在 allowlist 的 `backendEntries`）。
+   厂商包只在这里 import。构建期索引（`scripts/gen-backend-index.mjs`，挂在 `compile` 上）
    会把它纳入注册表，门禁的厂商包与 `native.<id>` 规则也由它派生：**不要手改**
    `kernelPrefs.ts` 与 `backends.ts`（目录与身份回归都按 ID 取项，新增目录不必同步它们）；
    声明了非空 `vendorPackages` 或 `nativeKey` 时，`verify-adapter-boundary.ts` 的
@@ -290,14 +305,25 @@ bundle 的真实准入接线（清单 → registry → picker）留到 C 段（W
 7. 子代理转录页按 [dsh-child-transcript.md](dsh-child-transcript.md) 的清单实现
    `history`。
 8. 宿主服务按 **feature-detect** 取，不是 grants：后端真正需要的东西（起子进程、读自己的
-   prefs、联网）不在宿主权限词表里，`BackendHost` 上的 `tokenStore`、`oauthCredential`、
-   `stderr` 都是可选成员，将来的 `dataDir` 同理——缺席即自己降级，不要假设它一定在。
+   prefs、联网）不在宿主权限词表里。`BackendHost` 上与存储和文案有关的三项是：
+   `dataDir`（**可选**，`~/.dsh-tui/backends/<id>`，你自己的 prefs 与缓存写这里；缺席即
+   这次进程不落盘，**不要**自己拼一条宿主数据目录下的路径）、`locale()`（当前界面语言，
+   实时读：`/lang` 切换对下一条字符串生效）、`appVersion?`（跑着的 TUI 版本）；`tokenStore`、
+   `oauthCredential`、`stderr` 同样是可选成员——缺席即自己降级，不要假设它一定在。
+   `launch.sessionPrefs(host)` 拿到的也是这个 host（启动器在会话打开之前就要问上次会话）。
    收口分两层：会话级资源归 `session.dispose()`，`unloadExport` 只用于模块级/进程级资源池，
    且宿主只对真的加载过的条目记账并调用。
-9. 恢复只走自己的 `lastSession()`：启动恢复只针对所选后端，恢复目标绑定后端身份，裸
-   `--resume` 只查该后端自己的 `lastSession`；后端不可用、没有上次会话、指定会话不存在
-   一律明确报错并**非零退出**，不回落、不恢复别的后端的上次会话、不自动新建。
-10. 回归用假 SDK/假进程驱动（参考 `scripts/lib/claude-fake-sdk.ts`），翻译器用脱敏
+9. **文案是后端自己的**（插件读不到宿主字典，也不该借宿主 i18n 键冒充首方文案）：把字符串
+   放在自己目录里，按 `host.locale()` 选 `zh`/`en`。两条规则（`{{name}}` 占位、`count`
+   复数）在 `src/backends/shared/localized-text.ts`，字典在你这边；`scripts/verify-i18n.ts`
+   会把你登记的字典按宿主字典同样的规则查（双语齐全、占位符一致、单花括号打回）。
+   `elicit` 表单机（`src/backends/shared/elicitation.ts`）是后端中立的，它不含任何文案：
+   调用时交一份 `ElicitationText` 快照（**一个流程一份**——选项标签按面板当时显示的字符串
+   匹配答案）。
+10. 恢复只走自己的 `lastSession()`：启动恢复只针对所选后端，恢复目标绑定后端身份，裸
+    `--resume` 只查该后端自己的 `lastSession`；后端不可用、没有上次会话、指定会话不存在
+    一律明确报错并**非零退出**，不回落、不恢复别的后端的上次会话、不自动新建。
+11. 回归用假 SDK/假进程驱动（参考 `scripts/lib/claude-fake-sdk.ts`），翻译器用脱敏
     fixture 测；登记进 `scripts/run-ci-group.mjs`。
 
 ## 验证

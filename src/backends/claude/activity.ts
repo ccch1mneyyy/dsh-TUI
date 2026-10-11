@@ -27,8 +27,8 @@
  *
  * @module dsh-tui/backends/claude/activity
  */
-import type { WorkingActivityView } from '../../adapter/ports/channel-view.js'
-import { getLang, t } from '../../i18n.js'
+import type { WorkingActivityView } from '../../agent/index.js'
+import { claudeLocale, claudeText } from './text.js'
 import type { Rec } from './narrow.js'
 import type { ClaudeActivityState } from './translate.js'
 
@@ -89,7 +89,7 @@ export function createClaudeActivityPublisher(options: { now?: () => number } = 
     phaseStartedAt: 0,
     turnStartedAt: 0,
     updatedAt: 0,
-    lang: getLang(),
+    lang: claudeLocale(),
   })
 
   return {
@@ -99,7 +99,7 @@ export function createClaudeActivityPublisher(options: { now?: () => number } = 
         const openTool = state.openTool
         const detail = openTool === undefined ? undefined : activityDetail(openTool.input)
         if (waiting) {
-          next = view('waiting', t('claude-activity-waiting'), {
+          next = view('waiting', claudeText('claude-activity-waiting'), {
             ...(openTool === undefined ? {} : { label: openTool.name, ...(detail === undefined ? {} : { detail }) }),
             toolCount: state.toolCount,
           })
@@ -111,7 +111,7 @@ export function createClaudeActivityPublisher(options: { now?: () => number } = 
           })
         } else {
           const phrase = state.narration ?? state.activeForm
-          next = view('thinking', phrase ?? t('claude-activity-thinking'), {
+          next = view('thinking', phrase ?? claudeText('claude-activity-thinking'), {
             ...(phrase === undefined ? {} : { phrase }),
             toolCount: state.toolCount,
           })
@@ -119,7 +119,7 @@ export function createClaudeActivityPublisher(options: { now?: () => number } = 
       } else if (current !== undefined) {
         // The turn closed: park on the done card (kept until the next turn,
         // like the plugin — the status line shows it while the session idles).
-        next = view('done', state.toolCount > 0 ? t('claude-activity-done-tools', { count: state.toolCount }) : t('claude-activity-done'), { toolCount: state.toolCount })
+        next = view('done', state.toolCount > 0 ? claudeText('claude-activity-done-tools', { count: state.toolCount }) : claudeText('claude-activity-done'), { toolCount: state.toolCount })
       }
       if (next === undefined) return undefined
       if (current !== undefined && current.phase === next.phase && current.line === next.line) {

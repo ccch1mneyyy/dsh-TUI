@@ -17,7 +17,7 @@
  * is ignored (debug-logged), never fatal.
  */
 import type { AgentEvent, AgentEventOf, ImageRef, PendingItem } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { claudeText } from '../text.js'
 import { arr, num, rec, str, type Rec } from '../narrow.js'
 import { BASH_OUTPUT, narrationOf } from './content.js'
 import { createAttemptTranslator, MAX_SETTLED_ATTEMPTS } from './attempts.js'
@@ -175,7 +175,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         inputs.delete(uuid)
         startedInputs.delete(uuid)
         if (pending.delete(uuid)) out.push({ type: 'pending.changed', items: [...pending.values()], discarded: [uuid] })
-        if (state === 'refused') out.push({ type: 'notice', level: 'warning', text: t('claude-input-refused') })
+        if (state === 'refused') out.push({ type: 'notice', level: 'warning', text: claudeText('claude-input-refused') })
         break
       default:
         // `queued` (the channel already shows the preview) / `completed`
@@ -321,7 +321,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         // Progress output is the CLI's own sign-in flow (none in headless
         // use); only an error is the user's business.
         const error = str(message.error)
-        return error === undefined || error.trim() === '' ? [] : [{ type: 'notice', level: 'error', key: 'auth-status', text: t('claude-auth-status-error', { error }) }]
+        return error === undefined || error.trim() === '' ? [] : [{ type: 'notice', level: 'error', key: 'auth-status', text: claudeText('claude-auth-status-error', { error }) }]
       }
       case 'conversation_reset': {
         // Close whatever the old conversation left open first (an aborted

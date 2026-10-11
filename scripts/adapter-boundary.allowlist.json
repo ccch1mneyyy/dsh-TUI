@@ -3,7 +3,11 @@
     "UI value imports from src/dsh-adapter/ that predate the boundary rules (ADAPTER.md 「边界规则」).",
     "verify-adapter-boundary.ts reports these as one warning; a new pair fails the gate, and a pair that no longer matches must be deleted here.",
     "Planned cleanup: Chat.tsx sessionCwdMatches and the dialog/status/approval fallback stores first; the rest move to neutral modules as they are touched.",
-    "The side-panel, launchpad version banner and StatusMetrics occupancy-fallback pairs arrived with a merge from main; same cleanup rule."
+    "The side-panel, launchpad version banner and StatusMetrics occupancy-fallback pairs arrived with a merge from main; same cleanup rule.",
+    "\"backendEntries\" is the second, separate debt: imports src/backends/codex/ still makes into host internals. B-3",
+    "made a concrete backend an island (own directory + src/agent/ + src/backends/shared/ only); claude is already",
+    "clean, codex follows in B-5 (its own text module, host.dataDir, the command registry). Every pair is listed by",
+    "hand and the gate fails on a listed pair that stops matching, so both lists only shrink."
   ],
   "entries": [
     {
@@ -165,6 +169,140 @@
     {
       "from": "screens/StatusMetrics.ts",
       "to": "dsh-adapter/context-occupancy.js"
+    }
+  ],
+  "backendEntries": [
+    {
+      "from": "backends/codex/auth/external-tokens.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/auth/status.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/backend.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/backend.ts",
+      "to": "update.js"
+    },
+    {
+      "from": "backends/codex/catalog.ts",
+      "to": "adapter/ports/channel-session.js"
+    },
+    {
+      "from": "backends/codex/catalog.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/channels.ts",
+      "to": "channel/channel-slug.js"
+    },
+    {
+      "from": "backends/codex/channels.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/channels.ts",
+      "to": "utils/paths.js"
+    },
+    {
+      "from": "backends/codex/detect.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/prefs.ts",
+      "to": "utils/paths.js"
+    },
+    {
+      "from": "backends/codex/rpc/hub.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/activity.ts",
+      "to": "adapter/ports/channel-view.js"
+    },
+    {
+      "from": "backends/codex/session/activity.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/approvals.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/commands.ts",
+      "to": "commands.js"
+    },
+    {
+      "from": "backends/codex/session/commands.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/controls.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/goals.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/history.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/images.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/images.ts",
+      "to": "utils/imageResize.js"
+    },
+    {
+      "from": "backends/codex/session/input.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/plan-review.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/session.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/side-query.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/subagents.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/session/tasks.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/translate/items.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/translate/live.ts",
+      "to": "adapter/ports/channel-view.js"
+    },
+    {
+      "from": "backends/codex/translate/live.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/translate/notices.ts",
+      "to": "i18n.js"
+    },
+    {
+      "from": "backends/codex/translate/presentation.ts",
+      "to": "adapter/ports/channel-view.js"
     }
   ]
 }

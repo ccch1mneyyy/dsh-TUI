@@ -13,6 +13,7 @@ import { createClaudeTranslator } from '../src/backends/claude/translate.js'
 import { replayClaudeTranscript } from '../src/backends/claude/replay.js'
 import { buildQueryOptions, OPTION_POLICY } from '../src/backends/claude/options.js'
 import { setLang, t } from '../src/i18n.js'
+import { claudeText } from '../src/backends/claude/text.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
 
 setLang('en')
@@ -287,11 +288,11 @@ const synced = scenario(f => [
   // successful updates complete the table from their named patches.
   const sdk = replayClaudeTranscript(chain(false), { cwd: '/fixture/project' })
   check('resume: an SDK-shaped history syncs explicitly from its successful updates (no guessed ids)',
-    JSON.stringify(sdk.tasks) === JSON.stringify([{ id: '1', content: t('claude-task-unnamed', { id: '1' }), status: 'in_progress', seq: 1 }]), sdk.tasks)
+    JSON.stringify(sdk.tasks) === JSON.stringify([{ id: '1', content: claudeText('claude-task-unnamed', { id: '1' }), status: 'in_progress', seq: 1 }]), sdk.tasks)
   const filled = liveSession(sdk)
   const filledWrites = todosOf(filled.events)
   check('resume: a successful live update of an untracked id completes the table from its patch (honest fallback subject)',
-    filledWrites.length === 1 && same(items(filledWrites[0]), [{ content: t('claude-task-unnamed', { id: '1' }), status: 'completed' }]),
+    filledWrites.length === 1 && same(items(filledWrites[0]), [{ content: claudeText('claude-task-unnamed', { id: '1' }), status: 'completed' }]),
     filledWrites.map(event => items(event)))
 
   // The completion stays explicit: a rename-only success (no status known)

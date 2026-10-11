@@ -1,16 +1,16 @@
 /** Translate session, compaction, background-task and rate-limit frames. */
 import type { AgentEvent, AgentEventOf, SubagentUsage, TurnEndReason } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { claudeText } from '../text.js'
 import { arr, num, rec, str, type Rec } from '../narrow.js'
 import type { ClaudeTranslatorOptions, OpenAttempt } from './types.js'
 
 /** The user-facing name of a rate-limit window. */
 function rateLimitWindow(type: string): string {
   switch (type) {
-    case 'five_hour': return t('status-rate-limit-five-hour')
-    case 'seven_day': return t('status-rate-limit-seven-day')
-    case 'seven_day_opus': return `${t('status-rate-limit-seven-day')} Opus`
-    case 'seven_day_sonnet': return `${t('status-rate-limit-seven-day')} Sonnet`
+    case 'five_hour': return claudeText('status-rate-limit-five-hour')
+    case 'seven_day': return claudeText('status-rate-limit-seven-day')
+    case 'seven_day_opus': return `${claudeText('status-rate-limit-seven-day')} Opus`
+    case 'seven_day_sonnet': return `${claudeText('status-rate-limit-seven-day')} Sonnet`
     default: return type === '' ? '?' : type
   }
 }
@@ -131,10 +131,10 @@ export function createSystemTranslator(context: {
     rateLimitState = state
     const window = rateLimitWindow(type)
     const resetsAt = num(info?.resetsAt)
-    const resets = resetsAt === undefined ? '' : t('claude-rate-limit-resets', { time: t('claude-rate-limit-in', { duration: formatDuration(resetsAt * 1000 - now()) }) })
-    if (status === 'rejected') return [{ type: 'notice', level: 'error', key: 'rate-limit', text: t('claude-rate-limit-rejected', { window, resets }) }]
+    const resets = resetsAt === undefined ? '' : claudeText('claude-rate-limit-resets', { time: claudeText('claude-rate-limit-in', { duration: formatDuration(resetsAt * 1000 - now()) }) })
+    if (status === 'rejected') return [{ type: 'notice', level: 'error', key: 'rate-limit', text: claudeText('claude-rate-limit-rejected', { window, resets }) }]
     const utilization = num(info?.utilization)
-    return [{ type: 'notice', level: 'warning', key: 'rate-limit', text: t('claude-rate-limit-warning', { window, percent: utilization === undefined ? '?' : Math.round(utilization * 100), resets }) }]
+    return [{ type: 'notice', level: 'warning', key: 'rate-limit', text: claudeText('claude-rate-limit-warning', { window, percent: utilization === undefined ? '?' : Math.round(utilization * 100), resets }) }]
   }
 
   const translateSystem = (message: Rec): AgentEvent[] => {
@@ -289,7 +289,7 @@ export function createSystemTranslator(context: {
         return [{
           type: 'notice',
           level: 'warning',
-          text: reason === '' ? t('claude-permission-denied', { tool: str(message.tool_name) ?? '' }) : t('claude-permission-denied-reason', { tool: str(message.tool_name) ?? '', reason }),
+          text: reason === '' ? claudeText('claude-permission-denied', { tool: str(message.tool_name) ?? '' }) : claudeText('claude-permission-denied-reason', { tool: str(message.tool_name) ?? '', reason }),
           ...(callId === undefined ? {} : { callId, key: `permission-denied:${callId}` }),
         }]
       }
@@ -300,7 +300,7 @@ export function createSystemTranslator(context: {
           type: 'notice',
           level: 'notice',
           key: 'api-retry',
-          text: t('claude-api-retry', { attempt: String(num(message.attempt) ?? '?'), max: String(num(message.max_retries) ?? '?'), detail: status === undefined ? '' : t('claude-api-retry-status', { status }) }),
+          text: claudeText('claude-api-retry', { attempt: String(num(message.attempt) ?? '?'), max: String(num(message.max_retries) ?? '?'), detail: status === undefined ? '' : claudeText('claude-api-retry-status', { status }) }),
         }]
       }
       case 'informational': {
@@ -340,7 +340,7 @@ export function createSystemTranslator(context: {
           type: 'notice',
           level: 'info',
           key: 'memory-recall',
-          text: message.mode === 'synthesize' ? t('claude-memory-synthesized') : t('claude-memory-recalled', { count: memories.length }),
+          text: message.mode === 'synthesize' ? claudeText('claude-memory-synthesized') : claudeText('claude-memory-recalled', { count: memories.length }),
         }]
       }
       case 'elicitation_complete':
@@ -368,19 +368,19 @@ export function createSystemTranslator(context: {
         const category = str(message.api_refusal_category)
         // `local`: only a subagent / side question fell back; the session
         // model is unchanged.
-        if (message.scope === 'local') return [{ type: 'notice', level: 'info', key: 'model-fallback-local', text: t('claude-model-fallback-local', { model, original }) }]
+        if (message.scope === 'local') return [{ type: 'notice', level: 'info', key: 'model-fallback-local', text: claudeText('claude-model-fallback-local', { model, original }) }]
         const out: AgentEvent[] = []
         if (model !== context.currentModel) {
           context.currentModel = model
           out.push({ type: 'model.changed', model, source: 'fallback' })
         }
-        out.push({ type: 'notice', level: 'warning', key: 'model-fallback', text: t('claude-model-fallback', { model, original, category: category === undefined || category === '' ? '' : t('claude-refusal-category-suffix', { category }) }) })
+        out.push({ type: 'notice', level: 'warning', key: 'model-fallback', text: claudeText('claude-model-fallback', { model, original, category: category === undefined || category === '' ? '' : claudeText('claude-refusal-category-suffix', { category }) }) })
         return out
       }
       case 'model_refusal_no_fallback': {
         const model = str(message.original_model) ?? context.currentModel
         const category = str(message.api_refusal_category)
-        return [{ type: 'notice', level: 'warning', key: 'model-refusal', text: t('claude-model-refused', { model, category: category === undefined || category === '' ? '' : t('claude-refusal-category-suffix', { category }) }) }]
+        return [{ type: 'notice', level: 'warning', key: 'model-refusal', text: claudeText('claude-model-refused', { model, category: category === undefined || category === '' ? '' : claudeText('claude-refusal-category-suffix', { category }) }) }]
       }
       default:
         debug(`claude: system/${subtype ?? '?'} ignored`)

@@ -128,9 +128,29 @@ export interface BackendTokenStore {
   declared(ref: string): boolean
 }
 
+/** The languages the TUI ships (`src/i18n.ts`'s `Lang`, restated here so the
+ *  domain contract does not depend on the host dictionary module). */
+export type BackendLocale = 'zh' | 'en'
+
 /** Host services a backend may use while detecting or opening. */
 export interface BackendHost {
   readonly cwd: string
+  /**
+   * A directory of this backend's own, under the TUI's data directory
+   * (`~/.dsh-tui/backends/<id>`): where its prefs, stores and caches belong.
+   * Optional, like the other host facilities (D-3): a backend MUST
+   * feature-detect it. A host without one keeps nothing for this backend, and
+   * a backend MUST NOT guess a location of its own under the host's data
+   * directory (D2) — degrade to memory instead. Created on the first write,
+   * not here.
+   */
+  readonly dataDir?: string
+  /** The language the TUI is showing, read live (a `/lang` switch applies to
+   *  the next string a backend writes). A backend's own copy is written in it
+   *  — plugin text never goes through the host dictionary (D2). */
+  locale(): BackendLocale
+  /** The running TUI's version, when it can be read from `package.json`. */
+  readonly appVersion?: string
   /** Stored channel tokens, when the host provides its credential service. */
   readonly tokenStore?: BackendTokenStore
   /** Opt-in diagnostics; never stdout while the TUI renders. */
@@ -194,7 +214,11 @@ export interface AgentBackend {
   open(target: OpenTarget, host: BackendHost): Promise<AgentSession>
   readonly catalog?: SessionCatalog
   readonly launch?: {
-    sessionPrefs(debug: (message: string) => void): BackendSessionPrefs
+    /** This backend's remembered-session store. It takes the host because the
+     *  store lives under `host.dataDir` (B-3): the launcher asks before any
+     *  session is open, so `open()` cannot be the one to hand the directory
+     *  over. Absent `dataDir` = nothing is remembered, never a guessed path. */
+    sessionPrefs(host: BackendHost): BackendSessionPrefs
     resumeCommand(sessionId: string): string
   }
 }

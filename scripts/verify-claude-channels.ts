@@ -66,6 +66,7 @@ import { BACKEND_CHANNEL_COMMAND, LOCAL_COMMANDS } from '../src/commands.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { localCommandsFor } from '../src/dsh-adapter/channel/core/session-controls.js'
 import { setLang, t } from '../src/i18n.js'
+import { claudeText } from '../src/backends/claude/text.js'
 import { claudeDeps, fakeClaudeSdk, tick } from './lib/claude-fake-sdk.js'
 
 setLang('en')
@@ -152,7 +153,14 @@ const init = {
   check('slug: lowercases and collapses non-alphanumerics', channelSlug('Open.BigModel~CN') === 'open-bigmodel-cn', channelSlug('Open.BigModel~CN'))
   check('slug: a name without ASCII alphanumerics gets a stable hashed id', /^channel-[0-9a-f]{8}$/u.test(channelSlug('智谱')) && channelSlug('智谱') === channelSlug(' 智谱 '), channelSlug('智谱'))
   check('slug: two such names get different ids (and token refs)', channelSlug('智谱') !== channelSlug('硅基流动') && channelTokenRef(channelSlug('智谱')) !== channelTokenRef(channelSlug('硅基流动')), [channelSlug('智谱'), channelSlug('硅基流动')])
-  check('slug: the wizard and the backend share one rule', channelSlug === channelProfileSlug)
+  // The wizard's copy (src/channel/channel-slug.ts) and the backends' copy
+  // (src/backends/shared/channel-slug.ts) are separate functions on purpose:
+  // a backend must not import src/channel/ (B-3). The id is a persistent join
+  // key — the profile file's row and the token ref derived from it — so the
+  // two copies are pinned by behaviour over a name vector, not by identity.
+  check('slug: the wizard and the backend share one rule', [
+    'Open.BigModel~CN', 'open-bigmodel-cn', '智谱', ' 智谱 ', '硅基流动', 'a/b.c', '--', '', 'A B',
+  ].every(name => channelSlug(name) === channelProfileSlug(name)), channelSlug('智谱'))
   const env = {
     ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',
     ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: 'GLM',
@@ -547,7 +555,7 @@ const init = {
     helperConflict = error instanceof ClaudeChannelConflictError ? error.message : 'wrong error: ' + String(error)
   }
   check('refuse: a settings apiKeyHelper conflicts with a channel (fail closed, never a double credential)',
-    helperConflict === t('claude-channel-helper-conflict') && !helperConflict.includes('chan-token'), helperConflict)
+    helperConflict === claudeText('claude-channel-helper-conflict') && !helperConflict.includes('chan-token'), helperConflict)
   const helperless = await resolveClaudeAuth({ ...base }, undefined, {
     settings: async () => ({ env: {} }),
     globalConfig: () => undefined,
@@ -561,8 +569,8 @@ const init = {
       { ANTHROPIC_BASE_URL: 'https://old.invalid', ANTHROPIC_API_KEY: 'stale-key-secret', anthropic_auth_token: 'stale-token-secret', CLAUDE_CODE_OAUTH_TOKEN: 'stale-oauth-secret' })
     check('notice: the URL mismatch line and the superseded-credential line both appear (names only, never values)',
       superseded.length === 2
-      && superseded[0] === t('channel-conn-settings-mismatch', { name: 'ZhiPu' })
-      && superseded[1] === t('channel-conn-creds-superseded', { keys: 'ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN' })
+      && superseded[0] === claudeText('channel-conn-settings-mismatch', { name: 'ZhiPu' })
+      && superseded[1] === claudeText('channel-conn-creds-superseded', { keys: 'ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN' })
       && !superseded.join('\n').includes('stale-key-secret') && !superseded.join('\n').includes('stale-token-secret') && !superseded.join('\n').includes('stale-oauth-secret'), superseded)
     check('notice: a mapping-only channel supersedes nothing (the ambient credentials stand)',
       channelStartNotices({ name: 'Map' }, { ANTHROPIC_API_KEY: 'k' }).length === 0)
@@ -1236,7 +1244,7 @@ try {
     "fs.mkdirSync(dataDir, { recursive: true })",
     "const open = async claudeBackend => {",
     "  try {",
-    "    const session = await claudeBackend.open({ kind: 'create', cwd: home }, { cwd: home, debug: () => undefined, warn: () => undefined })",
+    "    const session = await claudeBackend.open({ kind: 'create', cwd: home }, { cwd: home, dataDir, locale: () => 'en', debug: () => undefined, warn: () => undefined })",
     "    await session.dispose()",
     "    return 'opened'",
     "  } catch (error) { return 'rejected: ' + (error instanceof Error ? error.message : String(error)) }",
@@ -1276,9 +1284,9 @@ try {
     check('refuse-backend: the isolated child ran and reported both scenarios',
       parsed !== undefined && parsed.crashed === undefined && ran.code === 0, { code: ran.code, stderr: ran.stderr.slice(0, 300), stdout: ran.stdout.slice(0, 300) })
     check('refuse-backend: a tokenless custom-endpoint channel refuses the start with the actionable sentence',
-      parsed?.s1 === 'rejected: ' + t('claude-channel-token-missing', { name: 'Relay', host: 'relay.example' }), parsed?.s1)
+      parsed?.s1 === 'rejected: ' + claudeText('claude-channel-token-missing', { name: 'Relay', host: 'relay.example' }), parsed?.s1)
     check('refuse-backend: a channel token under a settings apiKeyHelper refuses the start the same way',
-      parsed?.s2 === 'rejected: ' + t('claude-channel-helper-conflict'), parsed?.s2)
+      parsed?.s2 === 'rejected: ' + claudeText('claude-channel-helper-conflict'), parsed?.s2)
     check('refuse-backend: no synthetic credential material travels in the refusals',
       synthetic.every(secret => !outcomeText.includes(secret)), outcomeText.slice(0, 300))
   } finally {

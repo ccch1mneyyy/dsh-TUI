@@ -23,11 +23,81 @@
  * are matched against the very strings the panel showed, so a language
  * switch meanwhile cannot turn a valid answer into a mismatch.
  *
- * Backend-neutral (`verify:boundary`): no vendor types, no I/O.
+ * **Locale-free (B-3)**: this module writes no copy of its own. Every string
+ * it puts on screen comes from the {@link ElicitationText} the caller hands
+ * over — one snapshot per flow, taken in the backend's own language through
+ * `BackendHost.locale()`. A backend's text is its own (D2); the host
+ * dictionary is not readable from here.
+ *
+ * Backend-neutral (`verify:boundary`): no vendor types, no I/O, no host
+ * module — the module lives in `src/backends/shared/` because the two
+ * backends are its only callers.
  */
-import type { QuestionAnswers } from '../agent/capabilities.js'
-import type { QuestionItemView } from '../agent/events.js'
-import { t } from '../i18n.js'
+import type { QuestionAnswers } from '../../agent/capabilities.js'
+import type { QuestionItemView } from '../../agent/events.js'
+import { fillTemplate } from './localized-text.js'
+
+/** Every string this flow puts on screen, in one language, as the caller's
+ *  own dictionary holds it. Values may carry `{{name}}` placeholders: this
+ *  module fills them from the values of the call. */
+export interface ElicitationText {
+  /** The label that skips an optional field. */
+  readonly skip: string
+  readonly skipDesc: string
+  readonly yes: string
+  readonly no: string
+  /** The last question's two options. */
+  readonly send: string
+  readonly sendDesc: string
+  readonly decline: string
+  readonly declineDesc: string
+  readonly confirm: string
+  /** `{{title}}` = the field's title. */
+  readonly optional: string
+  /** `{{reason}}` = the reason the field is asked again. */
+  readonly invalid: string
+  readonly invalidChoice: string
+  readonly invalidRequired: string
+  readonly invalidNumber: string
+  readonly invalidInteger: string
+  /** `{{min}}` / `{{max}}` / `{{n}}`. */
+  readonly invalidMin: string
+  readonly invalidMax: string
+  readonly invalidMinLength: string
+  readonly invalidMaxLength: string
+  readonly invalidMinItems: string
+  readonly invalidMaxItems: string
+  readonly invalidJson: string
+  readonly invalidEmail: string
+  readonly invalidUri: string
+  readonly invalidDate: string
+  readonly invalidDateTime: string
+  readonly invalidPattern: string
+  readonly kindInteger: string
+  readonly kindNumber: string
+  /** `{{kind}}` / `{{min}}` / `{{max}}`. */
+  readonly hintRange: string
+  readonly hintMin: string
+  readonly hintMax: string
+  readonly hintJson: string
+  /** `{{format}}` = the declared string format (email, date, …). */
+  readonly hintFormat: string
+  readonly urlAccept: string
+  readonly urlAcceptDesc: string
+  /** `{{server}}` = the MCP server's name. */
+  readonly urlQuestion: string
+  readonly urlDetail: string
+  /** `{{server}}` + `{{url}}`. */
+  readonly urlNotice: string
+  readonly urlComplete: string
+  readonly urlMissing: string
+  /** `{{server}}` + `{{mode}}`. */
+  readonly unsupported: string
+}
+
+/** Substitute the values of this call into a template of {@link ElicitationText}
+ *  (one rule for every backend: `shared/localized-text.ts`). */
+const fill = fillTemplate
 
 /** A JSON object as read from an untyped schema. */
 type Rec = Readonly<Record<string, unknown>>
@@ -128,16 +198,16 @@ function calendarDay(year: number, month: number, day: number): boolean {
 }
 
 /** Validate one typed value against its field; the value or the reason. */
-export function parseFieldText(field: FormField, text: string): { readonly value: ElicitationValue } | { readonly error: string } {
+export function parseFieldText(field: FormField, text: string, elicit: ElicitationText): { readonly value: ElicitationValue } | { readonly error: string } {
   const schema = field.schema
   if (field.kind === 'number' || field.kind === 'integer') {
     const value = Number(text)
-    if (text.trim() === '' || !Number.isFinite(value)) return { error: t('elicit-invalid-number') }
-    if (field.kind === 'integer' && !Number.isInteger(value)) return { error: t('elicit-invalid-integer') }
+    if (text.trim() === '' || !Number.isFinite(value)) return { error: elicit.invalidNumber }
+    if (field.kind === 'integer' && !Number.isInteger(value)) return { error: elicit.invalidInteger }
     const min = num(schema.minimum)
     const max = num(schema.maximum)
-    if (min !== undefined && value < min) return { error: t('elicit-invalid-min', { min }) }
-    if (max !== undefined && value > max) return { error: t('elicit-invalid-max', { max }) }
+    if (min !== undefined && value < min) return { error: fill(elicit.invalidMin, { min }) }
+    if (max !== undefined && value > max) return { error: fill(elicit.invalidMax, { max }) }
     return { value }
   }
   if (field.kind === 'json') {
@@ -145,35 +215,35 @@ export function parseFieldText(field: FormField, text: string): { readonly value
     try {
       value = JSON.parse(text)
     } catch {
-      return { error: t('elicit-invalid-json') }
+      return { error: elicit.invalidJson }
     }
     const type = str(schema.type)
     const fits = type === 'array'
       ? Array.isArray(value) && value.every(item => typeof item === 'string')
       : type === 'object' ? false : typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
     // An MCP form value is a string, number, boolean or string array.
-    if (!fits) return { error: t('elicit-invalid-json') }
+    if (!fits) return { error: elicit.invalidJson }
     return { value: value as ElicitationValue }
   }
   const length = [...text].length
   const minLength = num(schema.minLength)
   const maxLength = num(schema.maxLength)
-  if (minLength !== undefined && length < minLength) return { error: t('elicit-invalid-min-length', { n: minLength }) }
-  if (maxLength !== undefined && length > maxLength) return { error: t('elicit-invalid-max-length', { n: maxLength }) }
+  if (minLength !== undefined && length < minLength) return { error: fill(elicit.invalidMinLength, { n: minLength }) }
+  if (maxLength !== undefined && length > maxLength) return { error: fill(elicit.invalidMaxLength, { n: maxLength }) }
   switch (str(schema.format)) {
     case 'email':
-      if (!EMAIL.test(text)) return { error: t('elicit-invalid-email') }
+      if (!EMAIL.test(text)) return { error: elicit.invalidEmail }
       break
     case 'uri':
       try {
         new URL(text)
       } catch {
-        return { error: t('elicit-invalid-uri') }
+        return { error: elicit.invalidUri }
       }
       break
     case 'date': {
       const match = DATE.exec(text)
-      if (match === null || !calendarDay(Number(match[1]), Number(match[2]), Number(match[3]))) return { error: t('elicit-invalid-date') }
+      if (match === null || !calendarDay(Number(match[1]), Number(match[2]), Number(match[3]))) return { error: elicit.invalidDate }
       break
     }
     case 'date-time': {
@@ -185,7 +255,7 @@ export function parseFieldText(field: FormField, text: string): { readonly value
       if (match === null
         || !calendarDay(Number(match[1]), Number(match[2]), Number(match[3]))
         || Number(match[4]) > 23 || Number(match[5]) > 59 || Number(match[6]) > 60
-        || Number(match[7]) > 23 || Number(match[8]) > 59) return { error: t('elicit-invalid-date-time') }
+        || Number(match[7]) > 23 || Number(match[8]) > 59) return { error: elicit.invalidDateTime }
       break
     }
     default:
@@ -199,57 +269,47 @@ export function parseFieldText(field: FormField, text: string): { readonly value
     } catch {
       // A pattern this runtime cannot compile is the server's to check.
     }
-    if (!matches) return { error: t('elicit-invalid-pattern') }
+    if (!matches) return { error: elicit.invalidPattern }
   }
   return { value: text }
 }
 
 /** A short constraint hint for a free-text field (shown under the question). */
-function constraintHint(field: FormField): string | undefined {
+function constraintHint(field: FormField, elicit: ElicitationText): string | undefined {
   const schema = field.schema
   switch (field.kind) {
     case 'number':
     case 'integer': {
       const min = num(schema.minimum)
       const max = num(schema.maximum)
-      const kind = t(field.kind === 'integer' ? 'elicit-kind-integer' : 'elicit-kind-number')
-      if (min !== undefined && max !== undefined) return t('elicit-hint-range', { kind, min, max })
-      if (min !== undefined) return t('elicit-hint-min', { kind, min })
-      if (max !== undefined) return t('elicit-hint-max', { kind, max })
+      const kind = field.kind === 'integer' ? elicit.kindInteger : elicit.kindNumber
+      if (min !== undefined && max !== undefined) return fill(elicit.hintRange, { kind, min, max })
+      if (min !== undefined) return fill(elicit.hintMin, { kind, min })
+      if (max !== undefined) return fill(elicit.hintMax, { kind, max })
       return kind
     }
     case 'json':
-      return t('elicit-hint-json')
+      return elicit.hintJson
     case 'text': {
       const format = str(schema.format)
-      return format === undefined ? undefined : t('elicit-hint-format', { format })
+      return format === undefined ? undefined : fill(elicit.hintFormat, { format })
     }
     default:
       return undefined
   }
 }
 
-/** The option labels of one form flow, fixed when it is first asked. */
-export interface FormLabels {
-  readonly skip: string
-  readonly yes: string
-  readonly no: string
-}
-
-/** The current language's form labels. */
-export const formLabels = (): FormLabels => ({ skip: t('elicit-skip'), yes: t('elicit-yes'), no: t('elicit-no') })
-
 /** A field's question (with the reason it is asked again, if any). */
-export function fieldQuestion(field: FormField, header: string, lead: string | undefined, error: string | undefined, labels: FormLabels = formLabels()): QuestionItemView {
-  const skip = labels.skip
+export function fieldQuestion(field: FormField, header: string, lead: string | undefined, error: string | undefined, elicit: ElicitationText): QuestionItemView {
+  const skip = elicit.skip
   const detail = [
-    error === undefined ? undefined : t('elicit-invalid', { reason: error }),
+    error === undefined ? undefined : fill(elicit.invalid, { reason: error }),
     lead,
     field.description,
-    constraintHint(field),
+    constraintHint(field, elicit),
   ].filter((line): line is string => line !== undefined && line !== '').join('\n')
-  const question = field.required ? field.title : t('elicit-optional', { title: field.title })
-  const optional = field.required ? [] : [{ label: skip, description: t('elicit-skip-desc') }]
+  const question = field.required ? field.title : fill(elicit.optional, { title: field.title })
+  const optional = field.required ? [] : [{ label: skip, description: elicit.skipDesc }]
   const defaults = (labels: readonly string[]): { defaultSelected?: readonly string[] } => labels.length === 0 ? {} : { defaultSelected: labels }
   const base = { question, header, ...(detail === '' ? {} : { detail }) }
   switch (field.kind) {
@@ -258,7 +318,7 @@ export function fieldQuestion(field: FormField, header: string, lead: string | u
       return { ...base, options: [...field.choices!.map(choice => ({ label: choice.label })), ...optional], hideCustomInput: true, ...defaults(field.choices!.filter(choice => choice.value === fallback).map(choice => choice.label)) }
     }
     case 'boolean': {
-      const { yes, no } = labels
+      const { yes, no } = elicit
       const fallback = field.schema.default
       return { ...base, options: [{ label: yes }, { label: no }, ...optional], hideCustomInput: true, ...defaults(fallback === true ? [yes] : fallback === false ? [no] : []) }
     }
@@ -272,33 +332,33 @@ export function fieldQuestion(field: FormField, header: string, lead: string | u
 }
 
 /** One answered field: its value, `skip`, or why it is invalid. */
-export function fieldValue(field: FormField, answer: QuestionAnswers['answers'][number] | undefined, labels: FormLabels = formLabels()): { readonly value: ElicitationValue } | { readonly skip: true } | { readonly error: string } {
+export function fieldValue(field: FormField, answer: QuestionAnswers['answers'][number] | undefined, elicit: ElicitationText): { readonly value: ElicitationValue } | { readonly skip: true } | { readonly error: string } {
   const selected = answer?.selected ?? []
   const custom = answer?.custom?.trim() ?? ''
-  const skip = labels.skip
+  const skip = elicit.skip
   const skipped = selected.includes(skip)
   switch (field.kind) {
     case 'choice': {
       const choice = field.choices!.find(item => item.label === selected[0])
       if (choice !== undefined) return { value: choice.value }
-      return skipped && !field.required ? { skip: true } : { error: t('elicit-invalid-choice') }
+      return skipped && !field.required ? { skip: true } : { error: elicit.invalidChoice }
     }
     case 'boolean':
-      if (selected[0] === labels.yes) return { value: true }
-      if (selected[0] === labels.no) return { value: false }
-      return skipped && !field.required ? { skip: true } : { error: t('elicit-invalid-choice') }
+      if (selected[0] === elicit.yes) return { value: true }
+      if (selected[0] === elicit.no) return { value: false }
+      return skipped && !field.required ? { skip: true } : { error: elicit.invalidChoice }
     case 'multi': {
       const values = field.choices!.filter(choice => selected.includes(choice.label)).map(choice => choice.value)
-      if (values.length === 0) return skipped && !field.required ? { skip: true } : { error: t('elicit-invalid-choice') }
+      if (values.length === 0) return skipped && !field.required ? { skip: true } : { error: elicit.invalidChoice }
       const min = num(field.schema.minItems)
       const max = num(field.schema.maxItems)
-      if (min !== undefined && values.length < min) return { error: t('elicit-invalid-min-items', { n: min }) }
-      if (max !== undefined && values.length > max) return { error: t('elicit-invalid-max-items', { n: max }) }
+      if (min !== undefined && values.length < min) return { error: fill(elicit.invalidMinItems, { n: min }) }
+      if (max !== undefined && values.length > max) return { error: fill(elicit.invalidMaxItems, { n: max }) }
       return { value: values }
     }
     default:
-      if (custom === '') return skipped && !field.required ? { skip: true } : { error: t('elicit-invalid-required') }
-      return parseFieldText(field, custom)
+      if (custom === '') return skipped && !field.required ? { skip: true } : { error: elicit.invalidRequired }
+      return parseFieldText(field, custom, elicit)
   }
 }
 
@@ -343,18 +403,17 @@ export interface ElicitationForm {
  * send / decline choice is asked once, after the first round; a re-ask
  * keeps the values already accepted and replaces the re-asked ones.
  */
-export function createElicitationForm(request: ElicitationRequestView): ElicitationForm {
+export function createElicitationForm(request: ElicitationRequestView, elicit: ElicitationText): ElicitationForm {
   const fields = formFields(request.requestedSchema)
   const header = serverHeader(request.displayName ?? request.serverName)
   const lead = [request.title, request.message].filter((line): line is string => line !== undefined && line.trim() !== '').join('\n')
-  const send = t('elicit-send')
-  const decline = t('elicit-decline')
-  const labels = formLabels()
+  const send = elicit.send
+  const decline = elicit.decline
   const confirm: QuestionItemView = {
-    question: t('elicit-confirm', { server: request.serverName }),
+    question: fill(elicit.confirm, { server: request.serverName }),
     header,
     ...(fields.length === 0 && lead !== '' ? { detail: lead } : {}),
-    options: [{ label: send, description: t('elicit-send-desc') }, { label: decline, description: t('elicit-decline-desc') }],
+    options: [{ label: send, description: elicit.sendDesc }, { label: decline, description: elicit.declineDesc }],
     hideCustomInput: true,
   }
   const values = new Map<string, ElicitationValue>()
@@ -362,7 +421,7 @@ export function createElicitationForm(request: ElicitationRequestView): Elicitat
   let asked: readonly FormField[] = fields
   let sending = false
   return {
-    questions: [...fields.map((field, index) => fieldQuestion(field, header, index === 0 ? lead : undefined, undefined, labels)), confirm],
+    questions: [...fields.map((field, index) => fieldQuestion(field, header, index === 0 ? lead : undefined, undefined, elicit)), confirm],
     answer: answers => {
       if (!sending) {
         const choice = answers.answers[asked.length]?.selected[0]
@@ -371,14 +430,14 @@ export function createElicitationForm(request: ElicitationRequestView): Elicitat
       }
       const invalid: { field: FormField; error: string }[] = []
       asked.forEach((field, index) => {
-        const outcome = fieldValue(field, answers.answers[index], labels)
+        const outcome = fieldValue(field, answers.answers[index], elicit)
         if ('error' in outcome) invalid.push({ field, error: outcome.error })
         else if ('skip' in outcome) values.delete(field.key)
         else values.set(field.key, outcome.value)
       })
       if (invalid.length > 0) {
         asked = invalid.map(item => item.field)
-        return { kind: 'reask', questions: invalid.map(item => fieldQuestion(item.field, header, undefined, item.error, labels)) }
+        return { kind: 'reask', questions: invalid.map(item => fieldQuestion(item.field, header, undefined, item.error, elicit)) }
       }
       return { kind: 'accept', content: Object.fromEntries(values) }
     },
@@ -393,18 +452,18 @@ export interface ElicitationUrlAsk {
 }
 
 /** The URL-mode question; undefined when the request names no URL. */
-export function createElicitationUrlAsk(request: ElicitationRequestView): ElicitationUrlAsk | undefined {
+export function createElicitationUrlAsk(request: ElicitationRequestView, elicit: ElicitationText): ElicitationUrlAsk | undefined {
   const target = request.url
   if (target === undefined || target.trim() === '') return undefined
-  const accept = t('elicit-url-accept')
+  const accept = elicit.urlAccept
   const message = request.message ?? ''
   return {
     questions: [{
-      question: message.trim() === '' ? t('elicit-url-question', { server: request.serverName }) : message,
+      question: message.trim() === '' ? fill(elicit.urlQuestion, { server: request.serverName }) : message,
       header: serverHeader(request.displayName ?? request.serverName),
-      detail: t('elicit-url-detail'),
+      detail: elicit.urlDetail,
       link: target,
-      options: [{ label: accept, description: t('elicit-url-accept-desc') }, { label: t('elicit-decline'), description: t('elicit-decline-desc') }],
+      options: [{ label: accept, description: elicit.urlAcceptDesc }, { label: elicit.decline, description: elicit.declineDesc }],
       hideCustomInput: true,
     }],
     accepted: answers => answers.answers[0]?.selected[0] === accept,
@@ -412,13 +471,20 @@ export function createElicitationUrlAsk(request: ElicitationRequestView): Elicit
 }
 
 /** The notice texts a backend shows around an elicitation. */
-export const elicitationNotices = {
+export function elicitationNotices(elicit: ElicitationText): {
   /** URL mode: the server asks the user to open a page. */
-  urlOpen: (server: string, url: string): string => t('elicit-url-notice', { server, url }),
+  urlOpen(server: string, url: string): string
   /** URL mode: the server reported the flow done. */
-  urlComplete: (server: string): string => t('elicit-url-complete', { server }),
+  urlComplete(server: string): string
   /** URL mode without a URL: declined. */
-  urlMissing: (server: string): string => t('elicit-url-missing', { server }),
+  urlMissing(server: string): string
   /** A mode this client cannot render: declined. */
-  unsupported: (server: string, mode: string): string => t('elicit-unsupported', { server, mode }),
+  unsupported(server: string, mode: string): string
+} {
+  return {
+    urlOpen: (server, url) => fill(elicit.urlNotice, { server, url }),
+    urlComplete: server => fill(elicit.urlComplete, { server }),
+    urlMissing: server => fill(elicit.urlMissing, { server }),
+    unsupported: (server, mode) => fill(elicit.unsupported, { server, mode }),
+  }
 }

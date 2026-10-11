@@ -907,7 +907,7 @@ const GROUPS = {
 // 可选项跳过）→ accept/decline/cancel；URL 模式、elicitation_complete、不支持的模式、
 // refusal_fallback_prompt；中断与释放收回面板；经 channel 与真实 QuestionStore 端到端。
     ["verify-claude-dialogs", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-dialogs.ts']],
-// 后端中立的 MCP elicitation ↔ 问卷纯函数（src/channel/elicitation.ts）：schema → 字段、
+// 后端中立的 MCP elicitation ↔ 问卷纯函数（src/backends/shared/elicitation.ts）：schema → 字段、
 // 逐类型校验、表单流程（拒绝 / 只重问无效项 / 类型化 content / 标签在首问时固定）、
 // URL 模式问题与提示文案、中英文都能解析；模块不 import 厂商包。
     ["verify-elicitation", ['node', '--import', 'tsx/esm', 'scripts/verify-elicitation.ts']],

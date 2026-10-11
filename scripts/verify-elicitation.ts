@@ -1,6 +1,6 @@
 /**
  * The backend-neutral MCP elicitation ↔ questionnaire helper
- * (`src/channel/elicitation.ts`), pure and without a backend:
+ * (`src/backends/shared/elicitation.ts`), pure and without a backend:
  *
  *  - schema → fields: enum (`enum` + `enumNames`, `oneOf` const + title,
  *    duplicate labels made unique), boolean, multi-select array, number /
@@ -17,6 +17,11 @@
  *    accept / decline; the notice texts; the header chip clip;
  *  - zh and en both resolve every string; no vendor import in the module.
  *
+ * The module writes no copy of its own (B-3): the caller hands over an
+ * `ElicitationText`. This gate drives it with the Claude backend's copy, on
+ * the live language, and keeps asserting against the host dictionary — so a
+ * drift between the two copies fails here as well as a broken rule.
+ *
  * Run: node --import tsx/esm scripts/verify-elicitation.ts
  */
 import assert from 'node:assert/strict'
@@ -24,12 +29,25 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const [
-  { createElicitationForm, createElicitationUrlAsk, elicitationNotices, fieldQuestion, formFields, parseFieldText, serverHeader },
-  { setLang, t },
+  { createElicitationForm: createForm, createElicitationUrlAsk: createUrlAsk, elicitationNotices, fieldQuestion: askField, formFields, parseFieldText: parseField, serverHeader },
+  { getLang, setLang, t },
+  { claudeElicitationText, installClaudeLocale },
 ] = await Promise.all([
-  import('../src/channel/elicitation.js'),
+  import('../src/backends/shared/elicitation.js'),
   import('../src/i18n.js'),
+  import('../src/backends/claude/text.js'),
 ])
+
+// The copy of one call, in the language showing now.
+installClaudeLocale(getLang)
+/** One snapshot per flow: its option labels are matched against the strings
+ *  the panel showed, so a language switch mid-flow must not relabel them. */
+const elicit = (): Parameters<typeof askField>[4] => claudeElicitationText()
+const createElicitationForm = (request: Parameters<typeof createForm>[0]) => createForm(request, elicit())
+const createElicitationUrlAsk = (request: Parameters<typeof createUrlAsk>[0]) => createUrlAsk(request, elicit())
+const fieldQuestion = (field: Parameters<typeof askField>[0], header: string, lead: string | undefined, error: string | undefined) => askField(field, header, lead, error, elicit())
+const parseFieldText = (field: Parameters<typeof parseField>[0], text: string) => parseField(field, text, elicit())
+const notices = (): ReturnType<typeof elicitationNotices> => elicitationNotices(elicit())
 
 let passed = 0
 const check = (label: string, ok: boolean, detail?: unknown): void => {
@@ -45,9 +63,10 @@ setLang('en')
 
 // ── module hygiene ──────────────────────────────────────────────────────
 {
-  const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'channel', 'elicitation.ts'), 'utf8')
+  const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'backends', 'shared', 'elicitation.ts'), 'utf8')
   const imports = [...source.matchAll(/from '([^']+)'/gu)].map(match => match[1]!)
-  check('the module imports only the agent domain and i18n', imports.every(path => path === '../agent/capabilities.js' || path === '../agent/events.js' || path === '../i18n.js'), imports)
+  check('the module imports only the agent domain and the shared text rules',
+    imports.every(path => path === '../../agent/capabilities.js' || path === '../../agent/events.js' || path === './localized-text.js'), imports)
 }
 
 // ── schema → fields ─────────────────────────────────────────────────────
@@ -150,10 +169,10 @@ const request = { serverName: 'github', displayName: 'GitHub MCP', title: 'Sign 
   check('accept is the first option only', ask.accepted(answers({ selected: [t('elicit-url-accept')] })) && !ask.accepted(answers({ selected: [t('elicit-decline')] })) && !ask.accepted(answers({})))
   const own = createElicitationUrlAsk({ serverName: 'github', message: 'Authorize the app', url: 'https://example.test' })!
   check('the server message is the question when present', own.questions[0]!.question === 'Authorize the app')
-  check('notices name the server (and the URL)', elicitationNotices.urlOpen('github', 'https://x.test') === t('elicit-url-notice', { server: 'github', url: 'https://x.test' })
-    && elicitationNotices.urlComplete('github') === t('elicit-url-complete', { server: 'github' })
-    && elicitationNotices.urlMissing('github') === t('elicit-url-missing', { server: 'github' })
-    && elicitationNotices.unsupported('github', 'hologram') === t('elicit-unsupported', { server: 'github', mode: 'hologram' }))
+  check('notices name the server (and the URL)', notices().urlOpen('github', 'https://x.test') === t('elicit-url-notice', { server: 'github', url: 'https://x.test' })
+    && notices().urlComplete('github') === t('elicit-url-complete', { server: 'github' })
+    && notices().urlMissing('github') === t('elicit-url-missing', { server: 'github' })
+    && notices().unsupported('github', 'hologram') === t('elicit-unsupported', { server: 'github', mode: 'hologram' }))
   check('the header chip clips a long server name', serverHeader('a   very long    server name that goes on') === 'a very long server name…' && serverHeader(' short ') === 'short')
 }
 

@@ -42,6 +42,7 @@ const [
   { setLang, t },
   { settled },
   fakes,
+  { claudeText },
 ] = await Promise.all([
   import('../src/backends/claude/transcript-file.js'),
   import('../src/backends/claude/older-history.js'),
@@ -53,6 +54,7 @@ const [
   import('../src/i18n.js'),
   import('./lib/term-test.mjs'),
   import('./lib/claude-fake-sdk.js'),
+  import('../src/backends/claude/text.js'),
 ])
 type AgentEvent = import('../src/agent/events.js').AgentEvent
 
@@ -143,7 +145,7 @@ const texts = (events: readonly AgentEvent[]): string[] => events.flatMap(event 
   const read = readTranscriptEntries(transcriptPath)
   check('bad lines are skipped and counted, every good entry kept', read.badLines === 2 && read.entries.length === segmentA.length + segmentB.length + segmentC.length + 1, read.badLines)
   let refused = false
-  try { readTranscriptEntries(transcriptPath, 100) } catch (error) { refused = error instanceof Error && error.message === t('claude-transcript-too-large', { mb: '0' }) }
+  try { readTranscriptEntries(transcriptPath, 100) } catch (error) { refused = error instanceof Error && error.message === claudeText('claude-transcript-too-large', { mb: '0' }) }
   check('a file over the bound is refused, not truncated', refused)
 }
 

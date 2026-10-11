@@ -3,7 +3,11 @@
  * file. Legal JSON that is not a record (`null`, scalars, arrays) is skipped
  * silently since it is well-formed, just not a row; text that fails to parse
  * is counted, so a truncated or corrupted source can be reported.
- * Shared by the migration sources and the Claude backend's transcript reader.
+ *
+ * Backend-neutral (D15): the migration sources (via
+ * `src/dsh-adapter/migrate/parse/jsonl.ts`) and the Claude backend's
+ * transcript reader both read JSONL, and a backend must not reach into
+ * `src/utils/` (B-3's boundary rule). Pure, zero imports.
  */
 
 /** A decoded JSON object row. */

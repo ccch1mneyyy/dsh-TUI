@@ -16,7 +16,14 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { i18nDict, type I18nText } from '../src/i18n.js'
+import { claudeTexts } from '../src/backends/claude/text.js'
 import { SPINNER_VERBS } from '../src/terminal-utils/spinnerVerbs.js'
+
+/** Dictionaries a backend carries itself (B-3), audited with the same rules
+ *  minus the dead-key one (see the section at the end). */
+const BACKEND_TEXT_MODULES: readonly { readonly module: string; readonly dict: Readonly<Record<string, { readonly zh?: I18nText; readonly en?: I18nText }>> }[] = [
+  { module: 'src/backends/claude/text.ts', dict: claudeTexts },
+]
 
 // 运行时拼接的 key 前缀（新增拼接家族时在此登记，并附拼接点）：
 //   cmd-desc-*    src/commands.ts        tOr(`cmd-desc-${command.name}`)
@@ -110,9 +117,37 @@ for (const f of files.filter(f => f.startsWith('src'))) {
   }
 }
 
+// ── 5：后端自带文案（B-3）───────────────────────────────────────────
+// A backend writes its own copy (D2: the host dictionary is not readable from
+// a backend), so the two silent-failure classes above apply there too — a
+// missing `en` would show zh to an English user, and `{name}` would go on
+// screen unfilled. Registered modules are audited through the read-only view
+// each exports. The dead-key rule does NOT apply here: a backend's entries are
+// consumed by `claudeText` / `claudeTemplate` calls inside its own package, a
+// typo is already a compile error (`ClaudeTextKey`), and an unused entry is
+// dead weight rather than a silent failure.
+for (const { module, dict } of BACKEND_TEXT_MODULES) {
+  for (const [key, entry] of Object.entries(dict)) {
+    if (entry.zh === undefined) fail(`${module}: ${key}: 缺 zh`)
+    if (entry.en === undefined) fail(`${module}: ${key}: 缺 en`)
+    for (const lang of ['zh', 'en'] as const) {
+      for (const form of forms(entry[lang])) {
+        const m = singleBrace.exec(form)
+        if (m) fail(`${module}: ${key}.${lang}: 单花括号 {${m[1]}}——模板只替换 {{${m[1]}}}`)
+      }
+    }
+    const zh = placeholders(entry.zh)
+    const en = placeholders(entry.en)
+    if (entry.en !== undefined && !isSubset(zh, en) && !isSubset(en, zh)) {
+      fail(`${module}: ${key}: 占位符名不一致 zh={{${[...zh].join(',')}}} en={{${[...en].join(',')}}}`)
+    }
+  }
+}
+
 const total = Object.keys(i18nDict).length
+const backendTotal = BACKEND_TEXT_MODULES.reduce((sum, module) => sum + Object.keys(module.dict).length, 0)
 if (failures > 0) {
-  console.error(`verify-i18n: ${total} 条目，${failures} 处失败`)
+  console.error(`verify-i18n: ${total} 条目（+ 后端自带 ${backendTotal}），${failures} 处失败`)
   process.exit(1)
 }
-console.log(`✓ verify-i18n: ${total} 条目——语言完整、占位符一致、无死 key`)
+console.log(`✓ verify-i18n: ${total} 条目（+ 后端自带 ${backendTotal}）——语言完整、占位符一致、无死 key`)

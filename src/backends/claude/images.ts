@@ -16,11 +16,11 @@
  * until asked: its size is probed from a short decoded prefix on first
  * access, its bytes decoded on `read()` — no pixels in the projection.
  */
-import type { TranscriptImage } from '../../adapter/ports/channel-view.js'
+import type { TranscriptImage } from '../../agent/index.js'
 import type { ImageLimitsView } from '../../agent/capabilities.js'
 import type { ImageRef } from '../../agent/events.js'
-import { t } from '../../i18n.js'
-import { probeImageSize } from '../../utils/imageResize.js'
+import { claudeText } from './text.js'
+import { probeImageSize } from '../shared/image-size.js'
 import { rec } from './narrow.js'
 
 /** What a Claude message may carry (see the module comment). */
@@ -49,21 +49,21 @@ const isAccepted = (mediaType: string | undefined): mediaType is ClaudeImageBloc
  * message silently missing an image.
  */
 export async function claudeImageBlocks(images: readonly TranscriptImage[], limits: ImageLimitsView = CLAUDE_IMAGE_LIMITS): Promise<ClaudeImageBlock[]> {
-  if (images.length > limits.maxImagesPerMessage) throw new Error(t('claude-images-too-many', { n: limits.maxImagesPerMessage }))
+  if (images.length > limits.maxImagesPerMessage) throw new Error(claudeText('claude-images-too-many', { n: limits.maxImagesPerMessage }))
   const blocks: ClaudeImageBlock[] = []
   let total = 0
   for (const image of images) {
     const label = image.name ?? image.id
-    if (!isAccepted(image.mediaType) || !limits.mediaTypes.includes(image.mediaType)) throw new Error(t('claude-image-type-refused', { name: label, type: image.mediaType ?? '?' }))
+    if (!isAccepted(image.mediaType) || !limits.mediaTypes.includes(image.mediaType)) throw new Error(claudeText('claude-image-type-refused', { name: label, type: image.mediaType ?? '?' }))
     let data: Uint8Array
     try {
       data = await image.read()
     } catch (error) {
-      throw new Error(t('claude-image-unreadable', { name: label, err: error instanceof Error ? error.message : String(error) }))
+      throw new Error(claudeText('claude-image-unreadable', { name: label, err: error instanceof Error ? error.message : String(error) }))
     }
-    if (data.byteLength > limits.maxImageBytes) throw new Error(t('claude-image-too-large', { name: label, mb: Math.round(limits.maxImageBytes / (1024 * 1024)) }))
+    if (data.byteLength > limits.maxImageBytes) throw new Error(claudeText('claude-image-too-large', { name: label, mb: Math.round(limits.maxImageBytes / (1024 * 1024)) }))
     total += data.byteLength
-    if (total > limits.maxMessageImageBytes) throw new Error(t('claude-images-too-large', { mb: Math.round(limits.maxMessageImageBytes / (1024 * 1024)) }))
+    if (total > limits.maxMessageImageBytes) throw new Error(claudeText('claude-images-too-large', { mb: Math.round(limits.maxMessageImageBytes / (1024 * 1024)) }))
     blocks.push({ type: 'image', source: { type: 'base64', media_type: image.mediaType, data: Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('base64') } })
   }
   return blocks

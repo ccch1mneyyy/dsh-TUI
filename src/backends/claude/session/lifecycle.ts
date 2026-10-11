@@ -35,11 +35,11 @@
  */
 import type { AccountInfo, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountView } from '../../../agent/capabilities.js'
-import type { WorkingActivityView } from '../../../adapter/ports/channel-view.js'
+import type { WorkingActivityView } from '../../../agent/index.js'
 import type { AgentEvent, AgentEventMeta } from '../../../agent/events.js'
 import type { AgentSessionRef } from '../../../agent/refs.js'
 import type { AgentInput, AgentSession, AgentSessionStatus, CancelCause, SubmitPlacement } from '../../../agent/session.js'
-import { t } from '../../../i18n.js'
+import { claudeText, installClaudeLocale } from '../text.js'
 import { CLAUDE_BACKEND_ID, CLI_CAPABILITY, cliVersionDrift, VALIDATED_CLI_VERSIONS, VALIDATED_SDK_VERSION } from '../contract.js'
 import { isAuthFailure, type ClaudeAuthPlan, CLAUDE_OAUTH_PROVIDER } from '../auth.js'
 import { accountView } from '../controls.js'
@@ -49,11 +49,9 @@ import { createClaudeActivityPublisher } from '../activity.js'
 import { createClaudePermissionBridge, WITHDRAWN_MESSAGE } from '../permissions.js'
 import { createStderrSink } from '../process.js'
 import { memoryClaudePrefs } from '../prefs.js'
-import { fileClaudeChannels } from '../channels.js'
+import { fileClaudeChannels, memoryClaudeChannels } from '../channels.js'
 import { fileClaudeChannelTokens } from '../../shared/channel-tokens.js'
 import { createClaudeTranscriptHistory } from '../older-history.js'
-import { join } from 'node:path'
-import { DATA_DIR } from '../../../utils/paths.js'
 import { envSlotsServeModel, mergedModelEnv } from '../modelEnv.js'
 import { claudeConfigDir } from '../transcript-file.js'
 import { CLAUDE_IMAGE_LIMITS, claudeImageBlocks } from '../images.js'
@@ -85,6 +83,11 @@ const NO_CONVERSATION = /No conversation found with session ID/iu
 /** Open one session: start the query, wait for its handshake, start the
  *  consumer loop. Throws (after cleaning up) when the CLI cannot start. */
 export async function openClaudeSession(input: ClaudeSessionDeps): Promise<AgentSession> {
+  // This backend's own copy follows the host's language (B-3): a session the
+  // host opened has already installed it in `detect()`/`open()`, and a caller
+  // that builds the deps itself (a regression fixture) says so here or keeps
+  // the documented `zh` fallback.
+  if (input.host.locale !== undefined) installClaudeLocale(input.host.locale)
   // The replayed history goes to the channel once (`history()`) and is then
   // let go: a long transcript's events must not live as long as the session.
   const { resume, ...deps } = input
@@ -99,9 +102,13 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   const clock = deps.clock ?? REAL_CLOCK
   const forceSettleMs = deps.forceSettleMs ?? 30_000
   const prefs = deps.prefs ?? memoryClaudePrefs()
-  // The relay channel profiles: the file store under ~/.dsh-tui by default,
-  // injectable like prefs (tests run an in-memory store).
-  const channels = deps.channels ?? fileClaudeChannels(join(DATA_DIR, 'backends', 'claude'), message => deps.host.debug(message))
+  // The relay channel profiles: the file store under the host's data dir for
+  // this backend, injectable like prefs (tests run an in-memory store). A host
+  // that hands over no directory keeps nothing here — memory, never a path
+  // this backend picked for itself (D2).
+  const channels = deps.channels ?? (deps.host.dataDir === undefined
+    ? memoryClaudeChannels({ channels: [] })
+    : fileClaudeChannels(deps.host.dataDir, message => deps.host.debug(message)))
   // The channel-token seam: ~/.dsh/.credentials.yaml by default (the
   // /provider precedent), injectable for tests.
   const channelTokens = deps.channelTokens ?? fileClaudeChannelTokens(undefined, message => deps.host.debug(message))
@@ -321,16 +328,16 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     if (disposing) return
     disposing = true
     status = 'disposed'
-    const reason = error === undefined ? t('claude-process-ended') : errorText(error)
+    const reason = error === undefined ? claudeText('claude-process-ended') : errorText(error)
     teardown()
     emit([
       ...translator.forceCloseTurn({ kind: 'error', message: reason }),
       // The process's background work went with it (the level is per process).
       { type: 'tasks.snapshot', taskIds: [] },
-      { type: 'notice', level: 'error', text: t('claude-process-exited', { reason }) },
+      { type: 'notice', level: 'error', text: claudeText('claude-process-exited', { reason }) },
       { type: 'session.status', status: 'disposed' },
     ], 'sync', true)
-    settleIdleWaiters(new Error(t('claude-session-closed')))
+    settleIdleWaiters(new Error(claudeText('claude-session-closed')))
   }
 
   const fetchAccount = (target: Run): void => {
@@ -368,7 +375,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     const init = await Promise.race([
       target.query.initializationResult(),
       new Promise<never>((_, reject) => {
-        timer = clock.setTimeout(() => reject(new Error(t('claude-start-timeout'))), deps.initTimeoutMs ?? 60_000)
+        timer = clock.setTimeout(() => reject(new Error(claudeText('claude-start-timeout'))), deps.initTimeoutMs ?? 60_000)
       }),
     ]).finally(() => clock.clearTimeout(timer))
     const result = rec(init)
@@ -451,7 +458,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       cliVersion = event.backendVersion
       // Drift is reported, never a stop.
       if (cliVersionDrift(cliVersion) !== undefined) {
-        emit([{ type: 'notice', level: 'warning', text: t('claude-version-drift', { version: cliVersion, validated: VALIDATED_CLI_VERSIONS.join(', ') }) }])
+        emit([{ type: 'notice', level: 'warning', text: claudeText('claude-version-drift', { version: cliVersion, validated: VALIDATED_CLI_VERSIONS.join(', ') }) }])
       }
     }
   }
@@ -676,7 +683,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
           auth.attempts = 0
           // Never under a running turn: the restart would abort it and drop
           // what the user queued behind it. Reconnect once it ends.
-          if (!idle()) emit([{ type: 'notice', level: 'info', text: t('claude-auth-reconnect-deferred') }])
+          if (!idle()) emit([{ type: 'notice', level: 'info', text: claudeText('claude-auth-reconnect-deferred') }])
           await auth.reconnect({}, { waitIdle: true })
         },
       },
@@ -698,11 +705,11 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       },
       diagnostics: {
         lines: (): readonly string[] => [
-          t('claude-doctor-cli', { path: deps.executable.path ?? t('claude-doctor-bundled'), source: deps.executable.source, version: cliVersion ?? t('doctor-unknown') }),
-          ...(cliVersionDrift(cliVersion) === undefined ? [] : [t('claude-version-drift', { version: cliVersion ?? '', validated: VALIDATED_CLI_VERSIONS.join(', ') })]),
-          t('claude-doctor-sdk', { version: deps.sdkVersion ?? t('doctor-unknown'), validated: VALIDATED_SDK_VERSION }),
-          t('claude-doctor-mode', { mode: translator.mode ?? deps.start.mode, source: deps.start.source }),
-          t('claude-auth-source', { source: authSourceLabel(authPlan) }),
+          claudeText('claude-doctor-cli', { path: deps.executable.path ?? claudeText('claude-doctor-bundled'), source: deps.executable.source, version: cliVersion ?? claudeText('doctor-unknown') }),
+          ...(cliVersionDrift(cliVersion) === undefined ? [] : [claudeText('claude-version-drift', { version: cliVersion ?? '', validated: VALIDATED_CLI_VERSIONS.join(', ') })]),
+          claudeText('claude-doctor-sdk', { version: deps.sdkVersion ?? claudeText('doctor-unknown'), validated: VALIDATED_SDK_VERSION }),
+          claudeText('claude-doctor-mode', { mode: translator.mode ?? deps.start.mode, source: deps.start.source }),
+          claudeText('claude-auth-source', { source: authSourceLabel(authPlan) }),
           ...(account === undefined ? [] : accountLines(accountView(account, apiKeySource))),
         ],
       },
@@ -733,7 +740,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       // new one (the old one's stdin is closed). A `/login` reconnect still
       // waiting for the session to go idle leaves the old CLI serving.
       if (auth.reconnecting !== undefined && !auth.reconnectDeferred) await auth.reconnecting.catch(() => undefined)
-      if (disposing || run.inbox.closed) throw new Error(t('claude-session-closed'))
+      if (disposing || run.inbox.closed) throw new Error(claudeText('claude-session-closed'))
       // Pasted images and `@image` mentions arrive as image blocks with their
       // staged facades (`input.images`, block order): each is read back and
       // sent as a base64 block after the text. An image block without its
@@ -741,14 +748,14 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       // the text without part of it.
       const imageBlocks = (input.blocks ?? []).filter(block => block.type === 'image').length
       const staged = input.images ?? []
-      if (imageBlocks > staged.length) throw new Error(t('claude-image-unreadable', { name: `#${staged.length + 1}`, err: t('claude-image-gone') }))
+      if (imageBlocks > staged.length) throw new Error(claudeText('claude-image-unreadable', { name: `#${staged.length + 1}`, err: claudeText('claude-image-gone') }))
       const images = staged.length === 0 ? [] : await claudeImageBlocks(staged)
       // An auth-failure reconnect may have started during the read (this
       // run's inbox is then closed until the replacement is up): wait for
       // it again before judging. A deferred `/login` reconnect is not waited
       // for; the old CLI keeps serving until it swaps.
       if (auth.reconnecting !== undefined && !auth.reconnectDeferred) await auth.reconnecting.catch(() => undefined)
-      if (disposing || run.inbox.closed) throw new Error(t('claude-session-closed'))
+      if (disposing || run.inbox.closed) throw new Error(claudeText('claude-session-closed'))
       const texts = (input.blocks ?? [{ type: 'text', text: input.text }])
         .flatMap(block => block.type === 'text' && typeof block.text === 'string' && block.text !== '' ? [block.text] : [])
       const content = images.length === 0 && texts.length <= 1
@@ -784,7 +791,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
           dialogs.settleAll()
           emit([
             ...translator.forceCloseTurn({ kind: 'aborted' }),
-            { type: 'notice', level: 'warning', text: t('claude-cancel-forced') },
+            { type: 'notice', level: 'warning', text: claudeText('claude-cancel-forced') },
             { type: 'session.status', status: 'requires-action' },
           ])
           settleIdleWaiters()
@@ -837,7 +844,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         ])
         clock.clearTimeout(timer)
         if (!wasDisposed) emit([{ type: 'session.status', status: 'disposed' }], 'none', true)
-        settleIdleWaiters(new Error(t('claude-session-closed')))
+        settleIdleWaiters(new Error(claudeText('claude-session-closed')))
         listeners.clear()
         backlog.length = 0
       })()

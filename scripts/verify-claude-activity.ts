@@ -26,6 +26,7 @@ import { activityDetail, createClaudeActivityPublisher } from '../src/backends/c
 import { createClaudeTranslator, type ClaudeActivityState } from '../src/backends/claude/translate.js'
 import { openClaudeSession } from '../src/backends/claude/session.js'
 import { setLang, t } from '../src/i18n.js'
+import { claudeText } from '../src/backends/claude/text.js'
 import { claudeDeps, fakeClaudeSdk } from './lib/claude-fake-sdk.js'
 
 setLang('en')
@@ -77,7 +78,7 @@ const settle = async (rounds = 4): Promise<void> => { for (let i = 0; i < rounds
   translator.registerInput('u1', 'fix the login bug', 'turn')
   feed({ type: 'command_lifecycle', state: 'started', command_uuid: 'u1' })
   check('turn open publishes thinking with the turn anchor',
-    published.length === 1 && published[0]!.phase === 'thinking' && published[0]!.line === t('claude-activity-thinking') && published[0]!.turnStartedAt !== 0,
+    published.length === 1 && published[0]!.phase === 'thinking' && published[0]!.line === claudeText('claude-activity-thinking') && published[0]!.turnStartedAt !== 0,
     lines())
 
   // The reply narrates: the ⏵ line becomes the line while it streams.
@@ -122,14 +123,14 @@ const settle = async (rounds = 4): Promise<void> => { for (let i = 0; i < rounds
   feed({ type: 'assistant', message: { id: 'msg_4', model: 'fixture-model', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_3', name: 'Bash', input: { command: 'rm -rf /tmp/x' } }] } }, true)
   const waiting = published.at(-1)!
   check('a parked prompt is the waiting phase with the pending tool named',
-    waiting.phase === 'waiting' && waiting.line === t('claude-activity-waiting') && waiting.label === 'Bash' && waiting.detail === 'rm -rf /tmp/x',
+    waiting.phase === 'waiting' && waiting.line === claudeText('claude-activity-waiting') && waiting.label === 'Bash' && waiting.detail === 'rm -rf /tmp/x',
     lines())
 
   // Turn end: the done card, settled copy, the count kept.
   feed({ type: 'result', subtype: 'success', duration_api_ms: 1, usage: { input_tokens: 1, output_tokens: 1 } })
   const done = published.at(-1)!
   check('turn end parks on the done card',
-    done.phase === 'done' && done.live === false && done.line === t('claude-activity-done-tools', { count: 2 }) && done.toolCount === 2,
+    done.phase === 'done' && done.live === false && done.line === claudeText('claude-activity-done-tools', { count: 2 }) && done.toolCount === 2,
     lines())
   check('the done card is not republished while idle', (feed({ type: 'system', subtype: 'status', status: 'ready' }), published.length) === published.length || published.at(-1) === done, lines())
 

@@ -1,7 +1,7 @@
 /** Subagent transcript access and background-task controls for a session. */
 import type { Query } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentSession } from '../../../agent/session.js'
-import { t } from '../../../i18n.js'
+import { claudeText } from '../text.js'
 import type { ClaudeAuthPlan } from '../auth.js'
 import { replayClaudeSubagentLane } from '../replay.js'
 import { readTaskOutputTail, taskOutputRoots } from '../task-output.js'
@@ -75,7 +75,7 @@ export function sessionTaskCapabilities(context: {
       stop: taskId => stopTask(taskId),
       readOutput: taskId => {
         const file = translator.outputFileOf(taskId)
-        if (file === undefined) return Promise.reject(new Error(t('claude-task-output-unknown', { id: taskId })))
+        if (file === undefined) return Promise.reject(new Error(claudeText('claude-task-output-unknown', { id: taskId })))
         try {
           return Promise.resolve(readTaskOutputTail(file, taskId, taskOutputRoots(context.authPlan.env)))
         } catch (error) {

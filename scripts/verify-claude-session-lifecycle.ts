@@ -49,7 +49,8 @@ import { memoryClaudePrefs } from '../src/backends/claude/prefs.js'
 import type { ClaudeReplay } from '../src/backends/claude/replay.js'
 import { buildClaudeEnv } from '../src/backends/claude/process.js'
 import { openClaudeSession, type ClaudeClock, type ClaudeSessionDeps } from '../src/backends/claude/session.js'
-import { setLang, t } from '../src/i18n.js'
+import { getLang, setLang, t } from '../src/i18n.js'
+import { claudeText } from '../src/backends/claude/text.js'
 
 setLang('en')
 let passed = 0
@@ -155,7 +156,7 @@ const baseDeps = (sdk: ClaudeSessionDeps['sdk'], clock: ClaudeClock, extra: Part
   start: { mode: 'default', source: 'default' },
   executable: { path: '/fixture/bin/claude', source: 'env' },
   env: { PATH: '/usr/bin' },
-  host: { debug: () => undefined },
+  host: { locale: getLang, debug: () => undefined },
   clock,
   ...extra,
 })
@@ -206,8 +207,8 @@ const collect = (session: AgentSession) => {
   // Images are sent (see verify-claude-images); an image the session
   // cannot send (an unreadable facade, an image block without one) is
   // still refused loudly, never dropped from the message.
-  await assert.rejects(session.submit({ text: 'img', clientMessageId: 'x', images: [{} as never] }, 'followup'), new RegExp(t('claude-image-type-refused', { name: 'undefined', type: '?' }).replace(/[()?]/gu, '\\$&')))
-  await assert.rejects(session.submit({ text: 'pasted', clientMessageId: 'z', blocks: [{ type: 'text', text: 'pasted' }, { type: 'image' }] }, 'followup'), new RegExp(t('claude-image-gone')))
+  await assert.rejects(session.submit({ text: 'img', clientMessageId: 'x', images: [{} as never] }, 'followup'), new RegExp(claudeText('claude-image-type-refused', { name: 'undefined', type: '?' }).replace(/[()?]/gu, '\\$&')))
+  await assert.rejects(session.submit({ text: 'pasted', clientMessageId: 'z', blocks: [{ type: 'text', text: 'pasted' }, { type: 'image' }] }, 'followup'), new RegExp(claudeText('claude-image-gone')))
   check('submit: an image it cannot send (bad facade, block without one) is refused loudly', !query.inputs.some(input => input.uuid === 'x' || input.uuid === 'z'))
   query.emit({ type: 'mystery_frame', payload: 1 })
   query.emit({ type: 'system', subtype: 'brand_new' })
@@ -252,7 +253,7 @@ const collect = (session: AgentSession) => {
   advance(1)
   const tail = sink.events().slice(-3)
   check('30 s without confirmation force-closes the turn', tail.some(event => event.type === 'turn.end' && event.reason.kind === 'aborted'), tail)
-  check('the forced close says so', tail.some(event => event.type === 'notice' && event.text === t('claude-cancel-forced')))
+  check('the forced close says so', tail.some(event => event.type === 'notice' && event.text === claudeText('claude-cancel-forced')))
   check('the session asks for attention', tail.some(event => event.type === 'session.status' && event.status === 'requires-action'))
   await session.dispose()
   check('no timer after dispose', outstanding() === 0)
@@ -422,9 +423,13 @@ const collect = (session: AgentSession) => {
     CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SESSION_ATTENDED: '1', CLAUDE_PID: '42', AI_AGENT: 'claude-code',
     TRACEPARENT: '00-abc-def-01', CLAUDE_CODE_EXECPATH: '/parent/claude', CLAUDE_EFFORT: 'high', CLAUDE_CODE_INVOKED_SKILLS: 'x',
   }
-  const env = buildClaudeEnv({ PATH: '/usr/bin', ...parent, ANTHROPIC_API_KEY: 'kept' })
+  const env = buildClaudeEnv({ appVersion: '9.9.9', base: { PATH: '/usr/bin', ...parent, ANTHROPIC_API_KEY: 'kept' } })
   check('env: parent Claude Code session variables are scrubbed', Object.keys(parent).every(key => env[key] === undefined), Object.keys(parent).filter(key => env[key] !== undefined))
-  check('env: client app + session state events, credentials untouched', env.CLAUDE_AGENT_SDK_CLIENT_APP?.startsWith('dsh-tui/') === true && env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS === '1' && env.ANTHROPIC_API_KEY === 'kept' && env.PATH === '/usr/bin')
+  check('env: client app + session state events, credentials untouched', env.CLAUDE_AGENT_SDK_CLIENT_APP === 'dsh-tui/9.9.9' && env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS === '1' && env.ANTHROPIC_API_KEY === 'kept' && env.PATH === '/usr/bin')
+  // The version tag comes from the host (`BackendHost.appVersion`), never from
+  // this backend reading the TUI's package.json; a host that cannot tell
+  // keeps the long-standing `dev` tag (B-3).
+  check('env: no host version keeps the dev tag', buildClaudeEnv({ base: {} }).CLAUDE_AGENT_SDK_CLIENT_APP === 'dsh-tui/dev')
   const options = buildQueryOptions({
     cwd: '/fixture/project', sessionId: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
     stderr: () => undefined, abortController: new AbortController(), replayUserMessages: true,

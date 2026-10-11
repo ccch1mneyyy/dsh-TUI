@@ -44,6 +44,7 @@ const [
   { setLang, t },
   { claudeDeps, fakeClaudeSdk, tick },
   { settled },
+  { claudeText },
 ] = await Promise.all([
   import('../src/backends/claude/catalog.js'),
   import('../src/backends/claude/backend.js'),
@@ -54,6 +55,7 @@ const [
   import('../src/i18n.js'),
   import('./lib/claude-fake-sdk.js'),
   import('./lib/term-test.mjs'),
+  import('../src/backends/claude/text.js'),
 ])
 type AgentEvent = import('../src/agent/events.js').AgentEvent
 type AgentEventMeta = import('../src/agent/events.js').AgentEventMeta
@@ -265,7 +267,7 @@ const chain = (id: string) => [
   check('resume reads where the session was recorded', loaded.cwd === workdir)
   check('… replays its subagents after their Agent call', loaded.replay.events.some(event => event.type === 'subagent.start' && event.agentId === 'agentx' && event.parentCallId === 'sess-1-call'))
   check('… and its title', loaded.replay.events.some(event => event.type === 'session.title' && event.title === 'title of sess-1'))
-  check('an unknown id fails loudly (never a fresh session)', await loadClaudeTranscript(store as never, { sessionId: 'nope' }, workdir).then(() => false, (error: Error) => error.message === t('claude-resume-not-found', { id: 'nope' })))
+  check('an unknown id fails loudly (never a fresh session)', await loadClaudeTranscript(store as never, { sessionId: 'nope' }, workdir).then(() => false, (error: Error) => error.message === claudeText('claude-resume-not-found', { id: 'nope' })))
 
   const fake = fakeClaudeSdk(undefined, {
     rewindFiles: (anchor: unknown, options: unknown) => ((options as { dryRun?: boolean } | undefined)?.dryRun === true
@@ -327,7 +329,7 @@ const chain = (id: string) => [
 
   // A session the CLI never wrote has nothing to fork.
   const fresh = await openClaudeSession(claudeDeps(fakeClaudeSdk().sdk, { store: sessionStore as never }))
-  check('/fork before the first saved prompt is refused', await fresh.capabilities.fork!.fork().then(() => false, (error: Error) => error.message === t('claude-fork-empty')))
+  check('/fork before the first saved prompt is refused', await fresh.capabilities.fork!.fork().then(() => false, (error: Error) => error.message === claudeText('claude-fork-empty')))
   await fresh.dispose()
 }
 

@@ -4,7 +4,7 @@ import type { RewindOutcome, RewindPreview } from '../../../agent/capabilities.j
 import type { AgentEvent } from '../../../agent/events.js'
 import type { AgentSessionRef } from '../../../agent/refs.js'
 import type { AgentSession } from '../../../agent/session.js'
-import { t } from '../../../i18n.js'
+import { claudeText } from '../text.js'
 import { CLAUDE_BACKEND_ID } from '../contract.js'
 import { errorText } from '../narrow.js'
 import { rewindCutPoint } from '../replay.js'
@@ -24,9 +24,9 @@ export function createSessionStore(context: {
   /** The live query's checkpoint restore (`enableFileCheckpointing`). */
   const rewindFiles = async (anchor: string, dryRun: boolean): Promise<RewindPreview> => {
     const query = context.run.query as Partial<Pick<Query, 'rewindFiles'>>
-    if (typeof query.rewindFiles !== 'function') throw new Error(t('claude-rewind-files-unavailable'))
+    if (typeof query.rewindFiles !== 'function') throw new Error(claudeText('claude-rewind-files-unavailable'))
     const result = await query.rewindFiles(anchor, dryRun ? { dryRun: true } : undefined)
-    if (!result.canRewind) throw new Error(result.error ?? t('claude-rewind-files-unavailable'))
+    if (!result.canRewind) throw new Error(result.error ?? claudeText('claude-rewind-files-unavailable'))
     return {
       filesChanged: result.filesChanged ?? [],
       ...(result.insertions === undefined ? {} : { insertions: result.insertions }),
@@ -45,7 +45,7 @@ export function createSessionStore(context: {
     if (store === undefined) return {}
     const fork = async (options: { readonly upToMessageId?: string; readonly title?: string }): Promise<AgentSessionRef> => {
       // Nothing to copy before the CLI wrote the transcript.
-      if (!context.persisted) throw new Error(t('claude-fork-empty'))
+      if (!context.persisted) throw new Error(claudeText('claude-fork-empty'))
       const forked = await store.forkSession(context.currentSessionId, { dir: deps.cwd, ...options })
       return { backendId: CLAUDE_BACKEND_ID, sessionId: forked.sessionId }
     }
@@ -61,9 +61,9 @@ export function createSessionStore(context: {
             // Resolve the cut before touching any file: a conversation the
             // rewind cannot cut must not leave the files rewound alone.
             const chain = await store.getSessionMessages(context.currentSessionId, { dir: deps.cwd, includeSystemMessages: true })
-            if (!chain.some(message => message.uuid === anchor)) return { kind: 'refused', reason: t('claude-rewind-not-found') }
+            if (!chain.some(message => message.uuid === anchor)) return { kind: 'refused', reason: claudeText('claude-rewind-not-found') }
             cut = rewindCutPoint(chain, anchor)
-            if (cut === undefined) return { kind: 'refused', reason: t('rewind-first-message') }
+            if (cut === undefined) return { kind: 'refused', reason: claudeText('rewind-first-message') }
           }
           let files: RewindPreview | undefined
           if (mode !== 'conversation') {
@@ -102,7 +102,7 @@ export function createSessionStore(context: {
     pendingTitle = undefined
     void rename(context.currentSessionId, title, { dir: deps.cwd }).catch((error: unknown) => {
       deps.host.debug(`claude: deferred rename failed (${errorText(error)})`)
-      emit([{ type: 'notice', level: 'warning', text: t('rename-failed', { err: errorText(error) }) }])
+      emit([{ type: 'notice', level: 'warning', text: claudeText('rename-failed', { err: errorText(error) }) }])
     })
   }
   function renameCapability(): Pick<AgentSession['capabilities'], 'rename'> {
@@ -112,7 +112,7 @@ export function createSessionStore(context: {
       rename: {
         async rename(title: string): Promise<void> {
           const trimmed = title.trim()
-          if (trimmed === '') throw new Error(t('rename-usage'))
+          if (trimmed === '') throw new Error(claudeText('rename-usage'))
           if (context.persisted) await rename(context.currentSessionId, trimmed, { dir: deps.cwd })
           else pendingTitle = trimmed
           emit([{ type: 'session.title', title: trimmed, source: 'user' }])
