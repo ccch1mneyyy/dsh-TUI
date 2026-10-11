@@ -137,6 +137,53 @@ check('an install recipe is refused without a non-empty executor, specifier and 
 // own. The probes below are that acceptance in executable form — a non-inTree entry
 // declaring Claude's recipe gets *its own* wizard, while codex's "there is nothing
 // to install, the user's own binary is the dependency" is an ordinary absent recipe.
+//
+// ── 2b′. §4.7 ① over the *real* manifests (B-3) ────────────────────────────────
+// The roadmap's note ("flipping the two built-in manifests reddens on the label
+// only") is measured here rather than assumed, on copies of the real manifests
+// through the production gate. A copy needs a free id — the seeds own theirs, and a
+// second registration of one id is refused before any of these rules is reached —
+// and nothing else is changed. Measured: the flip reddens on the label in the
+// registry, and on two further conditions the note did not name —
+// claude's `vendorPackages` (the boundary gate refuses a vendor rule for a
+// non-in-tree backend) and codex's `nativeKey` (native channels are first-party).
+// With those three neutralized both manifests register as plugins with their
+// install surface intact, which is what B-4 has to keep true.
+{
+  const seed = (id: string): BackendManifest => {
+    const manifest = getBackend(id)?.manifest
+    assert.ok(manifest !== undefined, `${id} must be seeded`)
+    return manifest
+  }
+  const claude = seed('claude')
+  const codex = seed('codex')
+  const asPlugin = (manifest: BackendManifest, id: string, overrides: Partial<BackendManifest> = {}): BackendManifest =>
+    ({ ...manifest, id, inTree: false, label: { kind: 'literal', text: manifest.shortLabel }, ...overrides })
+
+  check('flip: claude\'s host label key is the first red — a plugin may not wear a first-party name',
+    throws(() => registerBackend({ manifest: asPlugin(claude, 'claude-flip-label', { label: claude.label }) })))
+  check('flip: codex\'s nativeKey is a second red — native channels stay first-party (the roadmap named only the label)',
+    throws(() => registerBackend({ manifest: asPlugin(codex, 'codex-flip-native') })))
+  check('flip: with the label a literal and its vendor rule dropped, the real claude manifest registers as a plugin — same recipe, its own wizard',
+    (() => {
+      registerBackend({ manifest: asPlugin(claude, 'claude-flip', { vendorPackages: [] }) })
+      const entry = getBackend('claude-flip')
+      const surface = installSurfaceFor('claude-flip')
+      return entry?.installable === true
+        && JSON.stringify(entry.manifest.install) === JSON.stringify(claude.install)
+        && surface?.specifier === claude.install?.specifier && surface.version === claude.install?.version
+        && entry.admission.decision !== 'rejected'
+    })())
+  check('flip: the real codex manifest registers as a plugin with no install surface (nothing to add, the user\'s own binary)',
+    (() => {
+      registerBackend({ manifest: asPlugin(codex, 'codex-flip', { nativeKey: undefined }) })
+      const entry = getBackend('codex-flip')
+      return entry?.manifest.install === undefined && entry.installable === false
+        && installSurfaceFor('codex-flip') === undefined
+        && entry.admission.decision !== 'rejected'
+    })())
+}
+
 check('a non-inTree entry may declare the host\'s executor, and the wizard it opens is its own (not Claude\'s)',
   (() => {
     registerBackend({
@@ -388,6 +435,12 @@ check('and opens a backend in exactly one place, inside the "not dsh" branch (D1
     { name: '@dsh-std/* off adapter/standard + dsh-adapter', file: 'src/agent/probe.ts', source: "import core from '@dsh-std/core'\nexport const s = core\n" },
     { name: 'native.dsh outside dsh-adapter', file: 'src/agent/probe.ts', source: 'export const read = (session: { capabilities: { native: Record<string, unknown> } }): unknown => session.capabilities.native.dsh\n' },
     { name: 'native.codex outside backends/codex', file: 'src/agent/probe.ts', source: 'export const read = (session: { capabilities: { native: Record<string, unknown> } }): unknown => session.capabilities.native.codex\n' },
+    // The island rule (B-3): a concrete backend reaches into host internals. The
+    // three probes are the shapes that matter — the host dictionary (D2), the
+    // host's own utils, and a type-only import (types are part of the surface).
+    { name: 'a backend reads the host dictionary', file: 'src/backends/claude/probe.ts', source: "import { t } from '../../i18n.js'\nexport const s = t('claude-sdk-missing')\n" },
+    { name: 'a backend reads a host util', file: 'src/backends/claude/probe.ts', source: "import { DATA_DIR } from '../../utils/paths.js'\nexport const s = DATA_DIR\n" },
+    { name: 'a backend takes a host type', file: 'src/backends/claude/probe.ts', source: "import type { I18nKey } from '../../i18n.js'\nexport type S = I18nKey\n" },
   ]
   const probeFile = join(tree, 'src', 'agent', 'probe.ts')
   for (const probe of probes) {

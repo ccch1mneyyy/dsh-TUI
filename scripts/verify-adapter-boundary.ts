@@ -33,9 +33,17 @@
  *                                  (reported as one warning); an unlisted one
  *                                  fails, and so does a listed one that no
  *                                  longer exists, so the list only shrinks
- *   src/backends/<x>/**            no src/backends/<y>/** (each backend is an
- *                                  island); src/backends/shared/** is the
- *                                  one exception every backend may import
+ *   src/backends/<x>/**            an island: its own directory, src/agent/**
+ *                                  (the domain it implements) and
+ *                                  src/backends/shared/** (the neutral seam)
+ *                                  only, plus node builtins and the vendor
+ *                                  packages its manifest declares. Host
+ *                                  internals — src/i18n.ts, src/utils/**,
+ *                                  src/channel/**, src/dsh-adapter/** — are
+ *                                  off limits, `import type` included (the
+ *                                  public surface is self-contained, types
+ *                                  too). Another backend's directory is out
+ *                                  too
  *   src/backends/shared/**         backend-neutral helpers (D15 of
  *                                  docs/codex-backend-design.md): no scoped
  *                                  (vendor) package, no concrete backend
@@ -116,6 +124,10 @@ const LAYER_RULES: readonly { readonly dir: string; readonly forbidden: readonly
 const UI_DIRS = ['screens/', 'components/', 'hooks/', 'ink/']
 /** Backend-neutral helpers every backend may import (D15). */
 const SHARED_BACKEND_DIR = 'backends/shared/'
+/** The only host directories a concrete backend may import from (B-3): the
+ *  domain it implements, plus the neutral seam above. Everything else in
+ *  `src/` is host-internal. */
+const BACKEND_ALLOWED_DIRS: readonly string[] = ['agent/', SHARED_BACKEND_DIR]
 /** Any scoped package: vendor SDKs and host frameworks alike. */
 const SCOPED_PACKAGE = /^@[^/]+\//u
 // channel/input-delivery.ts stays outside core because it builds DSH user
@@ -284,17 +296,31 @@ function resolveInternal(file: string, specifier: string): string | undefined {
   return target.startsWith('..') ? undefined : target
 }
 
-function readAllowlist(): AllowlistEntry[] {
+/**
+ * The two recorded debts, each an explicit list of file pairs (ADAPTER.md's
+ * "only shrinks" convention):
+ *
+ *  - \`entries\`: UI value imports from \`src/dsh-adapter/\` that predate the
+ *    layer rules;
+ *  - \`backendEntries\`: imports a concrete backend still makes into host
+ *    internals (B-3 introduced the island rule; claude is clean, codex
+ *    follows in B-5). Every pair is listed by hand, so the list cannot grow
+ *    by accident.
+ */
+function readAllowlist(): { readonly ui: readonly AllowlistEntry[]; readonly backend: readonly AllowlistEntry[] } {
   const label = relative(process.cwd(), ALLOWLIST_FILE)
   const raw: unknown = JSON.parse(readFileSync(ALLOWLIST_FILE, 'utf8'))
-  const entries = raw && typeof raw === 'object' && 'entries' in raw ? raw.entries : undefined
-  if (!Array.isArray(entries)) throw new Error(`${label}: expected { "entries": [...] }`)
-  return entries.map((entry: unknown, index) => {
-    if (!entry || typeof entry !== 'object' || !('from' in entry) || !('to' in entry) || typeof entry.from !== 'string' || typeof entry.to !== 'string') {
-      throw new Error(`${label}: entry ${index} needs string "from" and "to"`)
-    }
-    return { from: entry.from, to: entry.to }
-  })
+  const list = (name: 'entries' | 'backendEntries'): AllowlistEntry[] => {
+    const entries = raw && typeof raw === 'object' && name in raw ? (raw as Record<string, unknown>)[name] : undefined
+    if (!Array.isArray(entries)) throw new Error(`${label}: expected { "${name}": [...] }`)
+    return entries.map((entry: unknown, index) => {
+      if (!entry || typeof entry !== 'object' || !('from' in entry) || !('to' in entry) || typeof entry.from !== 'string' || typeof entry.to !== 'string') {
+        throw new Error(`${label}: ${name}[${index}] needs string "from" and "to"`)
+      }
+      return { from: entry.from, to: entry.to }
+    })
+  }
+  return { ui: list('entries'), backend: list('backendEntries') }
 }
 
 // The manifest-derived rules (P0 §6). Read before the scan: a manifest that
@@ -313,9 +339,12 @@ const NATIVE_PATTERNS = [
 
 const allowlist = readAllowlist()
 const allowKey = (from: string, to: string): string => `${from} -> ${to}`
-const allowed = new Set(allowlist.map(entry => allowKey(entry.from, entry.to)))
+const allowed = new Set(allowlist.ui.map(entry => allowKey(entry.from, entry.to)))
+const backendAllowed = new Set(allowlist.backend.map(entry => allowKey(entry.from, entry.to)))
 const usedAllowances = new Set<string>()
+const usedBackendAllowances = new Set<string>()
 const allowlistedHits: string[] = []
+const backendAllowlistedHits: string[] = []
 
 const violations: string[] = []
 const files: string[] = []
@@ -362,6 +391,26 @@ for (const file of files) {
       const other = target.split('/')[1]
       if (own !== other) violations.push(`${where} imports src/${target}; src/backends/${own}/ must not depend on another backend (src/backends/${other}/)`)
     }
+    // A concrete backend is an island (B-3): it implements the Agent Domain
+    // against the host, so it may read its own directory, `src/agent/` (the
+    // contract it implements) and `src/backends/shared/` (the backend-neutral
+    // seam) — nothing else. The host dictionary, `src/utils/`, `src/channel/`
+    // and `src/dsh-adapter/` are host-internal; a backend that reads them is not
+    // a plugin. Type-only imports count too: the point is that the public surface
+    // is self-contained, types included. Targets under `src/backends/` are left
+    // to the island rule above (own directory allowed, cross-backend already
+    // reported), so one violation is never named twice.
+    if (under(path, 'backends/') && !under(path, SHARED_BACKEND_DIR) && !under(target, 'backends/')
+      && !BACKEND_ALLOWED_DIRS.some(dir => under(target, dir))) {
+      const key = allowKey(path, target)
+      if (backendAllowed.has(key)) {
+        usedBackendAllowances.add(key)
+        backendAllowlistedHits.push(`${where} -> src/${target}`)
+      } else {
+        const own = path.split('/')[1]
+        violations.push(`${where} imports src/${target}; src/backends/${own}/ may import only its own directory, src/agent/ and src/backends/shared/ (the backend is an island)`)
+      }
+    }
     if (!UI_DIRS.some(dir => under(path, dir))) continue
     if (under(target, 'backends/')) {
       violations.push(`${where} imports src/${target}; UI layers must not depend on src/backends/`)
@@ -390,10 +439,15 @@ for (const file of files) {
   }
 }
 
-for (const entry of allowlist) {
-  const key = allowKey(entry.from, entry.to)
-  if (!usedAllowances.has(key)) {
-    violations.push(`allowlist entry "${key}" no longer matches a value import; delete it from scripts/adapter-boundary.allowlist.json`)
+for (const [list, used, name] of [
+  [allowlist.ui, usedAllowances, 'entries'],
+  [allowlist.backend, usedBackendAllowances, 'backendEntries'],
+] as const) {
+  for (const entry of list) {
+    const key = allowKey(entry.from, entry.to)
+    if (!used.has(key)) {
+      violations.push(`allowlist ${name} entry "${key}" no longer matches an import; delete it from scripts/adapter-boundary.allowlist.json (the lists only shrink)`)
+    }
   }
 }
 
@@ -404,7 +458,11 @@ if (violations.length > 0) {
 }
 
 if (allowlistedHits.length > 0) {
-  console.warn(`adapter boundary warning: ${allowlistedHits.length} allowlisted UI value imports from src/dsh-adapter/ (${allowlist.length} file pairs in scripts/adapter-boundary.allowlist.json) await cleanup${VERBOSE ? ':' : '; --verbose lists them'}`)
+  console.warn(`adapter boundary warning: ${allowlistedHits.length} allowlisted UI value imports from src/dsh-adapter/ (${allowlist.ui.length} file pairs in scripts/adapter-boundary.allowlist.json) await cleanup${VERBOSE ? ':' : '; --verbose lists them'}`)
   if (VERBOSE) for (const hit of allowlistedHits) console.warn(`  - ${hit}`)
+}
+if (backendAllowlistedHits.length > 0) {
+  console.warn(`adapter boundary warning: ${backendAllowlistedHits.length} allowlisted host-internal imports in src/backends/codex/ (${allowlist.backend.length} file pairs) await the B-5 migration${VERBOSE ? ':' : '; --verbose lists them'}`)
+  if (VERBOSE) for (const hit of backendAllowlistedHits) console.warn(`  - ${hit}`)
 }
 console.log(`adapter boundary OK (${files.length} source files, ${importCount} import specifiers scanned)`)
