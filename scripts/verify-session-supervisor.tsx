@@ -55,6 +55,8 @@
  * channel, then drives it with real stdin bytes (SGR mouse reports).
  *
  * Run: node --import tsx/esm scripts/verify-session-supervisor.tsx
+ * Set DSH_TUI_RESUME_CAPTURE to save the rendered Codex cache-plus-progress
+ * frame while the complete listing is still pending (for PR screenshots).
  */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
@@ -1322,6 +1324,9 @@ for (const backendId of [undefined, 'claude', 'codex'] as const) {
         const shown = app.lines().join('\n')
         return focused('native newest') && shown.includes('fresh title') && shown.includes('cached older') && !shown.includes('cached latest')
       }), app.lines().join('\n'))
+      if (backendId === 'codex' && !inline && process.env.DSH_TUI_RESUME_CAPTURE) {
+        writeFileSync(process.env.DSH_TUI_RESUME_CAPTURE, app.lines().join('\n') + '\n', 'utf8')
+      }
       app.write('\u001b[B')
       await settled(() => focused('fresh title'))
       target.onPartial?.([later, native, renamed])
