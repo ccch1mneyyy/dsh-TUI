@@ -13,7 +13,7 @@
  * (dsh-llm-retry executes it; the TUI never retries anything itself).
  * ensureUpstreamRetry seeds that field ONLY on the route(s) the bound
  * session actually uses (the channel feeds it the live provider at every
- * bind — boot, /model switch, resume), and only when that route declares
+ * bind — boot, resume — and on each /model switch), and only when that route declares
  * no retryPolicy: an explicit value (from cordis.yml or a hand-edited
  * settings document) is a deliberate choice and is never overwritten, and
  * dormant channels are never touched. The settings user layer merges

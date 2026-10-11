@@ -120,7 +120,7 @@ export function attachDshExtensions(
   }
   // Upstream auto-retry seeding (upstream-retry.ts), scoped to the route
   // the bound session actually uses: the binding feed calls this on every
-  // bind (boot, /model switch, resume). The config gate defaults on,
+  // bind (boot, resume) and /model calls it for the route it selects. The config gate defaults on,
   // observational (shadow) compositions never write settings, and the
   // fire-and-forget promise never blocks a bind.
   const upstreamRetryAttempted = new Set<string>()
@@ -495,6 +495,7 @@ export function attachDshExtensions(
     selection,
     applyPreferredEffort: () => modelActions.applyPreferredEffort(),
     dropModelCompletion: () => modelActions.dropModelNodeCache(),
+    seedUpstreamRetry,
     notify,
   })
 

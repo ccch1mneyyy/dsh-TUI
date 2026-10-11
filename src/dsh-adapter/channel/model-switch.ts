@@ -20,6 +20,8 @@ export function createModelSwitchAction(
     selection: ModelSelectionRef
     applyPreferredEffort(): Promise<void>
     dropModelCompletion(): void
+    /** No bind follows an in-session switch, so seed the new route here. */
+    seedUpstreamRetry(provider: string): void
     notify: ChannelState['notify']
   },
 ) {
@@ -55,6 +57,7 @@ export function createModelSwitchAction(
     state.reasoningEffort = undefined
     deps.dropModelCompletion()
     void deps.applyPreferredEffort()
+    deps.seedUpstreamRetry(provider)
     if (!writeModelPref(provider, model)) deps.notify(t('model-pref-write-failed'), { color: 'warning' })
     state.emit()
     return true

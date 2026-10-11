@@ -35,6 +35,7 @@ assert.doesNotMatch(switchAction, /settleCompaction/u, 'a route change leaves in
 assert.match(switchAction, /deps\.selection\.current = \{ provider, model \}/u)
 assert.doesNotMatch(switchAction, /agents\.create|resetSessionProjection/u, 'model changes preserve the conversation')
 assert.match(switchAction, /writeModelPref/u)
+assert.match(switchAction, /deps\.seedUpstreamRetry\(provider\)/u, 'no bind follows a route change, so the switch seeds upstream retry itself')
 assert.match(mode, /prePlanModes/u)
 assert.match(mode, /approval\/policy/u)
 assert.match(mode, /onSessionEvent/u)

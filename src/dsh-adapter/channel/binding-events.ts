@@ -158,8 +158,8 @@ export function createBindingEvents(ctx: Context, deps: {
       // permission preference seeds sessions that never chose their own.
       void deps.modeActions.applyRememberedPermission()
       // The upstream auto-retry policy follows the route in use: the
-      // agent's own options name it after a /model switch or a resume,
-      // and a fresh session falls back to the launch route.
+      // agent's own options name it after a resume, and a fresh session
+      // falls back to the launch route (/model seeds its own selection).
       deps.seedUpstreamRetry?.(deps.binding.agent.options?.provider ?? deps.state.provider)
       // Entering/resuming a session whose preset serves neither automatic
       // compaction nor tool-result pruning changes what the user can expect
