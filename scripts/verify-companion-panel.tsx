@@ -262,6 +262,7 @@ let channelVersion = 0
 const channelListeners = new Set<() => void>()
 const fakeChannel: Record<string, unknown> = {
   get version() { return channelVersion },
+  sessionId: 'companion-parent-1',
   working: true,
   spinnerMode: 'tool-use' as string,
   goal: undefined,
@@ -891,6 +892,94 @@ try {
   } finally {
     await d.app.unmount()
     d.term.dispose()
+  }
+
+  // ================= scene: read agent failures release the pet ===========
+  applySidePanelRatio(0.55)
+  fakeChannel.working = true
+  fakeChannel.spinnerMode = 'tool-use'
+  fakeChannel.notifications = []
+  const failedAgent = {
+    agentId: 'failed-pet-child', runId: 'pet-run-1', description: 'PET-FAILURE',
+    status: 'failed', startedAt: NOW - 2000, completedAt: NOW - 1000,
+    error: 'probe failure', output: [], outputEvents: [], toolCalls: [],
+  }
+  fakeChannel.subagents = [failedAgent]
+  const failureScene = await scene(140, 30, undefined, { approvals: 0, questions: 0 }, 'todo,jobs,agents,companion')
+  try {
+    failureScene.controller?.openPanel('companion', { focus: true })
+    check('failure: an unread agent failure overrides ongoing work',
+      await settled(() => nowPlaying(failureScene.lines()) === '出错啦', { timeoutMs: 5000 }), nowPlaying(failureScene.lines()))
+    failureScene.controller?.openPanel('agents', { focus: true })
+    await settled(() => panelStore.get('agents')?.badge?.level !== 'error' && failureScene.lines().some(l => l.includes('PET-FAILURE')))
+    failureScene.controller?.openPanel('companion', { focus: true })
+    check('failure: viewing agents restores the working animation',
+      await settled(() => nowPlaying(failureScene.lines()) === '敲代码', { timeoutMs: 5000 }), nowPlaying(failureScene.lines()))
+    check('failure: acknowledgement preserves the failed result', failedAgent.status === 'failed' && failedAgent.error === 'probe failure')
+    fakeChannel.subagents = [{ ...failedAgent }]
+    bumpChannel()
+    check('failure: repeating a read snapshot does not re-arm the pet',
+      await settled(() => panelStore.get('agents')?.badge?.level !== 'error') && nowPlaying(failureScene.lines()) === '敲代码')
+    fakeChannel.subagents = [{ ...failedAgent, runId: 'pet-run-2' }]
+    bumpChannel()
+    check('failure: the same child failing on a new run alerts again',
+      await settled(() => nowPlaying(failureScene.lines()) === '出错啦', { timeoutMs: 5000 }), nowPlaying(failureScene.lines()))
+    fakeChannel.sessionId = 'companion-parent-2'
+    fakeChannel.subagents = []
+    bumpChannel()
+    check('failure: switching to a healthy parent releases stale failure',
+      await settled(() => nowPlaying(failureScene.lines()) === '敲代码', { timeoutMs: 5000 }), nowPlaying(failureScene.lines()))
+    fakeChannel.subagents = [{ ...failedAgent }]
+    bumpChannel()
+    check('failure: acknowledgement from another parent does not silence its failure',
+      await settled(() => nowPlaying(failureScene.lines()) === '出错啦', { timeoutMs: 5000 }), nowPlaying(failureScene.lines()))
+  } finally {
+    await failureScene.app.unmount()
+    failureScene.term.dispose()
+    check('failure: unmounting the agents adapter clears its badge', panelStore.get('agents')?.badge === null)
+    fakeChannel.sessionId = 'companion-parent-1'
+    fakeChannel.subagents = []
+  }
+
+  const { subagentFailureReads } = await import('../src/components/sidePanel/subagentFailureReads.js')
+  const coldChannel = {}
+  const coldFailure = { ...failedAgent, agentId: 'cold-restored-child', runId: 'cold-run-1' }
+  subagentFailureReads.coldStart(coldChannel, 'cold-parent', [coldFailure])
+  check('failure: cold-start restored failures are treated as read', subagentFailureReads.unread(coldChannel, 'cold-parent', [coldFailure]) === 0)
+  const coldNewFailure = { ...coldFailure, runId: 'cold-run-2' }
+  subagentFailureReads.coldStart(coldChannel, 'cold-parent', [coldNewFailure])
+  check('failure: later runs still alert after cold-start acknowledgement', subagentFailureReads.unread(coldChannel, 'cold-parent', [coldNewFailure]) === 1)
+  // 冷启动按会话各一次：同一进程里第一次打开另一个会话，它的恢复失败同样按已读。
+  const otherSessionFailure = { ...failedAgent, agentId: 'cold-other-child', runId: 'cold-run-1' }
+  subagentFailureReads.coldStart(coldChannel, 'cold-parent-2', [otherSessionFailure])
+  check('failure: another session first opened in this run is cold-started too',
+    subagentFailureReads.unread(coldChannel, 'cold-parent-2', [otherSessionFailure]) === 0)
+  const backToFirst = { ...coldFailure, runId: 'cold-run-3' }
+  subagentFailureReads.coldStart(coldChannel, 'cold-parent', [backToFirst])
+  check('failure: returning to an already cold-started session does not re-acknowledge',
+    subagentFailureReads.unread(coldChannel, 'cold-parent', [backToFirst]) === 1)
+
+  fakeChannel.subagents = [failedAgent]
+  fakeChannel.sessionId = 'companion-main-view-parent'
+  subagentFailureReads.acknowledge(fakeChannel, 'companion-main-view-parent', [failedAgent])
+  const readScene = await scene(140, 30, undefined, { approvals: 0, questions: 0 }, 'todo,jobs,agents,companion')
+  try {
+    readScene.controller?.openPanel('companion', { focus: true })
+    check('failure: main-screen acknowledgement survives sidebar remount',
+      await settled(() => nowPlaying(readScene.lines()) === '敲代码', { timeoutMs: 5000 }), nowPlaying(readScene.lines()))
+    const unseenAgent = { ...failedAgent, agentId: 'other-unread-child' }
+    fakeChannel.subagents = [failedAgent, unseenAgent]
+    bumpChannel()
+    check('failure: a new child failure after leaving the viewing page alerts again',
+      await settled(() => nowPlaying(readScene.lines()) === '出错啦', { timeoutMs: 5000 }), nowPlaying(readScene.lines()))
+    subagentFailureReads.acknowledge(fakeChannel, 'companion-main-view-parent', [unseenAgent])
+    check('failure: shared main-screen read updates the mounted pet',
+      await settled(() => nowPlaying(readScene.lines()) === '敲代码', { timeoutMs: 5000 }), nowPlaying(readScene.lines()))
+  } finally {
+    await readScene.app.unmount()
+    readScene.term.dispose()
+    fakeChannel.sessionId = 'companion-parent-1'
+    fakeChannel.subagents = []
   }
 
   // ================= scene F: context signals render through =============

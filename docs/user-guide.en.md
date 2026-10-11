@@ -298,8 +298,15 @@ one-column seam between the two surfaces.
   bubble above its head — while the pet panel is the ACTIVE panel the toast above the input box
   does NOT repeat it (toasts return on any other panel; error-colored notices always toast). Moods
   are debounced: fast tool calls no longer flicker the animation (leaving the working state takes
-  ~1.5s to settle; approvals and errors still preempt instantly). Subagent/session counts switch
-  the music / conducting / building ensemble animations. When the column is too narrow even for
+  ~1.5s to settle; approvals and unread failures still preempt instantly). Opening the agents sidebar,
+  full-screen dashboard, a child's details or its transcript-card view marks all current child failures
+  as read. While a child viewing page stays open, new failures are also marked as read immediately.
+  Failures arriving after returning to chat alert again; task outcomes are preserved. Read state is
+  retained per parent session during this TUI run, including switching away and resuming it; a fork
+  is an independent session. The first time a run opens a session, the failures already present in
+  its restored roster are treated as read; failures that occur afterward alert normally.
+  Subagent/session counts switch the music / conducting /
+  building ensemble animations. When the column is too narrow even for
   the compact form the pet hides, leaving one line: "So cramped! {{name}} is hiding for now~".
   The `dsh-tui.companion.skin` setting picks one of three: `deepy` (default, the fan-made whale
   kit), `whaleGirl` (the whale-girl sticker pack — 22 animations that react to pokes, tickles and

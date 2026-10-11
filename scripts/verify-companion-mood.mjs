@@ -37,7 +37,7 @@ function pass(name) {
 const NOW = 1_000_000
 const SLEEP = 60_000
 const NO_ATTENTION = { approvalPending: false, questionPending: false }
-const NO_FAILURES = { failedJobsUnread: 0, failedSubagents: 0 }
+const NO_FAILURES = { failedJobsUnread: 0, failedSubagentsUnread: 0 }
 
 function inputs(overrides = {}) {
   return {
@@ -69,17 +69,26 @@ for (const [name, attention] of [
 
 // --- failure triggers -> error (kit's 工具失败 slot) ----------------------
 for (const [name, failures] of [
-  ['failedJobsUnread', { failedJobsUnread: 2, failedSubagents: 0 }],
-  ['failedSubagents', { failedJobsUnread: 0, failedSubagents: 1 }],
+  ['failedJobsUnread', { failedJobsUnread: 2, failedSubagentsUnread: 0 }],
+  ['failedSubagentsUnread', { failedJobsUnread: 0, failedSubagentsUnread: 1 }],
 ]) {
   assert.equal(moodOf(inputs({ failures })), 'error')
   pass('failure trigger: ' + name + ' -> error')
 }
 assert.equal(moodOf(inputs({
   attention: { approvalPending: true, questionPending: true },
-  failures: { failedJobsUnread: 3, failedSubagents: 1 },
+  failures: { failedJobsUnread: 3, failedSubagentsUnread: 1 },
 })), 'attention')
 pass('priority: attention beats error')
+
+// Reading failures releases the pet; it does not erase task outcomes.
+assert.equal(moodOf(inputs({ failures: NO_FAILURES, working: true, spinnerMode: 'tool-use' })), 'working')
+assert.equal(moodOf(inputs({ failures: NO_FAILURES })), 'idle')
+assert.equal(moodOf(inputs({ failures: NO_FAILURES, lastInputAt: NOW - 10 * SLEEP })), 'sleeping')
+pass('read failures release working, idle and sleeping moods')
+assert.equal(moodOf(inputs({ failures: { failedJobsUnread: 1, failedSubagentsUnread: 0 } })), 'error')
+assert.equal(moodOf(inputs({ failures: NO_FAILURES, attention: { approvalPending: false, questionPending: true } })), 'attention')
+pass('reading agent failures leaves job failures and questions effective')
 
 // attention > error > working > celebrate > sleeping > idle.
 assert.equal(moodOf(inputs({
@@ -90,7 +99,7 @@ assert.equal(moodOf(inputs({
 })), 'working')
 pass('priority: working beats celebrate and sleeping')
 assert.equal(moodOf(inputs({
-  failures: { failedJobsUnread: 1, failedSubagents: 0 },
+  failures: { failedJobsUnread: 1, failedSubagentsUnread: 0 },
   working: true,
   lastInputAt: NOW - 10 * SLEEP,
 })), 'error')
@@ -127,7 +136,7 @@ assert.equal(moodOf(inputs({
 })), 'attention')
 pass('attention blocks sleep — lastInputAt far past sleepAfterMs')
 assert.equal(moodOf(inputs({
-  failures: { failedJobsUnread: 4, failedSubagents: 0 },
+  failures: { failedJobsUnread: 4, failedSubagentsUnread: 0 },
   lastInputAt: NOW - 10 * SLEEP,
 })), 'error')
 pass('error blocks sleep too')

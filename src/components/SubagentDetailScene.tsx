@@ -174,6 +174,7 @@ export interface SubagentDetailSceneProps {
   subagent: SubagentState
   onBack: () => void
   onInterrupt?: (agentId: string) => void
+  onViewed?: () => void
   /** The child's full transcript (`subagentControl.history`). Absent = no
    *  transcript source for this session: no Transcript page, and the
    *  output tail keeps its retained-range note. */
@@ -203,6 +204,7 @@ export function SubagentDetailScene({
   subagent,
   onBack,
   onInterrupt,
+  onViewed,
   loadTranscript,
   onOpenView,
   messages = [],
@@ -212,6 +214,7 @@ export function SubagentDetailScene({
   visible = true,
 }: SubagentDetailSceneProps): React.ReactNode {
   const panelMode = variant === 'panel'
+  React.useEffect(() => { if (visible) onViewed?.() }, [onViewed, visible])
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows, columns } = useTerminalSize()
   // 主屏 Agent View 盖过 Detail 时组件会卸载；从 Agent View 回来时按记忆

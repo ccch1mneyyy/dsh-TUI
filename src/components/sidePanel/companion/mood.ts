@@ -73,7 +73,7 @@ export type CompanionMood =
   | 'attention'
   /** 回合完成 / goal 完成 / star / 节日彩蛋（短暂）。 */
   | 'celebrate'
-  /** 工具失败：后台任务失败未读或子代理 failed（官方素材表 error=工具失败）。 */
+  /** 工具失败：后台任务或子代理失败未读（官方素材表 error=工具失败）。 */
   | 'error'
 
 export interface CompanionMoodInputs {
@@ -84,8 +84,8 @@ export interface CompanionMoodInputs {
   readonly activity: ActivityView | undefined
   /** 需要用户处理的事（审批/问卷）→ attention。 */
   readonly attention: { readonly approvalPending: boolean; readonly questionPending: boolean }
-  /** 失败信号（后台任务失败未读 + failed 子代理数）→ error。 */
-  readonly failures: { readonly failedJobsUnread: number; readonly failedSubagents: number }
+  /** 失败信号（后台任务与子代理的未读失败数）→ error。 */
+  readonly failures: { readonly failedJobsUnread: number; readonly failedSubagentsUnread: number }
   readonly lastInputAt: number
   readonly celebration: {
     readonly kind: 'star' | 'holiday' | 'turn-done' | 'goal-done'
@@ -128,7 +128,7 @@ function workingMood(inputs: CompanionMoodInputs): CompanionMood {
 export function deriveCompanionMood(inputs: CompanionMoodInputs, now: number): DerivedCompanionMood {
   let mood: CompanionMood
   if (inputs.attention.approvalPending || inputs.attention.questionPending) mood = 'attention'
-  else if (inputs.failures.failedJobsUnread > 0 || inputs.failures.failedSubagents > 0) mood = 'error'
+  else if (inputs.failures.failedJobsUnread > 0 || inputs.failures.failedSubagentsUnread > 0) mood = 'error'
   else if (inputs.working) mood = workingMood(inputs)
   else if (inputs.celebration !== undefined && now < inputs.celebration.until) mood = 'celebrate'
   else if (inputs.sleepAfterMs > 0 && now - inputs.lastInputAt >= inputs.sleepAfterMs) mood = 'sleeping'

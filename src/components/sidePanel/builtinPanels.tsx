@@ -15,6 +15,7 @@ import { useSidePanelChannel } from './SidePanelRuntimeContext.js'
 import { usePanelInput } from './usePanelInput.js'
 import { jobsFocusStore } from './jobsFocusStore.js'
 import { agentViewStore } from './agentViewStore.js'
+import { subagentFailureReads } from './subagentFailureReads.js'
 import { agentComposeTargetOf, type AgentComposeTarget } from '../messages/agentTeam.js'
 import type { PanelProps } from './types.js'
 
@@ -163,24 +164,19 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
   const detailCompose = detailTarget !== undefined && messageControl !== undefined
     ? { control: messageControl, target: detailTarget }
     : undefined
-  // 已读基线：上次 visible=true 时见过的 failed id 集合。
-  const seenFailedRef = React.useRef<ReadonlySet<string>>(new Set())
+  const sessionId = channel.sessionId
+  const readVersion = React.useSyncExternalStore(subagentFailureReads.subscribe, subagentFailureReads.getVersion)
   React.useEffect(() => {
     const running = subagents.filter(s => s.status === 'running' || s.status === 'starting').length
-    const failedIds = new Set(subagents.filter(s => s.status === 'failed').map(s => s.agentId))
-    if (visible) {
-      seenFailedRef.current = failedIds
-      panelStore.setBadge('agents', running > 0 ? { level: 'info', unread: 0 } : null)
-      return
-    }
-    let unread = 0
-    for (const id of failedIds) if (!seenFailedRef.current.has(id)) unread += 1
+    if (visible) subagentFailureReads.acknowledge(channel, sessionId, subagents)
+    const unread = subagentFailureReads.unread(channel, sessionId, subagents)
     panelStore.setBadge(
       'agents',
       unread > 0 ? { level: 'error', unread } : running > 0 ? { level: 'info', unread: 0 } : null,
     )
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- badge derives from the channel version bump
-  }, [version, visible])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- roster changes publish a channel version bump
+  }, [channel, version, visible, sessionId, readVersion])
+  React.useEffect(() => () => panelStore.clearBadge('agents'), [])
 
   // 行暂时不在名册里（会话切换 / replay 尚未回填）时退回 dashboard，但不清
   // 路由：行回来后用户原来看的那一页还在——这正是 enabled 挂载策略要保的

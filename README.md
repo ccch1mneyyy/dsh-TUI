@@ -36,6 +36,7 @@
 - **Timeline rail** — every turn clickable; timeline / scrollbar / hidden gutter.
 - **Side panel** — `Ctrl+B` splits the chat with a panel column once the terminal is wide enough; drag the divider to resize it. All eight built-in panels are enabled by default. The header shows each inactive panel's symbol; hover to see its name. Narrow terminals and inline mode keep full-screen panels.
 - **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, session cost estimate (main + subagents), Git and session metadata.
+  The companion follows unread child failures; opening any child viewing page acknowledges all current child failures without changing their outcomes. The first time a run opens a session, failures already in its restored roster are treated as read; failures that occur afterward alert normally.
   Context-bar fill follows backend occupancy; colors estimate content composition. Compaction clears obsolete estimates, and missing composition displays a single used block.
 - **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.
 - **Session workflow** — `/new` `/compact` `/export` `/btw`, model hot-switch, fork, rewind, vim, fullscreen draft editor.

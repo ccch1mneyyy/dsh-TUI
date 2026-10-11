@@ -35,7 +35,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { SidePanelCol
   import('./lib/term-test.mjs'),
 ])
 const { render, ThemeProvider, AlternateScreen, Box, Text, useInput } = ui
-const { applySidePanelOpen, applySidePanelRatio } = prefs
+const { applySidePanelOpen, applySidePanelRatio, applySidePanelPanels } = prefs
 const { settled } = termTest
 
 const COLS = 120
@@ -50,6 +50,7 @@ function check(name: string, ok: boolean, extra = ''): void {
 // --- fake channel -----------------------------------------------------------
 interface FakeSubagent {
   agentId: string
+  runId?: string
   description: string
   status: string
   startedAt: number
@@ -63,10 +64,12 @@ interface FakeSubagent {
 }
 let subagents: FakeSubagent[] = []
 let channelVersion = 0
+let sessionId = 'agents-parent-1'
 const channelListeners = new Set<() => void>()
 const interrupted: string[] = []
 const channel = {
   get version() { return channelVersion },
+  get sessionId() { return sessionId },
   get subagents() { return subagents },
   // jobs 面板默认启用，适配器读名册（jobs.length 摘要）
   backgroundJobs: [] as unknown[],
@@ -155,6 +158,7 @@ class FakeStdin extends PassThrough { isTTY = true; setRawMode() { return this }
 // starts split (mirrors Chat at 120 columns with the sidebar enabled).
 applySidePanelOpen(true)
 applySidePanelRatio(0.68)
+applySidePanelPanels('todo,jobs,agents')
 // 可重挂载的夹具：滚动/焦点是面板内状态（mountPolicy:'enabled' 的卖点），
 // 跨用例段共享会互相污染——需要「全新面板」的段落 unmount 后重挂。
 let term: InstanceType<typeof XTerm>
@@ -258,6 +262,65 @@ try {
   await settled(() => panelStore.get('agents')?.badge?.level === 'info')
   check('open: error badge cleared once visible (running re-lights info)',
     panelStore.get('agents')?.badge?.level === 'info', JSON.stringify(panelStore.get('agents')?.badge ?? null))
+  const visibleFailure = agent('agent-fail-while-open', 'VISIBLE-FAILURE', 'failed', { runId: 'visible-run-1', completedAt: NOW })
+  setSubagents([A1, A2, A3, visibleFailure])
+  check('open: a new failure while the sidebar is visible is immediately acknowledged', await settled(() => panelStore.get('agents')?.badge?.level === 'info'))
+  setSubagents([A1, A2, A3])
+
+  // Reading a failure preserves its outcome, and repeated snapshots stay read.
+  openTodo?.()
+  await settled(() => exposedActive === 'todo')
+  setSubagents([A1, A2, { ...A3 }])
+  check('read: a rebuilt failed snapshot stays read', await settled(() => panelStore.get('agents')?.badge?.level !== 'error'))
+  check('read: failed outcome and error remain available', subagents[2]?.status === 'failed' && subagents[2]?.error === 'boom')
+
+  // Legacy rows without runId distinguish failures by their run timestamps.
+  const failedAgain = { ...A3, startedAt: NOW, completedAt: NOW + 1000 }
+  setSubagents([A1, A2, failedAgain])
+  check('read: a new legacy run under the same agent id is unread', await settled(() => panelStore.get('agents')?.badge?.unread === 1))
+  openAgents?.()
+  await settled(() => exposedActive === 'agents' && panelStore.get('agents')?.badge?.level !== 'error')
+  openTodo?.()
+  await settled(() => exposedActive === 'todo')
+
+  const keyedFailure = { ...failedAgain, runId: 'agent-fail-run-2' }
+  setSubagents([A1, A2, keyedFailure])
+  check('read: a new keyed run under the same agent id is unread', await settled(() => panelStore.get('agents')?.badge?.unread === 1))
+  openAgents?.()
+  await settled(() => exposedActive === 'agents' && panelStore.get('agents')?.badge?.level !== 'error')
+  openTodo?.()
+  await settled(() => exposedActive === 'todo')
+  setSubagents([A1, A2, { ...keyedFailure, completedAt: NOW + 2000 }])
+  check('read: timestamp enrichment of a read run does not re-arm failure', await settled(() => panelStore.get('agents')?.badge?.level !== 'error'))
+  setSubagents([A1, A2, { ...keyedFailure, status: 'running', runId: 'agent-fail-run-3', completedAt: undefined }])
+  await settled(() => panelStore.get('agents')?.badge?.level === 'info')
+  setSubagents([A1, A2, { ...keyedFailure, runId: 'agent-fail-run-3' }])
+  check('read: a continuable child failing on its next run alerts again', await settled(() => panelStore.get('agents')?.badge?.unread === 1))
+
+  setSubagents([])
+  check('read: removing failures clears the unread error', await settled(() => panelStore.get('agents')?.badge === null))
+  sessionId = 'agents-parent-2'
+  setSubagents([keyedFailure])
+  check('read: another parent does not inherit acknowledgement', await settled(() => panelStore.get('agents')?.badge?.unread === 1))
+  sessionId = 'agents-parent-1'
+  setSubagents([{ ...keyedFailure }])
+  check('read: resuming the first parent retains its acknowledged run', await settled(() => panelStore.get('agents')?.badge === null))
+  sessionId = 'agents-parent-2'
+  setSubagents([keyedFailure])
+  openAgents?.()
+  await settled(() => exposedActive === 'agents' && panelStore.get('agents')?.badge === null)
+  openTodo?.()
+  await settled(() => exposedActive === 'todo')
+  sessionId = 'agents-parent-fork'
+  setSubagents([{ ...keyedFailure }])
+  check('read: a fork with inherited child identity has independent unread failures', await settled(() => panelStore.get('agents')?.badge?.unread === 1))
+  sessionId = 'agents-parent-2'
+  setSubagents([{ ...keyedFailure }])
+  check('read: returning from a fork retains the original parent acknowledgement', await settled(() => panelStore.get('agents')?.badge === null))
+  sessionId = 'agents-parent-1'
+  setSubagents([A1, A2, A3])
+  openAgents?.()
+  await settled(() => exposedActive === 'agents' && panelStore.get('agents')?.badge?.level !== 'error')
 
   // --- 4. Enter opens the focused card's detail ---------------------------
   await writeKey('\r')

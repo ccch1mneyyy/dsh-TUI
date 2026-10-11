@@ -92,6 +92,8 @@ export interface AgentTranscriptSceneProps {
    *  source stack is preserved — Esc still returns to the original entry
    *  point. Absent = the panel renders read-only rows without switching. */
   onSwitchAgent?: (agentId: string) => void
+  /** Report that a child viewing page is visible; the host acknowledges failures. */
+  onViewed?: () => void
 }
 
 /**
@@ -102,7 +104,8 @@ export interface AgentTranscriptSceneProps {
  * The body uses the same transcript pager as the Detail page, with the
  * live SubagentState tail merged in.
  */
-export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript, messages = [], compose, roster, onSwitchAgent }: AgentTranscriptSceneProps): React.ReactNode {
+export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript, messages = [], compose, roster, onSwitchAgent, onViewed }: AgentTranscriptSceneProps): React.ReactNode {
+  React.useEffect(() => { onViewed?.() }, [onViewed])
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const followRef = React.useRef(true)
   React.useEffect(() => {

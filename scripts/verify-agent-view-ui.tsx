@@ -570,6 +570,7 @@ console.log('--- Chat: source stack + parent state preservation ---')
   const dispatchLog: Array<Record<string, unknown>> = []
   const listeners = new Set<() => void>()
   const EMPTY: readonly never[] = Object.freeze([])
+  const { subagentFailureReads } = await import('../src/components/sidePanel/subagentFailureReads.js')
   const subagent = {
     agentId: 'agent-child-0001',
     description: 'chat level child',
@@ -581,6 +582,8 @@ console.log('--- Chat: source stack + parent state preservation ---')
     toolCalls: [],
     mode: 'continuable' as const,
   }
+  const failedChild = { ...subagent, runId: 'r1', status: 'failed' as const, error: 'test failure' }
+  const unseenFailure = { ...failedChild, agentId: 'agent-unread-0002', description: 'unread peer failure' }
   const historyPageData = historyPage([
     ev('assistant.message', { anchor: 'a1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'child answer in history' }] }),
   ])
@@ -698,16 +701,77 @@ console.log('--- Chat: source stack + parent state preservation ---')
     await sleep(80) // 固定窗:pacing Esc 分层步间
     stdin.write('\x1b')
     check('C1 Esc 退回聊天（父转录仍在）', await settled(() => screen().includes('please delegate') && !screen().includes('read-only')), lines().slice(0, 4).join('|'))
-    const afterRows = lines().filter(l => l.includes('please delegate') || l.includes('delegated') || l.includes('chat level child'))
     // 行尾空白格不是比较对象（重挂载后 flex 尾格可能多一格 padding）。
     const norm = (ls: readonly string[]): string[] => ls.map(l => l.replace(/\s+$/, ''))
-    check('C1 父 rows 逐字不变', JSON.stringify(norm(beforeRows)) === JSON.stringify(norm(afterRows)), JSON.stringify({ before: beforeRows, after: afterRows }))
+    const parentRows = (): string[] => lines().filter(l => l.includes('please delegate') || l.includes('delegated') || l.includes('chat level child'))
+    const parentRestored = await settled(() => JSON.stringify(norm(beforeRows)) === JSON.stringify(norm(parentRows())))
+    const afterRows = parentRows()
+    check('C1 父 rows 逐字不变', parentRestored, JSON.stringify({ before: beforeRows, after: afterRows }))
     check('C1 父草稿保留', await settled(() => screen().includes('parent draft stays')))
     check('C1 主转录未因消息流多出普通行', !screen().includes('flow message one'))
+
+    // C1b: any child viewing page acknowledges all current failures.
+    channel.subagents = [failedChild, unseenFailure]
+    const row = (channel.rows as Array<{ kind: string; subagent?: unknown }>).find(item => item.kind === 'subagent')!
+    row.subagent = { ...failedChild, outputLines: [] }
+    ;(channel.bump as () => void)()
+    check('C1b 查看前两条失败均未读', subagentFailureReads.unread(channel, undefined, [failedChild, unseenFailure]) === 2)
+    await settled(() => screen().includes('· failed'))
+    check('C1b 点击失败转录卡', await click({ screen, lines, rerender: () => {}, stdin, term } as unknown as Frame, '⤢'))
+    check('C1b 卡片主屏查看确认当前全部失败', await settled(() =>
+      screen().includes('from transcript card') && subagentFailureReads.unread(channel, undefined, [failedChild, unseenFailure]) === 0))
+    check('C1b 查看失败不改执行结果', failedChild.status === 'failed' && failedChild.error === 'test failure')
+    stdin.write('\x1b')
+    await sleep(80) // 固定窗:pacing Esc 分层步间
+    stdin.write('\x1b')
+    await settled(() => screen().includes('please delegate') && !screen().includes('read-only'))
+    check('C1b 返回后全部失败保持已读', subagentFailureReads.unread(channel, undefined, [failedChild, unseenFailure]) === 0)
+    check('C1b 同一 child 新运行失败仍未读', subagentFailureReads.unread(channel, undefined, [{ ...failedChild, runId: 'r2' }]) === 1)
+    check('C1b 已读只属于当前父会话', subagentFailureReads.unread({}, 'probe', [failedChild]) === 1)
+
+    const stillRunningChild = { ...unseenFailure, agentId: 'agent-later-b', runId: 'b-run-after-close', status: 'running' as const, completedAt: undefined }
+    channel.subagents = [failedChild, stillRunningChild]
+    ;(channel.bump as () => void)()
+    check('C1b A 已查看而 B 仍运行时没有失败占用', subagentFailureReads.unread(channel, undefined, [failedChild, stillRunningChild]) === 0)
+    const laterFailure = { ...stillRunningChild, status: 'failed' as const, completedAt: NOW }
+    channel.subagents = [failedChild, laterFailure]
+    ;(channel.bump as () => void)()
+    check('C1b 返回聊天后 B 再失败重新提醒', await settled(() =>
+      !screen().includes('read-only') && subagentFailureReads.unread(channel, undefined, [failedChild, laterFailure]) === 1))
+    await sleep(510) // 固定窗:墙钟 两次独立单击间隔超过终端 500ms 连击窗口
+    check('C1b 再打开 A 的卡片即可解除 B 新失败', await click({ screen, lines, rerender: () => {}, stdin, term } as unknown as Frame, '⤢') &&
+      await settled(() => screen().includes('from transcript card') && subagentFailureReads.unread(channel, undefined, [failedChild, laterFailure]) === 0),
+      JSON.stringify({ screen: lines().slice(0, 5), unread: subagentFailureReads.unread(channel, undefined, [failedChild, laterFailure]) }))
+    const failureWhileViewing = { ...laterFailure, runId: 'b-run-while-viewing-a' }
+    channel.subagents = [failedChild, failureWhileViewing]
+    ;(channel.bump as () => void)()
+    check('C1b A 页面已打开时 B 新失败立即确认', await settled(() =>
+      screen().includes('read-only') && subagentFailureReads.unread(channel, undefined, [failedChild, failureWhileViewing]) === 0))
+    stdin.write('\x1b')
+    await sleep(80) // 固定窗:pacing Esc 分层步间
+    stdin.write('\x1b')
+    await settled(() => screen().includes('please delegate') && !screen().includes('read-only'))
+    const unreadBeforeDashboard = { ...unseenFailure, runId: 'b-run-before-dashboard' }
+    channel.subagents = [failedChild, unreadBeforeDashboard]
+    ;(channel.bump as () => void)()
+    check('C1b 查看页面关闭后 B 下一轮失败仍提醒', subagentFailureReads.unread(channel, undefined, [failedChild, unreadBeforeDashboard]) === 1)
 
     // C2: dashboard → v → Agent View → Esc → dashboard → Esc → chat
     stdin.write('\x01') // Ctrl+A
     check('C2 Ctrl+A 打开代理面板', await settled(() => screen().includes('Subagent Dashboard')), lines().slice(0, 6).join('|'))
+    check('C2 全屏 Dashboard 确认其显示的失败', await settled(() => subagentFailureReads.unread(channel, undefined, [failedChild, unreadBeforeDashboard]) === 0))
+    const dashboardFailure = { ...unseenFailure, runId: 'b-run-dashboard-open' }
+    channel.subagents = [failedChild, dashboardFailure]
+    ;(channel.bump as () => void)()
+    check('C2 Dashboard 保持打开时 B 新失败也确认', await settled(() => subagentFailureReads.unread(channel, undefined, [failedChild, dashboardFailure]) === 0))
+    stdin.write('\r')
+    check('C2 Enter 打开全屏单代理详情', await settled(() => screen().includes('1/5') && !screen().includes('Subagent Dashboard')), lines().slice(0, 5).join('|'))
+    const detailFailure = { ...unseenFailure, runId: 'b-run-detail-open' }
+    channel.subagents = [failedChild, detailFailure]
+    ;(channel.bump as () => void)()
+    check('C2 单代理详情已打开时 B 新失败也确认', await settled(() => subagentFailureReads.unread(channel, undefined, [failedChild, detailFailure]) === 0))
+    stdin.write('\x1b')
+    await settled(() => screen().includes('Subagent Dashboard'))
     stdin.write('v')
     check('C2 Dashboard v 进入 Agent View（来源面板）', await settled(() => screen().includes('from agents panel')), lines().slice(0, 3).join('|'))
     stdin.write('\x1b')

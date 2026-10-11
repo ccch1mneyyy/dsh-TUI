@@ -19,6 +19,7 @@ export interface SubagentDashboardProps {
    *  关侧栏——Esc 让给宿主（焦点回聊天，见 usePanelInput 契约）。 */
   onClose?: () => void
   onSelect?: (agentId: string) => void
+  onViewed?: () => void
   /** 打开主屏只读 Agent View：行点击/Enter 仍进 Detail，这是另一个专用
    *  动作（'v' 键或行内 ⤢）。 */
   onOpenView?: (agentId: string) => void
@@ -65,6 +66,7 @@ export function SubagentDashboard({
   peers,
   onClose,
   onSelect,
+  onViewed,
   onOpenView,
   messages,
   variant = 'default',
@@ -72,6 +74,7 @@ export function SubagentDashboard({
   visible = true,
 }: SubagentDashboardProps): React.ReactNode {
   const panelMode = variant === 'panel'
+  React.useEffect(() => { if (visible) onViewed?.() }, [onViewed, visible])
   const [focusIndex, setFocusIndex] = React.useState(0)
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows, columns } = useTerminalSize()

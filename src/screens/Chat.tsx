@@ -77,6 +77,7 @@ import { PromptInput, composerImageRefsForText, type PromptController } from '..
 import { turnUsageParts } from '../components/TurnUsageRow.js'
 import { AgentTranscriptScene } from './AgentTranscriptScene.js'
 import { agentViewStore } from '../components/sidePanel/agentViewStore.js'
+import { subagentFailureReads } from '../components/sidePanel/subagentFailureReads.js'
 import { agentComposeTargetOf, type AgentComposeTarget, type AgentMessageView, type AgentViewSource } from '../components/messages/agentTeam.js'
 import { resolveBindingGeneration, type PromptDraftCache } from '../components/promptDraftCache.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
@@ -1470,7 +1471,22 @@ export function Chat({
     setSubagentDashboardOpen(true)
   }, [])
   /** Detail view for a specific subagent (opened from dashboard). */
+  /**
+   * 冷启动确认：本进程里某个会话第一次被打开时，把它恢复出来的失败视为已读
+   * （上一次运行的已读状态不落盘）。adoption 先 replay 再 emit，所以这里读到的
+   * roster 已经是恢复后的快照；之后再发生的失败属于 live 失败，照常提醒。
+   */
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 有意只认会话身份变化，roster 变化不代表新会话
+  React.useEffect(() => {
+    subagentFailureReads.coldStart(channel, channel.sessionId, channel.subagents)
+  }, [channel, channel.sessionId])
   const [subagentDetailId, setSubagentDetailId] = React.useState<string | null>(null)
+  const failureReadSessionId = channel.sessionId
+  const failureReadVersion = channel.version
+  const acknowledgeViewedFailures = React.useCallback((): void => {
+    if (channel.sessionId !== failureReadSessionId || channel.version !== failureReadVersion) return
+    subagentFailureReads.acknowledge(channel, failureReadSessionId, channel.subagents)
+  }, [channel, failureReadSessionId, failureReadVersion])
   /**
    * 主屏只读 Agent View：Chat 自己的场景层。父 Chat、Channel 与 PromptInput
    * 保持挂载（草稿经 draftCache 往返），场景只借用屏幕与键盘；Esc 回到打开它
@@ -6040,6 +6056,7 @@ export function Chat({
         // Switching to a sibling or the parent swaps the viewed agent in
         // place; Esc still returns to the original entry point.
         onSwitchAgent={switchViewedAgent}
+        onViewed={acknowledgeViewedFailures}
       />
     )
     return fullscreen ? viewScene : <AlternateScreen>{viewScene}</AlternateScreen>
@@ -6061,6 +6078,7 @@ export function Chat({
     const scene = (
       <SubagentDetailScene
         subagent={subagent}
+        onViewed={acknowledgeViewedFailures}
         onInterrupt={(id) => channel.subagentControl?.interrupt(id)}
         {...(channel.subagentControl?.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
         onOpenView={() => openAgentView(subagent.agentId, { kind: 'agent-detail', agentId: subagent.agentId })}
@@ -6117,6 +6135,7 @@ export function Chat({
     const dashboard = (
       <SubagentDashboard
         subagents={[...channel.subagents]}
+        onViewed={acknowledgeViewedFailures}
         onSelect={(id) => {
           setSubagentDashboardOpen(false)
           setSubagentDetailId(id)
