@@ -1,7 +1,7 @@
 /** Track Task* result state and TodoWrite snapshots for the todo panel. */
 import type { AgentEvent, AgentEventOf } from '../../../agent/events.js'
 import type { TodoPanelItem } from '../../../agent/index.js'
-import { t } from '../../../i18n.js'
+import { claudeText } from '../text.js'
 import { arr, rec, str } from '../narrow.js'
 import { claudeToolRole } from '../tools.js'
 import type { ClaudeTaskSeed, ClaudeTranslatorOptions, TrackedTask } from './types.js'
@@ -97,7 +97,7 @@ export function createTaskTools(options: ClaudeTranslatorOptions) {
             const status = panelStatus(patch.status) ?? panelStatus(rec(record?.statusChange)?.to) ?? known?.status
             if (status !== undefined) {
               trackedTasks.set(id, {
-                content: str(patch.subject) ?? known?.content ?? t('claude-task-unnamed', { id }),
+                content: str(patch.subject) ?? known?.content ?? claudeText('claude-task-unnamed', { id }),
                 status,
                 activeForm: str(patch.activeForm) ?? known?.activeForm,
                 seq: known?.seq ?? ++taskSeq,

@@ -154,7 +154,7 @@ Record<keyof Options, …>`，SDK 增删选项时 `tsc` 会报错）。要点：
 - `AskUserQuestion` 走问卷面板；`ExitPlanMode` 走计划评审面板。
 - SDK 的 abort signal、会话 dispose 与切换都会撤回挂起的请求，不会让面板卡住。
 - MCP elicitation：表单每个字段一题并按字段约束校验；URL 模式给出链接提示。表单与 URL
-  问题的规则在后端中立的 `src/channel/elicitation.ts`，后端只负责挂起与应答。
+  问题的规则在后端中立的 `src/backends/shared/elicitation.ts`，后端只负责挂起与应答（文案由各后端自带）。
 - 拒答回退：只声明 `refusal_fallback_prompt` 一种对话框（重试回退模型或取消）。
 
 ### 子代理与后台任务

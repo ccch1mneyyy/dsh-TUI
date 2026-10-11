@@ -1,6 +1,6 @@
 /** Assemble turns, attempts and streaming deltas into canonical messages. */
 import type { AgentEvent, AgentEventOf, ContentBlockView, TurnEndReason, UsageDelta } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { claudeText } from '../text.js'
 import { arr, num, rec, str, type Rec } from '../narrow.js'
 import { narrationOf, usageOf } from './content.js'
 import type { OpenAttempt } from './types.js'
@@ -47,7 +47,7 @@ export function createAttemptTranslator(context: {
     const notified = origin === 'system' && context.notificationTurnExpected
     context.notificationTurnExpected = false
     out.push({ type: 'turn.start', turn: context.turn, origin: notified ? 'notification' : origin, time: now(), ...(userMessageId === undefined ? {} : { userMessageId }) })
-    if (notified) out.push({ type: 'notice', level: 'info', text: t('claude-notification-turn') })
+    if (notified) out.push({ type: 'notice', level: 'info', text: claudeText('claude-notification-turn') })
   }
 
   /** Settle the open attempt as one canonical assistant message. */

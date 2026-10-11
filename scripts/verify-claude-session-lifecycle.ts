@@ -49,7 +49,8 @@ import { memoryClaudePrefs } from '../src/backends/claude/prefs.js'
 import type { ClaudeReplay } from '../src/backends/claude/replay.js'
 import { buildClaudeEnv } from '../src/backends/claude/process.js'
 import { openClaudeSession, type ClaudeClock, type ClaudeSessionDeps } from '../src/backends/claude/session.js'
-import { setLang, t } from '../src/i18n.js'
+import { getLang, setLang, t } from '../src/i18n.js'
+import { claudeText } from '../src/backends/claude/text.js'
 
 setLang('en')
 let passed = 0
@@ -155,7 +156,7 @@ const baseDeps = (sdk: ClaudeSessionDeps['sdk'], clock: ClaudeClock, extra: Part
   start: { mode: 'default', source: 'default' },
   executable: { path: '/fixture/bin/claude', source: 'env' },
   env: { PATH: '/usr/bin' },
-  host: { debug: () => undefined },
+  host: { locale: getLang, debug: () => undefined },
   clock,
   ...extra,
 })
@@ -206,8 +207,8 @@ const collect = (session: AgentSession) => {
   // Images are sent (see verify-claude-images); an image the session
   // cannot send (an unreadable facade, an image block without one) is
   // still refused loudly, never dropped from the message.
-  await assert.rejects(session.submit({ text: 'img', clientMessageId: 'x', images: [{} as never] }, 'followup'), new RegExp(t('claude-image-type-refused', { name: 'undefined', type: '?' }).replace(/[()?]/gu, '\\$&')))
-  await assert.rejects(session.submit({ text: 'pasted', clientMessageId: 'z', blocks: [{ type: 'text', text: 'pasted' }, { type: 'image' }] }, 'followup'), new RegExp(t('claude-image-gone')))
+  await assert.rejects(session.submit({ text: 'img', clientMessageId: 'x', images: [{} as never] }, 'followup'), new RegExp(claudeText('claude-image-type-refused', { name: 'undefined', type: '?' }).replace(/[()?]/gu, '\\$&')))
+  await assert.rejects(session.submit({ text: 'pasted', clientMessageId: 'z', blocks: [{ type: 'text', text: 'pasted' }, { type: 'image' }] }, 'followup'), new RegExp(claudeText('claude-image-gone')))
   check('submit: an image it cannot send (bad facade, block without one) is refused loudly', !query.inputs.some(input => input.uuid === 'x' || input.uuid === 'z'))
   query.emit({ type: 'mystery_frame', payload: 1 })
   query.emit({ type: 'system', subtype: 'brand_new' })
@@ -252,7 +253,7 @@ const collect = (session: AgentSession) => {
   advance(1)
   const tail = sink.events().slice(-3)
   check('30 s without confirmation force-closes the turn', tail.some(event => event.type === 'turn.end' && event.reason.kind === 'aborted'), tail)
-  check('the forced close says so', tail.some(event => event.type === 'notice' && event.text === t('claude-cancel-forced')))
+  check('the forced close says so', tail.some(event => event.type === 'notice' && event.text === claudeText('claude-cancel-forced')))
   check('the session asks for attention', tail.some(event => event.type === 'session.status' && event.status === 'requires-action'))
   await session.dispose()
   check('no timer after dispose', outstanding() === 0)

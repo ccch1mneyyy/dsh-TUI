@@ -61,7 +61,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { OAuthCredentialSource } from '../../agent/backend.js'
-import { t } from '../../i18n.js'
+import { claudeText } from './text.js'
 
 /**
  * The user's home directory, self-contained on purpose: `homeDir()` in
@@ -435,7 +435,7 @@ export async function resolveClaudeAuth(
     // credential to the other's host.
     if (channelCarriesCredential && routeSettings !== undefined
       && routeSettings.apiKeyHelper !== undefined && routeSettings.apiKeyHelper !== null && routeSettings.apiKeyHelper !== '') {
-      throw new ClaudeChannelConflictError(t('claude-channel-helper-conflict'))
+      throw new ClaudeChannelConflictError(claudeText('claude-channel-helper-conflict'))
     }
     // The channel's own credential decides the source label; the dsh-auth
     // branch below is deliberately unreachable while a channel connection

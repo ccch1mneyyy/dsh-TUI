@@ -27,7 +27,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { t } from '../../i18n.js'
+import { claudeText } from './text.js'
 import { parseJsonl, type JsonRecord } from '../shared/jsonl.js'
 import { str } from './narrow.js'
 
@@ -80,7 +80,7 @@ export function locateClaudeTranscript(sessionId: string, configDir: string): st
 /** Every entry of a transcript file (bounded; malformed lines skipped). */
 export function readTranscriptEntries(path: string, maxBytes = MAX_TRANSCRIPT_BYTES): { readonly entries: readonly JsonRecord[]; readonly badLines: number } {
   const size = statSync(path).size
-  if (size > maxBytes) throw new Error(t('claude-transcript-too-large', { mb: String(Math.round(maxBytes / (1024 * 1024))) }))
+  if (size > maxBytes) throw new Error(claudeText('claude-transcript-too-large', { mb: String(Math.round(maxBytes / (1024 * 1024))) }))
   const { records, badLines } = parseJsonl(readFileSync(path, 'utf8'))
   return { entries: records, badLines }
 }

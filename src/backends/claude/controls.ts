@@ -13,7 +13,7 @@
 import type { AccountInfo, McpServerStatus, ModelInfo, Query, SDKControlGetContextUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountView, ChannelProfileView, ContextUsageView, EffortOption, McpServerView, ModelOption, ModelRef, ModelSwitchOutcome, ModeOption, SessionCapabilities } from '../../agent/capabilities.js'
 import type { AgentEvent, CommandInfo } from '../../agent/events.js'
-import { t } from '../../i18n.js'
+import { claudeText } from './text.js'
 import { createHash } from 'node:crypto'
 import { channelTokenRef, type ClaudeChannelTokens } from '../shared/channel-tokens.js'
 import { importFromSettingsEnv, importTokenFromSettingsEnv, hasChannelConnection, type ClaudeChannelProfile, type ClaudeChannels } from './channels.js'
@@ -228,7 +228,7 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       },
       async set(ref: ModelRef): Promise<ModelSwitchOutcome> {
         const row = rowOf(models, ref.model) ?? rowOf(await refreshModels(), ref.model)
-        if (row === undefined) return { kind: 'refused', reason: t('claude-model-unknown', { model: ref.model }) }
+        if (row === undefined) return { kind: 'refused', reason: claudeText('claude-model-unknown', { model: ref.model }) }
         // In place (no fork): the CLI applies it from the next request on.
         await deps.query().setModel(row.value)
         deps.prefs.write({ model: row.value })
@@ -432,12 +432,12 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
 /** The localized label of a backend-native permission mode. */
 export function modeLabel(id: string): string {
   switch (id) {
-    case 'default': return t('claude-mode-default')
-    case 'acceptEdits': return t('claude-mode-acceptEdits')
-    case 'plan': return t('claude-mode-plan')
-    case 'auto': return t('claude-mode-auto')
-    case 'dontAsk': return t('claude-mode-dontAsk')
-    case 'bypassPermissions': return t('claude-mode-bypassPermissions')
+    case 'default': return claudeText('claude-mode-default')
+    case 'acceptEdits': return claudeText('claude-mode-acceptEdits')
+    case 'plan': return claudeText('claude-mode-plan')
+    case 'auto': return claudeText('claude-mode-auto')
+    case 'dontAsk': return claudeText('claude-mode-dontAsk')
+    case 'bypassPermissions': return claudeText('claude-mode-bypassPermissions')
     default: return id
   }
 }
@@ -447,12 +447,12 @@ export function modeLabel(id: string): string {
  *  label). Unknown ids have none. */
 export function modeDescription(id: string): string | undefined {
   switch (id) {
-    case 'default': return t('claude-mode-desc-default')
-    case 'acceptEdits': return t('claude-mode-desc-acceptEdits')
-    case 'plan': return t('claude-mode-desc-plan')
-    case 'auto': return t('claude-mode-desc-auto')
-    case 'dontAsk': return t('claude-mode-desc-dontAsk')
-    case 'bypassPermissions': return t('claude-mode-desc-bypassPermissions')
+    case 'default': return claudeText('claude-mode-desc-default')
+    case 'acceptEdits': return claudeText('claude-mode-desc-acceptEdits')
+    case 'plan': return claudeText('claude-mode-desc-plan')
+    case 'auto': return claudeText('claude-mode-desc-auto')
+    case 'dontAsk': return claudeText('claude-mode-desc-dontAsk')
+    case 'bypassPermissions': return claudeText('claude-mode-desc-bypassPermissions')
     default: return undefined
   }
 }
@@ -460,11 +460,11 @@ export function modeDescription(id: string): string | undefined {
 /** The localized label of an effort level. */
 export function effortLabel(id: string): string {
   switch (id) {
-    case 'low': return t('claude-effort-low')
-    case 'medium': return t('claude-effort-medium')
-    case 'high': return t('claude-effort-high')
-    case 'xhigh': return t('claude-effort-xhigh')
-    case 'max': return t('claude-effort-max')
+    case 'low': return claudeText('claude-effort-low')
+    case 'medium': return claudeText('claude-effort-medium')
+    case 'high': return claudeText('claude-effort-high')
+    case 'xhigh': return claudeText('claude-effort-xhigh')
+    case 'max': return claudeText('claude-effort-max')
     default: return id
   }
 }

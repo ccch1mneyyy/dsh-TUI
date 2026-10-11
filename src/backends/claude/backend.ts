@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto'
 import { isAbsolute, normalize } from 'node:path'
 import type { AgentBackend, BackendDetection, BackendHost, OpenTarget } from '../../agent/backend.js'
 import type { AgentSession } from '../../agent/session.js'
-import { t } from '../../i18n.js'
+import { claudeText, installClaudeLocale } from './text.js'
 import { CLAUDE_BACKEND_ID, CLAUDE_BACKEND_LABEL, cliVersionDrift, sdkVersionDrift, VALIDATED_SDK_VERSION, claudeResumeCommand } from './contract.js'
 import { CLAUDE_OAUTH_PROVIDER, ClaudeChannelConflictError, channelMissingCredential, detectClaudeAuth, originHost, refreshFailureDebugDetail, refreshFailureStatus, resolveClaudeAuth, type ClaudeChannelConnectionInput, type ClaudeRouteSettings } from './auth.js'
 import { createClaudeCatalog } from './catalog.js'
@@ -35,7 +35,7 @@ function refreshFailedNotice(error: unknown): string {
   // refusal sentence is already the actionable one.
   if (error instanceof ClaudeChannelConflictError) return error.message
   const status = refreshFailureStatus(error)
-  return t('claude-auth-refresh-failed', { detail: status === undefined ? '' : t('claude-auth-refresh-status', { status }) })
+  return claudeText('claude-auth-refresh-failed', { detail: status === undefined ? '' : claudeText('claude-auth-refresh-status', { status }) })
 }
 
 /** The settings credentials a channel connection replaces (named in a
@@ -65,11 +65,11 @@ export function channelStartNotices(
   const notices: string[] = []
   const settingsUrl = firstNonEmpty(settingsEnv, 'ANTHROPIC_BASE_URL')
   if (channel.baseUrl !== undefined && settingsUrl !== undefined && settingsUrl !== channel.baseUrl) {
-    notices.push(t('channel-conn-settings-mismatch', { name: channel.name }))
+    notices.push(claudeText('channel-conn-settings-mismatch', { name: channel.name }))
   }
   if (channel.baseUrl !== undefined || channel.tokenRef !== undefined) {
     const superseded = SUPERSEDED_CREDENTIAL_KEYS.filter(key => firstNonEmpty(settingsEnv, key) !== undefined)
-    if (superseded.length > 0) notices.push(t('channel-conn-creds-superseded', { keys: superseded.join(', ') }))
+    if (superseded.length > 0) notices.push(claudeText('channel-conn-creds-superseded', { keys: superseded.join(', ') }))
   }
   return notices
 }
@@ -81,15 +81,15 @@ export function channelStartNotices(
  */
 export function startModeNotices(start: StartPermissionMode, prefs: Pick<ClaudePrefs, 'write'>): string[] {
   const notices: string[] = []
-  if (start.downgradedFrom !== undefined) notices.push(t('claude-start-mode-downgraded', { mode: start.downgradedFrom }))
+  if (start.downgradedFrom !== undefined) notices.push(claudeText('claude-start-mode-downgraded', { mode: start.downgradedFrom }))
   // The developer override is never silent: a live-test leftover in the
   // environment would otherwise change every approval without a trace.
-  if (start.source === 'env') notices.push(t('claude-start-mode-env', { mode: start.mode }))
+  if (start.source === 'env') notices.push(claudeText('claude-start-mode-env', { mode: start.mode }))
   if (start.bypassNotCarried === true) {
     prefs.write({ permissionMode: null })
-    notices.push(t('claude-start-mode-bypass-not-carried'))
+    notices.push(claudeText('claude-start-mode-bypass-not-carried'))
   }
-  if (start.ignoredOverride !== undefined) notices.push(t('claude-start-mode-env-ignored', { mode: start.ignoredOverride }))
+  if (start.ignoredOverride !== undefined) notices.push(claudeText('claude-start-mode-env-ignored', { mode: start.ignoredOverride }))
   return notices
 }
 
@@ -105,7 +105,7 @@ export async function loadClaudeTranscript(
 ): Promise<{ readonly cwd: string; readonly replay: ClaudeReplay }> {
   const info = (target.cwd === undefined ? undefined : await sdk.getSessionInfo(target.sessionId, { dir: target.cwd }))
     ?? await sdk.getSessionInfo(target.sessionId)
-  if (info === undefined) throw new Error(t('claude-resume-not-found', { id: target.sessionId }))
+  if (info === undefined) throw new Error(claudeText('claude-resume-not-found', { id: target.sessionId }))
   const cwd = info.cwd ?? target.cwd ?? fallbackCwd
   const [messages, subagentIds] = await Promise.all([
     sdk.getSessionMessages(target.sessionId, { dir: cwd, includeSystemMessages: true }),
@@ -153,8 +153,13 @@ const catalogPrefs = (): ClaudePrefs | undefined => {
 }
 
 /** Remember the host of the most recent detect / open: the catalog's only way
- *  to reach this backend's own directory without a host parameter. */
-const rememberHost = (host: BackendHost): void => { catalogHost = host }
+ *  to reach this backend's own directory without a host parameter, and where
+ *  this backend's copy takes its language from (read live, so a `/lang`
+ *  switch applies to the next string). */
+const rememberHost = (host: BackendHost): void => {
+  catalogHost = host
+  installClaudeLocale(host.locale)
+}
 
 export const claudeBackend: AgentBackend = {
   id: CLAUDE_BACKEND_ID,
@@ -167,7 +172,7 @@ export const claudeBackend: AgentBackend = {
       await loadClaudeSdk()
     } catch (error) {
       host.debug(`claude: SDK import failed (${errorText(error)})`)
-      return { installed: false, hint: t('claude-sdk-missing', { version: VALIDATED_SDK_VERSION }) }
+      return { installed: false, hint: claudeText('claude-sdk-missing', { version: VALIDATED_SDK_VERSION }) }
     }
     let auth: 'ok' | 'missing' | 'unknown' = 'unknown'
     try {
@@ -179,7 +184,7 @@ export const claudeBackend: AgentBackend = {
       const executable = await resolveClaudeExecutable()
       const version = executable.path === undefined ? undefined : await readClaudeVersion(executable.path, host.appVersion)
       const drift = cliVersionDrift(version) ?? sdkVersionDrift(installedSdkVersion())
-      return { installed: true, auth, ...(version === undefined ? {} : { version }), ...(drift === undefined ? {} : { drift }), ...(auth === 'missing' ? { hint: t('claude-auth-missing-hint') } : {}) }
+      return { installed: true, auth, ...(version === undefined ? {} : { version }), ...(drift === undefined ? {} : { drift }), ...(auth === 'missing' ? { hint: claudeText('claude-auth-missing-hint') } : {}) }
     } catch (error) {
       host.debug(`claude: detection failed (${errorText(error)})`)
       return { installed: true, auth }
@@ -222,7 +227,7 @@ export const claudeBackend: AgentBackend = {
       sdk = await loadClaudeSdk()
     } catch (error) {
       host.debug(`claude: SDK import failed (${errorText(error)})`)
-      throw new Error(t('claude-sdk-missing', { version: VALIDATED_SDK_VERSION }))
+      throw new Error(claudeText('claude-sdk-missing', { version: VALIDATED_SDK_VERSION }))
     }
     const resumed = target.kind === 'resume'
       ? await loadClaudeTranscript(sdk, target, host.cwd, message => host.debug(message))
@@ -269,7 +274,7 @@ export const claudeBackend: AgentBackend = {
         ...(active.env === undefined ? {} : { env: active.env }),
       }
       if (channelMissingCredential(connection)) {
-        throw new ClaudeChannelConflictError(t('claude-channel-token-missing', { name: active.name, host: originHost(active.baseUrl ?? '') }))
+        throw new ClaudeChannelConflictError(claudeText('claude-channel-token-missing', { name: active.name, host: originHost(active.baseUrl ?? '') }))
       }
       return connection
     }
@@ -305,7 +310,7 @@ export const claudeBackend: AgentBackend = {
       plan = await resolveClaudeAuth(baseEnv, undefined, { settings })
     }
     startNotices.push(...startModeNotices(start, prefs))
-    if (sdkVersionDrift(sdkVersion) !== undefined) startNotices.push(t('claude-sdk-drift', { version: sdkVersion ?? '', validated: VALIDATED_SDK_VERSION }))
+    if (sdkVersionDrift(sdkVersion) !== undefined) startNotices.push(claudeText('claude-sdk-drift', { version: sdkVersion ?? '', validated: VALIDATED_SDK_VERSION }))
     return openClaudeSession({
       sdk,
       store: sdk,

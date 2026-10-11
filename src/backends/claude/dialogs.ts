@@ -6,7 +6,7 @@
  * session's `questions` capability, and settles into the shape the SDK
  * expects:
  *
- *  - form elicitation: the shared form flow (`src/channel/elicitation.ts`:
+ *  - form elicitation: the shared form flow (`src/backends/shared/elicitation.ts`:
  *    one question per field of the requested JSON schema, validated against
  *    the field's constraints, invalid answers asked again, optional fields
  *    skippable, a last question that sends or declines) settles as
@@ -32,16 +32,26 @@
 import type { ElicitationRequest, ElicitationResult, OnElicitation, OnUserDialog, UserDialogRequest, UserDialogResult } from '@anthropic-ai/claude-agent-sdk'
 import type { QuestionAnswers } from '../../agent/capabilities.js'
 import type { AgentEvent, QuestionItemView } from '../../agent/events.js'
-import { createElicitationForm, createElicitationUrlAsk, elicitationNotices } from '../../channel/elicitation.js'
-import { t } from '../../i18n.js'
+import { createElicitationForm, createElicitationUrlAsk, elicitationNotices, parseFieldText as parseField, type ElicitationValue, type FormField } from '../shared/elicitation.js'
+import { claudeElicitationText, claudeText } from './text.js'
 import { errorText, rec, str } from './narrow.js'
 
 /** The dialog kinds this client renders (`supportedDialogKinds`). */
 export const SUPPORTED_DIALOG_KINDS: readonly string[] = ['refusal_fallback_prompt']
 
 // The form schema rules are the shared, backend-neutral ones
-// (`src/channel/elicitation.ts`); re-exported for this backend's callers.
-export { formFields, parseFieldText, type FormField } from '../../channel/elicitation.js'
+// (`src/backends/shared/elicitation.ts`); re-exported for this backend's
+// callers, with this backend's copy bound in. A flow freezes its labels when
+// it opens (answers are matched against the strings the panel showed);
+// `parseFieldText` only builds a re-ask reason, so it reads the live language.
+export { formFields, serverHeader, type ElicitationValue, type FormField } from '../shared/elicitation.js'
+export const parseFieldText = (field: FormField, text: string): { readonly value: ElicitationValue } | { readonly error: string } =>
+  parseField(field, text, claudeElicitationText())
+
+/** The elicitation notices in the language showing now: a notice is a
+ *  one-shot line, so it follows a `/lang` switch (the questions of a flow do
+ *  not — see above). */
+const notices = (): ReturnType<typeof elicitationNotices> => elicitationNotices(claudeElicitationText())
 
 /** One parked ask (an elicitation or a dialog, possibly re-asked). */
 interface Pending {
@@ -165,7 +175,7 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
   /** A form elicitation: its fields, then send / decline (the shared
    *  form flow decides every round; this bridge only parks and answers). */
   const form = (request: ElicitationRequest, flow: string, signal: AbortSignal, resolve: (result: ElicitationResult) => void): void => {
-    const ask = createElicitationForm(request)
+    const ask = createElicitationForm(request, claudeElicitationText())
     park<ElicitationResult>(flow, signal, resolve, (finish, reask) => ({
       kind: 'form',
       questions: ask.questions,
@@ -182,13 +192,13 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
 
   /** A URL elicitation: the notice, then accept / decline with the link. */
   const url = (request: ElicitationRequest, flow: string, signal: AbortSignal, resolve: (result: ElicitationResult) => void): void => {
-    const ask = createElicitationUrlAsk(request)
+    const ask = createElicitationUrlAsk(request, claudeElicitationText())
     if (ask === undefined) {
-      deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${flow}`, text: elicitationNotices.urlMissing(request.serverName) }])
+      deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${flow}`, text: notices().urlMissing(request.serverName) }])
       resolve({ action: 'decline' })
       return
     }
-    deps.emit([{ type: 'notice', level: 'info', key: `elicit-url:${request.elicitationId ?? flow}`, text: elicitationNotices.urlOpen(request.serverName, request.url!) }])
+    deps.emit([{ type: 'notice', level: 'info', key: `elicit-url:${request.elicitationId ?? flow}`, text: notices().urlOpen(request.serverName, request.url!) }])
     park<ElicitationResult>(flow, signal, resolve, finish => ({
       kind: 'url',
       url: { server: request.serverName, ...(request.elicitationId === undefined ? {} : { elicitationId: request.elicitationId }) },
@@ -215,7 +225,7 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
       if (mode === 'form') form(request, flow, options.signal, resolve)
       else if (mode === 'url') url(request, flow, options.signal, resolve)
       else {
-        deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${flow}`, text: elicitationNotices.unsupported(request.serverName, String(mode)) }])
+        deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${flow}`, text: notices().unsupported(request.serverName, String(mode)) }])
         resolve({ action: 'decline' })
       }
     } catch (error) {
@@ -233,20 +243,20 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
       resolve({ behavior: 'cancelled' })
       return
     }
-    const retry = t('claude-refusal-retry', { model: fallback })
-    const cancel = t('claude-refusal-cancel')
+    const retry = claudeText('claude-refusal-retry', { model: fallback })
+    const cancel = claudeText('claude-refusal-cancel')
     const category = str(payload?.apiRefusalCategory)
     const detail = [
       str(payload?.guidanceText)?.trim(),
-      category === undefined || category === '' ? undefined : t('claude-refusal-category', { category }),
+      category === undefined || category === '' ? undefined : claudeText('claude-refusal-category', { category }),
     ].filter((line): line is string => line !== undefined && line !== '').join('\n')
     park<UserDialogResult>(flow, signal, resolve, finish => ({
       kind: 'dialog',
       questions: [{
-        question: t('claude-refusal-question', { model: original ?? t('claude-refusal-this-model') }),
-        header: t('claude-refusal-header'),
+        question: claudeText('claude-refusal-question', { model: original ?? claudeText('claude-refusal-this-model') }),
+        header: claudeText('claude-refusal-header'),
         ...(detail === '' ? {} : { detail }),
-        options: [{ label: retry, description: t('claude-refusal-retry-desc') }, { label: cancel, description: t('claude-refusal-cancel-desc') }],
+        options: [{ label: retry, description: claudeText('claude-refusal-retry-desc') }, { label: cancel, description: claudeText('claude-refusal-cancel-desc') }],
         hideCustomInput: true,
       }],
       cancelled: { behavior: 'cancelled' },
@@ -296,7 +306,7 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
     complete(server: string, elicitationId: string): void {
       for (const entry of [...byFlow.values()]) {
         if (entry.kind !== 'url' || entry.url?.server !== server || entry.url.elicitationId !== elicitationId) continue
-        deps.emit([{ type: 'notice', level: 'info', key: `elicit-url:${elicitationId}`, text: elicitationNotices.urlComplete(server) }])
+        deps.emit([{ type: 'notice', level: 'info', key: `elicit-url:${elicitationId}`, text: notices().urlComplete(server) }])
         entry.complete?.()
       }
     },

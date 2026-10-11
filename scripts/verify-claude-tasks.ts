@@ -49,6 +49,7 @@ const [
   { setLang, t },
   { settled, sleep },
   fakes,
+  { claudeText },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -64,6 +65,7 @@ const [
   import('../src/i18n.js'),
   import('./lib/term-test.mjs'),
   import('./lib/claude-fake-sdk.js'),
+  import('../src/backends/claude/text.js'),
 ])
 type ChannelState = ReturnType<typeof createChannel>
 type FakeQuery = ReturnType<typeof fakes.fakeClaudeSdk>['queries'][number]
@@ -137,7 +139,7 @@ async function feed(name: string, session: Awaited<ReturnType<typeof openClaudeS
     check('the bookend wins over the inferred end: completed, its exit code as the (short) detail, one toast', await settled(() => channel.backgroundJobs[0]?.status === 'completed') && channel.backgroundJobs[0]!.detail === 'exit code: 0'
       && channel.notifications.filter(item => item.text.startsWith('Background job completed')).length === 1, { job: channel.backgroundJobs[0], toasts: channel.notifications.map(item => item.text) })
     check('the card settled with it', jobRows(channel)[0]?.job?.status === 'completed')
-    check('the report started the CLI\'s notification turn (a notice, no user bubble)', channel.rows.some(row => row.kind === 'notice' && row.text === t('claude-notification-turn')) && channel.rows.filter(row => row.kind === 'user').length === 1)
+    check('the report started the CLI\'s notification turn (a notice, no user bubble)', channel.rows.some(row => row.kind === 'notice' && row.text === claudeText('claude-notification-turn')) && channel.rows.filter(row => row.kind === 'user').length === 1)
     check('a job is never a subagent', channel.subagents.length === 0 && !channel.rows.some(row => row.kind === 'subagent'))
   } finally {
     channel.releaseContributions()

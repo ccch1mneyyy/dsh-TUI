@@ -33,7 +33,8 @@ import type { buildQueryOptions } from '../src/backends/claude/options.js'
 import { CLOSED_MESSAGE, PLAN_DISMISSED_MESSAGE, PLAN_KEEP_PLANNING_MESSAGE, QUESTION_CANCEL_MESSAGE, REJECT_MESSAGE, WITHDRAWN_MESSAGE } from '../src/backends/claude/permissions.js'
 import { openClaudeSession, type ClaudeClock, type ClaudeSessionDeps } from '../src/backends/claude/session.js'
 import { createClaudeTranslator } from '../src/backends/claude/translate.js'
-import { setLang, t } from '../src/i18n.js'
+import { getLang, setLang, t } from '../src/i18n.js'
+import { claudeText } from '../src/backends/claude/text.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
 
 setLang('en')
@@ -122,7 +123,7 @@ async function open(extra: Partial<ClaudeSessionDeps> = {}) {
     start: { mode: 'default', source: 'default' },
     executable: { path: '/fixture/bin/claude', source: 'env' },
     env: { PATH: '/usr/bin' },
-    host: { debug: () => undefined },
+    host: { locale: getLang, debug: () => undefined },
     clock,
     ...extra,
   })
@@ -152,7 +153,7 @@ const writeInput = { file_path: '/fixture/project/notes.txt', content: 'x' }
   check('a prompt surfaces as permission.request', request.requestId === 'r1' && request.callId === 'toolu_r1' && request.toolName === 'Write' && request.displayName === 'Write')
   check('the gated file is shown relative to the cwd', request.command === 'notes.txt', request.command)
   check('options: allow once, allow always (auto-accept edits), reject', JSON.stringify(request.options.map(option => option.kind)) === JSON.stringify(['allow-once', 'allow-always', 'reject'])
-    && request.options[1]!.label === t('claude-always-accept-edits'), request.options)
+    && request.options[1]!.label === claudeText('claude-always-accept-edits'), request.options)
   check('a rejection may carry a reason', request.feedback === true)
   check('a parked prompt is requires-action', session.status === 'requires-action' && of(events, 'session.status').some(event => event.status === 'requires-action'))
   check('capabilities.permissions.pending lists it', session.capabilities.permissions?.pending().some(view => view.requestId === 'r1') === true)
@@ -177,7 +178,7 @@ const writeInput = { file_path: '/fixture/project/notes.txt', content: 'x' }
   const rules = [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'npm test:*' }], behavior: 'allow', destination: 'localSettings' }]
   const always = canUseTool('Bash', { command: 'npm test' }, opts('r3', { suggestions: rules }))
   await tick()
-  check('addRules → "don\'t ask again in this project" label', lastRequest(events).options.find(option => option.kind === 'allow-always')?.label === t('claude-always-rules-project', { rules: 'Bash(npm test:*)' }))
+  check('addRules → "don\'t ask again in this project" label', lastRequest(events).options.find(option => option.kind === 'allow-always')?.label === claudeText('claude-always-rules-project', { rules: 'Bash(npm test:*)' }))
   session.capabilities.permissions!.respond('r3', { kind: 'allow-always' })
   const allowed = await always
   check('allow always → the CLI\'s own suggestions, classified permanent', allowed.behavior === 'allow' && JSON.stringify(allowed.updatedPermissions) === JSON.stringify(rules) && allowed.decisionClassification === 'user_permanent', allowed)
@@ -186,7 +187,7 @@ const writeInput = { file_path: '/fixture/project/notes.txt', content: 'x' }
   const dirPrompt = canUseTool('Read', { file_path: '/fixture/other/a' }, opts('r4', { suggestions: dirs, blockedPath: '/fixture/other/a', defaultToNo: true, agentID: 'agent-123' }))
   await tick()
   const dirRequest = lastRequest(events)
-  check('addDirectories → "allow access" label', dirRequest.options.find(option => option.kind === 'allow-always')?.label === t('claude-always-directories', { dirs: '/fixture/other' }))
+  check('addDirectories → "allow access" label', dirRequest.options.find(option => option.kind === 'allow-always')?.label === claudeText('claude-always-directories', { dirs: '/fixture/other' }))
   check('blockedPath, defaultToNo and the subagent pass through', dirRequest.blockedPath === '/fixture/other/a' && dirRequest.defaultToNo === true && dirRequest.agentId === 'agent-123', dirRequest)
   session.capabilities.permissions!.respond('r4', { kind: 'allow-once' })
   await dirPrompt
@@ -388,17 +389,17 @@ const writeInput = { file_path: '/fixture/project/notes.txt', content: 'x' }
     const question = request.questions[0]!
     if (requestId === 'plan1') {
       check('ExitPlanMode → a plan-review question with the plan as detail', question.intent?.kind === 'plan-review' && question.detail === planInput.plan
-        && question.intent.approve === t('claude-plan-accept-edits') && question.intent.approveAlso?.[0] === t('claude-plan-manual') && question.intent.decline === t('claude-plan-keep'), question)
+        && question.intent.approve === claudeText('claude-plan-accept-edits') && question.intent.approveAlso?.[0] === claudeText('claude-plan-manual') && question.intent.decline === claudeText('claude-plan-keep'), question)
     }
     session.capabilities.questions!.respond(requestId, { answers: [{ selected, ...(custom === undefined ? {} : { custom }) }] })
     return pending
   }
-  const accepted = await review('plan1', [t('claude-plan-accept-edits')])
+  const accepted = await review('plan1', [claudeText('claude-plan-accept-edits')])
   check('approve (auto-accept edits) → allow + setMode acceptEdits for the session', accepted.behavior === 'allow'
     && JSON.stringify(accepted.updatedPermissions) === JSON.stringify([{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]), accepted)
-  const manual = await review('plan2', [t('claude-plan-manual')])
+  const manual = await review('plan2', [claudeText('claude-plan-manual')])
   check('approve (manual approvals) → allow + setMode default', manual.behavior === 'allow' && JSON.stringify(manual.updatedPermissions) === JSON.stringify([{ type: 'setMode', mode: 'default', destination: 'session' }]))
-  const keep = await review('plan3', [t('claude-plan-keep')], 'split step 1')
+  const keep = await review('plan3', [claudeText('claude-plan-keep')], 'split step 1')
   check('keep planning with feedback → deny + interrupt with the feedback', keep.behavior === 'deny' && keep.interrupt === true && keep.message.startsWith(PLAN_KEEP_PLANNING_MESSAGE) && keep.message.includes('split step 1'))
   const dismissed = canUseTool('ExitPlanMode', planInput, opts('plan4'))
   await tick()
@@ -435,7 +436,7 @@ const writeInput = { file_path: '/fixture/project/notes.txt', content: 'x' }
   const entered = feed({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tp', content: 'Entered plan mode.' }] } })
   check('EnterPlanMode → mode.changed{plan}', entered.some(event => event.type === 'mode.changed' && event.modeId === 'plan'), entered)
   const exited = feed({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tx', content: 'User has approved your plan.' }] } })
-  check('an approved plan leaves a notice row', exited.some(event => event.type === 'notice' && event.text === t('claude-plan-approved')))
+  check('an approved plan leaves a notice row', exited.some(event => event.type === 'notice' && event.text === claudeText('claude-plan-approved')))
   feed({ type: 'user', tool_use_result: { answers: { 'Which color?': 'blue' } }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tq', content: 'Your questions have been answered: "Which color?"="blue". You can now continue.' }] } })
   check('an answered AskUserQuestion projects its record', harness.state.rows.some(row => row.kind === 'local-output' && row.text.includes('Which color?') && row.text.includes('blue')), harness.state.rows.map(row => `${row.kind}:${row.text}`))
 }

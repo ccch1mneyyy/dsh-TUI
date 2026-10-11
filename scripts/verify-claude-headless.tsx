@@ -38,7 +38,7 @@ pinHaikuOrExit('verify-claude-headless', (await import('../src/utils/paths.js'))
 
 const [{ execFile, execFileSync }, { startWsFixture }] = await Promise.all([import('node:child_process'), import('./lib/ide-ws-fixture.js')])
 
-const [{ Writable, PassThrough }, { mkdtempSync, readFileSync, rmSync, writeFileSync }, { tmpdir }, { join }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { claudeBackend }, { setLang, t }, { default: instances }, { settled, sleep, viewportLines }] =
+const [{ Writable, PassThrough }, { mkdtempSync, readFileSync, rmSync, writeFileSync }, { tmpdir }, { join }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { claudeBackend }, { setLang, t }, { claudeText }, { default: instances }, { settled, sleep, viewportLines }] =
   await Promise.all([
     import('node:stream'),
     import('node:fs'),
@@ -55,6 +55,7 @@ const [{ Writable, PassThrough }, { mkdtempSync, readFileSync, rmSync, writeFile
     import('../src/i18n.js'),
     import('../src/ink/instances.js'),
     import('./lib/term-test.mjs'),
+    import('../src/backends/claude/text.js'),
   ])
 
 type AgentSession = import('../src/agent/session.js').AgentSession
@@ -85,7 +86,7 @@ const shell = {
 const ide = await startWsFixture('tok-headless', [root], { clearSelectionAfterMs: null })
 process.env.DSH_TUI_IDE_PORT = String(ide.port)
 process.env.DSH_TUI_IDE_TOKEN = 'tok-headless'
-const host = { cwd: root, debug: () => undefined, warn: () => undefined, stderr: () => undefined }
+const host = { cwd: root, locale: getLang, debug: () => undefined, warn: () => undefined, stderr: () => undefined }
 /**
  * Every session this run opened (to dispose) and every Claude session id it
  * created (to delete from the real ~/.claude in the final `finally`, success
@@ -330,7 +331,7 @@ try {
     check('5a: the interrupt closes the turn', await settled(() => !c5.working && c5.rows.some(row => row.kind === 'interrupt'), { timeoutMs: 60_000 }), screen())
     check('5a: … and the job keeps running (an interrupt never stops a task)', c5.backgroundJobs[0]?.status === 'running', JSON.stringify(c5.backgroundJobs[0]))
     check('5a: the job completes on its own, its tail read from its output file', await settled(() => c5.backgroundJobs[0]?.status === 'completed' && c5.backgroundJobs[0].outputLines.some(line => line.text.includes('bg-live-done')), { timeoutMs: 120_000 }), JSON.stringify(c5.backgroundJobs[0]))
-    check('5a: the CLI reports it in its notification turn', await settled(() => !c5.working && c5.rows.some(row => row.kind === 'notice' && row.text === t('claude-notification-turn')), { timeoutMs: 120_000 }), c5.rows.map(row => `${row.kind}:${row.text.slice(0, 40)}`).join(' | '))
+    check('5a: the CLI reports it in its notification turn', await settled(() => !c5.working && c5.rows.some(row => row.kind === 'notice' && row.text === claudeText('claude-notification-turn')), { timeoutMs: 120_000 }), c5.rows.map(row => `${row.kind}:${row.text.slice(0, 40)}`).join(' | '))
   } finally {
     clearInterval(approver)
     i5.unmount()
