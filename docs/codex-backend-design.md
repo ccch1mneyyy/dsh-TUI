@@ -472,7 +472,7 @@ interface CodexSessionState {
 | `item/fileChange/requestApproval` | `permission.request{toolName:'apply_patch', callId:itemId, reason, blockedPath:grantRoot?, displayName:t('tool-name-edit'), feedback:true}` | `allow-once`(accept) · `allow-always` id=`session` label=`t('codex-approve-session-files')`(acceptForSession) · `reject` |
 | `item/permissions/requestApproval` | `permission.request{toolName:'permissions', description:<RequestPermissionProfile 摘要>, reason}` | `allow-once` → `{permissions:<请求的全部>, scope:'turn'}` · `allow-always` id=`session` → `scope:'session'` · `reject` → `{permissions:{}, scope:'turn'}` |
 | `item/tool/requestUserInput` | `question.request{requestId, callId:itemId, questions: 每个 question 一项：header、question、options(label/description)、`hideCustomInput: !isOther`、`secret: isSecret`（N3）}` | 应答 `{answers:{<qid>:{answers:[选中 label…, 自定义文本?]}}}`；取消（**C0 已验证**，V7：错误应答与 `{answers:{}}` 等价，官方 TUI 的 Esc 是中断回合）→ 应答 `{answers:{}}` 并 `turn/interrupt`；`autoResolutionMs` 非空时到点自动以首选项应答并 notice |
-| `mcpServer/elicitation/request` | 经中立的 `src/channel/elicitation.ts`（N2，从 Claude 迁来）转 `question.request` | 应答 `{action:'accept'\|'decline'\|'cancel', content, _meta:null}`；URL 模式 → 链接问题（与 Claude 一致） |
+| `mcpServer/elicitation/request` | 经中立的 `src/backends/shared/elicitation.ts`（N2 从 Claude 迁来，**B-3 从 `src/channel/` 移到后端中立接缝并去掉自带文案**：调用方交一份 `ElicitationText`）转 `question.request` | 应答 `{action:'accept'\|'decline'\|'cancel', content, _meta:null}`；URL 模式 → 链接问题（与 Claude 一致） |
 | `account/chatgptAuthTokens/refresh` | 不进界面，hub 的 auth 处理（§5.10） | — |
 | `applyPatchApproval` / `execCommandApproval`（v1 遗留） | 不应出现（v2 客户端）；出现则 `respondError(-32601)` 并调试日志 | — |
 | `item/tool/call`、`attestation/generate`、`currentTime/read` | 不声明 dynamic tools / attestation：`respondError(-32601)`；`currentTime/read` 应答当前时间 | — |
@@ -783,7 +783,7 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 | # | 改动 | 文件 | 形状 | 期 |
 | --- | --- | --- | --- | --- |
 | N1 | 后端共享件目录 + 边界规则 | 新 `src/backends/shared/{atomic-file,channel-tokens}.ts`（从 `claude/` 移来，Claude 改 import）；`scripts/verify-adapter-boundary.ts`、`ADAPTER.md` 规则表 | `shared/` 不得 import `@*/` 厂商包与 `backends/<任何具体后端>/`；`backends/<a>/` 不得 import `backends/<b>/`（`shared/` 除外）；新增 `native.codex` 规则（`allowedIn: 'backends/codex/'`）。`ClaudeChannelTokens` → `ChannelTokenStore`（类型别名保留一期以减小 diff） | C0 |
-| N2 | MCP elicitation ↔ 问卷的纯函数 | 新 `src/channel/elicitation.ts`（从 `claude/dialogs.ts` 抽出 form schema → `QuestionItemView[]`、答案 → `content`、校验与重问、URL 模式问题） | 输入为 MCP 规范形状（`requestedSchema`、`mode`、`url`），无厂商类型；Claude 改为调用它（`verify-claude-dialogs` 不变绿） | C2 |
+| N2 | MCP elicitation ↔ 问卷的纯函数 | 新 `src/backends/shared/elicitation.ts`（从 `claude/dialogs.ts` 抽出 form schema → `QuestionItemView[]`、答案 → `content`、校验与重问、URL 模式问题；B-3 落地时从 `src/channel/` 移入接缝，文案改为调用方提供） | 输入为 MCP 规范形状（`requestedSchema`、`mode`、`url`），无厂商类型；Claude 改为调用它（`verify-claude-dialogs` 不变绿） | C2 |
 | N3 | 问卷保密输入 | `src/agent/events.ts` `QuestionItemView.secret?: true`；`AskUserQuestionPanel` 自定义输入以 `•` 掩码显示；答案记录行显示 `••••` | 缺省行为不变 | C2 |
 | N4 | 运行中工具的实时输出 | `events.ts` 新事件 `{ type:'tool.output'; callId; text; time; parentCallId? }`（追加片段）；共享投影器给工具行维护 `liveOutput`（有界尾部：最后 200 行 / 16 KiB，超出记 `liveOutputDropped` 计数）；`tool.result` 到达时清除；终端卡运行中渲染最后 5 行（dim，宽度按显示单元截断，超出时首行 `… N 行省略`），全屏模式 8 行 | DSH/Claude 翻译器不发此事件（`verify:agent-domain` 穷举里登记为"可选未用"）；投影器对未知 callId 忽略 | C2 |
 | N5 | 带真实行号的 unified patch | `channel-view.ts` `ToolFileDiff` 改为联合：`{path, oldText, newText}` \| `{path, patch, change?: 'add'\|'delete'\|'update', movePath?}`；`SplitDiffView`（及 diff 卡）对 `patch` 分支用已导入的 `JsDiff.parsePatch`（缺文件头时补 `--- a/<path>\n+++ b/<path>\n`）按 hunk 渲染真实新旧行号；`(+N -M)` 统计从 hunk 计算 | 旧分支零改动；窄宽度/CJK/超长行走现有换行与截断辅助 | C2 |
@@ -1159,7 +1159,7 @@ contributing 的规则单独重跑并在进度日志说明。
    （把 `usageOnly` 迁到独立 `usage` 事件 + 投影器采用 `context.usage` 占用读数）；事件流不变量
    检查器（§10.3）接入并跑全部后端的 fixture。
 2. **接上中立层**：`tool.output`（≤10 Hz 合并）、diff 卡换成 N5 的 `patch`、`isSecret` → `secret`、
-   elicitation 走 `src/channel/elicitation.ts`。
+   elicitation 走 `src/backends/shared/elicitation.ts`（B-3 起，文案由 codex 自己带）。
 3. **控制面**：models/effort；modes（§5.9：Shift+Tab 只切 Plan，权限档走 `/permission`）与计划评审；
    compact；context（官方 12k 基线公式）；account；rate-limit；mcp；commands（`/review`、`/diff`、
    `/plan`、`/usage`、skills）；N9 `init`；bubblewrap 对话内提示；默认设置优先级（§5.5）。
