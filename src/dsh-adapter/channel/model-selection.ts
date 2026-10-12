@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import { boundContextSummary, createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
-import type { ChannelOwner } from './owner.js'
+import { createChannelOwner, type ChannelOwner } from './owner.js'
 
 /** Routing belongs to the live agent, including turns running while parked.
  * The foreground facade follows the binding; each waterfall captures its own
@@ -39,23 +39,18 @@ export function createModelSelection(ctx: Context, deps: {
         ? { ...route } : undefined,
       assembled: undefined,
     }
-    let active = true
+    const lifetime = createChannelOwner()
+    lifetime.bind(deps.owner.current)
     let assemblyOperation = 0
-    const current = (): boolean => active && deps.owner.current()
-    const releases: Array<() => void> = []
+    const current = lifetime.current
     const release = deps.owner.own(() => {
-      active = false
       entries.delete(agent)
-      const failures: unknown[] = []
-      for (const dispose of releases.splice(0)) {
-        try { dispose() } catch (error) { failures.push(error) }
-      }
-      if (failures.length > 0) throw new AggregateError(failures, 'dsh-tui: model selection cleanup failed')
+      lifetime.dispose()
     })
     entries.set(agent, { ref, release })
     const own = (dispose: () => void): void => {
-      releases.push(deps.owner.own(dispose))
-      deps.owner.assertActive()
+      lifetime.own(dispose)
+      lifetime.assertActive()
     }
     try {
       own(agent.ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
