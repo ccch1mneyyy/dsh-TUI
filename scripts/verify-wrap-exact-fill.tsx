@@ -8,13 +8,12 @@
 process.env.FORCE_COLOR = '3'
 import assert from 'node:assert/strict'
 
-const [React, { default: Box }, { default: Text }, { renderToScreen }, { cellAt }, { getSelectedText, startSelection, updateSelection }] = await Promise.all([
+const [React, { default: Box }, { default: Text }, { renderToScreen }, { cellAt }, { captureScrolledRows, createSelectionState, getSelectedText, selectWordAt, startSelection, updateSelection }] = await Promise.all([
   import('react'), import('../src/ink/components/Box.js'),
   import('../src/ink/components/Text.js'), import('../src/ink/render-to-screen.js'),
   import('../src/ink/screen.js'), import('../src/ink/selection.js'),
 ])
 type Screen = ReturnType<typeof renderToScreen>['screen']
-type SelectionState = Parameters<typeof getSelectedText>[0]
 
 function rows(screen: Screen, width: number): string[] {
   return Array.from({ length: screen.height }, (_, y) =>
@@ -22,11 +21,7 @@ function rows(screen: Screen, width: number): string[] {
 }
 
 function select(screen: Screen, fromCol: number, fromRow: number, toCol: number, toRow: number): string {
-  const s = {
-    anchor: null, focus: null, isDragging: false, anchorSpan: null,
-    scrolledOffAbove: [], scrolledOffBelow: [],
-    lastPressHadAlt: false, coveredFingerprint: null, coveredText: null, coveredGeometry: null, stale: false,
-  } as unknown as SelectionState
+  const s = createSelectionState()
   startSelection(s, fromCol, fromRow)
   updateSelection(s, toCol, toRow)
   return getSelectedText(s, screen)
@@ -39,6 +34,34 @@ function select(screen: Screen, fromCol: number, fromRow: number, toCol: number,
   assert.equal(screen.softWrap[1], -7, 'continuation records the elided separator')
   assert.equal(select(screen, 0, 0, 6, 1), 'aaa the PR.', 'copy re-inserts the elided separator')
   assert.equal(select(screen, 4, 0, 5, 0), 'th', 'a selection short of the row end adds no space')
+  const s = createSelectionState()
+  selectWordAt(s, screen, 5, 0)
+  assert.equal(getSelectedText(s, screen), 'the', 'double-clicking the row-end word adds no separator')
+  captureScrolledRows(s, screen, 0, 0, 'above')
+  assert.equal(s.scrolledOffAbove[0]!.text, 'the', 'capturing a selection ending at the row edge adds no separator')
+}
+
+// Captured rows on either side still join with the visible selection.
+for (const side of ['above', 'below'] as const) {
+  const { screen } = renderToScreen(<Text>aaa the PR.</Text>, 7)
+  const s = createSelectionState()
+  startSelection(s, 0, 0)
+  updateSelection(s, 2, 1)
+  const row = side === 'above' ? 0 : 1
+  captureScrolledRows(s, screen, row, row, side)
+  if (side === 'above') s.anchor = { col: 0, row: 1 }
+  else s.focus = { col: 6, row: 0 }
+  assert.equal(getSelectedText(s, screen), 'aaa the PR.', `copy restores the separator with rows captured ${side}`)
+}
+
+// Keep whitespace-only pieces: later joins and trailing trim depend on them.
+for (const [width, text, expected] of [
+  [7, 'aaa the changes', 'aaa the changes'],
+  [1, 'a b', 'a b'],
+  [7, 'aaa the  \nEND', 'aaa the\nEND'],
+] as const) {
+  const { screen } = renderToScreen(<Text>{text}</Text>, width)
+  assert.equal(select(screen, 0, 0, width - 1, screen.height - 1), expected, 'whitespace-only rows preserve copy joins and trailing trim')
 }
 
 // Not an exact fill: wrap-ansi already leaves the space trailing the row.
