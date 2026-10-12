@@ -453,7 +453,8 @@ await withTerminal(
       setLang('en')
     }
     assert.equal(await settled(() => timeline?.turns[0]?.preview === '1 image'), true)
-    assert.match(screen(), /Image · assistant\.png/u)
+    assert.equal(await settled(() => screen().includes('Image · assistant.png')), true,
+      'the English image label is painted after switching language back')
     assert.match(screen(), /image_tool/iu, 'tool card remains visible above its image')
   },
 )

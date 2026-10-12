@@ -55,6 +55,11 @@ export function addUsageToBucket(bucket: TokenBucket, usage: UsageDelta): void {
  * harness `contextPressure` projection, `projectedTokens ?? pressureTokens`, see
  * `dsh-adapter/context-occupancy.ts`); these numbers only describe what the
  * segmented bar is made of and must never be summed into that total.
+ * The bar's span is anchored to that occupancy instead (`contextBarColumns`),
+ * so the role of these estimates is to WEIGHT the fills: the harness's own
+ * `contextBreakdown` supplies the system/envelope/message split where it exists,
+ * and these numbers split its message side and stand in for the whole
+ * composition where it does not. No span is ever derived from them alone.
  */
 
 /** ASCII, including control bytes and ANSI escapes: ~4 characters per token. */

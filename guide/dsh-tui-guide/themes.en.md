@@ -4,22 +4,30 @@
 
 ## Built-in themes
 
-dsh-TUI provides three Gentle Mist Blue palettes, plus an `auto` pseudo-theme:
+dsh-TUI ships two palette families (six themes) plus an `auto` pseudo-theme:
 
-| Name | Purpose |
-| --- | --- |
-| `auto` | Pseudo-theme: follows the system/terminal background, resolving to `light` or `dark` |
-| `light` | White panels, ink body text, and mist-blue interaction color |
-| `dark` | Dark-terminal adaptation with warm-gray text and soft blue accents |
-| `dark-ansi` | Compatibility fallback using only the 16 ANSI colors (except the ignition pair) |
+| Name | Family | Purpose |
+| --- | --- | --- |
+| `auto` | — | Pseudo-theme: follows the system/terminal background, resolving to `light` or `dark` |
+| `light` | Mist Blue | White panels, ink body text, and mist-blue interaction color |
+| `dark` | Mist Blue | Dark-terminal adaptation with warm-gray text and soft blue accents |
+| `dark-ansi` | Mist Blue | 16-color ANSI fallback (except the ignition pair) |
+| `pink-day` | Sakura Pink | Light terminals: blush panels and sakura-pink interaction color |
+| `pink-night` | Sakura Pink | Dark terminals: warm surfaces and sakura-pink interaction color |
+| `pink-ansi` | Sakura Pink | 16-color ANSI fallback (except the ignition pair) |
+
+Both families keep the same role split (light / dark / ANSI fallback). `auto`
+resolves within the Mist Blue family only; the Sakura Pink family is selected
+explicitly.
 
 Without an explicit choice, the TUI queries the terminal background with OSC
 11 and selects `light` or `dark`. It falls back to `dark` when the terminal
 does not answer.
 
-Light-theme panels, tool cards, and image previews use white (`#FFFFFF`)
-surfaces by default; image previews use neutral borders. Dark palettes and
-accent colors are unchanged. This does not modify the terminal's own
+Light-theme panels and tool cards take their own family's surface colors (`light`
+uses white `#FFFFFF`; `pink-day` uses blush `#F9ECF1`), and their input fills are
+the warm `#F6F3ED` / `#FBF3F0`; image previews always use neutral borders. Dark
+palettes and accent colors are unchanged. This does not modify the terminal's own
 background or wallpaper.
 
 `auto` turns that one-shot startup detection into a standing choice:

@@ -15,7 +15,10 @@
  *     (never loaded means never imported, never closed; only what was loaded is
  *     closed), the two install-surface shapes, and the declaration covering what
  *     the session actually serves.
- *  5. **Bad declarations** — each one refused, loudly.
+ *  5. **Bad declarations** — each one refused, loudly, and the confirmation-policy
+ *     vocabulary this host *does* implement pinned in the positive direction (it only
+ *     grows; `trusted-source` requests the host's own source judgment, it never grants
+ *     itself the exemption).
  *  6. **Bad baseline** — the load-bearing checkers above go red on an injected
  *     input, which is what makes them checks rather than decoration. Unlike the
  *     boundary gate (whose subject is a file tree, so it copies one), the subject
@@ -40,6 +43,7 @@ import ts from 'typescript'
 import {
   BACKEND,
   BACKEND_CAPABILITY_NAMES,
+  BACKEND_CONFIRMATION_POLICIES,
   BACKEND_RESERVED_IDS,
   validateBackendSpec,
 } from '../src/adapter/spec/tui-contributions.js'
@@ -283,6 +287,16 @@ check('dogfood: flipping `inTree` on a built-in reds on its host label key, and 
   for (const [label, declaration] of specCases) {
     check(`refused at validation: ${label}`, throws(() => validateBackendSpec(declaration)))
   }
+  // The positive direction: the policies this host implements are accepted, and the
+  // vocabulary is exactly the frozen pair. `trusted-source` asks the host to apply its
+  // own source judgment (curated list, provenance cross-checked when the registry
+  // offers it); declaring it is a request — the judgment that can honor it lands with
+  // the install / enable chain, and a request that does not hold falls back to `confirm`.
+  check('accepted at validation: the trusted-source confirmation policy',
+    throws(() => validateBackendSpec({ ...projection, confirmation: { policy: 'trusted-source' } })) === false)
+  check('the implemented confirmation policies are exactly confirm and trusted-source',
+    [...BACKEND_CONFIRMATION_POLICIES].join(',') === 'confirm,trusted-source',
+    [...BACKEND_CONFIRMATION_POLICIES])
 }
 
 // ── 6. Wired (W-2): the family reaches the registry / descriptor chain ───────

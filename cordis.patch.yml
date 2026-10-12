@@ -7,7 +7,7 @@
 # restates every key it owns (see the dsh-base patch for the shared
 # defaults). The dsh-base core rows that need no dsh-tui value — tools,
 # sandbox/approval policy, skills, goal, plan mode, workspace context,
-# telemetry — are inherited unless this surface explicitly restates them.
+# telemetry — are inherited unchanged.
 
 # ── surface-specific values over the dsh-base layer ─────────────────────────
 
@@ -53,53 +53,6 @@
 - id: agent-loop
   config:
     agents: []
-
-# Preserve the TUI's opt-in privacy stance across the 0.1.2 base default
-# change to FEEDBACK_ONLY. An explicit DSH_TELEMETRY_MODE still wins. This
-# restates the whole 0.1.2 config because include patches replace config
-# objects rather than merging them. The 0.2.0 base moved the collector to
-# dsh-otel-collector and added maxRequestBytes; older cohorts keep the
-# endpoint (and the key set) their base shipped, so both follow the
-# installed package version.
-- id: session-telemetry-otel
-  config: !!js >-
-    (() => {
-      let url = 'https://dsh-otel-collector.deepseeksvc.com/v1/logs'
-      let modern = false
-      try {
-        const require = process.getBuiltinModule('node:module').createRequire(ctx.baseUrl)
-        const fs = process.getBuiltinModule('node:fs')
-        const manifest = require.resolve('@deepseek-ai/dsh-session-telemetry-otel/package.json')
-        const version = String(JSON.parse(fs.readFileSync(manifest, 'utf8')).version ?? '')
-        const match = /^(\d+)\.(\d+)\./u.exec(version)
-        modern = match === null || Number(match[1]) > 0 || Number(match[2]) >= 2
-        if (!modern) url = 'https://harness-telemetry.deepseeksvc.com/v1/logs'
-      } catch {}
-      return {
-        mode: process.env.DSH_TELEMETRY_MODE || 'DISABLED',
-        shutdownTimeoutMillis: 3000,
-        // 0.2.0's base config caps one request at 4 MB; the older plugin's
-        // schema has no such key, so only a probed 0.2+ host gets it.
-        ...(modern ? { maxRequestBytes: 4000000 } : {}),
-        exporter: {
-          url: process.env.DSH_TELEMETRY_OTLP_URL ?? url,
-          compression: 'gzip',
-          timeoutMillis: 1000,
-        },
-        processor: {
-          scheduledDelayMillis: 10000,
-          maxQueueSize: 2048,
-          maxExportBatchSize: 2048,
-          exportTimeoutMillis: 1500,
-        },
-      }
-    })()
-
-# The 0.1.2 base sends the active Loader package inventory on official
-# DeepSeek requests by default. TUI keeps that diagnostic metadata opt-in.
-- id: plugin-package-inventory-deepseek
-  config:
-    enabled: false
 
 # ── agent presets (issue #8) ────────────────────────────────────────────────
 #

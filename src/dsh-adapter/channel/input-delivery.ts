@@ -238,7 +238,15 @@ export function createInputDelivery(
         const view = local.facade(block.attachment)
         return view === undefined ? [] : [view]
       })
-      await origin.session.submit({ text, blocks: message.content, clientMessageId: message.id, native: message, ...(images === undefined || images.length === 0 ? {} : { images }) }, placement)
+      const result = await origin.session.submit({ text, blocks: message.content, clientMessageId: message.id, native: message, ...(images === undefined || images.length === 0 ? {} : { images }) }, placement)
+      // A backend refusal need not emit pending.changed. Retire its preview
+      // and attached context here, and show the refusal instead of queuing it.
+      if (!result.accepted) {
+        if (attach !== undefined) attachedByMessageId.delete(message.id)
+        untrackPending(message.id)
+        if (result.reason !== undefined && result.reason !== '') notify(result.reason, { color: 'warning', timeoutMs: 4000 })
+        return
+      }
     } catch (error) {
       if (attach !== undefined) attachedByMessageId.delete(message.id)
       untrackPending(message.id)

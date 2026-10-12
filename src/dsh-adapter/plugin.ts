@@ -75,6 +75,7 @@ import { startSessionMountHeartbeat } from './session-mount-heartbeat.js'
 import { reserveMount, reserveNewSession } from '../sessionMounts.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
+import { attachSessionListMetadata } from './session-list-metadata.js'
 import { createActivityStore } from './activity-store.js'
 import { createContextOccupancyStore } from './context-occupancy.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
@@ -288,6 +289,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
 
   // Validate settings before creating an agent or taking over the terminal.
   const tuiSettingsNs = resolveSettingsNamespace(configOwner, Config) as SettingsNamespace
+
+  // Register before agent creation so its first checkpoint includes web list metadata.
+  attachSessionListMetadata(ctx)
   // The TUI's own settings layer (~/.dsh-tui/settings.json): the same
   // document on every kernel and entry. Other namespaces still go
   // to the host's settings service (absent in the standalone entry).

@@ -39,6 +39,8 @@ import { homeDir } from '../utils/paths.js'
 import {
   USED_SEGMENTS,
   channelContextOccupancy,
+  attributeBarTokens,
+  barSegments,
   contextBarBreakdown,
   contextBarSegmentColors,
   renderMiniContextBar,
@@ -596,8 +598,8 @@ const selectionBadge = formatSelectionBadge(channel.selection)
   // (the v0.8.0 paddingX 2→1 tightening left the old `columns - 4` stale).
   const barWidth = columns - 2
   // 空段的深色兜底：deepseek 档冷灰、claude 档暖墨（品牌档见 branding.ts）。
-  // 明暗问色板而不是比主题名：浅色主题不一定叫 `light`（用户/插件色板也可以是
-  // 浅色），只有真彩/ANSI 的深色默认档才需要显式的 free 段色。
+  // 明暗问色板而不是比主题名：浅色主题不一定叫 `light`（pink-day、用户/插件
+  // 色板也可以是浅色），只有真彩/ANSI 的深色默认档才需要显式的 free 段色。
   const barColors: { freeFill: Color; freeText: Color } | undefined =
     isLightThemeActive(themeName)
       ? undefined
@@ -670,6 +672,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
         {barVisible ? (
           <ContextBarView
             segments={channel.contextSegments}
+            breakdown={channel.contextBreakdown}
             usedTokens={contextUsed ?? 0}
             contextWindow={contextWindow ?? 0}
             width={barWidth}
@@ -789,9 +792,11 @@ function buildHoverDetail(
   if (hover === 'bar') {
     if (window === undefined || window <= 0 || contextUsed === undefined) return null
     // The bar's text-free design pays off here: this line is its legend, so
-    // every entry leads with a chip of the very color it names.
+    // every entry leads with a chip of the very color it names, and the numbers
+    // are the shares the fills above were drawn from — attributed to the
+    // occupancy, so five entries plus `free` make up the window.
     const { entries, separator } = contextBarBreakdown(
-      channel.contextSegments,
+      attributeBarTokens(barSegments(channel.contextSegments, channel.contextBreakdown), contextUsed),
       contextUsed,
       window,
       columns,
@@ -818,9 +823,18 @@ function buildHoverDetail(
       // The hover payoff for the ctx ask: percent + counts + free, then the
       // segment breakdown as the truncate-able tail (no bar — the row's
       // in-place morph and the segment bar above already carry the gauge).
-      const segments = USED_SEGMENTS.map(
-        segment => `${segment.labels[1] ?? segment.key} ${formatTokens(channel.contextSegments[segment.key])}`,
-      ).join(' · ')
+      // Match the bar's attributed shares, including its measured-used
+      // fallback when no content category can be attributed.
+      const sizes = attributeBarTokens(
+        barSegments(channel.contextSegments, channel.contextBreakdown),
+        contextUsed,
+      )
+      const hasComposition = USED_SEGMENTS.some(segment => sizes[segment.key] > 0)
+      const segments = hasComposition
+        ? USED_SEGMENTS.map(
+          segment => `${segment.labels[1] ?? segment.key} ${formatTokens(sizes[segment.key])}`,
+        ).join(' · ')
+        : `${t('context-bar-used')} ${formatTokens(contextUsed)}`
       return (
         <Text wrap="truncate">
           {((contextUsed / window) * 100).toFixed(1)}% ·{' '}

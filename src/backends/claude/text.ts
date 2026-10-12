@@ -18,6 +18,7 @@
 import type { BackendLocale } from '../../agent/backend.js'
 import type { ElicitationText } from '../shared/elicitation.js'
 import { fillTemplate, pickLocalizedText, type LocalizedText, type TextParams } from '../shared/localized-text.js'
+import { pickPlatformText } from '../shared/platform-text.js'
 
 /**
  * Every string of this backend. `zh` and `en` are both required
@@ -215,14 +216,20 @@ const texts = {
   },
   // ── Strings this backend shares with platform surfaces the host also
   //    renders (the status line's rate-limit window, /doctor, rename and
-  //    rewind outcomes). The host keeps its own entries for DSH sessions and
-  //    codex; a backend cannot read them (D2), so the copy is repeated here. ──
-  'doctor-unknown': { zh: '未知', en: 'unknown' },
-  'rewind-first-message': { zh: '不能回退到第一条消息之前', en: 'Cannot rewind past the very first message' },
-  'rename-failed': { zh: '重命名失败 · {{err}}', en: 'Rename failed · {{err}}' },
-  'rename-usage': { zh: '用法  /rename <新名称>', en: 'Usage  /rename <new title>' },
-  'status-rate-limit-five-hour': { zh: '5小时', en: '5h' },
-  'status-rate-limit-seven-day': { zh: '7天', en: '7d' },
+  //    rewind outcomes). They are not a copy kept here any more: the values
+  //    come from the one source in the neutral seam
+  //    (`src/backends/shared/platform-text.ts`), which the host dictionary
+  //    reads too, so the two sides cannot drift apart. D2 is unchanged for a
+  //    third-party contribution — it still cannot read the host dictionary,
+  //    and the seam is out of reach from the layers a contribution occupies. ──
+  ...pickPlatformText([
+    'doctor-unknown',
+    'rewind-first-message',
+    'rename-failed',
+    'rename-usage',
+    'status-rate-limit-five-hour',
+    'status-rate-limit-seven-day',
+  ]),
 } as const satisfies Record<string, { readonly zh: LocalizedText; readonly en: LocalizedText }>
 
 /** Read-only view of {@link texts} for audits (scripts/verify-i18n.ts and the

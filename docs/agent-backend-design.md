@@ -215,9 +215,12 @@ SDK `settings` 选项把路由钉回 `https://api.anthropic.com`。CLI 拒绝令
 `claudeText()` 按 `host.locale()` 实时取语言）：后端不再 import 宿主字典，也就不再有
 "这个键还属于 claude 家族"的假从属关系。它只从 `src/agent/`、`src/backends/shared/`、
 自己的目录、node 内建与 manifest 声明的厂商包取值——`verify-adapter-boundary.ts` 把这条
-钉成"后端是孤岛"，`claude` 侧已清零。自己的 prefs / channels / 模型名缓存落在
-`host.dataDir`（`~/.dsh-tui/backends/claude`），跑着的 TUI 版本由 `host.appVersion` 提供，
-`launch.sessionPrefs(host)` 也从同一个 host 取目录。
+钉成"后端是孤岛"，`claude` 侧已清零。**与宿主界面共用的那几条平台文案不再各抄一份**：
+它们住在 `src/backends/shared/platform-text.ts`（单一数据源），宿主字典与两个后端都从它取
+（`shared/` 自身也被边界门禁钉成叶子：不许读宿主字典、投影层或宿主工具）；
+`verify-i18n` 的跨字典段盯着"有没有人又写回一份副本"。自己的 prefs / channels / 模型名缓存
+落在 `host.dataDir`（`~/.dsh-tui/backends/claude`），跑着的 TUI 版本由 `host.appVersion`
+提供，`launch.sessionPrefs(host)` 也从同一个 host 取目录。
 
 ## Codex 后端（`src/backends/codex/`）
 
@@ -246,10 +249,11 @@ SDK `settings` 选项把路由钉回 `https://api.anthropic.com`。CLI 拒绝令
   hooks 生命周期通知与 hookPrompt 注入消息复用既有视图。缺实验方法时按实际能力
   降级，不因协议有名字假称可用。用户操作见[Codex 用户说明](codex-backend.md)。
 - **文案与公开面（B-5 起）**：用户可见的每一条字符串都在 `text.ts`（`codex-*` 169 条、
-  自带的 `elicit-*` 42 条、与平台共用的 7 条副本，双语，`codexText()` 按 `host.locale`
-  实时取语言），宿主字典里的这两段随之删除。prefs / channels 的目录改由 `host.dataDir`
-  提供，没有 host 就降级为内存（不落盘、也不猜路径）；`clientVersion` 取
-  `host.appVersion`。`session/commands.ts` 的保留名从**自己的能力面**派生（自有四条 +
+  自带的 `elicit-*` 42 条、从共用数据源取的 7 条平台文案，双语，`codexText()` 按 `host.locale`
+  实时取语言），宿主字典里的这两段随之删除。那 7 条平台文案不再是本后端自己的副本，而是
+  `src/backends/shared/platform-text.ts` 的单一数据源（宿主字典同源）。prefs / channels 的
+  目录改由 `host.dataDir` 提供，没有 host 就降级为内存（不落盘、也不猜路径）；`clientVersion`
+  取 `host.appVersion`。`session/commands.ts` 的保留名从**自己的能力面**派生（自有四条 +
   manifest 声明的 `goals`/`channels`/`permissions` 三个名字）：宿主命令表不是公开面，
   与本地命令重名的 skill 交给宿主合并时丢弃（"local names win"），claude 与 codex 在这一步
   同构。manifest 也不再声明 `nativeKey`（没有生产者的预留通道，声明它等于让 manifest

@@ -25,6 +25,43 @@ Profile 启动按顺序叠加：
 > 覆盖某一行时，`config` 是整块替换，不是逐字段深合并。需要继续生效的字段必须
 > 在用户补丁中全部重写。
 
+## 官方请求元数据与反馈上报
+
+TUI bundle 继承已安装 DSH 官方组合的上报配置；上游未提供的服务不会由 TUI
+补装。当前验证线的默认行为如下，profile、home 和命令行补丁仍可覆盖：
+
+| 配置 | 官方默认 | 发送内容与触发条件 |
+| --- | --- | --- |
+| `plugin-package-inventory-deepseek.enabled` | `true` | `deepseek-official` 路由请求中的 `dsh_plugin_packages`，包含活跃插件包的名称与版本，可用于识别 TUI 使用量 |
+| `session-log-deepseek.enabled` | `true` | `deepseek-official` 路由请求中的 `dsh_session_log`，增量携带规范会话事件，可能包括工作目录、提示词、对话内容、工具参数和结果；与插件包清单分别控制 |
+| `session-telemetry-otel.mode` | `FEEDBACK_ONLY` | 新的显式反馈授权通过 OTel 上传截至反馈的会话日志前缀，包含上下文；普通聊天不触发该通道 |
+
+前两项是模型输入之外的请求元数据，不增加模型输入 token。两项都会发送到
+适配器配置的 `baseURL`，包括第三方网关。它们只随对应的 DeepSeek 请求发送，
+不能据此统计 Claude/Codex 后端的全部 TUI 使用。
+
+反馈遥测支持上游环境变量：
+
+- `DSH_TELEMETRY_MODE=DISABLED`：停止 OTel 会话日志上传；默认的 `FEEDBACK_ONLY`
+  仍只在反馈后授权上传。
+- `DSH_TELEMETRY_DISABLED`：任何非空值（包括 `0`、`false`）都会在启动时禁用
+  `session-telemetry-otel` 行。恢复时删除变量；它不控制上述两项 API 请求元数据。
+- `DSH_TELEMETRY_OTLP_URL`：覆盖 OTel collector 地址；未设置时使用已安装官方
+  版本的端点和导出参数。
+
+若需停止 API 请求元数据，可在用户 profile 补丁中分别关闭：
+
+```yaml
+- id: plugin-package-inventory-deepseek
+  config:
+    enabled: false
+- id: session-log-deepseek
+  config:
+    enabled: false
+```
+
+修改 bundle 或启动环境后重启 TUI，既有用户补丁不会被恢复默认的操作删除。
+
 ## TUI 配置
 
 `/settings` 的 `dsh-tui` 分区存放在 TUI 自己的 `~/.dsh-tui/settings.json`，所有内核
@@ -69,13 +106,13 @@ Profile 启动按顺序叠加：
 | `effortDefault` | 未设置 | 新会话默认推理强度（`/settings` 用户层，显式设定时优先于持久化 `/effort`）；`auto` 让位给持久化选择与 `effort`，可经 `/settings` 修改 |
 | `whale` / `whaleIdle` | `true` / `true` | 标题鲸鱼与欢迎页鲸鱼闲置动画 |
 | `splashFont` | `daily` | 开屏大字字体：`daily` 按本地日期轮换（默认），其余取字体 id（`bold` / `square` / `bevel` / `wide` / `dot` / `stencil` / `classic` / `slab`）pin 住那一款；非法值回落 `daily`。也可经 `/settings` 修改 |
-| `whaleGirl` | `false` | 把标题的像素鲸鱼换成女仆娘：**最优先**真图（Kitty/Sixel）；不支持时回落字符画版女仆娘 |
+| `whaleGirl` | `false` | 女仆娘立绘开关：DeepSeek 品牌下，宠物皮肤 deepy 或 whaleGirl 会占据开屏艺术槽；选 whale 并开启「女仆娘立绘」才会显示女仆娘。Claude 使用自己的图案，Codex 使用自己的真图或女仆娘字符画回退；这两个品牌的开屏图案不受宠物皮肤和女仆娘开关影响。这里「宠物皮肤」即 `companion.skin`；立绘生效时优先走终端图像协议（Kitty/Sixel）的真图，终端不支持则回落字符画版女仆娘。见下方的优先级小表 |
 | `minimal` | `false` | 极简界面（Minimal UI）：精简标题装饰与配色。**这是界面显示开关**，与下面 `preset` 里的内核「极简模式」预设完全是两件事（那个才决定模型能用哪些工具） |
 | `sidePanel.splitEnabled` | `true`（布尔） | 分栏总开关：开启时 `Ctrl+B` 与 `/panel` 在聊天右侧展开侧栏；关闭时两者都不再分栏，`/jobs` 等仍走整屏面板。立即生效 |
 | `sidePanel.open` | `false`（布尔） | 启动时侧栏是否已展开；默认关闭，升级后布局与原来一致。会话内的 `Ctrl+B` / `/panel toggle` 不写回这里。立即生效 |
 | `sidePanel.ratio` | `0.68`（数值，0.1–0.95） | 聊天列占内容宽度的比例；侧栏有焦点时 `+`/`-` 在当前会话内实时微调（不写回）。立即生效 |
 | `sidePanel.panels` | `todo,jobs,agents,info,trajectory,workspace,btw,companion`（逗号分隔文本） | 默认启用全部 8 个内置面板；这里控制面板 id 与顺序。格式合法但暂无面板认领的 id 会留在标签栏等插件注册，格式非法的条目被拒绝。面板栏右端的 `⤢` 把当前面板放大成整屏（只对声明了整屏形态的面板出现）。立即生效 |
- | `companion.skin` | `deepy` | 宠物面板的皮肤：`deepy`（默认，deepy 小鲸鱼素材包）、`whaleGirl`（鲸娘表情包，22 个动画含互动反应）或 `whale`（与开屏同款分层像素鲸鱼）；面板默认启用，可在 `sidePanel.panels` 调整。立即生效 |
+| `companion.skin` | `deepy` | 宠物面板的皮肤：`deepy`（默认，deepy 小鲸鱼素材包）、`whaleGirl`（鲸娘表情包，22 个动画含互动反应）或 `whale`（与开屏同款分层像素鲸鱼）；面板默认启用，可在 `sidePanel.panels` 调整。**DeepSeek 品牌下，它同时决定开屏（标题）艺术槽**：宠物皮肤为 deepy 或 whaleGirl 时，该槽由对应吉祥物占据（像素鲸鱼与女仆娘立绘都不出现），「女仆娘立绘」（`whaleGirl`）开关不生效；把宠物皮肤设为 whale 才回到原路径（像素鲸鱼；打开「女仆娘立绘」后为立绘）。立即生效，另见下方的优先级小表 |
 | `btw.contextTurns` | `4`（数值，1–8） | `/btw` 追问时带上的最近已完成问答组数；更早的组不进请求，线程和面板里仍保留。立即生效 |
 | `btw.contextBudget` | `24000`（数值，1000–200000） | `/btw` 追问携带的最近问答总字符数上限，超出时从最旧的一组开始丢。立即生效 |
 | `codeFrameStyle` | `light` | 回复里代码块的边框：`light` 只有顶部标签和左侧竖线，不多占行；`full` 是封闭的框。终端太窄时总是用纯文本 fence。立即生效 |
@@ -90,6 +127,16 @@ Profile 启动按顺序叠加：
 | `preset` | 名册默认 `standard` | 新会话 Agent preset；优先级：`DSH_TUI_PRESET`（本次运行）> `/preset` 持久化选择 > 本字段（部署默认值）> 名册默认 |
 | `sessionId` | 未设置 | 要恢复的会话 ID，通常由 Windows `--resume` 启动器注入 |
 | `backend` | 未设置（`/kernel` 记住的选择，否则 `dsh`） | 会话后端：内置 `dsh`，或已装的后端（实验性的 `claude` / `codex`，以及插件后端；不区分大小写）。**未安装或未知的取值一律按 `dsh` 启动并告警**，不会崩。profile 行读取 `DSH_TUI_BACKEND`，`dsh-tui --backend <id>` 会设置它。profile 自己的补丁里若把它写成 `!!js` 表达式（只转发 `DSH_TUI_BACKEND` 的写法除外，例如随包行的 `process.env.DSH_TUI_BACKEND \|\| undefined`），本次启动改走 `dsh --profile`（只有 profile 的 Loader 能求值），`/kernel` 切换除外。见 [Claude 后端](claude-backend.md) |
+
+DeepSeek 品牌下，开启标题图形（`whale`）时，`companion.skin` 与「女仆娘立绘」（`whaleGirl`）按下表决定开屏艺术槽：
+
+| `companion.skin` | 开屏（标题）艺术槽 | 女仆娘立绘开关 |
+| --- | --- | --- |
+| `deepy`（默认） | Deepy 吉祥物（字母格动画；**无真图**） | **不生效** |
+| `whaleGirl` | 鲸娘吉祥物（图像协议真图；无协议回落字母格） | **不生效** |
+| `whale` | 原路径：像素鲸鱼；打开女仆娘立绘后为立绘（真图优先，回落字符画） | **生效** |
+
+上表适用于「品牌外观」（`brand`）解析为 `deepseek` 时（包括 DSH 后端的 `auto`）。Claude 使用自己的真图或字符画；Codex 使用自己的真图，真图不可用或加载失败时回落女仆娘字符画。两者都不受 `companion.skin` 和 `whaleGirl` 影响；要使用表中的皮肤或女仆娘，先选 DeepSeek 品牌外观。关闭标题图形会隐藏所有品牌的图形。
 
 ### 优先级与强制关闭
 
@@ -275,7 +322,7 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 | `DSH_HOME` | harness 家目录（profile、会话、凭据、附件）；未设置时用上游默认 `~/.dsh` |
 | `DSH_TUI_PERSONA` | 覆盖组合注入的 Agent persona |
 | `DSH_TUI_PRESET` | 覆盖新会话默认 Agent preset |
-| `DSH_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`）、静态主题或已注册的插件主题，优先于持久化选择 |
+| `DSH_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`/`pink-day`/`pink-night`/`pink-ansi`）、静态主题或已注册的插件主题，优先于持久化选择 |
 | `DSH_TUI_DISABLE_MOUSE` | 在 fullscreen 模式临时关闭鼠标处理 |
 | `DSH_TUI_DISABLE_TERMINAL_IMAGES` | 设为 `1` 时强制关闭 Kitty/Sixel 探测、预览读取/解码与终端图片渲染，优先于 config 和 /settings；保留文字信息 |
 | `DSH_TUI_IMAGE_PROTOCOL` | `auto`（默认）、`kitty`、`sixel` 或 `none`；覆盖协议选择，但不绕过图片预览偏好、禁用开关、非全屏、无障碍和多路复用器限制 |

@@ -50,7 +50,7 @@ export interface InputQueueDeps {
   startFailed?(error: unknown, overrides: Rec): void
   closed(): boolean
   /** The open turn could not be settled by the server: close it here. */
-  forceClose(): void
+  forceClose(turnId: string, reviewTurnId?: string): void
   readonly clock: RpcClock
   readonly forceSettleMs: number
 }
@@ -70,8 +70,13 @@ export function userInputOf(input: AgentInput): UserInput[] {
 export function createInputQueue(deps: InputQueueDeps) {
   /** The running turn (from its start answer or `turn/started`). */
   let activeTurnId: string | undefined
+  /** Inline reviews can use a different id for items/completion than the
+   *  one announced by `turn/started` (Codex 0.160.1). */
+  let reviewTurnId: string | undefined
   /** A `turn/start` in flight: resolves with the turn id (undefined = it failed). */
   let starting: Promise<string | undefined> | undefined
+  /** Reviews announce their interrupt id separately from their request id. */
+  let resolveReviewStart: ((id: string | undefined) => void) | undefined
   /** Inputs not sent yet (the client follow-up queue). */
   let queue: Entry[] = []
   /** Sent with `turn/start`, not yet claimed by their user message. */
@@ -98,6 +103,13 @@ export function createInputQueue(deps: InputQueueDeps) {
     if (forceTimer === undefined) return
     deps.clock.clearTimeout(forceTimer)
     forceTimer = undefined
+  }
+
+  const settleReviewStart = (id?: string): void => {
+    if (resolveReviewStart === undefined) return
+    resolveReviewStart(id)
+    resolveReviewStart = undefined
+    starting = undefined
   }
 
   /** Send one input as a new turn. */
@@ -167,8 +179,10 @@ export function createInputQueue(deps: InputQueueDeps) {
     }
   }
 
-  const interrupt = async (): Promise<boolean> => {
-    const turnId = activeTurnId ?? await starting
+  const interrupt = async (waitForReviewStart = true): Promise<boolean> => {
+    // Dispose has already stopped notification delivery. It cannot wait for
+    // a review lifecycle id that only a notification could resolve.
+    const turnId = activeTurnId ?? (resolveReviewStart !== undefined && !waitForReviewStart ? undefined : await starting)
     if (turnId === undefined) return true
     try {
       await deps.call(CLIENT.turnInterrupt, { threadId: deps.threadId, turnId })
@@ -181,7 +195,7 @@ export function createInputQueue(deps: InputQueueDeps) {
         forceTimer = undefined
         if (activeTurnId !== turnId) return
         deps.emit([{ type: 'notice', level: 'warning', text: codexText('codex-cancel-forced') }])
-        deps.forceClose()
+        deps.forceClose(turnId, reviewTurnId)
         onTurnCompleted(turnId, true)
       }, deps.forceSettleMs)
     }
@@ -190,9 +204,11 @@ export function createInputQueue(deps: InputQueueDeps) {
 
   /** The turn ended: settle unclaimed inputs, then start the next queued one. */
   const onTurnCompleted = (turnId: string | undefined, interrupted: boolean): void => {
-    if (turnId !== undefined && activeTurnId !== undefined && turnId !== activeTurnId) return
+    if (turnId !== undefined && activeTurnId !== undefined && turnId !== activeTurnId && turnId !== reviewTurnId) return
     clearForceTimer()
+    settleReviewStart()
     activeTurnId = undefined
+    reviewTurnId = undefined
     const cause = cancelCause
     cancelCause = undefined
     const events: AgentEvent[] = []
@@ -290,6 +306,26 @@ export function createInputQueue(deps: InputQueueDeps) {
 
     onTurnStarted(turnId: string): void {
       activeTurnId = turnId
+      settleReviewStart(turnId)
+    },
+    /** Reserve the turn before review/start reaches the server. The returned
+     *  cleanup releases only this request's wait if its RPC fails. */
+    beginReview(): () => void {
+      const pending = new Promise<string | undefined>(resolve => { resolveReviewStart = resolve })
+      starting = pending
+      return () => {
+        if (starting !== pending) return
+        settleReviewStart()
+        reviewTurnId = undefined
+        cancelCause = undefined
+        drain()
+      }
+    },
+    onReviewStarted(turnId: string): void {
+      reviewTurnId = turnId
+      // review/start's id cannot be used by turn/interrupt. Keep submissions
+      // queued and let an early Esc wait for the native lifecycle id.
+      if (activeTurnId === undefined && starting === undefined) starting = new Promise(resolve => { resolveReviewStart = resolve })
     },
     onTurnCompleted,
 
@@ -303,7 +339,9 @@ export function createInputQueue(deps: InputQueueDeps) {
     connectionLost(): readonly AgentEvent[] {
       offline = true
       clearForceTimer()
+      settleReviewStart()
       activeTurnId = undefined
+      reviewTurnId = undefined
       const lost = [...started.keys(), ...steered.keys()]
       started.clear()
       steered.clear()
@@ -328,9 +366,11 @@ export function createInputQueue(deps: InputQueueDeps) {
     /** Dispose: forget everything, stop the timer. */
     close(): void {
       clearForceTimer()
+      settleReviewStart()
       queue = []
       started.clear()
       steered.clear()
+      reviewTurnId = undefined
     },
     /** Interrupt the running turn (best-effort, dispose path). */
     interrupt,

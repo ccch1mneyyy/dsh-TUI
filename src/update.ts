@@ -17,10 +17,12 @@ import { classifyReplacementOutcome, formatHandoffNotice, handoffEventTag, write
 import { HANDOFF_ACK_FD_ENV, HANDOFF_ATTEMPT_ENV, HANDOFF_SCREEN_ENV, parseHandoffAckLine } from './handoffAck.js'
 import { DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from './ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from './ink/termio/dec.js'
+import { detachHandoffStdin } from './ink/stdin-handoff.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
 // the compiled copy at lib/types/utils/shellQuote.js.
 export { shellQuote }
+export { detachHandoffStdin }
 
 const PACKAGE_NAME = '@deepseek-harness-tui/dsh-tui'
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org'
@@ -2022,36 +2024,6 @@ export async function cliUpdate(profile: string): Promise<number> {
 }
 
 /**
- * Release the shared console for the replacement without resetting it.
- *
- * A pty's termios is per-DEVICE: destroying this stream would write this
- * process's saved cooked/ECHO mode back over the replacement's raw mode
- * (libuv restores orig_termios on tty close; verified on Node 24 — mouse
- * reports then echo as `^[[<…M` and keys wait for a newline). Detaching —
- * no readers, paused, unref'd — keeps the mode untouched.
- *
- * Two deliberate trade-offs vs the old destroy():
- * - destroy() doubled as a permanent gate ("a destroyed stream can never be
- *   resumed"). Readers removed + paused already keep this process out of the
- *   console's key path (#284/#307), and after the handoff only the
- *   child-exit listener remains here — nothing re-attaches a reader.
- * - On exit Node still writes the saved cooked mode back once (atexit
- *   uv_tty_reset_mode). Fine in the normal order — this process outlives the
- *   replacement, and the shell wants cooked back anyway; it only bites if
- *   this process dies while the replacement is still running.
- *
- * @param stdin - Console stream to detach; injectable for the regression.
- */
-export function detachHandoffStdin(
-  stdin: Pick<NodeJS.ReadStream, 'removeAllListeners' | 'pause' | 'unref'> = process.stdin,
-): void {
-  stdin.removeAllListeners('readable')
-  stdin.removeAllListeners('data')
-  stdin.pause()
-  stdin.unref()
-}
-
-/**
  * Restart the running TUI in place and resume the active session — the
  * `/update` restart path minus the pnpm step, for `/restart`. Spawns the
  * same node process with the original argv and the dual-written resume
@@ -2279,6 +2251,9 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
       childEnv[HANDOFF_ATTEMPT_ENV] = attemptId!
       logRestartEvent('handoff: alt-screen bracket held for the replacement', { attemptId })
     }
+    // Reassert after root disposal: even a late drain must not restart the
+    // parent's native stdin read before the replacement probes the terminal.
+    detachHandoffStdin()
     const child = spawn(process.execPath, argv, {
       env: childEnv,
       // stdin/stdout stay inherited so the replacement owns the console the

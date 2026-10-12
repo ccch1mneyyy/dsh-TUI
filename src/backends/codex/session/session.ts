@@ -225,7 +225,12 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
     overrides: () => controls.turnOverrides(),
     startFailed: (error, overrides) => controls.turnFailed(error, overrides),
     closed: () => disposing || permanentlyLost,
-    forceClose: () => { output.flush(); emit(live.forceClose({ kind: 'interrupted' })) },
+    forceClose: (turnId, reviewTurnId) => {
+      output.flush()
+      seenOf(turnId).ended = true
+      if (reviewTurnId !== undefined) seenOf(reviewTurnId).ended = true
+      emit([...live.forceClose({ kind: 'interrupted' }), { type: 'session.status', status: 'idle' }])
+    },
     clock,
     forceSettleMs: deps.forceSettleMs ?? DEFAULT_FORCE_SETTLE_MS,
   })
@@ -264,6 +269,11 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
     actualModel: id => deps.channels?.active()?.models?.[id] ?? id,
   })
   const sideQueries = createCodexSideQuery({ hub, settings, cwd: opened.cwd, clock, threadId: () => threadId, closed: () => disposing || permanentlyLost, debug })
+  const noteReviewStarted = (id: string): void => {
+    // Completed and force-settled reviews may still send new item ids or a
+    // late review/start answer; neither may reopen the input wait gate.
+    if (seenTurns.get(id)?.ended !== true) input.onReviewStarted(id)
+  }
   const commands = createCodexCommands({
     hub, ctx, cwd: opened.cwd, threadId: () => threadId, busy: () => input.busy(), emit,
     lastDiff: () => lastDiff, planSupported: () => controls.planSupported,
@@ -276,7 +286,8 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       await controls.capabilities.modes!.set(settings.permissionMode ?? DEFAULT_CODEX_MODE)
     },
     submit: (next, placement, wire) => input.submit(next, placement, wire),
-    noteTurnStarted: id => input.onTurnStarted(id),
+    beginReview: () => input.beginReview(),
+    noteReviewStarted,
   })
   const planReview = createPlanReview({
     emit: events => emit(events, 'sync', true),
@@ -415,6 +426,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
         }
         case NOTIFY.itemStarted: {
           const item = rec(params.item)
+          if (item?.type === 'enteredReviewMode' && nativeTurn !== undefined) noteReviewStarted(nativeTurn)
           const clientId = item?.type === 'userMessage' ? str(item.clientId) : undefined
           if (clientId !== undefined) {
             const claimed = input.claim(clientId)
@@ -442,7 +454,9 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
         approvals.turnEnded()
         const turn = rec(params.turn)
         deliver([...before, ...events, { type: 'session.status', status: 'idle' }], wakeOf(method, events))
+        const activeTurnId = input.activeTurnId
         input.onTurnCompleted(str(turn?.id), str(turn?.status) === 'interrupted')
+        if (activeTurnId !== undefined && input.activeTurnId !== activeTurnId) seenOf(activeTurnId).ended = true
         if (str(turn?.status) === 'completed' && settings.modeId === 'plan' && lastPlan !== undefined && approvals.size === 0 && !input.busy()) planReview.offer(str(turn?.id) ?? ctx.turnId, lastPlan)
         return
       }
@@ -768,7 +782,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
         sideQueries.close()
         const busy = input.busy()
         disposing = true
-        if (busy) await input.interrupt().catch(() => false)
+        if (busy) await input.interrupt(false).catch(() => false)
         input.close()
         offGlobal()
         for (const unroute of childRoutes.values()) unroute()

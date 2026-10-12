@@ -15,7 +15,7 @@ import type { AgentEvent } from '../src/agent/events.js'
 import type { AgentInput } from '../src/agent/session.js'
 import { setLang } from '../src/i18n.js'
 import { codexText } from '../src/backends/codex/text.js'
-import { FakeRpcError } from './lib/codex-fake-app-server.js'
+import { FakeRpcError, NO_REPLY } from './lib/codex-fake-app-server.js'
 import { CWD, openHarness, THREAD, threadAnswer, tick } from './lib/codex-session-harness.js'
 
 setLang('en')
@@ -126,6 +126,43 @@ const of = <T extends AgentEvent['type']>(events: readonly AgentEvent[], type: T
   check('forced settle: a late item / delta / completion of the settled turn is dropped (no phantom turn)', of(h.events(), 'turn.start').length === startsBefore && of(h.events(), 'turn.end').length === endsBefore
     && !h.events().some(event => event.type === 'assistant.delta' || (event.type === 'assistant.message' && JSON.stringify(event).includes('late words'))), h.events().slice(-6))
   await h.session.dispose()
+}
+
+// ── review ids and force-close fences ──────────────────────────────────
+{
+  const h = await openHarness({ configureFake: fake => fake.on('review/start', () => ({ turn: { id: 'review', status: 'inProgress', items: [] } })) })
+  await h.session.submit(input('review-command', '/review'), 'followup')
+  await h.session.dispose()
+  check('dispose does not wait for a review lifecycle notification after delivery stopped', h.session.status === 'disposed' && h.sent('thread/unsubscribe').length === 1)
+}
+
+for (const forced of [false, true]) {
+  const label = forced ? 'forced review settle' : 'review completion'
+  const h = await openHarness({ configureFake: fake => fake.on('review/start', () => NO_REPLY) })
+  try {
+    const submitting = h.session.submit(input('review-command', '/review'), 'followup')
+    const request = await h.fake.waitForRequest('review/start')
+    await h.notify('item/started', { turnId: 'review', item: { type: 'enteredReviewMode', id: 'enter-review', review: 'changes' } })
+    await h.notify('turn/started', { turn: { id: 'review-lifecycle', status: 'inProgress', items: [] } })
+    if (forced) {
+      await h.session.cancel('interrupt')
+      h.clock.advance(15_000)
+      await tick()
+    } else {
+      await h.completeTurn('review')
+    }
+    h.fake.reply(request.id, { turn: { id: 'review', status: 'inProgress', items: [] } })
+    await submitting
+    const starts = of(h.events(), 'turn.start').length
+    const ends = of(h.events(), 'turn.end').length
+    await h.notify('item/started', { turnId: 'review', item: { type: 'enteredReviewMode', id: 'late-enter-review', review: 'late changes' } })
+    await h.notify('item/completed', { turnId: 'review', item: { type: 'enteredReviewMode', id: 'late-enter-review', review: 'late changes' } })
+    await h.notify('turn/started', { turn: { id: 'review-lifecycle', status: 'inProgress', items: [] } })
+    await h.notify('item/started', { turnId: 'review', item: { type: 'agentMessage', id: 'late-review', text: 'late content' } })
+    check(label + ': late review items and lifecycle starts do not reopen the session', h.session.status === 'idle' && of(h.events(), 'turn.start').length === starts && of(h.events(), 'turn.end').length === ends)
+    await h.session.submit(input('after-review', 'next input'), 'followup')
+    check(label + ': late review/start answers and enteredReviewMode items cannot strand the next input', h.sent('turn/start').at(-1)?.clientUserMessageId === 'after-review')
+  } finally { await h.session.dispose() }
 }
 
 // ── `now` beats a pending steer (review fix) ────────────────────────────

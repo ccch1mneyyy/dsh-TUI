@@ -27,6 +27,8 @@ export type Brand = 'deepseek' | 'claude' | 'codex'
 // 这里转出去：设置链（Config / channel / /settings 面板）只认这一个入口。
 export type { BrandSetting } from './adapter/ports/channel-display.js'
 import type { BrandSetting } from './adapter/ports/channel-display.js'
+import { isLightThemeActive } from './theme.js'
+import type { ThemeName } from './theme.js'
 
 /** 设置项的合法值表（注册与归一化共用一份）。 */
 export const BRAND_SETTING_VALUES: readonly BrandSetting[] = ['auto', 'deepseek', 'claude', 'codex']
@@ -97,6 +99,23 @@ export const BRAND_THEMES: Readonly<Partial<Record<Brand, { readonly dark: strin
   claude: CLAUDE_BRAND_THEMES,
   codex: CODEX_BRAND_THEMES,
 })
+
+/**
+ * 品牌默认档的落位：浅色档 → 该品牌主题对的浅色版，深色档 → 深色版；`deepseek`
+ * 没有品牌主题对（用系统默认 light/dark），返回 `undefined`，调用方沿用解析档。
+ *
+ * 判据是**解析后色板的明暗**（`isLightThemeActive`），不是主题名的字面量：浅色
+ * 内置名不止 `light` 一个（`pink-day`、`claude-paper`、`codex-paper`），自定义与
+ * 运行时主题更是任意名字——只认 `'light'` 会让持久化选了 `pink-day` 的用户在品牌
+ * 后端下看到深色版。
+ * @param brand - 当前品牌档（`resolveBrand` 的结果）。
+ * @param themeName - 品牌覆盖前的解析档（ThemeProvider 的 `active`，含 `auto`）。
+ */
+export function brandThemeFor(brand: Brand, themeName: ThemeName): string | undefined {
+  const pair = BRAND_THEMES[brand]
+  if (pair === undefined) return undefined
+  return isLightThemeActive(themeName) ? pair.light : pair.dark
+}
 
 /** 开屏欢迎语（品牌档；deepseek 沿用 i18n 的 `logo-tagline`）。英文两行以
  *  `\n` 分隔，渲染层按行拆开居中。 */

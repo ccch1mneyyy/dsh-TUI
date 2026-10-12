@@ -2,7 +2,9 @@ import React from 'react'
 import { t } from '../i18n.js'
 import { Box, Text, useTerminalSize } from '../ui.js'
 import { Pane } from './design-system/Pane.js'
-import { Select, type SelectOption } from './Select.js'
+import type { SelectOption } from './Select.js'
+import { ListItem } from './design-system/ListItem.js'
+import { listWindow } from './listWindow.js'
 import { HintLine } from './design-system/HintLine.js'
 import { ThemePreviewPane } from './ThemePreviewPane.js'
 import { useOverlayListRows } from './OverlayAbove.js'
@@ -17,9 +19,6 @@ const SWATCH = '██'
 
 /** Theme keys previewed in the picker, chosen for visual contrast. */
 const SWATCH_KEYS = ['accent', 'text', 'success'] as const
-
-/** 列表窗口行数（Select visibleOptionCount）——也是堆叠布局里列表占的行数。 */
-const LIST_ROWS = 6
 
 /**
  * 面板自占的行数（不含列表/预览本体）：Pane 的上边距 + 分隔线 2 行、标题 1 行、
@@ -41,11 +40,9 @@ const PREVIEW_MAX_COLUMNS = 48
 const PREVIEW_MIN_ROWS = 5
 
 /**
- * 堆叠布局里列表真实占的行数：每项 2 行（label + 描述），窗口最多 LIST_ROWS 项，
- * 另留 2 行给描述换行与滚动箭头。**不能按 LIST_ROWS 算**——浮层的溢出方向是
- * 从顶部裁，少算的每一行都会把列表本身顶出可视区（verify-theme-preview 的 F 组）。
+ * 堆叠布局为列表预留最多 12 行；ListItem 的标签与描述各占一行。
  */
-const LIST_RESERVE_ROWS = 2 * LIST_ROWS + 2
+const LIST_RESERVE_ROWS = 12
 
 function swatches(theme: Theme): React.ReactNode {
   return (
@@ -81,7 +78,7 @@ function optionsFrom(entries: readonly ThemeCatalogEntry[]): SelectOption[] {
     const description = item.source === 'auto'
       ? t('theme-auto-base')
       : item.source === 'builtin'
-        ? t('theme-builtin-base', { name: item.name })
+        ? t('theme-builtin-base', { base })
         : item.source === 'runtime'
           ? t('theme-plugin-base', { base, name: item.name })
           : t('theme-user-base', { base, name: item.name })
@@ -159,8 +156,9 @@ export function ThemePicker({
   // max(列表, 预览)——预览比列表矮就一分高度都不加，所以直接吃满预算；
   // 堆叠时预览是**加在列表下面**的净增量，必须先扣掉列表真实占的行数和
   // 那 1 行间隔，否则多出来的预览会把列表顶出浮层（溢出从顶部裁）。
-  const contentRows = useOverlayListRows(FRAME_ROWS)
-  const previewRows = sideBySide ? contentRows : contentRows - LIST_RESERVE_ROWS - 1
+  const contentRows = useOverlayListRows(FRAME_ROWS + 1)
+  const reservedListRows = Math.min(LIST_RESERVE_ROWS, options.length * 2, contentRows)
+  const previewRows = sideBySide ? contentRows : contentRows - reservedListRows - 1
   const focused = entries[focusIndex] ?? entries[0]
   const preview = focused !== undefined && previewRows >= PREVIEW_MIN_ROWS
     ? (
@@ -171,6 +169,8 @@ export function ThemePicker({
         />
       )
     : undefined
+  const listRows = !sideBySide && preview !== undefined ? reservedListRows : contentRows
+  const { start, end } = listWindow(options.map(() => 2), focusIndex, listRows)
 
   return (
     <Pane color="permission">
@@ -181,13 +181,22 @@ export function ThemePicker({
               {t('picker-title-theme')}
             </Text>
           </Box>
-          <Select
-            options={options}
-            focusIndex={focusIndex}
-            selectedValue={currentTheme}
-            visibleOptionCount={LIST_ROWS}
-            onPick={onPick ? index => onPick(index) : undefined}
-          />
+          {options.slice(start, end).map((option, index) => {
+            const absoluteIndex = start + index
+            return (
+              <ListItem
+                key={option.value}
+                isFocused={absoluteIndex === focusIndex}
+                isSelected={option.value === currentTheme}
+                description={option.description}
+                showScrollUp={absoluteIndex === start && start > 0}
+                showScrollDown={absoluteIndex === end - 1 && end < options.length}
+                onClick={onPick ? () => onPick(absoluteIndex) : undefined}
+              >
+                {option.label}
+              </ListItem>
+            )
+          })}
           <Text dimColor italic>
             <HintLine text={t('hint-confirm-exit')} />
           </Text>
