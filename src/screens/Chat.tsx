@@ -5175,11 +5175,6 @@ export function Chat({
       }
       return
     }
-    if (actionMatches('goalDetails', input, key) && channel.goal !== undefined) {
-      openGoalDetails()
-      event.stopImmediatePropagation()
-      return
-    }
     if (actionMatches('trajectory', input, key)) {
       // The trajectory scene key (default Ctrl+T) opens it at any point in
       // the session.

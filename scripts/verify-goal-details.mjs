@@ -1,5 +1,5 @@
 /**
- * Long goals: keyboard/click access, wrapped scrollable full text, hover
+ * Long goals: click access, wrapped scrollable full text, hover
  * gating, modal input isolation, resize and goal/session retirement.
  * Run: node --import tsx/esm scripts/verify-goal-details.mjs
  */
@@ -7,10 +7,10 @@ process.env.DSH_TUI_LANG = 'en'
 process.env.FORCE_COLOR = '3'
 const [React, { Writable, PassThrough }, { Terminal }, { render, AlternateScreen }, { Chat },
   { GoalTodoPanel }, { TooltipLayer, getTooltipSnapshot, clearTooltip },
-  { setKeymapOverrides, resetKeymapOverrides }, { settled, settle, viewportLines, findText }, { setLang, t }, { QuestionStore }] = await Promise.all([
+  { settled, settle, viewportLines, findText }, { setLang, t }, { QuestionStore }] = await Promise.all([
   import('react'), import('node:stream'), import('@xterm/headless'), import('../src/ui.js'),
   import('../src/screens/Chat.js'), import('../src/components/GoalTodoPanel.js'),
-  import('../src/components/Tooltip.js'), import('../src/utils/keymap.js'), import('./lib/term-test.mjs'), import('../src/i18n.js'), import('../src/dsh-adapter/questions.js'),
+  import('../src/components/Tooltip.js'), import('./lib/term-test.mjs'), import('../src/i18n.js'), import('../src/dsh-adapter/questions.js'),
 ])
 let failed = 0
 function check(name, ok) { console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}`); if (!ok) failed++ }
@@ -62,17 +62,16 @@ for (const lang of ['en', 'zh']) for (const mode of ['fullscreen', 'inline', 'sp
     { stdout: io.stdout, stderr: io.stderr, stdin: io.stdin, exitOnCtrlC: false, patchConsole: false })
   const label = `${lang}/${mode}`
   check(`${label}: goal summary renders`, await settled(() => io.screen().includes('GOAL_HEAD')))
-  if (mode === 'split') {
-    io.stdin.write('\x02')
-    check(`${label}: panel takes keyboard focus`, await settled(() => io.screen().includes(t('panel-hint-focused').split(' · ')[0])))
-    io.stdin.write('\x1bg')
-    check(`${label}: focused panel allows goal shortcut`, await settled(() => io.screen().includes(title)))
-    io.stdin.write('\x1b')
-    await settle(() => !io.screen().includes(title))
-    io.stdin.write('\x1b')
-    await settle(() => !io.screen().includes(title))
-    const goalHit = findText(io.term, 'GOAL_HEAD')
+  // Inline has no pointer path; `/goal` prints the full objective there.
+  if (!fullscreen) { await app.unmount(); io.term.dispose(); continue }
+  const clickGoal = async () => {
+    const head = channel.goal.objective.split(' ')[0]
+    await settle(() => findText(io.term, head) !== null)
+    const goalHit = findText(io.term, head)
     io.stdin.write(`\x1b[<0;${goalHit.col + 1};${goalHit.row + 1}M\x1b[<0;${goalHit.col + 1};${goalHit.row + 1}m`)
+  }
+  if (mode === 'split') {
+    await clickGoal()
     check(`${label}: side-panel goal click opens details`, await settled(() => io.screen().includes(title)))
     io.stdin.write('\x1b[F')
     check(`${label}: goal tail reachable beside panel`, await settled(() => io.screen().includes('GOAL_TAIL')))
@@ -85,11 +84,8 @@ for (const lang of ['en', 'zh']) for (const mode of ['fullscreen', 'inline', 'sp
   }
   io.stdin.write('draft')
   await settle(() => io.screen().includes('draft'))
-  if (fullscreen) {
-    const goalHit = findText(io.term, 'GOAL_HEAD')
-    io.stdin.write(`\x1b[<0;${goalHit.col + 1};${goalHit.row + 1}M\x1b[<0;${goalHit.col + 1};${goalHit.row + 1}m`)
-  } else io.stdin.write('\x1bg')
-  check(`${label}: ${fullscreen ? 'click' : 'Alt+G'} opens details`, await settled(() => io.screen().includes(title)))
+  await clickGoal()
+  check(`${label}: click opens details`, await settled(() => io.screen().includes(title)))
   check(`${label}: body is windowed, dismissal hint visible`, !io.screen().includes('GOAL_TAIL') && io.screen().includes('Esc'))
   check(`${label}: hint has no underlying goal residue`, io.screen().split('\n').find(line => line.includes('↑/↓'))?.trim() === t('goal-details-hint'))
   io.stdin.write('leak')
@@ -105,11 +101,9 @@ for (const lang of ['en', 'zh']) for (const mode of ['fullscreen', 'inline', 'sp
   check(`${label}: End reaches the full goal tail`, await settled(() => io.screen().includes('GOAL_TAIL')))
   io.stdin.write('\x1b[H')
   check(`${label}: Home returns to goal head`, await settled(() => io.screen().includes('GOAL_HEAD') && !io.screen().includes('GOAL_TAIL')))
-  if (fullscreen) {
-    const hit = findText(io.term, 'GOAL_HEAD')
-    if (hit) for (let i = 0; i < 100; i++) io.stdin.write(`\x1b[<65;${hit.col + 1};${hit.row + 1}M`)
-    check('fullscreen: wheel reaches goal tail', await settled(() => io.screen().includes('GOAL_TAIL')))
-  }
+  const hit = findText(io.term, 'GOAL_HEAD')
+  if (hit) for (let i = 0; i < 100; i++) io.stdin.write(`\x1b[<65;${hit.col + 1};${hit.row + 1}M`)
+  check(`${label}: wheel reaches goal tail`, await settled(() => io.screen().includes('GOAL_TAIL')))
   io.term.resize(54, 18)
   io.stdout.columns = 54; io.stdout.rows = 18; io.stdout.emit('resize')
   check(`${label}: resize keeps details and controls visible`, await settled(() => io.screen().includes(title) && io.screen().includes('Esc')))
@@ -124,18 +118,16 @@ for (const lang of ['en', 'zh']) for (const mode of ['fullscreen', 'inline', 'sp
   io.stdin.write('\x1b')
   check(`${label}: Esc closes without cancelling running agent`, await settled(() => !io.screen().includes(title)) && channel.cancelled === 0)
   check(`${label}: draft survives viewing details`, io.screen().includes('draft') && !io.screen().includes('leak'))
-  setKeymapOverrides({ goalDetails: 'alt+j' })
-  io.stdin.write('\x1bj')
-  check(`${label}: remapped key opens details`, await settled(() => io.screen().includes(title)))
-  resetKeymapOverrides()
+  await clickGoal()
+  await settle(() => io.screen().includes(title))
   channel.agentId = 'other-session'; channel.emit()
   check(`${label}: switching sessions retires details`, await settled(() => !io.screen().includes(title)))
-  io.stdin.write('\x1bg')
+  await clickGoal()
   await settle(() => io.screen().includes(title))
   channel.goal = undefined; channel.emit()
   check(`${label}: clearing goal retires details`, await settled(() => !io.screen().includes(title)))
   channel.goal = { id: 'g2', revision: 1, objective, phase: 'active', roundsStarted: 0, maxGoalRounds: 12 }
-  channel.emit(); io.stdin.write('\x1bg')
+  channel.emit(); await clickGoal()
   await settle(() => io.screen().includes(title))
   const questionResult = questionStore.ask({ questions: [{
     id: 'question', header: 'Review', question: 'QUESTION_INTERRUPTS',

@@ -164,7 +164,7 @@ export function GoalTodoPanel({
     const width = objectiveRef.current?.yogaNode?.getComputedWidth() ?? 0
     if (goal === undefined || width <= 0) return ''
     return stringWidth(goal.objective) > width || goal.objective.includes('\n')
-      ? `${t('goal-details-open', { key: primaryComboString('goalDetails') })}\n${goal.objective}`
+      ? goal.objective
       : ''
   })
   const allTodos = channel.todos ?? []
