@@ -10,7 +10,7 @@ import {
   AUTO_THEME_NAME,
   THEME_NAMES,
 } from '../../theme.js'
-import { BRAND_THEMES, getActiveBrand, subscribeActiveBrand } from '../../branding.js'
+import { brandThemeFor, getActiveBrand, subscribeActiveBrand } from '../../branding.js'
 import instances from '../../ink/instances.js'
 import { resolveCustomTheme } from '../../customTheme.js'
 import type { TuiThemeHost } from '../../dsh-adapter/themes.js'
@@ -307,13 +307,11 @@ export function ThemeProvider({
       : isThemeAvailable(active)
         ? active
         : AUTO_THEME_NAME
-    const brandThemes = BRAND_THEMES[brand]
-    if (brandThemes === undefined || brandThemeLockRef.current) return resolved
-    // 品牌双主题按解析档深浅落位：浅色终端（或历史 light 偏好）→ 浅色版，
-    // 深色 → 深色版——同一套品牌强调色，切明暗不丢品牌识别（claude 陶土橙、
-    // codex 薰衣草紫）。
-    const lightness = resolved === 'light' || (resolved === AUTO_THEME_NAME && autoBase === 'light') ? 'light' : 'dark'
-    return brandThemes[lightness]
+    if (brandThemeLockRef.current) return resolved
+    // 品牌双主题按**解析后色板**的深浅落位：浅色（含 `pink-day` 这类浅底内置名、
+    // 浅色自定义主题，以及浅色终端下的 `auto`）→ 浅色版，深色 → 深色版——两套
+    // 共用同一强调色，切明暗不丢品牌识别（claude 陶土橙、codex 薰衣草紫）。
+    return brandThemeFor(brand, resolved) ?? resolved
   })()
   // 模块级镜像必须**在渲染期**写入（不是 effect）：markdown 把主题色烤进
   // ANSI 字符串（链接 accent、行内代码 permission…），而它正是被这次 context

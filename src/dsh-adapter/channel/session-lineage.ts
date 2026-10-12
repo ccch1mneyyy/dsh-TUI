@@ -1,28 +1,7 @@
 /**
- * Lineage decision consulted by `/model` only.
- *
- * `/rewind` and the `/tree` branch also re-create the live session as a child,
- * but they always record `parentSession` and do not call this helper. A blank
- * log cannot reach them (`boundary < 0`). This module is not their gate.
- *
- * The decision is load-bearing beyond grouping. Upstream's automatic session
- * title only ever runs on a session WITHOUT a parent: `dsh-session-title`
- * schedules its provider on the first human message under
- * `session.header.parentSession === undefined`, and a session that already has
- * one is never offered a generated title again — a fork keeps the title it
- * inherited, and only an explicit `ctx.sessionTitle.refresh()` retries, which
- * no TUI surface calls. A route switch on a session nobody has typed into
- * would therefore cost that user the title of their first real prompt, leaving
- * the deterministic fallback instead (a mid-word truncation of the prompt at
- * `fallbackMaxBytes`).
- *
- * A session with no human message has no conversation for the lineage to
- * describe, so its replacement stands as its own root — the same independent-
- * conversation choice `/fork` already makes (`session-fork.ts`), for the same
- * reason. The seeded prefix is unaffected either way: the child still inherits
- * the source's session scaffolding verbatim.
- *
- * @module
+ * `/model` records lineage only for a conversation. Policy-only cuts start
+ * unseeded, so their first human prompt remains eligible for an automatic title.
+ * Rewind and tree actions decide their own parentSession from the inherited cut.
  */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'

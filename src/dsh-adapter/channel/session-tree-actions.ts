@@ -8,7 +8,9 @@ import { createDshSession, dshHandleOf } from '../backend/session.js'
 import { appendInterruptedTurnEnd, liveSessionCreateOptions, liveSessionOffset, snapshotLiveSessionEvents } from '../compat/index.js'
 import { readPersistedSession, type SessionReader } from '../compat/persistence.js'
 import { closeLiveForkTurn } from '../compat/liveSession.js'
+import { createFreshAgent, isUnstoredFreshSession } from '../fresh-agent.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from '../presets.js'
+import { holdsNoConversation, latestPolicyFacts, replayPolicyFacts } from '../session-seed.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { reserveNewSession } from '../../sessionMounts.js'
 import { forkTarget, rewindTarget, turnUserText } from '../sessionTree.js'
@@ -101,7 +103,12 @@ export function createTreeRewindAction(
       deps.notify(t('rewind-settling'), { color: 'error' })
       return null
     }
-    const seed = sourceEvents.filter(event => event.seq <= target.boundary)
+    const cut = sourceEvents.filter(event => event.seq <= target.boundary)
+    const neverUsed = forkFromLive && isUnstoredFreshSession(entrySession)
+    const seed = neverUsed || holdsNoConversation(cut) ? [] : cut
+    // A policy-only cut starts fresh; seeded creation would publish it immediately.
+    const cutHoldsNoConversation = seed.length === 0
+    const policyFacts = cutHoldsNoConversation ? latestPolicyFacts(cut) : []
     const inheritedCount = seed.length
     const closeAfterCreate = target.closeTurn !== undefined && entrySession.header?.version >= 3
     if (target.closeTurn !== undefined && !closeAfterCreate) {
@@ -112,27 +119,33 @@ export function createTreeRewindAction(
     const { reservation } = await reserveNewSession(String(childId))
     let candidate: AgentSession
     try {
-      candidate = await deps.binding.prepare(adoption, async () => createDshSession(ctx, await agents.create(liveSessionCreateOptions({
-        sessionId: childId,
-        seed,
-        runtimeSession: entrySession,
-        inheritedCount,
-        cwd: sourceCwd,
-        parentSession: SessionId(sessionId),
-        agentPreset: composed.agentPreset,
-        agentOptions: { provider: state.provider, model: state.model },
-        setup: closeAfterCreate || mode === 'rewind' ? async (agentCtx, agent) => {
-          // V3 requires seed.length === inheritedEventCount. The constructor
-          // inserts the inherited marker, then these closers belong to the
-          // child and persist before publication, without falsifying the cut.
-          if (closeAfterCreate) closeLiveForkTurn(agent.session, target.closeTurn!)
-          // Re-editing starts with no historical pending work. Cancel through
-          // the child's Inbox so a later resume cannot resurrect the queue.
-          // A plain fork deliberately keeps its separate semantics.
-          if (mode === 'rewind') agent.inbox.clear()
-          return composed.setup?.(agentCtx, agent)
-        } : composed.setup,
-      }))))
+      const create = (): Promise<AgentHandle> => cutHoldsNoConversation
+        ? createFreshAgent(ctx, agents, {
+          sessionId: childId,
+          meta: { cwd: sourceCwd, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
+          agentOptions: { provider: state.provider, model: state.model },
+          setup: composed.setup,
+        })
+        : agents.create(liveSessionCreateOptions({
+          sessionId: childId,
+          seed,
+          runtimeSession: entrySession,
+          inheritedCount,
+          cwd: sourceCwd,
+          parentSession: SessionId(sessionId),
+          agentPreset: composed.agentPreset,
+          agentOptions: { provider: state.provider, model: state.model },
+          setup: closeAfterCreate || mode === 'rewind' ? async (agentCtx, agent) => {
+            if (closeAfterCreate) closeLiveForkTurn(agent.session, target.closeTurn!)
+            if (mode === 'rewind') agent.inbox.clear()
+            return composed.setup?.(agentCtx, agent)
+          } : composed.setup,
+        }))
+      candidate = await deps.binding.prepare(adoption, async () => {
+        const handle = await create()
+        if (cutHoldsNoConversation) replayPolicyFacts(handle.agent.session, policyFacts)
+        return createDshSession(ctx, handle)
+      })
     } catch {
       reservation.abandon()
       deps.notify(t('rewind-create-failed'), { color: 'error' })

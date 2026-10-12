@@ -59,7 +59,33 @@ function captureWriter(source: JsonlPersistence, id: string, receive: (writer: S
   }
 }
 
-const INITIAL_POLICY_EVENTS = new Set(['permission/preset', 'sandbox/mode', 'approval/policy', 'plan/mode'])
+/** Policy facts held in memory until the session has further activity. */
+export const INITIAL_POLICY_EVENTS: ReadonlySet<string> = new Set(['permission/preset', 'sandbox/mode', 'approval/policy', 'plan/mode'])
+
+/** The command envelope a session-policy switch runs through. */
+const POLICY_ACTIVITY_EVENTS: ReadonlySet<string> = new Set(['command/run', 'command/done'])
+
+/** Source-less legacy messages and explicit user messages count as human input. */
+export function isHumanSource(source: unknown): boolean {
+  if (source === undefined || source === null) return true
+  if (typeof source !== 'object') return false
+  return (source as Record<string, unknown>)['kind'] === 'user'
+}
+
+/** Policy commands also emit command envelopes and nonhuman inbox notices. */
+export function isPolicyPlaneActivity(event: SessionEvent): boolean {
+  if (INITIAL_POLICY_EVENTS.has(event.type) || POLICY_ACTIVITY_EVENTS.has(event.type)) return true
+  if (event.type !== 'agent/inbox/spliced') return false
+  const inserted = (event.data as { readonly inserted?: unknown } | undefined)?.inserted
+  if (!Array.isArray(inserted)) return false
+  for (const message of inserted) {
+    if (message === null || typeof message !== 'object') continue
+    const entry = message as Record<string, unknown>
+    if (entry['role'] === 'user' && isHumanSource(entry['source'])) return false
+  }
+  return true
+}
+
 const unstoredSessions = new WeakSet<Session>()
 
 /** Initialization-only fresh session with no persistence requested yet. */
@@ -114,7 +140,8 @@ function deferInitialPolicy(ctx: Context, session: FilteredSession, writer: Sess
   })().finally(() => { draining = undefined })
 
   const guardedFlush = async (): Promise<void> => {
-    start()
+    // Projection checkpoints flush on creation; only later activity publishes the session.
+    if (!started) return
     await drain()
     await flush.call(writer)
   }
@@ -140,7 +167,7 @@ function deferInitialPolicy(ctx: Context, session: FilteredSession, writer: Sess
     }
   }, 'dsh-tui fresh session policy')
   stopEvents = ctx.on('session/event', (subject, event) => {
-    if (subject !== session || (!started && INITIAL_POLICY_EVENTS.has(event.type))) return
+    if (subject !== session || (!started && isPolicyPlaneActivity(event))) return
     start()
     if (failed || draining !== undefined) return
     void drain().catch((error: unknown) => {

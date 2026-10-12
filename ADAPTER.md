@@ -12,7 +12,7 @@
 | `@dsh-std/*` | 只在 `src/adapter/standard/` 与 `src/dsh-adapter/` 内 import |
 | `src/agent/`、`src/channel/` | 不 import 厂商包、`src/dsh-adapter/`、`src/backends/` 与 `src/ink/`;`src/agent/` 也不 import `src/channel/`。唯一例外:`src/channel/sanitize.ts → src/ink/stringWidth.ts` |
 | `src/backends/<x>/` | **一座孤岛**:只 import 自己目录、`src/agent/`(它实现的领域)与 `src/backends/shared/`(中立接缝),外加 node 内建与 manifest `vendorPackages` 声明的厂商包。宿主内部——`src/i18n.ts`、`src/utils/`、`src/channel/`、`src/dsh-adapter/`——一律不可读;`import type` 也算(公开面自洽包括类型)。也不 import 其他后端目录。存量违例登记在 `scripts/adapter-boundary.allowlist.json` 的 `backendEntries`(**只减不增**;claude 在 B-3 清零、codex 随 B-5,该段现已为空——规则对每个后端无条件生效) |
-| `src/backends/shared/` | 后端无关的共享件(原子写、渠道令牌库);任何后端都可 import。它自己不 import scoped(厂商)包、具体后端目录与 `src/dsh-adapter/` |
+| `src/backends/shared/` | 后端无关的共享件(原子写、渠道令牌库、平台文案的单一数据源);任何后端都可 import。它自己是后端栈的**地板**,规则分三条:① 不 import scoped(厂商)包;② 在 `src/` 内只 resolve 到 `src/agent/` 与自己目录,外加一条已论证的例外 `channel-tokens.ts → src/utils/credentials.ts`(纯路径助手,不碰宿主字典与宿主状态);③ 相对 import 不得逃出 `src/`(`scripts/`、`vendor/` 也够不着)。**非 scoped 的运行时依赖不归这条管**(`channel-tokens.ts` 的 `yaml` 即一例),由依赖清单与 `verify:manifest-deps` 一类门禁把关。于是它读不到宿主字典 `src/i18n.ts`、宿主投影 `src/channel/` 或宿主工具 `src/utils/`,也不 import 具体后端目录与 `src/dsh-adapter/`——否则每个后端都会经它间接拿到宿主自己的那份东西(D2 的传递性;边界门禁只查直接 specifier,所以这条必须由规则本身兜住) |
 | Codex 后端(`src/backends/codex/`) | 驱动用户安装的 `codex` 二进制,不依赖 Codex npm 包;本地 daemon 的 stdio proxy 用通用 `ws` 处理 WebSocket 帧,协议类型由 `scripts/codex-protocol-sync.mjs` 生成入库;`package.json` 不得出现 `@openai/codex*`(`verify:codex-contract`) |
 | UI 层(`screens/`、`components/`、`hooks/`、`ink/`) | 不 import `src/backends/`;从 `src/dsh-adapter/` 只取类型,运行期经 facade(`src/dsh-adapter/types.ts` 的类型 re-export、`channel.ts`/`plugin.ts` 提供的服务)接触上游。存量值 import 登记在 `scripts/adapter-boundary.allowlist.json`,只减不增 |
 | `native.dsh` | 只允许 `src/dsh-adapter/` 内访问(唯一的 native 通道;两个内置后端都不声明 `nativeKey`) |
@@ -127,8 +127,10 @@ manifest 一致,过期即红)。
 - **disabled overrides**:23 行。其中 22 行恒定禁用；`command-goal` 在新 registry
   或旧 shipped standard preset 自带该命令时禁用。0.1.7 的 host PTC/workflow
   服务由 base 提供，模型可见的工具仍由 preset 控制；与 web-app 的差异见快照。
-- **config overrides**:8 行(原有 6 行加 session-telemetry-otel /
-  plugin-package-inventory-deepseek),后两行保持 TUI 的隐私默认
+- **config overrides**:6 行。`session-telemetry-otel`、
+  `plugin-package-inventory-deepseek` 与 `session-log-deepseek` 继承官方组合，
+  上报默认值、导出配置与版本差异由上游拥有；三项均可经用户补丁覆盖。
+  遥测环境变量只控制 `session-telemetry-otel`，不控制两项 API 请求元数据。
 - **inserts**:19 行(dsh-tui、working-activity、内置 OAuth 入口 dsh-tui-auth、DeepSeek 账号回调的 dsh-tui-webserver、六个插件互通行,以及
   dsh-tui-storage、dsh-tui-storage-json、dsh-tui-storage-domain、
   dsh-tui-workspace、dsh-tui-code-runtime、dsh-tui-subagent-model-selection-settings、

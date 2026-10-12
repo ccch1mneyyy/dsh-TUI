@@ -345,13 +345,14 @@ claim。
 - Source：`protocols/tui-contributions.js`
 - Fixtures：`conformance/fixtures/valid-backend-contribution.json`（SDK peer 形态：安装配方 + 池钩子）、
   `valid-backend-contribution-cli.json`（系统 CLI 形态：无安装配方 + 池钩子）、
+  `valid-backend-contribution-trusted.json`（第二个已实现的确认策略 `trusted-source`）、
   `invalid-backend-unknown-field.json`（即 `nativeKey` 那条反例）、`invalid-backend-bad-id.json`、
   `invalid-backend-key-label.json`、`invalid-backend-capability-shape.json`、
   `invalid-backend-install-incomplete.json`、`invalid-backend-confirmation-policy.json`、
   `invalid-backend-grants-shape.json`
 - Test："Backend contribution shape in both backend shapes (SDK peer with an install recipe,
-  system CLI with a pool hook), capability/grants declaration, the refusals, and resume
-  binding semantics"（automated）
+  system CLI with a pool hook), both implemented confirmation policies (confirm, trusted-source),
+  capability/grants declaration, the refusals, and resume binding semantics"（automated）
 
 ### TUI-TRUST-001 Trust disclosure
 
@@ -1020,8 +1021,11 @@ ctx.effect(() => () => dispose?.())
 - `shortLabel` 必填；`product`、`install`、`unloadExport`、`confirmation` 可选。
 - 未知字段一律拒（`nativeKey`、`inTree` 之类 in-tree 私有项因此进不来）；声明里
   的文本按不可信输入净化：剥控制字符、按 terminal cell 截断。
-- `confirmation` 的形状先留着（默认全确认），未知取值一律拒——贡献不许给自己
-  免确认。
+- `confirmation` 是**请求**，不是自授豁免：缺省 `confirm`（宿主始终询问）；`trusted-source`
+  请求走宿主的可信来源通道，宿主按自己的判据决定，判据不成立一律 fail closed 退回
+  `confirm`。判据与四条边界（嫡系清单 + provenance 交叉、免确认 ≠ 免记录/免展示、
+  只覆盖该包本身、伪装嫡系退回确认）见 `notes/0009` 的「Permissions and security」。
+  未知取值一律拒；取值集合只增不删。
 
 ### 公开子集与 in-tree 私有项
 
@@ -1049,6 +1053,22 @@ ctx.effect(() => () => dispose?.())
 `session.dispose()`。宿主只对**真的加载过**的条目记账并调用：「未加载即不关池」是
 宿主的不变量——没加载过的后端不会被 import，也不会被关池；第二次 unload 是 no-op。
 失败必须响亮且归属于具体条目，不能拖垮别的贡献或基础 TUI。
+
+这条的**执行强度在宿主**：贡献写不出"我没被加载就别关我的池"，那是注册表的记账行为
+（`src/dsh-adapter/backend-registry.ts`）。所以它的反例在宿主门禁里——
+`scripts/fixtures/probe-backend/` 的假后端配一份独立模块的池台账，
+`scripts/verify-backend-contribution.ts` 用它钉住三条不变量与幂等性。conformance fixture
+层不承载这条：manifest 里没有"我还没被加载"这种形状。
+
+### 命令名与宿主命令表
+
+后端 MUST NOT 依赖宿主的命令表：不读它来决定自己注册什么名字，也不假定宿主的某个命令
+一定存在。要保留的名字从**自身能力面**派生（自己实现的命令 + manifest 里声明的
+goals / channels / permissions 一类名字）。
+
+重名由**宿主**在合并与分发两处丢弃（local names win：`session-controls.ts` 的合并、
+`Chat.tsx` 的本地命令判定），因此后端侧不需要 `local.has(name)` 一类防御。这条不是形状
+规则——`validateBackendSpec` 不校验命令名，写在这里是让你知道**谁负责**。
 
 ### 恢复语义
 

@@ -1273,3 +1273,25 @@ export interface ContextOccupancy {
    */
   readonly source: 'projection' | 'backend' | 'sample'
 }
+
+/**
+ * What the context is made of, as DSH's own token meter prices it: the heuristic
+ * composition half of the same unit that publishes {@link ContextOccupancy}
+ * (`contextBreakdown`: system prompt / the newest request envelope's tool
+ * schemas / every other visible surface node, injected context included).
+ *
+ * The three are a COMPOSITION, never a total — the meter's own contract says so,
+ * because its fixed density estimator underprices CJK text and JSON schemas.
+ * Only the occupancy numerator answers "how full is the window"; these numbers
+ * split that answer (and whatever this app estimates on top of them) across the
+ * bar's fills. Absent when the mounted meter predates the projection.
+ */
+export interface ContextBreakdown {
+  /** Heuristic tokens of the last nonempty surviving system prompt. */
+  readonly systemTokens: number
+  /** Heuristic tokens of the newest request envelope's tool schemas. */
+  readonly toolsTokens: number
+  /** Heuristic tokens of every other visible surface node (superseded system
+   *  prompts and injected context included). */
+  readonly messageTokens: number
+}

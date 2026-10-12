@@ -6,7 +6,7 @@ export const SETTINGS_SECTION: Readonly<ApiReference & { kind: 'SettingsSection'
 export const SCENE: Readonly<ApiReference & { kind: 'Scene' }>
 export const BACKEND: Readonly<ApiReference & { kind: 'Backend' }>
 export const BACKEND_RESERVED_IDS: readonly string[]
-export const BACKEND_CONFIRMATION_POLICIES: readonly ('confirm')[]
+export const BACKEND_CONFIRMATION_POLICIES: readonly ('confirm' | 'trusted-source')[]
 
 export type LocalizedText = Readonly<Record<string, string>>
 export type SettingsFieldKind = 'text' | 'number' | 'boolean' | 'select'
@@ -68,8 +68,10 @@ export interface BackendSpec {
   /** Module export closing this backend's process-wide resource pool. See the
    *  definition body: session-scoped resources belong to `session.dispose()`. */
   readonly unloadExport?: string
-  /** Reserved shape (roadmap §6 item 5 ②): absent means the default `confirm`. */
-  readonly confirmation?: { readonly policy: 'confirm' }
+  /** The confirmation this contribution requests; absent means the default
+   *  `confirm`. `trusted-source` asks for the host's own source judgment and is
+   *  honored only when that judgment holds — it never exempts by itself. */
+  readonly confirmation?: { readonly policy: 'confirm' | 'trusted-source' }
 }
 
 /** The handler a contribution binds at registration (the runtime `AgentBackend`). */

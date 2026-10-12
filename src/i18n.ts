@@ -57,6 +57,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './utils/paths.js'
+import { PLATFORM_TEXT } from './backends/shared/platform-text.js'
 
 export type Lang = 'zh' | 'en'
 
@@ -74,6 +75,14 @@ export const LANGS = ['zh', 'en'] as const
 export type I18nText = string | { one: string; other: string }
 
 const dict = {
+  // ── 平台文案：真源在 src/backends/shared/platform-text.ts ────────────
+  // 这 10 条是宿主界面与内置后端渲染的同一批字符串（状态行的速率窗口、
+  // /doctor、/rename、回退、工具卡名）。真源放在后端中立缝里：后端读不到宿主
+  // 字典（D2），第三方贡献也不得借宿主的词说话，于是两边共读一份值，各自保留
+  // 自己字典里的条目、照旧渲染。宿主侧仍用 t() 取；scripts/verify-i18n.ts 的
+  // 「跨字典一致性」段逐字比对宿主字典与两个后端，此处若有人再写一份内联副本
+  // （同名键在展开之后会覆盖它）即红。
+  ...PLATFORM_TEXT,
   // ── channel.ts ───────────────────────────────────────────────────────
   // Working spinner labels. WorkingSpinner resolves these through the
   // `spinner-verb-*` dynamic family so the status stays localized after a
@@ -192,7 +201,6 @@ const dict = {
   'conversation-reset-fresh': { zh: '已开新会话来执行计划', en: 'Started a fresh session to carry out the plan' },
   'cost-source-backend': { zh: '内核上报的会话费用', en: 'session cost reported by the kernel' },
   'capability-unavailable-backend': { zh: '当前内核不支持：{{name}}', en: 'Not supported by this kernel: {{name}}' },
-  'capability-failed': { zh: '{{name}} 失败 · {{err}}', en: '{{name}} failed · {{err}}' },
   'effort-tier-low': { zh: '低', en: 'Low' },
   'effort-tier-medium': { zh: '中', en: 'Medium' },
   'effort-tier-high': { zh: '高', en: 'High' },
@@ -217,8 +225,6 @@ const dict = {
   'backend-mcp-needs-auth': { zh: '需要授权的服务器请在终端运行 claude 后用 /mcp 完成', en: 'For servers that need auth, finish it with /mcp in an interactive `claude`' },
   'context-tokens': { zh: '{{n}} tokens', en: '{{n}} tokens' },
   'status-rate-limit': { zh: '订阅用量 {{usage}}', en: 'Subscription usage {{usage}}' },
-  'status-rate-limit-five-hour': { zh: '5小时', en: '5h' },
-  'status-rate-limit-seven-day': { zh: '7天', en: '7d' },
   'interrupt-failed': { zh: '打断请求失败：排队消息没有撤回，仍会在下一回合发送；已取消暂存，避免重复发送', en: 'The interrupt request failed: the queued messages were not withdrawn and will still run next turn; they are no longer held, so nothing is sent twice' },
   'interrupt-unconfirmed': { zh: '无法确认排队消息已撤回：它们仍会在下一回合发送，不再暂存', en: 'Could not confirm the queued messages were withdrawn: they will still run next turn and are no longer held' },
   'cmd-unavailable-backend': { zh: '/{{cmd}} 在 {{backend}} 内核下不可用', en: '/{{cmd}} is not available on the {{backend}} kernel' },
@@ -239,7 +245,6 @@ const dict = {
   'doctor-model': { zh: '模型: {{model}} · 提供方: {{provider}}', en: 'Model: {{model}} · Provider: {{provider}}' },
   'doctor-cwd': { zh: '工作目录: {{cwd}}', en: 'Working directory: {{cwd}}' },
   'doctor-context-window': { zh: '上下文窗口: {{window}} tokens', en: 'Context window: {{window}} tokens' },
-  'doctor-unknown': { zh: '未知', en: 'unknown' },
   'doctor-session': { zh: '会话: {{id}}', en: 'Session: {{id}}' },
   'doctor-backend': { zh: '内核: {{label}} ({{id}})', en: 'Kernel: {{label}} ({{id}})' },
   'doctor-config': { zh: '配置: {{candidate}} {{state}}', en: 'Config: {{candidate}} {{state}}' },
@@ -271,7 +276,6 @@ const dict = {
   'rewind-attach-failed': { zh: '已回退，但工作区挂载失败 · {{err}}', en: 'Session rewound, but workspace attachment failed · {{err}}' },
   'rewind-no-persistence': { zh: '回退不可用——持久化服务未加载', en: 'Rewind unavailable — session persistence not loaded' },
   'rewind-load-failed': { zh: '无法读取该会话日志 · {{err}}', en: 'Could not read that session log · {{err}}' },
-  'rewind-first-message': { zh: '不能回退到第一条消息之前', en: 'Cannot rewind past the very first message' },
   'rewind-noop': { zh: '该点之后没有可回退的内容', en: 'Nothing to rewind past this point' },
   'rewind-while-working': { zh: '回合运行中，无法回退', en: 'Cannot rewind while a turn is running' },
   'rewind-unanchored': { zh: '这条消息没有可回退的锚点', en: 'This message has no rewind anchor' },
@@ -282,7 +286,6 @@ const dict = {
   'rewind-fork-kept': { zh: '回退副本已保存但未能切换过去；可用此命令进入：{{command}}', en: 'The rewound copy is saved but could not be opened here; enter it with: {{command}}' },
   'rewind-mode-both': { zh: '回退会话并恢复文件', en: 'Rewind conversation and restore files' },
   'rewind-mode-files': { zh: '仅恢复文件（会话不变）', en: 'Restore files only (conversation unchanged)' },
-  'rename-failed': { zh: '重命名失败 · {{err}}', en: 'Rename failed · {{err}}' },
   'session-archive-failed': { zh: '归档会话失败 · {{err}}', en: 'Archiving the session failed · {{err}}' },
   'session-delete-failed': { zh: '删除会话失败 · {{err}}', en: 'Deleting the session failed · {{err}}' },
   'rewind-session-changed': { zh: '会话已切换，回退已放弃', en: 'The session changed; the rewind was dropped' },
@@ -295,6 +298,14 @@ const dict = {
   'fork-done': {
     zh: '已分叉（{{id}}）——仍在原会话中\n新进程进入分叉：{{command}}',
     en: 'Forked ({{id}}) — still in the original session\nEnter the fork in a new process: {{command}}',
+  },
+  // A fork of a session that holds no conversation keeps NO log until its own
+  // first real event (the fresh-session deferral), so there is no artifact a
+  // resume command could enter. This notice says that instead of printing a
+  // command that cannot work yet.
+  'fork-done-unstored': {
+    zh: '已分叉（{{id}}）——仍在原会话中\n源会话还没有内容，分叉副本没有日志可恢复',
+    en: 'Forked ({{id}}) — still in the original session\nThe source session has no content yet, so the fork has no log to resume',
   },
   // ── /tree screen (session family tree) ─────────────────────────────────
   'tree-title': { zh: '会话树', en: 'Session tree' },
@@ -869,7 +880,6 @@ const dict = {
   'effort-preference-downgraded': { zh: '偏好推理强度 {{preferred}} 不被当前模型支持，已就近降档至 {{applied}}', en: 'Preferred reasoning effort {{preferred}} is unavailable on this model; fell back to the nearest lower tier {{applied}}' },
   'effort-preference-unsupported': { zh: '偏好推理强度 {{preferred}} 不被当前模型支持，且无更低可用档，保持模型默认', en: 'Preferred reasoning effort {{preferred}} is unavailable on this model with no lower tier; keeping the model default' },
   'effort-switched': { zh: '推理强度 → {{name}}', en: 'Reasoning effort → {{name}}' },
-  'effort-invalid': { zh: '未知推理等级 {{id}}（当前模型可选：{{ids}}）', en: 'Unknown reasoning effort {{id}} (this model offers: {{ids}})' },
   'effort-current': { zh: '当前推理强度 {{name}}', en: 'Current reasoning effort {{name}}' },
   'effort-usage': { zh: '用法：/effort（滑杆）| /effort <id> | /effort status', en: 'Usage: /effort (slider) | /effort <id> | /effort status' },
   'effort-fallback-tier-note': { zh: '该模型没有声明推理档位，这里列出的是通用档位', en: 'This model declares no effort levels; these are the standard ones' },
@@ -1027,13 +1037,11 @@ const dict = {
   // 代码里以字面量出现，无需登记 DYNAMIC_PREFIXES）。bash / powershell 是
   // 产品名，zh 不译；未登记的 id（插件、上游新增）回退首字母大写——那是
   // 名字不是文案，没有可翻译的内容。
-  'tool-name-bash': { zh: 'Bash', en: 'Bash' },
   'tool-name-powershell': { zh: 'PowerShell', en: 'PowerShell' },
   'tool-name-read': { zh: '读取', en: 'Read' },
   'tool-name-glob': { zh: '文件搜索', en: 'Glob' },
   'tool-name-grep': { zh: '内容搜索', en: 'Grep' },
   'tool-name-write': { zh: '写入', en: 'Write' },
-  'tool-name-edit': { zh: '编辑', en: 'Edit' },
   'tool-name-todo_write': { zh: '待办清单', en: 'TodoWrite' },
   'tool-name-subagent': { zh: '子代理', en: 'Task' },
   'tool-name-web_search': { zh: '联网搜索', en: 'WebSearch' },
@@ -1379,7 +1387,6 @@ const dict = {
   // ── screens/Chat.tsx（/ 转录搜索条）─────────────────────────────────
   'search-no-matches': { zh: '无匹配', en: 'no matches' },
 
-  'rename-usage': { zh: '用法  /rename <新名称>', en: 'Usage  /rename <new title>' },
   'rename-current': { zh: '当前名称  {{title}}', en: 'Current title  {{title}}' },
   'rename-done': { zh: '已重命名为「{{title}}」', en: 'Renamed to "{{title}}"' },
   'compact-summary-folded': { zh: '摘要已折叠', en: 'Summary folded' },
@@ -1388,7 +1395,7 @@ const dict = {
   'back-to-bottom': { zh: '↓ 回到底部（Enter/End）', en: '↓ back to bottom (Enter/End)' },
 
   // ── components/ThemePicker.tsx ──────────────────────────────────────
-  'theme-builtin-base': { zh: '内置 · {{name}} 基底', en: 'Built-in · {{name}} base' },
+  'theme-builtin-base': { zh: '内置 · {{base}} 基底', en: 'Built-in · {{base}} base' },
   'theme-auto-base': { zh: '内置 · 跟随系统/终端背景自动选择 light/dark', en: 'Built-in · follows the system/terminal background (light/dark)' },
   'theme-user-base': { zh: '{{base}} 基底 · ~/.dsh-tui/themes/{{name}}.json', en: '{{base}} base · ~/.dsh-tui/themes/{{name}}.json' },
   'theme-plugin-base': { zh: '插件 · {{base}} 基底 · {{name}}', en: 'Plugin · {{base}} base · {{name}}' },

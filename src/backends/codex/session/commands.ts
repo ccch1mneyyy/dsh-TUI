@@ -35,7 +35,8 @@ interface CommandDeps {
    *  catalog's `off` token). */
   exitPlan(): Promise<void>
   submit(input: AgentInput, placement: SubmitPlacement, wireInput?: readonly UserInput[]): Promise<{ readonly accepted: boolean; readonly reason?: string }>
-  noteTurnStarted(id: string): void
+  beginReview(): () => void
+  noteReviewStarted(id: string): void
 }
 
 /** The name the host serves for one of this backend's declared capabilities
@@ -81,6 +82,11 @@ export function createCodexCommands(deps: CommandDeps) {
     const seq = deps.ctx.nextSeq()
     deps.emit([{ type: 'user.message', id: `codex-local-${seq}`, anchor: `codex-local-${seq}`, seq, time: deps.ctx.now(), source: 'command-output', text, blocks: [{ type: 'text', text }] }])
   }
+  /** Backend commands that do not enter the Codex input queue still need to
+   *  retire the channel's optimistic pending row. */
+  const claim = (input: AgentInput): void => {
+    deps.emit([{ type: 'pending.changed', items: [], claimed: [input.clientMessageId] }])
+  }
   const list = async (): Promise<readonly CommandInfo[]> => [
     { name: 'review', description: codexText('codex-command-review') },
     { name: 'diff', description: codexText('codex-command-diff') },
@@ -107,9 +113,16 @@ export function createCodexCommands(deps: CommandDeps) {
       switch (name) {
         case 'review': {
           if (deps.busy()) return { accepted: false, reason: codexText('codex-command-idle') }
-          const result = rec(await deps.hub.call(CLIENT.reviewStart, { threadId: deps.threadId(), target: reviewTarget(args), delivery: 'inline' }))
-          const id = str(rec(result?.turn)?.id)
-          if (id !== undefined) deps.noteTurnStarted(id)
+          const failStart = deps.beginReview()
+          try {
+            const result = rec(await deps.hub.call(CLIENT.reviewStart, { threadId: deps.threadId(), target: reviewTarget(args), delivery: 'inline' }))
+            const id = str(rec(result?.turn)?.id)
+            if (id !== undefined) deps.noteReviewStarted(id)
+          } catch (error) {
+            failStart()
+            throw error
+          }
+          claim(input)
           return { accepted: true }
         }
         case 'plan': {
@@ -123,11 +136,16 @@ export function createCodexCommands(deps: CommandDeps) {
           const arg = args.trim()
           if (arg === 'off') {
             await deps.exitPlan()
+            claim(input)
             return { accepted: true }
           }
           await deps.setPlan()
           const prompt = arg === 'on' ? '' : args
-          return prompt.trim() === '' ? { accepted: true } : deps.submit({ ...input, text: prompt, blocks: [{ type: 'text', text: prompt }, ...(input.blocks?.slice(1) ?? [])] }, placement)
+          if (prompt.trim() === '') {
+            claim(input)
+            return { accepted: true }
+          }
+          return deps.submit({ ...input, text: prompt, blocks: [{ type: 'text', text: prompt }, ...(input.blocks?.slice(1) ?? [])] }, placement)
         }
         case 'diff': {
           let diff = deps.lastDiff()
@@ -140,6 +158,7 @@ export function createCodexCommands(deps: CommandDeps) {
             }
           }
           output(diff === undefined || diff === '' ? codexText('codex-diff-empty') : diff)
+          claim(input)
           return { accepted: true }
         }
         case 'usage': {
@@ -162,6 +181,7 @@ export function createCodexCommands(deps: CommandDeps) {
           })
           output(lines.length === 0 ? codexText('codex-usage-unavailable') : lines.join('\n'))
           if (view !== undefined) deps.emit([{ type: 'rate-limit', info: view }])
+          claim(input)
           return { accepted: true }
         }
         default: {

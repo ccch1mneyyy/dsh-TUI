@@ -1211,6 +1211,7 @@ function extractRowText(
   row: number,
   colStart: number,
   colEnd: number,
+  continuesSelection: boolean,
   includeNoSelect = false,
 ): SelectionRow {
   const noSelect = screen.noSelect
@@ -1252,9 +1253,8 @@ function extractRowText(
     }
     line += cell.char
   }
-  // Negative marker: the renderer elided the separator space that wrapped
-  // onto the next row (this row filled the width exactly).
-  if (next < 0 && colStart <= lastCol && lastCol === contentEnd - 1) line += ' '
+  // Restore an elided separator only when the selection joins the next row.
+  if (continuesSelection && next < 0 && colStart <= lastCol && lastCol === contentEnd - 1) line += ' '
   // The trailing trim may only eat blanks written AFTER the last region: a
   // region's cells are content (a formula's box), so the space separating it
   // from the text before it survives. The markers this replaced were never
@@ -1555,7 +1555,10 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
       rowEnd = Math.min(rowEnd, s.fence.colEnd)
       if (rowStart > rowEnd) continue
     }
-    rows.push(extractRowText(screen, row, rowStart, rowEnd, s.includeNoSelectCells))
+    rows.push(extractRowText(
+      screen, row, rowStart, rowEnd,
+      row < end.row || s.scrolledOffBelow.length > 0, s.includeNoSelectCells,
+    ))
   }
 
   for (let i = 0; i < s.scrolledOffBelow.length; i++) {
@@ -1611,7 +1614,10 @@ export function captureScrolledRows(
     const colStart = row === start.row ? start.col : 0
     const colEnd = row === end.row ? end.col : width - 1
     const screenRow = row - screenRowOffset
-    captured.push(extractRowText(screen, screenRow, colStart, colEnd, s.includeNoSelectCells))
+    captured.push(extractRowText(
+      screen, screenRow, colStart, colEnd,
+      row < end.row || s.scrolledOffBelow.length > 0, s.includeNoSelectCells,
+    ))
   }
 
   if (side === 'above') {

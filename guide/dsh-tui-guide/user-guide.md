@@ -273,6 +273,7 @@ dsh-tui
   表情包，22 个动画，被戳/被挠/被拎起来都有对应反应，独有「冒爱心」「举大拇指」）、`whale`（开屏
   同款像素鲸）。**鲸娘在有图像协议（kitty/sixel）的终端里按原帧数 240px 像素级渲染**（267 帧全保留、
   透明悬浮、按需解码），无图像协议自动回退字符画版。
+  开屏仅在 DeepSeek 品牌下使用这些皮肤：`deepy` 和 `whaleGirl` 会取代女仆娘立绘；选择 `whale` 并开启「女仆娘立绘」才会显示女仆娘。Claude 使用自己的图案，Codex 使用自己的真图或女仆娘字符画回退；这两个品牌的开屏图案不受宠物皮肤和女仆娘开关影响。见[优先级表](configuration.md)。
 
 | 子命令 | 作用 |
 |---|---|
@@ -491,7 +492,7 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 
 - **开场动画**（约 3.4 秒，每次启动三选一，`/deepseek` 彩蛋重掷）：经典 / 爱心 / 睡觉。
 - **欢迎期闲置动画**（`whaleIdle`，默认开）：摆鱼鳍、眨眼、拍尾巴，空闲 10 秒入睡冒 Z；**点击冒爱心唤醒**。
-- **女仆娘立绘**（`whaleGirl`，默认关）：把标题的像素鲸鱼换成作者绘制的女仆娘——**最优先**走终端图像协议（Kitty/Sixel）的真图渲染；终端不支持（如内联模式）时回落到字符画版女仆娘。**点她一下**会换成「高兴鲸娘」几秒再自动回安静版；开始第一个任务后定格、不再响应点击。
+- **女仆娘立绘**（`whaleGirl`，默认关）：DeepSeek 品牌下，宠物皮肤设为 `whale` 并开启本项后，显示作者绘制的女仆娘——优先走 Kitty/Sixel 真图，不支持时回落字符画。**显示真图时，点她一下**会换成「高兴鲸娘」几秒，再自动回安静版；第一个任务后定格，不再响应点击。字符画保持静态。`deepy` 和 `whaleGirl` 皮肤会取代立绘；Claude 使用自己的图案，Codex 使用自己的真图或女仆娘字符画回退；这两个品牌的开屏图案不受宠物皮肤和女仆娘开关影响。见[优先级表](configuration.md)。
 - 开始第一个 agent 任务后定格为静态帧（`/new` 重新进入欢迎期）。
 - 鲸鱼右侧文字列：`✦ dsh-TUI v版本号` → 块体大字 `DEEPSEEK / HARNESS`（加粗字形，两行等宽、中间空一行）→
   当前模型 + effort → 工作目录 → 启动提示行。
@@ -517,8 +518,16 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 **Row 1 — 上下文分段进度条**（`/settings → statusBar.contextBar`，默认开）
 
 - 按内容类型分段着色（system / prompt / assistant / thinking / tools）。
-- 分段 token 数是**本地估算**（CJK/全角按 ~1.4 字符/token、ASCII 按 ~4 字符/token、其它脚本按 ~2），
-  只描述这条由什么构成，**不参与占用总量**——占用以 ctx 字段/读数为准（见下）。
+- 分段着色按内容类型（system / prompt / assistant / thinking / tools）。**已用段的长短严格等于读数**
+  （`13k/64k` 里的 13k）：五段只按构成把这个长度切开，估算偏小/偏大都不会再让条画短或画长。
+- 构成分两层：harness 的 `contextBreakdown` 投影（system 提示 / 本次请求信封里的工具 schema /
+  其余可见内容，注入的上下文也在这一项）＋ 本地估算（把 meter 的消息侧再按 prompt / assistant /
+  thinking / 工具结果细分；ASCII ~4 字符/token、CJK ~1.4、其它脚本 ~2）。旧版 meter 不发布该投影时
+  只用本地估算。
+- 悬停图例报的就是条上那批份额（按占用归因），**五段 + free 合起来正好是窗口**（`1.2k` 这类缩写
+  每项最多差半个单位），不再出现「五段加起来只有读数一半」。估算本身**不参与占用总量**——占用以
+  ctx 字段/读数为准（见下）。
+- 构成无法归因到任何类别时，条保持单块已用区域；条和 ctx 字段的悬停明细都报实测 `used`，不列五个零分类。
 - 条上唯一文字是最右缘读数 `13k/64k 19.5%`（窄屏只显示 `19.5%`）。
 - 读数按占用率变色：<80% 灰蓝，**≥80% 琥珀、≥95% 红**。
 - 悬停整条弹出图例：色块 + 名称 + token 数（窄屏自动改用短名）。
@@ -560,7 +569,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | whale | 开屏头部像素鲸鱼娘（默认开）；每次启动随机三选一开场动画（经典/爱心/睡觉），`/deepseek` 彩蛋重掷 |
 | whaleIdle | 鲸鱼娘欢迎期闲置动画（默认开）：定格后摆鱼鳍/拍尾巴/眨眼，空闲 10 秒入睡冒 Z；点击冒爱心。开始第一个任务后定格 |
 | splashFont | 开屏大字字体：按天轮换（默认，随本地日期换款）/ 加粗 / 方角实心 / 半立体 / 宽体 / 点阵灰度 / 镂空模板 / 细笔 / 方板。选某一款即固定那一款，选回「按天轮换」恢复。立即生效 |
-| whaleGirl | 女仆娘立绘（默认关）：标题像素鲸鱼换成作者绘制的女仆娘**真图**（Kitty/Sixel 图像协议）；不支持时回落像素鲸鱼 |
+| whaleGirl | 女仆娘立绘（默认关）：DeepSeek 品牌下，设 `companion.skin=whale` 并开启本项；`deepy` 和 `whaleGirl` 皮肤会取代立绘。Claude 使用自己的图案，Codex 使用自己的真图或女仆娘字符画回退；这两个品牌的开屏图案不受宠物皮肤和女仆娘开关影响。优先 Kitty/Sixel 真图，不支持时回落字符画。见[优先级表](configuration.md) |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
 | btw.contextBudget | `/btw` 追问携带的最近问答总字符预算（默认 24000，范围 1000-200000）；超出时从最旧的整组开始裁剪。立即生效 |
@@ -629,7 +638,7 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
 | 模型 | `/model` | 选择器；**切换 = fork 会话续聊**（历史保留、仅换路由）；持久化 `~/.dsh-tui/model.json`，重启与 `/new` 沿用——它**优先于** cordis.yml/profile 里写的 `provider`/`model`（后者只是首次启动的部署默认值）。从没选过的话，用配置值，再没有才用 Harness 默认（当前为 `deepseek-flash`） |
 | 推理强度 | `/effort` | 滑杆（←/→ 实时）或 `/effort <id>`；`/effort status` 看当前；持久化 `~/.dsh-tui/effort.json` 并被下一次启动沿用（优先于 cordis.yml 的 `effort`），新会话默认档在 /settings → 默认推理强度 |
 | Agent 预设 | `/preset` | `standard` / `ptc`（旧 0.1.1 名 `code`）/ `minimal` / `cordis` / **梁神模式 `liangshen`**；**已开始会话不可切换** |
-| 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
+| 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi` / `pink-day` / `pink-night` / `pink-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
 | 自定义主题 | 手动 | `~/.dsh-tui/themes/<名>.json`，`{base, colors}` 格式，选中即热切换；命名为 `auto` 会被内置遮蔽 |
 | 语言 | `/lang` | `en` / `zh` 热切换；优先级 `DSH_TUI_LANG` > profile 配置（旧版 settings.yaml 用户层 > cordis.yml）> 持久化 |
 | 状态行动画 | `/activity` | 选择器或 `/activity frames <名>`；默认 `moon8`，`random` 随机 |

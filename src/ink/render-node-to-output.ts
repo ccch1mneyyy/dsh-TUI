@@ -543,7 +543,7 @@ function buildCharToSegmentMap(segments: StyledSegment[]): number[] {
  * @param originalPlain - the original unwrapped plain text.
  * @param trimEnabled - Whether whitespace trimming is enabled (wrap-trim mode).
  *   When true, we skip whitespace in the original that was trimmed from the output.
- *   When false (wrap mode), all whitespace is preserved so no skipping is needed.
+ *   When false (wrap mode), only separators marked 'gap' are skipped.
  * @param softWrap - per-line flags from wrapWithSoftWrap; a 'gap' line had its
  *   leading separator space elided, so that original character is skipped.
  * @returns the styled wrapped text.
@@ -701,9 +701,10 @@ function wrapWithSoftWrap(
       : wrapText(orig, maxWidth, textWrap).split('\n')
     for (let i = 0; i < pieces.length; i++) {
       const piece = pieces[i]!
+      // Blank pieces retain their width for copy joins and trailing trim.
       if (
         i > 0 && textWrap === 'wrap' && piece.startsWith(' ') &&
-        stringWidth(pieces[i - 1]!) === maxWidth
+        stringWidth(pieces[i - 1]!) === maxWidth && stringWidth(piece.trim()) > 0
       ) {
         outLines.push(piece.slice(1))
         softWrap.push('gap')

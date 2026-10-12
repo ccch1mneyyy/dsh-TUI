@@ -222,13 +222,97 @@ await scenario('review wire targets and lifecycle', async () => {
       check(command + ' accepted', (await f.submit(command)).accepted)
       check(command + ' exact target', f.last(CLIENT.reviewStart).target, target)
       check(command + ' delivery inline', f.last(CLIENT.reviewStart).delivery, 'inline')
+      check(command + ' consumes its command preview without a clientId echo', f.events.some(event => event.type === 'pending.changed' && event.claimed?.includes(command)))
       check(command + ' second review refuses active turn', (await f.submit('/review')).accepted, false)
       const id = 'review-' + reviewTurn
       await f.notify(NOTIFY.itemStarted, { turnId: id, item: { type: 'enteredReviewMode', id: 'enter-' + id, review: 'API' } })
+      // Native 0.160.1 uses another id for turn/started and interrupts.
+      await f.notify(NOTIFY.turnStarted, { turn: { id: 'lifecycle-' + id, status: 'inProgress', items: [] } })
       await f.notify(NOTIFY.itemCompleted, { turnId: id, item: { type: 'exitedReviewMode', id: 'exit-' + id, review: 'No issues.' } })
       await f.complete(id)
     }
     check('review completion creates matched neutral turn boundaries', f.events.filter(event => event.type === 'turn.start').length === 4 && f.events.filter(event => event.type === 'turn.end').length === 4)
+  } finally { await f.close() }
+})
+
+await scenario('review completion drains queued input and an early interrupt waits for its lifecycle id', async () => {
+  const f = await fixture({ configure: fake => fake.on(CLIENT.reviewStart, () => ({ turn: { id: 'review', status: 'inProgress', items: [] } })) })
+  try {
+    await f.submit('/review')
+    await f.notify(NOTIFY.itemStarted, { turnId: 'review', item: { type: 'enteredReviewMode', id: 'enter-review', review: 'changes' } })
+    await f.submit('next turn', 'queued')
+    const interrupt = f.session.cancel('user')
+    await settle()
+    check('review interrupt waits instead of using the uninterruptible review id', f.sent(CLIENT.turnInterrupt).length, 0)
+    await f.notify(NOTIFY.turnStarted, { turn: { id: 'lifecycle', status: 'inProgress', items: [] } })
+    await interrupt
+    check('review interrupt uses the lifecycle id', f.last(CLIENT.turnInterrupt).turnId, 'lifecycle')
+    await f.complete('unrelated')
+    check('unrelated completion cannot drain the review queue', f.sent(CLIENT.turnStart).length, 0)
+    await f.complete('review')
+    await settle()
+    check('review completion under its own id drains the next turn', f.last(CLIENT.turnStart).clientUserMessageId, 'queued')
+  } finally { await f.close() }
+})
+
+await scenario('cancel while review/start awaits its first response or notification', async () => {
+  const f = await fixture({ configure: fake => fake.on(CLIENT.reviewStart, () => NO_REPLY) })
+  try {
+    const submitting = f.submit('/review')
+    const request = await f.fake.waitForRequest(CLIENT.reviewStart)
+    await f.submit('queued while starting', 'starting-followup')
+    check('an in-flight review holds ordinary followups', f.sent(CLIENT.turnStart).length, 0)
+    check('an in-flight review refuses a second review', (await f.submit('/review')).accepted, false)
+    let cancelled = false
+    const cancelling = f.session.cancel('interrupt').then(receipt => { cancelled = true; return receipt })
+    await settle()
+    check('cancel cannot confirm before the review start is known', cancelled, false)
+    f.fake.reply(request.id, { turn: { id: 'review', status: 'inProgress', items: [] } })
+    await submitting
+    check('the review response still waits for the interruptible lifecycle id', cancelled, false)
+    await f.notify(NOTIFY.itemStarted, { turnId: 'review', item: { type: 'enteredReviewMode', id: 'enter-review', review: 'changes' } })
+    await f.notify(NOTIFY.turnStarted, { turn: { id: 'lifecycle', status: 'inProgress', items: [] } })
+    const receipt = await cancelling
+    check('the early cancel sends exactly one interrupt to the lifecycle id', f.sent(CLIENT.turnInterrupt).map(params => params.turnId), ['lifecycle'])
+    check('cancel confirms only after its interrupt is accepted', receipt.outcome, 'confirmed')
+    await f.complete('review')
+    check('the cancelled followup does not start after the review completes', f.sent(CLIENT.turnStart).length, 0)
+    await f.submit('after cancellation', 'after-cancel')
+    check('input starts normally after the early cancel settles', f.last(CLIENT.turnStart).clientUserMessageId, 'after-cancel')
+  } finally { await f.close() }
+})
+
+await scenario('a refused review/start releases cancellation and retained followups', async () => {
+  const f = await fixture({ configure: fake => fake.on(CLIENT.reviewStart, () => NO_REPLY) })
+  try {
+    const submitting = f.submit('/review').then(() => undefined, (error: unknown) => error instanceof Error ? error.message : String(error))
+    const request = await f.fake.waitForRequest(CLIENT.reviewStart)
+    await f.submit('retained followup', 'retained')
+    let cancelled = false
+    const cancelling = f.session.cancel('user').then(receipt => { cancelled = true; return receipt })
+    await settle()
+    check('a user cancel waits for an in-flight review/start', cancelled, false)
+    f.fake.replyError(request.id, -32602, 'review refused')
+    check('review/start refusal still reaches its caller', await submitting, 'review refused')
+    check('a failed review start releases the pending cancel', (await cancelling).outcome, 'confirmed')
+    await settle()
+    check('a failed review start drains the retained followup', f.last(CLIENT.turnStart).clientUserMessageId, 'retained')
+    check('a failed review start needs no turn/interrupt', f.sent(CLIENT.turnInterrupt).length, 0)
+  } finally { await f.close() }
+})
+
+await scenario('review notifications can complete before review/start answers', async () => {
+  const f = await fixture({ configure: fake => fake.on(CLIENT.reviewStart, (_params, request) => {
+    fake.notify(NOTIFY.itemStarted, { threadId: THREAD, turnId: 'fast-review', item: { type: 'enteredReviewMode', id: 'enter-fast', review: 'changes' } })
+    fake.notify(NOTIFY.turnStarted, { threadId: THREAD, turn: { id: 'fast-lifecycle', status: 'inProgress', items: [] } })
+    fake.notify(NOTIFY.turnCompleted, { threadId: THREAD, turn: { id: 'fast-review', status: 'completed', items: [] } })
+    fake.reply(request.id, { turn: { id: 'fast-review', status: 'inProgress', items: [] } })
+    return NO_REPLY
+  }) })
+  try {
+    await f.submit('/review')
+    await f.submit('after fast review', 'after-fast')
+    check('a late review answer never resurrects the completed turn', f.last(CLIENT.turnStart).clientUserMessageId, 'after-fast')
   } finally { await f.close() }
 })
 

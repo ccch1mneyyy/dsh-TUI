@@ -127,6 +127,19 @@ async function run() {
   instance.rerender(makeScroller(60))
   check('post-shrink grow frame keeps the mid position', await settled(() => frameLog.at(-1)?.scrollTop === 10 && frameLog.at(-1)?.scrollHeight === 60), JSON.stringify(frameLog.at(-1)))
 
+  // A real content removal at the SAME width is not an indefinitely
+  // recovering virtual window. Its next stable-height paint must clamp the
+  // old position, so the bottom remains reachable and follow can resume.
+  instance.rerender(makeScroller(20))
+  check('real shrink keeps the position for its first frame', await settled(() =>
+    frameLog.at(-1)?.scrollHeight === 24 && frameLog.at(-1)?.scrollTop === 10))
+  instance.rerender(makeScroller(21))
+  check('stable real shrink clamps to the new bottom', await settled(() =>
+    frameLog.at(-1)?.scrollHeight === 24 && frameLog.at(-1)?.scrollTop === 0 && scrollHandle.isSticky()))
+  instance.rerender(makeScroller(60))
+  check('growth after a real shrink follows the reachable bottom', await settled(() =>
+    frameLog.at(-1)?.scrollHeight === 60 && frameLog.at(-1)?.scrollTop === 36))
+
   instance.unmount()
   process.exit(failed)
 }

@@ -21,6 +21,7 @@
 import type { BackendLocale } from '../../agent/backend.js'
 import type { ElicitationText } from '../shared/elicitation.js'
 import { fillTemplate, type LocalizedText, type TextParams } from '../shared/localized-text.js'
+import { pickPlatformText } from '../shared/platform-text.js'
 
 /**
  * Every string of this backend. `zh` and `en` are both required
@@ -241,14 +242,20 @@ const texts = {
   'elicit-url-complete': { zh: 'MCP 服务器 {{server}} 确认已完成', en: 'The MCP server {{server}} confirmed it is done' },
   'elicit-url-missing': { zh: 'MCP 服务器 {{server}} 请求打开链接却没有给出网址，已拒绝', en: 'The MCP server {{server}} asked to open a link but gave none; declined' },
   'elicit-unsupported': { zh: 'MCP 服务器 {{server}} 的请求（{{mode}}）无法在此显示，已拒绝', en: 'The request of the MCP server {{server}} ({{mode}}) cannot be shown here; declined' },
-  // ── Strings this backend shares with platform surfaces the host also renders (the status line's rate-limit window, /doctor, the tool names of its own cards). The host keeps its own entries; a backend cannot read them (D2), so the copy is repeated here. ──
-  'capability-failed': { zh: '{{name}} 失败 · {{err}}', en: '{{name}} failed · {{err}}' },
-  'status-rate-limit-five-hour': { zh: '5小时', en: '5h' },
-  'status-rate-limit-seven-day': { zh: '7天', en: '7d' },
-  'doctor-unknown': { zh: '未知', en: 'unknown' },
-  'effort-invalid': { zh: '未知推理等级 {{id}}（当前模型可选：{{ids}}）', en: 'Unknown reasoning effort {{id}} (this model offers: {{ids}})' },
-  'tool-name-bash': { zh: 'Bash', en: 'Bash' },
-  'tool-name-edit': { zh: '编辑', en: 'Edit' },
+  // ── Strings this backend shares with platform surfaces the host also renders (the status line's rate-limit window, /doctor, the tool names of its own cards).
+  //    They are not a copy kept here any more: the values come from the one source in the neutral seam
+  //    (`src/backends/shared/platform-text.ts`), which the host dictionary reads too, so the two sides cannot drift apart.
+  //    D2 is unchanged for a third-party contribution — it still cannot read the host dictionary,
+  //    and the seam is out of reach from the layers a contribution occupies. ──
+  ...pickPlatformText([
+    'capability-failed',
+    'status-rate-limit-five-hour',
+    'status-rate-limit-seven-day',
+    'doctor-unknown',
+    'effort-invalid',
+    'tool-name-bash',
+    'tool-name-edit',
+  ]),
 } as const satisfies Record<string, { readonly zh: LocalizedText; readonly en: LocalizedText }>
 
 /** Read-only view of {@link texts} for audits (`scripts/verify-i18n.ts` and the

@@ -8,8 +8,10 @@ import { WORKING_GATE_NOTICES } from '../../commands.js'
 import { writeModelPref } from '../../modelPrefs.js'
 import { touchSession } from '../../sessionHistory.js'
 import { createDshSession, dshHandleOf } from '../backend/session.js'
-import { liveSessionCreateOptions, sliceLiveSessionSeed } from '../compat/index.js'
+import { liveSessionCreateOptions, sliceLiveSessionSeed, snapshotLiveSessionEvents } from '../compat/index.js'
+import { createFreshAgent, isUnstoredFreshSession } from '../fresh-agent.js'
 import { composePreset, runningPresetOf } from '../presets.js'
+import { holdsNoConversation, latestPolicyFacts, replayPolicyFacts } from '../session-seed.js'
 import { reserveNewSession } from '../../sessionMounts.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import type { DshChannelBinding } from './binding.js'
@@ -50,37 +52,49 @@ export function createModelSwitchAction(
     if (state.working) { deps.notify(t(WORKING_GATE_NOTICES.model), { color: 'warning' }); return false }
     const agents = ctx.get('agents') as { create(options: CreateAgentOptions): Promise<AgentHandle> } | undefined
     if (agents === undefined) { deps.notify(t('model-switch-unavailable'), { color: 'error' }); return false }
+    const source = deps.binding.agent.session
     let seed: readonly SessionEvent[]
+    let cut: readonly SessionEvent[]
+    const neverUsed = isUnstoredFreshSession(source)
     try {
-      // A compaction checkpoint may not settle after the model fork snapshot.
       await deps.settleCompaction()
-      // No boundary = the whole source log (continue the conversation). Slice
-      // the SOURCE snapshot: sessions.fork() registers a real child, and its
-      // snapshot length is not the inherited cut.
-      seed = sliceLiveSessionSeed(deps.binding.agent.session)
+      cut = neverUsed ? snapshotLiveSessionEvents(source) : sliceLiveSessionSeed(source)
+      seed = neverUsed || holdsNoConversation(cut) ? [] : cut
     } catch (error) { deps.notify(t('model-switch-fork-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error' }); return false }
+    // A policy-only cut starts fresh; seeded creation would publish it immediately.
+    const cutHoldsNoConversation = seed.length === 0
+    const policyFacts = cutHoldsNoConversation ? latestPolicyFacts(cut) : []
     const childId = SessionId(randomUUID())
     // Announce the id before the factory: from the moment `agents.create`
     // returns this process holds the only write handle on a log the publisher
     // will not name until its next beat.
     const { reservation } = await reserveNewSession(String(childId))
-    const composed = await composePreset(ctx, runningPresetOf(deps.binding.agent.session))
+    const composed = await composePreset(ctx, runningPresetOf(source))
     let candidate: AgentSession
     try {
-      candidate = await deps.binding.prepare(adoption, async () => createDshSession(ctx, await agents.create(liveSessionCreateOptions({
-        sessionId: childId,
-        seed,
-        runtimeSession: deps.binding.agent.session,
-        inheritedCount: seed.length,
-        cwd: state.cwd,
-        // A session nobody has typed into has no conversation to relate, and
-        // lineage would cost its first real prompt the generated title — the
-        // child stands as its own root instead (session-lineage.ts).
-        parentSession: childRecordsLineage(seed) ? deps.binding.agent.session.id : undefined,
-        agentPreset: composed.agentPreset,
-        agentOptions: { provider, model },
-        setup: composed.setup,
-      }))))
+      const create = (): Promise<AgentHandle> => cutHoldsNoConversation
+        ? createFreshAgent(ctx, agents, {
+          sessionId: childId,
+          meta: { cwd: state.cwd, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
+          agentOptions: { provider, model },
+          setup: composed.setup,
+        })
+        : agents.create(liveSessionCreateOptions({
+          sessionId: childId,
+          seed,
+          runtimeSession: source,
+          inheritedCount: seed.length,
+          cwd: state.cwd,
+          parentSession: childRecordsLineage(seed) ? source.id : undefined,
+          agentPreset: composed.agentPreset,
+          agentOptions: { provider, model },
+          setup: composed.setup,
+        }))
+      candidate = await deps.binding.prepare(adoption, async () => {
+        const handle = await create()
+        if (cutHoldsNoConversation) replayPolicyFacts(handle.agent.session, policyFacts)
+        return createDshSession(ctx, handle)
+      })
     } catch (error) { reservation.abandon(); deps.notify(t('model-switch-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 }); return false }
     try { await attachSessionToWorkspace(ctx, state.cwd, childId) }
     catch (error) { deps.notify(t('model-switch-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 }) }

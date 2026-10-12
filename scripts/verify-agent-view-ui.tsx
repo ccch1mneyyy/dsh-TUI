@@ -679,9 +679,9 @@ console.log('--- Chat: source stack + parent state preservation ---')
   try {
     // parent state before the round trip
     check('C1 父转录渲染子代理卡', await settled(() => screen().includes('chat level child')), lines().slice(0, 8).join('|'))
-    // draft into the parent composer
-    stdin.write('parent draft stays')
-    await settled(() => screen().includes('parent draft stays'))
+    // "read-only" is ordinary parent content too, not an Agent View marker.
+    stdin.write('parent read-only draft stays')
+    await settled(() => screen().includes('parent read-only draft stays'))
     const beforeRows = lines().filter(l => l.includes('please delegate') || l.includes('delegated') || l.includes('chat level child'))
     // card ⤢ click → Agent View (source transcript-card)
     check('C1 转录卡主屏查看动作（⤢ 字形）可定位', await click({ screen, lines, rerender: () => {}, stdin, term } as unknown as Frame, '⤢'))
@@ -697,12 +697,12 @@ console.log('--- Chat: source stack + parent state preservation ---')
     stdin.write('\x1b')
     await sleep(80) // 固定窗:pacing Esc 分层步间
     stdin.write('\x1b')
-    check('C1 Esc 退回聊天（父转录仍在）', await settled(() => screen().includes('please delegate') && !screen().includes('read-only')), lines().slice(0, 4).join('|'))
+    check('C1 Esc 退回聊天（父转录仍在）', await settled(() => screen().includes('please delegate') && !lines().slice(0, 3).some(line => line.includes(t('agent-view-title')))), lines().slice(0, 4).join('|'))
     const afterRows = lines().filter(l => l.includes('please delegate') || l.includes('delegated') || l.includes('chat level child'))
     // 行尾空白格不是比较对象（重挂载后 flex 尾格可能多一格 padding）。
     const norm = (ls: readonly string[]): string[] => ls.map(l => l.replace(/\s+$/, ''))
     check('C1 父 rows 逐字不变', JSON.stringify(norm(beforeRows)) === JSON.stringify(norm(afterRows)), JSON.stringify({ before: beforeRows, after: afterRows }))
-    check('C1 父草稿保留', await settled(() => screen().includes('parent draft stays')))
+    check('C1 父草稿保留', await settled(() => screen().includes('parent read-only draft stays')))
     check('C1 主转录未因消息流多出普通行', !screen().includes('flow message one'))
 
     // C2: dashboard → v → Agent View → Esc → dashboard → Esc → chat
@@ -713,7 +713,7 @@ console.log('--- Chat: source stack + parent state preservation ---')
     stdin.write('\x1b')
     await sleep(80) // 固定窗:pacing Esc 分层步间
     stdin.write('\x1b')
-    check('C2 Esc 回到 Dashboard', await settled(() => screen().includes('Subagent Dashboard') && !screen().includes('read-only')), lines().slice(0, 4).join('|'))
+    check('C2 Esc 回到 Dashboard', await settled(() => screen().includes('Subagent Dashboard') && !lines().slice(0, 3).some(line => line.includes(t('agent-view-title')))), lines().slice(0, 4).join('|'))
     stdin.write('\x1b')
     check('C2 Esc 关面板回聊天', await settled(() => screen().includes('please delegate')))
   } finally {

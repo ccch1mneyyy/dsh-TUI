@@ -88,6 +88,13 @@ const instance = await render(
 const screen = (): string => viewportLines(term, rows).join('\n')
 /** The rendered line carrying text, if any. */
 const lineOf = (text: string): string => screen().split('\n').find(line => line.includes(text)) ?? ''
+/** The help bar's two segments, read off the rendered line: the focused
+ *  field's hint on the left, the pinned navigation keys on the right. */
+function barSegments(line: string): { hint: string; keys: string } {
+  const cut = line.indexOf('Enter')
+  if (cut < 0) return { hint: line.trim(), keys: '' }
+  return { hint: line.slice(0, cut).trim(), keys: line.slice(cut).trim() }
+}
 
 /** Focus moves only change colors/the pointer glyph; the pacing sleeps are
  *  the upstream convention (no text-observable condition mid-walk). */
@@ -95,9 +102,11 @@ async function arrow(direction: 'down' | 'up', times: number): Promise<void> {
   const key = direction === 'down' ? '\x1b[B' : '\x1b[A'
   for (let i = 0; i < times; i++) { stdin.write(key); await sleep(120) } // 固定窗:pacing 焦点步进无 settle 锚点
 }
-function assert(condition: boolean, label: string): void {
+/** `dump` overrides the failure screen dump for scenarios rendered into their
+ *  own terminal (the module-level `screen()` belongs to the first harness). */
+function assert(condition: boolean, label: string, dump?: string): void {
   console.log((condition ? 'ok' : 'FAIL') + ' — ' + label)
-  if (!condition) { console.log('--- screen ---\n' + screen()); process.exit(1) }
+  if (!condition) { console.log('--- screen ---\n' + (dump ?? screen())); process.exit(1) }
 }
 
 // 1. Inline groups lay their fields — and header — right on the root page.
@@ -123,4 +132,89 @@ assert(await settled(() => screen().includes('D one') && screen().includes('D tw
 stdin.write('\x1b')
 assert(await settled(() => !screen().includes('D one') && screen().includes('A one')), 'Esc returns to the root page with the inline fields in place')
 await instance.unmount()
+
+// The help bar must display the focused field's hint at wide and narrow widths.
+// Read the expected text from the definition so copy edits do not need a second
+// version of each sentence in this regression.
+const [{ settingField, SETTING_GROUPS }, { setLang }, { stringWidth }] = await Promise.all([
+  import('../src/settings/definitions.js'),
+  import('../src/i18n.js'),
+  import('../src/ink/stringWidth.js'),
+])
+
+const HINT_ROWS = 16
+const hintDocs = { 'dsh-tui': { revision: 1, value: { whaleGirl: false, companion: { skin: 'deepy' } }, user: {} } }
+const hintHost = {
+  listNamespaces: () => Object.entries(hintDocs).map(([ns, doc]) => ({
+    ns, revision: doc.revision, applies: 'live' as const, value: { ...doc.value }, user: { ...doc.user },
+  })),
+  // Read-only scenario: a write here means the visibility probe drifted into
+  // mutating territory and must fail loudly.
+  write: (ns: string) => Promise.reject(new Error('unexpected write in the hint-visibility scenario: ' + ns)),
+  credentialConfigured: () => Promise.resolve(false),
+  writeCredential: () => Promise.resolve(),
+}
+const hintSection = {
+  ns: 'dsh-tui',
+  title: 'dsh-tui',
+  groups: SETTING_GROUPS.filter(group => group.id === 'splash'),
+  fields: [settingField('whaleGirl'), settingField('companion.skin')],
+}
+
+async function openHintScreen(width: number) {
+  const term = new XTerm({ cols: width, rows: HINT_ROWS, scrollback: 50, allowProposedApi: true })
+  class HintStdout extends Writable {
+    columns = width
+    rows = HINT_ROWS
+    isTTY = true
+    _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { term.write(String(chunk), cb) }
+  }
+  const stdin = new FakeStdin()
+  const instance = await render(
+    <Settings channel={{ settingsHost: () => hintHost, settingsSections: () => [hintSection], subscribeSettingsSections: () => () => {} } as Parameters<typeof Settings>[0]['channel']} onClose={() => {}} />,
+    { stdout: new HintStdout(), stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = (): string => viewportLines(term, HINT_ROWS).join('\n')
+  const lineOf = (text: string): string => screen().split('\n').find(line => line.includes(text)) ?? ''
+  const bar = (): { hint: string; keys: string } => barSegments(lineOf('Esc '))
+  return { stdin, lineOf, bar, screen, unmount: async () => { await instance.unmount(); term.dispose() } }
+}
+
+for (const lang of ['en', 'zh'] as const) {
+  setLang(lang)
+  for (const columns of [100, 80, 60] as const) {
+    const ui = await openHintScreen(columns)
+    try {
+      const labels = Object.fromEntries(hintSection.fields.map(field => [
+        field.path.join('.'), lang === 'zh' ? field.descriptions?.zh ?? field.label : field.label,
+      ]))
+      const check = (key: 'whaleGirl' | 'companion.skin', seen: { hint: string; keys: string }): void => {
+        const budget = columns - stringWidth(seen.keys) - 2
+        console.log(`readout — ${lang} ${columns}col ${key}: budget ${budget}, visible ${stringWidth(seen.hint)} cols | ${seen.hint}`)
+        const field = hintSection.fields.find(field => field.path.join('.') === key)!
+        const expected = lang === 'zh' ? field.hintDescriptions?.zh ?? field.hint : field.hint
+        const visible = seen.hint.replace(/…$/, '')
+        const expectedWidth = Math.min(budget, stringWidth(expected ?? ''))
+        const actualWidth = stringWidth(seen.hint)
+        // A wide character can leave one unused column before the ellipsis.
+        assert(actualWidth >= expectedWidth - 1 && actualWidth <= expectedWidth,
+          `${lang} ${columns}col: ${key} hint fills its available display width`, ui.screen())
+        assert(visible.length > 0, `${lang} ${columns}col: ${key} help bar shows a non-empty hint head`, ui.screen())
+        assert(expected?.startsWith(visible) === true,
+          `${lang} ${columns}col: ${key} visible text starts with the focused field's hint`, ui.screen())
+      }
+      // The screen opens focused on the first field; one ↓ moves to the
+      // second. The pointer glyph is text-observable, so the focus step has
+      // a real settle anchor (no fixed pacing window).
+      assert(await settled(() => ui.lineOf(labels.whaleGirl).includes('❯')), `${lang} ${columns}col: focus starts on ${labels.whaleGirl}`, ui.screen())
+      check('whaleGirl', ui.bar())
+      ui.stdin.write('\x1b[B')
+      assert(await settled(() => ui.lineOf(labels['companion.skin']).includes('❯')), `${lang} ${columns}col: ↓ moves the focus to ${labels['companion.skin']}`, ui.screen())
+      check('companion.skin', ui.bar())
+    } finally {
+      await ui.unmount()
+    }
+  }
+}
+
 console.log('verify-settings-root-inline: all assertions passed')

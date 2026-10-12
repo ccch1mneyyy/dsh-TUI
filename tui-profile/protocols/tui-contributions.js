@@ -31,14 +31,24 @@ export const BACKEND = Object.freeze({
 export const BACKEND_RESERVED_IDS = Object.freeze(['dsh', 'claude', 'codex'])
 
 /**
- * Reserved confirmation-policy values (roadmap §6 item 5 ②). The decision on
- * exempting trusted entries from the user's confirmation is still open, so only
- * the shape is reserved here: `confirm` is the default, an unknown value is
- * refused (a contribution may never exempt itself from a confirmation this host
- * does not implement), and the later decision adds a value rather than widening
- * the field — additive, not breaking.
+ * The confirmation policies this host implements (roadmap §6 item 5 ②).
+ *
+ * A contribution **requests** a policy; the host decides. `confirm` (the default
+ * when the field is absent) always asks the user. `trusted-source` asks for the
+ * host's trusted-source path: the host applies *its own* judgment of where the
+ * package came from — a curated, offline-readable list of first-party packages,
+ * cross-checked against provenance when the registry offers it — and **falls back
+ * to `confirm` whenever that judgment does not hold**. A declaration therefore
+ * never exempts itself: wearing this value is a request, not a grant, and any
+ * mismatch (not on the list, publisher disagrees, provenance disagrees) is
+ * fail-closed. Exempting an entry from the interactive confirmation never exempts
+ * it from the effect ledger or from being listed.
+ *
+ * An unknown value is refused: a contribution may never exempt itself from a
+ * confirmation this host does not implement. The vocabulary only grows — a later
+ * decision adds a value rather than widening the field (additive, not breaking).
  */
-export const BACKEND_CONFIRMATION_POLICIES = Object.freeze(['confirm'])
+export const BACKEND_CONFIRMATION_POLICIES = Object.freeze(['confirm', 'trusted-source'])
 
 export const settingsSectionExtensionDefinition = Object.freeze({
   ...SETTINGS_SECTION,

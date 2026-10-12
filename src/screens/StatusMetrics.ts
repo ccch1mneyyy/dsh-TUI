@@ -10,7 +10,7 @@
 import type { Color } from '../ink/styles.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import type { Theme } from '../theme.js'
-import type { ContextOccupancy } from '../adapter/ports/channel-view.js'
+import type { ContextBreakdown, ContextOccupancy } from '../adapter/ports/channel-view.js'
 import { resolveContextOccupancy } from '../dsh-adapter/context-occupancy.js'
 import { getActiveBrand } from '../branding.js'
 import { getActiveThemeName, isLightThemeActive } from '../theme.js'
@@ -242,6 +242,84 @@ function renderFreeSegment(
 ): string {
   if (width <= 0) return ''
   return background(fill, style(rightAlignBarText(options, width)))
+}
+
+/**
+ * The five fills' weights, in bar order — the composition the bar is drawn
+ * from: the meter's `contextBreakdown` joined with the estimates that stay
+ * useful for the part it does not break down.
+ *
+ * DSH's meter prices the composition it can see (`contextBreakdown`: the system
+ * prompt, the newest request ENVELOPE's tool schemas, and every other visible
+ * surface node, injected context included). This app's own `segments` estimates
+ * are what remains useful for the part the meter does not break down: the
+ * message side, where only the transcript distinguishes a human prompt from
+ * assistant text, reasoning and tool results. The join is therefore:
+ *
+ *  - `system` ← the meter's `systemTokens`;
+ *  - `tools` ← the meter's `toolsTokens` (the tool SCHEMAS, which no transcript
+ *    estimate can see) plus this app's tool-RESULT estimate;
+ *  - `prompt`/`assistant`/`thinking` ← the meter's `messageTokens` shared in the
+ *    proportions the estimates report.
+ *
+ * One weight set feeds every reader of the composition: the bar's own column
+ * split (`contextBarColumns`, which the hoverable twin calls too) and the hover
+ * legend (`contextBarBreakdown`), so the numbers under the pointer describe the
+ * fills above them.
+ *
+ * Without a meter value this is the estimates alone — the pre-existing
+ * behavior — and the bar spans whatever the occupancy says regardless, since
+ * the weights only divide a span the occupancy already fixed.
+ * @param segments - Used tokens per content type (this app's estimates).
+ * @param breakdown - The meter's composition, when the harness publishes one.
+ * @returns One weight per used fill, in bar order.
+ */
+export function barSegments(
+  segments: ContextSegments,
+  breakdown: ContextBreakdown | undefined,
+): ContextSegments {
+  if (breakdown === undefined) return segments
+  const promptEst = Math.max(0, segments.prompt ?? 0)
+  const assistantEst = Math.max(0, segments.assistant ?? 0)
+  const thinkingEst = Math.max(0, segments.thinking ?? 0)
+  const toolsEst = Math.max(0, segments.tools ?? 0)
+  const estimatedMessages = promptEst + assistantEst + thinkingEst + toolsEst
+  // No estimates to share it in (a partial channel literal, or the frame before
+  // a replay folds): the message side stays unattributed rather than invented.
+  const scale = estimatedMessages > 0
+    ? Math.max(0, breakdown.messageTokens) / estimatedMessages
+    : 0
+  return {
+    system: Math.max(0, breakdown.systemTokens),
+    prompt: promptEst * scale,
+    assistant: assistantEst * scale,
+    thinking: thinkingEst * scale,
+    tools: Math.max(0, breakdown.toolsTokens) + toolsEst * scale,
+  }
+}
+
+/**
+ * Attribute the composition's weights to the one authoritative token total:
+ * largest remainders, integers that sum EXACTLY to it, so the hover legend's
+ * numbers add up to the reading beside them instead of reporting a second,
+ * unrelated total.
+ *
+ * All-zero weights — no composition known at all — attribute nothing: the bar
+ * paints its measured span as one `unclassified` block, so the legend names
+ * that block as measured `used` rather than inventing five equal slices.
+ * @param weights - The composition's weights, one per used fill.
+ * @param total - Tokens to attribute (the occupancy numerator).
+ * @returns Integer weights summing to `total` (all zero for a non-positive total).
+ */
+export function attributeBarTokens(weights: ContextSegments, total: number): ContextSegments {
+  const budget = Math.max(0, Math.round(total))
+  const values = USED_SEGMENTS.map(segment => Math.max(0, weights[segment.key] ?? 0))
+  const attributed = values.reduce((sum, value) => sum + value, 0) <= 0
+    ? values.map(() => 0)
+    : allocateProportionally(values, budget)
+  return Object.fromEntries(
+    USED_SEGMENTS.map((segment, index) => [segment.key, attributed[index] ?? 0]),
+  ) as ContextSegments
 }
 
 /** One entry of the context bar's hover breakdown: the fill color, the name

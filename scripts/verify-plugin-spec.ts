@@ -263,6 +263,9 @@ const expectBackend = (name: string, body: () => unknown, pass: boolean): void =
   const BACKEND_FIXTURES = [
     ['valid Backend contribution (SDK peer shape)', 'valid-backend-contribution.json', true],
     ['valid Backend contribution (system CLI shape: no install recipe, pool hook)', 'valid-backend-contribution-cli.json', true],
+    // 第二个已实现的确认策略取值：`trusted-source` 请求走宿主自己的来源判据，命中才免确认——
+    // 声明是请求，不是自授豁免（定义正文原话）。
+    ['valid Backend contribution (confirmation policy: trusted-source)', 'valid-backend-contribution-trusted.json', true],
     // 这条就是 roadmap §4.7 / §6 第 7 条点名的 nativeKey 反例：fixture 形状是 unknown-field，
     // 拒绝理由逐字是 `Backend content contains unknown field "nativeKey"`（实测）。
     ['Backend native channel rejected (unknown field)', 'invalid-backend-unknown-field.json', false],
@@ -310,6 +313,8 @@ const expectBackend = (name: string, body: () => unknown, pass: boolean): void =
     [...validateBackendSpec(spec).capabilities].join(',') === spec.capabilities.join(','))
   expectBackend('Backend native channel is refused in a declaration too',
     () => validateBackendSpec({ ...spec, nativeKey: 'example' }), false)
+  expectBackend('Backend confirmation policy accepts the second implemented value',
+    () => validateBackendSpec({ ...spec, confirmation: { policy: 'trusted-source' } }), true)
   expectBackend('Backend confirmation policy refused when it is not one this host implements',
     () => validateBackendSpec({ ...spec, confirmation: { policy: 'trusted' } }), false)
   expectBackend('Backend install recipe must be complete',
@@ -321,6 +326,8 @@ const expectBackend = (name: string, body: () => unknown, pass: boolean): void =
   expectBackend('Backend handler assertion refuses a handler without open()',
     () => assertBackendHandler({ id: 'example-agent', detect: async () => ({}) }), false)
   expect('confirm stays the reserved default policy', BACKEND_CONFIRMATION_POLICIES.includes('confirm'))
+  expect('the implemented confirmation policies are exactly confirm and trusted-source',
+    [...BACKEND_CONFIRMATION_POLICIES].join(',') === 'confirm,trusted-source', [...BACKEND_CONFIRMATION_POLICIES].join(','))
   expect('the Backend family reserve exactly the registry built-ins',
     [...BACKEND_RESERVED_IDS].join(',') === 'dsh,claude,codex', [...BACKEND_RESERVED_IDS].join(','))
   expect('the Backend declaration validator freezes what it returns',

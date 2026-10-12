@@ -96,9 +96,13 @@ const compiledHandoffEventsPath = fileURLToPath(new URL('../lib/types/handoffEve
 // update.js imports the ACK protocol (S05 完整版) from handoffAck.js and
 // EXIT_ALT_SCREEN from the ink dec sequences — both must ride the mirror.
 const compiledHandoffAckPath = fileURLToPath(new URL('../lib/types/handoffAck.js', import.meta.url))
+const compiledStdinHandoffPath = fileURLToPath(new URL('../lib/types/ink/stdin-handoff.js', import.meta.url))
 const compiledTermioDir = fileURLToPath(new URL('../lib/types/ink/termio', import.meta.url))
 const compiledKernelCatalogPath = fileURLToPath(new URL('../lib/types/components/kernelCatalog.js', import.meta.url))
 const compiledI18nPath = fileURLToPath(new URL('../lib/types/i18n.js', import.meta.url))
+// i18n.js 的字典展开平台文案的唯一真源（C-2），所以它也随镜像走。那个模块本身
+// 零运行期 import（`import type` 已被抹掉），拷一个文件即可。
+const compiledPlatformTextPath = fileURLToPath(new URL('../lib/types/backends/shared/platform-text.js', import.meta.url))
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 
 /**
@@ -110,6 +114,7 @@ function copyUpdateModule(dstDir) {
   mkdirSync(join(dstDir, 'utils'), { recursive: true })
   mkdirSync(join(dstDir, 'components'), { recursive: true })
   mkdirSync(join(dstDir, 'agent'), { recursive: true })
+  mkdirSync(join(dstDir, 'backends', 'shared'), { recursive: true })
   cpSync(compiledModulePath, join(dstDir, 'update.js'))
   cpSync(compiledShellQuotePath, join(dstDir, 'utils', 'shellQuote.js'))
   cpSync(compiledPathsPath, join(dstDir, 'utils', 'paths.js'))
@@ -120,8 +125,10 @@ function copyUpdateModule(dstDir) {
   cpSync(compiledHandoffAckPath, join(dstDir, 'handoffAck.js'))
   // dec.js 拉着 csi/ansi 的序列常量链——整个 termio 目录随镜像走。
   cpSync(compiledTermioDir, join(dstDir, 'ink', 'termio'), { recursive: true })
+  cpSync(compiledStdinHandoffPath, join(dstDir, 'ink', 'stdin-handoff.js'))
   cpSync(compiledKernelCatalogPath, join(dstDir, 'components', 'kernelCatalog.js'))
   cpSync(compiledI18nPath, join(dstDir, 'i18n.js'))
+  cpSync(compiledPlatformTextPath, join(dstDir, 'backends', 'shared', 'platform-text.js'))
 }
 
 // ---- installedTuiVersion: compiled layout is this module's own real layout

@@ -209,6 +209,9 @@ const GROUPS = {
 // 滚动窗口与 shrink 边界。measure-depth 需生产模式（minified #185）。
     ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx']],
     ["verify-scroll", ['node', 'scripts/verify-scroll.mjs']],
+// 流式行离开虚拟窗口时保留实测行高：不得因回落到 2 行估算而塌陷，
+// 不得改写 committed/painted 位置、接回跟随或移动 xterm 中的正文锚点。
+    ["verify-post-shrink-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-post-shrink-anchor.tsx']],
 // 长会话冷/热窗口跳转、绘制边界发布与回底挂载预算（不能等滚轮救活）。
     ['verify-scroll-jumps', ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-jumps.tsx']],
     ['verify-scroll-jumps-narrow', ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-jumps.tsx'], { DSH_TEST_COLUMNS: '60' }],
@@ -501,8 +504,8 @@ const GROUPS = {
 // 端到端：ready 后旧进程不写 1049l，ready 前死亡与旧版 replacement 都只回主屏一次。
     ["verify-handoff-atomic", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-atomic.ts']],
 // 真实 PTY 下的完整交接链：1049h/l 各恰好一次且闭合晚于首帧、旧进程 spawn 前后
-// stdin 无 reader、replacement 的 isTTY/尺寸/raw mode。依次尝试 node-pty、POSIX
-// script、pipe（pipe 档跳过设备断言并注明）；Linux CI 走 script。
+// stdin 分离后不再预读/抢答复、replacement 的 isTTY/尺寸/raw mode。
+// node-pty 与 POSIX script 都应答 DA1；pipe 档跳过设备断言并注明。
     ["verify-handoff-pty-gate", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-pty-gate.mjs']],
 // 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：
 // 全程跑官方读取链——Session.append 生成骨架（turn 配对/reasoning/
@@ -649,6 +652,8 @@ const GROUPS = {
     ["verify-session-artifact-cache", ['node', 'scripts/verify-session-artifact-cache.mjs']],
 // 跨进程首屏快照：不等慢枚举、来源隔离、失败保留、空库清空与迟到守卫。
     ["verify-session-list-snapshot", ['node', 'scripts/verify-session-list-snapshot.mjs']],
+// Web 判空投影：真实注册表读写、旧版字段兼容、注册顺序与上游语义对照。
+    ["verify-session-list-metadata", ['node', '--import', 'tsx/esm', 'scripts/verify-session-list-metadata.ts']],
 // 空会话须完整读取后才能判定：截断/损坏、帧数上限、纯图片输入与旧缓存
 // 不得隐藏真实历史或进入清理名单；真实 JSONL 重开验证落盘后的可见性。
     ['verify-session-emptiness', ['node', '--import', 'tsx/esm', 'scripts/verify-session-emptiness.ts']],

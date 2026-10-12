@@ -2,11 +2,11 @@
  * verify-handoff-stdin — /restart | /update 交接时，父进程必须"只分离、不销毁"
  * 自己的 stdin。
  *
- * 机制与取舍见 src/update.ts 的 detachHandoffStdin。
+ * 机制与取舍见 src/ink/stdin-handoff.ts（update.ts 保留导出）。
  *
  * 用法:node --import tsx/esm scripts/verify-handoff-stdin.ts
  */
-import { readFileSync } from 'node:fs'
+import { createReadStream, readFileSync } from 'node:fs'
 
 import { detachHandoffStdin } from '../src/update.js'
 
@@ -54,6 +54,22 @@ check(
   !stdin.calls.some(call => call.startsWith('destroy')),
   stdin.calls.join(','),
 )
+
+// Redirected input is an fs.ReadStream with no unref(), unlike a console or
+// pipe. CLI update/restart fixtures must still hand off without closing it.
+const fileInput = createReadStream(new URL(import.meta.url))
+try {
+  await new Promise<void>((resolve, reject) => {
+    fileInput.once('open', () => { resolve() })
+    fileInput.once('error', reject)
+  })
+  detachHandoffStdin(fileInput)
+  check('普通文件 stdin 无 unref 也可分离，且保留句柄', !fileInput.destroyed)
+} catch (error) {
+  check('普通文件 stdin 无 unref 也可分离，且保留句柄', false, String(error))
+} finally {
+  fileInput.destroy()
+}
 
 // 交接路径本身:看门狗只能走 detachHandoffStdin，不能再出现 stream.destroy()。
 const source = readFileSync(new URL('../src/update.ts', import.meta.url), 'utf8')

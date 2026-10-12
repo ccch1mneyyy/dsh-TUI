@@ -63,6 +63,7 @@
       "fixtures": [
         "valid-backend-contribution.json",
         "valid-backend-contribution-cli.json",
+        "valid-backend-contribution-trusted.json",
         "invalid-backend-unknown-field.json",
         "invalid-backend-bad-id.json",
         "invalid-backend-key-label.json",
@@ -71,7 +72,7 @@
         "invalid-backend-confirmation-policy.json",
         "invalid-backend-grants-shape.json"
       ],
-      "test": "Backend contribution shape in both backend shapes (SDK peer with an install recipe, system CLI with a pool hook), capability/grants declaration, the refusals, and resume binding semantics",
+      "test": "Backend contribution shape in both backend shapes (SDK peer with an install recipe, system CLI with a pool hook), both implemented confirmation policies (confirm, trusted-source), capability/grants declaration, the refusals, and resume binding semantics",
       "evidence": "automated"
     },
     {

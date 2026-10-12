@@ -36,7 +36,7 @@
 - **Timeline rail** — every turn clickable; timeline / scrollbar / hidden gutter.
 - **Side panel** — `Ctrl+B` splits the chat with a panel column once the terminal is wide enough; drag the divider to resize it. All eight built-in panels are enabled by default. The header shows each inactive panel's symbol; hover to see its name. Narrow terminals and inline mode keep full-screen panels.
 - **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, session cost estimate (main + subagents), Git and session metadata.
-  Context-bar fill follows backend occupancy; colors estimate content composition. Compaction clears obsolete estimates, and missing composition displays a single used block.
+  Context-bar fill follows backend occupancy; colors estimate content composition. Compaction clears obsolete estimates, and missing composition displays a single used block with a measured used count in both hover details.
 - **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.
 - **Session workflow** — `/new` `/compact` `/export` `/btw`, model hot-switch, fork, rewind, vim, fullscreen draft editor.
 - **IDE selection channel** — a VS Code selection lands in the prompt.
@@ -331,7 +331,7 @@ Shortcuts sit below the title and effort levels have their own section; DSH, Cla
 In `/provider`'s model list, focus a model and press `Tab` to edit its context window, max output tokens, reasoning efforts, and image input capability.
 
 The session manager focuses the most recently used session in the current workspace; if there is no history, it focuses the new-session card. Moving between the workspace rail and session list preserves the selected session, including when the mouse enters the list. Switching to another workspace selects its latest session; switching back also starts from its latest session instead of restoring an earlier selection. Press `←` to move to the workspace rail. DST preloads the session list in the background after startup and updates the cache on success. The manager paints the last successful list immediately. Opening `/resume` while that read is pending shares the request and receives results that have already arrived. This first-paint snapshot survives restarts on DSH, Claude and Codex and is isolated by backend and storage directory. With or without a snapshot, all three backends prioritize the current workspace before filling in other workspaces. Fresh sessions and titles merge into the list immediately; cached rows from other workspaces remain until the full read finishes. Background updates preserve a session the user has selected manually. Claude and Codex first request up to 32 recent sessions within their native cwd scope: Claude's SDK includes Git worktrees in the same repository, while Codex matches the session cwd exactly. Codex listings reuse the running connection and read the first 32 regular results alongside the state DB shortcut, then fill in later pages. The browser groups sessions by their own cwd. DSH resolves the current workspace's metadata first and publishes it before reading other workspaces' logs, even when it has fewer than 32 sessions. Titles that require a deeper DSH log scan appear first with a fallback name and update in place when recovery finishes.
-With DSH's current JSONL backend, startup and `/new` keep initial permission events in memory until further session activity or an explicit durability flush saves the complete log. Restarting an unstored empty session starts fresh.
+With DSH's current JSONL backend, startup and `/new` keep initial permission events in memory until further session activity saves the complete log. Flushing a session that holds only initialization leaves it unstored. Restarting an unstored empty session starts fresh.
 Removing a workspace registration keeps its sessions accessible under a "History only" directory in the rail.
 History-only directories offer edit and new-session actions; rename and remove are available for registered workspaces.
 
@@ -344,6 +344,10 @@ Full commands: [Interaction and commands](docs/interaction.en.md).
 ## Configuration & Extensions
 
 Agent presets, themes, MCP servers, environment variables: [Configuration](docs/configuration.en.md) · [Themes](docs/themes.en.md).
+
+With the DeepSeek brand, Companion skins `deepy` and `whaleGirl` replace the maid portrait; choose `whale` and enable Maid portrait to use it. Claude uses its own artwork; Codex uses its own raster portrait or the maid character-art fallback. Both brands ignore these settings for splash artwork. See [Configuration](docs/configuration.en.md).
+
+DSH profiles inherit official reporting defaults: DeepSeek API requests carry plugin package identities and incremental Session logs to the configured `baseURL`, including third-party gateways, while OpenTelemetry uploads a Session-log prefix only after explicit feedback. User overrides remain supported; see [reporting settings](docs/configuration.en.md#official-request-metadata-and-feedback-reporting).
 
 ## How It Works
 
