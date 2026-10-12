@@ -97,30 +97,41 @@ function frame(): Screen {
   assert.equal(getSelectedText(selection(0, 0, 19, 1), joined), 'wrapped line $y$', 'a wrapped row joins its predecessor on copy')
 }
 
-{
+for (const columns of [2, 7]) {
   // An exact-fill separator before an inline formula is hidden on screen,
-  // but survives semantic copy, blitting and drag-to-scroll capture.
-  const rows = layoutInlineMedia(`aaa the ${inlineMediaPlaceholder(0, 2)}`, 7, [2])!
-  assert.equal(rows[1]!.gap, true)
-  assert.deepEqual(rows[1]!.pieces, [{ kind: 'media', index: 0, columns: 2 }])
-  const screen = createScreen(7, 2, stylePool, charPool, hyperlinkPool)
-  const output = new Output({ width: 7, height: 2, stylePool, screen, terminalImages: true })
-  output.write(0, 0, 'aaa the')
+  // or occupies its own row before a full-width formula. Both copy once.
+  const rows = layoutInlineMedia(`aaa the ${inlineMediaPlaceholder(0, columns)}`, 7, [columns])!
+  const height = rows.length
+  const screen = createScreen(7, height, stylePool, charPool, hyperlinkPool)
+  const output = new Output({ width: 7, height, stylePool, screen, terminalImages: true })
   const formula = image('$x$')
-  assert.equal(output.image(formula, 0, 1, 2, 1, source), true)
-  output.imageBacking(formula)
-  output.softWrapRow(1, -rows[0]!.width)
+  rows.forEach((row, index) => {
+    let x = 0
+    for (const piece of row.pieces) {
+      if (piece.kind === 'text') {
+        output.write(x, index, piece.text)
+        x += piece.width
+      } else {
+        assert.equal(output.image(formula, x, index, piece.columns, 1, source), true)
+        output.imageBacking(formula)
+        x += piece.columns
+      }
+    }
+    if (row.continuation) output.softWrapRow(index, (row.gap ? -1 : 1) * rows[index - 1]!.width)
+  })
   const painted = output.get()
-  assert.equal(getSelectedText(selection(0, 0, 6, 1), painted), 'aaa the $x$', 'copy restores the gap before the formula source')
-  assert.equal(getSelectedText(selection(0, 1, 6, 1), painted), '$x$', 'starting on a continuation does not prepend a gap')
-  const blitted = createScreen(7, 2, stylePool, charPool, hyperlinkPool)
-  blitRegion(blitted, painted, 0, 0, 7, 2)
-  assert.equal(getSelectedText(selection(0, 0, 6, 1), blitted), 'aaa the $x$', 'blitting keeps the gap marker')
-  const captured = selection(0, 0, 6, 1)
+  assert.equal(getSelectedText(selection(0, 0, 6, height - 1), painted), 'aaa the $x$', `copy keeps one separator before a ${columns}-column formula`)
+  assert.equal(rows[1]!.gap, columns < 7, 'only a nonblank continuation elides the separator')
+  assert.deepEqual(rows.at(-1)!.pieces, [{ kind: 'media', index: 0, columns }])
+  assert.equal(getSelectedText(selection(0, height - 1, 6, height - 1), painted), '$x$', 'starting on a continuation does not prepend a gap')
+  const blitted = createScreen(7, height, stylePool, charPool, hyperlinkPool)
+  blitRegion(blitted, painted, 0, 0, 7, height)
+  assert.equal(getSelectedText(selection(0, 0, 6, height - 1), blitted), 'aaa the $x$', 'blitting keeps the separator provenance')
+  const captured = selection(0, 0, 6, height - 1)
   captureScrolledRows(captured, painted, 0, 0, 'above')
-  shiftRows(painted, 0, 1, 1)
+  shiftRows(painted, 0, height - 1, 1)
   captured.anchor = { col: 0, row: 0 }
-  captured.focus = { col: 6, row: 0 }
+  captured.focus = { col: 6, row: height - 2 }
   assert.equal(getSelectedText(captured, painted), 'aaa the $x$', 'a captured predecessor keeps the gap on its visible continuation')
 }
 

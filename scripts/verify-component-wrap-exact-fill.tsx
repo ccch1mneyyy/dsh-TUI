@@ -34,11 +34,13 @@ for (const [text, width, expected] of [
   ['aaa the\n PR.', 7, ['aaa the', ' PR.']],
   ['aaa the\n\n  PR.', 7, ['aaa the', '', '  PR.']],
   ['aaa the  PR.', 7, ['aaa the', ' PR.']],
+  ['aaa the abcdefg', 7, ['aaa the', ' ', 'abcdefg']],
+  ['a b', 1, ['a', ' ', 'b']],
   ['你好abc PR.', 7, ['你好abc', 'PR.']],
   ['\x1b[1maaa the PR.\x1b[22m', 7, ['aaa the', 'PR.']],
   ['aaa the \x1b]8;;https://example.com\x07PR.\x1b]8;;\x07', 7, ['aaa the', 'PR.']],
   ['abcdefghi', 7, ['abcdefg', 'hi']],
-  ['aaa the ', 7, ['aaa the', '']],
+  ['aaa the ', 7, ['aaa the', ' ']],
 ] as const) {
   const rows = wrapTextLines(text, width)
   assert.deepEqual(rows.map(row => stripAnsi(row.text)), expected)
@@ -120,6 +122,23 @@ assert.equal(selection.getSelectedText(selected, painted), 'aaa the PR.', 'copy 
 selection.refreshSelectionFingerprint(selected, painted, false)
 painted.softWrap[1] = 9
 assert.equal(selection.refreshSelectionFingerprint(selected, painted, false), true, 'a gap-only change makes the selection stale')
+
+// A separator-only row must retain its width through the row Box path.
+for (const [text, columns] of [['aaa the abcdefg', 7], ['a b', 1]] as const) {
+  const rows = layoutInlineMedia(text, columns, [])!
+  const { screen } = renderToScreen(
+    <Box flexDirection="column">
+      {rows.map((row, index) => <Box key={index} height={1}
+        softWrapContinuation={row.continuation ? (row.gap ? -1 : 1) * rows[index - 1]!.width : undefined}>
+        <Text wrap="truncate">{row.pieces.map(piece => piece.kind === 'text' ? piece.text : '').join('')}</Text>
+      </Box>)}
+    </Box>, columns,
+  )
+  const selected = selection.createSelectionState()
+  selection.startSelection(selected, 0, 0)
+  selection.updateSelection(selected, columns - 1, screen.height - 1)
+  assert.equal(selection.getSelectedText(selected, screen), text, 'pre-wrapped text copies its original separator once')
+}
 
 assert.deepEqual(failures, [])
 

@@ -16,8 +16,9 @@ export function wrapTextLines(
   return text.split('\n').flatMap(sourceLine => {
     const pieces = wrapLine(sourceLine).split('\n')
     return pieces.map((line, index) => {
+      // Blank rows keep their width for copy joins and trailing trim.
       const gap = index > 0 && stringWidth(pieces[index - 1]!) === maxWidth
-        && stripAnsi(line).startsWith(' ')
+        && stripAnsi(line).startsWith(' ') && stringWidth(stripAnsi(line).trim()) > 0
       return {
         text: gap ? sliceAnsi(line, 1, stringWidth(line)) : line,
         continuation: index > 0,
