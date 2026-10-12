@@ -139,6 +139,25 @@ for (const lang of ['en', 'zh']) for (const mode of ['fullscreen', 'inline', 'sp
   await app.unmount(); io.term.dispose()
 }
 applySidePanelOpen(false)
+// A short goal sizes the panel to its text instead of covering the transcript.
+{
+  setLang('en')
+  const io = makeTerm()
+  const channel = makeChannel()
+  channel.goal.objective = 'SHORT_GOAL fits on one line'
+  const app = await render(React.createElement(AlternateScreen, null, React.createElement(Chat, {
+    channel, fullscreen: true, questionStore: new QuestionStore(), onExit() {},
+  })), { stdout: io.stdout, stderr: io.stderr, stdin: io.stdin, exitOnCtrlC: false, patchConsole: false })
+  await settle(() => findText(io.term, 'SHORT_GOAL') !== null)
+  const goalHit = findText(io.term, 'SHORT_GOAL')
+  io.stdin.write(`\x1b[<0;${goalHit.col + 1};${goalHit.row + 1}M\x1b[<0;${goalHit.col + 1};${goalHit.row + 1}m`)
+  check('short goal: click opens details', await settled(() => io.screen().includes(t('goal-details-title'))))
+  const lines = viewportLines(io.term, io.stdout.rows)
+  const hintRow = lines.findIndex(line => line.trim() === t('goal-details-hint'))
+  check('short goal: body is one row tall', hintRow > 0 && lines[hintRow - 1].includes('SHORT_GOAL'))
+  check('short goal: content above details stays visible', io.screen().includes('Explore the uncharted!'))
+  await app.unmount(); io.term.dispose()
+}
 // Keep the panel mounted while a higher-priority prompt takes ownership. Send
 // its first key during the commit, before passive overlay-retirement effects.
 {

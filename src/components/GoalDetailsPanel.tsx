@@ -14,9 +14,15 @@ export function GoalDetailsPanel({ goal, onClose, inputEnabled = true }: {
 }): React.ReactNode {
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { columns } = useTerminalSize()
+  const innerWidth = Math.max(1, columns - 4)
+  const wrappedRows = (text: string) => wrapText(text, innerWidth, 'wrap').split('\n').length
   const hint = t('goal-details-hint')
-  const hintRows = wrapText(hint, Math.max(1, columns - 4), 'wrap').split('\n').length
+  const hintRows = wrappedRows(hint)
   const bodyRows = useOverlayListRows(3 + hintRows)
+  const blockedMessage = goal.phase === 'blocked' ? goal.blockedReason?.message : undefined
+  // A definite height keeps the ScrollBox scrollable; fit it to short goals.
+  const contentRows = wrappedRows(goal.objective) + (blockedMessage === undefined ? 0 : wrappedRows(blockedMessage))
+  const viewportRows = Math.max(1, Math.min(contentRows, bodyRows))
   React.useEffect(() => {
     scrollRef.current?.scrollTo(0)
   }, [goal.objective, goal.blockedReason?.message])
@@ -38,10 +44,10 @@ export function GoalDetailsPanel({ goal, onClose, inputEnabled = true }: {
         <Box height={1} flexShrink={0}>
           <Text color="remember" bold wrap="truncate">{t('goal-details-title')}</Text>
         </Box>
-        <ScrollBox ref={scrollRef} flexDirection="column" height={bodyRows} flexShrink={0}>
+        <ScrollBox ref={scrollRef} flexDirection="column" height={viewportRows} flexShrink={0}>
           <Text wrap="wrap">{goal.objective}</Text>
-          {goal.phase === 'blocked' && goal.blockedReason !== undefined && (
-            <Text color="error" wrap="wrap">{goal.blockedReason.message}</Text>
+          {blockedMessage !== undefined && (
+            <Text color="error" wrap="wrap">{blockedMessage}</Text>
           )}
         </ScrollBox>
         <Box onClick={onClose} flexShrink={0}>
