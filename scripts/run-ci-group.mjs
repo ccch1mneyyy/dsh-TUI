@@ -499,8 +499,8 @@ const GROUPS = {
 // 端到端：ready 后旧进程不写 1049l，ready 前死亡与旧版 replacement 都只回主屏一次。
     ["verify-handoff-atomic", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-atomic.ts']],
 // 真实 PTY 下的完整交接链：1049h/l 各恰好一次且闭合晚于首帧、旧进程 spawn 前后
-// stdin 无 reader、replacement 的 isTTY/尺寸/raw mode。依次尝试 node-pty、POSIX
-// script、pipe（pipe 档跳过设备断言并注明）；Linux CI 走 script。
+// stdin 分离后不再预读/抢答复、replacement 的 isTTY/尺寸/raw mode。
+// node-pty 与 POSIX script 都应答 DA1；pipe 档跳过设备断言并注明。
     ["verify-handoff-pty-gate", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-pty-gate.mjs']],
 // 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：
 // 全程跑官方读取链——Session.append 生成骨架（turn 配对/reasoning/

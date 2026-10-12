@@ -5,9 +5,8 @@
  * replacement 退出时关 1049。断言：
  *
  *   1. replacement 的 stdout 是 TTY、有 columns/rows、能 setRawMode；
- *   2. DA1 查询（ESC[c）能收到回复（图片协议探测的前提；只在 node-pty 下
- *      断言，script 的 PTY 另一端没有终端模拟器应答）；
- *   3. 旧进程 spawn 前后 stdin 上没有 reader，replacement 是唯一读者；
+ *   2. DA1 查询（ESC[c）能收到回复（图片协议探测的前提），无需按键唤醒；
+ *   3. 旧进程曾读过 stdin，分离后即便再次 read(0) 也不抢走 replacement 的回复；
  *   4. 1049h、1049l 各恰好一次，1049l 晚于首帧，过场文案在 alt 屏内。
  *
  * PTY 来源按顺序自动选择（DSH_TUI_PTY_GATE 可指定）：node-pty（Windows 为
@@ -16,7 +15,7 @@
  *
  * 运行：node --import tsx/esm scripts/verify-handoff-pty-gate.mjs
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -27,7 +26,7 @@ const isDriver = process.argv.includes('--pty-driver')
 
 // ── driver：在 PTY 内跑完整交接链 ────────────────────────────────────────
 if (isDriver) {
-  const { restartTui } = await import('../src/update.ts')
+  const { detachHandoffStdin, restartTui } = await import('../src/update.ts')
   const markerPath = process.env.PTY_GATE_MARKER ?? ''
   const { writeSync } = await import('node:fs')
   const attempt = process.env.DSH_TUI_HANDOFF_ATTEMPT ?? ''
@@ -56,6 +55,7 @@ if (isDriver) {
       const cleanup = () => { stdin.removeListener('readable', onReadable); stdin.pause() }
       stdin.pause()
       if (stdin.isTTY !== true) { resolve(undefined); return }
+      stdin.setRawMode(true)
       stdin.on('readable', onReadable)
       process.stdout.write('\u001b[c') // DA1，代表一次能力探测往返
       setTimeout(() => { cleanup(); resolve(saw) }, 1200)
@@ -80,6 +80,16 @@ if (isDriver) {
 
   // 旧进程：先进 1049（相当于它自己的全屏），再跑真实的 restartTui。
   process.stdout.write('\u001b[?1049h\u001b[2J\u001b[H')
+  if (process.stdin.isTTY) {
+    // Like Ink, first use readable-mode input, then detach before the spawn.
+    // A final drain can schedule another _read after pause(): zero listeners
+    // alone does not prevent that read from stealing the child's first reply.
+    process.stdin.setRawMode(true)
+    process.stdin.on('readable', () => { while (process.stdin.read() !== null) {} })
+    process.stdin.read(0)
+    detachHandoffStdin()
+    process.stdin.read(0)
+  }
   const stdinBefore = {
     readable: process.stdin.listenerCount('readable'),
     data: process.stdin.listenerCount('data'),
@@ -92,6 +102,7 @@ if (isDriver) {
   const stdinAfter = {
     readable: process.stdin.listenerCount('readable'),
     data: process.stdin.listenerCount('data'),
+    buffered: process.stdin.readableLength,
   }
   report({ role: 'parent', code, stdinBefore, stdinAfter })
   process.exit(code)
@@ -133,6 +144,7 @@ const env = { ...process.env, PTY_GATE_MARKER: marker, HOME: tmp, USERPROFILE: t
 delete env.DSH_TUI_HANDOFF_ACK_FD
 delete env.DSH_TUI_HANDOFF_SCREEN
 delete env.DSH_TUI_HANDOFF_ATTEMPT
+delete env.DSH_TUI_HOST_ENTRY_PATH // restart this fixture, not an enclosing TUI
 
 const driverCommand = [process.execPath, '--import', 'tsx/esm', selfPath, '--pty-driver']
 let run
@@ -154,12 +166,32 @@ if (provider === 'node-pty') {
   const exit = await new Promise(resolve => term.onExit(() => resolve(true)))
   run = { status: exit ? 0 : 1, stdout: chunks.join('') }
 } else if (provider === 'script') {
-  // script copies its own terminal's size onto the new PTY; run headless (CI)
-  // that is 0x0, so set the same 100x30 the node-pty provider uses.
+  // script supplies the PTY; answer queries on its pipes just as node-pty's
+  // master does, so Linux CI exercises actual reply ownership too.
   const quoted = 'stty cols 100 rows 30 && exec ' + driverCommand.map(part => '"' + part + '"').join(' ')
-  run = spawnSync('script', ['-qec', quoted, marker + '.typescript'], {
-    encoding: 'utf8', timeout: 120000, env, cwd: dirname(selfPath),
+  const child = spawn('script', ['-qec', quoted, marker + '.typescript'], {
+    env, cwd: dirname(selfPath), stdio: ['pipe', 'pipe', 'pipe'],
   })
+  const chunks = []
+  let pending = ''
+  child.stdout.on('data', chunk => {
+    const text = chunk.toString()
+    chunks.push(text)
+    pending += text
+    while (pending.includes('\u001b[c')) {
+      pending = pending.slice(pending.indexOf('\u001b[c') + 3)
+      child.stdin.write('\u001b[?62;1;2;6;9;15;22c')
+    }
+    pending = pending.slice(-2)
+  })
+  child.stdin.on('error', () => {}) // script may close before a late reply
+  child.stderr.on('data', chunk => chunks.push(chunk.toString()))
+  const timeout = setTimeout(() => child.kill('SIGTERM'), 15000)
+  const status = await new Promise((resolve, reject) => {
+    child.once('error', reject)
+    child.once('close', resolve)
+  }).finally(() => { clearTimeout(timeout) })
+  run = { status, stdout: chunks.join('') }
 } else {
   run = spawnSync(driverCommand[0], driverCommand.slice(1), {
     encoding: 'utf8', timeout: 120000, env, cwd: dirname(selfPath),
@@ -169,6 +201,7 @@ if (provider === 'node-pty') {
 const text = run.stdout ?? ''
 const parentReport = existsSync(marker) ? JSON.parse(readFileSync(marker, 'utf8')) : undefined
 const replacementReport = existsSync(marker + '.replacement') ? JSON.parse(readFileSync(marker + '.replacement', 'utf8')) : undefined
+if (parentReport === undefined || replacementReport === undefined) console.error(text)
 
 check('chain: driver completed', run.status === 0, 'status=' + String(run.status))
 check("sequence: 1049h exactly once (the old parent's boot)", (text.match(/\u001b\[\?1049h/g) ?? []).length === 1)
@@ -181,6 +214,8 @@ check('single owner: the old parent holds zero stdin readers across the spawn',
   parentReport?.role === 'parent' && parentReport.stdinBefore.readable === 0 && parentReport.stdinBefore.data === 0
   && parentReport.stdinAfter.readable === 0 && parentReport.stdinAfter.data === 0,
   JSON.stringify(parentReport?.stdinBefore) + '→' + JSON.stringify(parentReport?.stdinAfter))
+check('single owner: no terminal replies accumulated in the detached parent', parentReport?.stdinAfter.buffered === 0,
+  'buffered=' + String(parentReport?.stdinAfter.buffered))
 
 if (provider === 'pipe') {
   note('provider=pipe: no real PTY device available in this environment — TTY facade and DA1 probe assertions are device-gated (sequence/owner invariants still enforced). Run with node-pty installed or on POSIX script for the device-level gate.')
@@ -188,11 +223,7 @@ if (provider === 'pipe') {
   check("tty facade: the replacement's stdout is a real TTY (not a disguised pipe)", replacementReport?.role === 'replacement' && replacementReport.isTTY === true)
   check('tty facade: columns/rows are positive', (replacementReport?.columns ?? 0) >= 40 && (replacementReport?.rows ?? 0) >= 10, JSON.stringify({ c: replacementReport?.columns, r: replacementReport?.rows }))
   check('tty facade: raw mode is available to the replacement', replacementReport?.hasSetRawMode === true)
-  if (provider === 'node-pty') {
-    check('probe round-trip: a DA1 query through the shared console gets a reply (image/kitty/sixel probing premise)', replacementReport?.probeSeen === true, 'probeSeen=' + String(replacementReport?.probeSeen))
-  } else {
-    note('provider=' + provider + ': a real PTY without an emulator on the master side answers no DA1 probe — the round-trip assertion is node-pty-gated (this run still asserts the real-PTY facade).')
-  }
+  check('probe round-trip: a DA1 query through the shared console gets a reply without user input', replacementReport?.probeSeen === true, 'probeSeen=' + String(replacementReport?.probeSeen))
 }
 
 rmSync(tmp, { recursive: true, force: true })

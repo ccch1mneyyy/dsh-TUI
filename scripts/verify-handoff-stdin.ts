@@ -2,7 +2,7 @@
  * verify-handoff-stdin — /restart | /update 交接时，父进程必须"只分离、不销毁"
  * 自己的 stdin。
  *
- * 机制与取舍见 src/update.ts 的 detachHandoffStdin。
+ * 机制与取舍见 src/ink/stdin-handoff.ts（update.ts 保留导出）。
  *
  * 用法:node --import tsx/esm scripts/verify-handoff-stdin.ts
  */
