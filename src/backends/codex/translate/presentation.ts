@@ -12,7 +12,7 @@
  * content (C0 V13); updates keep their unified hunks and real line numbers.
  */
 import type { ContentBlockView } from '../../../agent/events.js'
-import type { ToolFileDiff } from '../../../adapter/ports/channel-view.js'
+import type { ToolFileDiff } from '../../../agent/index.js'
 import type { ToolCallPresentation, ToolPresentationMeta, ToolResultPresentation } from '../../../agent/presentation.js'
 import { displayPath } from '../../shared/display-path.js'
 import { arr, num, rec, str, type Rec } from '../narrow.js'

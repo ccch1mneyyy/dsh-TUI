@@ -13,7 +13,8 @@
 import assert from 'node:assert/strict'
 import type { AgentEvent } from '../src/agent/events.js'
 import type { AgentInput } from '../src/agent/session.js'
-import { setLang, t } from '../src/i18n.js'
+import { setLang } from '../src/i18n.js'
+import { codexText } from '../src/backends/codex/text.js'
 import { FakeRpcError } from './lib/codex-fake-app-server.js'
 import { CWD, openHarness, THREAD, threadAnswer, tick } from './lib/codex-session-harness.js'
 
@@ -65,7 +66,7 @@ const of = <T extends AgentEvent['type']>(events: readonly AgentEvent[], type: T
   h.fake.on('turn/steer', () => { throw new FakeRpcError(-32600, 'cannot steer a compact turn') })
   await h.session.submit(input('s2', 'late steer'), 'steer')
   await h.session.submit(input('s3', 'another'), 'steer')
-  check('a refused steer queues as a follow-up, with one notice', of(h.events(), 'notice').filter(event => event.text === t('codex-steer-fallback')).length === 1)
+  check('a refused steer queues as a follow-up, with one notice', of(h.events(), 'notice').filter(event => event.text === codexText('codex-steer-fallback')).length === 1)
   // `now`: front of the queue + interrupt.
   await h.session.submit(input('n1', 'right now'), 'now')
   await tick()
@@ -113,7 +114,7 @@ const of = <T extends AgentEvent['type']>(events: readonly AgentEvent[], type: T
   await h.session.cancel('user')
   h.clock.advance(15_000)
   await tick()
-  check('forced settle: the turn closes interrupted with a notice, the queue moves on', of(h.events(), 'turn.end').at(-1)?.reason.kind === 'interrupted' && of(h.events(), 'notice').some(event => event.text === t('codex-cancel-forced')) && h.sent('turn/start').at(-1)?.clientUserMessageId === 'q4')
+  check('forced settle: the turn closes interrupted with a notice, the queue moves on', of(h.events(), 'turn.end').at(-1)?.reason.kind === 'interrupted' && of(h.events(), 'notice').some(event => event.text === codexText('codex-cancel-forced')) && h.sent('turn/start').at(-1)?.clientUserMessageId === 'q4')
   // The server's late traffic for the force-settled turn opens no phantom turn.
   const startsBefore = of(h.events(), 'turn.start').length
   const endsBefore = of(h.events(), 'turn.end').length
@@ -153,11 +154,11 @@ const of = <T extends AgentEvent['type']>(events: readonly AgentEvent[], type: T
   const refused = await h.session.submit(input('x1', 'nope'), 'followup')
   check('a failed turn/start: not accepted, with a reason, and discarded', !refused.accepted && refused.reason?.includes('bad input') === true && of(h.events(), 'pending.changed').some(event => event.discarded?.[0] === 'x1'))
   const images = await h.session.submit(input('i1', 'pic', { blocks: [{ type: 'text', text: 'pic' }, { type: 'image' }] }), 'followup').catch((error: unknown) => (error as Error).message)
-  check('image blocks without readable facades are refused explicitly', images === t('codex-image-unreadable', { name: 'i1' }))
+  check('image blocks without readable facades are refused explicitly', images === codexText('codex-image-unreadable', { name: 'i1' }))
   await h.session.dispose()
   check('dispose: unsubscribes and reports disposed', h.sent('thread/unsubscribe')[0]?.threadId === THREAD && h.session.status === 'disposed')
   const after = await h.session.submit(input('z', 'late'), 'followup').catch((error: unknown) => (error as Error).message)
-  check('submit after dispose rejects', after === t('codex-session-closed'))
+  check('submit after dispose rejects', after === codexText('codex-session-closed'))
   check('dispose twice is a no-op', (await h.session.dispose(), true))
 }
 
@@ -179,7 +180,7 @@ const of = <T extends AgentEvent['type']>(events: readonly AgentEvent[], type: T
   h.fake.on('thread/resume', () => threadAnswer({ initialTurnsPage: { data: [{ id: 'turn-1', status: 'completed', itemsView: 'full', items: [{ type: 'userMessage', id: 'item-c1', clientId: 'c1', content: [{ type: 'text', text: 'go', text_elements: [] }] }] }], nextCursor: null } }))
   h.fake.crash({ code: 9 })
   await tick()
-  check('connection lost: the open native turn survives until recovery without a fabricated failure', of(h.events(), 'turn.end').length === 0 && of(h.events(), 'notice').some(event => event.text === t('codex-connection-lost')) && h.session.status === 'running')
+  check('connection lost: the open native turn survives until recovery without a fabricated failure', of(h.events(), 'turn.end').length === 0 && of(h.events(), 'notice').some(event => event.text === codexText('codex-connection-lost')) && h.session.status === 'running')
   await h.session.submit(input('q2', 'while down'), 'followup')
   h.clock.advance(500)
   await tick()
@@ -187,7 +188,7 @@ const of = <T extends AgentEvent['type']>(events: readonly AgentEvent[], type: T
   await tick()
   await tick()
   check('restore: the thread is resumed on the new child', h.fake.requests.filter(request => request.method === 'thread/resume' && request.generation === 2).length === 1)
-  check('restore: a reconnected notice and the queue drains', of(h.events(), 'notice').some(event => event.text === t('codex-reconnected')) && h.sent('turn/start').at(-1)?.clientUserMessageId === 'q1')
+  check('restore: a reconnected notice and the queue drains', of(h.events(), 'notice').some(event => event.text === codexText('codex-reconnected')) && h.sent('turn/start').at(-1)?.clientUserMessageId === 'q1')
   await h.session.dispose()
 }
 

@@ -36,7 +36,8 @@ type Rec = Record<string, unknown>
 type Clock = ReturnType<typeof manualClock>
 const runtimeRoot = process.env.CODEX_TEST_SOURCE_ROOT ?? fileURLToPath(new URL('../', import.meta.url))
 const moduleUrl = (path: string): string => pathToFileURL(resolve(runtimeRoot, path)).href
-const { setLang, t } = await import(moduleUrl('src/i18n.js')) as typeof import('../src/i18n.js')
+const { getLang, setLang } = await import(moduleUrl('src/i18n.js')) as typeof import('../src/i18n.js')
+const { codexText } = await import(moduleUrl('src/backends/codex/text.js')) as typeof import('../src/backends/codex/text.js')
 const { createCodexHub } = await import(moduleUrl('src/backends/codex/rpc/hub.js')) as typeof import('../src/backends/codex/rpc/hub.js')
 const { createCodexSideQuery } = await import(moduleUrl('src/backends/codex/session/side-query.js')) as typeof import('../src/backends/codex/session/side-query.js')
 const { createCodexActivity } = await import(moduleUrl('src/backends/codex/session/activity.js')) as typeof import('../src/backends/codex/session/activity.js')
@@ -161,7 +162,7 @@ await scenario('side query server error, interrupted cancel, closed and timeout 
     check('signal cancellation unsubscribes the child', paramsOf(fake, 'thread/unsubscribe').at(-1)?.threadId, CHILD)
 
     const closed = await sideDeps(hub, clock, true).ask('closed')
-    check('closed session rejects before fork', closed.error, t('codex-session-closed'))
+    check('closed session rejects before fork', closed.error, codexText('codex-session-closed'))
 
     const debug: string[] = []
     const after = fake.requests.length
@@ -193,7 +194,7 @@ await scenario('activity narrates native milestones and never re-narrates settle
   // narrating it — that showed the same sentence twice at once, under the
   // spinner AND as the reply's first message.
   check('settled commentary never appears as a working line', views.filter(view => view.line === 'Checking the files.').length, 0)
-  check('working line stays on the thinking copy after commentary settles', views.at(-1)?.line, t('codex-working-thinking'))
+  check('working line stays on the thinking copy after commentary settles', views.at(-1)?.line, codexText('codex-working-thinking'))
   activity.notification('item/started', { item: { type: 'commandExecution', command: 'pwsh -NoLogo -c ls', commandActions: [] } })
   check('command milestone is narrated', views.at(-1)?.line.includes('ls') && views.at(-1)?.phase === 'tool')
   activity.notification('item/completed', { item: { type: 'commandExecution' } })
@@ -201,7 +202,7 @@ await scenario('activity narrates native milestones and never re-narrates settle
   check('file milestone is narrated', views.at(-1)?.line.includes('a.ts') && views.at(-1)?.phase === 'tool')
   activity.notification('item/completed', { item: { type: 'fileChange' } })
   activity.notification('item/started', { item: { type: 'collabAgentToolCall' } })
-  check('subagent wait milestone is narrated', views.at(-1)?.line === t('codex-working-subagents'))
+  check('subagent wait milestone is narrated', views.at(-1)?.line === codexText('codex-working-subagents'))
   activity.notification('item/completed', { item: { type: 'collabAgentToolCall' } })
   check('tool completion increments count', views.at(-1)?.toolCount, 3)
   unsubscribe()
@@ -217,9 +218,9 @@ await scenario('activity waiting timers are bounded and never fake-stall tools o
   activity.capability.subscribe(view => views.push(view))
   activity.notification('turn/started', {})
   clock.advance(29_999)
-  check('waiting warning not early', views.at(-1)?.line, t('codex-working-thinking'))
+  check('waiting warning not early', views.at(-1)?.line, codexText('codex-working-thinking'))
   clock.advance(1)
-  check('30s model waiting line appears', views.at(-1)?.line, t('codex-model-waiting'))
+  check('30s model waiting line appears', views.at(-1)?.line, codexText('codex-model-waiting'))
   activity.notification('thread/status/changed', { status: { type: 'active', activeFlags: ['waitingOnApproval'] } })
   clock.advance(120_000)
   check('requires-action never emits stalled warning', emitted.filter(event => event.key === 'codex-model-stalled').length, 0)
@@ -281,7 +282,7 @@ await scenario('side query owner close and late fork cleanup', async () => {
     check('owner close sends child interrupt', paramsOf(fake, 'turn/interrupt').at(-1)?.turnId, 'owner-turn')
     check('owner close cleans child subscription and sink', paramsOf(fake, 'thread/unsubscribe').at(-1)?.threadId === CHILD && !attached.has(CHILD))
     check('owner close clears all request and query timers', clock.pending(), 0)
-    check('closed runtime refuses new side query', (await runtime.capability.ask('closed')).error, t('codex-session-closed'))
+    check('closed runtime refuses new side query', (await runtime.capability.ask('closed')).error, codexText('codex-session-closed'))
 
     let forkId: number | string | undefined
     fake.on('thread/fork', (_params, request) => { forkId = request.id; return NO_REPLY })
@@ -386,7 +387,7 @@ await scenario('real session side isolation dispose and output-before-result wir
   const sharedRetain = hub.retain()
   let session: Awaited<ReturnType<typeof openCodexSession>> | undefined
   try {
-    session = await openCodexSession({ hub, release: hub.retain(), target: { kind: 'create', cwd: '/TMP/cwd' }, cwd: '/TMP/cwd', prefs: memoryCodexPrefs({}), config: {}, executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug() {} }, clock, now: clock.now })
+    session = await openCodexSession({ hub, release: hub.retain(), target: { kind: 'create', cwd: '/TMP/cwd' }, cwd: '/TMP/cwd', prefs: memoryCodexPrefs({}), config: {}, executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug() {}, locale: getLang }, clock, now: clock.now })
     const events: AgentEvent[] = []
     session.subscribe(batch => events.push(...batch))
     await settle()

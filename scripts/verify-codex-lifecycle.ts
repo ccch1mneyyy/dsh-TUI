@@ -22,7 +22,8 @@ const { openCodexSession } = await fromSource('backends/codex/session/session.js
 const { memoryCodexPrefs, fileCodexPrefs } = await fromSource('backends/codex/prefs.js') as typeof import('../src/backends/codex/prefs.js')
 const { dataUrlImageFacade, CODEX_IMAGE_LIMITS } = await fromSource('backends/codex/session/images.js') as typeof import('../src/backends/codex/session/images.js')
 const { CLIENT, NOTIFY } = await fromSource('backends/codex/protocol/index.js') as { CLIENT: Readonly<Record<string, string>>; NOTIFY: Readonly<Record<string, string>> }
-const { setLang, t } = await fromSource('i18n.js') as typeof import('../src/i18n.js')
+const { getLang, setLang } = await fromSource('i18n.js') as typeof import('../src/i18n.js')
+const { codexText } = await fromSource('backends/codex/text.js') as typeof import('../src/backends/codex/text.js')
 setLang('en')
 type Rec = Record<string, unknown>
 const asRec = (value: unknown): Rec | undefined => typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
@@ -95,7 +96,7 @@ async function fixture(options: {
   const release = hub.retain()
   let session: AgentSession
   try {
-    session = await openCodexSession({ hub, release: () => { releases += 1; release() }, target: options.resume === undefined ? { kind: 'create', cwd: CWD } : { kind: 'resume', sessionId: THREAD }, cwd: CWD, prefs, config: {}, executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug: line => debug.push(line) }, clock })
+    session = await openCodexSession({ hub, release: () => { releases += 1; release() }, target: options.resume === undefined ? { kind: 'create', cwd: CWD } : { kind: 'resume', sessionId: THREAD }, cwd: CWD, prefs, config: {}, executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug: line => debug.push(line), locale: getLang }, clock })
   } catch (error) { await hub.close(); throw error }
   const events: AgentEvent[] = []
   const off = session.subscribe(batch => events.push(...batch))
@@ -227,7 +228,7 @@ await scenario('Plan clear-context rebinds every subsequent lifecycle action', a
     assert.ok(event?.type === 'question.request')
     const question: QuestionRequestView = event.request
     const after = f.fake.requests.length
-    f.session.capabilities.questions!.respond(question.requestId, { answers: [{ selected: [t('codex-plan-clear')] }] })
+    f.session.capabilities.questions!.respond(question.requestId, { answers: [{ selected: [codexText('codex-plan-clear')] }] })
     await f.fake.waitForRequest(CLIENT.threadStart, { after })
     await f.fake.waitForRequest(CLIENT.turnStart, { after })
     await tick()
@@ -280,7 +281,7 @@ await scenario('Post-open initialization failure releases subscription and hub r
   const release = hub.retain()
   try {
     let error: unknown
-    try { await openCodexSession({ hub, release: () => { released += 1; release() }, target: { kind: 'create', cwd: CWD }, cwd: CWD, prefs: memoryCodexPrefs({ plan: true }), config: {}, executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug: () => undefined }, clock }) } catch (caught) { error = caught }
+    try { await openCodexSession({ hub, release: () => { released += 1; release() }, target: { kind: 'create', cwd: CWD }, cwd: CWD, prefs: memoryCodexPrefs({ plan: true }), config: {}, executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug: () => undefined, locale: getLang }, clock }) } catch (caught) { error = caught }
     check('post-open initialization failure rejects rather than leaking a session', error instanceof Error && error.message.includes('fixture initialization failed'))
     check('post-open initialization failure unsubscribes opened thread and releases exactly once', released === 1 && fake.requests.some(request => request.method === CLIENT.threadUnsubscribe && request.params.threadId === THREAD))
     clock.advance(30_000)

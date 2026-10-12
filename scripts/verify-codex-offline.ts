@@ -19,6 +19,7 @@ const { prepareCodexRuntime, codexBackend, openCodexBackendSession } = await imp
 const { openCodexSession } = await import('../src/backends/codex/session/session.js')
 const { closeAllCodexHubs } = await import('../src/backends/codex/rpc/hub.js')
 const { memoryCodexPrefs } = await import('../src/backends/codex/prefs.js')
+const { getLang } = await import('../src/i18n.js')
 const { CLIENT } = await import('../src/backends/codex/protocol/index.js')
 const { rec, str } = await import('../src/backends/codex/narrow.js')
 let checks = 0
@@ -38,7 +39,7 @@ try {
     assert.notEqual(method, CLIENT.turnStart, 'offline smoke never starts a model turn')
     return call(method, params, options)
   }
-  session = await openCodexSession({ ...runtime, target: { kind: 'create', cwd: sandbox.cwd }, prefs: memoryCodexPrefs(), host: { debug: () => undefined } })
+  session = await openCodexSession({ ...runtime, target: { kind: 'create', cwd: sandbox.cwd }, prefs: memoryCodexPrefs(), host: { debug: () => undefined, locale: getLang } })
   release = undefined
   check('real native thread created', session.ref.sessionId !== '' && session.ref.backendId === 'codex')
   const id = session.ref.sessionId

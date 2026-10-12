@@ -11,8 +11,8 @@
  * (debug-logged), never fatal.
  */
 import type { AgentEvent, AgentEventMeta } from '../../../agent/events.js'
-import type { TodoPanelItem } from '../../../adapter/ports/channel-view.js'
-import { t } from '../../../i18n.js'
+import type { TodoPanelItem } from '../../../agent/index.js'
+import { codexText } from '../text.js'
 import { modeIdOf } from '../modes.js'
 import { arr, num, rec, str, text, type Rec } from '../narrow.js'
 import { NOTIFY } from '../protocol/index.js'
@@ -201,7 +201,7 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
             out.push({ type: 'session.status', status: 'idle' })
             return out
           case 'systemError':
-            out.push({ type: 'session.status', status: 'idle' }, { type: 'notice', level: 'error', key: 'codex-system-error', text: t('codex-system-error') })
+            out.push({ type: 'session.status', status: 'idle' }, { type: 'notice', level: 'error', key: 'codex-system-error', text: codexText('codex-system-error') })
             return out
           default:
             return out
@@ -245,7 +245,7 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
         ctx.model = to
         out.push(
           { type: 'model.changed', model: to, source: 'fallback' },
-          { type: 'notice', level: 'warning', key: 'reroute', text: t('codex-rerouted', { from: str(params.fromModel) ?? '', to, reason: str(params.reason) ?? '' }) },
+          { type: 'notice', level: 'warning', key: 'reroute', text: codexText('codex-rerouted', { from: str(params.fromModel) ?? '', to, reason: str(params.reason) ?? '' }) },
         )
         return out
       }
@@ -267,7 +267,7 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
         return out
       }
       case NOTIFY.strictReviewRequired:
-        out.push({ type: 'notice', level: 'info', key: 'strict-review', text: t('codex-strict-review') })
+        out.push({ type: 'notice', level: 'info', key: 'strict-review', text: codexText('codex-strict-review') })
         return out
       case NOTIFY.threadCompacted:
         if (!ctx.compactionSeen) out.push({ type: 'compaction.end', ok: true, contextReplaced: true, time: now })
@@ -275,7 +275,7 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
       case NOTIFY.threadClosed:
       case NOTIFY.threadArchived:
       case NOTIFY.threadDeleted:
-        out.push({ type: 'notice', level: 'warning', key: 'thread-state', text: t(method === NOTIFY.threadClosed ? 'codex-thread-closed' : method === NOTIFY.threadArchived ? 'codex-thread-archived' : 'codex-thread-deleted') })
+        out.push({ type: 'notice', level: 'warning', key: 'thread-state', text: codexText(method === NOTIFY.threadClosed ? 'codex-thread-closed' : method === NOTIFY.threadArchived ? 'codex-thread-archived' : 'codex-thread-deleted') })
         return out
       case NOTIFY.mcpServerStartupStatusUpdated: {
         const notice = mcpStartupNotice(params)
@@ -294,8 +294,8 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
           level: 'info',
           key: `hook:${id}`,
           text: method === NOTIFY.hookStarted
-            ? t('codex-hook-started', { event })
-            : t(status === 'failed' || status === 'blocked' ? 'codex-hook-failed' : 'codex-hook-done', { event, duration: duration === undefined ? '' : `${Math.round(duration)} ms` }),
+            ? codexText('codex-hook-started', { event })
+            : codexText(status === 'failed' || status === 'blocked' ? 'codex-hook-failed' : 'codex-hook-done', { event, duration: duration === undefined ? '' : `${Math.round(duration)} ms` }),
         })
         return out
       }

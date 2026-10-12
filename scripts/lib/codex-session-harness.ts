@@ -12,6 +12,7 @@ import { memoryCodexPrefs, type CodexPrefsData } from '../../src/backends/codex/
 import type { RpcClock } from '../../src/backends/codex/rpc/client.js'
 import { createCodexHub, type CodexHub } from '../../src/backends/codex/rpc/hub.js'
 import { openCodexSession } from '../../src/backends/codex/session/session.js'
+import { getLang } from '../../src/i18n.js'
 import { createFakeAppServer, NO_REPLY, type FakeAppServer } from './codex-fake-app-server.js'
 
 type Rec = Record<string, unknown>
@@ -95,7 +96,7 @@ export async function openHarness(options: { readonly prefs?: CodexPrefsData; re
     prefs: memoryCodexPrefs(options.prefs ?? {}),
     config: {},
     executable: { path: '/fake/codex', source: 'env', version: '0.160.1' },
-    host: { debug: line => debug.push(line) },
+    host: { debug: line => debug.push(line), locale: getLang },
     clock,
     forceSettleMs: options.forceSettleMs ?? 15_000,
   })

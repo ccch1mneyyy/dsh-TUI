@@ -23,7 +23,7 @@ import { randomUUID } from 'node:crypto'
 import type { AgentEvent, AgentEventMeta } from '../../../agent/events.js'
 import type { AgentSessionRef } from '../../../agent/refs.js'
 import type { AgentInput, AgentSession, AgentSessionStatus, CancelCause, SubmitPlacement } from '../../../agent/session.js'
-import { t } from '../../../i18n.js'
+import { codexText, installCodexLocale } from '../text.js'
 import { CODEX_BACKEND_ID, codexVersionDrift, VALIDATED_CODEX_VERSIONS } from '../contract.js'
 import { CODEX_MODE_PARAMS, DEFAULT_CODEX_MODE, isCodexModeId, modeIdOf } from '../modes.js'
 import { arr, errorText, num, rec, str, text, type Rec } from '../narrow.js'
@@ -81,8 +81,8 @@ export function openedThread(response: Rec, fallbackCwd: string): OpenedThread {
 /** A JSON-RPC failure of the open as a user-facing sentence (C0 V15). */
 export function openFailureText(error: unknown, threadId: string | undefined): string {
   const message = errorText(error)
-  if (/already has an active writer/iu.test(message)) return t('codex-thread-busy', { id: threadId ?? '' })
-  if (threadId !== undefined && rpcCode(error) === RPC_ERROR.invalidRequest) return t('codex-resume-not-found', { id: threadId, err: message })
+  if (/already has an active writer/iu.test(message)) return codexText('codex-thread-busy', { id: threadId ?? '' })
+  if (threadId !== undefined && rpcCode(error) === RPC_ERROR.invalidRequest) return codexText('codex-resume-not-found', { id: threadId, err: message })
   return message
 }
 
@@ -90,6 +90,11 @@ export function openFailureText(error: unknown, threadId: string | undefined): s
  *  user-facing sentence when the thread cannot be opened; the hub retain is
  *  released then. */
 export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSession> {
+  // This backend's own copy follows the host's language (B-5): a session the
+  // host opened has already installed it in `detect()`/`open()`, and a caller
+  // that builds the deps itself (a regression fixture) says so here or keeps
+  // the documented `zh` fallback.
+  if (deps.host.locale !== undefined) installCodexLocale(deps.host.locale)
   const { hub } = deps
   const clock = deps.clock ?? REAL_CLOCK
   const debug = deps.host.debug
@@ -135,7 +140,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
   if (opened.threadId === '') {
     detach?.()
     deps.release()
-    throw new Error(t('codex-open-failed', { err: 'no thread id' }))
+    throw new Error(codexText('codex-open-failed', { err: 'no thread id' }))
   }
   let threadId = opened.threadId
 
@@ -249,7 +254,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
   const output = createToolOutputBuffer(events => emit(events, 'frame'), clock)
   const submitText = async (text: string): Promise<void> => {
     const result = await input.submit({ text, clientMessageId: randomUUID() }, 'followup')
-    if (!result.accepted) throw new Error(result.reason ?? t('codex-turn-start-failed', { err: '' }))
+    if (!result.accepted) throw new Error(result.reason ?? codexText('codex-turn-start-failed', { err: '' }))
   }
   const controls = createCodexControls({
     hub, prefs: deps.prefs, ctx, settings, cwd: opened.cwd,
@@ -316,7 +321,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
   async function clearContext(plan: string): Promise<void> {
     const response = rec(await hub.call(CLIENT.threadStart, { cwd: opened.cwd, ...resumeOverrides() })) ?? {}
     const next = openedThread(response, opened.cwd)
-    if (next.threadId === '') throw new Error(t('codex-open-failed', { err: 'no thread id' }))
+    if (next.threadId === '') throw new Error(codexText('codex-open-failed', { err: 'no thread id' }))
     const previous = threadId
     approvals.withdrawAll()
     authBridge?.withdrawAll()
@@ -364,7 +369,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
     diagnostic(entry): void {
       if (entry.kind === 'stderr' && /bubblewrap/iu.test(entry.message)) {
         bubblewrapWarned = true
-        if (process.platform === 'linux' && settings.permissionMode !== 'full-access') emit([{ type: 'notice', level: 'warning', key: 'codex-bwrap', text: t('codex-bwrap-warning') }])
+        if (process.platform === 'linux' && settings.permissionMode !== 'full-access') emit([{ type: 'notice', level: 'warning', key: 'codex-bwrap', text: codexText('codex-bwrap-warning') }])
       }
     },
     notification(method: string, params: Rec): void {
@@ -470,7 +475,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
         // ever drain that queue, so parking forever would lie to the user.
         ...(permanent ? live.forceClose({ kind: 'error', message: errorText(error) }) : []),
         ...(permanent ? input.permanentLoss() : input.connectionLost()),
-        { type: 'notice', level: permanent ? 'error' : 'warning', key: 'codex-connection', text: permanent ? t('codex-connection-failed', { err: errorText(error) }) : t('codex-connection-lost') },
+        { type: 'notice', level: permanent ? 'error' : 'warning', key: 'codex-connection', text: permanent ? codexText('codex-connection-failed', { err: errorText(error) }) : codexText('codex-connection-lost') },
         { type: 'session.status', status: !permanent && ctx.turnOpen ? 'running' : 'idle' },
       ])
     },
@@ -504,8 +509,8 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
           permanentlyLost = true
           rejoining = false
           reconnectHeld.length = 0
-          emit([...live.forceClose({ kind: 'error', message: t('codex-reconnect-incomplete') }),
-            { type: 'notice', level: 'warning', key: 'codex-connection', text: t('codex-reconnect-incomplete') },
+          emit([...live.forceClose({ kind: 'error', message: codexText('codex-reconnect-incomplete') }),
+            { type: 'notice', level: 'warning', key: 'codex-connection', text: codexText('codex-reconnect-incomplete') },
             { type: 'session.status', status: 'idle' }])
         }
         while (cursor !== undefined && !atKnownTurn()) {
@@ -550,7 +555,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
         history.reset({ ...response, initialTurnsPage: { data: turns, nextCursor: cursor } })
         connected = true
         if (active !== undefined) input.onTurnStarted(active)
-        emit([{ type: 'notice', level: 'info', key: 'codex-connection', text: t('codex-reconnected') }, { type: 'session.status', status: active === undefined ? 'idle' : 'running' }])
+        emit([{ type: 'notice', level: 'info', key: 'codex-connection', text: codexText('codex-reconnected') }, { type: 'session.status', status: active === undefined ? 'idle' : 'running' }])
         for (const deliver of reconnectHeld.splice(0)) deliver()
         await tasks.refresh()
         if (!current() || !connected) return
@@ -569,7 +574,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
         reconnectHeld.length = 0
         emit([...live.forceClose({ kind: 'error', message: errorText(error) }),
           ...input.permanentLoss(),
-          { type: 'notice', level: 'error', key: 'codex-connection', text: t('codex-connection-failed', { err: errorText(error) }) },
+          { type: 'notice', level: 'error', key: 'codex-connection', text: codexText('codex-connection-failed', { err: errorText(error) }) },
           { type: 'session.status', status: 'idle' }])
       })
     },
@@ -587,7 +592,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       const { view, reached } = rateLimitOf(params)
       const events: AgentEvent[] = []
       if (view !== undefined) events.push({ type: 'rate-limit', info: view })
-      if (reached !== undefined) events.push({ type: 'notice', level: 'warning', key: 'codex-rate-limit', text: t('codex-rate-limit-reached', { kind: reached }) })
+      if (reached !== undefined) events.push({ type: 'notice', level: 'warning', key: 'codex-rate-limit', text: codexText('codex-rate-limit-reached', { kind: reached }) })
       emit(events)
       return
     }
@@ -595,7 +600,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       const summary = str(params.summary) ?? str(params.message) ?? ''
       if (method === NOTIFY.configWarning && /bubblewrap/iu.test(summary)) {
         bubblewrapWarned = true
-        if (process.platform === 'linux' && settings.permissionMode !== 'full-access') emit([{ type: 'notice', level: 'warning', key: 'codex-bwrap', text: t('codex-bwrap-warning') }])
+        if (process.platform === 'linux' && settings.permissionMode !== 'full-access') emit([{ type: 'notice', level: 'warning', key: 'codex-bwrap', text: codexText('codex-bwrap-warning') }])
         return
       }
       const notice = warningNotice(method, params)
@@ -620,7 +625,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
     ...(version === undefined ? {} : { backendVersion: version }),
   }])
   for (const notice of deps.startNotices ?? []) emit([{ type: 'notice', level: 'warning', text: notice }])
-  if (drift !== undefined) emit([{ type: 'notice', level: 'warning', key: 'codex-drift', text: t('codex-version-drift', { version: drift, validated: VALIDATED_CODEX_VERSIONS.join(', ') }) }])
+  if (drift !== undefined) emit([{ type: 'notice', level: 'warning', key: 'codex-drift', text: codexText('codex-version-drift', { version: drift, validated: VALIDATED_CODEX_VERSIONS.join(', ') }) }])
   emit([{ type: 'mode.changed', modeId: opened.modeId }], 'none')
   const rememberedColor = deps.prefs.read().colors?.[threadId]
   if (rememberedColor !== undefined) emit([{ type: 'session.color', color: rememberedColor }], 'none')
@@ -660,10 +665,10 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       fork: {
         async fork(anchor, title) {
           const lastTurnId = anchor === undefined ? undefined : ctx.anchorTurns.get(anchor) ?? str(history.turns.find(turn => arr(turn.items).some(item => str(rec(item)?.id) === anchor))?.id)
-          if (anchor !== undefined && lastTurnId === undefined) throw new Error(t('codex-anchor-missing'))
+          if (anchor !== undefined && lastTurnId === undefined) throw new Error(codexText('codex-anchor-missing'))
           const response = rec(await hub.call(CLIENT.threadFork, { threadId, excludeTurns: true, ...(lastTurnId === undefined ? {} : { lastTurnId }) }))
           const id = str(rec(response?.thread)?.id)
-          if (id === undefined) throw new Error(t('codex-open-failed', { err: 'no thread id' }))
+          if (id === undefined) throw new Error(codexText('codex-open-failed', { err: 'no thread id' }))
           if (title !== undefined) await hub.call(CLIENT.threadNameSet, { threadId: id, name: title })
           await hub.call(CLIENT.threadUnsubscribe, { threadId: id })
           return { backendId: CODEX_BACKEND_ID, sessionId: id }
@@ -671,19 +676,19 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       },
       rewind: {
         async rewind(anchor, mode) {
-          if (mode !== 'conversation') return { kind: 'refused', reason: t('codex-rewind-files-unsupported') }
+          if (mode !== 'conversation') return { kind: 'refused', reason: codexText('codex-rewind-files-unsupported') }
           const selected = ctx.anchorTurns.get(anchor) ?? str(history.turns.find(turn => arr(turn.items).some(item => str(rec(item)?.id) === anchor))?.id)
-          if (selected === undefined) return { kind: 'refused', reason: t('codex-anchor-missing') }
-          if (input.busy()) return { kind: 'refused', reason: t('codex-command-idle') }
+          if (selected === undefined) return { kind: 'refused', reason: codexText('codex-anchor-missing') }
+          if (input.busy()) return { kind: 'refused', reason: codexText('codex-command-idle') }
           const previous = history.previousTurnId(anchor)
           const retained = history.turns
           const index = retained.findIndex(turn => str(turn.id) === selected)
-          if (previous === undefined && (index < 0 || history.capability.hasOlder())) return { kind: 'refused', reason: t('codex-rewind-load-older') }
+          if (previous === undefined && (index < 0 || history.capability.hasOlder())) return { kind: 'refused', reason: codexText('codex-rewind-load-older') }
           const response = rec(await hub.call(previous === undefined ? CLIENT.threadStart : CLIENT.threadFork, previous === undefined
             ? { cwd: opened.cwd, ...resumeOverrides() }
             : { threadId, lastTurnId: previous, excludeTurns: true, ...resumeOverrides() }))
           const id = str(rec(response?.thread)?.id)
-          if (id === undefined) throw new Error(t('codex-open-failed', { err: 'no thread id' }))
+          if (id === undefined) throw new Error(codexText('codex-open-failed', { err: 'no thread id' }))
           await hub.call(CLIENT.threadUnsubscribe, { threadId: id })
           return { kind: 'rewound', session: { backendId: CODEX_BACKEND_ID, sessionId: id } }
         },
@@ -711,13 +716,13 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       pendingRetraction: { remove: id => input.remove(id) },
       diagnostics: {
         lines: (): readonly string[] => [
-          t('codex-doctor-cli', { path: deps.executable.path, source: deps.executable.source, version: version ?? t('doctor-unknown') }),
-          ...(drift === undefined ? [] : [t('codex-version-drift', { version: drift, validated: VALIDATED_CODEX_VERSIONS.join(', ') })]),
-          t('codex-doctor-home', { home: hub.info?.codexHome ?? t('doctor-unknown') }),
-          t('codex-doctor-thread', { id: threadId, provider: opened.provider === '' ? t('doctor-unknown') : opened.provider, model: settings.model === '' ? t('doctor-unknown') : settings.model }),
-          t('codex-doctor-mode', { mode: settings.modeId }),
-          ...(connected ? [] : [t('codex-connection-lost')]),
-          ...((bubblewrapWarned || hub.bubblewrapMissing || deps.doctor?.bubblewrapMissing === true) && process.platform === 'linux' ? [t('codex-doctor-bubblewrap')] : []),
+          codexText('codex-doctor-cli', { path: deps.executable.path, source: deps.executable.source, version: version ?? codexText('doctor-unknown') }),
+          ...(drift === undefined ? [] : [codexText('codex-version-drift', { version: drift, validated: VALIDATED_CODEX_VERSIONS.join(', ') })]),
+          codexText('codex-doctor-home', { home: hub.info?.codexHome ?? codexText('doctor-unknown') }),
+          codexText('codex-doctor-thread', { id: threadId, provider: opened.provider === '' ? codexText('doctor-unknown') : opened.provider, model: settings.model === '' ? codexText('doctor-unknown') : settings.model }),
+          codexText('codex-doctor-mode', { mode: settings.modeId }),
+          ...(connected ? [] : [codexText('codex-connection-lost')]),
+          ...((bubblewrapWarned || hub.bubblewrapMissing || deps.doctor?.bubblewrapMissing === true) && process.platform === 'linux' ? [codexText('codex-doctor-bubblewrap')] : []),
         ],
       },
     },
@@ -737,8 +742,8 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       return () => { listeners.delete(listener) }
     },
     submit(next: AgentInput, placement: SubmitPlacement) {
-      if (disposing) return Promise.reject(new Error(t('codex-session-closed')))
-      if (permanentlyLost) return Promise.reject(new Error(t('codex-connection-failed', { err: '' })))
+      if (disposing) return Promise.reject(new Error(codexText('codex-session-closed')))
+      if (permanentlyLost) return Promise.reject(new Error(codexText('codex-connection-failed', { err: '' })))
       planReview.withdraw()
       return commands.submit(next, placement).then(result => result ?? input.submit(next, placement))
     },

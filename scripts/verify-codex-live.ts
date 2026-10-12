@@ -110,8 +110,11 @@ try {
   const { closeAllCodexHubs } = await fromSource('backends/codex/rpc/hub.js') as typeof import('../src/backends/codex/rpc/hub.js')
   closeAll = closeAllCodexHubs
   const { createProjectorHarness } = await import('./lib/projector-harness.js')
-  fileCodexPrefs().write({ model, effort: 'low', mode: 'auto' })
-  const host = { cwd: live.cwd, debug: (line: string) => debug.push(safe(line)), warn: () => undefined, stderr: (line: string) => debug.push('[stderr] ' + safe(line)) }
+  // The backend's own directory, as a real host hands it over (`<DATA_DIR>/backends/<id>`):
+  // prefs are no longer read from a module-level default (D2, B-5).
+  const dataDir = join(isolatedHome, '.dsh-tui', 'backends', 'codex')
+  fileCodexPrefs(dataDir).write({ model, effort: 'low', mode: 'auto' })
+  const host = { cwd: live.cwd, dataDir, locale: () => 'en' as const, debug: (line: string) => debug.push(safe(line)), warn: () => undefined, stderr: (line: string) => debug.push('[stderr] ' + safe(line)) }
   const detection = await codexBackend.detect(host)
   check('detect: installed, a version, credentials judged without a network call', detection.installed && typeof detection.version === 'string', detection)
   const executable = await resolveCodexExecutable()

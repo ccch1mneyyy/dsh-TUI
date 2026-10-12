@@ -6,7 +6,8 @@ import { createCodexGoals, codexGoalEvent } from '../src/backends/codex/session/
 import { createCodexTasks, CODEX_TASK_OUTPUT_BYTES, CODEX_TASK_POLL_MS } from '../src/backends/codex/session/tasks.js'
 import { CLIENT, NOTIFY } from '../src/backends/codex/protocol/index.js'
 import { CodexRpcError } from '../src/backends/codex/rpc/client.js'
-import { setLang, t } from '../src/i18n.js'
+import { setLang } from '../src/i18n.js'
+import { codexText } from '../src/backends/codex/text.js'
 import { manualClock } from './lib/claude-fake-sdk.js'
 
 setLang('en')
@@ -105,7 +106,7 @@ await tasks.refresh()
 inventory = []
 await tasks.refresh()
 const ended = taskEvents.find(event => event.type === 'task.end' && event.taskId === 'natural')
-check('inventory disappearance reports unknown exit status, never a fake code', ended?.type === 'task.end' && ended.summary === t('codex-terminal-ended') && !('exitCode' in ended))
+check('inventory disappearance reports unknown exit status, never a fake code', ended?.type === 'task.end' && ended.summary === codexText('codex-terminal-ended') && !('exitCode' in ended))
 tasks.close()
 const closedCalls = taskRequests.length
 clock.advance(20_000)

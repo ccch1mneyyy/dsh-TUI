@@ -17,12 +17,14 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { i18nDict, type I18nText } from '../src/i18n.js'
 import { claudeTexts } from '../src/backends/claude/text.js'
+import { codexTexts } from '../src/backends/codex/text.js'
 import { SPINNER_VERBS } from '../src/terminal-utils/spinnerVerbs.js'
 
-/** Dictionaries a backend carries itself (B-3), audited with the same rules
- *  minus the dead-key one (see the section at the end). */
+/** Dictionaries a backend carries itself (B-3, B-5), audited with the same
+ *  rules minus the dead-key one (see the section at the end). */
 const BACKEND_TEXT_MODULES: readonly { readonly module: string; readonly dict: Readonly<Record<string, { readonly zh?: I18nText; readonly en?: I18nText }>> }[] = [
   { module: 'src/backends/claude/text.ts', dict: claudeTexts },
+  { module: 'src/backends/codex/text.ts', dict: codexTexts },
 ]
 
 // 运行时拼接的 key 前缀（新增拼接家族时在此登记，并附拼接点）：

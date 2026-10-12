@@ -12,9 +12,9 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { BackendDetection, BackendHost } from '../../agent/backend.js'
-import { t } from '../../i18n.js'
+import { codexText } from './text.js'
 import { CODEX_OAUTH_PROVIDER } from './auth/external-tokens.js'
-import { activeProfileOf, codexChannelLaunch, fileCodexChannels, hasChannelConnection, type CodexChannelProfile } from './channels.js'
+import { activeProfileOf, codexChannelLaunch, fileCodexChannels, hasChannelConnection, memoryCodexChannels, type CodexChannelProfile } from './channels.js'
 import type { ChannelTokenStore } from '../shared/channel-tokens.js'
 import { codexVersionDrift, codexVersionSupported, MIN_CODEX_VERSION } from './contract.js'
 import { errorText } from './narrow.js'
@@ -50,15 +50,15 @@ export function detectCodexAuth(env: NodeJS.ProcessEnv = process.env, options: {
 export async function detectCodex(host: BackendHost & { readonly tokenStore?: ChannelTokenStore }, env: NodeJS.ProcessEnv = process.env): Promise<BackendDetection> {
   try {
     const executable = await resolveCodexExecutable(env)
-    if (executable === undefined) return { installed: false, hint: t('codex-not-installed') }
+    if (executable === undefined) return { installed: false, hint: codexText('codex-not-installed') }
     const version = executable.version
     if (!codexVersionSupported(version)) {
       // `stale`: the binary is here, just older than this backend supports. The
       // picker says "too old / upgrade", not "not installed" (P0 D5-2) — the
       // knowledge stays here, where the version is actually known.
-      return { installed: false, stale: true, ...(version === undefined ? {} : { version }), hint: t('codex-too-old', { version: version ?? '', min: MIN_CODEX_VERSION }) }
+      return { installed: false, stale: true, ...(version === undefined ? {} : { version }), hint: codexText('codex-too-old', { version: version ?? '', min: MIN_CODEX_VERSION }) }
     }
-    const channel = activeProfileOf(fileCodexChannels(undefined, host.debug).read())
+    const channel = activeProfileOf((host.dataDir === undefined ? memoryCodexChannels() : fileCodexChannels(host.dataDir, host.debug)).read())
     let auth = detectCodexAuth(env, { channel, tokens: host.tokenStore })
     if (!hasChannelConnection(channel)) {
       try { if (await host.oauthCredential?.(CODEX_OAUTH_PROVIDER)?.stored() === true) auth = 'ok' }
@@ -71,7 +71,7 @@ export async function detectCodex(host: BackendHost & { readonly tokenStore?: Ch
       auth,
       ...(version === undefined ? {} : { version }),
       ...(drift === undefined ? {} : { drift }),
-      ...(auth === 'missing' ? { hint: t('codex-auth-missing-hint') } : {}),
+      ...(auth === 'missing' ? { hint: codexText('codex-auth-missing-hint') } : {}),
     }
   } catch (error) {
     host.debug(`codex: detection failed (${errorText(error)})`)

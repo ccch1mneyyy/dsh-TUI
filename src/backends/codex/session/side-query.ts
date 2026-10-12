@@ -1,7 +1,7 @@
 /** Ephemeral, read-only side answers; owned and cancelled with their session. */
 import { randomUUID } from 'node:crypto'
 import type { SessionCapabilities } from '../../../agent/capabilities.js'
-import { t } from '../../../i18n.js'
+import { codexText } from '../text.js'
 import { errorText, rec, str, type Rec } from '../narrow.js'
 import { CLIENT, NOTIFY } from '../protocol/index.js'
 import { RPC_ERROR, type RpcClock } from '../rpc/client.js'
@@ -34,7 +34,7 @@ export function createCodexSideQuery(deps: { readonly hub: CodexHub; readonly se
   const capability: NonNullable<SessionCapabilities['sideQuery']> = {
     async ask(prompt, options = {}) {
       if (options.signal?.aborted) return { answer: null }
-      if (closed || deps.closed()) return { answer: null, error: t('codex-session-closed') }
+      if (closed || deps.closed()) return { answer: null, error: codexText('codex-session-closed') }
       const owner = new AbortController()
       active.add(owner)
       const signal = options.signal === undefined ? owner.signal : AbortSignal.any([owner.signal, options.signal])
@@ -61,7 +61,7 @@ export function createCodexSideQuery(deps: { readonly hub: CodexHub; readonly se
           // continues a goal anyway.
           const response = await forkSideThread()
           childId = str(rec(response?.thread)?.id)
-          if (childId === undefined) throw new Error(t('codex-side-open-failed'))
+          if (childId === undefined) throw new Error(codexText('codex-side-open-failed'))
           if (signal.aborted || closed || deps.closed()) return { answer: null }
           const sink: ThreadSink = {
             notification(method, params) {
@@ -78,7 +78,7 @@ export function createCodexSideQuery(deps: { readonly hub: CodexHub; readonly se
               }
               if (method === NOTIFY.turnCompleted) {
                 const turn = rec(params.turn)
-                if (str(turn?.status) === 'failed') finish({ answer: null, error: str(rec(turn?.error)?.message) ?? t('codex-turn-failed') })
+                if (str(turn?.status) === 'failed') finish({ answer: null, error: str(rec(turn?.error)?.message) ?? codexText('codex-turn-failed') })
                 else if (str(turn?.status) === 'interrupted') finish({ answer: null })
                 else finish({ answer: answer || streamed })
               }

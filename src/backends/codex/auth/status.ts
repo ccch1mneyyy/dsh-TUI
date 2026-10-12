@@ -3,7 +3,7 @@
 import { randomUUID } from 'node:crypto'
 import type { QuestionAnswers, SessionCapabilities } from '../../../agent/capabilities.js'
 import type { AgentEvent, QuestionItemView } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { codexText } from '../text.js'
 import { CODEX_OAUTH_PROVIDER, type CodexAuthRuntime } from './external-tokens.js'
 
 export interface CodexAuthCapabilityBridge {
@@ -43,36 +43,36 @@ export function createCodexAuthCapability(runtime: CodexAuthRuntime, emit: (even
   }
   const login = async (loginOAuth?: () => Promise<boolean>): Promise<void> => {
     if (disposed) return
-    if (runtime.source === 'channel') { notice('warning', t('codex-auth-channel-active')); return }
+    if (runtime.source === 'channel') { notice('warning', codexText('codex-auth-channel-active')); return }
     const methods = [
-      ...(loginOAuth === undefined ? [] : [{ id: 'oauth', label: t('codex-login-oauth'), description: t('codex-login-oauth-desc') }]),
-      { id: 'device', label: t('codex-login-device'), description: t('codex-login-device-desc') },
-      { id: 'api-key', label: t('codex-login-api-key'), description: t('codex-login-api-key-storage') },
+      ...(loginOAuth === undefined ? [] : [{ id: 'oauth', label: codexText('codex-login-oauth'), description: codexText('codex-login-oauth-desc') }]),
+      { id: 'device', label: codexText('codex-login-device'), description: codexText('codex-login-device-desc') },
+      { id: 'api-key', label: codexText('codex-login-api-key'), description: codexText('codex-login-api-key-storage') },
     ]
-    const selection = await ask({ header: 'Codex', question: t('codex-login-choose'), options: methods.map(({ label, description }) => ({ label, description })), hideCustomInput: true }).answer
+    const selection = await ask({ header: 'Codex', question: codexText('codex-login-choose'), options: methods.map(({ label, description }) => ({ label, description })), hideCustomInput: true }).answer
     const label = selection?.answers[0]?.selected[0]
     const method = methods.find(row => row.label === label)?.id
     if (disposed || method === undefined) return
     try {
       if (method === 'oauth') {
-        if (!runtime.route.firstParty) { notice('warning', t('codex-auth-route-blocked')); return }
+        if (!runtime.route.firstParty) { notice('warning', codexText('codex-auth-route-blocked')); return }
         if (await loginOAuth?.() !== true || disposed) return
         await runtime.reconnect()
-        notice(runtime.source === 'dsh-auth' ? 'info' : 'error', t(runtime.source === 'dsh-auth' ? 'codex-login-success' : 'codex-auth-login-failed'))
+        notice(runtime.source === 'dsh-auth' ? 'info' : 'error', codexText(runtime.source === 'dsh-auth' ? 'codex-login-success' : 'codex-auth-login-failed'))
         return
       }
       if (method === 'api-key') {
-        const answers = await ask({ header: 'Codex', question: t('codex-login-api-key-prompt'), detail: t('codex-login-api-key-storage'), options: [], secret: true }).answer
+        const answers = await ask({ header: 'Codex', question: codexText('codex-login-api-key-prompt'), detail: codexText('codex-login-api-key-storage'), options: [], secret: true }).answer
         if (answers === undefined || disposed) return
         const apiKey = answers.answers[0]?.custom
-        if (apiKey === undefined || apiKey.trim() === '') { notice('warning', t('codex-auth-api-key-required')); return }
+        if (apiKey === undefined || apiKey.trim() === '') { notice('warning', codexText('codex-auth-api-key-required')); return }
         await runtime.apiKeyLogin(apiKey)
-        notice('info', t('codex-login-success'))
+        notice('info', codexText('codex-login-success'))
         return
       }
       const device = await runtime.deviceLogin()
       if (disposed) { await device.cancel(); return }
-      const prompt = ask({ header: 'Codex', question: t('codex-login-device-code', { code: device.userCode }), detail: t('codex-login-device-wait'), link: device.verificationUrl, options: [{ label: t('codex-login-cancel') }], hideCustomInput: true })
+      const prompt = ask({ header: 'Codex', question: codexText('codex-login-device-code', { code: device.userCode }), detail: codexText('codex-login-device-wait'), link: device.verificationUrl, options: [{ label: codexText('codex-login-cancel') }], hideCustomInput: true })
       const outcome = await Promise.race([
         device.done.then(success => ({ kind: 'done' as const, success })),
         prompt.answer.then(() => ({ kind: 'cancel' as const })),
@@ -80,9 +80,9 @@ export function createCodexAuthCapability(runtime: CodexAuthRuntime, emit: (even
       if (outcome.kind === 'cancel') await device.cancel()
       else {
         prompt.withdraw()
-        notice(outcome.success ? 'info' : 'error', t(outcome.success ? 'codex-login-success' : 'codex-auth-login-failed'))
+        notice(outcome.success ? 'info' : 'error', codexText(outcome.success ? 'codex-login-success' : 'codex-auth-login-failed'))
       }
-    } catch { notice('error', t('codex-auth-login-failed')) }
+    } catch { notice('error', codexText('codex-auth-login-failed')) }
   }
   return {
     capability: {

@@ -10,10 +10,17 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentEvent } from '../../src/agent/events.js'
+import { installCodexLocale } from '../../src/backends/codex/text.js'
 import { createItemContext, type ItemContext } from '../../src/backends/codex/translate/items.js'
 import { createLiveTranslator } from '../../src/backends/codex/translate/live.js'
 import { replayTurns } from '../../src/backends/codex/translate/replay.js'
+import { getLang } from '../../src/i18n.js'
 import { createProjectorHarness, type ProjectorHarness } from './projector-harness.js'
+
+// The translator writes in the backend's own copy (B-5): the host's language is
+// installed here exactly as `detect()`/`open()` install it in production, so a
+// golden pins the wording it was recorded in.
+installCodexLocale(getLang)
 
 type Rec = Record<string, unknown>
 export const WIRE_DIR = join(import.meta.dirname, '..', 'fixtures', 'codex', 'wire')

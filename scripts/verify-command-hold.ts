@@ -46,7 +46,7 @@ const isLocal = (name: string): boolean =>
 const gated = Object.keys(WORKING_GATE_NOTICES)
 assert.deepEqual(gated, [
   'new', 'compact', 'fork', 'model', 'preset', 'workspace', 'update', 'restart',
-  'resume', 'rewind', 'kernel', 'channel',
+  'resume', 'rewind', 'kernel', 'dsh', 'codex', 'claude', 'channel',
 ])
 for (const name of gated) {
   assert.ok(isLocal(name), `gated command ${name} must exist in LOCAL_COMMANDS`)

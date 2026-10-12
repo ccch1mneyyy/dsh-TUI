@@ -300,7 +300,11 @@ export function createCoreChannel(
     localImageStore ??= createLocalImageStore(() => binding.session.capabilities.images?.limits ?? NO_IMAGES)
     return localImageStore
   }
-  const composer = createComposerImages(ctx, owner, { generation: () => state.agentBindingGeneration, localImages })
+  const composer = createComposerImages(ctx, owner, {
+    generation: () => state.agentBindingGeneration,
+    sessionId: () => state.agentId,
+    localImages,
+  })
   const files = createCoreFiles(ctx, {
     owner,
     binding,

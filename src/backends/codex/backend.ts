@@ -12,18 +12,16 @@
 import { isAbsolute, normalize } from 'node:path'
 import type { AgentBackend, BackendHost, OpenTarget } from '../../agent/backend.js'
 import type { AgentSession } from '../../agent/session.js'
-import { getLang, t } from '../../i18n.js'
-import { installedTuiVersion } from '../../update.js'
+import { codexLocale, codexText, installCodexLocale } from './text.js'
 import { CODEX_BACKEND_ID, CODEX_BACKEND_LABEL, codexResumeCommand, codexVersionSupported, MIN_CODEX_VERSION } from './contract.js'
 import { acquireCodexAuth, CODEX_OAUTH_PROVIDER, type CodexAuthRuntime } from './auth/external-tokens.js'
 import { codexAuthRoute } from './auth/route.js'
-import { createCodexChannelsRuntime, fileCodexChannels, type CodexChannels, type CodexChannelsRuntime } from './channels.js'
-import type { ChannelTokenStore } from '../shared/channel-tokens.js'
+import { createCodexChannelsRuntime, fileCodexChannels, memoryCodexChannels, type CodexChannels, type CodexChannelsRuntime } from './channels.js'
 import { createCodexCatalog } from './catalog.js'
 import { codexHomeDir, detectCodex } from './detect.js'
 import { errorText, rec, str, type Rec } from './narrow.js'
 import { CLIENT } from './protocol/index.js'
-import { fileCodexPrefs, type CodexPrefs } from './prefs.js'
+import { fileCodexPrefs, memoryCodexPrefs, type CodexPrefs } from './prefs.js'
 import { buildCodexEnv, resolveCodexExecutable, type CodexExecutable } from './rpc/binary.js'
 import { acquireCodexHub, type CodexHub, type CodexHubDeps, type HubSettings } from './rpc/hub.js'
 import { rpcCode, RPC_ERROR, type RpcClock } from './rpc/client.js'
@@ -31,10 +29,6 @@ import { openCodexSession } from './session/session.js'
 
 /** Child stderr that is known start-up noise, reported by `/doctor` only. */
 const STDERR_NOISE = [/bubblewrap/iu, /could not create PATH aliases/iu]
-
-/** Structural until the neutral BackendHost addition is merged; the shared
- * ChannelTokenStore interface is the real host read/write/erase/declared seam. */
-export type CodexBackendHost = BackendHost & { readonly tokenStore?: ChannelTokenStore }
 
 export interface CodexRuntime {
   readonly hub: CodexHub
@@ -60,12 +54,12 @@ export interface CodexRuntimeOptions {
 
 /** Acquire the same platform runtime for open/resume/catalog. Tests replace
  * only the process, executable discovery and profile file, not the plumbing. */
-export async function prepareCodexRuntime(target: OpenTarget, host: CodexBackendHost, options: CodexRuntimeOptions = {}): Promise<CodexRuntime> {
+export async function prepareCodexRuntime(target: OpenTarget, host: BackendHost, options: CodexRuntimeOptions = {}): Promise<CodexRuntime> {
   const env = options.env ?? process.env
   const executable = options.executable ?? await resolveCodexExecutable(env)
-  if (executable === undefined) throw new Error(t('codex-not-installed'))
-  if (!codexVersionSupported(executable.version)) throw new Error(t('codex-too-old', { version: executable.version ?? '', min: MIN_CODEX_VERSION }))
-  const channels = createCodexChannelsRuntime({ store: options.channels ?? fileCodexChannels(undefined, host.debug), tokens: host.tokenStore, env })
+  if (executable === undefined) throw new Error(codexText('codex-not-installed'))
+  if (!codexVersionSupported(executable.version)) throw new Error(codexText('codex-too-old', { version: executable.version ?? '', min: MIN_CODEX_VERSION }))
+  const channels = createCodexChannelsRuntime({ store: options.channels ?? (host.dataDir === undefined ? memoryCodexChannels() : fileCodexChannels(host.dataDir, host.debug)), tokens: host.tokenStore, env })
   const launch = channels.launch()
   const credential = launch.provider === undefined ? host.oauthCredential?.(CODEX_OAUTH_PROVIDER) : undefined
   let cwd = target.cwd ?? host.cwd
@@ -77,7 +71,7 @@ export async function prepareCodexRuntime(target: OpenTarget, host: CodexBackend
   const deps: CodexHubDeps = {
     debug: host.debug,
     stderr: line => { if (!STDERR_NOISE.some(pattern => pattern.test(line))) host.stderr?.(line) },
-    clientVersion: installedTuiVersion() ?? 'dev',
+    clientVersion: host.appVersion ?? 'dev',
     ...options.hubDeps,
   }
   let hub = acquireCodexHub(settings, deps)
@@ -151,9 +145,9 @@ export async function prepareCodexRuntime(target: OpenTarget, host: CodexBackend
     // reason once at start instead of leaving a bare turn failure behind.
     let startNotices: readonly string[] | undefined = missingProviderEnvKey === undefined || route.firstParty
       ? undefined
-      : [t('codex-provider-env-key-missing', { provider: missingProviderEnvKey.provider, env: missingProviderEnvKey.env })]
+      : [codexText('codex-provider-env-key-missing', { provider: missingProviderEnvKey.provider, env: missingProviderEnvKey.env })]
     if (auth.managedFailed) {
-      startNotices = [...(startNotices ?? []), t('codex-auth-login-failed')]
+      startNotices = [...(startNotices ?? []), codexText('codex-auth-login-failed')]
       // Only an already-observed startup failure takes this path. No logout:
       // a different process starts clean on the user's native credentials.
       release()
@@ -199,13 +193,12 @@ export async function prepareCodexRuntime(target: OpenTarget, host: CodexBackend
   } catch (error) {
     release()
     host.debug(`codex: app-server start failed (${errorText(error)})`)
-    throw new Error(t('codex-start-failed', { err: errorText(error) }), { cause: error })
+    throw new Error(codexText('codex-start-failed', { err: errorText(error) }), { cause: error })
   }
 }
 
-let catalogHost: CodexBackendHost | undefined
-const catalogPrefs = fileCodexPrefs()
-let catalogRuntime: { readonly source: string; readonly host: CodexBackendHost; readonly hub: CodexHub } | undefined
+let catalogHost: BackendHost | undefined
+let catalogRuntime: { readonly source: string; readonly host: BackendHost; readonly hub: CodexHub } | undefined
 
 function catalogSource(env: NodeJS.ProcessEnv = process.env, actualHome?: string): string | undefined {
   const home = actualHome ?? codexHomeDir(env)
@@ -214,19 +207,37 @@ function catalogSource(env: NodeJS.ProcessEnv = process.env, actualHome?: string
   return JSON.stringify(['codex', normalize(home), sqlite ? normalize(sqlite) : null])
 }
 
-function rememberCatalogRuntime(runtime: CodexRuntime, host: CodexBackendHost): void {
+function rememberCatalogRuntime(runtime: CodexRuntime, host: BackendHost): void {
   const source = runtime.catalogSource
   if (source !== undefined) catalogRuntime = { source, host, hub: runtime.hub }
 }
 
-/** Open a native thread, rejoining its idle daemon writer on conflict. */
-export async function openCodexBackendSession(target: OpenTarget, host: CodexBackendHost, options: CodexRuntimeOptions & { readonly prefs?: CodexPrefs } = {}): Promise<AgentSession> {
+/** The prefs store of the captured host, or undefined when no host has been
+ *  seen yet (see {@link catalogHost}). Built lazily: a module-level call would
+ *  resolve a directory before any host exists to name one (D2). */
+const catalogPrefs = (): CodexPrefs | undefined => {
+  const dir = catalogHost?.dataDir
+  const host = catalogHost
+  return dir === undefined || host === undefined ? undefined : fileCodexPrefs(dir, message => host.debug(message))
+}
+
+/** Remember the host of the most recent detect / open: the catalog's only way
+ *  to reach this backend's own directory without a host parameter, and where
+ *  this backend's copy takes its language from (read live, so a `/lang`
+ *  switch applies to the next string). */
+const rememberHost = (host: BackendHost): void => {
   catalogHost = host
+  installCodexLocale(host.locale)
+}
+
+/** Open a native thread, rejoining its idle daemon writer on conflict. */
+export async function openCodexBackendSession(target: OpenTarget, host: BackendHost, options: CodexRuntimeOptions & { readonly prefs?: CodexPrefs } = {}): Promise<AgentSession> {
+  rememberHost(host)
   const runtime = await prepareCodexRuntime(target, host, options)
   const open = (active: CodexRuntime): Promise<AgentSession> => openCodexSession({
     ...active, target,
-    prefs: options.prefs ?? fileCodexPrefs(undefined, host.debug),
-    host: { debug: host.debug },
+    prefs: options.prefs ?? (host.dataDir === undefined ? memoryCodexPrefs() : fileCodexPrefs(host.dataDir, host.debug)),
+    host: { debug: host.debug, locale: host.locale },
     doctor: { get bubblewrapMissing() { return active.hub.bubblewrapMissing } },
   })
   try {
@@ -246,11 +257,13 @@ export const codexBackend: AgentBackend = {
   id: CODEX_BACKEND_ID,
   descriptor: { label: CODEX_BACKEND_LABEL },
 
-  detect: (host: BackendHost) => { catalogHost = host; return detectCodex(host) },
+  detect: (host: BackendHost) => { rememberHost(host); return detectCodex(host) },
 
   catalog: createCodexCatalog({
     acquire: async cwd => {
-      const host = catalogHost ?? { cwd: process.cwd(), debug: () => undefined, warn: () => undefined, locale: getLang }
+      // Before detect/open supplies a host, keep stores in memory and use
+      // this backend's locale without guessing a host data directory.
+      const host = catalogHost ?? { cwd: process.cwd(), debug: () => undefined, warn: () => undefined, locale: codexLocale }
       catalogHost = host
       const source = catalogSource()
       const known = catalogRuntime
@@ -264,16 +277,19 @@ export const codexBackend: AgentBackend = {
       return runtime
     },
     cwd: () => catalogHost?.cwd ?? process.cwd(),
-    lastUsed: () => catalogPrefs.read().lastUsed ?? {},
+    lastUsed: () => catalogPrefs()?.read().lastUsed ?? {},
     snapshotKey: catalogSource,
   }),
 
   launch: {
     // `host` replaces the old `debug` parameter (B-3 widened
-    // `AgentBackend.launch.sessionPrefs`); codex's store still resolves its
-    // own directory here and moves onto `host.dataDir` in B-5.
+    // `AgentBackend.launch.sessionPrefs`). The launcher asks before a session
+    // exists, so this store is built from the host it is handed; a host that
+    // hands over no directory keeps nothing — there is simply no remembered
+    // session to resume (D-3's feature-detect, never a path this backend
+    // guessed — D2).
     sessionPrefs: host => {
-      const prefs = fileCodexPrefs(undefined, host.debug)
+      const prefs = host.dataDir === undefined ? memoryCodexPrefs() : fileCodexPrefs(host.dataDir, host.debug)
       return {
         lastSession: () => prefs.read().lastSession,
         setLastSession: threadId => { prefs.write({ lastSession: threadId }) },

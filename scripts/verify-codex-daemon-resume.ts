@@ -5,6 +5,7 @@
 import './lib/default-lang-zh.mjs'
 import assert from 'node:assert/strict'
 import { openCodexBackendSession } from '../src/backends/codex/backend.js'
+import { getLang } from '../src/i18n.js'
 import { memoryCodexChannels } from '../src/backends/codex/channels.js'
 import { memoryCodexPrefs } from '../src/backends/codex/prefs.js'
 import { closeAllCodexHubs } from '../src/backends/codex/rpc/hub.js'
@@ -85,7 +86,7 @@ for (const test of cases) {
   let error: unknown
   try {
     session = await openCodexBackendSession({ kind: 'resume', sessionId: THREAD, ...(test.preserveCwd ? {} : { cwd }) }, {
-      cwd: '/TMP/launcher', debug: line => debug.push(line), warn: () => undefined,
+      cwd: '/TMP/launcher', debug: line => debug.push(line), warn: () => undefined, locale: getLang,
       tokenStore: memoryChannelTokens({ [channelTokenRef('codex-relay')]: API_KEY }),
       ...(test.firstParty ? { oauthCredential: () => ({ stored: async () => test.managed === true, fresh: async () => { credentialReads += 1; return test.managed ? { access: TOKEN, expires: 0 } : undefined } }) } : {}),
     }, {

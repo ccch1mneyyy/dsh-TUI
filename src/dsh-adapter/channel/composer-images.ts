@@ -140,6 +140,8 @@ export function createComposerImages(
   owner: ChannelOwner,
   deps: {
     generation(): number
+    /** An empty startup id adopts its first real session without losing the draft. */
+    sessionId?(): string
     /** The in-memory store of a session that takes images itself (a
      *  backend with the `images` capability); undefined = the DSH
      *  attachments service. */
@@ -180,17 +182,23 @@ export function createComposerImages(
    *  point re-checks it, so a replacement session revokes the old draft's
    *  capabilities BEFORE any subscriber can observe it — the invariant the
    *  single-file channel got by clearing immediately after the agent rebind,
-   *  made independent of the caller's ordering. */
+   *  made independent of the caller's ordering. The empty startup session's
+   *  first real binding retains the same draft and image epoch. */
   let syncedGeneration: number | undefined
+  let syncedSessionId: string | undefined
   const syncSession = (): void => {
     const generation = deps.generation()
+    const sessionId = deps.sessionId?.()
     if (syncedGeneration === undefined) {
       syncedGeneration = generation
+      syncedSessionId = sessionId
       return
     }
     if (generation === syncedGeneration) return
+    const startupAdoption = syncedSessionId === '' && sessionId !== undefined && sessionId !== ''
     syncedGeneration = generation
-    clearStagedImages()
+    syncedSessionId = sessionId
+    if (!startupAdoption) clearStagedImages()
   }
 
   const includeLegacyImageRefs = (

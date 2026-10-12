@@ -21,7 +21,7 @@
  */
 import type { AgentEvent, PendingItem } from '../../../agent/events.js'
 import type { AgentInput, CancelCause, CancelReceipt, SubmitPlacement } from '../../../agent/session.js'
-import { t } from '../../../i18n.js'
+import { codexText } from '../text.js'
 import { errorText, rec, str, type Rec } from '../narrow.js'
 import { CLIENT } from '../protocol/index.js'
 import { codexImageInputs } from './images.js'
@@ -121,7 +121,7 @@ export function createInputQueue(deps: InputQueueDeps) {
       deps.startFailed?.(error, overrides)
       started.delete(entry.id)
       resolveStart(undefined)
-      const reason = t('codex-turn-start-failed', { err: errorText(error) })
+      const reason = codexText('codex-turn-start-failed', { err: errorText(error) })
       deps.debug(`codex: turn/start failed (${errorText(error)})`)
       deps.emit([pendingEvent({ discarded: [entry.id] })])
       return { accepted: false, reason }
@@ -136,7 +136,7 @@ export function createInputQueue(deps: InputQueueDeps) {
     const next = queue.shift()
     if (next === undefined) return
     void startTurn(next).then(result => {
-      if (!result.accepted) deps.emit([{ type: 'notice', level: 'error', text: result.reason ?? t('codex-turn-start-failed', { err: '' }) }])
+      if (!result.accepted) deps.emit([{ type: 'notice', level: 'error', text: result.reason ?? codexText('codex-turn-start-failed', { err: '' }) }])
       else drain()
     })
   }
@@ -160,7 +160,7 @@ export function createInputQueue(deps: InputQueueDeps) {
       queue.push(entry)
       if (!steerFallbackSaid) {
         steerFallbackSaid = true
-        deps.emit([{ type: 'notice', level: 'info', text: t('codex-steer-fallback') }])
+        deps.emit([{ type: 'notice', level: 'info', text: codexText('codex-steer-fallback') }])
       }
       drain()
       return { accepted: true }
@@ -180,7 +180,7 @@ export function createInputQueue(deps: InputQueueDeps) {
       forceTimer = deps.clock.setTimeout(() => {
         forceTimer = undefined
         if (activeTurnId !== turnId) return
-        deps.emit([{ type: 'notice', level: 'warning', text: t('codex-cancel-forced') }])
+        deps.emit([{ type: 'notice', level: 'warning', text: codexText('codex-cancel-forced') }])
         deps.forceClose()
         onTurnCompleted(turnId, true)
       }, deps.forceSettleMs)
@@ -228,11 +228,11 @@ export function createInputQueue(deps: InputQueueDeps) {
     busy(): boolean { return activeTurnId !== undefined || starting !== undefined },
 
     async submit(input: AgentInput, placement: SubmitPlacement, wireInput?: readonly UserInput[]): Promise<{ readonly accepted: boolean; readonly reason?: string }> {
-      if (deps.closed()) throw new Error(t('codex-session-closed'))
-      if (dead) throw new Error(t('codex-connection-dead'))
-      if ((input.images ?? []).length === 0 && (input.blocks ?? []).some(block => block.type === 'image')) throw new Error(t('codex-image-unreadable', { name: input.clientMessageId }))
+      if (deps.closed()) throw new Error(codexText('codex-session-closed'))
+      if (dead) throw new Error(codexText('codex-connection-dead'))
+      if ((input.images ?? []).length === 0 && (input.blocks ?? []).some(block => block.type === 'image')) throw new Error(codexText('codex-image-unreadable', { name: input.clientMessageId }))
       const pictureInputs = await codexImageInputs(input.images ?? [])
-      if (deps.closed()) throw new Error(t('codex-session-closed'))
+      if (deps.closed()) throw new Error(codexText('codex-session-closed'))
       const entry: Entry = { id: input.clientMessageId, text: input.text, input: [...(wireInput ?? userInputOf(input)), ...pictureInputs], placement: placement === 'steer' ? 'steer' : 'followup' }
       if (offline) {
         queue.push(entry)

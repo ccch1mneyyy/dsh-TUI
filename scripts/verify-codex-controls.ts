@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import type { AgentEvent } from '../src/agent/events.js'
-import { setLang } from '../src/i18n.js'
+import { getLang, setLang } from '../src/i18n.js'
 import { memoryCodexPrefs } from '../src/backends/codex/prefs.js'
 import { CLIENT, NOTIFY } from '../src/backends/codex/protocol/index.js'
 import { resolve } from 'node:path'
@@ -55,7 +55,7 @@ async function fixture(options: { answer?: Rec; configure?(fake: ReturnType<type
   options.configure?.(fake)
   let session: Awaited<ReturnType<typeof openCodexSession>>
   try {
-    session = await openCodexSession({ hub, release: hub.retain(), target: { kind: 'create', cwd: CWD }, cwd: CWD, prefs, executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug: line => debug.push(line) }, clock })
+    session = await openCodexSession({ hub, release: hub.retain(), target: { kind: 'create', cwd: CWD }, cwd: CWD, prefs, executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug: line => debug.push(line), locale: getLang }, clock })
   } catch (error) { await hub.close(); throw error }
   session.subscribe(batch => events.push(...batch))
   await settle()
@@ -262,7 +262,13 @@ await scenario('skills collision filtering, cache, dynamic refresh and actual sk
   const f = await fixture({ configure: fake => fake.on(CLIENT.skillsList, () => ({ data: [{ cwd: CWD, skills }] })) })
   try {
     const commands = await f.session.capabilities.commands!.list()
-    check('skills local names filtered case-insensitively', commands.some(row => row.name.toLowerCase() === 'init'), false)
+    // A name colliding with a *local* command is no longer filtered here (B-5):
+    // the host drops it when it merges the backend's list after the local ones
+    // ("local names win", dsh-adapter/channel/core/session-controls.ts —
+    // verify-init-capability pins that a backend /init never shows). What this
+    // backend still filters is what it answers itself: its own four plus the
+    // names its own manifest declares.
+    check('a skill colliding with a local name is reported; the host merge drops it', commands.some(row => row.name.toLowerCase() === 'init'), true)
     check('skills backend reserved names not duplicated', commands.filter(row => row.name === 'review').length, 1)
     check('skills capability-owned names not advertised', commands.some(row => row.name === 'permission'), false)
     check('disabled skill omitted', commands.some(row => row.name === 'disabled'), false)

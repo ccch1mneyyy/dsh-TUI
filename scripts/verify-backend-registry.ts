@@ -105,8 +105,8 @@ for (const name of manifestFiles) {
       // nothing at runtime could report it.
       && getBackend(name)?.installable === (manifest.install !== undefined))
 }
-check('claude declares no native channel; codex declares exactly its own (P0 §6)',
-  getBackend('claude')?.manifest.nativeKey === undefined && getBackend('codex')?.manifest.nativeKey === 'codex')
+check('neither in-tree backend declares a native channel (P0 §6) — claude never did, codex stopped in B-5',
+  getBackend('claude')?.manifest.nativeKey === undefined && getBackend('codex')?.manifest.nativeKey === undefined)
 check('the install wizard target comes from the manifest that declares it',
   getBackend('claude')?.manifest.install?.version === (await import('../src/backends/claude/contract.js')).VALIDATED_SDK_VERSION)
 
@@ -138,17 +138,18 @@ check('an install recipe is refused without a non-empty executor, specifier and 
 // declaring Claude's recipe gets *its own* wizard, while codex's "there is nothing
 // to install, the user's own binary is the dependency" is an ordinary absent recipe.
 //
-// ── 2b′. §4.7 ① over the *real* manifests (B-3) ────────────────────────────────
+// ── 2b′. §4.7 ① over the *real* manifests (B-3; re-measured in B-5) ──────────────
 // The roadmap's note ("flipping the two built-in manifests reddens on the label
 // only") is measured here rather than assumed, on copies of the real manifests
 // through the production gate. A copy needs a free id — the seeds own theirs, and a
 // second registration of one id is refused before any of these rules is reached —
 // and nothing else is changed. Measured: the flip reddens on the label in the
-// registry, and on two further conditions the note did not name —
-// claude's `vendorPackages` (the boundary gate refuses a vendor rule for a
-// non-in-tree backend) and codex's `nativeKey` (native channels are first-party).
-// With those three neutralized both manifests register as plugins with their
-// install surface intact, which is what B-4 has to keep true.
+// registry, plus one further condition the note did not name — claude's
+// `vendorPackages` (the boundary gate refuses a vendor rule for a non-in-tree
+// backend). codex's `nativeKey` was the second such condition while it declared one;
+// B-5 removed the declaration (the slot had no consumer), so its copy now registers
+// as declared. With the remaining condition neutralized both manifests register as
+// plugins with their install surface intact, which is what B-4 has to keep true.
 {
   const seed = (id: string): BackendManifest => {
     const manifest = getBackend(id)?.manifest
@@ -162,8 +163,13 @@ check('an install recipe is refused without a non-empty executor, specifier and 
 
   check('flip: claude\'s host label key is the first red — a plugin may not wear a first-party name',
     throws(() => registerBackend({ manifest: asPlugin(claude, 'claude-flip-label', { label: claude.label }) })))
-  check('flip: codex\'s nativeKey is a second red — native channels stay first-party (the roadmap named only the label)',
-    throws(() => registerBackend({ manifest: asPlugin(codex, 'codex-flip-native') })))
+  check('flip: the real codex manifest has no native channel left to neutralize (B-5) — its copy registers as declared',
+    (() => {
+      registerBackend({ manifest: asPlugin(codex, 'codex-flip-native') })
+      return getBackend('codex-flip-native')?.admission.decision !== 'rejected'
+    })())
+  check('flip: an invented nativeKey on a non-in-tree manifest is still refused — native channels stay first-party',
+    throws(() => registerBackend({ manifest: asPlugin(codex, 'codex-flip-nativekey', { nativeKey: 'codex' }) })))
   check('flip: with the label a literal and its vendor rule dropped, the real claude manifest registers as a plugin — same recipe, its own wizard',
     (() => {
       registerBackend({ manifest: asPlugin(claude, 'claude-flip', { vendorPackages: [] }) })
@@ -176,7 +182,7 @@ check('an install recipe is refused without a non-empty executor, specifier and 
     })())
   check('flip: the real codex manifest registers as a plugin with no install surface (nothing to add, the user\'s own binary)',
     (() => {
-      registerBackend({ manifest: asPlugin(codex, 'codex-flip', { nativeKey: undefined }) })
+      registerBackend({ manifest: asPlugin(codex, 'codex-flip') })
       const entry = getBackend('codex-flip')
       return entry?.manifest.install === undefined && entry.installable === false
         && installSurfaceFor('codex-flip') === undefined

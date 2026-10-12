@@ -18,6 +18,12 @@
  * gap (§6 item 12): there is no package for the host to add — what the row owes
  * a user is detection's own "how to get it" hint, never an install button that
  * could not do anything.
+ *
+ * `nativeKey` is deliberately absent (B-5): this backend does not read a
+ * `native.<key>` channel — its sessions write `native: {}` — and deriving one
+ * from a stray declaration would *widen* the boundary gate (P0 §6). The slot it
+ * held until B-5 had no consumer at all, which is exactly the manifest claiming
+ * a channel no one speaks; claude never had one.
  */
 import type { BackendManifest } from '../../agent/backend-manifest.js'
 
@@ -30,7 +36,6 @@ export const manifest: BackendManifest = {
   backendExport: 'codexBackend',
   unloadExport: 'closeAllCodexHubs',
   vendorPackages: [],
-  nativeKey: 'codex',
   // The optional session surfaces this backend serves (B-2 dogfood): the union
   // of `session/session.ts`'s own literal capabilities, the model/mode/compaction
   // controls it spreads in from `session/controls.ts`, and the two conditional

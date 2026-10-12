@@ -13,7 +13,7 @@ process.env.HOME = home
 process.env.USERPROFILE = home
 process.env.DSH_TUI_LANG = 'en'
 const root = process.env.CODEX_TEST_SOURCE_ROOT ?? resolve('.')
-const [{ createCodexHub }, { openCodexSession }, { createFakeAppServer, FakeRpcError, NO_REPLY }, { memoryCodexPrefs }, { manualClock, threadAnswer, THREAD, CWD }, { createChannel }, { settled }, { agentEventInvariantViolations }, { setLang }] = await Promise.all([
+const [{ createCodexHub }, { openCodexSession }, { createFakeAppServer, FakeRpcError, NO_REPLY }, { memoryCodexPrefs }, { manualClock, threadAnswer, THREAD, CWD }, { createChannel }, { settled }, { agentEventInvariantViolations }, { getLang, setLang }] = await Promise.all([
   import(pathToFileURL(resolve(root, 'src/backends/codex/rpc/hub.ts')).href),
   import(pathToFileURL(resolve(root, 'src/backends/codex/session/session.ts')).href),
   import('./lib/codex-fake-app-server.js'), import('../src/backends/codex/prefs.js'), import('./lib/codex-session-harness.js'),
@@ -41,7 +41,7 @@ async function fixture(auth?: unknown) {
   fake.on('mcpServerStatus/list', () => ({ data: [], nextCursor: null }))
   let turns = 0
   fake.on('turn/start', () => ({ turn: { id: 'turn-' + ++turns, status: 'inProgress', items: [] } }))
-  const session = await openCodexSession({ hub, release: hub.retain(), target: { kind: 'create', cwd: CWD }, cwd: CWD, config: {}, prefs: memoryCodexPrefs({}), executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug: () => undefined }, clock, ...(auth === undefined ? {} : { auth: auth as never }) }) as import('../src/agent/session.js').AgentSession
+  const session = await openCodexSession({ hub, release: hub.retain(), target: { kind: 'create', cwd: CWD }, cwd: CWD, config: {}, prefs: memoryCodexPrefs({}), executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug: () => undefined, locale: getLang }, clock, ...(auth === undefined ? {} : { auth: auth as never }) }) as import('../src/agent/session.js').AgentSession
   const events: Event[] = []
   session.subscribe(batch => events.push(...batch))
   const ctx = { on: () => () => undefined, get: () => undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never

@@ -8,7 +8,12 @@
  * Run: node --import tsx/esm scripts/verify-startup-adoption.tsx
  */
 import './lib/fake-home.mjs'
+import { writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { join } from 'node:path'
 process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_LANG = 'en'
+process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES = '1'
 
 const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { createStartingSession }, { setLang, t }, { default: instances }, { settled, sleep, viewportLines }, { kernelEntriesOf }, { listBackends }] =
   await Promise.all([
@@ -32,6 +37,7 @@ import type { AgentInput, AgentSession, SubmitPlacement } from '../src/agent/ses
 import type { SessionCapabilities } from '../src/agent/capabilities.js'
 import type { ChannelLaunchOptions } from '../src/dsh-adapter/channel.js'
 import type { SessionSummary } from '../src/adapter/ports/channel-session.js'
+import type { PromptController } from '../src/components/PromptInput.js'
 
 setLang('en')
 let passed = 0
@@ -81,9 +87,31 @@ const deferred = () => {
   return { promise, resolve, reject }
 }
 
+// The DSH attachments service can accept images before the agent opens.
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+const attachmentId = `sha256:${createHash('sha256').update(png).digest('hex')}`
+const hasStartupImage = (input: AgentInput): boolean => input.blocks?.some(block => {
+  if (block.type !== 'image' || !('attachment' in block)) return false
+  const attachment = block.attachment
+  return typeof attachment === 'object' && attachment !== null
+    && 'attachmentId' in attachment && attachment.attachmentId === attachmentId
+}) === true
+const pastedImagePath = join(process.env.HOME!, 'startup.png')
+writeFileSync(pastedImagePath, png)
+const attachments = {
+  imageLimits: {
+    maxImageBytes: 1024 * 1024, maxImagesPerMessage: 4, maxMessageImageBytes: 4 * 1024 * 1024,
+    maxImageDimension: 8192, maxImagePixels: 64_000_000, mediaTypes: ['image/png'],
+  },
+  saveImage: async (input: { data: Uint8Array; mediaType: string; name?: string }) => ({
+    attachmentId, mediaType: input.mediaType, bytes: input.data.byteLength,
+    width: 1, height: 1, name: input.name,
+  }),
+  readImage: async () => ({ data: png }),
+}
 const ctx = {
   on: () => () => undefined,
-  get: () => undefined,
+  get: (name: string) => name === 'attachments' ? attachments : undefined,
   logger: { warn: () => undefined, info: () => undefined, debug: () => undefined },
 } as never
 const LAUNCH = '/fixture/launch'
@@ -102,6 +130,26 @@ const launch = (startup: Startup): ChannelLaunchOptions => ({
 })
 const notices = (channel: { rows: readonly { kind: string; text: string }[] }): string[] =>
   channel.rows.filter(row => row.kind === 'notice').map(row => row.text)
+
+// ── staged image capabilities belong to the startup draft ────────────
+{
+  const open = deferred()
+  const channel = createChannel(ctx, createStartingSession('claude', LAUNCH), launch(open.promise))
+  const generation = channel.stagedImageGeneration()
+  const handle = await channel.stageComposerImage({ data: png, mediaType: 'image/png', name: 'startup.png' }, generation)
+  const view = channel.stagedImage(handle.stageId)
+  check('an image can be staged while the session opens', view !== undefined && !channel.ready)
+  const real = fakeSession('99999999-9999-4999-8999-999999999990', LAUNCH)
+  open.resolve({ session: real, history: [] })
+  check('the image draft gets its real session', await settled(() => channel.ready))
+  check('startup adoption keeps the image epoch', channel.stagedImageGeneration() === generation)
+  check('startup adoption keeps the staged capability and preview', channel.hasStagedImage(handle.stageId) && channel.stagedImage(handle.stageId) === view)
+  channel.submit('[Image #1] early image', [{ token: '[Image #1]', stageId: handle.stageId }])
+  check('the startup image is delivered as an attachment', await settled(() => real.submits.some(item => hasStartupImage(item.input))), JSON.stringify(real.submits))
+  check('/new opens another session after the image draft', await channel.newSession())
+  check('a real switch revokes the old image capability', !channel.hasStagedImage(handle.stageId) && channel.stagedImageGeneration() > generation)
+  channel.releaseContributions()
+}
 
 // ── adoption ──────────────────────────────────────────────────────────
 {
@@ -202,8 +250,11 @@ const notices = (channel: { rows: readonly { kind: string; text: string }[] }): 
 {
   const open = deferred()
   const channel = createChannel(ctx, createStartingSession('claude', LAUNCH), launch(open.promise))
+  const generation = channel.stagedImageGeneration()
+  const handle = await channel.stageComposerImage({ data: png, mediaType: 'image/png' }, generation)
   const before = opened.length
   check('/new while starting opens its own session', await channel.newSession() && channel.agentId === opened[before]!.ref.sessionId && channel.ready)
+  check('/new while starting revokes the replaced draft image', !channel.hasStagedImage(handle.stageId) && channel.stagedImageGeneration() > generation)
   const late = fakeSession('66666666-6666-4666-8666-666666666666', LAUNCH)
   open.resolve({ session: late, history: [] })
   check('the startup session arriving later is closed', await settled(() => late.disposed))
@@ -213,8 +264,8 @@ const notices = (channel: { rows: readonly { kind: string; text: string }[] }): 
 }
 
 // ── the real Chat over a not-ready channel ────────────────────────────
-// Twice: once in the chat composer, once on the landing page (first boot),
-// whose Enter reaches the channel through its own submit path.
+// Both the composer and landing page, inline/fullscreen and narrow/wide.
+// A covered composer also exercises the parked draft's ownership transfer.
 const notReady = t('startup-not-ready', { backend: 'Claude' })
 class FakeStdin extends PassThrough {
   isTTY = true
@@ -222,11 +273,11 @@ class FakeStdin extends PassThrough {
   ref() { return this }
   unref() { return this }
 }
-async function screenCase(surface: 'composer' | 'launchpad' | 'launchpad-failed', sessionId: string): Promise<void> {
-  const label = (text: string): string => `${surface}: ${text}`
+async function screenCase(surface: 'composer' | 'launchpad' | 'launchpad-failed', sessionId: string, fullscreen = false, columns = 100, covered = false, outcome: 'adoption' | 'new' = 'adoption'): Promise<void> {
+  const label = (text: string): string => `${surface}${covered ? ' covered' : ''}${outcome === 'new' ? ' /new' : ''} ${fullscreen ? 'fullscreen' : 'inline'} ${columns} cols: ${text}`
   const open = deferred()
   const channel = createChannel(ctx, createStartingSession('claude', process.cwd()), { ...launch(open.promise), cwd: process.cwd() })
-  const COLS = 100
+  const COLS = columns
   const ROWS = 30
   const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 200, allowProposedApi: true })
   class FakeStdout extends Writable {
@@ -238,19 +289,22 @@ async function screenCase(surface: 'composer' | 'launchpad' | 'launchpad-failed'
   const stdin = new FakeStdin()
   const stdout = new FakeStdout()
   const screen = (): string => viewportLines(term, ROWS).join('\n')
+  const controllerRef: { current: PromptController | null } = { current: null }
+  const chat = React.createElement(Chat, {
+    channel: channel as never,
+    questionStore: new QuestionStore(),
+    approvalStore: new ApprovalStore(),
+    onExit: () => undefined,
+    fullscreen,
+    trajectorySeen: true,
+    promptControllerRef: controllerRef,
+    // The composition root's kernel list: the notices name the kernel by its
+    // short label ("Claude"), not the backend id.
+    kernelEntries: kernelEntriesOf(listBackends()),
+    ...(surface !== 'composer' ? { launchpadOnBoot: true } : {}),
+  })
   const instance = await ui.render(
-    React.createElement(Chat, {
-      channel: channel as never,
-      questionStore: new QuestionStore(),
-      approvalStore: new ApprovalStore(),
-      onExit: () => undefined,
-      fullscreen: false,
-      trajectorySeen: true,
-      // The composition root's kernel list: the notices name the kernel by its
-      // short label ("Claude"), not the backend id.
-      kernelEntries: kernelEntriesOf(listBackends()),
-      ...(surface !== 'composer' ? { launchpadOnBoot: true } : {}),
-    }),
+    fullscreen ? React.createElement(ui.AlternateScreen, null, chat) : chat,
     { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
   )
   for (const value of instances.values()) instances.set(process.stdout, value)
@@ -310,21 +364,72 @@ async function screenCase(surface: 'composer' | 'launchpad' | 'launchpad-failed'
     stdin.write('\x1b')
     // 固定窗:pacing Esc is a standalone key only after the escape timeout.
     await sleep(200)
-    open.resolve({ session: real, history: [] })
+    await clearLine()
+    stdin.write(`\x1b[200~${pastedImagePath}\x1b[201~`)
+    check(label('an image pasted before ready has a token'), await settled(() => screen().includes('[Image #1]')), screen())
+    await typeLine('draft loading')
+    check(label('typing before ready is visible'), await settled(() => screen().includes('draft loading')), screen())
+    stdin.write('\x1b[D')
+    // 固定窗:pacing caret movement has no observable text change.
+    await sleep(60)
+    if (covered) {
+      stdin.write('\x01')
+      check(label('the composer parks its draft behind the dashboard'), await settled(() => controllerRef.current === null && screen().includes('Subagent Dashboard')), screen())
+    }
+    if (outcome === 'new') {
+      const before = opened.length
+      check(label('/new explicitly replaces the placeholder'), await channel.newSession())
+      const replacement = opened[before]!
+      channel.notify('replacement ready')
+      if (covered) stdin.write('\x1b')
+      check(label('the explicit replacement is rendered'), await settled(() => screen().includes('replacement ready')), screen())
+      check(label('the explicit replacement clears the old text and image token'), !screen().includes('draft loading') && !screen().includes('[Image #1]'), screen())
+      if (surface === 'composer') check(label('the composer owns an empty draft'), controllerRef.current?.text?.() === '', controllerRef.current?.text?.())
+      await typeLine('after new')
+      stdin.write('\r')
+      check(label('only new text reaches the replacement session'), await settled(() => replacement.submits.some(item => item.input.text === 'after new')), JSON.stringify(replacement.submits))
+      check(label('the replacement inherits no old image'), replacement.submits.every(item => !hasStartupImage(item.input)), JSON.stringify(replacement.submits))
+      open.resolve({ session: real, history: [] })
+      check(label('the late startup session is closed'), await settled(() => real.disposed))
+      check(label('the replacement remains bound'), channel.agentId === replacement.ref.sessionId)
+      return
+    }
+    open.resolve({ session: real, history: [], route: { provider: 'fixture', model: 'READY' } })
     check(label('the channel becomes ready'), await settled(() => channel.ready))
+    if (covered) stdin.write('\x1b')
+    check(label('the ready session is rendered'), await settled(() => screen().includes('READY')), screen())
+    check(label('adoption preserves the unsent draft'), screen().includes('draft loading'), screen())
+    check(label('adoption does not submit the draft'), real.submits.length === 0)
+    stdin.write('X')
+    check(label('typing after adoption preserves the caret'), await settled(() => screen().includes('draft loadinXg')), screen())
+    stdin.write('\r')
+    check(label('the preserved draft reaches the real session'), await settled(() => real.submits.some(item => item.input.text === '[Image #1] draft loadinXg')), JSON.stringify(real.submits.map(item => item.input.text)))
+    check(label('the preserved image reaches the real session'), real.submits.some(item => hasStartupImage(item.input)), JSON.stringify(real.submits))
     await clearLine()
     await typeLine('hello ready')
     stdin.write('\r')
     check(label('after the adoption Enter sends to the real session'), await settled(() => real.submits.some(item => item.input.text === 'hello ready')), JSON.stringify(real.submits.map(item => item.input.text)))
     // A refused line must not be queued and forwarded once the session opens.
     check(label('the refused early line never reaches the session'), !real.submits.some(item => item.input.text === 'hello early'), JSON.stringify(real.submits.map(item => item.input.text)))
+    await typeLine('old session draft')
+    check(label('a draft in the ready session is visible'), await settled(() => screen().includes('old session draft')), screen())
+    check(label('/new replaces the real session'), await channel.newSession())
+    check(label('a real session switch clears the draft'), await settled(() => !screen().includes('old session draft')), screen())
   } finally {
     instance.unmount()
     channel.releaseContributions()
   }
 }
-await screenCase('composer', '77777777-7777-4777-8777-777777777777')
-await screenCase('launchpad', '88888888-8888-4888-8888-888888888888')
+for (const fullscreen of [false, true]) {
+  for (const columns of [100, 42]) {
+    await screenCase('composer', '77777777-7777-4777-8777-777777777777', fullscreen, columns)
+    await screenCase('launchpad', '88888888-8888-4888-8888-888888888888', fullscreen, columns)
+  }
+}
+await screenCase('composer', '77777777-7777-4777-8777-777777777777', true, 42, true)
+await screenCase('launchpad', '88888888-8888-4888-8888-888888888888', true, 42, false, 'new')
+await screenCase('composer', '77777777-7777-4777-8777-777777777777', false, 100, false, 'new')
+await screenCase('composer', '77777777-7777-4777-8777-777777777777', true, 42, true, 'new')
 await screenCase('launchpad-failed', '99999999-9999-4999-8999-999999999999')
 // A browser opened while startup is pending follows the first adoption.
 for (const fullscreen of [false, true]) {

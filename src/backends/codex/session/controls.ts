@@ -1,7 +1,7 @@
 /** Thin wrappers over Codex's control requests; choices persist only in TUI prefs. */
 import type { AccountView, EffortOption, McpServerView, ModelOption, ModeOption, SessionCapabilities } from '../../../agent/capabilities.js'
 import type { AgentEvent } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { codexText } from '../text.js'
 import { CODEX_MODE_PARAMS, isCodexModeId } from '../modes.js'
 import { arr, errorText, num, rec, str, type Rec } from '../narrow.js'
 import type { CodexPrefs } from '../prefs.js'
@@ -41,12 +41,12 @@ export function sandboxPolicy(mode: string, cwd: string): Rec {
 
 function permissionOptions(): ModeOption[] {
   return [
-    { id: 'read-only', label: t('codex-mode-read-only'), description: t('codex-mode-read-only-desc') },
-    { id: 'auto', label: t('codex-mode-auto'), description: t('codex-mode-auto-desc') },
-    { id: 'full-access', label: t('codex-mode-full-access'), description: t('codex-mode-full-access-desc') },
+    { id: 'read-only', label: codexText('codex-mode-read-only'), description: codexText('codex-mode-read-only-desc') },
+    { id: 'auto', label: codexText('codex-mode-auto'), description: codexText('codex-mode-auto-desc') },
+    { id: 'full-access', label: codexText('codex-mode-full-access'), description: codexText('codex-mode-full-access-desc') },
   ]
 }
-const planOption = (): ModeOption => ({ id: 'plan', label: t('codex-mode-plan'), description: t('codex-mode-plan-desc') })
+const planOption = (): ModeOption => ({ id: 'plan', label: codexText('codex-mode-plan'), description: codexText('codex-mode-plan-desc') })
 
 export function createCodexControls(deps: ControlsDeps) {
   const { hub, settings, ctx, prefs } = deps
@@ -117,19 +117,19 @@ export function createCodexControls(deps: ControlsDeps) {
         if (code === RPC_ERROR.invalidParams && change.collaborationMode !== undefined) {
           planSupported = false
           delete pending.collaborationMode
-          throw new Error(t('codex-capability-unavailable', { feature: t('codex-mode-plan') }))
+          throw new Error(codexText('codex-capability-unavailable', { feature: codexText('codex-mode-plan') }))
         }
         throw error
       }
       settingsSupported = false
-      deps.emit([{ type: 'notice', level: 'warning', key: 'codex-settings-deferred', text: t('codex-settings-deferred') }])
+      deps.emit([{ type: 'notice', level: 'warning', key: 'codex-settings-deferred', text: codexText('codex-settings-deferred') }])
     }
   }
 
   const effortLevels = (row: Rec | undefined): EffortOption[] => arr(row?.supportedReasoningEfforts).flatMap(raw => {
     const id = str(rec(raw)?.reasoningEffort)
     if (id === undefined) return []
-    const labels: Record<string, string> = { none: t('codex-effort-none'), minimal: t('codex-effort-minimal'), low: t('codex-effort-low'), medium: t('codex-effort-medium'), high: t('codex-effort-high'), xhigh: t('codex-effort-xhigh'), ultra: t('codex-effort-ultra') }
+    const labels: Record<string, string> = { none: codexText('codex-effort-none'), minimal: codexText('codex-effort-minimal'), low: codexText('codex-effort-low'), medium: codexText('codex-effort-medium'), high: codexText('codex-effort-high'), xhigh: codexText('codex-effort-xhigh'), ultra: codexText('codex-effort-ultra') }
     return [{ id, label: labels[id] ?? id }]
   })
 
@@ -164,7 +164,7 @@ export function createCodexControls(deps: ControlsDeps) {
       current: () => settings.effort ?? undefined,
       async set(id) {
         if (rows.length === 0) await models()
-        if (id !== null && !effortLevels(currentRow()).some(option => option.id === id)) throw new Error(t('effort-invalid', { id, ids: effortLevels(currentRow()).map(option => option.id).join(', ') }))
+        if (id !== null && !effortLevels(currentRow()).some(option => option.id === id)) throw new Error(codexText('effort-invalid', { id, ids: effortLevels(currentRow()).map(option => option.id).join(', ') }))
         const applied = id ?? str(currentRow()?.defaultReasoningEffort) ?? null
         await update({ effort: applied })
         settings.effort = applied
@@ -180,8 +180,8 @@ export function createCodexControls(deps: ControlsDeps) {
       },
       current: () => settings.modeId,
       async set(id) {
-        if (id !== 'plan' && !isCodexModeId(id) && id !== settings.permissionMode) throw new Error(t('codex-mode-invalid', { mode: id }))
-        if (id === 'plan' && !planSupported) throw new Error(t('codex-capability-unavailable', { feature: t('codex-mode-plan') }))
+        if (id !== 'plan' && !isCodexModeId(id) && id !== settings.permissionMode) throw new Error(codexText('codex-mode-invalid', { mode: id }))
+        if (id === 'plan' && !planSupported) throw new Error(codexText('codex-capability-unavailable', { feature: codexText('codex-mode-plan') }))
         const plan = id === 'plan'
         const switching = plan !== (settings.modeId === 'plan')
         const change: Record<string, unknown> = planSupported && switching ? { collaborationMode: collaboration(plan ? 'plan' : 'default') } : {}
@@ -205,7 +205,7 @@ export function createCodexControls(deps: ControlsDeps) {
     },
     compact: {
       async run() {
-        if (deps.busy()) throw new Error(t('codex-command-idle'))
+        if (deps.busy()) throw new Error(codexText('codex-command-idle'))
         ctx.compactRequested = true
         try { await hub.call(CLIENT.threadCompactStart, { threadId: deps.threadId() }) }
         catch (error) { ctx.compactRequested = false; throw error }
@@ -271,7 +271,7 @@ export function createCodexControls(deps: ControlsDeps) {
       const modeId = appliedCollaboration?.mode === 'plan' ? 'plan' : settings.permissionMode ?? 'custom'
       if (settings.modeId !== modeId) { settings.modeId = modeId; deps.emit([{ type: 'mode.changed', modeId }]) }
       prefs.write({ plan: modeId === 'plan' })
-      if (warn) deps.emit([{ type: 'notice', level: 'warning', key: 'codex-plan-unavailable', text: t('codex-capability-unavailable', { feature: t('codex-mode-plan') }) }])
+      if (warn) deps.emit([{ type: 'notice', level: 'warning', key: 'codex-plan-unavailable', text: codexText('codex-capability-unavailable', { feature: codexText('codex-mode-plan') }) }])
     },
     note(method: string, params: Rec): boolean {
       if (method === NOTIFY.modelVerification || method === NOTIFY.accountUpdated) { catalog!.rows = undefined }

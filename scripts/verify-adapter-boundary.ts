@@ -49,7 +49,6 @@
  *                                  (vendor) package, no concrete backend
  *                                  directory, no src/dsh-adapter/**
  *   native.dsh    only inside src/dsh-adapter/**
- *   native.codex  only inside src/backends/codex/**
  *
  * The standalone entry's host loading (ADAPTER.md, host contract):
  *
@@ -117,7 +116,6 @@ const EXPECTED_VENDOR_RULES: readonly { readonly label: string; readonly allowed
 ]
 const EXPECTED_NATIVE_RULES: readonly { readonly key: string; readonly allowedIn: string }[] = [
   { key: 'dsh', allowedIn: 'dsh-adapter/' },
-  { key: 'codex', allowedIn: 'backends/codex/' },
 ]
 
 /** The one allowlisted runtime import a manifest may have: claude's SDK pin
@@ -337,15 +335,16 @@ function resolveInternal(file: string, specifier: string): string | undefined {
 }
 
 /**
- * The two recorded debts, each an explicit list of file pairs (ADAPTER.md's
- * "only shrinks" convention):
+ * The recorded debts, each an explicit list of file pairs (ADAPTER.md's "only
+ * shrinks" convention):
  *
  *  - \`entries\`: UI value imports from \`src/dsh-adapter/\` that predate the
  *    layer rules;
- *  - \`backendEntries\`: imports a concrete backend still makes into host
- *    internals (B-3 introduced the island rule; claude is clean, codex
- *    follows in B-5). Every pair is listed by hand, so the list cannot grow
- *    by accident.
+ *  - \`backendEntries\`: imports a concrete backend makes into host internals.
+ *    B-3 introduced the island rule with claude, B-5 finished codex, and the
+ *    list is empty now: the rule holds for every backend with no exemption
+ *    left. The shape stays, and so does its warning, so a future debt has to
+ *    be written down by hand instead of appearing silently.
  */
 function readAllowlist(): { readonly ui: readonly AllowlistEntry[]; readonly backend: readonly AllowlistEntry[] } {
   const label = relative(process.cwd(), ALLOWLIST_FILE)
@@ -544,7 +543,7 @@ if (allowlistedHits.length > 0) {
   if (VERBOSE) for (const hit of allowlistedHits) console.warn(`  - ${hit}`)
 }
 if (backendAllowlistedHits.length > 0) {
-  console.warn(`adapter boundary warning: ${backendAllowlistedHits.length} allowlisted host-internal imports in src/backends/codex/ (${allowlist.backend.length} file pairs) await the B-5 migration${VERBOSE ? ':' : '; --verbose lists them'}`)
+  console.warn(`adapter boundary warning: ${backendAllowlistedHits.length} allowlisted host-internal imports in src/backends/ (${allowlist.backend.length} file pairs) are grandfathered; the island rule is meant to hold for every backend (B-5)${VERBOSE ? ':' : '; --verbose lists them'}`)
   if (VERBOSE) for (const hit of backendAllowlistedHits) console.warn(`  - ${hit}`)
 }
 console.log(`adapter boundary OK (${files.length} source files, ${importCount} import specifiers scanned)`)

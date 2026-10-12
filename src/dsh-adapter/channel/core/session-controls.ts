@@ -54,12 +54,12 @@ export function createSessionControls(deps: {
     // Local names win, served here or not: a typed `/init` is the local
     // command (or its explicit unavailability), never the backend's. A
     // served `/goal` (the typed capability) wins over a same-named backend
-    // command the same way.
+    // command the same way. Compare names case-insensitively, as completion does.
     const served = localCommandsFor(state.backendCapabilities.commands)
     const local = new Set([...LOCAL_COMMANDS.map(command => command.name), ...(served.includes(BACKEND_GOAL_COMMAND) ? [BACKEND_GOAL_COMMAND.name] : [])])
     state.commandList = backendCommands.length === 0
       ? served
-      : [...served, ...backendCommands.filter(command => !local.has(command.name))]
+      : [...served, ...backendCommands.filter(command => !local.has(command.name.toLowerCase()))]
   }
 
   const loadBackendCommands = (session: AgentSession, current: () => boolean): void => {

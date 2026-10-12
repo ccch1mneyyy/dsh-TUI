@@ -2,8 +2,8 @@
  * Each bounded operation borrows the same hub and releases it in finally. */
 import { basename } from 'node:path'
 import type { SessionCatalog, SessionListScope } from '../../agent/backend.js'
-import type { PreviewEntry, SessionSummary } from '../../adapter/ports/channel-session.js'
-import { t } from '../../i18n.js'
+import type { PreviewEntry, SessionSummary } from '../../agent/index.js'
+import { codexText } from './text.js'
 import { CODEX_BACKEND_ID } from './contract.js'
 import { arr, num, rec, str, text } from './narrow.js'
 import { CLIENT } from './protocol/index.js'
@@ -56,7 +56,7 @@ export function codexPreviewEntries(turns: readonly unknown[], limit = PREVIEW_L
       if (item?.type === 'userMessage') {
         const content = arr(item.content).map(rec)
         const first = content.find(block => block?.type === 'text')
-        const body = text(first?.text) ?? (content.some(block => block?.type === 'image' || block?.type === 'localImage') ? t('codex-preview-image') : undefined)
+        const body = text(first?.text) ?? (content.some(block => block?.type === 'image' || block?.type === 'localImage') ? codexText('codex-preview-image') : undefined)
         if (body !== undefined) entries.push({ role: 'user', text: body, at: at === undefined ? undefined : at * 1000 })
       } else if (item?.type === 'agentMessage' && text(item.text) !== undefined) {
         entries.push({ role: 'assistant', text: str(item.text)!, at: at === undefined ? undefined : at * 1000 })
@@ -157,7 +157,7 @@ export function createCodexCatalog(deps: CodexCatalogDeps): SessionCatalog {
     delete: (threadId, cwd) => borrow(cwd, async hub => {
       try { await hub.call(CLIENT.threadArchive, { threadId }) }
       catch (error) {
-        if (rpcCode(error) === RPC_ERROR.invalidRequest && /active.*worker/iu.test(error instanceof Error ? error.message : '')) throw new Error(t('codex-archive-busy'))
+        if (rpcCode(error) === RPC_ERROR.invalidRequest && /active.*worker/iu.test(error instanceof Error ? error.message : '')) throw new Error(codexText('codex-archive-busy'))
         throw error
       }
     }),
