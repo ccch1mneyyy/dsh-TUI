@@ -155,7 +155,7 @@ for (let round = 1; round <= ROUNDS; round++) {
     // Read old history with the streaming tail entirely outside the window.
     for (let page = 0; page < 20; page++) stdin.write('\x1b[5~')
     check('远处历史就绪且尾行已卸载', await settled(() => {
-      const list = traceFrames().at(-1)?.list
+      const list = traceFrames().map(frame => frame.list).findLast(list => list !== null)
       return lastFrame()?.scrollTop === 0 && list !== null && list !== undefined && list.end <= streamIndex
     }))
   }
@@ -211,6 +211,13 @@ check('真实收缩前已手动上滚', await settled(() => lastFrame()?.sticky 
 const heightBeforeRemoval = lastFrame()?.scrollHeight ?? 0
 stream.streaming = false
 stream.text = 'SETTLED TAIL'
+bump()
+check('真实高度收缩已落帧', await settled(() =>
+  (lastFrame()?.scrollHeight ?? heightBeforeRemoval) < heightBeforeRemoval))
+// A shrink frame intentionally freezes once. Change a one-line sibling to
+// produce a subsequent paint at the same content height, even if the rest
+// of the ScrollBox tree is cached and the app would otherwise stay idle.
+channel.rows.at(-1)!.text += '!'
 bump()
 check('同宽真实收缩会收敛到可达底部', await settled(() => {
   const frame = lastFrame()
