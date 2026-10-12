@@ -93,7 +93,10 @@ export function createLiveTranslator(ctx: ItemContext, settings: SettingsSnapsho
     switch (method) {
       case NOTIFY.turnStarted: {
         const id = str(rec(params.turn)?.id)
-        if (id !== undefined) ctx.turnId = id
+        // Review items can open their durable turn before a turn/started
+        // carrying a different internal lifecycle id. Preserve the item id
+        // for transcript anchors, attempts and forced-close late-event fences.
+        if (id !== undefined && !ctx.turnOpen) ctx.turnId = id
         return out
       }
       case NOTIFY.turnCompleted: {

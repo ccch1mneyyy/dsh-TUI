@@ -115,6 +115,7 @@ fixture 名指 `scripts/fixtures/codex/wire/` 下的录制（C0 已脱敏入库�
 | F28 | 官方审批选项文案与决策：命令 `Yes, proceed`(accept) / `Yes, and don't ask again for commands that start with …`(acceptWithExecpolicyAmendment) / `… for this command in this session`(acceptForSession) / `No, continue without running it`(decline) / `No, and tell Codex what to do differently`(cancel)；文件 `Yes, proceed` / `Yes, and don't ask again for these files`(acceptForSession) / `No, and tell Codex what to do differently`(cancel) | [src] tui/bottom_pane/approval_overlay.rs |
 | F29 | 中转请求可能静默卡住（无 error、无重试，90 s 无任何通知）；同一连接上的其他 thread 不受影响 | [live] s1 T1 |
 | F30 | pi-ai 的 `openai-codex` 登录从访问令牌 JWT 的 `https://api.openai.com/auth.chatgpt_account_id` 解出账户 id（`chatgpt_plan_type` 同处） | [src] pi-ai dist/auth/oauth/openai-codex.js |
+| F31 | 0.160.1 的 inline `review/start` 返回的 turn id 用于评审 item 与 `turn/completed`；`turn/started` 另报 lifecycle id，`turn/interrupt` 必须用后者。`enteredReviewMode` 可先于 `turn/started` 到达，评审用户 item 的 `clientId` 为 `null` | [offline probe] 临时 CODEX_HOME + loopback 故障 provider，无真实凭据；`verify-codex-controls` / `verify-codex-input` 固化时序 |
 
 ---
 
@@ -447,6 +448,9 @@ interface CodexSessionState {
 - 只有 `item/started{userMessage}` 带回相同 `clientId` 时才认领 pending（`pending.changed{claimed}`）
   并产出 `user.message`（D8）。`turn/start` 失败 → 移除该 pending 并返回
   `{accepted:false, reason}`。
+- `/review`、`/diff`、`/usage` 与只切换模式的 `/plan` 不走普通消息回显，命令成功后
+  主动认领 pending；拒绝结果由 channel 移除预览并显示原因。评审同时保留完成 id 与
+  lifecycle id（F31），早到的 Esc 等待后者，完成事件按前者释放队列；投影锚点保留评审 id。
 - 每次 `turn/start` 都携带当前的覆盖（`model`、`effort`、`approvalPolicy`、`sandboxPolicy`、
   `collaborationMode`）——只在与 thread 当前设置不同的时候才带，带了即对后续回合生效（协议语义）。
 

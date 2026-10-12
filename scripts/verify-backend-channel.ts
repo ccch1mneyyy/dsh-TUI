@@ -193,6 +193,16 @@ try {
   check('session.status drives the channel status', channel.status === 'running')
   first.emit([{ type: 'session.status', status: 'idle' }], { wake: 'none' })
 
+  const acceptingSubmit = first.submit
+  first.submit = () => Promise.resolve({ accepted: false, reason: 'command requires an idle turn' })
+  try {
+    channel.submit('/review')
+    check('a backend refusal is visible and retires its unwithdrawable pending preview',
+      await settled(() => toasts().includes('command requires an idle turn')) && channel.pending.length === 0)
+    channel.submit('another refused input')
+    check('a refusal leaves the input FIFO usable', await settled(() => toasts().filter(text => text === 'command requires an idle turn').length === 2) && channel.pending.length === 0)
+  } finally { first.submit = acceptingSubmit }
+
   channel.cancel()
   check('cancel reaches session.cancel(user)', await settled(() => first.cancels.includes('user')) && channel.cancelPending)
   first.emit([{ type: 'turn.start', turn: 2, origin: 'user', time: 7 }, { type: 'turn.end', turn: 2, reason: { kind: 'aborted' }, time: 8 }])

@@ -276,7 +276,10 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       await controls.capabilities.modes!.set(settings.permissionMode ?? DEFAULT_CODEX_MODE)
     },
     submit: (next, placement, wire) => input.submit(next, placement, wire),
-    noteTurnStarted: id => input.onTurnStarted(id),
+    noteReviewStarted: id => {
+      // Notifications may finish a fast review before its request answers.
+      if (seenTurns.get(id)?.ended !== true) input.onReviewStarted(id)
+    },
   })
   const planReview = createPlanReview({
     emit: events => emit(events, 'sync', true),
@@ -415,6 +418,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
         }
         case NOTIFY.itemStarted: {
           const item = rec(params.item)
+          if (item?.type === 'enteredReviewMode' && nativeTurn !== undefined) input.onReviewStarted(nativeTurn)
           const clientId = item?.type === 'userMessage' ? str(item.clientId) : undefined
           if (clientId !== undefined) {
             const claimed = input.claim(clientId)
@@ -768,7 +772,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
         sideQueries.close()
         const busy = input.busy()
         disposing = true
-        if (busy) await input.interrupt().catch(() => false)
+        if (busy) await input.interrupt(false).catch(() => false)
         input.close()
         offGlobal()
         for (const unroute of childRoutes.values()) unroute()

@@ -128,6 +128,29 @@ const of = <T extends AgentEvent['type']>(events: readonly AgentEvent[], type: T
   await h.session.dispose()
 }
 
+// ── review ids and force-close fences ──────────────────────────────────
+{
+  const h = await openHarness({ configureFake: fake => fake.on('review/start', () => ({ turn: { id: 'review', status: 'inProgress', items: [] } })) })
+  await h.session.submit(input('review-command', '/review'), 'followup')
+  await h.session.dispose()
+  check('dispose does not wait for a review lifecycle notification after delivery stopped', h.session.status === 'disposed' && h.sent('thread/unsubscribe').length === 1)
+}
+
+{
+  const h = await openHarness({ configureFake: fake => fake.on('review/start', () => ({ turn: { id: 'review', status: 'inProgress', items: [] } })) })
+  try {
+    await h.session.submit(input('review-command', '/review'), 'followup')
+    await h.notify('item/started', { turnId: 'review', item: { type: 'enteredReviewMode', id: 'enter-review', review: 'changes' } })
+    await h.notify('turn/started', { turn: { id: 'review-lifecycle', status: 'inProgress', items: [] } })
+    await h.session.cancel('interrupt')
+    h.clock.advance(15_000)
+    await tick()
+    const starts = of(h.events(), 'turn.start').length
+    await h.notify('item/started', { turnId: 'review', item: { type: 'agentMessage', id: 'late-review', text: 'late content' } })
+    check('forced review settle fences late items by the review id, not its lifecycle id', of(h.events(), 'turn.start').length === starts && of(h.events(), 'turn.end').at(-1)?.reason.kind === 'interrupted')
+  } finally { await h.session.dispose() }
+}
+
 // ── `now` beats a pending steer (review fix) ────────────────────────────
 {
   const h = await openHarness()

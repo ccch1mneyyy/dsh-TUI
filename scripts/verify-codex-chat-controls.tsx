@@ -2,7 +2,8 @@
  * C2 controls through the real Codex session, shared stores/projector and Chat.
  * Only the external app-server is scripted: 80/40 columns × inline/fullscreen.
  * Covers running output tails, true patch line numbers, every command decision
- * label, secret input, Plan review/label, quota warning and backend interrupt text.
+ * label, secret input, Plan review/label, quota warning, backend interrupt text
+ * and /review queue withdrawal/cancellation with native lifecycle ids.
  * Run: node --import tsx/esm scripts/verify-codex-chat-controls.tsx
  */
 import { mkdtempSync } from 'node:fs'
@@ -43,6 +44,7 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
     fake.on('model/list', () => ({ data: [{ id: 'gpt-5.6-terra', model: 'gpt-5.6-terra', displayName: 'Codex', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }], nextCursor: null }))
     fake.on('collaborationMode/list', () => ({ data: [{ name: 'Plan', mode: 'plan' }, { name: 'Default', mode: 'default' }] }))
     fake.on('thread/settings/update', () => ({}))
+    fake.on('review/start', () => ({ turn: { id: 'review', status: 'inProgress', items: [] }, reviewThreadId: THREAD }))
   } })
   const permissions = new PermissionStore()
   const questions = new QuestionStore()
@@ -172,6 +174,35 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
     setLang('zh')
     check(tag + ': language switch keeps Codex interruption identity', await settled(() => flat(view()).includes(flat(t('interrupted-ask-backend', { name: 'Codex' })))), view())
     setLang('en')
+
+    await type('/review')
+    stdin.write('\r')
+    check(tag + ': /review reaches the native command and retires its preview',
+      await settled(() => h.sent('review/start').length === 1 && channel.pending.length === 0), view())
+    await h.notify('item/started', { turnId: 'review', item: { type: 'enteredReviewMode', id: 'enter-review', review: 'current changes' } })
+    await h.notify('turn/started', { turn: { id: 'review-lifecycle', status: 'inProgress', items: [] } })
+    check(tag + ': native review is working without an optimistic user row', channel.working && !channel.rows.some(row => row.kind === 'user' && row.text === '/review'))
+    await type('/review')
+    stdin.write('\r')
+    check(tag + ': a busy review refusal is visible and leaves no ghost preview',
+      await settled(() => channel.notifications.some(notice => notice.text === codexText('codex-command-idle')) && channel.pending.length === 0)
+      && h.sent('review/start').length === 1, view())
+    await type('review followup')
+    stdin.write('\t')
+    check(tag + ': Tab queues the review followup', await settled(() => channel.pending.length === 1 && channel.pending[0]?.text === 'review followup'), view())
+    stdin.write('\x1b[1;3A')
+    check(tag + ': Alt+Up retracts the live queued followup for editing', await settled(() => channel.pending.length === 0 && view().includes('review followup')), view())
+    stdin.write('\t')
+    check(tag + ': re-send queues exactly one followup', await settled(() => channel.pending.length === 1 && channel.pending[0]?.text === 'review followup'), view())
+    stdin.write('\x1b')
+    check(tag + ': Esc interrupts the native lifecycle and docks only the followup',
+      await settled(() => h.sent('turn/interrupt').at(-1)?.turnId === 'review-lifecycle' && channel.pending[0]?.docked === true)
+      && channel.pending.length === 1, view())
+    await h.completeTurn('review', 'interrupted')
+    check(tag + ': review completion clears cancellation and keeps the dock editable',
+      await settled(() => !channel.working && !channel.cancelPending), view())
+    stdin.write('\x1b[1;3A')
+    check(tag + ': Alt+Up retrieves the dock after native review cancellation', await settled(() => channel.pending.length === 0 && view().includes('review followup')), view())
   } finally {
     app.unmount()
     channel.releaseContributions()
