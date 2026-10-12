@@ -112,6 +112,19 @@ if (!process.argv.includes('--legacy-only')) for (const persisted of [true, fals
   assert.equal(other.hooks.size, 0)
 }
 
+if (!process.argv.includes('--legacy-only')) {
+  const child = makeAgent('seeded-child', 'p', 'b')
+  child.record({ provider: 'p', model: 'a' })
+  const channel = createChannel({ on: () => () => {}, get: () => undefined, logger: { warn() {} } } as never,
+    child as never, { provider: 'p', model: 'b', cwd: '/tmp/demo', activity: false })
+  try {
+    const assembly = await invoke<Assembly>(child.hooks.get('system-prompt/assemble'), {}, {}, async () => ({ variables: child.options }))
+    const request = await invoke<Route>(child.hooks.get('agent/request'), {}, async () => child.options)
+    assert.deepEqual(assembly.variables, { provider: 'p', model: 'b' })
+    assert.deepEqual(request, assembly.variables, 'a seeded child keeps its explicitly selected route over inherited headers')
+  } finally { channel.releaseContributions() }
+}
+
 {
   const state = { provider: 'p', model: 'a', working: false, emit() {} }
   const selection = { current: undefined, assembled: undefined }

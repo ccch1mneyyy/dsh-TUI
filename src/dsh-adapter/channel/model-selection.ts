@@ -27,9 +27,16 @@ export function createModelSelection(ctx: Context, deps: {
   const bind = (agent: Agent, route: { provider: string; model: string }): void => {
     deps.owner.assertActive()
     if (entries.has(agent)) return
+    const recorded = agent.session.requestHeader?.()?.config
+    const hasCreatedRoute = agent.options?.provider !== undefined && agent.options.model !== undefined
+    // Seeded children can deliberately replace the inherited header's route.
+    // Restore a recorded pin only when the caller actually adopted that route.
+    const usesRecordedRoute = recorded?.provider === route.provider && recorded?.model === route.model
     const ref: ModelSelectionRef = {
-      current: agent.options?.provider === route.provider && agent.options?.model === route.model
-        ? undefined : { ...route },
+      current: route.provider !== '' && route.model !== '' &&
+        (!hasCreatedRoute || (usesRecordedRoute &&
+          (route.provider !== agent.options.provider || route.model !== agent.options.model)))
+        ? { ...route } : undefined,
       assembled: undefined,
     }
     let active = true
