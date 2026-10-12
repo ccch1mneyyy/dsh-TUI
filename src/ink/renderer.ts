@@ -27,6 +27,7 @@ export type RenderOptions = {
   /** Whether terminal graphics are active for this paint pass. */
   terminalImages?: boolean
   imageReady?: (placement: TerminalImagePlacement) => boolean
+  imageRasterBytes?: (placement: TerminalImagePlacement) => number
   /**
    * True when rasters paint over the cell grid (Sixel): image-owned cells
    * carry the surface background instead of terminal-default blanks. See
@@ -142,6 +143,7 @@ export default function createRenderer(
         frontFrame.images,
         options.imageReady,
         options.opaqueImageBacking ?? false,
+        options.imageRasterBytes,
       )
     } else {
       output = new Output({
@@ -152,6 +154,7 @@ export default function createRenderer(
         terminalImages: options.terminalImages,
         previousImages: frontFrame.images,
         imageReady: options.imageReady,
+        imageRasterBytes: options.imageRasterBytes,
         opaqueImageBacking: options.opaqueImageBacking ?? false,
       })
     }

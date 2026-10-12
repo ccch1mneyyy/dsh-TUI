@@ -772,6 +772,7 @@ export default class Ink {
       altScreen: this.altScreenActive,
       terminalImages: this.altScreenActive && (this.kittyGraphicsSupported || this.sixelGraphicsSupported),
       imageReady: sixelActive ? this.sixelGraphicsManager.prepare : undefined,
+      imageRasterBytes: this.altScreenActive && this.kittyGraphicsSupported ? this.kittyGraphicsManager.rasterBytes : undefined,
       // Sixel paints rasters over the cells: an image's own cells must then
       // carry the surface background instead of terminal-default blanks.
       opaqueImageBacking: sixelActive,
