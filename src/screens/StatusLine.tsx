@@ -823,15 +823,18 @@ function buildHoverDetail(
       // The hover payoff for the ctx ask: percent + counts + free, then the
       // segment breakdown as the truncate-able tail (no bar — the row's
       // in-place morph and the segment bar above already carry the gauge).
-      // The same attributed shares the bar's fills were drawn from, so these
-      // five add up to `contextUsed` and the free count next to them.
+      // Match the bar's attributed shares, including its measured-used
+      // fallback when no content category can be attributed.
       const sizes = attributeBarTokens(
         barSegments(channel.contextSegments, channel.contextBreakdown),
         contextUsed,
       )
-      const segments = USED_SEGMENTS.map(
-        segment => `${segment.labels[1] ?? segment.key} ${formatTokens(sizes[segment.key])}`,
-      ).join(' · ')
+      const hasComposition = USED_SEGMENTS.some(segment => sizes[segment.key] > 0)
+      const segments = hasComposition
+        ? USED_SEGMENTS.map(
+          segment => `${segment.labels[1] ?? segment.key} ${formatTokens(sizes[segment.key])}`,
+        ).join(' · ')
+        : `${t('context-bar-used')} ${formatTokens(contextUsed)}`
       return (
         <Text wrap="truncate">
           {((contextUsed / window) * 100).toFixed(1)}% ·{' '}

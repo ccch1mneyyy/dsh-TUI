@@ -37,7 +37,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, tooltip, termT
   import('../src/screens/StatusMetrics.js'),
 ])
 
-const { sleep, settled, screenHas, findText } = termTest
+const { sleep, settled, screenHas, findText, viewportLines } = termTest
 const { render, AlternateScreen, Box } = ui
 
 let failed = 0
@@ -389,6 +389,37 @@ try {
   }
   hover(barStdin, 1, 1)
   check('I 移开条即撤下明细', await settled(() => !screenHas(barTerm, 'thinking 5.0k')))
+
+  // I2：只知占用、不知构成时，两处悬停都报实测已用量，不列五个 0。
+  // 分别覆盖 meter 构成全零，以及旧 meter 缺席且本地估算为空。
+  for (const sample of [
+    { model: 'ZERO-METER', contextSegments: SEGMENTS, contextBreakdown: { systemTokens: 0, toolsTokens: 0, messageTokens: 0 } },
+    { model: 'NO-METER', contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }, contextBreakdown: undefined },
+  ]) {
+    barInstance.rerender(
+      <AlternateScreen>
+        <Box flexDirection="column">
+          <KeySink />
+          <StatusLine
+            channel={{
+              ...barStub,
+              ...sample,
+              statusBar: { contextBar: true, contextUsage: true, cache: false },
+            } as never}
+          />
+          <tooltip.TooltipLayer />
+        </Box>
+      </AlternateScreen>,
+    )
+    check(`I2 ${sample.model} 已上屏`, await settled(() => screenHas(barTerm, sample.model)))
+    hoverText(barStdin, barTerm, '19.5%')
+    check(`I2 ${sample.model} 条悬停沿用已用量兜底`, await settled(() => screenHas(barTerm, '已用 13k')))
+    hoverText(barStdin, barTerm, 'ctx')
+    check(`I2 ${sample.model} ctx 悬停沿用已用量兜底`,
+      await settled(() => screenHas(barTerm, '已用 12.5k') && !screenHas(barTerm, 'sys 0')),
+      JSON.stringify(viewportLines(barTerm).filter(line => line !== '')))
+    hover(barStdin, 1, 1)
+  }
 
   // 压力染色上屏：同一实例改用 84% 占用重渲染，读数文字应转成主题 warning。
   const { ThemeProvider } = ui

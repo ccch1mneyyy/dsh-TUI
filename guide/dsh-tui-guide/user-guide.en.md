@@ -575,6 +575,8 @@ An empty session shows the whale logo area at the top (scrolls away with the con
   free add up to the window** (`1.2k`-style abbreviations cost at most half a unit each) instead of
   reporting a second, smaller total. The estimates themselves **never** feed the occupancy total — that
   comes from the ctx reading below.
+- When no content category can be attributed, the bar keeps one used block and both the bar and ctx
+  hover details report its measured `used` count instead of five zero categories.
 - The only text on the bar is the right-edge reading `13k/64k 19.5%` (narrow screens show only `19.5%`).
 - The reading colors by usage: <80% gray-blue, **≥80% amber, ≥95% red**.
 - Hover the whole bar for the legend: color block + name + token count (narrow screens shorten the names).
