@@ -119,11 +119,12 @@ function traceFrames(): GeometryFrame[] {
 const lastFrame = () => traceFrames().flatMap(frame => frame.scroll).at(-1)
 
 const stdin = new FakeStdin()
+const stdout = new FakeStdout()
 const instance = await render(
   <AlternateScreen>
     <Chat channel={channel as unknown as Channel} questionStore={new QuestionStore()} fullscreen />
   </AlternateScreen>,
-  { stdout: new FakeStdout() as unknown as NodeJS.WriteStream, stdin: stdin as unknown as NodeJS.ReadStream, stderr: new FakeStderr() as unknown as NodeJS.WriteStream, exitOnCtrlC: false, patchConsole: false },
+  { stdout: stdout as unknown as NodeJS.WriteStream, stdin: stdin as unknown as NodeJS.ReadStream, stderr: new FakeStderr() as unknown as NodeJS.WriteStream, exitOnCtrlC: false, patchConsole: false },
 )
 await sleep(1200) // 固定窗:pacing 首屏就绪的静置窗——完整渲染前无单一可轮询锚点（trace 只在滚动几何变化的帧落 note）
 
@@ -156,7 +157,14 @@ for (let round = 1; round <= ROUNDS; round++) {
     for (let page = 0; page < 20; page++) stdin.write('\x1b[5~')
     check('远处历史就绪且尾行已卸载', await settled(() => {
       const list = traceFrames().map(frame => frame.list).findLast(list => list !== null)
-      return lastFrame()?.scrollTop === 0 && list !== null && list !== undefined && list.end <= streamIndex
+      const frame = lastFrame()
+      // Geometry is written synchronously; xterm consumes stdout later.
+      // At the logical head an earlier drain frame can still show a clipped
+      // logo. Wait for the full header and parsed output before freezing a
+      // text anchor, so that navigation's final paint is outside the probe.
+      return frame?.scrollTop === 0 && frame.renderScrollTop === 0 &&
+        list !== null && list !== undefined && list.pending === 0 && list.end <= streamIndex &&
+        stdout.writableLength === 0 && viewportLines(term).some(line => line.includes('dsh-TUI'))
     }))
   }
 
