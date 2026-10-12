@@ -813,7 +813,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
 - `/update`, `/vim` — vim editing mode toggle, see "Editing keys".
 - `/terminal-setup`, `/connect`, `/help`, `/exit` — aliases `/quit`, `/q`.
 - `/kernel` — opens the kernel picker (the current kernel is ticked; every row
-  carries a version and a one-line explanation), on DSH and Claude sessions alike.
+  carries a version and a one-line explanation), on DSH, Codex and Claude sessions alike.
   Picking the other kernel remembers it and restarts into it with a new session;
   the old session stays in `/resume`, and if the new session fails to start you
   are back on the old one. A running turn blocks the switch. The launchpad's
@@ -822,6 +822,11 @@ The command menu merges local commands with the DSH command registry. Type `/` t
   a later direct launch follows the flag. A fresh launch lands on the launchpad
   whichever kernel is remembered; a launch with a resume target goes straight
   into the session.
+- `/dsh`, `/codex`, `/claude` — directly choose the named kernel through the same
+  checks and restart flow as `/kernel`. Choosing the current kernel only reports
+  that it is already current; a running turn blocks switching. Missing Claude
+  opens the install wizard; missing or outdated Codex shows install/upgrade guidance.
+  These shortcuts also work before startup is ready.
 
 **Registry**
 

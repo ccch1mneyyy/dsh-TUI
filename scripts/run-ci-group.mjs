@@ -70,6 +70,8 @@ const GROUPS = {
 // 内核选择器组件：标题、行标签与副标题（版本、不可选原因）、当前项勾选、
 // 不可选行变暗但焦点指针仍显示、pinned 提示行、鼠标点行、未接 onPick 时无 hover。
     ['verify-kernel-picker', ['node', '--import', 'tsx/esm', 'scripts/verify-kernel-picker.tsx']],
+// 内核快捷命令：真实 Chat 的直达切换、探测等待、回合门禁、首屏与安装提示。
+    ['verify-kernel-commands', ['node', '--import', 'tsx/esm', 'scripts/verify-kernel-commands.tsx']],
 // SDK 安装向导（内核选择器「未安装」行进入）：各步骤态的正文与提示行、
 // 手动兜底命令、窄终端截断、en 态文案。
     ['verify-sdk-install-wizard', ['node', '--import', 'tsx/esm', 'scripts/verify-sdk-install-wizard.tsx']],

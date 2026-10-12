@@ -1875,6 +1875,9 @@ const dict = {
   'cmd-desc-jobs': { zh: '查看本会话的后台任务' },
   'cmd-desc-panel': { zh: '侧栏面板：开关 / 聚焦 / 缩放 / 切换', en: 'Side panel: toggle / focus / zoom / switch' },
   'cmd-desc-kernel': { zh: '选择内核（切换后重启进入）', en: 'Choose the kernel (restarts into it)' },
+  'cmd-desc-dsh': { zh: '切换到 DSH 内核（重启进入新会话）' },
+  'cmd-desc-codex': { zh: '切换到 Codex 内核（重启进入新会话）' },
+  'cmd-desc-claude': { zh: '切换到 Claude 内核（重启进入新会话）' },
   'cmd-desc-channel': { zh: '渠道档案：切换 / 导入 / 查看映射（Claude）', en: 'Channel profiles: switch / import / view mappings (Claude)' },
   // Side panel（侧栏）
   'panel-title-todo': { zh: '待办', en: 'Todo' },

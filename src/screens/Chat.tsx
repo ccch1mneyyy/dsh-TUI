@@ -840,7 +840,7 @@ export function Chat({
    * "点了没反应"，状态还滞留着、等界面关掉才突然弹出来。默认收，白名单只留给覆盖层。
    */
   const overlayCommandNames = React.useMemo(
-    () => new Set(['model', 'effort', 'plan', 'preset', 'permission', 'kernel']),
+    () => new Set(['model', 'effort', 'plan', 'preset', 'permission', 'kernel', 'dsh', 'codex', 'claude']),
     [],
   )
   /**
@@ -870,7 +870,7 @@ export function Chat({
     }).catch(() => undefined)
   }, [launchpadShown])
   const canInstallSdk = onResolveSdkInstall !== undefined
-  const { currentId: kernelCurrentId, options: kernelOptions, open: openKernelPicker, pick: pickKernel, reprobe: reprobeKernels } = useKernelPicker({
+  const { currentId: kernelCurrentId, options: kernelOptions, open: openKernelPicker, pick: pickKernel, pickById: pickKernelById, reprobe: reprobeKernels } = useKernelPicker({
     channel, kernelVersion, kernelEntries, launchpadShown, onProbeKernels, onSwitchBackend, canInstallSdk, dispatchOverlay,
   })
   /** 当前内核那一行：短名给落地页入口、PromptInput 的不可用提示等消费（同源，
@@ -3889,13 +3889,18 @@ export function Chat({
         return true
       }
       case 'kernel':
-        // 内核选择器，每个内核下都可用（在对话页里切回 DSH 只有这一条路）。
+        // 内核选择器，每个内核下都可用。
         // 确认后由组合根的 onSwitchBackend 记住选择并以新内核重启。与 /help、
         // 参数行一致：选择器已开着就收起，没开才打开。
         setHelpOpen(false)
         if (overlay.kind === 'kernel') dispatchOverlay({ type: 'close' })
         else openKernelPicker()
         return true
+      case 'dsh':
+      case 'codex':
+      case 'claude':
+        setHelpOpen(false)
+        return pickKernelById(name).then(() => true)
       case 'restart':
         // pi-style reload tail: /reload cannot re-read boot-time-only state
         // (cordis.yml root config, frozen fullscreen layout, newly built
