@@ -35,6 +35,7 @@ interface CommandDeps {
    *  catalog's `off` token). */
   exitPlan(): Promise<void>
   submit(input: AgentInput, placement: SubmitPlacement, wireInput?: readonly UserInput[]): Promise<{ readonly accepted: boolean; readonly reason?: string }>
+  beginReview(): () => void
   noteReviewStarted(id: string): void
 }
 
@@ -112,9 +113,15 @@ export function createCodexCommands(deps: CommandDeps) {
       switch (name) {
         case 'review': {
           if (deps.busy()) return { accepted: false, reason: codexText('codex-command-idle') }
-          const result = rec(await deps.hub.call(CLIENT.reviewStart, { threadId: deps.threadId(), target: reviewTarget(args), delivery: 'inline' }))
-          const id = str(rec(result?.turn)?.id)
-          if (id !== undefined) deps.noteReviewStarted(id)
+          const failStart = deps.beginReview()
+          try {
+            const result = rec(await deps.hub.call(CLIENT.reviewStart, { threadId: deps.threadId(), target: reviewTarget(args), delivery: 'inline' }))
+            const id = str(rec(result?.turn)?.id)
+            if (id !== undefined) deps.noteReviewStarted(id)
+          } catch (error) {
+            failStart()
+            throw error
+          }
           claim(input)
           return { accepted: true }
         }

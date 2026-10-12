@@ -450,7 +450,10 @@ interface CodexSessionState {
   `{accepted:false, reason}`。
 - `/review`、`/diff`、`/usage` 与只切换模式的 `/plan` 不走普通消息回显，命令成功后
   主动认领 pending；拒绝结果由 channel 移除预览并显示原因。评审同时保留完成 id 与
-  lifecycle id（F31），早到的 Esc 等待后者，完成事件按前者释放队列；投影锚点保留评审 id。
+  lifecycle id（F31），发起 `review/start` 前即占住输入闸门，早到的取消等待后者，
+  启动 RPC 失败则释放等待；完成事件按前者释放队列，投影锚点保留评审 id。正常完成
+  与强制收尾共用关闭记录，迟到的启动回执、`enteredReviewMode` 与 lifecycle 通知
+  都不能重新占住已关闭评审的输入闸门。
 - 每次 `turn/start` 都携带当前的覆盖（`model`、`effort`、`approvalPolicy`、`sandboxPolicy`、
   `collaborationMode`）——只在与 thread 当前设置不同的时候才带，带了即对后续回合生效（协议语义）。
 

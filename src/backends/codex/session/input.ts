@@ -50,7 +50,7 @@ export interface InputQueueDeps {
   startFailed?(error: unknown, overrides: Rec): void
   closed(): boolean
   /** The open turn could not be settled by the server: close it here. */
-  forceClose(): void
+  forceClose(turnId: string, reviewTurnId?: string): void
   readonly clock: RpcClock
   readonly forceSettleMs: number
 }
@@ -195,7 +195,7 @@ export function createInputQueue(deps: InputQueueDeps) {
         forceTimer = undefined
         if (activeTurnId !== turnId) return
         deps.emit([{ type: 'notice', level: 'warning', text: codexText('codex-cancel-forced') }])
-        deps.forceClose()
+        deps.forceClose(turnId, reviewTurnId)
         onTurnCompleted(turnId, true)
       }, deps.forceSettleMs)
     }
@@ -307,6 +307,19 @@ export function createInputQueue(deps: InputQueueDeps) {
     onTurnStarted(turnId: string): void {
       activeTurnId = turnId
       settleReviewStart(turnId)
+    },
+    /** Reserve the turn before review/start reaches the server. The returned
+     *  cleanup releases only this request's wait if its RPC fails. */
+    beginReview(): () => void {
+      const pending = new Promise<string | undefined>(resolve => { resolveReviewStart = resolve })
+      starting = pending
+      return () => {
+        if (starting !== pending) return
+        settleReviewStart()
+        reviewTurnId = undefined
+        cancelCause = undefined
+        drain()
+      }
     },
     onReviewStarted(turnId: string): void {
       reviewTurnId = turnId
