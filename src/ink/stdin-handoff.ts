@@ -6,7 +6,7 @@
  * Temporary editor handoffs must keep using suspendStdin()/resumeStdin().
  */
 export function detachHandoffStdin(
-  stdin: Pick<NodeJS.ReadStream, 'removeAllListeners' | 'pause' | 'unref'> = process.stdin,
+  stdin: Pick<NodeJS.ReadStream, 'removeAllListeners' | 'pause'> & { unref?: () => unknown } = process.stdin,
 ): void {
   stdin.removeAllListeners('readable')
   stdin.removeAllListeners('data')
@@ -20,5 +20,5 @@ export function detachHandoffStdin(
   if (typeof input._read === 'function') input._read = () => {}
   stdin.pause()
   input._handle?.readStop?.()
-  stdin.unref()
+  stdin.unref?.()
 }
