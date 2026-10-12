@@ -133,7 +133,13 @@ for (const baseline of baselines) {
       },
     },
     { id: 'session-log-deepseek', name: '@deepseek-ai/dsh-session-log-deepseek' },
-  ].map(row => officialRows.find(official => official.id === row.id) ?? row)
+  ].map(row => {
+    const official = officialRows.find(official => official.id === row.id)
+    if (baseline.basePath !== undefined) {
+      assert.ok(official, `${baseline.label}: source baseline must provide official ${row.id} row`)
+    }
+    return official ?? row
+  })
   const reportingComposition = applyEntryPatches(reportingRows, tuiPatches, () => {})
   for (const row of reportingRows) {
     assert.deepEqual(reportingComposition.find(entry => entry.id === row.id), row,

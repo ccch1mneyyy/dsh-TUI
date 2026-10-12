@@ -40,7 +40,8 @@
   服务由 base 提供，模型可见的工具仍由 preset 控制；与 web-app 的差异见快照。
 - **config overrides**:6 行。`session-telemetry-otel`、
   `plugin-package-inventory-deepseek` 与 `session-log-deepseek` 继承官方组合，
-  上报默认值、导出配置与版本差异由上游拥有；用户补丁与环境变量仍可显式覆盖。
+  上报默认值、导出配置与版本差异由上游拥有；三项均可经用户补丁覆盖。
+  遥测环境变量只控制 `session-telemetry-otel`，不控制两项 API 请求元数据。
 - **inserts**:19 行(dsh-tui、working-activity、内置 OAuth 入口 dsh-tui-auth、DeepSeek 账号回调的 dsh-tui-webserver、六个插件互通行,以及
   dsh-tui-storage、dsh-tui-storage-json、dsh-tui-storage-domain、
   dsh-tui-workspace、dsh-tui-code-runtime、dsh-tui-subagent-model-selection-settings、

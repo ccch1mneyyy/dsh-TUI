@@ -35,13 +35,14 @@ to override them:
 
 | Setting | Official default | Data and trigger |
 | --- | --- | --- |
-| `plugin-package-inventory-deepseek.enabled` | `true` | `dsh_plugin_packages` on official DeepSeek API requests, containing active plugin package names and versions so TUI usage can be identified |
-| `session-log-deepseek.enabled` | `true` | `dsh_session_log` on official DeepSeek API requests, incrementally carrying canonical Session events including conversation content; controlled independently of package inventory |
+| `plugin-package-inventory-deepseek.enabled` | `true` | `dsh_plugin_packages` on `deepseek-official` requests, containing active plugin package names and versions so TUI usage can be identified |
+| `session-log-deepseek.enabled` | `true` | `dsh_session_log` on `deepseek-official` requests, incrementally carrying canonical Session events that may include the working directory, prompts, conversation content, and tool arguments and results; controlled independently of package inventory |
 | `session-telemetry-otel.mode` | `FEEDBACK_ONLY` | New explicit feedback authorizes OTel upload of the Session-log prefix through that feedback, including context; ordinary chat does not trigger this channel |
 
 The first two fields are request metadata outside model input and add no model
-input tokens. They accompany the corresponding DeepSeek requests and do not
-measure all TUI usage through the Claude/Codex backends.
+input tokens. Both go to the adapter's configured `baseURL`, including third-party
+gateways. They accompany the corresponding DeepSeek requests and do not measure
+all TUI usage through the Claude/Codex backends.
 
 Feedback telemetry supports the upstream environment variables:
 

@@ -32,12 +32,13 @@ TUI bundle 继承已安装 DSH 官方组合的上报配置；上游未提供的�
 
 | 配置 | 官方默认 | 发送内容与触发条件 |
 | --- | --- | --- |
-| `plugin-package-inventory-deepseek.enabled` | `true` | DeepSeek 官方 API 请求中的 `dsh_plugin_packages`，包含活跃插件包的名称与版本，可用于识别 TUI 使用量 |
-| `session-log-deepseek.enabled` | `true` | DeepSeek 官方 API 请求中的 `dsh_session_log`，增量携带规范会话事件，包括会话内容；与插件包清单分别控制 |
+| `plugin-package-inventory-deepseek.enabled` | `true` | `deepseek-official` 路由请求中的 `dsh_plugin_packages`，包含活跃插件包的名称与版本，可用于识别 TUI 使用量 |
+| `session-log-deepseek.enabled` | `true` | `deepseek-official` 路由请求中的 `dsh_session_log`，增量携带规范会话事件，可能包括工作目录、提示词、对话内容、工具参数和结果；与插件包清单分别控制 |
 | `session-telemetry-otel.mode` | `FEEDBACK_ONLY` | 新的显式反馈授权通过 OTel 上传截至反馈的会话日志前缀，包含上下文；普通聊天不触发该通道 |
 
-前两项是模型输入之外的请求元数据，不增加模型输入 token。它们只随对应的
-DeepSeek 请求发送，不能据此统计 Claude/Codex 后端的全部 TUI 使用。
+前两项是模型输入之外的请求元数据，不增加模型输入 token。两项都会发送到
+适配器配置的 `baseURL`，包括第三方网关。它们只随对应的 DeepSeek 请求发送，
+不能据此统计 Claude/Codex 后端的全部 TUI 使用。
 
 反馈遥测支持上游环境变量：
 
