@@ -192,9 +192,8 @@ const GROUPS = {
 // 滚动窗口与 shrink 边界。measure-depth 需生产模式（minified #185）。
     ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx']],
     ["verify-scroll", ['node', 'scripts/verify-scroll.mjs']],
-// 塌陷假象帧之后的锚定回归（opentui #709 同族的另一半）：恢复帧不得把上翻
-// 停住的位置钳到塌陷后的 maxScroll——那会被下一帧读成「用户在底部」而悄悄
-// 接回跟随，屏幕表现为「翻上去停住，新内容一来又被推回底部」。
+// 流式行离开虚拟窗口时保留实测行高：不得因回落到 2 行估算而塌陷，
+// 不得改写 committed/painted 位置、接回跟随或移动 xterm 中的正文锚点。
     ["verify-post-shrink-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-post-shrink-anchor.tsx']],
 // 长会话冷/热窗口跳转、绘制边界发布与回底挂载预算（不能等滚轮救活）。
     ['verify-scroll-jumps', ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-jumps.tsx']],
