@@ -216,8 +216,9 @@ function makeChannel() {
   const channel = {
     whaleIdle: false,
     version: 0,
-    // Keep the CI hint collision visible on every run, independent of tip rotation.
-    rows: [{ id: 1, kind: 'user' as const, text: 'hi · ' + DASHBOARD_HINT_COLLISION }],
+    // Keep dashboard and fold markers outside the composer, so whole-screen
+    // matches cannot report a draft edit before its own row has rendered.
+    rows: [{ id: 1, kind: 'user' as const, text: 'hi · ' + DASHBOARD_HINT_COLLISION + ' · ▸' }],
     status: 'idle' as const,
     sessionTitle: 'probe',
     agentId: 'probe',
@@ -605,10 +606,9 @@ async function scenarioEditState(): Promise<string> {
     await waitFor(
       scenario,
       'big bracketed paste to fold into one chip',
-      () => screenHas(app, '▸') && !screenHas(app, 'fold-line-05'),
+      () => composerHas(app, '▸') && composerHas(app, 'fold-line-00') && !composerHas(app, 'fold-line-05'),
       8000,
     )
-    assertTrue(scenario, 'fold chip keeps the first-line preview', screenHas(app, 'fold-line-00'))
     pasteText(app, pastedImagePath)
     await waitFor(scenario, 'staged image token', () => composerHas(app, STAGED_IMAGE_TOKEN), 8000)
     // The paste leaves the caret deterministically at the end of the inserted
