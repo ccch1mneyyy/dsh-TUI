@@ -226,6 +226,22 @@ assert.equal(portraitRaster.data[(832 * 828 + 827) * 4 + 3], 255)
 assert.equal(portraitRaster.data[(833 * 828) * 4 + 3], 0)
 assert.equal(portraitManager.reconcile([portraitPlacement]), '', 'enlarged portraits retain the stable-frame cache')
 
+// Crossing a pixel budget must shrink uniformly, not jump to a half-size
+// integer-ratio canvas. These boxes are just above the 4/8 MiB limits.
+for (const boundary of [
+  { presentation: 'transcript' as const, cell: { width: 47, height: 80 }, size: [1021, 1026], maxBytes: TERMINAL_IMAGE_MAX_BYTES },
+  { presentation: 'preview' as const, cell: { width: 67, height: 112 }, size: [1457, 1439], maxBytes: TERMINAL_IMAGE_PREVIEW_MAX_BYTES },
+]) {
+  const boundaryManager = new KittyGraphicsManager({ cellSize: boundary.cell })
+  const boundaryPlacement = { ...portraitPlacement, columns: 22, rows: 13, presentation: boundary.presentation }
+  const boundaryRaster = rgbaFromTransmission(boundaryManager.reconcile([boundaryPlacement]))
+  assert.deepEqual([boundaryRaster.width, boundaryRaster.height], boundary.size,
+    'budget-boundary uploads retain the available physical resolution')
+  assert.ok(boundaryRaster.data.byteLength <= boundary.maxBytes)
+  assert.ok(boundaryRaster.width / (22 * boundary.cell.width) > 0.98)
+  assert.ok(boundaryRaster.height / (13 * boundary.cell.height) > 0.98)
+}
+
 // Interpolation across an opaque pixel and an empty black pixel must retain
 // the ink colour as coverage fades, rather than darkening the enlarged edge.
 const softEdge = fitTerminalImageSource({

@@ -161,35 +161,14 @@ export function terminalImagePixelSize(
   const cell = normalizeTerminalCellSize(cellSize)
   const safeColumns = Math.max(1, Math.floor(columns))
   const safeRows = Math.max(1, Math.floor(rows))
-  const [boxWidth, boxHeight] = boundedPixelBox(
+  // Keep an affordable physical box exact. Over budget, shrink uniformly
+  // and round each edge by at most one pixel; exact-ratio integer multiples
+  // can otherwise discard most of the budget at a boundary (e.g. 1034x1040).
+  return boundedPixelBox(
     safeColumns * cell.width,
     safeRows * cell.height,
     presentation === 'preview' ? TERMINAL_IMAGE_PREVIEW_MAX_BYTES : TERMINAL_IMAGE_MAX_BYTES,
   )
-
-  // Preserve the exact physical aspect ratio using an integer multiple of
-  // its reduced ratio. Take the full pixel box when it fits the budget,
-  // otherwise the largest multiple within it.
-  const requestedWidth = safeColumns * cell.width
-  const requestedHeight = safeRows * cell.height
-  const divisor = greatestCommonDivisor(requestedWidth, requestedHeight)
-  let ratioWidth = requestedWidth / divisor
-  let ratioHeight = requestedHeight / divisor
-  let multiple = Math.floor(
-    Math.min(boxWidth / ratioWidth, boxHeight / ratioHeight),
-  )
-
-  // Some coprime physical dimensions need more pixels than the allocation
-  // budget even at their smallest exact ratio. Only then use the nearest
-  // uniformly bounded raster ratio.
-  if (multiple < 1) {
-    const boundedDivisor = greatestCommonDivisor(boxWidth, boxHeight)
-    ratioWidth = boxWidth / boundedDivisor
-    ratioHeight = boxHeight / boundedDivisor
-    multiple = boundedDivisor
-  }
-
-  return [ratioWidth * multiple, ratioHeight * multiple]
 }
 
 /**
@@ -247,15 +226,6 @@ export function fitTerminalImageSource(
     data.set(content.subarray(sourceStart, sourceStart + sourceStride), targetStart)
   }
   return { data, width: canvasWidth, height: canvasHeight }
-}
-
-function greatestCommonDivisor(left: number, right: number): number {
-  while (right !== 0) {
-    const remainder = left % right
-    left = right
-    right = remainder
-  }
-  return left
 }
 
 function boundedPixelBox(width: number, height: number, maxBytes: number): readonly [number, number] {
