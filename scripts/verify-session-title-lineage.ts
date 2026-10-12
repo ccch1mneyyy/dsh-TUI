@@ -60,7 +60,7 @@ const { createModelSwitchAction } = await import('../src/dsh-adapter/channel/mod
   const switchModel = createModelSwitchAction({ get: () => ({ listModels: () => new Promise(resolve => { resolveCatalog = resolve }) }) } as never, state as never, {
     owner: { current: () => active },
     binding: { capture: () => ({ generation }), isCurrent: capture => capture.generation === generation } as never,
-    selection, settleCompaction: async () => {}, applyPreferredEffort: async () => {}, dropModelCompletion() {}, notify() {},
+    selection, supportsRouteSwitch: true, seedUpstreamRetry() {}, applyPreferredEffort: async () => {}, dropModelCompletion() {}, notify() {},
   })
   const tick = () => new Promise(resolve => setImmediate(resolve))
   const stale = switchModel('p', 'b')

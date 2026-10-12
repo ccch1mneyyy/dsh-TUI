@@ -18,6 +18,8 @@ export function createModelSwitchAction(
     owner: Pick<ChannelOwner, 'current'>
     binding: Pick<Binding, 'capture' | 'isCurrent'>
     selection: ModelSelectionRef
+    /** Legacy DSH delegates from immutable creation options instead of request headers. */
+    supportsRouteSwitch: boolean
     applyPreferredEffort(): Promise<void>
     dropModelCompletion(): void
     /** No bind follows an in-session switch, so seed the new route here. */
@@ -31,6 +33,10 @@ export function createModelSwitchAction(
     if (state.working) { deps.notify(t(WORKING_GATE_NOTICES.model), { color: 'warning' }); return false }
     const generation = ++operation
     if (provider === state.provider && model === state.model) return true
+    if (!deps.supportsRouteSwitch) {
+      deps.notify(t('model-switch-legacy-unavailable'), { color: 'warning', timeoutMs: 8000 })
+      return false
+    }
     const capture = deps.binding.capture()
     const current = (): boolean => deps.owner.current() && deps.binding.isCurrent(capture) && generation === operation
     try {

@@ -19,8 +19,8 @@
  *
  * Second part — request-level regression for the #866 preferred-effort
  * fallback: a stored tier must still reach the request config on the SECOND and
- * every later bind. bind() resets `selection.current` on every session switch
- * (binding-events.ts), so the fallback-notice dedupe may gate only the toast.
+ * every later bind. Each new Agent starts with its own unpinned selection
+ * (model-selection.ts), so the fallback-notice dedupe may gate only the toast.
  * An early return on an unchanged (preferred → applied) pair leaves the request
  * without any tier from the second bind on — the very "effort resets every new
  * session" symptom the fallback exists to fix, reborn one session later, and it
@@ -35,6 +35,7 @@ import { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { createChannelBinding } from '../src/dsh-adapter/channel/binding.js'
 import { createDshSession } from '../src/dsh-adapter/backend/session.js'
+import { createModelSelection } from '../src/dsh-adapter/channel/model-selection.js'
 import { createBindingEvents } from '../src/dsh-adapter/channel/binding-events.js'
 import { createModelActions } from '../src/dsh-adapter/channel/model-actions.js'
 import { createChannelOwner } from '../src/dsh-adapter/channel/owner.js'
@@ -178,7 +179,7 @@ check(
 
 // ── part 2: the preferred tier must survive a rebind (request level) ────────
 // One rig per scenario: the real binding cell, the real binding router
-// (bind → selection reset → applyPreferredEffort → assemble → request) and the
+// (new-agent bind → applyPreferredEffort → assemble → request) and the
 // real model actions over a fake route, so the assertion reads what the agent
 // loop's buildRequest would actually carry.
 
@@ -216,7 +217,8 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
   }
   const owner = createChannelOwner()
   const binding = createChannelBinding(createDshSession(rigRoot as never, { agent: agent as never, handle: undefined }), owner)
-  const selection: { current?: { provider: string; model: string; reasoningEffort?: string }; assembled?: { provider: string; model: string; reasoningEffort?: string } } = {}
+  const modelSelection = createModelSelection(rigRoot as never, { owner, agent: () => binding.agent! })
+  const { selection } = modelSelection
   const notices: string[] = []
   const state = {
     agentBindingGeneration: 0,
@@ -254,8 +256,8 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
     state: state as never,
     activity: { start() {}, stop() {}, onAgentStatus() {}, onSessionEvent() {} },
     inputConvergence: { interruptSeq: 0, cancelInFlight: false },
-    selection: selection as never,
-    modelActions: { selection: selection as never, applyPreferredEffort },
+    modelSelection,
+    modelActions: { applyPreferredEffort },
     modeActions: { refreshMode() {}, onSessionEvent() {}, async applyRememberedPermission() {} },
     projector: { apply() {}, settleStreaming() {}, updateSpinnerMode() {} } as never,
     subagents: { onSessionEvent() { return false }, onStart() {}, onEnd() {} },
@@ -266,14 +268,16 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
    * Real bind entry. Later binds go through a binding-cell transaction
    * (`switchTo`), which does the three things every session-switch tail does —
    * generation bump, cleared subscriptions, then `bindAgent()` — so
-   * `selection.current` is reset precisely as production resets it. /new and
-   * /bg reach the same place through `adopt` instead; only the adoption
-   * transaction differs, not the reset-then-reapply sequence under test.
+   * each new Agent starts with a fresh selection, as /new and /bg do through
+   * `adopt`. Reattaching an existing Agent instead retains its route.
    */
   const bindOnce = async (first = false): Promise<void> => {
     const before = applies
     if (first) events.bind()
-    else binding.switchTo(binding.session, () => events.bind())
+    else {
+      const next = { ...agent, id: `rebind-${before}`, ctx: rigRoot.extend(), session: { id: `rebind-session-${before}`, events: [] } }
+      binding.switchTo(createDshSession(rigRoot as never, { agent: next as never, handle: undefined }), () => events.bind())
+    }
     // The apply chain is promise-only (no timer anywhere in it), so a bounded
     // setImmediate spin settles it in both the fixed and the buggy tree — no
     // wall-clock window that could go green on a slow runner.
@@ -283,9 +287,9 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
   /** Exactly the two waterfalls dsh-agent-loop's buildRequest dispatches. */
   const requestTier = async (): Promise<string | undefined> => {
     const assembly = { variables: { provider: 'narrow-route', model: 'narrow-model' } }
-    await (agentCtx as Context).waterfall('system-prompt/assemble' as never, assembly, {}, () => Promise.resolve(assembly))
+    await binding.agent!.ctx.waterfall('system-prompt/assemble' as never, assembly, {}, () => Promise.resolve(assembly))
     const seed = { provider: 'narrow-route', model: 'narrow-model' }
-    const proposed = (await (agentCtx as Context).waterfall(
+    const proposed = (await binding.agent!.ctx.waterfall(
       'agent/request' as never,
       { turn: 1, step: 1, signal: new AbortController().signal },
       () => Promise.resolve(seed),

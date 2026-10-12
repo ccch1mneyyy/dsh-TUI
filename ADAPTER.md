@@ -166,6 +166,13 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 - 业务 UI 代码原则上零修改;若最新预发布源码 tsc 报错,修复落在 `src/dsh-adapter/`
   内,优先形状探测而非版本门,老安装上优雅降级。
 
+## 同会话模型路由
+
+`channel/model-selection.ts` 为每个 live Agent 保留独立 selection；组装、请求与
+模型变化提示监听器跨前台停放存活，在 Agent dispose 或 channel owner 释放时清理。
+DSH 低于 `0.1.2-alpha.3` 的子代理从创建时的 AgentOptions 继承路由，不能兑现
+同会话切换后的继承语义，因此 `/model` 明确拒绝并提示升级，不创建隐式分支。
+
 ## 0.1.7 适配接缝
 
 `compat/shell.ts` 优先使用 `execute(resolve(spec)).result()`，旧 host 回落 `run`，

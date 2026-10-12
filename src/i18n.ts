@@ -380,6 +380,7 @@ const dict = {
   'new-session-raced': { zh: '新会话打开期间当前会话开始了新的回合，已取消 /new；该回合在当前会话中继续', en: 'The current session started a turn while the new one was opening — /new was cancelled; the turn continues here' },
   'new-session-attach-failed': { zh: '会话已创建，但工作区挂载失败 · {{err}}', en: 'Session created, but workspace attachment failed · {{err}}' },
   'model-switch-while-working': { zh: '回合运行中，无法切换模型', en: 'Cannot switch models while a turn is running' },
+  'model-switch-legacy-unavailable': { zh: '同会话切换模型需要 DSH >= 0.1.2-alpha.3，请先升级 DSH', en: 'Switching models within a session requires DSH >= 0.1.2-alpha.3; upgrade DSH first' },
   'model-switch-failed': { zh: '模型切换失败 · {{err}}', en: 'Model switch failed · {{err}}' },
   'model-usage': { zh: '用法：/model <provider/model>（如 deepseek/deepseek-flash）', en: 'Usage: /model <provider/model> (e.g. deepseek/deepseek-flash)' },
   'model-unknown': { zh: '未知模型「{{spec}}」· /model 查看全部', en: 'Unknown model "{{spec}}" · /model to view all' },

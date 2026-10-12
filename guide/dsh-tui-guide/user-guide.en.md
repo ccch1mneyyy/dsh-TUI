@@ -481,6 +481,8 @@ Full-screen view of the whole session timeline (doesn't pollute scrollback); key
 
 ### 4.6 Model switching and presets
 
+Switching within a session requires DSH `0.1.2-alpha.3` or later; older versions prompt an upgrade so subagents cannot keep using the previous model. Parked sessions retain their selection.
+
 - `/model`: selector. **Switch within the same session** (ID and history kept; the next request uses the new route);
   persisted to `~/.dsh-tui/model.json` and reused by the next launch (a `provider`/`model`
   pair in cordis.yml/profile is only the first-run deployment default).

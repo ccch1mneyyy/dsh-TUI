@@ -1,11 +1,12 @@
 /**
- * L4 router ownership regressions: retained root callbacks, waterfall tails,
- * queued mode restores, and partial subscription setup must not outlive the
- * captured binding/owner.
+ * Foreground callbacks and queued mode restores follow the binding; model
+ * routing follows its captured live agent. Both release with their owner,
+ * including partially installed subscriptions.
  */
 import assert from 'node:assert/strict'
 import { createChannelBinding } from '../src/dsh-adapter/channel/binding.js'
 import { createDshSession } from '../src/dsh-adapter/backend/session.js'
+import { createModelSelection } from '../src/dsh-adapter/channel/model-selection.js'
 import { createBindingEvents } from '../src/dsh-adapter/channel/binding-events.js'
 import { createModeActions } from '../src/dsh-adapter/channel/mode-actions.js'
 import { createChannelOwner } from '../src/dsh-adapter/channel/owner.js'
@@ -57,7 +58,8 @@ const state = {
   agentBindingGeneration: 0, provider: 'p', model: 'm', status: 'idle', pending: [], working: false,
   cancelPending: false, activeToolCount: 0, emit() {}, emitStream() {},
 }
-const selection: { current?: any; assembled?: any } = {}
+const modelSelection = createModelSelection(ctx as never, { owner, agent: () => binding.agent! })
+const { selection } = modelSelection
 let projected = 0
 let childStarts = 0
 const childState = { rows: [], subagents: [], emit() { childStarts += 1 }, emitStream() {} }
@@ -67,8 +69,8 @@ const subagents = createSubagentProjection(() => childState, {
 const events = createBindingEvents(ctx as never, {
   owner, binding, state: state as never,
   activity: { start() {}, stop() {}, onAgentStatus() {}, onSessionEvent() {} },
-  inputConvergence: { interruptSeq: 0, cancelInFlight: false }, selection,
-  modelActions: { selection, async applyPreferredEffort() {} },
+  inputConvergence: { interruptSeq: 0, cancelInFlight: false }, modelSelection,
+  modelActions: { async applyPreferredEffort() {} },
   modeActions: { refreshMode() {}, onSessionEvent() {}, async applyRememberedPermission() {} },
   projector: { apply() { projected += 1 }, settleStreaming() {}, updateSpinnerMode() {} } as never,
   subagents,
@@ -98,19 +100,25 @@ binding.switchTo(session(agentA), () => {
   events.bind()
 })
 assert.equal(subagents.store.get('background-child')?.status, 'running', 'owner listener kept the explicitly routed background child')
+selection.current = { provider: 'new', model: 'new-model' }
 selection.assembled = { provider: 'new', model: 'new-model' }
 oldStatus({ agent: agentA, status: 'disposed' })
 oldSession(agentA.session, { type: 'assistant/chunk' })
 oldChild({ id: 'retained', provider: 'p' })
 assemblyGate.resolve({ variables: {} })
-await oldAssemblyResult
+assert.deepEqual((await oldAssemblyResult as { variables: unknown }).variables, { provider: 'old', model: 'old-model' }, 'an admitted assembly keeps its snapshot across parking')
 assert.equal(state.status, 'idle', 'retained ABA status callback cannot mutate current state')
 assert.equal(projected, 0, 'retained ABA session callback cannot project into current binding')
 assert.equal(childStarts, 0, 'unscoped unknown child cannot mutate current projection after ABA')
 oldChild.call(scopeTarget({}, agentA), { id: 'current-child', provider: 'p' })
 assert.equal(childStarts, 1, 'owner callback remains live after ABA only with an explicit parent')
-assert.deepEqual(selection.assembled, { provider: 'new', model: 'new-model' }, 'old assembly continuation cannot overwrite current selection')
+assert.deepEqual(selection.current, { provider: 'new', model: 'new-model' }, 'an admitted assembly cannot overwrite a later selection')
+assert.deepEqual(await requestListeners[0]!({}, async () => ({})), { provider: 'old', model: 'old-model' }, 'the admitted request matches its assembly, while the newer selection waits for the next step')
 
+const parkedAssembly = assemblyListeners[1]!
+emit('agent/disposed', { agent: agentB })
+assert.equal(assemblyListeners.length, 1, 'disposing a parked agent releases its routing listeners')
+assert.deepEqual(await parkedAssembly({}, {}, async () => ({ variables: {} })), { variables: {} }, 'a retained disposed-agent waterfall is inert')
 owner.dispose()
 oldStatus({ agent: agentA, status: 'disposed' })
 oldSession(agentA.session, { type: 'assistant/chunk' })
@@ -134,8 +142,8 @@ failingAgent.ctx.on = () => {
 const failingEvents = createBindingEvents(ctx as never, {
   owner: failingOwner, binding: failingBinding, state: { ...state } as never,
   activity: { start() {}, stop() {}, onAgentStatus() {}, onSessionEvent() {} },
-  inputConvergence: { interruptSeq: 0, cancelInFlight: false }, selection: {},
-  modelActions: { selection: {}, async applyPreferredEffort() {} }, modeActions: { refreshMode() {}, onSessionEvent() {}, async applyRememberedPermission() {} },
+  inputConvergence: { interruptSeq: 0, cancelInFlight: false }, modelSelection: createModelSelection(ctx as never, { owner: failingOwner, agent: () => failingBinding.agent! }),
+  modelActions: { async applyPreferredEffort() {} }, modeActions: { refreshMode() {}, onSessionEvent() {}, async applyRememberedPermission() {} },
   projector: { settleStreaming() {}, updateSpinnerMode() {}, apply() {} } as never,
   subagents: { onSessionEvent() { return false }, onStart() {}, onEnd() {} }, agentView: { schedule() {} },
 })

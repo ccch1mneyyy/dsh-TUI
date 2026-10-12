@@ -23,8 +23,8 @@ export type { SubagentState } from './subagents.js'
  * transcript, subscribe to the session's events, and expose every TUI action.
  * @internal
  * @param ctx - The plugin context; optional services are resolved via ctx.get.
- * @param initial - The session the channel renders; rewinds, resumes, and
- *   model switches replace it. A raw DSH agent (direct embedders, fixtures) is
+ * @param initial - The session the channel renders; rewinds and resumes
+ *   replace it, while model switches keep it. A raw DSH agent (direct embedders, fixtures) is
  *   wrapped as a DSH session together with `options.handle`.
  * @param options - Boot options: model route, cwd, provider, and the
  *   reasoning-effort / working-activity preferences.
