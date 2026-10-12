@@ -6,6 +6,7 @@ import type { ContextMenuEvent } from '../../ink/events/context-menu-event.js'
 import { useTooltip } from '../Tooltip.js'
 import { SpinnerGlyph } from '../Spinner/SpinnerGlyph.js'
 import { stringWidth } from '../../ink/stringWidth.js'
+import { useDeclaredCursor, useNativeCursor } from '../../ink/hooks/use-declared-cursor.js'
 import {
   formatAbsolute,
   formatBytes,
@@ -59,6 +60,7 @@ export function SessionListRow({
   width,
   depth,
   focused,
+  declareCursor = false,
   pinned,
   now,
   onClick,
@@ -75,6 +77,8 @@ export function SessionListRow({
   /** 0 for a conversation, 1 for a sub-agent run under its parent. */
   depth: number
   focused: boolean
+  /** Park the native caret on this row while the list owns it. */
+  declareCursor?: boolean
   /** Whether the user pinned this session to the top of the browser. */
   pinned: boolean
   /** Epoch ms used for every relative time in this render pass. */
@@ -105,6 +109,8 @@ export function SessionListRow({
   spinner?: { frame: number; time: number }
 }): React.ReactNode {
   const indent = depth * 2
+  const nativeCursor = useNativeCursor()
+  const cursorRef = useDeclaredCursor({ line: 0, column: indent, active: focused && declareCursor, visible: nativeCursor, hideOnIdle: true })
   // Two cells for the focus marker, plus the indent for a nested run.
   const body = Math.max(8, width - 2 - indent)
   const mark = kindMark(session.kind)
@@ -166,7 +172,7 @@ export function SessionListRow({
       // background and a selected row keeps its own colour while hovered.
       backgroundColor={hovered && !focused ? 'userMessageBackgroundHover' : undefined}
     >
-      <Box>
+      <Box ref={cursorRef}>
         <Text color={focused ? 'success' : 'subtle'}>
           {`${' '.repeat(indent)}${focused ? '❯ ' : '  '}`}
         </Text>

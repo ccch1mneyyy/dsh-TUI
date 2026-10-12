@@ -7,6 +7,8 @@ export type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputK
 
 const MAX_OUTPUT_EVENTS = 160
 const MAX_OUTPUT_LINES = 160
+/** Keyed labels parked before their row exists (see `earlyLabels`). */
+const MAX_EARLY_LABELS = 64
 
 /** 子代理 durable 用量的费用快照：entries 供多模型计价，unpriced 是
  *  非官方/未收录用量的独立副本（展示与回归断言用）。 */
@@ -37,6 +39,17 @@ export class SubagentActivityStore {
   private costUnpriced = emptyCostBuckets()
   /** 每个 agent 已消费的最大 durable 事件 seq（同一事件重投不重复计费）。 */
   private costSeq = new Map<string, number>()
+  /** 描述的来源。spawn 首帧的描述来自一条**无身份**的 FIFO 队列（并发派发
+   *  时可能是别的 child 的），只有 childId-keyed 的权威 label
+   *  （`subagent/catalog`、子会话 `subagent/descriptor`）能定案：`bound`
+   *  之后不再改写，`queue`/`placeholder` 允许被 label 覆盖。 */
+  private descriptionSource = new Map<string, 'queue' | 'bound' | 'placeholder'>()
+  /** keyed label 可能比它那一行先到：子会话的 `subagent/descriptor` 在会话
+   *  链接建立之前就已投递。丢掉它，这一行就只剩队列猜出来的名字，而外部
+   *  子代理上游不写 catalog ⇒ 没有第二条 keyed 事实来救，永久错名。先寄存在
+   *  这里，建行时直接当描述用：keyed 事实不因到达先后而失效。有界，理由同
+   *  队列（没人建行时不能无界增长）。 */
+  private earlyLabels = new Map<string, string>()
 
   private commitLine(agentId: string, kind: SubagentOutputKind, text: string): void {
     const state = this.states.get(agentId)
@@ -51,13 +64,27 @@ export class SubagentActivityStore {
     if (state.output.length > MAX_OUTPUT_LINES) state.output.splice(0, state.output.length - MAX_OUTPUT_LINES)
   }
 
-  onSpawned(agentId: string, provider = 'subagent', model?: string, info: Partial<SubagentState> = {}): void {
+  onSpawned(agentId: string, provider = 'subagent', model?: string, info: Partial<SubagentState> & { descriptionFromQueue?: boolean } = {}): void {
     const existing = this.states.get(agentId)
+    // A term off the identity-less spawn queue may belong to a concurrent
+    // delegation, so it never overrides a description a keyed fact already
+    // settled. The caller still consumes (shifts) the term either way — the
+    // FIFO has no identity to hand back, and leaving it at the head would only
+    // misalign the next spawn.
+    const fromQueue = info.descriptionFromQueue === true
+    const description = fromQueue && this.descriptionSource.get(agentId) === 'bound' ? undefined : info.description
+    // A keyed label that outran its row (see `earlyLabels`) carries the same
+    // authority as a live one: the row is born settled, and the queue term the
+    // same spawn consumed is dropped instead of shown.
+    const keyed = this.earlyLabels.get(agentId)
+    if (keyed !== undefined) this.earlyLabels.delete(agentId)
+    const settled = keyed ?? description
+    const source: 'queue' | 'bound' | 'placeholder' = keyed !== undefined ? 'bound' : description === undefined ? 'placeholder' : fromQueue ? 'queue' : 'bound'
     if (!existing) {
       this.states.set(agentId, {
         agentId,
         runId: info.runId ?? agentId,
-        description: info.description ?? `${provider} task`,
+        description: settled ?? `${provider} task`,
         provider,
         model: model ?? info.model ?? provider,
         effort: info.effort,
@@ -71,6 +98,7 @@ export class SubagentActivityStore {
         toolCalls: [],
         ...(info.parentAgentId === undefined ? {} : { parentAgentId: info.parentAgentId }),
       })
+      this.descriptionSource.set(agentId, source)
       this.notify()
       return
     }
@@ -78,7 +106,11 @@ export class SubagentActivityStore {
     // new epoch announces a NEW runId (the host's `subagent/start` pairing
     // key). A runId change therefore opens a fresh run: the previous epoch's
     // terminal state, timing, output and tools must not leak into it. The
-    // same runId re-announced only refreshes display metadata.
+    // description is the one thing a new epoch does not own *once a keyed
+    // label settled it*: that label outranks the queue and survives every
+    // epoch (see the guard above), while a row still living on a queue guess
+    // takes the new epoch's term like any other fresh run. The same runId
+    // re-announced only refreshes display metadata.
     if (info.runId !== undefined && info.runId !== existing.runId) {
       this.streams.delete(agentId)
       existing.runId = info.runId
@@ -93,7 +125,8 @@ export class SubagentActivityStore {
       existing.outputEvents = []
       existing.toolCalls = []
       existing.tokens = undefined
-      existing.description = info.description ?? existing.description
+      existing.description = settled ?? existing.description
+      if (settled !== undefined) this.descriptionSource.set(agentId, source)
       existing.local = info.local ?? existing.local
       existing.provider = provider
       existing.model = model ?? existing.model
@@ -103,11 +136,48 @@ export class SubagentActivityStore {
     } else {
       existing.provider = provider
       existing.model = model ?? existing.model
-      if (info.description !== undefined) existing.description = info.description
+      if (settled !== undefined) {
+        existing.description = settled
+        this.descriptionSource.set(agentId, source)
+      }
       if (info.local !== undefined) existing.local = info.local
       if (info.parentAgentId !== undefined && existing.parentAgentId === undefined) existing.parentAgentId = info.parentAgentId
     }
     this.notify()
+  }
+
+  /** Park a keyed label whose row does not exist yet — a child session's
+   *  `subagent/descriptor` can be published before the host's spawn edge, and
+   *  dropping it there would leave the row with the identity-less queue's
+   *  guess and no second keyed fact to correct it (an external child gets no
+   *  catalog). `onSpawned` adopts it when the row is created. Bounded: when
+   *  full, the oldest parked label goes first — the least likely to still be
+   *  waiting for its row. */
+  holdKeyedLabel(agentId: string, label: unknown): void {
+    if (typeof label !== 'string' || label === '') return
+    if (!this.earlyLabels.has(agentId) && this.earlyLabels.size >= MAX_EARLY_LABELS) {
+      const oldest = this.earlyLabels.keys().next().value
+      if (oldest !== undefined) this.earlyLabels.delete(oldest)
+    }
+    this.earlyLabels.set(agentId, label)
+  }
+
+  /** Bind the authoritative description of one child (a `subagent/catalog`
+   *  label or a child session's own `subagent/descriptor`). The identity-less
+   *  spawn queue may have handed this row a concurrent delegation's term, so
+   *  the keyed fact wins, once, until it is the source of truth for this row.
+   *  Returns whether the displayed description changed. */
+  private describeFromLabel(agentId: string, label: unknown): boolean {
+    if (typeof label !== 'string' || label === '') return false
+    // A row-less call has no display to correct: the projection parks such a
+    // label before it gets here (`holdKeyedLabel`) and the row adopts it when
+    // it is created.
+    const state = this.states.get(agentId)
+    if (state === undefined || this.descriptionSource.get(agentId) === 'bound') return false
+    this.descriptionSource.set(agentId, 'bound')
+    if (state.description === label) return false
+    state.description = label
+    return true
   }
 
   /** Durable discovery (`subagent/catalog`, workflow member events, registry
@@ -119,16 +189,23 @@ export class SubagentActivityStore {
     const existing = this.states.get(agentId)
     if (existing !== undefined) {
       // A bus edge usually created the row first; the durable catalog fact
-      // still carries the one thing the edge never knows — the mode.
+      // still carries the two things the edge never knows — the mode, and the
+      // childId-keyed label that a queue-derived description only guessed at.
+      let changed = false
       if (info.mode !== undefined && existing.mode === undefined) {
         existing.mode = info.mode
-        this.notify()
+        changed = true
       }
+      if (this.describeFromLabel(agentId, info.label)) changed = true
+      if (changed) this.notify()
       return
     }
+    // An empty label is not a fact: the row keeps a visible placeholder that a
+    // later real label can still replace.
+    const label = typeof info.label === 'string' && info.label !== '' ? info.label : undefined
     this.states.set(agentId, {
       agentId,
-      description: info.label ?? `${info.provider ?? 'subagent'} task`,
+      description: label ?? `${info.provider ?? 'subagent'} task`,
       provider: info.provider ?? 'subagent',
       model: info.model ?? info.provider,
       status: info.live ? 'running' : 'unknown',
@@ -139,6 +216,7 @@ export class SubagentActivityStore {
       outputEvents: [],
       toolCalls: [],
     })
+    this.descriptionSource.set(agentId, label === undefined ? 'placeholder' : 'bound')
     this.notify()
   }
 
@@ -151,6 +229,12 @@ export class SubagentActivityStore {
   getSubagentIdBySession(session: unknown): string | undefined { return this.sessionToAgent.get(session) }
 
   has(agentId: string): boolean { return this.states.has(agentId) }
+
+  /** The run key of one tracked child: its current epoch's key, or `undefined`
+   *  when the row is tracked but has no run fact yet (a durable discovery row
+   *  carries none). That is the same value an untracked child yields, so a
+   *  caller that must tell the two apart asks `has()` as well. */
+  runIdOf(agentId: string): string | undefined { return this.states.get(agentId)?.runId }
 
   appendOutput(agentId: string, text: string, kind: SubagentOutputKind = 'text'): void {
     const state = this.states.get(agentId)
@@ -306,6 +390,13 @@ export class SubagentActivityStore {
         }
         break
       }
+      case 'subagent/descriptor': {
+        // The child session's own durable self-description: the same keyed
+        // label the parent catalog carries, usable once the session link
+        // exists.
+        if (this.describeFromLabel(agentId, data.label)) this.notify()
+        break
+      }
       default:
         break
     }
@@ -316,6 +407,8 @@ export class SubagentActivityStore {
     const state = this.states.get(agentId)
     if (!state) return
     Object.assign(state, partial)
+    // A description handed in directly is authoritative, never a queue guess.
+    if (partial.description !== undefined) this.descriptionSource.set(agentId, 'bound')
     this.notify()
   }
 
@@ -453,6 +546,8 @@ export class SubagentActivityStore {
     this.costByModel.clear()
     this.costUnpriced = emptyCostBuckets()
     this.costSeq.clear()
+    this.descriptionSource.clear()
+    this.earlyLabels.clear()
     this.notify()
   }
 

@@ -1,6 +1,6 @@
 /**
  * BtwThreadView：Q/A 轮次的滚动列表（面板 / 全屏场景 / 浮层 fallback
- * 共用）。Question 走用户侧视觉（accent ❯ 前缀），Answer 走共享
+ * 共用）。Question 走用户侧视觉（accent 加粗，无行首箭头），Answer 走共享
  * Markdown；运行中显示本轮 spinner；失败或中止时保留已流出的部分答复，
  * 下面标出错误/已中止。
  *
@@ -13,10 +13,28 @@ import { Box, Text, ScrollBox, type ScrollBoxHandle } from '../../../ui.js'
 import { Markdown } from '../../Markdown.js'
 import { SpinnerGlyph } from '../../Spinner/SpinnerGlyph.js'
 import { t } from '../../../i18n.js'
+import { getBtwContextTurns, subscribeBtwContextTurns } from '../../../tuiDisplayPrefs.js'
 import type { BtwThreadSnapshot, BtwTurn } from './threads.js'
 
 /** 80ms spinner 帧（只在有 running 轮且其还没收到首段文本时走时钟）。 */
 const SPINNER_MS = 80
+
+/** 空态：一句「还没有」+ 这是什么 + 上下文口径（三条信息各一行，不再一行裸文案）。 */
+function BtwEmptyState({ contextTurns }: { readonly contextTurns: number }): React.ReactNode {
+  return (
+    <Box flexDirection="column" flexGrow={1} paddingX={1}>
+      <Box marginTop={1}>
+        <Text color="subtle" wrap="truncate">{t('btw-thread-empty')}</Text>
+      </Box>
+      <Box marginTop={1}>
+        <Text color="subtle" wrap="wrap">{t('btw-empty-lines')}</Text>
+      </Box>
+      <Box marginTop={1}>
+        <Text dimColor italic wrap="wrap">{t('btw-thread-context-recent', { n: contextTurns })}</Text>
+      </Box>
+    </Box>
+  )
+}
 
 export function BtwThreadView({
   thread,
@@ -38,6 +56,8 @@ export function BtwThreadView({
   readonly scrollHandleRef?: { current: ScrollBoxHandle | null }
 }): React.ReactNode {
   const localScrollRef = React.useRef<ScrollBoxHandle | null>(null)
+  // 上下文覆盖提示跟随 dsh-tui.btw.contextTurns 的活值（/settings 改完即换词）。
+  const contextTurns = React.useSyncExternalStore(subscribeBtwContextTurns, getBtwContextTurns)
   const scrollRef = scrollHandleRef ?? localScrollRef
   const [frame, setFrame] = React.useState(0)
   const [follow, setFollow] = React.useState(true)
@@ -92,25 +112,17 @@ export function BtwThreadView({
     setPendingJump(false)
   }, [])
 
-  if (thread === undefined || thread.turns.length === 0) {
-    return (
-      <Box flexDirection="column" flexGrow={1} paddingX={1}>
-        <Box marginTop={1}>
-          <Text color="subtle" wrap="truncate">{t('btw-thread-empty')}</Text>
-        </Box>
-      </Box>
-    )
-  }
+  if (thread === undefined || thread.turns.length === 0) return <BtwEmptyState contextTurns={contextTurns} />
 
   return (
     <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingX={1}>
       <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1} stickyScroll>
-        {thread.turns.map(turn => (
+        {thread.turns.map((turn, index) => (
           <Box key={turn.turnId} flexDirection="column">
-            <Box flexDirection="row" flexShrink={0}>
-              <Text color="accent" bold>{'❯ '}</Text>
-              <Text color="accent" wrap="wrap">{turn.question}</Text>
-            </Box>
+            {index > 0 && <Text dimColor>{'┈'.repeat(Math.max(4, width - 2))}</Text>}
+            {/* 问题靠 accent 色 + 加粗与答案区分；行首不再挂箭头——输入框的
+                `›` 已经是这个视觉语言里的唯一箭头，重复反而杂乱。 */}
+            <Text color="accent" bold wrap="wrap">{turn.question}</Text>
             <Box marginLeft={2} flexDirection="column">
               {turn.phase === 'completed' ? (
                 <Box
@@ -144,7 +156,6 @@ export function BtwThreadView({
                 </Text>
               )}
             </Box>
-            <Box height={1} flexShrink={0} />
           </Box>
         ))}
       </ScrollBox>

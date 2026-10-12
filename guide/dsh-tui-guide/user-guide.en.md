@@ -44,7 +44,8 @@ dsh-tui
    the marker — when `Enter` lands on a **shortcut card** (on a command card `Enter` tries the command).
    Re-run it any time with `/setup`.
 2. **Launchpad** (the first screen of an **ordinary launch** — no `--resume`, no workspace target,
-   no prompt; `DSH_TUI_NO_LAUNCHPAD=1` skips it entirely): the pixel-whale header (`✦ dsh-TUI`
+   no prompt; turn it off in `/settings` (`launchpad`, on by default, restart to apply), or
+   `DSH_TUI_NO_LAUNCHPAD=1` skips it entirely): the pixel-whale header (`✦ dsh-TUI`
    version, `DEEPSEEK / HARNESS` big text, current model and effort, working directory, and a
    **startup hint**; the header here is **frozen from the first frame** — the intro animation is
    left to the transcript header once you are in the chat), a **real input box** underneath
@@ -95,13 +96,15 @@ dsh-tui
 
 | Key | Action |
 |---|---|
-| `Enter` | idle = send; **model working = steer** (inject a next-step boundary, no interrupt); menu open = confirm selection |
+| `Enter` | idle = send; **a known `/` command (with or without arguments) = run that command** (its own gate decides while a turn is running); model working = steer (inject a next-step boundary, no interrupt); menu open = confirm selection |
 | `Tab` | complete `/` command or `@` file; **model working = follow-up** (queue after the current turn) |
 | `Ctrl+Enter` (⌘Enter) | interrupt the current turn and send the input now |
 | `Shift+Enter` / `Ctrl+J` | newline (`Option+Enter` is the mac Terminal.app fallback) |
 | `Alt+Up` | bring the last unhandled message back to the input for editing (no interrupt) |
 | `Esc` (working + pending) | interrupt the turn and re-send the pending message now |
 | `/btw …` while working | Enter runs it directly (side question never interrupts the main turn) |
+
+While a turn is running, the `/` overlay groups commands by their impact on the current conversation: the harmless ones stay on top in their normal style, while commands that are gated, interrupt or replace the conversation, or steer into it sink to the bottom in the theme's grey (`subtle`), with no extra header row. The grey region never blocks use — the gate still gates and the steer still steers. Only two kinds of input steer into the running turn: text that is not a command, and a **direct skill gesture** (`/skill-name …`), which the overlay groups as steering as well.
 
 ### 2.2 Interrupt / exit / system
 
@@ -162,7 +165,7 @@ Unrecognized keys are ignored, `Esc` does nothing, clear with `Ctrl+C`/`dd`.
 
 | Action | Effect |
 |---|---|
-| left-drag | select text, **copy on release** (OSC 52 + system clipboard tools as fallback), auto-clear the selection |
+| left-drag | select text, **copy on release** (OSC 52 + system clipboard tools as fallback), keep the selection after copying; a new selection replaces it |
 | double-click / triple-click | select word / line, copy immediately |
 | wheel | scroll the message list (±3 rows/notch); **with a text selection, pan the selection with the content** |
 | in the input box | drag / Shift+click / double-click build a selection; `Backspace`/`Delete` delete it, typing replaces, `←/→` collapse, `Esc` clears only the selection, `Ctrl+C` copies it |
@@ -272,18 +275,21 @@ one-column seam between the two surfaces.
   reach the chat, while `Ctrl+C`/`Ctrl+D`/`Ctrl+L` and the other Ctrl combos still do.
 - **Mouse**: click the chat column to focus the chat, click the panel column to focus the panel;
   clicking a tab on the bar switches to that panel (hover highlights it), and the `⤢` on its right
-  edge blows the active panel up to the full screen. The panel column is excluded from
-  drag-selection.
-- **Panels**: `todo` (Goals/Todos — with a split it moves here from above the input), `jobs`
+  edge blows the active panel up to the full screen. Hovering over the seam highlights it; hold
+  the left mouse button and drag it left to widen the panel or right to narrow it. Chat keeps
+  at least 64 columns and the panel at least 28. Dragging exits zoom, preserves keyboard focus,
+  and keeps the width for the current session. Text drags starting in chat select only chat;
+  drags starting inside the panel can select panel text.
+- **Panels**: all eight built-in panels are enabled by default and can be changed in `sidePanel.panels`. `todo` (Goals/Todos — with a split it moves here from above the input), `jobs`
   (background jobs; clicking a job card in the transcript focuses that job here), `agents`
   (subagent dashboard and detail: Enter opens the detail, Esc steps back), `companion`
-  (the pet — off by default; add `companion` to `sidePanel.panels` to enable: its mood follows
+  (the pet — its mood follows
   the session, click for a heart, Enter to poke; the `dsh-tui.companion.skin` setting offers
   deepy (default, the fan-made deepy whale kit) or whale), `info` (model, effort, mode,
   permissions, context usage, cache hit, tokens, TPS, spend, working dir, session title and id),
   `trajectory` (the session's wake band + ledger + inspector: ↑/↓ select, Enter expands, Tab
   switches to the hotspot view — ←/→ always stay the host's panel-cycling keys), `workspace`
-  (working-directory overview; Enter opens the full workspace home).
+  (working-directory overview; Enter opens the full workspace home), `btw` (follow-up threads, also opened by `/btw`).
 - **Pet (companion) details**: the pet sits at the BOTTOM of the panel with a status area above
   it (mood · subagent/session counts · current animation). Interactions: clicking its left/right
   half pokes it (poke-left/right), three rapid clicks tickle it, **holding and dragging walks it
@@ -307,7 +313,7 @@ one-column seam between the two surfaces.
 | `/panel toggle` | Really open / really close (closing returns focus to the chat) |
 | `/panel focus` | Open and focus the panel |
 | `/panel zoom` | Open and zoom the active panel |
-| `/panel <id>` | Open a panel by id: `todo` / `info` / `trajectory` / `jobs` / `agents` / `workspace` / `companion` (completion lists the enabled ids) |
+| `/panel <id>` | Open a panel by id: `todo` / `info` / `trajectory` / `jobs` / `agents` / `workspace` / `btw` / `companion` (completion lists the enabled ids) |
 
 - Views that used to be full-screen-only now also live in the sidebar: with the split up and the
   matching panel enabled, `Ctrl+T` / `/trace` open the trajectory panel and `/home` opens the
@@ -322,7 +328,7 @@ one-column seam between the two surfaces.
 
 ## 3. Command reference
 
-The command menu = built-in commands (58, aliases included) + DSH registry commands (`/plan` `/goal` etc.) + the skill catalog
+The command menu = built-in commands (aliases included) + DSH registry commands (`/plan` `/goal` etc.) + the skill catalog
 (completion only, hidden from the `/help` menu). `/lang` switches the UI and command descriptions between English and Chinese.
 
 ### 3.1 Session
@@ -330,12 +336,13 @@ The command menu = built-in commands (58, aliases included) + DSH registry comma
 | Command | Args | Effect |
 |---|---|---|
 | `/new` | none | start a new session (no confirmation; the old session stays under `/resume`) |
-| `/resume` | none | open the **session manager** (workspace + session columns, live filter, pins, cross-workspace): switching just parks the session, the running turn keeps going |
+| `/resume` | none | open the **session manager** (workspace + session columns, live filter, pins, cross-workspace): switching just **parks** the outgoing session — it keeps running in the background and the active turn is not interrupted (like `/tree`: neither browsing nor switching cuts a running turn short; on the Claude backend a mid-turn switch is refused instead) |
 | `/home` / `/agentview` / `/bg` | none | the same session manager (`/home`=workspace view · `/agentview`=hosted session state · `/bg`=send to background and open, alias `/background`) |
 | `/tree` | none | session fork tree: hover to preview, click to rewind / fork / switch branch |
 | `/fork` | none | copy the current session into a resumable clone (original unaffected) |
 | `/restart` | none | restart the process and resume this session (rejected mid-turn, `Ctrl+C` first) |
-| `/kernel` | none | kernel picker: switch between DSH and the experimental Claude backend; remembers the pick and restarts into a new session (rejected mid-turn); see [Claude backend](claude-backend.en.md) |
+| `/kernel` | none | kernel picker: switch between DSH, Codex and the experimental Claude backend; remembers the pick and restarts into a new session (rejected mid-turn); see [Claude backend](claude-backend.en.md) |
+| `/dsh` / `/codex` / `/claude` | none | directly choose the named kernel through the same checks and restart flow as `/kernel`; the current kernel does not restart, a running turn blocks switching, and missing Claude opens the install wizard |
 | `/rename` | `<新名称>` | rename the current session (no arg shows the current title and usage) |
 | `/recap` | none | recent-activity summary (one line) + suggested title; press `a` or click to apply the title. With `dsh-tui.recapOnOpen` (default on), opening/resuming a session auto-shows a divider + `回顾：` summary line at the bottom; hover to view actions, click to expand, gone after the next message |
 | `/workspace` | `resume` / `rename <名称>` / `open <路径或URI>` | manage workspaces; `open` accepts an absolute path, file URI, or plugin scheme |
@@ -344,7 +351,7 @@ The command menu = built-in commands (58, aliases included) + DSH registry comma
 | `/export` | none | export the session as Markdown to the working directory |
 | `/btw` | `<问题>` | side question: single turn, no tools, doesn't interrupt the main turn, not written to history |
 | `/trace` | none | open the trace scene (same as `Ctrl+T`) |
-| `/rewind` | none | rewind selector (same as double-press Esc on empty input) |
+| `/rewind` | none | rewind selector (same as double-press Esc on empty input); **a running turn is cancelled first** |
 | `/exit` (alias `/quit` `/q`) | none | exit dsh-tui |
 
 ### 3.2 Status and diagnostics
@@ -369,9 +376,9 @@ The command menu = built-in commands (58, aliases included) + DSH registry comma
 
 | Command | Args | Effect |
 |---|---|---|
-| `/channel` | none | relay channel profiles (Claude backend only), see [Interaction](interaction.en.md#channel-profiles-channel-claude-only) |
+| `/channel` | none | relay channel profiles (Claude backend only); **import / add / manage and any switch that needs a process restart are refused while a turn runs** (the picker itself still opens), see [Interaction](interaction.en.md#channel-profiles-channel-claude-only) |
 | `/model` | none | model selector; **switching = fork the session** (history kept, only routing changes; a session nobody has typed into records no branch, keeping automatic titles for its first prompt), choice persisted to `~/.dsh-tui/model.json` |
-| `/effort` | `status` / `<id>` | reasoning effort: no-arg slider (`←/→` adjust); `status` current level; `<id>` set directly. Persisted to `~/.dsh-tui/effort.json`; new-session start level follows /settings `effortDefault` (§5.3) |
+| `/effort` | `status` / `<id>` | reasoning effort: no-arg slider (`←/→` adjust); `status` current level; `<id>` set directly. Persisted to `~/.dsh-tui/effort.json` and reused by the next launch (it outranks the cordis.yml `effort` default); new-session start level follows /settings `effortDefault` (§5.3) |
 | `/thinking` | none | extended-thinking display toggle (thinking expands item by item while streaming) |
 | `/tokens` | none | three separate figures, never two different quantities side by side: **this request**'s upload (input + cache read + cache write — the harness's four buckets are disjoint), the **session totals** (uncached input / output / cache read / cache write), and **context occupancy** |
 | `/activity` | `frames <名>` / `status` | working-status animation: no-arg selector, `frames <名>` sets directly (includes `random`), default `moon8`. Persisted to `~/.dsh-tui/working-activity.json` |
@@ -434,7 +441,11 @@ dsh-TUI ships no generic skills; `/skills` browses skills DSH discovers, and a d
 | Exit | `/exit` (or `/quit` `/q`) | double-press `Ctrl+C` or `Ctrl+D` also exits when idle; mid-work, press `Ctrl+C`/`Ctrl+D` again to force quit when the interrupt won't settle |
 
 Command-line resume: `dsh-tui --resume` (last session) / `dsh-tui --resume <id>` (specific session).
-`-c` / `--continue` are equivalent.
+`-c` / `--continue` are equivalent. Startup recovery only ever targets **the backend this
+launch selected**: a backend with no last session, or a derived target belonging to a
+different backend, refuses with a clear error and exit code 1 — no silent cold start, no new
+session (safe mode's "retry normal startup" degrades to a warning plus a cold start, see the
+[README](../README.md)).
 
 ### 4.2 Time-travel rewind (double-press Esc)
 
@@ -449,7 +460,7 @@ Command-line resume: `dsh-tui --resume` (last session) / `dsh-tui --resume <id>`
 ### 4.3 Message delivery semantics (while the model is working)
 
 Keys are in §2.1:
-- `Enter` = **steer** (inject a next-step boundary, no interrupt)
+- `Enter` = a known `/` command (with or without arguments) runs as a command (its own gate decides while a turn is running); anything else **steers** (inject a next-step boundary, no interrupt)
 - `Tab` = **follow-up** (queue after the turn)
 - `Ctrl+Enter` = **interrupt** (interrupt and send)
 - `Alt+Up` bring the last unhandled message back
@@ -470,7 +481,9 @@ Full-screen view of the whole session timeline (doesn't pollute scrollback); key
 ### 4.6 Model switching and presets
 
 - `/model`: selector. **Switching = fork the session** (history kept, only routing changes, the old session stays in `/resume`);
-  persisted to `~/.dsh-tui/model.json`.
+  persisted to `~/.dsh-tui/model.json` and reused by the next launch (a `provider`/`model`
+  pair in cordis.yml/profile is only the first-run deployment default).
+- DSH provider tabs start with **Recently used**, and `Tab` / `Shift+Tab` switch providers; Codex and Claude show their catalogs directly without these tabs. All backends use `↑/↓` to select a model, `←/→` to adjust its effort, `Enter` to apply both, and `Esc` to cancel the draft. Click the available tabs, models, effort levels, or select/cancel hints; clicking an effort level immediately applies the focused model and that effort and closes the picker. The wheel moves model focus.
 - Switching is rejected mid-turn.
 - `/preset` options: `standard` (default full features), `ptc`, `minimal` (the kernel's Minimal preset: one persistent-shell tool only, no compaction, no plan mode — and therefore no compaction and no tool-result pruning, so a long session can hit the context limit and `/compact` plus questions are unavailable; Help and `/` completion mark the command, and entering the preset says so once),
   `cordis`, `liangshen` (Liangshen mode).
@@ -590,6 +603,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 |---|---|
 | lang | UI language zh/en (locked when DSH_TUI_LANG is pinned) |
 | fullscreen | fullscreen mode (default on); takes effect after `/restart` |
+| launchpad | launchpad landing page (default on): an ordinary launch starts on the launchpad where the first sentence gets typed; off boots straight into the chat page (launches with a `--resume` target are unaffected — they open their conversation directly either way). Takes effect after `/restart` |
 | minimal | Minimal UI (default off): hide the header splash, emoji glyphs and decorative colors, and trim the footer to model + cwd; code highlight and tool colors stay. **An interface switch** with no effect on model capability — do not confuse it with the kernel Minimal agent preset in `/preset` |
 | terminalImages | terminal image preview (default on, needs terminal support); takes effect after `/restart`. Off shows text only and skips preview decode, sending images to the model is unaffected |
 | imageBacking | image backing (default `transparent`, same **Rendering** topic as the row above): what sits behind chat photos and illustrations. Transparent paints only the pixels of the image itself — the terminal background or wallpaper shows at anti-aliased edges and transparent corners; Terminal colour composites onto the terminal background for smooth soft edges. Applies immediately |
@@ -616,8 +630,8 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | expandEditor | full-screen draft editor (default on): `⛶` at the input line end or `Ctrl+Shift+E` expands to a full-screen editor; `Ctrl+Enter` send, `Esc` collapse (draft kept); off hides both entries |
 | statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId) |
 
-**effortDefault**: when the model lacks that level, drop one level and show a notice; priority settings user layer > cordis `effort` >
-last `/effort` (effort.json) > model default.
+**effortDefault**: when the model lacks that level, drop one level and show a notice; priority settings user layer > the last `/effort`
+(effort.json, the level the last session ran) > cordis `effort` (deployment default) > model default.
 
 **scrollGutter**: the scrollbar track can be dragged directly; `Shift`/`Alt`/`Ctrl`+drag is still text selection.
 
@@ -664,10 +678,10 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 
 | Item | Command | Notes |
 |---|---|---|
-| Model | `/model` | selector; **switching = fork the session** (history kept, routing only); persisted to `~/.dsh-tui/model.json`, reused on restart and `/new`. Never chosen → built-in default (currently `deepseek-flash`) |
+| Model | `/model` | selector; **switching = fork the session** (history kept, routing only); persisted to `~/.dsh-tui/model.json` and reused on restart and `/new` — it OUTRANKS a `provider`/`model` pair written in cordis.yml/profile (that pair is only the first-run deployment default). Never chosen → the configured pair, else the harness default (currently `deepseek-flash`) |
 | Reasoning effort | `/effort` | slider (`←/→` live) or `/effort <id>`; `/effort status` for current; new-session default in /settings → default reasoning effort |
 | Agent preset | `/preset` | `standard` / `ptc` (old 0.1.1 name `code`) / `minimal` / `cordis` / **Liangshen mode `liangshen`**; **can't switch an already-started session** |
-| Theme | `/theme` | `auto` (OSC 11 follows terminal background) / `light` / `dark` / `dark-ansi`; `/theme <名>` direct; `/theme status` for the result |
+| Theme | `/theme` | `auto` (OSC 11 follows terminal background) / `light` / `dark` / `dark-ansi` / `pink-day` / `pink-night` / `pink-ansi`; `/theme <名>` direct; `/theme status` for the result |
 | Custom theme | manual | `~/.dsh-tui/themes/<名>.json`, `{base, colors}` format, hot-swap on select; naming it `auto` gets shadowed by the built-in |
 | Language | `/lang` | `en` / `zh` hot switch; priority `DSH_TUI_LANG` > profile config (legacy: settings.yaml user layer > cordis.yml) > persisted |
 | Status animation | `/activity` | selector or `/activity frames <名>`; default `moon8`, `random` randomizes |
@@ -699,7 +713,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 
 **Efficiency**
 
-4. Three deliveries while the model works: `Enter` inject a next step, `Tab` queue, `Ctrl+Enter` interrupt and send.
+4. Three deliveries while the model works: `Enter` inject a next step (a known `/` command runs as a command instead), `Tab` queue, `Ctrl+Enter` interrupt and send.
 5. `Alt+Up` brings the last unhandled message back to edit and resend, no retyping.
 6. A quick question without interrupting the main turn or writing history:
    `/btw <问题>`.

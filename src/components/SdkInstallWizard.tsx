@@ -6,7 +6,7 @@ import { LoadingState } from './design-system/LoadingState.js'
 import { Pane } from './design-system/Pane.js'
 
 /**
- * The SDK install wizard (the kernel picker's dim Claude row, Enter): one
+ * The SDK install wizard (the kernel picker's installable row, Enter): one
  * pane, one step machine. The phase lives in Chat — it is async process
  * state, which stays out of the overlay union by design (chatOverlay.ts
  * note 3); this component renders it and never touches useInput, exactly
@@ -18,7 +18,7 @@ export type SdkInstallPhase =
   | { readonly kind: 'confirm'; readonly dir: string; readonly version: string; readonly specifier: string }
   | { readonly kind: 'checking' }
   | { readonly kind: 'running' }
-  | { readonly kind: 'done' }
+  | { readonly kind: 'done'; readonly rebuiltStore?: boolean }
   | { readonly kind: 'failed'; readonly exitCode: number; readonly tail: readonly string[]; readonly dir: string; readonly version: string; readonly specifier: string }
   | { readonly kind: 'pnpm-missing'; readonly dir: string; readonly version: string; readonly specifier: string }
   | { readonly kind: 'cancelled' }
@@ -43,7 +43,7 @@ export function SdkInstallWizard({ phase }: { phase: SdkInstallPhase }): React.R
         </Box>
         {phase.kind === 'confirm' && (
           <Box flexDirection="column">
-            <Text>{t('sdk-install-confirm-what', { version: phase.version })}</Text>
+            <Text>{t('sdk-install-confirm-what', { specifier: phase.specifier, version: phase.version })}</Text>
             <Text>{t('sdk-install-confirm-where', { dir: phase.dir })}</Text>
             <Box marginTop={1}>
               <Text dimColor>{t('sdk-install-confirm-note')}</Text>
@@ -58,7 +58,12 @@ export function SdkInstallWizard({ phase }: { phase: SdkInstallPhase }): React.R
             />
           </Box>
         )}
-        {phase.kind === 'done' && <Text>{t('sdk-install-done')}</Text>}
+        {phase.kind === 'done' && (
+          <Box flexDirection="column">
+            <Text>{t('sdk-install-done')}</Text>
+            {phase.rebuiltStore === true && <Text dimColor>{t('sdk-install-rebuilt')}</Text>}
+          </Box>
+        )}
         {phase.kind === 'failed' && (
           <Box flexDirection="column">
             <Text>{t('sdk-install-failed', { code: String(phase.exitCode) })}</Text>

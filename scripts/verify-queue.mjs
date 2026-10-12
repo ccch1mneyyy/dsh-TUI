@@ -14,6 +14,7 @@ import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 import { render } from '../lib/types/ui.js'
 import { PromptInput } from '../lib/types/components/PromptInput.js'
+import { settle } from './lib/term-test.mjs'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -51,7 +52,10 @@ function makeStreams() {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
-function makeChannel(working, initialPending = []) {
+// `initialPending` seeds the docked queue (the ⏎-sends-the-dock scenarios);
+// `commands` / `completions` drive the `/` overlay and the command-hold cases.
+function makeChannel(working, options = {}) {
+  const { initialPending = [], commands = [], completions = [] } = options
   const submitted = []
   const steered = []
   const notified = []
@@ -64,7 +68,8 @@ function makeChannel(working, initialPending = []) {
     mode: { id: 'default', plan: false },
     modeIndex: 0,
     cycleMode() {},
-    commandList: [],
+    commandList: commands,
+    commandCompletions() { return completions },
     notifications: [],
     contextWindow: undefined,
     get pending() { return pending },
@@ -308,10 +313,10 @@ async function run() {
   // official-parity hint render; ⏎ on an EMPTY draft sends the dock once.
   {
     const { stdout, stderr, stdin } = makeStreams()
-    const channel = makeChannel(false, [
+    const channel = makeChannel(false, { initialPending: [
       { id: 'd1', text: '停靠甲', placement: 'followup', docked: true },
       { id: 'd2', text: '停靠乙', placement: 'followup', docked: true },
-    ])
+    ] })
     const instance = await render(
       React.createElement(PromptInput, {
         channel,
@@ -338,9 +343,9 @@ async function run() {
   // is exactly what the dock exists to prevent).
   {
     const { stdout, stderr, stdin } = makeStreams()
-    const channel = makeChannel(false, [
+    const channel = makeChannel(false, { initialPending: [
       { id: 'd1', text: '停靠丙', placement: 'followup', docked: true },
-    ])
+    ] })
     const instance = await render(
       React.createElement(PromptInput, {
         channel,
@@ -364,10 +369,10 @@ async function run() {
   // first, Claude Code parity); ⏎ retracts the selected row into the draft.
   {
     const { stdout, stderr, stdin } = makeStreams()
-    const channel = makeChannel(false, [
+    const channel = makeChannel(false, { initialPending: [
       { id: 'd1', text: '停靠丁', placement: 'followup', docked: true },
       { id: 'd2', text: '停靠戊', placement: 'followup', docked: true },
-    ])
+    ] })
     const instance = await render(
       React.createElement(PromptInput, {
         channel,
@@ -393,9 +398,9 @@ async function run() {
   // the next empty ⏎ still sends it (the selector did not eat the key).
   {
     const { stdout, stderr, stdin } = makeStreams()
-    const channel = makeChannel(false, [
+    const channel = makeChannel(false, { initialPending: [
       { id: 'd1', text: '停靠己', placement: 'followup', docked: true },
-    ])
+    ] })
     const instance = await render(
       React.createElement(PromptInput, {
         channel,
@@ -468,6 +473,129 @@ async function run() {
     check('Ctrl+Enter input cleared', !/❯ urgent/.test(last))
     check('interrupt notice shown', channel.notified.some(n => n.text.includes('已打断当前回合')), JSON.stringify(channel.notified))
     instance.unmount()
+  }
+
+  // ---- Scenarios 9+: issue #1072 — while a turn is running a KNOWN command
+  // is still a COMMAND (with or without arguments, overlay open or closed,
+  // inline or fullscreen); only input that is not a command steers into the
+  // running turn. The command's own gate decides whether it may run mid-turn.
+  const COMMANDS = [
+    { name: 'model', description: 'Show the active model' },
+    { name: 'btw', description: 'Side question' },
+    { name: 'skills', description: 'List skills' },
+    { name: 'new', description: 'Start a new conversation' },
+    { name: 'audit', description: 'Registered skill', external: true, skill: true },
+    { name: 'notes', description: 'Completion-only filesystem skill', skill: true },
+  ]
+  // 等待每一步自己产生的那一帧，而不是固定窗（#791）：挂载一帧、回显键入
+  // 的那一帧、Enter 提交的那一帧。回显帧同时证明输入钩子已经接上，所以
+  // Enter 绝不会写进一个还没安装监听器的组件里。
+  const typeAndEnter = async (channel, text, onRunCommand) => {
+    const { stdout, stderr, stdin } = makeStreams()
+    const instance = await render(
+      React.createElement(PromptInput, {
+        channel,
+        helpOpen: false,
+        onToggleHelp() {},
+        onRunCommand,
+        selectionActive: false,
+      }),
+      { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
+    )
+    await settle(() => stdout.frames.length > 0)
+    const typedFrom = stdout.frames.length
+    stdin.write(text)
+    await settle(() => stdout.frames.length > typedFrom)
+    const enteredFrom = stdout.frames.length
+    stdin.write('\r')
+    await settle(() => stdout.frames.length > enteredFrom)
+    instance.unmount()
+  }
+  const dispatchRun = runs => (name, rawInput) => { runs.push([name, rawInput]); return true }
+
+  // `/model <arg>`: the overlay is closed for an argument the completer does
+  // not know, which is exactly where Enter used to steer the whole line.
+  {
+    const runs = []
+    const channel = makeChannel(true, { commands: COMMANDS })
+    await typeAndEnter(channel, '/model deepseek-chat', dispatchRun(runs))
+    check(
+      'working: /model <arg> dispatches the command instead of steering',
+      runs.length === 1 && runs[0][0] === 'model' && runs[0][1] === ' deepseek-chat' && channel.steered.length === 0,
+      JSON.stringify({ runs, steered: channel.steered }),
+    )
+  }
+  // Trailing-space form with the completion overlay OPEN: Enter still accepts
+  // the selected row (unchanged precedence), never steers `/model`.
+  {
+    const runs = []
+    const channel = makeChannel(true, {
+      commands: COMMANDS,
+      completions: [{ name: 'deepseek-chat', commandLine: '/model deepseek-chat', replacement: '/model deepseek-chat ', description: 'Chat model' }],
+    })
+    await typeAndEnter(channel, '/model ', dispatchRun(runs))
+    check(
+      'working: /model with a trailing space dispatches the selected completion',
+      runs.length === 1 && runs[0][0] === 'model' && runs[0][1] === ' deepseek-chat' && channel.steered.length === 0,
+      JSON.stringify({ runs, steered: channel.steered }),
+    )
+  }
+  // A gated command still reaches the command channel: the channel's own gate
+  // answers (issue #1072 keeps the gate, it only stops the steer).
+  {
+    const runs = []
+    const channel = makeChannel(true, { commands: COMMANDS })
+    await typeAndEnter(channel, '/new ', dispatchRun(runs))
+    check(
+      'working: a gated command (/new) is dispatched, not steered',
+      runs.length === 1 && runs[0][0] === 'new' && channel.steered.length === 0,
+      JSON.stringify({ runs, steered: channel.steered }),
+    )
+  }
+  // A registry-registered skill (`external && skill`) takes the registry
+  // gesture path; its placement (steer vs followup) is the channel's call.
+  {
+    const runs = []
+    const channel = makeChannel(true, { commands: COMMANDS })
+    await typeAndEnter(channel, '/audit ', (name, rawInput) => { runs.push([name, rawInput]); return Promise.resolve(true) })
+    check(
+      'working: a registry skill (/audit) goes to the registry gesture, not a steer',
+      runs.length === 1 && runs[0][0] === 'audit' && channel.steered.length === 0,
+      JSON.stringify({ runs, steered: channel.steered }),
+    )
+  }
+  // Immediate commands stay immediate (the old whitelist behavior, now general).
+  for (const name of ['btw', 'skills']) {
+    const runs = []
+    const channel = makeChannel(true, { commands: COMMANDS })
+    await typeAndEnter(channel, `/${name}`, dispatchRun(runs))
+    check(
+      `working: /${name} still executes immediately`,
+      runs.length === 1 && runs[0][0] === name && channel.steered.length === 0,
+      JSON.stringify({ runs, steered: channel.steered }),
+    )
+  }
+  // Completion-only skills fall through to the model (Chat's runCommand
+  // returns false for a non-external skill entry): the line still steers.
+  {
+    const runs = []
+    const channel = makeChannel(true, { commands: COMMANDS })
+    await typeAndEnter(channel, '/notes do it', (name, rawInput) => { runs.push([name, rawInput]); return false })
+    check(
+      'working: a completion-only skill (/notes) still steers into the turn',
+      runs.length === 1 && channel.steered.length === 1 && channel.steered[0] === '/notes do it',
+      JSON.stringify({ runs, steered: channel.steered }),
+    )
+  }
+  // Not-a-command input keeps steering.
+  for (const text of ['hello there', '/usr/bin/env node x', '/modelx keep going']) {
+    const channel = makeChannel(true, { commands: COMMANDS })
+    await typeAndEnter(channel, text, () => { throw new Error('non-command input must not dispatch') })
+    check(
+      `working: ${JSON.stringify(text)} steers (not a command)`,
+      channel.steered.length === 1 && channel.steered[0] === text,
+      JSON.stringify({ steered: channel.steered }),
+    )
   }
 
   process.exit(failed)

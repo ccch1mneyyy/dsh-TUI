@@ -68,8 +68,9 @@
     # mathRendering: auto
     # Reasoning effort applied to every request, validated against the live
     # route's adapter levels. An unlisted level falls back to the adapter
-    # default; this wins over the persisted /effort choice and seeds the
-    # startup header/statusline.
+    # default. This is the deployment DEFAULT for sessions that carry no
+    # choice of their own: the persisted /effort pick (last session's level)
+    # outranks it, and it seeds the startup header/statusline.
     effort: max
     # Shift+Tab 会话模式循环（数组顺序即循环顺序；缺省为下面三档）。
     # 每档可声明 plan（计划模式开/关）、sandbox（read-only/

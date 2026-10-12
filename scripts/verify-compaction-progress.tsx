@@ -144,7 +144,9 @@ function assemble(kind = 'hang-until-abort', extra = []) {
   check('scene1: /compact opens the status row', opened)
   check(
     'scene1: opening the row wakes the renderer with it',
-    bumps.length === 1 && bumps[0].row === true,
+    // 首个 bump 必须带行（行开即重绘）；窗口内后续 bump（负载下迟到的后台
+    // 刷新）合法，但没有哪个 bump 应当丢行。
+    bumps.length >= 1 && bumps[0].row === true && bumps.every(bump => bump.row === true),
     JSON.stringify(bumps),
   )
   unsubscribe()
@@ -500,7 +502,10 @@ async function mountChat(channel, cols = 100, rows = 30, activityStore) {
   const turnChat = await mountChat(duringTurn.channel)
   const badged = await settled(() => turnChat.screen().includes(t('compact-badge')), { timeoutMs: 4000 })
   check('scene7: an automatic compaction badges the working spinner', badged, turnChat.screen().trim().split('\n').slice(-3).join(' | '))
-  check('scene7: no separate row while a turn runs', !turnChat.screen().includes(t('compact-esc-cancel')), turnChat.screen().trim())
+  // 行级判定：随机提示行可能含「Esc 取消」字样（如「拖选即复制；Esc 取消
+  // 选区」），裸子串会与之假撞——独立的压缩行是**同一行**同时带进行标签与
+  // Esc 提示；提示行没有进行标签。徽章行只有徽章没有 Esc。
+  check('scene7: no separate row while a turn runs', !turnChat.screen().split('\n').some(line => line.includes(t('compact-working')) && line.includes(t('compact-esc-cancel'))), turnChat.screen().trim())
   await turnChat.instance.unmount()
   check('scene7: Esc during a turn interrupts the turn, not the compaction', duringTurn.calls.cancelCompact === 0, String(duringTurn.calls.cancelCompact))
 

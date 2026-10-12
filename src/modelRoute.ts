@@ -4,8 +4,16 @@
  * so a cordis.yml `provider`-only pin (the bundle ships
  * `provider: deepseek-official` without `model`) can never merge with the
  * model half of the persisted `/model` choice into a route no adapter
- * recognizes. Startup, `/new`, resume and the status line all resolve through
- * these helpers so the displayed route is the route requests actually take.
+ * recognizes.
+ *
+ * Precedence is the LAST-USED rule: the persisted `/model` choice — the route
+ * the previous session actually ran on — wins whole; a complete cordis.yml
+ * route is the deployment DEFAULT underneath it (it decides the first run,
+ * and a resumed session's own record decides that session), and the harness
+ * default closes the chain. A static config route therefore cannot silently
+ * freeze the model every later session starts on. Startup, `/new`, resume and
+ * the status line all resolve through these helpers so the displayed route is
+ * the route requests actually take.
  */
 
 import type { ModelPref } from './modelPrefs.js'
@@ -38,11 +46,16 @@ export function explicitModelRoute(configured: { provider?: string; model?: stri
 }
 
 /**
- * Resolve the effective route atomically: a complete cordis.yml route wins
- * whole; otherwise the persisted `/model` choice wins whole; otherwise the
+ * Resolve the effective route atomically: the persisted `/model` choice wins
+ * whole; otherwise a complete cordis.yml route wins whole; otherwise the
  * defaults win whole — a half-pinned config is IGNORED rather than merged
  * with the defaults' other half, so no source ever contributes just one
  * half of the final route.
+ *
+ * The persisted pick leads because it is the standing user choice (`/model`
+ * writes it on every switch): a static deployment route is a DEFAULT, not a
+ * lock. A deployment that must pin a route states it where the composition
+ * reads the environment, not in this config key.
  * @param configured - Raw `provider`/`model` keys from cordis.yml.
  * @param pref - The persisted `/model` choice, if any.
  * @param defaults - Final fallback route (the channel's startup route for
@@ -54,20 +67,21 @@ export function resolveModelRoute(
   pref: ModelPref | undefined,
   defaults: ModelRoute = DEFAULT_MODEL_ROUTE,
 ): ModelRoute {
+  if (pref !== undefined) return { provider: pref.provider, model: pref.model }
   const explicit = explicitModelRoute(configured)
   if (explicit !== undefined) return explicit
-  if (pref !== undefined) return { provider: pref.provider, model: pref.model }
   return { provider: defaults.provider, model: defaults.model }
 }
 
 /**
  * The route a persisted session's own log records (issues #30/#67): the last
  * `request/header` snapshot carries the call config the agent loop builds its
- * requests from, so it IS the route a resume continues on when cordis.yml
- * does not pin a complete override. The status line derives the resumed
- * session's route from this so the display follows the session, not the
- * startup resolution. A log without any header (a session that never started
- * a turn) records no route.
+ * requests from, so it IS the route a resume continues on — it outranks a
+ * static cordis.yml route, which is only the deployment default (the route
+ * that session actually ran is the more specific fact). The status line
+ * derives the resumed session's route from this so the display follows the
+ * session, not the startup resolution. A log without any header (a session
+ * that never started a turn) records no route.
  * @param events - The session's durable event log.
  * @returns The last recorded route, or undefined when the log has none.
  */

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useSyncExternalStore } from 'react'
 import {
+  getTheme,
   isThemeAvailable,
   isLightThemeActive,
   registerCustomThemeResolver,
@@ -7,8 +8,9 @@ import {
   setAutoThemeBase,
   getAutoThemeBase,
   AUTO_THEME_NAME,
+  THEME_NAMES,
 } from '../../theme.js'
-import { CLAUDE_BRAND_THEMES, getActiveBrand, subscribeActiveBrand } from '../../branding.js'
+import { brandThemeFor, getActiveBrand, subscribeActiveBrand } from '../../branding.js'
 import instances from '../../ink/instances.js'
 import { resolveCustomTheme } from '../../customTheme.js'
 import type { TuiThemeHost } from '../../dsh-adapter/themes.js'
@@ -129,7 +131,7 @@ export function ThemeProvider({
     if (forced === undefined) return false
     if (isThemeAvailable(forced)) return true
     console.warn(
-      `[dsh-tui] theme "${forced}" not found (built-ins: auto, light, dark, dark-ansi; static ~/.dsh-tui/themes/*.json; runtime plugin themes); falling back to auto-detection`,
+      `[dsh-tui] theme "${forced}" not found (built-ins: ${AUTO_THEME_NAME}, ${THEME_NAMES.join(', ')}; static ~/.dsh-tui/themes/*.json; runtime plugin themes); falling back to auto-detection`,
     )
     return false
   })
@@ -305,12 +307,23 @@ export function ThemeProvider({
       : isThemeAvailable(active)
         ? active
         : AUTO_THEME_NAME
-    if (brand !== 'claude' || brandThemeLockRef.current) return resolved
-    // 双主题按解析档深浅落位：浅色终端（或历史 light 偏好）→ claude-paper，
-    // 深色 → claude-dark——两套共用同一强调色，切明暗不丢品牌识别。
-    const lightness = resolved === 'light' || (resolved === AUTO_THEME_NAME && autoBase === 'light') ? 'light' : 'dark'
-    return CLAUDE_BRAND_THEMES[lightness]
+    if (brandThemeLockRef.current) return resolved
+    // 品牌双主题按**解析后色板**的深浅落位：浅色（含 `pink-day` 这类浅底内置名、
+    // 浅色自定义主题，以及浅色终端下的 `auto`）→ 浅色版，深色 → 深色版——两套
+    // 共用同一强调色，切明暗不丢品牌识别（claude 陶土橙、codex 薰衣草紫）。
+    return brandThemeFor(brand, resolved) ?? resolved
   })()
+  // 模块级镜像必须**在渲染期**写入（不是 effect）：markdown 把主题色烤进
+  // ANSI 字符串（链接 accent、行内代码 permission…），而它正是被这次 context
+  // 更新触发重渲染的——放进 effect 会让它读到上一帧的主题名，于是换主题后
+  // 链接颜色要等重启才更新。镜像只服务非 React 渲染（markdown/hyperlink）。
+  // 当前色板的**身份**：运行时主题在同一批里释放并重注册时名字不变，但 resolver
+  // 已经换了一个新色板对象（themes.ts 每次注册都新建并冻结）。context value 必须
+  // 跟着它换，否则消费者（含按色板身份 memo 的 Markdown）完全不重渲染，屏幕停在
+  // 旧色——切走再切回才刷新。放进 value 依赖即可：内置/静态主题的身份稳定，
+  // 不会因此多渲染。
+  const renderedPalette = getTheme(renderedTheme)
+  setActiveThemeName(renderedTheme)
   const value = React.useMemo(
     () => ({
       theme: renderedTheme,
@@ -323,13 +336,8 @@ export function ThemeProvider({
       // 纯黑（深色主题）——深色终端上糊一块白底最突兀。
       terminalBackground: hexRgb(imageBackingColor(detectedBackground, renderedTheme)),
     }),
-    [renderedTheme, autoBase, setTheme, detectedBackground],
+    [renderedTheme, renderedPalette, autoBase, setTheme, detectedBackground],
   )
-
-  useEffect(() => {
-    if (active !== null) setActiveThemeName(renderedTheme)
-  }, [active, renderedTheme])
-
   // Backdrop shade target: the detected terminal background when OSC 11
   // answered, else black/white by the rendered theme's lightness. `autoBase`
   // is a dependency because `auto` resolves through it.

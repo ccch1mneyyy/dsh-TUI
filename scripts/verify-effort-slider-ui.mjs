@@ -210,6 +210,9 @@ await sleep(700)
 // inline 模式下有 scrollback 时 getLine(0..rows) 直扫读的是缓冲区开头；
 // 改用公共辅助按 baseY 读可见视口（issue #532）。
 const screen = () => viewportLines(term).join('\n')
+// Welcome tips can mention scrolling or effort; observe the modal chrome.
+const helpVisible = title => viewportLines(term).some(line => line.trimEnd().endsWith(title))
+const sliderVisible = title => viewportLines(term).some(line => line.trim() === title)
 
 // Pin the UI language so the assertions below don't depend on the host's
 // persisted /lang choice or OS locale (the slider chrome is localized).
@@ -221,15 +224,15 @@ stdin.write('/help')
 // 输入已落屏（补全菜单描述可见）再回车——等待后只操作不断言，用 settle。
 await settle(() => screen().includes('Show shortcuts and commands'))
 stdin.write('\r')
-check('en: Help opens before slider', await settled(() => /scroll|commands:/.test(screen())), '')
+check('en: Help opens before slider', await settled(() => helpVisible('commands:')), '')
 stdin.write('\x1b')
-check('en: Esc closes Help only', await settled(() => !/commands:/.test(screen())), '')
+check('en: Esc closes Help only', await settled(() => !helpVisible('commands:')), '')
 
 // 1. /effort bare → slider opens with the current level (High) checked.
 stdin.write('/effort')
 await settle(() => screen().includes('Adjust the reasoning effort'))
 stdin.write('\r')
-check('slider opens with Reasoning effort title', await settled(() => /Reasoning effort/.test(screen())), '')
+check('slider opens with Reasoning effort title', await settled(() => sliderVisible('Reasoning effort')), '')
 check('slider lists all three levels', await settled(() => /Off/.test(screen()) && /High/.test(screen()) && /Max/.test(screen())), '')
 check('current level marked', await settled(() => /High\s*✓/.test(screen()) || /✓/.test(screen())), '')
 
@@ -240,7 +243,7 @@ check('statusline effort shows max', await settled(() => /max/.test(screen())), 
 
 // 3. Esc closes.
 stdin.write('\x1b')
-check('Esc closed the slider', await settled(() => !/Reasoning effort/.test(screen().slice(-4000))), '')
+check('Esc closed the slider', await settled(() => !sliderVisible('Reasoning effort')), '')
 
 // 4. /effort off → direct set + notify.
 stdin.write('/effort off')
@@ -268,18 +271,18 @@ stdin.write('/help')
 // zh 下 /help 的补全描述是本地化文案（i18n cmd-desc-help），等英文永远不成立。
 await settle(() => screen().includes('查看快捷键与命令'))
 stdin.write('\r')
-check('zh: Help opens before slider', await settled(() => /命令：/.test(screen())), '')
+check('zh: Help opens before slider', await settled(() => helpVisible('命令：')), '')
 stdin.write('\x1b')
-check('zh: Esc closes Help only', await settled(() => !/命令：/.test(screen())), '')
+check('zh: Esc closes Help only', await settled(() => !helpVisible('命令：')), '')
 stdin.write('/effort')
 // /effort 暂无 cmd-desc-effort 键，zh 下补全描述回退英文；若日后补键需同步改这里。
 await settle(() => screen().includes('Adjust the reasoning effort'))
 stdin.write('\r')
-check('zh: slider title 推理强度', await settled(() => screen().includes('推理强度')), '')
-check('zh: hint line localized', await settled(() => screen().includes('调整') && screen().includes('完成')), '')
+check('zh: slider title 推理强度', await settled(() => sliderVisible('推理强度')), '')
+check('zh: hint line localized', await settled(() => viewportLines(term).some(line => line.trim() === '←/→ 调整 · Enter/Esc 完成')), '')
 // Read the xterm visible screen after the repaint, not the raw output backlog.
 stdin.write('\x1b')
-check('zh: Esc closed the slider', await settled(() => !screen().includes('推理强度')), '')
+check('zh: Esc closed the slider', await settled(() => !sliderVisible('推理强度')), '')
 setLang('en')
 
 instance.unmount()

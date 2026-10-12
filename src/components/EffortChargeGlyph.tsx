@@ -2,7 +2,7 @@
  * EffortChargeGlyph — 输入提示前缀 `❯ ` 的最高档强调与充能。
  *
  * 思考强度处于当前路线最高档期间，前缀换为点火强调色（加粗，与点焰波
- * 共用 hues[0]——同一瞬间前缀与波是同一种橙）；切到最高档的瞬间做一次
+ * 共用主题 ignition——同一瞬间前缀与波同色）；切到最高档的瞬间做一次
  * 150ms「充能」渐变（accentRamp 的暗端 → 全值）。冷启动已在最高档时
  * 不充能（充能只属于切换瞬间），离开最高档恢复原样的 dim 行为。
  *
@@ -17,10 +17,9 @@
 import React, { useContext, useEffect, useReducer, useState } from 'react'
 import { Text, useTheme } from '../ui.js'
 import { ClockContext } from '../ink/components/ClockContext.js'
-import { accentRamp } from '../trajectory/effortIgnition.js'
+import { accentRamp, ignitionColors } from '../trajectory/effortIgnition.js'
 import { rgbString } from '../trajectory/motion.js'
 import { interpolateColor } from './Spinner/spinnerUtils.js'
-import { isLightThemeActive } from '../theme.js'
 
 /** 充能时长（ms）。 */
 const CHARGE_MS = 150
@@ -73,7 +72,7 @@ export function EffortChargeGlyph({
   }, [charging, clock])
 
   if (!topActive) return <Text dimColor={working}>❯ </Text>
-  const ramp = accentRamp(isLightThemeActive(themeName))
+  const ramp = accentRamp(ignitionColors(themeName))
   if (!charging) {
     // Steady state re-derives on every render (two allocations + one blend
     // per keystroke — negligible) instead of caching: a cached colour would

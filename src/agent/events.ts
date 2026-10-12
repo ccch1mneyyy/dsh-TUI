@@ -155,6 +155,13 @@ export interface QuestionItemView {
   readonly defaultSelected?: readonly string[]
   /** A URL the question is about (rendered as a link where supported). */
   readonly link?: string
+  /**
+   * The answer is a secret (a token, a password): the panel masks the
+   * free-text row with `•` while typing and the answered record shows
+   * `••••` instead of the answer. The answer itself reaches the backend
+   * unchanged. Absent = an ordinary question.
+   */
+  readonly secret?: true
 }
 
 /** One parked structured ask. */
@@ -231,8 +238,11 @@ export type AgentEvent =
    */
   | { readonly type: 'pending.changed'; readonly items: readonly PendingItem[]; readonly claimed?: readonly string[]; readonly discarded?: readonly string[] }
   // ── assistant stream ────────────────────────────────────────────────
-  /** A streamed attempt opened at (turn, step); a still-open earlier attempt is superseded. */
-  | { readonly type: 'assistant.attempt.start'; readonly attemptId: string; readonly turn: number; readonly step: number; readonly model?: string; readonly parentCallId?: string }
+  /** A streamed attempt opened at (turn, step); a still-open earlier attempt
+   *  is superseded. `firstTokenTime`, when known, timestamps the backend's
+   *  first output signal (including hidden reasoning), not request submission.
+   *  Without it, throughput starts at the first content delta. */
+  | { readonly type: 'assistant.attempt.start'; readonly attemptId: string; readonly turn: number; readonly step: number; readonly model?: string; readonly parentCallId?: string; readonly firstTokenTime?: number }
   /**
    * One stream delta. Live deltas route by `attemptId` (a delta of an attempt
    * the projector never saw open adopts the open step: the reattach case);
@@ -260,6 +270,9 @@ export type AgentEvent =
    * `turn`/`step` are absent only on legacy history that predates them.
    */
   | { readonly type: 'assistant.message'; readonly seq: number; readonly anchor: string; readonly turn?: number; readonly step?: number; readonly attemptId: string; readonly time: number; readonly model?: string; readonly blocks: readonly AssistantBlock[]; readonly images?: readonly ImageRef[]; readonly usage?: UsageDelta; readonly interrupted?: true; readonly canonical: boolean; readonly parentCallId?: string }
+  /** One model call's usage, reported separately from its reply. Books tokens
+   *  and cost by seq without creating or changing transcript rows. */
+  | { readonly type: 'usage'; readonly seq: number; readonly turn: number; readonly step?: number; readonly usage: UsageDelta; readonly time: number; readonly model?: string }
   // ── tools ───────────────────────────────────────────────────────────
   /** A tool call was issued. */
   | { readonly type: 'tool.call'; readonly seq: number; readonly anchor?: string; readonly turn: number; readonly step: number; readonly callId: string; readonly name: string; readonly argsJson: string; readonly parentCallId?: string; readonly agentId?: string; readonly presentation?: ToolCallPresentation; readonly time: number }
@@ -270,6 +283,17 @@ export type AgentEvent =
   | { readonly type: 'tool.result'; readonly seq: number; readonly turn: number; readonly step: number; readonly callId: string; readonly isError: boolean; readonly time: number; readonly content: readonly ContentBlockView[]; readonly text: string; readonly errorText?: string; readonly images?: readonly ImageRef[]; readonly structured?: unknown; readonly meta?: unknown; readonly presentation?: ToolResultPresentation; readonly parentCallId?: string }
   /** A running tool reported progress. */
   | { readonly type: 'tool.progress'; readonly callId: string; readonly elapsedMs: number; readonly parentCallId?: string }
+  /**
+   * Live output of a running tool: one appended chunk of what it printed so
+   * far (a command's stdout/stderr as it arrives; raw, ANSI and carriage
+   * returns included). Display-only and transient: the projector keeps a
+   * bounded tail on the running card and drops it when `tool.result`
+   * settles the call (the result carries the output of record), so it is
+   * never part of durable history. A chunk for a call the projector does
+   * not know (never opened, already settled) is ignored. A backend sends it
+   * frame-coalesced (`wake: 'frame'`) and at a bounded rate.
+   */
+  | { readonly type: 'tool.output'; readonly callId: string; readonly text: string; readonly time: number; readonly parentCallId?: string }
   // ── human in the loop ───────────────────────────────────────────────
   /** A permission prompt is waiting for the user. */
   | { readonly type: 'permission.request'; readonly request: PermissionRequestView }
@@ -323,8 +347,9 @@ export type AgentEvent =
   | { readonly type: 'compaction.start'; readonly trigger: 'manual' | 'auto'; readonly cancellable: boolean; readonly time: number }
   /** The compaction model call produced `outputChars` more characters. */
   | { readonly type: 'compaction.progress'; readonly outputChars: number }
-  /** A compaction closed (committed or abandoned). */
-  | { readonly type: 'compaction.end'; readonly ok: boolean; readonly summary?: string; readonly preTokens?: number; readonly postTokens?: number; readonly error?: string; readonly time: number }
+  /** A compaction closed (committed or abandoned). `contextReplaced` confirms
+   *  replacement, unlike a host's outcome-less compaction bracket. */
+  | { readonly type: 'compaction.end'; readonly ok: boolean; readonly contextReplaced?: boolean; readonly summary?: string; readonly preTokens?: number; readonly postTokens?: number; readonly error?: string; readonly time: number }
   /** The model's context window is known. */
   | { readonly type: 'context.capacity'; readonly contextWindow: number }
   /** Backend-measured context usage. */

@@ -1,0 +1,13 @@
+{
+  "name":"tui.backend","version":"v1alpha1","kind":"extension",
+  "coordinates":{"apiVersion":"tui.dsh/v1alpha1","kind":"Backend"},
+  "caller":"trusted in-process dsh-TUI backend registry",
+  "permissions":[],
+  "operations":["declare","detect","open","catalog","resume"],
+  "errors":["BACKEND_ID_RESERVED","PERMISSION_NOT_GRANTED"],
+  "concurrency":"one backend owns one process-wide resource pool; session-scoped resources belong to session.dispose()",
+  "timeout":"detection and install preflight are local; session operations retain their own deadlines",
+  "cleanup":"the registry closes only the entries it actually loaded (unloadExport); a session's resources are closed by its own dispose()",
+  "privacyClass":"sensitive",
+  "securityBoundary":false
+}

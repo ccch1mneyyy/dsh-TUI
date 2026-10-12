@@ -11,6 +11,7 @@ import React from 'react'
 import { Box, Text, useInput, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import { t } from '../i18n.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
+import { truncateWidth } from '../trajectory/format.js'
 import { BtwThreadView } from './sidePanel/btw/BtwThreadView.js'
 import type { BtwThreadSnapshot } from './sidePanel/btw/threads.js'
 
@@ -49,13 +50,19 @@ export function BtwPanelFallback({
     event.stopImmediatePropagation()
   })
 
+  const title = thread !== undefined && thread.turns.length > 0 ? thread.turns[0]!.question : ''
+
   return (
     <Box flexDirection="column">
-      <Box flexDirection="column" maxHeight={Math.max(5, rows - 8)}>
+      <Box flexDirection="row" width="100%" flexShrink={0}>
+        <Text color="warning" bold>{t('panel-title-btw')} </Text>
+        <Text dimColor wrap="truncate">{truncateWidth(title, Math.max(4, columns - 10))}</Text>
+      </Box>
+      <Box flexDirection="column" maxHeight={Math.max(5, rows - 9)}>
         <BtwThreadView
           thread={thread}
           width={columns}
-          height={Math.max(5, rows - 10)}
+          height={Math.max(5, rows - 11)}
           alive
           scrollHandleRef={scrollRef}
         />

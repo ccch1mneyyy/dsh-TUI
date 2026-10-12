@@ -74,6 +74,7 @@ try {
   writeFileSync(ledger, JSON.stringify({ version: 1, owners: [] }))
   const created = await start([])
   assert.equal(created.session.ref.sessionId, 'new')
+  assert.equal(created.resumedSessionId, undefined, 'a fresh session has no resume target')
   assert.equal(opened.at(-1)?.kind, 'create')
   assert.ok(readSessionOwners().has('fake:new'), 'create publishes its fresh session reservation')
   await created.session.dispose()
@@ -88,6 +89,7 @@ try {
   }
   const resumed = await start(['--resume'])
   assert.equal(resumed.initialHistory, seed)
+  assert.equal(resumed.resumedSessionId, 'remembered', 'boot observes the backend\'s own bare resume target even with empty history')
   assert.equal(lastSession, 'remembered')
   assert.deepEqual(used, ['remembered'])
   assert.equal(resumed.resumeCommand('remembered'), 'fake --resume remembered')

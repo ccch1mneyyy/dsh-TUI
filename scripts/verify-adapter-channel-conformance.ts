@@ -46,7 +46,7 @@ import { CHANNEL_UI_EFFECTS } from '../src/adapter/channel/ui-policy.js'
 const ROOT = resolve(import.meta.dirname, '..')
 let checks = 0
 
-for (const name of ['backendChannels', 'backendModes', 'backendMcp'] as const) {
+for (const name of ['backendChannels', 'backendModes', 'backendMcp', 'backendGoals'] as const) {
   assert.equal(CHANNEL_UI_EFFECTS[name], 'read-only', 'a subhost accessor is a passive read')
   checks += 1
 }

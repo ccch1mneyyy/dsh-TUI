@@ -58,6 +58,7 @@ const EXPECTED: readonly { id: string; icon: string; fullscreen: boolean }[] = [
   { id: 'info', icon: 'ⓘ', fullscreen: false },
   { id: 'trajectory', icon: '∿', fullscreen: true },
   { id: 'jobs', icon: '▸', fullscreen: true },
+  { id: 'btw', icon: '?', fullscreen: true },
   { id: 'agents', icon: '◆', fullscreen: true },
   { id: 'workspace', icon: '⌗', fullscreen: true },
   { id: 'companion', icon: '♥', fullscreen: false },
@@ -65,6 +66,10 @@ const EXPECTED: readonly { id: string; icon: string; fullscreen: boolean }[] = [
 // Importing the column module runs registerBuiltinPanels(); give it a tick.
 await new Promise(resolve => setTimeout(resolve, 0))
 const registry = panelStore.list()
+const defaultIds = prefs.DEFAULT_SIDE_PANEL_IDS.split(',')
+check('r defaults: every built-in panel is selected once',
+  defaultIds.length === EXPECTED.length && EXPECTED.every(expected => defaultIds.filter(id => id === expected.id).length === 1),
+  defaultIds.join(','))
 for (const expected of EXPECTED) {
   const entry = registry.find(candidate => candidate.definition.id === expected.id)
   check('r registry: ' + expected.id + ' is registered', entry !== undefined)
@@ -73,6 +78,7 @@ for (const expected of EXPECTED) {
   check('r registry: ' + expected.id + ' has a single-cell icon', stringWidth(icon) === 1 && icon === expected.icon, icon)
   const fullscreen = entry.definition.capabilities?.fullscreen === true
   check('r registry: ' + expected.id + ' fullscreen=' + expected.fullscreen, fullscreen === expected.fullscreen)
+  check('r registry: ' + expected.id + ' is marked enabled by default', entry.definition.defaultEnabled === true)
 }
 
 // ── c. mount through the real host ──────────────────────────────────────────
@@ -162,7 +168,7 @@ const app = await render(
 
 try {
   check('c mount: todo is the active carousel title', await settled(() => has('Todo'), { timeoutMs: 4000 }))
-  check('c mount: two inactive panels use dots', (viewportLines(term, ROWS)[0]?.match(/[○●]/g) ?? []).length === 2)
+  check('c mount: inactive panels show their registered icons', (viewportLines(term, ROWS)[0]?.match(/[ⓘ∿]/g) ?? []).length === 2)
   check('c mount: no ⤢ while a fullscreen-less panel is active', !has('⤢'))
 
   const infoArrow = findText('▶')
@@ -175,10 +181,10 @@ try {
   check('c info: still no ⤢ (no fullscreen form)', !has('⤢'))
 
   const row = viewportLines(term, ROWS)[0] ?? ''
-  const rightDot = { col: row.indexOf('○', row.indexOf('Info') + 'Info'.length), row: 0 }
-  check('c trajectory: the next panel dot is visible', rightDot.col > 0, row)
-  if (rightDot.col > 0) click(rightDot.col + 1, rightDot.row)
-  check('c trajectory: clicking its dot selects the panel title', await settled(() => has('Trajectory') && !has('Info'), { timeoutMs: 4000 }), viewportLines(term, ROWS).slice(0, 5).join('|'))
+  const trajectoryIcon = { col: row.indexOf('∿', row.indexOf('Info') + 'Info'.length), row: 0 }
+  check('c trajectory: the next panel icon is visible', trajectoryIcon.col > 0, row)
+  if (trajectoryIcon.col > 0) click(trajectoryIcon.col + 1, trajectoryIcon.row)
+  check('c trajectory: clicking its icon selects the panel title', await settled(() => has('Trajectory') && !has('Info'), { timeoutMs: 4000 }), viewportLines(term, ROWS).slice(0, 5).join('|'))
   check('c trajectory: empty state without a build', await settled(() => has(t('panel-trajectory-empty').slice(0, 24)), { timeoutMs: 4000 }))
   check('c trajectory: ⤢ appears (declares capabilities.fullscreen)', has('⤢'))
 } finally {

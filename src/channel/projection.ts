@@ -16,15 +16,16 @@
 import type { ChannelUi } from '../adapter/ports/channel-ui.js'
 import type { ChatRow, SelectionAttachment, TodoPanelItem, ToolCallView, TurnUsageSummary } from '../adapter/ports/channel-view.js'
 import { markChannelReadDirty } from '../adapter/channel/read-view.js'
-import type { AgentEvent, AgentEventMeta, AgentEventOf, ContentBlockView, GoalSnapshot, ImageRef } from '../agent/events.js'
+import type { AgentEvent, AgentEventMeta, AgentEventOf, ContentBlockView, GoalSnapshot, ImageRef, UsageDelta } from '../agent/events.js'
 import { t } from '../i18n.js'
 import { logForDebugging } from '../utils/debug.js'
 import { laneOf } from './activity.js'
 import { buildQuestionRecord, parseQuestionRecordAnswers, parseQuestionRecordQuestions } from './question-record.js'
 import { cleanRenderText, NOTICE_CELLS } from './sanitize.js'
+import { appendLiveOutput, type LiveOutputTail } from './live-output.js'
 import { replaySelectionAttachment } from './selection-record.js'
 import { ARGS_PREVIEW_LIMIT, LOCAL_OUTPUT_LIMIT, preview, RESULT_PREVIEW_LIMIT } from './transcript.js'
-import { addUsageToBucket, emptyCostBuckets, estimateTokens, usageOutputTokens, type PricingWindow } from './usage.js'
+import { addUsageToBucket, emptyCostBuckets, estimateTokens, estimateTokensFraction, usageOutputTokens, type PricingWindow } from './usage.js'
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 
@@ -51,6 +52,8 @@ export interface ProjectionRenderer {
 /** Everything the projector needs from its channel. */
 export interface ChannelProjectionDeps {
   rowIds: { value: number }
+  /** Display name of the bound backend; absent keeps the legacy DSH wording. */
+  backendLabel?: () => string | undefined
   resetContextWarning(): void
   checkContextWarning(): void
   notify: ChannelUi['notify']
@@ -118,7 +121,27 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       turn: number
       step: number
       firstTokenTime: number | undefined
-      outputChars: number
+      outputEstimate: number
+    }
+    | undefined
+  /** The open turn's per-step token contributions (real or estimated): a
+   *  late real usage report naming the same (turn, step) swaps the estimate
+   *  in place (Codex meters after the reply settles). */
+  let tpsTurnSteps:
+    | {
+      step: number
+      tokens: number
+      estimated: boolean
+    }[]
+  /** The LAST ended turn's fold, kept so a straggler usage arriving after
+   *  turn.end still corrects the tps readout and the pushed sample. */
+  let tpsClosedTurn:
+    | {
+      turn: number
+      decodeMs: number
+      steps: { step: number; tokens: number; estimated: boolean }[]
+      endAt: number
+      sample: { tps: number; at: number } | undefined
     }
     | undefined
   /** Per-turn usage ledger: reset at turn.start, summed from each assistant
@@ -146,6 +169,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
   let lastNotedTurnModel: string | undefined
   /** Tool cards by callId, so the result can settle the running card. */
   const toolCards = new Map<string, ChatRow>()
+  /** The live-output tail of each running card that printed (`tool.output`),
+   *  by callId: at most one per running card, dropped with its result. */
+  const liveTails = new Map<string, LiveOutputTail>()
   /**
    * Question-presented calls by callId, holding their raw arguments. The ask
    * renders as the interactive panel rather than a tool card, so its result
@@ -171,6 +197,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
    * row for the same durable sequence number.
    */
   const handledAssistantMessages = new Set<number>()
+  const handledUsage = new Set<number>()
   const handledAssistantChunks = new Set<number>()
   /** One agent runs one request at a time. Durable step boundaries also let
    *  a freshly attached projector accept deltas whose attempt start it missed. */
@@ -181,6 +208,8 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
    *  不会把换模型前的用量重估到新模型；旧日志没有 header 时回退
    *  事件发生时的 state.model。 */
   let eventModel: string | undefined
+  /** Backend occupancy is independent of the last request's billed usage. */
+  let contextUsage: AgentEventOf<'context.usage'> | undefined
   const assistantRowsByStep = new Map<string, ChatRow>()
   /**
    * Assistant rows by the seq they carry: a reconnect can replay a delta or
@@ -227,7 +256,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     if (activeAttempt !== undefined && activeAttempt.turn === turn && activeAttempt.step === step) activeAttempt = undefined
     if (tpsStep !== undefined && tpsStep.turn === turn && tpsStep.step === step) {
       tpsStep.firstTokenTime = undefined
-      tpsStep.outputChars = 0
+      tpsStep.outputEstimate = 0
     }
     updateSpinnerMode()
   }
@@ -441,14 +470,16 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         return false
     }
   }
-  /** Character payload of one token-bearing delta for the live fallback. */
-  const tokenDeltaChars = (delta: Delta): number => {
+  /** Fractional token estimate of one token-bearing delta for the live fold
+   *  (script-weighted, see estimateTokensFraction): the old raw char count fed
+   *  a chars/4 conversion that under-counted CJK output ~3x. */
+  const tokenDeltaEstimate = (delta: Delta): number => {
     switch (delta.kind) {
       case 'text':
       case 'reasoning':
-        return delta.text.length
+        return estimateTokensFraction(delta.text)
       case 'tool-args':
-        return (delta.name?.length ?? 0) + delta.partialJson.length
+        return (delta.name === undefined ? 0 : estimateTokensFraction(delta.name)) + estimateTokensFraction(delta.partialJson)
       default:
         return 0
     }
@@ -498,15 +529,64 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       isTokenDelta(delta)
     ) {
       tps.firstTokenTime ??= time
-      tps.outputChars += tokenDeltaChars(delta)
+      tps.outputEstimate += tokenDeltaEstimate(delta)
       const elapsedMs = Math.max(0, time - tps.firstTokenTime)
       if (elapsedMs > 500) {
         const decodeMs = tpsTurnDecodeMs + elapsedMs
-        const outputTokens = tpsTurnDecodeTokens + Math.ceil(tps.outputChars / 4)
+        const outputTokens = tpsTurnDecodeTokens + Math.ceil(tps.outputEstimate)
         state.tps = outputTokens / (decodeMs / 1000)
       }
     }
     updateSpinnerMode()
+  }
+
+  /**
+   * Book one model call's usage: session totals, the cost buckets, the
+   * context sample and the open turn's ledger. Shared by settled messages
+   * and the separate usage reports a backend sends after a reply settled.
+   */
+  const bookUsage = (usage: UsageDelta, event: Pick<AgentEventOf<'usage'>, 'time' | 'model'>): void => {
+    state.tokens.input += usage.input ?? 0
+    state.tokens.output += usage.output ?? 0
+    // Cache split totals feed the session cost estimate (hit-priced input
+    // vs. uncached input) — the durable replay may lack them.
+    state.tokens.cacheRead += usage.cacheRead ?? 0
+    state.tokens.cacheWrite += usage.cacheWrite ?? 0
+    // Rate-window bucketing by the request's own time (the durable replay
+    // replays historical events, so a resumed session prices each request
+    // at the rate window it actually ran in — the session cost estimate
+    // never prices the whole session at the current window).
+    const peak = (deps.pricingWindow?.(event.time) ?? 'idle') === 'peak'
+    addUsageToBucket(peak ? state.tokens.peak : state.tokens.idle, usage)
+    // 主会话费用分桶：计数方式与 tokens 相同，但按事件发生时的模型
+    // 归属。replay 用 request.header 还原历史请求模型，旧日志回退
+    // channel 模型；换模型不会把历史 token 重估到新模型。
+    if ((usage.input ?? 0) !== 0 || (usage.output ?? 0) !== 0 || (usage.cacheRead ?? 0) !== 0 || (usage.cacheWrite ?? 0) !== 0) {
+      const model = eventModel ?? event.model ?? state.model
+      const cost = state.mainCost[model] ?? emptyCostBuckets()
+      addUsageToBucket(peak ? cost.peak : cost.idle, usage)
+      state.mainCost[model] = cost
+    }
+    // The most recent request's usage describes the current context:
+    // input (uncached) + cache hits all occupy the window. Cache hits
+    // also drive the status-line `cache N` readout.
+    state.lastUsage = {
+      input: usage.input ?? 0,
+      output: usage.output ?? 0,
+      cacheRead: usage.cacheRead ?? 0,
+      cacheWrite: usage.cacheWrite ?? 0,
+      at: event.time,
+    }
+    // Turn ledger: each message reports its own request's increment, so
+    // the sum is the turn total. Cache fields absent on the wire stay
+    // absent (cacheKnown distinguishes zero from unreported).
+    turnLedger.input += usage.input ?? 0
+    turnLedger.output += usage.output ?? 0
+    turnLedger.cacheRead += usage.cacheRead ?? 0
+    turnLedger.cacheWrite += usage.cacheWrite ?? 0
+    if (usage.cacheRead !== undefined || usage.cacheWrite !== undefined) turnLedger.cacheKnown = true
+    turnLedger.usageSeen = true
+    if (event.model !== undefined && event.model !== '') turnLedger.model = event.model
   }
 
   const applyAssistantMessage = (event: AgentEventOf<'assistant.message'>): void => {
@@ -606,69 +686,35 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     if (activeAttempt !== undefined && activeAttempt.turn === event.turn && activeAttempt.step === event.step) activeAttempt = undefined
     updateSpinnerMode()
     const usage = event.usage
-    if (usage !== undefined) {
-      state.tokens.input += usage.input ?? 0
-      state.tokens.output += usage.output ?? 0
-      // Cache split totals feed the session cost estimate (hit-priced input
-      // vs. uncached input) — the durable replay may lack them.
-      state.tokens.cacheRead += usage.cacheRead ?? 0
-      state.tokens.cacheWrite += usage.cacheWrite ?? 0
-      // Rate-window bucketing by the request's own time (the durable replay
-      // replays historical events, so a resumed session prices each request
-      // at the rate window it actually ran in — the session cost estimate
-      // never prices the whole session at the current window).
-      const peak = (deps.pricingWindow?.(event.time) ?? 'idle') === 'peak'
-      addUsageToBucket(peak ? state.tokens.peak : state.tokens.idle, usage)
-      // 主会话费用分桶：计数方式与 tokens 相同，但按事件发生时的模型
-      // 归属。replay 用 request.header 还原历史请求模型，旧日志回退
-      // channel 模型；换模型不会把历史 token 重估到新模型。
-      if ((usage.input ?? 0) !== 0 || (usage.output ?? 0) !== 0 || (usage.cacheRead ?? 0) !== 0 || (usage.cacheWrite ?? 0) !== 0) {
-        const model = eventModel ?? state.model
-        const cost = state.mainCost[model] ?? emptyCostBuckets()
-        addUsageToBucket(peak ? cost.peak : cost.idle, usage)
-        state.mainCost[model] = cost
-      }
-      // The most recent request's usage describes the current context:
-      // input (uncached) + cache hits all occupy the window. Cache hits
-      // also drive the status-line `cache N` readout.
-      state.lastUsage = {
-        input: usage.input ?? 0,
-        output: usage.output ?? 0,
-        cacheRead: usage.cacheRead ?? 0,
-        cacheWrite: usage.cacheWrite ?? 0,
-        at: event.time,
-      }
-      // Turn ledger: each message reports its own request's increment, so
-      // the sum is the turn total. Cache fields absent on the wire stay
-      // absent (cacheKnown distinguishes zero from unreported).
-      turnLedger.input += usage.input ?? 0
-      turnLedger.output += usage.output ?? 0
-      turnLedger.cacheRead += usage.cacheRead ?? 0
-      turnLedger.cacheWrite += usage.cacheWrite ?? 0
-      if (usage.cacheRead !== undefined || usage.cacheWrite !== undefined) turnLedger.cacheKnown = true
-      turnLedger.usageSeen = true
-      if (event.model !== undefined && event.model !== '') turnLedger.model = event.model
-    }
+    if (usage !== undefined) bookUsage(usage, event)
     const tpsMessageStep = tpsStep
+    // Same-timestamp delivery has no measurable decode span; its tokens
+    // must not inflate the rate of another step in this turn.
     if (
       tpsTurn === event.turn &&
       tpsMessageStep !== undefined &&
       tpsMessageStep.turn === event.turn &&
       tpsMessageStep.step === event.step &&
-      tpsMessageStep.firstTokenTime !== undefined
+      tpsMessageStep.firstTokenTime !== undefined &&
+      event.time > tpsMessageStep.firstTokenTime
     ) {
-      const outputTokens = usageOutputTokens(usage)
-        ?? (tpsMessageStep.outputChars > 0
-          ? Math.ceil(tpsMessageStep.outputChars / 4)
+      const reported = usageOutputTokens(usage)
+      const outputTokens = reported
+        ?? (tpsMessageStep.outputEstimate > 0
+          ? Math.ceil(tpsMessageStep.outputEstimate)
           : undefined)
+      const decodeMs = Math.max(0, event.time - tpsMessageStep.firstTokenTime)
+      tpsTurnDecodeMs += decodeMs
       if (outputTokens !== undefined) {
-        tpsTurnDecodeMs += Math.max(0, event.time - tpsMessageStep.firstTokenTime)
         tpsTurnDecodeTokens += outputTokens
         tpsTurnSampled = true
         if (tpsTurnDecodeMs > 0) {
           state.tps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
         }
       }
+      // A backend can signal hidden generation without any content delta.
+      // Keep its timed span for later usage, without sampling a zero rate.
+      tpsTurnSteps = [...tpsTurnSteps.filter(step => step.step !== event.step), { step: event.step, tokens: outputTokens ?? 0, estimated: reported === undefined }]
     }
     if (
       tpsMessageStep !== undefined &&
@@ -867,6 +913,12 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       return
     }
     if (card === undefined || card.tool === undefined) return
+    // The result carries the output of record: the live tail goes (deleted,
+    // not set undefined, so a card that never printed keeps its shape).
+    if (liveTails.delete(callId)) {
+      delete card.tool.liveOutput
+      delete card.tool.liveOutputDropped
+    }
     const images = event.images ?? NO_IMAGES
     card.images = images.length === 0 ? undefined : images
     card.tool.durationMs = Math.max(0, Date.now() - card.tool.startedAt)
@@ -902,6 +954,24 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     updateSpinnerMode()
   }
 
+  /**
+   * One live-output chunk of a running card: appended to its bounded tail
+   * (`./live-output.ts`) and published on the row. Only that row changes
+   * (the read view marks it dirty), so only the running card re-renders. A
+   * chunk for a call with no running card here (unknown, settled, folded
+   * by the window cap, or a suppressed question/todo/subagent call) is
+   * ignored.
+   */
+  const applyToolOutput = (event: AgentEventOf<'tool.output'>): void => {
+    const card = toolCards.get(event.callId)
+    if (card?.tool === undefined || card.tool.status !== 'running' || card.folded === true || event.text === '') return
+    const tail = appendLiveOutput(liveTails.get(event.callId), event.text)
+    liveTails.set(event.callId, tail)
+    card.tool.liveOutput = tail.text
+    if (tail.dropped > 0) card.tool.liveOutputDropped = tail.dropped
+    touchRow(card)
+  }
+
   /** A task feed derived from one tool result reaches the job registry only
    *  when that result settled an ok card here (see settledCardCallId). */
   const taskFeedAdmitted = (callId: string | undefined): boolean =>
@@ -919,18 +989,25 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     state.working = false
     state.activeToolCount = 0
     if (tpsTurn !== undefined && tpsTurn === event.turn) {
+      let sample: { tps: number; at: number } | undefined
       if (tpsTurnSampled && tpsTurnDecodeMs > 0) {
         const turnTps = tpsTurnDecodeTokens / (tpsTurnDecodeMs / 1000)
         state.tps = turnTps
-        state.tpsSamples.push({ tps: turnTps, at: event.time })
+        sample = { tps: turnTps, at: event.time }
+        state.tpsSamples.push(sample)
         if (state.tpsSamples.length > 500) state.tpsSamples.shift()
       } else {
         // Do not leave a chars/4 live estimate behind when no completed
         // decode sample exists for this turn.
         state.tps = tpsBeforeTurn
       }
+      // Keep the ended turn's fold ONE turn longer: a straggler usage report
+      // (Codex may deliver the final metering after turn/completed) still
+      // corrects the tps readout and the just-pushed sample through it.
+      tpsClosedTurn = tpsTurnSteps.length > 0 ? { turn: event.turn, decodeMs: tpsTurnDecodeMs, steps: tpsTurnSteps, endAt: event.time, sample } : undefined
       tpsTurn = undefined
       tpsStep = undefined
+      tpsTurnSteps = []
       tpsTurnDecodeMs = 0
       tpsTurnDecodeTokens = 0
       tpsTurnSampled = false
@@ -982,10 +1059,14 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       // A user cancel closes the turn as `aborted`; `interrupted` only
       // appears for crash-orphaned turns. Both user-interruption paths
       // render as a distinct dim row.
+      const backend = deps.backendLabel?.()
       appendRow({
         id: deps.rowIds.value,
         kind: 'interrupt',
-        text: t('interrupted-by-user') + t('interrupted-ask-next'),
+        ...(backend ? { interruptBackend: backend } : {}),
+        text: t('interrupted-by-user') + (backend
+          ? t('interrupted-ask-backend', { name: backend })
+          : t('interrupted-ask-next')),
       })
       deps.rowIds.value += 1
       emitTurnSummary()
@@ -1044,7 +1125,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
             turn: event.turn,
             step: event.step,
             firstTokenTime: undefined,
-            outputChars: 0,
+            outputEstimate: 0,
           }
         }
         return
@@ -1071,6 +1152,11 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
           turnFailedAttempts.add(superseded)
         }
         activeAttempt = { attemptId: event.attemptId, turn: event.turn, step: event.step }
+        // A backend's output-start signal includes generation hidden from
+        // text deltas. Replay has no reliable per-item decode timing.
+        if (!replaying && event.firstTokenTime !== undefined && tpsStep?.turn === event.turn && tpsStep.step === event.step) {
+          tpsStep.firstTokenTime ??= event.firstTokenTime
+        }
         return
       case 'assistant.attempt.end':
         // A positioned end is a durable record of a failed attempt: drop that
@@ -1109,11 +1195,52 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'assistant.message':
         applyAssistantMessage(event)
         return
+      case 'usage':
+        if (handledUsage.has(event.seq)) return
+        handledUsage.add(event.seq)
+        bookUsage(event.usage, event)
+        // A late real report (Codex meters after the reply settles) names the
+        // step it describes: replace that step's estimate in the turn fold so
+        // the live tps and the turn-end sample read real tokens, not a guess.
+        // The same swap also serves the LAST ended turn (a straggler after
+        // turn.end corrects the readout and the pushed sample in place).
+        const real = usageOutputTokens(event.usage)
+        const swap = (steps: { step: number; tokens: number; estimated: boolean }[], decodeMs: number): number | undefined => {
+          const target = steps.find(step => step.step === event.step && step.estimated)
+          if (target === undefined || real === undefined) return undefined
+          target.tokens = real
+          target.estimated = false
+          return steps.reduce((sum, step) => sum + step.tokens, 0)
+        }
+        if (real !== undefined && tpsTurn === event.turn) {
+          const total = swap(tpsTurnSteps, tpsTurnDecodeMs)
+          if (total !== undefined) {
+            tpsTurnDecodeTokens = total
+            tpsTurnSampled = true
+            if (tpsTurnDecodeMs > 0) state.tps = total / (tpsTurnDecodeMs / 1000)
+          }
+        } else if (real !== undefined && tpsClosedTurn?.turn === event.turn) {
+          const total = swap(tpsClosedTurn.steps, tpsClosedTurn.decodeMs)
+          if (total !== undefined && tpsClosedTurn.decodeMs > 0) {
+            state.tps = total / (tpsClosedTurn.decodeMs / 1000)
+            if (tpsClosedTurn.sample === undefined) {
+              tpsClosedTurn.sample = { tps: state.tps, at: tpsClosedTurn.endAt }
+              state.tpsSamples.push(tpsClosedTurn.sample)
+              if (state.tpsSamples.length > 500) state.tpsSamples.shift()
+            } else {
+              tpsClosedTurn.sample.tps = state.tps
+            }
+          }
+        }
+        return
       case 'tool.call':
         applyToolCall(event)
         return
       case 'tool.result':
         applyToolResult(event)
+        return
+      case 'tool.output':
+        applyToolOutput(event)
         return
       case 'task.output':
         // A `job_output`-style read doubles as the job card's output feed:
@@ -1164,11 +1291,17 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         tpsTurnDecodeTokens = 0
         tpsTurnSampled = false
         tpsStep = undefined
+        tpsTurnSteps = []
+        tpsClosedTurn = undefined
         return
       case 'turn.end':
         applyTurnEnd(event)
         // A foreground subagent cannot outlive its turn (./activity.ts).
         deps.activity?.apply(event, replaying)
+        return
+      case 'context.usage':
+        contextUsage = event
+        if (!replaying) deps.checkContextWarning()
         return
       case 'context.capacity':
         // Backend-advertised context capacity; drives the context-low warning.
@@ -1263,6 +1396,18 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       }
       case 'compaction.end':
         state.compaction = undefined
+        // A confirmed replacement without a checkpoint (Codex) invalidates
+        // the old composition. Hosts that only bracket the attempt omit this
+        // signal; their recorded checkpoint owns the reset.
+        if (event.ok && event.contextReplaced === true) {
+          state.contextSegments = {
+            system: state.contextSegments.system,
+            prompt: estimateTokens(event.summary ?? ''),
+            assistant: 0,
+            thinking: 0,
+            tools: 0,
+          }
+        }
         // A backend that measured the compacted window (Claude
         // `compact_boundary.post_tokens`) re-seeds the occupancy sample with
         // it: a compaction turn makes no request, so without this the
@@ -1348,7 +1493,6 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'permission.settled':
       case 'question.request':
       case 'question.settled':
-      case 'context.usage':
       case 'effort.changed':
       case 'mode.changed':
       case 'commands.changed':
@@ -1376,6 +1520,8 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       return
     }
     handledAssistantMessages.clear()
+    handledUsage.clear()
+    contextUsage = undefined
     handledAssistantChunks.clear()
     openStep = undefined
     activeAttempt = undefined
@@ -1402,10 +1548,13 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     sealedReasoning.length = 0
     lastReasoningRow = undefined
     toolCards.clear()
+    liveTails.clear()
     askCalls.clear()
     todoCalls.clear()
     settledCardCallId = undefined
     handledAssistantMessages.clear()
+    handledUsage.clear()
+    contextUsage = undefined
     handledAssistantChunks.clear()
     openStep = undefined
     activeAttempt = undefined
@@ -1416,11 +1565,13 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     lastNotedTurnModel = undefined
     tpsTurn = undefined
     tpsStep = undefined
+    tpsTurnSteps = []
+    tpsClosedTurn = undefined
     tpsTurnDecodeMs = 0
     tpsTurnDecodeTokens = 0
     tpsTurnSampled = false
   }
-  return { apply, reset, settleStreaming, updateSpinnerMode }
+  return { apply, reset, settleStreaming, updateSpinnerMode, contextUsage: () => contextUsage }
 }
 
 export type ChannelProjection = ReturnType<typeof createChannelProjection>

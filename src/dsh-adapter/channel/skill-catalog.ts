@@ -23,12 +23,16 @@ export function createSkillCatalog(
     cwd(): string
     setCommands(commands: LocalCommand[]): void
     commandDescriptions(name: string): LocalizedDescriptions | undefined
+    /** Whether a turn is currently running. A skill gesture typed mid-turn
+     *  must stay IMMEDIATE (steer at the next step boundary) instead of
+     *  degrading into a turn-end followup (issue #1072). */
+    working(): boolean
     /** Submit a user line through the channel's delivery pipeline. The
      *  fallback skill path rides this same entry point and attaches the
      *  rendered body, so the line stays a plain user message (fence, pending
      *  preview and `@` expansion included) and the body is appended to that
      *  message's step batch — never a turn of its own. */
-    deliverUserText(text: string, placement: 'followup', attach?: UserMessage): void
+    deliverUserText(text: string, placement: 'steer' | 'followup', attach?: UserMessage): void
   },
 ) {
   let commandListSeq = 0
@@ -152,7 +156,7 @@ export function createSkillCatalog(
             const tools = ctx.get('tools') as { get(name: string, scope?: unknown): unknown } | undefined
             if (tools?.get('skill', invoker) !== undefined) {
               if (!deps.owner.current() || invoker !== deps.agent()) return { kind: 'error', text: t('skill-unavailable', { name }) }
-              deps.deliverUserText(`/${name}${rawInput}`, 'followup')
+              deps.deliverUserText(`/${name}${rawInput}`, deps.working() ? 'steer' : 'followup')
               return { kind: 'success' }
             }
             const skill = await registryFor(invoker)?.get(name, { ...viewOptions(invoker), signal })
@@ -163,7 +167,7 @@ export function createSkillCatalog(
             // listener appends the body AFTER the admitted batch — the same
             // shape/order as dsh-tool-skill's gesture boundary (#842).
             const bodyMessage = createUserMessage({ content: [{ type: 'text', text: renderSkillContent(skill as never) }], source: { kind: 'skill-invocation', name, form: 'instructions' } })
-            deps.deliverUserText(`/${name}${rawInput}`, 'followup', bodyMessage)
+            deps.deliverUserText(`/${name}${rawInput}`, deps.working() ? 'steer' : 'followup', bodyMessage)
             return { kind: 'success' }
           },
         })

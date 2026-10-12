@@ -14,10 +14,23 @@ export interface BackendDetection {
    */
   readonly auth?: 'ok' | 'missing' | 'unknown'
   readonly version?: string
+  /**
+   * Not installed, yet a version was read: the CLI is there but older than
+   * this backend supports (codex's "too old"). The picker then says "upgrade"
+   * instead of "not installed", which is what the detection hint explains.
+   * Replaces the host's `id === 'codex'` branch (P0 D5-2).
+   */
+  readonly stale?: true
   /** A version outside the validated range (warn, never block). */
   readonly drift?: string
   /** How to install or sign in when unavailable. */
   readonly hint?: string
+  /**
+   * A missing credential can be supplied after the session opened (the
+   * backend's own `/login`): the kernel picker keeps the row selectable and
+   * says to sign in after start, instead of dimming it.
+   */
+  readonly loginInSession?: true
 }
 
 /**
@@ -31,9 +44,12 @@ export type SdkInstallTarget =
   | { readonly kind: 'standalone' }
   | { readonly kind: 'no-profile' }
 
-/** How `pnpm add` ended; `tail` carries the captured output's last lines. */
+/** How \u0060pnpm add\u0060 ended; \u0060tail\u0060 carries the captured output's last lines.
+ *  \u0060ok.rebuiltStore\u0060 marks the self-healed path: pnpm reported
+ *  ERR_PNPM_UNEXPECTED_STORE and the installer rebuilt node_modules under
+ *  the pinned store before the add succeeded. */
 export type SdkInstallResult =
-  | { readonly kind: 'ok' }
+  | { readonly kind: 'ok'; readonly rebuiltStore?: boolean }
   | { readonly kind: 'cancelled' }
   | { readonly kind: 'pnpm-missing' }
   | { readonly kind: 'failed'; readonly exitCode: number; readonly tail: readonly string[] }
@@ -42,6 +58,35 @@ export type SdkInstallResult =
 export interface SdkInstaller {
   readonly result: Promise<SdkInstallResult>
   readonly cancel: () => void
+}
+
+/**
+ * The **data** half of an install surface: which of the host's install executors
+ * to run, and what to hand it. A backend's manifest declares it
+ * (`BackendManifest.install`) so the picker's wizard reads the target from the
+ * registry entry instead of a host constant — the manifest describes, it does
+ * not act.
+ *
+ * `executor` names a value of the host's table (`src/dsh-adapter/install/`), not
+ * a backend: a recipe naming an executor this host does not implement is read as
+ * "no install surface" (§6 item 12), which is what lets the set of values widen
+ * without changing this shape.
+ */
+export interface BackendInstallRecipe {
+  /** The host-side executor to run (`pnpm-profile-add`). */
+  readonly executor: string
+  /** `@scope/name@<version>`, as handed to `pnpm add`. */
+  readonly specifier: string
+  /** The validated version, shown in the confirm panel. */
+  readonly version: string
+}
+
+/** The host's install wizard: the recipe above with its executor bound — the
+ *  actions this surface carries are the ones its recipe's executor value means. */
+export interface SdkInstallSurface extends BackendInstallRecipe {
+  readonly resolveTarget: () => SdkInstallTarget
+  readonly start: (dir: string) => SdkInstaller
+  readonly preflight: () => Promise<boolean>
 }
 
 /** Which session to open. */
@@ -70,14 +115,44 @@ export interface OAuthCredentialSource {
    * credential rotated meanwhile (a fresh `/login`, another process's
    * refresh) is returned as is, never force-refreshed.
    */
-  fresh(options?: { readonly rejected?: string }): Promise<OAuthAccess | undefined>
+  fresh(options?: { readonly rejected?: string; readonly signal?: AbortSignal }): Promise<OAuthAccess | undefined>
   /** Whether a credential is stored, without touching the network. */
   stored(): Promise<boolean>
 }
 
+/** Host-owned credential refs; token material never enters events or logs. */
+export interface BackendTokenStore {
+  read(ref: string): string | undefined
+  write(ref: string, value: string): void
+  erase(ref: string): void
+  declared(ref: string): boolean
+}
+
+/** The languages the TUI ships (`src/i18n.ts`'s `Lang`, restated here so the
+ *  domain contract does not depend on the host dictionary module). */
+export type BackendLocale = 'zh' | 'en'
+
 /** Host services a backend may use while detecting or opening. */
 export interface BackendHost {
   readonly cwd: string
+  /**
+   * A directory of this backend's own, under the TUI's data directory
+   * (`~/.dsh-tui/backends/<id>`): where its prefs, stores and caches belong.
+   * Optional, like the other host facilities (D-3): a backend MUST
+   * feature-detect it. A host without one keeps nothing for this backend, and
+   * a backend MUST NOT guess a location of its own under the host's data
+   * directory (D2) — degrade to memory instead. Created on the first write,
+   * not here.
+   */
+  readonly dataDir?: string
+  /** The language the TUI is showing, read live (a `/lang` switch applies to
+   *  the next string a backend writes). A backend's own copy is written in it
+   *  — plugin text never goes through the host dictionary (D2). */
+  locale(): BackendLocale
+  /** The running TUI's version, when it can be read from `package.json`. */
+  readonly appVersion?: string
+  /** Stored channel tokens, when the host provides its credential service. */
+  readonly tokenStore?: BackendTokenStore
   /** Opt-in diagnostics; never stdout while the TUI renders. */
   debug(message: string): void
   /** User-visible warning (localized by the caller). */
@@ -102,17 +177,24 @@ export interface SessionListScope {
 /**
  * A backend's offline session catalog: no session needs to be open. Rows
  * are the browser's own `SessionSummary` shape with `backendId` set. The
- * backend's own store stays authoritative; the TUI indexes nothing beyond
- * what the catalog itself caches.
+ * backend's own store stays authoritative; completed listings may be retained
+ * solely for the browser's first paint while the catalog refreshes.
  */
 export interface SessionCatalog {
-  list(scope?: SessionListScope): Promise<readonly SessionSummary[]>
+  /** Partial callbacks contain cumulative rows for this scope; only resolution
+   *  of the promise represents a complete, successful listing. */
+  list(scope?: SessionListScope, onPartial?: (rows: readonly SessionSummary[]) => void): Promise<readonly SessionSummary[]>
+  /** Stable backend/store identity for a first-paint snapshot, never transcript
+   *  authority. Undefined declines disk caching (for example a relative root). */
+  snapshotKey?(): string | undefined
   /** One session's row, or undefined when the backend has no such session. */
   info?(sessionId: string, cwd?: string): Promise<SessionSummary | undefined>
   /** The trailing exchanges of a session (browser preview), newest last. */
   preview?(sessionId: string, options?: { readonly cwd?: string; readonly limit?: number }): Promise<readonly PreviewEntry[]>
   rename?(sessionId: string, title: string, cwd?: string): Promise<void>
   delete?(sessionId: string, cwd?: string): Promise<void>
+  /** Omitted means deletion; archive keeps the backend's durable transcript. */
+  readonly deleteAction?: 'archive'
 }
 
 /** Backend-scoped launcher marker and session browser usage notes. */
@@ -132,7 +214,11 @@ export interface AgentBackend {
   open(target: OpenTarget, host: BackendHost): Promise<AgentSession>
   readonly catalog?: SessionCatalog
   readonly launch?: {
-    sessionPrefs(debug: (message: string) => void): BackendSessionPrefs
+    /** This backend's remembered-session store. It takes the host because the
+     *  store lives under `host.dataDir` (B-3): the launcher asks before any
+     *  session is open, so `open()` cannot be the one to hand the directory
+     *  over. Absent `dataDir` = nothing is remembered, never a guessed path. */
+    sessionPrefs(host: BackendHost): BackendSessionPrefs
     resumeCommand(sessionId: string): string
   }
 }

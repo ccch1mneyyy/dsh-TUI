@@ -17,7 +17,7 @@ import assert from 'node:assert/strict'
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS }, { wrapSideQuestion, runSideQuestion, splitUnresolvedToolCalls, openStepToolCallIds }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS }, { wrapSideQuestion, runSideQuestion, splitUnresolvedToolCalls, openStepToolCallIds }, { applySidePanelPanels }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('../src/ui.js'),
@@ -25,7 +25,12 @@ const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
   import('../src/dsh-adapter/sideQuestion.js'),
+  import('../src/tuiDisplayPrefs.js'),
 ])
+
+// This script exercises the fallback overlay. The default now enables btw;
+// the enabled-panel route has its own verify-btw-panel.tsx regression.
+applySidePanelPanels('todo,jobs,agents')
 
 class FakeStdout extends Writable {
   columns = 100

@@ -49,7 +49,12 @@ export function resolveSplashLayout(
   // 最后一个字形。按 ink 宽判「放得下」，会在恰好卡阈值时让 Ink 走 `truncate-end`
   // ——最后一个字形被换成 `…`（可达边界：基准款 55 列即复现）。末尾那一格是空白，
   // 少画一格不可惜，字形被吃掉才可惜。
-  const titleWidth = bigTextWidth(font, font.tagline.top, font.tagline.topKerning) + font.tagline.topKerning
+  // 大字块按**两行中较宽的那行**判（品牌 uniform 档两行宽度不同——CODEX 窄于
+  // HARNESS；只看上排会把下排截掉。deepseek 等宽契约下两行同宽，行为不变）。
+  const titleWidth = Math.max(
+    bigTextWidth(font, font.tagline.top, font.tagline.topKerning) + font.tagline.topKerning,
+    bigTextWidth(font, font.tagline.bottom, font.tagline.bottomKerning) + font.tagline.bottomKerning,
+  )
   const fitsTitle = columns >= titleWidth
   const showWhale =
     options.whale &&

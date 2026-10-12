@@ -69,7 +69,7 @@ const events = createBindingEvents(ctx as never, {
   activity: { start() {}, stop() {}, onAgentStatus() {}, onSessionEvent() {} },
   inputConvergence: { interruptSeq: 0, cancelInFlight: false }, selection,
   modelActions: { selection, async applyPreferredEffort() {} },
-  modeActions: { refreshMode() {}, onSessionEvent() {} },
+  modeActions: { refreshMode() {}, onSessionEvent() {}, async applyRememberedPermission() {} },
   projector: { apply() { projected += 1 }, settleStreaming() {}, updateSpinnerMode() {} } as never,
   subagents,
   agentView: { schedule() {} },
@@ -135,7 +135,7 @@ const failingEvents = createBindingEvents(ctx as never, {
   owner: failingOwner, binding: failingBinding, state: { ...state } as never,
   activity: { start() {}, stop() {}, onAgentStatus() {}, onSessionEvent() {} },
   inputConvergence: { interruptSeq: 0, cancelInFlight: false }, selection: {},
-  modelActions: { selection: {}, async applyPreferredEffort() {} }, modeActions: { refreshMode() {}, onSessionEvent() {} },
+  modelActions: { selection: {}, async applyPreferredEffort() {} }, modeActions: { refreshMode() {}, onSessionEvent() {}, async applyRememberedPermission() {} },
   projector: { settleStreaming() {}, updateSpinnerMode() {}, apply() {} } as never,
   subagents: { onSessionEvent() { return false }, onStart() {}, onEnd() {} }, agentView: { schedule() {} },
 })

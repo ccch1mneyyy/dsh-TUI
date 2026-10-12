@@ -7,6 +7,7 @@
 // the adapter declarations so Context augmentation is available.
 export { name, apply } from './dsh-adapter/plugin-host.js'
 export type { TuiPluginHost, HostGrantFacade } from './dsh-adapter/plugin-host.js'
+export type { BackendAdmissionProbe } from './dsh-adapter/backend-registry.js'
 export type { HostContract, HostDescriptor, ContractCoordinate, ContractRef, NegotiationDecision, PermissionEntry, PermissionRegistry } from './adapter/standard/types.js'
 export type { TuiPluginStorage, PluginStorageErrorCode, TuiPluginStorageRuntime } from './dsh-adapter/plugin-storage.js'
 export { PluginStorageError, STORAGE_KEY_MAX_LENGTH, STORAGE_MAX_BYTES, STORAGE_MAX_KEYS } from './dsh-adapter/plugin-storage.js'

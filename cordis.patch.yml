@@ -218,7 +218,9 @@
 
 # Windows has no sandbox confinement backend yet (sandbox-local's win32
 # chain is empty); use danger-full-access on Windows so bash commands can
-# run. Other platforms keep the base workspace-write default.
+# run. Other platforms keep the base workspace-write default. DSH_PERMISSION_MODE
+# is the INITIAL state of a launch — the remembered /permission pick
+# (~/.dsh-tui/permission.json) outranks it whenever it is not set.
 - id: sandbox-policy
   config:
     mode: !!js "process.platform === 'win32' ? 'danger-full-access' : (process.env.DSH_PERMISSION_MODE ?? 'workspace-write')"
@@ -467,6 +469,9 @@
       # open. (The comment sits below the inject line:
       # verify-workspace-attachment.mjs asserts the name→inject distance.)
       config:
+        # `provider` + `model` are the deployment DEFAULT route (used until a
+        # `/model` pick is persisted in ~/.dsh-tui/model.json, which then wins
+        # whole); a half-pinned pair is ignored outright (issue #67).
         provider: deepseek-official
         # Alt-screen fullscreen 布局：应用内鼠标选区（选择即复制, OSC 52 +
         # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。出厂默认开启，
@@ -483,6 +488,8 @@
         # mathRendering: auto
         # 每个请求实际生效的推理强度，按当前路由的 adapter 档位校验
         #（deepseek: off/low/high/max）；非法值回落 adapter 默认。
+        # 这是部署默认值：上一次 /effort 的持久化选择（~/.dsh-tui/effort.json）
+        # 优先于它，它只决定"还没有选择过"的会话。
         effort: max
         # Shift+Tab session-mode cycle (array order IS the cycle order;
         # absent → the built-in default/plan/full trio below). Each entry
@@ -503,9 +510,10 @@
         #     plan: false
         #     sandbox: danger-full-access
         #     approval: never
-        # Static preset choice (DSH_TUI_PRESET overrides): wins over the
-        # persisted `/preset` preference (~/.dsh-tui/agent-preset.json), which
-        # wins over the roster default (standard).
+        # Deployment default for the Agent preset: the persisted `/preset`
+        # preference (~/.dsh-tui/agent-preset.json) outranks it, and
+        # DSH_TUI_PRESET (this run's explicit instruction) outranks both; the
+        # roster default (standard) closes the chain.
         preset: !!js process.env.DSH_TUI_PRESET ?? undefined
         workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
         sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined

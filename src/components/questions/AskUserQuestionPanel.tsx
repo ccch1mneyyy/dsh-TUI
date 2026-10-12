@@ -30,7 +30,7 @@
 import React from 'react'
 import { t } from '../../i18n.js'
 import { Box, Text, useInput, useTerminalSize } from '../../ui.js'
-import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
+import { useDeclaredCursor, useNativeCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../terminal-utils/figures.js'
 import type { QuestionDraft, QuestionSelection } from '../../channel/questions.js'
@@ -53,6 +53,8 @@ function isPlainArrow(key: { ctrl?: boolean; meta?: boolean; super?: boolean; sh
 const CHECKED = '◉'
 const UNCHECKED = '○'
 const PENCIL = '✎'
+/** One masked code point of a secret answer (`question.secret`). */
+const SECRET_MASK = '•'
 
 /**
  * Paste cap for one answer field, in code points. Typing is naturally
@@ -86,6 +88,9 @@ export type AskUserQuestionPanelProps = {
      *  (plain otherwise; a scheme that is not http(s)/file/mailto shows
      *  nothing — the notice row still names it). */
     readonly link?: string
+    /** A secret answer (a token, a password): the input row shows one `•`
+     *  per typed code point; the submitted answer is the real text. */
+    readonly secret?: boolean
     /** Local /provider draft editor. Ordinary model-facing asks carry none. */
     readonly modelEditor?: ModelEditor
     /** Presentation intent tag (rc.6): 'plan-review' switches to the
@@ -288,7 +293,12 @@ export function AskUserQuestionPanel({
   // three visual variants): its nodeCache rect IS the caret cell, so (0, 0)
   // stays exact under CJK widths and line wrapping without any
   // layout-affecting wrapper Box.
-  const caretRef = useDeclaredCursor({ line: 0, column: 0, active: !hideCustomInput && !collapsed && editingModel === null })
+  const nativeCursor = useNativeCursor()
+  const caretRef = useDeclaredCursor({
+    line: 0, column: 0,
+    active: !hideCustomInput && !collapsed && editingModel === null,
+    visible: nativeCursor && inputFocused,
+  })
 
   const moveFocus = (delta: 1 | -1): void => {
     if (rowCount <= 1) return
@@ -645,8 +655,11 @@ export function AskUserQuestionPanel({
 
   // The caret counts code points (see the module header), so the caret
   // char and the visual split index into the point array — never raw
-  // UTF-16 offsets, which could land inside a surrogate pair.
-  const textPoints = [...customText]
+  // UTF-16 offsets, which could land inside a surrogate pair. A secret
+  // question paints one mask per code point instead: the same caret math,
+  // nothing of the typed text on screen.
+  const typedPoints = [...customText]
+  const textPoints = question.secret === true ? typedPoints.map(() => SECRET_MASK) : typedPoints
   const cursorChar = customCursor < textPoints.length ? textPoints[customCursor] : ' '
   /** Mouse: click the input row to focus it (same as Tab). */
   const focusInputRow = (): void => {
@@ -716,11 +729,10 @@ export function AskUserQuestionPanel({
         ) : (
           <>
             <Text wrap="wrap">{textPoints.slice(0, customCursor).join('')}</Text>
-            {/* Focused keeps the inverse block caret (same contract as the
-                composer's value box): the preedit then renders inverted,
-                which reads as "the block is filling with text". */}
+            {/* Leave the native caret's glyph plain so the terminal can
+                animate it and paint IME preedit with the input's style. */}
             {inputFocused
-              ? <Text ref={caretRef} inverse>{cursorChar}</Text>
+              ? <Text ref={caretRef} inverse={!nativeCursor}>{cursorChar}</Text>
               : <Text ref={caretRef}>▏</Text>}
             <Text wrap="wrap">{textPoints.slice(inputFocused ? customCursor + 1 : customCursor).join('')}</Text>
           </>

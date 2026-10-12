@@ -15,7 +15,7 @@
  *  - any other shape — including a bare success — is `unknown`, the legal
  *    terminal. Nothing is ever inferred from the tool having succeeded.
  */
-import type { AgentMessageState, AgentMessageView } from '../../adapter/ports/channel-view.js'
+import type { AgentMessageState, AgentMessageView } from '../../agent/index.js'
 import { rec, str } from './narrow.js'
 
 /** The SendMessage tool input as this module recognizes it: the addressed

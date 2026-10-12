@@ -8,6 +8,7 @@ export type PanelBadgeLevel = 'info' | 'warning' | 'error'
 export interface PanelBarTab {
   readonly id: string
   readonly title: string
+  readonly icon?: string
   readonly badge?: { readonly level: PanelBadgeLevel; readonly unread: number } | null
 }
 
@@ -25,6 +26,12 @@ function badgeColor(level: PanelBadgeLevel): 'warning' | 'error' | 'accent' {
   if (level === 'warning') return 'warning'
   if (level === 'error') return 'error'
   return 'accent'
+}
+
+function tabLabel(tab: PanelBarTab): string {
+  const icon = tab.icon ?? Array.from(tab.title)[0] ?? '?'
+  const unread = tab.badge?.unread ?? 0
+  return icon + (unread > 0 ? String(unread) : '')
 }
 
 function truncateCells(text: string, maxCells: number): string {
@@ -50,7 +57,7 @@ function ActiveTitle({ title, left, width, focused }: { title: string; left: num
   )
 }
 
-function PanelDot({ tab, left, width, focused, hovered, onHover, onSelect }: {
+function PanelIcon({ tab, left, width, focused, hovered, onHover, onSelect }: {
   tab: PanelBarTab
   left: number
   width: number
@@ -60,8 +67,7 @@ function PanelDot({ tab, left, width, focused, hovered, onHover, onSelect }: {
   onSelect?: (id: string) => void
 }): React.ReactNode {
   const tooltip = useTooltip(tab.title)
-  const unread = tab.badge?.unread ?? 0
-  const label = (tab.badge == null ? '○' : '●') + (unread > 0 ? String(unread) : '')
+  const label = tabLabel(tab)
   return (
     <Box
       position="absolute"
@@ -80,7 +86,7 @@ function PanelDot({ tab, left, width, focused, hovered, onHover, onSelect }: {
       }}
     >
       <Text
-        bold={hovered}
+        bold={hovered || tab.badge != null}
         dimColor={!hovered && tab.badge == null && !focused}
         color={tab.badge != null ? badgeColor(tab.badge.level) : hovered || focused ? 'accent' : undefined}
       >
@@ -101,26 +107,26 @@ export function PanelBar({ tabs, activeId, width, focused, canExpand, onExpand, 
   const expandWidth = canExpand === true ? 2 : 0
   const middleStart = arrowWidth
   const middleWidth = Math.max(0, contentWidth - arrowWidth * 2 - expandWidth)
-  const dots: Array<{ readonly tab: PanelBarTab; readonly side: 'left' | 'right' }> = []
-  for (let distance = 1; dots.length < tabs.length - 1; distance += 1) {
-    dots.push({ tab: tabs[(activeIndex + distance) % tabs.length]!, side: 'right' })
-    if (dots.length < tabs.length - 1) {
-      dots.push({ tab: tabs[(activeIndex - distance + tabs.length) % tabs.length]!, side: 'left' })
+  const icons: Array<{ readonly tab: PanelBarTab; readonly side: 'left' | 'right' }> = []
+  for (let distance = 1; icons.length < tabs.length - 1; distance += 1) {
+    icons.push({ tab: tabs[(activeIndex + distance) % tabs.length]!, side: 'right' })
+    if (icons.length < tabs.length - 1) {
+      icons.push({ tab: tabs[(activeIndex - distance + tabs.length) % tabs.length]!, side: 'left' })
     }
   }
-  const dotWidth = Math.max(2, ...dots.map(dot => stringWidth((dot.tab.badge == null ? '○' : '●') + (dot.tab.badge !== undefined && dot.tab.badge !== null && dot.tab.badge.unread > 0 ? String(dot.tab.badge.unread) : ''))))
+  const iconWidth = Math.max(2, ...icons.map(icon => stringWidth(tabLabel(icon.tab))))
   const titleWidth = active === undefined
     ? 0
-    : Math.max(6, Math.min(stringWidth(active.title), Math.max(6, middleWidth - dots.length * dotWidth)))
-  const pitch = dots.length === 0 ? 0 : Math.max(2, Math.floor((middleWidth - titleWidth) / dots.length))
+    : Math.max(6, Math.min(stringWidth(active.title), Math.max(6, middleWidth - icons.length * iconWidth)))
+  const pitch = icons.length === 0 ? 0 : Math.max(2, Math.floor((middleWidth - titleWidth) / icons.length))
   const titleLeft = middleStart + Math.floor((middleWidth - titleWidth) / 2)
   let rightIndex = 0
   let leftIndex = 0
-  const dotPositions = dots.map(dot => {
-    const index = dot.side === 'right' ? rightIndex++ : leftIndex++
+  const iconPositions = icons.map(icon => {
+    const index = icon.side === 'right' ? rightIndex++ : leftIndex++
     return {
-      ...dot,
-      left: dot.side === 'right'
+      ...icon,
+      left: icon.side === 'right'
         ? titleLeft + titleWidth + index * pitch
         : titleLeft - (index + 1) * pitch,
     }
@@ -133,14 +139,14 @@ export function PanelBar({ tabs, activeId, width, focused, canExpand, onExpand, 
     <Box height={1} flexShrink={0} paddingX={1} overflow="hidden">
       <Box width={contentWidth} height={1} position="relative" overflow="hidden" flexShrink={0}>
         {active !== undefined && <ActiveTitle title={active.title} left={titleLeft} width={titleWidth} focused={focused} />}
-        {dotPositions.map(dot => (
-          <PanelDot
-            key={dot.tab.id}
-            tab={dot.tab}
-            left={dot.left}
+        {iconPositions.map(icon => (
+          <PanelIcon
+            key={icon.tab.id}
+            tab={icon.tab}
+            left={icon.left}
             width={pitch}
             focused={focused}
-            hovered={hoveredTab === dot.tab.id}
+            hovered={hoveredTab === icon.tab.id}
             onHover={setHoveredTab}
             onSelect={onSelect}
           />

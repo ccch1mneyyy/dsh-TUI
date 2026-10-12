@@ -26,9 +26,13 @@ live in the admission & development guide.
 
 ## Seam stability reference
 
-An **informal** maturity grading to help plugin authors gauge investment;
-the authoritative status and compatibility agreement live in the
-[admission & development guide](../tui-profile/docs/plugin-admission-and-development.md):
+A maturity grading to help plugin authors gauge investment; the authoritative
+status and compatibility agreement live in the
+[admission & development guide](../tui-profile/docs/plugin-admission-and-development.md).
+**The "stable candidate" tier is part of the frozen public surface as of the first
+published apiVersion (`tui.dsh/v1alpha1`)** — the four commitments are in
+`tui-profile/CHANGELOG.md`'s freeze entry; the other two tiers stay a **maturity
+reference**, not a promise:
 
 | Tier | Seams |
 | --- | --- |
@@ -52,6 +56,14 @@ Also an experimental public surface:
 - The `@deepseek-harness-tui/dsh-tui/test-utils` subpath and
   `ctx.tuiPluginHost.grants.corrupt` were removed in the adapter layering
   refactor (#705).
+- **The backend contribution family (`tui.dsh/v1alpha1` `Backend`, seam XIV) has its
+  public surface frozen with the first published apiVersion**: the type surface
+  (`BackendSpec`, `validateBackendSpec`, `backendAdmission`) and conformance
+  (`TUI-BACKEND-001`) are usable, and the **admission chain (manifest →
+  registry → descriptor) is wired**; what is still missing is the step that
+  reads a mounted bundle's declaration into the registry and the kernel picker
+  (the install chain), so "install a third-party backend, restart, see it in the
+  picker" does not hold end to end yet.
 - `grants` is now the narrower `HostGrantFacade`; see that PR for migration
   details.
 - On `TuiSceneProps.channel` (`ChannelUi`), `minimal` / `setMinimal()` were
@@ -68,6 +80,27 @@ Also an experimental public surface:
   callers means both aliases and the `'setMinimal': 'mutate'` row in
   `ui-policy.ts` are deleted in v0.13; any remaining caller is migrated within
   that same release rather than postponing the removal again.
+- **The DSH kernel in the package's own entry** (the default since the
+  standalone host, [configuration](configuration.en.md)): the screen mounts
+  before the profile composes, so plugin rows activate *after* the first
+  frame and every `ctx.tui*` registration reaches an already-mounted screen
+  (themes, panels, status views and the rest join live). A runtime theme the
+  user had chosen is applied once its plugin registers it; until then the
+  first frames use the auto-detected palette. The root-capability guard is
+  the same as under `dsh --profile`: a row activating after the first TUI row
+  cannot use `ctx.root` capabilities (`root.plugin`, `root.effect`,
+  `root.on`, …) in its apply. A plugin that waits for something in its apply
+  holds the composition: start long work detached, not awaited. On a scene's
+  `TuiSceneProps.channel`, `ready` is `false` (and `status` `'starting'`)
+  while no session stands behind the channel, e.g. after the startup session
+  failed to open (`startupFailure`).
+- **Claude and Codex kernels** (light profile; accepted on Claude, not yet on
+  Codex, which takes the same composition path): the entry composes this
+  package's rows and the third-party bundles the profile declares, without
+  `@deepseek-ai/dsh-base`, after the first frame, on the same terms as above.
+  A row whose `inject` names a service only DSH's core provides (`agents`,
+  `llm`, `tools`, `sessionPersistence`, …) stays pending on these kernels;
+  the `tui*` services are all there.
 
 - The core repository remains independent; community plugins live in their own
   repos.

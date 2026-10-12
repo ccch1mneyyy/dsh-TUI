@@ -1,0 +1,77 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "session.status",
+    "assistant.message",
+    "assistant.attempt.end",
+    "tool.call",
+    "session.status",
+    "tool.result",
+    "context.capacity",
+    "usage",
+    "context.usage",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "assistant.message",
+    "assistant.attempt.end",
+    "usage",
+    "context.usage",
+    "session.status",
+    "step.end",
+    "turn.end"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Run exactly this shell command and nothing else: echo probe > a.txt"
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "shell",
+        "status": "ok",
+        "call": {
+          "card": "terminal",
+          "title": "echo probe > a.txt",
+          "displayKey": "tool-name-bash"
+        },
+        "result": {
+          "card": "terminal"
+        }
+      }
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "contextWindow": 258400,
+    "tokens": {
+      "input": 6,
+      "output": 106,
+      "cacheRead": 8694,
+      "cacheWrite": 8819
+    },
+    "lastUsage": {
+      "input": 3,
+      "output": 4,
+      "cacheRead": 8694,
+      "cacheWrite": 125
+    },
+    "todos": [],
+    "notices": [],
+    "contextMeasure": {
+      "type": "context.usage",
+      "used": 0,
+      "max": 246400
+    }
+  }
+}

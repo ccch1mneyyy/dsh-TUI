@@ -1,0 +1,263 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "assistant.attempt.end",
+    "tool.call",
+    "tool.output",
+    "tool.result",
+    "context.capacity",
+    "usage",
+    "context.usage",
+    "user.message",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "assistant.attempt.end",
+    "usage",
+    "context.usage",
+    "session.status",
+    "step.end",
+    "turn.end",
+    "session.status",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "assistant.attempt.end",
+    "tool.call",
+    "usage",
+    "context.usage",
+    "session.status",
+    "tool.result",
+    "step.end",
+    "turn.end",
+    "session.status",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "assistant.attempt.end",
+    "tool.call",
+    "tool.result",
+    "tool.call",
+    "tool.result",
+    "usage",
+    "context.usage",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "assistant.attempt.end",
+    "usage",
+    "context.usage",
+    "session.status",
+    "step.end",
+    "turn.end"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Run the shell command `sleep 6 && echo done`, then reply with one short sentence."
+    },
+    {
+      "kind": "assistant",
+      "text": "I’ll run that command and report back once it completes."
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "shell",
+        "status": "ok",
+        "call": {
+          "card": "terminal",
+          "title": "sleep 6 && echo done",
+          "displayKey": "tool-name-bash"
+        },
+        "result": {
+          "card": "terminal"
+        },
+        "resultText": "done"
+      }
+    },
+    {
+      "kind": "user",
+      "text": "Also include the word banana in your reply."
+    },
+    {
+      "kind": "assistant",
+      "text": "The command finished: done, banana."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
+      "kind": "user",
+      "text": "Run the shell command `sleep 30` and then say finished."
+    },
+    {
+      "kind": "assistant",
+      "text": "I’ll wait for the command to complete, then confirm."
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "shell",
+        "status": "error",
+        "call": {
+          "card": "terminal",
+          "title": "sleep 30",
+          "displayKey": "tool-name-bash"
+        },
+        "result": null,
+        "errorText": "Interrupted"
+      }
+    },
+    {
+      "kind": "interrupt",
+      "text": "Interrupted · What should DeepSeek do instead?"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    },
+    {
+      "kind": "user",
+      "text": "First use your plan tool to record a 2-step plan. Then create c.txt with three lines: one, two, three. Then edit c.txt changing the line two to TWO. Mark plan s…"
+    },
+    {
+      "kind": "assistant",
+      "text": "I don’t have a plan tool here; I’ll create and update the file now."
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "apply_patch",
+        "status": "ok",
+        "call": {
+          "card": "diff",
+          "title": "c.txt",
+          "displayKey": "tool-name-write"
+        },
+        "result": {
+          "card": "diff"
+        }
+      }
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "apply_patch",
+        "status": "ok",
+        "call": {
+          "card": "diff",
+          "title": "c.txt",
+          "displayKey": "tool-name-edit"
+        },
+        "result": {
+          "card": "diff"
+        }
+      }
+    },
+    {
+      "kind": "assistant",
+      "text": "Created and updated `c.txt`."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "contextWindow": 258400,
+    "tokens": {
+      "input": 15,
+      "output": 346,
+      "cacheRead": 35390,
+      "cacheWrite": 9233
+    },
+    "lastUsage": {
+      "input": 3,
+      "output": 11,
+      "cacheRead": 9043,
+      "cacheWrite": 190
+    },
+    "todos": [],
+    "notices": [],
+    "contextMeasure": {
+      "type": "context.usage",
+      "used": 0,
+      "max": 246400
+    }
+  }
+}

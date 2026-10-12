@@ -1,0 +1,28 @@
+{
+  "$schema":"urn:dsh-std:community-draft:dsh-plugin:0.15",
+  "manifestVersion":"0.15",
+  "id":"com.example.backend-plugin",
+  "name":"Backend Plugin",
+  "version":"1.0.0",
+  "facets":{"host":{"entry":"host.js","apiVersion":"v1alpha1"}},
+  "requires":{"contracts":[]},
+  "permissions":[],
+  "contributes":{
+    "commands":[],
+    "x-dsh-tui":[
+      {"apiVersion":"tui.dsh/v1alpha1","kind":"Backend","id":"com.example.backend","name":"example_backend","spec":{
+        "id":"example-agent",
+        "label":{"text":"Example Agent"},
+        "shortLabel":"Example",
+        "product":"example-cli",
+        "capabilities":["permissions","models","rename"],
+        "grants":[],
+        "install":{"executor":"pnpm-profile-add","specifier":"@example/agent-sdk@1.2.3","version":"1.2.3"},
+        "unloadExport":"closeExamplePool",
+        "confirmation":{"policy":"confirm"}
+      }}
+    ]
+  },
+  "subscriptions":[],
+  "license":"MIT"
+}

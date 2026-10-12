@@ -22,6 +22,7 @@ const { Markdown } = await import('../src/components/Markdown.js')
 const { StreamingMarkdown } = await import('../src/components/StreamingMarkdown.js')
 const { renderToScreen } = await import('../src/ink/render-to-screen.js')
 const { cellAtIndex } = await import('../src/ink/screen.js')
+const { setActiveThemeName } = await import('../src/theme.js')
 
 let failures = 0
 let checks = 0
@@ -130,6 +131,54 @@ try {
       '\u001b]8;;dsh-file:///x\u0007\u001b[38;2;63;108;196msrc/dsh-adapter/plugin.ts\u001b[39m\u001b]8;;\u0007',
     ),
     JSON.stringify(withStyle),
+  )
+
+  // ── 默认链接色跟随主题 accent（不再是固定 ANSI 蓝）──────────────────
+  setActiveThemeName('light')
+  const themedLink = createHyperlink('https://example.com/x', 'example', {
+    supportsHyperlinks: true,
+  })
+  check(
+    '默认链接色取主题 accent（light = #3F6CC4）',
+    themedLink.includes('\u001b[38;2;63;108;196mexample\u001b[39m'),
+    JSON.stringify(themedLink),
+  )
+  check(
+    '默认链接仍带成对 OSC 8 包裹、不再固定 34m 蓝',
+    themedLink.startsWith('\u001b]8;;https://example.com/x\u0007') &&
+      themedLink.endsWith('\u001b]8;;\u0007') &&
+      !themedLink.includes('\u001b[34m'),
+    JSON.stringify(themedLink),
+  )
+  setActiveThemeName('dark-ansi')
+  const ansiLink = createHyperlink('https://example.com/x', 'example', {
+    supportsHyperlinks: true,
+  })
+  check(
+    'ANSI 主题的链接色退回 16 色（accent = ansi:blueBright）',
+    ansiLink.includes('\u001b[94mexample\u001b[39m'),
+    JSON.stringify(ansiLink),
+  )
+
+  // ── 折行不丢色 ──────────────────────────────────────────────────────
+  // 代码注释与 docs/themes.md 曾把「真彩链接折行处丢色」写成已知取舍；实测
+  // wrap-ansi 10 在续行重发 SGR 并补齐 OSC 8，取舍不成立。这里钉住
+  // 渲染器真正使用的折行入口（wrap 样式 = trim:false + hard:true）。
+  setActiveThemeName('dark')
+  const { wrapAnsi } = await import('../src/ink/wrapAnsi.js')
+  const longLink = createHyperlink(
+    'https://example.com/x',
+    'dsh-tui-theme-plugin-link-label',
+    { supportsHyperlinks: true },
+  )
+  const wrappedLink = wrapAnsi(longLink, 14, { trim: false, hard: true }).split('\n')
+  check(
+    '真彩链接折行后每一条续行仍带 accent SGR 与 OSC 8 打开序列',
+    wrappedLink.length > 1 &&
+      wrappedLink.slice(1).every(line =>
+        line.includes('\u001b[38;2;125;161;222m') &&
+        line.includes('\u001b]8;;https://example.com/x\u0007')),
+    JSON.stringify(wrappedLink),
   )
 } finally {
   chalk.level = prevLevel

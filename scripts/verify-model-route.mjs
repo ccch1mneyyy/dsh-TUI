@@ -9,7 +9,8 @@
  * Scenarios:
  * 1. The issue repro: config pins provider only + pref holds a complete
  *    custom route → the pref wins WHOLE (no cross-source halves).
- * 2. A complete cordis.yml route wins whole over the pref.
+ * 2. A complete cordis.yml route is the deployment DEFAULT: the pref still
+ *    wins whole, and the config decides only when nothing is remembered.
  * 3. A model-only config pin also counts as unset → pref wins whole.
  * 4. Neither config nor pref → the harness default route.
  * 5. A half-pinned config with NO pref is ignored → the defaults win whole
@@ -23,9 +24,11 @@
  *    registered is not "failed catalog" but proven-unusable, so it falls back
  *    too — trusting it does not keep startup alive, it defers the death to
  *    agent creation where the error names neither the provider nor the stale
- *    preference behind it.
- * 9. recordedModelRoute: a resume's status-line route comes from the target
- *    session's own log (last request/header wins; a bare log records none).
+ *    preference behind it. A rejected PREFERENCE lands on the deployment
+ *    default route (the complete config pair), never on the built-in pair.
+ * 9. recordedModelRoute: a resume's route comes from the target session's own
+ *    log (last request/header wins; a bare log records none) — that record is
+ *    what outranks a static config route on resume.
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-model-route.mjs`
@@ -53,11 +56,15 @@ const PREF = { provider: 'my-gateway', model: 'glm-5.3' }
   check('provider-only config + pref -> pref wins whole', eq(route, PREF), JSON.stringify(route))
 }
 
-// 2. A complete cordis.yml route wins whole over the pref.
+// 2. A complete cordis.yml route is the deployment default: the persisted
+//    last-used choice still wins whole, and the config decides only when the
+//    preference is absent.
 {
   const config = { provider: 'my-gateway', model: 'glm-5.3-air' }
   const route = resolveModelRoute(config, PREF)
-  check('complete config -> config wins whole', eq(route, config), JSON.stringify(route))
+  check('complete config + pref -> pref wins whole (config is the default)', eq(route, PREF), JSON.stringify(route))
+  const fallback = resolveModelRoute(config, undefined)
+  check('complete config, no pref -> config wins whole', eq(fallback, config), JSON.stringify(fallback))
 }
 
 // 3. A model-only pin is likewise half a route: pref wins whole.
@@ -121,6 +128,25 @@ const PREF = { provider: 'my-gateway', model: 'glm-5.3' }
 
   const absent = await validateModelRoute(undefined, PREF)
   check('no llm service -> trusted', absent.rejected === undefined && eq(absent.route, PREF))
+
+  // A stale PREFERENCE is exactly the case the fallback exists for: it must
+  // land on the deployment default (the complete config pair), not on the
+  // built-in pair — the boot chain the caller resolved and passed in.
+  const deployment = resolveModelRoute(
+    { provider: 'my-gateway', model: 'glm-5.3-air' },
+    undefined,
+    DEFAULT_MODEL_ROUTE,
+  )
+  const stale = await validateModelRoute(
+    { listModels: provider => Promise.resolve(provider === 'my-gateway' ? [{ id: 'glm-5.3-air' }] : []) },
+    PREF,
+    deployment,
+  )
+  check(
+    'stale pref -> deployment default (complete config), not the built-in route',
+    stale.rejected !== undefined && eq(stale.route, deployment),
+    JSON.stringify(stale),
+  )
 
   // A provider nobody registered: dsh-llm's registry raises LlmError with code
   // NO_ADAPTER before any catalog read happens. Proven unusable, so it falls

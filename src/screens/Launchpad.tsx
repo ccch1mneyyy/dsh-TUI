@@ -1,22 +1,30 @@
 import React from 'react'
-import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import { unlink } from 'node:fs/promises'
+import { basename, resolve } from 'node:path'
+import { Box, Text, useInput, useTerminalSize, useNativeCursor } from '../ui.js'
 import { SearchBox } from '../components/SearchBox.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { CommandSuggestions } from '../components/CommandSuggestions.js'
+import type { CommandCompletion } from '../commands.js'
 import { LogoV2 } from '../components/LogoV2.js'
 import type { Brand } from '../branding.js'
 import { resolveLaunchpadLayout, type LaunchpadLayout } from '../components/launchpadLayout.js'
 import { type LaunchpadAction } from '../components/launchpadActions.js'
-import { kernelDisplayName, kernelSubtitle, type KernelOption } from '../components/kernelCatalog.js'
+import { kernelSubtitle, type KernelOption } from '../components/kernelCatalog.js'
 import { fitParamParts, PARAM_SEPARATOR } from '../components/launchpadParams.js'
 import { useTooltip } from '../components/Tooltip.js'
-import { pickSplashFont, splashFontById, type SplashFont } from '../components/splashFonts.js'
+import { resolveSplashTitleFont, pickSplashFont, splashFontById, type SplashFont } from '../components/splashFonts.js'
+import { pickSplashEgg, type SplashEgg } from '../components/splashEggs.js'
 import { t } from '../i18n.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
 import { stringWidth } from '../ink/stringWidth.js'
-import { isPlainReturn } from '../utils/modifiers.js'
+import { isMod, isPlainReturn } from '../utils/modifiers.js'
 import { actionMatches } from '../utils/keymap.js'
 import { formatClipboardInsert, readClipboard, type ClipboardRead } from '../utils/clipboard.js'
+import { imagePathMediaType, parsePastedImagePath, readBoundedRegularFile, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
+import type { ChannelUi } from '../adapter/channel/ui-policy.js'
+import { resolveBindingGeneration } from '../components/promptDraftCache.js'
+import { imageTokenSpans, snapOffImageToken, expandImageTokenRange } from '../components/composerImageTokens.js'
 import {
   collapseToSingleLine,
   insertSingleLineAt,
@@ -279,7 +287,7 @@ function CornerChip({
 /**
  * 右下角内核区（第八版）：列出可选内核并标出记住的那个。第一行 TUI 版本不动，其后一行一个内核
  * ——当前内核打 `▸ ` 前缀、保持主题蓝；其余行前缀两格空格、文字 dim（前缀等宽
- * 让名字对齐）。行文本 = `短品牌名 · 副标题`（名字取 kernelDisplayName：DSH /
+ * 让名字对齐）。行文本 = `短品牌名 · 副标题`（名字取 manifest 的 shortLabel：DSH /
  * Claude——全名 40 列会挤掉左下角的目录铭牌；副标题 = 版本 / 置灰原因，缺席就
  * 只画名字，见 kernelCatalog 的 kernelSubtitle）。目标形状：
  *
@@ -314,14 +322,14 @@ function KernelCorner({
   const interactive = onActivate !== undefined
   const active = interactive && (hovered || focused)
   return (
-    // 外层整行右推（块贴右缘，与 TUI 版本那一行同一条右边界），内层左对齐：
-    // 行内两格前缀（▸ + 空格 / 两个空格）于是成了**标记列**——几个内核的名字
-    // 从同一列开始，箭头只多占最左边那两格。可点目标是内层这个真的画了字的
-    // 块（不是整行空白），与 CornerChip 的收缩形态一致。
+    // 外层整行右推（块贴右缘，与 TUI 版本那一行同一条右边界），内层各行**右对齐**：
+    // 每行右端都贴这条边界（名字/版号长短不同，参差全留给左边），`▸` 前缀随行
+    // 浮动、只标当前内核。可点目标是内层这个真的画了字的块（不是整行空白），
+    // 与 CornerChip 的收缩形态一致。
     <Box flexShrink={0} flexDirection="row" justifyContent="flex-end">
       <Box
         flexDirection="column"
-        alignItems="flex-start"
+        alignItems="flex-end"
         {...(interactive
           ? {
               onMouseEnter: () => { setHovered(true); onHover() },
@@ -378,15 +386,13 @@ function KernelCorner({
  * **输入框在这一屏是唯一有状态的部件**：用户敲进去的东西必须原样带进聊天页，
  * 否则"第一屏输入的字"就被这一屏吞了。第六版起行首 `/` 会弹出**命令补全面板**
  * （`commands`/`onCommandPick` 两缝，数据与组件都与聊天页 composer 同源），
- * 面板选中直接执行命令；面板没收掉时整行仍原样交给 `onSubmit`，由 `Chat`
+ * Tab 补全到输入框，Enter/点击执行并清空输入；面板收起时整行原样交给 `onSubmit`，由 `Chat`
  * 走它既有的命令表判定（合并命令表，含 registry 命令）再决定 runCommand 或
  * 发送。本地只读一点：行首是不是 `/`，用来把输入框左边的提示符从 `❯` 换成
  * `⌘`。
  *
- * 光标闪烁：只在输入框有焦点（`focusIndex < 0`）且终端持有焦点时跑，
- * 约 550ms 一个相位；**相位只切换样式**（inverse ↔ inverse+dim，见
- * `SearchBox` 的 `caretBlink` 契约），不增删任何字符——无头回归读的是
- * 视口纯文本，闪烁对它不可见，断言不随相位抖动。
+ * TTY 输入使用终端原生光标，闪烁与动画继承终端配置。无原生光标的
+ * 呈现环境保留约 550ms 的样式闪烁；相位不增删字符、不挪动文本。
  *
  * 居中与降级：宽度走 `resolveSplashLayout` 那一套（与开屏同源，阈值不会漂），
  * 高度走 `resolveLaunchpadLayout`（整块撤：Tips → 键帽行 → 立绘 → 只留输入框）。
@@ -405,6 +411,7 @@ export function Launchpad({
   whaleGirl,
   brand,
   fontId,
+  egg,
   starred,
   onStarClick,
   firstRun,
@@ -419,8 +426,10 @@ export function Launchpad({
   commands,
   onCommandPick,
   clipboardReader = readClipboard,
+  imageComposer,
   /** Tips 自动轮换间隔（第七版；测试缝：无头回归注入短间隔确定性驱动相位）。 */
   tipRotateMs = TIP_ROTATE_MS,
+  notice,
   /** 左下角工作目录铭牌被点击/回车时交给 Chat（开既有的 /workspace 工作区菜单）。 */
   onOpenWorkspace,
   /** 右下角内核区的目录行（第八版：一行一个内核，当前那个打 ▸）。 */
@@ -450,6 +459,8 @@ export function Launchpad({
   /** 品牌档（当前后端 → `resolveBrand`；见 `branding.ts`）。 */
   brand?: Brand
   fontId?: string | undefined
+  /** 测试缝：固定节日词对；null 关闭换词，undefined 按本地日期选择。 */
+  egg?: SplashEgg | null
   starred: boolean
   onStarClick?: () => void
   /** 引导还没跑过：Tips 换成首启那一句（动作表本身已由 resolveLaunchpadActions 状态驱动）。 */
@@ -499,20 +510,24 @@ export function Launchpad({
    * 补全**同一个来源、同一个组件**（CommandSuggestions），本屏不另造一套。
    * 不传（或空数组）= 不画面板（孤立回归夹具的默认形态）。
    */
-  commands?: readonly (import('../commands.js').LocalCommand & { descriptionKey?: string; commandLine?: string })[] | undefined
+  commands?: readonly CommandCompletion[] | undefined
   /**
-   * 补全面板选中一条（Enter/Tab/点击）时交给 Chat 的**完整命令行**
-   * （如 /setup 加尾随空格）。Chat 走 runCommand 执行——与聊天页选中命令
-   * 同一条路径，绝不是 submit。
+   * 补全面板选中一条（Enter/点击）时交给 Chat 的**完整命令行**
+   * （如 /setup）。普通命令经 runCommand 执行，模型路由技能作为消息
+   * 提交；拒绝时返回提示并保留草稿。
    */
-  onCommandPick?: ((commandLine: string) => void) | undefined
+  onCommandPick?: ((commandLine: string) => string | void) | undefined
   /**
    * 剪贴板读取缝（测试打桩用；生产走 `utils/clipboard` 的 `readClipboard`，
    * Chat 不传这一项）。签名与 `readClipboard` 一致。
    */
   clipboardReader?: () => Promise<ClipboardRead>
+  /** Chat owns the bindings so attachments survive a full-screen round trip. */
+  imageComposer?: { channel: ChannelUi; bindings: Map<string, string> }
   /** Tips 自动轮换间隔（第七版；测试缝，生产用默认 10s）。 */
   tipRotateMs?: number
+  /** Chat 的最近一条 channel 通知：落地页没有 toast 区，借 Tips 行显示（粘贴提示优先）；过期由 channel 负责。 */
+  notice?: { readonly text: string; readonly color?: 'error' | 'warning' | 'success' } | undefined
   /** 左下角工作目录铭牌被点击/焦点环 Enter 时交给 Chat（开 /workspace 菜单）。 */
   onOpenWorkspace?: (() => void) | undefined
   /**
@@ -535,8 +550,8 @@ export function Launchpad({
   onAction: (action: LaunchpadAction) => void
   /** 输入框内容变化（含光标位置）。 */
   onQueryChange: (text: string, cursor: number) => void
-  /** 提交：整行原文交给 Chat，由它走命令表/模型两条既有的路。 */
-  onSubmit: (text: string) => void
+  /** 提交：交给 Chat 分派；拒绝时返回提示并保留草稿。 */
+  onSubmit: (text: string) => string | void
   /** 空输入时按 Esc / `Ctrl+C`：`sessions` 去看会话，`exit` 走双击退出漏斗。 */
   onEscape: (intent: 'sessions' | 'exit') => void
   /** 点空白处：把焦点收回输入框（不是提交、不是关闭）。 */
@@ -548,13 +563,15 @@ export function Launchpad({
   // 光标偏移只在"输入框有焦点"时才有意义；未给（或焦点在快捷入口行）时
   // 一律按行尾算——这与 `SearchBox` 自己的 `cursorOffset ?? query.length`
   // 同一条约定，两处必须一致，否则退格会从"看不见的位置"删字。
-  const caret = focusIndex === -1 ? (cursorOffset ?? query.length) : query.length
+  const boundImageSpans = (text: string) => imageTokenSpans(text).filter(span => imageComposer?.bindings.has(span.token) === true)
+  const imageSpans = boundImageSpans(query)
+  const caret = snapOffImageToken(imageSpans, focusIndex === -1 ? (cursorOffset ?? query.length) : query.length, 'nearest')
   /** 焦点是否在输入框上（-1）；参数段（≤-2）与动作入口（≥0）都不算。 */
   const inputFocused = focusIndex === -1
 
   // ── 命令补全面板（第六版 BUG 1）──────────────────────────────────────────
   // 与聊天页 composer 同一套契约：行首 / + 有候选 → 面板上屏；↑/↓ 移选中、
-  // Enter/Tab/点击执行选中命令、Esc 只收面板（不清草稿——用户可能只是想
+  // Tab 补全到输入框，Enter/点击执行并清空输入、Esc 只收面板（用户可能只是想
   // 看一眼）。`dismissedFor` 记住"这条 query 被收过"：Esc 之后继续打字
   // （query 变了）面板自然回来，与 PromptInput 的补全行为同源。
   const [paletteIndex, setPaletteIndex] = React.useState(0)
@@ -566,8 +583,11 @@ export function Launchpad({
   const paletteSelectedIndex = Math.min(paletteIndex, Math.max(0, paletteCommands.length - 1))
   const paletteSelected = paletteCommands[paletteSelectedIndex]
   const pickCommand = (commandLine: string): void => {
-    setPaletteDismissedFor(query)
-    if (onCommandPick !== undefined) onCommandPick(commandLine)
+    setPaletteDismissedFor('')
+    setPaletteIndex(0)
+    const notice = onCommandPick?.(commandLine)
+    if (typeof notice === 'string') showPasteNotice(notice)
+    else pasteRevisionRef.current += 1
   }
 
   // ── Tips 轮换（第六版设计 2）─────────────────────────────────────────────
@@ -586,7 +606,40 @@ export function Launchpad({
   queryRef.current = query
   const caretRef = React.useRef(caret)
   caretRef.current = caret
+  const changeQuery = (text: string, offset: number): void => {
+    const nextCaret = snapOffImageToken(boundImageSpans(text), offset,
+      offset < caretRef.current ? 'start' : offset > caretRef.current ? 'end' : 'nearest')
+    queryRef.current = text
+    caretRef.current = nextCaret
+    onQueryChange(text, nextCaret)
+  }
+  const deleteRange = (start: number, end: number): void => {
+    const text = queryRef.current
+    const range = expandImageTokenRange(boundImageSpans(text), start, end)
+    changeQuery(text.slice(0, range.start) + text.slice(range.end), range.start)
+  }
   const clipboardBusyRef = React.useRef(false)
+  const pasteRevisionRef = React.useRef(0)
+  const mountedRef = React.useRef(true)
+  const imageChainRef = React.useRef<Promise<void>>(Promise.resolve())
+  React.useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+  const capturePasteLease = () => {
+    const revision = pasteRevisionRef.current
+    const channel = imageComposer?.channel
+    const agentId = channel?.agentId
+    const generation = channel === undefined ? 0 : resolveBindingGeneration(channel)
+    const imageGeneration = channel?.stagedImageGeneration?.() ?? 0
+    return {
+      imageGeneration,
+      isCurrent: () => mountedRef.current && revision === pasteRevisionRef.current
+        && (channel === undefined || (channel.agentId === agentId
+          && resolveBindingGeneration(channel) === generation
+          && (channel.stagedImageGeneration?.() ?? 0) === imageGeneration)),
+    }
+  }
   /** 粘贴提示：落地页没有 toast 基础设施，借 Tips 行显示 4 秒（失败不能静默）。 */
   const [pasteNotice, setPasteNotice] = React.useState<string | undefined>(undefined)
   const noticeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -603,6 +656,10 @@ export function Launchpad({
   React.useEffect(() => () => {
     if (noticeTimerRef.current !== null) clearTimeout(noticeTimerRef.current)
   }, [])
+  /** Tips 行此刻被哪条提示占用（粘贴提示优先于 channel 通知）。 */
+  const rowNotice = pasteNotice !== undefined
+    ? { text: pasteNotice, color: 'warning' as const }
+    : notice
   /** 单行插入（粘贴）：换行折叠成空格、`\r` 去掉——落地页是单行编辑器，
    *  多行内容不许拼出换行（Enter 才是提交）。落在当下光标处。 */
   const insertSingleLine = (text: string): void => {
@@ -610,17 +667,70 @@ export function Launchpad({
     if (clean === '') return
     // 异步落点守则：读回那一刻的 query/caret 才算数（refs 每次渲染刷新）。
     const next = insertSingleLineAt(queryRef.current, caretRef.current, clean)
-    onQueryChange(next.text, next.caret)
+    changeQuery(next.text, next.caret)
     onFocusChange(-1)
+  }
+  const pasteImagePaths = (paths: readonly string[], lease: ReturnType<typeof capturePasteLease>, bitmap = false): Promise<void> => {
+    const work = async (): Promise<void> => {
+      if (!lease.isCurrent()) return
+      if (imageComposer === undefined) {
+        showPasteNotice(t('input-image-paste-failed', { err: 'image attachments are unavailable in this profile' }))
+        return
+      }
+      const { channel, bindings } = imageComposer
+      const limits = channel.stagedImageLimits?.()
+      const { parts, staged, failure, failureCode } = await stageClipboardFilePaths(
+        paths,
+        async path => {
+          if (!lease.isCurrent()) throw new Error('the draft changed while the image was being staged')
+          if (limits === undefined) throw new Error('image attachments are unavailable in this profile')
+          const data = await readBoundedRegularFile(path, limits.maxImageBytes)
+          if (!lease.isCurrent()) throw new Error('the draft changed while the image was being staged')
+          return channel.stageComposerImage({
+            data,
+            mediaType: imagePathMediaType(path) ?? 'image/png',
+            name: basename(path),
+            path: resolve(path),
+          }, lease.imageGeneration)
+        },
+        path => formatClipboardInsert({ kind: 'files', paths: [path] }),
+        Math.max(0, (limits?.maxImagesPerMessage ?? 0) - bindings.size),
+      )
+      if (!lease.isCurrent() || staged.some(handle => channel.hasStagedImage(handle.stageId) !== true)) {
+        for (const handle of staged) channel.discardStagedImage(handle.stageId)
+        return
+      }
+      let number = 1
+      const reserved = new Set(queryRef.current.match(/\[Image #\d+\]/gu) ?? [])
+      const text = parts.map(part => {
+        if (part.kind === 'text') return part.value
+        while (reserved.has(`[Image #${number}]`)) number += 1
+        const token = `[Image #${number++}]`
+        bindings.set(token, part.value.stageId)
+        return token
+      }).join(' ')
+      // A failed bitmap export is temporary and must never become a path reference.
+      if (!bitmap || staged.length > 0) insertSingleLine(`${text} `)
+      if (failure !== '') {
+        showPasteNotice(t('input-image-paste-failed', { err: failureCode === 'image-limit' ? t('input-image-paste-limit') : failure }))
+      } else if (staged.length > 0) {
+        const adapted = staged.filter(handle => handle.adjustment !== undefined).length
+        showPasteNotice(adapted > 0
+          ? t('input-images-staged-adapted', { count: staged.length, adapted })
+          : t('input-images-staged', { count: staged.length }))
+      }
+    }
+    const queued = imageChainRef.current.then(work, work)
+    imageChainRef.current = queued.catch(() => undefined)
+    return queued
   }
 
   // 光标闪烁相位（第四版修订：**自动呼吸**，不要求终端 focus 事件）。开关只看
   // 「输入框是这一屏的焦点目标」（focusIndex < 0）——`isTerminalFocused` 依赖
-  // DECSET 1004 focus 事件，Windows Terminal 下要点击窗口才发，拿它当开关就
-  // 出现"必须手动点一下才开始闪"（用户实测）。它其余的语义（SearchBox 的
-  // 失焦降级等）保留，只是不再控制闪烁。样式切换、字符不动（模块头注释里
-  // 的契约）。定时器 unref——探针宿主不因闪烁挂着事件循环。
-  const inputActive = inputFocused
+  // The native caret owns blinking in TTYs; only the painted fallback needs
+  // a timer. Do not gate it on terminal focus events, which can arrive late.
+  const nativeCursor = useNativeCursor()
+  const inputActive = inputFocused && !nativeCursor
   const [caretPhase, setCaretPhase] = React.useState(true)
   React.useEffect(() => {
     if (!inputActive) {
@@ -670,32 +780,41 @@ export function Launchpad({
   const cornerLeft = [cwd, branch].filter(part => part !== undefined && part !== '').join(':')
   // 右下角铭牌带（第八版）：第一行 TUI 版本，其后一行一个内核。
   // 行文本 = `名字 · 副标题`——副标题（版本 / 置灰原因）与选择器同源
-  // （kernelSubtitle），读不到就只画名字，绝不编造。
+  // （kernelSubtitle），读不到就只画名字，绝不编造。**登录状态不进铭牌**：
+  // 铭牌只报「有哪些内核、各自什么版本」，未登录在选择器里看（切换时才需要，
+  // noteKey 在那边走副标题），右下角保持只有名字与版号的干净两列。
   const tuiPart = tuiVersion === undefined || tuiVersion === '' ? undefined : `dsh-tui v${tuiVersion}`
-  // 名字用**短品牌名**（DSH / Claude，与启动页「内核 · DSH」那个 chip 同源）：
-  // 这一格与左下角的 `工作目录:分支` 共用底边，全名（DeepSeek Harness · … = 40 列）
-  // 在窄终端里会把左边的目录铭牌挤掉。选择器那一屏有地方，仍用全名（labelKey）。
+  // 名字用**短品牌名**（option.shortLabel，来自 manifest：DSH / Claude，与启动页
+  // 「内核 · DSH」那个 chip 同源）：这一格与左下角的 `工作目录:分支` 共用底边，
+  // 全名（DeepSeek Harness · … = 40 列）在窄终端里会把左边的目录铭牌挤掉。
+  // 选择器那一屏有地方，仍用全名（label）。
   const kernelRows = (kernels ?? []).map(option => {
-    const subtitle = kernelSubtitle(option, key => t(key))
-    const name = kernelDisplayName(option.id)
+    const { noteKey: _loginNote, ...rest } = option
+    const subtitle = kernelSubtitle(rest, key => t(key))
+    const name = option.shortLabel
     return { id: option.id, current: option.current, label: subtitle === undefined ? name : name + ' \u00b7 ' + subtitle }
   })
   /** 内核区进不进焦点环：画得出来**且**接了回调（可点才需要键盘等价操作）。 */
   const kernelCornerFocusable = kernelRows.length > 0 && onKernelPick !== undefined
   const cardWidth = Math.max(24, Math.min(columns - 4, 72))
 
+  // 当天字体与节日只在 mount 时选一次，并交给 Logo，避免预算与渲染各自读日期。
+  const [dailyFont] = React.useState<SplashFont>(() => pickSplashFont())
+  const [dailyEgg] = React.useState<SplashEgg | null>(() => egg === undefined ? pickSplashEgg() : egg)
+  const font = fontId === undefined ? dailyFont : splashFontById(fontId)
+  const titleFont = resolveSplashTitleFont(font, brand, dailyEgg)
   const layout: LaunchpadLayout = resolveLaunchpadLayout(columns, rows, {
     params: hasParams,
     whale,
     whaleGirl,
-    font: launchpadFont(fontId),
+    font: titleFont,
   })
   // Tips 自动轮换（第七版，用户要「呼吸感」）：约 10s 一换，与点击/焦点+Enter
   // 的手动切换**并存**——手动切换改 tipIndex，本 effect 以 tipIndex 为依赖，
   // 重臂即计时重置（刚点完不会立刻被自动轮换跳走）。只在 Tips 行真的在画、
   // 且不是首启句/粘贴提示时跑；本组件被整屏盖住时随之卸载，定时器自然停。
   // 切换只改那一行文本（TIP_KEYS 查表），行高与居中位置不变——无布局抖动。
-  const tipsAutoRotatable = layout.showTip && pasteNotice === undefined && !firstRun
+  const tipsAutoRotatable = layout.showTip && rowNotice === undefined && !firstRun
   React.useEffect(() => {
     if (!tipsAutoRotatable) return
     const timer = setInterval(() => { setTipIndex(index => (index + 1) % TIP_KEYS.length) }, tipRotateMs)
@@ -718,7 +837,7 @@ export function Launchpad({
    *
    * 编辑能力刻意只做单行编辑器该有的那几样：退格 / Delete / 左右移动 /
    * Home / End / 粘贴。首屏不是编辑器，用户在上面打的第一句通常就一两个
-   * 词；多行、图片、`@` 补全都属于聊天页，敲 Enter 就过去了。
+   * 词；多行与 `@` 补全属于聊天页，图片经同一 channel 暂存。
    *
    * `↑/↓` 与 `Tab` 在键帽行上移动焦点；焦点在 `-1` 时这两组键无操作
    * （首屏没有可滚的东西）。
@@ -727,12 +846,21 @@ export function Launchpad({
     // 选择器盖在这一屏之上时键盘整块让位（Chat 的 overlay 分支处理；Esc 关
     // 选择器回到这里）。没有这道闸，选择器分支没消费的键会漏进草稿。
     if (inputPaused) return
+    const query = queryRef.current
+    const caret = caretRef.current
     const composing = key.ctrl || key.meta || key.super
     // 终端原生粘贴（bracketed paste：Ctrl+Shift+V / 右键 / Shift+Insert）：
     // ink 把载荷标成 isPasted 交给 useInput；标记字节（\x1b[200~ / 201~）在
     // 解析层已被剥掉，这里的 input 就是纯载荷。换行折叠成单行（见上）。
     if (event?.isPasted === true && input.length > 0) {
-      insertSingleLine(stripBracketedPasteMarkers(input))
+      const text = stripBracketedPasteMarkers(input)
+      const path = parsePastedImagePath(text)
+      if (path !== null && imageComposer !== undefined) {
+        const lease = capturePasteLease()
+        void pasteImagePaths([path], lease).catch(error => {
+          if (lease.isCurrent()) showPasteNotice(t('input-image-paste-failed', { err: String(error) }))
+        })
+      } else insertSingleLine(text)
       event.stopImmediatePropagation()
       return
     }
@@ -741,27 +869,43 @@ export function Launchpad({
     // 曾经的 bug：组合键兜底把 Ctrl+V 一口吞掉，粘贴永远是死的。
     if (matchesPasteShortcut(input, key)) {
       if (!clipboardBusyRef.current) {
+        const lease = capturePasteLease()
         clipboardBusyRef.current = true
         void clipboardReader()
-          .then(content => {
-            if (content === null) {
-              showPasteNotice(t('input-clipboard-empty' as never))
-              return
+          .then(async content => {
+            const temporaryPath = content?.kind === 'image' ? content.path : undefined
+            try {
+              if (!lease.isCurrent()) return
+              if (content === null) {
+                showPasteNotice(t('input-clipboard-empty' as never))
+                return
+              }
+              if (content.kind === 'unavailable') {
+                showPasteNotice(t(content.wsl === true ? 'input-clipboard-unavailable-wsl' as never : 'input-clipboard-unavailable' as never))
+                return
+              }
+              if (content.kind === 'image') {
+                if (imagePathMediaType(content.path) === undefined) {
+                  showPasteNotice(t('input-image-format-unsupported'))
+                  return
+                }
+                await pasteImagePaths([content.path], lease, true)
+                return
+              }
+              if (content.kind === 'files' && imageComposer !== undefined) {
+                await pasteImagePaths(content.paths, lease)
+                return
+              }
+              const text = formatClipboardInsert(content)
+              const path = parsePastedImagePath(text)
+              if (path !== null && imageComposer !== undefined) await pasteImagePaths([path], lease)
+              else insertSingleLine(text)
+            } finally {
+              if (temporaryPath !== undefined) await unlink(temporaryPath).catch(() => undefined)
             }
-            if (content.kind === 'unavailable') {
-              showPasteNotice(t(content.wsl === true ? 'input-clipboard-unavailable-wsl' as never : 'input-clipboard-unavailable' as never))
-              return
-            }
-            if (content.kind === 'image') {
-              // 单行编辑器不能暂存图片（staged image 是聊天页的能力）；
-              // 插入临时文件路径只会留一条谁也读不懂的路径——提示而不是插入。
-              showPasteNotice(t('input-clipboard-unavailable' as never))
-              return
-            }
-            insertSingleLine(formatClipboardInsert(content))
           })
           .catch(() => {
-            showPasteNotice(t('input-clipboard-read-failed' as never))
+            if (lease.isCurrent()) showPasteNotice(t('input-clipboard-read-failed' as never))
           })
           .finally(() => {
             clipboardBusyRef.current = false
@@ -782,7 +926,7 @@ export function Launchpad({
       }
     }
     // 命令补全面板（第六版 BUG 1）：面板开着时 ↑/↓/Enter/Tab/Esc 全归面板——
-    // 与聊天页 composer 的补全菜单同一套键位。Enter/Tab/点击 = 执行选中命令
+    // 与聊天页 composer 的补全菜单同一套键位。Tab 补全；Enter/点击执行选中命令
     // （onCommandPick → Chat 的 runCommand，绝不 submit）；Esc 只收面板，
     // 草稿一字不动（用户可能只是想看一眼有什么命令）。
     if (paletteOpen && paletteSelected !== undefined) {
@@ -792,8 +936,17 @@ export function Launchpad({
         event.stopImmediatePropagation()
         return
       }
-      if (key.tab || isPlainReturn(key)) {
-        pickCommand(paletteSelected.commandLine ?? '/' + paletteSelected.name + ' ')
+      if (key.tab) {
+        if (!key.shift) {
+          const replacement = paletteSelected.replacement
+          setPaletteIndex(0)
+          changeQuery(replacement, replacement.length)
+        }
+        event.stopImmediatePropagation()
+        return
+      }
+      if (isPlainReturn(key)) {
+        pickCommand(paletteSelected.commandLine)
         event.stopImmediatePropagation()
         return
       }
@@ -804,15 +957,17 @@ export function Launchpad({
       }
     }
     if (key.escape) {
+      pasteRevisionRef.current += 1
       // 空输入时 Esc 去看会话（首屏最常见的下一步）；已经有字就只清空它,
       // 免得辛苦打的半句话被一次性丢掉。
-      if (query !== '') onQueryChange('', 0)
+      if (query !== '') changeQuery('', 0)
       else onEscape('sessions')
       event.stopImmediatePropagation()
       return
     }
     if (key.ctrl && (input === 'c' || input === 'd')) {
-      if (query !== '') onQueryChange('', 0)
+      pasteRevisionRef.current += 1
+      if (query !== '') changeQuery('', 0)
       else onEscape('exit')
       event.stopImmediatePropagation()
       return
@@ -839,8 +994,11 @@ export function Launchpad({
         onParamPick(activated)
       } else {
         const focused = focusIndex >= 0 ? actions[focusIndex] : undefined
-        if (focused === undefined) onSubmit(query)
-        else onAction(focused)
+        if (focused === undefined) {
+          const notice = onSubmit(query)
+          if (typeof notice === 'string') showPasteNotice(notice)
+          else pasteRevisionRef.current += 1
+        } else onAction(focused)
       }
       event.stopImmediatePropagation()
       return
@@ -855,7 +1013,7 @@ export function Launchpad({
       // 入口 + Tips 行（第六版设计 2，环的最后一格——它在版面上就在入口行下方）。
       // 窄终端里 `fitChips`/参数行的宽度裁剪会丢掉放不下的那几个，按
       // 整张表绕圈会让焦点指着一个看不见的目标、Enter 触发一个看不见的动作。
-      const tipsFocusable = layout.showTip && pasteNotice === undefined && !firstRun
+      const tipsFocusable = layout.showTip && rowNotice === undefined && !firstRun
       // 左下角铭牌（第七版）：画得出来且接了 onOpenWorkspace 才进环。
       const cornerFocusable = layout.showCorners && cornerLeft !== '' && onOpenWorkspace !== undefined
       // 环的顺序 = 版面顺序（↓ 一路向下）：…→ Tips → 左下目录铭牌 → 右下内核区。
@@ -880,7 +1038,7 @@ export function Launchpad({
         : key.end ? query.length
           : key.leftArrow ? Math.max(0, prevBoundary(query, at))
             : Math.min(query.length, nextBoundary(query, at))
-      onQueryChange(query, next)
+      changeQuery(query, next)
       event.stopImmediatePropagation()
       return
     }
@@ -889,12 +1047,20 @@ export function Launchpad({
       const at = caret
       if (key.backspace) {
         if (at === 0) return
-        const cut = prevBoundary(query, at)
-        onQueryChange(query.slice(0, cut) + query.slice(at), cut)
+        deleteRange(prevBoundary(query, at), at)
       } else {
         if (at >= query.length) return
-        onQueryChange(query.slice(0, at) + query.slice(nextBoundary(query, at)), at)
+        deleteRange(at, nextBoundary(query, at))
       }
+      event.stopImmediatePropagation()
+      return
+    }
+    if (isMod(key) && input === 'w') {
+      if (!inputFocused) return
+      let start = caret
+      while (start > 0 && /\s/u.test(query[start - 1]!)) start--
+      while (start > 0 && !/\s/u.test(query[start - 1]!)) start--
+      deleteRange(start, caret)
       event.stopImmediatePropagation()
       return
     }
@@ -903,7 +1069,7 @@ export function Launchpad({
     const typed = input.replace(/[\r\n]+/gu, '')
     if (typed === '') return
     const at = caret
-    onQueryChange(query.slice(0, at) + typed + query.slice(at), at + typed.length)
+    changeQuery(query.slice(0, at) + typed + query.slice(at), at + typed.length)
     onFocusChange(-1)
     event.stopImmediatePropagation()
   })
@@ -917,7 +1083,8 @@ export function Launchpad({
       <Box flexDirection="column" flexGrow={1} alignItems="center" justifyContent="center">
         {layout.showHero && (
           <LogoV2
-                      fontId={fontId}
+                      fontId={font.id}
+                      egg={dailyEgg}
                       whale={layout.showWhale && whale}
                       whaleIdle={whaleIdle}
                       whaleGirl={layout.showWhale && whaleGirl}
@@ -960,6 +1127,7 @@ export function Launchpad({
               prefix={query.startsWith('/') ? '⌘' : '❯'}
               width={cardWidth - 4}
               cursorOffset={caret}
+              imageSpans={imageSpans}
               caretBlink={inputFocused ? caretPhase : true}
             />
           </Box>
@@ -1029,7 +1197,7 @@ export function Launchpad({
                   onPick={(index) => {
                     const command = paletteCommands[index]
                     if (command !== undefined) {
-                      pickCommand(command.commandLine ?? '/' + command.name + ' ')
+                      pickCommand(command.commandLine)
                     }
                   }}
                 />
@@ -1077,7 +1245,7 @@ export function Launchpad({
             而行数不变（阶梯预算不动）。 */}
         {/* 入口行与 Tips 之间的呼吸留白（第六版）：默认 2 行，矮屏先撤它再撤
             Tips 行本身（launchpadLayout 的 tipGapRows）——刻意呼吸，不是遗漏。 */}
-        {(layout.showTip || pasteNotice !== undefined) && (
+        {(layout.showTip || rowNotice !== undefined) && (
           <Box
             flexShrink={0}
             alignSelf="center"
@@ -1085,11 +1253,11 @@ export function Launchpad({
             // 第六版设计 2：点击 Tips 行切到下一条（循环）。首启句与粘贴提示
             // 不参与轮换（首启优先级最高；提示是临时占用）。点击拦住冒泡——
             // 点 Tips 不是“点空白”。
-            {...(pasteNotice === undefined && !firstRun
+            {...(rowNotice === undefined && !firstRun
               ? { onClick: (event: ClickEvent) => { event.stopImmediatePropagation(); rotateTip() } }
               : {})}
           >
-            {pasteNotice === undefined ? (
+            {rowNotice === undefined ? (
               <>
                 <Text color="warning">● {t('launchpad-tip-prefix')}</Text>
                 <Text
@@ -1101,7 +1269,7 @@ export function Launchpad({
                 </Text>
               </>
             ) : (
-              <Text color="warning">● {pasteNotice}</Text>
+              <Text color={rowNotice.color ?? 'warning'}>● {rowNotice.text}</Text>
             )}
           </Box>
         )}
@@ -1205,17 +1373,6 @@ export function nextBoundary(text: string, at: number): number {
   const rest = Array.from(text.slice(at))
   const first = rest[0] ?? ''
   return at + first.length
-}
-
-/**
- * 当天那款字体：设置项 pin 住就用它，否则按日期轮换。
- * 与 `LogoV2` 同源——两边必须解出同一款，否则宽轴阈值会互相矛盾。
- *
- * @param fontId - 设置项 `dsh-tui.splashFont` 的值。
- * @returns 那款字体。
- */
-function launchpadFont(fontId: string | undefined): SplashFont {
-  return fontId === undefined ? pickSplashFont() : splashFontById(fontId)
 }
 
 /** 最小模式这一屏整体不存在（与 `LogoHeader` 同规则）：直接进会话。 */

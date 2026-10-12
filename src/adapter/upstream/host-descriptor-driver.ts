@@ -111,6 +111,10 @@ function contractServiceName(coordinate: ContractCoordinate): string {
     case 'LocalStorage': return 'tuiPluginStorage'
     case 'MessageObserver': return 'tuiMessageObserver'
     case 'DecisionEvents': return 'tuiPluginHost'
+    // The `Backend` contribution family is not a plugin-visible service; the
+    // host row that owns the descriptor owns its admission machine too, and
+    // reports it through the read-only probe below (W-2).
+    case 'Backend': return 'tuiPluginHost'
     default: return ''
   }
 }
@@ -411,12 +415,49 @@ async function probeMessageLive(service: unknown): Promise<ProbeResult> {
   }
 }
 
+/** The backend admission machine probe (W-2).
+ *
+ * `Backend` is a manifest extension family, not a plugin-visible service, and the
+ * contract may only be published when the host can actually admit a
+ * contribution. The host row that owns the descriptor reports that itself
+ * (`ctx.tuiPluginHost.probeBackendAdmission()`), read-only and side-effect free —
+ * the same shape as `probeDecisionEvents()`, which likewise reports topology the
+ * service row alone cannot prove. */
+function probeBackendAdmissionMachine(service: unknown): ProbeResult {
+  if (!hasFunction(service, 'probeBackendAdmission')) {
+    return { evidence: [], missing: ['tuiPluginHost.probeBackendAdmission()'] }
+  }
+  try {
+    const result = (service as {
+      probeBackendAdmission(): { registered?: unknown; offered?: unknown; verdict?: unknown }
+    }).probeBackendAdmission()
+    if (result?.verdict !== 'compatible') {
+      throw new Error('backend admission probe did not admit a contribution declaration')
+    }
+    return {
+      evidence: [
+        probeEvidence(
+          'tuiPluginHost.probeBackendAdmission()',
+          `backend admission machine answered ${String(result.verdict)} (${String(result.registered)} registered, ${String(result.offered)} offered)`,
+        ),
+      ],
+      missing: [],
+    }
+  } catch (error) {
+    return {
+      evidence: [probeEvidence('tuiPluginHost.probeBackendAdmission()', errorText(error))],
+      missing: ['tuiPluginHost.probeBackendAdmission()'],
+    }
+  }
+}
+
 function probeForCoordinate(service: unknown, coordinate: ContractCoordinate): ProbeResult {
   switch (coordinate.kind) {
     case 'Command': return probeCommand(service)
     case 'LocalStorage': return probeStorage(service)
     case 'MessageObserver': return probeMessageObserver(service)
     case 'DecisionEvents': return probeDecisionEvents(service)
+    case 'Backend': return probeBackendAdmissionMachine(service)
     default: return { evidence: [], missing: [] }
   }
 }
@@ -454,6 +495,10 @@ function contractDetection(ctx: HostContext, coordinate: ContractCoordinate): De
     case 'DecisionEvents':
       if (!hasFunction(service, 'subscribeDecision')) missing.push('tuiPluginHost.subscribeDecision()')
       else evidence.push(methodEvidence(serviceName, 'subscribeDecision'))
+      break
+    case 'Backend':
+      if (!hasFunction(service, 'probeBackendAdmission')) missing.push('tuiPluginHost.probeBackendAdmission()')
+      else evidence.push(methodEvidence(serviceName, 'probeBackendAdmission'))
       break
   }
   const probe = probeForCoordinate(service, coordinate)
@@ -574,6 +619,16 @@ export async function refreshHostCapabilityLifecycles(ctx: unknown): Promise<Cap
         if (hasMessageLiveProbe(service)) evidence.push(methodEvidence(serviceName, 'probeReversible'))
         {
           const probe = await probeMessageLive(service)
+          evidence.push(...probe.evidence)
+          missing.push(...probe.missing)
+        }
+        break
+      case 'Backend':
+        // The same probe as the synchronous projection: a completed refresh
+        // replaces the whole lifecycle set, so leaving `Backend` out here would
+        // publish it before the first refresh and drop it right after.
+        {
+          const probe = probeBackendAdmissionMachine(service)
           evidence.push(...probe.evidence)
           missing.push(...probe.missing)
         }

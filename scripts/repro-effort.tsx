@@ -256,7 +256,7 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
     inputConvergence: { interruptSeq: 0, cancelInFlight: false },
     selection: selection as never,
     modelActions: { selection: selection as never, applyPreferredEffort },
-    modeActions: { refreshMode() {}, onSessionEvent() {} },
+    modeActions: { refreshMode() {}, onSessionEvent() {}, async applyRememberedPermission() {} },
     projector: { apply() {}, settleStreaming() {}, updateSpinnerMode() {} } as never,
     subagents: { onSessionEvent() { return false }, onStart() {}, onEnd() {} },
     agentView: { schedule() {} },

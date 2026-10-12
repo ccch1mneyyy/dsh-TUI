@@ -29,14 +29,18 @@ function fixture(t, initial = good) {
   let calls = 0
   let warnings = 0
   let hideSkillDescriptors = false
+  let working = false
+  const placements = []
   const disposePlan = commands.register({ name: 'plan', description: 'Host plan', handler: async () => ({ kind: 'success' }) })
   const catalog = createSkillCatalog({
     on: (event, listener) => events.on(event, listener),
-    get: name => name === 'skills' ? { snapshot: options => { calls += 1; return read(options) } } : undefined,
+    get: name => name === 'skills'
+      ? { snapshot: options => { calls += 1; return read(options) } }
+      : name === 'tools' ? { get: () => ({}) } : undefined,
     logger: { warn() { warnings += 1 } },
   }, {
     owner, agent: () => agent, cwd: () => '/tmp', commandDescriptions: () => undefined,
-    setCommands(value) { menu = value }, deliverUserText() {},
+    setCommands(value) { menu = value }, deliverUserText(_text, placement) { placements.push(placement) }, working: () => working,
     commandService: {
       list: target => commands.list(target).filter(entry => !hideSkillDescriptors || entry.name === 'plan'),
       find: (target, name) => commands.find(target, name),
@@ -52,6 +56,8 @@ function fixture(t, initial = good) {
     observe(value) { read = async () => value },
     readWith(value) { read = value },
     hideDescriptors() { hideSkillDescriptors = true },
+    setWorking(value) { working = value },
+    placements: () => placements,
     async start() { catalog.start(); await drain() },
     async change() { events.emit('skills/change'); await drain() },
     // Drain snapshot promises after each fake-clock step; no wall-clock sleeps.
@@ -253,4 +259,20 @@ await test('release prevents pending reads from registering or retrying', async 
   await pendingFixture.tick(60_000)
   assert.equal(pendingFixture.calls, before)
   assert.equal(pendingFixture.find('skill-x'), undefined)
+})
+
+// issue #1072: a skill gesture typed while a turn runs must stay IMMEDIATE
+// (steer at the next step boundary) instead of degrading into a turn-end
+// followup; an idle gesture keeps queueing a followup.
+await test('a mid-turn skill gesture steers; an idle gesture queues a followup', async t => {
+  const f = fixture(t)
+  await f.start()
+  await f.change()
+  const handler = f.find('skill-x').handler
+  assert.equal(typeof handler, 'function', 'skill-x stays callable')
+  f.setWorking(true)
+  assert.equal((await handler({ agent: f.agentA, rawInput: ' now', signal: undefined })).kind, 'success')
+  f.setWorking(false)
+  assert.equal((await handler({ agent: f.agentA, rawInput: '', signal: undefined })).kind, 'success')
+  assert.deepEqual(f.placements(), ['steer', 'followup'])
 })

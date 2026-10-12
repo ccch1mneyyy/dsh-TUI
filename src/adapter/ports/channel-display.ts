@@ -75,7 +75,7 @@ export type SplashFontSetting = 'daily' | SplashFontId
  * follows the active backend (`branding.ts` resolves it); the other members
  * pin one look. Normalization back to `auto` belongs to `branding.ts`.
  */
-export type BrandSetting = 'auto' | 'deepseek' | 'claude'
+export type BrandSetting = 'auto' | 'deepseek' | 'claude' | 'codex'
 
 /** Individually selectable fields in the status footer. */
 export interface StatusBarConfig {

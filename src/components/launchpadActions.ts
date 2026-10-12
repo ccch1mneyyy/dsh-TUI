@@ -1,5 +1,4 @@
 import { stringWidth } from '../ink/stringWidth.js'
-import { kernelDisplayName } from './kernelCatalog.js'
 
 /**
  * 落地页的一个动作入口（第四版：状态驱动的"下一步建议"）。
@@ -46,6 +45,10 @@ export interface LaunchpadActionState {
   /** 当前内核（channel.backendCapabilities.backendId）；缺省 = 未知，内核
    *  入口用不带名的短标签。 */
   readonly backendId?: string | undefined
+  /** 当前内核的**短品牌名**（选择器同一份 KernelOption.shortLabel，由 Launchpad
+   *  喂进来）：动作行「内核 · Claude」用它。缺席 = 退化成不带名/原样 id——
+   *  与内核选择器同一姿态，绝不自己拿 id 查表。 */
+  readonly backendLabel?: string | undefined
 }
 
 /** Continue 标题的截断上限（显示宽度，含截断省略号）。 */
@@ -164,10 +167,12 @@ export function resolveLaunchpadActions(state: LaunchpadActionState): readonly L
         ? STAR
         : HELP
   // 内核入口：当前内核已知 → 带名（「内核 · Claude」）；未知（Chat 侧接线
-  // 前）→ 短标签。显示名走 kernelCatalog，与选择器和重启通知同源。
-  const backend = state.backendId === undefined
+  // 前）→ 短标签。名字来自 manifest 的 shortLabel（state.backendLabel），与
+  // 选择器、落地页铭牌和重启通知同源；没有就退回原样 id（不猜品牌名）。
+  const backendName = state.backendLabel ?? state.backendId
+  const backend = backendName === undefined || backendName === ''
     ? BACKEND
-    : { ...BACKEND, labelKey: 'launchpad-action-backend-named', values: { name: kernelDisplayName(state.backendId) } }
+    : { ...BACKEND, labelKey: 'launchpad-action-backend-named', values: { name: backendName } }
   const title = truncateContinueTitle(state.lastSessionTitle ?? '')
   if (title !== '') {
     return [

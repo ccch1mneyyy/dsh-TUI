@@ -14,6 +14,25 @@ export {
   TUI_DECISION_EVENT_NAMES,
   TUI_EXTENSION_PERMISSION_NAMES,
 } from './protocol-constants.js'
+export { BACKEND_CAPABILITY_NAMES } from './backend-capabilities.js'
+// The Backend contribution family (B-2). `profile-definitions` re-exports only
+// the registrar, and the definition itself must come from the profile module that
+// authors it — still inside the spec boundary, the one layer allowed to resolve
+// `#tui-profile/*`. The import map for this specifier already exists
+// (`package.json` `imports`); nothing new is mounted.
+export {
+  BACKEND,
+  BACKEND_CONFIRMATION_POLICIES,
+  BACKEND_RESERVED_IDS,
+  assertBackendHandler,
+  backendExtensionDefinition,
+  validateBackendSpec,
+} from '#tui-profile/tui-contributions'
+export type {
+  BackendHandler,
+  BackendInstallRecipe,
+  BackendSpec,
+} from '#tui-profile/tui-contributions'
 
 export const TUI_EXTENSION_API_VERSION = 'tui.dsh/v1alpha1'
 

@@ -122,7 +122,10 @@ function isTerminal(status: BackgroundJobStatus): boolean {
  * Ordered store of the current conversation's background jobs. Roster: fed by
  * {@link BackgroundJobStore.replace} with a fresh `list()` after every
  * lifecycle commit (kernel `events` bus when reachable, `onJobsChanged`
- * legacy hooks otherwise). Output: two tiers — kernel `output` events pull
+ * legacy hooks otherwise), and trimmed by {@link BackgroundJobStore.drop} for
+ * the records the registry announces as `removed` (work the model never saw
+ * an id for, such as a shell tool's foreground command). Output: two tiers —
+ * kernel `output` events pull
  * non-consuming `readAt` increments through {@link BackgroundJobStore.onKernelOutput}
  * (live, channel-labelled, gap-aware), and `job_output` tool-result tails
  * land in {@link BackgroundJobStore.onOutputSeen} as the fallback mirror.
@@ -397,6 +400,19 @@ export class BackgroundJobStore {
 
   get(id: string): BackgroundJobState | undefined {
     return this.jobs.get(id)
+  }
+
+  /**
+   * Drop one job's record after the registry announced `removed` — a caller
+   * collected the terminal state through its own wait and never handed the id
+   * to the model (the shell tool's foreground command). The record left the
+   * registry's visible set, so it leaves ours too; `reset()` is the bulk form.
+   */
+  drop(id: string): void {
+    if (!this.jobs.delete(id)) return
+    this.kernelReads.delete(id)
+    this.pendingCommands.delete(id)
+    this.events.onChanged?.()
   }
 
   /** Jobs still alive (running or being stopped). */

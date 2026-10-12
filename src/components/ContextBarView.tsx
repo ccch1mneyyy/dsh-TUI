@@ -1,13 +1,16 @@
 import React from 'react'
-import { Box, Text } from '../ui.js'
+import { Box, Text, useTheme } from '../ui.js'
 import type { Color } from '../ink/styles.js'
+import { getTheme } from '../theme.js'
 import {
   FREE_SEGMENT_FILL,
   FREE_SEGMENT_TEXT,
   USED_SEGMENTS,
   usedSegmentColor,
-  allocateBarColumns,
+  contextBarColumns,
   contextBarReadout,
+  contextBarSegmentColors,
+  contextBarUsedColor,
   contextPressureStep,
   rightAlignBarText,
   type ContextSegments,
@@ -40,9 +43,9 @@ export function ContextBarView({
   colors,
   onHover,
 }: {
-  /** Used tokens per content type. */
+  /** Local token estimates per content type, dividing the filled portion only. */
   segments: ContextSegments
-  /** Total used tokens, driving the usage readout. */
+  /** Measured occupancy, driving both fill length and readout. */
   usedTokens: number
   /** The context window size in tokens. */
   contextWindow: number
@@ -54,11 +57,14 @@ export function ContextBarView({
    *  leave. Absent handlers render a static bar (tests, headless embeds). */
   onHover?: (hovered: boolean) => void
 }): React.ReactNode {
+  // The five used fills come from the palette (contextBar* keys); only the free
+  // segment still takes an override, since its shading is a light/dark call the
+  // call site already made.
+  const [themeName] = useTheme()
   if (width <= 0 || contextWindow <= 0) return null
 
-  const freeTokens = Math.max(0, contextWindow - usedTokens)
-  const values = [...USED_SEGMENTS.map(segment => segments[segment.key]), freeTokens]
-  const columns = allocateBarColumns(values, width)
+  const segmentColors = contextBarSegmentColors(getTheme(themeName))
+  const columns = contextBarColumns(segments, usedTokens, contextWindow, width)
   // The readout is the bar's only text, and its one pressure signal: amber
   // from 80% occupancy, red from 95% (the footer's shared thresholds). The
   // theme key wins over the free-text color, which stays for comfortable
@@ -68,7 +74,7 @@ export function ContextBarView({
 
   const nodes: React.ReactNode[] = []
   for (const [index, segment] of USED_SEGMENTS.entries()) {
-    const segmentWidth = columns[index] ?? 0
+    const segmentWidth = columns.used[index] ?? 0
     if (segmentWidth <= 0) continue
     // Childless on purpose: the renderer fills a node's own rect with its
     // backgroundColor, so the segment is a pure colored block (render-node-to-
@@ -79,12 +85,27 @@ export function ContextBarView({
         width={segmentWidth}
         height={1}
         flexShrink={0}
-        backgroundColor={usedSegmentColor(segment)}
+        backgroundColor={usedSegmentColor({
+          key: segment.key,
+          color: segmentColors[index] ?? segment.fallback,
+        })}
       />,
     )
   }
 
-  const freeWidth = columns[USED_SEGMENTS.length] ?? 0
+  if (columns.unclassified > 0) {
+    nodes.push(
+      <Box
+        key="used"
+        width={columns.unclassified}
+        height={1}
+        flexShrink={0}
+        backgroundColor={contextBarUsedColor(segmentColors)}
+      />,
+    )
+  }
+
+  const freeWidth = columns.free
   if (freeWidth > 0) {
     nodes.push(
       <Box

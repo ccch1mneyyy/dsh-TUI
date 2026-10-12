@@ -1,0 +1,304 @@
+/**
+ * The Codex backend (docs/codex-backend-design.md §5.5): detection, opening
+ * a thread (create or resume) on the process-wide app-server hub, and the
+ * launcher's per-backend session markers.
+ *
+ * The child runs the user's own `codex` with the user's own `CODEX_HOME`
+ * (D6): their config, instructions, MCP servers, provider and login apply
+ * as in the official client, and threads are shared with it. dsh-tui's
+ * choices (start mode, model, effort) travel per thread as request
+ * parameters; nothing is written into Codex's configuration.
+ */
+import { isAbsolute, normalize } from 'node:path'
+import type { AgentBackend, BackendHost, OpenTarget } from '../../agent/backend.js'
+import type { AgentSession } from '../../agent/session.js'
+import { codexLocale, codexText, installCodexLocale } from './text.js'
+import { CODEX_BACKEND_ID, CODEX_BACKEND_LABEL, codexResumeCommand, codexVersionSupported, MIN_CODEX_VERSION } from './contract.js'
+import { acquireCodexAuth, CODEX_OAUTH_PROVIDER, type CodexAuthRuntime } from './auth/external-tokens.js'
+import { codexAuthRoute } from './auth/route.js'
+import { createCodexChannelsRuntime, fileCodexChannels, memoryCodexChannels, type CodexChannels, type CodexChannelsRuntime } from './channels.js'
+import { createCodexCatalog } from './catalog.js'
+import { codexHomeDir, detectCodex } from './detect.js'
+import { errorText, rec, str, type Rec } from './narrow.js'
+import { CLIENT } from './protocol/index.js'
+import { fileCodexPrefs, memoryCodexPrefs, type CodexPrefs } from './prefs.js'
+import { buildCodexEnv, resolveCodexExecutable, type CodexExecutable } from './rpc/binary.js'
+import { acquireCodexHub, type CodexHub, type CodexHubDeps, type HubSettings } from './rpc/hub.js'
+import { rpcCode, RPC_ERROR, type RpcClock } from './rpc/client.js'
+import { openCodexSession } from './session/session.js'
+
+/** Child stderr that is known start-up noise, reported by `/doctor` only. */
+const STDERR_NOISE = [/bubblewrap/iu, /could not create PATH aliases/iu]
+
+export interface CodexRuntime {
+  readonly hub: CodexHub
+  readonly release: () => void
+  readonly cwd: string
+  readonly executable: CodexExecutable & { readonly version?: string }
+  readonly config?: Rec
+  readonly auth: CodexAuthRuntime
+  readonly channels: CodexChannelsRuntime
+  /** Store identity captured from this child, not later process env changes. */
+  readonly catalogSource?: string
+  readonly startNotices?: readonly string[]
+  /** Rejoin an idle native thread retained by the local daemon, if available. */
+  readonly rejoinNativeDaemon?: () => Promise<CodexRuntime | undefined>
+}
+export interface CodexRuntimeOptions {
+  readonly executable?: CodexExecutable & { readonly version?: string }
+  readonly channels?: CodexChannels
+  readonly env?: NodeJS.ProcessEnv
+  readonly hubDeps?: CodexHubDeps
+  readonly authClock?: RpcClock
+}
+
+/** Acquire the same platform runtime for open/resume/catalog. Tests replace
+ * only the process, executable discovery and profile file, not the plumbing. */
+export async function prepareCodexRuntime(target: OpenTarget, host: BackendHost, options: CodexRuntimeOptions = {}): Promise<CodexRuntime> {
+  const env = options.env ?? process.env
+  const executable = options.executable ?? await resolveCodexExecutable(env)
+  if (executable === undefined) throw new Error(codexText('codex-not-installed'))
+  if (!codexVersionSupported(executable.version)) throw new Error(codexText('codex-too-old', { version: executable.version ?? '', min: MIN_CODEX_VERSION }))
+  const channels = createCodexChannelsRuntime({ store: options.channels ?? (host.dataDir === undefined ? memoryCodexChannels() : fileCodexChannels(host.dataDir, host.debug)), tokens: host.tokenStore, env })
+  const launch = channels.launch()
+  const credential = launch.provider === undefined ? host.oauthCredential?.(CODEX_OAUTH_PROVIDER) : undefined
+  let cwd = target.cwd ?? host.cwd
+  let settings: HubSettings = {
+    executable: executable.path, args: ['app-server', ...launch.args], env: buildCodexEnv(env, launch.env), cwd,
+    credentialMode: launch.provider !== undefined ? 'channel' : credential === undefined ? 'codex' : 'external',
+    injectedEnvKeys: launch.injectedEnvKeys,
+  }
+  const deps: CodexHubDeps = {
+    debug: host.debug,
+    stderr: line => { if (!STDERR_NOISE.some(pattern => pattern.test(line))) host.stderr?.(line) },
+    clientVersion: host.appVersion ?? 'dev',
+    ...options.hubDeps,
+  }
+  let hub = acquireCodexHub(settings, deps)
+  let release = hub.retain()
+  try {
+    await hub.ready
+    let locationKnown = true
+    if (target.kind === 'resume' && target.cwd === undefined) {
+      // Route/project configuration must be checked for the recorded thread
+      // directory, not the launcher's unrelated current directory.
+      try {
+        const answer = rec(await hub.call(CLIENT.threadRead, { threadId: target.sessionId, includeTurns: false }))
+        const recorded = str(rec(answer?.thread)?.cwd)
+        if (recorded === undefined || recorded === '') locationKnown = false
+        else cwd = recorded
+      } catch { locationKnown = false }
+    }
+    let config: Rec | undefined
+    if (locationKnown) {
+      try { config = rec(rec(await hub.call(CLIENT.configRead, { includeLayers: false, cwd }))?.config) }
+      catch { host.debug('codex: config/read failed; managed injection disabled') }
+    }
+    // A provider in the user's own config can take its credential from an
+    // environment key (`env_key`, e.g. DEEPSEEK_API_KEY). When the launching
+    // environment does not export it but the DSH credential store declares
+    // it, inject it into the child: a stored key then works without an
+    // exported variable. The key joins `injectedEnvKeys`, so the hub
+    // fingerprint separates keyless and keyed children and a keyless hub is
+    // never reused for a session whose provider needs the key. A key nothing
+    // can supply is not a startup failure — Codex itself rejects each turn —
+    // so it is remembered and reported once at start instead.
+    let missingProviderEnvKey: { readonly provider: string; readonly env: string } | undefined
+    if (launch.provider === undefined) {
+      const providerId = str(config?.model_provider) || 'openai'
+      const providerEnvKey = str(rec(rec(config?.model_providers)?.[providerId])?.env_key)
+      if (providerEnvKey !== undefined && providerEnvKey !== '' && (settings.env[providerEnvKey] ?? '') === '') {
+        const stored = host.tokenStore?.read(providerEnvKey)
+        if (stored !== undefined) {
+          release()
+          settings = { ...settings, env: { ...settings.env, [providerEnvKey]: stored }, injectedEnvKeys: [...(settings.injectedEnvKeys ?? []), providerEnvKey] }
+          hub = acquireCodexHub(settings, deps)
+          release = hub.retain()
+          await hub.ready
+          host.debug(`codex: provider env ${providerEnvKey} resolved from the DSH credential store`)
+        } else {
+          missingProviderEnvKey = { provider: providerId, env: providerEnvKey }
+        }
+      }
+    }
+    const route = codexAuthRoute(config, env, launch.provider !== undefined)
+    const externalAllowed = settings.credentialMode === 'external' && route.firstParty
+    if (settings.credentialMode === 'external' && !externalAllowed) {
+      // A native-only route must not reuse a hub whose other sessions loaded
+      // a managed token. Probing config does not issue any model request.
+      release()
+      settings = { ...settings, credentialMode: 'codex' }
+      hub = acquireCodexHub(settings, deps)
+      release = hub.retain()
+      await hub.ready
+    }
+    channels.refreshConfig(config)
+    const profile = channels.active()
+    let auth = acquireCodexAuth({
+      hub, cwd, config, env, credential, externalAllowed,
+      ...(launch.provider === undefined || profile === undefined ? {} : { channel: { name: profile.name, baseUrl: profile.baseUrl } }),
+      ...(options.authClock === undefined ? {} : { clock: options.authClock }),
+      debug: host.debug,
+    })
+    await auth.start()
+    // Codex rejects every turn of a provider whose env key is unset: name the
+    // reason once at start instead of leaving a bare turn failure behind.
+    let startNotices: readonly string[] | undefined = missingProviderEnvKey === undefined || route.firstParty
+      ? undefined
+      : [codexText('codex-provider-env-key-missing', { provider: missingProviderEnvKey.provider, env: missingProviderEnvKey.env })]
+    if (auth.managedFailed) {
+      startNotices = [...(startNotices ?? []), codexText('codex-auth-login-failed')]
+      // Only an already-observed startup failure takes this path. No logout:
+      // a different process starts clean on the user's native credentials.
+      release()
+      settings = { ...settings, credentialMode: 'native-fallback' }
+      hub = acquireCodexHub(settings, deps)
+      release = hub.retain()
+      await hub.ready
+      auth = acquireCodexAuth({ hub, cwd, config, env, credential, externalAllowed: route.firstParty, skipStoredCredential: true, debug: host.debug })
+      await auth.start()
+    }
+    const rejoinNativeDaemon = target.kind !== 'resume' ? undefined : async (): Promise<CodexRuntime | undefined> => {
+      // Managed credentials and channel overrides belong to our private
+      // child. Never install them in the user's shared background server.
+      if (launch.provider !== undefined || auth.source === 'dsh-auth' || auth.managedFailed || settings.credentialMode === 'native-fallback') return undefined
+      const daemon = acquireCodexHub({ ...settings, args: ['app-server', 'proxy'], credentialMode: 'codex' }, { ...deps, handshakeTimeoutMs: 5000 })
+      const releaseDaemon = daemon.retain()
+      let handedOff = false
+      try {
+        await daemon.ready
+        const loaded = rec(await daemon.call(CLIENT.threadLoadedList, {}, { timeoutMs: 5000 }))
+        if (!Array.isArray(loaded?.data) || !loaded.data.includes(target.sessionId)) return undefined
+        const thread = rec(rec(await daemon.call(CLIENT.threadRead, { threadId: target.sessionId, includeTurns: false }, { timeoutMs: 5000 }))?.thread)
+        if (str(rec(thread?.status)?.type) !== 'idle') return undefined
+        const daemonCwd = target.cwd ?? str(thread?.cwd)
+        if (daemonCwd === undefined || daemonCwd === '') return undefined
+        const daemonConfig = rec(rec(await daemon.call(CLIENT.configRead, { includeLayers: false, cwd: daemonCwd }, { timeoutMs: 5000 }))?.config)
+        const daemonAuth = acquireCodexAuth({ hub: daemon, cwd: daemonCwd, config: daemonConfig, env, externalAllowed: false, debug: host.debug })
+        await daemonAuth.start()
+        channels.refreshConfig(daemonConfig)
+        handedOff = true
+        return { hub: daemon, release: releaseDaemon, cwd: daemonCwd, executable, config: daemonConfig, auth: daemonAuth, channels }
+      } catch {
+        host.debug('codex: native daemon could not rejoin the retained thread')
+        return undefined
+      } finally {
+        if (!handedOff) {
+          releaseDaemon()
+          if (daemon.state === 'failed') await daemon.close()
+        }
+      }
+    }
+    return { hub, release, cwd, executable, config, auth, channels, catalogSource: catalogSource(settings.env, hub.info?.codexHome), ...(startNotices === undefined ? {} : { startNotices }), ...(rejoinNativeDaemon === undefined ? {} : { rejoinNativeDaemon }) }
+  } catch (error) {
+    release()
+    host.debug(`codex: app-server start failed (${errorText(error)})`)
+    throw new Error(codexText('codex-start-failed', { err: errorText(error) }), { cause: error })
+  }
+}
+
+let catalogHost: BackendHost | undefined
+let catalogRuntime: { readonly source: string; readonly host: BackendHost; readonly hub: CodexHub } | undefined
+
+function catalogSource(env: NodeJS.ProcessEnv = process.env, actualHome?: string): string | undefined {
+  const home = actualHome ?? codexHomeDir(env)
+  const sqlite = env.CODEX_SQLITE_HOME
+  if (!isAbsolute(home) || (sqlite !== undefined && sqlite !== '' && !isAbsolute(sqlite))) return undefined
+  return JSON.stringify(['codex', normalize(home), sqlite ? normalize(sqlite) : null])
+}
+
+function rememberCatalogRuntime(runtime: CodexRuntime, host: BackendHost): void {
+  const source = runtime.catalogSource
+  if (source !== undefined) catalogRuntime = { source, host, hub: runtime.hub }
+}
+
+/** The prefs store of the captured host, or undefined when no host has been
+ *  seen yet (see {@link catalogHost}). Built lazily: a module-level call would
+ *  resolve a directory before any host exists to name one (D2). */
+const catalogPrefs = (): CodexPrefs | undefined => {
+  const dir = catalogHost?.dataDir
+  const host = catalogHost
+  return dir === undefined || host === undefined ? undefined : fileCodexPrefs(dir, message => host.debug(message))
+}
+
+/** Remember the host of the most recent detect / open: the catalog's only way
+ *  to reach this backend's own directory without a host parameter, and where
+ *  this backend's copy takes its language from (read live, so a `/lang`
+ *  switch applies to the next string). */
+const rememberHost = (host: BackendHost): void => {
+  catalogHost = host
+  installCodexLocale(host.locale)
+}
+
+/** Open a native thread, rejoining its idle daemon writer on conflict. */
+export async function openCodexBackendSession(target: OpenTarget, host: BackendHost, options: CodexRuntimeOptions & { readonly prefs?: CodexPrefs } = {}): Promise<AgentSession> {
+  rememberHost(host)
+  const runtime = await prepareCodexRuntime(target, host, options)
+  const open = (active: CodexRuntime): Promise<AgentSession> => openCodexSession({
+    ...active, target,
+    prefs: options.prefs ?? (host.dataDir === undefined ? memoryCodexPrefs() : fileCodexPrefs(host.dataDir, host.debug)),
+    host: { debug: host.debug, locale: host.locale },
+    doctor: { get bubblewrapMissing() { return active.hub.bubblewrapMissing } },
+  })
+  try {
+    const session = await open(runtime)
+    if (options.env === undefined && options.executable === undefined) rememberCatalogRuntime(runtime, host)
+    return session
+  } catch (error) {
+    const cause = error instanceof Error ? error.cause : undefined
+    if (rpcCode(cause) !== RPC_ERROR.invalidRequest || !/already has an active writer/iu.test(errorText(cause))) throw error
+    const daemon = await runtime.rejoinNativeDaemon?.()
+    if (daemon === undefined) throw error
+    return open(daemon)
+  }
+}
+
+export const codexBackend: AgentBackend = {
+  id: CODEX_BACKEND_ID,
+  descriptor: { label: CODEX_BACKEND_LABEL },
+
+  detect: (host: BackendHost) => { rememberHost(host); return detectCodex(host) },
+
+  catalog: createCodexCatalog({
+    acquire: async cwd => {
+      // Before detect/open supplies a host, keep stores in memory and use
+      // this backend's locale without guessing a host data directory.
+      const host = catalogHost ?? { cwd: process.cwd(), debug: () => undefined, warn: () => undefined, locale: codexLocale }
+      catalogHost = host
+      const source = catalogSource()
+      const known = catalogRuntime
+      // Metadata listing needs the native store, not another executable probe,
+      // config read or auth startup. Borrow the already-running session hub.
+      if (known !== undefined && known.source === source && known.host === host && known.hub.state !== 'closed' && known.hub.state !== 'failed') {
+        return { hub: known.hub, release: known.hub.retain() }
+      }
+      const runtime = await prepareCodexRuntime({ kind: 'create', cwd: cwd ?? host.cwd }, host)
+      rememberCatalogRuntime(runtime, host)
+      return runtime
+    },
+    cwd: () => catalogHost?.cwd ?? process.cwd(),
+    lastUsed: () => catalogPrefs()?.read().lastUsed ?? {},
+    snapshotKey: catalogSource,
+  }),
+
+  launch: {
+    // `host` replaces the old `debug` parameter (B-3 widened
+    // `AgentBackend.launch.sessionPrefs`). The launcher asks before a session
+    // exists, so this store is built from the host it is handed; a host that
+    // hands over no directory keeps nothing — there is simply no remembered
+    // session to resume (D-3's feature-detect, never a path this backend
+    // guessed — D2).
+    sessionPrefs: host => {
+      const prefs = host.dataDir === undefined ? memoryCodexPrefs() : fileCodexPrefs(host.dataDir, host.debug)
+      return {
+        lastSession: () => prefs.read().lastSession,
+        setLastSession: threadId => { prefs.write({ lastSession: threadId }) },
+        touch: threadId => { prefs.touch(threadId) },
+        forget: threadId => { prefs.forget(threadId) },
+      }
+    },
+    resumeCommand: codexResumeCommand,
+  },
+
+  open: openCodexBackendSession,
+}

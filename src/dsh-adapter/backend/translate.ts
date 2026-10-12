@@ -94,6 +94,9 @@ export function dshEmits(type: AgentEventType): boolean {
     case 'session.ready':
     case 'session.reset':
     case 'tool.progress':
+    // Optional, unused: DSH tool output reaches the card through the
+    // settled result (and background jobs through task.output).
+    case 'tool.output':
     case 'permission.request':
     case 'permission.settled':
     case 'question.request':
@@ -104,6 +107,7 @@ export function dshEmits(type: AgentEventType): boolean {
     case 'task.update':
     case 'task.end':
     case 'tasks.snapshot':
+    case 'usage':
     case 'context.usage':
     case 'model.changed':
     case 'effort.changed':

@@ -19,12 +19,15 @@ function throwCleanupFailures(failures: unknown[], message: string): void {
   if (failures.length > 1) throw new AggregateError(failures, message)
 }
 
+/** What every read of an ended Channel UI lifetime throws. */
+export const CHANNEL_UI_LIFETIME_ENDED = 'dsh-tui: Channel UI lifetime has ended'
+
 export function createChannelUiLease(isCurrent: () => boolean): ChannelUiLease & { dispose(): void } {
   let active = true
   const disposers = new Set<() => void>()
   return {
     assertActive() {
-      if (!active || !isCurrent()) throw new Error('dsh-tui: Channel UI lifetime has ended')
+      if (!active || !isCurrent()) throw new Error(CHANNEL_UI_LIFETIME_ENDED)
     },
     own(dispose) {
       let released = false
@@ -121,7 +124,9 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
         }
         if (key === 'listEfforts') {
           check('read-only')
-          return Promise.resolve({ efforts: (channel.effortLevels ?? []).map(id => ({ id, name: id })), defaultEffort: undefined })
+          const route = args[0] as { provider: string; model: string } | undefined
+          const live = route === undefined || (route.provider === channel.provider && route.model === channel.model)
+          return Promise.resolve({ efforts: (live ? channel.effortLevels ?? [] : []).map(id => ({ id, name: id })), defaultEffort: undefined })
         }
       }
       // A renderer observes the already-owned Channel emitter, never mounts
@@ -145,13 +150,18 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
       }
       if (key === 'backendAuth' && result !== undefined) {
         const host = result as NonNullable<ReturnType<ChannelUi['backendAuth']>>
-        return methods<typeof host>({ login: present => host.login((oauth, provider) => settle(present(query(oauth), provider))) }, { login: 'mutate' })
+        const login = methods<Pick<typeof host, 'login'>>({ login: present => host.login((oauth, provider) => settle(present(query(oauth), provider))) }, { login: 'mutate' })
+        if (host.logout === undefined) return login
+        return Object.freeze({ ...login, ...methods({ logout: () => host.logout!() }, { logout: 'mutate' }) })
       }
       if (key === 'backendModes' && result !== undefined) {
         return methods(result as NonNullable<ReturnType<ChannelUi['backendModes']>>, { snapshot: 'read-only', set: 'mutate' })
       }
       if (key === 'backendMcp' && result !== undefined) {
         return methods(result as NonNullable<ReturnType<ChannelUi['backendMcp']>>, { reconnect: 'mutate', toggle: 'mutate' })
+      }
+      if (key === 'backendGoals' && result !== undefined) {
+        return methods(result as NonNullable<ReturnType<ChannelUi['backendGoals']>>, { set: 'mutate', pause: 'mutate', resume: 'mutate', clear: 'mutate' })
       }
       if (key === 'settingsHost' && result !== undefined) {
         return methods(result as NonNullable<ReturnType<ChannelUi['settingsHost']>>, {

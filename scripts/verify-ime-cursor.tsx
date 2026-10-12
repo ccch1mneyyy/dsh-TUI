@@ -3,12 +3,12 @@
  * 光标走，useDeclaredCursor 必须把原生光标停到输入框 caret 上。本脚本用
  * xterm/headless 读取真实硬件光标落点，断言：
  *   1. 问答面板：选项行上打字（文本进输入行），光标锚在输入行 ▏ caret 上
- *   2. 聚焦输入行 + 英文输入：光标在反色 caret 格上
- *   3. CJK 宽字符输入：光标仍在反色 caret 格上
- *   4. 窄宽长回答换行 + Home：字符齐全且光标贴合反色 caret 格（首字符）
+ *   2. 聚焦输入行 + 英文输入：光标在原生 caret 格上
+ *   3. CJK 宽字符输入：光标仍在原生 caret 格上
+ *   4. 窄宽长回答换行 + Home：字符齐全且光标贴合原生 caret 格（首字符）
  *   5. 历史搜索浮层：光标归 SearchBox 的 caret 格，不被结果行 ListItem 抢走
  *   6. 窄宽 + 超长查询：SearchBox 单行窗口化（不折行），光标精确落在框内
- *      反色 caret 格，且可见文本是查询尾部（头部已滚出）
+ *      原生 caret 格，且可见文本是查询尾部（头部已滚出）
  *   7. emoji surrogate 对中间的非法 cursorOffset：归一化到码点边界，
  *      光标停在 emoji 首格
  *   8. 极窄 SearchBox（内容区 0 列）：光标钳制在框内不越界
@@ -19,7 +19,7 @@ export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本�
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh' // 光标定位使用中文「自定义回答」行，不能随宿主语言漂移。
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { AskUserQuestionPanel }, { HistorySearchDialog }, { SearchBox }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { AskUserQuestionPanel }, { HistorySearchDialog }, { SearchBox }, { stringWidth }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -27,6 +27,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { AskU
   import('../src/components/questions/AskUserQuestionPanel.js'),
   import('../src/components/HistorySearchDialog.js'),
   import('../src/components/SearchBox.js'),
+  import('../src/ink/stringWidth.js'),
 ])
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -54,19 +55,6 @@ function makeHarness(cols: number, rows: number) {
   }
   /** 硬件光标（IME 预编辑锚点）落点。 */
   const cursor = () => ({ x: term.buffer.active.cursorX, y: term.buffer.active.cursorY })
-  /** 屏幕上第一个反色格（聚焦 caret 的渲染形态）的坐标，可限定行范围。 */
-  const findInverseCell = (yFrom = 0, yTo = rows - 1): { x: number; y: number } | undefined => {
-    const buf = term.buffer.active
-    for (let y = yFrom; y <= yTo; y++) {
-      const line = buf.getLine(y)
-      if (!line) continue
-      for (let x = 0; x < line.length; x++) {
-        const cell = line.getCell(x)
-        if (cell && cell.isInverse()) return { x, y }
-      }
-    }
-    return undefined
-  }
   /** 指定字符（如 '▏'）在某行的单元格列号 —— 走 buffer 单元格，避开 CJK
    *  宽度与 JS 字符串下标的错位。 */
   const findCharCell = (ch: string, yFrom = 0, yTo = rows - 1): { x: number; y: number } | undefined => {
@@ -80,7 +68,11 @@ function makeHarness(cols: number, rows: number) {
     }
     return undefined
   }
-  return { term, stdout, stdin, lines, cursor, findInverseCell, findCharCell }
+  const findAfterChar = (ch: string, yFrom = 0, yTo = rows - 1) => {
+    const point = findCharCell(ch, yFrom, yTo)
+    return point === undefined ? undefined : { x: point.x + stringWidth(ch), y: point.y }
+  }
+  return { term, stdout, stdin, lines, cursor, findAfterChar, findCharCell }
 }
 
 const panelProps = {
@@ -103,7 +95,7 @@ const report = (name: string, ok: boolean, detail: string) => {
 
 /** 场景 1-3：问答面板（80 列宽松宽度）。 */
 {
-  const { stdout, stdin, lines, cursor, findInverseCell, findCharCell } = makeHarness(80, 24)
+  const { stdout, stdin, lines, cursor, findAfterChar, findCharCell } = makeHarness(80, 24)
   const app = await render(
     React.createElement(AskUserQuestionPanel, {
       ...panelProps,
@@ -145,7 +137,7 @@ const report = (name: string, ok: boolean, detail: string) => {
   {
     const ls = lines()
     const row = ls.findIndex(l => l.includes('自定义回答') && l.includes('hello'))
-    const caret = findInverseCell(Math.max(row, 0), row + 2)
+    const caret = findAfterChar('o', Math.max(row, 0), row + 2)
     const cur = cursor()
     const ok = row >= 0 && caret !== undefined && cur.x === caret.x && cur.y === caret.y
     report('聚焦输入行 + 英文输入：光标在 caret 格', ok,
@@ -158,7 +150,7 @@ const report = (name: string, ok: boolean, detail: string) => {
   {
     const ls = lines()
     const row = ls.findIndex(l => l.includes('自定义回答') && l.includes('你好'))
-    const caret = findInverseCell(Math.max(row, 0), row + 2)
+    const caret = findAfterChar('好', Math.max(row, 0), row + 2)
     const cur = cursor()
     const ok = row >= 0 && caret !== undefined && cur.x === caret.x && cur.y === caret.y
     report('CJK 输入：光标在 caret 格', ok,
@@ -170,7 +162,7 @@ const report = (name: string, ok: boolean, detail: string) => {
 
 /** 场景 4：窄宽 + 长回答换行 + Home —— 光标贴合 caret。 */
 {
-  const { stdout, stdin, lines, cursor, findInverseCell, findCharCell } = makeHarness(40, 24)
+  const { stdout, stdin, lines, cursor, findAfterChar, findCharCell } = makeHarness(40, 24)
   const app = await render(
     React.createElement(AskUserQuestionPanel, {
       ...panelProps,
@@ -185,7 +177,7 @@ const report = (name: string, ok: boolean, detail: string) => {
   await sleep(200)
   stdin.write('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghij') // 46 字符，必换行
   await sleep(400)
-  stdin.write('\x1b[H') // Home：caret 回到文本开头，反色格是 'A'
+  stdin.write('\x1b[H') // Home：caret 回到文本开头的 'A' 格
   await sleep(400)
   {
     const ls = lines()
@@ -195,7 +187,7 @@ const report = (name: string, ok: boolean, detail: string) => {
     // 这里断言的是光标与 caret 格重合 + 文本主体上屏。
     const pencil = findCharCell('✎')
     const row = pencil?.y ?? -1
-    const caret = findInverseCell(Math.max(row, 0), row + 6)
+    const caret = findCharCell('A', Math.max(row, 0), row + 6)
     const cur = cursor()
     const text = ls.join('\n')
     const ok = row >= 0 && text.includes('ABCDEF') && text.includes('defghij')
@@ -209,7 +201,7 @@ const report = (name: string, ok: boolean, detail: string) => {
 
 /** 场景 5：历史搜索浮层 —— 光标归 SearchBox caret，不被结果行抢走。 */
 {
-  const { stdout, stdin, lines, cursor, findInverseCell } = makeHarness(80, 24)
+  const { stdout, stdin, lines, cursor, findAfterChar } = makeHarness(80, 24)
   const matches = [
     { text: 'first result command', ts: Date.now() - 60_000 },
     { text: 'second result command', ts: Date.now() - 120_000 },
@@ -223,7 +215,7 @@ const report = (name: string, ok: boolean, detail: string) => {
     const ls = lines()
     const boxRow = ls.findIndex(l => l.includes('abc'))
     const itemRow = ls.findIndex(l => l.includes('first result'))
-    const caret = findInverseCell(Math.max(boxRow, 0), Math.max(boxRow, 0))
+    const caret = findAfterChar('c', Math.max(boxRow, 0), Math.max(boxRow, 0))
     const cur = cursor()
     const ok = boxRow >= 0 && itemRow >= 0 && caret !== undefined
       && cur.x === caret.x && cur.y === caret.y && cur.y !== itemRow
@@ -236,7 +228,7 @@ const report = (name: string, ok: boolean, detail: string) => {
 
 /** 场景 6：窄宽 + 超长查询 —— SearchBox 单行窗口化，光标不出框。 */
 {
-  const { stdout, stdin, lines, cursor, findInverseCell, findCharCell } = makeHarness(40, 24)
+  const { stdout, stdin, lines, cursor, findAfterChar, findCharCell } = makeHarness(40, 24)
   // 50 字符查询，caret 在末尾：40 列下框内容区只有 ~30 格，必须水平滚动。
   const query = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa0123456789'
   const app = await render(
@@ -254,11 +246,11 @@ const report = (name: string, ok: boolean, detail: string) => {
     const lens = findCharCell('⌕')
     const boxRow = lens?.y ?? -1
     const boxLine = boxRow >= 0 ? ls[boxRow]! : ''
-    const caret = boxRow >= 0 ? findInverseCell(boxRow, boxRow) : undefined
+    const caret = boxRow >= 0 ? findAfterChar('9', boxRow, boxRow) : undefined
     const cur = cursor()
     const aRun = (boxLine.match(/a/g) ?? []).length
     // 窗口化证据：尾部 '0123456789' 可见；头部 a 串大部分滚出（可见 a
-    // 远少于 40 个）；光标与反色 caret 格重合，天然落在框内。
+    // 远少于 40 个）；光标与原生 caret 格重合，天然落在框内。
     const ok = boxRow >= 0 && boxLine.includes('0123456789') && aRun > 0 && aRun <= 30
       && caret !== undefined && cur.x === caret.x && cur.y === caret.y
     report('窄宽超长查询：光标在框内 caret 格且尾部可见', ok,
@@ -270,10 +262,10 @@ const report = (name: string, ok: boolean, detail: string) => {
 
 /** 场景 7：emoji surrogate 对中间的非法 cursorOffset —— 归一化到码点边界。 */
 {
-  const { stdout, stdin, cursor, findInverseCell, findCharCell } = makeHarness(80, 24)
+  const { stdout, stdin, cursor, findAfterChar, findCharCell } = makeHarness(80, 24)
   // 'a😀b'：😀 占 UTF-16 下标 1-2，offset=2 落在 surrogate 对正中间
   // （Chat 历史搜索按 code unit 移光标就可能产生这种值）。归一化后 caret
-  // 应吸附到 😀 起点，反色块覆盖整个 emoji（2 格），光标停在首格。
+  // 应吸附到 😀 起点，光标停在 emoji 首格（2 格宽）。
   const app = await render(
     React.createElement(HistorySearchDialog, {
       query: 'a😀b',
@@ -286,7 +278,7 @@ const report = (name: string, ok: boolean, detail: string) => {
   await sleep(500)
   {
     const emoji = findCharCell('😀')
-    const caret = emoji !== undefined ? findInverseCell(emoji.y, emoji.y) : undefined
+    const caret = emoji
     const cur = cursor()
     const ok = emoji !== undefined && caret !== undefined
       && caret.x === emoji.x && cur.x === emoji.x && cur.y === emoji.y
@@ -322,5 +314,44 @@ const report = (name: string, ok: boolean, detail: string) => {
   await sleep(100)
 }
 
+
+/** 场景 N：btw 面板输入框 —— 面板聚焦时 IME 光标停在面板输入框，而非主聊天框。 */
+{
+  const { stdout, stdin, cursor, findAfterChar } = makeHarness(60, 12)
+  const { BtwComposer } = await import('../src/components/sidePanel/btw/BtwComposer.js')
+  const app = await render(
+    React.createElement(BtwComposer, {
+      state: { text: '你好', caret: 2 },
+      focused: true,
+      busy: false,
+    }),
+    { stdout, stdin, stderr: stdout, exitOnCtrlC: false, patchConsole: false },
+  )
+  await sleep(500)
+  {
+    // 按宽字符的显示宽度定位行尾，原生光标与 IME 使用同一锚点。
+    const cur = cursor()
+    const caret = findAfterChar('好')
+    report('btw composer 聚焦：原生光标与输入末尾重合', caret !== undefined && cur.x === caret.x && cur.y === caret.y, `cursor=${JSON.stringify(cur)} caret=${JSON.stringify(caret)}`)
+  }
+  app.unmount()
+  await sleep(100)
+  const app2 = await render(
+    React.createElement(BtwComposer, {
+      state: { text: '你好', caret: 2 },
+      focused: false,
+      busy: false,
+    }),
+    { stdout, stdin, stderr: stdout, exitOnCtrlC: false, patchConsole: false },
+  )
+  await sleep(500)
+  {
+    // 未聚焦（阅读层）不声明：光标不得停在输入行——聚焦层之外不该有第二个 IME 锚点。
+    const cur = cursor()
+    report('btw composer 未聚焦：不声明光标（无第二个 IME 锚点）', cur.y !== 1, `cursor=${JSON.stringify(cur)}`)
+  }
+  app2.unmount()
+  await sleep(100)
+}
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)

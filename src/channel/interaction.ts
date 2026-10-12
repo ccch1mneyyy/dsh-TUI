@@ -52,6 +52,7 @@ function storeRequest(request: QuestionRequestView, signal: AbortSignal): Questi
       ...(question.hideCustomInput === true ? { hideCustomInput: true } : {}),
       ...(question.defaultSelected === undefined || question.defaultSelected.length === 0 ? {} : { defaultSelected: [...question.defaultSelected] }),
       ...(question.link === undefined || question.link === '' ? {} : { link: question.link }),
+      ...(question.secret === true ? { secret: true } : {}),
     })),
   }
 }

@@ -1,0 +1,57 @@
+{
+  "events": [
+    "session.status",
+    "context.capacity",
+    "context.usage",
+    "session.title",
+    "session.status",
+    "session.status",
+    "turn.start",
+    "compaction.start",
+    "usage",
+    "context.usage",
+    "usage",
+    "context.usage",
+    "usage",
+    "context.usage",
+    "compaction.end",
+    "notice",
+    "session.status",
+    "turn.end"
+  ],
+  "rows": [
+    {
+      "kind": "notice",
+      "text": "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted."
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "contextWindow": 258400,
+    "tokens": {
+      "input": 6,
+      "output": 85,
+      "cacheRead": 0,
+      "cacheWrite": 13556
+    },
+    "lastUsage": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+    },
+    "todos": [],
+    "notices": [
+      "Heads up: Long threads and multiple compactions can cause the model to be less accurate. Start a new thread when possible to keep threads small and targeted."
+    ],
+    "contextMeasure": {
+      "type": "context.usage",
+      "used": 0,
+      "max": 246400
+    }
+  }
+}

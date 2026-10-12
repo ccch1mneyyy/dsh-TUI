@@ -59,7 +59,10 @@ export function KernelPicker({ options, focusIndex, pinned, onPick }: {
                 bold={focused && option.selectable}
                 wrap="truncate-end"
               >
-                {t(option.labelKey as never)}
+                {/* 名字按来源渲染（P0 D2）：in-tree 走宿主词表 `t()`；插件的
+                    字面量原样画（登记时已消毒/限宽，见 backend-registry），
+                    不进字典、不做模板展开。 */}
+                {option.label.kind === 'key' ? t(option.label.key as never) : option.label.text}
               </Text>
             </ListItem>
           )

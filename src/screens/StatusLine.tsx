@@ -6,10 +6,10 @@ import { t } from '../i18n.js'
 import { formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
 import { estimateSessionCostSnapshotCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
 import { getActiveBrand } from '../branding.js'
-import { isLightThemeActive } from '../theme.js'
 import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../components/ActivityLine.js'
 import { formatClock } from '../trajectory/format.js'
 import { GoalStatusChip } from '../components/GoalTodoPanel.js'
+import { formatGoalBudget } from '../channel/goal-command.js'
 import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.js'
 
 /** Stable fallback for stubbed channels: verify/repro harnesses render the
@@ -31,15 +31,16 @@ const NO_SUBAGENT_COST: Channel['subagentCost'] = []
 import type { SelectionSnapshot } from '../dsh-adapter/ide-channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
+import { getTheme, isLightThemeActive } from '../theme.js'
 import { ContextBarView } from '../components/ContextBarView.js'
 import { TooltipTarget } from '../components/Tooltip.js'
 import { formatProject } from '../sessions/format.js'
 import { homeDir } from '../utils/paths.js'
 import {
-  FREE_SEGMENT_FILL,
   USED_SEGMENTS,
   channelContextOccupancy,
   contextBarBreakdown,
+  contextBarSegmentColors,
   renderMiniContextBar,
   renderTpsGauge,
   renderTpsSparkline,
@@ -436,7 +437,16 @@ const selectionBadge = formatSelectionBadge(channel.selection)
           </Text>
         ),
       }
+  // The placeholder's backend is still opening: say so up front, so the
+  // frame drawn before DSH's synchronous load is not a silent one.
+  const startingPart: FieldPart | undefined = channel.ready === false && channel.startupFailure === undefined
+    ? {
+        key: 'starting',
+        node: <Text color="warning">{t('status-starting', { backend: channel.backendCapabilities?.backendLabel ?? 'DSH' })}</Text>,
+      }
+    : undefined
   const leftFields: FieldPart[] = [
+    ...(startingPart !== undefined ? [startingPart] : []),
     ...(statusBar.model
       ? [{ key: 'model', id: 'model' as const, ...(modelPicker === undefined ? {} : { onClick: modelPicker.onOpen }), node: <Text color="inactiveShimmer">{channel.modelDisplay ?? channel.model}</Text> }]
       : []),
@@ -585,8 +595,9 @@ const selectionBadge = formatSelectionBadge(channel.selection)
   // arithmetic or its right edge falls 2 columns short of the status row's
   // (the v0.8.0 paddingX 2→1 tightening left the old `columns - 4` stale).
   const barWidth = columns - 2
-  // 空段的深色兜底：deepseek 档冷灰、claude 档暖墨（品牌档见 branding.ts）；
-  // 浅色主题（light 与 claude-paper）走 StatusMetrics 的浅灰默认。
+  // 空段的深色兜底：deepseek 档冷灰、claude 档暖墨（品牌档见 branding.ts）。
+  // 明暗问色板而不是比主题名：浅色主题不一定叫 `light`（pink-day、用户/插件
+  // 色板也可以是浅色），只有真彩/ANSI 的深色默认档才需要显式的 free 段色。
   const barColors: { freeFill: Color; freeText: Color } | undefined =
     isLightThemeActive(themeName)
       ? undefined
@@ -602,7 +613,17 @@ const selectionBadge = formatSelectionBadge(channel.selection)
 
   // The supplemental-row readout for the hovered field: replaces the idle
   // hint (never the activity line) while the pointer dwells on a field.
-  const detail = buildHoverDetail(hover, channel, occupancy, usage, columns, barColors, backendMode, modelPicker)
+  const detail = buildHoverDetail(
+    hover,
+    channel,
+    occupancy,
+    usage,
+    columns,
+    barColors,
+    backendMode,
+    modelPicker,
+    contextBarSegmentColors(getTheme(themeName)),
+  )
   const trailer: React.ReactNode = detail !== null
     ? detail
     : hint !== ''
@@ -756,6 +777,7 @@ function buildHoverDetail(
   barColors: { freeFill: Color; freeText: Color } | undefined,
   backendMode: { readonly name: string } | undefined,
   modelPicker: { readonly onOpen: () => void } | undefined,
+  usedColors: readonly Color[],
 ): React.ReactNode | null {
   if (hover === null) return null
   const contextUsed = occupancy?.usedTokens
@@ -773,7 +795,7 @@ function buildHoverDetail(
       contextUsed,
       window,
       columns,
-      barColors?.freeFill ?? FREE_SEGMENT_FILL,
+      { used: usedColors, freeFill: barColors?.freeFill },
     )
     if (entries.length === 0) return null
     return (
@@ -934,9 +956,16 @@ function buildHoverDetail(
     case 'goal': {
       const goal = channel.goal
       if (goal === undefined) return null
-      return (
+      // A budgeted goal (a backend that measures tokens/time) reads its
+      // spend instead of the rounds.
+      return goal.budget === undefined ? (
         <Text wrap="truncate">
           {dim('goal ')}{goal.phase} · {dim('r')}{goal.roundsStarted}/{goal.maxGoalRounds} ·{' '}
+          {goal.objective}
+        </Text>
+      ) : (
+        <Text wrap="truncate">
+          {dim('goal ')}{goal.phase} · {formatGoalBudget(goal.budget)} ·{' '}
           {goal.objective}
         </Text>
       )

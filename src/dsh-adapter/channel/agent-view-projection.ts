@@ -5,7 +5,7 @@ import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import { resolveModelRoute, validateModelRoute } from '../../modelRoute.js'
 import { readModelPref } from '../../modelPrefs.js'
-import { readPresetPref } from '../../presetPrefs.js'
+import { presetOverrideFromEnv, readPresetPref } from '../../presetPrefs.js'
 import { forgetAgentViewSession, readAgentViewSessions, touchAgentViewSession, touchSession } from '../../sessionHistory.js'
 import { t } from '../../i18n.js'
 import {
@@ -182,7 +182,7 @@ export function createAgentViewProjection(
     let detached: Awaited<ReturnType<typeof deps.createDetached>>
     try {
       deps.owner.assertActive()
-      const composed = await composePreset(ctx, deps.configuredPreset ?? readPresetPref())
+      const composed = await composePreset(ctx, presetOverrideFromEnv() ?? readPresetPref() ?? deps.configuredPreset)
       const resolved = resolveModelRoute({ provider: deps.configuredProvider, model: deps.configuredModel }, readModelPref(), { provider: deps.provider, model: deps.model })
       const llm = ctx.get('llm') as { listModels(provider: string): Promise<readonly { id: string }[]> } | undefined
       const { route } = await validateModelRoute(llm, resolved, { provider: deps.provider, model: deps.model })

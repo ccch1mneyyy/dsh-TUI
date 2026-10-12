@@ -1,5 +1,5 @@
-import { useCallback, useContext, useLayoutEffect, useRef } from 'react'
-import CursorDeclarationContext from '../components/CursorDeclarationContext.js'
+import { useCallback, useContext, useLayoutEffect, useRef, type RefCallback } from 'react'
+import CursorDeclarationContext, { NativeCursorContext } from '../components/CursorDeclarationContext.js'
 import type { DOMElement } from '../dom.js'
 
 /**
@@ -14,7 +14,7 @@ import type { DOMElement } from '../dom.js'
  * The declared (line, column) is interpreted relative to that Box's
  * nodeCache rect (populated by renderNodeToOutput).
  *
- * Timing: Both ref attach and useLayoutEffect fire in React's layout
+ * Timing: Both ref attach and useLayoutEffect declare in React's layout
  * phase — after resetAfterCommit calls scheduleRender. scheduleRender
  * defers onRender via queueMicrotask, so onRender runs AFTER layout
  * effects commit and reads the fresh declaration on the first frame
@@ -23,21 +23,38 @@ import type { DOMElement } from '../dom.js'
  * explicitly after render.
  * @param options - the declared cursor target: `line` and `column` give the
  *   position relative to the node, `active` controls whether the declaration
- *   is set or cleared.
+ *   is set or cleared. `visible` opts a text input into the native caret;
+ *   focus anchors remain hidden unless accessibility mode is enabled.
+ *   `hideOnIdle` shows structural focus anchors during movement and hides
+ *   them after 500 ms at rest, retaining the terminal's original style.
  * @returns a ref callback to attach to the Box that contains the input.
  */
 export function useDeclaredCursor(options: {
   line: number
   column: number
   active: boolean
-}): (element: DOMElement | null) => void {
-  const { line, column, active } = options
+  visible?: boolean
+  hideOnIdle?: boolean
+}): RefCallback<DOMElement> {
+  const { line, column, active, visible = false, hideOnIdle = false } = options
   const setCursorDeclaration = useContext(CursorDeclarationContext)
   const nodeRef = useRef<DOMElement | null>(null)
 
-  const setNode = useCallback((node: DOMElement | null) => {
+  const setNode = useCallback<RefCallback<DOMElement>>(node => {
     nodeRef.current = node
-  }, [])
+    if (node === null) return
+    // A store-driven editor layer can attach after the caller's layout
+    // effect, so claim its cursor as soon as the node is attached.
+    if (active) {
+      setCursorDeclaration({ relativeX: column, relativeY: line, node, visible, hideOnIdle })
+    }
+    // React 19 binds this cleanup to the attached node. A withdrawn editor
+    // must not erase the inline node that has already taken over this ref.
+    return () => {
+      setCursorDeclaration(null, node)
+      if (nodeRef.current === node) nodeRef.current = null
+    }
+  }, [active, column, line, setCursorDeclaration, hideOnIdle, visible])
 
   // When active, set unconditionally. When inactive, clear conditionally
   // (only if the currently-declared node is ours). The node-identity check
@@ -55,15 +72,14 @@ export function useDeclaredCursor(options: {
   useLayoutEffect(() => {
     const node = nodeRef.current
     if (active && node) {
-      setCursorDeclaration({ relativeX: column, relativeY: line, node })
+      setCursorDeclaration({ relativeX: column, relativeY: line, node, visible, hideOnIdle })
     } else {
       setCursorDeclaration(null, node)
     }
   })
 
-  // Clear on unmount (conditionally — another instance may own by then).
-  // Separate effect with empty deps so cleanup only fires once — not on
-  // every line/column change, which would transiently null between commits.
+  // Withdraw on hook unmount as well: its ref may live in an independently
+  // committed editor layer that has not detached yet.
   useLayoutEffect(() => {
     return () => {
       setCursorDeclaration(null, nodeRef.current)
@@ -71,4 +87,9 @@ export function useDeclaredCursor(options: {
   }, [setCursorDeclaration])
 
   return setNode
+}
+
+/** Use a native caret in a TTY renderer, retaining painted carets in snapshots. */
+export function useNativeCursor(): boolean {
+  return useContext(NativeCursorContext)
 }

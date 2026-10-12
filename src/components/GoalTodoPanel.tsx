@@ -5,6 +5,7 @@ import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { ChannelGoal, TodoPanelItem } from '../dsh-adapter/channel.js'
 import { t } from '../i18n.js'
 import { primaryComboString } from '../utils/keymap.js'
+import { formatGoalBudget, formatGoalBudgetCompact } from '../channel/goal-command.js'
 
 /** Maximum todo rows shown before the overflow line. */
 const MAX_TODOS = 8
@@ -38,16 +39,18 @@ function formatDuration(ms: number): string {
 }
 
 /**
- * Compact goal chip for the status footer: phase glyph + rounds, colored by
+ * Compact goal chip for the status footer: phase glyph + rounds (a goal a
+ * backend budgets by tokens: tokens used / budget instead), colored by
  * phase. `minimal` swaps the glyph for a text form, per the minimal-mode
  * no-emoji contract.
  */
 export function GoalStatusChip({ goal, minimal = false }: { goal: ChannelGoal; minimal?: boolean }): React.ReactNode {
+  const progress = goal.budget === undefined ? `${goal.roundsStarted}/${goal.maxGoalRounds}` : formatGoalBudgetCompact(goal.budget)
   return (
     <Text color={phaseColor(goal.phase)} dimColor={goal.phase === 'complete'}>
       {minimal
-        ? `goal ${goal.roundsStarted}/${goal.maxGoalRounds}`
-        : `${PHASE_GLYPH[goal.phase]} ${goal.roundsStarted}/${goal.maxGoalRounds}`}
+        ? `goal ${progress}`
+        : `${PHASE_GLYPH[goal.phase]} ${progress}`}
     </Text>
   )
 }
@@ -56,15 +59,26 @@ function PhaseBadge({
   phase,
   roundsStarted,
   maxGoalRounds,
+  budget,
   elapsed,
 }: {
   phase: ChannelGoal['phase']
   roundsStarted: number
   maxGoalRounds: number
+  /** A token/time budget the backend reports: shown instead of the rounds
+   *  (its own time used replaces the panel's wall clock). */
+  budget?: ChannelGoal['budget']
   /** Wall-clock age of the goal, from the panel's own timer. */
   elapsed?: string
 }): React.ReactNode {
   const color = phaseColor(phase)
+  if (budget !== undefined) {
+    return (
+      <Text color={color} dimColor={phase === 'complete'}>
+        {PHASE_LABEL[phase]} · {formatGoalBudget(budget)}
+      </Text>
+    )
+  }
   return (
     <Text color={color} dimColor={phase === 'complete'}>
       {PHASE_LABEL[phase]} · {roundsStarted}/{maxGoalRounds}
@@ -243,6 +257,7 @@ export function GoalTodoPanel({
                 phase={goal.phase}
                 roundsStarted={goal.roundsStarted}
                 maxGoalRounds={goal.maxGoalRounds}
+                budget={goal.budget}
                 elapsed={elapsed}
               />
             </Box>

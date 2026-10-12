@@ -3,7 +3,12 @@
     "UI value imports from src/dsh-adapter/ that predate the boundary rules (ADAPTER.md 「边界规则」).",
     "verify-adapter-boundary.ts reports these as one warning; a new pair fails the gate, and a pair that no longer matches must be deleted here.",
     "Planned cleanup: Chat.tsx sessionCwdMatches and the dialog/status/approval fallback stores first; the rest move to neutral modules as they are touched.",
-    "The side-panel, launchpad version banner and StatusMetrics occupancy-fallback pairs arrived with a merge from main; same cleanup rule."
+    "The side-panel, launchpad version banner and StatusMetrics occupancy-fallback pairs arrived with a merge from main; same cleanup rule.",
+    "\"backendEntries\" was the second, separate debt: imports src/backends/codex/ made into host internals. B-3",
+    "made a concrete backend an island (own directory + src/agent/ + src/backends/shared/ only); claude was already",
+    "clean, and codex followed in B-5 (its own text module, host.dataDir, the command registry). The list is now",
+    "empty, so the island rule holds for every backend with no exemption left. Every pair is listed by hand and the",
+    "gate fails on a listed pair that stops matching, so both lists only shrink."
   ],
   "entries": [
     {
@@ -166,5 +171,6 @@
       "from": "screens/StatusMetrics.ts",
       "to": "dsh-adapter/context-occupancy.js"
     }
-  ]
+  ],
+  "backendEntries": []
 }

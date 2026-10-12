@@ -5,9 +5,10 @@
  * src/commands.ts 的注册：
  *   1. 五类偏好（theme/lang/preset/model/activity）在无显式配置时的应用
  *      与顺序；
- *   2. 优先级守卫：DSH_TUI_THEME / DSH_TUI_LANG（env-wins）、cordis.yml
- *      显式 preset / lang / activityFrames / 完整 provider+model 对
- *      （config-wins）、settings 用户层 lang（config-wins）；
+ *   2. 优先级守卫：DSH_TUI_THEME / DSH_TUI_LANG / DSH_TUI_PRESET（env-wins）、
+ *      cordis.yml 显式 lang / activityFrames 与 settings 用户层 lang
+ *      （config-wins）；preset 与 model 的 cordis.yml 值只是部署默认值，
+ *      不阻止偏好生效（上次用的优先）；
  *   3. 原子路由规则（issue #67）：provider-only pin 不得阻止偏好生效；
  *   4. 无效/缺失偏好文件（invalid）与无变化（unchanged）分支；
  *   5. 命令注册：/reload、/restart 在 LOCAL_COMMANDS 中、isLocalCommandName
@@ -20,7 +21,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { planReload, type ReloadPlan } from '../src/reload.js'
 import { LOCAL_COMMANDS, isLocalCommandName, parseCommandName } from '../src/commands.js'
-import { migratePresetPref, parsePresetPref, readPresetPref, writePresetPref } from '../src/presetPrefs.js'
+import { migratePresetPref, parsePresetPref, presetOverrideFromEnv, readPresetPref, writePresetPref } from '../src/presetPrefs.js'
 
 let failures = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -43,10 +44,9 @@ const BASE = {
   currentLang: 'zh',
   langOverriddenBySettings: false,
   configuredLang: undefined,
-  configuredPreset: undefined,
+  envPreset: undefined,
   presetPref: 'standard',
   currentPreset: 'standard',
-  configuredModel: undefined,
   modelPref: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
   currentModel: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
   configuredActivity: undefined,
@@ -103,10 +103,10 @@ const BASE = {
   check('lang 无文件 → skip invalid', noFile.skipped.some(s => s.kind === 'lang' && s.reason === 'invalid'))
 }
 
-// ── 5. preset / activity：cordis.yml 显式优先 ───────────────────────────
+// ── 5. preset：DSH_TUI_PRESET 优先；activity：cordis.yml 显式优先 ───────
 {
-  const preset = planReload({ ...BASE, configuredPreset: 'ptc', presetPref: 'standard' })
-  check('preset cordis.yml → skip config-wins', preset.skipped.some(s => s.kind === 'preset' && s.reason === 'config-wins'))
+  const preset = planReload({ ...BASE, envPreset: 'ptc', presetPref: 'standard' })
+  check('preset DSH_TUI_PRESET → skip env-wins', preset.skipped.some(s => s.kind === 'preset' && s.reason === 'env-wins'))
   const presetApply = planReload({ ...BASE, presetPref: 'ptc' })
   check('preset 变化 → apply', presetApply.apply.some(a => a.kind === 'preset' && a.to === 'ptc'))
   const presetNoFile = planReload({ ...BASE, presetPref: undefined })
@@ -117,23 +117,13 @@ const BASE = {
   check('activity 变化 → apply', activityApply.apply.some(a => a.kind === 'activity' && a.to === 'moon'))
 }
 
-// ── 6. model：完整 pair 优先；provider-only pin 不挡偏好（原子规则） ────
+// ── 6. model：偏好即当前选择（cordis.yml 只是部署默认值） ───────────────
 {
-  const complete = planReload({
-    ...BASE,
-    configuredModel: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
-    modelPref: { provider: 'deepseek', model: 'deepseek-chat' },
-  })
-  check('model 完整 pair → skip config-wins', complete.skipped.some(s => s.kind === 'model' && s.reason === 'config-wins'))
-  check('model 完整 pair → 不 apply', !complete.apply.some(a => a.kind === 'model'))
-  // issue #67 原子规则：只 pin provider 不算显式路由，不得阻止偏好生效。
-  const half = planReload({
-    ...BASE,
-    configuredModel: { provider: 'deepseek-official', model: undefined },
-    modelPref: { provider: 'deepseek', model: 'deepseek-chat' },
-  })
-  check('model provider-only pin 不挡偏好 → apply', half.apply.some(a => a.kind === 'model' && a.route?.provider === 'deepseek'), JSON.stringify(half.skipped))
-  check('model provider-only pin → 无 skip', !half.skipped.some(s => s.kind === 'model'))
+  // issue #67 原子规则 + 上次用的优先：model.json 完整路由总是生效，静态
+  // cordis.yml pair（曾经 config-wins）不再阻止它。
+  const complete = planReload({ ...BASE, modelPref: { provider: 'deepseek', model: 'deepseek-chat' } })
+  check('model 偏好完整路由 → apply', complete.apply.some(a => a.kind === 'model' && a.route?.provider === 'deepseek'))
+  check('model 偏好完整路由 → 无 skip', !complete.skipped.some(s => s.kind === 'model'), JSON.stringify(complete.skipped))
   const noFile = planReload({ ...BASE, modelPref: undefined })
   check('model 无文件 → skip invalid', noFile.skipped.some(s => s.kind === 'model' && s.reason === 'invalid'))
   const noCurrent = planReload({ ...BASE, currentModel: undefined, modelPref: { provider: 'deepseek', model: 'deepseek-chat' } })
@@ -155,6 +145,16 @@ const BASE = {
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+}
+
+// ── 7b. DSH_TUI_PRESET 启动指令（本次运行的显式选择） ───────────────────
+{
+  check('DSH_TUI_PRESET 原样读取', presetOverrideFromEnv({ DSH_TUI_PRESET: 'minimal' }) === 'minimal')
+  check('DSH_TUI_PRESET 去空白', presetOverrideFromEnv({ DSH_TUI_PRESET: '  ptc  ' }) === 'ptc')
+  check('未设置 → undefined', presetOverrideFromEnv({}) === undefined)
+  check('空串/纯空白 → undefined', presetOverrideFromEnv({ DSH_TUI_PRESET: '   ' }) === undefined)
+  // 故意不按 PRESET_ID 预校验：拼错必须由 preset 组装大声失败，而不是静默回落偏好。
+  check('拼错的 id 透传给组装（失败要响）', presetOverrideFromEnv({ DSH_TUI_PRESET: 'no such preset' }) === 'no such preset')
 }
 
 // ── 8. 命令注册：/reload、/restart ──────────────────────────────────────

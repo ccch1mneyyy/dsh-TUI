@@ -1,0 +1,26 @@
+{
+  "$schema":"urn:dsh-std:community-draft:dsh-plugin:0.15",
+  "manifestVersion":"0.15",
+  "id":"com.example.backend-cli-plugin",
+  "name":"Backend CLI Plugin",
+  "version":"1.0.0",
+  "facets":{"host":{"entry":"host.js","apiVersion":"v1alpha1"}},
+  "requires":{"contracts":[]},
+  "permissions":[],
+  "contributes":{
+    "commands":[],
+    "x-dsh-tui":[
+      {"apiVersion":"tui.dsh/v1alpha1","kind":"Backend","id":"com.example.backend-cli","name":"example_backend_cli","spec":{
+        "id":"example-cli-agent",
+        "label":{"text":"Example CLI Agent"},
+        "shortLabel":"Example CLI",
+        "product":"example-cli",
+        "capabilities":["permissions","models"],
+        "grants":[],
+        "unloadExport":"closeExamplePool"
+      }}
+    ]
+  },
+  "subscriptions":[],
+  "license":"MIT"
+}

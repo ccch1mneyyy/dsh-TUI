@@ -16,7 +16,7 @@
  * `ownsSessionFacts`, and adds its raw per-binding listeners through
  * `onBind`.
  */
-import type { Context } from '@deepseek-ai/cordis'
+import type { ChannelHostLogger } from '../channel-host.js'
 import type { AgentEvent, AgentEventMeta, AgentEventOf } from '../../../agent/events.js'
 import type { AgentSession } from '../../../agent/session.js'
 import { attachInteraction } from '../../../channel/interaction.js'
@@ -270,7 +270,7 @@ export function createSessionBinder(deps: {
   return { bind }
 }
 
-export function createBindingFeed(ctx: Context, deps: {
+export function createBindingFeed(ctx: { readonly logger: ChannelHostLogger }, deps: {
   owner: ChannelOwner
   binding: ChannelBinding
   state: ChannelState
@@ -290,7 +290,10 @@ export function createBindingFeed(ctx: Context, deps: {
   const { owner, binding, state, inputConvergence, controls } = deps
   // The projector reads its deps per use, so an extension can install its
   // job feed and pricing policy before any event is projected.
-  const projectorDeps: ChannelProjectionDeps = { ...deps.projection, inputConvergence }
+  const projectorDeps: ChannelProjectionDeps = {
+    ...deps.projection, inputConvergence,
+    backendLabel: () => state.backendCapabilities.backendId === 'dsh' ? undefined : state.backendCapabilities.backendLabel,
+  }
   const projector = createChannelProjection(state, projectorDeps)
   const router = createSessionBatchRouter({
     state,

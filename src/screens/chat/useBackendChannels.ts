@@ -3,6 +3,7 @@ import type { BackendChannelsHost, ChannelUi } from '../../adapter/ports/channel
 import { runChannelWizard } from '../../channel/channel-wizard.js'
 import type { QuestionStore } from '../../channel/questions.js'
 import type { ChannelPickerRow } from '../../components/ChannelPicker.js'
+import { WORKING_GATE_NOTICES } from '../../commands.js'
 import { t } from '../../i18n.js'
 import type { ChatOverlayAction } from '../chatOverlay.js'
 import { channelMapLines } from './backendCommands.js'
@@ -54,7 +55,7 @@ export function useBackendChannels({ channel, host, questionStore, dispatchOverl
     }
     if (row.kind === 'import') {
       if (channel.working) {
-        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
+        channel.notify(t(WORKING_GATE_NOTICES.channel), { color: 'warning' })
         return
       }
       const imported = host.importFromSettings()
@@ -65,7 +66,7 @@ export function useBackendChannels({ channel, host, questionStore, dispatchOverl
     }
     if (row.kind === 'add' || row.kind === 'manage') {
       if (channel.working) {
-        channel.notify(t('channel-switch-while-working'), { color: 'warning' })
+        channel.notify(t(WORKING_GATE_NOTICES.channel), { color: 'warning' })
         return
       }
       dispatchOverlay({ type: 'close' })

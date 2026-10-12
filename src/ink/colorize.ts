@@ -65,8 +65,14 @@ export const CHALK_CLAMPED_FOR_TMUX = clampChalkLevelForTmux()
 /** Which part of a cell a color applies to: text or background. */
 export type ColorType = 'foreground' | 'background'
 
-const RGB_REGEX = /^rgb\(\s?(\d+),\s?(\d+),\s?(\d+)\s?\)$/
-const ANSI_REGEX = /^ansi256\(\s?(\d+)\s?\)$/
+// Whitespace tolerance must stay a superset of the theme-color validators
+// (`customTheme.isValidThemeColor`, shared by theme files and plugin
+// descriptors): those accept `rgb(34 ,48,95)`, `rgb(34,  48, 95)` and
+// `ansi256(  33)`. A value that passes validation but fails to parse here is
+// not a visible error but a silent no-color (a caret with no fill, an unfilled
+// context-bar segment), so the two must move together.
+const RGB_REGEX = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/
+const ANSI_REGEX = /^ansi256\(\s*(\d+)\s*\)$/
 
 /**
  * Apply a raw color value to a string using chalk.

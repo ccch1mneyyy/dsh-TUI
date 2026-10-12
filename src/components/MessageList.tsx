@@ -11,6 +11,7 @@ import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
 import { AssistantTextLeafRow, ThinkingLeafRow, ToolLeafRow } from './messages/TranscriptLeaves.js'
+import { liveOutputMaxLines, liveOutputRows } from './messages/liveOutputLines.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
 import { JobCard } from './Chat/JobCard.js'
 import { JobGroupHeader } from './Chat/JobGroupHeader.js'
@@ -211,6 +212,7 @@ function signatureParts(
   failureHint: string | undefined,
   displayTextLen: number,
   sessionCwd: string | undefined,
+  fullscreen: boolean,
 ): Array<string | number | boolean> {
   signatureScratch.length = 0
   // Universal height inputs: width reflows every row; kind switches height
@@ -255,6 +257,12 @@ function signatureParts(
         row.folded === true,
         tool?.resultView?.card ?? '',
         row.id === failureHintRowId ? failureHint ?? '' : '',
+        // Live output rows of a running call (omitted header + lines): the
+        // count saturates once the tail fills the card's window, so a
+        // steady stream stops invalidating the cached height.
+        tool?.status === 'running'
+          ? liveOutputRows(tool.liveOutput, tool.liveOutputDropped ?? 0, liveOutputMaxLines(expanded || expandedRows.has(row.id), fullscreen))
+          : 0,
       )
       break
     }
@@ -361,6 +369,7 @@ export function MessageList({
   olderHistory,
   thinkingVisible = true,
   historyPaintEnabled = true,
+  fullscreen = false,
   registerRowRef,
   scrollHandle,
   forceMountRowId,
@@ -433,6 +442,8 @@ export function MessageList({
    * seconds of lex/highlight/layout before first paint).
    */
   historyPaintEnabled?: boolean
+  /** Fullscreen layout: running tool cards show more live output lines. */
+  fullscreen?: boolean
   /** Transcript search: register each row's DOM element for scroll-to-match. */
   registerRowRef?: (rowId: number, el: DOMElement | null) => void
   /** Scroll viewport the list virtualizes against. */
@@ -884,6 +895,7 @@ export function MessageList({
         failureHint,
         revealDisplayLen(row, smoothStreaming),
         sessionCwd,
+        fullscreen,
       )
       const cachedParts = sigs.get(row.id)
       let same = false
@@ -1465,6 +1477,7 @@ export function MessageList({
               rowId={row.id}
               kind={row.kind}
               text={displayText}
+              interruptBackend={row.interruptBackend}
               images={row.images}
               textFull={row.kind === 'reasoning' ? row.text : undefined}
               executionTarget={row.executionTarget}
@@ -1502,6 +1515,9 @@ export function MessageList({
               toolStartedAt={tool?.startedAt}
               toolDurationMs={tool?.durationMs}
               toolSourceFolded={row.folded === true}
+              toolLiveOutput={tool?.liveOutput}
+              toolLiveOutputDropped={tool?.liveOutputDropped}
+              fullscreen={fullscreen}
               turnUsage={row.turnUsage}
               subagent={subagent}
               job={job}
@@ -1539,6 +1555,7 @@ type MemoRowProps = {
   rowId: number
   kind: ChatRow['kind']
   text: string
+  interruptBackend?: string
   images: readonly TranscriptImage[] | undefined
   /** Reasoning rows: the FULL un-revealed text — the live three-line preview
    *  ticker follows the newest arrived content (never the reveal), while the
@@ -1596,6 +1613,12 @@ type MemoRowProps = {
   /** Row-level source fold (window cap dropped full payloads): the expanded
    *  card discloses preview-only instead of passing it off as full text. */
   toolSourceFolded: boolean
+  /** Live output tail of a running call (a string: every new chunk is a
+   *  new value, so only that card's memo misses) and its dropped count. */
+  toolLiveOutput: string | undefined
+  toolLiveOutputDropped: number | undefined
+  /** Fullscreen layout (running cards show more live output lines). */
+  fullscreen: boolean
   /** Turn-summary payload (kind === 'turn-summary'); set-once immutable
    *  ref created at turn.end, so a plain ref compare is complete. */
   turnUsage: TurnUsageSummary | undefined
@@ -1642,6 +1665,7 @@ function TranscriptRow({
   rowId,
   kind,
   text,
+  interruptBackend,
   images,
   textFull,
   executionTarget,
@@ -1680,6 +1704,9 @@ function TranscriptRow({
   toolStartedAt,
   toolDurationMs,
   toolSourceFolded,
+  toolLiveOutput,
+  toolLiveOutputDropped,
+  fullscreen,
   turnUsage,
   subagent,
   job,
@@ -1879,6 +1906,8 @@ function TranscriptRow({
         resultView: toolResultView,
         startedAt: toolStartedAt,
         durationMs: toolDurationMs,
+        ...(toolLiveOutput === undefined ? {} : { liveOutput: toolLiveOutput }),
+        ...(toolLiveOutputDropped === undefined ? {} : { liveOutputDropped: toolLiveOutputDropped }),
       }
       return (
         <Box flexDirection="column" ref={ref}>
@@ -1901,6 +1930,7 @@ function TranscriptRow({
             onPreviewImage={onPreviewImage}
             suppressImageGraphics={suppressImageGraphics}
             sourceFolded={toolSourceFolded}
+            fullscreen={fullscreen}
           />
         </Box>
       )
@@ -1914,7 +1944,7 @@ function TranscriptRow({
     case 'interrupt':
       return (
         <Box marginTop={1} ref={ref}>
-          <TurnInterruptedRow />
+          <TurnInterruptedRow backendLabel={interruptBackend} />
         </Box>
       )
     case 'turn-summary':

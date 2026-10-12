@@ -7,11 +7,13 @@
  *  2. Exhaustiveness is present in source: the shared projector folds
  *     `AgentEvent` in a `switch (event.type)` whose default is a `never`
  *     check, and every translator (`src/dsh-adapter/backend/translate.ts`,
- *     `src/backends/<id>/translate.ts`) carries an exhaustive
+ *     `src/backends/<id>/translate/events.ts` or `translate.ts`) carries an exhaustive
  *     `switch (type)` over `AgentEventType` with a `never` default, so a new
  *     event variant fails `tsc` in each place until it is decided.
  *  3. The DSH translator only emits the event types it declares
  *     (`dshEmits`), over every DSH fixture (live and replay).
+ *  4. Optional vocabulary no shipped translator emits (`tool.output`) is
+ *     declared unused by both translators and folded by the projector.
  *
  * Plain fs + regex for (2): no TypeScript program, like verify:boundary.
  *
@@ -22,6 +24,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { AgentEvent } from '../src/agent/events.js'
 import { DEFAULT_BACKEND_ID, formatSessionRef, parseSessionRef, sameSessionRef, type AgentSessionRef } from '../src/agent/refs.js'
+import { claudeEmits } from '../src/backends/claude/translate/events.js'
 import { createDshTranslator, dshEmits } from '../src/dsh-adapter/backend/translate.js'
 import { FIXTURE_DIR, buildFixtures } from './fixtures/dsh/generate.js'
 
@@ -69,10 +72,12 @@ const translators = ['dsh-adapter/backend/translate.ts']
 const backendsDir = join(SRC, 'backends')
 if (existsSync(backendsDir)) {
   for (const entry of readdirSync(backendsDir)) {
-    if (existsSync(join(backendsDir, entry, 'translate.ts'))) {
-      translators.push(entry === 'claude' ? 'backends/claude/translate/events.ts' : `backends/${entry}/translate.ts`)
-    }
+    // A backend's decision table: translate/events.ts (claude, codex), else
+    // its single-file translate.ts.
+    if (existsSync(join(backendsDir, entry, 'translate', 'events.ts'))) translators.push(`backends/${entry}/translate/events.ts`)
+    else if (existsSync(join(backendsDir, entry, 'translate.ts'))) translators.push(`backends/${entry}/translate.ts`)
   }
+  check('every backend with a translator is checked (claude, codex)', ['claude', 'codex'].every(id => translators.includes(`backends/${id}/translate/events.ts`)))
 }
 for (const path of translators) {
   const source = read(path)
@@ -99,5 +104,16 @@ for (const fixture of buildFixtures()) {
 }
 const undeclared = [...emitted].filter(type => !dshEmits(type))
 check('DSH fixtures emit only declared event types', undeclared.length === 0, undeclared.join(','))
+
+// ── 4. optional events no shipped translator emits ──────────────────────
+// `tool.output` (live tool output, N4) is optional vocabulary: the shared
+// projector folds it, but neither the DSH nor the Claude translator emits
+// it (their output arrives with the settled result), so DSH/Claude
+// transcripts cannot change through it.
+for (const type of ['tool.output', 'usage', 'context.usage'] as const) {
+  check(`${type}: optional and unused by the DSH translator`, !dshEmits(type) && !emitted.has(type))
+  check(`${type}: optional and unused by the Claude translator`, !claudeEmits(type))
+}
+check('the projector folds tool.output (a case of its own)', /case 'tool\.output':\s*applyToolOutput\(event\)/u.test(projection))
 
 console.log(`\nverify:agent-domain OK (${passed} checks)`)

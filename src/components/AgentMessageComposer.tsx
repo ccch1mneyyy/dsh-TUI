@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Text, useInput } from '../ui.js'
+import { Box, Text, InputCaret, useInput } from '../ui.js'
 import { t } from '../i18n.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { agentMessageStateColor, agentMessageStateText, agentMessageViaText } from './messages/TranscriptLeaves.js'
@@ -219,6 +219,7 @@ export function AgentMessageComposer({ target, control, messages, focused, onFoc
   }, { isActive: focused && keyHandlerRef === undefined })
 
   const viaLabel = agentMessageViaText(control.via)
+  const afterCaret = nextCodePoint(text, caret)
   return (
     <Box flexDirection="column">
       <Box flexDirection="row">
@@ -234,8 +235,8 @@ export function AgentMessageComposer({ target, control, messages, focused, onFoc
       )}
       <Box flexDirection="row">
         <Text>{text.slice(0, caret)}</Text>
-        <Text inverse>{' '}</Text>
-        <Text>{text.slice(caret)}</Text>
+        <InputCaret active={focused}>{text.slice(caret, afterCaret) || ' '}</InputCaret>
+        <Text>{text.slice(afterCaret)}</Text>
       </Box>
       {notice !== null && (
         <Text color={notice.failure === true ? 'error' : undefined}>{`${t(notice.key)}${notice.failure === true ? ` · ${t('agent-message-draft-retained')}` : ''}`}</Text>

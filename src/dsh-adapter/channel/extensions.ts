@@ -74,6 +74,7 @@ import { createSkillCatalog } from './skill-catalog.js'
 import { createSubagentProjection, type SubagentsServiceView } from './subagent-projection.js'
 import { readChildTranscriptPage } from './subagent-transcript.js'
 import { DSH_BACKEND_LABEL, type ChannelLaunchOptions } from './state.js'
+import { ensureUpstreamRetry } from './upstream-retry.js'
 import { foldBack } from './transcript.js'
 import type { BackgroundResult, ResumeResult } from './types.js'
 import { createWorkspaceActions } from './workspace-actions.js'
@@ -95,8 +96,9 @@ async function listSessionsSnapshot(ctx: Context): Promise<readonly SessionSumma
 
 /**
  * Attach the DSH specialists to a core whose bound session is a DSH session.
- * Called inside `createChannel`'s construction transaction: a throw here is
- * rolled back by the caller through the core's owner.
+ * Called inside `createChannel`'s construction transaction, or inside the
+ * adoption that binds a placeholder's DSH session (`core.extendOnAdopt`); a
+ * throw fails either. The binding already holds the DSH session.
  */
 export function attachDshExtensions(
   core: CoreChannel,
@@ -116,6 +118,20 @@ export function attachDshExtensions(
     if (native === undefined) throw new Error('dsh-tui: the bound session is not a DSH session')
     return native
   }
+  // Upstream auto-retry seeding (upstream-retry.ts), scoped to the route
+  // the bound session actually uses: the binding feed calls this on every
+  // bind (boot, /model switch, resume). The config gate defaults on,
+  // observational (shadow) compositions never write settings, and the
+  // fire-and-forget promise never blocks a bind.
+  const upstreamRetryAttempted = new Set<string>()
+  const seedUpstreamRetry = (provider: string | undefined): void => {
+    if (options.upstreamRetry === false) return
+    if (adapterRuntime.mode === 'passive-shadow' || adapterRuntime.mode === 'replay-shadow') return
+    if (provider === undefined || provider === '' || upstreamRetryAttempted.has(provider)) return
+    upstreamRetryAttempted.add(provider)
+    void ensureUpstreamRetry(ctx, notify, [provider])
+  }
+
   // Detached work (/fork and agent-view dispatch) is owned until a caller
   // explicitly transfers the temporary handle to its destination ledger.
   const createDetachedHandle = createDetachedHandleFactory(owner)
@@ -175,6 +191,7 @@ export function attachDshExtensions(
   // service attachment has no authority after its injected lifetime ends.
   const jobProjection = createJobProjection(() => state, {
     owner, notify: (...args) => notify(...args), rowIds, agent: () => binding.agent, steer: text => channelCommands(state).steer(text),
+    history: () => dshNative().rawHistory(),
   })
 
   // The DSH slash-command registry (optional service): /plan, /goal and
@@ -235,7 +252,7 @@ export function attachDshExtensions(
     configurable: true,
     enumerable: true,
     get(): boolean {
-      const settings = ctx.get('settings') as
+      const settings = (options.settingsService ?? ctx.get('settings')) as
         | { describe(options?: { redactSecrets?: boolean }): readonly { ns: string; value: unknown }[] }
         | undefined
       if (settings === undefined) return false
@@ -389,6 +406,9 @@ export function attachDshExtensions(
       state.emit()
     },
     commandDescriptions: name => commandTrees?.descriptions(name),
+    // A skill gesture typed mid-turn stays immediate (steer at the next step
+    // boundary) instead of degrading into a turn-end followup (issue #1072).
+    working: () => state.working,
     // Attached-context pass-through: the skill catalog never loses the
     // FIFO/decision fence.
     deliverUserText: (text, placement, attach) => core.input.deliverUserText(text, placement, [], attach),
@@ -412,6 +432,7 @@ export function attachDshExtensions(
   const sessionMetadataActions = createSessionMetadataActions(ctx, {
     owner,
     binding,
+    cwd: () => state.cwd,
     provider: () => state.provider,
     model: () => state.model,
     emit: () => state.emit(),
@@ -527,8 +548,10 @@ export function attachDshExtensions(
     modeActions,
     projector,
     subagents: subagentProjection,
+    jobs: jobProjection,
     agentView,
     messageObserver,
+    seedUpstreamRetry,
     retireAttachment: core.input.retireAttachment,
   })
 

@@ -1,6 +1,7 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import { t } from '../../i18n.js'
+import { WORKING_GATE_NOTICES } from '../../commands.js'
 import { dispatchTuiDecision, normalizeCancelDecision } from '../extension-events.js'
 import { serviceForAgent } from '../presets.js'
 import type { ChannelOwner } from './owner.js'
@@ -60,7 +61,7 @@ export function createManualCompaction(
       return
     }
     if (state.working) {
-      deps.notify(t('compact-while-working'), { color: 'warning' })
+      deps.notify(t(WORKING_GATE_NOTICES.compact), { color: 'warning' })
       return
     }
     const controller = new AbortController()
@@ -92,7 +93,7 @@ export function createManualCompaction(
           return
         }
         if (state.working) {
-          deps.notify(t('compact-while-working'), { color: 'warning' })
+          deps.notify(t(WORKING_GATE_NOTICES.compact), { color: 'warning' })
           return
         }
         // The status row replaces the old 4s toast: a real compaction runs for

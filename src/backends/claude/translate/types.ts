@@ -1,6 +1,6 @@
 /** Input, attempt and activity types carried by the Claude translator. */
 import type { ImageRef, PendingItem, UsageDelta } from '../../../agent/events.js'
-import type { TodoPanelItem } from '../../../adapter/ports/channel-view.js'
+import type { TodoPanelItem } from '../../../agent/index.js'
 
 /** How confirmed user inputs become user rows. */
 export type ClaudeUserRows =

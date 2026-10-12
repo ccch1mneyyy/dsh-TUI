@@ -265,8 +265,7 @@ export function registerBuiltinPanels(): void {
     order: 15,
     source: 'builtin',
     mountPolicy: 'enabled',
-    // opt-in（在 dsh-tui.sidePanel.panels 里加入才出现，同 companion）。
-    defaultEnabled: false,
+    defaultEnabled: true,
     minColumns: 24,
     capabilities: { scroll: true },
     component: InfoPanel,
@@ -278,7 +277,7 @@ export function registerBuiltinPanels(): void {
     order: 25,
     source: 'builtin',
     mountPolicy: 'enabled',
-    defaultEnabled: false,
+    defaultEnabled: true,
     minColumns: 28,
     // 整屏对应物 = Ctrl+T / /trace 的 TrajectoryScene（分屏时那两者也走本面板）。
     capabilities: { scroll: true, fullscreen: true },
@@ -291,7 +290,7 @@ export function registerBuiltinPanels(): void {
     order: 35,
     source: 'builtin',
     mountPolicy: 'enabled',
-    defaultEnabled: false,
+    defaultEnabled: true,
     minColumns: 28,
     // 整屏对应物 = /home 的工作区主页（分屏时 /home 也走本面板）。
     capabilities: { scroll: true, fullscreen: true },
@@ -304,8 +303,7 @@ export function registerBuiltinPanels(): void {
     order: 22,
     source: 'builtin',
     mountPolicy: 'enabled',
-    // opt-in（/btw 快路径在未启用时回退浮层，启用后路由进面板）。
-    defaultEnabled: false,
+    defaultEnabled: true,
     minColumns: 28,
     // 整屏对应物 = ⤢ 的 BtwThreadScene（Esc 返回侧栏，不清 thread/draft）。
     capabilities: { scroll: true, sendToChat: true, fullscreen: true },
@@ -318,8 +316,7 @@ export function registerBuiltinPanels(): void {
     order: 40,
     source: 'builtin',
     mountPolicy: 'enabled',
-    // 默认不启用（在 dsh-tui.sidePanel.panels 里显式加入才出现）。
-    defaultEnabled: false,
+    defaultEnabled: true,
     component: CompanionPanel,
   }, 'builtin')
 }

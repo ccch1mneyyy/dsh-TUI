@@ -539,7 +539,38 @@ check1('decision permission map is immutable',
       && !descriptor.contracts.some(contract => contract.kind === 'LocalStorage')
       && !descriptor.contracts.some(contract => contract.kind === 'MessageObserver')
       && !descriptor.contracts.some(contract => contract.kind === 'DecisionEvents')
-      && descriptor.contracts.length === 0)
+      // The one contract a bare host anchor *does* serve (W-2): the backend
+      // admission machine is process-wide, so `Backend` is published without any
+      // sibling row — and nothing else is.
+      && descriptor.contracts.length === 1
+      && descriptor.contracts[0]?.kind === 'Backend',
+      JSON.stringify(descriptor?.contracts.map(contract => `${contract.apiVersion}#${contract.kind}`)))
+  }
+
+  // The same fact on the path the *default* boot takes (W-2). `legacy` is
+  // `DEFAULT_ADAPTER_MODE`, and its descriptor is built from the mounted topology
+  // rather than from Kernel lifecycles — so the `Backend` coordinate has to be
+  // declared there too, or the whole wiring would only exist under
+  // `DSH_TUI_ADAPTER_MODE=new` and a third-party bundle would still be refused on
+  // a normal launch. Read-only: the backend admission machine is a process-wide
+  // module registry, and the probe registers nothing.
+  {
+    const previousMode = process.env.DSH_TUI_ADAPTER_MODE
+    process.env.DSH_TUI_ADAPTER_MODE = 'legacy'
+    try {
+      const legacyCtx = new Context()
+      legacyCtx.logger.warn = () => undefined
+      legacyCtx.plugin(pluginHostRow.TuiPluginHostRuntime)
+      await sleep(30)
+      const descriptor = legacyCtx.get('tuiPluginHost')?.hostDescriptor()
+      check1('legacy (default mode) host also declares the Backend contract, and only it',
+        descriptor !== undefined
+        && descriptor.contracts.length === 1
+        && descriptor.contracts[0]?.kind === 'Backend',
+        JSON.stringify(descriptor?.contracts.map(contract => `${contract.apiVersion}#${contract.kind}`)))
+    } finally {
+      process.env.DSH_TUI_ADAPTER_MODE = previousMode
+    }
   }
 
   // Admission must use the same mounted topology as the public

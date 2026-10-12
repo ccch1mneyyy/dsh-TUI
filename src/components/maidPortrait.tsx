@@ -40,6 +40,21 @@ export const CLAUDE_GIRL_ASSETS: PortraitAssets = {
   happy: 'claude-girl-happy.png',
 }
 
+/** 恶魔精灵（codex 品牌，见 `branding.ts`）：用户提供的淡紫像素立绘 ×2
+ * （628×628 透明底，Lanczos 自 1254² 重采样）——常态 = 淡紫恶魔精灵头像，
+ * 点击后切「按下红色按钮的紫月龙裔少女」几秒（与鲸鱼娘/claude 娘同一套
+ * reactMaid 交互）。 */
+export const CODEX_GIRL_ASSETS: PortraitAssets = {
+  dir: 'codex-girl',
+  normal: 'codex-girl.png',
+  happy: 'codex-girl-happy.png',
+}
+
+/** 品牌档 → 立绘资产集（LogoV2 的立绘槽选这一份；deepseek 走鲸鱼娘）。 */
+export function portraitAssetsOf(brand: 'deepseek' | 'claude' | 'codex'): PortraitAssets {
+  return brand === 'claude' ? CLAUDE_GIRL_ASSETS : brand === 'codex' ? CODEX_GIRL_ASSETS : MAID_ASSETS
+}
+
 /** 一台机器上的两张立绘都解好、并补齐到**同一像素画布**上——几何完全一致，
  *  换图时宿主是「擦旧 + 画新」一次写入，不会留残影。 */
 export interface MaidPortraits {

@@ -120,6 +120,7 @@ function Harness(): React.ReactNode {
         focus={sp.focus}
         onActivateChat={sp.focusChat}
         onActivatePanel={sp.focusPanel}
+        onResize={sp.resize}
         side={
           <SidePanelColumn
             width={sp.panelColumns}

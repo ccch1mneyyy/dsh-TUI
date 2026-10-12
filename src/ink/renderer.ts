@@ -27,6 +27,7 @@ export type RenderOptions = {
   /** Whether terminal graphics are active for this paint pass. */
   terminalImages?: boolean
   imageReady?: (placement: TerminalImagePlacement) => boolean
+  imageRasterBytes?: (placement: TerminalImagePlacement) => number
   /**
    * True when rasters paint over the cell grid (Sixel): image-owned cells
    * carry the surface background instead of terminal-default blanks. See
@@ -142,6 +143,7 @@ export default function createRenderer(
         frontFrame.images,
         options.imageReady,
         options.opaqueImageBacking ?? false,
+        options.imageRasterBytes,
       )
     } else {
       output = new Output({
@@ -152,6 +154,7 @@ export default function createRenderer(
         terminalImages: options.terminalImages,
         previousImages: frontFrame.images,
         imageReady: options.imageReady,
+        imageRasterBytes: options.imageRasterBytes,
         opaqueImageBacking: options.opaqueImageBacking ?? false,
       })
     }
@@ -241,11 +244,11 @@ export default function createRenderer(
         // screen), cursor.y = screen.height would trigger log-update's
         // cursor-restore LF at the last row, scrolling one row off the top
         // of the alt buffer and desyncing the diff's cursor model. The
-        // cursor is hidden so its position only matters for diff coords.
+        // This is the diff anchor; ink.tsx separately parks the native caret.
         y: options.altScreen
           ? Math.max(0, Math.min(screen.height, terminalRows) - 1)
           : screen.height,
-        // Hide cursor when there's dynamic output to render (only in TTY mode)
+        // Logical anchor visibility; ink.tsx manages the physical caret.
         visible: !isTTY || screen.height === 0,
       },
     }

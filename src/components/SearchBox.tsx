@@ -1,11 +1,15 @@
 import React, { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import Box from './design-system/ThemedBox.js'
 import Text from './design-system/ThemedText.js'
+import { useTheme } from './design-system/ThemeProvider.js'
+import { cursorGlyphColor, getTheme } from '../theme.js'
+import type { Color } from '../ink/styles.js'
 import type { DOMElement } from '../ink/dom.js'
 import measureElement from '../ink/measure-element.js'
-import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
+import { useDeclaredCursor, useNativeCursor } from '../ink/hooks/use-declared-cursor.js'
 import { useTerminalSize } from '../ink/hooks/use-terminal-size.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import { snapOffImageToken, type ImageTokenSpan } from './composerImageTokens.js'
 
 /**
  * Window a single-line query around the caret so the visible slice fits
@@ -21,7 +25,8 @@ function windowQuery(
   query: string,
   offset: number,
   avail: number,
-): { before: string; at: string; after: string; caretColumn: number } {
+  imageSpans: readonly ImageTokenSpan[],
+): { before: string; at: string; after: string; caretColumn: number; start: number; caret: number } {
   const budget = Math.max(avail, 1)
   let caret = Math.max(0, Math.min(offset, query.length))
   if (
@@ -34,8 +39,10 @@ function windowQuery(
   ) {
     caret-- // mid-surrogate: snap to the emoji's start
   }
+  caret = snapOffImageToken(imageSpans, caret, 'nearest')
   const beforeChars = [...query.slice(0, caret)]
-  const at = caret < query.length ? [...query.slice(caret)][0]! : ' '
+  const tokenAtCaret = imageSpans.find(span => span.start === caret)
+  const at = tokenAtCaret !== undefined ? tokenAtCaret.token : caret < query.length ? [...query.slice(caret)][0]! : ' '
   const atWidth = Math.max(1, stringWidth(at))
   let caretColumn = 0
   for (const ch of beforeChars) caretColumn += stringWidth(ch)
@@ -44,6 +51,10 @@ function windowQuery(
     caretColumn -= stringWidth(beforeChars[start]!)
     start++
   }
+  const before = beforeChars.slice(start).join('')
+  const rawStart = caret - before.length
+  const windowStart = snapOffImageToken(imageSpans, rawStart, 'end')
+  caretColumn -= stringWidth(query.slice(rawStart, windowStart))
   let rest = budget - caretColumn - atWidth
   let after = ''
   for (const ch of [...query.slice(caret + at.length)]) {
@@ -52,16 +63,15 @@ function windowQuery(
     after += ch
     rest -= w
   }
-  return { before: beforeChars.slice(start).join(''), at, after, caretColumn }
+  const end = snapOffImageToken(imageSpans, caret + at.length + after.length, 'start')
+  return { before: query.slice(windowStart, caret), at, after: query.slice(caret + at.length, end), caretColumn, start: windowStart, caret }
 }
 
 /**
- * A single-line search input in a round-bordered box: `⌕ ` prefix, block
- * cursor at `cursorOffset` (inverse cell).
- * When empty and focused, the caret is an inverse block **on the first
- * character of the placeholder** (opencode style, 2026-10 第七版) — it never
- * occupies a cell of its own, so text never shifts; the terminal-painted IME
- * preedit (pinyin) still lands at the declared native cursor next to it.
+ * A single-line search input in a round-bordered box: `⌕ ` prefix and a native
+ * cursor at `cursorOffset`. Static snapshots retain the theme-painted caret.
+ * When empty with a left-aligned placeholder, the caret sits on its first
+ * character; text stays in place and IME preedit uses the same native anchor.
  *
  * The query row is strictly single-line: an overlong query is windowed
  * around the caret (horizontal scroll) instead of wrapping, so the native
@@ -77,7 +87,9 @@ export function SearchBox({
   cursorOffset,
   borderless = false,
   caretBlink = true,
+  declareCursor = true,
   placeholderAlign = 'right',
+  imageSpans = [],
 }: {
   query: string
   placeholder?: string
@@ -87,32 +99,38 @@ export function SearchBox({
   width?: number | string
   cursorOffset?: number
   borderless?: boolean
+  /** Capability-backed image chips, sharing the chat composer's atomic geometry. */
+  imageSpans?: readonly ImageTokenSpan[]
   /**
    * 空输入 + 焦点态那一行里占位文案的对齐（2026-10 落地页第四版新增）：
-   * `right`（缺省，历史行为）贴框右缘；`left` 紧跟 `前缀 + 块状光标` 之后。
+   * `right`（缺省，历史行为）贴框右缘；`left` 紧跟前缀。
    * 共享组件——聊天页/选择器不传此 prop，渲染与从前逐字节一致。
    */
   placeholderAlign?: 'left' | 'right'
   /**
-   * 光标闪烁相位（true = 反显、false = 常规）。落地页传入（约 550ms 一相位）；
-   * 缺省 true 恒反显——其它使用方（选择器搜索等）保持不闪。
-   *
-   * 契约（第七版修订）：光标是**压在当前字符身上的反显块**（对那一个字符
-   * 用 inverse；行尾时对反显空格），绝不另起一格、绝不吃掉字符；闪烁是
-   * **纯样式切换**（inverse ↔ 常规——上一版是 inverse ↔ inverse+dim，dim
-   * 相位在部分终端会把反显块里的字形糊到几乎看不见，看起来像"字消失了"），
-   * 不增删任何字符——无头回归读的是视口纯文本，断言不会随相位抖动。
+   * 无原生光标的呈现环境使用的闪烁相位（仅切换样式，不增删字符）。
+   * TTY 光标的闪烁与动画由终端配置控制。
    */
   caretBlink?: boolean
+  /** Keep the live field styled while another region owns the native caret. */
+  declareCursor?: boolean
 }): React.ReactNode {
+  const [themeName] = useTheme()
+  const nativeCursor = useNativeCursor()
+  const cursorTheme = getTheme(themeName)
+  const cursorColor = cursorTheme.cursor ?? ''
+  const cursorGlyph = cursorGlyphColor(cursorTheme)
+  const caretCell = (text: string, image = false): React.ReactNode => !image && (nativeCursor || !caretBlink)
+    ? <Text>{text}</Text>
+    : cursorColor === ''
+      ? <Text inverse>{text}</Text>
+      : <Text backgroundColor={cursorColor as Color} color={cursorGlyph}>{text}</Text>
   const offset = cursorOffset ?? query.length
   const borderStyle = borderless ? undefined : 'round'
   const borderColor = isFocused ? 'suggestion' : undefined
   const borderDimColor = !isFocused
-  // 空输入的行内光标（第七版重做）：光标压在**占位文本的第一个字符**身上
-  // （对那一个字符 inverse，opencode 式）——绝不自己占一格、绝不把文字往右
-  // 挤。不再拿终端焦点（DECSET 1004 focus 事件）当开关：只要这个输入框是
-  // 本屏的焦点目标，光标就常在（用户原话「光标永远不消失 哪怕焦点没了」）。
+  // Empty left-aligned inputs park on the placeholder's first character;
+  // the terminal owns the cursor's appearance when its window loses focus.
   const inlineCaret = isFocused && query === ''
 
   // Content width of the box in display cells. Measured from yoga after
@@ -124,8 +142,22 @@ export function SearchBox({
   const [measuredWidth, setMeasuredWidth] = useState<number | null>(null)
   const contentWidth = measuredWidth ?? Math.max(8, columns - chrome - 2)
 
-  const prefixWidth = stringWidth(`${prefix} `)
-  const win = windowQuery(query, offset, contentWidth - prefixWidth)
+  const prefixText = prefix === '' ? '' : `${prefix} `
+  const prefixWidth = stringWidth(prefixText)
+  const win = windowQuery(query, offset, contentWidth - prefixWidth, imageSpans)
+  const renderQueryPart = (text: string, start: number): React.ReactNode => {
+    if (imageSpans.length === 0) return <Text>{text}</Text>
+    const pieces: React.ReactNode[] = []
+    let pos = start
+    for (const span of imageSpans) {
+      if (span.start < start || span.end > start + text.length) continue
+      if (pos < span.start) pieces.push(<Text key={`text-${pos}`}>{query.slice(pos, span.start)}</Text>)
+      pieces.push(<Text key={`image-${span.start}`} color="suggestion">{span.token}</Text>)
+      pos = span.end
+    }
+    if (pos < start + text.length) pieces.push(<Text key={`text-${pos}`}>{query.slice(pos, start + text.length)}</Text>)
+    return pieces.length === 0 ? <Text>{text}</Text> : <>{pieces}</>
+  }
 
   // Park the native terminal cursor at the caret so IME preedit (pinyin)
   // renders inline at the input instead of the screen's bottom row (same
@@ -134,7 +166,7 @@ export function SearchBox({
   // reorders/drops glyphs on narrow widths), so the position is computed:
   // border (1) + paddingX (1) per edge when bordered, then the `prefix `
   // run and the windowed before-caret text, all in display cells.
-  const showCaret = isFocused && isTerminalFocused
+  const showCaret = isFocused && (nativeCursor || isTerminalFocused)
   // Clamp into the box's content area: on absurdly narrow layouts the
   // prefix alone can meet or exceed the content width, and the park must
   // never land outside the box's rect.
@@ -144,13 +176,19 @@ export function SearchBox({
   const declarationRef = useDeclaredCursor({
     line: borderless ? 0 : 1,
     column: caretColumn,
-    active: showCaret,
+    active: showCaret && declareCursor,
+    visible: nativeCursor,
   })
   const boxNodeRef = useRef<DOMElement | null>(null)
   const boxRef = useCallback(
     (node: DOMElement | null) => {
       boxNodeRef.current = node
-      declarationRef(node)
+      const cleanup = declarationRef(node)
+      if (node === null) return
+      return () => {
+        if (typeof cleanup === 'function') cleanup()
+        if (boxNodeRef.current === node) boxNodeRef.current = null
+      }
     },
     [declarationRef],
   )
@@ -170,19 +208,18 @@ export function SearchBox({
   let content: React.ReactNode
   if (isFocused) {
     if (query) {
-      // 第七版重做：光标常在（不再依赖终端焦点事件），压在当前字符身上
-      // （对那一个字符 inverse；行尾时反显空格），闪烁相位只在
-      // inverse ↔ 常规之间切样式——字符常在、文字不位移。
+      // Keep the visible text intact; only the painted fallback changes
+      // the caret glyph's style as its blink phase advances.
       content = (
         <>
-          <Text>{win.before}</Text>
-          {caretBlink ? <Text inverse>{win.at}</Text> : <Text>{win.at}</Text>}
-          {win.after !== '' && <Text>{win.after}</Text>}
+          {renderQueryPart(win.before, win.start)}
+          {caretCell(win.at, imageSpans.some(span => span.start === win.caret))}
+          {win.after !== '' && renderQueryPart(win.after, win.caret + win.at.length)}
         </>
       )
     }
   } else {
-    content = query ? <Text>{query}</Text> : <Text>{placeholder}</Text>
+    content = query ? renderQueryPart(query, 0) : <Text>{placeholder}</Text>
   }
 
   return (
@@ -198,22 +235,20 @@ export function SearchBox({
       {inlineCaret ? (
         placeholderAlign === 'left' ? (
           <Box flexDirection="row" width="100%">
-            <Text>{prefix} </Text>
-            {/* 光标压在占位**第一个字符**身上（opencode 式）：对那一个字符
-                inverse，整行不多占一格、文字位置不动；闪烁只切样式。 */}
+            <Text>{prefixText}</Text>
+            {/* An empty placeholder still reserves a blank caret cell
+                so the input row cannot collapse. */}
             <Text dimColor wrap="truncate">
-              {caretBlink
-                ? <Text inverse>{placeholder.slice(0, 1)}</Text>
-                : placeholder.slice(0, 1)}
+              {caretCell(placeholder.slice(0, 1) || ' ')}
               {placeholder.slice(1)}
             </Text>
           </Box>
         ) : (
           <Box flexDirection="row" width="100%">
-            <Text>{prefix} </Text>
-            {/* 右对齐变体（非落地页使用方）：占位钉在右缘，行首没有可压的
-                字符——光标画在光标位那一格（反显空格），同样不挤任何文字。 */}
-            {caretBlink ? <Text inverse> </Text> : <Text> </Text>}
+            <Text>{prefixText}</Text>
+            {/* A right-aligned placeholder leaves a blank caret cell at
+                the input origin. */}
+            {caretCell(' ')}
             <Box flexGrow={1} />
             <Text dimColor wrap="truncate">
               {placeholder}
@@ -222,7 +257,7 @@ export function SearchBox({
         )
       ) : (
         <Text dimColor={!isFocused} wrap="truncate-end">
-          {prefix} {content}
+          {prefixText}{content}
         </Text>
       )}
     </Box>

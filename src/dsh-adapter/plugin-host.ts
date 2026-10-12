@@ -77,6 +77,7 @@ import {
 } from './component-identity.js'
 import { activationContext, activationFiber, assertCallerContext, bindCallerEffect, compositionRoot, concreteService, withHostRootCapability } from './host-access.js'
 import { bindHostGrantStore } from './host-grants.js'
+import { probeBackendAdmission, type BackendAdmissionProbe } from './backend-registry.js'
 import { registerCommandLiveProbe } from '../adapter/kernel/host-probe-access.js'
 
 /** Caller-safe grant facade exposed through `ctx.tuiPluginHost.grants`.
@@ -121,6 +122,11 @@ export interface TuiPluginHost {
   selfCheck(): string[]
   /** Read-only DecisionEvents feature probe (host/driver diagnostics). */
   probeDecisionEvents(): readonly string[]
+  /** Read-only backend admission probe (host/driver diagnostics): whether the
+   *  `Backend` contribution family's admission machine is mounted and answers
+   *  for a third-party declaration. This is the evidence the host descriptor
+   *  publishes `tui.dsh/v1alpha1#Backend` on (W-2). */
+  probeBackendAdmission(): BackendAdmissionProbe
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -173,6 +179,15 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
     return probeDecisionEventFeatures(hostContextFor(this))
   }
 
+  /** Read-only backend admission probe. Read-only and side-effect free: it
+   * exercises the family validator and the host's admission facts on a
+   * synthetic declaration and reports the verdict, so the descriptor never
+   * claims the `Backend` coordinate off a mere mounted service row. */
+  probeBackendAdmission(): BackendAdmissionProbe {
+    this.assertEffect('host.backend.probe')
+    return probeBackendAdmission()
+  }
+
   constructor(ctx: Context) {
     super(ctx, 'tuiPluginHost')
     const runtime = adapterRuntimeFor(ctx)
@@ -215,7 +230,12 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
       // Defer until after the apply() body has mounted storage/observer
       // siblings, so the live refresh observes the complete production
       // topology.
-      setTimeout(() => this.startKernelRuntime(), 0)
+      // An effect of this row's fiber: unloading the row first cancels a start
+      // that has not happened (nothing mounted, nothing to report).
+      ctx.effect(() => {
+        const timer = setTimeout(() => this.startKernelRuntime(), 0)
+        return () => clearTimeout(timer)
+      })
     }
     bindHostGrantStore(concreteService(this), rawGrants)
     // The host row may be mounted without the extensions row or a channel;
@@ -231,8 +251,8 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
   }
 
   /** @internal Start the Kernel after the whole plugin-host row (including
-   * sibling storage/observer services) is mounted. Called from `apply()`; not
-   * part of the public plugin surface. */
+   * sibling storage/observer services) is mounted. Triggered only by the
+   * constructor's deferred effect. */
   startKernelRuntime(): void {
     const state = hostStateFor(this)
     const kernelRuntime = state.kernelRuntime
@@ -376,13 +396,27 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
     const storageMounted = host.get('tuiPluginStorage') !== undefined
     const observerMounted = host.get('tuiMessageObserver') !== undefined
     const decisionEventsMounted = probeDecisionEventFeatures(host).length > 0
-    const topology = `${Number(commandsMounted)}:${Number(storageMounted)}:${Number(observerMounted)}:${Number(decisionEventsMounted)}`
+    // The `Backend` admission machine is a process-wide module registry, not a
+    // sibling row: the legacy topology can read it directly, exactly like the
+    // DecisionEvents guard probe above. Without this the default (legacy) boot
+    // would never publish the coordinate, which is the "declares support, cannot
+    // deliver" state W-2 exists to end. A machine that cannot admit a contribution
+    // is not evidence — and it must not take the descriptor build down with it, so
+    // the refusal is reported the way the neighbouring exclusions are.
+    let backendMounted = false
+    try {
+      backendMounted = probeBackendAdmission().verdict === 'compatible'
+    } catch (error) {
+      host.logger.warn(`dsh-tui: host descriptor: tui.dsh/v1alpha1#Backend excluded — the backend admission machine did not answer (${error instanceof Error ? error.message : String(error)})`)
+    }
+    const topology = `${Number(commandsMounted)}:${Number(storageMounted)}:${Number(observerMounted)}:${Number(decisionEventsMounted)}:${Number(backendMounted)}`
     if (state.descriptorBuild === undefined || state.descriptorTopology !== topology) {
       const supported = HOST_SUPPORTED_CONTRACTS.filter(contract => {
         if (contract.kind === 'Command') return commandsMounted
         if (contract.kind === 'LocalStorage') return storageMounted
         if (contract.kind === 'MessageObserver') return observerMounted
         if (contract.kind === 'DecisionEvents') return decisionEventsMounted
+        if (contract.kind === 'Backend') return backendMounted
         return false
       })
       state.descriptorBuild = buildLegacyHostDescriptor({
@@ -980,8 +1014,4 @@ export function apply(ctx: Context): void {
   // messages.observe (C-042): the grant-gated observation broker the
   // channel publishes mapped session events into.
   ctx.plugin(TuiMessageObserverRuntime)
-  // All sibling services are mounted now; start the kernel live refresh /
-  // driver mount so probes observe the complete production topology.
-  const host = ctx.get('tuiPluginHost') as unknown as TuiPluginHostRuntime | undefined
-  host?.startKernelRuntime()
 }

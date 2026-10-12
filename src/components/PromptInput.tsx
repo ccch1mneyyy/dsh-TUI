@@ -2,19 +2,19 @@ import React from 'react'
 // 粘贴/清洗语义已抽到 utils/inputPaste.ts（方案 B：PromptInput 与 Launchpad 共享；
 // 行为逐字节不变，只是搬了家）。
 import { sanitizeEditableText, sanitizePastedText } from '../utils/inputPaste.js'
-import { constants as fsConstants } from 'node:fs'
-import { open, unlink } from 'node:fs/promises'
+import { unlink } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { t } from '../i18n.js'
-import { kernelDisplayName } from './kernelCatalog.js'
 import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
+import { COMPOSER_IMAGE_TOKEN, imageTokenSpans, imageTokenAround, snapOffImageToken, expandImageTokenRange, type ImageTokenSpan } from './composerImageTokens.js'
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
 import { EffortInputBorder, type InputBorderLabel } from './EffortInputBorder.js'
 import { EffortTierBadge } from './EffortTierBadge.js'
-import { isLightThemeActive } from '../theme.js'
+import { cursorGlyphColor, getTheme } from '../theme.js'
 import { sessionColorHex } from '../terminal-utils/sessionColors.js'
-import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
+import { useDeclaredCursor, useNativeCursor } from '../ink/hooks/use-declared-cursor.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
+import type { Color } from '../ink/styles.js'
 import type { DragEvent } from '../ink/events/drag-event.js'
 import { TerminalWriteContext } from '../ink/useTerminalNotification.js'
 import { setClipboard } from '../ink/termio/osc.js'
@@ -25,7 +25,7 @@ import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 import { draftWordRangeAt, isDraftWordBoundary } from '../utils/draftWordBoundary.js'
 import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
-import { imagePathMediaType, parsePastedImagePath, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
+import { imagePathMediaType, parsePastedImagePath, readBoundedRegularFile, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import { setPromptEditorNode, EditorButton } from './PromptEditor.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
@@ -35,7 +35,7 @@ import type {
   StagedImageHandle,
 } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
-import { isHiddenCommandName, isUnavailableLocalCommand, parseCommandName } from '../commands.js'
+import { isBootSafeCommand, isHiddenCommandName, isUnavailableLocalCommand, parseCommandName, workingHoldOf } from '../commands.js'
 import { appendHistory, HISTORY_LIMIT, historyProjectKey, loadHistoryOldestFirst } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
@@ -225,60 +225,10 @@ const FOLD_MIN_CHARS = 600
 const isBigInput = (text: string): boolean =>
   text.split('\n').length >= FOLD_MIN_LINES || text.length >= FOLD_MIN_CHARS
 
-
-const COMPOSER_IMAGE_TOKEN = /\[Image #\d+\]/gu
-
 /** Format label for one image media type, matching the image preview card's
  *  title (`JPEG`, `PNG`, `WEBP`, `GIF`). */
 const mediaTypeLabel = (mediaType: string): string =>
   mediaType.replace(/^image\//u, '').replace(/\+xml$/u, '').toUpperCase()
-
-/** One `[Image #N]` occurrence: [start, end) offsets into the draft. */
-interface ImageTokenSpan {
-  readonly start: number
-  readonly end: number
-  readonly token: string
-}
-
-/** Every `[Image #N]` in `text`, in order. */
-function imageTokenSpans(text: string): ImageTokenSpan[] {
-  const spans: ImageTokenSpan[] = []
-  for (const match of text.matchAll(COMPOSER_IMAGE_TOKEN)) {
-    const start = match.index ?? 0
-    spans.push({ start, end: start + match[0].length, token: match[0] })
-  }
-  return spans
-}
-
-/** The span whose interior (exclusive of both edges) contains `offset`. */
-function imageTokenAround(spans: readonly ImageTokenSpan[], offset: number): ImageTokenSpan | undefined {
-  return spans.find(span => span.start < offset && offset < span.end)
-}
-
-/**
- * A caret never rests inside a staged token: an offset in a span's interior
- * moves to the edge `prefer` names — `'start'` (the token becomes the caret
- * cluster), `'end'`, or whichever is nearer.
- */
-function snapOffImageToken(
-  spans: readonly ImageTokenSpan[],
-  offset: number,
-  prefer: 'start' | 'end' | 'nearest',
-): number {
-  const span = imageTokenAround(spans, offset)
-  if (span === undefined) return offset
-  if (prefer === 'start') return span.start
-  if (prefer === 'end') return span.end
-  return offset - span.start < span.end - offset ? span.start : span.end
-}
-
-/** Expand a deletion or selection to include every staged token it touches. */
-function expandImageTokenRange(spans: readonly ImageTokenSpan[], start: number, end: number) {
-  return {
-    start: snapOffImageToken(spans, start, 'start'),
-    end: snapOffImageToken(spans, end, 'end'),
-  }
-}
 
 /** Capabilities referenced by `text`, in first occurrence order. A raw token
  * restored from disk/history has no sidecar entry and therefore stays inert. */
@@ -296,32 +246,6 @@ export function composerImageRefsForText(
     if (stageId !== undefined) refs.push({ token, stageId })
   }
   return refs
-}
-
-/** Read one regular file through one descriptor, bounded to `maxBytes + 1`.
- * The extra byte detects a file that grows after fstat; a short read detects
- * shrinkage. This avoids stat(path) → readFile(path)'s path-swap TOCTOU and
- * never allocates from an untrusted size before the profile limit is checked. */
-async function readBoundedRegularFile(path: string, maxBytes: number): Promise<Uint8Array> {
-  // O_NONBLOCK keeps a pasted FIFO/device path from parking the UI before
-  // fstat can reject it; regular-file reads are unchanged.
-  const file = await open(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK)
-  try {
-    const info = await file.stat()
-    if (!info.isFile()) throw new Error(`${basename(path)} is not a regular file`)
-    if (info.size > maxBytes) throw new Error(`image exceeds this profile's per-image size limit`)
-    const data = Buffer.allocUnsafe(info.size + 1)
-    let offset = 0
-    while (offset < data.byteLength) {
-      const { bytesRead } = await file.read(data, offset, data.byteLength - offset, offset)
-      if (bytesRead === 0) break
-      offset += bytesRead
-    }
-    if (offset !== info.size) throw new Error(`${basename(path)} changed while it was being read`)
-    return data.subarray(0, offset)
-  } finally {
-    await file.close()
-  }
 }
 
 /** Index of the word boundary at or before `cursor` (readline alt+b). */
@@ -549,6 +473,13 @@ export interface PromptInputProps {
   /** Keep the draft mounted while another prompt-slot panel owns the UI. */
   suspended?: boolean
   /**
+   * 原生终端光标（IME 预编辑/读屏锚点）的让位：侧栏持有键盘焦点时传
+   * false——主输入框停驻硬件光标会让输入法的临时拼音浮在主聊天框，即使
+   * 按键已经路由进面板。聚焦的面板自己的输入组件（如 btw 的 composer）
+   * 会接管声明。默认 true（无侧栏/焦点在聊天时行为不变）。
+   */
+  cursorParking?: boolean
+  /**
    * Host judgement "this notice needs no toast" — the pet panel says it with
    * its speech bubble instead while it is the active panel. Evaluated during
    * render (not via an effect-written ledger) so toast and bubble swap in
@@ -595,8 +526,8 @@ export interface PromptInputProps {
   /** Double-tap Esc with an empty input: open the rewind picker. */
   onRewindRequest?(): void
   /**
-   * ← on an EMPTY prompt backgrounds this session and
-   * opens the agent view (with text, ← moves the caret as usual).
+   * ← on an EMPTY prompt opens the session manager. DSH backgrounds the
+   * session first; other backends keep it attached. With text, ← moves the caret.
    */
   onBackgroundRequest?(): void
   /**
@@ -609,6 +540,17 @@ export interface PromptInputProps {
    * had before.
    */
   onOpenSessions?(): void
+  /**
+   * 当前内核的**短品牌名**（选择器目录里那一行的 `manifest.shortLabel`，宿主经
+   * Chat 透传）：只用在「这条命令当前后端不支持」的提示里，与内核选择器、落地页
+   * 铭牌同一份来源（P0 D2——界面里不再有 id→名字表）。
+   *
+   * 不复用 `channel.backendCapabilities.backendLabel`：那是**会话后端自己的全名**
+   * （后端 `descriptor.label`，如 "Claude Agent"），而这里是宿主词表给内核起的短名
+   * （"Claude"）；两者在真机上恰好都可用，但短名才是选择器那一屏的用词。缺席 =
+   * 退回原样 backendId（不猜品牌名）。
+   */
+  backendLabel?: string
   /**
    * Background sessions waiting on the user (agent view "needs input" rows
    * excluding this session); the prompt footer shows the
@@ -645,11 +587,11 @@ export interface PromptInputProps {
 /**
  * dsh-TUI prompt input: rounded border box (top+bottom borders
  * only), `❯ ` prompt char (dimmed while a turn is working), the text with a
- * block cursor at the cursor position, and above it the slash-command /
+ * native cursor at the editing position, and above it the slash-command /
  * file-completion suggestion card (SuggestionCard: rounded panel with the
  * selected row behind a `❯` pointer in the theme's `suggestion` color).
  *
- * Empty input: a solid block caret on a blank cell and nothing else — no
+ * Empty input: a caret on a reserved blank cell and nothing else — no
  * placeholder text, so the terminal-painted IME preedit (pinyin) at the
  * parked cursor can never be overlaid on anything.
  *
@@ -676,6 +618,7 @@ export function PromptInput({
   channel,
   toastSuppressed,
   suspended = false,
+  cursorParking = true,
   draftCache,
   helpOpen,
   onToggleHelp,
@@ -686,6 +629,7 @@ export function PromptInput({
   onRewindRequest,
   onBackgroundRequest,
   onOpenSessions,
+  backendLabel,
   backgroundAgentsNeedingInput,
   controllerRef,
   onCaretImage,
@@ -694,6 +638,15 @@ export function PromptInput({
   now = Date.now,
 }: PromptInputProps) {
   const [themeName] = useTheme()
+  const nativeCursor = useNativeCursor()
+  /**
+   * Painted caret fill for static snapshots and atomic image-token focus.
+   * Ordinary TTY editing uses the terminal's own cursor. A legacy palette
+   * may omit `cursor`; normalize that case to the inverse-video fallback.
+   */
+  const cursorTheme = getTheme(themeName)
+  const cursorColor = cursorTheme.cursor ?? ''
+  const cursorGlyph = cursorGlyphColor(cursorTheme)
   // Raw stdout writer for OSC 52 clipboard writes (selection copy) — must
   // bypass the frame pipeline; null outside a mounted Ink App.
   const writeRaw = React.useContext(TerminalWriteContext)
@@ -1293,7 +1246,27 @@ export function PromptInput({
   // snapshot's cherry-pick resurrected the old formula.)
   const helpViewportHeight = Math.max(3, Math.min(terminalRows - 7, 15))
 
-  const suggestions = value.startsWith('/') ? channel.commandCompletions(value) : []
+  // Issue #1072: while a turn runs, the overlay groups the commands that
+  // AFFECT the running conversation (gated / conversation-acting / steering)
+  // below the ones that do not. The partition is a stable reorder and keeps ONE
+  // index space: `suggestions` stays the only list selection, Enter dispatch and
+  // clicks read, and the default selection stays the first normal-region row.
+  // The region is marked by colour only — it costs no display row.
+  const completions = value.startsWith('/') ? channel.commandCompletions(value) : []
+  const holdOf = (commandLine: string): boolean =>
+    workingHoldOf(commandLine, channel.commandList.find(
+      command => command.name === commandLine.replace(/^\//, '').split(/[\t ]/u)[0],
+    )?.skill === true) !== undefined
+  const normalCompletions = channel.working
+    ? completions.filter(completion => !holdOf(completion.commandLine))
+    : completions
+  /** 灰区起始索引；灰区为空时不分区。 */
+  const suggestionsHoldFrom = channel.working && normalCompletions.length < completions.length
+    ? normalCompletions.length
+    : undefined
+  const suggestions = suggestionsHoldFrom === undefined
+    ? completions
+    : [...normalCompletions, ...completions.filter(completion => holdOf(completion.commandLine))]
   const overlayOpen =
     suggestions.length > 0 &&
     !expanded &&
@@ -1929,6 +1902,11 @@ export function PromptInput({
     channel.notify(t('input-interrupt-immediate'), { timeoutMs: 2500 })
   }
 
+  /** The startup phase's refusal (see `ChannelUi.ready`). */
+  const notifyNotReady = (): void => {
+    channel.notify(t('startup-not-ready', { backend: backendLabel ?? channel.backendCapabilities.backendId }), { color: 'warning', timeoutMs: 2500 })
+  }
+
   /**
    * Execute a slash command (built-in, plugin-registered, or hidden) when
    * the input resolves to one: the name parses as the first token so
@@ -1941,6 +1919,12 @@ export function PromptInput({
     if (!text.startsWith('/')) return false
     const parsed = parseCommandName(text)
     if (parsed === undefined) return false
+    // Not ready (`ChannelUi.ready`): only boot-safe commands run; the rest
+    // are refused before dispatch so the draft stays. The one chokepoint.
+    if (channel.ready === false && !isBootSafeCommand(parsed.name)) {
+      notifyNotReady()
+      return true
+    }
     const command = channel.commandList.find(entry => entry.name === parsed.name)
     // A built-in the bound backend does not serve is hidden from the menu and
     // Tab, and a typed one must neither run nor reach the model as text. A
@@ -1948,7 +1932,7 @@ export function PromptInput({
     // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the snapshot
     const capabilities = channel.backendCapabilities as Channel['backendCapabilities'] | undefined
     if (command === undefined && isUnavailableLocalCommand(parsed.name, capabilities)) {
-      channel.notify(t('cmd-unavailable-backend', { cmd: parsed.name, backend: capabilities === undefined ? '' : kernelDisplayName(capabilities.backendId) }), {
+      channel.notify(t('cmd-unavailable-backend', { cmd: parsed.name, backend: capabilities === undefined ? '' : backendLabel ?? capabilities.backendId }), {
         color: 'warning',
         timeoutMs: 4000,
       })
@@ -2027,8 +2011,9 @@ export function PromptInput({
    * The Enter main path, shared by the inline prompt, the expanded
    * editor's Ctrl+Enter, and its Send button:
    * - command menu open → run the SELECTED command (never send `/mo`);
-   * - model working → STEER into the running turn (next step boundary,
-   *   agent continues — the "immediate" send; Codex/pi semantics);
+   * - model working → a KNOWN command is still a command; anything else
+   *   STEERS into the running turn (next step boundary, agent continues —
+   *   the "immediate" send; Codex/pi semantics);
    * - otherwise → submit directly (or run a unique command).
    * Reads valueRef so a key batch (typing + Enter in one stdin read)
    * operates on the text the preceding keys produced.
@@ -2063,6 +2048,12 @@ export function PromptInput({
         return
       }
     }
+    // Not ready: refuse before any path that clears the draft.
+    if (channel.ready === false && value.trim() !== '') {
+      if (tryRunCommand(value)) return
+      notifyNotReady()
+      return
+    }
     // A docked queue (Esc parked it) owns a bare Enter on an EMPTY draft
     // (Claude Code parity: "…or Enter to send them now"). A draft in
     // progress keeps the ordinary submit path and the dock stays parked —
@@ -2073,22 +2064,12 @@ export function PromptInput({
       return
     }
     if (channel.working && value.trim() !== '') {
-      // Immediate-command semantics: /btw and /skills are exempt from
-      // steering — neither command interrupts the running turn. Hidden
-      // UI-only easter eggs (e.g. /deepseek) are also safe to run while
-      // streaming. Every other input keeps the steer behavior so /new
-      // /model etc. stay idle-only.
-      const parsed = value.startsWith('/') ? parseCommandName(value) : undefined
-      if (parsed !== undefined && (
-        ((parsed.name === 'btw' || parsed.name === 'skills')
-          && channel.commandList.some(c => c.name === parsed.name))
-        || isHiddenCommandName(parsed.name)
-        // A built-in the backend lacks is refused here too, never steered in.
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the snapshot
-        || isUnavailableLocalCommand(parsed.name, channel.backendCapabilities as Channel['backendCapabilities'] | undefined)
-      )) {
-        if (tryRunCommand(value)) return
-      }
+      // While a turn is running a KNOWN command is dispatched as a command:
+      // with or without arguments, with the completion overlay open or closed,
+      // from the inline prompt or the fullscreen editor (issue #1072). Each
+      // command's own gate decides whether it can run mid-turn and says why;
+      // steering is reserved for input that is NOT a command.
+      if (tryRunCommand(value)) return
       steerSend(value)
       return
     }
@@ -2666,6 +2647,8 @@ export function PromptInput({
         return
       }
       const line = (value + input).trim()
+      // Not ready: the line becomes the draft first, so a refused command keeps it.
+      if (channel.ready === false) setInput(line)
       if (line.startsWith('/')) {
         const matches = channel.commandCompletions(line)
         if (matches.length === 1) {
@@ -2673,7 +2656,12 @@ export function PromptInput({
           return
         }
       }
-      if (!tryRunCommand(line)) submitText(line)
+      if (tryRunCommand(line)) return
+      if (channel.ready === false) {
+        notifyNotReady()
+        return
+      }
+      submitText(line)
       return
     }
     if (key.return && isMod(key)) {
@@ -3013,8 +3001,8 @@ export function PromptInput({
       return
     }
     if (key.leftArrow) {
-      // ← on an EMPTY prompt backgrounds this session
-      // and opens the agent view; with text it moves the caret as usual.
+      // ← on an EMPTY prompt opens the session manager; the caller decides
+      // whether the backend can background the session first.
       // (The command/file overlays both imply non-empty text, so no extra
       // gate beyond the help menu is needed.)
       if (value.length === 0 && !helpOpen) {
@@ -3638,26 +3626,25 @@ export function PromptInput({
     : visualLineRanges(value, inputWidth)
 
   /**
-   * Inverse runs for one rendered row, shared by the inline prompt and the
-   * expanded editor: the selection's intersection (if any) and the caret
-   * cluster on the caret's row. Both render <Text inverse>; overlapping
-   * intervals merge so a caret inside the selection stays one continuous
-   * highlight. The caret row inverts the WHOLE cluster at the caret column
-   * (solid block) — [col, next boundary) covers a surrogate pair or ZWJ
-   * emoji as one glyph; at the text end it shows a blank inverse cell like
-   * the empty-input caret (appended after everything, so a selection
-   * ending there cannot swallow it).
+   * Highlight runs for one rendered row, shared by the inline prompt and the
+   * expanded editor: selection and image-token focus stay painted. A native
+   * caret leaves ordinary glyphs unchanged; snapshots paint the whole caret
+   * grapheme using the theme fill or inverse video. The trailing blank is
+   * retained in both modes so the terminal has a cell for an end-of-line caret.
    */
   const rowHighlightPieces = (
     text: string,
     absoluteLine: number,
-  ): Array<{ text: string; inverse: boolean; chip: boolean }> => {
+  ): Array<{ text: string; inverse: boolean; chip: boolean; caret: boolean }> => {
     const [rowStart] = lineRanges[absoluteLine] ?? [0, 0]
     // Per-character style: 0 plain, 1 chip (a staged token), 2 inverse
-    // (selection or caret cluster). Inverse wins over chip.
+    // (selection, or caret when the palette has no `cursor`), 3 caret.
+    // Later fills win: chip < selection < caret.
     const PLAIN = 0
     const CHIP = 1
     const INVERSE = 2
+    const CARET = 3
+    const caretKind = cursorColor === '' ? INVERSE : CARET
     const kinds = new Uint8Array(text.length)
     const fill = (lo: number, hi: number, kind: number): void => {
       for (let i = Math.max(lo, 0); i < Math.min(hi, text.length); i++) kinds[i] = kind
@@ -3675,21 +3662,39 @@ export function PromptInput({
       const clusterEnd = tokenAtCaret !== undefined
         ? Math.min(tokenAtCaret.end - rowStart, text.length)
         : nextGraphemeBoundary(graphemeBoundaries(text), col)
-      if (clusterEnd > col) fill(col, clusterEnd, INVERSE)
-      else endBlankCaret = col === text.length
+      if (clusterEnd > col) {
+        if (!nativeCursor || tokenAtCaret !== undefined) fill(col, clusterEnd, caretKind)
+      } else endBlankCaret = col === text.length
     }
-    const pieces: Array<{ text: string; inverse: boolean; chip: boolean }> = []
+    const pieces: Array<{ text: string; inverse: boolean; chip: boolean; caret: boolean }> = []
     let pos = 0
     while (pos < text.length) {
       const kind = kinds[pos]!
       let end = pos + 1
       while (end < text.length && kinds[end] === kind) end++
-      pieces.push({ text: text.slice(pos, end), inverse: kind === INVERSE, chip: kind === CHIP })
+      pieces.push({
+        text: text.slice(pos, end),
+        inverse: kind === INVERSE,
+        chip: kind === CHIP,
+        caret: kind === CARET,
+      })
       pos = end
     }
-    if (endBlankCaret) pieces.push({ text: ' ', inverse: true, chip: false })
+    if (endBlankCaret) {
+      pieces.push({ text: ' ', inverse: !nativeCursor && caretKind === INVERSE, chip: false, caret: !nativeCursor && caretKind === CARET })
+    }
     return pieces
   }
+
+  /**
+   * One caret cell: the palette's `cursor` fill with the glyph in whichever
+   * palette ink contrasts with it, or the inverse-video block it replaces when
+   * the palette predates the key.
+   */
+  const caretCell = (key: React.Key, text: string): React.ReactNode =>
+    cursorColor === ''
+      ? <Text key={key} inverse>{text}</Text>
+      : <Text key={key} backgroundColor={cursorColor as Color} color={cursorGlyph}>{text}</Text>
 
   const rendered = visibleLines.map((line, index) => {
     const absoluteLine = windowStart + index
@@ -3722,7 +3727,9 @@ export function PromptInput({
       <Text key={absoluteLine} wrap="truncate-end">
         {prefix}
         {pieces.length === 0 ? ' ' : pieces.map((piece, pieceIndex) =>
-          piece.inverse ? (
+          piece.caret ? (
+            caretCell(pieceIndex, piece.text)
+          ) : piece.inverse ? (
             <Text key={pieceIndex} inverse>
               {piece.text}
             </Text>
@@ -3775,7 +3782,9 @@ export function PromptInput({
               {`${gutterLabel} │ `}
             </Text>
             {pieces.map((piece, pieceIndex) =>
-              piece.inverse ? (
+              piece.caret ? (
+                caretCell(pieceIndex, piece.text)
+              ) : piece.inverse ? (
                 <Text key={pieceIndex} inverse>
                   {piece.text}
                 </Text>
@@ -3851,19 +3860,15 @@ export function PromptInput({
     // (padding + gutter included), so those columns ride along and the
     // clamp grows with them.
     //
-    // The declared column is relative to the VALUE BOX, and `caretVisualCol`
-    // is already measured in that box's cell space: the text box IS the text
-    // run, so nothing that renders before it — the session entry, the `❯ `
-    // glyph, the fold prefix — shifts a cell inside it. Adding any of those
-    // back double-counts them and parks the hardware cursor to the RIGHT of
-    // the inverted caret cell (a 2-column miss shows up as a displaced IME
-    // preedit target). Only the expanded editor declares against a wider box
-    // (gutter + padding), so only that branch adds columns.
+    // Session entry and `❯ ` sit outside the value box. The inline fold
+    // prefix is inside its first row; the expanded editor instead includes
+    // a gutter and padding. Add only the columns inside the declared node.
     column: Math.min(
-      caretVisualCol + (expanded ? editorGutterCols + 1 : 0),
+      caretVisualCol + (expanded ? editorGutterCols + 1 : caretVisualLine === 0 ? prefixCols : 0),
       expanded ? editorGutterCols + 1 + inputWidth : inputWidth,
     ),
-    active: !suspended && !selectionActive,
+    active: cursorParking && !suspended && !selectionActive && caretVisualLine >= windowStart && caretVisualLine < windowStart + visibleLines.length,
+    visible: nativeCursor,
   })
 
   /**
@@ -4167,8 +4172,8 @@ export function PromptInput({
   // ── 全屏草稿编辑节点 ────────────────────────────────────────────────
   // 每次渲染构造新鲜闭包（value/caret/handlers），经 module store 发布给
   // Chat 根部末尾的 PromptEditorLayer（树序最后 → 盖住全部后绘兄弟）。
-  // useInsertionEffect 发布：sink 的同步重渲染发生在 layout 阶段之前，
-  // useDeclaredCursor（layout effect）读到的新 ref 已指向编辑区 Box。
+  // useInsertionEffect 发布：sink 经 store 独立提交，useDeclaredCursor
+  // 在 layout effect 与 ref 挂载时声明，编辑区稍后挂载也能接管光标。
   // 点击/拖拽坐标以内容区为原点（localCol 去掉行号槽宽度）。
   const editorNode = editorVisible ? (
     <Box
@@ -4383,6 +4388,7 @@ export function PromptInput({
             columns={columns}
             query={value}
             accent={promptAccent}
+            holdFrom={suggestionsHoldFrom}
             // 点击行 = 运行该命令（与 Enter 同路径）
             onPick={(index) => {
               const command = suggestions[index]
@@ -4483,7 +4489,6 @@ export function PromptInput({
         effort={channel.reasoningEffort}
         levels={channel.effortLevels}
         columns={columns}
-        onLight={isLightThemeActive(themeName)}
         idleColor={promptAccent}
         topRightLabel={topRightLabel}
       >
@@ -4533,11 +4538,11 @@ export function PromptInput({
             onDragEnd={handleDragEnd}
           >
             {value.length === 0 ? (
-              // Solid block caret on a BLANK cell: the terminal paints the
+              // Reserve a BLANK caret cell: the terminal paints the
               // IME preedit (pinyin) at the physical cursor, which is parked
               // right here, so nothing else may occupy this cell.
               <>
-                <Text inverse> </Text>
+                {nativeCursor ? <Text>{' '}</Text> : caretCell('empty', ' ')}
                 {/* 三幕点焰第二幕：空输入行居中短暂浮现档名大写（纯文
                     本流自带偏移空格——不引入嵌套 Box，行数恒定；有文字
                     时不显示）。3 = 行内 `❯ `（2 列）+ 空输入块光标（1
@@ -4545,7 +4550,6 @@ export function PromptInput({
                 <EffortTierBadge
                   effort={channel.reasoningEffort}
                   levels={channel.effortLevels}
-                  onLight={isLightThemeActive(themeName)}
                   columns={columns}
                   leadingColumns={3 + homeButtonCols}
                 />

@@ -131,17 +131,23 @@ export function contextPressureUsedTokens(view: ContextPressureView): number | u
  * @param projected - Cached `contextPressure` value, `undefined` without a meter.
  * @param sample - Last settled request's billed usage (the fallback numerator).
  * @param requestWindow - `request/context` capacity (the fallback denominator).
+ * @param backendUsage - Backend-measured occupancy; preferred over billed usage
+ * when DSH's projection has no reading.
  * @returns the reading, or `undefined` when neither path knows anything.
  */
 export function resolveContextOccupancy(
   projected: ContextPressureView | undefined,
   sample: { input: number; cacheRead: number; cacheWrite: number } | undefined,
   requestWindow: number | undefined,
+  backendUsage?: { readonly used: number; readonly max?: number },
 ): ContextOccupancy | undefined {
   const contextWindow = projected?.contextWindow ?? requestWindow
   const projectedUsed = projected === undefined ? undefined : contextPressureUsedTokens(projected)
   if (projectedUsed !== undefined) {
     return { usedTokens: projectedUsed, contextWindow, source: 'projection' }
+  }
+  if (backendUsage !== undefined) {
+    return { usedTokens: backendUsage.used, contextWindow: backendUsage.max ?? contextWindow, source: 'backend' }
   }
   if (sample === undefined) return undefined
   return {

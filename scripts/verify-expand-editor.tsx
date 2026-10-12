@@ -52,6 +52,7 @@ type Harness = {
   screenHas: (s: string) => boolean
   findText: (s: string) => { col: number; row: number } | null
   inverseAt: (col: number, row: number) => boolean
+  caretAt: (col: number, row: number) => boolean
   press: (col: number, row: number) => void
   motion: (col: number, row: number) => void
   release: (col: number, row: number) => void
@@ -107,6 +108,8 @@ function makeHarness(cols: number, rows: number): Harness {
   }
   const inverseAt = (col: number, row: number): boolean =>
     buf().getLine(buf().baseY + row)?.getCell(col)?.isInverse() ?? false
+  const caretAt = (col: number, row: number): boolean =>
+    buf().cursorX === col && buf().cursorY === row
   // SGR 坐标 1-indexed（与 verify-input-selection 同款）。
   const press = (c: number, r: number) => stdin.write(`\x1b[<0;${c + 1};${r + 1}M`)
   const motion = (c: number, r: number) => stdin.write(`\x1b[<32;${c + 1};${r + 1}M`)
@@ -123,6 +126,7 @@ function makeHarness(cols: number, rows: number): Harness {
     screenHas,
     findText,
     inverseAt,
+    caretAt,
     press,
     motion,
     release,
@@ -133,7 +137,7 @@ function makeHarness(cols: number, rows: number): Harness {
 const COLS = 80
 const ROWS = 24
 const h = makeHarness(COLS, ROWS)
-const { stdin, screenHas, findText, inverseAt, press, motion, release, click } = h
+const { stdin, screenHas, findText, inverseAt, caretAt, press, motion, release, click } = h
 
 let submitted: string[] = []
 const channel = {
@@ -286,8 +290,8 @@ try {
   if (t6) {
     click(t6.col + 3, t6.row)
     check(
-      'A6 点击定位 caret（d 反显）',
-      await settled(() => inverseAt(t6.col + 3, t6.row) && !inverseAt(t6.col + 5, t6.row)),
+      'A6 点击定位原生 caret（d 格，文本保持常规样式）',
+      await settled(() => caretAt(t6.col + 3, t6.row) && !inverseAt(t6.col + 3, t6.row)),
     )
   }
 

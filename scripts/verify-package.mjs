@@ -69,6 +69,12 @@ for (const path of packed) {
 if ([...packed].some(path => path.startsWith('src/'))) {
   throw new Error('npm package unexpectedly contains TypeScript sources')
 }
+// The vendored Codex protocol types are compile-time only (their emitted
+// files are empty modules plus ~10 MB of declarations): package.json
+// `files` excludes them, and no runtime module imports them.
+if ([...packed].some(path => path.startsWith('lib/types/backends/codex/protocol/generated/'))) {
+  throw new Error('npm package contains the generated Codex protocol types (keep the `files` exclusion)')
+}
 if ([...packed].some(path => path.startsWith('skills/') || path.startsWith('.agents/skills/'))) {
   throw new Error('npm package unexpectedly contains developer skills')
 }

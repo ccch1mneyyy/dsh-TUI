@@ -11,6 +11,8 @@ import type { ProviderSetupHost, OAuthProviderStatus, OAuthSetupHost, SettingsHo
 export interface BackendAuthHost {
   /** Report status, present OAuth, then reconnect after sign-in or sign-out. */
   login(present: (oauth: OAuthSetupHost, provider: string) => Promise<'added' | 'updated' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'>): Promise<void>
+  /** Remove only this backend's host OAuth credential, never its native login. */
+  logout?(): Promise<boolean>
 }
 
 /** Relay profile management for the bound backend session. */
@@ -24,6 +26,16 @@ export interface BackendChannelsHost {
 }
 export interface BackendModesHost { snapshot(): { modes: readonly BackendModeOption[]; currentIndex: number }; set(id: string): Promise<boolean> }
 export interface BackendMcpHost { reconnect(name: string): Promise<boolean>; toggle(name: string, enabled: boolean): Promise<boolean> }
+/** The bound session's typed `goals` capability (`/goal` on a non-DSH
+ *  session): each call resolves true once the backend took the change
+ *  (the goal itself arrives as `goal.change`), false after a reported
+ *  failure. */
+export interface BackendGoalsHost {
+  set(objective: string, options?: { readonly tokenBudget?: number }): Promise<boolean>
+  pause(): Promise<boolean>
+  resume(): Promise<boolean>
+  clear(): Promise<boolean>
+}
 
 /**
  * The public channel surface a screen renders: the full transcript and live
@@ -35,6 +47,16 @@ export interface BackendMcpHost { reconnect(name: string): Promise<boolean>; tog
 export interface ChannelUi {
   /** Monotonic version — bump on every mutation so screens can re-render. */
   readonly version: number
+  /**
+   * Whether a live session stands behind this channel. `false` only while
+   * the startup session is still opening or after that open failed: typing
+   * is accepted, but the composer refuses to send and only the purely local
+   * commands run (`isBootSafeCommand`).
+   */
+  readonly ready: boolean
+  /** Why the startup session failed to open, while it stays unopened (the
+   *  placeholder is still bound); cleared once a session is adopted. */
+  readonly startupFailure: string | undefined
   readonly rows: readonly ChatRow[]
   /** Live editor selection from the IDE channel (undefined = no IDE / no
    *  selection / link dropped). Protocol-2 pushes carry the editor buffer's
@@ -542,8 +564,10 @@ export interface ChannelUi {
    *  slider; empty `efforts` after notifying when unsupported/unavailable.
    *  `levelsFallback` is true when the ladder is the CLI-standard
    *  compatibility offer (the model row declares no tiers of its own) —
-   *  the slider marks it as such instead of implying the model's list. */
-  listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined; levelsFallback?: true }>
+   *  the slider marks it as such instead of implying the model's list.
+   *  With a route, previews that model for `/model` without changing live
+   *  state or emitting unsupported/single-tier notifications. */
+  listEfforts(route?: { provider: string; model: string }): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined; levelsFallback?: true }>
   /** Set one effort level by id (validated against the adapter list);
    *  false + a notify when the id is not offered. Persists like the old
    *  Shift+Tab cycle (~/.dsh-tui/effort.json). */
@@ -563,6 +587,11 @@ export interface ChannelUi {
   backendChannels(): BackendChannelsHost | undefined
   backendModes(): BackendModesHost | undefined
   backendMcp(): BackendMcpHost | undefined
+  /** Backend-owned `/init`; DSH keeps its synchronous initWorkspace path. */
+  backendInit(): { run(): Promise<boolean> } | undefined
+  /** `/goal` on a session with the typed `goals` capability; undefined
+   *  otherwise (DSH's /goal is its command registry row). */
+  backendGoals(): BackendGoalsHost | undefined
   /** Read the official permission preset roster and current identity. */
   permissionPresets(): PermissionPresetSnapshot
   /**

@@ -15,9 +15,10 @@ type Props = {
 }
 
 /**
- * User prompt bubble: `❯ text` in bold userPromptLabel gold with no background
- * fill (Kimi Code style: the user turn gets a distinct bold tint so it reads
- * apart from assistant text; only selection mode paints a highlight).
+ * User prompt bubble: `❯ text` in bold userPromptLabel tint with no background
+ * fill (Kimi Code style: the user turn gets a distinct bold tint — the
+ * kernel-rotated brand colour of the active theme — so it reads apart from
+ * assistant text; only selection mode paints a highlight).
  */
 export function UserPromptMessage({
   text,

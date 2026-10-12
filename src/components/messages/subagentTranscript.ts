@@ -156,6 +156,8 @@ export interface ReadyTranscript {
   readonly parentAgentId: string | null
   readonly hasOlder: boolean
   readonly skippedFromStart: number
+  /** Native opaque paging cursor, when the source does not expose a count. */
+  readonly sourceCursor?: string
   readonly loadingOlder: boolean
   readonly messagesFrom: number
   readonly orphanResults: ReadonlyMap<string, ToolResultEvent>
@@ -168,7 +170,7 @@ export function foldNewestPage(agentId: string, page: SubagentTranscriptView, me
   const messagesFrom = foldTranscriptLeaves(page.events, leaves, messages, { olderPagesRemain: page.hasOlder, orphans })
   // The newest page can itself repeat one anchor (text, tool, text of one
   // message): its rows carry unique render keys from the start.
-  return { status: 'ready', agentId, leaves: uniqueRenderKeys(leaves), parentAgentId: page.parentAgentId, hasOlder: page.hasOlder, skippedFromStart: page.skippedFromStart, loadingOlder: false, messagesFrom, orphanResults: orphans }
+  return { status: 'ready', agentId, leaves: uniqueRenderKeys(leaves), parentAgentId: page.parentAgentId, hasOlder: page.hasOlder, skippedFromStart: page.skippedFromStart, ...(page.sourceCursor === undefined ? {} : { sourceCursor: page.sourceCursor }), loadingOlder: false, messagesFrom, orphanResults: orphans }
 }
 
 /** One older page folded in front of a loaded transcript: its agent
@@ -187,7 +189,8 @@ export function foldOlderPage(current: ReadyTranscript, page: SubagentTranscript
     carried.delete(leaf.tool.callId)
   }
   for (const [callId, result] of orphans) carried.set(callId, result)
-  return { ...current, leaves: prependOlderLeaves(fresh, current.leaves), hasOlder: page.hasOlder, skippedFromStart: page.skippedFromStart, loadingOlder: false, messagesFrom, orphanResults: carried }
+  const { sourceCursor: previousCursor, ...previous } = current
+  return { ...previous, leaves: prependOlderLeaves(fresh, current.leaves), hasOlder: page.hasOlder, skippedFromStart: page.skippedFromStart, ...(page.sourceCursor === undefined ? {} : { sourceCursor: page.sourceCursor }), loadingOlder: false, messagesFrom, orphanResults: carried }
 }
 
 /** One load-older window (messages; matches the backend's newest page). */
@@ -341,11 +344,11 @@ export function useSubagentTranscript(
     const load = loaderRef.current
     if (transcript.status !== 'ready' || !transcript.hasOlder || transcript.loadingOlder || load === undefined) return
     const requestedFor = transcript
-    const count = Math.min(TRANSCRIPT_OLDER_CHUNK, requestedFor.skippedFromStart)
+    const count = requestedFor.sourceCursor === undefined ? Math.min(TRANSCRIPT_OLDER_CHUNK, requestedFor.skippedFromStart) : TRANSCRIPT_OLDER_CHUNK
     setTranscript(prev => prev === requestedFor ? { ...prev, loadingOlder: true } : prev)
     const current = (prev: TranscriptState): prev is ReadyTranscript =>
-      prev.status === 'ready' && prev.agentId === requestedFor.agentId && prev.skippedFromStart === requestedFor.skippedFromStart
-    load(requestedFor.agentId, { count, skipFromStart: requestedFor.skippedFromStart }).then(older => {
+      prev.status === 'ready' && prev.agentId === requestedFor.agentId && prev.skippedFromStart === requestedFor.skippedFromStart && prev.sourceCursor === requestedFor.sourceCursor
+    load(requestedFor.agentId, { count, skipFromStart: requestedFor.skippedFromStart, ...(requestedFor.sourceCursor === undefined ? {} : { sourceCursor: requestedFor.sourceCursor }) }).then(older => {
       setTranscript(prev => {
         if (!current(prev)) return prev
         if (older === null) return { ...prev, loadingOlder: false }

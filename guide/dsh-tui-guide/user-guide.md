@@ -41,7 +41,7 @@ dsh-tui
    **跳过不记账**（下次启动还会问），最后一步要在**键位卡**上按 `Enter` 才算"完成"并写入记账文件
    （焦点落在命令卡上时 `Enter` 是"试一下"）。之后随时可用 `/setup` 重跑。
 2. **落地页**（**普通启动**的第一屏：没带 `--resume`、没指定工作区、也没带首句提示词；
-   `DSH_TUI_NO_LAUNCHPAD=1` 可整体跳过）：像素鲸鱼顶栏（`✦ dsh-TUI` 版本号、
+   可在 /settings 用 `launchpad` 关掉（默认开，重启生效），`DSH_TUI_NO_LAUNCHPAD=1` 可整体跳过）：像素鲸鱼顶栏（`✦ dsh-TUI` 版本号、
    `DEEPSEEK / HARNESS` 大字、当前模型与 effort、工作目录，及一行**启动提示**；
    这一屏的头部**直接定格**——开场动画留给进入对话后的转录区顶部），
    下面是一个**真输入框**（第一句话在这里打，**回车直接发送**）与框下一行**参数行**
@@ -83,13 +83,15 @@ dsh-tui
 
 | 键 | 功能 |
 |---|---|
-| `Enter` | 空闲=发送；**模型工作时=steer**（注入下一步边界，不中断）；菜单打开=确认选中项 |
+| `Enter` | 空闲=发送；**已知 `/` 命令（可带参数）=执行该命令**（回合运行中由命令自己的门禁裁决）；模型工作时=steer（注入下一步边界，不中断）；菜单打开=确认选中项 |
 | `Tab` | 补全 `/` 命令或 `@` 文件；**模型工作时=follow-up**（排入当前回合之后） |
 | `Ctrl+Enter`（⌘Enter） | 打断当前回合并立即发送输入 |
 | `Shift+Enter` / `Ctrl+J` | 换行（`Option+Enter` 是 mac Terminal.app 的兜底） |
 | `Alt+Up` | 把最后一条未处理消息取回输入框编辑（不中断回合） |
 | `Esc`（工作 + 有 pending） | 中断回合并立即重投 pending 消息 |
 | 工作中的 `/btw …` | Enter 直接执行（侧问永不打断主回合） |
+
+回合运行中的 `/` 浮窗按「对当前对话的影响」分区：不影响的命令在上（原样式），会被门禁拦下 / 会打断或替换对话 / 会 steer 的沉到下方、整行变灰（`subtle`，不额外插标题行）。灰区不阻止使用：选中执行后该门禁的门禁、该 steer 的 steer。回合运行中只有两种输入会加塞：不构成命令的普通文本，以及**直接调用技能**的手势（`/技能名 …`，浮窗里同样按「会 steer」沉到灰区）。
 
 ### 2.2 中断 / 退出 / 系统
 
@@ -150,7 +152,7 @@ dsh-tui
 
 | 操作 | 功能 |
 |---|---|
-| 左键拖拽 | 选文本，**松开即复制**（OSC 52 + 系统剪贴板工具兜底），自动取消选区 |
+| 左键拖拽 | 选文本，**松开即复制**（OSC 52 + 系统剪贴板工具兜底），复制后保留选区；重新拖选会替换现有选区 |
 | 双击 / 三击 | 选词 / 选行，即选即复制 |
 | 滚轮 | 滚动消息列表（±3 行/格）；**有文本选区时随内容平移选区** |
 | 输入框内 | 拖拽 / Shift+click / 双击建立选区；`Backspace`/`Delete` 删选区、打字替换、`←/→` 坍缩、`Esc` 仅清选区、`Ctrl+C` 复制选区 |
@@ -249,15 +251,17 @@ dsh-tui
   `z` 或 `Alt+Z` 缩放 · `+`/`-` 调宽（`+` 加宽面板，步长 4 列） · `↑`/`↓`/`PgUp`/`PgDn` 交给活动面板（jobs 用它选择与滚动）；
   面板没吃下的键不会再落到聊天，但 `Ctrl+C`/`Ctrl+D`/`Ctrl+L` 等 Ctrl 组合照旧作用于聊天。
 - **鼠标**：点聊天栏把焦点给聊天，点右栏把焦点给面板；点标签栏上的标签直接切到那个面板（悬停会高亮），
-  点右端的 `⤢` 把当前面板放大成整屏；右栏不参与拖拽选字。
-- **面板**：`todo`（Goals/Todos，分栏时从输入框上方迁到这里）、`jobs`（后台任务，点转录里的任务卡
+  点右端的 `⤢` 把当前面板放大成整屏。悬停中缝会提亮，按住鼠标左键左右拖拽即可实时调宽：
+  向左加宽侧栏、向右缩窄，聊天列至少 64 列、侧栏至少 28 列；拖拽会退出 zoom，保留键盘焦点，
+  宽度在当前会话内保留。聊天内起拖只选聊天文字，右栏内起拖可选右栏文字。
+- **面板**：全部 8 个内置面板默认启用，可在 `sidePanel.panels` 调整。`todo`（Goals/Todos，分栏时从输入框上方迁到这里）、`jobs`（后台任务，点转录里的任务卡
   会直接定位到该任务）、`agents`（子代理 Dashboard 与详情：Enter 进详情、Esc 逐级返回）、`companion`
-   （宠物，默认不启用——在 `sidePanel.panels` 加入 `companion` 开启：跟随会话状态换心情动画，点击
+   （宠物：跟随会话状态换心情动画，点击
    比爱心、Enter 戳一戳；皮肤 `dsh-tui.companion.skin` 可选 deepy（默认，非官方粉丝作品 deepy
    小鲸鱼）或 whale）、`info`（信息栏：模型 / 思考深度 / 工作模式 / 权限 / 上下文占用 / 缓存命中 /
   Token / TPS / 消耗 / 工作目录 / 会话标题与 ID）、`trajectory`（会话轨迹：唤醒带 + 账本 + 检视器，
   ↑/↓ 选择、Enter 展开、Tab 切热点视图；←/→ 恒归侧栏切面板，Tab 才是切视图）、`workspace`
-  （工作目录/工作区总览，Enter 打开整屏工作区主页）。
+  （工作目录/工作区总览，Enter 打开整屏工作区主页）、`btw`（追问线程，可从 `/btw` 进入）。
 - **宠物（companion）细节**：宠物锚在面板**底部**，上方是状态区（心情 · 子代理/会话计数 · 当前动作）。
   互动：点它左半/右半会被戳（poke-left/right）、短窗口连点三次是挠痒（tickle）、**按住拖动它就跟着
   指针在整个面板里走（松手弹回底部）**、鼠标悬停它会看向指针；Enter 也算戳一戳。后台任务完成、已打断
@@ -276,7 +280,7 @@ dsh-tui
 | `/panel toggle` | 真开 / 真关（关闭时焦点回聊天） |
 | `/panel focus` | 打开并聚焦右栏 |
 | `/panel zoom` | 打开并缩放当前面板 |
-| `/panel <id>` | 打开指定面板：`todo` / `info` / `trajectory` / `jobs` / `agents` / `workspace` / `companion`（补全列出已启用的 id） |
+| `/panel <id>` | 打开指定面板：`todo` / `info` / `trajectory` / `jobs` / `agents` / `workspace` / `btw` / `companion`（补全列出已启用的 id） |
 
 - 原本只能整屏的视图现在也能进侧栏：分屏开着且对应面板已启用时，`Ctrl+T` / `/trace` 打开轨迹面板、
   `/home` 打开工作区面板；面板栏右端的 `⤢` 再把它们放回整屏（`⤢` 是鼠标入口，键盘等价物就是各自的
@@ -288,7 +292,7 @@ dsh-tui
 
 ## 3. 命令全集
 
-命令菜单 = 内置命令（58 条，含别名） + DSH 注册表命令（`/plan` `/goal` 等） + 技能目录
+命令菜单 = 内置命令（含别名） + DSH 注册表命令（`/plan` `/goal` 等） + 技能目录
 （仅补全，`/help` 菜单隐藏）。`/lang` 可切换中英文界面与命令描述。
 
 ### 3.1 会话
@@ -296,12 +300,13 @@ dsh-tui
 | 命令 | 参数 | 作用 |
 |---|---|---|
 | `/new` | 无 | 新开会话（无二次确认；旧会话可 `/resume` 恢复） |
-| `/resume` | 无 | 打开**会话管理界面**（工作区栏 + 会话栏、实时筛选、固定常用、跨工作区）：切换会话只是**停放**，正在跑的回合不中断 |
+| `/resume` | 无 | 打开**会话管理界面**（工作区栏 + 会话栏、实时筛选、固定常用、跨工作区）：切换会话只是**停放**，旧会话转后台继续跑，正在跑的回合不中断（与 `/tree` 同类：浏览与切换都不打断当前回合；仅 Claude 后端例外，回合运行中切换会被拒绝） |
 | `/home` / `/agentview` / `/bg` | 无 | 同一个会话管理界面（`/home`=工作区视角 · `/agentview`=托管会话状态 · `/bg`=转后台并打开，别名 `/background`） |
 | `/tree` | 无 | 会话分叉树：悬停预览、点击回退 / 分叉 / 切换分支 |
 | `/fork` | 无 | 把当前会话复制成可恢复的副本（原会话不受影响） |
 | `/restart` | 无 | 重启进程并恢复本会话（回合运行中会被拒绝，先 `Ctrl+C`） |
-| `/kernel` | 无 | 内核选择器：在 DSH 与实验性的 Claude 后端之间切换，记住选择并重启进入新会话（回合运行中会被拒绝）；见 [Claude 后端](claude-backend.md) |
+| `/kernel` | 无 | 内核选择器：在 DSH、Codex 与实验性的 Claude 后端之间切换，记住选择并重启进入新会话（回合运行中会被拒绝）；见 [Claude 后端](claude-backend.md) |
+| `/dsh` / `/codex` / `/claude` | 无 | 直接选择对应内核，检查与重启流程同 `/kernel`；选择当前内核不重启，回合运行中不能切换，未安装 Claude 时进入安装向导 |
 | `/rename` | `<新名称>` | 重命名当前会话（无参时显示当前标题与用法） |
 | `/recap` | 无 | 最近活动摘要（一行）+ 建议标题；面板内 `a` 键或点击一键应用标题。设置 `dsh-tui.recapOnOpen`（默认开）开启时，打开/恢复会话自动在底部显示一条分隔线 + `回顾：` 摘要行，悬停可查看操作、点击展开，发送新消息后自动消失 |
 | `/workspace` | `resume` / `rename <名称>` / `open <路径或URI>` | 管理工作区；`open` 支持绝对路径、file URI、插件 scheme |
@@ -310,7 +315,7 @@ dsh-tui
 | `/export` | 无 | 导出会话为 Markdown 到工作目录 |
 | `/btw` | `<问题>` | 侧问：单轮、无工具、不打断主回合、不写历史 |
 | `/trace` | 无 | 打开轨迹场景（同 `Ctrl+T`） |
-| `/rewind` | 无 | 回退选择器（同空输入双击 Esc 的时间回溯） |
+| `/rewind` | 无 | 回退选择器（同空输入双击 Esc 的时间回溯）；**回合运行中会先取消当前回合**再回溯 |
 | `/exit`（别名 `/quit` `/q`） | 无 | 退出 dsh-tui |
 
 ### 3.2 状态与诊断
@@ -335,7 +340,7 @@ dsh-tui
 
 | 命令 | 参数 | 作用 |
 |---|---|---|
-| `/channel` | 无 | 中转渠道档案（仅 Claude 后端），见 [交互与命令](interaction.md#渠道档案channel仅-claude) |
+| `/channel` | 无 | 中转渠道档案（仅 Claude 后端）；**回合运行中导入 / 新建 / 管理，以及需要重启进程的切换会被拒绝**（选择器本身仍可打开），见 [交互与命令](interaction.md#渠道档案channel仅-claude) |
 | `/model` | 无 | 模型选择器；**切换 = fork 会话续聊**（历史保留、仅换路由；还没有人说过话的会话不记分支，保留首个 prompt 的自动标题），选择持久化到 `~/.dsh-tui/model.json` |
 | `/effort` | `status` / `<id>` | 推理强度：无参滑杆（`←/→` 实时调整）；`status` 当前档位；`<id>` 直接设定。持久化 `~/.dsh-tui/effort.json`；新会话起始档看 /settings 的 `effortDefault`（§5.3） |
 | `/thinking` | 无 | 扩展思考显示开关（流式时思考逐条展开） |
@@ -400,7 +405,9 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 | 退出 | `/exit`（或 `/quit` `/q`） | 空闲 `Ctrl+C` 双击或 `Ctrl+D` 双击也可退出；工作中中断迟迟不收敛时再按 `Ctrl+C`/`Ctrl+D` 强制退出 |
 
 命令行恢复：`dsh-tui --resume`（最近会话）/ `dsh-tui --resume <id>`（指定会话）。
-`-c` / `--continue` 等价。
+`-c` / `--continue` 等价。启动恢复只针对**本次启动所选的后端**：该后端没有上次会话，
+或派生出的目标属于别的后端时，启动器明确报错并以退出码 1 收束，不静默冷启动、不新建
+会话（安全模式的「重试正常启动」降级为告警 + 冷启动，见 [README](../README_ZH.md)）。
 
 ### 4.2 时间回溯 rewind（双击 Esc）
 
@@ -415,7 +422,7 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 ### 4.3 消息投递语义（模型工作中）
 
 键位见 §2.1：
-- `Enter` = **steer**（注入下一步边界，不中断）
+- `Enter` = 已知 `/` 命令（可带参数）按命令执行（回合运行中由该命令自己的门禁裁决）；其余文本 **steer**（注入下一步边界，不中断）
 - `Tab` = **follow-up**（排到回合后）
 - `Ctrl+Enter` = **interrupt**（打断并发送）
 - `Alt+Up` 取回最后一条未处理消息
@@ -435,7 +442,9 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 ### 4.6 模型切换与预设
 
 - `/model`：选择器。**切换 = fork 会话续聊**（历史保留、仅换路由，旧会话留在 `/resume`）；
-  持久化 `~/.dsh-tui/model.json`。
+  持久化 `~/.dsh-tui/model.json`，下次启动直接沿用它（cordis.yml/profile 中的
+  `provider`/`model` 只是首次启动的部署默认值）。
+- DSH 的顶部标签以「最近使用」开头，再列各提供商，`Tab` / `Shift+Tab` 切换提供商；Codex 与 Claude 直接显示模型目录，不显示这些标签。所有后端均用 `↑/↓` 选模型、`←/→` 调推理等级、`Enter` 一并应用、`Esc` 取消草稿，支持点击可用的标签、模型、档位与选择/取消提示，以及滚轮移动模型焦点。点击推理档位会立即应用当前聚焦模型与该强度，并关闭选择器。
 - 回合运行中切换会被拒绝。
 - `/preset` 可选：`standard`（默认全功能）、`ptc`、`minimal`（内核「极简模式」：只暴露一个持久 shell 工具，无 compaction、无计划模式；也因此没有压缩、工具结果不剪枝——长会话可能撞上下文上限，`/compact` 与问卷不可用，Help 与 `/` 补全会标注，进入该预设时提示一次）、
   `cordis`、`liangshen`（梁神模式）。
@@ -543,6 +552,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 |---|---|
 | lang | 界面语言 zh/en（DSH_TUI_LANG 钉死时不可改） |
 | fullscreen | 全屏模式（默认开）；保存后用 `/restart` 生效 |
+| launchpad | 启动页（落地页，默认开）：普通启动先落启动页输入第一句话；关闭后直接进入聊天页（带 `--resume` 等恢复目标的启动不受影响，仍直接进会话）。保存后用 `/restart` 生效 |
 | minimal | 极简界面 Minimal UI（默认关）：隐藏开屏头部、emoji 状态符与装饰性配色，底栏只留模型与目录；代码高亮与工具配色保留。**这是界面开关**，对模型能力没有任何影响——别和 `/preset` 的内核「极简模式」预设搞混 |
 | terminalImages | 终端图片预览（默认开，需终端支持）；保存后用 `/restart` 生效。关闭后只显示文字信息并跳过预览解码，不影响向模型发送图片 |
 | imageBacking | 图片底色（默认 `transparent`，与上一条同在**图表与图片**主题下）：聊天照片/插图背后垫什么。透明：只画图片自己的像素，抗锯齿边缘和透明圆角透出终端底色或壁纸；终端底色：先合成到终端背景色，柔和边缘更平滑。立即生效 |
@@ -569,8 +579,8 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | expandEditor | 全屏草稿编辑（默认开）：输入行尾 `⛶` 或 `Ctrl+Shift+E` 展开成整屏编辑器；`Ctrl+Enter` 发送、`Esc` 收起（草稿还在）；关掉后入口不显示 |
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 
-**effortDefault**：模型没有该档时自动就近降级并弹提示；优先级 settings 用户层 > cordis `effort` >
-上次 `/effort`（effort.json）> 模型默认。
+**effortDefault**：模型没有该档时自动就近降级并弹提示；优先级 settings 用户层 > 上次 `/effort`
+（effort.json，即上次实际运行的档位）> cordis `effort`（部署默认值）> 模型默认。
 
 **scrollGutter**：scrollbar 轨道可直接拖；`Shift`/`Alt`/`Ctrl`+拖动仍是文字选择。
 
@@ -616,10 +626,10 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
 
 | 项 | 命令 | 说明 |
 |---|---|---|
-| 模型 | `/model` | 选择器；**切换 = fork 会话续聊**（历史保留、仅换路由）；持久化 `~/.dsh-tui/model.json`，重启与 `/new` 沿用。从没选过的话，用内置默认模型（当前为 `deepseek-flash`） |
-| 推理强度 | `/effort` | 滑杆（←/→ 实时）或 `/effort <id>`；`/effort status` 看当前；新会话默认档在 /settings → 默认推理强度 |
+| 模型 | `/model` | 选择器；**切换 = fork 会话续聊**（历史保留、仅换路由）；持久化 `~/.dsh-tui/model.json`，重启与 `/new` 沿用——它**优先于** cordis.yml/profile 里写的 `provider`/`model`（后者只是首次启动的部署默认值）。从没选过的话，用配置值，再没有才用 Harness 默认（当前为 `deepseek-flash`） |
+| 推理强度 | `/effort` | 滑杆（←/→ 实时）或 `/effort <id>`；`/effort status` 看当前；持久化 `~/.dsh-tui/effort.json` 并被下一次启动沿用（优先于 cordis.yml 的 `effort`），新会话默认档在 /settings → 默认推理强度 |
 | Agent 预设 | `/preset` | `standard` / `ptc`（旧 0.1.1 名 `code`）/ `minimal` / `cordis` / **梁神模式 `liangshen`**；**已开始会话不可切换** |
-| 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
+| 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi` / `pink-day` / `pink-night` / `pink-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
 | 自定义主题 | 手动 | `~/.dsh-tui/themes/<名>.json`，`{base, colors}` 格式，选中即热切换；命名为 `auto` 会被内置遮蔽 |
 | 语言 | `/lang` | `en` / `zh` 热切换；优先级 `DSH_TUI_LANG` > profile 配置（旧版 settings.yaml 用户层 > cordis.yml）> 持久化 |
 | 状态行动画 | `/activity` | 选择器或 `/activity frames <名>`；默认 `moon8`，`random` 随机 |
@@ -651,7 +661,7 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
 
 **效率**
 
-4. 模型工作中三种投递：`Enter` 注入下一步、`Tab` 排队、`Ctrl+Enter` 打断并发送。
+4. 模型工作中三种投递：`Enter` 注入下一步（已知 `/` 命令除外，按命令执行）、`Tab` 排队、`Ctrl+Enter` 打断并发送。
 5. `Alt+Up` 取回最后一条未处理消息改完重发，不用重打。
 6. 想快速问又不打断主回合、不留历史：`/btw <问题>`。
 7. 打错了想重来：**空输入双击 `Esc` 时间回溯**（或 `/rewind`），改完重发。

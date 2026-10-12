@@ -25,6 +25,7 @@ import { join } from 'node:path'
 import {
   getTheme,
   AUTO_THEME_NAME,
+  isBuiltInThemeName,
   isThemeColorKey,
   normalizeThemeKey,
   isRetiredThemeKey,
@@ -34,7 +35,7 @@ import {
 import { DATA_DIR } from './utils/paths.js'
 
 /** The base palettes a user theme may overlay. */
-export const THEME_BASE_NAMES = ['light', 'dark', 'dark-ansi', 'claude-dark', 'claude-paper'] as const
+export const THEME_BASE_NAMES = ['light', 'dark', 'dark-ansi', 'claude-dark', 'claude-paper', 'codex-lavender', 'codex-paper'] as const
 export type ThemeBase = (typeof THEME_BASE_NAMES)[number]
 
 /** The directory user theme files live in (~/.dsh-tui/themes). */
@@ -309,14 +310,12 @@ function indexCustomThemeNames(): void {
 }
 
 /**
- * Whether a name selects a usable theme: a built-in palette, the `auto`
- * pseudo-theme, or a valid user theme file. Used for DSH_TUI_THEME /
- * persisted-preference validation and the runtime /theme switch.
- * @param name - Candidate theme name.
- * @returns True when the theme resolves.
+ * Availability from this module's static view: built-ins, `auto`, a valid user
+ * theme file. Runtime (plugin) themes belong to theme.isThemeAvailable(); the
+ * callers here are the static verification scripts.
  */
 export function isThemeAvailable(name: string): boolean {
-  if (name === AUTO_THEME_NAME || isThemeBase(name)) return true
+  if (name === AUTO_THEME_NAME || isBuiltInThemeName(name)) return true
   return resolveCustomTheme(name) !== undefined
 }
 

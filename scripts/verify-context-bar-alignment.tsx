@@ -10,14 +10,17 @@
  * 它最右侧带背景色的格就是 bar 的右缘；其下一行的最右非空格是状态行的
  * 右缘。两者都必须落在内容区右缘（第 `columns - 2` 格，0 起）。
  * 宽度扫描与终端宽度无关地断言等号——这正是 #922 报告里失配的形状。
+ * 占用回归：inline/fullscreen 与窄宽终端下逐格测量填充，文本估算偏大、
+ * 偏小或缺失均不得改变已用/空余边界；ANSI 与 JSX 两条路径必须一致。
  *
  * Run: node --import tsx/esm scripts/verify-context-bar-alignment.tsx
  */
 process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_LANG = 'en'
 
 import type { Terminal } from '@xterm/headless'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { StatusLine }, { settled }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, ThemeProvider, AlternateScreen }, { StatusLine }, { settled }, metrics] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -25,6 +28,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Stat
     import('../src/ui.js'),
     import('../src/screens/StatusLine.js'),
     import('./lib/term-test.mjs'),
+    import('../src/screens/StatusMetrics.js'),
   ])
 const instances = (await import('../src/ink/instances.js')).default
 
@@ -83,10 +87,15 @@ function makeHarness(cols: number, rows: number) {
   return { term, stdout, stdin: new FakeStdin() }
 }
 
-async function mountAt(cols: number, rows: number) {
+async function mountAt(cols: number, rows: number, channel = makeChannel(), fullscreen = false) {
   const harness = makeHarness(cols, rows)
+  const footer = React.createElement(StatusLine, { channel: channel as never })
   const instance = await render(
-    React.createElement(StatusLine, { channel: makeChannel() as never }),
+    React.createElement(
+      ThemeProvider,
+      { theme: 'dark' },
+      fullscreen ? React.createElement(AlternateScreen, null, footer) : footer,
+    ),
     {
       stdout: harness.stdout as never,
       stdin: harness.stdin as never,
@@ -177,5 +186,198 @@ for (const cols of WIDTHS) {
   }
 }
 
+// ── 空余段配色：浅色判定看调色板，不看主题名 ─────────────────────────────
+// 浅色主题的名字不必叫 `light`（用户主题、插件主题都可能）；按名字比较会让
+// 它拿到深色空余段（#2E3440 深蓝灰），在浅色终端上是肉眼可见的瑕疵。这里用
+// 一份浅色墨的运行时调色板当探针：它不是内置 `light` 的身份，只能靠亮度判定。
+const DARK_FREE_FILL = (0x2e << 16) | (0x34 << 8) | 0x40
+const LIGHT_FREE_FILL = (0xe8 << 16) | (0xe8 << 8) | 0xe8
+const hex = (value: number): string => `#${value.toString(16).padStart(6, '0')}`
+
+/** Occupied cells exclude the footer's known free-segment fill. */
+function barGeometry(term: Terminal, y: number): { painted: number; used: number } {
+  let painted = 0
+  let used = 0
+  for (let x = 0; x < term.cols; x++) {
+    const cell = cellAt(term, y, x)
+    if (cell === undefined || cell.isBgDefault()) continue
+    painted++
+    if (cell.getBgColor() !== DARK_FREE_FILL) used++
+  }
+  return { painted, used }
+}
+
+const ESTIMATES = { system: 15_000, prompt: 15_000, assistant: 15_000, thinking: 15_000, tools: 15_000 }
+const EMPTY_ESTIMATES = { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }
+const OCCUPANCY_CASES = [
+  { name: 'overestimate', used: 25_000, segments: ESTIMATES },
+  { name: 'underestimate', used: 25_000, segments: { system: 1, prompt: 1, assistant: 1, thinking: 1, tools: 1 } },
+  { name: 'unclassified', used: 25_000, segments: EMPTY_ESTIMATES },
+  { name: 'zero', used: 0, segments: ESTIMATES },
+  { name: 'tiny', used: 1, segments: ESTIMATES },
+  { name: 'full', used: 100_000, segments: ESTIMATES },
+  { name: 'overflow', used: 125_000, segments: ESTIMATES },
+]
+for (const fullscreen of [false, true]) {
+  for (const cols of [16, 40, 120]) {
+    for (const sample of OCCUPANCY_CASES) {
+      const channel = {
+        ...makeChannel(),
+        contextOccupancy: { source: 'backend', usedTokens: sample.used, contextWindow: 100_000 },
+        contextSegments: sample.segments,
+      }
+      const { harness, instance } = await mountAt(cols, 30, channel, fullscreen)
+      const label = `${fullscreen ? 'fullscreen' : 'inline'}@${cols} ${sample.name}`
+      try {
+        await settled(() => findBarRow(harness.term) >= 0)
+        const y = findBarRow(harness.term)
+        const geometry = barGeometry(harness.term, y)
+        const width = cols - 2
+        const exactUsed = Math.min(1, sample.used / 100_000) * width
+        check(label + ' 填充比例跟随后端占用，误差不超过半格',
+          geometry.painted === width && Math.abs(geometry.used - exactUsed) <= 0.5,
+          `used=${geometry.used}/${geometry.painted} expected=${exactUsed}/${width}`)
+        if (sample.used === 25_000) {
+          check(label + ' 读数仍为 25.0%',
+            harness.term.buffer.active.getLine(y)?.translateToString(true).includes('25.0%') === true)
+        }
+        const ansiTerm = new XTerm({ cols: width, rows: 2, allowProposedApi: true })
+        try {
+          await new Promise<void>(resolve => ansiTerm.write(
+            metrics.renderContextBar(sample.segments, sample.used, 100_000, width, {
+              freeFill: '#2E3440', freeText: '#8D95A6',
+            }),
+            resolve,
+          ))
+          const ansi = barGeometry(ansiTerm, 0)
+          check(label + ' ANSI 与 JSX 的填充宽度相同',
+            ansi.painted === geometry.painted && ansi.used === geometry.used)
+        } finally {
+          ansiTerm.dispose()
+        }
+      } finally {
+        instance.unmount()
+        instances.delete(process.stdout)
+        harness.term.dispose()
+      }
+    }
+  }
+}
+const unclassified = metrics.contextBarBreakdown(EMPTY_ESTIMATES, 25_000, 100_000, 120)
+check('无分类的悬停明细给实测已用量，不虚构内容类别',
+  unclassified.entries.map(entry => entry.key).join(',') === 'used,free'
+  && unclassified.entries[0]?.label === 'used 25k')
+const zero = metrics.contextBarBreakdown(ESTIMATES, 0, 100_000, 120)
+check('零占用的悬停明细不显示旧分类估算',
+  zero.entries.length === 1 && zero.entries[0]?.key === 'free')
+
+/** 该主题下 bar 行的背景填充色**段**，按列顺序、相邻同色合并。 */
+async function barFills(theme: string): Promise<number[]> {
+  const harness = makeHarness(120, 30)
+  const instance = await render(
+    React.createElement(
+      ThemeProvider,
+      { theme },
+      React.createElement(StatusLine, { channel: makeChannel() as never }),
+    ),
+    {
+      stdout: harness.stdout as never,
+      stdin: harness.stdin as never,
+      stderr: harness.stdout as never,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  for (const value of instances.values()) instances.set(process.stdout, value)
+  try {
+    await settled(() => findBarRow(harness.term) >= 0)
+    const barY = findBarRow(harness.term)
+    const fills: number[] = []
+    if (barY >= 0) {
+      for (let x = 0; x < harness.term.cols; x++) {
+        const cell = cellAt(harness.term, barY, x)
+        if (cell === undefined || cell.isBgDefault()) continue
+        const fill = cell.getBgColor()
+        // 段与段的先后就是条上的渲染顺序：只按集合比对会漏掉「两段映射颠倒」。
+        if (fills[fills.length - 1] !== fill) fills.push(fill)
+      }
+    }
+    return fills
+  } finally {
+    instance.unmount()
+    instances.delete(process.stdout)
+    harness.term.dispose()
+  }
+}
+
+const fmtFills = (fills: readonly number[]): string => fills.map(hex).join(' ')
+
+const darkFills = await barFills('dark')
+check('dark 空余段用深色填充', darkFills.includes(DARK_FREE_FILL), fmtFills(darkFills))
+
+const probeFillsForLightInk = async (): Promise<Set<number>> => {
+  const { getTheme, registerRuntimeThemeResolver } = await import('../src/theme.js')
+  // 另一个身份（不是内置对象）⇒ 只能走亮度分支；`text` 刻意写成 hex——校验器放行的
+  // 最常见写法，判据必须读得出来（只认紧凑 `rgb()` 时下面两条会红）。
+  const lightInk = { ...getTheme('light'), text: '#22262E' }
+  const dispose = registerRuntimeThemeResolver(name =>
+    name === 'light-ink-probe' ? lightInk : undefined)
+  try {
+    return await barFills('light-ink-probe')
+  } finally {
+    dispose()
+  }
+}
+
+const lightInkFills = await probeFillsForLightInk()
+check('浅色墨的运行时主题不拿深色空余段', !lightInkFills.includes(DARK_FREE_FILL), fmtFills(lightInkFills))
+check('浅色墨的运行时主题退回浅色默认填充', lightInkFills.includes(LIGHT_FREE_FILL), fmtFills(lightInkFills))
+
+const lightFills = await barFills('light')
+check('light 空余段用浅色默认填充', lightFills.includes(LIGHT_FREE_FILL), fmtFills(lightFills))
+
+// ── 段填充跟着主题走（contextBar* 键）────────────────────────────────────
+// 五段色曾写死在 StatusMetrics 的 USED_SEGMENTS 里；现在由调色板的
+// contextBar* 键驱动。运行时主题探针断言「键 → 屏上填充色」这条链路真的接通，
+// 而不只是解析层拿到值（解析层在 verify-themes）。
+const PROBE_FILLS = [0x101010, 0x202020, 0x303030, 0x404040, 0x505050]
+{
+  const { getTheme, registerRuntimeThemeResolver } = await import('../src/theme.js')
+  const probe = {
+    ...getTheme('dark'),
+    contextBarSystem: '#101010',
+    contextBarPrompt: '#202020',
+    contextBarAssistant: '#303030',
+    contextBarThinking: '#404040',
+    contextBarTools: '#505050',
+  }
+  const dispose = registerRuntimeThemeResolver(name =>
+    name === 'chrome-probe' ? probe : undefined)
+  const probeFills = await barFills('chrome-probe')
+  const shown = fmtFills(probeFills)
+  // 按顺序逐段比对，而不是「五个色都在屏上」：只比集合时，渲染器把任意两段的
+  // 颜色对调仍然全绿——段与段的先后正是本条要钉的映射；写死的深蓝坡道色不在前
+  // 五段里，同样被这条排除。
+  check('五段填充按上下文段顺序来自主题的 contextBar* 键',
+    PROBE_FILLS.every((fill, index) => probeFills[index] === fill), shown)
+  // ── 品牌优先于色板键（branding.ts）──────────────────────────────────────
+  // claude 品牌在档时五段与空余段都走品牌表，连**声明了 contextBar\* 键**的调色板
+  // 也让位——那是「切后端整屏换色」的语义，与 `ignitionColors` 同一规则。这里用
+  // 同一条渲染链路钉优先级；解析层的纯投影由 verify-themes 钉。
+  const { setActiveBrand } = await import('../src/branding.js')
+  const CLAUDE_DARK_RAMP = [0x3a2720, 0x7a4a33, 0xb0623f, 0xd77757, 0xe8a183]
+  setActiveBrand('claude')
+  try {
+    const brandFills = await barFills('chrome-probe')
+    check('品牌在档：段填充走品牌表，色板声明的键让位',
+      CLAUDE_DARK_RAMP.every((fill, index) => brandFills[index] === fill), fmtFills(brandFills))
+  } finally {
+    setActiveBrand('deepseek')
+  }
+  const restoredFills = await barFills('chrome-probe')
+  check('品牌复位：段填充回到色板声明的键',
+    PROBE_FILLS.every((fill, index) => restoredFills[index] === fill), fmtFills(restoredFills))
+  dispose()
+}
 console.log(failed === 0 ? '\nAll context bar alignment checks passed.' : `\n${failed} check(s) failed.`)
 process.exit(failed === 0 ? 0 : 1)

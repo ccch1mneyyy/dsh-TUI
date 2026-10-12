@@ -25,8 +25,10 @@ process.env.TERM_PROGRAM = 'kitty'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'en'
 
-// 宽度要容得下**当天那款**轮换字体与鲸鱼并排：最宽的 `wide`（8 列字身）需要
-// 40 + 2 + 71 = 113 列，否则会走阶梯的"纯大字"档、鲸鱼不渲染，这条回归就失去了前提。
+// 字体钉基准款（与 splash 系夹具同一口径）：不钉的话按天轮换，轮到宽体字身
+// 那天（shadow 10 列字身，修完间距也要 40 + 2 + 88 = 130 列）120 列装不下
+// 鲸鱼并排，走阶梯的"纯大字"档、鲸鱼不渲染，这条回归就失去了前提。基准
+// 款 40 + 2 + 56 = 98 列，120 列绰绰有余。
 const COLS = 120
 const ROWS = 34
 const SETTLE_MS = 6000
@@ -118,6 +120,7 @@ const channel = {
   responseChars: 0,
   whale: true,
   whaleIdle: true,
+  splashFont: 'bold',
   activeToolCount: 0,
   turnStart: 0,
   lastUserText: '',

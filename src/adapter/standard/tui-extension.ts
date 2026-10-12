@@ -13,7 +13,7 @@ import { register as registerCommand } from '@dsh-std/command'
 import { register as registerMessages } from '@dsh-std/messages'
 import { register as registerPresentation } from '@dsh-std/presentation'
 import { register as registerStorage } from '@dsh-std/storage'
-import { registerProfileProtocols } from '../spec/tui-contributions.js'
+import { registerProfileProtocols, registerTuiContributionExtensions } from '../spec/tui-contributions.js'
 
 export {
   TUI_EXTENSION_API_VERSION,
@@ -47,6 +47,12 @@ function buildAdmissionCatalog(): AdmissionCatalog {
   registerMessages(protocols)
   registerPresentation(protocols)
   registerProfileProtocols(protocols)
+  // The manifest extension catalog every `x-dsh-tui` contribution is validated
+  // against (W-2). Without it a bundle's SettingsSection / Scene / Backend
+  // declaration has no definition to resolve, so the family could never be
+  // admitted by a third party. Registering it here — the one assembly point of
+  // the canonical catalog, built lazily on first use — adds no startup ordering.
+  registerTuiContributionExtensions(manifests)
   return { protocols, manifests }
 }
 

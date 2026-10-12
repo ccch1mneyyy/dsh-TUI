@@ -1,0 +1,72 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "assistant.message",
+    "assistant.attempt.end",
+    "subagent.start",
+    "context.capacity",
+    "usage",
+    "context.usage",
+    "subagent.end",
+    "tool.call",
+    "tool.result",
+    "usage",
+    "context.usage",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "assistant.message",
+    "assistant.attempt.end",
+    "usage",
+    "context.usage",
+    "session.status",
+    "step.end",
+    "turn.end"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Spawn exactly one sub-agent whose only task is to reply with the word child-ok. Wait for it, then reply done. Keep everything minimal."
+    },
+    {
+      "kind": "subagent",
+      "text": "child"
+    },
+    {
+      "kind": "assistant",
+      "text": "done"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "contextWindow": 258400,
+    "tokens": {
+      "input": 46,
+      "output": 88,
+      "cacheRead": 17492,
+      "cacheWrite": 8833
+    },
+    "lastUsage": {
+      "input": 40,
+      "output": 5,
+      "cacheRead": 8787,
+      "cacheWrite": 46
+    },
+    "todos": [],
+    "notices": [],
+    "contextMeasure": {
+      "type": "context.usage",
+      "used": 0,
+      "max": 246400
+    }
+  }
+}

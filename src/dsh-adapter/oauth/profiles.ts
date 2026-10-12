@@ -16,6 +16,7 @@
 
 import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
+import { UPSTREAM_RETRY_MAX_RETRIES, UPSTREAM_RETRYABLE_CODES } from '../channel/upstream-retry.js'
 import { adapterBuiltinProviders, type PiAiProvider } from './pi-ai.js'
 
 /** Subscription routes this build can mount, in picker order. */
@@ -130,7 +131,13 @@ export function buildOAuthProfile(
     provider: id,
     displayName: catalog.name,
     streamIdleTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
-    retryPolicy: resolveRetryPolicy(undefined, `dsh-auth: provider "${id}" retryPolicy`),
+    // The widened upstream-retry codes (upstream-retry.ts): the stock
+    // default set would leave STREAM_CLOSED — a dropped upstream stream
+    // — un-retried on this plugin's own routes too.
+    retryPolicy: resolveRetryPolicy(
+      { mode: 'normal', maxRetries: UPSTREAM_RETRY_MAX_RETRIES, retryableCodes: [...UPSTREAM_RETRYABLE_CODES] },
+      `dsh-auth: provider "${id}" retryPolicy`,
+    ),
     configuredMaxTokens: new Map(),
     piProvider: catalog,
     // Required since 0.1.5 (per-model pre-request diagnostics); this build

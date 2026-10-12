@@ -1,0 +1,24 @@
+{
+  "$schema":"urn:dsh-std:community-draft:dsh-plugin:0.15",
+  "manifestVersion":"0.15",
+  "id":"com.example.backend-capability-shape",
+  "name":"Backend Capability Shape",
+  "version":"1.0.0",
+  "facets":{"host":{"entry":"host.js","apiVersion":"v1alpha1"}},
+  "requires":{"contracts":[]},
+  "permissions":[],
+  "contributes":{
+    "commands":[],
+    "x-dsh-tui":[
+      {"apiVersion":"tui.dsh/v1alpha1","kind":"Backend","id":"com.example.backend","name":"example_backend","spec":{
+        "id":"example-agent",
+        "label":{"text":"Example Agent"},
+        "shortLabel":"Example",
+        "capabilities":["permissions",42],
+        "grants":[]
+      }}
+    ]
+  },
+  "subscriptions":[],
+  "license":"MIT"
+}

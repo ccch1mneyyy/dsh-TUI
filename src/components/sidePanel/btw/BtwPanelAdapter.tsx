@@ -8,15 +8,16 @@
  * 面板（visible）即 markSeen 清 unread——仅开始生成不清旧未读。
  */
 import React from 'react'
-import { Box, Text } from '../../../ui.js'
+import { Box, Text, type ScrollBoxHandle } from '../../../ui.js'
 import { t } from '../../../i18n.js'
 import { panelStore } from '../PanelStore.js'
 import { useSidePanelChannel } from '../SidePanelRuntimeContext.js'
 import { usePanelInput } from '../usePanelInput.js'
 import { truncateWidth } from '../../../trajectory/format.js'
 import { stringWidth } from '../../../ink/stringWidth.js'
+import { setClipboard } from '../../../ink/termio/osc.js'
 import { btwThreads } from './threads.js'
-import { getBtwContextBudget, getBtwContextTurns, subscribeBtwContextTurns } from '../../../tuiDisplayPrefs.js'
+import { getBtwContextBudget, getBtwContextTurns } from '../../../tuiDisplayPrefs.js'
 import { BtwComposer, btwComposerKey, type BtwComposerState } from './BtwComposer.js'
 import { BtwThreadView } from './BtwThreadView.js'
 import type { PanelKeyHandler, PanelProps } from '../types.js'
@@ -37,7 +38,17 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
   const thread = useBtwThread(sessionId)
   const version = thread?.version ?? 0
   const busy = thread !== undefined && thread.activeTurnId !== null
-  const [composerFocus, setComposerFocus] = React.useState(true)
+  // 默认阅读层：箭头归导航（←/→ 切面板、↑/↓ 滚动）；Enter/Tab/点击输入框
+  // 才进编辑层，箭头变光标——聚焦状态有边框高亮与框内提示兜底。
+  const [composerFocus, setComposerFocusState] = React.useState(false)
+  // 聚焦位也骑 ref：Enter 聚焦后紧接着的按键（两键之间没有重渲染）必须
+  // 已经看见编辑层——与 caret 同一款契约，否则第一个字符会被列表层吃掉。
+  const composerFocusRef = React.useRef(false)
+  const setComposerFocus = React.useCallback((next: boolean) => {
+    composerFocusRef.current = next
+    setComposerFocusState(next)
+  }, [])
+  const activateComposer = React.useCallback(() => setComposerFocus(true), [setComposerFocus])
   // The caret rides a ref too: two keys arriving before a re-render must
   // see each other's caret (the draft itself is read from the store).
   const caretRef = React.useRef(0)
@@ -47,6 +58,8 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
     setCaretState(next)
   }, [])
   const [notice, setNotice] = React.useState<{ readonly text: string; readonly failure: boolean } | null>(null)
+  // 列表态的滚动句柄（阅读态：↑/↓/PgUp/PgDn 归线程，编辑态仍归输入框）。
+  const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
 
   // badge（镜像 jobs：version/visible 驱动；可见即已读）。
   React.useEffect(() => {
@@ -104,9 +117,16 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
     channel.notify(t('btw-thread-clear'), { timeoutMs: 2500 })
   }, [sessionId, channel])
 
+  const copyLatest = React.useCallback(() => {
+    const latest = [...(btwThreads.get(sessionId)?.turns ?? [])].reverse().find(turn => turn.phase === 'completed')
+    if (latest === undefined) return
+    void setClipboard(latest.answer)
+    channel.notify(t('copied-chars', { n: latest.answer.length }), { timeoutMs: 1500 })
+  }, [sessionId, channel])
+
   // ── 键盘：composer 层 > 列表层 > 宿主（未消费的键返回 false）──────────
   const onKey = React.useCallback<PanelKeyHandler>((input, key) => {
-    if (composerFocus) {
+    if (composerFocusRef.current) {
       const text = btwThreads.get(sessionId)?.draft ?? ''
       const result = btwComposerKey({ text, caret: caretRef.current }, input, key as Parameters<typeof btwComposerKey>[2])
       if (result === null) return false
@@ -120,62 +140,77 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
       return true
     }
     const tabKey = (key as { readonly tab?: boolean }).tab === true || input === '\t'
-    if (tabKey) { setComposerFocus(true); return true }
+    const enterKey = key.return_ === true || (key as { readonly return?: boolean }).return === true || /^[\r\n]+$/u.test(input)
+    // Enter/Tab 都回编辑层：列表态不是死胡同，一键继续问（Enter 不进
+    // composer 的提交分支——那是聚焦后的下一次按键的事）。
+    if (tabKey || enterKey) { setComposerFocus(true); return true }
     if (input === 'n' && key.ctrl !== true && key.meta !== true) { newTopic(); return true }
     if (input === 's' && key.ctrl !== true && key.meta !== true) {
       const latest = [...(btwThreads.get(sessionId)?.turns ?? [])].reverse().find(turn => turn.phase === 'completed')
       if (latest !== undefined) attachTurn(latest)
       return true
     }
-    // 列表层不独占 Esc/←/→：返回 false 交宿主（Esc 回聊天、←/→ 切面板）。
+    if (input === 'c' && key.ctrl !== true && key.meta !== true) { copyLatest(); return true }
+    // 阅读态滚动：↑/↓ 步进 3 行、PgUp/PgDn 翻页（编辑态的方向键仍归光标）。
+    if (key.upArrow === true) { scrollRef.current?.scrollBy(-3); return true }
+    if (key.downArrow === true) { scrollRef.current?.scrollBy(3); return true }
+    if (key.pageUp === true) { scrollRef.current?.scrollBy(-(height - 6)); return true }
+    if (key.pageDown === true) { scrollRef.current?.scrollBy(height - 6); return true }
+    // 其余不独占：返回 false 交宿主（Esc 回聊天、←/→ 切面板、1-9 跳面板）。
     return false
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [composerFocus, sessionId, submitDraft, newTopic, attachTurn, setCaret])
+  }, [sessionId, submitDraft, newTopic, attachTurn, copyLatest, height, setCaret])
   usePanelInput(onKey, { active: focused && visible })
 
-  // ── 头部：/btw + 首问标题（单行裁切）+ 新话题 + 上下文覆盖提示 ────────
-  const title = thread !== undefined && thread.turns.length > 0 ? thread.turns[0]!.question : ''
+  // ── 头部（只有线程后才画）：首问标题 + 状态徽 + 新话题，下压一条细线 ──
+  // 空线程不画头部：标题没有内容，`新话题` 在空线程上也无事可做（清空/换题的
+  // 语义只对已有线程成立）——面板标签栏已经给了这块版面的标题。
   const newLabel = t('btw-thread-new')
-  // 覆盖提示跟随 dsh-tui.btw.contextTurns 的活值（/settings 改完即换词）。
-  const contextTurns = React.useSyncExternalStore(subscribeBtwContextTurns, getBtwContextTurns)
-  const contextLabel = t('btw-thread-context-recent', { n: contextTurns })
+  const turnCount = thread?.turns.length ?? 0
+  const title = turnCount > 0 ? thread!.turns[0]!.question : ''
+  const chip = busy ? '● ' + t('btw-answering') : turnCount > 0 ? `Q${turnCount}` : ''
   const budget = Math.max(6, width - 2)
-  const titleRoom = budget - stringWidth(newLabel) - stringWidth(contextLabel) - 5
-  const header = (
-    <Box flexDirection="row" width="100%" height={1} flexShrink={0}>
-      <Text color="warning" bold>/btw </Text>
-      <Text dimColor wrap="truncate">{truncateWidth(title, Math.max(2, titleRoom))}</Text>
-      <Box flexGrow={1} flexShrink={1}><Text> </Text></Box>
-      <Box
-        flexShrink={0}
-        onClick={event => { event.stopImmediatePropagation(); newTopic() }}
-      >
-        <Text color="permission">[n] {newLabel}</Text>
+  const titleRoom = budget - stringWidth(newLabel) - stringWidth(chip) - 4
+  const header = turnCount === 0 ? null : (
+    <Box flexDirection="column" width="100%" flexShrink={0}>
+      <Box flexDirection="row" width="100%" height={1} paddingLeft={1}>
+        <Text bold wrap="truncate">{truncateWidth(title, Math.max(2, titleRoom))}</Text>
+        <Box flexGrow={1} flexShrink={1}><Text> </Text></Box>
+        {chip !== '' && (
+          <Box flexShrink={0}>
+            <Text color={busy ? 'warning' : undefined} dimColor={!busy}>{chip} </Text>
+          </Box>
+        )}
+        <Box
+          flexShrink={0}
+          onClick={event => { event.stopImmediatePropagation(); newTopic() }}
+        >
+          <Text color="permission">[n] {newLabel}</Text>
+        </Box>
       </Box>
-    </Box>
-  )
-  const contextNote = (
-    <Box width="100%" height={1} flexShrink={0}>
-      <Text dimColor italic wrap="truncate">{contextLabel}</Text>
+      <Box width="100%" height={1}>
+        <Text dimColor>{'─'.repeat(Math.max(4, width - 2))}</Text>
+      </Box>
     </Box>
   )
 
   return (
     <Box flexDirection="column" width="100%" height={height} overflow="hidden">
       {header}
-      {contextNote}
       <BtwThreadView
         thread={thread}
         width={width}
-        height={Math.max(3, height - 5)}
+        height={Math.max(3, height - (header === null ? 4 : 6))}
         alive={visible}
         onAttachTurn={attachTurn}
+        scrollHandleRef={scrollRef}
       />
       <BtwComposer
         state={{ text: thread?.draft ?? '', caret }}
         focused={composerFocus && focused && visible}
         busy={busy}
         notice={notice === undefined || notice === null ? undefined : notice}
+        onActivate={activateComposer}
       />
     </Box>
   )

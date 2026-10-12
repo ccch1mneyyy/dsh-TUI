@@ -97,6 +97,12 @@ const run = (args, env = {}) =>
 // 替身必须**真的造出半成品**（半装与 no-op 两种模式都写盘），否则「清理」类
 // 断言会因为 `!existsSync(...)` 恒真而空转（变异测试实证：删掉实现的 rmSync，
 // 套件照样全绿——那是假通过）。
+/** stub 记录的 env 行（见 STUB_MODULE）。两个会话控制变量必须被剥离（实现侧
+ *  RESCUE_DROPPED_ENV）；`backend` 相反必须**原样带过去**——`--backend` 由启动器
+ *  写进 process.env（见 bin 的实参解析），救援若把它剥掉，`dsh-tui --backend X
+ *  --safe --rescue` 会被静默吞掉选内核的意图。行格式只有一处定义——stub 写什么，
+ *  断言就比什么，所以这里按注入值构造期望串，而不是写死 `backend=none`。 */
+const rescueCleanEnv = backend => `resume=none workspace=none backend=${backend}`
 const STUB_MODULE = `import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -115,7 +121,7 @@ bump('calls')
 appendFileSync(join(state, 'argv'), argv.join(' ') + '\\n')
 // 被剥离的会话控制变量**两个都**记，且记在同一行：argv 与 env 两个文件是按行
 // 号一一配对的（见 stubCalls），一个调用占两行会让后面每次配对整体错位。
-appendFileSync(join(state, 'env'), 'resume=' + (process.env.DSH_TUI_RESUME_SESSION ?? 'none') + ' workspace=' + (process.env.DSH_TUI_WORKSPACE_TARGET ?? 'none') + '\\n')
+appendFileSync(join(state, 'env'), 'resume=' + (process.env.DSH_TUI_RESUME_SESSION ?? 'none') + ' workspace=' + (process.env.DSH_TUI_WORKSPACE_TARGET ?? 'none') + ' backend=' + (process.env.DSH_TUI_BACKEND ?? 'none') + '\\n')
 
 const [command] = argv
 if (command === '--version') {
@@ -312,7 +318,8 @@ const cleanManifest = {
   const pkgDir = join(profHome, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
   mkdirSync(pkgDir, { recursive: true })
   writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: PACKAGE, version: ownVersion }))
-  const runFb = (env = {}) => run([], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: profHome, DSH_TUI_NO_DELEGATE: '1', ...env })
+  // The stub dsh is no host the entry could load: keep DSH on `dsh --profile`.
+  const runFb = (env = {}) => run([], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: profHome, DSH_TUI_NO_DELEGATE: '1', DSH_TUI_HOST_ENTRY: '0', ...env })
   {
     const r = runFb()
     // 判「有没有 safe 提示」必须断真正的提示串：沙箱临时目录叫 verify-safe-*，
@@ -330,6 +337,28 @@ const cleanManifest = {
   {
     const r = runFb({ DSH_STUB_PROFILE_EXIT: '42', DSH_TUI_LANG: 'en' })
     check('fallback: safeHint 双语', r.stderr.includes('Run dsh-tui safe'), `status=${r.status}`)
+  }
+  {
+    // --backend 的闭集校验在 P0 放宽成 id 语法校验（D1）：合法但没装的 id
+    // 不再早退，而是进 TUI 后由 boot 告警 + 回落 dsh（启动器看不到 profile 里
+    // 装了什么）。这里钉住「透传」，非法语法仍然当场 exit 2。
+    const r = run(['--backend', 'claud'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: profHome, DSH_TUI_NO_DELEGATE: '1', DSH_STUB_PROFILE_EXIT: '42' })
+    // stubCalls 是追加式的：本块前面几次 fallback 的调用也在里面，取**最后一次**
+    // --profile 才是这次 --backend 的透传证据。
+    const call = stubCalls(stub.state).filter(c => c.argv.startsWith('--profile')).at(-1)
+    check(
+      '--backend：语法合法的未装 id 不再早退（透传给会话，退出码保真）',
+      r.status === 42 && call !== undefined && call.env.includes('backend=claud') && !r.stderr.includes('非法的 --backend'),
+      `status=${r.status} env=${call?.env ?? 'none'}`,
+    )
+  }
+  {
+    const r = run(['--backend', 'Bad Id'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: profHome, DSH_TUI_NO_DELEGATE: '1' })
+    check(
+      '--backend：语法非法仍然 exit 2 + 明确文案（不再列"可选"闭集）',
+      r.status === 2 && r.stderr.includes('非法的 --backend') && !r.stderr.includes('可选 dsh'),
+      `status=${r.status}`,
+    )
   }
   if (isWin) {
     skip('fallback: 信号透传且无 safe 提示', 'Windows has no POSIX signal semantics (Node turns kill into TerminateProcess, so spawnSync reports a code, never a signal)')
@@ -350,10 +379,16 @@ const cleanManifest = {
 // resumeEnvForRetry），注入受控的 homedir 与 process.env。
 {
   const binSource = readFileSync(bin, 'utf8')
-  const idsStart = binSource.indexOf('const KERNEL_IDS = [')
+  const idsStart = binSource.indexOf('const BUILTIN_BACKEND_IDS = [')
   const idsEnd = binSource.indexOf('\n', idsStart)
   if (idsStart < 0 || idsEnd < 0) throw new Error('bin kernel registry not found')
-  const KERNEL_IDS = new vm.Script(binSource.slice(idsStart, idsEnd) + '\nKERNEL_IDS').runInNewContext()
+  const KERNEL_IDS = new vm.Script(binSource.slice(idsStart, idsEnd) + '\nBUILTIN_BACKEND_IDS').runInNewContext()
+  // 切出来的 resumeEnvForRetry 现在按 id 语法判定非 DSH 内核（P0 D1），所以把
+  // 启动器里**同一段源码**切出来注入——不是测试里另写一份规则。
+  const syntaxStart = binSource.indexOf('const BACKEND_ID_PATTERN = ')
+  const syntaxEnd = binSource.indexOf('\n', binSource.indexOf('const isBackendIdSyntax = '))
+  if (syntaxStart < 0 || syntaxEnd < 0) throw new Error('bin backend id rule not found')
+  const isBackendIdSyntax = new vm.Script(binSource.slice(syntaxStart, syntaxEnd) + '\nisBackendIdSyntax').runInNewContext()
   const fromMarker = 'const readLastRunRecord = () => {'
   const from = binSource.indexOf(fromMarker)
   const to = binSource.indexOf('// TTY 判定：')
@@ -367,6 +402,7 @@ const cleanManifest = {
       homedir: () => home,
       process: sandboxProcess,
       KERNEL_IDS,
+      isBackendIdSyntax,
     }
     context.globalThis = context
     const factory = new vm.Script(
@@ -480,11 +516,124 @@ const cleanManifest = {
       check('回落: 无记录 + 空 env → 读 resume.txt（旧逻辑不变）', env.DSH_TUI_RESUME_SESSION === 'dsh-marker-3')
     }
   }
+  // C6b 重试标记（B-2a）：三条回落分支派生出来的目标都带上 RESUME_RETRY_ENV——
+  //    重试的目标来自 last-run.json，记录里的内核可能已经不在注册表里，boot 届时
+  //    会撤销它；那是用户最后的退路，只能降级为冷启动，不能报错退出。字面量与
+  //    src/kernelPrefs.ts 的一致性由 scripts/verify-resume-target.ts 单独比对。
+  {
+    const withRecord = makeLauncher({ env: {}, home: chainHome })
+    withRecord.noteLaunchChain()
+    writeRecord(chainHome, { backendId: 'claude', sessionId: 'claude-45', cwd: 'D:/w', attemptId: 'b8', updatedAt: Date.now() + 5000 })
+    const legacyHome = join(tmp, 's02-retry-marker')
+    mkdirSync(join(legacyHome, '.dsh-tui'), { recursive: true })
+    const explicit = makeLauncher({ env: { DSH_TUI_RESUME_SESSION: 'explicit-keep' }, home: legacyHome })
+    explicit.noteLaunchChain()
+    const derived = makeLauncher({ env: { DSH_TUI_BACKEND: 'claude' }, home: legacyHome })
+    derived.noteLaunchChain()
+    check(
+      '重试: 记录/显式 marker/派生目标三条分支都带 RESUME_RETRY_ENV=1',
+      withRecord.resumeEnvForRetry().DSH_TUI_RESUME_RETRY === '1'
+        && explicit.resumeEnvForRetry().DSH_TUI_RESUME_RETRY === '1'
+        && derived.resumeEnvForRetry().DSH_TUI_RESUME_RETRY === '1',
+      JSON.stringify({
+        record: withRecord.resumeEnvForRetry().DSH_TUI_RESUME_RETRY,
+        explicit: explicit.resumeEnvForRetry().DSH_TUI_RESUME_RETRY,
+        derived: derived.resumeEnvForRetry().DSH_TUI_RESUME_RETRY,
+      }),
+    )
+  }
   // C7 接线 tripwire：launch 路径必须在首次 spawn 之前登记链身份。
   {
     const noteAt = binSource.indexOf('noteLaunchChain(')
     const spawnAt = binSource.indexOf('settleFirstResult(await startDshSession(')
     check('接线: noteLaunchChain 在首次 startDshSession 之前（链时刻先于任何后代）', noteAt > 0 && spawnAt > 0 && noteAt < spawnAt)
+  }
+  // C8 归一（R4/CR-1）：env 里的后端先按 boot 侧 parseBackendId 的规则 trim+小写，
+  //    再选 resume 目标。拿原始值判定时 `DSH_TUI_BACKEND=' Claude '` 会读 dsh 的
+  //    resume.txt，而 boot 归一后起 claude——claude 便拿着 DSH 的会话 id 去恢复
+  //    （必报错）。判定走的是 bin 里切出来的真实源码，不是测试另写一份规则。
+  {
+    const normHome = join(tmp, 's02-normalize')
+    mkdirSync(join(normHome, '.dsh-tui', 'backends', 'claude'), { recursive: true })
+    writeFileSync(join(normHome, '.dsh-tui', 'resume.txt'), 'dsh-marker-9', 'utf8')
+    writeFileSync(join(normHome, '.dsh-tui', 'backends', 'claude', 'prefs.json'), JSON.stringify({ lastSession: 'claude-normalized-1' }), 'utf8')
+    const launcher = makeLauncher({ env: { DSH_TUI_BACKEND: ' Claude ' }, home: normHome })
+    launcher.noteLaunchChain()
+    const env = launcher.resumeEnvForRetry()
+    check(
+      '重试: env 的后端先归一（大小写/空白）再选 resume 目标（不再误读 dsh 的 resume.txt）',
+      env.DSH_TUI_RESUME_SESSION === 'claude-normalized-1',
+      JSON.stringify({ r: env.DSH_TUI_RESUME_SESSION, b: env.DSH_TUI_BACKEND }),
+    )
+  }
+  // C9 来源标记（review R2）：派生的恢复目标要一并记下**读它时的内核**，boot 若
+  //    回落到别的内核（未注册的插件 id → dsh；内存内核顶掉 env）才撤得掉它，而不是
+  //    把别的内核的会话 id 交给 dsh。判定走上面的真实 launcher 实现。
+  {
+    const launcher = makeLauncher({ env: {}, home: chainHome })
+    launcher.noteLaunchChain()
+    writeRecord(chainHome, { backendId: 'claude', sessionId: 'claude-45', cwd: 'D:/w', attemptId: 'b6', updatedAt: Date.now() + 5000 })
+    const env = launcher.resumeEnvForRetry()
+    check(
+      '来源: 记录派生的目标带来源内核（claude-45 ← claude）',
+      env.DSH_TUI_RESUME_SESSION === 'claude-45' && env.DSH_TUI_RESUME_BACKEND === 'claude',
+      JSON.stringify({ r: env.DSH_TUI_RESUME_SESSION, s: env.DSH_TUI_RESUME_BACKEND }),
+    )
+  }
+  {
+    const launcher = makeLauncher({ env: { DSH_TUI_RESUME_SESSION: 'stale-x', DSH_TUI_RESUME_BACKEND: 'codex' }, home: chainHome })
+    launcher.noteLaunchChain()
+    writeRecord(chainHome, { backendId: 'claude', sessionId: '   ', cwd: 'D:/w', attemptId: 'b7', updatedAt: Date.now() + 5000 })
+    const env = launcher.resumeEnvForRetry()
+    check(
+      '来源: 记录没有可恢复会话时，会话与来源两个 marker 一起清掉（不留孤儿来源）',
+      env.DSH_TUI_RESUME_SESSION === undefined && env.DSH_TUI_RESUME_BACKEND === undefined,
+      JSON.stringify({ r: env.DSH_TUI_RESUME_SESSION, s: env.DSH_TUI_RESUME_BACKEND }),
+    )
+  }
+  {
+    rmSync(chainDotTui, { recursive: true, force: true })
+    const sourceHome = join(tmp, 's02-source')
+    mkdirSync(join(sourceHome, '.dsh-tui', 'backends', 'codex'), { recursive: true })
+    writeFileSync(join(sourceHome, '.dsh-tui', 'resume.txt'), 'dsh-marker-11', 'utf8')
+    writeFileSync(join(sourceHome, '.dsh-tui', 'backends', 'codex', 'prefs.json'), JSON.stringify({ lastSession: 'codex-prefs-11' }), 'utf8')
+    const dshLauncher = makeLauncher({ env: {}, home: sourceHome })
+    dshLauncher.noteLaunchChain()
+    const dshEnv = dshLauncher.resumeEnvForRetry()
+    check(
+      '来源: 无记录 + 空 env → resume.txt 的目标标记来源 dsh（内存内核顶掉时撤得掉）',
+      dshEnv.DSH_TUI_RESUME_SESSION === 'dsh-marker-11' && dshEnv.DSH_TUI_RESUME_BACKEND === 'dsh',
+      JSON.stringify({ r: dshEnv.DSH_TUI_RESUME_SESSION, s: dshEnv.DSH_TUI_RESUME_BACKEND }),
+    )
+    const codexLauncher = makeLauncher({ env: { DSH_TUI_BACKEND: 'codex' }, home: sourceHome })
+    codexLauncher.noteLaunchChain()
+    const codexEnv = codexLauncher.resumeEnvForRetry()
+    check(
+      '来源: 无记录 + codex env → 目标标记来源 codex',
+      codexEnv.DSH_TUI_RESUME_SESSION === 'codex-prefs-11' && codexEnv.DSH_TUI_RESUME_BACKEND === 'codex',
+      JSON.stringify({ r: codexEnv.DSH_TUI_RESUME_SESSION, s: codexEnv.DSH_TUI_RESUME_BACKEND }),
+    )
+  }
+  {
+    const launcher = makeLauncher({ env: { DSH_TUI_RESUME_SESSION: 'explicit-keep' }, home: join(tmp, 's02-source') })
+    launcher.noteLaunchChain()
+    const env = launcher.resumeEnvForRetry()
+    check(
+      '来源: 显式 marker 原样保留、不追加来源标记（归属由用户决定）',
+      env.DSH_TUI_RESUME_SESSION === 'explicit-keep' && env.DSH_TUI_RESUME_BACKEND === undefined,
+      JSON.stringify({ r: env.DSH_TUI_RESUME_SESSION, s: env.DSH_TUI_RESUME_BACKEND }),
+    )
+  }
+  // C10 接线 tripwire：裸 --resume 的**派生**目标带来源，显式 id 不带（上一格是
+  //     行为断言，这一格保证重放循环本身没把两者写反）。
+  {
+    const derivedAt = binSource.indexOf('setResumeEnv(sessionId, sourceBackend)')
+    const explicitAt = binSource.indexOf('setResumeEnv(flag, undefined)')
+    check(
+      '接线: 裸 --resume 派生目标带来源，显式 id 清掉来源',
+      derivedAt > 0 && explicitAt > 0 && explicitAt < derivedAt,
+      'derived=' + derivedAt + ' explicit=' + explicitAt,
+    )
   }
 }
 
@@ -784,20 +933,22 @@ const cleanManifest = {
   check('救援: 重试确实带 -w 且首次失败原样转印', adds[1]?.argv.includes(' add -w ') === true && r.stderr.includes('ERR_PNPM_ADDING_TO_ROOT'), adds[1]?.argv ?? 'no retry call')
 }
 {
-  // 9) 救援环境是显式构造的：宿主残留的会话控制变量不得被带进救援的安装/启动。
+  // 9) 救援环境是显式构造的：宿主残留的会话控制变量不得被带进救援的安装/启动，
+  //    而选内核的 DSH_TUI_BACKEND 必须原样保留（见 rescueCleanEnv 的理由）。
+  //    三者都真注入，三段才都是真断言——只断 resume 时，另外两个键哪天从剥离
+  //    清单里掉出去（或被误剥）本套件照样全绿。
   const stub = makeStub()
   const home = join(tmp, 'rescue-env')
   mkdirSync(home, { recursive: true })
   const r = run(['safe', '--rescue'], {
     PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home,
     DSH_TUI_RESUME_SESSION: 'leaked-session-id', DSH_TUI_WORKSPACE_TARGET: '/leaked/target',
+    DSH_TUI_BACKEND: 'claude',
   })
   const addCall = pluginCalls(stub.state)[0]
-  // 两个会话控制变量都在被剥离之列（实现侧 RESCUE_DROPPED_ENV），所以两个都
-  // 断言：只断 resume 时，第二个键哪天从剥离清单里掉出去本套件照样全绿。
   check(
-    '救援: 显式环境剥离宿主会话控制变量（resume 与 workspace 两键）',
-    r.status === 0 && addCall?.env === 'resume=none workspace=none',
+    '救援: 剥离宿主会话控制变量（resume 与 workspace），但保留选内核的 backend',
+    r.status === 0 && addCall?.env === rescueCleanEnv('claude'),
     addCall?.env ?? 'no call',
   )
 }

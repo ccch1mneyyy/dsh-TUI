@@ -106,6 +106,8 @@ export interface ChatRow {
   kind: 'user' | 'assistant' | 'tool' | 'notice' | 'reasoning' | 'interrupt' | 'local' | 'local-output' | 'compact' | 'subagent' | 'job' | 'turn-summary'
   /** Extra label for non-human user rows (e.g. `steering`). */
   label?: string
+  /** Interrupt rows: backend name, kept separate from localized transcript text. */
+  interruptBackend?: string
   /** Actual execution location for `!command` rows. */
   executionTarget?: string
   text: string
@@ -187,6 +189,15 @@ export interface ToolRow {
   startedAt: number
   /** Settled wall-clock duration, written by tool/result. */
   durationMs?: number
+  /**
+   * Live output of the running call (`tool.output`): the bounded tail the
+   * projector keeps (at most 200 lines / 16 KiB), raw — ANSI and carriage
+   * returns included; the card sanitizes the few lines it shows. Absent
+   * when the call printed nothing live; removed when the result settles.
+   */
+  liveOutput?: string
+  /** Whole lines dropped from the head of `liveOutput` to keep it bounded. */
+  liveOutputDropped?: number
 }
 
 /** Pending-call render intent (structural subset of dsh-tools ToolCallView). */
@@ -206,13 +217,27 @@ export interface ToolViewMeta {
   readonly category?: 'mutate' | 'exec' | 'other'
 }
 
-/** One file change in a tool presentation (dsh-tools FileDiff). */
-export interface ToolFileDiff {
-  readonly path: string
-  /** Prior content, or null for a new file / no before-image. */
-  readonly oldText: string | null
-  readonly newText: string
-}
+/**
+ * One file change in a tool presentation: the before/after texts
+ * (dsh-tools FileDiff; the diff is computed for display), or — for a
+ * backend that only has the patch — one file's unified diff hunks, whose
+ * real line numbers the card shows (`@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n`;
+ * file headers optional). `change` marks an added / deleted file;
+ * `movePath` the destination of a moved one.
+ */
+export type ToolFileDiff =
+  | {
+      readonly path: string
+      /** Prior content, or null for a new file / no before-image. */
+      readonly oldText: string | null
+      readonly newText: string
+    }
+  | {
+      readonly path: string
+      readonly patch: string
+      readonly change?: 'add' | 'delete' | 'update'
+      readonly movePath?: string
+    }
 
 /** Completed-call render intent (structural subset of dsh-tools
  *  ToolResultView). `web` results and unknown shapes fall back to raw text. */
@@ -563,6 +588,13 @@ export interface ChannelGoal {
   roundsStarted: number
   /** Present exactly while `phase` is `blocked`. */
   blockedReason?: { code: string; message: string }
+  /**
+   * A backend that budgets its goals by tokens and time (Codex) reports
+   * the spend here; the goal panel and status line then show it instead of
+   * the round count. DSH goals carry no budget (rounds stay the readout).
+   * `tokenBudget: null` = no cap.
+   */
+  budget?: { tokensUsed: number; tokenBudget: number | null; timeUsedSeconds: number }
 }
 
 /** One entry of the latest todo-list snapshot (mirrors dsh-tool-todo's
@@ -1120,9 +1152,13 @@ export interface ChannelCapabilities {
   readonly effort: boolean
   readonly modes: boolean
   readonly compact: boolean
+  /** `/init` initializes project instructions (DSH: its existing template). */
+  readonly init: boolean
   readonly rewind: boolean
   readonly fork: boolean
   readonly resume: boolean
+  /** Catalog removal keeps the transcript when explicitly marked as archive. */
+  readonly deleteAction?: 'archive'
   readonly subagents: boolean
   readonly tasks: boolean
   readonly mcp: boolean
@@ -1140,6 +1176,10 @@ export interface ChannelCapabilities {
    *  channels.json). False on every other backend, DSH included: the only
    *  flag a DSH session does not get by default. */
   readonly channels: boolean
+  /** `/goal` is served: DSH through its command registry row, another
+   *  backend through its typed `goals` capability. False = `/goal` is
+   *  refused as unavailable on this backend. */
+  readonly goals: boolean
 }
 
 /**
@@ -1227,10 +1267,9 @@ export interface ContextOccupancy {
   /** Window to divide by; `undefined` when no route advertised a capacity. */
   readonly contextWindow: number | undefined
   /**
-   * Which source answered: `projection` is DSH's own `contextPressure`
-   * projection (the number the Web UI shows); `sample` is this TUI's fallback,
-   * the last settled request's billed usage, used only when the composition
-   * mounts no token meter.
+   * Which source answered: DSH's `contextPressure` projection, the backend's
+   * measured occupancy, or the last settled request's billed usage when
+   * neither occupancy source has a reading.
    */
-  readonly source: 'projection' | 'sample'
+  readonly source: 'projection' | 'backend' | 'sample'
 }

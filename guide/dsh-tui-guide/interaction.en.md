@@ -6,7 +6,7 @@
 
 | Key | Behavior |
 | --- | --- |
-| `Enter` | Send while idle; steer text into the running turn at its next step boundary; confirm an open menu |
+| `Enter` | Send while idle; run a known `/` command (with or without arguments — while a turn runs its own gate decides); steer the remaining text into the running turn at its next step boundary; confirm an open menu |
 | `Tab` | Complete a `/` command or `@` file; while the model is working, queue non-empty input as a post-turn follow-up |
 | `Ctrl+Enter` | Interrupt the running turn and process the input immediately |
 | `Shift+Enter` / `Ctrl+J` | Insert a newline at the caret; `Ctrl+J` (LF) is the fallback when the terminal cannot report the Shift modifier; macOS Terminal.app uses `Option+Enter` |
@@ -20,7 +20,7 @@
 | `Ctrl+Z` | Undo the prompt draft's last word-level edit (text, caret and images together). Draft-only: a submit, a history recall (`Ctrl+R`/`↑`) or a session switch ends the history; it is NOT the message/conversation rewind behind `Esc Esc`. Remappable via `/settings` |
 | `Esc` / `Ctrl+C` / `Enter` while an image preview is open | Close the preview and restore the surface underneath; other keys are not passed through |
 | `Left` / `Right` in the image modal | Previous / next image, no wrapping; caret peeks keep arrows with the prompt |
-| `←` (empty input) | Background this session and open the session-management screen (same as `/bg`) |
+| `←` (empty input) | Open the session manager (same as `/bg`); DSH backgrounds the current session first, while Claude/Codex keep it attached |
 | `Ctrl+C` | Interrupt while working; press again while the interrupt is still settling to force-exit<br>clear non-empty idle input; **while idle with a selection in the prompt input, copy it to the clipboard (selection kept for editing)**; press twice on empty input to exit |
 | `Ctrl+D` | Same ladder as `Ctrl+C`: interrupt while working (press again to force-exit if the interrupt stalls); press twice while idle to exit |
 | `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output; also the escape hatch for the **long-line fold** (a single line over 1000 chars is clipped to 1000 with a `… N chars folded` marker — see the user guide §5). Clicking the folded row (or the tool card face) toggles it too |
@@ -64,10 +64,13 @@ side panel (`Ctrl+B`/`Alt+Z`), subagent dashboard, show-all, and todo fold are r
 - Plugins may also contribute one text line above the prompt, or a compact rich status view of up to three rows when the host exposes `tuiStatus.registerView`.
 - Rich views receive only host `Box`, `Text`, `Image`, and terminal size. Click/hover/drag work in fullscreen, and the view never owns the keyboard.
 - `Image` takes decoded RGBA pixels plus a same-size cell fallback.
-- After a successful Kitty probe, the host centers the image at its natural aspect ratio
-  using terminal-reported cell geometry (or a conservative default), adding transparent
-  letterboxing and downsampling when needed. Otherwise it renders the fallback (including
+- After a successful Kitty probe, the host enlarges or downsamples the image to the
+  reserved cell box's physical pixels, preserving its aspect ratio with centered transparent
+  letterboxing. It uses terminal-reported cell geometry (or a conservative default) and
+  downsamples boxes that exceed the pixel budget. Otherwise it renders the fallback (including
   inline, accessibility, and multiplexer sessions).
+- The 16 MiB frame budget bounds both decoded sources and fitted rasters;
+  images over the budget keep their text fallback.
 - Plugins provide the keyboard path for the same action through a slash command or `tuiShortcuts`.
 - A refused rich registration returns `undefined`; an admitted one returns a disposer that removes both the view and its Cordis effect.
 
@@ -77,14 +80,16 @@ The startup **launchpad** and the **first-run wizard** each own the keyboard; bo
 results back to the chat screen and add no new behavior.
 
 - **Launchpad**: printable input goes into the input box (the prefix turns from `❯` to `⌘` when the line
-  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; the caret is an **inverse block
-  sitting on the current character** (inverse on that one character; an inverse blank cell at end of
-  line), blinking is a pure style toggle (inverse ↔ regular, ~550ms per phase) and never occupies an
-  extra cell or eats a character; `Alt+R` continues the most recent session (= the first entry row slot,
-  bound only on this screen, no-op when there is nothing to continue, remappable in `/settings`);
+  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; the **native terminal cursor**
+  inherits your terminal's shape, color, blinking, and enabled animation or trail effects.
+  Cursor movement never adds a cell or eats a character. Static rendering retains the
+  [theme-painted fallback](themes.en.md); `Alt+R` continues the most recent session
+  (= the first entry row slot, bound only on this screen, no-op when there is nothing to continue,
+  remappable in `/settings`);
   a leading `/` opens the
   **command palette** (the same data source and component as the chat composer: `↑`/`↓` move the selection,
-  `Enter`/`Tab`/click **run** the selected command, `Esc` dismisses only the palette and keeps the draft);
+  `Tab` **completes** the selected command in the input box with the caret at the end,
+  `Enter`/click **run** it and clear the input, `Esc` dismisses only the palette and keeps the draft);
   with the palette dismissed, `Enter` **sends** the line straight away (a leading `/` line — including
   plugin/registry commands — goes through the chat page's merged command table and never reaches the model);
   `↑`/`↓`/`Tab` walk the focus ring (input box → the four param segments under the box → the quick
@@ -124,13 +129,16 @@ results back to the chat screen and add no new behavior.
 - **Corner plates**: the bottom-left working directory is **clickable** — it opens the existing
   `/workspace` menu (rendered above the launchpad; `Esc` returns to the launchpad), keyboard path =
   the focus ring's last slot + `Enter`, hover/focus = text highlight; the bottom-right plate starts
-  with `dsh-tui v<TUI>`, followed by one row for each of the two kernels:
-  `▸ DSH · dsh-core v<kernel>` / `Claude · claude-code v<CLI>`. `▸` marks the current kernel and the
-  other row stays dim; an unavailable kernel adds the reason after its version (such as *Not installed*
-  or *Not signed in*), a row whose version cannot be read shows just the name, and *Checking…* shows
-  while the probe runs. The whole block is clickable and opens the same kernel picker (keyboard path =
-  focus ring + `Enter`). Rows are right-aligned, the cwd plate is top-aligned to the first row, and
-  narrow terminals truncate per the existing truncate-middle contract.
+  with `dsh-tui v<TUI>`, followed by one row for **each registered backend**:
+  `▸ DSH · dsh-core v<kernel>` / `Claude · claude-code v<CLI>` (then `Codex · codex-cli v<CLI>`, and any
+  installed plugin backend after it). The name is the backend manifest's short label; `▸` marks the
+  current kernel and the other rows stay dim; an unavailable kernel adds the reason after its version (such as *Not installed*
+  or *Too old · upgrade needed*), a row whose version cannot be read shows just the name, and *Checking…* shows
+  while the probe runs. Sign-in state never enters the plate — check it in the picker when switching (a signed-out
+  row is selectable, its subtitle says *Not signed in*). The whole block is clickable
+  and opens the same kernel picker (keyboard path =
+  focus ring + `Enter`). Every row ends flush at the same right edge, the cwd plate is top-aligned to the
+  first row, and narrow terminals truncate per the existing truncate-middle contract.
 - **Wizard**: `←`/`→` change step (except the effort slider in step 3 and a drilled-in model list, where the
   horizontal keys belong to the child control), `Tab` switches between the language/theme and
   model/effort/workspace panes, `↑`/`↓` move the selection; `Enter` runs the step (step 1 = re-check
@@ -292,9 +300,11 @@ While the model is working, three paths have different placement:
 
 | Action | Placement |
 | --- | --- |
-| `Enter` | Steer: deliver to the running turn at its next step boundary |
+| `Enter` | known `/` command (with or without arguments) → run it, its own gate decides; anything else → steer: deliver to the running turn at its next step boundary |
 | `Tab` | Follow-up: wait until the current turn finishes |
 | `Ctrl+Enter` | Interrupt: stop the turn and deliver immediately |
+
+**While a turn is running, a command is always a command; only two kinds of input steer: plain text that is not a command, and a direct skill gesture (`/skill-name …`).** The completion overlay groups commands by their impact on the current conversation: the harmless ones stay on top in their normal style, while gated, interrupting, replacing or steering commands sink to the bottom in the theme's grey (`subtle`, no header row) — where they stay selectable.
 
 - Undelivered messages appear above the editor.
 - `Alt/Option+Up` retrieves the latest one.
@@ -326,6 +336,7 @@ The four commands and the `⌸` entry at the head of the prompt row all open the
 
 - The workspace rail (the durable registry) on the left.
 - The sessions of the selected workspace on the right, every row carrying that session's live state.
+- Focus starts on the most recently used session in the current workspace, ready for `Enter`; with no history, it starts on the new-session card.
 
 They used to be three implementations that grew apart — a session browser, an agent view,
 a workspace home — each listing the same session with its own selection model and its own
@@ -346,7 +357,7 @@ brings it back.
 
 | Key | Action |
 | --- | --- |
-| `←` `→` | Choose the column that owns the keyboard (rail / sessions); exactly one `❯` is on screen |
+| `←` `→` | Choose the column that owns the keyboard (rail / sessions), preserving the selected session in the same workspace; exactly one `❯` is on screen |
 | `↑` `↓` / `PgUp` `PgDn` / wheel | Move in the rail; move in the session list (row 0 is the new-session card) |
 | Type | Filter the selected workspace's sessions live (title, directory, branch, model) |
 | `Enter` | Sessions: enter the row under the cursor (row 0 = start a session in this workspace). Rail: open that workspace's action menu |
@@ -356,6 +367,10 @@ brings it back.
 | `Ctrl+L` | Re-read the workspace registry and the session listing |
 | `Tab` / `Shift+Tab` | Next / previous source tab (when other agents have sessions) |
 | `Esc` | Dismiss a notice → clear the filter → leave the screen |
+
+Each workspace starts on its most recent visible session, or the new-session card if it has no matches. Changing columns or moving the mouse into the list preserves the current selection. Changing workspace chooses that workspace's newest session; returning chooses the newest again, without remembering past selections per workspace. Until you choose a list row, partial results, complete reads, and later refreshes keep following the newest visible session. After you select a session or the new-session card, refreshes preserve that choice.
+
+The native cursor follows the last-used region, as in the model picker: workspace navigation parks it on the workspace row, session navigation on the session row or new-session card, and typing or clicking the filter on its text caret. Row carets hide after 0.5 seconds at rest; the search caret stays visible. Animation and trail effects come from your terminal settings. Narrow layouts keep the caret on a visible target when the workspace rail is hidden. Arrow and Enter actions keep the same meaning while filtering.
 
 The right side of the title row is the **source strip**: `DSH │ Claude Code  Codex …`.
 
@@ -416,9 +431,10 @@ On Windows, `dsh-tui.cmd --resume` uses the session ID last written to `~/.dsh-t
 
 ### Background sessions
 
-`/bg` (alias `/background`) moves the current session to the background and keeps it
+On DSH, `/bg` (alias `/background`) moves the current session to the background and keeps it
 running, switches the terminal to a fresh session, and opens the session-management screen;
-`←` on an empty prompt does the same.
+`←` on an empty prompt does the same. On Claude/Codex, both entries open the session manager
+without backgrounding the attached session.
 
 - While a background session waits on you, the prompt footer shows `← N agents`.
 - A background session awaiting approval shows as **needs input**, and the approval panel labels which session it comes from.
@@ -485,6 +501,14 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 - Namespaces without a declared TUI section are listed read-only and need manual edits to the profile config (`~/.dsh/settings.yaml` on older hosts).
 
 ### Model and preset
+
+`/model` shows the model list and the highlighted model's reasoning effort on one page. DSH also has provider tabs, with **Recently used** first; opening records the current model as the latest use and moves it to the front without duplicates, initially focusing it when it is still in the catalog.
+Codex and Claude show their complete model catalogs directly, without provider or recents tabs; the current model is initially focused when the catalog loads.
+In DSH, `Tab` selects the next provider and `Shift+Tab` the previous one, wrapping at either end; all backends use `↑/↓` to select a model and `←/→` to adjust its effort.
+The native terminal cursor follows the **region you used last**: `Tab`/`Shift+Tab` moves to the provider tab, `↑/↓` to the focused model's `❯`, and `←/→` to the effort level. Movement shows the terminal's original cursor shape, blinking, and enabled animation or trail effects; the cursor hides after **0.5 seconds at rest**, then reappears and restarts the timer on the next movement. Ordinary repaints do not extend this window; text input carets stay visible, and accessibility mode retains visible focus anchors. Clipped tabs or unavailable effort levels fall back to the model row. Inverse tabs and the `❯` pointer always remain visible, including in static rendering.
+Confirmation submits only explicit effort drafts. Changing only the model leaves saved-effort validation to the backend; candidate defaults do not become new preferences. While the picker is open, `Ctrl+B` and `Alt+Z` still control the sidebar, and picker navigation stays with the model picker.
+`Enter` applies the model and effort; `Esc` cancels the draft. Shortcuts sit below the title, and a separate effort heading and level strip sit below the models, with the `←/→` hint beside the effort heading. Selectable levels use the body text color and the current level is highlighted. DSH, Claude, and Codex use the terminal background while covering the text underneath.
+Click tabs, models, and effort levels, then click **select** or **cancel** below the title; the wheel moves through the model list. When space above the input is tight, navigation hints, model descriptions and neighboring models are omitted, effort collapses to one row, and Select / Cancel stay at the bottom. With only two rows, effort is hidden too, keeping the focused model and actions visible.
 
 `/model` switches through a session fork at the end of current history, because DSH has no in-place model-switch API. The old session remains in `/resume`.
 
@@ -599,8 +623,9 @@ In inline mode, the terminal emulator owns native scrollback and selection.
   transcript behind an open overlay. Moves the cursor in the trajectory scene (±3 rows per
   notch on the timeline, ±1 in hotspot; scrolls the detail while expanded). Walks the
   focused row in /settings.
-- **Drag** — Select text, copy on release, then clear the selection; a "Copied N characters"
-  notice pops up. With `dsh-tui.scrollGutter: scrollbar`, the right-edge scrollbar is a drag
+- **Drag** — Select text and copy on release, keeping the selection; a "Copied N characters"
+  notice pops up. A new selection replaces the retained one. With
+  `dsh-tui.scrollGutter: scrollbar`, the right-edge scrollbar is a drag
   target: an unmodified left drag scrubs the transcript to the track position (same mapping
   as a track click — drag to point), while `Shift`/`Alt`/`Ctrl`+drag still selects text (the
   drag protocol opens only for unmodified left presses).
@@ -740,6 +765,7 @@ reason; see [Claude backend](claude-backend.en.md#approvals-and-questions).
 
 The command menu merges local commands with the DSH command registry. Type `/` to inspect the complete surface available in the current composition.
 
+- **While a turn is running**, the overlay groups commands by their impact on the current conversation: the harmless ones stay on top in their normal style, while gated, interrupting, replacing or steering commands sink to the bottom in the theme's grey (`subtle`, no header row) — and stay selectable there.
 - Command descriptions follow the UI language (`/lang`).
 - Built-in commands and mapped registry commands (`/plan`, `/goal`, `/feedback`) show Chinese translations in zh.
 - Unmapped registry commands fall back to the registry's own text.
@@ -747,7 +773,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
 **Sessions**
 
 - `/new`, `/resume`, `/home`, `/agentview` — all three open the same session-management screen.
-- `/bg` — alias `/background`, backgrounds the session and opens that screen.
+- `/bg` — alias `/background`, opens the session manager; DSH backgrounds the session first, while Claude/Codex keep it attached.
 - `/rename`.
 - `/recap` — session recap: apply the suggested title in one key; `/settings` can enable an
   auto-summary on session open, on by default — a divider + `Recap:` line appears at the
@@ -790,7 +816,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
 - `/update`, `/vim` — vim editing mode toggle, see "Editing keys".
 - `/terminal-setup`, `/connect`, `/help`, `/exit` — aliases `/quit`, `/q`.
 - `/kernel` — opens the kernel picker (the current kernel is ticked; every row
-  carries a version and a one-line explanation), on DSH and Claude sessions alike.
+  carries a version and a one-line explanation), on DSH, Codex and Claude sessions alike.
   Picking the other kernel remembers it and restarts into it with a new session;
   the old session stays in `/resume`, and if the new session fails to start you
   are back on the old one. A running turn blocks the switch. The launchpad's
@@ -799,6 +825,11 @@ The command menu merges local commands with the DSH command registry. Type `/` t
   a later direct launch follows the flag. A fresh launch lands on the launchpad
   whichever kernel is remembered; a launch with a resume target goes straight
   into the session.
+- `/dsh`, `/codex`, `/claude` — directly choose the named kernel through the same
+  checks and restart flow as `/kernel`. Choosing the current kernel only reports
+  that it is already current; a running turn blocks switching. Missing Claude
+  opens the install wizard; missing or outdated Codex shows install/upgrade guidance.
+  These shortcuts also work before startup is ready.
 
 **Registry**
 
@@ -836,6 +867,16 @@ Additional forms:
   path (the same handler, real events) and confirms via event/readback. When neither is
   available, it fails loudly instead of sending the input to the model.
 - Exiting plan mode restores the pre-plan atoms first, then the durable preset you were on before plan mode (while the registry still offers it).
+- The DSH `/permission` pick is persisted the same way at `~/.dsh-tui/permission.json`: every durable
+  preset switch teaches it (picker, typed command, Shift+Tab static mode, or a switch the official
+  command performed on its own), and a session that never customized its permission planes starts on
+  the remembered preset — applied through the same official switch path. "Never customized" means the
+  USER never touched it: the composition itself writes its default preset into every fresh session at
+  creation (`dsh-permission-presets`' `session/created` → `pinInitialPermission`), and those events are
+  not a user choice — only a session that ran a turn, or whose identity is not the composition default,
+  keeps its own planes. Plan-mode transients are excluded (entering plan keeps the pre-plan memory; the
+  exit restore teaches it again), `DSH_PERMISSION_MODE` is this launch's initial permission plane and
+  outranks the file when set, and an identity the mounted roster no longer offers is skipped.
 - When the registry service is absent, TUI uses its legacy three-row compatibility roster; a mounted but broken service is unavailable and fails closed.
 - Non-DSH backends (Claude) that declare native permission modes answer
   `/permission` with that backend's own modes: `default` (ask before each risky

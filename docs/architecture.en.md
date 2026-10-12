@@ -2,13 +2,15 @@
 
 [Documentation index](README.md) · [简体中文](architecture.md)
 
+This document describes the **current** implementation: dsh-TUI runs as a plugin mounted in a DSH profile (the path below reflects that). For the move to an app that owns its entry and composition root, with DSH loaded in process as the first-party backend, see [Standalone host design](standalone-host-design.md).
+
 ## Runtime path
 
 ```text
 Cordis profile
   -> src/index.ts (plugin contract and Schema)
   -> src/dsh-adapter/plugin.ts (services, Agent, and React lifecycle)
-  -> AgentSession (the DSH Agent, or the experimental Claude Agent backend)
+  -> AgentSession (DSH Agent, Claude Agent SDK or Codex app-server backend)
   -> src/dsh-adapter/channel.ts (core + DSH extensions; AgentEvent -> shared projector -> Channel)
   -> src/screens/Chat.tsx (keyboard and mode orchestration)
   -> src/components/* (views)
@@ -29,7 +31,7 @@ Cordis profile
 | `src/dsh-adapter/channel/core/` | The backend-neutral core every `AgentSession` goes through (table below) |
 | `src/dsh-adapter/channel/extensions.ts` | DSH extensions: wiring only, DSH specialist internals unchanged |
 | `src/agent/`, `src/channel/` | The backend-neutral session domain (`AgentEvent`, `AgentSession`, capabilities), the shared projector and neutral stores |
-| `src/dsh-adapter/backend/`, `src/backends/claude/` | Each backend's translator and session; see [Agent backends](agent-backend-design.md) for the structure (Chinese) |
+| `src/dsh-adapter/backend/`, `src/backends/claude/`, `src/backends/codex/` | DSH, Claude and Codex translators/sessions/capabilities; Codex drives the user’s app-server without bundling an SDK; see [Agent backends](agent-backend-design.md) (Chinese) |
 | `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |
@@ -91,9 +93,13 @@ missing configuration, placeholders, or fallback branches.
 
 ## The session log is the source of truth
 
-The channel does not treat a React-local array as conversation truth. A Claude
-session follows the Claude CLI's own transcript (read through the SDK); DSH is
-the example below. DSH `session/event` records own:
+The channel does not treat a React-local array as conversation truth. Claude
+follows its CLI transcript through the SDK; Codex follows official `$CODEX_HOME`
+thread/turn storage through paginated app-server full items, sharing live/replay
+mapping. The TUI stores preferences/channel metadata, not a second transcript or
+official config. Codex’s `usage` event is accounting-only; `context.usage` keeps
+the official 12k baseline semantics without creating empty assistant rows or
+inventing historical billed usage. DSH is the example below. DSH `session/event` records own:
 
 - initial replay and incremental streaming events;
 - assistant/reasoning/tool association and sequence anchors;
@@ -163,6 +169,25 @@ protocol paths.
 Changes involving input, scrolling, mouse, cursor, resize, or cleanup must
 be checked in both modes, especially on narrow terminals and Windows ConPTY.
 
+Text inputs declare a position and visibility through `useDeclaredCursor`.
+The renderer hides the native cursor before repainting, then positions and
+shows it at the end of the frame. Cursor-only moves keep it visible so the
+terminal's animation and trail can continue. Shape, color, and blinking follow
+terminal settings. List items declare accessibility anchors that stay hidden
+in ordinary mode by default; the model picker declares a cursor on
+the region used last (provider tab / model row / effort level) so terminal
+animation moves between them. Tabs clipped by the overlay hand the caret back
+to the visible model row. A `hideOnIdle` declaration shows the native cursor
+when its target changes, then hides it 500 ms after the latest movement;
+ordinary repaints do not extend the deadline. The timer belongs to the
+renderer instance and is cancelled on input handback, pause, declaration
+clearing, and shutdown. Shape and blinking remain terminal-owned, while
+accessibility mode keeps focus anchors visible. External editor handoffs
+still reset styles only where configured styles can safely be restored;
+picker movement and closing emit no DECSCUSR sequences.
+Static rendering retains theme-painted carets; selection and
+image-token highlights remain painted by the TUI.
+
 ## Persistence locations
 
 | Path | Contents |
@@ -175,8 +200,9 @@ be checked in both modes, especially on narrow terminals and Windows ConPTY.
 | `~/.dsh-tui/themes/` | User theme JSON files; runtime plugin themes do not write here |
 | `~/.dsh-tui/working-activity.json` | Activity animation selection |
 | `~/.dsh-tui/agent-preset.json` | Default Agent preset for new sessions |
-| `~/.dsh-tui/kernel.json` | The backend `/kernel` remembers (`dsh` / `claude`) |
+| `~/.dsh-tui/kernel.json` | The backend `/kernel` remembers (`dsh` / `claude` / `codex`) |
 | `~/.dsh-tui/backends/claude/` | Claude backend preferences (`prefs.json`), pins and channel profiles (`channels.json`); Claude sessions themselves live in `~/.claude/projects/` |
+| `~/.dsh-tui/backends/codex/` | Codex preferences/channel profiles (tokenRef only; keys in the DSH credential store); native threads, login and config remain owned by `$CODEX_HOME` / Codex |
 
 `DSH_TUI_SESSION_ROOT` overrides the JSONL root in either composition. The
 profile defaults to `$DSH_HOME/sessions` (normally `~/.dsh/sessions/`);
@@ -270,8 +296,9 @@ visual TUI alone does not describe the effective policy.
 
 ## Known limitations
 
-- The experimental Claude backend's limitations are listed in
-  [Agent backends](agent-backend-design.md) (Chinese).
+- The experimental Claude backend’s limitations are listed in
+  [Agent backends](agent-backend-design.md) (Chinese); Codex operations, non-goals
+  and live-verification boundaries are in [Codex backend](codex-backend.en.md).
 - Plugin-source context injected into the system prompt is not shown as a
   separate UI segment; it is included in the system/context meter.
 - `/model` switches through a session fork rather than an in-place update; the
@@ -323,6 +350,8 @@ visual TUI alone does not describe the effective policy.
 | stderr diagnostics | `DSH_TUI_DEBUG=1 dsh --profile dsh-tui` |
 | Raw ANSI frames | `DSH_TUI_RENDER_LOG=/path/to/render.log dsh --profile dsh-tui` |
 | Theme regression | `node --import tsx/esm scripts/verify-themes.mjs` |
+| Three-backend comparison | DSH: `verify:projection-golden` / `verify-dsh-translate`; Claude: `verify:claude-contract` / matching fake-SDK scripts; Codex: `verify:codex-contract` / matching fake-app-server scripts; also verify the shared domain/event invariants |
+| Live Codex evidence | Nine 0.160.1 isolated-home offline checks passed without model turns; credentialed checks must use `codex-cheap-only.mjs`. Real login/model calls and inline/fullscreen/narrow-terminal checks were not run in this round, not proven by offline/mocks |
 
 `DSH_TUI_RENDER_LOG` and session exports may contain sensitive content. Redact
 them before sharing.

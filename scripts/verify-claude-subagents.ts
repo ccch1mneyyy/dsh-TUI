@@ -46,6 +46,7 @@ const [
   { setLang, t },
   { settled, sleep, findText },
   fakes,
+  { claudeText },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -60,6 +61,7 @@ const [
   import('../src/i18n.js'),
   import('./lib/term-test.mjs'),
   import('./lib/claude-fake-sdk.js'),
+  import('../src/backends/claude/text.js'),
 ])
 type ChannelState = ReturnType<typeof createChannel>
 type FakeQuery = ReturnType<typeof fakes.fakeClaudeSdk>['queries'][number]
@@ -242,7 +244,7 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
     query.emit({ type: 'system', subtype: 'task_notification', task_id: 'bg-1', tool_use_id: 'call-bg', status: 'completed', output_file: '', summary: 'Found the thing', usage: { total_tokens: 99, tool_uses: 2, duration_ms: 50 } })
     check('… a later real end still wins', await settled(() => channel.subagents.find(item => item.agentId === 'bg-1')?.status === 'completed') && channel.subagents.find(item => item.agentId === 'bg-1')?.summary === 'Found the thing')
     check('… the other stays unknown (no end ever came), its card settled', channel.subagents.find(item => item.agentId === 'bg-2')?.status === 'unknown' && subagentRows(channel).find(row => row.subagent?.agentId === 'bg-2')?.subagent?.status === 'unknown')
-    check('the notification opened the CLI\'s notification turn, not a user turn', await settled(() => { query.emit({ type: 'system', subtype: 'status', status: 'requesting' }); return channel.working }) && channel.rows.some(row => row.kind === 'notice' && row.text === t('claude-notification-turn')))
+    check('the notification opened the CLI\'s notification turn, not a user turn', await settled(() => { query.emit({ type: 'system', subtype: 'status', status: 'requesting' }); return channel.working }) && channel.rows.some(row => row.kind === 'notice' && row.text === claudeText('claude-notification-turn')))
     query.emit({ type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: 0.002, modelUsage: {} })
     // A foreground subagent moved to the background (Ctrl+B in the CLI).
     query.emit({ type: 'assistant', message: { id: 'm9', content: [{ type: 'tool_use', id: 'call-fg', name: 'Agent', input: { description: 'fg', prompt: 'x' } }] } })

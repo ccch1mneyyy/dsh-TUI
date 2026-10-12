@@ -20,6 +20,8 @@ import { useRevealVersion } from '../../hooks/useRevealVersion.js'
 import { primaryComboString } from '../../utils/keymap.js'
 import { agentMessageStateColor, agentMessageStateText } from './TranscriptLeaves.js'
 import type { AgentMessageState } from './agentTeam.js'
+import { liveOutputMaxLines, liveOutputView } from './liveOutputLines.js'
+import { isPatchDiff, parseFilePatch, patchHeader, type ToolPatchDiff } from '../diffPatch.js'
 
 type Props = {
   tool: ToolRow
@@ -82,6 +84,10 @@ type Props = {
    *  remain — the expanded card says so instead of passing the preview off
    *  as the full text. */
   sourceFolded?: boolean
+  /** Fullscreen layout: a running card shows more live output lines
+   *  (`tool.liveOutput`: 8 instead of 5; the whole retained tail when
+   *  verbose/expanded). */
+  fullscreen?: boolean
 }
 
 /** Tool display names localize through the `tool-name-*` dictionary family
@@ -224,14 +230,20 @@ function languageFromPath(path: string | undefined): string | undefined {
 // body hangs under a `  ⎿  ` gutter (first line) / blank continuation, so
 // tool output is visually nested under its header instead of flush-left.
 
-/** `hint` is the trajectory pointer: recessive, never competing with output. */
-type BodyTone = 'add' | 'del' | 'dim' | 'plain' | 'error' | 'hint' | 'path'
+/** `hint` is the trajectory pointer: recessive, never competing with output.
+ *  `live` is a running call's live output line: dim, one row (truncated). */
+type BodyTone = 'add' | 'del' | 'dim' | 'plain' | 'error' | 'hint' | 'path' | 'live'
 type BodyLine = {
   readonly text: string
   readonly tone: BodyTone
   /** The row's collapse hint: dim at rest, steps to text while hovered so the
    *  toggle reads before the click (the compaction row's pattern). */
   readonly revealOnHover?: boolean
+  /** `path` rows: the file a click opens when the text is not the path
+   *  itself (a moved file's `old → new`). */
+  readonly target?: string
+  /** `path` rows: dim text after the path (a patch file's `(+N -M)`). */
+  readonly suffix?: string
 }
 
 /** The collapsed text body keeps three lines. */
@@ -284,13 +296,46 @@ function sideLines(text: string): string[] {
   return lines
 }
 
+/** A patch file → its header and numbered hunk rows: each line carries
+ *  its real line number (old for a removed line, new otherwise) in a gutter
+ *  as wide as the file's largest number; `⋯` separates hunks. A patch with
+ *  no readable hunk shows its own lines, coloured by their marker. */
+function patchLines(diff: ToolPatchDiff, multiFile: boolean): BodyLine[] {
+  const parsed = parseFilePatch(diff)
+  const header = patchHeader(diff, parsed, multiFile)
+  const out: BodyLine[] = [header.kind === 'path'
+    ? { text: header.path, tone: 'path', target: header.target, suffix: header.suffix }
+    : dim(header.text)]
+  if (parsed.raw !== undefined) {
+    for (const line of parsed.raw) out.push(line.startsWith('+') ? add(line) : line.startsWith('-') ? del(line) : plain(line))
+    return out
+  }
+  const width = String(parsed.maxLineNo).length
+  parsed.hunks.forEach((hunk, index) => {
+    if (index > 0) out.push(dim('⋯'))
+    for (const line of hunk.lines) {
+      const no = String((line.kind === 'del' ? line.oldNo : line.newNo) ?? '').padStart(width)
+      if (line.kind === 'del') out.push(del(`${no} - ${line.text}`))
+      else if (line.kind === 'add') out.push(add(`${no} + ${line.text}`))
+      else out.push(plain(`${no}   ${line.text}`))
+    }
+  })
+  return out
+}
+
 /** Diff hunks → add/del rows. The header already carries the path for the
  *  common single-hunk case; with several hunks a path row separates files
- *  and `⋯` separates scattered hunks of one file (upstream DiffBlock). */
+ *  and `⋯` separates scattered hunks of one file (upstream DiffBlock). A
+ *  patch file (`ToolFileDiff.patch`) renders through {@link patchLines}. */
 function diffLines(diffs: readonly ToolFileDiff[]): BodyLine[] {
   const out: BodyLine[] = []
   let prevPath: string | undefined
   for (const diff of diffs) {
+    if (isPatchDiff(diff)) {
+      out.push(...patchLines(diff, diffs.length > 1))
+      prevPath = diff.path
+      continue
+    }
     if (diffs.length > 1) {
       if (diff.path !== prevPath) out.push({ text: diff.path, tone: 'path' })
       else out.push(dim('⋯'))
@@ -660,6 +705,7 @@ export function AssistantToolUseMessage({
   fresh = false,
   revealVersion,
   sourceFolded = false,
+  fullscreen = false,
 }: Props): React.ReactNode {
   // MessageList owns the single production subscription and passes a version
   // prop only to active reveal rows. Standalone consumers keep the fallback
@@ -743,6 +789,18 @@ export function AssistantToolUseMessage({
     - (!isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0))
   const useSplitDiff = !isError && view?.card === 'diff' &&
     (diffLayout === 'split' || (diffLayout !== 'unified' && columns >= SPLIT_DIFF_MIN_COLS))
+  // Live output of the running call: the newest lines of the bounded tail,
+  // sanitized and cut to the body width in cells (liveOutputLines.ts).
+  // Memoized on the tail itself, so the 1 s elapsed tick re-renders without
+  // rescanning; only a new chunk (a new string) recomputes.
+  const liveText = isRunning && !isError && sendMessage === undefined && !useSplitDiff ? tool.liveOutput ?? '' : ''
+  const liveDropped = tool.liveOutputDropped ?? 0
+  const liveMaxLines = liveOutputMaxLines(verbose, fullscreen)
+  const liveWidth = Math.max(1, columns - 4)
+  const liveView = React.useMemo(
+    () => liveText === '' ? undefined : liveOutputView(liveText, liveDropped, liveMaxLines, liveWidth),
+    [liveText, liveDropped, liveMaxLines, liveWidth],
+  )
   let body: BodyLine[] = []
   if (sendMessage !== undefined) {
     // 正文 = message 文本预览（长文走既有的三行折叠），summary 作副行；
@@ -845,8 +903,21 @@ export function AssistantToolUseMessage({
   const revealedLineCount = revealable
     ? revealLinesOf(revealKey, rendered.length, { enabled: true, active: true })
     : rendered.length
-  const shownLines: BodyLine[] =
+  const revealedLines: BodyLine[] =
     revealedLineCount >= rendered.length ? rendered : rendered.slice(0, revealedLineCount)
+  // Live output rides OUTSIDE the line cap and the smooth reveal: it is the
+  // tool's real progress (never prose), so it paints complete, right under
+  // the body (the running line), once the body itself is fully shown. The
+  // omitted header counts every older line, dropped or above the window.
+  const liveLines: BodyLine[] = liveView === undefined
+    ? []
+    : [
+        ...(liveView.omitted > 0 ? [dim(t('tool-live-omitted', { count: liveView.omitted }))] : []),
+        ...liveView.lines.map((text): BodyLine => ({ text, tone: 'live' })),
+      ]
+  const shownLines: BodyLine[] = liveLines.length === 0 || revealedLines.length < rendered.length
+    ? revealedLines
+    : [...lines, ...liveLines, ...rendered.slice(lines.length)]
   // Nested split-diff context panes must also yield to interaction highlights.
   // `none` leaves them transparent so the selected/expanded root shows through.
   const ordinaryToolBackground = isSelected || isExpanded ? 'none' : toolBackground
@@ -943,10 +1014,11 @@ export function AssistantToolUseMessage({
                       // Stop propagation so the row's fold toggle does not
                       // fire when clicking the path.
                       event.stopImmediatePropagation()
-                      onOpenFile(line.text)
+                      onOpenFile(line.target ?? line.text)
                     }}
                   >
                     <Text color="ide" underline>{line.text}</Text>
+                    {line.suffix !== undefined && <Text dimColor>{line.suffix}</Text>}
                   </Box>
                 ) : (
                   <Text
@@ -963,14 +1035,15 @@ export function AssistantToolUseMessage({
                                 ? 'ide'
                                 : undefined
                     }
-                    dimColor={line.tone === 'dim' && !(line.revealOnHover === true && hovered)}
-                    wrap="wrap"
+                    dimColor={(line.tone === 'dim' && !(line.revealOnHover === true && hovered)) || line.tone === 'live'}
+                    wrap={line.tone === 'live' ? 'truncate-end' : 'wrap'}
                   >
                     {line.tone === 'plain' && syntaxLanguage !== undefined ? (
                       <SyntaxText text={line.text} sourceText={bodySource} lineIndex={index} language={syntaxLanguage} />
                     ) : (
                       line.text === '' ? ' ' : line.text
                     )}
+                    {line.suffix !== undefined && <Text dimColor>{line.suffix}</Text>}
                   </Text>
                 )}
               </Box>

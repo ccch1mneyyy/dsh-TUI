@@ -151,11 +151,31 @@ function plausibleTerminalCellSize(
   return { width: Math.round(value.width), height: Math.round(value.height) }
 }
 
+/** Compute the fitted canvas size without allocating pixels, for frame admission. */
+export function terminalImagePixelSize(
+  columns: number,
+  rows: number,
+  cellSize: TerminalCellSize = DEFAULT_TERMINAL_CELL_SIZE,
+  presentation?: TerminalImagePlacement['presentation'],
+): readonly [number, number] {
+  const cell = normalizeTerminalCellSize(cellSize)
+  const safeColumns = Math.max(1, Math.floor(columns))
+  const safeRows = Math.max(1, Math.floor(rows))
+  // Keep an affordable physical box exact. Over budget, shrink uniformly
+  // and round each edge by at most one pixel; exact-ratio integer multiples
+  // can otherwise discard most of the budget at a boundary (e.g. 1034x1040).
+  return boundedPixelBox(
+    safeColumns * cell.width,
+    safeRows * cell.height,
+    presentation === 'preview' ? TERMINAL_IMAGE_PREVIEW_MAX_BYTES : TERMINAL_IMAGE_MAX_BYTES,
+  )
+}
+
 /**
- * Prepare an RGBA raster that fits a laid-out cell rectangle without
- * distortion. The transparent canvas has the terminal rectangle's physical
- * aspect ratio; the host only downsamples source pixels and centers them
- * inside it. Kitty can then scale that bounded canvas to the requested cells.
+ * Fit an RGBA source into the cell rectangle's physical pixel box, preserving
+ * its aspect ratio with transparent letterboxing. Enlarge or downsample here:
+ * terminals that do not upscale Kitty payloads need the box's own pixels to
+ * fill the reserved cells. Oversized boxes still obey the allocation budget.
  */
 export function fitTerminalImageSource(
   source: TerminalImageSource,
@@ -164,51 +184,9 @@ export function fitTerminalImageSource(
   cellSize: TerminalCellSize = DEFAULT_TERMINAL_CELL_SIZE,
   presentation?: TerminalImagePlacement['presentation'],
 ): TerminalImageSource {
-  const cell = normalizeTerminalCellSize(cellSize)
-  const safeColumns = Math.max(1, Math.floor(columns))
-  const safeRows = Math.max(1, Math.floor(rows))
-  const [boxWidth, boxHeight] = boundedPixelBox(
-    safeColumns * cell.width,
-    safeRows * cell.height,
-    presentation === 'preview' ? TERMINAL_IMAGE_PREVIEW_MAX_BYTES : TERMINAL_IMAGE_MAX_BYTES,
-  )
-
-  // Kitty scales the raster to the requested cell rectangle, so its canvas
-  // must have that rectangle's exact physical aspect ratio. Rounding each
-  // side independently would distort tiny sources. Use the smallest integer
-  // multiple of the reduced ratio that contains the fitted source.
-  const requestedWidth = safeColumns * cell.width
-  const requestedHeight = safeRows * cell.height
-  const divisor = greatestCommonDivisor(requestedWidth, requestedHeight)
-  let ratioWidth = requestedWidth / divisor
-  let ratioHeight = requestedHeight / divisor
-  let maximumMultiple = Math.floor(
-    Math.min(boxWidth / ratioWidth, boxHeight / ratioHeight),
-  )
-
-  // Some coprime physical dimensions need more pixels than the allocation
-  // budget even at their smallest exact ratio. Only then use the nearest
-  // uniformly bounded raster ratio.
-  if (maximumMultiple < 1) {
-    const boundedDivisor = greatestCommonDivisor(boxWidth, boxHeight)
-    ratioWidth = boxWidth / boundedDivisor
-    ratioHeight = boxHeight / boundedDivisor
-    maximumMultiple = boundedDivisor
-  }
-
-  const multiple = Math.min(
-    maximumMultiple,
-    Math.max(
-      1,
-      Math.ceil(source.width / ratioWidth),
-      Math.ceil(source.height / ratioHeight),
-    ),
-  )
-  const canvasWidth = ratioWidth * multiple
-  const canvasHeight = ratioHeight * multiple
+  const [canvasWidth, canvasHeight] = terminalImagePixelSize(columns, rows, cellSize, presentation)
 
   const canvasScale = Math.min(
-    1,
     canvasWidth / source.width,
     canvasHeight / source.height,
   )
@@ -248,15 +226,6 @@ export function fitTerminalImageSource(
     data.set(content.subarray(sourceStart, sourceStart + sourceStride), targetStart)
   }
   return { data, width: canvasWidth, height: canvasHeight }
-}
-
-function greatestCommonDivisor(left: number, right: number): number {
-  while (right !== 0) {
-    const remainder = left % right
-    left = right
-    right = remainder
-  }
-  return left
 }
 
 function boundedPixelBox(width: number, height: number, maxBytes: number): readonly [number, number] {

@@ -19,6 +19,7 @@
 import type { ResumeResult } from '../adapter/ports/channel-view.js'
 import type { MountFailure } from '../sessionMounts.js'
 import { t } from '../i18n.js'
+import { WORKING_GATE_NOTICES } from '../commands.js'
 
 /**
  * The message for a failed mount, or undefined when it should stay silent.
@@ -31,7 +32,7 @@ export function resumeFailureText(result: ResumeResult): string | undefined {
     case 'cancelled':
       return undefined
     case 'working':
-      return t('resume-while-working')
+      return t(WORKING_GATE_NOTICES.resume)
     case 'unavailable':
       return t('resume-unavailable')
     case 'occupied':

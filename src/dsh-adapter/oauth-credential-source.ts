@@ -63,6 +63,7 @@ export function createOAuthCredentialSource(
       return access(await store.read(provider)) !== undefined
     },
     async fresh(request = {}): Promise<OAuthAccess | undefined> {
+      request.signal?.throwIfAborted()
       // Due: about to expire, or still the very token the backend refused.
       // A token that differs from the refused one was rotated by someone
       // else (a fresh `/login`, another request's refresh): use it as is.
@@ -70,6 +71,7 @@ export function createOAuthCredentialSource(
         credential.expires - now() <= REFRESH_MARGIN_MS ||
         (request.rejected !== undefined && credential.access === request.rejected)
       const current = access(await store.read(provider))
+      request.signal?.throwIfAborted()
       if (current === undefined) return undefined
       if (!due(current)) return current
       // Re-read and refresh under the file's own lock (compare-and-swap): a
@@ -79,7 +81,12 @@ export function createOAuthCredentialSource(
         const credential = asStoredCredential(stored)
         if (credential === undefined) return undefined
         if (!due({ access: credential.access, expires: credential.expires })) return undefined
-        return refresh(provider, credential, AbortSignal.timeout(REFRESH_TIMEOUT_MS))
+        const timeout = AbortSignal.timeout(REFRESH_TIMEOUT_MS)
+        const signal = request.signal === undefined ? timeout : AbortSignal.any([request.signal, timeout])
+        signal.throwIfAborted()
+        const refreshed = await refresh(provider, credential, signal)
+        signal.throwIfAborted()
+        return refreshed
       })
       return access(next)
     },

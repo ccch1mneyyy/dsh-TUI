@@ -1,0 +1,76 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "assistant.message",
+    "assistant.attempt.end",
+    "tool.call",
+    "session.status",
+    "session.status",
+    "tool.result",
+    "context.capacity",
+    "usage",
+    "context.usage",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "assistant.message",
+    "assistant.attempt.end",
+    "usage",
+    "context.usage",
+    "session.status",
+    "step.end",
+    "turn.end"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Create a file named b.txt containing the single word hi, using your file editing tool. Do nothing else."
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "apply_patch",
+        "status": "error",
+        "call": {
+          "card": "diff",
+          "title": "b.txt",
+          "displayKey": "tool-name-write"
+        },
+        "result": null,
+        "errorText": "Declined"
+      }
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "contextWindow": 258400,
+    "tokens": {
+      "input": 6,
+      "output": 112,
+      "cacheRead": 9444,
+      "cacheWrite": 9582
+    },
+    "lastUsage": {
+      "input": 3,
+      "output": 4,
+      "cacheRead": 9444,
+      "cacheWrite": 138
+    },
+    "todos": [],
+    "notices": [],
+    "contextMeasure": {
+      "type": "context.usage",
+      "used": 0,
+      "max": 246400
+    }
+  }
+}

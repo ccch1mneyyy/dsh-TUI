@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, type LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
-import type { CommandCompletionNode } from '../../commands.js'
+import { WORKING_GATE_NOTICES, type CommandCompletionNode } from '../../commands.js'
 import { nearestLowerEffort, readEffortPref, resolveEffortDefault, writeEffortPref, STANDARD_EFFORT_LADDER } from '../../effortPrefs.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getLang, t, tOr, type I18nKey, type Lang } from '../../i18n.js'
@@ -44,7 +44,7 @@ export function createModelActions(
       listModels(provider: string): Promise<readonly LlmModelInfo[]>
     }
     | undefined
-  let preferredEffort: string | undefined = deps.initialEffort ?? readEffortPref()
+  let preferredEffort: string | undefined = readEffortPref() ?? deps.initialEffort
   // Last fallback notice shown for a (preferred → applied) pair: bind fires on
   // every session switch, so an unchanged downgrade must not re-toast.
   let lastEffortFallbackNotice: { preferred: string; applied: string | undefined } | undefined
@@ -81,14 +81,16 @@ export function createModelActions(
       deps.checkContextWarning()
     }
   }
-  /** Localized label of a standard ladder tier (the claude-effort-* family
-   * is the repo's existing vocabulary for these five names). */
+  /** Localized label of a standard ladder tier. The five names are the
+   *  host's own vocabulary (`effort-tier-*`): they label a *route* that
+   *  declares reasoning support without a tier list, whichever backend serves
+   *  it. A backend that shows its own ladder carries its own copy (B-3). */
   const STANDARD_EFFORT_LABEL_KEYS: Record<string, I18nKey> = {
-    low: 'claude-effort-low',
-    medium: 'claude-effort-medium',
-    high: 'claude-effort-high',
-    xhigh: 'claude-effort-xhigh',
-    max: 'claude-effort-max',
+    low: 'effort-tier-low',
+    medium: 'effort-tier-medium',
+    high: 'effort-tier-high',
+    xhigh: 'effort-tier-xhigh',
+    max: 'effort-tier-max',
   }
   const standardEffortLabel = (id: string): string => {
     const key = STANDARD_EFFORT_LABEL_KEYS[id]
@@ -210,7 +212,22 @@ export function createModelActions(
     notify(t('effort-switched', { name: effort.name }))
     state.emit()
   }
-  const listEfforts = async (): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined }> => {
+  const listEfforts = async (route?: { provider: string; model: string }): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined; levelsFallback?: true }> => {
+    if (route !== undefined) {
+      const binding = deps.binding.capture()
+      if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return { efforts: [], defaultEffort: undefined }
+      // Preview is independent of the live effort operation: browsing the
+      // picker must neither invalidate a pending preference nor publish the
+      // candidate's context window/tiers into the current session.
+      const info = await llmRuntime.resolveModelInfo(route.provider, route.model)
+      if (!owner.current() || !deps.binding.isCurrent(binding)) return { efforts: [], defaultEffort: undefined }
+      return {
+        efforts: tiersOf(info.reasoning),
+        defaultEffort: typeof info.reasoning === 'object' && info.reasoning !== null ? info.reasoning.defaultEffort : undefined,
+        ...(info.reasoning === true || (typeof info.reasoning === 'object' && info.reasoning !== null && info.reasoning.efforts === undefined)
+          ? { levelsFallback: true as const } : {}),
+      }
+    }
     const capture = captureEffort()
     const resolved = await resolveEfforts(capture)
     if (resolved === 'stale') return { efforts: [], defaultEffort: undefined }
@@ -236,10 +253,11 @@ export function createModelActions(
   }
   /**
    * Re-seat the future-sessions default reasoning effort. `id` is the settings
-   * user layer (the settings user layer outranks the cordis.yml `effort` pin);
-   * an absent level re-derives the boot chain (cordis `effort` → the persisted
-   * /effort choice). Also re-pins the live agent when its route offers the
-   * level, so the change lands on the next request. No-op when unchanged.
+   * user layer (an explicit value there outranks the persisted `/effort`
+   * choice); an absent level re-derives the boot chain (the persisted
+   * `/effort` choice → the cordis.yml `effort` deployment default). Also
+   * re-pins the live agent when its route offers the level, so the change
+   * lands on the next request. No-op when unchanged.
    */
   const setDefaultEffort = (id: string | undefined): void => {
     const resolved = resolveEffortDefault(id, deps.initialEffort, readEffortPref())
@@ -295,7 +313,7 @@ export function createModelActions(
   const switchPreset = async (presetId: string): Promise<boolean> => {
     const presets = rosterOf(ctx)
     if (presets === undefined) { notify(t('preset-unavailable'), { color: 'error' }); return false }
-    if (state.working) { notify(t('preset-agent-running'), { color: 'warning' }); return false }
+    if (state.working) { notify(t(WORKING_GATE_NOTICES.preset), { color: 'warning' }); return false }
     const capture = deps.binding.capture()
     const targetAgent = deps.agent()
     const targetSession = targetAgent.session

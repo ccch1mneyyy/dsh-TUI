@@ -9,10 +9,12 @@
  *      只能 jpeg 时显式填白）、B9 源格式被接受时保留 alpha、B10 需要改字节
  *      的动图明确拒绝、B11 限内动图原字节直通、B12/B13 解码失败（含截断
  *      GIF）拒绝、B14 提示数字取附件库回报、B15 allowlist 复查、B16 字节
- *      上限、B17 会话代际守卫；
+ *      上限、B17 会话代际守卫、B18/B19 错标源按内容改标、B20/B21 真实位图
+ *      （BMP）先转码再入库；
  *   C. host/profile 分离：入站适配复用宿主 sharp，不加载 profile 的第二份；
  *   E. sharp 缺失（子进程 + loader 钩子让 optional 依赖不可解析）：可放行时
- *      降级交给附件库，已知超限/格式不可转换时粘贴即报错。
+ *      降级交给附件库，已知超限/格式不可转换时粘贴即报错；纯 JS 的位图
+ *      转码不依赖 libvips，限内位图仍然入库。
  *
  * 未覆盖：附件库自身的归一化（尺寸、格式、动图单帧化）不在本 PR 范围内，
  * 这里只验证「交给附件库之前」这一步。
@@ -68,7 +70,11 @@ if (process.env.DSH_VERIFY_IMAGE_SPLIT_SHARP === '1') {
     write(join(hostSession, 'package.json'), '{"name":"@deepseek-ai/dsh-session"}')
     mkdirSync(join(profile, 'node_modules/@deepseek-ai'), { recursive: true })
     symlinkSync(hostSession, join(profile, 'node_modules/@deepseek-ai/dsh-session'), 'junction')
-    for (const file of ['dsh-adapter/sharp.ts', 'utils/imageResize.ts']) {
+    // `utils/imageResize.ts` re-exports the pure probe from the neutral seam
+    // (`backends/shared/image-size.ts`), so the profile tree carries both —
+    // and the ingress adaptation now also pulls in the pure-JS bitmap
+    // converter (`utils/bmp.ts`).
+    for (const file of ['dsh-adapter/sharp.ts', 'utils/imageResize.ts', 'backends/shared/image-size.ts', 'utils/bmp.ts']) {
       const target = join(profile, 'src', file)
       mkdirSync(dirname(target), { recursive: true })
       copyFileSync(new URL(`../src/${file}`, import.meta.url), target)
@@ -178,6 +184,26 @@ function truncatedPng(): Uint8Array {
 /** Same shape for GIF: a 10-byte header whose logical screen is 0×0. */
 function truncatedGif(): Uint8Array {
   return new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0, 0, 0, 0])
+}
+
+/** A real 24-bit BI_RGB bitmap: what a WeChat, WSLg or X11 clipboard owner
+ *  hands over, and a format neither the byte probe nor libvips can decode. */
+function smallBmp(width: number, height: number): Uint8Array {
+  const stride = (width * 3 + 3) & ~3
+  const pixels = stride * height
+  const bmp = Buffer.alloc(54 + pixels)
+  bmp.write('BM', 0, 'ascii')
+  bmp.writeUInt32LE(bmp.length, 2)
+  bmp.writeUInt32LE(54, 10)
+  bmp.writeUInt32LE(40, 14)
+  bmp.writeInt32LE(width, 18)
+  bmp.writeInt32LE(height, 22)
+  bmp.writeUInt16LE(1, 26)
+  bmp.writeUInt16LE(24, 28)
+  bmp.writeUInt32LE(0, 30)
+  bmp.writeUInt32LE(pixels, 34)
+  bmp.fill(0x33, 54)
+  return new Uint8Array(bmp)
 }
 
 interface StoredImage { data: Uint8Array; mediaType: string }
@@ -373,6 +399,41 @@ if (!NO_SHARP) {
       b13.error !== undefined && b13.stored === undefined,
       b13.error ?? 'no error')
 
+    // Mislabeled sources: the paste declares a media type from the filename,
+    // the bytes say otherwise (a renamed wechat download, a re-saved
+    // screenshot). The sniff must win BEFORE any admission decision, matching
+    // the local image store (channel/core/local-images.ts).
+    const b18 = await stageViaEntry({ mediaTypes: ACCEPTED, data: smallPng, mediaType: 'image/jpeg' })
+    check('B18. a png saved as .jpg is stored as png, byte-identical, no conversion report',
+      b18.error === undefined && b18.stored?.mediaType === 'image/png' && b18.adjustment === undefined
+      && b18.stored.data.every((v, i) => v === smallPng[i]),
+      b18.error ?? `${b18.stored?.mediaType} ${b18.stored?.data.byteLength}`)
+
+    const smallWebp = await sharp({ create: { width: 90, height: 70, channels: 3, background: '#336699' } }).webp().toBuffer()
+    const b19 = await stageViaEntry({ mediaTypes: ACCEPTED, data: smallWebp, mediaType: 'image/png' })
+    check('B19. a webp saved as .png is stored as webp, not transcoded under a false label',
+      b19.error === undefined && b19.stored?.mediaType === 'image/webp' && b19.adjustment === undefined
+      && b19.stored.data.every((v, i) => v === smallWebp[i]),
+      b19.error ?? `${b19.stored?.mediaType} ${b19.stored?.data.byteLength}`)
+
+    // A real bitmap paste — valid data in a format the byte probe cannot
+    // measure and libvips cannot decode at all. It used to be refused as
+    // "unsupported image format"; the gate converts it instead, under either
+    // label the owner happened to declare.
+    const b20 = await stageViaEntry({ mediaTypes: ACCEPTED, data: smallBmp(120, 80), mediaType: 'image/png' })
+    const b20Size = b20.stored ? probeImageSize(b20.stored.data) : null
+    check('B20. a real bitmap under a png label is converted, not refused',
+      b20.error === undefined && b20.stored?.mediaType === 'image/png'
+      && b20Size?.width === 120 && b20Size.height === 80,
+      b20.error ?? `${b20.stored?.mediaType} ${JSON.stringify(b20Size)}`)
+
+    const b21 = await stageViaEntry({ mediaTypes: ACCEPTED, data: smallBmp(64, 48), mediaType: 'image/bmp' })
+    const b21Size = b21.stored ? probeImageSize(b21.stored.data) : null
+    check('B21. a bitmap under its own label is converted to an accepted type',
+      b21.error === undefined && b21.stored?.mediaType === 'image/png'
+      && b21Size?.width === 64 && b21Size.height === 48,
+      b21.error ?? String(b21.stored?.mediaType))
+
     const b14 = await stageViaEntry({
       mediaTypes: ACCEPTED,
       data: bigPng,
@@ -502,7 +563,10 @@ if (!NO_SHARP) {
   check('E3. sharp-missing still refuses a measured oversize paste',
     !e3.ok && e3.message.includes('sharp is unavailable'), e3.ok ? 'staged' : e3.message)
 
-  const e4 = await stage(truncatedPng(), 'image/gif', ['image/png'])
+  // GIF bytes under a gif label the profile refuses (a png-signature byte
+  // here would now be sniff-corrected to png and degraded like E2 — the
+  // label the content contradicts must no longer be the refusal reason).
+  const e4 = await stage(truncatedGif(), 'image/gif', ['image/png'])
   check(
     'E4. sharp-missing refuses a format the profile does not accept',
     !e4.ok && e4.message.includes('sharp is unavailable'),
@@ -512,6 +576,12 @@ if (!NO_SHARP) {
   const e5 = await stage(truncatedPng(), 'image/png', ['image/jpeg'])
   check('E5. sharp-missing refuses an unconvertible unmeasurable paste',
     !e5.ok && e5.message.includes('sharp is unavailable'), e5.ok ? 'staged' : e5.message)
+
+  // A bitmap is converted without libvips, so an in-cap paste still reaches
+  // the store where sharp cannot be resolved at all.
+  const e6 = await stage(smallBmp(120, 80), 'image/png')
+  check('E6. sharp-missing still stages a bitmap paste (the conversion needs no libvips)',
+    e6.ok && e6.saved === 1, e6.ok ? `stored ${e6.saved}` : e6.message)
 }
 
 console.log(failures === 0 ? 'image ingress adaptation regression passed' : `${failures} failure(s)`)

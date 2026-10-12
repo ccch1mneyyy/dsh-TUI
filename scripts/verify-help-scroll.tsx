@@ -204,7 +204,8 @@ try {
   stdin.write('\x1b[F')
   await settle(() => screenText().includes('/q —'))
   stdin.write('\x1b[B'.repeat(60))
-  check(LOCAL_COMMANDS.at(-1)?.name === 'q' && await settled(() => screenText().includes('/connect —')), 'narrow Help keeps the command-list tail reachable after End and navigation')
+  // Check the actual tail: earlier entries can leave the final viewport as the catalog grows.
+  check(LOCAL_COMMANDS.at(-1)?.name === 'q' && await settled(() => screenText().includes('/q —')), 'narrow Help keeps the command-list tail reachable after End and navigation')
   check(await settled(() => screenText().includes('↑/↓')), 'narrow Help keeps the navigation hint fixed')
 } finally {
   app.unmount()

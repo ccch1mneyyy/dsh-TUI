@@ -328,6 +328,32 @@ attachment；cleanup failure 必须保留可诊断、可重试状态。
 固定的 dsh-std revision。只验证源码仓库或只执行参考实现测试，不足以产生 artifact
 claim。
 
+### TUI-BACKEND-001 Backend contribution family
+
+后端的公开声明是 `tui.dsh/v1alpha1#Backend`（接缝十四）：`id`、`label`（只收字面量）、
+`shortLabel`、`product?`、`capabilities`、`grants`、`install?`、`unloadExport?`、
+`confirmation?`。形状由 `protocols/tui-contributions.js` 的 `validateBackendSpec` 判定；
+宿主侧再判一次"这个宿主能不能兑现"（`backendAdmission`）：未知的能力/权限名**降级不
+拒绝**并记为待决项，已知权限名却没有授权则注册但不进 picker，声明宿主保留 id 时在
+准入处被拒（`BACKEND_ID_RESERVED`）。`capabilities` 必须覆盖运行期
+`AgentSession.capabilities` 实际返回的键集。
+
+启动恢复只针对所选后端，恢复目标绑定后端身份；后端不可用、没有上次会话、指定会话
+不存在一律明确报错并非零退出，不回落、不自动新建。`lastSession` 的接口与恢复目标的
+传递方式不在协议内。
+
+- Source：`protocols/tui-contributions.js`
+- Fixtures：`conformance/fixtures/valid-backend-contribution.json`（SDK peer 形态：安装配方 + 池钩子）、
+  `valid-backend-contribution-cli.json`（系统 CLI 形态：无安装配方 + 池钩子）、
+  `valid-backend-contribution-trusted.json`（第二个已实现的确认策略 `trusted-source`）、
+  `invalid-backend-unknown-field.json`（即 `nativeKey` 那条反例）、`invalid-backend-bad-id.json`、
+  `invalid-backend-key-label.json`、`invalid-backend-capability-shape.json`、
+  `invalid-backend-install-incomplete.json`、`invalid-backend-confirmation-policy.json`、
+  `invalid-backend-grants-shape.json`
+- Test："Backend contribution shape in both backend shapes (SDK peer with an install recipe,
+  system CLI with a pool hook), both implemented confirmation policies (confirm, trusted-source),
+  capability/grants declaration, the refusals, and resume binding semantics"（automated）
+
 ### TUI-TRUST-001 Trust disclosure
 
 当前 profile 为 `trusted-in-process`。Manifest permission 用于兼容性、授权提示和
@@ -369,6 +395,7 @@ evaluator 成功时成立。
 | 十一 · 状态行 | `ctx.tuiStatus` | 提示框上方的键控状态行 |
 | 十二 · 键盘快捷键 | `ctx.tuiShortcuts` | 注册全局组合键 |
 | 十三 · 条目渲染器 | `ctx.tuiRenderers` | 自定义会话事件 → transcript 文本行 |
+| 十四 · 后端 | 贡献族声明 + 注册 | 第三方后端接入（Backend 贡献族） |
 
 接缝九~十三统称**扩展面**（dsh-tui-extensions）。类型增强（`Context` 上的
 四个服务、`Events` 上的决策事件）从一个导入获得：
@@ -957,6 +984,124 @@ ctx.effect(() => () => dispose?.())
 - 事件类型注册的两条铁律（log-only + 写入 `KNOWN_SESSION_EVENT_TYPES`）仍
   是接缝一的责任——渲染器只管"怎么显示"，不管"能不能持久化"。
 
+## 接缝十四：后端（Backend 贡献族）
+
+前十三道接缝说的都是"插件往 TUI 里加什么"；这一道声明的是**一个后端在宿主里长什么样**：
+由它开进程、答话哪套会话能力、要哪些宿主权限、怎么装、退出时关哪个资源池。
+与九~十三不同，它不是 `ctx.tui*` 服务：声明随 manifest 的
+`x-dsh-tui` 进来（与设置区块、全屏场景同一个 extension catalog），注册与判定
+发生在 profile 的准入层。字段语义、词表与恢复语义的完整口径见
+[说明 0009](../notes/0009-backend-contribution.md)。
+
+**当前状态：`alpha`，不承诺。** 类型面、definition、contract profile、conformance
+与**准入链路**（清单 → registry → descriptor）都已可用，第三方 bundle 的声明过得了准入；
+仍未做的是把**已挂载 bundle** 的声明接进注册表与 picker 的那一步（装链路，见本节末）。
+
+### 声明形状
+
+```json
+{
+  "apiVersion": "tui.dsh/v1alpha1", "kind": "Backend", "id": "com.example.backend",
+  "name": "example_backend",
+  "spec": {
+    "id": "example-agent", "label": { "text": "Example Agent" }, "shortLabel": "Example",
+    "product": "example-cli",
+    "capabilities": ["permissions", "models", "rename"],
+    "grants": [],
+    "install": { "executor": "pnpm-profile-add", "specifier": "@example/agent-sdk@1.2.3", "version": "1.2.3" },
+    "unloadExport": "closeExamplePool",
+    "confirmation": { "policy": "confirm" }
+  }
+}
+```
+
+- `id`：`^[a-z0-9][a-z0-9-]{0,31}$`。宿主自己的 id（`dsh`/`claude`/`codex`）是保留字，
+  贡献声明其中之一在准入处被拒（`BACKEND_ID_RESERVED`）。
+- `label` **只收字面量**——宿主 i18n 键是宿主的词表，贡献不许借它说话。
+- `shortLabel` 必填；`product`、`install`、`unloadExport`、`confirmation` 可选。
+- 未知字段一律拒（`nativeKey`、`inTree` 之类 in-tree 私有项因此进不来）；声明里
+  的文本按不可信输入净化：剥控制字符、按 terminal cell 截断。
+- `confirmation` 是**请求**，不是自授豁免：缺省 `confirm`（宿主始终询问）；`trusted-source`
+  请求走宿主的可信来源通道，宿主按自己的判据决定，判据不成立一律 fail closed 退回
+  `confirm`。判据与四条边界（嫡系清单 + provenance 交叉、免确认 ≠ 免记录/免展示、
+  只覆盖该包本身、伪装嫡系退回确认）见 `notes/0009` 的「Permissions and security」。
+  未知取值一律拒；取值集合只增不删。
+
+### 公开子集与 in-tree 私有项
+
+宿主自己后端的 manifest 是这份公开声明的**超集**：`inTree`、`alwaysAvailable`、
+`nativeKey`、`vendorPackages`、`backendExport` 与 `label.kind === 'key'` 都是仓内私有项。
+投影只有一个方向（`backendContributionOf()`，把 manifest 剥成公开声明），门禁断言
+每个内建后端都投影得干净、且投影结果过 `validateBackendSpec()`。
+
+### 准入判定
+
+`validateBackendSpec` 只答"形状对不对"，"这个宿主能不能兑现"由宿主侧
+`backendAdmission` 判，复用插件准入的五态：
+
+| 判定 | 触发 | 结果 |
+| --- | --- | --- |
+| `compatible` | 能力与权限都在词表内且已授权 | 注册并进 picker |
+| `compatible_degraded` | 能力名或权限名不在宿主词表内 | 注册，记为待决项（`capability:<name>` / `permission:<name>`），**不拒绝** |
+| `waiting_authorization` | 权限名已知但没有授权（`PERMISSION_NOT_GRANTED`） | 注册但**不进 picker** |
+| `rejected` | 声明了宿主保留的 id（`BACKEND_ID_RESERVED`） | 抛错，内建 manifest 走到这里必须是响亮的构建期错误 |
+| `unknown` | 保留给将来的协议版本协商 | 今天不产生（W-2 只接线，不引入版本协商） |
+
+### `unloadExport` 的池语义
+
+`unloadExport` 只用于**模块级/进程级**资源池（跨会话复用的那种）；会话级资源归
+`session.dispose()`。宿主只对**真的加载过**的条目记账并调用：「未加载即不关池」是
+宿主的不变量——没加载过的后端不会被 import，也不会被关池；第二次 unload 是 no-op。
+失败必须响亮且归属于具体条目，不能拖垮别的贡献或基础 TUI。
+
+这条的**执行强度在宿主**：贡献写不出"我没被加载就别关我的池"，那是注册表的记账行为
+（`src/dsh-adapter/backend-registry.ts`）。所以它的反例在宿主门禁里——
+`scripts/fixtures/probe-backend/` 的假后端配一份独立模块的池台账，
+`scripts/verify-backend-contribution.ts` 用它钉住三条不变量与幂等性。conformance fixture
+层不承载这条：manifest 里没有"我还没被加载"这种形状。
+
+### 命令名与宿主命令表
+
+后端 MUST NOT 依赖宿主的命令表：不读它来决定自己注册什么名字，也不假定宿主的某个命令
+一定存在。要保留的名字从**自身能力面**派生（自己实现的命令 + manifest 里声明的
+goals / channels / permissions 一类名字）。
+
+重名由**宿主**在合并与分发两处丢弃（local names win：`session-controls.ts` 的合并、
+`Chat.tsx` 的本地命令判定），因此后端侧不需要 `local.has(name)` 一类防御。这条不是形状
+规则——`validateBackendSpec` 不校验命令名，写在这里是让你知道**谁负责**。
+
+### 恢复语义
+
+启动恢复**只针对所选后端**，恢复目标**绑定后端身份**：裸 `--resume` 只查该后端
+自己的 `lastSession`；后端不可用、没有上次会话、指定会话不存在，一律**明确报错并以
+非零退出**——不回落、不恢复别的后端的上次会话、不自动新建会话。`lastSession` 的接口
+与恢复目标的传递方式不在协议内。安全模式的「重试正常启动」是唯一例外（一次性 env
+`DSH_TUI_RESUME_RETRY`，撤销降级为告警 + 冷启动），它同样不进协议。
+
+### W-2：准入链路已接线，装链路未做
+
+**声明过得了准入。** 前五道接缝之外，`Backend` 这一族在 W-2（Stage C 第一段）里接完了
+它的准入链路：
+
+- `registry-0.15.json` 的 `extensions` 段有 `tui.backend` 条目（sha256 钉住
+  `registry/contracts/backend-v1alpha1.json`），注册表读者、descriptor 的 supported
+  contracts 派生、准入 index 三处都读它；
+- `Backend` 是宿主发布的契约坐标（与 `DecisionEvents` 同一个 provider 形状），bundle 可以在
+  `requires.contracts` 里引用它；
+- 贡献定义由生产准入 catalog 注册（`src/adapter/standard/tui-extension.ts`），所以
+  `x-dsh-tui` 声明在准入时有定义可解析；
+- descriptor **只在真探针证据上**发布该坐标（`ctx.tuiPluginHost.probeBackendAdmission()`，
+  只读、无副作用）：new 内核路径按 live lifecycle 证据，默认的 `legacy` 路径按挂载拓扑里的同一
+  个探针；探针缺席或答不出"可准入"就不发布并说明原因。
+
+**仍未做**：把**已挂载 bundle** 的 `x-dsh-tui` 声明读出来接进 `registerBackend()` 与
+picker——今天注册表只有内置种子，所以"装一个第三方后端 bundle，重启后它出现在 kernel
+picker 里"这条端到端流程仍要等 `/plugin` 的装链路落地。在那之前，本节描述的形状可以被
+准入，但还进不了 picker。
+
+完整口径与逐条门禁见
+[说明 0009](../notes/0009-backend-contribution.md) 的「Wired (W-2)」节。
+
 ## 命名与发布规范
 
 - **包名**：生态约定 `@dsh-tui-ecosystem/<name>`（发布前先查 npm 是否被占）；
@@ -1006,6 +1151,8 @@ ctx.effect(() => () => dispose?.())
 - [ ] 不假设本机存在 GUI 或浏览器
 - [ ] 不在 activation 时缓存单一 Presentation
 - [ ] 声明 remote attach 时通过对应 profile 测试
+- [ ] `TUI-BACKEND-001`：`Backend` 贡献声明通过 `validateBackendSpec` 与宿主准入，
+      fixtures 按预期通过/拒绝（准入链路已接线；真实装链路见接缝十四）
 
 ### D. 运行时行为
 

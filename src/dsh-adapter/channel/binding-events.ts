@@ -39,7 +39,13 @@ export function createBindingEvents(ctx: Context, deps: {
   inputConvergence: InputConvergence
   selection: ModelSelectionRef
   modelActions: { applyPreferredEffort(): Promise<void>; selection: ModelSelectionRef }
-  modeActions: { refreshMode(): void; onSessionEvent(session: unknown, event: unknown): void }
+  modeActions: {
+    refreshMode(): void
+    onSessionEvent(session: unknown, event: unknown): void
+    /** Seed an untouched session with the persisted permission preference
+     *  (permissionPrefs.ts); fire-and-forget on bind, never rejects. */
+    applyRememberedPermission(): Promise<void>
+  }
   projector: ChannelProjection
   subagents: {
     onSessionEvent(session: unknown, event: unknown): boolean
@@ -48,8 +54,16 @@ export function createBindingEvents(ctx: Context, deps: {
     onEnd(info: { id: string; runId?: string; stopReason: string; lastAssistantMessage?: unknown[] }, parent: object | null): void
     forget?(agent: Agent): void
   }
+  /** The job projection's own raw-event half: it times the card hold a tool
+   *  call puts on the job it registers (see channel/job-projection.ts). */
+  jobs?: { onSessionEvent(event: unknown): void }
   agentView: { schedule(): void }
   messageObserver?: { publish(session: unknown, event: unknown): void }
+  /** Seed the upstream auto-retry policy (upstream-retry.ts) for the
+   *  provider route this session actually uses; fire-and-forget on bind,
+   *  never rejects, never blocks. Optional for direct/embed constructors
+   *  that bring no settings seam. */
+  seedUpstreamRetry?(provider: string | undefined): void
   /** Drop a pre-step attachment registered by this channel for one message id
    *  (input-delivery's `retireAttachment`); see the discard hook below.
    *  Optional for direct/embed constructors that never emit inbox discards;
@@ -139,6 +153,13 @@ export function createBindingEvents(ctx: Context, deps: {
       }
       void deps.modelActions.applyPreferredEffort()
       deps.modeActions.refreshMode()
+      // Same pattern as the preferred effort above: the remembered
+      // permission preference seeds sessions that never chose their own.
+      void deps.modeActions.applyRememberedPermission()
+      // The upstream auto-retry policy follows the route in use: the
+      // agent's own options name it after a /model switch or a resume,
+      // and a fresh session falls back to the launch route.
+      deps.seedUpstreamRetry?.(deps.binding.agent.options?.provider ?? deps.state.provider)
       // Entering/resuming a session whose preset serves neither automatic
       // compaction nor tool-result pruning changes what the user can expect
       // from a long session; say it once, here, before the turn starts.
@@ -186,6 +207,7 @@ export function createBindingEvents(ctx: Context, deps: {
         if (!current()) return
         deps.messageObserver?.publish(native.agent.session, event)
         deps.modeActions.onSessionEvent(native.agent.session, event)
+        deps.jobs?.onSessionEvent(event)
       }))
     },
   } satisfies BindingFeedHooks

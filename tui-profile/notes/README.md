@@ -9,7 +9,7 @@
 > [`../governance/rules.md`](../governance/rules.md) 为准；本目录内的文档如何阅读、
 > 编号怎么用，见 [0000-maintenance.md](0000-maintenance.md)。
 
-**编号只是稳定锚点，不是 RFC 流程**：`0001`–`0008` 是文件名与交叉链接长期引用的固定
+**编号只是稳定锚点，不是 RFC 流程**：`0001`–`0009` 是文件名与交叉链接长期引用的固定
 编号，用来保证仓库内外的链接可解析；编号顺序不代表提案顺序、成熟度或批准先后，
 也没有对应的晋级阶梯。新增说明按需在末尾续号。
 
@@ -24,3 +24,4 @@
 | [0006](0006-tui-contributions.md) | TUI Contribution Surfaces |
 | [0007](0007-tui-channel.md) | TUI Channel Capability |
 | [0008](0008-tui-channel-http.md) | dsh-TUI Channel HTTP Endpoint |
+| [0009](0009-backend-contribution.md) | Backend Contribution |

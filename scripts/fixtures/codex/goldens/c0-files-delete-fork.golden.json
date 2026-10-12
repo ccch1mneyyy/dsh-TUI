@@ -1,0 +1,154 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "assistant.attempt.end",
+    "tool.call",
+    "tool.result",
+    "context.capacity",
+    "usage",
+    "context.usage",
+    "tool.call",
+    "tool.result",
+    "usage",
+    "context.usage",
+    "tool.call",
+    "tool.result",
+    "usage",
+    "context.usage",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "assistant.message",
+    "assistant.attempt.end",
+    "usage",
+    "context.usage",
+    "session.status",
+    "step.end",
+    "turn.end",
+    "session.status",
+    "usage",
+    "context.usage",
+    "session.status",
+    "usage",
+    "context.usage",
+    "model.changed",
+    "effort.changed",
+    "mode.changed"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Do exactly these three steps and nothing else. 1) Run the shell command `env | grep -E \"^CODEX\" | cut -d= -f1 | sort`. 2) Use apply_patch to create note.txt con…"
+    },
+    {
+      "kind": "assistant",
+      "text": "I’ll run the exact environment-name command, then create and remove `note.txt` using patches."
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "shell",
+        "status": "ok",
+        "call": {
+          "card": "terminal",
+          "title": "env | grep -E \"^CODEX\" | cut -d= -f1 | sort",
+          "displayKey": "tool-name-bash"
+        },
+        "result": {
+          "card": "terminal"
+        },
+        "resultText": "CODEX_CI CODEX_EXECUTABLE CODEX_HOME CODEX_MANAGED_BY_NPM CODEX_MANAGED_PACKAGE_ROOT CODEX_PROBE_RECORD_DIR CODEX_SESSIO"
+      }
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "apply_patch",
+        "status": "ok",
+        "call": {
+          "card": "diff",
+          "title": "note.txt",
+          "displayKey": "tool-name-write"
+        },
+        "result": {
+          "card": "diff"
+        }
+      }
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "apply_patch",
+        "status": "ok",
+        "call": {
+          "card": "diff",
+          "title": "note.txt",
+          "displayKey": "tool-name-edit"
+        },
+        "result": {
+          "card": "diff"
+        }
+      }
+    },
+    {
+      "kind": "assistant",
+      "text": "done"
+    },
+    {
+      "kind": "turn-summary",
+      "text": ""
+    }
+  ],
+  "state": {
+    "working": false,
+    "contextWindow": 258400,
+    "tokens": {
+      "input": 18,
+      "output": 212,
+      "cacheRead": 44702,
+      "cacheWrite": 9217
+    },
+    "lastUsage": {
+      "input": 3,
+      "output": 5,
+      "cacheRead": 9007,
+      "cacheWrite": 70
+    },
+    "todos": [],
+    "notices": [],
+    "contextMeasure": {
+      "type": "context.usage",
+      "used": 0,
+      "max": 246400
+    }
+  }
+}

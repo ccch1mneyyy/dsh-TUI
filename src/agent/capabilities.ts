@@ -194,6 +194,12 @@ export interface SessionCapabilities {
      *  is no list). */
     readonly levelsFallback?: true
     levels(): readonly EffortOption[]
+    /** Preview a catalog model without switching the session or its effort. */
+    forModel?(ref: ModelRef): {
+      readonly levels: readonly EffortOption[]
+      readonly defaultEffort?: string
+      readonly levelsFallback?: true
+    }
     current(): string | undefined
     set(id: string | null): Promise<void>
   }
@@ -250,6 +256,8 @@ export interface SessionCapabilities {
     peekSettingsImport(): { readonly baseUrl?: string; readonly tiers: Readonly<Record<string, string>> } | undefined
   }
   readonly compact?: { run(): Promise<void> }
+  /** Run the backend's own project-instructions initialization. */
+  readonly init?: { run(): Promise<void> }
   /**
    * Rewind to a user message (`anchor` = its `user.message.anchor`):
    * `preview` reports what restoring the files would change (throws when
@@ -275,6 +283,8 @@ export interface SessionCapabilities {
     history?(agentId: string, window?: SubagentTranscriptWindow): Promise<SubagentTranscriptPage>
     /** How subagent messages reach this session. */
     messaging?: 'parent-mediated'
+    /** Native model tool used by the parent to relay messages. */
+    readonly messagingTool?: string
   }
   /**
    * Background tasks: `stop` asks the backend to stop one; `readOutput`
@@ -337,6 +347,9 @@ export interface SessionCapabilities {
   readonly auth?: {
     readonly oauthProvider?: string
     status(): Promise<SessionAuthView>
+    /** A backend-owned login flow; the optional callback offers host OAuth
+     * sign-in and reports whether a credential was saved. */
+    login?(loginOAuth?: () => Promise<boolean>): Promise<void>
     reconnect(): Promise<void>
   }
   /**
@@ -351,6 +364,19 @@ export interface SessionCapabilities {
   /** Backend-specific `/doctor` lines (version drift, executable, …), already
    *  localized by the backend. */
   readonly diagnostics?: { lines(): readonly string[] }
+  /**
+   * The session's goal (`/goal` on a non-DSH session; DSH keeps its own
+   * command registry row): set or replace the objective, optionally under a
+   * token budget; pause, resume, or clear it. The backend reports the
+   * resulting goal as `goal.change` events (with `budget` when it measures
+   * one); these calls only ask for the change.
+   */
+  readonly goals?: {
+    set(objective: string, options?: { readonly tokenBudget?: number }): Promise<void>
+    pause(): Promise<void>
+    resume(): Promise<void>
+    clear(): Promise<void>
+  }
   /** DSH specialists not yet covered by a typed capability. */
   readonly native: { readonly dsh?: DshNative }
 }
@@ -374,6 +400,8 @@ export interface SubagentTranscriptPage {
   /** Messages the disk transcript holds before this page's first message
    *  (the next older window asks for skipFromStart - count). */
   readonly skippedFromStart: number
+  /** Opaque cursor when the native source has no absolute record count. */
+  readonly sourceCursor?: string
 }
 
 /** An older slice request: `count` messages ending just before
@@ -381,4 +409,5 @@ export interface SubagentTranscriptPage {
 export interface SubagentTranscriptWindow {
   readonly count: number
   readonly skipFromStart: number
+  readonly sourceCursor?: string
 }

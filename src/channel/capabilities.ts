@@ -20,6 +20,8 @@ export function channelCapabilities(input: {
   /** The channel can reopen this backend's persisted sessions (its catalog
    *  and `open` are wired); DSH sessions always can. */
   readonly resume?: boolean
+  /** The backend catalog's optional, non-destructive removal semantics. */
+  readonly deleteAction?: 'archive'
 }): ChannelCapabilities {
   const caps = input.capabilities
   const flags = {
@@ -28,6 +30,7 @@ export function channelCapabilities(input: {
     effort: input.dsh || caps.effort !== undefined,
     modes: input.dsh || caps.modes !== undefined,
     compact: input.dsh || caps.compact !== undefined,
+    init: input.dsh || caps.init !== undefined,
     rewind: input.dsh || caps.rewind !== undefined,
     fork: input.dsh || caps.fork !== undefined,
     // Resume is a backend-level act (re-open a persisted session): the
@@ -46,11 +49,15 @@ export function channelCapabilities(input: {
     // command must not appear there even though dsh sessions list every
     // built-in.
     channels: caps.channels !== undefined,
+    // DSH serves /goal through its registry row; another backend through
+    // the typed `goals` capability (BACKEND_GOAL_COMMAND below).
+    goals: input.dsh || caps.goals !== undefined,
   }
   return Object.freeze({
     backendId: input.backendId,
     backendLabel: input.backendLabel,
     modelRoutes: input.dsh ? 'providers' : 'backend',
+    ...(input.dsh || input.deleteAction === undefined ? {} : { deleteAction: input.deleteAction }),
     commands: Object.freeze([
       ...supportedLocalCommandNames({ dsh: input.dsh, has: capability => flags[capability] }),
       // The typed `modes` capability is its own permission roster: a
@@ -62,6 +69,9 @@ export function channelCapabilities(input: {
       // the backend's own profile manager (BACKEND_CHANNEL_COMMAND), never
       // offered on a session that does not declare it (DSH included).
       ...(input.dsh || caps.channels === undefined ? [] : ['channel']),
+      // The typed `goals` capability serves /goal the same way
+      // (BACKEND_GOAL_COMMAND); DSH keeps its registry-row command.
+      ...(input.dsh || caps.goals === undefined ? [] : ['goal']),
     ]),
     retractPending: caps.pendingRetraction !== undefined,
     ...flags,

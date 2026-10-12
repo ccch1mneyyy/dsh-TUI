@@ -26,6 +26,7 @@ export function BtwThreadScene({
   const sessionId = String(channel.agentId)
   const thread = React.useSyncExternalStore(btwThreads.subscribe, () => btwThreads.get(sessionId))
   const [composerFocus, setComposerFocus] = React.useState(true)
+  const activateComposer = React.useCallback(() => setComposerFocus(true), [])
   const caretRef = React.useRef(0)
   const [caret, setCaretState] = React.useState(0)
   const setCaret = (next: number): void => {
@@ -90,7 +91,8 @@ export function BtwThreadScene({
     if (key.pageUp) { scrollRef.current?.scrollBy(-(rows - 4)); event.stopImmediatePropagation(); return }
     if (key.pageDown) { scrollRef.current?.scrollBy(rows - 4); event.stopImmediatePropagation(); return }
     // ink reports a plain Tab as key.tab with an empty input.
-    if (key.tab || input === '\t') { setComposerFocus(true); event.stopImmediatePropagation(); return }
+    // Enter/Tab 都回编辑层：列表态不是死胡同，一键继续问。
+    if (key.tab || input === '\t' || key.return || /^[\r\n]+$/u.test(input)) { setComposerFocus(true); event.stopImmediatePropagation(); return }
     if (input === 'n' && !key.ctrl && !key.meta) {
       btwThreads.newTopic(sessionId)
       channel.notify(t('btw-thread-clear'), { timeoutMs: 2500 })
@@ -117,7 +119,7 @@ export function BtwThreadScene({
     <Box flexDirection="column" width={columns} height={rows} paddingX={1}>
       <Box flexDirection="row" width="100%" height={1} flexShrink={0}>
         <Text color="warning" bold>{t('btw-fullscreen-title')}</Text>
-        <Text dimColor>{'  ' + t('btw-thread-send-to-chat') + ' [s] · ' + t('btw-thread-new') + ' [n] · Esc'}</Text>
+        <Text dimColor wrap="truncate">{'  ' + t('btw-scene-hints')}</Text>
       </Box>
       <BtwThreadView
         thread={thread}
@@ -132,6 +134,7 @@ export function BtwThreadScene({
         focused={composerFocus}
         busy={busy}
         notice={notice === null ? undefined : notice}
+        onActivate={activateComposer}
       />
     </Box>
   )

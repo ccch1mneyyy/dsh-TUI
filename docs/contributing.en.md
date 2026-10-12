@@ -53,6 +53,30 @@ account has write access or appears in `.github/APPROVED_CONTRIBUTORS`.
 - A human cannot bypass this with a private approval, an issue link, or a pasted
   maintainer comment.
 
+### Contribution Discipline
+
+Applies to every contributor and coding agent — a baseline of self-discipline
+before submission, complementary to the gates and CI:
+
+- **Value over volume**: contribution is measured by substance, not by commit
+  count, PR count, or lines of code. No split-up filler submissions; keep
+  changes minimal and code lean — do not bloat it with redundant wrappers or
+  duplicate implementations.
+- **Humans gate AI-written code**: AI-assisted development is allowed, but
+  nothing flows into `main` automatically — every change requires human
+  review and a human merge decision (the required approving review exists for
+  this). Bot reviews such as CodeRabbit are a second pair of eyes, not a
+  replacement.
+- **Prefer stronger models for AI-assisted work**: vibe coding is allowed, but
+  pick the strongest model available: weaker outputs are more prone to bloat,
+  hallucinated APIs, and hidden regressions — rework costs more than the
+  model difference.
+- **Verify locally before opening a PR**: actually run the builds and focused
+  regressions for the changed area (see "Verification"), and walk
+  terminal-visible changes through the affected flows in a real terminal.
+  State plainly what was not run in the PR's Verification section — never
+  dress "should pass" as "verified".
+
 ### When the gates take effect
 
 The feature proposal flow applies only to pull requests opened on or after
@@ -140,7 +164,7 @@ boundaries and helpers over introducing parallel abstractions.
   - Backend translators turn session events into `AgentEvent`s; the one
     shared projector, `src/channel/projection.ts`, turns those into
     transcript rows. Adding a backend needs no channel code.
-- `src/agent/`, `src/channel/`, `src/backends/claude/`, `src/dsh-adapter/backend/`:
+- `src/agent/`, `src/channel/`, `src/backends/claude/`, `src/backends/codex/`, `src/dsh-adapter/backend/`:
   the backend-neutral session domain and shared projector, plus each backend's
   translator and session. The structure, the rules and the steps to add a
   backend are in [Agent backends](agent-backend-design.md) (Chinese).
@@ -247,6 +271,11 @@ seam.
     verify:manifest-deps gate enforces it).
   - Framework packages used only by tests/scripts (e.g. dsh-settings, dsh-tools,
     dsh-session-persistence-*) stay dev-only — do NOT declare peers for them.
+  - The host packages the standalone entry takes types from (`HOST_TYPE_PACKAGES` in
+    `src/dsh-adapter/host-contract.ts`) are optional peer + dev too, for types only; the
+    host CLI `@deepseek-ai/dsh` is no dependency. At
+    run time `host-dsh.ts` loads the installed host's copies by realpath, never this
+    package's (ADAPTER.md "独立入口的宿主契约").
   - Non-host packages such as `dsh-working-activity` stay runtime dependencies.
   - Historical exception, now resolved: `dsh-working-activity@0.2.4` and earlier
     pulled a real copy of `@deepseek-ai/schemastery` (plus cosmokit) into the
@@ -407,7 +436,9 @@ change, also run the closest focused script:
 | --- | --- |
 | General headless screen composition | `pnpm smoke` |
 | Shared projector, DSH translator | `pnpm verify:projection-golden`, `node --import tsx/esm scripts/verify-dsh-translate.ts`, `pnpm verify:agent-domain` |
-| Claude backend | The matching `scripts/verify-claude-*` (fake SDK, no cost) and `pnpm verify:backend-channel`; `verify:claude-live`/`verify:claude-headless` drive the real CLI, so run them by hand only when you mean to spend (pinned to haiku) |
+| Claude backend | The matching `scripts/verify-claude-*` (fake SDK, no cost) and `node --import tsx/esm scripts/verify-backend-channel.ts`; `verify:claude-live`/`verify:claude-headless` drive the real CLI, so run them by hand only when you mean to spend (pinned to haiku) |
+| Archive semantics and backend OAuth logout | `node --import tsx/esm scripts/verify-session-archive.tsx` (real headless browser, fake catalog), `node --import tsx/esm scripts/verify-backend-logout.ts` (real channel/UI facade, fake OAuth host); no native-login/real-credential mutation, preserving DSH/Claude default deletion |
+| Native Codex backend | `pnpm verify:codex-contract`, matching fake-app-server/fixture `scripts/verify-codex-*`, `node --import tsx/esm scripts/verify-backend-channel.ts`; neutral-layer changes also need DSH goldens, Claude comparisons and `verify-agent-event-invariants.ts`. Real `verify-codex-live.ts` / probes must use `codex-cheap-only.mjs`; explicitly list unavailable real ChatGPT login/TTY checks |
 | Channel submit/steer/pending behavior | `node scripts/verify-submit.mjs` |
 | Rewind/edit/resend and historical inbox cancellation | `pnpm verify:rewind-edit` |
 | Prompt queue behavior | `node scripts/verify-queue.mjs` |
@@ -428,6 +459,7 @@ change, also run the closest focused script:
 | Standalone Markdown nodes (tables, mermaid diagrams) and streaming block spacing | `pnpm verify:table-layout`, `pnpm verify:mermaid-diagram`, `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
 | Cross-process session mount ledger (failure behavior, strict reads, lock recovery, reservations) | `pnpm verify:session-mounts` |
 | Unsent-draft handoff across screens (snapshot, cursor, image bindings, ownership) | `pnpm verify:composer-draft-handoff`; end-to-end screen switching also `node scripts/verify-session-browser.mjs` |
+| Launcher `bin/dsh-tui.js` (argv parsing and delegation/bootstrap, safe mode, the `/update` launcher migration, the entry child's env) | `node scripts/verify-launcher.mjs` + `node scripts/verify-safe-mode.mjs` + `node scripts/verify-update.mjs` + `node scripts/verify-update-recovery.mjs` |
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the
@@ -650,11 +682,13 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 | Session/channel behavior | Backend-neutral: `src/dsh-adapter/channel/core/`; DSH-only: `channel/extensions.ts` and its specialists; affected UI projections, compiled output, focused channel/replay regression (incl. `verify-backend-channel`, `verify-channel-rollback`) |
 | Renderer/layout behavior | `src/ink/` or Yoga source, compiled output, CI regressions, focused scroll/resize/PTY probe |
 | Skill discovery or presentation | DSH adapter, slash-command merge, `/skills`, and focused regressions; maintainer-only skills live in `.agents/skills/` and must stay out of npm |
-| User-facing documented behavior | Chinese and English READMEs, plus config comments/help text where applicable |
+| User-facing documented behavior | Both READMEs, applicable config/help text and bilingual `docs/` pages; a new bundled guide also needs `scripts/guide-sources.mjs` and `guide/dsh-tui-guide/SKILL.md` routing, then `node scripts/build-guide.mjs` / `node scripts/verify-guide.mjs` (do not edit copies by hand) |
 | Contribution intake or PR gate | `.mergify.yml`, `docs/contributing.md`, `docs/contributing.en.md`, `.github/workflows/pr-gate.yml`, `.github/scripts/pr-intake/`, `.github/APPROVED_CONTRIBUTORS` |
 | Package version or dependency | `package.json`, `pnpm-lock.yaml`, generated/published artifacts as applicable; do not churn the legacy npm lock incidentally |
+| Adding or changing a backend | A new `src/backends/<id>/` (`manifest.ts` + implementation), plus the regenerated `src/dsh-adapter/backends.generated.ts` that `pnpm compile` writes (a checked-in generated file; `verify-backend-registry` fails when it is stale): the build-time index comes from `scripts/gen-backend-index.mjs` — do **not** hand-edit `src/kernelPrefs.ts` or `src/dsh-adapter/backends.ts` (the directory and identity assertions look entries up by id, so a new directory needs no regression sync). The boundary gate derives its vendor-package and `native.<id>` rules from the manifest but compares them verbatim against the `EXPECTED_*` snapshot in `scripts/verify-adapter-boundary.ts`: a backend declaring a non-empty `vendorPackages` or a `nativeKey` must update that snapshot together with `ADAPTER.md` (the gate's failure says so), while declaring neither needs no change. `install` is a declarative recipe instead (`{ executor, specifier, version }`), with the host-side executor table in `src/dsh-adapter/install/` (one value today, `pnpm-profile-add`): the registry derives "can this entry be installed" by looking the name up, the wizard installs the specifier *you* declared, and naming an executor this host does not implement simply means "no install surface" (never a throw). A backend with nothing to add — the ones driving a system CLI — declares nothing. Names come from the manifest (a plugin uses `kind:'literal'`, never the i18n catalog); module-level/process-wide pools declare `unloadExport`, session-scoped resources stay with `session.dispose()`; the `id`, `label` and `install` boundaries are in the "backend manifest" section of `ADAPTER.md`. Register a new backend's focused regressions in `scripts/run-ci-group.mjs`; the registry gate is `scripts/verify-backend-registry.ts`; user-visible values (`--backend`, the config row) go into both READMEs and `docs/configuration{,.en}.md` |
 | Claude Agent SDK version | The exact version in both the optional peer and dev entries of `package.json`, `pnpm-lock.yaml`, `src/backends/claude/contract.ts` (`VALIDATED_SDK_VERSION`/`VALIDATED_CLI_VERSIONS`), the install command in `docs/claude-backend{,.en}.md`; `verify:claude-contract` checks they agree |
-| Upstream validated-line bump | `src/dsh-adapter/contract.ts`, `src/dsh-adapter/oauth/`, both peer and dev ranges in `package.json`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
+| Codex protocol/validated version | Regenerate through `scripts/codex-protocol-sync.mjs`, update `src/backends/codex/contract.ts`, method tables/fixtures/redaction/live-replay regressions and bilingual Codex guides; do not add a Codex SDK npm dependency or claim the minimum validates every experimental API |
+| Upstream validated-line bump | `src/dsh-adapter/contract.ts`, `src/dsh-adapter/host-contract.ts` (`HOST_REPLICA_VERSION`; after reviewing the replicas, `scripts/verify-host-contract.ts --snapshot` rewrites `host-replica.snapshot.json`), `src/dsh-adapter/oauth/`, both peer and dev ranges in `package.json`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
 
 ## Git And Release Safety
 
@@ -691,8 +725,8 @@ guide owns detailed contracts such as the toolchain and verification matrix.
   - To backfill notes for an existing tag, run Actions → Publish → Run
     workflow with that tag. It only touches the notes; it skips npm publish
     and bundle builds.
-  - In the hand-written summary, entries from external contributors end with
-    `(#PR by @user)`; the maintainer's own entries are unmarked.
+  - In the hand-written summary, every entry ends with `(#PR by @user)` —
+    maintainers and external contributors alike.
   - Write bare `#123` and `@user` — GitHub renders them as links.
 - Before handing off a code change, inspect `git diff --check`, the source diff,
   the generated diff, and `git status`. Report exactly which verification ran
