@@ -15,6 +15,14 @@ concurrency:
 permissions:
   contents: read
 
+# 开屏字体 CI 确定性：全 workflow 钉基准款——`pickSplashFont` 的测试缝
+# （`DSH_TUI_SPLASH_FONT`，见 splashFonts.ts）。挂真 Chat/LogoV2 的回归不再
+# 随日期变头部几何：宽体字身轮到那天鲸鱼被窄终端阶梯撤掉、文字列位移，
+# 断言失配（每 9 天红一次的日期性 flake，最难查）。要测 daily 轮换路径的
+# 脚本自己删掉这个 env（verify-splash-font-setting.mjs）。
+env:
+  DSH_TUI_SPLASH_FONT: bold
+
 jobs:
   # 变更分流：纯文档 / issue 模板改动不需要编译与回归——docs/contributing.md
   # 已经写了「纯文档、纯 workflow、纯 YAML 改动不需要重建」，这里是它的 CI 落地。

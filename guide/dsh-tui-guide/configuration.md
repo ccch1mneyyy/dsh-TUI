@@ -27,8 +27,15 @@ Profile 启动按顺序叠加：
 
 ## TUI 配置
 
-DSH 0.1.7 的 `/settings` 写入当前 profile 的 `cordis.patch.yml`，字段属于插件
-Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成新版设置入口。
+`/settings` 的 `dsh-tui` 分区存放在 TUI 自己的 `~/.dsh-tui/settings.json`，所有内核
+（DSH、Claude、Codex）共用这一份。第一次启动时，若该文件不存在，会从当前 profile 的
+`cordis.patch.yml` 里 `dsh-tui` 行的 `config` 一次性导入可编辑字段（只读，不改 profile；
+`!!js` 表达式不导入），之后不再重复导入。旧版 host 存在 `~/.dsh/settings.yaml` 里的
+`dsh-tui` 分区同时导入：尚未被 DSH 迁走的文件优先于补丁行；DSH 已迁入补丁、改名为
+`settings.yaml.imported` 的，补丁行优先。导入后 profile 补丁里残留的这些字段只在 DSH
+内核下作为静态部署层生效（用户层未设置时兜底），建议从补丁里删掉，避免两个内核看到
+不同的默认值。其他插件的分区仍由 DSH 的设置服务读写（写入当前 profile 的
+`cordis.patch.yml`；旧版是 `~/.dsh/settings.yaml`）。
 语言、布局等偏好实时更新；全屏和图片预览需 `/restart`。
 
 下面是完整的常用覆盖示例：
@@ -55,11 +62,11 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 | 字段 | 默认/来源 | 说明 |
 | --- | --- | --- |
 | `provider` | Harness `agentDefaultModel`；裸组合回落 `deepseek-official` | DSH 模型路由名称；只有 provider 与 model 同时配置才构成显式路由 |
-| `model` | Harness `agentDefaultModel`；裸组合回落 `deepseek-flash` | 启动模型；`/model` 可通过 session fork 实时切换 |
+| `model` | Harness `agentDefaultModel`；裸组合回落 `deepseek-flash` | 启动模型；`/model` 可通过 session fork 实时切换。优先级：`/model` 持久化选择（`~/.dsh-tui/model.json`，上次实际运行的路由，完整 pair）> 此处的完整 `provider`+`model` 对（部署默认值）> Harness 默认。半 pin（只有 `provider` 或只有 `model`）视为未设置，绝不与偏好拼成半个路由（issue #67） |
 | `cwd` | 启动目录所在的 git worktree 根（不在任何 worktree 内时为 `process.cwd()`；家目录的 dotfiles 仓不算） | TUI 会话侧工作区：agent meta、`@` 补全/提及展开、/resume 过滤、状态栏；恢复已有会话时以该会话持久化的 cwd 为准。注意 bash/fs-policy/sandbox 的根仍由组合层 cordis 配置决定（默认启动目录，归 dsh-base 管），与这里的会话侧 cwd 可能不同 |
 | `workspace` | 未设置 | 启动工作区目标；可用本地路径、`file://` URI 或插件提供的 URI，设置后优先于 `cwd` |
-| `effort` | 配置层通常为 `max` | 每个请求实际生效的推理等级（按运行时模型档位校验，非法档位静默回落默认；兼作顶栏启动显示）。优先级：/settings 的 `effortDefault`（`auto` 时让位）> 本字段 > `/effort` 持久化选择（`~/.dsh-tui/effort.json`）> 模型默认 |
-| `effortDefault` | 未设置 | 新会话默认推理强度；`auto` 让位给 `effort`，可经 `/settings` 修改 |
+| `effort` | 配置层通常为 `max` | 每个请求实际生效的推理等级（按运行时模型档位校验，非法档位静默回落默认；兼作顶栏启动显示）。优先级：/settings 的 `effortDefault`（`auto` 时让位）> `/effort` 持久化选择（`~/.dsh-tui/effort.json`，上次实际运行的档位）> 本字段（部署默认值）> 模型默认 |
+| `effortDefault` | 未设置 | 新会话默认推理强度（`/settings` 用户层，显式设定时优先于持久化 `/effort`）；`auto` 让位给持久化选择与 `effort`，可经 `/settings` 修改 |
 | `whale` / `whaleIdle` | `true` / `true` | 标题鲸鱼与欢迎页鲸鱼闲置动画 |
 | `splashFont` | `daily` | 开屏大字字体：`daily` 按本地日期轮换（默认），其余取字体 id（`bold` / `square` / `bevel` / `wide` / `dot` / `stencil` / `classic` / `slab`）pin 住那一款；非法值回落 `daily`。也可经 `/settings` 修改 |
 | `whaleGirl` | `false` | 把标题的像素鲸鱼换成女仆娘：**最优先**真图（Kitty/Sixel）；不支持时回落字符画版女仆娘 |
@@ -74,14 +81,15 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 | `codeFrameStyle` | `light` | 回复里代码块的边框：`light` 只有顶部标签和左侧竖线，不多占行；`full` 是封闭的框。终端太窄时总是用纯文本 fence。立即生效 |
 | `turnUsageRow` | `false`（布尔） | 每回合末尾显示一行右对齐的用量（输入/输出、缓存、耗时、重试）；关闭时 `/tokens`、`/status` 和底栏悬停照样能看到这些数字 |
 | `modes` | 内置三档 | Shift+Tab 会话模式循环（plan/sandbox/approval 原子组合）；缺省为 默认 → 计划 → 完全访问 |
+| `upstreamRetry` | `true` | 为当前会话实际使用的 `llm-pi-ai` 渠道播种重试策略（最多重试 5 次，失败码覆盖传输类中断、含 `STREAM_CLOSED` 上游断链）：每次绑定（启动、`/model` 切换、resume）时检查该渠道，未声明 `retryPolicy` 才写入官方 `llm-pi-ai` settings 分节——内核 `llm-retry` 插件执行的就是这份策略。从不写闲置渠道；已显式声明 `retryPolicy` 的渠道（cordis.yml 或手改 settings）不会被覆盖；`false` 整体关闭 |
 | `activity` | `true` | 是否显示实时工作状态行 |
 | `activityFrames` | `moon8` | 工作状态动画预设；也可通过 `/activity` 修改。旧配置值 `claude` 读取时映射为 `moon8`，选择器不再显示该旧预设 |
 | `contextBar` | `true` | 输入框下方的分段上下文进度条；`false` 隐藏该行。与 `/settings → statusBar.contextBar`（默认开）同时为开才显示 |
 | `fullscreen` | `true`（0.9.0 起出厂默认） | `true` 使用 alternate screen、应用内滚动和鼠标选区；`false` 使用 inline 模式 |
 | `terminalImages` | `true` | 允许在支持的终端预览图片；`false` 保留文字信息，跳过图片探测与预览解码。修改后重启生效 |
-| `preset` | 名册默认 `standard` | 新会话 Agent preset；显式配置优先于持久化偏好 |
+| `preset` | 名册默认 `standard` | 新会话 Agent preset；优先级：`DSH_TUI_PRESET`（本次运行）> `/preset` 持久化选择 > 本字段（部署默认值）> 名册默认 |
 | `sessionId` | 未设置 | 要恢复的会话 ID，通常由 Windows `--resume` 启动器注入 |
-| `backend` | 未设置（`/kernel` 记住的选择，否则 `dsh`） | 会话后端：`dsh`，或实验性的 `claude` / `codex`（不区分大小写，未知值按 `dsh`）。profile 行读取 `DSH_TUI_BACKEND`，`dsh-tui --backend <id>` 会设置它。见 [Claude 后端](claude-backend.md) |
+| `backend` | 未设置（`/kernel` 记住的选择，否则 `dsh`） | 会话后端：内置 `dsh`，或已装的后端（实验性的 `claude` / `codex`，以及插件后端；不区分大小写）。**未安装或未知的取值一律按 `dsh` 启动并告警**，不会崩。profile 行读取 `DSH_TUI_BACKEND`，`dsh-tui --backend <id>` 会设置它。profile 自己的补丁里若把它写成 `!!js` 表达式（只转发 `DSH_TUI_BACKEND` 的写法除外，例如随包行的 `process.env.DSH_TUI_BACKEND \|\| undefined`），本次启动改走 `dsh --profile`（只有 profile 的 Loader 能求值），`/kernel` 切换除外。见 [Claude 后端](claude-backend.md) |
 
 ### 优先级与强制关闭
 
@@ -160,8 +168,8 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 ### 默认值与优先级
 
 - 默认值保存在 `~/.dsh-tui/agent-preset.json`。
-- 优先级：显式 `config.preset` 或 `DSH_TUI_PRESET` → 持久化偏好 → 名册
-  默认值 `standard`。
+- 优先级：`DSH_TUI_PRESET`（本次运行的显式指令）→ 持久化偏好 → 显式
+  `config.preset`（部署默认值）→ 名册默认值 `standard`。
 - 名册不再提供 `code` 时，旧偏好回退解析为 `ptc`，解析成功后迁移；rc 名册
   仍保留真实 `code` id，历史会话日志始终不改写。
 - 恢复旧会话时，以该会话日志记录的 preset 为准，不读取当前默认值覆盖它。
@@ -177,6 +185,44 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
   - 始终拒绝把 System32 的 WSL 启动器当作 Git Bash
 - 环境变量 `DSH_TUI_LIANGSHEN_BASH_PATH` 可显式指定 `bash.exe` 绝对路径。
 - 设置后即为唯一候选；找不到即告警并跳过注册，首轮直接放开完整工具目录。
+
+### Windows bash 工具（winbash）
+
+`presets/winbash.mjs` 是随包分发的 Windows `bash` 工具插件，挂载在 host 层后
+**对任意 Agent preset 生效**（与梁神模式无关、不进 `/preset` 名单）。行为对齐官方
+`dsh-tool-bash`——官方 bash 执行器 `dsh-bash-local` 为 POSIX-only，Windows 不适用，故有此件。
+
+- 每次调用在新 shell 中执行（`bash -c`），状态不跨调用保留；`description` 必填（UI 标题）。
+- `run_in_background: true`：命令登记为后台 job，立即返回 job id；`job_output`/`job_kill`
+  收集与停止，后台运行无超时。
+- 前台命令到超时不杀：转后台继续跑并返回 job id（`promoteOnTimeout`，可配置关闭）。
+- 非零退出以 `[exit code: N]` 标记报告，不算工具错误。
+- 无 job registry 的组合自动降级为纯前台（超时即杀），不暴露 `run_in_background`。
+- Git Bash 探测链与梁神模式相同（见上节）；环境变量 `DSH_TUI_WINBASH_BASH_PATH`
+  （兼容旧名 `DSH_TUI_LIANGSHEN_BASH_PATH`）可显式指定 `bash.exe`。
+
+挂载：把 `presets/winbash.mjs` 复制到 profile 根目录，在 `cordis.patch.yml`
+的插件列表追加：
+
+```yaml
+- id: windows-bash
+  name: './custom-bash.mjs'
+  disabled: !!js process.platform !== 'win32'
+```
+
+配置项（挂载行的 `config`）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `timeoutMs` | `120000` | 前台默认超时（毫秒） |
+| `maxTimeoutMs` | `600000` | 单次调用超时上限（带 job 时也是工具级硬顶） |
+| `maxOutputBytes` | `64000` | 单流输出内存上限 |
+| `enableRunInBackground` | `true` | 是否暴露后台参数（需 job registry 在场） |
+| `promoteOnTimeout` | `true` | 前台超时是否转后台而非杀 |
+| `bashPath` | — | 显式指定 `bash.exe`（同环境变量） |
+
+> 与梁神模式内置的 `custom-bash` 注册同名工具 `bash`：同一 profile 只挂其一。
+> 同时使用梁神 preset 时把本行 `disabled` 置 `true`（梁神内置那份为前台版）。
 
 ### 自定义 preset
 
@@ -229,16 +275,19 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 | `DSH_HOME` | harness 家目录（profile、会话、凭据、附件）；未设置时用上游默认 `~/.dsh` |
 | `DSH_TUI_PERSONA` | 覆盖组合注入的 Agent persona |
 | `DSH_TUI_PRESET` | 覆盖新会话默认 Agent preset |
-| `DSH_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`）、静态主题或已注册的插件主题，优先于持久化选择 |
+| `DSH_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`/`pink-day`/`pink-night`/`pink-ansi`）、静态主题或已注册的插件主题，优先于持久化选择 |
 | `DSH_TUI_DISABLE_MOUSE` | 在 fullscreen 模式临时关闭鼠标处理 |
 | `DSH_TUI_DISABLE_TERMINAL_IMAGES` | 设为 `1` 时强制关闭 Kitty/Sixel 探测、预览读取/解码与终端图片渲染，优先于 config 和 /settings；保留文字信息 |
 | `DSH_TUI_IMAGE_PROTOCOL` | `auto`（默认）、`kitty`、`sixel` 或 `none`；覆盖协议选择，但不绕过图片预览偏好、禁用开关、非全屏、无障碍和多路复用器限制 |
 | `DSH_TUI_RESUME_SESSION` | 启动时恢复指定会话，通常由启动器设置 |
-| `DSH_TUI_BACKEND` | 会话后端（`dsh` / `claude`），通常由 `dsh-tui --backend` 设置 |
+| `DSH_TUI_RESUME_BACKEND` | `DSH_TUI_RESUME_SESSION` 的来源后端，只在启动器**派生**恢复目标时（裸 `--resume` 读该后端的上次会话、安全模式重试按最后运行记录）设置；boot 若落在别的后端（未装的 id 回落 `dsh`、没给 `DSH_TUI_BACKEND` 时跟随记住的内核），该目标一律**明确报错并非零退出**——不跨后端恢复、不静默冷启动、不新建会话（安全模式重试是唯一例外，降级为告警 + 冷启动）。用户显式给出的 id 不带此标记、原样透传 |
+| `DSH_TUI_RESUME_RETRY` | 一次性标记：本次启动是安全模式的「重试正常启动」。重试的目标派生自最后运行记录，记录里的内核可能已经不在注册表里，所以带此标记的那次启动在恢复目标被撤销时降级为告警 + 冷启动，而不是报错退出。boot 读到即从 `process.env` 删除 |
+| `DSH_TUI_BACKEND` | 会话后端（内置 `dsh` / `claude` / `codex`，或已装的插件后端），通常由 `dsh-tui --backend` 设置；未安装或写错的 id 按 `dsh` 启动并告警（若同时带了 `--resume` 请求则改为报错退出，见上） |
+| `DSH_TUI_HOST_ENTRY` | 设为 `0` 时两个内核都经 `dsh --profile` 启动（默认两个内核都从本包入口启动）。入口用不了已安装的 dsh（`PATH` 上的 `dsh` 不是 `@deepseek-ai/dsh`、启动脚本跟不进去、所需模块或导出缺失）时，DSH 启动自动回退到 `dsh --profile`，并在终端与界面里说明原因 |
 | `DSH_TUI_CLAUDE_PERMISSION_MODE` | Claude 后端的起始权限模式（`default`/`acceptEdits`/`plan`/`dontAsk`/`bypassPermissions`），优先于 `/permission` 记住的选择 |
 | `DSH_TUI_WORKSPACE_TARGET` | 启动时解析的工作区路径或 URI，通常由 `dsh-tui <目标>` 设置 |
 | `DSH_TUI_SESSION_ROOT` | 覆盖 JSONL 会话根目录；profile 默认 `$DSH_HOME/sessions`，裸 `cordis.yml` 默认 `~/.dsh-tui/sessions` |
-| `DSH_PERMISSION_MODE` | 非 Windows 平台覆盖 sandbox policy，例如 `workspace-write` 或 `danger-full-access` |
+| `DSH_PERMISSION_MODE` | 非 Windows 平台覆盖 sandbox policy，例如 `workspace-write` 或 `danger-full-access`；作为本次启动的初始权限面，优先于 `/permission` 记住的选择 |
 | `DSH_TUI_WORKSPACE` | Windows `dsh-tui.cmd` 采用的工作目录 |
 | `DSH_TUI_DEBUG` | 启用写往 stderr 的 dsh-tui 调试日志 |
 | `DSH_TUI_RENDER_LOG` | 指定文件路径，记录原始 ANSI 渲染帧用于取证 |

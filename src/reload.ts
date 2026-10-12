@@ -8,9 +8,10 @@
  *   - lang:     DSH_TUI_LANG > settings `dsh-tui.lang` (folded in by the
  *               caller as `langOverriddenBySettings`) > cordis.yml `lang`
  *               > lang.json.
- *   - preset:   cordis.yml `preset` wins; else agent-preset.json.
- *   - model:    a COMPLETE cordis.yml provider/model pair wins whole
- *               (issue #67 — never merge halves); else model.json.
+ *   - preset:   DSH_TUI_PRESET wins; else agent-preset.json (the cordis.yml
+ *               `preset` is only the deployment default).
+ *   - model:    model.json whole (issue #67 — a cordis.yml pair is only the
+ *               deployment default); nothing to apply without it.
  *   - activity: cordis.yml `activityFrames` wins; else
  *               working-activity.json.
  *
@@ -28,7 +29,6 @@
 import type { Lang } from './i18n.js'
 import type { ModelPref } from './modelPrefs.js'
 import type { ModelRoute } from './modelRoute.js'
-import { explicitModelRoute } from './modelRoute.js'
 
 /** The five boot-only preference surfaces /reload re-reads. */
 export type ReloadKind = 'theme' | 'lang' | 'preset' | 'model' | 'activity'
@@ -86,14 +86,12 @@ export interface ReloadInput {
   langOverriddenBySettings: boolean
   /** cordis.yml's raw `lang` key, when set. */
   configuredLang?: string
-  /** cordis.yml's explicit `preset` key, when set. */
-  configuredPreset?: string
+  /** A `DSH_TUI_PRESET` launch instruction, when set (pins this run). */
+  envPreset?: string
   /** Fresh readPresetPref(). */
   presetPref?: string
   /** The live preset id (channel.agentPreset; undefined = roster default). */
   currentPreset?: string
-  /** cordis.yml's raw `provider`/`model` keys, when set. */
-  configuredModel?: { provider?: string; model?: string }
   /** Fresh readModelPref(). */
   modelPref?: ModelPref
   /** The live route (channel provider/model). */
@@ -141,9 +139,11 @@ export function planReload(input: ReloadInput): ReloadPlan {
     apply.push({ kind: 'lang', from: input.currentLang, to: input.langPref })
   }
 
-  // Preset: cordis.yml's static choice wins; else the persisted one.
-  if (input.configuredPreset !== undefined) {
-    skipped.push({ kind: 'preset', reason: 'config-wins' })
+  // Preset: a DSH_TUI_PRESET launch instruction pins this run; else the
+  // persisted choice. A static cordis.yml `preset` is only the deployment
+  // default, so it never blocks a reload.
+  if (input.envPreset !== undefined) {
+    skipped.push({ kind: 'preset', reason: 'env-wins' })
   } else if (input.presetPref === undefined) {
     skipped.push({ kind: 'preset', reason: 'invalid' })
   } else if (input.presetPref === input.currentPreset) {
@@ -152,12 +152,11 @@ export function planReload(input: ReloadInput): ReloadPlan {
     apply.push({ kind: 'preset', from: input.currentPreset ?? '—', to: input.presetPref })
   }
 
-  // Model route: the atomic rule (issue #67) — a complete cordis.yml pair
-  // wins whole; a half-pinned config never merges with the pref's other half.
-  // (Normalize to an object: callers may pass undefined when no route is pinned.)
-  if (explicitModelRoute(input.configuredModel ?? {}) !== undefined) {
-    skipped.push({ kind: 'model', reason: 'config-wins' })
-  } else if (input.modelPref === undefined) {
+  // Model route: the persisted choice is the standing one (the atomic rule of
+  // issue #67 — a cordis.yml pair is only the deployment default and can
+  // never merge with half the pref). A route the file does not hold reads as
+  // invalid here; the config default only takes over on the next boot.
+  if (input.modelPref === undefined) {
     skipped.push({ kind: 'model', reason: 'invalid' })
   } else if (
     input.currentModel !== undefined

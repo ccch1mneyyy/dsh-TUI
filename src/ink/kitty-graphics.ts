@@ -5,6 +5,7 @@ import {
   DEFAULT_TERMINAL_CELL_SIZE,
   fitTerminalImageSource,
   normalizeTerminalCellSize,
+  terminalImagePixelSize,
   type TerminalCellSize,
   type TerminalImagePlacement,
   type TerminalImageSource,
@@ -148,6 +149,17 @@ export class KittyGraphicsManager {
     }
     this.cellSize = normalized
     return true
+  }
+
+  /** Decoded bytes of the upload canvas, calculated before allocation. */
+  readonly rasterBytes = (placement: TerminalImagePlacement): number => {
+    const [width, height] = terminalImagePixelSize(
+      placement.columns,
+      placement.rows,
+      this.cellSize,
+      placement.presentation,
+    )
+    return width * height * 4
   }
 
   reconcile(placements: readonly TerminalImagePlacement[]): string {

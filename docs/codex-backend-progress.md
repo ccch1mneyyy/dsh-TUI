@@ -99,7 +99,9 @@
 
 - `acfc2327` 运行时：`rpc/{client,hub,binary}.ts`、`detect.ts`、`backend.ts`、`modes.ts`、`prefs.ts`、
   `session/{session,state,input,approvals,history}.ts`、`translate/{items,live,replay,presentation,commands,notices,usage,events}.ts`；
-  N7（`KERNEL_IDS`/`KERNEL_INFO`（含 `installable`）/`kernelDisplayName`、`BACKEND_LOADERS.codex`、
+  N7（**P0 后端注册表已取代这一套**：`KERNEL_IDS`/`KERNEL_INFO`/`kernelDisplayName`/`BACKEND_LOADERS`
+  都不再存在，改为每个后端一个 `manifest.ts` + 构建期生成的索引；下面的记录是当时的实现）、
+  `BACKEND_LOADERS.codex`、
   `BackendDetection.loginInSession` 与目录的 `noteKey`、`plugin.ts` 的 `KernelBackendId`、Config 注释、
   launcher 的 `--backend` 与帮助）；`displayPath` 移到 `src/backends/shared/`；i18n 全部 `codex-*` 键（zh/en）；
   README 双语一节、`docs/configuration*` 的 `backend` 行。

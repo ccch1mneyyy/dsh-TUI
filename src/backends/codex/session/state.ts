@@ -1,5 +1,5 @@
 /** Dependencies and start-up facts of one Codex session (a thread). */
-import type { OpenTarget } from '../../../agent/backend.js'
+import type { BackendLocale, OpenTarget } from '../../../agent/backend.js'
 import type { CodexAuthRuntime } from '../auth/external-tokens.js'
 import type { CodexChannelsRuntime } from '../channels.js'
 import type { Rec } from '../narrow.js'
@@ -24,6 +24,11 @@ export interface CodexSessionDeps {
   readonly executable: CodexExecutable & { readonly version?: string }
   readonly host: {
     debug(message: string): void
+    /** The host's live language, when the caller has one: a session the host
+     *  opened has already installed it in `detect()`/`open()`, and a caller
+     *  that builds the deps itself (a regression fixture) says so here or
+     *  keeps the documented `zh` fallback. */
+    locale?(): BackendLocale
   }
   /** Notices to show once the channel subscribes (start-time findings). */
   readonly startNotices?: readonly string[]

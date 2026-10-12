@@ -44,6 +44,7 @@ const [
   { setLang, t },
   { settled },
   fakes,
+  { claudeText },
 ] = await Promise.all([
   import('../src/backends/claude/session.js'),
   import('../src/backends/claude/prefs.js'),
@@ -54,6 +55,7 @@ const [
   import('../src/i18n.js'),
   import('./lib/term-test.mjs'),
   import('./lib/claude-fake-sdk.js'),
+  import('../src/backends/claude/text.js'),
 ])
 type AgentEvent = import('../src/agent/events.js').AgentEvent
 
@@ -114,7 +116,7 @@ function answer(query: { emit(message: unknown): void }, text: string): void {
   const { fake, session, persist } = await persistedSession()
   try {
     const early = await session.capabilities.sideQuery!.ask('anything?')
-    check('a session the CLI has not persisted has nothing to fork', early.answer === null && early.error === t('claude-side-query-empty') && fake.queries.length === 1)
+    check('a session the CLI has not persisted has nothing to fork', early.answer === null && early.error === claudeText('claude-side-query-empty') && fake.queries.length === 1)
     await persist()
     const deltas: string[] = []
     const pending = session.capabilities.sideQuery!.ask('What did we say?', { onText: delta => { deltas.push(delta) } })

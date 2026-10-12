@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import type { AgentEvent } from '../src/agent/events.js'
-import { setLang } from '../src/i18n.js'
+import { getLang, setLang } from '../src/i18n.js'
 import { memoryCodexPrefs } from '../src/backends/codex/prefs.js'
 import { CLIENT, NOTIFY } from '../src/backends/codex/protocol/index.js'
 import { resolve } from 'node:path'
@@ -55,7 +55,7 @@ async function fixture(options: { answer?: Rec; configure?(fake: ReturnType<type
   options.configure?.(fake)
   let session: Awaited<ReturnType<typeof openCodexSession>>
   try {
-    session = await openCodexSession({ hub, release: hub.retain(), target: { kind: 'create', cwd: CWD }, cwd: CWD, prefs, executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug: line => debug.push(line) }, clock })
+    session = await openCodexSession({ hub, release: hub.retain(), target: { kind: 'create', cwd: CWD }, cwd: CWD, prefs, executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug: line => debug.push(line), locale: getLang }, clock })
   } catch (error) { await hub.close(); throw error }
   session.subscribe(batch => events.push(...batch))
   await settle()
@@ -83,6 +83,11 @@ await scenario('models pagination/cache/mapping + effort defaults', async () => 
     const settings: SettingsSnapshot = { model: 'gpt-5.6-terra', effort: 'high', modeId: 'auto', permissionMode: 'auto' }
     const controls = createCodexControls({ hub: f.hub, prefs: f.prefs, ctx: createItemContext({ cwd: CWD, model: settings.model, debug: () => {} }), settings, cwd: CWD, threadId: () => THREAD, busy: () => false, emit: () => {}, submitText: async () => {}, debug: () => {}, mappedModels: () => [{ id: 'alias', label: 'mapped limited' }], actualModel: id => id === 'alias' ? 'limited' : id })
     check('mapped alias added without extra request', (await controls.capabilities.models!.list()).some(row => row.id === 'alias'))
+    const preview = controls.capabilities.effort!.forModel!({ model: 'alias' })
+    check('effort preview follows candidate mapping', preview.levels.map(level => level.id), ['medium'])
+    check('effort preview carries candidate default', preview.defaultEffort, 'medium')
+    check('unknown candidate never borrows the live model tiers', controls.capabilities.effort!.forModel!({ model: 'unknown' }).levels, [])
+    check('preview leaves model, effort and settings RPC untouched', [settings.model, settings.effort, f.sent(CLIENT.threadSettingsUpdate).length], ['gpt-5.6-terra', 'high', 0])
     f.prefs.write({ effort: 'high' })
     await controls.capabilities.models!.set({ model: 'alias' })
     check('mapping wire actual slug', f.last(CLIENT.threadSettingsUpdate).model, 'limited')
@@ -217,13 +222,97 @@ await scenario('review wire targets and lifecycle', async () => {
       check(command + ' accepted', (await f.submit(command)).accepted)
       check(command + ' exact target', f.last(CLIENT.reviewStart).target, target)
       check(command + ' delivery inline', f.last(CLIENT.reviewStart).delivery, 'inline')
+      check(command + ' consumes its command preview without a clientId echo', f.events.some(event => event.type === 'pending.changed' && event.claimed?.includes(command)))
       check(command + ' second review refuses active turn', (await f.submit('/review')).accepted, false)
       const id = 'review-' + reviewTurn
       await f.notify(NOTIFY.itemStarted, { turnId: id, item: { type: 'enteredReviewMode', id: 'enter-' + id, review: 'API' } })
+      // Native 0.160.1 uses another id for turn/started and interrupts.
+      await f.notify(NOTIFY.turnStarted, { turn: { id: 'lifecycle-' + id, status: 'inProgress', items: [] } })
       await f.notify(NOTIFY.itemCompleted, { turnId: id, item: { type: 'exitedReviewMode', id: 'exit-' + id, review: 'No issues.' } })
       await f.complete(id)
     }
     check('review completion creates matched neutral turn boundaries', f.events.filter(event => event.type === 'turn.start').length === 4 && f.events.filter(event => event.type === 'turn.end').length === 4)
+  } finally { await f.close() }
+})
+
+await scenario('review completion drains queued input and an early interrupt waits for its lifecycle id', async () => {
+  const f = await fixture({ configure: fake => fake.on(CLIENT.reviewStart, () => ({ turn: { id: 'review', status: 'inProgress', items: [] } })) })
+  try {
+    await f.submit('/review')
+    await f.notify(NOTIFY.itemStarted, { turnId: 'review', item: { type: 'enteredReviewMode', id: 'enter-review', review: 'changes' } })
+    await f.submit('next turn', 'queued')
+    const interrupt = f.session.cancel('user')
+    await settle()
+    check('review interrupt waits instead of using the uninterruptible review id', f.sent(CLIENT.turnInterrupt).length, 0)
+    await f.notify(NOTIFY.turnStarted, { turn: { id: 'lifecycle', status: 'inProgress', items: [] } })
+    await interrupt
+    check('review interrupt uses the lifecycle id', f.last(CLIENT.turnInterrupt).turnId, 'lifecycle')
+    await f.complete('unrelated')
+    check('unrelated completion cannot drain the review queue', f.sent(CLIENT.turnStart).length, 0)
+    await f.complete('review')
+    await settle()
+    check('review completion under its own id drains the next turn', f.last(CLIENT.turnStart).clientUserMessageId, 'queued')
+  } finally { await f.close() }
+})
+
+await scenario('cancel while review/start awaits its first response or notification', async () => {
+  const f = await fixture({ configure: fake => fake.on(CLIENT.reviewStart, () => NO_REPLY) })
+  try {
+    const submitting = f.submit('/review')
+    const request = await f.fake.waitForRequest(CLIENT.reviewStart)
+    await f.submit('queued while starting', 'starting-followup')
+    check('an in-flight review holds ordinary followups', f.sent(CLIENT.turnStart).length, 0)
+    check('an in-flight review refuses a second review', (await f.submit('/review')).accepted, false)
+    let cancelled = false
+    const cancelling = f.session.cancel('interrupt').then(receipt => { cancelled = true; return receipt })
+    await settle()
+    check('cancel cannot confirm before the review start is known', cancelled, false)
+    f.fake.reply(request.id, { turn: { id: 'review', status: 'inProgress', items: [] } })
+    await submitting
+    check('the review response still waits for the interruptible lifecycle id', cancelled, false)
+    await f.notify(NOTIFY.itemStarted, { turnId: 'review', item: { type: 'enteredReviewMode', id: 'enter-review', review: 'changes' } })
+    await f.notify(NOTIFY.turnStarted, { turn: { id: 'lifecycle', status: 'inProgress', items: [] } })
+    const receipt = await cancelling
+    check('the early cancel sends exactly one interrupt to the lifecycle id', f.sent(CLIENT.turnInterrupt).map(params => params.turnId), ['lifecycle'])
+    check('cancel confirms only after its interrupt is accepted', receipt.outcome, 'confirmed')
+    await f.complete('review')
+    check('the cancelled followup does not start after the review completes', f.sent(CLIENT.turnStart).length, 0)
+    await f.submit('after cancellation', 'after-cancel')
+    check('input starts normally after the early cancel settles', f.last(CLIENT.turnStart).clientUserMessageId, 'after-cancel')
+  } finally { await f.close() }
+})
+
+await scenario('a refused review/start releases cancellation and retained followups', async () => {
+  const f = await fixture({ configure: fake => fake.on(CLIENT.reviewStart, () => NO_REPLY) })
+  try {
+    const submitting = f.submit('/review').then(() => undefined, (error: unknown) => error instanceof Error ? error.message : String(error))
+    const request = await f.fake.waitForRequest(CLIENT.reviewStart)
+    await f.submit('retained followup', 'retained')
+    let cancelled = false
+    const cancelling = f.session.cancel('user').then(receipt => { cancelled = true; return receipt })
+    await settle()
+    check('a user cancel waits for an in-flight review/start', cancelled, false)
+    f.fake.replyError(request.id, -32602, 'review refused')
+    check('review/start refusal still reaches its caller', await submitting, 'review refused')
+    check('a failed review start releases the pending cancel', (await cancelling).outcome, 'confirmed')
+    await settle()
+    check('a failed review start drains the retained followup', f.last(CLIENT.turnStart).clientUserMessageId, 'retained')
+    check('a failed review start needs no turn/interrupt', f.sent(CLIENT.turnInterrupt).length, 0)
+  } finally { await f.close() }
+})
+
+await scenario('review notifications can complete before review/start answers', async () => {
+  const f = await fixture({ configure: fake => fake.on(CLIENT.reviewStart, (_params, request) => {
+    fake.notify(NOTIFY.itemStarted, { threadId: THREAD, turnId: 'fast-review', item: { type: 'enteredReviewMode', id: 'enter-fast', review: 'changes' } })
+    fake.notify(NOTIFY.turnStarted, { threadId: THREAD, turn: { id: 'fast-lifecycle', status: 'inProgress', items: [] } })
+    fake.notify(NOTIFY.turnCompleted, { threadId: THREAD, turn: { id: 'fast-review', status: 'completed', items: [] } })
+    fake.reply(request.id, { turn: { id: 'fast-review', status: 'inProgress', items: [] } })
+    return NO_REPLY
+  }) })
+  try {
+    await f.submit('/review')
+    await f.submit('after fast review', 'after-fast')
+    check('a late review answer never resurrects the completed turn', f.last(CLIENT.turnStart).clientUserMessageId, 'after-fast')
   } finally { await f.close() }
 })
 
@@ -257,7 +346,13 @@ await scenario('skills collision filtering, cache, dynamic refresh and actual sk
   const f = await fixture({ configure: fake => fake.on(CLIENT.skillsList, () => ({ data: [{ cwd: CWD, skills }] })) })
   try {
     const commands = await f.session.capabilities.commands!.list()
-    check('skills local names filtered case-insensitively', commands.some(row => row.name.toLowerCase() === 'init'), false)
+    // A name colliding with a *local* command is no longer filtered here (B-5):
+    // the host drops it when it merges the backend's list after the local ones
+    // ("local names win", dsh-adapter/channel/core/session-controls.ts —
+    // verify-init-capability pins that a backend /init never shows). What this
+    // backend still filters is what it answers itself: its own four plus the
+    // names its own manifest declares.
+    check('a skill colliding with a local name is reported; the host merge drops it', commands.some(row => row.name.toLowerCase() === 'init'), true)
     check('skills backend reserved names not duplicated', commands.filter(row => row.name === 'review').length, 1)
     check('skills capability-owned names not advertised', commands.some(row => row.name === 'permission'), false)
     check('disabled skill omitted', commands.some(row => row.name === 'disabled'), false)

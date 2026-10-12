@@ -15,7 +15,7 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { createChannel }, { setLang, t }, { default: instances }, { settled, sleep, viewportLines }, { PermissionStore }] =
+const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { createChannel }, { setLang }, { codexText }, { default: instances }, { settled, sleep, viewportLines }, { PermissionStore }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -25,6 +25,7 @@ const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { Qu
     import('../src/dsh-adapter/questions.js'),
     import('../src/dsh-adapter/channel.js'),
     import('../src/i18n.js'),
+    import('../src/backends/codex/text.js'),
     import('../src/ink/instances.js'),
     import('./lib/term-test.mjs'),
     import('../src/channel/permissions.js'),
@@ -167,7 +168,7 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
     check(`${tag}: the running command's card is on screen`, await settled(() => screen().includes('sleep 30')), screen())
     stdin.write('\x1b')
     check(`${tag}: Esc interrupts the turn`, await settled(() => h.sent('turn/interrupt').length === 1 && h.sent('turn/interrupt')[0]!.turnId === 'turn-3'))
-    check(`${tag}: the interrupted card and the interrupt row show`, await settled(() => screen().includes(t('codex-interrupted')) && !channel.working), screen())
+    check(`${tag}: the interrupted card and the interrupt row show`, await settled(() => screen().includes(codexText('codex-interrupted')) && !channel.working), screen())
   } finally {
     instance.unmount()
     channel.releaseContributions()

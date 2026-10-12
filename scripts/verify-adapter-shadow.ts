@@ -101,6 +101,7 @@ const METHOD_POLICY: Record<string, Record<string, MethodPolicy>> = {
     generationId: { kind: 'exempt', reason: 'read-only scalar accessor; no effect' },
     grants: { kind: 'exempt', reason: 'read-only facade accessor; underlying grant evaluation is guarded in GrantStore' },
     probeDecisionEvents: { kind: 'capability', capability: 'host.decision.probe' },
+    probeBackendAdmission: { kind: 'capability', capability: 'host.backend.probe' },
     hostDescriptor: { kind: 'capability', capability: 'host.descriptor' },
     describe: { kind: 'capability', capability: 'host.descriptor' },
     admit: { kind: 'exempt', reason: 'host-owned denial stub; always throws before producing an effect' },

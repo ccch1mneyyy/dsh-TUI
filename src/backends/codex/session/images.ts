@@ -5,8 +5,8 @@ import { readFile } from 'node:fs/promises'
 import { basename, extname, resolve } from 'node:path'
 import type { ImageLimitsView } from '../../../agent/capabilities.js'
 import type { ImageRef } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
-import { probeImageSize } from '../../../utils/imageResize.js'
+import { codexText } from '../text.js'
+import { probeImageSize } from '../../shared/image-size.js'
 import { arr, rec, str, type Rec } from '../narrow.js'
 import type { UserInput } from '../protocol/index.js'
 
@@ -24,22 +24,22 @@ const extensionType: Readonly<Record<string, string>> = { '.png': 'image/png', '
 
 /** Read and recheck staged facades before any turn/steer request is sent. */
 export async function codexImageInputs(images: readonly ImageRef[], limits: ImageLimitsView = CODEX_IMAGE_LIMITS): Promise<UserInput[]> {
-  if (images.length > limits.maxImagesPerMessage) throw new Error(t('codex-images-too-many', { n: limits.maxImagesPerMessage }))
+  if (images.length > limits.maxImagesPerMessage) throw new Error(codexText('codex-images-too-many', { n: limits.maxImagesPerMessage }))
   const inputs: UserInput[] = []
   let total = 0
   for (const image of images) {
     const name = image.name ?? image.id
     const type = image.mediaType
-    if (type === undefined || !CODEX_IMAGE_LIMITS.mediaTypes.includes(type) || !limits.mediaTypes.includes(type)) throw new Error(t('codex-image-type-refused', { name, type: type ?? '?' }))
+    if (type === undefined || !CODEX_IMAGE_LIMITS.mediaTypes.includes(type) || !limits.mediaTypes.includes(type)) throw new Error(codexText('codex-image-type-refused', { name, type: type ?? '?' }))
     let data: Uint8Array
-    try { data = await image.read() } catch { throw new Error(t('codex-image-unreadable', { name })) }
-    if (data.byteLength > limits.maxImageBytes) throw new Error(t('codex-image-too-large', { name, mb: Math.round(limits.maxImageBytes / (1024 * 1024)) }))
+    try { data = await image.read() } catch { throw new Error(codexText('codex-image-unreadable', { name })) }
+    if (data.byteLength > limits.maxImageBytes) throw new Error(codexText('codex-image-too-large', { name, mb: Math.round(limits.maxImageBytes / (1024 * 1024)) }))
     total += data.byteLength
-    if (total > limits.maxMessageImageBytes) throw new Error(t('codex-images-too-large', { mb: Math.round(limits.maxMessageImageBytes / (1024 * 1024)) }))
+    if (total > limits.maxMessageImageBytes) throw new Error(codexText('codex-images-too-large', { mb: Math.round(limits.maxMessageImageBytes / (1024 * 1024)) }))
     const size = probeImageSize(data)
     const width = size?.width ?? image.width
     const height = size?.height ?? image.height
-    if (width > limits.maxImageDimension || height > limits.maxImageDimension || width * height > limits.maxImagePixels) throw new Error(t('codex-image-dimensions-refused', { name, px: limits.maxImageDimension }))
+    if (width > limits.maxImageDimension || height > limits.maxImageDimension || width * height > limits.maxImagePixels) throw new Error(codexText('codex-image-dimensions-refused', { name, px: limits.maxImageDimension }))
     inputs.push({ type: 'image', url: 'data:' + type + ';base64,' + Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('base64') })
   }
   return inputs

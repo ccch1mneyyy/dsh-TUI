@@ -85,7 +85,9 @@ export interface PermissionRegistry {
 interface RegistryEntryBase {
   name: string
   coordinates: ContractCoordinate
-  kind: 'capability' | 'event'
+  /** What the entry registers: a contract capability, an event point, or a
+   *  manifest extension definition (`SettingsSection` / `Scene` / `Backend` …). */
+  kind: 'capability' | 'event' | 'extension'
   permissions: string[]
   eventEnvelope?: string
 }
@@ -111,5 +113,12 @@ export interface ContractRegistry {
   }
   imports: ImportedRegistryEntry[]
   definitions: PrivateRegistryEntry[]
+  /**
+   * Manifest extension definitions, both imported and TUI-owned (W-2). The
+   * section is what a contribution family is *published* from: `Backend` lives
+   * here, which is why the registry reader, the descriptor's supported-contract
+   * derivation and the admission gates all read it (`src/adapter/standard/registry.ts`).
+   */
+  extensions: RegistryEntry[]
   facetApiVersions: string[]
 }

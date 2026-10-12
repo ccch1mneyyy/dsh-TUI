@@ -13,8 +13,8 @@
 import { statSync } from 'node:fs'
 import type { SessionCapabilities } from '../../agent/capabilities.js'
 import type { AgentEvent } from '../../agent/events.js'
-import { t } from '../../i18n.js'
-import type { JsonRecord } from '../../utils/jsonl.js'
+import { claudeText } from './text.js'
+import type { JsonRecord } from '../shared/jsonl.js'
 import { replayClaudeTranscript } from './replay.js'
 import { cursorBefore, headBoundary, locateClaudeTranscript, olderSlice, readTranscriptEntries, type OlderCursor } from './transcript-file.js'
 
@@ -59,7 +59,7 @@ export function createClaudeTranscriptHistory(deps: ClaudeTranscriptHistoryDeps)
   const load = (): NonNullable<typeof parsed> => {
     follow()
     path ??= locateClaudeTranscript(boundId, deps.configDir())
-    if (path === undefined) throw new Error(t('claude-transcript-missing', { id: boundId }))
+    if (path === undefined) throw new Error(claudeText('claude-transcript-missing', { id: boundId }))
     const stat = statSync(path)
     if (parsed !== undefined && parsed.size === stat.size && parsed.mtimeMs === stat.mtimeMs) return parsed
     const { entries, badLines } = readTranscriptEntries(path)

@@ -187,6 +187,11 @@ export interface SettingsHost {
   writeCredential(ref: string, value: string): Promise<void>
 }
 
+/** A recoverable fault in a namespace's persisted document (shown as a badge). */
+export type SettingsNamespaceWarning =
+  | { readonly id: 'unreadable' }
+  | { readonly id: 'recovered'; readonly backup: string }
+
 /** One settings namespace as the screen reads it (secrets redacted). */
 export interface SettingsNamespaceView {
   readonly ns: string
@@ -198,6 +203,8 @@ export interface SettingsNamespaceView {
   readonly value: unknown
   /** Raw user layer; a path present here is a user override. */
   readonly user: unknown
+  /** A fault in the namespace's own document, when there is one. */
+  readonly warning?: SettingsNamespaceWarning
 }
 
 export type SettingsPathOp =

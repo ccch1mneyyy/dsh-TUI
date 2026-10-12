@@ -41,6 +41,7 @@ import { fileClaudePrefs, memoryClaudePrefs } from '../src/backends/claude/prefs
 import { openClaudeSession } from '../src/backends/claude/session.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { i18nDict, setLang, t } from '../src/i18n.js'
+import { claudeText } from '../src/backends/claude/text.js'
 import { claudeDeps, fakeClaudeSdk, tick } from './lib/claude-fake-sdk.js'
 
 setLang('en')
@@ -212,7 +213,7 @@ const fakeSettings = (defaultMode: unknown) => ({
   check('safety: the downgrade is reported as a downgrade', start.downgradedFrom === 'bypassPermissions', start)
   // backend.ts pushes this sentence as a start notice; the copy must tell the
   // user where the explicit choice lives.
-  const notice = t('claude-start-mode-downgraded', { mode: start.downgradedFrom ?? '' })
+  const notice = claudeText('claude-start-mode-downgraded', { mode: start.downgradedFrom ?? '' })
   check('safety: the notice names the mode and points at /permission', notice.includes('bypassPermissions') && notice.includes('/permission'), notice)
   const fake = fakeClaudeSdk(() => ({ capabilities: [] }), controls)
   const session = await openClaudeSession(claudeDeps(fake.sdk, { start, startNotices: [notice] }))
@@ -288,9 +289,9 @@ const fakeSettings = (defaultMode: unknown) => ({
   const envBypass = await resolveStartPermissionMode(fakeSettings('default'), '/p', { DSH_TUI_CLAUDE_PERMISSION_MODE: 'bypassPermissions' }, 'bypassPermissions')
   check('pref: the env override still starts in bypassPermissions', envBypass.mode === 'bypassPermissions' && envBypass.source === 'env' && envBypass.bypassNotCarried === undefined, envBypass)
   setLang('zh')
-  const zhNotice = t('claude-start-mode-bypass-not-carried')
+  const zhNotice = claudeText('claude-start-mode-bypass-not-carried')
   setLang('en')
-  const notice = t('claude-start-mode-bypass-not-carried')
+  const notice = claudeText('claude-start-mode-bypass-not-carried')
   check('pref: the not-carried notice is real copy in both languages, both naming /permission', zhNotice.includes('/permission') && notice.includes('/permission') && zhNotice !== notice && zhNotice !== 'claude-start-mode-bypass-not-carried', { zhNotice, notice })
   const startNotices = startModeNotices(start, bypassPrefs)
   check('pref: the start notices say the bypass was not carried', startNotices.includes(notice), startNotices)

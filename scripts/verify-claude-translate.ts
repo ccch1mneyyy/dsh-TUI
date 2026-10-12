@@ -19,9 +19,13 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentEvent } from '../src/agent/events.js'
 import { claudeEmits, createClaudeTranslator } from '../src/backends/claude/translate.js'
-import { setLang } from '../src/i18n.js'
+import { getLang, setLang } from '../src/i18n.js'
+import { installClaudeLocale } from '../src/backends/claude/text.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
 
+// The translator is driven directly here (no session), so the backend's copy
+// takes its language straight from the host, exactly as `open()` wires it.
+installClaudeLocale(getLang)
 setLang('en')
 const FIXTURES = join(import.meta.dirname, 'fixtures', 'claude')
 const UPDATE = process.argv.includes('--update')

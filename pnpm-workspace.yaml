@@ -19,6 +19,13 @@ packages:
 # peerDependencies stay wide, and this file is never consulted by consumer
 # installs.
 overrides:
+  # The host-only packages the entry takes types from
+  # (src/dsh-adapter/host-contract.ts). At run time the entry loads the
+  # installed dsh's own copies by realpath.
+  '@deepseek-ai/dsh-app-boot': 0.2.0-rc.2
+  '@deepseek-ai/dsh-cmdline': 0.2.0-rc.2
+  '@deepseek-ai/dsh-http-proxy': 0.2.0-rc.2
+  '@deepseek-ai/dsh-launch-environment': 0.2.0-rc.2
   '@deepseek-ai/dsh-agent': 0.2.0-rc.2
   '@deepseek-ai/dsh-agent-instructions': 0.2.0-rc.2
   '@deepseek-ai/dsh-agent-preset-registry': 0.2.0-rc.2
@@ -174,7 +181,7 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-agent-default-model@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-api-gateway@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-api-remotes@0.1.0-rc.8 || 0.1.1-rc.2'
-  - '@deepseek-ai/dsh-app-boot@0.1.0-rc.8 || 0.1.1-rc.2'
+  - '@deepseek-ai/dsh-app-boot@0.1.0-rc.8 || 0.1.1-rc.2 || 0.2.0-rc.2'
   - '@deepseek-ai/dsh-client-connection@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-client-hmr@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-client-locale@0.1.0-rc.8 || 0.1.1-rc.2'
@@ -213,7 +220,7 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-client-ui-user-questions@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-client-ui-workflow-run@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-client-ui-workspace@0.1.0-rc.8 || 0.1.1-rc.2'
-  - '@deepseek-ai/dsh-cmdline@0.1.0-rc.8 || 0.1.1-rc.2'
+  - '@deepseek-ai/dsh-cmdline@0.1.0-rc.8 || 0.1.1-rc.2 || 0.2.0-rc.2'
   - '@deepseek-ai/dsh-code-runtime-worker-thread@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-compaction@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-cordis-client-runner@0.1.0-rc.8 || 0.1.1-rc.2'
@@ -230,7 +237,7 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-host-plugin-inventory@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-host-webserver@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-jobs@0.1.0-rc.8 || 0.1.1-rc.2'
-  - '@deepseek-ai/dsh-launch-environment@0.1.0-rc.8 || 0.1.1-rc.2'
+  - '@deepseek-ai/dsh-launch-environment@0.1.0-rc.8 || 0.1.1-rc.2 || 0.2.0-rc.2'
   - '@deepseek-ai/dsh-llm-retry@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-message-feedback@0.1.0-rc.8 || 0.1.1-rc.2'
   - '@deepseek-ai/dsh-native-command@0.1.0-rc.8 || 0.1.1-rc.2'

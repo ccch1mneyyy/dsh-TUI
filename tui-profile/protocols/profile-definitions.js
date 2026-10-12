@@ -3,6 +3,7 @@
 export { registerTuiContributionExtensions } from './tui-contributions.js'
 export * from './tui-channel.js'
 import { tuiChannelDefinition } from './tui-channel.js'
+import { BACKEND } from './tui-contributions.js'
 
 export const DECISION_EVENTS = Object.freeze({
   apiVersion: 'tui.dsh/v1alpha1',
@@ -48,9 +49,22 @@ function providerDefinition(reference, label) {
 
 export const decisionEventsDefinition = providerDefinition(DECISION_EVENTS, 'DecisionEvents')
 
+/**
+ * The `Backend` contribution coordinate as a **host-published contract** (C
+ * stage / W-2). The family's own declaration shape and validator live in
+ * `tui-contributions.js` (the manifest extension catalog); this definition is the
+ * other half — the coordinate a bundle names in `requires.contracts`, which the
+ * host descriptor advertises once its admission machine answers a real probe.
+ * Like DecisionEvents it carries no support spec: a backend's support is not
+ * feature-granular, and what a declaration may say is decided by the extension
+ * definition, not by this contract.
+ */
+export const backendDefinition = providerDefinition(BACKEND, 'Backend')
+
 export const profileDefinitions = Object.freeze([
   decisionEventsDefinition,
   tuiChannelDefinition,
+  backendDefinition,
 ])
 
 export function registerProfileProtocols(catalog) {

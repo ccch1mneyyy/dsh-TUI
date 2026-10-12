@@ -156,6 +156,14 @@ export const SETTING_DEFINITIONS = {
       { value: 'en', label: 'English', descriptions: { zh: '英文' } },
     ],
   },
+  'launchpad': {
+    label: 'Launchpad on boot',
+    descriptions: { zh: '启动页（落地页）' },
+    group: 'splash',
+    hint: 'On: an ordinary launch (no --resume, no first prompt) starts on the launchpad — the landing page where the first sentence gets typed, with the Continue / Sessions / Settings / Kernel row. Off: boots straight into the chat page. A resume target always skips the launchpad either way. On by default. Restart to apply.',
+    hintDescriptions: { zh: '开启：普通启动（不带 --resume、不带首句）先落启动页——输入第一句话的落地页，带「继续上次 / 会话与工作区 / 设置 / 内核」一行；关闭：直接进入聊天页。无论开关，指定恢复的会话总是直接打开。默认开启。重启生效。' },
+    kind: 'boolean',
+  },
   'mathImageBacking': {
     label: 'Formula image background',
     descriptions: { zh: '公式图片底色' },
@@ -274,8 +282,8 @@ export const SETTING_DEFINITIONS = {
     label: 'Chat column width',
     descriptions: { zh: '聊天列占比' },
     group: 'side-panel',
-    hint: 'Chat column as a fraction of the content width: 0.1-0.95, default 0.68. Type a decimal such as `0.6`; while the panel has focus the +/- shortcuts nudge it live for the current session. Applies immediately.',
-    hintDescriptions: { zh: '聊天列占内容宽度的比例：0.1-0.95，默认 0.68。输入小数如 `0.6`；面板获得焦点时可用 +/- 在会话内实时微调。立即生效。' },
+    hint: 'Chat column as a fraction of the content width: 0.1-0.95, default 0.68. Type a decimal such as `0.6`; drag the divider or use +/- while the panel has focus to resize for the current session. Applies immediately.',
+    hintDescriptions: { zh: '聊天列占内容宽度的比例：0.1-0.95，默认 0.68。输入小数如 `0.6`；拖拽分隔线，或在面板获得焦点时用 +/-，可在当前会话内实时调宽。立即生效。' },
     kind: 'number',
   },
   'sidePanel.splitEnabled': {

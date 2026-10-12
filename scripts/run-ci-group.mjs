@@ -70,9 +70,14 @@ const GROUPS = {
 // 内核选择器组件：标题、行标签与副标题（版本、不可选原因）、当前项勾选、
 // 不可选行变暗但焦点指针仍显示、pinned 提示行、鼠标点行、未接 onPick 时无 hover。
     ['verify-kernel-picker', ['node', '--import', 'tsx/esm', 'scripts/verify-kernel-picker.tsx']],
+// 内核快捷命令：真实 Chat 的直达切换、探测等待、回合门禁、首屏与安装提示。
+    ['verify-kernel-commands', ['node', '--import', 'tsx/esm', 'scripts/verify-kernel-commands.tsx']],
 // SDK 安装向导（内核选择器「未安装」行进入）：各步骤态的正文与提示行、
 // 手动兜底命令、窄终端截断、en 态文案。
     ['verify-sdk-install-wizard', ['node', '--import', 'tsx/esm', 'scripts/verify-sdk-install-wizard.tsx']],
+// 真实 Chat 安装链：两个可安装后端、鼠标关闭、预检/安装取消与迟到结果隔离；
+// inline/fullscreen × 常规/窄终端，安装动作全为夹具。
+    ['verify-sdk-install-chat', ['node', '--import', 'tsx/esm', 'scripts/verify-sdk-install-chat.tsx']],
 // 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
 // （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
     ["repro-askpanel", ['node', '--import', 'tsx/esm', 'scripts/repro-askpanel.tsx']],
@@ -202,6 +207,9 @@ const GROUPS = {
 // 滚动窗口与 shrink 边界。measure-depth 需生产模式（minified #185）。
     ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx']],
     ["verify-scroll", ['node', 'scripts/verify-scroll.mjs']],
+// 流式行离开虚拟窗口时保留实测行高：不得因回落到 2 行估算而塌陷，
+// 不得改写 committed/painted 位置、接回跟随或移动 xterm 中的正文锚点。
+    ["verify-post-shrink-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-post-shrink-anchor.tsx']],
 // 长会话冷/热窗口跳转、绘制边界发布与回底挂载预算（不能等滚轮救活）。
     ['verify-scroll-jumps', ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-jumps.tsx']],
     ['verify-scroll-jumps-narrow', ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-jumps.tsx'], { DSH_TEST_COLUMNS: '60' }],
@@ -296,6 +304,9 @@ const GROUPS = {
     ["verify-btw-thread", ['node', '--import', 'tsx/esm', 'scripts/verify-btw-thread.mjs']],
   ],
   'input-terminal': [
+// 原生光标：inline/fullscreen × 宽/窄终端、无同步输出的重绘顺序、
+// 纯光标移动不隐藏、列表焦点与可见性切换、resize、外部交接与退出恢复。
+    ['verify-native-cursor', ['node', '--import', 'tsx/esm', 'scripts/verify-native-cursor.tsx']],
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
 // 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
     ["verify-keys", ['node', '--import', 'tsx/esm', 'scripts/verify-keys.tsx']],
@@ -339,8 +350,12 @@ const GROUPS = {
     ["verify-exit-resume-marker", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-resume-marker.tsx']],
 // 退出阶段 stderr/console 恢复回归（issue #42）：shutdown 解绑恢复物理流并注销监听器。
     ["verify-shutdown-stderr", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-stderr.tsx']],
+// 迁移提示的退出生命周期：真实 Chat + UI lease，覆盖待触发/扫描在途/消失定时器与双渲染模式。
+    ["verify-migrate-hint-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-migrate-hint-lifecycle.tsx']],
 // 退出收尾运行时未命中回退：找不到 Ink runtime 时必须走完整 unmount 恢复终端。
     ["verify-shutdown-fallback", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-fallback.tsx']],
+// 独立入口的进程所有权：信号经退出漏斗、以同一信号结束；组合期间释放根先等组合收尾。
+    ["verify-entry-process-exit", ['node', '--import', 'tsx/esm', 'scripts/verify-entry-process-exit.ts']],
 // 退出鼠标残留回归（issue #522）：detach 闩锁后自愈探针不再重写
 // ENABLE_MOUSE_TRACKING；unmount 在末帧渲染抛错时仍同步写完整清理
 // （帧在 EXIT_ALT_SCREEN 前、DISABLE 后 SHOW_CURSOR），handle 暴露
@@ -355,6 +370,9 @@ const GROUPS = {
 // 连续 dragmove、release/focus-out/reset 收尾 dragend；未移动仍走 click，
 // 无 handler 与修饰键区域保留基线文本选择；真实 SGR 管线 + 最小滑块消费者。
     ["verify-drag-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-drag-protocol.tsx']],
+// 全屏拖选自动复制后保留选区，重复 release 不重复复制；选区高亮跳过
+// 行尾填充/空白行，并保留代码缩进、软换行分隔空格和 Unicode 字符。
+    ['verify-copy-on-select', ['node', 'scripts/verify-copy-on-select.mjs']],
 // hover 事件性能与健壮性回归：同批 motion 保留兴趣边界（tooltip dwell
 // 不提前）、无兴趣矩形快路径跳过全树 hit-test，且渲染提交/帧边界/
 // 多 root 失效；拖拽 motion 逐事件到达。
@@ -374,6 +392,11 @@ const GROUPS = {
 // 直达启动器回归（issue #108）：参数透传、残骸 profile 重装、
 // 版本不一致提示、双语消息、shellQuote 转义规则。
     ["verify-launcher", ['node', 'scripts/verify-launcher.mjs']],
+// 本包入口的路由：内核判定排序、profile 补丁的 backend 钉、重启 argv、宿主 dsh 查找。
+    ["verify-host-entry", ['node', '--import', 'tsx/esm', 'scripts/verify-host-entry.ts']],
+// 第三方插件的身份准入：真 Cordis 组合上驱动 armAdmissionLoader，面板带 manifest id；
+// tuiPluginHost 始终不挂载（issue #183）时等待有上限、settle 成 refused。
+    ["verify-admission-loader", ['node', '--import', 'tsx/esm', 'scripts/verify-admission-loader.ts']],
 // CLI 子命令回归（issue #509）：help/version 零环境应答（不触发自举
 // 与委托）、双语输出、profile 版本读取、只认第一个参数。
     ["verify-cli-subcommands", ['node', 'scripts/verify-cli-subcommands.mjs']],
@@ -436,6 +459,41 @@ const GROUPS = {
   ],
   'session-workspace': [
     ["verify-backend-startup", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-startup.ts']],
+// 启动恢复 fail-closed（roadmap §6 第 11 条，B-2a）：纯函数半边（ResumeTarget 三态与 retry
+// 容错、显式 id 原样透传、裸 flag 走调用方 fallback、`--` 之后不再解析）、启动器半边（裸
+// 请求派生不出目标即报错退出，而不是把 --continue 交给下游；三个重试分支都带
+// RESUME_RETRY_ENV；双语文案；救援 profile 仍丢掉三个会话控制变量），以及 /restart 的替换
+// 进程不再继承一次性标记。四条启动器断言各配一条坏基线（control 先绿 / 逐条注入 / 还原再绿，
+// 照 verify-backend-registry 的手法）。boot 侧的两条拒绝分支由 verify-startup-argv 从编译
+// 产物里切出来真跑，本脚本不重复。
+    ["verify-resume-target", ['node', '--import', 'tsx/esm', 'scripts/verify-resume-target.ts']],
+// 后端贡献族（B-2；W-1 → W-2 已接线）：三个内置 manifest 的投影必须过族内验证器、不漏
+// in-tree 私有键、投影是纯的；能力词表与 `SessionCapabilities` 成员双向一致（TS AST 提取）、
+// 保留字 id 表与注册表 built-in 双向一致；准入四种判定各一条（含 waiting_authorization 的
+// 拒绝形状）；scripts/fixtures/probe-backend 钉资源不变量（未加载即不 import / 不关池、
+// 只关加载过的、幂等）、两种安装面形态、声明覆盖运行期能力；坏声明逐条必拒；关键判据各配
+// 一条坏基线（注入 mutated 输入后必须红）；**末节是 W-2 的接线正断言**（它们取代了 B 段故意
+// 留下的四条 W-1 范围守卫）：宿主 supported contracts 含 `Backend`、`registryEntries()` 读
+// registry 的 extensions 段、`tui.backend` 条目把 contract profile 钉在 sha256 上、唯一注册
+// 贡献定义的生产模块就是规范准入 catalog 的装配点；以及 descriptor 的**双向**发布证据——
+// 探针应答才发布（用 pin 住的 profileHash），探针缺席/答"不可准入"就不发布并报出丢弃原因。
+// 两条新坏基线（删条目 / 漂移 profileHash）就地证明这几条不是装饰。
+    ["verify-backend-contribution", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-contribution.ts']],
+// 后端注册表回归（P0 Stage A + B-1）：注册闸门（重复 id / 保留 id / 非 inTree 用宿主
+// 词表 / native 越权 / 安装配方缺字段）、**安装面按声明不按 id**（非 inTree 条目声明
+// 宿主执行器即可装、装的是它自己的 specifier；codex 式"没有安装面"是缺省配方；
+// 宿主不认识的执行器＝不抛错、不可装、无向导）、五条来源的两段式解析
+// （语法合法但未装的 id → dsh + 告警，绝不打死 boot）、D4 的池记账（未加载即
+// 不 import、不关池；已加载的按序关、幂等、单条失败不阻断也不抛）、生成索引的
+// 发现/行序/失败即红，以及**坏基线必须红**——把边界门禁连同 src 副本搬进临时
+// 目录，逐条 vendor/native 规则注入一次越界 import，六条都必须失败。
+    ["verify-backend-registry", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-registry.ts']],
+// 包入口配置面（review R1）：`Config.backend` 必须继续接受普通字符串——它经
+// `src/index.ts` 的 `export *` 就在已发布入口上，声明成 branded 的 id 会让消费者
+// 原先合法的 `{ backend: 'codex' }` 变成 TS2322。用仓库自己的 tsc 编译一份真实
+// 消费者写法（`lib/types/index.d.ts`，故须在 build 之后跑），判据是零诊断：
+// 品牌回归报 TS2322，松成 any 则 `@ts-expect-error` 变 unused directive。
+    ["verify-public-config-types", ['node', 'scripts/verify-public-config-types.mjs']],
 // 内核切换过场：结局分类（spawn 失败或启动期死亡＝failed，干净退出＝succeeded 不出声，
 // 之后非零退出＝crashed）、进度行写完才 spawn、双语文案与配色、plugin.ts/update.ts 接线。
     ["verify-handoff-transition", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-transition.ts']],
@@ -444,8 +502,8 @@ const GROUPS = {
 // 端到端：ready 后旧进程不写 1049l，ready 前死亡与旧版 replacement 都只回主屏一次。
     ["verify-handoff-atomic", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-atomic.ts']],
 // 真实 PTY 下的完整交接链：1049h/l 各恰好一次且闭合晚于首帧、旧进程 spawn 前后
-// stdin 无 reader、replacement 的 isTTY/尺寸/raw mode。依次尝试 node-pty、POSIX
-// script、pipe（pipe 档跳过设备断言并注明）；Linux CI 走 script。
+// stdin 分离后不再预读/抢答复、replacement 的 isTTY/尺寸/raw mode。
+// node-pty 与 POSIX script 都应答 DA1；pipe 档跳过设备断言并注明。
     ["verify-handoff-pty-gate", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-pty-gate.mjs']],
 // 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：
 // 全程跑官方读取链——Session.append 生成骨架（turn 配对/reasoning/
@@ -717,8 +775,16 @@ const GROUPS = {
     ["verify-command-hold", ['node', '--import', 'tsx/esm', 'scripts/verify-command-hold.ts']],
     ['verify-shell-compat', ['node', 'scripts/verify-shell-compat.mjs']],
     ['verify-agent-lifecycle-compat', ['node', 'scripts/verify-agent-lifecycle-compat.mjs']],
+// 真 Agent/Session/JSONL：启动与连续 /new 不落盘权限初始化，首个输入完整
+// 保存初始权限；异步写入交接、失败重试、退出与并发工厂保持连续事件日志。
+    ['verify-empty-session-persistence', ['node', '--import', 'tsx/esm', 'scripts/verify-empty-session-persistence.ts']],
     ['verify-bundled-presets', ['node', 'scripts/verify-bundled-presets.mjs']],
     ['verify-preset-startup', ['node', 'scripts/verify-preset-startup.mjs']],
+// winbash 插件（presets/winbash.mjs——平铺单文件：presets/ 子目录被 packaged-preset
+// 发现逻辑强制要求 marker，非 preset 资产必须平铺）：注册形状（有/无 job registry
+// 两态）、前台执行、后台准入、取消杀进程、超时转后台、参数校验与卡片呈现；mock
+// registry + 真子进程、零依赖免编译（Linux 上 bash 解析为系统 bash 同样可跑）。
+    ['verify-winbash', ['node', 'scripts/verify-winbash.mjs']],
 // 随包用户手册（guide/）：副本与 docs/ 逐字节一致 + SKILL.md 能被内核加载 +
 // 发布面与启动器真的把它带上。npm 包原本不含任何用户文档，用户机器上的 AI
 // 无从"查手册回答"；这条门禁保证手册在包内且没漂移。
@@ -730,6 +796,9 @@ const GROUPS = {
 // langOverriddenBySettings）必须用同一个 ns —— 写死 'dsh-tui' 会让非默认挂载
 // 「写得进、读不回」，自动回顾永远关不掉。
     ["verify-settings-namespace", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-namespace.ts']],
+// TUI 自有设置文档（~/.dsh-tui/settings.json）：首启从 profile 补丁一次性导入、mutate 与
+// revision 冲突、其他 ns 转给宿主设置服务。
+    ["verify-tui-settings", ['node', '--import', 'tsx/esm', 'scripts/verify-tui-settings.ts']],
 // sidePanel.panels 多选：勾选行与逗号字符串互转且保序、未注册 id 保留为占位行、
 // 插件面板注册即出现、至少保留一个、高级原始编辑（改序/手填 id、非法草稿拒绝）。
     ["verify-panel-settings-picker", ['node', '--import', 'tsx/esm', 'scripts/verify-panel-settings-picker.tsx']],
@@ -772,6 +841,9 @@ const GROUPS = {
 // /plan 参数在屏内的归一化（#1371）：补全目录自己的 `on` 令牌必须以裸命令离开屏幕，
 // `off` 与 `/plan <message>` 原样透传，裸 `/plan` 仍开 on/off 选择器。
     ["verify-plan-argument-normalization", ['node', '--import', 'tsx/esm', 'scripts/verify-plan-argument-normalization.tsx']],
+// 启动接管（独立入口）：占位会话上先挂界面，后端打开后接管真会话；打开失败留提示行、
+// /new 重试；未就绪时 Enter 保留草稿、只放行本地命令。
+    ["verify-startup-adoption", ['node', '--import', 'tsx/esm', 'scripts/verify-startup-adoption.tsx']],
 // 只有 token 数没有正文的思考行：流式「思考中 · ~N tokens」、落定「已思考 · ~N tokens」，
 // 正文到达后显示正文；中英双语。
     ["verify-thinking-tokens", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-tokens.tsx']],
@@ -835,6 +907,9 @@ const GROUPS = {
 // 刷新（文件锁内落盘）、认证失败刷新后同会话 resume 一次、再失败引导 /login；事件、
 // 提示和日志里都不出现令牌。
     ["verify-claude-auth", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-auth.ts']],
+// Claude 内核检测：未装凭证也返回 loginInSession（选择器不拦切换，行带「启动后用
+// /login 登录」注记）；环境变量凭据照常判 ok，检测本身不变。
+    ["verify-claude-detect", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-detect.ts']],
 // Claude 控制面（假 Query）：model/effort/mode/compact/commands/mcp/context/account 的委托
 // 与持久化、channel 侧模式标签与命令合并、/mcp、/context、订阅用量、/login 及其无头渲染；
 // effort 在 open/resume、init 帧与 message_start 变化时都按后端声明的档位收敛。
@@ -856,7 +931,7 @@ const GROUPS = {
 // 可选项跳过）→ accept/decline/cancel；URL 模式、elicitation_complete、不支持的模式、
 // refusal_fallback_prompt；中断与释放收回面板；经 channel 与真实 QuestionStore 端到端。
     ["verify-claude-dialogs", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-dialogs.ts']],
-// 后端中立的 MCP elicitation ↔ 问卷纯函数（src/channel/elicitation.ts）：schema → 字段、
+// 后端中立的 MCP elicitation ↔ 问卷纯函数（src/backends/shared/elicitation.ts）：schema → 字段、
 // 逐类型校验、表单流程（拒绝 / 只重问无效项 / 类型化 content / 标签在首问时固定）、
 // URL 模式问题与提示文案、中英文都能解析；模块不 import 厂商包。
     ["verify-elicitation", ['node', '--import', 'tsx/esm', 'scripts/verify-elicitation.ts']],
@@ -916,6 +991,7 @@ const GROUPS = {
     ["verify-codex-plans", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-plans.ts']],
     ["verify-codex-advanced", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-advanced.ts']],
     ["verify-codex-catalog-history", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-catalog-history.ts']],
+    ["verify-backend-list-snapshot", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-list-snapshot.ts']],
     ["verify-codex-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-lifecycle.ts']],
     ["verify-codex-side-query", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-side-query.ts']],
     ["verify-codex-reconnect", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-reconnect.ts']],
@@ -925,7 +1001,7 @@ const GROUPS = {
     ["verify-backend-logout", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-logout.ts']],
     ["verify-codex-chat-controls", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-chat-controls.tsx']],
     ["verify-session-archive", ['node', '--import', 'tsx/esm', 'scripts/verify-session-archive.tsx']],
-// 内核目录（N7）：三内核、未探测/未安装/未登录置灰、loginInSession 仍可选并提示、
+// 内核目录（N7）：三内核、未探测/未安装置灰（登录态不再置灰）、loginInSession 可选并提示、
 // 只有可一键安装的内核给安装向导、版本产品前缀、--backend 接受 codex。
     ["verify-kernel-catalog", ['node', '--import', 'tsx/esm', 'scripts/verify-kernel-catalog.ts']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
@@ -964,9 +1040,11 @@ const GROUPS = {
 // 已随三合一会话界面删除，其断言一并移除。
     ["verify-agent-view", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-view.mjs']],
 // 后台任务（ctx.jobs）UI 投影：BackgroundJobStore 单元（注册/转换/消失
-// 合成 killed/输出镜像有界）、channel 集成（建卡、job_output 镜像、落定
-// toast、kill 权限传递、无 jobs 服务降级、/new 重置）、JobCard/JobsPanel
-// 渲染冒烟（三行瀑布、settled 折叠、面板行/提示）。
+// 合成 killed/removed 整条丢弃/输出镜像有界）、channel 集成（建卡、job_output
+// 镜像、落定 toast、awaited 落定不报 toast、removed 让前台 shell 的卡离场、
+// 有调用在飞时挂起卡、换绑从会话日志重建在飞台账、kill 权限传递、无 jobs
+// 服务降级、/new 重置）、JobCard/JobsPanel 渲染冒烟（三行瀑布、settled 折叠、
+// 面板行/提示）。
     ["verify-jobs-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-panel.tsx']],
 // jobs 面板：最近进度跨 settle 保留（带时间与来源）、有界时间线（启动/进度/输出/
 // 缺口/收尾，满了丢最旧）、保留的尾巴如实标注、无历史时的提示。
@@ -985,6 +1063,9 @@ const GROUPS = {
 // 侧栏鼠标契约：PanelBar 标签可点（切换活动面板）且 hover 高亮、⤢ 只对声明
 // capabilities.fullscreen 的面板出现并把**活动** id 交给宿主、点聊天列交还焦点。
     ["verify-side-panel-mouse", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-mouse.tsx']],
+// 侧栏分隔线拖拽：真实 SGR 捕获、逐列宽度/最小宽度、zoom/焦点、松手/失焦/
+// resize/收起/编辑器/换屏中断，以及带页边距的 Chat 接线与草稿保留、inline 回退。
+    ["verify-side-panel-resize", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-resize.tsx']],
 // 轨迹侧栏迁移回归：TrajectoryPanel 经真实投影渲染唤醒带/账本/检视器——
 // 空态、↑/↓ 经分发器移动选中、Tab/→ 切视图、Enter 展开再收起、Esc 恒不消费、
 // SGR 真鼠标点行聚焦、visible=false 零写流（visible=true 对照有写）、28/40 列不溢出。
@@ -1085,6 +1166,12 @@ const GROUPS = {
 // 分代（含上一 epoch 迟到 end 不得错杀）、resume 日志 bootstrap（历史行
 // 不进转录）、会话绑定延迟愈合与 peer 会话不污染。
     ["verify-subagent-panel-sync", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-panel-sync.tsx']],
+// 子代理卡片描述绑定回归：无身份的队列 term 不得覆盖 childId-keyed 的 label
+// （含 one-shot 的 catalog 先行形态与 resume 折叠行、continuable 二次 epoch），
+// keyed 事实（label/mode）必须落到自己的行、迟到也不丢；并发派发时首帧宁可
+// 留占位也不借同伴的标题；描述作废/溢出后仍保留未匹配的派发，远程任务迟到
+// 不得取走后来入队的标题；另钉住两种宿主顺序、队列上界与 reset 卫生。
+    ["verify-subagent-description-binding", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-description-binding.ts']],
 // 只读 Agent View、子代理消息输入框与代理间消息流：三个入口与 Esc 分层、父会话行与草稿
 // 往返不变、无 history 时回退 tail 并注明范围、queue/steer 与失败保草稿、降级路径、
 // 28/40 列不溢出、Detail Messages 页与 Dashboard 摘要行。
@@ -1105,11 +1192,12 @@ const GROUPS = {
     ["verify-balance", ['node', '--import', 'tsx/esm', 'scripts/verify-balance.tsx']],
 // 本会话费用估算回归（#1089）：主会话按模型分桶 + 子代理按各自 (provider, model)、峰值/空闲、缓存分项合并计价，非官方/未收录只报 token 并标注未计价。
     ["verify-session-cost", ['node', '--import', 'tsx/esm', 'scripts/verify-session-cost.tsx']],
-// /model 二级选择器派生回归：provider 分组（首现排序、显示名回退、
-// 计数）与落焦规则（多 provider 聚焦当前组、单 provider 直达模型层、
-// 缺席当前 provider 落首行）。键盘与 overlay 归约由 verify-chat-overlay
-// 覆盖，这里钉住两层共用的纯派生。
+// /model 标签选择器派生回归：provider 分组（首现排序、显示名回退、
+// 计数）、最近使用目录交集/持久化与初始提供商/模型焦点。
     ["verify-model-picker-groups", ['node', 'scripts/verify-model-picker-groups.mjs']],
+// /model 同页交互：最近使用置顶、Tab/Shift+Tab、模型/推理草稿、取消、
+// 同批键序、鼠标/滚轮与 inline/fullscreen 窄终端窗口化。
+    ['verify-model-picker-ui', ['node', '--import', 'tsx/esm', 'scripts/verify-model-picker-ui.tsx']],
 // 全屏出厂默认迁移回归（0.9.x schema + cordis.patch.yml false→true 翻转）：
 // 翻转前钉在 settings 用户层的显式 false 首启被 unset 一次（marker 仅在
 // 写入成功后落盘，失败下次自愈重试），此后再写的 false 是用户主动选择
@@ -1159,6 +1247,7 @@ const GROUPS = {
 // displayName 内嵌换行入口压平（#160 窗口化列表单行契约的第一道防
 // 线）。注意必须走 tsx——脚本直接 import src/customTheme.ts。
     ["verify-themes", ['node', '--import', 'tsx/esm', 'scripts/verify-themes.mjs']],
+// ThemeProvider 的 `theme` prop 三态回归：迟到生效、撤走不跳回、不可用名暂存待注册。
 
 // Text 背景色回归（issue #166）：公开 themed Text 与 Box 一致支持
 // 原始颜色值，且必须把对应 ANSI 背景色写入终端。

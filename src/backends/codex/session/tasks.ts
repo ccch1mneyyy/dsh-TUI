@@ -2,7 +2,7 @@
 import { Buffer } from 'node:buffer'
 import type { SessionCapabilities } from '../../../agent/capabilities.js'
 import type { AgentEvent } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { codexText } from '../text.js'
 import { arr, errorText, rec, str, type Rec } from '../narrow.js'
 import { CLIENT, NOTIFY } from '../protocol/index.js'
 import { REAL_CLOCK, rpcCode, RPC_ERROR, type RpcClock } from '../rpc/client.js'
@@ -50,7 +50,7 @@ export function createCodexTasks(deps: {
   }
   const unsupported = (error: unknown): boolean => {
     if (rpcCode(error) !== RPC_ERROR.methodNotFound && rpcCode(error) !== RPC_ERROR.invalidParams) return false
-    if (enabled) deps.emit([{ type: 'notice', level: 'warning', key: 'codex-tasks-unsupported', text: t('codex-tasks-unsupported') }])
+    if (enabled) deps.emit([{ type: 'notice', level: 'warning', key: 'codex-tasks-unsupported', text: codexText('codex-tasks-unsupported') }])
     enabled = false
     cancelTimer()
     return true
@@ -108,7 +108,7 @@ export function createCodexTasks(deps: {
           if (!entry.live || found.has(entry.id)) continue
           flushOutput()
           entry.live = false
-          events.push({ type: 'task.end', taskId: entry.id, status: entry.stopped ? 'stopped' : 'completed', summary: t(entry.stopped ? 'codex-terminal-stopped' : 'codex-terminal-ended'), time: now() })
+          events.push({ type: 'task.end', taskId: entry.id, status: entry.stopped ? 'stopped' : 'completed', summary: codexText(entry.stopped ? 'codex-terminal-stopped' : 'codex-terminal-ended'), time: now() })
         }
         events.push({ type: 'tasks.snapshot', taskIds: [...terminals.values()].filter(entry => entry.live).map(entry => entry.id) })
         if (events.length > 0) deps.emit(events)
@@ -141,7 +141,7 @@ export function createCodexTasks(deps: {
       if (![...terminals.values()].some(entry => entry.output !== '')) return undefined
       return async (id: string): Promise<string> => {
         const output = terminals.get(id)?.output
-        if (output === undefined || output === '') throw new Error(t('codex-terminal-no-output'))
+        if (output === undefined || output === '') throw new Error(codexText('codex-terminal-no-output'))
         return output
       }
     },

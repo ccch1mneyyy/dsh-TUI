@@ -2,10 +2,14 @@
  * 后台任务（ctx.jobs）UI 投影回归：/jobs 面板、转录任务卡、状态栏角标、完成 toast。
  *
  * Group A — BackgroundJobStore 单元（无渲染）：
- *   注册/转换/消失合成 killed、onSettled 恰好一次、输出镜像过滤与有界、时长格式化。
+ *   注册/转换/名册消失合成 killed/removed 整条丢弃、onSettled 恰好一次、输出镜像过滤与有界、时长格式化。
  * Group B — channel 集成（真实 cordis Context + 假 agents/jobs 服务）：
  *   任务注册建卡、job_output 结果镜像进瀑布、落定 toast、存活任务消失冻结、
- *   jobControl.kill 权限传递、无 jobs 服务降级、/new 重置投影。
+ *   jobControl.kill 权限传递、无 jobs 服务降级、/new 重置投影；
+ *   内核事件总线（B2）：registered/output/readAt 增量、gap、awaited 落定不报 toast、
+ *   removed 让前台 shell 的任务卡随记录离场；会话换绑见 B3。
+ *   B10：前台 shell 不闪卡——有调用在飞时卡挂起，调用返回后才现；同名双调用等全部返回；
+ *   名册上界逐出只约束面板，卡作为历史留在转录（B11：换绑时台账从会话日志重建）。
  * Group C — 渲染冒烟（headless xterm）：
  *   JobCard 运行态三行瀑布（有输出时）/仅头行（无输出时）、settled 折叠、JobsPanel 标题/行/提示。
  * Group D — 按键归属（Chat 整屏 + 假 channel）：
@@ -173,6 +177,15 @@ console.log('--- A: BackgroundJobStore units ---')
       && formatJobDuration({ startedAt: 0, finishedAt: 3_720_000 }) === '1h02m',
     `${formatJobDuration({ startedAt: 0, finishedAt: 192_000 })}`,
   )
+
+  // A8 内核 removed：调用方自己 wait 收走终态后丢弃记录（前台 shell）。
+  // 记录必须整条离场，而非像「名册消失」那样冻结成 killed 历史。
+  const changesBeforeDrop = changes
+  store.drop('pwsh-1')
+  check('A8 drop 移除记录并通知一次', store.get('pwsh-1') === undefined && changes === changesBeforeDrop + 1)
+  const changesAfterDrop = changes
+  store.drop('pwsh-1')
+  check('A8 drop 未跟踪 id 无事发生', changes === changesAfterDrop)
 }
 
 // ---------------------------------------------------------------------------
@@ -478,10 +491,165 @@ console.log('--- B2: kernel event bus integration ---')
       && channel2.notifications.some(item => item.text.includes('pwsh-7'))),
     JSON.stringify(channel2.notifications.map(item => item.text)),
   )
+  check(
+    'B2d 未 removed 的落定卡留在转录（面板与状态栏继续跟踪）',
+    jobRows(channel2).some(row => row.job?.id === 'pwsh-7' && row.job?.status === 'completed'),
+    JSON.stringify(jobRows(channel2).map(row => row.job?.status)),
+  )
 
   check(
     'B2e kill 以会话 id 字符串过围栏',
     channel2.jobControl.kill('pwsh-7') === true,
+  )
+
+  // 前台 shell：内核给每次 bash 调用都注册 job，工具自己 wait 收走终态后
+  // remove（模型从未拿到 id）。转录里只该留 Bash 工具卡——任务卡要随记录
+  // 离场，且这次落定不该再报「后台任务完成」。
+  const foreground = () => ({
+    id: 'bash-16', kind: 'bash', label: 'grep -rn Launchpad src', startedAt: NOW,
+    output: { total: 0, earliest: 0 },
+  })
+  shots.set('bash-16', { ...foreground(), status: 'running' })
+  for (const listener of listeners) listener({ type: 'registered', job: shots.get('bash-16') })
+  check(
+    'B2f 前台 shell 注册时建卡（记录此刻仍在可见集）',
+    await settled(() => jobRows(channel2).some(row => row.job?.id === 'bash-16')),
+  )
+
+  const noticesBeforeForeground = channel2.notifications.length
+  shots.set('bash-16', { ...foreground(), status: 'completed', detail: 'exit code: 0', finishedAt: Date.now() })
+  for (const listener of listeners) listener({ type: 'settled', job: shots.get('bash-16'), cause: 'producer', awaited: true })
+  await sleep(150) // 固定窗:探针 已由调用方 wait 收走的落定不得发完成 toast
+  check(
+    'B2f awaited 落定不发完成 toast',
+    channel2.notifications.length === noticesBeforeForeground,
+    JSON.stringify(channel2.notifications.slice(noticesBeforeForeground).map(item => item.text)),
+  )
+
+  shots.delete('bash-16')
+  for (const listener of listeners) listener({ type: 'removed', job: { ...foreground(), status: 'completed', detail: 'exit code: 0', finishedAt: Date.now() } })
+  check(
+    'B2g removed → 任务卡与面板快照一并离场',
+    await settled(() => !jobRows(channel2).some(row => row.job?.id === 'bash-16')
+      && !channel2.backgroundJobs.some(job => job.id === 'bash-16')),
+    JSON.stringify({ rows: jobRows(channel2).map(row => row.job?.id), jobs: channel2.backgroundJobs.map(job => job.id) }),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Group B10 — 前台 shell 不得先闪一张卡再撤（注册调用未返回时挂起）
+// ---------------------------------------------------------------------------
+console.log('--- B10: a card is held until the call that registered it returns ---')
+{
+  // 现场（标准模式，官方 dsh-tool-bash）：每次 bash 调用都先注册 job，工具自己
+  // wait 收走终态后 remove。若在 registered 时立刻建卡，前台命令运行期间转录里
+  // 就有两张同内容卡（Bash 工具卡 + 任务卡），随后任务卡又消失。前台与后台在
+  // JobView 上无从区分，但「注册它的那次工具调用还没返回」是可判定的事实：卡
+  // 挂起，调用返回（模型的 id 若存在就在这条工具结果里）时再出现；前台命令在
+  // 调用返回前记录就被 remove 了，于是这张卡从头到尾不存在。
+  const ctx10 = new Context()
+  const provide10 = (ctx10 as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx10)
+  const emit10 = (event: string, ...args: unknown[]) =>
+    (ctx10 as unknown as { emit(event: string, ...args: unknown[]): void }).emit(event, ...args)
+  provide10('agents', {
+    get: () => undefined,
+    create: () => Promise.resolve(makeHandle(makeAgent('agent-h', 'sess-h'))),
+  })
+
+  const shots10 = new Map<string, Record<string, unknown>>()
+  const listeners10 = new Set<(event: Record<string, unknown>) => void>()
+  let rosterReads = 0
+  provide10('jobs', {
+    list: () => { rosterReads += 1; return [...shots10.values()] },
+    kill: () => 'requested',
+    events: {
+      subscribe: (_filter: unknown, listener: (event: Record<string, unknown>) => void) => {
+        listeners10.add(listener)
+        return () => { listeners10.delete(listener) }
+      },
+    },
+  })
+  const agent10 = makeAgent('agent-h', 'sess-h')
+  const channel10 = createChannel(ctx10 as never, agent10 as never, {
+    model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
+  })
+  // 首绑的 afterBind 会 reanchor（清行 + 重读名册），在飞调用台账随之一并清空；
+  // 先等它落地，后面的原始事件才落在稳定的绑定上。
+  await settle(() => rosterReads >= 2)
+  const fire10 = (event: Record<string, unknown>): void => { for (const listener of listeners10) listener(event) }
+  const job10 = (id: string, label: string, status = 'running') =>
+    ({ id, kind: 'bash', label, status, startedAt: NOW, output: { total: 0, earliest: 0 } })
+  const rawCall = (callId: string, command: string): Record<string, unknown> =>
+    ({ type: 'tool/call', data: { callId, name: 'bash', arguments: JSON.stringify({ command, description: 'x' }) } })
+  const rawResult = (callId: string): Record<string, unknown> =>
+    ({ type: 'tool/result', data: { message: { source: { callId }, content: [] } } })
+  const hasRow10 = (id: string) => jobRows(channel10).some(row => row.job?.id === id)
+
+  emit10('session/event', agent10.session, rawCall('cb1', 'grep -rn hold src'))
+  shots10.set('bash-90', job10('bash-90', 'grep -rn hold src'))
+  fire10({ type: 'registered', job: shots10.get('bash-90') })
+  check('B10a 注册调用未返回：卡挂起，名册照收', await settled(() =>
+    channel10.backgroundJobs.some(job => job.id === 'bash-90') && !hasRow10('bash-90')))
+
+  shots10.set('bash-91', job10('bash-91', 'unrelated background work'))
+  fire10({ type: 'registered', job: shots10.get('bash-91') })
+  check('B10b 对不上任何在飞调用：立即建卡（不过度挂起）', await settled(() => hasRow10('bash-91')))
+
+  emit10('session/event', agent10.session, rawResult('cb1'))
+  check('B10c 调用返回：挂起的卡出现（后台 id 就在这条结果里）', await settled(() => hasRow10('bash-90')))
+
+  // 前台命令：调用未返回期间内核就 remove 了记录 → 卡一次都不出现。
+  emit10('session/event', agent10.session, rawCall('cb2', 'sleep 30'))
+  shots10.set('bash-92', job10('bash-92', 'sleep 30'))
+  fire10({ type: 'registered', job: shots10.get('bash-92') })
+  check('B10d 前台命令注册：卡挂起', await settled(() =>
+    channel10.backgroundJobs.some(job => job.id === 'bash-92') && !hasRow10('bash-92')))
+  shots10.delete('bash-92')
+  fire10({ type: 'removed', job: job10('bash-92', 'sleep 30', 'completed') })
+  emit10('session/event', agent10.session, rawResult('cb2'))
+  check('B10d removed 先到：卡从头到尾没出现，名册也清空', !hasRow10('bash-92')
+    && !channel10.backgroundJobs.some(job => job.id === 'bash-92'),
+  JSON.stringify({ rows: jobRows(channel10).map(row => row.job?.id), jobs: channel10.backgroundJobs.map(job => job.id) }))
+
+  // 兜底：调用结果始终没来，但任务自己落定且无人 wait（模型会收到完成通知）
+  // → 卡不再等调用。
+  emit10('session/event', agent10.session, rawCall('cb4', 'no result ever'))
+  shots10.set('bash-94', job10('bash-94', 'no result ever'))
+  fire10({ type: 'registered', job: shots10.get('bash-94') })
+  check('B10e 无结果的在飞调用：卡先挂起', await settled(() => !hasRow10('bash-94')))
+  shots10.set('bash-94', { ...job10('bash-94', 'no result ever', 'completed'), detail: 'exit code: 0', finishedAt: Date.now() })
+  fire10({ type: 'settled', job: shots10.get('bash-94'), cause: 'producer', awaited: false })
+  check('B10e 无人收走的落定：卡出现（完成通知已把它交给模型）', await settled(() => hasRow10('bash-94')))
+
+  // 同一命令的两个在飞调用：卡要等两个都返回（前者返回不代表它就是后台活）。
+  emit10('session/event', agent10.session, rawCall('cc1', 'twin cmd'))
+  emit10('session/event', agent10.session, rawCall('cc2', 'twin cmd'))
+  shots10.set('bash-95', job10('bash-95', 'twin cmd'))
+  fire10({ type: 'registered', job: shots10.get('bash-95') })
+  check('B10f 同名双调用：卡挂起', await settled(() => !hasRow10('bash-95')))
+  emit10('session/event', agent10.session, rawResult('cc1'))
+  check('B10f 只返回一个：卡继续挂起', !hasRow10('bash-95'))
+  emit10('session/event', agent10.session, rawResult('cc2'))
+  check('B10f 两个都返回：卡出现', await settled(() => hasRow10('bash-95')))
+
+  // 换会话：上一个会话没返回的调用不得继续按住新会话的同名命令。
+  emit10('session/event', agent10.session, rawCall('cb3', 'stale cmd'))
+  check('B10g /new 成功', (await channel10.newSession()) === true)
+  shots10.set('bash-93', job10('bash-93', 'stale cmd'))
+  fire10({ type: 'registered', job: shots10.get('bash-93') })
+  check('B10g 换会话后旧的在飞调用不再挂起新卡', await settled(() => hasRow10('bash-93')))
+
+  // 裁剪只能由注册表的 removed 驱动：store 自己的 JOBS_MAX_TRACKED 有界逐出
+  // 只约束面板名册，被逐出的终态卡仍以冻结快照留在转录里。
+  shots10.set('bash-96', { ...job10('bash-96', 'ancient done'), status: 'completed', detail: 'exit code: 0', finishedAt: NOW })
+  fire10({ type: 'registered', job: shots10.get('bash-96') })
+  check('B10h 旧终态卡先建卡', await settled(() => hasRow10('bash-96')))
+  for (let i = 0; i < 40; i++) shots10.set(`bash-${100 + i}`, job10(`bash-${100 + i}`, `bulk ${i}`))
+  fire10({ type: 'registered', job: shots10.get('bash-139') })
+  check(
+    'B10h 名册超上界逐出最旧终态：卡作为历史留在转录',
+    await settled(() => !channel10.backgroundJobs.some(job => job.id === 'bash-96') && hasRow10('bash-96')),
+    JSON.stringify({ roster: channel10.backgroundJobs.length, row: hasRow10('bash-96') }),
   )
 }
 
@@ -552,6 +720,73 @@ console.log('--- B3: session rebind (the roster must follow the binding) ---')
   emit({ type: 'output', id: 'boot-job', total: 10 }, 'sess-other')
   check('B3f 他人会话的输出事件被围栏挡住（不崩、不污染名册）',
     calls.length === beforeEvent + 1 && ids() === 'user-job', `${calls.join(',')} → ${ids()}`)
+}
+
+// ---------------------------------------------------------------------------
+// Group B11 — 换绑继承在飞调用：挂起台账从会话日志重建
+// ---------------------------------------------------------------------------
+console.log('--- B11: a rebind re-seeds the in-flight call ledger from the log ---')
+{
+  // 现场：会话 B 在后台跑着前台命令时被切回来（adopt/park 的活会话接管）。原始
+  // 事件订阅是 per-bind 的，接管那一刻台账是空的，而 B 的名册里就有那个 job；
+  // 若不从 B 自己的日志重建，卡会立刻建出来再等 removed 剪掉——就是被修掉的闪烁。
+  const liveCall = {
+    type: 'tool/call',
+    data: { callId: 'adopt-1', name: 'bash', arguments: JSON.stringify({ command: 'adopted foreground' }) },
+  }
+  const jobOf = (id: string, label: string) => ({ id, kind: 'bash', label, status: 'running' as const, startedAt: 1 })
+  const rosters: Record<string, ReturnType<typeof jobOf>[]> = {
+    'sess-a': [jobOf('bash-201', 'session A work')],
+    'sess-b': [jobOf('bash-200', 'adopted foreground')],
+    'sess-c': [jobOf('bash-202', 'malformed log check')],
+  }
+  const subs: Array<(event: Record<string, unknown>) => void> = []
+  let bound: { id: string } = { id: 'sess-a' }
+  const kernelJobs = {
+    list: () => [...rosters[bound.id] ?? []],
+    kill() {},
+    readAt() { return { chunks: [], next: 0 } },
+    events: {
+      subscribe(_filter: unknown, listener: (event: Record<string, unknown>) => void) {
+        subs.push(listener)
+        return () => {}
+      },
+    },
+  }
+  let log: unknown[] = []
+  const state = { backgroundJobs: [], rows: [] as Array<{ kind: string; job?: { id?: string } }>, emit() {} }
+  const projection = createJobProjection(
+    () => state as never,
+    {
+      owner: { current: () => true, own: () => () => {} },
+      notify: () => {},
+      rowIds: { value: 0 },
+      agent: () => bound as never,
+      steer: () => {},
+      history: () => log as never,
+    },
+  )
+  projection.attach(kernelJobs as never)
+  const jobRowIds = (): string => state.rows.filter(row => row.kind === 'job').map(row => row.job?.id).join(',')
+  check('B11a 绑定会话 A：名册里的 job 正常建卡', jobRowIds() === 'bash-201', jobRowIds())
+
+  bound = { id: 'sess-b' }
+  log = [liveCall]
+  projection.reanchor()
+  check(
+    'B11b 换绑到在跑前台命令的会话：日志种子让卡继续挂起（不建新行）',
+    !jobRowIds().includes('bash-200') && projection.store.snapshot().some(job => job.id === 'bash-200'),
+    `rows=[${jobRowIds()}] roster=${projection.store.snapshot().map(job => job.id).join(',')}`,
+  )
+
+  projection.onSessionEvent({ type: 'tool/result', data: { message: { source: { callId: 'adopt-1' } } } })
+  check('B11c 该调用的结果到达：卡出现', jobRowIds().includes('bash-200'), jobRowIds())
+
+  // 日志里的事件形状不合契约时不得抛出，也不得凭空挂起（收窄后当无调用处理）。
+  bound = { id: 'sess-c' }
+  log = [{ type: 'tool/call', data: { arguments: '{"command":"no id"}' } }, { nope: true }]
+  projection.reanchor()
+  check('B11d 畸形日志事件被忽略且照常建卡', jobRowIds().includes('bash-202'), jobRowIds())
 }
 
 // ---------------------------------------------------------------------------

@@ -855,9 +855,10 @@ export function MessageList({
   // change feeds topPad/bottomPad spacers, the offsets scan, and the
   // ScrollBox clamps with geometry that no longer exists — blank bands,
   // overlapping rows, wrong scrollTop after toggles (the audit's stale
-  // height cache). Track the inputs that decide each row's height; when
-  // one changes, drop the cached height. The window extension further
-  // down remounts invalidated rows so useLayoutEffect re-measures them.
+  // height cache). Track the inputs that decide each row's height; changes
+  // invalidate the cache, except text-only growth of an active stream keeps
+  // its last measured estimate until the mounted row is re-measured. The
+  // window extension remounts invalidated rows for useLayoutEffect to measure.
   // Text identity uses length as an O(1) proxy — per-frame full-text
   // hashing over every row would defeat virtualization's budget, and a
   // same-length miss only degrades to the previous behavior.
@@ -868,6 +869,7 @@ export function MessageList({
   // render was O(rows) garbage per tick (3200-row session ⇒ several MB/s
   // into minor GC; the GC share of the scroll profile).
   const sigRef = React.useRef(new Map<number, Array<string | number | boolean>>())
+  let growingStreamNeedsMeasure = false
   {
     const sigs = sigRef.current
     for (let i = 0; i < visibleRows.length; i++) {
@@ -910,7 +912,16 @@ export function MessageList({
       }
       // Copy out of the module-level scratch buffer — the next row reuses it.
       sigs.set(row.id, parts.slice())
-      heightsRef.current.delete(row.id)
+      // Keep a streaming row's last measured extent when only its text grows.
+      // If it leaves the mount window before the next measurement, falling
+      // back to DEFAULT_ROW_HEIGHT would manufacture a content collapse.
+      const growingStream = row.streaming === true && cachedParts !== undefined &&
+        parts.length === cachedParts.length &&
+        typeof parts[2] === 'number' && typeof cachedParts[2] === 'number' && parts[2] >= cachedParts[2] &&
+        parts.every((part, index) => index === 2 || part === cachedParts[index])
+      if (!growingStream) heightsRef.current.delete(row.id)
+      // Retaining the estimate must not skip the next fresh Yoga read.
+      else if (localRefs.current.has(row.id)) growingStreamNeedsMeasure = true
       heightsVersionRef.current++
     }
   }
@@ -1384,7 +1395,7 @@ export function MessageList({
         )
       }
     }
-    if (changed && measureTimerRef.current === null) {
+    if ((changed || growingStreamNeedsMeasure) && measureTimerRef.current === null) {
       // Layout corrections can cascade for many rows. Yield to the next
       // macrotask so React does not count the valid convergence as nested
       // updates when a streaming/reveal commit is already in flight.

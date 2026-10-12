@@ -2,7 +2,8 @@
  * C2 controls through the real Codex session, shared stores/projector and Chat.
  * Only the external app-server is scripted: 80/40 columns × inline/fullscreen.
  * Covers running output tails, true patch line numbers, every command decision
- * label, secret input, Plan review/label, quota warning and backend interrupt text.
+ * label, secret input, Plan review/label, quota warning, backend interrupt text
+ * and /review queue withdrawal/cancellation with native lifecycle ids.
  * Run: node --import tsx/esm scripts/verify-codex-chat-controls.tsx
  */
 import { mkdtempSync } from 'node:fs'
@@ -16,10 +17,10 @@ process.env.DSH_TUI_LANG = 'en'
 process.env.DSH_TUI_THEME = 'dark'
 delete process.env.DSH_TUI_BRAND
 
-const [{ Writable, PassThrough }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { PermissionStore }, { createChannel }, { setLang, t }, { default: instances }, { settled, sleep, viewportLines }] = await Promise.all([
+const [{ Writable, PassThrough }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { PermissionStore }, { createChannel }, { setLang, t }, { codexText }, { default: instances }, { settled, sleep, viewportLines }] = await Promise.all([
   import('node:stream'), import('react'), import('@xterm/headless'), import('../src/ui.js'),
   import('../src/screens/Chat.js'), import('../src/channel/questions.js'), import('../src/channel/permissions.js'),
-  import('../src/dsh-adapter/channel.js'), import('../src/i18n.js'), import('../src/ink/instances.js'), import('./lib/term-test.mjs'),
+  import('../src/dsh-adapter/channel.js'), import('../src/i18n.js'), import('../src/backends/codex/text.js'), import('../src/ink/instances.js'), import('./lib/term-test.mjs'),
 ])
 const { CWD, openHarness, THREAD } = await import('./lib/codex-session-harness.js')
 setLang('en')
@@ -43,6 +44,7 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
     fake.on('model/list', () => ({ data: [{ id: 'gpt-5.6-terra', model: 'gpt-5.6-terra', displayName: 'Codex', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }], nextCursor: null }))
     fake.on('collaborationMode/list', () => ({ data: [{ name: 'Plan', mode: 'plan' }, { name: 'Default', mode: 'default' }] }))
     fake.on('thread/settings/update', () => ({}))
+    fake.on('review/start', () => ({ turn: { id: 'review', status: 'inProgress', items: [] }, reviewThreadId: THREAD }))
   } })
   const permissions = new PermissionStore()
   const questions = new QuestionStore()
@@ -125,7 +127,7 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
     const network = { applyNetworkPolicyAmendment: { network_policy_amendment: { host: 'example.invalid', action: 'allow' } } }
     const approval = h.fake.request('item/commandExecution/requestApproval', { threadId: THREAD, turnId: turn, itemId: 'approval', command: 'printf lines', cwd: CWD,
       availableDecisions: ['accept', 'acceptForSession', exec, network, 'decline', 'cancel'] })
-    const labels = [t('codex-approve-accept'), t('codex-approve-session-command'), t('codex-approve-prefix', { prefix: 'printf' }), t('codex-approve-network', { host: 'example.invalid' }), t('codex-approve-decline')]
+    const labels = [codexText('codex-approve-accept'), codexText('codex-approve-session-command'), codexText('codex-approve-prefix', { prefix: 'printf' }), codexText('codex-approve-network', { host: 'example.invalid' }), codexText('codex-approve-decline')]
     check(tag + ': every offered decision has its localized label', await settled(() => labels.every(label => flat(view()).includes(flat(label)))), view())
     // Persistent approvals deliberately require navigation + Enter, not a digit.
     for (let step = 0; step < 3; step += 1) await type('\t')
@@ -134,7 +136,7 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
     check(tag + ': network choice sends the exact offered amendment', JSON.stringify(networkAnswer.result) === JSON.stringify({ decision: network }), JSON.stringify(networkAnswer) + '\n' + view())
     await resolveLast()
     const cancel = h.fake.request('item/commandExecution/requestApproval', { threadId: THREAD, turnId: turn, itemId: 'cancel-label', command: 'printf lines', availableDecisions: ['cancel'] })
-    check(tag + ': cancel-only uses the distinct tell-Codex label', await settled(() => flat(view()).includes(flat(t('codex-approve-cancel')))), view())
+    check(tag + ': cancel-only uses the distinct tell-Codex label', await settled(() => flat(view()).includes(flat(codexText('codex-approve-cancel')))), view())
     stdin.write('\r')
     check(tag + ': cancel-only sends cancel, never decline', JSON.stringify((await cancel).result) === '{"decision":"cancel"}')
     await resolveLast()
@@ -149,20 +151,20 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
     await h.completeTurn(turn)
 
     await h.session.capabilities.modes!.set('plan')
-    check(tag + ': Plan label reaches the real footer', await settled(() => h.session.capabilities.modes!.current() === 'plan' && view().includes(t('codex-mode-plan'))), view())
+    check(tag + ': Plan label reaches the real footer', await settled(() => h.session.capabilities.modes!.current() === 'plan' && view().includes(codexText('codex-mode-plan'))), view())
     const planned = await start('plan next')
     await h.notify('item/started', { turnId: planned, item: { type: 'plan', id: 'plan-item', text: '' } })
     await h.notify('item/plan/delta', { turnId: planned, itemId: 'plan-item', delta: '# Proposed steps\n\n1. Add regression coverage.' })
     await h.notify('item/completed', { turnId: planned, item: { type: 'plan', id: 'plan-item', text: '# Proposed steps\n\n1. Add regression coverage.' } })
     await h.completeTurn(planned)
-    const planLabels = [t('codex-plan-yes'), t('codex-plan-clear'), t('codex-plan-stay')]
-    check(tag + ': Plan review reuses the markdown decision panel', await settled(() => view().includes(t('codex-plan-implement')) && view().includes('Proposed steps') && planLabels.every(label => flat(view()).includes(flat(label)))), view())
+    const planLabels = [codexText('codex-plan-yes'), codexText('codex-plan-clear'), codexText('codex-plan-stay')]
+    check(tag + ': Plan review reuses the markdown decision panel', await settled(() => view().includes(codexText('codex-plan-implement')) && view().includes('Proposed steps') && planLabels.every(label => flat(view()).includes(flat(label)))), view())
     const beforeStay = h.sent('turn/start').length
     await pick('3')
-    check(tag + ': stay in Plan dismisses review without a new turn', await settled(() => !view().includes(t('codex-plan-implement'))) && h.sent('turn/start').length === beforeStay && h.session.capabilities.modes!.current() === 'plan', view())
+    check(tag + ': stay in Plan dismisses review without a new turn', await settled(() => !view().includes(codexText('codex-plan-implement'))) && h.sent('turn/start').length === beforeStay && h.session.capabilities.modes!.current() === 'plan', view())
 
     h.fake.notify('account/rateLimits/updated', { rateLimits: { primary: { usedPercent: 95, windowDurationMins: 300 }, secondary: { usedPercent: 100, windowDurationMins: 10080 }, rateLimitReachedType: 'weekly' } })
-    const quotaWarning = t('codex-rate-limit-reached', { kind: 'weekly' })
+    const quotaWarning = codexText('codex-rate-limit-reached', { kind: 'weekly' })
     check(tag + ': quota warning is localized on screen', await settled(() => view().includes(quotaWarning.slice(0, 30))) && channel.rows.some(row => row.text === quotaWarning), view())
     check(tag + ': both quota windows reach the channel', channel.rateLimit?.windows?.length === 2 && channel.rateLimit.windows[1]?.utilization === 1)
 
@@ -172,6 +174,35 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
     setLang('zh')
     check(tag + ': language switch keeps Codex interruption identity', await settled(() => flat(view()).includes(flat(t('interrupted-ask-backend', { name: 'Codex' })))), view())
     setLang('en')
+
+    await type('/review')
+    stdin.write('\r')
+    check(tag + ': /review reaches the native command and retires its preview',
+      await settled(() => h.sent('review/start').length === 1 && channel.pending.length === 0), view())
+    await h.notify('item/started', { turnId: 'review', item: { type: 'enteredReviewMode', id: 'enter-review', review: 'current changes' } })
+    await h.notify('turn/started', { turn: { id: 'review-lifecycle', status: 'inProgress', items: [] } })
+    check(tag + ': native review is working without an optimistic user row', channel.working && !channel.rows.some(row => row.kind === 'user' && row.text === '/review'))
+    await type('/review')
+    stdin.write('\r')
+    check(tag + ': a busy review refusal is visible and leaves no ghost preview',
+      await settled(() => channel.notifications.some(notice => notice.text === codexText('codex-command-idle')) && channel.pending.length === 0)
+      && h.sent('review/start').length === 1, view())
+    await type('review followup')
+    stdin.write('\t')
+    check(tag + ': Tab queues the review followup', await settled(() => channel.pending.length === 1 && channel.pending[0]?.text === 'review followup'), view())
+    stdin.write('\x1b[1;3A')
+    check(tag + ': Alt+Up retracts the live queued followup for editing', await settled(() => channel.pending.length === 0 && view().includes('review followup')), view())
+    stdin.write('\t')
+    check(tag + ': re-send queues exactly one followup', await settled(() => channel.pending.length === 1 && channel.pending[0]?.text === 'review followup'), view())
+    stdin.write('\x1b')
+    check(tag + ': Esc interrupts the native lifecycle and docks only the followup',
+      await settled(() => h.sent('turn/interrupt').at(-1)?.turnId === 'review-lifecycle' && channel.pending[0]?.docked === true)
+      && channel.pending.length === 1, view())
+    await h.completeTurn('review', 'interrupted')
+    check(tag + ': review completion clears cancellation and keeps the dock editable',
+      await settled(() => !channel.working && !channel.cancelPending), view())
+    stdin.write('\x1b[1;3A')
+    check(tag + ': Alt+Up retrieves the dock after native review cancellation', await settled(() => channel.pending.length === 0 && view().includes('review followup')), view())
   } finally {
     app.unmount()
     channel.releaseContributions()

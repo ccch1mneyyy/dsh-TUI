@@ -19,7 +19,7 @@
  * query says so instead of starting one.
  */
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import { t } from '../../i18n.js'
+import { claudeText } from './text.js'
 import { writeFlagSettingsFile, type FlagSettingsFile } from './flag-settings.js'
 import { buildSideQueryOptions } from './options.js'
 import type { ClaudeSdkModule } from './sdk.js'
@@ -56,7 +56,7 @@ export function createClaudeSideQuery(deps: ClaudeSideQueryDeps) {
     async ask(prompt: string, options: { readonly signal?: AbortSignal; readonly onText?: (delta: string) => void } = {}): Promise<SideQueryOutcome> {
       const { signal, onText } = options
       if (signal?.aborted) return { answer: null }
-      if (!deps.persisted()) return { answer: null, error: t('claude-side-query-empty') }
+      if (!deps.persisted()) return { answer: null, error: claudeText('claude-side-query-empty') }
       const abortController = new AbortController()
       const onAbort = (): void => { abortController.abort() }
       signal?.addEventListener('abort', onAbort, { once: true })
@@ -135,7 +135,7 @@ export function createClaudeSideQuery(deps: ClaudeSideQueryDeps) {
       if (streamed === '' && settled !== '') onText?.(settled)
       const answer = (streamed !== '' ? streamed : settled).trim()
       if (failure !== undefined) return { answer: null, error: failure }
-      if (answer === '') return { answer: null, error: incomplete ?? t('claude-side-query-no-answer') }
+      if (answer === '') return { answer: null, error: incomplete ?? claudeText('claude-side-query-no-answer') }
       return { answer }
     },
   }

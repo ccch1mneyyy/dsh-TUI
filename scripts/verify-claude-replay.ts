@@ -32,9 +32,13 @@ import { join } from 'node:path'
 import type { AgentEvent, AgentEventOf } from '../src/agent/events.js'
 import { previewEntries, replayClaudeTranscript, rewindCutPoint, type ClaudeReplay, type ClaudeSubagentTranscript } from '../src/backends/claude/replay.js'
 import { createClaudeTranslator } from '../src/backends/claude/translate.js'
-import { setLang, t } from '../src/i18n.js'
+import { getLang, setLang, t } from '../src/i18n.js'
+import { claudeText, installClaudeLocale } from '../src/backends/claude/text.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
 
+// No session here (the replay is driven directly), so the backend's copy takes
+// its language straight from the host, exactly as `open()` wires it.
+installClaudeLocale(getLang)
 setLang('en')
 const FIXTURES = join(import.meta.dirname, 'fixtures', 'claude')
 const TRANSCRIPTS = join(FIXTURES, 'transcripts')
@@ -196,7 +200,7 @@ const userRows = (name: string) => run(name).harness.state.rows.filter(row => ro
   const events = run('background-bash').replay.events
   const starts = ofType(events, 'turn.start')
   check('a task notification opens the notification turn', starts.length === 2 && starts[1]!.origin === 'notification')
-  check('… with its notice, and the notification text is no bubble', events.some(event => event.type === 'notice' && event.text === t('claude-notification-turn')) && !userRows('background-bash').some(row => row.text.includes('task-notification')))
+  check('… with its notice, and the notification text is no bubble', events.some(event => event.type === 'notice' && event.text === claudeText('claude-notification-turn')) && !userRows('background-bash').some(row => row.text.includes('task-notification')))
 }
 
 // dsh-tui's own `!!` sends `<bash-stdout>…` as a real prompt: its own turn

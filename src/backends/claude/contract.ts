@@ -24,6 +24,11 @@ export function claudeResumeCommand(sessionId: string): string {
  *  validated against (mirrors the package.json pin). */
 export const VALIDATED_SDK_VERSION = '0.3.287'
 
+/** What the picker's install wizard adds, at that pin. Lives here rather than
+ *  in install.ts because the backend's manifest declares it, and a manifest may
+ *  import nothing but this import-free module (P0 D3 / §4.4). */
+export const CLAUDE_SDK_SPECIFIER = `@anthropic-ai/claude-agent-sdk@${VALIDATED_SDK_VERSION}`
+
 /** CLI versions validated with {@link VALIDATED_SDK_VERSION} (the SDK's own
  *  `manifest.json` parity version). */
 export const VALIDATED_CLI_VERSIONS: readonly string[] = ['2.1.287']

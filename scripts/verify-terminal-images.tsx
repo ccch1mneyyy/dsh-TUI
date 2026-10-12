@@ -42,7 +42,9 @@ import {
   isTerminalImageSource,
   terminalImageSourceFromAttributes,
   resolveTerminalCellSize,
+  TERMINAL_IMAGE_MAX_BYTES,
   TERMINAL_IMAGE_MAX_FRAME_BYTES,
+  TERMINAL_IMAGE_PREVIEW_MAX_BYTES,
   type TerminalImagePlacement,
   type TerminalImageSource,
 } from '../src/ink/terminal-image.js'
@@ -183,6 +185,89 @@ assert.equal(
 )
 assert.ok(fittedWideBanner.data.byteLength <= 4 * 1024 * 1024)
 
+// HiDPI portrait slot from #1381. Ghostty needs the uploaded raster itself
+// to fill the physical box, even when the source is smaller than the slot.
+const portraitSource: TerminalImageSource = {
+  data: new Uint8Array(410 * 411 * 4),
+  width: 410,
+  height: 411,
+}
+for (let offset = 0; offset < portraitSource.data.length; offset += 4) {
+  portraitSource.data.set([240, 200, 210, 255], offset)
+}
+const portraitManager = new KittyGraphicsManager({
+  firstImageId: 501,
+  cellSize: { width: 36, height: 76 },
+})
+const portraitPlacement: TerminalImagePlacement = {
+  node: createNode('ink-image'),
+  x: 0,
+  y: 0,
+  columns: 23,
+  rows: 11,
+  source: portraitSource,
+  presentation: 'transcript',
+  transparent: true,
+}
+const portraitUpload = portraitManager.reconcile([portraitPlacement])
+const portraitRaster = rgbaFromTransmission(portraitUpload)
+assert.deepEqual(
+  [portraitRaster.width, portraitRaster.height],
+  [828, 836],
+  'the uploaded raster must fill the HiDPI cell box',
+)
+assert.match(portraitUpload, /a=p,i=501,p=1,c=23,r=11,/u)
+// Aspect fit enlarges 410x411 to 828x830, leaving three transparent rows
+// above and below. Check the painted extent, not just the allocated canvas.
+assert.equal(portraitRaster.data[3], 0)
+assert.deepEqual(portraitRaster.data.subarray(3 * 828 * 4, 3 * 828 * 4 + 4),
+  Buffer.from([240, 200, 210, 255]))
+assert.equal(portraitRaster.data[(832 * 828 + 827) * 4 + 3], 255)
+assert.equal(portraitRaster.data[(833 * 828) * 4 + 3], 0)
+assert.equal(portraitManager.reconcile([portraitPlacement]), '', 'enlarged portraits retain the stable-frame cache')
+
+// Crossing a pixel budget must shrink uniformly, not jump to a half-size
+// integer-ratio canvas. These boxes are just above the 4/8 MiB limits.
+for (const boundary of [
+  { presentation: 'transcript' as const, cell: { width: 47, height: 80 }, size: [1021, 1026], maxBytes: TERMINAL_IMAGE_MAX_BYTES },
+  { presentation: 'preview' as const, cell: { width: 67, height: 112 }, size: [1457, 1439], maxBytes: TERMINAL_IMAGE_PREVIEW_MAX_BYTES },
+]) {
+  const boundaryManager = new KittyGraphicsManager({ cellSize: boundary.cell })
+  const boundaryPlacement = { ...portraitPlacement, columns: 22, rows: 13, presentation: boundary.presentation }
+  const boundaryRaster = rgbaFromTransmission(boundaryManager.reconcile([boundaryPlacement]))
+  assert.deepEqual([boundaryRaster.width, boundaryRaster.height], boundary.size,
+    'budget-boundary uploads retain the available physical resolution')
+  assert.ok(boundaryRaster.data.byteLength <= boundary.maxBytes)
+  assert.ok(boundaryRaster.width / (22 * boundary.cell.width) > 0.98)
+  assert.ok(boundaryRaster.height / (13 * boundary.cell.height) > 0.98)
+}
+
+// Interpolation across an opaque pixel and an empty black pixel must retain
+// the ink colour as coverage fades, rather than darkening the enlarged edge.
+const softEdge = fitTerminalImageSource({
+  data: new Uint8Array([240, 200, 210, 255, 0, 0, 0, 0]),
+  width: 2,
+  height: 1,
+}, 4, 1, { width: 1, height: 2 })
+assert.deepEqual([softEdge.width, softEdge.height], [4, 2])
+assert.deepEqual([...softEdge.data.subarray(4, 8)], [240, 200, 210, 191],
+  'enlarged edges retain their unpremultiplied colour at three-quarter coverage')
+assert.deepEqual([...softEdge.data.subarray(8, 12)], [240, 200, 210, 64],
+  'enlarged edges retain their unpremultiplied colour at one-quarter coverage')
+
+// Enlarging a tiny source must keep both allocation budgets, including a
+// coprime box whose smallest exact-ratio canvas already exceeds the budget.
+for (const presentation of ['transcript', 'preview'] as const) {
+  const maxBytes = presentation === 'preview' ? TERMINAL_IMAGE_PREVIEW_MAX_BYTES : TERMINAL_IMAGE_MAX_BYTES
+  for (const cell of [{ width: 36, height: 76 }, { width: 37, height: 79 }]) {
+    const fitted = fitTerminalImageSource(tinySquare, 127, 113, cell, presentation)
+    assert.ok(fitted.data.byteLength <= maxBytes, 'upscaling must remain within the pixel budget')
+    assert.equal(fitted.data.byteLength, fitted.width * fitted.height * 4)
+    assert.ok(Math.abs(fitted.width / fitted.height - (127 * cell.width) / (113 * cell.height)) < 0.001,
+      'budget-limited canvases must preserve the physical aspect ratio')
+  }
+}
+
 const guardedPixels = new Uint8Array([9, 1, 2, 3, 4, 9])
 const subarrayTransmission = transmitKittyRgba(102, {
   data: guardedPixels.subarray(1, 5),
@@ -207,8 +292,11 @@ const placement = {
 }
 const rawManager = new KittyGraphicsManager({ firstImageId: 601, compress: false })
 const rawPlacement = rawManager.reconcile([placement])
+const rawRaster = rgbaFromTransmission(rawPlacement)
+const expectedRawPixels = Buffer.alloc(48 * 48 * 4, 127)
 assert.doesNotMatch(rawPlacement, /o=z/u, 'raw uploads must bypass the terminal zlib decoder')
-assert.deepEqual(rgbaFromTransmission(rawPlacement).data, Buffer.from(source.data))
+assert.deepEqual([rawRaster.width, rawRaster.height], [48, 48])
+assert.deepEqual(rawRaster.data, expectedRawPixels, 'raw uploads preserve the fitted pixels without compression')
 assert.equal(rawManager.reconcile([placement]), '', 'raw uploads retain the stable-frame cache')
 rawManager.setCompression(true)
 const compressedVariant = rawManager.reconcile([placement])
@@ -220,7 +308,7 @@ assert.doesNotMatch(restoredRaw, /\x1b_Ga=t,/u)
 rawManager.invalidateAll()
 const rawAfterClear = rawManager.reconcile([placement])
 assert.doesNotMatch(rawAfterClear, /o=z/u, 'screen clears must never restore compressed uploads in raw mode')
-assert.deepEqual(rgbaFromTransmission(rawAfterClear).data, Buffer.from(source.data))
+assert.deepEqual(rgbaFromTransmission(rawAfterClear).data, expectedRawPixels)
 
 const first = manager.reconcile([placement])
 assert.match(first, /a=t,t=d,f=32/u)
@@ -1284,6 +1372,78 @@ assert.match(
   /a=d,d=I,i=/u,
   'alt-screen exit must delete images',
 )
+
+// Tiny decoded sources can become large HiDPI uploads. Admission must bound
+// the fitted rasters too, and a metrics change must repaint displaced images
+// as their text fallback even when the React tree itself stays unchanged.
+const gallerySources = Array.from({ length: 9 }, (_, index): TerminalImageSource => {
+  const data = new Uint8Array(410 * 411 * 4).fill(255)
+  data[0] = index
+  return { data, width: 410, height: 411 }
+})
+const galleryTree = (
+  <AlternateScreen>
+    <Box width={80} flexDirection="column">
+      {[0, 1, 2].map(row => (
+        <Box key={row} flexDirection="row" height={11}>
+          {gallerySources.slice(row * 3, row * 3 + 3).map((image, column) => (
+            <Image key={column} source={image} width={23} height={11}
+              presentation="transcript" alt={`fallback-${row * 3 + column}`} />
+          ))}
+        </Box>
+      ))}
+    </Box>
+  </AlternateScreen>
+)
+const galleryStdout = new FakeStdout()
+galleryStdout.columns = 80
+galleryStdout.rows = 40
+const galleryStdin = new FakeStdin()
+const galleryApp = await render(galleryTree, {
+  stdin: galleryStdin,
+  stdout: galleryStdout,
+  stderr: new FakeStderr(),
+  exitOnCtrlC: false,
+  patchConsole: false,
+})
+try {
+  assert.ok(await settled(() => galleryStdout.output.includes(query.request)),
+    'the gallery must start its capability probe')
+  galleryStdin.write('\x1b_Gi=31;OK\x1b\\\x1b[6;16;8t\x1b[4;640;640t' +
+    '\x1bP>|ghostty(1.3.1)\x1b\\' + '\x1b[?61;4c'.repeat(3))
+  const galleryInk = instances.get(galleryStdout) as unknown as {
+    readonly frontFrame: { readonly images?: readonly TerminalImagePlacement[]; readonly screen: Screen }
+  }
+  assert.ok(await settled(() => galleryInk.frontFrame.images?.length === 9 && galleryStdout.output.includes('a=p,i=')),
+    'all nine decoded sources fit at ordinary cell density')
+  const beforeHiDpi = galleryStdout.output.length
+  galleryStdout.emit('resize')
+  assert.ok(await settled(() => galleryStdout.output.slice(beforeHiDpi).includes(cellSizeQuery.request)),
+    'a same-grid resize must refresh the gallery pixel budget')
+  galleryStdin.write('\x1b[6;76;36t\x1b[4;3040;2880t' + '\x1b[?61;4c'.repeat(3))
+  assert.ok(await settled(() => galleryInk.frontFrame.images?.length === 6),
+    'only six 828x836 RGBA rasters fit the 16 MiB frame budget')
+  assert.equal(cellAt(galleryInk.frontFrame.screen, 0, 22)?.char, 'f',
+    'a formerly admitted image must repaint its fallback after the DPI change')
+  const hiDpiUploads = [...galleryStdout.output.slice(beforeHiDpi)
+    .matchAll(/a=t,t=d,f=32,s=(\d+),v=(\d+)/gu)]
+  assert.equal(hiDpiUploads.length, 6, 'rejected images must never allocate or upload a raster')
+  const uploadedBytes = hiDpiUploads.reduce((bytes, match) =>
+    bytes + Number(match[1]) * Number(match[2]) * 4, 0)
+  assert.ok(uploadedBytes <= TERMINAL_IMAGE_MAX_FRAME_BYTES,
+    'actual uploaded pixels must respect the frame budget')
+  const beforeDensityRestore = galleryStdout.output.length
+  galleryStdout.emit('resize')
+  assert.ok(await settled(() => galleryStdout.output.slice(beforeDensityRestore).includes(cellSizeQuery.request)))
+  galleryStdin.write('\x1b[6;16;8t\x1b[4;640;640t' + '\x1b[?61;4c'.repeat(3))
+  assert.ok(await settled(() => galleryInk.frontFrame.images?.length === 9),
+    'a fresh frame budget must restore all images when cell density decreases')
+  assert.equal(isEmptyCellAt(galleryInk.frontFrame.screen, 0, 22), true,
+    'restoring the image must clear its former fallback cells')
+} finally {
+  galleryStdout.isTTY = false
+  galleryApp.unmount()
+}
 
 for (const [key, value] of Object.entries(previousEnv)) {
   const envKey =

@@ -29,6 +29,7 @@
  *      exactly as before.
  */
 import type { BackendModeOption, ChatRow, PermissionPresetSnapshot } from '../dsh-adapter/channel.js'
+import type { KernelBackendId } from '../kernelPrefs.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import type { TuiWorkspaceCommandResult } from '../workspaces.js'
@@ -56,7 +57,7 @@ export type ChatOverlay =
       busy: boolean
       input: WorkspaceFlowInput | null
     }
-  | { kind: 'model'; index: number }
+  | { kind: 'model' }
   | { kind: 'skills'; index: number }
   | { kind: 'migrate'; index: number }
   | { kind: 'migrate-confirm' }
@@ -77,8 +78,11 @@ export type ChatOverlay =
   | { kind: 'kernel'; index: number }
   /** SDK 安装向导（内核选择器的「未安装」行 Enter 进入）。与 kernel 同为
    *  「盖在落地页之上」的姿态；向导的步骤态（确认/安装中/结果）是异步进程
-   *  状态，按本文件头注释第 3 条的分工留在 Chat.tsx，不冻进 overlay。 */
-  | { kind: 'sdk-install' }
+   *  状态，按本文件头注释第 3 条的分工留在 Chat.tsx，不冻进 overlay。
+   *
+   *  只带**后端 id**：装的是哪一行、就查哪一行的安装面——安装面在打开时按 id
+   *  从宿主现查（Stage B / §6 第 12 条），与 kernel 一样不冻名册。 */
+  | { kind: 'sdk-install'; backendId: KernelBackendId }
   | { kind: 'plan'; index: number }
   | { kind: 'lang'; index: number }
   /** `/panel` 无参的选择器：列出「已启用 ∩ 已注册」的面板（含插件）。 */
@@ -157,10 +161,10 @@ export type ChatOverlayAction =
    */
   | { type: 'move'; delta: 1 | -1; count: number }
   /** Set the focused row to an absolute index — an async loader landing
-   *  with the authoritative focus (model list / preset roster), or a mouse
+   *  with the authoritative focus (preset roster), or a mouse
    *  click on a row of a panel that stays open (effort slider, workspace
    *  flow). Ignored unless that panel is still up. */
-  | { type: 'set-index'; kind: 'model' | 'preset' | 'effort' | 'permission' | 'mode' | 'kernel' | 'workspace-flow' | 'rewind' | 'file-actions' | 'panel' | 'channel'; index: number }
+  | { type: 'set-index'; kind: 'preset' | 'effort' | 'permission' | 'mode' | 'kernel' | 'workspace-flow' | 'rewind' | 'file-actions' | 'panel' | 'channel'; index: number }
   /** Edit the history-search draft (query text, caret, focused match). */
   | { type: 'history-edit'; query?: string; cursor?: number; focus?: number }
   /** Workspace flow: an action is running (keys except Esc are swallowed). */
@@ -226,7 +230,6 @@ export function chatOverlayReducer(state: ChatOverlay, action: ChatOverlayAction
         state.kind === 'workspace-picker'
         || state.kind === 'workspace-menu'
         || state.kind === 'workspace-flow'
-        || state.kind === 'model'
         || state.kind === 'skills'
         || state.kind === 'migrate'
         || state.kind === 'activity'

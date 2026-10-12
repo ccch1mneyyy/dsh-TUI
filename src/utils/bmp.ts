@@ -68,6 +68,32 @@ async function encodePng(
   ])
 }
 
+/** DIB header sizes a bitmap can carry: the OS/2 core header (12), the
+ *  BITMAPINFOHEADER (40), its three V2/V3 extensions (52/56/64) and the V4/V5
+ *  headers (108/124). */
+const DIB_HEADER_SIZES = new Set([12, 40, 52, 56, 64, 108, 124])
+
+/**
+ * Whether the bytes open like a bitmap: a `BM` file, or a headerless DIB —
+ * the shape an X11 or Windows clipboard owner hands over. Structural only;
+ * {@link bmpToPng} still does the real validation, so a false positive costs
+ * one refused conversion and nothing else.
+ */
+export function looksLikeBitmap(bytes: Uint8Array): boolean {
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return true
+  if (bytes.length < 16) return false
+  const headerSize = (bytes[0]! | (bytes[1]! << 8) | (bytes[2]! << 16) | (bytes[3]! << 24)) >>> 0
+  if (!DIB_HEADER_SIZES.has(headerSize)) return false
+  // The OS/2 core header is 12 bytes and puts planes/depth earlier than the
+  // Windows headers do. Planes is 1 in every real bitmap, and the depth must
+  // be one BMP defines.
+  const windowsHeader = headerSize !== 12
+  const planes = windowsHeader ? bytes[12]! | (bytes[13]! << 8) : bytes[8]! | (bytes[9]! << 8)
+  const bpp = windowsHeader ? bytes[14]! | (bytes[15]! << 8) : bytes[10]! | (bytes[11]! << 8)
+  return planes === 1
+    && (bpp === 1 || bpp === 4 || bpp === 8 || bpp === 16 || bpp === 24 || bpp === 32)
+}
+
 /**
  * Convert BMP bytes (a `BM` file, or a headerless DIB) to PNG.
  * @param bmp - Raw clipboard bytes.

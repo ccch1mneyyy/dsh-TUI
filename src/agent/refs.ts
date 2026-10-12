@@ -6,7 +6,17 @@
 
 /** One session of one backend. */
 export interface AgentSessionRef {
-  /** Backend id: `dsh`, `claude`, `acp:<agent>`. */
+  /**
+   * Backend id: `dsh`, `claude`, `acp:<agent>`.
+   *
+   * A plain string on purpose (P0 R11): branding it would force every backend,
+   * every fixture and this whole neutral layer through the app-level validator,
+   * for no gain here — what a ref and a `~/.dsh-tui/backends/<id>/` path need is
+   * the **id syntax** gate (`agent/backend-manifest.ts`), and that is applied
+   * wherever an untrusted value enters (`kernelPrefs.parseBackendId`, the
+   * registry's parse, the launcher's mirror). Backends build their own refs from
+   * their own constant id.
+   */
   readonly backendId: string
   /** The backend's own session id (DSH session id, Claude session uuid). */
   readonly sessionId: string

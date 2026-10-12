@@ -8,6 +8,13 @@ import type { AgentIdentity, AgentMessageControl, AgentMessageSubmitInput, Agent
 import type { ChannelState, ChatRow, SubagentControl, SubagentRow } from './types.js'
 import { isSubagentToolName } from './projection-helpers.js'
 
+/**
+ * Bound the retained description text. Evicting an older term does not cancel
+ * its pending spawn: a separate count keeps those unmatched starts from
+ * consuming a later delegation's title without retaining unbounded text.
+ */
+const MAX_PENDING_TASK_DESCRIPTIONS = 32
+
 type ProjectionState = Pick<ChannelState, 'rows' | 'subagents' | 'subagentCost' | 'emit' | 'emitStream'>
 
 /**
@@ -201,7 +208,7 @@ export function createSubagentProjection(getState: () => ProjectionState, deps: 
     dropRows: () => active.dropRows(),
     park, restore,
     forget(agent: Agent) { parked.delete(agent) },
-    dispose() { parked.clear(); active.store.reset(); active.dropRows(); active.pendingTaskDescriptions.length = 0 },
+    dispose() { parked.clear(); active.reset() },
     reset() { active = make(); activeParent = deps.agent(); restored = false; getState().subagents = []; getState().subagentCost = [] },
   }
 }
@@ -234,7 +241,9 @@ function createSessionSubagentProjection(
    *  oldest first, folded by durable message id. */
   const agentMessages: AgentMessageView[] = []
   const rowsByAgentId = new Map<string, ChatRow>()
+  /** Empty entries reserve starts whose ambiguous description was discarded. */
   const pendingTaskDescriptions: string[] = []
+  let evictedDescriptionCount = 0
   /** Workflow member identity: `tool-workflow/agent-end` carries no childId,
    * so member starts remember `runId:seq` → agentId for their settlement. */
   const workflowMembers = new Map<string, string>()
@@ -306,10 +315,24 @@ function createSessionSubagentProjection(
     })
   }
 
+  /** A child session's own descriptor can beat the host's spawn edge. With no
+   *  row to attribute it to the label would be lost for good — an external
+   *  child never gets a catalog to re-state it — so park it under the session
+   *  id (the child id the host links rows by) for the row born later to adopt. */
+  const rememberEarlyLabel = (session: unknown, event: { type?: string }): void => {
+    if (event.type !== 'subagent/descriptor') return
+    const sessionId = (session as { id?: unknown } | null | undefined)?.id
+    const label = (event as unknown as { data?: { label?: unknown } }).data?.label
+    if (typeof sessionId !== 'string' || sessionId === '') return
+    store.holdKeyedLabel(sessionId, label)
+  }
   const onSessionEvent = (session: unknown, event: { type?: string }): boolean => {
     let id = store.getSubagentIdBySession(session)
     if (id === undefined) id = backfillSessionLink(session)
-    if (id === undefined) return false
+    if (id === undefined) {
+      rememberEarlyLabel(session, event)
+      return false
+    }
     if (event.type === 'user/message') noteChildRelay(id, event)
     store.onSessionEvent(id, event)
     if (event.type === 'assistant/chunk') {
@@ -416,7 +439,13 @@ function createSessionSubagentProjection(
       if (!historical && typeof data.name === 'string' && isSubagentToolName(data.name) && typeof data.arguments === 'string') {
         try {
           const args = JSON.parse(data.arguments) as { description?: unknown }
-          if (typeof args.description === 'string' && args.description) pendingTaskDescriptions.push(args.description)
+          if (typeof args.description === 'string' && args.description) {
+            if (pendingTaskDescriptions.length >= MAX_PENDING_TASK_DESCRIPTIONS) {
+              pendingTaskDescriptions.shift()
+              evictedDescriptionCount += 1
+            }
+            pendingTaskDescriptions.push(args.description)
+          }
         } catch { /* malformed arguments do not describe a child */ }
       }
       return
@@ -471,11 +500,40 @@ function createSessionSubagentProjection(
     if (!info?.id) return
     // The fact that the host spawned a child is authoritative even when its
     // optional discovery seam is absent, unloading, or throws.
+    // The queue is keyed by nothing, so only a NEW run may consume a term from
+    // it: a re-announced edge for the same runId (a continuable epoch's
+    // refresh) must leave the queue alone, or every later row shifts by one.
+    // An edge without a run key is itself such a refresh (the store's epoch
+    // rule) — only a real, different key opens a new epoch.
+    const knownRunId = store.runIdOf(info.id)
+    // A row that does not exist yet is a fresh run even when the edge carries
+    // no run key: the store's refresh rule is about a row it already tracks,
+    // and treating the first edge of an untracked child as a refresh would
+    // skip its term and hand that term to the next spawn instead.
+    const freshRun = !store.has(info.id)
+      || (info.runId !== undefined && (knownRunId === undefined || knownRunId !== info.runId))
+    // A queued term is a first-frame guess; `subagent/catalog`'s childId-keyed
+    // label is the authority and corrects it in the store (describeFromLabel).
+    // A row a keyed label already settled still consumes the term here — the
+    // store drops it instead of applying it, so the FIFO stays aligned.
+    //
+    // The queue carries no childId, so a term is only usable while exactly one
+    // delegation is outstanding. With two or more, any pick is a coin flip
+    // that puts a concurrent child's name on this card until its keyed label
+    // arrives. Discard the text, but retain every unmatched start slot: a new
+    // call can arrive before the rest of this batch starts. Forgetting those
+    // slots would let an older start consume that new call's title.
+    let description: string | undefined
+    if (freshRun) {
+      if (evictedDescriptionCount + pendingTaskDescriptions.length > 1) pendingTaskDescriptions.fill('')
+      if (evictedDescriptionCount > 0) evictedDescriptionCount -= 1
+      else description = pendingTaskDescriptions.shift() || undefined
+    }
     store.onSpawned(info.id, info.provider || 'subagent', info.provider, {
-      runId: info.runId ?? info.id,
+      ...(freshRun ? { runId: info.runId } : {}),
       local: info.local,
       startedAt: Date.now(),
-      description: pendingTaskDescriptions.shift(),
+      ...(description === undefined ? {} : { description, descriptionFromQueue: true }),
     })
     cardedIds.add(info.id)
     try {
@@ -576,6 +634,6 @@ function createSessionSubagentProjection(
     },
   }
   const dropRows = (): void => { streamDirty = false; rowsByAgentId.clear() }
-  const reset = (): void => { dropRows(); cardedIds.clear(); workflowMembers.clear(); pendingTaskDescriptions.length = 0; agentMessages.length = 0; store.reset(); getState().subagents = []; getState().subagentCost = [] }
+  const reset = (): void => { dropRows(); cardedIds.clear(); workflowMembers.clear(); pendingTaskDescriptions.length = 0; evictedDescriptionCount = 0; agentMessages.length = 0; store.reset(); getState().subagents = []; getState().subagentCost = [] }
   return { store, control, pendingTaskDescriptions, agentMessages, onSessionEvent, onStreamFrame, onParentEvent, bootstrapFromLog, onStart, onEnd, syncNow, flush, dropRows, reset, submitPrompt }
 }

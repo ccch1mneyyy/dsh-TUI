@@ -18,7 +18,8 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentEvent, PermissionRequestView, QuestionRequestView } from '../src/agent/events.js'
 import { prefixLabel } from '../src/backends/codex/session/approvals.js'
-import { setLang, t } from '../src/i18n.js'
+import { setLang } from '../src/i18n.js'
+import { codexText } from '../src/backends/codex/text.js'
 import { parseWire } from './lib/codex-fake-app-server.js'
 import { openHarness, THREAD, tick } from './lib/codex-session-harness.js'
 
@@ -112,7 +113,7 @@ const respond = h.session.capabilities.permissions!.respond
   const answer = h.fake.request('item/commandExecution/requestApproval', { ...COMMAND, itemId: 'net-1', networkApprovalContext: { host: 'example.com' }, availableDecisions: ['accept', 'acceptForSession', { applyNetworkPolicyAmendment: { network_policy_amendment: { host: 'example.com', action: 'allow' } } }, { applyNetworkPolicyAmendment: { network_policy_amendment: { host: 'evil.test', action: 'deny' } } }, 'cancel'] })
   await tick()
   const view = lastRequest(h.events())
-  check('network: an allow amendment is an allow-always option naming the host; a deny one is not offered', view.options.map(option => option.id).join(',') === 'accept,session,net:0,reject' && view.options[2]!.label === t('codex-approve-network', { host: 'example.com' }))
+  check('network: an allow amendment is an allow-always option naming the host; a deny one is not offered', view.options.map(option => option.id).join(',') === 'accept,session,net:0,reject' && view.options[2]!.label === codexText('codex-approve-network', { host: 'example.com' }))
   respond(view.requestId, { kind: 'allow-always', optionId: 'net:0' })
   check('network: the amendment decision goes back verbatim', JSON.stringify(((await answer).result as Rec).decision) === JSON.stringify({ applyNetworkPolicyAmendment: { network_policy_amendment: { host: 'example.com', action: 'allow' } } }))
 }
@@ -132,7 +133,7 @@ const respond = h.session.capabilities.permissions!.respond
   const answer = h.fake.request('item/permissions/requestApproval', { threadId: THREAD, turnId: 'turn-2', itemId: 'perm-1', environmentId: null, startedAtMs: 0, cwd: '/TMP/cwd', reason: 'fetch deps', permissions: { network: { enabled: true }, fileSystem: { read: null, write: ['/TMP/cwd/out'] } } })
   await tick()
   const view = lastRequest(h.events())
-  check('permissions: a summary of what is asked', view.toolName === 'permissions' && view.description === `${t('codex-perm-network')}; ${t('codex-perm-write', { paths: 'out' })}`, view.description)
+  check('permissions: a summary of what is asked', view.toolName === 'permissions' && view.description === `${codexText('codex-perm-network')}; ${codexText('codex-perm-write', { paths: 'out' })}`, view.description)
   respond(view.requestId, { kind: 'allow-always', optionId: 'session' })
   const result = (await answer).result as Rec
   check('permissions: grant for the session returns what was asked', result.scope === 'session' && (result.permissions as Rec).network !== undefined && (result.permissions as Rec).fileSystem !== undefined)
@@ -239,8 +240,8 @@ const respond = h.session.capabilities.permissions!.respond
   const view = lastRequest(h.events())
   const description = (view as { description?: string }).description ?? ''
   check('approval: writeStdin, network context, extra permissions and another cwd are shown',
-    view.displayName === t('codex-approve-stdin-name') && description.includes(t('codex-approve-stdin'))
-    && description.includes('registry.npmjs.org') && description.includes(t('codex-perm-network')) && description.includes('out') && description.includes('pkg'), view)
+    view.displayName === codexText('codex-approve-stdin-name') && description.includes(codexText('codex-approve-stdin'))
+    && description.includes('registry.npmjs.org') && description.includes(codexText('codex-perm-network')) && description.includes('out') && description.includes('pkg'), view)
   respond(view.requestId, { kind: 'allow-always', optionId: 'missing-option' })
   await answer
   await h.notify('serverRequest/resolved', { requestId: Number(view.requestId.split(':').at(-1)) })
@@ -285,7 +286,7 @@ const respond = h.session.capabilities.permissions!.respond
 
 // ── zh labels ───────────────────────────────────────────────────────────
 setLang('zh')
-check('zh: session / prefix / files labels', t('codex-approve-session-command') === '是，本会话内此命令不再询问' && t('codex-approve-prefix', { prefix: 'ls' }) === '是，以后以 `ls` 开头的命令不再询问' && t('codex-approve-session-files') === '是，本会话内这些文件不再询问')
+check('zh: session / prefix / files labels', codexText('codex-approve-session-command') === '是，本会话内此命令不再询问' && codexText('codex-approve-prefix', { prefix: 'ls' }) === '是，以后以 `ls` 开头的命令不再询问' && codexText('codex-approve-session-files') === '是，本会话内这些文件不再询问')
 setLang('en')
 check('prefix labels strip bash -lc and quote odd tokens', prefixLabel(['/bin/bash', '-lc', 'npm test']) === 'npm test' && prefixLabel(['git', 'commit', '-m', 'a b']) === "git commit -m 'a b'" && prefixLabel(['/bin/bash', '-lc', 'a\nb']) === undefined)
 

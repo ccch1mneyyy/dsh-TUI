@@ -5,8 +5,8 @@
  * panels that actually have a fullscreen form (capabilities.fullscreen).
  *
  * Locked behavior:
- *  a. the active title stays centered while inactive panels appear as dots;
- *  b. dot hover reveals the panel title, and clicking its hit area selects it;
+ *  a. the active title stays centered while inactive panels show their icons;
+ *  b. icon hover reveals the panel title, and clicking its hit area selects it;
  *  c. the edge arrows wrap through the panel order and ⤢ appears by capability;
  *  d. ⤢ calls the host with the active panel id;
  *  e. clicking the chat column returns focus to chat.
@@ -80,6 +80,7 @@ function Harness({ columns = COLS }: { readonly columns?: number } = {}): React.
       focus={sp.focus}
       onActivateChat={sp.focusChat}
       onActivatePanel={sp.focusPanel}
+      onResize={sp.resize}
       side={
         <SidePanelColumn
           width={sp.panelColumns}
@@ -166,21 +167,21 @@ const app = await render(
 
 try {
   check('a boot: active title is centered on Todo', await settled(() => has('Todo'), { timeoutMs: 4000 }))
-  check('a boot: inactive panels use carousel dots', (lines()[0]?.match(/[○●]/g) ?? []).length === 2, lines()[0]?.trim())
+  check('a boot: inactive panels show their own icons', (lines()[0]?.match(/[▸◆]/g) ?? []).length === 2, lines()[0]?.trim())
   check('a boot: no ⤢ for a panel without a fullscreen form', !has('⤢'))
 
-  const agentsDot = findText('○')
-  check('b hover: agents dot located', agentsDot !== null, JSON.stringify(agentsDot))
-  if (agentsDot !== null) {
-    check('b hover: dot starts dim', !boldAt(agentsDot.col, agentsDot.row))
-    motion(agentsDot.col, agentsDot.row)
-    check('b hover: dot brightens and reveals its title', await settled(() => boldAt(agentsDot.col, agentsDot.row) && has('Agents'), { timeoutMs: 4000 }))
-    motion(agentsDot.col + 5, agentsDot.row + 3)
-    check('b hover: tooltip disappears after leaving the dot', await settled(() => !has('Agents'), { timeoutMs: 4000 }))
+  const agentsIcon = findText('◆')
+  check('b hover: agents icon located', agentsIcon !== null, JSON.stringify(agentsIcon))
+  if (agentsIcon !== null) {
+    check('b hover: icon starts dim', !boldAt(agentsIcon.col, agentsIcon.row))
+    motion(agentsIcon.col, agentsIcon.row)
+    check('b hover: icon brightens and reveals its title', await settled(() => boldAt(agentsIcon.col, agentsIcon.row) && has('Agents'), { timeoutMs: 4000 }))
+    motion(agentsIcon.col + 5, agentsIcon.row + 3)
+    check('b hover: tooltip disappears after leaving the icon', await settled(() => !has('Agents'), { timeoutMs: 4000 }))
   }
 
-  if (agentsDot !== null) click(agentsDot.col + 1, agentsDot.row)
-  check('c click: dot hit area selects Agents', await settled(() => has('Agents') && has('⤢'), { timeoutMs: 4000 }))
+  if (agentsIcon !== null) click(agentsIcon.col + 1, agentsIcon.row)
+  check('c click: icon hit area selects Agents', await settled(() => has('Agents') && has('⤢'), { timeoutMs: 4000 }))
   const nextArrow = findText('▶')
   check('c arrows: right arrow located', nextArrow !== null)
   if (nextArrow !== null) click(nextArrow.col, nextArrow.row)
@@ -210,15 +211,15 @@ try {
   await app.unmount()
 }
 
-// ── f. seven dots and fullscreen control stay on one narrow bar ───────────
+// ── f. eight panels and fullscreen control stay on one narrow bar ─────────
 {
   const NARROW = 96
   const NROWS = 14
   const term2 = new XTerm({ cols: NARROW, rows: NROWS, scrollback: 0, allowProposedApi: true })
   const lines2 = (): string[] => viewportLines(term2, NROWS)
-  // Jobs starts active so the fullscreen control is present beside seven dots.
+  // Jobs starts active so the fullscreen control is present beside seven icons.
   applySidePanelRatio(0.78)
-  applySidePanelPanels('jobs,todo,info,trajectory,agents,workspace,companion')
+  applySidePanelPanels('jobs,todo,info,trajectory,btw,agents,workspace,companion')
   const app2 = await render(
     <AlternateScreen>
       <Harness columns={NARROW} />
@@ -234,7 +235,7 @@ try {
   try {
     await settled(() => lines2().some(line => line.includes('Jobs')), { timeoutMs: 4000 })
     const barRow = lines2()[0] ?? ''
-    check('f narrow: seven-panel bar keeps every dot and both arrows', (barRow.match(/[○●]/g) ?? []).length === 6 && barRow.includes('◀') && barRow.includes('▶'), barRow.trim())
+    check('f narrow: eight-panel bar keeps every icon and both arrows', (barRow.match(/[≡ⓘ∿?◆⌗♥]/g) ?? []).length === 7 && barRow.includes('◀') && barRow.includes('▶'), barRow.trim())
     check('f narrow: ⤢ stays on the same row', barRow.includes('⤢'), barRow.trim())
     check('f fold: the bar is exactly one row (row 1 is the rule)', (lines2()[1] ?? '').includes('─'), (lines2()[1] ?? '').trim())
   } finally {

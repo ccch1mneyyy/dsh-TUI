@@ -8,7 +8,7 @@
  */
 import { createHash } from 'node:crypto'
 import type { AgentEvent, TurnEndReason } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { codexText } from '../text.js'
 import { NOTIFY } from '../protocol/index.js'
 import { rec, str, text, type Rec } from '../narrow.js'
 
@@ -32,7 +32,7 @@ export function isBubblewrapNoise(summary: string): boolean {
 export function retryNotice(params: Rec): Notice | undefined {
   if (params.willRetry !== true) return undefined
   const message = str(rec(params.error)?.message) ?? ''
-  return { type: 'notice', level: 'warning', key: `retry:${str(params.turnId) ?? ''}`, text: t('codex-retrying', { message }) }
+  return { type: 'notice', level: 'warning', key: `retry:${str(params.turnId) ?? ''}`, text: codexText('codex-retrying', { message }) }
 }
 
 /** `warning` / `guardianWarning` / `configWarning` / `deprecationNotice`. */
@@ -55,7 +55,7 @@ export function turnEndReason(turn: Rec): TurnEndReason {
     case 'failed': {
       const error = rec(turn.error)
       const category = errorCategory(error?.codexErrorInfo)
-      return { kind: 'error', message: str(error?.message) ?? t('codex-turn-failed'), ...(category === undefined ? {} : { category }) }
+      return { kind: 'error', message: str(error?.message) ?? codexText('codex-turn-failed'), ...(category === undefined ? {} : { category }) }
     }
     default:
       return { kind: 'other', label: str(turn.status) ?? 'unknown' }
@@ -71,14 +71,14 @@ export function failureHint(reason: TurnEndReason, platform: string = process.pl
   if (reason.kind !== 'error') return undefined
   switch (reason.category) {
     case 'unauthorized':
-      return { type: 'notice', level: 'error', key: 'codex-hint:auth', text: t('codex-hint-unauthorized') }
+      return { type: 'notice', level: 'error', key: 'codex-hint:auth', text: codexText('codex-hint-unauthorized') }
     case 'context-window-exceeded':
-      return { type: 'notice', level: 'warning', key: 'codex-hint:context', text: t('codex-hint-context') }
+      return { type: 'notice', level: 'warning', key: 'codex-hint:context', text: codexText('codex-hint-context') }
     case 'usage-limit-exceeded':
     case 'rate-limit-exceeded':
-      return { type: 'notice', level: 'warning', key: 'codex-hint:limit', text: t('codex-hint-limit') }
+      return { type: 'notice', level: 'warning', key: 'codex-hint:limit', text: codexText('codex-hint-limit') }
     case 'sandbox-error':
-      return platform === 'linux' ? { type: 'notice', level: 'warning', key: 'codex-hint:sandbox', text: t('codex-hint-sandbox') } : undefined
+      return platform === 'linux' ? { type: 'notice', level: 'warning', key: 'codex-hint:sandbox', text: codexText('codex-hint-sandbox') } : undefined
     default:
       return undefined
   }
@@ -89,10 +89,10 @@ export function reviewNotice(method: string, params: Rec): Notice | undefined {
   const review = rec(params.review)
   const id = str(params.reviewId) ?? ''
   if (method === NOTIFY.autoApprovalReviewStarted) {
-    return { type: 'notice', level: 'info', key: `auto-review:${id}`, text: t('codex-auto-review-started') }
+    return { type: 'notice', level: 'info', key: `auto-review:${id}`, text: codexText('codex-auto-review-started') }
   }
   const status = str(review?.status) ?? str(params.status)
-  const outcome = status === 'approved' ? t('codex-auto-review-approved') : status === 'denied' ? t('codex-auto-review-denied') : t('codex-auto-review-ended')
+  const outcome = status === 'approved' ? codexText('codex-auto-review-approved') : status === 'denied' ? codexText('codex-auto-review-denied') : codexText('codex-auto-review-ended')
   return { type: 'notice', level: 'info', key: `auto-review:${id}`, text: outcome }
 }
 
@@ -101,5 +101,5 @@ export function mcpStartupNotice(params: Rec): Notice | undefined {
   const status = str(params.status)
   const name = str(params.name) ?? ''
   if (status !== 'failed' && status !== 'error') return undefined
-  return { type: 'notice', level: 'warning', key: `mcp:${name}`, text: t('codex-mcp-failed', { name, error: str(params.error) ?? '' }) }
+  return { type: 'notice', level: 'warning', key: `mcp:${name}`, text: codexText('codex-mcp-failed', { name, error: str(params.error) ?? '' }) }
 }

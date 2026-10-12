@@ -141,6 +141,18 @@
       "profile": "registry/contracts/scene-v1alpha1.json",
       "profileHash": "sha256:69ce3ae26d60dea2ed170376db8a1fb5860c94bd192c62681423c1d848ec2b26",
       "permissions": []
+    },
+    {
+      "name": "tui.backend",
+      "authority": "dsh-tui",
+      "coordinates": {
+        "apiVersion": "tui.dsh/v1alpha1",
+        "kind": "Backend"
+      },
+      "kind": "extension",
+      "profile": "registry/contracts/backend-v1alpha1.json",
+      "profileHash": "sha256:14d0923ccead5420219da39767050cdb46aa8e29f2b168d8d1e9b6cb1b3d4547",
+      "permissions": []
     }
   ],
   "facetApiVersions": [

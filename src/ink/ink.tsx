@@ -42,15 +42,16 @@ import { applyPositionedHighlight, type MatchPosition, scanPositions } from './r
 import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './transcript-highlight.js';
-import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
-import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
-import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
-import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
+import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, getSelectionCursor, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
+import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsCursorStyleReset, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
+import { CURSOR_HOME, cursorMove, cursorPosition, cursorStyle, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
+import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
 import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels, xtversion } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
 import { TerminalImagesContext } from './hooks/use-terminal-images.js';
 import { DEFAULT_TERMINAL_CELL_SIZE, resolveTerminalCellSize, type TerminalImagePlacement } from './terminal-image.js';
+import { detachHandoffStdin } from './stdin-handoff.js';
 
 // Alt-screen: renderer.ts sets cursor.visible = !isTTY || screen.height===0,
 // which is always false in alt-screen (TTY + content fills screen).
@@ -69,6 +70,10 @@ const ERASE_THEN_HOME_PATCH = Object.freeze({
   content: ERASE_SCREEN + CURSOR_HOME
 });
 const TERMINAL_REPLY_QUARANTINE_MS = 120;
+const CURSOR_IDLE_HIDE_MS = 500;
+// Only external-editor handoffs reset styles, and only where 0 restores the
+// terminal's configuration. Normal caret movement never changes its style.
+const DEFAULT_CURSOR_STYLE = cursorStyle(0);
 
 // Cached per-Ink-instance, invalidated on resize. frame.cursor.y for
 // alt-screen is always terminalRows - 1 (renderer.ts).
@@ -130,6 +135,8 @@ export default class Ink {
   };
   // Ignore last render after unmounting a tree to prevent empty output before exit
   private isUnmounted = false;
+  private isDetachedForShutdown = false;
+  private shutdownCleanup: Promise<void> | undefined;
   private isPaused = false;
   private readonly container: FiberRoot;
   private rootNode: dom.DOMElement;
@@ -237,12 +244,21 @@ export default class Ink {
   private cursorDeclaration: CursorDeclaration | null = null;
   // Main-screen: physical cursor position after the declared-cursor move,
   // tracked separately from frame.cursor (which must stay at content-bottom
-  // for log-update's relative-move invariants). Alt-screen doesn't need
-  // this — every frame begins with CSI H. null = no move emitted last frame.
+  // for log-update's relative-move invariants). Alt-screen uses absolute
+  // moves; tracking the target also preserves the zero-write fast path.
+  // null = no declared move emitted last frame.
   private displayCursor: {
     x: number;
     y: number;
   } | null = null;
+  // null after a screen switch or external handoff: reassert visibility on
+  // the next frame. Cursor shape, color and blink remain terminal-owned.
+  private nativeCursorVisible: boolean | null = null;
+  private cursorIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  private cursorIdleNode: dom.DOMElement | null = null;
+  private cursorIdleHidden = false;
+  private readonly cursorStyleReset = supportsCursorStyleReset() ? DEFAULT_CURSOR_STYLE : '';
+  private cursorStyleHandedOff = false;
   private handleStdinError(error: NodeJS.ErrnoException): void {
     if (this.isUnmounted && error.code === 'EIO') {
       return;
@@ -398,6 +414,8 @@ export default class Ink {
     // keystroke and delivers nothing until Enter.
     this.app?.reassertRawMode();
 
+    this.resetCursorIdle();
+
     // Alt screen: after SIGCONT, content is stale (shell may have written
     // to main screen, switching focus away) and the DEC private modes the app
     // enabled were reset by whoever owned the tty meanwhile.
@@ -415,6 +433,7 @@ export default class Ink {
     // next frame's cursor preamble doesn't emit a relative move from a stale
     // park position.
     this.displayCursor = null;
+    this.nativeCursorVisible = null;
   };
 
   // NOT debounced. A debounce opens a window where stdout.columns is NEW
@@ -560,10 +579,13 @@ export default class Ink {
     // reset attributes
     '\x1b[?25h' +
     // show cursor
+    this.cursorStyleReset +
+    // hand back the terminal's own caret style (DECSCUSR 0)
     '\x1b[2J' +
     // clear screen
     '\x1b[H' // cursor home
     );
+    this.cursorStyleHandedOff = this.cursorStyleReset !== '';
   }
 
   /**
@@ -579,6 +601,11 @@ export default class Ink {
    * returns, fullscreen scroll is dead.
    */
   exitAlternateScreen(): void {
+    // The child owned the tty and may have driven DECSCUSR itself, so the
+    // style we handed it is no longer guaranteed: re-assert the terminal's
+    // default before the repaint where this safely restores its configuration.
+    if (this.cursorStyleReset !== '') this.options.stdout.write(this.cursorStyleReset);
+    this.cursorStyleHandedOff = false;
     if (this.altScreenActive) {
       // Fullscreen: re-enter alt FIRST — terminal editors (vim, nano, less)
       // write smcup/rmcup, so the editor's rmcup on exit dropped us to the
@@ -746,6 +773,7 @@ export default class Ink {
       altScreen: this.altScreenActive,
       terminalImages: this.altScreenActive && (this.kittyGraphicsSupported || this.sixelGraphicsSupported),
       imageReady: sixelActive ? this.sixelGraphicsManager.prepare : undefined,
+      imageRasterBytes: this.altScreenActive && this.kittyGraphicsSupported ? this.kittyGraphicsManager.rasterBytes : undefined,
       // Sixel paints rasters over the cells: an image's own cells must then
       // carry the surface background instead of terminal-default blanks.
       opaqueImageBacking: sixelActive,
@@ -1093,10 +1121,26 @@ export default class Ink {
     // cursor climb that height on every park/preamble cycle, so later streaming
     // diffs overwrite thinking, tool, and assistant rows. The terminal maps the
     // full-frame relative move onto its viewport/scrollback position itself.
-    const target = decl !== null && rect !== undefined ? {
+    const declaredTarget = decl !== null && rect !== undefined ? {
       x: rect.x + decl.relativeX,
       y: rect.y + decl.relativeY
     } : null;
+    // Main-screen coordinates include scrollback and the trailing cursor
+    // row. Do not expose a caret that is clipped or scrolled out of view.
+    const viewportTop = this.altScreenActive ? 0 : Math.max(0, frame.cursor.y - terminalRows + 1);
+    // A fullscreen text drag temporarily owns the native cursor. Leave the
+    // editor declaration intact so release, cancellation and recovery return
+    // to its latest caret without requiring another React commit.
+    const selectionFocus = this.altScreenActive && this.selection.isDragging ? getSelectionCursor(frame.screen, this.selection) : null;
+    const selectionTarget = selectionFocus !== null ? {
+      x: Math.min(Math.max(selectionFocus.col, 0), terminalWidth - 1),
+      y: Math.min(Math.max(selectionFocus.row, 0), terminalRows - 1)
+    } : null;
+    const target = selectionTarget ?? (declaredTarget !== null && decl !== null && rect !== undefined &&
+      decl.relativeX >= 0 && decl.relativeX < rect.width && decl.relativeY >= 0 && decl.relativeY < rect.height &&
+      declaredTarget.x >= 0 && declaredTarget.x < terminalWidth &&
+      declaredTarget.y >= viewportTop && declaredTarget.y < viewportTop + terminalRows
+      ? declaredTarget : null);
     const parked = this.displayCursor;
     // Diagnostics: the resolved park target per frame (DSH_TUI_DEBUG only).
     // ConPTY's readback drops trailing cursor moves, so pty probes can't
@@ -1107,6 +1151,23 @@ export default class Ink {
     // Preserve the empty-diff zero-write fast path: skip all cursor writes
     // when nothing rendered AND the park target is unchanged.
     const targetMoved = target !== null && (parked === null || parked.x !== target.x || parked.y !== target.y);
+    const accessibility = isEnvTruthy(process.env.DSH_TUI_ACCESSIBILITY);
+    const idleCaret = this.options.stdout.isTTY && !accessibility && target !== null && selectionTarget === null && decl?.visible === true && decl.hideOnIdle === true;
+    if (idleCaret && decl !== null) {
+      if (targetMoved || this.cursorIdleNode !== decl.node) {
+        this.resetCursorIdle();
+        this.cursorIdleNode = decl.node;
+        this.cursorIdleTimer = setTimeout(() => {
+          this.cursorIdleTimer = null;
+          if (this.isUnmounted || this.isPaused) return;
+          this.cursorIdleHidden = true;
+          this.renderNow();
+        }, CURSOR_IDLE_HIDE_MS);
+        this.cursorIdleTimer.unref?.();
+      }
+    } else {
+      this.resetCursorIdle();
+    }
     if (hasDiff || targetMoved || target === null && parked !== null) {
       // Main-screen preamble: log-update's relative moves assume the
       // physical cursor is at prevFrame.cursor. If last frame parked it
@@ -1171,6 +1232,20 @@ export default class Ink {
         this.displayCursor = null;
       }
     }
+    if (this.options.stdout.isTTY) {
+      const visible = accessibility || target !== null && (selectionTarget !== null || decl?.visible === true && (!idleCaret || !this.cursorIdleHidden));
+      // Hide before repainting or handing focus to a non-editable anchor.
+      // Pure caret moves stay visible so terminal cursor animations can run
+      // continuously, including on terminals without synchronized output.
+      if (this.nativeCursorVisible !== false && (hasDiff || !visible)) {
+        optimized.unshift({ type: 'cursorHide' });
+        this.nativeCursorVisible = false;
+      }
+      if (visible && this.nativeCursorVisible !== true) {
+        optimized.push({ type: 'cursorShow' });
+        this.nativeCursorVisible = true;
+      }
+    }
     const tWrite = performance.now();
     writeDiffToTerminal(this.terminal, optimized, this.altScreenActive && !SYNC_OUTPUT_SUPPORTED);
     const writeMs = performance.now() - tWrite;
@@ -1232,16 +1307,24 @@ export default class Ink {
       flickers
     });
   }
+  private resetCursorIdle(): void {
+    if (this.cursorIdleTimer !== null) clearTimeout(this.cursorIdleTimer);
+    this.cursorIdleTimer = null;
+    this.cursorIdleNode = null;
+    this.cursorIdleHidden = false;
+  }
   pause(): void {
     // Flush pending React updates and render before pausing.
     // @ts-ignore -- runtime/type-definition mismatch: flushSyncFromReconciler exists in react-reconciler 0.31 but not in @types/react-reconciler
     reconciler.flushSyncFromReconciler();
     this.renderNow();
     this.isPaused = true;
+    this.resetCursorIdle();
     this.notifyTerminalImagesChange();
   }
   resume(): void {
     this.isPaused = false;
+    this.nativeCursorVisible = null;
     this.notifyTerminalImagesChange();
     this.renderNow();
     if (
@@ -1267,6 +1350,7 @@ export default class Ink {
     // Clear displayCursor so the cursor preamble doesn't emit a stale
     // relative move from where we last parked it.
     this.displayCursor = null;
+    this.nativeCursorVisible = null;
   }
 
   /**
@@ -1283,7 +1367,7 @@ export default class Ink {
     // (BCE); ctrl+l is exactly the recovery a user reaches for when the
     // screen is already wrecked (e.g. a stuck colored SGR after a torn
     // frame), so the clear must not repaint the wreckage color.
-    this.options.stdout.write(SGR_RESET + ERASE_SCREEN + CURSOR_HOME);
+    this.options.stdout.write(HIDE_CURSOR + SGR_RESET + ERASE_SCREEN + CURSOR_HOME);
     if (this.altScreenActive) {
       this.resetFramesForAltScreen();
     } else {
@@ -1309,7 +1393,7 @@ export default class Ink {
     // Keep 3J outside synchronized output. Windows Terminal can relocate the
     // viewport when erase-buffer commands execute inside BSU/ESU.
     this.options.stdout.write(
-      SGR_RESET + ERASE_SCROLLBACK + ERASE_SCREEN + CURSOR_HOME,
+      HIDE_CURSOR + SGR_RESET + ERASE_SCROLLBACK + ERASE_SCREEN + CURSOR_HOME,
     );
     if (this.altScreenActive) {
       this.resetFramesForAltScreen();
@@ -1359,6 +1443,7 @@ export default class Ink {
       if (deleteImages !== '') this.options.stdout.write(deleteImages);
     }
     this.altScreenActive = active;
+    this.nativeCursorVisible = null;
     this.notifyTerminalImagesChange();
     this.altScreenMouseTracking = active && mouseTracking;
     // Entering has no old alt-screen drag to notify, but the main-screen
@@ -1479,18 +1564,18 @@ export default class Ink {
   };
 
   /**
-   * Mark this instance as unmounted so future unmount() calls early-return.
-   * Called by gracefulShutdown's cleanupTerminalModes() after it has sent
-   * EXIT_ALT_SCREEN but before the remaining terminal-reset sequences.
-   * Without this, signal-exit's deferred ink.unmount() (triggered by
-   * process.exit()) runs the full unmount path: onRender() + writeSync
-   * cleanup block + updateContainerSync → AlternateScreen unmount cleanup.
-   * The result is 2-3 redundant EXIT_ALT_SCREEN sequences landing on the
-   * main screen AFTER printResumeHint(), which tmux (at least) interprets
-   * as restoring the saved cursor position — clobbering the resume hint.
+   * Release React effects while leaving terminal mode cleanup to finishExit.
+   * Suppress Ink.writeRaw and later unmount() calls so AlternateScreen cleanup
+   * cannot close the handoff buffer or clobber a resume hint. App's direct
+   * SHOW_CURSOR write still runs during React cleanup. The old process may
+   * wait on an updater or replacement, so its UI timers must stop before the
+   * Channel lifetime ends.
    */
-  detachForShutdown(): void {
+  detachForShutdown(): void | Promise<void> {
+    if (this.isUnmounted) return this.shutdownCleanup;
+    this.isDetachedForShutdown = true;
     this.isUnmounted = true;
+    this.resetCursorIdle();
     this.terminalImageListeners.clear();
     // Cancel any pending throttled render so it doesn't fire between
     // cleanupTerminalModes() and process.exit() and write to main screen.
@@ -1532,9 +1617,7 @@ export default class Ink {
       this.restoreConsole();
     }
     this.restoreStderr?.();
-    // Restore stdin from raw mode. unmount() used to do this via React
-    // unmount (App.componentWillUnmount → handleSetRawMode(false)) but we're
-    // short-circuiting that path. Must use this.options.stdin — NOT
+    // Restore stdin before React cleanup. Must use this.options.stdin — NOT
     // process.stdin — because getStdinOverride() may have opened /dev/tty
     // when stdin is piped.
     const stdin = this.options.stdin as NodeJS.ReadStream & {
@@ -1551,16 +1634,35 @@ export default class Ink {
         // is no longer possible.
       }
     }
+    // Cancelling renderer work alone leaves component timers and async
+    // continuations alive throughout a backend-switch handoff. finishExit
+    // awaits this cleanup before it can revoke Channel handles.
+    const cleanup = () => {
+      reconciler.flushPassiveEffects();
+      this.rootNode.yogaNode?.free();
+      this.rootNode.yogaNode = undefined;
+    };
+    reconciler.updateContainerSync(null, this.container, null, noop);
+    const insideCommit = reconciler.flushSyncWork();
+    if (insideCommit) {
+      // A render-error exit can arrive inside React's commit. Flush/free only
+      // after that commit has yielded; React forbids passive flushes within it.
+      this.shutdownCleanup = new Promise<void>(resolve => setImmediate(resolve)).then(() => {
+        reconciler.flushSyncWork();
+        cleanup();
+      });
+      return this.shutdownCleanup;
+    }
+    cleanup();
   }
 
   /**
    * Fully detach stdin before handing the terminal to a child process that
-   * inherits it (the /update restart). `detachForShutdown()` restores
-   * cooked mode but leaves the App's 'readable' pump attached — ordinary
-   * exits don't care because the process dies right after, but a parent
-   * that lingers waiting on the child keeps a libuv read pending on the
-   * console and races the child for every keypress: the restarted TUI
-   * sees dropped or entirely swallowed input (issues #284/#307). Remove
+   * inherits it (the /update restart). After `detachForShutdown()` releases
+   * the renderer's stdin ownership, remove any remaining readers and pause
+   * the stream. A parent that lingers waiting on the child must not keep a
+   * libuv read pending on the console and race it for every keypress: the
+   * restarted TUI sees dropped or entirely swallowed input (issues #284/#307). Remove
    * the listeners and pause the pump so the child is the sole reader.
    */
   detachStdinForHandoff(): void {
@@ -1570,17 +1672,10 @@ export default class Ink {
     } catch {
       // A destroyed stream must not block the handoff.
     }
-    stdin.removeAllListeners('readable');
-    stdin.removeAllListeners('data');
     try {
-      stdin.pause();
+      detachHandoffStdin(stdin);
     } catch {
-      // Same destroyed-stream tolerance as above.
-    }
-    try {
-      stdin.unref();
-    } catch {
-      // unref on a closed stream can throw on some Node versions.
+      // A revoked or closed stream must not block shutdown.
     }
   }
 
@@ -1995,7 +2090,7 @@ export default class Ink {
     // the alt screen or re-enable mouse tracking past the exit cleanup
     // (issue #522).
     if (this.isUnmounted) return;
-    this.options.stdout.write(ENTER_ALT_SCREEN + ERASE_SCREEN + CURSOR_HOME + (this.altScreenMouseTracking ? ENABLE_MOUSE_TRACKING : ''));
+    this.options.stdout.write(HIDE_CURSOR + ENTER_ALT_SCREEN + ERASE_SCREEN + CURSOR_HOME + (this.altScreenMouseTracking ? ENABLE_MOUSE_TRACKING : ''));
     this.resetFramesForAltScreen();
   }
 
@@ -2039,6 +2134,7 @@ export default class Ink {
     // resets), but a stale displayCursor would be misleading if we later
     // exit to main-screen without an intervening render.
     this.displayCursor = null;
+    this.nativeCursorVisible = null;
     // Fresh frontFrame is blank rows×cols — blitting from it would copy
     // blanks over content. Next alt-screen frame must full-render.
     this.prevFrameContaminated = true;
@@ -2087,9 +2183,9 @@ export default class Ink {
     return text;
   }
 
-  /** Clear the current text selection without copying. */
+  /** Cancel an active drag or clear the current text selection without copying. */
   clearTextSelection(): void {
-    if (!hasSelection(this.selection)) return;
+    if (!hasSelection(this.selection) && !this.selection.isDragging) return;
     clearSelection(this.selection);
     this.notifySelectionChange();
   }
@@ -2635,7 +2731,15 @@ export default class Ink {
   // change on every render() call (initial mount + each resize), which
   // cascades through useContext → <AlternateScreen>'s useLayoutEffect dep
   // array → spurious exit+re-enter of the alt screen on every SIGWINCH.
+  //
+  // After detachForShutdown the exit funnel owns the terminal restore: a late
+  // commit (e.g. <AlternateScreen>'s cleanup) must not write control sequences.
   private writeRaw(data: string): void {
+    if (this.isDetachedForShutdown) {
+      // Length only: a dropped write may carry clipboard (OSC 52) content.
+      logMouseDebug('stdout: raw write after shutdown detach dropped', { len: data.length });
+      return;
+    }
     if (data.includes('\x1b[?1049')) {
       logMouseDebug('stdout:1049', { len: data.length, head: data.slice(0, 60) });
     }
@@ -2691,6 +2795,7 @@ export default class Ink {
     } catch (renderError) {
       logError(renderError instanceof Error ? renderError : new Error(String(renderError)));
     }
+    this.resetCursorIdle();
     this.unsubscribeExit();
     if (typeof this.restoreConsole === 'function') {
       this.restoreConsole();
@@ -2753,6 +2858,8 @@ export default class Ink {
       writeSync(stdoutFd, DBP);
       // Show cursor
       writeSync(stdoutFd, SHOW_CURSOR);
+      // Restore a child editor's style if shutdown interrupted its handoff.
+      if (this.cursorStyleHandedOff) writeSync(stdoutFd, this.cursorStyleReset);
       // Clear iTerm2 progress bar
       writeSync(stdoutFd, CLEAR_ITERM2_PROGRESS);
       // Clear tab status (OSC 21337) so a stale dot doesn't linger

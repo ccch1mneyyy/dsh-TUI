@@ -12,7 +12,7 @@ import { useTheme } from './design-system/ThemeProvider.js'
 import { interpolateColor, parseRGB } from './Spinner/spinnerUtils.js'
 import { paintedWidth, renderBigText } from './bigfont.js'
 import { COLUMN_GAP, WHALE_BOX_WIDTH, resolveSplashLayout } from './splashLayout.js'
-import { withTagline, pickSplashFont, splashFontById, type SplashFont } from './splashFonts.js'
+import { resolveSplashTitleFont, pickSplashFont, splashFontById, type SplashFont } from './splashFonts.js'
 import { pickSplashEgg, splashStarLine, type SplashEgg } from './splashEggs.js'
 import { isHistoricMilestone, markStarAsked, pendingStarMilestone, recordLaunch, STAR_MILESTONES, usageSnapshot } from '../usageStats.js'
 import { effectiveComboDisplay } from '../utils/keymap.js'
@@ -306,13 +306,12 @@ export function LogoV2({
   // 词对紧解为预算。窄终端阶梯阈值跟着当天真实标题宽度走，与彩蛋共用
   // `withTagline`。
   const words = BRAND_SPLASH_WORDS[brand]
-  const brandFont = brand !== 'deepseek' ? withTagline(font, words.top, words.bottom, { uniform: true }) : font
 
   // 节日彩蛋：本地日期整天恒定，每次 mount 只判一次（照 pickSplashFont 的写法）。
   // 只换下排词——上排钉在品牌词上（deepseek 的 `DEEPSEEK` / claude 的 `CLAUDE`
   // / codex 的 `CODEX`）。
   const [dailyEgg] = React.useState<SplashEgg | null>(() => (egg === undefined ? pickSplashEgg() : egg))
-  const titleFont = dailyEgg === null ? brandFont : withTagline(font, brand === 'deepseek' ? font.tagline.top : words.top, dailyEgg.bottom, brand === 'deepseek' ? undefined : { uniform: true })
+  const titleFont = resolveSplashTitleFont(font, brand, dailyEgg)
 
   // 窄终端阶梯：鲸鱼 + 大字 → 纯大字 → 纯鲸鱼 → 一行纯文字（阈值随字体字身宽度变）。
   const splash = resolveSplashLayout(columns, { whale, font: titleFont })
@@ -506,7 +505,8 @@ export function LogoV2({
       : 2
 
   // 两行标题各自用字体声明的字距；下排再按 `bottomIndent` 居中——
-  // 两者一起保证画出来的列数相等（见 splashFonts 的 tagline 契约）。
+  // 两者一起保证画出来的列数相等（见 splashFonts 的 tagline 契约；声明了
+  // 固定字距的 shadow 例外：两行同字距、不再等宽，见下方金字塔路径）。
   // 节日彩蛋换的就是这里的两排词（`titleFont` 已按当天词对重解字距）。
   const { top: fontTop, bottom, topKerning, bottomKerning, bottomIndent } = titleFont.tagline
   // 品牌词对经 withTagline 重解后 fontTop 即品牌上排词（含彩蛋日的钉顶）。
@@ -565,9 +565,12 @@ export function LogoV2({
     ?? PALE
   // 品牌档两行同字距后宽度不同，对齐按形态处理（用户定调）：居中形态
   // （落地页/启动页）窄行补半差，两行各自居中成金字塔；钉左形态（对话页
-  // 标题）两行左缘对齐。deepseek 档维持求解器的 bottomIndent（等宽契约）。
+  // 标题）两行左缘对齐。deepseek 档维持求解器的 bottomIndent（等宽契约），
+  // 例外是声明了固定字距的字体（shadow——等宽契约在 10 列字身上最紧只能
+  // 解出 5/7 字距，字间空得能走人）：它两行同字距，两种形态都按半差居中。
   const uniformBrand = brand !== 'deepseek'
-  const centeredTitle = uniformBrand && align === 'center'
+  const fixedKerning = !uniformBrand && titleFont.uniformKerning !== undefined
+  const centeredTitle = (uniformBrand && align === 'center') || fixedKerning
   const topInk = paintedWidth(titleFont, top, topKerning)
   const bottomInk = paintedWidth(titleFont, bottom, bottomKerning)
   const topIndent = centeredTitle ? Math.max(0, Math.round((bottomInk - topInk) / 2)) : 0

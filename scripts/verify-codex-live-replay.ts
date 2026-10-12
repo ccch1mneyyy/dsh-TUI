@@ -21,7 +21,8 @@
  */
 import assert from 'node:assert/strict'
 import { readdirSync } from 'node:fs'
-import { setLang, t } from '../src/i18n.js'
+import { setLang } from '../src/i18n.js'
+import { codexText } from '../src/backends/codex/text.js'
 import { assertAgentEventInvariants } from './lib/agent-event-invariants.js'
 import { liveRun, loadWire, notificationsOf, recordedTurns, replayRun, turnThreads, WIRE_DIR, type TranslateRun } from './lib/codex-translate-harness.js'
 
@@ -39,7 +40,7 @@ function comparable(run: TranslateRun, side: 'live' | 'replay'): { rows: string[
   const rows: string[] = []
   for (const row of run.harness.state.rows) {
     if (row.kind === 'turn-summary') { exempt.summaries += 1; continue }
-    if (side === 'live' && row.kind === 'tool' && row.tool?.status === 'error' && row.tool.errorText === t('codex-interrupted')) { exempt.interrupted += 1; continue }
+    if (side === 'live' && row.kind === 'tool' && row.tool?.status === 'error' && row.tool.errorText === codexText('codex-interrupted')) { exempt.interrupted += 1; continue }
     if (side === 'live' && row.kind === 'notice' && run.liveOnlyNotices.has(row.text)) { exempt.notices += 1; continue }
     const tool = row.tool === undefined ? undefined : {
       name: row.tool.name,

@@ -47,6 +47,16 @@ export interface BackendGoalsHost {
 export interface ChannelUi {
   /** Monotonic version — bump on every mutation so screens can re-render. */
   readonly version: number
+  /**
+   * Whether a live session stands behind this channel. `false` only while
+   * the startup session is still opening or after that open failed: typing
+   * is accepted, but the composer refuses to send and only the purely local
+   * commands run (`isBootSafeCommand`).
+   */
+  readonly ready: boolean
+  /** Why the startup session failed to open, while it stays unopened (the
+   *  placeholder is still bound); cleared once a session is adopted. */
+  readonly startupFailure: string | undefined
   readonly rows: readonly ChatRow[]
   /** Live editor selection from the IDE channel (undefined = no IDE / no
    *  selection / link dropped). Protocol-2 pushes carry the editor buffer's
@@ -572,8 +582,10 @@ export interface ChannelUi {
    *  slider; empty `efforts` after notifying when unsupported/unavailable.
    *  `levelsFallback` is true when the ladder is the CLI-standard
    *  compatibility offer (the model row declares no tiers of its own) —
-   *  the slider marks it as such instead of implying the model's list. */
-  listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined; levelsFallback?: true }>
+   *  the slider marks it as such instead of implying the model's list.
+   *  With a route, previews that model for `/model` without changing live
+   *  state or emitting unsupported/single-tier notifications. */
+  listEfforts(route?: { provider: string; model: string }): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined; levelsFallback?: true }>
   /** Set one effort level by id (validated against the adapter list);
    *  false + a notify when the id is not offered. Persists like the old
    *  Shift+Tab cycle (~/.dsh-tui/effort.json). */

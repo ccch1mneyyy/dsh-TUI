@@ -13,7 +13,7 @@
 import type { AccountInfo, McpServerStatus, ModelInfo, Query, SDKControlGetContextUsageResponse, SlashCommand } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountView, ChannelProfileView, ContextUsageView, EffortOption, McpServerView, ModelOption, ModelRef, ModelSwitchOutcome, ModeOption, SessionCapabilities } from '../../agent/capabilities.js'
 import type { AgentEvent, CommandInfo } from '../../agent/events.js'
-import { t } from '../../i18n.js'
+import { claudeText } from './text.js'
 import { createHash } from 'node:crypto'
 import { channelTokenRef, type ClaudeChannelTokens } from '../shared/channel-tokens.js'
 import { importFromSettingsEnv, importTokenFromSettingsEnv, hasChannelConnection, type ClaudeChannelProfile, type ClaudeChannels } from './channels.js'
@@ -145,6 +145,18 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
 
   const currentRow = (): ModelInfo | undefined => rowOf(models, deps.currentModel())
 
+  const effortsFor = (row: ModelInfo | undefined): { levels: readonly EffortOption[]; levelsFallback?: true } => {
+    if (row === undefined || row.supportsEffort === false) return { levels: [] }
+    // Known rows without a tier list use the CLI-standard compatibility
+    // ladder; unknown rows offer nothing. Preview and live controls agree.
+    const declared = row.supportedEffortLevels as readonly string[] | undefined
+    const fallback = declared === undefined || declared.length === 0
+    return {
+      levels: (fallback ? EFFORT_FALLBACK_TIERS : declared).map(level => ({ id: level, label: effortLabel(level) })),
+      ...(fallback ? { levelsFallback: true as const } : {}),
+    }
+  }
+
   /** Check the remembered effort against what a model declares. It is
    *  cleared only on an explicit refusal: `supportsEffort === false`, or a
    *  declared level list without the tier. A row that declares neither
@@ -216,7 +228,7 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
       },
       async set(ref: ModelRef): Promise<ModelSwitchOutcome> {
         const row = rowOf(models, ref.model) ?? rowOf(await refreshModels(), ref.model)
-        if (row === undefined) return { kind: 'refused', reason: t('claude-model-unknown', { model: ref.model }) }
+        if (row === undefined) return { kind: 'refused', reason: claudeText('claude-model-unknown', { model: ref.model }) }
         // In place (no fork): the CLI applies it from the next request on.
         await deps.query().setModel(row.value)
         deps.prefs.write({ model: row.value })
@@ -229,28 +241,12 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
     },
     effort: {
       get levelsFallback(): true | undefined {
-        const row = currentRow()
-        if (row === undefined) return undefined
-        const declared = row.supportedEffortLevels as readonly string[] | undefined
-        if (row.supportsEffort === false || (declared !== undefined && declared.length > 0)) return undefined
-        return true
+        return effortsFor(currentRow()).levelsFallback
       },
       levels(): readonly EffortOption[] {
-        const row = currentRow()
-        // An unknown model (no catalog row at all — the cold start before the
-        // handshake seeds one) offers nothing: nothing is guessed for a model
-        // the catalog does not know (the lifecycle contract).
-        if (row === undefined) return []
-        if (row.supportsEffort === false) return []
-        // A known row that declares no list of its own (relay custom rows,
-        // the offline Haiku shape, old CLIs) falls back to the CLI's standard
-        // tiers — the CLI accepts any effortLevel flag, so the standard
-        // ladder is the honest compatibility offer, marked above for the
-        // picker to say so.
-        const declared = row.supportedEffortLevels as readonly string[] | undefined
-        const tiers = declared !== undefined && declared.length > 0 ? declared : EFFORT_FALLBACK_TIERS
-        return tiers.map(level => ({ id: level, label: effortLabel(level) }))
+        return effortsFor(currentRow()).levels
       },
+      forModel: (ref: ModelRef) => effortsFor(rowOf(models, ref.model)),
       current: (): string | undefined => effort,
       async set(id: string | null): Promise<void> {
         // `null` resets to the model's default level (applyFlagSettings
@@ -436,12 +432,12 @@ export function createClaudeControls(deps: ClaudeControlsDeps) {
 /** The localized label of a backend-native permission mode. */
 export function modeLabel(id: string): string {
   switch (id) {
-    case 'default': return t('claude-mode-default')
-    case 'acceptEdits': return t('claude-mode-acceptEdits')
-    case 'plan': return t('claude-mode-plan')
-    case 'auto': return t('claude-mode-auto')
-    case 'dontAsk': return t('claude-mode-dontAsk')
-    case 'bypassPermissions': return t('claude-mode-bypassPermissions')
+    case 'default': return claudeText('claude-mode-default')
+    case 'acceptEdits': return claudeText('claude-mode-acceptEdits')
+    case 'plan': return claudeText('claude-mode-plan')
+    case 'auto': return claudeText('claude-mode-auto')
+    case 'dontAsk': return claudeText('claude-mode-dontAsk')
+    case 'bypassPermissions': return claudeText('claude-mode-bypassPermissions')
     default: return id
   }
 }
@@ -451,12 +447,12 @@ export function modeLabel(id: string): string {
  *  label). Unknown ids have none. */
 export function modeDescription(id: string): string | undefined {
   switch (id) {
-    case 'default': return t('claude-mode-desc-default')
-    case 'acceptEdits': return t('claude-mode-desc-acceptEdits')
-    case 'plan': return t('claude-mode-desc-plan')
-    case 'auto': return t('claude-mode-desc-auto')
-    case 'dontAsk': return t('claude-mode-desc-dontAsk')
-    case 'bypassPermissions': return t('claude-mode-desc-bypassPermissions')
+    case 'default': return claudeText('claude-mode-desc-default')
+    case 'acceptEdits': return claudeText('claude-mode-desc-acceptEdits')
+    case 'plan': return claudeText('claude-mode-desc-plan')
+    case 'auto': return claudeText('claude-mode-desc-auto')
+    case 'dontAsk': return claudeText('claude-mode-desc-dontAsk')
+    case 'bypassPermissions': return claudeText('claude-mode-desc-bypassPermissions')
     default: return undefined
   }
 }
@@ -464,11 +460,11 @@ export function modeDescription(id: string): string | undefined {
 /** The localized label of an effort level. */
 export function effortLabel(id: string): string {
   switch (id) {
-    case 'low': return t('claude-effort-low')
-    case 'medium': return t('claude-effort-medium')
-    case 'high': return t('claude-effort-high')
-    case 'xhigh': return t('claude-effort-xhigh')
-    case 'max': return t('claude-effort-max')
+    case 'low': return claudeText('claude-effort-low')
+    case 'medium': return claudeText('claude-effort-medium')
+    case 'high': return claudeText('claude-effort-high')
+    case 'xhigh': return claudeText('claude-effort-xhigh')
+    case 'max': return claudeText('claude-effort-max')
     default: return id
   }
 }

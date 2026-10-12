@@ -5,7 +5,7 @@
  * Run: node --import tsx/esm scripts/verify-codex-auth.ts */
 import './lib/default-lang-zh.mjs'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { OAuthCredentialSource } from '../src/agent/backend.js'
@@ -19,7 +19,7 @@ import { detectCodexAuth } from '../src/backends/codex/detect.js'
 import { fileCodexPrefs, memoryCodexPrefs, resolveCodexStartOptions } from '../src/backends/codex/prefs.js'
 import { closeAllCodexHubs, createCodexHub, type HubSettings } from '../src/backends/codex/rpc/hub.js'
 import type { RpcClock } from '../src/backends/codex/rpc/client.js'
-import { channelTokenRef, memoryChannelTokens } from '../src/backends/shared/channel-tokens.js'
+import { channelTokenRef, fileChannelTokens, memoryChannelTokens } from '../src/backends/shared/channel-tokens.js'
 import { createFakeAppServer } from './lib/codex-fake-app-server.js'
 
 let passed = 0
@@ -344,6 +344,58 @@ const latestQuestion = (events: readonly AgentEvent[]): QuestionRequestView => {
   check('backend: native-only route cannot reuse an OAuth-eligible hub', touched === 0 && fake.spawns.length === 2 && runtime.auth.route.firstParty === false)
   runtime.release()
   await closeAllCodexHubs()
+}
+
+// A provider env_key the launching shell never exported is resolved from the
+// DSH credential store and injected into a fresh child (the keyless hub is
+// never reused); an exported key needs no second child at all.
+{
+  const fake = createFakeAppServer()
+  fake.on('config/read', () => ({ config: { model_provider: 'deepseek', model_providers: { deepseek: { base_url: 'https://api.deepseek.com/v1', env_key: 'DEEPSEEK_API_KEY' } } } }))
+  fake.on('account/read', () => ({ account: null, requiresOpenaiAuth: false }))
+  const debug: string[] = []
+  const runtime = await prepareCodexRuntime({ kind: 'create', cwd: SETTINGS.cwd }, { cwd: SETTINGS.cwd, debug: line => debug.push(line), warn: () => undefined, tokenStore: memoryChannelTokens({ DEEPSEEK_API_KEY: API_KEY }) }, { channels: memoryCodexChannels(), env: {}, executable: { path: '/fake/backend-envkey', source: 'env', version: '0.160.1' }, hubDeps: { transportFactory: fake.transportFactory } })
+  check('backend: missing provider env_key is injected from the credential store', fake.spawns.length === 2 && fake.spawns[0]!.env.DEEPSEEK_API_KEY === undefined && fake.spawns[1]!.env.DEEPSEEK_API_KEY === API_KEY)
+  check('backend: env_key injection names the variable without leaking its value', debug.some(line => line.includes('DEEPSEEK_API_KEY')) && safe(debug))
+  runtime.release()
+  await closeAllCodexHubs()
+  const exported = await prepareCodexRuntime({ kind: 'create', cwd: SETTINGS.cwd }, { cwd: SETTINGS.cwd, debug: () => undefined, warn: () => undefined, tokenStore: memoryChannelTokens({ DEEPSEEK_API_KEY: API_KEY }) }, { channels: memoryCodexChannels(), env: { DEEPSEEK_API_KEY: API_KEY }, executable: { path: '/fake/backend-envkey', source: 'env', version: '0.160.1' }, hubDeps: { transportFactory: fake.transportFactory } })
+  check('backend: an exported provider env_key reuses the first child', fake.spawns.length === 3 && fake.spawns[2]!.env.DEEPSEEK_API_KEY === API_KEY)
+  exported.release()
+  await closeAllCodexHubs()
+  // Nothing can supply the key here, and Codex will reject the turn itself:
+  // the session still opens, carrying the reason as a start notice.
+  const keyless = await prepareCodexRuntime({ kind: 'create', cwd: SETTINGS.cwd }, { cwd: SETTINGS.cwd, debug: () => undefined, warn: () => undefined, tokenStore: memoryChannelTokens() }, { channels: memoryCodexChannels(), env: {}, executable: { path: '/fake/backend-envkey', source: 'env', version: '0.160.1' }, hubDeps: { transportFactory: fake.transportFactory } })
+  check('backend: an unsupplied provider env_key opens with the reason instead of a bare turn failure', fake.spawns.length === 4 && fake.spawns[3]!.env.DEEPSEEK_API_KEY === undefined && (keyless.startNotices ?? []).some(line => line.includes('DEEPSEEK_API_KEY') && line.includes('deepseek')) && safe(keyless.startNotices))
+  keyless.release()
+  await closeAllCodexHubs()
+}
+
+// A `DSH_HOME` override must not orphan a key stored where both READMEs name
+// it: reads fall back to the default `~/.dsh` store while writes stay in the
+// active home.
+{
+  const home = mkdtempSync(join(tmpdir(), 'dsh-creds-default-'))
+  const active = mkdtempSync(join(tmpdir(), 'dsh-creds-active-'))
+  mkdirSync(join(home, '.dsh'), { recursive: true })
+  writeFileSync(join(home, '.dsh', '.credentials.yaml'), `refs:\n  DEEPSEEK_API_KEY: ${API_KEY}\n`)
+  const previousHome = process.env.HOME
+  const previousDshHome = process.env.DSH_HOME
+  process.env.HOME = home
+  process.env.DSH_HOME = active
+  try {
+    const store = fileChannelTokens()
+    check('store: the default ~/.dsh store backs an active home that lacks the ref', store.read('DEEPSEEK_API_KEY') === API_KEY && store.declared('DEEPSEEK_API_KEY') && store.read('ABSENT_REF') === undefined)
+    store.write('CHANNEL_PROBE_TOKEN', API_KEY)
+    check('store: a write still targets the active home', readFileSync(join(active, '.credentials.yaml'), 'utf8').includes('CHANNEL_PROBE_TOKEN') && !readFileSync(join(home, '.dsh', '.credentials.yaml'), 'utf8').includes('CHANNEL_PROBE_TOKEN'))
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+    if (previousDshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousDshHome
+    rmSync(home, { recursive: true, force: true })
+    rmSync(active, { recursive: true, force: true })
+  }
 }
 
 {

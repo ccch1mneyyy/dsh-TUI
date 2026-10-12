@@ -35,13 +35,17 @@
  *    `allowDangerouslySkipPermissions` rides along on every query, see
  *    options.ts, so the session may enter bypass at runtime; settings-level
  *    bypass still downgrades).
+ *  - backend.open carries the host data directory into the session: channel
+ *    profiles persist across opens and the local model-name cache is read.
  *
  * Run: node --import tsx/esm scripts/verify-claude-session-lifecycle.ts
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { registerHooks } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { BackendHost } from '../src/agent/backend.js'
 import type { AgentEvent, AgentEventMeta } from '../src/agent/events.js'
 import type { AgentSession } from '../src/agent/session.js'
 import { buildQueryOptions, OPTION_POLICY, resolveStartPermissionMode } from '../src/backends/claude/options.js'
@@ -49,7 +53,8 @@ import { memoryClaudePrefs } from '../src/backends/claude/prefs.js'
 import type { ClaudeReplay } from '../src/backends/claude/replay.js'
 import { buildClaudeEnv } from '../src/backends/claude/process.js'
 import { openClaudeSession, type ClaudeClock, type ClaudeSessionDeps } from '../src/backends/claude/session.js'
-import { setLang, t } from '../src/i18n.js'
+import { getLang, setLang, t } from '../src/i18n.js'
+import { claudeText } from '../src/backends/claude/text.js'
 
 setLang('en')
 let passed = 0
@@ -155,7 +160,7 @@ const baseDeps = (sdk: ClaudeSessionDeps['sdk'], clock: ClaudeClock, extra: Part
   start: { mode: 'default', source: 'default' },
   executable: { path: '/fixture/bin/claude', source: 'env' },
   env: { PATH: '/usr/bin' },
-  host: { debug: () => undefined },
+  host: { locale: getLang, debug: () => undefined },
   clock,
   ...extra,
 })
@@ -206,8 +211,8 @@ const collect = (session: AgentSession) => {
   // Images are sent (see verify-claude-images); an image the session
   // cannot send (an unreadable facade, an image block without one) is
   // still refused loudly, never dropped from the message.
-  await assert.rejects(session.submit({ text: 'img', clientMessageId: 'x', images: [{} as never] }, 'followup'), new RegExp(t('claude-image-type-refused', { name: 'undefined', type: '?' }).replace(/[()?]/gu, '\\$&')))
-  await assert.rejects(session.submit({ text: 'pasted', clientMessageId: 'z', blocks: [{ type: 'text', text: 'pasted' }, { type: 'image' }] }, 'followup'), new RegExp(t('claude-image-gone')))
+  await assert.rejects(session.submit({ text: 'img', clientMessageId: 'x', images: [{} as never] }, 'followup'), new RegExp(claudeText('claude-image-type-refused', { name: 'undefined', type: '?' }).replace(/[()?]/gu, '\\$&')))
+  await assert.rejects(session.submit({ text: 'pasted', clientMessageId: 'z', blocks: [{ type: 'text', text: 'pasted' }, { type: 'image' }] }, 'followup'), new RegExp(claudeText('claude-image-gone')))
   check('submit: an image it cannot send (bad facade, block without one) is refused loudly', !query.inputs.some(input => input.uuid === 'x' || input.uuid === 'z'))
   query.emit({ type: 'mystery_frame', payload: 1 })
   query.emit({ type: 'system', subtype: 'brand_new' })
@@ -252,7 +257,7 @@ const collect = (session: AgentSession) => {
   advance(1)
   const tail = sink.events().slice(-3)
   check('30 s without confirmation force-closes the turn', tail.some(event => event.type === 'turn.end' && event.reason.kind === 'aborted'), tail)
-  check('the forced close says so', tail.some(event => event.type === 'notice' && event.text === t('claude-cancel-forced')))
+  check('the forced close says so', tail.some(event => event.type === 'notice' && event.text === claudeText('claude-cancel-forced')))
   check('the session asks for attention', tail.some(event => event.type === 'session.status' && event.status === 'requires-action'))
   await session.dispose()
   check('no timer after dispose', outstanding() === 0)
@@ -422,9 +427,13 @@ const collect = (session: AgentSession) => {
     CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SESSION_ATTENDED: '1', CLAUDE_PID: '42', AI_AGENT: 'claude-code',
     TRACEPARENT: '00-abc-def-01', CLAUDE_CODE_EXECPATH: '/parent/claude', CLAUDE_EFFORT: 'high', CLAUDE_CODE_INVOKED_SKILLS: 'x',
   }
-  const env = buildClaudeEnv({ PATH: '/usr/bin', ...parent, ANTHROPIC_API_KEY: 'kept' })
+  const env = buildClaudeEnv({ appVersion: '9.9.9', base: { PATH: '/usr/bin', ...parent, ANTHROPIC_API_KEY: 'kept' } })
   check('env: parent Claude Code session variables are scrubbed', Object.keys(parent).every(key => env[key] === undefined), Object.keys(parent).filter(key => env[key] !== undefined))
-  check('env: client app + session state events, credentials untouched', env.CLAUDE_AGENT_SDK_CLIENT_APP?.startsWith('dsh-tui/') === true && env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS === '1' && env.ANTHROPIC_API_KEY === 'kept' && env.PATH === '/usr/bin')
+  check('env: client app + session state events, credentials untouched', env.CLAUDE_AGENT_SDK_CLIENT_APP === 'dsh-tui/9.9.9' && env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS === '1' && env.ANTHROPIC_API_KEY === 'kept' && env.PATH === '/usr/bin')
+  // The version tag comes from the host (`BackendHost.appVersion`), never from
+  // this backend reading the TUI's package.json; a host that cannot tell
+  // keeps the long-standing `dev` tag (B-3).
+  check('env: no host version keeps the dev tag', buildClaudeEnv({ base: {} }).CLAUDE_AGENT_SDK_CLIENT_APP === 'dsh-tui/dev')
   const options = buildQueryOptions({
     cwd: '/fixture/project', sessionId: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
     stderr: () => undefined, abortController: new AbortController(), replayUserMessages: true,
@@ -705,6 +714,66 @@ const collect = (session: AgentSession) => {
   await tick()
   check('resume: the replay model is kept (the seed only fills an empty one)', resumedSession.capabilities.models.current().model === 'claude-sonnet-4-5')
   await resumedSession.dispose()
+}
+
+// Drive the real backend entry, replacing only the optional SDK. Direct
+// openClaudeSession fixtures cannot catch host fields lost by backend.open.
+{
+  const root = mkdtempSync(join(tmpdir(), 'dsh-tui-claude-host-'))
+  const dataDir = join(root, 'backend-data')
+  mkdirSync(dataDir)
+  const model = 'claude-opus-fixture'
+  const fake = fakeSdk({ init: () => ({ model, capabilities: [] }) })
+  const fixtureKey = Symbol.for('dsh-tui.verify-claude-session-lifecycle.sdk')
+  Object.defineProperty(globalThis, fixtureKey, { value: fake.sdk, configurable: true })
+  const sdkUrl = `data:text/javascript,${encodeURIComponent(`
+    export const query = globalThis[Symbol.for('dsh-tui.verify-claude-session-lifecycle.sdk')].query
+    export const resolveSettings = async () => ({ effective: {} })
+    export const filterEscalatingDefaultMode = () => ({})
+  `)}`
+  const hooks = registerHooks({
+    resolve(specifier, context, nextResolve) {
+      return specifier === '@anthropic-ai/claude-agent-sdk'
+        ? { url: sdkUrl, shortCircuit: true }
+        : nextResolve(specifier, context)
+    },
+  })
+  const savedEnv = { CLAUDE_CODE_EXECUTABLE: process.env.CLAUDE_CODE_EXECUTABLE, CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR }
+  process.env.CLAUDE_CODE_EXECUTABLE = process.execPath
+  process.env.CLAUDE_CONFIG_DIR = root
+  let session: AgentSession | undefined
+  try {
+    const { claudeBackend } = await import('../src/backends/claude/backend.js')
+    const host: BackendHost = { cwd: root, dataDir, locale: getLang, debug: () => undefined, warn: () => undefined }
+    const channelFile = join(dataDir, 'channels.json')
+    writeFileSync(channelFile, JSON.stringify({ active: 'seed', channels: [
+      { id: 'seed', name: 'Seed', models: { [model]: 'channel-model' } },
+    ] }))
+    writeFileSync(join(dataDir, 'model-names.json'), JSON.stringify({ [model]: 'cached-model' }))
+    session = await claudeBackend.open({ kind: 'create', cwd: root }, host)
+    check('backend.open: existing channels come from host.dataDir',
+      session.capabilities.channels!.list()[0]?.id === 'seed' && session.capabilities.channels!.activeId() === 'seed')
+    check('backend.open: the active channel mapping reaches model display', session.capabilities.models!.display!() === 'channel-model')
+    session.capabilities.channels!.save!({ id: 'saved', name: 'Saved' })
+    session.capabilities.channels!.setActive('saved')
+    const stored = JSON.parse(readFileSync(channelFile, 'utf8')) as { active: string; channels: { id: string }[] }
+    check('backend.open: channel edits persist in the host directory', stored.active === 'saved' && stored.channels.some(row => row.id === 'saved'))
+    await session.dispose()
+    session = await claudeBackend.open({ kind: 'create', cwd: root }, host)
+    check('backend.open: a second session sees the saved channel',
+      session.capabilities.channels!.activeId() === 'saved' && session.capabilities.channels!.list().some(row => row.id === 'saved'))
+    session.capabilities.channels!.remove!('saved')
+    check('backend.open: model display falls back to the host-directory cache', session.capabilities.models!.display!() === 'cached-model')
+  } finally {
+    await session?.dispose()
+    hooks.deregister()
+    Reflect.deleteProperty(globalThis, fixtureKey)
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    rmSync(root, { recursive: true, force: true })
+  }
 }
 
 console.log(`\nverify-claude-session-lifecycle OK (${passed} checks)`)

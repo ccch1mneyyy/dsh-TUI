@@ -1,7 +1,7 @@
 /** Parent-owned Codex subagents: independent translators and bounded history pages. */
 import type { SessionCapabilities, SubagentTranscriptPage, SubagentTranscriptWindow } from '../../../agent/capabilities.js'
 import type { AgentEvent, AgentEventMeta, AgentEventOf } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { codexText } from '../text.js'
 import { arr, num, rec, str, type Rec } from '../narrow.js'
 import { CLIENT, NOTIFY } from '../protocol/index.js'
 import { threadOf, type CodexHub } from '../rpc/hub.js'
@@ -96,12 +96,12 @@ export function createCodexSubagents(deps: {
       const thread = rec(response?.thread)
       const spawn = rec(rec(rec(thread?.source)?.subAgent)?.thread_spawn)
       const parent = str(thread?.parentThreadId) ?? str(spawn?.parent_thread_id)
-      if (!current(root, epoch) || thread === undefined || str(thread.id) !== next || parent === undefined || parent === next) throw new Error(t('codex-subagent-unavailable'))
+      if (!current(root, epoch) || thread === undefined || str(thread.id) !== next || parent === undefined || parent === next) throw new Error(codexText('codex-subagent-unavailable'))
       if (first === undefined) { first = thread; direct = parent }
       if (parent === root) return { parent: direct!, depth, thread: first }
       next = parent
     }
-    throw new Error(t('codex-subagent-unavailable'))
+    throw new Error(codexText('codex-subagent-unavailable'))
   }
   /** Spawn items report a requested model/prompt, not execution telemetry. */
   const noteSpawn = (method: string, params: Rec, parent: string): void => {
@@ -212,12 +212,12 @@ export function createCodexSubagents(deps: {
       return current(root, epoch)
     },
     async history(id: string, window?: SubagentTranscriptWindow): Promise<SubagentTranscriptPage> {
-      if (closed || !children.has(id)) throw new Error(t('codex-subagent-unavailable'))
+      if (closed || !children.has(id)) throw new Error(codexText('codex-subagent-unavailable'))
       const root = deps.threadId()
       const epoch = generation
       const owned = await ownership(id)
       const response = rec(await deps.hub.call(CLIENT.threadTurnsList, { threadId: id, limit: HISTORY_TURNS, sortDirection: 'desc', itemsView: 'full', ...(window?.sourceCursor === undefined ? {} : { cursor: window.sourceCursor }) }))
-      if (!current(root, epoch)) throw new Error(t('codex-subagent-unavailable'))
+      if (!current(root, epoch)) throw new Error(codexText('codex-subagent-unavailable'))
       const turns = [...arr(response?.data)].reverse()
       const context = createItemContext({ cwd: str(owned.thread.cwd) ?? deps.cwd, now })
       const child = children.get(id)!

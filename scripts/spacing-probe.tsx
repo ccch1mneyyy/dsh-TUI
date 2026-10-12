@@ -2,7 +2,7 @@
  * Spacing/visual-distinction probe: renders a transcript with user prompt,
  * thinking, tool call and assistant text rows, then checks the transcript row spacing:
  *   1. Every block is separated by a blank line (top margin on each new turn).
- *   2. User prompt carries the gold bold label (userPromptLabel, no background
+ *   2. User prompt carries the tinted bold label (userPromptLabel, no background
  *      fill since the Kimi-style restyle).
  *   3. Thinking label + body are dim+italic (grey).
  * Run: node --import tsx scripts/spacing-probe.tsx (Windows side)
@@ -185,12 +185,13 @@ for (let i = 1; i < markerLines.length; i++) {
   )
 }
 
-// 2. User prompt carries the gold bold label (userPromptLabel #FFDF80 in the
-//    dark theme) with no background fill since the Kimi-style restyle.
+// 2. User prompt carries the tinted bold label (userPromptLabel #D77757 — the
+//    kernel-rotated terracotta — in the dark theme) with no background fill
+//    since the Kimi-style restyle.
 check(
-  'user prompt gold bold label',
-  cursorMoved.includes('\x1b[38;2;255;223;128m'),
-  'userPromptLabel gold SGR present in user prompt region',
+  'user prompt tinted bold label',
+  cursorMoved.includes('\x1b[38;2;215;119;87m'),
+  'userPromptLabel terracotta SGR present in user prompt region',
 )
 
 // 3. Thinking label is grey + italic (the theme's `inactive` grey is how

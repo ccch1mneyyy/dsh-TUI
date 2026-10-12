@@ -92,6 +92,21 @@ is handed to Codex unchanged. Non-first-party routes should use their own provid
 credentials or a channel key. Account status shows only credential source, subscription
 type and host, not an email address or key.
 
+One bridging exception: when the active provider takes its credential from an `env_key`
+(say `DEEPSEEK_API_KEY`) that the launching environment did not export but the DSH credential
+store declares, the stored value is injected into the app-server child after `config/read`
+(the hub is re-acquired; the key joins the hub fingerprint through `injectedEnvKeys`). Reads
+take the active store first (`$DSH_HOME/.credentials.yaml`, or `~/.dsh/.credentials.yaml`
+when `DSH_HOME` is unset) and then the default `~/.dsh` store, so a `DSH_HOME` override does
+not orphan a key stored where both READMEs name it; writes only ever target the active home. A key
+stored once in the credential store therefore works without exporting a shell variable. The
+value only ever travels into the spawn pipeline, never into logs, notices or events.
+
+When nothing can supply the key, startup is **not** blocked: Codex itself rejects every turn
+of that provider, so the runtime reports the reason once as a start notice (naming the
+provider and the variable, never a value) — export the key, store it, or move the provider to
+a channel.
+
 ### The three `/login` methods
 
 | Method | Purpose and storage |
@@ -214,6 +229,12 @@ past tokens/cost. Fresh usage notifications update the readings.
   say the transcript is retained, not physically deleted. Current, occupied or active-worker
   threads cannot be archived. The catalog lists up to 500 recent ordinary threads, excluding
   ephemeral forks and child threads from the main list.
+  Reopening or restarting first paints the last complete list while the native catalog
+  refreshes; a cold scan shows pages as they arrive. Without a snapshot, the native state
+  database supplies up to 32 recent threads from the current workspace first, then the
+  rollout scan repairs titles and fills in that workspace followed by other workspaces;
+  an unavailable database falls back to scanning. First-paint snapshots are isolated by
+  Codex storage directory; failed or incomplete reads never replace a complete snapshot.
 - `/rename` changes the official thread title; `/color` stores a session accent, not a global theme.
 - `/fork` creates a resumable copy without switching. Double `Esc` or `/rewind` conversation
   rewind creates a copy before the selected question, returns the question to the composer
@@ -267,10 +288,14 @@ Real model vision and image generation were not tested in this round.
 
 usageLimited/budgetLimited goals show a blocked state and reason. Unsupported goal APIs
 do not expose the capability. `/btw`/`/recap` use a read-only sandbox with no approval
-escalation, request answer-only behavior and reject tool/approval requests. Cancellation
-interrupts the temporary turn and unsubscribes the fork. They consume model quota, not
-free local summaries. Ephemeral fork creation/non-persistence was checked offline; actual
-side-query model answers were not tested in this round.
+escalation, request answer-only behavior and reject tool/approval requests. The fork never
+carries `deferGoalContinuation` (app-servers from 0.162 reject it combined with `ephemeral`),
+and when the thread has no rollout on disk yet (nothing persisted, e.g. a brand-new session)
+the side call falls back to a fresh ephemeral `thread/start` — the conversation is empty in
+exactly that state, so no context is lost. Cancellation interrupts the temporary turn and
+unsubscribes the fork. They consume model quota, not free local summaries. Ephemeral fork
+creation/non-persistence was checked offline; actual side-query model answers were not
+tested in this round.
 
 ## Limitations and troubleshooting
 

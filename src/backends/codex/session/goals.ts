@@ -1,7 +1,7 @@
 /** Native Codex goals: budget facts come from the server, never TUI rounds. */
 import type { SessionCapabilities } from '../../../agent/capabilities.js'
 import type { AgentEvent, AgentEventOf } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { codexText } from '../text.js'
 import { num, rec, str, type Rec } from '../narrow.js'
 import { CLIENT, NOTIFY } from '../protocol/index.js'
 import type { CodexHub } from '../rpc/hub.js'
@@ -23,7 +23,7 @@ export function codexGoalEvent(raw: unknown, operation = 'update'): AgentEventOf
       id: 'codex-goal:' + threadId + ':' + String(goal.createdAt),
       revision: num(goal.updatedAt) ?? 0,
       objective, phase, maxGoalRounds: 0,
-      ...(phase !== 'blocked' ? {} : { blockedReason: { code: status, message: t(status === 'usageLimited' ? 'codex-goal-usage-limited' : status === 'budgetLimited' ? 'codex-goal-budget-limited' : 'codex-goal-blocked') } }),
+      ...(phase !== 'blocked' ? {} : { blockedReason: { code: status, message: codexText(status === 'usageLimited' ? 'codex-goal-usage-limited' : status === 'budgetLimited' ? 'codex-goal-budget-limited' : 'codex-goal-blocked') } }),
       budget: { tokensUsed: num(goal.tokensUsed) ?? 0, tokenBudget: num(goal.tokenBudget) ?? null, timeUsedSeconds: num(goal.timeUsedSeconds) ?? 0 },
     },
   }
@@ -76,7 +76,7 @@ export function createCodexGoals(deps: {
       } catch (error) {
         if (closed || epoch !== generation || root !== deps.threadId()) return
         if (rpcCode(error) === RPC_ERROR.methodNotFound || rpcCode(error) === RPC_ERROR.invalidParams) {
-          if (enabled) deps.emit([{ type: 'notice', level: 'warning', key: 'codex-goals-unsupported', text: t('codex-goals-unsupported') }])
+          if (enabled) deps.emit([{ type: 'notice', level: 'warning', key: 'codex-goals-unsupported', text: codexText('codex-goals-unsupported') }])
           enabled = false
         } else deps.debug?.('codex: initial goal unavailable (' + (error instanceof Error ? error.message : String(error)) + ')')
       }

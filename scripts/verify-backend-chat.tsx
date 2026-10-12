@@ -9,7 +9,7 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { setLang, t }, { default: instances }, { findText, settled, sleep, viewportLines }] =
+const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { setLang, t }, { default: instances }, { findText, settled, sleep, viewportLines }, { kernelEntriesOf }, { listBackends }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -22,6 +22,8 @@ const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { Qu
     import('../src/i18n.js'),
     import('../src/ink/instances.js'),
     import('./lib/term-test.mjs'),
+    import('../src/components/kernelCatalog.js'),
+    import('../src/dsh-adapter/backend-registry.js'),
   ])
 const { activateModernEmojiWidths } = await import('./lib/modern-widths.mjs')
 import type { AgentEvent, AgentEventMeta } from '../src/agent/events.js'
@@ -95,6 +97,9 @@ class FakeStdin extends PassThrough {
 const stdin = new FakeStdin()
 const stdout = new FakeStdout()
 const screen = (): string => viewportLines(term, ROWS).join('\n')
+// Startup tips can also contain "Trajectory"; only its header marks the scene.
+const trajectoryOpen = (): boolean => viewportLines(term, ROWS)
+  .some(line => line.trimStart().startsWith(`✦ ${t('traj-title')}`))
 const instance = await ui.render(
   React.createElement(Chat, {
     channel: channel as never,
@@ -102,6 +107,7 @@ const instance = await ui.render(
     approvalStore: new ApprovalStore(),
     onExit: () => undefined,
     fullscreen: false,
+    kernelEntries: kernelEntriesOf(listBackends()),
     trajectorySeen: true,
   }),
   { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
@@ -160,9 +166,9 @@ try {
   // 三态契约（设计 §④）：核心已挂中立 AgentEvent 折叠源——Ctrl+T 打开
   // 的轨迹场景渲染折叠账本（上面发出的 turn 已成行），不弹能力缺失通
   // 知、不拒绝入口；unsupported 只属于未挂数据源的组合。
-  check('Ctrl+T over the folded core renders the trajectory ledger', await settled(() => screen().includes(t('traj-title')) && screen().includes('1 turns')) && !screen().includes(t('trajectory-unsupported')) && !toasts().includes(t('capability-unavailable-backend', { name: 'trace' })), screen())
+  check('Ctrl+T over the folded core renders the trajectory ledger', await settled(() => trajectoryOpen() && screen().includes('1 turns')) && !screen().includes(t('trajectory-unsupported')) && !toasts().includes(t('capability-unavailable-backend', { name: 'trace' })), screen())
   stdin.write('q')
-  check('the trajectory scene returns to the conversation', await settled(() => !screen().includes(t('traj-title'))))
+  check('the trajectory scene returns to the conversation', await settled(() => !trajectoryOpen() && screen().includes('fake-model')))
   stdin.write('\x1b')
   // 固定窗:pacing the double-Esc detector needs two distinct key events.
   await sleep(80)
@@ -585,14 +591,14 @@ await runEffortCase('bare /effort with a real range', [{ id: 'low', label: 'Low'
       stdin.write(seq('M'))
       await sleep(30) // 固定窗:pacing 鼠标 press→release 步间
       stdin.write(seq('m'))
-      // A single-provider catalog opens the picker's DIRECT list (no group
-      // pane, no title row) — the catalog rows + the confirm hint are the
-      // open-picker markers.
-      check('clicking the model segment opens the /model picker with the catalog', await settled(() => screen().includes('Sonnet') && screen().includes('Opus') && screen().includes('Enter to confirm')), screen())
+      check('clicking the model segment opens the backend catalog directly',
+        await settled(() => screen().includes('Sonnet') && screen().includes('Opus') && screen().includes('Enter select')), screen())
+      check('backend catalogs omit provider and recents tabs',
+        !screen().includes(t('picker-group-recent')) && !screen().includes('Shift+Tab providers'), screen())
       stdin.write('\x1b')
       await sleep(120) // 固定窗:pacing the picker closes before the next click.
     }
-    check('Esc closed the model picker', await settled(() => !screen().includes('Sonnet')), screen())
+    check('Esc closed the model picker', await settled(() => !screen().includes(t('picker-group-recent')) && !screen().includes('Sonnet')), screen())
     const effortHit = footerHit('medium')
     check('the think-level segment is locatable', effortHit !== null)
     if (effortHit !== null) {
@@ -850,6 +856,86 @@ for (const route of ['missing', 'ready', 'failed'] as const) {
   check('absent modes keep the permission fallthrough route',
     backendPermissionCommand(undefined, 'default', '') === undefined
       && backendPermissionCommand({ modes: [], currentIndex: -1 }, '', '') === undefined)
+}
+// ── B-1: the row you press Enter on decides which install surface runs ────────
+// Stage A resolved ONE host-global surface at composition time — Claude's wizard,
+// behind an `sdk-install` overlay that carried no backend id at all — so a second
+// installable backend could only ever have installed Claude's SDK. The surface is
+// now looked up per backend id, at the moment the row is picked (Stage B /
+// §6 item 12). These two rows are that fact end to end: one with a recipe opens the
+// wizard of *its own* recipe (a version and a directory nobody else declares), and
+// one without a recipe keeps its dead-end reason and opens nothing — the two fixture
+// shapes §5 asks for, at the Chat level rather than in the registry gate.
+{
+  const INSTALL_DIR = 'C:\\Users\\verify\\.dsh\\profiles\\acme'
+  const INSTALL_VERSION = '9.9.9'
+  const asked: string[] = []
+  const session: AgentSession = {
+    ...freshSession({}),
+    ref: { backendId: 'claude', sessionId: 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1' },
+  }
+  const channel = createChannel(ctx, session, { model: 'fake-model', provider: '', cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent' })
+  const term = new XTerm({ cols: 100, rows: 30, scrollback: 0, allowProposedApi: true })
+  class Out extends Writable { columns = 100; rows = 30; isTTY = true; _write(chunk: unknown, _e: BufferEncoding, cb: () => void): void { term.write(String(chunk), cb) } }
+  class In extends PassThrough { isTTY = true; setRawMode() { return this }; ref() { return this }; unref() { return this } }
+  const stdin = new In()
+  const screen = (): string => viewportLines(term, 30).join('\n')
+  const instance = await ui.render(
+    React.createElement(Chat, {
+      channel: channel as never,
+      questionStore: new QuestionStore(),
+      approvalStore: new ApprovalStore(),
+      onExit: () => undefined,
+      fullscreen: false,
+      trajectorySeen: true,
+      // The registry projection the composition root hands in, plus the two facts
+      // the picker needs: nobody is installed, and exactly one backend has an
+      // install surface this host can run (claude's manifest recipe).
+      kernelEntries: kernelEntriesOf(listBackends()),
+      onProbeKernels: () => Promise.resolve({ claude: { installed: false }, codex: { installed: false } }),
+      onResolveSdkInstall: (id) => {
+        asked.push(id)
+        return id === 'claude'
+          ? {
+              executor: 'pnpm-profile-add',
+              specifier: `@acme/verify-sdk@${INSTALL_VERSION}`,
+              version: INSTALL_VERSION,
+              resolveTarget: () => ({ kind: 'profile', dir: INSTALL_DIR }),
+              start: () => ({ result: Promise.resolve({ kind: 'cancelled' as const }), cancel: () => undefined }),
+              preflight: () => Promise.resolve(true),
+            }
+          : undefined
+      },
+    }),
+    { stdout: new Out() as never, stdin: stdin as never, stderr: new Out() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  try {
+    await sleep(300) // 固定窗:pacing the key handlers attach after the first frame.
+    for (const char of '/kernel') stdin.write(char)
+    await sleep(60) // 固定窗:pacing the prompt applies typed characters on its own render tick.
+    stdin.write('\r')
+    check('B-1: the picker marks the not-installed row of the one installable backend',
+      await settled(() => screen().includes(t('kernel-not-installed-installable'))), screen())
+    // A row whose manifest declares no recipe: Enter is the dead end it always was,
+    // and the host is never even asked (nothing to look up).
+    stdin.write('\x1b[B')
+    await sleep(150) // 固定窗:pacing 模态 Enter 有 80ms 防抖，焦点移动要走完一个渲染帧。
+    stdin.write('\r')
+    check('B-1: a row with no recipe opens no wizard at all — it keeps its dead-end reason',
+      await settled(() => channel.notifications.some(item => item.text === t('kernel-unavailable-not-installed'))
+        && !screen().includes(t('sdk-install-title'))) && asked.length === 0,
+      `${asked.join()} | ${channel.notifications.map(item => item.text).join(' | ')} | ${screen()}`)
+    stdin.write('\x1b[A')
+    await sleep(150) // 固定窗:pacing 同上（回到 Claude 行）。
+    stdin.write('\r')
+    check('B-1: the wizard is built from THAT row\'s recipe — its version and its target, not a host constant',
+      await settled(() => screen().includes(t('sdk-install-title')) && screen().includes(INSTALL_VERSION) && screen().includes(INSTALL_DIR)
+        && !screen().includes('0.3.287')) && asked.join() === 'claude', `${asked.join()} | ${screen()}`)
+  } finally {
+    instance.unmount()
+    channel.releaseContributions()
+    term.dispose()
+  }
 }
 console.log(`\nverify-backend-chat OK (${passed} checks)`)
 process.exit(0)

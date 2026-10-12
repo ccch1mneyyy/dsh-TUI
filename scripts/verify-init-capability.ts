@@ -17,7 +17,7 @@ process.env.USERPROFILE = home
 process.env.DSH_HOME = home
 process.env.CLAUDE_CONFIG_DIR = join(home, 'claude')
 process.env.DSH_TUI_LANG = 'en'
-const [{ createChannel }, { channelCapabilities }, { LOCAL_COMMANDS }, { openClaudeSession }, { fakeClaudeSdk, claudeDeps, tick }] = await Promise.all([
+const [{ createChannel }, { channelCapabilities }, { completeCommands, LOCAL_COMMANDS, parseCommandName }, { openClaudeSession }, { fakeClaudeSdk, claudeDeps, tick }] = await Promise.all([
   import('../src/dsh-adapter/channel.js'),
   import('../src/channel/capabilities.js'),
   import('../src/commands.js'),
@@ -37,22 +37,31 @@ const session = (capabilities: Omit<SessionCapabilities, 'native'> = {}): AgentS
   submit: async () => ({ accepted: true }), cancel: async () => ({ stillQueued: [], outcome: 'confirmed' }), dispose: async () => undefined,
 })
 const channel = (caps: Omit<SessionCapabilities, 'native'> = {}, oauth?: unknown) => createChannel(context(oauth), session(caps), { model: 'fixture', provider: '', cwd: home, activity: false, initialHistory: [] })
+const backendCommands = [
+  ...['init', 'Init', 'INIT'].map(name => ({ name, description: 'duplicate backend name' })),
+  { name: 'deploy', description: 'non-colliding backend skill' },
+]
 
 try {
-  const absent = channel()
+  const absent = channel({ commands: { list: async () => backendCommands } })
   try {
-    check('no init capability means no backend host and no menu entry', absent.backendInit() === undefined && !absent.commandList.some(command => command.name === 'init'))
+    await tick()
+    check('no init capability hides every case variant of a colliding backend command', absent.backendInit() === undefined && !absent.commandList.some(command => command.name.toLowerCase() === 'init'))
     check('unsupported init keeps the explicit unavailable result', absent.initWorkspace() === null && absent.notifications.length > 0)
   } finally { absent.releaseContributions() }
 
   let calls = 0
-  const native = channel({ init: { run: async () => { calls += 1 } }, commands: { list: async () => [{ name: 'init', description: 'duplicate backend name' }] } })
+  const native = channel({ init: { run: async () => { calls += 1 } }, commands: { list: async () => backendCommands } })
   const init = native.backendInit()!
   try {
     check('the declared init capability appears in the local menu', native.backendCapabilities.init && native.commandList.some(command => command.name === 'init'))
-    check('backendInit delegates to the production capability', await init.run() && calls === 1)
     await tick()
-    check('local /init wins a backend command name collision', native.commandList.filter(command => command.name === 'init').length === 1 && native.commandList.find(command => command.name === 'init')?.origin !== 'backend')
+    const initCommands = native.commandList.filter(command => command.name.toLowerCase() === 'init')
+    check('local /init wins every case variant of a backend command name collision', initCommands.length === 1 && initCommands[0]?.name === 'init' && initCommands[0].origin !== 'backend')
+    check('a non-colliding backend skill remains available', native.commandList.some(command => command.name === 'deploy' && command.origin === 'backend' && command.skill))
+    const completions = completeCommands('/ini', native.commandList)
+    check('init completion has one entry that parses as the local command', completions.length === 1 && parseCommandName(completions[0]!.commandLine)?.name === 'init')
+    check('backendInit delegates to the production capability', await init.run() && calls === 1)
   } finally { native.releaseContributions() }
   check('a released init host cannot act on the old session', await init.run() === false && calls === 1)
 

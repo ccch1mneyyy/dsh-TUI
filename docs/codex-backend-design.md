@@ -115,6 +115,7 @@ fixture 名指 `scripts/fixtures/codex/wire/` 下的录制（C0 已脱敏入库�
 | F28 | 官方审批选项文案与决策：命令 `Yes, proceed`(accept) / `Yes, and don't ask again for commands that start with …`(acceptWithExecpolicyAmendment) / `… for this command in this session`(acceptForSession) / `No, continue without running it`(decline) / `No, and tell Codex what to do differently`(cancel)；文件 `Yes, proceed` / `Yes, and don't ask again for these files`(acceptForSession) / `No, and tell Codex what to do differently`(cancel) | [src] tui/bottom_pane/approval_overlay.rs |
 | F29 | 中转请求可能静默卡住（无 error、无重试，90 s 无任何通知）；同一连接上的其他 thread 不受影响 | [live] s1 T1 |
 | F30 | pi-ai 的 `openai-codex` 登录从访问令牌 JWT 的 `https://api.openai.com/auth.chatgpt_account_id` 解出账户 id（`chatgpt_plan_type` 同处） | [src] pi-ai dist/auth/oauth/openai-codex.js |
+| F31 | 0.160.1 的 inline `review/start` 返回的 turn id 用于评审 item 与 `turn/completed`；`turn/started` 另报 lifecycle id，`turn/interrupt` 必须用后者。`enteredReviewMode` 可先于 `turn/started` 到达，评审用户 item 的 `clientId` 为 `null` | [offline probe] 临时 CODEX_HOME + loopback 故障 provider，无真实凭据；`verify-codex-controls` / `verify-codex-input` 固化时序 |
 
 ---
 
@@ -249,6 +250,17 @@ export function spawnTransport(options: TransportOptions): Transport
   `CODEX_CI`、`CODEX_SANDBOX`、`CODEX_SANDBOX_NETWORK_DISABLED`、`CODEX_PERMISSION_PROFILE`、
   `CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS`、`CODEX_INTERNAL_ORIGINATOR_OVERRIDE`、
   `CODEX_MANAGED_BY_*`、`CODEX_MANAGED_PACKAGE_ROOT` 与前缀 `CODEX_NETWORK_PROXY_`。
+- provider 密钥注入（`backend.ts`）：用户自己 config.toml 里 provider 的 `env_key`（如
+  `DEEPSEEK_API_KEY`）若未随启动环境导出、但 DSH 凭据库（`$DSH_HOME/.credentials.yaml`，经
+  `BackendHost.tokenStore` 同一文件视图）声明了该 ref，则在 `config/read` 后把值注入子进程环境并
+  重取 hub——存储的 key 无需 shell 导出即可用。key 记入 `injectedEnvKeys` 参与 hub 指纹，无 key 的
+  hub 不会被需要 key 的会话复用；值只进 spawn 管道，不进日志/提示/事件。两边都拿不到时**不拦启动**：
+  拒绝发生在 Codex 自己的每个回合，运行时只把原因作为 start notice 报一次（点名 provider 与变量名，
+  不含值），用户可导出变量、写入凭据库或改用渠道。
+- 凭据库读取顺序（`utils/credentials.ts`、`backends/shared/channel-tokens.ts`）：先活动 home 的
+  `.credentials.yaml`（`$DSH_HOME`，未设置时为 `~/.dsh`），再回退默认 `~/.dsh/.credentials.yaml`——
+  `DSH_HOME` 覆盖不再让写在文档位置（README 与 `/doctor` 都点名 `~/.dsh`）的 key 失联。**写只进活动
+  home**，回退只影响读；启动器 `bin/dsh-tui.js` 的 doctor 镜像同一顺序，两处不许分叉。
 
 ### 5.2 `rpc/client.ts`
 
@@ -344,7 +356,9 @@ export function acquireCodexHub(host: BackendHost, settings: HubSettings): Codex
     `auth.json` → `unknown`（**评审修订**：已登录用户不能被判成 missing）；否则 `missing`。
     `missing` 不置灰：Codex 声明 `loginInSession`（N7），内核行可选并提示"启动后用 /login 登录"。
   - 版本低于 `MIN_CODEX_VERSION`：独立的"版本过旧"原因并保留升级 hint（**评审修订**：不能显示成
-    "未安装"——Codex 没有安装向导，用户需要知道该升级）。
+    "未安装"——Codex 没有安装向导，用户需要知道该升级）。**P0 起**这个原因来自
+    `BackendDetection.stale`（检测侧自己声明），宿主 UI 不再按 `id === 'codex'` 分支
+    （任何后端过旧都会自动得到同一行文案）。
 
 ### 5.5 `backend.ts`
 
@@ -434,6 +448,12 @@ interface CodexSessionState {
 - 只有 `item/started{userMessage}` 带回相同 `clientId` 时才认领 pending（`pending.changed{claimed}`）
   并产出 `user.message`（D8）。`turn/start` 失败 → 移除该 pending 并返回
   `{accepted:false, reason}`。
+- `/review`、`/diff`、`/usage` 与只切换模式的 `/plan` 不走普通消息回显，命令成功后
+  主动认领 pending；拒绝结果由 channel 移除预览并显示原因。评审同时保留完成 id 与
+  lifecycle id（F31），发起 `review/start` 前即占住输入闸门，早到的取消等待后者，
+  启动 RPC 失败则释放等待；完成事件按前者释放队列，投影锚点保留评审 id。正常完成
+  与强制收尾共用关闭记录，迟到的启动回执、`enteredReviewMode` 与 lifecycle 通知
+  都不能重新占住已关闭评审的输入闸门。
 - 每次 `turn/start` 都携带当前的覆盖（`model`、`effort`、`approvalPolicy`、`sandboxPolicy`、
   `collaborationMode`）——只在与 thread 当前设置不同的时候才带，带了即对后续回合生效（协议语义）。
 
@@ -459,7 +479,7 @@ interface CodexSessionState {
 | `item/fileChange/requestApproval` | `permission.request{toolName:'apply_patch', callId:itemId, reason, blockedPath:grantRoot?, displayName:t('tool-name-edit'), feedback:true}` | `allow-once`(accept) · `allow-always` id=`session` label=`t('codex-approve-session-files')`(acceptForSession) · `reject` |
 | `item/permissions/requestApproval` | `permission.request{toolName:'permissions', description:<RequestPermissionProfile 摘要>, reason}` | `allow-once` → `{permissions:<请求的全部>, scope:'turn'}` · `allow-always` id=`session` → `scope:'session'` · `reject` → `{permissions:{}, scope:'turn'}` |
 | `item/tool/requestUserInput` | `question.request{requestId, callId:itemId, questions: 每个 question 一项：header、question、options(label/description)、`hideCustomInput: !isOther`、`secret: isSecret`（N3）}` | 应答 `{answers:{<qid>:{answers:[选中 label…, 自定义文本?]}}}`；取消（**C0 已验证**，V7：错误应答与 `{answers:{}}` 等价，官方 TUI 的 Esc 是中断回合）→ 应答 `{answers:{}}` 并 `turn/interrupt`；`autoResolutionMs` 非空时到点自动以首选项应答并 notice |
-| `mcpServer/elicitation/request` | 经中立的 `src/channel/elicitation.ts`（N2，从 Claude 迁来）转 `question.request` | 应答 `{action:'accept'\|'decline'\|'cancel', content, _meta:null}`；URL 模式 → 链接问题（与 Claude 一致） |
+| `mcpServer/elicitation/request` | 经中立的 `src/backends/shared/elicitation.ts`（N2 从 Claude 迁来，**B-3 从 `src/channel/` 移到后端中立接缝并去掉自带文案**：调用方交一份 `ElicitationText`）转 `question.request` | 应答 `{action:'accept'\|'decline'\|'cancel', content, _meta:null}`；URL 模式 → 链接问题（与 Claude 一致） |
 | `account/chatgptAuthTokens/refresh` | 不进界面，hub 的 auth 处理（§5.10） | — |
 | `applyPatchApproval` / `execCommandApproval`（v1 遗留） | 不应出现（v2 客户端）；出现则 `respondError(-32601)` 并调试日志 | — |
 | `item/tool/call`、`attestation/generate`、`currentTime/read` | 不声明 dynamic tools / attestation：`respondError(-32601)`；`currentTime/read` 应答当前时间 | — |
@@ -724,11 +744,16 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
   AGENTS.md 模板生成器，非 DSH 会话会被拒绝），所以 `/init` **不能**作为后端命令——它会被本地名字
   遮住，永远到不了后端。改由 N9 的 `init` 能力承接：Codex 的实现提交官方 `/init` 提示词（从
   `codex-rs/tui` 取原文并注明来源版本）。本地已有的名字见 `src/commands.ts` 的 `LOCAL_COMMANDS`，
-  设计后端命令前先查重；完整对照见 §8.6。
+  设计后端命令前先查重；完整对照见 §8.6。**B-5**：本模块不再读宿主命令表——保留名改为自有的
+  四条加 manifest 声明派生的三个（§5.20），"本地名字优先"仍由宿主在合并后端列表时承担，
+  所以上面这条"先查重"现在只约束**设计**（别指望后端替你挡），不约束实现。
 - `/btw`（`sideQuery`）：`thread/fork{threadId, ephemeral:true}` → `turn/start{input, approvalPolicy:'never', sandboxPolicy: read-only, developerInstructions 附加"只回答，不使用工具"}` →
   收集 agentMessage delta 为 `onText` → 完成后 `thread/unsubscribe`；`signal` 中断 →
-  `turn/interrupt`。**C0 已验证**（V12）：ephemeral fork（`path:null`）带原上下文可跑回合，不出现在
-  `thread/list`、不写 rollout 文件。`/recap` 同路径（固定提示词）。
+  `turn/interrupt`。fork 不带 `deferGoalContinuation`：0.162 起 app-server 拒绝它与 `ephemeral`
+  组合，且 ephemeral fork 本就不延续目标。fork 报 "no rollout found"（会话还没落过盘，
+  例如新会话首轮未完成）时回退 `thread/start{ephemeral:true}` 新线程作答——该状态下
+  对话本就为空，无上下文可携带。**C0 已验证**（V12）：ephemeral fork（`path:null`）带原
+  上下文可跑回合，不出现在 `thread/list`、不写 rollout 文件。`/recap` 同路径（固定提示词）。
 - hooks：`hook/started`/`hook/completed` → info notice（`key: hook:<run.id>`，完成时替换为
   "hook <eventName> 完成/失败（耗时）"）；`hookPrompt` item → `user.message{source:'injected', label:'hook'}`。
 
@@ -758,6 +783,49 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 - 官方 TUI 用 `!` 产生的 `userShell` 回合（F17）出现在历史里时，按终端卡回放
   （标题前缀 `!`，turn origin `user`）。
 
+### 5.20 文案与公开面（B-5）
+
+**自带文案**：用户可见的每一条字符串都在 `text.ts`——218 条，`zh`/`en` 双语，
+`codexText()` 按当前语言取值。其中 169 条 `codex-*`、42 条 `elicit-*`（MCP elicitation →
+问卷的表单文案，表单机本身在 `backends/shared/elicitation.ts`，是后端无关的纯函数）、
+7 条与平台共用（`capability-failed`、`doctor-unknown`、`effort-invalid`、
+`status-rate-limit-{five-hour,seven-day}`、`tool-name-{bash,edit}`）——**这 7 条自 C-2 起不再
+是本后端自己的一份副本**：它们住在 `src/backends/shared/platform-text.ts`，是宿主与内置后端
+共用的**单一数据源**（宿主字典展开同一份），本后端用 `pickPlatformText()` 取自己渲染的那几条，
+`verify-i18n` 的跨字典段盯着"有没有人又写回一份副本"。键名逐字沿用宿主
+字典的旧键名，所以 B-5 那次搬迁在 diff 里可以逐条核对；宿主字典里的两段（`codex-*`、
+`elicit-*`）同时删除，`kernel-label-codex` 除外——那是 manifest 的 `label` 键，走 inTree
+特权通道，不归字典迁移管。两条规则（`{{name}}` 占位、`count` 复数）的**机制**在
+`src/backends/shared/localized-text.ts`；codex 没有任何一条文案带复数形（实测没有一处
+`t()`/`codexText()` 传 `count`），所以它不带 claude 那套复数选择器。语言从 `host.locale`
+活读（`/lang` 切换对下一条字符串即生效），由 `detect()`、`open()` 与会话打开处安装；
+在这三者之前没有 host 可问，兜底 `zh`——与 `src/i18n.ts` 自己文档化的最后兜底同源。
+
+**自己的路径**：prefs（`~/.dsh-tui/backends/codex/prefs.json`）与 channels 的目录改为
+**必填**，由 `host.dataDir` 提供（真源与旧公式同源：`<DATA_DIR>/backends/<id>`）；没有
+host 时降级为内存（`memoryCodexPrefs` / `memoryCodexChannels`），既不落盘也不猜路径
+（D2/D3）。`catalogPrefs` 因此是惰性的：模块加载时求值会在任何 host 出现之前定下目录。
+catalog 的 `snapshotKey` 走 codex 自己的家目录（`codexHomeDir()` + `CODEX_SQLITE_HOME`），
+不经 `DATA_DIR`，路径语义未变；`clientVersion` 由 `host.appVersion` 提供。
+
+**不读宿主命令表**：`session/commands.ts` 的保留名来自**自己的能力声明**——自己的四条
+（`review`/`diff`/`plan`/`usage`），加上 manifest `capabilities` 里声明的
+`goals`/`channels`/`permissions` 对应的三个名字。与宿主 local 命令重名的 skill 不再在这里
+过滤：上报列表会带上这些名字，宿主合并后端列表时丢弃（"local names win"，
+`dsh-adapter/channel/core/session-controls.ts`），用户可见列表不变；`submit` 也不再拿宿主
+命令表做防御——Chat 层在分发前已把 local 名分流。claude 本来就是零过滤，两个内置后端
+自此同构。
+
+**不做的事**：不声明 `nativeKey`（B-5 定夺：这个后端不读 `native.<key>` 通道，它的会话写
+`native: {}`；从一个没有生产者的声明里派生规则只会放宽边界门禁）；`vendorPackages: []`
+与缺席的 `install` 同样是在陈述事实，而不是留白。
+
+**门禁**：`src/backends/<id>/**` 的孤岛规则（只许 import 自己目录、`src/agent/`、
+`src/backends/shared/`、node 内建与 manifest 声明的厂商包；`import type` 也算）自此对
+**全部后端无条件生效**——`scripts/adapter-boundary.allowlist.json` 的 `backendEntries`
+存量违例清单从 33 对清零。回归脚本的期望文案改读各自后端的副本（`codexText` / `claudeText`），
+宿主字典不再是后端文案的 oracle。
+
 ---
 
 ## 6. 中立层改动（N1–N7）
@@ -766,13 +834,14 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 
 | # | 改动 | 文件 | 形状 | 期 |
 | --- | --- | --- | --- | --- |
-| N1 | 后端共享件目录 + 边界规则 | 新 `src/backends/shared/{atomic-file,channel-tokens}.ts`（从 `claude/` 移来，Claude 改 import）；`scripts/verify-adapter-boundary.ts`、`ADAPTER.md` 规则表 | `shared/` 不得 import `@*/` 厂商包与 `backends/<任何具体后端>/`；`backends/<a>/` 不得 import `backends/<b>/`（`shared/` 除外）；新增 `native.codex` 规则（`allowedIn: 'backends/codex/'`）。`ClaudeChannelTokens` → `ChannelTokenStore`（类型别名保留一期以减小 diff） | C0 |
-| N2 | MCP elicitation ↔ 问卷的纯函数 | 新 `src/channel/elicitation.ts`（从 `claude/dialogs.ts` 抽出 form schema → `QuestionItemView[]`、答案 → `content`、校验与重问、URL 模式问题） | 输入为 MCP 规范形状（`requestedSchema`、`mode`、`url`），无厂商类型；Claude 改为调用它（`verify-claude-dialogs` 不变绿） | C2 |
+| N1 | 后端共享件目录 + 边界规则 | 新 `src/backends/shared/{atomic-file,channel-tokens}.ts`（从 `claude/` 移来，Claude 改 import）；`scripts/verify-adapter-boundary.ts`、`ADAPTER.md` 规则表 | `shared/` 不得 import `@*/` 厂商包与 `backends/<任何具体后端>/`；`backends/<a>/` 不得 import `backends/<b>/`（`shared/` 除外）；新增 `native.codex` 规则（`allowedIn: 'backends/codex/'`）——**B-5 删除**：该后端不读 `native` 通道，声明它只是没有生产者的预留（§5.20）。`ClaudeChannelTokens` → `ChannelTokenStore`（类型别名保留一期以减小 diff） | C0 |
+| N2 | MCP elicitation ↔ 问卷的纯函数 | 新 `src/backends/shared/elicitation.ts`（从 `claude/dialogs.ts` 抽出 form schema → `QuestionItemView[]`、答案 → `content`、校验与重问、URL 模式问题；B-3 落地时从 `src/channel/` 移入接缝，文案改为调用方提供） | 输入为 MCP 规范形状（`requestedSchema`、`mode`、`url`），无厂商类型；Claude 改为调用它（`verify-claude-dialogs` 不变绿） | C2 |
 | N3 | 问卷保密输入 | `src/agent/events.ts` `QuestionItemView.secret?: true`；`AskUserQuestionPanel` 自定义输入以 `•` 掩码显示；答案记录行显示 `••••` | 缺省行为不变 | C2 |
 | N4 | 运行中工具的实时输出 | `events.ts` 新事件 `{ type:'tool.output'; callId; text; time; parentCallId? }`（追加片段）；共享投影器给工具行维护 `liveOutput`（有界尾部：最后 200 行 / 16 KiB，超出记 `liveOutputDropped` 计数）；`tool.result` 到达时清除；终端卡运行中渲染最后 5 行（dim，宽度按显示单元截断，超出时首行 `… N 行省略`），全屏模式 8 行 | DSH/Claude 翻译器不发此事件（`verify:agent-domain` 穷举里登记为"可选未用"）；投影器对未知 callId 忽略 | C2 |
 | N5 | 带真实行号的 unified patch | `channel-view.ts` `ToolFileDiff` 改为联合：`{path, oldText, newText}` \| `{path, patch, change?: 'add'\|'delete'\|'update', movePath?}`；`SplitDiffView`（及 diff 卡）对 `patch` 分支用已导入的 `JsDiff.parsePatch`（缺文件头时补 `--- a/<path>\n+++ b/<path>\n`）按 hunk 渲染真实新旧行号；`(+N -M)` 统计从 hunk 计算 | 旧分支零改动；窄宽度/CJK/超长行走现有换行与截断辅助 | C2 |
 | N6 | 目标预算 | `ChannelGoal.budget?: {tokensUsed, tokenBudget: number\|null, timeUsedSeconds}`；目标面板/状态行有 `budget` 时显示 `已用 12.3k / 50k tokens · 4m` 替代轮次；新能力 `goals?: { set(objective, {tokenBudget?}); pause(); resume(); clear() }`，核心 `/goal` 在会话无 `native.dsh` 时委托它 | DSH 目标不带 `budget`，显示不变 | C4 |
 | N7 | 内核注册数据化 | `kernelPrefs.ts` `KERNEL_IDS` 加 `'codex'`、`KERNEL_INFO.codex = {labelKey:'kernel-label-codex', product:'codex-cli'}`、`kernelDisplayName`；`dsh-adapter/backends.ts` `BACKEND_LOADERS.codex`；安装能力改为按内核（`installable(id)`，Codex 不可一键安装，只给 hint）；`BackendDetection.loginInSession?: true`（为真时 `auth:'missing'` 仍可选，行内提示"启动后 /login"）；`plugin.ts` 中 `kernel: 'dsh' \| 'claude'` 改 `KernelBackendId`；配置 Schema 与 `--backend`/`DSH_TUI_BACKEND` 接受 `codex` | 现有两内核行为不变 | C1 |
+| — | **后续（P0 后端注册表）**：N7 这套"往闭集里加 id"的接法已被取代——每个内置后端自此都有 `manifest.ts`，`KERNEL_IDS`/`KERNEL_INFO`/`kernelDisplayName`/`BACKEND_LOADERS` 不再存在，第 4 个后端只需新增一个目录。历史记录保留在此，接新后端请看 [agent-backend-design.md](agent-backend-design.md#接入新后端) 与 [ADAPTER.md](../ADAPTER.md) 的「后端 manifest」 | 三内核行为逐字不变 | — |
 | N8 | 用量与上下文占用的中立通道（**评审修订**） | **N8a** 新事件 `{ type:'usage'; turn; step?; usage: UsageDelta; time; model? }`：投影器只记账（tokens、费用分桶、`lastUsage`、回合账本），不建行、不改行，`/trace` 与导出不收录。取代 C1 评审修复里的 `assistant.message.usageOnly` 标志（R-D1）——"一条不是消息的消息"会让每个消费 `assistant.message` 的地方都得特判它；独立事件让不关心的消费者走默认分支自然忽略。**N8b** 投影器记住最近的 `context.usage{used,max}`，核心的上下文占用（`resolveContextOccupancy`）在没有 DSH 投影值时**优先**用它，其次才是计费样本 | DSH/Claude 都不发这两个事件（已核对三个翻译器），行为不变；`verify:agent-domain` 登记 | C2（第一项） |
 | N9 | 可选的 `init` 能力（**评审修订**） | `SessionCapabilities.init?: { run(): Promise<void> }`；核心 `/init` 在会话没有 `native.dsh` 且声明了 `init` 时委托它，否则维持现状（DSH 扩展生成模板 / 明确不可用） | DSH 不变；Claude 可顺带声明（提交 CLI 的 `/init`），恢复目前被本地名字遮住的 `/init` | C2 |
 
@@ -909,8 +978,9 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 ## 8. 显示规格（体验第一）
 
 对照基准：官方 TUI 的快照测试（`codex-rs/tui/src/**/snapshots/*.snap`，调研材料里有）。
-目标是**信息对等**，呈现用 dsh-TUI 现有组件与主题。所有文案 zh/en 双语进 `src/i18n.ts`
-（键名前缀 `codex-`），按显示单元宽度截断（仓库宽度辅助函数），不按字符串长度。
+目标是**信息对等**，呈现用 dsh-TUI 现有组件与主题。所有文案 zh/en 双语，B-5 起**自带**在
+`src/backends/codex/text.ts`（键名沿用宿主字典的旧键名；平台共用的那几条在宿主字典里另有
+副本，见 §5.20），按显示单元宽度截断（仓库宽度辅助函数），不按字符串长度。
 
 ### 8.1 命令（`commandExecution`）
 
@@ -1142,7 +1212,7 @@ contributing 的规则单独重跑并在进度日志说明。
    （把 `usageOnly` 迁到独立 `usage` 事件 + 投影器采用 `context.usage` 占用读数）；事件流不变量
    检查器（§10.3）接入并跑全部后端的 fixture。
 2. **接上中立层**：`tool.output`（≤10 Hz 合并）、diff 卡换成 N5 的 `patch`、`isSecret` → `secret`、
-   elicitation 走 `src/channel/elicitation.ts`。
+   elicitation 走 `src/backends/shared/elicitation.ts`（B-3 起，文案由 codex 自己带）。
 3. **控制面**：models/effort；modes（§5.9：Shift+Tab 只切 Plan，权限档走 `/permission`）与计划评审；
    compact；context（官方 12k 基线公式）；account；rate-limit；mcp；commands（`/review`、`/diff`、
    `/plan`、`/usage`、skills）；N9 `init`；bubblewrap 对话内提示；默认设置优先级（§5.5）。

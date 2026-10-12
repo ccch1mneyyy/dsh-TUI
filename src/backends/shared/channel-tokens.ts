@@ -8,6 +8,9 @@
  *
  * This module is a direct, host-side file view of that store (a non-DSH
  * backend has no cordis context to resolve `ctx.get('credentials')` from).
+ * Reads consult the active home's store and then the default `~/.dsh` store
+ * (`credentialStoreFiles`), so a `DSH_HOME` override does not orphan a key the
+ * user stored at the documented location; writes always target the active home.
  * The store is edited through a YAML document parser (`yaml`): the top-level
  * `refs` mapping is found in block or flow style, quoted keys included;
  * foreign fields, comments and multiline scalars keep their meaning, and a
@@ -30,7 +33,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isMap, parseDocument, type Document, type YAMLMap } from 'yaml'
-import { dshHomeDir } from '../../utils/credentials.js'
+import { credentialStoreFiles, dshHomeDir } from '../../utils/credentials.js'
 import { writeFileAtomic } from './atomic-file.js'
 
 /** The credential ref of one channel id (the deriveKeyRef convention:
@@ -59,14 +62,18 @@ const FILE = '.credentials.yaml'
  * `~/.dsh/.credentials.yaml`). */
 export function fileChannelTokens(home: string = dshHomeDir(), debug: (message: string) => void = () => undefined): ChannelTokenStore {
   const path = join(home, FILE)
+  // Writes stay in the active home; reads also consult the default `~/.dsh`
+  // store so a key stored at the documented location survives a DSH_HOME
+  // override (the codex bridge injects provider env keys from here).
+  const files = credentialStoreFiles(home)
 
-  /** Parse the store into a YAML document; undefined for a file that
+  /** Parse one store into a YAML document; undefined for a file that
    *  cannot be read or does not parse (never rebuilt over). An absent file
    *  parses as an empty document, so the first write can create it. */
-  const load = (): Document | undefined => {
+  const load = (file: string): Document | undefined => {
     let text: string
     try {
-      text = readFileSync(path, 'utf8')
+      text = readFileSync(file, 'utf8')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return parseDocument('')
       debug('dsh-tui: channel token store unreadable (' + (error instanceof Error ? error.message : String(error)) + '); refusing to touch it')
@@ -91,6 +98,14 @@ export function fileChannelTokens(home: string = dshHomeDir(), debug: (message: 
     return isMap(refs) ? refs : null
   }
 
+  /** The `refs` mapping of one candidate store (undefined when it has none). */
+  const refsAt = (file: string): YAMLMap | undefined => {
+    const doc = load(file)
+    if (doc === undefined) return undefined
+    const refs = refsOf(doc)
+    return refs === undefined || refs === null ? undefined : refs
+  }
+
   const commit = (next: string): void => {
     try {
       writeFileAtomic(home, FILE, next)
@@ -100,17 +115,16 @@ export function fileChannelTokens(home: string = dshHomeDir(), debug: (message: 
   }
   return {
     read: ref => {
-      const doc = load()
-      if (doc === undefined) return undefined
-      const refs = refsOf(doc)
-      if (refs === undefined || refs === null) return undefined
-      const value = refs.get(ref)
-      // Only a non-empty string scalar is a token; null/number/boolean
-      // scalars are declared but not usable credential material.
-      return typeof value === 'string' && value !== '' ? value : undefined
+      for (const file of files) {
+        const value = refsAt(file)?.get(ref)
+        // Only a non-empty string scalar is a token; null/number/boolean
+        // scalars are declared but not usable credential material.
+        if (typeof value === 'string' && value !== '') return value
+      }
+      return undefined
     },
     write: (ref, value) => {
-      const doc = load()
+      const doc = load(path)
       if (doc === undefined) return
       const refs = refsOf(doc)
       if (refs === null) {
@@ -129,7 +143,7 @@ export function fileChannelTokens(home: string = dshHomeDir(), debug: (message: 
       if (next !== '') commit(next)
     },
     erase: ref => {
-      const doc = load()
+      const doc = load(path)
       if (doc === undefined) return
       const refs = refsOf(doc)
       if (refs === undefined || refs === null) return
@@ -137,12 +151,7 @@ export function fileChannelTokens(home: string = dshHomeDir(), debug: (message: 
       refs.delete(ref)
       commit(doc.toString({ lineWidth: 0 }))
     },
-    declared: ref => {
-      const doc = load()
-      if (doc === undefined) return false
-      const refs = refsOf(doc)
-      return refs !== undefined && refs !== null && refs.has(ref)
-    },
+    declared: ref => files.some(file => refsAt(file)?.has(ref) === true),
   }
 }
 

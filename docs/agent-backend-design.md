@@ -154,7 +154,7 @@ Record<keyof Options, …>`，SDK 增删选项时 `tsc` 会报错）。要点：
 - `AskUserQuestion` 走问卷面板；`ExitPlanMode` 走计划评审面板。
 - SDK 的 abort signal、会话 dispose 与切换都会撤回挂起的请求，不会让面板卡住。
 - MCP elicitation：表单每个字段一题并按字段约束校验；URL 模式给出链接提示。表单与 URL
-  问题的规则在后端中立的 `src/channel/elicitation.ts`，后端只负责挂起与应答。
+  问题的规则在后端中立的 `src/backends/shared/elicitation.ts`，后端只负责挂起与应答（文案由各后端自带）。
 - 拒答回退：只声明 `refusal_fallback_prompt` 一种对话框（重试回退模型或取消）。
 
 ### 子代理与后台任务
@@ -171,6 +171,9 @@ Record<keyof Options, …>`，SDK 增删选项时 `tsc` 会报错）。要点：
 - 目录（`catalog.ts`）：`listSessions` 带 `includeProgrammatic: true`。SDK 创建的会话
   在 CLI 自己的 `/resume` 选择器里是隐藏的，所以 dsh-tui 建的会话要用
   `claude --resume <id>` 打开。
+  后端通过 `SessionCatalog.snapshotKey()` 声明存储作用域，共享 channel 在完整读取
+  后记录首屏快照，每次打开仍刷新官方目录。`list()` 的可选回调可提前展示分页，
+  部分或失败的读取不写完整快照；DSH 使用同一快照实现，保留 JSONL provider 的作用域键。
 - 恢复：先读历史（`getSessionMessages` 加子代理转录）并在订阅前同步画出，再接 live；
   续接后的翻译器沿用回放的编号。上下文窗口无法从转录恢复，等首个 `result` 补上。
 - 加载更早消息（`older-history.ts`、`transcript-file.ts`）：从原生 JSONL 沿压缩边界
@@ -206,13 +209,28 @@ SDK `settings` 选项把路由钉回 `https://api.anthropic.com`。CLI 拒绝令
 - 托管（policy）设置在会话运行中改了路由时，要到下一次启动 CLI 才重新判定。
 - 绕过 dsh-auth 文件锁写凭据的进程仍可能与令牌刷新交错。
 
+### 文案与公开面（B-3 起）
+
+用户可见的每一条字符串都在 `text.ts`（`claude-*` 与它自带的 `elicit-*`，双语，
+`claudeText()` 按 `host.locale()` 实时取语言）：后端不再 import 宿主字典，也就不再有
+"这个键还属于 claude 家族"的假从属关系。它只从 `src/agent/`、`src/backends/shared/`、
+自己的目录、node 内建与 manifest 声明的厂商包取值——`verify-adapter-boundary.ts` 把这条
+钉成"后端是孤岛"，`claude` 侧已清零。**与宿主界面共用的那几条平台文案不再各抄一份**：
+它们住在 `src/backends/shared/platform-text.ts`（单一数据源），宿主字典与两个后端都从它取
+（`shared/` 自身也被边界门禁钉成叶子：不许读宿主字典、投影层或宿主工具）；
+`verify-i18n` 的跨字典段盯着"有没有人又写回一份副本"。自己的 prefs / channels / 模型名缓存
+落在 `host.dataDir`（`~/.dsh-tui/backends/claude`），跑着的 TUI 版本由 `host.appVersion`
+提供，`launch.sessionPrefs(host)` 也从同一个 host 取目录。
+
 ## Codex 后端（`src/backends/codex/`）
 
 - **传输与契约**：调用用户安装的 `codex app-server`，stdio JSON-RPC；不依赖 Codex SDK
   npm 包。协议类型从 codex-cli 0.160.1 生成并入库，最低 0.144.0；`contract.ts` 与
   `verify:codex-contract` 守住摘要/方法名/版本策略，生成类型不扩大运行时信任边界。
 - **进程与环境**：`rpc/hub.ts` 按运行设置/路由指纹复用子进程和连接，多 thread 路由；
-  退出漏斗关闭全部 hub。保留用户 `CODEX_HOME`、证书与原生 provider 环境，只清除父级
+  退出漏斗关闭全部 hub——manifest 用 `unloadExport: 'closeAllCodexHubs'` 把这个**模块级/
+  进程级**资源池登记给注册表（宿主只对**真的加载过的条目**记账并调用，会话级资源归
+  `session.dispose()`）。保留用户 `CODEX_HOME`、证书与原生 provider 环境，只清除父级
   Codex 会话专用变量；Windows 解析真 `codex.exe`。不写官方 `config.toml`。
 - **凭据与渠道**：激活连接 > 第一方路由允许的 dsh-auth `openai-codex` 外部托管令牌 >
   Codex 自己的登录/API key。配置不可读时禁止托管注入；令牌不进 argv/事件/日志，失败
@@ -230,6 +248,18 @@ SDK `settings` 选项把路由钉回 `https://api.anthropic.com`。CLI 拒绝令
   无退出码时注明 exit unknown。goals 预算来自服务端；sideQuery 用只读临时 fork；
   hooks 生命周期通知与 hookPrompt 注入消息复用既有视图。缺实验方法时按实际能力
   降级，不因协议有名字假称可用。用户操作见[Codex 用户说明](codex-backend.md)。
+- **文案与公开面（B-5 起）**：用户可见的每一条字符串都在 `text.ts`（`codex-*` 169 条、
+  自带的 `elicit-*` 42 条、从共用数据源取的 7 条平台文案，双语，`codexText()` 按 `host.locale`
+  实时取语言），宿主字典里的这两段随之删除。那 7 条平台文案不再是本后端自己的副本，而是
+  `src/backends/shared/platform-text.ts` 的单一数据源（宿主字典同源）。prefs / channels 的
+  目录改由 `host.dataDir` 提供，没有 host 就降级为内存（不落盘、也不猜路径）；`clientVersion`
+  取 `host.appVersion`。`session/commands.ts` 的保留名从**自己的能力面**派生（自有四条 +
+  manifest 声明的 `goals`/`channels`/`permissions` 三个名字）：宿主命令表不是公开面，
+  与本地命令重名的 skill 交给宿主合并时丢弃（"local names win"），claude 与 codex 在这一步
+  同构。manifest 也不再声明 `nativeKey`（没有生产者的预留通道，声明它等于让 manifest
+  说谎），两个内置后端自此同形。`verify-adapter-boundary.ts` 的 `backendEntries` 存量清单
+  清零：孤岛规则对**每个**后端无条件生效。细节见
+  [codex 设计文档](codex-backend-design.md) §5.20。
 - **验证范围**：真实 0.160.1 app-server 的九项无凭据离线检查通过，没有模型回合/
   费用；真实订阅登录、带凭据模型调用、真实 TTY 本轮未运行。假进程/fixture 与
   无头界面回归不能替代它们。门禁与偏离见[施工日志](codex-backend-progress.md)。
@@ -244,17 +274,86 @@ SDK `settings` 选项把路由钉回 `https://api.anthropic.com`。CLI 拒绝令
 
 ## 接入新后端
 
-1. 新建 `src/backends/<id>/`，厂商包只在这里 import；在 `verify-adapter-boundary.ts`
-   登记对应的包与 `native.<id>` 规则。
-2. 实现 `AgentBackend`（检测、`open`、可选的离线会话目录）与 `AgentSession`。
-3. 写翻译器：把后端消息翻成 `AgentEvent`，live 与回放用同一套映射；不认识的消息
+`Backend` 是 `tui.dsh/v1alpha1` 的第三个贡献族（继设置区块、全屏场景之后），当前状态是
+**`alpha`、不承诺**：类型面、definition、contract profile、conformance 与**准入链路**
+（清单 → registry → descriptor，W-2 已接线）都可用；还没做的是把已挂载 bundle 的声明读进
+`registerBackend()` / picker 的那一步，它随 Stage C 的装链路落地。接入一个后端 = 按公开
+面写一份声明 + 实现 `AgentBackend` 与 `AgentSession`；**协议不依赖任何单个后端的特殊性**：
+claude（SDK peer + 安装向导）与 codex（系统 CLI + 进程池）必须都能用同一份声明面表达，
+两者的差异只落在 `install?`、`unloadExport?` 这类字段上——conformance 的两个正例
+（`valid-backend-contribution.json` 与 `valid-backend-contribution-cli.json`）与常驻假后端
+夹具钉的就是这条。仓内的 `manifest.ts` 是这份声明的
+**超集**，私有项不投影出去。完整口径见
+[tui-profile 说明 0009](../tui-profile/notes/0009-backend-contribution.md)，其中
+「Public surface（α）」一节是**承诺 / 不承诺清单**（导出面只增不删、破坏性变更怎么被发现）。
+
+1. 写 `src/backends/<id>/manifest.ts`——它投影出的**公开声明**（`tui.dsh/v1alpha1#Backend`）
+   字段是 `id`、`label`（**只收字面量**，宿主 i18n 键进不来）、`shortLabel`、`product?`、`capabilities`、`grants`、`install?`、
+   `unloadExport?`、`confirmation?`。形状由 `validateBackendSpec()`
+   （`tui-profile/protocols/tui-contributions.js`，经 `src/adapter/spec/tui-contributions.ts`
+   再导出）判定，"这个宿主能不能兑现"由 `backendAdmission()` 判定：未知的能力名或权限名
+   **降级不拒绝**（记为待决项），已知权限名而没有授权则注册但不进 picker，声明宿主保留的
+   `id`（`dsh`/`claude`/`codex`）在准入处被拒。仓内 manifest 是公开声明的超集：
+   `inTree`、`alwaysAvailable`、`nativeKey`、`vendorPackages`、`backendExport` 与
+   `label.kind === 'key'` 是私有项，`backendContributionOf()` 是唯一投影方向，门禁断言
+   投影不泄漏私有键且结果过 validator。
+2. **后端是孤岛**：只从自己目录、`src/agent/`（你实现的领域，含它为公开面再导出的视图类型）与
+   `src/backends/shared/`（中立接缝：原子写、JSONL、图片探测、elicit 表单机、`LocalizedText`）
+   取值，外加 node 内建与自己在 manifest 里声明的厂商包。宿主内部一律不可读——宿主字典
+   （`src/i18n.ts`）、`src/utils/`、`src/channel/`、`src/dsh-adapter/`——`import type` 也算；
+   `verify-adapter-boundary.ts` 钉住这条（存量违例在 allowlist 的 `backendEntries`）。
+   厂商包只在这里 import。构建期索引（`scripts/gen-backend-index.mjs`，挂在 `compile` 上）
+   会把它纳入注册表，门禁的厂商包与 `native.<id>` 规则也由它派生：**不要手改**
+   `kernelPrefs.ts` 与 `backends.ts`（目录与身份回归都按 ID 取项，新增目录不必同步它们）；
+   声明了非空 `vendorPackages` 或 `nativeKey` 时，`verify-adapter-boundary.ts` 的
+   `EXPECTED_*` 快照要与 `ADAPTER.md` 一并更新（派生结果逐字比对，门禁报错会写明——不声明
+   这两项的后端无需改动）；`install` 是**声明式配方**（`{ executor, specifier, version }`，
+   宿主侧执行器表在 `src/dsh-adapter/install/`，首版只有 `pnpm-profile-add`）：注册表查表
+   派生"这个条目可不可装"，选择器那行"未安装·按 Enter 安装"由此而来，装的是**你声明的**
+   specifier；没有包可装的后端（驱动系统 CLI 的那类）就不声明，那是一条一等公民的
+   降级路径（落检测自己的 hint，不长假按钮）；把 `pnpm compile` 重新生成的
+   `src/dsh-adapter/backends.generated.ts` 一起提交（它是入库的生成产物，过期会被
+   `verify-backend-registry` 判红）。字段语义与六条边界（id 语法、`nativeKey` 缺省的含义、
+   公开子集与私有项、`unloadExport` 只管进程级资源池、`install` 的执行器查表、恢复语义）见
+   [ADAPTER.md](../ADAPTER.md) 的「后端 manifest」一节。
+3. 实现 `AgentBackend`（检测、`open`、可选的离线会话目录）与 `AgentSession`。注册时交出的
+   handler 对象由 `assertBackendHandler()` 断言形状（`src/adapter/spec/tui-contributions.ts`
+   再导出）。
+4. 写翻译器：把后端消息翻成 `AgentEvent`，live 与回放用同一套映射；不认识的消息
    忽略，不崩。
-4. 按后端真实支持的东西声明 `SessionCapabilities`；没有的就不声明，界面会显示不可用。
-5. 工具卡经 `presentation` 描述，不在界面里按工具名分支。
-6. 子代理转录页按 [dsh-child-transcript.md](dsh-child-transcript.md) 的清单实现
+5. 按后端真实支持的东西声明 `SessionCapabilities`；没有的就不声明，界面会显示不可用。
+   同一份清单也是声明里的 `capabilities` 字段：它必须覆盖运行期
+   `AgentSession.capabilities` 实际返回的键集，而宿主不认识的名字降级不拒绝（见第 1 条）。
+6. 工具卡经 `presentation` 描述，不在界面里按工具名分支。
+7. 子代理转录页按 [dsh-child-transcript.md](dsh-child-transcript.md) 的清单实现
    `history`。
-7. 回归用假 SDK/假进程驱动（参考 `scripts/lib/claude-fake-sdk.ts`），翻译器用脱敏
-   fixture 测；登记进 `scripts/run-ci-group.mjs`。
+8. 宿主服务按 **feature-detect** 取，不是 grants：后端真正需要的东西（起子进程、读自己的
+   prefs、联网）不在宿主权限词表里。`BackendHost` 上与存储和文案有关的三项是：
+   `dataDir`（**可选**，`~/.dsh-tui/backends/<id>`，你自己的 prefs 与缓存写这里；缺席即
+   这次进程不落盘，**不要**自己拼一条宿主数据目录下的路径）、`locale()`（当前界面语言，
+   实时读：`/lang` 切换对下一条字符串生效）、`appVersion?`（跑着的 TUI 版本）；`tokenStore`、
+   `oauthCredential`、`stderr` 同样是可选成员——缺席即自己降级，不要假设它一定在。
+   `launch.sessionPrefs(host)` 拿到的也是这个 host（启动器在会话打开之前就要问上次会话）。
+   收口分两层：会话级资源归 `session.dispose()`，`unloadExport` 只用于模块级/进程级资源池，
+   且宿主只对真的加载过的条目记账并调用。
+9. **文案是后端自己的**（插件读不到宿主字典，也不该借宿主 i18n 键冒充首方文案）：把字符串
+   放在自己目录里，按 `host.locale()` 选 `zh`/`en`。两条规则（`{{name}}` 占位、`count`
+   复数）在 `src/backends/shared/localized-text.ts`，字典在你这边；`scripts/verify-i18n.ts`
+   会把你登记的字典按宿主字典同样的规则查（双语齐全、占位符一致、单花括号打回）。
+   `elicit` 表单机（`src/backends/shared/elicitation.ts`）是后端中立的，它不含任何文案：
+   调用时交一份 `ElicitationText` 快照（**一个流程一份**——选项标签按面板当时显示的字符串
+   匹配答案）。
+10. 恢复只走自己的 `lastSession()`：启动恢复只针对所选后端，恢复目标绑定后端身份，裸
+    `--resume` 只查该后端自己的 `lastSession`；后端不可用、没有上次会话、指定会话不存在
+    一律明确报错并**非零退出**，不回落、不恢复别的后端的上次会话、不自动新建。
+11. 回归用假 SDK/假进程驱动（参考 `scripts/lib/claude-fake-sdk.ts`），翻译器用脱敏
+    fixture 测；登记进 `scripts/run-ci-group.mjs`。
+12. **驱动系统 CLI 的后端**（codex 那种形态）走另一条一等公民路径：**不声明** `install`
+    ——声明了等于长出一个装不出任何东西的按钮——改为在 `detect()` 里报告 `installed` /
+    `version` 与"缺什么、怎么补"的 hint；进程池照旧用 `unloadExport` 登记给注册表。
+    这条形态与 SDK peer 形态（claude）由 conformance 的两个正例对照钉住（见上），宿主侧
+    由 `scripts/fixtures/probe-backend/` 的两种安装面夹具与
+    `scripts/verify-backend-contribution.ts` 的执行体覆盖。
 
 ## 验证
 

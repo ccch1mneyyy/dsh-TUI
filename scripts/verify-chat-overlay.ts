@@ -44,11 +44,11 @@ function reduce(state: ChatOverlay, ...actions: ChatOverlayAction[]): ChatOverla
 const fakeRow = { id: 7, kind: 'user', text: 'prompt' } as unknown as ChatRow
 
 // --- T1: open replaces, close resets -------------------------------------
-check('T1a open from none', reduce(NO_OVERLAY, { type: 'open', overlay: { kind: 'model', index: 2 } }), { kind: 'model', index: 2 })
+check('T1a open from none', reduce(NO_OVERLAY, { type: 'open', overlay: { kind: 'model' } }), { kind: 'model' })
 check(
   'T1b async open replaces the current overlay (effort landing over model)',
   reduce(
-    { kind: 'model', index: 2 },
+    { kind: 'model' },
     { type: 'open', overlay: { kind: 'effort', index: 1 } },
   ),
   { kind: 'effort', index: 1 },
@@ -56,8 +56,8 @@ check(
 check('T1c close', reduce({ kind: 'tips' }, { type: 'close' }), { kind: 'none' })
 check(
   'T1d open-if drops a stale async open when the user opened something else',
-  reduce({ kind: 'model', index: 0 }, { type: 'open-if', overlay: { kind: 'effort', index: 1 }, when: ['none'] }),
-  { kind: 'model', index: 0 },
+  reduce({ kind: 'model' }, { type: 'open-if', overlay: { kind: 'effort', index: 1 }, when: ['none'] }),
+  { kind: 'model' },
 )
 check(
   'T1e open-if opens over an allowed kind (idle, and flow stage transitions)',
@@ -75,8 +75,8 @@ check(
 check('T2a close-if matching', reduce({ kind: 'preset', index: 0 }, { type: 'close-if', kind: 'preset' }), { kind: 'none' })
 check(
   'T2b close-if mismatched is a no-op (stale loader must not close the picker the user opened later)',
-  reduce({ kind: 'model', index: 1 }, { type: 'close-if', kind: 'preset' }),
-  { kind: 'model', index: 1 },
+  reduce({ kind: 'model' }, { type: 'close-if', kind: 'preset' }),
+  { kind: 'model' },
 )
 
 // --- T3: move wrap parity with the boolean-era per-picker formulas --------
@@ -92,10 +92,10 @@ check('T3f thinking focus toggles on either arrow', reduce({ kind: 'thinking', f
 check('T3g effort modulo parity', [wrapIndex(1, -1, 3), wrapIndex(2, 1, 3)], [0, 0])
 
 // --- T4: set-index is kind-guarded ---------------------------------------
-check('T4a set-index applies on its picker', reduce({ kind: 'model', index: 0 }, { type: 'set-index', kind: 'model', index: 3 }), { kind: 'model', index: 3 })
+check('T4a set-index applies on its picker', reduce({ kind: 'preset', index: 0 }, { type: 'set-index', kind: 'preset', index: 3 }), { kind: 'preset', index: 3 })
 check(
   'T4b stale loader set-index ignored after the picker changed',
-  reduce({ kind: 'theme', index: 1 }, { type: 'set-index', kind: 'model', index: 3 }),
+  reduce({ kind: 'theme', index: 1 }, { type: 'set-index', kind: 'preset', index: 3 }),
   { kind: 'theme', index: 1 },
 )
 check(
@@ -169,7 +169,7 @@ check('T7g decision ignored outside rewind', reduce({ kind: 'tips' }, { type: 'r
 const gates = { workspaceTargetCount: 0, effortOptionCount: 0, presetOptionCount: 0 }
 const loaded = { workspaceTargetCount: 2, effortOptionCount: 3, presetOptionCount: 2 }
 check('T8a none never mounts', dialogOverlayVisible(NO_OVERLAY, loaded), false)
-check('T8b plain picker mounts', dialogOverlayVisible({ kind: 'model', index: 0 }, gates), true)
+check('T8b plain picker mounts', dialogOverlayVisible({ kind: 'model' }, gates), true)
 check('T8c workspace picker gated on targets', [
   dialogOverlayVisible({ kind: 'workspace-picker', index: 0 }, gates),
   dialogOverlayVisible({ kind: 'workspace-picker', index: 0 }, loaded),
@@ -217,7 +217,7 @@ const fakeImage = { id: 'sha256:x', width: 8, height: 4, read: () => Promise.rej
 const imagePreview: ChatOverlay = { kind: 'image-preview', image: fakeImage }
 check('T10a open from none', reduce(NO_OVERLAY, { type: 'open', overlay: imagePreview }), imagePreview)
 check('T10b open replaces another picker (thumbnail click while /model up)',
-  reduce({ kind: 'model', index: 1 }, { type: 'open', overlay: imagePreview }), imagePreview)
+  reduce({ kind: 'model' }, { type: 'open', overlay: imagePreview }), imagePreview)
 check('T10c close', reduce(imagePreview, { type: 'close' }), { kind: 'none' })
 check('T10d close-if own kind', reduce(imagePreview, { type: 'close-if', kind: 'image-preview' }), { kind: 'none' })
 check('T10e stale close-if is a no-op', reduce({ kind: 'tips' }, { type: 'close-if', kind: 'image-preview' }), { kind: 'tips' })

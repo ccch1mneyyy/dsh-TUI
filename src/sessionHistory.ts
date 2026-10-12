@@ -77,6 +77,11 @@ export function readResumeTarget(): string | undefined {
  * verbatim and never parses them into DSH_TUI_RESUME_SESSION, so the
  * in-profile plugin reads them itself. A bare flag with no id defers to the
  * exit-time marker, exactly like the bin. An app-level `--` ends option parsing.
+ *
+ * A bare flag whose fallback is empty yields `undefined` here — the caller decides
+ * what that means, and both callers fail closed: the launcher reports "no session
+ * to resume" and exits non-zero, the boot treats it as "no target" only because the
+ * launcher already refused (roadmap §6 item 11). Never invent a fallback.
  * @param argv - the app arguments from cmdlineArgs, after the host's own options.
  * @returns The requested session id, or undefined when none was given.
  */

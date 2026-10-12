@@ -36,7 +36,8 @@ type Rec = Record<string, unknown>
 type Clock = ReturnType<typeof manualClock>
 const runtimeRoot = process.env.CODEX_TEST_SOURCE_ROOT ?? fileURLToPath(new URL('../', import.meta.url))
 const moduleUrl = (path: string): string => pathToFileURL(resolve(runtimeRoot, path)).href
-const { setLang, t } = await import(moduleUrl('src/i18n.js')) as typeof import('../src/i18n.js')
+const { getLang, setLang } = await import(moduleUrl('src/i18n.js')) as typeof import('../src/i18n.js')
+const { codexText } = await import(moduleUrl('src/backends/codex/text.js')) as typeof import('../src/backends/codex/text.js')
 const { createCodexHub } = await import(moduleUrl('src/backends/codex/rpc/hub.js')) as typeof import('../src/backends/codex/rpc/hub.js')
 const { createCodexSideQuery } = await import(moduleUrl('src/backends/codex/session/side-query.js')) as typeof import('../src/backends/codex/session/side-query.js')
 const { createCodexActivity } = await import(moduleUrl('src/backends/codex/session/activity.js')) as typeof import('../src/backends/codex/session/activity.js')
@@ -89,7 +90,7 @@ await scenario('side query forks read-only without main events or goals', async 
     await fake.waitForRequest('thread/fork')
     const fork = paramsOf(fake, 'thread/fork')[0]!
     check('fork sandbox is read-only', fork.sandbox, 'read-only')
-    check('fork is ephemeral and excludes durable turns', { ephemeral: fork.ephemeral, excludeTurns: fork.excludeTurns, deferGoalContinuation: fork.deferGoalContinuation }, { ephemeral: true, excludeTurns: true, deferGoalContinuation: true })
+    check('fork is ephemeral and excludes durable turns without goal deferral', { ephemeral: fork.ephemeral, excludeTurns: fork.excludeTurns, deferGoalContinuation: fork.deferGoalContinuation }, { ephemeral: true, excludeTurns: true, deferGoalContinuation: undefined })
     check('fork uses readonly never approval and current model/cwd', { cwd: fork.cwd, model: fork.model, approvalPolicy: fork.approvalPolicy, developerInstructions: fork.developerInstructions }, { cwd: '/TMP/cwd', model: 'gpt-test', approvalPolicy: 'never', developerInstructions: 'Answer the side question using the existing conversation. Do not call tools, modify files, create goals, or start agents. Give one concise answer.' })
     await fake.waitForRequest('turn/start')
     const start = paramsOf(fake, 'turn/start')[0]!
@@ -107,6 +108,31 @@ await scenario('side query forks read-only without main events or goals', async 
     await settle()
     check('successful side query unsubscribes child', paramsOf(fake, 'thread/unsubscribe').at(-1)?.threadId, CHILD)
     check('successful side query has no timer leak', clock.pending(), 0)
+  } finally { await hub.close() }
+})
+
+await scenario('side query falls back to a fresh ephemeral thread when no rollout exists', async () => {
+  const fake = createFakeAppServer()
+  const clock = manualClock()
+  fake.on('thread/fork', () => { throw new FakeRpcError(-32600, 'no rollout found for thread id thread-parent') })
+  fake.on('thread/start', () => ({ thread: { id: CHILD, cwd: '/TMP/cwd', turns: [], status: { type: 'idle' } }, model: 'gpt-test', cwd: '/TMP/cwd', modelProvider: 'relay', reasoningEffort: 'low', approvalPolicy: 'on-request', sandbox: { type: 'workspaceWrite' } }))
+  fake.on('turn/start', () => ({ turn: { id: 'fallback-turn', status: 'inProgress' } }))
+  const hub = await makeHub(fake, clock)
+  try {
+    const pending = sideDeps(hub, clock).ask('first question before any turn')
+    await fake.waitForRequest('thread/start')
+    const start = paramsOf(fake, 'thread/start')[0]!
+    check('fallback thread is ephemeral with the same guard rails', { ephemeral: start.ephemeral, approvalPolicy: start.approvalPolicy, sandbox: start.sandbox, model: start.model }, { ephemeral: true, approvalPolicy: 'never', sandbox: 'read-only', model: 'gpt-test' })
+    check('fallback fork was attempted first', paramsOf(fake, 'thread/fork').length, 1)
+    await fake.waitForRequest('turn/start')
+    check('fallback turn targets the fresh child', paramsOf(fake, 'turn/start')[0]?.threadId, CHILD)
+    fake.notify('turn/started', { threadId: CHILD, turn: { id: 'fallback-turn', status: 'inProgress' } })
+    fake.notify('item/completed', { threadId: CHILD, turnId: 'fallback-turn', item: { type: 'agentMessage', text: 'fresh answer' } })
+    fake.notify('turn/completed', { threadId: CHILD, turn: { id: 'fallback-turn', status: 'completed' } })
+    check('fallback answers without the parent conversation', await pending, { answer: 'fresh answer' })
+    await settle()
+    check('fallback child is unsubscribed', paramsOf(fake, 'thread/unsubscribe').at(-1)?.threadId, CHILD)
+    check('fallback clears the query timer', clock.pending(), 0)
   } finally { await hub.close() }
 })
 
@@ -136,7 +162,7 @@ await scenario('side query server error, interrupted cancel, closed and timeout 
     check('signal cancellation unsubscribes the child', paramsOf(fake, 'thread/unsubscribe').at(-1)?.threadId, CHILD)
 
     const closed = await sideDeps(hub, clock, true).ask('closed')
-    check('closed session rejects before fork', closed.error, t('codex-session-closed'))
+    check('closed session rejects before fork', closed.error, codexText('codex-session-closed'))
 
     const debug: string[] = []
     const after = fake.requests.length
@@ -168,7 +194,7 @@ await scenario('activity narrates native milestones and never re-narrates settle
   // narrating it — that showed the same sentence twice at once, under the
   // spinner AND as the reply's first message.
   check('settled commentary never appears as a working line', views.filter(view => view.line === 'Checking the files.').length, 0)
-  check('working line stays on the thinking copy after commentary settles', views.at(-1)?.line, t('codex-working-thinking'))
+  check('working line stays on the thinking copy after commentary settles', views.at(-1)?.line, codexText('codex-working-thinking'))
   activity.notification('item/started', { item: { type: 'commandExecution', command: 'pwsh -NoLogo -c ls', commandActions: [] } })
   check('command milestone is narrated', views.at(-1)?.line.includes('ls') && views.at(-1)?.phase === 'tool')
   activity.notification('item/completed', { item: { type: 'commandExecution' } })
@@ -176,7 +202,7 @@ await scenario('activity narrates native milestones and never re-narrates settle
   check('file milestone is narrated', views.at(-1)?.line.includes('a.ts') && views.at(-1)?.phase === 'tool')
   activity.notification('item/completed', { item: { type: 'fileChange' } })
   activity.notification('item/started', { item: { type: 'collabAgentToolCall' } })
-  check('subagent wait milestone is narrated', views.at(-1)?.line === t('codex-working-subagents'))
+  check('subagent wait milestone is narrated', views.at(-1)?.line === codexText('codex-working-subagents'))
   activity.notification('item/completed', { item: { type: 'collabAgentToolCall' } })
   check('tool completion increments count', views.at(-1)?.toolCount, 3)
   unsubscribe()
@@ -192,9 +218,9 @@ await scenario('activity waiting timers are bounded and never fake-stall tools o
   activity.capability.subscribe(view => views.push(view))
   activity.notification('turn/started', {})
   clock.advance(29_999)
-  check('waiting warning not early', views.at(-1)?.line, t('codex-working-thinking'))
+  check('waiting warning not early', views.at(-1)?.line, codexText('codex-working-thinking'))
   clock.advance(1)
-  check('30s model waiting line appears', views.at(-1)?.line, t('codex-model-waiting'))
+  check('30s model waiting line appears', views.at(-1)?.line, codexText('codex-model-waiting'))
   activity.notification('thread/status/changed', { status: { type: 'active', activeFlags: ['waitingOnApproval'] } })
   clock.advance(120_000)
   check('requires-action never emits stalled warning', emitted.filter(event => event.key === 'codex-model-stalled').length, 0)
@@ -256,7 +282,7 @@ await scenario('side query owner close and late fork cleanup', async () => {
     check('owner close sends child interrupt', paramsOf(fake, 'turn/interrupt').at(-1)?.turnId, 'owner-turn')
     check('owner close cleans child subscription and sink', paramsOf(fake, 'thread/unsubscribe').at(-1)?.threadId === CHILD && !attached.has(CHILD))
     check('owner close clears all request and query timers', clock.pending(), 0)
-    check('closed runtime refuses new side query', (await runtime.capability.ask('closed')).error, t('codex-session-closed'))
+    check('closed runtime refuses new side query', (await runtime.capability.ask('closed')).error, codexText('codex-session-closed'))
 
     let forkId: number | string | undefined
     fake.on('thread/fork', (_params, request) => { forkId = request.id; return NO_REPLY })
@@ -361,7 +387,7 @@ await scenario('real session side isolation dispose and output-before-result wir
   const sharedRetain = hub.retain()
   let session: Awaited<ReturnType<typeof openCodexSession>> | undefined
   try {
-    session = await openCodexSession({ hub, release: hub.retain(), target: { kind: 'create', cwd: '/TMP/cwd' }, cwd: '/TMP/cwd', prefs: memoryCodexPrefs({}), config: {}, executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug() {} }, clock, now: clock.now })
+    session = await openCodexSession({ hub, release: hub.retain(), target: { kind: 'create', cwd: '/TMP/cwd' }, cwd: '/TMP/cwd', prefs: memoryCodexPrefs({}), config: {}, executable: { path: '/fake/codex', source: 'env', version: '0.160.1' }, host: { debug() {}, locale: getLang }, clock, now: clock.now })
     const events: AgentEvent[] = []
     session.subscribe(batch => events.push(...batch))
     await settle()

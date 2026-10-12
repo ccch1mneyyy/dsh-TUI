@@ -26,6 +26,7 @@ import { createHyperlink } from './hyperlink.js'
 import { fileLinkUrl, linkifyFilePaths, looksLikeFilePath } from '../utils/fileTarget.js'
 import { getMathRendering } from '../tuiDisplayPrefs.js'
 import { noteCodeHighlight, noteFormatToken } from '../ink/render-stats.js'
+import { CJK_EMPHASIS_EXTENSIONS } from './cjk-emphasis.js'
 import {
   isMathBlockToken,
   isMathToken,
@@ -85,7 +86,9 @@ let markedInitialized = false
  * Configure the shared `marked` instance once. Strikethrough stays on
  * marked's built-in del tokenizer, which only matches double-tilde pairs —
  * single tildes (`~100`, models' "approximate") never pair up and render
- * literally. LaTeX math becomes `math`/`mathBlock` tokens (see math.ts).
+ * literally. LaTeX math becomes `math`/`mathBlock` tokens (see math.ts),
+ * and CJK-adjacent strong emphasis (`**标签：**中文`, unclosable under
+ * CommonMark's flanking rule) closes via cjk-emphasis.ts.
  * Every lexer caller — Markdown and StreamingMarkdown's boundary
  * lex — must run this first so both agree on block boundaries.
  */
@@ -94,7 +97,9 @@ export function configureMarked(): void {
   markedInitialized = true
 
   marked.use({
-    extensions: [...MATH_MARKDOWN_EXTENSIONS],
+    // Math first: a $…$ body holding emphasis-looking ** stays a formula;
+    // the CJK strong pass only sees what math declined.
+    extensions: [...MATH_MARKDOWN_EXTENSIONS, ...CJK_EMPHASIS_EXTENSIONS],
   })
 }
 

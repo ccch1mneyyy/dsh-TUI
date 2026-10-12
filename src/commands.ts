@@ -106,7 +106,10 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Help / exit
   { name: 'help', description: 'Show shortcuts and commands' },
   { name: 'tips', description: 'Show usage tips and shortcuts' },
-  { name: 'kernel', description: 'Choose the kernel dsh-tui runs on (DSH or Claude)' },
+  { name: 'kernel', description: 'Choose the kernel dsh-tui runs on (DSH, Codex or Claude)' },
+  { name: 'dsh', description: 'Switch to the DSH kernel (restarts into a new session)' },
+  { name: 'codex', description: 'Switch to the Codex kernel (restarts into a new session)' },
+  { name: 'claude', description: 'Switch to the Claude kernel (restarts into a new session)' },
   { name: 'restart', description: 'Restart dsh-tui and resume this session' },
   { name: 'exit', description: 'Exit dsh-tui' },
   { name: 'quit', description: 'Exit dsh-tui', tag: 'alias of /exit' },
@@ -179,9 +182,8 @@ const LOCAL_COMMAND_REQUIREMENTS: ReadonlyMap<string, LocalCommandRequirement> =
   ['activity', 'any'], ['thinking', 'any'], ['vim', 'any'], ['terminal-setup', 'any'],
   ['connect', 'any'], ['update', 'any'], ['export', 'any'], ['panel', 'any'],
   // The composition root serves these by respawning the process, so every
-  // backend offers them. /kernel is also the only way back to DSH from
-  // inside a non-DSH conversation (the launchpad's kernel entry is the other).
-  ['kernel', 'any'], ['restart', 'any'],
+  // backend offers them, including the direct kernel shortcuts.
+  ['kernel', 'any'], ['dsh', 'any'], ['codex', 'any'], ['claude', 'any'], ['restart', 'any'],
   ['compact', 'compact'], ['resume', 'resume'], ['home', 'resume'], ['agentview', 'resume'],
   ['bg', 'resume'], ['background', 'resume'], ['rewind', 'rewind'], ['fork', 'fork'],
   ['model', 'models'], ['effort', 'effort'], ['agents', 'subagents'], ['jobs', 'tasks'], ['mcp', 'mcp'],
@@ -256,6 +258,26 @@ export function isHiddenCommandName(input: string): boolean {
 }
 
 /**
+ * Commands that may run while the channel is not ready (`ChannelUi.ready`
+ * false): the purely local ones. Everything else is refused before dispatch.
+ */
+const BOOT_SAFE_COMMAND_NAMES: ReadonlySet<string> = new Set([
+  'exit', 'quit', 'q',
+  'help', 'tips',
+  'theme', 'lang', 'vim',
+  'kernel', 'dsh', 'codex', 'claude',
+  'deepseek',
+  // Opening a session by hand: the retry after a failed startup open. Run
+  // while the open is still going, the binding drops the startup candidate.
+  'new', 'resume',
+])
+
+/** Whether a command name (no slash) may run before the channel is ready. */
+export function isBootSafeCommand(name: string): boolean {
+  return BOOT_SAFE_COMMAND_NAMES.has(name)
+}
+
+/**
  * Resolve a command's description in the active UI language. The en text in
  * `LOCAL_COMMANDS` (and the registry's own text for external commands) is
  * the fallback; zh translations live in the i18n dict under
@@ -303,6 +325,9 @@ export const WORKING_GATE_NOTICES = {
   // them is refused (`/kernel` confirms a switch; `/channel` imports, adds,
   // manages or switches to a profile that needs a process restart).
   kernel: 'kernel-switch-while-working',
+  dsh: 'kernel-switch-while-working',
+  codex: 'kernel-switch-while-working',
+  claude: 'kernel-switch-while-working',
   channel: 'channel-switch-while-working',
 } as const
 

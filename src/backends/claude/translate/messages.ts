@@ -1,6 +1,6 @@
 /** Translate main-lane assistant blocks, user echoes and tool results. */
 import type { AgentEvent, AgentEventOf, ContentBlockView, UsageDelta } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { claudeText } from '../text.js'
 import { arr, rec, str, type Rec } from '../narrow.js'
 import { parseSendMessageInput, sendMessageCallView, sendMessageResultState, sendMessageResultView } from '../send-message.js'
 import { claudeToolRole, presentClaudeToolCall, presentClaudeToolResult } from '../tools.js'
@@ -45,7 +45,7 @@ export function createMessageTranslator(context: {
     open.usage ??= usageOf(body.usage)
     if (message.aborted === true) open.aborted = true
     const error = str(message.error)
-    if (error !== undefined) out.push({ type: 'notice', level: 'error', text: t('claude-assistant-error', { error }) })
+    if (error !== undefined) out.push({ type: 'notice', level: 'error', text: claudeText('claude-assistant-error', { error }) })
     for (const raw of arr(body.content)) {
       const block = rec(raw)
       if (block === undefined) continue
@@ -109,7 +109,7 @@ export function createMessageTranslator(context: {
       context.currentMode = 'plan'
       return [{ type: 'mode.changed', modeId: 'plan' }]
     }
-    return [{ type: 'notice', level: 'info', text: t(isError ? 'claude-plan-kept' : 'claude-plan-approved') }]
+    return [{ type: 'notice', level: 'info', text: claudeText(isError ? 'claude-plan-kept' : 'claude-plan-approved') }]
   }
 
   const translateUser = (message: Rec): AgentEvent[] => {
@@ -154,7 +154,7 @@ export function createMessageTranslator(context: {
         const denied = deniedReasons.get(callId)
         deniedReasons.delete(callId)
         const text = isError && denied !== undefined && !rawText.includes(denied)
-          ? `${rawText}${rawText === '' ? '' : '\n'}${t('claude-denied-reason', { reason: denied })}`
+          ? `${rawText}${rawText === '' ? '' : '\n'}${claudeText('claude-denied-reason', { reason: denied })}`
           : call !== undefined && claudeToolRole(call.name) === 'question' && !isError
             ? questionRecordText(call.input, structured, rawText)
             : rawText

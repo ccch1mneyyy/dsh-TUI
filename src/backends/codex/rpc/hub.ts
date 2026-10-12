@@ -25,7 +25,7 @@
  *   environment) form a fingerprint; equal fingerprints share a hub.
  */
 import { createHash } from 'node:crypto'
-import { t } from '../../../i18n.js'
+import { codexText } from '../text.js'
 import { CLIENT, NOTIFY, OPT_OUT_NOTIFICATIONS, SERVER_REQUEST } from '../protocol/index.js'
 import type { InitializeParams } from '../protocol/index.js'
 import { errorText, rec, str, type Rec } from '../narrow.js'
@@ -298,7 +298,7 @@ export function createCodexHub(settings: HubSettings, deps: CodexHubDeps = {}): 
             warned = true
           }
         }
-        if (warned) handleNotification(NOTIFY.warning, { message: t('codex-orphan-request'), threadId: null })
+        if (warned) handleNotification(NOTIFY.warning, { message: codexText('codex-orphan-request'), threadId: null })
       })
     }
     queue.messages.push(message)

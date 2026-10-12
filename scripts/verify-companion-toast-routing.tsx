@@ -144,7 +144,7 @@ try {
   stdin.write('\x02') // Ctrl+B: open(已开) + focus chat → focus panel
   check('focus: keyboard is in the panel', await settled(() => termTest.viewportLines(term, ROWS).some(l => l.includes('Esc chat')), { timeoutMs: 5000 }))
   stdin.write('2') // jump to the 2nd enabled panel = companion
-  check('active: companion carousel title with navigation dots', await settled(() => panelBar().includes('Companion') && panelBar().includes('◀') && panelBar().includes('▶') && panelBar().includes('○'), { timeoutMs: 5000 }), panelBar().trim())
+  check('active: companion carousel title with the todo icon', await settled(() => panelBar().includes('Companion') && panelBar().includes('◀') && panelBar().includes('▶') && panelBar().includes('≡'), { timeoutMs: 5000 }), panelBar().trim())
 
   // a. plain notice on the pet panel → bubble owns it; the chat column stays clean
   push({ id: 1, text: 'NOTICE-A-PET-SAYS' })

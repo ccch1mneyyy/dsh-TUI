@@ -292,9 +292,13 @@ try {
       dispose: () => Promise.resolve(),
     }
     const ctx = { on: () => () => undefined, get: () => undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never
-    const channel = createChannel(ctx, session as never, { model: 'm', provider: '', cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent' })
+    // The scene's title word may also appear in ordinary conversation text.
+    const conversationModel = 'Trajectory-fixture'
+    const channel = createChannel(ctx, session as never, { model: conversationModel, provider: '', cwd: process.cwd(), activity: false, backendLabel: 'Fake Agent' })
     const toasts = (): string => channel.notifications.map(item => item.text).join(' | ')
     const h = makeTerminalHarness(100, 30)
+    const trajectoryOpen = (): boolean => h.lines()
+      .some(line => line.trimStart().startsWith(`✦ ${t('traj-title')}`))
     const app = await render(
       React.createElement(Chat, {
         channel: channel as never,
@@ -307,16 +311,17 @@ try {
       { stdout: h.stdout as unknown as NodeJS.WriteStream, stdin: h.stdin as unknown as NodeJS.ReadStream, stderr: h.stderr as unknown as NodeJS.WriteStream, exitOnCtrlC: false, patchConsole: false },
     )
     check('entries: /trace is offered on the fold-backed backend', channel.commandList.some(command => command.name === 'trace'))
+    check('entries: the conversation contains the title word outside the scene', await settled(() => h.screen().includes(conversationModel)))
     await sleep(300) // 固定窗:pacing Chat 的按键处理器在首帧后才挂载
     // /trace entry
     for (const char of '/trace') h.stdin.write(char)
     await sleep(120) // 固定窗:pacing 输入按自身渲染 tick 应用，回车须另起一个 stdin chunk
     await writeKey(h.stdin, '\r')
-    check('entries//trace: opens the scene in the empty state (fold mounted)', await settled(() => h.screen().includes(t('traj-title')) && !h.screen().includes(t('trajectory-unsupported'))))
+    check('entries//trace: opens the scene in the empty state (fold mounted)', await settled(() => trajectoryOpen() && !h.screen().includes(t('trajectory-unsupported'))))
     check('entries//trace: no capability notice', !toasts().includes(t('capability-unavailable-backend', { name: 'trace' })), toasts())
     check('entries//trace: no unavailable-command notice', !toasts().includes(t('cmd-unavailable-backend', { cmd: 'trace', backend: 'Fake Agent' })), toasts())
     await writeKey(h.stdin, 'q')
-    check('entries//trace: q returns to the conversation', await settled(() => !h.screen().includes(t('traj-title'))))
+    check('entries//trace: q returns to the conversation', await settled(() => !trajectoryOpen() && h.screen().includes(conversationModel)))
     // Ctrl+T entry — now over a session with folded events: the scene must
     // render the LEDGER (the Claude mapping's whole point), not chrome.
     for (const listener of listeners) {
@@ -328,10 +333,10 @@ try {
       ], { replay: false })
     }
     await writeKey(h.stdin, '\x14')
-    check('entries/Ctrl+T: folded ledger rows render over live events', await settled(() => h.screen().includes('Grep')), h.screen().split('\n').slice(0, 6).join(' / '))
+    check('entries/Ctrl+T: folded ledger rows render over live events', await settled(() => trajectoryOpen() && h.screen().includes('Grep')), h.screen().split('\n').slice(0, 6).join(' / '))
     check('entries/Ctrl+T: no capability notice', !toasts().includes(t('capability-unavailable-backend', { name: 'trace' })), toasts())
     await writeKey(h.stdin, 'q')
-    check('entries/Ctrl+T: q returns to the conversation', await settled(() => !h.screen().includes(t('traj-title'))))
+    check('entries/Ctrl+T: q returns to the conversation', await settled(() => !trajectoryOpen() && h.screen().includes(conversationModel)))
     await app.unmount()
     channel.releaseContributions()
     h.term.dispose()
@@ -405,10 +410,10 @@ try {
     source = 'unsupported'
     {
       const { h, app } = await mountColumn()
-      check('tab: the inactive trajectory title is represented by a dot', await settled(() => barRow(h).includes('○') && barRow(h).includes('◀') && barRow(h).includes('▶')), barRow(h).trim())
-      const tab = findText(h, '○')
+      check('tab: the inactive trajectory panel shows its icon', await settled(() => barRow(h).includes('∿') && barRow(h).includes('◀') && barRow(h).includes('▶')), barRow(h).trim())
+      const tab = findText(h, '∿')
       if (tab !== null) click(h, tab.col + 1, tab.row)
-      check('tab: clicking the trajectory dot centers its title', await settled(() => barRow(h).includes('Trajectory') && !barRow(h).includes('Todo')), barRow(h).trim())
+      check('tab: clicking the trajectory icon centers its title', await settled(() => barRow(h).includes('Trajectory') && !barRow(h).includes('Todo')), barRow(h).trim())
       check('tab: honest generic unsupported copy remains in the panel', await settled(() => h.screen().includes(head(t('trajectory-unsupported')))))
       check('outlet/unsupported: ⤢ stays hidden while carousel navigation remains', !barRow(h).includes('⤢') && barRow(h).includes('Trajectory') && barRow(h).includes('◀') && barRow(h).includes('▶'), barRow(h).trim())
       await app.unmount(); h.term.dispose()
@@ -419,9 +424,9 @@ try {
       // 固定窗:pacing 两次用例在完全相同的坐标点击 ∿——必须跨过 ink 的
       // 500ms 双击窗，否则第二次点击被当作 double-click 吞掉（面板不切换）。
       await sleep(600)
-      const tab = findText(h, '○')
+      const tab = findText(h, '∿')
       if (tab !== null) click(h, tab.col + 1, tab.row)
-      check('outlet/supported: trajectory dot centers the title', await settled(() => barRow(h).includes('Trajectory') && !barRow(h).includes('Todo')), barRow(h).trim())
+      check('outlet/supported: trajectory icon centers the title', await settled(() => barRow(h).includes('Trajectory') && !barRow(h).includes('Todo')), barRow(h).trim())
       check('outlet/supported: ⤢ stays beside the carousel', await settled(() => barRow(h).includes('⤢') && barRow(h).includes('◀') && barRow(h).includes('▶')), barRow(h).trim())
       await app.unmount(); h.term.dispose()
     }

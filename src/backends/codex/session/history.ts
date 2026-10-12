@@ -7,7 +7,7 @@
  */
 import type { SessionCapabilities } from '../../../agent/capabilities.js'
 import type { AgentEvent, AgentEventOf } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { codexText } from '../text.js'
 import { arr, rec, str, type Rec } from '../narrow.js'
 import { CLIENT, NOTIFY } from '../protocol/index.js'
 import type { CodexHub } from '../rpc/hub.js'
@@ -121,7 +121,7 @@ export function createCodexTranscriptHistory(deps: CodexTranscriptHistoryDeps): 
       if (closed || generation !== gen) return
       failures += 1
       deps.ctx.debug('codex: older history prefetch failed; cursor retained')
-      if (failures >= 3) deps.notice?.({ type: 'notice', level: 'warning', key: 'codex-older-history', text: t('codex-history-fetch-failed') })
+      if (failures >= 3) deps.notice?.({ type: 'notice', level: 'warning', key: 'codex-older-history', text: codexText('codex-history-fetch-failed') })
     }).finally(() => { if (pending === task) { pending = undefined; abort = undefined } })
     pending = task
   }

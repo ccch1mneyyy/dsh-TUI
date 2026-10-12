@@ -9,6 +9,9 @@
  * 契约（`scripts/verify-splash-layout.ts` / `verify-splash-eggs.tsx` 逐款钉死）：
  * - 每款 5 行；每个字形、每个 fallback 行的显示宽度都等于 `glyphWidth`；
  * - 两行标题画出来的列数必须**相等**（靠 tagline 的字距 + `bottomIndent` 撑）；
+ *   例外：声明了 `uniformKerning` 的字体（shadow）放弃等宽契约——两行同字距，
+ *   下排由渲染层按半差居中（等宽契约在 10 列字身上最紧只能解出 5/7 字距，
+ *   字间空 7-9 列，用户反馈「间隔太宽」）；
  * - 缺字走 `fallback` 而不是抛错，且不改变字身宽度。
  *
  * 选择：设置项 `dsh-tui.splashFont` 取 `daily`（默认，按本地日期轮换）或某款 id；
@@ -20,7 +23,9 @@
  * `C L U O`（`branding.ts` 的按内核换品牌）。
  */
 import type { SplashFontId, SplashFontSetting } from '../adapter/ports/channel-display.js'
+import { BRAND_SPLASH_WORDS, type Brand } from '../branding.js'
 import { bigTextWidth, paintedWidth } from './bigfont.js'
+import type { SplashEgg } from './splashEggs.js'
 
 // 取值类型住在端口的显示偏好词汇表里（ports 目录不许 import 到目录外），这里
 // 转出去：设置链（Config / channel / /settings 面板）只认这一个入口。
@@ -45,6 +50,14 @@ export interface SplashFont {
   readonly glyphWidth: number
   readonly glyphs: GlyphTable
   readonly fallback: GlyphRows
+  /**
+   * 可选：这款字体的词对一律两行同用这个字距（`shadow` 用）。等宽 + 居中
+   * 契约在整数字距下解 8 字 vs 7 字的词对时有 `8·bk = g + 9·tk` 的硬关系
+   * （g 是字身宽度）——10 列字身最紧只能解出 5/7，字间空得能走人。声明后
+   * `withTagline` 不再进求解器：两行同字距、`bottomIndent` 恒 0，下排由
+   * 渲染层按半差居中（LogoV2 的金字塔路径，同品牌 uniform 档）。
+   */
+  readonly uniformKerning?: number
   /** 两行标题各自的画法与字距。 */
   readonly tagline: {
     readonly top: string
@@ -337,6 +350,8 @@ interface FaceData {
   readonly en: string
   readonly glyphs: GlyphTable
   readonly fallback: GlyphRows
+  /** 固定字距档（见 `SplashFont.uniformKerning`）；不声明走等宽契约求解器。 */
+  readonly uniformKerning?: number
 }
 
 const font = (id: SplashFontId, face: FaceData): SplashFont => {
@@ -348,7 +363,10 @@ const font = (id: SplashFontId, face: FaceData): SplashFont => {
     glyphWidth,
     glyphs: face.glyphs,
     fallback: face.fallback,
-    tagline: { top: TOP_WORD, bottom: BOTTOM_WORD, ...solveTagline(glyphWidth, TOP_WORD, BOTTOM_WORD) },
+    uniformKerning: face.uniformKerning,
+    tagline: face.uniformKerning === undefined
+      ? { top: TOP_WORD, bottom: BOTTOM_WORD, ...solveTagline(glyphWidth, TOP_WORD, BOTTOM_WORD) }
+      : { top: TOP_WORD, bottom: BOTTOM_WORD, topKerning: face.uniformKerning, bottomKerning: face.uniformKerning, bottomIndent: 0 },
   }
 }
 
@@ -370,6 +388,12 @@ export function withTagline(
   bottom: string,
   options?: { readonly wide?: boolean; readonly uniform?: boolean },
 ): SplashFont {
+  // 固定字距档（shadow）：换词不进求解器——任何词对（默认/彩蛋/品牌）都两行
+  // 同字距，对齐交给渲染层。options 在这一档没有意义：预算与中间档都是为
+  // 「等宽解太散但还想舒展」的字体设计的，这款要的恰恰是收紧。
+  if (font.uniformKerning !== undefined) {
+    return { ...font, tagline: { top, bottom, topKerning: font.uniformKerning, bottomKerning: font.uniformKerning, bottomIndent: 0 } }
+  }
   if (options?.uniform === true) {
     // 同字距档（品牌词用，用户点名「两行间隙一致」）：两行共用一个字距，
     // 不再拉伸等宽。块宽以基准词对（字体表 DEEPSEEK/HARNESS 紧解的宽行）
@@ -383,6 +407,22 @@ export function withTagline(
     return { ...font, tagline: { top, bottom, topKerning: kerning, bottomKerning: kerning, bottomIndent: 0 } }
   }
   return { ...font, tagline: { top, bottom, ...solveTagline(font.glyphWidth, top, bottom, options?.wide === true ? 'wide' : 'tight') } }
+}
+
+/** 品牌与节日换词后的实际标题，供布局预算与 Logo 渲染共同使用。 */
+export function resolveSplashTitleFont(
+  font: SplashFont,
+  brand: Brand = 'deepseek',
+  egg: SplashEgg | null = null,
+): SplashFont {
+  if (brand === 'deepseek' && egg === null) return font
+  const words = BRAND_SPLASH_WORDS[brand]
+  return withTagline(
+    font,
+    brand === 'deepseek' ? font.tagline.top : words.top,
+    egg?.bottom ?? words.bottom,
+    brand === 'deepseek' ? undefined : { uniform: true },
+  )
 }
 
 /** 半立体的配色不再静态写死：LogoV2 按主题 accent 派生亮/暗两档（金属受光），
@@ -402,7 +442,10 @@ const SPLASH_FONT_TABLE: Record<SplashFontId, SplashFont> = {
   stencil: font('stencil', { zh: '镂空模板', en: 'Stencil', glyphs: applyTable(BOLD_GLYPHS, STENCIL), fallback: applyRows(BOLD_FALLBACK, STENCIL) }),
   classic: font('classic', { zh: '细笔（经典）', en: 'Thin (classic)', glyphs: CLASSIC_GLYPHS, fallback: CLASSIC_FALLBACK }),
   slab: font('slab', { zh: '方板（实心横笔）', en: 'Slab (solid bars)', glyphs: SLAB_GLYPHS, fallback: SLAB_FALLBACK }),
-  shadow: font('shadow', { zh: '立体弧角（ANSI Shadow）', en: 'Shadow (ANSI)', glyphs: SHADOW_GLYPHS, fallback: SHADOW_FALLBACK }),
+  // shadow 声明固定字距 1：等宽契约在 10 列字身上最紧解出 5/7（mod-8 算术，
+  // 见 uniformKerning 注释），叠上字形自带的左右留白，字间空 7-9 列——用户
+  // 反馈「间隔太宽」。两行同 1 列字距后空隙 2-4 列，下排渲染层半差居中。
+  shadow: font('shadow', { zh: '立体弧角（ANSI Shadow）', en: 'Shadow (ANSI)', glyphs: SHADOW_GLYPHS, fallback: SHADOW_FALLBACK, uniformKerning: 1 }),
 }
 
 /** 轮换池（渲染侧只读这一份；表的书写顺序即轮换顺序）。 */
@@ -473,11 +516,26 @@ const DAY_MS = 86_400_000
 
 /**
  * 按**本地日期**轮换：同一天内恒定、隔天换一款，且与启动时刻无关（可复现）。
+ *
+ * CI 确定性缝：**无参**调用（生产与挂件夹具的「按天轮换」路径）先看
+ * `DSH_TUI_SPLASH_FONT`——合法 id 就钉住那一款。CI 全 workflow 设 `bold`
+ * （`.github/workflows/ci.yml`）：挂真 Chat/LogoV2 的回归不再随日期变头部
+ * 几何——宽体字身轮到那天鲸鱼被阶梯撤掉、文字列位移，断言失配，每 9 天
+ * 红一次的 flake 最难查。**显式传日期的调用不受影响**（轮换契约自身的
+ * 回归照按注入日期算）；要测 daily 路径的脚本自己删掉这个 env
+ * （`verify-splash-font-setting.mjs`）。
  * @param date - 注入的当前时间（测试缝；生产用 `new Date()`）。
- * @returns 当天的字体。
+ * @returns 当天的字体（或 `DSH_TUI_SPLASH_FONT` 钉住的那款）。
  */
-export function pickSplashFont(date: Date = new Date()): SplashFont {
-  const day = Math.floor(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) / DAY_MS)
+export function pickSplashFont(date?: Date): SplashFont {
+  if (date === undefined) {
+    const pinned = process.env.DSH_TUI_SPLASH_FONT
+    if (pinned !== undefined && SPLASH_FONTS.some(font => font.id === pinned)) {
+      return splashFontById(pinned)
+    }
+  }
+  const now = date ?? new Date()
+  const day = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / DAY_MS)
   const index = ((day % SPLASH_FONTS.length) + SPLASH_FONTS.length) % SPLASH_FONTS.length
   return SPLASH_FONTS[index] as SplashFont
 }

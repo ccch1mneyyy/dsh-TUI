@@ -61,6 +61,7 @@ import {
 import AppContext from "./AppContext.js";
 import { ClockProvider } from "./ClockContext.js";
 import CursorDeclarationContext, {
+	NativeCursorContext,
 	type CursorDeclarationSetter,
 } from "./CursorDeclarationContext.js";
 import ErrorOverview from "./ErrorOverview.js";
@@ -239,6 +240,11 @@ export default class App extends PureComponent<Props, State> {
 	// Count how many components enabled raw mode to avoid disabling
 	// raw mode until all components don't need it anymore
 	rawModeEnabledCount = 0;
+	// Latched by detachForShutdown: the exit funnel has written its cleanup,
+	// so a late React commit (a useInput mounting while the funnel settles)
+	// must not re-enter raw mode and re-enable bracketed paste and focus
+	// reporting on the shell's terminal.
+	shutdownDetached = false;
 	internal_eventEmitter = new EventEmitter();
 	keyParseState: KeyParseState = {
 		...INITIAL_STATE,
@@ -419,6 +425,8 @@ export default class App extends PureComponent<Props, State> {
 	// <AlternateScreen>'s insertion effect every frame, flapping the alt
 	// screen on/off.
 	writeRaw = (data: string): void => {
+		// Same latch as Ink.writeRaw: the exit funnel owns the terminal now.
+		if (this.shutdownDetached) return;
 		if (data.includes("\x1b[?1049")) {
 			logMouseDebug("stdout:1049", { len: data.length, head: data.slice(0, 60) });
 		}
@@ -453,15 +461,19 @@ export default class App extends PureComponent<Props, State> {
 					>
 						<TerminalFocusProvider>
 							<ClockProvider>
-								<CursorDeclarationContext.Provider
-									value={this.props.onCursorDeclaration ?? (() => {})}
+								<NativeCursorContext.Provider
+									value={Boolean(this.props.stdout.isTTY && this.props.onCursorDeclaration)}
 								>
-									{this.state.error ? (
-										<ErrorOverview error={this.state.error} />
-									) : (
-										this.props.children
-									)}
-								</CursorDeclarationContext.Provider>
+									<CursorDeclarationContext.Provider
+										value={this.props.onCursorDeclaration ?? (() => {})}
+									>
+										{this.state.error ? (
+											<ErrorOverview error={this.state.error} />
+										) : (
+											this.props.children
+										)}
+									</CursorDeclarationContext.Provider>
+								</NativeCursorContext.Provider>
 							</ClockProvider>
 						</TerminalFocusProvider>
 					</StdinContext.Provider>
@@ -506,6 +518,7 @@ export default class App extends PureComponent<Props, State> {
 		if (this.isRawModeSupported()) {
 			while (this.rawModeEnabledCount > 0) this.handleSetRawMode(false);
 		}
+		this.shutdownDetached = true;
 	}
 	override componentDidCatch(error: Error, errorInfo: { componentStack?: string }) {
 		// A #185 that reaches the root boundary escaped every enqueue-site
@@ -589,6 +602,8 @@ export default class App extends PureComponent<Props, State> {
 		// the half of a CJK char still buffered from the last chunk (#1227).
 		if (stdin.readableEncoding !== "utf8") stdin.setEncoding("utf8");
 		if (isEnabled) {
+			// The borrower's later disable finds the count at 0 and returns.
+			if (this.shutdownDetached) return;
 			// Ensure raw mode is enabled only once
 			if (this.rawModeEnabledCount === 0) {
 				// Stop early input capture right before we add our own readable handler.
@@ -1170,12 +1185,12 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			const session = app.dragSession;
 			if (session) {
 				// Anchor-cell exemption (parity with selection.ts): motion
-				// landing on the press cell is hand jitter, not a drag —
+				// at the press cell before the drag starts is hand jitter —
 				// keep the session dormant so release resolves to the plain
 				// click path (and the input's double-click detector sees
 				// the press). Without it, trackpads/1002 terminals turn a
 				// wobbly click into a 1-cell drag selection.
-				if (col === session.startCol && row === session.startRow) {
+				if (!session.started && col === session.startCol && row === session.startRow) {
 					return;
 				}
 				session.lastCol = col;

@@ -146,6 +146,20 @@ export const CURSOR_STYLES: Array<{ style: CursorStyle; blinking: boolean }> = [
 // Cursor movement generators
 
 /**
+ * Set cursor style (DECSCUSR, `CSI Ps SP q`).
+ *
+ * Ps couples shape and blink: 0 = blinking block in XTerm (some terminals
+ * restore user settings instead), 1/3/5 = blinking
+ * block/underline/bar, 2/4/6 = the same shapes steady (see `CURSOR_STYLES`).
+ *
+ * @param ps - DECSCUSR parameter.
+ * @returns the CSI sequence.
+ */
+export function cursorStyle(ps: number): string {
+  return `${CSI_PREFIX}${ps} q`
+}
+
+/**
  * Move cursor up n lines (CSI n A).
  * @param n - number of lines to move; defaults to 1.
  * @returns the CSI sequence, or an empty string when n is 0.

@@ -5,8 +5,8 @@ import { useSelection } from './use-selection.js'
 /**
  * Copy-on-select: when a drag finishes (or a double/triple click, or a
  * shift+arrow extension, lands a selection), copy the selected text to the
- * clipboard — OSC 52 plus the native-utility fallback — then clear the
- * highlight so the copy reads as a completed action.
+ * clipboard — OSC 52 plus the native-utility fallback — keeping the
+ * highlight until the user clears or replaces the selection.
  *
  * Implemented as a subscription rather than a mouse-release hook so every
  * path that settles a selection (release, lost-release recovery, focus-out
@@ -30,28 +30,33 @@ export function useCopyOnSelect(
   onCopied?: (text: string) => void,
   onRefused?: () => void,
 ): void {
-  const { subscribe, getState, copySelection } = useSelection()
+  const { subscribe, getState, copySelectionNoClear } = useSelection()
   const onCopiedRef = useRef(onCopied)
   onCopiedRef.current = onCopied
   const onRefusedRef = useRef(onRefused)
   onRefusedRef.current = onRefused
   useEffect(() => {
+    let copiedRevision = -1
     return subscribe(() => {
       const state = getState()
       // Mid-drag notifications (every motion event) skip the copy; the
       // release notification arrives with isDragging already cleared.
       if (state && !state.isDragging && hasSelection(state)) {
+        // Retained selections can receive repeated release notifications.
+        // Copy once per completion, including a new gesture on the same text.
+        if (copiedRevision === state.settledRevision) return
+        copiedRevision = state.settledRevision
         if (state.stale) {
-          // copySelection clears the stale highlight; its internal copy
+          // copySelectionNoClear clears the stale highlight; its internal copy
           // is refused (empty), so the only user-visible effect without
           // this branch would be a highlight vanishing for no reason.
-          copySelection()
+          copySelectionNoClear()
           onRefusedRef.current?.()
           return
         }
-        const text = copySelection()
+        const text = copySelectionNoClear()
         if (text) onCopiedRef.current?.(text)
       }
     })
-  }, [subscribe, getState, copySelection])
+  }, [subscribe, getState, copySelectionNoClear])
 }

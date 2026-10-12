@@ -21,7 +21,7 @@
 import { basename } from 'node:path'
 import type { SDKSessionInfo } from '@anthropic-ai/claude-agent-sdk'
 import type { SessionCatalog, SessionListScope } from '../../agent/backend.js'
-import type { PreviewEntry, SessionSummary } from '../../adapter/ports/channel-session.js'
+import type { PreviewEntry, SessionSummary } from '../../agent/index.js'
 import { CLAUDE_BACKEND_ID } from './contract.js'
 import { previewEntries } from './replay.js'
 import type { ClaudeSessionStoreSdk } from './sdk.js'
@@ -33,10 +33,12 @@ export interface ClaudeCatalogDeps {
   cwd(): string
   /** This install's last-used notes (epoch ms by session id). */
   lastUsed?(): Readonly<Record<string, number>>
+  snapshotKey?(): string | undefined
 }
 
 /** Preview depth when the caller names none. */
 const PREVIEW_LIMIT = 6
+const FIRST_PAGE = 32
 
 /** One SDK record as a browser row. */
 export function claudeSessionSummary(info: SDKSessionInfo, lastUsed: Readonly<Record<string, number>> = {}): SessionSummary {
@@ -78,13 +80,23 @@ export function createClaudeCatalog(deps: ClaudeCatalogDeps): SessionCatalog {
   const lastUsed = (): Readonly<Record<string, number>> => deps.lastUsed?.() ?? {}
   const dirOption = (cwd: string | undefined): { dir: string } | undefined => cwd === undefined || cwd === '' ? undefined : { dir: cwd }
   return {
-    async list(scope: SessionListScope = {}): Promise<readonly SessionSummary[]> {
+    ...(deps.snapshotKey === undefined ? {} : { snapshotKey: deps.snapshotKey }),
+    async list(scope: SessionListScope = {}, onPartial?: (rows: readonly SessionSummary[]) => void): Promise<readonly SessionSummary[]> {
       const sdk = await deps.loadSdk()
-      const infos = scope.allProjects === true
-        ? await sdk.listSessions({ includeProgrammatic: true })
-        : await sdk.listSessions({ dir: scope.cwd ?? deps.cwd(), includeProgrammatic: true })
+      const options = { includeProgrammatic: true, ...(scope.allProjects === true ? {} : { dir: scope.cwd ?? deps.cwd() }) }
       const used = lastUsed()
-      return infos.map(info => claudeSessionSummary(info, used)).sort((a, b) => b.updatedAt - a.updatedAt)
+      const summaries = (infos: readonly SDKSessionInfo[]): SessionSummary[] =>
+        infos.map(info => claudeSessionSummary(info, used)).sort((a, b) => b.updatedAt - a.updatedAt)
+      if (onPartial !== undefined) {
+        // A bounded SDK read extracts metadata only for the newest sessions.
+        // Both reads keep the SDK's project scope, including git worktrees.
+        // An unlimited read confirms completeness: a short limited page does
+        // not promise exhaustion. Avoid repeatedly scanning offset pages.
+        const first = await sdk.listSessions({ ...options, limit: FIRST_PAGE })
+        const rows = summaries(first)
+        onPartial(rows)
+      }
+      return summaries(await sdk.listSessions(options))
     },
     async info(sessionId: string, cwd?: string): Promise<SessionSummary | undefined> {
       const sdk = await deps.loadSdk()

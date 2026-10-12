@@ -35,7 +35,7 @@
 import type { CanUseTool, PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk'
 import type { PermissionDecision, QuestionAnswers } from '../../agent/capabilities.js'
 import type { AgentEvent, PermissionOptionView, PermissionOutcome, PermissionRequestView, QuestionItemView } from '../../agent/events.js'
-import { t } from '../../i18n.js'
+import { claudeText } from './text.js'
 import { displayPath } from './tools.js'
 import { errorText, rec, str, type Rec } from './narrow.js'
 
@@ -138,12 +138,12 @@ export function alwaysLabel(suggestions: readonly PermissionUpdate[], cwd: strin
         const key = suggestion.destination === 'session' || suggestion.destination === 'cliArg'
           ? 'claude-always-rules-session'
           : suggestion.destination === 'userSettings' ? 'claude-always-rules-user' : 'claude-always-rules-project'
-        return [t(key, { rules })]
+        return [claudeText(key, { rules })]
       }
       case 'setMode':
-        return [suggestion.mode === 'acceptEdits' ? t('claude-always-accept-edits') : t('claude-always-mode', { mode: suggestion.mode })]
+        return [suggestion.mode === 'acceptEdits' ? claudeText('claude-always-accept-edits') : claudeText('claude-always-mode', { mode: suggestion.mode })]
       case 'addDirectories':
-        return suggestion.directories.length === 0 ? [] : [t('claude-always-directories', { dirs: suggestion.directories.map(dir => displayPath(dir, cwd)).join(', ') })]
+        return suggestion.directories.length === 0 ? [] : [claudeText('claude-always-directories', { dirs: suggestion.directories.map(dir => displayPath(dir, cwd)).join(', ') })]
       default:
         return []
     }
@@ -255,7 +255,7 @@ export function createClaudePermissionBridge(deps: ClaudePermissionBridgeDeps) {
       if (kind === 'question') {
         const questions = questionsOf(input)
         if (questions.length === 0) {
-          resolve(deny(options, t('claude-question-unreadable'), { classify: false }))
+          resolve(deny(options, claudeText('claude-question-unreadable'), { classify: false }))
           return
         }
         entry = { ...base, kind, questions }
@@ -264,16 +264,16 @@ export function createClaudePermissionBridge(deps: ClaudePermissionBridgeDeps) {
           request: { requestId, callId: options.toolUseID, ...(options.agentID === undefined ? {} : { agentId: options.agentID }), questions },
         }
       } else if (kind === 'plan') {
-        const plan: PlanLabels = { accept: t('claude-plan-accept-edits'), manual: t('claude-plan-manual'), keep: t('claude-plan-keep') }
+        const plan: PlanLabels = { accept: claudeText('claude-plan-accept-edits'), manual: claudeText('claude-plan-manual'), keep: claudeText('claude-plan-keep') }
         const detail = str(input.plan)
         const questions: QuestionItemView[] = [{
-          question: t('claude-plan-review-question'),
-          header: t('claude-plan-review-header'),
+          question: claudeText('claude-plan-review-question'),
+          header: claudeText('claude-plan-review-header'),
           ...(detail === undefined ? {} : { detail }),
           options: [
-            { label: plan.accept, description: t('claude-plan-accept-edits-desc') },
-            { label: plan.manual, description: t('claude-plan-manual-desc') },
-            { label: plan.keep, description: t('claude-plan-keep-desc') },
+            { label: plan.accept, description: claudeText('claude-plan-accept-edits-desc') },
+            { label: plan.manual, description: claudeText('claude-plan-manual-desc') },
+            { label: plan.keep, description: claudeText('claude-plan-keep-desc') },
           ],
           intent: { kind: 'plan-review', approve: plan.accept, approveAlso: [plan.manual], decline: plan.keep },
         }]

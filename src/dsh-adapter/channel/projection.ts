@@ -50,7 +50,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     notify: (...args) => deps.notify(...args),
     jobs: deps.jobs,
     inputConvergence: deps.inputConvergence,
-    renderer: deps.renderer,
+    get renderer() { return deps.renderer },
     selectionAttached: messageId => deps.selectionAttached(messageId),
     pricingWindow: dshPricingWindow,
   })

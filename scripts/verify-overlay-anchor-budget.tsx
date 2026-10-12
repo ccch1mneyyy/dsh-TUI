@@ -10,7 +10,7 @@
  *   - overlaySpaceAbove / clampOverlayHeight 纯函数边界表（inline 溢出视口换算、
  *     声明上限取小、至少 1 行、未量到沿用声明值）；
  *   - 真实 ModelPicker 挂在 Chat 同构的输入簇里（转录 + 输入簇 + OverlayAbove），
- *     headless xterm 下短会话/高终端：标题、焦点、页脚全部在屏，浮层底边紧贴
+ *     headless xterm 下短会话/高终端：标题、焦点、推理区全部在屏，浮层底边紧贴
  *     输入行；焦点在首/中/末项均成立；
  *   - 长会话（帧高于终端的 inline 溢出）不被过度钳制：列表仍用满整屏预算；
  *   - 退化场景（锚点上方仅 4 行）：焦点可见优先于标题。
@@ -76,6 +76,7 @@ const MODELS = Array.from({ length: 36 }, (_, i) => ({
   description: undefined,
 }))
 const CURRENT = 'p/m05'
+const noop = () => {}
 
 /** Chat 输入簇同构：转录若干行 + 输入簇（输入行 + 状态行 + 浮层）。 */
 function Screen({ transcriptRows, focusIndex, rows }: {
@@ -100,7 +101,11 @@ function Screen({ transcriptRows, focusIndex, rows }: {
           Box,
           { flexDirection: 'column', marginTop: 1 },
           React.createElement(ModelPicker, {
-            models: MODELS, focusIndex, currentModel: CURRENT, showBack: false,
+            groups: [{ provider: 'p', label: 'Provider', count: MODELS.length }],
+            provider: 'p', models: MODELS, focusIndex, currentModel: CURRENT, loading: false,
+            efforts: [{ id: 'medium', name: 'Medium' }], effortId: 'medium',
+            effortsLoading: false, effortError: false, levelsFallback: false,
+            onProvider: noop, onFocus: noop, onEffort: noop, onMove: noop, onConfirm: noop, onCancel: noop,
           }),
         ),
       ),
@@ -113,6 +118,8 @@ type Shape = {
   divider: number
   focus: number
   hint: number
+  effort: number
+  levels: number
   composer: number
   listRows: number
 }
@@ -122,11 +129,13 @@ function readShape(term: InstanceType<typeof XTerm>, rows: number): Shape {
   const title = lines.findIndex(line => line.includes('模型'))
   const focus = lines.findIndex(line => line.includes('❯'))
   const hint = lines.findIndex(line => line.includes('Enter'))
+  const effort = lines.findIndex(line => line.includes('推理强度'))
+  const levels = lines.findIndex(line => line.includes('Medium'))
   const composer = lines.findIndex(line => line.includes('composer-line'))
   const divider = title > 0 && lines[title - 1]!.includes('─') ? title - 1 : -1
-  // 标题行、marginBottom 空行、列表行……页脚：列表行数 = hint - title - 2。
-  const listRows = title >= 0 && hint > title ? hint - title - 2 : -1
-  return { title, divider, focus, hint, composer, listRows }
+  // 只数模型行，提供商标签、推理等级与按键提示不属于列表预算。
+  const listRows = lines.filter(line => /model-\d{2}/u.test(line)).length
+  return { title, divider, focus, hint, effort, levels, composer, listRows }
 }
 
 function dump(term: InstanceType<typeof XTerm>, rows: number, tag: string): void {
@@ -173,10 +182,11 @@ async function mount(rows: number, transcriptRows: number, focusIndex: number) {
   }
 }
 
-/** 标题/焦点/页脚在屏，且浮层底边（页脚）紧贴输入行。 */
+/** 标题/提示/焦点/推理区在屏，推理档位紧贴输入行。 */
 function intact(shape: Shape): boolean {
-  return shape.divider >= 0 && shape.title > shape.divider && shape.focus > shape.title
-    && shape.hint > shape.focus && shape.composer === shape.hint + 1
+  return shape.divider >= 0 && shape.title > shape.divider && shape.hint > shape.title
+    && shape.focus > shape.hint && shape.effort > shape.focus
+    && shape.levels === shape.effort + 1 && shape.composer === shape.levels + 1
 }
 
 // 场景 A：#493 原型——高终端（48 行）、短会话（锚点上方 12 行）、焦点在当前模型。
@@ -184,12 +194,12 @@ function intact(shape: Shape): boolean {
   const ROWS = 48
   const m = await mount(ROWS, 12, 5)
   let shape = readShape(m.term, ROWS)
-  check('48 rows / short session: pane top, focus and footer all on screen, footer hugs the composer',
+  check('48 rows / short session: header, focus and effort all on screen, effort hugs the composer',
     await settled(() => { shape = readShape(m.term, ROWS); return intact(shape) }),
     JSON.stringify(shape))
   dump(m.term, ROWS, 'A focus=5')
   check('48 rows / short session: window fits the 12 rows above the anchor',
-    shape.title >= 0 && shape.listRows > 0 && shape.listRows <= 12 - 6, `listRows=${shape.listRows}`)
+    shape.title >= 0 && shape.listRows > 0 && shape.listRows <= 12 - 8, `listRows=${shape.listRows}`)
   for (const focus of [0, 20, 35]) {
     m.setFocus(focus)
     let next = readShape(m.term, ROWS)
@@ -206,7 +216,7 @@ function intact(shape: Shape): boolean {
 }
 
 // 场景 B：长会话（转录 60 行 > 48 行终端，inline 溢出）——不能过度钳制，
-// 列表仍用满整屏预算（rows - 14 = 34 行）。
+// 列表仍用满整屏预算（rows - 8 - 11 = 29 行）。
 {
   const ROWS = 48
   const m = await mount(ROWS, 60, 5)
@@ -215,9 +225,9 @@ function intact(shape: Shape): boolean {
     await settled(() => { shape = readShape(m.term, ROWS); return intact(shape) }),
     JSON.stringify(shape))
   dump(m.term, ROWS, 'B')
-  // 浮层 40 行（rows - 8）减 ModelPicker 框架 6 行 = 34 行列表，一行不少。
+  // 浮层 40 行（rows - 8）减同页选择器框架 11 行 = 29 行列表。
   check('48 rows / long session: full-screen budget still used (no over-clamp)',
-    shape.listRows === 34, `listRows=${shape.listRows}`)
+    shape.listRows === 29, `listRows=${shape.listRows}`)
   m.unmount()
 }
 
@@ -242,7 +252,10 @@ function intact(shape: Shape): boolean {
   check('4 rows above the anchor: focus and footer visible, footer hugs the composer',
     await settled(() => {
       shape = readShape(m.term, ROWS)
-      return shape.focus >= 0 && shape.hint > shape.focus && shape.composer === shape.hint + 1
+      const lines = viewportLines(m.term, ROWS)
+      return shape.focus >= 0 && lines[shape.focus]!.includes('model-05')
+        && lines.some(line => line.includes('推理强度') && line.includes('Medium'))
+        && shape.hint > shape.focus && shape.composer === shape.hint + 1
     }),
     JSON.stringify(shape))
   dump(m.term, ROWS, 'D')

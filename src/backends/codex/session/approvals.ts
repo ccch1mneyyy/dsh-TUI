@@ -23,8 +23,8 @@
 import { randomUUID } from 'node:crypto'
 import type { PermissionDecision, QuestionAnswers } from '../../../agent/capabilities.js'
 import type { AgentEvent, PermissionOptionView, PermissionOutcome, PermissionRequestView, QuestionItemView } from '../../../agent/events.js'
-import { createElicitationForm, createElicitationUrlAsk, elicitationNotices } from '../../../channel/elicitation.js'
-import { t } from '../../../i18n.js'
+import { createElicitationForm, createElicitationUrlAsk, elicitationNotices } from '../../shared/elicitation.js'
+import { codexElicitationText, codexText } from '../text.js'
 import { displayPath } from '../../shared/display-path.js'
 import { arr, errorText, num, rec, str, type Rec } from '../narrow.js'
 import { SERVER_REQUEST } from '../protocol/index.js'
@@ -111,35 +111,35 @@ function commandChoices(params: Rec): Choice[] {
   const declineOffered = offered.includes('decline')
   for (const raw of offered) {
     if (raw === 'accept') {
-      choices.push({ option: { id: 'accept', kind: 'allow-once', label: t('codex-approve-accept') }, decision: 'accept' })
+      choices.push({ option: { id: 'accept', kind: 'allow-once', label: codexText('codex-approve-accept') }, decision: 'accept' })
     } else if (raw === 'acceptForSession') {
-      choices.push({ option: { id: 'session', kind: 'allow-always', label: t('codex-approve-session-command') }, decision: 'acceptForSession' })
+      choices.push({ option: { id: 'session', kind: 'allow-always', label: codexText('codex-approve-session-command') }, decision: 'acceptForSession' })
     } else if (raw === 'decline' || raw === 'cancel') {
       // A plain rejection declines when the server allows it, else cancels.
-      if (!rejectAdded) choices.push({ option: { id: 'reject', kind: 'reject', label: t(declineOffered ? 'codex-approve-decline' : 'codex-approve-cancel') }, decision: declineOffered ? 'decline' : 'cancel' })
+      if (!rejectAdded) choices.push({ option: { id: 'reject', kind: 'reject', label: codexText(declineOffered ? 'codex-approve-decline' : 'codex-approve-cancel') }, decision: declineOffered ? 'decline' : 'cancel' })
       rejectAdded = true
     } else {
       const value = rec(raw)
       const amendment = arr(rec(value?.acceptWithExecpolicyAmendment)?.execpolicy_amendment).filter((token): token is string => typeof token === 'string')
       if (amendment.length > 0) {
         const prefix = prefixLabel(amendment)
-        if (prefix !== undefined) choices.push({ option: { id: 'execpolicy', kind: 'allow-always', label: t('codex-approve-prefix', { prefix }) }, decision: raw })
+        if (prefix !== undefined) choices.push({ option: { id: 'execpolicy', kind: 'allow-always', label: codexText('codex-approve-prefix', { prefix }) }, decision: raw })
         continue
       }
       const policy = rec(rec(value?.applyNetworkPolicyAmendment)?.network_policy_amendment)
       if (policy !== undefined && str(policy.action) === 'allow') {
-        choices.push({ option: { id: `net:${network++}`, kind: 'allow-always', label: t('codex-approve-network', { host: str(policy.host) ?? '' }) }, decision: raw })
+        choices.push({ option: { id: `net:${network++}`, kind: 'allow-always', label: codexText('codex-approve-network', { host: str(policy.host) ?? '' }) }, decision: raw })
       }
     }
   }
-  if (!rejectAdded) choices.push({ option: { id: 'reject', kind: 'reject', label: t('codex-approve-cancel') }, decision: 'cancel' })
+  if (!rejectAdded) choices.push({ option: { id: 'reject', kind: 'reject', label: codexText('codex-approve-cancel') }, decision: 'cancel' })
   return choices
 }
 
 /** A one-line summary of requested extra permissions. */
 function permissionsSummary(permissions: Rec | undefined, cwd: string): string {
   const parts: string[] = []
-  if (rec(permissions?.network)?.enabled === true) parts.push(t('codex-perm-network'))
+  if (rec(permissions?.network)?.enabled === true) parts.push(codexText('codex-perm-network'))
   const fileSystem = rec(permissions?.fileSystem)
   const paths = (access: string, legacy: unknown): string[] => [
     ...arr(legacy).filter((path): path is string => typeof path === 'string'),
@@ -152,8 +152,8 @@ function permissionsSummary(permissions: Rec | undefined, cwd: string): string {
   ].filter(path => path !== '').map(path => displayPath(path, cwd))
   const reads = paths('read', fileSystem?.read)
   const writes = paths('write', fileSystem?.write)
-  if (reads.length > 0) parts.push(t('codex-perm-read', { paths: reads.join(', ') }))
-  if (writes.length > 0) parts.push(t('codex-perm-write', { paths: writes.join(', ') }))
+  if (reads.length > 0) parts.push(codexText('codex-perm-read', { paths: reads.join(', ') }))
+  if (writes.length > 0) parts.push(codexText('codex-perm-write', { paths: writes.join(', ') }))
   return parts.join('; ')
 }
 
@@ -161,14 +161,14 @@ function permissionsSummary(permissions: Rec | undefined, cwd: string): string {
  *  network host, extra permissions, another working directory. */
 function commandDescription(params: Rec, cwd: string): string {
   const parts: string[] = []
-  if (str(params.kind) === 'writeStdin') parts.push(t('codex-approve-stdin'))
+  if (str(params.kind) === 'writeStdin') parts.push(codexText('codex-approve-stdin'))
   const network = rec(params.networkApprovalContext)
   const host = str(network?.host)
-  if (host !== undefined && host !== '') parts.push(t('codex-approve-network-context', { host, protocol: str(network?.protocol) ?? '' }))
+  if (host !== undefined && host !== '') parts.push(codexText('codex-approve-network-context', { host, protocol: str(network?.protocol) ?? '' }))
   const extra = permissionsSummary(rec(params.additionalPermissions), cwd)
-  if (extra !== '') parts.push(t('codex-approve-extra-permissions', { what: extra }))
+  if (extra !== '') parts.push(codexText('codex-approve-extra-permissions', { what: extra }))
   const where = str(params.cwd)
-  if (where !== undefined && where !== '' && where !== cwd) parts.push(t('codex-approve-cwd', { cwd: displayPath(where, cwd) }))
+  if (where !== undefined && where !== '' && where !== cwd) parts.push(codexText('codex-approve-cwd', { cwd: displayPath(where, cwd) }))
   return parts.join(' · ')
 }
 
@@ -220,7 +220,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           requestId: request.key,
           toolName: 'shell',
           ...(itemId === undefined ? {} : { callId: itemId }),
-          displayName: stdin ? t('codex-approve-stdin-name') : t('tool-name-bash'),
+          displayName: stdin ? codexText('codex-approve-stdin-name') : codexText('tool-name-bash'),
           ...(command === undefined ? {} : { command, input: { command } }),
           ...(description === '' ? {} : { description }),
           ...(reason === undefined || reason === '' ? {} : { reason }),
@@ -235,15 +235,15 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
         const reason = str(params.reason)
         const root = str(params.grantRoot)
         const choices: Choice[] = [
-          { option: { id: 'accept', kind: 'allow-once', label: t('codex-approve-accept') }, decision: 'accept' },
-          { option: { id: 'session', kind: 'allow-always', label: t('codex-approve-session-files') }, decision: 'acceptForSession' },
-          { option: { id: 'reject', kind: 'reject', label: t('codex-approve-decline-files') }, decision: 'decline' },
+          { option: { id: 'accept', kind: 'allow-once', label: codexText('codex-approve-accept') }, decision: 'accept' },
+          { option: { id: 'session', kind: 'allow-always', label: codexText('codex-approve-session-files') }, decision: 'acceptForSession' },
+          { option: { id: 'reject', kind: 'reject', label: codexText('codex-approve-decline-files') }, decision: 'decline' },
         ]
         const view: PermissionRequestView = {
           requestId: request.key,
           toolName: 'apply_patch',
           ...(itemId === undefined ? {} : { callId: itemId }),
-          displayName: t('tool-name-edit'),
+          displayName: codexText('tool-name-edit'),
           ...(reason === undefined || reason === '' ? {} : { reason }),
           ...(root === undefined || root === '' ? {} : { blockedPath: displayPath(root, deps.cwd) }),
           ...agentOf(params),
@@ -261,15 +261,15 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
         }
         const reason = str(params.reason)
         const choices: Choice[] = [
-          { option: { id: 'turn', kind: 'allow-once', label: t('codex-approve-grant-turn') }, decision: { permissions: granted, scope: 'turn' } },
-          { option: { id: 'session', kind: 'allow-always', label: t('codex-approve-session-permissions') }, decision: { permissions: granted, scope: 'session' } },
-          { option: { id: 'reject', kind: 'reject', label: t('codex-approve-deny-permissions') }, decision: { permissions: {}, scope: 'turn' } },
+          { option: { id: 'turn', kind: 'allow-once', label: codexText('codex-approve-grant-turn') }, decision: { permissions: granted, scope: 'turn' } },
+          { option: { id: 'session', kind: 'allow-always', label: codexText('codex-approve-session-permissions') }, decision: { permissions: granted, scope: 'session' } },
+          { option: { id: 'reject', kind: 'reject', label: codexText('codex-approve-deny-permissions') }, decision: { permissions: {}, scope: 'turn' } },
         ]
         const view: PermissionRequestView = {
           requestId: request.key,
           toolName: 'permissions',
           ...(itemId === undefined ? {} : { callId: itemId }),
-          displayName: t('codex-permissions-name'),
+          displayName: codexText('codex-permissions-name'),
           description: permissionsSummary(requested, deps.cwd),
           ...(reason === undefined || reason === '' ? {} : { reason }),
           ...agentOf(params),
@@ -313,7 +313,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           const clock = deps.clock ?? REAL_CLOCK
           const timer = clock.setTimeout(() => {
             respondQuestion(entry.key, { answers: questions.map(question => ({ selected: question.options[0] === undefined ? [] : [question.options[0].label] })) })
-            deps.emit([{ type: 'notice', level: 'info', key: `codex-auto-answer:${entry.key}`, text: t('codex-question-auto-answered') }])
+            deps.emit([{ type: 'notice', level: 'info', key: `codex-auto-answer:${entry.key}`, text: codexText('codex-question-auto-answered') }])
           }, autoMs)
           entry.cancelTimer = () => clock.clearTimeout(timer)
         }
@@ -332,18 +332,18 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           deps.emit([{ type: 'question.request', request: { requestId: entry.askId!, ...agentOf(params), questions } }])
         }
         if (mode === 'url') {
-          const ask = createElicitationUrlAsk(source)
+          const ask = createElicitationUrlAsk(source, codexElicitationText())
           if (ask === undefined) {
             request.respond({ action: 'decline', content: null, _meta: null })
-            deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${request.key}`, text: elicitationNotices.urlMissing(serverName) }])
+            deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${request.key}`, text: elicitationNotices(codexElicitationText()).urlMissing(serverName) }])
             return
           }
           entry.answerQuestion = answers => finish(ask.accepted(answers) ? 'accept' : 'decline')
           parked.set(entry.key, entry)
-          deps.emit([{ type: 'notice', level: 'info', key: `elicit-url:${request.key}`, text: elicitationNotices.urlOpen(serverName, source.url!) }])
+          deps.emit([{ type: 'notice', level: 'info', key: `elicit-url:${request.key}`, text: elicitationNotices(codexElicitationText()).urlOpen(serverName, source.url!) }])
           show(ask.questions)
         } else if (mode === 'form' || mode === 'openai/form' || mode === 'openaiForm') {
-          const form = createElicitationForm(source)
+          const form = createElicitationForm(source, codexElicitationText())
           let round = 0
           entry.answerQuestion = answers => {
             const step = form.answer(answers)
@@ -356,7 +356,7 @@ export function createApprovalBridge(deps: ApprovalBridgeDeps) {
           show(form.questions)
         } else {
           request.respond({ action: 'decline', content: null, _meta: null })
-          deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${request.key}`, text: elicitationNotices.unsupported(serverName, mode) }])
+          deps.emit([{ type: 'notice', level: 'warning', key: `elicit:${request.key}`, text: elicitationNotices(codexElicitationText()).unsupported(serverName, mode) }])
         }
         return
       }

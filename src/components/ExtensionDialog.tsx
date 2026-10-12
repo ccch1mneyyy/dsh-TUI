@@ -32,6 +32,7 @@
 import React from 'react'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
+import { SearchBox } from './SearchBox.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { actionMatches } from '../utils/keymap.js'
@@ -334,8 +335,6 @@ function InputDialog({
     }
   }, { isActive: true })
 
-  const shown = value === '' && dialog.placeholder !== undefined ? dialog.placeholder : value
-  const shownPoints = [...shown]
   return (
     <Pane color="permission">
       <Box flexDirection="column">
@@ -344,15 +343,16 @@ function InputDialog({
             {dialog.title}
           </Text>
         </Box>
-        <Text>
-          {/* The caret is the inverted cell under the cursor.
-              At end of line it inverts the trailing space. Splits
-              are code-point safe — the caret never lands inside a surrogate
-              pair. */}
-          <Text dimColor={value === ''}>{shownPoints.slice(0, cursor).join('')}</Text>
-          <Text inverse>{shownPoints[cursor] ?? ' '}</Text>
-          <Text>{shownPoints.slice(cursor + 1).join('')}</Text>
-        </Text>
+        <SearchBox
+          query={value}
+          cursorOffset={[...value].slice(0, cursor).join('').length}
+          placeholder={dialog.placeholder ?? ''}
+          placeholderAlign="left"
+          prefix=""
+          borderless
+          isFocused
+          isTerminalFocused
+        />
       </Box>
       <Text dimColor italic>
         <HintLine text={t('hint-ext-dialog-input')} />

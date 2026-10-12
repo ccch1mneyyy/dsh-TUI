@@ -23,7 +23,8 @@ import { toolCallOf } from '../src/backends/codex/translate/presentation.js'
 import { isPatchDiff, parseFilePatch } from '../src/components/diffPatch.js'
 import { assertAgentEventInvariants } from './lib/agent-event-invariants.js'
 import { unwrapCommand } from '../src/backends/codex/translate/commands.js'
-import { setLang, t } from '../src/i18n.js'
+import { setLang } from '../src/i18n.js'
+import { codexText } from '../src/backends/codex/text.js'
 import { golden, liveRun, loadWire, notificationsOf, replayRun, turnThreads, WIRE_DIR } from './lib/codex-translate-harness.js'
 
 setLang('en')
@@ -89,7 +90,7 @@ for (const key of ['s1-approvals.2', 's1b-command-approval', 's2-steer-interrupt
 // ── recorded behaviour ──────────────────────────────────────────────────
 {
   const declined = runs.get('s1-approvals.2')!.harness.state.rows.find(row => row.kind === 'tool')
-  check('declined file change: an error card that says declined (F14)', declined?.tool?.status === 'error' && declined.tool.errorText === t('codex-declined') && declined.tool.callView?.card === 'diff', declined?.tool)
+  check('declined file change: an error card that says declined (F14)', declined?.tool?.status === 'error' && declined.tool.errorText === codexText('codex-declined') && declined.tool.callView?.card === 'diff', declined?.tool)
   const command = runs.get('s1b-command-approval')!.harness.state.rows.find(row => row.kind === 'tool')
   check('approved command: a terminal card titled with the unwrapped command (F13)', command?.tool?.callView?.card === 'terminal' && 'title' in command.tool.callView && command.tool.callView.title === 'echo probe > a.txt' && command.tool.callView.displayKey === 'tool-name-bash', command?.tool)
   const steer = runs.get('s2-steer-interrupt-diff')!
@@ -99,7 +100,7 @@ for (const key of ['s1-approvals.2', 's1b-command-approval', 's2-steer-interrupt
   const ends = of(steer.events, 'turn.end').map(event => event.reason.kind)
   check('interrupt: the second turn ends interrupted, the others complete', ends.join(',') === 'completed,interrupted,completed', ends)
   const interruptedCard = steer.harness.state.rows.find(row => row.kind === 'tool' && row.tool?.status === 'error')
-  check('interrupt: the never-completed command is closed as interrupted (F11)', interruptedCard?.tool?.errorText === t('codex-interrupted'))
+  check('interrupt: the never-completed command is closed as interrupted (F11)', interruptedCard?.tool?.errorText === codexText('codex-interrupted'))
   check('interrupt: an interrupt row marks the abort', steer.harness.state.rows.some(row => row.kind === 'interrupt'))
   const patches = steer.harness.state.rows.filter(row => row.tool?.name === 'apply_patch')
   check('file changes: write (add) then edit (update) diff cards', patches.length === 2 && patches[0]!.tool!.callView?.displayKey === 'tool-name-write' && patches[1]!.tool!.callView?.displayKey === 'tool-name-edit', patches.map(row => row.tool?.callView))

@@ -5,9 +5,8 @@ import { createHash } from 'node:crypto'
 import { readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SessionCapabilities, ChannelProfileView } from '../../agent/capabilities.js'
-import { channelProfileSlug } from '../../channel/channel-slug.js'
-import { t } from '../../i18n.js'
-import { DATA_DIR } from '../../utils/paths.js'
+import { channelProfileSlug } from '../shared/channel-slug.js'
+import { codexText } from './text.js'
 import { writeFileAtomic } from '../shared/atomic-file.js'
 import { channelTokenRef, type ChannelTokenStore } from '../shared/channel-tokens.js'
 import { rec, str, type Rec } from './narrow.js'
@@ -53,7 +52,7 @@ const credentialEnv = /(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|AUTHORIZATION)/iu
 
 /** Reject credential-bearing URLs before either persistence or spawn. */
 export function validateCodexBaseUrl(value: string): string {
-  const fail = (): never => { throw new Error(t('codex-channel-url-invalid')) }
+  const fail = (): never => { throw new Error(codexText('codex-channel-url-invalid')) }
   const input = value.trim()
   if (input === '' || /[\s\\]/u.test(input) || input.includes('?') || input.includes('#')) return fail()
   let url: URL
@@ -102,10 +101,10 @@ export function parseCodexChannels(value: unknown): CodexChannelsData {
 }
 
 function checked(profile: CodexChannelProfile): CodexChannelProfile {
-  if (!/^[a-z0-9][a-z0-9_-]*$/iu.test(profile.id)) throw new Error(t('codex-channel-id-invalid'))
-  if (profile.wireApi !== undefined && profile.wireApi !== 'responses') throw new Error(t('codex-channel-wire-api-invalid'))
+  if (!/^[a-z0-9][a-z0-9_-]*$/iu.test(profile.id)) throw new Error(codexText('codex-channel-id-invalid'))
+  if (profile.wireApi !== undefined && profile.wireApi !== 'responses') throw new Error(codexText('codex-channel-wire-api-invalid'))
   for (const key of Object.keys(profile.env ?? {})) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || credentialEnv.test(key)) throw new Error(t('codex-channel-env-invalid'))
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || credentialEnv.test(key)) throw new Error(codexText('codex-channel-env-invalid'))
   }
   return {
     id: profile.id, name: profile.name.trim() || profile.id, wireApi: 'responses',
@@ -124,8 +123,11 @@ const without = (data: CodexChannelsData, id: string): CodexChannelsData => ({
 export const activeProfileOf = (data: CodexChannelsData): CodexChannelProfile | undefined => data.channels.find(row => row.id === data.active)
 export const hasChannelConnection = (profile: CodexChannelProfile | undefined): boolean => profile !== undefined && (profile.baseUrl !== undefined || profile.tokenRef !== undefined || Object.keys(profile.env ?? {}).length > 0)
 
-/** Same atomic/upsert/damaged-file semantics as the mature Claude store. */
-export function fileCodexChannels(dir = join(DATA_DIR, 'backends', 'codex'), debug: (message: string) => void = () => undefined): CodexChannels {
+/** The file-backed profiles under `<dir>` (the host's `dataDir` for this
+ *  backend). The directory is required: a backend never picks a location of
+ *  its own under the host's data directory (D2, B-3/B-5). Same
+ *  atomic/upsert/damaged-file semantics as the mature Claude store. */
+export function fileCodexChannels(dir: string, debug: (message: string) => void = () => undefined): CodexChannels {
   const path = join(dir, FILE)
   const load = (): { data: CodexChannelsData; damaged: boolean } => {
     try { return { data: parseCodexChannels(JSON.parse(readFileSync(path, 'utf8'))), damaged: false } }
@@ -163,10 +165,10 @@ export function memoryCodexChannels(initial: CodexChannelsData = { channels: [] 
 /** The token only goes into the child environment, never an argv override. */
 export function codexChannelLaunch(profile: CodexChannelProfile | undefined, tokens?: ChannelTokenStore): CodexChannelLaunch {
   if (!hasChannelConnection(profile) || profile === undefined) return { args: [], env: {}, injectedEnvKeys: [] }
-  if (profile.baseUrl === undefined) throw new Error(t('codex-channel-url-required'))
+  if (profile.baseUrl === undefined) throw new Error(codexText('codex-channel-url-required'))
   const valid = checked(profile)
   const token = valid.tokenRef === undefined ? undefined : tokens?.read(valid.tokenRef)
-  if (token === undefined && new URL(valid.baseUrl!).protocol !== 'http:') throw new Error(t('codex-channel-token-missing', { name: valid.name }))
+  if (token === undefined && new URL(valid.baseUrl!).protocol !== 'http:') throw new Error(codexText('codex-channel-token-missing', { name: valid.name }))
   const provider = 'dshtui-' + valid.id
   const overrides: Readonly<Record<string, string | boolean>> = {
     model_provider: provider,
@@ -229,14 +231,14 @@ export function createCodexChannelsRuntime(deps: {
       })
       let tokenRef = profile.tokenRef
       if (input.token !== undefined) {
-        if (tokens === undefined) throw new Error(t('codex-channel-store-unavailable'))
+        if (tokens === undefined) throw new Error(codexText('codex-channel-store-unavailable'))
         if (input.token === '') {
           if (tokenRef !== undefined && !shared(tokenRef, input.id) && tokenRef === derivedRef(input.id)) tokens.erase(tokenRef)
           tokenRef = undefined
         } else {
           tokenRef ??= derivedRef(input.id)
           tokens.write(tokenRef, input.token)
-          if (tokens.read(tokenRef) !== input.token) throw new Error(t('codex-channel-token-write-failed'))
+          if (tokens.read(tokenRef) !== input.token) throw new Error(codexText('codex-channel-token-write-failed'))
         }
       }
       const { tokenRef: _oldRef, ...rest } = profile

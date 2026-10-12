@@ -2,7 +2,7 @@
  * the host credential source, JWT claims parsing, and JSON-RPC writes. */
 import type { OAuthAccess, OAuthCredentialSource } from '../../../agent/backend.js'
 import type { AccountView, SessionAuthView } from '../../../agent/capabilities.js'
-import { t } from '../../../i18n.js'
+import { codexText } from '../text.js'
 import { rec, str, type Rec } from '../narrow.js'
 import { CLIENT, NOTIFY, SERVER_REQUEST } from '../protocol/index.js'
 import { REAL_CLOCK, RPC_ERROR, type RpcClock } from '../rpc/client.js'
@@ -104,7 +104,7 @@ export function createCodexAuth(deps: CodexAuthDeps): CodexAuthRuntime {
     managedFailed = mayHaveLoaded
     if (managedFailed) source = 'unknown'
     debug('codex auth: managed credential failed; injection stopped')
-    note('codex-auth', 'error', t(key))
+    note('codex-auth', 'error', codexText(key))
   }
 
   const fresh = async (rejected?: string): Promise<OAuthAccess | undefined> => {
@@ -177,7 +177,7 @@ export function createCodexAuth(deps: CodexAuthDeps): CodexAuthRuntime {
         if (access !== undefined) {
           const tokens = externalTokensOf(access)
           if (tokens === undefined) {
-            note('codex-auth', 'warning', t('codex-auth-claims-missing'))
+            note('codex-auth', 'warning', codexText('codex-auth-claims-missing'))
           } else {
             epoch += 1
             injected = tokens
@@ -190,7 +190,7 @@ export function createCodexAuth(deps: CodexAuthDeps): CodexAuthRuntime {
         }
       } catch { failed('codex-auth-refresh-failed') }
     }
-    if (source === 'missing') note('codex-auth-required', 'warning', t('codex-auth-login-needed'))
+    if (source === 'missing') note('codex-auth-required', 'warning', codexText('codex-auth-login-needed'))
   }
 
   const runtime: CodexAuthRuntime = {
@@ -220,14 +220,14 @@ export function createCodexAuth(deps: CodexAuthDeps): CodexAuthRuntime {
       await runtime.start()
       const account = await runtime.account()
       const labels: Record<CodexTokenSource, string> = {
-        channel: t('codex-auth-source-channel', { name: deps.channel?.name ?? '' }),
-        'dsh-auth': t('codex-auth-source-oauth'),
-        'codex-login': t('codex-auth-source-native'),
-        'api-key': t('codex-auth-source-api-key'),
-        missing: t('codex-auth-source-missing'),
-        unknown: t('codex-auth-source-unknown'),
+        channel: codexText('codex-auth-source-channel', { name: deps.channel?.name ?? '' }),
+        'dsh-auth': codexText('codex-auth-source-oauth'),
+        'codex-login': codexText('codex-auth-source-native'),
+        'api-key': codexText('codex-auth-source-api-key'),
+        missing: codexText('codex-auth-source-missing'),
+        unknown: codexText('codex-auth-source-unknown'),
       }
-      return { lines: [labels[source], ...(account.subscription === undefined ? [] : [t('codex-auth-plan', { plan: account.subscription })]), ...(route.host === undefined ? [] : [t('codex-auth-host', { host: route.host })]), ...(!route.firstParty || deps.externalAllowed === false ? [t('codex-auth-route-blocked')] : []), ...[...notices.values()].map(notice => notice.text)] }
+      return { lines: [labels[source], ...(account.subscription === undefined ? [] : [codexText('codex-auth-plan', { plan: account.subscription })]), ...(route.host === undefined ? [] : [codexText('codex-auth-host', { host: route.host })]), ...(!route.firstParty || deps.externalAllowed === false ? [codexText('codex-auth-route-blocked')] : []), ...[...notices.values()].map(notice => notice.text)] }
     },
     async account() {
       await readOwnAccount()
@@ -239,7 +239,7 @@ export function createCodexAuth(deps: CodexAuthDeps): CodexAuthRuntime {
       return () => { listeners.delete(listener) }
     },
     async deviceLogin() {
-      if (deps.channel !== undefined) throw new Error(t('codex-auth-channel-active'))
+      if (deps.channel !== undefined) throw new Error(codexText('codex-auth-channel-active'))
       let finish!: (success: boolean) => void
       const done = new Promise<boolean>(resolve => { finish = resolve })
       const early: Rec[] = []
@@ -276,12 +276,12 @@ export function createCodexAuth(deps: CodexAuthDeps): CodexAuthRuntime {
       } catch {
         off()
         finish(false)
-        throw new Error(t('codex-auth-login-failed'))
+        throw new Error(codexText('codex-auth-login-failed'))
       }
     },
     async apiKeyLogin(apiKey) {
-      if (deps.channel !== undefined) throw new Error(t('codex-auth-channel-active'))
-      if (apiKey.trim() === '') throw new Error(t('codex-auth-api-key-required'))
+      if (deps.channel !== undefined) throw new Error(codexText('codex-auth-channel-active'))
+      if (apiKey.trim() === '') throw new Error(codexText('codex-auth-api-key-required'))
       try {
         await hub.call(CLIENT.accountLoginStart, { type: 'apiKey', apiKey })
         disable()
@@ -289,7 +289,7 @@ export function createCodexAuth(deps: CodexAuthDeps): CodexAuthRuntime {
         externalLoaded = false
         ownSource = 'api-key'
         source = 'api-key'
-      } catch { throw new Error(t('codex-auth-login-failed')) }
+      } catch { throw new Error(codexText('codex-auth-login-failed')) }
     },
   }
   return runtime

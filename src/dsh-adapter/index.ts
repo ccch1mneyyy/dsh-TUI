@@ -9,13 +9,15 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
-import { isKernelId, type KernelBackendId } from '../kernelPrefs.js'
+import { parseBackendChoice } from './backend-registry.js'
+import type { KernelBackendId } from '../kernelPrefs.js'
 import { BTW_CONTEXT_BUDGET_DEFAULT, BTW_CONTEXT_TURNS_DEFAULT, DEFAULT_COMPANION_SKIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, normalizeBtwContextBudget, normalizeBtwContextTurns, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../components/splashFonts.js'
 import { normalizeBrandSetting, type BrandSetting } from '../branding.js'
 import { editableConfig, type RuntimeConfig } from './compat/settings.js'
 import { EDITABLE_CONFIG_KEYS } from '../settings/definitions.js'
+import { peekEntrySlot, takeEntryAttach } from './entry-slot.js'
 
 export const name = 'dsh-tui'
 // `tuiWorkspaces` must stay OUT of this code-level inject (issue #183): the
@@ -41,14 +43,24 @@ export interface Config {
    *  the local Claude CLI through the Claude Agent SDK (optional peer
    *  `@anthropic-ai/claude-agent-sdk`); `codex`, the experimental Codex
    *  backend driving the user's own `codex` CLI over `codex app-server`.
-   *  `dsh-tui --backend <id>` sets it through `DSH_TUI_BACKEND`. */
-  backend?: KernelBackendId
-  /** LLM provider route. The route resolves atomically (issue #67): when
-   *  cordis.yml names BOTH `provider` and `model`, that pair wins; otherwise
-   *  the `/model` choice persisted in `~/.dsh-tui/model.json` wins whole;
-   *  otherwise `agentDefaultModel` supplies the provider-neutral Harness
-   *  default. A bare embedder without that service falls back to DeepSeek.
-   *  A provider-only pin never half-overrides the persisted choice. */
+   *  `dsh-tui --backend <id>` sets it through `DSH_TUI_BACKEND`.
+   *
+   *  A plain `string` on purpose: this is the **input** surface, so an embedder
+   *  writing `{ backend: 'codex' }` keeps compiling. The value is gated right
+   *  below (`normalizeBackendChoice`: syntax, then registry) and the boot re-reads
+   *  it through that same gate — the `BackendId` brand stays inside the package,
+   *  where it guards session refs and `~/.dsh-tui/backends/<id>/` paths. Declaring
+   *  the branded `KernelBackendId` here breaks published consumers instead
+   *  (PR #1380 review R1). */
+  backend?: string
+  /** LLM provider route. The route resolves atomically (issue #67): the
+   *  `/model` choice persisted in `~/.dsh-tui/model.json` — the route the
+   *  last session ran — wins whole; otherwise a `provider`+`model` pair named
+   *  here is the deployment DEFAULT; otherwise `agentDefaultModel` supplies
+   *  the provider-neutral Harness default. A bare embedder without that
+   *  service falls back to DeepSeek. A half-pinned pair (only one of the two
+   *  keys) is ignored outright and never half-overrides the persisted
+   *  choice. */
   provider?: string
   /** Model override passed to the agent; resolved together with `provider`
    *  as one atomic route (see `provider`). */
@@ -62,11 +74,13 @@ export interface Config {
   workspace?: string
   /** Reasoning effort applied to every request, validated against the live
    *  route's adapter levels (an unlisted level is ignored and the adapter
-   *  default applies). Wins over the persisted /effort choice; also seeds
-   *  the startup status line until the first request header reports the
-   *  live value. */
+   *  default applies). This is the deployment DEFAULT beneath the persisted
+   *  `/effort` choice (the level the last session ran); it also seeds the
+   *  startup status line until the first request header reports the live
+   *  value. */
   effort?: string
-  /** Settings default for future sessions; overrides the `effort` fallback. */
+  /** Settings user-layer default for future sessions; when set it outranks
+   *  both the persisted `/effort` choice and the `effort` fallback. */
   effortDefault?: string
   /** Show the header whale and its idle animation. */
   whale?: boolean
@@ -105,13 +119,20 @@ export interface Config {
    *  /settings choices override this value after restart. The environment
    *  override DSH_TUI_DISABLE_TERMINAL_IMAGES can always force previews off. */
   terminalImages?: boolean
+  /** Launchpad landing page (settings `dsh-tui.launchpad`): an ordinary
+   *  launch (no --resume, no first prompt) starts on the launchpad — the
+   *  page where the first sentence gets typed. On by default; `false` boots
+   *  straight into the chat page. Saved /settings choices override this
+   *  value after restart; DSH_TUI_NO_LAUNCHPAD=1 skips it regardless. */
+  launchpad?: boolean
   /** UI language: `en` / `zh`. When absent, the `DSH_TUI_LANG` env var wins,
    *  then the `/lang` choice persisted in `~/.dsh-tui/lang.json`, then `zh`. */
   lang?: string
   /** Agent preset id new sessions compose from (standard/ptc/minimal/
-   *  cordis/… when the roster is mounted). When absent, the `/preset` choice
-   *  persisted in `~/.dsh-tui/agent-preset.json` wins, then the roster
-   *  default (`standard`). */
+   *  cordis/… when the roster is mounted). A `DSH_TUI_PRESET` launch
+   *  instruction outranks everything; otherwise the `/preset` choice
+   *  persisted in `~/.dsh-tui/agent-preset.json` wins, then this value as
+   *  the deployment default, then the roster default (`standard`). */
   preset?: string
   /** Edit/Write diff presentation: `auto` picks side-by-side on wide
    *  terminals (≥110 cols) and unified below; `split`/`unified` force one
@@ -252,14 +273,22 @@ export interface Config {
    *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
    *  default/plan/full cycle (see sessionModes.ts). */
   modes?: SessionModeSpec[]
+  /** Upstream auto-retry for DSH sessions (default on): seed a retry
+   *  policy (5 attempts, transport-drop-aware failure codes) on the
+   *  llm-pi-ai provider route the bound session actually uses whenever
+   *  it declares no retryPolicy, through the llm-pi-ai settings section
+   *  — the policy the kernel's llm-retry plugin executes. Dormant
+   *  channels are never written; routes with an explicit retryPolicy are
+   *  never overwritten; setting this to false opts out entirely. */
+  upstreamRetry?: boolean
 }
 
-/** The backend a configured value names: case-insensitive, trimmed;
- *  empty or unknown → undefined (the DSH default). */
+/** The backend a configured value names: case-insensitive, trimmed, and
+ *  **registered** — both halves of the parse (P0 D1). Empty, malformed, or a
+ *  well-formed id that no installed backend answers to → undefined, which the
+ *  Config row and the boot both read as "not configured" (the DSH default). */
 export function normalizeBackendChoice(value: unknown): KernelBackendId | undefined {
-  if (typeof value !== 'string') return undefined
-  const id = value.trim().toLowerCase()
-  return isKernelId(id) ? id : undefined
+  return parseBackendChoice(value)
 }
 
 export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Config>(Schema.object({
@@ -304,6 +333,10 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   contextBar: Schema.boolean().default(true),
   fullscreen: Schema.boolean().default(true),
   terminalImages: Schema.boolean().default(true),
+  // No `.default()` on purpose (same rule as recapOnOpen): an unset key must
+  // stay distinguishable from an explicit `false`, and the boot reads
+  // undefined as on (`config.launchpad !== false`).
+  launchpad: Schema.boolean(),
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
@@ -410,6 +443,9 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
       permission: Schema.string().required(false),
     }),
   ).required(false),
+  // Upstream auto-retry seeding (see upstream-retry.ts): on by default so
+  // an upstream link drop retries like any other transient failure.
+  upstreamRetry: Schema.boolean().default(true),
 }), EDITABLE_CONFIG_KEYS as readonly (keyof Config)[])
 
 /**
@@ -420,6 +456,14 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
  * @returns a promise settling when the Loader entry has scheduled its runtime.
  */
 export async function apply(ctx: Context, config: RuntimeConfig<Config>): Promise<void> {
+  // The entry already mounted the screen in this process (./entry-slot.ts):
+  // the row only runs the DSH side and hands the session to that screen.
+  const entrySlot = peekEntrySlot()
+  if (entrySlot !== undefined) {
+    entrySlot.rowSeen = true
+    attachToEntry(ctx, config)
+    return
+  }
   // Upstream drift is NO LONGER spammed to stderr here: per-package
   // console.warn lines interleave with the TUI frame redraw and arrive
   // garbled (typewriter animation repaints over them). The merged,
@@ -443,3 +487,46 @@ export async function apply(ctx: Context, config: RuntimeConfig<Config>): Promis
     if (!disposed) handleStartupError(ctx, error)
   })
 }
+
+/** The row under the entry's screen: the DSH side in its own runtime fiber
+ *  once the Loader settled, never a second render; a recompose stays idle. */
+function attachToEntry(ctx: Context, config: RuntimeConfig<Config>): void {
+  const attach = takeEntryAttach()
+  if (attach === undefined) {
+    ctx.logger.warn('dsh-tui: the entry\'s screen already holds a DSH session; this dsh-tui row stays idle')
+    return
+  }
+  let disposed = false
+  ctx.effect(() => () => { disposed = true })
+  const loader = ctx.get('loader') as { await(): Promise<unknown> } | undefined
+  void (loader?.await() ?? ctx.fiber.await()).then(() => {
+    if (disposed) return
+    return ctx.plugin({
+      name: 'dsh-tui-runtime',
+      apply: (runtimeCtx: Context) => attach(runtimeCtx, config, ctx),
+    })
+  }).catch((error: unknown) => {
+    ctx.logger.error(`dsh-tui: the DSH side failed to start under the entry's screen: ${error instanceof Error ? error.message : String(error)}`)
+  })
+}
+
+// ── The Backend contribution family (B-2) ─────────────────────────────────────
+// `alpha`, and deliberately narrow: the *declaration* shape, its validator, the
+// admission verdict and the projection this package uses for its own manifests.
+// A third-party author writes a declaration by hand against exactly this surface
+// (scripts/verify-public-config-types.mjs compiles a real consumer file against
+// the published declarations), and from here on it may only grow — removing any
+// of it is a breaking change. What is NOT here: the registry, the loader and the
+// picker. Those stay the host's, and the stage C install chain is where a mounted
+// bundle's declaration reaches them (the admission chain itself is wired; see
+// docs/plugins.md).
+export {
+  BACKEND,
+  BACKEND_CAPABILITY_NAMES,
+  BACKEND_RESERVED_IDS,
+  validateBackendSpec,
+  type BackendInstallRecipe,
+  type BackendSpec,
+} from '../adapter/spec/tui-contributions.js'
+export { backendAdmission, type BackendAdmission, type BackendAdmissionHost } from './backend-admission.js'
+export { backendContributionOf } from './backend-contribution.js'

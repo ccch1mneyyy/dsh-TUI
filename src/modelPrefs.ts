@@ -3,10 +3,11 @@
  * `~/.dsh-tui/model.json` (`provider` + `model` keys) so the choice survives
  * restarts — same pattern as agent-preset.json. The file is best-effort: a
  * missing/corrupt file or an incomplete route simply falls back to the
- * harness default. Explicit `provider`/`model` keys in cordis.yml win over
- * this preference (deployment choice over runtime preference, matching
- * activityFrames and agent-preset) — but only as a COMPLETE pair; the
- * atomic resolution itself lives in modelRoute.ts (issue #67).
+ * deployment default. This preference is the standing user choice and wins
+ * over explicit `provider`/`model` keys in cordis.yml, which are the
+ * deployment DEFAULT for the first run — but only as a COMPLETE pair, so a
+ * config route can never merge with half of this file; the atomic resolution
+ * itself lives in modelRoute.ts (issue #67).
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'

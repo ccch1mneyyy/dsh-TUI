@@ -7,7 +7,7 @@
  * （useInput）共用；组件本身受控渲染（text 在 store，caret 是各处自己的）。
  */
 import React from 'react'
-import { Box, Text } from '../../../ui.js'
+import { Box, Text, InputCaret } from '../../../ui.js'
 import { t } from '../../../i18n.js'
 import type { SidePanelKeyFlags } from '../types.js'
 import { nextCodePoint, previousCodePoint } from '../../AgentMessageComposer.js'
@@ -55,6 +55,9 @@ export function btwComposerKey(state: BtwComposerState, input: string, key: BtwK
     const at = previousCodePoint(state.text, caret)
     return { state: { text: state.text.slice(0, at) + state.text.slice(caret), caret: at } }
   }
+  // Shift+←/→ 不归编辑层：返回未消费，面板形态下落宿主切面板（宿主的
+  // leftArrow 判定不看 shift）——编辑中途也能一键换面板，不必先 Esc 收起。
+  if ((key.leftArrow === true || key.rightArrow === true) && key.shift === true) return null
   if (key.leftArrow === true) return { state: { ...state, caret: previousCodePoint(state.text, caret) } }
   if (key.rightArrow === true) return { state: { ...state, caret: nextCodePoint(state.text, caret) } }
   if (key.home === true) return { state: { ...state, caret: 0 } }
@@ -70,30 +73,56 @@ export function BtwComposer({
   focused,
   busy,
   notice,
+  onActivate,
 }: {
   readonly state: BtwComposerState
-  /** 编辑焦点（决定 caret 反白块的画法）。 */
+  /** 编辑焦点（决定边框高亮与原生光标显示）。 */
   readonly focused: boolean
   /** 线程在途：Enter 不发送，提示稍候。 */
   readonly busy: boolean
   /** 提交失败/忙的本地提示（显示到下一次动作）。 */
   readonly notice?: { readonly text: string; readonly failure: boolean } | undefined
+  /** 点击输入框进入编辑（默认箭头归导航，点进来才编辑）。 */
+  readonly onActivate?: () => void
 }): React.ReactNode {
   const { text, caret } = state
   const shown = Math.min(caret, text.length)
+  const afterCaret = nextCodePoint(text, shown)
   return (
     <Box flexDirection="column" flexShrink={0}>
-      <Box flexDirection="row" flexShrink={0}>
-        <Text color="warning" bold>{'› '}</Text>
-        {focused ? (
-          <>
-            <Text>{text.slice(0, shown)}</Text>
-            <Text inverse>{text.slice(shown, shown + 1) || ' '}</Text>
-            {text.slice(shown + 1) !== '' ? <Text>{text.slice(shown + 1)}</Text> : null}
-          </>
-        ) : (
-          <Text dimColor>{text === '' ? t('btw-thread-followup') : text}</Text>
-        )}
+      {/* 一个真正的输入框：圆角边框 + 聚焦高亮；提示并到框内右缘，不另占行。 */}
+      <Box
+        width="100%"
+        flexShrink={0}
+        borderStyle="round"
+        borderColor={focused ? 'accent' : undefined}
+        onClick={onActivate === undefined ? undefined : event => {
+          event.stopImmediatePropagation()
+          onActivate()
+        }}
+      >
+        <Box flexDirection="row" flexShrink={0} paddingLeft={1} paddingRight={1}>
+          <Text color={focused ? 'accent' : undefined} bold>{'›'}</Text>
+          <Text>{' '}</Text>
+          {focused ? (
+            <>
+              {/* 窄面板里让草稿先被截，键位提示保持完整（提示是可用性信息，
+                  草稿尾部本来也看不见）。 */}
+              <Box flexDirection="row" flexShrink={1} minWidth={0}>
+                <Text wrap="truncate">{text.slice(0, shown)}</Text>
+                {/* 光标锚在实际单元上，跟随截断后的文本而非原始长度。 */}
+                <InputCaret>{text.slice(shown, afterCaret) || ' '}</InputCaret>
+                {text.slice(afterCaret) !== '' ? <Text wrap="truncate">{text.slice(afterCaret)}</Text> : null}
+              </Box>
+              <Box flexGrow={1} flexShrink={0}><Text> </Text></Box>
+              <Box flexShrink={0}><Text dimColor> {t('btw-input-hint-edit')}</Text></Box>
+            </>
+          ) : (
+            // 未聚焦态只有占位提示：←/→ 切面板已由宿主底栏的广告位说明，
+            // 框内不再重复（窄面板里也放不下第二段文字）。
+            <Text dimColor wrap="truncate">{text === '' ? t('btw-input-placeholder') : text}</Text>
+          )}
+        </Box>
       </Box>
       {notice !== undefined && (
         <Text color={notice.failure ? 'error' : undefined} wrap="truncate">{notice.text}</Text>

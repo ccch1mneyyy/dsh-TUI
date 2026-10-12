@@ -4,7 +4,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import { resolveModelRoute, validateModelRoute } from '../../modelRoute.js'
 import { readModelPref } from '../../modelPrefs.js'
-import { readPresetPref } from '../../presetPrefs.js'
+import { presetOverrideFromEnv, readPresetPref } from '../../presetPrefs.js'
 import { clearResumeTarget, touchAgentViewSession, touchSession } from '../../sessionHistory.js'
 import { t } from '../../i18n.js'
 import { reserveMount, type MountReservation } from '../../sessionMounts.js'
@@ -63,7 +63,7 @@ export function createBackgroundCurrentAction(
     if (!reserved.ok && reserved.reason !== 'occupied') deps.notify(mountFailureText(reserved), { color: 'warning', timeoutMs: 8000 })
     const reservation: MountReservation = reserved.ok ? reserved.reservation : { settle: () => {}, abandon: () => {} }
     try {
-      const composed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
+      const composed = await composePreset(ctx, presetOverrideFromEnv() ?? readPresetPref() ?? options.configuredPreset)
       const route = await validateModelRoute(
         ctx.get('llm') as { listModels(provider: string): Promise<readonly { id: string }[]> } | undefined,
         resolveModelRoute({ provider: options.configuredProvider, model: options.configuredModel }, readModelPref(), { provider: options.provider, model: options.model }),

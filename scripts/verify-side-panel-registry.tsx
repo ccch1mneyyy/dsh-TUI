@@ -168,7 +168,7 @@ const app = await render(
 
 try {
   check('c mount: todo is the active carousel title', await settled(() => has('Todo'), { timeoutMs: 4000 }))
-  check('c mount: two inactive panels use dots', (viewportLines(term, ROWS)[0]?.match(/[○●]/g) ?? []).length === 2)
+  check('c mount: inactive panels show their registered icons', (viewportLines(term, ROWS)[0]?.match(/[ⓘ∿]/g) ?? []).length === 2)
   check('c mount: no ⤢ while a fullscreen-less panel is active', !has('⤢'))
 
   const infoArrow = findText('▶')
@@ -181,10 +181,10 @@ try {
   check('c info: still no ⤢ (no fullscreen form)', !has('⤢'))
 
   const row = viewportLines(term, ROWS)[0] ?? ''
-  const rightDot = { col: row.indexOf('○', row.indexOf('Info') + 'Info'.length), row: 0 }
-  check('c trajectory: the next panel dot is visible', rightDot.col > 0, row)
-  if (rightDot.col > 0) click(rightDot.col + 1, rightDot.row)
-  check('c trajectory: clicking its dot selects the panel title', await settled(() => has('Trajectory') && !has('Info'), { timeoutMs: 4000 }), viewportLines(term, ROWS).slice(0, 5).join('|'))
+  const trajectoryIcon = { col: row.indexOf('∿', row.indexOf('Info') + 'Info'.length), row: 0 }
+  check('c trajectory: the next panel icon is visible', trajectoryIcon.col > 0, row)
+  if (trajectoryIcon.col > 0) click(trajectoryIcon.col + 1, trajectoryIcon.row)
+  check('c trajectory: clicking its icon selects the panel title', await settled(() => has('Trajectory') && !has('Info'), { timeoutMs: 4000 }), viewportLines(term, ROWS).slice(0, 5).join('|'))
   check('c trajectory: empty state without a build', await settled(() => has(t('panel-trajectory-empty').slice(0, 24)), { timeoutMs: 4000 }))
   check('c trajectory: ⤢ appears (declares capabilities.fullscreen)', has('⤢'))
 } finally {

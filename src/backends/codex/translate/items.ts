@@ -22,7 +22,7 @@
  * native fork/rewind anchor, and each anchor maps to its turn id.
  */
 import type { AgentEvent, AgentEventOf, ContentBlockView, TurnEndReason, UsageDelta } from '../../../agent/events.js'
-import { t } from '../../../i18n.js'
+import { codexText } from '../text.js'
 import { arr, rec, str, type Rec } from '../narrow.js'
 import { failureHint } from './notices.js'
 import { TOOL_ITEM_TYPES, toolCallOf, toolResultOf, type ResultWords } from './presentation.js'
@@ -115,7 +115,7 @@ export function createItemContext(options: ItemContextOptions): ItemContext {
     compactRequested: false,
     compactionSeen: false,
     turnUsage: undefined,
-    words: { declined: t('codex-declined'), failed: t('codex-tool-failed') },
+    words: { declined: codexText('codex-declined'), failed: codexText('codex-tool-failed') },
   }
 }
 
@@ -196,7 +196,7 @@ export function closeTurn(ctx: ItemContext, out: AgentEvent[], reason: TurnEndRe
   const interrupted = reason.kind === 'interrupted' || reason.kind === 'aborted'
   settleAttempt(ctx, out, time, interrupted)
   for (const [callId] of ctx.openTools) {
-    out.push({ type: 'tool.result', seq: ctx.nextSeq(), turn: ctx.turn, step: ctx.step, callId, isError: true, time, content: [], text: '', errorText: interrupted ? t('codex-interrupted') : t('codex-tool-unfinished') })
+    out.push({ type: 'tool.result', seq: ctx.nextSeq(), turn: ctx.turn, step: ctx.step, callId, isError: true, time, content: [], text: '', errorText: interrupted ? codexText('codex-interrupted') : codexText('codex-tool-unfinished') })
   }
   ctx.openTools.clear()
   closeStep(ctx, out)
@@ -374,7 +374,7 @@ export function itemEvents(item: Rec, phase: 'started' | 'completed', ctx: ItemC
     case 'enteredReviewMode': {
       if (phase !== 'started') return out
       settleAttempt(ctx, out, time)
-      out.push({ type: 'notice', level: 'info', key: `review:${id}`, text: t('codex-review-start', { review: str(item.review) ?? '' }) })
+      out.push({ type: 'notice', level: 'info', key: `review:${id}`, text: codexText('codex-review-start', { review: str(item.review) ?? '' }) })
       return out
     }
     case 'exitedReviewMode': {

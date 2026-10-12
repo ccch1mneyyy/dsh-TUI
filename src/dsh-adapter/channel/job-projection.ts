@@ -1,8 +1,9 @@
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
 import { t } from '../../i18n.js'
-import { BackgroundJobStore, formatJobDuration, type JobsRuntime } from '../jobs.js'
+import { BackgroundJobStore, formatJobDuration, type BackgroundJobState, type JobsRuntime } from '../jobs.js'
 import type { ChannelOwner } from './owner.js'
+import { toolCommandOf } from './projection-helpers.js'
 import type { ChannelState, ChatRow, JobControl } from './types.js'
 
 /**
@@ -18,9 +19,30 @@ export function createJobProjection(
     rowIds: { value: number }
     agent(): Agent
     steer(text: string): void
+    /** The bound session's durable log, for seeding the hold ledger when a
+     *  binding takes over a session that already has a call in flight. */
+    history?(): readonly unknown[]
   },
 ) {
   const jobRowsByJobId = new Map<string, ChatRow>()
+  /**
+   * Settlements a waiting caller collected itself (kernel `awaited`), held for
+   * the roster fold in flight: their result is already on screen, so the
+   * completion toast skips them.
+   */
+  const collectedSettles = new Set<string>()
+  /** Open `command`-carrying tool calls of the bound session (callId → command). */
+  const openCommandCalls = new Map<string, string>()
+  /**
+   * Cards held back because the calls that could own the job are still in
+   * flight (jobId → callIds). A shell tool registers its foreground command as
+   * a job like any other and hands the id to nobody, so a card now would
+   * duplicate the call's own card for as long as the command runs. The card
+   * appears when every such call has returned — the moment the id, if any,
+   * reaches the model — and never for a foreground command, whose record the
+   * registry drops before its call returns.
+   */
+  const heldJobs = new Map<string, Set<string>>()
   let jobsRuntime: JobsRuntime | undefined
   /** The live attachment's conditional roster re-read (see `reanchor`). */
   let reanchorActive: (() => void) | undefined
@@ -31,33 +53,71 @@ export function createJobProjection(
   const syncRows = (): void => {
     if (!attachmentCurrent()) return
     const state = getState()
-    state.backgroundJobs = store.snapshot()
-    for (const job of state.backgroundJobs) {
-      let row = jobRowsByJobId.get(job.id)
-      if (!row) {
-        row = { id: deps.rowIds.value++, kind: 'job', text: job.label, job: undefined }
-        jobRowsByJobId.set(job.id, row)
-        state.rows.push(row)
+    const jobs = store.snapshot()
+    state.backgroundJobs = jobs
+    for (const job of jobs) {
+      if (!jobRowsByJobId.has(job.id)) {
+        // A card waits while a call that could own the job is in flight: that
+        // call's own card already carries this work (see `heldJobs`).
+        if (heldJobs.has(job.id)) continue
+        const owners = openCallsOwning(job.label)
+        if (owners.size > 0) {
+          heldJobs.set(job.id, owners)
+          continue
+        }
       }
-      row.job = {
-        id: job.id,
-        kind: job.kind,
-        label: job.label,
-        status: job.status,
-        ...(job.detail === undefined ? {} : { detail: job.detail }),
-        ...(job.progress === undefined ? {} : { progress: job.progress }),
-        startedAt: job.startedAt,
-        ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
-        outputLines: job.outputLines,
-      }
-      row.text = job.label
-      markChannelReadDirty(row)
-      markChannelReadDirty(state.rows)
+      materializeRow(state, job)
     }
+  }
+
+  /** Create or refresh one job's transcript card. */
+  const materializeRow = (state: Pick<ChannelState, 'rows'>, job: BackgroundJobState): void => {
+    let row = jobRowsByJobId.get(job.id)
+    if (!row) {
+      row = { id: deps.rowIds.value++, kind: 'job', text: job.label, job: undefined }
+      jobRowsByJobId.set(job.id, row)
+      state.rows.push(row)
+    }
+    row.job = {
+      id: job.id,
+      kind: job.kind,
+      label: job.label,
+      status: job.status,
+      ...(job.detail === undefined ? {} : { detail: job.detail }),
+      ...(job.progress === undefined ? {} : { progress: job.progress }),
+      startedAt: job.startedAt,
+      ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
+      outputLines: job.outputLines,
+    }
+    row.text = job.label
+    markChannelReadDirty(row)
+    markChannelReadDirty(state.rows)
+  }
+
+  /**
+   * Take one job's card out of the transcript. Only an explicit departure
+   * (the registry's `removed`) does this: a record the store itself evicts at
+   * its tracked bound keeps its card as frozen history, exactly as it did
+   * before cards could leave at all.
+   */
+  const dropRow = (jobId: string): void => {
+    const row = jobRowsByJobId.get(jobId)
+    if (row === undefined) return
+    jobRowsByJobId.delete(jobId)
+    const rows = getState().rows
+    const at = rows.indexOf(row)
+    if (at === -1) return
+    rows.splice(at, 1)
+    markChannelReadDirty(rows)
   }
 
   const store = new BackgroundJobStore({
     onSettled(job) {
+      // A settlement a waiting caller collected (kernel `awaited`) already has
+      // its result in the transcript — the shell tool's own foreground wait —
+      // so there is nothing left to announce. The harness's completion
+      // notices skip the same settlements.
+      if (collectedSettles.delete(job.id)) return
       deps.notify(
         t(job.status === 'completed' ? 'jobs-toast-completed' : job.status === 'failed' ? 'jobs-toast-failed' : 'jobs-toast-killed', {
           id: job.id,
@@ -105,6 +165,85 @@ export function createJobProjection(
     return agent?.id
   }
 
+  /** Every open call whose command this job's label repeats. The label a shell
+   *  tool registers is the command it was handed, so a match is the same string
+   *  the model passed — not a resemblance. */
+  const openCallsOwning = (label: string): Set<string> => {
+    const owners = new Set<string>()
+    for (const [callId, command] of openCommandCalls) {
+      if (command === label) owners.add(callId)
+    }
+    return owners
+  }
+
+  /**
+   * End one hold and render its card now: having no row yet is what makes a
+   * job a hold candidate, so a released job must land its row in this same
+   * turn or the next fold would take the hold right back.
+   */
+  const releaseHold = (jobId: string): boolean => {
+    if (!heldJobs.delete(jobId)) return false
+    if (!attachmentCurrent()) return false
+    const job = store.get(jobId)
+    if (job === undefined) return false
+    materializeRow(getState(), job)
+    return true
+  }
+
+  /**
+   * Fold one raw durable event into the in-flight call ledger of the bound
+   * session: a `tool/call` carrying a `command` opens an entry, its
+   * `tool/result` closes it.
+   * @returns the callId this event closed, when it closed one.
+   */
+  const observeCall = (event: unknown): string | undefined => {
+    const type = (event as { type?: unknown }).type
+    if (type === 'tool/call') {
+      const data = (event as { data?: { callId?: unknown; arguments?: unknown } }).data
+      if (typeof data?.callId !== 'string') return undefined
+      const command = toolCommandOf(typeof data.arguments === 'string' ? data.arguments : undefined)
+      if (command !== undefined) openCommandCalls.set(data.callId, command)
+      return undefined
+    }
+    if (type !== 'tool/result') return undefined
+    const callId = (event as { data?: { message?: { source?: { callId?: unknown } } } })
+      .data?.message?.source?.callId
+    if (typeof callId !== 'string' || !openCommandCalls.delete(callId)) return undefined
+    return callId
+  }
+
+  /**
+   * Rebuild the ledger from the bound session's log. A call the log shows
+   * without its result was already in flight when this binding took the
+   * session over (a parked/background session the user switched back to), and
+   * the card it registered has to stay held across the swap.
+   */
+  const seedOpenCalls = (): void => {
+    openCommandCalls.clear()
+    for (const event of deps.history?.() ?? []) observeCall(event)
+  }
+
+  /**
+   * Raw durable events of the bound session, ahead of the projector's fold:
+   * the ledger above times the card hold, and a result releases it.
+   */
+  const onSessionEvent = (event: unknown): void => {
+    const closed = observeCall(event)
+    if (closed === undefined) return
+    // This call is over. A card it was holding waits for the others it could
+    // belong to; a job the call collected and removed on its way out is already
+    // gone from the store and owes nothing.
+    let released = false
+    for (const [jobId, held] of heldJobs) {
+      if (!held.delete(closed)) continue
+      if (held.size > 0) continue
+      if (releaseHold(jobId)) released = true
+    }
+    if (!released) return
+    syncRows()
+    getState().emit()
+  }
+
   /**
    * Each service attachment has one idempotent disposer, dual-owned by the
    * Channel and (when injected) the service context. Reattachment revokes the
@@ -141,6 +280,10 @@ export function createJobProjection(
     const reanchorThis = (): void => {
       if (callerKnown && sessionCaller() === lastCaller) return
       dropRows()
+      // The new session may already have a call in flight (a parked session the
+      // user switched back to), whose job the roster about to be read lists:
+      // seed the ledger before that read decides any card.
+      seedOpenCalls()
       store.reset()
       refresh()
     }
@@ -203,7 +346,29 @@ export function createJobProjection(
           if (!current()) return
           try {
             if (event.type === 'output') pullOutput(event.id)
-            else refresh()
+            else if (event.type === 'removed') {
+              // The registry dropped the record — a caller collected the
+              // terminal state through its own wait and never handed the id to
+              // the model (the shell tool's foreground command), or the owner
+              // was disposed. The card goes with it instead of lingering as
+              // frozen history; a held card was never rendered at all.
+              heldJobs.delete(event.job.id)
+              dropRow(event.job.id)
+              store.drop(event.job.id)
+            } else {
+              // `settled` reports whether it released a waiter: that caller's
+              // own wait collected the outcome, so the settlement is announced
+              // nowhere. The mark is good for exactly the fold below.
+              const collected = event.type === 'settled' && event.awaited === true
+              if (collected) collectedSettles.add(event.job.id)
+              // A settlement nobody collected is model-facing on its own (the
+              // harness sends its completion notice), so a held card may stop
+              // waiting for its call — the waiting CALLER's settlements are
+              // exactly the ones that must stay hidden until the record drops.
+              else if (event.type === 'settled' && event.awaited === false) releaseHold(event.job.id)
+              refresh()
+              if (collected) collectedSettles.delete(event.job.id)
+            }
           } catch { /* contained per-event; the next event re-syncs */ }
         }))
       }
@@ -218,7 +383,12 @@ export function createJobProjection(
     }
   }
 
-  const dropRows = (): void => { jobRowsByJobId.clear() }
+  const dropRows = (): void => {
+    jobRowsByJobId.clear()
+    collectedSettles.clear()
+    heldJobs.clear()
+    openCommandCalls.clear()
+  }
   const reset = (): void => { dropRows(); store.reset() }
 
   /**
@@ -229,5 +399,5 @@ export function createJobProjection(
    */
   const reanchor = (): void => { reanchorActive?.() }
 
-  return { store, control, attach, dropRows, reset, reanchor }
+  return { store, control, attach, dropRows, reset, reanchor, onSessionEvent }
 }

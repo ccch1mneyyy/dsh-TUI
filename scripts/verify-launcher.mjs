@@ -18,6 +18,9 @@
  *   - 面向用户的消息双语：DSH_TUI_LANG=zh 输出中文，否则默认英文
  *   - shellQuote 单元（win32 的 shell:true 路径 CI 跑不到 Windows，只能靠
  *     单测覆盖转义规则本身）
+ *   - 内核分流：判定为 Claude 的启动走本包入口（host-entry.js），开关关闭、
+ *     dsh 一次性开关、交接到 dsh 时仍走 `dsh --profile`；入口读到 Config 行
+ *     钉在 DSH 上时原样交给 dsh
  *
  * 运行：pnpm build && node scripts/verify-launcher.mjs
  */
@@ -121,11 +124,15 @@ function runBin(args, extraEnv = {}, { delegating = false } = {}) {
       // 0.8.7 双态启动器：默认强制完整逻辑（本套回归覆盖的全量路径）；
       // 委托角色的专门用例按需放开（见第 4 节）。
       ...(delegating ? {} : { DSH_TUI_NO_DELEGATE: '1' }),
+      // The stub dsh is no host the entry could load: keep launches on
+      // `dsh --profile` directly (5.1 and §7 cover the entry, via runEntry).
+      DSH_TUI_HOST_ENTRY: '0',
       ...extraEnv,
     },
     encoding: 'utf8',
   })
 }
+const runEntry = (args, extraEnv = {}) => runBin(args, { DSH_TUI_HOST_ENTRY: undefined, ...extraEnv })
 
 // --- 1. 残骸 profile 触发重新自举，版本号与本包对齐 ----------------------------
 setProfileVersion(undefined) // 目录在、package.json 不可读
@@ -348,6 +355,55 @@ r = runBin([], { ...envNoDsh, DSH_TUI_LANG: 'zh' })
 check('i18n: DSH_TUI_LANG=zh prints Chinese', r.stderr.includes('未检测到 dsh CLI'))
 r = runBin([], envNoDsh)
 check('i18n: default (unset) prints Chinese', r.stderr.includes('未检测到 dsh CLI'))
+
+// --- 5.1 默认路由：入口回退到 dsh --profile，缺 dsh 时仍须给出安装指引。
+// 默认 env 把 DSH_TUI_HOST_ENTRY 钉在 '0'，这里显式取默认值。
+const entryNoDsh = { ...envNoDsh, DSH_TUI_HOST_ENTRY: undefined }
+r = runBin([], { ...entryNoDsh, DSH_TUI_LANG: 'en' })
+check('entry route: a missing dsh prints the install guidance, with no delegation or profile/safe-mode hints',
+  r.status === 1 && r.stderr.includes('dsh CLI not found')
+  && !/cannot start dsh|cannot host this launch|dsh profile exited|dsh-tui safe/u.test(r.stderr), r.stderr)
+
+// --- 7. 内核分流 ----------------------------------------------------------------
+// 没有 TTY，入口里的运行时以「需要交互终端」失败——正好证明走的是入口。
+setProfileVersion(ownVersion)
+const entryRan = result => /interactive terminal/u.test(`${result.stderr}${result.stdout}`)
+const kernelPrefs = join(tmp, '.dsh-tui', 'kernel.json')
+const profilePatch = join(home, 'profiles', 'dsh-tui', 'cordis.patch.yml')
+resetStubLog()
+r = runEntry(['--backend', 'claude'])
+check('host entry: --backend claude starts the entry, not dsh --profile', launchCalls().length === 0 && entryRan(r))
+resetStubLog()
+r = runEntry(['--backend', 'claude'], { DSH_TUI_HOST_ENTRY: '0' })
+check('host entry: DSH_TUI_HOST_ENTRY=0 keeps dsh --profile', launchCalls().length === 1 && !entryRan(r))
+resetStubLog()
+r = runEntry(['--backend', 'claude', '--dump-config'])
+check('host entry: a dsh switch always goes to dsh', launchCalls().at(-1)?.includes('<--dump-config>') === true && !entryRan(r))
+mkdirSync(dirname(kernelPrefs), { recursive: true })
+writeFileSync(kernelPrefs, JSON.stringify({ backend: 'claude' }))
+resetStubLog()
+r = runEntry([])
+check('host entry: the remembered kernel (kernel.json) routes too', launchCalls().length === 0 && entryRan(r))
+resetStubLog()
+r = runEntry([], { DSH_TUI_BACKEND_HANDOFF: 'dsh' })
+check('host entry: a kernel-switch handoff to dsh beats the memory', launchCalls().length === 1 && !entryRan(r))
+rmSync(kernelPrefs, { force: true })
+mkdirSync(dirname(profilePatch), { recursive: true })
+writeFileSync(profilePatch, '- id: dsh-tui\n  config:\n    backend: dsh\n')
+resetStubLog()
+r = runEntry(['--backend', 'claude', 'foo'])
+check('host entry: a Config row pinning dsh is handed on to dsh with the app args', launchCalls().at(-1) === '<--profile><dsh-tui><--><foo>' && !entryRan(r))
+rmSync(profilePatch, { force: true })
+// The stub dsh is no host the entry can load, so the default DSH route falls
+// back (the app-args shape and the stderr reason: verify-host-contract §4).
+const hostFallback = result => /cannot host this launch/u.test(result.stderr)
+resetStubLog()
+r = runEntry([])
+check('host entry: DSH goes to the entry by default; an unusable dsh falls back to dsh --profile (no -- without app args)',
+  launchCalls().at(-1) === '<--profile><dsh-tui>' && hostFallback(r) && !entryRan(r), r.stderr)
+resetStubLog()
+r = runEntry([], { DSH_TUI_HOST_ENTRY: '0' })
+check('host entry: DSH_TUI_HOST_ENTRY=0 keeps DSH on dsh --profile too', launchCalls().length === 1 && !hostFallback(r))
 
 // --- 6. shellQuote 单元（win32 shell:true 路径的转义规则）---------------------
 check('shellQuote: plain tokens pass through', shellQuote(['plugin', '--profile', 'dsh-tui']).join(' ') === 'plugin --profile dsh-tui')

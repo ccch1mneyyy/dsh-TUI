@@ -12,7 +12,6 @@
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DATA_DIR } from '../../utils/paths.js'
 import { writeFileAtomic } from '../shared/atomic-file.js'
 import { CODEX_MODE_PARAMS, DEFAULT_CODEX_MODE, isCodexModeId, type CodexModeId } from './modes.js'
 import { rec, type Rec } from './narrow.js'
@@ -116,8 +115,10 @@ export function codexConfigOf(answer: unknown): Rec | undefined {
   return rec(rec(answer)?.config)
 }
 
-/** The file-backed prefs under `<dir>` (default `~/.dsh-tui/backends/codex`). */
-export function fileCodexPrefs(dir: string = join(DATA_DIR, 'backends', 'codex'), debug: (message: string) => void = () => undefined): CodexPrefs {
+/** The file-backed prefs under `<dir>` (the host's `dataDir` for this
+ *  backend). The directory is required: a backend never picks a location of
+ *  its own under the host's data directory (D2, B-3/B-5). */
+export function fileCodexPrefs(dir: string, debug: (message: string) => void = () => undefined): CodexPrefs {
   const path = join(dir, FILE)
   const read = (): CodexPrefsData => {
     try {

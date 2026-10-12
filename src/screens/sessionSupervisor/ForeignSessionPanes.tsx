@@ -54,6 +54,9 @@ export function ForeignSessionPanes({
   sessionWidth,
   rows,
   isTerminalFocused,
+  filterFocused,
+  cursorActive,
+  onFilterFocus,
 }: {
   model: ForeignSessionsModel
   /** The active source's display name. */
@@ -69,8 +72,20 @@ export function ForeignSessionPanes({
   /** Terminal rows of the whole screen. */
   rows: number
   isTerminalFocused: boolean
+  filterFocused: boolean
+  cursorActive: boolean
+  onFilterFocus(focused: boolean): void
 }): React.ReactNode {
   const { groups, selected, railFocus, visibleRows, rowIndex, pane, loading } = model
+  const searchCursor = filterFocused || (!railVisible && pane === 'rail') || (pane === 'list' && visibleRows.length === 0)
+  const activateRail = (): void => {
+    onFilterFocus(false)
+    model.activateRail()
+  }
+  const activateList = (): void => {
+    onFilterFocus(false)
+    model.activateList()
+  }
   const filtered = query.trim().length > 0
 
   const railTop = windowTop(railFocus, groups.length, railEntryCapacity)
@@ -89,9 +104,10 @@ export function ForeignSessionPanes({
       {railVisible && (
         <ink-box
           style={{ flexDirection: 'column', width: railWidth, height: '100%', flexShrink: 0, overflow: 'hidden' }}
-          onClick={model.activateRail}
-          onMouseEnter={model.activateRail}
+          onClick={activateRail}
+          onMouseEnter={activateRail}
           onWheel={(event: WheelEvent): void => {
+            onFilterFocus(false)
             model.moveRail(event.deltaY >= 0 ? 1 : -1)
           }}
         >
@@ -115,9 +131,11 @@ export function ForeignSessionPanes({
                 present={group.present}
                 selected={selected?.key === group.key}
                 focused={pane === 'rail' && railFocus === absolute}
+                declareCursor={cursorActive && !searchCursor}
                 width={railWidth}
                 onSelect={(event): void => {
                   event.stopImmediatePropagation()
+                  onFilterFocus(false)
                   model.selectGroup(group)
                 }}
               />
@@ -142,8 +160,8 @@ export function ForeignSessionPanes({
         height="100%"
         flexShrink={0}
         overflow="hidden"
-        onClick={model.activateList}
-        onMouseEnter={model.activateList}
+        onClick={activateList}
+        onMouseEnter={activateList}
       >
         <Box height={1} flexShrink={0} overflow="hidden">
           <Box flexShrink={1} overflow="hidden">
@@ -155,10 +173,19 @@ export function ForeignSessionPanes({
             </Text>
           </Box>
         </Box>
-        <Box height={1} flexShrink={0} paddingX={1}>
+        <Box height={1} flexShrink={0} paddingX={1} onClick={event => {
+          event.stopImmediatePropagation()
+          model.activateList()
+          onFilterFocus(true)
+        }} onMouseEnter={event => {
+          event.stopImmediatePropagation()
+          if (pane !== 'list') model.activateList()
+          onFilterFocus(true)
+        }}>
           <SearchBox
             query={query}
-            isFocused={pane === 'list'}
+            isFocused={pane === 'list' || searchCursor}
+            declareCursor={cursorActive && searchCursor}
             isTerminalFocused={isTerminalFocused}
             placeholder={truncateWidth(t('supervisor-foreign-filter-placeholder'), Math.max(8, sessionWidth - 6))}
             prefix="/"
@@ -168,7 +195,9 @@ export function ForeignSessionPanes({
         </Box>
         <ink-box
           style={{ flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' }}
+          onMouseEnter={() => onFilterFocus(false)}
           onWheel={(event: WheelEvent): void => {
+            onFilterFocus(false)
             model.moveList(event.deltaY >= 0 ? 1 : -1)
           }}
         >
@@ -184,6 +213,7 @@ export function ForeignSessionPanes({
               session={row}
               width={sessionWidth}
               focused={pane === 'list' && listTop + index === rowIndex}
+              declareCursor={cursorActive && !searchCursor}
               home={home}
               now={now}
               onClick={(event): void => {

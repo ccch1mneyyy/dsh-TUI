@@ -3,9 +3,10 @@
  * `~/.dsh-tui/agent-preset.json` (`preset` key) so the choice survives
  * restarts — same pattern as working-activity.json. The file is best-effort:
  * a missing/corrupt file or an id the roster no longer supplies simply falls
- * back to the roster default (`standard`). An explicit `preset` key in
- * cordis.yml wins over this preference (deployment choice over runtime
- * preference, matching activityFrames).
+ * back to the roster default (`standard`). The persisted choice is the
+ * standing user default and outranks a static `preset` key in cordis.yml
+ * (the deployment default); only the `DSH_TUI_PRESET` launch instruction of
+ * the current run leads it (see {@link presetOverrideFromEnv}).
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -16,6 +17,23 @@ const PREFS_DIR = DATA_DIR
 
 /** Ids a preset directory may use (dsh-agent-presets' own boundary). */
 const PRESET_ID = /^[a-z0-9][a-z0-9-]*$/
+
+/**
+ * The `DSH_TUI_PRESET` launch instruction of THIS run, when set: the
+ * composition folds the variable into its `preset` config (both cordis.yml and
+ * the bundle patch read it), and an explicit per-invocation instruction
+ * outranks the persisted choice exactly like the other `DSH_TUI_*`/permission
+ * environment pins. The value is NOT validated against PRESET_ID here, so an
+ * unknown id surfaces through preset composition (a warning, and the session
+ * composes without a preset) instead of silently falling back to the
+ * remembered preset.
+ * @param env - Environment to read (injectable for tests).
+ * @returns The requested preset id, if any.
+ */
+export function presetOverrideFromEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const value = env.DSH_TUI_PRESET?.trim()
+  return value === undefined || value === '' ? undefined : value
+}
 
 /** Parse the value exactly as stored. Preset aliases are roster-dependent:
  * legacy rc.2 ships `code`, while the 0.1.2 line ships `ptc`, so this file

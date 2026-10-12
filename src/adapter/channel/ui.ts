@@ -19,12 +19,15 @@ function throwCleanupFailures(failures: unknown[], message: string): void {
   if (failures.length > 1) throw new AggregateError(failures, message)
 }
 
+/** What every read of an ended Channel UI lifetime throws. */
+export const CHANNEL_UI_LIFETIME_ENDED = 'dsh-tui: Channel UI lifetime has ended'
+
 export function createChannelUiLease(isCurrent: () => boolean): ChannelUiLease & { dispose(): void } {
   let active = true
   const disposers = new Set<() => void>()
   return {
     assertActive() {
-      if (!active || !isCurrent()) throw new Error('dsh-tui: Channel UI lifetime has ended')
+      if (!active || !isCurrent()) throw new Error(CHANNEL_UI_LIFETIME_ENDED)
     },
     own(dispose) {
       let released = false
@@ -121,7 +124,9 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
         }
         if (key === 'listEfforts') {
           check('read-only')
-          return Promise.resolve({ efforts: (channel.effortLevels ?? []).map(id => ({ id, name: id })), defaultEffort: undefined })
+          const route = args[0] as { provider: string; model: string } | undefined
+          const live = route === undefined || (route.provider === channel.provider && route.model === channel.model)
+          return Promise.resolve({ efforts: (live ? channel.effortLevels ?? [] : []).map(id => ({ id, name: id })), defaultEffort: undefined })
         }
       }
       // A renderer observes the already-owned Channel emitter, never mounts

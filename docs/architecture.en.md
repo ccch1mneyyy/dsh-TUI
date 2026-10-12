@@ -2,6 +2,8 @@
 
 [Documentation index](README.md) · [简体中文](architecture.md)
 
+This document describes the **current** implementation: dsh-TUI runs as a plugin mounted in a DSH profile (the path below reflects that). For the move to an app that owns its entry and composition root, with DSH loaded in process as the first-party backend, see [Standalone host design](standalone-host-design.md).
+
 ## Runtime path
 
 ```text
@@ -166,6 +168,25 @@ protocol paths.
 
 Changes involving input, scrolling, mouse, cursor, resize, or cleanup must
 be checked in both modes, especially on narrow terminals and Windows ConPTY.
+
+Text inputs declare a position and visibility through `useDeclaredCursor`.
+The renderer hides the native cursor before repainting, then positions and
+shows it at the end of the frame. Cursor-only moves keep it visible so the
+terminal's animation and trail can continue. Shape, color, and blinking follow
+terminal settings. List items declare accessibility anchors that stay hidden
+in ordinary mode by default; the model picker declares a cursor on
+the region used last (provider tab / model row / effort level) so terminal
+animation moves between them. Tabs clipped by the overlay hand the caret back
+to the visible model row. A `hideOnIdle` declaration shows the native cursor
+when its target changes, then hides it 500 ms after the latest movement;
+ordinary repaints do not extend the deadline. The timer belongs to the
+renderer instance and is cancelled on input handback, pause, declaration
+clearing, and shutdown. Shape and blinking remain terminal-owned, while
+accessibility mode keeps focus anchors visible. External editor handoffs
+still reset styles only where configured styles can safely be restored;
+picker movement and closing emit no DECSCUSR sequences.
+Static rendering retains theme-painted carets; selection and
+image-token highlights remain painted by the TUI.
 
 ## Persistence locations
 

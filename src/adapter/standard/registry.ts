@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { getAdmissionCatalog } from './tui-extension.js'
 import { EXPECTED_PERMISSIONS } from '../spec/protocol-constants.js'
-import type { ContractRegistry, PermissionEntry, PermissionRegistry, RegistryEntry } from './types.js'
+import type { ContractRegistry, PermissionEntry, PermissionRegistry, PrivateRegistryEntry, RegistryEntry } from './types.js'
 
 export const DSH_STD_REVISION = '614dfa1ac168db79fcf4577cf0ebb34e2e3b944b'
 /** 仓内 TUI Profile 目录（纯文件，无 submodule 挂载，随本仓库代码一起修订）。 */
@@ -51,7 +51,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function soundEntry(value: unknown, privateDefinition: boolean): boolean {
   if (!isRecord(value) || typeof value.name !== 'string' || value.name === ''
-    || (value.kind !== 'capability' && value.kind !== 'event')) return false
+    || (value.kind !== 'capability' && value.kind !== 'event' && value.kind !== 'extension')) return false
   if (!isRecord(value.coordinates)
     || typeof value.coordinates.apiVersion !== 'string' || value.coordinates.apiVersion === ''
     || typeof value.coordinates.kind !== 'string' || value.coordinates.kind === '') return false
@@ -66,6 +66,17 @@ function soundEntry(value: unknown, privateDefinition: boolean): boolean {
   return typeof value.package === 'string' && /^@dsh-std\/[a-z0-9][a-z0-9-]*$/u.test(value.package)
 }
 
+/**
+ * An `extensions` entry is either imported (`authority: 'dsh-std'`, identified
+ * by its package) or TUI-owned (identified by its pinned profile) — the same
+ * split `imports` vs `definitions` makes, and the same one the profile's own
+ * conformance runner applies. Anything that is not explicitly dsh-std's must
+ * satisfy the TUI-owned shape, so an entry cannot dodge both.
+ */
+function soundExtension(value: unknown): boolean {
+  return soundEntry(value, !(isRecord(value) && value.authority === 'dsh-std'))
+}
+
 function structurallySound(data: { registry: unknown; permissions: unknown; schemas: Record<string, unknown> }): boolean {
   if (!isRecord(data.registry)
     || data.registry.profileVersion !== EXPECTED_PROFILE_VERSION
@@ -75,6 +86,7 @@ function structurallySound(data: { registry: unknown; permissions: unknown; sche
     || data.registry.std.manifestVersion !== EXPECTED_STD_MANIFEST_VERSION
     || !Array.isArray(data.registry.imports)
     || !Array.isArray(data.registry.definitions)
+    || !Array.isArray(data.registry.extensions)
     || !Array.isArray(data.registry.facetApiVersions)
     || data.registry.facetApiVersions.length === 0
     || !data.registry.facetApiVersions.every(version => typeof version === 'string'
@@ -82,7 +94,8 @@ function structurallySound(data: { registry: unknown; permissions: unknown; sche
   if (new Set(data.registry.facetApiVersions).size !== data.registry.facetApiVersions.length) return false
   if (!data.registry.imports.every(entry => soundEntry(entry, false))) return false
   if (!data.registry.definitions.every(entry => soundEntry(entry, true))) return false
-  const entries = [...data.registry.imports, ...data.registry.definitions]
+  if (!data.registry.extensions.every(soundExtension)) return false
+  const entries = [...data.registry.imports, ...data.registry.definitions, ...data.registry.extensions]
   const names = new Set<string>()
   const coordinates = new Set<string>()
   for (const entry of entries) {
@@ -91,7 +104,9 @@ function structurallySound(data: { registry: unknown; permissions: unknown; sche
     const key = `${entry.coordinates.apiVersion}#${entry.coordinates.kind}`
     if (coordinates.has(key)) return false
     coordinates.add(key)
-    if ('authority' in entry && !entry.coordinates.apiVersion.startsWith('tui.dsh/')) return false
+    // Only this profile's own entries must live in the private protocol group;
+    // an imported extension names a dsh-std coordinate (`workspace.dsh/…`).
+    if (entry.authority === 'dsh-tui' && !entry.coordinates.apiVersion.startsWith('tui.dsh/')) return false
   }
   if (!isRecord(data.permissions)
     || data.permissions.registryVersion !== EXPECTED_PERMISSION_REGISTRY_VERSION
@@ -139,10 +154,15 @@ export function loadSpecData(dir: string | undefined = locateSpecDir()): SpecDat
   }
 }
 
+/**
+ * Every registry entry this host can resolve a contract reference against, in
+ * section order: imported contracts, TUI-owned protocol definitions, and the
+ * manifest extension definitions (`Backend` is the family that made this section
+ * load-bearing — a bundle's declaration is admitted against it).
+ */
 export function registryEntries(registry: ContractRegistry): RegistryEntry[] {
-  return Array.isArray(registry.imports) && Array.isArray(registry.definitions)
-    ? [...registry.imports, ...registry.definitions]
-    : []
+  const section = (value: unknown): RegistryEntry[] => Array.isArray(value) ? value as RegistryEntry[] : []
+  return [...section(registry.imports), ...section(registry.definitions), ...section(registry.extensions)]
 }
 
 export function digestFile(dir: string, relative: string): `sha256:${string}` {
@@ -158,12 +178,16 @@ export function verifyRegistry(data: SpecData): string[] {
     || !Array.isArray(registry.definitions)) {
     return ['registry imports/definitions are malformed']
   }
+  // `structurallySound()` requires the section; a hand-built `SpecData` (gates,
+  // fixtures) may omit it, and an absent section is an empty one.
+  const extensions: unknown[] = Array.isArray(registry.extensions) ? registry.extensions : []
   const names = new Set<string>()
   const coordinates = new Set<string>()
-  const { protocols } = getAdmissionCatalog()
-  for (const raw of [...registry.imports, ...registry.definitions]) {
+  const { protocols, manifests } = getAdmissionCatalog()
+  for (const raw of [...registry.imports, ...registry.definitions, ...extensions]) {
     const privateDefinition = registry.definitions.includes(raw)
-    if (!soundEntry(raw, privateDefinition)) {
+    const extension = extensions.includes(raw)
+    if (!soundEntry(raw, extension ? !(isRecord(raw) && raw.authority === 'dsh-std') : privateDefinition)) {
       failures.push('registry entry is malformed')
       continue
     }
@@ -173,10 +197,22 @@ export function verifyRegistry(data: SpecData): string[] {
     names.add(entry.name)
     if (coordinates.has(key)) failures.push(`${key}: duplicate registry coordinate`)
     coordinates.add(key)
-    if ('authority' in entry && !entry.coordinates.apiVersion.startsWith('tui.dsh/')) {
+    if ('authority' in entry && entry.authority === 'dsh-tui' && !entry.coordinates.apiVersion.startsWith('tui.dsh/')) {
       failures.push(`${key}: dsh-tui definition must use the private protocol group`)
     }
-    if (!protocols.understands(entry.coordinates)) failures.push(`${key}: ProtocolCatalog definition unavailable`)
+    if (extension) {
+      // A manifest extension definition is published by the *manifest* catalog,
+      // never by the protocol catalog. Only an entry with a pinned profile is
+      // this host's own and must therefore resolve: an imported one names a
+      // dsh-std package this profile may not install (today `@dsh-std/workspace`),
+      // and dropping the whole descriptor over a definition the host does not
+      // ship — and never reads — would be a false alarm.
+      if ('profile' in entry && manifests.extension(entry.coordinates) === undefined) {
+        failures.push(`${key}: manifest extension definition unavailable`)
+      }
+    } else if (!protocols.understands(entry.coordinates)) {
+      failures.push(`${key}: ProtocolCatalog definition unavailable`)
+    }
     if ('profile' in entry) {
       let actual: string
       try {
@@ -198,15 +234,24 @@ export function verifyContractProfiles(data: SpecData): string[] {
     'errors', 'concurrency', 'timeout', 'cleanup', 'privacyClass', 'securityBoundary',
   ]
   const failures: string[] = []
-  if (!isRecord(data?.registry)
-    || !Array.isArray((data.registry as unknown as { definitions?: unknown }).definitions)) {
+  const registry = data?.registry as unknown as { definitions?: unknown; extensions?: unknown } | undefined
+  if (!isRecord(data?.registry) || !Array.isArray(registry?.definitions)) {
     return ['registry definitions are malformed']
   }
-  for (const entry of data.registry.definitions) {
-    if (!soundEntry(entry, true)) {
+  const extensions: unknown[] = Array.isArray(registry.extensions) ? registry.extensions : []
+  // TUI-owned extension profiles are held to the same ten-point shape as the
+  // protocol definitions: `Backend`'s contract profile is the pinned description
+  // of a contribution family third parties write against (W-2).
+  const ownedProfiles: unknown[] = [
+    ...data.registry.definitions,
+    ...extensions.filter(extension => isRecord(extension) && 'profile' in extension),
+  ]
+  for (const raw of ownedProfiles) {
+    if (!soundEntry(raw, true)) {
       failures.push('registry definition is malformed')
       continue
     }
+    const entry = raw as PrivateRegistryEntry
     let profile: Record<string, unknown>
     try {
       const loaded = loadJson(data.dir, entry.profile)
@@ -232,6 +277,11 @@ export function verifyContractProfiles(data: SpecData): string[] {
     }
     if (!('operations' in profile) || profile.securityBoundary !== false) {
       failures.push(`${entry.name}: capability boundary is incomplete`)
+    }
+    // The section is what selects the reader (manifest definition vs protocol
+    // definition), so a profile may not disagree with it.
+    if (extensions.includes(entry) && profile.kind !== 'extension') {
+      failures.push(`${entry.name}: extension definition profile must declare kind "extension"`)
     }
   }
   return failures

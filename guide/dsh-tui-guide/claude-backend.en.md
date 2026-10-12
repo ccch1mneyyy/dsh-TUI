@@ -18,7 +18,13 @@ You need:
   entry or `/kernel`) and press Enter on the dim Claude row — the wizard
   locates the profile directory and installs the pinned SDK via pnpm; the row
   lights up when it finishes (standalone builds and profile-less launches get
-  manual instructions). The manual equivalent, run once in the dsh-tui profile
+  manual instructions). Before installing, the wizard pins the profile's pnpm
+  store to a stable path (storeDir: ../../.pnpm-store, written into
+  pnpm-workspace.yaml), so store drift caused by environment overrides (a
+  sandbox or relay that redirected XDG_DATA_HOME, and the like) cannot recur;
+  if the drift predates the install, the installer rebuilds the dependencies
+  automatically and retries — no manual cleanup needed. The manual equivalent,
+  run once in the dsh-tui profile
   directory (`~/.dsh/profiles/dsh-tui`, or `$DSH_HOME/profiles/dsh-tui` when
   `DSH_HOME` is set):
 
@@ -37,8 +43,13 @@ To pick the backend, use any of:
   `/kernel` inside a session, which open the kernel picker. Picking the other
   kernel remembers the choice (`~/.dsh-tui/kernel.json`) and restarts dsh-TUI
   into a new session on it; the old session stays in `/resume`. A running turn
-  blocks the switch. Without the SDK or a credential the picker marks Claude as
-  *Not installed* or *Not signed in*.
+  blocks the switch. Without the SDK the picker marks Claude as *Not installed*;
+  an undetected credential does **not** block the pick — a key may perfectly well
+  live where detection cannot see it (the Claude settings' `env`, an
+  `apiKeyHelper`, a relay channel). The row stays selectable (the bottom-right
+  plate never shows sign-in state; the picker's subtitle says *Not signed in*).
+  The CLI applies its own configuration after start; `/login` covers a
+  subscription sign-in in-session, `/channel` the relay route.
 - `dsh-tui --backend claude` (this launch only).
 - `backend: claude` in the dsh-tui config row.
 
@@ -151,6 +162,12 @@ a notice, so a cloned repository cannot silently switch off every check.
   conversation continues), `Ctrl+R` renames, `Ctrl+D` deletes; the open session and
   one another dsh-TUI terminal is using cannot be deleted. Pins are kept per
   backend.
+  Reopening or restarting first paints the last complete list while the SDK refreshes it.
+  First-paint snapshots are isolated by Claude configuration directory. Without a snapshot,
+  up to 32 recent sessions from the SDK's default project scope appear first, including
+  the current directory and Git worktrees in the same repository, then the complete
+  project and other projects. A failed all-projects read retains the project's worktree
+  sessions. Failed reads preserve the last complete snapshot.
 - From a shell: `dsh-tui --backend claude --resume <id>`; without an id it resumes
   the last Claude session this install used. dsh-TUI prints that command on exit.
   A session another dsh-TUI terminal has open is refused, and a `--resume` that
@@ -193,6 +210,19 @@ their prompts carried.
 ## Known limitations
 
 - One dsh-TUI process runs one backend; switching restarts through `/kernel`.
+- On Claude, `dsh-tui` starts the TUI from the package's own entry and
+  composes only a light profile (this package plus the third-party plugins the
+  profile declares, without DSH's agent core): the screen appears first and sending waits until
+  the session has opened. Until then Enter keeps the draft and says the kernel
+  is still starting, and a command-line prompt is sent once the session opens;
+  a failed open says why (the landing page closes to show it) and `/new`
+  retries. Third-party
+  DSH/Cordis plugins (themes, panels, decision hooks) load and join once the
+  screen is up; a plugin that needs DSH's own services (agents, tools, the LLM
+  layer) does not activate on this kernel. `DSH_TUI_HOST_ENTRY=0` goes back to
+  starting through `dsh --profile dsh-tui`. (The DSH kernel starts from the
+  package's entry by default too, but composes the whole DSH profile into that
+  process.)
 - In a Claude session the side panel's workspace panel reports it is unsupported
   and the trajectory panel stays empty.
 - No `/add-dir`; the refusal dialog offers only *Retry* and *Cancel*; an MCP

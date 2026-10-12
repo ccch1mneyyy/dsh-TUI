@@ -16,7 +16,7 @@
  * 运行：node scripts/verify-sync-profile.mjs
  */
 import { spawnSync } from 'node:child_process'
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -61,8 +61,8 @@ const whyFailed = (r) =>
     : (r.stderr ?? '').trim()
 
 const runSync = (...args) =>
-  spawnSync(process.execPath, [syncScript, ...args], {
-    cwd: repoRoot,
+  spawnSync(process.execPath, [fixtureScript, ...args], {
+    cwd: fixtureRepo,
     encoding: 'utf8',
     timeout: SYNC_TIMEOUT_MS,
     killSignal: 'SIGKILL',
@@ -71,8 +71,22 @@ const runSync = (...args) =>
 const source = join(repoRoot, FIXTURE)
 const sourceBytes = readFileSync(source)
 const root = mkdtempSync(join(tmpdir(), 'dsh-tui-sync-profile-'))
+const fixtureRepo = join(root, 'source')
+const fixtureScript = join(fixtureRepo, 'scripts', 'sync-profile.mjs')
 
 try {
+  // Run the unchanged production script against a bounded package fixture.
+  // Copying and hashing the whole tarball tests packaging, not inode safety,
+  // and made this focused regression exceed its deadline on CI disks.
+  mkdirSync(join(fixtureRepo, 'scripts'), { recursive: true })
+  copyFileSync(syncScript, fixtureScript)
+  writeFileSync(join(fixtureRepo, 'package.json'), JSON.stringify({
+    name: '@deepseek-harness-tui/dsh-tui', version: '0.0.1', files: [FIXTURE, 'nested'],
+  }))
+  copyFileSync(source, join(fixtureRepo, FIXTURE))
+  mkdirSync(join(fixtureRepo, 'nested'))
+  writeFileSync(join(fixtureRepo, 'nested', 'fixture.txt'), SENTINEL)
+
   const installed = join(root, 'installed')
   const sibling = join(root, 'store-entry')
   const target = join(installed, FIXTURE)
@@ -93,12 +107,16 @@ try {
     JSON.stringify(readFileSync(sibling, 'utf8').slice(0, 60)))
   check('target was actually updated', readFileSync(target).equals(sourceBytes))
   check('target no longer shares the inode', statSync(target).nlink === 1, `nlink=${statSync(target).nlink}`)
+  check('nested published files are synchronized', sync.status === 0 && readFileSync(join(installed, 'nested', 'fixture.txt'), 'utf8') === SENTINEL)
 
   const recheck = runSync('--target', installed, '--check')
   check('--check reports no drift afterwards', recheck.status === 0, whyFailed(recheck))
+  writeFileSync(target, SENTINEL)
+  const drift = runSync('--target', installed, '--check')
+  check('--check reports changed bytes', drift.status === 2, whyFailed(drift))
+  check('--check leaves changed bytes untouched', readFileSync(target, 'utf8') === SENTINEL)
 } finally {
-  // 超时被杀的子树可能仍短暂持有句柄（Windows 上尤为明显）——重试而不是把 2000+ 文件的
-  // 沙箱留给 %TEMP%（实测残留过多个 dsh-tui-sync-profile-* 目录）。
+  // 超时被杀的子树可能仍短暂持有句柄（Windows 上尤为明显）——重试而不是留下沙箱。
   rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 }
 

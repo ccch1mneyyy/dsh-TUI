@@ -8,6 +8,7 @@ export const DECISION_EVENTS: Readonly<ApiReference & {
 }>
 
 export const decisionEventsDefinition: ProtocolDefinition
+export const backendDefinition: ProtocolDefinition
 export const profileDefinitions: readonly ProtocolDefinition[]
 
 export function registerProfileProtocols(catalog: ProtocolCatalog): () => void

@@ -1,6 +1,6 @@
 /**
  * The backend-neutral MCP elicitation ↔ questionnaire helper
- * (`src/channel/elicitation.ts`), pure and without a backend:
+ * (`src/backends/shared/elicitation.ts`), pure and without a backend:
  *
  *  - schema → fields: enum (`enum` + `enumNames`, `oneOf` const + title,
  *    duplicate labels made unique), boolean, multi-select array, number /
@@ -17,6 +17,11 @@
  *    accept / decline; the notice texts; the header chip clip;
  *  - zh and en both resolve every string; no vendor import in the module.
  *
+ * The module writes no copy of its own (B-3): the caller hands over an
+ * `ElicitationText`. This gate drives it with the Claude backend's copy, on
+ * the live language, and keeps asserting against the host dictionary — so a
+ * drift between the two copies fails here as well as a broken rule.
+ *
  * Run: node --import tsx/esm scripts/verify-elicitation.ts
  */
 import assert from 'node:assert/strict'
@@ -24,12 +29,25 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const [
-  { createElicitationForm, createElicitationUrlAsk, elicitationNotices, fieldQuestion, formFields, parseFieldText, serverHeader },
-  { setLang, t },
+  { createElicitationForm: createForm, createElicitationUrlAsk: createUrlAsk, elicitationNotices, fieldQuestion: askField, formFields, parseFieldText: parseField, serverHeader },
+  { getLang, setLang, t },
+  { claudeElicitationText, claudeText, installClaudeLocale },
 ] = await Promise.all([
-  import('../src/channel/elicitation.js'),
+  import('../src/backends/shared/elicitation.js'),
   import('../src/i18n.js'),
+  import('../src/backends/claude/text.js'),
 ])
+
+// The copy of one call, in the language showing now.
+installClaudeLocale(getLang)
+/** One snapshot per flow: its option labels are matched against the strings
+ *  the panel showed, so a language switch mid-flow must not relabel them. */
+const elicit = (): Parameters<typeof askField>[4] => claudeElicitationText()
+const createElicitationForm = (request: Parameters<typeof createForm>[0]) => createForm(request, elicit())
+const createElicitationUrlAsk = (request: Parameters<typeof createUrlAsk>[0]) => createUrlAsk(request, elicit())
+const fieldQuestion = (field: Parameters<typeof askField>[0], header: string, lead: string | undefined, error: string | undefined) => askField(field, header, lead, error, elicit())
+const parseFieldText = (field: Parameters<typeof parseField>[0], text: string) => parseField(field, text, elicit())
+const notices = (): ReturnType<typeof elicitationNotices> => elicitationNotices(elicit())
 
 let passed = 0
 const check = (label: string, ok: boolean, detail?: unknown): void => {
@@ -45,9 +63,10 @@ setLang('en')
 
 // ── module hygiene ──────────────────────────────────────────────────────
 {
-  const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'channel', 'elicitation.ts'), 'utf8')
+  const source = readFileSync(resolve(import.meta.dirname, '..', 'src', 'backends', 'shared', 'elicitation.ts'), 'utf8')
   const imports = [...source.matchAll(/from '([^']+)'/gu)].map(match => match[1]!)
-  check('the module imports only the agent domain and i18n', imports.every(path => path === '../agent/capabilities.js' || path === '../agent/events.js' || path === '../i18n.js'), imports)
+  check('the module imports only the agent domain and the shared text rules',
+    imports.every(path => path === '../../agent/capabilities.js' || path === '../../agent/events.js' || path === './localized-text.js'), imports)
 }
 
 // ── schema → fields ─────────────────────────────────────────────────────
@@ -78,10 +97,10 @@ check('no properties → no fields', formFields({ type: 'object' }).length === 0
 // ── typed validation ────────────────────────────────────────────────────
 const parse = (key: string, text: string, override?: Record<string, unknown>) => parseFieldText(override === undefined ? byKey(key) : { ...byKey(key), schema: { ...byKey(key).schema, ...override } }, text)
 check('an integer in range parses', JSON.stringify(parse('age', '42')) === '{"value":42}')
-check('a fraction is not an integer', JSON.stringify(parse('age', '4.5')) === JSON.stringify({ error: t('elicit-invalid-integer') }))
-check('above the maximum is refused', JSON.stringify(parse('age', '200')) === JSON.stringify({ error: t('elicit-invalid-max', { max: 150 }) }))
-check('not a number is refused', JSON.stringify(parse('age', 'x')) === JSON.stringify({ error: t('elicit-invalid-number') }))
-check('too short a text is refused', JSON.stringify(parse('name', 'A')) === JSON.stringify({ error: t('elicit-invalid-min-length', { n: 2 }) }))
+check('a fraction is not an integer', JSON.stringify(parse('age', '4.5')) === JSON.stringify({ error: claudeText('elicit-invalid-integer') }))
+check('above the maximum is refused', JSON.stringify(parse('age', '200')) === JSON.stringify({ error: claudeText('elicit-invalid-max', { max: 150 }) }))
+check('not a number is refused', JSON.stringify(parse('age', 'x')) === JSON.stringify({ error: claudeText('elicit-invalid-number') }))
+check('too short a text is refused', JSON.stringify(parse('name', 'A')) === JSON.stringify({ error: claudeText('elicit-invalid-min-length', { n: 2 }) }))
 check('length counts code points (CJK, emoji)', 'value' in parse('name', '张三') && 'value' in parse('name', '😀😀'))
 check('email format', 'error' in parse('note', 'nope', { format: 'email' }) && 'value' in parse('note', 'a@b.co', { format: 'email' }))
 check('uri format', 'error' in parse('note', 'not a uri', { format: 'uri' }) && 'value' in parse('note', 'https://x.test/a', { format: 'uri' }))
@@ -95,9 +114,9 @@ check('a JSON field takes a scalar or a string array, never an object', 'value' 
   const choice = fieldQuestion(byKey('color'), 'srv', undefined, undefined)
   check('a choice is options only, preselecting its default', choice.hideCustomInput === true && JSON.stringify(choice.defaultSelected) === '["Green"]' && choice.options.map(option => option.label).join() === 'Red,Green')
   const optional = fieldQuestion(byKey('note'), 'srv', undefined, undefined)
-  check('an optional free-text field offers skip and the text row', optional.question === t('elicit-optional', { title: 'note' }) && optional.options.map(option => option.label).join() === t('elicit-skip') && optional.hideCustomInput !== true)
-  const number = fieldQuestion(byKey('age'), 'srv', 'Lead line', t('elicit-invalid-number'))
-  check('a re-asked number says why, keeps the lead and shows its range', (number.detail ?? '').split('\n').join('|') === [t('elicit-invalid', { reason: t('elicit-invalid-number') }), 'Lead line', 'Years', t('elicit-hint-range', { kind: t('elicit-kind-integer'), min: 0, max: 150 })].join('|'), number.detail)
+  check('an optional free-text field offers skip and the text row', optional.question === claudeText('elicit-optional', { title: 'note' }) && optional.options.map(option => option.label).join() === claudeText('elicit-skip') && optional.hideCustomInput !== true)
+  const number = fieldQuestion(byKey('age'), 'srv', 'Lead line', claudeText('elicit-invalid-number'))
+  check('a re-asked number says why, keeps the lead and shows its range', (number.detail ?? '').split('\n').join('|') === [claudeText('elicit-invalid', { reason: claudeText('elicit-invalid-number') }), 'Lead line', 'Years', claudeText('elicit-hint-range', { kind: claudeText('elicit-kind-integer'), min: 0, max: 150 })].join('|'), number.detail)
   const multi = fieldQuestion(byKey('tags'), 'srv', undefined, undefined)
   check('a multi-select array is checkboxes', multi.multiSelect === true && multi.hideCustomInput === true && multi.options.length === 4)
 }
@@ -106,22 +125,22 @@ check('a JSON field takes a scalar or a string array, never an object', 'value' 
 const request = { serverName: 'github', displayName: 'GitHub MCP', title: 'Sign up', message: 'Tell us about you', requestedSchema: schema }
 {
   const form = createElicitationForm(request)
-  check('one question per field, then send / decline', form.questions.length === fields.length + 1 && form.questions.at(-1)!.options.map(option => option.label).join() === `${t('elicit-send')},${t('elicit-decline')}`)
+  check('one question per field, then send / decline', form.questions.length === fields.length + 1 && form.questions.at(-1)!.options.map(option => option.label).join() === `${claudeText('elicit-send')},${claudeText('elicit-decline')}`)
   check('the header chip names the server, the lead rides on the first field', form.questions.every(question => question.header === 'GitHub MCP') && (form.questions[0]!.detail ?? '').startsWith('Sign up\nTell us about you'))
-  check('the confirmation names the server', form.questions.at(-1)!.question === t('elicit-confirm', { server: 'github' }))
-  const declined = form.answer(answers({ custom: 'Al' }, { custom: '3' }, { selected: ['Red'] }, {}, { selected: ['Yes'] }, {}, {}, {}, { selected: [t('elicit-decline')] }))
+  check('the confirmation names the server', form.questions.at(-1)!.question === claudeText('elicit-confirm', { server: 'github' }))
+  const declined = form.answer(answers({ custom: 'Al' }, { custom: '3' }, { selected: ['Red'] }, {}, { selected: ['Yes'] }, {}, {}, {}, { selected: [claudeText('elicit-decline')] }))
   check('declining ends the flow', declined.kind === 'decline')
 }
 {
   const form = createElicitationForm(request)
   const first = form.answer(answers(
-    { custom: 'A' }, { custom: '200' }, { selected: ['Red'] }, { selected: [t('elicit-skip')] }, { selected: [t('elicit-no')] },
-    { selected: ['a', 'b', 'c'] }, { selected: [t('elicit-skip')] }, { selected: [t('elicit-skip')] }, { selected: [t('elicit-send')] },
+    { custom: 'A' }, { custom: '200' }, { selected: ['Red'] }, { selected: [claudeText('elicit-skip')] }, { selected: [claudeText('elicit-no')] },
+    { selected: ['a', 'b', 'c'] }, { selected: [claudeText('elicit-skip')] }, { selected: [claudeText('elicit-skip')] }, { selected: [claudeText('elicit-send')] },
   ))
   check('an invalid round re-asks only the invalid fields, saying why', first.kind === 'reask' && first.questions.length === 3
-    && (first.questions[0]!.detail ?? '').includes(t('elicit-invalid-min-length', { n: 2 }))
-    && (first.questions[1]!.detail ?? '').includes(t('elicit-invalid-max', { max: 150 }))
-    && (first.questions[2]!.detail ?? '').includes(t('elicit-invalid-max-items', { n: 2 })), first)
+    && (first.questions[0]!.detail ?? '').includes(claudeText('elicit-invalid-min-length', { n: 2 }))
+    && (first.questions[1]!.detail ?? '').includes(claudeText('elicit-invalid-max', { max: 150 }))
+    && (first.questions[2]!.detail ?? '').includes(claudeText('elicit-invalid-max-items', { n: 2 })), first)
   // The flow fixed its labels when first asked; a language switch now must
   // not turn the remaining answers into mismatches.
   setLang('zh')
@@ -132,13 +151,13 @@ const request = { serverName: 'github', displayName: 'GitHub MCP', title: 'Sign 
 {
   const empty = createElicitationForm({ serverName: 'srv', message: 'Just confirm', requestedSchema: {} })
   check('a field-less form is the confirmation alone, carrying the lead', empty.questions.length === 1 && empty.questions[0]!.detail === 'Just confirm')
-  const done = empty.answer(answers({ selected: [t('elicit-send')] }))
+  const done = empty.answer(answers({ selected: [claudeText('elicit-send')] }))
   check('… and sending it accepts empty content', done.kind === 'accept' && JSON.stringify(done.content) === '{}')
 }
 {
   const form = createElicitationForm({ serverName: 'srv', message: '', requestedSchema: { type: 'object', properties: { pick: { type: 'string', enum: ['x'] } }, required: ['pick'] } })
-  const step = form.answer(answers({}, { selected: [t('elicit-send')] }))
-  check('a required choice left empty is re-asked', step.kind === 'reask' && (step.questions[0]!.detail ?? '').includes(t('elicit-invalid-choice')))
+  const step = form.answer(answers({}, { selected: [claudeText('elicit-send')] }))
+  check('a required choice left empty is re-asked', step.kind === 'reask' && (step.questions[0]!.detail ?? '').includes(claudeText('elicit-invalid-choice')))
 }
 
 // ── URL mode and notices ────────────────────────────────────────────────
@@ -146,14 +165,14 @@ const request = { serverName: 'github', displayName: 'GitHub MCP', title: 'Sign 
   check('no URL → nothing to ask', createElicitationUrlAsk({ serverName: 'srv', message: 'x' }) === undefined && createElicitationUrlAsk({ serverName: 'srv', message: 'x', url: '  ' }) === undefined)
   const ask = createElicitationUrlAsk({ serverName: 'github', message: '', url: 'https://example.test/auth' })!
   const question = ask.questions[0]!
-  check('the URL question carries the link and accept / decline', question.link === 'https://example.test/auth' && question.question === t('elicit-url-question', { server: 'github' }) && question.options.map(option => option.label).join() === `${t('elicit-url-accept')},${t('elicit-decline')}` && question.hideCustomInput === true)
-  check('accept is the first option only', ask.accepted(answers({ selected: [t('elicit-url-accept')] })) && !ask.accepted(answers({ selected: [t('elicit-decline')] })) && !ask.accepted(answers({})))
+  check('the URL question carries the link and accept / decline', question.link === 'https://example.test/auth' && question.question === claudeText('elicit-url-question', { server: 'github' }) && question.options.map(option => option.label).join() === `${claudeText('elicit-url-accept')},${claudeText('elicit-decline')}` && question.hideCustomInput === true)
+  check('accept is the first option only', ask.accepted(answers({ selected: [claudeText('elicit-url-accept')] })) && !ask.accepted(answers({ selected: [claudeText('elicit-decline')] })) && !ask.accepted(answers({})))
   const own = createElicitationUrlAsk({ serverName: 'github', message: 'Authorize the app', url: 'https://example.test' })!
   check('the server message is the question when present', own.questions[0]!.question === 'Authorize the app')
-  check('notices name the server (and the URL)', elicitationNotices.urlOpen('github', 'https://x.test') === t('elicit-url-notice', { server: 'github', url: 'https://x.test' })
-    && elicitationNotices.urlComplete('github') === t('elicit-url-complete', { server: 'github' })
-    && elicitationNotices.urlMissing('github') === t('elicit-url-missing', { server: 'github' })
-    && elicitationNotices.unsupported('github', 'hologram') === t('elicit-unsupported', { server: 'github', mode: 'hologram' }))
+  check('notices name the server (and the URL)', notices().urlOpen('github', 'https://x.test') === claudeText('elicit-url-notice', { server: 'github', url: 'https://x.test' })
+    && notices().urlComplete('github') === claudeText('elicit-url-complete', { server: 'github' })
+    && notices().urlMissing('github') === claudeText('elicit-url-missing', { server: 'github' })
+    && notices().unsupported('github', 'hologram') === claudeText('elicit-unsupported', { server: 'github', mode: 'hologram' }))
   check('the header chip clips a long server name', serverHeader('a   very long    server name that goes on') === 'a very long server name…' && serverHeader(' short ') === 'short')
 }
 

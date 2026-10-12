@@ -2,10 +2,10 @@
  * verify-effort-default — 默认推理强度（/settings effortDefault）纯函数回归。
  *
  * 覆盖 src/effortPrefs.ts：
- *   1. resolveEffortDefault 优先级链：settings 用户层 > cordis `effort` >
- *      持久化 /effort 选择（effort.json）> undefined（模型/适配器默认）；
- *      `auto` 由调用方折叠为 undefined 后走同一链（这里显式传入 undefined
- *      验证折叠后行为）；
+ *   1. resolveEffortDefault 优先级链：settings 用户层 > 持久化 /effort 选择
+ *      （effort.json，即上次实际运行的档位）> cordis `effort`（部署默认值）>
+ *      undefined（模型/适配器默认）；`auto` 由调用方折叠为 undefined 后走同一
+ *      链（这里显式传入 undefined 验证折叠后行为）；
  *   2. readEffortPref / writeEffortPref 的 best-effort 文件语义：写入回读、
  *      缺文件、坏 JSON、结构不符（非对象 / effort 非字符串 / 空串）均回落
  *      undefined。
@@ -29,16 +29,16 @@ function check(name: string, ok: boolean, extra = ''): void {
 // ── 1. 优先级链 ──────────────────────────────────────────────────────────
 {
   check(
-    'settings 层优先于 cordis 与 effort.json',
+    'settings 层优先于持久化选择与 cordis 默认',
     resolveEffortDefault('high', 'max', 'low') === 'high',
   )
   check(
-    'settings 缺省（auto）时 cordis effort 生效',
-    resolveEffortDefault(undefined, 'max', 'low') === 'max',
+    'settings 缺省（auto）时持久化 /effort 优先于 cordis effort（部署默认）',
+    resolveEffortDefault(undefined, 'max', 'low') === 'low',
   )
   check(
-    'settings 与 cordis 都缺省时 effort.json 生效',
-    resolveEffortDefault(undefined, undefined, 'low') === 'low',
+    'settings 与持久化都缺省时 cordis effort 生效',
+    resolveEffortDefault(undefined, 'max', undefined) === 'max',
   )
   check(
     '全缺省 → undefined（适配器默认）',
@@ -97,8 +97,8 @@ try {
   )
   writeEffortPref('low', dir2)
   check(
-    'settings auto → 跟随最近一次 /effort',
-    resolveEffortDefault(undefined, 'high', readEffortPref(dir2)) === 'high',
+    'settings auto → 跟随最近一次 /effort（不被 cordis effort 压过）',
+    resolveEffortDefault(undefined, 'high', readEffortPref(dir2)) === 'low',
   )
 } finally {
   rmSync(dir2, { recursive: true, force: true })

@@ -107,15 +107,29 @@ export function CommandSuggestions({
         const commandIndex = startIndex + offset
         const isSelected = command.name === commands[selectedIndex]?.name
         const isHeld = commandIndex >= holdStart
-        const tagText = command.tag ? `[${command.tag}] ` : ''
+        // tag = 宿主命令/技能的 `input.hint`（如 `/goal` 的
+        // `[<objective>|clear|edit <objective>|pause|resume]`，52 列），可能比整行
+        // 预算还长。它必须先吃预算并**截断**：行内容一旦超过 `usable`，flex 行就
+        // 出现负空间——两侧 `│` 被压到亚 1 列宽，`measure-text` 的
+        // `ceil(1 / 0.98) = 2` 会把整行量成两行，屏幕上就是该行后面多出一条幽灵
+        // 空行（启动页 72 列的卡片里 `/goal` 实测如此）。
+        const rawTagText = command.tag ? `[${command.tag}] ` : ''
+        // 行预算：内容宽 − 前导空格 1 − 指针列 2 − 名字列。
+        const rowBudget = Math.max(0, usable - 3 - nameWidth)
+        const tagText = stringWidth(rawTagText) <= rowBudget
+          ? rawTagText
+          : rowBudget >= 1 ? truncateToWidth(rawTagText, rowBudget - 1) + '…' : ''
         const tagWidth = stringWidth(tagText)
-        // 行预算：内容宽 − 前导空格 1 − 指针列 2。
-        const descriptionWidth = Math.max(0, usable - 3 - nameWidth - tagWidth)
+        // 预算被 tag 吃光时**不画**省略号：`truncateToWidth(raw, -1) + '…'` 会白送
+        // 1 列，同样把行顶出 `usable`。
+        const descriptionWidth = Math.max(0, rowBudget - tagWidth)
         const rawDescription = localizedDescription(command)
         const description =
-          stringWidth(rawDescription) > descriptionWidth
-            ? truncateToWidth(rawDescription, descriptionWidth - 1) + '…'
-            : rawDescription
+          descriptionWidth === 0
+            ? ''
+            : stringWidth(rawDescription) > descriptionWidth
+              ? truncateToWidth(rawDescription, descriptionWidth - 1) + '…'
+              : rawDescription
         const padAfter = Math.max(0, nameWidth - stringWidth(command.name))
         // 灰区整行一个 `subtle`，且刻意不做查询命中提亮（灰区不该看起来像
         // 「可用」）。选中行仍走下方通用样式，保证光标始终可见。

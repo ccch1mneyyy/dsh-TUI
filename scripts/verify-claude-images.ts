@@ -50,6 +50,7 @@ const [
   { setLang, t },
   { settled },
   fakes,
+  { claudeText },
 ] = await Promise.all([
   import('../src/backends/claude/session.js'),
   import('../src/backends/claude/prefs.js'),
@@ -60,6 +61,7 @@ const [
   import('../src/i18n.js'),
   import('./lib/term-test.mjs'),
   import('./lib/claude-fake-sdk.js'),
+  import('../src/backends/claude/text.js'),
 ])
 
 setLang('en')
@@ -167,10 +169,10 @@ const BLUE = png(5, 5, [0, 0, 255])
   const refusal = async (images: Parameters<typeof claudeImageBlocks>[0], limits = CLAUDE_IMAGE_LIMITS): Promise<string | undefined> => {
     try { await claudeImageBlocks(images, limits); return undefined } catch (error) { return error instanceof Error ? error.message : String(error) }
   }
-  check('more than 20 images are refused', await refusal(Array.from({ length: 21 }, () => facade)) === t('claude-images-too-many', { n: 20 }))
-  check('an image over the per-image limit (5 MiB) is refused', await refusal([facade], { ...CLAUDE_IMAGE_LIMITS, maxImageBytes: 10 }) === t('claude-image-too-large', { name: facade.id, mb: 0 }))
-  check('images over the per-message total are refused', await refusal([facade, facade], { ...CLAUDE_IMAGE_LIMITS, maxMessageImageBytes: RED.byteLength + 1 }) === t('claude-images-too-large', { mb: 0 }))
-  check('a format Claude does not take is refused', await refusal([{ ...facade, mediaType: 'image/bmp' }]) === t('claude-image-type-refused', { name: facade.id, type: 'image/bmp' }))
+  check('more than 20 images are refused', await refusal(Array.from({ length: 21 }, () => facade)) === claudeText('claude-images-too-many', { n: 20 }))
+  check('an image over the per-image limit (5 MiB) is refused', await refusal([facade], { ...CLAUDE_IMAGE_LIMITS, maxImageBytes: 10 }) === claudeText('claude-image-too-large', { name: facade.id, mb: 0 }))
+  check('images over the per-message total are refused', await refusal([facade, facade], { ...CLAUDE_IMAGE_LIMITS, maxMessageImageBytes: RED.byteLength + 1 }) === claudeText('claude-images-too-large', { mb: 0 }))
+  check('a format Claude does not take is refused', await refusal([{ ...facade, mediaType: 'image/bmp' }]) === claudeText('claude-image-type-refused', { name: facade.id, type: 'image/bmp' }))
 }
 
 // ── submit, the user row, @-mentions — through the channel ─────────────
@@ -210,7 +212,7 @@ const BLUE = png(5, 5, [0, 0, 255])
   } catch (error) {
     refused = error instanceof Error ? error.message : String(error)
   }
-  check('an image block without its staged image refuses the message (never text alone)', refused === t('claude-image-unreadable', { name: '#1', err: t('claude-image-gone') }), refused)
+  check('an image block without its staged image refuses the message (never text alone)', refused === claudeText('claude-image-unreadable', { name: '#1', err: claudeText('claude-image-gone') }), refused)
   await lone.dispose()
 }
 

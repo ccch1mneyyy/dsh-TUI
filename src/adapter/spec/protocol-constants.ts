@@ -121,15 +121,23 @@ export const HOST_SUPPORTED_CONTRACTS: readonly { apiVersion: string; kind: stri
     const raw = JSON.parse(readFileSync(join(dir, 'registry', 'registry-0.15.json'), 'utf8')) as {
       imports?: unknown
       definitions?: unknown
+      extensions?: unknown
     }
+    const section = (value: unknown): unknown[] => Array.isArray(value) ? value : []
+    // All three sections are read: the driver set is selected by entry *name*,
+    // and `Backend` is published from the `extensions` section (W-2). The other
+    // extension entries (`tui.settings-section`, `tui.scene`,
+    // `workspace.provider`) are manifest contributions with no host contract of
+    // their own, so they are deliberately not selected here.
     const entries = [
-      ...((Array.isArray(raw.imports) ? raw.imports : []) as unknown[]),
-      ...((Array.isArray(raw.definitions) ? raw.definitions : []) as unknown[]),
+      ...section(raw.imports),
+      ...section(raw.definitions),
+      ...section(raw.extensions),
     ] as Array<{
       name?: unknown
       coordinates?: { apiVersion?: unknown; kind?: unknown }
     }>
-    const supported = new Set(['commands', 'storage.local', 'messages.observe', 'tui.decision-events'])
+    const supported = new Set(['commands', 'storage.local', 'messages.observe', 'tui.decision-events', 'tui.backend'])
     const coords = entries
       .filter(entry => typeof entry.name === 'string' && supported.has(entry.name))
       .map(entry => ({

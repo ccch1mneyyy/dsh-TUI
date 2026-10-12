@@ -12,7 +12,7 @@
  *     caret/点击、fold block 选区钳制与无选区 consumeSelectionCopy=false。
  *   阶段 B（真实 Chat）：Ctrl+C 经 Chat→控制器复制选区且保留选区、再打字
  *     替换；无选区 Ctrl+C 保持既有清空语义。
- *   阶段 C/D（运行时主题的 caret）：C = `cursor` 有值（实心主题色块、选区仍
+ *   阶段 C/D（无原生光标时的主题回退）：C = `cursor` 有值（实心主题色块、选区仍
  *     反色）；D = 旧调色板整份缺 `cursor` 键（必须仍落回反色块）。
  *
  * 运行：node --import tsx/esm scripts/verify-input-selection.tsx
@@ -57,6 +57,7 @@ const [
   import('./lib/term-test.mjs'),
 ])
 const { getTheme, registerRuntimeThemeResolver } = await import('../src/theme.js')
+const { NativeCursorContext } = await import('../src/ink/components/CursorDeclarationContext.js')
 
 import type { PromptController } from '../src/components/PromptInput.js'
 
@@ -76,6 +77,7 @@ type Harness = {
   screenHas: (s: string) => boolean
   findText: (s: string) => { col: number; row: number } | null
   inverseAt: (col: number, row: number) => boolean
+  caretAt: (col: number, row: number) => boolean
   bgAt: (col: number, row: number) => number
   oscPayloads: () => string[]
   press: (col: number, row: number) => void
@@ -137,6 +139,8 @@ function makeHarness(cols: number, rows: number): Harness {
   }
   const inverseAt = (col: number, row: number): boolean =>
     buf().getLine(buf().baseY + row)?.getCell(col)?.isInverse() ?? false
+  const caretAt = (col: number, row: number): boolean =>
+    buf().cursorX === col && buf().cursorY === row
   const bgAt = (col: number, row: number): number =>
     buf().getLine(buf().baseY + row)?.getCell(col)?.getBgColor() ?? -1
   const oscPayloads = (): string[] =>
@@ -161,6 +165,7 @@ function makeHarness(cols: number, rows: number): Harness {
     screenHas,
     findText,
     inverseAt,
+    caretAt,
     bgAt,
     oscPayloads,
     press,
@@ -205,7 +210,7 @@ function makePromptChannel(): Record<string, unknown> {
   const COLS = 80
   const ROWS = 24
   const h = makeHarness(COLS, ROWS)
-  const { stdin, screenHas, findText, inverseAt, oscPayloads, press, motion, release, shiftPress, shiftRelease, click } = h
+  const { stdin, screenHas, findText, inverseAt, caretAt, oscPayloads, press, motion, release, shiftPress, shiftRelease, click } = h
 
   const channel = makePromptChannel()
 
@@ -269,7 +274,7 @@ function makePromptChannel(): Record<string, unknown> {
         () =>
           inverseAt(c0 + 1, r0) &&
           inverseAt(c0 + 4, r0) &&
-          inverseAt(c0 + 5, r0) &&
+          !inverseAt(c0 + 5, r0) && caretAt(c0 + 5, r0) &&
           !inverseAt(c0, r0) &&
           !inverseAt(c0 + 6, r0),
       ),
@@ -334,7 +339,7 @@ function makePromptChannel(): Record<string, unknown> {
     stdin.write('hello world')
     await settle(() => screenHas('hello world'))
     click(c0 + 1, r0) // 单击 'e' → caret 1
-    await settle(() => inverseAt(c0 + 1, r0))
+    await settle(() => caretAt(c0 + 1, r0))
     shiftPress(c0 + 10, r0)
     shiftRelease(c0 + 10, r0)
     check(
@@ -343,7 +348,7 @@ function makePromptChannel(): Record<string, unknown> {
         () =>
           inverseAt(c0 + 1, r0) &&
           inverseAt(c0 + 9, r0) &&
-          inverseAt(c0 + 10, r0) &&
+          !inverseAt(c0 + 10, r0) && caretAt(c0 + 10, r0) &&
           !inverseAt(c0, r0),
       ),
     )
@@ -370,7 +375,7 @@ function makePromptChannel(): Record<string, unknown> {
           screenHas('hello world') &&
           !inverseAt(c0 + 1, r0) &&
           !inverseAt(c0 + 9, r0) &&
-          inverseAt(c0 + 10, r0),
+          !inverseAt(c0 + 10, r0) && caretAt(c0 + 10, r0),
       ),
     )
     stdin.write('\x1b')
@@ -391,7 +396,7 @@ function makePromptChannel(): Record<string, unknown> {
     await sleep(50) // 固定窗:墙钟 两次 shift+click 的间隔须落在 500ms 双击窗口内
     shiftPress(shiftRow.col + 6, shiftRow.row)
     shiftRelease(shiftRow.col + 6, shiftRow.row)
-    await settle(() => inverseAt(shiftRow.col + 6, shiftRow.row))
+    await settle(() => caretAt(shiftRow.col + 6, shiftRow.row))
     const shiftCopies = oscPayloads().length
     check(
       'A5b 连续 Shift+click 不误判双击选词',
@@ -415,7 +420,7 @@ function makePromptChannel(): Record<string, unknown> {
         () =>
           inverseAt(c0, r0) &&
           inverseAt(c0 + 6, r0) &&
-          inverseAt(c0 + 7, r0) &&
+          !inverseAt(c0 + 7, r0) && caretAt(c0 + 7, r0) &&
           !inverseAt(c0 + 8, r0),
       ),
     )
@@ -437,7 +442,7 @@ function makePromptChannel(): Record<string, unknown> {
       'A7 ← 坍缩到选区头（caret 在 w）',
       await settled(
         () =>
-          inverseAt(c0 + 6, r0) &&
+          caretAt(c0 + 6, r0) && !inverseAt(c0 + 6, r0) &&
           !inverseAt(c0 + 7, r0) &&
           !inverseAt(c0 + 10, r0),
       ),
@@ -617,7 +622,7 @@ function makePromptChannel(): Record<string, unknown> {
     check(
       'A12 词中 caret 留在换行后的词行',
       await settled(
-        () => inverseAt(wpos.col + 7, wpos.row) && !inverseAt(wpos.col + 7, wpos.row - 1),
+        () => caretAt(wpos.col + 7, wpos.row) && !inverseAt(wpos.col + 7, wpos.row),
       ),
     )
     click(wpos.col + 3, wpos.row)
@@ -625,9 +630,9 @@ function makePromptChannel(): Record<string, unknown> {
       'A12 点击换行词 caret 在词行而非上一行',
       await settled(
         () =>
-          (inverseAt(wpos.col + 2, wpos.row) ||
-            inverseAt(wpos.col + 3, wpos.row) ||
-            inverseAt(wpos.col + 4, wpos.row)) &&
+          (caretAt(wpos.col + 2, wpos.row) ||
+            caretAt(wpos.col + 3, wpos.row) ||
+            caretAt(wpos.col + 4, wpos.row)) &&
           !inverseAt(wpos.col + 3, wpos.row - 1),
       ),
     )
@@ -759,9 +764,8 @@ function makePromptChannel(): Record<string, unknown> {
 }
 
 // ── 阶段 C：主题化 caret（cursor 键）────────────────────────────────────
-// 内置主题的 `cursor` 为空 → caret 仍是反色块（向后兼容，阶段 A/B 全程在
-// 断言这条路径）。主题给出 cursor 时 caret 改为实心色块：背景 = cursor、
-// 字形 = inverseText；选区语义不变（仍是反色）。
+// 显式关闭原生光标上下文以覆盖静态呈现的回退路径：主题给出 cursor 时
+// caret 为实心色块，选区仍是反色。阶段 A/B 验证真实 TTY 的原生光标。
 {
   const COLS = 80
   const ROWS = 10
@@ -792,9 +796,11 @@ function makePromptChannel(): Record<string, unknown> {
 
   const app = await render(
     <ThemeProvider theme="caret-probe">
+      <NativeCursorContext.Provider value={false}>
       <AlternateScreen>
         <Fixture />
       </AlternateScreen>
+      </NativeCursorContext.Provider>
     </ThemeProvider>,
     {
       stdout: h.stdout,
@@ -874,9 +880,11 @@ function makePromptChannel(): Record<string, unknown> {
 
   const app = await render(
     <ThemeProvider theme="caret-legacy">
+      <NativeCursorContext.Provider value={false}>
       <AlternateScreen>
         <Fixture />
       </AlternateScreen>
+      </NativeCursorContext.Provider>
     </ThemeProvider>,
     {
       stdout: h.stdout,

@@ -8,7 +8,7 @@ import { mountFailureText } from '../../sessions/resumeFailure.js'
 import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { readModelPref } from '../../modelPrefs.js'
-import { migratePresetPref, readPresetPref } from '../../presetPrefs.js'
+import { migratePresetPref, presetOverrideFromEnv, readPresetPref } from '../../presetPrefs.js'
 import { agentViewHasTurns } from '../agent-view.js'
 import {
   occupancyOf,
@@ -20,6 +20,7 @@ import {
 import { ensureLegacySessionEventTypes } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute } from '../presets.js'
+import { createFreshAgent } from '../fresh-agent.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { createDshSession, dshHandleOf } from '../backend/session.js'
 import { resetSessionProjection } from './session-reset.js'
@@ -187,9 +188,11 @@ export function createSessionResumeActions(
       try {
         candidate = await deps.binding.prepare(adoption, async () => createDshSession(ctx, await agents.resume({
           resumeSessionId: SessionId(sessionId),
+          // The session's own recorded route is what it actually ran, so it
+          // outranks the static cordis.yml route (the deployment default).
           agentOptions: {
-            provider: explicitRoute?.provider ?? persistedRoute?.provider,
-            model: explicitRoute?.model ?? persistedRoute?.model,
+            provider: persistedRoute?.provider ?? explicitRoute?.provider,
+            model: persistedRoute?.model ?? explicitRoute?.model,
           },
           ...(composed.setup === undefined ? {} : { setup: composed.setup }),
         })))
@@ -228,7 +231,7 @@ export function createSessionResumeActions(
         // Reset the input FIFO and pending-decision indicators BEFORE the first
         // emit (main's bind → clear → refresh order); see the /new tail.
         deps.clearStagedImages()
-        resetAndBind(handle, composed.agentPreset, explicitRoute ?? recordedModelRoute(snapshotLiveSessionEvents(handle.agent.session)), true)
+        resetAndBind(handle, composed.agentPreset, recordedModelRoute(snapshotLiveSessionEvents(handle.agent.session)) ?? explicitRoute, true)
         writeResumeTarget(sessionId)
         touchSession(sessionId)
         state.emit()
@@ -440,8 +443,12 @@ export function createSessionResumeActions(
       await deps.settleCompaction()
       if (!current()) return undefined
       const sessionId = SessionId(randomUUID())
-      const presetPref = options.configuredPreset === undefined ? readPresetPref() : undefined
-      const composed = await composePreset(ctx, options.configuredPreset ?? presetPref)
+      // Preset precedence for a session created from inside the TUI: the
+      // DSH_TUI_PRESET launch instruction, the persisted `/preset` choice,
+      // then the cordis.yml default.
+      const presetOverride = presetOverrideFromEnv()
+      const presetPref = readPresetPref()
+      const composed = await composePreset(ctx, presetOverride ?? presetPref ?? options.configuredPreset)
       if (!current()) return undefined
       const resolved = resolveModelRoute(
         { provider: options.configuredProvider, model: options.configuredModel },
@@ -452,7 +459,7 @@ export function createSessionResumeActions(
       const validated = await validateModelRoute(llm, resolved, { provider: options.provider, model: options.model })
       const route = validated.route
       if (!current()) return undefined
-      if (!migratePresetPref(presetPref, composed.agentPreset)) {
+      if (presetOverride === undefined && !migratePresetPref(presetPref, composed.agentPreset)) {
         deps.notify(t('preset-switched-pref-failed', { id: composed.agentPreset ?? presetPref ?? 'unknown' }), { color: 'warning' })
       }
       if (validated.rejected !== undefined) {
@@ -466,7 +473,7 @@ export function createSessionResumeActions(
         // has been told about yet, and the publisher would not name it until
         // its next beat.
         async reserve() { reservation = await reserveCreatedSession(sessionId) },
-        open: async cwd => createDshSession(ctx, await agents.create({
+        open: async cwd => createDshSession(ctx, await createFreshAgent(ctx, agents, {
           sessionId,
           meta: { cwd, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
           agentOptions: route,
