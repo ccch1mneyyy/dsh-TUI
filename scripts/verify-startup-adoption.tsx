@@ -483,7 +483,7 @@ for (const fullscreen of [false, true]) {
     })
     const label = `${fullscreen ? 'fullscreen' : 'inline'} ${changedCwd ? 'changed cwd' : 'same cwd'}`
     try {
-      await settled(() => reads === 1)
+      check(`${label}: startup preload starts before /resume`, await settled(() => reads === 1))
       stdin.write('/resume')
       await settled(() => screen().includes('/resume'))
       stdin.write('\r')
