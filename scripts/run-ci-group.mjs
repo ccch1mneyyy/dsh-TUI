@@ -843,6 +843,8 @@ const GROUPS = {
 // 非 DSH 会话上的 channel：能力快照、只提供后端支持的命令、DSH 专属动作明确不可用、
 // /new 经后端 open、换会话后的代际栅栏；DSH channel 的命令表不变。
     ["verify-backend-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-channel.ts']],
+// 任务完成通知：共享 channel 的完成/队列/目标/换会话栅栏，回复摘要、标题、焦点与 OSC 9/99/777/BEL/tmux。
+    ['verify-task-notifications', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications.ts']],
 // channel 构造失败回滚：核心、DSH 扩展或首次 bind 任一步抛错，都释放宿主与 agent
 // 监听、IDE 选区连接（真 loopback）和计时器，并关闭非 DSH 会话。
     ["verify-channel-rollback", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-rollback.ts']],

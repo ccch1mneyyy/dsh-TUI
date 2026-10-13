@@ -64,6 +64,9 @@
     # 以下为 /settings 可改的显示设置；每项说明与默认值见应用内 /settings 屏。
     terminalImages: true
     # mermaidDiagrams: true
+    # 任务完成通知：off / unfocused（默认）/ always；方式：auto（默认）/ osc9 / bel。
+    # taskNotifications: unfocused
+    # notificationMethod: auto
     # 回复中 LaTeX 公式的显示方式：auto（默认，目前为 Unicode）/ image（支持图形的终端里块级公式显示为图片）/ unicode / source（保留源码）。/settings 可实时改。
     # mathRendering: auto
     # Reasoning effort applied to every request, validated against the live

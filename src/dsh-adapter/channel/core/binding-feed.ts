@@ -26,6 +26,7 @@ import type { BindingCapture, ChannelBinding } from '../binding.js'
 import type { InputConvergence } from '../input-actions.js'
 import type { ChannelOwner } from '../owner.js'
 import type { ChannelLaunchOptions } from '../state.js'
+import { createTaskCompletion } from '../task-completion.js'
 import type { ChannelState } from '../types.js'
 import type { SessionControls } from './session-controls.js'
 
@@ -71,6 +72,7 @@ export function createSessionBatchRouter(deps: {
    *  land on the cleared view. Absent = the event is projected (ignored). */
   onReset?(event: AgentEventOf<'session.reset'>): void
   warn(message: string): void
+  taskCompletion?: ReturnType<typeof createTaskCompletion>
 }) {
   const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
     if (!deps.state.working) return
@@ -180,6 +182,7 @@ export function createSessionBatchRouter(deps: {
     }
     if (meta.wake === 'frame') deps.state.emitStream()
     else if (meta.wake !== 'none') deps.state.emit()
+    deps.taskCompletion?.(events, meta, current)
   }
 
   return { route, reconcileRetiredProjection, turnStarts: (): number => turnStarts }
@@ -274,7 +277,7 @@ export function createBindingFeed(ctx: { readonly logger: ChannelHostLogger }, d
   owner: ChannelOwner
   binding: ChannelBinding
   state: ChannelState
-  options: Pick<ChannelLaunchOptions, 'interaction'>
+  options: Pick<ChannelLaunchOptions, 'interaction' | 'onTaskComplete'>
   inputConvergence: InputConvergence
   /** The projector's channel-side dependencies; `jobs` and `pricingWindow`
    *  stay writable until the channel starts (`configureProjection`). */
@@ -302,6 +305,7 @@ export function createBindingFeed(ctx: { readonly logger: ChannelHostLogger }, d
     retireAttachment: deps.retireAttachment,
     ...(deps.onReset === undefined ? {} : { onReset: deps.onReset }),
     warn: message => ctx.logger.warn(message),
+    taskCompletion: deps.options.onTaskComplete === undefined ? undefined : createTaskCompletion(state, owner, deps.options.onTaskComplete),
   })
 
   /** Forget every per-session projection ledger: the projector's and the

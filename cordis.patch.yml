@@ -437,6 +437,9 @@
         terminalImages: true
         # diffLayout: auto
         # mermaidDiagrams: true
+        # 任务完成通知：off / unfocused（默认）/ always；方式：auto（默认）/ osc9 / bel。
+        # taskNotifications: unfocused
+        # notificationMethod: auto
         # 回复中 LaTeX 公式的显示方式：auto（默认，目前为 Unicode）/ image（支持图形的终端里块级公式显示为图片）/ unicode / source（保留源码）。/settings 可实时改。
         # mathRendering: auto
         # 每个请求实际生效的推理强度，按当前路由的 adapter 档位校验

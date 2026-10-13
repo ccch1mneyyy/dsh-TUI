@@ -219,6 +219,19 @@ export const SETTING_DEFINITIONS = {
     hintDescriptions: { zh: '只精简界面：隐藏开屏头部、emoji 状态符与装饰性配色，底栏只留模型与目录；代码高亮与工具配色保留。这是界面开关，不是 Agent 预设——模型能用哪些工具由内核预设决定（见 /preset）。' },
     kind: 'boolean',
   },
+  'notificationMethod': {
+    label: 'Notification method',
+    descriptions: { zh: '通知方式' },
+    group: 'conversation',
+    hint: 'Auto uses separate title/body notifications on Ghostty and WezTerm (OSC 777) and Kitty (OSC 99). iTerm2 and Warp use OSC 9 with a title prefix; other terminals ring the bell. Explicit OSC 9 also uses the title prefix. Delivery depends on terminal settings. In tmux, OSC notifications need allow-passthrough on. Applies immediately.',
+    hintDescriptions: { zh: '自动：Ghostty、WezTerm 使用 OSC 777，Kitty 使用 OSC 99，分别显示标题与正文；iTerm2、Warp 使用 OSC 9，将标题放在正文前；其他终端响铃。显式 OSC 9 同样使用标题前缀。实际提醒取决于终端设置；tmux 中 OSC 通知需要开启 allow-passthrough。立即生效。' },
+    kind: 'select',
+    options: [
+      { value: 'auto', label: 'Auto', descriptions: { zh: '自动' } },
+      { value: 'osc9', label: 'OSC 9', descriptions: { zh: 'OSC 9' } },
+      { value: 'bel', label: 'Terminal bell', descriptions: { zh: '终端响铃' } },
+    ],
+  },
   'pageMargin': {
     label: 'Page margin',
     descriptions: { zh: '页边距' },
@@ -454,6 +467,19 @@ export const SETTING_DEFINITIONS = {
     hintDescriptions: { zh: '在状态栏边缘显示动态迷你轨迹条。' },
     kind: 'boolean',
     group: 'status-bar',
+  },
+  'taskNotifications': {
+    label: 'Task completion notifications',
+    descriptions: { zh: '任务完成通知' },
+    group: 'conversation',
+    hint: 'Notify when successful live work finishes with no queued follow-up or active goal. The title is dsh-TUI · Task complete; the body previews the latest reply in one line, up to 200 characters. No reply shows only the title; BEL only rings. Default: only while the terminal is unfocused. Off disables notifications; Always also notifies while focused or when focus reporting is unavailable. Replay, cancellation and errors stay quiet. Applies immediately.',
+    hintDescriptions: { zh: '实时任务成功结束、没有排队的后续输入或活动目标时提醒。标题为「dsh-TUI · 任务已完成」，正文显示最新回复的单行摘要，最多 200 字符；没有回复时只显示标题，BEL 只响铃。默认仅在终端失去焦点时通知；关闭可禁用，每次完成则在终端聚焦或不支持焦点报告时也通知。回放、取消和失败不通知。立即生效。' },
+    kind: 'select',
+    options: [
+      { value: 'unfocused', label: 'When unfocused', descriptions: { zh: '仅失焦时' } },
+      { value: 'always', label: 'Always', descriptions: { zh: '每次完成' } },
+      { value: 'off', label: 'Off', descriptions: { zh: '关闭' } },
+    ],
   },
   'terminalImages': {
     label: 'Terminal image previews',

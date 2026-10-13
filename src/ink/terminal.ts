@@ -205,6 +205,17 @@ export function setXtversionName(name: string): void {
   if (xtversionName === undefined) xtversionName = name
 }
 
+/** Notification protocol, using the existing SSH-capable terminal probe. */
+export function getNotificationProtocol(): 'osc777' | 'osc99' | 'osc9' | 'bel' {
+  const program = process.env.TERM_PROGRAM?.toLowerCase()
+  const term = process.env.TERM
+  const probed = xtversionName ?? ''
+  if (program === 'ghostty' || program === 'wezterm' || term === 'xterm-ghostty' || /^(ghostty|wezterm)\b/i.test(probed)) return 'osc777'
+  if (program === 'kitty' || term === 'xterm-kitty' || /^kitty\b/i.test(probed)) return 'osc99'
+  if (program === 'iterm.app' || program === 'warpterminal' || /^(iterm2?|warp(?:terminal)?)\b/i.test(probed)) return 'osc9'
+  return 'bel'
+}
+
 /**
  * True if running in an xterm.js-based terminal (VS Code, Cursor, Windsurf
  * integrated terminals). Combines TERM_PROGRAM env check (fast, sync, but

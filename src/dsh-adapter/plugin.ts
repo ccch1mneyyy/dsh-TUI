@@ -29,6 +29,7 @@ import { createChildStderrReporter, installChildStderrGuard } from './childStder
 import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { appendCrashLog, serializeCrashDetail, unserializableCrashDetail, type CrashDetail } from '../utils/crashDetail.js'
 import { logForDebugging } from '../utils/debug.js'
+import { createTerminalNotifier, type NotificationMethod, type TaskNotifications } from '../ink/terminal-notification.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
@@ -213,6 +214,8 @@ export interface RuntimeApplyOptions {
 
 export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx, runtimeOptions: RuntimeApplyOptions = {}): Promise<void> {
   const config = configValues<Config>(runtimeConfig)
+  const taskNotifier = createTerminalNotifier(process.stdout)
+  taskNotifier.configure(config.taskNotifications, config.notificationMethod)
   // /restart handoff diagnosis: the replacement process is marked by env and
   // logs its boot progress to ~/.dsh-tui/restart.log (ordinary launches stay
   // silent). First line lands before anything in this function can throw.
@@ -892,6 +895,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // (the Config owner's Loader id; custom ids are supported). Chat and the
     // channel's own settings reads look the section up by it.
     settingsNs: tuiSettingsNs,
+    onTaskComplete: preview => {
+      if (!shadow) taskNotifier.notify(t('task-complete-notification'), preview)
+    },
     settingsService: tuiSettings,
     // The backend reports its model with its first turn (`system/init`);
     // until then the status line names the backend.
@@ -1157,6 +1163,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         expandEditor: Schema.boolean(),
         // Same no-default rule: applyDisplay resolves `?? config.smoothStreaming ?? true`.
         smoothStreaming: Schema.boolean(),
+        taskNotifications: Schema.union(['off', 'unfocused', 'always']),
+        notificationMethod: Schema.union(['auto', 'osc9', 'bel']),
         // Same no-default rule: applyDisplay resolves `?? config.mermaidDiagrams ?? true`.
         mermaidDiagrams: Schema.boolean(),
         // Code-frame shape; unset keeps the light rail frame.
@@ -1293,6 +1301,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       promptSessionLabel?: boolean
       expandEditor?: boolean
       smoothStreaming?: boolean
+      taskNotifications?: TaskNotifications
+      notificationMethod?: NotificationMethod
       mermaidDiagrams?: boolean
       codeFrameStyle?: CodeFrameStyle
       mathRendering?: MathRendering
@@ -1399,6 +1409,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
       channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
+      taskNotifier.configure(value.taskNotifications ?? config.taskNotifications, value.notificationMethod ?? config.notificationMethod)
       applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
       applyCodeFrameStyle(value.codeFrameStyle ?? config.codeFrameStyle)
       applyMathRendering(resolveMathRendering(value, config))
@@ -1663,6 +1674,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
             // Unset in settings.yaml: the effective default is on.
             return String(typeof value === 'boolean' ? value : config.mermaidDiagrams !== false)
           },
+        },
+        {
+          ...settingField('taskNotifications'),
+          format: value => String(value ?? config.taskNotifications ?? 'unfocused'),
+        },
+        {
+          ...settingField('notificationMethod'),
+          format: value => String(value ?? config.notificationMethod ?? 'auto'),
         },
         {
           ...settingField('codeFrameStyle'),

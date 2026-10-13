@@ -9,6 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
+import type { NotificationMethod, TaskNotifications } from '../ink/terminal-notification.js'
 import { parseBackendChoice } from './backend-registry.js'
 import type { KernelBackendId } from '../kernelPrefs.js'
 import { BTW_CONTEXT_BUDGET_DEFAULT, BTW_CONTEXT_TURNS_DEFAULT, DEFAULT_COMPANION_SKIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, normalizeBtwContextBudget, normalizeBtwContextTurns, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
@@ -183,6 +184,10 @@ export interface Config {
    *  a ~30fps reveal instead of jumping per provider burst — bursty or
    *  one-shot deliveries read as an even flow. On by default. */
   smoothStreaming?: boolean
+  /** Successful task notifications: off, unfocused (default), or always. */
+  taskNotifications?: TaskNotifications
+  /** Terminal notification transport: auto (default), OSC 9, or BEL. */
+  notificationMethod?: NotificationMethod
   /** Mermaid diagrams (settings `dsh-tui.mermaidDiagrams`): ```mermaid
    *  fences in replies render as Unicode box-drawing art — flowcharts,
    *  sequence/state/class/ER diagrams, pie, mindmap, timeline, gitGraph —
@@ -356,6 +361,8 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   promptSessionLabel: Schema.boolean().default(false),
   expandEditor: Schema.boolean().default(true),
   smoothStreaming: Schema.boolean().default(true),
+  taskNotifications: Schema.union(['off', 'unfocused', 'always']),
+  notificationMethod: Schema.union(['auto', 'osc9', 'bel']),
   mermaidDiagrams: Schema.boolean().default(true),
   codeFrameStyle: Schema.union(['light', 'full']),
   mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),

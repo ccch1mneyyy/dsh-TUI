@@ -38,6 +38,8 @@ export class StartupOpenError extends Error {
 
 /** Launch configuration belongs to channel construction, not the composition root. */
 export interface ChannelLaunchOptions {
+  /** Host notification effect with the last settled reply's preview, when present. */
+  onTaskComplete?: (preview?: string) => void
   model: string
   cwd: string
   provider: string
