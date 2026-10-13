@@ -114,6 +114,14 @@ try {
   const oscEnd = header.endsWith('\x07') ? '\x07' : '\x1b\\'
   const oscPrefix = header.slice(0, -oscEnd.length)
   const bodyBudget = 2048 - Buffer.byteLength(header)
+  const assertReceiverBudget = (data: string): void => {
+    assert.ok(Buffer.byteLength(`\x1b]777;${data}${oscEnd}`) <= 2048, 'headless receiver enforces the complete OSC byte budget')
+  }
+  const receiverOverhead = Buffer.byteLength(`\x1b]777;${oscEnd}`)
+  assert.doesNotThrow(() => assertReceiverBudget('a'.repeat(2048 - receiverOverhead)))
+  for (const packetBytes of [2049, 2050]) {
+    assert.throws(() => assertReceiverBudget('a'.repeat(packetBytes - receiverOverhead)), { code: 'ERR_ASSERTION' }, 'receiver must count the OSC introducer and terminator')
+  }
   const deliveredBody = (packet: string): string => {
     assert.ok(packet.startsWith(oscPrefix))
     assert.ok(packet.endsWith(oscEnd))
@@ -394,7 +402,7 @@ try {
       return true
     })
     term.parser.registerOscHandler(777, data => {
-      assert.ok(Buffer.byteLength(`777;${data}\x07`) <= 2048, 'headless receiver models the Ghostty OSC buffer limit')
+      assertReceiverBudget(data)
       const [command, title, ...body] = data.split(';')
       assert.equal(command, 'notify')
       notifications.push({ title, message: body.join(';') })
