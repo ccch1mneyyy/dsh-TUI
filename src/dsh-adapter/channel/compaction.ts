@@ -17,8 +17,10 @@ interface ManualCompaction {
 type CompactionState = Pick<ChannelState, 'agentId' | 'cwd' | 'working' | 'compaction' | 'emit' | 'emitStream'>
 type Notify = ChannelState['notify']
 
-/** Manual compactions belong to live agents, including ones parked by `/bg`.
- * Only snapshot/replacement actions settle the foreground agent's transaction. */
+/** One manual compaction transaction per live agent, including agents parked
+ * by `/bg`. `settle` aborts the transaction of the FOREGROUND binding — the
+ * session a switch is leaving — so returning to a compacting background session
+ * keeps it running while navigating to a different one still settles it. */
 export function createManualCompaction(
   ctx: Context,
   state: CompactionState,
@@ -149,7 +151,16 @@ export function createManualCompaction(
         disposeEnd = ctx.on('session/event', (session, event) => {
           // Older hosts carry the bracket as legacy events outside the
           // current SessionEvent union, just like the DSH translator accepts.
-          if (session === originAgent.session && (event as { type: string }).type === 'compaction/end') transaction.row = undefined
+          if (session !== originAgent.session || (event as { type: string }).type !== 'compaction/end') return
+          // Retire the row HERE as well. Clearing only the transaction row
+          // would defeat the identity check in the `finally` below and leave a
+          // stale cancellable row whenever the projector does not also fold
+          // this event (a host whose translator drops the legacy bracket).
+          if (isCurrent() && state.compaction === transaction.row) {
+            state.compaction = undefined
+            state.emit()
+          }
+          transaction.row = undefined
         })
         try {
           // Compact the entry agent, never a later binding read after await.

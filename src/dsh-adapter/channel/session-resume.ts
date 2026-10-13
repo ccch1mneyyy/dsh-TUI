@@ -393,6 +393,14 @@ export function createSessionResumeActions(
       reservation?.abandon()
       return { ok: false, reason: 'cancelled' }
     }
+    // Settle the transaction of the session being LEFT — the foreground
+    // binding, not the target. With one transaction per live agent this is
+    // exactly the two behaviors the switch needs: returning to a session that
+    // is compacting in the background leaves the fresh foreground (which owns
+    // nothing) untouched, so the compaction survives; navigating to a
+    // DIFFERENT session still settles the one left behind, so a compaction
+    // never keeps running invisibly after a plain switch.
+    await deps.settleCompaction()
     if (!deps.binding.isCurrent(adoption) || deps.binding.agent.session !== entrySession) {
       reservation?.abandon()
       return { ok: false, reason: 'cancelled' }
