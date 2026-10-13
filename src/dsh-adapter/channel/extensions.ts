@@ -756,7 +756,11 @@ export function attachDshExtensions(
       // Re-anchor the job projection after every bind: its event
       // subscription is deliberately owner-agnostic, so this is what makes
       // the /jobs roster follow a session switch immediately.
-      afterBind: () => { jobProjection.reanchor() },
+      afterBind: () => {
+        jobProjection.reanchor()
+        manualCompaction.restore()
+      },
+      ownsCompactionProgress: manualCompaction.ownsProgress,
       resetTranslation: () => { binding.session.capabilities.native.dsh?.resetTranslation() },
     },
     newSession: resumeActions.newSessionOpener,

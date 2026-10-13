@@ -111,10 +111,22 @@ function assemble(kind = 'hang-until-abort', extra = []) {
   const compaction = makeCompaction(kind)
   const services = { compaction, llm: { listProviders: () => [], listModels: async () => [] } }
   const handlers = new Map()
+  const listeners = new Map()
   const ctx = {
     on(event, handler) {
-      handlers.set(event, handler)
-      return () => { if (handlers.get(event) === handler) handlers.delete(event) }
+      const entries = listeners.get(event) ?? new Set()
+      listeners.set(event, entries)
+      entries.add(handler)
+      // Preserve all subscriptions: manual progress has a transaction owner
+      // in addition to the currently bound session's ordinary observer.
+      handlers.set(event, (...args) => {
+        if (event === 'llm/stream') {
+          const [options, next] = args
+          return [...entries].reduceRight((next, listener) => () => listener(options, next), next)()
+        }
+        for (const listener of [...entries]) listener(...args)
+      })
+      return () => { entries.delete(handler); if (entries.size === 0) handlers.delete(event) }
     },
     get: name => services[name],
     logger: { warn() {} },

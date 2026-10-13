@@ -706,8 +706,7 @@ await sleep(800)
   check('compact phase cancellation: switch immediately toasts cancellation before decision release',
     notified('压缩进行中，已取消并切换会话'))
   release(undefined)
-  // The actively settled transaction exits silently after its cancellation;
-  // ext-compact-stale remains covered by live, non-cancelled stale paths.
+  // A transaction cancelled for /new stays silent when its decision settles.
   check('compact phase cancellation: the old session’s compaction never ran',
     captured.compactCalls.length === 1, JSON.stringify(captured.compactCalls))
   dispose()

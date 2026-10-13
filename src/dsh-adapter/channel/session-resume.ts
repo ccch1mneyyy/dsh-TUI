@@ -393,7 +393,6 @@ export function createSessionResumeActions(
       reservation?.abandon()
       return { ok: false, reason: 'cancelled' }
     }
-    await deps.settleCompaction()
     if (!deps.binding.isCurrent(adoption) || deps.binding.agent.session !== entrySession) {
       reservation?.abandon()
       return { ok: false, reason: 'cancelled' }

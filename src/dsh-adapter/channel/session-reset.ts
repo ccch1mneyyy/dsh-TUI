@@ -70,8 +70,8 @@ export function resetSessionProjection(
   state.activeToolCount = 0
   state.lastUserText = ''
   state.working = false
-  // The adoption path settles any in-flight compaction before it takes the
-  // new session over; a row that survived it would describe the old one.
+  // Progress belongs to the old foreground. A parked manual transaction is
+  // still live and restores its own row when that agent is bound again.
   state.compaction = undefined
   state.cancelPending = false
   state.spinnerMode = 'requesting'

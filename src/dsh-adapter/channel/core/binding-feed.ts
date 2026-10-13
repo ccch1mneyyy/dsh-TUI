@@ -51,6 +51,8 @@ export interface BindingFeedHooks {
   readonly ownsSessionFacts?: boolean
   /** Forget the bound session's translator state with the projector's. */
   resetTranslation?(): void
+  /** A live transaction observes its own progress across foreground rebinds. */
+  ownsCompactionProgress?(): boolean
 }
 
 /**
@@ -70,6 +72,7 @@ export function createSessionBatchRouter(deps: {
    *  the events before it in the batch are projected first, those after it
    *  land on the cleared view. Absent = the event is projected (ignored). */
   onReset?(event: AgentEventOf<'session.reset'>): void
+  ownsCompactionProgress?(): boolean
   warn(message: string): void
 }) {
   const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
@@ -144,7 +147,7 @@ export function createSessionBatchRouter(deps: {
         case 'compaction.progress':
           // Summary output only advances a compaction row that is open; a
           // stale stream after the row closed finds nothing to advance.
-          if (deps.state.compaction === undefined) {
+          if (deps.state.compaction === undefined || deps.ownsCompactionProgress?.()) {
             admitted ??= batch.slice(0, index)
             continue
           }
@@ -300,6 +303,7 @@ export function createBindingFeed(ctx: { readonly logger: ChannelHostLogger }, d
     projector,
     inputConvergence,
     retireAttachment: deps.retireAttachment,
+    ownsCompactionProgress: () => deps.hooks().ownsCompactionProgress?.() ?? false,
     ...(deps.onReset === undefined ? {} : { onReset: deps.onReset }),
     warn: message => ctx.logger.warn(message),
   })

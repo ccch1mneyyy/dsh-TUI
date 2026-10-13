@@ -6,16 +6,19 @@ import { dispatchTuiDecision, normalizeCancelDecision } from '../extension-event
 import { serviceForAgent } from '../presets.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState } from './types.js'
+import { isTokenDelta, tokenDeltaChars } from './usage.js'
 
 interface ManualCompaction {
   controller: AbortController
   settled: Promise<void>
+  row: ChannelState['compaction']
 }
 
-type CompactionState = Pick<ChannelState, 'agentId' | 'cwd' | 'working' | 'compaction' | 'emit'>
+type CompactionState = Pick<ChannelState, 'agentId' | 'cwd' | 'working' | 'compaction' | 'emit' | 'emitStream'>
 type Notify = ChannelState['notify']
 
-/** Owns the one manual compaction transaction that must settle before a switch. */
+/** Manual compactions belong to live agents, including ones parked by `/bg`.
+ * Only snapshot/replacement actions settle the foreground agent's transaction. */
 export function createManualCompaction(
   ctx: Context,
   state: CompactionState,
@@ -26,16 +29,24 @@ export function createManualCompaction(
     notify: Notify
   },
 ) {
-  let active: ManualCompaction | undefined
+  const active = new Map<Agent, ManualCompaction>()
   const cancelled = new WeakSet<AbortController>()
   /** Aborts the user asked for (Esc / Ctrl+C) rather than an ownership change:
    *  only those are reported as a cancellation instead of a failure. */
   const userCancelled = new WeakSet<AbortController>()
+  deps.owner.own(ctx.on('agent/disposed', ({ agent }) => {
+    const transaction = active.get(agent)
+    if (transaction === undefined) return
+    active.delete(agent)
+    cancelled.add(transaction.controller)
+    transaction.controller.abort(new Error('agent disposed'))
+  }))
 
   const settle = async (): Promise<void> => {
-    const transaction = active
+    const agent = deps.agent()
+    const transaction = active.get(agent)
     if (transaction === undefined) return
-    active = undefined
+    active.delete(agent)
     cancelled.add(transaction.controller)
     transaction.controller.abort(new Error('session switch'))
     deps.notify(t('compact-cancelled-switch'), { color: 'warning', timeoutMs: 4000 })
@@ -51,8 +62,9 @@ export function createManualCompaction(
   }
 
   const compact = (): void => {
-    if (!deps.owner.current() || deps.owner.signal.aborted || active !== undefined) return
+    if (!deps.owner.current() || deps.owner.signal.aborted) return
     const originAgent = deps.agent()
+    if (active.has(originAgent)) return
     const compactService = serviceForAgent<{
       compactNow(agent: unknown, signal: AbortSignal): Promise<unknown>
     }>(ctx, originAgent, 'compaction')
@@ -65,13 +77,17 @@ export function createManualCompaction(
       return
     }
     const controller = new AbortController()
-    const isCurrent = () => deps.owner.current()
+    const transaction: ManualCompaction = { controller, settled: Promise.resolve(), row: undefined }
+    const isLive = () => deps.owner.current()
       && !deps.owner.signal.aborted
       && !cancelled.has(controller)
-      && deps.agent() === originAgent
+    const isCurrent = () => isLive() && deps.agent() === originAgent
+    let disposeStream: (() => void) | undefined
+    let disposeEnd: (() => void) | undefined
     const releaseOwner = deps.owner.own(() => {
       cancelled.add(controller)
       controller.abort(new Error('channel lifetime ended'))
+      try { disposeStream?.() } finally { disposeEnd?.() }
     })
     const originAgentId = state.agentId
     let finished = false
@@ -81,19 +97,19 @@ export function createManualCompaction(
           sessionId: originAgentId,
           cwd: state.cwd,
         }, normalizeCancelDecision))
-        // A revoked owner stays silent, but retain the original stale-agent
-        // classification when this channel remains active on a new binding.
-        if (!deps.owner.current() || deps.owner.signal.aborted || cancelled.has(controller)) return
-        if (deps.agent() !== originAgent) {
-          deps.notify(t('ext-compact-stale'), { color: 'warning', timeoutMs: 4000 })
+        // A view switch may park this agent while the decision is pending.
+        // Disposal and snapshot actions revoke it; parking does not.
+        if (!isLive()) return
+        if (userCancelled.has(controller)) {
+          if (isCurrent()) deps.notify(t('compact-cancelled'))
           return
         }
         if (decision !== undefined) {
-          deps.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
+          if (isCurrent()) deps.notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
           return
         }
-        if (state.working) {
-          deps.notify(t(WORKING_GATE_NOTICES.compact), { color: 'warning' })
+        if (originAgent.status === 'running' || (isCurrent() && state.working)) {
+          if (isCurrent()) deps.notify(t(WORKING_GATE_NOTICES.compact), { color: 'warning' })
           return
         }
         // The status row replaces the old 4s toast: a real compaction runs for
@@ -105,8 +121,36 @@ export function createManualCompaction(
           outputChars: 0,
           cancellable: true,
         }
-        state.compaction = row
-        state.emit()
+        transaction.row = row
+        if (isCurrent()) {
+          state.compaction = row
+          state.emit()
+        }
+        // Unlike the foreground stream subscription, this observer stays with
+        // the transaction across rebinds. The feed delegates manual progress
+        // here so a chunk is counted once, including after returning from /bg.
+        disposeStream = ctx.on('llm/stream', (options, next) => {
+          const stream = next()
+          if (!isLive() || options.purpose !== 'compaction' || options.sessionId === undefined
+            || String(options.sessionId) !== String(originAgent.session.id)) return stream
+          return (async function* () {
+            for await (const chunk of stream) {
+              if (isLive() && transaction.row !== undefined && isTokenDelta(chunk)) {
+                transaction.row = { ...transaction.row, phase: 'summary', outputChars: transaction.row.outputChars + tokenDeltaChars(chunk) }
+                if (isCurrent()) {
+                  state.compaction = transaction.row
+                  state.emitStream()
+                }
+              }
+              yield chunk
+            }
+          })()
+        })
+        disposeEnd = ctx.on('session/event', (session, event) => {
+          // Older hosts carry the bracket as legacy events outside the
+          // current SessionEvent union, just like the DSH translator accepts.
+          if (session === originAgent.session && (event as { type: string }).type === 'compaction/end') transaction.row = undefined
+        })
         try {
           // Compact the entry agent, never a later binding read after await.
           const result = await compactService.compactNow(originAgent, controller.signal)
@@ -137,31 +181,39 @@ export function createManualCompaction(
         )
       } finally {
         finished = true
-        releaseOwner()
         // The durable `compaction/end` event already cleared the row on every
         // path that reached the host; this covers the ones that never did
         // (vetoed decision, unavailable service, a throw before the bracket).
-        if (state.compaction?.cancellable === true) {
+        if (deps.agent() === originAgent && state.compaction !== undefined && state.compaction === transaction.row) {
           state.compaction = undefined
           state.emit()
         }
-        const currentTransaction = active as ManualCompaction | undefined
-        if (currentTransaction?.controller === controller) active = undefined
+        if (active.get(originAgent) === transaction) active.delete(originAgent)
+        releaseOwner()
       }
     })()
     // Install before the decision await so a switch/fork settles a pending
     // decision too, rather than letting it start compaction after its seed.
     // A synchronous embedder failure is already handled by the IIFE above.
-    if (!finished) active = { controller, settled }
+    transaction.settled = settled
+    if (!finished) active.set(originAgent, transaction)
   }
 
   /** Abort the in-flight manual compaction the user asked to stop. */
   const cancel = (): void => {
-    const transaction = active
+    const transaction = active.get(deps.agent())
     if (transaction === undefined) return
     userCancelled.add(transaction.controller)
     transaction.controller.abort(new Error('user cancelled compaction'))
   }
 
-  return { compact, settle, cancel }
+  /** Restore only this live agent's row; settled/replayed brackets stay closed. */
+  const restore = (): void => {
+    const transaction = active.get(deps.agent())
+    if (transaction === undefined) return
+    state.compaction = transaction.row
+    state.emit()
+  }
+
+  return { compact, settle, cancel, restore, ownsProgress: () => active.get(deps.agent())?.row !== undefined }
 }
