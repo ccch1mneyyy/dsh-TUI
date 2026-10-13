@@ -77,9 +77,12 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
       state.emit()
     },
 
-    pushLocal(title: string, lines: readonly string[]): void {
+    pushLocal(title: string, lines: readonly string[], options?: { readonly lineLimit?: number }): void {
+      // A report whose line IS the payload (the /goal objective) raises the
+      // budget; every other report keeps the shared 240-cell preview.
+      const limit = options?.lineLimit ?? LOCAL_OUTPUT_LIMIT
       state.rows.push({ id: rowIds.value++, kind: 'local', text: title })
-      for (const line of lines) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: preview(line, LOCAL_OUTPUT_LIMIT) })
+      for (const line of lines) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: preview(line, limit) })
       state.emit()
     },
 

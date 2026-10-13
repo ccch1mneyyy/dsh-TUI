@@ -508,6 +508,9 @@ Keys are in §2.7. Key points:
 - `/plan` `/goal` `/feedback` `/permission` come from the DSH registry, merged into the `/` menu.
 - **Goals/Todos panel appears automatically**: when the model writes a goal/todo, it renders above the input
   (🎯 goal + phase badge + tree todo), no action needed; with a split it moves to the `todo` panel on the right (see §2.8).
+  The goal bar keeps a one-line summary: hovering truncated goal text reads the whole objective, and a bare `/goal` prints the
+  full status (objective, phase, rounds or budget, available commands) as a `/plugins`-shaped transcript block — inline mode has
+  no pointer, so a long objective is read from that block.
 
 ### 4.9 MCP / Workspace / other
 

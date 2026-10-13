@@ -136,7 +136,6 @@ export function GoalTodoPanel({
   visible = true,
   maxTodos,
   wrapWidth,
-  onOpenGoal,
 }: {
   channel: Channel
   /** Fold the whole todo section to its summary header line. */
@@ -155,8 +154,6 @@ export function GoalTodoPanel({
    *  加省略号；maxTodos 预算按「行」折算，放不下仍走「…N more」。缺省
    *  （default 形态）不折行，保持单行 truncate 的 chat 页现状。 */
   wrapWidth?: number
-  /** Open the current goal's wrapped, scrollable details. */
-  onOpenGoal?: () => void
 }): React.ReactNode {
   const goal = channel.goal
   const objectiveRef = React.useRef<DOMElement | null>(null)
@@ -261,7 +258,7 @@ export function GoalTodoPanel({
               truncate）。 */}
           <Box flexDirection="row" width="100%" height={1}>
             <Text color="suggestion">🎯 </Text>
-            <Box ref={objectiveRef} flexGrow={1} flexShrink={1} onClick={onOpenGoal} {...goalTooltip}>
+            <Box ref={objectiveRef} flexGrow={1} flexShrink={1} {...goalTooltip}>
               <Text bold wrap="truncate">
                 {goal.objective}
               </Text>

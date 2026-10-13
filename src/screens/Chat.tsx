@@ -22,7 +22,7 @@ import { formatClock } from '../trajectory/format.js'
 import { homeDir } from '../utils/paths.js'
 import { execFileNoThrow } from '../utils/execFileNoThrow.js'
 import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-view.js'
-import { cleanRenderText, cleanScalarText } from '../dsh-adapter/sanitize.js'
+import { cleanBlockLines, cleanRenderText, cleanScalarText } from '../dsh-adapter/sanitize.js'
 import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
 import { WORKING_GATE_NOTICES } from '../commands.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
@@ -87,7 +87,6 @@ import { jobsFocusStore } from '../components/sidePanel/jobsFocusStore.js'
 import { SidePanelLayout } from '../components/sidePanel/SidePanelLayout.js'
 import { SidePanelColumn } from '../components/sidePanel/SidePanelColumn.js'
 import { PanelPicker, usePanelPickerRows } from '../components/sidePanel/PanelPicker.js'
-import { GoalDetailsPanel } from '../components/GoalDetailsPanel.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { CompactionStatusRow } from '../components/CompactionStatusRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
@@ -218,6 +217,11 @@ const STATUS_VIEW_UI = Object.freeze({
 const NO_EVENTS: readonly SessionEvent[] = []
 
 const COMMAND_RESULT_CELLS = 200
+
+/** Per-line width budget for a transcript block (`/plugins`, `/goal`): much
+ *  wider than COMMAND_RESULT_CELLS, whose 200-cell single-line rule cannot
+ *  carry a full goal objective. Still a bound, not "no limit". */
+const LOCAL_BLOCK_CELLS = 4000
 
 /** Ceiling for one `dsh-tui migrate` child run. Discovery parses every source
  *  file, but a healthy import of thousands of conversations finishes well
@@ -651,12 +655,6 @@ export function Chat({
    * list while the fresh one loads, exactly as the boolean era did.
    */
   const [overlay, dispatchOverlay] = React.useReducer(chatOverlayReducer, NO_OVERLAY)
-  React.useEffect(() => {
-    if (overlay.kind === 'goal-details'
-      && (overlay.sessionId !== channel.agentId || overlay.goalId !== channel.goal?.id)) {
-      dispatchOverlay({ type: 'close-if', kind: 'goal-details' })
-    }
-  }, [overlay, channel.agentId, channel.goal?.id])
   // `/migrate` picker rows (null = collecting in the background; the picker
   // shows its empty state until the sub-second scan lands).
   const [migrateRows, setMigrateRows] = React.useState<MigratePickerRow[] | null>(null)
@@ -2358,11 +2356,19 @@ export function Chat({
    * plugin (plan/goal/…) dispatches through the command registry, whose
    * result text lands as a notification. `rawInput` carries the text after
    * the command name (`/plan off` → ` off`).
+   *
+   * `render.block` prints a multi-line report the way `/plugins` prints one:
+   * a `local` echo row plus one wrapped `local-output` row per line, in the
+   * transcript (native scrollback in inline mode). A single truncated toast
+   * row cannot carry a full goal objective, so the bare `/goal` status query
+   * asks for the block; errors always notify — they want the color and the
+   * transient read.
    */
   const runExternalCommand = (
     name: string,
     rawInput: string,
     images: readonly ComposerImageRef[] = [],
+    render?: { readonly block?: boolean },
   ): Promise<boolean> => {
     const originAgentBinding = channel.agentBindingGeneration
     return channel.runExternalCommandOutcome(name, rawInput, images).then((outcome) => {
@@ -2371,9 +2377,15 @@ export function Chat({
         channel.notify(t('command-not-found', { name }), { color: 'error' })
         return false
       }
-      const cleaned = cleanRenderText(outcome.text, COMMAND_RESULT_CELLS)
-      if (cleaned !== '') {
-        channel.notify(cleaned, outcome.kind === 'error' ? { color: 'error' } : undefined)
+      if (render?.block === true && outcome.kind !== 'error') {
+        // Per-line sanitize: the newlines here are the report's structure.
+        const lines = cleanBlockLines(outcome.text, LOCAL_BLOCK_CELLS)
+        if (lines.length > 0) channel.pushLocal(`/${name}`, lines, { lineLimit: LOCAL_BLOCK_CELLS })
+      } else {
+        const cleaned = cleanRenderText(outcome.text, COMMAND_RESULT_CELLS)
+        if (cleaned !== '') {
+          channel.notify(cleaned, outcome.kind === 'error' ? { color: 'error' } : undefined)
+        }
       }
       return outcome.consumeDraft
     }).catch((error: unknown) => {
@@ -3855,7 +3867,11 @@ export function Chat({
         // default branch below would dispatch it.
         if (channel.commandList.some(command => command.external && command.name === 'goal')) {
           setHelpOpen(false)
-          return runExternalCommand(name, rawInput, images)
+          // Bare `/goal` is DSH's status query. Print it as a transcript
+          // block: inline mode sees no pointer events, so the hover tooltip
+          // cannot carry the objective there, and the toast truncates it to
+          // one row.
+          return runExternalCommand(name, rawInput, images, { block: rawInput.trim() === '' })
         }
         // Another backend: the channel core's host over its typed `goals`
         // capability. None (DSH without the row, or a backend's own `goal`
@@ -3872,7 +3888,7 @@ export function Chat({
         const command = parseGoalCommand(rawInput)
         switch (command.kind) {
           case 'status':
-            channel.pushLocal('/goal', goalStatusLines(channel.goal))
+            channel.pushLocal('/goal', goalStatusLines(channel.goal), { lineLimit: LOCAL_BLOCK_CELLS })
             return true
           case 'invalid':
             channel.notify(command.reason, { color: 'error' })
@@ -4368,22 +4384,6 @@ export function Chat({
     if (coupon !== null) bonusNotices?.dismiss(coupon.orderId)
   }, [bonusNotices, coupon])
 
-  React.useEffect(() => {
-    if (approvalSnapshot !== null || dialogSnapshot !== null || questionSnapshot !== null) {
-      dispatchOverlay({ type: 'close-if', kind: 'goal-details' })
-    }
-  }, [approvalSnapshot, dialogSnapshot, questionSnapshot])
-
-  const openGoalDetails = () => {
-    if (channel.goal === undefined || overlay.kind !== 'none' || helpOpen
-      || approvalSnapshot !== null || dialogSnapshot !== null || questionSnapshot !== null
-      || btwOverlayOpen || btwSceneOpen || (recap !== null && (!recap.auto || recap.expanded))
-      || starModal !== null || couponVisible || promptEditorOpen) return
-    dispatchOverlay({ type: 'open', overlay: {
-      kind: 'goal-details', sessionId: channel.agentId, goalId: channel.goal.id,
-    } })
-  }
-
   useInput((input, key, event) => {
     // 开屏"求 star"弹窗开着时键盘全归它（↑/↓/Enter/Esc 由它自己的
     // useInput 处理），滚轮也不许滚动它身后的转录——和下面的整屏界面
@@ -4414,7 +4414,6 @@ export function Chat({
     // via inputPaused for exactly this window, so keys the picker does not
     // consume cannot leak into the draft.
     if (launchpadShown && !launchpadOverlayUp) return
-    if (overlay.kind === 'goal-details') return
     // The session tree owns the whole terminal while it is up: plain letters
     // drive its search, clicks and Enter drive its action menu.
     if (treeOpen) return
@@ -5486,15 +5485,6 @@ export function Chat({
 
   const pickerPanels = (
     <>
-      {overlay.kind === 'goal-details' && channel.goal !== undefined
-        && overlay.sessionId === channel.agentId && overlay.goalId === channel.goal.id && (
-        <GoalDetailsPanel
-          key={`${channel.agentId}:${channel.goal.id}`}
-          goal={channel.goal}
-          inputEnabled={approvalSnapshot === null && questionSnapshot === null && dialogSnapshot === null}
-          onClose={() => dispatchOverlay({ type: 'close-if', kind: 'goal-details' })}
-        />
-      )}
           {overlay.kind === 'help' && (
             <Box flexDirection="column" marginBottom={1}>
               <HelpMenu
@@ -6486,7 +6476,6 @@ export function Chat({
             }}
             trajectory={trajectory}
             onExpand={openPanelFullscreen}
-            onOpenGoal={openGoalDetails}
           />
         }
       >
@@ -6687,7 +6676,6 @@ export function Chat({
             channel={channel}
             collapsed={todoCollapsed}
             onToggle={() => setTodoCollapsed(previous => !previous)}
-            onOpenGoal={openGoalDetails}
           />
         )}
         {recap !== null && recap.auto && !recap.expanded && (

@@ -244,6 +244,15 @@ const toastsOf = (channel: { notifications: readonly { text: string }[] }): stri
   await h.typeLine('/goal')
   await h.enter()
   check('4 bare /goal prints the status into the transcript', await settled(() => h.screen().includes(t('goal-backend-objective', { objective: 'Ship the parser' })) && h.screen().includes(t('goal-backend-phase', { phase: t('goal-phase-active') }))), h.screen())
+  // The same block must carry a long objective whole: the status line is one
+  // line, so it rides the raised per-line budget instead of the 240-cell
+  // preview (and stays under the transcript's 1000-char long-line fold).
+  const longObjective = 'Local goal head ' + 'Validate recovered evidence and paired depth evaluations. '.repeat(9) + 'LOCAL_GOAL_TAIL'
+  h.emit([{ type: 'goal.change', operation: 'set', goal: { ...snapshot, objective: longObjective } }])
+  await settled(() => h.screen().includes('Local goal head'))
+  await h.typeLine('/goal')
+  await h.enter()
+  check('4 a long objective survives the goals-capability status block', await settled(() => h.screen().includes('LOCAL_GOAL_TAIL')), h.screen())
   check('4 nothing ever reached the model', h.submits.length === 0)
   await h.unmount()
 }
@@ -258,17 +267,42 @@ const toastsOf = (channel: { notifications: readonly { text: string }[] }): stri
   // A DSH-style composition: the registry row owns /goal even when the
   // session also had a goals host (it never does on DSH; the row wins).
   const external: string[] = []
+  const blocks: { title: string; lines: readonly string[]; lineLimit?: number }[] = []
   let hostCalls = 0
+  // Long enough to blow both single-row budgets — the toast's 200-cell
+  // whitespace-flattened cleanRenderText and the 240-cell local-output
+  // preview — and short enough to stay under the transcript's 1000-char
+  // long-line fold (past that the shared fold clips with its own marker).
+  const longObjective = 'Registry goal head ' + 'Validate recovered evidence and paired depth evaluations. '.repeat(9) + 'REGISTRY_GOAL_TAIL'
+  const dshStatus = ['Goal', 'Status: active', `Objective: ${longObjective}`, 'Rounds: 0/40', 'Activation: armed', '', 'Commands: /goal edit <objective>, /goal pause, /goal clear'].join('\n')
   const h = await mountChat({ goals: { ...goalsCap, set: () => { hostCalls += 1; return Promise.resolve() } } }, channel => new Proxy(channel, {
     get(target, key, receiver) {
       if (key === 'commandList') return [...target.commandList.filter(command => command.name !== 'goal'), { name: 'goal', description: 'Set or show the session goal', external: true }]
-      if (key === 'runExternalCommandOutcome') return (name: string, rawInput: string) => { external.push(`${name}|${rawInput}`); return Promise.resolve({ kind: 'success', text: '', consumeDraft: true }) }
+      if (key === 'runExternalCommandOutcome') return (name: string, rawInput: string) => {
+        external.push(`${name}|${rawInput}`)
+        return Promise.resolve({ kind: 'success', text: rawInput.trim() === '' ? dshStatus : 'Goal paused\nStatus: paused', consumeDraft: true })
+      }
+      // Record the block the way the UI asks for it, then let the real core
+      // push it (row shape + line budget are the core's own contract).
+      if (key === 'pushLocal') return (title: string, lines: readonly string[], options?: { readonly lineLimit?: number }) => {
+        blocks.push({ title, lines: [...lines], ...(options?.lineLimit === undefined ? {} : { lineLimit: options.lineLimit }) })
+        target.pushLocal(title, lines, options)
+      }
       return Reflect.get(target, key, receiver)
     },
   }))
   await h.typeLine('/goal registry route')
   await h.enter()
   check('4 a registry row owns /goal (DSH route unchanged)', await settled(() => external.includes('goal| registry route')) && hostCalls === 0 && h.submits.length === 0, external.join(','))
+  await h.typeLine('/goal')
+  await h.enter()
+  check('4 bare /goal over the registry row prints a transcript block',
+    await settled(() => blocks.length === 1) && blocks[0]?.title === '/goal'
+    && blocks[0]?.lines.length === 6 && blocks[0]?.lines.includes(`Objective: ${longObjective}`)
+    && (blocks[0]?.lineLimit ?? 0) > 240, JSON.stringify(blocks).slice(0, 400))
+  check('4 … with the whole objective on screen (no 200/240-cell truncation)',
+    await settled(() => h.screen().includes('REGISTRY_GOAL_TAIL')), h.screen())
+  check('4 … and the status text does not also ride a toast', !toastsOf(h.channel).includes('Registry goal head'), toastsOf(h.channel))
   await h.unmount()
 }
 

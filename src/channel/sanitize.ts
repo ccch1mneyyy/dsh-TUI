@@ -36,6 +36,16 @@ export function cleanRenderText(value: string, maxCells: number): string {
 }
 
 /**
+ * Sanitize untrusted plugin text destined for a MULTI-LINE block (a
+ * `pushLocal` report): the same per-line strip as {@link cleanRenderText},
+ * but newlines are structure here, not whitespace to fold. Blank rows are
+ * dropped so one reported line stays one transcript row.
+ */
+export function cleanBlockLines(value: string, maxCells: number): string[] {
+  return value.split(/\r?\n/u).map(line => cleanRenderText(line, maxCells)).filter(line => line !== '')
+}
+
+/**
  * Sanitize an untrusted (possibly non-string) value. Non-scalars — objects,
  * arrays, functions, symbols, null/undefined — yield '' so the caller takes
  * its drop/refuse path; scalars coerce then sanitize.

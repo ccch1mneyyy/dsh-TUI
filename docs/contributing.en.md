@@ -442,7 +442,7 @@ change, also run the closest focused script:
 | Channel submit/steer/pending behavior | `node scripts/verify-submit.mjs` |
 | Rewind/edit/resend and historical inbox cancellation | `pnpm verify:rewind-edit` |
 | Prompt queue behavior | `node scripts/verify-queue.mjs` |
-| Goal/todo projection and rendering | `node scripts/verify-channel-goal-todo.mjs` and `node scripts/verify-goal-todo.mjs` |
+| Goal/todo projection and rendering | `node scripts/verify-channel-goal-todo.mjs`, `node scripts/verify-goal-todo.mjs`, and `node --import tsx/esm scripts/verify-goal-display.mjs` (goal text display: hover full text, bare `/goal` transcript block) |
 | Compaction and folded transcript rows | `node scripts/verify-compact.mjs` |
 | Command capability facts (compaction / plan / questionnaire / pruner routing and the Help + `/` unavailable marking) | `pnpm verify:agent-capabilities` |
 | Compaction × session-switch lifecycle (cancel before the fork snapshot, persistence-classified toast) | `node --import tsx/esm scripts/verify-compact-switch.tsx` |

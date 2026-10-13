@@ -37,7 +37,6 @@ export interface PanelHostProps {
   readonly trajectory?: import('../../dsh-adapter/trajectory/index.js').TrajBuild
   /** 宿主「全屏」出口（PanelBar 的 ⤢ 经 SidePanelColumn 传进来）。 */
   readonly openFullscreen?: (panelId: string) => void
-  readonly openGoalDetails?: () => void
 }
 
 function TooNarrow({ minColumns }: { readonly minColumns: number }): React.ReactNode {
@@ -66,7 +65,7 @@ function PluginDisabled({ panelId, channel }: { readonly panelId: string; readon
   )
 }
 
-export function PanelHost({ controller, channel, width, height, activity, attention, trajectory, openFullscreen, openGoalDetails }: PanelHostProps): React.ReactNode {
+export function PanelHost({ controller, channel, width, height, activity, attention, trajectory, openFullscreen }: PanelHostProps): React.ReactNode {
   const entries = React.useSyncExternalStore(panelStore.subscribe, () => panelStore.list())
   // Forward the real screen rows so panel animations (useAnimationFrame →
   // useTerminalViewport) measure visibility against the screen, not the
@@ -92,8 +91,8 @@ export function PanelHost({ controller, channel, width, height, activity, attent
 
   const mode = controller.zoom ? 'zoom' : 'split'
   const runtimeContext = React.useMemo(
-    () => ({ runtime: controller.runtime, channel, activity, attention, trajectory, openFullscreen, openGoalDetails }),
-    [controller.runtime, channel, activity, attention, trajectory, openFullscreen, openGoalDetails],
+    () => ({ runtime: controller.runtime, channel, activity, attention, trajectory, openFullscreen }),
+    [controller.runtime, channel, activity, attention, trajectory, openFullscreen],
   )
 
   return (

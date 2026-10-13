@@ -24,7 +24,6 @@ export interface SidePanelColumnProps {
   readonly attention?: { readonly approvals: number; readonly questions: number }
   /** 宿主提供的「全屏」出口（Chat 把活动面板切到整屏形态）。 */
   readonly onExpand?: (panelId: string) => void
-  readonly onOpenGoal?: () => void
   /** 会话轨迹投影（轨迹 Panel 的数据源）。 */
   readonly trajectory?: import('../../dsh-adapter/trajectory/index.js').TrajBuild
 }
@@ -63,7 +62,7 @@ function EmptyNone(): React.ReactNode {
   )
 }
 
-export function SidePanelColumn({ width, controller, channel, activity, attention, onExpand, trajectory, onOpenGoal }: SidePanelColumnProps): React.ReactNode {
+export function SidePanelColumn({ width, controller, channel, activity, attention, onExpand, trajectory }: SidePanelColumnProps): React.ReactNode {
   const focused = controller.focus === 'panel'
   const { rows } = useTerminalSize()
   const entries = React.useSyncExternalStore(panelStore.subscribe, () => panelStore.list())
@@ -122,7 +121,6 @@ export function SidePanelColumn({ width, controller, channel, activity, attentio
               attention={attention}
               trajectory={trajectory}
               openFullscreen={onExpand}
-              openGoalDetails={onOpenGoal}
             />
           )
           : <EmptyNone />}

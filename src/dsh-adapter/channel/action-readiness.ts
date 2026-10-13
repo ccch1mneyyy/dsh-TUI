@@ -149,7 +149,7 @@ export function createChannelActionMethods(
     cancelCompact: () => getReadyActions().cancelCompact(),
     runExternalCommand: (name, rawInput) => getReadyActions().runExternalCommand(name, rawInput),
     runExternalCommandOutcome: (name, rawInput, images) => getReadyActions().runExternalCommandOutcome(name, rawInput, images),
-    pushLocal: (title, lines) => getReadyActions().pushLocal(title, lines),
+    pushLocal: (title, lines, options) => getReadyActions().pushLocal(title, lines, options),
     mcpStatus: () => getReadyActions().mcpStatus(),
     exportSession: () => getReadyActions().exportSession(),
     initWorkspace: () => getReadyActions().initWorkspace(),

@@ -723,8 +723,10 @@ export interface ChannelUi {
    *  this channel's own request carries an abort signal it may fire. */
   cancelCompact(): void
   /** Render a multi-line local report in the transcript (`/status`,
-   *  `/doctor`, …): a `local` row plus one `local-output` row per line. */
-  pushLocal(title: string, lines: readonly string[]): void
+   *  `/doctor`, …): a `local` row plus one `local-output` row per line.
+   *  `lineLimit` overrides the default per-line cell budget for a report
+   *  whose line IS the payload (`/goal`'s objective) so it is not clipped. */
+  pushLocal(title: string, lines: readonly string[], options?: { readonly lineLimit?: number }): void
   /** MCP server/tool status for /mcp: one line per server, or setup guidance. */
   mcpStatus(): string[]
   /** Write the conversation transcript to `dsh-tui-export-<ts>.md` in the
