@@ -29,7 +29,7 @@
 - **原生光标** — 聚焦的文本输入框继承终端的光标形状、颜色、闪烁及已启用的动画或拖尾效果，inline 与 fullscreen 均支持。`/model` 选择器在提供商标签、模型行和推理档位之间移动时显示同样的光标，停稳 **0.5 秒后隐藏**；区域被裁剪时回落到模型行。会话管理界面也会在工作区栏、会话行与搜索框之间移动原生光标；输入时移到搜索框，导航时回到聚焦行。动画与拖尾效果在终端设置中配置。
 - **图片** — Kitty/Sixel 缩略图，居中大图可缩放平移，粘贴前按限额适配，无图形时文字回退。Kitty 图片按预留格子的物理像素缩放，适配 HiDPI 终端。
 - **Mermaid 图表** — ```` ```mermaid ```` 代码块画成 Unicode 字符图。
-- **任务完成通知** — DSH、Claude、Codex 的实时任务成功结束，且没有排队的后续输入或活动目标时提醒。标题为「dsh-TUI · 任务已完成」，正文显示本轮最新回复的单行纯文本摘要（去掉 Markdown 样式，最多 200 字符）；没有回复时只显示标题，BEL 只响铃。`/settings` → 对话：`taskNotifications` 可选 `unfocused`（默认，仅失焦）、`always`（每次完成）、`off`；`notificationMethod` 可选 `auto`（默认）、`osc9`、`bel`。自动模式在 Ghostty/WezTerm（OSC 777）与 Kitty（OSC 99）分别显示标题与正文；iTerm2/Warp 与显式 `osc9` 将标题放在正文前；其他终端使用响铃，实际提醒取决于终端的通知/响铃设置。tmux 的 OSC 通知需要 `set -g allow-passthrough on`，焦点报告需要 `set -g focus-events on`。不支持焦点报告的终端可选 `always`。回放、取消和失败不通知；inline 与 fullscreen 均支持。
+- **任务完成通知** — DSH、Claude、Codex 的实时任务成功结束，且没有排队的后续输入或活动目标时提醒。标题为「dsh-TUI · 任务已完成」，正文显示本轮最新回复的单行纯文本摘要（去掉 Markdown 样式，最多 200 字符）；OSC 777/9 还会按包含标题和协议开销的 2048 字节预算截短，保留完整字素；没有回复时只显示标题，BEL 只响铃。`/settings` → 对话：`taskNotifications` 可选 `unfocused`（默认，仅失焦）、`always`（每次完成）、`off`；`notificationMethod` 可选 `auto`（默认）、`osc9`、`bel`。自动模式在 Ghostty/WezTerm（OSC 777）与 Kitty（OSC 99）分别显示标题与正文；iTerm2/Warp 与显式 `osc9` 将标题放在正文前；其他终端使用响铃，实际提醒取决于终端的通知/响铃设置。tmux 的 OSC 通知需要 `set -g allow-passthrough on`，焦点报告需要 `set -g focus-events on`。不支持焦点报告的终端可选 `always`。回放、取消和失败不通知；inline 与 fullscreen 均支持。
 - **LaTeX 公式** — `$…$` 与 `$$…$$` 公式转成 Unicode 文本，块级公式里的分数与上下限竖排；`mathRendering: image` 时在支持图形的终端里把块级公式与能压成一行的行内公式排成终端图片。
 - **时间轴** — 全部回合可点；右栏时间线 / 滚动条 / 隐藏。
 - **侧栏面板** — `Ctrl+B` 在聊天右侧展开面板列，拖拽分隔线即可调宽，默认启用全部 8 个内置面板；顶部以各面板符号显示未选中的页面，悬停显示名称。终端够宽才分栏，窄屏与 inline 模式保持整屏面板。

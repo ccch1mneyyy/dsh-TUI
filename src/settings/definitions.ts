@@ -472,8 +472,8 @@ export const SETTING_DEFINITIONS = {
     label: 'Task completion notifications',
     descriptions: { zh: '任务完成通知' },
     group: 'conversation',
-    hint: 'Notify when successful live work finishes with no queued follow-up or active goal. The title is dsh-TUI · Task complete; the body previews the latest reply as plain text in one line, with Markdown formatting removed, up to 200 characters. No reply shows only the title; BEL only rings. Default: only while the terminal is unfocused. Off disables notifications; Always also notifies while focused or when focus reporting is unavailable. Replay, cancellation and errors stay quiet. Applies immediately.',
-    hintDescriptions: { zh: '实时任务成功结束、没有排队的后续输入或活动目标时提醒。标题为「dsh-TUI · 任务已完成」，正文显示最新回复的单行纯文本摘要，去掉 Markdown 样式，最多 200 字符；没有回复时只显示标题，BEL 只响铃。默认仅在终端失去焦点时通知；关闭可禁用，每次完成则在终端聚焦或不支持焦点报告时也通知。回放、取消和失败不通知。立即生效。' },
+    hint: 'Notify when successful live work finishes with no queued follow-up or active goal. The title is dsh-TUI · Task complete; the body previews the latest reply as plain text in one line, with Markdown formatting removed, up to 200 characters. OSC 777/9 may shorten it further to fit a 2048-byte sequence budget without splitting characters. No reply shows only the title; BEL only rings. Default: only while the terminal is unfocused. Off disables notifications; Always also notifies while focused or when focus reporting is unavailable. Replay, cancellation and errors stay quiet. Applies immediately.',
+    hintDescriptions: { zh: '实时任务成功结束、没有排队的后续输入或活动目标时提醒。标题为「dsh-TUI · 任务已完成」，正文显示最新回复的单行纯文本摘要，去掉 Markdown 样式，最多 200 字符；OSC 777/9 还会按完整序列的 2048 字节预算截短，不拆字符；没有回复时只显示标题，BEL 只响铃。默认仅在终端失去焦点时通知；关闭可禁用，每次完成则在终端聚焦或不支持焦点报告时也通知。回放、取消和失败不通知。立即生效。' },
     kind: 'select',
     options: [
       { value: 'unfocused', label: 'When unfocused', descriptions: { zh: '仅失焦时' } },

@@ -16,6 +16,7 @@ import { createTerminalNotifier } from '../src/ink/terminal-notification.js'
 import { getTerminalFocusState, resetTerminalFocusState, setTerminalFocused } from '../src/ink/terminal-focus-state.js'
 import { setXtversionName, getNotificationProtocol } from '../src/ink/terminal.js'
 import { osc, wrapForMultiplexer } from '../src/ink/termio/osc.js'
+import { getGraphemeSegmenter } from '../src/utils/intl.js'
 import { setLang, t } from '../src/i18n.js'
 
 const savedEnv = { TERM_PROGRAM: process.env.TERM_PROGRAM, TERM: process.env.TERM, TMUX: process.env.TMUX, STY: process.env.STY }
@@ -108,6 +109,54 @@ try {
   notifier.notify('Task complete', 'reply')
   assert.equal(writes.pop(), wrapForMultiplexer(osc(777, 'notify', 'Task complete', 'reply')))
   delete process.env.TMUX
+  const notificationTitle = 'dsh-TUI · Task complete'
+  const header = osc(777, 'notify', notificationTitle, '')
+  const oscEnd = header.endsWith('\x07') ? '\x07' : '\x1b\\'
+  const oscPrefix = header.slice(0, -oscEnd.length)
+  const bodyBudget = 2048 - Buffer.byteLength(header)
+  const deliveredBody = (packet: string): string => {
+    assert.ok(packet.startsWith(oscPrefix))
+    assert.ok(packet.endsWith(oscEnd))
+    assert.ok(Buffer.byteLength(packet) <= 2048, 'full OSC 777 packet fits Ghostty, including title and terminator')
+    return packet.slice(oscPrefix.length, -oscEnd.length)
+  }
+  notifier.notify(notificationTitle, 'a'.repeat(bodyBudget))
+  const exactPacket = writes.pop()!
+  assert.equal(Buffer.byteLength(exactPacket), 2048)
+  assert.equal(deliveredBody(exactPacket), 'a'.repeat(bodyBudget), 'exact byte boundary does not truncate')
+  notifier.notify(notificationTitle, 'a'.repeat(bodyBudget + 1))
+  assert.equal(deliveredBody(writes.pop()!), `${'a'.repeat(bodyBudget - 3)}…`, 'ellipsis counts against the UTF-8 byte budget')
+  for (const grapheme of ['👨‍👩‍👧‍👦', `e${'\u0301'.repeat(12)}`]) {
+    notifier.notify(notificationTitle, grapheme.repeat(200))
+    const body = deliveredBody(writes.pop()!)
+    assert.ok(body.endsWith('…'))
+    assert.ok([...getGraphemeSegmenter().segment(body.slice(0, -1))].every(part => part.segment === grapheme), 'byte truncation preserves whole emoji and combining graphemes')
+  }
+  notifier.notify(notificationTitle, `e${'\u0301'.repeat(2000)}`)
+  assert.equal(deliveredBody(writes.pop()!), '…', 'a single oversized grapheme is omitted whole')
+  const byteSession = new FakeSession('ghostty-byte-budget')
+  const byteChannel = createChannel(ctx, byteSession, {
+    model: 'fake', provider: '', cwd: byteSession.cwd, activity: false,
+    onTaskComplete: preview => notifier.notify(notificationTitle, preview),
+  })
+  try {
+    byteSession.start(0)
+    byteSession.reply(0, '👨‍👩‍👧‍👦'.repeat(200), 1)
+    byteSession.end(0)
+    byteSession.idle()
+    await nextDispatch()
+    assert.ok(deliveredBody(writes.pop()!).endsWith('…'), 'real completion and preview generation also obey the Ghostty byte limit')
+  } finally {
+    byteChannel.releaseContributions()
+  }
+  process.env.TMUX = '/tmp/fixture,1,0'
+  notifier.notify(notificationTitle, '👨‍👩‍👧‍👦'.repeat(200))
+  const wrappedPacket = writes.pop()!
+  assert.ok(wrappedPacket.startsWith('\x1bPtmux;') && wrappedPacket.endsWith('\x1b\\'))
+  assert.ok(deliveredBody(wrappedPacket.slice('\x1bPtmux;'.length, -2).replaceAll('\x1b\x1b', '\x1b')).endsWith('…'), 'byte cap applies to the OSC forwarded by tmux, before DCS wrapping')
+  delete process.env.TMUX
+  notifier.notify('x'.repeat(3000), 'reply')
+  assert.ok(Buffer.byteLength(writes.pop()!) <= 2048, 'an oversized title also respects the packet budget')
   process.env.TERM_PROGRAM = 'kitty'
   const longReply = '👨‍👩‍👧‍👦'.repeat(200)
   notifier.notify('Task complete', longReply)
@@ -141,6 +190,8 @@ try {
   delete process.env.TMUX
   notifier.notify('Task complete', 'latest reply')
   assert.equal(writes.pop(), osc(9, 'Task complete: latest reply'), 'explicit OSC 9 retains a title prefix')
+  notifier.notify(notificationTitle, longReply)
+  assert.ok(Buffer.byteLength(writes.pop()!) <= 2048, 'explicit OSC 9 also fits Ghostty when used as a compatibility override')
   notifier.configure('off', 'osc9')
   notifier.notify('done')
   stdout.isTTY = false
@@ -343,6 +394,7 @@ try {
       return true
     })
     term.parser.registerOscHandler(777, data => {
+      assert.ok(Buffer.byteLength(`777;${data}\x07`) <= 2048, 'headless receiver models the Ghostty OSC buffer limit')
       const [command, title, ...body] = data.split(';')
       assert.equal(command, 'notify')
       notifications.push({ title, message: body.join(';') })

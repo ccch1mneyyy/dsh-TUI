@@ -3,9 +3,29 @@ import { getNotificationProtocol } from './terminal.js'
 import { BEL } from './termio/ansi.js'
 import { OSC, osc, wrapForMultiplexer } from './termio/osc.js'
 import { logForDebugging } from '../utils/debug.js'
+import { getGraphemeSegmenter } from '../utils/intl.js'
 
 export type TaskNotifications = 'off' | 'unfocused' | 'always'
 export type NotificationMethod = 'auto' | 'osc9' | 'bel'
+
+// Ghostty 1.2.3 has a 2048-byte OSC buffer. Counting the entire unwrapped
+// sequence also reserves the introducer and terminator conservatively.
+const MAX_OSC_BYTES = 2048
+
+function truncateUtf8(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text) <= maxBytes) return text
+  const suffix = maxBytes >= 3 ? '…' : ''
+  const budget = Math.max(0, maxBytes - Buffer.byteLength(suffix))
+  let out = ''
+  let bytes = 0
+  for (const { segment } of getGraphemeSegmenter().segment(text)) {
+    const size = Buffer.byteLength(segment)
+    if (bytes + size > budget) break
+    out += segment
+    bytes += size
+  }
+  return out + suffix
+}
 
 /** Terminal-owned notification transport; never writes to redirected output. */
 export function createTerminalNotifier(stdout: Pick<NodeJS.WriteStream, 'isTTY' | 'write'>) {
@@ -24,7 +44,10 @@ export function createTerminalNotifier(stdout: Pick<NodeJS.WriteStream, 'isTTY' 
       if (resolved === 'osc777') {
         // OSC 777 separates title and body with semicolons; only the body
         // may contain that delimiter. OSC 9 has no separate title field.
-        sequence = osc(OSC.GHOSTTY, 'notify', title.replaceAll(';', ' '), message)
+        const titleBudget = MAX_OSC_BYTES - Buffer.byteLength(osc(OSC.GHOSTTY, 'notify', '', ''))
+        const safeTitle = truncateUtf8(title.replaceAll(';', ' '), titleBudget)
+        const bodyBudget = MAX_OSC_BYTES - Buffer.byteLength(osc(OSC.GHOSTTY, 'notify', safeTitle, ''))
+        sequence = osc(OSC.GHOSTTY, 'notify', safeTitle, truncateUtf8(message, bodyBudget))
       } else if (resolved === 'osc99') {
         const id = ++notificationId
         sequence = osc(OSC.KITTY, `i=${id}:d=0:p=title`, title)
@@ -42,7 +65,9 @@ export function createTerminalNotifier(stdout: Pick<NodeJS.WriteStream, 'isTTY' 
         chunks.push(chunk)
         sequence += chunks.map((part, index) => osc(OSC.KITTY, `i=${id}:d=${index === chunks.length - 1 ? 1 : 0}:p=body`, part)).join('')
       } else {
-        sequence = resolved === 'bel' ? BEL : osc(OSC.ITERM2, message ? `${title}: ${message}` : title)
+        const payload = message ? `${title}: ${message}` : title
+        const budget = MAX_OSC_BYTES - Buffer.byteLength(osc(OSC.ITERM2, ''))
+        sequence = resolved === 'bel' ? BEL : osc(OSC.ITERM2, truncateUtf8(payload, budget))
       }
       try {
         stdout.write(resolved === 'bel' ? sequence : wrapForMultiplexer(sequence))

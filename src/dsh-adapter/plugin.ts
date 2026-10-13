@@ -1127,9 +1127,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     resolveSettingsReady = () => resolve()
     setTimeout(resolve, 300)
   })
-  // Old hosts register a settings.yaml scope. 0.1.7 projects the plugin's
-  // volatile Config fields instead; both paths apply edits without remounting.
-  // File-backed settings apply before the first mount.
+  // This namespace uses the TUI's own settings.json service on every host.
+  // Its registered scope is a sparse user layer: clearing a key inherits
+  // the deployment config. File-backed settings apply before the first mount.
   ;((settingsCtx: { settings: typeof tuiSettings; effect: Context['effect'] }) => {
     const scope = createSettingsScope<SettingsValue>(configOwner, settingsCtx.settings,
       tuiSettingsNs,
