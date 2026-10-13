@@ -1,5 +1,6 @@
 import type { AgentEvent, AgentEventMeta } from '../../agent/events.js'
 import stripAnsi from 'strip-ansi'
+import { Lexer, type MarkedToken, type Token } from 'marked'
 import { textOfBlocks } from '../../channel/projection.js'
 import { getGraphemeSegmenter } from '../../utils/intl.js'
 import type { ChannelOwner } from './owner.js'
@@ -67,13 +68,34 @@ export function createTaskCompletion(state: ChannelState, owner: ChannelOwner, n
   }
 }
 
-/** Codex-style single-line preview, capped at 200 complete graphemes. */
+/** Plain-text preview; notification daemons may interpret raw Markdown headings. */
 function notificationPreview(text: string): string | undefined {
-  const flat = stripAnsi(text).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
+  const plain = markdownText(Lexer.lex(stripAnsi(text), { gfm: true }))
+  const flat = plain.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
   const graphemes: string[] = []
   for (const { segment } of getGraphemeSegmenter().segment(flat)) {
     if (graphemes.length === 200) return `${graphemes.slice(0, 199).join('')}…`
     graphemes.push(segment)
   }
   return graphemes.join('') || undefined
+}
+
+function isMarkdownToken<K extends MarkedToken['type']>(token: Token, kind: K): token is Extract<MarkedToken, { type: K }> {
+  return token.type === kind
+}
+
+/** Extract visible text before flattening lines or truncating emphasis/link pairs. */
+function markdownText(tokens: readonly Token[]): string {
+  return tokens.map(token => {
+    if (isMarkdownToken(token, 'heading') || isMarkdownToken(token, 'paragraph') || isMarkdownToken(token, 'blockquote')) return `${markdownText(token.tokens)}\n`
+    if (isMarkdownToken(token, 'strong') || isMarkdownToken(token, 'em') || isMarkdownToken(token, 'del') || isMarkdownToken(token, 'link')) return markdownText(token.tokens)
+    if (isMarkdownToken(token, 'text')) return token.tokens === undefined ? token.text : markdownText(token.tokens)
+    if (isMarkdownToken(token, 'codespan') || isMarkdownToken(token, 'escape') || isMarkdownToken(token, 'image')) return token.text
+    if (isMarkdownToken(token, 'code')) return `${token.text}\n`
+    if (isMarkdownToken(token, 'list')) return `${token.items.map(item => markdownText(item.tokens)).join('\n')}\n`
+    if (isMarkdownToken(token, 'table')) return `${[token.header, ...token.rows].map(row => row.map(cell => markdownText(cell.tokens)).join(' ')).join('\n')}\n`
+    if (isMarkdownToken(token, 'html')) return token.text.replace(/<[^>]*>/g, '')
+    if (isMarkdownToken(token, 'space') || isMarkdownToken(token, 'br') || isMarkdownToken(token, 'hr')) return '\n'
+    return ''
+  }).join('')
 }
