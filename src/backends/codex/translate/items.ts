@@ -27,6 +27,7 @@ import { arr, rec, str, type Rec } from '../narrow.js'
 import { failureHint } from './notices.js'
 import { TOOL_ITEM_TYPES, toolCallOf, toolResultOf, type ResultWords } from './presentation.js'
 import { addUsage } from './usage.js'
+import { displayQuestionReply, parseQuestionReply } from './question-reply.js'
 import { itemImages, transcriptImages, dataUrlImageFacade } from '../session/images.js'
 
 /** The attempt (one model reply) being assembled. */
@@ -242,7 +243,8 @@ function userContent(content: unknown): { readonly text: string; readonly blocks
     switch (type) {
       case 'text': {
         const value = str(input.text) ?? ''
-        texts.push(value)
+        const replies = parseQuestionReply(value)
+        texts.push(replies === undefined ? value : displayQuestionReply(replies))
         blocks.push({ type: 'text', text: value })
         break
       }

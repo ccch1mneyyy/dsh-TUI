@@ -253,7 +253,9 @@ subscription credentials and `/channel` connections use private app-server proce
 
 Streaming/tool cards, approvals, questions, steer/queue/interrupt, model and
 effort controls, Plan, `/review`, `/diff`, `/usage`, `/init`, skills and MCP
-share the existing UI. **Shift+Tab only toggles Plan**, keeping its underlying
+share the existing UI. Async questions open the questionnaire while Codex
+continues working; answers steer the turn (or queue if unavailable), and
+dismissing the question leaves work running. **Shift+Tab only toggles Plan**, keeping its underlying
 permission preset; Full Access requires an explicit choice. Existing Codex
 settings are respected, not overwritten with defaults. `/login` offers
 ChatGPT OAuth, a device code or an API key (the last writes to Codex’s own

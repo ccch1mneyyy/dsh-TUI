@@ -1007,6 +1007,8 @@ const GROUPS = {
 // 每种决策映射、拒绝+理由（cancel+followup）、外部结算、重投只显示一次、
 // 问卷与取消（V7）、dispose 撤回、录制的 s1b 审批端到端。
     ["verify-codex-approvals", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-approvals.ts']],
+// Codex 非阻塞问卷：异步消息继续运行，答案按原生信封插话/排队，真源回放与生命周期清理。
+    ["verify-codex-async-questions", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-async-questions.ts']],
 // 真实 Chat 挂在 Codex 会话（假 app-server）上：审批面板文案、命令卡输出、
 // 流式回复、diff 卡、问卷、Esc 中断；80/40 列 × inline/fullscreen。
     ["verify-codex-chat", ['node', '--import', 'tsx/esm', 'scripts/verify-codex-chat.tsx']],

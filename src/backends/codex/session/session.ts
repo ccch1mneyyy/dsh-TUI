@@ -37,6 +37,7 @@ import { rateLimitOf } from '../translate/usage.js'
 import { resolveCodexStartOptions } from '../prefs.js'
 import { createCodexAuthCapability } from '../auth/status.js'
 import { createApprovalBridge } from './approvals.js'
+import { createAsyncQuestions } from './async-questions.js'
 import { createCodexControls } from './controls.js'
 import { createCodexCommands } from './commands.js'
 import { createPlanReview, PLAN_IMPLEMENTATION_PROMPT } from './plan-review.js'
@@ -227,6 +228,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
     closed: () => disposing || permanentlyLost,
     forceClose: (turnId, reviewTurnId) => {
       output.flush()
+      asyncQuestions.withdraw()
       seenOf(turnId).ended = true
       if (reviewTurnId !== undefined) seenOf(reviewTurnId).ended = true
       emit([...live.forceClose({ kind: 'interrupted' }), { type: 'session.status', status: 'idle' }])
@@ -250,6 +252,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
     enqueueFollowup: (id, followup) => input.enqueueFollowup(id, followup),
     interruptTurn: () => { void input.interrupt() },
   })
+  const asyncQuestions = createAsyncQuestions({ input, emit: events => emit(events, 'sync', true) })
 
   const activity = createCodexActivity({ clock, now: ctx.now, emit })
   const subagents = createCodexSubagents({ hub, cwd: opened.cwd, threadId: () => threadId, nextSeq: ctx.nextSeq, now: ctx.now, emit: (events, wake) => deliver(events, wake ?? 'sync'), debug })
@@ -335,6 +338,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
     if (next.threadId === '') throw new Error(codexText('codex-open-failed', { err: 'no thread id' }))
     const previous = threadId
     approvals.withdrawAll()
+    asyncQuestions.withdraw()
     authBridge?.withdrawAll()
     output.close()
     for (const unroute of childRoutes.values()) unroute()
@@ -413,6 +417,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       activity.notification(method, params)
       tasks.notification(method, params)
       if (goals.notification(method, params)) return
+      asyncQuestions.notification(method, params)
       commands.note(method)
       if (controls.note(method, params)) return
       const before: AgentEvent[] = []
@@ -452,6 +457,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       }
       if (method === NOTIFY.turnCompleted) {
         approvals.turnEnded()
+        asyncQuestions.withdraw()
         const turn = rec(params.turn)
         deliver([...before, ...events, { type: 'session.status', status: 'idle' }], wakeOf(method, events))
         const activeTurnId = input.activeTurnId
@@ -479,6 +485,7 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       sideQueries.reset()
       permanentlyLost = permanent
       approvals.withdrawAll()
+      asyncQuestions.withdraw()
       authBridge?.withdrawAll()
       activity.reset()
       planReview.withdraw()
@@ -718,11 +725,13 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
       questions: {
         respond: (requestId, answers) => {
           if (authBridge?.respondQuestion(requestId, answers)) return
+          if (asyncQuestions.owns(requestId)) { asyncQuestions.respond(requestId, answers); return }
           if (planReview.owns(requestId)) planReview.respond(requestId, answers)
           else approvals.respondQuestion(requestId, answers)
         },
         cancel: requestId => {
           if (authBridge?.cancelQuestion(requestId)) return
+          if (asyncQuestions.owns(requestId)) { asyncQuestions.cancel(requestId); return }
           if (planReview.owns(requestId)) planReview.cancel(requestId)
           else approvals.cancelQuestion(requestId)
         },
@@ -763,13 +772,17 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
     },
     async cancel(cause: CancelCause) {
       if (disposing) return { stillQueued: [], outcome: 'unknown' }
-      if (cause === 'switch' || cause === 'dispose') approvals.withdrawAll()
+      if (cause === 'switch' || cause === 'dispose') {
+        approvals.withdrawAll()
+        asyncQuestions.withdraw()
+      }
       return input.cancel(cause)
     },
     dispose(): Promise<void> {
       if (disposePromise !== undefined) return disposePromise
       disposePromise = (async () => {
         approvals.withdrawAll()
+        asyncQuestions.withdraw()
         authBridge?.dispose()
         planReview.withdraw()
         output.close()

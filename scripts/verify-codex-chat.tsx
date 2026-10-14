@@ -9,7 +9,8 @@
  * `1` + Enter allows it, the terminal card shows the unwrapped command and
  * its output, the reply streams in; a second turn shows the diff cards of a
  * new and an edited file and a question panel answered with Enter; a third
- * turn's running command is interrupted with Esc and its card says so.
+ * turn's async questions leave its tool running, accept a steered answer,
+ * and dismiss without interruption; Esc then interrupts the command.
  *
  * Run: node --import tsx/esm scripts/verify-codex-chat.tsx
  */
@@ -97,6 +98,9 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
         notify('turn/completed', { turn: { id: turnId, items: [], status: 'completed', error: null } })
       } else {
         notify('item/started', { turnId, item: command('exec-3', 'sleep 30', 'inProgress', null, null) })
+        const asyncQuestion = { type: 'agentMessage', id: 'async-3', delivery: 'async', phase: 'final_answer', text: 'Which approach?\n- Small\n- Full\n\nAny details?', questions: [{ title: 'Which approach?', options: ['Small', 'Full'] }, { title: 'Any details?' }] }
+        notify('item/started', { turnId, item: asyncQuestion })
+        notify('item/completed', { turnId, item: asyncQuestion })
       }
     })()
     return NO_REPLY
@@ -104,6 +108,13 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
   h.fake.on('turn/interrupt', params => {
     setTimeout(() => notify('turn/completed', { turn: { id: params.turnId, items: [], status: 'interrupted', error: null } }), 5)
     return {}
+  })
+  h.fake.on('turn/steer', params => {
+    const text = String((params.input as Rec[])[0]?.text ?? '')
+    const reply = userItem('async-reply', String(params.clientUserMessageId), text)
+    notify('item/started', { turnId: params.expectedTurnId, item: reply })
+    notify('item/completed', { turnId: params.expectedTurnId, item: reply })
+    return { turnId: params.expectedTurnId }
   })
 
   const term = new XTerm({ cols, rows, scrollback: 400, allowProposedApi: true })
@@ -166,6 +177,12 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
     await type('long one')
     stdin.write('\r')
     check(`${tag}: the running command's card is on screen`, await settled(() => screen().includes('sleep 30')), screen())
+    check(`${tag}: async question opens while the session keeps working`, await settled(() => view().includes('Which approach?') && view().includes('Small')) && channel.working && h.session.status === 'running', view())
+    stdin.write('\r')
+    check(`${tag}: async default answer steers without interrupting`, await settled(() => h.sent('turn/steer').length === 1 && view().includes('Any details?')) && h.sent('turn/interrupt').length === 0, view())
+    check(`${tag}: async answer echo is readable and has no protocol envelope`, await settled(() => channel.rows.some(row => row.kind === 'user' && row.text === '> Which approach?\n\nSmall')) && !screen().includes('send_user_message_question_reply'), view())
+    stdin.write('\x1b')
+    check(`${tag}: dismissing an async question leaves work running`, await settled(() => questions.getSnapshot() === null) && h.sent('turn/interrupt').length === 0 && channel.working, view())
     stdin.write('\x1b')
     check(`${tag}: Esc interrupts the turn`, await settled(() => h.sent('turn/interrupt').length === 1 && h.sent('turn/interrupt')[0]!.turnId === 'turn-3'))
     check(`${tag}: the interrupted card and the interrupt row show`, await settled(() => screen().includes(codexText('codex-interrupted')) && !channel.working), screen())

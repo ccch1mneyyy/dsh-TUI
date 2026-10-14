@@ -212,7 +212,8 @@ thread；这不是把历史导入 DSH 的 `migrate codex`。
 托管订阅凭据与 `/channel` 连接继续使用独立的 app-server 进程。
 
 流式/工具卡、审批问卷、插话/排队/打断、模型与 effort、Plan、`/review`、`/diff`、
-`/usage`、`/init`、skills 与 MCP 复用现有界面。**Shift+Tab 只开关 Plan**，保留底层
+`/usage`、`/init`、skills 与 MCP 复用现有界面。异步提问会打开问卷，同时 Codex 继续
+执行；答案插入当前回合（不可插话时排队），取消问卷保留运行。**Shift+Tab 只开关 Plan**，保留底层
 权限档；Full Access 必须明确选择。已有 Codex 设置不会被默认值覆盖。`/login` 提供
 ChatGPT OAuth、设备码或 API key（后者写入 Codex 自己的凭据存储）。`/channel` 连接
 优先，托管订阅令牌只在第一方路由注入；不写 `~/.codex/config.toml`，不退出原生登录。
