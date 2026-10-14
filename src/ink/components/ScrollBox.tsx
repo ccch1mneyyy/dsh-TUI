@@ -62,6 +62,15 @@ export type ScrollBoxHandle = {
    * cold start).
    */
   setClampBounds: (min: number | undefined, max: number | undefined) => void;
+  /**
+   * Scroll-anchoring correction: shift the committed position by `delta` rows
+   * because a spacer ABOVE the viewport changed size under a scrollTop that
+   * never moved (a folding card, an invalidated height estimate, a deferred
+   * measurement). This is a geometry correction for the layout that already
+   * committed, not wheel debt: no pending drain, no sticky clear, no
+   * subscriber notify (notifying would commit React again off our own write).
+   */
+  anchorBy: (delta: number) => void;
 };
 export type ScrollBoxProps = Except<Styles, 'textWrap' | 'overflow' | 'overflowX' | 'overflowY'> & {
   ref?: Ref<ScrollBoxHandle>;
@@ -302,6 +311,21 @@ function ScrollBox({
       // tick, so that paint can otherwise remain on blank spacer indefinitely.
       // Invalidate the blit and schedule a paint, without notifying React
       // subscribers (the window is already committed).
+      markDirty(el);
+      queueRender(el);
+    },
+    anchorBy(delta) {
+      const el = domRef.current;
+      if (!el || delta === 0) return;
+      const current = el.scrollTop ?? 0;
+      const next = Math.max(0, Math.round(current + delta));
+      if (next === current) return;
+      el.scrollTop = next;
+      // Same contract as setClampBounds: the mount window for this layout is
+      // already committed, so mark the blit dirty and schedule the paint
+      // without a subscriber notify (the correction must not feed back into a
+      // React commit). noteFrameCause gives the geometry trace the origin.
+      noteFrameCause('reanchor');
       markDirty(el);
       queueRender(el);
     }
