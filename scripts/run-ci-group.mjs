@@ -212,6 +212,10 @@ const GROUPS = {
 // 流式行离开虚拟窗口时保留实测行高：不得因回落到 2 行估算而塌陷，
 // 不得改写 committed/painted 位置、接回跟随或移动 xterm 中的正文锚点。
     ["verify-post-shrink-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-post-shrink-anchor.tsx']],
+// 视口上方发生**真实**收缩（思考卡收起 / 工具卡结算）时，贴底的手动锚点
+// 必须靠滚动锚定保持原地：paint 不得与 committed 分歧、不得越界、xterm 中
+// 的正文锚点逐帧一致。verify-post-shrink-anchor 覆盖的是测量假象那条路径。
+    ["verify-scroll-fold-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-fold-anchor.tsx']],
 // 长会话冷/热窗口跳转、绘制边界发布与回底挂载预算（不能等滚轮救活）。
     ['verify-scroll-jumps', ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-jumps.tsx']],
     ['verify-scroll-jumps-narrow', ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-jumps.tsx'], { DSH_TEST_COLUMNS: '60' }],
