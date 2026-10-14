@@ -15,9 +15,12 @@
  * position by the anchor row's own offset delta, so the row owning the viewport
  * top keeps its screen row. Assert exactly that: sticky stays false, the paint
  * never disagrees with the committed position, the committed position stays
- * inside the reachable range, and the terminal text anchor is byte-identical
- * frame over frame. The run fails unless it actually observed the fold frame,
- * so a vacuous pass is impossible.
+ * inside the reachable range, the terminal text anchor is byte-identical frame
+ * over frame, and the committed mount window covers the position it is painted
+ * at (a window scanned against the PRE-correction position leaves the top
+ * `base + topPad - scrollTop` rows of the viewport on the topPad spacer — a
+ * blank band across the reader's rows). The run fails unless it actually
+ * observed the fold frame, so a vacuous pass is impossible.
  *
  * Run: node --import tsx/esm scripts/verify-scroll-fold-anchor.tsx
  * Imports src/; no compiled lib/ required. DSH_TEST_COLUMNS=60 tests narrow.
@@ -215,9 +218,27 @@ check('绘制与 committed 始终一致', paintDisagreed === undefined,
 const unreachable = frames.find(note => note.scrollTop > note.maxScroll)
 check('committed 位置始终可达', unreachable === undefined,
   unreachable ? `top=${unreachable.scrollTop} max=${unreachable.maxScroll}` : `frames=${frames.length}`)
+// The mount window must cover the position it is painted at. `base + topPad` is
+// the Yoga top of the first mounted row, so a positive band means the viewport
+// top sits inside the topPad spacer and that many rows of the reader's view are
+// blank. One legitimate exception: a paint pinned to the burst-scroll clamp
+// (renderScrollTop === clampMin) is deliberately held at the mounted edge.
+let bandFrame: { frame: number; cause: string; band: number } | undefined
+for (const frame of observations) {
+  const list = frame.list
+  if (list === null || list.sticky) continue
+  for (const note of frame.scroll) {
+    const band = list.base + list.topPad - note.renderScrollTop
+    if (band > 0 && !note.sticky && note.renderScrollTop !== note.clampMin && bandFrame === undefined) {
+      bandFrame = { frame: frame.frame, cause: frame.cause, band }
+    }
+  }
+}
+check('无空白带（窗口覆盖绘制位置）', bandFrame === undefined,
+  bandFrame ? `f${bandFrame.frame} ${bandFrame.cause} band=${bandFrame.band}` : `frames=${frames.length}`)
 check('xterm 正文锚点逐帧不变', screens.slice(screenMark).every(frame => frame[baselineAnchorRow] === baselineAnchor),
   `row=${baselineAnchorRow} ${baselineAnchor}`)
-if (paintDisagreed !== undefined) {
+if (paintDisagreed !== undefined || bandFrame !== undefined) {
   for (const frame of observations) {
     for (const note of frame.scroll) {
       const l = frame.list

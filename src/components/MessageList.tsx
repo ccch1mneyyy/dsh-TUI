@@ -953,11 +953,36 @@ export function MessageList({
     total += heightOf(visibleRows[i])
   }
 
-  const scrollTop = scrollHandle?.getScrollTop() ?? 0
+  // Scroll anchoring, render half (the DOM write is the layout effect's half).
+  // Rows above the viewport are spaced by ESTIMATES, so a real fold among them
+  // — or an invalidated estimate that collapses to the two-row fallback —
+  // changes their offsets and every visible row moves while scrollTop never
+  // did. The committed position has to follow that delta, and the mount window
+  // has to be scanned against the CORRECTED position: scanned against the old
+  // one, the window starts below the corrected top and the top
+  // `base + topPad - scrollTop` rows of the viewport are painted as topPad
+  // spacer — a blank band over the reader's rows until some later commit
+  // happens to re-scan. Track the row that owned the viewport top by INDEX (a
+  // shrink above the viewport pushes the mount window's start past it) and hand
+  // its own offset delta to the ScrollBox so the rows on screen keep their
+  // screen rows. Never fights a deliberate scroll: skipped while following,
+  // while a wheel drain is in flight, and when the position moved since the row
+  // was recorded.
+  const anchorRef = React.useRef<{ id: number; index: number; top: number; scrollTop: number } | null>(null)
+  const scrollTopRaw = scrollHandle?.getScrollTop() ?? 0
   const pending = scrollHandle?.getPendingDelta() ?? 0
   const viewport = scrollHandle?.getViewportHeight() ?? 24
   const sticky = scrollHandle?.isSticky() ?? true
   const base = baseRef.current ?? DEFAULT_HEADER_LINES
+  const prevAnchor = anchorRef.current
+  let anchorCorrection = 0
+  if (scrollHandle && prevAnchor !== null && !sticky && pending === 0 && scrollTopRaw === prevAnchor.scrollTop) {
+    const anchored = visibleRows[prevAnchor.index]
+    if (anchored !== undefined && anchored.id === prevAnchor.id) {
+      anchorCorrection = Math.max(0, prevAnchor.top - (base + (offsets[prevAnchor.index] ?? 0)))
+    }
+  }
+  const scrollTop = scrollTopRaw - anchorCorrection
 
   // Mount the union of the committed position and any in-flight pending
   // delta, plus overscan; when sticky, always reach the tail (streaming row).
@@ -1332,16 +1357,7 @@ export function MessageList({
     onTimeline?.(timeline)
   })
 
-  // Scroll anchoring (paired with the anchorBy call in the measure effect):
-  // rows above the viewport are spaced by ESTIMATES, so a real fold among them
-  // — or an invalidated estimate that collapses to the two-row fallback —
-  // changes their offsets and every visible row moves while scrollTop never
-  // did. The renderer then clamps the paint to the shrunken maxScroll and the
-  // reader's transcript drops a few rows and stays there. Track one row by
-  // INDEX (a shrink above the viewport pushes the mount window's start past it)
-  // and hand its own offset delta back to the ScrollBox so the rows on screen
-  // keep their screen rows.
-  const anchorRef = React.useRef<{ id: number; index: number; top: number; scrollTop: number } | null>(null)
+  // Scroll anchoring, commit half of the render-time pass above.
   // Post-commit: measure mounted rows, derive the content-space base from
   // the first mounted row's Yoga top, and clamp render-time scrollTop to the
   // mounted coverage so burst scrolls never show blank spacer.
@@ -1404,51 +1420,43 @@ export function MessageList({
           bottomPad <= 0 ? undefined : Math.max(min, base + mountedBottom - viewport),
         )
       }
-      // Scroll anchoring. The row that owns the viewport top is re-picked EVERY
-      // commit (a pick kept from an earlier position sits above whatever
-      // changed and reports no movement), and it is compared with the pick
-      // recorded last commit through ITS index+id — a shrink above the viewport
-      // pushes the mount window's start past that row, while offsets[] still
-      // covers it, so the row's own offset delta is exactly what the reader saw
-      // move. Never fights a deliberate scroll: skipped while following, while
-      // a wheel drain is in flight, and when the position moved since the row
-      // was recorded.
+      // Scroll anchoring. The render half already scanned the mount window
+      // against the corrected position; publish that correction to the DOM node
+      // whose paint is about to happen. The position can still have moved since
+      // the render (a wheel drain between render and commit) — then the window
+      // no longer covers where the reader is, so drop the correction and commit
+      // once more to re-scan instead of painting spacer over their rows.
       const anchorBase = baseRef.current ?? base
-      const anchorScrollTop = scrollHandle.getScrollTop()
-      const prevAnchor = anchorRef.current
-      const viewTop = anchorScrollTop - anchorBase
+      let anchoredTop = scrollHandle.getScrollTop()
+      if (anchorCorrection > 0) {
+        if (
+          !sticky &&
+          scrollHandle.getPendingDelta() === 0 &&
+          anchoredTop === anchorRef.current?.scrollTop
+        ) {
+          scrollHandle.anchorBy(-anchorCorrection)
+          anchoredTop = scrollHandle.getScrollTop()
+        } else {
+          changed = true
+        }
+      }
+      // The row that owns the viewport top is re-picked EVERY commit (a pick
+      // kept from an earlier position sits above whatever changed and reports
+      // no movement), against the position this commit paints. It is compared
+      // with the pick recorded last commit through ITS index+id — a shrink above
+      // the viewport pushes the mount window's start past that row, while
+      // offsets[] still covers it, so the row's own offset delta is exactly what
+      // the reader saw move.
+      const viewTop = anchoredTop - anchorBase
       let pick = start
       for (let i = start; i < end; i++) {
         if ((offsets[i] ?? 0) <= viewTop) pick = i
         else break
       }
-      if (prevAnchor !== null) {
-        const anchored = visibleRows[prevAnchor.index]
-        if (anchored !== undefined && anchored.id === prevAnchor.id) {
-          const top = anchorBase + (offsets[prevAnchor.index] ?? 0)
-          const shrinkAbove = prevAnchor.top - top
-          // Any shrink above the viewport moves every row the reader is looking
-          // at: either a real fold (a thinking/tool card collapsing) or an
-          // invalidated estimate falling back to the two-row default. Correct
-          // the committed position by exactly that delta — the renderer
-          // otherwise clamps the paint below the reader's rows and the
-          // transcript drops a few. Never fights a deliberate scroll: skipped
-          // while following, while a wheel drain is in flight, and when the
-          // position moved since that row was recorded.
-          if (
-            shrinkAbove > 0 &&
-            !sticky &&
-            scrollHandle.getPendingDelta() === 0 &&
-            anchorScrollTop === prevAnchor.scrollTop
-          ) {
-            scrollHandle.anchorBy(-shrinkAbove)
-          }
-        }
-      }
       const picked = visibleRows[pick]
       anchorRef.current = picked === undefined
         ? null
-        : { id: picked.id, index: pick, top: anchorBase + (offsets[pick] ?? 0), scrollTop: scrollHandle.getScrollTop() }
+        : { id: picked.id, index: pick, top: anchorBase + (offsets[pick] ?? 0), scrollTop: anchoredTop }
     }
     if ((changed || growingStreamNeedsMeasure) && measureTimerRef.current === null) {
       // Layout corrections can cascade for many rows. Yield to the next
