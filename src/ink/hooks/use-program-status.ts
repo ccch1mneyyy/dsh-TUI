@@ -32,6 +32,12 @@ export type ProgramStatusInput = {
   title: string
   /** Opt-out, and the hard TTY requirement. */
   enabled: boolean
+  /**
+   * Identity of the session these signals describe. Switching sessions in one
+   * process does not remount the tree, so this is what tells the falling-edge
+   * latch below that `lastOutcome` now belongs to a different session's past.
+   */
+  sessionId: string
 }
 
 /**
@@ -60,22 +66,35 @@ export function useProgramStatus(input: ProgramStatusInput): void {
   // Last sequence written, so an unchanged state writes nothing. Reset when
   // reporting turns off so a later re-enable re-establishes the record.
   const lastSequenceRef = useRef<string>('')
-  // Whether a turn was observed running since mount. `turnUsage` is a
-  // persisted projection: a resumed session can still carry its previous
-  // turn's outcome, and reporting that as a fresh `done` at startup would
-  // claim work the user has not seen. Terminal states are therefore only
-  // reported on the falling edge of `working`.
-  const sawWorkingRef = useRef(false)
+  // Whether a turn was observed running since the current session was adopted,
+  // tagged with the session it belongs to. `turnUsage` is a persisted
+  // projection: a resumed session can still carry its previous turn's outcome,
+  // and reporting that as a fresh `done` would claim work the user has not
+  // seen. Terminal states are therefore only reported on the falling edge of
+  // `working`. The tag matters because switching sessions in one process does
+  // not remount this tree, and the switch replays the target session's own
+  // history — re-populating `turnUsage` from its last turn.end. A latch left
+  // over from the previous session would report that as a brand-new `done`.
+  const latchRef = useRef<{ sessionId: string; sawWorking: boolean }>({
+    sessionId: input.sessionId,
+    sawWorking: false,
+  })
 
-  const { working, blocked, lastOutcome, title, enabled } = input
+  const { working, blocked, lastOutcome, title, enabled, sessionId } = input
 
   useEffect(() => {
     if (!enabled || !writeRaw) return
 
+    // Adopting a different session starts a fresh latch; `lastOutcome` now
+    // describes that session's past, not work observed in this one.
+    if (latchRef.current.sessionId !== sessionId) {
+      latchRef.current = { sessionId, sawWorking: false }
+    }
+
     const derive = (): { state: ProgramState; kind?: ProgramBlockedKind; msg?: string } => {
       if (blocked !== null) return { state: 'blocked', kind: blocked.kind, msg: blocked.message }
       if (working) return { state: 'working' }
-      if (!sawWorkingRef.current) return { state: 'idle' }
+      if (!latchRef.current.sawWorking) return { state: 'idle' }
       switch (lastOutcome) {
         case 'error':
           return { state: 'error' }
@@ -91,7 +110,7 @@ export function useProgramStatus(input: ProgramStatusInput): void {
     }
 
     const { state, kind, msg } = derive()
-    if (working) sawWorkingRef.current = true
+    if (working) latchRef.current.sawWorking = true
     const sequence = programStatus({
       state,
       app: PROGRAM_STATUS_APP,
@@ -103,5 +122,5 @@ export function useProgramStatus(input: ProgramStatusInput): void {
     if (sequence === '' || sequence === lastSequenceRef.current) return
     lastSequenceRef.current = sequence
     writeRaw(sequence)
-  }, [enabled, working, blocked, lastOutcome, title, writeRaw])
+  }, [enabled, working, blocked, lastOutcome, title, writeRaw, sessionId])
 }

@@ -27,7 +27,7 @@ import { ESC, ESC_TYPE } from './ansi.js'
 import { OSC } from './osc.js'
 
 /** The OSC command number for the Program Status Protocol. */
-export const PROGRAM_STATUS = OSC.PROGRAM_STATUS
+const PROGRAM_STATUS = OSC.PROGRAM_STATUS
 
 /** `ESC ]` — the OSC introducer. */
 const OSC_PREFIX = ESC + String.fromCharCode(ESC_TYPE.OSC)
@@ -37,7 +37,7 @@ const OSC_PREFIX = ESC + String.fromCharCode(ESC_TYPE.OSC)
  * terminal, so the encoder refuses to build it instead of truncating into a
  * half-applied record.
  */
-export const PROGRAM_STATUS_LIMITS = {
+const PROGRAM_STATUS_LIMITS = {
   /** Whole sequence, OSC through ST. The largest legal report is under 3300. */
   sequenceBytes: 4096,
   /** Encoded `msg` bytes (base64 of at most 2048 decoded). */
@@ -179,7 +179,9 @@ function isValidApp(app: string): boolean {
  */
 export function programStatus(record: ProgramStatusRecord): string {
   const { state } = record
-  if (state === 'clear') return clearProgramStatus()
+  // Forward `id`: dropping it would widen a targeted clear into "remove every
+  // record on the terminal", wiping records other programs own.
+  if (state === 'clear') return clearProgramStatus(record.id)
 
   const pairs: string[] = [`state=${state}`]
 

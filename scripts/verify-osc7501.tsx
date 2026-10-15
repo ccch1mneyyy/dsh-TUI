@@ -214,6 +214,18 @@ check('state=clear via programStatus matches clearProgramStatus', () => {
   assert.equal(programStatus({ state: 'clear' }), clearProgramStatus())
 })
 
+check('a targeted clear keeps its id through programStatus', () => {
+  // Dropping the id would widen a targeted clear into "remove every record on
+  // the terminal", wiping records other programs own.
+  assert.equal(programStatus({ state: 'clear', id: 'build' }), clearProgramStatus('build'))
+  assert.equal(programStatus({ state: 'clear', id: 'build' }), `${PREFIX}state=clear:id=build${ESC}\\`)
+  assert.notEqual(programStatus({ state: 'clear', id: 'build' }), clearProgramStatus())
+})
+
+check('a malformed id on clear is refused, not silently widened', () => {
+  assert.equal(programStatus({ state: 'clear', id: 'a b' }), '')
+})
+
 // -----------------------------------------------------------------------------
 // 5. Enable gate
 // -----------------------------------------------------------------------------
@@ -249,6 +261,7 @@ type StatusInput = {
   lastOutcome: 'completed' | 'interrupted' | 'error' | undefined
   title: string
   enabled: boolean
+  sessionId: string
 }
 
 class FakeStdout extends Writable {
@@ -329,7 +342,7 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
 // idle at mount
 {
   const { instance, reports } = mountHook({
-    working: false, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true,
+    working: false, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1',
   })
   await flush()
   assert.deepEqual(reports(), ['state=idle:app=dsh-tui:title=c2Vzcw=='])
@@ -340,13 +353,13 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
 // precedence and transitions
 {
   const { instance, set, reports } = mountHook({
-    working: false, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true,
+    working: false, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1',
   })
   await flush()
 
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true })
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
   await flush()
-  set({ working: true, blocked: { kind: 'permission', message: 'Approval needed: Bash' }, lastOutcome: undefined, title: 'sess', enabled: true })
+  set({ working: true, blocked: { kind: 'permission', message: 'Approval needed: Bash' }, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
   await flush()
   // A parked prompt outranks the running turn it interrupted.
   assert.deepEqual(reports().slice(1), [
@@ -355,24 +368,24 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
   ])
   console.log('  ok - blocked outranks working')
 
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true })
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
   await flush()
-  set({ working: false, blocked: null, lastOutcome: 'completed', title: 'sess', enabled: true })
+  set({ working: false, blocked: null, lastOutcome: 'completed', title: 'sess', enabled: true, sessionId: 's1' })
   await flush()
   const after = reports()
   assert.equal(after.at(-1), 'state=done:app=dsh-tui:title=c2Vzcw==')
   console.log('  ok - working falling edge reports done')
 
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true })
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
   await flush()
-  set({ working: false, blocked: null, lastOutcome: 'error', title: 'sess', enabled: true })
+  set({ working: false, blocked: null, lastOutcome: 'error', title: 'sess', enabled: true, sessionId: 's1' })
   await flush()
   assert.equal(reports().at(-1), 'state=error:app=dsh-tui:title=c2Vzcw==')
   console.log('  ok - error outcome reports error')
 
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true })
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
   await flush()
-  set({ working: false, blocked: null, lastOutcome: 'interrupted', title: 'sess', enabled: true })
+  set({ working: false, blocked: null, lastOutcome: 'interrupted', title: 'sess', enabled: true, sessionId: 's1' })
   await flush()
   assert.equal(reports().at(-1), 'state=idle:app=dsh-tui:title=c2Vzcw==')
   console.log('  ok - an interrupted turn reports idle, not done')
@@ -383,13 +396,13 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
 // dedup
 {
   const { instance, set, reports } = mountHook({
-    working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true,
+    working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1',
   })
   await flush()
   const before = reports().length
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true })
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
   await flush()
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true })
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
   await flush()
   assert.equal(reports().length, before, 'an unchanged state must not re-report')
   console.log('  ok - unchanged state is deduplicated')
@@ -399,7 +412,7 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
 // a resumed session's stale outcome must not claim a fresh done
 {
   const { instance, reports } = mountHook({
-    working: false, blocked: null, lastOutcome: 'completed', title: 'sess', enabled: true,
+    working: false, blocked: null, lastOutcome: 'completed', title: 'sess', enabled: true, sessionId: 's1',
   })
   await flush()
   assert.deepEqual(reports(), ['state=idle:app=dsh-tui:title=c2Vzcw=='])
@@ -407,10 +420,48 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
   instance.unmount()
 }
 
+// switching sessions without remounting must not replay the new session's
+// history as a fresh done
+{
+  const { instance, set, reports } = mountHook({
+    working: false, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1',
+  })
+  await flush()
+
+  // A turn ran and finished in session 1: the latch is armed, `done` is right.
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
+  await flush()
+  set({ working: false, blocked: null, lastOutcome: 'completed', title: 'sess', enabled: true, sessionId: 's1' })
+  await flush()
+  assert.equal(reports().at(-1), 'state=done:app=dsh-tui:title=c2Vzcw==')
+
+  // Switch to session 2: resetSessionProjection clears turnUsage, then the
+  // switch replays that session's own history and re-populates it from its
+  // last turn.end. The stale latch would report that as a brand-new `done`.
+  set({ working: false, blocked: null, lastOutcome: 'completed', title: 'other', enabled: true, sessionId: 's2' })
+  await flush()
+  assert.equal(
+    reports().at(-1),
+    'state=idle:app=dsh-tui:title=b3RoZXI=',
+    'a session switch must not replay the target session history as a fresh done',
+  )
+  console.log('  ok - a session switch reports idle, not the replayed history as done')
+
+  // The latch is per-session: session 2's own falling edge still reports done.
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'other', enabled: true, sessionId: 's2' })
+  await flush()
+  set({ working: false, blocked: null, lastOutcome: 'completed', title: 'other', enabled: true, sessionId: 's2' })
+  await flush()
+  assert.equal(reports().at(-1), 'state=done:app=dsh-tui:title=b3RoZXI=')
+  console.log('  ok - the new session still reports its own done on the falling edge')
+
+  instance.unmount()
+}
+
 // disabled from the start writes nothing
 {
   const { instance, stdout } = mountHook({
-    working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: false,
+    working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: false, sessionId: 's1',
   })
   await flush()
   assert.ok(!stdout.output.includes(`${ESC}]7501;`), 'a disabled hook must not write')
