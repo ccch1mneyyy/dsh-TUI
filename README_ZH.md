@@ -152,7 +152,7 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 - pi / opencode 等其他代理经 adapter 注册表逐步扩展；grok-build 支持读 `GROK_HOME` 环境变量
 
-**VS Code**：用集成终端，或用 `dsh-tui-vscode` 扩展。见 [VS Code 使用指南](docs/vscode.md)。**Herdr**：在 [Herdr](https://herdr.dev) 窗格运行 `dsh-tui`，经其本地集成 API 报告 `idle` / `working` / `blocked`。
+**VS Code**：用集成终端，或用 `dsh-tui-vscode` 扩展。见 [VS Code 使用指南](docs/vscode.md)。**Herdr**：在 [Herdr](https://herdr.dev) 窗格运行 `dsh-tui`，经其本地集成 API 报告 `idle` / `working` / `blocked`。**任意终端**：dsh-tui 经 pty 用 [OSC 7501（Program Status Protocol）](https://www.superlogical.com/rex/docs/build/program-status) 报告 `idle` / `working` / `blocked` / `done` / `error`，实现了该协议的终端与 agent 收件箱可据此显示会话在做什么；未实现的终端会忽略该序列。设 `DSH_TUI_PROGRAM_STATUS=0` 可关闭。
 
 裸 `--resume`（`-c`、`--continue`）恢复本次启动所选后端自己的上次会话。
 启动恢复只针对所选后端：该后端没有上次会话，或派生出来的目标不属于最终启动的后端

@@ -178,7 +178,7 @@ dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件�
     重装对齐；
   - `dsh-tui doctor` 环境诊断。
 
-## 在 VS Code / Herdr 中运行
+## 在 VS Code / Herdr / 任意终端中运行
 
 - **VS Code**：可在集成终端直接运行，或用已上架 Marketplace 的 companion 扩展
   `dsh-tui-vscode`（真实终端会话、会话历史、指定会话恢复、IDE 选区通道）。
@@ -186,6 +186,11 @@ dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件�
 - **Herdr**：直接在 [Herdr](https://herdr.dev) 窗格中运行 `dsh-tui`，无需额外
   配置；dsh-TUI 经 Herdr 本地集成 API 报告 `idle` / `working` / `blocked`
   （问卷与工具审批记为 `blocked`），在 Herdr 之外不做任何事。
+- **任意终端**：dsh-TUI 经 pty 用
+  [OSC 7501（Program Status Protocol）](https://www.superlogical.com/rex/docs/build/program-status)
+  报告 `idle` / `working` / `blocked` / `done` / `error`，实现了该协议的终端或
+  agent 收件箱可据此显示会话在做什么、何时需要你介入。未实现的终端会忽略该
+  序列，因此无需配置；设 `DSH_TUI_PROGRAM_STATUS=0` 可关闭报告。
 
 ## 更新到最新版本
 

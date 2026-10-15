@@ -186,7 +186,7 @@ diagnostics, a profile plugin inventory, and repair guidance.
     reinstalls/aligns;
   - `dsh-tui doctor` runs environment diagnostics.
 
-## Running in VS Code / Herdr
+## Running in VS Code / Herdr / any terminal
 
 - **VS Code**: run directly in the integrated terminal, or use the
   `dsh-tui-vscode` companion extension on the Marketplace (real terminal
@@ -196,6 +196,13 @@ diagnostics, a profile plugin inventory, and repair guidance.
   no extra setup; dsh-TUI reports `idle` / `working` / `blocked` through
   Herdr's local integration API (questionnaires and tool approvals count as
   `blocked`), and stays completely inactive outside Herdr.
+- **Any terminal**: dsh-TUI reports `idle` / `working` / `blocked` / `done` /
+  `error` over the pty using
+  [OSC 7501 (Program Status Protocol)](https://www.superlogical.com/rex/docs/build/program-status),
+  so a terminal or agentic inbox that implements it can show what the session
+  is doing and when it needs you. Terminals that do not implement it ignore the
+  sequence, so there is nothing to configure; set `DSH_TUI_PROGRAM_STATUS=0` to
+  turn the reports off.
 
 ## Update to the latest version
 

@@ -1,0 +1,426 @@
+/**
+ * OSC 7501 (Program Status Protocol) regression.
+ *
+ * Covers:
+ * - Wire format for every state, plus the required `app` on each report
+ *   (each report replaces its record, so a key must ride along every time)
+ * - Free text: base64, control characters / newlines collapsed, byte-bounded
+ *   on a code-point boundary, and the protocol's per-field limits
+ * - Whole-report refusal: unknown state, `kind`/`progress` on states that
+ *   forbid them, malformed `id`/`app`, oversized sequence
+ * - `clear` with and without an `id`
+ * - The enable gate: on by default, TTY required, `DSH_TUI_PROGRAM_STATUS`
+ *   opt-out with the usual falsy spellings
+ * - The hook end to end through a real Ink mount: precedence
+ *   (blocked > working > done/error > idle), dedup of unchanged states, no
+ *   `done` for a resumed session's stale outcome, and the disabled gate
+ *
+ * Run: node --import tsx/esm scripts/verify-osc7501.tsx
+ */
+
+import assert from 'node:assert/strict'
+import { PassThrough, Writable } from 'node:stream'
+import React from 'react'
+import { renderSync, Text } from '../src/ui.js'
+import { TerminalWriteProvider } from '../src/ink/useTerminalNotification.js'
+import { useProgramStatus, PROGRAM_STATUS_APP } from '../src/ink/hooks/use-program-status.js'
+import {
+  clearProgramStatus,
+  programStatus,
+  sanitizeProgramText,
+  supportsProgramStatus,
+} from '../src/ink/termio/osc7501.js'
+import instances from '../src/ink/instances.js'
+
+let failed = 0
+function check(name: string, fn: () => void): void {
+  try {
+    fn()
+    console.log(`  ok - ${name}`)
+  } catch (error) {
+    failed++
+    console.log(`  FAIL - ${name}`)
+    console.log(`    ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+const ESC = '\x1b'
+const PREFIX = `${ESC}]7501;`
+
+// -----------------------------------------------------------------------------
+// 1. Wire format
+// -----------------------------------------------------------------------------
+console.log('wire format')
+
+check('working carries state and app', () => {
+  assert.equal(
+    programStatus({ state: 'working', app: 'dsh-tui' }),
+    `${PREFIX}state=working:app=dsh-tui${ESC}\\`,
+  )
+})
+
+check('blocked carries kind', () => {
+  assert.equal(
+    programStatus({ state: 'blocked', kind: 'permission', app: 'dsh-tui' }),
+    `${PREFIX}state=blocked:kind=permission:app=dsh-tui${ESC}\\`,
+  )
+})
+
+check('blocked with progress keeps spec pair order', () => {
+  assert.equal(
+    programStatus({ state: 'blocked', kind: 'question', progress: 40, app: 'dsh-tui' }),
+    `${PREFIX}state=blocked:kind=question:progress=40:app=dsh-tui${ESC}\\`,
+  )
+})
+
+check('msg is base64 of the single-line text', () => {
+  assert.equal(
+    programStatus({ state: 'done', app: 'dsh-tui', msg: 'Upgraded 12 packages' }),
+    `${PREFIX}state=done:app=dsh-tui:msg=VXBncmFkZWQgMTIgcGFja2FnZXM=${ESC}\\`,
+  )
+})
+
+check('non-ASCII msg is base64 UTF-8', () => {
+  assert.equal(
+    programStatus({ state: 'done', app: 'dsh-tui', msg: '世界' }),
+    `${PREFIX}state=done:app=dsh-tui:msg=5LiW55WM${ESC}\\`,
+  )
+})
+
+check('title and msg are independently encoded', () => {
+  const out = programStatus({ state: 'working', app: 'dsh-tui', title: 'US East', msg: 'Pushing image' })
+  assert.match(out, /:title=VVMgRWFzdA==/)
+  assert.match(out, /:msg=UHVzaGluZyBpbWFnZQ==/)
+})
+
+check('sequence is ST-terminated (no BEL side effects)', () => {
+  const out = programStatus({ state: 'working', app: 'dsh-tui' })
+  assert.ok(out.endsWith(`${ESC}\\`))
+  assert.ok(!out.includes('\x07'))
+})
+
+check('output is not tmux/screen wrapped', () => {
+  // Passthrough would reach the outer terminal, which cannot tell panes apart
+  // or see the program exit — the record lifetime depends on the pty.
+  const out = programStatus({ state: 'working', app: 'dsh-tui' })
+  assert.ok(out.startsWith(`${ESC}]7501;`))
+  assert.ok(!out.includes('\x1bP'))
+})
+
+// -----------------------------------------------------------------------------
+// 2. Sanitization and limits
+// -----------------------------------------------------------------------------
+console.log('sanitization and limits')
+
+check('control characters and newlines are removed, not escaped', () => {
+  assert.equal(sanitizeProgramText('a\nb\tc'), 'a b c')
+  assert.equal(sanitizeProgramText('a\x1b]0;PWNED\x07b'), 'a ]0;PWNED b')
+  assert.equal(sanitizeProgramText('x\x00y'), 'x y')
+})
+
+check('sanitized text never round-trips an escape sequence', () => {
+  const out = programStatus({ state: 'error', app: 'dsh-tui', msg: 'boom\x1b]52;c;AAAA\x07' })
+  const encoded = /msg=([A-Za-z0-9+/=]*)/.exec(out)?.[1] ?? ''
+  const decoded = Buffer.from(encoded, 'base64').toString('utf8')
+  assert.ok(!/[\x00-\x1f\x7f-\x9f]/.test(decoded), `control char survived: ${JSON.stringify(decoded)}`)
+  assert.ok(!decoded.includes('\x1b'))
+})
+
+check('msg is truncated to the protocol cap without splitting a code point', () => {
+  // 4 bytes per emoji: 2048 decoded bytes fits 512 of them exactly; the
+  // encoded budget is the binding one here.
+  const out = programStatus({ state: 'done', app: 'dsh-tui', msg: '🌊'.repeat(2000) })
+  const encoded = /msg=([A-Za-z0-9+/=]*)/.exec(out)?.[1]
+  assert.ok(encoded !== undefined)
+  assert.ok(encoded.length <= 2732, `encoded msg ${encoded.length} over cap`)
+  const decoded = Buffer.from(encoded, 'base64').toString('utf8')
+  assert.ok(!decoded.includes('\ufffd'), 'truncation split a multi-byte character')
+  assert.ok(decoded.startsWith('🌊'))
+})
+
+check('oversized title is truncated, empty text omits the key', () => {
+  const out = programStatus({ state: 'working', app: 'dsh-tui', title: 'x'.repeat(500) })
+  const encoded = /title=([A-Za-z0-9+/=]*)/.exec(out)?.[1]
+  assert.ok(encoded !== undefined && encoded.length <= 256)
+  const blank = programStatus({ state: 'working', app: 'dsh-tui', msg: '', title: '   ' })
+  assert.ok(!blank.includes('msg='))
+  assert.ok(!blank.includes('title='))
+})
+
+// -----------------------------------------------------------------------------
+// 3. Whole-report refusal
+// -----------------------------------------------------------------------------
+console.log('whole-report refusal')
+
+check('kind is refused outside blocked', () => {
+  assert.equal(programStatus({ state: 'working', app: 'dsh-tui', kind: 'auth' }), '')
+  assert.equal(programStatus({ state: 'done', app: 'dsh-tui', kind: 'permission' }), '')
+})
+
+check('progress is refused outside working/blocked and out of range', () => {
+  assert.equal(programStatus({ state: 'done', app: 'dsh-tui', progress: 100 }), '')
+  assert.equal(programStatus({ state: 'working', app: 'dsh-tui', progress: -1 }), '')
+  assert.equal(programStatus({ state: 'working', app: 'dsh-tui', progress: 101 }), '')
+  assert.equal(programStatus({ state: 'working', app: 'dsh-tui', progress: 1.5 }), '')
+  assert.notEqual(programStatus({ state: 'working', app: 'dsh-tui', progress: 0 }), '')
+  assert.notEqual(programStatus({ state: 'working', app: 'dsh-tui', progress: 100 }), '')
+})
+
+check('malformed app and id are refused', () => {
+  assert.equal(programStatus({ state: 'working', app: 'a b' }), '')
+  assert.equal(programStatus({ state: 'working', app: 'a/b' }), '')
+  assert.equal(programStatus({ state: 'working', app: 'x'.repeat(33) }), '')
+  assert.equal(programStatus({ state: 'working', id: 'a b' }), '')
+  assert.equal(programStatus({ state: 'working', id: '/lead' }), '')
+  assert.equal(programStatus({ state: 'working', id: 'x'.repeat(129) }), '')
+})
+
+check('valid hierarchical id is accepted', () => {
+  assert.equal(
+    programStatus({ state: 'working', id: 'build/test', app: 'dsh-tui' }),
+    `${PREFIX}state=working:id=build/test:app=dsh-tui${ESC}\\`,
+  )
+})
+
+check('even a maximal report stays inside the sequence cap', () => {
+  // Every field is bounded, so no legal report can exceed 4096 bytes: the
+  // largest possible body is the capped msg + title + app + state.
+  const maximal = programStatus({
+    state: 'working',
+    id: 'a'.repeat(32),
+    app: 'dsh-tui',
+    title: 'y'.repeat(500),
+    msg: 'z'.repeat(5000),
+  })
+  assert.ok(maximal !== '', 'a maximal legal report must encode')
+  assert.ok(Buffer.byteLength(maximal, 'utf8') <= 4096, 'legal report exceeded the cap')
+})
+
+// -----------------------------------------------------------------------------
+// 4. clear
+// -----------------------------------------------------------------------------
+console.log('clear')
+
+check('clear without id removes every record', () => {
+  assert.equal(clearProgramStatus(), `${PREFIX}state=clear${ESC}\\`)
+})
+
+check('clear with id removes that record and its children', () => {
+  assert.equal(clearProgramStatus('us-east'), `${PREFIX}state=clear:id=us-east${ESC}\\`)
+  assert.equal(clearProgramStatus('a b'), '')
+})
+
+check('state=clear via programStatus matches clearProgramStatus', () => {
+  assert.equal(programStatus({ state: 'clear' }), clearProgramStatus())
+})
+
+// -----------------------------------------------------------------------------
+// 5. Enable gate
+// -----------------------------------------------------------------------------
+console.log('enable gate')
+
+check('on by default for an interactive stdout', () => {
+  assert.equal(supportsProgramStatus(true, {}), true)
+})
+
+check('never reports without a TTY', () => {
+  assert.equal(supportsProgramStatus(false, {}), false)
+  assert.equal(supportsProgramStatus(false, { DSH_TUI_PROGRAM_STATUS: '1' }), false)
+})
+
+check('opt-out accepts the common falsy spellings', () => {
+  for (const value of ['0', 'false', 'FALSE', 'no', 'off']) {
+    assert.equal(supportsProgramStatus(true, { DSH_TUI_PROGRAM_STATUS: value }), false, value)
+  }
+  for (const value of ['1', 'true', 'yes', 'on']) {
+    assert.equal(supportsProgramStatus(true, { DSH_TUI_PROGRAM_STATUS: value }), true, value)
+  }
+  assert.equal(supportsProgramStatus(true, { DSH_TUI_PROGRAM_STATUS: '' }), true)
+})
+
+// -----------------------------------------------------------------------------
+// 6. Hook end to end
+// -----------------------------------------------------------------------------
+console.log('hook end to end')
+
+type StatusInput = {
+  working: boolean
+  blocked: { kind: 'permission' | 'question' | 'auth'; message: string } | null
+  lastOutcome: 'completed' | 'interrupted' | 'error' | undefined
+  title: string
+  enabled: boolean
+}
+
+class FakeStdout extends Writable {
+  columns = 80
+  rows = 24
+  isTTY = true
+  output = ''
+
+  _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
+    this.output += String(chunk)
+    callback()
+  }
+}
+
+class FakeStderr extends Writable {
+  isTTY = true
+
+  _write(_chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
+    callback()
+  }
+}
+
+class FakeStdin extends PassThrough {
+  isTTY = true
+  isRaw = false
+
+  setRawMode(enabled: boolean): this {
+    this.isRaw = enabled
+    return this
+  }
+}
+
+/**
+ * Mount the hook through a real Ink tree and drive it by re-rendering with a
+ * new input (the same path a channel update takes in the app).
+ */
+function mountHook(initial: StatusInput) {
+  const stdout = new FakeStdout()
+  const stderr = new FakeStderr()
+  const stdin = new FakeStdin()
+
+  function Harness({ input }: { input: StatusInput }): React.ReactElement {
+    useProgramStatus(input)
+    return React.createElement(Text, null, 'probe')
+  }
+
+  const tree = (input: StatusInput): React.ReactElement =>
+    React.createElement(
+      TerminalWriteProvider,
+      { value: (data: string) => { stdout.write(data) } },
+      React.createElement(Harness, { input }),
+    )
+
+  const instance = renderSync(tree(initial), {
+    stdin,
+    stdout,
+    stderr,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  })
+
+  /** The OSC 7501 payloads this mount wrote, in order. */
+  const reports = (): string[] =>
+    [...stdout.output.matchAll(/\x1b\]7501;([^\x1b\x07]*)\x1b\\/g)]
+      .map(match => match[1]!)
+      .filter(part => !part.startsWith('?'))
+
+  return {
+    instance,
+    set: (next: StatusInput) => { instance.rerender(tree(next)) },
+    reports,
+    stdout,
+  }
+}
+
+const flush = async (): Promise<void> => { await new Promise<void>(resolve => setImmediate(resolve)) }
+
+// idle at mount
+{
+  const { instance, reports } = mountHook({
+    working: false, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true,
+  })
+  await flush()
+  assert.deepEqual(reports(), ['state=idle:app=dsh-tui:title=c2Vzcw=='])
+  console.log('  ok - idle is reported at mount')
+  instance.unmount()
+}
+
+// precedence and transitions
+{
+  const { instance, set, reports } = mountHook({
+    working: false, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true,
+  })
+  await flush()
+
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true })
+  await flush()
+  set({ working: true, blocked: { kind: 'permission', message: 'Approval needed: Bash' }, lastOutcome: undefined, title: 'sess', enabled: true })
+  await flush()
+  // A parked prompt outranks the running turn it interrupted.
+  assert.deepEqual(reports().slice(1), [
+    'state=working:app=dsh-tui:title=c2Vzcw==',
+    'state=blocked:kind=permission:app=dsh-tui:title=c2Vzcw==:msg=QXBwcm92YWwgbmVlZGVkOiBCYXNo',
+  ])
+  console.log('  ok - blocked outranks working')
+
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true })
+  await flush()
+  set({ working: false, blocked: null, lastOutcome: 'completed', title: 'sess', enabled: true })
+  await flush()
+  const after = reports()
+  assert.equal(after.at(-1), 'state=done:app=dsh-tui:title=c2Vzcw==')
+  console.log('  ok - working falling edge reports done')
+
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true })
+  await flush()
+  set({ working: false, blocked: null, lastOutcome: 'error', title: 'sess', enabled: true })
+  await flush()
+  assert.equal(reports().at(-1), 'state=error:app=dsh-tui:title=c2Vzcw==')
+  console.log('  ok - error outcome reports error')
+
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true })
+  await flush()
+  set({ working: false, blocked: null, lastOutcome: 'interrupted', title: 'sess', enabled: true })
+  await flush()
+  assert.equal(reports().at(-1), 'state=idle:app=dsh-tui:title=c2Vzcw==')
+  console.log('  ok - an interrupted turn reports idle, not done')
+
+  instance.unmount()
+}
+
+// dedup
+{
+  const { instance, set, reports } = mountHook({
+    working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true,
+  })
+  await flush()
+  const before = reports().length
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true })
+  await flush()
+  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true })
+  await flush()
+  assert.equal(reports().length, before, 'an unchanged state must not re-report')
+  console.log('  ok - unchanged state is deduplicated')
+  instance.unmount()
+}
+
+// a resumed session's stale outcome must not claim a fresh done
+{
+  const { instance, reports } = mountHook({
+    working: false, blocked: null, lastOutcome: 'completed', title: 'sess', enabled: true,
+  })
+  await flush()
+  assert.deepEqual(reports(), ['state=idle:app=dsh-tui:title=c2Vzcw=='])
+  console.log('  ok - stale outcome at mount reports idle, not done')
+  instance.unmount()
+}
+
+// disabled from the start writes nothing
+{
+  const { instance, stdout } = mountHook({
+    working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: false,
+  })
+  await flush()
+  assert.ok(!stdout.output.includes(`${ESC}]7501;`), 'a disabled hook must not write')
+  console.log('  ok - disabled reports nothing')
+  instance.unmount()
+}
+
+// No report may outlive unmount: the protocol has the terminal drop
+// working/blocked itself, and done/error must survive for the user.
+for (const stdout of instances.keys()) instances.delete(stdout)
+
+console.log(failed === 0 ? '\nall OSC 7501 checks passed' : `\n${failed} check(s) failed`)
+process.exit(failed === 0 ? 0 : 1)

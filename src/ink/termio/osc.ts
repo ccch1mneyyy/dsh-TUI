@@ -281,6 +281,7 @@ export const OSC = {
   RESET_CURSOR_COLOR: 112,
   SEMANTIC_PROMPT: 133,
   GHOSTTY: 777, // Ghostty notification protocol
+  PROGRAM_STATUS: 7501, // Program Status Protocol (see osc7501.ts)
   TAB_STATUS: 21337, // Tab status extension
 } as const
 
