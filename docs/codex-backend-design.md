@@ -116,6 +116,7 @@ fixture 名指 `scripts/fixtures/codex/wire/` 下的录制（C0 已脱敏入库�
 | F29 | 中转请求可能静默卡住（无 error、无重试，90 s 无任何通知）；同一连接上的其他 thread 不受影响 | [live] s1 T1 |
 | F30 | pi-ai 的 `openai-codex` 登录从访问令牌 JWT 的 `https://api.openai.com/auth.chatgpt_account_id` 解出账户 id（`chatgpt_plan_type` 同处） | [src] pi-ai dist/auth/oauth/openai-codex.js |
 | F31 | 0.160.1 的 inline `review/start` 返回的 turn id 用于评审 item 与 `turn/completed`；`turn/started` 另报 lifecycle id，`turn/interrupt` 必须用后者。`enteredReviewMode` 可先于 `turn/started` 到达，评审用户 item 的 `clientId` 为 `null` | [offline probe] 临时 CODEX_HOME + loopback 故障 provider，无真实凭据；`verify-codex-controls` / `verify-codex-input` 固化时序 |
+| F32 | 非阻塞异步问卷：模型工具 `request_user_input_async` 产出 `agentMessage{delivery:"async", phase:"final_answer", questions:[{title,options}]}`（item id = `call_id`），回合继续运行；答案作为用户消息文本回信封 `<send_user_message_question_reply>…</send_user_message_question_reply>`（内含 `[{questionItemId,question,answer}]`，也接受单个对象），`questionItemId` = `["request_user_input_async",<item id>,<index>]`；问题标题按 512 **字节**的 UTF-8 边界截断、`\n`/`\r` 换空格，id 超 512 字节省略（本后端退回无信封的引述文本）；可选 IDE 前缀 `# Context from my IDE setup:…## My request for Codex:` 按同一解析 | [src] core/src/tools/handlers/request_user_input_async.rs、tui/src/async_question_reply.rs、context-fragments/src/answered_question.rs；协议类型 0.160.1（`AsyncUserInputQuestion` / `AgentMessageDelivery`） |
 
 ---
 
@@ -194,6 +195,7 @@ src/backends/codex/
     state.ts               会话可变状态（turn、open items、pending 队列、设置快照）
     input.ts               四种 placement、客户端 followup 队列、取消回执
     approvals.ts           审批/问卷/elicitation/计划评审 → permission.* / question.*
+    async-questions.ts     非阻塞异步问卷（delivery:async 的 agentMessage）→ question.*
     controls.ts            models/effort/modes/compact/context/account/mcp/commands/rename/color/diagnostics
     history.ts             history()、transcript 能力（分页预取）
     subagents.ts           子 thread 路由与 subagents 能力
@@ -826,6 +828,27 @@ catalog 的 `snapshotKey` 走 codex 自己的家目录（`codexHomeDir()` + `COD
 存量违例清单从 33 对清零。回归脚本的期望文案改读各自后端的副本（`codexText` / `claudeText`），
 宿主字典不再是后端文案的 oracle。
 
+### 5.21 异步问卷（`session/async-questions.ts`）
+
+非阻塞问答：`request_user_input_async` 工具产出的 `agentMessage{delivery:"async", questions}`
+（F32）在**回合继续运行**时打开现有问卷面板。面板事件（`question.request` /
+`question.settled`）与阻塞问卷（§5.8）共用同一套 `question.*`；pending 表归会话实例所有，
+不新增订阅或定时器，撤回全部走会话既有的生命周期钩子。
+
+- 每题一个面板，`questionId` 用 Codex 稳定问题标识（F32）；有建议答案时首项
+  `defaultSelected`，自由输入始终可用（上游工具规约：建议答案按展示顺序、首个默认预选，
+  自由输入由 UI 自带）。
+- 应答经 `input.submit(..., 'steer')` 送回（§5.7）：`turn/steer` 被拒时输入队列自行降级为
+  下一回合的排队 follow-up；`turn/start` 失败时报 notice、结算旧 requestId 并以新 id 重开
+  该题，面板可重试。
+- 撤回时机与阻塞问卷不同：回合结束、连接断开、清空上下文/换 thread、`cancel` 的
+  `switch`/`dispose` 分支、`forceClose` 与 dispose 撤回未答问题；用户取消只结算该题、
+  **不**打断回合。重投递的 `item/completed` 由 `session.ts` 的 item 去重（`seenTurns`）
+  拦截，不重复开面板。
+- 历史回放不重开面板：面板只由 live 通知产生；`items.ts` 把持久化回显投影成「问题 + 答案」
+  的引述行（原始 model-facing blocks 原样保留，§7.1）。官方客户端的倒计时自动作答未复刻
+  （issue 非目标）。
+
 ---
 
 ## 6. 中立层改动（N1–N7）
@@ -1126,6 +1149,7 @@ catalog 的 `snapshotKey` 走 codex 自己的家目录（`codexHomeDir()` + `COD
 | `verify-codex-live-replay` | §10.4 |
 | `verify-codex-input` | 四种 placement、steer 降级、客户端队列 FIFO、cancel 回执（user/interrupt/switch）、`clientId` 认领、turn/start 失败回滚 |
 | `verify-codex-approvals` | 三类审批全部选项与决策映射、reject+理由（cancel+followup）、`serverRequest/resolved` 外部结算、问卷（含 isOther/isSecret/autoResolution）、elicitation、计划评审三个分支、dispose 撤回 |
+| `verify-codex-async-questions` | 非阻塞异步问卷：默认首选项与自由输入、steer 与排队降级、发送失败重试、外部作答、重投递去重、持久化回显与历史重建、信封解析与 512 字节边界、回合结束/断连/dispose 撤回 |
 | `verify-codex-auth` | 路由判定矩阵（每个非第一方条件单独触发 fail closed）、`chatgptAuthTokens` 登录参数（JWT 声明解析）、刷新 CAS 与 8 s 预算、刷新失败提示；**哨兵令牌扫描**：所有调试输出、事件、notice 中不得出现令牌片段 |
 | `verify-codex-controls` | models/effort/modes（循环排除 full-access）/compact/context/account/mcp/commands/rename/color/diagnostics |
 | `verify-codex-lifecycle` | catalog（list/info/preview/rename/archive）、fork、rewind（fork+采用、首回合、files 拒绝）、加载更早（预取、空缓存、失败重试）、`codex:<id>` 挂载账本、`--resume` |
