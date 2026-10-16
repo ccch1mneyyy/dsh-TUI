@@ -274,7 +274,11 @@ const plain = (text: string): BodyLine => ({ text, tone: 'plain' })
  *  terminal tools get mist cyan. Exported for the subagent card, which
  *  mirrors the transcript tool-card name styling. */
 const TOOL_NAME_MUTATE = new Set(['edit', 'write', 'multiedit', 'notebookedit'])
-const TOOL_NAME_EXEC = new Set(['bash', 'bashpersistent', 'sh', 'shell', 'terminal'])
+/** `pwsh` is the Windows exec id: DSH mounts tool-bash or tool-pwsh by
+ *  platform, and both persistent tools register under their platform's
+ *  shell name. ToolUseLoader already counts it in the exec family, so
+ *  leaving it out here split the name from its own status dot. */
+const TOOL_NAME_EXEC = new Set(['bash', 'bashpersistent', 'sh', 'shell', 'terminal', 'pwsh'])
 export function toolNameColor(raw: string, category?: 'mutate' | 'exec' | 'other'): keyof Theme {
   // A backend-declared colour family wins over the id heuristics below.
   if (category === 'mutate') return 'toolNameMutate'

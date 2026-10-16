@@ -705,6 +705,10 @@ const GROUPS = {
 // 工具卡完整度：非零退出码/信号行不被行预算折掉、折叠提示带被折字符数、verbose
 // 行窗口有界并注明、展开卡的截断说明、错误长文与输出共用行预算。
     ["verify-tool-card-completeness", ['node', '--import', 'tsx/esm', 'scripts/verify-tool-card-completeness.tsx']],
+// 工具名分类色（issue #1555）：工具名与同一行的状态圆点必须同家族——两张
+// 分类表（toolNameColor 的 id 启发式 / ToolUseLoader 的 CATEGORY_BY_TOOL）
+// 曾各自独立补齐 pwsh，Windows 上卡名与圆点颜色因此分裂。真机 SGR 断言。
+    ["verify-toolcard-name-color", ['node', '--import', 'tsx/esm', 'scripts/verify-toolcard-name-color.tsx']],
 // 解码吞吐（真 channel + 会话事件）：多步回合剔除工具间隙、字符估算按脚本
 // 类加权（CJK ~1.4 字符/token）、真实 usage 结算覆盖估算、回放不复活 tps。
     ["verify-tps", ['node', 'scripts/verify-tps.mjs']],
