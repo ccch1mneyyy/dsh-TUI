@@ -133,6 +133,7 @@ const GATES = [
   'verify:math-inline-image',
   'verify:semantic-copy',
   'verify:btw',
+  'verify:preset-patch',
   'verify:session-mounts',
   'verify:handoff-stdin',
 ]

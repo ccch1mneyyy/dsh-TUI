@@ -8,7 +8,7 @@ import { appendSessionTitle, deleteSessionLog, userTitleData } from '../compat/i
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from '../recap.js'
 import { listSummaries, locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
-import { openStepToolCallIds, runSideQuestion, splitUnresolvedToolCalls, wrapSideQuestion } from '../sideQuestion.js'
+import { openStepToolCallIds, runAsSideBranch, runSideQuestion, splitUnresolvedToolCalls, wrapSideQuestion, type InitiatorScope } from '../sideQuestion.js'
 import { beginListingSnapshot, readListingSnapshot } from '../sessions/snapshot.js'
 import type { ChannelOwner } from './owner.js'
 import { createSessionListing } from './session-listing.js'
@@ -203,7 +203,8 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     // /btw can land mid-step; see splitUnresolvedToolCalls.
     const running = openStepToolCallIds(snapshotLiveSessionEvents(capture.agent.session))
     const history = splitUnresolvedToolCalls(capture.agent.session.deriveMessages(), running)
-    const outcome = await runSideQuestion({
+    const agents = ctx.get('agents') as Partial<InitiatorScope> | undefined
+    const outcome = await runAsSideBranch(agents, capture.agent, () => runSideQuestion({
       stream: llm.stream.bind(llm),
       options: llmRequest(capture, [
         ...history.messages,
@@ -212,7 +213,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
       // Do not let an old session append streamed UI facts after a switch.
       onText: delta => { if (current(capture) && !options?.signal?.aborted) options?.onText?.(delta) },
       signal,
-    })
+    }))
     return current(capture) ? outcome : { answer: null }
   }
 

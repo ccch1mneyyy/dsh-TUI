@@ -65,6 +65,10 @@
       "types": "./lib/types/command-trees.d.ts",
       "import": "./lib/types/command-trees.js"
     },
+    "./preset-patch": {
+      "types": "./lib/types/preset-patch.d.ts",
+      "import": "./lib/types/preset-patch.js"
+    },
     "./settings-sections": {
       "types": "./lib/types/settings-sections.d.ts",
       "import": "./lib/types/settings-sections.js"
@@ -215,6 +219,7 @@
     "verify:math-inline-image": "node --import tsx/esm scripts/verify-math-inline-image.tsx",
     "verify:semantic-copy": "node --import tsx/esm scripts/verify-semantic-copy.tsx",
     "verify:btw": "node --import tsx/esm scripts/verify-btw.tsx",
+    "verify:preset-patch": "node --import tsx/esm scripts/verify-preset-patch.ts",
     "verify:adapter-skeleton": "node --import tsx/esm scripts/verify-adapter-skeleton.ts",
     "verify:adapter-ports": "node --import tsx/esm scripts/verify-adapter-ports.ts",
     "verify:adapter-effect-class": "node --import tsx/esm scripts/verify-adapter-effect-class.ts",

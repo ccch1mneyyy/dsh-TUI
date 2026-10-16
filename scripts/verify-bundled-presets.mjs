@@ -102,6 +102,7 @@ try {
   for (const name of ['bundled-presets.js', 'packaged-presets.js']) {
     copyFileSync(new URL(`../lib/types/dsh-adapter/${name}`, import.meta.url), join(modules, name))
   }
+  copyFileSync(new URL('../lib/types/preset-patch.js', import.meta.url), join(relocatedRoot, 'src', 'preset-patch.js'))
   // Different metadata makes a hard-coded copy fail, including name and order.
   const relocatedMetadata = { name: 'Relocated 梁神', description: 'Metadata from preset.yml', order: 17 }
   writeFileSync(join(assets, 'preset.yml'), JSON.stringify(relocatedMetadata))

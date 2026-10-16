@@ -5,6 +5,14 @@
 口径见 [`governance/rules.md`](governance/rules.md)），因此没有单独的审批或晋级流程，
 登记的是 profile 的变化而不是 dsh-TUI 产品的全部变更。
 
+## 2026-10-15（接缝七新增实验面：preset 内的行）
+
+### Added（实验性，不在冻结范围）
+
+- [准入与开发指南](docs/plugin-admission-and-development.md)接缝七新增「preset 内的行」：
+  bundle 用 `@deepseek-harness-tui/dsh-tui/preset-patch` 行替换 dsh-TUI 注册的 agent preset
+  里某一行的 `config`（按 id，含嵌套 group）。
+
 ## 2026-10-12（**发布第一版 apiVersion**：`tui.dsh/v1alpha1` 公开面冻结）
 
 > 这一段就是 roadmap §6 第 5 条的**冻结动作**（Stage C / C-2）。逐条口径见

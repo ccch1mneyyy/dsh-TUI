@@ -38,6 +38,9 @@
 另：
 
 - `@deepseek-harness-tui/dsh-tui/api`（纯类型入口）为实验性公开面。
+- **preset 内的行（实验性，接缝七）**：bundle 用 `@deepseek-harness-tui/dsh-tui/preset-patch`
+  行改 dsh-TUI 注册的 preset 里某一行的 `config`（例如关掉 `standard` 的
+  `compaction-basic` 自动压缩），写法见[准入与开发指南](../tui-profile/docs/plugin-admission-and-development.md)接缝七。
 - **侧栏 Panel（实验性，§18）**：`ctx.tuiPanels.register({ apiVersion: 1,
   id, title, icon?, component | compact })` 向右侧栏注册面板（宿主自动加
   `<pluginId>:` 前缀；每插件 ≤4 个、全局 ≤32 个；`open()` 限速每 5s 一次；

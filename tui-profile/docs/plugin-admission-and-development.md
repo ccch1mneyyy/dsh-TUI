@@ -613,6 +613,27 @@ ctx.inject(['tuiSettingsSections'], (settingsCtx) => {
   `@deepseek-harness-tui/dsh-tui/working-activity` 子路径再导出后挂载。你的插件
   如果也要被别的 bundle 组合，提供同样的显式子路径导出。
 
+### preset 内的行（实验性）
+
+Agent preset 里的行（如 `standard` 的 `compaction-basic`）运行在 preset 自己的
+realm 里，按 id 的 patch 够不到。dsh-TUI 注册的 preset（`standard` / `ptc` /
+`minimal` / `cordis` / `liangshen`）改用 preset-patch 行：
+
+```yaml
+- insert:
+    - id: my-plugin-standard
+      name: '@deepseek-harness-tui/dsh-tui/preset-patch'
+      config:
+        preset: standard
+        config:
+          compaction-basic: { auto: false }
+```
+
+- `config.config` 把 preset 里的行 id 映射到替换后的 `config`，语义同上面的覆盖行
+  （**整块替换**）；嵌套在 group 里的行也能命中，找不到的 id 会告警。
+- 与插件加载顺序无关；同一 preset 的多行合并，同一行 id 后者覆盖前者。
+- profile 自己声明的 preset 归 profile 所有，不受影响。
+
 ## 接缝八：插件全屏场景（tuiScenes）
 
 插件可以把一个**整屏 React 场景**注册给 TUI，再从自己的 slash 命令里打开它——

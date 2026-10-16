@@ -6,6 +6,10 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parse } from 'yaml'
 import { packagedPresetRoot } from './packaged-presets.js'
+import { PRESET_PATCH_MODULE } from '../preset-patch.js'
+
+/** Upstream presets copied into the roster by id; liangshen ships in this package. */
+const UPSTREAM_PRESET_IDS: readonly string[] = ['standard', 'ptc', 'minimal', 'cordis']
 
 interface DeclarativePresets {
   register(definition: PresetDefinition): Promise<() => Promise<void>>
@@ -38,6 +42,49 @@ function readPresetPatch(path: string): PresetDefinition {
   throw new Error(`dsh-tui: invalid upstream preset declaration: ${path}`)
 }
 
+type RowConfigs = ReadonlyMap<string, unknown>
+
+/** Preset id → row id → replacement config, from preset-patch rows (src/preset-patch.ts). */
+function presetPatches(ctx: Context, loader: PresetLoader | undefined): Map<string, Map<string, unknown>> {
+  const patches = new Map<string, Map<string, unknown>>()
+  for (const entry of loader?.entries() ?? []) {
+    if (entry.disabled || entry.options.name !== PRESET_PATCH_MODULE) continue
+    const config = entry.options.config as { preset?: unknown; config?: unknown } | undefined
+    const rows = config?.config
+    if (typeof config?.preset !== 'string' || rows === null || typeof rows !== 'object' || Array.isArray(rows)) {
+      ctx.logger.warn('dsh-tui: ignoring a preset-patch row without `preset` and a `config` map')
+      continue
+    }
+    const target = patches.get(config.preset) ?? new Map<string, unknown>()
+    for (const [id, value] of Object.entries(rows)) target.set(id, value)
+    patches.set(config.preset, target)
+  }
+  return patches
+}
+
+/** Copy an entry list with the named rows' `config` replaced, nested groups included. */
+function withRowConfigs<T>(rows: readonly T[], configs: RowConfigs, matched: Set<string>): T[] {
+  return rows.map((row) => {
+    const entry = row as { id?: unknown; group?: unknown; config?: unknown }
+    if (typeof entry.id === 'string' && configs.has(entry.id)) {
+      matched.add(entry.id)
+      return { ...row, config: configs.get(entry.id) }
+    }
+    if (entry.group === true && Array.isArray(entry.config)) return { ...row, config: withRowConfigs(entry.config, configs, matched) }
+    return row
+  })
+}
+
+function patchDefinition(ctx: Context, definition: PresetDefinition, configs: RowConfigs | undefined): PresetDefinition {
+  if (configs === undefined) return definition
+  const matched = new Set<string>()
+  const plugins = withRowConfigs(definition.plugins, configs, matched)
+  for (const id of configs.keys()) {
+    if (!matched.has(id)) ctx.logger.warn(`dsh-tui: preset-patch row "${id}" not found in preset "${definition.id}"`)
+  }
+  return { ...definition, plugins }
+}
+
 /**
  * 0.1.7 removed directory discovery. Consume the official bundle definitions
  * through its registry, without copying or reimplementing their tool sets.
@@ -62,12 +109,13 @@ export async function registerBundledPresets(ctx: Context): Promise<boolean> {
       declared.add(config.id)
     }
   }
+  const patches = presetPatches(ctx, loader)
   const require = createRequire(ctx.baseUrl ?? import.meta.url)
-  for (const id of ['standard', 'ptc', 'minimal', 'cordis']) {
+  for (const id of UPSTREAM_PRESET_IDS) {
     if (declared.has(id)) continue
     const path = require.resolve(`@deepseek-ai/dsh-web-app/presets/${id}.patch.yml`)
     const owner = ctx.extend({ baseUrl: pathToFileURL(path).href })
-    const dispose = await declarativePresets(owner)!.register(readPresetPatch(path))
+    const dispose = await declarativePresets(owner)!.register(patchDefinition(ctx, readPresetPatch(path), patches.get(id)))
     ctx.effect(() => dispose)
   }
   if (!declared.has('liangshen')) {
@@ -81,10 +129,19 @@ export async function registerBundledPresets(ctx: Context): Promise<boolean> {
       plugins: [{
         id: 'liangshen-plugins',
         name: '@deepseek-ai/cordis-plugin-include',
-        config: { path: pathToFileURL(join(root, 'agent.cordis.yml')).href },
+        config: {
+          path: pathToFileURL(join(root, 'agent.cordis.yml')).href,
+          patches: [...patches.get('liangshen') ?? []].map(([id, config]) => ({ id, config })),
+        },
       }],
     })
     ctx.effect(() => dispose)
+  }
+  // A typo in `preset` would otherwise be a silent no-op (row ids warn inside
+  // patchDefinition). Profile-declared presets are the profile's own seats.
+  for (const preset of patches.keys()) {
+    if (preset === 'liangshen' || UPSTREAM_PRESET_IDS.includes(preset) || declared.has(preset)) continue
+    ctx.logger.warn(`dsh-tui: preset-patch row names a preset dsh-tui does not register: "${preset}"`)
   }
   return true
 }

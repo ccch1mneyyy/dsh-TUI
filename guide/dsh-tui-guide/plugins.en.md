@@ -43,6 +43,10 @@ reference**, not a promise:
 Also an experimental public surface:
 
 - `@deepseek-harness-tui/dsh-tui/api` (types-only entry).
+- **Rows inside a preset (experimental, seam VII)**: a bundle changes the `config` of a row
+  inside a preset dsh-TUI registers (for example, turning off `standard`'s
+  `compaction-basic` auto-compaction) with a `@deepseek-harness-tui/dsh-tui/preset-patch` row;
+  see seam VII of the [admission and development guide](../tui-profile/docs/plugin-admission-and-development.md).
 - **Side panels (experimental, §18)**: `ctx.tuiPanels.register({ apiVersion:
   1, id, title, icon?, component | compact })` registers a right-sidebar
   panel (the host prefixes `<pluginId>:`; ≤4 panels per plugin, ≤32 globally;
