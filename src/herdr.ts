@@ -23,6 +23,16 @@ export interface HerdrIntegration {
   dispose(): Promise<void>
 }
 
+/**
+ * The resumable session of the pane. Herdr stores the id and reopens the pane
+ * with {@link HerdrSession.argv} after its server restarts, so the argv must
+ * start with a plain command name on PATH plus the options that session needs.
+ */
+export interface HerdrSession {
+  readonly id: string
+  readonly argv: readonly string[]
+}
+
 export interface HerdrIntegrationOptions {
   readonly channel: HerdrChannel
   readonly questions: BlockingStore
@@ -34,6 +44,13 @@ export interface HerdrIntegrationOptions {
   readonly retryDelaysMs?: readonly number[]
   /** Milliseconds. Tests pin this so a later report can jump ahead of another pane reporter. */
   readonly now?: () => number
+  /**
+   * The pane's resumable session, or undefined while there is none. Re-read on
+   * every report so an agent swap (/new, /resume) reports the new session.
+   * Herdr answers `resume_not_accepted` until this source holds the pane, which
+   * the state report carrying the session itself satisfies.
+   */
+  readonly session?: () => HerdrSession | undefined
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
@@ -80,6 +97,8 @@ export function attachHerdrIntegration(
     return String(sequence)
   }
   let lastConfirmedReport = ''
+  /** Session id Herdr already holds for this pane; '' until one is accepted. */
+  let reportedSessionId = ''
   let disposed = false
   let running = false
   let wakeDelay: (() => void) | undefined
@@ -88,6 +107,17 @@ export function attachHerdrIntegration(
   const computeState = (): { state: AgentState; blocked: boolean } => {
     const blocked = options.questions.getSnapshot() !== null || options.approvals.getSnapshot() !== null
     return { state: blocked ? 'blocked' : options.channel.working ? 'working' : 'idle', blocked }
+  }
+
+  /**
+   * The session Herdr has not been told about yet, or undefined when there is
+   * nothing new to report. It rides on a state report because Herdr only
+   * accepts a resume command from a source that already holds the pane.
+   */
+  const pendingSession = (): HerdrSession | undefined => {
+    const session = options.session?.()
+    if (session === undefined || session.id === '' || session.id === reportedSessionId) return undefined
+    return session
   }
 
   const waitForRetry = (delayMs: number): Promise<void> => new Promise(resolve => {
@@ -108,7 +138,8 @@ export function attachHerdrIntegration(
     try {
       while (!disposed) {
         const { state, blocked } = computeState()
-        if (state === lastConfirmedReport) break
+        const session = pendingSession()
+        if (state === lastConfirmedReport && session === undefined) break
         if (state !== failedState) {
           failedState = state
           attempts = 0
@@ -121,10 +152,12 @@ export function attachHerdrIntegration(
           '--state', state,
           ...(blocked ? ['--message', 'Waiting for user input'] : []),
           '--seq', nextSequence(),
+          ...(session === undefined ? [] : ['--agent-session-id', session.id, '--', ...session.argv]),
         ]), reportTimeoutMs)
         if (disposed) break
         if (result?.code === 0) {
           lastConfirmedReport = state
+          if (session !== undefined) reportedSessionId = session.id
           failedState = ''
           attempts = 0
           continue
@@ -143,7 +176,7 @@ export function attachHerdrIntegration(
       wakeDelay?.()
       return
     }
-    if (computeState().state === lastConfirmedReport) return
+    if (computeState().state === lastConfirmedReport && pendingSession() === undefined) return
     running = true
     settledPromise = processQueue()
   }

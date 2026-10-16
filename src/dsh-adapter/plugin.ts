@@ -1947,6 +1947,16 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     channel,
     questions: questionStore,
     approvals: panelApprovals,
+    // Herdr reopens this pane after its server restarts, and only a pane whose
+    // source reported a resume command comes back. Same gate as the restart and
+    // update handoffs, so a session the backend never persisted is not reported
+    // — Herdr would reopen the pane onto nothing. A non-DSH backend resumes
+    // through its own shell command rather than this argv.
+    session: () => {
+      if (backendStart !== undefined) return undefined
+      const sessionId = handoffSessionId()
+      return sessionId === '' ? undefined : { id: sessionId, argv: ['dsh-tui', '--resume', sessionId] }
+    },
   })
   if (herdr !== undefined) {
     ctx.effect(() => () => herdr.dispose())
@@ -2020,9 +2030,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // not share a fate (issue #12). Teardown only unmounts the UI; user exit
   // runs the full leave sequence below (resume marker, terminal restore,
   // update handoff or resume hint).
-  /** The session id for a restart or update handoff, or empty when the backend
-   * has not persisted it and the replacement must start fresh. */
-  const handoffSessionId = (): string => {
+  /**
+   * The session id for a restart, update, or Herdr handoff, or empty when the
+   * backend has not persisted it and the replacement must start fresh.
+   * A declaration rather than an arrow const: the Herdr integration attached
+   * above reads it on its very first report, before this line would run.
+   */
+  function handoffSessionId(): string {
     if (backendStart !== undefined) return backendStart.persisted(channel.agentId, channel.rows) ? channel.agentId : ''
     return isUnstoredFreshSession(liveDshAgent()?.session) ? '' : channel.agentId
   }

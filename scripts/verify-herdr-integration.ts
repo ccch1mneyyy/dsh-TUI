@@ -184,6 +184,63 @@ class TestBlockingStore extends ObservableState {
 }
 
 // -----------------------------------------------------------------------------
+// 1b. Resume command reporting (Herdr reopens the pane after a server restart)
+// -----------------------------------------------------------------------------
+{
+  const channel = new TestChannel()
+  const questions = new TestBlockingStore()
+  const approvals = new TestBlockingStore()
+  const calls: Array<{ file: string; args: readonly string[] }> = []
+  let session: { id: string; argv: readonly string[] } | undefined
+  const sessionTail = (id: string): string[] => ['--agent-session-id', id, '--', 'dsh-tui', '--resume', id]
+
+  const integration = attachHerdrIntegration({
+    channel,
+    questions,
+    approvals,
+    env: { HERDR_ENV: '1', HERDR_BIN_PATH: 'herdr', HERDR_PANE_ID: 'w1:p2' },
+    now: () => 1_700_000_000_000,
+    session: () => session,
+    run: async (file, args) => {
+      calls.push({ file, args })
+      return { code: 0, stdout: '', stderr: '' }
+    },
+  })
+
+  assert.ok(integration, 'Herdr environment should enable the integration')
+  await integration.settled()
+  assert.equal(calls[0]?.args.includes('--agent-session-id'), false, 'without a resumable session the report stays state-only')
+
+  session = { id: 'session-9', argv: ['dsh-tui', '--resume', 'session-9'] }
+  channel.working = true
+  channel.emit()
+  await integration.settled()
+  assert.equal(calls[1]?.args.at(8), 'working')
+  assert.deepEqual(calls[1]?.args.slice(-6), sessionTail('session-9'), 'the session rides on the next state report')
+
+  // An agent swap changes only the session: it must be reported without a duplicate state change.
+  session = { id: 'session-10', argv: ['dsh-tui', '--resume', 'session-10'] }
+  channel.emit()
+  await integration.settled()
+  assert.equal(calls.length, 3, 'a new session must be reported even when the state did not change')
+  assert.equal(calls[2]?.args.at(8), 'working')
+  assert.deepEqual(calls[2]?.args.slice(-6), sessionTail('session-10'))
+
+  // The same session is never reported twice.
+  channel.emit()
+  await integration.settled()
+  assert.equal(calls.length, 3, 'an unchanged session must not spawn a duplicate report')
+
+  // A session that goes away must not clear what Herdr already holds (release does that).
+  session = undefined
+  channel.emit()
+  await integration.settled()
+  assert.equal(calls.length, 3, 'a session that disappears must not report an empty one')
+
+  await integration.dispose()
+}
+
+// -----------------------------------------------------------------------------
 // 2. [P1] Rejection isolation: throwing / rejecting run does not stall the queue
 // -----------------------------------------------------------------------------
 {
@@ -444,8 +501,13 @@ function fail(msg, code = 2) {
 function parseFlags(raw) {
   const flags = {}
   const positionals = []
+  let resumeArgv = []
   for (let i = 0; i < raw.length; i++) {
     const a = raw[i]
+    if (a === '--') {
+      resumeArgv = raw.slice(i + 1)
+      break
+    }
     if (a.startsWith('--')) {
       const key = a.slice(2)
       if (i + 1 < raw.length && !raw[i + 1].startsWith('--')) {
@@ -457,10 +519,10 @@ function parseFlags(raw) {
       positionals.push(a)
     }
   }
-  return { flags, positionals }
+  return { flags, positionals, resumeArgv }
 }
 
-const { flags, positionals } = parseFlags(args)
+const { flags, positionals, resumeArgv } = parseFlags(args)
 const [command, subcommand, paneId] = positionals
 
 if (command === 'pane' && subcommand === 'report-agent') {
@@ -469,9 +531,17 @@ if (command === 'pane' && subcommand === 'report-agent') {
   if (typeof flags.agent !== 'string' || !flags.agent) fail('missing or invalid --agent')
   if (!['idle', 'working', 'blocked'].includes(flags.state)) fail('invalid --state: ' + flags.state)
   if (typeof flags.seq !== 'string' || !/^\\d+$/.test(flags.seq)) fail('missing or invalid --seq')
-  const allowed = new Set(['source', 'agent', 'state', 'message', 'seq'])
+  const allowed = new Set(['source', 'agent', 'state', 'message', 'seq', 'agent-session-id'])
   for (const k of Object.keys(flags)) {
     if (!allowed.has(k)) fail('unknown option --' + k)
+  }
+  // Herdr's own resume_argv rules: a plain command name on PATH, no apostrophes,
+  // bounded length, and a session id to attach it to.
+  if (resumeArgv.length > 0) {
+    if (typeof flags['agent-session-id'] !== 'string') fail('resume_argv requires --agent-session-id')
+    if (!/^[A-Za-z0-9._-]+$/.test(resumeArgv[0])) fail('resume_argv must start with a plain command name, not a path')
+    if (resumeArgv.some(t => t.includes("'"))) fail('resume_argv must not contain apostrophes')
+    if (resumeArgv.length > 64) fail('resume_argv has too many arguments')
   }
   const statePath = join(stateDir, 'herdr-pane-' + paneId.replace(/[^a-zA-Z0-9_-]/g, '_') + '.json')
   writeFileSync(statePath, JSON.stringify({
@@ -480,6 +550,8 @@ if (command === 'pane' && subcommand === 'report-agent') {
     agent_status: flags.state,
     source: flags.source,
     message: flags.message ?? null,
+    agent_session_id: flags['agent-session-id'] ?? null,
+    resume_argv: resumeArgv,
     seq: Number(flags.seq),
   }))
   process.exit(0)
@@ -542,6 +614,12 @@ if (command === 'pane' && subcommand === 'report-agent') {
     ['pane', 'report-agent', 'w1:p2', '--source', 'custom:dsh-tui', '--agent', 'dsh-tui', '--state', 'idle', '--seq', 'not-a-number'],
     // Unknown option
     ['pane', 'report-agent', 'w1:p2', '--source', 'custom:dsh-tui', '--agent', 'dsh-tui', '--state', 'idle', '--seq', '1', '--unknown-flag'],
+    // resume_argv must be a plain command name, not a path
+    ['pane', 'report-agent', 'w1:p2', '--source', 'custom:dsh-tui', '--agent', 'dsh-tui', '--state', 'idle', '--seq', '1', '--agent-session-id', 'session-1', '--', '/usr/bin/dsh-tui', '--resume', 'session-1'],
+    // resume_argv must not carry apostrophes
+    ['pane', 'report-agent', 'w1:p2', '--source', 'custom:dsh-tui', '--agent', 'dsh-tui', '--state', 'idle', '--seq', '1', '--agent-session-id', 'session-1', '--', 'dsh-tui', '--resume', "it's"],
+    // a resume command without a session id has nothing to attach to
+    ['pane', 'report-agent', 'w1:p2', '--source', 'custom:dsh-tui', '--agent', 'dsh-tui', '--state', 'idle', '--seq', '1', '--', 'dsh-tui', '--resume', 'session-1'],
     // Invalid release-agent options
     ['pane', 'release-agent', 'w1:p2', '--source', 'custom:dsh-tui', '--agent', 'dsh-tui', '--seq', '1', '--invalid'],
   ]
@@ -550,6 +628,19 @@ if (command === 'pane' && subcommand === 'report-agent') {
     const res = await execFileNoThrow(stubBin, args, { timeout: 2000 })
     assert.notEqual(res.code, 0, `Contract gate must reject invalid CLI args: ${args.join(' ')}`)
   }
+
+  // The session-bearing report is the exact shape the integration sends.
+  const sessionReport = await execFileNoThrow(stubBin, [
+    'pane', 'report-agent', 'w1:p2',
+    '--source', 'custom:dsh-tui', '--agent', 'dsh-tui', '--state', 'idle', '--seq', '1',
+    '--agent-session-id', 'session-1', '--', 'dsh-tui', '--resume', 'session-1',
+  ], { timeout: 2000 })
+  assert.equal(sessionReport.code, 0, sessionReport.stderr)
+  const storedSession = JSON.parse(
+    (await execFileNoThrow(stubBin, ['agent', 'get', 'w1:p2'], { timeout: 2000 })).stdout.trim(),
+  ) as { agent_session_id: string; resume_argv: string[] }
+  assert.equal(storedSession.agent_session_id, 'session-1')
+  assert.deepEqual(storedSession.resume_argv, ['dsh-tui', '--resume', 'session-1'])
 
   // --- Real End-to-End lifecycle through actual child process execution ---
   const testPane = 'w1:p2'
