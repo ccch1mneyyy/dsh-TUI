@@ -76,35 +76,59 @@ if (target === '-') {
 } else {
   // 只读上次之后新增的字节：既能实时 --follow，也不会每来一行普通渲染字节
   // 就重放一遍全部历史报告。读取偏移与半条报告的尾巴都在 createIncrementalTail
-  // 里维护；文件被截断/轮转时它重置位置，下面的 size() 顺手换个句柄。
+  // 里维护；长度缩回（截断）由它自己发现，路径被换成另一个文件则由下面的
+  // dev:ino 比对发现——只看长度发现不了「新文件不比旧文件短」的轮转。
   let descriptor = -1
-  let seenSize = 0
+  /** 当前句柄对应文件的 `dev:ino`，用来识别路径被换成了另一个文件。 */
+  let descriptorKey = ''
+  let pendingSize = 0
   const closeTarget = () => {
     if (descriptor >= 0) closeSync(descriptor)
     descriptor = -1
+    descriptorKey = ''
   }
-  const currentSize = () => {
-    let total
+  /**
+   * 对路径取一次 stat：换掉旧句柄、按需打开当前文件，并把长度记进
+   * `pendingSize`。返回读取位置与半条尾巴是否需要复位。
+   *
+   * 必须在 `tail.poll()` **之前**调用：轮转一旦发现就要在同一轮里复位读取
+   * 位置，否则新文件会被当成旧文件的续写，从旧偏移读起。
+   */
+  const checkTarget = () => {
+    let stats
     try {
-      total = statSync(target).size
+      stats = statSync(target)
     } catch {
-      return 0
+      // 路径不在了：旧句柄指的是已删除的 inode，留着它只会让「新文件恰好
+      // 复用同一 inode」被误判成没换过。丢掉句柄并要求复位。
+      closeTarget()
+      pendingSize = 0
+      return true
     }
-    // 截断或轮转：旧句柄指向的内容已经不是这个文件了，丢掉它让 readRange
-    // 重新打开（读取位置由 createIncrementalTail 一并重置）。
-    if (total < seenSize) closeTarget()
-    seenSize = total
-    return total
+    const key = `${stats.dev}:${stats.ino}`
+    const rotated = descriptor >= 0 && key !== descriptorKey
+    if (rotated) closeTarget()
+    if (descriptor < 0) {
+      descriptor = openSync(target, 'r')
+      descriptorKey = key
+    }
+    pendingSize = stats.size
+    return rotated
   }
+  // checkTarget 每次 poll 都先跑，所以读的时候句柄必定是开的；这里不再兜底
+  // 打开——那样开出的句柄没有记下 `descriptorKey`，下一次 checkTarget 会把
+  // 同一个文件误判成轮转。
   const readRange = (offset, length) => {
-    if (descriptor < 0) descriptor = openSync(target, 'r')
     const buffer = Buffer.allocUnsafe(length)
     const got = readSync(descriptor, buffer, 0, length, offset)
     return buffer.toString('utf8', 0, got)
   }
-  const tail = createIncrementalTail({ read: readRange, size: currentSize })
+  // 长度由 checkTarget 本次 stat 的结果给出：一次回调只 stat 一次，轮转判定
+  // 与实际读取看到的必然是同一份状态。
+  const tail = createIncrementalTail({ read: readRange, size: () => pendingSize })
   const poll = () => {
     try {
+      if (checkTarget()) tail.reset()
       printEntries(tail.poll())
     } catch {
       // 文件暂时读不到（还没建出来 / 已被删掉）：当作没有新内容。

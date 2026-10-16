@@ -159,7 +159,12 @@ function retainPending(rest) {
 
 /**
  * 增量读取一个**增长或截断**的字节源：只读上次之后新增的字节，跨读取边界的
- * 半条报告由 `scanChunk` 的尾巴兜住，源被截断/轮转时位置与尾巴一起重置。
+ * 半条报告由 `scanChunk` 的尾巴兜住，源被截断（长度缩回）时位置与尾巴一起
+ * 自动重置。
+ *
+ * 被**换掉**的源（轮转、删掉重建）光看长度发现不了：新内容不比旧的短时长度
+ * 只会变大。所以调用方发现路径换了文件时要自己调 `reset()`——位置、半条尾巴
+ * 与旧句柄都属于上一个文件，新文件必须从 0 读起。
  *
  * `size()` 返回源当前字节长度；`read(offset, length)` 返回该区间解码后的文本
  * （调用方负责在源被替换后换用新的句柄）。报告本体是 ASCII（键 + base64），
@@ -173,11 +178,16 @@ export function createIncrementalTail({ read, size }) {
     offset: () => offset,
     /** 跨边界留待补全的半条报告。 */
     pending: () => pending,
+    /** 丢弃读取位置与半条尾巴，让下一次 poll 从字节 0 重新读。 */
+    reset() {
+      offset = 0
+      pending = ''
+    },
     /** 读取并返回新增内容里的完整报告。 */
     poll() {
       const total = size()
       if (total < offset) {
-        // 截断或轮转：旧位置与新尾巴都对不上新内容了。
+        // 截断：旧位置与新尾巴都对不上新内容了。
         offset = 0
         pending = ''
       }

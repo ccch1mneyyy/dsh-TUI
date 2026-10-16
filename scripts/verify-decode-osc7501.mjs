@@ -238,6 +238,21 @@ check('截断/轮换后位置与尾巴一起重置，且不重放旧报告', () 
   assert.equal(tail.offset(), source.size())
 })
 
+check('reset() 丢弃位置与半条尾巴，让替换后的源从字节 0 重读', () => {
+  const source = controller()
+  const tail = createIncrementalTail(source)
+  source.write(`${SEQ('state=idle:app=dsh-tui')}\x1b]7501;state=work`)
+  assert.equal(tail.poll().length, 1)
+  assert.notEqual(tail.pending(), '')
+  // 换成一个**不比原来短**的文件：光看长度发现不了，只能由调用方复位。
+  source.write(`${SEQ('state=error:app=dsh-tui')}${'pad'.repeat(8)}`)
+  tail.reset()
+  const after = tail.poll()
+  assert.equal(after.length, 1)
+  assert.match(after[0].line, /✗ error/)
+  assert.equal(tail.pending(), '')
+})
+
 // -----------------------------------------------------------------------------
 console.log('CLI 端到端：文件与 stdin 入口')
 // -----------------------------------------------------------------------------
@@ -292,7 +307,8 @@ try {
 
   // --follow：只读新增字节；换掉文件（fd 指向已删除的 inode）后必须重新跟随。
   const followPath = join(dir, 'follow.log')
-  writeFileSync(followPath, SEQ('state=working:app=dsh-tui'))
+  const initialLog = SEQ('state=working:app=dsh-tui')
+  writeFileSync(followPath, initialLog)
   const child = spawn(process.execPath, [SCRIPT, '--follow', followPath], { stdio: ['ignore', 'pipe', 'ignore'] })
   let output = ''
   const waiters = new Set()
@@ -317,6 +333,12 @@ try {
       waiter()
     })
   const occurrences = needle => output.split(needle).length - 1
+  /** 轮转：删掉旧文件、写一份**长度可控**的新文件（旧 fd 指向已删除的 inode）。 */
+  const rotate = (report, targetBytes) => {
+    const padded = report + 'R'.repeat(Math.max(0, targetBytes - Buffer.byteLength(report)))
+    unlinkSync(followPath)
+    writeFileSync(followPath, padded)
+  }
 
   try {
     await waitFor(text => text.includes('◐ working'), '第一条报告')
@@ -331,12 +353,21 @@ try {
       await waitFor(text => text.includes('● done'), '追加的报告')
       assert.equal(occurrences('◐ working'), 1, '追加报告把旧报告也重放了一遍')
 
-      // 轮换：删掉文件、写一份更短的新文件（旧 fd 指向已删除的 inode）。
-      unlinkSync(followPath)
-      writeFileSync(followPath, SEQ('state=error:app=dsh-tui'))
-      await waitFor(text => text.includes('✗ error'), '轮换后的报告')
-      assert.equal(occurrences('◐ working'), 1, '轮换后重放了旧报告')
-      assert.equal(occurrences('● done'), 1, '轮换后重放了旧报告')
+      // 轮换 1：新文件**与旧文件等长**。只看长度的实现（total < seenSize）发现
+      // 不了它——长度没缩回，偏移却停在旧长度上，新文件的报告永远读不到。
+      const grown = SEQ('state=working:app=dsh-tui') + '\x1b[38;5;1mrender only\x1b[0m' + SEQ('state=done:app=dsh-tui')
+      rotate(SEQ('state=error:app=dsh-tui'), Buffer.byteLength(grown))
+      await waitFor(text => text.includes('✗ error'), '等长轮换后的报告')
+      assert.equal(occurrences('◐ working'), 1, '等长轮换后重放了旧报告')
+      assert.equal(occurrences('● done'), 1, '等长轮换后重放了旧报告')
+
+      // 轮换 2：新文件**比旧文件更长**。此时长度只会变大，同样绕开长度检测；
+      // 只看长度的实现会从旧偏移读起，漏掉新文件开头那条报告。
+      const previous = SEQ('state=error:app=dsh-tui') + 'R'.repeat(Math.max(0, Buffer.byteLength(grown) - Buffer.byteLength(SEQ('state=error:app=dsh-tui'))))
+      const longer = SEQ('state=blocked:kind=question:app=dsh-tui') + 'R'.repeat(Buffer.byteLength(previous))
+      rotate(SEQ('state=blocked:kind=question:app=dsh-tui'), Buffer.byteLength(longer))
+      await waitFor(text => text.includes('◼ blocked'), '变长轮换后的报告')
+      assert.equal(occurrences('✗ error'), 1, '变长轮换后重放了旧报告')
       assert.ok(!NO_CONTROL.test(output), `stdout 出现控制字符：${JSON.stringify(output)}`)
     })
   } finally {
