@@ -20,24 +20,42 @@ export type ProgramBlockedPrompt = {
   message: string
 }
 
-/** What the caller knows about the session's current activity. */
-export type ProgramStatusInput = {
+/**
+ * The channel facts this hook reports on, taken as ONE object so that the
+ * hook — not its caller — decides which field carries which fact. `ChannelUi`
+ * satisfies it structurally, and so does a projector state, which is what
+ * lets the regression drive the real projection into a real mount.
+ */
+export type ProgramStatusChannel = {
   /** A turn is running. */
   working: boolean
-  /** The pending ask, if any; outranks `working` (the turn is parked on it). */
-  blocked: ProgramBlockedPrompt | null
-  /** How the last turn ended, for the `done`/`error` record. */
-  lastOutcome: 'completed' | 'interrupted' | 'error' | undefined
-  /** Short session label used as the record title. */
-  title: string
-  /** Opt-out, and the hard TTY requirement. */
-  enabled: boolean
   /**
-   * Identity of the session these signals describe. Switching sessions in one
+   * How the most recently ended turn closed, projected from
+   * `turn.end.reason` on every turn end. Deliberately NOT the outcome on the
+   * usage ledger: a turn that measured nothing writes no ledger, so reading
+   * that instead would report idle for a first failure and, after a
+   * successful turn, report the previous `completed` as a fresh `done`.
+   */
+  turnOutcome: 'completed' | 'interrupted' | 'error' | undefined
+  /** Short session label used as the record title. */
+  sessionTitle: string
+  /**
+   * Identity of the session these facts describe. Switching sessions in one
    * process does not remount the tree, so this is what tells the falling-edge
-   * latch below that `lastOutcome` now belongs to a different session's past.
+   * latch below that the projected outcome now belongs to a different
+   * session's past.
    */
   sessionId: string
+}
+
+/** What the caller knows beyond the channel's own projection. */
+export type ProgramStatusInput = {
+  /** The channel, or any structurally equal snapshot of it. */
+  channel: ProgramStatusChannel
+  /** The pending ask, if any; outranks `working` (the turn is parked on it). */
+  blocked: ProgramBlockedPrompt | null
+  /** Opt-out, and the hard TTY requirement. */
+  enabled: boolean
 }
 
 /**
@@ -59,7 +77,7 @@ export type ProgramStatusInput = {
  *   process exit or the next shell prompt, while `done`/`error` must survive
  *   for the user to find. Clearing would erase exactly that.
  *
- * @param input - the current activity, already derived by the caller.
+ * @param input - the channel plus the ask/opt-out the channel cannot know.
  */
 export function useProgramStatus(input: ProgramStatusInput): void {
   const writeRaw = useContext(TerminalWriteContext)
@@ -67,26 +85,27 @@ export function useProgramStatus(input: ProgramStatusInput): void {
   // reporting turns off so a later re-enable re-establishes the record.
   const lastSequenceRef = useRef<string>('')
   // Whether a turn was observed running since the current session was adopted,
-  // tagged with the session it belongs to. `turnUsage` is a persisted
-  // projection: a resumed session can still carry its previous turn's outcome,
-  // and reporting that as a fresh `done` would claim work the user has not
-  // seen. Terminal states are therefore only reported on the falling edge of
+  // tagged with the session it belongs to. A projected outcome is PERSISTED
+  // state: a resumed session can still carry its previous turn's outcome, and
+  // reporting that as a fresh `done` would claim work the user has not seen.
+  // Terminal states are therefore only reported on the falling edge of
   // `working`. The tag matters because switching sessions in one process does
   // not remount this tree, and the switch replays the target session's own
-  // history — re-populating `turnUsage` from its last turn.end. A latch left
+  // history — re-populating the outcome from its last turn.end. A latch left
   // over from the previous session would report that as a brand-new `done`.
   const latchRef = useRef<{ sessionId: string; sawWorking: boolean }>({
-    sessionId: input.sessionId,
+    sessionId: input.channel.sessionId,
     sawWorking: false,
   })
 
-  const { working, blocked, lastOutcome, title, enabled, sessionId } = input
+  const { channel, blocked, enabled } = input
+  const { working, turnOutcome, sessionTitle, sessionId } = channel
 
   useEffect(() => {
     if (!enabled || !writeRaw) return
 
-    // Adopting a different session starts a fresh latch; `lastOutcome` now
-    // describes that session's past, not work observed in this one.
+    // Adopting a different session starts a fresh latch; the projected
+    // outcome now describes that session's past, not work observed in this one.
     if (latchRef.current.sessionId !== sessionId) {
       latchRef.current = { sessionId, sawWorking: false }
     }
@@ -95,7 +114,7 @@ export function useProgramStatus(input: ProgramStatusInput): void {
       if (blocked !== null) return { state: 'blocked', kind: blocked.kind, msg: blocked.message }
       if (working) return { state: 'working' }
       if (!latchRef.current.sawWorking) return { state: 'idle' }
-      switch (lastOutcome) {
+      switch (turnOutcome) {
         case 'error':
           return { state: 'error' }
         case 'interrupted':
@@ -115,12 +134,12 @@ export function useProgramStatus(input: ProgramStatusInput): void {
       state,
       app: PROGRAM_STATUS_APP,
       // Every report replaces its record, so app/title ride along each time.
-      title,
+      title: sessionTitle,
       ...(kind === undefined ? {} : { kind }),
       ...(msg === undefined ? {} : { msg }),
     })
     if (sequence === '' || sequence === lastSequenceRef.current) return
     lastSequenceRef.current = sequence
     writeRaw(sequence)
-  }, [enabled, working, blocked, lastOutcome, title, writeRaw, sessionId])
+  }, [enabled, working, turnOutcome, blocked, sessionTitle, writeRaw, sessionId])
 }

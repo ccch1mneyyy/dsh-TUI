@@ -14,6 +14,9 @@
  * - The hook end to end through a real Ink mount: precedence
  *   (blocked > working > done/error > idle), dedup of unchanged states, no
  *   `done` for a resumed session's stale outcome, and the disabled gate
+ * - The terminal state's source: a real projector drives the close reason, so
+ *   a turn that measured no usage still reports `error` (and cancels report
+ *   idle) instead of reading the previous turn's ledger
  *
  * Run: node --import tsx/esm scripts/verify-osc7501.tsx
  */
@@ -31,6 +34,8 @@ import {
   supportsProgramStatus,
 } from '../src/ink/termio/osc7501.js'
 import instances from '../src/ink/instances.js'
+import { createProjectorHarness } from './lib/projector-harness.ts'
+import type { AgentEvent } from '../src/agent/events.js'
 
 let failed = 0
 function check(name: string, fn: () => void): void {
@@ -255,14 +260,28 @@ check('opt-out accepts the common falsy spellings', () => {
 // -----------------------------------------------------------------------------
 console.log('hook end to end')
 
-type StatusInput = {
+type StatusChannel = {
   working: boolean
-  blocked: { kind: 'permission' | 'question' | 'auth'; message: string } | null
-  lastOutcome: 'completed' | 'interrupted' | 'error' | undefined
-  title: string
-  enabled: boolean
+  turnOutcome: 'completed' | 'interrupted' | 'error' | undefined
+  sessionTitle: string
   sessionId: string
 }
+type StatusInput = {
+  channel: StatusChannel
+  blocked: { kind: 'permission' | 'question' | 'auth'; message: string } | null
+  enabled: boolean
+}
+
+/** A channel snapshot; `over` is what the case under test varies. */
+const statusInput = (
+  over: Partial<StatusChannel> = {},
+  blocked: StatusInput['blocked'] = null,
+  enabled = true,
+): StatusInput => ({
+  channel: { working: false, turnOutcome: undefined, sessionTitle: 'sess', sessionId: 's1', ...over },
+  blocked,
+  enabled,
+})
 
 class FakeStdout extends Writable {
   columns = 80
@@ -341,9 +360,7 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
 
 // idle at mount
 {
-  const { instance, reports } = mountHook({
-    working: false, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1',
-  })
+  const { instance, reports } = mountHook(statusInput())
   await flush()
   assert.deepEqual(reports(), ['state=idle:app=dsh-tui:title=c2Vzcw=='])
   console.log('  ok - idle is reported at mount')
@@ -352,14 +369,12 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
 
 // precedence and transitions
 {
-  const { instance, set, reports } = mountHook({
-    working: false, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1',
-  })
+  const { instance, set, reports } = mountHook(statusInput())
   await flush()
 
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
+  set(statusInput({ working: true }))
   await flush()
-  set({ working: true, blocked: { kind: 'permission', message: 'Approval needed: Bash' }, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
+  set(statusInput({ working: true }, { kind: 'permission', message: 'Approval needed: Bash' }))
   await flush()
   // A parked prompt outranks the running turn it interrupted.
   assert.deepEqual(reports().slice(1), [
@@ -368,24 +383,24 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
   ])
   console.log('  ok - blocked outranks working')
 
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
+  set(statusInput({ working: true }))
   await flush()
-  set({ working: false, blocked: null, lastOutcome: 'completed', title: 'sess', enabled: true, sessionId: 's1' })
+  set(statusInput({ turnOutcome: 'completed' }))
   await flush()
   const after = reports()
   assert.equal(after.at(-1), 'state=done:app=dsh-tui:title=c2Vzcw==')
   console.log('  ok - working falling edge reports done')
 
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
+  set(statusInput({ working: true }))
   await flush()
-  set({ working: false, blocked: null, lastOutcome: 'error', title: 'sess', enabled: true, sessionId: 's1' })
+  set(statusInput({ turnOutcome: 'error' }))
   await flush()
   assert.equal(reports().at(-1), 'state=error:app=dsh-tui:title=c2Vzcw==')
   console.log('  ok - error outcome reports error')
 
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
+  set(statusInput({ working: true }))
   await flush()
-  set({ working: false, blocked: null, lastOutcome: 'interrupted', title: 'sess', enabled: true, sessionId: 's1' })
+  set(statusInput({ turnOutcome: 'interrupted' }))
   await flush()
   assert.equal(reports().at(-1), 'state=idle:app=dsh-tui:title=c2Vzcw==')
   console.log('  ok - an interrupted turn reports idle, not done')
@@ -395,14 +410,12 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
 
 // dedup
 {
-  const { instance, set, reports } = mountHook({
-    working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1',
-  })
+  const { instance, set, reports } = mountHook(statusInput({ working: true }))
   await flush()
   const before = reports().length
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
+  set(statusInput({ working: true }))
   await flush()
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
+  set(statusInput({ working: true }))
   await flush()
   assert.equal(reports().length, before, 'an unchanged state must not re-report')
   console.log('  ok - unchanged state is deduplicated')
@@ -411,9 +424,7 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
 
 // a resumed session's stale outcome must not claim a fresh done
 {
-  const { instance, reports } = mountHook({
-    working: false, blocked: null, lastOutcome: 'completed', title: 'sess', enabled: true, sessionId: 's1',
-  })
+  const { instance, reports } = mountHook(statusInput({ turnOutcome: 'completed' }))
   await flush()
   assert.deepEqual(reports(), ['state=idle:app=dsh-tui:title=c2Vzcw=='])
   console.log('  ok - stale outcome at mount reports idle, not done')
@@ -423,22 +434,21 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
 // switching sessions without remounting must not replay the new session's
 // history as a fresh done
 {
-  const { instance, set, reports } = mountHook({
-    working: false, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1',
-  })
+  const { instance, set, reports } = mountHook(statusInput())
   await flush()
 
   // A turn ran and finished in session 1: the latch is armed, `done` is right.
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: true, sessionId: 's1' })
+  set(statusInput({ working: true }))
   await flush()
-  set({ working: false, blocked: null, lastOutcome: 'completed', title: 'sess', enabled: true, sessionId: 's1' })
+  set(statusInput({ turnOutcome: 'completed' }))
   await flush()
   assert.equal(reports().at(-1), 'state=done:app=dsh-tui:title=c2Vzcw==')
 
-  // Switch to session 2: resetSessionProjection clears turnUsage, then the
-  // switch replays that session's own history and re-populates it from its
-  // last turn.end. The stale latch would report that as a brand-new `done`.
-  set({ working: false, blocked: null, lastOutcome: 'completed', title: 'other', enabled: true, sessionId: 's2' })
+  // Switch to session 2: resetSessionProjection clears the projected outcome,
+  // then the switch replays that session's own history and re-populates it
+  // from its last turn.end. The stale latch would report that as a brand-new
+  // `done`.
+  set(statusInput({ turnOutcome: 'completed', sessionTitle: 'other', sessionId: 's2' }))
   await flush()
   assert.equal(
     reports().at(-1),
@@ -448,9 +458,9 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
   console.log('  ok - a session switch reports idle, not the replayed history as done')
 
   // The latch is per-session: session 2's own falling edge still reports done.
-  set({ working: true, blocked: null, lastOutcome: undefined, title: 'other', enabled: true, sessionId: 's2' })
+  set(statusInput({ working: true, sessionTitle: 'other', sessionId: 's2' }))
   await flush()
-  set({ working: false, blocked: null, lastOutcome: 'completed', title: 'other', enabled: true, sessionId: 's2' })
+  set(statusInput({ turnOutcome: 'completed', sessionTitle: 'other', sessionId: 's2' }))
   await flush()
   assert.equal(reports().at(-1), 'state=done:app=dsh-tui:title=b3RoZXI=')
   console.log('  ok - the new session still reports its own done on the falling edge')
@@ -458,11 +468,93 @@ const flush = async (): Promise<void> => { await new Promise<void>(resolve => se
   instance.unmount()
 }
 
+// The terminal state must be projected from the turn's own close reason, not
+// read off the usage ledger. The ledger is only written by a turn that
+// measured something, so a usage-less turn would otherwise report idle (first
+// turn, nothing to inherit) or inherit the previous turn's `completed` and
+// report done.
+//
+// Each case folds REAL events through the production projector and mounts the
+// hook on that projector's own state object, so the whole wire is under test:
+// `turn.end.reason` → `channel.turnOutcome` → the OSC 7501 bytes.
+{
+  const user = (id: string, seq: number, turn: number): readonly AgentEvent[] => [
+    { type: 'user.message', id, anchor: id, seq, time: 900 + seq, source: 'user', text: 'hi', blocks: [] },
+    { type: 'turn.start', turn, origin: 'user', time: 1000 + seq },
+  ]
+  const measured = (turn: number, seq: number): readonly AgentEvent[] => [
+    { type: 'assistant.attempt.start', attemptId: `a${turn}`, turn, step: 1, model: 'model-x' },
+    { type: 'assistant.message', seq, anchor: `a${turn}`, turn, step: 1, attemptId: `a${turn}`, time: 6000, model: 'model-x', blocks: [{ type: 'text', text: 'answer' }], usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0 }, canonical: true },
+    { type: 'assistant.attempt.end', attemptId: `a${turn}`, outcome: 'committed' },
+  ]
+
+  /** A mount whose channel IS a real projector state. */
+  const mountProjection = () => {
+    const rig = createProjectorHarness()
+    rig.apply([{ type: 'session.title', title: 'sess', source: 'auto' }] as readonly AgentEvent[])
+    const { instance, set, reports } = mountHook({ channel: rig.state, blocked: null, enabled: true })
+    return {
+      rig,
+      reports,
+      /** Fold events, then re-render: what a channel emit does in the app. */
+      fold: async (events: readonly AgentEvent[]): Promise<void> => {
+        rig.apply(events)
+        set({ channel: rig.state, blocked: null, enabled: true })
+        await flush()
+      },
+      unmount: () => instance.unmount(),
+    }
+  }
+
+  // First turn fails before producing any usage: nothing to inherit, and the
+  // failure still has to reach the terminal.
+  const firstFailure = mountProjection()
+  await firstFailure.fold(user('u1', 1, 1))
+  assert.equal(firstFailure.reports().at(-1), 'state=working:app=dsh-tui:title=c2Vzcw==')
+  await firstFailure.fold([{ type: 'turn.end', turn: 1, reason: { kind: 'error', message: 'boom' }, time: 2000 }] as readonly AgentEvent[])
+  assert.equal(firstFailure.rig.state.turnUsage, undefined, 'a usage-less turn writes no ledger')
+  assert.equal(firstFailure.rig.state.turnOutcome, 'error')
+  assert.equal(firstFailure.reports().at(-1), 'state=error:app=dsh-tui:title=c2Vzcw==')
+  firstFailure.unmount()
+  console.log('  ok - a first usage-less failure reports error')
+
+  // A successful turn, then a usage-less failure: the ledger still says
+  // `completed`, which is exactly what must NOT be reported.
+  const staleLedger = mountProjection()
+  await staleLedger.fold(user('u1', 1, 1))
+  await staleLedger.fold([
+    ...measured(1, 2),
+    { type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 7000 },
+  ] as readonly AgentEvent[])
+  assert.equal(staleLedger.rig.state.turnOutcome, 'completed')
+  assert.equal(staleLedger.rig.state.turnUsage?.outcome, 'completed')
+  assert.equal(staleLedger.reports().at(-1), 'state=done:app=dsh-tui:title=c2Vzcw==')
+
+  await staleLedger.fold(user('u2', 3, 2))
+  assert.equal(staleLedger.reports().at(-1), 'state=working:app=dsh-tui:title=c2Vzcw==')
+  await staleLedger.fold([{ type: 'turn.end', turn: 2, reason: { kind: 'error', message: 'late failure' }, time: 8000 }] as readonly AgentEvent[])
+  assert.equal(staleLedger.rig.state.turnOutcome, 'error')
+  assert.equal(
+    staleLedger.rig.state.turnUsage?.outcome,
+    'completed',
+    'the previous turn keeps its ledger: that stale outcome is what the projection field exists to avoid',
+  )
+  assert.equal(staleLedger.reports().at(-1), 'state=error:app=dsh-tui:title=c2Vzcw==')
+  console.log('  ok - a usage-less failure after a completed turn reports error, not the stale done')
+
+  // Same shape, cancelled instead of failed: the spec wants idle.
+  await staleLedger.fold(user('u3', 4, 3))
+  await staleLedger.fold([{ type: 'turn.end', turn: 3, reason: { kind: 'aborted' }, time: 9000 }] as readonly AgentEvent[])
+  assert.equal(staleLedger.rig.state.turnOutcome, 'interrupted')
+  assert.equal(staleLedger.rig.state.turnUsage?.outcome, 'completed')
+  assert.equal(staleLedger.reports().at(-1), 'state=idle:app=dsh-tui:title=c2Vzcw==')
+  staleLedger.unmount()
+  console.log('  ok - a usage-less cancel after a completed turn reports idle')
+}
+
 // disabled from the start writes nothing
 {
-  const { instance, stdout } = mountHook({
-    working: true, blocked: null, lastOutcome: undefined, title: 'sess', enabled: false, sessionId: 's1',
-  })
+  const { instance, stdout } = mountHook(statusInput({ working: true }, null, false))
   await flush()
   assert.ok(!stdout.output.includes(`${ESC}]7501;`), 'a disabled hook must not write')
   console.log('  ok - disabled reports nothing')

@@ -2354,13 +2354,13 @@ export function Chat({
     }
     return null
   }, [approvalSnapshot, dialogSnapshot, questionSnapshot])
+  // The hook reads the channel's own projected fields (`working`,
+  // `turnOutcome` from `turn.end.reason`, the title and the session id), so
+  // the usage ledger's stale outcome can never stand in for the turn's close.
   useProgramStatus({
-    working: channel.working,
+    channel,
     blocked: programStatusBlocked,
-    lastOutcome: channel.turnUsage?.outcome,
-    title: channel.sessionTitle,
     enabled: programStatusEnabled,
-    sessionId: channel.sessionId,
   })
 
   const handleWorkspaceResult = (result: TuiWorkspaceCommandResult): void => {

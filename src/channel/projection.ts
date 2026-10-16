@@ -14,7 +14,7 @@
  * contract (the goldens pin `startedAt`/`durationMs` with a stepping clock).
  */
 import type { ChannelUi } from '../adapter/ports/channel-ui.js'
-import type { ChatRow, SelectionAttachment, TodoPanelItem, ToolCallView, TurnUsageSummary } from '../adapter/ports/channel-view.js'
+import type { ChatRow, SelectionAttachment, TodoPanelItem, ToolCallView, TurnOutcome, TurnUsageSummary } from '../adapter/ports/channel-view.js'
 import { markChannelReadDirty } from '../adapter/channel/read-view.js'
 import type { AgentEvent, AgentEventMeta, AgentEventOf, ContentBlockView, GoalSnapshot, ImageRef, UsageDelta } from '../agent/events.js'
 import { t } from '../i18n.js'
@@ -35,7 +35,7 @@ const MAX_KEYED_TOASTS = 32
 /** The channel state slice the projector writes. */
 export interface ProjectionState extends Mutable<Pick<ChannelUi,
   | 'thinkingFold' | 'activeToolCount' | 'spinnerMode' | 'goal' | 'contextSegments' | 'tokens' | 'mainCost'
-  | 'model' | 'lastUsage' | 'turnUsage' | 'lastUserText' | 'responseChars' | 'tps' | 'cancelPending' | 'working'
+  | 'model' | 'lastUsage' | 'turnUsage' | 'turnOutcome' | 'lastUserText' | 'responseChars' | 'tps' | 'cancelPending' | 'working'
   | 'compaction' | 'turnStart' | 'contextWindow' | 'reasoningEffort' | 'sessionTitle' | 'agentPreset' | 'sessionColor'
   | 'costReport'
 >> {
@@ -1025,10 +1025,18 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     // reads as the account of what just happened. A turn with no
     // usage-bearing message emits nothing (nothing was measured), and a
     // fully successful zero-usage turn stays quiet too.
-    const outcome: 'completed' | 'interrupted' | 'error' =
+    const outcome: TurnOutcome =
       reason.kind === 'completed' ? 'completed'
         : reason.kind === 'aborted' || reason.kind === 'interrupted' ? 'interrupted'
           : 'error'
+    // The turn's terminal state is projected from the close reason itself,
+    // NOT from the ledger below: a turn that emitted no usage-bearing message
+    // still ended (and can have failed or been cancelled), and the ledger is
+    // only written for the turns that measured something. Anything that asks
+    // "how did the turn that just ended close" reads this, so a usage-less
+    // failure can never inherit the previous turn's `completed` — or leave
+    // nothing behind on the first turn.
+    state.turnOutcome = outcome
     const emitTurnSummary = (): void => {
       if (!turnLedger.usageSeen) return
       const total = turnLedger.input + turnLedger.output + turnLedger.cacheRead + turnLedger.cacheWrite
