@@ -702,12 +702,15 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
           if (selected === undefined) return { kind: 'refused', reason: codexText('codex-anchor-missing') }
           if (input.busy()) return { kind: 'refused', reason: codexText('codex-command-idle') }
           const previous = history.previousTurnId(anchor)
-          const retained = history.turns
-          const index = retained.findIndex(turn => str(turn.id) === selected)
-          if (previous === undefined && (index < 0 || history.capability.hasOlder())) return { kind: 'refused', reason: codexText('codex-rewind-load-older') }
-          const response = rec(await hub.call(previous === undefined ? CLIENT.threadStart : CLIENT.threadFork, previous === undefined
-            ? { cwd: opened.cwd, ...resumeOverrides() }
-            : { threadId, lastTurnId: previous, excludeTurns: true, ...resumeOverrides() }))
+          // Codex can cut before a known turn even when its predecessor is
+          // not loaded or retained locally. For the first turn this persists
+          // an empty branch; a turnless thread/start cannot be resumed.
+          const response = rec(await hub.call(CLIENT.threadFork, {
+            threadId,
+            ...(previous === undefined ? { beforeTurnId: selected } : { lastTurnId: previous }),
+            excludeTurns: true,
+            ...resumeOverrides(),
+          }))
           const id = str(rec(response?.thread)?.id)
           if (id === undefined) throw new Error(codexText('codex-open-failed', { err: 'no thread id' }))
           await hub.call(CLIENT.threadUnsubscribe, { threadId: id })

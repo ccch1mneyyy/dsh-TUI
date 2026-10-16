@@ -671,7 +671,10 @@ Codex 渠道 = 一个 OpenAI 兼容的 Responses API 端点（中转站）。存
   像 resume 一样采用它并把所选消息交还输入框；返回同一会话 id 时核心什么都不刷新。所以：
   `thread/fork{threadId, lastTurnId: anchor 所在回合的**上一个**回合}` → 返回
   `{kind:'rewound', session: 新 ref}`（与 Claude 完全一致，原 thread 保留，可 `/resume` 回去）。
-  anchor 在第一个回合时没有上一回合 → `thread/start`（同 cwd/设置）得到空 thread 作为结果。
+  本地没有上一回合（首回合、分页尚未加载或记录已淘汰）时 →
+  `thread/fork{beforeTurnId: anchor 所在回合}`，由 Codex 按原生回合定位截断，无需先加载更早消息；
+  首回合得到可恢复的空分支，并沿用当前设置。无回合的 `thread/start` 尚未落盘，取消订阅后
+  `thread/resume` 会报 `no rollout found`，不能作为回退结果交给核心采用。
   **不用** `thread/revert`（原地删除，与核心的采用语义不符，且不可撤销）。
   `files`/`both` → `{kind:'refused', reason:t('codex-rewind-files-unsupported')}`；`preview` 不声明。
 - `/clear`：只清视图（核心已实现）。
@@ -686,8 +689,10 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 安装托管令牌，也不启动、停止 daemon。真实验证脚本为 `verify-codex-daemon-offline.ts`。
 
 **C0 观察（评审更正）**：`thread/fork.beforeTurnId`（排除该回合及之后）只存在于**实验**类型
-（`generate-ts --experimental`），0.144.0 与 0.160.1 的稳定类型都只有 `lastTurnId`。rewind 坚持用
-稳定的 `lastTurnId`（上一回合）+ 首回合 `thread/start` 的方案；`beforeTurnId` 不采用。
+（`generate-ts --experimental`），0.144.0 与 0.160.1 的稳定类型都只有 `lastTurnId`。
+本地已知上一回合时仍用稳定的 `lastTurnId`；没有上一回合时使用 `beforeTurnId`（hub 握手已开启
+`experimentalApi`）。真实 0.160.1 离线回归覆盖空分支取消订阅后的恢复及原会话保留，
+不发起模型请求。
 
 ### 5.13 子代理（`session/subagents.ts`）
 

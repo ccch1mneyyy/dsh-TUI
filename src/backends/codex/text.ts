@@ -195,7 +195,6 @@ const texts = {
   'codex-channel-env-invalid': { zh: '渠道 env 只能存非凭据变量；令牌请填入令牌输入框', en: 'Channel env may only hold non-credential variables; use the token input for credentials' },
   'codex-anchor-missing': { zh: '找不到这条消息的原生回合，无法 fork 或回退', en: 'The native turn for this message is unavailable; it cannot be forked or rewound' },
   'codex-rewind-files-unsupported': { zh: 'Codex 仅支持对话回退，不恢复工作区文件', en: 'Codex supports conversation rewind only; workspace files are not restored' },
-  'codex-rewind-load-older': { zh: '请先加载更早的消息，再回退到这一回合', en: 'Load earlier messages before rewinding to this turn' },
   'codex-goals-unsupported': { zh: '此 Codex 不支持目标管理，目标能力已关闭', en: 'This Codex does not support goal management; goal controls are unavailable' },
   'codex-subagent-unavailable': { zh: '无法读取此 Codex 子代理的历史', en: 'This Codex subagent history is unavailable' },
   'codex-reconnect-incomplete': { zh: 'Codex 恢复缺口超过读取预算或游标失效，请重新打开会话', en: 'Codex recovery exceeded its history budget or could not reach a known turn; reopen the session' },

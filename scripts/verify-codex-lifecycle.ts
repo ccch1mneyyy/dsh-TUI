@@ -122,12 +122,13 @@ await scenario('Fork and rewind production capability', async () => {
     check('rewind forks to predecessor and returns a new ref', rewound.kind === 'rewound' && rewound.session.sessionId !== THREAD && f.sent(CLIENT.threadFork).at(-1)?.lastTurnId === '2')
     const beforeStart = f.sent(CLIENT.threadStart).length
     const first = await f.session.capabilities.rewind!.rewind('user-1', 'conversation')
-    check('rewind original first turn creates an empty same-cwd thread', first.kind === 'rewound' && f.sent(CLIENT.threadStart).length === beforeStart + 1 && f.sent(CLIENT.threadStart).at(-1)?.cwd === CWD)
+    check('rewind original first turn forks before it without starting an unpersisted thread', first.kind === 'rewound' && f.sent(CLIENT.threadStart).length === beforeStart && f.sent(CLIENT.threadFork).at(-1)?.beforeTurnId === '1' && f.sent(CLIENT.threadFork).at(-1)?.lastTurnId === undefined)
+    check('first-turn rewind keeps current model, effort and permissions', f.sent(CLIENT.threadFork).at(-1)?.model === 'gpt-fixture' && asRec(f.sent(CLIENT.threadFork).at(-1)?.config)?.model_reasoning_effort === 'low' && f.sent(CLIENT.threadFork).at(-1)?.sandbox === 'workspace-write')
     const beforeMutations = f.sent(CLIENT.threadStart).length + f.sent(CLIENT.threadFork).length
     check('file rewind explicitly refuses', (await f.session.capabilities.rewind!.rewind('user-2', 'files')).kind, 'refused')
     check('combined rewind explicitly refuses without native mutation', (await f.session.capabilities.rewind!.rewind('user-2', 'both')).kind === 'refused' && f.sent(CLIENT.threadStart).length + f.sent(CLIENT.threadFork).length === beforeMutations)
     check('missing rewind anchor explicitly refuses', (await f.session.capabilities.rewind!.rewind('absent', 'conversation')).kind, 'refused')
-    check('fork/rewind never use destructive revert or experimental beforeTurnId', !f.fake.requests.some(request => request.method === 'thread/revert' || Object.hasOwn(request.params, 'beforeTurnId')))
+    check('fork/rewind never use destructive revert', !f.fake.requests.some(request => request.method === 'thread/revert'))
   } finally { await f.close() }
   check('normal dispose releases hub exactly once', f.releases, 1)
 })
@@ -141,6 +142,8 @@ await scenario('Older anchor and prefetch predecessor production capability', as
     check('record contains displayed page before older adoption', initialRecord.filter(event => event.type === 'user.message').map(event => event.text), ['prompt-3'])
     const rewound = await f.session.capabilities.rewind!.rewind('user-3', 'conversation')
     check('rewind earliest loaded turn uses prefetched real predecessor', rewound.kind === 'rewound' && f.sent(CLIENT.threadFork).at(-1)?.lastTurnId === '2' && f.sent(CLIENT.threadStart).length === 0)
+    const first = await f.session.capabilities.rewind!.rewind('user-1', 'conversation')
+    check('rewind original first turn works while its page is prefetched but not displayed', first.kind === 'rewound' && f.session.capabilities.transcript!.hasOlder() && f.sent(CLIENT.threadFork).at(-1)?.beforeTurnId === '1')
     const older = f.session.capabilities.transcript!.older()
     check('older capability is synchronous and exposes full ordered history', Array.isArray(older) && older.filter(event => event.type === 'user.message').map(event => event.text).join(',') === 'prompt-1,prompt-2')
     check('older cursor exhausts without returning the same page twice', !f.session.capabilities.transcript!.hasOlder() && f.session.capabilities.transcript!.older().length === 0)
@@ -150,18 +153,28 @@ await scenario('Older anchor and prefetch predecessor production capability', as
   } finally { await f.close() }
 })
 
-await scenario('Pending older cache cannot be mistaken for original first turn', async () => {
+await scenario('Native rewind does not need a loaded predecessor', async () => {
   const f = await fixture({ resume: resume([turn('3')], 'older'), configure: fake => fake.on(CLIENT.threadTurnsList, () => NO_REPLY) })
   try {
     await f.session.history()
-    const refused = await f.session.capabilities.rewind!.rewind('user-3', 'conversation')
-    check('rewind with unresolved ancestry does not create empty thread', refused.kind === 'refused' && f.sent(CLIENT.threadStart).length === 0 && f.sent(CLIENT.threadFork).length === 0)
+    const rewoundBeforeLoad = await f.session.capabilities.rewind!.rewind('user-3', 'conversation')
+    check('rewind with unresolved ancestry forks before the selected turn without starting an empty thread', rewoundBeforeLoad.kind === 'rewound' && f.sent(CLIENT.threadStart).length === 0 && f.sent(CLIENT.threadFork).at(-1)?.beforeTurnId === '3')
     check('pending prefetch older click stays synchronous and keeps affordance', f.session.capabilities.transcript!.older().length === 0 && f.session.capabilities.transcript!.hasOlder())
     const page = await f.fake.waitForRequest(CLIENT.threadTurnsList)
     f.fake.reply(page.id, { data: [turn('2')], nextCursor: null })
     await tick()
     const rewound = await f.session.capabilities.rewind!.rewind('user-3', 'conversation')
     check('rewind succeeds against predecessor after page arrives', rewound.kind === 'rewound' && f.sent(CLIENT.threadFork).at(-1)?.lastTurnId === '2')
+  } finally { await f.close() }
+})
+
+await scenario('Known anchor survives bounded transcript retention', async () => {
+  const f = await fixture({ resume: resume(Array.from({ length: 1001 }, (_, index) => turn(String(1001 - index)))) })
+  try {
+    const seed = await f.session.history()
+    check('first-message anchor remains in replay after its native turn leaves the bounded record', seed.some(event => event.type === 'user.message' && event.anchor === 'user-1') && !f.session.capabilities.transcript!.record()!.some(event => event.type === 'user.message' && event.anchor === 'user-1'))
+    const first = await f.session.capabilities.rewind!.rewind('user-1', 'conversation')
+    check('rewind a known evicted anchor delegates the cut to Codex', first.kind === 'rewound' && f.sent(CLIENT.threadFork).at(-1)?.beforeTurnId === '1' && f.sent(CLIENT.threadStart).length === 0)
   } finally { await f.close() }
 })
 

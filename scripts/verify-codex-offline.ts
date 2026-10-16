@@ -1,7 +1,8 @@
 /** Real pinned app-server, isolated homes, no turn/start and no provider charge.
  * Run: CODEX_EXECUTABLE=<0.160.1> node --import tsx/esm scripts/verify-codex-offline.ts */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -27,6 +28,8 @@ const check = (label: string, ok: unknown): void => { assert.ok(ok, label); chec
 let session: Awaited<ReturnType<typeof openCodexSession>> | undefined
 let release: (() => void) | undefined
 let catalogSession: Awaited<ReturnType<typeof openCodexBackendSession>> | undefined
+let rewindSource: Awaited<ReturnType<typeof openCodexSession>> | undefined
+let rewindTarget: Awaited<ReturnType<typeof openCodexSession>> | undefined
 let alternate: ReturnType<typeof liveCodexHome> | undefined
 try {
   const runtime = await prepareCodexRuntime({ kind: 'create', cwd: sandbox.cwd }, { cwd: sandbox.cwd, debug: () => undefined, warn: () => undefined, locale: () => 'en' })
@@ -78,6 +81,36 @@ try {
   const forkId = str(rec(fork?.thread)?.id)
   check('real ephemeral fork is not durable', forkId !== undefined && rec(fork?.thread)?.ephemeral === true && rec(fork?.thread)?.path === null)
   if (forkId !== undefined) await runtime.hub.call(CLIENT.threadUnsubscribe, { threadId: forkId })
+  // Seed a durable native turn without making a model request. An empty
+  // thread/start cannot be resumed after unsubscribe until it is persisted.
+  const sourceId = randomUUID()
+  const turnId = randomUUID()
+  const timestamp = new Date().toISOString()
+  const folder = join(sandbox.home, 'sessions', ...timestamp.slice(0, 10).split('-'))
+  mkdirSync(folder, { recursive: true })
+  const rows = [
+    { type: 'session_meta', payload: { id: sourceId, session_id: sourceId, timestamp, cwd: sandbox.cwd, originator: 'dsh-tui-offline-rewind', cli_version: '0.160.1', source: 'cli', model_provider: 'openai', history_mode: 'legacy', base_instructions: { text: 'Offline fixture; no model call.' } } },
+    { type: 'event_msg', payload: { type: 'task_started', turn_id: turnId, model_context_window: 128000 } },
+    { type: 'event_msg', payload: { type: 'user_message', message: 'first saved question', images: [], local_images: [], text_elements: [] } },
+    { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'first saved question' }] } },
+    { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'saved answer' }], phase: 'final_answer' } },
+    { type: 'event_msg', payload: { type: 'agent_message', message: 'saved answer', phase: 'final_answer' } },
+    { type: 'event_msg', payload: { type: 'task_complete', turn_id: turnId, last_agent_message: 'saved answer' } },
+  ]
+  writeFileSync(join(folder, 'rollout-' + timestamp.slice(0, 19).replaceAll(':', '-') + '-' + sourceId + '.jsonl'), rows.map(row => JSON.stringify({ timestamp, ...row })).join('\n') + '\n', { mode: 0o600 })
+  const openSaved = (sessionId: string) => openCodexSession({ ...runtime, release: runtime.hub.retain(), target: { kind: 'resume', sessionId }, prefs: memoryCodexPrefs(), host: { debug: () => undefined, locale: getLang } })
+  rewindSource = await openSaved(sourceId)
+  const seed = await rewindSource.history()
+  const first = seed.find(event => event.type === 'user.message')
+  assert.ok(first?.type === 'user.message' && first.anchor !== undefined)
+  const outcome = await rewindSource.capabilities.rewind!.rewind(first.anchor, 'conversation')
+  assert.equal(outcome.kind, 'rewound')
+  assert.ok(outcome.kind === 'rewound' && outcome.session.sessionId !== sourceId)
+  rewindTarget = await openSaved(outcome.session.sessionId)
+  check('real first-message rewind reopens an empty fork with the same cwd', (await rewindTarget.history()).length === 0 && rewindTarget.cwd === sandbox.cwd)
+  await rewindSource.dispose()
+  rewindSource = await openSaved(sourceId)
+  check('real first-message rewind preserves the original transcript', (await rewindSource.history()).some(event => event.type === 'user.message' && event.text === 'first saved question'))
   await session.dispose()
   session = undefined
   const resumed = rec(await runtime.hub.call(CLIENT.threadResume, { threadId: id, excludeTurns: true, initialTurnsPage: { limit: 20, sortDirection: 'desc', itemsView: 'full' } }))
@@ -88,6 +121,8 @@ try {
 } finally {
   await session?.dispose()
   await catalogSession?.dispose()
+  await rewindTarget?.dispose()
+  await rewindSource?.dispose()
   release?.()
   await closeAllCodexHubs()
   alternate?.cleanup()
