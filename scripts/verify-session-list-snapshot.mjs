@@ -34,7 +34,8 @@ try {
   const { createChannelOwner } = await import('../lib/types/dsh-adapter/channel/owner.js')
   const { createSessionMetadataActions } = await import('../lib/types/dsh-adapter/channel/session-metadata.js')
   const { createChannelActionMethods, createChannelActionReadiness } = await import('../lib/types/dsh-adapter/channel/action-readiness.js')
-  const { default: Jsonl } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const JsonlModule = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const Jsonl = 'default' in JsonlModule ? JsonlModule.default : JsonlModule
 
   let checks = 0
   function check(name, actual, expected) { assert.deepEqual(actual, expected, name); checks += 1 }

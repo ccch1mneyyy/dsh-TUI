@@ -118,5 +118,26 @@ const invariant = await import(new URL('../lib/types/dsh-adapter/invariant.js', 
 if (invariant.name !== 'dsh-tui-invariant' || typeof invariant.apply !== 'function') {
   throw new Error('compiled invariant entry does not expose the expected contract')
 }
+// The compatibility entry still mounts after DSH retired its invariant service,
+// and keeps the legacy registration's disposer when an older host provides it.
+const { Context } = await import('@deepseek-ai/cordis')
+for (const legacy of [false, true]) {
+  const ctx = new Context()
+  let registered = false
+  let disposed = false
+  if (legacy) ctx.provide('invariants', {
+    register(name) {
+      if (name !== manifest.name) throw new Error('invariant companion registered the wrong package')
+      registered = true
+      return () => { disposed = true }
+    },
+  })
+  try {
+    const fiber = ctx.plugin(invariant)
+    await fiber
+    await fiber.dispose()
+    if (registered !== legacy || disposed !== legacy) throw new Error('invariant companion lifecycle drifted')
+  } finally { await ctx.fiber.dispose() }
+}
 
 console.log(`package surface OK (${packed.size} files, ${targets.size} entry targets)`)

@@ -9,9 +9,11 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { Context } from '@deepseek-ai/cordis'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistenceModule from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SqliteSessionPersistence, { Context as LegacyContext, SessionStore, Session as LegacySession } from '../vendor/sqlite-island/index.js'
 import { settled } from './lib/term-test.mjs'
+
+const JsonlSessionPersistence = 'default' in JsonlSessionPersistenceModule ? JsonlSessionPersistenceModule.default : JsonlSessionPersistenceModule
 
 const root = mkdtempSync(join(tmpdir(), 'dsh-tui-migrate-test-'))
 const from = join(root, 'source.sqlite')

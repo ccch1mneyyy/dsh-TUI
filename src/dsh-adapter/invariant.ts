@@ -8,15 +8,20 @@
  */
 
 /* jscpd:ignore-start */
-import type { Context } from '@deepseek-ai/cordis'
-import type { InvariantInstaller } from '@deepseek-ai/dsh-invariants'
+import type { Context, Inject } from '@deepseek-ai/cordis'
+
+/** Legacy companion contract; DSH 0.2.1 removed the invariant service. */
+export interface InvariantInstaller {
+  (ctx: Context, fail: (message: string) => never): void | Promise<void>
+  readonly inject?: Inject
+}
 
 const PACKAGE_NAME = '@deepseek-harness-tui/dsh-tui'
 
 /** Cordis companion plugin name. */
 export const name = 'dsh-tui-invariant'
-/** Service required before the companion can reserve package ownership. */
-export const inject = ['invariants']
+/** Modern hosts no longer provide an invariant service. */
+export const inject: string[] = []
 
 /**
  * No runtime invariant: this interactive TUI front door owns no independent
@@ -30,6 +35,8 @@ const install: InvariantInstaller = () => {}
  * @param ctx - Cordis context carrying the invariant service.
  * @returns the installed registration's disposer after setup succeeds.
  */
-export const apply = (ctx: Context): Promise<() => void> =>
-  Promise.resolve(ctx.invariants.register(PACKAGE_NAME, install))
+export const apply = (ctx: Context): Promise<() => void> => {
+  const registry = ctx.get('invariants', false) as { register(name: string, installer: InvariantInstaller): () => void } | undefined
+  return Promise.resolve(registry?.register(PACKAGE_NAME, install) ?? (() => {}))
+}
 /* jscpd:ignore-end */

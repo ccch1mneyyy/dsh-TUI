@@ -30,7 +30,7 @@ dsh-tui
 - `dsh-tui safe`：安全模式——只读查看环境、列出 profile 插件并给出修复建议，还能创建干净的救援 profile（见 §5.5）。
 - `dsh --profile dsh-tui`：与 `dsh-tui` 等价的手工启动方式（`/update` 仅此方式可用）。
 - `deepseek-official` 路由需要 `DEEPSEEK_API_KEY`；DSH 0.2.0-rc.1+ 可用标准 profile 的 `deepseek-account` 浏览器授权路由。其他支持的订阅模型可用内置 OAuth 登录。环境自检用 `/doctor`。
-- 主验证 dsh 引擎版本 `0.2.0-rc.2`；兼容列表以 `ADAPTER.md` 为准，列表之外的版本在 logo 页提示版本漂移与对齐命令。
+- 主验证 dsh 引擎版本 `0.2.1-alpha.5`；兼容列表以 `ADAPTER.md` 为准，列表之外的版本在 logo 页提示版本漂移与对齐命令。
 - 如果 logo 页出现 ⚠ 版本漂移警告，按提示执行 `npm i -g @deepseek-ai/dsh@<版本>` 对齐 dsh 引擎。
 
 ### 1.2 首次启动你会看到

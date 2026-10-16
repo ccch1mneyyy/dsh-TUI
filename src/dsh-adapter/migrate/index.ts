@@ -14,7 +14,7 @@
  * @module @deepseek-harness-tui/dsh-tui/migrate
  */
 import { Context } from '@deepseek-ai/cordis'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -102,7 +102,7 @@ export async function importSessions(
 ): Promise<ImportRun> {
   const ctx = new Context()
   const fiber = ctx.plugin(
-    JsonlSessionPersistence as unknown as Parameters<Context['plugin']>[0],
+    ('default' in JsonlSessionPersistence ? JsonlSessionPersistence.default : JsonlSessionPersistence) as Parameters<Context['plugin']>[0],
     { root },
   )
   let imported = 0

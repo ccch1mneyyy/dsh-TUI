@@ -826,8 +826,8 @@ for (const [fullscreen, columns, service] of [
   }
 
   // An incompatible version: the service's own list, and the exemption escape.
-  {
-    const peer = { name: 'verify-other', version: '1.0.0', runtimeVersion: '0.2.0-rc.2', peers: { '@deepseek-ai/dsh': '^9' } }
+  for (const field of ['peers', 'requirements'] as const) {
+    const peer = { name: 'verify-other', version: '1.0.0', runtimeVersion: '0.2.0-rc.2', [field]: { 'engines.dsh': '^9' } }
     const rig = makeInstallRig({
       feed: TRUSTED,
       install: () => Promise.resolve({
@@ -838,6 +838,8 @@ for (const [fullscreen, columns, service] of [
     check(`${tag}: an incompatible version comes back with the packages and the exemptions`,
       step.kind === 'incompatible' && step.packages.length === 1 && step.exemptions.exemptions !== undefined,
       JSON.stringify(step))
+    check(`${tag}: ${field} retains the host's exact version requirement for the pane`,
+      step.kind === 'incompatible' && step.packages[0]?.peers['engines.dsh'] === '^9', JSON.stringify(step))
     rig.setInstall(() => Promise.resolve(CHANGE))
     const after = await rig.flow.acceptRisk()
     check(`${tag}: accepting the risk registers the exact exemption and retries`,
@@ -2258,7 +2260,7 @@ for (const [fullscreen, columns, service] of [
               code: 'incompatible-version',
               incompatible: [{
                 name: 'probe-component', version: '1.0.0', runtimeVersion: '0.2.0-rc.2',
-                peers: { '@deepseek-ai/dsh': '>=99.0.0' },
+                requirements: { 'engines.dsh': '>=99.0.0' },
               }],
             },
           })
@@ -2275,7 +2277,7 @@ for (const [fullscreen, columns, service] of [
         await settled(() => rig.installs.length === 2 &&
           JSON.stringify(rig.installs[1]?.approvedBuilds) === '["esbuild"]'), JSON.stringify(rig.installs))
       check(`${tag}: an incompatible component is reported after the approval landed`,
-        await settled(() => rig.hasText('Incompatible packages:') && rig.hasText('probe-component')), rig.screen())
+        await settled(() => rig.hasText('Incompatible packages:') && rig.hasText('probe-component') && rig.hasText('engines.dsh >=99.0.0')), rig.screen())
       await rig.enter()
       check(`${tag}: the retry after a risk does not resubmit the spent approval`,
         await settled(() => rig.installs.length === 3 && rig.installs[2]?.approvedBuilds === undefined),

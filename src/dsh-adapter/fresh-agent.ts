@@ -97,6 +97,11 @@ export function isUnstoredFreshSession(session: Session | undefined): boolean {
 function deferInitialPolicy(ctx: Context, session: FilteredSession, writer: SessionWriter, source: JsonlPersistence): void {
   if (session.seq !== 0) return
   const providerFiber = concreteService(source.ctx.fiber)
+  // 0.2.1 publishes the service from a child; its named parent owns live
+  // routing so it can outlive consumer unloads. Older providers route on the
+  // service fiber itself. Never suppress the root's unrelated observers.
+  const parentFiber = concreteService(providerFiber.parent.fiber)
+  const routingFiber = parentFiber.name === source.name ? parentFiber : providerFiber
   const descriptor = Object.getOwnPropertyDescriptor(session, Context.filter)
   const originalFilter = session[Context.filter]
   const flush = writer.flush
@@ -112,7 +117,7 @@ function deferInitialPolicy(ctx: Context, session: FilteredSession, writer: Sess
   }
   const filter = (listener: Context): boolean =>
     (originalFilter?.call(session, listener) ?? true) &&
-    (!deferred || concreteService(listener.fiber) !== providerFiber)
+    (!deferred || concreteService(listener.fiber) !== routingFiber)
   let stopEvents: (() => void) | undefined
   let stopFlush: (() => void) | undefined
   const release = (): void => {

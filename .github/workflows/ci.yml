@@ -251,10 +251,9 @@ jobs:
       # 整合包产物编码契约防复发（.bat CRLF / install.ps1 UTF-8 BOM / install.sh LF）。
       - run: pnpm verify:installer-bundle
 
-  # The newest prerelease is source-checked while CI keeps rc.2 as the installed
-  # compatibility baseline. Type-check the adapter and compose both patches
-  # against the immutable upstream rc.1 source SHA. Missing source
-  # is a hard failure.
+  # Type-check the adapter and compose both patches against the primary
+  # validated prerelease source, pinned to its immutable tag SHA. Missing
+  # source is a hard failure.
   alpha-compat:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -270,11 +269,11 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      # deepseek-ai/deepseek-harness tag dsh-v0.2.0-rc.2
+      # deepseek-ai/deepseek-harness tag dsh-v0.2.1-alpha.5
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: 639ed015397290b3745d163aafe02ffee4aa3f84
+          ref: 1517a4dbca0a2789ff1d41ba439600f8547d23fa
           path: .upstream/deepseek-harness
           fetch-depth: 1
           persist-credentials: false

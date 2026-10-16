@@ -63,6 +63,11 @@ export interface PluginArtifact {
 /** What the profile's compatibility file currently exempts. */
 export type VersionExemptions = ReturnType<PluginManagerView['listVersionExemptions']>
 
+/** Stable display shape across the host's peers → requirements rename. */
+export type IncompatiblePackage = Pick<IncompatiblePlugin, 'name' | 'version' | 'runtimeVersion'> & {
+  readonly peers: Readonly<Record<string, string>>
+}
+
 /**
  * What `/plugin install` has to say next. `done` means the flow has reported
  * everything it is going to report: refused, finished, failed or cancelled.
@@ -79,7 +84,7 @@ export type PluginInstallStep =
   /** pnpm was blocked by build scripts this profile has not approved. */
   | { readonly kind: 'build-blocked'; readonly builds: readonly string[] }
   /** The running host refuses this exact version; the exemption is the escape. */
-  | { readonly kind: 'incompatible'; readonly packages: readonly IncompatiblePlugin[]; readonly exemptions: VersionExemptions }
+  | { readonly kind: 'incompatible'; readonly packages: readonly IncompatiblePackage[]; readonly exemptions: VersionExemptions }
   | { readonly kind: 'done' }
 
 /** What the caller of a flow supplies that only the UI knows. */
@@ -428,7 +433,11 @@ export function createPluginInstallFlow(options: PluginInstallFlowOptions): Plug
           packages: incompatible.map(entry => `${cell(entry.name)}@${cell(entry.version)}`).join(', '),
           runtime: cell(incompatible[0]?.runtimeVersion ?? ''),
         })])
-        return { kind: 'incompatible', packages: incompatible, exemptions: exemptionsNow() }
+        const packages = incompatible.map(entry => {
+          const shape = entry as IncompatiblePlugin & { requirements?: Record<string, string>; peers?: Record<string, string> }
+          return { name: entry.name, version: entry.version, runtimeVersion: entry.runtimeVersion, peers: shape.requirements ?? shape.peers ?? {} }
+        })
+        return { kind: 'incompatible', packages, exemptions: exemptionsNow() }
       }
       emit([
         t('plugins-install-failed', { reason: failureReasonOf(result) }),

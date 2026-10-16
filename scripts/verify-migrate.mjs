@@ -134,7 +134,8 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   const run = await importSessions(fakeAdapter, root, sessions)
   check('2a. 三条会话全部导入', run.imported === 3 && run.failed === 0, JSON.stringify(run))
 
-  const { default: JsonlSessionPersistence } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const JsonlSessionPersistenceModule = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const JsonlSessionPersistence = 'default' in JsonlSessionPersistenceModule ? JsonlSessionPersistenceModule.default : JsonlSessionPersistenceModule
   const { Context } = await import('@deepseek-ai/cordis')
   const ctx = new Context()
   const readFiber = ctx.plugin(JsonlSessionPersistence, { root })
@@ -206,7 +207,8 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
 {
   const run2 = await importSessions(fakeAdapter, root, fixtureSessions())
   check('4a. 二次导入零新增零失败', run2.imported === 0 && run2.existing === 3 && run2.failed === 0, JSON.stringify(run2))
-  const { default: JsonlSessionPersistence } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const JsonlSessionPersistenceModule = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const JsonlSessionPersistence = 'default' in JsonlSessionPersistenceModule ? JsonlSessionPersistenceModule.default : JsonlSessionPersistenceModule
   const { Context } = await import('@deepseek-ai/cordis')
   const ctx = new Context()
   const fiber = ctx.plugin(JsonlSessionPersistence, { root })
@@ -249,7 +251,8 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   }
   // 夹具 2 端到端：restore 后 5 条消息且末位是 user（尾问保留）
   {
-    const { default: JsonlSessionPersistence } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+    const JsonlSessionPersistenceModule = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+    const JsonlSessionPersistence = 'default' in JsonlSessionPersistenceModule ? JsonlSessionPersistenceModule.default : JsonlSessionPersistenceModule
     const { Context } = await import('@deepseek-ai/cordis')
     const { SessionLogOffset: SLO, Session } = await import('@deepseek-ai/dsh-session')
     const root2 = mkdtempSync(join(tmpdir(), 'verify-migrate-shapes-'))
@@ -320,7 +323,8 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
 
   const rootTools = mkdtempSync(join(tmpdir(), 'verify-migrate-tools-'))
   const run = await importSessions(fakeAdapter, rootTools, [toolSession, titled])
-  const { default: JsonlSessionPersistence } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const JsonlSessionPersistenceModule = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const JsonlSessionPersistence = 'default' in JsonlSessionPersistenceModule ? JsonlSessionPersistenceModule.default : JsonlSessionPersistenceModule
   const { Context } = await import('@deepseek-ai/cordis')
   const ctxT = new Context()
   const fiberT = ctxT.plugin(JsonlSessionPersistence, { root: rootTools })
@@ -393,7 +397,8 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
 
   const rootC = mkdtempSync(join(tmpdir(), 'verify-migrate-compact-'))
   const run = await importSessions(fakeAdapter, rootC, [compacted])
-  const { default: JsonlSessionPersistence } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const JsonlSessionPersistenceModule = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const JsonlSessionPersistence = 'default' in JsonlSessionPersistenceModule ? JsonlSessionPersistenceModule.default : JsonlSessionPersistenceModule
   const { Context } = await import('@deepseek-ai/cordis')
   const ctxC = new Context()
   const fiberC = ctxC.plugin(JsonlSessionPersistence, { root: rootC })

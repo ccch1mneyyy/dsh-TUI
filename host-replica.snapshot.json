@@ -1,13 +1,13 @@
 {
-  "hostVersion": "0.2.0-rc.2",
+  "hostVersion": "0.2.1-alpha.5",
   "replicas": {
-    "process-shutdown": "c394b2aa2ce08a3b1fcc8c544257c7d689dd4d0b1cfaf8602687e65eeaba5aa1",
-    "process-shutdown-timeout": "c394b2aa2ce08a3b1fcc8c544257c7d689dd4d0b1cfaf8602687e65eeaba5aa1",
-    "app-ready": "c394b2aa2ce08a3b1fcc8c544257c7d689dd4d0b1cfaf8602687e65eeaba5aa1",
-    "compose-profile": "c394b2aa2ce08a3b1fcc8c544257c7d689dd4d0b1cfaf8602687e65eeaba5aa1",
-    "run-profile": "c394b2aa2ce08a3b1fcc8c544257c7d689dd4d0b1cfaf8602687e65eeaba5aa1",
-    "boot": "234db45e1b3f8c683b5bc1f551948b2a2ec52a6468c7b6937725a23f1c0e0d96",
-    "startup-report": "1a03dee18683483ff6a1b27b2a1e650230da6bcca9a0f55f7d81b3308c3f307f",
-    "run-cli": "1a03dee18683483ff6a1b27b2a1e650230da6bcca9a0f55f7d81b3308c3f307f"
+    "process-shutdown": "32d6345d7457e7c19c18bad07a85856e7ef7c560d52a1da042d68981ee127b4d",
+    "process-shutdown-timeout": "32d6345d7457e7c19c18bad07a85856e7ef7c560d52a1da042d68981ee127b4d",
+    "app-ready": "32d6345d7457e7c19c18bad07a85856e7ef7c560d52a1da042d68981ee127b4d",
+    "compose-profile": "32d6345d7457e7c19c18bad07a85856e7ef7c560d52a1da042d68981ee127b4d",
+    "run-profile": "32d6345d7457e7c19c18bad07a85856e7ef7c560d52a1da042d68981ee127b4d",
+    "boot": "5135179ac810e4f626f32ec3bdc3293dc7d2028e8aa92e5e0c006f1a33b78e76",
+    "startup-report": "80112efe368efb1a39720c7ada0af00442e5131fb2744edaaff8a3e8bb499e6f",
+    "run-cli": "80112efe368efb1a39720c7ada0af00442e5131fb2744edaaff8a3e8bb499e6f"
   }
 }

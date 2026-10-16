@@ -313,7 +313,8 @@ const keyed = entries => entries.filter(e => e.summary !== null).map(e => e.summ
 
 // ── 5. 单会话导入（官方 JsonlSessionPersistence）────────────────────────
 {
-  const { default: JsonlSessionPersistence } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const JsonlSessionPersistenceModule = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const JsonlSessionPersistence = 'default' in JsonlSessionPersistenceModule ? JsonlSessionPersistenceModule.default : JsonlSessionPersistenceModule
   const { Context } = await import('@deepseek-ai/cordis')
   const { importForeignSession, createForeignImporter } = await import('../src/dsh-adapter/migrate/import-one.js')
   const { importSessions, migrationSessionId } = await import('../src/dsh-adapter/migrate/index.js')

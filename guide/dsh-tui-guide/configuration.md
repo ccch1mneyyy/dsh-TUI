@@ -382,8 +382,8 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 `dsh-auth` 插件包**。`/provider` 的添加分支提供 ChatGPT/Codex（`openai-codex`）、
 Claude（`anthropic`）、Grok（`xai`）订阅账号登录。宿主 pi-ai catalog 提供相应流程
 时还可使用 OpenAI 直连 ChatGPT 登录（`openai`，使用 OpenAI API 而非旧版 Codex
-后端）和 Meta Muse（`meta`）。当前主验证线 DSH `0.2.0-rc.2` 携带 pi-ai
-`0.87.1`，包含 Meta Muse，但不提供 OpenAI 直连登录。`/auth status`、`/auth login [provider]`、
+后端）和 Meta Muse（`meta`）。当前主验证线 DSH `0.2.1-alpha.5` 的开发依赖解析到 pi-ai
+`1.2.0`，包含 Meta Muse 与 OpenAI 直连登录。`/auth status`、`/auth login [provider]`、
 `/auth logout <provider>` 对这些 pi-ai 路由操作同一套凭据。浏览器授权会尝试自动打开页面，并在同一
 问卷中提供授权链接与手动粘贴回调 URL/代码的输入；设备码流程在轮询期间显示可复制的
 短码。无交互问卷服务的宿主会明确拒绝登录。

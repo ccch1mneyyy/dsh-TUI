@@ -54,7 +54,8 @@ syncBuiltinESMExports()
 
 const { Context } = await import('@deepseek-ai/cordis')
 const { default: SessionStore } = await import('@deepseek-ai/dsh-session')
-const { default: Jsonl } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+const JsonlModule = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+const Jsonl = 'default' in JsonlModule ? JsonlModule.default : JsonlModule
 const { listSummaries } = await import('../lib/types/dsh-adapter/sessions/list.js')
 
 // --- fixtures: three historical (v0/v0/v3) + two current (v4) sessions ----

@@ -57,7 +57,8 @@ import { fileURLToPath } from 'node:url'
 import { zstdCompressSync } from 'node:zlib'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { KNOWN_SESSION_EVENT_TYPES, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
-import Jsonl from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlModule from '@deepseek-ai/dsh-session-persistence-jsonl'
+const Jsonl = 'default' in JsonlModule ? JsonlModule.default : JsonlModule
 
 const root = mkdtempSync(join(tmpdir(), 'dsh-tui-resume-legacy-'))
 const {

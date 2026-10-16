@@ -89,10 +89,10 @@ manifest 一致,过期即红)。
 
 ## 上游契约
 
-- 校验版本线:主 `0.2.0-rc.2`,兼容 `0.2.0-rc.1` / `0.1.7-rc.2` / `0.1.7-rc.1` / `0.1.5-rc.1` / `0.1.5-alpha.2` / `0.1.5-alpha.1` / `0.1.3-alpha.2` / `0.1.2-rc.1` / `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
+- 校验版本线:主 `0.2.1-alpha.5`,兼容 `0.2.0-rc.2` / `0.2.0-rc.1` / `0.1.7-rc.2` / `0.1.7-rc.1` / `0.1.5-rc.1` / `0.1.5-alpha.2` / `0.1.5-alpha.1` / `0.1.3-alpha.2` / `0.1.2-rc.1` / `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
   (`src/dsh-adapter/contract.ts` 的 `UPSTREAM_VALIDATED_VERSIONS`;特性门控用
   `installedMeetsVersion(pkg, 'x.y.z-<alpha|beta|rc>.n')` 跨家族、跨预发布通道比较,老安装上优雅降级)
-- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || 0.1.2-alpha.3 || 0.1.2-alpha.4 || 0.1.2-alpha.5 || 0.1.2-rc.1 || 0.1.3-alpha.2 || 0.1.5-alpha.1 || 0.1.5-alpha.2 || 0.1.5-rc.1 || 0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2`(新命名的 registry/PTC 包仅声明 `0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2`;契约外版本启动时打 drift 警告;新增预发布一律用精确 OR,不用 caret)
+- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || 0.1.2-alpha.3 || 0.1.2-alpha.4 || 0.1.2-alpha.5 || 0.1.2-rc.1 || 0.1.3-alpha.2 || 0.1.5-alpha.1 || 0.1.5-alpha.2 || 0.1.5-rc.1 || 0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.5`(新命名的 registry/PTC 包仅声明 `0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-alpha.5`;契约外版本启动时打 drift 警告;新增预发布一律用精确 OR,不用 caret)
 - 白名单包:blessed list(harness 包按完整版本号校验,框架包 cordis/schemastery 按 major 校验)
 - 启动时:检测到 drift 打 warning;CI 上 `pnpm run verify:contract` 直接失败
 
@@ -107,7 +107,7 @@ manifest 一致,过期即红)。
   进 blessed 清单。宿主 CLI `@deepseek-ai/dsh` **不是**依赖(它的依赖树是整个 CLI):
   `host-dsh.ts` 本地声明入口读取的 `profile-boot` 三个导出。运行期**不**从本包解析
   它们:入口按宿主 realpath 加载宿主自己的副本(profile 由宿主 dsh 安装、cordis 必须单实例),
-  所以它们也在运行期可缺的集合里(缺席不算 drift)。新包范围只写已核对的 `0.2.0-rc.2`
+  所以它们也在运行期可缺的集合里(缺席不算 drift)。宿主类型包范围为 `0.2.0-rc.2 || 0.2.1-alpha.5`
   (`dsh-home-paths` 沿用家族宽范围)。`cordis-plugin-loader` 只当 `unknown` 用,不声明 peer。
 - **能力探测**:`HOST_MODULES` 列出 8 个宿主模块与入口读取的每个导出。`loadHostDsh` 逐项检查,
   缺模块 / 缺导出即抛出点名原因,入口回退(DSH 内核交给 `dsh --profile`,Claude 内核无宿主解析)
@@ -153,7 +153,7 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 
 ## 升级流程
 
-- dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.2.0-rc.2`,
+- dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.2.1-alpha.5`,
   CI `alpha-compat` lane 还对同版上游 tag 的固定 SHA 做源码类型与 patch 合成校验。
   旧 SQLite 迁移工具的依赖闭包单独锁在 `vendor/sqlite-island`。
 - 主验证线移动时 `verify:contract` 会要求复核独立入口的复刻面(见「独立入口的宿主契约」),
@@ -165,6 +165,14 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   追加、保留历史。
 - 业务 UI 代码原则上零修改;若最新预发布源码 tsc 报错,修复落在 `src/dsh-adapter/`
   内,优先形状探测而非版本门,老安装上优雅降级。
+
+## 0.2.1 适配接缝
+
+- `session-persistence-jsonl` 从默认类导出改成具名 `apply` 插件；迁移入口按导出形状选择，旧宿主仍用默认类。
+- 新 JSONL 服务由子 fiber 发布、父 fiber 持有事件路由；空会话守卫按实际路由 owner 延迟写入，首个真实活动只移交一次完整日志，旧版仍匹配服务自身的 fiber。
+- 插件管理的不兼容结果从 `peers` 改成 `requirements`（含 `engines.dsh`）；安装流程在适配层归一化，确认界面保留完整要求与精确版本豁免。
+- 上游移除了 `dsh-invariants`，本包不再依赖它；保留 `./invariant` 兼容入口，仅在旧宿主提供服务时注册。
+- 复核 alpha.5 的入口复刻面：退出、ready、环境加载、profile 组合与启动报告的消费语义不变；新增的运行时解析重组由宿主 `PluginPackages` 与插件管理服务拥有。Web 的模型 label Slot、DOM 布局和终端查询缓存属于 Web 客户端，本包不消费这些接缝。
 
 ## 同会话模型路由
 

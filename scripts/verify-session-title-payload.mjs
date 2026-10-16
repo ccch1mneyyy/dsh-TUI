@@ -37,7 +37,8 @@ import { zstdCompressSync } from 'node:zlib'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore, { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
-import Jsonl from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlModule from '@deepseek-ai/dsh-session-persistence-jsonl'
+const Jsonl = 'default' in JsonlModule ? JsonlModule.default : JsonlModule
 
 const root = mkdtempSync(join(tmpdir(), 'dsh-tui-title-payload-'))
 // The compat writer resolves its store through this override first.

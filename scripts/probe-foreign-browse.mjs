@@ -14,7 +14,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const { createForeignBrowser } = await import('../src/dsh-adapter/migrate/browse.js')
-const { default: JsonlSessionPersistence } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+const JsonlSessionPersistenceModule = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+const JsonlSessionPersistence = 'default' in JsonlSessionPersistenceModule ? JsonlSessionPersistenceModule.default : JsonlSessionPersistenceModule
 const { Context } = await import('@deepseek-ai/cordis')
 
 const scratch = mkdtempSync(join(tmpdir(), 'probe-foreign-browse-'))

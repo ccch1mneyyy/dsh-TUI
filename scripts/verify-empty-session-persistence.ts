@@ -18,11 +18,13 @@ import PlanMode from '@deepseek-ai/dsh-plan-mode'
 import SandboxPolicy, { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import SessionStore, { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistenceModule from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import Approval, { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import { settled, sleep } from './lib/term-test.mjs'
+
+const JsonlSessionPersistence = 'default' in JsonlSessionPersistenceModule ? JsonlSessionPersistenceModule.default : JsonlSessionPersistenceModule
 
 const handoffRole = process.env.DSH_TUI_EMPTY_HANDOFF_ROLE
 if (handoffRole === 'driver') {
