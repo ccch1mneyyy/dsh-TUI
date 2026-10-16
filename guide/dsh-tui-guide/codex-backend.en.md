@@ -245,8 +245,11 @@ past tokens/cost. Fresh usage notifications update the readings.
 - `/rename` changes the official thread title; `/color` stores a session accent, not a global theme.
 - `/fork` creates a resumable copy without switching. Double `Esc` or `/rewind` conversation
   rewind creates a copy before the selected question, returns the question to the composer
-  and preserves the original. Rewinding the first question creates an empty thread. **File-only
-  and conversation+files rewind are unsupported**; the Git working tree does not revert.
+  and preserves the original. Rewinding the first question creates an empty, resumable fork.
+  First-question rewind, or rewind without a loaded predecessor, requires Codex app-server
+  **0.160.1+**, checked from the connection handshake. Older or unknown server versions
+  receive an explicit upgrade notice; rewind with a loaded predecessor keeps its existing path.
+  **File-only and conversation+files rewind are unsupported**; the Git working tree does not revert.
 - Resume replays the newest 20 full turns before live continuation. Load older messages uses
   prefetched full-item pages, not tool-omitting summaries. Retry when prefetch is still pending;
   repeated failure reports a notice. Active resume deduplicates redelivered approvals and

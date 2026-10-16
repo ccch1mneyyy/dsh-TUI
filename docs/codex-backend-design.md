@@ -672,7 +672,9 @@ Codex 渠道 = 一个 OpenAI 兼容的 Responses API 端点（中转站）。存
   `thread/fork{threadId, lastTurnId: anchor 所在回合的**上一个**回合}` → 返回
   `{kind:'rewound', session: 新 ref}`（与 Claude 完全一致，原 thread 保留，可 `/resume` 回去）。
   本地没有上一回合（首回合、分页尚未加载或记录已淘汰）时 →
-  `thread/fork{beforeTurnId: anchor 所在回合}`，由 Codex 按原生回合定位截断，无需先加载更早消息；
+  `thread/fork{beforeTurnId: anchor 所在回合}`，由 Codex 按原生回合定位截断；此路径要求
+  当前连接握手中的服务端版本至少为 `MIN_CODEX_BEFORE_TURN_FORK_VERSION`（0.160.1）。
+  旧版或版本未知时明确拒绝并提示升级，不使用可能与 daemon 不同版本的本地 CLI 代替判断。
   首回合得到可恢复的空分支，并沿用当前设置。无回合的 `thread/start` 尚未落盘，取消订阅后
   `thread/resume` 会报 `no rollout found`，不能作为回退结果交给核心采用。
   **不用** `thread/revert`（原地删除，与核心的采用语义不符，且不可撤销）。
@@ -688,11 +690,11 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 活跃回合、托管凭据与显式渠道不走该分支；代理不可用则保留原错误。代理连接从不
 安装托管令牌，也不启动、停止 daemon。真实验证脚本为 `verify-codex-daemon-offline.ts`。
 
-**C0 观察（评审更正）**：`thread/fork.beforeTurnId`（排除该回合及之后）只存在于**实验**类型
-（`generate-ts --experimental`），0.144.0 与 0.160.1 的稳定类型都只有 `lastTurnId`。
-本地已知上一回合时仍用稳定的 `lastTurnId`；没有上一回合时使用 `beforeTurnId`（hub 握手已开启
-`experimentalApi`）。真实 0.160.1 离线回归覆盖空分支取消订阅后的恢复及原会话保留，
-不发起模型请求。
+**版本边界**：0.160.1 的 `thread/fork.beforeTurnId` 是实验字段，hub 已开启 `experimentalApi`；
+0.144.0 的参数结构没有这个字段，即使开启实验 API 也可能静默忽略它，变成复制完整历史。
+因此没有本地上一回合时必须检查服务端版本；已知上一回合时仍用稳定的 `lastTurnId`。
+真实 0.160.1 离线回归覆盖空分支恢复及原会话保留；假服务端回归覆盖 0.144.0、
+0.160.0 与未知版本在 fork 前拒绝，不发起模型请求。
 
 ### 5.13 子代理（`session/subagents.ts`）
 

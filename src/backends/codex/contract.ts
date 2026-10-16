@@ -36,6 +36,10 @@ export const VALIDATED_CODEX_VERSIONS: readonly string[] = ['0.160.1']
  */
 export const MIN_CODEX_VERSION = '0.144.0'
 
+/** Oldest verified server for `thread/fork.beforeTurnId`; older servers can
+ *  silently ignore the field and fork the entire conversation. */
+export const MIN_CODEX_BEFORE_TURN_FORK_VERSION = '0.160.1'
+
 /** The `codex-cli` version `protocol/generated/` was generated from. */
 export const PROTOCOL_VERSION = '0.160.1'
 

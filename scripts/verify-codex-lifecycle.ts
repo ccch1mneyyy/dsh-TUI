@@ -66,9 +66,13 @@ async function fixture(options: {
   readonly resume?: Rec
   readonly prefs?: CodexPrefsData
   readonly store?: ReturnType<typeof memoryCodexPrefs>
+  readonly serverVersion?: string | null
   readonly configure?: (fake: FakeAppServer) => void
 } = {}) {
-  const fake = createFakeAppServer()
+  const fake = createFakeAppServer({ initialize: {
+    userAgent: options.serverVersion === null ? 'unknown' : `dsh-tui/${options.serverVersion ?? '0.160.1'} (fake; x86_64)`,
+    codexHome: '/TMP/home', platformFamily: 'unix', platformOs: 'linux',
+  } })
   const clock = manualClock()
   const debug: string[] = []
   const hub = createCodexHub({ executable: '/fake/codex', args: ['app-server'], env: {}, cwd: CWD }, { transportFactory: fake.transportFactory, clock, debug: line => debug.push(line) })
@@ -177,6 +181,20 @@ await scenario('Known anchor survives bounded transcript retention', async () =>
     check('rewind a known evicted anchor delegates the cut to Codex', first.kind === 'rewound' && f.sent(CLIENT.threadFork).at(-1)?.beforeTurnId === '1' && f.sent(CLIENT.threadStart).length === 0)
   } finally { await f.close() }
 })
+
+for (const serverVersion of ['0.144.0', '0.160.0', null]) {
+  await scenario(`Rewind with an unsupported or unknown server (${serverVersion ?? 'unknown'})`, async () => {
+    const f = await fixture({ serverVersion, resume: resume([turn('2'), turn('1')]) })
+    try {
+      await f.session.history()
+      const first = await f.session.capabilities.rewind!.rewind('user-1', 'conversation')
+      check('first-turn rewind refuses before an old server can silently fork full history', first.kind === 'refused' && first.reason.includes('0.160.1') && f.sent(CLIENT.threadFork).length === 0 && f.sent(CLIENT.threadStart).length === 0)
+      check('refused rewind keeps the source identity and full transcript', f.session.ref.sessionId === THREAD && f.session.capabilities.transcript!.record()!.filter(event => event.type === 'user.message').length === 2)
+      const second = await f.session.capabilities.rewind!.rewind('user-2', 'conversation')
+      check('known-predecessor rewind still uses the supported lastTurnId path', second.kind === 'rewound' && f.sent(CLIENT.threadFork).at(-1)?.lastTurnId === '1' && f.sent(CLIENT.threadFork).at(-1)?.beforeTurnId === undefined)
+    } finally { await f.close() }
+  })
+}
 
 await scenario('Per-thread color persistence and bounded file preferences', async () => {
   const store = memoryCodexPrefs({ colors: { [THREAD]: 'red', other: 'green' } } as CodexPrefsData)
