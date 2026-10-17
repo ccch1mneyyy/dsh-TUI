@@ -201,6 +201,12 @@ console.log('    正在执行 pnpm install…')
 // 构建期静默重解析；上面的 lockfile-only 预同步保证 spec 与 lock 一致，
 // 刚发布自家包的 24h 门禁由精确版本豁免承接。
 execSync('pnpm install --frozen-lockfile', { cwd: standaloneDir, stdio: 'inherit' })
+// The published runtime must actually carry the independent CLI. A build
+// against an older registry artifact must fail, not ship a TUI-only bundle.
+for (const relative of ['cli/entry.mjs', 'cli/adapters/dsh/management-plugin.mjs']) {
+  const required = join(standaloneDir, 'node_modules', '@deepseek-harness-tui', 'dsh-tui', relative)
+  if (!existsSync(required)) throw new Error(`Standalone runtime is missing ${relative}; publish the matching CLI-bearing package first.`)
+}
 console.log('    正在打包 node_modules 到 runtime.tar.gz…')
 execFileSync('tar', ['-czf', runtimeTar, 'node_modules'], { cwd: standaloneDir, stdio: 'inherit' })
 const tarStat = statSync(runtimeTar)

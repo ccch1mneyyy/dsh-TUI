@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
 import { GUIDE_DIR, guideFiles } from './guide-sources.mjs'
@@ -40,6 +40,18 @@ const collectExports = value => {
   for (const nested of Object.values(value)) collectExports(nested)
 }
 collectExports(manifest.exports)
+
+// The independent CLI is shipped as ready-to-run ESM, outside lib/types.
+const cliRoot = new URL('../cli/', import.meta.url)
+function cliRuntimeFiles(dir, prefix = 'cli/') {
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.name === 'test' ? []
+    : entry.isDirectory() ? cliRuntimeFiles(new URL(`${entry.name}/`, dir), `${prefix}${entry.name}/`)
+    : /\.(mjs|json|d\.ts)$/u.test(entry.name) ? [`${prefix}${entry.name}`] : [])
+}
+for (const file of cliRuntimeFiles(cliRoot)) {
+  if (!packed.has(file)) throw new Error(`independent CLI file missing from tarball: ${file}`)
+}
+if ([...packed].some(path => path.startsWith('cli/test/'))) throw new Error('npm package contains CLI test fixtures')
 
 const missing = [...targets].filter(target => !packed.has(target))
 if (missing.length > 0) {

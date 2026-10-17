@@ -683,6 +683,7 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 | Session/channel behavior | Backend-neutral: `src/dsh-adapter/channel/core/`; DSH-only: `channel/extensions.ts` and its specialists; affected UI projections, compiled output, focused channel/replay regression (incl. `verify-backend-channel`, `verify-channel-rollback`) |
 | Renderer/layout behavior | `src/ink/` or Yoga source, compiled output, CI regressions, focused scroll/resize/PTY probe |
 | Skill discovery or presentation | DSH adapter, slash-command merge, `/skills`, and focused regressions; maintainer-only skills live in `.agents/skills/` and must stay out of npm |
+| Automation CLI | Root `cli/`, bilingual CLI guides and READMEs, package/CI/standalone checks; the engine must not depend on `src/` |
 | User-facing documented behavior | Both READMEs, applicable config/help text and bilingual `docs/` pages; a new bundled guide also needs `scripts/guide-sources.mjs` and `guide/dsh-tui-guide/SKILL.md` routing, then `node scripts/build-guide.mjs` / `node scripts/verify-guide.mjs` (do not edit copies by hand) |
 | Contribution intake or PR gate | `.mergify.yml`, `docs/contributing.md`, `docs/contributing.en.md`, `.github/workflows/pr-gate.yml`, `.github/scripts/pr-intake/`, `.github/APPROVED_CONTRIBUTORS` |
 | Package version or dependency | `package.json`, `pnpm-lock.yaml`, generated/published artifacts as applicable; do not churn the legacy npm lock incidentally |

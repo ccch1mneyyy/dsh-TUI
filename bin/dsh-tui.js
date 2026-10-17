@@ -490,6 +490,9 @@ const MSG = {
     en:
       `Usage: dsh-tui|dst [command] [options] [path|url]\n\n` +
       `Commands:\n` +
+      `  run / -p              Run one non-interactive DSH task (dst cli --help)\n` +
+      `  cli <command>          Independent automation CLI and management commands\n` +
+      `  dsh <argv...>          Forward native DSH arguments unchanged\n` +
       `  update                 Update the ${PROFILE} profile to the latest release\n` +
       `  migrate [agent]        Import conversations from claude-code/codex/omp/zcode/grok-build (--dry-run to preview)\n` +
       `  doctor                 Pre-flight environment checks (dsh/pnpm/profile/key)\n` +
@@ -509,6 +512,9 @@ const MSG = {
     zh:
       `用法：dsh-tui|dst [命令] [选项] [路径|URL]\n\n` +
       `命令：\n` +
+      `  run / -p              无界面运行单个 DSH 任务（dst cli --help）\n` +
+      `  cli <命令>             独立自动化 CLI 与管理命令\n` +
+      `  dsh <参数...>          原样转交官方 DSH CLI\n` +
       `  update                 将 ${PROFILE} profile 升级到最新版本\n` +
       `  migrate [agent]        迁移 claude-code/codex/omp/zcode/grok-build 的对话（--dry-run 预览）\n` +
       `  doctor                 启动前环境诊断（dsh/pnpm/profile/密钥）\n` +
@@ -594,6 +600,20 @@ if (subcommand === 'version' || subcommand === '--version' || subcommand === '-v
 if (subcommand === 'help' || subcommand === '--help' || subcommand === '-h') {
   console.log(msg('helpText'))
   process.exit(0)
+}
+// CLI is a separate, uncompiled application. Never bootstrap/render the TUI for
+// automation. A migrated single-file launcher prefers the updated profile copy.
+const cliInvocation = ['cli', 'run', '-p', '--print', 'session', 'models', 'skills', 'mcp', 'auth', 'capabilities', 'dsh'].includes(subcommand)
+if (cliInvocation) {
+  const profileEntry = join(profilePkgDir, 'cli', 'entry.mjs')
+  const ownEntry = join(ownDir, 'cli', 'entry.mjs')
+  const entry = existsSync(profileEntry) ? profileEntry : ownEntry
+  if (!existsSync(entry)) {
+    console.error('[dsh-tui] CLI_ENTRY_MISSING: update the profile or reinstall the package; no task was started.')
+    process.exit(3)
+  }
+  const { main } = await import(pathToFileURL(entry).href)
+  process.exit(await main(process.argv.slice(2)))
 }
 /**
  * The credential documents a read may consult, most authoritative first: the

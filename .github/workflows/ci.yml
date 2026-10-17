@@ -722,6 +722,9 @@ jobs:
       # dsh 替身，本就不依赖 lib/ 产物。放进这里的理由是 required 的
       # input-terminal 组只在 ubuntu 跑，而 bin/dsh-tui.js 有 Windows 专属
       # 分支（旧二进制清理、shellQuote/cmd 拼串）——只靠 ubuntu 等于没测。
+      - name: Independent CLI contract (cross-platform)
+        run: pnpm verify:cli
+
       - name: Safe-mode launcher gate (cross-platform)
         run: node scripts/verify-safe-mode.mjs
 

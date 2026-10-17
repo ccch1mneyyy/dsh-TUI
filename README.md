@@ -141,6 +141,13 @@ source builds, and troubleshooting, including migration from the former
 
 ### CLI
 
+Automation: `dst -p "task"`, `dst run --json`, `dst session list --json`.
+The independent engine does not load the TUI or inherit its profile/preferences;
+it uses official DSH headless/services (validated on 0.2.0-rc.2).
+`dst cli --help` lists its commands; `dst dsh <argv...>` forwards native DSH.
+See [Automation CLI](docs/cli.en.md) for protocol, limits, resume restrictions,
+and Node/Python/PowerShell integration examples.
+
 | Command | Purpose |
 | --- | --- |
 | `dsh-tui` / `dst` | Start the TUI; `dst` is a short alias for the same program |

@@ -115,6 +115,12 @@ TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 
 
 ### CLI 子命令
 
+自动化入口：`dst -p "任务"`、`dst run --json`、`dst session list --json`。
+独立引擎不加载 TUI，也不继承其 profile/偏好；执行与查询仍由官方 DSH
+headless/服务拥有（当前验证 0.2.0-rc.2）。`dst cli --help` 查看全部命令，
+`dst dsh <参数...>` 原样转交官方。协议、限制、会话恢复边界与
+Node/Python/PowerShell 示例见[自动化 CLI](docs/cli.md)。
+
 | 命令 | 作用 |
 | --- | --- |
 | `dsh-tui` / `dst` | 启动 TUI；短别名是同一个程序 |

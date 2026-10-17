@@ -44,6 +44,7 @@ export const GUIDE_DOCS = [
   'codex-backend',
   'themes',
   'migrate',
+  'cli',
   'vscode',
   'plugins',
 ]

@@ -513,6 +513,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 | 会话/channel 行为 | 后端中立的放 `src/dsh-adapter/channel/core/`，DSH 专属的放 `channel/extensions.ts` 及其 specialist、受影响的 UI 投影、编译产物、聚焦 channel/回放回归（含 `verify-backend-channel`、`verify-channel-rollback`） |
 | 渲染器/布局行为 | `src/ink/` 或 Yoga 源、编译产物、CI 回归、聚焦滚动/resize/PTY 探针 |
 | 技能发现或呈现 | DSH adapter、slash 命令合并、`/skills` 与相关回归；项目维护技能放 `.agents/skills/` 且不得加入 npm 包 |
+| CLI 自动化 | 根级 `cli/`、中英文 CLI 手册与 README、package/CI/standalone 验证；不从引擎依赖 `src/` |
 | 用户可见的文档化行为 | 中英文 README，适用的配置注释/帮助文本与 `docs/` 双语页；新增用户手册同时改 `scripts/guide-sources.mjs` 清单、`guide/dsh-tui-guide/SKILL.md` 路由，再 `node scripts/build-guide.mjs` / `node scripts/verify-guide.mjs`（不手改副本） |
 | 贡献入口或 PR 门禁 | `.mergify.yml`、`docs/contributing.md`、`docs/contributing.en.md`、`.github/workflows/pr-gate.yml`、`.github/scripts/pr-intake/`、`.github/APPROVED_CONTRIBUTORS` |
 | 包版本或依赖 | `package.json`、`pnpm-lock.yaml`、适用时的生成/发布产物；不要顺手搅动旧 npm 锁文件 |

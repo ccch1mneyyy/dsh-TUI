@@ -17,6 +17,7 @@ The root README lists what ships; the details live here. Chinese files have no s
 | --- | --- | --- | --- |
 | 使用说明 / User guide | [user-guide.md](user-guide.md) | [user-guide.en.md](user-guide.en.md) | 键位、命令、会话工作流与设置。 |
 | 交互与命令 / Interaction & commands | [interaction.md](interaction.md) | [interaction.en.md](interaction.en.md) | 键位、鼠标、问卷审批与 slash 命令。 |
+| 自动化 CLI / Automation CLI | [cli.md](cli.md) | [cli.en.md](cli.en.md) | 无界面执行、管理查询、版本化输出与官方转接。 |
 | 主题系统 / Themes | [themes.md](themes.md) | [themes.en.md](themes.en.md) | 内置主题、自动检测与自定义主题。 |
 | Claude 后端（实验性）/ Claude backend (experimental) | [claude-backend.md](claude-backend.md) | [claude-backend.en.md](claude-backend.en.md) | 启用、登录、与 DSH 的差异和已知限制。 |
 | Codex 原生后端（实验性）/ Native Codex backend (experimental) | [codex-backend.md](codex-backend.md) | [codex-backend.en.md](codex-backend.en.md) | 安装、登录/渠道、Plan/权限、原生会话与当前验证边界。 |

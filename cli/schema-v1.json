@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dshtui.com/schemas/cli-v1.json",
+  "title": "dst CLI v1 record",
+  "type": "object",
+  "required": ["schemaVersion", "type"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "type": { "enum": ["capabilities", "session", "status", "text", "thinking", "tool_call", "tool_result", "error", "result"] },
+    "ok": { "type": "boolean" },
+    "sessionId": { "type": "string", "minLength": 1 },
+    "text": { "type": "string" },
+    "exitCode": { "type": "integer" },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": { "code": { "type": "string" }, "message": { "type": "string" } }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "result" } } },
+      "then": {
+        "required": ["ok"],
+        "oneOf": [
+          { "properties": { "ok": { "const": true } }, "not": { "required": ["error"] } },
+          { "properties": { "ok": { "const": false } }, "required": ["error", "exitCode"] }
+        ]
+      }
+    }
+  ],
+  "additionalProperties": true
+}

@@ -58,8 +58,8 @@ const {
 // scripts/verify-standalone-cache-guard.mjs).
 const { ensureRuntime } = require('./cacheGuard.cjs')
 
-const TUI_VERSION = '0.9.2'
-const DSH_VERSION = '0.1.1-rc.2'
+const TUI_VERSION = '0.15.0'
+const DSH_VERSION = '0.2.0-rc.2'
 const BUNDLE_ID = `tui-${TUI_VERSION}-dsh-${DSH_VERSION}`
 const PROFILE = 'dsh-tui'
 const archivePath = fileURLToPath(new URL('./runtime.tar.gz', import.meta.url))
@@ -86,6 +86,8 @@ async function ensureRuntimeReady() {
     requiredPaths: [
       'node_modules/@deepseek-ai/dsh/lib/bin.js',
       'node_modules/@deepseek-harness-tui/dsh-tui/cordis.patch.yml',
+      'node_modules/@deepseek-harness-tui/dsh-tui/cli/entry.mjs',
+      'node_modules/@deepseek-harness-tui/dsh-tui/cli/adapters/dsh/management-plugin.mjs',
     ],
     log: text => process.stderr.write(text),
   })
@@ -151,6 +153,21 @@ if (process.platform === 'win32') {
 }
 
 await ensureRuntimeReady()
+const cliEntry = join(tuiRoot, 'cli', 'entry.mjs')
+const cliCommand = process.argv.slice(2)[0]
+if (['cli', 'run', '-p', '--print', 'session', 'models', 'skills', 'mcp', 'auth', 'capabilities', 'dsh'].includes(cliCommand)) {
+  // Bypass TUI profile initialization. The standalone cache supplies the same
+  // independently shipped CLI; DSH owns its own headless profile and home.
+  process.env.DSH_HOME ??= resolve(process.env.DSH_TUI_STANDALONE_HOME ?? join(homedir(), '.dsh-tui-standalone'))
+  process.env.DSH_TUI_CLI_INSTALL_ANCHOR ??= dirname(dirname(dshBin))
+  const node = process.env.DSH_TUI_CLI_NODE ?? 'node'
+  const { spawn } = await import('node:child_process')
+  const child = spawn(node, [cliEntry, ...process.argv.slice(2)], { stdio: 'inherit', shell: false })
+  child.on('error', () => { console.error('CLI_NODE_UNAVAILABLE: install Node ^22.19 or >=24, or set DSH_TUI_CLI_NODE.'); process.exit(3) })
+  child.on('exit', (code, signal) => { if (signal) process.kill(process.pid, signal); else process.exit(code ?? 1) })
+  await new Promise(resolve => child.once('close', resolve))
+  process.exit(0)
+}
 ensureProfile()
 
 process.env.DSH_TUI_STANDALONE = '1'

@@ -87,6 +87,15 @@ manifest 一致,过期即红)。
 真实 import,越界即失败;已挂进 `build`)。多后端的分层见
 [docs/agent-backend-design.md](docs/agent-backend-design.md)。
 
+## 独立自动化 CLI
+
+根级 `cli/` 是与 `src/` 物理隔离的应用，不复用 TUI channel、渲染或偏好。
+其引擎只能 import 同目录中立模块与 Node 内建；只有 `entry.mjs` 绑定
+`adapters/dsh/`。该 adapter 解析官方 DSH 安装、调用其 JS bin，并用单独的
+Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商包标识符只出现在
+这个 adapter 中；不放宽上表对 `src/` 的规则。`pnpm verify:cli` 包含带负例的
+边界门禁、进程及替换契约；用户行为与迁移步骤见 [CLI 手册](docs/cli.md)。
+
 ## 上游契约
 
 - 校验版本线:主 `0.2.1-alpha.5`,兼容 `0.2.0-rc.2` / `0.2.0-rc.1` / `0.1.7-rc.2` / `0.1.7-rc.1` / `0.1.5-rc.1` / `0.1.5-alpha.2` / `0.1.5-alpha.1` / `0.1.3-alpha.2` / `0.1.2-rc.1` / `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`

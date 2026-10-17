@@ -324,6 +324,7 @@ const GROUPS = {
     ["verify-btw-thread", ['node', '--import', 'tsx/esm', 'scripts/verify-btw-thread.mjs']],
   ],
   'input-terminal': [
+    ['verify-cli', ['node', '--test', 'cli/test/cli.test.mjs', 'cli/test/edges.test.mjs', 'cli/test/package.test.mjs', 'cli/test/boundary.test.mjs']],
 // 原生光标：inline/fullscreen × 宽/窄终端、无同步输出的重绘顺序、
 // 纯光标移动不隐藏、列表焦点与可见性切换、resize、外部交接与退出恢复。
     ['verify-native-cursor', ['node', '--import', 'tsx/esm', 'scripts/verify-native-cursor.tsx']],
