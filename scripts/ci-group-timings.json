@@ -267,6 +267,7 @@
     "verify-permission-store": 0.3,
     "verify-plan-exit-restore": 1.3,
     "verify-plan-review-scroll": 3.4,
+    "verify-plugin-panel-namespace": 0.9,
     "verify-plugin-panels": 0.9,
     "verify-plugin-scene-boundary": 0.6,
     "verify-preset-startup": 3.1,

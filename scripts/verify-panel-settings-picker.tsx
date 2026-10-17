@@ -285,9 +285,15 @@ const ROW_TODO = 0, ROW_JOBS = 2, ROW_COMPANION = 7
     icon: '◉',
     order: 50,
     source: 'plugin',
+    // panels.ts freezes the resolved namespace onto the definition; the picker
+    // renders it as the row description.
+    pluginId: 'demo',
     component: () => null,
   }, { pluginId: 'demo' })
   check('l plugin panel row appears without reopening', await settled(() => screen.has('Notes'), { timeoutMs: 4000 }))
+  // The row's description names the namespace the panel is persisted under —
+  // the visible half of issue #1473, where it read '插件面板（act1）'.
+  check('l plugin row names the panel namespace', screen.has(t('settings-panels-plugin', { plugin: 'demo' })))
   cursor = await arrow(screen.stdin, 'down', 8, cursor)
   screen.stdin.write('\r')
   check('l plugin panel id written on tick',

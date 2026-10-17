@@ -1385,6 +1385,12 @@ const GROUPS = {
 // open 限速/跨插件所有权/订阅过滤/崩溃禁用/释放撤下 + 无头渲染冒烟
 // （插件面板抛错出错误卡、3 次崩溃出禁用卡、Chat 侧不受影响）。
     ["verify-plugin-panels", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-panels.tsx']],
+// 面板命名空间避碰（#1474 评审 R1）：loader 条目 id 与宿主发号器的 `act<N>`
+// 不能互相抢占——一个恰叫 `act1` 的合法条目加它两个运行期子插件注册同一局部
+// id 必须 3/3 注册上，`act<N>` 形状的条目 id 不许当稳定命名空间，自动发号先占
+// 时同名条目要让位，卸载后面板与启用列表一起回收。发号器是模块级计数器，所以
+// 本用例**自成进程**（verify-plugin-panels 里同形状的用例跑在若干次发号之后）。
+    ["verify-plugin-panel-namespace", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-panel-namespace.ts']],
 // 终端点击目标回归（点击链接开浏览器 / 文件路径弹菜单）：路径判定、
 // dsh-file: URL 编解码、相对路径按 cwd 解析、file:// 转换、Windows
 // start 组装——fileTarget.ts / openExternal.ts 的纯函数部分。

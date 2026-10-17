@@ -2,7 +2,9 @@
  * Admission loader (src/dsh-adapter/admission-loader.ts) on a real Cordis
  * composition: a row whose package carries `dsh-plugin.json` registers its
  * panel under the manifest id when armed (absolute and bare specifiers) and
- * under `act<N>` when not; a missing `tuiPluginHost` settles refused, bounded.
+ * under the owning loader entry id when not — `act<N>` is left for mounts with
+ * no owning entry (bare `ctx.plugin()`); a missing `tuiPluginHost` settles
+ * refused, bounded.
  * fake-home must load first: the plugin-host row writes the effect ledger.
  *
  * Run: node --import tsx/esm scripts/verify-admission-loader.ts
@@ -125,9 +127,14 @@ function reportedIds(report: string): string[] {
   return last.ids ?? []
 }
 
-async function activate(composition: MountedComposition, id: string): Promise<string> {
+/** Mount a fixture package. `entryId` defaults to the manifest id; every case
+ *  that asserts admission passes a different one, so that case proves WHICH of
+ *  the two named the panel — with the loader fallback in place an unbound
+ *  identity is named after the row id instead, so reusing the manifest id as
+ *  the row id would make the two indistinguishable. */
+async function activate(composition: MountedComposition, id: string, entryId = id): Promise<string> {
   const entry = writePackage(id)
-  await composition.root.loader.create({ id, name: entry, config: { report: composition.report } })
+  await composition.root.loader.create({ id: entryId, name: entry, config: { report: composition.report } })
   await composition.root.loader.await()
   // 固定窗:pacing 行 apply 后的落盘报告没有可轮询锚点（reportedIds 要等 appendFileSync）
   await sleep(400)
@@ -162,12 +169,14 @@ const control = await mount(false)
 await activate(control, 'verify-anonymous')
 const controlIds = reportedIds(control.report)
 check('control: the plugin applied and registered its panel', controlIds.length === 1, JSON.stringify(controlIds))
-check('control: without the loader the panel falls back to the act<N> namespace',
-  controlIds.length === 1 && /^act\d+:demo$/u.test(controlIds[0]))
+check('control: without admission the namespace is the owning loader entry id',
+  controlIds.length === 1 && controlIds[0] === 'verify-anonymous:demo')
 
 // ── armed: the real armAdmissionLoader on the composition ─────────────────
+// The row id and the manifest id differ on purpose: the namespace must come
+// from the manifest (admission), not from the entry the loader mounted.
 const armed = await mount(true)
-await activate(armed, 'verify-admitted')
+await activate(armed, 'verify-admitted', 'verify-admitted-row')
 const armedIds = reportedIds(armed.report)
 check('armed: the plugin applied and registered its panel', armedIds.length === 1, JSON.stringify(armedIds))
 check('armed: admission lands before apply, so the panel carries the manifest id',
@@ -199,24 +208,29 @@ await nested.root.loader.await()
 await sleep(300)
 let nestedThrew: string | undefined
 try {
-  await activate(nested, 'verify-after-nested')
+  // Row id ≠ manifest id, as in the first armed case: the loader fallback would
+  // name the panel after the row, so this proves admission still bound it.
+  await activate(nested, 'verify-after-nested', 'verify-after-nested-row')
 } catch (error) {
   nestedThrew = messageOf(error)
 }
 check('nested id: an unresolvable entry id does not tear the loader down',
   nestedThrew === undefined, nestedThrew ?? '')
+const nestedLog = readFileSync(nested.report, 'utf8')
 check('nested id: the other activation on the same composition is still admitted',
-  readFileSync(nested.report, 'utf8').includes('verify-after-nested:demo'), readFileSync(nested.report, 'utf8'))
+  nestedLog.includes('verify-after-nested:demo') && !nestedLog.includes('verify-after-nested-row:demo'), nestedLog)
 
 // Unloading the row must release its identity, so re-activation is admitted again.
-const entryId = 'verify-admitted'
+const entryId = 'verify-admitted-row'
 const entry = armed.root.loader.resolve(entryId) as { fiber?: { dispose?: () => Promise<unknown> } } | undefined
 await entry?.fiber?.dispose?.()
 // 固定窗:pacing 让撤销在 Cordis 里落定，之后没有断言锚点可轮询
 await sleep(200)
-const again = await activate(armed, 'verify-admitted-2')
+// Row id ≠ manifest id again: re-admission after an unload must come from a
+// freshly bound identity, not from the entry the loader mounted.
+const again = await activate(armed, 'verify-admitted-2', 'verify-admitted-2-row')
 check('armed: a fresh activation is admitted again (identity is per-activation)',
-  readFileSync(armed.report, 'utf8').includes('verify-admitted-2:demo') || again.includes('verify-admitted-2:demo'))
+  again.includes('verify-admitted-2:demo') && !again.includes('verify-admitted-2-row:demo'), again)
 
 // ── armed + BARE specifier: the profile's real third-party row name ───────
 // The cases above use absolute paths; a profile row names a package, so the
@@ -313,7 +327,10 @@ for (const boundary of [false, true]) {
     await composition.root.loader.await()
     const applied = await settled(() => reportedIds(composition.report).length > 0)
     const id = reportedIds(composition.report)[0] ?? ''
-    check('stray manifest: ' + suffix + ' respects the nearest package boundary', applied && (boundary ? /^act\d+:demo$/u.test(id) : id === 'verify-root-' + suffix + ':demo'), id)
+    // No trusted identity in the boundary case: this PR names identity-less
+    // entries after their owning loader entry id instead of act<N>, and the
+    // stray package manifest must never lend its id.
+    check('stray manifest: ' + suffix + ' respects the nearest package boundary', applied && (boundary ? id === suffix + ':demo' : id === 'verify-root-' + suffix + ':demo'), id)
   } finally { await composition.root.fiber.dispose() }
 }
 
@@ -327,7 +344,9 @@ try {
   await withoutResolver.root.loader.create({ id: 'without-resolver', name, config: { report: withoutResolver.report } })
   await withoutResolver.root.loader.await()
   const applied = await settled(() => reportedIds(withoutResolver.report).length > 0)
-  check('missing active resolver: execution continues without guessed component authority', applied && /^act\d+:demo$/u.test(reportedIds(withoutResolver.report)[0] ?? ''), JSON.stringify(reportedIds(withoutResolver.report)))
+  // Same fallback: with no resolver no manifest may claim the activation, so the
+  // owning entry id names it.
+  check('missing active resolver: execution continues without guessed component authority', applied && reportedIds(withoutResolver.report)[0] === 'without-resolver:demo', JSON.stringify(reportedIds(withoutResolver.report)))
 } finally {
   withoutResolver.root.loader.internal = savedResolver
   await withoutResolver.root.fiber.dispose()

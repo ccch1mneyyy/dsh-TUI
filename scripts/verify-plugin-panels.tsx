@@ -18,7 +18,12 @@
  *    (no-consumer open returns false without rate-limit consumption);
  *  - subscribe: only own-panel events (registered/badge/unregistered/
  *    disabled), listener errors swallowed;
- *  - dispose → store entry gone, CSV cleaned, ledger release recorded.
+ *  - dispose → store entry gone, CSV cleaned, ledger release recorded;
+ *  - loader-owned activation (real cordis-plugin-loader entry) → the panel
+ *    namespace is the entry id, independent of mount order; bare mounts,
+ *    runtime `ctx.plugin()` children of an entry (they inherit `entry` from
+ *    their parent context) and non-slug (nested) entry ids keep the act<N>
+ *    fallback.
  *
  * Render smoke (headless XTerm): throwing plugin panel renders the error
  * card and the chat body stays intact; the 3rd reportError flips the entry
@@ -29,10 +34,11 @@
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
+import { pathToFileURL } from 'node:url'
 
 const [cordis, React, XTermMod, ui, termTest, prefs, i18nMod, adapterMod, storeMod, bridgeMod, panelAdapterMod] = await Promise.all([
   import('@deepseek-ai/cordis'),
@@ -52,7 +58,7 @@ const { Terminal: XTerm } = XTermMod
 const { render, ThemeProvider, AlternateScreen, Box, Text } = ui
 const { settled, sleep } = termTest
 const { applySidePanelPanels, DEFAULT_SIDE_PANEL_IDS, getSidePanelPanels, parseSidePanelIds } = prefs
-const { setLang } = i18nMod
+const { setLang, t } = i18nMod
 const { applyConfiguredSidePanelPanels, applySidePanelPanelsFromSettings, TuiPanelRuntime, getHostPanelRuntime } = adapterMod
 const { panelStore } = storeMod
 const { panelBridgeRequests } = bridgeMod
@@ -244,6 +250,109 @@ disposeA?.()
 check('dispose removes store entry', panelStore.get(idA) === undefined)
 check('dispose cleans enabled CSV', !parseSidePanelIds(getSidePanelPanels()).includes(idA))
 check('dispose records ledger release', ledgerRecords().some(r => r.resource?.id === idA && r.result === 'applied' && r.operation === 'release'))
+
+// ── loader-owned activation: the panel namespace is the entry id ─────────
+// A plugin configured in cordis.yml / cordis.patch.yml is mounted by a loader
+// entry. When its activation carries no Component identity — admission (armed
+// in production by src/dsh-adapter/plugin.ts) mints one only for third-party
+// packages with a package-root dsh-plugin.json, and it wins when it does
+// apply — the entry id is the only stable, user-authored address it has. The
+// panel id carries that namespace into user settings (`<pluginId>:<id>` in
+// dsh-tui.sidePanel.panels), so it must not be handed out in activation order
+// — otherwise an unrelated entry registering first renames this plugin's
+// panels and orphans the saved row. The bare mounts above keep the act<N>
+// fallback; that generator is for fixtures, not for production.
+const { default: Loader } = await import('@deepseek-ai/cordis-plugin-loader')
+
+/** In-memory tree: `EntryTree.write()` is a documented no-op for these. */
+class MemoryLoader extends Loader { write(): void {} }
+
+const entryDir = mkdtempSync(join(tmpdir(), 'dsh-tui-panel-entry-'))
+const loaderFiber = await root.plugin(MemoryLoader)
+const loader = root.get('loader') as {
+  root: { create(options: { id: string; name: string }): Promise<string> }
+  await(): Promise<void>
+}
+
+/** Mount a throwaway module as a real loader entry (one file per entry id). */
+async function mountEntryModule(entryId: string, source: string): Promise<void> {
+  const modulePath = join(entryDir, entryId.replace(/[^a-z0-9_-]/giu, '_') + '.mjs')
+  writeFileSync(modulePath, source)
+  await loader.root.create({ id: entryId, name: pathToFileURL(modulePath).href })
+  await loader.await()
+}
+
+/** Mount a throwaway plugin module as a real loader entry owning one panel. */
+async function mountLoaderEntry(entryId: string, panelId: string): Promise<void> {
+  await mountEntryModule(entryId, [
+    `export const name = ${JSON.stringify(entryId)}`,
+    `export const inject = ['tuiPanels']`,
+    `export function apply(ctx) {`,
+    `  ctx.tuiPanels.register({ apiVersion: 1, id: ${JSON.stringify(panelId)}, title: 'Entry', component: () => null })`,
+    `}`,
+  ].join('\n'))
+}
+
+function panelOf(panelId: string): { id: string; pluginId?: string } | undefined {
+  const entry = panelStore.list().find(e => e.definition.id.endsWith(':' + panelId))
+  return entry === undefined ? undefined : { id: entry.definition.id, pluginId: entry.definition.pluginId }
+}
+
+check('bare mount keeps the act<N> fallback', /^act\d+:metrics$/u.test(idA), idA)
+
+// 'zzz-other-plugin' sorts and mounts first: under the old counter this is
+// exactly what pushed the next plugin onto act2.
+await mountLoaderEntry('zzz-other-plugin', 'other')
+await mountLoaderEntry('dsh-tui-find', 'search')
+const search = panelOf('search')
+const other = panelOf('other')
+check('loader entry id becomes the panel namespace', search?.id === 'dsh-tui-find:search', search?.id)
+check('loader entry id becomes the panel pluginId', search?.pluginId === 'dsh-tui-find', search?.pluginId)
+check('settings row names the entry, not act<N>', search !== undefined
+  && t('settings-panels-plugin', { plugin: search.pluginId ?? '' }) === '插件面板（dsh-tui-find）')
+check('mount order does not rename a panel', other?.id === 'zzz-other-plugin:other', other?.id)
+
+// Nested entry ids are '<parent>:<child>'; panel consumers split on the FIRST
+// colon, so a multi-segment namespace stays unclaimed and falls back instead.
+await mountLoaderEntry('nested:child', 'child')
+const child = panelOf('child')
+check('non-slug entry id falls back to act<N>', child !== undefined && /^act\d+:child$/u.test(child.id), child?.id)
+
+// Runtime children inherit `entry` from their parent context (the loader sets
+// `fiber.entry` from the nearest entry context up the chain), so reading
+// `owner.entry.id` without checking who the entry actually mounted would hand
+// the entry's namespace to every `ctx.plugin()` child as well: a parent and its
+// two children registering the same local id would all claim
+// 'panel-family:shared' and the later two would be turned away as duplicates.
+await mountEntryModule('panel-family', [
+  `export const name = 'panel-family'`,
+  `export const inject = ['tuiPanels']`,
+  `function child(label) {`,
+  `  return { name: 'panel-family-' + label, inject: ['tuiPanels'], apply(ctx) {`,
+  `    ctx.tuiPanels.register({ apiVersion: 1, id: 'shared', title: label, component: () => null })`,
+  `  } }`,
+  `}`,
+  `export function apply(ctx) {`,
+  `  ctx.tuiPanels.register({ apiVersion: 1, id: 'shared', title: 'Parent', component: () => null })`,
+  `  ctx.plugin(child('child-a'))`,
+  `  ctx.plugin(child('child-b'))`,
+  `}`,
+].join('\n'))
+const familyIds = panelStore.list().map(e => e.definition.id).filter(id => id.endsWith(':shared'))
+check('an entry root and its two runtime children all register the same local id',
+  familyIds.length === 3, familyIds.join(','))
+check('only the entry root takes the entry namespace',
+  familyIds.includes('panel-family:shared'), familyIds.join(','))
+check('runtime children keep distinct act<N> namespaces',
+  familyIds.filter(id => /^act\d+:shared$/u.test(id)).length === 2, familyIds.join(','))
+
+await loaderFiber.dispose()
+check('entry dispose removes the panel and its CSV row', panelOf('search') === undefined
+  && !parseSidePanelIds(getSidePanelPanels()).includes('dsh-tui-find:search'))
+check('entry dispose removes the runtime-child family too', familyIds.length === 3
+  && familyIds.every(id => panelStore.list().every(e => e.definition.id !== id)
+    && !parseSidePanelIds(getSidePanelPanels()).includes(id)), familyIds.join(','))
+rmSync(entryDir, { recursive: true, force: true })
 
 // ── render smoke: crash isolation + disabled card ───────────────────────
 // fresh panel that throws on every render (boundary catches → error card)
