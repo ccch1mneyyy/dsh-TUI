@@ -37,6 +37,9 @@ const requests: Array<{ url: string; body: Record<string, unknown>; headers: Hea
 let route = 'deepseek-official'
 let responseStatus = 200
 let profileWrites = 0
+const credentialValues = new Map([['DEEPSEEK_API_KEY', 'fixture-key']])
+const credentialWrites: Array<{ ref: string; value: string }> = []
+let rejectCredentialWrite = false
 const prompt = 'What changed? '.repeat(20)
 globalThis.fetch = async (input, init) => {
   const url = String(input)
@@ -64,7 +67,14 @@ try {
       await root.loader.await()
     },
   })
-  root.provide('credentials', { resolve: async () => ({ value: 'fixture-key' }) })
+  root.provide('credentials', {
+    resolve: async (ref: string) => credentialValues.has(ref) ? { value: credentialValues.get(ref)! } : undefined,
+    set: async (ref: string, value: string) => {
+      if (rejectCredentialWrite) throw new Error('fixture credential store is read-only')
+      credentialWrites.push({ ref, value })
+      credentialValues.set(ref, value)
+    },
+  })
   root.provide('agents', { currentInitiator: () => ({ session: {
     requestContext: () => ({ provider: route }),
     deriveMessages: () => [{ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: prompt }] }],
@@ -91,9 +101,12 @@ try {
   const valueOf = (ns: string, key: string) => getPath(host.listNamespaces().find(view => view.ns === ns)?.value, [key])
   const agent = { id: 'fixture-agent', ctx: { on: () => () => {} }, status: 'idle',
     session: { id: 'fixture-session', seq: 0, events: [] }, inbox: { remove: () => true } } as unknown as Agent
-  channel = createChannel({ get: (name: string) => ['settings', 'loader', 'web'].includes(name) ? root.get(name as never) : undefined,
+  channel = createChannel({ get: (name: string) => ['settings', 'loader', 'web', 'credentials'].includes(name) ? root.get(name as never) : undefined,
     on: () => () => {}, logger: { warn() {} } } as unknown as CordisContext,
   agent, { provider: 'deepseek-official', model: 'deepseek-flash', cwd: home, activity: false, upstreamRetry: false })
+  const { createChannelUi, createChannelUiLease } = await import('../src/adapter/channel/ui.js')
+  const uiLease = createChannelUiLease(() => true)
+  const uiChannel = createChannelUi(createChannelUi(channel, 'legacy', uiLease), 'legacy', uiLease)
   const sections = channel.settingsSections()
   assert.deepEqual(sections.map(section => section.ns), ['web', 'web-deepseek-api'], 'DSH channel exposes available web forms')
   const formFor = (ns: string) => {
@@ -101,24 +114,37 @@ try {
     return new SettingsForm(host, host.listNamespaces().find(view => view.ns === ns), section.fields)
   }
   const field = (ns: string, key: string) => sections.find(section => section.ns === ns)!.fields.find(field => field.path[0] === key)!
-  const credentialField = field('web-deepseek-api', 'apiKeyEnv')
-  for (const text of ['sk-review-fixture-do-not-use', 'store/key', '123_KEY', 'key with spaces']) {
-    const form = formFor('web-deepseek-api')
-    const before = profileWrites
-    const configured = JSON.stringify([...root.loader.entries()].map(entry => entry.options.config))
-    const described = JSON.stringify(host.listNamespaces())
-    form.edit(credentialField, text)
-    assert.equal(await form.save(), false, 'invalid credential references must not be saved')
-    assert.equal(profileWrites, before, 'invalid credential references never reach profile IO')
-    assert.equal(JSON.stringify([...root.loader.entries()].map(entry => entry.options.config)), configured)
-    assert.equal(JSON.stringify(host.listNamespaces()), described)
-  }
-  for (const ref of ['SEARCH_API_KEY_2', '_search_key', '']) {
-    const form = formFor('web-deepseek-api')
-    form.edit(credentialField, ref)
-    assert.equal(await form.save(), true, 'valid credential names and clearing remain writable')
-    assert.equal(valueOf('web-deepseek-api', 'apiKeyEnv'), ref || 'DEEPSEEK_API_KEY')
-  }
+  assert.equal(sections.flatMap(section => section.fields).filter(field => field.path[0] === 'apiKeyEnv').length, 0,
+    'web settings offer no variable-name input')
+  const keyField = field('web', 'apiKey')
+  assert.ok(keyField.secret, 'the single API key control uses the secret-field path')
+  assert.equal(sections.flatMap(section => section.fields).filter(field => field.secret !== undefined).length, 1)
+  const beforeKey = profileWrites
+  const configured = JSON.stringify([...root.loader.entries()].map(entry => entry.options.config))
+  const described = JSON.stringify(host.listNamespaces())
+  const keyForm = formFor('web')
+  keyForm.edit(keyField, 'sk-direct-fixture')
+  assert.equal(await keyForm.save(), true, keyForm.failureMessage)
+  assert.equal(credentialValues.get('DEEPSEEK_API_KEY') === 'sk-direct-fixture', true)
+  assert.equal(credentialWrites.length, 1)
+  assert.equal(profileWrites, beforeKey, 'key input never writes profile configuration')
+  assert.equal(JSON.stringify([...root.loader.entries()].map(entry => entry.options.config)), configured)
+  assert.equal(JSON.stringify(host.listNamespaces()), described, 'redacted settings contain no key literal')
+  assert.equal(keyForm.field(keyField).text, '', 'saved key drafts are cleared')
+  assert.equal(formFor('web').field(keyField).text, '', 'reopening never reads a key back')
+  const blankKey = formFor('web')
+  blankKey.edit(keyField, '')
+  assert.equal(await blankKey.save(), true)
+  assert.equal(credentialWrites.length, 1, 'blank input preserves the existing key')
+  const refusedKey = formFor('web')
+  refusedKey.edit(keyField, 'sk-refused-fixture')
+  rejectCredentialWrite = true
+  assert.equal(await refusedKey.save(), false, 'credential-store refusals reach the form')
+  rejectCredentialWrite = false
+  assert.equal(credentialWrites.length, 1)
+  await assert.rejects(host.writeCredential('DEEPSEEK_API_KEY', 'sk-forged-fixture', { ...keyField.secret!.authorization }), /./,
+    'plain metadata cannot forge access to a reserved credential')
+  assert.equal(credentialWrites.length, 1)
   const choose = async (search: string, fetch: string) => {
     const form = formFor('web')
     form.edit(field('web', 'searchProvider'), search)
@@ -138,7 +164,7 @@ try {
   assert.equal(result.sources[0]?.snippet, 'Source excerpt')
   assert.equal(requests.at(-1)?.body.count, 3, 'next request reads the saved result bound')
   assert.equal(requests.at(-1)?.body.ori_question, prompt.trim().slice(0, 128))
-  assert.equal(requests.at(-1)?.headers.get('authorization'), 'Bearer fixture-key')
+  assert.equal(requests.at(-1)?.headers.get('authorization'), 'Bearer sk-direct-fixture')
   assert.equal((await runtime.fetch({ url: 'https://page.invalid' })).body.kind, 'text')
   assert.equal(requests.at(-1)?.url, 'https://web-fixture.invalid/tools/fetch')
   for (const [name, args, expected] of [
@@ -184,13 +210,14 @@ try {
     await choose('deepseek-official', 'http')
     const rows = 24
     const term = new Terminal({ cols: columns, rows, allowProposedApi: true })
+    const output: string[] = []
     class Output extends Writable {
       columns = columns; rows = rows; isTTY = true
-      _write(chunk: unknown, _encoding: BufferEncoding, done: () => void) { term.write(String(chunk), done) }
+      _write(chunk: unknown, _encoding: BufferEncoding, done: () => void) { output.push(String(chunk)); term.write(String(chunk), done) }
     }
     const stdin = new Input()
     const screen = () => viewportLines(term, rows).join('\n')
-    const content = <SettingsScreen channel={channel} onClose={() => {}} />
+    const content = <SettingsScreen channel={uiChannel} onClose={() => {}} />
     const instance = await render(fullscreen ? <AlternateScreen>{content}</AlternateScreen> : content,
       { stdout: new Output(), stdin, stderr: new Writable({ write(_chunk, _encoding, done) { done() } }), patchConsole: false, exitOnCtrlC: false })
     try {
@@ -199,6 +226,21 @@ try {
       assert.ok(await settled(() => screen().includes('‹ Search API')), screen())
       assert.ok(await settled(() => valueOf('web', 'searchProvider') === 'deepseek-search-api'),
         'the terminal selector saves through the real settings service')
+      stdin.write('\x1b[B')
+      assert.ok(await settled(() => screen().split('\n').some(line => line.includes('❯') && line.includes('Fetch'))), screen())
+      stdin.write('\x1b[B')
+      assert.ok(await settled(() => screen().split('\n').some(line => line.includes('❯') && line.includes('API key'))), screen())
+      stdin.write('\r')
+      assert.ok(await settled(() => screen().includes('▌')), screen())
+      const writes = credentialWrites.length
+      stdin.write('sk-ui-fixture')
+      assert.ok(await settled(() => screen().includes('••••')), screen())
+      stdin.write('\r')
+      assert.ok(await settled(() => credentialWrites.length === writes + 1), screen())
+      assert.equal(output.join('').includes('sk-ui-fixture'), false, 'terminal output never echoes the key')
+      assert.equal(screen().includes('Credential reference'), false)
+      assert.equal(screen().includes('DEEPSEEK_API_KEY'), false)
+
     } finally { await instance.unmount(); term.dispose() }
   }
   let previous = { web: 'web', api: 'web-deepseek-api' }
@@ -259,7 +301,43 @@ try {
   assert.equal(valueOf('included-api', 'count'), 9)
   await root.web.search({ query: 'included owner' })
   assert.equal(requests.at(-1)?.body.count, 9, 'included Config owners receive the saved API settings')
-  console.log('web settings OK: credential validation, custom Config owners, live routing, API parameters, account/key auth, cancellation, failure, legacy fallback and 4 terminal layouts')
+  const staleField = included.flatMap(section => section.fields).find(field => field.secret !== undefined)!
+  const beforeRedirect = credentialWrites.length
+  await host.write('included-api', [{ op: 'set', path: ['apiKeyEnv'], value: 'TEST_SEARCH_KEY' }])
+  await assert.rejects(host.writeCredential(staleField.secret!.ref, 'sk-stale-fixture', staleField.secret!.authorization), /./)
+  assert.equal(credentialWrites.length, beforeRedirect, 'a changed credential target cannot redirect an open key editor')
+  const freshSections = channel.settingsSections()
+  const freshWeb = freshSections.find(section => section.ns === 'included-web')!
+  const freshField = freshWeb.fields.find(field => field.secret !== undefined)!
+  const freshForm = new SettingsForm(host, host.listNamespaces().find(view => view.ns === freshWeb.ns), freshWeb.fields)
+  freshForm.edit(freshField, 'sk-custom-fixture')
+  assert.equal(await freshForm.save(), true, freshForm.failureMessage)
+  route = 'deepseek-official'
+  await root.web.search({ query: 'saved key' })
+  assert.equal(requests.at(-1)?.headers.get('authorization') === 'Bearer sk-custom-fixture', true,
+    'the next API operation uses the key entered through the single key control')
+  await assert.rejects(host.writeCredential(keyField.secret!.ref, 'sk-disposed-fixture', keyField.secret!.authorization), /./)
+  assert.equal(credentialWrites.length, beforeRedirect + 1, 'disposed Config owners cannot write credentials')
+  const Schema = (await import('@deepseek-ai/schemastery')).default
+  root.loader.builtins.messages = {
+    name: 'web-search-deepseek',
+    Config: Schema.object({ apiKeyEnv: Schema.string().default('TEST_MESSAGES_KEY').volatile() }),
+    apply() {},
+  }
+  await root.loader.create({ id: 'custom-messages', name: 'cordis:messages', config: {} })
+  await root.loader.await()
+  await host.write('included-web', [{ op: 'set', path: ['searchProvider'], value: 'deepseek-official' }])
+  const messageSections = channel.settingsSections()
+  const messageWeb = messageSections.find(section => section.ns === 'included-web')!
+  assert.equal(messageSections.flatMap(section => section.fields).filter(field => field.secret !== undefined).length, 1,
+    'Messages and Search API share one key input')
+  const messageField = messageWeb.fields.find(field => field.secret !== undefined)!
+  const messageForm = new SettingsForm(host, host.listNamespaces().find(view => view.ns === messageWeb.ns), messageWeb.fields)
+  messageForm.edit(messageField, 'sk-messages-fixture')
+  assert.equal(await messageForm.save(), true, messageForm.failureMessage)
+  assert.equal(credentialWrites.at(-1)?.ref, 'TEST_MESSAGES_KEY', 'the key input follows the selected search API')
+  assert.equal(credentialValues.get('TEST_SEARCH_KEY') === 'sk-custom-fixture', true, 'switching APIs preserves the other key')
+  console.log('web settings OK: direct masked key input and credential-store writes, custom Config owners, live routing, API parameters, account/key auth, cancellation, failure, legacy fallback and 4 terminal layouts')
 } finally {
   if (channel !== undefined) disposeChannelOwner(channel)
   globalThis.fetch = originalFetch

@@ -1208,6 +1208,7 @@ const dict = {
   'settings-saved': { zh: '已保存 {{ns}}', en: 'Saved {{ns}}' },
   'settings-save-failed': { zh: '保存 {{ns}} 失败——请重试', en: 'Saving {{ns}} failed — please retry' },
   'settings-secret-ref-reserved': { zh: '凭据 {{ref}} 由宿主保留，写入被拒绝：第三方设置区块不能覆盖宿主共享凭据', en: 'Credential {{ref}} is reserved by the host; write rejected: third-party settings sections cannot overwrite host-shared credentials' },
+  'settings-web-key-changed': { zh: '网页搜索设置已变化，请重新打开设置后输入密钥', en: 'Web search settings changed. Reopen settings and enter the key again.' },
   // /settings 里 sidePanel.panels 的勾选列表。
   'settings-panels-unclaimed': { zh: '暂无面板使用此 id：先保留，等插件注册后生效', en: 'No panel uses this id yet; kept until a plugin registers it' },
   'settings-panels-plugin': { zh: '插件面板（{{plugin}}）', en: 'Plugin panel ({{plugin}})' },

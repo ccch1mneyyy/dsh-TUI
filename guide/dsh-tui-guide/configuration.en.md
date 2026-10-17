@@ -35,13 +35,15 @@ Each selection saves immediately and applies to the next operation. Choose
 **Messages** / **HTTP** to restore the original providers. Enter accepts a custom
 provider ID. Sections use the plugin's actual Loader entry ID, including custom IDs.
 
-The **DeepSeek Search / Fetch API** section edits the API base URL, credential
-reference, result count (1–50), and **Send original question**. The base URL
+**Web search** has one **API key** input. Paste the key for the selected search API;
+typing is masked and confirmation saves it in DSH's credential store, outside
+profile configuration. Reopening shows only whether a key is configured. Blank
+input preserves the saved key, and switching APIs selects that API's credential.
+
+The **DeepSeek Search / Fetch API** section edits the API base URL,
+result count (1–50), and **Send original question**. The base URL
 includes the path prefix without `/search` or `/fetch`; its default is
-`https://api.deepseek.com/v1/tools`. The credential reference defaults to
-`DEEPSEEK_API_KEY`: enter the name of an existing credential or environment
-variable matching `[A-Za-z_][A-Za-z0-9_]*`; invalid references are not saved.
-Store literal keys in the credential store. DSH supplies an authorized account token for the account route.
+`https://api.deepseek.com/v1/tools`. DSH supplies an authorized account token for the account route.
 Search sends the first 128 characters of the latest user prompt by default;
 the section can disable this. Messages search has its own endpoint and maximum
 search count section.

@@ -183,8 +183,8 @@ export interface SettingsHost {
   write(ns: string, ops: readonly SettingsPathOp[], expectedRevision?: number): Promise<void>
   /** Whether any layer supplies a credential under `ref`. */
   credentialConfigured(ref: string): Promise<boolean>
-  /** Persist a credential; rejects when env-shadowed or the store is read-only. */
-  writeCredential(ref: string, value: string): Promise<void>
+  /** Persist a credential; opaque host authorization is checked by identity. */
+  writeCredential(ref: string, value: string, authorization?: object): Promise<void>
 }
 
 /** A recoverable fault in a namespace's persisted document (shown as a badge). */
@@ -279,9 +279,10 @@ export interface TuiSettingsField {
    * never rides the settings document — the draft starts blank on every
    * open, a blank draft writes nothing, and a typed draft writes through the
    * credentials seam under `ref`. The screen shows only whether a value is
-   * configured.
+   * configured. Optional authorization belongs to host controls and is omitted
+   * from plugin-visible projections.
    */
-  secret?: { ref: string }
+  secret?: { ref: string; authorization?: object }
   /**
    * Render a stored value as draft text. Defaults to the kind's conversion
    * (strings verbatim, numbers via `String`, booleans/selects by value).

@@ -236,13 +236,13 @@ export class SettingsForm {
     const ns = this.view.ns
     const snapshot = new Map(this.edits)
     const ops: SettingsPathOp[] = []
-    const secrets: { ref: string; text: string }[] = []
+    const secrets: { ref: string; text: string; field: TuiSettingsField }[] = []
     for (const field of this.fields) {
       const staged = snapshot.get(fieldKey(field))
       if (staged === undefined) continue
       if (field.secret !== undefined) {
         // Blank drafts write nothing; typed drafts replace the credential.
-        if (staged.text !== '') secrets.push({ ref: field.secret.ref, text: staged.text })
+        if (staged.text !== '') secrets.push({ ref: field.secret.ref, text: staged.text, field })
         continue
       }
       const write = staged.clear ? ({ kind: 'clear' } as const) : defaultParse(field, staged.text)
@@ -266,7 +266,7 @@ export class SettingsForm {
         }
       }
       for (const secret of secrets) {
-        await this.host.writeCredential(secret.ref, secret.text)
+        await this.host.writeCredential(secret.ref, secret.text, secret.field.secret?.authorization)
       }
       for (const [key, edit] of snapshot) {
         if (this.edits.get(key) === edit) this.edits.delete(key)

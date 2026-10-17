@@ -482,6 +482,7 @@ export function Settings({
 
   const refresh = (): void => {
     setNamespaces(host?.listNamespaces() ?? [])
+    setSections(channel.settingsSections())
   }
 
   // Secret fields report only configured/unconfigured; resolve each ref once

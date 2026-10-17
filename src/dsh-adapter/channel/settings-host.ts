@@ -4,10 +4,15 @@ import { t } from '../../i18n.js'
 import type { ChannelState } from '../channel/types.js'
 import { isReservedCredentialRef } from '../credentialRefGuard.js'
 import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupHost } from '../providerWizard.js'
-import type { SettingsHost } from '../settingsEditor.js'
-import type { SettingsNamespaceView, SettingsNamespaceWarning, TuiSettingsSection } from '../../adapter/ports/channel-settings.js'
+import { getPath, type SettingsHost } from '../settingsEditor.js'
+import type { SettingsNamespaceView, SettingsNamespaceWarning, TuiSettingsField, TuiSettingsSection } from '../../adapter/ports/channel-settings.js'
 import { settingsValue } from '../compat/settings.js'
 import { concreteService } from '../host-access.js'
+
+// An opaque leaf survives the renderer's detached read projections. Plain
+// metadata cannot forge it; writes still pass the Channel UI lifetime/policy gate.
+class WebCredentialAuthorization {}
+const webCredentialFields = new WeakMap<object, { store: object; owner: object; ns: string; ref: string }>()
 
 /** Forms over the host's web settings; provider selection remains owned by DSH. */
 export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly SettingsNamespaceView[]): TuiSettingsSection[] {
@@ -21,14 +26,22 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
   let webNs: string | undefined
   let apiNs: string | undefined
   let messagesNs: string | undefined
+  let apiOwner: object | undefined
+  let messagesOwner: object | undefined
   // Settings namespaces belong to Config-owning fibers, not package or row names.
   for (const entry of loader?.entries() ?? []) {
     // entry.id includes an Include tree path; settings uses the raw Config owner ID.
     const ns = entry.options.id
     if (entry.fiber === undefined || !available.has(ns)) continue
     if (webOwner !== undefined && concreteService(entry.fiber) === concreteService(webOwner)) webNs = ns
-    if (entry.fiber.runtime?.name === 'web-deepseek-api') apiNs = ns
-    if (entry.fiber.runtime?.name === 'web-search-deepseek') messagesNs = ns
+    if (entry.fiber.runtime?.name === 'web-deepseek-api') {
+      apiNs = ns
+      apiOwner = concreteService(entry.fiber)
+    }
+    if (entry.fiber.runtime?.name === 'web-search-deepseek') {
+      messagesNs = ns
+      messagesOwner = concreteService(entry.fiber)
+    }
   }
   // This section is introduced together with live provider selection in rc.2.
   // Older hosts keep their existing search route without an ineffective picker.
@@ -55,6 +68,22 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
           { value: 'http', label: 'HTTP' },
         ],
       },
+      ...((): TuiSettingsField[] => {
+        const searchApi = getPath(namespaces.find(view => view.ns === webNs)?.value, ['searchProvider']) === 'deepseek-search-api'
+        const ns = searchApi ? apiNs : messagesNs ?? apiNs
+        const owner = searchApi ? apiOwner : messagesOwner ?? apiOwner
+        const ref = getPath(namespaces.find(view => view.ns === ns)?.value, ['apiKeyEnv']) ?? 'DEEPSEEK_API_KEY'
+        const store = ctx.get('credentials') as object | undefined
+        if (owner === undefined || store === undefined || typeof ref !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(ref)) return []
+        const authorization = Object.freeze(new WebCredentialAuthorization())
+        const field: TuiSettingsField = {
+          path: ['apiKey'], label: 'API key', descriptions: { zh: 'API 密钥' }, kind: 'text', secret: { ref, authorization },
+          hint: 'Paste a key for the selected search API. Saved keys are never displayed.',
+          hintDescriptions: { zh: '粘贴当前搜索 API 的密钥，保存后不再显示原值。' },
+        }
+        webCredentialFields.set(authorization, { store: concreteService(store), owner, ns, ref })
+        return [field]
+      })(),
     ],
   })
   sections.push({
@@ -64,15 +93,6 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
       { path: ['baseURL'], label: 'API base URL', descriptions: { zh: 'API 基础地址' }, kind: 'text',
         hint: 'Include the path prefix, without /search or /fetch.',
         hintDescriptions: { zh: '包含路径前缀，不含末尾的 /search 或 /fetch。' } },
-      { path: ['apiKeyEnv'], label: 'Credential reference', descriptions: { zh: '凭据引用' }, kind: 'text',
-        hint: 'Use an environment-variable name; store literal keys in the credential store instead.',
-        hintDescriptions: { zh: '填写环境变量格式的凭据名称；密钥本身请存入凭据库。' },
-        parse(text) {
-          const ref = text.trim()
-          if (ref === '') return { kind: 'clear' }
-          // dsh-credentials CredentialRef uses POSIX environment-variable names.
-          return /^[A-Za-z_][A-Za-z0-9_]*$/u.test(ref) ? { kind: 'set', value: ref } : undefined
-        } },
       { path: ['count'], label: 'Search result count', descriptions: { zh: '搜索结果数' }, kind: 'number',
         parse(text) {
           if (text.trim() === '') return { kind: 'clear' }
@@ -131,7 +151,7 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
           ): Promise<void>
         }
         | undefined
-      const credentials = ctx.get('credentials') as
+      const credentials = () => ctx.get('credentials') as
         | {
           resolve(ref: string): Promise<{ value: string } | undefined>
           set(ref: string, value: string): Promise<void>
@@ -158,10 +178,24 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
           // The environment shadows the store (providerSetup.envShadows), so
           // an env-provided key counts as configured.
           if (process.env[ref] !== undefined) return true
-          return credentials !== undefined && (await credentials.resolve(ref)) !== undefined
+          return (await credentials()?.resolve(ref)) !== undefined
         },
-        async writeCredential(ref, value) {
-          if (!credentials) throw new Error('credentials service unavailable')
+        async writeCredential(ref, value, authorization) {
+          const store = credentials()
+          if (!store) throw new Error('credentials service unavailable')
+          const authorized = authorization === undefined ? undefined : webCredentialFields.get(authorization)
+          if (authorized !== undefined) {
+            const currentFields = webSettingsSections(ctx, settingsHostCache!.listNamespaces()).flatMap(section => section.fields)
+            const current = currentFields.flatMap(candidate => {
+              const binding = candidate.secret?.authorization === undefined ? undefined : webCredentialFields.get(candidate.secret.authorization)
+              return binding === undefined ? [] : [binding]
+            }).some(binding => binding.owner === authorized.owner && binding.ns === authorized.ns && binding.ref === ref)
+            if (!current || authorized.ref !== ref || authorized.store !== concreteService(store)) {
+              throw new Error(t('settings-web-key-changed'))
+            }
+            await store.set(ref, value)
+            return
+          }
           // Second layer of the secret-ref reservation guard: the
           // registration layer already rejects plugin sections with
           // host-owned refs, but this seam must not trust it — a stale
@@ -169,7 +203,7 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
           // reach the shared credentials. The host's own main-credential
           // writes go through providerSetup().writeCredential instead.
           if (isReservedCredentialRef(ref)) throw new Error(t('settings-secret-ref-reserved', { ref }))
-          await credentials.set(ref, value)
+          await store.set(ref, value)
         },
       }
       return settingsHostCache

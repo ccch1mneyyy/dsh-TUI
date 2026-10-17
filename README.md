@@ -103,8 +103,8 @@ Shell API, V4 session messages, declarative presets, and profile-backed settings
 older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
 
 On DSH rc.2, `/settings` also selects DeepSeek Search / Fetch APIs and edits their
-endpoint and result limits, supporting custom Loader entry IDs and validating
-credential-reference names before saving. Official Flash model labels show the `1017` release
+endpoint and result limits, supporting custom Loader entry IDs and a masked API
+key input saved through DSH's credential store. Official Flash model labels show the `1017` release
 marker while retaining the `deepseek-flash` model ID.
 
 On DSH 0.1.7, `/settings` uses the TUI's actual Loader entry ID, including custom
