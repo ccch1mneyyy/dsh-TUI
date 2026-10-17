@@ -253,6 +253,29 @@ Cordis config
 `scripts/build.sh` 是面向本地 DeepSeek Harness 源码检出的备用构建器（定位 DSH
 检出并重连依赖），不是本独立仓库的默认构建命令。
 
+### Windows 安装包（离线 setup.exe）
+
+`scripts/windows/` 产出 Release 里的 `dsh-tui-setup-win-x64.exe`：离线载荷加 NSIS 界面，
+只能在 Windows x64 上构建（需要 Node 24 与 NSIS 3）。
+
+```powershell
+npm ci --prefix scripts/windows --ignore-scripts
+node scripts/windows/build-installer-payload.mjs --out dist-windows
+node scripts/verify-windows-installer.mjs --build dist-windows --makensis 'C:\Program Files (x86)\NSIS\makensis.exe'
+& 'C:\Program Files (x86)\NSIS\makensis.exe' "/DBUILD_DIR=$pwd\dist-windows" scripts/windows/installer.nsi
+node scripts/verify-windows-installer.mjs --exe dist-windows/dsh-tui-setup-win-x64.exe
+```
+
+- 载荷按 TUI 的版本契约解析已发布的最新 DSH RC；`--kernel-version <rc>` 固定内核，
+  `--locks <目录>` 配 `--node-version <版本>` 复用上次的解析结果，两者不能同时用。
+- `verify-windows-installer.mjs` 编译一份隔离目录的测试 EXE，跑安装、profile 组合、旧 RC
+  升级、重复安装、静默降级拒绝与卸载，不写真实用户目录，耗时写入 `smoke-result.json`。
+- 界面资源（ICO、页头、欢迎页动画帧）由 `node scripts/windows/make-brand-assets.mjs` 从
+  `docs/assets/readme/logo*.svg` 与 `scripts/windows/assets/icon.svg` 重新生成；产物已提交，
+  只有改图时才需要跑（需要 `sharp`）。
+- `release-bundle.yml` 的 `windows-installer` job 在 Release 时跑同一套命令，产物与便携包
+  一起以一份 `SHA256SUMS` 上传。
+
 ## 验证（Verification）
 
 仓库没有根级 `test` 或 `lint` 脚本；不要声称跑过它们。TypeScript 构建是通用

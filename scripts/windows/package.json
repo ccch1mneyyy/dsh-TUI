@@ -1,0 +1,9 @@
+{
+  "name": "dsh-tui-windows-installer-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "cmd-shim": "8.0.0",
+    "semver": "7.7.3"
+  }
+}

@@ -1,0 +1,30 @@
+name: Watch upstream DSH RC
+
+# Weekly early warning: upstream may publish a DSH RC this checkout does not
+# bundle yet. The Windows installer already resolves the newest compatible RC at
+# build time, so a red run simply means "rebuild to adopt it" or, when the new RC
+# is outside the validated range, "bump src/dsh-adapter/contract.ts first".
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install installer script dependencies
+        run: npm ci --prefix scripts/windows --ignore-scripts
+
+      - name: Compare the newest upstream RC with the maintained contract
+        run: node scripts/windows/check-kernel-rc.mjs

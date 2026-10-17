@@ -91,6 +91,12 @@ daily** (TypeScript).
 
 ## Quick Start
 
+### Windows one-click installer (x64)
+
+Download `dsh-tui-setup-win-x64.exe` from [Releases](https://github.com/ccch1mneyyy/dsh-TUI/releases) and run it. Per-user, no administrator, fully offline, and no preinstalled Node or DSH.
+
+### Command-line installation
+
 Prerequisites: [Node.js](https://nodejs.org/en) and
 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 The `deepseek-official` API-key route needs `DEEPSEEK_API_KEY`. On DSH

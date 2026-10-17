@@ -84,6 +84,12 @@
 
 ## 快速开始
 
+### Windows 一键安装（x64）
+
+从 [Releases](https://github.com/ccch1mneyyy/dsh-TUI/releases) 下载 `dsh-tui-setup-win-x64.exe` 双击运行。免管理员、全离线，也无需预先装 Node 或 DSH。
+
+### 命令行安装
+
 前置条件：安装 [Node.js](https://nodejs.org/zh-cn) 与 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。`deepseek-official` API key 路由需要 `DEEPSEEK_API_KEY`；DSH 0.2.0-rc.1+ 的标准 profile 也可用 `/auth login deepseek-account` 登录，再通过 `/model` 选择独立的账号路由。其他支持的账号可在启动后通过 `/provider` 或 `/auth` 登录。
 
 主适配目标为 DSH `0.2.1-alpha.5`，已接入新版 Shell API、V4 会话消息、声明式预设与
