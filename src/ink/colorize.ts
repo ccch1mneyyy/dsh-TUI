@@ -17,7 +17,11 @@ import type { Color, TextStyles } from './styles.js'
  * terminal, tmux's passthrough limitation wins and we want level 2.
  */
 function boostChalkLevelForXtermJs(): boolean {
-  if (process.env.TERM_PROGRAM === 'vscode' && chalk.level === 2) {
+  // Windows Terminal (truecolor since 2019) sets WT_SESSION — forwarded into
+  // WSL — but neither COLORTERM nor TERM_PROGRAM.
+  const truecolorHost = process.env.TERM_PROGRAM === 'vscode'
+    || (Boolean(process.env.WT_SESSION) && process.env.FORCE_COLOR !== '2')
+  if (truecolorHost && chalk.level === 2) {
     chalk.level = 3
     return true
   }

@@ -8,6 +8,12 @@
  * 3. 70 cols (below SPLIT_DIFF_MIN_COLS): the card falls back to the
  *    unified view
  * 4. a new-file Write (oldText null) fills only the right pane
+ * 7. diffStyle `bars`: unified rows carry a colored ▌
+ *    bar and row tint, removals precede additions per block, context shows
+ *    once; the split layout swaps its −/+ markers for the same bar; both use
+ *    the full-strength diffAdded/diffRemoved row tint
+ * 8. hover under toolBackground `subtle`: context rows take the root's hover
+ *    card face (no striping) while changed rows keep their diff tint
  *
  * Exits non-zero on the first failed assertion (CI convention).
  */
@@ -16,16 +22,18 @@ process.env.FORCE_COLOR = '3'
 // module import resolves the startup lang (env > persisted > locale).
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseMessage }, { getCliHighlightPromise }, { parseAnsiRuns, chalkFromToken, highlightLines }, { sleep }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { AssistantToolUseMessage }, { ToolLeafRow }, { getCliHighlightPromise }, { parseAnsiRuns, chalkFromToken, highlightLines }, { sleep, settled, findText }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/components/messages/AssistantToolUseMessage.js'),
+  import('../src/components/messages/TranscriptLeaves.js'),
   import('../src/terminal-utils/cliHighlight.js'),
   import('../src/components/SplitDiffView.js'),
   import('./lib/term-test.mjs'),
 ])
+const { render } = ui
 
 let failures = 0
 const check = (name: string, ok: boolean, extra = '') => {
@@ -52,7 +60,7 @@ const editTool = {
 }
 
 /** Boot one headless terminal at the given width and render the card. */
-async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none') {
+async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none', diffStyle = 'default') {
   const rows = 30
   const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
   class FakeStdout extends Writable {
@@ -62,7 +70,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     _write(chunk, _e, cb) { term.write(String(chunk), cb) }
   }
   const app = await render(
-    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose: false, diffLayout, toolBackground }),
+    React.createElement(ToolLeafRow, { tool, marginTopOnTurn: false, verbose: false, diffLayout, toolBackground, diffStyle }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
   )
   // 固定窗:pacing cli-highlight 首次使用才懒加载，其后的补色重绘没有
@@ -224,6 +232,187 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   const lightColor = lightRuns?.[0]?.find(run => run.text === 'def')?.color
   check('主题签名不同缓存不串色', darkColor !== undefined && lightColor !== undefined && darkColor !== lightColor,
     `dark=${darkColor} light=${lightColor}`)
+}
+
+// ---- 7. diffStyle bars
+{
+  const { lines, screen, bgAt, fgAt } = await renderAt(70, editTool, 'auto', 'none', 'bars')
+  const s = screen()
+  check('bars：无经典 - /+ 行', !s.includes('- def shout') && !s.includes('+ def shout'))
+  const delRow = lines.findIndex(line => line.includes('def shout(text):'))
+  const addRow = lines.findIndex(line => line.includes('def shout(text, mark="!"):'))
+  check('bars：删除行在新增行之上', delRow >= 0 && addRow > delRow)
+  check('bars：改动行带 ▌', delRow >= 0 && addRow >= 0 && lines[delRow]!.includes('▌') && lines[addRow]!.includes('▌'))
+  const ctxRows = lines.filter(line => line.includes('# tail'))
+  check('bars：上下文只出现一次且无 ▌', ctxRows.length === 1 && !ctxRows[0]!.includes('▌'), JSON.stringify(ctxRows))
+  if (delRow >= 0 && addRow >= 0) {
+    const delBar = lines[delRow]!.indexOf('▌')
+    const addBar = lines[addRow]!.indexOf('▌')
+    check('bars：删除条为红词色', fgAt(delBar, delRow) === 0xb26671, `fg=${fgAt(delBar, delRow).toString(16)}`)
+    check('bars：新增条为绿词色', fgAt(addBar, addRow) === 0x57956b, `fg=${fgAt(addBar, addRow).toString(16)}`)
+    check('bars：删除行红底', bgAt(delBar + 2, delRow) === 0x3e2a2c, `bg=${bgAt(delBar + 2, delRow).toString(16)}`)
+    check('bars：新增行绿底（行尾）', bgAt(60, addRow) === 0x27392c, `bg=${bgAt(60, addRow).toString(16)}`)
+    const markX = lines[addRow]!.indexOf('mark="!"')
+    check('bars：改动词组亮绿', markX > 0 && fgAt(markX, addRow) === 0x57956b, `fg=${fgAt(Math.max(markX, 0), addRow).toString(16)}`)
+  }
+}
+{
+  const blockTool = {
+    ...editTool,
+    callId: 'c5',
+    callView: {
+      card: 'diff',
+      title: 'Edit /tmp/b.py',
+      diffs: [{ path: '/tmp/b.py', oldText: 'alpha\nbeta\nkeep', newText: 'ALPHA2\nBETA2\nkeep' }],
+    },
+  }
+  const { lines } = await renderAt(70, blockTool, 'auto', 'none', 'bars')
+  const order = ['alpha', 'beta', 'ALPHA2', 'BETA2', 'keep'].map(text => lines.findIndex(line => line.includes(text)))
+  check('bars：同块先全部删除再全部新增', order.every((row, i) => row >= 0 && (i === 0 || row > order[i - 1]!)), JSON.stringify(order))
+}
+{
+  const { lines, screen, bgAt } = await renderAt(120, editTool, 'auto', 'none', 'bars')
+  const pairRow = lines.findIndex(line => line.includes('def shout(text):') && line.includes('def shout(text, mark="!"):'))
+  check('bars + 宽屏：仍为双栏', pairRow >= 0 && lines[pairRow]!.includes('│'))
+  check('bars + 双栏：标记为 ▌ 而非 −/+', pairRow >= 0 && (lines[pairRow]!.match(/▌/g) ?? []).length === 2 && !screen().includes('−'))
+  if (pairRow >= 0) {
+    const dividerX = lines[pairRow]!.indexOf('│')
+    check('bars + 双栏：两栏改动行为非 dimmed 红/绿底', bgAt(6, pairRow) === 0x3e2a2c && bgAt(dividerX + 4, pairRow) === 0x27392c,
+      `bg=${bgAt(6, pairRow).toString(16)}/${bgAt(dividerX + 4, pairRow).toString(16)}`)
+  }
+}
+{
+  const tailTool = {
+    ...editTool,
+    callId: 'c6',
+    callView: {
+      card: 'diff',
+      title: 'Edit /tmp/t.py',
+      diffs: [{ path: '/tmp/t.py', oldText: 'x = 1\nend', newText: 'x = 2\nend\nmore' }],
+    },
+  }
+  const { lines } = await renderAt(70, tailTool, 'auto', 'none', 'bars')
+  const endRows = lines.filter(line => /\bend\b/.test(line))
+  check('末行无换行：共享末行仍为上下文', endRows.length === 1 && !endRows[0]!.includes('▌'), JSON.stringify(endRows))
+}
+{
+  // 8. Hover: SGR mode-1003 motion reaches the card only when stdin has a
+  //    useInput subscriber (mirrors Chat).
+  const cols = 70
+  const rows = 12
+  const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
+  class FakeStdout extends Writable {
+    columns = cols
+    rows = rows
+    isTTY = true
+    _write(chunk, _e, cb) { term.write(String(chunk), cb) }
+  }
+  class FakeStdin extends PassThrough {
+    isTTY = true
+    setRawMode() { return this }
+    ref() { return this }
+    unref() { return this }
+  }
+  const stdin = new FakeStdin()
+  const KeySink = () => { ui.useInput(() => {}); return null }
+  const app = await render(
+    React.createElement(ui.AlternateScreen, null, React.createElement(ui.Box, { flexDirection: 'column' },
+      React.createElement(KeySink),
+      React.createElement(AssistantToolUseMessage, { tool: editTool, marginTopOnTurn: false, verbose: false, diffStyle: 'bars', toolBackground: 'subtle', onClick: () => {} }),
+    )),
+    { stdout: new FakeStdout(), stdin, stderr: new FakeStdout(), exitOnCtrlC: false, patchConsole: false },
+  )
+  await sleep(900) // 固定窗:pacing 同 renderAt，等语法高亮补色
+  const buf = term.buffer.active
+  const lineAt = (y) => buf.getLine(y)?.translateToString(true) ?? ''
+  const bgAt = (x, y) => (buf.getLine(y)?.getCell(x)?.getBgColor() ?? 0) & 0xffffff
+  let ctxRow = -1
+  let addRow = -1
+  for (let y = 0; y < rows; y++) {
+    if (lineAt(y).includes('# tail')) ctxRow = y
+    if (lineAt(y).includes('mark="!"')) addRow = y
+  }
+  check('hover 前 subtle：上下文行浅档底', ctxRow >= 0 && bgAt(40, ctxRow) === 0x1c2330, `bg=${bgAt(40, Math.max(ctxRow, 0)).toString(16)}`)
+  stdin.write(`\x1b[<35;10;${ctxRow + 1}M`)
+  await sleep(300) // 固定窗:pacing hover 重绘
+  check('hover：上下文行随卡片 hover 底色', ctxRow >= 0 && bgAt(40, ctxRow) === 0x242b3a, `bg=${bgAt(40, Math.max(ctxRow, 0)).toString(16)}`)
+  check('hover：新增行保留绿底', addRow >= 0 && bgAt(60, addRow) === 0x27392c, `bg=${bgAt(60, Math.max(addRow, 0)).toString(16)}`)
+  app.unmount()
+}
+{
+  const { screen } = await renderAt(70, editTool, 'auto', 'none', 'default')
+  check('default 风格保持经典统一式', screen().includes('- def shout(text):') && !screen().includes('▌'))
+}
+
+// ---- 9. File separators retain their file actions in both layouts and modes.
+for (const fullscreen of [false, true]) {
+  for (const diffLayout of ['unified', 'split'] as const) {
+    const cols = diffLayout === 'split' ? 120 : 70
+    const rows = 20
+    const term = new XTerm({ cols, rows, scrollback: 100, allowProposedApi: true })
+    class FakeStdout extends Writable {
+      columns = cols
+      rows = rows
+      isTTY = true
+      _write(chunk, _e, cb) { term.write(String(chunk), cb) }
+    }
+    class FakeStdin extends PassThrough {
+      isTTY = true
+      setRawMode() { return this }
+      ref() { return this }
+      unref() { return this }
+    }
+    const stdin = new FakeStdin()
+    const opened: string[] = []
+    let toggles = 0
+    const path = '/tmp/second.py'
+    const tool = {
+      ...editTool,
+      callId: `paths-${fullscreen}-${diffLayout}`,
+      callView: {
+        card: 'diff',
+        title: 'MultiEdit',
+        diffs: [
+          { path: '/tmp/first.py', oldText: 'before', newText: 'after' },
+          { path, oldText: 'two', newText: 'TWO' },
+          { path, oldText: 'three', newText: 'THREE' },
+        ],
+      },
+    }
+    const KeySink = () => { ui.useInput(() => {}); return null }
+    const content = React.createElement(ui.Box, { flexDirection: 'column' },
+      React.createElement(KeySink),
+      React.createElement(AssistantToolUseMessage, {
+        tool, marginTopOnTurn: false, verbose: true, diffLayout, diffStyle: 'bars',
+        onOpenFile: value => opened.push(value), onClick: () => { toggles++ },
+      }),
+    )
+    const app = await render(fullscreen ? React.createElement(ui.AlternateScreen, null, content) : content,
+      { stdout: new FakeStdout(), stdin, stderr: new FakeStdout(), exitOnCtrlC: false, patchConsole: false })
+    const label = `${fullscreen ? 'fullscreen' : 'inline'} ${diffLayout}`
+    try {
+      check(`${label}: second file path is visible`, await settled(() => findText(term, path) !== null))
+      const at = findText(term, path)
+      if (at === null) continue
+      if (!fullscreen) {
+        check(`${label}: repeated-file hunk separator is visible`, findText(term, '⋯') !== null)
+        continue // Inline mode leaves mouse selection to the terminal.
+      }
+      stdin.write(`\x1b[<0;${at.col + 3};${at.row + 1}M\x1b[<0;${at.col + 3};${at.row + 1}m`)
+      check(`${label}: path opens the exact file`, await settled(() => opened.length > 0) && opened.length === 1 && opened[0] === path,
+        JSON.stringify({ opened, toggles }))
+      check(`${label}: path click does not toggle the card`, toggles === 0)
+      const separator = findText(term, '⋯')
+      check(`${label}: repeated-file hunk separator is visible`, separator !== null)
+      if (separator !== null) {
+        stdin.write(`\x1b[<0;${separator.col + 1};${separator.row + 1}M\x1b[<0;${separator.col + 1};${separator.row + 1}m`)
+        check(`${label}: hunk separator remains a card toggle`, await settled(() => toggles > 0) && toggles === 1)
+        check(`${label}: hunk separator does not open a file`, opened.length === 1)
+      }
+    } finally {
+      app.unmount()
+    }
+  }
 }
 
 console.log(failures === 0 ? 'repro-diff-split: all assertions passed' : `repro-diff-split: ${failures} FAILED`)
