@@ -49,14 +49,48 @@ Also an experimental public surface:
   see seam VII of the [admission and development guide](../tui-profile/docs/plugin-admission-and-development.md).
 - **Side panels (experimental, §18)**: `ctx.tuiPanels.register({ apiVersion:
   1, id, title, icon?, component | compact })` registers a right-sidebar
-  panel (the host prefixes `<pluginId>:`; ≤4 panels per plugin, ≤32 globally;
-  `open()` is rate-limited to once per 5s; 3 consecutive crashes disable the
-  panel for the session). Of the two render slots — the full panel
-  (`component`) and the compact row (`compact`, 1–3 lines) — **compact is
-  descriptor-validated only this phase and not mounted yet**; `sendToChat`
-  requires the `panels.chat.attach` grant (a later version) and currently
-  always returns `false` with a one-time hint. Types live at
-  `@deepseek-harness-tui/dsh-tui/panels` and `./api`.
+  panel (the host prefixes `<pluginId>:`, so the final id reads
+  `my-plugin:search`; ≤4 panels per plugin, ≤32 globally; `open()` is
+  rate-limited to once per 5s; 3 consecutive crashes disable the panel for
+  the session). **The prefix is the first usable source in this order**: (1)
+  the Component id the activation was admitted under (`id` in the third-party
+  package's `dsh-plugin.json`); (2) the id of the loader entry that **directly
+  owns** the activation — the `id` you wrote on the `cordis.yml` /
+  `cordis.patch.yml` row (or the row a bundle patch inserted). The host loads
+  the whole composition under a root Include, so the runtime entry id carries
+  an `include:` path prefix; that prefix is the composition layer's own
+  marker and gets stripped (the host’s own plugin inventory strips it the
+  same way when it displays an identity), but only when the id is exactly the
+  prefix plus the id written on that row — a mere shared prefix does not
+  count; (3) with
+  neither, a host-issued `act<N>`. Sources 1 and 2 are addresses you or a
+  manifest authored and they survive restarts and composition changes, which
+  matters because the panel id is persisted as a long-lived address in
+  `dsh-tui.sidePanel.panels` (checking the row under `/settings › side panel ›
+  enabled panels` writes it) — those are the values to put in config. `act<N>`
+  is issued in activation order and can change with any composition change; it
+  serves runtime mounts outside the loader (test fixtures included), so never
+  hard-code it. Both sources must be a single-segment lowercase slug
+  (`[a-z][a-z0-9_-]*`) **and must not be shaped like `act<N>`** — that shape is
+  the generator's reserved space, so (1) falls through to (2) and only then to
+  (3): a legitimate entry named `act1` holding the number would leave its runtime
+  child drawing the same one, and the shared local id would be refused as a
+  duplicate contribution; the mirror case, the generator claiming the number
+  first, breaks the same way. Only the single `include:` marker is peeled
+  (and only with the row's own id, above); a `cordis:group` row is flattened
+  into the same Include tree by the loader, keeps the `include:<id>` shape
+  and therefore works normally. An id that still carries a separator
+  afterwards (a nested Include path such as `include:<a>:<b>`), and a
+  runtime `ctx.plugin()`
+  child (it inherits its parent entry's `entry` through the context chain without
+  being the entry's direct owner) are skipped and fall back to `act<N>`. A composed
+  row must declare an `id`: without one the loader issues a random id on the spot
+  and that name changes across restarts, so do not rely on it. Of the
+  two render slots — the full panel (`component`) and the compact row (`compact`,
+  1–3 lines) — **compact is descriptor-validated only this phase and not
+  mounted yet**; `sendToChat` requires the `panels.chat.attach` grant (a later
+  version) and currently always returns `false` with a one-time hint. Types live
+  at `@deepseek-harness-tui/dsh-tui/panels` and `./api`.
 - The `@deepseek-harness-tui/dsh-tui/test-utils` subpath and
   `ctx.tuiPluginHost.grants.corrupt` were removed in the adapter layering
   refactor (#705).
