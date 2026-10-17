@@ -216,6 +216,11 @@ const GROUPS = {
 // 必须靠滚动锚定保持原地：paint 不得与 committed 分歧、不得越界、xterm 中
 // 的正文锚点逐帧一致。verify-post-shrink-anchor 覆盖的是测量假象那条路径。
     ["verify-scroll-fold-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-fold-anchor.tsx']],
+// 同一折叠，但折叠卡**已被挂载**（窗口内、完全在视口上方）：渲染期那条回退到
+// 2 行估算的路径在这里不成立——估算误差是「折叠后行高 − 2」，且以正向差额
+// 落地、被只补偿收缩的单向修正丢弃，留下永久偏移（基线 740ce628 实测多滚
+// 5 行，读者视线落到折叠卡尾部）。保留旧估高、由下一帧实测归还则精确到位。
+    ["verify-scroll-fold-anchor-mounted", ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-fold-anchor-mounted.tsx']],
 // 失效的高度缓存不得被当成真实收缩：Ctrl+O 重签所有行的签名，普通提示行
 // 的真实高度不变，只有 offsets[] 回退到 2 行估算。夹具让整表都留在挂载
 // 窗口内（topPad/bottomPad 0），锚定修正就是唯一能改动 committed 位置的
