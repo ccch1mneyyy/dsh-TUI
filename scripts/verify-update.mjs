@@ -51,7 +51,11 @@ const {
   ensureProfileReleaseAgeExclude,
   sharpCurrentSuffix,
   ignoredSharpOptionalPatterns,
-  ensureProfileSharpPlatformFilter,
+  claudeSdkCurrentSuffix,
+  ignoredClaudeSdkOptionalPatterns,
+  ignoredForeignPlatformPatterns,
+  ensureProfilePlatformFilter,
+  ensurePlatformFilterAt,
   detectLibc,
   profileWorkspaceYamlPath,
   isStandaloneRuntime,
@@ -937,13 +941,13 @@ check(
     mkdirSync(profDir, { recursive: true })
     const wsPath = join(profDir, 'pnpm-workspace.yaml')
     writeFileSync(wsPath, 'packages:\n  - .\nnodeLinker: hoisted\n')
-    const first = ensureProfileSharpPlatformFilter('dsh-tui')
+    const first = ensureProfilePlatformFilter('dsh-tui')
     const yamlText = readFileSync(profileWorkspaceYamlPath('dsh-tui'), 'utf8')
     check('workspace 预种: 块落盘且带模式行', first !== undefined && first.changed && yamlText.includes('ignoredOptionalDependencies:') && yamlText.includes(`- '${hostIgnore[0]}'`), `host=${process.platform}-${process.arch} first=${JSON.stringify(first)}`)
     check('workspace 预种: 既有内容保留', yamlText.includes('nodeLinker: hoisted'))
     check('workspace 预种: 不忽略本机平台（手写期望）', !ownNames.some(n => yamlText.includes(n)), `yaml 含本机包 ownNames=${ownNames.join(',')}`)
     check('workspace 预种: 忽略本机外的代表性包（手写期望）', literalProbes.every(p => yamlText.includes(`- '${p}'`)), `host=${hostSuffix} probes=${literalProbes.join(',')}`)
-    const second = ensureProfileSharpPlatformFilter('dsh-tui')
+    const second = ensureProfilePlatformFilter('dsh-tui')
     const afterText = readFileSync(profileWorkspaceYamlPath('dsh-tui'), 'utf8')
     check('workspace 预种: 幂等（不重复块、不再写盘）', afterText.match(/ignoredOptionalDependencies:/gu)?.length === 1 && second !== undefined && second.changed === false && afterText === yamlText)
 
@@ -951,13 +955,13 @@ check(
     // 重算必须把它换掉；块内非表内条目是用户显式决策，原样保留。
     const hostOwnLine = `- '${ownNames[0]}'`
     writeFileSync(wsPath, `ignoredOptionalDependencies:\n  - fsevents\n  ${hostOwnLine}\n  - '@img/sharp-linux-riscv64'\n`)
-    const third = ensureProfileSharpPlatformFilter('dsh-tui')
+    const third = ensureProfilePlatformFilter('dsh-tui')
     const refreshed = readFileSync(profileWorkspaceYamlPath('dsh-tui'), 'utf8')
     check('workspace 预种: 旧名单被重算（本机平台的包被移出）', third !== undefined && third.changed && !refreshed.includes(ownNames[0]))
     check('workspace 预种: 用户自定义条目保留', refreshed.includes('- fsevents'))
     check('workspace 预种: 重算后覆盖当前平台矩阵', hostIgnore.every(p => refreshed.includes(`- '${p}'`)))
     check('workspace 预种: 重算后仍只有一个块', refreshed.match(/ignoredOptionalDependencies:/gu)?.length === 1)
-    const fourth = ensureProfileSharpPlatformFilter('dsh-tui')
+    const fourth = ensureProfilePlatformFilter('dsh-tui')
     check('workspace 预种: 重算后再次运行不再写盘', fourth !== undefined && fourth.changed === false)
 
     // 归类必须按「包名」而不是原始字节：空行、条目尾注释、双引号都是合法 YAML，
@@ -970,31 +974,94 @@ check(
     ]
     for (const [label, seeded] of malformed) {
       writeFileSync(wsPath, seeded)
-      const outcome = ensureProfileSharpPlatformFilter('dsh-tui')
+      const outcome = ensureProfilePlatformFilter('dsh-tui')
       const got = readFileSync(wsPath, 'utf8')
       check(`workspace 预种: ${label}时本机包仍被重算掉`, outcome !== undefined && !got.includes(ownNames[0]) && got.includes('- fsevents'), `got=${got.replace(/\n/gu, '|')}`)
     }
     // 用户自写的、不在本模块两张表内的 @img 条目（如自带豁免 wasm 回退包）是用户
     // 决策，不能被重算抹掉。
     writeFileSync(wsPath, `ignoredOptionalDependencies:\n  - fsevents\n  - '@img/sharp-wasm32'\n`)
-    const keepOutcome = ensureProfileSharpPlatformFilter('dsh-tui')
+    const keepOutcome = ensureProfilePlatformFilter('dsh-tui')
     check('workspace 预种: 用户自写的表外 @img 条目保留', keepOutcome !== undefined && readFileSync(wsPath, 'utf8').includes(`- '@img/sharp-wasm32'`))
 
     // 重复键的文档本来就不是合法 YAML：不能往里写（否则 pnpm 连 workspace 都读不了）。
     const duplicated = `ignoredOptionalDependencies:\n  - fsevents\nignoredOptionalDependencies:\n  - '@img/sharp-wasm32'\n`
     writeFileSync(wsPath, duplicated)
-    check('workspace 预种: 重复键原样放过', ensureProfileSharpPlatformFilter('dsh-tui') === undefined && readFileSync(wsPath, 'utf8') === duplicated)
+    check('workspace 预种: 重复键原样放过', ensureProfilePlatformFilter('dsh-tui') === undefined && readFileSync(wsPath, 'utf8') === duplicated)
     // 流式写法（键行自带值）同理。
     writeFileSync(wsPath, 'ignoredOptionalDependencies: [fsevents]\n')
-    check('workspace 预种: 流式写法不动用户文件', ensureProfileSharpPlatformFilter('dsh-tui') === undefined && readFileSync(wsPath, 'utf8') === 'ignoredOptionalDependencies: [fsevents]\n')
+    check('workspace 预种: 流式写法不动用户文件', ensureProfilePlatformFilter('dsh-tui') === undefined && readFileSync(wsPath, 'utf8') === 'ignoredOptionalDependencies: [fsevents]\n')
 
     // 文件不存在时要新建，且不能以空行开头。
     const emptyProf = join(process.env.DSH_HOME, 'profiles', 'dsh-tui-empty')
     mkdirSync(emptyProf, { recursive: true })
-    const created = ensureProfileSharpPlatformFilter('dsh-tui-empty')
+    const created = ensureProfilePlatformFilter('dsh-tui-empty')
     const createdText = readFileSync(join(emptyProf, 'pnpm-workspace.yaml'), 'utf8')
     check('workspace 预种: 新建文件不以空行开头', created !== undefined && createdText.startsWith('ignoredOptionalDependencies:'))
-    check('workspace 预种: profile 目录缺失返回 undefined', ensureProfileSharpPlatformFilter('absent') === undefined)
+    check('workspace 预种: profile 目录缺失返回 undefined', ensureProfilePlatformFilter('absent') === undefined)
+
+    // --- Claude SDK 原生包（维护者实测：0.15 → 0.16 更新多下 7 个异平台包，
+    // --- 每个解包约 230MB）。SDK 是按需安装的内核，但在 profile 里一天，更新
+    // --- 就会按同一 pnpm 路径把全平台 optional 物化一遍。
+    // 手写字面表：SDK 每个平台一个原生包，与 helper 推导互为 oracle。
+    const SDK_OWN = {
+      'darwin-arm64': '@anthropic-ai/claude-agent-sdk-darwin-arm64',
+      'darwin-x64': '@anthropic-ai/claude-agent-sdk-darwin-x64',
+      'linux-arm64': '@anthropic-ai/claude-agent-sdk-linux-arm64',
+      'linux-arm64-musl': '@anthropic-ai/claude-agent-sdk-linux-arm64-musl',
+      'linux-x64': '@anthropic-ai/claude-agent-sdk-linux-x64',
+      'linux-x64-musl': '@anthropic-ai/claude-agent-sdk-linux-x64-musl',
+      'win32-arm64': '@anthropic-ai/claude-agent-sdk-win32-arm64',
+      'win32-x64': '@anthropic-ai/claude-agent-sdk-win32-x64',
+    }
+    check('SDK 后缀: glibc linux x64', claudeSdkCurrentSuffix('linux', 'x64', 'glibc') === 'linux-x64')
+    check('SDK 后缀: musl linux x64 带 -musl', claudeSdkCurrentSuffix('linux', 'x64', 'musl') === 'linux-x64-musl')
+    check('SDK 后缀: darwin arm64 直拼', claudeSdkCurrentSuffix('darwin', 'arm64', 'glibc') === 'darwin-arm64')
+    check('SDK 后缀: win32 x64 直拼', claudeSdkCurrentSuffix('win32', 'x64', 'glibc') === 'win32-x64')
+    const sdkLinuxX64 = ignoredClaudeSdkOptionalPatterns('linux', 'x64', 'glibc')
+    check(
+      'SDK 过滤: 本平台包保留、异平台包全忽略',
+      !sdkLinuxX64.includes(SDK_OWN['linux-x64'])
+        && sdkLinuxX64.includes(SDK_OWN['linux-x64-musl'])
+        && sdkLinuxX64.includes(SDK_OWN['win32-x64'])
+        && sdkLinuxX64.includes(SDK_OWN['darwin-arm64'])
+        && sdkLinuxX64.length === 7,
+      `entries=${sdkLinuxX64.length}`,
+    )
+    const sdkMusl = ignoredClaudeSdkOptionalPatterns('linux', 'x64', 'musl')
+    check('SDK 过滤: musl 环境保留 musl 包、忽略 glibc 包', !sdkMusl.includes(SDK_OWN['linux-x64-musl']) && sdkMusl.includes(SDK_OWN['linux-x64']))
+    // 矩阵外平台（freebsd / riscv64）：本机没有对应包，忽略全部已知包；
+    // 将来 SDK 新增的平台包不在表内，因此永远不会被误忽略。
+    check('SDK 过滤: 矩阵外平台忽略全部已知包', ignoredClaudeSdkOptionalPatterns('freebsd', 'x64', 'glibc').length === 8 && ignoredClaudeSdkOptionalPatterns('linux', 'riscv64', 'glibc').length === 8)
+    check('SDK 过滤: 只列平台包、不碰主包', sdkLinuxX64.every(p => p.startsWith('@anthropic-ai/claude-agent-sdk-')) && !sdkLinuxX64.includes('@anthropic-ai/claude-agent-sdk'))
+    check(
+      '合并名单: sharp 与 SDK 同时覆盖',
+      ignoredForeignPlatformPatterns('linux', 'x64', 'glibc').includes('@img/sharp-win32-x64')
+        && ignoredForeignPlatformPatterns('linux', 'x64', 'glibc').includes(SDK_OWN['darwin-x64'])
+        && !ignoredForeignPlatformPatterns('linux', 'x64', 'glibc').includes(SDK_OWN['linux-x64']),
+    )
+
+    // 文件级：两份名单同块落盘、幂等、换平台重算、用户条目保留，且 install
+    // 路径（ensurePlatformFilterAt）与 update 路径写的是同一份名单。
+    const hostSdkSuffix = claudeSdkCurrentSuffix(process.platform, process.arch, hostLibc)
+    const hostSdkOwn = SDK_OWN[hostSdkSuffix]
+    const hostSdkIgnore = ignoredClaudeSdkOptionalPatterns(process.platform, process.arch, hostLibc)
+    writeFileSync(wsPath, 'packages:\n  - .\n')
+    const sdkFirst = ensureProfilePlatformFilter('dsh-tui')
+    const sdkYaml = readFileSync(wsPath, 'utf8')
+    check('workspace 预种: SDK 名单落盘', sdkFirst !== undefined && sdkFirst.changed && hostSdkIgnore.every(p => sdkYaml.includes(`- '${p}'`)), `host=${hostSdkSuffix}`)
+    check('workspace 预种: 本机 SDK 包不进忽略名单', hostSdkOwn === undefined || !sdkYaml.includes(`- '${hostSdkOwn}'`))
+    const sdkSecond = ensureProfilePlatformFilter('dsh-tui')
+    check('workspace 预种: SDK 名单幂等', sdkSecond !== undefined && sdkSecond.changed === false && readFileSync(wsPath, 'utf8') === sdkYaml)
+    // 别的平台算出的残留（把本机包列进去）必须被重算掉。
+    writeFileSync(wsPath, `ignoredOptionalDependencies:\n  - fsevents\n  - '${hostSdkOwn ?? SDK_OWN['linux-x64']}'\n  - '${SDK_OWN['darwin-x64']}'\n`)
+    const sdkThird = ensureProfilePlatformFilter('dsh-tui')
+    const sdkRefreshed = readFileSync(wsPath, 'utf8')
+    check('workspace 预种: 旧 SDK 名单被重算', sdkThird !== undefined && sdkThird.changed && (hostSdkOwn === undefined || !sdkRefreshed.includes(`- '${hostSdkOwn}'`)))
+    check('workspace 预种: SDK 重算保留列表外用户条目', sdkRefreshed.includes('- fsevents'))
+    writeFileSync(wsPath, 'packages:\n  - .\n')
+    const installPathOutcome = ensurePlatformFilterAt(wsPath)
+    check('install 路径: 同一重写器写同一份名单', installPathOutcome !== undefined && readFileSync(wsPath, 'utf8') === sdkYaml)
   } finally {
     if (prevDshHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevDshHome

@@ -230,14 +230,18 @@ allowBuilds:
 
 `/update` 与 `dsh-tui update` 会自动写入这份配置，无需手工处理。
 
-更新时还会维护 `ignoredOptionalDependencies`（忽略异平台的 `@img/sharp-*`
-原生包）：
+更新时还会维护 `ignoredOptionalDependencies`（忽略异平台原生包：`@img/sharp-*`
+与 Claude SDK 的 `@anthropic-ai/claude-agent-sdk-*`）：
 
-- sharp 以全平台可选依赖分发，不处理时 `pnpm update` 会把各平台二进制一起
-  下载（实测约 200MB）。
-- 名单每次更新按当前平台重算，异平台原生包不再下载（当前平台原生包与无平台
-  归属的 wasm 回退包保留）。
-- 把 profile 搬到别的平台或 musl 容器后，在那台机器上跑一次更新即可刷新。
+- sharp 与 Claude SDK 都以全平台可选依赖分发，不处理时 pnpm 的 update 路径会
+  把各平台二进制一起解析/下载（实测 sharp 约 200MB；Claude SDK 单个包解包约
+  230MB，0.15 → 0.16 的一次更新多下 7 个异平台包，约 1.6GB）。
+- 名单每次更新按当前平台重算：当前平台的原生包与无平台归属的 wasm 回退包
+  保留，异平台的整段跳过（pnpm 在解析阶段就不取它们，lockfile 里也不再出现）。
+- SDK 本身不会被更新装进 profile：只有在内核选择器里选中该后端才安装，安装前
+  也按当前机器重算名单，只装本平台对应的那个包。不用的后端一直不占空间。
+- 把 profile 搬到别的平台或 musl 容器后，在那台机器上跑一次更新或内核安装
+  即可刷新。
 - 老 profile 的 lockfile 里仍写着全平台条目，第一次更新会照旧下载一遍，之后
   才被忽略。
 - 块内不属于这两张平台表的条目（`fsevents`、自己写的 `@img/sharp-wasm32`

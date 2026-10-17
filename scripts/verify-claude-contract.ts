@@ -20,7 +20,11 @@
  *  6. `src/backends/claude/options.ts` classifies every SDK option with
  *     `satisfies Record<keyof Options, …>` over the SDK's own `Options`
  *     type — `tsc` then fails when the SDK adds or removes an option, so
- *     the clause must exist (and be the SDK's type, not a local alias).
+ *     the clause must exist (and be the SDK's type, not a local alias);
+ *  7. `src/update.ts` `CLAUDE_SDK_SUFFIXES` lists exactly the platform
+ *     suffixes the pinned SDK publishes as optional dependencies — the
+ *     update-time ignore list must keep only the running platform's bundle
+ *     and skip every other one.
  *
  * Mutations to self-test the gate: change one pin (package.json peer or
  * dev, the contract, a lockfile resolution, a workspace exemption) or drop
@@ -98,5 +102,17 @@ if (existsSync(join(installed, 'package.json'))) {
 const options = readFileSync(join(ROOT, 'src', 'backends', 'claude', 'options.ts'), 'utf8')
 check('options.ts: imports the SDK\'s own `Options` type', /import type \{[^}]*\bOptions\b[^}]*\} from '@anthropic-ai\/claude-agent-sdk'/u.test(options))
 check('options.ts: OPTION_POLICY is checked `satisfies Record<keyof Options, OptionPolicy>`', /export const OPTION_POLICY = \{[\s\S]*?\} as const satisfies Record<keyof Options, OptionPolicy>/u.test(options))
+
+// ── 7. the update-time foreign-platform filter covers the whole matrix ──
+// The profile's `ignoredOptionalDependencies` list is built from a table in
+// update.ts; the lockfile's optional entries are the registry's published
+// matrix for this pin (check 3). Bumping the pin without bumping the table
+// would leave a platform's bundle un-ignored (wasted download) or, worse,
+// ignored on the platform that needs it — so the two must match exactly.
+const updateSource = readFileSync(join(ROOT, 'src', 'update.ts'), 'utf8')
+const table = /const CLAUDE_SDK_SUFFIXES = \[([\s\S]*?)\] as const/u.exec(updateSource)?.[1] ?? ''
+const suffixes = [...table.matchAll(/'([^']+)'/gu)].map(match => match[1]).sort()
+const published = platforms.map(([name]) => name.slice(`${SDK}-`.length)).sort()
+check('update.ts: CLAUDE_SDK_SUFFIXES mirrors the pinned SDK platform matrix', JSON.stringify(suffixes) === JSON.stringify(published), { suffixes, published })
 
 console.log(`\nverify-claude-contract OK (${passed} checks)`)

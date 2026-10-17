@@ -32,6 +32,14 @@ You need:
   cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
   ```
 
+  The SDK ships as all-platform optional dependencies (one native bundle per
+  platform, about 230MB unpacked). The profile's
+  `ignoredOptionalDependencies` keeps only the running platform's bundle, and
+  the installer recomputes that list for the current machine, so a reinstall
+  after moving platforms still fetches exactly one. `/update` and
+  `dsh-tui update` never install the SDK on their own: when the profile does
+  not depend on it, they do not bring it in.
+
 - A Claude credential; see "Signing in" below.
 - The `claude` command is optional: dsh-TUI probes an **explicitly specified
   executable path** (an environment variable, used as set, with no version check;

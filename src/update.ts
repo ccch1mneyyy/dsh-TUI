@@ -1369,18 +1369,21 @@ function existsSafe(path: string): boolean {
 }
 
 /**
- * sharp distributes its native binaries as platform-specific optional
- * dependencies (@img/sharp-<platform> wrappers plus @img/sharp-libvips-<platform>
- * runtimes). pnpm's lockfile records EVERY platform's entry by design, and
- * some pnpm update paths materialize all of them — maintainer-group report
- * 2026-09-11: a 0.10.0 → 0.10.1 update downloaded ~90MB of win32/darwin/
- * musl/riscv64/s390x/ppc64 binaries on a linux-x64 box. The fix keeps
- * `ignoredOptionalDependencies` patterns for every OTHER platform in the
- * profile: pnpm skips ignored optionals entirely (no download, no node_modules
- * entry), while the current platform's packages — the only ones sharp loads —
- * stay untouched. These tables mirror sharp's published platform matrix; a
- * suffix sharp adds later only costs the saving for that platform, never a
- * broken install, since an unknown suffix is simply not ignored.
+ * Native backends ship as platform-specific optional dependencies, and pnpm's
+ * lockfile records EVERY platform's entry by design. Some pnpm update paths
+ * materialize all of them — maintainer-group report 2026-09-11: a 0.10.0 →
+ * 0.10.1 update downloaded ~90MB of win32/darwin/musl/riscv64/s390x/ppc64
+ * sharp binaries on a linux-x64 box; a 0.15 → 0.16 dsh-tui update then pulled
+ * seven foreign `@anthropic-ai/claude-agent-sdk-*` bundles (~230MB each,
+ * ~1.6GB) the same way. The fix keeps `ignoredOptionalDependencies` patterns
+ * for every OTHER platform in the profile: pnpm skips ignored optionals
+ * entirely (no download, no node_modules entry), while the current platform's
+ * packages — the only ones these backends load — stay untouched.
+ *
+ * Each table mirrors its package's published platform matrix for the pinned
+ * version. A suffix the package adds later only costs the saving for that
+ * platform, never a broken install: an unknown suffix is simply not listed
+ * here, so it is never ignored.
  */
 const SHARP_WRAPPER_SUFFIXES = [
   'darwin-arm64', 'darwin-x64', 'freebsd-wasm32', 'linux-arm', 'linux-arm64',
@@ -1426,6 +1429,42 @@ export function ignoredSharpOptionalPatterns(platform: string, cpu: string, libc
 }
 
 /**
+ * `@anthropic-ai/claude-agent-sdk` carries the Claude CLI as one native bundle
+ * per platform in its optionalDependencies. The SDK is an on-demand backend —
+ * the kernel picker adds it to a profile only when the user picks Claude — but
+ * once it IS there, an update re-resolves it through the same pnpm path that
+ * materializes every platform's optional (see the sharp report above), so the
+ * same ignore list keeps only this platform's bundle. Suffixes mirror the
+ * pinned SDK version's published matrix, musl variants included.
+ */
+const CLAUDE_SDK_PREFIX = '@anthropic-ai/claude-agent-sdk-'
+const CLAUDE_SDK_SUFFIXES = [
+  'darwin-arm64', 'darwin-x64',
+  'linux-arm64', 'linux-arm64-musl', 'linux-x64', 'linux-x64-musl',
+  'win32-arm64', 'win32-x64',
+] as const
+
+/** The SDK bundle suffix of the RUNNING platform (musl linux adds `-musl`). */
+export function claudeSdkCurrentSuffix(platform: string, cpu: string, libc: string): string {
+  const musl = platform === 'linux' && libc === 'musl'
+  return `${platform}-${cpu}${musl ? '-musl' : ''}`
+}
+
+/** Patterns for every SDK bundle EXCEPT the running one. */
+export function ignoredClaudeSdkOptionalPatterns(platform: string, cpu: string, libc: string): string[] {
+  const current = claudeSdkCurrentSuffix(platform, cpu, libc)
+  return CLAUDE_SDK_SUFFIXES.filter(s => s !== current).map(s => `${CLAUDE_SDK_PREFIX}${s}`)
+}
+
+/** Patterns for every known native package this platform does not load. */
+export function ignoredForeignPlatformPatterns(platform: string, cpu: string, libc: string): string[] {
+  return [
+    ...ignoredSharpOptionalPatterns(platform, cpu, libc),
+    ...ignoredClaudeSdkOptionalPatterns(platform, cpu, libc),
+  ]
+}
+
+/**
  * Libc verdict for an explicit platform, so the whole matrix is testable on any
  * host. Node's report wins when present: a stray musl loader (Debian's musl
  * package, cross-compile toolchains) on a glibc system must NOT flip the
@@ -1455,10 +1494,11 @@ function isMuslRuntime(): boolean {
   ) === 'musl'
 }
 
-/** Every @img package this module's tables cover (both the wrapper and the libvips matrix). */
-const SHARP_MANAGED_PATTERNS: ReadonlySet<string> = new Set([
+/** Every native package this module's tables cover (sharp wrappers/libvips and SDK bundles). */
+const MANAGED_OPTIONAL_PATTERNS: ReadonlySet<string> = new Set([
   ...SHARP_WRAPPER_SUFFIXES.map(s => `@img/sharp-${s}`),
   ...SHARP_LIBVIPS_SUFFIXES.map(s => `@img/sharp-libvips-${s}`),
+  ...CLAUDE_SDK_SUFFIXES.map(s => `${CLAUDE_SDK_PREFIX}${s}`),
 ])
 
 /**
@@ -1483,8 +1523,8 @@ function optionalDependencyNameOf(line: string): string | undefined {
   return name === '' ? undefined : name
 }
 
-/** What ensureProfileSharpPlatformFilter did to the profile workspace file. */
-export interface SharpPlatformFilterOutcome {
+/** What ensurePlatformFilterAt did to a profile workspace file. */
+export interface PlatformFilterOutcome {
   /** The foreign-platform ignore patterns the file now carries. */
   entries: string[]
   /** True when the file was written (filter added or refreshed). */
@@ -1492,29 +1532,29 @@ export interface SharpPlatformFilterOutcome {
 }
 
 /**
- * Keep an `ignoredOptionalDependencies:` block in the profile's
- * pnpm-workspace.yaml listing every non-current-platform @img package, so an
- * update stops downloading the foreign-platform sharp natives. The list is
- * recomputed on every run: it is a fact about the machine running the update,
- * so a profile carried to another platform (WSL, a musl container, a new cpu)
- * gets a fresh list instead of a stale one that would skip the packages that
+ * Keep an `ignoredOptionalDependencies:` block in a profile's
+ * pnpm-workspace.yaml listing every native package this platform does not
+ * load — the foreign-platform sharp natives and Claude SDK bundles — so an
+ * update (or an on-demand kernel install) stops downloading them. The list is
+ * recomputed on every run: it is a fact about the machine running pnpm, so a
+ * profile carried to another platform (WSL, a musl container, a new cpu) gets
+ * a fresh list instead of a stale one that would skip the packages that
  * machine needs. Entries this module's own tables cover are rewritten (by
  * package name, so quoted forms, trailing comments and blank lines inside the
- * block all still refresh); every other entry — a user's `fsevents`, a name
- * sharp adds later, a user's own `@img/sharp-wasm32` exemption — is preserved
- * verbatim, same as in {@link ensureProfileAllowBuilds}. Best effort and
- * idempotent: the file is written only when the resulting block actually
- * differs, a missing `ignoredOptionalDependencies:` block is appended, and an
- * absent profile directory resolves to undefined — the update still runs, only
- * the download-size win is lost. A document this function cannot rewrite safely
- * (a flow-style value, a duplicated key, which is already invalid YAML) is left
- * untouched rather than half-rewritten. Residual caveat shared by any persisted
- * machine fact: a second platform using the same profile without running an
- * update keeps this platform's list, so its own binaries stay skipped until the
- * next update there.
+ * block all still refresh); every other entry — a user's `fsevents`, a native
+ * package a backend adds later, a user's own `@img/sharp-wasm32` exemption —
+ * is preserved verbatim, same as in {@link ensureProfileAllowBuilds}. Best
+ * effort and idempotent: the file is written only when the resulting block
+ * actually differs, a missing `ignoredOptionalDependencies:` block is
+ * appended, and an absent directory resolves to undefined — the caller still
+ * runs pnpm, only the download-size win is lost. A document this function
+ * cannot rewrite safely (a flow-style value, a duplicated key, which is
+ * already invalid YAML) is left untouched rather than half-rewritten. Residual
+ * caveat shared by any persisted machine fact: a second platform using the
+ * same profile without running either path keeps this platform's list, so its
+ * own binaries stay skipped until the next update or install there.
  */
-export function ensureProfileSharpPlatformFilter(profile: string): SharpPlatformFilterOutcome | undefined {
-  const yamlPath = profileWorkspaceYamlPath(profile)
+export function ensurePlatformFilterAt(yamlPath: string): PlatformFilterOutcome | undefined {
   try {
     if (!existsSafe(dirname(yamlPath))) return undefined
     let text = ''
@@ -1546,10 +1586,10 @@ export function ensureProfileSharpPlatformFilter(profile: string): SharpPlatform
         const name = optionalDependencyNameOf(line)
         // Entries from our own tables (possibly computed for another platform)
         // are dropped here and recomputed below; everything else is preserved.
-        if (name === undefined || !SHARP_MANAGED_PATTERNS.has(name)) foreign.push(line)
+        if (name === undefined || !MANAGED_OPTIONAL_PATTERNS.has(name)) foreign.push(line)
       }
     }
-    const patterns = ignoredSharpOptionalPatterns(process.platform, process.arch, isMuslRuntime() ? 'musl' : 'glibc')
+    const patterns = ignoredForeignPlatformPatterns(process.platform, process.arch, isMuslRuntime() ? 'musl' : 'glibc')
     const insert = foreign.concat(patterns.map(p => `  - '${p}'`))
     if (blockStart !== -1 && lines.slice(blockStart + 1, blockEnd).join('\n') === insert.join('\n')) {
       return { entries: patterns, changed: false }
@@ -1565,6 +1605,11 @@ export function ensureProfileSharpPlatformFilter(profile: string): SharpPlatform
   } catch {
     return undefined
   }
+}
+
+/** {@link ensurePlatformFilterAt} for a profile's own workspace file. */
+export function ensureProfilePlatformFilter(profile: string): PlatformFilterOutcome | undefined {
+  return ensurePlatformFilterAt(profileWorkspaceYamlPath(profile))
 }
 
 /**
@@ -1796,13 +1841,16 @@ export async function updateTui(
         'postinstall-only deps are explicitly ignored\n',
     )
   }
-  // Foreign-platform @img/sharp-* optionals are pure download waste (~90MB on
-  // the maintainer-group report); keep the profile's ignore list matching THIS
-  // machine (each update recomputes it) so pnpm never fetches them.
-  const sharpFilter = ensureProfileSharpPlatformFilter(profile)
-  if (sharpFilter !== undefined && sharpFilter.changed) {
+  // Foreign-platform natives are pure download waste (sharp ~90MB, the Claude
+  // SDK's bundles ~1.6GB on the maintainer report); keep the profile's ignore
+  // list matching THIS machine (each update recomputes it) so pnpm never
+  // fetches them. The SDK is never ADDED here — it only enters a profile
+  // through the kernel picker's guided install, and then only for the
+  // platform it runs on.
+  const platformFilter = ensureProfilePlatformFilter(profile)
+  if (platformFilter !== undefined && platformFilter.changed) {
     process.stderr.write(
-      `dsh-tui: sharp platform filter updated (${sharpFilter.entries.length} foreign-platform patterns ignored) — ` +
+      `dsh-tui: platform filter updated (${platformFilter.entries.length} foreign-platform patterns ignored) — ` +
         `this profile's install keeps only the current platform's natives\n`,
     )
   }

@@ -113,7 +113,9 @@ SDK/原生进程；agent 读取 ports 类型并使用中立 helper。目录与 i
 - 传输：Agent SDK 的 streaming-input `query()`，一个会话一个长寿命 query。会话目录
   （list/fork/rename/delete/读消息）用 SDK 根入口的会话 API。
 - `@anthropic-ai/claude-agent-sdk` 是可选 peer 依赖（平台二进制很大，不让每个 DSH
-  用户都装），代码里动态 `import()`。版本精确钉在 `contract.ts` 的
+  用户都装），代码里动态 `import()`。装进 profile 也只取当前平台的原生包：更新与安装
+  都维护 `ignoredOptionalDependencies`，异平台的 `@anthropic-ai/claude-agent-sdk-*`
+  在解析阶段就被跳过。版本精确钉在 `contract.ts` 的
   `VALIDATED_SDK_VERSION`，CLI 的验证版本见 `VALIDATED_CLI_VERSIONS`；`package.json`、
   lockfile 与 `contract.ts` 是否一致由 `verify:claude-contract` 检查（在 `build` 里）。
   行为差异优先按 `system/init.capabilities` 判断，版本号只用来解释。

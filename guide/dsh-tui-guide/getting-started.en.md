@@ -234,15 +234,23 @@ allowBuilds:
 manual step needed.
 
 Updates also maintain `ignoredOptionalDependencies` covering foreign-platform
-`@img/sharp-*` natives:
+natives — `@img/sharp-*` and the Claude SDK's
+`@anthropic-ai/claude-agent-sdk-*` bundles:
 
-- sharp ships as all-platform optional dependencies, and an untouched
-  `pnpm update` downloads every platform's binaries (about 200MB measured).
-- The list is recomputed for the running platform on every update. Foreign
-  natives are skipped while this platform's own and the platform-agnostic wasm
-  fallbacks stay.
-- Move the profile to another platform or musl container and the next update
-  there refreshes it.
+- Both ship as all-platform optional dependencies, and an untouched pnpm update
+  resolves and downloads every platform's binaries (about 200MB measured for
+  sharp; each SDK bundle unpacks to about 230MB, and one 0.15 → 0.16 update
+  pulled seven foreign bundles, roughly 1.6GB).
+- The list is recomputed for the running platform on every update. This
+  platform's own natives and the platform-agnostic wasm fallbacks stay; foreign
+  ones are skipped at resolution, so they no longer appear in the lockfile
+  either.
+- The SDK is never installed by an update: it only enters a profile when you
+  pick that backend in the kernel picker, and the installer recomputes the list
+  for the current machine first, so exactly one platform's bundle lands. An
+  unused backend keeps taking no space.
+- Move the profile to another platform or musl container and the next update or
+  kernel install there refreshes it.
 - An existing profile's lockfile still lists every platform, so its first
   update downloads them once more before the filter takes effect.
 - Entries outside those two platform tables (a user's `fsevents`, a

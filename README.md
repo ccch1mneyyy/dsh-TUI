@@ -132,9 +132,12 @@ Afterwards `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 
 > **New-user note**: pnpm ≥11 blocks dependencies with install scripts by
 > default and reports `ERR_PNPM_IGNORED_BUILDS`. Updates skip foreign-platform
-> `@img/sharp-*` native packages, saving about 200MB of downloads. `/update`
-> and `dsh-tui update` write both settings automatically. No manual step
-> needed. Details:
+> natives — the `@img/sharp-*` packages and the Claude SDK's per-platform
+> bundles — so only this machine's binaries are fetched. `/update` and
+> `dsh-tui update` write both settings automatically. An update never installs
+> the Claude SDK on its own: it enters a profile only when you pick that
+> backend in the kernel picker, which then installs the pinned SDK for the
+> running platform. No manual step needed. Details:
 > [Getting started](docs/getting-started.en.md#pnpm-install-script-blocks-and-foreign-platform-natives).
 
 After startup the TUI checks for newer versions in the background. It never

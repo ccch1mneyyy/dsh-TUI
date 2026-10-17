@@ -25,6 +25,11 @@ dsh-TUI 可以把会话跑在 Claude Agent 后端上，而不是 DeepSeek Harnes
   cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
   ```
 
+  SDK 以全平台可选依赖分发（每个平台一个原生包，解包约 230MB）。profile 的
+  `ignoredOptionalDependencies` 只放行本机平台的包，安装器每次按当前机器重算
+  这份名单，换平台后重装也只取对应那个。`/update` 与 `dsh-tui update` **不会**
+  主动安装 SDK：profile 里没有这个依赖时，它们不会把它带进来。
+
 - 一份 Claude 凭据，见下面的「登录」。
 - `claude` 命令不是必需的：按**显式指定的可执行路径**（环境变量，设置后原样采用，不做版本校验；
   变量名见[多后端架构](agent-backend-design.md)）→ `PATH` 上的 `claude` → 用户主目录下的

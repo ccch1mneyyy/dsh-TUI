@@ -25,7 +25,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import stripAnsi from 'strip-ansi'
 import type { SdkInstallResult, SdkInstallTarget, SdkInstaller } from '../../agent/backend.js'
-import { ensureWorkspaceAllowBuilds, ensureWorkspaceStoreDir, isStandaloneRuntime, profileWorkspaceYamlPath, resolveDshProfileName } from '../../update.js'
+import { ensurePlatformFilterAt, ensureWorkspaceAllowBuilds, ensureWorkspaceStoreDir, isStandaloneRuntime, profileWorkspaceYamlPath, resolveDshProfileName } from '../../update.js'
 import { shellQuote } from '../../utils/shellQuote.js'
 import type { InstallExecutor } from './executors.js'
 
@@ -122,11 +122,17 @@ function start(specifier: string, dir: string): SdkInstaller {
     // Seed before any pnpm run: the store pin (drift prevention — a pin
     // landing after node_modules exists is itself a store change, and the
     // heal below covers pre-existing drift and that induced one in the same
-    // pass) and the build-script opt-outs a full lockfile rebuild needs on
-    // pnpm ≥11 (ERR_PNPM_IGNORED_BUILDS, see ensureProfileAllowBuilds).
+    // pass), the build-script opt-outs a full lockfile rebuild needs on
+    // pnpm ≥11 (ERR_PNPM_IGNORED_BUILDS, see ensureProfileAllowBuilds), and
+    // the foreign-platform ignore list. That list is a fact about the machine
+    // that wrote it: a profile carried over from another platform (WSL, a musl
+    // container) would otherwise ignore the very native package this install
+    // needs, leaving a backend without its binary. Recomputed here, the
+    // current platform's package is never on it.
     const yamlPath = join(dir, 'pnpm-workspace.yaml')
     ensureWorkspaceStoreDir(yamlPath)
     ensureWorkspaceAllowBuilds(yamlPath)
+    ensurePlatformFilterAt(yamlPath)
     const first = await run(['add', specifier])
     if (cancelled) return { kind: 'cancelled' }
     if (first.code === 0) return { kind: 'ok' }
