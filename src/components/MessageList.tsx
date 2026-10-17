@@ -870,6 +870,13 @@ export function MessageList({
   // into minor GC; the GC share of the scroll profile).
   const sigRef = React.useRef(new Map<number, Array<string | number | boolean>>())
   let growingStreamNeedsMeasure = false
+  /** Set when this render invalidated the cached height of a row that is still
+   *  MOUNTED: offsets[] then falls back to DEFAULT_ROW_HEIGHT for a row that
+   *  keeps painting its real Yoga height, so any anchor delta read from
+   *  offsets[] this render is an estimate artifact, not a content change
+   *  (Ctrl+O invalidates every mounted row's signature without touching the
+   *  layout). The anchoring block below skips its correction for this pass. */
+  let mountedHeightInvalidated = false
   {
     const sigs = sigRef.current
     for (let i = 0; i < visibleRows.length; i++) {
@@ -919,7 +926,15 @@ export function MessageList({
         parts.length === cachedParts.length &&
         typeof parts[2] === 'number' && typeof cachedParts[2] === 'number' && parts[2] >= cachedParts[2] &&
         parts.every((part, index) => index === 2 || part === cachedParts[index])
-      if (!growingStream) heightsRef.current.delete(row.id)
+      if (!growingStream) {
+        // A MOUNTED row paints its own real height while offsets[] uses the
+        // fallback for the entry dropped here — the estimate and the paint
+        // disagree, so nothing may be anchored on that delta. An unmounted
+        // row's fallback IS its painted spacer, which is the real-shrink case
+        // the anchoring exists for.
+        if (localRefs.current.has(row.id)) mountedHeightInvalidated = true
+        heightsRef.current.delete(row.id)
+      }
       // Retaining the estimate must not skip the next fresh Yoga read.
       else if (localRefs.current.has(row.id)) growingStreamNeedsMeasure = true
       heightsVersionRef.current++
@@ -976,7 +991,14 @@ export function MessageList({
   const base = baseRef.current ?? DEFAULT_HEADER_LINES
   const prevAnchor = anchorRef.current
   let anchorCorrection = 0
-  if (scrollHandle && prevAnchor !== null && !sticky && pending === 0 && scrollTopRaw === prevAnchor.scrollTop) {
+  if (
+    scrollHandle &&
+    prevAnchor !== null &&
+    !sticky &&
+    pending === 0 &&
+    scrollTopRaw === prevAnchor.scrollTop &&
+    !mountedHeightInvalidated
+  ) {
     const anchored = visibleRows[prevAnchor.index]
     if (anchored !== undefined && anchored.id === prevAnchor.id) {
       anchorCorrection = Math.max(0, prevAnchor.top - (base + (offsets[prevAnchor.index] ?? 0)))
@@ -1447,16 +1469,27 @@ export function MessageList({
       // the viewport pushes the mount window's start past that row, while
       // offsets[] still covers it, so the row's own offset delta is exactly what
       // the reader saw move.
-      const viewTop = anchoredTop - anchorBase
-      let pick = start
-      for (let i = start; i < end; i++) {
-        if ((offsets[i] ?? 0) <= viewTop) pick = i
-        else break
+      if (mountedHeightInvalidated) {
+        // This commit's offsets[] is built on estimates the render just
+        // invalidated for rows that are still on screen, so no delta measured
+        // against it is a geometry change — and a pick taken from it would hand
+        // the NEXT commit a fabricated delta and move the reader for real. Drop
+        // the record instead: the measurements above land this commit and the
+        // next one re-baselines on the real heights.
+        anchorRef.current = null
+        changed = true
+      } else {
+        const viewTop = anchoredTop - anchorBase
+        let pick = start
+        for (let i = start; i < end; i++) {
+          if ((offsets[i] ?? 0) <= viewTop) pick = i
+          else break
+        }
+        const picked = visibleRows[pick]
+        anchorRef.current = picked === undefined
+          ? null
+          : { id: picked.id, index: pick, top: anchorBase + (offsets[pick] ?? 0), scrollTop: anchoredTop }
       }
-      const picked = visibleRows[pick]
-      anchorRef.current = picked === undefined
-        ? null
-        : { id: picked.id, index: pick, top: anchorBase + (offsets[pick] ?? 0), scrollTop: anchoredTop }
     }
     if ((changed || growingStreamNeedsMeasure) && measureTimerRef.current === null) {
       // Layout corrections can cascade for many rows. Yield to the next

@@ -216,6 +216,11 @@ const GROUPS = {
 // 必须靠滚动锚定保持原地：paint 不得与 committed 分歧、不得越界、xterm 中
 // 的正文锚点逐帧一致。verify-post-shrink-anchor 覆盖的是测量假象那条路径。
     ["verify-scroll-fold-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-fold-anchor.tsx']],
+// 失效的高度缓存不得被当成真实收缩：Ctrl+O 重签所有行的签名，普通提示行
+// 的真实高度不变，只有 offsets[] 回退到 2 行估算。夹具让整表都留在挂载
+// 窗口内（topPad/bottomPad 0），锚定修正就是唯一能改动 committed 位置的
+// 路径——坏基线上它会把读者滚走 3 行，main（无本改动）保持不动。
+    ["verify-scroll-anchor-invalidation", ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-anchor-invalidation.tsx']],
 // 长会话冷/热窗口跳转、绘制边界发布与回底挂载预算（不能等滚轮救活）。
     ['verify-scroll-jumps', ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-jumps.tsx']],
     ['verify-scroll-jumps-narrow', ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-jumps.tsx'], { DSH_TEST_COLUMNS: '60' }],
