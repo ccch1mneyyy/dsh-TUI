@@ -214,7 +214,6 @@ export function ForeignSessionPanes({
               width={sessionWidth}
               focused={pane === 'list' && listTop + index === rowIndex}
               declareCursor={cursorActive && !searchCursor}
-              home={home}
               now={now}
               onClick={(event): void => {
                 event.stopImmediatePropagation()
