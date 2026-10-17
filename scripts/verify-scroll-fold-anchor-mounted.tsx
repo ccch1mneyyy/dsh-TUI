@@ -2,14 +2,11 @@
  * A REAL shrink of a row the render ALREADY has mounted above the viewport must not
  * move the reader's rows.
  *
- * Sibling of verify-scroll-fold-anchor.tsx with the one difference that separates the
- * two anchoring paths in MessageList. That probe picks its folding card from
- * `listStart - 1` — OUTSIDE the mount window — so at the moment the render invalidates
- * signatures the card is unmounted and the "Unknown-height extension" remounts it
- * inside the same render. This probe picks the card from `list.start` itself: mounted
- * in the previous commit, still entirely above the visible top, then really folded.
- * That is the frame in which the render drops the cached height of a row that is still
- * on screen, and it is the frame a `mountedHeightInvalidated`-style gate short-circuits.
+ * Unlike verify-scroll-fold-anchor.tsx's off-window card, this probe picks
+ * `list.start`: already mounted in the previous commit, wholly above the
+ * visible top, then really folded. Its fresh Yoga height must correct the
+ * position before paint, without consuming a fallback estimate or waiting for
+ * another React commit to restore the reader's line.
  *
  * Measured, not assumed: the card must be inside the window reported for the frame
  * BEFORE the fold (that window IS the previous commit's mounted set, which is what the
@@ -18,12 +15,10 @@
  * cannot supply such a row are nudged one wheel notch at a time; if none is found the
  * run exits non-zero instead of measuring something it did not mount.
  *
- * Assertions: the fold frame is observed, the committed position converges on the real
- * shrink with no residual, the reader's terminal lines are back where they started, sticky
- * stays false, paint never disagrees with the committed position, the position stays
- * reachable, and no blank band opens over the reader's rows. A transient drift while the
- * correction waits for the fresh measurement is reported, not failed: only a PERMANENT
- * one is a lost place, and that is what the end-state assertions read.
+ * Assertions: the fold frame is observed, the committed position absorbs the real
+ * shrink with no residual, and every parsed terminal write keeps the reader's line
+ * at its original screen row. Sticky stays false, paint agrees with the committed
+ * position, the position remains reachable, and no blank band opens above it.
  *
  * The card folds to SIX lines, never to the two-row DEFAULT_ROW_HEIGHT fallback: a fold
  * that lands exactly on the fallback makes any estimate look exact, which is how the
@@ -191,10 +186,9 @@ if (beforeFrame0 === undefined || beforeFrame0.scroll.at(-1) === undefined) {
   await bail('geometry trace 未捕获到任何 scroll note（DSH_TUI_GEOMETRY_TRACE 未生效？）')
 }
 
-// Pick a card the render ALREADY mounted and that is entirely above the visible top.
-// `list.start` is by construction at least OVERSCAN_LINES above the viewport top;
-// a first mounted row that pokes into the viewport (its own turn marker on screen) is
-// the PR's non-goal — nudge the position a notch and re-sample instead.
+// Pick a card already mounted and entirely above the visible top. Overscan may
+// begin on a partially visible tall row; reject it by its actual screen marker
+// and nudge one notch instead of assuming a fixed gap from the window boundary.
 let victim: ChatRow | undefined
 let victimIndex = -1
 let preFrame = beforeFrame0
@@ -283,8 +277,10 @@ const residual = shrink - applied
 check('末帧锚点行复位（读者位置未丢）', (endScreen[baselineAnchorRow] ?? '').trimEnd() === baselineAnchor,
   `row=${baselineAnchorRow} ${baselineAnchor} → ${(endScreen[baselineAnchorRow] ?? '').trimEnd()}`)
 check('锚点补偿无残差', residual === 0, `shrink=${shrink} applied=${applied} residual=${residual}`)
-const driftFrames = screens.slice(screenMark).filter(frame => (frame[baselineAnchorRow] ?? '').trimEnd() !== baselineAnchor).length
-console.log(`INFO: 折叠窗口内锚点行漂移 ${driftFrames}/${screens.length - screenMark} 帧（瞬态允许，末帧必须复位）`)
+const postFoldScreens = screens.slice(screenMark)
+const driftFrames = postFoldScreens.filter(frame => (frame[baselineAnchorRow] ?? '').trimEnd() !== baselineAnchor).length
+check('绘制帧锚点行逐帧不变', postFoldScreens.length > 0 && driftFrames === 0,
+  `drift=${driftFrames}/${postFoldScreens.length}`)
 
 console.log('\n折叠后逐帧：')
 for (const frame of observations) {

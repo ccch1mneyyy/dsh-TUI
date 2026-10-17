@@ -919,15 +919,10 @@ export function MessageList({
         parts.length === cachedParts.length &&
         typeof parts[2] === 'number' && typeof cachedParts[2] === 'number' && parts[2] >= cachedParts[2] &&
         parts.every((part, index) => index === 2 || part === cachedParts[index])
-      // A MOUNTED row keeps painting its own Yoga height, so dropping the entry
-      // here would space it with DEFAULT_ROW_HEIGHT while it paints something
-      // else: an estimate the anchoring cannot tell from a real shrink, and one
-      // it writes for good — the height that lands afterwards arrives as a
-      // GROWTH, which the shrink-only correction above drops. Keep the last
-      // measurement and take the fresh read instead; the delta then lands one
-      // commit later as the real shrink it is. An UNMOUNTED row's fallback IS
-      // its painted spacer, which is the real-shrink case the anchoring exists
-      // for. Retaining an estimate must never skip the next fresh Yoga read.
+      // Keep a mounted row's estimate until the fresh Yoga read: falling back
+      // here could eject still-visible rows from this render's mount window.
+      // An unmounted row really paints the fallback spacer until it remounts.
+      // Retaining an estimate must never skip the next fresh measurement.
       if (localRefs.current.has(row.id)) growingStreamNeedsMeasure = true
       else if (!growingStream) heightsRef.current.delete(row.id)
       heightsVersionRef.current++
@@ -961,22 +956,13 @@ export function MessageList({
     total += heightOf(visibleRows[i])
   }
 
-  // Scroll anchoring, render half (the DOM write is the layout effect's half).
-  // Rows above the viewport are spaced by ESTIMATES, so a real fold among them
-  // — or an invalidated estimate of a row the render no longer mounts, which
-  // falls back to the two-row spacer it paints — changes their offsets and
-  // every visible row moves while scrollTop never did. The committed position
-  // has to follow that delta, and the mount window
-  // has to be scanned against the CORRECTED position: scanned against the old
-  // one, the window starts below the corrected top and the top
-  // `base + topPad - scrollTop` rows of the viewport are painted as topPad
-  // spacer — a blank band over the reader's rows until some later commit
-  // happens to re-scan. Track the row that owned the viewport top by INDEX (a
-  // shrink above the viewport pushes the mount window's start past it) and hand
-  // its own offset delta to the ScrollBox so the rows on screen keep their
-  // screen rows. Never fights a deliberate scroll: skipped while following,
-  // while a wheel drain is in flight, and when the position moved since the row
-  // was recorded.
+  // Predict the anchor's signed offset delta before scanning the mount window.
+  // A remeasured offscreen spacer must return its provisional shrink, not leave
+  // the reader permanently over-corrected. Scan against the corrected position
+  // so the anchor stays mounted; the layout effect refines that prediction
+  // from fresh Yoga before paint. Never fight following, wheel debt, or a
+  // position the user changed. A row below the viewport top (the header's
+  // fallback pick) does not own the reader's position.
   const anchorRef = React.useRef<{ id: number; index: number; top: number; scrollTop: number } | null>(null)
   const scrollTopRaw = scrollHandle?.getScrollTop() ?? 0
   const pending = scrollHandle?.getPendingDelta() ?? 0
@@ -985,13 +971,16 @@ export function MessageList({
   const base = baseRef.current ?? DEFAULT_HEADER_LINES
   const prevAnchor = anchorRef.current
   let anchorCorrection = 0
-  if (scrollHandle && prevAnchor !== null && !sticky && pending === 0 && scrollTopRaw === prevAnchor.scrollTop) {
+  if (
+    scrollHandle && prevAnchor !== null && prevAnchor.top <= prevAnchor.scrollTop &&
+    !sticky && pending === 0 && scrollTopRaw === prevAnchor.scrollTop
+  ) {
     const anchored = visibleRows[prevAnchor.index]
     if (anchored !== undefined && anchored.id === prevAnchor.id) {
-      anchorCorrection = Math.max(0, prevAnchor.top - (base + (offsets[prevAnchor.index] ?? 0)))
+      anchorCorrection = prevAnchor.top - (base + (offsets[prevAnchor.index] ?? 0))
     }
   }
-  const scrollTop = scrollTopRaw - anchorCorrection
+  const scrollTop = Math.max(0, scrollTopRaw - anchorCorrection)
 
   // Mount the union of the committed position and any in-flight pending
   // delta, plus overscan; when sticky, always reach the tail (streaming row).
@@ -1401,6 +1390,14 @@ export function MessageList({
       }
     }
     if (scrollHandle) {
+      // Fresh bounds must move with a prefix's real height, too: an estimated
+      // max can otherwise clamp away a positive correction larger than overscan.
+      const mountedTop = top ?? base + topPad
+      const lastMounted = visibleRows[end - 1]
+      const lastYoga = lastMounted ? localRefs.current.get(lastMounted.id)?.yogaNode : undefined
+      const mountedEnd = lastYoga === undefined
+        ? base + mountedBottom
+        : lastYoga.getComputedTop() + lastYoga.getComputedHeight()
       if (sticky || (start === 0 && end >= visibleRows.length)) {
         // Sticky still needs the MIN clamp: the first wheel-up breaks sticky
         // on the DOM (ScrollBox.scrollBy) several frames before React
@@ -1410,10 +1407,11 @@ export function MessageList({
         // behavior as the steady-state scroll path. The MAX clamp stays
         // disabled: sticky follow pushes scrollTop to each frame's new
         // maxScroll, which a stale mounted max would clamp away.
-        const min = start > 0 ? Math.max(0, base + topPad - viewport) : undefined
+        const min = start > 0 ? Math.max(0, mountedTop - viewport) : undefined
         scrollHandle.setClampBounds(min, undefined)
       } else {
-        const min = Math.max(0, base + topPad - viewport)
+        // With no top spacer, the mounted header must remain reachable at Home.
+        const min = start > 0 ? Math.max(0, mountedTop - viewport) : 0
         // Upper clamp only while unmounted content remains below the window
         // (bottomPad spacer): it exists to pin the paint to the mounted edge
         // during burst scrolls that outrun React's window re-render. Once the
@@ -1426,46 +1424,46 @@ export function MessageList({
         // still caps at the frame's real maxScroll.
         scrollHandle.setClampBounds(
           min,
-          bottomPad <= 0 ? undefined : Math.max(min, base + mountedBottom - viewport),
+          bottomPad <= 0 ? undefined : Math.max(min, mountedEnd - viewport),
         )
       }
-      // Scroll anchoring. The render half already scanned the mount window
-      // against the corrected position; publish that correction to the DOM node
-      // whose paint is about to happen. The position can still have moved since
-      // the render (a wheel drain between render and commit) — then the window
-      // no longer covers where the reader is, so drop the correction and commit
-      // once more to re-scan instead of painting spacer over their rows.
+      // Yoga is fresh even when this render retained an old height estimate.
+      // Refine the prediction before paint, not on the later measure tick, and
+      // recheck input intent in case scrolling moved between render and commit.
       const anchorBase = baseRef.current ?? base
       let anchoredTop = scrollHandle.getScrollTop()
-      if (anchorCorrection > 0) {
-        if (
-          !sticky &&
-          scrollHandle.getPendingDelta() === 0 &&
-          anchoredTop === anchorRef.current?.scrollTop
-        ) {
-          scrollHandle.anchorBy(-anchorCorrection)
+      if (
+        prevAnchor !== null && prevAnchor.top <= prevAnchor.scrollTop &&
+        visibleRows[prevAnchor.index]?.id === prevAnchor.id &&
+        !scrollHandle.isSticky() && scrollHandle.getPendingDelta() === 0 &&
+        anchoredTop === prevAnchor.scrollTop
+      ) {
+        const measuredTop = localRefs.current.get(prevAnchor.id)?.yogaNode?.getComputedTop()
+        const correction = measuredTop === undefined ? anchorCorrection : prevAnchor.top - measuredTop
+        if (correction !== 0) {
+          scrollHandle.anchorBy(-correction)
           anchoredTop = scrollHandle.getScrollTop()
-        } else {
-          changed = true
         }
+      } else if (anchorCorrection !== 0) {
+        changed = true
       }
-      // The row that owns the viewport top is re-picked EVERY commit (a pick
-      // kept from an earlier position sits above whatever changed and reports
-      // no movement), against the position this commit paints. It is compared
-      // with the pick recorded last commit through ITS index+id — a shrink above
-      // the viewport pushes the mount window's start past that row, while
-      // offsets[] still covers it, so the row's own offset delta is exactly what
-      // the reader saw move.
-      const viewTop = anchoredTop - anchorBase
+      // Pick and record in the same fresh coordinates as the correction.
+      // Recording old offsets after a fresh read would consume that delta again.
       let pick = start
+      let pickedTop = anchorBase + (offsets[start] ?? 0)
       for (let i = start; i < end; i++) {
-        if ((offsets[i] ?? 0) <= viewTop) pick = i
-        else break
+        const row = visibleRows[i]!
+        const rowTop = localRefs.current.get(row.id)?.yogaNode?.getComputedTop() ?? anchorBase + (offsets[i] ?? 0)
+        if (i === start || rowTop <= anchoredTop) {
+          pick = i
+          pickedTop = rowTop
+        }
+        if (rowTop > anchoredTop) break
       }
       const picked = visibleRows[pick]
       anchorRef.current = picked === undefined
         ? null
-        : { id: picked.id, index: pick, top: anchorBase + (offsets[pick] ?? 0), scrollTop: anchoredTop }
+        : { id: picked.id, index: pick, top: pickedTop, scrollTop: anchoredTop }
     }
     if ((changed || growingStreamNeedsMeasure) && measureTimerRef.current === null) {
       // Layout corrections can cascade for many rows. Yield to the next

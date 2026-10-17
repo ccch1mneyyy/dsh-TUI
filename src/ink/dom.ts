@@ -92,8 +92,9 @@ export type DOMElement = {
   // can transiently shrink scrollHeight; a positional at-bottom check must
   // not compare against a maxScroll computed from such an artifact frame,
   // or a mid-scroll position is mistaken for "at bottom" and yanked to the
-  // bottom/top. Shrink frames keep the last trusted value; only real
-  // growth (or a settled measurement) refreshes it.
+  // bottom/top. Shrink frames keep the last trusted value; real growth (or a
+  // settled measurement) refreshes it. ScrollBox.anchorBy translates it with
+  // a geometry correction so the positional check stays in the same coordinates.
   scrollPrevMax?: number
   stickyScroll?: boolean
   // Renderer → React notification channel, set by ScrollBox to its
