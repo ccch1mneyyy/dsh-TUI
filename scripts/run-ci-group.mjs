@@ -829,6 +829,7 @@ const GROUPS = {
     ['verify-guide', ['node', 'scripts/verify-guide.mjs']],
     ['verify-message-compat', ['node', 'scripts/verify-message-compat.mjs']],
     ['verify-settings-compat', ['node', '--import', 'tsx/esm', 'scripts/verify-settings-compat.mjs']],
+    ['verify-web-settings', ['node', '--import', 'tsx/esm', 'scripts/verify-web-settings.tsx']],
 // 设置读点的 ns 归属（issue #1124）：分区注册与写入用 Config owner 的 Loader id
 // （可为自定义 id），读点（channel.autoRecapOnOpen、Chat 的 lang 镜像、/reload 的
 // langOverriddenBySettings）必须用同一个 ns —— 写死 'dsh-tui' 会让非默认挂载
@@ -1173,6 +1174,7 @@ const GROUPS = {
 // /model 保留会话与自动标题资格；路由及其异步快照跟随停放中的 agent。
     ["verify-session-title-lineage", ['node', '--import', 'tsx/esm', 'scripts/verify-session-title-lineage.ts']],
     ["verify-model-route-lifetime", ['node', '--import', 'tsx/esm', 'scripts/verify-model-route-lifetime.ts']],
+    ['verify-model-completion-invalidate', ['node', 'scripts/verify-model-completion-invalidate.mjs']],
     ["verify-session-v3", ['node', '--import', 'tsx/esm', 'scripts/verify-session-v3.ts']],
     ["verify-session-tree-generations", ['node', '--import', 'tsx/esm', 'scripts/verify-session-tree-generations.ts']],
 // 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message

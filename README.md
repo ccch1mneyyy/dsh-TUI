@@ -98,9 +98,13 @@ The `deepseek-official` API-key route needs `DEEPSEEK_API_KEY`. On DSH
 and select the separate account route through `/model`. Other supported
 accounts can sign in through `/provider` or `/auth` after startup.
 
-The primary compatibility target is DSH `0.2.1-alpha.5`. This adapter supports its
+The primary compatibility target is DSH `0.2.1-rc.2`. This adapter supports its
 Shell API, V4 session messages, declarative presets, and profile-backed settings;
 older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
+
+On DSH rc.2, `/settings` also selects DeepSeek Search / Fetch APIs and edits their
+endpoint and result limits. Official Flash model labels show the `1017` release
+marker while retaining the `deepseek-flash` model ID.
 
 On DSH 0.1.7, `/settings` uses the TUI's actual Loader entry ID, including custom
 IDs. It requires matching profile dependencies with `@deepseek-ai/schemastery`

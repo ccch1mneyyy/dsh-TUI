@@ -108,6 +108,26 @@ check('completion refetches without the deleted provider', await settled(() => {
   return names.length === 1 && has(names, 'deepseek/ds-1') && !has(names, 'my-gateway/gw-1')
 }, { timeoutMs: 4000 }), JSON.stringify(completionNames('/model ')))
 
+// rc.2 marks only the two official Flash labels; catalog names and route IDs
+// stay untouched, including aliases and third-party providers with the same ID.
+const { installedMeetsVersion } = await import('../lib/types/dsh-adapter/contract.js')
+if (installedMeetsVersion('@deepseek-ai/dsh-web-app', '0.2.1-rc.2')) {
+  providerCatalog = ['deepseek-official', 'deepseek-account', 'custom'].map(id => ({ id, name: id }))
+  const catalog = providerCatalog.flatMap(({ id: provider }) => [
+    Object.freeze({ provider, id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash' }),
+    Object.freeze({ provider, id: 'deepseek-pro', name: 'DeepSeek-V4.1-Pro' }),
+    Object.freeze({ provider, id: 'flash-alias', name: 'DeepSeek-V4.1-Flash' }),
+  ])
+  llmStub.listModels = async provider => catalog.filter(model => model.provider === provider)
+  const models = await channel.listModels()
+  check('1017 labels only mark the official Flash model', models.filter(model => model.name.endsWith(' 1017')).length === 2)
+  check('display marking preserves model route identities', models.every((model, index) => model.id === catalog[index].id && model.provider === catalog[index].provider))
+  check('display marking never modifies the shared catalog', catalog.every(model => !model.name.includes('1017')))
+  channel.invalidateModelCompletion()
+  check('model completion shows the same release label', await settled(() => channel.commandCompletions('/model ')
+    .some(node => node.name.endsWith('deepseek-account/deepseek-flash') && node.description === 'DeepSeek-V4.1-Flash 1017')))
+}
+
 if (failed === 0) {
   console.log('verify-model-completion-invalidate: all checks passed')
 } else {

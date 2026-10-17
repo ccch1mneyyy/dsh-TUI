@@ -25,6 +25,34 @@ Profile 启动按顺序叠加：
 > 覆盖某一行时，`config` 是整块替换，不是逐字段深合并。需要继续生效的字段必须
 > 在用户补丁中全部重写。
 
+## 网页搜索与抓取（DSH 0.2.1-rc.2）
+
+标准 DSH profile 会加载新的 DeepSeek Search / Fetch API 提供者，默认仍使用
+Messages 搜索和本地 HTTP 抓取。在 `/settings` 的「网页搜索」分区，用左右键将
+「搜索」选为「搜索 API」、「抓取」选为「抓取 API」；选择立即保存，从下一次操作
+生效，不需要重启。切回 `Messages` / `HTTP` 可恢复原提供者。Enter 可输入第三方
+提供者 ID。
+
+「DeepSeek 搜索 / 抓取 API」分区可修改 API 基础地址、凭据引用、搜索结果数
+（1–50）和「发送原始问题」。基础地址包含路径前缀，不含 `/search` 或 `/fetch`，
+默认 `https://api.deepseek.com/v1/tools`。凭据引用默认 `DEEPSEEK_API_KEY`，只填写
+已有凭据或环境变量的名称；账号路由由 DSH 使用已授权的账号令牌。默认会将最近一条
+用户提示的前 128 个字符随搜索请求发送，可在该分区关闭。Messages 搜索的端点与
+最大搜索次数在独立分区设置。
+
+也可通过用户 profile 补丁选择两个提供者：
+
+```yaml
+- id: web
+  config:
+    searchProvider: deepseek-search-api
+    fetchProvider: deepseek-fetch-api
+```
+
+TUI 沿用 DSH 的工具、鉴权、取消和结果持久化，不额外发起模型请求；旧宿主或未加载
+API 插件的组合不显示这些新增设置。官方 `deepseek-official` / `deepseek-account`
+路由的 `DeepSeek-V4.1-Flash` 在模型列表中显示 `1017` 标记，路由 ID 不变。
+
 ## 官方请求元数据与反馈上报
 
 TUI bundle 继承已安装 DSH 官方组合的上报配置；上游未提供的服务不会由 TUI
@@ -382,7 +410,7 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 `dsh-auth` 插件包**。`/provider` 的添加分支提供 ChatGPT/Codex（`openai-codex`）、
 Claude（`anthropic`）、Grok（`xai`）订阅账号登录。宿主 pi-ai catalog 提供相应流程
 时还可使用 OpenAI 直连 ChatGPT 登录（`openai`，使用 OpenAI API 而非旧版 Codex
-后端）和 Meta Muse（`meta`）。当前主验证线 DSH `0.2.1-alpha.5` 的开发依赖解析到 pi-ai
+后端）和 Meta Muse（`meta`）。当前主验证线 DSH `0.2.1-rc.2` 的开发依赖解析到 pi-ai
 `1.2.0`，包含 Meta Muse 与 OpenAI 直连登录。`/auth status`、`/auth login [provider]`、
 `/auth logout <provider>` 对这些 pi-ai 路由操作同一套凭据。浏览器授权会尝试自动打开页面，并在同一
 问卷中提供授权链接与手动粘贴回调 URL/代码的输入；设备码流程在轮询期间显示可复制的

@@ -9,7 +9,7 @@
 export const HOST_PACKAGE = '@deepseek-ai/dsh'
 
 /** The host line the reproduced pieces were checked against (host-replica.snapshot.json). */
-export const HOST_REPLICA_VERSION = '0.2.1-alpha.5'
+export const HOST_REPLICA_VERSION = '0.2.1-rc.2'
 
 /** Where the entry resolves a host module from. */
 export type HostModuleVia =

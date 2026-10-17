@@ -5,8 +5,74 @@ import type { ChannelState } from '../channel/types.js'
 import { isReservedCredentialRef } from '../credentialRefGuard.js'
 import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupHost } from '../providerWizard.js'
 import type { SettingsHost } from '../settingsEditor.js'
-import type { SettingsNamespaceWarning } from '../../adapter/ports/channel-settings.js'
+import type { SettingsNamespaceView, SettingsNamespaceWarning, TuiSettingsSection } from '../../adapter/ports/channel-settings.js'
 import { settingsValue } from '../compat/settings.js'
+
+/** Forms over the host's web settings; provider selection remains owned by DSH. */
+export function webSettingsSections(namespaces: readonly SettingsNamespaceView[]): TuiSettingsSection[] {
+  const available = new Set(namespaces.map(view => view.ns))
+  // This section is introduced together with live provider selection in rc.2.
+  // Older hosts keep their existing search route without an ineffective picker.
+  if (!available.has('web-deepseek-api')) return []
+  const sections: TuiSettingsSection[] = []
+  if (available.has('web')) sections.push({
+    ns: 'web', title: 'Web search', descriptions: { zh: '网页搜索' },
+    fields: [
+      {
+        path: ['searchProvider'], label: 'Search', descriptions: { zh: '搜索' }, kind: 'text',
+        hint: 'Select DeepSeek Search API or Messages search. Custom provider IDs are also accepted.',
+        hintDescriptions: { zh: '选择 DeepSeek Search API 或 Messages 搜索，也可输入自定义提供者 ID。' },
+        options: [
+          { value: 'deepseek-search-api', label: 'Search API', descriptions: { zh: '搜索 API' } },
+          { value: 'deepseek-official', label: 'Messages' },
+        ],
+      },
+      {
+        path: ['fetchProvider'], label: 'Fetch', descriptions: { zh: '抓取' }, kind: 'text',
+        hint: 'Select DeepSeek Fetch API or local HTTP fetch. Changes apply to the next operation.',
+        hintDescriptions: { zh: '选择 DeepSeek Fetch API 或本地 HTTP 抓取，保存后从下一次操作生效。' },
+        options: [
+          { value: 'deepseek-fetch-api', label: 'Fetch API', descriptions: { zh: '抓取 API' } },
+          { value: 'http', label: 'HTTP' },
+        ],
+      },
+    ],
+  })
+  sections.push({
+    ns: 'web-deepseek-api', title: 'DeepSeek Search / Fetch API',
+    descriptions: { zh: 'DeepSeek 搜索 / 抓取 API' },
+    fields: [
+      { path: ['baseURL'], label: 'API base URL', descriptions: { zh: 'API 基础地址' }, kind: 'text',
+        hint: 'Include the path prefix, without /search or /fetch.',
+        hintDescriptions: { zh: '包含路径前缀，不含末尾的 /search 或 /fetch。' } },
+      { path: ['apiKeyEnv'], label: 'Credential reference', descriptions: { zh: '凭据引用' }, kind: 'text',
+        hint: 'Name of an existing credential or environment variable; do not enter the key itself.',
+        hintDescriptions: { zh: '填写已有凭据或环境变量的名称，请勿填写密钥本身。' } },
+      { path: ['count'], label: 'Search result count', descriptions: { zh: '搜索结果数' }, kind: 'number',
+        parse(text) {
+          if (text.trim() === '') return { kind: 'clear' }
+          const value = Number(text)
+          return Number.isInteger(value) && value >= 1 && value <= 50 ? { kind: 'set', value } : undefined
+        } },
+      { path: ['sendOriginalQuestion'], label: 'Send original question', descriptions: { zh: '发送原始问题' }, kind: 'boolean',
+        hint: 'Send up to 128 characters of the latest user prompt with the search query.',
+        hintDescriptions: { zh: '搜索时附带最近一条用户提示，最多 128 个字符。' } },
+    ],
+  })
+  if (available.has('web-search-deepseek')) sections.push({
+    ns: 'web-search-deepseek', title: 'DeepSeek Messages search', descriptions: { zh: 'DeepSeek Messages 搜索' },
+    fields: [
+      { path: ['baseURL'], label: 'Messages API base URL', descriptions: { zh: 'Messages API 基础地址' }, kind: 'text' },
+      { path: ['maxUses'], label: 'Maximum searches per request', descriptions: { zh: '每次请求的最大搜索次数' }, kind: 'number',
+        parse(text) {
+          if (text.trim() === '') return { kind: 'clear' }
+          const value = Number(text)
+          return Number.isInteger(value) && value > 0 ? { kind: 'set', value } : undefined
+        } },
+    ],
+  })
+  return sections
+}
 
 export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void = () => undefined): Pick<ChannelState, 'settingsHost' | 'providerSetup' | 'oauthProviderStatuses' | 'backendAuth'> {
   let settingsHostResolved = false

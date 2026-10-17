@@ -23,7 +23,7 @@ export interface ProcessExitSeam {
   request?: (request: ExitRequest) => ExitRequestAnswer
 }
 
-/** dsh `process-shutdown` PROCESS_SHUTDOWN_TIMEOUT_MS (0.2.1-alpha.5): the dispose bound. */
+/** dsh `process-shutdown` PROCESS_SHUTDOWN_TIMEOUT_MS (0.2.1-rc.2): the dispose bound. */
 export const PROCESS_SHUTDOWN_TIMEOUT_MS = 5000
 /** Last-resort bound for a funnel exit: outlasts its terminal cleanup plus the dispose bound. */
 const BACKSTOP_MS = PROCESS_SHUTDOWN_TIMEOUT_MS + 2000

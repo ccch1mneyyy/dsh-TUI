@@ -72,6 +72,7 @@ import { createSessionMetadataActions } from './session-metadata.js'
 import { createSessionResumeActions } from './session-resume.js'
 import { createRewindToAction } from './session-rewind.js'
 import { createSessionTreeReader } from './session-tree.js'
+import { webSettingsSections } from './settings-host.js'
 import { createTreeRewindAction } from './session-tree-actions.js'
 import { createSkillCatalog } from './skill-catalog.js'
 import { createSubagentProjection, type SubagentsServiceView } from './subagent-projection.js'
@@ -112,6 +113,13 @@ export function attachDshExtensions(
   const { state, owner, rowIds, host, notify } = core
   const { workspaceService, commandTrees } = host
   const adapterRuntime = host.adapterRuntime
+  const registeredSettingsSections = state.settingsSections
+  state.settingsSections = () => {
+    const registered = registeredSettingsSections()
+    const claimed = new Set(registered.map(section => section.ns))
+    return [...registered, ...webSettingsSections(state.settingsHost()?.listNamespaces() ?? [])
+      .filter(section => !claimed.has(section.ns))]
+  }
   // The DSH specialists read the binding through its DSH view (the bound
   // session is a DSH session for this whole composition).
   const binding = dshChannelBinding(core.binding)

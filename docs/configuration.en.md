@@ -26,6 +26,40 @@ only for a genuinely new service.
 > When a row is overridden, its `config` block is replaced as a whole. It is
 > not deep-merged, so repeat every key that must remain active.
 
+## Web search and fetch (DSH 0.2.1-rc.2)
+
+The standard DSH profile loads the new DeepSeek Search / Fetch API providers,
+while Messages search and local HTTP fetch remain the defaults. In `/settings`,
+use the arrow keys in **Web search** to select **Search API** and **Fetch API**.
+Each selection saves immediately and applies to the next operation. Choose
+**Messages** / **HTTP** to restore the original providers. Enter accepts a custom
+provider ID.
+
+The **DeepSeek Search / Fetch API** section edits the API base URL, credential
+reference, result count (1–50), and **Send original question**. The base URL
+includes the path prefix without `/search` or `/fetch`; its default is
+`https://api.deepseek.com/v1/tools`. The credential reference defaults to
+`DEEPSEEK_API_KEY`: enter the name of an existing credential or environment
+variable. DSH supplies an authorized account token for the account route.
+Search sends the first 128 characters of the latest user prompt by default;
+the section can disable this. Messages search has its own endpoint and maximum
+search count section.
+
+The user profile patch can also select both providers:
+
+```yaml
+- id: web
+  config:
+    searchProvider: deepseek-search-api
+    fetchProvider: deepseek-fetch-api
+```
+
+The TUI uses DSH's tools, authentication, cancellation and persisted results;
+it does not make an additional model request. Older hosts and compositions
+without the API plugin omit these new settings. The official `deepseek-official`
+and `deepseek-account` routes show a `1017` marker for `DeepSeek-V4.1-Flash` in
+the model list, retaining the original route IDs.
+
 ## Official request metadata and feedback reporting
 
 The TUI bundle inherits reporting configuration from the installed official DSH
@@ -438,7 +472,7 @@ The `/provider` add branch signs in to ChatGPT/Codex (`openai-codex`), Claude
 (`anthropic`), or Grok (`xai`) subscriptions. When the installed host's pi-ai
 catalog ships the corresponding flows, it also offers OpenAI direct ChatGPT sign-in
 (`openai`, using the OpenAI API rather than the legacy Codex backend) and Meta
-Muse (`meta`). The primary validated DSH `0.2.1-alpha.5` development fixture resolves pi-ai
+Muse (`meta`). The primary validated DSH `0.2.1-rc.2` development fixture resolves pi-ai
 `1.2.0`, which includes Meta Muse and OpenAI direct sign-in.
 `/auth status`, `/auth login [provider]`, and `/auth logout <provider>` use
 that credential store for these pi-ai routes. Browser authorization tries to open the page

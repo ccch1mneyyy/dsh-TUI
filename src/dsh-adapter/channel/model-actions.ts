@@ -7,6 +7,7 @@ import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getLang, t, tOr, type I18nKey, type Lang } from '../../i18n.js'
 import { migratePresetPref, writePresetPref } from '../../presetPrefs.js'
 import { presetDisplayId, resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from '../preset-resolution.js'
+import { installedMeetsVersion } from '../contract.js'
 import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState, EffortOption, PresetOption } from './types.js'
@@ -274,7 +275,13 @@ export function createModelActions(
   }
   const listModels = (): Promise<readonly LlmModelInfo[]> => {
     if (llmRuntime === undefined) return Promise.resolve([])
-    return Promise.all(llmRuntime.listProviders().map(provider => llmRuntime.listModels(provider.id).catch(() => []))).then(lists => lists.flat())
+    return Promise.all(llmRuntime.listProviders().map(provider => llmRuntime.listModels(provider.id).catch(() => []))).then(lists => lists.flat().map(model => {
+      // rc.2's official model-label plugin is display-only; keep route IDs intact.
+      const official = model.provider === 'deepseek-account' || model.provider === 'deepseek-official'
+      return official && model.id === 'deepseek-flash' && model.name === 'DeepSeek-V4.1-Flash' &&
+        installedMeetsVersion('@deepseek-ai/dsh-web-app', '0.2.1-rc.2')
+        ? { ...model, name: `${model.name} 1017` } : model
+    }))
   }
   const listProviders = () => Promise.resolve(llmRuntime === undefined ? [] : llmRuntime.listProviders().map(info => ({ ...info })))
   const dropModelNodeCache = (): void => { modelNodeCache.generation += 1; modelNodeCache.nodes = undefined; modelNodeCache.load = undefined }

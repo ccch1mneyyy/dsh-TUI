@@ -443,7 +443,7 @@ function hostVersion(host: HostDsh): string {
 }
 
 /**
- * dsh `bin.js` reportStartupFailure (0.2.1-alpha.5), the file half only: the
+ * dsh `bin.js` reportStartupFailure (0.2.1-rc.2), the file half only: the
  * screen is up, so never stderr. Undefined when it could not be written.
  */
 async function writeStartupReport(error: unknown, context: {
@@ -484,7 +484,7 @@ async function writeStartupReport(error: unknown, context: {
   return logPath
 }
 
-/** dsh `profile-boot` createAppReady (0.2.1-alpha.5). */
+/** dsh `profile-boot` createAppReady (0.2.1-rc.2). */
 function createAppReady(): { readonly service: AppReadyService; commit(): void } {
   let ready = false
   const listeners = new Set<() => void>()
@@ -508,7 +508,7 @@ function createAppReady(): { readonly service: AppReadyService; commit(): void }
   }
 }
 
-/** dsh `process-shutdown` createProcessShutdown (0.2.1-alpha.5), the `shutdown` half only. */
+/** dsh `process-shutdown` createProcessShutdown (0.2.1-rc.2), the `shutdown` half only. */
 function createProcessShutdown(dispose: () => Promise<unknown>, timeoutMs = PROCESS_SHUTDOWN_TIMEOUT_MS): (code: number) => Promise<void> {
   let pending: Promise<void> | undefined
   let settled = false
