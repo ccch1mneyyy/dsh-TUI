@@ -32,6 +32,10 @@ import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { appendCrashLog, serializeCrashDetail, unserializableCrashDetail, type CrashDetail } from '../utils/crashDetail.js'
 import { logForDebugging } from '../utils/debug.js'
 import { createTerminalNotifier, type NotificationMethod, type TaskNotifications } from '../ink/terminal-notification.js'
+import type { WindowsToastInput, WindowsToastResult } from '../ink/terminal-notification-windows.js'
+import { getTerminalFocused } from '../ink/terminal-focus-state.js'
+import { setWindowsToastWiring, windowsToastProfileDocument } from '../ink/notification-wiring-state.js'
+import { resolveNotificationMethod } from '../ink/terminal.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
@@ -217,10 +221,200 @@ export interface RuntimeApplyOptions {
   readonly exitSeam?: ProcessExitSeam
 }
 
+/** Where a Windows task-completion announcement delivers, and where it falls back to. */
+export interface TaskCompletionDelivery {
+  /** Hand the completion to the native toast transport (D8 keeps the dedup inside it). */
+  toast(input: WindowsToastInput): Promise<WindowsToastResult>
+  /** The terminal path: whichever of OSC 9/99/777 or the bell this terminal gets. */
+  terminal(title: string, message: string): void
+}
+
+/** The two live task-notification settings both delivery paths read. */
+export interface TaskNotificationSettings {
+  /** When a completion is announced at all: `off` suppresses it entirely. */
+  condition: TaskNotifications
+  /** How it is delivered: the native toast here, a terminal sequence or the bell there. */
+  method: NotificationMethod
+}
+
+/** The terminal notifier the host configures, as `createTerminalNotifier` returns it. */
+export type TerminalNotifier = ReturnType<typeof createTerminalNotifier>
+
+/**
+ * Publish whether this launch delivers task completions through the native
+ * toast, so the title hook can ask the same question this branch answers (R5).
+ *
+ * The hook writes the `[dsh-tui:<pid>]` marker from the renderer and never sees
+ * the settings; the host resolves them here, wherever it configures them, and a
+ * live `/settings` edit re-publishes. The marker is the toast's promise that a
+ * click comes back, so it may only be written while this launch really routes to
+ * the toast: a launch set to `off`, or pointed at the bell or OSC 9, has no
+ * toast to click.
+ * @param settings - The condition and method the toast branch resolves.
+ * @param platform - What `resolveNotificationMethod` probes; production passes `process.platform`.
+ */
+export function publishWindowsToastWiring(settings: TaskNotificationSettings, platform: NodeJS.Platform = process.platform): void {
+  setWindowsToastWiring(settings.condition !== 'off' && resolveNotificationMethod(settings.method, platform) === 'windows')
+}
+
+/** The live task-notification settings and their one writer. */
+export interface TaskNotificationSettingsHandle {
+  /** The current values; the toast branch and the terminal fallback read these. */
+  readonly settings: TaskNotificationSettings
+  /**
+   * Adopt a new condition/method: the terminal notifier and the published wiring
+   * both move, so a live `/settings` edit cannot leave the title promising a
+   * toast the delivery path no longer sends.
+   * @param condition - The new condition, or undefined for the default.
+   * @param method - The new method, or undefined for the default.
+   */
+  configure(condition: TaskNotifications | undefined, method: NotificationMethod | undefined): void
+}
+
+/**
+ * Create the live task-notification settings around a notifier.
+ *
+ * The notifier holds the values for the terminal path; the Windows branch needs
+ * the same two before it can decide whether to spawn anything; and the title
+ * hook cannot see them at all, so the answer is published (`notification-wiring-state.ts`).
+ * One writer keeps all three in step - `applyDisplay` is the second caller, for
+ * a live /settings edit.
+ * @param notifier - The terminal notifier to configure.
+ * @param initial - The values this launch starts with.
+ * @returns The settings and the single function that changes them.
+ */
+export function createTaskNotificationSettings(
+  notifier: TerminalNotifier,
+  initial: TaskNotificationSettings,
+): TaskNotificationSettingsHandle {
+  const settings: TaskNotificationSettings = { ...initial }
+  return {
+    settings,
+    configure(condition, method) {
+      settings.condition = condition ?? 'unfocused'
+      settings.method = method ?? 'auto'
+      notifier.configure(condition, method)
+      publishWindowsToastWiring(settings)
+    },
+  }
+}
+
+/**
+ * Ring the terminal for a completion the host's gate already approved.
+ *
+ * The gate asks whether the terminal is focused; this port runs after the toast's
+ * await, which is up to 30 s of PowerShell plus 30 s of helper work. Asking the
+ * focus question a second time here would drop the bell for a user who came back
+ * to the terminal in that window - while the log had already reported it rung
+ * (AC-5). The decision travels in instead. `notify()` is synchronous, so the
+ * override covers exactly this call.
+ * @param notifier - The terminal notifier the host configured.
+ * @param settings - The live settings the decision was taken from.
+ * @param title - The localized title.
+ * @param message - The single-line summary; empty rings for the title alone.
+ */
+export function ringTaskCompletion(notifier: TerminalNotifier, settings: TaskNotificationSettings, title: string, message: string): void {
+  if (settings.condition !== 'unfocused') {
+    notifier.notify(title, message)
+    return
+  }
+  notifier.configure('always', settings.method)
+  try {
+    notifier.notify(title, message)
+  } finally {
+    notifier.configure(settings.condition, settings.method)
+  }
+}
+
+/**
+ * Show one task-completion toast and answer for what it did.
+ *
+ * Exactly one answer reaches the terminal path: `unavailable` rings the bell
+ * (AC-5), because the alternative is a notification the user never learns
+ * about. `shown` is already delivered and `yielded` belongs to the external
+ * notifier (D8/AC-6) — ringing after either would remind the user twice.
+ *
+ * The transport is a parameter so the regression can drive all three answers
+ * without a toast, a registry write or a child process.
+ * @param title - The localized title.
+ * @param message - The single-line summary; empty shows the title alone.
+ * @param delivery - The toast port, and the terminal path to fall back to.
+ */
+export async function deliverTaskCompletionOnWindows(
+  title: string,
+  message: string,
+  delivery: TaskCompletionDelivery,
+): Promise<void> {
+  const result = await delivery.toast({
+    title,
+    message,
+    profilePackageJsonPath: windowsToastProfileDocument(),
+  })
+  if (result.status !== 'unavailable') return
+  // AC-5 wants the bell, not a silent loss - and the reason is what makes the
+  // pair "toast missing + bell rang" explainable afterwards. Ring first, then
+  // report: the port rings for a completion the gate already approved, and a line
+  // written ahead of the action is how the fallback came to log a bell that a
+  // second look at the focus had eaten.
+  const cause = result.detail === undefined ? result.reason : `${result.reason}: ${result.detail}`
+  delivery.terminal(title, message)
+  logForDebugging(`windows toast unavailable (${cause}); ringing the terminal bell`)
+}
+
+/**
+ * The production toast port. The Windows module is imported on first use and
+ * never at load time, so this path does not pull it in on a host that never
+ * delivers a toast; the title hook loads it the same way (`use-terminal-title.ts`).
+ * A load that fails answers like any other unavailable transport instead of
+ * throwing: this path is fire-and-forget, and the caller still has the bell.
+ */
+async function showWindowsToast(input: WindowsToastInput): Promise<WindowsToastResult> {
+  try {
+    const { notifyWindowsToast } = await import('../ink/terminal-notification-windows.js')
+    return await notifyWindowsToast(input)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    logForDebugging(`windows toast transport failed to load (${detail})`)
+    return { status: 'unavailable', reason: 'unexpected', detail }
+  }
+}
+
 export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx, runtimeOptions: RuntimeApplyOptions = {}): Promise<void> {
   const config = configValues<Config>(runtimeConfig)
   const taskNotifier = createTerminalNotifier(process.stdout)
-  taskNotifier.configure(config.taskNotifications, config.notificationMethod)
+  const { settings: notificationSettings, configure: configureTaskNotifications } = createTaskNotificationSettings(taskNotifier, {
+    condition: config.taskNotifications ?? 'unfocused',
+    method: config.notificationMethod ?? 'auto',
+  })
+  configureTaskNotifications(config.taskNotifications, config.notificationMethod)
+  /**
+   * Whether a task completion is announced at all: the one gate, asked before
+   * the Windows transport so a suppressed notification never costs a PowerShell
+   * process, and so a delivered toast never also rings the bell. The Windows
+   * fallback re-enters through `ringTaskCompletion`, which carries this answer
+   * instead of asking the time-varying question again, after the awaits.
+   */
+  const taskCompletionAlertsEnabled = (): boolean =>
+    process.stdout.isTTY === true
+    && notificationSettings.condition !== 'off'
+    && !(notificationSettings.condition === 'unfocused' && getTerminalFocused())
+  /**
+   * Announce a finished task: the channel's `onTaskComplete` payload and gate,
+   * with the Windows method resolved first (`auto` picks the toast there, D2).
+   */
+  const announceTaskCompletion = (preview: string | undefined): void => {
+    if (!taskCompletionAlertsEnabled()) return
+    const title = t('task-complete-notification')
+    const message = preview ?? ''
+    if (resolveNotificationMethod(notificationSettings.method, process.platform) !== 'windows') {
+      taskNotifier.notify(title, message)
+      return
+    }
+    void deliverTaskCompletionOnWindows(title, message, {
+      toast: showWindowsToast,
+      terminal: (fallbackTitle, fallbackMessage) => ringTaskCompletion(taskNotifier, notificationSettings, fallbackTitle, fallbackMessage),
+    })
+  }
   // /restart handoff diagnosis: the replacement process is marked by env and
   // logs its boot progress to ~/.dsh-tui/restart.log (ordinary launches stay
   // silent). First line lands before anything in this function can throw.
@@ -917,7 +1111,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // channel's own settings reads look the section up by it.
     settingsNs: tuiSettingsNs,
     onTaskComplete: preview => {
-      if (!shadow) taskNotifier.notify(t('task-complete-notification'), preview)
+      if (!shadow) announceTaskCompletion(preview)
     },
     settingsService: tuiSettings,
     // The backend reports its model with its first turn (`system/init`);
@@ -1187,7 +1381,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         // Same no-default rule: applyDisplay resolves `?? config.smoothStreaming ?? true`.
         smoothStreaming: Schema.boolean(),
         taskNotifications: Schema.union(['off', 'unfocused', 'always']),
-        notificationMethod: Schema.union(['auto', 'osc9', 'bel']),
+        // Must mirror Config's union (`src/dsh-adapter/index.ts`): a method
+        // missing here is rejected by /settings and never reaches the runtime.
+        notificationMethod: Schema.union(['auto', 'osc9', 'bel', 'windows']),
         // Same no-default rule: applyDisplay resolves `?? config.mermaidDiagrams ?? true`.
         mermaidDiagrams: Schema.boolean(),
         // Code-frame shape; unset keeps the light rail frame.
@@ -1432,7 +1628,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
       channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
-      taskNotifier.configure(value.taskNotifications ?? config.taskNotifications, value.notificationMethod ?? config.notificationMethod)
+      configureTaskNotifications(value.taskNotifications ?? config.taskNotifications, value.notificationMethod ?? config.notificationMethod)
       applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
       applyCodeFrameStyle(value.codeFrameStyle ?? config.codeFrameStyle)
       applyMathRendering(resolveMathRendering(value, config))

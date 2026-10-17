@@ -186,7 +186,8 @@ export interface Config {
   smoothStreaming?: boolean
   /** Successful task notifications: off, unfocused (default), or always. */
   taskNotifications?: TaskNotifications
-  /** Terminal notification transport: auto (default), OSC 9, or BEL. */
+  /** Notification transport: auto (default), OSC 9, BEL, or the native Windows
+   *  toast, which off Windows resolves back to the probed terminal protocol. */
   notificationMethod?: NotificationMethod
   /** Mermaid diagrams (settings `dsh-tui.mermaidDiagrams`): ```mermaid
    *  fences in replies render as Unicode box-drawing art — flowcharts,
@@ -363,7 +364,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   expandEditor: Schema.boolean().default(true),
   smoothStreaming: Schema.boolean().default(true),
   taskNotifications: Schema.union(['off', 'unfocused', 'always']),
-  notificationMethod: Schema.union(['auto', 'osc9', 'bel']),
+  notificationMethod: Schema.union(['auto', 'osc9', 'bel', 'windows']),
   mermaidDiagrams: Schema.boolean().default(true),
   codeFrameStyle: Schema.union(['light', 'full']),
   mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),

@@ -223,13 +223,14 @@ export const SETTING_DEFINITIONS = {
     label: 'Notification method',
     descriptions: { zh: '通知方式' },
     group: 'conversation',
-    hint: 'Auto uses separate title/body notifications on Ghostty and WezTerm (OSC 777) and Kitty (OSC 99). iTerm2 and Warp use OSC 9 with a title prefix; other terminals ring the bell. Explicit OSC 9 also uses the title prefix. Delivery depends on terminal settings. In tmux, OSC notifications need allow-passthrough on. Applies immediately.',
-    hintDescriptions: { zh: '自动：Ghostty、WezTerm 使用 OSC 777，Kitty 使用 OSC 99，分别显示标题与正文；iTerm2、Warp 使用 OSC 9，将标题放在正文前；其他终端响铃。显式 OSC 9 同样使用标题前缀。实际提醒取决于终端设置；tmux 中 OSC 通知需要开启 allow-passthrough。立即生效。' },
+    hint: 'Auto uses separate title/body notifications on Ghostty and WezTerm (OSC 777) and Kitty (OSC 99). iTerm2 and Warp use OSC 9 with a title prefix; other terminals ring the bell. Explicit OSC 9 also uses the title prefix. On Windows, Auto uses the system\'s native notifications instead: a task-completion toast that returns to that session when clicked. The first toast registers that user\'s AppUserModelID (an HKCU key); it appears about 3 seconds after the task ends; and an external notification plugin in the profile makes it yield (no toast, no bell); if that AppUserModelID cannot be written, it falls back to the bell instead of going silent. Delivery depends on terminal settings. In tmux, OSC notifications need allow-passthrough on. Applies immediately.',
+    hintDescriptions: { zh: '自动：Ghostty、WezTerm 使用 OSC 777，Kitty 使用 OSC 99，分别显示标题与正文；iTerm2、Warp 使用 OSC 9，将标题放在正文前；其他终端响铃。显式 OSC 9 同样使用标题前缀。在 Windows 上，自动改用系统原生通知：任务完成时弹出 toast，点击可回到该会话；首次弹出会注册当前用户的 AppUserModelID（写 HKCU），弹出比任务结束晚约 3 秒；profile 里装了外部通知插件时让位（不弹也不响）；AppUserModelID 写不进去时回落到响铃，不会静默。实际提醒取决于终端设置；tmux 中 OSC 通知需要开启 allow-passthrough。立即生效。' },
     kind: 'select',
     options: [
       { value: 'auto', label: 'Auto', descriptions: { zh: '自动' } },
       { value: 'osc9', label: 'OSC 9', descriptions: { zh: 'OSC 9' } },
       { value: 'bel', label: 'Terminal bell', descriptions: { zh: '终端响铃' } },
+      { value: 'windows', label: 'Windows notification', descriptions: { zh: 'Windows 原生通知' } },
     ],
   },
   'pageMargin': {

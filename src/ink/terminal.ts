@@ -5,6 +5,7 @@ import { env } from '../utils/env.js'
 import { gte } from '../utils/semver.js'
 import { getClearTerminalSequence } from './clearTerminal.js'
 import type { Diff } from './frame.js'
+import type { NotificationMethod } from './terminal-notification.js'
 import {
   CURSOR_HOME,
   cursorMove,
@@ -214,6 +215,29 @@ export function getNotificationProtocol(): 'osc777' | 'osc99' | 'osc9' | 'bel' {
   if (program === 'kitty' || term === 'xterm-kitty' || /^kitty\b/i.test(probed)) return 'osc99'
   if (program === 'iterm.app' || program === 'warpterminal' || /^(iterm2?|warp(?:terminal)?)\b/i.test(probed)) return 'osc9'
   return 'bel'
+}
+
+/**
+ * The transport a configured `notificationMethod` resolves to on `platform`.
+ *
+ * `auto` asks the platform: Windows shows a native toast, every other platform
+ * keeps whatever {@link getNotificationProtocol} probes for, so delivery there
+ * is unchanged. An explicit `windows` is a platform capability rather than a
+ * terminal sequence, so off Windows it falls back to that same probed protocol;
+ * `osc9` and `bel` stay explicit overrides everywhere.
+ *
+ * `platform` is a parameter, like {@link supportsWin32InputMode}'s, so callers
+ * and regressions can resolve for a host that is not this process.
+ * @param method - the configured notification method.
+ * @param platform - the host platform to resolve for.
+ * @returns the transport to deliver the notification through.
+ */
+export function resolveNotificationMethod(
+  method: NotificationMethod,
+  platform: NodeJS.Platform = process.platform,
+): 'windows' | 'osc777' | 'osc99' | 'osc9' | 'bel' {
+  if (method === 'osc9' || method === 'bel') return method
+  return platform === 'win32' ? 'windows' : getNotificationProtocol()
 }
 
 /**

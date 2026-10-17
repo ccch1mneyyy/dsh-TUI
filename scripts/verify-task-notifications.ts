@@ -5,8 +5,10 @@
  * Run: node --import tsx/esm scripts/verify-task-notifications.ts
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { setImmediate as nextDispatch } from 'node:timers/promises'
 import { PassThrough, Writable } from 'node:stream'
+import { fileURLToPath } from 'node:url'
 import type { AgentEvent, AgentEventMeta, AgentEventOf, TurnEndReason } from '../src/agent/events.js'
 import type { AgentSession, AgentSessionStatus } from '../src/agent/session.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
@@ -14,10 +16,24 @@ import { Config } from '../src/dsh-adapter/index.js'
 import { configValues } from '../src/dsh-adapter/compat/settings.js'
 import { createTerminalNotifier } from '../src/ink/terminal-notification.js'
 import { getTerminalFocusState, resetTerminalFocusState, setTerminalFocused } from '../src/ink/terminal-focus-state.js'
-import { setXtversionName, getNotificationProtocol } from '../src/ink/terminal.js'
+import { setXtversionName, getNotificationProtocol, resolveNotificationMethod } from '../src/ink/terminal.js'
 import { osc, wrapForMultiplexer } from '../src/ink/termio/osc.js'
+import { SETTING_DEFINITIONS } from '../src/settings/definitions.js'
 import { getGraphemeSegmenter } from '../src/utils/intl.js'
 import { setLang, t } from '../src/i18n.js'
+
+/** The plugin entry whose sparse /settings schema mirrors this Config. */
+const pluginEntry = fileURLToPath(new URL('../src/dsh-adapter/plugin.ts', import.meta.url))
+
+/** The notification methods the Config schema accepts, in the order it declares them. */
+function acceptedNotificationMethods(): string[] {
+  const field = Config.dict?.['notificationMethod']
+  assert.equal(field?.type, 'union', 'notificationMethod is a union of literal methods')
+  return (field?.list ?? []).map(entry => {
+    assert.equal(entry.type, 'const', 'every accepted notification method is one literal')
+    return entry.value as string
+  })
+}
 
 const savedEnv = { TERM_PROGRAM: process.env.TERM_PROGRAM, TERM: process.env.TERM, TMUX: process.env.TMUX, STY: process.env.STY }
 const writes: string[] = []
@@ -100,6 +116,9 @@ try {
     process.env.TERM_PROGRAM = program
     notifier.notify('Task complete', 'done')
     assert.equal(getNotificationProtocol(), protocol)
+    for (const platform of ['darwin', 'linux'] as const) {
+      assert.equal(resolveNotificationMethod('auto', platform), protocol, `${program} keeps its protocol for auto off Windows (${platform})`)
+    }
     assert.equal(writes.pop(), expected, `${program} preserves the title and reply`)
   }
   process.env.TERM_PROGRAM = 'ghostty'
@@ -190,6 +209,15 @@ try {
     assert.equal(getNotificationProtocol(), term === 'xterm-kitty' ? 'osc99' : 'osc777')
   }
   process.env.TERM = 'xterm-256color'
+  // `auto` asks the platform: the native toast on Windows (D2), the same
+  // terminal protocol as before everywhere else (D12/AC-7). The platform is an
+  // argument, so a Windows host asserts the POSIX paths too.
+  for (const [method, expected] of [['auto', 'windows'], ['windows', 'windows'], ['osc9', 'osc9'], ['bel', 'bel']] as const) {
+    assert.equal(resolveNotificationMethod(method, 'win32'), expected, `${method} on win32`)
+  }
+  process.env.TERM_PROGRAM = 'ghostty'
+  assert.equal(resolveNotificationMethod('windows', 'darwin'), 'osc777', 'an explicit windows is not a POSIX transport')
+  delete process.env.TERM_PROGRAM
   notifier.configure('always', 'osc9')
   setTerminalFocused(true)
   process.env.TMUX = '/tmp/fixture,1,0'
@@ -213,9 +241,34 @@ try {
   notifier.configure('always', 'bel')
   notifier.notify('done')
   assert.equal(writes.pop(), '\x07', 'explicit BEL overrides detection')
+  notifier.configure('always', 'windows')
+  notifier.notify('done')
+  assert.equal(writes.pop(), '\x07', 'an explicit windows is not a terminal sequence and resolves like auto')
   assert.equal(configValues(Config({ taskNotifications: 'off', notificationMethod: 'osc9' })).taskNotifications, 'off')
+  assert.equal(configValues(Config({ notificationMethod: 'windows' })).notificationMethod, 'windows', 'windows joins the accepted notification methods')
   assert.throws(() => configValues(Config({ notificationMethod: 'unknown' })))
   assert.equal(configValues(Config({})).taskNotifications, undefined, 'unset schema does not shadow deployment settings')
+  // The method's value domain is written in four places (F1): the type
+  // (`ink/terminal-notification.ts`), this Config schema, the sparse /settings
+  // schema in `plugin.ts`, and the option list `/settings` renders from. The type
+  // carries the two schemas - both are typed by it - but the option list is typed
+  // `value: string`, so a method missing there compiles, passes every gate and is
+  // simply never offered. That is the one mirror nothing else compares.
+  const acceptedMethods = acceptedNotificationMethods()
+  assert.deepEqual(
+    (SETTING_DEFINITIONS.notificationMethod.options ?? []).map(option => option.value).sort(),
+    [...acceptedMethods].sort(),
+    '/settings offers exactly the notification methods the config accepts (F1)',
+  )
+  // The sparse schema is a local `Schema.object` inside `apply()`, so no import
+  // reaches it; its source text is the only form left to compare against.
+  const sparse = /notificationMethod: Schema\.union\(\[([^\]]*)\]\)/u.exec(readFileSync(pluginEntry, 'utf8'))
+  assert.ok(sparse !== null, 'plugin.ts still declares the sparse notificationMethod schema')
+  assert.deepEqual(
+    [...sparse[1]!.matchAll(/'([^']*)'/gu)].map(match => match[1]).sort(),
+    [...acceptedMethods].sort(),
+    'the sparse /settings schema accepts the same methods (F1)',
+  )
 
   notifier.configure('unfocused', 'osc9')
   setTerminalFocused(false)

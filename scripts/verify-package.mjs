@@ -64,6 +64,7 @@ for (const guideFile of ['SKILL.md', ...guideFiles()]) {
 for (const feedFile of ['tui-profile/feed/first-party.json']) {
   if (!packed.has(feedFile)) throw new Error(`packaged first-party feed missing from tarball: ${feedFile}`)
 }
+if (!packed.has('lib/types/ink/notify-helper/activate.cs')) throw new Error('packaged jump-back helper missing from tarball (every click on a toast would fall back to the bell, silently): lib/types/ink/notify-helper/activate.cs')
 for (const path of packed) {
   const lower = path.toLowerCase()
   if (lower.includes('plugin-spec/')

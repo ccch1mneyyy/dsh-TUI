@@ -913,6 +913,16 @@ const GROUPS = {
     ["verify-backend-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-channel.ts']],
 // 任务完成通知：共享 channel 的完成/队列/目标/换会话栅栏，回复摘要、标题、焦点与 OSC 9/99/777/BEL/tmux。
     ['verify-task-notifications', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications.ts']],
+// Windows toast 端到端（AC-1/5/6/7/8 + 标题跳回标记）：任务完成 → 解析为 windows → 去重判定 →
+// XML/URI 转义与标记 → 要 spawn 的命令行形态 → AUMID 被拒降级为 BEL；标题侧守住"让位不写标记、
+// 拿不到 profile 仍写、非 win32 标题与 OSC 0 逐字节不变"。注册表/子进程/helper 全是注入桩。
+    ['verify-task-notifications-windows', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications-windows.ts']],
+// Windows toast transport 契约：XML 转义 / URI / marker 纯函数、AUMID 与 URI 注册状态机
+// （只注册一次、被拒不重试）、外部通知插件去重、非 win32 零副作用。端口全注入：不写注册表、不 spawn。
+    ['verify-notify-transport', ['node', '--import', 'tsx/esm', 'scripts/verify-notify-transport.ts']],
+// 跳回 helper 契约（T01/T08）：C# 源码属性、缓存复用/重建/失败上报的判定，以及随包分发面
+// （产物落点、幂等、失败路径、相对模块自身解析源码而非工作目录）。
+    ['verify-notify-helper', ['node', '--import', 'tsx/esm', 'scripts/verify-notify-helper.ts']],
 // channel 构造失败回滚：核心、DSH 扩展或首次 bind 任一步抛错，都释放宿主与 agent
 // 监听、IDE 选区连接（真 loopback）和计时器，并关闭非 DSH 会话。
     ["verify-channel-rollback", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-rollback.ts']],
