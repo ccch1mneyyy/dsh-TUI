@@ -7,16 +7,35 @@ import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupH
 import type { SettingsHost } from '../settingsEditor.js'
 import type { SettingsNamespaceView, SettingsNamespaceWarning, TuiSettingsSection } from '../../adapter/ports/channel-settings.js'
 import { settingsValue } from '../compat/settings.js'
+import { concreteService } from '../host-access.js'
 
 /** Forms over the host's web settings; provider selection remains owned by DSH. */
-export function webSettingsSections(namespaces: readonly SettingsNamespaceView[]): TuiSettingsSection[] {
+export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly SettingsNamespaceView[]): TuiSettingsSection[] {
   const available = new Set(namespaces.map(view => view.ns))
+  const loader = ctx.get('loader') as { entries(): Iterable<{
+    options: { id: string }
+    fiber?: { runtime: { name?: string } | null }
+  }> } | undefined
+  const web = ctx.get('web') as { ctx: { fiber: object } } | undefined
+  const webOwner = web === undefined ? undefined : concreteService(web).ctx.fiber
+  let webNs: string | undefined
+  let apiNs: string | undefined
+  let messagesNs: string | undefined
+  // Settings namespaces belong to Config-owning fibers, not package or row names.
+  for (const entry of loader?.entries() ?? []) {
+    // entry.id includes an Include tree path; settings uses the raw Config owner ID.
+    const ns = entry.options.id
+    if (entry.fiber === undefined || !available.has(ns)) continue
+    if (webOwner !== undefined && concreteService(entry.fiber) === concreteService(webOwner)) webNs = ns
+    if (entry.fiber.runtime?.name === 'web-deepseek-api') apiNs = ns
+    if (entry.fiber.runtime?.name === 'web-search-deepseek') messagesNs = ns
+  }
   // This section is introduced together with live provider selection in rc.2.
   // Older hosts keep their existing search route without an ineffective picker.
-  if (!available.has('web-deepseek-api')) return []
+  if (apiNs === undefined) return []
   const sections: TuiSettingsSection[] = []
-  if (available.has('web')) sections.push({
-    ns: 'web', title: 'Web search', descriptions: { zh: '网页搜索' },
+  if (webNs !== undefined) sections.push({
+    ns: webNs, title: 'Web search', descriptions: { zh: '网页搜索' },
     fields: [
       {
         path: ['searchProvider'], label: 'Search', descriptions: { zh: '搜索' }, kind: 'text',
@@ -39,15 +58,21 @@ export function webSettingsSections(namespaces: readonly SettingsNamespaceView[]
     ],
   })
   sections.push({
-    ns: 'web-deepseek-api', title: 'DeepSeek Search / Fetch API',
+    ns: apiNs, title: 'DeepSeek Search / Fetch API',
     descriptions: { zh: 'DeepSeek 搜索 / 抓取 API' },
     fields: [
       { path: ['baseURL'], label: 'API base URL', descriptions: { zh: 'API 基础地址' }, kind: 'text',
         hint: 'Include the path prefix, without /search or /fetch.',
         hintDescriptions: { zh: '包含路径前缀，不含末尾的 /search 或 /fetch。' } },
       { path: ['apiKeyEnv'], label: 'Credential reference', descriptions: { zh: '凭据引用' }, kind: 'text',
-        hint: 'Name of an existing credential or environment variable; do not enter the key itself.',
-        hintDescriptions: { zh: '填写已有凭据或环境变量的名称，请勿填写密钥本身。' } },
+        hint: 'Use an environment-variable name; store literal keys in the credential store instead.',
+        hintDescriptions: { zh: '填写环境变量格式的凭据名称；密钥本身请存入凭据库。' },
+        parse(text) {
+          const ref = text.trim()
+          if (ref === '') return { kind: 'clear' }
+          // dsh-credentials CredentialRef uses POSIX environment-variable names.
+          return /^[A-Za-z_][A-Za-z0-9_]*$/u.test(ref) ? { kind: 'set', value: ref } : undefined
+        } },
       { path: ['count'], label: 'Search result count', descriptions: { zh: '搜索结果数' }, kind: 'number',
         parse(text) {
           if (text.trim() === '') return { kind: 'clear' }
@@ -59,8 +84,8 @@ export function webSettingsSections(namespaces: readonly SettingsNamespaceView[]
         hintDescriptions: { zh: '搜索时附带最近一条用户提示，最多 128 个字符。' } },
     ],
   })
-  if (available.has('web-search-deepseek')) sections.push({
-    ns: 'web-search-deepseek', title: 'DeepSeek Messages search', descriptions: { zh: 'DeepSeek Messages 搜索' },
+  if (messagesNs !== undefined) sections.push({
+    ns: messagesNs, title: 'DeepSeek Messages search', descriptions: { zh: 'DeepSeek Messages 搜索' },
     fields: [
       { path: ['baseURL'], label: 'Messages API base URL', descriptions: { zh: 'Messages API 基础地址' }, kind: 'text' },
       { path: ['maxUses'], label: 'Maximum searches per request', descriptions: { zh: '每次请求的最大搜索次数' }, kind: 'number',

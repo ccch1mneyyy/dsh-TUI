@@ -90,6 +90,7 @@
 profile 设置；旧受支持版本保留兼容路径。迁移说明见[配置参考](docs/configuration.md)。
 
 DSH rc.2 下还可在 `/settings` 选择 DeepSeek 搜索 / 抓取 API、修改端点与结果数。
+分区支持自定义 Loader 行 ID，凭据引用保存前会校验名称格式。
 官方 Flash 模型显示 `1017` 发布标记，模型 ID 仍为 `deepseek-flash`。
 
 DSH 0.1.7 的 `/settings` 使用 TUI 实际的 Loader 行 ID，也支持自定义 ID。

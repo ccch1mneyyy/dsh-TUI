@@ -120,7 +120,10 @@ if (installedMeetsVersion('@deepseek-ai/dsh-web-app', '0.2.1-rc.2')) {
   ])
   llmStub.listModels = async provider => catalog.filter(model => model.provider === provider)
   const models = await channel.listModels()
-  check('1017 labels only mark the official Flash model', models.filter(model => model.name.endsWith(' 1017')).length === 2)
+  const markedRoutes = models.filter(model => model.name.endsWith(' 1017')).map(model => `${model.provider}/${model.id}`).sort()
+  check('1017 labels only mark the two official Flash routes', JSON.stringify(markedRoutes) === JSON.stringify([
+    'deepseek-account/deepseek-flash', 'deepseek-official/deepseek-flash',
+  ]), JSON.stringify(markedRoutes))
   check('display marking preserves model route identities', models.every((model, index) => model.id === catalog[index].id && model.provider === catalog[index].provider))
   check('display marking never modifies the shared catalog', catalog.every(model => !model.name.includes('1017')))
   channel.invalidateModelCompletion()

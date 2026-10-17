@@ -9,17 +9,17 @@ process.env.DSH_TUI_LANG = 'en'
 process.env.FORCE_COLOR = '3'
 
 const [
-  { default: assert }, { mkdtempSync, rmSync }, { tmpdir }, { join },
+  { default: assert }, { mkdtempSync, rmSync, writeFileSync }, { tmpdir }, { join },
   { PassThrough, Writable }, React, { Terminal }, { render, AlternateScreen },
   { Settings: SettingsScreen }, { settled, viewportLines },
-  { Context }, { default: Loader }, { default: Settings }, { default: Web }, WebApi,
+  { Context }, { default: Loader }, { default: Include }, { default: Settings }, { default: Web }, WebApi,
   { default: ToolRuntime }, { default: SystemPrompt }, ToolWeb, { ToolCallId },
   { createSettingsHosts, webSettingsSections }, { SettingsForm, getPath }, { createChannel }, { disposeChannelOwner },
 ] = await Promise.all([
   import('node:assert/strict'), import('node:fs'), import('node:os'), import('node:path'),
   import('node:stream'), import('react'), import('@xterm/headless'), import('../src/ui.js'),
   import('../src/screens/Settings.js'), import('./lib/term-test.mjs'),
-  import('@deepseek-ai/cordis'), import('@deepseek-ai/cordis-plugin-loader'), import('@deepseek-ai/dsh-settings'),
+  import('@deepseek-ai/cordis'), import('@deepseek-ai/cordis-plugin-loader'), import('@deepseek-ai/cordis-plugin-include'), import('@deepseek-ai/dsh-settings'),
   import('@deepseek-ai/dsh-web'), import('@deepseek-ai/dsh-web-deepseek-api'),
   import('@deepseek-ai/dsh-tools'), import('@deepseek-ai/dsh-system-prompt'), import('@deepseek-ai/dsh-tool-web'), import('@deepseek-ai/dsh-llm'),
   import('../src/dsh-adapter/channel/settings-host.js'), import('../src/dsh-adapter/settingsEditor.js'),
@@ -27,6 +27,7 @@ const [
 ])
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Context as CordisContext } from '@deepseek-ai/cordis'
+import { pathToFileURL } from 'node:url'
 import { concreteService } from '../src/dsh-adapter/host-access.js'
 
 const home = mkdtempSync(join(tmpdir(), 'dsh-tui-web-settings-'))
@@ -35,6 +36,7 @@ const originalFetch = globalThis.fetch
 const requests: Array<{ url: string; body: Record<string, unknown>; headers: Headers }> = []
 let route = 'deepseek-official'
 let responseStatus = 200
+let profileWrites = 0
 const prompt = 'What changed? '.repeat(20)
 globalThis.fetch = async (input, init) => {
   const url = String(input)
@@ -47,8 +49,8 @@ globalThis.fetch = async (input, init) => {
 }
 let channel: ReturnType<typeof createChannel> | undefined
 try {
-  assert.deepEqual(webSettingsSections([]), [], 'bare and non-DSH compositions expose no web controls')
-  assert.deepEqual(webSettingsSections([{ ns: 'web', revision: 0, applies: 'restart', value: {}, user: {} }]), [],
+  assert.deepEqual(webSettingsSections(root, []), [], 'bare and non-DSH compositions expose no web controls')
+  assert.deepEqual(webSettingsSections(root, [{ ns: 'web', revision: 0, applies: 'restart', value: {}, user: {} }]), [],
     'older hosts do not expose a provider picker that cannot apply live')
   await root.plugin(Loader)
   root.provide('profileContext', { home })
@@ -57,7 +59,8 @@ try {
     entries: () => [...root.loader.entries()],
     configuration: () => [...root.loader.entries()].map(entry => ({ entry, inherited: {}, override: entry.options.config ?? {} })),
     async edit(entry, change) {
-      await root.loader.update(entry.options.id, { config: change(entry.options.config ?? {}, {}) })
+      profileWrites += 1
+      await root.loader.update(entry.id, { config: change(entry.options.config ?? {}, {}) })
       await root.loader.await()
     },
   })
@@ -88,7 +91,7 @@ try {
   const valueOf = (ns: string, key: string) => getPath(host.listNamespaces().find(view => view.ns === ns)?.value, [key])
   const agent = { id: 'fixture-agent', ctx: { on: () => () => {} }, status: 'idle',
     session: { id: 'fixture-session', seq: 0, events: [] }, inbox: { remove: () => true } } as unknown as Agent
-  channel = createChannel({ get: (name: string) => name === 'settings' ? root.settings : undefined,
+  channel = createChannel({ get: (name: string) => ['settings', 'loader', 'web'].includes(name) ? root.get(name as never) : undefined,
     on: () => () => {}, logger: { warn() {} } } as unknown as CordisContext,
   agent, { provider: 'deepseek-official', model: 'deepseek-flash', cwd: home, activity: false, upstreamRetry: false })
   const sections = channel.settingsSections()
@@ -98,6 +101,24 @@ try {
     return new SettingsForm(host, host.listNamespaces().find(view => view.ns === ns), section.fields)
   }
   const field = (ns: string, key: string) => sections.find(section => section.ns === ns)!.fields.find(field => field.path[0] === key)!
+  const credentialField = field('web-deepseek-api', 'apiKeyEnv')
+  for (const text of ['sk-review-fixture-do-not-use', 'store/key', '123_KEY', 'key with spaces']) {
+    const form = formFor('web-deepseek-api')
+    const before = profileWrites
+    const configured = JSON.stringify([...root.loader.entries()].map(entry => entry.options.config))
+    const described = JSON.stringify(host.listNamespaces())
+    form.edit(credentialField, text)
+    assert.equal(await form.save(), false, 'invalid credential references must not be saved')
+    assert.equal(profileWrites, before, 'invalid credential references never reach profile IO')
+    assert.equal(JSON.stringify([...root.loader.entries()].map(entry => entry.options.config)), configured)
+    assert.equal(JSON.stringify(host.listNamespaces()), described)
+  }
+  for (const ref of ['SEARCH_API_KEY_2', '_search_key', '']) {
+    const form = formFor('web-deepseek-api')
+    form.edit(credentialField, ref)
+    assert.equal(await form.save(), true, 'valid credential names and clearing remain writable')
+    assert.equal(valueOf('web-deepseek-api', 'apiKeyEnv'), ref || 'DEEPSEEK_API_KEY')
+  }
   const choose = async (search: string, fetch: string) => {
     const form = formFor('web')
     form.edit(field('web', 'searchProvider'), search)
@@ -180,7 +201,65 @@ try {
         'the terminal selector saves through the real settings service')
     } finally { await instance.unmount(); term.dispose() }
   }
-  console.log('web settings OK: live routing, API parameters, account/key auth, cancellation, failure, legacy fallback and 4 terminal layouts')
+  let previous = { web: 'web', api: 'web-deepseek-api' }
+  let decoys: string[] = []
+  root.loader.builtins.decoy = { Config: WebApi.Config, apply() {} }
+  for (const ids of [
+    { web: 'custom-web', api: 'web-deepseek-api' },
+    { web: 'web', api: 'custom-api' },
+    { web: ' custom-web ', api: 'Custom.API' },
+  ]) {
+    root.loader.remove(previous.api)
+    root.loader.remove(previous.web)
+    for (const id of decoys) root.loader.remove(id)
+    await root.loader.await()
+    await root.loader.create({ id: ids.web, name: 'cordis:web', config: { searchProvider: 'deepseek-official', fetchProvider: 'http' } })
+    await root.loader.create({ id: ids.api, name: 'cordis:webApi', config: { baseURL: 'https://web-fixture.invalid/custom' } })
+    // A different plugin may reuse an old row ID; it must not receive web edits.
+    decoys = ['web', 'web-deepseek-api'].filter(id => id !== ids.web && id !== ids.api)
+    for (const id of decoys) await root.loader.create({ id, name: 'cordis:decoy', config: { count: 19 } })
+    await root.loader.await()
+    const custom = channel.settingsSections()
+    assert.deepEqual(custom.map(section => section.ns), [ids.web, ids.api], 'web forms follow their Config owners, not default row IDs')
+    const selection = custom.find(section => section.ns === ids.web)!
+    const selectionForm = new SettingsForm(host, host.listNamespaces().find(view => view.ns === ids.web), selection.fields)
+    selectionForm.edit(selection.fields.find(field => field.path[0] === 'searchProvider')!, 'deepseek-search-api')
+    selectionForm.edit(selection.fields.find(field => field.path[0] === 'fetchProvider')!, 'deepseek-fetch-api')
+    assert.equal(await selectionForm.save(), true, selectionForm.failureMessage)
+    const api = custom.find(section => section.ns === ids.api)!
+    const apiForm = new SettingsForm(host, host.listNamespaces().find(view => view.ns === ids.api), api.fields)
+    apiForm.edit(api.fields.find(field => field.path[0] === 'count')!, '7')
+    assert.equal(await apiForm.save(), true, apiForm.failureMessage)
+    assert.equal(valueOf(ids.web, 'searchProvider'), 'deepseek-search-api')
+    assert.equal(valueOf(ids.api, 'count'), 7)
+    for (const id of decoys) assert.equal(valueOf(id, 'count'), 19, 'unrelated namespaces remain unchanged')
+    await root.web.search({ query: 'custom owner' })
+    assert.equal(requests.at(-1)?.body.count, 7, 'the real provider reads its custom namespace after saving')
+    previous = ids
+  }
+  root.loader.remove(previous.api)
+  root.loader.remove(previous.web)
+  for (const id of decoys) root.loader.remove(id)
+  await root.loader.await()
+  const includedFile = join(home, 'web-profile.json')
+  writeFileSync(includedFile, JSON.stringify([
+    { id: 'included-web', name: 'cordis:web', config: { searchProvider: 'deepseek-search-api', fetchProvider: 'deepseek-fetch-api' } },
+    { id: 'included-api', name: 'cordis:webApi', config: { baseURL: 'https://web-fixture.invalid/included' } },
+  ]))
+  root.loader.builtins.include = Include
+  await root.loader.create({ id: 'included', name: 'cordis:include', config: { path: pathToFileURL(includedFile).href } })
+  await root.loader.await()
+  assert.equal(root.loader.resolve('included:included-api').id, 'included:included-api', 'the fixture uses a real nested entry tree')
+  const included = channel.settingsSections()
+  assert.deepEqual(included.map(section => section.ns), ['included-web', 'included-api'], 'Include tree paths are not settings namespaces')
+  const includedApi = included.find(section => section.ns === 'included-api')!
+  const includedForm = new SettingsForm(host, host.listNamespaces().find(view => view.ns === includedApi.ns), includedApi.fields)
+  includedForm.edit(includedApi.fields.find(field => field.path[0] === 'count')!, '9')
+  assert.equal(await includedForm.save(), true, includedForm.failureMessage)
+  assert.equal(valueOf('included-api', 'count'), 9)
+  await root.web.search({ query: 'included owner' })
+  assert.equal(requests.at(-1)?.body.count, 9, 'included Config owners receive the saved API settings')
+  console.log('web settings OK: credential validation, custom Config owners, live routing, API parameters, account/key auth, cancellation, failure, legacy fallback and 4 terminal layouts')
 } finally {
   if (channel !== undefined) disposeChannelOwner(channel)
   globalThis.fetch = originalFetch

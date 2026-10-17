@@ -117,7 +117,7 @@ export function attachDshExtensions(
   state.settingsSections = () => {
     const registered = registeredSettingsSections()
     const claimed = new Set(registered.map(section => section.ns))
-    return [...registered, ...webSettingsSections(state.settingsHost()?.listNamespaces() ?? [])
+    return [...registered, ...webSettingsSections(ctx, state.settingsHost()?.listNamespaces() ?? [])
       .filter(section => !claimed.has(section.ns))]
   }
   // The DSH specialists read the binding through its DSH view (the bound
