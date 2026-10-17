@@ -6,7 +6,9 @@ import { logForDebugging } from '../utils/debug.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 
 export type TaskNotifications = 'off' | 'unfocused' | 'always'
-export type NotificationMethod = 'auto' | 'osc9' | 'bel'
+/** How a task completion is delivered: probe the terminal (`auto`), force
+ *  OSC 9 or BEL, or ask for the native Windows toast. */
+export type NotificationMethod = 'auto' | 'osc9' | 'bel' | 'windows'
 
 // Ghostty 1.2.3 has a 2048-byte OSC buffer. Counting the entire unwrapped
 // sequence also reserves the introducer and terminator conservatively.
@@ -39,7 +41,10 @@ export function createTerminalNotifier(stdout: Pick<NodeJS.WriteStream, 'isTTY' 
     },
     notify(title: string, message = ''): void {
       if (!stdout.isTTY || condition === 'off' || (condition === 'unfocused' && getTerminalFocused())) return
-      const resolved = method === 'auto' ? getNotificationProtocol() : method
+      // `windows` is a host transport (the native toast), not a terminal
+      // sequence, so this notifier resolves it like `auto` - which is also the
+      // resolution off Windows.
+      const resolved = method === 'auto' || method === 'windows' ? getNotificationProtocol() : method
       let sequence: string
       if (resolved === 'osc777') {
         // OSC 777 separates title and body with semicolons; only the body

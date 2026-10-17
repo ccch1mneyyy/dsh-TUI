@@ -437,9 +437,11 @@
         terminalImages: true
         # diffLayout: auto
         # mermaidDiagrams: true
-        # 任务完成通知：off / unfocused（默认）/ always；方式：auto（默认）/ osc9 / bel。
+        # 任务完成通知：off / unfocused（默认）/ always；方式：auto（默认）/ osc9 / bel / windows。
         # taskNotifications: unfocused
         # notificationMethod: auto
+        # windows 档：Windows 上的系统原生 toast（首次弹出注册 HKCU 的 AUMID；
+        # 弹出比任务结束晚约 3 秒；profile 装了外部通知插件时让位）。Windows 上 auto 即此档。
         # 回复中 LaTeX 公式的显示方式：auto（默认，目前为 Unicode）/ image（支持图形的终端里块级公式显示为图片）/ unicode / source（保留源码）。/settings 可实时改。
         # mathRendering: auto
         # 每个请求实际生效的推理强度，按当前路由的 adapter 档位校验
