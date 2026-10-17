@@ -273,16 +273,93 @@ function panelStateFor(runtime: TuiPanelRuntime): PanelState {
   return state
 }
 
-/** 无 Component identity 的裸挂载（测试夹具）需要一个稳定命名空间：
- * 按 activation fiber 发号。 */
+/** 裸挂载（测试夹具、运行期 ctx.plugin）的兜底命名空间：按 activation
+ * fiber 发号。只服务这两种用例——生产插件走 Component identity 或 loader
+ * 条目 id。发号器**不能**当生产路径：面板 id 会被写进用户设置当长期地址
+ * （`dsh-tui.sidePanel.panels` 里的 `<pluginId>:<id>`），按激活顺序发号意味着
+ * 组合一变（另一个同类插件先注册面板）同一个插件就换号，旧持久项没人认领。
+ *
+ * `act<N>` 因此是发号器的**保留区**：稳定来源（Component id / loader 条目 id）
+ * 撞上这个形状一律不算稳定身份（stablePluginId），否则一个合法却恰叫 `act1`
+ * 的条目会和自动发号抢同一个前缀——条目先拿到 `act1` 却不推进计数器，它第一个
+ * 运行期子插件随后也领到 `act1`，同名局部 id 被 DUPLICATE_CONTRIBUTION_ID 拒掉；
+ * 反过来自动发号先占了 `act1` 时，同名的条目同样会和它撞上。 */
 const fallbackPluginIds = new WeakMap<object, string>()
 let fallbackSeq = 0
+const SYNTHETIC_PLUGIN_ID_PATTERN = /^act[0-9]+$/u
+
+/** 稳定命名空间：单段小写 slug，且不占用发号器的保留区 `act<N>`。
+ * Component id 那边其实够不着保留区——manifest 校验要求 id 带 `.`/`-` 分隔符，
+ * 而 `act<N>` 是纯数字后缀，形状上撞不上；两条来源共用这一条判定是防御性的
+ * （上游哪天放宽 id 规则，规则仍然成立，不必两处改）。 */
+function stablePluginId(name: string): string | undefined {
+  return SUB_ID_PATTERN.test(name) && !SYNTHETIC_PLUGIN_ID_PATTERN.test(name) ? name : undefined
+}
+
+/** 组合层加在每条入口 id 前面的路径前缀。app-boot 用根 Include 装载整个组合树
+ * （mountRootInclude，条目 id 就是 'include'），cordis-loader 的 Entry 取 id 时
+ * 拼成父条目 id + EntryTree.sep + options.id（Entry.id getter）。真机上每个
+ * bundle 条目与用户 patch 条目都这样进来——所以条目 id 的常态是带前缀的，不是
+ * 边角。宿主自己的插件清单在显示条目身份时也把这个前缀当「组合专用标记」剥掉
+ * （dsh-client-ui-settings-plugin-inventory），剥离后剩下的才是用户写进
+ * cordis.yml / cordis.patch.yml、跨重启稳定的那个 id。
+ *
+ * 只剥这一层，而且要求运行时 id **恰好**是前缀 + 这一行自己配置的 id：仅仅撞上
+ * 前缀的直接根条目（loader 允许 id 带冒号）不算组合行，不能被剥成别人的命名
+ * 空间。剥完仍带分隔符的（嵌套 Include 子树的 'include:<a>:<b>'，或行 id 自己
+ * 就带冒号）继续按多段拒绝——面板 id 的读取方按第一个冒号切分，多段根本没有
+ * 表达方式。 */
+const COMPOSITION_MARKER = 'include:'
+
+/** 条目 id 的稳定命名空间：直接是单段 slug，或是剥掉组合标记后的单段 slug。
+ * 组合层的剥法见 COMPOSITION_MARKER（必须是这一行自己的 id，不是前缀撞对）。 */
+function stableEntryPluginId(entry: { id?: unknown; options?: { id?: unknown } }): string | undefined {
+  const id = entry.id
+  if (typeof id !== 'string') return undefined
+  const direct = stablePluginId(id)
+  if (direct !== undefined) return direct
+  const configured = entry.options?.id
+  if (typeof configured !== 'string' || id !== COMPOSITION_MARKER + configured) return undefined
+  return stablePluginId(configured)
+}
+
+/** loader 条目（cordis.yml / cordis.patch.yml 里的一行）**直接**拥有这个激活时，
+ * 它的 `id` 就是那个稳定可读的地址：用户自己写的、跨重启不变。
+ *
+ * 「直接拥有」是硬条件，不能只看 `entry.id`：条目自己的根 fiber 才等于
+ * `entry.fiber`（`Entry._init` 里 `registry.plugin()` 的返回值）。运行期
+ * `ctx.plugin()` 挂出的子插件会沿上下文继承父条目的 `entry`（loader 的
+ * `internal/plugin` 监听直接把 `fiber.parent[Entry.key]` 赋给子 fiber），
+ * 只认 id 的话一个条目下父子注册同名面板就会挤在同一个 `<entry>:<id>` 上，
+ * 后注册的被 DUPLICATE_CONTRIBUTION_ID 拒绝；继承来的条目不算数，落回 actN。
+ *
+ * 组合标记要先剥掉：根 Include 装载的条目运行时 id 是 `include:<id>`，且必须
+ * 恰好等于 `include:` + 这一行配置的 id（见 COMPOSITION_MARKER）。剥完仍是
+ * 多段的 id（嵌套 Include 子树的 `a:b`）照旧拒绝；
+ * 发号器保留的 `act<N>` 形状同样不算稳定身份（见 stablePluginId），因为面板
+ * id 的读取方按**第一个**冒号切分（SidePanelColumn 的 bare 标题推导）。
+ * locate() 那种向祖先上溯的归属更不行，那样运行期挂载会被记到宿主条目名下
+ * （`dsh-tui:search`），比 actN 更误导。 */
+function loaderEntryIdFor(owner: object): string | undefined {
+  try {
+    const entry = (owner as {
+      entry?: { id?: unknown; options?: { id?: unknown }; fiber?: unknown } | null
+    }).entry
+    if (entry === undefined || entry === null || entry.fiber !== owner) return undefined
+    return stableEntryPluginId(entry)
+  } catch {
+    return undefined
+  }
+}
 
 function pluginIdFor(caller: Context, owner: object): string {
   const identity = componentIdentityOf(caller)
-  if (identity !== undefined && /^[a-z][a-z0-9_-]*$/u.test(identity.componentId)) {
-    return identity.componentId
+  if (identity !== undefined) {
+    const stable = stablePluginId(identity.componentId)
+    if (stable !== undefined) return stable
   }
+  const entryId = loaderEntryIdFor(owner)
+  if (entryId !== undefined) return entryId
   let fallback = fallbackPluginIds.get(owner)
   if (fallback === undefined) {
     fallbackSeq += 1

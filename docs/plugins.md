@@ -43,10 +43,32 @@
   `compaction-basic` 自动压缩），写法见[准入与开发指南](../tui-profile/docs/plugin-admission-and-development.md)接缝七。
 - **侧栏 Panel（实验性，§18）**：`ctx.tuiPanels.register({ apiVersion: 1,
   id, title, icon?, component | compact })` 向右侧栏注册面板（宿主自动加
-  `<pluginId>:` 前缀；每插件 ≤4 个、全局 ≤32 个；`open()` 限速每 5s 一次；
-  连续崩溃 3 次本会话禁用）。full 面板（`component`）与 compact 行
-  （`compact`，1–3 行紧凑呈现）两个渲染槽中，**本阶段 compact 仅校验
-  descriptor、尚不挂载渲染**；`sendToChat` 需要 `panels.chat.attach`
+  `<pluginId>:` 前缀，最终 id 形如 `my-plugin:search`；每插件 ≤4 个、全局
+  ≤32 个；`open()` 限速每 5s 一次；连续崩溃 3 次本会话禁用）。**前缀按下面
+  的顺序取第一个可用来源**：① 准入拿到的 Component id（第三方插件包
+  `dsh-plugin.json` 的 `id`）；② **直接拥有**该激活的 loader 条目 id
+  （`cordis.yml` / `cordis.patch.yml` 里这一行写的 `id`，或 bundle patch
+  insert 的那一行；宿主用根 Include 装载整棵组合树，运行时条目 id 因此带
+  `include:` 路径前缀，这个前缀是组合层自己的标记、取值时要先剥掉，而且必须
+  恰好是「前缀 + 这一行自己写的 id」才算（只撞前缀不算）——宿主自己的插件
+  清单显示身份时也这么剥，剥掉后剩下的才是你写下的那个 id）；③ 两者
+  都没有才退回宿主发号的 `act<N>`。①② 是用户或
+  清单自己给的地址、跨重启与组合变化都不变，也会被当作持久地址写进
+  `dsh-tui.sidePanel.panels`（`/settings › 侧栏 › 启用的面板` 勾选即落盘），
+  配置里要写的就是它们；`act<N>` 按激活顺序发号，组合一变就可能换号，只
+  服务不走 loader 的运行期挂载（含测试夹具），别写死进配置。①② 都只接受
+  单段小写 slug（`[a-z][a-z0-9_-]*`），且**不接受 `act<N>` 形状**——那是发号器
+  的保留区，① 撞上就按 ②→③ 的顺序继续回退：一个恰叫 `act1` 的合法条目若占了
+  号，它的运行期子插件随后会领到同一个号，同名面板被当重复贡献拒掉；反过来自动
+  发号先占时，同名的条目也会和它撞上。② 只剥 `include:` 这一层组合标记（见上，
+  还要对上这一行自己的 id）；`cordis:group` 的行会被 loader 摊平进同一棵
+  Include 树，运行时 id 仍是 `include:<id>`，所以照常生效。剥完仍多段的嵌套
+  Include 路径（`include:<a>:<b>`），以及运行期
+  `ctx.plugin()` 挂出的子插件（它们沿上下文继承父条目的 `entry`，但不是该
+  条目的直接拥有者）同样跳过、落到 `act<N>`。组合行要自己写 `id`——不写时 loader
+  会当场发随机 id，那个名字跨重启会变，别依赖。full 面板（`component`）与
+  compact 行（`compact`，1–3 行紧凑呈现）两个渲染槽中，**本阶段 compact 仅
+  校验 descriptor、尚不挂载渲染**；`sendToChat` 需要 `panels.chat.attach`
   授权（后续版本），当前恒返回 `false` 并提示一次。类型见
   `@deepseek-harness-tui/dsh-tui/panels` 与 `./api`。
 - `@deepseek-harness-tui/dsh-tui/test-utils` 子路径与
