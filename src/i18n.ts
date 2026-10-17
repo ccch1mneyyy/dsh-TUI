@@ -362,6 +362,14 @@ const dict = {
   'resume-session-occupied': { zh: '该会话正被其他 TUI 终端占用（进程 {{pid}}），无法进入', en: 'Another TUI terminal holds this session (pid {{pid}}); cannot enter' },
   'resume-mount-busy': { zh: '无法确认该会话是否被其他终端占用（占用检查正忙），请稍后重试', en: 'Could not confirm whether another terminal holds this session (the occupancy check is busy); retry in a moment' },
   'resume-mount-unavailable': { zh: '无法验证该会话的占用状态 · {{detail}}', en: 'Could not verify this session\'s occupancy · {{detail}}' },
+  // 损坏账本的出口：只在拒绝句自称 `damaged` 时追加，所以它必须读起来像"针对那个文件"的
+  // 建议，而不是通用下一步。
+  //
+  // 长度由屏幕决定，不由作者决定：通知上限三行，而 120 列终端上实际换行宽度只有 80 列，
+  // 再长就会被裁。因此动作（删除 / remove）与前提（其他 / no other）必须挺过裁切，只有
+  // 末尾"会自动重建"这句安心话可以让位；`.lock` 同理不再在这里点名 —— 屏幕上放不下，
+  // 点名它的是 CLI 的 `--resume` 拒绝句。
+  'resume-mount-ledger-repair': { zh: '该文件已损坏：无其他 dsh-tui 运行时删除它，会自动重建', en: 'Damaged: remove it with no other TUI running (it rebuilds)' },
   'session-mount-occupied-short': { zh: '占用 pid {{pid}}', en: 'held by pid {{pid}}' },
   'resume-failed': { zh: '恢复失败 · {{err}}', en: 'Resume failed · {{err}}' },
   'resume-attach-failed': { zh: '已恢复会话，但工作区挂载失败 · {{err}}', en: 'Session resumed, but workspace attachment failed · {{err}}' },

@@ -198,7 +198,7 @@ one session in the ledger. Step 2 is what makes the admission decision real.
 | --- | --- | --- |
 | `occupied` + `holders` | A live holder, by pid | Report "held by pid N", refuse |
 | `busy` | A peer holds the short lock, so the check **did not happen** | Bounded backoff (25–400ms), then refuse and ask the user to retry |
-| `unavailable` + `detail` | The ledger cannot be read or written, so the check **did not happen** | Refuse with the reason (a damaged file names the manual repair) |
+| `unavailable` + `detail` (plus an optional `damaged` when the file is damaged) | The ledger cannot be read or written, so the check **did not happen** | Refuse with the reason; the actionable repair is appended to the existing sentence only when `damaged` is set (see "Strict read vs. tolerant read" below) |
 
 The old shape folded the last two into `holders: []`, leaving callers to guess.
 Boot then treated "could not check" as "nobody holds it" and resumed anyway —
@@ -222,6 +222,31 @@ version, a record whose shape is wrong — is `unavailable`.
 A refusal **changes nothing on disk**: the record that failed to parse may be
 another writer's only claim, so skipping it and rewriting the file would throw
 away that peer's reservation for it.
+
+Those causes do not leave alike. **Damaged** has exactly one meaning: the bytes
+were read and they are not a ledger document — JSON that does not parse, a
+parsed value that is not an object, an unknown `version`, no `owners` array, a
+record whose shape is wrong. That failure carries an **optional** `damaged`
+flag, and the flag travels with the refusal all the way to the user; the
+interactive surfaces append the actionable repair to the sentence they already
+show: **remove that file while no other dsh-tui is running**, and it rebuilds
+itself. The sentence is that short because the screen is: the supervisor's
+notice is capped at three rows (`NOTICE_MAX_LINES`) and a 120-column terminal
+leaves it 80 columns to wrap in, so the wording is sized backwards from "the
+whole refusal on 120 columns, the action and its precondition still there on
+100" — a cut can only take the reassurance that follows them. (On a narrower
+terminal the refusal's own prefix and the ledger path fill those three rows
+first, and the repair goes with them; that is the row cap, not the wording.) It
+is also why naming the matching `.lock` (`session-mounts.lock`) is the CLI's
+`--resume` refusal and not the interactive surface. **Unreadable** (permissions,
+a directory in its place) and
+unwritable (a lock that cannot be taken, a directory that cannot be created, a
+failed replace) carry **no** such flag — they say nothing about the file's
+contents, and calling a path that may hold the user's own data "damaged" to
+send them off to delete it is worse than saying nothing.
+
+The flag is an **optional** field, so every existing consumer behaves exactly as
+before: without it, the refusal is **byte-for-byte** the sentence it was before.
 
 **A reservation must outlive the waits.** The claim is committed before the
 agent exists in the registry (a resume reads preset, route and workspace first)

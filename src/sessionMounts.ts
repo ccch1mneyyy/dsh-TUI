@@ -117,11 +117,18 @@ const EMPTY: SessionOccupancy = { kind: 'free' }
  * names a transient collision worth retrying, and `unavailable` means the
  * occupancy question could not be answered at all. Folding them together is
  * how "we did not manage to check" turns into "there was nothing to check".
+ *
+ * `damaged` splits `unavailable` one step further, because only one of its
+ * causes has anything the user can do: the file was read and is not a ledger
+ * document, so deleting it clears the refusal. A failure that is not marked
+ * (permissions, a directory in its place, a lock we could not take) must not
+ * be described as deformation — sending someone to delete a path that may be
+ * their own data is worse than telling them nothing (issue #1579).
  */
 export type MountFailure =
   | { readonly ok: false; readonly reason: 'occupied'; readonly holders: readonly number[] }
   | { readonly ok: false; readonly reason: 'busy' }
-  | { readonly ok: false; readonly reason: 'unavailable'; readonly detail: string }
+  | { readonly ok: false; readonly reason: 'unavailable'; readonly detail: string; readonly damaged?: true }
 
 /**
  * Outcome of {@link claimMount}: either this process now owns the session, or
@@ -194,10 +201,13 @@ export function readMountLedger(): readonly SessionMountOwner[] {
  * Outcome of the authoritative read. `unavailable` carries a sentence naming
  * what was wrong, so a refusal can say "cannot verify occupancy" instead of
  * inventing a holder.
+ *
+ * `damaged` is the read's half of {@link MountFailure}: set only when the bytes
+ * were in hand and they are not a ledger document.
  */
 export type MountLedgerRead =
   | { readonly ok: true; readonly owners: readonly SessionMountOwner[] }
-  | { readonly ok: false; readonly detail: string }
+  | { readonly ok: false; readonly detail: string; readonly damaged?: true }
 
 /**
  * Read the ledger for DECIDING, where "I could not read it" must not pass for
@@ -209,6 +219,8 @@ export type MountLedgerRead =
  * a bad record and writing the ledger anyway is not an option either: the
  * record that failed to parse may be another writer's only claim, so the safe
  * move is to leave the file exactly as it is and ask the user to repair it.
+ * The five refusals that mean "read, but not a ledger document" carry
+ * `damaged`; a failure to read at all carries no verdict.
  */
 export function readMountLedgerStrict(): MountLedgerRead {
   const path = join(DATA_DIR, MOUNTS_FILE)
@@ -223,22 +235,22 @@ export function readMountLedgerStrict(): MountLedgerRead {
   try {
     parsed = JSON.parse(raw)
   } catch {
-    return { ok: false, detail: `${path} is not valid JSON` }
+    return { ok: false, detail: `${path} is not valid JSON`, damaged: true }
   }
   if (typeof parsed !== 'object' || parsed === null) {
-    return { ok: false, detail: `${path} is not a ledger document` }
+    return { ok: false, detail: `${path} is not a ledger document`, damaged: true }
   }
   const document = parsed as Record<string, unknown>
   if (document.version !== MOUNTS_VERSION) {
-    return { ok: false, detail: `${path} has unknown version ${JSON.stringify(document.version)}` }
+    return { ok: false, detail: `${path} has unknown version ${JSON.stringify(document.version)}`, damaged: true }
   }
   if (!Array.isArray(document.owners)) {
-    return { ok: false, detail: `${path} has no owners array` }
+    return { ok: false, detail: `${path} has no owners array`, damaged: true }
   }
   const owners: SessionMountOwner[] = []
   for (const record of document.owners) {
     const owner = parseOwner(record)
-    if (owner === undefined) return { ok: false, detail: `${path} has a record whose shape is wrong` }
+    if (owner === undefined) return { ok: false, detail: `${path} has a record whose shape is wrong`, damaged: true }
     owners.push(owner)
   }
   return { ok: true, owners }
@@ -467,7 +479,14 @@ function writeLedger(mine: SessionMountOwner | undefined): { ok: true } | MountF
   // and fail the `wx` create.
   const temporary = `${target}.${process.pid}.${Date.now()}.${temporarySequence++}.tmp`
   const existing = readMountLedgerStrict()
-  if (!existing.ok) return { ok: false, reason: 'unavailable', detail: existing.detail }
+  if (!existing.ok) {
+    // The read's verdict is what tells the caller whether the file is
+    // something to repair, so it travels with the refusal rather than being
+    // flattened into "the write did not happen".
+    return existing.damaged === true
+      ? { ok: false, reason: 'unavailable', detail: existing.detail, damaged: true }
+      : { ok: false, reason: 'unavailable', detail: existing.detail }
+  }
   try {
     mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
     const records = existing.owners.filter(owner => !ownerIsSelf(owner) && pidAlive(owner.pid))
@@ -611,7 +630,11 @@ export function claimMount(sessionId: string): MountClaim {
     // this claim was derived from, so refuse rather than write a stale merge.
     if (!lockIsHeld(lock)) return { ok: false, reason: 'busy' }
     const read = readMountLedgerStrict()
-    if (!read.ok) return { ok: false, reason: 'unavailable', detail: read.detail }
+    if (!read.ok) {
+      return read.damaged === true
+        ? { ok: false, reason: 'unavailable', detail: read.detail, damaged: true }
+        : { ok: false, reason: 'unavailable', detail: read.detail }
+    }
     const holders: number[] = []
     for (const owner of read.owners) {
       if (ownerIsSelf(owner) || !pidAlive(owner.pid)) continue

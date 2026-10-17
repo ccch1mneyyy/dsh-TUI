@@ -50,6 +50,10 @@ export function resumeFailureText(result: ResumeResult): string | undefined {
  * `occupied` case is here too because it is a {@link MountFailure} and its
  * sentence already exists; {@link resumeFailureText} reaches the same key from
  * the adapter's own result.
+ *
+ * A refusal the user can clear gets the repair instruction appended: every
+ * interactive surface goes through here, and "occupancy could not be verified"
+ * on its own is a dead end when the cause is a file that has to be deleted.
  * @param failure - Why the session could not be claimed.
  * @returns The user-facing sentence.
  */
@@ -57,7 +61,10 @@ export function mountFailureText(failure: MountFailure): string {
   if (failure.reason === 'occupied') {
     return t('resume-session-occupied', { pid: failure.holders[0] ?? 0 })
   }
-  return failure.reason === 'busy'
-    ? t('resume-mount-busy')
-    : t('resume-mount-unavailable', { detail: failure.detail })
+  if (failure.reason === 'busy') return t('resume-mount-busy')
+  const refusal = t('resume-mount-unavailable', { detail: failure.detail })
+  // Without the flag this is exactly the sentence it was before; the repair
+  // line is added only for damage, because it is advice the other causes
+  // (permissions, a lock, a failed replace) would make wrong.
+  return failure.damaged === true ? `${refusal} ${t('resume-mount-ledger-repair')}` : refusal
 }
