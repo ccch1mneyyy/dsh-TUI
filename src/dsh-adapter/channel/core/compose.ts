@@ -804,6 +804,7 @@ export function createCoreChannel(
     state.costReport = undefined
     state.lastUsage = undefined
     state.turnUsage = undefined
+    state.turnOutcome = undefined
     state.contextSegments = { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }
     state.activeToolCount = 0
     state.responseChars = 0

@@ -368,6 +368,7 @@ for the complete field reference.
 | `DSH_TUI_PRESET` | Override the default Agent preset for new sessions |
 | `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`/`pink-day`/`pink-night`/`pink-ansi`), static theme, or registered plugin theme ahead of persisted selection |
 | `DSH_TUI_DISABLE_MOUSE` | Temporarily disable mouse handling in fullscreen mode |
+| `DSH_TUI_PROGRAM_STATUS` | Set to `0` (or `false`/`no`/`off`) to stop reporting session state to the terminal with [OSC 7501](https://www.superlogical.com/rex/docs/build/program-status); on by default and a no-op on terminals that do not implement it |
 | `DSH_TUI_DISABLE_TERMINAL_IMAGES` | Set to `1` to force Kitty/Sixel probing, preview reads/decoding, and terminal image rendering off, overriding config and /settings; text metadata remains visible |
 | `DSH_TUI_IMAGE_PROTOCOL` | `auto` (default), `kitty`, `sixel`, or `none`; override protocol selection without bypassing the preview preference, disable switch, non-fullscreen, accessibility or multiplexer guards |
 | `DSH_TUI_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |

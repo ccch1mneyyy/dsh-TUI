@@ -324,6 +324,7 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 | `DSH_TUI_PRESET` | 覆盖新会话默认 Agent preset |
 | `DSH_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`/`pink-day`/`pink-night`/`pink-ansi`）、静态主题或已注册的插件主题，优先于持久化选择 |
 | `DSH_TUI_DISABLE_MOUSE` | 在 fullscreen 模式临时关闭鼠标处理 |
+| `DSH_TUI_PROGRAM_STATUS` | 设为 `0`（或 `false`/`no`/`off`）可停止用 [OSC 7501](https://www.superlogical.com/rex/docs/build/program-status) 向终端报告会话状态；默认开启，未实现该协议的终端上无副作用 |
 | `DSH_TUI_DISABLE_TERMINAL_IMAGES` | 设为 `1` 时强制关闭 Kitty/Sixel 探测、预览读取/解码与终端图片渲染，优先于 config 和 /settings；保留文字信息 |
 | `DSH_TUI_IMAGE_PROTOCOL` | `auto`（默认）、`kitty`、`sixel` 或 `none`；覆盖协议选择，但不绕过图片预览偏好、禁用开关、非全屏、无障碍和多路复用器限制 |
 | `DSH_TUI_RESUME_SESSION` | 启动时恢复指定会话，通常由启动器设置 |

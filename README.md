@@ -178,7 +178,7 @@ Full guide: [Session migration](docs/migrate.en.md).
 
 - More agents (pi, opencode, …) extend the adapter registry as adapters land; grok-build reads `GROK_HOME` when set.
 
-**VS Code**: use the integrated terminal or the `dsh-tui-vscode` extension. See [VS Code guide](docs/vscode.en.md). **Herdr**: run `dsh-tui` in a [Herdr](https://herdr.dev) pane; `idle` / `working` / `blocked` are reported through its local integration API.
+**VS Code**: use the integrated terminal or the `dsh-tui-vscode` extension. See [VS Code guide](docs/vscode.en.md). **Herdr**: run `dsh-tui` in a [Herdr](https://herdr.dev) pane; `idle` / `working` / `blocked` are reported through its local integration API. **Any terminal**: dsh-tui reports `idle` / `working` / `blocked` / `done` / `error` over the pty with [OSC 7501 (Program Status Protocol)](https://www.superlogical.com/rex/docs/build/program-status), so terminals and agentic inboxes that implement it can show what the session is doing; terminals that do not implement it ignore the sequence. Set `DSH_TUI_PROGRAM_STATUS=0` to turn it off.
 
 Bare `--resume` (`-c`, `--continue`) reopens the last session of the backend this
 launch selected. Startup recovery only ever targets that backend: a backend with no

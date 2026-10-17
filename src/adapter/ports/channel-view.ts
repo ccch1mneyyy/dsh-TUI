@@ -494,6 +494,13 @@ export interface CostTokenBuckets {
  * fields stay absent: `cacheKnown` tells "the route reported zero cache"
  * from "the route reports no cache at all", so the UI never shows a made-up
  * zero. */
+/**
+ * How one turn ended, in the shared vocabulary every backend maps its own
+ * close reason onto: `completed` ran to the end, `interrupted` was cancelled
+ * by the user (or orphaned by a crash), `error` failed.
+ */
+export type TurnOutcome = 'completed' | 'interrupted' | 'error'
+
 export interface TurnUsageSummary {
   readonly input: number
   readonly output: number
@@ -517,7 +524,7 @@ export interface TurnUsageSummary {
   readonly effort?: string
   /** How the turn ended; an interrupted turn's ledger is partial and the
    * row says so. */
-  readonly outcome: 'completed' | 'interrupted' | 'error'
+  readonly outcome: TurnOutcome
 }
 
 /**

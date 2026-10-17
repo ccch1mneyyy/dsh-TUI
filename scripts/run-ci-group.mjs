@@ -161,6 +161,17 @@ const GROUPS = {
 // 安全回归：OSC 出口控制字符剥离 + 超链接 scheme 门禁（安全审查
 // 2026-08-27）——tokenize 提取→回放链路的注入 payload 必须被剥除。
     ["verify-osc8-sanitize", ['node', '--import', 'tsx/esm', 'scripts/verify-osc8-sanitize.tsx']],
+// OSC 7501 程序状态协议回归：线格式、自由文本 base64/控制字符剥离/字节
+// 上限、整条拒绝、clear、启用门控（默认开、TTY 必需、可 opt-out），以及
+// hook 的优先级与去重（blocked > working > done/error > idle；恢复会话的
+// 残留终态不得误报 done）；终态取自真实 turn.end.reason 的投影，用量摘要
+// 缺失的回合也照报。
+    ["verify-osc7501", ['node', '--import', 'tsx/esm', 'scripts/verify-osc7501.tsx']],
+// OSC 7501 取证解码器（scripts/decode-osc7501.mjs）回归：不可信日志里的
+// 控制字符一律转义展示、解码后含控制字符的报告整条拒绝（清屏/换行/OSC 52
+// 一类 payload 不得从「看一眼日志」变成执行），且 stdin 与文件两个入口的
+// stdout 里不存在可执行控制字节；--follow 只读新增字节，不重放历史报告。
+    ["verify-decode-osc7501", ['node', 'scripts/verify-decode-osc7501.mjs']],
 // 文件链接 ANSI 完整性回归：renderCodeSpan 把已上色的路径代码段传入
 // createHyperlink 时，防注入消毒会剥掉合法 \x1b、SGR 参数文本上屏
 // （[38;2;…m 残片）；链接标签的样式序列同样不得残留裸参数。
