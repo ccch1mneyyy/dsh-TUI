@@ -297,32 +297,32 @@ OpenAI’s terms. Full instructions and current boundaries:
 
 DSH's experimental Agent Teams lets the session's agent (the Lead) create
 named teammates that share the working directory, message each other and
-coordinate on a shared task board. It is off by default. Install the
-upstream bundle into the TUI profile once:
+coordinate on a shared task board. It ships with dsh, is off by default, and
+`/plugin list` advertises it. Switch it on:
 
 ```sh
-dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@0.2.1-rc.2
+/plugin enable @deepseek-ai/dsh-experimental-agent-team-profile
 ```
 
-Then switch it with `/team on` / `/team off` (`/team` alone reports the
-bundle, the service and this session's teammates). The switch enables or
-disables the bundle in the profile, so it persists across restarts, and on a
-`dsh --profile` launch it applies at once — running sessions included: the
-model is told which tools came and went. Turning it off while teammates run
-asks first, and switching off stops them: the team service releases the
-teammates still running as it unloads. Inside a teammate session the other
-teammates' runs are not visible, so the question counts them as possibly
-running. The team record stays in the session for the next `/team on`.
-`/plugin enable|disable` on the bundle does the same.
+The switch enables or disables the bundle in the profile, so it persists
+across restarts, and on a `dsh --profile` launch it applies at once — running
+sessions included: the model is told which tools came and went. `/team` appears
+in Help and `/` completion only once the team service is mounted, and only
+reports: `/team` (or `/team status`) shows the bundle, the service and this
+session's teammates. `/team on|off` was removed; typing it points at
+`/plugin enable|disable`. Turning the bundle off while teammates run asks
+first, and switching off stops them: the team service releases the teammates
+still running as it unloads. Inside a teammate session the other teammates'
+runs are not visible, so the question counts them as possibly running. The
+team record stays in the session and comes back when the bundle is enabled
+again.
 
-Pin the version to exactly your installed DSH version (the command above
-uses the primary line `0.2.1-rc.2`; on DSH `0.2.1-alpha.5`, `0.2.0-rc.1` or
-`0.2.0-rc.2` install `…-profile@` that same version). The team packages ship in lockstep with DSH and pin
-their DSH peers exactly, so neither the untagged install nor `next` works.
-When the package is missing, `/team on` prints the command with your
-DSH version filled in on those lines (`0.2.1-rc.2` when the version cannot
-be read); on any other DSH version it asks you to switch DSH to one of those lines first, since
-no team bundle installs there.
+If the running DSH does not ship the bundle (`/plugin list` stays silent),
+switch DSH to one of the supported lines first (`0.2.1-rc.2`, `0.2.1-alpha.5`,
+`0.2.0-rc.1` or `0.2.0-rc.2`). To install it into the profile explicitly,
+run `dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@<your-dsh-version>`:
+the team packages ship in lockstep with DSH and pin their DSH peers exactly,
+so the version must match.
 
 While a request carries `spawn_teammate`, dsh-TUI drops `subagent` /
 `subagent_fork` from it, and the team's `send_message` / `list_agents` /
@@ -490,6 +490,8 @@ Managing what is installed: `/plugin remove <bundle>`, `/plugin enable <name | r
 
 These three actions have no cancellation — the service offers none — so `esc` only closes the pane while the write finishes and reports itself into the transcript. Enable and disable have no CLI verb either (the service writes them into the profile's own files), and a removal never deletes your own data: anything left under `~/.dsh-tui` is reported once and left for you to delete.
 
+`/plugin list` also advertises the experimental features DSH ships, leaves off by default, and this app knows how to drive (currently Agent Teams and Auto review), each with its switch and usage line. A DSH installation that does not ship one shows no such section.
+
 ## Documentation
 
 - **Start** — [Getting started](docs/getting-started.en.md) · [VS Code](docs/vscode.en.md)
@@ -527,7 +529,7 @@ No sandbox of its own: dsh-TUI uses the active DSH profile's filesystem, shell, 
 
 **Permission persistence** (all three backends): the Claude and Codex backends keep their `/permission` picks in `~/.dsh-tui/backends/<id>/prefs.json`; the DSH pick is kept at `~/.dsh-tui/permission.json`. Every durable preset switch teaches it (picker, typed `/permission`, Shift+Tab static modes, or a switch the official command performed on its own), and a session that never customized its permission planes starts on the remembered preset — applied through the same official switch path. "Never customized" is about the user: the composition writes its own default preset into every fresh session at creation, and those events do not count. Plan-mode transients and the experimental Auto review preset (see below) are excluded, a `DSH_PERMISSION_MODE` launch pin (this run's initial permission plane) outranks the file, and an identity the mounted roster no longer offers is skipped.
 
-**Auto review** (DSH, experimental): when the `dsh-experimental-auto-review` plugin is enabled, the `auto` preset (shown as "Auto review", tagged `EXP`) appears in `/permission` and its completions live, and disappears when the plugin is removed. It is session-only: the model reviews every tool call before it runs, there is no file sandbox, and each call costs one extra model request; its approval prompts show the localized reason, and a subagent denial reads "Auto review denied; not executed". Picking it in the picker first shows a risk confirmation (`Enter` enables, `Esc` goes back; in fullscreen its Enable / Go back rows are clickable); a typed `/permission auto` switches directly. Once the current session has selected it, the picker skips the confirmation and Shift+Tab stops skipping it.
+**Auto review** (DSH, experimental): `/plugin list` advertises it; after `/plugin enable @deepseek-ai/dsh-experimental-auto-review`, the `auto` preset (shown as "Auto review", tagged `EXP`) appears in `/permission` and its completions live, and disappears when the plugin is removed. It is session-only: the model reviews every tool call before it runs, there is no file sandbox, and each call costs one extra model request; its approval prompts show the localized reason, and a subagent denial reads "Auto review denied; not executed". Picking it in the picker first shows a risk confirmation (`Enter` enables, `Esc` goes back; in fullscreen its Enable / Go back rows are clickable); a typed `/permission auto` switches directly. Once the current session has selected it, the picker skips the confirmation and Shift+Tab stops skipping it.
 
 **Upstream auto-retry** (DSH): whenever a session binds (boot, `/model` switch, resume), the TUI seeds a retry policy — 5 attempts, transport-drop-aware failure codes including `STREAM_CLOSED` (a dropped upstream stream) — on **the provider route that session actually uses**, through the official `llm-pi-ai` settings section (the policy the kernel's `llm-retry` plugin executes). Only routes without an explicit `retryPolicy` are seeded — dormant channels are never written — and `upstreamRetry: false` in cordis.yml opts out.
 

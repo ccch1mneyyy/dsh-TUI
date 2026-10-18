@@ -2444,12 +2444,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     onPluginManage: createPluginManageEntry(ctx, {
       profileName: profile ?? resolveDshProfileName(),
     }),
-    // `/team [status] | on | off`: the Agent Teams bundle through the same
-    // lifecycle flow (team-mode.ts).
+    // `/team [status]`: the live team report (team-mode.ts). The bundle switch
+    // is `/plugin enable|disable`, which shares the lifecycle flow.
     onTeamCommand: createTeamCommandEntry(ctx, {
       profileName: profile ?? resolveDshProfileName(),
-      // The host reports `unknown` when it has no version: read the installed one.
-      kernelVersion: entrySlot?.kernelVersion === 'unknown' ? undefined : entrySlot?.kernelVersion,
     }),
     kernelPinned: backendPinned,
     // Only a `dsh --profile <name>` launch has a profile installation for

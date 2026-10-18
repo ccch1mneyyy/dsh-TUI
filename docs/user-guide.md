@@ -332,7 +332,7 @@ dsh-tui
 | `/migrate` | `[agent] [--dry-run]` | 从其他编程代理（claude-code/codex/omp/zcode/grok-build）导入对话历史，子进程运行不卡界面，详见[会话迁移](migrate.md) |
 | `/init` | 无 | 在工作目录创建 `AGENTS.md`（created / exists / failed 三态提示） |
 | `/agents` | 无 | 本会话子代理列表 |
-| `/team` | `status`（默认）/ `on` / `off` | 实验性 Agent Teams 的开关：启停团队 bundle，有热重载时立即生效；`status` 报告 bundle、服务与本会话 teammate |
+| `/team` | `status`（默认） | 实验性 Agent Teams 的状态报告；只在团队服务运行后出现在帮助与 `/` 补全里，报告 bundle、服务与本会话 teammate。开关改用 `/plugin enable\|disable @deepseek-ai/dsh-experimental-agent-team-profile`（服务未运行时手敲 `/team` 会给出开启提示） |
 | `/jobs` | 无 | 后台任务面板：状态/运行时长/退出码实时跟踪，`↑/↓` 选择、`k` 停止；面板打开时 `Esc` **只关面板**不打断回合（想中断先关面板再 `Ctrl+C`） |
 | `/settings` | 无 | 打开插件设置编辑器（命名空间读取/编辑） |
 | `/setup` | 无 | 重跑首次引导向导（API Key / 语言主题 / 模型工作区 / 快捷键），与首次启动是同一个界面 |
@@ -368,7 +368,7 @@ dsh-tui
 | `/hooks` | 无 | 占位：DSH hooks 未在组合中挂载时给出说明 |
 | `/mcp` | 无 | MCP 连接状态（工具按 `mcp__服务器__工具` 分组）；未配置时给出 `cordis.patch.yml` 插入示例 |
 | `/skills` | 无 | 技能目录选择器（名称+来源+简述），Enter 将可直调技能以 `/name ` 填回输入行 |
-| `/plugin` | `list` · `install <spec>` · `remove <bundle>` · `enable <名称\|id>` · `disable <名称\|id>` · `check <dsh-plugin.json 路径>` · `info <id 或 spec>` · `registries` | `list` 简洁列出你装的额外插件（不含安装自带），并给详情 / 卸载 / 启用 / 关闭的指引；无参给完整诊断：信任横幅 + host 描述符 + 授权矩阵 + 台账 + profile 的 bundle/行；`install <spec>` 把插件装进当前 profile：装前提醒 + 信任确认，嫡系包按随包清单免确认，`esc` 收起面板（安装中尝试取消并等待写操作结束；来不及时等待安装完成，已登记的版本豁免保留），构建脚本被拦时在面板里批准，版本不兼容时可登记精确版本豁免；`remove` / `enable` / `disable` 是生命周期动作：bundle 名精确匹配优先，其次 `entryId` / `patchId` / 模块名，模块名匹配多行时须改用具体行 ID；门禁 2 对「提供本应用的 bundle / 宿主层 dsh-base / 本包自己的行」硬拒并给原因（零服务调用），任何启用与卸载都要确认（已装包来源无法验证）。**这三个动作没有取消**：`esc` 只关面板，写入照旧跑完并把结果写进转录；卸载不会删掉 `~/.dsh-tui` 下你自己的数据，有残留时报告一次。`check` 校验清单并给兼容状态，`info` 查已装条目或待装 spec，`registries` 列安装源 |
+| `/plugin` | `list` · `install <spec>` · `remove <bundle>` · `enable <名称\|id>` · `disable <名称\|id>` · `check <dsh-plugin.json 路径>` · `info <id 或 spec>` · `registries` | `list` 简洁列出你装的额外插件（不含其他安装自带；本应用已适配、默认关闭的实验性功能单独列出并给开启/用法）；无参给完整诊断：信任横幅 + host 描述符 + 授权矩阵 + 台账 + profile 的 bundle/行；`install <spec>` 把插件装进当前 profile：装前提醒 + 信任确认，嫡系包按随包清单免确认，`esc` 收起面板（安装中尝试取消并等待写操作结束；来不及时等待安装完成，已登记的版本豁免保留），构建脚本被拦时在面板里批准，版本不兼容时可登记精确版本豁免；`remove` / `enable` / `disable` 是生命周期动作：bundle 名精确匹配优先，其次 `entryId` / `patchId` / 模块名，模块名匹配多行时须改用具体行 ID；门禁 2 对「提供本应用的 bundle / 宿主层 dsh-base / 本包自己的行」硬拒并给原因（零服务调用），任何启用与卸载都要确认（已装包来源无法验证）。**这三个动作没有取消**：`esc` 只关面板，写入照旧跑完并把结果写进转录；卸载不会删掉 `~/.dsh-tui` 下你自己的数据，有残留时报告一次。`check` 校验清单并给兼容状态，`info` 查已装条目或待装 spec，`registries` 列安装源 |
 | `/update` | 无 | 更新 TUI 并自动重启恢复会话（仅 `dsh --profile` 启动可用；回合运行中会拒绝） |
 | `/terminal-setup` | 无 | 终端配置建议（Windows Terminal ≥110 列、粘贴键位） |
 

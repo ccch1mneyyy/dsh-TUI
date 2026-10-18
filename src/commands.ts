@@ -91,7 +91,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'migrate', description: 'Import conversations from other coding agents (claude-code / codex / omp / zcode / grok-build)' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },
   { name: 'agents', description: 'Show subagents of this session' },
-  { name: 'team', description: 'Agent Teams: show status, or switch on / off (the team bundle)' },
+  { name: 'team', description: 'Agent Teams: show status while the team service is running' },
   { name: 'jobs', description: 'Show background jobs of this session' },
   { name: 'panel', description: 'Side panel: toggle / focus / zoom / switch panels' },
   // Model / display
@@ -113,7 +113,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'hooks', description: 'Show hooks status' },
   { name: 'mcp', description: 'Show MCP status' },
   { name: 'skills', description: 'List available skills' },
-  { name: 'plugin', description: 'Show plugin diagnostics, and the plugins this profile added' },
+  { name: 'plugin', description: 'Show plugin diagnostics, added plugins, and switchable experimental features' },
   { name: 'update', description: 'Update dsh-tui and restart' },
   // Skills are discovered through the DSH registry and added at runtime.
   // A local entry of the same name would win the collision filter.

@@ -748,8 +748,10 @@ export interface ChannelUi {
   /** Render a multi-line local report in the transcript (`/status`,
    *  `/doctor`, …): a `local` row plus one `local-output` row per line.
    *  `lineLimit` overrides the default per-line cell budget for a report
-   *  whose line IS the payload (`/goal`'s objective) so it is not clipped. */
-  pushLocal(title: string, lines: readonly string[], options?: { readonly lineLimit?: number }): void
+   *  whose line IS the payload (`/goal`'s objective) so it is not clipped.
+   *  `preserveWhitespace` keeps leading indentation and blank rows for
+   *  sectioned reports (`/plugin list`); the default flattens each line. */
+  pushLocal(title: string, lines: readonly string[], options?: { readonly lineLimit?: number; readonly preserveWhitespace?: boolean }): void
   /** MCP server/tool status for /mcp: one line per server, or setup guidance. */
   mcpStatus(): string[]
   /** Write the conversation transcript to `dsh-tui-export-<ts>.md` in the

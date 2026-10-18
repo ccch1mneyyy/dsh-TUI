@@ -97,10 +97,12 @@ const fakeSession = (sessionId: string, capabilities: Omit<SessionCapabilities, 
   return session
 }
 
-// A bare context: no host services mounted (degraded composition).
+// A bare context: no host services mounted (degraded composition). The team
+// service is the one exception below: `/team` is now gated on it, and the DSH
+// command-list check expects the full built-in list.
 const ctx = {
   on: () => () => undefined,
-  get: () => undefined,
+  get: (name: string) => name === 'agentTeams' ? {} : undefined,
   logger: { warn: () => undefined, info: () => undefined, debug: () => undefined },
 } as never
 

@@ -37,6 +37,18 @@ export function setActivityFrames(
   return true
 }
 
+/**
+ * One report line that keeps its shape: blank rows stay blank and leading
+ * indentation survives; a stray newline still cannot become a second row.
+ */
+function previewIndented(text: string, limit: number): string {
+  const line = text.replace(/[\r\n]+/gu, ' ').replace(/\s+$/u, '')
+  // A truly empty Text node measures as zero height; one no-break space keeps
+  // the blank row the report asked for without painting anything.
+  if (line === '') return '\u00a0'
+  return line.length <= limit ? line : `${line.slice(0, limit)}…`
+}
+
 export function createCoreLocalActions(ctx: ServiceLookup, deps: {
   owner: Pick<ChannelOwner, 'current'>
   binding: Pick<ChannelBinding, 'capture' | 'isCurrent'>
@@ -77,12 +89,13 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
       state.emit()
     },
 
-    pushLocal(title: string, lines: readonly string[], options?: { readonly lineLimit?: number }): void {
+    pushLocal(title: string, lines: readonly string[], options?: { readonly lineLimit?: number; readonly preserveWhitespace?: boolean }): void {
       // A report whose line IS the payload (the /goal objective) raises the
       // budget; every other report keeps the shared 240-cell preview.
       const limit = options?.lineLimit ?? LOCAL_OUTPUT_LIMIT
+      const render = options?.preserveWhitespace ? previewIndented : preview
       state.rows.push({ id: rowIds.value++, kind: 'local', text: title })
-      for (const line of lines) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: preview(line, limit) })
+      for (const line of lines) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: render(line, limit) })
       state.emit()
     },
 

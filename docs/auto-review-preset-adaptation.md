@@ -13,6 +13,7 @@
 实验性插件 `@deepseek-ai/dsh-experimental-auto-review` 于 0.1.6-alpha.1
 （2026-09-15）首发，此时需显式安装；自 0.1.7-rc.2（2026-09-24）起随 dsh 安装
 分发但默认关闭。本文按 0.2.0-rc.2 版本线核对（插件列表标题「自动授权审查」）。
+TUI 的 `/plugin list` 会列出它并提供 `/plugin enable @deepseek-ai/dsh-experimental-auto-review` 的开启路径。
 它不是一个独立的审批策略，而是把
 `sandbox=danger-full-access` + `approval=ask` 捆成一个**当前会话专属**的命名权限
 预设 `auto`，由当前模型在每次工具调用前做一次授权审查。

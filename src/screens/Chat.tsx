@@ -127,7 +127,7 @@ import { PluginManagePane } from '../components/PluginManagePane.js'
 import type { SdkInstaller, SdkInstallSurface } from '../agent/backend.js'
 import type { PluginInstallFlow, PluginInstallSink, PluginInstallStep } from '../dsh-adapter/plugin-install.js'
 import type { PluginManageFlow, PluginManageSink, PluginManageStep } from '../dsh-adapter/plugin-manage.js'
-import type { TeamCommandOutcome, TeamCommandSink } from '../dsh-adapter/team-mode.js'
+import type { TeamCommandSink } from '../dsh-adapter/team-mode.js'
 import { teamMemberCounts } from '../components/teamRoster.js'
 import { usePluginWriteFlow } from './chat/usePluginWriteFlow.js'
 import { ChannelPicker } from '../components/ChannelPicker.js'
@@ -520,11 +520,11 @@ export function Chat({
    */
   onPluginManage?: (args: string, sink: PluginManageSink) => PluginManageFlow | undefined
   /**
-   * `/team [status] | on | off`, wired to `createTeamCommandEntry`: on/off
-   * hand back a lifecycle flow on the Agent Teams bundle (same pane as
-   * `/plugin`), status a report. `undefined` on a backend without it.
+   * `/team [status]`, wired to `createTeamCommandEntry`: a report, or the
+   * enable/migration hint when the team service is not mounted. `undefined`
+   * on a backend without it.
    */
-  onTeamCommand?: (args: string, sink: TeamCommandSink) => TeamCommandOutcome
+  onTeamCommand?: (args: string, sink: TeamCommandSink) => Promise<readonly string[]>
   /** 启动参数（Config 行 / DSH_TUI_BACKEND）压过了记忆：选择器明说。 */
   kernelPinned?: boolean
   /**
@@ -1070,6 +1070,10 @@ export function Chat({
       runSdkInstall(dir)
     })
   }
+  /** `/plugin` reports keep section indentation and blank rows. */
+  const pushPluginLocal = (lines: readonly string[]): void => {
+    channel.pushLocal('/plugin', lines, { preserveWhitespace: true })
+  }
   /**
    * `/plugin install <spec>` 的步骤态（C-4）。六件套（ref / state / 收尾 / 结算 /
    * 栅栏 / 起步）与 manage 侧共用 `usePluginWriteFlow`，两处的差异只有「关浮层
@@ -1079,7 +1083,7 @@ export function Chat({
     overlayKind: 'plugin-install',
     overlay,
     dispatchOverlay,
-    pushLocal: lines => channel.pushLocal('/plugin', lines),
+    pushLocal: pushPluginLocal,
     initialStep: { kind: 'done' },
     // 装了半截就关浮层会把 profile 留在半装状态：取消由服务自己结算（回滚）。
     cancelOnClose: flow => flow.cancel(),
@@ -1091,7 +1095,7 @@ export function Chat({
       binding: () => channel.agentBindingGeneration,
       // 回合运行中改 profile 会触发应用／HMR：门禁在流程里（inspect 之前与写入之前各查一次）。
       busy: () => channel.working,
-      onLines: lines => channel.pushLocal('/plugin', lines),
+      onLines: pushPluginLocal,
     })
     if (flow === undefined) return false
     pluginInstall.start(flow, flow.begin())
@@ -1117,7 +1121,7 @@ export function Chat({
     overlayKind: 'plugin-manage',
     overlay,
     dispatchOverlay,
-    pushLocal: lines => channel.pushLocal('/plugin', lines),
+    pushLocal: pushPluginLocal,
     initialStep: { kind: 'done' },
     failureLine: error => t('plugins-manage-failed', { reason: cleanScalarText(error, COMMAND_RESULT_CELLS) }),
   })
@@ -1132,7 +1136,7 @@ export function Chat({
       binding: () => channel.agentBindingGeneration,
       // 回合运行中改 profile 会触发应用／HMR：门禁在流程里（解析之前与写入之前各查一次）。
       busy: () => channel.working,
-      onLines: lines => channel.pushLocal('/plugin', lines),
+      onLines: pushPluginLocal,
       teamActiveMembers: teamMembers,
     })
     if (flow === undefined) return false
@@ -3724,30 +3728,20 @@ export function Chat({
         const originAgentBinding = channel.agentBindingGeneration
         void channel.pluginsInfo(rawInput).then((lines) => {
           if (channel.agentBindingGeneration !== originAgentBinding) return
-          channel.pushLocal('/plugin', lines)
+          pushPluginLocal(lines)
         })
         return true
       }
       case 'team': {
-        // `/team` 是团队 bundle 的启停（team-mode.ts）：on/off 走与 /plugin 同一个
-        // 生命周期流程与确认浮层，status 是一段报告；都按发起时的绑定落行。
+        // `/team` 只报告团队状态（team-mode.ts）；开关是 /plugin enable|disable。
+        // 服务未挂载时这一行不在命令表里，但手敲仍会走到这里，拿回开启提示。
         setHelpOpen(false)
         if (onTeamCommand === undefined) {
           channel.pushLocal('/team', [t('team-cmd-unavailable')])
           return true
         }
         const originAgentBinding = channel.agentBindingGeneration
-        const outcome = onTeamCommand(rawInput, {
-          binding: () => channel.agentBindingGeneration,
-          busy: () => channel.working,
-          onLines: lines => channel.pushLocal('/team', lines),
-          members: teamMembers,
-        })
-        if (outcome.kind === 'flow') {
-          pluginManage.start(outcome.flow, outcome.flow.begin())
-          return true
-        }
-        void outcome.lines.then((lines) => {
+        void onTeamCommand(rawInput, { members: teamMembers }).then((lines) => {
           if (channel.agentBindingGeneration !== originAgentBinding) return
           channel.pushLocal('/team', [...lines])
         }, (error: unknown) => {

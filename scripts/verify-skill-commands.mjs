@@ -67,6 +67,9 @@ const ctx = {
         get: async skillName => catalog.find(skill => skill.name === skillName),
       }
     }
+    // `/team` is gated on this service, so mount it: the "locals all kept"
+    // check below is about skill merging, not about the team switch.
+    if (name === 'agentTeams') return {}
     return undefined
   },
   logger: { warn() {} },

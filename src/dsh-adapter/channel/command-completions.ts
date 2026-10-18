@@ -105,11 +105,6 @@ export function createCommandCompletions(deps: {
         model.warmPresetOptions()
         return [{ name: 'status', description: 'Show the current agent preset', descriptionKey: 'sugg-status-desc' }, ...model.presetOptions().map(preset => ({ name: preset.id, description: preset.description ?? preset.name ?? preset.id, ...(preset.id === state.agentPreset ? { tag: 'current' } : preset.isDefault ? { tag: 'default' } : {}) }))]
       }
-      if (path.length === 1 && path[0] === 'team') return [
-        { name: 'status', description: 'Show the team mode state', descriptionKey: 'sugg-status-desc' },
-        { name: 'on', description: 'Switch Agent Teams on', descriptionKey: 'sugg-team-on-desc' },
-        { name: 'off', description: 'Switch Agent Teams off', descriptionKey: 'sugg-team-off-desc' },
-      ]
       if (path.length === 1 && path[0] === 'activity') return [
         { name: 'status', description: 'Show the current activity preset', descriptionKey: 'sugg-status-desc' },
         { name: 'frames', description: 'List or switch frame presets', descriptionKey: 'sugg-activity-frames-desc' },

@@ -35,7 +35,7 @@ import type {
   StagedImageHandle,
 } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
-import { isBootSafeCommand, isHiddenCommandName, isUnavailableLocalCommand, parseCommandName, workingHoldOf } from '../commands.js'
+import { isBootSafeCommand, isHiddenCommandName, isLocalCommandName, isUnavailableLocalCommand, parseCommandName, workingHoldOf } from '../commands.js'
 import { appendHistory, HISTORY_LIMIT, historyProjectKey, loadHistoryOldestFirst } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
@@ -1939,7 +1939,10 @@ export function PromptInput({
       })
       return true
     }
-    const known = command !== undefined || isHiddenCommandName(parsed.name)
+    // A local command may be intentionally absent from the published catalog
+    // (the service-gated `/team`): a typed name is still this app's command,
+    // never text for the model. Backend-unavailable locals were refused above.
+    const known = command !== undefined || isHiddenCommandName(parsed.name) || isLocalCommandName(parsed.name)
     if (!known) return false
     const generation = syncImageGeneration()
     const revision = draftRevisionRef.current

@@ -883,10 +883,13 @@ const GROUPS = {
 // teammate 是空闲而非完成、failed phase 优先）、只读任务板与失败横幅；整屏与侧栏、
 // 窄宽度与宽字符成员名下不越界，只在名单里的成员不进详情。
     ["verify-team-dashboard", ['node', '--import', 'tsx/esm', 'scripts/verify-team-dashboard.tsx']],
-// 团队模式开关（#1241）：assembly 里有 spawn_teammate 才去掉 subagent / subagent_fork、
-// plugin-manager/changed 后团队 store 随服务清空与恢复、/team status|on|off 与关闭时
-// 有成员运行的确认（/plugin disable 团队 bundle 同问）。
+// 团队状态（#1241）：assembly 里有 spawn_teammate 才去掉 subagent / subagent_fork、
+// plugin-manager/changed 后团队 store 随服务清空与恢复、/team status 与隐藏时提示、
+// 关闭时有成员运行的确认（/plugin disable 团队 bundle 同问）。
     ["verify-team-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-team-mode.ts']],
+// `/team` 可见性（#1241）：帮助与 `/` 补全里的这一行跟 agentTeams 服务挂载/卸载，
+// 其他服务的 internal/service 事件不得误发布它。
+    ["verify-team-command-visibility", ['node', '--import', 'tsx/esm', 'scripts/verify-team-command-visibility.ts']],
 // 分段估算口径回归（#1170）：estimateTokens 由 chars/4 改为 CJK 感知的纯函数——
 // 单条纯 ASCII 与旧口径相同（显式快路径；跨消息累加因改为逐条 ceil 会有 ≤1
 // token/条的舍入差），中文/全角按 ~1.4 字符/token、其它脚本按 ~2；单调不减、

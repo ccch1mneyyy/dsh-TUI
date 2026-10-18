@@ -43,7 +43,8 @@ import type {
 
 const [{ Writable, PassThrough }, { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync }, { tmpdir }, { join }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { setLang, t }, { pluginReport, parsePluginArgs }, { kernelEntriesOf }, { listBackends }, { findText, settle, settled, sleep, viewportLines }, { Context }, { createPluginInstallFlow, createPluginInstallEntry }, { COMPOSITION_PACKAGE }, { pathToFileURL }, { createDshSession }, { PluginInstallPane },
   { createPluginManageFlow, createPluginManageEntry, residueWatchOf },
-  { CORE_BUNDLES, HOST_BUNDLE }, { loadFirstPartyFeed }, { PluginManagePane }, { backendDataDir }] = await Promise.all([
+  { CORE_BUNDLES, HOST_BUNDLE }, { loadFirstPartyFeed }, { PluginManagePane }, { backendDataDir },
+  { createTeamCommandEntry }] = await Promise.all([
   import('node:stream'),
   import('node:fs'),
   import('node:os'),
@@ -74,10 +75,15 @@ const [{ Writable, PassThrough }, { mkdtempSync, mkdirSync, readFileSync, rmSync
   import('../src/dsh-adapter/plugin-feed.js'),
   import('../src/components/PluginManagePane.js'),
   import('../src/utils/paths.js'),
+  import('../src/dsh-adapter/team-mode.js'),
 ])
 
 setLang('en')
 const ROWS = 40
+
+const TEAM_BUNDLE = '@deepseek-ai/dsh-experimental-agent-team-profile'
+const AUTO_REVIEW_BUNDLE = '@deepseek-ai/dsh-experimental-auto-review'
+const SCHEDULE_BUNDLE = '@deepseek-ai/dsh-experimental-schedule-bundle'
 
 const bundles: BundleInfo[] = [
   {
@@ -101,6 +107,22 @@ const bundles: BundleInfo[] = [
     name: 'verify-plugin-locked', version: '4.0.0', enabled: true, installed: true, optional: false,
     removable: false, readOnlyReason: 'management-required', error: { code: 'bundle-in-use', diagnostic: 'held by 2 rows' },
     rows: [], overrides: [],
+  },
+]
+/** Installation-supplied optional bundles: only the two TUI-adapted ones belong in `list`. */
+const experimentalBundles: BundleInfo[] = [
+  {
+    name: TEAM_BUNDLE, version: '0.2.0-rc.2', enabled: false, installed: false, optional: true, removable: false,
+    meta: { title: { en: 'Agent Teams', zh: '智能体团队' } }, rows: [], overrides: [],
+  },
+  {
+    name: AUTO_REVIEW_BUNDLE, version: '0.2.0-rc.2', enabled: true, installed: false, optional: true, removable: false,
+    meta: { title: { en: 'Auto review', zh: '自动授权审查' } }, rows: [], overrides: [],
+  },
+  {
+    // Shipped by dsh but not adapted by the TUI: the section must leave it out.
+    name: SCHEDULE_BUNDLE, version: '0.2.0-rc.2', enabled: false, installed: false, optional: true, removable: false,
+    meta: { title: { en: 'Schedule', zh: '自动化任务' } }, rows: [], overrides: [],
   },
 ]
 const plugins: PluginInfo[] = [
@@ -160,6 +182,12 @@ const manager: PluginManagerView = {
   setPluginEnabled: (id, enabled) => Promise.resolve({ changed: true, application: 'applied', stage: 'enable', target: id, enabled }),
 }
 
+/** The same service with the installation's optional experimental bundles, for the list section. */
+const experimentalManager: PluginManagerView = {
+  ...manager,
+  listBundles: () => Promise.resolve([...bundles, ...experimentalBundles]),
+}
+
 /** The same service, refusing every call: the report must survive it. */
 const SERVICE_FAILURE = 'the plugin service is gone'
 const failingManager: PluginManagerView = {
@@ -192,6 +220,7 @@ const officialOnlyManager: PluginManagerView = {
 /** The service each form mounts (`absent` mounts none). */
 const SERVICES: Record<string, PluginManagerView | undefined> = {
   present: manager,
+  experimental: experimentalManager,
   'official-only': officialOnlyManager,
   absent: undefined,
   failing: failingManager,
@@ -271,6 +300,8 @@ for (const [fullscreen, columns, service] of [
   [false, 100, 'present'],
   [false, 50, 'present'],
   [true, 100, 'present'],
+  [false, 100, 'experimental'],
+  [false, 50, 'experimental'],
   [false, 100, 'official-only'],
   [false, 100, 'absent'],
   [false, 100, 'failing'],
@@ -291,6 +322,9 @@ for (const [fullscreen, columns, service] of [
     channel: channel as never, questionStore: new QuestionStore(), approvalStore: new ApprovalStore(),
     onExit: () => undefined, fullscreen, trajectorySeen: true,
     kernelEntries: kernelEntriesOf(listBackends()),
+    // `agentTeams` is absent in this fixture, so `/team` is hidden from the
+    // catalog; the typed form must still reach this entry instead of the model.
+    onTeamCommand: createTeamCommandEntry(ctx as never),
   }))
 
   try {
@@ -301,6 +335,38 @@ for (const [fullscreen, columns, service] of [
       await run('/plugin list')
       check(`${tag}: a profile with nothing added says so`,
         await settled(() => hasText(t('plugins-list-empty'))), screen())
+      await clear()
+      continue
+    }
+    if (service === 'experimental') {
+      await run('/plugin list')
+      check(`${tag}: list advertises the TUI experimental features`,
+        await settled(() => hasText(t('plugins-experimental-header', { count: '2' })) &&
+          hasText('Agent Teams 0.2.0-rc.2 · off') &&
+          hasText('Auto review 0.2.0-rc.2 · on')), screen())
+      check(`${tag}: experimental rows give one state-appropriate switch line`,
+        hasText(t('plugins-experimental-enable', { bundle: TEAM_BUNDLE })) &&
+        hasText(t('plugins-experimental-disable', { bundle: AUTO_REVIEW_BUNDLE })), screen())
+      check(`${tag}: experimental hints name the TUI entry points`,
+        hasText(t('plugins-experimental-team-hint')) && hasText(t('plugins-experimental-auto-review-hint')), screen())
+      check(`${tag}: list drops the old footer and provenance note`,
+        !hasText('Details: /plugin info') && !hasText('These packages ship with') &&
+        !hasText('Enable/disable:'), screen())
+      check(`${tag}: experimental rows keep their indentation`,
+        screen().split('\n').some(line => line === '    Agent Teams 0.2.0-rc.2 · off'), screen())
+      {
+        const rows = screen().split('\n')
+        const teamAt = rows.findIndex(line => line === '    Agent Teams 0.2.0-rc.2 · off')
+        const autoAt = rows.findIndex(line => line === '    Auto review 0.2.0-rc.2 · on')
+        check(`${tag}: experimental features have no blank row between them`,
+          teamAt >= 0 && autoAt > teamAt &&
+          !rows.slice(teamAt + 1, autoAt).some(line => line.trim() === ''), screen())
+      }
+      check(`${tag}: list still leaves the installation's non-TUI bundles out`,
+        !hasText('@deepseek-ai/dsh-base') && !hasText('@deepseek-harness-tui/dsh-tui') &&
+        !hasText('Schedule') && !hasText(SCHEDULE_BUNDLE), screen())
+      check(`${tag}: the person's own plugins still lead the list`,
+        hasText('Plugins you added (2)') && hasText('verify-plugin-undeclared 3.1.4 · off'), screen())
       await clear()
       continue
     }
@@ -325,7 +391,7 @@ for (const [fullscreen, columns, service] of [
       // reason `list` exists, and it is the assertion a wrong predicate must
       // break before the header count hides it.
       check(`${tag}: list answers`,
-        await settled(() => hasText('/plugin info') && hasText('/plugin registries')), screen())
+        await settled(() => hasText(t('plugins-list-header', { count: '2' }))), screen())
       check(`${tag}: list leaves the installation's own bundles out`,
         !hasText('@deepseek-ai/dsh-base') && !hasText('@deepseek-harness-tui/dsh-tui'), screen())
       check(`${tag}: list names the plugins the person added`,
@@ -333,8 +399,14 @@ for (const [fullscreen, columns, service] of [
         hasText('verify-plugin-locked 4.0.0 · on · not removable'), screen())
       check(`${tag}: list leads with the trust banner`,
         above('C-070', t('plugins-list-header', { count: '2' })), screen())
-      check(`${tag}: list points at the detail forms`,
-        hasText('/plugin info') && hasText('/plugin registries'), screen())
+      check(`${tag}: list omits the experimental section without optional bundles`,
+        !hasText(t('plugins-experimental-header', { count: '2' })), screen())
+      // `agentTeams` is absent and the manager lists no team bundle: a typed
+      // `/team` must still be answered here (never sent to the model), and it
+      // must not name an enable command this installation cannot serve.
+      await run('/team')
+      check(`${tag}: a hidden /team says the installation ships no team bundle`,
+        await settled(() => hasText(t('team-cmd-bundle-absent', { bundle: TEAM_BUNDLE }))), screen())
       await clear()
 
       // The completion tree: the static subcommand hints first, then whatever
@@ -599,6 +671,24 @@ for (const [fullscreen, columns, service] of [
     ['registry.example.com', 'npm.example.com', 'other.example.com/path']
       .every(host => registries.some(line => line.includes(host))),
     registries.join('\n'))
+
+  const plain = await pluginReport('list', deps as never, {
+    ...manager,
+    listBundles: () => Promise.resolve(bundles.filter(bundle => !bundle.installed && !bundle.optional)),
+  })
+  check('report: a host without optional bundles keeps the list output unchanged',
+    plain.length === 2 && plain[0] === t('plugins-trust-banner') && plain[1] === t('plugins-list-empty'),
+    plain.join('\n'))
+
+  const experimentalOnly = await pluginReport('list', deps as never, {
+    ...manager,
+    listBundles: () => Promise.resolve([...bundles.filter(bundle => !bundle.installed), ...experimentalBundles]),
+  })
+  check('report: an empty profile still advertises switchable experimental features',
+    experimentalOnly[0] === t('plugins-trust-banner') &&
+    experimentalOnly.includes(t('plugins-list-empty')) &&
+    experimentalOnly.includes(t('plugins-experimental-header', { count: '2' })),
+    experimentalOnly.join('\n'))
 }
 // ── The install flow, headless (C-4) ─────────────────────────────────────────
 // What `/plugin install` asks about, what it refuses to guess, and what it does

@@ -1116,8 +1116,6 @@ const dict = {
   'sugg-more-below': { zh: '↓{{n}}', en: '↓{{n}}' },
   // 二级补全子项描述（/lang /theme /effort /preset /activity 的 children）
   'sugg-status-desc': { zh: '显示当前选择', en: 'Show the current choice' },
-  'sugg-team-on-desc': { zh: '开启 Agent Teams（启用团队 bundle）', en: 'Switch Agent Teams on (enable the team bundle)' },
-  'sugg-team-off-desc': { zh: '关闭 Agent Teams（停用团队 bundle）', en: 'Switch Agent Teams off (disable the team bundle)' },
   'sugg-lang-zh-desc': { zh: '切换界面语言到中文', en: 'Switch the UI language to Chinese' },
   'sugg-lang-en-desc': { zh: '切换界面语言到英文', en: 'Switch the UI language to English' },
   'sugg-theme-auto-desc': { zh: '跟随终端背景自动切换', en: 'Follow the terminal background' },
@@ -1406,9 +1404,25 @@ const dict = {
     zh: '本 profile 没有额外插件：只有安装自带与 dsh-tui 自身。装好后用 /plugin list 复查。',
     en: 'No extra plugins in this profile: only the installation-supplied bundles and dsh-tui itself. Run /plugin list again after installing one.',
   },
-  'plugins-list-hint': {
-    zh: '详情：/plugin info <名字>；卸载：/plugin remove <名字>；启用 / 关闭：/plugin enable|disable <名字|行 id>；安装源：/plugin registries；完整诊断：无参 /plugin。',
-    en: 'Details: /plugin info <name>; remove: /plugin remove <name>; enable or disable: /plugin enable|disable <name|row id>; registries: /plugin registries; full diagnostics: bare /plugin.',
+  'plugins-experimental-header': {
+    zh: 'DSH 自带实验性功能（EXP，{{count}} 项）：',
+    en: 'Experimental features shipped by DSH (EXP, {{count}}):',
+  },
+  'plugins-experimental-enable': {
+    zh: '启用：/plugin enable {{bundle}}',
+    en: 'Enable: /plugin enable {{bundle}}',
+  },
+  'plugins-experimental-disable': {
+    zh: '关闭：/plugin disable {{bundle}}',
+    en: 'Disable: /plugin disable {{bundle}}',
+  },
+  'plugins-experimental-team-hint': {
+    zh: '用法：服务运行后 /team status',
+    en: 'Use: /team status once the service runs',
+  },
+  'plugins-experimental-auto-review-hint': {
+    zh: '用法：在 /permission 选择「自动授权审查」',
+    en: 'Use: pick Auto review in /permission',
   },
   'plugins-bundles-header': { zh: '已装 bundle（数据来自 profile 插件服务）：', en: 'Installed bundles (from the profile plugin service):' },
   'plugins-bundles-official': { zh: '安装自带', en: 'Official (installation-supplied)' },
@@ -1801,29 +1815,35 @@ const dict = {
   'team-task-blocked': { zh: '阻塞', en: 'blocked' },
   'team-failure': { zh: '团队记录被拒：{{failure}}', en: 'Team record rejected: {{failure}}' },
 
-  // ── /team：团队模式开关（团队 bundle 的启停，见 docs/agent-teams-design.md「开关机制」）──
+  // ── /team：团队状态（开关是 /plugin enable|disable，见 docs/agent-teams-design.md「开关机制」）──
   'team-cmd-unavailable': { zh: '当前内核没有 Agent Teams。', en: 'The current kernel has no Agent Teams.' },
-  'team-cmd-usage': { zh: '未知子命令「{{sub}}」。用法：/team [status] | on | off', en: 'Unknown subcommand "{{sub}}". Usage: /team [status] | on | off' },
+  'team-cmd-usage': { zh: '未知子命令「{{sub}}」。用法：/team [status]', en: 'Unknown subcommand "{{sub}}". Usage: /team [status]' },
+  'team-cmd-switch-moved': {
+    zh: '团队开关已改为 /plugin enable|disable {{bundle}}；/team 只报告状态。',
+    en: 'The team switch moved to /plugin enable|disable {{bundle}}; /team only reports status.',
+  },
+  'team-cmd-not-enabled': {
+    zh: '团队服务未运行（bundle 未启用、启用后尚未生效，或激活失败）。开启/应用：/plugin enable {{bundle}}；需要时重启。',
+    en: 'The team service is not running (bundle off, enabled but not applied yet, or activation failed). Enable/apply with /plugin enable {{bundle}}; restart if needed.',
+  },
+  'team-cmd-no-manager-route': {
+    zh: '本次启动没有 profile 插件服务，无法在会话内切换。在终端用 dsh plugin --profile {{profile}} add {{bundle}}@<已装 DSH 版本>（关闭用 remove），然后重启；版本须与已装 DSH 完全一致。',
+    en: 'This launch has no profile plugin service, so the team cannot be switched here. In a terminal run dsh plugin --profile {{profile}} add {{bundle}}@<your DSH version> (remove to switch off), then restart; the version must match the installed DSH exactly.',
+  },
+  'team-cmd-bundle-absent': {
+    zh: '本次运行的 DSH 安装不自带团队包（/plugin list 不显示它）：先把 DSH 换到自带团队包的版本线，再重启并开启。',
+    en: 'The running DSH installation does not ship the team bundle (/plugin list does not show it): switch DSH to a line that ships the team packages first, then restart and enable it.',
+  },
   'team-cmd-no-manager': {
-    zh: '本次启动没有 profile 插件服务，无法在会话内切换。改用：dsh plugin --profile {{profile}} add {{bundle}}（关闭用 remove），然后重启。',
-    en: 'This launch has no profile plugin service, so the team cannot be switched here. Use dsh plugin --profile {{profile}} add {{bundle}} (remove to switch off), then restart.',
+    zh: '本次启动没有 profile 插件服务：只能报告团队服务状态。',
+    en: 'This launch has no profile plugin service: only the team service state can be reported.',
   },
   'team-cmd-bundle': { zh: '团队 bundle：{{state}}', en: 'Team bundle: {{state}}' },
+  'team-cmd-bundle-unknown': { zh: '团队 bundle：未知（插件服务没有列出该包）', en: 'Team bundle: unknown (the plugin service does not list it)' },
   'team-cmd-on': { zh: '已开启', en: 'on' },
   'team-cmd-off': { zh: '已关闭', en: 'off' },
-  'team-cmd-already-on': { zh: '团队 bundle 已开启，无需改动。', en: 'The team bundle is already on; nothing to change.' },
-  'team-cmd-not-installed': {
-    zh: '团队 bundle 未安装。在这里安装：/plugin install {{bundle}}（装完即开启）；或在终端：dsh plugin --profile {{profile}} add {{bundle}}',
-    en: 'The team bundle is not installed. Install it here with /plugin install {{bundle}} (it is switched on once installed), or in a terminal with dsh plugin --profile {{profile}} add {{bundle}}',
-  },
-  'team-cmd-kernel-unsupported': {
-    zh: '运行中的 DSH {{version}} 没有本应用能读取的团队 bundle：先把 DSH 换成 {{lines}} 之一，再安装同版本的团队 bundle。',
-    en: 'The running DSH {{version}} has no team bundle this app can read: switch DSH to one of {{lines}} first, then install the team bundle of that same version.',
-  },
-  'team-cmd-off-not-installed': { zh: '团队 bundle 未安装，团队本就是关闭的，无需改动。', en: 'The team bundle is not installed, so the team is already off; nothing to change.' },
   'team-cmd-service': { zh: '团队服务：{{state}}', en: 'Team service: {{state}}' },
   'team-cmd-running': { zh: '运行中', en: 'running' },
-  'team-cmd-stopped': { zh: '未运行', en: 'not running' },
   'team-cmd-pending-on': { zh: 'profile 已开启团队，但服务没有运行：重启后生效，或服务激活失败（见日志）。', en: 'The profile has the team on but the service is not running: it applies after a restart, or the service failed to activate (see the log).' },
   'team-cmd-pending-off': { zh: 'profile 已关闭团队，但服务仍在运行：重启后生效。', en: 'The profile has the team off but the service is still running: it applies after a restart.' },
   'team-cmd-no-members': { zh: '本会话没有 teammate。', en: 'No teammates in this session.' },
@@ -2207,7 +2227,7 @@ const dict = {
   'cmd-desc-migrate': { zh: '从其他编程代理导入对话（claude-code/codex/omp/zcode/grok-build）' },
   'cmd-desc-init': { zh: '在工作目录创建 AGENTS.md' },
   'cmd-desc-agents': { zh: '查看本会话的子代理' },
-  'cmd-desc-team': { zh: '团队模式：查看状态，或 on / off 开关（启停 Agent Teams bundle）' },
+  'cmd-desc-team': { zh: '团队模式：团队服务运行时查看状态（开关用 /plugin enable|disable）' },
   'cmd-desc-jobs': { zh: '查看本会话的后台任务' },
   'cmd-desc-panel': { zh: '侧栏面板：开关 / 聚焦 / 缩放 / 切换', en: 'Side panel: toggle / focus / zoom / switch' },
   'cmd-desc-kernel': { zh: '选择内核（切换后重启进入）', en: 'Choose the kernel (restarts into it)' },
@@ -2327,7 +2347,7 @@ const dict = {
   'sugg-panel-zoom-desc': { zh: '缩放当前面板', en: 'Zoom the active panel' },
   'sugg-panel-id-desc': { zh: '打开该面板', en: 'Open this panel' },
   // /plugin 的子命令提示（补全树；动态实参见 plugin-completions.ts）
-  'sugg-plugin-list-desc': { zh: '列出你装的额外插件', en: 'List the plugins this profile added' },
+  'sugg-plugin-list-desc': { zh: '列出额外插件与实验性功能', en: 'List added plugins and experimental features' },
   'sugg-plugin-info-desc': { zh: '查单个条目或待装 spec', en: 'Describe an installed plugin or an install spec' },
   'sugg-plugin-registries-desc': { zh: '查看安装源', en: 'Show where installations ask' },
   'sugg-plugin-check-desc': { zh: '校验清单，不安装', en: 'Validate a manifest without installing it' },
@@ -2357,7 +2377,7 @@ const dict = {
   'cmd-desc-hooks': { zh: '查看 hooks 状态' },
   'cmd-desc-mcp': { zh: '查看 MCP 状态' },
   'cmd-desc-skills': { zh: '列出所有可用技能' },
-  'cmd-desc-plugin': { zh: '插件诊断；`list` 列你装的额外插件，`info` 查单个条目或待装 spec' },
+  'cmd-desc-plugin': { zh: '插件诊断；`list` 列额外插件与可开启的实验性功能，`info` 查单个条目或待装 spec' },
   'cmd-desc-update': { zh: '更新 dsh-tui 并重启' },
   // Misc
   'cmd-desc-vim': { zh: '切换 vim 模式' },
