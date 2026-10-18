@@ -1,5 +1,5 @@
 import type { TuiSettingsSection, TuiSettingsGroup, TuiSettingsField, TuiSettingsFieldKind, TuiSettingsFieldOption, TuiSettingsFieldWrite } from '../adapter/ports/channel-settings.js'
-export type { TuiSettingsSection, TuiSettingsGroup, TuiSettingsField, TuiSettingsFieldKind, TuiSettingsFieldOption, TuiSettingsFieldWrite } from '../adapter/ports/channel-settings.js'
+export type { TuiSettingsSection, TuiSettingsPage, TuiSettingsGroup, TuiSettingsField, TuiSettingsFieldKind, TuiSettingsFieldOption, TuiSettingsFieldWrite } from '../adapter/ports/channel-settings.js'
 /**
  * Plugin settings-section extension seam for terminal front doors.
  *

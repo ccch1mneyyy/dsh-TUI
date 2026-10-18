@@ -10,7 +10,7 @@ import { POINTER, TICK, MULTIPLICATION_X } from '../terminal-utils/figures.js'
 import type { Theme } from '../theme.js'
 import { getLang, t, type I18nKey } from '../i18n.js'
 import { SettingsForm } from '../dsh-adapter/settingsEditor.js'
-import type { TuiSettingsField, TuiSettingsFieldKind, TuiSettingsGroup, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
+import type { TuiSettingsField, TuiSettingsFieldKind, TuiSettingsGroup, TuiSettingsPage, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
 import type { LocalizedDescriptions } from '../commands.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import { panelStore } from '../components/sidePanel/PanelStore.js'
@@ -135,7 +135,10 @@ const DEFAULT_PAGE_ID = ''
 /** One top-level page of the screen: its sections, in declaration order. */
 interface SettingsPageModel {
   id: string
-  title: string
+  /** Declaration that named the page; undefined for the default "general"
+   *  page. Titles are resolved per render (see {@link settingsPageTitle}), so
+   *  a language hot-swap repaints the strip instead of leaving the old one. */
+  page?: TuiSettingsPage
   sections: readonly TuiSettingsSection[]
 }
 
@@ -148,10 +151,10 @@ interface SettingsPageModel {
  */
 function settingsPages(sections: readonly TuiSettingsSection[]): SettingsPageModel[] {
   const pages: SettingsPageModel[] = []
-  const byId = new Map<string, { id: string; title: string; sections: TuiSettingsSection[] }>()
+  const byId = new Map<string, { id: string; page?: TuiSettingsPage; sections: TuiSettingsSection[] }>()
   const general = sections.filter(section => section.page === undefined)
   if (general.length > 0) {
-    const page = { id: DEFAULT_PAGE_ID, title: t('settings-page-general'), sections: general }
+    const page = { id: DEFAULT_PAGE_ID, sections: general }
     byId.set(DEFAULT_PAGE_ID, page)
     pages.push(page)
   }
@@ -163,11 +166,16 @@ function settingsPages(sections: readonly TuiSettingsSection[]): SettingsPageMod
       existing.sections.push(section)
       continue
     }
-    const page = { id: declared.id, title: pick(declared.title, declared.descriptions), sections: [section] }
+    const page = { id: declared.id, page: declared, sections: [section] }
     byId.set(declared.id, page)
     pages.push(page)
   }
   return pages
+}
+
+/** The strip label of one page, localized at render time. */
+function settingsPageTitle(page: SettingsPageModel): string {
+  return page.page === undefined ? t('settings-page-general') : pick(page.page.title, page.page.descriptions)
 }
 
 /**
@@ -176,9 +184,9 @@ function settingsPages(sections: readonly TuiSettingsSection[]): SettingsPageMod
  * tab never hides — a strip that hid the page you are on could not tell you
  * where you are).
  */
-function pageTabLabels(pages: readonly SettingsPageModel[], columns: number): string[] {
-  const budget = Math.max(3, Math.floor((columns - pages.length * 2) / Math.max(1, pages.length)))
-  return pages.map(page => truncateWidth(page.title, budget))
+function pageTabLabels(titles: readonly string[], columns: number): string[] {
+  const budget = Math.max(3, Math.floor((columns - titles.length * 2) / Math.max(1, titles.length)))
+  return titles.map(title => truncateWidth(title, budget))
 }
 
 /** One page tab: a reverse block when active, dim (or hovered) otherwise. */
@@ -1230,7 +1238,8 @@ export function Settings({
   // The bottom help bar: the focused field's hint on the left (truncated
   // first), the navigation keys pinned to the right — a truncated hint still
   // reads, a truncated shortcut hint hides the keys nobody can guess.
-  const tabLabels = showTabs ? pageTabLabels(pages, columns) : []
+  const tabTitles = showTabs ? pages.map(settingsPageTitle) : []
+  const tabLabels = showTabs ? pageTabLabels(tabTitles, columns) : []
   const focusedHint = focused !== undefined && focused.kind !== 'group' && focused.field.hint !== undefined
     ? pick(focused.field.hint, focused.field.hintDescriptions)
     : undefined
@@ -1277,7 +1286,7 @@ export function Settings({
           {pages.map((page, index) => (
             <PageTab
               key={page.id === DEFAULT_PAGE_ID ? '__general' : page.id}
-              label={tabLabels[index] ?? page.title}
+              label={tabLabels[index] ?? tabTitles[index] ?? page.id}
               active={index === activePageIndex}
               {...(mode === 'edit' ? {} : { onSelect: () => switchPage(page.id) })}
             />
