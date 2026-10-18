@@ -107,6 +107,10 @@ endpoint and result limits, supporting custom Loader entry IDs and a masked API
 key input saved through DSH's credential store. Official Flash model labels show the `1017` release
 marker while retaining the `deepseek-flash` model ID.
 
+`/settings` groups its sections into pages: the TUI's own settings sit under
+**General**, and plugins that declare a page get their own tab (`Tab` / `Shift+Tab`
+or a click on the strip switches pages; the strip is hidden when only one page exists).
+
 On DSH 0.1.7, `/settings` uses the TUI's actual Loader entry ID, including custom
 IDs. It requires matching profile dependencies with `@deepseek-ai/schemastery`
 3.18.3 or newer; an incompatible schema stops TUI startup with repair guidance
