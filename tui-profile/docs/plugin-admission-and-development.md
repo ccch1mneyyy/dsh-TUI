@@ -740,6 +740,9 @@ ctx.inject(['tuiSettingsSections'], (settingsCtx) => {
     ns: 'my-plugin',            // 与 ctx.settings.register 的命名空间一致
     title: 'My plugin',         // 英文标题（也是回退文案）
     descriptions: { zh: '我的插件' },
+    // 可选：在 /settings 里单独占一页（tab）。同 page.id 的区块共用一页，
+    // 第一个声明决定页标题；省略则并入默认的「常规」页，与 TUI 自己的设置同页。
+    page: { id: 'my-plugin', title: 'My plugin', descriptions: { zh: '我的插件' } },
     fields: [
       { path: ['enabled'], label: 'Enabled', kind: 'boolean' },
       { path: ['limit'], label: 'Retry limit', kind: 'number', hint: 'Attempts before giving up' },
@@ -756,6 +759,12 @@ ctx.inject(['tuiSettingsSections'], (settingsCtx) => {
 ```
 
 语义（与 web 前端的插件设置卡片一致）：
+
+- 设置屏按**页**组织：不声明 `page` 的区块都落在「常规」页；声明 `page` 的
+  区块按 `page.id` 归组，同 id 的区块共用一页（第一个声明决定页标题），页签
+  按注册顺序排在「常规」之后。`page.id` 用 `[a-z][a-z0-9_-]*`，标题不能为空。
+  用户用 `Tab` / `Shift+Tab` 或**点击页签**切换页；整套组合只有一页时页签
+  不显示，版面与只有一页时完全一致。字段、分组、保存语义都不受分页影响。
 
 - 编辑是**草稿式**的：用户打字只改草稿，按 `s` 保存才落成一次 revision 栅栏的
   `settings.mutate` path ops（冲突自动用新 revision 重试一次）。

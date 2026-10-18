@@ -127,6 +127,81 @@ function pick(text: string, descriptions: LocalizedDescriptions | undefined): st
   return descriptions?.[getLang()] ?? text
 }
 
+/** Page id of the sections that declare none: the default "general" page.
+ *  Declared ids are validated against the plugin namespace grammar, so the
+ *  empty string can never collide with one. */
+const DEFAULT_PAGE_ID = ''
+
+/** One top-level page of the screen: its sections, in declaration order. */
+interface SettingsPageModel {
+  id: string
+  title: string
+  sections: readonly TuiSettingsSection[]
+}
+
+/**
+ * Group the declared sections into the screen's top-level pages. A section
+ * that declares `page` joins every other section declaring the same id (the
+ * first declaration names the page); sections without one share the default
+ * "general" page, which stays first. Pages follow registration order, so the
+ * strip is stable across renders for a given section list.
+ */
+function settingsPages(sections: readonly TuiSettingsSection[]): SettingsPageModel[] {
+  const pages: SettingsPageModel[] = []
+  const byId = new Map<string, { id: string; title: string; sections: TuiSettingsSection[] }>()
+  const general = sections.filter(section => section.page === undefined)
+  if (general.length > 0) {
+    const page = { id: DEFAULT_PAGE_ID, title: t('settings-page-general'), sections: general }
+    byId.set(DEFAULT_PAGE_ID, page)
+    pages.push(page)
+  }
+  for (const section of sections) {
+    const declared = section.page
+    if (declared === undefined) continue
+    const existing = byId.get(declared.id)
+    if (existing !== undefined) {
+      existing.sections.push(section)
+      continue
+    }
+    const page = { id: declared.id, title: pick(declared.title, declared.descriptions), sections: [section] }
+    byId.set(declared.id, page)
+    pages.push(page)
+  }
+  return pages
+}
+
+/**
+ * Tab labels sized to the terminal: every page keeps a visible cell, and the
+ * labels shrink evenly when the strip would overflow `columns` (the active
+ * tab never hides — a strip that hid the page you are on could not tell you
+ * where you are).
+ */
+function pageTabLabels(pages: readonly SettingsPageModel[], columns: number): string[] {
+  const budget = Math.max(3, Math.floor((columns - pages.length * 2) / Math.max(1, pages.length)))
+  return pages.map(page => truncateWidth(page.title, budget))
+}
+
+/** One page tab: a reverse block when active, dim (or hovered) otherwise. */
+function PageTab({ label, active, onSelect }: {
+  label: string
+  active: boolean
+  onSelect?: () => void
+}): React.ReactNode {
+  const [hovered, setHovered] = React.useState(false)
+  return (
+    <Box
+      flexShrink={0}
+      onClick={onSelect}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      {active
+        ? <Text color="remember" bold inverse>{` ${label} `}</Text>
+        : <Text dimColor={!hovered}>{` ${label} `}</Text>}
+    </Box>
+  )
+}
+
 /**
  * Pad a glyph to a fixed display width.
  *
@@ -446,6 +521,10 @@ export function Settings({
   const [editing, setEditing] = React.useState<EditingState | null>(null)
   const [activeGroup, setActiveGroup] = React.useState<ActiveGroup | null>(null)
   const [focusIndex, setFocusIndex] = React.useState(0)
+  /** Selected page id; undefined = the first page (settings page ids are
+   *  stable across renders, so focus can be remembered per page). */
+  const [activePageId, setActivePageId] = React.useState<string | undefined>(undefined)
+  const pageFocusRef = React.useRef(new Map<string, number>())
   const [notice, setNotice] = React.useState<{ text: string; tone: 'error' | 'success' } | undefined>(undefined)
   /** Configured status of every secret field's credential ref. */
   const [secrets, setSecrets] = React.useState<ReadonlyMap<string, boolean>>(new Map())
@@ -505,6 +584,16 @@ export function Settings({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host, sections, secretProbe])
 
+  // Top-level pages (tabs): sections without a declared page share the
+  // default "general" page; the strip only appears once something declares
+  // a page of its own.
+  const pages = React.useMemo(() => settingsPages(sections), [sections])
+  const activePageIndex = Math.max(0, pages.findIndex(page => page.id === activePageId))
+  const activePage = pages[activePageIndex]
+  React.useEffect(() => {
+    if (activePageId !== undefined && !pages.some(page => page.id === activePageId)) setActivePageId(undefined)
+  }, [activePageId, pages])
+
   const activeSection = activeGroup === null ? undefined : sections.find(section => section.ns === activeGroup.ns)
   const activeGroupSpec = activeSection?.groups?.find(group => group.id === activeGroup?.id)
   React.useEffect(() => {
@@ -553,13 +642,27 @@ export function Settings({
     ? activeSection.fields
       .filter(field => field.group === activeGroupSpec.id)
       .flatMap(field => fieldEntries(activeSection.ns, field))
-    : sections.flatMap(section => rootRowsFor(section).flatMap((row): FocusEntry[] => {
+    : (activePage?.sections ?? []).flatMap(section => rootRowsFor(section).flatMap((row): FocusEntry[] => {
       if (row.kind === 'field') return fieldEntries(section.ns, row.field)
       if (row.kind === 'page') return [{ kind: 'group', ns: section.ns, group: row.group }]
       return []
     }))
   const effFocus = Math.min(focusIndex, Math.max(0, focusable.length - 1))
   const focused = focusable.length === 0 ? undefined : focusable[effFocus]
+
+  /** Switch the visible page: remember this page's focus, drop a group
+   *  subpage (its section lives on the page we are leaving), and restore the
+   *  target page's last focus. */
+  const switchPage = (id: string): void => {
+    if (id === activePage?.id) return
+    if (activePage !== undefined) pageFocusRef.current.set(activePage.id, effFocus)
+    setActivePageId(id)
+    setActiveGroup(null)
+    setMode('list')
+    setEditing(null)
+    setFocusIndex(pageFocusRef.current.get(id) ?? 0)
+    setWindowStart(0)
+  }
 
   /**
    * Save a section's staged edits right now (auto-save: every confirmed edit
@@ -721,6 +824,14 @@ export function Settings({
       setFocusIndex(Math.max(0, effFocus - 1))
     } else if (key.downArrow) {
       setFocusIndex(Math.min(Math.max(0, focusable.length - 1), effFocus + 1))
+    } else if (key.tab) {
+      // Tab / Shift+Tab walk the page tabs; the arrows keep the field focus.
+      // Editing owns the keyboard, so this only runs in list mode.
+      if (pages.length > 1) {
+        const step = key.shift ? -1 : 1
+        const next = pages[(activePageIndex + step + pages.length) % pages.length]
+        if (next !== undefined) switchPage(next.id)
+      }
     } else if (key.leftArrow || key.rightArrow) {
       // ←/→ cycle an options-bearing field (select rows and hybrid
       // text-with-options rows such as the page margin presets). Rows
@@ -983,7 +1094,8 @@ export function Settings({
     }
     entries.push({ key: 'card:group:bottom', lines: 1, node: <CardBottom columns={columns} /> })
   } else {
-    sections.forEach((section, sectionIndex) => {
+    const rootSections = activePage?.sections ?? []
+    rootSections.forEach((section, sectionIndex) => {
       if (sectionIndex > 0) entries.push({ key: `gap:${section.ns}`, lines: 1, node: <Text> </Text> })
       entries.push({
         key: `card:${section.ns}:top`,
@@ -1051,7 +1163,7 @@ export function Settings({
 
     // Namespaces without a plugin-declared section are deliberately NOT
     // listed (they used to get a read-only YAML hint; user feedback: noise).
-    if (sections.length === 0) {
+    if (pages.length === 0) {
       entries.push({
         key: 'empty',
         lines: 1,
@@ -1085,7 +1197,8 @@ export function Settings({
   // Chrome: title row, footer rule, notice slot, help row. The notice slot is
   // permanent (blank while quiet) so a save/discard toast never shifts the
   // list above it.
-  const viewport = Math.max(1, rows - 4)
+  const showTabs = pages.length > 1
+  const viewport = Math.max(1, rows - 4 - (showTabs ? 1 : 0))
   const maxStart = Math.max(0, totalLines - viewport)
   React.useEffect(() => {
     setWindowStart(start => {
@@ -1111,10 +1224,13 @@ export function Settings({
   })
 
   const inGroup = activeSection !== undefined && activeGroupSpec !== undefined
-  const navigationHint = inGroup ? t('settings-hint-group') : t('settings-hint-list')
+  const navigationHint = inGroup
+    ? t('settings-hint-group')
+    : pages.length > 1 ? t('settings-hint-list-pages') : t('settings-hint-list')
   // The bottom help bar: the focused field's hint on the left (truncated
   // first), the navigation keys pinned to the right — a truncated hint still
   // reads, a truncated shortcut hint hides the keys nobody can guess.
+  const tabLabels = showTabs ? pageTabLabels(pages, columns) : []
   const focusedHint = focused !== undefined && focused.kind !== 'group' && focused.field.hint !== undefined
     ? pick(focused.field.hint, focused.field.hintDescriptions)
     : undefined
@@ -1156,6 +1272,18 @@ export function Settings({
         {host === undefined && <Text color="warning">{`${t('settings-unavailable')} `}</Text>}
         {focusable.length > 0 && <Text dimColor>{`${effFocus + 1}/${focusable.length}`}</Text>}
       </Box>
+      {showTabs && (
+        <Box height={1} flexShrink={0} overflow="hidden">
+          {pages.map((page, index) => (
+            <PageTab
+              key={page.id === DEFAULT_PAGE_ID ? '__general' : page.id}
+              label={tabLabels[index] ?? page.title}
+              active={index === activePageIndex}
+              {...(mode === 'edit' ? {} : { onSelect: () => switchPage(page.id) })}
+            />
+          ))}
+        </Box>
+      )}
       {/* Literal ink-box host for the wheel — every Box flavor is a compiled
           component whose prop list drops onWheel (SuggestionCard precedent).
           Rolling the wheel walks the focus, and the focus-follow window

@@ -89,7 +89,7 @@ import { getHostThemes, type TuiThemeHost, type TuiThemeRuntime } from './themes
 import type { DshAuthService } from './oauth/service.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
-import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
+import { trackHostSettingsSection, type TuiSettingsField, type TuiSettingsSection } from './settings-sections.js'
 import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { armAdmissionLoader } from './admission-loader.js'
 import { assembleBackendsFromProfile } from './backend-assembly.js'
@@ -1583,15 +1583,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // dsh-tui-* host-seam insert list right after load (issue #557), which
   // left this registration silently skipped and /settings read-only.
   // channel.ts reads through the same fallback, so both sides meet in the
-  // same registry either way.
-  // The in-process DSH kernel registers into the local host first and moves
-  // the section to the composition's service once it exists.
-  let rehomeSettingsSection = (): void => undefined
+  // same registry either way — but which registry that is can still change
+  // after this registration: the service row may activate later, or reload
+  // into an empty state. trackHostSettingsSection follows it, so the section
+  // never strands in the registry /settings stopped reading.
   {
-    let settingsSections = getHostSettingsSections(
-      ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
-    ) ?? getLocalSettingsSectionsHost(ctx)
-    const tuiSection: Parameters<typeof settingsSections.register>[0] = {
+    const tuiSection: TuiSettingsSection = {
       ns: tuiSettingsNs,
       title: 'dsh-tui',
       groups: [...SETTING_GROUPS],
@@ -1920,15 +1917,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
       ],
     }
-    let unregister = settingsSections.register(tuiSection)
-    ctx.effect(() => () => { unregister() })
-    rehomeSettingsSection = () => {
-      const service = getHostSettingsSections(ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined)
-      if (service === undefined || service === settingsSections) return
-      unregister()
-      settingsSections = service
-      unregister = service.register(tuiSection)
-    }
+    const disposeSection = trackHostSettingsSection(ctx, tuiSection)
+    ctx.effect(() => () => { disposeSection() })
   }
   // DSH approval seam: the permission layer asks ApprovalService.request(),
   // which dispatches an `approval/request` waterfall. With no answerer the
@@ -2648,10 +2638,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   }
   /**
    * Services composed after the mount: re-read what the screen took as values
-   * at mount (Chat's stores, theme host, toast sink, /settings section).
+   * at mount (Chat's stores, theme host, toast sink). The /settings section
+   * follows its registry on its own (trackHostSettingsSection).
    */
   const refreshHostServices = (): void => {
-    rehomeSettingsSection()
     bindToastSink()
     if (!exited) instance?.rerender(buildTree())
   }

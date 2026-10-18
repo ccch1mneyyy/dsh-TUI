@@ -152,6 +152,22 @@ function registerSection(runtime: TuiSettingsSectionsRuntime | SettingsSectionSt
   if (state.sections.has(ns)) throw new Error(`TUI settings section "${ns}" is already registered`)
 
   const groupIds = new Set<string>()
+  // Pages are display-only grouping keys: validate the id so a tab can never
+  // collide with the screen's own sentinel/page keys, and keep the title the
+  // tab strip renders.
+  const page = section.page === undefined
+    ? undefined
+    : (() => {
+      const id = section.page.id.trim()
+      if (!/^[a-z][a-z0-9_-]*$/u.test(id)) throw new TypeError(`invalid TUI settings page id: ${section.page.id}`)
+      const title = section.page.title.trim()
+      if (title === '') throw new TypeError(`TUI settings page "${id}" needs a title`)
+      return Object.freeze({
+        id,
+        title,
+        descriptions: section.page.descriptions === undefined ? undefined : Object.freeze({ ...section.page.descriptions }),
+      })
+    })()
   const groups = section.groups === undefined
     ? undefined
     : Object.freeze(section.groups.map(group => {
@@ -186,6 +202,7 @@ function registerSection(runtime: TuiSettingsSectionsRuntime | SettingsSectionSt
     ...section,
     ns,
     descriptions: section.descriptions === undefined ? undefined : Object.freeze({ ...section.descriptions }),
+    page,
     groups,
     fields,
   })
@@ -289,6 +306,58 @@ export function getLocalSettingsSectionsHost(ctx?: Context): TuiSettingsSections
     },
   })
   return state.host
+}
+
+/** The registry `/settings` reads right now: the composition's service, else
+ *  the in-package fallback (the channel resolves the same pair). */
+function currentSettingsSectionsHost(ctx: Context): TuiSettingsSectionsHost {
+  return getHostSettingsSections(ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined)
+    ?? getLocalSettingsSectionsHost(ctx)
+}
+
+/**
+ * Register a host-owned section in whichever registry `/settings` reads, and
+ * keep it there while the composition's `tuiSettingsSections` service comes
+ * and goes.
+ *
+ * The channel prefers the service whenever it exists, while a registration
+ * made before the service row activated lands in the in-package fallback —
+ * profile rows activate concurrently (`EntryGroup.update` awaits all of
+ * them), so "the service exists" is not a boot-order guarantee. A reloaded
+ * service row also starts from an empty registry, stranding sections
+ * registered in the previous instance. Either transition would leave the
+ * section in the registry the screen no longer reads: it disappears from
+ * /settings while other sections keep rendering. Both announce themselves
+ * through `internal/service`; the replacement registration is taken before
+ * the old one is released, so a failed move leaves the section where it was.
+ */
+export function trackHostSettingsSection(ctx: Context, section: TuiSettingsSection): () => void {
+  let host = currentSettingsSectionsHost(ctx)
+  let unregister = host.register(section)
+  let disposed = false
+  const off: () => void = ctx.on('internal/service' as never, ((name: unknown) => {
+    if (name !== 'tuiSettingsSections' || disposed) return
+    const target = currentSettingsSectionsHost(ctx)
+    if (target === host) return
+    let dispose: () => void
+    try {
+      dispose = target.register(section)
+    } catch (error) {
+      // A registry that already holds this namespace (a reload that kept the
+      // row's state) must not take the section down with the move.
+      ctx.logger.warn(`dsh-tui: keeping settings section "${section.ns}" in its current registry: ${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
+    unregister()
+    host = target
+    unregister = dispose
+  }) as never)
+  return () => {
+    if (disposed) return
+    disposed = true
+    off()
+    unregister()
+  }
 }
 
 export default TuiSettingsSectionsRuntime

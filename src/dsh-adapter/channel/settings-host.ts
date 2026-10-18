@@ -14,6 +14,14 @@ import { concreteService } from '../host-access.js'
 class WebCredentialAuthorization {}
 const webCredentialFields = new WeakMap<object, { store: object; owner: object; ns: string; ref: string }>()
 
+/** The web-search forms share one settings page: provider, fetch route, API
+ *  route and key are one topic and are edited together. */
+const WEB_SETTINGS_PAGE: NonNullable<TuiSettingsSection['page']> = Object.freeze({
+  id: 'search',
+  title: 'Search',
+  descriptions: Object.freeze({ zh: '搜索' }),
+})
+
 /** Forms over the host's web settings; provider selection remains owned by DSH. */
 export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly SettingsNamespaceView[]): TuiSettingsSection[] {
   const available = new Set(namespaces.map(view => view.ns))
@@ -48,7 +56,7 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
   if (apiNs === undefined) return []
   const sections: TuiSettingsSection[] = []
   if (webNs !== undefined) sections.push({
-    ns: webNs, title: 'Web search', descriptions: { zh: '网页搜索' },
+    ns: webNs, title: 'Web search', descriptions: { zh: '网页搜索' }, page: WEB_SETTINGS_PAGE,
     fields: [
       {
         path: ['searchProvider'], label: 'Search', descriptions: { zh: '搜索' }, kind: 'text',
@@ -88,7 +96,7 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
   })
   sections.push({
     ns: apiNs, title: 'DeepSeek Search / Fetch API',
-    descriptions: { zh: 'DeepSeek 搜索 / 抓取 API' },
+    descriptions: { zh: 'DeepSeek 搜索 / 抓取 API' }, page: WEB_SETTINGS_PAGE,
     fields: [
       { path: ['baseURL'], label: 'API base URL', descriptions: { zh: 'API 基础地址' }, kind: 'text',
         hint: 'Include the path prefix, without /search or /fetch.',
@@ -105,7 +113,7 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
     ],
   })
   if (messagesNs !== undefined) sections.push({
-    ns: messagesNs, title: 'DeepSeek Messages search', descriptions: { zh: 'DeepSeek Messages 搜索' },
+    ns: messagesNs, title: 'DeepSeek Messages search', descriptions: { zh: 'DeepSeek Messages 搜索' }, page: WEB_SETTINGS_PAGE,
     fields: [
       { path: ['baseURL'], label: 'Messages API base URL', descriptions: { zh: 'Messages API 基础地址' }, kind: 'text' },
       { path: ['maxUses'], label: 'Maximum searches per request', descriptions: { zh: '每次请求的最大搜索次数' }, kind: 'number',

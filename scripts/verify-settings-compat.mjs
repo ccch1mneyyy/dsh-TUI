@@ -16,7 +16,7 @@ import { Config } from '../src/dsh-adapter/index.ts'
 import { configValues, createSettingsScope, editableConfig, resolveSettingsNamespace } from '../src/dsh-adapter/compat/settings.ts'
 import { createSettingsHosts } from '../src/dsh-adapter/channel/settings-host.ts'
 import { SettingsForm } from '../src/dsh-adapter/settingsEditor.ts'
-import TuiSettingsSectionsRuntime, { getHostSettingsSections, getLocalSettingsSectionsHost } from '../src/dsh-adapter/settings-sections.ts'
+import TuiSettingsSectionsRuntime, { getHostSettingsSections, getLocalSettingsSectionsHost, trackHostSettingsSection } from '../src/dsh-adapter/settings-sections.ts'
 import { DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, isPageMarginMode, normalizePageMargin, normalizeSidePanelPanels, parsePageMarginSpec } from '../src/tuiDisplayPrefs.ts'
 import { SPLASH_FONTS, SPLASH_FONT_OPTIONS, normalizeSplashFont } from '../src/components/splashFonts.ts'
 import { normalizeBrandSetting } from '../src/branding.ts'
@@ -136,12 +136,13 @@ function visit(node) {
   if (ts.isVariableStatement(node)) {
     for (const declaration of node.declarationList.declarations) {
       const name = declaration.name.getText(source)
-      // The section object is a named declaration (the in-process DSH kernel
-      // re-registers it when the composition's sections service appears).
+      // The section object is a named declaration; the production tracker is
+      // what keeps it in the registry /settings reads as the composition's
+      // sections service appears, disappears and reloads.
       if (name === 'shortcutFieldMeta' || name === 'shortcutFields' || name === 'tuiSection') sectionDeclarations.set(name, node.getText(source))
     }
   }
-  if (ts.isCallExpression(node) && node.expression.getText(source) === 'settingsSections.register') {
+  if (ts.isCallExpression(node) && node.expression.getText(source) === 'trackHostSettingsSection') {
     assert.equal(sectionRegistration, undefined)
     sectionRegistration = node.getText(source)
   }
@@ -163,7 +164,7 @@ const registrationJs = ts.transpileModule(`${namespaceDeclaration}
   return ${sectionRegistration}`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText
-const registerSection = dependencies => new Function(...Object.keys(dependencies), registrationJs)(...Object.values(dependencies))
+const trackProductionSection = dependencies => new Function(...Object.keys(dependencies), registrationJs)(...Object.values(dependencies))
 const declarationNames = ['scope', 'applyShortcuts', 'bootSettings', 'lastTerminalImages']
 const declarations = declarationNames.map(name => {
   const statement = settingsBody.statements.find(node => ts.isVariableStatement(node)
@@ -240,8 +241,9 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     assert.notEqual(owner.fiber, child.fiber, 'injection has its own lifecycle')
     assert.equal(effectiveComboString('paste'), 'alt+v')
     const ownerFiber = owner.fiber
-    const unregister = registerSection({
-      configOwner: owner, Config, resolveSettingsNamespace, settingsSections: sections,
+    const unregister = trackProductionSection({
+      ctx: root, trackHostSettingsSection,
+      configOwner: owner, Config, resolveSettingsNamespace,
       config: configValues(runtime), SHORTCUT_ACTIONS, SHORTCUT_FIELD_META, SETTING_GROUPS, settingField, effectiveComboString, parseComboDraft, draftComboConflicts,
       getLang, DEFAULT_PAGE_MARGIN, isPageMarginMode, parsePageMarginSpec, SPLASH_FONT_OPTIONS, normalizeSplashFont, normalizeBrandSetting,
       // Side-panel fields (sidePanel.panels) validate their draft against the
@@ -371,6 +373,35 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
   }
 }
 
+// The registry the /settings screen reads is not fixed: the composition's
+// `tuiSettingsSections` service can activate after this row (profile rows
+// activate concurrently, so row order guarantees nothing) and can be reloaded
+// into an empty state, while the channel always reads whichever registry is
+// current. The production tracker must follow both transitions — a
+// registration left behind in the other registry silently drops the section
+// from /settings while the plugin-declared cards keep rendering.
+if (modernSchema) {
+  const root = new Context()
+  try {
+    const local = getLocalSettingsSectionsHost(root)
+    const dispose = trackHostSettingsSection(root, { ns: 'follow', title: 'Follow', fields: [] })
+    assert.equal(local.section('follow')?.title, 'Follow', 'a registration made before the service row mounts lands in the fallback')
+    const fiber = await root.plugin(TuiSettingsSectionsRuntime)
+    const service = getHostSettingsSections(root.get('tuiSettingsSections'))
+    assert.ok(service, 'the service exposes its host facade once mounted')
+    assert.equal(service.section('follow')?.title, 'Follow', 'the section follows the service when it mounts')
+    assert.equal(local.section('follow'), undefined, 'the fallback copy is released, not duplicated')
+    await fiber.dispose()
+    assert.equal(getHostSettingsSections(root.get('tuiSettingsSections')), undefined, 'the disposed service is unreachable')
+    assert.equal(local.section('follow')?.title, 'Follow', 'the section returns to the fallback when the service goes away')
+    assert.equal(service.section('follow'), undefined, 'the dead registry is not reused')
+    dispose()
+    assert.equal(local.section('follow'), undefined, 'the tracker owns its registration')
+  } finally {
+    await root.fiber.dispose()
+  }
+}
+
 // Only host-owned sections accept Loader IDs; external plugin validation stays strict.
 const pluginRoot = new Context()
 try {
@@ -385,6 +416,28 @@ try {
   })
 } finally {
   await pluginRoot.fiber.dispose()
+}
+
+// Pages are display-only grouping keys, but a page no screen can address is a
+// declaration bug: the id must be addressable and the title cannot be blank.
+{
+  const pageRoot = new Context()
+  try {
+    const sections = getLocalSettingsSectionsHost(pageRoot)
+    assert.throws(() => sections.register({ ns: 'bad-page', fields: [], page: { id: 'Bad.Page', title: 'Bad' } }), /invalid TUI settings page id/)
+    assert.throws(() => sections.register({ ns: 'blank-page', fields: [], page: { id: 'blank', title: '   ' } }), /needs a title/)
+    const unregister = sections.register({
+      ns: 'paged', fields: [],
+      page: { id: ' my-page ', title: ' My page ', descriptions: { zh: '我的页' } },
+    })
+    assert.equal(sections.section('paged').page.id, 'my-page', 'page ids normalize whitespace')
+    assert.equal(sections.section('paged').page.title, 'My page')
+    assert.equal(sections.section('paged').page.descriptions.zh, '我的页')
+    unregister()
+    assert.equal(sections.section('paged'), undefined)
+  } finally {
+    await pageRoot.fiber.dispose()
+  }
 }
 
 for (const api of ['legacy', 'forms']) {

@@ -1235,7 +1235,9 @@ const dict = {
   'settings-panels-plugin': { zh: '插件面板（{{plugin}}）', en: 'Plugin panel ({{plugin}})' },
   'settings-panels-advanced': { zh: '高级：编辑原始面板列表', en: 'Advanced: edit raw panel list' },
   'settings-panels-min-one': { zh: '至少保留一个启用的面板', en: 'Keep at least one panel enabled' },
+  'settings-page-general': { zh: '常规', en: 'General' },
   'settings-hint-list': { zh: '**Enter** 进入/编辑/切换（改动即保存） · Esc 退出', en: '**Enter** open/edit/toggle (auto-saves) · Esc exit' },
+  'settings-hint-list-pages': { zh: '**Enter** 进入/编辑/切换（改动即保存） · **Tab** 切换页 · Esc 退出', en: '**Enter** open/edit/toggle (auto-saves) · **Tab** switch page · Esc exit' },
   'settings-hint-group': { zh: '**Enter** 编辑/切换（改动即保存） · Esc 返回', en: '**Enter** edit/toggle (auto-saves) · Esc back' },
   'settings-hint-edit': { zh: '**Enter** 确认并保存 · Esc 取消', en: '**Enter** to confirm & save · Esc to cancel' },
 

@@ -223,10 +223,28 @@ export interface TuiSettingsSection {
   title: string
   /** Provider-owned translations for the title. */
   descriptions?: LocalizedDescriptions
+  /**
+   * Top-level page (tab) of the settings screen this section renders on.
+   * Sections declaring the same `id` share one page; the first declaration
+   * names it. Absent: the section joins the screen's default "general" page
+   * together with every other paged-less section, and the tab strip only
+   * appears once at least one section declares a page of its own.
+   */
+  page?: TuiSettingsPage
   /** Optional navigation groups, in display order. */
   groups?: readonly TuiSettingsGroup[]
   /** Editable fields, in display order. */
   fields: readonly TuiSettingsField[]
+}
+
+/** One top-level page (tab) of the settings screen. */
+export interface TuiSettingsPage {
+  /** Stable identifier; sections declaring the same id share the page. */
+  id: string
+  /** Page title (English; also the fallback). */
+  title: string
+  /** Provider-owned translations for the title. */
+  descriptions?: LocalizedDescriptions
 }
 
 /** Optional navigation group inside one settings section. */

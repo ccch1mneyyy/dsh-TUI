@@ -156,6 +156,10 @@ const GROUPS = {
 // 焦点序跳过标题直达字段），page 组与无 mode 的旧默认仍走子页；空的
 // inline 组不渲染孤儿标题。
     ["verify-settings-root-inline", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-root-inline.tsx']],
+// /settings 分页（页签）回归：不声明 page 的区块并入「常规」页，声明同一
+// page 的区块共页（页签按注册顺序、常规在最前）；Tab/Shift+Tab 与点击切换、
+// 每页焦点记忆、从 group 子页切页回根页；只有一页时不显示页签、布局不变。
+    ["verify-settings-pages", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-pages.tsx']],
     ["repro-inline-scrollback", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-scrollback.tsx']],
     ["repro-inline-thirdparty", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-thirdparty.tsx']],
 // 安全回归：OSC 出口控制字符剥离 + 超链接 scheme 门禁（安全审查
