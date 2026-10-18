@@ -178,15 +178,28 @@ function settingsPageTitle(page: SettingsPageModel): string {
   return page.page === undefined ? t('settings-page-general') : pick(page.page.title, page.page.descriptions)
 }
 
+/** The tab strip as drawn: which page indexes, their labels, and whether the
+ *  strip had to fall back to the compact (active tab + position) form. */
+interface SettingsTabsView {
+  indexes: readonly number[]
+  labels: readonly string[]
+  compact: boolean
+}
+
 /**
- * Tab labels sized to the terminal: every page keeps a visible cell, and the
- * labels shrink evenly when the strip would overflow `columns` (the active
- * tab never hides — a strip that hid the page you are on could not tell you
- * where you are).
+ * Lay the page tabs out in `columns`. Labels shrink evenly while every page
+ * keeps at least one label cell; when even that cannot fit (a terminal
+ * narrower than three cells per page), only the active tab is drawn followed
+ * by its `i/N` position — the page you are on never disappears from the
+ * strip, and Tab / Shift+Tab still reach every page.
  */
-function pageTabLabels(titles: readonly string[], columns: number): string[] {
-  const budget = Math.max(3, Math.floor((columns - titles.length * 2) / Math.max(1, titles.length)))
-  return titles.map(title => truncateWidth(title, budget))
+function settingsTabsView(pages: readonly SettingsPageModel[], columns: number, activeIndex: number): SettingsTabsView {
+  const titles = pages.map(settingsPageTitle)
+  const budget = Math.floor((columns - titles.length * 2) / Math.max(1, titles.length))
+  if (budget >= 1) {
+    return { indexes: pages.map((_, index) => index), labels: titles.map(title => truncateWidth(title, budget)), compact: false }
+  }
+  return { indexes: [activeIndex], labels: [truncateWidth(titles[activeIndex] ?? '', Math.max(1, columns - 6))], compact: true }
 }
 
 /** One page tab: a reverse block when active, dim (or hovered) otherwise. */
@@ -604,6 +617,7 @@ export function Settings({
 
   const activeSection = activeGroup === null ? undefined : sections.find(section => section.ns === activeGroup.ns)
   const activeGroupSpec = activeSection?.groups?.find(group => group.id === activeGroup?.id)
+  const inGroup = activeSection !== undefined && activeGroupSpec !== undefined
   React.useEffect(() => {
     if (activeGroup !== null && activeGroupSpec === undefined) {
       setActiveGroup(null)
@@ -663,7 +677,10 @@ export function Settings({
    *  target page's last focus. */
   const switchPage = (id: string): void => {
     if (id === activePage?.id) return
-    if (activePage !== undefined) pageFocusRef.current.set(activePage.id, effFocus)
+    // A group subpage's focus index is local to that subpage; recording it as
+    // the page's root focus would land on an unrelated row when the page comes
+    // back. The root focus was captured when the group row was activated.
+    if (activePage !== undefined && !inGroup) pageFocusRef.current.set(activePage.id, effFocus)
     setActivePageId(id)
     setActiveGroup(null)
     setMode('list')
@@ -766,6 +783,9 @@ export function Settings({
    */
   const activateEntry = (entry: FocusEntry): void => {
     if (entry.kind === 'group') {
+      // Remember the page root focus before the subpage resets it, so a page
+      // switch from inside the group returns to this row.
+      if (activePage !== undefined) pageFocusRef.current.set(activePage.id, effFocus)
       setActiveGroup({ ns: entry.ns, id: entry.group.id })
       setFocusIndex(0)
       setWindowStart(0)
@@ -1231,15 +1251,13 @@ export function Settings({
     return start >= windowStart && start + entry.lines <= windowStart + viewport
   })
 
-  const inGroup = activeSection !== undefined && activeGroupSpec !== undefined
   const navigationHint = inGroup
     ? t('settings-hint-group')
     : pages.length > 1 ? t('settings-hint-list-pages') : t('settings-hint-list')
   // The bottom help bar: the focused field's hint on the left (truncated
   // first), the navigation keys pinned to the right — a truncated hint still
   // reads, a truncated shortcut hint hides the keys nobody can guess.
-  const tabTitles = showTabs ? pages.map(settingsPageTitle) : []
-  const tabLabels = showTabs ? pageTabLabels(tabTitles, columns) : []
+  const tabs = showTabs ? settingsTabsView(pages, columns, activePageIndex) : undefined
   const focusedHint = focused !== undefined && focused.kind !== 'group' && focused.field.hint !== undefined
     ? pick(focused.field.hint, focused.field.hintDescriptions)
     : undefined
@@ -1281,16 +1299,21 @@ export function Settings({
         {host === undefined && <Text color="warning">{`${t('settings-unavailable')} `}</Text>}
         {focusable.length > 0 && <Text dimColor>{`${effFocus + 1}/${focusable.length}`}</Text>}
       </Box>
-      {showTabs && (
+      {tabs !== undefined && (
         <Box height={1} flexShrink={0} overflow="hidden">
-          {pages.map((page, index) => (
-            <PageTab
-              key={page.id === DEFAULT_PAGE_ID ? '__general' : page.id}
-              label={tabLabels[index] ?? tabTitles[index] ?? page.id}
-              active={index === activePageIndex}
-              {...(mode === 'edit' ? {} : { onSelect: () => switchPage(page.id) })}
-            />
-          ))}
+          {tabs.indexes.map((index, cell) => {
+            const page = pages[index]
+            if (page === undefined) return null
+            return (
+              <PageTab
+                key={page.id === DEFAULT_PAGE_ID ? '__general' : page.id}
+                label={tabs.labels[cell] ?? settingsPageTitle(page)}
+                active={index === activePageIndex}
+                {...(mode === 'edit' ? {} : { onSelect: () => switchPage(page.id) })}
+              />
+            )
+          })}
+          {tabs.compact && <Text dimColor>{` ${activePageIndex + 1}/${pages.length}`}</Text>}
         </Box>
       )}
       {/* Literal ink-box host for the wheel — every Box flavor is a compiled

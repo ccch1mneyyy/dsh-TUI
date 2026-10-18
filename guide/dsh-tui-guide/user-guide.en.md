@@ -233,7 +233,7 @@ Lists only inputs from the current project (the session's working directory), pl
 
 **/settings panel**
 `↑/↓` move · `Enter` expand/toggle/edit · `←/→` cycle a field that has options (booleans still only respond to `Enter`) ·
-`Tab` / `Shift+Tab` or a click on the tab strip switch **pages** (General plus the pages a plugin declares; hidden when only one page exists) ·
+`Tab` / `Shift+Tab`, or a click on the tab strip in fullscreen, switch **pages** (General plus the pages a plugin declares; hidden when only one page exists) ·
 changes save automatically, `Esc` exits
 
 **/btw panel**

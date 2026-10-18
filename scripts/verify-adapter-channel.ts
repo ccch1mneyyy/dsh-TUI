@@ -200,6 +200,19 @@ assert.equal(transcript.rows().length, 2)
 assert.equal(transcript.traceEvents().length, 0)
 const plugins = createChannelPlugins(channel as never, CHANNEL_SPLIT_TOKEN)
 assert.equal(plugins.settingsSections().length, 0)
+// The plugin-facing projection keeps the section's page metadata: consumers
+// render their own settings UI from this shape and must see the tab grouping.
+const pagedPlugins = createChannelPlugins({
+  ...makeFakeChannel(),
+  settingsSections: () => [{
+    ns: 'x', title: 'X',
+    page: { id: 'my-page', title: 'My page', descriptions: { zh: '我的页' } },
+    fields: [{ path: ['k'], label: 'K', kind: 'text' }],
+  }],
+} as never, CHANNEL_SPLIT_TOKEN)
+assert.deepEqual(pagedPlugins.settingsSections()[0]?.page,
+  { id: 'my-page', title: 'My page', descriptions: { zh: '我的页' } },
+  'settings sections keep their page through the plugin projection')
 assert.equal(plugins.runExternalCommand('x', 'y') instanceof Promise, true)
 
 // Channel slice/feature declarations must cover every HostChannelPort method.

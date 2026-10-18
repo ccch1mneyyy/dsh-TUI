@@ -94,7 +94,7 @@ DSH rc.2 下还可在 `/settings` 选择 DeepSeek 搜索 / 抓取 API、修改�
 官方 Flash 模型显示 `1017` 发布标记，模型 ID 仍为 `deepseek-flash`。
 
 `/settings` 按页签组织：TUI 自己的设置位于「常规」页，插件声明的页单独成签
-（`Tab` / `Shift+Tab` 或点击页签切换；只有一页时不显示页签）。
+（`Tab` / `Shift+Tab` 或全屏下点击页签切换；只有一页时不显示页签）。
 
 DSH 0.1.7 的 `/settings` 使用 TUI 实际的 Loader 行 ID，也支持自定义 ID。
 profile 依赖须配套，包含 `@deepseek-ai/schemastery` 3.18.3 或更新版本；

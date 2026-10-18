@@ -9,9 +9,12 @@
  *   clicked tab;
  * - the header count, the cards and the focus order belong to the active
  *   page only, and that page's focus is restored when you come back;
- * - Tab from a group subpage returns to a page root, not the subpage;
+ * - Tab from a group subpage returns to a page root, not the subpage, and the
+ *   page keeps the group row it was entered from as its root focus;
  * - a single-page composition keeps the pre-tabs layout (no extra chrome row,
- *   no Tab hint) — the strip only exists once a page is declared.
+ *   no Tab hint) — the strip only exists once a page is declared;
+ * - a terminal too narrow for every label collapses the strip to the active
+ *   tab plus its position, so the page you are on never disappears.
  *
  * Run: node --import tsx/esm scripts/verify-settings-pages.tsx
  */
@@ -101,15 +104,15 @@ const otherSection = {
 class FakeStderr extends Writable { isTTY = true; _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() } }
 class FakeStdin extends PassThrough { isTTY = true; setRawMode() { return this } ref() { return this } unref() { return this } }
 
-function makeTerm(): InstanceType<typeof XTerm> {
-  return new XTerm({ cols: COLS, rows: ROWS, scrollback: 50, allowProposedApi: true })
+function makeTerm(cols: number): InstanceType<typeof XTerm> {
+  return new XTerm({ cols, rows: ROWS, scrollback: 50, allowProposedApi: true })
 }
 class FakeStdout extends Writable {
-  columns = COLS
+  columns: number
   rows = ROWS
   isTTY = true
   term: InstanceType<typeof XTerm>
-  constructor(term: InstanceType<typeof XTerm>) { super(); this.term = term }
+  constructor(term: InstanceType<typeof XTerm>, cols: number) { super(); this.term = term; this.columns = cols }
   _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { this.term.write(String(chunk), cb) }
 }
 
@@ -123,8 +126,8 @@ function assert(condition: boolean, label: string, dump?: string): void {
   }
 }
 
-async function mount(sections: readonly unknown[]) {
-  const term = makeTerm()
+async function mount(sections: readonly unknown[], cols = COLS) {
+  const term = makeTerm(cols)
   const stdin = new FakeStdin()
   const instance = await render(
     <AlternateScreen>
@@ -133,7 +136,7 @@ async function mount(sections: readonly unknown[]) {
         onClose={() => {}}
       />
     </AlternateScreen>,
-    { stdout: new FakeStdout(term), stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
+    { stdout: new FakeStdout(term, cols), stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
   )
   const lines = (): string[] => viewportLines(term, ROWS)
   /** The whole buffer, scrollback included — inline mode can scroll the
@@ -238,6 +241,9 @@ async function mount(sections: readonly unknown[]) {
     ui.stdin.write('\t')
     assert(await settled(() => ui.screen().includes('TUI settings') && !ui.screen().includes('Deep field')),
       'Tab from a group subpage lands on a page root with the group closed', ui.screen())
+    ui.stdin.write('\x1b[Z')
+    assert(await settled(() => ui.lineOf('Deep group').includes('❯')),
+      'returning to the page restores the group row, not a subpage index', ui.screen())
   } finally {
     await ui.unmount()
   }
@@ -268,6 +274,26 @@ async function mount(sections: readonly unknown[]) {
     assert(await settled(() => ui.screen().includes('Web search') && ui.screen().includes('Search API')),
       'a single declared page renders all of its sections', ui.screen())
     assert(!ui.screen().includes('Tab'), 'a single declared page keeps the one-page help bar', ui.screen())
+  } finally {
+    await ui.unmount()
+  }
+}
+
+// ── A strip narrower than three cells per page keeps the active tab ─────────
+{
+  const pages = ['A', 'B', 'C', 'D', 'E'].map((title, index) => ({
+    ns: `page-${index}`,
+    title: `Page ${title}`,
+    page: { id: `p${index}`, title },
+    fields: [{ path: ['v'], label: `V ${index}`, kind: 'boolean' as const }],
+  }))
+  const ui = await mount(pages, 14)
+  try {
+    assert(await settled(() => ui.screen().includes('1/5')),
+      'a strip too narrow for every label collapses to the active tab plus its position', ui.screen())
+    ui.stdin.write('\t')
+    assert(await settled(() => ui.screen().includes('2/5')),
+      'the compact strip follows Tab to the next page', ui.screen())
   } finally {
     await ui.unmount()
   }

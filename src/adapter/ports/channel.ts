@@ -21,6 +21,7 @@
  */
 
 import type { ChannelUi } from './channel-ui.js'
+import type { LocalizedDescriptions } from './channel-catalog.js'
 import type { ComposerSubmission } from './channel-view.js'
 import type { HostDisposer } from './owner.js'
 
@@ -133,6 +134,12 @@ export interface HostChannelStatePort {
 export interface HostChannelSettingsSectionProjection {
   readonly ns: string
   readonly title: string
+  /** Top-level page the section renders on; absent = the default general one. */
+  readonly page?: {
+    readonly id: string
+    readonly title: string
+    readonly descriptions?: LocalizedDescriptions
+  }
   readonly groups?: readonly { readonly id: string; readonly title: string }[]
   readonly fields: readonly Readonly<Record<string, unknown>>[]
 }

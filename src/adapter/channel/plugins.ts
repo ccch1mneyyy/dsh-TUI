@@ -23,6 +23,13 @@ function projectSettingsSection(section: TuiSettingsSection): HostChannelSetting
   return Object.freeze({
     ns: section.ns,
     title: section.title,
+    ...(section.page === undefined ? {} : {
+      page: Object.freeze({
+        id: section.page.id,
+        title: section.page.title,
+        ...(section.page.descriptions === undefined ? {} : { descriptions: Object.freeze({ ...section.page.descriptions }) }),
+      }),
+    }),
     ...(section.groups === undefined ? {} : {
       groups: Object.freeze(section.groups.map(group => Object.freeze({ id: group.id, title: group.title }))),
     }),
