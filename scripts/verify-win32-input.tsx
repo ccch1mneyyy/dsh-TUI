@@ -29,7 +29,7 @@ import {
   type KeyParseState,
   type ParsedInput,
 } from '../src/ink/parse-keypress.js'
-import { supportsWin32InputMode } from '../src/ink/terminal.js'
+import { isEmbeddedTerminalHost, supportsWin32InputMode } from '../src/ink/terminal.js'
 import { default as App } from '../src/ink/components/App.js'
 import { InputEvent } from '../src/ink/events/input-event.js'
 
@@ -99,24 +99,76 @@ const CSI = '\x1b['
 
 checkBoolean(
   'native Windows terminals enable win32-input-mode',
-  supportsWin32InputMode('win32', undefined, undefined),
+  supportsWin32InputMode('win32', undefined, undefined, false),
   true,
 )
 checkBoolean(
   'Termy-style xterm.js hosts keep standard VT input on Windows',
-  supportsWin32InputMode('win32', 'vscode', '6.0.0'),
+  supportsWin32InputMode('win32', 'vscode', '6.0.0', false),
   false,
 )
 checkBoolean(
   'native VS Code keeps win32-input-mode on Windows',
-  supportsWin32InputMode('win32', 'vscode', '1.103.0'),
+  supportsWin32InputMode('win32', 'vscode', '1.103.0', false),
   true,
 )
 checkBoolean(
   'non-Windows terminals never enable win32-input-mode',
-  supportsWin32InputMode('linux', undefined, undefined),
+  supportsWin32InputMode('linux', undefined, undefined, false),
   false,
 )
+
+// A nested terminal emulator (Neovim/Vim `:terminal`) forwards classic VT and
+// implements none of DECSET 9001 (#1624). ConPTY still honours the request and
+// reframes those bytes one character at a time, so `ESC [ A` arrives as a
+// standalone Escape plus the literal text `[A`. Detection is by host marker,
+// never by DECRQM: that probe is answered by ConPTY — the layer that *does*
+// implement 9001 — not by the host that lacks it.
+{
+  // The defaulted arguments read ambient markers; normalize the ones this block
+  // reasons about so the assertions describe the host under test, not whoever
+  // launched the script (a dev running it inside Neovim must not flip them).
+  const saved: Record<string, string | undefined> = {
+    NVIM: process.env.NVIM,
+    VIM_TERMINAL: process.env.VIM_TERMINAL,
+    TERM_PROGRAM: process.env.TERM_PROGRAM,
+    TERM_PROGRAM_VERSION: process.env.TERM_PROGRAM_VERSION,
+    DSH_TUI_DISABLE_WIN32_INPUT: process.env.DSH_TUI_DISABLE_WIN32_INPUT,
+  }
+  try {
+    delete process.env.NVIM
+    delete process.env.VIM_TERMINAL
+    delete process.env.TERM_PROGRAM
+    delete process.env.TERM_PROGRAM_VERSION
+    delete process.env.DSH_TUI_DISABLE_WIN32_INPUT
+
+    checkBoolean('a bare console host is not a nested terminal',
+      isEmbeddedTerminalHost(), false)
+    checkBoolean('a bare console host keeps win32-input-mode through the defaults',
+      supportsWin32InputMode('win32'), true)
+
+    process.env.NVIM = '\\\\.\\pipe\\nvim.22800.0'
+    checkBoolean('$NVIM marks a nested Neovim buffer', isEmbeddedTerminalHost(), true)
+    checkBoolean('Neovim `:terminal` keeps classic input on Windows',
+      supportsWin32InputMode('win32'), false)
+
+    delete process.env.NVIM
+    process.env.VIM_TERMINAL = 'term://~//1:dsh-tui'
+    checkBoolean('$VIM_TERMINAL marks a nested Vim buffer', isEmbeddedTerminalHost(), true)
+    checkBoolean('Vim `:terminal` keeps classic input on Windows',
+      supportsWin32InputMode('win32'), false)
+
+    delete process.env.VIM_TERMINAL
+    process.env.DSH_TUI_DISABLE_WIN32_INPUT = '1'
+    checkBoolean('DSH_TUI_DISABLE_WIN32_INPUT forces the mode off',
+      supportsWin32InputMode('win32'), false)
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
 
 // A win32 record translated to a named/special key keeps the raw record as
 // its sequence; a translated text char uses the char itself.

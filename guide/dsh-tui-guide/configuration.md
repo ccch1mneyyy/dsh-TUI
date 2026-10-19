@@ -357,6 +357,7 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 | `DSH_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`/`pink-day`/`pink-night`/`pink-ansi`）、静态主题或已注册的插件主题，优先于持久化选择 |
 | `DSH_TUI_DISABLE_MOUSE` | 在 fullscreen 模式临时关闭鼠标处理 |
 | `DSH_TUI_DISABLE_TERMINAL_IMAGES` | 设为 `1` 时强制关闭 Kitty/Sixel 探测、预览读取/解码与终端图片渲染，优先于 config 和 /settings；保留文字信息 |
+| `DSH_TUI_DISABLE_WIN32_INPUT` | 设为 `1` 时不在原生 Windows 上请求 win32-input-mode（DECSET 9001），改回 kitty/modifyOtherKeys 与经典 VT 输入。内嵌终端宿主（Neovim/Vim 的 `:terminal` 等）会被自动识别并跳过 9001；此变量是未识别宿主的手动逃生门——那里按上方向键不会再插入 `[A`，但 Shift+Enter 也无法区分，换行用 `Ctrl+J` |
 | `DSH_TUI_IMAGE_PROTOCOL` | `auto`（默认）、`kitty`、`sixel` 或 `none`；覆盖协议选择，但不绕过图片预览偏好、禁用开关、非全屏、无障碍和多路复用器限制 |
 | `DSH_TUI_RESUME_SESSION` | 启动时恢复指定会话，通常由启动器设置 |
 | `DSH_TUI_RESUME_BACKEND` | `DSH_TUI_RESUME_SESSION` 的来源后端，只在启动器**派生**恢复目标时（裸 `--resume` 读该后端的上次会话、安全模式重试按最后运行记录）设置；boot 若落在别的后端（未装的 id 回落 `dsh`、没给 `DSH_TUI_BACKEND` 时跟随记住的内核），该目标一律**明确报错并非零退出**——不跨后端恢复、不静默冷启动、不新建会话（安全模式重试是唯一例外，降级为告警 + 冷启动）。用户显式给出的 id 不带此标记、原样透传 |

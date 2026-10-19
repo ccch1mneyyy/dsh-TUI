@@ -2,6 +2,7 @@ import coerce from 'semver/functions/coerce.js'
 import type { Writable } from 'stream'
 import { appendFileSync } from 'node:fs'
 import { env } from '../utils/env.js'
+import { isEnvTruthy } from '../utils/envUtils.js'
 import { gte } from '../utils/semver.js'
 import { getClearTerminalSequence } from './clearTerminal.js'
 import type { Diff } from './frame.js'
@@ -296,6 +297,26 @@ export function supportsExtendedKeys(): boolean {
 }
 
 /**
+ * True when this process runs inside another terminal emulator's own buffer
+ * rather than directly in a console host — Neovim's `:terminal` (which sets
+ * `$NVIM` in every child job) or Vim's (`$VIM_TERMINAL`).
+ *
+ * Those hosts are libvterm-based VT emulators: they ignore DECSET 9001 and keep
+ * forwarding classic key sequences (`ESC [ A` for Up, `ESC O P` for F1). The
+ * ConPTY beneath them still honours the request, so it re-frames those classic
+ * bytes as one record per character; the app then sees a standalone Escape
+ * followed by literal `[A` / `OP` (issue #1624).
+ *
+ * Kept as a marker check rather than a capability probe on purpose: a DECRQM
+ * (`CSI ? 9001 $ p`) is answered by ConPTY, which does implement 9001 — it says
+ * "supported" exactly where enabling it is harmful.
+ * @returns true inside a nested terminal buffer that only forwards classic VT.
+ */
+export function isEmbeddedTerminalHost(): boolean {
+  return process.env.NVIM !== undefined || process.env.VIM_TERMINAL !== undefined
+}
+
+/**
  * True when win32-input-mode (DECSET 9001, `CSI ? 9001 h`) should drive
  * keyboard input. This is a ConPTY feature — both Windows Terminal and
  * classic conhost switch into it when the app emits the sequence. In this
@@ -312,14 +333,26 @@ export function supportsExtendedKeys(): boolean {
  * 9001 can reduce arrows/mouse sequences to their trailing A-D/M bytes and
  * interfere with IME commits (issue #215). Native VS Code reports its own
  * 1.x application version and retains win32-input-mode support.
+ *
+ * Nested terminal emulators are the same class of failure from the other side:
+ * they implement no part of 9001 and forward classic VT, which ConPTY then
+ * reframes character by character (see `isEmbeddedTerminalHost`, issue #1624).
+ * Nothing is given up by staying on classic input there — such a host cannot
+ * report a modifier it never had, so Shift+Enter is unreachable either way.
+ *
+ * `DSH_TUI_DISABLE_WIN32_INPUT=1` forces the mode off for hosts this gate
+ * cannot enumerate.
  * @returns true on native Windows (never in WSL — platform is linux there).
  */
 export function supportsWin32InputMode(
   platform: NodeJS.Platform = process.platform,
   termProgram: string | undefined = process.env.TERM_PROGRAM,
   termProgramVersion: string | undefined = process.env.TERM_PROGRAM_VERSION,
+  embeddedHost: boolean = isEmbeddedTerminalHost(),
 ): boolean {
   if (platform !== 'win32') return false
+  if (embeddedHost) return false
+  if (isEnvTruthy(process.env.DSH_TUI_DISABLE_WIN32_INPUT)) return false
 
   const version = coerce(termProgramVersion)
   const isEmbeddedXtermJs =
