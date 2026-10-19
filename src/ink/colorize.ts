@@ -9,15 +9,23 @@ import type { Color, TextStyles } from './styles.js'
  * through to the -256color regex → level 2. At level 2, chalk.rgb()
  * downgrades to the nearest 6×6×6 cube color: rgb(215,119,87) → idx 174 rgb(215,135,135) — washed-out salmon.
  *
+ * Windows Terminal has had truecolor since 2019 and sets WT_SESSION instead
+ * (forwarded into WSL), but neither COLORTERM nor TERM_PROGRAM; the same 256
+ * round-trip there collapses every dark diff/card tint onto one grey.
+ *
  * Gated on level === 2 (not < 3) to respect NO_COLOR / FORCE_COLOR=0 —
  * those yield level 0 and are an explicit "no colors" request. Desktop VS
  * Code sets COLORTERM=truecolor itself, so this is a no-op there (already 3).
+ * An explicit FORCE_COLOR=2 is a caller asking for 256 colors, so WT_SESSION
+ * does not override it.
  *
  * Must run BEFORE the tmux clamp — if tmux is running inside a VS Code
  * terminal, tmux's passthrough limitation wins and we want level 2.
  */
 function boostChalkLevelForXtermJs(): boolean {
-  if (process.env.TERM_PROGRAM === 'vscode' && chalk.level === 2) {
+  const truecolorHost = process.env.TERM_PROGRAM === 'vscode'
+    || (Boolean(process.env.WT_SESSION) && process.env.FORCE_COLOR !== '2')
+  if (truecolorHost && chalk.level === 2) {
     chalk.level = 3
     return true
   }
