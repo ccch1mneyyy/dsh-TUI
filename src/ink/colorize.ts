@@ -13,19 +13,20 @@ import type { Color, TextStyles } from './styles.js'
  * (forwarded into WSL), but neither COLORTERM nor TERM_PROGRAM; the same 256
  * round-trip there collapses every dark diff/card tint onto one grey.
  *
- * Gated on level === 2 (not < 3) to respect NO_COLOR / FORCE_COLOR=0 —
- * those yield level 0 and are an explicit "no colors" request. Desktop VS
- * Code sets COLORTERM=truecolor itself, so this is a no-op there (already 3).
- * An explicit FORCE_COLOR=2 is a caller asking for 256 colors, so WT_SESSION
- * does not override it.
+ * Gated on level === 2 (not < 3) to preserve FORCE_COLOR=0 (level 0) and
+ * already-detected truecolor. NO_COLOR keeps chalk's existing detection
+ * semantics; this module does not add a separate NO_COLOR policy. Desktop
+ * VS Code sets COLORTERM=truecolor itself, so this is a no-op there (already 3).
+ * An explicit FORCE_COLOR=2 is a caller asking for 256 colors, so neither
+ * VS Code nor Windows Terminal overrides it.
  *
- * Must run BEFORE the tmux clamp — if tmux is running inside a VS Code
- * terminal, tmux's passthrough limitation wins and we want level 2.
+ * Must run BEFORE the tmux clamp — inside either truecolor host, tmux's
+ * passthrough limitation wins and we want level 2.
  */
 function boostChalkLevelForXtermJs(): boolean {
   const truecolorHost = process.env.TERM_PROGRAM === 'vscode'
-    || (Boolean(process.env.WT_SESSION) && process.env.FORCE_COLOR !== '2')
-  if (truecolorHost && chalk.level === 2) {
+    || Boolean(process.env.WT_SESSION)
+  if (truecolorHost && process.env.FORCE_COLOR !== '2' && chalk.level === 2) {
     chalk.level = 3
     return true
   }
@@ -64,8 +65,8 @@ function clampChalkLevelForTmux(): boolean {
 }
 // Computed once at module load — terminal/tmux environment doesn't change mid-session.
 // Order matters: boost first so the tmux clamp can re-clamp if tmux is running
-// inside a VS Code terminal. Exported for debugging — tree-shaken if unused.
-/** Whether chalk's color level was boosted to 3 for xterm.js terminals. */
+// inside either truecolor host. Exported for debugging — tree-shaken if unused.
+/** Whether chalk's color level was boosted to 3 for VS Code or Windows Terminal. */
 export const CHALK_BOOSTED_FOR_XTERMJS = boostChalkLevelForXtermJs()
 /** Whether chalk's color level was clamped to 2 for tmux passthrough. */
 export const CHALK_CLAMPED_FOR_TMUX = clampChalkLevelForTmux()
