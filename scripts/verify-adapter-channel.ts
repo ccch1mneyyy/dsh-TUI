@@ -73,6 +73,7 @@ function makeFakeChannel() {
     tpsSamples: [],
     activityFrames: 'claude',
     diffLayout: 'auto',
+    diffStyle: 'default',
     thinkingFold: 'preview',
     toolBackground: 'none',
     scrollGutter: 'timeline',

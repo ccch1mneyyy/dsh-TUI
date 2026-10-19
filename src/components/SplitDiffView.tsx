@@ -474,14 +474,21 @@ function gutterText(
   lineNo: number | undefined,
   hasContent: boolean,
   lineNoWidth: number,
+  bars: boolean,
 ): string {
   // Status gutter instead of line numbers: ToolFileDiff has no file
   // offsets, and an invented number misleads (issue #250, P2-3).
-  const marker = kind === 'context' ? ' ' : tone === 'old' ? '−' : '+'
+  const marker = kind === 'context' ? ' ' : bars ? '▌' : tone === 'old' ? '−' : '+'
   const numbered = lineNoWidth > 0
     ? `${(lineNo === undefined || !hasContent ? '' : String(lineNo)).padStart(lineNoWidth)} ${marker}`
     : marker
   return tone === 'new' ? ` ${numbered}` : numbered
+}
+
+/** Gutter of a wrapped row's continuation under `bars`: the marker column keeps
+ *  its bar so one logical line still reads as one stripe. */
+function barContinuation(prefix: string): string {
+  return `${' '.repeat(Math.max(0, stringWidth(prefix) - 2))}▌ `
 }
 
 /** One pane of one terminal row. `prefix` is the gutter already padded to its
@@ -495,6 +502,7 @@ function PaneLine({
   width,
   tone,
   toolBackground,
+  bars,
 }: {
   readonly segments: readonly Segment[] | undefined
   readonly prefix: string
@@ -502,24 +510,27 @@ function PaneLine({
   readonly width: number
   readonly tone: 'old' | 'new'
   readonly toolBackground: ToolBackground
+  /** `bars` style: `▌` gutter and the full-strength diff tint. */
+  readonly bars: boolean
 }): React.ReactNode {
   const ordinaryBackground = toolBackground === 'subtle'
     ? 'toolCardBackgroundDim'
     : toolBackground === 'strong'
       ? 'toolCardBackground'
       : undefined
-  // Additions/removals keep their semantic tint; unchanged and empty panes
-  // inherit the configured ordinary tool-card surface.
+  // Additions/removals keep their semantic tint (full strength under `bars`);
+  // unchanged and empty panes inherit the configured ordinary surface.
   const backgroundColor =
     kind === 'context'
       ? ordinaryBackground
       : tone === 'old'
-        ? 'diffRemovedDimmed'
-        : 'diffAddedDimmed'
+        ? bars ? 'diffRemoved' : 'diffRemovedDimmed'
+        : bars ? 'diffAdded' : 'diffAddedDimmed'
   const wordColor = tone === 'old' ? 'diffRemovedWord' : 'diffAddedWord'
+  const barPrefix = bars && kind !== 'context'
   return (
     <Box width={width} flexShrink={0} backgroundColor={backgroundColor}>
-      <Text dimColor backgroundColor={backgroundColor}>{prefix}</Text>
+      <Text color={barPrefix ? wordColor : undefined} dimColor={!barPrefix} backgroundColor={backgroundColor}>{prefix}</Text>
       {segments === undefined ? (
         <Text backgroundColor={backgroundColor}> </Text>
       ) : (
@@ -550,6 +561,7 @@ export function SplitDiffView({
   maxRows,
   verbose,
   toolBackground = 'none',
+  bars = false,
   reveal,
 }: {
   readonly diffs: readonly ToolFileDiff[]
@@ -559,6 +571,9 @@ export function SplitDiffView({
   readonly maxRows: number
   readonly verbose: boolean
   readonly toolBackground?: ToolBackground
+  /** `bars` look: a `▌` gutter and the full-strength diff tint per row. The
+   *  painted rows, wrapping and window budget are the same either way. */
+  readonly bars?: boolean
   /**
    * Smooth-streaming participation (the card owning this view computes
    * eligibility): when present, the capped row list reveals line-by-line at
@@ -680,8 +695,8 @@ export function SplitDiffView({
     // paints the "context" tone there — and, being empty, no line number.
     const leftKind = row.kind === 'add' ? 'context' : row.kind
     const rightKind = row.kind === 'del' ? 'context' : row.kind
-    const leftPrefix = `${gutterText(leftKind, 'old', row.oldNo, oldSegments !== undefined, lineNoWidth)} `
-    const rightPrefix = `${gutterText(rightKind, 'new', row.newNo, newSegments !== undefined, lineNoWidth)} `
+    const leftPrefix = `${gutterText(leftKind, 'old', row.oldNo, oldSegments !== undefined, lineNoWidth, bars)} `
+    const rightPrefix = `${gutterText(rightKind, 'new', row.newNo, newSegments !== undefined, lineNoWidth, bars)} `
     const leftBudget = paneWidth - stringWidth(leftPrefix)
     const rightBudget = paneWidth - stringWidth(rightPrefix)
     if (!verbose) {
@@ -731,13 +746,17 @@ export function SplitDiffView({
         }
         const leftPad = ' '.repeat(stringWidth(plan.leftPrefix))
         const rightPad = ' '.repeat(stringWidth(plan.rightPrefix))
+        // Wrapped rows repeat the gutter width; under `bars` a changed row
+        // keeps its bar on every visual row so the block stays one stripe.
+        const leftCont = bars && plan.leftKind !== 'context' ? barContinuation(plan.leftPrefix) : leftPad
+        const rightCont = bars && plan.rightKind !== 'context' ? barContinuation(plan.rightPrefix) : rightPad
         return Array.from({ length: plan.height }, (_, visual) => (
           <Box key={`${index}-${visual}`} flexDirection="row">
-            <PaneLine segments={plan.leftRows[visual]} prefix={visual === 0 ? plan.leftPrefix : leftPad} kind={plan.leftKind} tone="old" width={paneWidth} toolBackground={toolBackground} />
+            <PaneLine segments={plan.leftRows[visual]} prefix={visual === 0 ? plan.leftPrefix : leftCont} kind={plan.leftKind} tone="old" width={paneWidth} toolBackground={toolBackground} bars={bars} />
             <Box width={1} flexShrink={0}>
               <Text dimColor>│</Text>
             </Box>
-            <PaneLine segments={plan.rightRows[visual]} prefix={visual === 0 ? plan.rightPrefix : rightPad} kind={plan.rightKind} tone="new" width={paneWidth} toolBackground={toolBackground} />
+            <PaneLine segments={plan.rightRows[visual]} prefix={visual === 0 ? plan.rightPrefix : rightCont} kind={plan.rightKind} tone="new" width={paneWidth} toolBackground={toolBackground} bars={bars} />
           </Box>
         ))
       })}

@@ -578,6 +578,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | splashFont | 开屏大字字体：按天轮换（默认，随本地日期换款）/ 加粗 / 方角实心 / 半立体 / 宽体 / 点阵灰度 / 镂空模板 / 细笔 / 方板。选某一款即固定那一款，选回「按天轮换」恢复。立即生效 |
 | whaleGirl | 女仆娘立绘（默认关）：DeepSeek 品牌下，设 `companion.skin=whale` 并开启本项；`deepy` 和 `whaleGirl` 皮肤会取代立绘。Claude 使用自己的图案，Codex 使用自己的真图或女仆娘字符画回退；这两个品牌的开屏图案不受宠物皮肤和女仆娘开关影响。优先 Kitty/Sixel 真图，不支持时回落字符画。见[优先级表](configuration.md) |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified；双栏（auto 在 ≥110 列，或显式 split）折叠时仍一行一条，超宽行会被截断，卡片末尾给一行 `… 已折叠 N 字符（ctrl+o 展开）` 提示；展开（`Ctrl+O` 或点击卡片）后超宽行按各自栏宽换行，两栏仍逐行对齐（同一改动行左右同起点） |
+| diffStyle | Edit/Write diff 样式：default（`−`/`+` 行）/ bars（`▌` 竖条 + 整行底色）。只换绘制，不改折叠/换行/行数上限；立即生效 |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
 | btw.contextBudget | `/btw` 追问携带的最近问答总字符预算（默认 24000，范围 1000-200000）；超出时从最旧的整组开始裁剪。立即生效 |
 | btw.contextTurns | `/btw` 追问显式携带的最近完成问答组数（默认 4，范围 1-8）；窗口外的问答不进入请求，线程与面板仍保留全文。立即生效 |

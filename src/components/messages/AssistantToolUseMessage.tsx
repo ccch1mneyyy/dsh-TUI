@@ -50,6 +50,8 @@ type Props = {
   footnote?: string
   /** Diff presentation preference; `auto` picks by terminal width. */
   diffLayout?: 'auto' | 'split' | 'unified'
+  /** Diff look: `default` `−`/`+` rows, or `bars` (`▌` gutter + row tint). */
+  diffStyle?: 'default' | 'bars'
   /** Background treatment for the ordinary, unselected tool card surface. */
   toolBackground?: ToolBackground
   /**
@@ -268,6 +270,14 @@ const add = (text: string): BodyLine => ({ text, tone: 'add' })
 const del = (text: string): BodyLine => ({ text, tone: 'del' })
 const dim = (text: string): BodyLine => ({ text, tone: 'dim' })
 const plain = (text: string): BodyLine => ({ text, tone: 'plain' })
+
+/** `bars` look: the full-strength tint of one body row (`undefined` = the style
+ *  is off, or the row is not a changed line). Only the paint changes — the
+ *  line's wrapping, cap and reveal stay exactly as `default`. */
+function barsTint(tone: BodyTone, bars: boolean): 'diffAdded' | 'diffRemoved' | undefined {
+  if (!bars) return undefined
+  return tone === 'add' ? 'diffAdded' : tone === 'del' ? 'diffRemoved' : undefined
+}
 
 /** Tool-name color by category (mist-blue accents): read/search tools keep
  *  the brand blue, file-mutating tools get the warm gold accent, exec /
@@ -698,6 +708,7 @@ export function AssistantToolUseMessage({
   onClick,
   footnote,
   diffLayout = 'auto',
+  diffStyle = 'default',
   toolBackground = 'none',
   onOpenFile,
   foldTerminalCommand = false,
@@ -791,6 +802,9 @@ export function AssistantToolUseMessage({
     - (!isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0))
   const useSplitDiff = !isError && view?.card === 'diff' &&
     (diffLayout === 'split' || (diffLayout !== 'unified' && columns >= SPLIT_DIFF_MIN_COLS))
+  // `bars` restyles whichever diff layout is active; it never picks one, so the
+  // layout preference and the width heuristic above stay in charge.
+  const useBarsDiff = diffStyle === 'bars' && !isError && view?.card === 'diff'
   // Live output of the running call: the newest lines of the bounded tail,
   // sanitized and cut to the body width in cells (liveOutputLines.ts).
   // Memoized on the tail itself, so the 1 s elapsed tick re-renders without
@@ -987,12 +1001,13 @@ export function AssistantToolUseMessage({
               maxRows={DIFF_BODY_MAX_LINES}
               verbose={verbose}
               toolBackground={ordinaryToolBackground}
+              bars={useBarsDiff}
               reveal={revealable ? { key: `${revealKey}:split` } : undefined}
             />
           </Box>
         ) : (
           shownLines.map((line, index) => (
-            <Box key={index} flexDirection="row">
+            <Box key={index} flexDirection="row" backgroundColor={barsTint(line.tone, useBarsDiff)}>
               <Box width={3} flexShrink={0}>
                 <Text
                   color={
@@ -1006,7 +1021,7 @@ export function AssistantToolUseMessage({
                   }
                   dimColor={line.tone !== 'add' && line.tone !== 'del' && line.tone !== 'path'}
                 >
-                  {index === 0 ? GUTTER_FIRST : GUTTER_REST}
+                  {barsTint(line.tone, useBarsDiff) === undefined ? (index === 0 ? GUTTER_FIRST : GUTTER_REST) : '▌'}
                 </Text>
               </Box>
               <Box flexGrow={1}>
@@ -1039,6 +1054,7 @@ export function AssistantToolUseMessage({
                     }
                     dimColor={(line.tone === 'dim' && !(line.revealOnHover === true && hovered)) || line.tone === 'live'}
                     wrap={line.tone === 'live' ? 'truncate-end' : 'wrap'}
+                    backgroundColor={barsTint(line.tone, useBarsDiff)}
                   >
                     {line.tone === 'plain' && syntaxLanguage !== undefined ? (
                       <SyntaxText text={line.text} sourceText={bodySource} lineIndex={index} language={syntaxLanguage} />

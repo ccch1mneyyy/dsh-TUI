@@ -11,19 +11,25 @@
  * 5. expanded (Ctrl+O / verbose) long lines wrap inside each pane instead of
  *    being clipped, the collapsed card reports how many characters it
  *    clipped, and the expanded body stays inside its 400-visual-row window
+ * 6. `diffStyle: bars` swaps the gutter marker for `▌` and the row tint for its
+ *    full strength — in both layouts, on every visual row of a wrapped line,
+ *    and without changing what the card makes reachable
  *
  * Exits non-zero on the first failed assertion (CI convention).
  *
  * Each covered fix has a one-line negative control rather than an in-suite
  * switch (restore the line with `git checkout` afterwards); every revert turns
- * only its own cases red, out of 56 assertions:
+ * only its own cases red, out of 67 assertions:
  * - dropping the `<= budget` guard in clippedGraphemes → 3 FAILED (the 54- and
  *   55-cell counts and the NFD cluster count);
  * - `take = height` in its paint loop → 2 FAILED (the giant single line, which
  *   then paints all 742 visual rows);
  * - segmenting each run on its own instead of the joined line → 3 FAILED (the
  *   cluster cases, including the folded count reading code points);
- * - the window notice back on `tool-card-window-shown` → 2 FAILED (its unit).
+ * - the window notice back on `tool-card-window-shown` → 2 FAILED (its unit);
+ * - `bars={false}` on the two-pane rows → 3 FAILED (its marker and both tint
+ *   strengths; the context row stays untinted either way, so it holds);
+ * - dropping the unified body's `barsTint` → 2 FAILED (its marker and tint).
  */
 process.env.FORCE_COLOR = '3'
 // This script asserts English UI copy; pin the language before any
@@ -72,7 +78,7 @@ const editTool = {
  *  would clip it); `settleMs` widens the fixed window for frames far larger
  *  than an ordinary card. */
 async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none', options = {}) {
-  const { verbose = false, rows = 30, settleMs = 900 } = options
+  const { verbose = false, rows = 30, settleMs = 900, diffStyle = 'default' } = options
   const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
   class FakeStdout extends Writable {
     columns = cols
@@ -81,7 +87,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     _write(chunk, _e, cb) { term.write(String(chunk), cb) }
   }
   const app = await render(
-    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose, diffLayout, toolBackground }),
+    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose, diffLayout, toolBackground, diffStyle }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
   )
   // 固定窗:pacing cli-highlight 首次使用才懒加载，其后的补色重绘没有
@@ -408,6 +414,56 @@ for (const [cells, expected] of [[53, 0], [54, 0], [55, 2], [56, 5]] as const) {
     folded.includes('folded 2 chars'), folded.split('\n').find(line => line.includes('folded')) ?? 'no hint')
 }
 
+
+// ---- 8. diffStyle: bars swaps the gutter marker and the tint strength; the
+//          painted rows, wrapping and caps belong to the layout, not the style.
+{
+  const pairOf = (lines: string[]) => lines.findIndex(line => line.includes('def shout(text):') && line.includes('mark="!"'))
+  const { lines, bgAt } = await renderAt(120, editTool, 'auto', 'none', { diffStyle: 'bars' })
+  const pairRow = pairOf(lines)
+  check('bars 双栏：改动行 gutter 换成 ▌', pairRow >= 0 && lines[pairRow]!.includes('▌'), `pairRow=${pairRow}`)
+  const dividerX = pairRow >= 0 ? lines[pairRow]!.indexOf('│') : -1
+  check('bars 双栏：左栏用全强度删除底色', pairRow >= 0 && bgAt(6, pairRow) === 0x3e2a2c,
+    `bg=${pairRow >= 0 ? bgAt(6, pairRow).toString(16) : 'no row'}`)
+  check('bars 双栏：右栏用全强度新增底色', pairRow >= 0 && bgAt(dividerX + 2, pairRow) === 0x27392c,
+    `bg=${pairRow >= 0 ? bgAt(dividerX + 2, pairRow).toString(16) : 'no row'}`)
+  const ctxRow = lines.findIndex(line => line.includes('# tail'))
+  check('bars 双栏：上下文行不染色', ctxRow >= 0 && bgAt(6, ctxRow) === 0xffffff,
+    `bg=${ctxRow >= 0 ? bgAt(6, ctxRow).toString(16) : 'no row'}`)
+}
+// Negative control: the style is off by default, so no bar may appear and the
+// dimmed tint of sections 1-2 stays in charge.
+{
+  const { lines, bgAt } = await renderAt(120, editTool)
+  const pairRow = lines.findIndex(line => line.includes('def shout(text):') && line.includes('mark="!"'))
+  check('default 双栏：没有 ▌、沿用暗色底', pairRow >= 0 && !lines[pairRow]!.includes('▌') && bgAt(6, pairRow) === 0x362b2c,
+    `bg=${pairRow >= 0 ? bgAt(6, pairRow).toString(16) : 'no row'}`)
+}
+// Unified under bars (70 cols): the body still wraps, so the style can never
+// make a line unreachable — the tail is on screen in both styles.
+{
+  const longTool = diffTool(`${'o'.repeat(80)}TAIL_OLD_ZZZ`, `${'n'.repeat(80)}TAIL_NEW_ZZZ`, '/tmp/long80.py')
+  const bars = await renderAt(70, longTool, 'auto', 'none', { diffStyle: 'bars', rows: 40 })
+  const s = bars.screen()
+  check('bars 统一式：改动行 gutter 换成 ▌', bars.lines.some(line => line.startsWith('▌')))
+  const addRow = bars.lines.findIndex(line => line.includes('+ '))
+  check('bars 统一式：新增行整行染色', addRow >= 0 && bars.bgAt(69, addRow) === 0x27392c,
+    `bg=${addRow >= 0 ? bars.bgAt(69, addRow).toString(16) : 'no row'}`)
+  check('bars 统一式：长行尾部仍可读（不截断）', s.includes('TAIL_NEW_ZZZ'))
+  const plain = await renderAt(70, longTool, 'auto', 'none', { rows: 40 })
+  check('default 统一式：长行尾部同样可读', plain.screen().includes('TAIL_NEW_ZZZ'))
+}
+// Expanded two-pane under bars: the clipped-then-wrapped reachability of #1602
+// is a layout property, so both tails stay readable and every visual row of a
+// wrapped change keeps its bar.
+{
+  const longTool = diffTool(`${'o'.repeat(188)}TAIL_OLD_ZZZ`, `${'n'.repeat(188)}TAIL_NEW_ZZZ`, '/tmp/long.py')
+  const { lines, screen } = await renderAt(120, longTool, 'auto', 'none', { verbose: true, diffStyle: 'bars' })
+  const expanded = screen()
+  check('bars 展开态：两侧长行尾部都可读', expanded.includes('TAIL_OLD_ZZZ') && expanded.includes('TAIL_NEW_ZZZ'))
+  const tailRow = lines.findIndex(line => line.includes('TAIL_OLD_ZZZ'))
+  check('bars 展开态：换行后的视觉行仍带竖条', tailRow >= 0 && lines[tailRow]!.includes('▌'), `tailRow=${tailRow}`)
+}
 
 console.log(failures === 0 ? 'repro-diff-split: all assertions passed' : `repro-diff-split: ${failures} FAILED`)
 process.exit(failures === 0 ? 0 : 1)

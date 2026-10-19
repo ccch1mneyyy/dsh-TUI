@@ -146,6 +146,7 @@ export function ToolLeafRow({
   isExpanded = false,
   footnote,
   diffLayout,
+  diffStyle,
   toolBackground,
   smoothReveal,
   fresh,
@@ -166,6 +167,7 @@ export function ToolLeafRow({
   isExpanded?: boolean
   footnote?: string
   diffLayout?: 'auto' | 'split' | 'unified'
+  diffStyle?: 'default' | 'bars'
   toolBackground?: ToolBackground
   smoothReveal?: boolean
   fresh?: boolean
@@ -191,6 +193,7 @@ export function ToolLeafRow({
         isExpanded={isExpanded}
         footnote={footnote}
         diffLayout={diffLayout}
+        diffStyle={diffStyle}
         toolBackground={toolBackground}
         smoothReveal={smoothReveal}
         fresh={fresh}
