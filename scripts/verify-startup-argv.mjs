@@ -304,6 +304,7 @@ try {
   mkdirSync(join(temp, '.dsh-tui/backends/missing-agent'), { recursive: true })
   writeFileSync(join(temp, '.dsh-tui/backends/missing-agent/prefs.json'), JSON.stringify({ lastSession: 'foreign-session' }))
   writeFileSync(patch, '[]\n')
+  mkdirSync(join(temp, 'ark/kimi3'), { recursive: true })
   writeFileSync(join(temp, '--resume=patch-file'), '[]\n')
   const isWin = process.platform === 'win32'
   const quoteSh = value => `'${value.replaceAll("'", "'\\''")}'`
@@ -332,6 +333,9 @@ try {
     { name: 'long continue before separator', argv: ['--continue', '--', '--resume=literal'], session: 'remembered-session', prompt: '--resume=literal' },
     { name: 'ordinary resume', argv: ['--resume=real-session'], session: 'real-session', prompt: '' },
     { name: 'Web startup flags', argv: ['--host', '127.0.0.1', '--port', '3099', '--trusted-host', 'a:1', 'b:2'], prompt: '' },
+    { name: 'session launch option values never become prompt or workspace', argv: ['--model', 'ark/kimi3', '--effort', 'high', 'implement the task'], prompt: 'implement the task' },
+    { name: 'inline launch option values never become prompt', argv: ['--model=ark/kimi3', '--effort=high', 'implement the task'], prompt: 'implement the task' },
+    { name: 'launch options respect literal delimiter', argv: ['--model', 'ark/kimi3', '--', '--effort', 'literal'], prompt: '--effort literal' },
     { name: 'separator only', argv: ['--'], prompt: '' },
     { name: 'explicit workspace before separator', argv: [workspace, '--', '--resume=literal', '.'], workspace, prompt: '--resume=literal .', binOnly: true },
     // Host-prefix cases need only the current service shape; both shapes are

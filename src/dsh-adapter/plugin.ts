@@ -58,7 +58,8 @@ import { ensurePackagedPresets } from './packaged-presets.js'
 import { registerBundledPresets } from './bundled-presets.js'
 import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './compat/index.js'
 import { clearResumeTarget, resumeTargetFromArgv, stripResumeArgs, writeResumeTarget } from '../sessionHistory.js'
-import { cmdlineArgsOf, initialPromptFromCmdlineArgs } from './startup-args.js'
+import { cmdlineArgsOf, initialPromptFromCmdlineArgs, startupPreferencesFromCmdlineArgs } from './startup-args.js'
+import { rememberStartupSelection, StartupPreferencesError, validateStartupPreferences, type StartupPreferences } from './startup-preferences.js'
 import { readHomePrefs } from '../homePrefs.js'
 import { handoffEventTag, formatHandoffNotice } from '../handoffEvents.js'
 import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit } from '../handoffAck.js'
@@ -672,6 +673,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // Config-only route: resolveAgent applies the persisted `/model`
   // preference on CREATE only — a resumed session keeps the route its own
   // log records (last request/header), matching the preset rule.
+  const launchPreferences = startupPreferencesFromCmdlineArgs(cmdlineArgsOf(ctx) ?? process.argv.slice(2))
   const configuredRoute = {
     provider: config.provider,
     model: config.model,
@@ -915,6 +917,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // in /kernel is then one Enter away from installing what is missing.
   // Explicit choices (flag/Config/handoff) and explicit resume targets keep
   // the hard failure: silently swapping what the user named would be worse.
+  if (backendChoice !== 'dsh' && (launchPreferences.model !== undefined || launchPreferences.effort !== undefined)) {
+    throw new Error('dsh-tui: --model and --effort launch options currently require the dsh backend')
+  }
   let backendStart: Awaited<ReturnType<typeof openBackendStartup>> | undefined
   /** The startup session still opening (`deferBackendOpen`); the channel adopts it. */
   let backendStartup: Promise<{ readonly session: AgentSession; readonly history: readonly AgentEvent[] }> | undefined
@@ -1006,6 +1011,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       deploymentRoute,
       meta,
       config.preset,
+      launchPreferences,
     )
   let agent: Agent | undefined = resolved.agent
   const { handle, agentPreset, route: createdRoute } = resolved
@@ -1092,6 +1098,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // set in `attachDsh` before adoption; the getters below serve them.
   const rowFacts: {
     route?: { readonly provider: string; readonly model: string }
+    defaultRoute?: ModelRoute
     config?: Pick<Config, 'provider' | 'model' | 'preset' | 'effort' | 'modes' | 'upstreamRetry'>
   } = {}
   /**
@@ -1159,6 +1166,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // A resumed backend session runs where it was recorded.
     cwd: backendStart?.session.cwd ?? agent?.session.header.cwd ?? sessionCwd,
     get provider() { return rowFacts.route?.provider ?? (backendStart !== undefined ? backendStart.backendId : displayRoute.provider) },
+    get sessionDefaultRoute() { return rowFacts.defaultRoute ?? deploymentRoute },
     // Raw cordis.yml route (undefined when unset): the channel's
     // new-session path re-resolves prefs against these, and resume passes
     // only explicit values so the target session's own record wins.
@@ -2912,6 +2920,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         const rowRoute = { provider: rowConfig.provider, model: rowConfig.model }
         // The same startup/deployment split the plugin's own boot makes (issue #67).
         const { startupRoute: rowStartupRoute, deploymentRoute: rowDeploymentRoute } = startupRoutes(dshCtx, rowRoute)
+        rowFacts.defaultRoute = rowDeploymentRoute
         const openOnRow = (sessionId: string | undefined, openMeta: { cwd: string }) =>
           resolveAgent(dshCtx, sessionId, rowRoute, rowStartupRoute, rowDeploymentRoute, openMeta, rowConfig.preset)
         /** The opened agent is this screen's from now on; returns its route. */
@@ -2947,7 +2956,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         const rowSessionId = resumeTarget.kind === 'revoked'
           ? undefined
           : rowConfig.sessionId ?? resumeTargetFromArgv(cmdlineArgsOf(dshCtx) ?? process.argv.slice(2))
-        const opened = await openOnRow(rowSessionId, startupMeta)
+        // Only this startup session receives CLI pins; /new uses the normal defaults.
+        const opened = await resolveAgent(dshCtx, rowSessionId, rowRoute, rowStartupRoute, rowDeploymentRoute, startupMeta, rowConfig.preset, launchPreferences)
         const session = createDshSession(dshCtx, { agent: opened.agent, handle: opened.handle })
         // The composition failed while this opened: close the unadoptable session.
         if (compositionFailed) {
@@ -3031,6 +3041,7 @@ async function resolveAgent(
   deploymentRoute: ModelRoute,
   meta: { cwd: string },
   configuredPreset?: string,
+  launchPreferences?: StartupPreferences,
 ): Promise<{ agent: Agent; handle?: AgentHandle; agentPreset?: string; route?: ModelRoute }> {
   // Deployment fallback (issue #67): a resumed session continues on the route
   // its own request/header records carry (issue #30) — the route it actually
@@ -3046,7 +3057,9 @@ async function resolveAgent(
     const resumeId = SessionId(requestedSessionId)
     const existing = ctx.agents.get(resumeId)
     if (existing !== undefined) {
-      return { agent: existing, agentPreset: runningPresetOf(existing.session) }
+      const selected = await validateStartupPreferences(ctx, launchPreferences, recordedModelRoute(snapshotLiveSessionEvents(existing.session)) ?? resumeRoute)
+      rememberStartupSelection(existing, selected)
+      return { agent: existing, agentPreset: runningPresetOf(existing.session), ...(selected === undefined ? {} : { route: selected }) }
     }
     // The launch-time counterpart of the in-session `/resume` claim
     // (`channel/session-resume.ts`), and it has to happen before ANY await:
@@ -3099,7 +3112,8 @@ async function resolveAgent(
       const persisted = await resolvePersistedPreset(ctx, resumeId)
       const composed = await composePreset(ctx, persisted)
       const recorded = await resolvePersistedRoute(ctx, resumeId)
-      const resumeOptions = {
+      const selected = await validateStartupPreferences(ctx, launchPreferences, recorded ?? resumeRoute)
+      const resumeOptions = selected ?? {
         provider: recorded?.provider ?? resumeRoute?.provider,
         model: recorded?.model ?? resumeRoute?.model,
       }
@@ -3108,6 +3122,7 @@ async function resolveAgent(
         agentOptions: resumeOptions,
         ...(composed.setup === undefined ? {} : { setup: composed.setup }),
       })
+      rememberStartupSelection(resumed.agent, selected)
       // Status-line route on resume: the route the session actually
       // continues on — its own request/header record, else the complete
       // cordis.yml deployment route (a bare log that pins none falls back to
@@ -3116,12 +3131,13 @@ async function resolveAgent(
         agent: resumed.agent,
         handle: resumed,
         agentPreset: composed.agentPreset,
-        route: recordedModelRoute(snapshotLiveSessionEvents(resumed.agent.session)) ?? resumeRoute,
+        route: selected ?? recordedModelRoute(snapshotLiveSessionEvents(resumed.agent.session)) ?? resumeRoute,
       }
     } catch (error) {
       // A claim says "this process is driving the log". A resume that never
       // mounted must not leave one behind for a peer to see and refuse.
       reservation.abandon()
+      if (error instanceof StartupPreferencesError) throw error
       // A launch-time --resume is an explicit request: silently substituting a
       // fresh session presents a cold conversation as the resumed one (the
       // "resume did nothing" failure mode — the warn below never reached a
@@ -3162,7 +3178,10 @@ async function resolveAgent(
   const llm = ctx.get('llm') as
     | { listModels(provider: string): Promise<readonly { id: string }[]> }
     | undefined
-  const { route, rejected } = await validateModelRoute(llm, startupRoute, deploymentRoute)
+  const selected = await validateStartupPreferences(ctx, launchPreferences, startupRoute)
+  const { route, rejected } = selected === undefined
+    ? await validateModelRoute(llm, startupRoute, deploymentRoute)
+    : { route: selected, rejected: undefined }
   if (rejected !== undefined) {
     ctx.logger.warn(
       `dsh-tui: model route ${rejected.provider}/${rejected.model} is not advertised by provider "${rejected.provider}"; falling back to ${route.provider}/${route.model}`,
@@ -3202,6 +3221,7 @@ async function resolveAgent(
     )
   }
   bootReservation?.settle()
+  rememberStartupSelection(created.agent, selected)
   return { agent: created.agent, handle: created, agentPreset: composed.agentPreset, route }
 }
 

@@ -13,7 +13,7 @@ export function initialPromptFromCmdlineArgs(args: readonly string[] | undefined
       promptArgs.push(...args.slice(i + 1))
       break
     }
-    if (arg === '--resume' || arg === '--host' || arg === '--port') {
+    if (arg === '--resume' || arg === '--host' || arg === '--port' || arg === '--model' || arg === '--effort') {
       if (args[i + 1] !== undefined && !args[i + 1]!.startsWith('-')) i += 1
       continue
     }
@@ -26,6 +26,35 @@ export function initialPromptFromCmdlineArgs(args: readonly string[] | undefined
     promptArgs.push(arg)
   }
   return promptArgs.join(' ').trim()
+}
+
+/** Session-only DSH launch overrides; an app-level `--` ends option parsing. */
+export function startupPreferencesFromCmdlineArgs(args: readonly string[] | undefined): {
+  model?: { provider: string; model: string }
+  effort?: string
+} {
+  const preferences: { model?: { provider: string; model: string }; effort?: string } = {}
+  if (args === undefined) return preferences
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]!
+    if (arg === '--') break
+    const flag = arg.split('=', 1)[0]!
+    if (flag !== '--model' && flag !== '--effort') continue
+    const value = arg === flag ? args[++i] : arg.slice(flag.length + 1)
+    if (value === undefined || value.trim() === '' || value.startsWith('-')) {
+      throw new Error(`dsh-tui: ${flag} requires ${flag === '--model' ? '<provider/model>' : '<level>'}`)
+    }
+    if (flag === '--model') {
+      const slash = value.indexOf('/')
+      if (slash <= 0 || slash === value.length - 1 || /\s/u.test(value)) {
+        throw new Error('dsh-tui: --model must be <provider/model>')
+      }
+      preferences.model = { provider: value.slice(0, slash), model: value.slice(slash + 1) }
+    } else {
+      preferences.effort = value
+    }
+  }
+  return preferences
 }
 
 /** `ctx.cmdlineArgs`: the app argv the host snapshotted, if it provides one. */

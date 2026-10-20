@@ -503,6 +503,8 @@ const MSG = {
       `Options:\n` +
       `  --resume [id]          Resume the last (or the given) session\n` +
       `  -c, --continue         Same as --resume\n` +
+      `  --model <provider/model>  Session-only DSH model route (saved defaults are unchanged)\n` +
+      `  --effort <level>       Session-only DSH reasoning effort, validated against the model\n` +
       `  --backend <id>         Agent backend: dsh | claude | codex, or an installed plugin backend\n` +
       `                         (claude, codex and plugin backends: experimental)\n` +
       `  -- <prompt...>        Treat the remaining arguments as literal prompt text\n` +
@@ -525,6 +527,8 @@ const MSG = {
       `选项：\n` +
       `  --resume [id]          恢复上次（或指定 id 的）会话\n` +
       `  -c, --continue         同 --resume\n` +
+      `  --model <provider/model>  本次 DSH 会话的模型路由（不修改保存的默认值）\n` +
+      `  --effort <level>       本次 DSH 会话的推理强度，按模型能力校验\n` +
       `  --backend <id>         Agent 后端：dsh | claude | codex，或已安装的插件后端\n` +
       `                         （claude、codex 与插件后端均为实验性）\n` +
       `  -- <提示词...>         将剩余参数作为字面提示词\n` +
@@ -585,7 +589,7 @@ const GENERATED_FILE_ENTRIES = new Set([
 ])
 
 // ─── 子命令：version / help ──────────────────────────────────────────────────
-// 只认第一个参数，且在角色分支之前应答：两种角色都不经过委托与自举——
+// 只认第一个参数，且在角色分支之前应答：不经过自举或 DSH 启动——
 // `dsh-tui --help` 在没装 dsh、profile 残缺时也必须能出（否则求助命令
 // 本身先触发一轮安装）。后续位置的同名字符串不截获，保持既有透传与
 // 工作区目标嗅探行为不变。
@@ -598,6 +602,15 @@ if (subcommand === 'version' || subcommand === '--version' || subcommand === '-v
   process.exit(0)
 }
 if (subcommand === 'help' || subcommand === '--help' || subcommand === '-h') {
+  // Advertise the options of the copy that will actually launch the session.
+  // A newer global launcher can coexist with an older profile, including on
+  // the same patch line; showing only its own help would falsely advertise
+  // --model/--effort to callers while the delegated app treats values as input.
+  if (!runningInsideProfile && process.env.DSH_TUI_NO_DELEGATE !== '1' && existsSync(profileBin)) {
+    const result = spawnSync(process.execPath, [profileBin, subcommand], { stdio: 'inherit', timeout: 5000 })
+    if (result.error) console.error(`dsh-tui: cannot read profile help: ${result.error.message}`)
+    process.exit(result.status ?? 1)
+  }
   console.log(msg('helpText'))
   process.exit(0)
 }
@@ -1590,6 +1603,13 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
         hostArgs.push(a)
         continue
       }
+    }
+    // Preserve launch option values as app arguments; a value may look like a
+    // workspace path. The native adapter owns catalog validation and application.
+    if (a === '--model' || a === '--effort') {
+      args.push(a)
+      if (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) args.push(argv[++i])
+      continue
     }
     // `--backend <id>`: which agent backend the app opens its session with
     // (the row reads DSH_TUI_BACKEND; absent falls back to kernel.json, then dsh).

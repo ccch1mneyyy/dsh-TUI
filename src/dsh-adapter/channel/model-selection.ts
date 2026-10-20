@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import { boundContextSummary, createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { createChannelOwner, type ChannelOwner } from './owner.js'
+import { startupSelectionFor } from '../startup-preferences.js'
 
 /** Routing belongs to the live agent, including turns running while parked.
  * The foreground facade follows the binding; each waterfall captures its own
@@ -33,10 +34,10 @@ export function createModelSelection(ctx: Context, deps: {
     // Restore a recorded pin only when the caller actually adopted that route.
     const usesRecordedRoute = recorded?.provider === route.provider && recorded?.model === route.model
     const ref: ModelSelectionRef = {
-      current: route.provider !== '' && route.model !== '' &&
+      current: startupSelectionFor(agent) ?? (route.provider !== '' && route.model !== '' &&
         (!hasCreatedRoute || (usesRecordedRoute &&
           (route.provider !== agent.options.provider || route.model !== agent.options.model)))
-        ? { ...route } : undefined,
+        ? { ...route } : undefined),
       assembled: undefined,
     }
     const lifetime = createChannelOwner()

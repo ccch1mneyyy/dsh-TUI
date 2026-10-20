@@ -74,6 +74,18 @@ for (const alias of ['help', '--help', '-h']) {
 {
   const r = run(['--help'], { DSH_TUI_LANG: 'en' })
   check('--help 英文输出（DSH_TUI_LANG=en）', r.status === 0 && r.stdout.includes('Usage'))
+  check('--help advertises native session launch flags', r.stdout.includes('--model <provider/model>') && r.stdout.includes('--effort <level>'))
+}
+{
+  // A new global launcher must not advertise flags absent from the actual
+  // delegated runtime. The profile help still runs without dsh/pnpm installed.
+  const helpHome = join(tmp, 'help-home')
+  const pkgDir = join(helpHome, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+  mkdirSync(join(pkgDir, 'bin'), { recursive: true })
+  writeFileSync(join(pkgDir, 'package.json'), '{"type":"module","version":"0.16.1"}')
+  writeFileSync(join(pkgDir, 'bin', 'dsh-tui.js'), 'console.log("Usage: old profile --resume [id]")\n')
+  const r = run(['--help'], { DSH_HOME: helpHome })
+  check('help describes the actual old profile, not newer launcher capabilities', r.status === 0 && r.stdout.includes('old profile') && !r.stdout.includes('--model'))
 }
 
 // --- version ------------------------------------------------------------------

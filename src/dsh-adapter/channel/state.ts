@@ -44,6 +44,8 @@ export interface ChannelLaunchOptions {
   model: string
   cwd: string
   provider: string
+  /** Normal default for new sessions, before any startup-only CLI route pin. */
+  sessionDefaultRoute?: { readonly provider: string; readonly model: string }
   effort?: string
   activity?: boolean
   /** Read the activity projection's current value when a session binds. A

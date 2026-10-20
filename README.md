@@ -183,6 +183,19 @@ prompt: `dsh-tui --patch ./overlay.yml -- --resume=sid-1` applies the overlay
 and sends `--resume=sid-1` as prompt text without resuming that session.
 Safe mode: [Getting started](docs/getting-started.en.md).
 
+For the DSH backend, `dsh-tui --model ark/kimi3 --effort high "Implement the task"`
+selects the provider/model route and native effort for this startup session only.
+The route and effort are validated against the provider's model catalog before
+the first task; missing values, unknown models, unavailable catalogs and
+unsupported efforts fail explicitly instead of falling back. Use the route IDs
+shown by `/model`; effort IDs depend on that model. Either flag may also use
+`--model=provider/model` or `--effort=level`. With `--resume <id>`, explicit flags
+override that DSH session's recorded route for this process; without flags,
+resume keeps its usual recorded route. Saved model/effort defaults and profiles
+are unchanged, and `/new` does not inherit these launch-only pins. Claude,
+Codex and plugin backends currently reject these launch options. Tokens after
+the app's `--` remain literal prompt text, including `--model` and `--effort`.
+
 ### Importing conversations from other agents (`dsh-tui migrate`)
 
 Bring Claude Code, Codex, OMP, zcode, or Grok Build conversation histories into the DSH session store, then browse and resume them by their original working directory via `/resume`:

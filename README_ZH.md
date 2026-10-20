@@ -152,6 +152,16 @@ Node/Python/PowerShell 示例见[自动化 CLI](docs/cli.md)。
 并将 `--resume=sid-1` 作为提示词发送，而不恢复该会话。
 安全模式：[安装与快速开始](docs/getting-started.md)。
 
+DSH 后端可用 `dsh-tui --model ark/kimi3 --effort high "实施正式任务"`
+为本次启动会话指定提供商/模型路由及原生推理档位。首次任务前按提供商模型目录
+验证；缺少参数值、未知模型、目录不可用及不支持的档位均明确报错，不静默回退。
+模型路由使用 `/model` 展示的 ID，档位由该模型决定；也支持
+`--model=provider/model`、`--effort=level`。与 `--resume <id>` 同用时，显式参数
+覆盖该 DSH 会话本进程使用的已有路由；不带参数时仍沿用原恢复规则。
+保存的模型/档位默认值和 profile 不变，`/new` 不继承这些仅本次启动生效的覆盖。
+Claude、Codex 及插件后端目前明确拒绝这两个启动选项。应用级 `--` 后的内容
+（包括 `--model`、`--effort`）仍作为字面提示词。
+
 ### 迁移其他编程代理的对话（`dsh-tui migrate`）
 
 把 Claude Code、Codex、OMP、zcode、Grok Build 的本地对话历史导入 DSH 会话库，之后用 `/resume` 按原工作目录浏览与恢复：

@@ -116,6 +116,9 @@ export function attachDshExtensions(
 ): void {
   const { state, owner, rowIds, host, notify } = core
   const { workspaceService, commandTrees } = host
+  // Display and the initial agent may use a CLI pin; later fresh sessions use
+  // the normal defaults, never that startup agent's temporary route.
+  const sessionDefaultRoute = options.sessionDefaultRoute ?? { provider: options.provider, model: options.model }
   const adapterRuntime = host.adapterRuntime
   const registeredSettingsSections = state.settingsSections
   state.settingsSections = () => {
@@ -439,7 +442,7 @@ export function attachDshExtensions(
     configuredPreset: options.configuredPreset,
     configuredProvider: options.configuredProvider,
     configuredModel: options.configuredModel,
-    provider: options.provider, model: options.model,
+    provider: sessionDefaultRoute.provider, model: sessionDefaultRoute.model,
     notify,
     listPersisted: () => listSessionsSnapshot(ctx),
     createDetached: createDetachedHandle,
@@ -669,8 +672,8 @@ export function attachDshExtensions(
     configuredPreset: options.configuredPreset,
     configuredProvider: options.configuredProvider,
     configuredModel: options.configuredModel,
-    provider: options.provider,
-    model: options.model,
+    provider: sessionDefaultRoute.provider,
+    model: sessionDefaultRoute.model,
   }, {
     owner,
     binding,
@@ -739,8 +742,8 @@ export function attachDshExtensions(
     configuredPreset: options.configuredPreset,
     configuredProvider: options.configuredProvider,
     configuredModel: options.configuredModel,
-    provider: options.provider,
-    model: options.model,
+    provider: sessionDefaultRoute.provider,
+    model: sessionDefaultRoute.model,
   }, {
     owner,
     binding,

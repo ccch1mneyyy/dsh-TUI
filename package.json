@@ -173,7 +173,7 @@
     "verify:prompt-debug": "npm run build && node scripts/verify-prompt-debug.mjs",
     "verify:clipboard-image": "node --import tsx/esm scripts/verify-clipboard-image.ts",
     "verify:history-search": "node --import tsx/esm scripts/verify-history-search.mjs",
-    "verify:initial-prompt": "node scripts/verify-initial-prompt.mjs && node scripts/verify-startup-argv.mjs",
+    "verify:initial-prompt": "node scripts/verify-initial-prompt.mjs && node scripts/verify-startup-argv.mjs && node --import tsx/esm scripts/verify-startup-preferences.ts",
     "verify:plugin-ledger": "node --import tsx/esm scripts/verify-plugin-ledger.ts",
     "verify:plugin-commands": "node --import tsx/esm scripts/verify-plugin-commands.ts",
     "verify:plugin-negotiation": "node --import tsx/esm scripts/verify-plugin-negotiation.ts",

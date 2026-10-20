@@ -82,6 +82,50 @@ const makeHandle = (agent: FakeAgent, onDispose?: () => void) => ({ agent, dispo
 
 const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.rows.filter(row => row.kind === 'subagent')
 
+// A launch-only model override must not become /new's fallback when no
+// model.json or complete cordis.yml route exists. Exercise the actual channel
+// transaction and agent factory, including the route shown after adoption.
+{
+  const { rememberStartupSelection } = await import('../src/dsh-adapter/startup-preferences.js')
+  const ctx = new Context()
+  const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
+  const initial = makeAgent('launch-pinned', 'launch-pinned-session')
+  const launchRoute = { provider: 'ark', model: 'kimi3' }
+  const defaultRoute = { provider: 'saved', model: 'default' }
+  initial.options = launchRoute
+  rememberStartupSelection(initial as never, launchRoute)
+  let openedRoute: unknown
+  let createdCount = 0
+  provide('agents', {
+    get: () => undefined,
+    create: (options: { agentOptions: typeof defaultRoute }) => {
+      openedRoute = options.agentOptions
+      const fresh = makeAgent(`fresh-default-${++createdCount}`, `fresh-default-session-${createdCount}`)
+      fresh.options = options.agentOptions
+      return Promise.resolve(makeHandle(fresh))
+    },
+  })
+  provide('llm', {
+    listModels: async () => [{ id: 'default' }, { id: 'kimi3' }],
+    resolveModelInfo: async () => ({ reasoning: false }),
+  })
+  const channel = createChannel(ctx as never, initial as never, {
+    ...launchRoute, sessionDefaultRoute: defaultRoute, cwd: isolatedHome,
+    activity: false, upstreamRetry: false,
+  })
+  check('launch CLI model is the initial displayed route', channel.provider === 'ark' && channel.model === 'kimi3')
+  check('/new after launch override succeeds', await channel.newSession())
+  check('/new uses the ordinary default in the agent factory', JSON.stringify(openedRoute) === JSON.stringify(defaultRoute), JSON.stringify(openedRoute))
+  check('/new displays its own ordinary default route', channel.provider === 'saved' && channel.model === 'default')
+  const { writeModelPref } = await import('../src/modelPrefs.js')
+  writeModelPref('saved', 'removed-model', joinPath(isolatedHome, '.dsh-tui'))
+  check('/new with a stale saved route succeeds', await channel.newSession())
+  check('/new rejects stale saved route using the ordinary deployment fallback', JSON.stringify(openedRoute) === JSON.stringify(defaultRoute), JSON.stringify(openedRoute))
+  const { unlinkSync } = await import('node:fs')
+  unlinkSync(joinPath(isolatedHome, '.dsh-tui', 'model.json'))
+  channel.releaseContributions()
+}
+
 // ── 场景 1+2：/new 重置子代理投影、任务描述队列 ──────────────────────────
 {
   const ctx = new Context()

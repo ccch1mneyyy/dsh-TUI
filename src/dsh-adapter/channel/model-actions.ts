@@ -2,12 +2,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, type LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import { WORKING_GATE_NOTICES, type CommandCompletionNode } from '../../commands.js'
-import { nearestLowerEffort, readEffortPref, resolveEffortDefault, writeEffortPref, STANDARD_EFFORT_LADDER } from '../../effortPrefs.js'
+import { nearestLowerEffort, readEffortPref, resolveEffortDefault, writeEffortPref } from '../../effortPrefs.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getLang, t, tOr, type I18nKey, type Lang } from '../../i18n.js'
 import { migratePresetPref, writePresetPref } from '../../presetPrefs.js'
 import { presetDisplayId, resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from '../preset-resolution.js'
 import { installedMeetsVersion } from '../contract.js'
+import { modelEfforts } from '../model-efforts.js'
+import { clearStartupEffort, startupSelectionFor } from '../startup-preferences.js'
 import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState, EffortOption, PresetOption } from './types.js'
@@ -45,13 +47,13 @@ export function createModelActions(
       listModels(provider: string): Promise<readonly LlmModelInfo[]>
     }
     | undefined
-  let preferredEffort: string | undefined = readEffortPref() ?? deps.initialEffort
+  let preferredDefaultEffort: string | undefined = readEffortPref() ?? deps.initialEffort
   // Last fallback notice shown for a (preferred → applied) pair: bind fires on
   // every session switch, so an unchanged downgrade must not re-toast.
   let lastEffortFallbackNotice: { preferred: string; applied: string | undefined } | undefined
   // State construction cannot call this factory yet; seed the visible value
   // before the root starts binding or exposes the completed ChannelState.
-  state.reasoningEffort = preferredEffort
+  state.reasoningEffort = startupSelectionFor(deps.agent())?.reasoningEffort ?? preferredDefaultEffort
   let effortLevelsGeneration = 0
   let effortOperation = 0
   let presetOperation = 0
@@ -97,23 +99,7 @@ export function createModelActions(
     const key = STANDARD_EFFORT_LABEL_KEYS[id]
     return key === undefined ? id : tOr(key, id)
   }
-  /** The standard ladder as picker options, resolved per call so a language
-   * switch relabels tiers with no cache to invalidate. */
-  const standardEffortOptions = (): Array<{ id: string; name: string }> =>
-    STANDARD_EFFORT_LADDER.map(id => ({ id, name: standardEffortLabel(id) }))
-  /** Effort tiers for one route-metadata answer. A row that declares
-   * reasoning support without a tier list (`reasoning: true`, or an object
-   * whose `efforts` is absent, as pi-ai zai rows for glm-5.3* do) gets the
-   * standard ladder: the kernel accepts the standard ids and validates at
-   * set time, and offering nothing would hide tiers the route does run.
-   * An explicit `efforts: []` means the route supports none and is kept
-   * as is, like any declared list; `reasoning` absent/false offers nothing. */
-  const tiersOf = (reasoning: boolean | { efforts?: ReadonlyArray<{ id: string; name: string; description?: string }>; defaultEffort?: string } | undefined): ReadonlyArray<{ id: string; name: string; description?: string }> => {
-    if (reasoning === true) return standardEffortOptions()
-    if (reasoning === undefined || reasoning === false) return []
-    if (reasoning.efforts !== undefined) return reasoning.efforts
-    return standardEffortOptions()
-  }
+  const tiersOf = (reasoning: Parameters<typeof modelEfforts>[0]) => modelEfforts(reasoning, standardEffortLabel)
   const resolveEfforts = async (capture: EffortCapture): Promise<EffortResult | 'unavailable' | 'error' | 'stale'> => {
     if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return 'unavailable'
     try {
@@ -130,6 +116,7 @@ export function createModelActions(
     }
   }
   const applyPreferredEffort = async (): Promise<void> => {
+    const preferredEffort = startupSelectionFor(deps.agent())?.reasoningEffort ?? preferredDefaultEffort
     if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return
     const capture = captureEffort()
     const resolved = await resolveEfforts(capture)
@@ -199,7 +186,8 @@ export function createModelActions(
   const applyEffort = (effort: { id: string; name: string }, capture: EffortCapture): void => {
     if (!effortCurrent(capture)) return
     selection.current = { provider: capture.provider, model: capture.model, reasoningEffort: ReasoningEffortId(effort.id) }
-    preferredEffort = effort.id
+    clearStartupEffort(deps.agent())
+    preferredDefaultEffort = effort.id
     state.reasoningEffort = effort.id
     writeEffortPref(effort.id)
     notify(t('effort-switched', { name: effort.name }))
@@ -254,8 +242,8 @@ export function createModelActions(
    */
   const setDefaultEffort = (id: string | undefined): void => {
     const resolved = resolveEffortDefault(id, deps.initialEffort, readEffortPref())
-    if (resolved === preferredEffort) return
-    preferredEffort = resolved
+    if (resolved === preferredDefaultEffort) return
+    preferredDefaultEffort = resolved
     void applyPreferredEffort()
   }
   const warmEffortLevels = (): void => {
