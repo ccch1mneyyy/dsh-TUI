@@ -17,6 +17,8 @@
  *  - Chat 级 surface 切换（issue #1631）：浮层开着时把终端拉宽——分栏画的是
  *    别的面板，浮层必须留在原处；分栏正好画的是 btw，浮层让位、线程进侧栏，
  *    主输入框回来（`btwOverlayVisible` 不能停在「不可见却仍占键盘」）。
+ *    移交后展开整屏编辑器，草稿可继续编辑、收起后保留；主任务问卷异步
+ *    到达时先接管显示与 Enter，回答后恢复仍在途的侧问（inline/fullscreen）。
  * 运行：node --import tsx/esm scripts/verify-btw-panel.tsx
  */
 import { mkdtempSync } from 'node:fs'
@@ -96,6 +98,7 @@ function makePanelChannel(ask: ReturnType<typeof scriptedAsk>) {
     status: 'idle' as const,
     working: false,
     agentId: 'probe-session',
+    sessionId: 'probe-session',
     goal: undefined,
     todos: [],
     backgroundJobs: [],
@@ -505,14 +508,16 @@ const plainText = (frames: readonly string[]) => frames.join('')
   .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
   .replace(/\x1b\]9;[^\x07]*\x07/g, '')
 
-async function mountChat(ask: ReturnType<typeof scriptedAsk>, cols = 100) {
+async function mountChat(ask: ReturnType<typeof scriptedAsk>, cols = 100, fullscreen = true) {
   const channel = makeChatChannel(ask)
+  const questionStore = new QuestionStore()
   const term = new XTerm({ cols, rows: ROWS, scrollback: 200, allowProposedApi: true })
   const stdout = new FakeStdout(term, cols)
   const stdin = new FakeStdin()
   let width = cols
+  const chat = <Chat channel={channel as never} questionStore={questionStore} fullscreen={fullscreen} />
   const instance = await render(
-    <Chat channel={channel as never} questionStore={new QuestionStore()} fullscreen />,
+    fullscreen ? <AlternateScreen>{chat}</AlternateScreen> : chat,
     { stdout: stdout as unknown as NodeJS.WriteStream, stdin: stdin as unknown as NodeJS.ReadStream, stderr: new FakeStderr() as unknown as NodeJS.WriteStream, exitOnCtrlC: false, patchConsole: false },
   )
   await delay(500)
@@ -538,7 +543,7 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>, cols = 100) {
     for (const needle of watched.keys()) if (screen.includes(needle)) watched.set(needle, true)
   }
   return {
-    channel, stdout, stdin, lines,
+    channel, questionStore, stdout, stdin, lines,
     /** Start recording whether `needle` is ever on screen. */
     viewport,
     watch: (needle: string) => { watched.set(needle, viewport().includes(needle)) },
@@ -745,6 +750,24 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>, cols = 100) {
   check('C7c. 线程在侧栏可见', wide.includes('侧栏接管的问题'))
   check('C7d. 主输入框回来（浮层不再接管输入）', wide.includes(HOME_BUTTON), wide.split('\n').slice(-2).join(' | '))
   check('C7e. 侧问只发起一次', ask.calls.length === 1)
+  // 编辑器会临时收起分栏；残留的 fallback 请求不能因此重新暂停输入框，
+  // 否则编辑器发布/撤下相互触发，直到 React #185 重挂整树并丢掉草稿。
+  const draft = 'DRAFT-AFTER-BTW'
+  const editorTitle = t('input-expand-editor-title')
+  chat.stdin.write(draft)
+  await settle(() => chat.viewport().includes(draft))
+  chat.stdin.write(CTRL_SHIFT_E)
+  check('C7f. 移交侧栏后编辑器保持打开、草稿可见', await settled(() =>
+    chat.viewport().includes(editorTitle) && chat.viewport().includes(draft)))
+  if (process.env.BTW_SCREENSHOT) console.log('SCREENSHOT-C7-EDITOR\n' + chat.viewport())
+  chat.stdin.write('-KEPT')
+  check('C7g. 编辑器可继续编辑原草稿', await settled(() => chat.viewport().includes(draft + '-KEPT')))
+  chat.stdin.write(ESC)
+  check('C7h. 收起编辑器后主输入框保留完整草稿', await settled(() =>
+    !chat.viewport().includes(editorTitle) && chat.viewport().includes(HOME_BUTTON)
+    && chat.viewport().includes(draft + '-KEPT')))
+  check('C7i. 编辑器往返没有取消或重发侧问', ask.calls.length === 1
+    && btwThreads.get('probe-session')?.turns.at(-1)?.phase === 'running')
   await chat.unmount()
 }
 
@@ -769,6 +792,45 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>, cols = 100) {
   check('C8b. 关掉编辑器后不冒出那个「看不见的浮层」', !after.includes(fallbackNote))
   check('C8c. 主输入框可用（浮层没有接管输入）', after.includes(HOME_BUTTON), after.split('\n').slice(-2).join(' | '))
   check('C8d. 侧问照常发起（一次）', ask.calls.length === 1)
+  await chat.unmount()
+}
+
+// ── C9: 主任务问卷到达时先接管浮层；Enter 回答问卷，不误取消侧问 ───────
+for (const fullscreen of [true, false]) {
+  const mode = fullscreen ? 'fullscreen' : 'inline'
+  applySidePanelPanels('todo,jobs,agents,info,trajectory,workspace,btw,companion')
+  applySidePanelSplitEnabled(true)
+  applySidePanelOpen(true)
+  btwThreads.resetForTest()
+  const ask = scriptedAsk()
+  const chat = await mountChat(ask, 80, fullscreen)
+  const sideQuestion = 'SIDE-THREAD-QUESTION'
+  const mainQuestion = 'MAIN-QUESTION'
+  await chat.run('/btw ' + sideQuestion)
+  check('C9a. ' + mode + ' 起点为在途侧问浮层', await settled(() => chat.viewport().includes(sideQuestion)))
+  chat.channel.working = true
+  const answerPromise = chat.questionStore.ask({ questions: [{
+    id: 'main-question',
+    question: mainQuestion,
+    options: [{ label: 'CONTINUE-MAIN' }],
+  }] }).then(
+    answer => ({ ok: true as const, answer }),
+    (error: unknown) => ({ ok: false as const, error: String(error) }),
+  )
+  check('C9b. ' + mode + ' 问卷先上屏、浮层让位', await settled(() =>
+    chat.viewport().includes(mainQuestion) && chat.viewport().includes('CONTINUE-MAIN')
+    && !chat.viewport().includes(sideQuestion)))
+  if (process.env.BTW_SCREENSHOT) console.log('SCREENSHOT-C9-' + mode + '\n' + chat.viewport())
+  chat.stdin.write('\r')
+  check('C9c. ' + mode + ' 第一次 Enter 即完成主问卷', await settled(() => chat.questionStore.getSnapshot() === null))
+  // 失败路径也要结清 ask：不能让一个永不 settle 的 await 掩掉断言失败。
+  if (chat.questionStore.getSnapshot() !== null) chat.questionStore.cancelCurrent()
+  const outcome = await answerPromise
+  check('C9d. ' + mode + ' 回答来自主问卷选项', outcome.ok
+    && outcome.answer.answers[0]?.selected[0] === 'CONTINUE-MAIN', JSON.stringify(outcome))
+  check('C9e. ' + mode + ' 回答后恢复仍在途的侧问浮层', await settled(() =>
+    chat.viewport().includes(sideQuestion) && !chat.viewport().includes(mainQuestion))
+    && ask.calls.length === 1 && btwThreads.get('probe-session')?.turns.at(-1)?.phase === 'running')
   await chat.unmount()
 }
 

@@ -37,6 +37,7 @@
   上下文条的填充长度跟随后端占用量，颜色按内容构成估算；压缩后清理过期估算，缺少分类时显示单块已用区域，条和 ctx 字段的悬停明细都报实测已用量。
 - **唯一的会话管理界面** — `/resume` `/home` `/agentview` `/bg` `⌸`。
 - **会话工作流** — `/new` `/compact` `/export` `/btw`、模型热切换、fork、回溯、vim、全屏草稿编辑器。
+  `/btw` 在侧栏无法显示时回退到浮层；主任务问卷与全屏草稿编辑器优先接管，侧问与草稿保持原样。
 - **IDE 选区通道** — VS Code 里选中的代码进 prompt。
 - **DSH 集成** — presets、技能、MCP、目标、待办、子代理、问卷。
 - **账号登录** — 标准 profile 提供 pi-ai 的 ChatGPT/Codex、Claude、Grok OAuth（可用时还有 OpenAI 直连与 Meta Muse）；DSH 0.2.0-rc.1+ 还通过宿主服务提供 DeepSeek 浏览器登录，路由为 `deepseek-account`。通过 `/provider` 或 `/auth` 使用，无需另装插件。

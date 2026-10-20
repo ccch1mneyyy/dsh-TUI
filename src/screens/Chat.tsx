@@ -4453,7 +4453,11 @@ export function Chat({
    * 出现后它可能为真却什么都不画——那时不能再让 PromptInput 与 Chat 的按键
    * 处理器让位（否则 composer 消失、Esc/Ctrl+C 都失效）。
    */
+  // 编辑器展开会收起分栏；此时不能复活浮层并暂停 PromptInput，否则编辑器
+  // 发布/撤下与分栏恢复会循环触发。主任务问卷也先接管显示和键盘，结束后
+  // 再恢复浮层请求，保留在途侧问。
   const btwOverlayVisible = btwOverlayOpen && !btwPanelOnScreen
+    && !promptEditorOpen && questionSnapshot === null
   /**
    * 「全屏」出口（PanelBar 的 ⤢）：把侧栏里那个面板的内容切到它原本的整屏
    * 形态。只映射**真的有整屏对应物**的面板 id（能力位 capabilities.fullscreen
@@ -7223,7 +7227,7 @@ export function Chat({
           </Box>
         ) : btwOverlayVisible ? (
           // 浮层只在 btw 线程没有真正上屏时显示：面板未启用，或分栏渲不
-          // 出来（窄屏 / inline / 编辑器展开 / splitEnabled=false），或分栏
+          // 出来（窄屏 / inline / splitEnabled=false），或分栏
           // 在、但画的是别的面板。侧栏真的显示 btw 线程时浮层立即让位——
           // 单一 surface（判定见 btwPanelOnScreen）。
           <Box flexDirection="column" marginTop={1}>
