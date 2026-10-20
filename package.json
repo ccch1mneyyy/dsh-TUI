@@ -263,6 +263,7 @@
     "verify:selection-stale-guard": "node --import tsx/esm scripts/verify-selection-stale-guard.tsx",
     "verify:inject-channel": "node --import tsx/esm scripts/verify-inject-channel.mjs",
     "verify:session-mounts": "node --import tsx/esm scripts/verify-session-mounts.mjs",
+    "verify:session-resume-ownership": "node --import tsx/esm scripts/verify-session-resume-ownership.ts",
     "verify:handoff-stdin": "node --import tsx/esm scripts/verify-handoff-stdin.ts",
     "verify:session-supervisor": "node --import tsx/esm scripts/verify-session-supervisor.tsx",
     "verify:composer-draft-handoff": "node --import tsx/esm scripts/verify-composer-draft-handoff.tsx",

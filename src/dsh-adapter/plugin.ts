@@ -24,7 +24,7 @@ import { formatSessionRef } from '../agent/refs.js'
 import type { AgentEvent } from '../agent/events.js'
 import type { AgentSession } from '../agent/session.js'
 import { createStartingSession } from '../agent/starting-session.js'
-import { mountFailureText } from '../sessions/resumeFailure.js'
+import { isSessionOwnershipError, mountFailureText } from '../sessions/resumeFailure.js'
 import { createChannelSceneOutlet } from './channel-scene-outlet.js'
 import { mountChannelUi } from './channel-ui.js'
 import { bindChannelCommands } from './channel/commands.js'
@@ -3127,7 +3127,21 @@ async function resolveAgent(
       // "resume did nothing" failure mode — the warn below never reached a
       // terminal). Fail the boot loudly instead; the loader surfaces this to
       // stderr. The in-session /resume picker has its own error path.
-      const reason = error instanceof Error ? error.message : String(error)
+      const message = error instanceof Error ? error.message : String(error)
+      const owned = isSessionOwnershipError(error)
+      // A held write handle names a LIVE peer (another TUI, or dsh web on the
+      // shared sessions root — issue #1635), not a corrupt log: saying
+      // "corrupt" sends the user to delete a healthy log. Refuse loudly with
+      // the holder-oriented repair instead.
+      if (owned) {
+        throw new Error(
+          `dsh-tui: cannot resume session "${requestedSessionId}": another process holds its write lock ` +
+          '(likely a running dsh web or another terminal) — close it and retry, ' +
+          'or drop --resume to start a fresh session.',
+          { cause: error },
+        )
+      }
+      const reason = message
       throw new Error(
         `dsh-tui: cannot resume session "${requestedSessionId}": ${reason} — ` +
         'the stored log is unreadable or corrupt; no fresh session was started instead. ' +

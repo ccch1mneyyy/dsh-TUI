@@ -4,7 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../../modelRoute.js'
 import { clearResumeTarget, writeResumeTarget, touchAgentViewSession, touchSession } from '../../sessionHistory.js'
-import { mountFailureText } from '../../sessions/resumeFailure.js'
+import { isSessionOwnershipError, mountFailureText } from '../../sessions/resumeFailure.js'
 import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { readModelPref } from '../../modelPrefs.js'
@@ -49,7 +49,6 @@ type ResumeState = Pick<
   | 'working'
   | 'emit'
 > & Parameters<typeof resetSessionProjection>[0]
-
 export type { NewSessionTarget } from './core/session-switch.js'
 
 type ResumeAgents = {
@@ -197,6 +196,21 @@ export function createSessionResumeActions(
           ...(composed.setup === undefined ? {} : { setup: composed.setup }),
         })))
       } catch (error) {
+        // A held write handle is an occupancy refusal, not a corrupt log: the
+        // ledger only tracks THIS app's own mounts, so a peer (another TUI,
+        // or dsh web on the shared sessions root — issue #1635) reaches here
+        // past the ledger check. Name this process when it already hosts the
+        // session (a parked handle whose close is still draining); otherwise
+        // the holder is external and its pid is unknowable from a kernel lock.
+        if (isSessionOwnershipError(error)) {
+          if (agents.get?.(SessionId(sessionId)) !== undefined) {
+            deps.notify(t('resume-session-occupied', { pid: process.pid }), { color: 'error', timeoutMs: 8000 })
+            return { ok: false, reason: 'occupied', pid: process.pid }
+          }
+          const held = t('resume-session-held-external')
+          deps.notify(held, { color: 'error', timeoutMs: 8000 })
+          return { ok: false, reason: 'failed', error: held }
+        }
         const message = error instanceof Error ? error.message : String(error)
         deps.notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
         return { ok: false, reason: 'failed', error: message }

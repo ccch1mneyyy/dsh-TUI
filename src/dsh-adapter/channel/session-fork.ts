@@ -84,6 +84,12 @@ export function createForkSessionAction(
           runtimeSession: source,
           inheritedCount: seed.length,
           cwd: state.cwd,
+          // Upstream's own fork records the lineage (sessions.fork sets
+          // parentSession): without it the child's inherited delivery
+          // markers fail the resume-time ownership check ("names the wrong
+          // Session", issue #1635), because the exemption only covers
+          // inherited prefixes of a session that names its parent.
+          parentSession: source.id,
           agentPreset: forkComposed.agentPreset,
           agentOptions: { provider: state.provider, model: state.model },
           setup: forkComposed.setup,

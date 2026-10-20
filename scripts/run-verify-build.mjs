@@ -136,6 +136,7 @@ const GATES = [
   'verify:btw',
   'verify:preset-patch',
   'verify:session-mounts',
+  'verify:session-resume-ownership',
   'verify:handoff-stdin',
   'verify:status-fields',
   'verify:plugin-field-order',

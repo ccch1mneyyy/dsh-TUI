@@ -22,6 +22,21 @@ import { t } from '../i18n.js'
 import { WORKING_GATE_NOTICES } from '../commands.js'
 
 /**
+ * Whether a resume failure is an ownership refusal rather than a corrupt log.
+ * The persistence backend reports `SessionAlreadyOwnedError` (name stable
+ * across the validated lines) in two cases: an in-process claim collision
+ * (this process already drives the log — e.g. a parked handle whose close is
+ * still draining) and a foreign holder's kernel lock (another TUI terminal,
+ * or dsh web sharing the same sessions root — issue #1635). Both must read
+ * as "held by someone else", never as storage corruption.
+ * @param error - The resume rejection.
+ */
+export function isSessionOwnershipError(error: unknown): boolean {
+  if (error instanceof Error && error.name === 'SessionAlreadyOwnedError') return true
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes('is already owned by an active write handle')
+}
+/**
  * The message for a failed mount, or undefined when it should stay silent.
  * @param result - The adapter's mount outcome.
  * @returns The user-facing sentence, or undefined for `cancelled`.

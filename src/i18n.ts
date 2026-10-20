@@ -365,6 +365,7 @@ const dict = {
   'resume-while-working': { zh: '回合运行中，无法恢复会话', en: 'Cannot resume while a turn is running' },
   'resume-unavailable': { zh: '恢复不可用——agents 服务未加载', en: 'Resume unavailable — agents service not loaded' },
   'resume-session-occupied': { zh: '该会话正被其他 TUI 终端占用（进程 {{pid}}），无法进入', en: 'Another TUI terminal holds this session (pid {{pid}}); cannot enter' },
+  'resume-session-held-external': { zh: '该会话正被其他进程占用（可能是在运行的 dsh web 或另一个终端），关闭对方后重试', en: 'Another process holds this session (likely a running dsh web or another terminal); close it and retry' },
   'resume-mount-busy': { zh: '无法确认该会话是否被其他终端占用（占用检查正忙），请稍后重试', en: 'Could not confirm whether another terminal holds this session (the occupancy check is busy); retry in a moment' },
   'resume-mount-unavailable': { zh: '无法验证该会话的占用状态 · {{detail}}', en: 'Could not verify this session\'s occupancy · {{detail}}' },
   // 损坏账本的出口：只在拒绝句自称 `damaged` 时追加，所以它必须读起来像"针对那个文件"的
