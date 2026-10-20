@@ -74,6 +74,7 @@ export interface AgentTranscriptSceneProps {
   readonly subagent: SubagentState
   /** Where Esc returns to. */
   readonly source: AgentViewSource
+  readonly diffStyle: 'default' | 'bars'
   onExit(): void
   /** The child's full transcript (`subagentControl.history`). Absent = no
    *  transcript source: the bounded live tail with its retained-range note,
@@ -102,7 +103,7 @@ export interface AgentTranscriptSceneProps {
  * The body uses the same transcript pager as the Detail page, with the
  * live SubagentState tail merged in.
  */
-export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript, messages = [], compose, roster, onSwitchAgent }: AgentTranscriptSceneProps): React.ReactNode {
+export function AgentTranscriptScene({ subagent, source, diffStyle, onExit, loadTranscript, messages = [], compose, roster, onSwitchAgent }: AgentTranscriptSceneProps): React.ReactNode {
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const followRef = React.useRef(true)
   React.useEffect(() => {
@@ -365,6 +366,7 @@ export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript,
                         <ToolLeafRow
                           key={`tool-${row.key}`}
                           tool={row.tool}
+                          diffStyle={diffStyle}
                           marginTopOnTurn={margin}
                           verbose={expandedLeaf === row.key}
                           isExpanded={expandedLeaf === row.key}

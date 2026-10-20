@@ -18,6 +18,7 @@
  *   S6  消息行渲染：state 词表；unknown 附「不推断」行；未知关系不画箭头。
  *   S7  28/40 列顶栏不溢出。
  *   S8  Detail：消息流页能力驱动出现；'v' 主屏查看；composer 挂载。
+ *   S8b Agent View / Detail / panel Detail 的 diffStyle 传递与实时切换。
  *   S9  Dashboard：'v' 专用动作；行下 from → to 摘要。
  * Chat 层（真 Chat + 桩 channel）：
  *   C1  转录卡 ⤢ 点击进 Agent View，Esc 回聊天；父 rows/草稿不变。
@@ -180,6 +181,17 @@ const msg = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
 })
 
 const ev = (type: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({ type, ...over })
+
+const diffEvents = [
+  ev('tool.call', {
+    callId: 'edit-style', name: 'Edit', argsJson: '{}', time: NOW - 30_000,
+    presentation: {
+      card: 'diff', title: 'Edit /tmp/style.txt',
+      diffs: [{ path: '/tmp/style.txt', oldText: 'beforeValue', newText: 'afterValue' }],
+    },
+  }),
+  ev('tool.result', { callId: 'edit-style', isError: false, text: '', time: NOW - 20_000, content: [] }),
+]
 
 function historyPage(events: Array<Record<string, unknown>>, over: Record<string, unknown> = {}): Record<string, unknown> {
   return { events, parentAgentId: 'parent-agent-9', uuids: [], hasOlder: false, skippedFromStart: 0, ...over }
@@ -534,6 +546,31 @@ console.log('--- S8: detail messages page + view action ---')
   )
 }
 
+// ── S8b: diff style in each alternate transcript surface ───────────────────
+console.log('--- S8b: alternate transcript diff styles ---')
+for (const surface of ['agent', 'detail', 'panel'] as const) {
+  const subagent = makeSubagent({ agentId: `diff-style-${surface}` })
+  const loadTranscript = async (): Promise<Record<string, unknown>> => historyPage(diffEvents)
+  const scene = (diffStyle: 'default' | 'bars'): React.ReactNode => React.createElement(
+    surface === 'agent' ? AgentTranscriptScene : SubagentDetailScene,
+    {
+      subagent, loadTranscript, diffStyle,
+      ...(surface === 'agent' ? { source: { kind: 'chat' }, onExit: () => {} } : { onBack: () => {}, variant: surface === 'panel' ? 'panel' : 'default' }),
+    },
+  )
+  await withTerminal(() => scene('bars'), async frame => {
+    if (surface !== 'agent') {
+      await settled(() => frame.screen().includes(t('subagent-tab-transcript')))
+      check(`S8b ${surface} opens transcript`, await click(frame, t('subagent-tab-transcript')))
+    }
+    check(`S8b ${surface} renders bars`, await settled(() => frame.screen().includes('beforeValue') && frame.screen().includes('▌')), frame.screen())
+    frame.rerender(scene('default'))
+    check(`S8b ${surface} switches to default`, await settled(() => frame.screen().includes('beforeValue') && !frame.screen().includes('▌')), frame.screen())
+    frame.rerender(scene('bars'))
+    check(`S8b ${surface} switches back to bars`, await settled(() => frame.screen().includes('beforeValue') && frame.screen().includes('▌')), frame.screen())
+  }, 70)
+}
+
 // ── S9: dashboard ──────────────────────────────────────────────────────────
 console.log('--- S9: dashboard view action + summary ---')
 {
@@ -583,6 +620,7 @@ console.log('--- Chat: source stack + parent state preservation ---')
   }
   const historyPageData = historyPage([
     ev('assistant.message', { anchor: 'a1', time: NOW - 40_000, blocks: [{ type: 'text', text: 'child answer in history' }] }),
+    ...diffEvents,
   ])
   const feed = [msg({ text: 'flow message one', to: 'agent-child-0001', from: 'parent-session-1' })]
   const channel: Record<string, unknown> = {
@@ -613,6 +651,7 @@ console.log('--- Chat: source stack + parent state preservation ---')
     activityFrames: 'moon8',
     lastUserText: '',
     scrollGutter: 'timeline',
+    diffStyle: 'bars',
     subagents: [subagent],
     backgroundJobs: EMPTY,
     subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
@@ -687,6 +726,7 @@ console.log('--- Chat: source stack + parent state preservation ---')
     check('C1 转录卡主屏查看动作（⤢ 字形）可定位', await click({ screen, lines, rerender: () => {}, stdin, term } as unknown as Frame, '⤢'))
     check('C1 进入 Agent View（顶栏出现）', await settled(() => screen().includes('read-only') && screen().includes('from transcript card')), lines().slice(0, 3).join('|'))
     check('C1 场景读同一 history（子答案可见）', await settled(() => screen().includes('child answer in history')))
+    check('C1 channel diffStyle reaches Agent View', await settled(() => screen().includes('beforeValue') && screen().includes('▌')))
     check('C1 场景内消息流叶子', screen().includes('parent → child'))
     // composer submit through the channel-provided capability
     stdin.write('to the child')

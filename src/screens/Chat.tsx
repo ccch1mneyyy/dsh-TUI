@@ -6561,6 +6561,7 @@ export function Chat({
     const viewScene = (
       <AgentTranscriptScene
         subagent={viewSubagent}
+        diffStyle={channel.diffStyle}
         source={agentView.source}
         onExit={() => exitAgentView(agentView.source)}
         {...(loadTranscript === undefined ? {} : { loadTranscript })}
@@ -6591,6 +6592,7 @@ export function Chat({
     const scene = (
       <SubagentDetailScene
         subagent={subagent}
+        diffStyle={channel.diffStyle}
         onInterrupt={(id) => channel.subagentControl?.interrupt(id)}
         {...(channel.subagentControl?.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
         onOpenView={() => openAgentView(subagent.agentId, { kind: 'agent-detail', agentId: subagent.agentId })}

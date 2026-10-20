@@ -194,6 +194,7 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
     return (
       <SubagentDetailScene
         subagent={detail}
+        diffStyle={channel.diffStyle}
         variant="panel"
         focused={focused}
         visible={visible}

@@ -172,6 +172,7 @@ function isActivityLine(text: string): boolean {
 
 export interface SubagentDetailSceneProps {
   subagent: SubagentState
+  diffStyle: 'default' | 'bars'
   onBack: () => void
   onInterrupt?: (agentId: string) => void
   /** The child's full transcript (`subagentControl.history`). Absent = no
@@ -201,6 +202,7 @@ export interface SubagentDetailSceneProps {
  */
 export function SubagentDetailScene({
   subagent,
+  diffStyle,
   onBack,
   onInterrupt,
   loadTranscript,
@@ -707,6 +709,7 @@ export function SubagentDetailScene({
                         <ToolLeafRow
                           key={`tool-${row.key}`}
                           tool={row.tool}
+                          diffStyle={diffStyle}
                           marginTopOnTurn={margin}
                           verbose={expandedLeaf === row.key}
                           isExpanded={expandedLeaf === row.key}
