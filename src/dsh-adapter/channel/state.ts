@@ -8,7 +8,7 @@ import type { ContextPressureSource } from '../context-occupancy.js'
 import type { TeamSource } from '../team-roster.js'
 import type { ActivityView } from '../activity-store.js'
 import type { SessionModeSpec } from '../../sessionModes.js'
-import { normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type JobGroupFoldMode, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
+import { normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type JobGroupFoldMode, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ThinkingFoldMode, type ToolBackground } from '../../tuiDisplayPrefs.js'
 import { normalizeActivityPreset } from '../../components/activityFrames.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../../components/splashFonts.js'
 import { normalizeBrandSetting, type BrandSetting } from '../../branding.js'
@@ -91,7 +91,7 @@ export interface ChannelLaunchOptions {
    *  declares no retryPolicy. Absent means enabled (the Config schema's
    *  default); false opts out without touching settings. */
   upstreamRetry?: boolean
-  thinkingFold?: 'preview' | 'full'
+  thinkingFold?: ThinkingFoldMode
   jobGroupFold?: JobGroupFoldMode
   toolBackground?: ToolBackground
   scrollGutter?: ScrollGutterMode

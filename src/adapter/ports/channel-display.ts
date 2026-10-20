@@ -16,6 +16,16 @@ export type SpinnerMode =
 export type ToolBackground = 'none' | 'subtle' | 'strong'
 
 /**
+ * Thinking-block display (settings `dsh-tui.thinkingFold`):
+ *  - `preview` (default): stream 2-3 live lines and fold the block when its
+ *    step settles;
+ *  - `full`: keep thinking expanded until the whole turn ends;
+ *  - `always`: keep every settled block open too (history included) until a
+ *    click folds it back to the preview.
+ */
+export type ThinkingFoldMode = 'preview' | 'full' | 'always'
+
+/**
  * What the fullscreen transcript's right gutter shows:
  *  - `timeline`: Grok-style turn rail — one tick per user turn (conversation
  *    order, not scroll proportion), active turn highlighted, click to jump;

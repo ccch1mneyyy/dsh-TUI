@@ -1,5 +1,5 @@
-import type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode } from './adapter/ports/channel-display.js'
-export type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode } from './adapter/ports/channel-display.js'
+import type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode, ThinkingFoldMode } from './adapter/ports/channel-display.js'
+export type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode, ThinkingFoldMode } from './adapter/ports/channel-display.js'
 
 /** Where a plugin footer field joins the status row, in the list order the
  *  user's `statusBar.pluginFieldsOrder` groups map onto by index. Kept

@@ -12,7 +12,7 @@ import type { SessionModeSpec } from '../sessionModes.js'
 import type { NotificationMethod, TaskNotifications } from '../ink/terminal-notification.js'
 import { parseBackendChoice } from './backend-registry.js'
 import { parseBackendId, type KernelBackendId } from '../kernelPrefs.js'
-import { BTW_CONTEXT_BUDGET_DEFAULT, BTW_CONTEXT_TURNS_DEFAULT, DEFAULT_COMPANION_SKIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, normalizeBtwContextBudget, normalizeBtwContextTurns, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { BTW_CONTEXT_BUDGET_DEFAULT, BTW_CONTEXT_TURNS_DEFAULT, DEFAULT_COMPANION_SKIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, normalizeBtwContextBudget, normalizeBtwContextTurns, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ThinkingFoldMode, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../components/splashFonts.js'
 import { normalizeBrandSetting, type BrandSetting } from '../branding.js'
@@ -141,8 +141,10 @@ export interface Config {
   diffLayout?: 'auto' | 'split' | 'unified'
   /** Thinking-block display: `preview` (default) streams a 2-3 line live
    *  preview and folds each step when it settles; `full` keeps thinking
-   *  expanded until the whole turn ends. Editable live from `/settings`. */
-  thinkingFold?: 'preview' | 'full'
+   *  expanded until the whole turn ends; `always` keeps settled blocks
+   *  expanded too (history included) until clicked. Editable live from
+   *  `/settings`. */
+  thinkingFold?: ThinkingFoldMode
   /** Grouping/folding of consecutive background-job cards: `auto` (default)
    *  groups any run of ≥2 adjacent job cards and folds a run of 3+ into its
    *  summary line once every member settled; `always` folds any run of 2+
@@ -347,7 +349,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
-  thinkingFold: Schema.union(['preview', 'full']).default('preview'),
+  thinkingFold: Schema.union(['preview', 'full', 'always']).default('preview'),
   jobGroupFold: Schema.union(['auto', 'always', 'never']).default('auto'),
   toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
   scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),

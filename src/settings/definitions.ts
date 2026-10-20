@@ -510,12 +510,13 @@ export const SETTING_DEFINITIONS = {
     label: 'Thinking display',
     descriptions: { zh: '思考块展示' },
     group: 'conversation',
-    hint: 'Preview shows 2-3 live lines; Full stays expanded until turn end. Click a streaming block to switch between preview and full.',
-    hintDescriptions: { zh: '预览模式显示 2-3 行动态思考；展开模式保持至轮末。点击流式思考块可在预览与全文间切换。' },
+    hint: 'Preview shows 2-3 live lines; Full stays expanded until turn end; Always keeps settled blocks expanded too, history included. Click a thinking block to switch between preview and full.',
+    hintDescriptions: { zh: '预览模式显示 2-3 行动态思考；展开模式保持至轮末；常驻模式在回合落定后（含历史）也保持展开。点击思考块可在预览与全文间切换。' },
     kind: 'select',
     options: [
       { value: 'preview', label: 'Preview (2-3 lines)', descriptions: { zh: '预览（2-3 行）' } },
       { value: 'full', label: 'Full until turn end', descriptions: { zh: '展开至轮末' } },
+      { value: 'always', label: 'Always expanded', descriptions: { zh: '常驻展开' } },
     ],
   },
   'toolBackground': {

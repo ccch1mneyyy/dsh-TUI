@@ -722,6 +722,11 @@ export function Chat({
   const [streamViewToggledRows, setStreamViewToggledRows] = React.useState<ReadonlySet<number>>(
     () => new Set(),
   )
+  // 设置切换时清空逐行覆盖：`always` 会重新打开落定行，旧模式下点过的
+  // 行不能把过期的预览/全文选择带回来（行 id 跨轮末保留）。
+  React.useEffect(() => {
+    setStreamViewToggledRows(previous => (previous.size === 0 ? previous : new Set()))
+  }, [channel.thinkingFold])
   /**
    * The transient-dialog layer (every picker/dialog `<OverlayAbove>` hosts,
    * plus /tips) as ONE value: mutual exclusion between the panels is

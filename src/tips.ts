@@ -703,8 +703,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'disp-thinking-fold',
     group: 'display',
-    zh: '/settings 里 thinkingFold：preview 折叠 / full 全展开',
-    en: 'In /settings, thinkingFold: preview folds, full expands',
+    zh: '/settings 里 thinkingFold：preview 折叠 / full 至轮末 / always 常驻',
+    en: 'In /settings, thinkingFold: preview folds, full to turn end, always stays open',
   },
   {
     id: 'disp-tool-bg',

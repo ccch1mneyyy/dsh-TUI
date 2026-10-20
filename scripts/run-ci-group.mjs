@@ -101,8 +101,9 @@ const GROUPS = {
 // 无背景的空格被 diff 跳过，在 tmux/Windows Terminal 深色底下显示为黑块。
     ["verify-code-block-tab-background", ['node', '--import', 'tsx/esm', 'scripts/verify-code-block-tab-background.tsx']],
 // 思考块流式视图回归：preview 固定三行且点击切全文/再点收回，full
-// 默认值反向但仍不进入 0 行正文；增量 Markdown 与整段渲染的块间距
-// 一致（真实段落空行保留，代码块后不凭空多一行）。
+// 默认值反向但仍不进入 0 行正文；always 让落定行保持全文、点击回到
+// 预览，且展开行不再显示 ctrl+o 展开提示；增量 Markdown 与整段渲染的
+// 块间距一致（真实段落空行保留，代码块后不凭空多一行）。
     ["verify-thinking-preview", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-preview.tsx']],
     ["repro-thinking-stream-fold", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking-stream-fold.tsx']],
     ["verify-streaming-markdown-spacing", ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-spacing.tsx']],

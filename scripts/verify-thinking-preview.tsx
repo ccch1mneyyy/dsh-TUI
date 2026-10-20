@@ -10,14 +10,23 @@
 process.env.DSH_TUI_LANG = 'en'
 process.env.FORCE_COLOR = '3'
 
-const [{ Writable }, React, { Terminal: XTerm }, { render, Box, Text }, { AssistantThinkingMessage }] =
-  await Promise.all([
-    import('node:stream'),
-    import('react'),
-    import('@xterm/headless'),
-    import('../src/ui.js'),
-    import('../src/components/messages/AssistantThinkingMessage.js'),
-  ])
+const [
+  { Writable, PassThrough },
+  React,
+  { Terminal: XTerm },
+  { render, Box, Text, useInput },
+  { AssistantThinkingMessage },
+  { MessageList },
+  { settled, viewportLines },
+] = await Promise.all([
+  import('node:stream'),
+  import('react'),
+  import('@xterm/headless'),
+  import('../src/ui.js'),
+  import('../src/components/messages/AssistantThinkingMessage.js'),
+  import('../src/components/MessageList.js'),
+  import('./lib/term-test.mjs'),
+])
 
 const COLS = 32
 const ROWS = 12
@@ -82,3 +91,86 @@ for (const [name, thinking] of cases) {
 }
 
 console.log('AssistantThinkingMessage preview height regression passed')
+
+// ── thinkingFold=always: settled rows stay expanded until clicked ────────
+// The live-preview height contract above is unchanged. This section pins the
+// display mode: `preview`/`full` settled rows fold, while `always` opens them
+// and keeps the per-row preview/full click toggle.
+const MODE_COLS = 60
+const MODE_ROWS = 18
+const BODY = ['LINE1 alpha', 'LINE2 bravo', 'LINE3 charlie', 'LINE4 delta', 'LINE5 echo', 'LINE6 foxtrot'].join('\n')
+
+async function renderThinking(mode: 'preview' | 'full' | 'always', toggled: boolean): Promise<string> {
+  const term = new XTerm({ cols: MODE_COLS, rows: MODE_ROWS, scrollback: 0, allowProposedApi: true })
+  class ModeStdout extends Writable {
+    columns = MODE_COLS
+    rows = MODE_ROWS
+    isTTY = true
+    _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
+      term.write(String(chunk), callback)
+    }
+  }
+  class ModeInput extends PassThrough {
+    isTTY = true
+    setRawMode(): this { return this }
+    ref(): this { return this }
+    unref(): this { return this }
+  }
+  function RawMode(): null {
+    useInput((): void => {}, { isActive: true })
+    return null
+  }
+  const rows = [{ id: 1, kind: 'reasoning', text: BODY, streaming: false, durationMs: 1_500 }] as never
+  const app = await render(
+    <>
+      <RawMode />
+      <MessageList
+        rows={rows}
+        expanded={false}
+        expandedRows={new Set<number>()}
+        selectedId={null}
+        onToggleRow={(): void => {}}
+        model="fixture"
+        showAll
+        onToggleAll={(): void => {}}
+        thinkingFold={mode}
+        streamViewToggledRows={toggled ? new Set([1]) : new Set<number>()}
+      />
+    </>,
+    {
+      stdout: new ModeStdout() as unknown as NodeJS.WriteStream,
+      stdin: new ModeInput() as unknown as NodeJS.ReadStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  await settled(() => viewportLines(term, MODE_ROWS).some(line => line.includes('Thinking')))
+  const text = viewportLines(term, MODE_ROWS).join('\n')
+  await app.unmount()
+  term.dispose()
+  return text
+}
+
+const modeCases = [
+  ['preview default folds', 'preview', false, false],
+  ['full settles folded', 'full', false, false],
+  ['always keeps settled rows open', 'always', false, true],
+  ['always click previews', 'always', true, false],
+] as const
+
+for (const [name, mode, toggled, expectBody] of modeCases) {
+  const text = await renderThinking(mode, toggled)
+  const hasBody = text.includes('LINE1 alpha')
+  // The expand hint belongs to a folded row only; an open body must not
+  // advertise ctrl+o as the way to expand it.
+  const hasHint = text.includes('ctrl+o to expand')
+  if (hasBody !== expectBody || hasHint === expectBody) {
+    throw new Error(
+      `${name}: expected body=${expectBody}, hint=${!expectBody}; ` +
+        `got body=${hasBody}, hint=${hasHint}\n${text}`,
+    )
+  }
+  console.log(`PASS: ${name}`)
+}
+
+console.log('AssistantThinkingMessage thinkingFold modes regression passed')

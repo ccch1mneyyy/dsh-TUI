@@ -4,7 +4,7 @@ import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow, JobGroupRow, JobRow } from '../dsh-adapter/channel.js'
 import type { TurnUsageSummary } from '../adapter/ports/channel-view.js'
-import type { JobGroupFoldMode } from '../tuiDisplayPrefs.js'
+import type { JobGroupFoldMode, ThinkingFoldMode } from '../tuiDisplayPrefs.js'
 import { normalizeIdePath } from '../dsh-adapter/ide-channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { DOMElement } from '../ink/dom.js'
@@ -413,8 +413,8 @@ export function MessageList({
   model: string
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout?: 'auto' | 'split' | 'unified'
-  /** Thinking-block display mode from channel (`preview`/`full`). */
-  thinkingFold?: 'preview' | 'full'
+  /** Thinking-block display mode from channel (`preview`/`full`/`always`). */
+  thinkingFold?: ThinkingFoldMode
   /** Grouping/folding of consecutive job-card runs (settings
    *  `dsh-tui.jobGroupFold`): `auto` folds a settled run of ≥3 into its
    *  summary header, `always` folds any run of ≥2, `never` leaves runs open
@@ -1672,7 +1672,7 @@ type MemoRowProps = {
   fresh: boolean
   /** Version tick for active tool reveal; 0 keeps settled rows memoized. */
   revealVersion: number
-  thinkingFold: 'preview' | 'full'
+  thinkingFold: ThinkingFoldMode
   toolBackground: ToolBackground
   /** Terminal-card header folding (forwarded to tool cards). */
   foldTerminalCommand: boolean
@@ -1953,11 +1953,15 @@ function TranscriptRow({
         </Box>
       )
     case 'reasoning': {
-      // The setting chooses the live default; a row click reverses it. Global
-      // or per-row transcript expansion always wins and shows the full text.
-      const turnOpen = streaming || thinkingOpen
+      // The setting chooses the live default; a row click reverses it. `always`
+      // also opens settled rows (history included), so their click keeps the
+      // same preview/full toggle. Global or per-row transcript expansion always
+      // wins and shows the full text.
+      const alwaysOpen = thinkingFold === 'always'
+      const previewByDefault = thinkingFold === 'preview'
+      const turnOpen = streaming || thinkingOpen || alwaysOpen
       const streamPreview = turnOpen && !expanded && !isExpanded &&
-        (streamViewToggled ? thinkingFold === 'full' : thinkingFold === 'preview')
+        (streamViewToggled ? !previewByDefault : previewByDefault)
       return (
         <Box flexDirection="column" ref={ref}>
           <ThinkingLeafRow
@@ -1966,8 +1970,8 @@ function TranscriptRow({
             marginTopOnTurn={marginTopOnTurn}
             streaming={streaming}
             preview={streamPreview}
-            // Settled rows keep the fold-on-settle default and expand via
-            // expandedRows/Ctrl+O; a current-turn row is preview or full.
+            // `always` rows are open without expandedRows; preview/full settle
+            // to the fold-on-click default and expand via expandedRows/Ctrl+O.
             verbose={isExpanded || expanded || (turnOpen && !streamPreview)}
             durationMs={durationMs}
             reasoningTokens={reasoningTokens}

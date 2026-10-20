@@ -55,9 +55,9 @@ type Props = {
 }
 
 /**
- * Thinking block: settled rows fold to `⚓ Thinking` plus the localized
- * ctrl+o expand hint (hint-expand-ctrl-o);
- * streaming rows switch between a three-line preview and the full reasoning
+ * Thinking block: settled folded rows show `⚓ Thinking` plus the localized
+ * ctrl+o expand hint (hint-expand-ctrl-o); an expanded body omits the hint.
+ * Streaming rows switch between a three-line preview and the full reasoning
  * text on click. The live leading mark is a rotating braille spinner
  * (`⠋⠙⠹…`, Kimi Code style), settling back to the static anchor (`⚓`). When
  * the channel records the reasoning duration, the label carries it
@@ -112,7 +112,7 @@ export function AssistantThinkingMessage({
   // header's brand→ice ladder, one sine period per ~7 frames (≈0.56s) —
   // lively without strobing. The minimal UI drops the color (plain glyph);
   // settled always keeps the plain dim anchor.
-  const label = `${t('thinking-label')}${duration}${streaming ? '…' : ` ${t('hint-expand-ctrl-o', { key: primaryComboString('transcript') })}`}`
+  const label = `${t('thinking-label')}${duration}${streaming ? '…' : verbose ? '' : ` ${t('hint-expand-ctrl-o', { key: primaryComboString('transcript') })}`}`
   const minimalUi = isMinimalUiMode()
   const pulse = (Math.sin(frame * 0.9) + 1) / 2
   const pulseColor = interpolateColor(BRAND, ICE, pulse)

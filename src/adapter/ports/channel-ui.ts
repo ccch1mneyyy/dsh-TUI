@@ -1,6 +1,6 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
 import type { ChatRow, AgentStatus, TokenUsage, TurnUsageSummary, TurnOutcome, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, TrajectoryLane, TrajectorySource, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy, ContextBreakdown, TeamView, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef, BackendModeOption, BackendChannelOption, BackendChannelInput } from './channel-view.js'
-import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode, BrandSetting } from './channel-display.js'
+import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode, ThinkingFoldMode, BrandSetting } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { AgentCapabilities } from './channel-capabilities.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry, ForeignSource, ForeignSessionRow, ForeignImportOutcome } from './channel-session.js'
@@ -240,8 +240,9 @@ export interface ChannelUi {
   /** Edit/Write diff presentation preference (`auto`/`split`/`unified`). */
   readonly diffLayout: 'auto' | 'split' | 'unified'
   /** Thinking-block display (`preview` = 2-3 line live stream + fold per
-   *  step; `full` = expanded until turn end). */
-  readonly thinkingFold: 'preview' | 'full'
+   *  step; `full` = expanded until turn end; `always` = settled blocks stay
+   *  expanded until clicked). */
+  readonly thinkingFold: ThinkingFoldMode
   /** Grouping/folding of runs of consecutive background-job cards (settings
    *  `dsh-tui.jobGroupFold`): `auto` folds a settled run of 3+ into its
    *  summary line, `always` folds any run of 2+, `never` never folds on its
@@ -874,7 +875,7 @@ export interface ChannelUi {
    */
   trajectoryBackendLabel(): string
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
-  setThinkingFold(mode: 'preview' | 'full'): void
+  setThinkingFold(mode: ThinkingFoldMode): void
   setJobGroupFold(mode: JobGroupFoldMode): void
   setToolBackground(background: ToolBackground): void
   setScrollGutter(mode: ScrollGutterMode): void
