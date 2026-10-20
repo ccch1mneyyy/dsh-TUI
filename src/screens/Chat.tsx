@@ -1465,10 +1465,11 @@ export function Chat({
    *  a row they are no longer looking at). */
   const rewindRequestRef = React.useRef(0)
   /** /btw side-question thread: pure UI state in btwThreads — the answers
-   *  never enter the transcript or the session log. The floating overlay is
-   *  only the FALLBACK surface (btw panel not enabled); with the panel
-   *  enabled the same thread routes to the sidebar instead — one answer,
-   *  exactly one surface. */
+   *  never enter the transcript or the session log. Two surfaces, one owner:
+   *  the sidebar panel when the split can render AND is showing the btw
+   *  panel, otherwise the floating overlay in the conversation. This flag
+   *  records that the fallback is wanted; `btwOverlayVisible` decides whether
+   *  it actually owns the screen. */
   const [btwOverlayOpen, setBtwOverlayOpen] = React.useState(false)
   /** ⤢ fullscreen thread scene (openPanelFullscreen 'btw' route). */
   const [btwSceneOpen, setBtwSceneOpen] = React.useState(false)
@@ -4256,10 +4257,11 @@ export function Chat({
       case 'btw': {
         // `/btw`：单轮无工具侧问，线程只在内存里（btwThreads，按会话
         // 隔离），不打断主回合、不写会话历史。空参数只提示用法。分栏
-        // 渲染得出来才进面板线程（有模态界面时不抢开，只标未读）；否则
-        // 退浮层——面板「已启用」只是配置，不代表分栏真的上屏（窄屏 /
-        // inline / 编辑器展开 / splitEnabled=false 都会把它掩掉，issue
-        // #1631）。同一个问答只出现在一处。
+        // 渲染得出来才进面板线程；否则退浮层——面板「已启用」只是配置，
+        // 不代表分栏真的上屏（窄屏 / inline / 编辑器展开 /
+        // splitEnabled=false 都会把它掩掉，issue #1631）。屏被别的浮层或
+        // 整屏界面占着时两个表面都不抢开，只发通知。同一个问答只出现在
+        // 一处。
         setHelpOpen(false)
         const question = rawInput.trim()
         if (!question) {
@@ -4272,13 +4274,13 @@ export function Chat({
           return true
         }
         const btwPanelEnabled = sidePanel.enabledPanelIds.includes('btw')
-        if (btwPanelEnabled && sidePanel.splitAvailable) {
-          if (btwSurfaceFree()) sidePanel.openPanel('btw')
-        } else if (!btwPanelEnabled || btwSurfaceFree()) {
-          setBtwOverlayOpen(true)
+        if (btwSurfaceFree()) {
+          if (btwPanelEnabled && sidePanel.splitAvailable) sidePanel.openPanel('btw')
+          else setBtwOverlayOpen(true)
         } else {
-          // 面板已启用、分栏却渲不出来，屏又被别的界面占着：说一句，
-          // 别让侧问静默落进一个看不见的地方。
+          // 屏被别的浮层/整屏界面占着：侧问照常发出，但只在通知通道里说一
+          // 句——既不把答案静默塞进看不见的地方，也不挂一个既看不见、又
+          // 会先吃掉按键的浮层。
           channel.notify(t('btw-surface-busy'), { color: 'warning', timeoutMs: 4000 })
         }
         return true
@@ -4437,6 +4439,21 @@ export function Chat({
     fullscreen: fullscreen && !launchpadShown,
     editorOpen: promptEditorOpen,
   })
+  /**
+   * 「面板上屏」不等于「分栏在渲染」：分栏画出的是 activePanelId 那一块，
+   * 而活动面板默认是启用列表第一项。浮层只在侧栏真的显示 btw 线程时让位；
+   * 侧栏停在别的面板上时把浮层卸掉，等于让用户什么都看不到（issue #1631
+   * 的同一条静默路径）。
+   */
+  const btwPanelOnScreen =
+    sidePanel.enabledPanelIds.includes('btw') && sidePanel.split && sidePanel.activePanelId === 'btw'
+  /**
+   * 浮层是否真的占着屏幕（因而可以接管输入）。渲染门与所有「让位 / 暂停
+   * 输入」的判定都读这一个值：`btwOverlayOpen` 只是「想要浮层」，分栏重新
+   * 出现后它可能为真却什么都不画——那时不能再让 PromptInput 与 Chat 的按键
+   * 处理器让位（否则 composer 消失、Esc/Ctrl+C 都失效）。
+   */
+  const btwOverlayVisible = btwOverlayOpen && !btwPanelOnScreen
   /**
    * 「全屏」出口（PanelBar 的 ⤢）：把侧栏里那个面板的内容切到它原本的整屏
    * 形态。只映射**真的有整屏对应物**的面板 id（能力位 capabilities.fullscreen
@@ -4649,7 +4666,7 @@ export function Chat({
   const lastModalEnterAtRef = React.useRef(0)
   const couponVisible = coupon !== null && starModal === null
     && approvalSnapshot === null && dialogSnapshot === null && questionSnapshot === null
-    && overlay.kind === 'none' && !btwOverlayOpen && recap === null
+    && overlay.kind === 'none' && !btwOverlayVisible && recap === null
     && !supervisorOpen && !treeOpen && !settingsOpen && !jobsPanelOpen
     && !sceneOpen && !subagentDashboardOpen && subagentDetailId === null
     && !btwSceneOpen
@@ -4704,7 +4721,7 @@ export function Chat({
     // suspended to preserve async command drafts, making this guard also
     // essential for Ctrl+C: it must never clear the hidden composer.
     if (
-      btwOverlayOpen
+      btwOverlayVisible
       || overlay.kind === 'tips'
       || (recap !== null && (!recap.auto || recap.expanded))
     ) return
@@ -6615,7 +6632,7 @@ export function Chat({
    *  overlay union covers every picker/dialog and /tips in one check;
    *  message-selection mode and the /btw panel live outside it. */
   const promptSelectionActive =
-    selectionActive || overlay.kind !== 'none' || btwOverlayOpen
+    selectionActive || overlay.kind !== 'none' || btwOverlayVisible
 
   // These panels replace the visible composer, but PromptInput remains
   // mounted (suspended) so an async registry command cannot lose its exact
@@ -6625,7 +6642,7 @@ export function Chat({
     || dialogSnapshot !== null
     || overlay.kind === 'tips'
     || (recap !== null && (!recap.auto || recap.expanded))
-    || btwOverlayOpen
+    || btwOverlayVisible
     || questionPanelNode !== null
     || starModal !== null
     || couponVisible
@@ -7204,10 +7221,11 @@ export function Chat({
               }}
             />
           </Box>
-        ) : btwOverlayOpen && !(sidePanel.enabledPanelIds.includes('btw') && sidePanel.split) ? (
-          // 浮层只在 btw 面板没有真正上屏时显示：面板未启用，或分栏渲不
-          // 出来（窄屏 / inline / 编辑器展开 / splitEnabled=false）。面板
-          // 一上屏（含中途重新上屏）浮层就立即让位，单一 surface。
+        ) : btwOverlayVisible ? (
+          // 浮层只在 btw 线程没有真正上屏时显示：面板未启用，或分栏渲不
+          // 出来（窄屏 / inline / 编辑器展开 / splitEnabled=false），或分栏
+          // 在、但画的是别的面板。侧栏真的显示 btw 线程时浮层立即让位——
+          // 单一 surface（判定见 btwPanelOnScreen）。
           <Box flexDirection="column" marginTop={1}>
             <BtwPanelFallback
               thread={btwOverlayThread}
@@ -7320,7 +7338,7 @@ export function Chat({
           订阅模块级 store，锚点/内容由各处 useTooltip hover props 写入；
           resize 时自行隐藏（几何失效）。 */}
       <TooltipLayer
-        invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btwOverlayOpen}`}
+        invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btwOverlayVisible}`}
         subscribeInvalidation={subscribeTooltipInvalidation}
       />
       </SidePanelLayout>

@@ -182,6 +182,8 @@ interface Case {
   readonly editor?: boolean
   /** 期望形态：屏幕可见（默认）或至少一句提示。 */
   readonly expect?: 'visible' | 'notice'
+  /** 提示形态必须命中的 i18n 文案（已解析；只看到任意通知不算通过）。 */
+  readonly expectNotice?: string
   /** 从「侧栏收起」起步，验证 openPanel 的开关写入是否可见。 */
   readonly startClosed?: boolean
 }
@@ -208,10 +210,10 @@ const cases: Case[] = [
   // inline 模式（非 fullscreen）
   { name: 'I1  120 列 inline /btw', cols: 120, fullscreen: false, line: '/btw Q120I', token: 'Q120I', expectVisible: true },
   // 整屏草稿编辑器展开中（splitAvailable 因 editorOpen 为 false）
-  { name: 'E1  100 列 编辑器展开 /btw（应给提示）', cols: 100, line: '/btw Q100E', token: 'Q100E', expectVisible: false, editor: true, expect: 'notice' },
+  { name: 'E1  100 列 编辑器展开 /btw（应给提示）', cols: 100, line: '/btw Q100E', token: 'Q100E', expectVisible: false, editor: true, expect: 'notice', expectNotice: t('btw-surface-busy') },
   // issue 声称的对照：/panel btw 在窄宽度下能开整屏 btw 场景——实测只能给提示，
   // 整屏形态只有面板 ⤢ 一个入口（需要面板先上屏）。这条期望因此是「不出现」。
-  { name: 'C1   80 列 /panel btw（issue 的对照断言不成立）', cols: 80, line: '/panel btw', token: BTW_FACE, expectVisible: false, expect: 'notice' },
+  { name: 'C1   80 列 /panel btw（issue 的对照断言不成立）', cols: 80, line: '/panel btw', token: BTW_FACE, expectVisible: false, expect: 'notice', expectNotice: t('panel-unavailable-hint') },
 ]
 
 const rows: string[] = []
@@ -226,7 +228,13 @@ for (const item of cases) {
   const screen = chat.screen()
   if (process.env.DUMP) console.log(`\n=== ${item.name} ===\n${screen}\n=== end ===`)
   const visible = screen.includes(item.token)
-  const ok = item.expect === 'notice' ? chat.channel.notices.length > 0 : visible === item.expectVisible
+  // 侧问必须真的发出去：光靠草稿里残留的题目文本满足 `visible` 会是假绿。
+  const asked = item.line.startsWith('/btw') ? chat.ask.calls.length === 1 : true
+  // 提示形态必须命中预期文案，任意通知（复制、其它命令）不算。
+  const expectedNotice = item.expectNotice
+  const noticeOk = item.expect !== 'notice'
+    || (expectedNotice !== undefined && chat.channel.notices.some(text => text.includes(expectedNotice)))
+  const ok = visible === item.expectVisible && asked && noticeOk
   const status = ok ? 'PASS' : 'FAIL'
   const notice = chat.channel.notices.length > 0 ? JSON.stringify(chat.channel.notices[0]!.slice(0, 24)) : '无'
   const openAfter = getSidePanelOpen()
