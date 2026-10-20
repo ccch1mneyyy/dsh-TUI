@@ -11,6 +11,9 @@
  *    只有无修饰的 Enter 才关（关闭即中止在途侧问）。
  *  - Chat 级（真 Chat + fake channel）：/btw 快路由——面板启用时路由进侧栏
  *    且浮层反针不出现（单一 surface）；未启用时浮层回退，Esc 关闭即 abort。
+ *  - Chat 级分栏掩码（issue #1631）：窄屏（<93 列）或 splitEnabled=false 时
+ *    面板「已启用」但分栏渲不出来，/btw 必须退浮层、且不写无效的打开状态；
+ *    整屏编辑器占屏时给一句提示，而不是把浮层开在它底下。
  * 运行：node --import tsx/esm scripts/verify-btw-panel.tsx
  */
 import { mkdtempSync } from 'node:fs'
@@ -44,7 +47,7 @@ const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn },
   import('../src/components/sidePanel/btw/BtwComposer.js'),
 ])
 const { render, ThemeProvider, Box, Text, AlternateScreen, useInput, useTerminalSize } = ui
-const { applySidePanelOpen, applySidePanelRatio, applySidePanelPanels } = prefs
+const { applySidePanelOpen, applySidePanelRatio, applySidePanelPanels, applySidePanelSplitEnabled, getSidePanelOpen } = prefs
 setLang('zh')
 
 const ROWS = 22
@@ -55,6 +58,9 @@ function check(name: string, ok: boolean, extra = ''): void {
 }
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 const ESC = String.fromCharCode(27)
+/** 展开草稿编辑器（Ctrl+Shift+E）/ 在编辑器里提交（Ctrl+Enter）。 */
+const CTRL_SHIFT_E = '\x1b[69;6u'
+const CTRL_ENTER = '\x1b[13;5u'
 
 function scriptedAsk() {
   const calls: { question: string }[] = []
@@ -494,10 +500,10 @@ const plainText = (frames: readonly string[]) => frames.join('')
   .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
   .replace(/\x1b\]9;[^\x07]*\x07/g, '')
 
-async function mountChat(ask: ReturnType<typeof scriptedAsk>) {
+async function mountChat(ask: ReturnType<typeof scriptedAsk>, cols = 100) {
   const channel = makeChatChannel(ask)
-  const term = new XTerm({ cols: 100, rows: ROWS, scrollback: 200, allowProposedApi: true })
-  const stdout = new FakeStdout(term, 100)
+  const term = new XTerm({ cols, rows: ROWS, scrollback: 200, allowProposedApi: true })
+  const stdout = new FakeStdout(term, cols)
   const stdin = new FakeStdin()
   const instance = await render(
     <Chat channel={channel as never} questionStore={new QuestionStore()} fullscreen />,
@@ -507,7 +513,7 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>) {
   const lines = () => {
     const buf = term.buffer.active
     const out: string[] = []
-    for (let y = 0; y < ROWS; y += 1) out.push((buf.getLine(y)?.translateToString(false) ?? '').padEnd(100, ' '))
+    for (let y = 0; y < ROWS; y += 1) out.push((buf.getLine(y)?.translateToString(false) ?? '').padEnd(cols, ' '))
     return out
   }
   // Negative checks read the rendered viewport after every write instead of
@@ -532,11 +538,11 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>) {
     watch: (needle: string) => { watched.set(needle, viewport().includes(needle)) },
     seen: (needle: string) => watched.get(needle) === true,
     since: (mark: number) => plainText(stdout.frames.slice(mark)),
-    run: async (line: string) => {
+    run: async (line: string, submit = '\r') => {
       const from = stdout.frames.length
       stdin.write(line)
       await delay(150)
-      stdin.write('\r')
+      stdin.write(submit)
       await delay(600)
       return plainText(stdout.frames.slice(from))
     },
@@ -609,6 +615,70 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>) {
     closed = chat.viewport()
   }
   check('C2d. 浮层关闭后回到普通聊天（视口里没有浮层）', !closed.includes(fallbackNote), closed.split('\n').filter(l => l.trim() !== '').slice(-4).join(' | '))
+  await chat.unmount()
+}
+
+// ── C3: 分栏渲不出来时 /btw 退浮层（issue #1631：绝不静默）────────────
+{
+  // 80 列 < canSplit 阈值（CHAT_MIN 64 + PANEL_MIN 28 + DIVIDER 1 = 93）。
+  // 修前：openPanel 只写了一个被 splitAvailable 掩掉的开关，屏幕不变、也
+  // 没有一句提示，用户无从判断命令有没有生效。
+  applySidePanelPanels('todo,jobs,agents,info,trajectory,workspace,btw,companion')
+  applySidePanelOpen(false)
+  btwThreads.resetForTest()
+  const ask = scriptedAsk()
+  const chat = await mountChat(ask, 80)
+  const fallbackNote = t('btw-panel-unavailable').slice(0, 10)
+  chat.watch(fallbackNote)
+  await chat.run('/btw 窄屏的问题一')
+  const narrow = chat.viewport()
+  check('C3a. 80 列 + btw 面板启用：浮层兜底出现并把题目上屏',
+    narrow.includes(fallbackNote) && narrow.includes('窄屏的问题一'),
+    narrow.split('\n').filter(l => l.trim() !== '').slice(-3).join(' | '))
+  check('C3b. 侧问照常发起（一次）', ask.calls.length === 1)
+  check('C3c. 分栏不可用时不写一个不生效的「侧栏打开」状态', getSidePanelOpen() === false)
+  await chat.unmount()
+}
+
+// ── C4: splitEnabled=false 是同一根因的另一条掩码，同样要退浮层──────
+{
+  applySidePanelPanels('todo,jobs,agents,info,trajectory,workspace,btw,companion')
+  applySidePanelSplitEnabled(false)
+  applySidePanelOpen(true)
+  btwThreads.resetForTest()
+  const ask = scriptedAsk()
+  const chat = await mountChat(ask, 120)
+  const fallbackNote = t('btw-panel-unavailable').slice(0, 10)
+  await chat.run('/btw 关掉分栏的问题')
+  const wide = chat.viewport()
+  check('C4a. splitEnabled=false：浮层兜底出现并把题目上屏',
+    wide.includes(fallbackNote) && wide.includes('关掉分栏的问题'),
+    wide.split('\n').filter(l => l.trim() !== '').slice(-3).join(' | '))
+  check('C4b. 侧问照常发起（一次）', ask.calls.length === 1)
+  await chat.unmount()
+  applySidePanelSplitEnabled(true)
+}
+
+// ── C5: 整屏编辑器占屏 → 发通知，别把浮层挂上去 ───────────────────────
+// 编辑器是全屏不透明 cover（PromptEditorLayer 是 Chat 根 Box 的最后一个
+// 孩子），toast 也在它下面，所以这一格能保证的是「不静默丢弃」+「不挂一
+// 个既看不见又会先吃掉编辑器按键的浮层」（useInput 按挂载顺序分发）。
+{
+  applySidePanelPanels('todo,jobs,agents,info,trajectory,workspace,btw,companion')
+  applySidePanelOpen(true)
+  btwThreads.resetForTest()
+  const ask = scriptedAsk()
+  const chat = await mountChat(ask, 100)
+  const fallbackNote = t('btw-panel-unavailable').slice(0, 10)
+  chat.watch(fallbackNote)
+  chat.stdin.write(CTRL_SHIFT_E)
+  await delay(400)
+  await chat.run('/btw 编辑器里的侧问', CTRL_ENTER)
+  check('C5a. 编辑器占屏：侧问被挡住这件事进了通知通道（不静默丢弃）',
+    chat.channel.notices.some(text => text.includes(t('btw-surface-busy'))),
+    JSON.stringify(chat.channel.notices))
+  check('C5b. 不在编辑器底下开一个看不见的浮层', !chat.seen(fallbackNote))
+  check('C5c. 侧问照常发起（一次）', ask.calls.length === 1)
   await chat.unmount()
 }
 

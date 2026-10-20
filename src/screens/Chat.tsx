@@ -4255,9 +4255,11 @@ export function Chat({
       }
       case 'btw': {
         // `/btw`：单轮无工具侧问，线程只在内存里（btwThreads，按会话
-        // 隔离），不打断主回合、不写会话历史。空参数只提示用法。启用了
-        // btw 面板就进面板线程（有模态界面时不抢开，只标未读）；没启用
-        // 就用浮层。同一个问答只出现在一处。
+        // 隔离），不打断主回合、不写会话历史。空参数只提示用法。分栏
+        // 渲染得出来才进面板线程（有模态界面时不抢开，只标未读）；否则
+        // 退浮层——面板「已启用」只是配置，不代表分栏真的上屏（窄屏 /
+        // inline / 编辑器展开 / splitEnabled=false 都会把它掩掉，issue
+        // #1631）。同一个问答只出现在一处。
         setHelpOpen(false)
         const question = rawInput.trim()
         if (!question) {
@@ -4269,10 +4271,15 @@ export function Chat({
           channel.notify(t('btw-thread-busy'), { color: 'warning', timeoutMs: 3000 })
           return true
         }
-        if (sidePanel.enabledPanelIds.includes('btw')) {
+        const btwPanelEnabled = sidePanel.enabledPanelIds.includes('btw')
+        if (btwPanelEnabled && sidePanel.splitAvailable) {
           if (btwSurfaceFree()) sidePanel.openPanel('btw')
-        } else {
+        } else if (!btwPanelEnabled || btwSurfaceFree()) {
           setBtwOverlayOpen(true)
+        } else {
+          // 面板已启用、分栏却渲不出来，屏又被别的界面占着：说一句，
+          // 别让侧问静默落进一个看不见的地方。
+          channel.notify(t('btw-surface-busy'), { color: 'warning', timeoutMs: 4000 })
         }
         return true
       }
@@ -7197,8 +7204,10 @@ export function Chat({
               }}
             />
           </Box>
-        ) : btwOverlayOpen && !sidePanel.enabledPanelIds.includes('btw') ? (
-          // 浮层只在 btw 面板未启用时显示；面板中途被启用就立即让位。
+        ) : btwOverlayOpen && !(sidePanel.enabledPanelIds.includes('btw') && sidePanel.split) ? (
+          // 浮层只在 btw 面板没有真正上屏时显示：面板未启用，或分栏渲不
+          // 出来（窄屏 / inline / 编辑器展开 / splitEnabled=false）。面板
+          // 一上屏（含中途重新上屏）浮层就立即让位，单一 surface。
           <Box flexDirection="column" marginTop={1}>
             <BtwPanelFallback
               thread={btwOverlayThread}

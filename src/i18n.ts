@@ -798,6 +798,7 @@ const dict = {
   'btw-fullscreen-title': { zh: '侧问线程', en: 'Side thread' },
   'btw-scene-hints': { zh: 'Enter 追问 · ↑/↓ 选择 · n 新话题 · s 送聊天 · c 复制 · Esc 返回', en: 'Enter ask · ↑/↓ select · n new · s to chat · c copy · Esc back' },
   'btw-panel-unavailable': { zh: 'btw 面板未启用（/settings → dsh-tui.sidePanel.panels）', en: 'btw panel not enabled (/settings → dsh-tui.sidePanel.panels)' },
+  'btw-surface-busy': { zh: '侧问已发出，但当前界面挡住了它（关掉浮层后再 /btw）', en: 'Side question is hidden by the current screen — close it, then rerun /btw' },
   'btw-output-unavailable': { zh: '没有收到回答', en: 'No answer received' },
   'btw-answering': { zh: '思考中…', en: 'Answering…' },
   'btw-hint-loading': { zh: 'Esc 取消', en: 'Esc cancel' },
