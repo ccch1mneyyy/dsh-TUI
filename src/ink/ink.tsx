@@ -138,6 +138,7 @@ export default class Ink {
   private isDetachedForShutdown = false;
   private shutdownCleanup: Promise<void> | undefined;
   private isPaused = false;
+  private rawModeRecoveryTimer: ReturnType<typeof setInterval> | undefined;
   private readonly container: FiberRoot;
   private rootNode: dom.DOMElement;
   readonly focusManager: FocusManager;
@@ -328,9 +329,11 @@ export default class Ink {
     if (options.stdout.isTTY) {
       options.stdout.on('resize', this.handleResize);
       process.on('SIGCONT', this.handleResume);
+      this.startRawModeRecovery();
       this.unsubscribeTTYHandlers = () => {
         options.stdout.off('resize', this.handleResize);
         process.off('SIGCONT', this.handleResume);
+        this.stopRawModeRecovery();
       };
     }
     this.rootNode = dom.createNode('ink-root');
@@ -1313,17 +1316,34 @@ export default class Ink {
     this.cursorIdleNode = null;
     this.cursorIdleHidden = false;
   }
+  private reassertOwnedRawMode = (): void => {
+    if (!this.options.stdout.isTTY || this.isUnmounted || this.isPaused) return;
+    try { this.app?.reassertRawMode(); } catch { /* revoked TTY; retry only while owned */ }
+  };
+  private startRawModeRecovery(): void {
+    if (!this.options.stdout.isTTY || this.isUnmounted || this.isPaused || this.rawModeRecoveryTimer !== undefined) return;
+    // Cooked mode can suppress readable until Enter. Recover independently
+    // of input, without periodically rewriting DEC modes or the viewport.
+    this.rawModeRecoveryTimer = setInterval(this.reassertOwnedRawMode, 5000);
+    this.rawModeRecoveryTimer.unref();
+  }
+  private stopRawModeRecovery(): void {
+    clearInterval(this.rawModeRecoveryTimer);
+    this.rawModeRecoveryTimer = undefined;
+  }
   pause(): void {
     // Flush pending React updates and render before pausing.
     // @ts-ignore -- runtime/type-definition mismatch: flushSyncFromReconciler exists in react-reconciler 0.31 but not in @types/react-reconciler
     reconciler.flushSyncFromReconciler();
     this.renderNow();
     this.isPaused = true;
+    this.stopRawModeRecovery();
     this.resetCursorIdle();
     this.notifyTerminalImagesChange();
   }
   resume(): void {
     this.isPaused = false;
+    this.startRawModeRecovery();
     this.nativeCursorVisible = null;
     this.notifyTerminalImagesChange();
     this.renderNow();
@@ -1494,8 +1514,8 @@ export default class Ink {
   }
 
   /**
-   * Re-assert terminal modes after a gap (>5s stdin silence or event-loop
-   * stall). Catches tmux detach→attach, ssh reconnect, and laptop
+   * Re-assert terminal modes after a gap (>5s stdin silence).
+   * Catches tmux detach→attach, ssh reconnect, and laptop
    * sleep/wake — none of which send SIGCONT. The terminal may reset DEC
    * private modes on reconnect; this method restores them.
    *
@@ -1509,21 +1529,22 @@ export default class Ink {
    * Ctrl+C/Ctrl+D leak as escape sequences. The alt-screen
    * re-entry (ERASE_SCREEN + frame reset) is NOT idempotent — it blanks the
    * screen — so it's opt-in via includeAltScreen. The stdin-gap caller fires
-   * on ordinary >5s idle + keypress and must not erase; the event-loop stall
-   * detector fires on genuine sleep/wake and opts in. tmux attach / ssh
+   * on ordinary >5s idle + keypress and must not erase. The independent
+   * raw-mode timer restores termios only, without re-entering alt. tmux attach / ssh
    * reconnect typically send a resize, which already covers alt-screen via
    * handleResize.
    */
   reassertTerminalModes = (includeAltScreen = false): void => {
     if (!this.options.stdout.isTTY) return;
-    // Shutdown latch: the >5s idle-gap trigger (or an event-loop stall
-    // detector firing during the dispose window) must not re-assert mouse
+    // Shutdown latch: an idle-gap trigger during the dispose window must
+    // not re-assert mouse
     // tracking after the exit cleanup disabled it (issue #522).
     if (this.isUnmounted) return;
     // Don't touch the terminal during an editor handoff — re-enabling kitty
     // keyboard here would undo enterAlternateScreen's disable and nano would
     // start seeing CSI-u sequences again.
     if (this.isPaused) return;
+    this.reassertOwnedRawMode();
     // Extended keys — re-assert if enabled (App.tsx enables these on
     // allowlisted terminals at raw-mode entry; a terminal reset clears them).
     // Pop-before-push keeps Kitty stack depth at 1 instead of accumulating
@@ -1872,6 +1893,7 @@ export default class Ink {
   /** Refocus = first observable moment after a conpty-side mode reset. */
   handleTerminalFocusProbe = (focused: boolean): void => {
     if (focused) {
+      this.reassertOwnedRawMode();
       this.probeAltScreenHealth();
       // Refocus is a safe boundary: the OS delivered the focus event, so no
       // button can be held (a held button would have generated motion or a

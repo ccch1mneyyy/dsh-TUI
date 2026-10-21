@@ -20,7 +20,7 @@
  * Run after build: `node scripts/verify-sigcont-rawmode.mjs`
  */
 import { PassThrough, Writable } from 'node:stream'
-import { settle, sleep } from './lib/term-test.mjs'
+import { settle, settled, sleep } from './lib/term-test.mjs'
 import instances from '../lib/types/ink/instances.js'
 
 const [{ default: React }, { render, AlternateScreen }, { PromptInput }] = await Promise.all([
@@ -46,9 +46,11 @@ const stdin = new PassThrough()
 stdin.isTTY = true
 stdin.isRaw = false
 const rawCalls = []
+let kernelRaw = false
 stdin.setRawMode = mode => {
   rawCalls.push(mode)
   stdin.isRaw = mode
+  kernelRaw = mode
   return stdin
 }
 stdin.setEncoding = () => stdin
@@ -91,6 +93,40 @@ try {
   check('raw mode is enabled while the composer is mounted', rawCalls.includes(true) && stdin.isRaw === true,
     JSON.stringify(rawCalls))
 
+  const ink = instances.get(stdout)
+  check('the Ink instance is reachable for pause()/resume()', ink !== undefined)
+  const initialRawCount = ink.app.rawModeEnabledCount
+  const initialReaders = stdin.listenerCount('readable')
+  // Kernel state changes behind Node's cached isRaw property, with NO input.
+  kernelRaw = false
+  rawCalls.length = 0
+  check('idle recovery restores raw mode without waiting for readable or Enter',
+    await settled(() => kernelRaw, { timeoutMs: 6500 }), JSON.stringify(rawCalls))
+  check('idle recovery leaves the raw reference count and listeners unchanged',
+    ink.app.rawModeEnabledCount === initialRawCount && stdin.listenerCount('readable') === initialReaders)
+  check('raw recovery timer does not keep the process alive', ink.rawModeRecoveryTimer?.hasRef() === false)
+
+  rawCalls.length = 0
+  ink.reassertTerminalModes()
+  check('input-gap recovery also reasserts raw mode', rawCalls.includes(true))
+  rawCalls.length = 0
+  ink.handleTerminalFocusProbe(true)
+  check('focus recovery also reasserts raw mode', rawCalls.includes(true))
+
+  const savedSetRawMode = stdin.setRawMode
+  let escaped = false
+  try {
+    stdin.setRawMode = () => { throw new Error('fixture revoked tty') }
+    try { ink.reassertOwnedRawMode() } catch { escaped = true }
+  } finally {
+    stdin.setRawMode = savedSetRawMode
+  }
+  check('periodic raw recovery tolerates a revoked tty ioctl', !escaped)
+  kernelRaw = false
+  ink.reassertOwnedRawMode()
+  check('a later raw recovery can succeed after the ioctl failure', kernelRaw)
+
+
   // The shell reset termios to its own cooked modes while the job was stopped.
   // `stdin.isRaw` is deliberately left alone: Node caches it as a plain stream
   // property, so after an external stop it still reads `true` while the tty is
@@ -114,12 +150,14 @@ try {
   // suspending the whole process group — must be left entirely to the child: no
   // termios re-assert, no repaint, no alt-screen re-entry (all three share the
   // same `isPaused` early return in handleResume).
-  const ink = instances.get(stdout)
-  check('the Ink instance is reachable for pause()/resume()', ink !== undefined)
   ink.pause()
+  check('pause clears the periodic raw recovery timer', ink.rawModeRecoveryTimer === undefined)
   await sleep(120) // 固定窗:pacing 等 pause() 的收尾重绘落地
   rawCalls.length = 0
   const pausedWrites = writes.length
+  ink.reassertOwnedRawMode()
+  ink.reassertTerminalModes()
+  ink.handleTerminalFocusProbe(true)
   process.emit('SIGCONT')
   await sleep(120) // 固定窗:探针 暂停期间 SIGCONT 必须完全静默：只能等观察窗
   check('SIGCONT while paused touches nothing (no raw mode, no repaint, no alt-screen re-entry)',
@@ -129,6 +167,7 @@ try {
   // Unpausing restores the ordinary path: the next SIGCONT re-asserts termios
   // (and, with the alt screen active, re-enters it).
   ink.resume()
+  check('resume restarts periodic raw recovery', ink.rawModeRecoveryTimer !== undefined)
   await sleep(80) // 固定窗:pacing 等 resume 的重绘落地
   rawCalls.length = 0
   process.emit('SIGCONT')
@@ -136,8 +175,12 @@ try {
   check('SIGCONT after resume re-asserts raw mode again', rawCalls.includes(true), JSON.stringify(rawCalls))
 
   instance.unmount()
+  check('unmount clears periodic raw recovery', ink.rawModeRecoveryTimer === undefined)
   await sleep(120) // 固定窗:pacing 等 unmount 的清理落地（无单一可轮询锚点）
   rawCalls.length = 0
+  ink.reassertOwnedRawMode()
+  ink.reassertTerminalModes()
+  ink.handleTerminalFocusProbe(true)
   process.emit('SIGCONT')
   await sleep(100) // 固定窗:探针 断言 unmount 后 SIGCONT 不得碰 tty：只能等观察窗
   check('SIGCONT after unmount does not touch the tty', rawCalls.length === 0, JSON.stringify(rawCalls))

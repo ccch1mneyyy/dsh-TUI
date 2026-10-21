@@ -855,7 +855,7 @@ export default class App extends PureComponent<Props, State> {
 		setTerminalFocused(isFocused);
 	};
 	/**
-	 * Re-assert raw mode after an EXTERNAL stop+continue (SIGCONT). While the
+	 * Re-assert owned raw mode after an external reset or SIGCONT. While the
 	 * job is stopped the shell owns the tty and leaves it in its own cooked
 	 * modes; the job is expected to restore its termios when it continues.
 	 * The readable listener survives the stop, so only the termios flag comes
@@ -867,7 +867,7 @@ export default class App extends PureComponent<Props, State> {
 	 * back. `setRawMode(true)` is an idempotent ioctl.
 	 */
 	reassertRawMode = (): void => {
-		if (this.rawModeEnabledCount === 0 || !this.isRawModeSupported()) {
+		if (this.shutdownDetached || this.rawModeEnabledCount === 0 || !this.isRawModeSupported()) {
 			return;
 		}
 		this.props.stdin.setRawMode(true);

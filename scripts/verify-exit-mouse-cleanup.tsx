@@ -130,6 +130,8 @@ const sleep = (ms: number): Promise<void> =>
   // Latch, then let the probe throttle window pass: every self-heal path must
   // stay silent afterwards.
   instance.detachForShutdown()
+  check('shutdown handoff clears periodic raw recovery',
+    (ink as unknown as { rawModeRecoveryTimer?: unknown }).rawModeRecoveryTimer === undefined)
   await sleep(300) // 固定窗:探针 等探测节流窗过去后，被闩住的自愈路径仍不得重开鼠标跟踪
 
   ink?.probeAltScreenHealth()
