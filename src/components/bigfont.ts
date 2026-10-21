@@ -1,3 +1,4 @@
+import { foregroundOpenCode } from '../ink/colorize.js'
 import { interpolateColor } from './Spinner/spinnerUtils.js'
 import type { SplashFont } from './splashFonts.js'
 
@@ -32,7 +33,7 @@ const SWEEP_WINDOW = 8
 /** 一行字画几行。 */
 const ROWS = 5
 
-const esc = (rgb: Rgb): string => `\x1b[38;2;${rgb.r};${rgb.g};${rgb.b}m`
+const esc = (rgb: Rgb): string => foregroundOpenCode(`rgb(${rgb.r},${rgb.g},${rgb.b})`)
 const RESET = '\x1b[39m'
 
 /**

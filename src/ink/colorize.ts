@@ -272,3 +272,15 @@ export function backgroundOpenCode(color: Color | undefined): string {
   const end = styled.indexOf(SGR_OPEN_MARKER)
   return end <= 0 ? '' : styled.slice(0, end)
 }
+
+/**
+ * The opening SGR for a raw foreground color, without text or a reset.
+ * @param color - raw color; missing or disabled colors yield an empty string.
+ * @returns the capability-aware foreground opening sequence.
+ */
+export function foregroundOpenCode(color: Color | undefined): string {
+  if (!color) return ''
+  const styled = colorize(SGR_OPEN_MARKER, color, 'foreground')
+  const end = styled.indexOf(SGR_OPEN_MARKER)
+  return end <= 0 ? '' : styled.slice(0, end)
+}

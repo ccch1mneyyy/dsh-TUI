@@ -7,6 +7,7 @@
  *    normalized sparkline after each completed turn; colors green ≥ 50 tps,
  *    yellow ≥ 20, red below.
  */
+import { colorize } from '../ink/colorize.js'
 import type { Color } from '../ink/styles.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import type { Theme } from '../theme.js'
@@ -142,11 +143,7 @@ const stripAnsi = (text: string): string => text.replace(ANSI_RE, '')
 const plainWidth = (text: string): number => Array.from(stripAnsi(text)).length
 
 function ansiColor(mode: 38 | 48, hex: string, text: string): string {
-  const value = Number.parseInt(hex.replace(/^#/, ''), 16)
-  const red = (value >> 16) & 0xff
-  const green = (value >> 8) & 0xff
-  const blue = value & 0xff
-  return `\x1b[${mode};2;${red};${green};${blue}m${text}\x1b[${mode === 38 ? 39 : 49}m`
+  return colorize(text, hex, mode === 38 ? 'foreground' : 'background')
 }
 
 const foreground = (hex: string, text: string): string => ansiColor(38, hex, text)
@@ -552,11 +549,11 @@ export function renderContextBar(
 /** Pressure-colored text: green below 80%, amber ≥ 80, red ≥ 95.
  * @param pct - Context occupancy percent (0–100+).
  * @param text - Text to color.
- * @returns The ANSI 24-bit color-wrapped text.
+ * @returns The capability-aware color-wrapped text.
  */
 export function pressureColor(pct: number, text: string): string {
   const key = contextPressureStep(pct) ?? 'success'
-  return `\x1b[38;2;${colorHex(key)}m${text}\x1b[39m`
+  return colorize(text, colorHex(key), 'foreground')
 }
 
 /** Compact 1/8-cell context gauge for the footer's ctx field on hover:
@@ -599,21 +596,21 @@ const MED = 20
 /** Speed color: green ≥ 50, yellow ≥ 20, red below (pi-tps-meter).
  * @param tps - Tokens per second; selects the color threshold.
  * @param text - Text to color.
- * @returns The ANSI 24-bit color-wrapped text.
+ * @returns The capability-aware color-wrapped text.
  */
 export function speedColor(tps: number, text: string): string {
   const color = tps >= FAST ? 'success' : tps >= MED ? 'warning' : 'error'
-  return `\x1b[38;2;${colorHex(color)}m${text}\x1b[39m`
+  return colorize(text, colorHex(color), 'foreground')
 }
 
 function colorHex(key: 'success' | 'warning' | 'error'): string {
-  // dsh-tui dark theme values (theme.ts), semicolon-separated for raw ANSI.
+  // dsh-tui dark theme values (theme.ts), passed through shared color policy.
   const palette: Record<string, string> = {
-    success: '78;186;101',
-    warning: '202;138;4',
-    error: '255;107;128',
+    success: '#4eba65',
+    warning: '#ca8a04',
+    error: '#ff6b80',
   }
-  return palette[key] ?? '255;255;255'
+  return palette[key] ?? '#ffffff'
 }
 
 /** Live 1/8-cell horizontal gauge: `▕███████▋···▏`.

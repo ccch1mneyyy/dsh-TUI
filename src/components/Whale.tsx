@@ -1,4 +1,5 @@
 import React from 'react'
+import { backgroundOpenCode, foregroundOpenCode } from '../ink/colorize.js'
 import { Box, Text } from '../ui.js'
 import { WHALE_FRAMES, type WhaleFrame } from './whaleFrames.js'
 import { composeWhaleGrid, poseKey, type WhaleLayerPose } from './whaleLayers.js'
@@ -25,8 +26,8 @@ const PALETTE: Record<string, Rgb | undefined> = {
   Z: [128, 128, 128],
 }
 
-const fg = (rgb: Rgb): string => `\x1b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m`
-const bg = (rgb: Rgb): string => `\x1b[48;2;${rgb[0]};${rgb[1]};${rgb[2]}m`
+const fg = (rgb: Rgb): string => foregroundOpenCode(`rgb(${rgb.join(',')})`)
+const bg = (rgb: Rgb): string => backgroundOpenCode(`rgb(${rgb.join(',')})`)
 const RESET = '\x1b[0m'
 /** Erase from the cursor to the end of the physical line (default colors). */
 const ERASE_TO_EOL = '\x1b[K'
@@ -69,10 +70,12 @@ export function renderCellRows(
         // background, and SGR persists across cells — a bg left over from
         // the previous cell would paint a phantom pixel into the empty half
         // (the contour noise of the sprite). Reset it explicitly.
-        seq = fg(up) + BG_DEFAULT
+        const color = fg(up)
+        seq = color === '' ? '' : color + BG_DEFAULT
         ch = '▀'
       } else if (lo !== undefined) {
-        seq = fg(lo) + BG_DEFAULT
+        const color = fg(lo)
+        seq = color === '' ? '' : color + BG_DEFAULT
         ch = '▄'
       } else {
         seq = ''
@@ -88,7 +91,7 @@ export function renderCellRows(
     // otherwise leak its SGR into the line's remaining padding — then append
     // the erase pass (see the doc above).
     let row = out
-    if (!row.endsWith(RESET)) row += RESET
+    if (foregroundOpenCode('ansi:white') !== '' && !row.endsWith(RESET)) row += RESET
     rows.push(row + ERASE_TO_EOL)
   }
   return rows
