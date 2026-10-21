@@ -26,8 +26,8 @@ const PALETTE: Record<string, Rgb | undefined> = {
   Z: [128, 128, 128],
 }
 
-const fg = (rgb: Rgb): string => foregroundOpenCode(`rgb(${rgb.join(',')})`)
-const bg = (rgb: Rgb): string => backgroundOpenCode(`rgb(${rgb.join(',')})`)
+const fg = (rgb: Rgb): string => foregroundOpenCode(`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`)
+const bg = (rgb: Rgb): string => backgroundOpenCode(`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`)
 const RESET = '\x1b[0m'
 /** Erase from the cursor to the end of the physical line (default colors). */
 const ERASE_TO_EOL = '\x1b[K'
