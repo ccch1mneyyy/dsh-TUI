@@ -3,6 +3,7 @@ import { Box, Text } from '../ui.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { useTerminalSize } from '../ink/hooks/use-terminal-size.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import { getGraphemeSegmenter } from '../utils/intl.js'
 import { t } from '../i18n.js'
 import { formatDuration, formatTokens } from '../terminal-utils/format.js'
 import { SpinnerGlyph } from './Spinner/SpinnerGlyph.js'
@@ -81,21 +82,39 @@ export function CompactionStatusRow({
   // The hint is actionable and the phase is informative, so a narrow terminal
   // drops the phase first and the hint only when even that does not fit.
   const budget = Math.max(0, columns - RESERVE)
-  const base = (indicator === null ? DOT_SLOT : indicator.width) + stringWidth(label)
+  const indicatorWidth = indicator === null ? DOT_SLOT : indicator.width
+  const base = indicatorWidth + stringWidth(label)
   const elapsedWidth = stringWidth(SEP) + stringWidth(elapsed)
   const hintWidth = hint === undefined ? 0 : stringWidth(SEP) + stringWidth(hint)
   const detailWidth = stringWidth(SEP) + stringWidth(detail)
   const showHint = hint !== undefined && base + elapsedWidth + hintWidth <= budget
   const showDetail = base + elapsedWidth + hintWidth + detailWidth <= budget
+  // Keep the timer atomic, then spend the remaining cells on whole graphemes.
+  // Drop an oversized indicator before sacrificing an otherwise fitting timer.
+  const showIndicator = indicatorWidth < budget
+    && (indicatorWidth + elapsedWidth < budget || elapsedWidth >= budget)
+  const remaining = budget - (showIndicator ? indicatorWidth : 0)
+  const showElapsed = elapsedWidth < remaining
+  const labelWidth = Math.max(0, remaining - (showElapsed ? elapsedWidth : 0)
+    - (showHint ? hintWidth : 0) - (showDetail ? detailWidth : 0))
+  let fittedLabel = label
+  if (stringWidth(label) > labelWidth) {
+    fittedLabel = ''
+    for (const { segment } of getGraphemeSegmenter().segment(label)) {
+      if (stringWidth(fittedLabel + segment) > labelWidth - 1) break
+      fittedLabel += segment
+    }
+    if (labelWidth > 0) fittedLabel += '…'
+  }
 
   return (
-    <Box ref={viewportRef} flexDirection="row" flexWrap="wrap" marginTop={1} width="100%">
-      {glyph === null
+    <Box ref={viewportRef} flexDirection="row" flexWrap="nowrap" height={1} overflow="hidden" marginTop={1} width="100%">
+      {showIndicator && (glyph === null
         ? <SpinnerGlyph frame={frame} messageColor="accent" />
-        : <Text color="activity">{`${glyph} `}</Text>}
-      <Text color="accent">{label}</Text>
+        : <Text color="activity">{`${glyph} `}</Text>)}
+      <Text color="accent">{fittedLabel}</Text>
       {showDetail && <Text dimColor>{`${SEP}${detail}`}</Text>}
-      <Text dimColor>{`${SEP}${elapsed}`}</Text>
+      {showElapsed && <Text dimColor>{`${SEP}${elapsed}`}</Text>}
       {showHint && <Text dimColor>{`${SEP}${hint}`}</Text>}
     </Box>
   )

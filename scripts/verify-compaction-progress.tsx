@@ -20,6 +20,8 @@
  *
  * 运行：node --import tsx/esm scripts/verify-compaction-progress.tsx
  */
+process.env.DSH_TUI_LANG = 'zh'
+
 const [{ createChannel }, { settled, viewportLines }, { Writable, PassThrough }, React, { Terminal: XTerm }, ui, { CompactionStatusRow }, { t }, { Chat }, { QuestionStore }, { default: instances }, { FRAME_PRESETS }, { ActivityStore }] =
   await Promise.all([
     import('../src/dsh-adapter/channel.js'),
@@ -361,6 +363,42 @@ async function renderRow(compaction, cols, activityPreset) {
   }
   await live.app.unmount()
   check('scene6: the indicator advances through the preset frames', seen.size >= 2, [...seen].join(','))
+}
+
+// Matrix uses the real renderer with a narrower context than its physical root.
+{
+  const [{ renderToScreen }, { TerminalSizeContext }, { cellAt }, { setLang, getLang }, { stringWidth }] = await Promise.all([
+    import('../src/ink/render-to-screen.js'), import('../src/ink/components/TerminalSizeContext.js'),
+    import('../src/ink/screen.js'), import('../src/i18n.js'), import('../src/ink/stringWidth.js'),
+  ])
+  const savedLang = getLang()
+  for (const lang of ['en', 'zh']) for (const columns of [1, 2, 3, 5, 8, 12, 24, 34, 36]) {
+    setLang(lang)
+    for (const activityPreset of [undefined, 'aesthetic']) for (const phase of ['prefill', 'summary']) {
+      for (const cancellable of [false, true]) for (const age of [26_000, 3_726_000]) {
+        const { screen, height } = renderToScreen(
+          <ui.ThemeProvider theme="dark">
+            <TerminalSizeContext.Provider value={{ columns, rows: 10 }}>
+              <ui.Box width={columns}>
+                <CompactionStatusRow compaction={{ startedAt: Date.now() - age, phase, outputChars: 4800, cancellable }} activityPreset={activityPreset} />
+              </ui.Box>
+            </TerminalSizeContext.Provider>
+          </ui.ThemeProvider>,
+          100,
+        )
+        const painted = Array.from({ length: screen.height }, (_, y) =>
+          Array.from({ length: 100 }, (_, x) => cellAt(screen, x, y)?.char ?? ' ').join('').trimEnd())
+        const nonempty = painted.filter(line => line.trim() !== '')
+        check(`narrow matrix ${lang}/${columns}/${activityPreset}/${phase}/${cancellable}/${age}`,
+          height <= 2 && nonempty.length <= 1 && nonempty.every(line => stringWidth(line) <= columns), JSON.stringify(painted))
+        const row = nonempty[0] ?? ''
+        const tail = row.split(' · ').at(-1) ?? ''
+        // Any displayed elapsed field is complete, never a clipped number.
+        if (/^\d/u.test(tail)) check('narrow elapsed field is whole', /^\d+[hms](?: \d+[hms])*$/u.test(tail), row)
+      }
+    }
+  }
+  setLang(savedLang)
 }
 
 // ==== 场景 7：挂真实 Chat —— 行在屏上，Esc 真的打到 cancelCompact ============
