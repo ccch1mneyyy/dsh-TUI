@@ -339,14 +339,21 @@ export function supportsExtendedKeys(): boolean {
  * 9001 can reduce arrows/mouse sequences to their trailing A-D/M bytes and
  * interfere with IME commits (issue #215). Native VS Code reports its own
  * 1.x application version and retains win32-input-mode support.
- * @returns true on native Windows (never in WSL — platform is linux there).
+ * NVIM/VIM_TERMINAL identify nested VT hosts; the dedicated opt-out also
+ * preserves classic input when an unrecognized embedding rejects mode 9001.
+ * @param environment - optional capability environment, defaults to the process.
+ * @returns true on supported native Windows hosts (never in WSL).
  */
 export function supportsWin32InputMode(
   platform: NodeJS.Platform = process.platform,
   termProgram: string | undefined = process.env.TERM_PROGRAM,
   termProgramVersion: string | undefined = process.env.TERM_PROGRAM_VERSION,
+  environment: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (platform !== 'win32') return false
+  // Nested VT hosts do not expose the outer ConPTY input-record contract.
+  // 请核: Windows Neovim/Vim child environments and post-resume arrow/F-key input.
+  if (environment.NVIM || environment.VIM_TERMINAL || environment.DSH_TUI_DISABLE_WIN32_INPUT_MODE === '1') return false
 
   const version = coerce(termProgramVersion)
   const isEmbeddedXtermJs =

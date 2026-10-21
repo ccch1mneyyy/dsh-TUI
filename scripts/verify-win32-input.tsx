@@ -99,24 +99,39 @@ const CSI = '\x1b['
 
 checkBoolean(
   'native Windows terminals enable win32-input-mode',
-  supportsWin32InputMode('win32', undefined, undefined),
+  supportsWin32InputMode('win32', undefined, undefined, {}),
   true,
 )
 checkBoolean(
   'Termy-style xterm.js hosts keep standard VT input on Windows',
-  supportsWin32InputMode('win32', 'vscode', '6.0.0'),
+  supportsWin32InputMode('win32', 'vscode', '6.0.0', {}),
   false,
 )
 checkBoolean(
   'native VS Code keeps win32-input-mode on Windows',
-  supportsWin32InputMode('win32', 'vscode', '1.103.0'),
+  supportsWin32InputMode('win32', 'vscode', '1.103.0', {}),
   true,
 )
 checkBoolean(
   'non-Windows terminals never enable win32-input-mode',
-  supportsWin32InputMode('linux', undefined, undefined),
+  supportsWin32InputMode('linux', undefined, undefined, {}),
   false,
 )
+
+for (const environment of [
+  { NVIM: '/editor/socket' },
+  { VIM_TERMINAL: '1' },
+  { DSH_TUI_DISABLE_WIN32_INPUT_MODE: '1' },
+]) {
+  checkBoolean(`nested/disabled Windows host stays on VT: ${Object.keys(environment)[0]}`,
+    supportsWin32InputMode('win32', 'Windows_Terminal', undefined, environment), false)
+  checkBoolean(`native VS Code cannot override the nested host marker: ${Object.keys(environment)[0]}`,
+    supportsWin32InputMode('win32', 'vscode', '1.103.0', environment), false)
+}
+checkBoolean('empty markers and an inactive opt-out preserve native Windows support',
+  supportsWin32InputMode('win32', undefined, undefined, {
+    NVIM: '', VIM_TERMINAL: '', DSH_TUI_DISABLE_WIN32_INPUT_MODE: '0',
+  }), true)
 
 // A win32 record translated to a named/special key keeps the raw record as
 // its sequence; a translated text char uses the char itself.
