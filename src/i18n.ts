@@ -1179,7 +1179,8 @@ const dict = {
   'help-complete-command': { zh: 'tab 补全命令', en: 'tab to complete command' },
   'help-cycle-mode': { zh: 'shift+tab 切换模式', en: 'shift+tab to cycle mode' },
   'help-open-editor': { zh: '{{key}} 打开编辑器', en: '{{key}} to open editor' },
-  'help-fold-todos': { zh: '{{key}} 折叠待办', en: '{{key}} to fold todos' },
+  'help-fold-todos': { zh: '{{key}} 运行时折叠／空闲时隐藏待办', en: '{{key}} to fold running / hide idle todos' },
+  'goal-todo-hide-hint': { zh: '{{key}} 隐藏／恢复', en: '{{key}} to hide/restore' },
   'goal-todo-fold-hint': { zh: '{{key}} 折叠', en: '{{key}} to fold' },
   // ── goal budget and the backend-neutral /goal (src/channel/goal-command.ts)
   'goal-budget-used': { zh: '已用 {{used}} / {{budget}} tokens · {{time}}', en: 'Used {{used}} / {{budget}} tokens · {{time}}' },

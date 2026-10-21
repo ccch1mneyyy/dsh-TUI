@@ -192,4 +192,45 @@ const type = async (io, text) => {
   clearTooltip()
   await app.unmount(); io.term.dispose()
 }
+// Footer dismissal is a Chat action, so exercise its real key route in both modes.
+for (const fullscreen of [false, true]) {
+  const io = makeTerm(70, 24)
+  const channel = makeChannel({ goal: {
+    id: 'finished', revision: 1, objective: 'COMPLETED_FOOTER', phase: 'complete',
+    roundsStarted: 1, maxGoalRounds: 1,
+  } })
+  channel.todos = [{ content: 'RESIDUAL_TODO', status: 'in_progress' }]
+  const originalTodos = channel.todos
+  const app = await mount(io, channel, fullscreen)
+  await settle(() => io.screen().includes('Ready.'))
+  check(`${fullscreen}: completed idle goal and stale todos leave the footer`,
+    !io.screen().includes('COMPLETED_FOOTER') && !io.screen().includes('RESIDUAL_TODO'))
+  io.stdin.write('\x11')
+  check(`${fullscreen}: Ctrl+Q restores an automatically hidden completed footer`,
+    await settled(() => io.screen().includes('COMPLETED_FOOTER') && io.screen().includes('RESIDUAL_TODO')))
+  io.stdin.write('\x11')
+  await settle(() => !io.screen().includes('COMPLETED_FOOTER') && !io.screen().includes('RESIDUAL_TODO'))
+  channel.todos = [...originalTodos]
+  channel.emit()
+  check(`${fullscreen}: a later todo update is visible beside a completed goal`, await settled(() => io.screen().includes('RESIDUAL_TODO')))
+  channel.goal = undefined
+  channel.emit()
+  await settle(() => io.screen().includes('RESIDUAL_TODO'))
+  io.stdin.write('\x11')
+  check(`${fullscreen}: Ctrl+Q hides idle residual todos`, await settled(() => !io.screen().includes('RESIDUAL_TODO')))
+  check(`${fullscreen}: hide preserves canonical todo snapshot`, channel.todos[0] === originalTodos[0] && channel.todos[0].status === 'in_progress')
+  io.stdin.write('\x11')
+  await settle(() => io.screen().includes('RESIDUAL_TODO'))
+  io.stdin.write('\x11')
+  await settle(() => !io.screen().includes('RESIDUAL_TODO'))
+  channel.todos = [{ content: 'NEW_TODO_SNAPSHOT', status: 'pending' }]
+  channel.emit()
+  check(`${fullscreen}: a new todo snapshot reveals the footer`, await settled(() => io.screen().includes('NEW_TODO_SNAPSHOT')))
+  channel.goal = { id: 'finished', revision: 2, objective: 'REACTIVATED_GOAL', phase: 'active', roundsStarted: 1, maxGoalRounds: 3 }
+  channel.emit()
+  check(`${fullscreen}: a reactivated goal is visible`, await settled(() => io.screen().includes('REACTIVATED_GOAL')))
+  await app.unmount()
+  io.term.dispose()
+}
+
 process.exitCode = failed ? 1 : 0

@@ -671,8 +671,8 @@ export const SHORTCUT_FIELD_META: Record<ShortcutActionId, { label: string; zh: 
   todoFold: {
     label: 'Todo fold shortcut',
     zh: '待办折叠快捷键',
-    hintEn: d => `Fold/unfold the goal/todo panel. Default: ${d}.`,
-    hintZh: d => `折叠/展开目标与待办面板。默认 ${d}。`,
+    hintEn: d => `Fold running todos; hide/restore the idle goal/todo footer. Default: ${d}.`,
+    hintZh: d => `运行时折叠待办，空闲时隐藏/恢复目标与待办底部面板。默认 ${d}。`,
   },
   questionFold: {
     label: 'Question panel fold shortcut',

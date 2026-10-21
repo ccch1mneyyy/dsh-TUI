@@ -1,6 +1,8 @@
 # Interaction and Commands
 
 [Documentation index](README.md) · [简体中文](interaction.md)
+`Ctrl+Q` folds running todos; while idle it hides/restores the goal/todo footer. Clicking the idle todo header hides it too. New goal/todo data or another session shows it again. Completed goals leave the footer once idle; their history remains in the Todo side panel.
+
 
 ## Input and global shortcuts
 

@@ -1455,6 +1455,38 @@ export function Chat({
   const questionMinimized = questionSnapshot !== null && minimizedQuestionKey === questionSnapshot.key
   /** Fold state for the GoalTodoPanel todo section (ctrl/cmd+q or click). */
   const [todoCollapsed, setTodoCollapsed] = React.useState(false)
+  // Dismiss only this idle projection; new goal/todo data or a session switch
+  // reveals the footer again without changing the backend's canonical state.
+  const [todoFooterOverride, setTodoFooterOverride] = React.useState<{
+    hidden: boolean
+    agentId: string
+    goal: Channel['goal']
+    todos: Channel['todos']
+  } | undefined>(undefined)
+  const todoFooterOverrideMatches = !channel.working && todoFooterOverride !== undefined
+    && todoFooterOverride.agentId === channel.agentId
+    && todoFooterOverride.goal === channel.goal
+    && todoFooterOverride.todos === channel.todos
+  const completedTodoSnapshot = React.useRef<{
+    agentId: string
+    goal: Channel['goal']
+    todos: Channel['todos']
+  } | undefined>(undefined)
+  if (channel.goal?.phase !== 'complete') completedTodoSnapshot.current = undefined
+  else if (channel.working || completedTodoSnapshot.current?.goal !== channel.goal
+    || completedTodoSnapshot.current?.agentId !== channel.agentId) {
+    completedTodoSnapshot.current = { agentId: channel.agentId, goal: channel.goal, todos: channel.todos }
+  }
+  const completedTodoFooter = channel.goal?.phase === 'complete' && !channel.working
+    && completedTodoSnapshot.current?.todos === channel.todos
+  const todoFooterHidden = todoFooterOverrideMatches ? todoFooterOverride!.hidden : completedTodoFooter
+  const toggleTodoFooter = (): void => {
+    if (channel.working) setTodoCollapsed(previous => !previous)
+    else setTodoFooterOverride({
+      hidden: !todoFooterHidden,
+      agentId: channel.agentId, goal: channel.goal, todos: channel.todos,
+    })
+  }
   const [thinkingVisible, setThinkingVisible] = React.useState(true)
   /** ctrl+r history-search entries (loaded on open, persists). */
   const [historyEntries, setHistoryEntries] = React.useState<readonly HistoryEntry[]>([])
@@ -5773,10 +5805,8 @@ export function Chat({
       // additionally moving the caret (one press, one meaning).
       event.stopImmediatePropagation()
     } else if (actionMatches('todoFold', input, key)) {
-      // Fold/unfold the GoalTodoPanel todo section (default Ctrl+Q) — works
-      // mid-turn too: the collapsed line keeps the done/total count and the
-      // live task preview, so long todo lists stop crowding the prompt.
-      setTodoCollapsed(previous => !previous)
+      // Fold running work; hide/restore the idle footer without mutating todos.
+      toggleTodoFooter()
       // Consume: same readline-shadowing rule as dashboard/showAll above.
       event.stopImmediatePropagation()
     } else if (actionMatches('star', input, key)) {
@@ -7153,11 +7183,13 @@ export function Chat({
         )}
         {/* 分栏且 todo Panel 已启用时，Goal/Todo 由右栏 Panel 承载，
             底部 chrome 不再挂载（窄屏 / inline / 未启用时保留现状）。 */}
-        {!(sidePanel.split && sidePanel.enabledPanelIds.includes('todo')) && (
+        {!(sidePanel.split && sidePanel.enabledPanelIds.includes('todo'))
+          && !todoFooterHidden && (
           <GoalTodoPanel
             channel={channel}
             collapsed={todoCollapsed}
-            onToggle={() => setTodoCollapsed(previous => !previous)}
+            onToggle={toggleTodoFooter}
+            idleDismissal
           />
         )}
         {recap !== null && recap.auto && !recap.expanded && (
