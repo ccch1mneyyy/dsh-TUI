@@ -422,6 +422,7 @@ for (const mode of ['char', 'word', 'line', 'keyboard'] as const) {
   updateSelection(sel3, 0, 3)
   refreshSelectionFingerprint(sel3, screen, false)
   rig.selection = sel3
+  rig.frontFrame = { ...rig.frontFrame, screen }
   check('K6: explicit final highlight copies successfully after stale recovery', rig.copySelectionNoClear() === 'S')
 }
 
