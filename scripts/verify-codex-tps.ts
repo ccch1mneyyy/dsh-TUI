@@ -135,21 +135,22 @@ const message = (id = 'reply', text = ''): Record<string, unknown> => ({ type: '
   assertAgentEventInvariants(run.events)
 }
 
-{
+for (const duration of [0, 1, 499, 500]) {
   const run = rig()
   run.turn()
   run.start(1_000, reasoning())
   run.start(1_000, message())
   run.notify(1_000, 'item/agentMessage/delta', { itemId: 'reply', delta: 'ok' })
-  run.complete(1_000, message('reply', 'ok'))
-  run.usage(1_010, 10_000, 9_999)
-  check('zero-duration delivery leaves throughput unknown', run.harness.state.tps === undefined && run.harness.state.tpsSamples.length === 0, run.harness.state.tps)
+  run.complete(1_000 + duration, message('reply', 'ok'))
+  run.usage(1_010 + duration, 10_000, 9_999)
+  check(`${duration}ms buffered delivery leaves throughput unknown`, run.harness.state.tps === undefined && run.harness.state.tpsSamples.length === 0, run.harness.state.tps)
   run.start(2_000, message('next'))
   run.notify(2_000, 'item/agentMessage/delta', { itemId: 'next', delta: 'next' })
   run.complete(4_000, message('next', 'next'))
   run.usage(4_010, 100)
   run.end(4_020)
-  check('a zero-duration buffered reply cannot inflate another measured call', near(run.harness.state.tps, 50) && run.harness.state.tpsSamples.length === 1, run.harness.state.tps)
+  check(`${duration}ms buffered reply cannot inflate another measured call`, near(run.harness.state.tps, 50) && run.harness.state.tpsSamples.length === 1, run.harness.state.tps)
+  check(`${duration}ms rejected rate sample is still fully billed`, run.harness.state.tokens.output === 10_100)
   assertAgentEventInvariants(run.events)
 }
 

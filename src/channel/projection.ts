@@ -32,6 +32,9 @@ type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 /** Notice keys whose live toast is tracked (a repeat replaces it). */
 const MAX_KEYED_TOASTS = 32
 
+/** Short buffered deliveries are not reliable decode-rate samples. */
+const MIN_TPS_DECODE_MS = 500
+
 /** The channel state slice the projector writes. */
 export interface ProjectionState extends Mutable<Pick<ChannelUi,
   | 'thinkingFold' | 'activeToolCount' | 'spinnerMode' | 'goal' | 'contextSegments' | 'tokens' | 'mainCost'
@@ -531,7 +534,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       tps.firstTokenTime ??= time
       tps.outputEstimate += tokenDeltaEstimate(delta)
       const elapsedMs = Math.max(0, time - tps.firstTokenTime)
-      if (elapsedMs > 500) {
+      if (elapsedMs > MIN_TPS_DECODE_MS) {
         const decodeMs = tpsTurnDecodeMs + elapsedMs
         const outputTokens = tpsTurnDecodeTokens + Math.ceil(tps.outputEstimate)
         state.tps = outputTokens / (decodeMs / 1000)
@@ -688,15 +691,15 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     const usage = event.usage
     if (usage !== undefined) bookUsage(usage, event)
     const tpsMessageStep = tpsStep
-    // Same-timestamp delivery has no measurable decode span; its tokens
-    // must not inflate the rate of another step in this turn.
+    // Only reliable spans enter the rate ledger, including late-usage
+    // reconciliation. Billing above still includes every delivered token.
     if (
       tpsTurn === event.turn &&
       tpsMessageStep !== undefined &&
       tpsMessageStep.turn === event.turn &&
       tpsMessageStep.step === event.step &&
       tpsMessageStep.firstTokenTime !== undefined &&
-      event.time > tpsMessageStep.firstTokenTime
+      event.time - tpsMessageStep.firstTokenTime > MIN_TPS_DECODE_MS
     ) {
       const reported = usageOutputTokens(usage)
       const outputTokens = reported

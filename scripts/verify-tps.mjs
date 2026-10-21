@@ -228,6 +228,28 @@ emit('assistant/message', B + 503_000, message(6, 1, 300))
 emit('turn/end', B + 503_100, completed(6))
 check('sixth turn settles on provider usage', channel.tpsSamples.length === 6 && near(channel.tpsSamples[5]?.tps, 150), JSON.stringify(channel.tpsSamples))
 
+// DSH's settled-message usage obeys the same boundary as live estimates.
+for (const [index, duration] of [0, 1, 499, 500, 501].entries()) {
+  const turn = 7 + index
+  const start = B + 600_000 + index * 10_000
+  const previousRate = channel.tps
+  const previousSamples = channel.tpsSamples.length
+  const previousOutput = channel.tokens.output
+  emit('turn/start', start, { turn })
+  emit('step/start', start, { turn, step: 1 })
+  emit('assistant/chunk', start + 1_000, {
+    turn, step: 1, chunk: { type: 'text-delta', index: 0, text: 'x'.repeat(400) },
+  })
+  const settled = emit('assistant/message', start + 1_000 + duration, message(turn, 1, 500))
+  handlers.get('session/event')?.(agent.session, settled)
+  const ended = emit('turn/end', start + 2_000, completed(turn))
+  handlers.get('session/event')?.(agent.session, ended)
+  check(`DSH ${duration}ms boundary and duplicate end`, duration > 500
+    ? near(channel.tps, 500 / (duration / 1000)) && channel.tpsSamples.length === previousSamples + 1
+    : channel.tps === previousRate && channel.tpsSamples.length === previousSamples)
+  check(`DSH ${duration}ms billing is not filtered or duplicated`, channel.tokens.output === previousOutput + 500)
+}
+
 // Rebuild from durable history. prepareReplayEvents intentionally drops
 // settled chunks, so TPS remains a live-only metric after resume.
 const replayContext = makeContext()

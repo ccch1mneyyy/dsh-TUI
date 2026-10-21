@@ -302,7 +302,9 @@ the default home; reconnect it in the active home if needed. Provider
 `env_key` credentials retain the fallback described above.
 
 TPS includes hidden reasoning time and excludes tool execution time. Live
-text estimates are corrected when Codex reports output token usage.
+text estimates are corrected when Codex reports output token usage. Decode
+spans of 500ms or less are excluded from TPS samples; token and cost totals
+still include all reported usage.
 
 Native browsing/archive, fork/conversation rewind (the first message requires
 Codex app-server 0.160.1+), paged history, images,

@@ -95,6 +95,42 @@ events(
 events({ type: 'usage', seq: nextSeq(), turn: 3, step: 1, time: B + 30_200, usage: { input: 1_000, output: 9_999 } })
 check('a straggler older than the last ended turn no longer patches', near(harness.state.tps, 400), String(harness.state.tps))
 
+// The live, settled and late-usage paths share one strict 500ms boundary.
+for (const duration of [0, 1, 499, 500, 501]) {
+  for (const metering of ['embedded', 'before-end', 'after-end'] as const) {
+    const run = createProjectorHarness()
+    const apply = (...batch: AgentEvent[]): void => run.apply(batch)
+    const measured = duration > 500
+    apply(
+      { type: 'turn.start', turn: 1, origin: 'user', time: B },
+      { type: 'step.start', turn: 1, step: 1 },
+      { type: 'assistant.attempt.start', attemptId: 'boundary', turn: 1, step: 1 },
+      delta('boundary', B + 1_000, 'x'.repeat(400)),
+      delta('boundary', B + 1_000 + duration, 'y'.repeat(400)),
+    )
+    check(`${duration}ms ${metering}: live boundary`, measured
+      ? near(run.state.tps, 200 / (duration / 1000)) : run.state.tps === undefined)
+    const message = settle('boundary', 1, 1, B + 1_000 + duration,
+      metering === 'embedded' ? { output: 500 } : undefined)
+    apply(message, message)
+    check(`${duration}ms ${metering}: settled boundary`, measured
+      ? near(run.state.tps, (metering === 'embedded' ? 500 : 200) / (duration / 1000))
+      : run.state.tps === undefined)
+    const usage: AgentEvent = {
+      type: 'usage', seq: nextSeq(), turn: 1, step: 1,
+      time: B + 2_000, usage: { input: 10, output: 500 },
+    }
+    if (metering === 'before-end') apply(usage, usage)
+    const end: AgentEvent = { type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: B + 3_000 }
+    apply(end, end)
+    if (metering === 'after-end') apply(usage, usage)
+    check(`${duration}ms ${metering}: billed tokens stay complete and idempotent`, run.state.tokens.output === 500)
+    check(`${duration}ms ${metering}: final rate and sample boundary`, measured
+      ? near(run.state.tps, 500 / (duration / 1000)) && run.state.tpsSamples.length === 1
+      : run.state.tps === undefined && run.state.tpsSamples.length === 0)
+  }
+}
+
 if (failed > 0) {
   console.error(`verify-tps-backfill: ${failed} check(s) failed`)
   process.exit(1)

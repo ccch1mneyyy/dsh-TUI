@@ -249,7 +249,8 @@ Claude 与 Codex 的 `/channel` 令牌（`CHANNEL_*` ref）只属于活动 `DSH_
 provider 的 `env_key` 密钥仍保留上述回退读取。
 
 TPS 计入隐藏推理的生成时间，剔除工具执行时间；实时文本估算在 Codex 报告实际
-输出 token 用量后校正。
+输出 token 用量后校正。解码跨度不超过 500ms 的调用不进入 TPS 样本，
+token 与费用总量仍完整计入所有已报告用量。
 
 原生浏览/归档、fork/对话回退（首条消息需 Codex app-server 0.160.1+）、分页历史、图片、子代理、轮询后台终端、目标与
 `/btw`/`/recap` 接入现有界面。`/logout` 仅清对应 dsh-auth 凭据；已载入的托管令牌
