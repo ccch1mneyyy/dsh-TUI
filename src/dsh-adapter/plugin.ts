@@ -108,7 +108,7 @@ import { normalizeBrandSetting, resolveBrand, setActiveBrand } from '../branding
 import { SETTING_GROUPS, SHORTCUT_FIELD_META, settingField } from '../settings/definitions.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
-import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
+import { DBP, DFE, DISABLE_MOUSE_TRACKING, ESU, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMultiplexer } from '../ink/termio/osc.js'
 import { addProcessErrorAbsorber, fatalReasonForExit, registerProcessGuardFatalSink } from '../ink/update-overflow-guard.js'
 import { CHANNEL_UI_LIFETIME_ENDED } from '../adapter/channel/ui.js'
@@ -3460,6 +3460,7 @@ export async function finishExit(
     //    first frame, and the old process will close the alternate screen.
     const exitAlt = fullscreen && !(options.keepAltScreen === true) && ownsAltScreenExit() ? EXIT_ALT_SCREEN : ''
     const cleanup = [
+      ESU,
       exitAlt,
       cursor,
       DISABLE_MOUSE_TRACKING,
@@ -3489,7 +3490,9 @@ export async function finishExit(
       await writeStream(process.stderr, `\n${stderrNotice}\n`)
     }
   } catch {
-    ctx.logger.debug('dsh-tui: terminal cleanup failed; continuing with process shutdown')
+    try {
+      ctx.logger.debug('dsh-tui: terminal cleanup failed; continuing with process shutdown')
+    } catch { /* a failed diagnostic must not swallow the exit action */ }
   }
   // Filesystem-only: the exported clipboard images live in a per-process
   // temp directory that nothing else removes.

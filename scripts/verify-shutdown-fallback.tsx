@@ -12,6 +12,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { createExitFunnel, finishExit, runCrashExit, writeCrashResumeMarkers } from '../src/dsh-adapter/plugin.js'
 import { UNSERIALIZABLE } from '../src/utils/crashDetail.js'
 import instances from '../src/ink/instances.js'
+import { ESU } from '../src/ink/termio/dec.js'
 
 let failures = 0
 const results: string[] = []
@@ -61,6 +62,7 @@ await finishExit(
 swapStdout(originalStdout)
 check('runtime-miss shutdown falls back to instance.unmount', unmountsA === 1 && doneA)
 check('runtime-miss shutdown still prints the notice', captured.chunks.join('').includes('hint-one'))
+check('runtime-miss cleanup ends synchronized output without a frame', captured.chunks.join('').includes(ESU))
 
 // Case B: runtime present → detach path runs, unmount stays untouched.
 captured.chunks.length = 0
@@ -85,6 +87,26 @@ swapStdout(originalStdout)
 instances.delete(captured)
 check('runtime-present shutdown detaches without unmount', detaches === 1 && handoffs === 1 && unmountsB === 0 && doneB)
 check('runtime-present shutdown prints the notice', captured.chunks.join('').includes('hint-two'))
+check('runtime-present cleanup explicitly ends synchronized output', captured.chunks.join('').includes(ESU))
+
+// Terminal and diagnostic failures must still reach the original exit action.
+const broken = new CapturingStream() as unknown as NodeJS.WriteStream
+broken.write = () => { throw new Error('terminal unavailable') }
+let exitCode: number | undefined
+swapStdout(broken)
+try {
+  await finishExit(ctx, undefined, false, undefined, undefined, () => { exitCode = 1 })
+  check('terminal write failure preserves nonzero exit continuation', exitCode === 1)
+  exitCode = undefined
+  await finishExit(
+    { logger: { debug() { throw new Error('diagnostics unavailable') } } } as never,
+    undefined, false, undefined, undefined, () => { exitCode = 1 },
+  )
+} finally {
+  swapStdout(originalStdout)
+}
+check('cleanup and diagnostic failures preserve nonzero exit continuation', exitCode === 1)
+
 
 // ── Cases C/D (r1-stability S03): the crash tail's diagnostics are fully ──
 // degradable while the terminal cleanup runs exactly once, no matter what

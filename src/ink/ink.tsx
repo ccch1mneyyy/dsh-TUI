@@ -45,7 +45,7 @@ import { applySearchHighlight } from './transcript-highlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, getSelectionCursor, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsCursorStyleReset, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, cursorStyle, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
-import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js';
+import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, ESU, EXIT_ALT_SCREEN, HIDE_CURSOR, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
 import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels, xtversion } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
@@ -2815,7 +2815,9 @@ export default class Ink {
     try {
       this.renderNow();
     } catch (renderError) {
-      logError(renderError instanceof Error ? renderError : new Error(String(renderError)));
+      try {
+        logError(renderError instanceof Error ? renderError : new Error(String(renderError)));
+      } catch { /* diagnostics must not skip terminal cleanup */ }
     }
     this.resetCursorIdle();
     this.unsubscribeExit();
@@ -2827,8 +2829,11 @@ export default class Ink {
 
     // Non-TTY environments don't handle erasing ansi escapes well, so it's better to
     // only render last frame of non-static output
-    const diff = this.log.renderPreviousOutput_DEPRECATED(this.frontFrame);
-    const lastFrame = serializeDiff(this.terminal, optimize(diff));
+    let lastFrame = '';
+    try {
+      const diff = this.log.renderPreviousOutput_DEPRECATED(this.frontFrame);
+      lastFrame = serializeDiff(this.terminal, optimize(diff));
+    } catch { /* a failed final diff must not skip terminal cleanup */ }
     const sixelCleanup = this.sixelGraphicsManager.dispose();
 
     // Clean up terminal modes synchronously before process exit.
@@ -2854,6 +2859,8 @@ export default class Ink {
       if (lastFrame !== '') {
         writeSync(stdoutFd, lastFrame);
       }
+      // A missing final diff has no frame tail to close synchronized output.
+      writeSync(stdoutFd, ESU);
       const deleteImages = this.kittyGraphicsManager.deleteAll() + sixelCleanup;
       if (deleteImages !== '') {
         writeSync(stdoutFd, deleteImages);

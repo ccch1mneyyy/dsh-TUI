@@ -34,6 +34,7 @@ import {
   DISABLE_MOUSE_TRACKING,
   ENABLE_MOUSE_TRACKING,
   ENTER_ALT_SCREEN,
+  ESU,
   EXIT_ALT_SCREEN,
   SHOW_CURSOR,
 } from '../src/ink/termio/dec.js'
@@ -173,21 +174,32 @@ const sleep = (ms: number): Promise<void> =>
     },
   )
 
-  const ink = instances.get(stdout) as unknown as { renderNow(): void }
+  const ink = instances.get(stdout) as unknown as {
+    renderNow(): void
+    log: { renderPreviousOutput_DEPRECATED(): [] }
+  }
+  // No final frame exists to contribute an ESU tail.
+  ink.log.renderPreviousOutput_DEPRECATED = () => []
   ink.renderNow = () => {
     throw new Error('final render boom')
   }
 
   let unmountThrew = false
+  const savedStderrWrite = process.stderr.write
   try {
+    process.stderr.write = () => { throw new Error('diagnostic write failed') }
     instance.unmount()
   } catch {
     unmountThrew = true
+  } finally {
+    process.stderr.write = savedStderrWrite
   }
   closeSync(tmpFd)
 
   check('unmount survives a throwing final render', !unmountThrew)
   const cleanup = readFileSync(tmpFile, 'utf8')
+  check('sync cleanup ends synchronized output without a final frame', cleanup.includes(ESU))
+  check('ESU precedes alternate-screen cleanup', cleanup.indexOf(ESU) < cleanup.indexOf(EXIT_ALT_SCREEN))
   check('sync cleanup exits the alt screen', cleanup.includes(EXIT_ALT_SCREEN))
   check('sync cleanup disables mouse tracking', cleanup.includes(DISABLE_MOUSE_TRACKING))
   const disableAt = cleanup.indexOf(DISABLE_MOUSE_TRACKING)
