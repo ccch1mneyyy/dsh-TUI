@@ -12,6 +12,8 @@ import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Schema from '@deepseek-ai/schemastery'
 import Settings from '@deepseek-ai/dsh-settings'
+import { applyConfiguredSidePanelPanels, applySidePanelPanelsFromSettings, TuiPanelRuntime } from '../src/dsh-adapter/panels.ts'
+import { getSidePanelPanels, parseSidePanelIds } from '../src/tuiDisplayPrefs.ts'
 import { Config } from '../src/dsh-adapter/index.ts'
 import { configValues, createSettingsScope, editableConfig, resolveSettingsNamespace } from '../src/dsh-adapter/compat/settings.ts'
 import { createSettingsHosts } from '../src/dsh-adapter/channel/settings-host.ts'
@@ -165,7 +167,7 @@ const registrationJs = ts.transpileModule(`${namespaceDeclaration}
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText
 const trackProductionSection = dependencies => new Function(...Object.keys(dependencies), registrationJs)(...Object.values(dependencies))
-const declarationNames = ['scope', 'applyShortcuts', 'bootSettings', 'lastTerminalImages']
+const declarationNames = ['scope', 'applyShortcuts', 'bootSettings', 'lastTerminalImages', 'settingsEditsLive', 'lastPanelsCsv']
 const declarations = declarationNames.map(name => {
   const statement = settingsBody.statements.find(node => ts.isVariableStatement(node)
     && node.declarationList.declarations.some(declaration => declaration.name.getText(source) === name))
@@ -178,12 +180,25 @@ function containsWatch(node) {
 }
 const watchStatements = settingsBody.statements.filter(node => ts.isExpressionStatement(node) && containsWatch(node))
 assert.equal(watchStatements.length, 1, 'one production watch registration')
+// Exercise the production panel-field statements inside the real watch below.
+const displayDeclaration = settingsBody.statements.find(node => ts.isVariableStatement(node)
+  && node.declarationList.declarations.some(declaration => declaration.name.getText(source) === 'applyDisplay'))
+const displayBody = displayDeclaration.declarationList.declarations[0].initializer.body
+const panelsStart = displayBody.statements.findIndex(node => ts.isVariableStatement(node)
+  && node.declarationList.declarations.some(declaration => declaration.name.getText(source) === 'panelsCsv'))
+const panelsEnd = displayBody.statements.findIndex(node => ts.isExpressionStatement(node)
+  && ts.isBinaryExpression(node.expression) && node.expression.left.getText(source) === 'lastPanelsCsv')
+assert.ok(panelsStart >= 0 && panelsEnd > panelsStart)
+const panelsStatements = displayBody.statements.slice(panelsStart, panelsEnd + 1).map(node => node.getText(source)).join('\n')
 const javascript = ts.transpileModule(`
   ${namespaceDeclaration}
   return ctx.inject(['settings'], settingsCtx => {
     ${declarations.join('\n')}
-    const apply = next => { observe(next); applyShortcuts(next) }
+    const applyPanels = value => { ${panelsStatements} }
+    const apply = next => { observe(next); applyShortcuts(next); applyPanels(next) }
+    settingsEditsLive = false
     apply(bootSettings)
+    settingsEditsLive = true
     ${watchStatements[0].getText(source)}
     capture(settingsCtx, scope, applyShortcuts)
   })
@@ -200,6 +215,14 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
   const defaultPaste = effectiveComboString('paste')
   try {
     await root.plugin(Loader)
+    await root.plugin(TuiPanelRuntime)
+    let panelId
+    await root.inject(['tuiPanels'], ctx => {
+      ctx.tuiPanels.register({ apiVersion: 1, id: 'settings-watch', title: 'Settings watch', component: () => null })
+      panelId = ctx.tuiPanels.list()[0]?.id
+    })
+    assert.ok(panelId)
+    const panelEnabled = () => parseSidePanelIds(getSidePanelPanels()).includes(panelId)
     if (registry === 'service') await root.plugin(TuiSettingsSectionsRuntime)
     const sections = registry === 'service'
       ? getHostSettingsSections(root.get('tuiSettingsSections'))
@@ -224,6 +247,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
       await ctx.plugin(async runtimeCtx => {
         await bindSettings({
           ctx: runtimeCtx, configOwner: ctx, runtimeConfig, config: configValues(runtimeConfig), Schema, SHORTCUT_ACTIONS,
+          applyConfiguredSidePanelPanels, applySidePanelPanelsFromSettings,
           DEFAULT_STATUS_BAR, normalizePageMargin, isLang, Config, configValues, resolveSettingsNamespace, setKeymapOverrides,
           // Capture the legacy scope's own schema: the production wiring hands
           // it a second hand-written statusBar list that has to stay in step
@@ -240,6 +264,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     await root.loader.await()
     assert.notEqual(owner.fiber, child.fiber, 'injection has its own lifecycle')
     assert.equal(effectiveComboString('paste'), 'alt+v')
+    assert.equal(panelEnabled(), true, 'boot CSV omission preserves a registered panel')
     const ownerFiber = owner.fiber
     const unregister = trackProductionSection({
       ctx: root, trackHostSettingsSection,
@@ -338,6 +363,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     assert.equal(configValues(runtime).statusBar.cost, false, 'the panel persists the status-bar cost switch')
     assert.equal(owner.fiber, ownerFiber, 'editing settings does not remount the agent owner')
     assert.equal(observed.length, 1)
+    assert.equal(panelEnabled(), true, 'unrelated form edits replay the CSV without hiding a registered panel')
     assert.equal(host.listNamespaces().find(view => view.ns === ns).value.diffLayout, 'unified')
     assert.equal(host.listNamespaces().find(view => view.ns === ns).value.recapOnOpen, false, 'describe() projects the recap switch for the channel read site')
     assert.equal(host.listNamespaces().find(view => view.ns === ns).value.statusBar.cost, false, 'describe() projects the cost switch for the status-bar read site')
@@ -353,6 +379,13 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
       applyShortcuts({ shortcuts })
       assert.equal(effectiveComboString('paste'), defaultPaste, 'unset and blank overrides do not revive the startup snapshot')
     }
+    await root.settings.mutate(ns, [{ op: 'set', path: ['sidePanel', 'panels'], value: `todo,${panelId}` }])
+    assert.equal(panelEnabled(), true, 'an explicit selection includes the plugin')
+    await root.settings.mutate(ns, [{ op: 'set', path: ['sidePanel', 'panels'], value: 'todo' }])
+    assert.equal(panelEnabled(), false, 'an explicit changed CSV removes the plugin')
+    await root.settings.mutate(ns, [{ op: 'set', path: ['diffLayout'], value: 'split' }])
+    assert.equal(panelEnabled(), false, 'unrelated edits do not revive an explicit removal')
+    const observationsBeforeDispose = observed.length
     // The legacy scope still layers user choices over the deployment config.
     liveScope.legacy = true
     applyShortcuts({ shortcuts: {} })
@@ -363,7 +396,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     await child.fiber.dispose()
     await root.loader.update(entryId, { config: { diffLayout: 'split', shortcuts: {} } })
     await root.loader.await()
-    assert.equal(observed.length, 1, 'disposing the injection removes its owner-fiber listener')
+    assert.equal(observed.length, observationsBeforeDispose, 'disposing the injection removes its owner-fiber listener')
     await root.loader.create({ id: 'restarted', name: 'cordis:fixture', config: { diffLayout: 'split', shortcuts: {} } })
     await root.loader.await()
     assert.equal(effectiveComboString('paste'), defaultPaste, 'a fresh boot agrees with the live reset')

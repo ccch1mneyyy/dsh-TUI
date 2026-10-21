@@ -54,6 +54,9 @@ Resuming a DSH session preserves its recorded reasoning effort (or its live sele
 
 Keys and commands: [Interaction and commands](docs/interaction.en.md). Everything else: [documentation index](docs/README.md).
 
+Plugin side panels stay enabled when unrelated settings change. Editing the enabled panel list still applies your explicit selection.
+
+
 ## Preview
 
 <div align="center">

@@ -1599,6 +1599,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     /** False only during the boot application below: a registered panel absent
      *  from its CSV is not a user removal (./panels.ts). */
     let settingsEditsLive = true
+    let lastPanelsCsv: string | undefined
     // The /settings language field writes `lang` through the settings
     // service (user layer): apply it live and mirror it to lang.json so
     // the /lang command and next-boot resolution agree. DSH_TUI_LANG
@@ -1644,10 +1645,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       applySidePanelSplitEnabled(value.sidePanel?.splitEnabled ?? config.sidePanel?.splitEnabled)
       applySidePanelOpen(value.sidePanel?.open ?? config.sidePanel?.open)
       applySidePanelRatio(value.sidePanel?.ratio ?? config.sidePanel?.ratio)
-      // A registered panel missing from a live edit was unticked in /settings.
+      // A watch snapshot can change unrelated fields. Only a changed panels
+      // field can express removal; replaying the boot CSV must not hide plugins.
       const panelsCsv = value.sidePanel?.panels ?? config.sidePanel?.panels
-      if (settingsEditsLive) applySidePanelPanelsFromSettings(panelsCsv)
-      else applyConfiguredSidePanelPanels(panelsCsv)
+      if (!settingsEditsLive) applyConfiguredSidePanelPanels(panelsCsv)
+      else if (panelsCsv !== lastPanelsCsv) applySidePanelPanelsFromSettings(panelsCsv)
+      lastPanelsCsv = panelsCsv
       applyCompanionSkin(value.companion?.skin ?? config.companion?.skin)
       applyBtwContextTurns(value.btw?.contextTurns ?? config.btw?.contextTurns)
       applyBtwContextBudget(value.btw?.contextBudget ?? config.btw?.contextBudget)
