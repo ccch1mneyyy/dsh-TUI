@@ -173,7 +173,14 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
     const agentIds = new Set(subagents.map(agent => agent.agentId))
     const teamFailures = new Set((channel.team?.members ?? [])
       .filter(member => member.phase === 'failed' && !agentIds.has(member.id)).map(member => member.id))
-    if (visible) seenTeamFailures.current = teamFailures
+    if (visible) {
+      // The visible dashboard acknowledges every failed child (the pre-existing
+      // badge contract); the detail view additionally acknowledges one target.
+      seenTeamFailures.current = teamFailures
+      for (const agent of subagents) if (agent.status === 'failed') subagentFailureRead.acknowledge(failureScope, agent)
+      panelStore.setBadge('agents', running > 0 ? { level: 'info', unread: 0 } : null)
+      return
+    }
     const unread = new Set(unreadFailures)
     for (const id of teamFailures) if (!seenTeamFailures.current.has(id)) unread.add(id)
     panelStore.setBadge('agents', unread.size > 0 ? { level: 'error', unread: unread.size }
