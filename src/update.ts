@@ -1729,7 +1729,26 @@ export function migrateGlobalLauncher(): boolean {
   // layouts collapse both onto the same real path — copying onto ourselves
   // would be a no-op at best).
   let dir = dirname(resolve(launcherBin))
-  const ownDir = dirname(dirname(fileURLToPath(import.meta.url)))
+  const here = dirname(fileURLToPath(import.meta.url))
+  let own: { dir: string; bin: Buffer; manifest: Buffer } | undefined
+  // These are the same two layouts accepted by installedTuiVersion(). Read
+  // both source files before replacing either destination file.
+  for (const relativePath of ['../..', '..']) {
+    try {
+      const candidate = resolve(here, relativePath)
+      const manifest = readFileSync(join(candidate, 'package.json'))
+      const parsed: unknown = JSON.parse(manifest.toString('utf8'))
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)
+        || (parsed as Record<string, unknown>).name !== PACKAGE_NAME) continue
+      const bin = readFileSync(join(candidate, 'bin', 'dsh-tui.js'))
+      if (bin.length === 0) continue
+      own = { dir: realpathSync(candidate), bin, manifest }
+      break
+    } catch {
+      // A missing or invalid compiled root may still be a source checkout.
+    }
+  }
+  if (!own) return false
   for (let depth = 0; depth < 4; depth++) {
     const manifest = join(dir, 'package.json')
     try {
@@ -1738,23 +1757,23 @@ export function migrateGlobalLauncher(): boolean {
         parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
         && (parsed as Record<string, unknown>).name === PACKAGE_NAME
       ) {
-        let same = false
         try {
-          same = realpathSync(dir) === realpathSync(ownDir)
+          // Fail closed when the real paths cannot establish distinct roots.
+          if (realpathSync(dir) === own.dir) return false
+          // Each rename is atomic, not the pair. A partial migration returns
+          // false and can be retried; the standalone bin is safe in either case.
+          const replace = (target: string, content: Buffer): void => {
+            const staged = `${target}.dsh-tui-migrate`
+            writeFileSync(staged, content)
+            renameSync(staged, target)
+          }
+          replace(join(dir, 'bin', 'dsh-tui.js'), own.bin)
+          replace(manifest, own.manifest)
+          return true
         } catch {
-          same = resolve(dir) === resolve(ownDir)
+          // Keep the alignment warning as the permission/locked-file fallback.
+          return false
         }
-        if (same) return false
-        // tmp + rename keeps each file atomic; a crash mid-migration leaves
-        // either the old or the new file, never a truncated one.
-        const replace = (target: string, source: string): void => {
-          const staged = `${target}.dsh-tui-migrate`
-          writeFileSync(staged, readFileSync(source))
-          renameSync(staged, target)
-        }
-        replace(join(dir, 'bin', 'dsh-tui.js'), join(ownDir, 'bin', 'dsh-tui.js'))
-        replace(manifest, join(ownDir, 'package.json'))
-        return true
       }
     } catch {
       // Unreadable manifest at this level — keep walking up.

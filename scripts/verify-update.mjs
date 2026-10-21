@@ -23,6 +23,8 @@
  *
  * Run: node scripts/verify-update.mjs
  */
+import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -184,6 +186,71 @@ try {
     foreignMod.installedTuiVersion() === undefined,
     `got ${foreignMod.installedTuiVersion()}`,
   )
+
+  // Launcher migration must work from both published and source layouts.
+  const oldRoot = join(scratch, 'old-global')
+  mkdirSync(join(oldRoot, 'bin'), { recursive: true })
+  const oldManifest = JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '0.1.0' })
+  const oldBin = '#!/usr/bin/env node\n// old launcher\n'
+  const savedArgv1 = process.argv[1]
+  const resetGlobal = () => {
+    writeFileSync(join(oldRoot, 'package.json'), oldManifest)
+    writeFileSync(join(oldRoot, 'bin', 'dsh-tui.js'), oldBin)
+  }
+  try {
+    for (const [root, mod, layout] of [[sourceRoot, sourceMod, 'source'], [pkgRoot, pkgMod, 'compiled']]) {
+      mkdirSync(join(root, 'bin'), { recursive: true })
+      const newBin = `#!/usr/bin/env node\n// ${layout} launcher\n`
+      writeFileSync(join(root, 'bin', 'dsh-tui.js'), newBin)
+      resetGlobal()
+      process.argv[1] = join(oldRoot, 'bin', 'dsh-tui.js')
+      check(`launcher migration succeeds in ${layout} layout`, mod.migrateGlobalLauncher())
+      check(`${layout} migration copies both files`,
+        readFileSync(process.argv[1], 'utf8') === newBin
+        && readFileSync(join(oldRoot, 'package.json'), 'utf8') === readFileSync(join(root, 'package.json'), 'utf8'))
+
+      const alias = join(scratch, `${layout}-alias`)
+      symlinkSync(root, alias, process.platform === 'win32' ? 'junction' : 'dir')
+      process.argv[1] = join(alias, 'bin', 'dsh-tui.js')
+      check(`${layout} migration refuses its own realpath`, mod.migrateGlobalLauncher() === false)
+      check(`${layout} self migration creates no staging file`, !existsSync(`${process.argv[1]}.dsh-tui-migrate`))
+    }
+    process.argv[1] = join(oldRoot, 'bin', 'dsh-tui.js')
+    const sourceManifestPath = join(pkgRoot, 'package.json')
+    const sourceManifest = readFileSync(sourceManifestPath)
+    resetGlobal()
+    writeFileSync(sourceManifestPath, '{broken')
+    check('invalid source manifest prevents either write', pkgMod.migrateGlobalLauncher() === false
+      && readFileSync(process.argv[1], 'utf8') === oldBin)
+    writeFileSync(sourceManifestPath, sourceManifest)
+    rmSync(join(pkgRoot, 'bin', 'dsh-tui.js'))
+    check('missing source bin prevents either write', pkgMod.migrateGlobalLauncher() === false
+      && readFileSync(join(oldRoot, 'package.json'), 'utf8') === oldManifest)
+    writeFileSync(join(pkgRoot, 'bin', 'dsh-tui.js'), '// new launcher\n')
+    writeFileSync(join(oldRoot, 'package.json'), '{broken')
+    check('invalid destination manifest is not replaced', pkgMod.migrateGlobalLauncher() === false
+      && readFileSync(join(oldRoot, 'package.json'), 'utf8') === '{broken')
+    resetGlobal()
+    const savedWrite = fs.writeFileSync
+    try {
+      fs.writeFileSync = (target, ...args) => {
+        if (String(target).startsWith(oldRoot) && String(target).endsWith('.dsh-tui-migrate')) {
+          throw Object.assign(new Error('fixture permission failure'), { code: 'EACCES' })
+        }
+        return savedWrite(target, ...args)
+      }
+      syncBuiltinESMExports()
+      check('permission failure returns false without replacing either file', pkgMod.migrateGlobalLauncher() === false
+        && readFileSync(process.argv[1], 'utf8') === oldBin
+        && readFileSync(join(oldRoot, 'package.json'), 'utf8') === oldManifest)
+    } finally {
+      fs.writeFileSync = savedWrite
+      syncBuiltinESMExports()
+    }
+  } finally {
+    if (savedArgv1 === undefined) delete process.argv[1]
+    else process.argv[1] = savedArgv1
+  }
 } finally {
   rmSync(scratch, { recursive: true, force: true })
 }

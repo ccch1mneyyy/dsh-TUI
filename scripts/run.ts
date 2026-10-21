@@ -44,31 +44,45 @@ const userPatch = join(profileDir, 'cordis.patch.yml')
 const homePatch = join(dshHome, 'cordis.patch.yml')
 const diagFile = join(dshHome, 'last-boot-diagnostic.txt')
 
-// --- Heap watchtower (leak forensics) ---------------------------------------
-// Long sessions OOM'd twice in real use (~4GB in 19-42min). The render
-// caches are bounded now, but something else still grows. This sampler logs
-// heapUsed/rss every 30s to $DSH_HOME/heap-watch.log and writes a full
-// heapsnapshot when crossing 3GB, so the next crash brings its own evidence.
-// Disable with DSH_TUI_HEAP_WATCH=0.
-if (process.env.DSH_TUI_HEAP_WATCH !== '0') {
-  const { appendFileSync, mkdirSync } = await import('node:fs')
+// --- Heap watchtower (leak forensics; explicit opt-in) ----------------------
+// Sample every 15s; snapshot once at each of five thresholds. Completed files
+// have bounded retention; a snapshot still has transient disk/memory costs.
+// Enable with DSH_TUI_HEAP_WATCH=1; unset or 0 disables all watchtower writes.
+if (process.env.DSH_TUI_HEAP_WATCH === '1') {
+  const { renameSync } = await import('node:fs')
+  const { randomUUID } = await import('node:crypto')
+  const { createHeapWatchLog, pruneHeapWatchFiles } = await import('./lib/heap-watch-retention.js')
   const v8 = await import('node:v8')
-  const logFile = join(dshHome, 'heap-watch.log')
+  const prefix = `dsh-tui-heap-watch-${Date.now()}-${process.pid}-${randomUUID()}`
+  const appendLog = createHeapWatchLog(join(dshHome, `${prefix}.log`))
+  const configuredMb = Number(process.env.DSH_TUI_HEAP_MAX_MB)
+  const maxBytes = (Number.isSafeInteger(configuredMb) && configuredMb > 0 && configuredMb <= 16384
+    ? configuredMb : 1024) * 1048576
+  const prune = (): void => pruneHeapWatchFiles(dshHome, 2, maxBytes)
   let snapLevel = 0
   const SNAP_LEVELS_MB = [1024, 1536, 2048, 2560, 3072]
   const t0 = Date.now()
   const sample = (): void => {
     try {
+      mkdirSync(dshHome, { recursive: true })
       const mu = process.memoryUsage()
       const line = `${new Date().toISOString()} t=${((Date.now() - t0) / 1000).toFixed(0)}s heap=${(mu.heapUsed / 1048576).toFixed(0)}MB rss=${(mu.rss / 1048576).toFixed(0)}MB ext=${(mu.external / 1048576).toFixed(0)}MB\n`
-      appendFileSync(logFile, line)
+      appendLog(line)
+      prune()
       const heapMb = mu.heapUsed / 1048576
       if (snapLevel < SNAP_LEVELS_MB.length && heapMb > SNAP_LEVELS_MB[snapLevel]) {
-        const snapFile = join(dshHome, `heap-${SNAP_LEVELS_MB[snapLevel]}mb-${Date.now()}.heapsnapshot`)
+        const snapFile = join(dshHome, `${prefix}-${SNAP_LEVELS_MB[snapLevel]}mb.heapsnapshot`)
+        const temporary = `${snapFile}.writing`
         snapLevel += 1
-        appendFileSync(logFile, `>>> heap>${heapMb.toFixed(0)}MB, writing snapshot ${snapFile}\n`)
-        v8.writeHeapSnapshot(snapFile)
-        appendFileSync(logFile, `>>> snapshot written\n`)
+        appendLog(`>>> heap>${heapMb.toFixed(0)}MB, writing snapshot ${snapFile}\n`)
+        try {
+          v8.writeHeapSnapshot(temporary)
+          renameSync(temporary, snapFile)
+          prune()
+          appendLog(existsSync(snapFile) ? '>>> snapshot retained\n' : '>>> snapshot removed by retention budget\n')
+        } finally {
+          try { unlinkSync(temporary) } catch { /* only this process's incomplete file */ }
+        }
       }
     } catch { /* sampler must never crash the app */ }
   }

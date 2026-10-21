@@ -473,6 +473,21 @@ Runtime path, module boundaries, performance notes and persistence locations: [A
 Full list: [Architecture and limitations → Known limitations](docs/architecture.en.md#known-limitations).
 
 ## Development
+The monorepo development host (`pnpm tui`, `scripts/run.ts`) enables heap
+forensics only with `DSH_TUI_HEAP_WATCH=1`; unset it or use `0` to disable it.
+It samples every 15 seconds and takes one snapshot at each heap threshold of
+1024, 1536, 2048, 2560 and 3072 MiB. Its own completed files in `$DSH_HOME`
+retain at most four 64-KiB logs and two snapshots totaling at most 1024 MiB.
+`DSH_TUI_HEAP_MAX_MB` changes the snapshot budget (integer 1–16384; invalid
+values use 1024). A single oversized snapshot is removed too; the latest
+diagnostic may therefore be a log only. Snapshot creation still blocks and
+uses extra memory and temporary disk space; this does not fix memory leaks.
+Files use a process-unique `dsh-tui-heap-watch-` prefix. Manual/legacy files
+are untouched; incomplete `.writing` files are removed only after their
+owner PID is confirmed absent. Live or uncheckable owners are preserved,
+and cleanup failures are nonfatal, so quotas apply to successful cleanup of
+completed files, not peak usage or uncertain crash leftovers.
+
 
 CI uses Node 24 and pnpm 11. The package supports Node `^22.19 || >=24`.
 

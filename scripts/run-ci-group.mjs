@@ -426,6 +426,7 @@ const GROUPS = {
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],
+    ['verify-heap-watch-retention', ['node', '--import', 'tsx/esm', 'scripts/verify-heap-watch-retention.ts']],
 // /update 恢复链路端到端回归（#479/#483）：假 dsh 按剧本重放 pnpm 失败
 // （Linux EEXIST 必现竞态、Windows 瞬时 ENOENT、真实 404），真实子进程
 // 走编译产物——验证陈旧安装清理后重跑成功、瞬时重试升级、真实失败不
