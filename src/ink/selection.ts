@@ -1387,7 +1387,6 @@ export function refreshSelectionFingerprint(
   screen: Screen,
   coordinated: boolean,
 ): boolean {
-  if (s.stale) return false
   const b = selectionBounds(s)
   if (!b) {
     s.coveredFingerprint = null
@@ -1401,10 +1400,14 @@ export function refreshSelectionFingerprint(
   // stationary highlight can go stale.
   const geometry = `${b.start.row}:${b.start.col}-${b.end.row}:${b.end.col}`
   if (geometry !== s.coveredGeometry) {
+    // Passive follow/resize must record its geometry without unlocking a
+    // stale selection on this frame or the next stationary frame.
+    if (!coordinated) s.stale = false
     s.coveredGeometry = geometry
     s.coveredFingerprint = null
     s.coveredText = null
   }
+  if (s.stale) return false
   const { cells, noSelect, width, height, charPool, softWrap } = screen
   const copyRegion = screen.copyRegion
   const copyTexts = screen.copyTexts

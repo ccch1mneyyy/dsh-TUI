@@ -42,7 +42,7 @@ export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本�
 process.env['SSH_CONNECTION'] = 'headless-test'
 delete process.env['TMUX']
 
-const { refreshSelectionFingerprint, getSelectedText, startSelection, updateSelection, clearSelection, selectionBounds } =
+const { refreshSelectionFingerprint, getSelectedText, startSelection, updateSelection, clearSelection, selectionBounds, extendSelection, moveFocus, selectWordAt, selectLineAt, shiftSelection } =
   await import('../src/ink/selection.js')
 const { CharPool, HyperlinkPool, StylePool, createScreen, migrateScreenPools } =
   await import('../src/ink/screen.js')
@@ -242,6 +242,45 @@ function putRaw(s: Screen, col: number, row: number, charId: number, width: numb
   check('H2. guard re-arms after re-baseline', relapse && sel.stale)
 }
 
+// A stale gesture can be explicitly narrowed back to stable text.
+for (const mode of ['char', 'word', 'line', 'keyboard'] as const) {
+  const screen = makeScreen(5, 10)
+  const sel = makeSel()
+  putText(screen, 0, 1, 'A')
+  putText(screen, 0, 2, 'B')
+  startSelection(sel, 0, 1)
+  if (mode === 'word') selectWordAt(sel, screen, 0, 1)
+  if (mode === 'line') selectLineAt(sel, screen, 1)
+  if (mode === 'word' || mode === 'line') extendSelection(sel, screen, 0, 2)
+  else updateSelection(sel, 0, 2)
+  refreshSelectionFingerprint(sel, screen, false)
+  putText(screen, 0, 2, 'C')
+  check(`H3 ${mode}: animated covered row latches stale`, refreshSelectionFingerprint(sel, screen, false) && sel.stale)
+  if (mode === 'word' || mode === 'line') extendSelection(sel, screen, 0, 1)
+  else if (mode === 'keyboard') moveFocus(sel, 0, 1)
+  else updateSelection(sel, 0, 1)
+  refreshSelectionFingerprint(sel, screen, false)
+  check(`H4 ${mode}: explicit geometry rebuilds the baseline`, !sel.stale && sel.coveredText === 'A' && getSelectedText(sel, screen) === 'A')
+  putText(screen, 0, 1, 'D')
+  check(`H5 ${mode}: stationary overwrite is still refused`, refreshSelectionFingerprint(sel, screen, false) && sel.stale)
+}
+{
+  const screen = makeScreen(5, 10)
+  const sel = makeSel()
+  putText(screen, 0, 1, 'A')
+  startSelection(sel, 0, 1)
+  updateSelection(sel, 3, 1)
+  refreshSelectionFingerprint(sel, screen, false)
+  putText(screen, 0, 1, 'B')
+  refreshSelectionFingerprint(sel, screen, false)
+  shiftSelection(sel, 1, 0, 4, 10)
+  putText(screen, 0, 2, 'B')
+  refreshSelectionFingerprint(sel, screen, true)
+  check('H6: coordinated geometry preserves stale and records the passive position', sel.stale && sel.coveredGeometry === '2:0-2:3')
+  refreshSelectionFingerprint(sel, screen, false)
+  check('H7: next stationary frame cannot mistake the passive move for user input', sel.stale)
+}
+
 // ── J. softWrap 翻转改变复制结果 → 指纹必须感知 ─────────────────────────
 {
   const screen = makeScreen(5, 10)
@@ -369,6 +408,21 @@ function putRaw(s: Screen, col: number, row: number, charId: number, width: numb
   const refused = rig.copySelectionNoClear()
   check('K4. stale copy is refused (empty) and the highlight is cleared',
     refused === '' && selectionBounds(sel2) === null)
+
+  // Commit through real Ink after a stale drag returns to stable content.
+  const sel3 = makeSel()
+  putText(screen, 0, 3, 'S')
+  putText(screen, 0, 4, 'T')
+  startSelection(sel3, 0, 3)
+  updateSelection(sel3, 0, 4)
+  refreshSelectionFingerprint(sel3, screen, false)
+  putText(screen, 0, 4, 'U')
+  refreshSelectionFingerprint(sel3, screen, false)
+  check('K5: real-copy recovery precondition is stale', sel3.stale)
+  updateSelection(sel3, 0, 3)
+  refreshSelectionFingerprint(sel3, screen, false)
+  rig.selection = sel3
+  check('K6: explicit final highlight copies successfully after stale recovery', rig.copySelectionNoClear() === 'S')
 }
 
 // ── L. 选区**下一行**的 softWrap 也是复制结果的输入 ──────────────────────

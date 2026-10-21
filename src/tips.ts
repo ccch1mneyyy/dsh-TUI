@@ -733,8 +733,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'disp-wheel-sel',
     group: 'display',
-    zh: '有文本选区时，滚轮平移选区而非滚动列表',
-    en: 'With a text selection, the wheel translates the selection, not the list',
+    zh: '滚轮滚动指针下的内容，选区随已选内容协调移动',
+    en: 'The wheel scrolls content under the pointer; the selection follows its selected content',
   },
   {
     id: 'disp-whale',
