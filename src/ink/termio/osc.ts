@@ -134,6 +134,8 @@ export async function tmuxLoadBuffer(text: string): Promise<boolean> {
   return code === 0
 }
 
+let windowsClipboardQueue: Promise<unknown> = Promise.resolve()
+
 /**
  * OSC 52 clipboard write: ESC ] 52 ; c ; <base64> BEL/ST
  * 'c' selects the clipboard (vs 'p' for primary selection on X11).
@@ -161,7 +163,7 @@ export async function tmuxLoadBuffer(text: string): Promise<boolean> {
  * Local (no SSH_CONNECTION): also shell out to a native clipboard utility.
  * OSC 52 and tmux -w both depend on terminal settings — iTerm2 disables
  * OSC 52 by default, VS Code shows a permission prompt on first use. Native
- * utilities (pbcopy/wl-copy/xclip/xsel/clip.exe) always work locally. Over
+ * utilities (pbcopy/wl-copy/xclip/xsel/PowerShell) bypass terminal settings. Over
  * SSH these would write to the remote clipboard — OSC 52 is the right path there.
  *
  * @param text - the text to place on the clipboard.
@@ -169,6 +171,17 @@ export async function tmuxLoadBuffer(text: string): Promise<boolean> {
  *   outside tmux, DCS-wrapped inside).
  */
 export async function setClipboard(text: string): Promise<string> {
+  if (process.platform !== 'win32' || process.env['SSH_CONNECTION']) {
+    return setClipboardNow(text)
+  }
+  // Serialize the entire Windows path, including the returned OSC 52. An
+  // older native writer must finish before the next copy can reach the terminal.
+  const pending = windowsClipboardQueue.then(() => setClipboardNow(text))
+  windowsClipboardQueue = pending.catch(() => {})
+  return pending
+}
+
+async function setClipboardNow(text: string): Promise<string> {
   const b64 = Buffer.from(text, 'utf8').toString('base64')
   const raw = osc(OSC.CLIPBOARD, 'c', b64)
 
@@ -178,8 +191,12 @@ export async function setClipboard(text: string): Promise<string> {
   // before pbcopy even started — fast cmd+tab → paste would beat it.
   // Gated on SSH_CONNECTION (not SSH_TTY) since tmux panes inherit SSH_TTY
   // forever but SSH_CONNECTION is in tmux's default update-environment and
-  // clears on local attach. Fire-and-forget.
-  if (!process.env['SSH_CONNECTION']) copyNative(text)
+  // clears on local attach. Windows waits before returning OSC 52 so a
+  // failed newer native copy cannot be followed by an older native write.
+  if (!process.env['SSH_CONNECTION']) {
+    if (process.platform === 'win32') await copyWindows(text)
+    else copyNative(text)
+  }
 
   const tmuxBufferLoaded = await tmuxLoadBuffer(text)
 
@@ -242,12 +259,24 @@ function copyNative(text: string): void {
       })
       return
     }
-    case 'win32':
-      // clip.exe is always available on Windows. Unicode handling is
-      // imperfect (system locale encoding) but good enough for a fallback.
-      void execFileNoThrow('clip', [], opts)
-      return
   }
+}
+
+/** Read UTF-8 bytes explicitly; clipboard content never enters command text. */
+async function copyWindows(text: string): Promise<void> {
+  const command = [
+    "$ErrorActionPreference = 'Stop'",
+    '$reader = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), [System.Text.UTF8Encoding]::new($false), $false)',
+    'Set-Clipboard -Value ($reader.ReadToEnd())',
+  ].join('; ')
+  // 请核: Windows PowerShell 5.1 / PowerShell 7 的原生 Unicode、超时终止与 STA 剪贴板行为须在 Windows 实机验收。
+  for (const executable of ['powershell.exe', 'pwsh.exe']) {
+    const result = await execFileNoThrow(executable, [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-Command', command,
+    ], { input: text, useCwd: false, timeout: 2000 })
+    if (result.code === 0) return
+  }
+  // Both tools failed or timed out: the caller still emits OSC 52.
 }
 
 /**

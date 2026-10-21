@@ -465,6 +465,7 @@ const GROUPS = {
 // 图片导出权限（目录 0700/文件 0600）、空 vs unavailable、
 // 死 Wayland 会话回退 xclip。
     ["verify-clipboard", ['node', 'scripts/verify-clipboard.mjs']],
+    ['verify-windows-copy', ['node', 'scripts/verify-windows-copy.mjs']],
 // Ctrl+V UI 端到端回归（stub wl-paste）：帮助面板在读取前关闭、
 // 剪贴板文本落入输入框、busy 闩锁释放后第二次粘贴仍生效。
     ["repro-clipboard", ['node', '--import', 'tsx/esm', 'scripts/repro-clipboard.tsx']],
