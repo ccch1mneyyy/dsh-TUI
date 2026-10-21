@@ -3,7 +3,7 @@ import { Box, Text, useTerminalSize, useTheme } from '../ui.js'
 import type { Color } from '../ink/styles.js'
 import { formatTokens } from '../terminal-utils/format.js'
 import { t } from '../i18n.js'
-import { applyPluginFieldsOrder, formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
+import { applyPluginFieldsOrder, formatContextUsage, DEFAULT_STATUS_BAR, getEscInterruptsTurn, normalizeStatusBar, subscribeEscInterruptsTurn, type StatusBarConfig } from '../tuiDisplayPrefs.js'
 import { estimateSessionCostSnapshotCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
 import { getActiveBrand } from '../branding.js'
 import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../components/ActivityLine.js'
@@ -644,6 +644,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     ...inSlot('right-tail'),
   ]
 
+  const escInterrupts = React.useSyncExternalStore(subscribeEscInterruptsTurn, getEscInterruptsTurn)
   const hint = selectionActive
     ? t('statusline-hint-select')
     : channel.working
@@ -651,7 +652,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
       // interrupt" would promise an action the channel ignores by contract
       // (and a wedged turn can hold this state forever). Say what the state
       // is instead, so the key never looks dead.
-      ? t(channel.cancelPending ? 'statusline-hint-interrupting' : 'statusline-hint-working')
+      ? t(channel.cancelPending ? 'statusline-hint-interrupting' : escInterrupts ? 'statusline-hint-working' : 'statusline-hint-working-ctrl-c')
       : statusBar.shortcutHint && !helpOpen
         ? t('statusline-hint-shortcuts')
         : ''

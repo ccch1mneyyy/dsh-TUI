@@ -10,7 +10,7 @@ const [
   { render, ThemeProvider },
   { StatusLine, formatCacheHitRate },
   { AssistantToolUseMessage },
-  { DEFAULT_STATUS_BAR, formatContextUsage, normalizeStatusBar, normalizeToolBackground },
+  { DEFAULT_STATUS_BAR, applyEscInterruptsTurn, formatContextUsage, normalizeStatusBar, normalizeToolBackground },
   { homeDir },
 ] = await Promise.all([
   import('node:assert'),
@@ -335,6 +335,14 @@ const working = await renderStatus({ working: true })
 check('working StatusLine always renders its Esc interrupt hint', () => {
   assert.equal((working.match(/esc to interrupt/g) ?? []).length, 1)
 })
+
+applyEscInterruptsTurn(false)
+const workingCtrlC = await renderStatus({ working: true })
+check('working StatusLine names Ctrl+C when Esc is configured not to interrupt', () => {
+  assert.equal((workingCtrlC.match(/ctrl\+c to interrupt/g) ?? []).length, 1)
+  assert.equal((workingCtrlC.match(/esc to interrupt/g) ?? []).length, 0)
+})
+applyEscInterruptsTurn(true)
 
 const selecting = await renderStatus({}, 140, { selectionActive: true })
 check('selection StatusLine always renders its Esc return hint', () => {

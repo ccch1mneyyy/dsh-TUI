@@ -189,6 +189,10 @@ export interface Config {
   /** Notification transport: auto (default), OSC 9, BEL, or the native Windows
    *  toast, which off Windows resolves back to the probed terminal protocol. */
   notificationMethod?: NotificationMethod
+  /** Esc interrupts a running turn (settings `dsh-tui.escInterruptsTurn`):
+   *  on by default. Off keeps Esc with the composer; Ctrl+C/Ctrl+Enter
+   *  interrupt instead. */
+  escInterruptsTurn?: boolean
   /** Mermaid diagrams (settings `dsh-tui.mermaidDiagrams`): ```mermaid
    *  fences in replies render as Unicode box-drawing art — flowcharts,
    *  sequence/state/class/ER diagrams, pie, mindmap, timeline, gitGraph —
@@ -365,6 +369,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   smoothStreaming: Schema.boolean().default(true),
   taskNotifications: Schema.union(['off', 'unfocused', 'always']),
   notificationMethod: Schema.union(['auto', 'osc9', 'bel', 'windows']),
+  escInterruptsTurn: Schema.boolean().default(true),
   mermaidDiagrams: Schema.boolean().default(true),
   codeFrameStyle: Schema.union(['light', 'full']),
   mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),

@@ -1306,6 +1306,7 @@ const dict = {
   'hint-rewind-back': { zh: '**Enter** 回退 · Esc 返回', en: '**Enter** to rewind · Esc to back' },
   'statusline-hint-select': { zh: 'esc 返回输入', en: 'esc to return to input' },
   'statusline-hint-working': { zh: 'esc 中断', en: 'esc to interrupt' },
+  'statusline-hint-working-ctrl-c': { zh: 'ctrl+c 中断', en: 'ctrl+c to interrupt' },
   'statusline-hint-interrupting': { zh: '中断中…', en: 'interrupting…' },
   'statusline-hint-shortcuts': { zh: '? 查看快捷键', en: '? for shortcuts' },
   // ── 底栏字段 hover 明细（补充行读出；技术标签 ctx/free/read 等保持不译）──

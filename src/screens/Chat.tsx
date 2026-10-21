@@ -148,7 +148,7 @@ import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
 import { BtwPanelFallback } from '../components/BtwPanel.js'
 import { btwThreads } from '../components/sidePanel/btw/threads.js'
-import { getBtwContextBudget, getBtwContextTurns } from '../tuiDisplayPrefs.js'
+import { getBtwContextBudget, getBtwContextTurns, getEscInterruptsTurn } from '../tuiDisplayPrefs.js'
 import { BtwThreadScene } from '../components/sidePanel/btw/BtwThreadScene.js'
 import { RecapPanel } from '../components/RecapPanel.js'
 import { isValidSessionColor, SESSION_COLOR_NAMES } from '../terminal-utils/sessionColors.js'
@@ -5682,7 +5682,7 @@ export function Chat({
       // though Chat's global listener runs first. Only an unconsumed Esc
       // reaches the working-turn interrupt below.
       event.stopImmediatePropagation()
-    } else if (key.escape && channel.working && !helpOpen && !promptControllerRef.current?.vimActive()) {
+    } else if (key.escape && getEscInterruptsTurn() && channel.working && !helpOpen && !promptControllerRef.current?.vimActive()) {
       // Esc interrupts a running turn (the prompt input
       // only sees esc when idle, where it has the double-tap-clear meaning).
       // With messages queued, the queue DOCKS (Claude Code parity): the

@@ -347,6 +347,14 @@ export const subscribeMermaidDiagrams = mermaidDiagramsStore.subscribe
 export const getMermaidDiagrams = mermaidDiagramsStore.get
 export const applyMermaidDiagrams = mermaidDiagramsStore.apply
 
+/** Whether Esc interrupts a running turn (settings `dsh-tui.escInterruptsTurn`,
+ *  default on). When off, Ctrl+C and Ctrl+Enter keep interrupting and Esc keeps
+ *  its composer meanings only. */
+const escInterruptsTurnStore = createLiveSetting<boolean>(true, value => value !== false)
+export const subscribeEscInterruptsTurn = escInterruptsTurnStore.subscribe
+export const getEscInterruptsTurn = escInterruptsTurnStore.get
+export const applyEscInterruptsTurn = escInterruptsTurnStore.apply
+
 /**
  * How fenced code blocks frame themselves (settings
  *  `dsh-tui.codeFrameStyle`): `light` (default) is the open rail frame

@@ -67,7 +67,7 @@ import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelRatio, applySidePanelSplitEnabled, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizePluginFieldsOrder, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, resolveMathRendering, SIDE_PANEL_ID_PATTERN, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyEscInterruptsTurn, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelRatio, applySidePanelSplitEnabled, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizePluginFieldsOrder, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, resolveMathRendering, SIDE_PANEL_ID_PATTERN, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -1293,6 +1293,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   applyCompanionSkin(config.companion?.skin)
   applyBtwContextTurns(config.btw?.contextTurns)
   applyBtwContextBudget(config.btw?.contextBudget)
+  applyEscInterruptsTurn(config.escInterruptsTurn)
   applyMermaidDiagrams(config.mermaidDiagrams)
   applyCodeFrameStyle(config.codeFrameStyle)
   applyMathRendering(resolveMathRendering({}, config))
@@ -1379,6 +1380,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         expandEditor: Schema.boolean(),
         // Same no-default rule: applyDisplay resolves `?? config.smoothStreaming ?? true`.
         smoothStreaming: Schema.boolean(),
+        // Same no-default rule: applyDisplay resolves `?? config.escInterruptsTurn ?? true`.
+        escInterruptsTurn: Schema.boolean(),
         taskNotifications: Schema.union(['off', 'unfocused', 'always']),
         // Must mirror Config's union (`src/dsh-adapter/index.ts`): a method
         // missing here is rejected by /settings and never reaches the runtime.
@@ -1521,6 +1524,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       promptSessionLabel?: boolean
       expandEditor?: boolean
       smoothStreaming?: boolean
+      escInterruptsTurn?: boolean
       taskNotifications?: TaskNotifications
       notificationMethod?: NotificationMethod
       mermaidDiagrams?: boolean
@@ -1631,6 +1635,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
       channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
       configureTaskNotifications(value.taskNotifications ?? config.taskNotifications, value.notificationMethod ?? config.notificationMethod)
+      applyEscInterruptsTurn(value.escInterruptsTurn ?? config.escInterruptsTurn ?? true)
       applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
       applyCodeFrameStyle(value.codeFrameStyle ?? config.codeFrameStyle)
       applyMathRendering(resolveMathRendering(value, config))
@@ -1886,6 +1891,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           format(value: unknown): string {
             // Unset in settings.yaml: the effective default is on.
             return String(typeof value === 'boolean' ? value : config.smoothStreaming !== false)
+          },
+        },
+        {
+          ...settingField('escInterruptsTurn'),
+          format(value: unknown): string {
+            return String(typeof value === 'boolean' ? value : config.escInterruptsTurn !== false)
           },
         },
         {

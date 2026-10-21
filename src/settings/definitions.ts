@@ -95,6 +95,14 @@ export const SETTING_DEFINITIONS = {
       { value: 'max', label: 'Max', descriptions: { zh: '最高' } },
     ],
   },
+  'escInterruptsTurn': {
+    label: 'Esc interrupts a running turn',
+    descriptions: { zh: 'Esc 中断运行中的回合' },
+    group: 'conversation',
+    hint: 'On: Esc aborts the running turn (composer menus and vim mode still take Esc first). Off: Esc stays with the composer and Ctrl+C / Ctrl+Enter interrupt instead. On by default. Applies immediately.',
+    hintDescriptions: { zh: '开启：Esc 中止运行中的回合（输入菜单与 vim 模式仍先取 Esc）。关闭：Esc 留给输入框，改用 Ctrl+C / Ctrl+Enter 中断。默认开启。立即生效。' },
+    kind: 'boolean',
+  },
   'expandEditor': {
     label: 'Fullscreen draft editor',
     descriptions: { zh: '全屏草稿编辑' },
