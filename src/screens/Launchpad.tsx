@@ -1085,6 +1085,13 @@ export function Launchpad({
       event.stopImmediatePropagation()
       return
     }
+    if (isMod(key) && input === 'u') {
+      if (!inputFocused) return
+      const lineStart = caret === 0 ? 0 : query.lastIndexOf('\n', caret - 1) + 1
+      deleteRange(lineStart, caret)
+      event.stopImmediatePropagation()
+      return
+    }
     if (composing || key.return) return
     // 可打印输入（含粘贴整段）：接到光标处，交给 SearchBox 的窗口化去滚。
     const typed = input.replace(/[\r\n]+/gu, '')

@@ -129,7 +129,7 @@
 | `Ctrl+Left/Right` / `Alt/Option+Left/Right` | 按空白分隔的单词移动；启动页也支持 |
 | `Home/End` | 移到当前逻辑行首/行尾 |
 | `Ctrl+A` / `Ctrl+E` | `Ctrl+A` 打开子代理面板（编辑器内 `Mod+A` 仍移到行首）；`Ctrl+E` 移到行尾，还会展开或折叠长会话中隐藏的旧消息 |
-| `Ctrl+U` | 删除光标前内容 |
+| `Ctrl+U` | 删除光标至当前行首，保留右侧文字；启动页输入框聚焦时也支持，图片 chip 整体删除 |
 | `Ctrl+K` | 删除光标后内容 |
 | `Ctrl+W` / `Alt/Option+Backspace` | 删除前一个单词；已暂存的图片附件整体删除 |
 | `Backspace` / `Delete` | 删前一 / 后一字符；**有选区时删除整个选区** |

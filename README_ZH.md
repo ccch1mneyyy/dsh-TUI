@@ -308,6 +308,8 @@ teammate 是空闲而不是完成，发消息即可唤醒）；另有 Lead 行�
 ## 快捷键与鼠标
 
 `Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 打断并发送 · `Alt+Up` 取回上一条 · `Esc` 先关闭局部层，再中断运行回合；空闲空输入双击回溯 · `Ctrl+B` 侧栏 · `Ctrl+O` 详情 · `Ctrl+R` 搜历史（`↑`/`↓` 与 `Ctrl+R` 按当前项目隔离） · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 快捷键 · `←` 打开会话管理（DSH 会先将当前会话转后台）。
+启动页与聊天页均支持 `Ctrl+U` 删除光标至当前行首的内容，保留右侧文字，图片 chip 整体处理；仅在输入框获得焦点时编辑草稿。
+
 
 启动页与聊天页均支持 `Alt/Option+←/→` 按空白分隔的单词移动，`Alt/Option+Backspace` 与 `Ctrl+W` 一样删除前一个单词。macOS 终端需将 Option 配置为 Meta。
 

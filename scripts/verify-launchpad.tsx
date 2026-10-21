@@ -211,6 +211,8 @@ interface OpenOptions {
   columns?: number
   rows?: number
   query?: string
+  caret?: number
+  imageComposer?: React.ComponentProps<typeof Launchpad>['imageComposer']
   firstRun?: boolean
   whale?: boolean
   fontId?: string
@@ -274,12 +276,13 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
   // 受控闭环：Chat 持有 query/caret/focus，这里照抄那三条回调的接线。
   function Harness(): React.ReactNode {
     const [query, setQuery] = React.useState(options.query ?? '')
-    const [caret, setCaret] = React.useState((options.query ?? '').length)
+    const [caret, setCaret] = React.useState(options.caret ?? (options.query ?? '').length)
     const [focus, setFocus] = React.useState(-1)
     const page = (
       <Launchpad
         query={query}
         cursorOffset={caret}
+        imageComposer={options.imageComposer}
         focusIndex={focus}
         isTerminalFocused={options.terminalFocused ?? true}
         whale={options.whale ?? true}
@@ -772,6 +775,60 @@ for (const brand of ['claude', 'codex'] as const) {
     last(ev2, 'query')?.value === 'b', JSON.stringify(last(ev2, 'query')))
   s.close()
   s2.close()
+}
+
+// Ctrl+U uses the controlled ref mirror, including multiple keys in one read.
+for (const fullscreen of [false, true]) {
+  const mode = fullscreen ? 'fullscreen' : 'inline'
+  for (const [encoding, key] of [
+    ['raw', '\x15'], ['CSI-u', '\x1b[117;5u'], ['modifyOtherKeys', '\x1b[27;5;117~'],
+  ] as const) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'alpha beta', columns: 78, rows: 37, fullscreen })
+    await s.send(key + 'X')
+    check(`B11u ${mode} ${encoding}: Ctrl+U then X in one batch`,
+      last(ev, 'query')?.value === 'X' && last(ev, 'query')?.cursor === 1, JSON.stringify(ev))
+    await s.send(key)
+    await s.send(key)
+    check(`B11u ${mode} ${encoding}: empty input stays empty`,
+      last(ev, 'query')?.value === '' && last(ev, 'query')?.cursor === 0)
+    s.close()
+  }
+  for (const item of [
+    { query: 'alpha beta', caret: 6, text: 'beta', next: 0 },
+    { query: 'alpha beta', caret: 0, text: 'alpha beta', next: 0 },
+    { query: 'keep\n中e\u0301👨‍👩‍👧‍👦right', caret: 'keep\n中e\u0301👨‍👩‍👧‍👦'.length, text: 'keep\nright', next: 5 },
+    { query: 'keep\nright', caret: 5, text: 'keep\nright', next: 5 },
+    { query: '\nright', caret: 0, text: '\nright', next: 0 },
+  ]) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: item.query, caret: item.caret, columns: 78, rows: 37, fullscreen })
+    await s.send('\x15')
+    check(`B11u ${mode}: current-line boundary ${JSON.stringify(item.query)} at ${item.caret}`,
+      last(ev, 'query')?.value === item.text && last(ev, 'query')?.cursor === item.next, JSON.stringify(ev))
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, {
+      query: '[Image #1] tail', caret: 8, columns: 78, rows: 37, fullscreen,
+      // This fixture exercises atomic editing only, never image staging.
+      imageComposer: { channel: {} as never, bindings: new Map([['[Image #1]', 'fixture-stage']]) },
+    })
+    await s.send('\x15')
+    check(`B11u ${mode}: an interior image caret removes the complete chip`,
+      last(ev, 'query')?.value === ' tail' && last(ev, 'query')?.cursor === 0, JSON.stringify(ev))
+    s.close()
+  }
+  for (const inputPaused of [false, true]) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'keep draft', columns: 78, rows: 37, fullscreen, inputPaused })
+    if (!inputPaused) await s.send('\t')
+    await s.send('\x15')
+    check(`B11u ${mode}: ${inputPaused ? 'overlay' : 'parameter focus'} owns Ctrl+U`,
+      last(ev, 'query') === undefined, JSON.stringify(ev))
+    s.close()
+  }
 }
 
 // Option-as-Meta editing reaches the controlled Launchpad query too (#1448).
