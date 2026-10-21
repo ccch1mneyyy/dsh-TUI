@@ -113,6 +113,7 @@ if (NO_SHARP) {
 
 const { probeImageSize, adaptImageForAdmission } = await import('../src/utils/imageResize.js')
 const { createComposerImages } = await import('../src/dsh-adapter/channel/composer-images.js')
+const { expandComposerMentions } = await import('../src/dsh-adapter/channel/composer-mentions.js')
 import type { StagedImageHandle } from '../src/adapter/ports/channel-view.js'
 
 const LIMITS = { maxImageDimension: 1024, maxImagePixels: 1_048_576 }
@@ -217,6 +218,7 @@ interface GateResult {
  *  store that records what it was handed. `report` lets a case simulate the
  *  store normalizing further (its own dimensions / media type). */
 async function stageViaEntry(options: {
+  viaMention?: boolean
   mediaTypes: readonly string[]
   data: Uint8Array
   mediaType: string
@@ -244,6 +246,17 @@ async function stageViaEntry(options: {
         bytes: input.data.byteLength,
       }
     },
+  }
+  if (options.viaMention === true) {
+    const fs = {
+      resolve: async (displayPath: string) => ({ displayPath }),
+      stat: async () => ({ type: 'file' as const }),
+      readBytes: async () => options.data,
+      readText: async () => '', listDir: async () => [],
+    }
+    const extension = options.mediaType.replace('image/', '').replace('jpeg', 'jpg')
+    const expansion = await expandComposerMentions(fs, '/workspace', '@probe.' + extension, attachments as never)
+    return { stored: saved[0], adjustment: expansion.imageAdjustments?.[0]?.adjustment, error: expansion.imageFailures?.[0]?.reason ?? (expansion.missing.length > 0 ? 'missing' : undefined) }
   }
   const ctx = { get: (key: string): unknown => (key === 'attachments' ? attachments : undefined) }
   const images = createComposerImages(ctx as never, { assertActive: () => {} } as never, { generation: () => 0 })
@@ -460,6 +473,38 @@ if (!NO_SHARP) {
       b16.error !== undefined && b16.stored === undefined && b16.error.includes('size limit'),
       b16.error ?? 'no error')
 
+    // The active mention entry must agree with staging, including store
+    // normalization, alpha conversion and controlled refusal reasons.
+    const hugePng = await pngBytes(sharp, 9000, 9000)
+    for (const [name, options] of [
+      ['9000 square', { mediaTypes: ACCEPTED, data: hugePng, mediaType: 'image/png' }],
+      ['alpha conversion', { mediaTypes: ['image/jpeg'], data: await pngBytes(sharp, 100, 60, true), mediaType: 'image/png' }],
+      ['store normalization', { mediaTypes: ACCEPTED, data: smallPng, mediaType: 'image/png', report: { width: 50, height: 30, mediaType: 'image/jpeg' } }],
+      ['animated refusal', { mediaTypes: ACCEPTED, data: animWebp, mediaType: 'image/webp' }],
+      ['decode refusal', { mediaTypes: ACCEPTED, data: truncatedPng(), mediaType: 'image/png' }],
+    ] as const) {
+      const paste = await stageViaEntry(options)
+      const mention = await stageViaEntry({ ...options, viaMention: true })
+      if (name === '9000 square') check('M0. 9000 square mention is admitted and visibly resized', mention.error === undefined && mention.stored !== undefined && sidesWithinCaps(mention.stored.data) && mention.adjustment?.resized === true)
+      check('M1. mention and paste agree: ' + name, paste.error === mention.error && JSON.stringify(paste.adjustment) === JSON.stringify(mention.adjustment)
+        && paste.stored?.mediaType === mention.stored?.mediaType, JSON.stringify({ paste: paste.adjustment, mention: mention.adjustment, error: mention.error }))
+    }
+    const stored = { attachmentId: 'staged', mediaType: 'image/png', width: 100, height: 60, bytes: 30 }
+    const mixedFs = { resolve: async (displayPath: string) => ({ displayPath }), stat: async () => ({ type: 'file' as const }), readBytes: async () => smallPng, readText: async () => 'body', listDir: async () => [] }
+    let saves = 0
+    const mixedStore = {
+      imageLimits: { ...LIMITS, maxImageBytes: 20_000_000, maxImagesPerMessage: 2, maxMessageImageBytes: 60, mediaTypes: ACCEPTED },
+      saveImage: async () => ({ ...stored, attachmentId: 'mention-' + (++saves), bytes: 20 }),
+    }
+    const mixedText = '@first.png [Image #1] @second.png'
+    const mixed = await expandComposerMentions(mixedFs, '/workspace', mixedText, mixedStore as never, new Map([['[Image #1]', stored]]) as never)
+    const mixedIds = mixed.blocks.flatMap(block => block.type === 'image' ? [String(block.attachment.attachmentId)] : [])
+    check('M2. mixed references retain text/order and use stored bytes', mixed.blocks[0]?.type === 'text' && mixed.blocks[0].text === mixedText && JSON.stringify(mixedIds) === JSON.stringify(['mention-1', 'staged']) && mixed.missing.includes('second.png') && saves === 1)
+    mixedStore.imageLimits.maxImagesPerMessage = 8
+    mixedStore.imageLimits.maxMessageImageBytes = 39
+    const bytesLimited = await expandComposerMentions(mixedFs, '/workspace', '@first.png @second.png', mixedStore as never)
+    check('M3. final stored byte budget refuses second image', bytesLimited.blocks.filter(block => block.type === 'image').length === 1 && bytesLimited.missing.includes('second.png'))
+
     // The generation guard protects the cross-await entry: a caller that
     // captured the epoch before a session change must be refused.
     let generation = 0
@@ -558,6 +603,9 @@ if (!NO_SHARP) {
   const e2 = await stage(truncatedPng(), 'image/png')
   check('E2. sharp-missing degrades an unmeasurable paste to the store',
     e2.ok && e2.saved === 1, e2.ok ? `stored ${e2.saved}` : e2.message)
+
+  const mentionNoSharp = await stageViaEntry({ viaMention: true, mediaTypes: ACCEPTED, data: pngHeaderClaims(9000, 9000), mediaType: 'image/png' })
+  check('M4. sharp-missing mention reports a controlled oversize refusal', mentionNoSharp.stored === undefined && mentionNoSharp.error?.includes('sharp is unavailable') === true)
 
   const e3 = await stage(pngHeaderClaims(9000, 9000), 'image/png')
   check('E3. sharp-missing still refuses a measured oversize paste',

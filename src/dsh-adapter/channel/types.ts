@@ -169,4 +169,8 @@ export interface MentionExpansion {
   attached: string[]
   /** Mention tokens that failed to resolve (kept literal, warned about). */
   missing: string[]
+  /** Store-reported transformations for successfully attached mention images. */
+  imageAdjustments?: { path: string; adjustment: StagedImageAdjustment }[]
+  /** Controlled admission refusals, excluding arbitrary filesystem/store errors. */
+  imageFailures?: { path: string; reason: string }[]
 }

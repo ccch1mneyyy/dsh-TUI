@@ -151,6 +151,8 @@ const dict = {
   'export-model': { zh: '- 模型: {{model}}', en: '- Model: {{model}}' },
   'export-session': { zh: '- 会话: {{id}}', en: '- Session: {{id}}' },
   'export-dir': { zh: '- 目录: {{cwd}}', en: '- Directory: {{cwd}}' },
+  'mentions-image-adjusted': { zh: '@{{path}} 已适配：{{detail}}', en: '@{{path}} adapted: {{detail}}' },
+  'mentions-image-failed': { zh: '@{{path}} 无法附加：{{reason}}', en: '@{{path}} could not be attached: {{reason}}' },
   'mentions-attached': { zh: '已附加 {{count}} 个文件引用', en: { one: 'Attached {{count}} file reference', other: 'Attached {{count}} file references' } },
   'mentions-missing': { zh: '未找到引用: {{paths}}', en: 'References not found: {{paths}}' },
   // Agent Teams: the tag after the sender of a peer message bubble.

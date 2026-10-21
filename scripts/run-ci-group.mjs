@@ -1480,6 +1480,7 @@ const GROUPS = {
 // 注明、剥后路径未命中时回退字面路径（真叫 `…#L…` 的文件按整文件附加
 // 且模型看到字面路径）、双 miss 报用户原文、无后缀行为不变、目录忽略
 // 后缀。内存 fs stub，expandMentions 纯扩展逻辑。
+    ["verify-image-downsample", ['node', '--import', 'tsx/esm', 'scripts/verify-image-downsample.tsx']],
     ["verify-mention-lines", ['node', '--import', 'tsx/esm', 'scripts/verify-mention-lines.ts']],
 // 问卷 provider 抢注守卫回归（issue #98 安全收尾）：静默让位只授予宿主
 // 可验证的白名单在位者（本 TUI 的私有 symbol 标记）；在位者【自报】的

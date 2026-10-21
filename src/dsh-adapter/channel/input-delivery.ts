@@ -255,6 +255,21 @@ export function createInputDelivery(
       untrackPending(message.id)
       throw error
     }
+    if (current(origin)) {
+      for (const { path, adjustment } of expansion.imageAdjustments ?? []) {
+        const detail: string[] = []
+        if (adjustment.resized) detail.push(t('input-image-detail-resized', { width: adjustment.width, height: adjustment.height }))
+        if (adjustment.mediaType !== adjustment.sourceMediaType) {
+          const from = adjustment.sourceMediaType.replace(/^image\//u, '').toUpperCase()
+          const to = adjustment.mediaType.replace(/^image\//u, '').toUpperCase()
+          detail.push(t(adjustment.flattened ? 'input-image-detail-converted-flattened' : 'input-image-detail-converted', { from, to }))
+        }
+        if (detail.length > 0) notify(t('mentions-image-adjusted', { path, detail: detail.join(' · ') }), { timeoutMs: 5000 })
+      }
+      for (const { path, reason } of expansion.imageFailures ?? []) {
+        notify(t('mentions-image-failed', { path, reason }), { color: 'warning', timeoutMs: 5000 })
+      }
+    }
     if (expansion.attached.length > 0) {
       notify(t('mentions-attached', { count: expansion.attached.length }), { timeoutMs: 2500 })
     }

@@ -23,6 +23,8 @@
 > DSH's public exports, and is moving from a mounted plugin to an app with its
 > own entry and composition root, where DSH loads in process as the first-party
 > backend. Install to enable; uninstall leaves no patches behind.
+Image files referenced with `@path` use the same admission and resize/conversion policy as pasted images. Adjustment notices report the stored dimensions and format; required animation conversion is refused instead of dropping frames. Mention images and staged images still share count and stored-byte limits in source order.
+
 
 ## Highlights
 Resuming a DSH session preserves its recorded reasoning effort (or its live selection when reattaching). The saved default seeds new sessions; explicit `/effort` and effort-default settings changes still apply to the current session’s next request.

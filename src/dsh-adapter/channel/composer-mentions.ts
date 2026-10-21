@@ -1,6 +1,6 @@
 import { isAbsolute, join } from 'node:path'
 import { extractMentions } from '../../utils/mentions.js'
-import { COMPOSER_IMAGE_TOKEN } from './composer-images.js'
+import { COMPOSER_IMAGE_TOKEN, ImageAdmissionError, saveAdmittedImage } from './composer-images.js'
 import {
   MENTION_MAX_DIR_ENTRIES,
   MENTION_MAX_FILE_CHARS,
@@ -33,6 +33,8 @@ export async function expandComposerMentions(
   const blocks: MentionExpansion['blocks'] = [{ type: 'text', text }]
   const attached: string[] = []
   const missing: string[] = []
+  const imageAdjustments: NonNullable<MentionExpansion['imageAdjustments']> = []
+  const imageFailures: NonNullable<MentionExpansion['imageFailures']> = []
   const mentions = extractMentions(text)
   let budget = MENTION_MAX_TOTAL_CHARS
   let imageCount = 0
@@ -124,27 +126,29 @@ export async function expandComposerMentions(
     if (info?.type === 'file') {
       if (imageType !== undefined && attachments !== undefined && fs.readBytes !== undefined) {
         const limits = attachments.imageLimits
-        if (!limits.mediaTypes.includes(imageType) || imageCount >= limits.maxImagesPerMessage) {
+        if (imageCount >= limits.maxImagesPerMessage) {
           missing.push(display)
           continue
         }
         try {
           const data = await fs.readBytes(target, undefined, limits.maxImageBytes)
-          if (imageBytes + data.byteLength > limits.maxMessageImageBytes) {
-            missing.push(display)
-            continue
-          }
-          const attachment = await attachments.saveImage({
+          const { attachment, adjustment } = await saveAdmittedImage(attachments, {
             data,
             mediaType: imageType,
             name: basename(target.displayPath),
           })
+          if (imageBytes + attachment.bytes > limits.maxMessageImageBytes) {
+            missing.push(display)
+            continue
+          }
           blocks.push({ type: 'image', attachment })
+          if (adjustment !== undefined) imageAdjustments.push({ path: display, adjustment })
           imageCount += 1
-          imageBytes += data.byteLength
+          imageBytes += attachment.bytes
           attached.push(display)
-        } catch {
+        } catch (error) {
           missing.push(display)
+          if (error instanceof ImageAdmissionError) imageFailures.push({ path: display, reason: error.message })
         }
         continue
       }
@@ -209,5 +213,5 @@ export async function expandComposerMentions(
     // Absent (stat → undefined) or a special file.
     missing.push(display)
   }
-  return { blocks, attached, missing }
+  return { blocks, attached, missing, ...(imageAdjustments.length === 0 ? {} : { imageAdjustments }), ...(imageFailures.length === 0 ? {} : { imageFailures }) }
 }
