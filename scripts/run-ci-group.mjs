@@ -334,6 +334,7 @@ const GROUPS = {
 // 自点亮、attention 阻止入睡、celebration 到期回落、activity 缺失/done/idle
 // 退 spinnerMode、sleepAfterMs=0 永不睡）+ stepCompanionMood 的 since 保留与
 // bubble 取值（phrase 优先、label+detail 兜底、idle/sleeping 无 bubble）。
+    ['verify-subagent-failure-read', ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-failure-read.ts']],
     ["verify-companion-mood", ['node', '--import', 'tsx/esm', 'scripts/verify-companion-mood.mjs']],
 // Companion pose 层：nextCompanionPoseStep 对 nextWhaleIdleStep 的帧级 parity
 // （8 mood × heart × 50 步 pose+state+delay 逐项相等）、gestures 集合由层姿态

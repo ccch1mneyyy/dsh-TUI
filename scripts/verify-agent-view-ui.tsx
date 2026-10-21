@@ -534,6 +534,32 @@ console.log('--- S8: detail messages page + view action ---')
   )
 }
 
+// Failure acknowledgement is tied to a rendered target, including hidden panels.
+for (const visible of [false, true]) {
+  let read = 0
+  await withTerminal(
+    () => React.createElement(SubagentDetailScene, {
+      subagent: makeSubagent({ status: 'failed' }), visible,
+      onBack: () => {}, onFailureRead: () => { read += 1 },
+    }),
+    async frame => {
+      await settled(() => frame.screen().includes('Summary'))
+      check(`S8 failure acknowledgement visible=${visible}`, visible
+        ? await settled(() => read > 0) : read === 0)
+    },
+  )
+}
+{
+  let read = 0
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, {
+      subagent: makeSubagent({ status: 'failed' }), source: { kind: 'chat' },
+      onExit: () => {}, onFailureRead: () => { read += 1 },
+    }),
+    async () => { check('S8 main view acknowledges the rendered failed child', await settled(() => read > 0)) },
+  )
+}
+
 // ── S9: dashboard ──────────────────────────────────────────────────────────
 console.log('--- S9: dashboard view action + summary ---')
 {

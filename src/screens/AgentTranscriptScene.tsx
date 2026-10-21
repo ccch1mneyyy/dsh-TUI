@@ -72,6 +72,8 @@ export interface AgentTranscriptSceneProps {
   /** The child this view reads. Readonly by contract — the scene never
    *  mutates the roster, the Channel or the parent's queues. */
   readonly subagent: SubagentState
+  /** Called when this failed child is shown, never for its siblings. */
+  onFailureRead?: (subagent: SubagentState) => void
   /** Where Esc returns to. */
   readonly source: AgentViewSource
   onExit(): void
@@ -102,7 +104,10 @@ export interface AgentTranscriptSceneProps {
  * The body uses the same transcript pager as the Detail page, with the
  * live SubagentState tail merged in.
  */
-export function AgentTranscriptScene({ subagent, source, onExit, loadTranscript, messages = [], compose, roster, onSwitchAgent }: AgentTranscriptSceneProps): React.ReactNode {
+export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, loadTranscript, messages = [], compose, roster, onSwitchAgent }: AgentTranscriptSceneProps): React.ReactNode {
+  React.useEffect(() => {
+    if (subagent.status === 'failed') onFailureRead?.(subagent)
+  }, [subagent, onFailureRead])
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const followRef = React.useRef(true)
   React.useEffect(() => {

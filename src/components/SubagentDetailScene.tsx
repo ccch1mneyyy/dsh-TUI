@@ -172,6 +172,8 @@ function isActivityLine(text: string): boolean {
 
 export interface SubagentDetailSceneProps {
   subagent: SubagentState
+  /** Called only while this specific failed child is visible. */
+  onFailureRead?: (subagent: SubagentState) => void
   onBack: () => void
   onInterrupt?: (agentId: string) => void
   /** The child's full transcript (`subagentControl.history`). Absent = no
@@ -201,6 +203,7 @@ export interface SubagentDetailSceneProps {
  */
 export function SubagentDetailScene({
   subagent,
+  onFailureRead,
   onBack,
   onInterrupt,
   loadTranscript,
@@ -211,6 +214,9 @@ export function SubagentDetailScene({
   focused = true,
   visible = true,
 }: SubagentDetailSceneProps): React.ReactNode {
+  React.useEffect(() => {
+    if (visible && subagent.status === 'failed') onFailureRead?.(subagent)
+  }, [visible, subagent, onFailureRead])
   const panelMode = variant === 'panel'
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows, columns } = useTerminalSize()

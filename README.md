@@ -381,6 +381,12 @@ Limits: the switch covers the whole profile, not one session (a launch
 without the profile plugin service, or without hot reload, needs `dsh plugin`
 and a restart); there is no "enter teammate session" yet, and `/export` leaves team messages out. Upstream limits apply: teammates share one working directory, a
 team lives in one process, and a task owner is never released automatically.
+Subagent failure badges and the Companion error state share session-scoped unread
+status. Opening that child’s detail or main view acknowledges only that failure;
+a new run or failure alerts again. Acknowledgements survive panel remounts and
+session switches during this process, but a cold restart starts unread. Opening
+the dashboard alone does not acknowledge every child. Task status stays failed.
+
 
 ## Keybindings & Mouse
 

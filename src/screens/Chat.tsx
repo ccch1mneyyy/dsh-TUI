@@ -79,6 +79,7 @@ import { PromptInput, composerImageRefsForText, type PromptController } from '..
 import { turnUsageParts } from '../components/TurnUsageRow.js'
 import { AgentTranscriptScene } from './AgentTranscriptScene.js'
 import { agentViewStore } from '../components/sidePanel/agentViewStore.js'
+import { subagentFailureRead, subagentFailureScope } from '../components/sidePanel/subagentFailureRead.js'
 import { agentComposeTargetOf, type AgentComposeTarget, type AgentMessageView, type AgentViewSource } from '../components/messages/agentTeam.js'
 import { resolveBindingGeneration, type PromptDraftCache } from '../components/promptDraftCache.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
@@ -615,6 +616,7 @@ export function Chat({
   // the process (beta.3; the reveal-store half was PR #680, this is the
   // channel half — the surviving source on Windows timer granularity).
   useExternalVersion(channel.subscribe, () => channel.version)
+  const failureScope = subagentFailureScope(channel)
   // Re-render on language switches so the whole UI hot-swaps its strings; the
   // value itself is what memoized strings key their language dependency on.
   const lang = React.useSyncExternalStore(subscribeLang, getLang)
@@ -6591,6 +6593,7 @@ export function Chat({
     const viewScene = (
       <AgentTranscriptScene
         subagent={viewSubagent}
+        onFailureRead={agent => subagentFailureRead.acknowledge(failureScope, agent)}
         source={agentView.source}
         onExit={() => exitAgentView(agentView.source)}
         {...(loadTranscript === undefined ? {} : { loadTranscript })}
@@ -6621,6 +6624,7 @@ export function Chat({
     const scene = (
       <SubagentDetailScene
         subagent={subagent}
+        onFailureRead={agent => subagentFailureRead.acknowledge(failureScope, agent)}
         onInterrupt={(id) => channel.subagentControl?.interrupt(id)}
         {...(channel.subagentControl?.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
         onOpenView={() => openAgentView(subagent.agentId, { kind: 'agent-detail', agentId: subagent.agentId })}
