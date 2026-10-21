@@ -61,10 +61,10 @@ const rows: any[] = [
   { id: 0, kind: 'user', text: '帮我跑一下测试' },
   // 空文本 settled assistant（PR #383 的 bug 形状：模型直接调工具）
   { id: 1, kind: 'assistant', text: '', streaming: false },
-  // 叙述-only settled assistant（narrate 契约：⏵ 行 + 直接调工具）。
-  // 原文非空但渲染层 stripNarration 剥成空——旧过滤器测原文漏放行，
-  // 渲染成工具卡上方的孤立 ●（用户实测报告的形状）。
-  { id: 6, kind: 'assistant', text: '⏵ 正在跑测试', streaming: false },
+  // A completed narration-only reply must survive history/replay rendering.
+  { id: 6, kind: 'assistant', text: '⏵ Waiting for your request', streaming: false },
+  // Only the original first line is narration; a body line may also start ⏵.
+  { id: 8, kind: 'assistant', text: '⏵ Hidden status\n⏵ BODY-NARRATION-MARKER', streaming: false },
   { id: 2, kind: 'tool', text: '', tool: { callId: 't1', name: 'Bash', argsText: '{"command": "npm test"}', argsFull: '{}', status: 'ok', startedAt: 0, durationMs: 42, resultText: 'all 12 tests passed' } },
   // ⏵ 行 + 正文：叙述被剥但正文必须完整保留（不能误过滤）
   { id: 7, kind: 'assistant', text: '⏵ 正在分析结果\n\n工具结果看起来全部通过 REALBODY2-END', streaming: false },
@@ -116,7 +116,9 @@ const inst = await render(
   const dotAboveTool = toolRow >= 0 && lines.slice(0, toolRow).some(l => /^●\s*$/.test(l))
   check('空 settled assistant 行被过滤（工具卡上方无孤立 ●）', !dotAboveTool,
     `toolRow=${toolRow}`)
-  check('叙述-only settled 行被过滤（⏵ 行不渲染、上方无孤立 ●）', !screen.includes('⏵') && !dotAboveTool, '')
+  check('settled narration-only reply stays visible without an empty bullet', screen.includes('⏵ Waiting for your request') && !dotAboveTool)
+  check('only the original first line is stripped', screen.includes('⏵ BODY-NARRATION-MARKER') && !screen.includes('Hidden status'))
+  check('narration with a body still hides its status line', !screen.includes('正在分析结果'))
 }
 
 // 落定翻转：streaming true → false 原地写（rows 身份/长度不变）。
@@ -129,6 +131,17 @@ channel.emit()
     `lone dots=${loneDotLines(screenLines()).length}`)
   check('翻转后真实正文仍在', screenLines().join('\n').includes('REALBODY-END'), '')
 }
+// Smooth reveal must use the same fallback, but keep live narration hidden.
+channel.smoothStreaming = true
+const narrationStream = { id: 9, kind: 'assistant', text: '⏵ LIVE-NARRATION-END', streaming: true, fresh: true }
+rows.push(narrationStream)
+channel.emit()
+check('live narration keeps only its streaming indicator', await settled(() => loneDotLines(screenLines()).length > 0))
+check('live narration is not duplicated into the transcript', !screenLines().join('\n').includes('LIVE-NARRATION-END'))
+narrationStream.streaming = false
+channel.emit()
+check('settling narration reveals its full body', await settled(() => screenLines().join('\n').includes('⏵ LIVE-NARRATION-END')))
+
 // 用户空文本行不受影响（kind 限定）：一个空 user 行仍渲染其气泡形状
 rows.push({ id: 5, kind: 'user', text: '' })
 channel.emit()

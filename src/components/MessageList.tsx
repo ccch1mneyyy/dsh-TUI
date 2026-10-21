@@ -104,8 +104,17 @@ function teamSenderOf(row: ChatRow): string | undefined {
   return row.label === 'team-message' ? row.sender ?? '' : undefined
 }
 
+/** Keep a settled text-only reply visible when narration is its whole body. */
+function assistantDisplayText(row: ChatRow): string {
+  const text = row.text ?? ''
+  const stripped = stripNarration(text)
+  return row.streaming !== true && (row.images?.length ?? 0) === 0 && stripped.trim() === ''
+    ? text
+    : stripped
+}
+
 function assistantRevealText(row: ChatRow, enabled: boolean): string {
-  const stripped = stripNarration(row.text)
+  const stripped = assistantDisplayText(row)
   return revealTextOf(`a${row.id}`, stripped, {
     enabled,
     active: row.streaming === true || row.fresh === true,
@@ -119,7 +128,7 @@ function reasoningRevealText(row: ChatRow, enabled: boolean): string {
 /** Display length only (layout signature; no slice allocation). */
 function revealDisplayLen(row: ChatRow, enabled: boolean): number {
   if (row.kind === 'assistant') {
-    const stripped = stripNarration(row.text)
+    const stripped = assistantDisplayText(row)
     return revealLengthOf(`a${row.id}`, stripped, {
       enabled,
       active: row.streaming === true || row.fresh === true,
@@ -599,16 +608,13 @@ export function MessageList({
     // that is STILL STREAMING keeps its place even with empty text — the
     // live dot is the "model is answering" affordance and content may yet
     // arrive.
-    // The emptiness test must match what RENDERING shows: the `⏵`
-    // self-narration line (dsh-working-activity narrate contract) is
-    // stripped at render (stripNarration below), so a narration-only step —
-    // thinking, `⏵ …` line, straight to a tool call — has non-empty raw
-    // text but RENDERS as that same lone `●`. Test the stripped text, or
-    // the raw-text check lets the dot through forever.
+    // Filtering, measurement and rendering share the same display text.
+    // A settled narration-only reply has real content; only truly empty
+    // text-only rows disappear. Image-only rows retain their own content.
     const rendersEmptyAssistant = (row: ChatRow): boolean =>
       row.kind === 'assistant' &&
       row.streaming !== true &&
-      stripNarration(row.text ?? '').trim() === '' &&
+      assistantDisplayText(row).trim() === '' &&
       (row.images?.length ?? 0) === 0
     let hasEmptyAssistant = false
     for (const row of sliced) {
@@ -1545,14 +1551,14 @@ export function MessageList({
           let displayText = row.text
           let displayStreaming = row.streaming === true
           if (row.kind === 'assistant' && smoothStreaming) {
-            const stripped = stripNarration(row.text)
+            const stripped = assistantDisplayText(row)
             displayText = revealTextOf(`a${row.id}`, stripped, {
               enabled: true,
               active: displayStreaming || row.fresh === true,
             })
             displayStreaming = displayStreaming || displayText.length !== stripped.length
           } else if (row.kind === 'assistant') {
-            displayText = stripNarration(row.text)
+            displayText = assistantDisplayText(row)
           } else if (row.kind === 'reasoning' && smoothStreaming) {
             displayText = revealTextOf(`r${row.id}`, row.text, { enabled: true, active: displayStreaming })
           }
@@ -1918,10 +1924,8 @@ function TranscriptRow({
             <Text color="text">●</Text>
           </Box>
           <Box flexDirection="column">
-            {/* The ⏵ self-narration line (working-activity narrate contract)
-              is stripped here: the live working line on the status bar
-              already shows it. */}
-            <StreamingMarkdown>{stripNarration(displayText)}</StreamingMarkdown>
+            {/* Narration was handled before reveal and measurement. */}
+            <StreamingMarkdown>{displayText}</StreamingMarkdown>
             {images !== undefined && <TranscriptImages images={images} indent={0} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
           </Box>
         </Box>
@@ -1944,7 +1948,7 @@ function TranscriptRow({
             </Box>
           )}
           <AssistantTextLeafRow
-            text={stripNarration(displayText)}
+            text={displayText}
             marginTopOnTurn={marginTopOnTurn}
             isSelected={isSelected}
             isExpanded={isExpanded}
