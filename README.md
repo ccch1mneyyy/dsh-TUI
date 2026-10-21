@@ -25,6 +25,8 @@
 > backend. Install to enable; uninstall leaves no patches behind.
 
 ## Highlights
+Resuming a DSH session preserves its recorded reasoning effort (or its live selection when reattaching). The saved default seeds new sessions; explicit `/effort` and effort-default settings changes still apply to the current session’s next request.
+
 
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
 - **Launchpad and first-run guide** — every ordinary launch lands on a landing page with a **real input box** (big text + whale + quick actions, dropping whole blocks on short/narrow terminals; whale-girl images use a compact native-canvas footprint instead of leaving a large gap before the title; on by default — /settings `launchpad` off boots straight into chat); command completion matches chat: `Tab` fills the input, `Enter` runs the command and clears it. The first run walks a four-step wizard (API key / language+theme / model+workspace / shortcuts), re-runnable with `/setup`.

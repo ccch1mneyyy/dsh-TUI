@@ -129,11 +129,17 @@ export function createModelActions(
       return 'error'
     }
   }
-  const applyPreferredEffort = async (): Promise<void> => {
+  const applyPreferredEffort = async (preserveSessionEffort = false): Promise<void> => {
     if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return
     const capture = captureEffort()
     const resolved = await resolveEfforts(capture)
     if (resolved === 'unavailable' || resolved === 'error' || resolved === 'stale' || !effortCurrent(capture)) return
+    // Passive bind only refreshes metadata for a session-owned selection.
+    // Explicit settings/model/effort actions retain the original default path.
+    if (preserveSessionEffort) {
+      state.emit()
+      return
+    }
     // This same binding-time lookup is the route's initial tier refresh even
     // without a stored preference. Do not make a separate competing refresh
     // operation that could invalidate the selected preference completion.

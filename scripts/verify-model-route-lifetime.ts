@@ -13,8 +13,9 @@ process.env.DSH_TUI_LANG = 'en'
 const { createChannel } = await import('../src/dsh-adapter/channel.js')
 const { createModelSwitchAction } = await import('../src/dsh-adapter/channel/model-switch.js')
 const { readModelPref } = await import('../src/modelPrefs.js')
+const { readEffortPref, writeEffortPref } = await import('../src/effortPrefs.js')
 
-type Route = { provider: string; model: string }
+type Route = { provider: string; model: string; reasoningEffort?: string }
 type Assembly = { variables: Route }
 type Hook = (...args: unknown[]) => Promise<unknown>
 const invoke = async <T>(hook: Hook | undefined, ...args: unknown[]): Promise<T> => {
@@ -110,6 +111,65 @@ if (!process.argv.includes('--legacy-only')) for (const persisted of [true, fals
   }
   assert.equal(original.hooks.size, 0, 'owner release removes parked routing listeners too')
   assert.equal(other.hooks.size, 0)
+}
+
+if (!process.argv.includes('--legacy-only')) {
+  const original = makeAgent('effort-original', 'p', 'a')
+  original.record({ provider: 'p', model: 'a', reasoningEffort: 'high' })
+  const fresh = makeAgent('effort-fresh', 'p', 'a')
+  fresh.session.events.length = 0
+  fresh.session.requestHeader = () => undefined as never
+  const unpinned = makeAgent('effort-unpinned', 'p', 'a')
+  const registry = new Map([original, fresh, unpinned].map(agent => [agent.id, agent]))
+  writeEffortPref('low')
+  const channel = createChannel({ on: () => () => {}, logger: { warn() {} }, get(name: string) {
+    if (name === 'agents') return { get: (id: string) => registry.get(id), list: () => [...registry.values()] }
+    if (name === 'llm') return {
+      listProviders: () => [{ id: 'p' }], listModels: async () => [{ id: 'a' }],
+      resolveModelInfo: async () => ({ reasoning: { efforts: ['low', 'high'].map(id => ({ id, name: id })) } }),
+    }
+  } } as never, original as never, { provider: 'p', model: 'a', cwd: '/tmp/demo', activity: false })
+  const settle = () => new Promise(resolve => setImmediate(resolve))
+  const requestOf = async (agent: ReturnType<typeof makeAgent>) => {
+    await invoke<Assembly>(agent.hooks.get('system-prompt/assemble'), {}, {}, async () => ({ variables: agent.options }))
+    return invoke<Route>(agent.hooks.get('agent/request'), {}, async () => agent.options)
+  }
+  try {
+    await settle()
+    assert.equal(channel.reasoningEffort, 'high', 'boot restores the durable effort above a global default')
+    assert.equal((await requestOf(original)).reasoningEffort, 'high', 'the next request restores the same durable effort')
+    assert.deepEqual(await channel.resumeTo(fresh.id), { ok: true })
+    await settle()
+    assert.equal(channel.reasoningEffort, 'low', 'an untouched session seeds the global effort')
+    assert.equal((await requestOf(fresh)).reasoningEffort, 'low')
+    assert.deepEqual(await channel.resumeTo(original.id), { ok: true })
+    await settle()
+    assert.equal(channel.reasoningEffort, 'high', 'passive resume cannot overwrite the durable pin')
+    assert.equal((await requestOf(original)).reasoningEffort, 'high')
+    assert.equal(readEffortPref(), 'low', 'resume never rewrites the global preference')
+    assert.deepEqual(await channel.resumeTo(unpinned.id), { ok: true })
+    await settle()
+    assert.equal(channel.reasoningEffort, undefined, 'a recorded header without effort owns its unpinned state')
+    assert.equal((await requestOf(unpinned)).reasoningEffort, undefined, 'a recorded unpinned request cannot borrow the global low')
+    assert.deepEqual(await channel.resumeTo(original.id), { ok: true })
+    await settle()
+    channel.setDefaultEffort('off')
+    await settle()
+    assert.equal((await requestOf(original)).reasoningEffort, undefined, 'an unsupported explicit preference clears the live pin')
+    assert.deepEqual(await channel.resumeTo(unpinned.id), { ok: true })
+    assert.deepEqual(await channel.resumeTo(original.id), { ok: true })
+    await settle()
+    assert.equal(channel.reasoningEffort, undefined, 'reattachment cannot revive an older high header over a cleared live pin')
+    assert.equal((await requestOf(original)).reasoningEffort, undefined)
+
+    channel.setDefaultEffort('high')
+    await settle()
+    channel.setDefaultEffort('low')
+    await settle()
+    assert.equal((await requestOf(original)).reasoningEffort, 'low', 'an explicit settings change still updates the next request')
+    assert.equal(await channel.setEffort('high'), true)
+    assert.equal((await requestOf(original)).reasoningEffort, 'high', 'an explicit effort choice still updates the next request')
+  } finally { channel.releaseContributions() }
 }
 
 if (!process.argv.includes('--legacy-only')) {

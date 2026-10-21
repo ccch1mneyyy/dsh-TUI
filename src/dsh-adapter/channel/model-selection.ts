@@ -33,7 +33,9 @@ export function createModelSelection(ctx: Context, deps: {
     // Restore a recorded pin only when the caller actually adopted that route.
     const usesRecordedRoute = recorded?.provider === route.provider && recorded?.model === route.model
     const ref: ModelSelectionRef = {
-      current: route.provider !== '' && route.model !== '' &&
+      current: usesRecordedRoute && recorded?.reasoningEffort !== undefined
+        ? { ...route, reasoningEffort: recorded.reasoningEffort }
+        : route.provider !== '' && route.model !== '' &&
         (!hasCreatedRoute || (usesRecordedRoute &&
           (route.provider !== agent.options.provider || route.model !== agent.options.model)))
         ? { ...route } : undefined,

@@ -75,6 +75,29 @@ const actions = createModelActions(ctx as never, state as never, {
   checkContextWarning: () => undefined,
 })
 
+// Passive restoration still resolves route metadata, without selecting the
+// global preference or writing the persisted choice back over the session.
+state.reasoningEffort = 'low'
+selection.current = { provider: 'p', model: 'old', reasoningEffort: 'low' }
+const restoredEffort = actions.applyPreferredEffort(true)
+await tick()
+routeLoads.get('p/old')!.resolve({ reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] } })
+await restoredEffort
+assert.equal(state.reasoningEffort, 'low')
+assert.deepEqual(selection.current, { provider: 'p', model: 'old', reasoningEffort: 'low' })
+assert.deepEqual(state.effortLevels, ['low', 'high'], 'restoration still refreshes route tiers')
+
+// A different session can use the same route. Binding generation, not only
+// provider/model equality, must fence the old default lookup.
+const staleBindingDefault = actions.applyPreferredEffort()
+await tick()
+bindingGeneration += 1
+state.effortLevels = ['replacement']
+routeLoads.get('p/old')!.resolve({ reasoning: { efforts: [{ id: 'high', name: 'High' }] } })
+await staleBindingDefault
+assert.deepEqual(state.effortLevels, ['replacement'])
+assert.deepEqual(selection.current, { provider: 'p', model: 'old', reasoningEffort: 'low' })
+
 // Old preferred-effort metadata resolves after a new route has won. The old
 // completion must not replace the new route's tiers or request selection.
 const oldPreferred = actions.applyPreferredEffort()

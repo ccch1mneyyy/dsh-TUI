@@ -40,7 +40,7 @@ export function createBindingEvents(ctx: Context, deps: {
   seedTeam?(session: unknown): void
   inputConvergence: InputConvergence
   modelSelection: ReturnType<typeof createModelSelection>
-  modelActions: { applyPreferredEffort(): Promise<void> }
+  modelActions: { applyPreferredEffort(preserveSessionEffort?: boolean): Promise<void> }
   modeActions: {
     refreshMode(): void
     onSessionEvent(session: unknown, event: unknown): void
@@ -156,7 +156,13 @@ export function createBindingEvents(ctx: Context, deps: {
         deps.state.provider = selected.provider
         deps.state.model = selected.model
       }
-      void deps.modelActions.applyPreferredEffort()
+      const recorded = deps.binding.agent.session.requestHeader?.()?.config
+      // Reattachment keeps a live pin; an adopted header also owns the
+      // absence of a pin. A child on a different route still seeds normally.
+      const preserveSessionEffort = selected?.reasoningEffort !== undefined ||
+        (recorded?.provider === deps.state.provider && recorded?.model === deps.state.model)
+      if (preserveSessionEffort) deps.state.reasoningEffort = selected === undefined ? recorded?.reasoningEffort : selected.reasoningEffort
+      void deps.modelActions.applyPreferredEffort(preserveSessionEffort)
       deps.modeActions.refreshMode()
       // Same pattern as the preferred effort above: the remembered
       // permission preference seeds sessions that never chose their own.
