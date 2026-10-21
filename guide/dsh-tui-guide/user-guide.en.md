@@ -104,6 +104,8 @@ dsh-tui
 | `Esc` (working + pending) | interrupt the turn and re-send the pending message now |
 | `/btw …` while working | Enter runs it directly (side question never interrupts the main turn) |
 
+> Both send and newline are remappable under `/settings → Shortcuts`: by default `Enter` sends and `Shift+Enter` / `Ctrl+J` / `Option+Enter` insert a newline. To swap them (Enter newline, Ctrl+Enter send), set the send shortcut to `ctrl+enter` first, then set the newline shortcut to `enter`.
+
 While a turn is running, the `/` overlay groups commands by their impact on the current conversation: the harmless ones stay on top in their normal style, while commands that are gated, interrupt or replace the conversation, or steer into it sink to the bottom in the theme's grey (`subtle`), with no extra header row. The grey region never blocks use — the gate still gates and the steer still steers. Only two kinds of input steer into the running turn: text that is not a command, and a **direct skill gesture** (`/skill-name …`), which the overlay groups as steering as well.
 
 ### 2.2 Interrupt / exit / system
@@ -114,9 +116,10 @@ While a turn is running, the `/` overlay groups commands by their impact on the 
 | `Ctrl+D` | working = interrupt (press again if it won't settle = force quit); idle = double-press exit |
 | `Ctrl+L` (⌘L) | clear screen and force redraw |
 | `Ctrl+O` (⌘O) | expand/collapse details (full thinking, tool args and output) |
-| `Ctrl+E` | in input = cursor to line end; in transcript = expand/collapse hidden old messages |
 | `Ctrl+P` | toggle the loaded-context panel at startup (works when the panel is on screen) |
 | `?` | empty input = open shortcut/command help menu |
+
+> Hidden older transcript rows: click the "show N previous messages" divider; no key is bound by default. Bind show-all under `/settings → Shortcuts` if you want one (`Ctrl+E` in the input is line end).
 
 ### 2.3 Search
 
@@ -131,7 +134,7 @@ While a turn is running, the `/` overlay groups commands by their impact on the 
 |---|---|
 | `←` / `→` | move the cursor by character (with a selection, collapse to that edge) |
 | `Ctrl+←` / `Ctrl+→` (⌘←/→) / `Alt/Option+←/→` | jump by whitespace-delimited words; also supported on the launchpad |
-| `Home` / `End`, `Ctrl+E` | logical line start / end (`Ctrl+A` now opens the subagent panel, see §2.7) |
+| `Home` / `End`, `Ctrl+E` | logical line start / end (`Ctrl+A` stays with the subagent panel; both are remappable via `/settings`, and line start has no default combo) |
 | `Ctrl+U` / `Ctrl+K` | delete before the cursor (to line start) / after the cursor (to line end) |
 | `Ctrl+W` / `Alt/Option+Backspace` | delete the previous word; staged image attachments are removed whole |
 | `Ctrl+Z` | undo the draft's last word-level edit (caret and images included); draft-only — a submit or a history recall (`Ctrl+R`/`↑`) ends it, and it is unrelated to the `Esc Esc` conversation/message rewind; remappable via `/settings` |
@@ -651,6 +654,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | pageMargin | page margin: inset from all four terminal edges. Presets none / slim / normal (default) / roomy, or custom `NxM` (details below). Applies immediately |
 | foldTerminalCommand | fold terminal commands (default off): multi-line commands on terminal cards (Bash/PowerShell) fold to first line + count; `Ctrl+O` or click to expand |
 | expandEditor | full-screen draft editor (default on): `⛶` at the input line end or `Ctrl+Shift+E` expands to a full-screen editor; `Ctrl+Enter` send, `Esc` collapse (draft kept); off hides both entries |
+| shortcuts.* | shortcut remaps (the **Shortcuts** subpage of /settings): `newline` / `submit` / `lineStart` / `lineEnd` / `wordLeft` / `wordRight` plus paste, history, side panel and the rest. `lineStart` and `showAll` are unbound by default (`Ctrl+A` stays with the subagent panel and `Home` always works; click the transcript divider for hidden rows). Each field takes one or more `ctrl+`/`alt+` combos separated by commas; blank restores the default. Send and newline also accept `enter` / `shift+enter` |
 | statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId; pluginFieldsOrder is the plugin field list: `''`=none, `*`=all, `a,b;c;d`=three groups and three slots) |
 
 **effortDefault**: when the model lacks that level, drop one level and show a notice; priority settings user layer > the last `/effort`

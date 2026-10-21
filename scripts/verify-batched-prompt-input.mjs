@@ -16,6 +16,7 @@ import xtermHeadless from '@xterm/headless'
 import { render } from '../lib/types/ui.js'
 import { PromptInput } from '../lib/types/components/PromptInput.js'
 import { settled, sleep, viewportLines } from './lib/term-test.mjs'
+import { resetKeymapOverrides, setKeymapOverrides } from '../lib/types/utils/keymap.js'
 
 const { Terminal: XTerm } = xtermHeadless
 
@@ -280,6 +281,40 @@ check(
   await settled(() => submitted.at(-1) === 'a\n\nb'),
   JSON.stringify(submitted),
 )
+
+// Alt+Left/Right are word jumps (the default wordLeft/wordRight actions).
+stdin.write('one two')
+await sleep(100) // 固定窗:pacing 按键分段步间
+stdin.write('\x1b[1;3D')
+await sleep(100) // 固定窗:pacing 按键分段步间
+stdin.write('X')
+await sleep(100) // 固定窗:pacing 按键分段步间
+stdin.write('\r')
+check(
+  'alt+left jumps one word left before typing',
+  await settled(() => submitted.at(-1) === 'one Xtwo'),
+  JSON.stringify(submitted.at(-1)),
+)
+
+// Remappable newline/submit: after the documented swap (submit →
+// ctrl+enter, newline → enter), Enter must insert a newline instead of
+// sending, and Ctrl+Enter must send the whole draft.
+setKeymapOverrides({ submit: 'ctrl+enter', newline: 'enter' })
+const beforeSwap = submitted.length
+stdin.write('a')
+await sleep(100) // 固定窗:pacing 按键分段步间
+stdin.write('\r')
+await sleep(100) // 固定窗:pacing 按键分段步间
+stdin.write('b')
+await sleep(100) // 固定窗:pacing 按键分段步间
+check('swapped bindings: Enter inserts a newline instead of submitting', submitted.length === beforeSwap, JSON.stringify(submitted))
+stdin.write('\x1b[13;5u')
+check(
+  'swapped bindings: Ctrl+Enter submits the multiline draft',
+  await settled(() => submitted.length === beforeSwap + 1 && submitted.at(-1) === 'a\nb'),
+  JSON.stringify(submitted.at(-1)),
+)
+resetKeymapOverrides()
 
 instance.unmount()
 

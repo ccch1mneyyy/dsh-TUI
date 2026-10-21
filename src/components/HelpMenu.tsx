@@ -75,7 +75,12 @@ export function HelpMenu({
         <Text dimColor>{t('help-history-nav')}</Text>
       </Box>
       <Box>
-        <Text dimColor>{t('help-move-cursor')}</Text>
+        <Text dimColor>
+          {t('help-move-cursor', {
+            start: primaryComboString('lineStart') || 'home',
+            end: primaryComboString('lineEnd') || 'end',
+          })}
+        </Text>
       </Box>
       <Box>
         <Text dimColor>{t('help-word-jumps', { mod: modLabel })}</Text>

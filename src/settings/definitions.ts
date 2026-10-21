@@ -659,8 +659,8 @@ export const SHORTCUT_FIELD_META: Record<ShortcutActionId, { label: string; zh: 
   showAll: {
     label: 'Show-all shortcut',
     zh: '显示全部消息快捷键',
-    hintEn: d => `Toggle show-all-messages. Default: ${d}.`,
-    hintZh: d => `切换显示全部消息。默认 ${d}。`,
+    hintEn: () => 'Toggle show-all-messages. Unbound by default (click the transcript divider instead); set any free combo here, e.g. ctrl+y.',
+    hintZh: () => '切换显示全部消息。默认不绑定（可点转录里的分隔行）；需要键盘键时在此填任意空闲组合，例如 ctrl+y。',
   },
   redraw: {
     label: 'Redraw shortcut',
@@ -709,5 +709,41 @@ export const SHORTCUT_FIELD_META: Record<ShortcutActionId, { label: string; zh: 
     zh: '侧栏缩放快捷键',
     hintEn: d => `Zoom the active side panel (chat keeps its minimum width). Default: ${d}.`,
     hintZh: d => `缩放当前侧栏面板（聊天列保留最小宽度）。默认 ${d}。`,
+  },
+  newline: {
+    label: 'Newline shortcut',
+    zh: '换行快捷键',
+    hintEn: d => `Insert a newline in the composer. Accepts \`enter\` / \`shift+enter\`. Default: ${d}.`,
+    hintZh: d => `在输入框插入换行（可填 \`enter\` / \`shift+enter\`）。默认 ${d}。`,
+  },
+  submit: {
+    label: 'Submit shortcut',
+    zh: '发送快捷键',
+    hintEn: d => `Send the composer (steer while the turn runs). Accepts \`enter\`; swap with newline by setting submit to ctrl+enter first. Default: ${d}.`,
+    hintZh: d => `发送输入框内容（回合运行中按 steer 投递）。可填 \`enter\`；想与换行互换时先把发送改成 ctrl+enter。默认 ${d}。`,
+  },
+  lineStart: {
+    label: 'Line start shortcut',
+    zh: '行首快捷键',
+    hintEn: () => 'Move the caret to the logical line start. Unbound by default because Ctrl+A belongs to the subagent dashboard; Home always works. Set any free combo here (remap the dashboard first if you want Ctrl+A).',
+    hintZh: () => '光标移到逻辑行首。默认不绑定（Ctrl+A 留给子代理面板；Home 始终可用）。可填任意空闲组合；想用 Ctrl+A 请先改掉子代理面板的快捷键。',
+  },
+  lineEnd: {
+    label: 'Line end shortcut',
+    zh: '行尾快捷键',
+    hintEn: d => `Move the caret to the logical line end (End always works too). Default: ${d}.`,
+    hintZh: d => `光标移到逻辑行尾（End 始终可用）。默认 ${d}。`,
+  },
+  wordLeft: {
+    label: 'Word-left shortcut',
+    zh: '左移一个单词快捷键',
+    hintEn: d => `Move the caret one whitespace-delimited word left. Default: ${d}.`,
+    hintZh: d => `光标向左移动一个空白分隔的单词。默认 ${d}。`,
+  },
+  wordRight: {
+    label: 'Word-right shortcut',
+    zh: '右移一个单词快捷键',
+    hintEn: d => `Move the caret one whitespace-delimited word right. Default: ${d}.`,
+    hintZh: d => `光标向右移动一个空白分隔的单词。默认 ${d}。`,
   },
 }

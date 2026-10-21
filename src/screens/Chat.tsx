@@ -1645,7 +1645,7 @@ export function Chat({
    * Suppress the intro on those remounts; `/deepseek` re-enables it.
    */
   const suppressLogoIntroRef = React.useRef(false)
-  /** Subagent dashboard (Ctrl+A): displays active/completed subagents. */
+  /** Subagent dashboard (Ctrl+N): displays active/completed subagents. */
   const [subagentDashboardOpen, setSubagentDashboardOpen] = React.useState(false)
   const [jobsPanelOpen, setJobsPanelOpen] = React.useState(false)
   /** Job id the panel should focus on open: set by a transcript card click
@@ -1687,7 +1687,7 @@ export function Chat({
     () => jobOutputWatchable ? (id: string) => jobControlRef.current?.watchOutput?.(id) ?? (() => undefined) : undefined,
     [jobOutputWatchable],
   )
-  /** Ctrl+A / detail 回退：侧栏分栏且 agents 已启用时打开右栏 Panel（内部
+  /** Ctrl+N / detail 回退：侧栏分栏且 agents 已启用时打开右栏 Panel（内部
    *  dashboard ↔ detail 二级路由自己管）；窄屏 / inline 保留整屏形态。 */
   const openSubagentDashboard = React.useCallback((): void => {
     const sidePanel = sidePanelRef.current
@@ -5606,11 +5606,9 @@ export function Chat({
       return
     }
     if (actionMatches('dashboard', input, key)) {
-      // The subagent dashboard key (default Ctrl+A) opens the dashboard —
+      // The subagent dashboard key (default Ctrl+N) opens the dashboard —
       // split mode routes it to the agents side panel instead. Consume the
-      // key: without the stop the prompt editor's readline binding ALSO
-      // fires (Ctrl+A moves the caret to line start), so one press both
-      // opens the view and jumps the cursor.
+      // key so it can never also land in the composer.
       openSubagentDashboard()
       event.stopImmediatePropagation()
       return
@@ -5769,8 +5767,8 @@ export function Chat({
       event.stopImmediatePropagation()
     } else if (actionMatches('showAll', input, key)) {
       setShowAllMessages(previous => !previous)
-      // Ctrl+E is also the editor's line-end binding — stop the press from
-      // additionally moving the caret (one press, one meaning).
+      // Consume the press: one key, one meaning (the old Ctrl+E dual use
+      // shadowed the editor's line-end binding and is gone).
       event.stopImmediatePropagation()
     } else if (actionMatches('todoFold', input, key)) {
       // Fold/unfold the GoalTodoPanel todo section (default Ctrl+Q) — works

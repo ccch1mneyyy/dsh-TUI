@@ -24,12 +24,10 @@
  * editor path rather than inserting 'g'.
  *
  * Listener order (#1155): on the FIRST mount — before any screen has
- * unmounted and remounted the composer — Ctrl+E (showAll) and Ctrl+A
- * (dashboard) must be consumed by Chat alone; the editor's readline
- * line-end / line-start bindings must not also move the caret. A fresh
- * fullscreen mount then proves Ctrl+E really toggled show-all (the row
- * hidden behind MessageList's render cap appears), which the caret probe
- * alone cannot tell apart from a press nobody handled.
+ * unmounted and remounted the composer — Ctrl+A must be consumed by Chat
+ * (dashboard), while Ctrl+E reaches the editor as line end. Show-all has no
+ * default key, so a fresh fullscreen mount remaps it to Ctrl+Y and proves
+ * the toggle reveals the row hidden behind MessageList's render cap.
  * While a turn is working, Esc still belongs to local composer layers
  * before Chat's interrupt branch, including in one stdin batch (#1310).
  *
@@ -76,6 +74,9 @@ check('parse: shift-only refused', parseCombo('shift+p') === undefined)
 check('parse: unknown key name refused', parseCombo('ctrl+wat') === undefined)
 check('parse: duplicated modifier refused', parseCombo('ctrl+ctrl+p') === undefined)
 check('parse: escape combos refused', parseCombo('alt+escape') === undefined)
+check('parse: bare enter accepted for submit', parseCombo('enter')?.named === 'return')
+check('parse: shift+enter accepted for newline', parseCombo('shift+enter')?.shift === true && parseCombo('shift+enter')?.named === 'return')
+check('parse: other bare named keys still refused', parseCombo('left') === undefined)
 
 // ---- default matching -----------------------------------------------------
 resetKeymapOverrides()
@@ -86,6 +87,19 @@ check('default editor matches ctrl+g', actionMatches('editor', 'g', { ctrl: true
 check('default trajectory matches ctrl+t', actionMatches('trajectory', 't', { ctrl: true }))
 check('default history matches ctrl+r', actionMatches('history', 'r', { ctrl: true }))
 check('default undo matches ctrl+z', actionMatches('undo', 'z', { ctrl: true }))
+check('default submit matches bare enter', actionMatches('submit', '', { return: true }))
+check('default submit does NOT match ctrl+enter', !actionMatches('submit', '', { return: true, ctrl: true }))
+check('default newline matches shift+enter', actionMatches('newline', '', { return: true, shift: true }))
+check('default newline matches ctrl+j', actionMatches('newline', 'j', { ctrl: true }))
+check('default newline matches alt+enter', actionMatches('newline', '', { return: true, meta: true }))
+// Ctrl+A stays with the dashboard; line start is opt-in (Home always works).
+check('default dashboard matches ctrl+a', actionMatches('dashboard', 'a', { ctrl: true }))
+check('default lineStart is unbound', effectiveCombos('lineStart').length === 0)
+check('default showAll is unbound', effectiveCombos('showAll').length === 0)
+check('default lineStart does not steal ctrl+a', !actionMatches('lineStart', 'a', { ctrl: true }))
+check('default lineEnd matches ctrl+e', actionMatches('lineEnd', 'e', { ctrl: true }))
+check('default wordLeft matches alt+left', actionMatches('wordLeft', '', { leftArrow: true, meta: true }))
+check('default wordRight matches ctrl+right', actionMatches('wordRight', '', { rightArrow: true, ctrl: true }))
 check('undo display string', effectiveComboString('undo') === 'ctrl+z', effectiveComboString('undo'))
 // macOS primary-modifier polarity, asserted on Linux via the platformAlias
 // seam: ordinary ctrl combos still alias to Cmd, `undo` (exactPrimary) must
@@ -118,10 +132,13 @@ check('other actions keep their defaults reserved', reserved.has('ctrl+o') && re
 check('fixed: ctrl+u kill-line reserved', isFixedReserved('ctrl+u'))
 check('fixed: ctrl+return reserved', isFixedReserved('ctrl+return'))
 check('fixed: ctrl+w reserved', isFixedReserved('ctrl+w'))
-check('fixed: Option word-editing keys reserved',
-  ['alt+backspace', 'alt+left', 'alt+right'].every(isFixedReserved))
-check('fixed: ctrl+j newline fallback reserved', isFixedReserved('ctrl+j'))
-check('free combo not reserved', !isFixedReserved('ctrl+n'))
+check('fixed: Option backspace reserved', isFixedReserved('alt+backspace'))
+check('editor keys are actions, not fixed: ctrl+a/ctrl+e/alt+left/ctrl+j',
+  ['ctrl+a', 'ctrl+e', 'alt+left', 'alt+right', 'ctrl+j'].every(combo => !isFixedReserved(combo)))
+check('action combos join reserved: ctrl+a is dashboard', reserved.has('ctrl+a'))
+check('action combos join reserved: shift+enter is newline', reserved.has('shift+return'))
+check('action combos join reserved: bare enter is submit', reserved.has('return'))
+check('free combo not reserved', !isFixedReserved('ctrl+y'))
 
 // ---- settings drafts ------------------------------------------------------
 // (Reset first: the override block above moved paste off ctrl+v, and the
@@ -136,14 +153,26 @@ check('conflict: history → ctrl+v refused (owned by paste)', draftComboConflic
 check('conflict: paste → ctrl+u refused (fixed kill-line)', draftComboConflicts('paste', ['ctrl+u']))
 check('conflict: paste → alt+backspace refused (fixed word deletion)', draftComboConflicts('paste', ['alt+backspace']))
 check('no conflict: history restating ctrl+r', !draftComboConflicts('history', ['ctrl+r']))
-check('no conflict: fresh combo ctrl+n', !draftComboConflicts('history', ['ctrl+n']))
-// Restating an action's OWN default (even one that is also fixed-reserved
-// for the editor, like dashboard's ctrl+a / showAll's ctrl+e) changes
-// nothing about what shadows what — it must not read as a conflict.
-check('no conflict: dashboard restating its fixed-reserved default ctrl+a', !draftComboConflicts('dashboard', ['ctrl+a']))
-check('no conflict: showAll restating its fixed-reserved default ctrl+e', !draftComboConflicts('showAll', ['ctrl+e']))
-check('conflict: showAll claiming ctrl+a (dashboard owns it)', draftComboConflicts('showAll', ['ctrl+a']))
-check('conflict: dashboard claiming ctrl+e (showAll owns it)', draftComboConflicts('dashboard', ['ctrl+e']))
+check('no conflict: fresh combo ctrl+y', !draftComboConflicts('history', ['ctrl+y']))
+// Restating an action's OWN default changes nothing about what shadows what
+// — it must not read as a conflict.
+check('no conflict: dashboard restating its default ctrl+a', !draftComboConflicts('dashboard', ['ctrl+a']))
+check('no conflict: showAll can bind ctrl+f (unbound by default)', !draftComboConflicts('showAll', ['ctrl+f']))
+check('conflict: lineStart claiming ctrl+a while dashboard owns it', draftComboConflicts('lineStart', ['ctrl+a']))
+// Freeing Ctrl+A is the documented way to move line start there.
+setKeymapOverrides({ dashboard: 'ctrl+n' })
+check('lineStart can claim ctrl+a after the dashboard moves', !draftComboConflicts('lineStart', ['ctrl+a']))
+resetKeymapOverrides()
+check('conflict: showAll claiming ctrl+e (lineEnd owns it)', draftComboConflicts('showAll', ['ctrl+e']))
+check('conflict: newline claiming enter while submit owns it', draftComboConflicts('newline', ['enter']))
+check('no conflict: newline restating shift+enter', !draftComboConflicts('newline', ['shift+enter']))
+// The documented swap: once submit moves to ctrl+enter, Enter is free for
+// the newline action.
+setKeymapOverrides({ submit: 'ctrl+enter' })
+check('swap: newline can claim enter after submit moved', !draftComboConflicts('newline', ['enter']))
+check('swap: submit matches ctrl+enter', actionMatches('submit', '', { return: true, ctrl: true }))
+check('swap: submit no longer matches bare enter', !actionMatches('submit', '', { return: true }))
+resetKeymapOverrides()
 check('conflict: another action cannot borrow the fixed ctrl+u', draftComboConflicts('dashboard', ['ctrl+u']))
 resetKeymapOverrides()
 
@@ -322,15 +351,16 @@ stdin.write('\x03')
 check('ctrl+c clears the prompt', await settled(() => promptText() === ''), JSON.stringify(promptText()))
 
 // Listener order (#1155). Nothing has remounted the composer yet, so this
-// is the first-mount order: Chat must still own Ctrl+E / Ctrl+A. The caret
-// probe is a typed marker — if the readline binding also fired, the marker
-// lands at the line end / line start instead of where the caret was.
+// is the first-mount order. Ctrl+E belongs to the editor (line end);
+// Ctrl+A stays with the dashboard, so the caret must NOT move and the view
+// must open. The caret probe is a typed marker: it lands where the binding
+// sent the caret.
 stdin.write('abc')
 await settle(() => promptText() === 'abc')
 stdin.write('\x1b[H')
 stdin.write('\x05')
 stdin.write('Y')
-check('first-mount ctrl+e does not move the caret', await settled(() => promptText() === 'Yabc'), JSON.stringify(promptText()))
+check('first-mount ctrl+e moves the caret to line end', await settled(() => promptText() === 'abcY'), JSON.stringify(promptText()))
 stdin.write('\x03')
 await settle(() => promptText() === '')
 stdin.write('abc')
@@ -339,7 +369,7 @@ stdin.write('\x1b[D')
 stdin.write('\x01')
 check('first-mount ctrl+a opens the subagent dashboard', await settled(() => /Subagent Dashboard|子代理面板/.test(screen())))
 stdin.write('\x1b')
-await settle(() => promptText() === 'abc')
+await settle(() => !/Subagent Dashboard|子代理面板/.test(screen()))
 stdin.write('X')
 check('first-mount ctrl+a leaves the caret where it was', await settled(() => promptText() === 'abXc'), JSON.stringify(promptText()))
 stdin.write('\x03')
@@ -386,8 +416,8 @@ resetKeymapOverrides()
 
 instance.unmount()
 
-// ---- fresh fullscreen mount: first-mount Ctrl+E really toggles show-all ---
-// The caret probe above cannot tell "Chat consumed Ctrl+E" from "nobody
+// ---- fresh fullscreen mount: a remapped show-all really toggles -------
+// The caret probe alone cannot tell "Chat consumed the key" from "nobody
 // handled it". Show-all is observable only with a transcript longer than
 // MessageList's render cap (120 rows) — its oldest row stays hidden until
 // the toggle — and only where the transcript is live: inline history never
@@ -423,13 +453,16 @@ const capped = await settled(() => /previous messages|显示前/.test(fsScreen()
 check('fullscreen: the capped transcript shows the divider, not its oldest row', capped, capped ? '' : fsScreen())
 fs.stdin.write('abc')
 await settle(() => promptText(fsScreen()) === 'abc')
+// Show-all has no default key; bind one so this mount can prove the toggle.
+setKeymapOverrides({ showAll: 'ctrl+y' })
 fs.stdin.write('\x1b[H')
-fs.stdin.write('\x05')
+fs.stdin.write('\x19')
 fs.stdin.write('Y')
-check('fullscreen first-mount ctrl+e does not move the caret', await settled(() => promptText(fsScreen()) === 'Yabc'), JSON.stringify(promptText(fsScreen())))
+check('fullscreen remapped ctrl+y toggles without moving the caret', await settled(() => promptText(fsScreen()) === 'Yabc'), JSON.stringify(promptText(fsScreen())))
 await scrollToTop()
 const shownAll = await settled(() => fsScreen().includes(HIDDEN_ROW))
-check('fullscreen first-mount ctrl+e toggles show-all', shownAll, shownAll ? '' : fsScreen())
+check('fullscreen remapped ctrl+y toggles show-all', shownAll, shownAll ? '' : fsScreen())
+resetKeymapOverrides()
 
 // The global layer is first, but editing-layer Esc must not interrupt a
 // running turn. Drive the real Chat, not the editor-only fixture.

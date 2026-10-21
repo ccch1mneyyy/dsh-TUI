@@ -91,6 +91,8 @@ dsh-tui
 | `Esc`（工作 + 有 pending） | 中断回合并立即重投 pending 消息 |
 | 工作中的 `/btw …` | Enter 直接执行（侧问永不打断主回合） |
 
+> 发送与换行都可在 `/settings → 快捷键` 里重映射：默认 `Enter` 发送，`Shift+Enter` / `Ctrl+J` / `Option+Enter` 换行。想反过来（Enter 换行、Ctrl+Enter 发送）时，先把「发送快捷键」改成 `ctrl+enter`，再把「换行快捷键」改成 `enter`。
+
 回合运行中的 `/` 浮窗按「对当前对话的影响」分区：不影响的命令在上（原样式），会被门禁拦下 / 会打断或替换对话 / 会 steer 的沉到下方、整行变灰（`subtle`，不额外插标题行）。灰区不阻止使用：选中执行后该门禁的门禁、该 steer 的 steer。回合运行中只有两种输入会加塞：不构成命令的普通文本，以及**直接调用技能**的手势（`/技能名 …`，浮窗里同样按「会 steer」沉到灰区）。
 
 ### 2.2 中断 / 退出 / 系统
@@ -101,9 +103,10 @@ dsh-tui
 | `Ctrl+D` | 工作中=中断（中断未收敛时再按=强制退出）；空闲时双击退出 |
 | `Ctrl+L`（⌘L） | 清屏并强制重绘 |
 | `Ctrl+O`（⌘O） | 展开/收起详情（思考全文、工具参数与输出） |
-| `Ctrl+E` | 输入框=光标到行尾；转录中=展开/折叠隐藏的旧消息 |
 | `Ctrl+P` | 切换启动时 loaded-context 面板（面板在屏时有效） |
 | `?` | 输入框为空时打开快捷键/命令帮助菜单 |
+
+> 转录中隐藏的旧消息：点击「显示前 N 条」分隔行展开；默认不绑键盘键，可在 `/settings → 快捷键` 给 show-all 绑定组合键（输入框里 `Ctrl+E` 是光标到行尾）。
 
 ### 2.3 搜索
 
@@ -118,7 +121,7 @@ dsh-tui
 |---|---|
 | `←` / `→` | 按字符移动光标（有选区时坍缩到选区对应边缘） |
 | `Ctrl+←` / `Ctrl+→`（⌘←/→） / `Alt/Option+←/→` | 按空白分隔的单词跳转；启动页也支持 |
-| `Home` / `End`，`Ctrl+E` | 逻辑行首 / 行尾（`Ctrl+A` 已改用于子代理面板，见 §2.7） |
+| `Home` / `End`，`Ctrl+E` | 逻辑行首 / 行尾（`Ctrl+A` 保留给子代理面板；行首/行尾均可经 `/settings` 重映射，行首默认不绑组合键） |
 | `Ctrl+U` / `Ctrl+K` | 删除光标前（至行首）/ 光标后（至行尾） |
 | `Ctrl+W` / `Alt/Option+Backspace` | 删除前一个单词；已暂存的图片附件整体删除 |
 | `Ctrl+Z` | 撤销草稿上一步「词级」编辑（含光标与图片）；只作用于草稿，提交或用历史召回（`Ctrl+R`/`↑`）后不再可撤销，与 `Esc Esc` 的会话/消息回溯无关；可经 `/settings` 重映射 |
@@ -593,6 +596,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | pageMargin | 页边距：整屏相对终端四边向里缩。预设 none / slim / normal（默认）/ roomy，或自定义 `NxM`（细节见下）。立即生效 |
 | foldTerminalCommand | 折叠终端命令（默认关）：终端卡（Bash/PowerShell）多行命令折成首行 + 计数；`Ctrl+O` 或点击卡片展开 |
 | expandEditor | 全屏草稿编辑（默认开）：输入行尾 `⛶` 或 `Ctrl+Shift+E` 展开成整屏编辑器；`Ctrl+Enter` 发送、`Esc` 收起（草稿还在）；关掉后入口不显示 |
+| shortcuts.* | 快捷键重映射（/settings 的**快捷键**子页）：`newline` / `submit` / `lineStart` / `lineEnd` / `wordLeft` / `wordRight` 以及粘贴、历史、侧栏等。`lineStart` 与 `showAll` 默认不绑定（`Ctrl+A` 留给子代理面板，`Home` 始终可用；隐藏消息可点分隔行）。一行填一个或多个 `ctrl+`/`alt+` 组合，逗号分隔；留空恢复默认。发送与换行额外接受 `enter` / `shift+enter` |
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关；pluginFieldsOrder 是插件字段名单：`''`=不显示、`*`=全部、`a,b;c;d`=三组即三槽） |
 
 **effortDefault**：模型没有该档时自动就近降级并弹提示；优先级 settings 用户层 > 上次 `/effort`

@@ -113,7 +113,9 @@ export function parseCombo(raw: string): ParsedCombo | undefined {
   }
   if (char === undefined && named === undefined) return undefined
   // Bare keys are typing/navigation; a modifier is what makes a shortcut.
-  if (!ctrl && !meta) return undefined
+  // Enter is the exception: `submit` names it, and `newline` may claim
+  // Shift+Enter, so both must be spellable without ctrl/alt.
+  if (!ctrl && !meta && named !== 'return') return undefined
   // Escape is fully owned by the TUI (every Escape arrives with meta set on
   // the input layer), so escape combos can never be unambiguous.
   if (named === 'escape') return undefined
@@ -171,7 +173,11 @@ function comboMatchesBuiltin(
   platformAlias: boolean = isMac,
 ): boolean {
   const alias = platformAlias && !exactPrimary
-  const primary = key.ctrl === true || (alias && key.super === true)
+  // Super is only meaningful as the mac alias for ctrl; when it rides along
+  // with ctrl (Ctrl+Super+J) the press is a different chord, not this one.
+  const superAlias = alias && key.super === true && key.ctrl !== true
+  if (key.super === true && !superAlias) return false
+  const primary = key.ctrl === true || superAlias
   if (combo.ctrl !== primary) return false
   if (Boolean(key.meta) !== combo.meta) return false
   if (Boolean(key.shift) !== combo.shift) return false
@@ -202,6 +208,15 @@ export type ShortcutActionId =
   | 'undo'
   | 'sidePanel'
   | 'sidePanelZoom'
+  /** 输入框：换行 / 发送。Enter 与 Shift+Enter 也可重映射。 */
+  | 'newline'
+  | 'submit'
+  /** 输入框：光标到逻辑行首 / 行尾。 */
+  | 'lineStart'
+  | 'lineEnd'
+  /** 输入框：按空白词左右跳转。 */
+  | 'wordLeft'
+  | 'wordRight'
 
 export interface ShortcutActionSpec {
   readonly id: ShortcutActionId
@@ -227,13 +242,17 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionSpec[] = [
   { id: 'editor', defaults: ['ctrl+g'] },
   { id: 'transcript', defaults: ['ctrl+o'] },
   { id: 'trajectory', defaults: ['ctrl+t'] },
+  // Ctrl+A stays with the subagent dashboard (the historical binding).
+  // Ctrl+E is reclaimed for the editor (line end), so show-all keeps NO
+  // default key: the transcript divider is still clickable, and users who
+  // want a keyboard path can bind showAll in /settings (Ctrl+F included).
   { id: 'dashboard', defaults: ['ctrl+a'] },
   { id: 'contextPanel', defaults: ['ctrl+p'] },
   // 落地页 Continue：alt+r（resume 语义）。占用核对（SHORTCUT_ACTIONS defaults ∪
   // FIXED_RESERVED_COMBOS）：ctrl 系 v/r/g/o/t/a/p/e/l/q/k/b/c/d/u/w/j/left/right/return
   // 全占；alt+r 空闲，且不与输入框抢字母键。
   { id: 'continue', defaults: ['alt+r'] },
-  { id: 'showAll', defaults: ['ctrl+e'] },
+  { id: 'showAll', defaults: [] },
   { id: 'redraw', defaults: ['ctrl+l'] },
   { id: 'todoFold', defaults: ['ctrl+q'] },
   { id: 'questionFold', defaults: ['ctrl+k'] },
@@ -248,6 +267,21 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionSpec[] = [
   // 键位；tmux 用户的前缀会吞掉 Ctrl+B，可在 /settings → Shortcuts 重映射）。
   { id: 'sidePanel', defaults: ['ctrl+b'] },
   { id: 'sidePanelZoom', defaults: ['alt+z'] },
+  // Composer actions. Defaults preserve the historical bindings: Enter
+  // sends, Shift+Enter / Ctrl+J / Alt+Enter insert a newline. The grammar
+  // accepts bare `enter` (and Shift+Enter) for these two so a user can
+  // swap the pair — set submit to `ctrl+enter`, then newline to `enter` —
+  // entirely from /settings.
+  { id: 'newline', defaults: ['shift+enter', 'ctrl+j', 'alt+enter', 'ctrl+shift+enter'] },
+  { id: 'submit', defaults: ['enter'] },
+  // Readline-style caret movement. lineStart is UNBOUND by default because
+  // Ctrl+A stays with the dashboard; Home remains the always-on alias and a
+  // user can give lineStart any free combo (after remapping the dashboard if
+  // they want Ctrl+A here). lineEnd keeps Ctrl+E; End stays hardwired too.
+  { id: 'lineStart', defaults: [] },
+  { id: 'lineEnd', defaults: ['ctrl+e'] },
+  { id: 'wordLeft', defaults: ['ctrl+left', 'alt+left'] },
+  { id: 'wordRight', defaults: ['ctrl+right', 'alt+right'] },
 ]
 
 /** Actions that refuse the macOS ctrl↔Cmd alias (see `exactPrimary`). */
@@ -371,29 +405,24 @@ export function parseComboDraft(text: string): { combos: string[] } | undefined 
 
 /**
  * Canonical combos the TUI binds but users canNOT remap — interrupt/exit,
- * the readline-style editor keys, the newline variants, and the navigation
- * keys plugins must never shadow. The customizable action combos (see
- * {@link SHORTCUT_ACTIONS}) join this set dynamically wherever both are
- * consulted. Entries the combo grammar itself refuses (bare escape, tab,
- * shift+tab) stay listed verbatim for the lowercase fallback canonical.
+ * the kill/yank editor keys, and the navigation keys plugins must never
+ * shadow. The customizable action combos (see {@link SHORTCUT_ACTIONS}) join
+ * this set dynamically wherever both are consulted. Entries the combo
+ * grammar itself refuses (bare escape, tab, shift+tab) stay listed verbatim
+ * for the lowercase fallback canonical.
+ *
+ * Line start/end (`ctrl+a` / `ctrl+e`), word jumps (`ctrl/alt+left/right`),
+ * and the newline aliases live in SHORTCUT_ACTIONS instead: they are user
+ * bindings, not unremappable editor keys.
  */
 export const FIXED_RESERVED_COMBOS: readonly string[] = [
   'ctrl+c', // interrupt / clear
   'ctrl+d', // exit on empty input
-  'ctrl+e', // editor line end (also the showAll action's default)
-  'ctrl+a', // editor line start (also the dashboard action's default)
   'ctrl+u', // kill line
   'ctrl+k', // kill to end
   'ctrl+w', // kill word
   'alt+backspace', // kill word (Option-as-Meta / extended key reporting)
-  'ctrl+j', // newline fallback (legacy LF / extended key reporting)
-  'ctrl+left', // word jump
-  'ctrl+right', // word jump
-  'alt+left', // word jump
-  'alt+right', // word jump
-  'ctrl+return', // newline (multi-line input)
-  'ctrl+shift+return', // shift+Enter newline (CSI 13;6u) — same editor binding
-  'alt+return', // newline fallback on terminals without shift reporting
+  'ctrl+return', // interrupt and send
   'alt+up', // pull the last pending message back for editing
   'escape', // pickers / interrupt / rewind double-tap
   'tab', // command completion
@@ -425,9 +454,9 @@ export function draftComboConflicts(action: ShortcutActionId, combos: readonly s
     if (spec.id === action) {
       // Restating a combo this action already binds — a default or the
       // current override — changes nothing about what shadows what; it must
-      // not read as a conflict. This is what lets dashboard re-save its own
-      // ctrl+a default even though that combo is also fixed-reserved for
-      // the editor line-start (the dual-use the defaults themselves encode).
+      // not read as a conflict. This lets an action re-save its own default
+      // (e.g. lineStart keeping ctrl+a) without tripping the cross-action
+      // scan below.
       for (const raw of spec.defaults) own.add(canonicalComboString(raw))
       for (const combo of effectiveCombos(spec.id)) own.add(canonicalCombo(combo))
       continue

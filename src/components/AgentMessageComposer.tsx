@@ -2,6 +2,7 @@ import React from 'react'
 import { Box, Text, InputCaret, useInput } from '../ui.js'
 import { t } from '../i18n.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
+import { actionMatches } from '../utils/keymap.js'
 import { agentMessageStateColor, agentMessageStateText, agentMessageViaText } from './messages/TranscriptLeaves.js'
 import type {
   AgentComposeTarget,
@@ -72,6 +73,7 @@ type ComposerKey = {
   readonly ctrl?: boolean
   readonly meta?: boolean
   readonly shift?: boolean
+  readonly super?: boolean
   readonly backspace?: boolean
   readonly delete?: boolean
   readonly leftArrow?: boolean
@@ -198,11 +200,14 @@ export function AgentMessageComposer({ target, control, messages, focused, onFoc
       setDraft({ ...current, caret: nextCodePoint(current.text, current.caret) })
       return true
     }
-    if (key.home === true || (key.ctrl === true && input === 'a')) {
+    // Home/End stay hardwired aliases; the primary combos are the remappable
+    // lineStart / lineEnd actions (default Ctrl+A / Ctrl+E), so a user remap
+    // applies to this composer too.
+    if (key.home === true || actionMatches('lineStart', input, key)) {
       setDraft({ ...current, caret: 0 })
       return true
     }
-    if (key.end === true || (key.ctrl === true && input === 'e')) {
+    if (key.end === true || actionMatches('lineEnd', input, key)) {
       setDraft({ ...current, caret: current.text.length })
       return true
     }

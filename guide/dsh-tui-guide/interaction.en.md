@@ -159,7 +159,7 @@ results back to the chat screen and add no new behavior.
 | `Left/Right` | Move by character; **with a selection, collapse to the corresponding edge** |
 | `Ctrl+Left/Right` / `Alt/Option+Left/Right` | Move by whitespace-delimited words; also supported on the launchpad |
 | `Home/End` | Move to the start/end of the current logical line |
-| `Ctrl+A` / `Ctrl+E` | `Ctrl+A` opens the subagent dashboard (`Mod+A` in the editor still moves to line start); `Ctrl+E` moves to line end and also expands or folds hidden older rows in long transcripts |
+| `Ctrl+A` / `Ctrl+E` | `Ctrl+A` opens the subagent dashboard; `Ctrl+E` moves to the logical line end. Line start/end are remappable via `/settings` (line start defaults to Home only). Hidden old rows have no default key: click the "show N previous messages" divider or bind show-all in `/settings` |
 | `Ctrl+U` | Delete before the caret |
 | `Ctrl+K` | Delete after the caret |
 | `Ctrl+W` / `Alt/Option+Backspace` | Delete the preceding word; staged image attachments are removed whole |
@@ -667,8 +667,8 @@ In inline mode, the terminal emulator owns native scrollback and selection.
   prompt-input paths (geometry corrected for the gutter). The wheel scrolls the editor
   viewport (position-routed; caret moves re-engage following). The Send/Collapse buttons
   execute on click and brighten on hover. The input row's `⛶` expands.
-- **Single-click "load earlier messages" / "ctrl+e show previous N"** — Load earlier
-  messages / expand all.
+- **Single-click "load earlier messages" / the "show previous N" divider** — Load earlier
+  messages / expand all. Show-all has no default key; once bound in `/settings`, the divider labels it.
 - **Single-click the sticky header / "↓ N new messages"** — Jump back to the pinned message /
   scroll to bottom.
 - **Single-click a hyperlink** — Open it in the browser.

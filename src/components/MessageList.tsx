@@ -47,7 +47,7 @@ import { primaryComboString } from '../utils/keymap.js'
  * rows; `selectedId` highlights the selected row.
  */
 /** Render cap for very long sessions: older rows fold behind a Divider until
- *  Ctrl+E expands them.
+ *  the show-all shortcut (unbound by default; the divider is clickable) expands them.
  *  120 (was 300): opening a long session paints the whole cap into the
  *  main-screen scrollback (historyPaint), and each row's first markdown
  *  lex + wrap costs ~2-5ms — 300 rows saturated the main thread for ~6s
@@ -1521,7 +1521,12 @@ export function MessageList({
         <ClickableDivider title={t('load-earlier')} onClick={onLoadOlder} />
       )}
       {!showAll && hiddenCount > 0 && (
-        <ClickableDivider title={t('show-previous-messages', { n: hiddenCount, key: primaryComboString('showAll') })} onClick={onToggleAll} />
+        <ClickableDivider
+          title={primaryComboString('showAll') === ''
+            ? t('show-previous-messages-plain', { n: hiddenCount })
+            : t('show-previous-messages', { n: hiddenCount, key: primaryComboString('showAll') })}
+          onClick={onToggleAll}
+        />
       )}
       {topPad > 0 && <Box height={topPad} flexShrink={0} />}
       {visibleRows

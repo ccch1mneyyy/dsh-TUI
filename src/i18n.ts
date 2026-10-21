@@ -1171,7 +1171,7 @@ const dict = {
   'help-redraw': { zh: '{{key}} 重绘', en: '{{key}} to redraw' },
   'help-clear-input': { zh: 'esc 清空输入', en: 'esc to clear input' },
   'help-history-nav': { zh: '↑/↓ 历史', en: '↑/↓ for history' },
-  'help-move-cursor': { zh: '←/→ 移动光标', en: '←/→ to move cursor' },
+  'help-move-cursor': { zh: '←/→ 移动 · {{start}}/{{end}} 行首/行尾', en: '←/→ move · {{start}}/{{end}} line start/end' },
   'help-word-jumps': { zh: '{{mod}}←/→ 或 Alt/Option+←/→ 按词跳转', en: '{{mod}}←/→ or Alt/Option+←/→ for word jumps' },
   'help-complete-command': { zh: 'tab 补全命令', en: 'tab to complete command' },
   'help-cycle-mode': { zh: 'shift+tab 切换模式', en: 'shift+tab to cycle mode' },
@@ -1213,6 +1213,7 @@ const dict = {
   // ── components/MessageList.tsx ──────────────────────────────────────
   'load-earlier': { zh: ' ↑ 加载更早消息（会话日志完整，/export 导出全文） ', en: ' ↑ load earlier messages (full session log; /export for full text) ' },
   'show-previous-messages': { zh: ' {{key}} 显示前 {{n}} 条消息 ', en: ' {{key}} to show {{n}} previous messages ' },
+  'show-previous-messages-plain': { zh: ' 显示前 {{n}} 条消息 ', en: ' show {{n}} previous messages ' },
 
   // ── screens/Chat.tsx (/resume) ──────────────────────────────────────
   'resume-resumed': { zh: '已恢复会话', en: 'Session resumed' },

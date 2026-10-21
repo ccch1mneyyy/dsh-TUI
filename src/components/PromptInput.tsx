@@ -2718,11 +2718,11 @@ export function PromptInput({
       return
     }
 
-    // Ctrl+J is the portable multiline fallback when a terminal cannot
-    // report modifiers on Enter. Legacy terminals deliver bare LF (`enter`),
-    // while kitty/modifyOtherKeys encode it as an exact Ctrl+J key.
-    const isCtrlJ = input === 'j' && key.ctrl && !key.shift && !key.meta && !key.super
-    if ((input === '\n' && event?.keypress.name === 'enter') || isCtrlJ) {
+    // Newline (remappable via /settings; default Shift+Enter / Ctrl+J /
+    // Option+Enter). Legacy terminals deliver bare LF as input `\n` with
+    // the enter keypress name, which must keep working whatever the combo
+    // is remapped to.
+    if ((input === '\n' && event?.keypress.name === 'enter') || actionMatches('newline', input, key)) {
       insertAtCaret('\n')
       return
     }
@@ -2762,6 +2762,16 @@ export function PromptInput({
       submitText(line)
       return
     }
+    if (key.return && (isMod(key) || key.meta) && actionMatches('submit', input, key)) {
+      // A submit combo carrying a modifier (typically Ctrl+Enter after the
+      // user swaps newline/submit) really sends instead of interrupting.
+      if (expandedRef.current) {
+        submitFromEditor()
+      } else {
+        handleEnter()
+      }
+      return
+    }
     if (key.return && isMod(key)) {
       // Ctrl+Enter / Cmd+Enter: in the EXPANDED editor this is the explicit
       // send (Enter inserts newlines there, so sending needs its own key);
@@ -2774,24 +2784,23 @@ export function PromptInput({
       }
       return
     }
-    if (key.return && (key.shift || key.meta)) {
-      // Shift+Enter / Option+Enter: insert a newline at the caret
-      // (multi-line input). Shift+Enter only arrives when the terminal
-      // supports extended key reporting (kitty/modifyOtherKeys allowlist in
-      // ink/terminal.ts); Option+Enter (ESC CR) is the fallback on terminals
-      // that can't report shift — e.g. macOS Terminal.app (issue #110).
-      insertAtCaret('\n')
+    if (key.return && actionMatches('submit', input, key) && !expandedRef.current) {
+      // The configured submit combo. The expanded editor keeps Enter as a
+      // newline (text-editor contract): only its modifier variant sends.
+      handleEnter()
       return
     }
     if (key.return && expandedRef.current) {
       // Expanded editor: plain Enter inserts a newline (text-editor
-      // semantics — long-draft editing must never misfire a send). The
-      // shift/meta variants above already newline; Ctrl+Enter sends.
+      // semantics — long-draft editing must never misfire a send). Ctrl+Enter
+      // sends; a newline combo remapped onto Enter/modifiers is handled above.
       insertAtCaret('\n')
       return
     }
     if (key.return) {
-      handleEnter()
+      // A remapped submit takes Enter off the send path completely; other
+      // Enter variants (Shift/Option) fall here only when the newline
+      // binding no longer names them. Consume rather than send implicitly.
       return
     }
     // Help is modal over the composer. Backtab must not cycle the session
@@ -3084,15 +3093,15 @@ export function PromptInput({
       }
       return
     }
-    if ((isMod(key) || key.meta) && key.leftArrow) {
+    if (actionMatches('wordLeft', input, key)) {
       // Jump to the previous word boundary (readline alt+b). Must precede the
-      // bare-arrow arms: Ctrl+Left arrives as leftArrow + ctrl. An active
-      // selection collapses to its START edge first (editor semantics).
+      // bare-arrow arms. An active selection collapses to its START edge first
+      // (editor semantics).
       const sel = selectionRef.current
       setInput(value, sel ? sel.start : wordBoundaryLeft(value, cursor))
       return
     }
-    if ((isMod(key) || key.meta) && key.rightArrow) {
+    if (actionMatches('wordRight', input, key)) {
       // Jump to the next word boundary (readline alt+f).
       const sel = selectionRef.current
       setInput(value, sel ? sel.end : wordBoundaryRight(value, cursor))
@@ -3143,12 +3152,12 @@ export function PromptInput({
       setInput(value, nextLine === -1 ? value.length : clampRowEnd(nextLine))
       return
     }
-    if (isMod(key) && input === 'a') {
+    if (actionMatches('lineStart', input, key)) {
       const lineStart = clampRowStart(value.lastIndexOf('\n', cursor - 1) + 1)
       setInput(value, lineStart)
       return
     }
-    if (isMod(key) && input === 'e') {
+    if (actionMatches('lineEnd', input, key)) {
       const nextLine = value.indexOf('\n', cursor)
       setInput(value, nextLine === -1 ? value.length : clampRowEnd(nextLine))
       return

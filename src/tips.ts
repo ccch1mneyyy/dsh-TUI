@@ -97,8 +97,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-ctrl-e',
     group: 'keys',
-    zh: 'Ctrl+E：输入框到行尾；转录中展开隐藏旧消息',
-    en: 'Ctrl+E: line end in input; reveals old messages in transcript',
+    zh: 'Ctrl+E 到行尾；隐藏的旧消息点「显示前 N 条」分隔行展开（键盘键可在 /settings 绑定）',
+    en: 'Ctrl+E jumps to line end; reveal hidden old rows via the divider (bind a key in /settings if wanted)',
   },
   {
     id: 'keys-ctrl-l',
@@ -115,8 +115,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-home-end',
     group: 'keys',
-    zh: 'Home/End 到行首/行尾，Ctrl+E 到行尾',
-    en: 'Home/End jump to line start/end; Ctrl+E to line end',
+    zh: 'Home/End 到行首/行尾；Ctrl+E 也到行尾（Ctrl+A 是子代理面板）',
+    en: 'Home/End jump to line start/end; Ctrl+E also goes to line end (Ctrl+A opens agents)',
   },
   {
     id: 'keys-ctrl-a',
