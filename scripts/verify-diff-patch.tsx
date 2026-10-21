@@ -193,6 +193,15 @@ for (const [cols, layout] of [[80, 'split'], [120, 'auto']] as const) {
   const moved = card.lines()
   check(`3${at} several files: move and new-file headers`, row(moved, 'src/a.ts → src/b.ts').includes('(+1 -1)') && row(moved, 'src/n.ts').includes(`${t('diff-patch-added')} (+1 -0)`), card.text())
 
+  check(`3${at} mixed new file uses one full-width side`, row(moved, 'fresh').indexOf('fresh') < 15 && !row(moved, 'fresh').includes('│'), row(moved, 'fresh'))
+  for (const change of ['add', 'delete'] as const) {
+    const body = 'x'.repeat(35) + '_PATCH_FULL_WIDTH'
+    const text = change === 'add' ? `@@ -0,0 +1,1 @@\n+${body}\n` : `@@ -1,1 +0,0 @@\n-${body}\n`
+    await card.show([patch('one.txt', text, { change })], layout, () => card.text().includes('_PATCH_FULL_WIDTH'))
+    const single = row(card.lines(), '_PATCH_FULL_WIDTH')
+    check(`3${at} ${change} patch full-width line retains its real number`, /1 [−+] /u.test(single) && !single.includes('│'), single)
+  }
+
   // Expanded: the collapsed view clips a wide row, so the wrap is the only
   // thing that can make its tail readable — and the wrapped rows must still
   // line up on the divider and under one gutter number. The changed pair is

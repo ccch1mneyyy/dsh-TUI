@@ -23,6 +23,8 @@
 > DSH's public exports, and is moving from a mounted plugin to an app with its
 > own entry and composition root, where DSH loads in process as the first-party
 > backend. Install to enable; uninstall leaves no patches behind.
+Split diff cards give one-sided additions and deletions the full body width, without an empty opposite pane. Ordinary edits remain side by side, and mixed files choose their layout separately before folding or streaming reveal.
+
 Compaction status stays on one line in narrow panes: phase and cancellation hints yield first, then the label is shortened; elapsed time is shown only as a complete field.
 
 Image files referenced with `@path` use the same admission and resize/conversion policy as pasted images. Adjustment notices report the stored dimensions and format; required animation conversion is refused instead of dropping frames. Mention images and staged images still share count and stored-byte limits in source order.

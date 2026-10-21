@@ -7,7 +7,7 @@
  *    bright word palette
  * 3. 70 cols (below SPLIT_DIFF_MIN_COLS): the card falls back to the
  *    unified view
- * 4. a new-file Write (oldText null) fills only the right pane
+ * 4. one-sided Write/delete files use the full body width without a divider
  * 5. expanded (Ctrl+O / verbose) long lines wrap inside each pane instead of
  *    being clipped, the collapsed card reports how many characters it
  *    clipped, and the expanded body stays inside its 400-visual-row window
@@ -72,7 +72,7 @@ const editTool = {
  *  would clip it); `settleMs` widens the fixed window for frames far larger
  *  than an ordinary card. */
 async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none', options = {}) {
-  const { verbose = false, rows = 30, settleMs = 900 } = options
+  const { verbose = false, fullscreen = false, rows = 30, settleMs = 900 } = options
   const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
   class FakeStdout extends Writable {
     columns = cols
@@ -81,7 +81,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     _write(chunk, _e, cb) { term.write(String(chunk), cb) }
   }
   const app = await render(
-    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose, diffLayout, toolBackground }),
+    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose, fullscreen, diffLayout, toolBackground }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
   )
   // 固定窗:pacing cli-highlight 首次使用才懒加载，其后的补色重绘没有
@@ -152,7 +152,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   }
 }
 
-// ---- 4. New file: only the right pane fills
+// ---- 4. New file: no empty old pane or middle divider
 {
   const writeTool = {
     ...editTool,
@@ -166,8 +166,8 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   }
   const { lines } = await renderAt(120, writeTool)
   const helloRow = lines.findIndex(line => line.includes('hello'))
-  check('新建文件的行落在右栏', helloRow >= 0 && lines[helloRow]!.includes('│') && lines[helloRow]!.indexOf('hello') > lines[helloRow]!.indexOf('│'))
-  check('新建文件左栏留空', helloRow >= 0 && lines[helloRow]!.slice(5, lines[helloRow]!.indexOf('│')).trim() !== 'hello')
+  check('new file starts at the body left edge without an empty pane', helloRow >= 0 && lines[helloRow]!.indexOf('hello') < 12)
+  check('new file has no middle divider', helloRow >= 0 && !lines[helloRow]!.includes('│'))
 }
 
 // ---- 5. diffLayout preference overrides the width heuristic
@@ -257,6 +257,34 @@ const diffTool = (oldText, newText, path) => ({
   callId: `c-${path}`,
   callView: { card: 'diff', title: `Edit ${path}`, diffs: [{ path, oldText, newText }] },
 })
+
+// One-sided widths are chosen per file, not from the current visible slice.
+for (const cols of [70, 120]) for (const layout of ['auto', 'split']) for (const fullscreen of [false, true]) {
+  const content = 'const value = "' + 'x'.repeat(24) + '" // FULL_WIDTH_TAIL'
+  for (const oldText of [null, '']) {
+    const fresh = (await renderAt(cols, diffTool(oldText, content, '/tmp/new.ts'), layout, 'none', { fullscreen })).screen()
+    check(`one-sided addition ${cols}/${layout}/${fullscreen}/${oldText}: full line and no divider`,
+      fresh.includes('FULL_WIDTH_TAIL') && !fresh.includes('│'), fresh)
+  }
+  const removed = (await renderAt(cols, diffTool(content, '', '/tmp/gone.ts'), layout, 'none', { fullscreen })).screen()
+  check(`one-sided deletion ${cols}/${layout}/${fullscreen}: full line and no divider`,
+    removed.includes('FULL_WIDTH_TAIL') && !removed.includes('│'), removed)
+}
+{
+  const tool = { ...editTool, callView: { card: 'diff', title: 'Mixed', diffs: [
+    { path: '/tmp/new.txt', oldText: null, newText: 'ONE_SIDE_FILE' },
+    { path: '/tmp/edit.txt', oldText: 'OLD_SIDE_FILE', newText: 'NEW_SIDE_FILE' },
+  ] } }
+  const { lines } = await renderAt(120, tool, 'split', 'none', { verbose: true })
+  check('mixed files: addition has no divider', lines.some(line => line.includes('ONE_SIDE_FILE') && !line.includes('│')))
+  check('mixed files: ordinary edit stays split', lines.some(line => line.includes('OLD_SIDE_FILE') && line.includes('NEW_SIDE_FILE') && line.includes('│')))
+  const hiddenOld = Array.from({ length: 20 }, (_, i) => `new_${i}`).join('\n') + '\nOLD_TAIL'
+  const folded = (await renderAt(120, diffTool('OLD_TAIL', hiddenOld, '/tmp/late.txt'), 'split')).screen()
+  check('folded opposite side still reserves split layout', folded.includes('│'))
+  const unicode = '新'.repeat(50) + '👨‍👩‍👧e\u0301FULL_WIDTH_UNICODE'
+  const expanded = (await renderAt(70, diffTool(null, unicode, '/tmp/new.txt'), 'split', 'none', { verbose: true })).screen()
+  check('one-sided expanded wrap preserves Unicode and tail', expanded.includes('👨‍👩‍👧e\u0301') && expanded.includes('FULL_WIDTH_UNICODE') && !expanded.includes('│'))
+}
 
 // Both states of one 200-char change pair: expanded, both tails are
 // readable and still separated by │ on one visual row; collapsed, the tail
