@@ -174,6 +174,33 @@ try {
     } finally { await f.close() }
   })
 
+  for (const errorName of ['SessionAlreadyOwnedError', 'SessionFormatError', 'Error']) {
+    await test(`writer error ${errorName} preserves classification and releases the reservation`, async () => {
+      let locked = true
+      const failure = new Error('SessionAlreadyOwnedError in an unrelated message')
+      failure.name = errorName
+      const f = fixture({ open: async () => { if (locked) throw failure } })
+      try {
+        const result = await f.actions.resumeTo(targetId)
+        assert.equal(result.ok, false)
+        if (result.ok || result.reason !== 'failed') throw new Error('Expected the compatible failed result')
+        if (errorName === 'SessionAlreadyOwnedError') {
+          assert.equal(result.code, 'owned-elsewhere')
+          assert.match(result.error, /Release it.*retry resume/)
+          assert.doesNotMatch(result.error, /PID|unrelated message/)
+        } else {
+          assert.equal(result.code, undefined)
+          assert.equal(result.error, failure.message, 'format and unrelated errors retain their own diagnostics')
+        }
+        assertFree(errorName)
+        assert.equal(f.binding.agent.id, 'resume-source', 'a writer refusal cannot change the foreground')
+        locked = false
+        assert.equal((await f.actions.resumeTo(targetId)).ok, true, 'retry succeeds after the real holder releases')
+        assert.equal(f.binding.agent.session.id, targetId)
+      } finally { await f.close() }
+    })
+  }
+
   for (const successful of [false, true]) {
     await test(`disk handoff retains its claim until ${successful ? 'commit' : 'open failure'}`, async () => {
       const entered = Promise.withResolvers<void>()

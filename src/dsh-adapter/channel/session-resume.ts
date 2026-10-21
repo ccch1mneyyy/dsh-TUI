@@ -197,6 +197,12 @@ export function createSessionResumeActions(
           ...(composed.setup === undefined ? {} : { setup: composed.setup }),
         })))
       } catch (error) {
+        // 请核: the supported host's writer-lock error.name is SessionAlreadyOwnedError.
+        if (error !== null && typeof error === 'object' && 'name' in error && error.name === 'SessionAlreadyOwnedError') {
+          const message = t('resume-owned-elsewhere')
+          deps.notify(message, { color: 'warning', timeoutMs: 8000 })
+          return { ok: false, reason: 'failed', error: message, code: 'owned-elsewhere' }
+        }
         const message = error instanceof Error ? error.message : String(error)
         deps.notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
         return { ok: false, reason: 'failed', error: message }

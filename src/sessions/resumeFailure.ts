@@ -38,7 +38,7 @@ export function resumeFailureText(result: ResumeResult): string | undefined {
     case 'occupied':
       return t('resume-session-occupied', { pid: result.pid })
     case 'failed':
-      return t('session-resume-failed', { err: result.error })
+      return result.code === 'owned-elsewhere' ? t('resume-owned-elsewhere') : t('session-resume-failed', { err: result.error })
   }
 }
 

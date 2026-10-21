@@ -965,7 +965,7 @@ export type ResumeResult =
   | { readonly ok: false; readonly reason: 'working' }
   | { readonly ok: false; readonly reason: 'unavailable' }
   | { readonly ok: false; readonly reason: 'cancelled' }
-  | { readonly ok: false; readonly reason: 'failed'; readonly error: string }
+  | { readonly ok: false; readonly reason: 'failed'; readonly error: string; readonly code?: 'owned-elsewhere' }
   /**
    * Another TUI process currently has this session mounted. Two processes
    * driving one session would interleave writes into a single append-only
