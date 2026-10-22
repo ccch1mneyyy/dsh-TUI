@@ -212,6 +212,8 @@ check('compaction bracket → compaction.start/end', of(live, 'compaction.start'
 // Session-search call cards: the header carries the query instead of the
 // upstream static sentence, but only while that sentence is still the pinned
 // 0.2.1-rc.2 wording — an upstream rewrite must win without editing this app.
+// The query is JSON-encoded because the header is one line: newlines, quotes
+// and control bytes stay printable instead of rewriting the header row.
 {
   const titleFor = (presented: string, name: string, args: string): string | undefined => {
     const translator = createDshTranslator({
@@ -230,6 +232,12 @@ check('compaction bracket → compaction.start/end', of(live, 'compaction.start'
     titleFor('Search prior sessions', 'session_search', '{"query":"resume preflight"}') === 'Sessions("resume preflight")')
   check('the event-search card header carries its query too',
     titleFor('Search session events', 'session_event_search', '{"query":"preflight"}') === 'Events("preflight")')
+  check('a newline inside the query stays one printable header line',
+    titleFor('Search prior sessions', 'session_search', '{"query":"alpha\\nbeta"}') === 'Sessions("alpha\\nbeta")')
+  check('quotes in the query are escaped in the header',
+    titleFor('Search prior sessions', 'session_search', '{"query":"say \\"hi\\""}') === 'Sessions("say \\"hi\\"")')
+  check('control bytes in the query never reach the header raw',
+    titleFor('Search prior sessions', 'session_search', '{"query":"a\\u001b[31mb"}') === 'Sessions("a\\u001b[31mb")')
   check('an upstream wording change wins over the refinement',
     titleFor('Find in prior sessions', 'session_search', '{"query":"x"}') === 'Find in prior sessions')
   check('unparseable args leave the call on the plain fallback card',

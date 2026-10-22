@@ -55,5 +55,9 @@ export function refineSessionSearchTitle(
   if (typeof query !== 'string') return view
   const trimmed = query.trim()
   if (trimmed === '') return view
-  return { ...view, title: `${refined.stem}("${trimmed}")` }
+  // The generic card header is one line (`HeaderTitle`'s non-terminal branch),
+  // and the query is free model text: JSON-encoding keeps newlines, quotes and
+  // control bytes printable inside the `Name("query")` shape instead of
+  // splitting the row or writing raw escape sequences to the terminal.
+  return { ...view, title: `${refined.stem}(${JSON.stringify(trimmed)})` }
 }
