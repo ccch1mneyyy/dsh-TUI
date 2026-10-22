@@ -217,6 +217,7 @@
     "bundle:installer": "node scripts/make-installer-bundle.mjs",
     "bundle:standalone": "node scripts/make-standalone-bundle.mjs",
     "verify:image-downsample": "node --import tsx/esm scripts/verify-image-downsample.tsx",
+    "verify:sharp-single-instance": "node --import tsx/esm scripts/verify-sharp-single-instance.ts",
     "verify:migrate-sessions": "node --import tsx/esm scripts/verify-migrate-sessions.ts",
     "verify:source-hygiene": "node scripts/verify-source-hygiene.mjs",
     "verify:renderer-primitives": "node --import tsx/esm scripts/verify-renderer-primitives.tsx",
