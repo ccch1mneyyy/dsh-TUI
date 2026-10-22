@@ -398,6 +398,8 @@ the dashboard alone does not acknowledge every child. Task status stays failed.
 `Enter` send · `Tab` complete · `Ctrl+Enter` interrupt and send · `Alt+Up` recall the last message · `Esc` closes local layers before interrupting a running turn, double-`Esc` rewinds on empty idle input · `Ctrl+B` side panel · `Ctrl+O` details · `Ctrl+R` history (`↑`/`↓` and `Ctrl+R` are scoped to the current project) · `Ctrl+V` paste · `Ctrl+Shift+E` fullscreen draft editor · `?` shortcuts · `←` open the session manager (DSH backgrounds the current session first).
 In both the launchpad and chat, `Ctrl+U` deletes from the caret to the current line start, preserving text to the right and whole image chips. It edits only the focused input.
 
+In the launchpad input, `Shift+Enter` (or `Option+Enter`) opens chat and inserts a newline at the caret, keeping the draft and staged images unsent. Continue typing there, then press `Enter` to send.
+
 
 In both the launchpad and chat, `Alt/Option+←/→` moves by whitespace-delimited words and `Alt/Option+Backspace` deletes the previous word, like `Ctrl+W`. On macOS, configure your terminal to send Option as Meta.
 

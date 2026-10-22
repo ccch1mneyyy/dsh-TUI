@@ -2485,8 +2485,7 @@ const dict = {
 
   // ── screens/Launchpad.tsx（开屏落地页：取代旧的"只有标题的空白会话"）───────
   // 落地页是"启动后第一屏"：大标题与吉祥物居中、输入框在下、再往下是
-  // 信息与快捷入口。用户真正发出第一条内容后才进聊天页，所以这里的
-  // 文案要短、要是动作而不是说明。
+  // 信息与快捷入口。发送首句或开始多行编辑时进入聊天页；这里的文案要短。
   'launchpad-placeholder': { zh: '说点什么，或输入 / 看命令…', en: 'Say something, or type / for commands…' },
   // （launchpad-param-*-label / launchpad-param-mode-* 六键已删：2026-10 第四版
   // 参数行只画值不画字段名——用户原话"大家都知道是模型啊，不用画蛇添足"；
@@ -2499,8 +2498,8 @@ const dict = {
   // 轮换顺序 = launchpad-tip → launchpad-tip-2 → launchpad-tip-3 → 回到首条；
   // 首启那一条（launchpad-first-run）优先级最高，不参与轮换。
   'launchpad-tip-2': {
-    zh: 'Ctrl+V 直接粘贴，Esc 清空后按 Esc 去看历史会话',
-    en: 'Ctrl+V pastes; Esc clears the draft, then Esc again opens sessions',
+    zh: 'Ctrl+V 直接粘贴，Shift+Enter 进入聊天页换行',
+    en: 'Ctrl+V pastes; Shift+Enter opens chat with a newline',
   },
   'launchpad-tip-3': {
     zh: '参数行四段都能点：模型 · 思考深度 · 模式 · 权限',

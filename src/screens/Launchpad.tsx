@@ -391,7 +391,8 @@ function KernelCorner({
  * （`commands`/`onCommandPick` 两缝，数据与组件都与聊天页 composer 同源），
  * Tab 补全到输入框，Enter/点击执行并清空输入；面板收起时整行原样交给 `onSubmit`，由 `Chat`
  * 走它既有的命令表判定（合并命令表，含 registry 命令）再决定 runCommand 或
- * 发送。本地只读一点：行首是不是 `/`，用来把输入框左边的提示符从 `❯` 换成
+ * 发送。Shift/Option+Enter 则交给 Chat 带着草稿继续多行编辑。本地只读一点：
+ * 行首是不是 `/`，用来把输入框左边的提示符从 `❯` 换成
  * `⌘`。
  *
  * TTY 输入使用终端原生光标，闪烁与动画继承终端配置。无原生光标的
@@ -447,6 +448,7 @@ export function Launchpad({
   onAction,
   onQueryChange,
   onSubmit,
+  onNewline,
   onEscape,
   onBlankClick,
 }: {
@@ -562,6 +564,8 @@ export function Launchpad({
   onQueryChange: (text: string, cursor: number) => void
   /** 提交：交给 Chat 分派；拒绝时返回提示并保留草稿。 */
   onSubmit: (text: string) => string | void
+  /** Shift/Option+Enter：交给 Chat 在当前光标处换行并继续编辑，保持未发送。 */
+  onNewline?: (text: string, cursor: number) => void
   /** 空输入时按 Esc / `Ctrl+C`：`sessions` 去看会话，`exit` 走双击退出漏斗。 */
   onEscape: (intent: 'sessions' | 'exit') => void
   /** 点空白处：把焦点收回输入框（不是提交、不是关闭）。 */
@@ -947,6 +951,13 @@ export function Launchpad({
         event.stopImmediatePropagation()
         return
       }
+    }
+    if (inputFocused && onNewline !== undefined
+      && key.return && (key.shift || key.meta) && !key.ctrl && !key.super) {
+      pasteRevisionRef.current += 1
+      onNewline(query, caret)
+      event.stopImmediatePropagation()
+      return
     }
     // 命令补全面板（第六版 BUG 1）：面板开着时 ↑/↓/Enter/Tab/Esc 全归面板——
     // 与聊天页 composer 的补全菜单同一套键位。Tab 补全；Enter/点击执行选中命令

@@ -986,9 +986,8 @@ export function Chat({
   /**
    * 打开**整屏界面**的命令（第七版）：从落地页触发这些命令时**不收掉落地页**
    * ——整屏盖在落地页之上渲染（它们的 early-return 排在落地页分支之前），
-   * Esc 退出整屏回到落地页（草稿/参数/焦点原样保留）。这是「从启动页进入
-   * 对话页的唯一路径 = Enter 提交一条非命令消息」的落地：任何返回键都不再
-   * 把人甩到对话页。其余命令（star / update / help / 转录输出类）的反馈在
+   * Esc 退出整屏回到落地页（草稿/参数/焦点原样保留），返回键不会切到对话页。
+   * 其余命令（star / update / help / 转录输出类）的反馈在
    * 对话页，仍按旧约收掉落地页再执行。
    */
   const launchpadScreenCommands = React.useMemo(
@@ -2823,6 +2822,28 @@ export function Chat({
     if (channel.ready !== false || (name !== undefined && isBootSafeCommand(name))) return false
     channel.notify(t('startup-not-ready', { backend: kernelCurrentOption?.shortLabel ?? channel.backendCapabilities.backendId }), { color: 'warning', timeoutMs: 2500 })
     return true
+  }
+
+  /** Move the unsent draft to chat, inserting a newline at the launchpad caret. */
+  const newlineLaunchpad = (text: string, cursor: number): void => {
+    promptDraftRef.current.current = {
+      ownerAgentId: String(channel.agentId),
+      bindingGeneration: resolveBindingGeneration(channel),
+      value: text.slice(0, cursor) + '\n' + text.slice(cursor),
+      cursor: cursor + 1,
+      foldBlock: null,
+      expanded: false,
+      vimEnabled: false,
+      vimInsert: true,
+      images: [...launchpadImagesRef.current],
+    }
+    // The composer snapshot now owns the capabilities behind the image chips.
+    launchpadImagesRef.current.clear()
+    setSupervisorOpen(false)
+    setLaunchpadOpen(false)
+    setLaunchpadFocus(-1)
+    setLaunchpadDraft('')
+    setLaunchpadCaret(0)
   }
 
   /**
@@ -6736,8 +6757,9 @@ export function Chat({
    * 第七版渲染姿态：early-return 排在**所有整屏界面（会话浏览器 / 设置 /
    * 任务面板 / 家谱 / 子代理 / 轨迹场景）之后**——从落地页打开的整屏盖在
    * 落地页之上，Esc 退出整屏回到这里（草稿/参数/焦点原样保留）。硬约束：
-   * 从启动页进入对话页的唯一路径是**提交一条非命令消息**（Enter 发送）；
-   * 任何 Esc/返回都回到启动页。参数行点开的选择器经 `pickerPanels` +
+   * Enter 发送非命令消息后进入对话页；Shift/Option+Enter 则带着未发送的
+   * 草稿进入对话页，并在当前光标处换行。Esc/返回都回到启动页。
+   * 参数行点开的选择器经 `pickerPanels` +
    * `inputPaused` 渲染在本屏之上，Esc 关掉它也回到这里。
    */
   if (launchpadShown) {
@@ -6825,11 +6847,11 @@ export function Chat({
         }}
         onQueryChange={changeLaunchpadDraft}
         onSubmit={submitLaunchpad}
+        onNewline={newlineLaunchpad}
         onFocusChange={setLaunchpadFocus}
         onAction={(action) => {
           // 第八版（用户实测：「刚点帮助，不知道为什么直接进入聊天页面了」）：
-          // 帮助**不属于**离开启动页的两条路（Enter 发非命令消息 / 会话浏览
-          // 里选中会话）——它盖在落地页之上（overlay kind 'help'），再点同一
+          // 帮助盖在落地页之上（overlay kind 'help'），再点同一
           // 入口 = 收起（与参数段同一条切换语义）。
           if (action.command === 'help') {
             dispatchOverlay(overlay.kind === 'help'
