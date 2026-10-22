@@ -27,6 +27,7 @@ import type { ToolCallView, ToolResultView, ToolsRegistryLike } from '../channel
 import { isCompactionCheckpointSource, toolResultPayload } from '../compat/messages.js'
 import { transcriptImagesOf } from '../transcript-images.js'
 import { isTeamToolName, TEAM_SPAWN_TOOL, teamMessageOf, teamToolCallView, teamToolResultView } from '../team-tools.js'
+import { refineSessionSearchTitle } from '../session-tools.js'
 import { teamMailboxAsRelay, withoutTeammateReminder } from '../compat/agent-team-0.2.0.js'
 
 export interface DshTranslatorDeps {
@@ -264,7 +265,9 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
     try {
       const tool = deps.tools()?.get(name, deps.scope())
       if (tool?.presentCall === undefined) return teamToolCallView(name, rawArgs)
-      return tool.presentCall(JSON.parse(rawArgs)) as ToolCallView | undefined
+      // The session-search calls carry a static sentence the card header would
+      // repeat verbatim; put the query back in the header (session-tools.ts).
+      return refineSessionSearchTitle(name, tool.presentCall(JSON.parse(rawArgs)) as ToolCallView | undefined, rawArgs)
     } catch {
       return undefined
     }

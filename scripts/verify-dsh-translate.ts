@@ -209,6 +209,35 @@ check('compaction bracket → compaction.start/end', of(live, 'compaction.start'
   const assistants = harness.state.rows.filter(row => row.kind === 'assistant')
   check('a live settlement never overwrites a restored row with the same seq', assistants[0]?.text === 'older answer' && assistants.at(-1)?.text === 'live answer')
 }
+// Session-search call cards: the header carries the query instead of the
+// upstream static sentence, but only while that sentence is still the pinned
+// 0.2.1-rc.2 wording — an upstream rewrite must win without editing this app.
+{
+  const titleFor = (presented: string, name: string, args: string): string | undefined => {
+    const translator = createDshTranslator({
+      tools: () => ({ get: () => ({ presentCall: () => ({ card: 'generic', title: presented }) }) }),
+      scope: () => ({}),
+      attachments: () => undefined,
+    })
+    const [event] = translator.translateEvent({
+      type: 'tool/call', seq: 1, time: 1,
+      data: { turn: 1, step: 1, callId: `call-${name}`, name, arguments: args },
+    } as never)
+    const presentation = (event as { presentation?: { card?: string; title?: string } } | undefined)?.presentation
+    return presentation?.card === 'generic' ? presentation.title : undefined
+  }
+  check('a session-search card header carries its query',
+    titleFor('Search prior sessions', 'session_search', '{"query":"resume preflight"}') === 'Sessions("resume preflight")')
+  check('the event-search card header carries its query too',
+    titleFor('Search session events', 'session_event_search', '{"query":"preflight"}') === 'Events("preflight")')
+  check('an upstream wording change wins over the refinement',
+    titleFor('Find in prior sessions', 'session_search', '{"query":"x"}') === 'Find in prior sessions')
+  check('unparseable args leave the call on the plain fallback card',
+    titleFor('Search prior sessions', 'session_search', 'not json') === undefined)
+  check('a non-session tool is never retitled',
+    titleFor('Search files', 'grep', '{"query":"x"}') === 'Search files')
+}
+
 const customs = of(live, 'custom').map(event => event.nativeType)
 check('unknown plugin events → custom', customs.includes('fixture-plugin/note') && customs.includes('other-plugin/ping') && customs.includes('developer/message'))
 
