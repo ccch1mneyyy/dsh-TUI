@@ -31,6 +31,38 @@ import {
 
 const ASK_USER_TOOL = 'ask_user_question'
 
+/**
+ * The prompt section `@deepseek-ai/dsh-experimental-session-search` contributes
+ * to the host layer once that bundle is enabled (`order: TOOL_SESSION_QUERY`).
+ * It is a section, not a tool: dropping only the five tools below would leave
+ * Minimal's model reading guidance for tools it cannot call.
+ */
+const SESSION_SEARCH_SECTION = 'tool:session-query'
+
+/**
+ * The five read-only tools the same bundle registers on the host tool layer
+ * (`@deepseek-ai/dsh-tool-session-query@0.2.1-rc.2`). The assembly carries no
+ * per-tool provenance, so these names are the only way to recognise them —
+ * same approach as `team-mode.ts`'s replaced-tool list. Renames upstream turn
+ * this carve-out into a silent no-op; `verify:minimal-preset-tools` pins them.
+ */
+const SESSION_SEARCH_TOOLS: ReadonlySet<string> = new Set([
+  'session_search',
+  'session_event_search',
+  'session_trace',
+  'session_event_trace',
+  'session_event_read',
+])
+
+/**
+ * Whether a preset's model-facing catalog is fixed by its own composition and
+ * must therefore be shielded from HOST-layer contributors the person switched
+ * on elsewhere. Only the official Minimal preset qualifies.
+ */
+function isMinimalPreset(presetId: string | undefined): boolean {
+  return presetId === 'minimal'
+}
+
 /** The composition inputs for `agents.create`/`agents.resume`. */
 export interface PresetComposition {
   /** Value for the durable header's `meta.agentPreset`; absent without a roster. */
@@ -161,28 +193,37 @@ export async function resolvePersistedRoute(ctx: Context, sessionId: SessionId):
  * @returns True when the host-layer tool must be filtered out of the assembly.
  */
 export function presetHidesHostAskTool(presetId: string | undefined): boolean {
-  return presetId === 'minimal'
+  return isMinimalPreset(presetId)
 }
 
 /**
  * Keep the official Minimal preset's model-facing catalog minimal: it declares
- * exactly one persistent shell tool, and the host-mounted ask_user_question
- * must not become a second one.
+ * exactly one persistent shell tool, and host-layer contributors the person
+ * switched on elsewhere must not become extra ones.
  *
- * This is a per-assembly filter rather than a startup-time decision because
- * one TUI process can resume, create, or recompose sessions under different
- * presets. The session log remains the source of truth for the active preset.
+ * Two such contributors are carved out here:
+ * - the host-mounted `ask_user_question` (see `presetHidesHostAskTool`);
+ * - `@deepseek-ai/dsh-experimental-session-search`, which registers five
+ *   read-only tools AND a usage-guidance section. The upstream bundle promises
+ *   "every preset including minimal"; this app intentionally deviates, because
+ *   Minimal's published promise is one persistent shell and a TUI process runs
+ *   sessions under several presets at once — hence an assembly-boundary filter
+ *   rather than a registry (or shell-whitelist) decision that would leak.
+ *
+ * This is per-assembly because one TUI process can resume, create, or
+ * recompose sessions under different presets. The session log remains the
+ * source of truth for the active preset.
  *
  * @param assembly - Fully assembled prompt inputs for one model request.
  * @param presetId - Preset recorded for the requesting session.
- * @returns The original assembly, except ask_user_question is absent in Minimal.
+ * @returns The original assembly when nothing is carved out, else the filtered copy.
  */
 export function filterMinimalPresetTools(assembly: PromptAssembly, presetId: string | undefined): PromptAssembly {
-  if (!presetHidesHostAskTool(presetId) || !assembly.tools.some(tool => tool.name === ASK_USER_TOOL)) return assembly
-  return {
-    ...assembly,
-    tools: assembly.tools.filter(tool => tool.name !== ASK_USER_TOOL),
-  }
+  if (!isMinimalPreset(presetId)) return assembly
+  const tools = assembly.tools.filter(tool => tool.name !== ASK_USER_TOOL && !SESSION_SEARCH_TOOLS.has(tool.name))
+  const sections = assembly.sections.filter(section => section.name !== SESSION_SEARCH_SECTION)
+  if (tools.length === assembly.tools.length && sections.length === assembly.sections.length) return assembly
+  return { ...assembly, tools, sections }
 }
 
 /**

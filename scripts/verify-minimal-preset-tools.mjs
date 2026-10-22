@@ -1,6 +1,8 @@
-/** Regression checks for the official Minimal preset (one persistent shell
- * tool) and the host-layer ask_user_question carve-out. Run against compiled
- * output. */
+/** Regression checks for the official Minimal preset (one persistent shell tool)
+ * and its two host-layer carve-outs — the host-mounted ask_user_question, and
+ * the experimental session-search bundle's five tools plus its prompt section
+ * (which must go together: guidance without tools is worse than neither). Run
+ * against compiled output. */
 
 import assert from 'node:assert/strict'
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
@@ -44,6 +46,29 @@ assert.equal(filterMinimalPresetTools(assembly, 'minimal-copy'), assembly)
 
 const shellOnly = { ...assembly, tools: [shell] }
 assert.equal(filterMinimalPresetTools(shellOnly, 'minimal'), shellOnly)
+
+// The session-search bundle (`@deepseek-ai/dsh-tool-session-query@0.2.1-rc.2`)
+// contributes five tools AND a `tool:session-query` prompt section at the host
+// layer. Minimal must lose both: leaving the section behind would tell the
+// model to use tools it cannot call.
+const sessionTools = ['session_search', 'session_event_search', 'session_trace',
+  'session_event_trace', 'session_event_read'].map(name => ({ name, description: '', parameters: {} }))
+const sessionSection = { name: 'tool:session-query', text: 'Use session_search to find relevant work' }
+const shellSection = { name: 'tool:bash', text: 'shell guidance' }
+const withBundle = { ...assembly, tools: [...assembly.tools, ...sessionTools], sections: [shellSection, sessionSection] }
+
+const filteredBundle = filterMinimalPresetTools(withBundle, 'minimal')
+assert.deepEqual(filteredBundle.tools.map(tool => tool.name), [shell.name])
+assert.deepEqual(filteredBundle.sections, [shellSection])
+assert.notEqual(filteredBundle, withBundle)
+
+// The input is never mutated: the filter returns a copy, and the other presets
+// keep their bundle tools and guidance untouched (same object).
+assert.equal(withBundle.tools.length, 7)
+assert.equal(withBundle.sections.length, 2)
+for (const preset of ['standard', 'ptc', 'cordis', 'liangshen', undefined, 'minimal-copy']) {
+  assert.equal(filterMinimalPresetTools(withBundle, preset), withBundle)
+}
 
 const legacyHeaderSession = {
   header: { agentPreset: 'code' },
