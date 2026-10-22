@@ -1,0 +1,51 @@
+name: Windows installer process ownership
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/update.ts'
+      - 'src/updateProcess.ts'
+      - 'src/windowsInstaller.ts'
+      - 'src/utils/shellQuote.ts'
+      - 'assets/windows-installer.*'
+      - 'scripts/verify-update-process*.mjs'
+      - 'scripts/fixtures/update-process-windows/**'
+      - '.github/workflows/update-process-windows.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/update.ts'
+      - 'src/updateProcess.ts'
+      - 'src/windowsInstaller.ts'
+      - 'src/utils/shellQuote.ts'
+      - 'assets/windows-installer.*'
+      - 'scripts/verify-update-process*.mjs'
+      - 'scripts/fixtures/update-process-windows/**'
+      - '.github/workflows/update-process-windows.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-job-ownership:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run production installer against real Win32 jobs
+        shell: pwsh
+        run: |
+          & node scripts/verify-update-process-windows.mjs 2>&1 | Tee-Object -FilePath update-process-windows.log
+          exit $LASTEXITCODE
+      - name: Upload raw native acceptance log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-process-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: update-process-windows.log
+          if-no-files-found: warn
+          retention-days: 14

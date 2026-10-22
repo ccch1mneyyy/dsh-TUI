@@ -805,6 +805,10 @@ function makeChannel() {
     cancel() {},
     clear() {},
     notify() {},
+    pushLocal(title: string, lines: readonly string[]) {
+      this.rows.push({ id: this.rows.length, kind: 'local', text: title })
+      for (const line of lines) this.rows.push({ id: this.rows.length, kind: 'local-output', text: line })
+    },
     stagedImageGeneration: () => 0,
     stageImage: async () => '[Image #1]',
     stageComposerImage: async () => ({ stageId: 'stage-1' }),

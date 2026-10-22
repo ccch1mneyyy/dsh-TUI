@@ -14,7 +14,7 @@ import { t } from '../../../i18n.js'
 import { runForegroundShell, type ForegroundShell } from '../../compat/shell.js'
 import type { ChannelBinding } from '../binding.js'
 import type { ChannelOwner } from '../owner.js'
-import { LOCAL_OUTPUT_LIMIT, preview } from '../transcript.js'
+import { LOCAL_OUTPUT_LIMIT, MAX_ROWS, preview } from '../transcript.js'
 import type { ChannelState } from '../types.js'
 import type { CoreHost } from './host.js'
 
@@ -94,6 +94,17 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
       // budget; every other report keeps the shared 240-cell preview.
       const limit = options?.lineLimit ?? LOCAL_OUTPUT_LIMIT
       const render = options?.preserveWhitespace ? previewIndented : preview
+      // Local reports cannot be restored from backend history. Retain whole
+      // recent blocks within the existing row budget, without folding facts.
+      let count = state.rows.reduce((sum, row) => sum + Number(row.kind === 'local' || row.kind === 'local-output'), lines.length + 1)
+      for (let i = 0; count > MAX_ROWS && i < state.rows.length;) {
+        if (state.rows[i]!.kind !== 'local' && state.rows[i]!.kind !== 'local-output') { i++; continue }
+        let end = i + 1
+        while (state.rows[end]?.kind === 'local-output') end++
+        count -= end - i
+        state.rows.splice(i, end - i)
+        markChannelReadDirty(state.rows)
+      }
       state.rows.push({ id: rowIds.value++, kind: 'local', text: title })
       for (const line of lines) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: render(line, limit) })
       state.emit()

@@ -107,6 +107,7 @@ import { normalizeSplashFont } from '../components/splashFonts.js'
 import { normalizeBrandSetting, resolveBrand, setActiveBrand } from '../branding.js'
 import { SETTING_GROUPS, SHORTCUT_FIELD_META, settingField } from '../settings/definitions.js'
 import instances from '../ink/instances.js'
+import { getShutdownInput, type ShutdownInput } from '../ink/shutdown-input.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ESU, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMultiplexer } from '../ink/termio/osc.js'
@@ -1681,9 +1682,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     const applyEffortDefault = (value: SettingsValue): void => {
       const next = value.effortDefault ?? null
       if (next === lastEffortDefault) return
-      lastEffortDefault = next
       const level = next === null || next === 'auto' ? undefined : next
-      channel.setDefaultEffort(level)
+      // Capability backends restore their own effort. Boot is not a live edit:
+      // Auto and resumed sessions keep that selection until the user changes it.
+      const preserve = !settingsEditsLive && backendStart !== undefined && (level === undefined || backendStart.resumedSessionId !== undefined)
+      if (!preserve && backendStart !== undefined && !channel.ready) { lastEffortDefault = undefined; return }
+      if (!preserve && (channel.setDefaultEffort(level) as unknown) === false) { lastEffortDefault = undefined; return }
+      lastEffortDefault = next
     }
     const apply = (next: SettingsValue): void => {
       applyLayout(next)
@@ -1725,6 +1730,23 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     settingsEditsLive = false
     apply(fullscreenMigration === 'unset' ? migratedSettings : bootSettings)
     settingsEditsLive = true
+    if (backendStart !== undefined) settingsCtx.effect(() => {
+      let active = true
+      let generation = channel.ready ? channel.agentBindingGeneration : undefined
+      const stop = channel.subscribe(() => {
+        if (!channel.ready || (lastEffortDefault !== undefined && generation === channel.agentBindingGeneration)) return
+        // Adoption publishes several synchronous updates before its binding generation.
+        queueMicrotask(() => {
+          if (!active || !channel.ready) return
+          if (generation !== undefined && generation !== channel.agentBindingGeneration) {
+            lastEffortDefault = scope.get().effortDefault ?? null
+          }
+          generation = channel.agentBindingGeneration
+          if (lastEffortDefault === undefined) applyEffortDefault(scope.get())
+        })
+      })
+      return () => { active = false; stop() }
+    })
     let lastTerminalImages = bootSettings.terminalImages ?? config.terminalImages ?? true
     let lastLaunchpad = bootSettings.launchpad ?? config.launchpad ?? true
     settingsCtx.effect(() => scope.watch(next => {
@@ -1927,11 +1949,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
         {
           ...settingField('effortDefault'),
+          optionsSource: 'effort',
           format(value: unknown): string {
             // Unset in settings.yaml: show what a boot would actually start
             // on (the persisted /effort choice → the cordis effort default)
             // instead of a misleading blank.
-            if (value === undefined || value === null || value === 'auto') {
+            if (value === undefined || value === null) {
               return readEffortPref() ?? config.effort ?? 'auto'
             }
             return String(value)
@@ -3404,8 +3427,13 @@ export async function finishExit(
   notice: string | undefined,
   stderrNotice: string | undefined,
   done: () => void,
-  options: { keepAltScreen?: boolean } = {},
+  options: {
+    keepAltScreen?: boolean
+    /** Explicit renderer lease for legacy wrappers that replace unmount(). */
+    shutdownInput?: ShutdownInput
+  } = {},
 ): Promise<void> {
+  const input = options.shutdownInput ?? getShutdownInput(instance)
   try {
     // Resolve the Ink runtime twice: the instances map is keyed by stdout
     // identity, so a replaced/overridden stdout misses it; the render()
@@ -3413,7 +3441,10 @@ export async function finishExit(
     // a missed lookup skipped detachForShutdown, leaving the stdin pump,
     // TTY handlers and querier alive so the self-heal probe re-wrote
     // ENABLE_MOUSE_TRACKING after DISABLE_MOUSE_TRACKING had been sent).
-    const fromMap = readInkShutdownState(instances.get(process.stdout))
+    const mapped = instances.get(input?.stdout ?? process.stdout)
+    const fromMap = input === undefined || mapped?.shutdownInput === input
+      ? readInkShutdownState(mapped)
+      : undefined
     const fromHandle = instance === undefined ? undefined : readInkShutdownState(instance)
     // A handle that exposes neither detach hook is not an Ink runtime we can
     // latch (e.g. the fake render handles in shutdown regressions) — treat it
@@ -3475,7 +3506,11 @@ export async function finishExit(
     ].join('')
     const suffix = notice === undefined ? '' : `${notice}\n`
     const restoreFrame = options.keepAltScreen === true ? '\x1b[2J\x1b[H' : ''
-    await writeStream(process.stdout, `${restoreFrame}${cleanup}\r\n${suffix}`)
+    // A replacement may already own the terminal. Its modes and frame must
+    // survive old-root disposal; a stale exit notice also belongs to that root.
+    if (input?.ownsInput() !== false) {
+      await writeStream(input?.stdout ?? process.stdout, `${restoreFrame}${cleanup}\r\n${suffix}`)
+    }
     // Re-drain AFTER the cleanup sequences have landed (#507): terminal
     // replies and mouse packets already in flight when the exit started
     // keep arriving while cleanup is being written — the detach-time drain
@@ -3485,8 +3520,9 @@ export async function finishExit(
     // environment; 50ms proved too tight there) while staying well inside
     // the exit window the user already waits through.
     await new Promise<void>(resolve => setTimeout(resolve, 150))
-    runtime?.drainStdin?.()
-    if (stderrNotice !== undefined) {
+    if (input !== undefined) input.drain()
+    else runtime?.drainStdin?.()
+    if (stderrNotice !== undefined && input?.ownsInput() !== false) {
       await writeStream(process.stderr, `\n${stderrNotice}\n`)
     }
   } catch {
@@ -3494,6 +3530,7 @@ export async function finishExit(
       ctx.logger.debug('dsh-tui: terminal cleanup failed; continuing with process shutdown')
     } catch { /* a failed diagnostic must not swallow the exit action */ }
   }
+  input?.release()
   // Filesystem-only: the exported clipboard images live in a per-process
   // temp directory that nothing else removes.
   removeClipboardImageDir()
@@ -3647,24 +3684,43 @@ function runUpdate(
   hint: (sessionId: string) => string = id => resumeCommand(profile, id),
   exitSeam?: ProcessExitSeam,
 ): void {
+  const recovery = preservedSessionTail(sessionId, hint)
   disposeRootAndThen(ctx, () => {
+    logRestartEvent('update: starting', { profile, targetVersion })
+    writeHandoffNotice(`\ndsh-tui: installation starts. Check/repair an interrupted installation before resuming.${recovery}`)
     if (profile === undefined) {
-      process.stderr.write(`\n${t('update-aborted-no-profile')}\n`)
+      writeHandoffNotice(`\n${t('update-aborted-no-profile')}${recovery}`)
       process.exit(1)
     }
-    void updateTuiAndRestart(sessionId, profile, targetVersion, kernel, superviseReplacement(exitSeam, {})).then(
+    const cancellation = new AbortController()
+    const supervision: TuiRestartOptions = superviseReplacement(exitSeam, {})
+    const replacementRequest = exitSeam?.request
+    if (exitSeam !== undefined) exitSeam.request = () => {
+      cancellation.abort()
+      // Installer owns its cancellation deadline. Entry fallback disposal
+      // must not kill this process before the owned installer tree settles.
+      return 'supervising'
+    }
+    const onSpawn = supervision.onSpawn
+    supervision.onSpawn = child => {
+      if (exitSeam !== undefined) exitSeam.request = replacementRequest
+      onSpawn?.(child)
+    }
+    void updateTuiAndRestart(sessionId, profile, targetVersion, kernel, supervision, cancellation.signal).then(
       ({ updateCode, restartCode }) => {
+        logRestartEvent('update: finished', { updateCode, restartCode })
         if (updateCode !== 0) {
-          process.stderr.write(
-            `\ndsh-tui update failed (exit ${updateCode}).${preservedSessionTail(sessionId, hint)}`,
+          writeHandoffNotice(
+            `\ndsh-tui update failed (exit ${updateCode}). Check/repair the installation before resuming.${preservedSessionTail(sessionId, hint)}`,
           )
         }
         process.exit(restartCode)
       },
       updateError => {
+        logRestartEvent('update: rejected')
         const message = updateError instanceof Error ? updateError.message : String(updateError)
-        process.stderr.write(
-          `\ndsh-tui update failed: ${message}.${preservedSessionTail(sessionId, hint)}`,
+        writeHandoffNotice(
+          `\ndsh-tui update failed: ${message}. Check/repair the installation before resuming.${preservedSessionTail(sessionId, hint)}`,
         )
         process.exit(1)
       },

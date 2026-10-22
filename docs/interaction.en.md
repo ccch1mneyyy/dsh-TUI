@@ -4,6 +4,8 @@
 `Ctrl+Q` folds running todos; while idle it hides/restores the goal/todo footer. Clicking the idle todo header hides it too. New goal/todo data or another session shows it again. Completed goals leave the footer once idle; their history remains in the Todo side panel.
 
 
+Fullscreen text selection belongs to its starting pane (chat, sidebar or one diff column). Dragging diagonally across rows, double-clicking words and triple-clicking lines retain that ownership. Copy ignores gutters and joins only that pane’s soft wraps, preserving source newlines. Scrolling the other pane does not move or invalidate the selection. Divider dragging resizes without selecting text.
+
 ## Input and global shortcuts
 
 | Key | Behavior |

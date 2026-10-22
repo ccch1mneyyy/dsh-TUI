@@ -466,6 +466,7 @@ const dict = {
   'questionnaire-answered': { zh: '📋 问卷已答 · {{total}} 题', en: '📋 Questionnaire answered · {{total}} questions' },
 
   // ── utils/loaded-context.ts ─────────────────────────────────────────
+  'command-output-truncated': { zh: '…（命令输出已截断：最多 200 行、65536 个 UTF-16 码元、每行 4000 显示单元）', en: '… (command output truncated: 200 lines, 65536 UTF-16 code units, 4000 cells per line)' },
   'context-truncated': { zh: '…（已截断）', en: '… (truncated)' },
   'context-sections': { zh: '系统提示词 {{n}} 段', en: 'System prompt {{n}} sections' },
   'context-files': { zh: '工作区指令 ×{{n}}', en: 'Workspace instructions ×{{n}}' },

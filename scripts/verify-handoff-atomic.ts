@@ -305,7 +305,7 @@ const stateTmp = mkdtempSync(join(tmpdir(), 'verify-handoff-atomic-'))
     // (the trailing argument is the standalone entry's exit seam / supervision hooks)
     /runRestart\(ctx, profile, handoffSessionId\(\), handoffHint, \{ kernel: backendChoice \}(, exitSeam)?\)/.test(plugin)
     && /runUpdate\(ctx, profile, handoffSessionId\(\), updateTargetVersion, backendChoice, handoffHint(, exitSeam)?\)/.test(plugin)
-    && /updateTuiAndRestart\(sessionId, profile, targetVersion, kernel(, superviseReplacement\(exitSeam, \{\}\))?\)/.test(plugin))
+    && /updateTuiAndRestart\(sessionId, profile, targetVersion, kernel, supervision, cancellation\.signal\)/.test(plugin))
   // The toast the composer raises for `/restart` dies with the unmount; the
   // handoff notice written by finishExit is the line the user actually reads.
   // It must own the mid-turn warning (turn interrupted, queue dropped), or the

@@ -311,6 +311,15 @@ pnpm dev:copy-config
 pnpm dev
 ```
 
+`pnpm dev` 默认保留完整 install/build/pack 检查。显式本地快速迭代可设置
+`DSH_TUI_DEV_FAST=1`，例如 `DSH_TUI_DEV_FAST=1 pnpm dev -- --no-launch`。
+缓存未命中时执行 frozen install、`compile`、不重复 `prepare` 的打包与隔离安装。
+只有源码/配置与编译加载器内容、Node/pnpm/npm/dsh 版本、编译与 vendor 产物、tarball 和已安装包/profile 均匹配时，
+才跳过这四步。若替换 pnpm/npm/dsh 而报告版本不变，须先运行一次普通（非 fast）开发流程。内部文档链接（如 `CLAUDE.md -> AGENTS.md`）参与指纹；树外、被排除、
+悬空或循环链接以及不可读输入会禁用复用并打印原因。工作开始前即作废旧成功标记，
+失败不写新标记。脚本输出阶段耗时与命中状态。发布前仍须正常执行 `pnpm build`
+和聚焦回归；快速模式不改变发布门禁。
+
 `pnpm dev:copy-config` 只复制 `~/.dsh/settings.yaml` 与
 `~/.dsh/.credentials.yaml`。Unix 上文件权限设为 `0600`；Windows 使用系统管理的
 文件 ACL。

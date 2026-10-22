@@ -8,11 +8,13 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { commandInvocation } from './dev-command.mjs'
 import { resolveDevPaths } from './dev-copy-config.mjs'
+import { devInputHash, devOutputHash, treeHash, installedHash, reusableInstall } from './lib/dev-install-cache.mjs'
 
 const isWindows = process.platform === 'win32'
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -25,31 +27,38 @@ function usage() {
     '',
     'Environment:',
     '  DSH_TUI_DEV_ROOT   Persistent isolated test root.',
+    '  DSH_TUI_DEV_FAST=1 Compile without build gates; reuse a verified unchanged install.',
     '  DSH_SOURCE_HOME    Source settings directory (default: ~/.dsh).',
   ].join('\n'))
 }
 
 function run(name, args, options = {}) {
+  const started = performance.now()
   const result = spawnSync(...commandInvocation(name, args), {
     cwd: repoRoot,
     stdio: 'inherit',
     shell: isWindows,
     ...options,
   })
+  console.log(`dev-test: ${name} ${args[0]} took ${((performance.now() - started) / 1000).toFixed(1)}s`)
   if (result.error) throw result.error
   if (result.status !== 0) {
     throw new Error(`${name} ${args.join(' ')} exited with ${String(result.status)}`)
   }
+  return result
 }
 
 function requireCommand(name) {
   const result = spawnSync(...commandInvocation(name, ['--version']), {
-    stdio: 'ignore',
+    stdio: 'pipe',
+    encoding: 'utf8',
     shell: isWindows,
   })
   if (result.error || result.status !== 0) {
     throw new Error(`required command not found: ${name}`)
   }
+  const version = String(result.stdout).trim()
+  return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version) ? `${name}:${version}` : undefined
 }
 
 function assertSameFile(source, installed) {
@@ -73,52 +82,79 @@ const noLaunch = args[0] === '--no-launch'
 if (noLaunch) args = args.slice(1)
 
 try {
-  requireCommand('pnpm')
-  requireCommand('dsh')
+  const toolVersions = [requireCommand('pnpm'), requireCommand('dsh'), requireCommand('npm')]
 
   const { devRoot, isolatedHome, dshHome, sessionRoot } = resolveDevPaths()
   const packageRoot = join(devRoot, 'packages')
-  const runId = `${new Date().toISOString().replaceAll(/[-:.]/gu, '')}-${process.pid}`
-  const packDir = join(packageRoot, runId)
+  let runId = `${new Date().toISOString().replaceAll(/[-:.]/gu, '')}-${process.pid}`
+  let packDir = join(packageRoot, runId)
 
   for (const directory of [devRoot, isolatedHome, dshHome, sessionRoot, packageRoot, packDir]) {
     secureDirectory(directory)
   }
 
-  run('pnpm', ['install', '--frozen-lockfile'])
-  run('pnpm', ['build'])
-  // npm pack, not pnpm: @dsh-std/* are bundledDependencies (#308) and pnpm
-  // refuses to pack them under the isolated linker
-  // (ERR_PNPM_BUNDLED_DEPENDENCIES_WITHOUT_HOISTED) - same reason publish.yml
-  // switched to npm publish (1801177).
-  run('npm', ['pack', '--pack-destination', packDir])
-
-  const tarballs = readdirSync(packDir)
-    .filter(file => file.endsWith('.tgz'))
-    .map(file => join(packDir, file))
-  if (tarballs.length !== 1) {
-    throw new Error(`expected one tarball in ${packDir}, found ${tarballs.length}`)
-  }
-  const tarball = tarballs[0]
-
-  run('dsh', ['plugin', '--profile', 'dsh-tui', 'add', tarball], {
-    env: { ...process.env, DSH_HOME: dshHome },
-  })
-
-  const installed = join(
-    dshHome,
-    'profiles',
-    'dsh-tui',
-    'node_modules',
-    '@deepseek-harness-tui',
-    'dsh-tui',
-  )
-  for (const file of [
-    'bin/dsh-tui.js',
-    'cordis.patch.yml',
-    'lib/types/index.js',
-  ]) {
-    assertSameFile(join(repoRoot, file), join(installed, file))
+  const installed = join(dshHome, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+  const stampFile = join(devRoot, 'dev-install-cache.json')
+  const fast = process.env.DSH_TUI_DEV_FAST === '1'
+  let inputs = fast ? devInputHash(repoRoot, devRoot, toolVersions) : undefined
+  let stamp
+  try { stamp = JSON.parse(readFileSync(stampFile, 'utf8')) } catch { /* Cache miss. */ }
+  let tarball
+  if (fast && reusableInstall(stamp, { repoRoot, packageRoot, installed, inputs })) {
+    tarball = stamp.tarball
+    packDir = dirname(tarball)
+    runId = dirname(tarball).split(/[\\/]/u).at(-1)
+    console.log('dev-test: cache hit; skipping install, compile, pack and plugin add')
+  } else {
+    if (fast) console.log('dev-test: cache miss; preparing current worktree')
+    // Invalidate before any command can partially change outputs or the profile.
+    rmSync(stampFile, { force: true })
+    run('pnpm', ['install', '--frozen-lockfile'])
+    inputs = fast ? devInputHash(repoRoot, devRoot, toolVersions) : undefined
+    run('pnpm', [fast ? 'compile' : 'build'])
+    // Fast mode has just compiled; npm pack's prepare would compile again.
+    // The full path keeps every original lifecycle and build gate.
+    const packed = run('npm', ['pack', ...(fast ? ['--ignore-scripts', '--json'] : []), '--pack-destination', packDir],
+      fast ? { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' } : {})
+    const packedFiles = fast ? JSON.parse(packed.stdout)[0]?.files : undefined
+    if (fast && (!Array.isArray(packedFiles) || packedFiles.length === 0)) {
+      throw new Error('npm pack did not report its packaged files')
+    }
+    const tarballs = readdirSync(packDir).filter(file => file.endsWith('.tgz')).map(file => join(packDir, file))
+    if (tarballs.length !== 1) throw new Error(`expected one tarball in ${packDir}, found ${tarballs.length}`)
+    tarball = tarballs[0]
+    run('dsh', ['plugin', '--profile', 'dsh-tui', 'add', tarball], {
+      env: { ...process.env, DSH_HOME: dshHome },
+    })
+    for (const file of ['bin/dsh-tui.js', 'cordis.patch.yml', 'lib/types/index.js']) {
+      assertSameFile(join(repoRoot, file), join(installed, file))
+    }
+    if (fast) {
+      // Verify the actual package manifest, including non-entry modules,
+      // presets and assets, before blessing a successful install for reuse.
+      for (const entry of packedFiles) {
+        if (typeof entry.path !== 'string' || !entry.path || entry.path.split(/[\\/]/u).includes('..')
+          || /^(?:[\\/]|[A-Za-z]:)/u.test(entry.path)) {
+          throw new Error('npm pack reported an invalid packaged path')
+        }
+        assertSameFile(join(repoRoot, entry.path), join(installed, entry.path))
+      }
+      const expected = new Set(packedFiles.map(entry => entry.path))
+      for (const entry of readdirSync(installed, { recursive: true, withFileTypes: true })) {
+        if (!entry.isDirectory()) {
+          const path = relative(installed, join(entry.parentPath, entry.name)).replaceAll('\\', '/')
+          if (!expected.has(path)) throw new Error(`installed package contains an unpacked file: ${path}`)
+        }
+      }
+    }
+    if (fast && inputs !== undefined && inputs === devInputHash(repoRoot, devRoot, toolVersions)) {
+      const outputs = devOutputHash(repoRoot)
+      const profile = installedHash(installed)
+      const artifact = treeHash(tarball)
+      if (outputs && profile && artifact) {
+        writeFileSync(stampFile, JSON.stringify({ repoRoot, inputs, outputs, profile, tarball, artifact }))
+      }
+    }
   }
 
   // Keep the current file dependency available, but cap the script-owned cache

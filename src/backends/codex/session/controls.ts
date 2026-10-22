@@ -50,7 +50,7 @@ const planOption = (): ModeOption => ({ id: 'plan', label: codexText('codex-mode
 
 export function createCodexControls(deps: ControlsDeps) {
   const { hub, settings, ctx, prefs } = deps
-  let rows: readonly Rec[] = []
+  let rows: readonly Rec[] | undefined
   let planSupported = true
   let settingsSupported = true
   let pending: Record<string, unknown> = {}
@@ -79,7 +79,7 @@ export function createCodexControls(deps: ControlsDeps) {
     for (const mapped of deps.mappedModels?.() ?? []) if (!options.some(option => option.id === mapped.id)) options.push(mapped)
     return options
   }
-  const currentRow = (): Rec | undefined => rows.find(row => row.model === settings.model || row.id === settings.model)
+  const currentRow = (): Rec | undefined => rows?.find(row => row.model === settings.model || row.id === settings.model)
   const collaboration = (mode: 'plan' | 'default', model = settings.model, effort = settings.effort): Rec => ({ mode, settings: { model, reasoning_effort: effort, developer_instructions: null } })
 
   /** An accepted update is sticky server-side, not an override for every turn. */
@@ -141,7 +141,7 @@ export function createCodexControls(deps: ControlsDeps) {
       async set(ref) {
         await models()
         const model = deps.actualModel?.(ref.model) ?? ref.model
-        const nextRow = rows.find(row => row.model === model || row.id === model)
+        const nextRow = rows?.find(row => row.model === model || row.id === model)
         const available = arr(nextRow?.supportedReasoningEfforts).map(raw => str(rec(raw)?.reasoningEffort))
         const effort = settings.effort !== null && available.length > 0 && !available.includes(settings.effort) ? str(nextRow?.defaultReasoningEffort) ?? null : settings.effort
         await update({ model, ...(effort === settings.effort ? {} : { effort }) })
@@ -155,15 +155,16 @@ export function createCodexControls(deps: ControlsDeps) {
       },
     },
     effort: {
+      get levelsAvailable() { return rows !== undefined },
       levels: () => effortLevels(currentRow()),
       forModel: ref => {
         const model = deps.actualModel?.(ref.model) ?? ref.model
-        const row = rows.find(row => row.model === model || row.id === model)
+        const row = rows?.find(row => row.model === model || row.id === model)
         return { levels: effortLevels(row), defaultEffort: str(row?.defaultReasoningEffort) }
       },
       current: () => settings.effort ?? undefined,
       async set(id) {
-        if (rows.length === 0) await models()
+        if (rows === undefined || rows.length === 0) await models()
         if (id !== null && !effortLevels(currentRow()).some(option => option.id === id)) throw new Error(codexText('effort-invalid', { id, ids: effortLevels(currentRow()).map(option => option.id).join(', ') }))
         const applied = id ?? str(currentRow()?.defaultReasoningEffort) ?? null
         await update({ effort: applied })

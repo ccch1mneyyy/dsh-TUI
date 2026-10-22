@@ -144,6 +144,7 @@ export type SelectionState = {
    *  panel's columns on every covered row — the chat column on intermediate
    *  rows is never captured. Undefined for gestures without the fence. */
   fence?: { colStart: number; colEnd: number }
+  paneId?: string
 }
 
 /**
@@ -211,6 +212,16 @@ export function startSelection(
     s.fence = { colStart, colEnd }
   } else {
     s.fence = undefined
+  }
+  s.paneId = undefined
+  let paneWidth = Infinity
+  for (const [id, rows] of screen?.selectionPanes ?? []) {
+    const span = rows.get(row)
+    if (!span || col < span.start || col >= span.end || span.end - span.start >= paneWidth || span.excluded?.some(range => col >= range.start && col < range.end)) continue
+    paneWidth = span.end - span.start
+    s.paneId = id
+    s.fence = { colStart: span.start, colEnd: span.end - 1 }
+    s.includeNoSelectCells = false
   }
   // Focus is not set until the first drag motion. A click-release with no
   // drag leaves focus null → hasSelection/selectionBounds return false/null
@@ -307,6 +318,7 @@ export function clearSelection(s: SelectionState): void {
   s.stale = false
   s.includeNoSelectCells = false
   s.fence = undefined
+  s.paneId = undefined
 }
 
 // Unicode-aware word character matcher: letters (any script), digits,
@@ -424,10 +436,10 @@ export function selectWordAt(
   col: number,
   row: number,
 ): void {
-  const b = wordBoundsAt(screen, col, row, s.includeNoSelectCells)
+  const b = wordBoundsAt(screen, clamp(col, s.fence?.colStart ?? 0, s.fence?.colEnd ?? screen.width - 1), row, s.includeNoSelectCells)
   if (!b) return
-  const lo = { col: b.lo, row }
-  const hi = { col: b.hi, row }
+  const lo = { col: Math.max(b.lo, s.fence?.colStart ?? 0), row }
+  const hi = { col: Math.min(b.hi, s.fence?.colEnd ?? screen.width - 1), row }
   s.anchor = lo
   s.focus = hi
   s.isDragging = true
@@ -560,8 +572,8 @@ export function selectLineAt(
   row: number,
 ): void {
   if (row < 0 || row >= screen.height) return
-  const lo = { col: 0, row }
-  const hi = { col: screen.width - 1, row }
+  const lo = { col: s.fence?.colStart ?? 0, row }
+  const hi = { col: s.fence?.colEnd ?? screen.width - 1, row }
   s.anchor = lo
   s.focus = hi
   s.isDragging = true
@@ -591,13 +603,13 @@ export function extendSelection(
   let mLo: Point
   let mHi: Point
   if (span.kind === 'word') {
-    const b = wordBoundsAt(screen, col, row, s.includeNoSelectCells)
-    mLo = { col: b ? b.lo : col, row }
-    mHi = { col: b ? b.hi : col, row }
+    const b = wordBoundsAt(screen, clamp(col, s.fence?.colStart ?? 0, s.fence?.colEnd ?? screen.width - 1), row, s.includeNoSelectCells)
+    mLo = { col: Math.max(b ? b.lo : col, s.fence?.colStart ?? 0), row }
+    mHi = { col: Math.min(b ? b.hi : col, s.fence?.colEnd ?? screen.width - 1), row }
   } else {
     const r = clamp(row, 0, screen.height - 1)
-    mLo = { col: 0, row: r }
-    mHi = { col: screen.width - 1, row: r }
+    mLo = { col: s.fence?.colStart ?? 0, row: r }
+    mHi = { col: s.fence?.colEnd ?? screen.width - 1, row: r }
   }
   if (comparePoints(mHi, span.lo) < 0) {
     // Mouse target ends before anchor span: extend backward.
@@ -1107,6 +1119,8 @@ export type ScrollEvent = {
   delta: number
   viewportTop: number
   viewportBottom: number
+  viewportLeft?: number
+  viewportRight?: number
   /** Current viewport rows map to PREVIOUS screen rows by this offset. */
   screenRowOffset?: number
 }
@@ -1128,11 +1142,13 @@ export type ScrollEvent = {
 export function pickFollowForSelection<T extends ScrollEvent>(
   events: T[],
   anchorRow: number | null,
+  anchorCol?: number,
 ): T | null {
   if (anchorRow === null) return null
   let best: T | null = null
   let bestHeight = Infinity
   for (const e of events) {
+    if (anchorCol !== undefined && (anchorCol < (e.viewportLeft ?? 0) || anchorCol > (e.viewportRight ?? Infinity))) continue
     if (anchorRow < e.viewportTop || anchorRow > e.viewportBottom) continue
     const height = e.viewportBottom - e.viewportTop
     if (best === null || height < bestHeight) {
@@ -1171,9 +1187,9 @@ export function selectionBounds(s: SelectionState): {
   // side panel selects only panel columns, never the chat column that
   // shares the intermediate rows.
   if (s.fence !== undefined) {
-    const colStart = Math.max(start.col, s.fence.colStart)
-    const colEnd = Math.min(end.col, s.fence.colEnd)
-    if (colStart > colEnd) return null
+    const colStart = clamp(start.col, s.fence.colStart, s.fence.colEnd)
+    const colEnd = clamp(end.col, s.fence.colStart, s.fence.colEnd)
+    if (start.row === end.row && colStart > colEnd) return null
     return { start: { col: colStart, row: start.row }, end: { col: colEnd, row: end.row } }
   }
   return { start, end }
@@ -1195,10 +1211,92 @@ export function isCellSelected(
   const b = selectionBounds(s)
   if (!b) return false
   const { start, end } = b
+  if (s.fence && (col < s.fence.colStart || col > s.fence.colEnd)) return false
   if (row < start.row || row > end.row) return false
   if (row === start.row && col < start.col) return false
   if (row === end.row && col > end.col) return false
   return true
+}
+
+function paneSpan(s: SelectionState, screen: Screen, row: number) {
+  return s.paneId === undefined ? undefined : screen.selectionPanes?.get(s.paneId)?.get(row)
+}
+
+function paneCellVisible(s: SelectionState, screen: Screen, row: number, col: number): boolean {
+  return !paneSpan(s, screen, row)?.excluded?.some(range => col >= range.start && col < range.end)
+}
+
+function selectedWrap(s: SelectionState, screen: Screen, row: number): number {
+  return s.paneId === undefined ? screen.softWrap[row] ?? 0 : paneSpan(s, screen, row)?.wrap ?? 0
+}
+
+/** Map logical text offsets back to cells when a pane reflows horizontally.
+ * Uses the same noSelect, wrap and grapheme rules as the copy path. Semantic
+ * image regions cannot be mapped to character cells and keep the stale guard.
+ */
+function paneTextMap(s: SelectionState, screen: Screen): { text: string; points: Point[] } | undefined {
+  const spans = screen.selectionPanes?.get(s.paneId!)
+  if (!spans) return
+  let text = ''
+  const points: Point[] = []
+  for (const [row, span] of [...spans].sort(([a], [b]) => a - b)) {
+    if (screen.noSelect.subarray(row * screen.width + span.start, row * screen.width + span.end).every(bit => bit === 1)) continue
+    const data = extractRowText(screen, row, span.start, span.end - 1, true, false, s)
+    if (data.regions.length > 0) return
+    if (text.length > 0 && !data.sw) { text += '\n'; points.push({ col: span.start, row }) }
+    const rowPoints: Point[] = []
+    for (let col = span.start; col < span.end; col++) {
+      if (screen.noSelect[row * screen.width + col] === 1 || !paneCellVisible(s, screen, row, col)) continue
+      const cell = cellAt(screen, col, row)
+      if (!cell || cell.width === CellWidth.SpacerTail || cell.width === CellWidth.SpacerHead) continue
+      for (let i = 0; i < cell.char.length; i++) rowPoints.push({ col, row })
+    }
+    text += data.text
+    for (let i = 0; i < data.text.length; i++) points.push(rowPoints[i] ?? { col: span.end - 1, row })
+  }
+  return { text: text.trimEnd(), points: points.slice(0, text.trimEnd().length) }
+}
+
+/** Re-anchor by logical offsets, not screen columns, when a pane reflows. */
+export function refreshSelectionPane(s: SelectionState, screen: Screen, previous?: Screen): boolean {
+  if (s.paneId === undefined || s.anchor === null) return false
+  const span = paneSpan(s, screen, s.anchor.row)
+    ?? screen.selectionPanes?.get(s.paneId)?.values().next().value
+  if (!span) { clearSelection(s); return true }
+  // A captured anchor no longer denotes the row clamped to the viewport edge.
+  // Its replacement may have a different span within the same diff pane;
+  // a viewport pane still provides its column geometry after the anchor leaves.
+  if (s.virtualAnchorRow !== undefined && !span.viewport) return false
+  const old = s.fence
+  const delta = span.start - (old?.colStart ?? span.start)
+  const changed = delta !== 0 || old?.colEnd !== span.end - 1
+  if (changed && s.focus && previous) {
+    const bounds = selectionBounds(s)!
+    const before = paneTextMap(s, previous)
+    const after = paneTextMap(s, screen)
+    if (before && after && before.text === after.text) {
+      const first = before.points.findIndex(point => comparePoints(point, bounds.start) >= 0)
+      let last = before.points.length - 1
+      while (last >= 0 && comparePoints(before.points[last]!, bounds.end) > 0) last--
+      if (first >= 0 && last >= first && after.points[first] && after.points[last]) {
+        const reverse = comparePoints(s.anchor, s.focus) > 0
+        s.anchor = { ...after.points[reverse ? last : first]! }
+        s.focus = { ...after.points[reverse ? first : last]! }
+        // A completed word/line selection no longer needs the old screen span.
+        s.anchorSpan = null
+      } else s.stale = true
+    } else {
+      // A resize that also replaces/clips content is not evidence that the
+      // old selection still denotes it. Never bless changed clipboard bytes.
+      s.stale = true
+    }
+  } else if (changed) {
+    for (const point of new Set([s.anchor, s.focus, s.anchorSpan?.lo, s.anchorSpan?.hi])) {
+      if (point) point.col = clamp(point.col + delta, span.start, span.end - 1)
+    }
+  }
+  s.fence = { colStart: span.start, colEnd: span.end - 1 }
+  return changed
 }
 
 /** Extract text from one screen row, plus the copy regions it touches.
@@ -1213,17 +1311,19 @@ function extractRowText(
   colEnd: number,
   continuesSelection: boolean,
   includeNoSelect = false,
+  selection?: SelectionState,
 ): SelectionRow {
   const noSelect = screen.noSelect
   const copyRegion = screen.copyRegion
   const rowOff = row * screen.width
-  const next = row + 1 < screen.height ? screen.softWrap[row + 1]! : 0
+  const next = row + 1 < screen.height ? (selection ? selectedWrap(selection, screen, row + 1) : screen.softWrap[row + 1]!) : 0
   const contentEnd = Math.abs(next)
   const lastCol = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) : colEnd
   let line = ''
   const regions: SelectionRegion[] = []
   let lastRegion = 0
   for (let col = colStart; col <= lastCol; col++) {
+    if (selection && !paneCellVisible(selection, screen, row, col)) continue
     // Skip cells marked noSelect (gutters, line numbers, diff sigils) unless
     // this gesture anchored inside a noSelect region (the direction fence:
     // a panel-origin drag selects panel text). Check before cellAt to avoid
@@ -1262,7 +1362,7 @@ function extractRowText(
   const tail = regions.length > 0 ? regions[regions.length - 1]!.at : 0
   return {
     text: contentEnd > 0 ? line : line.slice(0, tail) + line.slice(tail).replace(/\s+$/, ''),
-    sw: screen.softWrap[row]! !== 0,
+    sw: (selection ? selectedWrap(selection, screen, row) : screen.softWrap[row]) !== 0,
     regions,
   }
 }
@@ -1408,6 +1508,13 @@ export function refreshSelectionFingerprint(
     s.coveredText = null
   }
   if (s.stale) return false
+  if (s.paneId !== undefined) {
+    const text = getSelectedText(s, screen)
+    const changed = s.coveredText !== null && s.coveredText !== text && !coordinated
+    s.coveredText = text
+    if (changed) s.stale = true
+    return changed
+  }
   const { cells, noSelect, width, height, charPool, softWrap } = screen
   const copyRegion = screen.copyRegion
   const copyTexts = screen.copyTexts
@@ -1553,14 +1660,18 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
     let rowEnd = row === end.row ? end.col : screen.width - 1
     // Fence (panel-origin gestures) applies to EVERY row, not just the
     // endpoints: intermediate rows must not span into the chat column.
-    if (s.fence !== undefined) {
-      rowStart = Math.max(rowStart, s.fence.colStart)
-      rowEnd = Math.min(rowEnd, s.fence.colEnd)
+    const pane = paneSpan(s, screen, row)
+    if (s.paneId !== undefined && !pane) continue
+    const fence = pane ? { colStart: pane.start, colEnd: pane.end - 1 } : s.fence
+    if (fence !== undefined) {
+      rowStart = Math.max(rowStart, fence.colStart)
+      rowEnd = Math.min(rowEnd, fence.colEnd)
       if (rowStart > rowEnd) continue
     }
+    if (s.paneId !== undefined && (screen.noSelect.subarray(row * screen.width + rowStart, row * screen.width + rowEnd + 1).every(bit => bit === 1) || pane?.excluded?.some(range => range.start <= rowStart && range.end > rowEnd))) continue
     rows.push(extractRowText(
       screen, row, rowStart, rowEnd,
-      row < end.row || s.scrolledOffBelow.length > 0, s.includeNoSelectCells,
+      row < end.row || s.scrolledOffBelow.length > 0, s.includeNoSelectCells, s,
     ))
   }
 
@@ -1578,7 +1689,7 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
  * drag-to-scroll, BEFORE scrollBy overwrites them. Only the rows that
  * intersect the selection are captured, using the selection's col bounds
  * for the anchor-side boundary row. After capturing the anchor row, the
- * anchor.col AND anchorSpan cols are reset to the full-width boundary so
+ * anchor.col AND anchorSpan cols are reset to the pane boundary so
  * subsequent captures and the final getSelectedText don't re-apply a stale
  * col constraint to content that's no longer under the original anchor.
  * Both span cols are reset (not just the near side): after a blocked
@@ -1612,14 +1723,19 @@ export function captureScrolledRows(
   if (lo > hi) return
 
   const width = screen.width
+  const edgeLo = s.fence?.colStart ?? 0
+  const edgeHi = s.fence?.colEnd ?? width - 1
   const captured: SelectionRow[] = []
   for (let row = lo; row <= hi; row++) {
-    const colStart = row === start.row ? start.col : 0
-    const colEnd = row === end.row ? end.col : width - 1
     const screenRow = row - screenRowOffset
+    const pane = paneSpan(s, screen, screenRow)
+    if (s.paneId !== undefined && !pane) continue
+    const colStart = Math.max(row === start.row ? start.col : 0, pane?.start ?? s.fence?.colStart ?? 0)
+    const colEnd = Math.min(row === end.row ? end.col : width - 1, pane ? pane.end - 1 : s.fence?.colEnd ?? width - 1)
+    if (colStart > colEnd || (s.paneId !== undefined && (screen.noSelect.subarray(screenRow * width + colStart, screenRow * width + colEnd + 1).every(bit => bit === 1) || pane?.excluded?.some(range => range.start <= colStart && range.end > colEnd)))) continue
     captured.push(extractRowText(
       screen, screenRow, colStart, colEnd,
-      row < end.row || s.scrolledOffBelow.length > 0, s.includeNoSelectCells,
+      row < end.row || s.scrolledOffBelow.length > 0, s.includeNoSelectCells, s,
     ))
   }
 
@@ -1629,15 +1745,15 @@ export function captureScrolledRows(
     s.scrolledOffAbove.push(...captured)
     // We just captured the top of the selection. The anchor (=start when
     // dragging down) is now pointing at content that will scroll out; its
-    // col constraint was applied to the captured row. Reset to col 0 so
+    // col constraint was applied to the captured row. Reset to the pane edge so
     // the NEXT tick and the final getSelectedText read the full row.
     if (s.anchor && s.anchor.row === start.row && lo === start.row) {
-      s.anchor = { col: 0, row: s.anchor.row }
+      s.anchor = { col: edgeLo, row: s.anchor.row }
       if (s.anchorSpan) {
         s.anchorSpan = {
           kind: s.anchorSpan.kind,
-          lo: { col: 0, row: s.anchorSpan.lo.row },
-          hi: { col: width - 1, row: s.anchorSpan.hi.row },
+          lo: { col: edgeLo, row: s.anchorSpan.lo.row },
+          hi: { col: edgeHi, row: s.anchorSpan.hi.row },
         }
       }
     }
@@ -1646,12 +1762,12 @@ export function captureScrolledRows(
     // closest to the on-screen content.
     s.scrolledOffBelow.unshift(...captured)
     if (s.anchor && s.anchor.row === end.row && hi === end.row) {
-      s.anchor = { col: width - 1, row: s.anchor.row }
+      s.anchor = { col: edgeHi, row: s.anchor.row }
       if (s.anchorSpan) {
         s.anchorSpan = {
           kind: s.anchorSpan.kind,
-          lo: { col: 0, row: s.anchorSpan.lo.row },
-          hi: { col: width - 1, row: s.anchorSpan.hi.row },
+          lo: { col: edgeLo, row: s.anchorSpan.lo.row },
+          hi: { col: edgeHi, row: s.anchorSpan.hi.row },
         }
       }
     }
@@ -1670,22 +1786,24 @@ function selectedRowColumns(
   const width = screen.width
   let colStart = Math.max(0, row === start.row ? start.col : 0)
   let colEnd = row === end.row ? Math.min(end.col, width - 1) : width - 1
-  // Panel-origin gestures are clipped to their column fence on every row.
-  if (selection.fence !== undefined) {
-    colStart = Math.max(colStart, selection.fence.colStart)
-    colEnd = Math.min(colEnd, selection.fence.colEnd)
+  const pane = paneSpan(selection, screen, row)
+  if (selection.paneId !== undefined && !pane) return null
+  const fence = pane ? { colStart: pane.start, colEnd: pane.end - 1 } : selection.fence
+  if (fence !== undefined) {
+    colStart = Math.max(colStart, fence.colStart)
+    colEnd = Math.min(colEnd, fence.colEnd)
   }
   if (colStart > colEnd) return null
   const rowOff = row * width
   // Ignore excluded columns when finding the last content cell: text in
   // the side panel must not extend a chat-origin highlight or cursor.
-  const rowStart = selection.fence?.colStart ?? 0
-  let rowEnd = Math.min(selection.fence?.colEnd ?? width - 1, width - 1)
-  const wrappedEnd = row + 1 < screen.height ? screen.softWrap[row + 1]! : 0
+  const rowStart = fence?.colStart ?? 0
+  let rowEnd = Math.min(fence?.colEnd ?? width - 1, width - 1)
+  const wrappedEnd = row + 1 < screen.height ? selectedWrap(selection, screen, row + 1) : 0
   if (wrappedEnd > 0) rowEnd = Math.min(rowEnd, wrappedEnd - 1)
   for (let col = rowEnd; col >= rowStart; col--) {
     const idx = rowOff + col
-    if (screen.noSelect[idx] === 1 && !selection.includeNoSelectCells) continue
+    if (!paneCellVisible(selection, screen, row, col) || (screen.noSelect[idx] === 1 && !selection.includeNoSelectCells)) continue
     const cell = cellAtIndex(screen, idx)
     if (cell.width === CellWidth.SpacerTail || cell.width === CellWidth.SpacerHead) continue
     if ((screen.copyRegion?.[idx] ?? 0) !== 0 || cell.char.trim() !== '') {
@@ -1715,7 +1833,7 @@ export function getSelectionCursor(screen: Screen, selection: SelectionState): P
     if (columns === null) continue
     for (let col = forward ? columns.end : columns.start; col >= columns.start && col <= columns.end; col += step) {
       const idx = row * screen.width + col
-      if (screen.noSelect[idx] === 1 && !selection.includeNoSelectCells) continue
+      if (!paneCellVisible(selection, screen, row, col) || (screen.noSelect[idx] === 1 && !selection.includeNoSelectCells)) continue
       const cell = cellAtIndex(screen, idx)
       if (cell.width === CellWidth.SpacerTail || cell.width === CellWidth.SpacerHead) continue
       return { col, row }
@@ -1766,7 +1884,7 @@ export function applySelectionOverlay(
       // still highlight so the selection extent remains visible. A gesture
       // that ANCHORED on a noSelect cell (the direction fence) inverts this:
       // those cells are the selection's subject, so they must highlight.
-      if (noSelect[idx] === 1 && !selection.includeNoSelectCells) continue
+      if (!paneCellVisible(selection, screen, row, col) || (noSelect[idx] === 1 && !selection.includeNoSelectCells)) continue
       // Skip cells a terminal image is painted over: Kitty draws images
       // below cells with a non-default background, so a highlighted cell
       // would hide the image (a selected formula turned into a blank box).

@@ -25,7 +25,7 @@
  * Defaults: --from $DSH_TUI_SESSION_ROOT ?? ~/.dsh-tui/sessions.sqlite
  *           --to   $DSH_HOME/sessions ?? ~/.dsh/sessions
  */
-import { chmodSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -40,6 +40,7 @@ import { historicalChildCatalogSource } from '@deepseek-ai/dsh-session-format-v3
 import SqliteSessionPersistence, { Context as LegacyContext, SessionStore as LegacySessionStore } from '../vendor/sqlite-island/index.js'
 import * as JsonlSessionPersistenceModule from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { settled } from './lib/term-test.mjs'
+import { backupSqliteSnapshot } from './lib/sqlite-snapshot.mjs'
 
 const JsonlSessionPersistence = 'default' in JsonlSessionPersistenceModule ? JsonlSessionPersistenceModule.default : JsonlSessionPersistenceModule
 
@@ -59,14 +60,7 @@ if (!existsSync(from)) {
 
 const scratch = mkdtempSync(join(tmpdir(), 'dsh-tui-sqlite-migration-'))
 try {
-  const { DatabaseSync, backup } = await import('node:sqlite')
-  const sourceDb = new DatabaseSync(from, { readOnly: true })
-  try {
-    await backup(sourceDb, join(scratch, 'sessions.sqlite'))
-    chmodSync(join(scratch, 'sessions.sqlite'), 0o600)
-  } finally {
-    sourceDb.close()
-  }
+  await backupSqliteSnapshot(from, join(scratch, 'sessions.sqlite'))
   const src = new LegacyContext()
   const srcSessions = src.plugin(LegacySessionStore)
   const srcPlugin = src.plugin(SqliteSessionPersistence, { path: join(scratch, 'sessions.sqlite') })

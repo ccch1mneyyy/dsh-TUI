@@ -434,6 +434,10 @@ export type Styles = {
    * doesn't pick up leading whitespace from middle rows.
    */
   readonly noSelect?: boolean | 'from-left-edge'
+  /** Stable copy ownership for a pane; metadata is one span per visible row. */
+  readonly selectionPane?: string
+  /** A pane wrapping scroll viewports keeps its geometry while contents move. */
+  readonly selectionPaneViewport?: boolean
 
   /**
    * This one-row box continues the line of the row above it: the break

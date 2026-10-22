@@ -122,6 +122,13 @@ function copyUpdateModule(dstDir) {
   mkdirSync(join(dstDir, 'agent'), { recursive: true })
   mkdirSync(join(dstDir, 'backends', 'shared'), { recursive: true })
   cpSync(compiledModulePath, join(dstDir, 'update.js'))
+  cpSync(new URL('../lib/types/updateProcess.js', import.meta.url), join(dstDir, 'updateProcess.js'))
+  cpSync(new URL('../lib/types/windowsInstaller.js', import.meta.url), join(dstDir, 'windowsInstaller.js'))
+  const packageRoot = dstDir.endsWith(join('lib', 'types')) ? join(dstDir, '..', '..') : join(dstDir, '..')
+  mkdirSync(join(packageRoot, 'assets'), { recursive: true })
+  for (const name of ['windows-installer.ps1', 'windows-installer.cs']) {
+    cpSync(new URL('../assets/' + name, import.meta.url), join(packageRoot, 'assets', name))
+  }
   cpSync(compiledShellQuotePath, join(dstDir, 'utils', 'shellQuote.js'))
   cpSync(compiledPathsPath, join(dstDir, 'utils', 'paths.js'))
   cpSync(compiledSessionHistoryPath, join(dstDir, 'sessionHistory.js'))

@@ -80,6 +80,7 @@ const STDIN_RESUME_GAP_MS = 5000;
 type Props = {
 	readonly children: ReactNode;
 	readonly stdin: NodeJS.ReadStream;
+  readonly ownsStdin?: () => boolean
 	readonly stdout: NodeJS.WriteStream;
 	readonly stderr: NodeJS.WriteStream;
 	readonly exitOnCtrlC: boolean;
@@ -492,7 +493,7 @@ export default class App extends PureComponent<Props, State> {
 		}
 	}
 	override componentWillUnmount() {
-		if (this.props.stdout.isTTY) {
+		if (this.props.stdout.isTTY && this.props.ownsStdin?.() !== false) {
 			this.props.stdout.write(SHOW_CURSOR);
 		}
 		this.detachForShutdown();
@@ -587,6 +588,11 @@ export default class App extends PureComponent<Props, State> {
 
 	handleSetRawMode = (isEnabled: boolean): void => {
 		const { stdin } = this.props;
+    if (this.props.ownsStdin?.() === false) {
+      this.rawModeEnabledCount = 0
+      stdin.removeListener('readable', this.handleReadable)
+      return
+    }
 		if (!this.isRawModeSupported()) {
 			if (stdin === process.stdin) {
 				throw new Error(
@@ -789,6 +795,7 @@ export default class App extends PureComponent<Props, State> {
 		}
 	};
 	handleReadable = (): void => {
+    if (this.props.ownsStdin?.() === false) return
 		// Detect long stdin gaps (tmux attach, ssh reconnect, laptop wake).
 		// The terminal may have reset DEC private modes; re-assert mouse
 		// tracking. One Date.now() covers all chunks in this readable event.
@@ -867,7 +874,7 @@ export default class App extends PureComponent<Props, State> {
 	 * back. `setRawMode(true)` is an idempotent ioctl.
 	 */
 	reassertRawMode = (): void => {
-		if (this.shutdownDetached || this.rawModeEnabledCount === 0 || !this.isRawModeSupported()) {
+		if (this.props.ownsStdin?.() === false || this.shutdownDetached || this.rawModeEnabledCount === 0 || !this.isRawModeSupported()) {
 			return;
 		}
 		this.props.stdin.setRawMode(true);

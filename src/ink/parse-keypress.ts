@@ -198,11 +198,11 @@ const KITTY_FLAGS_RE = /^\x1b\[\?(\d+)u$/
 // Kitty graphics APC response: ESC_G key=value,...;OK|error ESC\\
 // eslint-disable-next-line no-control-regex
 const KITTY_GRAPHICS_RE = /^\x1b_G([^;]*);([^\x1b]*)\x1b\\$/
-// DECXCPR cursor position: CSI ? row ; col R
+// DECXCPR cursor position: CSI ? row ; col [ ; page ] R
 // The ? marker disambiguates from modified F3 keys (Shift+F3 = CSI 1;2 R,
 // Ctrl+F3 = CSI 1;5 R, etc.) — plain CSI row;col R is genuinely ambiguous.
 // eslint-disable-next-line no-control-regex
-const CURSOR_POSITION_RE = /^\x1b\[\?(\d+);(\d+)R$/
+const CURSOR_POSITION_RE = /^\x1b\[\?(\d+);(\d+)(?:;(\d+))?R$/
 // XTWINOPS pixel-size replies: CSI 6;height;width t (cell) and
 // CSI 4;height;width t (text area).
 // eslint-disable-next-line no-control-regex
@@ -764,7 +764,7 @@ export type TerminalResponse =
   /** Kitty graphics protocol response to an a=q capability query. */
   | { type: 'kittyGraphics'; imageId: number; status: string }
   /** DSR: cursor position report (answer to CSI 6 n) */
-  | { type: 'cursorPosition'; row: number; col: number }
+  | { type: 'cursorPosition'; row: number; col: number; page?: number }
   /** XTWINOPS: physical pixels for one cell or the terminal text area. */
   | {
       type: 'terminalPixelSize'
@@ -836,6 +836,7 @@ function parseTerminalResponse(s: string): TerminalResponse | null {
         type: 'cursorPosition',
         row: parseInt(m[1]!, 10),
         col: parseInt(m[2]!, 10),
+        ...(m[3] === undefined ? {} : { page: parseInt(m[3], 10) }),
       }
     }
 
@@ -907,9 +908,9 @@ const INCOMPLETE_RESPONSE_PREFIXES: ReadonlyArray<
   // `$` + final.
   ['decrpm', /^\x1b\[\?\d*(?:;\d*)?$/],
   ['decrpm', /^\x1b\[\?\d+;\d+\$$/],
-  // Kitty flags and DECXCPR: one `?` + at most two numeric params.
+  // Kitty flags take one parameter; DECXCPR permits an optional third page.
   ['kittyKeyboard', /^\x1b\[\?\d*$/],
-  ['cursorPosition', /^\x1b\[\?\d*(?:;\d*)?$/],
+  ['cursorPosition', /^\x1b\[\?\d*(?:;\d*){0,2}$/],
   // DA2: any `>`-parameter list.
   ['da2', /^\x1b\[>[\d;]*$/],
   // XTWINOPS: `6;h;w t` / `4;h;w t`, up to the final byte.

@@ -135,6 +135,7 @@ export function SidePanelLayout({
   onResize,
   children,
 }: SidePanelLayoutProps): React.ReactNode {
+  const paneId = React.useId()
   const outerEdges = useSurfaceEdges()
   const parentSize = useTerminalSize()
   const rows = parentSize.rows
@@ -170,6 +171,8 @@ export function SidePanelLayout({
             width={geometry === null ? undefined : geometry.chat}
             flexShrink={0}
             overflow={split ? 'hidden' : undefined}
+            selectionPane={split ? paneId + '-chat' : undefined}
+            selectionPaneViewport
             onClick={split ? onActivateChat : undefined}
           >
             {children}
@@ -196,10 +199,10 @@ export function SidePanelLayout({
                 flexShrink={0}
                 overflow="hidden"
                 onClick={onActivatePanel}
-                /* The right column is fenced out of the fullscreen linear text
-                   selection: a drag across chat rows must not capture panel
-                   glyphs (design doc §4.6). Panels carry their own copy action. */
-                noSelect
+                /* Ownership fences both directions; nested noSelect gutters
+                   and copyRegion sources retain their existing semantics. */
+                selectionPane={paneId + '-panel'}
+                selectionPaneViewport
               >
                 {side}
               </Box>

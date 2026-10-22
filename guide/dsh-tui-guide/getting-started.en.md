@@ -329,6 +329,20 @@ After each source change, build, pack, install in isolation, and launch with:
 pnpm dev
 ```
 
+`pnpm dev` keeps the full install/build/pack checks by default. For explicit local
+iteration, set `DSH_TUI_DEV_FAST=1` (for example,
+`DSH_TUI_DEV_FAST=1 pnpm dev -- --no-launch`). A miss runs frozen install,
+`compile`, pack without repeating `prepare`, and isolated profile installation.
+An unchanged hit skips all four stages only while source/config and compiler-loader contents,
+Node/pnpm/npm/dsh versions, compiled and vendor output, the tarball, and the installed
+package/profile match. Replacing pnpm/npm/dsh without changing its reported version
+requires one normal (non-fast) development run.
+Internal document links such as `CLAUDE.md -> AGENTS.md` are fingerprinted;
+external, excluded, dangling or cyclic links and unreadable inputs disable reuse
+with a diagnostic. Failures invalidate the success stamp before work begins.
+The script prints stage durations and cache hits. Run normal `pnpm build` and
+focused regressions before publishing; fast mode does not change release gates.
+
 `pnpm dev:copy-config` copies only `~/.dsh/settings.yaml` and
 `~/.dsh/.credentials.yaml`. Files are set to mode `0600` on Unix; Windows uses
 the OS-managed file ACL.

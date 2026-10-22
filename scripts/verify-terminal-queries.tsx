@@ -501,6 +501,30 @@ for (const [label, seeded] of [
   }
 }
 
+// WT DECXCPR's optional page must survive split/flush, without claiming F3.
+{
+  const report = '\x1b[?3;1;7R'
+  for (let cut = 4; cut < report.length; cut++) {
+    let state = withEvidence(['cursorPosition'])
+    const out: ParsedInput[] = []
+    for (const chunk of [report.slice(0, cut), null, report.slice(cut)]) {
+      const [parsed, next] = parseMultipleKeypresses(state, chunk)
+      out.push(...parsed)
+      state = next
+    }
+    assert.equal(out.length, 1, `page report split ${cut} stays one response`)
+    assert.ok(out[0]?.kind === 'response')
+    assert.deepEqual(out[0].response, { type: 'cursorPosition', row: 3, col: 1, page: 7 })
+  }
+  const [legacy] = parseMultipleKeypresses(withEvidence(['cursorPosition']), '\x1b[?3;1R')
+  assert.ok(legacy[0]?.kind === 'response')
+  assert.deepEqual(legacy[0].response, { type: 'cursorPosition', row: 3, col: 1 })
+  for (const sequence of ['\x1b[1;2R', '\x1b[1;5R', '\x1b[?3;1;7;9R']) {
+    const [parsed] = parseMultipleKeypresses(withEvidence(['cursorPosition']), sequence)
+    assert.equal(parsed.some(item => item.kind === 'response'), false, 'F3 and unsupported shapes are not cursor reports')
+  }
+}
+
 // AC-5b · after the DCS introducer ESC was flushed, the tokenizer emits
 // XTVERSION's ST/BEL terminator as its own sequence token. It must complete
 // the held text tail, even when the ST introducer ESC also times out.

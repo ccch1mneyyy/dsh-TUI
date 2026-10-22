@@ -10,7 +10,7 @@ import { POINTER, TICK, MULTIPLICATION_X } from '../terminal-utils/figures.js'
 import type { Theme } from '../theme.js'
 import { getLang, t, type I18nKey } from '../i18n.js'
 import { SettingsForm } from '../dsh-adapter/settingsEditor.js'
-import type { TuiSettingsField, TuiSettingsFieldKind, TuiSettingsGroup, TuiSettingsPage, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
+import type { TuiSettingsField, TuiSettingsFieldOption, TuiSettingsFieldKind, TuiSettingsGroup, TuiSettingsPage, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
 import type { LocalizedDescriptions } from '../commands.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import { panelStore } from '../components/sidePanel/PanelStore.js'
@@ -670,7 +670,38 @@ export function Settings({
   // host-keyed effects below on every render (an endless render loop).
   const host = channel.settingsHost()
   const [namespaces, setNamespaces] = React.useState(() => host?.listNamespaces() ?? [])
-  const [sections, setSections] = React.useState(() => channel.settingsSections())
+  const [registeredSections, setSections] = React.useState(() => channel.settingsSections())
+  const routeKey = React.useMemo(() => Symbol('effort catalog'), [
+    channel.sessionRef?.backendId, channel.sessionRef?.sessionId, channel.agentBindingGeneration,
+    channel.agentId, channel.provider, channel.model, JSON.stringify(channel.effortLevels),
+    channel.backendCapabilities?.backendId, channel.backendCapabilities?.effort, getLang(),
+  ])
+  const [effortCatalog, setEffortCatalog] = React.useState<{ key: symbol; options: readonly TuiSettingsFieldOption[] }>()
+  // A stable getter lets already-staged forms validate against the latest
+  // route without dropping their unrelated drafts or retaining old tiers.
+  const effortOptions = React.useRef<readonly TuiSettingsFieldOption[]>([])
+  effortOptions.current = effortCatalog?.key === routeKey ? effortCatalog.options : []
+  const sections = React.useMemo(() => registeredSections.map(section => ({
+    ...section,
+    fields: section.fields.map(field => field.optionsSource !== 'effort' ? field : {
+      ...field,
+      get options() { return [...(field.options ?? []).filter(option => option.value === 'auto'), ...effortOptions.current] },
+    }),
+  })), [registeredSections])
+  const needsEfforts = registeredSections.some(section => section.fields.some(field => field.optionsSource === 'effort'))
+  React.useEffect(() => {
+    if (!needsEfforts || typeof channel.listEfforts !== 'function') return
+    let current = true
+    const provider = channel.provider
+    const model = channel.model
+    void channel.listEfforts({ provider, model }).then(result => {
+      if (!current) return
+      setEffortCatalog({ key: routeKey, options: result.efforts.filter(effort => effort.id !== 'auto').map(effort => ({ value: effort.id, label: effort.name })) })
+    }).catch(() => {
+      if (current) setEffortCatalog({ key: routeKey, options: [] })
+    })
+    return () => { current = false }
+  }, [channel, routeKey, needsEfforts])
   const [mode, setMode] = React.useState<SettingsMode>('list')
   const [editing, setEditing] = React.useState<EditingState | null>(null)
   const [activeGroup, setActiveGroup] = React.useState<ActiveGroup | null>(null)
@@ -687,6 +718,7 @@ export function Settings({
   /** Repaint after a form mutation — staged drafts live in the (React-free)
    *  SettingsForm, so editing one changes no React state by itself. */
   const [, bump] = React.useReducer((count: number) => count + 1, 0)
+  React.useEffect(() => typeof channel.subscribe === 'function' ? channel.subscribe(bump) : undefined, [channel])
   /** Async save completions must not touch state after the screen closes. */
   const mountedRef = React.useRef(true)
   React.useEffect(() => () => {

@@ -4,6 +4,7 @@ import { Stream } from 'stream'
 import type { FrameEvent } from './frame.js'
 import Ink, { type Options as InkOptions } from './ink.js'
 import instances from './instances.js'
+import { registerShutdownInput, type ShutdownInput } from './shutdown-input.js'
 
 /** Options for mounting an Ink app. */
 export type RenderOptions = {
@@ -19,6 +20,8 @@ export type RenderOptions = {
    * @default process.stdin
    */
   stdin?: NodeJS.ReadStream
+  /** Bounded synchronous device drain for a custom stdin; called only while owned. */
+  drainStdin?: () => void
   /**
    * Error stream.
    * @default process.stderr
@@ -82,6 +85,9 @@ export type Instance = {
    * for the listener/pump semantics.
    */
   detachStdinForHandoff: Ink['detachStdinForHandoff']
+  /** Drain only this renderer's still-owned input after cleanup. */
+  drainStdin: Ink['drainStdin']
+  readonly shutdownInput: ShutdownInput
   cleanup: () => void
 }
 
@@ -91,6 +97,8 @@ export type Instance = {
  * can be reused for multiple sequential screens.
  */
 export type Root = {
+  /** Retain this lease when wrapping the unmount method. */
+  readonly shutdownInput: ShutdownInput
   render: (node: ReactNode) => void
   unmount: () => void
   waitUntilExit: () => Promise<void>
@@ -123,7 +131,7 @@ export const renderSync = (
 
   instance.render(node)
 
-  return {
+  const handle: Instance = {
     rerender: instance.render,
     unmount() {
       instance.unmount()
@@ -131,8 +139,12 @@ export const renderSync = (
     waitUntilExit: instance.waitUntilExit,
     detachForShutdown: () => instance.detachForShutdown(),
     detachStdinForHandoff: () => instance.detachStdinForHandoff(),
+    drainStdin: () => instance.drainStdin(),
+    shutdownInput: instance.shutdownInput,
     cleanup: () => instances.delete(inkOptions.stdout),
   }
+  registerShutdownInput(handle.unmount, instance.shutdownInput)
+  return handle
 }
 
 /**
@@ -176,6 +188,7 @@ export async function createRoot(
     exitOnCtrlC = true,
     patchConsole = true,
     terminalImages = true,
+    drainStdin,
     onFrame,
   } = options
   // See wrappedRender — preserve microtask boundary from the old WASM await.
@@ -187,6 +200,7 @@ export async function createRoot(
     exitOnCtrlC,
     patchConsole,
     terminalImages,
+    drainStdin,
     onFrame,
   })
 
@@ -194,11 +208,14 @@ export async function createRoot(
   // instance by stdout (e.g. external editor pause/resume) can find it.
   instances.set(stdout, instance)
 
-  return {
+  const handle: Root = {
+    shutdownInput: instance.shutdownInput,
     render: node => instance.render(node),
     unmount: () => instance.unmount(),
     waitUntilExit: () => instance.waitUntilExit(),
   }
+  registerShutdownInput(handle.unmount, instance.shutdownInput)
+  return handle
 }
 
 const getOptions = (

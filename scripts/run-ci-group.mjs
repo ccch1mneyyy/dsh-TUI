@@ -54,6 +54,7 @@ const GROUPS = {
   'render-scroll': [
     ['verify-image-inspection', ['node', '--import', 'tsx/esm', 'scripts/verify-image-inspection.tsx']],
     ['verify-terminal-images-sixel', ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-images-sixel.tsx']],
+    ['verify-sixel-cursor-heal', ['node', '--import', 'tsx/esm', 'scripts/verify-sixel-cursor-heal.tsx']],
     ['verify-sixel-transcript', ['node', '--import', 'tsx/esm', 'scripts/verify-sixel-transcript.tsx']],
 // 启动落地页回归：头部（块体大字/鲸鱼/模型/目录）与快捷入口的版面、
 // 高度阶梯（full → no-chips → no-hint → input-only）、受控输入的闭环、
@@ -437,6 +438,11 @@ const GROUPS = {
 // （Linux EEXIST 必现竞态、Windows 瞬时 ENOENT、真实 404），真实子进程
 // 走编译产物——验证陈旧安装清理后重跑成功、瞬时重试升级、真实失败不
 // 触发任何恢复且不破坏 profile，重启尾部向替代进程传递 env 契约。
+    ["verify-update-notice", ['node', 'scripts/verify-update-notice.mjs']],
+    ["verify-update-process", ['node', 'scripts/verify-update-process.mjs']],
+    ["verify-update-process-spawn-failure", ['node', 'scripts/verify-update-process-spawn-failure.mjs']],
+    ["verify-update-cleanup", ['node', 'scripts/verify-update-cleanup.mjs']],
+    ["verify-update-timeout", ['node', 'scripts/verify-update-timeout.mjs']],
     ["verify-update-recovery", ['node', 'scripts/verify-update-recovery.mjs']],
 // /reload 与 /restart 纯函数回归：planReload 五类偏好的应用/跳过/
 // 无变化分支、env 与 cordis.yml 显式配置的优先级守卫、模型路由原子
@@ -444,6 +450,8 @@ const GROUPS = {
     ["verify-reload", ['node', '--import', 'tsx/esm', 'scripts/verify-reload.ts']],
 // 直达启动器回归（issue #108）：参数透传、残骸 profile 重装、
 // 版本不一致提示、双语消息、shellQuote 转义规则。
+    ['verify-dev-install-cache', ['node', 'scripts/verify-dev-install-cache.mjs']],
+    ['verify-node-runtime', ['node', 'scripts/verify-node-runtime.mjs']],
     ["verify-launcher", ['node', 'scripts/verify-launcher.mjs']],
 // 包入口与启动器不继承工作区的 React 开发模式；专用调试开关仍可启用。
     ['verify-production-react', ['node', 'scripts/verify-production-react.mjs']],
@@ -909,6 +917,7 @@ const GROUPS = {
 // sidePanel.panels 多选：勾选行与逗号字符串互转且保序、未注册 id 保留为占位行、
 // 插件面板注册即出现、至少保留一个、高级原始编辑（改序/手填 id、非法草稿拒绝）。
     ["verify-panel-settings-picker", ['node', '--import', 'tsx/esm', 'scripts/verify-panel-settings-picker.tsx']],
+    ["verify-settings-effort-catalog", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-effort-catalog.tsx']],
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-compaction-progress", ['node', '--import', 'tsx/esm', 'scripts/verify-compaction-progress.tsx']],
 // #1030：隔离 locale、持久化 /lang 与环境变量，不能靠 CI 的 zh 默认掩盖脚本依赖。
@@ -949,6 +958,7 @@ const GROUPS = {
 // 浮层（键盘留在输入框）、裸 `/goal`（DSH 注册表行）打印成 /plugins 式转录块——
 // inline 无指针事件，块是那里读全文的唯一路径，旧的单行 toast 会折叠并截断它。
     ['verify-goal-display', ['node', '--import', 'tsx/esm', 'scripts/verify-goal-display.mjs']],
+    ['verify-plugin-command-output', ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-command-output.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
 // 目标预算与后端中立的 /goal（goals 能力）：语法（--budget 50k、控制词、无效预算）、
 // 「已用 12.3k / 50k tokens · 4m」中英文读数、能力快照（有能力才提供 /goal，无能力即
@@ -1252,6 +1262,7 @@ const GROUPS = {
     ["verify-side-panel-scroll-paint", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-scroll-paint.tsx']],
 // 侧栏选择围栏（方向感知）：面板内起拖可选可复制面板文字（逐行列钳制不跨
 // 聊天列）；聊天起拖维持 §4.6 不捕面板字符。真 SGR press/motion/release 驱动。
+    ["verify-pane-selection", ['node', '--import', 'tsx/esm', 'scripts/verify-pane-selection.tsx']],
     ["verify-side-panel-selection", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-selection.tsx']],
 // 连续任务卡成组（JobGroupRow/JobGroupHeader）：组头汇总、组内取消空行与
 // 链式连接线、落定整组折叠、点击/悬停/Ctrl+O 展开、失败数留在折叠行、
@@ -1280,6 +1291,9 @@ const GROUPS = {
     ["verify-model-lifecycle-fences", ['node', '--import', 'tsx/esm', 'scripts/verify-model-lifecycle-fences.ts']],
     ['verify-model-completion-invalidate', ['node', 'scripts/verify-model-completion-invalidate.mjs']],
     ["verify-session-v3", ['node', '--import', 'tsx/esm', 'scripts/verify-session-v3.ts']],
+    ["verify-packed-row-budget", ['node', 'scripts/verify-packed-row-budget.mjs']],
+    ["verify-release-age-cohort", ['node', 'scripts/verify-release-age-cohort.mjs']],
+    ["verify-sqlite-snapshot", ['node', 'scripts/verify-sqlite-snapshot.mjs']],
     ["verify-session-tree-generations", ['node', '--import', 'tsx/esm', 'scripts/verify-session-tree-generations.ts']],
 // 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
 // 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有

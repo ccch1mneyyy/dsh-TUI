@@ -74,6 +74,9 @@ export class SixelGraphicsManager {
   private columns = 0
   private rows = 0
   private displayModeSet = false
+  private readonly cursorOffsets = new WeakMap<SixelRaster, number>()
+  /** WT leaves the cursor at the last sixel band's row and the initial column. */
+  cursorAfterPaint: { row: number; col: number } | undefined
 
   constructor(private readonly onReady: () => void, private readonly encoder?: Encoder) {}
 
@@ -288,6 +291,7 @@ export class SixelGraphicsManager {
 
   /** Unchanged images have zero transport cost, including unrelated text ticks. */
   paint(diff: Diff): string {
+    this.cursorAfterPaint = undefined
     let damage: Rect[] | null | undefined
     let draw = ''
     for (const [node, next] of this.nextDisplay) {
@@ -296,6 +300,18 @@ export class SixelGraphicsManager {
         if (damage !== null && !damage.some(rect => overlaps(rect, next))) continue
       }
       draw += `\x1b[${next.y + 1};${next.x + 1}H${next.raster.data}`
+      // WT SixelParser::_updateTextCursor preserves X and uses the final band
+      // (microsoft/terminal src/terminal/adapter/SixelParser.cpp).
+      // Derive the final band from the actual encoded control path, not a CPR
+      // sample or raster height (a trailing '-' advances another sixel band).
+      let offset = this.cursorOffsets.get(next.raster)
+      if (offset === undefined) {
+        offset = 0
+        for (const byte of next.raster.data) if (byte === '-') offset += 6
+        this.cursorOffsets.set(next.raster, offset)
+      }
+      const row = next.y + Math.floor(offset / this.cell.height) + 1
+      this.cursorAfterPaint = row <= this.rows ? { row, col: next.x + 1 } : undefined
     }
     this.displayed = new Map(this.nextDisplay)
     // Rects held this frame stay on screen: they were neither erased nor

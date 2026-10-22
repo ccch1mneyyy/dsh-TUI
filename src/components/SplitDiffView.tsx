@@ -395,7 +395,7 @@ function toSegments(line: readonly StyledGrapheme[]): Segment[] {
  * mid-word. The space a break lands on stays at the end of the row it closes,
  * so joining the rows reproduces the input exactly.
  *
- * Empty text yields no rows: the caller paints the blank pane itself.
+ * Empty source text still occupies one row; only a missing side has no rows.
  */
 function wrapSegments(segments: readonly Segment[], budget: number): Segment[][] {
   const all = graphemes(segments)
@@ -420,7 +420,7 @@ function wrapSegments(segments: readonly Segment[], budget: number): Segment[][]
     rows.push(toSegments(all.slice(start, end)))
     start = end
   }
-  return rows
+  return rows.length > 0 ? rows : [[]]
 }
 
 /** How many graphemes of a pane line the renderer's `truncate` drops. It cuts
@@ -497,7 +497,13 @@ function PaneLine({
   width,
   tone,
   toolBackground,
+  paneId,
+  padding,
+  continuation,
 }: {
+  readonly padding: boolean
+  readonly paneId: string
+  readonly continuation?: number
   readonly segments: readonly Segment[] | undefined
   readonly prefix: string
   readonly kind: DiffRow['kind']
@@ -520,8 +526,8 @@ function PaneLine({
         : 'diffAddedDimmed'
   const wordColor = tone === 'old' ? 'diffRemovedWord' : 'diffAddedWord'
   return (
-    <Box width={width} flexShrink={0} backgroundColor={backgroundColor}>
-      <Text dimColor backgroundColor={backgroundColor}>{prefix}</Text>
+    <Box width={width} flexShrink={0} backgroundColor={backgroundColor} selectionPane={paneId} noSelect={padding} softWrapContinuation={continuation}>
+      <Box noSelect><Text dimColor backgroundColor={backgroundColor}>{prefix}</Text></Box>
       {segments === undefined ? (
         <Text backgroundColor={backgroundColor}> </Text>
       ) : (
@@ -570,6 +576,7 @@ export function SplitDiffView({
    */
   readonly reveal?: { readonly key: string }
 }): React.ReactNode {
+  const paneId = React.useId()
   const [hl, setHl] = React.useState<CliHighlight | null>(null)
   React.useEffect(() => {
     let mounted = true
@@ -751,11 +758,11 @@ export function SplitDiffView({
         const rightPad = ' '.repeat(stringWidth(plan.rightPrefix))
         return Array.from({ length: plan.height }, (_, visual) => (
           <Box key={`${index}-${visual}`} flexDirection="row">
-            {plan.singleSide !== 'new' && <PaneLine segments={plan.leftRows[visual]} prefix={visual === 0 ? plan.leftPrefix : leftPad} kind={plan.leftKind} tone="old" width={plan.paneWidth} toolBackground={toolBackground} />}
-            {plan.singleSide === undefined && <Box width={1} flexShrink={0}>
+            {plan.singleSide !== 'new' && <PaneLine padding={plan.leftRows[visual] === undefined} paneId={paneId + '-old'} continuation={visual > 0 && plan.leftRows[visual] !== undefined ? stringWidth(plan.leftPrefix) + stringWidth(plan.leftRows[visual - 1]!.map(s => s.text).join('')) : undefined} segments={plan.leftRows[visual]} prefix={visual === 0 ? plan.leftPrefix : leftPad} kind={plan.leftKind} tone="old" width={plan.paneWidth} toolBackground={toolBackground} />}
+            {plan.singleSide === undefined && <Box width={1} flexShrink={0} noSelect>
               <Text dimColor>│</Text>
             </Box>}
-            {plan.singleSide !== 'old' && <PaneLine segments={plan.rightRows[visual]} prefix={visual === 0 ? plan.rightPrefix : rightPad} kind={plan.rightKind} tone="new" width={plan.paneWidth} toolBackground={toolBackground} />}
+            {plan.singleSide !== 'old' && <PaneLine padding={plan.rightRows[visual] === undefined} paneId={paneId + '-new'} continuation={visual > 0 && plan.rightRows[visual] !== undefined ? stringWidth(plan.rightPrefix) + stringWidth(plan.rightRows[visual - 1]!.map(s => s.text).join('')) : undefined} segments={plan.rightRows[visual]} prefix={visual === 0 ? plan.rightPrefix : rightPad} kind={plan.rightKind} tone="new" width={plan.paneWidth} toolBackground={toolBackground} />}
           </Box>
         ))
       })}

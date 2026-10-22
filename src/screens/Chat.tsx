@@ -22,7 +22,7 @@ import { formatClock } from '../trajectory/format.js'
 import { homeDir } from '../utils/paths.js'
 import { execFileNoThrow } from '../utils/execFileNoThrow.js'
 import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-view.js'
-import { cleanBlockLines, cleanRenderText, cleanScalarText } from '../dsh-adapter/sanitize.js'
+import { cleanBlockLines, cleanCommandReport, cleanRenderText, cleanScalarText } from '../dsh-adapter/sanitize.js'
 import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
 import { WORKING_GATE_NOTICES } from '../commands.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
@@ -2623,7 +2623,7 @@ export function Chat({
    * Dispatch a slash command; false lets the input flow to the model.
    * Built-in names run the local switch; anything registered by a DSH
    * plugin (plan/goal/…) dispatches through the command registry, whose
-   * result text lands as a notification. `rawInput` carries the text after
+   * result text lands as a local report for generic plugin commands. `rawInput` carries the text after
    * the command name (`/plan off` → ` off`).
    *
    * `render.block` prints a multi-line report the way `/plugins` prints one:
@@ -2637,7 +2637,7 @@ export function Chat({
     name: string,
     rawInput: string,
     images: readonly ComposerImageRef[] = [],
-    render?: { readonly block?: boolean },
+    render?: { readonly block?: boolean; readonly report?: boolean },
   ): Promise<boolean> => {
     const originAgentBinding = channel.agentBindingGeneration
     return channel.runExternalCommandOutcome(name, rawInput, images).then((outcome) => {
@@ -2646,7 +2646,17 @@ export function Chat({
         channel.notify(t('command-not-found', { name }), { color: 'error' })
         return false
       }
-      if (render?.block === true && outcome.kind !== 'error') {
+      if (render?.report === true) {
+        const { lines, truncated } = cleanCommandReport(outcome.text)
+        if (truncated) lines.push(t('command-output-truncated'))
+        // The report already has a cell cap. Avoid a second UTF-16 preview cut
+        // splitting an emoji or a combining sequence in the local row sink.
+        if (lines.length > 0) channel.pushLocal(`/${name}`, lines, { lineLimit: 65_536, preserveWhitespace: true })
+        if (outcome.kind === 'error') {
+          const cleaned = cleanRenderText(outcome.text, COMMAND_RESULT_CELLS)
+          if (cleaned !== '') channel.notify(cleaned, { color: 'error' })
+        }
+      } else if (render?.block === true && outcome.kind !== 'error') {
         // Per-line sanitize: the newlines here are the report's structure.
         const lines = cleanBlockLines(outcome.text, LOCAL_BLOCK_CELLS)
         if (lines.length > 0) channel.pushLocal(`/${name}`, lines, { lineLimit: LOCAL_BLOCK_CELLS })
@@ -4393,7 +4403,7 @@ export function Chat({
         )
         if (external) {
           setHelpOpen(false)
-          return runExternalCommand(name, rawInput, images)
+          return runExternalCommand(name, rawInput, images, { report: true })
         }
         return false
       }

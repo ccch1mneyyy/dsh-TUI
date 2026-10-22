@@ -147,7 +147,7 @@ export function terminalWindowSizePixels(): TerminalQuery<TerminalPixelSizeRespo
 
 /**
  * DECXCPR: request cursor position with DEC-private marker (CSI ? 6 n).
- * Terminal replies with CSI ? row ; col R. The `?` marker is critical —
+ * Terminal replies with CSI ? row ; col [ ; page ] R. The `?` marker is critical —
  * the plain DSR form (CSI 6 n → CSI row;col R) is ambiguous with
  * modified F3 keys (Shift+F3 = CSI 1;2 R, etc.).
  * @returns a query whose response is the cursor-position reply.
@@ -300,6 +300,41 @@ export class TerminalQuerier {
       })
       this.stdout.write(query.request)
     })
+  }
+
+  /** Register a bounded query whose request will be inserted into an ordered frame.
+   * The caller must write request immediately, or cancel it if the frame is abandoned.
+   */
+  prepare<T extends TerminalResponse>(query: TerminalQuery<T>, timeoutMs: number): {
+    request: string
+    response: Promise<T | undefined>
+    cancel: () => void
+  } {
+    if (this.disposed || this.suspended) {
+      return { request: '', response: Promise.resolve(undefined), cancel: () => {} }
+    }
+    let cancel = () => {}
+    const response = new Promise<T | undefined>(resolve => {
+      const release = this.holdRawMode()
+      const pending: Pending = {
+        kind: 'query',
+        match: query.match,
+        responseType: query.responseType,
+        resolve: r => resolve(r as T | undefined),
+        releaseRawMode: () => { clearTimeout(timer); release() },
+      }
+      cancel = () => {
+        const index = this.queue.indexOf(pending)
+        if (index < 0) return
+        this.queue.splice(index, 1)
+        pending.resolve(undefined)
+        pending.releaseRawMode()
+      }
+      const timer = setTimeout(cancel, timeoutMs)
+      timer.unref?.()
+      this.queue.push(pending)
+    })
+    return { request: query.request, response, cancel: () => cancel() }
   }
 
   /**

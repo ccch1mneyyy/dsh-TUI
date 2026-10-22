@@ -16,6 +16,7 @@
  */
 
 import { stringWidth } from '../ink/stringWidth.js'
+import { getGraphemeSegmenter } from '../utils/intl.js'
 
 /** Sanitize an already-string value for the render path. */
 export function cleanRenderText(value: string, maxCells: number): string {
@@ -43,6 +44,35 @@ export function cleanRenderText(value: string, maxCells: number): string {
  */
 export function cleanBlockLines(value: string, maxCells: number): string[] {
   return value.split(/\r?\n/u).map(line => cleanRenderText(line, maxCells)).filter(line => line !== '')
+}
+
+/** Bounded, local-only registry output. Explicit command blocks keep the
+ * existing cleanBlockLines contract; reports retain indentation and empty rows. */
+export function cleanCommandReport(value: string): { lines: string[]; truncated: boolean } {
+  const maxCodeUnits = 65_536
+  const maxLines = 200
+  const maxCells = 4000
+  let bounded = value.slice(0, maxCodeUnits)
+  // Do not split a Unicode scalar at the allocation boundary.
+  if (bounded.length < value.length && /[\uD800-\uDBFF]$/u.test(bounded)) bounded = bounded.slice(0, -1)
+  let truncated = bounded.length < value.length
+  const rows = bounded.split(/\r?\n/u)
+  if (rows.length > maxLines) truncated = true
+  const lines = rows.slice(0, maxLines).map(row => {
+    const plain = flattenPasteInline(row)
+    if (stringWidth(plain) <= maxCells) return plain
+    truncated = true
+    let clipped = ''
+    let cells = 0
+    for (const { segment } of getGraphemeSegmenter().segment(plain)) {
+      const width = stringWidth(segment)
+      if (cells + width > maxCells - 1) break
+      clipped += segment
+      cells += width
+    }
+    return `${clipped}…`
+  })
+  return { lines: value === '' ? [] : lines, truncated }
 }
 
 /**

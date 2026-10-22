@@ -290,6 +290,9 @@ export interface TuiSettingsField {
    * text opens the editor for a custom value).
    */
   options?: readonly TuiSettingsFieldOption[]
+  /** Resolve select choices from the current route's read-only effort catalog.
+   * Omitted fields keep their declared static options. */
+  optionsSource?: 'effort'
   /** Input placeholder for `kind: 'text' | 'number'`. */
   placeholder?: string
   /**

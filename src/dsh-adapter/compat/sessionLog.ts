@@ -410,6 +410,15 @@ function decodeStorageRecordLocal(value: unknown): SessionEvent[] {
   return expandChunkRow(validateChunkRow(value, tag))
 }
 
+/** Validate before expansion so both the upstream and local decoders share the cap. */
+function storageRecordMemberCount(value: unknown): number {
+  if (!isRecordValue(value)) return 1
+  const tag = value['type']
+  if (tag !== 'text-chunks' && tag !== 'reasoning-chunks' && tag !== 'tool-call-chunks') return 1
+  const row = validateChunkRow(value, tag)
+  return (tag === 'tool-call-chunks' ? row.data.args! : row.data.texts!).length
+}
+
 /** I/O slice for streamed log reads. */
 const READ_CHUNK = 64 * 1024
 
@@ -809,6 +818,12 @@ function readEvents(
       if (scanned === 0 && isRecordValue(record) && record['type'] === 'session' && Number.isSafeInteger(record['version'])) {
         formatVersion = record['version'] as number
       }
+      // JSON/frame parsing and validation are physical-row work. Bound the
+      // additional logical event allocation BEFORE either decoder expands it.
+      if (storageRecordMemberCount(record) > maxScanned - scanned) {
+        scanned = maxScanned
+        return result(false)
+      }
       for (const event of decodeStorageRecord(record)) {
         // The SCAN budget bounds the real cost drivers — I/O, decompression,
         // JSON.parse — which are paid for EVERY envelope, collected or not.
@@ -915,7 +930,7 @@ export function readSessionEventsFromFile(
  * storage record, not an event, and seq-less rows must not be dropped as if
  * they were headers. The budget counts EXPANDED events, matching the tree's
  * per-event cost. Malformed packed rows throw inside decodeStorageRecord —
- * corrupt storage degrades to `undefined`, never to silently dropped runs.
+ * corrupt storage reports `failed: true`, never silently dropped runs.
  *
  * Torn-tail semantics mirror the backend's own reader: a plain log's
  * unterminated final line (crash mid-append) is uncommitted data and

@@ -193,6 +193,8 @@ export interface SessionCapabilities {
      *  picker can say so. Undefined = the list is the model's own (or there
      *  is no list). */
     readonly levelsFallback?: true
+    /** False until the backend has a reliable catalog, including a valid empty ladder. */
+    readonly levelsAvailable?: boolean
     levels(): readonly EffortOption[]
     /** Preview a catalog model without switching the session or its effort. */
     forModel?(ref: ModelRef): {

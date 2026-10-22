@@ -645,6 +645,8 @@ export type Screen = Size & {
    * blitRegion/shiftRows.
    */
   softWrap: Int32Array
+  /** Bounded pane row spans share the existing cell/copy-region planes. */
+  selectionPanes?: Map<string, Map<number, { start: number; end: number; wrap: number; viewport?: boolean; excluded?: readonly { start: number; end: number }[] }>>
 }
 
 function isEmptyCellByIndex(screen: Screen, index: number): boolean {
@@ -797,6 +799,7 @@ export function resetScreen(
   screen.copyTexts ??= new Map()
   screen.copyTexts.clear()
   screen.softWrap.fill(0, 0, height)
+  screen.selectionPanes?.clear()
 
   // Update dimensions
   screen.width = width
@@ -1343,6 +1346,28 @@ export function blitRegion(
     for (const [id, text] of src.copyTexts) dst.copyTexts.set(id, text)
   }
 
+  if (src.selectionPanes) {
+    dst.selectionPanes ??= new Map()
+    for (const [id, rows] of src.selectionPanes) {
+      for (const [row, span] of rows) {
+        if (row < regionY || row >= maxY || span.end <= regionX || span.start >= maxX) continue
+        let target = dst.selectionPanes.get(id)
+        if (!target) dst.selectionPanes.set(id, target = new Map())
+        const existing = target.get(row)
+        target.set(row, { start: Math.min(existing?.start ?? Infinity, Math.max(regionX, span.start)),
+          end: Math.max(existing?.end ?? 0, Math.min(maxX, span.end)), wrap: span.wrap, viewport: span.viewport,
+          excluded: [
+            ...(existing?.excluded ?? []).flatMap(range => [
+              { start: range.start, end: Math.min(range.end, regionX) },
+              { start: Math.max(range.start, maxX), end: range.end },
+            ]),
+            ...(span.excluded ?? []).map(range => ({ start: Math.max(regionX, range.start), end: Math.min(maxX, range.end) })),
+          ].filter(range => range.end > range.start),
+        })
+      }
+    }
+  }
+
   // softWrap is per-row — copy the row range regardless of stride/width.
   // Partial-width blits still carry the row's wrap provenance since the
   // blitted content (a cached ink-text node) is what set the bit.
@@ -1598,6 +1623,24 @@ export function shiftRows(
 ): void {
   if (n === 0 || top < 0 || bottom >= screen.height || top > bottom) return
   const w = screen.width
+  for (const rows of screen.selectionPanes?.values() ?? []) {
+    const previous = new Map(rows)
+    const inside = (span: { start: number; end: number }): boolean =>
+      span.end > (columnX ?? 0) && span.start < (columnX ?? 0) + (columnWidth ?? w)
+    for (let row = top; row <= bottom; row++) {
+      const span = previous.get(row)
+      if (span && inside(span) && !span.viewport) rows.delete(row)
+    }
+    for (const [row, span] of previous) {
+      if (row < top || row > bottom || !inside(span)) continue
+      if (span.viewport) {
+        const source = row + n >= top && row + n <= bottom ? previous.get(row + n) : undefined
+        rows.set(row, { ...span, wrap: source?.wrap ?? 0 })
+      } else if (row - n >= top && row - n <= bottom) {
+        rows.set(row - n, { ...span })
+      }
+    }
+  }
   if (columnX !== undefined || columnWidth !== undefined) {
     const x1 = Math.max(0, Math.floor(columnX ?? 0))
     const x2 = Math.min(w, x1 + Math.floor(columnWidth ?? w))

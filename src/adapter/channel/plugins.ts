@@ -40,6 +40,7 @@ function projectSettingsSection(section: TuiSettingsSection): HostChannelSetting
       ...(field.hint === undefined ? {} : { hint: field.hint }),
       ...(field.group === undefined ? {} : { group: field.group }),
       ...(field.options === undefined ? {} : { options: Object.freeze(field.options.map(option => Object.freeze({ ...option }))) }),
+      ...(field.optionsSource === undefined ? {} : { optionsSource: field.optionsSource }),
       ...(field.placeholder === undefined ? {} : { placeholder: field.placeholder }),
       ...(field.secret === undefined ? {} : { secret: Object.freeze({ ref: field.secret.ref }) }),
     }))),
