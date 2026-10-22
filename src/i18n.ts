@@ -1455,6 +1455,10 @@ const dict = {
     zh: '用法：在 /permission 选择「自动授权审查」',
     en: 'Use: pick Auto review in /permission',
   },
+  'plugins-experimental-session-search-hint': {
+    zh: '用法：开启后 Agent 多 5 个只读检索工具，可搜本工作区历史会话与事件、看溯源与全文；首次搜索才建内存索引（不落盘）；内核预设「极简模式」只保留 shell，不显示这 5 个工具。',
+    en: 'Use: enabling gives every Agent 5 read-only tools over past sessions in this workspace (search, lineage, full event read); the index is in-memory and builds on the first search; Minimal keeps its single shell tool and hides these.',
+  },
   'plugins-bundles-header': { zh: '已装 bundle（数据来自 profile 插件服务）：', en: 'Installed bundles (from the profile plugin service):' },
   'plugins-bundles-official': { zh: '安装自带', en: 'Official (installation-supplied)' },
   'plugins-bundles-installed': { zh: 'profile 依赖', en: 'Profile dependencies' },

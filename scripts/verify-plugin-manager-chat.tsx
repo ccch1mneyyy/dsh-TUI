@@ -83,6 +83,7 @@ const ROWS = 40
 
 const TEAM_BUNDLE = '@deepseek-ai/dsh-experimental-agent-team-profile'
 const AUTO_REVIEW_BUNDLE = '@deepseek-ai/dsh-experimental-auto-review'
+const SESSION_SEARCH_BUNDLE = '@deepseek-ai/dsh-experimental-session-search'
 const SCHEDULE_BUNDLE = '@deepseek-ai/dsh-experimental-schedule-bundle'
 
 const bundles: BundleInfo[] = [
@@ -109,7 +110,7 @@ const bundles: BundleInfo[] = [
     rows: [], overrides: [],
   },
 ]
-/** Installation-supplied optional bundles: only the two TUI-adapted ones belong in `list`. */
+/** Installation-supplied optional bundles: only the TUI-adapted ones belong in `list`. */
 const experimentalBundles: BundleInfo[] = [
   {
     name: TEAM_BUNDLE, version: '0.2.0-rc.2', enabled: false, installed: false, optional: true, removable: false,
@@ -118,6 +119,13 @@ const experimentalBundles: BundleInfo[] = [
   {
     name: AUTO_REVIEW_BUNDLE, version: '0.2.0-rc.2', enabled: true, installed: false, optional: true, removable: false,
     meta: { title: { en: 'Auto review', zh: '自动授权审查' } }, rows: [], overrides: [],
+  },
+  {
+    // Shipped from 0.2.1 on: the version string keeps the fixture honest about
+    // the line that first offers it (`legacyManager` below is the older shape).
+    name: SESSION_SEARCH_BUNDLE, version: '0.2.1-rc.2', enabled: false, installed: false,
+    optional: true, removable: false,
+    meta: { title: { en: 'Session search', zh: '会话搜索' } }, rows: [], overrides: [],
   },
   {
     // Shipped by dsh but not adapted by the TUI: the section must leave it out.
@@ -217,10 +225,22 @@ const officialOnlyManager: PluginManagerView = {
   listBundles: () => Promise.resolve(bundles.filter(bundle => !bundle.installed)),
 }
 
+/** A 0.2.0-rc.2 installation: it ships the two older TUI bundles, not session
+ *  search (which first appeared in 0.2.1). The advertised section is the
+ *  intersection with what the installation supplies, so this one shows two. */
+const legacyManager: PluginManagerView = {
+  ...manager,
+  listBundles: () => Promise.resolve([
+    ...bundles,
+    ...experimentalBundles.filter(bundle => bundle.name !== SESSION_SEARCH_BUNDLE),
+  ]),
+}
+
 /** The service each form mounts (`absent` mounts none). */
 const SERVICES: Record<string, PluginManagerView | undefined> = {
   present: manager,
   experimental: experimentalManager,
+  legacy: legacyManager,
   'official-only': officialOnlyManager,
   absent: undefined,
   failing: failingManager,
@@ -302,6 +322,7 @@ for (const [fullscreen, columns, service] of [
   [true, 100, 'present'],
   [false, 100, 'experimental'],
   [false, 50, 'experimental'],
+  [false, 100, 'legacy'],
   [false, 100, 'official-only'],
   [false, 100, 'absent'],
   [false, 100, 'failing'],
@@ -338,17 +359,33 @@ for (const [fullscreen, columns, service] of [
       await clear()
       continue
     }
-    if (service === 'experimental') {
+    if (service === 'legacy') {
+      // The 0.2.0-rc.2 shape: session search does not exist yet, so the
+      // advertised section is the intersection — two entries, no third row.
       await run('/plugin list')
-      check(`${tag}: list advertises the TUI experimental features`,
+      check(`${tag}: an older installation advertises only the older features`,
         await settled(() => hasText(t('plugins-experimental-header', { count: '2' })) &&
           hasText('Agent Teams 0.2.0-rc.2 · off') &&
           hasText('Auto review 0.2.0-rc.2 · on')), screen())
+      check(`${tag}: an older installation shows no session-search row`,
+        !hasText('Session search') && !hasText(SESSION_SEARCH_BUNDLE), screen())
+      await clear()
+      continue
+    }
+    if (service === 'experimental') {
+      await run('/plugin list')
+      check(`${tag}: list advertises the TUI experimental features`,
+        await settled(() => hasText(t('plugins-experimental-header', { count: '3' })) &&
+          hasText('Agent Teams 0.2.0-rc.2 · off') &&
+          hasText('Auto review 0.2.0-rc.2 · on') &&
+          hasText('Session search 0.2.1-rc.2 · off')), screen())
       check(`${tag}: experimental rows give one state-appropriate switch line`,
         hasText(t('plugins-experimental-enable', { bundle: TEAM_BUNDLE })) &&
-        hasText(t('plugins-experimental-disable', { bundle: AUTO_REVIEW_BUNDLE })), screen())
+        hasText(t('plugins-experimental-disable', { bundle: AUTO_REVIEW_BUNDLE })) &&
+        hasText(t('plugins-experimental-enable', { bundle: SESSION_SEARCH_BUNDLE })), screen())
       check(`${tag}: experimental hints name the TUI entry points`,
-        hasText(t('plugins-experimental-team-hint')) && hasText(t('plugins-experimental-auto-review-hint')), screen())
+        hasText(t('plugins-experimental-team-hint')) && hasText(t('plugins-experimental-auto-review-hint')) &&
+        hasText(t('plugins-experimental-session-search-hint')), screen())
       check(`${tag}: list drops the old footer and provenance note`,
         !hasText('Details: /plugin info') && !hasText('These packages ship with') &&
         !hasText('Enable/disable:'), screen())
@@ -358,9 +395,10 @@ for (const [fullscreen, columns, service] of [
         const rows = screen().split('\n')
         const teamAt = rows.findIndex(line => line === '    Agent Teams 0.2.0-rc.2 · off')
         const autoAt = rows.findIndex(line => line === '    Auto review 0.2.0-rc.2 · on')
+        const searchAt = rows.findIndex(line => line === '    Session search 0.2.1-rc.2 · off')
         check(`${tag}: experimental features have no blank row between them`,
-          teamAt >= 0 && autoAt > teamAt &&
-          !rows.slice(teamAt + 1, autoAt).some(line => line.trim() === ''), screen())
+          teamAt >= 0 && autoAt > teamAt && searchAt > autoAt &&
+          !rows.slice(teamAt + 1, searchAt).some(line => line.trim() === ''), screen())
       }
       check(`${tag}: list still leaves the installation's non-TUI bundles out`,
         !hasText('@deepseek-ai/dsh-base') && !hasText('@deepseek-harness-tui/dsh-tui') &&
@@ -400,7 +438,8 @@ for (const [fullscreen, columns, service] of [
       check(`${tag}: list leads with the trust banner`,
         above('C-070', t('plugins-list-header', { count: '2' })), screen())
       check(`${tag}: list omits the experimental section without optional bundles`,
-        !hasText(t('plugins-experimental-header', { count: '2' })), screen())
+        !hasText(t('plugins-experimental-header', { count: '2' })) &&
+        !hasText(t('plugins-experimental-header', { count: '3' })), screen())
       // `agentTeams` is absent and the manager lists no team bundle: a typed
       // `/team` must still be answered here (never sent to the model), and it
       // must not name an enable command this installation cannot serve.
@@ -687,7 +726,7 @@ for (const [fullscreen, columns, service] of [
   check('report: an empty profile still advertises switchable experimental features',
     experimentalOnly[0] === t('plugins-trust-banner') &&
     experimentalOnly.includes(t('plugins-list-empty')) &&
-    experimentalOnly.includes(t('plugins-experimental-header', { count: '2' })),
+    experimentalOnly.includes(t('plugins-experimental-header', { count: '3' })),
     experimentalOnly.join('\n'))
 }
 // ── The install flow, headless (C-4) ─────────────────────────────────────────
