@@ -486,7 +486,13 @@ export interface PromptInputProps {
    * empty first value.
    */
   draftCache?: PromptDraftCache
-  /** Mount handoff: draft adoption and the input listener are ready. */
+  /**
+   * The input can take keys: draft adoption has run and the listener above is
+   * live. Fires on mount when already unsuspended, and again whenever
+   * `suspended` lifts — a caller replaying keys captured during a screen swap
+   * must hold its queue until then, because a replay emitted while suspended
+   * is dropped by `isActive: !suspended` with nothing left to retry it.
+   */
   onInputReady?: () => void
   /** Whether the `?` help menu is open (state lives in the Chat screen). */
   helpOpen: boolean
@@ -3518,7 +3524,17 @@ export function PromptInput({
       setFileSelected(0)
     }
   }, { isActive: !suspended })
-  React.useEffect(() => { onInputReady?.() }, [])
+  // Readiness follows the listener's own gate. Announcing on mount regardless
+  // lets the owner drain a replay queue into a handler that drops every key
+  // while suspended (plugin dialog, approval, …), and a `[]` effect never
+  // re-fires once the panel closes. The callback goes through a ref so an
+  // inline closure from the parent cannot re-trigger the replay per render.
+  const onInputReadyRef = React.useRef(onInputReady)
+  React.useLayoutEffect(() => { onInputReadyRef.current = onInputReady })
+  React.useEffect(() => {
+    if (suspended) return
+    onInputReadyRef.current?.()
+  }, [suspended])
 
   // === Render: hard-wrap every logical line at the input width, then show
   // the window of visual lines with the caret row always visible.

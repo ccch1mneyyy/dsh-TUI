@@ -10,7 +10,8 @@
  *      不再盖着（第七版起 boot 不预开浏览器，落地页是第一屏）。
  *   C. 会开整屏界面的快捷入口盖在落地页之上，Esc 回落地页。
  *   NL. Shift/Option+Enter：带着未发送草稿进入聊天页，在光标处换行，保留图片；
- *      同批的 Ctrl+C 按"已交接的草稿"清空，不按空输入退出。
+ *      同批的 Ctrl+C 按"已交接的草稿"清空，不按空输入退出；换屏那一刻插件
+ *      对话框已 pending 时，同批按键等输入解除暂停后再重放，不丢文字。
  *   D. 覆盖层动作（模型 / 主题 / 语言）不收落地页。
  *   E. 记账：向导里 Esc（跳过）**不写** onboarding.json；→→→Enter 走完才写。
  *   F. 最小模式：落地页整体不存在（launchpadVisible 真的接在渲染链上）。
@@ -56,6 +57,7 @@ const [
   { kernelEntriesOf },
   { listBackends },
   { applySidePanelOpen, applySidePanelPanels, getSidePanelOpen, getSidePanelPanels },
+  { TuiDialogStore },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
@@ -68,6 +70,7 @@ const [
   import('../src/components/kernelCatalog.js'),
   import('../src/dsh-adapter/backend-registry.js'),
   import('../src/tuiDisplayPrefs.js'),
+  import('../src/dsh-adapter/dialogs.js'),
 ])
 
 /** 内核目录：与真机组合根同源（`kernelEntriesOf(listBackends())`）——选择器那一屏
@@ -624,6 +627,42 @@ for (const key of ['\x1b[13;2u', '\x1b\r']) {
       await settled(() => controller.current?.text() === '' && !chat.screen().includes(LAUNCHPAD_MARK))
         && !chat.calls.some(call => call.startsWith('submit:')), chat.screen())
   } finally { await chat.unmount() }
+}
+// NL9：换屏那一刻插件对话框已经 pending —— 聊天页输入框以 `suspended` 挂载，
+// `onInputReady` 必须等输入真正可接收才重放；等待期间队列归 Chat 保留。
+// 旧实现挂载即通知，Chat 清空队列后重放给 `isActive: !suspended` 丢弃的监听，
+// 同批后续文字永久丢失（尾随 Enter 也一样）。
+for (const fullscreen of [false, true]) {
+  for (const tail of ['tail', 'tail\r']) {
+    const controller = React.createRef<PromptController>()
+    const dialogs = new TuiDialogStore()
+    const chat = await mountChat(
+      { launchpadOnBoot: true, columns: 48 }, {},
+      { fullscreen, promptControllerRef: controller, extensionDialogs: dialogs },
+    )
+    const label = `${fullscreen ? 'fullscreen' : 'inline'} ${JSON.stringify(tail)}`
+    try {
+      await settle(() => chat.screen().includes(LAUNCHPAD_MARK))
+      await chat.type('draft')
+      void dialogs.ask({ kind: 'confirm', title: '插件确认', message: '继续？' })
+      await settle(() => dialogs.getSnapshot() !== null)
+      // 同一个 stdin chunk：换行键 + 换屏后的后续输入（可能带尾随 Enter）。
+      await chat.send('\x1b[13;2u' + tail)
+      const key = dialogs.getSnapshot()?.key
+      if (key === undefined) throw new Error('confirm dialog did not park')
+      dialogs.decide(key, true)
+      if (tail.endsWith('\r')) {
+        check(`NL9[${label}] 对话框关闭后才重放：同批尾随 Enter 只发送一次完整草稿`,
+          await settled(() => chat.calls.includes('submit:draft\ntail'))
+            && chat.calls.filter(call => call.startsWith('submit:')).length === 1,
+          JSON.stringify(chat.calls))
+      } else {
+        check(`NL9[${label}] 对话框关闭后才重放：同批后续文字不丢`,
+          await settled(() => controller.current?.text() === 'draft\ntail')
+            && !chat.calls.some(call => call.startsWith('submit:')), controller.current?.text())
+      }
+    } finally { await chat.unmount() }
+  }
 }
 
 // ── C. 会话管理与设置入口 ──
