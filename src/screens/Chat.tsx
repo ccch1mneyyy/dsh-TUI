@@ -10,7 +10,7 @@ import { envThemeOverride } from '../components/design-system/ThemeProvider.js'
 import { resolveBrand, setActiveBrand } from '../branding.js'
 import { hasPath } from '../dsh-adapter/settingsEditor.js'
 import { planReload, type ReloadKind } from '../reload.js'
-import { AlternateScreen, Box, Image, Text, InputCaret, useInput, useApp, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
+import { AlternateScreen, Box, Image, Text, InputCaret, useInput, useApp, useStdin, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { usePageInset } from '../components/PageMargin.js'
 import { POINTER } from '../terminal-utils/figures.js'
@@ -55,6 +55,7 @@ import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPan
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
 import { ExtensionDialog } from '../components/ExtensionDialog.js'
 import { consumeBoundaryRecoveryRemount } from '../ink/update-overflow-guard.js'
+import { InputEvent } from '../ink/events/input-event.js'
 import type { DOMElement } from '../ink/dom.js'
 import { useSearchHighlight } from '../ink/hooks/use-search-highlight.js'
 import { ChatTitle } from '../components/ChatTitle.js'
@@ -606,6 +607,7 @@ export function Chat({
    */
   promptControllerRef?: React.RefObject<PromptController | null>
 }) {
+  const { internal_eventEmitter: inputEmitter } = useStdin()
   const writeRaw = React.useContext(TerminalWriteContext)
   // Re-render whenever the channel mutates; rows/status are read fresh below.
   // DEFAULT lane on purpose (useExternalVersion): the channel version bumps
@@ -2209,6 +2211,7 @@ export function Chat({
    * the user into a different conversation.
    */
   const promptDraftRef = React.useRef<PromptDraftCache>({ current: null })
+  const launchpadPendingInputRef = React.useRef<InputEvent['keypress'][]>([])
   /**
    * Latest channel for the unmount release below: that effect must not re-run
    * on a channel identity change, yet its cleanup must release against the
@@ -2310,6 +2313,7 @@ export function Chat({
     // A stored draft can only belong to the conversation being replaced: the
     // composer is the one that writes it, and it writes it on the way out.
     promptDraftRef.current.current = null
+    launchpadPendingInputRef.current = []
     if (pendingFillRef.current === draftSessionId) {
       pendingFillRef.current = null
       return
@@ -6848,6 +6852,7 @@ export function Chat({
         onQueryChange={changeLaunchpadDraft}
         onSubmit={submitLaunchpad}
         onNewline={newlineLaunchpad}
+        onHandoffInput={event => launchpadPendingInputRef.current.push(event.keypress)}
         onFocusChange={setLaunchpadFocus}
         onAction={(action) => {
           // 第八版（用户实测：「刚点帮助，不知道为什么直接进入聊天页面了」）：
@@ -7346,6 +7351,13 @@ export function Chat({
           // 先闪一帧 toast 再消失。
           toastSuppressed={petSaysNotices}
           draftCache={promptDraftRef.current}
+          onInputReady={() => {
+            // Restore the draft and register the composer listener before
+            // replaying keys captured during the launchpad's final stdin batch.
+            const pending = launchpadPendingInputRef.current
+            launchpadPendingInputRef.current = []
+            for (const keypress of pending) inputEmitter.emit('input', new InputEvent(keypress))
+          }}
           helpOpen={helpOpen}
           onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
           onRunCommand={runCommand}

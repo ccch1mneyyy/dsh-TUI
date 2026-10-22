@@ -486,6 +486,8 @@ export interface PromptInputProps {
    * empty first value.
    */
   draftCache?: PromptDraftCache
+  /** Mount handoff: draft adoption and the input listener are ready. */
+  onInputReady?: () => void
   /** Whether the `?` help menu is open (state lives in the Chat screen). */
   helpOpen: boolean
   onToggleHelp(): void
@@ -604,6 +606,7 @@ export function PromptInput({
   suspended = false,
   cursorParking = true,
   draftCache,
+  onInputReady,
   helpOpen,
   onToggleHelp,
   onRunCommand,
@@ -3512,6 +3515,7 @@ export function PromptInput({
       setFileSelected(0)
     }
   }, { isActive: !suspended })
+  React.useEffect(() => { onInputReady?.() }, [])
 
   // === Render: hard-wrap every logical line at the input width, then show
   // the window of visual lines with the caret row always visible.

@@ -34,6 +34,7 @@ import {
   matchesPasteShortcut,
   stripBracketedPasteMarkers,
 } from '../utils/inputPaste.js'
+import type { InputEvent } from '../ink/events/input-event.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 
 /** 动作入口的类型与状态驱动纯函数在 `launchpadActions.ts`（第四版拆出，表驱动回归在那边）。 */
@@ -449,6 +450,7 @@ export function Launchpad({
   onQueryChange,
   onSubmit,
   onNewline,
+  onHandoffInput,
   onEscape,
   onBlankClick,
 }: {
@@ -566,6 +568,8 @@ export function Launchpad({
   onSubmit: (text: string) => string | void
   /** Shift/Option+Enter：交给 Chat 在当前光标处换行并继续编辑，保持未发送。 */
   onNewline?: (text: string, cursor: number) => void
+  /** Remaining keys before the composer mounts belong to the handed-off draft. */
+  onHandoffInput?: (event: InputEvent) => void
   /** 空输入时按 Esc / `Ctrl+C`：`sessions` 去看会话，`exit` 走双击退出漏斗。 */
   onEscape: (intent: 'sessions' | 'exit') => void
   /** 点空白处：把焦点收回输入框（不是提交、不是关闭）。 */
@@ -869,10 +873,16 @@ export function Launchpad({
    * `↑/↓` 与 `Tab` 在键帽行上移动焦点；焦点在 `-1` 时这两组键无操作
    * （首屏没有可滚的东西）。
    */
+  const handingOffRef = React.useRef(false)
   useInput((input, key, event) => {
     // 选择器盖在这一屏之上时键盘整块让位（Chat 的 overlay 分支处理；Esc 关
     // 选择器回到这里）。没有这道闸，选择器分支没消费的键会漏进草稿。
     if (inputPaused) return
+    if (handingOffRef.current) {
+      onHandoffInput?.(event)
+      event.stopImmediatePropagation()
+      return
+    }
     const query = queryRef.current
     const caret = caretRef.current
     const composing = key.ctrl || key.meta || key.super
@@ -955,6 +965,7 @@ export function Launchpad({
     if (inputFocused && onNewline !== undefined
       && key.return && (key.shift || key.meta) && !key.ctrl && !key.super) {
       pasteRevisionRef.current += 1
+      handingOffRef.current = true
       onNewline(query, caret)
       event.stopImmediatePropagation()
       return

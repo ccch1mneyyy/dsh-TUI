@@ -570,6 +570,25 @@ for (const fullscreen of [false, true]) {
     } finally { await chat.unmount() }
   }
 }
+for (const fullscreen of [false, true]) {
+  for (const newline of ['\x1b[13;2u', '\x1b\r']) {
+    const controller = React.createRef<PromptController>()
+    const chat = await mountChat({ launchpadOnBoot: true, columns: 48 }, {}, { fullscreen, promptControllerRef: controller })
+    try {
+      await settle(() => chat.screen().includes(LAUNCHPAD_MARK))
+      await chat.type('前🙂后')
+      await chat.send('\x1b[D')
+      await chat.send(newline + '续' + newline + '末\x1b[D中')
+      check(`NL batch [${fullscreen ? 'fullscreen' : 'inline'} ${JSON.stringify(newline)}] 保留换屏后的文字、连续换行和光标编辑`,
+        await settled(() => controller.current?.text() === '前🙂\n续\n中末后')
+          && !chat.calls.some(call => call.startsWith('submit:')), controller.current?.text())
+      await chat.send('\r')
+      check(`NL batch [${fullscreen ? 'fullscreen' : 'inline'}] 后续发送一次完整草稿`,
+        await settled(() => chat.calls.includes('submit:前🙂\n续\n中末后'))
+          && chat.calls.filter(call => call.startsWith('submit:')).length === 1, JSON.stringify(chat.calls))
+    } finally { await chat.unmount() }
+  }
+}
 for (const key of ['\x1b[13;2u', '\x1b\r']) {
   const controller = React.createRef<PromptController>()
   const chat = await mountChat({ launchpadOnBoot: true }, { ready: false, agentId: '' }, { promptControllerRef: controller })
@@ -1781,6 +1800,23 @@ const AC4_CUT_PRESET = 'Standard (Git Bash'
             && fixture.staged.size === 1, JSON.stringify(fixture.submissions))
       } finally { await chat.unmount() }
     }
+  }
+  for (const fullscreen of [false, true]) {
+    const fixture = imageHarness()
+    const controller = React.createRef<PromptController>()
+    const chat = await mountChat({ launchpadOnBoot: true, columns: 48 }, fixture.patch, { fullscreen, promptControllerRef: controller })
+    try {
+      await settle(() => chat.screen().includes(LAUNCHPAD_MARK))
+      await chat.send(pastePath)
+      await settle(() => fixture.staged.size === 1 && chat.screen().includes('[Image #1]'))
+      await chat.send('\x1b[13;2u\x1b[13;2u描述\r')
+      check(`NL batch image [${fullscreen ? 'fullscreen' : 'inline'}] 连续换行后同批发送保留图片绑定`,
+        await settled(() => fixture.submissions.length === 1)
+          && fixture.submissions[0]!.text === '[Image #1] \n\n描述'
+          && fixture.submissions[0]!.images.length === 1
+          && fixture.submissions[0]!.images[0]?.stageId === 'launchpad-stage-1'
+          && fixture.discarded.length === 0, JSON.stringify(fixture.submissions))
+    } finally { await chat.unmount() }
   }
   {
     const fixture = imageHarness()
