@@ -1042,7 +1042,10 @@ export function PromptInput({
   // hand-off below. A commit-time write would run BEFORE the restore effect
   // has consumed the slot, so the composer's own first (empty) value would
   // erase the draft it just came back for.
-  // Publish the live controller (fresh closure over `value` every render).
+  // Publish the live controller. `hasText()` reads the ref, not the render
+  // closure: a draft restored in a passive effect (the launchpad hand-off
+  // replays its keys from there) is already in `valueRef` while this facade
+  // still carries the empty first value.
   // A prompt-slot panel withdraws the handle in the same commit: external
   // injection must not append/submit a hidden command draft while it waits
   // for a decision. clear() mirrors the double-tap-Esc clear.
@@ -1053,7 +1056,7 @@ export function PromptInput({
       return
     }
     controllerRef.current = {
-      hasText: () => value.length > 0,
+      hasText: () => valueRef.current.length > 0,
       text: () => valueRef.current,
       previewImages: () => composerImageRefsForText(valueRef.current, draftImagesRef.current).flatMap(ref => {
         const image = channel.stagedImage(ref.stageId)

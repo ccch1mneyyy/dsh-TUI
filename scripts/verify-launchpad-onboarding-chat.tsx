@@ -9,7 +9,8 @@
  *   B. 提交首句的落点：提交一句 → 落在对话页、草稿就在输入框里、会话浏览器
  *      不再盖着（第七版起 boot 不预开浏览器，落地页是第一屏）。
  *   C. 会开整屏界面的快捷入口盖在落地页之上，Esc 回落地页。
- *   NL. Shift/Option+Enter：带着未发送草稿进入聊天页，在光标处换行，保留图片。
+ *   NL. Shift/Option+Enter：带着未发送草稿进入聊天页，在光标处换行，保留图片；
+ *      同批的 Ctrl+C 按"已交接的草稿"清空，不按空输入退出。
  *   D. 覆盖层动作（模型 / 主题 / 语言）不收落地页。
  *   E. 记账：向导里 Esc（跳过）**不写** onboarding.json；→→→Enter 走完才写。
  *   F. 最小模式：落地页整体不存在（launchpadVisible 真的接在渲染链上）。
@@ -610,6 +611,18 @@ for (const key of ['\x1b[13;2u', '\x1b\r']) {
     check('NL5 命令补全开启时 Shift+Enter 保留命令原文，不执行候选',
       await settled(() => controller.current?.text() === '/model\n' && !chat.screen().includes(LAUNCHPAD_MARK))
         && !modelOpen(chat.screen()) && !chat.calls.some(call => call.startsWith('submit:')), chat.screen())
+  } finally { await chat.unmount() }
+}
+for (const key of ['\x1b[13;2u', '\x1b\r']) {
+  const controller = React.createRef<PromptController>()
+  const chat = await mountChat({ launchpadOnBoot: true }, {}, { promptControllerRef: controller })
+  try {
+    await settle(() => chat.screen().includes(LAUNCHPAD_MARK))
+    await chat.type('前🙂后')
+    await chat.send(key + '\x03')
+    check(`NL8[${JSON.stringify(key)}] 同批 Ctrl+C 清空已交接的草稿，不把它当空输入退出`,
+      await settled(() => controller.current?.text() === '' && !chat.screen().includes(LAUNCHPAD_MARK))
+        && !chat.calls.some(call => call.startsWith('submit:')), chat.screen())
   } finally { await chat.unmount() }
 }
 

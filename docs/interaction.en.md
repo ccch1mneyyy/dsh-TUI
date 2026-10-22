@@ -120,9 +120,10 @@ results back to the chat screen and add no new behavior.
   jobs`; update detected → `Update available`; usage milestone reached and never starred → `Feed us a
   star`; fallback `Help`). Full screens opened from the launchpad (sessions & workspaces / settings /
   background jobs / the family tree / the wizard) render **above the launchpad** — `Esc` closes them
-  back onto the launchpad (draft, params and focus intact); **the only way off the launchpad into the
-  chat is submitting a non-command line with Enter**. Overlays on the launchpad side (pickers, the
-  command palette) are a **clean cutout** — every cell in the overlay rect is space-filled (host
+  back onto the launchpad (draft, params and focus intact); there are two ways off the launchpad into
+  the chat: submit a non-command line with Enter, or press `Shift+Enter` (`Option+Enter`) in the input
+  to carry the unsent draft over and start a new line at the caret. Overlays on the launchpad side
+  (pickers, the command palette) are a **clean cutout** — every cell in the overlay rect is space-filled (host
   glyphs never bleed through), yet no background color is emitted (no white block; Kitty splash
   art still shows through the terminal-default cells; the chat page's pickers are unaffected).
 - **Tips line**: click to rotate (three tips cycle; the first-run tip has top priority and never rotates);

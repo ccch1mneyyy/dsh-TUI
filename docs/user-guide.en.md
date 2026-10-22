@@ -66,9 +66,10 @@ dsh-tui
    whole blocks (quick actions → hint line → input only) and narrow ones climb down the ladder in
    5.1. Full screens opened from this screen (sessions & workspaces / settings / background jobs /
    the first-run guide) render **above the launchpad** — `Esc` closes them back onto the launchpad
-   (draft, params and focus intact); the only way off the launchpad into the chat is submitting a
-   non-command line with Enter. When the dsh engine is out of the verified range, a **⚠
-   version-drift warning** appears with the align command.
+   (draft, params and focus intact); there are two ways off the launchpad into the chat: submit a
+   non-command line with Enter, or press `Shift+Enter` (`Option+Enter`) in the input to carry the
+   unsent draft over and start a new line at the caret. When the dsh engine is out of the verified
+   range, a **⚠ version-drift warning** appears with the align command.
 3. **Bottom status bar**: working-status row, context bar, TPS gauge, and other live
    indicators (see [5. UI and status bar](#5-ui-and-status-bar)).
 4. **Startup hint line**: one fixed line under the logo:
