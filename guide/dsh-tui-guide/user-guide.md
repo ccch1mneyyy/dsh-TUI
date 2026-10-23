@@ -147,7 +147,7 @@ dsh-tui
 | `Shift+↑` | 消息选择模式（`↑/↓` 移动，`Enter` 展开单条，`Esc` 退出） |
 | `Ctrl+T`（⌘T） | 打开轨迹场景（同 `/trace`） |
 | `Alt+R` | 落地页上**继续最近一条会话**（同入口行的「继续「…」」；仅启动页生效，无可继续会话时无动作）。键位可在 `/settings` 改 |
-| `Alt+S` | 一键 star（同 `/star`；开屏那句求 star 标语整行也可点）。键位可在 `/settings` 改；成功后会演一小段「鲸鱼娘接住星星」的庆祝。想随时看这段庆祝：`DSH_TUI_STAR_MODAL=1 dsh-tui`；想随时看开屏那句求 star 标语：`DSH_TUI_STAR_LINE=1 dsh-tui`（都是预览用环境变量，不动账本） |
+| `Alt+S` | 一键 star（同 `/star`；开屏那句求 star 标语整行也可点）。键位可在 `/settings` 改；想随时看开屏那句求 star 标语：`DSH_TUI_STAR_LINE=1 dsh-tui`（预览用环境变量，不动账本） |
 
 ### 2.6 鼠标（fullscreen 全屏模式；拖拽/双击/三击即选即复制）
 

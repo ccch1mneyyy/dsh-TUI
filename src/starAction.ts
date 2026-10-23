@@ -3,7 +3,7 @@
  *
  * 为什么是 `gh` 而不是 `git`：star 是 GitHub 的 API 概念，`git` 本身没有这个能力；
  * 而且终端里的 OSC 8 链接**只能打开 URL**，点不出命令来——所以"一键"必须是 TUI 里
- * 一个显式动作（`/star` 或弹窗按钮），由用户按下去才执行。
+ * 一个显式动作（`/star`、`Alt+S` 或开屏标语行的点击），由用户按下去才执行。
  *
  * 三条硬约束：
  * 1. **绝不自动 star**：没有用户动作就不会调用这里；
@@ -23,6 +23,16 @@ export type StarOutcome =
   | { readonly kind: 'no-gh' }
   | { readonly kind: 'not-authed' }
   | { readonly kind: 'failed'; readonly detail: string }
+
+/**
+ * 一次 star 尝试带回来的结果（含回落用的仓库 URL）：Chat 的三个入口
+ * （`/star`、`Alt+S`、开屏标语点击）都按这四类各回一句提示。
+ */
+export type StarAttempt =
+  | { readonly kind: 'starred' }
+  | { readonly kind: 'no-gh'; readonly url: string }
+  | { readonly kind: 'not-authed'; readonly url: string }
+  | { readonly kind: 'failed'; readonly detail: string; readonly url: string }
 
 /** 探测 `gh` 是否存在用的命令（只读，不改任何东西）。 */
 const GH_VERSION_ARGS = ['--version'] as const

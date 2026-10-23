@@ -30,7 +30,7 @@ export interface LaunchpadAction {
  *   - `updateAvailable`：`checkForTuiUpdate()`（src/update.ts，与 /update
  *     同一条判定）在启动页挂起时异步探得的新版本；
  *   - `starDue`：`usageStats`（~/.dsh-tui/usage.json）有**未报过的**已达档
- *     里程碑（首档 24h）且本进程尚未 star 成功——口径与开屏求 star 弹窗
+ *     里程碑（首档 24h）且本进程尚未 star 成功——口径与开屏求 star 标语行
  *     完全一致（pendingStarMilestone + starred）。
  */
 export interface LaunchpadActionState {

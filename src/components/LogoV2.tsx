@@ -14,7 +14,7 @@ import { paintedWidth, renderBigText } from './bigfont.js'
 import { COLUMN_GAP, WHALE_BOX_WIDTH, resolveSplashLayout } from './splashLayout.js'
 import { resolveSplashTitleFont, pickSplashFont, splashFontById, type SplashFont } from './splashFonts.js'
 import { pickSplashEgg, splashStarLine, type SplashEgg } from './splashEggs.js'
-import { isHistoricMilestone, markStarAsked, pendingStarMilestone, recordLaunch, STAR_MILESTONES, usageSnapshot } from '../usageStats.js'
+import { markStarAsked, pendingStarMilestone, recordLaunch, STAR_MILESTONES, usageSnapshot } from '../usageStats.js'
 import { effectiveComboDisplay } from '../utils/keymap.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { BRAND, EMBER, EMBER_BRIGHT, EMBER_FLASH, EMBER_LIGHT, EMBER_PALE, EMBER_PAPER, EMBER_PAPER_FLASH, FLASH, ICE, LAVENDER, LAVENDER_BRIGHT, LAVENDER_FLASH, LAVENDER_LIGHT, LAVENDER_PALE, LAVENDER_PAPER, LAVENDER_PAPER_FLASH, LAVENDER_SOFT, PALE, sweep } from './shimmer.js'
@@ -451,10 +451,9 @@ export function LogoV2({
     if (starChance === 0) return null
     if (starChance !== undefined) return STAR_MILESTONES.length - 1
     const pending = pendingStarMilestone(usage)
-    // 历史性时刻（99h / 999 次）不走标语行——那两档归 Chat 的开屏弹窗
-    //（弹窗自己 markStarAsked）。这里既不画也不记，档位保持待报；
-    // 弹窗这轮没机会弹（回合中等）就留给下一次启动。
-    return pending !== null && isHistoricMilestone(pending) ? null : pending
+    // 标语行对**每一个待报档**都画（含 24h / 99h / 999 次这些以前归弹窗的档）：
+    // 开屏不再有拦路弹窗，记账走下面的 markStarAsked。
+    return pending
   })
   const starLine = starMilestone === null
     ? null

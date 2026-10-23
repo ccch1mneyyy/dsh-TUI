@@ -242,7 +242,7 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionSpec[] = [
   { id: 'questionDetailUp', defaults: ['alt+up'] },
   { id: 'questionDetailDown', defaults: ['alt+down'] },
   { id: 'expandEditor', defaults: ['ctrl+shift+e'] },
-  // 开屏标语里的"一键 star"：与 `/star`、弹窗按钮同一个动作（gh api PUT）。
+  // 一键 star：`/star`、开屏标语行点击与这个键位是同一个动作（gh api PUT）。
   // 用 alt 组合是为了不跟输入框抢字母键。
   { id: 'star', defaults: ['alt+s'] },
   // Word-level undo for the prompt draft. `exactPrimary` keeps Cmd+Z out of

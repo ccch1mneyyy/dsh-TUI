@@ -968,28 +968,6 @@ const dict = {
     zh: '一键 star 没成功：{{detail}}（也可以直接在浏览器里打开 {{url}}）',
     en: 'One-key star failed: {{detail}} (or open {{url}} in a browser)',
   },
-  // 99h / 999 次的"求 star"开屏弹窗（StarPrompt.tsx）。正文是维护者定的
-  // 原话——诚恳、不催；标题按里程碑取"小时"或"次启动"。**每一行都是
-  // 一行**（48 列内不折行），所以排版与作者写的断句完全一致。
-  'star-modal-title-hours': { zh: '🐳 已经陪你 {{hours}} 小时了！', en: '🐳 {{hours}} hours together!' },
-  'star-modal-title-launches': { zh: '🐳 已经陪你 {{launches}} 次启动了！', en: '🐳 {{launches}} launches together!' },
-  'star-modal-body-1': { zh: '不知不觉，dshTUI 已经陪你走了这么久啦。', en: 'Before you noticed, dsh-TUI had already come this far with you.' },
-  'star-modal-body-2': { zh: '如果它有让你的 DSH 更好用一点、', en: 'If it made your DSH a little more usable,' },
-  'star-modal-body-3': { zh: '更顺手一点，或者只是让你开心了一点——', en: 'a little smoother — or just made you smile —' },
-  'star-modal-body-4': { zh: '那就送鲸鱼娘一颗小小的 Star 吧 ⭐', en: 'treat the whale girl to a tiny Star ⭐' },
-  'star-modal-body-5': { zh: '每一颗 Star，都会变成我们继续折腾', en: 'Every Star becomes fuel for us to keep tinkering' },
-  'star-modal-body-6': { zh: '和把 dshTUI 做得更好的动力！', en: 'and to keep making dsh-TUI better!' },
-  'star-modal-star': { zh: '投喂一颗 Star ⭐', en: 'Feed a Star ⭐' },
-  'star-modal-open': { zh: '在浏览器中打开 GitHub', en: 'Open GitHub in the browser' },
-  'star-modal-working': { zh: '正在点 star…', en: 'Starring…' },
-  'star-modal-hint': { zh: '↑↓ 选择 · **Enter** 确认 · **Esc** 下次一定 (´;ω;`)', en: '↑↓ choose · **Enter** confirm · **Esc** next time (´;ω;`)' },
-  // star 成功后的庆祝态（星光 + 鲸鱼喷水），几秒后卡片自己收场。
-  'star-modal-thanks-title': { zh: '🌟 收到 Star 啦！', en: '🌟 Star received!' },
-  'star-modal-thanks-1': { zh: '鲸鱼娘成功接住了一颗小星星 ~', en: 'The whale girl caught a little star ~' },
-  'star-modal-thanks-2': { zh: '谢谢你的支持！', en: 'Thank you for your support!' },
-  'star-modal-thanks-3': { zh: '这颗 Star 会变成 dshTUI 继续成长的动力。', en: 'This Star becomes fuel for dsh-TUI to keep growing.' },
-  'star-modal-thanks-4': { zh: '希望以后，它也能继续陪你走很久。', en: 'May it keep you company for a long time to come.' },
-  'star-modal-thanks-hint': { zh: '**Enter** / **Esc** 关闭', en: '**Enter** / **Esc** to close' },
   'coupon-modal-title': { zh: '鲸鱼券', en: 'Whale coupon' },
   'coupon-modal-received': { zh: 'DeepSeek 送你的 {{amount}} {{unit}}鲸鱼券到账啦～', en: 'Your {{amount}} {{unit}} whale coupon from DeepSeek is here ~' },
   'coupon-modal-expiry': { zh: 'Deepy提醒：这张券 {{month}} 月 {{day}} 日 {{time}} 就要过期啦，别忘记用掉哦～', en: 'Deepy says: this coupon expires on {{month}}/{{day}} at {{time}}. Do not forget to use it ~' },

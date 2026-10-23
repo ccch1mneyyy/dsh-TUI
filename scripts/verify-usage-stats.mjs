@@ -4,7 +4,8 @@
  * 钉死三件事：
  *   ① 账本文件缺失/损坏/字段类型不对 → 一律当 0，且**绝不抛错**（开屏不能被统计搞挂）；
  *   ② 一次进程只记一次启动（`recordLaunch` 重复调用不重复 +1），写盘是"临时文件 + 改名"；
- *   ③ 里程碑阶梯：跨档只报最高那档、报过的不再报、全报完返回 null。
+ *   ③ 里程碑阶梯：跨档只报最高那档、报过的不再报、全报完返回 null；每一档都只出开屏那句
+ *      求 star 标语行（求 star 弹窗已删，没有"配弹窗"的档）。
  *
  * 运行：node --import tsx/esm scripts/verify-usage-stats.mjs
  */
@@ -13,7 +14,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const { EMPTY_USAGE, STAR_MILESTONES, isHistoricMilestone, markStarAsked, pendingStarMilestone, readUsage, recordLaunch, writeUsage } =
+const { EMPTY_USAGE, STAR_MILESTONES, markStarAsked, pendingStarMilestone, readUsage, recordLaunch, writeUsage } =
   await import('../src/usageStats.js')
 
 let checks = 0
@@ -67,19 +68,6 @@ check(
   '999 次那一档就在阶梯里（不是 1000）',
   STAR_MILESTONES.some(milestone => milestone.launches === 999) &&
     !STAR_MILESTONES.some(milestone => milestone.launches === 1000),
-)
-const modalIndexes = STAR_MILESTONES.map((milestone, index) => (milestone.modal === true ? index : -1)).filter(
-  index => index >= 0,
-)
-check(
-  '24h、99h 与 999 次配弹窗（其余档绝不拦路）',
-  modalIndexes.length === 3 &&
-    STAR_MILESTONES[modalIndexes[0]].hours === 24 &&
-    STAR_MILESTONES[modalIndexes[1]].hours === 99 &&
-    STAR_MILESTONES[modalIndexes[2]].launches === 999 &&
-    modalIndexes.every(index => isHistoricMilestone(index)) &&
-    !isHistoricMilestone(1),
-  `弹窗档位下标 ${modalIndexes.join('、')}`,
 )
 check('报过第 0 档后不再报它（下一档未达 → null）', pendingStarMilestone(at({ totalMs: 30 * hour, celebrated: 1 })) === null)
 check('报过第 0 档后，跨到 50h 才报第 1 档', pendingStarMilestone(at({ totalMs: 50 * hour, celebrated: 1 })) === 1)

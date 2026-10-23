@@ -1,6 +1,6 @@
 /**
  * 本机使用统计（`~/.dsh-tui/usage.json`）：累计启动次数与累计在线时长，只服务
- * 开屏那句"里程碑求 star"。三条硬约束：
+ * 开屏那句"里程碑求 star"标语行。三条硬约束：
  *
  * 1. **绝不影响开屏**：文件缺失/损坏/字段类型不对一律当 0，读不到就重写；
  * 2. **一次进程只记一次**：`recordLaunch()` 有模块级闸门，LogoV2 反复挂载也只 +1；
@@ -24,39 +24,25 @@ export interface StarMilestone {
   readonly launches?: number
   /** 累计在线小时门槛。 */
   readonly hours?: number
-  /**
-   * 这一档配不配"弹一次窗"。给**值得停下来看一眼**的档用（`24h` / `99h` /
-   * `999 次`）——其余档只在开屏出那行标语 + 一条非阻塞提示，绝不拦路。
-   * 弹窗一次只弹一档、只弹一次。（24h 是"第一次陪你一整天"，比 99h 早得多，
-   * 用户实机反馈 99h 等太久。）
-   */
-  readonly modal?: boolean
 }
 
 /**
  * 求 star 的里程碑阶梯（有序）。次数档：100 / 500 / **999** / 5000 / 10000；
  * 时长档：**24 / 50 / 99 / 200 / 500** 小时。两套按体感交错成一条线；
- * 其中 `24h`、`99h` 与 `999 次` 会**弹一次窗**（可关，只在开屏）。
+ * 每一档都只在开屏出那行求 star 标语，跨档时只报最高那一档。
  */
 export const STAR_MILESTONES: readonly StarMilestone[] = [
-  { hours: 24, modal: true },
+  { hours: 24 },
   { hours: 50 },
-  { hours: 99, modal: true },
+  { hours: 99 },
   { launches: 100 },
   { hours: 200 },
   { hours: 500 },
   { launches: 500 },
-  { launches: 999, modal: true },
+  { launches: 999 },
   { launches: 5000 },
   { launches: 10000 },
 ]
-
-/**
- * 这一档是不是"历史性时刻"（值得弹窗）。
- * @param index - `STAR_MILESTONES` 的下标。
- * @returns 该档是否配弹窗（未知下标一律 false）。
- */
-export const isHistoricMilestone = (index: number): boolean => STAR_MILESTONES[index]?.modal === true
 
 /** 本机累计用量。 */
 export interface UsageStats {
@@ -126,20 +112,6 @@ export function pendingStarMilestone(stats: UsageStats): number | null {
   return null
 }
 
-/**
- * 开屏弹窗判定：启动时由 Chat 调一次——账本文件里未报过的最高一档若
- * 配弹窗（`99h` / `999 次`），返回其下标；其余情况（没有待报档、或待报档
- * 是只出标语行的普通档）一律 `null`。读**文件**而不是进程缓存：LogoV2
- * 的 `recordLaunch` 与本函数分属不同挂载层，文件是两者一致的真相源。
- * 弹窗真正展示时由调用方 `markStarAsked` 记账，本函数只读不写。
- * @param dir - 数据目录（测试可注入）。
- * @returns 配弹窗且已达成的档位下标；没有则 `null`。
- */
-export function dueStarModal(dir: string = DATA_DIR): number | null {
-  const pending = pendingStarMilestone(readUsage(dir))
-  return pending !== null && isHistoricMilestone(pending) ? pending : null
-}
-
 /** 进程内闸门：一次进程、一个数据目录只记一次启动。 */const recorded = new Set<string>()
 /** 进程内缓存的账本（按目录分开存，生产只有一个目录；测试可注入不同目录）。 */
 const caches = new Map<string, UsageStats>()
@@ -195,7 +167,7 @@ export function usageSnapshot(dir: string = DATA_DIR): UsageStats {
 }
 
 /**
- * 把某一档标记为"已求过"（开屏决定显示之后调用一次）。
+ * 把某一档标记为"已求过"（开屏标语行决定显示之后调用一次）。
  * @param index - `STAR_MILESTONES` 的下标。
  * @param dir - 数据目录（测试可注入）。
  */
