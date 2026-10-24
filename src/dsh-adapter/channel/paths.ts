@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { rankFileCandidates, type FileCandidate } from '../../utils/fileSuggestions.js'
-import { homeDir } from '../../utils/paths.js'
+import { expandHomePrefix, homeDir } from '../../utils/paths.js'
 import type { FileSuggestionFs } from './types.js'
 
 /** Trailing path segment (`C:/a/b` → `b`). */
@@ -79,13 +79,14 @@ export async function listPathCandidates(fs: FileSuggestionFs, cwd: string, quer
   const displayDirectoryPart = rawSlash < 0 ? (bareDir ? `${query}/` : '') : query.slice(0, rawSlash + 1)
   const displaySeparator = displayDirectoryPart.endsWith('\\') ? '\\' : '/'
   const nameQuery = slash < 0 || bareDir ? '' : normalized.slice(slash + 1)
-  // `~/` expands against the host home (matches the cwd resolution rules);
-  // drive-letter and POSIX-absolute prefixes pass through untouched.
-  const expanded = directoryPart === '~/'
-    ? `${homeDir()}/`
-    : directoryPart.startsWith('/') || /^[A-Za-z]:\//.test(directoryPart)
-      ? directoryPart
-      : join(cwd, directoryPart || '.')
+  // A leading literal `~/` (or `~\`) expands against the host home at ANY
+  // depth — issue #1706: after picking `~/Downloads/` the next level used to be
+  // joined onto the workspace and the menu silently vanished. Drive-letter and
+  // POSIX-absolute prefixes still pass through untouched.
+  const homeExpanded = expandHomePrefix(directoryPart)
+  const expanded = homeExpanded.startsWith('/') || /^[A-Za-z]:[\\/]/.test(homeExpanded)
+    ? homeExpanded
+    : join(cwd, homeExpanded || '.')
   try {
     if (signal?.aborted) return []
     const target = await fs.resolve(expanded)

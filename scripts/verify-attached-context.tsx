@@ -393,6 +393,73 @@ console.log('--- C/D: composer render ---')
   await app.unmount()
 }
 
+{
+  // E — `@~/…` 提及解析（issue #1706）：前导 `~/` 必须展开到 HOME（`~\` 等价），
+  // 目标必须真的被附加，而不是静默落进 missing。HOME 已隔离到临时目录。
+  const { expandMentions } = await import('../src/dsh-adapter/channel.js')
+  const { expandHomePrefix } = await import('../src/utils/paths.js')
+  // R-4：直接钉住前缀展开本身（间接覆盖不够）——`~/` 与 `~\` 等价、裸 `~` 与
+  // `~user/` 不展开、绝对路径原样透传。
+  const absoluteInput = '/abs/keep/x'
+  check('E0 expandHomePrefix：只展开字面前缀（~/、~\\），裸 ~ / ~user / 绝对路径不动',
+    expandHomePrefix('~/a/b') === nodePath.join(isolatedHome, 'a', 'b')
+    && expandHomePrefix('~\\a') === nodePath.join(isolatedHome, 'a')
+    && expandHomePrefix('~/') === isolatedHome
+    && expandHomePrefix('~') === '~'
+    && expandHomePrefix('~user/x') === '~user/x'
+    && expandHomePrefix(absoluteInput) === absoluteInput,
+    JSON.stringify({
+      deep: expandHomePrefix('~/a/b'),
+      backslash: expandHomePrefix('~\\a'),
+      root: expandHomePrefix('~/'),
+      bare: expandHomePrefix('~'),
+      user: expandHomePrefix('~user/x'),
+      absolute: expandHomePrefix(absoluteInput),
+    }))
+  const homeNoteDir = nodePath.join(isolatedHome, 'Downloads')
+  nodeFs.mkdirSync(homeNoteDir, { recursive: true })
+  const homeNote = nodePath.join(homeNoteDir, 'note.txt')
+  nodeFs.writeFileSync(homeNote, 'home note body\n')
+  const mentionFs = {
+    async resolve(path) { return { displayPath: path } },
+    async stat(target) {
+      try {
+        const stat = nodeFs.statSync(target.displayPath)
+        return stat.isDirectory() ? { type: 'directory' } : stat.isFile() ? { type: 'file' } : { type: 'other' }
+      } catch {
+        return undefined
+      }
+    },
+    async readText(target) { return nodeFs.readFileSync(target.displayPath, 'utf8') },
+    async listDir(target) {
+      return nodeFs.readdirSync(target.displayPath, { withFileTypes: true })
+        .map(entry => ({ name: entry.name, type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other' }))
+    },
+  }
+  const workspace = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'dshtui-mention-ws-'))
+  try {
+    const expansion = await expandMentions(mentionFs, workspace, '看一下 @~/Downloads/note.txt')
+    check('E1 @~/… 展开到 HOME 并真的附加（不是 missing）',
+      expansion.missing.length === 0
+      && expansion.attached.length === 1
+      && expansion.blocks.some(block => block.type === 'text' && block.text.includes('home note body'))
+      // 模型侧必须拿到可解析的路径（fs 工具不展开 `~`）；用户可见列表仍是原串。
+      && expansion.blocks.some(block => block.type === 'text' && block.text.includes(`path="${homeNote}"`))
+      && expansion.attached[0] === '~/Downloads/note.txt',
+      JSON.stringify({ attached: expansion.attached, missing: expansion.missing, homeNote }))
+    // `~\` 前缀与 `~/` 等价；后半段在本机（POSIX）必须用 `/`——POSIX 不把
+    // 反斜杠当分隔符，全反斜杠形态只有在 Windows 上才落到同一个文件。
+    const backslash = await expandMentions(mentionFs, workspace, '再看 @~\\Downloads/note.txt')
+    check('E2 @~\\ 前缀与 @~/ 等价（模型侧同样拿到展开路径）',
+      backslash.missing.length === 0 && backslash.attached.length === 1
+      && backslash.blocks.some(block => block.type === 'text' && block.text.includes(`path="${homeNote}"`))
+      && backslash.attached[0] === '~\\Downloads/note.txt',
+      JSON.stringify({ attached: backslash.attached, missing: backslash.missing }))
+  } finally {
+    nodeFs.rmSync(workspace, { recursive: true, force: true })
+  }
+}
+
 console.log('')
 console.log(failed === 0 ? 'verify-attached-context: all checks passed' : 'verify-attached-context: ' + failed + ' check(s) FAILED')
 process.exit(failed === 0 ? 0 : 1)

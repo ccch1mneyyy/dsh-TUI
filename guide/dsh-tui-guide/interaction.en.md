@@ -247,6 +247,9 @@ Type `@` at **any position** of the message to open file completion.
 - Keep typing to filter; `Tab`/`Enter` to pick; directories can be entered further.
 - Plain fragments match **fuzzily** — `@ment` matches `src/utils/mentions.ts` (prefix/boundary and short-path boosts).
 - Path-shaped queries (`@src/`, `@./`, `@../`, `@~/`, `@D:\`, or anything containing a separator) read **only that directory** for local completion.
+- `~/` and `~\` expand to home at **any depth** (`@~/a/b/c` names the same directory as `@<home>/a/b/c`); the two spellings are equivalent, and a non-Windows terminal expands `~\` before completing too.
+- `~user/` is **not** expanded (it is a literal path); when the current directory really has a child named `~`, `@~/…` still expands to home (shell semantics) — use `@./~/…` for the literal directory.
+- Completion and the attachment produced on send share the same expansion: a `~/` path the menu can list resolves through the same home path.
 - `Esc` closes only the current `@` token's menu; async refreshes keep your selected candidate.
 - Text files and directory listings are attached as text; PNG, JPEG, WebP, and GIF files are sent as durable Harness image blocks.
 - Reads use the active workspace filesystem, including provider-owned workspaces.

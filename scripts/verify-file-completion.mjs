@@ -111,6 +111,74 @@ try {
     `ordinary nested source exceeded the completion depth limit:\n${filesWithNestedSource.join('\n')}`,
   )
   console.log('PASS: ordinary nested source remains reachable in @ completion')
+
+  // ── 前导 `~/` 展开（issue #1706）────────────────────────────────────────
+  // 补全必须把任意深度的字面前缀 `~/`（或 `~\`）展开到 HOME，而不是只在查询
+  // 恰好是 `~/` 时展开：选中 `~/Downloads/` 之后菜单必须继续列下一层。
+  const previousHome = process.env.HOME
+  const previousProfile = process.env.USERPROFILE
+  const homeFixture = await mkdtemp(join(tmpdir(), 'dsh-tui-home-'))
+  try {
+    await mkdir(join(homeFixture, 'Downloads', 'sub'), { recursive: true })
+    await writeFile(join(homeFixture, 'Downloads', 'note.txt'), 'note\n')
+    process.env.HOME = homeFixture
+    process.env.USERPROFILE = homeFixture
+
+    const homeRoot = await channel.listFileCandidates('~/')
+    assert.ok(
+      homeRoot.some(entry => entry.path === '~/Downloads/'),
+      `bare ~/ should list the home directory:\n${homeRoot.map(entry => entry.path).join('\n')}`,
+    )
+    console.log('PASS: bare ~/ lists the home directory')
+
+    const homeChild = await channel.listFileCandidates('~/Downloads/')
+    assert.ok(
+      homeChild.some(entry => entry.path === '~/Downloads/note.txt')
+      && homeChild.some(entry => entry.path === '~/Downloads/sub/'),
+      `~/ must expand after a subdirectory was picked (issue #1706):\n${homeChild.map(entry => entry.path).join('\n')}`,
+    )
+    console.log('PASS: ~/ expands at depth after picking a subdirectory (issue #1706)')
+
+    const homeTyped = await channel.listFileCandidates('~/Downloads/su')
+    assert.ok(
+      homeTyped.some(entry => entry.path === '~/Downloads/sub/'),
+      `~/ completion with a partial segment should still list home children:\n${homeTyped.map(entry => entry.path).join('\n')}`,
+    )
+    console.log('PASS: ~/ expands with a partial trailing segment')
+
+    const homeBackslash = await channel.listFileCandidates('~\\Downloads\\')
+    assert.ok(
+      homeBackslash.some(entry => entry.path === '~\\Downloads\\note.txt'),
+      `~\\ must expand like ~/ and keep the typed separator:\n${homeBackslash.map(entry => entry.path).join('\n')}`,
+    )
+    console.log('PASS: ~\\ expands like ~/ (typed separator preserved)')
+
+    // 字面 `~` 目录：home 优先（与 shell 一致），引用字面目录走 `./~/`。
+    await mkdir(join(fixture, '~'))
+    await writeFile(join(fixture, '~', 'literal.txt'), '')
+    const literalTilde = await channel.listFileCandidates('./~/')
+    assert.ok(
+      literalTilde.some(entry => entry.path === './~/literal.txt'),
+      `./~/ must reach a real directory named "~":\n${literalTilde.map(entry => entry.path).join('\n')}`,
+    )
+    console.log('PASS: ./~/ reaches a literal "~" directory (home wins for bare ~/)')
+
+    // `~user/` 不是字面前缀，不许展开。
+    await mkdir(join(fixture, '~user'))
+    await writeFile(join(fixture, '~user', 'u.txt'), '')
+    const userLike = await channel.listFileCandidates('~user/')
+    assert.ok(
+      userLike.some(entry => entry.path === '~user/u.txt'),
+      `~user/ must stay a literal directory name:\n${userLike.map(entry => entry.path).join('\n')}`,
+    )
+    console.log('PASS: ~user/ is not expanded')
+  } finally {
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+    if (previousProfile === undefined) delete process.env.USERPROFILE
+    else process.env.USERPROFILE = previousProfile
+    await rm(homeFixture, { recursive: true, force: true })
+  }
 } finally {
   await rm(fixture, { recursive: true, force: true })
 }
