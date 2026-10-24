@@ -125,7 +125,7 @@ const brokenHost = fakeHost({ dropExport: { key: 'cmdline', name: 'provideCmdlin
 const record = join(fakeRoot, 'delegated.json')
 writeFileSync(join(brokenHost, 'lib', 'bin.js'), `#!/usr/bin/env node
 import { writeFileSync } from 'node:fs'
-writeFileSync(${JSON.stringify(record)}, JSON.stringify({ args: process.argv.slice(2), notice: process.env.DSH_TUI_HOST_NOTICE }))
+writeFileSync(${JSON.stringify(record)}, JSON.stringify({ args: process.argv.slice(2), notice: process.env.DSH_TUI_HOST_NOTICE, delegated: process.env.DSH_TUI_HOST_DELEGATED }))
 process.exit(7)
 `)
 chmodSync(join(brokenHost, 'lib', 'bin.js'), 0o755)
@@ -143,11 +143,22 @@ const env: NodeJS.ProcessEnv = {
 }
 for (const name of ['DSH_TUI_HOST_ENTRY', 'DSH_TUI_BACKEND_HANDOFF', 'DSH_TUI_HANDOFF_ACK_FD', 'DSH_TUI_RESTART_CHILD', 'DSH_TUI_HOST_NOTICE', 'DSH_TUI_PROFILE']) delete env[name]
 const entry = spawnSync(process.execPath, ['--import', 'tsx/esm', join(repo, 'src', 'dsh-adapter', 'host-entry.ts'), 'hello'], { cwd: repo, env, encoding: 'utf8', timeout: 60_000 })
-const delegated = existsSync(record) ? JSON.parse(readFileSync(record, 'utf8')) as { args: string[]; notice?: string } : undefined
+const delegated = existsSync(record) ? JSON.parse(readFileSync(record, 'utf8')) as { args: string[]; notice?: string; delegated?: string } : undefined
 check('the entry hands a host it cannot use to `dsh --profile`', JSON.stringify(delegated?.args) === JSON.stringify(['--profile', 'dsh-tui', '--', 'hello']), { delegated, stderr: entry.stderr })
+check('the delegated chain is marked so restarts do not re-enter a waiting entry', delegated?.delegated === '1', delegated)
 check('the entry mirrors the delegated exit', entry.status === 7, { status: entry.status, signal: entry.signal, stderr: entry.stderr })
 check('the reason reaches stderr', /cannot host this launch \(dsh 0\.0\.0-fake\.0 at .* lacks dsh-cmdline\.provideCmdline\); starting DSH through `dsh --profile`/u.test(entry.stderr), entry.stderr)
 check('the reason reaches the delegated screen', delegated?.notice?.includes('lacks dsh-cmdline.provideCmdline') === true, delegated)
+// Dynamic backend expressions delegate before probing the host, but must mark
+// the same restart route as a host-capability fallback.
+const profileDir = join(entryHome, '.dsh', 'profiles', 'dsh-tui')
+mkdirSync(profileDir, { recursive: true })
+writeFileSync(join(profileDir, 'cordis.patch.yml'), '- id: dsh-tui\n  config:\n    backend: !!js process.env.DSH_TUI_BACKEND ?? "dsh"\n')
+const dynamicEntry = spawnSync(process.execPath, ['--import', 'tsx/esm', join(repo, 'src', 'dsh-adapter', 'host-entry.ts'), 'dynamic hello'], { cwd: repo, env, encoding: 'utf8', timeout: 60_000 })
+const dynamicDelegated = JSON.parse(readFileSync(record, 'utf8')) as { args: string[]; notice?: string; delegated?: string }
+check('a dynamic backend also marks the delegated restart route', dynamicEntry.status === 7 && dynamicDelegated.delegated === '1'
+  && JSON.stringify(dynamicDelegated.args) === JSON.stringify(['--profile', 'dsh-tui', '--', 'dynamic hello'])
+  && dynamicDelegated.notice === undefined, { dynamicDelegated, stderr: dynamicEntry.stderr })
 rmSync(fakeRoot, { recursive: true, force: true })
 rmSync(entryHome, { recursive: true, force: true })
 
