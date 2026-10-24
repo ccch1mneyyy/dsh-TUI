@@ -120,6 +120,8 @@ daily** (TypeScript).
 
 Download `dsh-tui-setup-win-x64.exe` from [Releases](https://github.com/ccch1mneyyy/dsh-TUI/releases) and run it. Per-user, no administrator, fully offline, and no preinstalled Node or DSH.
 
+If that release does not include an EXE yet, download `dsh-tui-setup.zip`, **extract all files**, and double-click `install.bat` (internet required). It checks Node and pnpm and verifies the launcher. API-key input is hidden and takes effect immediately; leave it blank to configure an account through `/provider` or `/login` inside the TUI. Press Enter when installation finishes to launch, then use `启动 dsh-tui.bat` for later launches. Keep the window open after an error and run `dsh-tui.cmd doctor` in PowerShell for environment diagnostics. See [Windows first use](docs/getting-started.en.md#windows-first-use).
+
 ### Command-line installation
 
 Prerequisites: [Node.js](https://nodejs.org/en) and
