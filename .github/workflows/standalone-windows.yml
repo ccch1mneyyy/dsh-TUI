@@ -1,0 +1,129 @@
+name: Windows portable first launch
+
+on:
+  pull_request:
+    paths:
+      - 'standalone/**'
+      - 'scripts/make-standalone-bundle.mjs'
+      - 'scripts/verify-standalone-*.mjs'
+      - 'scripts/lib/standalone-test-process.mjs'
+      - 'src/dsh-adapter/contract.ts'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/standalone-windows.yml'
+      - '.github/workflows/release-bundle.yml'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: 'Existing release artifact to verify; otherwise build the PR candidate'
+        type: string
+        default: ''
+      source_ref:
+        description: 'Source ref matching the release artifact'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portable-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  candidate:
+    if: inputs.artifact_name == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm compile
+      - name: Pack this checkout without publishing it
+        run: |
+          mkdir candidate
+          npm pack --ignore-scripts --pack-destination candidate
+      - name: Build the Windows ZIP from the candidate package
+        run: node scripts/make-standalone-bundle.mjs --tui-package candidate/*.tgz --targets node24-win-x64 --out dist-standalone
+      - uses: actions/upload-artifact@v4
+        with:
+          name: standalone-windows-candidate
+          path: dist-standalone/dsh-tui-standalone-win-x64.zip
+          if-no-files-found: error
+
+  first-launch:
+    needs: candidate
+    if: ${{ always() && (needs.candidate.result == 'success' || (needs.candidate.result == 'skipped' && inputs.artifact_name != '')) }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      # Only the test driver uses this Node/dependency tree. The executable's
+      # environment has no Node/pnpm on PATH and no inherited credentials.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name || 'standalone-windows-candidate' }}
+          path: portable-download
+      - name: Extract the shipped ZIP
+        shell: pwsh
+        run: Expand-Archive -LiteralPath portable-download/dsh-tui-standalone-win-x64.zip -DestinationPath 'portable 用户 download'
+      - name: Record Windows permission context
+        shell: pwsh
+        run: |
+          $context = [ordered]@{ administratorToken = 'unknown'; developerModeRegistryValue = 'unknown'; whoamiPrivilegeExitCode = 'unknown' }
+          try {
+            $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+            $context.administratorToken = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          } catch { $context.administratorTokenError = $_.Exception.Message }
+          try {
+            $context.developerModeRegistryValue = Get-ItemPropertyValue -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock' -Name AllowDevelopmentWithoutDevLicense -ErrorAction Stop
+          } catch { $context.developerModeReadError = $_.Exception.Message }
+          try {
+            $privileges = & "$env:SystemRoot\System32\whoami.exe" /priv 2>&1
+            $context.whoamiPrivilegeExitCode = $LASTEXITCODE
+            $context.whoamiPrivilegeOutput = @($privileges | ForEach-Object { $_.ToString() })
+          } catch { $context.whoamiPrivilegeError = $_.Exception.Message }
+          $context | ConvertTo-Json -Depth 3 | Tee-Object -FilePath portable-platform-context.json
+          exit 0
+      - name: Cold and warm runtime loading
+        shell: pwsh
+        run: |
+          node scripts/verify-standalone-runtime.mjs --binary 'portable 用户 download/dsh-tui.exe' --out portable-runtime-evidence 2>&1 | Tee-Object portable-self-test.log
+          exit $LASTEXITCODE
+      - name: First screen, local interaction and clean exit in ConPTY
+        shell: pwsh
+        run: |
+          node scripts/verify-standalone-interaction.mjs --binary 'portable 用户 download/dsh-tui.exe' --out portable-evidence
+          exit $LASTEXITCODE
+      - name: Preserve first-launch evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable-first-launch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            portable-platform-context.json
+            portable-self-test.log
+            portable-runtime-evidence/
+            portable-evidence/
+          if-no-files-found: warn
+          retention-days: 14
